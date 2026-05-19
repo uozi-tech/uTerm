@@ -1,12 +1,13 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// 侧栏：保存的服务器列表。选中即向上回调发起连接。
 struct ServerListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
 
-    @Binding var selection: ServerProfile?
+    let onOpenServer: (ServerProfile) -> Void
 
     @State private var showingForm = false
     @State private var editingProfile: ServerProfile?
@@ -18,7 +19,7 @@ struct ServerListView: View {
     }
 
     var body: some View {
-        List(selection: $selection) {
+        List {
             ForEach(topLevelProfiles) { profile in
                 Label {
                     VStack(alignment: .leading) {
@@ -29,7 +30,9 @@ struct ServerListView: View {
                 } icon: {
                     Image(systemName: "server.rack")
                 }
-                .tag(profile)
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenServer(profile) }
+                .onDrag { NSItemProvider(object: profile.id.uuidString as NSString) }
                 .contextMenu {
                     Button("编辑") { editingProfile = profile; showingForm = true }
                     Button("删除", role: .destructive) { delete(profile) }
@@ -54,7 +57,6 @@ struct ServerListView: View {
     }
 
     private func delete(_ profile: ServerProfile) {
-        if selection?.id == profile.id { selection = nil }
         let keychain = KeychainStore()
         for kind in [SecretKind.password, .passphrase, .privateKey] {
             try? keychain.delete(profileID: profile.id, kind: kind)
