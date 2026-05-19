@@ -35,4 +35,7 @@ final class ServerProfile {
         get { AuthMethod(rawValue: authMethodRaw) ?? .password }
         set { authMethodRaw = newValue.rawValue }
     }
+
+    /// 展示用的 `用户名@主机` 端点字符串。
+    var displayEndpoint: String { "\(username)@\(host)" }
 }

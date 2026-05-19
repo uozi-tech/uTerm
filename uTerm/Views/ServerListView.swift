@@ -24,7 +24,7 @@ struct ServerListView: View {
                 Label {
                     VStack(alignment: .leading) {
                         Text(profile.name).font(.body)
-                        Text("\(profile.username)@\(profile.host)")
+                        Text(profile.displayEndpoint)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } icon: {

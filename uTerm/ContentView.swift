@@ -17,6 +17,27 @@ struct ContentView: View {
                           onNewTab: { showingServerPicker = true },
                           onOpenServerInNewTab: openServerInNewTab)
                 .navigationTitle(workspace.activeTab?.title ?? "uTerm")
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button {
+                            showingServerPicker = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .help("新建标签")
+                    }
+                    ToolbarItem(placement: .principal) {
+                        if let tab = workspace.activeTab {
+                            HStack(spacing: 6) {
+                                Text(tab.title).font(.headline)
+                                if let pane = tab.focusedPane {
+                                    ConnectionStatusBadge(state: pane.session.connectionState,
+                                                          showsLabel: false)
+                                }
+                            }
+                        }
+                    }
+                }
         }
         .task {
             guard !didRestore else { return }
@@ -57,7 +78,7 @@ struct ServerPickerSheet: View {
                 } label: {
                     VStack(alignment: .leading) {
                         Text(profile.name)
-                        Text("\(profile.username)@\(profile.host)")
+                        Text(profile.displayEndpoint)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

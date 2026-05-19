@@ -26,6 +26,8 @@ struct WorkspaceView: View {
                     "未打开终端", systemImage: "terminal",
                     description: Text("从左侧选择一台服务器，或点标签栏的 ＋"))
             }
+            Divider()
+            StatusBarView(workspace: workspace)
         }
         .onChange(of: workspace.snapshot()) { _, newSnapshot in
             saveTask?.cancel()

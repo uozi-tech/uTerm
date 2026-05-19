@@ -31,6 +31,14 @@ nonisolated indirect enum LayoutNode: Equatable, Sendable {
     /// 深度优先的第一个窗格 id。
     nonisolated var firstLeafID: UUID? { leafIDs.first }
 
+    /// 树中窗格数量。递归累加，不分配数组，比 `leafIDs.count` 轻。
+    nonisolated var leafCount: Int {
+        switch self {
+        case .leaf: return 1
+        case .split(let s): return s.first.leafCount + s.second.leafCount
+        }
+    }
+
     /// 把 `.leaf(paneID)` 替换为一个 `.split`，子节点为 [原 leaf, 新 leaf]。
     nonisolated func splitting(paneID: UUID, direction: SplitDirection,
                                newPaneID: UUID, splitID: UUID, fraction: Double = 0.5) -> LayoutNode {

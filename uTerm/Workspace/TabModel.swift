@@ -11,6 +11,11 @@ final class TabModel: Identifiable {
     private(set) var panes: [UUID: PaneModel]
     var focusedPaneID: UUID?
 
+    var focusedPane: PaneModel? {
+        guard let id = focusedPaneID else { return nil }
+        return panes[id]
+    }
+
     /// 新建一个只有单窗格的标签，窗格连 `rootServerProfileID`。
     init(id: UUID = UUID(), title: String, rootServerProfileID: UUID) {
         self.id = id
@@ -33,11 +38,10 @@ final class TabModel: Identifiable {
 
     /// 对聚焦窗格分屏；新窗格连与聚焦窗格相同的服务器，并成为新的聚焦。
     func splitFocusedPane(direction: SplitDirection) {
-        guard let focused = focusedPaneID,
-              let focusedPane = panes[focused] else { return }
+        guard let focusedPane else { return }
         let newPane = PaneModel(serverProfileID: focusedPane.serverProfileID)
         panes[newPane.id] = newPane
-        root = root.splitting(paneID: focused, direction: direction,
+        root = root.splitting(paneID: focusedPane.id, direction: direction,
                               newPaneID: newPane.id, splitID: UUID())
         focusedPaneID = newPane.id
     }
