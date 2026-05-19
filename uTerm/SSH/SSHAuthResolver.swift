@@ -1,19 +1,21 @@
 import Foundation
 
-enum SSHAuthError: Error, Equatable {
+nonisolated enum SSHAuthError: Error, Equatable {
     case missingPassword
     case missingPrivateKey
 }
 
 /// 解析后的认证材料 —— 纯数据，不含 Citadel 类型，便于单测。
 /// `SSHConnection` 据此构造实际的 Citadel `SSHAuthenticationMethod`。
-enum ResolvedAuth: Equatable {
+nonisolated enum ResolvedAuth: Equatable {
     case password(username: String, password: String)
     case privateKey(username: String, pem: String, passphrase: String?)
 }
 
 /// 由 `ServerProfile` 与从 `KeychainStore` 取出的密钥，计算出 `ResolvedAuth`。
-enum SSHAuthResolver {
+///
+/// `nonisolated`：纯函数式工具，无 UI 状态，无需 MainActor 隔离。
+nonisolated enum SSHAuthResolver {
     static func resolve(
         profile: ServerProfile,
         password: String?,

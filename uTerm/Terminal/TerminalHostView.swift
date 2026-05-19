@@ -58,7 +58,10 @@ final class TerminalContainerView: NSView {
         }
     }
     private weak var terminalView: SwiftTerm.TerminalView?
-    private var scrollForwardingMonitor: Any?
+    /// `nonisolated(unsafe)` so `deinit` (itself nonisolated) can release the
+    /// monitor. Safe: the monitor is only mutated from the MainActor while the
+    /// view is alive, and `deinit` has exclusive access once it runs.
+    private nonisolated(unsafe) var scrollForwardingMonitor: Any?
 
     init(terminalView: SwiftTerm.TerminalView, forwardsScrollToParent: Bool = false) {
         self.forwardsScrollToParent = forwardsScrollToParent
@@ -136,7 +139,10 @@ final class TerminalContainerView: NSView {
         }
     }
 
-    private func removeScrollForwardingMonitor() {
+    /// `nonisolated` because it touches no MainActor state beyond the
+    /// `nonisolated(unsafe)` monitor handle — `NSEvent.removeMonitor` is
+    /// callable from any thread. This lets `deinit` invoke it directly.
+    private nonisolated func removeScrollForwardingMonitor() {
         if let scrollForwardingMonitor {
             NSEvent.removeMonitor(scrollForwardingMonitor)
             self.scrollForwardingMonitor = nil

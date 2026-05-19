@@ -16,7 +16,9 @@ enum KeychainError: Error {
 
 /// 对 macOS 钥匙串的封装。所有写入条目设 `kSecAttrSynchronizable = true`，
 /// 从而通过 iCloud Keychain 端到端加密同步到用户的其它设备。
-struct KeychainStore {
+///
+/// `nonisolated`：纯非 UI 工具类型，仅与 Security 框架交互，无需 MainActor 隔离。
+nonisolated struct KeychainStore {
     private let service: String
 
     init(service: String = "com.uozi.uTerm") {

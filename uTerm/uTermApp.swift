@@ -11,7 +11,7 @@ struct uTermApp: App {
             cloudKitDatabase: .automatic
         )
         do {
-            return try ModelContainer(for: ServerProfile.self, configurations: config)
+            return try ModelContainer(for: ServerProfile.self, KnownHost.self, configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
         }

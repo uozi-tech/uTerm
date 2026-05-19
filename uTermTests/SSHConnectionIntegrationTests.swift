@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import uTerm
 
 /// 集成测试 —— 对本地 sshd。无 sshd / 无密码时 SKIP（不 FAIL）。
@@ -19,10 +20,15 @@ final class SSHConnectionIntegrationTests: XCTestCase {
         profile.username = testUser
         profile.authMethod = .password
 
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
         let conn = SSHConnection(
-            profile: profile,
+            profile: SSHConnection.ProfileSnapshot(profile),
             auth: .password(username: testUser, password: testPassword!),
-            jumpHostAuth: nil
+            jumpHostAuth: nil,
+            hostKeyVerifier: verifier,
+            hostKeyApprover: { _ in true }
         )
         try await conn.connect()
 
@@ -55,10 +61,15 @@ final class SSHConnectionIntegrationTests: XCTestCase {
         target.authMethod = .password
         target.jumpHost = bastion
 
+        let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
+            for: KnownHost.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
         let conn = SSHConnection(
-            profile: target,
+            profile: SSHConnection.ProfileSnapshot(target),
             auth: .password(username: testUser, password: testPassword!),
-            jumpHostAuth: .password(username: testUser, password: testPassword!)
+            jumpHostAuth: .password(username: testUser, password: testPassword!),
+            hostKeyVerifier: verifier,
+            hostKeyApprover: { _ in true }
         )
         try await conn.connect()
         let collected = Task { () -> String in
