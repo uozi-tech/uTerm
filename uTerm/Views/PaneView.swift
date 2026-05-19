@@ -29,13 +29,6 @@ struct PaneView: View {
         profiles.first { $0.id == pane.serverProfileID }
     }
 
-    private var challengeBinding: Binding<HostKeyChallenge?> {
-        Binding(
-            get: { pane.pendingChallenge },
-            set: { if $0 == nil { pane.resolveChallenge(false) } }
-        )
-    }
-
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
@@ -61,9 +54,7 @@ struct PaneView: View {
                     onOpenInNewTab: onOpenInNewTab))
         }
         .task(id: pane.id) { await connect() }
-        .sheet(item: challengeBinding) { challenge in
-            HostKeyPromptView(challenge: challenge) { pane.resolveChallenge($0) }
-        }
+        .hostKeySheet(pane.hostKeyRelay)
     }
 
     /// 窗格头部条：服务器名 + 分屏/关闭控制。

@@ -150,27 +150,28 @@ actor SSHConnection: TerminalBackend {
         guard !isClosed else { throw SSHConnectionError.alreadyClosed }
         didConnect = true
 
-        // 目标客户端 + 跳板机连接（若有）。两者作为区域隔离的局部值持有，
-        // 不写回 `self` —— 非 `Sendable` 的 `SSHClient` 若同时被 actor 持有
-        // 又被下面并发的 `sessionTask` 捕获，会触发 Swift 6 数据竞争诊断。
-        // 这些强本地副本由 `sessionTask` 捕获，独占负责客户端 teardown，
-        // 使清理不依赖 actor 存活（I1）。
-        let targetClient: SSHClient
-        let bastion: SSHClient?
-        if let jumpHost = profile.jumpHost {
-            // 配置了跳板机：必须有跳板机认证材料，否则报错 —— 绝不静默回退直连。
-            guard let jumpHostAuth else {
-                finishStreams()
-                isClosed = true
-                throw SSHConnectionError.jumpHostFailed("缺少跳板机认证材料")
-            }
-            let pair = try await connectViaJumpHost(jumpHost: jumpHost, jumpHostAuth: jumpHostAuth)
-            targetClient = pair.target
-            bastion = pair.bastion
-        } else {
-            targetClient = try await connectDirect()
-            bastion = nil
+        // 目标客户端 + 跳板机连接（若有）由 `SSHClientFactory` 建立，打包成
+        // `Sendable` 的 `ConnectedClient`。它作为区域隔离的局部值持有，不写回
+        // `self` —— 非 `Sendable` 的 `SSHClient` 若同时被 actor 持有又被下面
+        // 并发的 `sessionTask` 捕获，会触发 Swift 6 数据竞争诊断。这个强本地
+        // 副本由 `sessionTask` 捕获，独占负责客户端 teardown（`connected.close()`
+        // 先关目标、再关跳板机），使清理不依赖 actor 存活（I1）。
+        let connected: ConnectedClient
+        do {
+            connected = try await SSHClientFactory.connect(
+                profile: profile,
+                auth: auth,
+                jumpHostAuth: jumpHostAuth,
+                hostKeyVerifier: hostKeyVerifier,
+                hostKeyApprover: hostKeyApprover)
+        } catch {
+            // I4：连接/认证/跳板机失败 —— 结束流、置 isClosed，让消费者干净终止。
+            // 工厂在 `jump` 失败时已就地关闭跳板机连接；此处只做 actor 状态收尾。
+            finishStreams()
+            isClosed = true
+            throw error
         }
+        let targetClient = connected.target
         let cols = Int(pendingCols)
         let rows = Int(pendingRows)
         let state = self.state
@@ -221,120 +222,15 @@ actor SSHConnection: TerminalBackend {
             }
             // drain 任务停止并 await 其完成，确保不再有 writer.write 在飞行中。
             await state.shutdownDrain()
-            // 客户端 teardown 用强引用的本地副本完成，不经过 `self` ——
+            // 客户端 teardown 用强引用的本地副本（`connected`）完成，不经过 `self` ——
             // 即便 actor 已被消费者丢弃（deinit 后 `self == nil`），底层
-            // SSHClient 传输仍会被关闭，杜绝泄漏（I1）。先关目标、再关跳板机。
-            try? await targetClient.close()
-            try? await bastion?.close()
+            // SSHClient 传输仍会被关闭，杜绝泄漏（I1）。`connected.close()`
+            // 先关目标、再关跳板机。
+            await connected.close()
             // 触碰 actor 状态的收尾（exitStream 产元素、结束流、置 isClosed）
             // 仍走 `self?.` —— 若 `self` 已不在，deinit 已结束流。
             await self?.handleSessionEnded()
         }
-    }
-
-    /// 直连路径：连接 `profile.host:profile.port`。
-    /// 任一失败步骤都结束流、置 `isClosed`，并抛 `connectFailed`。
-    private func connectDirect() async throws -> SSHClient {
-        let authMethod: SSHAuthenticationMethod
-        do {
-            authMethod = try Self.makeAuthMethod(from: auth)
-        } catch {
-            // I4：认证材料构造失败也要结束流。
-            finishStreams()
-            isClosed = true
-            throw error
-        }
-
-        do {
-            return try await SSHClient.connect(
-                host: profile.host,
-                port: profile.port,
-                authenticationMethod: authMethod,
-                hostKeyValidator: .custom(HostKeyValidationDelegate(
-                    host: profile.host, port: profile.port,
-                    verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never
-            )
-        } catch {
-            // I4：连接/认证失败 —— 结束流，让消费者干净终止。
-            finishStreams()
-            isClosed = true
-            throw SSHConnectionError.connectFailed(error.localizedDescription)
-        }
-    }
-
-    /// 跳板机路径（Task 9）：先连跳板机，再用 Citadel 原生 `jump(to:)` 在
-    /// 跳板机连接上开 `direct-tcpip` 通道并完成第二次 SSH 握手，得到目标客户端。
-    ///
-    /// 生命周期：成功时把跳板机连接与目标客户端一起作为元组返回。`connect()`
-    /// 在自身作用域内以区域隔离的局部值持有这两个 `SSHClient`，并交给
-    /// `sessionTask` 捕获 —— 会话结束时由 `sessionTask` 用这些强引用本地副本
-    /// 先关目标、再关跳板机，不依赖 actor 存活。返回元组（而非把 `bastion`
-    /// 写进 actor 存储属性）使其在 `connect()` 内保持区域隔离，从而能
-    /// `sending` 进 `sessionTask` 闭包（Swift 6 数据竞争检查）。
-    ///
-    /// 错误处理：每一步失败都 `finishStreams()` + `isClosed = true`，已打开的资源
-    /// （`jump` 失败时的跳板机连接）就地关闭，并抛 `jumpHostFailed("<detail>")`，
-    /// 不留任何泄漏 / 挂起。
-    private func connectViaJumpHost(
-        jumpHost: ProfileSnapshot.JumpHostSnapshot, jumpHostAuth: ResolvedAuth
-    ) async throws -> (target: SSHClient, bastion: SSHClient) {
-        // 1. 构造跳板机与目标的认证材料。
-        let bastionAuthMethod: SSHAuthenticationMethod
-        let targetAuthMethod: SSHAuthenticationMethod
-        do {
-            bastionAuthMethod = try Self.makeAuthMethod(from: jumpHostAuth)
-            targetAuthMethod = try Self.makeAuthMethod(from: auth)
-        } catch {
-            finishStreams()
-            isClosed = true
-            throw SSHConnectionError.jumpHostFailed(error.localizedDescription)
-        }
-
-        // 2. 连接跳板机。
-        let bastion: SSHClient
-        do {
-            bastion = try await SSHClient.connect(
-                host: jumpHost.host,
-                port: jumpHost.port,
-                authenticationMethod: bastionAuthMethod,
-                hostKeyValidator: .custom(HostKeyValidationDelegate(
-                    host: jumpHost.host, port: jumpHost.port,
-                    verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never
-            )
-        } catch {
-            finishStreams()
-            isClosed = true
-            throw SSHConnectionError.jumpHostFailed(
-                "无法连接跳板机 \(jumpHost.host):\(jumpHost.port) —— \(error.localizedDescription)")
-        }
-
-        // 3. 从跳板机 jump 到目标。`SSHClientSettings.authenticationMethod`
-        //    是 `@Sendable () -> SSHAuthenticationMethod` 转义闭包。
-        let targetSettings = SSHClientSettings(
-            host: profile.host,
-            port: profile.port,
-            authenticationMethod: { targetAuthMethod },
-            hostKeyValidator: .custom(HostKeyValidationDelegate(
-                host: profile.host, port: profile.port,
-                verifier: hostKeyVerifier, approver: hostKeyApprover))
-        )
-        let target: SSHClient
-        do {
-            target = try await bastion.jump(to: targetSettings)
-        } catch {
-            // jump 失败 —— 跳板机连接已建立，必须就地关闭，避免泄漏。
-            try? await bastion.close()
-            finishStreams()
-            isClosed = true
-            throw SSHConnectionError.jumpHostFailed(
-                "经跳板机连接目标 \(profile.host):\(profile.port) 失败 —— \(error.localizedDescription)")
-        }
-
-        // 成功 —— 跳板机连接与目标客户端一起返回，由 `connect()` 持有并交给
-        // `sessionTask` 做生命周期管理。
-        return (target: target, bastion: bastion)
     }
 
     // MARK: - write / resize / close
@@ -385,78 +281,6 @@ actor SSHConnection: TerminalBackend {
         exitContinuation.yield(())
         exitContinuation.finish()
         outputContinuation.finish()
-    }
-
-    // MARK: - 认证材料构造
-
-    /// 把 `ResolvedAuth` 转为 Citadel 的 `SSHAuthenticationMethod`。
-    /// 私钥仅支持 OpenSSH 格式的 RSA / Ed25519。
-    static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthenticationMethod {
-        switch auth {
-        case .password(let username, let password):
-            return .passwordBased(username: username, password: password)
-
-        case .privateKey(let username, let pem, let passphrase):
-            let decryptionKey = passphrase?.data(using: .utf8)
-
-            // 旧式 PEM（PKCS#1 / PKCS#8）不被 Citadel 的 OpenSSH 解析器支持。
-            guard pem.contains("BEGIN OPENSSH PRIVATE KEY") else {
-                throw SSHConnectionError.connectFailed(
-                    "不支持的私钥格式：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥，"
-                    + "请用 `ssh-keygen -p -m OPENSSH` 转换")
-            }
-
-            // 先用 SSHKeyDetection 判定内部类型，再走对应解析器。
-            let keyType: SSHKeyType
-            do {
-                keyType = try SSHKeyDetection.detectPrivateKeyType(from: pem)
-            } catch {
-                // 检测失败时退而求其次：依次尝试 Ed25519、RSA。
-                if let method = try? makeEd25519(username: username, pem: pem, key: decryptionKey) {
-                    return method
-                }
-                if let method = try? makeRSA(username: username, pem: pem, key: decryptionKey) {
-                    return method
-                }
-                throw SSHConnectionError.connectFailed(
-                    "无法解析私钥：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥")
-            }
-
-            switch keyType {
-            case .rsa:
-                return try makeRSA(username: username, pem: pem, key: decryptionKey)
-            case .ed25519:
-                return try makeEd25519(username: username, pem: pem, key: decryptionKey)
-            default:
-                throw SSHConnectionError.connectFailed(
-                    "不支持的私钥格式：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥，"
-                    + "请用 `ssh-keygen -p -m OPENSSH` 转换")
-            }
-        }
-    }
-
-    private static func makeRSA(
-        username: String, pem: String, key: Data?
-    ) throws -> SSHAuthenticationMethod {
-        do {
-            let privateKey = try Insecure.RSA.PrivateKey(sshRsa: pem, decryptionKey: key)
-            return .rsa(username: username, privateKey: privateKey)
-        } catch {
-            throw SSHConnectionError.connectFailed(
-                "RSA 私钥解析失败（可能是密码错误或格式不受支持）：\(error.localizedDescription)")
-        }
-    }
-
-    private static func makeEd25519(
-        username: String, pem: String, key: Data?
-    ) throws -> SSHAuthenticationMethod {
-        do {
-            let privateKey = try Curve25519.Signing.PrivateKey(sshEd25519: pem, decryptionKey: key)
-            return .ed25519(username: username, privateKey: privateKey)
-        } catch {
-            throw SSHConnectionError.connectFailed(
-                "Ed25519 私钥解析失败（可能是密码错误或格式不受支持）：\(error.localizedDescription)")
-        }
     }
 }
 

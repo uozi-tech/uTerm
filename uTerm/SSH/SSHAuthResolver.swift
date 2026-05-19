@@ -39,4 +39,17 @@ nonisolated enum SSHAuthResolver {
             )
         }
     }
+
+    /// 便捷重载：自行从 `KeychainStore` 取出密码 / 私钥 / 口令，再解析。
+    /// `PaneModel` 与 `FileBrowserModel` 共用，省去各自一份相同的取钥串逻辑。
+    nonisolated static func resolve(
+        profile: ServerProfile,
+        keychain: KeychainStore
+    ) throws -> ResolvedAuth {
+        try resolve(
+            profile: profile,
+            password: try? keychain.load(profileID: profile.id, kind: .password),
+            privateKey: try? keychain.load(profileID: profile.id, kind: .privateKey),
+            passphrase: try? keychain.load(profileID: profile.id, kind: .passphrase))
+    }
 }

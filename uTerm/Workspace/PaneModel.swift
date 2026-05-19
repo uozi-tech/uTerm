@@ -10,9 +10,8 @@ final class PaneModel: Identifiable {
     let serverProfileID: UUID
     let session = TerminalSession()
 
-    /// 待用户裁决的主机密钥挑战（驱动 `PaneView` 的 sheet）。
-    var pendingChallenge: HostKeyChallenge?
-    private var challengeDecision: CheckedContinuation<Bool, Never>?
+    /// 主机密钥审批的 UI 桥接（驱动 `PaneView` 的 sheet）。
+    let hostKeyRelay = HostKeyChallengeRelay()
     private var isConnecting = false
 
     init(id: UUID = UUID(), serverProfileID: UUID) {
@@ -34,24 +33,13 @@ final class PaneModel: Identifiable {
         await session.close()
         let keychain = KeychainStore()
         do {
-            let auth = try resolveAuth(for: profile, keychain: keychain)
+            let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
             var jumpAuth: ResolvedAuth?
             if let jump = profile.jumpHost {
-                jumpAuth = try resolveAuth(for: jump, keychain: keychain)
+                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
             }
             let verifier = HostKeyVerifier(modelContainer: modelContainer)
-            let approver: @Sendable (HostKeyChallenge) async -> Bool = { [weak self] challenge in
-                await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                    Task { @MainActor in
-                        guard let self else { cont.resume(returning: false); return }
-                        if let stale = self.challengeDecision {
-                            stale.resume(returning: false)
-                        }
-                        self.challengeDecision = cont
-                        self.pendingChallenge = challenge
-                    }
-                }
-            }
+            let approver = hostKeyRelay.makeApprover()
             let connection = SSHConnection(
                 profile: SSHConnection.ProfileSnapshot(profile),
                 auth: auth, jumpHostAuth: jumpAuth,
@@ -68,29 +56,11 @@ final class PaneModel: Identifiable {
         session.markFailed("服务器配置已被删除")
     }
 
-    /// host-key sheet 的裁决出口。两处（sheet 回调、teardown）都经此，
-    /// 读取并置空后再 resume —— 双重 resume 结构上不可能。
-    func resolveChallenge(_ trusted: Bool) {
-        guard let cont = challengeDecision else { return }
-        challengeDecision = nil
-        pendingChallenge = nil
-        cont.resume(returning: trusted)
-    }
-
     /// 窗格被关闭/移除时调用：severs SwiftTerm delegate、关闭 SSH、解挂任何待决挑战。
     func dispose() {
         let s = session
         s.dispose()
         Task { await s.close() }
-        resolveChallenge(false)
-    }
-
-    private func resolveAuth(for profile: ServerProfile,
-                             keychain: KeychainStore) throws -> ResolvedAuth {
-        try SSHAuthResolver.resolve(
-            profile: profile,
-            password: try? keychain.load(profileID: profile.id, kind: .password),
-            privateKey: try? keychain.load(profileID: profile.id, kind: .privateKey),
-            passphrase: try? keychain.load(profileID: profile.id, kind: .passphrase))
+        hostKeyRelay.resolve(false)
     }
 }

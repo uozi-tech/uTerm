@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var workspace = WorkspaceModel()
     @State private var didRestore = false
     @State private var showingServerPicker = false
+    @State private var showingFiles = false
 
     var body: some View {
         NavigationSplitView {
@@ -37,6 +38,26 @@ struct ContentView: View {
                             }
                         }
                     }
+                    ToolbarItem {
+                        Button {
+                            showingFiles.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help("文件管理器")
+                    }
+                }
+                .inspector(isPresented: $showingFiles) {
+                    Group {
+                        if let tab = workspace.activeTab,
+                           let serverID = activeServerID(tab),
+                           let profile = profiles.first(where: { $0.id == serverID }) {
+                            FileBrowserView(profile: profile)
+                        } else {
+                            ContentUnavailableView("未选择服务器", systemImage: "folder")
+                        }
+                    }
+                    .inspectorColumnWidth(min: 240, ideal: 320, max: 480)
                 }
         }
         .task {
@@ -52,6 +73,10 @@ struct ContentView: View {
                 if let profile { openServer(profile) }
             }
         }
+    }
+
+    private func activeServerID(_ tab: TabModel) -> UUID? {
+        (tab.focusedPane ?? tab.panes.values.first)?.serverProfileID
     }
 
     private func openServer(_ profile: ServerProfile) {
