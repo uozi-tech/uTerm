@@ -2,12 +2,44 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    enum InspectorPanel { case files, assistant }
+
     @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [ServerProfile]
     @State private var workspace = WorkspaceModel()
     @State private var didRestore = false
     @State private var showingServerPicker = false
-    @State private var showingFiles = false
+    @State private var inspectorPanel: InspectorPanel?
+    @State private var assistantModel = AssistantModel()
+
+    /// 当前活动标签对应的服务器配置（无则 nil）。
+    private var activeProfile: ServerProfile? {
+        guard let tab = workspace.activeTab, let id = activeServerID(tab) else { return nil }
+        return profiles.first { $0.id == id }
+    }
+
+    @ViewBuilder
+    private var inspectorContent: some View {
+        switch inspectorPanel {
+        case .files:
+            if let profile = activeProfile {
+                FileBrowserView(profile: profile)
+            } else {
+                ContentUnavailableView("未选择服务器", systemImage: "folder")
+            }
+        case .assistant:
+            AssistantView(
+                serverContext: activeProfile.map { "服务器：\($0.name)（\($0.displayEndpoint)）" } ?? "",
+                model: assistantModel)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    /// 点击工具栏按钮：已是当前面板则关闭，否则切到该面板。
+    private func toggleInspector(_ panel: InspectorPanel) {
+        inspectorPanel = (inspectorPanel == panel) ? nil : panel
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -40,24 +72,23 @@ struct ContentView: View {
                     }
                     ToolbarItem {
                         Button {
-                            showingFiles.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.right")
-                        }
+                            toggleInspector(.files)
+                        } label: { Image(systemName: "sidebar.right") }
                         .help("文件管理器")
                     }
-                }
-                .inspector(isPresented: $showingFiles) {
-                    Group {
-                        if let tab = workspace.activeTab,
-                           let serverID = activeServerID(tab),
-                           let profile = profiles.first(where: { $0.id == serverID }) {
-                            FileBrowserView(profile: profile)
-                        } else {
-                            ContentUnavailableView("未选择服务器", systemImage: "folder")
-                        }
+                    ToolbarItem {
+                        Button {
+                            toggleInspector(.assistant)
+                        } label: { Image(systemName: "sparkles") }
+                        .help("AI 助手")
                     }
-                    .inspectorColumnWidth(min: 240, ideal: 320, max: 480)
+                }
+                .inspector(isPresented: Binding(
+                    get: { inspectorPanel != nil },
+                    set: { if !$0 { inspectorPanel = nil } }
+                )) {
+                    inspectorContent
+                        .inspectorColumnWidth(min: 260, ideal: 340, max: 520)
                 }
         }
         .task {
