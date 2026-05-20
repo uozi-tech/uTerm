@@ -1,6 +1,5 @@
 import Foundation
 @preconcurrency import Citadel
-import Crypto
 import NIOCore
 import NIOSSH
 
@@ -162,72 +161,22 @@ nonisolated enum SSHClientFactory {
     // MARK: - 认证材料构造
 
     /// 把 `ResolvedAuth` 转为 Citadel 的 `SSHAuthenticationMethod`。
-    /// 私钥仅支持 OpenSSH 格式的 RSA / Ed25519。
+    /// 私钥解析委托给 `PrivateKeyImporter`。
     static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthenticationMethod {
         switch auth {
         case .password(let username, let password):
             return .passwordBased(username: username, password: password)
 
         case .privateKey(let username, let pem, let passphrase):
-            let decryptionKey = passphrase?.data(using: .utf8)
-
-            // 旧式 PEM（PKCS#1 / PKCS#8）不被 Citadel 的 OpenSSH 解析器支持。
-            guard pem.contains("BEGIN OPENSSH PRIVATE KEY") else {
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    "不支持的私钥格式：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥，"
-                    + "请用 `ssh-keygen -p -m OPENSSH` 转换")
-            }
-
-            // 先用 SSHKeyDetection 判定内部类型，再走对应解析器。
-            let keyType: SSHKeyType
             do {
-                keyType = try SSHKeyDetection.detectPrivateKeyType(from: pem)
+                let key = try PrivateKeyImporter.resolve(pem: pem, passphrase: passphrase)
+                return key.authenticationMethod(username: username)
+            } catch let error as PrivateKeyImportError {
+                throw SSHConnection.SSHConnectionError.connectFailed(
+                    error.errorDescription ?? "私钥导入失败")
             } catch {
-                // 检测失败时退而求其次：依次尝试 Ed25519、RSA。
-                if let method = try? makeEd25519(username: username, pem: pem, key: decryptionKey) {
-                    return method
-                }
-                if let method = try? makeRSA(username: username, pem: pem, key: decryptionKey) {
-                    return method
-                }
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    "无法解析私钥：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥")
+                throw SSHConnection.SSHConnectionError.connectFailed(error.localizedDescription)
             }
-
-            switch keyType {
-            case .rsa:
-                return try makeRSA(username: username, pem: pem, key: decryptionKey)
-            case .ed25519:
-                return try makeEd25519(username: username, pem: pem, key: decryptionKey)
-            default:
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    "不支持的私钥格式：仅支持 OpenSSH 格式的 RSA / Ed25519 密钥，"
-                    + "请用 `ssh-keygen -p -m OPENSSH` 转换")
-            }
-        }
-    }
-
-    private static func makeRSA(
-        username: String, pem: String, key: Data?
-    ) throws -> SSHAuthenticationMethod {
-        do {
-            let privateKey = try Insecure.RSA.PrivateKey(sshRsa: pem, decryptionKey: key)
-            return .rsa(username: username, privateKey: privateKey)
-        } catch {
-            throw SSHConnection.SSHConnectionError.connectFailed(
-                "RSA 私钥解析失败（可能是密码错误或格式不受支持）：\(error.localizedDescription)")
-        }
-    }
-
-    private static func makeEd25519(
-        username: String, pem: String, key: Data?
-    ) throws -> SSHAuthenticationMethod {
-        do {
-            let privateKey = try Curve25519.Signing.PrivateKey(sshEd25519: pem, decryptionKey: key)
-            return .ed25519(username: username, privateKey: privateKey)
-        } catch {
-            throw SSHConnection.SSHConnectionError.connectFailed(
-                "Ed25519 私钥解析失败（可能是密码错误或格式不受支持）：\(error.localizedDescription)")
         }
     }
 }
