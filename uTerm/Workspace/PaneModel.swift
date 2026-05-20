@@ -1,30 +1,44 @@
 import SwiftUI
 import SwiftData
 
-/// 一个终端窗格：绑定一台服务器，持有一个 `TerminalSession` 及其连接生命周期。
-/// 连接流程（认证解析、host-key 审批、SSH 建立）由 M1 `TerminalPaneView` 迁入。
+/// 一个窗格：绑定一台服务器，按 `kind` 是终端或文件浏览。
+/// 终端走 `TerminalSession`，文件走 `FileBrowserModel`；连接 / 释放统一由本类按 kind 分派。
 @MainActor
 @Observable
 final class PaneModel: Identifiable {
     let id: UUID
     let serverProfileID: UUID
-    let session = TerminalSession()
+    let kind: PaneKind
 
-    /// 主机密钥审批的 UI 桥接（驱动 `PaneView` 的 sheet）。
+    /// 终端连接的 host-key 审批桥接。文件窗格用 `FileBrowserModel` 自带的 relay。
     let hostKeyRelay = HostKeyChallengeRelay()
     private var isConnecting = false
 
-    init(id: UUID = UUID(), serverProfileID: UUID) {
+    init(id: UUID = UUID(), serverProfileID: UUID, kind: PaneKindTag) {
         self.id = id
         self.serverProfileID = serverProfileID
+        switch kind {
+        case .terminal: self.kind = .terminal(TerminalSession())
+        case .files: self.kind = .files(FileBrowserModel())
+        }
     }
 
-    /// 用给定的服务器配置发起连接。`profile` 由视图层按 `serverProfileID` 取出，
-    /// 取不到（服务器已删除）时不调用本方法，改为 `markServerMissing()`。
+    /// 用给定的服务器配置发起连接。按 kind 分派。`profile` 由视图层按
+    /// `serverProfileID` 取出，取不到（服务器已删除）时改调 `markServerMissing()`。
     func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
+        switch kind {
+        case .terminal(let session):
+            await connectTerminal(session: session, profile: profile,
+                                  modelContainer: modelContainer)
+        case .files(let model):
+            await model.connect(profile: profile, modelContainer: modelContainer)
+        }
+    }
+
+    private func connectTerminal(session: TerminalSession, profile: ServerProfile,
+                                 modelContainer: ModelContainer) async {
         guard !isConnecting else { return }
-        // 重访标签时窗格会重新进入视图层级触发 connect；已连接/连接中则视为 no-op，
-        // 不撕掉活动会话。仅 .idle（首次）/ .failed / .disconnected（重试）才继续。
+        // 重访标签时窗格会重新进入视图层级触发 connect；已连接/连接中则视为 no-op。
         guard session.connectionState != .connected,
               session.connectionState != .connecting else { return }
         isConnecting = true
@@ -53,14 +67,23 @@ final class PaneModel: Identifiable {
 
     /// 服务器配置已不存在时调用。
     func markServerMissing() {
-        session.markFailed("服务器配置已被删除")
+        switch kind {
+        case .terminal(let session):
+            session.markFailed("服务器配置已被删除")
+        case .files(let model):
+            model.markUnavailable("服务器配置已被删除")
+        }
     }
 
-    /// 窗格被关闭/移除时调用：severs SwiftTerm delegate、关闭 SSH、解挂任何待决挑战。
+    /// 窗格被关闭/移除时调用。
     func dispose() {
-        let s = session
-        s.dispose()
-        Task { await s.close() }
+        switch kind {
+        case .terminal(let session):
+            session.dispose()
+            Task { await session.close() }
+        case .files(let model):
+            model.dispose()
+        }
         hostKeyRelay.resolve(false)
     }
 }

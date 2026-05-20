@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 
 /// 侧栏：保存的服务器列表。选中即向上回调发起连接。
 struct ServerListView: View {
@@ -9,8 +8,21 @@ struct ServerListView: View {
 
     let onOpenServer: (ServerProfile) -> Void
 
-    @State private var showingForm = false
-    @State private var editingProfile: ServerProfile?
+    /// 表单 sheet 的两种用途。用 `.sheet(item:)` 驱动 —— 值直接传入闭包参数，
+    /// 避免 `isPresented` + 独立 `@State` 在同一渲染事务里读到过期（nil）的 profile。
+    private enum FormRoute: Identifiable {
+        case new
+        case edit(ServerProfile)
+
+        var id: String {
+            switch self {
+            case .new: return "new"
+            case .edit(let profile): return profile.id.uuidString
+            }
+        }
+    }
+
+    @State private var formRoute: FormRoute?
 
     /// 只显示顶层服务器 —— 作为某台服务器跳板机的 profile 不单独列出。
     private var topLevelProfiles: [ServerProfile] {
@@ -32,9 +44,8 @@ struct ServerListView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { onOpenServer(profile) }
-                .onDrag { NSItemProvider(object: profile.id.uuidString as NSString) }
                 .contextMenu {
-                    Button("编辑") { editingProfile = profile; showingForm = true }
+                    Button("编辑") { formRoute = .edit(profile) }
                     Button("删除", role: .destructive) { delete(profile) }
                 }
             }
@@ -43,16 +54,20 @@ struct ServerListView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    editingProfile = nil
-                    showingForm = true
+                    formRoute = .new
                 } label: {
                     Image(systemName: "plus")
                 }
                 .help("新建服务器")
             }
         }
-        .sheet(isPresented: $showingForm) {
-            ServerFormView(editing: editingProfile)
+        .sheet(item: $formRoute) { route in
+            switch route {
+            case .new:
+                ServerFormView(editing: nil)
+            case .edit(let profile):
+                ServerFormView(editing: profile)
+            }
         }
     }
 

@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 /// 顶部标签条：显示所有标签、可选中/关闭、可拖拽重排，末尾 ＋ 新建。
 struct TabBarView: View {
     let workspace: WorkspaceModel
-    /// 点 ＋ 时触发（上层弹服务器选择）。
-    let onNewTab: () -> Void
+    /// 点 ＋ 选择窗格种类时触发（上层据此新建对应标签）。
+    let onNewTab: (PaneKindTag) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -23,10 +23,15 @@ struct TabBarView: View {
                             return true
                         }
                 }
-                Button(action: onNewTab) {
+                Menu {
+                    Button("新建终端标签") { onNewTab(.terminal) }
+                    Button("新建文件标签") { onNewTab(.files) }
+                } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .padding(.horizontal, 6)
                 .help("新建标签")
             }

@@ -111,6 +111,11 @@ final class FileBrowserModel {
         transientError = nil
     }
 
+    /// 服务器配置已删除等外部原因导致不可用时调用。
+    func markUnavailable(_ message: String) {
+        state = .failed(message)
+    }
+
     static func join(_ base: String, _ name: String) -> String {
         base == "/" ? "/\(name)" : "\(base)/\(name)"
     }

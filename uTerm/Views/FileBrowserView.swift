@@ -2,12 +2,9 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-/// 文件管理面板：浏览一台服务器的远程文件系统。
-struct FileBrowserView: View {
-    let profile: ServerProfile
-
-    @Environment(\.modelContext) private var modelContext
-    @State private var model = FileBrowserModel()
+/// 文件浏览窗格的内容：路径栏 + 条目列表。model 由 `PaneView` 持有并驱动连接。
+struct FileBrowserContent: View {
+    let model: FileBrowserModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,11 +12,6 @@ struct FileBrowserView: View {
             Divider()
             content
         }
-        .task(id: profile.id) {
-            await model.connect(profile: profile, modelContainer: modelContext.container)
-        }
-        .onDisappear { model.dispose() }
-        .hostKeySheet(model.hostKeyRelay)
         .alert("操作失败", isPresented: Binding(
             get: { model.transientError != nil },
             set: { if !$0 { model.clearTransientError() } }
@@ -59,10 +51,6 @@ struct FileBrowserView: View {
                 Text("无法浏览文件").font(.headline)
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).textSelection(.enabled)
-                Button("重试") {
-                    Task { await model.connect(profile: profile,
-                                               modelContainer: modelContext.container) }
-                }.buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:
@@ -118,7 +106,6 @@ struct FileBrowserView: View {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = entry.name
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            // 磁盘写入是阻塞 IO —— 移出主 actor。
             try? await Task.detached(priority: .userInitiated) {
                 try data.write(to: url)
             }.value
@@ -132,7 +119,6 @@ struct FileBrowserView: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
-            // 磁盘读取是阻塞 IO —— 移出主 actor。
             guard let data = try? await Task.detached(priority: .userInitiated, operation: {
                 try Data(contentsOf: url)
             }).value else { return }

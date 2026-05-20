@@ -3,9 +3,9 @@ import XCTest
 
 @MainActor
 final class TabModelTests: XCTestCase {
-    private func makeTab() -> TabModel {
+    private func makeTab(kind: PaneKindTag = .terminal) -> TabModel {
         let server = UUID()
-        return TabModel(title: "t", rootServerProfileID: server)
+        return TabModel(title: "t", rootServerProfileID: server, kind: kind)
     }
 
     func testInitialTabHasOneFocusedPane() {
@@ -30,7 +30,7 @@ final class TabModelTests: XCTestCase {
         let tab = makeTab()
         let target = tab.focusedPaneID!
         let serverID = UUID()
-        tab.splitPane(target, direction: .horizontal, serverProfileID: serverID)
+        tab.splitPane(target, direction: .horizontal, serverProfileID: serverID, kind: .terminal)
         XCTAssertEqual(tab.root.leafIDs.count, 2)
         XCTAssertEqual(tab.panes.count, 2)
         let newPane = tab.panes[tab.focusedPaneID!]!
@@ -62,5 +62,14 @@ final class TabModelTests: XCTestCase {
         tab.setFraction(0.25, splitID: s.id)
         guard case .split(let s2) = tab.root else { return XCTFail("应为 split") }
         XCTAssertEqual(s2.fraction, 0.25, accuracy: 0.0001)
+    }
+
+    func testSplitInheritsFilesKind() {
+        let server = UUID()
+        let tab = TabModel(title: "t", rootServerProfileID: server, kind: .files)
+        let target = tab.focusedPaneID!
+        tab.splitPane(target, direction: .horizontal, serverProfileID: server, kind: .files)
+        let newPane = tab.panes[tab.focusedPaneID!]!
+        XCTAssertEqual(newPane.kind.tag, .files)
     }
 }

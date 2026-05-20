@@ -6,7 +6,7 @@ final class WorkspaceModelTests: XCTestCase {
     func testOpenServerAddsActiveTab() {
         let ws = WorkspaceModel()
         let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "s1")
+        let tab = ws.openServer(profileID: server, title: "s1", kind: .terminal)
         XCTAssertEqual(ws.tabs.count, 1)
         XCTAssertEqual(ws.activeTabID, tab.id)
         XCTAssertEqual(tab.panes.values.first?.serverProfileID, server)
@@ -14,8 +14,8 @@ final class WorkspaceModelTests: XCTestCase {
 
     func testCloseTabSelectsNeighbor() {
         let ws = WorkspaceModel()
-        let t1 = ws.openServer(profileID: UUID(), title: "a")
-        let t2 = ws.openServer(profileID: UUID(), title: "b")
+        let t1 = ws.openServer(profileID: UUID(), title: "a", kind: .terminal)
+        let t2 = ws.openServer(profileID: UUID(), title: "b", kind: .terminal)
         ws.closeTab(t2.id)
         XCTAssertEqual(ws.tabs.count, 1)
         XCTAssertEqual(ws.activeTabID, t1.id)
@@ -23,7 +23,7 @@ final class WorkspaceModelTests: XCTestCase {
 
     func testCloseLastTabClearsActive() {
         let ws = WorkspaceModel()
-        let t = ws.openServer(profileID: UUID(), title: "a")
+        let t = ws.openServer(profileID: UUID(), title: "a", kind: .terminal)
         ws.closeTab(t.id)
         XCTAssertTrue(ws.tabs.isEmpty)
         XCTAssertNil(ws.activeTabID)
@@ -31,17 +31,17 @@ final class WorkspaceModelTests: XCTestCase {
 
     func testMoveTabReorders() {
         let ws = WorkspaceModel()
-        let t1 = ws.openServer(profileID: UUID(), title: "a")
-        let t2 = ws.openServer(profileID: UUID(), title: "b")
+        let t1 = ws.openServer(profileID: UUID(), title: "a", kind: .terminal)
+        let t2 = ws.openServer(profileID: UUID(), title: "b", kind: .terminal)
         ws.moveTab(fromID: t1.id, toIndex: 1)
         XCTAssertEqual(ws.tabs.map(\.id), [t2.id, t1.id])
     }
 
     func testMoveTabBackward() {
         let ws = WorkspaceModel()
-        let t1 = ws.openServer(profileID: UUID(), title: "a")
-        let t2 = ws.openServer(profileID: UUID(), title: "b")
-        let t3 = ws.openServer(profileID: UUID(), title: "c")
+        let t1 = ws.openServer(profileID: UUID(), title: "a", kind: .terminal)
+        let t2 = ws.openServer(profileID: UUID(), title: "b", kind: .terminal)
+        let t3 = ws.openServer(profileID: UUID(), title: "c", kind: .terminal)
         ws.moveTab(fromID: t3.id, toIndex: 0)
         XCTAssertEqual(ws.tabs.map(\.id), [t3.id, t1.id, t2.id])
     }
@@ -49,9 +49,9 @@ final class WorkspaceModelTests: XCTestCase {
     func testSnapshotRoundTrip() {
         let ws = WorkspaceModel()
         let s1 = UUID(), s2 = UUID()
-        let t1 = ws.openServer(profileID: s1, title: "a")
+        let t1 = ws.openServer(profileID: s1, title: "a", kind: .terminal)
         t1.splitFocusedPane(direction: .vertical)
-        _ = ws.openServer(profileID: s2, title: "b")
+        _ = ws.openServer(profileID: s2, title: "b", kind: .terminal)
 
         let snapshot = ws.snapshot()
         let restored = WorkspaceModel(snapshot: snapshot)

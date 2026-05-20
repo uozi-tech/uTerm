@@ -3,8 +3,6 @@ import SwiftUI
 /// 递归渲染一个 `TabModel` 的布局树。
 struct TabContentView: View {
     let tab: TabModel
-    /// 把某服务器在新标签打开（窗格中心区拖放触发）。
-    let onOpenInNewTab: @MainActor @Sendable (UUID) -> Void
     /// 关闭整个标签（关闭最后一个窗格时触发）。
     let onCloseTab: () -> Void
 
@@ -23,17 +21,15 @@ struct TabContentView: View {
                     pane: pane,
                     isFocused: tab.focusedPaneID == paneID,
                     onFocus: { tab.focusedPaneID = paneID },
-                    onSplit: { dir, serverID in
-                        tab.splitPane(paneID, direction: dir, serverProfileID: serverID)
-                    },
-                    onOpenInNewTab: onOpenInNewTab,
                     onSplitHorizontal: {
                         tab.splitPane(paneID, direction: .horizontal,
-                                      serverProfileID: pane.serverProfileID)
+                                      serverProfileID: pane.serverProfileID,
+                                      kind: pane.kind.tag)
                     },
                     onSplitVertical: {
                         tab.splitPane(paneID, direction: .vertical,
-                                      serverProfileID: pane.serverProfileID)
+                                      serverProfileID: pane.serverProfileID,
+                                      kind: pane.kind.tag)
                     },
                     onClose: {
                         if !tab.closePane(paneID) { onCloseTab() }

@@ -1,19 +1,13 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 
-/// 渲染一个 `PaneModel`：按其 `TerminalSession.connectionState` 显示
-/// 连接中 / 失败重试 / 终端 / 断开重连；host-key 挑战弹 sheet。
+/// 渲染一个 `PaneModel`：终端窗格按连接状态显示，文件窗格显示文件浏览内容。
 struct PaneView: View {
     let pane: PaneModel
     /// 该窗格是否为所在标签的聚焦窗格（用于高亮）。
     let isFocused: Bool
     /// 点击窗格时通知上层设置聚焦。
     let onFocus: () -> Void
-    /// 拖入边缘区落下：按方向分屏，新窗格连给定服务器。
-    let onSplit: @MainActor @Sendable (SplitDirection, UUID) -> Void
-    /// 拖入中心区落下：在新标签打开给定服务器。
-    let onOpenInNewTab: @MainActor @Sendable (UUID) -> Void
     /// 头部「水平分屏」按钮。
     let onSplitHorizontal: () -> Void
     /// 头部「垂直分屏」按钮。
@@ -23,44 +17,31 @@ struct PaneView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [ServerProfile]
-    @State private var dropZone: PaneDropZone?
 
     private var profile: ServerProfile? {
         profiles.first { $0.id == pane.serverProfileID }
     }
 
     var body: some View {
-        GeometryReader { geo in
-            VStack(spacing: 0) {
-                header
-                content
-            }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(isFocused ? Color.accentColor : Color.clear, lineWidth: 2)
-                )
-                .overlay {
-                    if let dropZone {
-                        PaneDropHighlight(zone: dropZone)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { onFocus() }
-                .onDrop(of: [.plainText], delegate: PaneDropDelegate(
-                    bounds: CGRect(origin: .zero, size: geo.size),
-                    hoverZone: $dropZone,
-                    onSplit: onSplit,
-                    onOpenInNewTab: onOpenInNewTab))
+        VStack(spacing: 0) {
+            header
+            content
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(isFocused ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onFocus() }
         .task(id: pane.id) { await connect() }
-        .hostKeySheet(pane.hostKeyRelay)
+        .modifier(HostKeySheetModifier(pane: pane))
     }
 
-    /// 窗格头部条：服务器名 + 分屏/关闭控制。
+    /// 窗格头部条：图标 + 服务器名 + 分屏/关闭控制。
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
+            Image(systemName: headerIcon)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(profile?.name ?? "终端")
@@ -88,14 +69,31 @@ struct PaneView: View {
         .background(.bar)
     }
 
+    private var headerIcon: String {
+        switch pane.kind {
+        case .terminal: "terminal"
+        case .files: "folder"
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
-        switch pane.session.connectionState {
+        switch pane.kind {
+        case .terminal(let session):
+            terminalContent(session: session)
+        case .files(let model):
+            FileBrowserContent(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private func terminalContent(session: TerminalSession) -> some View {
+        switch session.connectionState {
         case .idle, .connecting:
             ProgressView("正在连接…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .connected:
-            TerminalHostView(terminalView: pane.session.terminalView)
+            TerminalHostView(terminalView: session.terminalView)
         case .failed(let message):
             stateView(systemImage: "exclamationmark.triangle",
                       title: "连接失败", detail: message, action: "重试")
@@ -130,5 +128,19 @@ struct PaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+}
+
+/// 按 kind 给窗格挂对应的 host-key 审批 sheet。
+private struct HostKeySheetModifier: ViewModifier {
+    let pane: PaneModel
+
+    func body(content: Content) -> some View {
+        switch pane.kind {
+        case .terminal:
+            content.hostKeySheet(pane.hostKeyRelay)
+        case .files(let model):
+            content.hostKeySheet(model.hostKeyRelay)
+        }
     }
 }

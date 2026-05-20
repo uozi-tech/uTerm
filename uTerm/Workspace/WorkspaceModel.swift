@@ -25,10 +25,10 @@ final class WorkspaceModel {
 
     var activeTab: TabModel? { tabs.first { $0.id == activeTabID } }
 
-    /// 新开一个标签连指定服务器，并设为活动标签。
+    /// 新开一个标签连指定服务器、种类为 `kind`，并设为活动标签。
     @discardableResult
-    func openServer(profileID: UUID, title: String) -> TabModel {
-        let tab = TabModel(title: title, rootServerProfileID: profileID)
+    func openServer(profileID: UUID, title: String, kind: PaneKindTag) -> TabModel {
+        let tab = TabModel(title: title, rootServerProfileID: profileID, kind: kind)
         tabs.append(tab)
         activeTabID = tab.id
         return tab
@@ -74,8 +74,9 @@ final class WorkspaceModel {
                                      panes: [UUID: PaneModel]) -> NodeSnapshot {
         switch node {
         case .leaf(let paneID):
-            let server = panes[paneID]?.serverProfileID ?? UUID()
-            return .leaf(serverProfileID: server)
+            let pane = panes[paneID]
+            return .leaf(serverProfileID: pane?.serverProfileID ?? UUID(),
+                         kind: pane?.kind.tag ?? .terminal)
         case .split(let s):
             return .split(direction: s.direction, fraction: s.fraction,
                           first: nodeSnapshot(s.first, panes: panes),
@@ -86,8 +87,8 @@ final class WorkspaceModel {
     private static func buildNode(_ snap: NodeSnapshot,
                                   into panes: inout [UUID: PaneModel]) -> LayoutNode {
         switch snap {
-        case .leaf(let serverProfileID):
-            let pane = PaneModel(serverProfileID: serverProfileID)
+        case .leaf(let serverProfileID, let kind):
+            let pane = PaneModel(serverProfileID: serverProfileID, kind: kind)
             panes[pane.id] = pane
             return .leaf(paneID: pane.id)
         case .split(let direction, let fraction, let first, let second):
