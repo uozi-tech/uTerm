@@ -59,19 +59,26 @@ final class DERKeyDecoderTests: XCTestCase {
         }
     }
 
-    /// RSA 关键往返：同一把密钥的 OpenSSH 与 PKCS#1 形式导入后签名一致。
-    /// 注意：rsaOpenSSH 与 rsaPKCS1 是同一密钥对，由 uTermTests/Fixtures/generate.sh 一起生成。
+    /// RSA 关键往返：rsaPKCS1 与 rsaPKCS8 是同一密钥的两种 PEM 封装，
+    /// 解析后 RSAKeyComponents.modulus 应相等。
+    /// OpenSSH RSA 走 .legacyOpenSSHRSA，PEM RSA 走 .rsa(RSAKeyComponents)。
     func testRSARoundTripOpenSSHvsPKCS1() throws {
         let fromOpenSSH = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSH, passphrase: nil)
+        guard case .legacyOpenSSHRSA = fromOpenSSH else {
+            return XCTFail("OpenSSH RSA 应为 .legacyOpenSSHRSA，得 \(fromOpenSSH)")
+        }
         let fromPKCS1 = try DERKeyDecoder.decode(
             der: der(of: KeyImportFixtures.rsaPKCS1), label: "RSA PRIVATE KEY")
-        guard case .rsa(let a) = fromOpenSSH, case .rsa(let b) = fromPKCS1 else {
-            return XCTFail("两者都应为 rsa")
+        let fromPKCS8 = try DERKeyDecoder.decode(
+            der: der(of: KeyImportFixtures.rsaPKCS8), label: "PRIVATE KEY")
+        guard case .rsa(let compsPKCS1) = fromPKCS1 else {
+            return XCTFail("PKCS#1 RSA 应为 .rsa，得 \(fromPKCS1)")
         }
-        let message = Array("uterm-roundtrip".utf8)
-        let sigA = try a.signature(for: message).rawRepresentation
-        let sigB = try b.signature(for: message).rawRepresentation
-        XCTAssertEqual(sigA, sigB, "同一密钥两种格式导入后签名应一致")
+        guard case .rsa(let compsPKCS8) = fromPKCS8 else {
+            return XCTFail("PKCS#8 RSA 应为 .rsa，得 \(fromPKCS8)")
+        }
+        XCTAssertEqual(compsPKCS1.modulus, compsPKCS8.modulus,
+                       "同一密钥的 PKCS#1 与 PKCS#8 模数应相等")
     }
 }

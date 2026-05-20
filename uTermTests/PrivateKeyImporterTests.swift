@@ -14,7 +14,7 @@ final class PrivateKeyImporterTests: XCTestCase {
     func testOpenSSHRSAResolves() throws {
         let key = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSH, passphrase: nil)
-        guard case .rsa = key else { return XCTFail("应为 rsa，得 \(key)") }
+        guard case .legacyOpenSSHRSA = key else { return XCTFail("应为 legacyOpenSSHRSA，得 \(key)") }
     }
 
     func testGarbageThrowsMalformed() {
@@ -97,7 +97,9 @@ final class PrivateKeyImporterTests: XCTestCase {
     /// 取 ParsedPrivateKey 的 case 名，便于断言。
     private func caseName(_ key: ParsedPrivateKey) -> String {
         switch key {
-        case .rsa: return "rsa"; case .ed25519: return "ed25519"
+        case .rsa: return "rsa"
+        case .legacyOpenSSHRSA: return "rsa"
+        case .ed25519: return "ed25519"
         case .p256: return "p256"; case .p384: return "p384"; case .p521: return "p521"
         }
     }

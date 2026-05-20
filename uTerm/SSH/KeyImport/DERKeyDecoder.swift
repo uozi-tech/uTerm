@@ -1,7 +1,6 @@
 import Foundation
 import SwiftASN1
 import Crypto
-@preconcurrency import Citadel
 
 /// 解析明文 DER 私钥为 `ParsedPrivateKey`。
 /// 用 SwiftASN1 的 `DER.parse` 得到节点树后手动遍历已知结构。
@@ -204,23 +203,6 @@ nonisolated extension DERKeyDecoder {
 
     /// PKCS#1 RSAPrivateKey ::= SEQUENCE { version, n, e, d, p, q, dP, dQ, qInv }
     static func decodePKCS1RSA(_ der: [UInt8]) throws -> ParsedPrivateKey {
-        let root = try parse(der)
-        let fields = try children(root)
-        guard fields.count >= 9 else {
-            throw PrivateKeyImportError.malformedKey(reason: "PKCS#1 RSA：字段不足")
-        }
-        let n    = try integerMagnitude(fields[1])
-        let e    = try integerMagnitude(fields[2])
-        let d    = try integerMagnitude(fields[3])
-        let p    = try integerMagnitude(fields[4])
-        let q    = try integerMagnitude(fields[5])
-        let iqmp = try integerMagnitude(fields[8])   // qInv == iqmp
-        let openSSH = OpenSSHRSAEncoder.encode(n: n, e: e, d: d, iqmp: iqmp, p: p, q: q)
-        do {
-            return .rsa(try Insecure.RSA.PrivateKey(sshRsa: openSSH))
-        } catch {
-            throw PrivateKeyImportError.malformedKey(
-                reason: "RSA 私钥重编码失败：\(error.localizedDescription)")
-        }
+        return .rsa(try RSAKeyComponents.fromPKCS1DER(der))
     }
 }

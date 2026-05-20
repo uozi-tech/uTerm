@@ -35,7 +35,7 @@ nonisolated enum PrivateKeyImporter {
         switch keyType {
         case .rsa:
             do {
-                return .rsa(try Insecure.RSA.PrivateKey(sshRsa: text, decryptionKey: decryptionKey))
+                return .legacyOpenSSHRSA(try Insecure.RSA.PrivateKey(sshRsa: text, decryptionKey: decryptionKey))
             } catch { throw mapCitadelKeyError(error) }
         case .ed25519:
             do {

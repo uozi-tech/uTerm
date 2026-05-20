@@ -170,10 +170,12 @@ nonisolated enum SSHClientFactory {
         case .privateKey(let username, let pem, let passphrase):
             do {
                 let key = try PrivateKeyImporter.resolve(pem: pem, passphrase: passphrase)
-                return key.authenticationMethod(username: username)
+                return try key.authenticationMethod(username: username)
             } catch let error as PrivateKeyImportError {
                 throw SSHConnection.SSHConnectionError.connectFailed(
                     error.errorDescription ?? "私钥导入失败")
+            } catch let error as SSHConnection.SSHConnectionError {
+                throw error
             } catch {
                 throw SSHConnection.SSHConnectionError.connectFailed(error.localizedDescription)
             }

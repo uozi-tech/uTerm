@@ -4,15 +4,15 @@ import Crypto
 @testable import uTerm
 
 final class ParsedPrivateKeyTests: XCTestCase {
-    func testEd25519MapsToAuthenticationMethod() {
+    func testEd25519MapsToAuthenticationMethod() throws {
         let key = Curve25519.Signing.PrivateKey()
         let parsed = ParsedPrivateKey.ed25519(key)
         // 仅验证不崩溃、能产出方法对象。
-        _ = parsed.authenticationMethod(username: "root")
+        _ = try parsed.authenticationMethod(username: "root")
     }
 
-    func testP256MapsToAuthenticationMethod() {
+    func testP256MapsToAuthenticationMethod() throws {
         let parsed = ParsedPrivateKey.p256(P256.Signing.PrivateKey())
-        _ = parsed.authenticationMethod(username: "root")
+        _ = try parsed.authenticationMethod(username: "root")
     }
 }
