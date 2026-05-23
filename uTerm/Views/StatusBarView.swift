@@ -22,8 +22,8 @@ struct StatusBarView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 22)
+        .padding(.horizontal, 12)
+        .frame(height: 28)
         .background(.bar)
     }
 

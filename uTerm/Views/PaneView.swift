@@ -1,22 +1,27 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// 渲染一个 `PaneModel`：终端窗格按连接状态显示，文件窗格显示文件浏览内容。
 struct PaneView: View {
     let pane: PaneModel
     /// 该窗格是否为所在标签的聚焦窗格（用于高亮）。
     let isFocused: Bool
+    /// 当前标签的拖拽会话状态（所有窗格共享一份）。
+    let dragState: PaneDragState
     /// 点击窗格时通知上层设置聚焦。
     let onFocus: () -> Void
-    /// 头部「水平分屏」按钮。
-    let onSplitHorizontal: () -> Void
-    /// 头部「垂直分屏」按钮。
-    let onSplitVertical: () -> Void
+    /// 头部「分屏」按钮；方向由 `PaneView` 按窗格长宽比算出后传出。
+    let onSplit: (SplitDirection) -> Void
+    /// 拖拽落点：把 `source` 窗格按 `zone` 移到本窗格 / 与本窗格交换。
+    let onMoveOrSwap: @MainActor @Sendable (_ source: UUID, _ zone: PaneDropZone) -> Void
     /// 头部「关闭窗格」按钮。
     let onClose: () -> Void
 
     @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [ServerProfile]
+
+    @State private var paneSize: CGSize = .zero
 
     private var profile: ServerProfile? {
         profiles.first { $0.id == pane.serverProfileID }
@@ -28,35 +33,61 @@ struct PaneView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { paneSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in paneSize = newSize }
+            }
+        )
+        // 投放区高亮叠在整块窗格上 —— 与 .onDrop 的 bounds、paneSize 量测
+        // 同一坐标系（含 26pt 头部），高亮位置才与 paneDropZone 的归类一致。
+        .overlay {
+            if let zone = dropHighlightZone {
+                PaneDropHighlight(zone: zone)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(isFocused ? Color.accentColor : Color.clear, lineWidth: 2)
         )
         .contentShape(Rectangle())
         .onTapGesture { onFocus() }
+        .onDrop(of: [.utermPaneID], delegate: PaneDropDelegate(
+            targetID: pane.id,
+            dragState: dragState,
+            bounds: CGRect(origin: .zero, size: paneSize),
+            onDrop: onMoveOrSwap))
         .task(id: pane.id) { await connect() }
         .modifier(HostKeySheetModifier(pane: pane))
     }
 
-    /// 窗格头部条：图标 + 服务器名 + 分屏/关闭控制。
+    /// 窗格头部条：拖拽手柄（图标 + 服务器名）+ 分屏 / 关闭控制。
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: headerIcon)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(profile?.name ?? "终端")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Button(action: onSplitHorizontal) {
+            // 图标 + 名称区域兼作拖拽手柄；尾部按钮在手柄之外，故按钮的
+            // mouseDown 不会进入 .onDrag 的潜在拖拽态，保持可点。
+            HStack(spacing: 6) {
+                Image(systemName: headerIcon)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(profile?.name ?? "终端")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .onDrag {
+                dragState.begin(paneID: pane.id)
+                return PaneDragPayload.itemProvider(paneID: pane.id)
+            } preview: {
+                dragPreview
+            }
+            Button(action: { onSplit(autoSplitDirection) }) {
                 Image(systemName: "rectangle.split.2x1")
             }
-            .help("水平分屏")
-            Button(action: onSplitVertical) {
-                Image(systemName: "rectangle.split.1x2")
-            }
-            .help("垂直分屏")
+            .help("分屏")
             Button(action: onClose) {
                 Image(systemName: "xmark")
             }
@@ -67,6 +98,30 @@ struct PaneView: View {
         .padding(.horizontal, 8)
         .frame(height: 26)
         .background(.bar)
+    }
+
+    /// 拖拽时跟随光标的小卡片。
+    private var dragPreview: some View {
+        HStack(spacing: 6) {
+            Image(systemName: headerIcon)
+            Text(profile?.name ?? "终端").lineLimit(1)
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(.bar))
+    }
+
+    /// 按窗格当前长宽比选分屏方向：偏宽 → 左右分，偏高 → 上下分。
+    private var autoSplitDirection: SplitDirection {
+        paneSize.width >= paneSize.height ? .horizontal : .vertical
+    }
+
+    /// 当前应在本窗格上显示的投放区高亮；非拖拽悬停目标时为 nil。
+    private var dropHighlightZone: PaneDropZone? {
+        guard let dragging = dragState.draggingPaneID, dragging != pane.id,
+              let hover = dragState.hover, hover.paneID == pane.id else { return nil }
+        return hover.zone
     }
 
     private var headerIcon: String {

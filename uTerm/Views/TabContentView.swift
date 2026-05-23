@@ -6,6 +6,10 @@ struct TabContentView: View {
     /// 关闭整个标签（关闭最后一个窗格时触发）。
     let onCloseTab: () -> Void
 
+    /// 当前标签的拖拽会话状态，所有窗格共享一份。拖拽全程鼠标按住，
+    /// 切不了标签，故无需随 tab 重建。
+    @State private var dragState = PaneDragState()
+
     var body: some View {
         nodeView(tab.root)
     }
@@ -20,16 +24,19 @@ struct TabContentView: View {
                 return AnyView(PaneView(
                     pane: pane,
                     isFocused: tab.focusedPaneID == paneID,
+                    dragState: dragState,
                     onFocus: { tab.focusedPaneID = paneID },
-                    onSplitHorizontal: {
-                        tab.splitPane(paneID, direction: .horizontal,
+                    onSplit: { direction in
+                        tab.splitPane(paneID, direction: direction,
                                       serverProfileID: pane.serverProfileID,
                                       kind: pane.kind.tag)
                     },
-                    onSplitVertical: {
-                        tab.splitPane(paneID, direction: .vertical,
-                                      serverProfileID: pane.serverProfileID,
-                                      kind: pane.kind.tag)
+                    onMoveOrSwap: { source, zone in
+                        if zone == .center {
+                            tab.swapPanes(source, paneID)
+                        } else {
+                            tab.movePane(source, toTarget: paneID, zone: zone)
+                        }
                     },
                     onClose: {
                         if !tab.closePane(paneID) { onCloseTab() }

@@ -39,20 +39,51 @@ nonisolated indirect enum LayoutNode: Equatable, Sendable {
         }
     }
 
-    /// 把 `.leaf(paneID)` 替换为一个 `.split`，子节点为 [原 leaf, 新 leaf]。
+    /// 把 `.leaf(paneID)` 替换为一个 `.split`，子节点为原 leaf 与新 leaf。
+    /// `newLeafFirst` 为 true 时新 leaf 放 `first`，否则放 `second`。
     nonisolated func splitting(paneID: UUID, direction: SplitDirection,
-                               newPaneID: UUID, splitID: UUID, fraction: Double = 0.5) -> LayoutNode {
+                               newPaneID: UUID, splitID: UUID, fraction: Double = 0.5,
+                               newLeafFirst: Bool = false) -> LayoutNode {
         switch self {
         case .leaf(let id):
             guard id == paneID else { return self }
+            let original = LayoutNode.leaf(paneID: id)
+            let added = LayoutNode.leaf(paneID: newPaneID)
             return .split(SplitNode(
                 id: splitID, direction: direction, fraction: fraction,
-                first: .leaf(paneID: id), second: .leaf(paneID: newPaneID)))
+                first: newLeafFirst ? added : original,
+                second: newLeafFirst ? original : added))
         case .split(var s):
             s.first = s.first.splitting(paneID: paneID, direction: direction,
-                                        newPaneID: newPaneID, splitID: splitID, fraction: fraction)
+                                        newPaneID: newPaneID, splitID: splitID,
+                                        fraction: fraction, newLeafFirst: newLeafFirst)
             s.second = s.second.splitting(paneID: paneID, direction: direction,
-                                          newPaneID: newPaneID, splitID: splitID, fraction: fraction)
+                                          newPaneID: newPaneID, splitID: splitID,
+                                          fraction: fraction, newLeafFirst: newLeafFirst)
+            return .split(s)
+        }
+    }
+
+    /// 交换两个 paneID 在各自 `.leaf` 中的位置。树结构与所有 `fraction` 保留。
+    /// 任一 id 不在树中时整体无操作 —— 否则会把在场的那个 leaf 改写成
+    /// 不存在的幽灵 id，丢掉真实窗格。
+    nonisolated func swapping(_ a: UUID, _ b: UUID) -> LayoutNode {
+        guard a != b else { return self }
+        let ids = leafIDs
+        guard ids.contains(a), ids.contains(b) else { return self }
+        return swappingKnown(a, b)
+    }
+
+    /// `swapping` 的递归核心 —— 调用前已确保 `a`、`b` 均在树中。
+    private nonisolated func swappingKnown(_ a: UUID, _ b: UUID) -> LayoutNode {
+        switch self {
+        case .leaf(let id):
+            if id == a { return .leaf(paneID: b) }
+            if id == b { return .leaf(paneID: a) }
+            return self
+        case .split(var s):
+            s.first = s.first.swappingKnown(a, b)
+            s.second = s.second.swappingKnown(a, b)
             return .split(s)
         }
     }

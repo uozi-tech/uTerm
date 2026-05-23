@@ -72,4 +72,97 @@ final class TabModelTests: XCTestCase {
         let newPane = tab.panes[tab.focusedPaneID!]!
         XCTAssertEqual(newPane.kind.tag, .files)
     }
+
+    func testMovePaneToLeadingPutsSourceFirst() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .vertical, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        tab.movePane(p2, toTarget: p1, zone: .leading)
+        guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
+        XCTAssertEqual(s.direction, .horizontal)
+        XCTAssertEqual(s.first, .leaf(paneID: p2))
+        XCTAssertEqual(s.second, .leaf(paneID: p1))
+        XCTAssertEqual(tab.focusedPaneID, p2)
+    }
+
+    func testMovePaneToBottomPutsSourceSecond() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        tab.movePane(p2, toTarget: p1, zone: .bottom)
+        guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
+        XCTAssertEqual(s.direction, .vertical)
+        XCTAssertEqual(s.first, .leaf(paneID: p1))
+        XCTAssertEqual(s.second, .leaf(paneID: p2))
+    }
+
+    func testMovePaneKeepsAllPanesAndCollapsesSourceOldSplit() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        tab.splitPane(p2, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p3 = tab.focusedPaneID!
+        tab.movePane(p3, toTarget: p1, zone: .top)
+        XCTAssertEqual(Set(tab.root.leafIDs), [p1, p2, p3])
+        XCTAssertEqual(tab.root.leafIDs.count, 3)
+        XCTAssertEqual(tab.panes.count, 3)
+        XCTAssertEqual(tab.focusedPaneID, p3)
+    }
+
+    func testMovePaneCenterZoneIsNoOp() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        let before = tab.root
+        tab.movePane(p2, toTarget: p1, zone: .center)
+        XCTAssertEqual(tab.root, before)
+    }
+
+    func testMovePaneToSelfIsNoOp() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let before = tab.root
+        tab.movePane(p1, toTarget: p1, zone: .top)
+        XCTAssertEqual(tab.root, before)
+    }
+
+    func testSwapPanesExchangesPositions() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        tab.swapPanes(p1, p2)
+        guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
+        XCTAssertEqual(s.first, .leaf(paneID: p2))
+        XCTAssertEqual(s.second, .leaf(paneID: p1))
+    }
+
+    func testSwapPanesUnknownIDIsNoOp() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let before = tab.root
+        tab.swapPanes(p1, UUID())
+        XCTAssertEqual(tab.root, before)
+    }
+
+    func testMoveThenSwapKeepsPanesAndFocusInvariants() {
+        let tab = makeTab()
+        let p1 = tab.focusedPaneID!
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        let p2 = tab.focusedPaneID!
+        tab.splitPane(p2, direction: .vertical, serverProfileID: UUID(), kind: .terminal)
+        let p3 = tab.focusedPaneID!
+        tab.movePane(p1, toTarget: p3, zone: .trailing)
+        XCTAssertEqual(tab.focusedPaneID, p1)            // movePane 聚焦被移动窗格
+        tab.swapPanes(p2, p3)
+        XCTAssertEqual(tab.focusedPaneID, p1)            // swapPanes 不改聚焦
+        XCTAssertEqual(Set(tab.root.leafIDs), [p1, p2, p3])
+        XCTAssertEqual(tab.panes.count, 3)
+    }
 }

@@ -77,6 +77,33 @@ final class TabModel: Identifiable {
         root = root.settingFraction(fraction, splitID: splitID)
     }
 
+    /// 把 `source` 窗格移到 `target` 窗格的某一侧，重新分屏。
+    /// `zone` 为 `.center` 时不处理（应改用 `swapPanes`）。
+    func movePane(_ source: UUID, toTarget target: UUID, zone: PaneDropZone) {
+        guard source != target,
+              panes[source] != nil, panes[target] != nil else { return }
+        let direction: SplitDirection
+        let newLeafFirst: Bool
+        switch zone {
+        case .leading:  direction = .horizontal; newLeafFirst = true
+        case .trailing: direction = .horizontal; newLeafFirst = false
+        case .top:      direction = .vertical;   newLeafFirst = true
+        case .bottom:   direction = .vertical;   newLeafFirst = false
+        case .center:   return
+        }
+        guard let removed = root.removingLeaf(paneID: source) else { return }
+        root = removed.splitting(paneID: target, direction: direction,
+                                 newPaneID: source, splitID: UUID(),
+                                 newLeafFirst: newLeafFirst)
+        focusedPaneID = source
+    }
+
+    /// 交换两个窗格在布局树中的位置。聚焦不变。
+    func swapPanes(_ a: UUID, _ b: UUID) {
+        guard a != b, panes[a] != nil, panes[b] != nil else { return }
+        root = root.swapping(a, b)
+    }
+
     /// 关闭整个标签前调用：dispose 所有窗格。
     func disposeAll() {
         for pane in panes.values { pane.dispose() }

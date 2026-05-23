@@ -32,7 +32,7 @@ struct uTermApp: App {
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
-                .frame(minWidth: 800, minHeight: 500)
+                .frame(minWidth: 1280, minHeight: 720)
         }
         .modelContainer(modelContainer)
     }
