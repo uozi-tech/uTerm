@@ -21,6 +21,10 @@ final class FileBrowserModel {
     private var provider: (any SFTPProviding)?
     private(set) var transientError: String?
 
+    /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
+    /// nil 表示尚未 connect。Spec 2A §1.4。
+    var sftpProvider: (any SFTPProviding)? { provider }
+
     init() {}
 
     init(testProvider: any SFTPProviding, startPath: String) {

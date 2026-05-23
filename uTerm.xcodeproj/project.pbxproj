@@ -9,8 +9,10 @@
 /* Begin PBXBuildFile section */
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
+		AD0CF0F0F0F0F0F0F0F00002 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = AD0CF0F0F0F0F0F0F0F00001 /* Markdown */; };
 		B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */; };
 		C17ADE1000000000000002 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = C17ADE1000000000000001 /* Citadel */; };
+		CE7EF0F0F0F0F0F0F0F00002 /* CodeEditTextView in Frameworks */ = {isa = PBXBuildFile; productRef = CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +52,8 @@
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
 				A50000000000000000000002 /* SwiftASN1 in Frameworks */,
 				B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */,
+				CE7EF0F0F0F0F0F0F0F00002 /* CodeEditTextView in Frameworks */,
+				AD0CF0F0F0F0F0F0F0F00002 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -105,6 +109,8 @@
 				C17ADE1000000000000001 /* Citadel */,
 				A50000000000000000000001 /* SwiftASN1 */,
 				B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */,
+				CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */,
+				AD0CF0F0F0F0F0F0F0F00001 /* Markdown */,
 			);
 			productName = uTerm;
 			productReference = 85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */;
@@ -166,6 +172,8 @@
 				C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
 				B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */,
+				CE7EF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "CodeEditTextView" */,
+				AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -504,6 +512,14 @@
 				minimumVersion = 1.7.0;
 			};
 		};
+		AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.0;
+			};
+		};
 		B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-crypto.git";
@@ -520,6 +536,14 @@
 				minimumVersion = 0.9.0;
 			};
 		};
+		CE7EF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "CodeEditTextView" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/CodeEditApp/CodeEditTextView";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -533,6 +557,11 @@
 			package = A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */;
 			productName = SwiftASN1;
 		};
+		AD0CF0F0F0F0F0F0F0F00001 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
 		B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */;
@@ -542,6 +571,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
 			productName = Citadel;
+		};
+		CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CE7EF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "CodeEditTextView" */;
+			productName = CodeEditTextView;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

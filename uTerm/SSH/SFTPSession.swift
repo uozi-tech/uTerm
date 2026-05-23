@@ -2,15 +2,6 @@ import Foundation
 import Citadel
 import NIOCore
 
-/// `FileBrowserModel` 依赖的 SFTP 抽象 —— 便于用 `MockSFTP` 单测导航逻辑。
-protocol SFTPProviding: Actor {
-    func list(path: String) async throws -> [RemoteEntry]
-    func realPath(_ path: String) async throws -> String
-    func download(remotePath: String) async throws -> Data
-    func upload(data: Data, toRemotePath: String) async throws
-    func close() async
-}
-
 /// 真实 SFTP 会话：在一个已连上的 `ConnectedClient` 上跑 Citadel SFTP。
 actor SFTPSession: SFTPProviding {
     private let connected: ConnectedClient
@@ -73,6 +64,29 @@ actor SFTPSession: SFTPProviding {
             try? await file.close()
             throw error
         }
+    }
+
+    func write(_ path: String, data: Data) async throws {
+        let file = try await sftp.openFile(
+            filePath: path,
+            flags: [.write, .create, .truncate]
+        )
+        do {
+            var buffer = ByteBuffer()
+            buffer.writeBytes(data)
+            try await file.write(buffer, at: 0)
+            try await file.close()
+        } catch {
+            try? await file.close()
+            throw error
+        }
+    }
+
+    func stat(_ path: String) async throws -> RemoteStat {
+        let attrs = try await sftp.getAttributes(at: path)
+        let size = Int64(attrs.size ?? 0)
+        let mtime = attrs.accessModificationTime?.modificationTime ?? Date()
+        return RemoteStat(size: size, mtime: mtime)
     }
 
     func close() async {

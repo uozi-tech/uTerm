@@ -44,6 +44,13 @@ struct uTermApp: App {
                 }
                 .keyboardShortcut("t", modifiers: .command)
             }
+            // ⌘S 保存预览区当前 tab。Spec 2A §3 / T18。
+            CommandGroup(after: .saveItem) {
+                Button("保存") {
+                    NotificationCenter.default.post(name: .savePreviewBuffer, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
             CommandGroup(after: .sidebar) {
                 Button("水平分屏") {
                     NotificationCenter.default.post(name: .splitFocusedPaneVertical, object: nil)

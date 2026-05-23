@@ -17,11 +17,33 @@ final class WorkspaceModel {
     /// 避免 inspector toggle 时丢失 chat 历史。
     let assistantModel = AssistantModel()
 
-    init() {}
+    /// 预览/编辑区的 model；与 workspace 同生命周期。Spec 2A §1.3。
+    let filePreviewModel: FilePreviewModel
+
+    init(windowID: WorkspaceWindowID? = nil) {
+        // 按 windowID 命名 recents 文件；windowID 为 nil（测试）走临时目录。
+        let store: RecentFilesStore
+        if let wid = windowID {
+            store = RecentFilesStore(windowID: wid)
+        } else {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("uTermTests-\(UUID().uuidString)", isDirectory: true)
+            store = RecentFilesStore(rootDirectory: tmp,
+                                     fileName: "recents-\(UUID().uuidString).json")
+        }
+        // FilePreviewModel 取 SFTP provider 走 fileBrowserModel —— 用 closure 延迟
+        // 取（fileBrowserModel 在 init 中先初始化，对 self 不可用直到 init 完成；
+        // 但 RecentFilesStore 与 sftpProvider closure 都不需要立即捕获 self。）
+        self.filePreviewModel = FilePreviewModel(
+            recentsStore: store,
+            sftpProvider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider })
+    }
 
     /// 从持久化快照重建工作区。便利构造器 —— 内部走 restore(from:) 走同一条路径。
+    /// 不接 windowID（测试场景多用），recents 走临时目录。生产代码用 init(windowID:) +
+    /// 后续 restore(from:)。
     convenience init(snapshot: WorkspaceSnapshot) {
-        self.init()
+        self.init(windowID: nil)
         restore(from: snapshot)
     }
 
@@ -50,11 +72,12 @@ final class WorkspaceModel {
         }
     }
 
-    /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话。
-    /// AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
+    /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
+    /// 预览 buffers。AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
     func dispose() {
         for tab in tabs { tab.disposeAll() }
         fileBrowserModel.dispose()
+        filePreviewModel.dispose()
     }
 
     var activeTab: TabModel? { tabs.first { $0.id == activeTabID } }

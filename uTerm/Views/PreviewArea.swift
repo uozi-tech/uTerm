@@ -1,21 +1,16 @@
 import SwiftUI
 
-/// 工作区中央上半部的预览/编辑区。
-/// Spec 1 只占位 —— 真正的多 tab 文件渲染留给 Spec 2。
+/// 工作区中央上半部的预览/编辑区。Spec 2A 真正动起来 ——
+/// 多 tab、可编辑、按 FileKind 分派渲染。
 struct PreviewArea: View {
+    let model: FilePreviewModel
+
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 38, weight: .light))
-                .foregroundStyle(AppTheme.Palette.textMuted)
-            Text("从左侧选择文件预览")
-                .font(.callout)
-                .foregroundStyle(AppTheme.Palette.textSecondary)
-            Text("Spec 2 落地后这里会显示多 tab 的代码 / Markdown / 图片")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Palette.textMuted)
+        VStack(spacing: 0) {
+            PreviewTabBar(model: model)
+            PreviewBodyRouter(model: model)
+            PreviewStatusRow(model: model)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.Palette.bgBase)
     }
 }

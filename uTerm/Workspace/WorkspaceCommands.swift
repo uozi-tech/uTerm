@@ -11,4 +11,8 @@ extension Notification.Name {
     static let toggleRightInspector = Notification.Name("uterm.toggleRightInspector")
     /// ⌘T：在当前工作区新建一个终端标签。
     static let newTerminalTab = Notification.Name("uterm.newTerminalTab")
+    /// 左 sidebar 文件 tap：在 PreviewArea 打开。userInfo: path / size / mtime。
+    static let openRemoteFile = Notification.Name("uterm.openRemoteFile")
+    /// ⌘S：保存当前活动 preview buffer。
+    static let savePreviewBuffer = Notification.Name("uterm.savePreviewBuffer")
 }

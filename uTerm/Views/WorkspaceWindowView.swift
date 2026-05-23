@@ -8,12 +8,34 @@ struct WorkspaceWindowView: View {
     let windowID: WorkspaceWindowID?
 
     @Query private var profiles: [ServerProfile]
-    @State private var workspace = WorkspaceModel()
+    @State private var workspace: WorkspaceModel
     @State private var didRestore = false
     @State private var saveTask: Task<Void, Never>?
+    /// 大文件确认 / 阻断 sheet 的状态（Spec 2A §1.5 / §7）。
+    @State private var largeFileConfirm: LargeFileConfirm?
+    @State private var blockedFile: BlockedFile?
     /// 用于把全局 CommandGroup 通知限定到当前 key window —— 多窗口下避免后台窗口
     /// 也被切换。`.controlActiveState` 在窗口为 key 时为 `.key`。
     @Environment(\.controlActiveState) private var controlActiveState
+
+    init(windowID: WorkspaceWindowID?) {
+        self.windowID = windowID
+        // @State 初值在 init 时构造一次；用 windowID 让 FilePreviewModel
+        // 拿到正确的 RecentFilesStore 命名（按服务器范围）。
+        self._workspace = State(initialValue: WorkspaceModel(windowID: windowID))
+    }
+
+    private struct LargeFileConfirm: Identifiable {
+        let id = UUID()
+        let path: String
+        let size: Int64
+        let mtime: Date?
+    }
+    private struct BlockedFile: Identifiable {
+        let id = UUID()
+        let path: String
+        let size: Int64
+    }
 
     /// 本窗口绑定的服务器（按 `windowID.serverID` 查；查不到 = 已删除）。
     private var server: ServerProfile? {
@@ -118,6 +140,109 @@ struct WorkspaceWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
             guard controlActiveState == .key else { return }
             workspace.openServer(profileID: server.id, title: server.name)
+        }
+        // SFTPSidebar 文件 tap → 通知 → 在 PreviewArea 打开。Spec 2A §3.1。
+        .onReceive(NotificationCenter.default.publisher(for: .openRemoteFile)) { note in
+            guard controlActiveState == .key,
+                  let info = note.userInfo,
+                  let path = info["path"] as? String,
+                  let size = info["size"] as? Int64 else { return }
+            let mtime = info["mtime"] as? Date
+            if size > 50 * 1024 * 1024 {
+                blockedFile = BlockedFile(path: path, size: size)
+            } else if size > 5 * 1024 * 1024 {
+                largeFileConfirm = LargeFileConfirm(path: path, size: size, mtime: mtime)
+            } else {
+                Task { await workspace.filePreviewModel.open(path: path, fileSize: size, mtime: mtime) }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { _ in
+            guard controlActiveState == .key,
+                  let id = workspace.filePreviewModel.activeBufferID else { return }
+            Task { await handleSave(id: id) }
+        }
+        .confirmationDialog(
+            "文件较大，可能卡顿。继续打开？",
+            isPresented: Binding(
+                get: { largeFileConfirm != nil },
+                set: { if !$0 { largeFileConfirm = nil } }),
+            presenting: largeFileConfirm) { confirm in
+                Button("继续") {
+                    Task {
+                        await workspace.filePreviewModel.open(
+                            path: confirm.path, fileSize: confirm.size, mtime: confirm.mtime)
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            } message: { confirm in
+                Text(byteSize(confirm.size))
+            }
+        .alert(
+            "文件太大",
+            isPresented: Binding(
+                get: { blockedFile != nil },
+                set: { if !$0 { blockedFile = nil } }),
+            presenting: blockedFile) { blocked in
+                Button("外部打开") {
+                    Task { await downloadAndOpenExternally(blocked.path) }
+                }
+                Button("取消", role: .cancel) {}
+            } message: { blocked in
+                Text("该文件 \(byteSize(blocked.size))，超过 50 MB 上限。建议用外部编辑器。")
+            }
+    }
+
+    // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）
+
+    private func byteSize(_ n: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+    }
+
+    @MainActor
+    private func handleSave(id: UUID) async {
+        let result = await workspace.filePreviewModel.save(id)
+        switch result {
+        case .conflict(let remoteMtime):
+            let alert = NSAlert()
+            alert.messageText = "远程文件已变化"
+            alert.informativeText = "远程已被另一处保存。"
+            alert.addButton(withTitle: "保留我的（覆盖远程）")
+            alert.addButton(withTitle: "用远程的（丢弃本地）")
+            alert.addButton(withTitle: "取消")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                // 强制覆盖：把 mtimeWhenLoaded 推到远程值绕过 conflict guard
+                if let buf = workspace.filePreviewModel.buffers.first(where: { $0.id == id }) {
+                    buf.mtimeWhenLoaded = remoteMtime
+                }
+                _ = await workspace.filePreviewModel.save(id)
+            case .alertSecondButtonReturn:
+                await workspace.filePreviewModel.reloadFromRemote(id)
+            default: break
+            }
+        case .failed(let msg):
+            let alert = NSAlert()
+            alert.messageText = "保存失败"
+            alert.informativeText = msg
+            alert.runModal()
+        case .saved, .noop: break
+        }
+    }
+
+    @MainActor
+    private func downloadAndOpenExternally(_ path: String) async {
+        guard let sftp = workspace.fileBrowserModel.sftpProvider else { return }
+        let basename = (path as NSString).lastPathComponent
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(basename)
+        do {
+            let data = try await sftp.download(remotePath: path)
+            try data.write(to: dest)
+            NSWorkspace.shared.open(dest)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "下载失败"
+            alert.informativeText = "\(error)"
+            alert.runModal()
         }
     }
 

@@ -9,7 +9,7 @@ struct WorkspaceCenter: View {
 
     var body: some View {
         VSplitView {
-            PreviewArea()
+            PreviewArea(model: workspace.filePreviewModel)
                 .frame(minHeight: 120,
                        idealHeight: idealPreviewHeight)
             TerminalArea(workspace: workspace, server: server)

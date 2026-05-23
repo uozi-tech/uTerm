@@ -81,7 +81,22 @@ struct FileBrowserContent: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if entry.isDirectory { Task { await model.navigate(into: entry) } }
+            if entry.isDirectory {
+                Task { await model.navigate(into: entry) }
+            } else {
+                // Spec 2A §3.1：非目录条目 tap → 让 PreviewArea 打开。
+                let basePath = model.currentPath
+                let fullPath = basePath.hasSuffix("/") ? basePath + entry.name
+                                                       : basePath + "/" + entry.name
+                NotificationCenter.default.post(
+                    name: .openRemoteFile,
+                    object: nil,
+                    userInfo: [
+                        "path": fullPath,
+                        "size": Int64(entry.size ?? 0),
+                        "mtime": entry.modifiedAt as Any
+                    ])
+            }
         }
         .contextMenu {
             if !entry.isDirectory {
