@@ -11,13 +11,14 @@ struct TabContentView: View {
     @State private var dragState = PaneDragState()
 
     var body: some View {
-        nodeView(tab.root)
+        // root 是单 leaf 时窗格头部由 titlebar chip 代为表达，隐藏 header。
+        nodeView(tab.root, showsHeader: !tab.root.isSingleLeaf)
     }
 
     // Returns AnyView to break the opaque-type recursion that arises when a
     // @ViewBuilder `some View` function calls itself — the compiler cannot
     // resolve the self-referential concrete type at compile time.
-    private func nodeView(_ node: LayoutNode) -> AnyView {
+    private func nodeView(_ node: LayoutNode, showsHeader: Bool) -> AnyView {
         switch node {
         case .leaf(let paneID):
             if let pane = tab.panes[paneID] {
@@ -40,17 +41,19 @@ struct TabContentView: View {
                     },
                     onClose: {
                         if !tab.closePane(paneID) { onCloseTab() }
-                    }))
+                    },
+                    showsHeader: showsHeader))
             } else {
                 return AnyView(Color.clear)   // 不应发生：树与 panes 映射不一致
             }
         case .split(let s):
+            // split 节点忽略入参 showsHeader —— 子 leaf 一律带 header。
             return AnyView(SplitContainerView(
                 direction: s.direction,
                 fraction: s.fraction,
                 onFractionChange: { tab.setFraction($0, splitID: s.id) },
-                first: { nodeView(s.first) },
-                second: { nodeView(s.second) }))
+                first: { nodeView(s.first, showsHeader: true) },
+                second: { nodeView(s.second, showsHeader: true) }))
         }
     }
 }

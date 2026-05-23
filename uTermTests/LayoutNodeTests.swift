@@ -121,4 +121,17 @@ final class LayoutNodeTests: XCTestCase {
             first: .leaf(paneID: a), second: .leaf(paneID: b)))
         XCTAssertEqual(tree.swapping(a, UUID()), tree)
     }
+
+    func test_isSingleLeaf_trueForLeaf() {
+        let node: LayoutNode = .leaf(paneID: UUID())
+        XCTAssertTrue(node.isSingleLeaf)
+    }
+
+    func test_isSingleLeaf_falseForSplit() {
+        let a = UUID(), b = UUID()
+        let split = LayoutNode.leaf(paneID: a).splitting(
+            paneID: a, direction: .horizontal,
+            newPaneID: b, splitID: UUID())
+        XCTAssertFalse(split.isSingleLeaf)
+    }
 }

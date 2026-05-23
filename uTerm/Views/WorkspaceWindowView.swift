@@ -40,39 +40,29 @@ struct WorkspaceWindowView: View {
     @ViewBuilder
     private func workspaceBody(server: ServerProfile,
                                windowID: WorkspaceWindowID) -> some View {
-        WorkspaceView(
-            workspace: workspace,
-            onNewTab: { kind in
-                workspace.openServer(profileID: server.id, title: server.name, kind: kind)
-            })
+        WorkspaceView(workspace: workspace)
             .navigationTitle(server.name)
+            // 隐藏工具栏中央那颗自动渲染的标题胶囊 —— 同样的信息已在标签栏 +
+            // StatusBarView 中呈现；保留 `.navigationTitle` 仅供「窗口」菜单 /
+            // 调度中心识别窗口。
+            .toolbar(removing: .title)
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Menu {
-                        Button("新建终端标签") {
-                            workspace.openServer(profileID: server.id,
-                                                 title: server.name, kind: .terminal)
-                        }
-                        Button("新建文件标签") {
-                            workspace.openServer(profileID: server.id,
-                                                 title: server.name, kind: .files)
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .help("新建标签")
-                }
                 ToolbarItem(placement: .principal) {
-                    if let tab = workspace.activeTab {
-                        HStack(spacing: 6) {
-                            Text(tab.title).font(.headline)
-                            if let pane = tab.focusedPane,
-                               case .terminal(let session) = pane.kind {
-                                ConnectionStatusBadge(state: session.connectionState,
-                                                      showsLabel: false)
-                            }
-                        }
+                    WorkspaceTitlebarTabs(
+                        workspace: workspace,
+                        onNewTab: { kind in
+                            workspace.openServer(profileID: server.id,
+                                                 title: server.name, kind: kind)
+                        })
+                }
+                ToolbarItem {
+                    Button {
+                        splitFocusedPane(direction: .horizontal)
+                    } label: {
+                        Image(systemName: "rectangle.split.2x1")
                     }
+                    .keyboardShortcut("d", modifiers: .command)
+                    .help("水平分屏（⌘D）")
                 }
                 ToolbarItem {
                     Button {
@@ -109,6 +99,13 @@ struct WorkspaceWindowView: View {
                     try? store.save(newSnapshot)
                 }
             }
+            // 全局 CommandMenu 是 app 级的，无法直达某个窗口；用通知做转发。
+            // 所有打开的工作区窗口都会订阅，但 workspace.activeTab 是窗口本地的
+            // ——前台窗口正常分屏，背景窗口因 activeTab 仍指向自己的活动 tab
+            // 也会被静默分屏。区分前台需读 NSWindow.isKeyWindow，本期不做。
+            .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
+                splitFocusedPane(direction: .vertical)
+            }
     }
 
     @ViewBuilder
@@ -126,5 +123,11 @@ struct WorkspaceWindowView: View {
     /// 点击工具栏按钮：已是当前面板则关闭，否则切到该面板。
     private func toggleInspector(_ panel: InspectorPanel) {
         inspectorPanel = (inspectorPanel == panel) ? nil : panel
+    }
+
+    /// 对当前活动 tab 的聚焦窗格分屏。toolbar 按钮（⌘D）与
+    /// CommandMenu 的「垂直分屏」（⇧⌘D）共用此入口；无活动 tab 时静默 no-op。
+    private func splitFocusedPane(direction: SplitDirection) {
+        workspace.activeTab?.splitFocusedPane(direction: direction)
     }
 }

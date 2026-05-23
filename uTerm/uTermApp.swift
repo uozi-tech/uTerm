@@ -35,5 +35,13 @@ struct uTermApp: App {
                 .frame(minWidth: 1280, minHeight: 720)
         }
         .modelContainer(modelContainer)
+        .commands {
+            CommandGroup(after: .sidebar) {
+                Button("垂直分屏") {
+                    NotificationCenter.default.post(name: .splitFocusedPaneVertical, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
+        }
     }
 }

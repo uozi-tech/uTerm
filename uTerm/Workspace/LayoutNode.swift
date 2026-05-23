@@ -39,6 +39,12 @@ nonisolated indirect enum LayoutNode: Equatable, Sendable {
         }
     }
 
+    /// 整棵树只有一个窗格 —— 等价 `leafCount == 1`，但避免遍历。
+    nonisolated var isSingleLeaf: Bool {
+        if case .leaf = self { return true }
+        return false
+    }
+
     /// 把 `.leaf(paneID)` 替换为一个 `.split`，子节点为原 leaf 与新 leaf。
     /// `newLeafFirst` 为 true 时新 leaf 放 `first`，否则放 `second`。
     nonisolated func splitting(paneID: UUID, direction: SplitDirection,

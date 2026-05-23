@@ -96,7 +96,15 @@ final class TerminalContainerView: NSView {
     }
 
     func detachTerminal() {
-        terminalView?.removeFromSuperview()
+        // Only unparent the shared terminal view if it is *still* ours.
+        // SwiftUI can defer this container's `dismantleNSView` until AFTER the
+        // next container has already re-adopted the same (TerminalSession-owned)
+        // terminal view — this happens on a tab switch away-and-back. Without
+        // this guard the stale container rips the live terminal view out of the
+        // new container, orphaning it so the pane renders black.
+        if terminalView?.superview === self {
+            terminalView?.removeFromSuperview()
+        }
         terminalView = nil
         removeScrollForwardingMonitor()
     }

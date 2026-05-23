@@ -17,6 +17,9 @@ struct PaneView: View {
     let onMoveOrSwap: @MainActor @Sendable (_ source: UUID, _ zone: PaneDropZone) -> Void
     /// 头部「关闭窗格」按钮。
     let onClose: () -> Void
+    /// 是否渲染窗格头部（图标 + 服务器名 + 分屏 + 关闭）。
+    /// 单窗格 tab 由 titlebar 上的 chip 表达标题，header 多余。
+    let showsHeader: Bool
 
     @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [ServerProfile]
@@ -29,7 +32,7 @@ struct PaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            if showsHeader { header }
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,7 +44,8 @@ struct PaneView: View {
             }
         )
         // 投放区高亮叠在整块窗格上 —— 与 .onDrop 的 bounds、paneSize 量测
-        // 同一坐标系（含 26pt 头部），高亮位置才与 paneDropZone 的归类一致。
+        // 同一坐标系（包含头部，当 showsHeader 为 true 时），高亮位置才与
+        // paneDropZone 的归类一致。
         .overlay {
             if let zone = dropHighlightZone {
                 PaneDropHighlight(zone: zone)

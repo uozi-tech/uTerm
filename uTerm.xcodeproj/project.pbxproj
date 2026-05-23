@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
-		C17ADE1000000000000002 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = C17ADE1000000000000001 /* Citadel */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */; };
+		C17ADE1000000000000002 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = C17ADE1000000000000001 /* Citadel */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -356,6 +356,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -389,6 +390,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -494,14 +496,6 @@
 				revision = c068a905c5aeab60852fb865bee05dc8a5af190c;
 			};
 		};
-		C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/orlandos-nl/Citadel";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.0;
-			};
-		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-asn1.git";
@@ -518,6 +512,14 @@
 				minimumVersion = 3.15.1;
 			};
 		};
+		C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orlandos-nl/Citadel";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -525,11 +527,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D4E5F6789ABCDEF000 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
-		};
-		C17ADE1000000000000001 /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
-			productName = Citadel;
 		};
 		A50000000000000000000001 /* SwiftASN1 */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -540,6 +537,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */;
 			productName = _CryptoExtras;
+		};
+		C17ADE1000000000000001 /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
