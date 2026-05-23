@@ -53,7 +53,7 @@ struct PaneView: View {
         }
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(isFocused ? Color.accentColor : Color.clear, lineWidth: 2)
+                .strokeBorder(isFocused ? AppTheme.Palette.accent : Color.clear, lineWidth: 2)
         )
         .contentShape(Rectangle())
         .onTapGesture { onFocus() }
@@ -63,7 +63,7 @@ struct PaneView: View {
             bounds: CGRect(origin: .zero, size: paneSize),
             onDrop: onMoveOrSwap))
         .task(id: pane.id) { await connect() }
-        .modifier(HostKeySheetModifier(pane: pane))
+        .hostKeySheet(pane.hostKeyRelay)
     }
 
     /// 窗格头部条：拖拽手柄（图标 + 服务器名）+ 分屏 / 关闭控制。
@@ -74,10 +74,10 @@ struct PaneView: View {
             HStack(spacing: 6) {
                 Image(systemName: headerIcon)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.Palette.textMuted)
                 Text(profile?.name ?? "终端")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.Palette.textMuted)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -101,7 +101,7 @@ struct PaneView: View {
         .font(.caption)
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(.bar)
+        .background(AppTheme.Palette.bgPanel)
     }
 
     /// 拖拽时跟随光标的小卡片。
@@ -128,31 +128,16 @@ struct PaneView: View {
         return hover.zone
     }
 
-    private var headerIcon: String {
-        switch pane.kind {
-        case .terminal: "terminal"
-        case .files: "folder"
-        }
-    }
+    private var headerIcon: String { "terminal" }
 
     @ViewBuilder
     private var content: some View {
-        switch pane.kind {
-        case .terminal(let session):
-            terminalContent(session: session)
-        case .files(let model):
-            FileBrowserContent(model: model)
-        }
-    }
-
-    @ViewBuilder
-    private func terminalContent(session: TerminalSession) -> some View {
-        switch session.connectionState {
+        switch pane.session.connectionState {
         case .idle, .connecting:
             ProgressView("正在连接…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .connected:
-            TerminalHostView(terminalView: session.terminalView)
+            TerminalHostView(terminalView: pane.session.terminalView)
         case .failed(let message):
             stateView(systemImage: "exclamationmark.triangle",
                       title: "连接失败", detail: message, action: "重试")
@@ -174,10 +159,10 @@ struct PaneView: View {
     private func stateView(systemImage: String, title: String,
                            detail: String, action: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(.secondary)
+            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(AppTheme.Palette.textMuted)
             Text(title).font(.headline)
             if !detail.isEmpty {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             if profile != nil {
@@ -190,16 +175,3 @@ struct PaneView: View {
     }
 }
 
-/// 按 kind 给窗格挂对应的 host-key 审批 sheet。
-private struct HostKeySheetModifier: ViewModifier {
-    let pane: PaneModel
-
-    func body(content: Content) -> some View {
-        switch pane.kind {
-        case .terminal:
-            content.hostKeySheet(pane.hostKeyRelay)
-        case .files(let model):
-            content.hostKeySheet(model.hostKeyRelay)
-        }
-    }
-}

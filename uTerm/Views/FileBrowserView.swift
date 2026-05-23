@@ -26,7 +26,7 @@ struct FileBrowserContent: View {
         HStack(spacing: 8) {
             Text(model.currentPath)
                 .font(.caption).lineLimit(1).truncationMode(.head)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.Palette.textMuted)
             Spacer()
             Button { Task { await model.refresh() } } label: {
                 Image(systemName: "arrow.clockwise")
@@ -47,9 +47,9 @@ struct FileBrowserContent: View {
             ProgressView("正在连接…").frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             VStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(AppTheme.Palette.textMuted)
                 Text("无法浏览文件").font(.headline)
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
@@ -72,11 +72,11 @@ struct FileBrowserContent: View {
     private func entryRow(_ entry: RemoteEntry) -> some View {
         HStack {
             Image(systemName: entry.isDirectory ? "folder" : "doc")
-                .foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary)
+                .foregroundStyle(entry.isDirectory ? AppTheme.Palette.accent : AppTheme.Palette.textMuted)
             Text(entry.name)
             Spacer()
             if let size = entry.size, !entry.isDirectory {
-                Text(byteText(size)).font(.caption).foregroundStyle(.secondary)
+                Text(byteText(size)).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
             }
         }
         .contentShape(Rectangle())

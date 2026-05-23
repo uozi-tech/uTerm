@@ -16,11 +16,11 @@ final class TabModel: Identifiable {
         return panes[id]
     }
 
-    /// 新建一个只有单窗格的标签，窗格连 `rootServerProfileID`、种类为 `kind`。
-    init(id: UUID = UUID(), title: String, rootServerProfileID: UUID, kind: PaneKindTag) {
+    /// 新建一个只有单窗格的标签，窗格连 `rootServerProfileID`。
+    init(id: UUID = UUID(), title: String, rootServerProfileID: UUID) {
         self.id = id
         self.title = title
-        let pane = PaneModel(serverProfileID: rootServerProfileID, kind: kind)
+        let pane = PaneModel(serverProfileID: rootServerProfileID)
         self.root = .leaf(paneID: pane.id)
         self.panes = [pane.id: pane]
         self.focusedPaneID = pane.id
@@ -36,22 +36,21 @@ final class TabModel: Identifiable {
         self.focusedPaneID = root.firstLeafID
     }
 
-    /// 对聚焦窗格分屏；新窗格连与聚焦窗格相同的服务器、沿用其 kind，并成为新的聚焦。
+    /// 对聚焦窗格分屏；新窗格连与聚焦窗格相同的服务器，并成为新的聚焦。
     func splitFocusedPane(direction: SplitDirection) {
         guard let focusedPane else { return }
-        let newPane = PaneModel(serverProfileID: focusedPane.serverProfileID,
-                                kind: focusedPane.kind.tag)
+        let newPane = PaneModel(serverProfileID: focusedPane.serverProfileID)
         panes[newPane.id] = newPane
         root = root.splitting(paneID: focusedPane.id, direction: direction,
                               newPaneID: newPane.id, splitID: UUID())
         focusedPaneID = newPane.id
     }
 
-    /// 在 `paneID` 处按 `direction` 分屏，新窗格连 `serverProfileID`、种类 `kind`。
+    /// 在 `paneID` 处按 `direction` 分屏，新窗格连 `serverProfileID`。
     func splitPane(_ paneID: UUID, direction: SplitDirection,
-                   serverProfileID: UUID, kind: PaneKindTag) {
+                   serverProfileID: UUID) {
         guard panes[paneID] != nil else { return }
-        let newPane = PaneModel(serverProfileID: serverProfileID, kind: kind)
+        let newPane = PaneModel(serverProfileID: serverProfileID)
         panes[newPane.id] = newPane
         root = root.splitting(paneID: paneID, direction: direction,
                               newPaneID: newPane.id, splitID: UUID())

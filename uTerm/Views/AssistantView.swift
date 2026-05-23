@@ -21,10 +21,11 @@ struct AssistantView: View {
 
     private var apiKeyEntry: some View {
         VStack(spacing: 12) {
-            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
+            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(AppTheme.Palette.textMuted)
             Text("设置 Anthropic API Key").font(.headline)
+                .foregroundStyle(AppTheme.Palette.textPrimary)
             Text("AI 助手需要你的 Anthropic API Key。它将保存在 macOS 钥匙串。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
                 .multilineTextAlignment(.center)
             SecureField("sk-ant-…", text: $keyDraft)
                 .textFieldStyle(.roundedBorder)
@@ -37,7 +38,7 @@ struct AssistantView: View {
             .buttonStyle(.borderedProminent)
             if model.keySaveFailed {
                 Text("保存到钥匙串失败，请重试。")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.caption).foregroundStyle(AppTheme.Palette.danger)
             }
         }
         .padding()
@@ -73,7 +74,7 @@ struct AssistantView: View {
                 .textSelection(.enabled)
                 .padding(8)
                 .background(message.role == .user
-                            ? Color.accentColor.opacity(0.2) : Color.gray.opacity(0.15))
+                            ? AppTheme.Palette.bgSelected : AppTheme.Palette.bgRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             if message.role == .assistant { Spacer(minLength: 32) }
         }

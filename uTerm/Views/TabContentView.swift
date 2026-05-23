@@ -29,8 +29,7 @@ struct TabContentView: View {
                     onFocus: { tab.focusedPaneID = paneID },
                     onSplit: { direction in
                         tab.splitPane(paneID, direction: direction,
-                                      serverProfileID: pane.serverProfileID,
-                                      kind: pane.kind.tag)
+                                      serverProfileID: pane.serverProfileID)
                     },
                     onMoveOrSwap: { source, zone in
                         if zone == .center {

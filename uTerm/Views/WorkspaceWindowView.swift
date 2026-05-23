@@ -1,19 +1,19 @@
 import SwiftUI
 import SwiftData
 
-/// 一个工作区窗口：绑定单台服务器（由 `WorkspaceWindowID` 指定），
-/// 承载标签工作区 + 右侧 inspector。持久化按窗口分文件。
+/// 一个工作区窗口：绑定单台服务器（由 `WorkspaceWindowID` 指定）。
+/// 三栏布局：左 SFTPSidebar（NavigationSplitView 的 sidebar）/ 中 WorkspaceCenter
+/// （NavigationSplitView 的 detail）/ 右 AgentSidebar（.inspector）。
 struct WorkspaceWindowView: View {
-    enum InspectorPanel { case assistant }
-
     let windowID: WorkspaceWindowID?
 
     @Query private var profiles: [ServerProfile]
     @State private var workspace = WorkspaceModel()
     @State private var didRestore = false
-    @State private var inspectorPanel: InspectorPanel?
-    @State private var assistantModel = AssistantModel()
     @State private var saveTask: Task<Void, Never>?
+    /// 用于把全局 CommandGroup 通知限定到当前 key window —— 多窗口下避免后台窗口
+    /// 也被切换。`.controlActiveState` 在窗口为 key 时为 `.key`。
+    @Environment(\.controlActiveState) private var controlActiveState
 
     /// 本窗口绑定的服务器（按 `windowID.serverID` 查；查不到 = 已删除）。
     private var server: ServerProfile? {
@@ -40,94 +40,123 @@ struct WorkspaceWindowView: View {
     @ViewBuilder
     private func workspaceBody(server: ServerProfile,
                                windowID: WorkspaceWindowID) -> some View {
-        WorkspaceView(workspace: workspace)
-            .navigationTitle(server.name)
-            // 隐藏工具栏中央那颗自动渲染的标题胶囊 —— 同样的信息已在标签栏 +
-            // StatusBarView 中呈现；保留 `.navigationTitle` 仅供「窗口」菜单 /
-            // 调度中心识别窗口。
-            .toolbar(removing: .title)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    WorkspaceTitlebarTabs(
-                        workspace: workspace,
-                        onNewTab: { kind in
-                            workspace.openServer(profileID: server.id,
-                                                 title: server.name, kind: kind)
-                        })
+        NavigationSplitView(columnVisibility: Binding(
+            get: { workspace.uiState.leftSidebarVisibility },
+            set: { workspace.uiState.leftSidebarVisibility = $0 }
+        )) {
+            SFTPSidebar(model: workspace.fileBrowserModel, server: server)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
+        } detail: {
+            WorkspaceCenter(workspace: workspace, server: server)
+                .inspector(isPresented: Binding(
+                    get: { workspace.uiState.rightInspectorPresented },
+                    set: { workspace.uiState.rightInspectorPresented = $0 }
+                )) {
+                    AgentSidebar(
+                        model: workspace.assistantModel,
+                        serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）")
+                        .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
                 }
-                ToolbarItem {
-                    Button {
-                        splitFocusedPane(direction: .horizontal)
-                    } label: {
-                        Image(systemName: "rectangle.split.2x1")
-                    }
-                    .keyboardShortcut("d", modifiers: .command)
-                    .help("水平分屏（⌘D）")
-                }
-                ToolbarItem {
-                    Button {
-                        toggleInspector(.assistant)
-                    } label: { Image(systemName: "sparkles") }
-                    .help("AI 助手")
-                }
+        }
+        .navigationTitle(server.name)
+        // 隐藏工具栏中央那颗自动渲染的标题胶囊 —— 服务器名在 .principal
+        // 工具栏自渲染；保留 `.navigationTitle` 仅供窗口菜单/调度中心识别。
+        .toolbar(removing: .title)
+        .toolbar { workspaceToolbar(server: server) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+                StatusBarView(workspace: workspace)
             }
-            .inspector(isPresented: Binding(
-                get: { inspectorPanel != nil },
-                set: { if !$0 { inspectorPanel = nil } }
-            )) {
-                inspectorContent(server: server)
-                    .inspectorColumnWidth(min: 260, ideal: 340, max: 520)
+        }
+        .background(AppTheme.Palette.bgBase)
+        // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
+        // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
+        .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
+        .task {
+            // 仅首次执行：载入本窗口的持久化布局，无则开一个默认终端标签。
+            // 在原 workspace 实例上 mutate（不再替换实例）—— SFTPSidebar 的
+            // .task(id: server.id) 持有的 fileBrowserModel 引用因此稳定，
+            // 修复「快照恢复后 SFTP 永久停在 .connecting」的卡死（Fix #1）。
+            guard !didRestore else { return }
+            didRestore = true
+            if let snapshot = WorkspaceStore(windowID: windowID).load() {
+                workspace.restore(from: snapshot)
+            } else {
+                workspace.openServer(profileID: server.id, title: server.name)
             }
-            .task {
-                // 仅首次执行：载入本窗口的持久化布局，无则开一个默认终端标签。
-                // `didRestore` 是 `WorkspaceWindowView` 的 @State —— 瞬态 re-render
-                // 不会重置它，故即便 `.task` 因视图重建再次触发也只恢复一次。
-                guard !didRestore else { return }
-                didRestore = true
-                if let snapshot = WorkspaceStore(windowID: windowID).load() {
-                    workspace = WorkspaceModel(snapshot: snapshot)
-                } else {
-                    workspace.openServer(profileID: server.id, title: server.name, kind: .terminal)
-                }
+        }
+        // 窗口关闭时释放资源（Fix #8）。WorkspaceModel.dispose 关闭 SFTP 会话
+        // 与所有终端 session。SwiftUI 在 view 离开层级时调 onDisappear，
+        // 而正常 re-render 不会触发，故此处是安全的窗口生命周期挂点。
+        .onDisappear {
+            workspace.dispose()
+        }
+        .onChange(of: workspace.snapshot()) { _, newSnapshot in
+            saveTask?.cancel()
+            let store = WorkspaceStore(windowID: windowID)
+            saveTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                try? store.save(newSnapshot)
             }
-            .onChange(of: workspace.snapshot()) { _, newSnapshot in
-                saveTask?.cancel()
-                let store = WorkspaceStore(windowID: windowID)
-                saveTask = Task {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    guard !Task.isCancelled else { return }
-                    try? store.save(newSnapshot)
-                }
-            }
-            // 全局 CommandMenu 是 app 级的，无法直达某个窗口；用通知做转发。
-            // 所有打开的工作区窗口都会订阅，但 workspace.activeTab 是窗口本地的
-            // ——前台窗口正常分屏，背景窗口因 activeTab 仍指向自己的活动 tab
-            // 也会被静默分屏。区分前台需读 NSWindow.isKeyWindow，本期不做。
-            .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
-                splitFocusedPane(direction: .vertical)
-            }
-    }
-
-    @ViewBuilder
-    private func inspectorContent(server: ServerProfile) -> some View {
-        switch inspectorPanel {
-        case .assistant:
-            AssistantView(
-                serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
-                model: assistantModel)
-        case nil:
-            EmptyView()
+        }
+        // 全局 CommandGroup 通知会广播到所有打开的工作区窗口；用
+        // controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
+        .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
+            guard controlActiveState == .key else { return }
+            workspace.activeTab?.splitFocusedPane(direction: .vertical)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleLeftSidebar)) { _ in
+            guard controlActiveState == .key else { return }
+            workspace.toggleLeftSidebar()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleRightInspector)) { _ in
+            guard controlActiveState == .key else { return }
+            workspace.toggleRightInspector()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
+            guard controlActiveState == .key else { return }
+            workspace.openServer(profileID: server.id, title: server.name)
         }
     }
 
-    /// 点击工具栏按钮：已是当前面板则关闭，否则切到该面板。
-    private func toggleInspector(_ panel: InspectorPanel) {
-        inspectorPanel = (inspectorPanel == panel) ? nil : panel
-    }
+    @ToolbarContentBuilder
+    private func workspaceToolbar(server: ServerProfile) -> some ToolbarContent {
+        // 工具栏按钮**不**再绑 keyboardShortcut —— 全靠 CommandGroup 一处注册
+        // （Fix #4）。先前 toolbar 与 commands 同时挂同一快捷键导致每次按键
+        // 触发两次 toggle，净 no-op。
+        ToolbarItem(placement: .navigation) {
+            Button { workspace.toggleLeftSidebar() } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .help("显示/隐藏 SFTP（⌘⌥1）")
+        }
 
-    /// 对当前活动 tab 的聚焦窗格分屏。toolbar 按钮（⌘D）与
-    /// CommandMenu 的「垂直分屏」（⇧⌘D）共用此入口；无活动 tab 时静默 no-op。
-    private func splitFocusedPane(direction: SplitDirection) {
-        workspace.activeTab?.splitFocusedPane(direction: direction)
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 8) {
+                Text(server.name).font(.headline)
+                    .foregroundStyle(AppTheme.Palette.textPrimary)
+                if let session = workspace.focusedTerminalSession() {
+                    ConnectionStatusBadge(state: session.connectionState)
+                }
+            }
+        }
+
+        ToolbarItem {
+            Button {
+                workspace.activeTab?.splitFocusedPane(direction: .horizontal)
+            } label: {
+                Image(systemName: "rectangle.split.2x1")
+            }
+            .help("水平分屏（⌘D）")
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button { workspace.toggleRightInspector() } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .help("显示/隐藏 Agent（⌘⌥2）")
+        }
     }
 }

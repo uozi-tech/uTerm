@@ -36,8 +36,9 @@ struct ServerListView: View {
                 Label {
                     VStack(alignment: .leading) {
                         Text(profile.name).font(.body)
+                            .foregroundStyle(AppTheme.Palette.textPrimary)
                         Text(profile.displayEndpoint)
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
                     }
                 } icon: {
                     Image(systemName: "server.rack")

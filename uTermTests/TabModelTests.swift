@@ -3,9 +3,9 @@ import XCTest
 
 @MainActor
 final class TabModelTests: XCTestCase {
-    private func makeTab(kind: PaneKindTag = .terminal) -> TabModel {
+    private func makeTab() -> TabModel {
         let server = UUID()
-        return TabModel(title: "t", rootServerProfileID: server, kind: kind)
+        return TabModel(title: "t", rootServerProfileID: server)
     }
 
     func testInitialTabHasOneFocusedPane() {
@@ -30,7 +30,7 @@ final class TabModelTests: XCTestCase {
         let tab = makeTab()
         let target = tab.focusedPaneID!
         let serverID = UUID()
-        tab.splitPane(target, direction: .horizontal, serverProfileID: serverID, kind: .terminal)
+        tab.splitPane(target, direction: .horizontal, serverProfileID: serverID)
         XCTAssertEqual(tab.root.leafIDs.count, 2)
         XCTAssertEqual(tab.panes.count, 2)
         let newPane = tab.panes[tab.focusedPaneID!]!
@@ -64,19 +64,10 @@ final class TabModelTests: XCTestCase {
         XCTAssertEqual(s2.fraction, 0.25, accuracy: 0.0001)
     }
 
-    func testSplitInheritsFilesKind() {
-        let server = UUID()
-        let tab = TabModel(title: "t", rootServerProfileID: server, kind: .files)
-        let target = tab.focusedPaneID!
-        tab.splitPane(target, direction: .horizontal, serverProfileID: server, kind: .files)
-        let newPane = tab.panes[tab.focusedPaneID!]!
-        XCTAssertEqual(newPane.kind.tag, .files)
-    }
-
     func testMovePaneToLeadingPutsSourceFirst() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .vertical, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .vertical, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
         tab.movePane(p2, toTarget: p1, zone: .leading)
         guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
@@ -89,7 +80,7 @@ final class TabModelTests: XCTestCase {
     func testMovePaneToBottomPutsSourceSecond() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
         tab.movePane(p2, toTarget: p1, zone: .bottom)
         guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
@@ -101,9 +92,9 @@ final class TabModelTests: XCTestCase {
     func testMovePaneKeepsAllPanesAndCollapsesSourceOldSplit() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
-        tab.splitPane(p2, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p2, direction: .horizontal, serverProfileID: UUID())
         let p3 = tab.focusedPaneID!
         tab.movePane(p3, toTarget: p1, zone: .top)
         XCTAssertEqual(Set(tab.root.leafIDs), [p1, p2, p3])
@@ -115,7 +106,7 @@ final class TabModelTests: XCTestCase {
     func testMovePaneCenterZoneIsNoOp() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
         let before = tab.root
         tab.movePane(p2, toTarget: p1, zone: .center)
@@ -125,7 +116,7 @@ final class TabModelTests: XCTestCase {
     func testMovePaneToSelfIsNoOp() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let before = tab.root
         tab.movePane(p1, toTarget: p1, zone: .top)
         XCTAssertEqual(tab.root, before)
@@ -134,7 +125,7 @@ final class TabModelTests: XCTestCase {
     func testSwapPanesExchangesPositions() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
         tab.swapPanes(p1, p2)
         guard case .split(let s) = tab.root else { return XCTFail("应为 split") }
@@ -145,7 +136,7 @@ final class TabModelTests: XCTestCase {
     func testSwapPanesUnknownIDIsNoOp() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let before = tab.root
         tab.swapPanes(p1, UUID())
         XCTAssertEqual(tab.root, before)
@@ -154,9 +145,9 @@ final class TabModelTests: XCTestCase {
     func testMoveThenSwapKeepsPanesAndFocusInvariants() {
         let tab = makeTab()
         let p1 = tab.focusedPaneID!
-        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p1, direction: .horizontal, serverProfileID: UUID())
         let p2 = tab.focusedPaneID!
-        tab.splitPane(p2, direction: .vertical, serverProfileID: UUID(), kind: .terminal)
+        tab.splitPane(p2, direction: .vertical, serverProfileID: UUID())
         let p3 = tab.focusedPaneID!
         tab.movePane(p1, toTarget: p3, zone: .trailing)
         XCTAssertEqual(tab.focusedPaneID, p1)            // movePane 聚焦被移动窗格

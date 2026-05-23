@@ -24,7 +24,7 @@ struct SplitterHandle: View {
             .fill(Color.gray.opacity(0.001))
             .overlay(
                 Rectangle()
-                    .fill(dragStartFraction != nil ? Color.accentColor.opacity(0.6) : Color.clear)
+                    .fill(dragStartFraction != nil ? AppTheme.Palette.accent.opacity(0.6) : Color.clear)
                     .frame(
                         width: orientation == .vertical ? 1 : nil,
                         height: orientation == .horizontal ? 1 : nil

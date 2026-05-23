@@ -34,6 +34,13 @@ final class FileBrowserModel {
         // no-op，不撕掉活动 SFTP 会话。仅 .idle（首次）/ .failed（重试）才继续。
         guard state == .idle || { if case .failed = state { return true } else { return false } }() else { return }
         state = .connecting
+        // 任务被取消（如 sidebar 折叠 / 窗口关闭）时把 .connecting 重置回 .idle，
+        // 否则下一次 connect 被 guard 直接跳过、永远停在 spinner 上（Fix #7）。
+        defer {
+            if Task.isCancelled, state == .connecting {
+                state = .idle
+            }
+        }
         let keychain = KeychainStore()
         do {
             let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)

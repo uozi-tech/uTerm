@@ -8,7 +8,7 @@ final class WorkspaceStoreTests: XCTestCase {
 
     private func sampleSnapshot(title: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(
-            tabs: [TabSnapshot(title: title, layout: .leaf(serverProfileID: UUID(), kind: .terminal))],
+            tabs: [TabSnapshot(title: title, layout: .leaf(serverProfileID: UUID()))],
             activeTabIndex: 0)
     }
 

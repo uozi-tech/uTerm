@@ -111,7 +111,7 @@ struct ServerFormView: View {
         } else {
             HStack {
                 Text(keyFilename.wrappedValue.isEmpty ? "未选择私钥" : keyFilename.wrappedValue)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.Palette.textMuted)
                 Spacer()
                 Button("选择私钥…") { pickPrivateKey(into: keyContent, filename: keyFilename) }
             }

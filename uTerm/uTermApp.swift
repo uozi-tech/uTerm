@@ -36,11 +36,31 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .commands {
+            // 所有工作区级快捷键的唯一注册点 —— 工具栏按钮不再挂 .keyboardShortcut，
+            // 避免双重注册导致的双触发 no-op（Fix #4 + #10）。
+            CommandGroup(after: .newItem) {
+                Button("新建终端标签") {
+                    NotificationCenter.default.post(name: .newTerminalTab, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: .command)
+            }
             CommandGroup(after: .sidebar) {
-                Button("垂直分屏") {
+                Button("水平分屏") {
                     NotificationCenter.default.post(name: .splitFocusedPaneVertical, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("显示/隐藏 SFTP") {
+                    NotificationCenter.default.post(name: .toggleLeftSidebar, object: nil)
+                }
+                .keyboardShortcut("1", modifiers: [.command, .option])
+
+                Button("显示/隐藏 Agent") {
+                    NotificationCenter.default.post(name: .toggleRightInspector, object: nil)
+                }
+                .keyboardShortcut("2", modifiers: [.command, .option])
             }
         }
     }

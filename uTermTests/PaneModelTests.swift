@@ -3,19 +3,11 @@ import XCTest
 
 @MainActor
 final class PaneModelTests: XCTestCase {
-    func testTerminalKindHoldsTerminalSession() {
-        let pane = PaneModel(serverProfileID: UUID(), kind: .terminal)
-        guard case .terminal = pane.kind else {
-            return XCTFail("应为 .terminal")
-        }
-        XCTAssertEqual(pane.kind.tag, .terminal)
-    }
-
-    func testFilesKindHoldsFileBrowserModel() {
-        let pane = PaneModel(serverProfileID: UUID(), kind: .files)
-        guard case .files = pane.kind else {
-            return XCTFail("应为 .files")
-        }
-        XCTAssertEqual(pane.kind.tag, .files)
+    func testHoldsTerminalSession() {
+        let server = UUID()
+        let pane = PaneModel(serverProfileID: server)
+        XCTAssertEqual(pane.serverProfileID, server)
+        // session 是终端独占的不可变属性，单元测试只验证它存在。
+        XCTAssertNotNil(pane.session)
     }
 }
