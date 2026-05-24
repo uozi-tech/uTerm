@@ -9,7 +9,9 @@
 /* Begin PBXBuildFile section */
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
+		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
+		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
@@ -79,6 +81,8 @@
 				A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */,
 				3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */,
 				91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */,
+				95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */,
+				61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -147,6 +151,8 @@
 				018260924700EAFE1739852A /* TreeSitterPython */,
 				7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */,
 				A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */,
+				C9011540443CD85AA784C8A9 /* TreeSitterTOML */,
+				4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */,
 			);
 			productName = uTerm;
 			productReference = 85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */;
@@ -660,6 +666,11 @@
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterPython;
 		};
+		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			productName = TreeSitterINI;
+		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
@@ -694,6 +705,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
 			productName = Citadel;
+		};
+		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			productName = TreeSitterTOML;
 		};
 		CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */ = {
 			isa = XCSwiftPackageProductDependency;

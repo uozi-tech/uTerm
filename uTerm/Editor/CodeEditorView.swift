@@ -96,6 +96,9 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
             context.coordinator.isUpdatingFromBinding = true
             textView.setText(buffer.text)
             context.coordinator.isUpdatingFromBinding = false
+            // setText 把 textView 所有 subview 都 removeFromSuperview 了（CodeEditTextView
+            // setTextStorage 的副作用）—— 把 gutter 重新挂回 + 刷宽度/行号。
+            context.coordinator.ensureGutterAttached()
         }
     }
 }

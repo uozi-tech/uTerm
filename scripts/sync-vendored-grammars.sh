@@ -14,11 +14,17 @@ declare -a PINS=(
   "python tree-sitter/tree-sitter-python 26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64"
   "javascript tree-sitter/tree-sitter-javascript 58404d8cf191d69f2674a8fd507bd5776f46cb11"
   "yaml tree-sitter-grammars/tree-sitter-yaml a1c4812a73ec5e089de8e441fdea3a921e8d5079"
+  "toml tree-sitter-grammars/tree-sitter-toml 64b56832c2cffe41758f28e05c756a3a98d16f41"
+  "ini justinmk/tree-sitter-ini e4018b5176132b4f3c5d6e61cea383f42288d0f5"
 )
 
-# 每个 grammar 需要的额外文件（yaml 的 schema.*.c）
-declare -A EXTRA
-EXTRA[yaml]="src/schema.core.c src/schema.json.c src/schema.legacy.c"
+# 每个 grammar 需要的额外文件。case 替代 declare -A（macOS 默认 bash 3.2 不支持）。
+extra_files_for() {
+  case "$1" in
+    yaml) echo "src/schema.core.c src/schema.json.c src/schema.legacy.c" ;;
+    *) echo "" ;;
+  esac
+}
 
 for entry in "${PINS[@]}"; do
   read lang repo sha <<<"$entry"
@@ -32,7 +38,9 @@ for entry in "${PINS[@]}"; do
   for f in src/parser.c src/scanner.c \
            src/tree_sitter/parser.h src/tree_sitter/alloc.h src/tree_sitter/array.h \
            queries/highlights.scm; do
-    code=$(curl -sf -o /dev/null -w "%{http_code}" "$base/$f")
+    # -s only（不 -f）：让 404 也返回 exit 0，避免 set -e 在第一个 missing
+    # 文件上整个 bail 出。ini 没 scanner.c 就是个常见 case。
+    code=$(curl -s -o /dev/null -w "%{http_code}" "$base/$f" || echo "000")
     if [ "$code" = "200" ]; then
       curl -sf "$base/$f" -o "$out/$f"
       echo "  ✓ $f"
@@ -42,8 +50,9 @@ for entry in "${PINS[@]}"; do
   done
 
   # 额外文件
-  if [ -n "${EXTRA[$lang]:-}" ]; then
-    for f in ${EXTRA[$lang]}; do
+  extra=$(extra_files_for "$lang")
+  if [ -n "$extra" ]; then
+    for f in $extra; do
       curl -sf "$base/$f" -o "$out/$f"
       echo "  ✓ $f (extra)"
     done

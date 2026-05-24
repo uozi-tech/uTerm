@@ -161,6 +161,27 @@ enum GrammarRegistry {
             (double_quote_scalar) @string
             (block_scalar) @string
             """,
+        "toml": """
+            (comment) @comment
+            (bare_key) @property
+            (quoted_key) @property
+            (table ("[" @punctuation "]" @punctuation))
+            (table_array_element ("[[" @punctuation "]]" @punctuation))
+            (string) @string
+            (integer) @number
+            (float) @number
+            (boolean) @keyword
+            (offset_date_time) @number
+            (local_date_time) @number
+            (local_date) @number
+            (local_time) @number
+            """,
+        "ini": """
+            (comment) @comment
+            (section_name) @keyword
+            (setting_name) @property
+            (setting_value) @string
+            """,
         "bash": """
             (comment) @comment
             ["if" "then" "else" "elif" "fi" "for" "while" "do" "done"

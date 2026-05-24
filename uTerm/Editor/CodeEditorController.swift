@@ -16,8 +16,9 @@ final class CodeEditorController: NSObject {
 
     // MARK: Find/Replace（Track B）
     var currentFindController: FindReplaceController?
-    /// Local key event monitor installed in makeNSView; removed on deinit.
-    var keyEventMonitor: Any?
+    /// Local key event monitor installed in makeNSView; removed on deinit。
+    /// nonisolated(unsafe) 让 deinit 能读 token 调 NSEvent.removeMonitor。
+    nonisolated(unsafe) var keyEventMonitor: Any?
 
     // MARK: Track C — 语法高亮
     private var highlighter: SyntaxHighlighter = NoopHighlighter()
@@ -27,9 +28,23 @@ final class CodeEditorController: NSObject {
     var onSelectionChange: ((NSRange) -> Void)?
 
     // MARK: Track A — 视觉
+    /// 当前行底色 overlay。CodeEditTextView 内置 `highlightSelectedLine` 只在选区
+    /// 为空时绘，drag-select 会消失（VSCode 是常显），所以走自己的 overlay。
     private var activeLineOverlay: ActiveLineOverlay?
     // nonisolated(unsafe): deinit is nonisolated and needs to remove this observer
     nonisolated(unsafe) private var selectionObserver: NSObjectProtocol?
+
+    // MARK: 行号 gutter
+    private var lineNumberGutter: LineNumberGutter?
+    /// 最近一次拿到的活动行号，scroll 事件下用作 fallback 防止滚动时
+    /// textLineForOffset 返回 nil 让 gutter 全行变灰。
+    private var lastActiveLineIndex: Int?
+    nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var textDidChangeObserver: NSObjectProtocol?
+    /// 订 clipView 的 frameDidChange —— size 变化（不是 scroll）。
+    /// 触发源：window resize / split adjust / SwiftUI 首次 layout。
+    /// 这是唯一能驱动 CodeEditTextView updatedViewport 链的 size 事件。
+    nonisolated(unsafe) private var clipFrameObserver: NSObjectProtocol?
 
     // MARK: PR-final — sameword emphasis debounce
     private var sameWordDebounce: DispatchWorkItem?
@@ -97,9 +112,14 @@ final class CodeEditorController: NSObject {
     }
 
     deinit {
-        if let observer = selectionObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        let center = NotificationCenter.default
+        if let observer = selectionObserver     { center.removeObserver(observer) }
+        if let observer = scrollObserver        { center.removeObserver(observer) }
+        if let observer = textDidChangeObserver { center.removeObserver(observer) }
+        if let observer = clipFrameObserver     { center.removeObserver(observer) }
+        // NSEvent.removeMonitor 必须配对 addLocalMonitorForEvents，否则全局 key-down
+        // 监听 token 永久泄漏 —— 每开一次文件多一个 monitor，每次按键多触发一次。
+        if let monitor = keyEventMonitor        { NSEvent.removeMonitor(monitor) }
     }
 }
 
@@ -111,7 +131,88 @@ extension CodeEditorController: TextViewDelegate {
         set { _isUpdatingFromBinding = newValue }
     }
 
+    /// 在 updateNSView 的 setText 之后调，确保 gutter 还挂着。
+    /// 背景：CodeEditTextView 的 `setTextStorage` 会 nuke 所有 subview，
+    /// SFTP 下载完成 / reloadFromRemote 都会触发 setText。
+    func ensureGutterAttached() {
+        // 同步跑一次（重挂 / 宽度）+ 异步 bootstrap viewport（等 layout 稳定）
+        refreshGutter(bootstrap: false)
+        refreshGutter(bootstrap: true, defer: true)
+    }
+
+    /// 统一刷新入口。
+    ///
+    /// `bootstrap`：是否需要显式启 CodeEditTextView 的 viewport-driven layout 链
+    /// （`updatedViewport` + 必要时 `layoutLines`）。只在首次 attach 和 setText
+    /// 之后需要 —— 其他场景（scroll、resize 中途）CodeEdit 内部观察者已经驱动。
+    ///
+    /// `defer`：把工作异步到下一 runloop tick。在 NSViewRepresentable.makeNSView /
+    /// updateNSView 调用栈里 SwiftUI/AppKit 自己的 layout 还没跑完，
+    /// `scrollView.documentVisibleRect` 可能是 `.zero`，异步后才稳定。
+    private func refreshGutter(bootstrap: Bool, defer doDefer: Bool = false) {
+        if doDefer {
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshGutter(bootstrap: bootstrap, defer: false)
+            }
+            return
+        }
+
+        guard let textView, let gutter = lineNumberGutter, let scrollView else { return }
+
+        // 1. 重挂（如被 setTextStorage 干掉）
+        if gutter.superview !== textView {
+            gutter.frame = NSRect(x: 0, y: 0, width: gutter.gutterWidth, height: textView.bounds.height)
+            textView.addSubview(gutter)
+        }
+
+        // 2. Bootstrap viewport layout 链。
+        //
+        // updatedViewport 内部是 `if !updateFrameIfNeeded { layoutLines() }`：
+        // - frame 变了 → updateFrameIfNeeded returns true → 短路 layoutLines
+        // - frame 没变 → updateFrameIfNeeded returns false → 自己跑 layoutLines
+        //
+        // 第一次 setText 后必然走"frame 变了"分支（高度从 17 跳到几万），所以
+        // 内部 layoutLines 不跑。我们检测 frame 是否扩展，只在扩展时再补一刀
+        // layoutLines；frame 没变就 skip（不再重复 layout）。
+        if bootstrap {
+            if scrollView.documentVisibleRect.isEmpty {
+                // 视口还没出来 —— 再 defer 一帧重试，最多两次
+                DispatchQueue.main.async { [weak self] in
+                    self?.refreshGutter(bootstrap: true, defer: false)
+                }
+                return
+            }
+            let oldHeight = textView.frame.height
+            textView.updatedViewport(scrollView.documentVisibleRect)
+            if textView.frame.height != oldHeight {
+                textView.layoutManager.layoutLines()
+            }
+        }
+
+        // 3. 宽度 / edgeInsets 兜底
+        let widthChanged = gutter.recomputeWidth()
+        let desired = 12 + gutter.gutterWidth
+        if widthChanged || textView.edgeInsets.left != desired {
+            textView.edgeInsets = HorizontalEdgeInsets(left: desired, right: 12)
+        }
+
+        // 4. 刷行号 —— bootstrap 时 layout 已经做完，textLineForOffset 可靠；
+        //    非 bootstrap 时回退到 lastActiveLineIndex 防 layout 滞后导致 nil。
+        let activeOffset = textView.selectionManager.textSelections.first?.range.location ?? 0
+        let active = lineIndex(ofOffset: activeOffset) ?? lastActiveLineIndex
+        if let active { lastActiveLineIndex = active }
+        updateGutter(activeLineIndex: active)
+    }
+
     func attach(textView: TextView, scrollView: NSScrollView, buffer: FileBuffer) {
+        // Idempotent —— 防 future refactor 再次 attach 时 leak 老的 observer。
+        let center = NotificationCenter.default
+        if let o = selectionObserver     { center.removeObserver(o); selectionObserver = nil }
+        if let o = scrollObserver        { center.removeObserver(o); scrollObserver = nil }
+        if let o = textDidChangeObserver { center.removeObserver(o); textDidChangeObserver = nil }
+        if let o = clipFrameObserver     { center.removeObserver(o); clipFrameObserver = nil }
+        if let m = keyEventMonitor       { NSEvent.removeMonitor(m); keyEventMonitor = nil }
+
         self.textView = textView
         self.scrollView = scrollView
         self.buffer = buffer
@@ -119,11 +220,68 @@ extension CodeEditorController: TextViewDelegate {
         // Track A · VSCode Dark+ 配色
         textView.selectionManager.selectionBackgroundColor = EditorTheme.selectionBg
         textView.selectionManager.insertionPointColor = EditorTheme.caret
+        // 关掉 CodeEditTextView 自带 active-line —— 它 `range.isEmpty` 才绘，
+        // drag-select 时消失（不是 VSCode 行为）；用我们自己的 overlay 替换。
+        textView.selectionManager.highlightSelectedLine = false
 
-        // Track A · 当前行高亮 overlay
+        // active-line 底色 overlay（始终显示，横跨 gutter 区）
         self.activeLineOverlay = ActiveLineOverlay(textView: textView)
         let initial = textView.selectionManager.textSelections.first?.range ?? NSRange(location: 0, length: 0)
         self.activeLineOverlay?.update(selection: initial)
+
+        // 行号 gutter —— 挂在 textView 子视图，随文档滚动。
+        let gutter = LineNumberGutter(textView: textView)
+        gutter.frame = NSRect(x: 0, y: 0, width: gutter.gutterWidth, height: textView.bounds.height)
+        gutter.autoresizingMask = [.height]
+        textView.addSubview(gutter)
+        self.lineNumberGutter = gutter
+        // 让正文给 gutter 让出空间（原本 left = 12）
+        textView.edgeInsets = HorizontalEdgeInsets(left: 12 + gutter.gutterWidth, right: 12)
+        // 首次给 activeLineIndex = 0（顶部）—— layout 还没跑时 textLineForOffset
+        // 会 nil，传 0 让 gutter 首帧第一行就是高亮态，避免短暂全灰。
+        lastActiveLineIndex = 0
+        updateGutter(activeLineIndex: 0)
+        refreshGutter(bootstrap: true, defer: true)
+
+        // 订阅滚动：contentView 的 bounds 变化驱动行号重排
+        // 不重算 activeLineIndex —— 用 lastActiveLineIndex；快速滚动时
+        // textLineForOffset 容易返回 nil，导致 active 行号瞬间变灰闪一下。
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateGutter(activeLineIndex: self?.lastActiveLineIndex)
+            }
+        }
+
+        // 订阅 clipView frame 变化：window resize / split adjust / SwiftUI 首次 layout。
+        // 非 bootstrap —— CodeEdit 内部 frameDidChange 观察者已驱动 layoutLines；
+        // 这里只需要刷 gutter 显示（重画 + 重算宽度）。
+        scrollView.contentView.postsFrameChangedNotifications = true
+        clipFrameObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshGutter(bootstrap: false)
+            }
+        }
+
+        // 订阅文本变化：行数可能变 → 重算宽度（若变了刷正文 edgeInsets）+ 刷行号
+        textDidChangeObserver = NotificationCenter.default.addObserver(
+            forName: TextView.textDidChangeNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // refreshGutter 一站包：重挂检查 + 宽度 + edgeInsets + 行号
+                self?.refreshGutter(bootstrap: false)
+            }
+        }
 
         // Track A · 订阅选中变化通知（TextViewDelegate 无 selection callback，用 NotificationCenter）
         selectionObserver = NotificationCenter.default.addObserver(
@@ -136,6 +294,9 @@ extension CodeEditorController: TextViewDelegate {
                 let range = self.textView?.selectionManager.textSelections.first?.range
                     ?? NSRange(location: 0, length: 0)
                 self.activeLineOverlay?.update(selection: range)
+                let idx = self.lineIndex(ofOffset: range.location)
+                if let idx { self.lastActiveLineIndex = idx }
+                self.updateGutter(activeLineIndex: idx ?? self.lastActiveLineIndex)
                 self.onSelectionChange?(range)
                 self.scheduleSameWordRefresh(selection: range)
             }
@@ -286,5 +447,21 @@ extension CodeEditorController {
         }
         sameWordDebounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250), execute: work)
+    }
+}
+
+// MARK: - Line number gutter helpers
+extension CodeEditorController {
+
+    /// 把字符 offset 解析为 0-based 行号。失败返回 nil。
+    fileprivate func lineIndex(ofOffset offset: Int) -> Int? {
+        textView?.layoutManager.textLineForOffset(offset)?.index
+    }
+
+    /// 用当前 scrollView 可视带 + 给定活动行号刷一次 gutter。
+    fileprivate func updateGutter(activeLineIndex: Int?) {
+        guard let gutter = lineNumberGutter, let scrollView else { return }
+        gutter.update(visibleRect: scrollView.documentVisibleRect,
+                      activeLineIndex: activeLineIndex)
     }
 }
