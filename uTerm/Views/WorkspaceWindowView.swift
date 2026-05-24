@@ -8,6 +8,8 @@ struct WorkspaceWindowView: View {
     let windowID: WorkspaceWindowID?
 
     @Query private var profiles: [ServerProfile]
+    @Query(sort: \AIProvider.sortOrder) private var providers: [AIProvider]
+    @AppStorage("activeProviderID") private var activeProviderIDString: String = ""
     @State private var workspace: WorkspaceModel
     @State private var didRestore = false
     @State private var saveTask: Task<Void, Never>?
@@ -80,7 +82,8 @@ struct WorkspaceWindowView: View {
                     )) {
                         AgentSidebar(
                             model: workspace.assistantModel,
-                            serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）")
+                            serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
+                            activeProviderIDString: $activeProviderIDString)
                             .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
                     }
             }
@@ -197,6 +200,10 @@ struct WorkspaceWindowView: View {
             } message: { blocked in
                 Text("该文件 \(byteSize(blocked.size))，超过 50 MB 上限。建议用外部编辑器。")
             }
+        .modifier(AssistantBindingModifier(
+            assistant: workspace.assistantModel,
+            providers: providers,
+            activeProviderIDString: activeProviderIDString))
     }
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）
@@ -280,9 +287,32 @@ struct WorkspaceWindowView: View {
 
         ToolbarItem(placement: .primaryAction) {
             Button { workspace.toggleRightInspector() } label: {
-                Image(systemName: "sidebar.right")
+                Image(systemName: "sparkles")
             }
             .help("显示/隐藏 Agent（⌘⌥2）")
         }
+    }
+}
+
+/// 把 SwiftData providers + @AppStorage activeProviderID 灌进 assistant model。
+/// 拆成独立 modifier 是为了让 `workspaceBody` 主表达式不至于让编译器超时；
+/// `[AIProvider]` 是 `@Model` class，非 `Equatable`，所以 onChange 用 `id` 列表比较。
+private struct AssistantBindingModifier: ViewModifier {
+    let assistant: AssistantModel
+    let providers: [AIProvider]
+    let activeProviderIDString: String
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                assistant.providers = providers
+                assistant.activeProviderID = UUID(uuidString: activeProviderIDString)
+            }
+            .onChange(of: providers.map(\.id)) { _, _ in
+                assistant.providers = providers
+            }
+            .onChange(of: activeProviderIDString) { _, new in
+                assistant.activeProviderID = UUID(uuidString: new)
+            }
     }
 }

@@ -8,14 +8,18 @@ import TreeSitterJSON
 import TreeSitterBash
 import TreeSitterMarkdown
 import TreeSitterSwift
+import TreeSitterPython
+import TreeSitterJavaScript
+import TreeSitterYAML
 
 /// language id（如 "go" / "swift"）→ 已注册 grammar 句柄。
-/// 6 个 grammar SPM 包验证可用（swift/go/ts/json/bash/markdown）。
-/// swift grammar 用 alex-pinkus/tree-sitter-swift 的 `with-generated-files` 分支
-/// （main 分支没 ship 生成的 parser.c）。
-/// Excluded (broken SPM packages — FileManager.default.fileExists 在 Package.swift
-/// manifest evaluation 不可靠，scanner.c 未编译进而 linker error):
-/// tree-sitter-python, tree-sitter-javascript, tree-sitter-yaml.
+///
+/// 全部 9 门：
+/// - 外部 SPM：swift（alex-pinkus/with-generated-files 分支）/ go / typescript /
+///   json / bash / markdown
+/// - 内部 vendor（`vendor/tree-sitter-grammars/`）：python / javascript / yaml
+///   —— 因上游 Package.swift 用 `FileManager.fileExists` 条件加 scanner.c
+///   在 SPM manifest eval 不可靠，vendor 化后自写硬编码 sources 一次性绕开。
 @MainActor
 enum GrammarRegistry {
 
@@ -45,6 +49,15 @@ enum GrammarRegistry {
         case "markdown":
             return Entry(language: Language(language: tree_sitter_markdown()),
                          highlightsQueryText: loadQuery(named: "markdown"))
+        case "python":
+            return Entry(language: Language(language: tree_sitter_python()),
+                         highlightsQueryText: loadQuery(named: "python"))
+        case "javascript":
+            return Entry(language: Language(language: tree_sitter_javascript()),
+                         highlightsQueryText: loadQuery(named: "javascript"))
+        case "yaml":
+            return Entry(language: Language(language: tree_sitter_yaml()),
+                         highlightsQueryText: loadQuery(named: "yaml"))
         default:
             return nil
         }
@@ -115,6 +128,38 @@ enum GrammarRegistry {
             (number) @number
             (string) @string
             ["true" "false" "null"] @keyword
+            """,
+        "python": """
+            (comment) @comment
+            ["def" "class" "if" "else" "elif" "return" "import" "from" "as"
+             "for" "while" "break" "continue" "pass" "in" "is" "not" "and"
+             "or" "try" "except" "finally" "raise" "with" "yield" "async"
+             "await" "lambda" "global" "nonlocal" "del" "assert" "None"
+             "True" "False" "match" "case"] @keyword
+            (integer) @number
+            (float) @number
+            (string) @string
+            """,
+        "javascript": """
+            (comment) @comment
+            (template_string) @string
+            ["function" "const" "let" "var" "if" "else" "return" "import"
+             "export" "from" "class" "new" "this" "super" "for" "while" "do"
+             "break" "continue" "switch" "case" "default" "typeof" "instanceof"
+             "in" "of" "delete" "void" "throw" "try" "catch" "finally" "async"
+             "await" "yield" "null" "undefined" "true" "false"] @keyword
+            (number) @number
+            (string) @string
+            """,
+        "yaml": """
+            (comment) @comment
+            (block_mapping_pair key: (_) @keyword)
+            (flow_mapping (_ key: (_) @keyword))
+            ((plain_scalar) @number (#match? @number "^-?[0-9]+(\\\\.[0-9]+)?$"))
+            ((plain_scalar) @keyword (#match? @keyword "^(true|false|null|~|yes|no|on|off)$"))
+            (single_quote_scalar) @string
+            (double_quote_scalar) @string
+            (block_scalar) @string
             """,
         "bash": """
             (comment) @comment

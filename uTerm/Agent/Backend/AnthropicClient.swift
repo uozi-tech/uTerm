@@ -1,36 +1,29 @@
 import Foundation
 
-/// `AssistantModel` 依赖的 AI 后端抽象 —— 便于用 `MockAssistantBackend` 单测。
-protocol AssistantBackend: Sendable {
-    /// 流式发送一轮对话，逐段产出助手回复的文本增量。
-    func stream(messages: [ChatMessage], system: String, apiKey: String)
-        -> AsyncThrowingStream<String, Error>
-}
-
-enum ClaudeClientError: Error, Equatable {
-    case httpError(status: Int, body: String)
-    case invalidResponse
-}
-
 /// 调用 Anthropic Claude Messages API（流式 SSE）。
-nonisolated struct ClaudeClient: AssistantBackend {
-    /// 默认模型标识。一个当前可用的 Claude 模型；可调整。
-    static let defaultModel = "claude-sonnet-4-5"
+/// baseURL 应为 root（如 https://api.anthropic.com），本 client append "/v1/messages"。
+nonisolated struct AnthropicClient: LLMClient {
     static let maxTokens = 2048
-    private static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    private let session: URLSession
 
-    func stream(messages: [ChatMessage], system: String, apiKey: String)
-        -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    nonisolated func stream(messages: [ChatMessage], system: String,
+                            config: LLMRequestConfig) -> AsyncThrowingStream<String, Error> {
+        let session = self.session
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var request = URLRequest(url: Self.endpoint)
+                    let url = config.baseURL.appendingPathComponent("v1/messages")
+                    var request = URLRequest(url: url)
                     request.httpMethod = "POST"
-                    request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     request.setValue("application/json", forHTTPHeaderField: "content-type")
                     let body: [String: Any] = [
-                        "model": Self.defaultModel,
+                        "model": config.model,
                         "max_tokens": Self.maxTokens,
                         "system": system,
                         "stream": true,
@@ -38,16 +31,16 @@ nonisolated struct ClaudeClient: AssistantBackend {
                     ]
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
-                        throw ClaudeClientError.invalidResponse
+                        throw LLMClientError.invalidResponse
                     }
                     guard (200..<300).contains(http.statusCode) else {
                         var bodyText = ""
                         for try await line in bytes.lines { bodyText += line }
-                        throw ClaudeClientError.httpError(status: http.statusCode, body: bodyText)
+                        throw LLMClientError.httpError(status: http.statusCode, body: bodyText)
                     }
-                    var parser = SSEParser()
+                    var parser = AnthropicSSEParser()
                     for try await line in bytes.lines {
                         if let delta = parser.parse(line: line) {
                             continuation.yield(delta)

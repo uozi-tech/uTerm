@@ -1,9 +1,9 @@
 import Foundation
 
-/// 解析 Claude Messages API 的 SSE 流。逐行喂入；`data:` 行里若是
+/// 解析 Anthropic Claude Messages API 的 SSE 流。逐行喂入；`data:` 行里若是
 /// `content_block_delta` 的 `text_delta` 则产出文本增量，其余行产出 nil。
 /// 纯逻辑、无网络，便于单测。
-nonisolated struct SSEParser {
+nonisolated struct AnthropicSSEParser {
     /// 喂入一行。返回该行携带的助手文本增量；非文本增量行返回 nil。
     mutating func parse(line: String) -> String? {
         guard line.hasPrefix("data:") else { return nil }

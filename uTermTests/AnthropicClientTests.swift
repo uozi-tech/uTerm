@@ -1,0 +1,118 @@
+import XCTest
+@testable import uTerm
+
+final class AnthropicClientTests: XCTestCase {
+    override func tearDown() {
+        StubURLProtocol.uninstall()
+        super.tearDown()
+    }
+
+    func testStreamHitsCorrectEndpointAndHeaders() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = AnthropicClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(
+            model: "claude-opus-4-7",
+            baseURL: URL(string: "https://api.anthropic.com")!,
+            apiKey: "sk-ant-xxx")
+        let stream = client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                    system: "be helpful", config: config)
+        for try await _ in stream {}
+
+        let req = StubURLProtocol.capturedRequest()!
+        XCTAssertEqual(req.url?.absoluteString, "https://api.anthropic.com/v1/messages")
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "x-api-key"), "sk-ant-xxx")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "content-type"), "application/json")
+    }
+
+    func testBodyContainsModelSystemAndMessages() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = AnthropicClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "claude-opus-4-7",
+                                        baseURL: URL(string: "https://api.anthropic.com")!,
+                                        apiKey: "sk-ant")
+        let stream = client.stream(
+            messages: [ChatMessage(role: .user, text: "hi")],
+            system: "S", config: config)
+        for try await _ in stream {}
+
+        let body = try XCTUnwrap(StubURLProtocol.capturedRequest()?.httpBody
+            ?? bodyFromStream(StubURLProtocol.capturedRequest()))
+        let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        XCTAssertEqual(obj["model"] as? String, "claude-opus-4-7")
+        XCTAssertEqual(obj["system"] as? String, "S")
+        XCTAssertEqual(obj["stream"] as? Bool, true)
+        let msgs = obj["messages"] as! [[String: Any]]
+        XCTAssertEqual(msgs.count, 1)
+        XCTAssertEqual(msgs[0]["role"] as? String, "user")
+        XCTAssertEqual(msgs[0]["content"] as? String, "hi")
+    }
+
+    func testStreamingDeltasParsed() async throws {
+        let sse = """
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
+
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" there"}}
+
+        data: {"type":"message_stop"}
+
+        """
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = AnthropicClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "x", baseURL: URL(string: "https://api.anthropic.com")!, apiKey: "k")
+        var out = ""
+        for try await delta in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {
+            out += delta
+        }
+        XCTAssertEqual(out, "Hi there")
+    }
+
+    func testHttpErrorMapped() async {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 401,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, "{\"error\":\"unauthorized\"}".data(using: .utf8)!)
+        }
+        let client = AnthropicClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "x", baseURL: URL(string: "https://api.anthropic.com")!, apiKey: "k")
+        do {
+            for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {}
+            XCTFail("应抛错")
+        } catch let e as LLMClientError {
+            guard case .httpError(let status, _) = e else { return XCTFail("应为 httpError") }
+            XCTAssertEqual(status, 401)
+        } catch {
+            XCTFail("应为 LLMClientError，得到 \(error)")
+        }
+    }
+
+    private func bodyFromStream(_ req: URLRequest?) -> Data? {
+        guard let stream = req?.httpBodyStream else { return nil }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
+        defer { buf.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buf, maxLength: 1024)
+            if read <= 0 { break }
+            data.append(buf, count: read)
+        }
+        return data
+    }
+}

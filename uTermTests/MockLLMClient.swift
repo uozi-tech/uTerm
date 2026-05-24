@@ -1,14 +1,15 @@
 import Foundation
 @testable import uTerm
 
-/// 可控的 `AssistantBackend` 测试替身。
-struct MockAssistantBackend: AssistantBackend {
+/// 可控的 LLMClient 测试替身。
+struct MockLLMClient: LLMClient {
     let deltas: [String]
     let failWith: Error?
-    /// 记录最近一次收到的 messages / system。
+
     final class Captured: @unchecked Sendable {
         var messages: [ChatMessage] = []
         var system: String = ""
+        var config: LLMRequestConfig?
     }
     let captured = Captured()
 
@@ -17,10 +18,11 @@ struct MockAssistantBackend: AssistantBackend {
         self.failWith = failWith
     }
 
-    func stream(messages: [ChatMessage], system: String, apiKey: String)
-        -> AsyncThrowingStream<String, Error> {
+    func stream(messages: [ChatMessage], system: String,
+                config: LLMRequestConfig) -> AsyncThrowingStream<String, Error> {
         captured.messages = messages
         captured.system = system
+        captured.config = config
         let deltas = deltas
         let failWith = failWith
         return AsyncThrowingStream { continuation in
@@ -34,11 +36,10 @@ struct MockAssistantBackend: AssistantBackend {
     }
 }
 
-/// 永不主动结束的 `AssistantBackend` 测试替身：用于把 `AssistantModel`
-/// 钉在 `.streaming` 状态，直到流被终止（取消）。
-struct BlockingAssistantBackend: AssistantBackend {
-    func stream(messages: [ChatMessage], system: String, apiKey: String)
-        -> AsyncThrowingStream<String, Error> {
+/// 永不主动结束：把 AssistantModel 钉在 .streaming，直到流被取消。
+struct BlockingLLMClient: LLMClient {
+    func stream(messages: [ChatMessage], system: String,
+                config: LLMRequestConfig) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 try? await Task.sleep(for: .seconds(60))

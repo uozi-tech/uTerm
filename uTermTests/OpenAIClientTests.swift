@@ -1,0 +1,151 @@
+import XCTest
+@testable import uTerm
+
+final class OpenAIClientTests: XCTestCase {
+    override func tearDown() {
+        StubURLProtocol.uninstall()
+        super.tearDown()
+    }
+
+    func testEndpointAndAuthorizationHeader() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!,
+                                        apiKey: "sk-test")
+        for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                          system: "", config: config) {}
+        let req = StubURLProtocol.capturedRequest()!
+        XCTAssertEqual(req.url?.absoluteString, "https://api.openai.com/v1/chat/completions")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "application/json")
+    }
+
+    func testCustomBaseURLForCompatibleEndpoint() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "deepseek-chat",
+                                        baseURL: URL(string: "https://api.deepseek.com")!,
+                                        apiKey: "sk-x")
+        for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                          system: "", config: config) {}
+        XCTAssertEqual(StubURLProtocol.capturedRequest()?.url?.absoluteString,
+                       "https://api.deepseek.com/v1/chat/completions")
+    }
+
+    func testSystemBecomesFirstMessage() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!,
+                                        apiKey: "k")
+        for try await _ in client.stream(
+            messages: [ChatMessage(role: .user, text: "hello")],
+            system: "you are pong-bot", config: config) {}
+        let captured = StubURLProtocol.capturedRequest()!
+        let body = try XCTUnwrap(captured.httpBody ?? bodyFromStream(captured))
+        let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        XCTAssertEqual(obj["model"] as? String, "gpt-5")
+        XCTAssertEqual(obj["stream"] as? Bool, true)
+        let msgs = obj["messages"] as! [[String: Any]]
+        XCTAssertEqual(msgs.count, 2)
+        XCTAssertEqual(msgs[0]["role"] as? String, "system")
+        XCTAssertEqual(msgs[0]["content"] as? String, "you are pong-bot")
+        XCTAssertEqual(msgs[1]["role"] as? String, "user")
+        XCTAssertEqual(msgs[1]["content"] as? String, "hello")
+    }
+
+    func testSystemOmittedWhenEmpty() async throws {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
+        for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "x")],
+                                          system: "", config: config) {}
+        let captured = StubURLProtocol.capturedRequest()!
+        let body = try XCTUnwrap(captured.httpBody ?? bodyFromStream(captured))
+        let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        let msgs = obj["messages"] as! [[String: Any]]
+        XCTAssertEqual(msgs.count, 1)
+        XCTAssertEqual(msgs[0]["role"] as? String, "user")
+    }
+
+    func testStreamingDeltasParsed() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+        data: {"choices":[{"delta":{"content":"Hi"}}]}
+
+        data: {"choices":[{"delta":{"content":" there"}}]}
+
+        data: [DONE]
+
+        """
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
+        var out = ""
+        for try await d in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                          system: "", config: config) {
+            out += d
+        }
+        XCTAssertEqual(out, "Hi there")
+    }
+
+    func testHttpErrorMapped() async {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 401,
+                                        httpVersion: nil, headerFields: nil)!
+            return (resp, "unauthorized".data(using: .utf8)!)
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "bad")
+        do {
+            for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {}
+            XCTFail("应抛错")
+        } catch let e as LLMClientError {
+            guard case .httpError(let status, _) = e else { return XCTFail("应为 httpError") }
+            XCTAssertEqual(status, 401)
+        } catch {
+            XCTFail("应为 LLMClientError，得到 \(error)")
+        }
+    }
+
+    private func bodyFromStream(_ req: URLRequest?) -> Data? {
+        guard let stream = req?.httpBodyStream else { return nil }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
+        defer { buf.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buf, maxLength: 1024)
+            if read <= 0 { break }
+            data.append(buf, count: read)
+        }
+        return data
+    }
+}

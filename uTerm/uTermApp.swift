@@ -11,7 +11,9 @@ struct uTermApp: App {
             cloudKitDatabase: .automatic
         )
         do {
-            return try ModelContainer(for: ServerProfile.self, KnownHost.self, configurations: config)
+            return try ModelContainer(
+                for: ServerProfile.self, KnownHost.self, AIProvider.self,
+                configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
         }
@@ -20,6 +22,8 @@ struct uTermApp: App {
     init() {
         // Spec 1 之前的单份 workspace.json 已不再使用 —— 启动时清掉。
         WorkspaceStore.purgeLegacyWorkspaceFile()
+        // M5 单 anthropic-api-key keychain 条目已被 AIProvider 多 key 取代——清掉旧条目。
+        AgentKeychain.purgeLegacy()
     }
 
     var body: some Scene {
@@ -73,6 +77,13 @@ struct uTermApp: App {
                 }
                 .keyboardShortcut("2", modifiers: [.command, .option])
             }
+        }
+
+        // Settings 窗口（⌘,）—— AI provider 配置面板。未来再加其它 tab。
+        Settings {
+            SettingsView()
+                .modelContainer(modelContainer)
+                .preferredColorScheme(.dark)
         }
     }
 }
