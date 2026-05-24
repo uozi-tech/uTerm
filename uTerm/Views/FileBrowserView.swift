@@ -33,7 +33,7 @@ struct FileBrowserContent: View {
             }
             .buttonStyle(.plain).help("刷新")
             Button { uploadFile() } label: {
-                Image(systemName: "square.and.arrow.up")
+                Image(systemName: "icloud.and.arrow.up")
             }
             .buttonStyle(.plain).help("上传文件到当前目录")
         }
@@ -71,7 +71,7 @@ struct FileBrowserContent: View {
     @ViewBuilder
     private func entryRow(_ entry: RemoteEntry) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: entry.isDirectory ? "folder" : "doc")
+            Image(systemName: entry.isDirectory ? "folder.fill" : "doc.fill")
                 .foregroundStyle(entry.isDirectory ? AppTheme.Palette.accent : AppTheme.Palette.textMuted)
                 .frame(width: 14)
             Text(entry.name)

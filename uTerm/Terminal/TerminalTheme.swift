@@ -5,6 +5,10 @@ import SwiftTerm
 enum TerminalTheme {
     static let backgroundColor = NSColor(srgbRed: 0x1E / 255, green: 0x1E / 255, blue: 0x1E / 255, alpha: 1)
     static let foregroundColor = NSColor(srgbRed: 0xCC / 255, green: 0xCC / 255, blue: 0xCC / 255, alpha: 1)
+    /// VS Code Dark+ `terminalCursor.foreground` (#AEAFAD). Used for the
+    /// caret block fill; pairs with `backgroundColor` as the glyph color so
+    /// the character under the solid block stays readable.
+    static let cursorColor = NSColor(srgbRed: 0xAE / 255, green: 0xAF / 255, blue: 0xAD / 255, alpha: 1)
 
     static func applyDefaults(to view: SwiftTerm.TerminalView) {
         apply(to: view, fontSize: 13, scrollback: 3_000)
@@ -18,7 +22,7 @@ enum TerminalTheme {
         view.nativeBackgroundColor = backgroundColor
         view.nativeForegroundColor = foregroundColor
         view.selectedTextBackgroundColor = normalSelectionColor
-        hideInputCursor(in: view)
+        applyCursor(to: view)
 
         view.installColors(vscodeDarkPlus)
 
@@ -33,27 +37,6 @@ enum TerminalTheme {
         view.layer?.masksToBounds = true
     }
 
-    static func hideInputCursor(in view: SwiftTerm.TerminalView) {
-        view.caretColor = .clear
-        view.caretTextColor = view.nativeForegroundColor
-        view.caretViewTracksFocus = false
-
-        // SwiftTerm renders the cursor through a private CaretView overlay.
-        // Keep hiding it by type name since the concrete class is not public.
-        hideCaretSubviews(in: view)
-    }
-
-    private static func hideCaretSubviews(in view: NSView) {
-        for subview in view.subviews {
-            if String(describing: type(of: subview)) == "CaretView" {
-                subview.isHidden = true
-                subview.layer?.removeAllAnimations()
-                subview.layer?.opacity = 0
-            }
-            hideCaretSubviews(in: subview)
-        }
-    }
-
     static func applyFont(to view: SwiftTerm.TerminalView, fontSize: CGFloat) {
         // Match VS Code's default on macOS: Menlo, fallback to system mono if
         // Menlo somehow isn't available (it's bundled since 10.6).
@@ -62,6 +45,23 @@ enum TerminalTheme {
         if view.font != font {
             view.font = font
         }
+    }
+
+    /// Match VS Code's integrated terminal default: steady (non-blinking)
+    /// block painted with `terminalCursor.foreground` (#AEAFAD). SwiftTerm
+    /// defaults to `.blinkBlock` and an unset `caretColor` that reads as the
+    /// system text-cursor blue. The DECSCUSR `ESC [ 2 SP q` switches the
+    /// caret to steady block — the same sequence shells emit to opt out of
+    /// blinking — and `caretTextColor` keeps the glyph under the solid
+    /// block readable against the light fill. `caretViewTracksFocus` stays
+    /// at its default `true` so an unfocused pane shows a hollow outline,
+    /// also matching VS Code's behaviour.
+    static func applyCursor(to view: SwiftTerm.TerminalView) {
+        view.caretColor = cursorColor
+        view.caretTextColor = backgroundColor
+        // `feed` on a fresh TerminalView is safe — the underlying Terminal
+        // is constructed during `super.init` before this is called.
+        view.feed(text: "\u{1B}[2 q")
     }
 
     static func applyScrollback(to view: SwiftTerm.TerminalView, scrollback: Int) {

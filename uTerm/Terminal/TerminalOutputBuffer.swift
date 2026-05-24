@@ -13,6 +13,10 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
     private var chunks: [Chunk] = []
     private var head = 0
     private var bufferedBytes = 0
+    /// Tasks 在 `waitForData()` 中暂停的延续。`append()` / `clear()` 都会清空
+    /// 此列表并 resume 所有等待者 —— 这让 flush loop 在空闲时挂起 0 CPU、
+    /// 一字节到达即恢复，取代旧的 100ms 轮询。
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(capacityBytes: Int = 4 * 1024 * 1024) {
         self.capacityBytes = max(1024, capacityBytes)
@@ -22,7 +26,6 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         guard !data.isEmpty else { return }
 
         lock.lock()
-        defer { lock.unlock() }
 
         let chunk: Chunk
         if data.count > capacityBytes {
@@ -37,6 +40,10 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         bufferedBytes += chunk.data.count
         dropOverflowLocked()
         compactIfNeededLocked()
+        let toWake = takeWaitersLocked()
+        lock.unlock()
+
+        resume(toWake)
     }
 
     func drain(maxBytes: Int, generation: Int) -> Data {
@@ -78,7 +85,37 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         chunks.removeAll(keepingCapacity: true)
         head = 0
         bufferedBytes = 0
+        // 唤醒所有等待者，让被取消的 flush task 能感知 generation 重置后退出。
+        let toWake = takeWaitersLocked()
         lock.unlock()
+        resume(toWake)
+    }
+
+    /// 异步挂起直到 buffer 中有数据。调用时已有缓冲字节则立即返回，
+    /// 避免 drain→wait 之间的丢信号竞态。`clear()` 也会唤醒挂起的等待者。
+    func waitForData() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if bufferedBytes > 0 {
+                lock.unlock()
+                cont.resume()
+            } else {
+                waiters.append(cont)
+                lock.unlock()
+            }
+        }
+    }
+
+    private func takeWaitersLocked() -> [CheckedContinuation<Void, Never>] {
+        guard !waiters.isEmpty else { return [] }
+        let snapshot = waiters
+        waiters.removeAll(keepingCapacity: true)
+        return snapshot
+    }
+
+    /// 始终在锁外 resume，避免在持锁期间触发等待者继续逻辑可能反入本类。
+    private func resume(_ continuations: [CheckedContinuation<Void, Never>]) {
+        for cont in continuations { cont.resume() }
     }
 
     private func dropOverflowLocked() {

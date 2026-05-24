@@ -21,7 +21,7 @@ struct StatusBarView: View {
                     .font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 20)
         .frame(height: 28)
         .background(AppTheme.Palette.bgPanel)
     }

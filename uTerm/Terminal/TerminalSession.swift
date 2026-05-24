@@ -16,8 +16,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
     private var feedGeneration: Int = 0
+    /// 输出活跃时的批合并节流。flush 后睡眠这么久再回头检查 buffer，让
+    /// SwiftTerm 一次处理一批字节而不是逐字节渲染。≈60fps 上限。
     private let outputFlushActiveMs: Int = 16
-    private let outputFlushIdleMs: Int = 100
     private let maxBytesPerOutputFlush = 32 * 1024
 
     // Resize forwarding state. SplitterHandle now updates `fraction` live during
@@ -229,14 +230,23 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     private func startOutputFlushLoop() {
         outputFlushTask?.cancel()
         let myGen = feedGeneration
+        let buffer = outputBuffer
         outputFlushTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 guard self.feedGeneration == myGen else { return }
 
                 let didFeed = self.flushPendingOutput(generation: myGen)
-                let delayMs = didFeed ? self.outputFlushActiveMs : self.outputFlushIdleMs
-                try? await Task.sleep(for: .milliseconds(delayMs))
+                if didFeed {
+                    // 活跃路径：让短时间内陆续到达的字节合批一次性 feed。
+                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                } else {
+                    // 空闲路径：挂起到下一次 append（或 clear 唤醒，让被取消的
+                    // generation 通过下一轮顶部的 guard 退出）。这条路径取代了
+                    // 旧的 100ms 轮询 —— 那 100ms 是 echo 字符在终端中可见前
+                    // 的最坏延迟，是"输入不跟手"的根因。
+                    await buffer.waitForData()
+                }
             }
         }
     }

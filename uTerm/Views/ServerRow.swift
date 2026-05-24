@@ -38,12 +38,6 @@ struct ServerRow: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(isSelected ? AppTheme.Palette.bgSelected : Color.clear)
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Rectangle().fill(AppTheme.Palette.accent).frame(width: 2)
-                    .padding(.vertical, 4)
-            }
-        }
         // 选中态走 bgSelected；非选中态 hover 给 bgRaised 反馈。
         // 老版本每行尾 0.5px border 在选中下与 bgSelected 撞色显得"双线"，已去除。
         .hoverBackground(isActive: isSelected)
@@ -80,7 +74,7 @@ struct ServerRow: View {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(AppTheme.Palette.bgPanel))
         } else {
-            Text("—")
+            Text("未分组")
                 .font(.system(size: 10))
                 .foregroundStyle(AppTheme.Palette.textMuted.opacity(0.5))
                 .frame(width: 36)

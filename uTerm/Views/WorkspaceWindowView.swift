@@ -68,7 +68,10 @@ struct WorkspaceWindowView: View {
                 set: { workspace.uiState.leftSidebarVisibility = $0 }
             )) {
                 SFTPSidebar(model: workspace.fileBrowserModel, server: server)
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
+                    // max 收窄 400 → 300：避免被拖宽到把 detail 挤到 0。NavigationSplitView
+                    // 在 detail 缩没后会让 inspector / 邻栏视觉上压上 sidebar，
+                    // 表现为「侧边栏内容被遮挡」。
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
             } detail: {
                 WorkspaceCenter(workspace: workspace, server: server)
                     .inspector(isPresented: Binding(
@@ -255,12 +258,10 @@ struct WorkspaceWindowView: View {
         // 工具栏按钮**不**再绑 keyboardShortcut —— 全靠 CommandGroup 一处注册
         // （Fix #4）。先前 toolbar 与 commands 同时挂同一快捷键导致每次按键
         // 触发两次 toggle，净 no-op。
-        ToolbarItem(placement: .navigation) {
-            Button { workspace.toggleLeftSidebar() } label: {
-                Image(systemName: "sidebar.left")
-            }
-            .help("显示/隐藏 SFTP（⌘⌥1）")
-        }
+        //
+        // 左 sidebar toggle 按钮**不**手动加 —— NavigationSplitView 绑了
+        // columnVisibility 后 macOS 会自动注入一颗系统按钮，再加自定义会重复
+        // （issue：截图里两颗 sidebar 图标）。⌘⌥1 由 CommandGroup 提供。
 
         ToolbarItem(placement: .principal) {
             HStack(spacing: 8) {
@@ -270,16 +271,12 @@ struct WorkspaceWindowView: View {
                     ConnectionStatusBadge(state: session.connectionState)
                 }
             }
+            // 系统给 .principal 的胶囊外壳贴边渲染文字，左右各留一点呼吸空间。
+            .padding(.horizontal, 10)
         }
 
-        ToolbarItem {
-            Button {
-                workspace.activeTab?.splitFocusedPane(direction: .horizontal)
-            } label: {
-                Image(systemName: "rectangle.split.2x1")
-            }
-            .help("水平分屏（⌘D）")
-        }
+        // 分屏按钮删了 —— ⌘⇧D 在 uTermApp 的 CommandGroup 里挂着，
+        // 工具栏长期占位且不常用。
 
         ToolbarItem(placement: .primaryAction) {
             Button { workspace.toggleRightInspector() } label: {
