@@ -69,6 +69,13 @@ struct CodeEditTextViewRepresentable: NSViewRepresentable {
         // CodeEditTextView.TextView 没有 backgroundColor 属性；外层 NSScrollView
         // 的 backgroundColor 已经覆盖了整个区域。
 
+        // 文本与容器边界留呼吸空间 —— 否则字符贴左/上边显得拥挤。
+        // 横向用 CodeEditTextView 自带的 `edgeInsets`，纵向走 NSScrollView 的
+        // contentInsets（滚动条仍在 ScrollView 边缘）。
+        textView.edgeInsets = HorizontalEdgeInsets(left: 12, right: 12)
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
+
         scrollView.documentView = textView
         context.coordinator.textView = textView
         return scrollView

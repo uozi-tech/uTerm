@@ -51,9 +51,13 @@ struct PaneView: View {
                 PaneDropHighlight(zone: zone)
             }
         }
+        // 焦点蓝框：只在多窗格 tab（即显示 header 时）出现 —— 单窗格 tab 时
+        // 整块区域就是唯一焦点，框纯是视觉噪声。
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(isFocused ? AppTheme.Palette.accent : Color.clear, lineWidth: 2)
+                .strokeBorder(
+                    (isFocused && showsHeader) ? AppTheme.Palette.accent : Color.clear,
+                    lineWidth: 2)
         )
         .contentShape(Rectangle())
         .onTapGesture { onFocus() }

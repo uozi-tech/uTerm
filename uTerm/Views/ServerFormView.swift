@@ -11,10 +11,13 @@ struct ServerFormView: View {
     /// nil = 新建；非 nil = 编辑现有 profile。
     let editing: ServerProfile?
 
+    @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
+
     @State private var name = ""
     @State private var host = ""
     @State private var port = "22"
     @State private var username = ""
+    @State private var group = ""
     @State private var authMethod: AuthMethod = .password
     @State private var password = ""
     @State private var passphrase = ""
@@ -45,6 +48,21 @@ struct ServerFormView: View {
                     authMethod: $authMethod, password: $password, passphrase: $passphrase,
                     keyContent: $privateKeyContent, keyFilename: $privateKeyFilename
                 )
+                Section("分组") {
+                    TextField("分组（可选）", text: $group)
+                    if !existingGroups.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(existingGroups, id: \.self) { g in
+                                    Button(g) { group = g }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
                 Section("跳板机") {
                     Toggle("通过跳板机连接", isOn: $useJumpHost)
                     if useJumpHost {
@@ -133,12 +151,21 @@ struct ServerFormView: View {
         filename.wrappedValue = url.lastPathComponent
     }
 
+    /// 已有的非空分组名，去重 + locale 排序；表单 chips 行的数据源。
+    private var existingGroups: [String] {
+        Set(allProfiles.compactMap { p -> String? in
+            let g = p.group ?? ""
+            return g.isEmpty ? nil : g
+        }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     private func loadForEditing() {
         guard let editing else { return }
         name = editing.name
         host = editing.host
         port = String(editing.port)
         username = editing.username
+        group = editing.group ?? ""
         authMethod = editing.authMethod
         password = (try? keychain.load(profileID: editing.id, kind: .password)) ?? ""
         passphrase = (try? keychain.load(profileID: editing.id, kind: .passphrase)) ?? ""
@@ -164,6 +191,8 @@ struct ServerFormView: View {
         profile.host = host
         profile.port = Int(port) ?? 22
         profile.username = username
+        let trimmedGroup = group.trimmingCharacters(in: .whitespacesAndNewlines)
+        profile.group = trimmedGroup.isEmpty ? nil : trimmedGroup
         profile.authMethod = authMethod
         writeSecrets(for: profile, authMethod: authMethod,
                      password: password, passphrase: passphrase, key: privateKeyContent)

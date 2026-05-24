@@ -62,35 +62,39 @@ struct WorkspaceWindowView: View {
     @ViewBuilder
     private func workspaceBody(server: ServerProfile,
                                windowID: WorkspaceWindowID) -> some View {
-        NavigationSplitView(columnVisibility: Binding(
-            get: { workspace.uiState.leftSidebarVisibility },
-            set: { workspace.uiState.leftSidebarVisibility = $0 }
-        )) {
-            SFTPSidebar(model: workspace.fileBrowserModel, server: server)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
-        } detail: {
-            WorkspaceCenter(workspace: workspace, server: server)
-                .inspector(isPresented: Binding(
-                    get: { workspace.uiState.rightInspectorPresented },
-                    set: { workspace.uiState.rightInspectorPresented = $0 }
-                )) {
-                    AgentSidebar(
-                        model: workspace.assistantModel,
-                        serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）")
-                        .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
-                }
+        VStack(spacing: 0) {
+            NavigationSplitView(columnVisibility: Binding(
+                get: { workspace.uiState.leftSidebarVisibility },
+                set: { workspace.uiState.leftSidebarVisibility = $0 }
+            )) {
+                SFTPSidebar(model: workspace.fileBrowserModel, server: server)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
+            } detail: {
+                WorkspaceCenter(workspace: workspace, server: server)
+                    .inspector(isPresented: Binding(
+                        get: { workspace.uiState.rightInspectorPresented },
+                        set: { workspace.uiState.rightInspectorPresented = $0 }
+                    )) {
+                        AgentSidebar(
+                            model: workspace.assistantModel,
+                            serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）")
+                            .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
+                    }
+            }
+            // status bar 作为 NavigationSplitView 的兄弟节点（而非 safeAreaInset）—
+            // safeAreaInset 在 NavigationSplitView 的 detail 列里不可靠传递，
+            // SwiftTerm NSView 会渲染到 inset 区域下面，挡住末行（issue 反馈）。
+            Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+            StatusBarView(workspace: workspace)
         }
         .navigationTitle(server.name)
         // 隐藏工具栏中央那颗自动渲染的标题胶囊 —— 服务器名在 .principal
         // 工具栏自渲染；保留 `.navigationTitle` 仅供窗口菜单/调度中心识别。
         .toolbar(removing: .title)
         .toolbar { workspaceToolbar(server: server) }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
-                StatusBarView(workspace: workspace)
-            }
-        }
+        // titlebar / toolbar 显式用 AppTheme.bgPanel 而非系统亮 material。
+        .toolbarBackground(AppTheme.Palette.bgPanel, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .background(AppTheme.Palette.bgBase)
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。

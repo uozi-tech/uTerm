@@ -25,6 +25,13 @@ final class ServerProfile {
     var createdAt: Date = Date()
     var sortOrder: Int = 0
 
+    /// 服务器分组标签（如 "production"、"staging"）。CloudKit 安全：可空。
+    var group: String?
+    /// 是否置顶显示。默认 false。
+    var isPinned: Bool = false
+    /// 最近一次成功连接的时间。连接成功后由调用方赋值。
+    var lastConnectedAt: Date?
+
     /// 单跳跳板机配置。自引用可选关系。M1 只用一层，
     /// 嵌套的 `jumpHost?.jumpHost` 不暴露、不连接。
     var jumpHost: ServerProfile?

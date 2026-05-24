@@ -36,11 +36,12 @@ struct TerminalTabBar: View {
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
+                    .hoverBackground(cornerRadius: 4)
                     .help("新建终端标签（⌘T）")
                     // ⌘T 走 uTermApp 的 CommandGroup 单独注册 —— 按在终端焦点
                     // 区时也能正确触发（Fix #10）；这里只是 UI 按钮入口。
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 4)
             }
         }
@@ -98,6 +99,7 @@ private struct TerminalTabChip: View {
                     .padding(.vertical, 3)
             }
         }
+        .hoverBackground(cornerRadius: 5, isActive: isActive)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }

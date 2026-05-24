@@ -15,10 +15,10 @@ struct PreviewTabBar: View {
                             buffer: buf,
                             isActive: model.activeBufferID == buf.id,
                             onSelect: { model.selectTab(buf.id) },
-                            onClose:  { Task { await model.close(buf.id, savingIfDirty: true) } })
+                            onClose:  { model.close(buf.id, savingIfDirty: true) })
                     }
                 }
-                .padding(.horizontal, 8).padding(.vertical, 4)
+                .padding(.horizontal, 12).padding(.vertical, 4)
             }
         }
         .frame(height: 30)
@@ -74,6 +74,7 @@ private struct PreviewTabChip: View {
                     .padding(.vertical, 3)
             }
         }
+        .hoverBackground(cornerRadius: 5, isActive: isActive)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }

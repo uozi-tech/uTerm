@@ -24,8 +24,11 @@ struct uTermApp: App {
 
     var body: some Scene {
         // 服务器管理 —— 单实例 Welcome 窗口。自动出现在「窗口」菜单，可重开。
+        // `.preferredColorScheme(.dark)` 让 macOS titlebar / scroller /
+        // 系统 material 都用暗变体，不与 AppTheme 冷灰蓝 token 撞色。
         Window("uTerm", id: "welcome") {
             WelcomeView()
+                .preferredColorScheme(.dark)
         }
         .modelContainer(modelContainer)
 
@@ -33,6 +36,7 @@ struct uTermApp: App {
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
                 .frame(minWidth: 1280, minHeight: 720)
+                .preferredColorScheme(.dark)
         }
         .modelContainer(modelContainer)
         .commands {

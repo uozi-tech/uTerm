@@ -70,15 +70,19 @@ struct FileBrowserContent: View {
 
     @ViewBuilder
     private func entryRow(_ entry: RemoteEntry) -> some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: entry.isDirectory ? "folder" : "doc")
                 .foregroundStyle(entry.isDirectory ? AppTheme.Palette.accent : AppTheme.Palette.textMuted)
+                .frame(width: 14)
             Text(entry.name)
+                .lineLimit(1)
             Spacer()
             if let size = entry.size, !entry.isDirectory {
                 Text(byteText(size)).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
             }
         }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .hoverBackground(cornerRadius: 4)
         .contentShape(Rectangle())
         .onTapGesture {
             if entry.isDirectory {
