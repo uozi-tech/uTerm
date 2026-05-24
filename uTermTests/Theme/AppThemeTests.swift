@@ -21,40 +21,50 @@ final class AppThemeTests: XCTestCase {
     }
 
     func test_palette_backgroundLayers() {
-        assertColor(AppTheme.Palette.bgBase,     equals: 0x1B1D23)
-        assertColor(AppTheme.Palette.bgPanel,    equals: 0x14161B)
-        assertColor(AppTheme.Palette.bgRaised,   equals: 0x1F2128)
-        assertColor(AppTheme.Palette.bgSelected, equals: 0x2A3041)
+        assertColor(AppTheme.Palette.bgBase,             equals: 0x1F1F1F)
+        assertColor(AppTheme.Palette.bgPanel,            equals: 0x181818)
+        assertColor(AppTheme.Palette.bgRaised,           equals: 0x2A2D2E)
+        assertColor(AppTheme.Palette.bgSelected,         equals: 0x04395E)
+        assertColor(AppTheme.Palette.bgSelectedInactive, equals: 0x37373D)
     }
 
     func test_palette_borders() {
-        assertColor(AppTheme.Palette.border,       equals: 0x2A2C33)
-        assertColor(AppTheme.Palette.borderStrong, equals: 0x3B3D44)
+        assertColor(AppTheme.Palette.border,       equals: 0x2B2B2B)
+        assertColor(AppTheme.Palette.borderStrong, equals: 0x3B3B3B)
     }
 
     func test_palette_text() {
-        assertColor(AppTheme.Palette.textPrimary,   equals: 0xE8EAEF)
-        assertColor(AppTheme.Palette.textSecondary, equals: 0xC8CACF)
-        assertColor(AppTheme.Palette.textMuted,     equals: 0x7A7C82)
+        assertColor(AppTheme.Palette.textPrimary,   equals: 0xCCCCCC)
+        assertColor(AppTheme.Palette.textSecondary, equals: 0x9D9D9D)
+        assertColor(AppTheme.Palette.textMuted,     equals: 0x6E6E6E)
     }
 
     func test_palette_accent() {
-        assertColor(AppTheme.Palette.accent, equals: 0x4F70D8)
+        assertColor(AppTheme.Palette.accent, equals: 0x0078D4)
     }
 
     func test_palette_status() {
-        assertColor(AppTheme.Palette.success, equals: 0x6FCF97)
-        assertColor(AppTheme.Palette.warning, equals: 0xF2C94C)
-        // caution（橙）必须与 warning（黄）颜色不同，否则状态徽标无法区分
-        // 「已断开」与「连接中」（Fix #9）。
-        assertColor(AppTheme.Palette.caution, equals: 0xF2994A)
-        assertColor(AppTheme.Palette.danger,  equals: 0xEB5757)
+        assertColor(AppTheme.Palette.success, equals: 0x73C991)
+        assertColor(AppTheme.Palette.warning, equals: 0xE2C08D)
+        // caution（暖橙红）必须与 warning（米黄）颜色不同，否则状态徽标无法区分
+        // 「已断开」与「连接中」（Fix #9 防御性约束保留）。
+        assertColor(AppTheme.Palette.caution, equals: 0xCC6633)
+        assertColor(AppTheme.Palette.danger,  equals: 0xF14C4C)
     }
 
-    /// caution ≠ warning —— 防御性比对，避免未来误改回同色。
+    /// caution ≠ warning —— 防御性比对
     func test_palette_cautionDistinctFromWarning() {
-        let cautionHex: UInt32 = 0xF2994A
-        let warningHex: UInt32 = 0xF2C94C
+        let cautionHex: UInt32 = 0xCC6633
+        let warningHex: UInt32 = 0xE2C08D
         XCTAssertNotEqual(cautionHex, warningHex)
+    }
+
+    /// hitTestFill 是 SwiftUI 鼠标命中区专用的近不可见填充。
+    /// 不断言精确 RGB（白色 sRGB ↔ NSColor 转换有舍入），断言 alpha 很小但 >0。
+    /// 用 `??` fallback 跟 `srgb()` 辅助保持一致，避免 headless 环境下 nil 强解崩。
+    func test_palette_hitTestFill_alphaIsTinyButNonZero() {
+        let raw = NSColor(AppTheme.Palette.hitTestFill)
+        let ns = raw.usingColorSpace(.sRGB) ?? raw
+        XCTAssertEqual(ns.alphaComponent, 0.001, accuracy: 0.0005)
     }
 }

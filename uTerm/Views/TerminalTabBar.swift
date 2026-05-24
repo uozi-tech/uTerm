@@ -86,17 +86,15 @@ private struct TerminalTabChip: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 4)
         .background(
-            ZStack {
-                if isActive {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(AppTheme.Palette.bgSelected)
-                }
-            }
+            // 活动 tab 用 bgBase（=Editor / 终端区同色），视觉上跟下方主区无缝
+            // 衔接；非活动 tab 留空，继承 TabBar 的 bgPanel。不用圆角，
+            // 否则跟"无缝"目标矛盾。
+            isActive ? AppTheme.Palette.bgBase : Color.clear
         )
-        .overlay(alignment: .leading) {
+        .overlay(alignment: .top) {
+            // 顶部 1px accent 横线，VS Code Dark Modern 标示活动 tab 的方式
             if isActive {
-                Rectangle().fill(AppTheme.Palette.accent).frame(width: 2)
-                    .padding(.vertical, 3)
+                Rectangle().fill(AppTheme.Palette.accent).frame(height: 1)
             }
         }
         .hoverBackground(cornerRadius: 5, isActive: isActive)

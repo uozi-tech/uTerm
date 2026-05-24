@@ -1,0 +1,101 @@
+// uTerm/Editor/CodeEditorView.swift
+import SwiftUI
+import AppKit
+import CodeEditTextView
+
+/// SwiftUI 入口。包了 CodeEditorController 持有的 TextView。
+struct CodeEditorView: View {
+    let buffer: FileBuffer
+    var language: String = ""
+    @State private var findController: FindReplaceController?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            CodeEditorViewRepresentable(buffer: buffer, language: language,
+                                        findController: $findController)
+                .background(AppTheme.Palette.bgBase)
+            if let fc = findController {
+                FindReplaceBar(controller: fc) {
+                    findController = nil
+                }
+                .padding(.top, 8).padding(.trailing, 14)
+                .transition(.opacity)
+            }
+        }
+    }
+}
+
+// MARK: - NSViewRepresentable
+
+private struct CodeEditorViewRepresentable: NSViewRepresentable {
+    let buffer: FileBuffer
+    let language: String
+    @Binding var findController: FindReplaceController?
+
+    func makeCoordinator() -> CodeEditorController {
+        CodeEditorController()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.backgroundColor = NSColor(AppTheme.Palette.bgBase)
+
+        let textView = TextView(
+            string: buffer.text,
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            textColor: NSColor(AppTheme.Palette.textPrimary),
+            lineHeightMultiplier: 1.4,
+            wrapLines: false,
+            isEditable: true,
+            isSelectable: true,
+            letterSpacing: 1.0,
+            useSystemCursor: false,
+            delegate: context.coordinator
+        )
+        textView.edgeInsets = HorizontalEdgeInsets(left: 12, right: 12)
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
+        scrollView.documentView = textView
+
+        context.coordinator.attach(textView: textView, scrollView: scrollView, buffer: buffer)
+
+        // Install a local event monitor for find/replace key shortcuts.
+        // We filter to events where this textView's window is key and textView is first responder,
+        // so the monitor doesn't steal from other windows.
+        let findBinding = $findController
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard
+                let window = textView.window,
+                event.window === window,
+                window.firstResponder === textView
+            else { return event }
+
+            let handled = context.coordinator.handleKeyEvent(event, openFind: { showReplace in
+                let fc = context.coordinator.openFindController(showReplace: showReplace)
+                DispatchQueue.main.async { findBinding.wrappedValue = fc }
+            }, closeFind: {
+                DispatchQueue.main.async {
+                    context.coordinator.dismissFindController()
+                    findBinding.wrappedValue = nil
+                }
+            })
+            return handled ? nil : event
+        }
+        context.coordinator.keyEventMonitor = monitor
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? TextView else { return }
+        if textView.string != buffer.text {
+            context.coordinator.isUpdatingFromBinding = true
+            textView.setText(buffer.text)
+            context.coordinator.isUpdatingFromBinding = false
+        }
+    }
+}

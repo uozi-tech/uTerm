@@ -21,7 +21,7 @@ struct SplitterHandle: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color.gray.opacity(0.001))
+            .fill(AppTheme.Palette.hitTestFill)
             .overlay(
                 Rectangle()
                     .fill(dragStartFraction != nil ? AppTheme.Palette.accent.opacity(0.6) : Color.clear)

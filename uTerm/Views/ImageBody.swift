@@ -28,7 +28,7 @@ struct ImageBody: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(AppTheme.Palette.bgPanel)
+        .background(AppTheme.Palette.bgBase)
     }
 
     @ViewBuilder
