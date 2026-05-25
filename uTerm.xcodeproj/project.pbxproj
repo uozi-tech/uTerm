@@ -46,15 +46,11 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		85D6BEF12FBC4E7E00FC90D8 /* uTerm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = uTerm;
 			sourceTree = "<group>";
 		};
 		B00000000000000000000002 /* uTermTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = uTermTests;
 			sourceTree = "<group>";
 		};
@@ -224,7 +220,7 @@
 				TC000700000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-bash" */,
 				TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */,
 				DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
-				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */,
+				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -339,6 +335,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -396,6 +393,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -408,7 +406,7 @@
 				CODE_SIGN_ENTITLEMENTS = uTerm/uTerm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 503;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -442,7 +440,7 @@
 				CODE_SIGN_ENTITLEMENTS = uTerm/uTerm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 503;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -473,7 +471,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 503;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -496,7 +494,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 503;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -547,7 +545,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */ = {
+		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
 		};
@@ -663,17 +661,17 @@
 /* Begin XCSwiftPackageProductDependency section */
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterPython;
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterINI;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterJavaScript;
 		};
 		A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */ = {
@@ -688,7 +686,7 @@
 		};
 		A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterYAML;
 		};
 		AD0CF0F0F0F0F0F0F0F00001 /* Markdown */ = {
@@ -708,7 +706,7 @@
 		};
 		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterTOML;
 		};
 		CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */ = {
