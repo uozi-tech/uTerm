@@ -10,60 +10,6 @@ enum TerminalTheme {
     /// the character under the solid block stays readable.
     static let cursorColor = NSColor(srgbRed: 0xAE / 255, green: 0xAF / 255, blue: 0xAD / 255, alpha: 1)
 
-    static func applyDefaults(to view: SwiftTerm.TerminalView) {
-        apply(to: view, fontSize: 13, scrollback: 3_000)
-    }
-
-    static func apply(to view: SwiftTerm.TerminalView, fontSize: CGFloat, scrollback: Int) {
-        applyFont(to: view, fontSize: fontSize)
-        applyScrollback(to: view, scrollback: scrollback)
-
-        // VS Code Dark+ background/foreground/selection
-        view.nativeBackgroundColor = backgroundColor
-        view.nativeForegroundColor = foregroundColor
-        view.selectedTextBackgroundColor = normalSelectionColor
-        applyCursor(to: view)
-
-        view.installColors(vscodeDarkPlus)
-
-        // Round only the visual bottom corners (where the terminal meets the
-        // pane's outer rounded bottom). Top corners stay straight to butt
-        // flush against the header. `.layerMinXMinYCorner` / `.layerMaxXMinYCorner`
-        // refer to the layer's MIN-Y edge, which on a non-flipped NSView layer
-        // is the visual bottom.
-        view.wantsLayer = true
-        view.layer?.cornerRadius = 8
-        view.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        view.layer?.masksToBounds = true
-    }
-
-    static func applyFont(to view: SwiftTerm.TerminalView, fontSize: CGFloat) {
-        // Match VS Code's default on macOS: Menlo, fallback to system mono if
-        // Menlo somehow isn't available (it's bundled since 10.6).
-        let font = NSFont(name: "Menlo", size: fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        if view.font != font {
-            view.font = font
-        }
-    }
-
-    /// Match VS Code's integrated terminal default: steady (non-blinking)
-    /// block painted with `terminalCursor.foreground` (#AEAFAD). SwiftTerm
-    /// defaults to `.blinkBlock` and an unset `caretColor` that reads as the
-    /// system text-cursor blue. The DECSCUSR `ESC [ 2 SP q` switches the
-    /// caret to steady block — the same sequence shells emit to opt out of
-    /// blinking — and `caretTextColor` keeps the glyph under the solid
-    /// block readable against the light fill. `caretViewTracksFocus` stays
-    /// at its default `true` so an unfocused pane shows a hollow outline,
-    /// also matching VS Code's behaviour.
-    static func applyCursor(to view: SwiftTerm.TerminalView) {
-        view.caretColor = cursorColor
-        view.caretTextColor = backgroundColor
-        // `feed` on a fresh TerminalView is safe — the underlying Terminal
-        // is constructed during `super.init` before this is called.
-        view.feed(text: "\u{1B}[2 q")
-    }
-
     static func applyScrollback(to view: SwiftTerm.TerminalView, scrollback: Int) {
         guard let terminal = view.terminal else { return }
         let target = max(0, scrollback)
@@ -80,26 +26,66 @@ enum TerminalTheme {
     /// `terminal.findMatchBackground` (`#A07D27`).
     static let searchMatchColor = NSColor(srgbRed: 0xF1 / 255, green: 0xB5 / 255, blue: 0x3C / 255, alpha: 0.6)
 
-    private static func ansi(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> SwiftTerm.Color {
-        SwiftTerm.Color(red: UInt16(r) * 257, green: UInt16(g) * 257, blue: UInt16(b) * 257)
+    // MARK: spec 03 — settings-driven API
+
+    /// Spec 03 主 entry：接收完整 settings 一次性 apply。
+    ///
+    /// 调用顺序保证 scheme 先于 cursor —— applyCursor 在 block 形态时
+    /// 读 view.nativeBackgroundColor 作为 caretTextColor，需要 scheme
+    /// 已生效。
+    static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings) {
+        applyFont(to: view, fontName: settings.fontName, fontSize: CGFloat(settings.fontSize))
+        applyLineSpacing(to: view, lineSpacing: CGFloat(settings.lineHeight))
+        applyColorScheme(to: view, scheme: settings.colorScheme)
+        applyCursor(to: view, shape: settings.cursorShape, blink: settings.cursorBlink)
+        applyScrollback(to: view, scrollback: settings.scrollback)
+        applyRoundedCorners(to: view)
     }
 
-    static let vscodeDarkPlus: [SwiftTerm.Color] = [
-        ansi(0x00, 0x00, 0x00), // black
-        ansi(0xCD, 0x31, 0x31), // red
-        ansi(0x0D, 0xBC, 0x79), // green
-        ansi(0xE5, 0xE5, 0x10), // yellow
-        ansi(0x24, 0x72, 0xC8), // blue
-        ansi(0xBC, 0x3F, 0xBC), // magenta
-        ansi(0x11, 0xA8, 0xCD), // cyan
-        ansi(0xE5, 0xE5, 0xE5), // white
-        ansi(0x66, 0x66, 0x66), // bright black
-        ansi(0xF1, 0x4C, 0x4C), // bright red
-        ansi(0x23, 0xD1, 0x8B), // bright green
-        ansi(0xF5, 0xF5, 0x43), // bright yellow
-        ansi(0x3B, 0x8E, 0xEA), // bright blue
-        ansi(0xD6, 0x70, 0xD6), // bright magenta
-        ansi(0x29, 0xB8, 0xDB), // bright cyan
-        ansi(0xE5, 0xE5, 0xE5), // bright white
-    ]
+    /// 字体名 + 字号同时设定。
+    static func applyFont(to view: SwiftTerm.TerminalView, fontName: String, fontSize: CGFloat) {
+        let font = NSFont(name: fontName, size: fontSize)
+            ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        if view.font != font {
+            view.font = font
+        }
+    }
+
+    /// 行距（SwiftTerm 的 lineSpacing，默认 1.0；范围 1.0-2.0）。
+    static func applyLineSpacing(to view: SwiftTerm.TerminalView, lineSpacing: CGFloat) {
+        if view.lineSpacing != lineSpacing {
+            view.lineSpacing = lineSpacing
+        }
+    }
+
+    /// 应用 scheme：bg / fg / installColors / 保留 selection color。
+    static func applyColorScheme(to view: SwiftTerm.TerminalView, scheme: TerminalColorScheme) {
+        view.nativeBackgroundColor = scheme.backgroundColor
+        view.nativeForegroundColor = scheme.foregroundColor
+        view.installColors(scheme.ansiColors)
+        // selection color 不随 scheme 切——保留 normalSelectionColor 蓝调
+        view.selectedTextBackgroundColor = normalSelectionColor
+    }
+
+    /// 光标形状 + 闪烁。注意：caller 必须先 applyColorScheme，因为
+    /// block 形态读 view.nativeBackgroundColor 作 caretTextColor。
+    static func applyCursor(to view: SwiftTerm.TerminalView,
+                             shape: TerminalCursorShape,
+                             blink: Bool) {
+        view.caretColor = cursorColor
+        // 仅块形态需要 caretTextColor 让字符在光标下可读；underline / bar
+        // 不覆盖字符（nil = 用 fg）。
+        view.caretTextColor = (shape == .block) ? view.nativeBackgroundColor : nil
+        view.feed(text: "\u{1B}[\(shape.decscusrParameter(blink: blink)) q")
+    }
+
+    /// 圆角设置抽离出来：原 `apply(to:fontSize:scrollback:)` 内联了
+    /// `wantsLayer = true; layer.cornerRadius = 8 ...`，本 spec 提到
+    /// 同一段，单独成方法便于新 entry 复用。
+    static func applyRoundedCorners(to view: SwiftTerm.TerminalView) {
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 8
+        view.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        view.layer?.masksToBounds = true
+    }
 }

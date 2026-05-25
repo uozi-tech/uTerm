@@ -15,25 +15,44 @@ struct TerminalHostView: NSViewRepresentable {
     let terminalView: SwiftTerm.TerminalView
     var forwardsScrollToParent = false
 
-    @AppStorage("terminalFontSize") private var fontSize: Double = 11
+    @AppStorage("terminalFontName")     private var fontName: String = "Menlo"
+    @AppStorage("terminalFontSize")     private var fontSize: Double = 11
+    @AppStorage("terminalLineHeight")   private var lineHeight: Double = 1.0
+    @AppStorage("terminalColorScheme")  private var colorSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
+    @AppStorage("terminalCursorShape")  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
+    @AppStorage("terminalCursorBlink")  private var cursorBlink: Bool = false
     /// Small live scrollback as a per-pane memory bound.
     /// 3000 lines ≈ 5MB/pane vs 24MB at 10k — meaningful win at 6 panes.
-    @AppStorage("terminalScrollback") private var scrollback: Int = 3_000
+    @AppStorage("terminalScrollback")   private var scrollback: Int = 3_000
+    @AppStorage("terminalCopyOnSelect") private var copyOnSelect: Bool = false
+
+    private var currentSettings: TerminalSettings {
+        TerminalSettings(
+            fontName: fontName,
+            fontSize: fontSize,
+            lineHeight: lineHeight,
+            colorSchemeID: TerminalColorSchemeID(rawValue: colorSchemeRaw) ?? .vscodeDark,
+            cursorShape: TerminalCursorShape(rawValue: cursorShapeRaw) ?? .block,
+            cursorBlink: cursorBlink,
+            scrollback: scrollback,
+            copyOnSelect: copyOnSelect
+        )
+    }
 
     func makeNSView(context: Context) -> TerminalContainerView {
-        TerminalTheme.applyFont(to: terminalView, fontSize: CGFloat(fontSize))
-        TerminalTheme.applyScrollback(to: terminalView, scrollback: scrollback)
+        TerminalTheme.apply(to: terminalView, settings: currentSettings)
         return TerminalContainerView(
             terminalView: terminalView,
-            forwardsScrollToParent: forwardsScrollToParent
+            forwardsScrollToParent: forwardsScrollToParent,
+            copyOnSelect: copyOnSelect
         )
     }
 
     func updateNSView(_ nsView: TerminalContainerView, context: Context) {
         nsView.forwardsScrollToParent = forwardsScrollToParent
+        nsView.copyOnSelect = copyOnSelect
         nsView.attach(terminalView)
-        TerminalTheme.applyFont(to: terminalView, fontSize: CGFloat(fontSize))
-        TerminalTheme.applyScrollback(to: terminalView, scrollback: scrollback)
+        TerminalTheme.apply(to: terminalView, settings: currentSettings)
     }
 
     static func dismantleNSView(_ nsView: TerminalContainerView, coordinator: ()) {
@@ -57,23 +76,34 @@ final class TerminalContainerView: NSView {
             updateScrollForwardingMonitor()
         }
     }
+    var copyOnSelect: Bool {
+        didSet {
+            updateCopyOnSelectMonitor()
+        }
+    }
     private weak var terminalView: SwiftTerm.TerminalView?
     /// `nonisolated(unsafe)` so `deinit` (itself nonisolated) can release the
     /// monitor. Safe: the monitor is only mutated from the MainActor while the
     /// view is alive, and `deinit` has exclusive access once it runs.
     private nonisolated(unsafe) var scrollForwardingMonitor: Any?
+    private nonisolated(unsafe) var copyOnSelectMonitor: Any?
 
-    init(terminalView: SwiftTerm.TerminalView, forwardsScrollToParent: Bool = false) {
+    init(terminalView: SwiftTerm.TerminalView,
+         forwardsScrollToParent: Bool = false,
+         copyOnSelect: Bool = false) {
         self.forwardsScrollToParent = forwardsScrollToParent
+        self.copyOnSelect = copyOnSelect
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = TerminalTheme.backgroundColor.cgColor
         attach(terminalView)
         updateScrollForwardingMonitor()
+        updateCopyOnSelectMonitor()
     }
 
     deinit {
         removeScrollForwardingMonitor()
+        removeCopyOnSelectMonitor()
     }
 
     @available(*, unavailable)
@@ -107,6 +137,7 @@ final class TerminalContainerView: NSView {
         }
         terminalView = nil
         removeScrollForwardingMonitor()
+        removeCopyOnSelectMonitor()
     }
 
     override func layout() {
@@ -175,5 +206,47 @@ final class TerminalContainerView: NSView {
             view = current.superview
         }
         return nil
+    }
+
+    // MARK: copy-on-select (spec 03)
+
+    private func updateCopyOnSelectMonitor() {
+        if copyOnSelect {
+            guard copyOnSelectMonitor == nil else { return }
+            copyOnSelectMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+                self?.handleMouseUpForCopy(event)
+                return event
+            }
+        } else {
+            removeCopyOnSelectMonitor()
+        }
+    }
+
+    private func handleMouseUpForCopy(_ event: NSEvent) {
+        guard let window, event.window === window else { return }
+        guard let terminalView else { return }
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(localPoint) else { return }
+
+        // 推一个 runloop tick：mouseUp 时 SwiftTerm 内部可能还在 finalize
+        // selection state，等下一个 main-queue 周期再读最稳。
+        //
+        // 注：terminalView.selection 是 IUO (SelectionService!)，直接读
+        //    .active 即可——SwiftTerm 内部保证已初始化。
+        DispatchQueue.main.async {
+            let sel = terminalView.selection!
+            guard sel.active else { return }
+            let text = sel.getSelectedText()
+            guard !text.isEmpty else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+
+    private nonisolated func removeCopyOnSelectMonitor() {
+        if let copyOnSelectMonitor {
+            NSEvent.removeMonitor(copyOnSelectMonitor)
+            self.copyOnSelectMonitor = nil
+        }
     }
 }
