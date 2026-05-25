@@ -10,6 +10,7 @@ struct WorkspaceWindowView: View {
     @Query private var profiles: [ServerProfile]
     @Query(sort: \AIProvider.sortOrder) private var providers: [AIProvider]
     @AppStorage("activeProviderID") private var activeProviderIDString: String = ""
+    @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
     @State private var workspace: WorkspaceModel
     @State private var didRestore = false
     @State private var saveTask: Task<Void, Never>?
@@ -110,9 +111,13 @@ struct WorkspaceWindowView: View {
             // 在原 workspace 实例上 mutate（不再替换实例）—— SFTPSidebar 的
             // .task(id: server.id) 持有的 fileBrowserModel 引用因此稳定，
             // 修复「快照恢复后 SFTP 永久停在 .connecting」的卡死（Fix #1）。
+            //
+            // restoreTerminalSession (spec 02): false 时跳过 snapshot.load()，
+            // 直接开空白单 tab。但保存逻辑（onChange）不动——用户切回 ON 时
+            // 能复现最近一次状态。
             guard !didRestore else { return }
             didRestore = true
-            if let snapshot = WorkspaceStore(windowID: windowID).load() {
+            if restoreTerminalSession, let snapshot = WorkspaceStore(windowID: windowID).load() {
                 workspace.restore(from: snapshot)
             } else {
                 workspace.openServer(profileID: server.id, title: server.name)

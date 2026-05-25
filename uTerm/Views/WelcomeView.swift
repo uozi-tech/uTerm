@@ -6,13 +6,18 @@ import AppKit
 /// sidebar + list 三层组合（Termius 风）。
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
+
+    @AppStorage("startupBehavior")
+    private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
 
     @State private var filter = ServerFilter()
     @State private var formRoute: FormRoute?
     @State private var selectedProfileID: UUID?
     @State private var pendingDelete: ServerProfile?
+    @State private var didApplyStartupBehavior = false
 
     private enum FormRoute: Identifiable {
         case new
@@ -72,6 +77,15 @@ struct WelcomeView: View {
             } message: { p in
                 Text("「\(p.name)」将被删除。此操作无法撤销。")
             }
+        .task {
+            // Spec 02: 启动协调钩子。WelcomeView 是 app 启动时 SwiftUI 实例化的
+            // 第一个 view（Welcome 窗有 .defaultLaunchBehavior 默认 .presented），
+            // 是最稳定的启动钩。.restore 和 .lastHost 模式下 Welcome 闪一下
+            // 后由 dismissWindow 关掉自己。
+            guard !didApplyStartupBehavior else { return }
+            didApplyStartupBehavior = true
+            await applyStartupBehavior()
+        }
     }
 
     @ViewBuilder
@@ -86,6 +100,34 @@ struct WelcomeView: View {
                        onContextAction: handleContextAction,
                        existingGroups: existingGroups)
         }
+    }
+
+    // MARK: startup coordination (spec 02)
+
+    @MainActor
+    private func applyStartupBehavior() async {
+        let behavior = StartupBehavior(rawValue: startupBehaviorRaw) ?? .welcome
+        switch behavior {
+        case .welcome:
+            break  // 保留 Welcome 窗
+        case .restore:
+            dismissWindow(id: "welcome")
+        case .lastHost:
+            if let id = fetchLastHostWindowID() {
+                openWindow(value: id)
+            }
+            dismissWindow(id: "welcome")
+        }
+    }
+
+    private func fetchLastHostWindowID() -> WorkspaceWindowID? {
+        var descriptor = FetchDescriptor<ServerProfile>(
+            predicate: #Predicate { $0.lastConnectedAt != nil },
+            sortBy: [SortDescriptor(\.lastConnectedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
+        return WorkspaceWindowID(id: UUID(), serverID: profile.id)
     }
 
     // MARK: actions
