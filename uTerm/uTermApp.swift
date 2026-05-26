@@ -9,6 +9,8 @@ struct uTermApp: App {
     @AppStorage("appLanguage")
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
+    @State private var appUpdater = AppUpdater()
+
     private var preferredColorScheme: ColorScheme? {
         (AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system).colorScheme
     }
@@ -101,6 +103,7 @@ struct uTermApp: App {
                 .modelContainer(modelContainer)
                 .preferredColorScheme(preferredColorScheme)
                 .modifier(LocaleOverride(locale: currentLocale))
+                .environment(appUpdater)
         }
     }
 }
