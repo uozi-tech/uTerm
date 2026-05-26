@@ -28,9 +28,20 @@ import NIOSSH
 //    可从 delegate 内部启动的 `Task` 直接完成，无需 hop 回 event loop。
 
 /// 主机密钥验证过程中产生的错误。
-enum HostKeyError: Error {
-    /// 用户在征询中拒绝了未知 / 不匹配的主机密钥。
+enum HostKeyError: Error, LocalizedError {
+    /// 用户在征询中拒绝了未知 / 不匹配的主机密钥（.ask 策略下用户取消 sheet）。
     case rejectedByUser
+    /// `.strict` 策略下未知 / 不匹配的主机密钥被自动拒绝（无 sheet）。
+    case rejectedByStrictPolicy
+
+    var errorDescription: String? {
+        switch self {
+        case .rejectedByUser:
+            return "主机密钥验证被用户拒绝"
+        case .rejectedByStrictPolicy:
+            return "主机密钥验证失败：严格策略拒绝未知 / 不匹配的密钥"
+        }
+    }
 }
 
 /// 把 `NIOSSHPublicKey` 序列化为 `(blob, keyType, fingerprint)`。
@@ -105,6 +116,14 @@ nonisolated final class HostKeyValidationDelegate: NIOSSHClientServerAuthenticat
     /// enough for a real person to read and act; a backstop, not a UX timer.
     private static let approvalTimeout: Duration = .seconds(180)
 
+    /// 读 UserDefaults `sshHostKeyPolicy`，默认 `.ask`。
+    /// 在每次 validateHostKey 内 read 一次——setting 改后下次连接才生效。
+    private static func currentPolicy() -> SSHHostKeyPolicy {
+        let raw = UserDefaults.standard.string(forKey: "sshHostKeyPolicy")
+            ?? SSHHostKeyPolicy.ask.rawValue
+        return SSHHostKeyPolicy(rawValue: raw) ?? .ask
+    }
+
     /// Runs the injected `approver` with a hard upper bound.
     ///
     /// If the pane presenting the prompt is torn down between the approver
@@ -164,27 +183,47 @@ nonisolated final class HostKeyValidationDelegate: NIOSSHClientServerAuthenticat
                 decision = .success(())
 
             case .unknown(let fp):
-                let challenge = HostKeyChallenge(
-                    host: host, port: port, kind: .unknown,
-                    newFingerprint: fp, oldFingerprint: nil)
-                if await self.approveWithTimeout(challenge) {
+                switch Self.currentPolicy() {
+                case .strict:
+                    decision = .failure(HostKeyError.rejectedByStrictPolicy)
+                case .none:
+                    // 静默信任（不安全，UI 已警示）
                     await verifier.trust(host: host, port: port, keyBlob: blob,
                                          keyType: keyType, fingerprint: fp)
                     decision = .success(())
-                } else {
-                    decision = .failure(HostKeyError.rejectedByUser)
+                case .ask:
+                    let challenge = HostKeyChallenge(
+                        host: host, port: port, kind: .unknown,
+                        newFingerprint: fp, oldFingerprint: nil)
+                    if await self.approveWithTimeout(challenge) {
+                        await verifier.trust(host: host, port: port, keyBlob: blob,
+                                             keyType: keyType, fingerprint: fp)
+                        decision = .success(())
+                    } else {
+                        decision = .failure(HostKeyError.rejectedByUser)
+                    }
                 }
 
             case .mismatch(let newFp, let oldFp):
-                let challenge = HostKeyChallenge(
-                    host: host, port: port, kind: .mismatch,
-                    newFingerprint: newFp, oldFingerprint: oldFp)
-                if await self.approveWithTimeout(challenge) {
+                switch Self.currentPolicy() {
+                case .strict:
+                    decision = .failure(HostKeyError.rejectedByStrictPolicy)
+                case .none:
+                    // 静默信任 + 覆盖（不安全，UI 已警示）
                     await verifier.trust(host: host, port: port, keyBlob: blob,
                                          keyType: keyType, fingerprint: newFp)
                     decision = .success(())
-                } else {
-                    decision = .failure(HostKeyError.rejectedByUser)
+                case .ask:
+                    let challenge = HostKeyChallenge(
+                        host: host, port: port, kind: .mismatch,
+                        newFingerprint: newFp, oldFingerprint: oldFp)
+                    if await self.approveWithTimeout(challenge) {
+                        await verifier.trust(host: host, port: port, keyBlob: blob,
+                                             keyType: keyType, fingerprint: newFp)
+                        decision = .success(())
+                    } else {
+                        decision = .failure(HostKeyError.rejectedByUser)
+                    }
                 }
             }
         }

@@ -3,6 +3,13 @@ import Foundation
 import NIOCore
 import NIOSSH
 
+/// 读 UserDefaults `sshConnectTimeout`（秒）并转 Citadel `TimeAmount`。
+/// 默认 30 秒（与 Citadel `SSHClient.connect` 的 default 一致）。
+private func currentConnectTimeout() -> TimeAmount {
+    let seconds = (UserDefaults.standard.object(forKey: "sshConnectTimeout") as? Int) ?? 30
+    return .seconds(Int64(seconds))
+}
+
 /// 已建立的 SSH 连接束：目标客户端，以及（若经跳板机）跳板机客户端。
 ///
 /// 终端（`SSHConnection`）与 SFTP 共享同一套连接建立逻辑 —— 它们都需要连到
@@ -85,7 +92,8 @@ nonisolated enum SSHClientFactory {
                 hostKeyValidator: .custom(HostKeyValidationDelegate(
                     host: profile.host, port: profile.port,
                     verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never
+                reconnect: .never,
+                connectTimeout: currentConnectTimeout()
             )
         } catch {
             // I4：连接/认证失败 —— 抛出后由调用方结束流，让消费者干净终止。
@@ -127,7 +135,8 @@ nonisolated enum SSHClientFactory {
                 hostKeyValidator: .custom(HostKeyValidationDelegate(
                     host: jumpHost.host, port: jumpHost.port,
                     verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never
+                reconnect: .never,
+                connectTimeout: currentConnectTimeout()
             )
         } catch {
             throw SSHConnection.SSHConnectionError.jumpHostFailed(
