@@ -91,9 +91,10 @@ struct SchemeCard: View {
         }
     }
 
-    private func ansiColor(_ idx: Int) -> Color {
+    // SwiftTerm 也定义 Color 类型 —— 全限定 SwiftUI.Color 消歧
+    private func ansiColor(_ idx: Int) -> SwiftUI.Color {
         let c = scheme.ansiColors[idx]
-        return Color(
+        return SwiftUI.Color(
             red: Double(c.red) / 65535,
             green: Double(c.green) / 65535,
             blue: Double(c.blue) / 65535

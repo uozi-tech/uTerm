@@ -34,23 +34,28 @@ enum AppLogger {
         Logger(subsystem: subsystem, category: category)
     }
 
-    static func error(_ message: @autoclosure () -> String, category: String = "app") {
+    // `os.Logger` 的字符串插值（OSLogInterpolation.appendInterpolation）
+    // 要求 escaping autoclosure —— message 参数必须是 @autoclosure @escaping。
+    // 仅 @autoclosure 会触发 "escaping autoclosure captures non-escaping
+    // parameter" 编译错（spec 04 落地时 latent bug，未编过）。
+
+    static func error(_ message: @autoclosure @escaping () -> String, category: String = "app") {
         guard shouldLog(.error, currentSetting: currentSettingRaw()) else { return }
         logger(category: category).error("\(message(), privacy: .public)")
     }
 
-    static func warn(_ message: @autoclosure () -> String, category: String = "app") {
+    static func warn(_ message: @autoclosure @escaping () -> String, category: String = "app") {
         guard shouldLog(.warn, currentSetting: currentSettingRaw()) else { return }
         // os.Logger 没有 warn 级别；用 error 级别但 message 加 [WARN] 前缀。
         logger(category: category).error("[WARN] \(message(), privacy: .public)")
     }
 
-    static func info(_ message: @autoclosure () -> String, category: String = "app") {
+    static func info(_ message: @autoclosure @escaping () -> String, category: String = "app") {
         guard shouldLog(.info, currentSetting: currentSettingRaw()) else { return }
         logger(category: category).info("\(message(), privacy: .public)")
     }
 
-    static func debug(_ message: @autoclosure () -> String, category: String = "app") {
+    static func debug(_ message: @autoclosure @escaping () -> String, category: String = "app") {
         guard shouldLog(.debug, currentSetting: currentSettingRaw()) else { return }
         logger(category: category).debug("\(message(), privacy: .public)")
     }

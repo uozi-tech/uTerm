@@ -6,12 +6,13 @@ import SwiftTerm
 struct TerminalPreview: View {
     let settings: TerminalSettings
 
-    private var bg: Color { Color(nsColor: settings.colorScheme.backgroundColor) }
-    private var fg: Color { Color(nsColor: settings.colorScheme.foregroundColor) }
+    // SwiftTerm 也定义 Color 类型 —— 全限定 SwiftUI.Color 消歧
+    private var bg: SwiftUI.Color { SwiftUI.Color(nsColor: settings.colorScheme.backgroundColor) }
+    private var fg: SwiftUI.Color { SwiftUI.Color(nsColor: settings.colorScheme.foregroundColor) }
 
-    private func ansi(_ idx: Int) -> Color {
+    private func ansi(_ idx: Int) -> SwiftUI.Color {
         let c = settings.colorScheme.ansiColors[idx]
-        return Color(
+        return SwiftUI.Color(
             red: Double(c.red) / 65535,
             green: Double(c.green) / 65535,
             blue: Double(c.blue) / 65535
@@ -60,7 +61,7 @@ struct TerminalPreview: View {
     }
 
     @ViewBuilder
-    private func outputLine(parts: [(Color, String)]) -> some View {
+    private func outputLine(parts: [(SwiftUI.Color, String)]) -> some View {
         HStack(spacing: 0) {
             ForEach(0..<parts.count, id: \.self) { i in
                 Text(parts[i].1).foregroundStyle(parts[i].0)

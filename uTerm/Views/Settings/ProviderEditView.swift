@@ -16,6 +16,14 @@ struct ProviderEditView: View {
 
     private let keychain = AgentKeychain()
 
+    /// 显式 String 而非字面量 —— `help(_:)` 有 LocalizedStringKey / StringProtocol
+    /// 两个 overload，字面量 prefer LocalizedStringKey，会把 `https://...` 当
+    /// markdown URL 解析成 attributed string 触发 runtime warning：
+    /// "Only unstyled text can be used with help(_:)"
+    /// 已知 String 类型走 StringProtocol overload 跳过 markdown 解析。
+    private let baseURLHelpText: String =
+        "不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。"
+
     var body: some View {
         Form {
             Section("基本") {
@@ -29,7 +37,7 @@ struct ProviderEditView: View {
 
                 TextField("Base URL", text: $provider.baseURL, prompt: Text("如 https://api.openai.com"))
                     .textFieldStyle(.roundedBorder)
-                    .help("不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。")
+                    .help(baseURLHelpText)
             }
 
             Section("模型") {
