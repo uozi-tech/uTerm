@@ -5,9 +5,17 @@ import AppKit
 
 final class AppThemeTests: XCTestCase {
 
+    /// 把 Color 转 sRGB 三元组。Spec 05 后 Palette 是 dynamic NSColor，
+    /// resolve 结果依赖当前 NSAppearance。本测试断言全部对齐 dark hex，
+    /// 所以必须在 darkAqua appearance 上下文里 resolve；否则在浅色 mac
+    /// 上跑会得到 light hex，断言全部 fail。
     private func srgb(_ color: Color) -> (Double, Double, Double) {
-        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
-        return (Double(ns.redComponent), Double(ns.greenComponent), Double(ns.blueComponent))
+        var result: (Double, Double, Double) = (0, 0, 0)
+        NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+            let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+            result = (Double(ns.redComponent), Double(ns.greenComponent), Double(ns.blueComponent))
+        }
+        return result
     }
 
     private func assertColor(_ color: Color, equals hex: UInt32, line: UInt = #line) {
@@ -24,7 +32,9 @@ final class AppThemeTests: XCTestCase {
         assertColor(AppTheme.Palette.bgBase,             equals: 0x1F1F1F)
         assertColor(AppTheme.Palette.bgPanel,            equals: 0x181818)
         assertColor(AppTheme.Palette.bgRaised,           equals: 0x2A2D2E)
-        assertColor(AppTheme.Palette.bgSelected,         equals: 0x04395E)
+        // bgSelected 从官方 #04395E 蓝调改成中性灰 0x37373D（避免大面积撞色，
+        // 跟 bgSelectedInactive 相同——focused/blurred 视觉一致）。
+        assertColor(AppTheme.Palette.bgSelected,         equals: 0x37373D)
         assertColor(AppTheme.Palette.bgSelectedInactive, equals: 0x37373D)
     }
 

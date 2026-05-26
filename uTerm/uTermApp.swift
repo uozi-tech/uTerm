@@ -3,6 +3,13 @@ import SwiftData
 
 @main
 struct uTermApp: App {
+    @AppStorage("appearancePreference")
+    private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
+
+    private var preferredColorScheme: ColorScheme? {
+        (AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system).colorScheme
+    }
+
     /// 启用 CloudKit 同步的 SwiftData 容器。`.automatic` 让 SwiftData
     /// 在用户已登录 iCloud 时自动后台同步，未登录时退化为纯本地。
     let modelContainer: ModelContainer = {
@@ -32,7 +39,7 @@ struct uTermApp: App {
         // 系统 material 都用暗变体，不与 AppTheme 冷灰蓝 token 撞色。
         Window("uTerm", id: "welcome") {
             WelcomeView()
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         }
         .modelContainer(modelContainer)
 
@@ -40,7 +47,7 @@ struct uTermApp: App {
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
                 .frame(minWidth: 1280, minHeight: 720)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         }
         .modelContainer(modelContainer)
         .commands {
@@ -83,7 +90,7 @@ struct uTermApp: App {
         Settings {
             SettingsView()
                 .modelContainer(modelContainer)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         }
     }
 }
