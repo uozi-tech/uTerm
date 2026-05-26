@@ -6,8 +6,15 @@ struct uTermApp: App {
     @AppStorage("appearancePreference")
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
+    @AppStorage("appLanguage")
+    private var appLanguageRaw: String = AppLanguage.system.rawValue
+
     private var preferredColorScheme: ColorScheme? {
         (AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system).colorScheme
+    }
+
+    private var currentLocale: Locale? {
+        (AppLanguage(rawValue: appLanguageRaw) ?? .system).locale
     }
 
     /// 启用 CloudKit 同步的 SwiftData 容器。`.automatic` 让 SwiftData
@@ -40,6 +47,7 @@ struct uTermApp: App {
         Window("uTerm", id: "welcome") {
             WelcomeView()
                 .preferredColorScheme(preferredColorScheme)
+                .modifier(LocaleOverride(locale: currentLocale))
         }
         .modelContainer(modelContainer)
 
@@ -47,6 +55,7 @@ struct uTermApp: App {
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
                 .frame(minWidth: 1280, minHeight: 720)
+                .modifier(LocaleOverride(locale: currentLocale))
                 .preferredColorScheme(preferredColorScheme)
         }
         .modelContainer(modelContainer)
@@ -91,6 +100,20 @@ struct uTermApp: App {
             SettingsView()
                 .modelContainer(modelContainer)
                 .preferredColorScheme(preferredColorScheme)
+                .modifier(LocaleOverride(locale: currentLocale))
+        }
+    }
+}
+
+/// 条件性挂 `.environment(\.locale, _:)` 的 modifier：`.system` 模式下
+/// 不挂任何修改，让 SwiftUI 走默认 `Locale.current`；其它模式下覆盖。
+private struct LocaleOverride: ViewModifier {
+    let locale: Locale?
+    func body(content: Content) -> some View {
+        if let locale {
+            content.environment(\.locale, locale)
+        } else {
+            content
         }
     }
 }

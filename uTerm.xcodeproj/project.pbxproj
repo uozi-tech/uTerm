@@ -198,10 +198,11 @@
 				};
 			};
 			buildConfigurationList = 85D6BEEA2FBC4E7E00FC90D8 /* Build configuration list for PBXProject "uTerm" */;
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
