@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class AppLanguageTests: XCTestCase {
     func test_allCases_order() {
         XCTAssertEqual(AppLanguage.allCases, [.system, .zhHans, .en])

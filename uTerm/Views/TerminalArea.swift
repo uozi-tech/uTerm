@@ -17,7 +17,7 @@ struct TerminalArea: View {
                 TabContentView(tab: activeTab, onCloseTab: {
                     workspace.closeTab(activeTab.id)
                 })
-                    .background(AppTheme.Palette.bgBase)
+                    .background(Color(nsColor: TerminalTheme.backgroundColor))
             } else {
                 emptyState
             }
@@ -38,6 +38,6 @@ struct TerminalArea: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.Palette.bgBase)
+        .background(Color(nsColor: TerminalTheme.backgroundColor))
     }
 }

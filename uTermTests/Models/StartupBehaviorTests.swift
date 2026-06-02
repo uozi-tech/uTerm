@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class StartupBehaviorTests: XCTestCase {
     func test_allCases_order_and_count() {
         XCTAssertEqual(StartupBehavior.allCases, [.welcome, .restore, .lastHost])

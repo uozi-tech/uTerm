@@ -124,7 +124,7 @@ private struct UpdateStatusPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(AppTheme.Palette.bgRaised.opacity(0.5))
+        .background(.quaternary)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .stroke(AppTheme.Palette.border, lineWidth: 1)

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppKit
 
 @main
 struct uTermApp: App {
@@ -11,8 +12,8 @@ struct uTermApp: App {
 
     @State private var appUpdater = AppUpdater()
 
-    private var preferredColorScheme: ColorScheme? {
-        (AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system).colorScheme
+    private var currentAppearance: AppearancePreference {
+        AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
     }
 
     private var currentLocale: Locale? {
@@ -40,15 +41,19 @@ struct uTermApp: App {
         WorkspaceStore.purgeLegacyWorkspaceFile()
         // M5 单 anthropic-api-key keychain 条目已被 AIProvider 多 key 取代——清掉旧条目。
         AgentKeychain.purgeLegacy()
+        // 启动即应用主题：读 UserDefaults（@AppStorage 此刻还不能保证可读 wrappedValue），
+        // 写 NSApp.appearance，避免首帧用错外观闪一下。live 切换由 AppAppearanceSync 负责。
+        let raw = UserDefaults.standard.string(forKey: "appearancePreference") ?? ""
+        NSApplication.shared.appearance = (AppearancePreference(rawValue: raw) ?? .system).nsAppearance
     }
 
     var body: some Scene {
         // 服务器管理 —— 单实例 Welcome 窗口。自动出现在「窗口」菜单，可重开。
-        // `.preferredColorScheme(.dark)` 让 macOS titlebar / scroller /
-        // 系统 material 都用暗变体，不与 AppTheme 冷灰蓝 token 撞色。
+        // 主题统一由 NSApp.appearance 驱动（AppAppearanceSync），不挂
+        // .preferredColorScheme——原因见 AppearancePreference 类型文档。
         Window("uTerm", id: "welcome") {
             WelcomeView()
-                .preferredColorScheme(preferredColorScheme)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
         }
         .modelContainer(modelContainer)
@@ -56,11 +61,14 @@ struct uTermApp: App {
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
-                .frame(minWidth: 1280, minHeight: 720)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
-                .preferredColorScheme(preferredColorScheme)
         }
         .modelContainer(modelContainer)
+        // 不挂 .windowResizability(.contentMinSize)：macOS 26 实测它把窗口
+        // 整个禁止 resize（cursor 都不显示），跟文档说的"只限制 min"不符。
+        // 单独写 .frame(minWidth:) on view body 已经能把 contentMinSize 推到
+        // AppKit（已 probe 验证 NSWindow.contentMinSize=(1280, 772)），不必加这条。
         .commands {
             // 所有工作区级快捷键的唯一注册点 —— 工具栏按钮不再挂 .keyboardShortcut，
             // 避免双重注册导致的双触发 no-op（Fix #4 + #10）。
@@ -101,9 +109,25 @@ struct uTermApp: App {
         Settings {
             SettingsView()
                 .modelContainer(modelContainer)
-                .preferredColorScheme(preferredColorScheme)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .environment(appUpdater)
+        }
+    }
+}
+
+/// 把主题偏好同步到 `NSApplication.shared.appearance`，让**所有**窗口（含
+/// 已打开的、含 Settings）即时跟着切——包括切回「跟随系统」。详见
+/// `AppearancePreference` 类型文档为何不用 Scene 的 `.preferredColorScheme`。
+///
+/// 初始值在 `uTermApp.init()` 里设；这里只负责用户在运行时改设置后的 live 同步。
+/// `NSApp.appearance` 是 app 级全局状态，任一挂了本 modifier 的存活窗口接到
+/// `onChange` 即可，新开的窗口自动跟随，无需逐窗口处理。
+private struct AppAppearanceSync: ViewModifier {
+    let preference: AppearancePreference
+    func body(content: Content) -> some View {
+        content.onChange(of: preference) { _, new in
+            NSApplication.shared.appearance = new.nsAppearance
         }
     }
 }

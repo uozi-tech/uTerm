@@ -66,7 +66,7 @@ struct SchemeCard: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
         }
-        .background(AppTheme.Palette.bgPanel.opacity(0.6))
+        .background(.regularMaterial)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(isSelected ? Color(nsColor: scheme.accentColor) : AppTheme.Palette.border, lineWidth: 1)

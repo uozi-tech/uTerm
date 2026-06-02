@@ -32,12 +32,7 @@ struct FindReplaceBar: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 6)
         .frame(width: 360)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(AppTheme.Palette.bgPanel)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(AppTheme.Palette.borderStrong, lineWidth: 1))
-        )
-        .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 2)
+        .glassEffect(in: .rect(cornerRadius: 4))
     }
 
     private var queryField: some View {

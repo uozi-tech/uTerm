@@ -11,7 +11,15 @@ final class TerminalThemeTests: XCTestCase {
     /// 现在 `apply(...)` 必须保留 SwiftTerm 的默认光标（非清空色）。
     func testApplyKeepsCaretVisible() {
         let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        TerminalTheme.apply(to: view, fontSize: 13, scrollback: 1000)
+        TerminalTheme.apply(to: view, settings: .read())
         XCTAssertNotEqual(view.caretColor, .clear, "光标颜色不应被清空")
+    }
+
+    /// 终端背景钉死 #1E1E1E —— 解耦后 TerminalArea wrapper 也用它，保证浅色 chrome 下不翻白。
+    func test_terminal_background_pinned_1E1E1E() {
+        let n = TerminalTheme.backgroundColor.usingColorSpace(.sRGB)!
+        XCTAssertEqual(Double(n.redComponent),   Double(0x1E)/255, accuracy: 0.01)
+        XCTAssertEqual(Double(n.greenComponent), Double(0x1E)/255, accuracy: 0.01)
+        XCTAssertEqual(Double(n.blueComponent),  Double(0x1E)/255, accuracy: 0.01)
     }
 }

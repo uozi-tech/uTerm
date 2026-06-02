@@ -60,6 +60,17 @@ struct WorkspaceWindowView: View {
                 ContentUnavailableView("正在恢复…", systemImage: "clock")
             }
         }
+        // .frame(minWidth:) 必须挂在 body 最外层，否则 ContentUnavailableView
+        // 路径（server 已删除 / windowID 恢复中）会渲染没有 min-size 约束，
+        // NSWindow.contentMinSize 从那一帧的 intrinsic content 推上去 → 远小于
+        // 1280×720，窗口可被拖到任意小。
+        //
+        // 1280pt 选定理由：sidebar.max(240) + detail.min(480) + inspector.max(360)
+        // = 1080，splitter + chrome 几十 pt，windowMin 1280 留 ~195pt 缓冲。
+        //
+        // 注意：不要再加 .windowResizability(.contentMinSize) on scene
+        //（macOS 26 实测它把 NSWindow.styleMask 的 .resizable 抹掉）。
+        .frame(minWidth: 1280, minHeight: 720)
     }
 
     @ViewBuilder
@@ -71,12 +82,22 @@ struct WorkspaceWindowView: View {
                 set: { workspace.uiState.leftSidebarVisibility = $0 }
             )) {
                 SFTPSidebar(model: workspace.fileBrowserModel, server: server)
-                    // max 收窄 400 → 300：避免被拖宽到把 detail 挤到 0。NavigationSplitView
-                    // 在 detail 缩没后会让 inspector / 邻栏视觉上压上 sidebar，
-                    // 表现为「侧边栏内容被遮挡」。
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+                    // 列宽几何约束（2026-05 final round）：
+                    //   sidebar.max(240) + detail.min(480) + inspector.max(360) = 1080
+                    //   再加 splitter ≈ 1085pt < windowMinWidth(1280) — 留 ~195pt
+                    //   缓冲应对 chrome / Liquid Glass 渲染。
+                    // 这条不等式保证：无论用户怎么拖 sidebar / inspector splitter，
+                    // 永远不会出现 sum(列宽) > 窗口宽 的 overflow 裁切。
+                    // max 从 300 收到 240：拖宽空间 80pt 仍够看较长文件名；
+                    // 收得更紧能给 detail 更大保底（之前 max=300 时 detail 只剩 ~500pt）。
+                    .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 240)
             } detail: {
                 WorkspaceCenter(workspace: workspace, server: server)
+                    // detail 显式声明 minWidth(480)：sidebar/inspector 拖到 max 时
+                    // detail 仍至少保留 480pt 渲染 terminal/preview，不被挤到 0。
+                    // 不声明的话 SwiftUI 给 detail = 0 让 sidebar/inspector 的
+                    // 内容溢出到 detail 区域 —— 那就是 user 看到的"被遮挡"。
+                    .frame(minWidth: 480)
                     .inspector(isPresented: Binding(
                         get: { workspace.uiState.rightInspectorPresented },
                         set: { workspace.uiState.rightInspectorPresented = $0 }
@@ -85,7 +106,12 @@ struct WorkspaceWindowView: View {
                             model: workspace.assistantModel,
                             serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
                             activeProviderIDString: $activeProviderIDString)
-                            .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
+                            // inspector.max 从 480 收到 360：上一轮 max 太宽，
+                            // sidebar(300) + inspector(480) = 780pt 占 1280pt 窗口
+                            // 一大半，detail 只剩 ~500pt。
+                            // 收到 360 之后 sum(240+360+480) = 1080 ≤ 1280-chrome，
+                            // 永远不会出现 overflow 裁切。
+                            .inspectorColumnWidth(min: 220, ideal: 280, max: 360)
                     }
             }
             // status bar 作为 NavigationSplitView 的兄弟节点（而非 safeAreaInset）—
@@ -99,10 +125,10 @@ struct WorkspaceWindowView: View {
         // 工具栏自渲染；保留 `.navigationTitle` 仅供窗口菜单/调度中心识别。
         .toolbar(removing: .title)
         .toolbar { workspaceToolbar(server: server) }
-        // titlebar / toolbar 显式用 AppTheme.bgPanel 而非系统亮 material。
-        .toolbarBackground(AppTheme.Palette.bgPanel, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
-        .background(AppTheme.Palette.bgBase)
+        // toolbar 背景留给系统 —— macOS 26 的 Liquid Glass sidebar 需要
+        // 顶部透明、内容从 toolbar 下方延伸过去，圆角/border 才整圈连贯。
+        // 强制 bgPanel + .visible 会在 sidebar 顶部封一道平板，把玻璃切断。
+        .background(Color(nsColor: .windowBackgroundColor))
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
@@ -209,6 +235,7 @@ struct WorkspaceWindowView: View {
             assistant: workspace.assistantModel,
             providers: providers,
             activeProviderIDString: activeProviderIDString))
+        // .frame(minWidth:) 在 body 根（见上）。
     }
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）

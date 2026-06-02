@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class AboutSettingsViewTests: XCTestCase {
     // ── versionString ────────────────────────────────────────────
     func test_version_full() {

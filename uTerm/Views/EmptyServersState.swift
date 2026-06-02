@@ -22,6 +22,5 @@ struct EmptyServersState: View {
                 .keyboardShortcut("n", modifiers: .command)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.Palette.bgBase)
     }
 }

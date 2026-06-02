@@ -10,13 +10,14 @@ struct TerminalTabBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
+                HStack(spacing: 0) {
                     ForEach(workspace.tabs) { tab in
                         TerminalTabChip(
                             tab: tab,
                             isActive: workspace.activeTabID == tab.id,
                             onSelect: { workspace.selectTab(tab.id) },
                             onClose:  { workspace.closeTab(tab.id) })
+                            .frame(maxHeight: .infinity)
                             .draggable(TabDragItem(tabID: tab.id)) {
                                 Text(tab.title).font(.callout)
                                     .padding(6)
@@ -31,22 +32,23 @@ struct TerminalTabBar: View {
                             }
                     }
                     Button(action: onNewTab) {
+                        // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
                         Image(systemName: "plus")
-                            .foregroundStyle(AppTheme.Palette.textSecondary)
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .hoverBackground(cornerRadius: 4)
+                    .iconButtonHover()
                     .help("新建终端标签（⌘T）")
+                    .padding(.leading, 4)
                     // ⌘T 走 uTermApp 的 CommandGroup 单独注册 —— 按在终端焦点
                     // 区时也能正确触发（Fix #10）；这里只是 UI 按钮入口。
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity)
         }
         .frame(height: 32)
-        .background(AppTheme.Palette.bgPanel)
+        .background(.regularMaterial)
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
         }
@@ -84,12 +86,13 @@ private struct TerminalTabChip: View {
             .opacity(isHovered ? 1 : 0)
             .allowsHitTesting(isHovered)
         }
-        .padding(.horizontal, 10).padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .frame(maxHeight: .infinity)
         .background(
-            // 活动 tab 用 bgBase（=Editor / 终端区同色），视觉上跟下方主区无缝
-            // 衔接；非活动 tab 留空，继承 TabBar 的 bgPanel。不用圆角，
+            // 活动 tab 用 controlBackgroundColor（=Editor / 终端区同色），视觉上跟下方主区无缝
+            // 衔接；非活动 tab 留空，继承 TabBar 的 .regularMaterial。不用圆角，
             // 否则跟"无缝"目标矛盾。
-            isActive ? AppTheme.Palette.bgBase : Color.clear
+            isActive ? Color(nsColor: .controlBackgroundColor) : Color.clear
         )
         .overlay(alignment: .top) {
             // 顶部 1px accent 横线，VS Code Dark Modern 标示活动 tab 的方式
@@ -97,7 +100,7 @@ private struct TerminalTabChip: View {
                 Rectangle().fill(AppTheme.Palette.accent).frame(height: 1)
             }
         }
-        .hoverBackground(cornerRadius: 5, isActive: isActive)
+        .hoverBackground(cornerRadius: 0, isActive: isActive)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }

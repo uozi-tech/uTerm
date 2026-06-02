@@ -11,6 +11,6 @@ struct PreviewArea: View {
             PreviewBodyRouter(model: model)
             PreviewStatusRow(model: model)
         }
-        .background(AppTheme.Palette.bgBase)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }

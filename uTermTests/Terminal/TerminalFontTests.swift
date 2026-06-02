@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class TerminalFontTests: XCTestCase {
     func test_allCases_count_and_order() {
         XCTAssertEqual(TerminalFont.allCases, [.menlo, .sfMono, .monaco])

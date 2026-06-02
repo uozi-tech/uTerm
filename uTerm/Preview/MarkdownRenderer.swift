@@ -56,7 +56,7 @@ private struct BlockView: View {
             .foregroundStyle(AppTheme.Palette.textSecondary)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.Palette.bgPanel)
+            .background(AppTheme.Palette.bgRaised)
             .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
@@ -103,7 +103,7 @@ private struct BlockView: View {
                 }
             }
             .padding(.vertical, 4).padding(.horizontal, 6)
-            .background(AppTheme.Palette.bgPanel)
+            .background(AppTheme.Palette.bgRaised)
 
             ForEach(Array(body.rows.enumerated()), id: \.offset) { _, row in
                 HStack {
@@ -145,7 +145,7 @@ private struct InlineView: View {
             case let c as InlineCode:
                 var a = AttributedString(c.code)
                 a.font = .system(.body, design: .monospaced)
-                a.backgroundColor = AppTheme.Palette.bgPanel
+                a.backgroundColor = AppTheme.Palette.bgRaised
                 result.append(a)
             case let link as MarkdownLink:
                 var a = attributed(link)

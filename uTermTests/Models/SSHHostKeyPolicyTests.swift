@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class SSHHostKeyPolicyTests: XCTestCase {
     func test_allCases_order() {
         XCTAssertEqual(SSHHostKeyPolicy.allCases, [.strict, .ask, .none])

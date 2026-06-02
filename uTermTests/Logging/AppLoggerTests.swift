@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class AppLoggerTests: XCTestCase {
     func test_shouldLog_default_info_passes_error_warn_info() {
         // currentSetting nil → 默认 .info → priority 2

@@ -33,17 +33,20 @@ struct AboutSettingsView: View {
         .padding(32)
     }
 
-    /// "u" + accent "Term"，font-weight 300, size 24, tracking -0.5。
-    /// 注意：Text 拼接必须用 .foregroundColor（返回 Text）；.foregroundStyle
-    /// 返回 some View 不可拼接。.tracking 应用在拼接后的整体上才会传到两段。
+    /// "u"(主色) + "Term"(accent)，font-weight light, size 24, tracking -0.5。
+    /// 用 AttributedString 分段着色，而非 `Text + Text`：后者的 `+` 在 macOS 26
+    /// 弃用，而 `Text("\(...)")` 插值会把内容当成 LocalizedStringKey（污染
+    /// xcstrings）。AttributedString 的 per-run 属性（这里是 foregroundColor）
+    /// 优先级高于 view modifier，故 .font/.tracking 加在外层 Text 上即对两段统一生效。
     private var wordmark: Text {
-        (Text("u")
+        var attributed = AttributedString("u")
+        attributed.foregroundColor = AppTheme.Palette.textPrimary
+        var term = AttributedString("Term")
+        term.foregroundColor = AppTheme.Palette.accent
+        attributed.append(term)
+        return Text(attributed)
             .font(.system(size: 24, weight: .light))
-            .foregroundColor(AppTheme.Palette.textPrimary)
-         + Text("Term")
-            .font(.system(size: 24, weight: .light))
-            .foregroundColor(AppTheme.Palette.accent))
-        .tracking(-0.5)
+            .tracking(-0.5)
     }
 
     // ─── 静态/纯函数：拼装版本与版权字符串 ───────────────────
@@ -72,5 +75,5 @@ struct AboutSettingsView: View {
 #Preview {
     AboutSettingsView()
         .frame(width: 720, height: 480)
-        .background(AppTheme.Palette.bgBase)
+        .background(Color(nsColor: .windowBackgroundColor))
 }

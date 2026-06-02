@@ -34,7 +34,7 @@ struct PreviewStatusRow: View {
         .padding(.horizontal, 12)
         .frame(height: 22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Palette.bgPanel)
+        .background(.bar)
         .overlay(alignment: .top) {
             Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
         }

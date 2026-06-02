@@ -101,15 +101,28 @@ struct AssistantView: View {
     }
 
     private func messageRow(_ message: ChatMessage) -> some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 32) }
+        let isUser = message.role == .user
+        // 不再用 bgSelected/bgRaised 的颜色差异区分（两者合并成同灰之后几乎
+        // 无对比）。改成：共用 bgRaised 底 + accent 描边区分 user / assistant。
+        // 大面积仍是灰色（user 反馈"避免大面积撞色"），但描边足以让用户
+        // 一眼分辨。
+        return HStack {
+            if isUser { Spacer(minLength: 32) }
             Text(message.text.isEmpty ? "…" : message.text)
                 .textSelection(.enabled)
                 .padding(8)
-                .background(message.role == .user
-                            ? AppTheme.Palette.bgSelected : AppTheme.Palette.bgRaised)
+                .background(AppTheme.Palette.bgRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-            if message.role == .assistant { Spacer(minLength: 32) }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            isUser
+                                ? AppTheme.Palette.accent.opacity(0.55)
+                                : AppTheme.Palette.border,
+                            lineWidth: isUser ? 1 : 0.5
+                        )
+                )
+            if !isUser { Spacer(minLength: 32) }
         }
         .id(message.id)
     }

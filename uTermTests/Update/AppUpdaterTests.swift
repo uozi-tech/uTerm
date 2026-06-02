@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class AppUpdaterTests: XCTestCase {
     func test_currentVersionString_full() {
         let info: [String: Any] = [

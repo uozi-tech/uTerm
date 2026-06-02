@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class TerminalCursorShapeTests: XCTestCase {
     func test_allCases_count_and_order() {
         XCTAssertEqual(TerminalCursorShape.allCases, [.block, .underline, .bar])

@@ -5,6 +5,12 @@ import AppKit
 /// 与 AppTheme.Palette 隔离 —— 编辑器色域闭环（17 token），混进全局会污染。
 nonisolated enum EditorTheme {
 
+    // MARK: 内容表面（与 AppTheme.Palette 脱钩，钉死 VS Code Dark）
+    /// 编辑器内容背景。VS Code Dark Modern editor.background。
+    static let background = NSColor(srgbRed: 0x1F/255, green: 0x1F/255, blue: 0x1F/255, alpha: 1)
+    /// 编辑器默认（未高亮）文字色。VS Code Dark Modern editor.foreground。
+    static let foreground = NSColor(srgbRed: 0xCC/255, green: 0xCC/255, blue: 0xCC/255, alpha: 1)
+
     // MARK: 选中 / 光标 / 当前行
     static let selectionBg       = NSColor(red: 0x26/255, green: 0x4F/255, blue: 0x78/255, alpha: 1)
     static let caret             = NSColor(red: 0xAE/255, green: 0xAF/255, blue: 0xAD/255, alpha: 1)

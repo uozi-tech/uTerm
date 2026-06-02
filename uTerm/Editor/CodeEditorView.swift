@@ -13,7 +13,7 @@ struct CodeEditorView: View {
         ZStack(alignment: .topTrailing) {
             CodeEditorViewRepresentable(buffer: buffer, language: language,
                                         findController: $findController)
-                .background(AppTheme.Palette.bgBase)
+                .background(Color(nsColor: EditorTheme.background))
             if let fc = findController {
                 FindReplaceBar(controller: fc) {
                     findController = nil
@@ -42,12 +42,12 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        scrollView.backgroundColor = NSColor(AppTheme.Palette.bgBase)
+        scrollView.backgroundColor = EditorTheme.background
 
         let textView = TextView(
             string: buffer.text,
             font: .monospacedSystemFont(ofSize: 13, weight: .regular),
-            textColor: NSColor(AppTheme.Palette.textPrimary),
+            textColor: EditorTheme.foreground,
             lineHeightMultiplier: 1.4,
             wrapLines: false,
             isEditable: true,

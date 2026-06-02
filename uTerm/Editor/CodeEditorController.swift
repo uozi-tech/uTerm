@@ -56,7 +56,7 @@ final class CodeEditorController: NSObject {
         let fullRange = NSRange(location: 0, length: storage.length)
         storage.removeAttribute(.foregroundColor, range: fullRange)
         storage.addAttribute(.foregroundColor,
-                             value: NSColor(AppTheme.Palette.textPrimary),
+                             value: EditorTheme.foreground,
                              range: fullRange)
         for (range, color) in pairs where NSMaxRange(range) <= storage.length {
             storage.addAttribute(.foregroundColor, value: color, range: range)

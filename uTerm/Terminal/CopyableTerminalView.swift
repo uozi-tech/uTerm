@@ -65,4 +65,41 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
             super.copy(self)
         }
     }
+
+    // MARK: 滚动条仅在有可滚动历史时出现
+
+    /// SwiftTerm 把它的 NSScroller 当作独立子视图常驻挂在右边缘，从不
+    /// `isHidden`（见 MacTerminalView.setupScroller / updateScroller），所以
+    /// 即便没有任何 scrollback 可滚，也会显示一个静态、禁用的 knob —— 在
+    /// 系统「显示滚动条 = 自动」且接了鼠标时尤其明显（渲染成宽的 legacy 条）。
+    ///
+    /// 这里把它改成 VSCode 那种「仅在有历史可滚时才出现」：
+    /// SwiftTerm 在 *每个* updateScroller() 里都会把 `scroller.isEnabled`
+    /// 设成 `canScroll`，而 updateScroller() 覆盖了所有触发点（输出滚动 /
+    /// 手动滚动 / 主备缓冲切换 / changeScrollback / resize），所以 KVO 盯住
+    /// `isEnabled` 是覆盖全部代码路径的唯一可靠信号。
+    ///
+    /// 只镜像到 `alphaValue`、*不动* `isHidden`：因为 SwiftTerm 的
+    /// `reservedScrollerWidth` 是按 `isHidden` 预留终端右侧宽度的，切 isHidden
+    /// 会改变可用列数、触发整屏 reflow 抖动（且回收要等到下次 resize 才生效）。
+    /// 切 alpha 纯视觉，零 reflow，预留宽度恒定。
+    private var scrollerEnabledObservation: NSKeyValueObservation?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installScrollerAutoHideIfNeeded()
+    }
+
+    private func installScrollerAutoHideIfNeeded() {
+        guard scrollerEnabledObservation == nil,
+              let scroller = subviews.compactMap({ $0 as? NSScroller }).first
+        else { return }
+        // .initial 立即按当前 isEnabled 同步一次（启动时 canScroll=false → 淡出）。
+        scrollerEnabledObservation = scroller.observe(\.isEnabled, options: [.initial, .new]) { scroller, _ in
+            let target: CGFloat = scroller.isEnabled ? 1 : 0
+            if scroller.alphaValue != target {
+                scroller.alphaValue = target
+            }
+        }
+    }
 }

@@ -23,7 +23,7 @@ struct StatusBarView: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 28)
-        .background(AppTheme.Palette.bgPanel)
+        .background(.bar)
     }
 
     @ViewBuilder

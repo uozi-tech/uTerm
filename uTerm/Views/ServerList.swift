@@ -37,7 +37,6 @@ struct ServerList: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.Palette.bgBase)
     }
 
     @ViewBuilder

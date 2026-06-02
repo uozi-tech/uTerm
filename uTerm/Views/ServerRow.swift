@@ -1,8 +1,8 @@
 // uTerm/Views/ServerRow.swift
 import SwiftUI
 
-/// Welcome 主列表的单行。avatar + name + endpoint + group tag + 相对时间 + 置顶 ★。
-/// 选中态左侧 2px accent 竖条。
+/// Welcome 主列表的单行。avatar + name + endpoint + group tag + 置顶 ★。
+/// 选中态：左 2px accent 竖条 + bgRaised 浅底；hover 走 hoverBackground。
 struct ServerRow: View {
     let profile: ServerProfile
     let query: String
@@ -31,15 +31,19 @@ struct ServerRow: View {
             }
             Spacer(minLength: 6)
             groupTag
-            Text(relativeTime(profile.lastConnectedAt))
-                .font(.caption)
-                .foregroundStyle(AppTheme.Palette.textMuted)
-                .frame(width: 70, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(isSelected ? AppTheme.Palette.bgSelected : Color.clear)
-        // 选中态走 bgSelected；非选中态 hover 给 bgRaised 反馈。
-        // 老版本每行尾 0.5px border 在选中下与 bgSelected 撞色显得"双线"，已去除。
+        // 选中态：左 2px accent 竖条 + 浅 bgRaised 底色（doc comment 承诺）。
+        // 不用 bgSelected/bgSelectedInactive（系统语义色下二者有别，与 hover 仍会撞色）。
+        // 非选中时 hover 走 .hoverBackground 反馈。
+        .background(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(AppTheme.Palette.accent)
+                    .frame(width: 2)
+            }
+        }
+        .background(isSelected ? AppTheme.Palette.bgRaised : Color.clear)
         .hoverBackground(isActive: isSelected)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onDoubleTap() }
@@ -76,15 +80,9 @@ struct ServerRow: View {
         } else {
             Text("未分组")
                 .font(.system(size: 10))
-                .foregroundStyle(AppTheme.Palette.textMuted.opacity(0.5))
+                .foregroundStyle(AppTheme.Palette.textMuted)
                 .frame(width: 36)
         }
     }
 
-    private func relativeTime(_ date: Date?) -> String {
-        guard let date else { return "—" }
-        let fmt = RelativeDateTimeFormatter()
-        fmt.unitsStyle = .short
-        return fmt.localizedString(for: date, relativeTo: Date())
-    }
 }

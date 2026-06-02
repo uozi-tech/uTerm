@@ -11,9 +11,130 @@ final class FileBrowserModel {
         case failed(String)
     }
 
+    enum SortKey: String, CaseIterable, Identifiable, Sendable {
+        case name, size, modified
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .name: return "名称"
+            case .size: return "大小"
+            case .modified: return "修改时间"
+            }
+        }
+    }
+
     private(set) var state: State = .idle
     private(set) var currentPath: String = "/"
-    private(set) var entries: [RemoteEntry] = []
+    /// 由 provider 返回的原始顺序；UI 应读取 `sortedEntries`（已按当前偏好排好）。
+    private(set) var entries: [RemoteEntry] = [] {
+        didSet { recomputeSortedEntries() }
+    }
+    /// `entries` 经当前 sortKey / sortAscending / foldersFirst 排序后的缓存。
+    ///
+    /// 改成缓存（之前是 computed）：list 视图每次 body 重渲染都会读这条；如果
+    /// 是 computed，SwiftUI 在 LazyList 滚动 + hover 触发的重渲染下会反复重新
+    /// 过滤 + 排序 N 遍（n=条目数，最坏每秒数十次）。改成 stored cache，只在
+    /// entries / sort 偏好变化时重算一次。
+    private(set) var sortedEntries: [RemoteEntry] = []
+
+    /// 排序偏好。改写后重新算 `sortedEntries`，并同步持久化到 UserDefaults
+    /// （全局共享，所有 server 一致）。
+    private enum PrefKey {
+        static let sortKey       = "fileBrowser.sortKey"
+        static let sortAscending = "fileBrowser.sortAscending"
+        static let foldersFirst  = "fileBrowser.foldersFirst"
+    }
+
+    var sortKey: SortKey = {
+        if let raw = UserDefaults.standard.string(forKey: PrefKey.sortKey),
+           let k = SortKey(rawValue: raw) { return k }
+        return .name
+    }() {
+        didSet {
+            UserDefaults.standard.set(sortKey.rawValue, forKey: PrefKey.sortKey)
+            recomputeSortedEntries()
+        }
+    }
+    var sortAscending: Bool = {
+        UserDefaults.standard.object(forKey: PrefKey.sortAscending) as? Bool ?? true
+    }() {
+        didSet {
+            UserDefaults.standard.set(sortAscending, forKey: PrefKey.sortAscending)
+            recomputeSortedEntries()
+        }
+    }
+    var foldersFirst: Bool = {
+        UserDefaults.standard.object(forKey: PrefKey.foldersFirst) as? Bool ?? true
+    }() {
+        didSet {
+            UserDefaults.standard.set(foldersFirst, forKey: PrefKey.foldersFirst)
+            recomputeSortedEntries()
+        }
+    }
+
+    /// 按当前排序偏好重算 `sortedEntries`。
+    ///
+    /// 稳定性 / nil 处理：
+    /// - Swift 的 `Array.sorted` 不保证稳定 —— 用原始 index 做 tiebreaker
+    ///   保证等值时按 provider 给的顺序排，列表不会跳。
+    /// - size / modifiedAt 为 nil 时永远排最后（不受 ascending 翻转影响）。
+    ///   之前用 `?? 0` 会让所有 dir（size=nil）撞 0、跟 0 字节文件混在一起。
+    private func recomputeSortedEntries() {
+        let ascending = sortAscending
+        let key = sortKey
+
+        func primary(_ a: RemoteEntry, _ b: RemoteEntry) -> ComparisonResult {
+            switch key {
+            case .name:
+                return a.name.localizedStandardCompare(b.name)
+            case .size:
+                switch (a.size, b.size) {
+                case let (sa?, sb?): return sa < sb ? .orderedAscending : (sa > sb ? .orderedDescending : .orderedSame)
+                case (nil, nil):     return .orderedSame
+                case (nil, _):       return .orderedDescending  // nil 总是更大 → 排末尾
+                case (_, nil):       return .orderedAscending
+                }
+            case .modified:
+                switch (a.modifiedAt, b.modifiedAt) {
+                case let (ta?, tb?): return ta < tb ? .orderedAscending : (ta > tb ? .orderedDescending : .orderedSame)
+                case (nil, nil):     return .orderedSame
+                case (nil, _):       return .orderedDescending
+                case (_, nil):       return .orderedAscending
+                }
+            }
+        }
+
+        // 给每一项打原始 index，等值时用 index 当 tiebreaker → 稳定排序。
+        let indexed = entries.enumerated().map { (idx: $0.offset, e: $0.element) }
+
+        func cmp(_ a: (idx: Int, e: RemoteEntry), _ b: (idx: Int, e: RemoteEntry)) -> Bool {
+            let p = primary(a.e, b.e)
+            if p != .orderedSame {
+                // nil-end 路径：nil 总是 orderedDescending（更大），
+                // 排序时无论 ascending 是 true / false，都要落到末尾。
+                let aHasNilEnd: Bool = {
+                    switch key {
+                    case .name: return false
+                    case .size: return a.e.size == nil || b.e.size == nil
+                    case .modified: return a.e.modifiedAt == nil || b.e.modifiedAt == nil
+                    }
+                }()
+                if aHasNilEnd {
+                    return p == .orderedAscending
+                }
+                return ascending ? (p == .orderedAscending) : (p == .orderedDescending)
+            }
+            return a.idx < b.idx
+        }
+
+        if foldersFirst {
+            let dirs  = indexed.filter {  $0.e.isDirectory }.sorted(by: cmp).map(\.e)
+            let files = indexed.filter { !$0.e.isDirectory }.sorted(by: cmp).map(\.e)
+            sortedEntries = dirs + files
+        } else {
+            sortedEntries = indexed.sorted(by: cmp).map(\.e)
+        }
+    }
 
     /// 主机密钥审批的 UI 桥接（驱动 `FileBrowserView` 的 sheet）。
     let hostKeyRelay = HostKeyChallengeRelay()

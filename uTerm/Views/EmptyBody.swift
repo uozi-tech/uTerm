@@ -85,9 +85,16 @@ struct EmptyBody: View {
         return "doc"
     }
 
-    private func relative(_ date: Date) -> String {
+    // 提到 static let：之前每次 row 渲染都分配新 formatter（list 里 N 次
+    // 分配 = N 次 locale 查询）。NSFormatter 子类在主线程使用线程安全。
+    // 不再写死 zh_CN —— 跟随 Locale.current（用户系统语言）。
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
         let fmt = RelativeDateTimeFormatter()
         fmt.unitsStyle = .short
-        return fmt.localizedString(for: date, relativeTo: Date())
+        return fmt
+    }()
+
+    private func relative(_ date: Date) -> String {
+        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }

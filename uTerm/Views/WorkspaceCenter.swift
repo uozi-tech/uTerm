@@ -16,7 +16,7 @@ struct WorkspaceCenter: View {
                 .frame(minHeight: 200,
                        idealHeight: idealTerminalHeight)
         }
-        .background(AppTheme.Palette.bgBase)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     // 默认比例 0.667，参考总高 720 → preview ≈ 480 / terminal ≈ 240，

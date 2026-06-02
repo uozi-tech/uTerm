@@ -105,7 +105,7 @@ struct PaneView: View {
         .font(.caption)
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(AppTheme.Palette.bgPanel)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     /// 拖拽时跟随光标的小卡片。

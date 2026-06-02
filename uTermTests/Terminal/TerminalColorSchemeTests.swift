@@ -2,6 +2,7 @@ import XCTest
 import SwiftTerm
 @testable import uTerm
 
+@MainActor
 final class TerminalColorSchemeTests: XCTestCase {
     func test_all_has_5_schemes() {
         XCTAssertEqual(TerminalColorScheme.all.count, 5)

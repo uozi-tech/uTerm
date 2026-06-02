@@ -6,23 +6,26 @@ import UniformTypeIdentifiers
 struct PreviewTabBar: View {
     let model: FilePreviewModel
 
+    
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
+                HStack(spacing: 0) {
                     ForEach(model.buffers) { buf in
                         PreviewTabChip(
                             buffer: buf,
                             isActive: model.activeBufferID == buf.id,
                             onSelect: { model.selectTab(buf.id) },
                             onClose:  { model.close(buf.id, savingIfDirty: true) })
+                            .frame(maxHeight: .infinity)
                     }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 4)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity)
         }
         .frame(height: 30)
-        .background(AppTheme.Palette.bgPanel)
+        .background(.regularMaterial)
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
         }
@@ -60,11 +63,12 @@ private struct PreviewTabChip: View {
             .opacity(isHovered ? 1 : 0)
             .allowsHitTesting(isHovered)
         }
-        .padding(.horizontal, 10).padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .frame(maxHeight: .infinity)
         .background(
-            // 活动 tab 用 bgBase（=主预览区同色），视觉上跟下方主区无缝衔接；
-            // 非活动 tab 留空，继承 TabBar 的 bgPanel。
-            isActive ? AppTheme.Palette.bgBase : Color.clear
+            // 活动 tab 用 controlBackgroundColor（=主预览区同色），视觉上跟下方主区无缝衔接；
+            // 非活动 tab 留空，继承 TabBar 的 .regularMaterial。
+            isActive ? Color(nsColor: .controlBackgroundColor) : Color.clear
         )
         .overlay(alignment: .top) {
             // 顶部 1px accent 横线，VS Code Dark Modern 标示活动 tab 的方式
@@ -72,7 +76,7 @@ private struct PreviewTabChip: View {
                 Rectangle().fill(AppTheme.Palette.accent).frame(height: 1)
             }
         }
-        .hoverBackground(cornerRadius: 5, isActive: isActive)
+        .hoverBackground(cornerRadius: 0, isActive: isActive)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }

@@ -1,6 +1,7 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class LogLevelTests: XCTestCase {
     func test_allCases_order() {
         XCTAssertEqual(LogLevel.allCases, [.error, .warn, .info, .debug])

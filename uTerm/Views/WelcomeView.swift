@@ -2,8 +2,8 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-/// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
-/// sidebar + list 三层组合（Termius 风）。
+/// Welcome 窗口：服务器列表 + 增删改 + 连接入口。当前结构为
+/// `NavigationSplitView` + `.searchable` + native `.toolbar`。
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -45,16 +45,23 @@ struct WelcomeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
-            HStack(spacing: 0) {
-                WelcomeSidebar(profiles: allProfiles, filter: $filter)
-                    .frame(width: 200)
-                bodyContent
+        NavigationSplitView {
+            WelcomeSidebar(profiles: allProfiles, filter: $filter)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
+            bodyContent
+        }
+        .navigationTitle("uTerm")
+        .searchable(text: $filter.query, prompt: "搜索 name / host / group…")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { formRoute = .new } label: {
+                    Label("新建", systemImage: "plus")
+                }
+                .keyboardShortcut("n", modifiers: .command)
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        .background(AppTheme.Palette.bgBase)
         .sheet(item: $formRoute) { route in
             switch route {
             case .new:
@@ -182,7 +189,7 @@ struct WelcomeView: View {
     }
 
     private func deleteProfile(_ profile: ServerProfile) {
-        // 沿用现有 ServerListView 的删除语义：清 keychain secrets + jumpHost。
+        // 删除语义：清 keychain secrets + jumpHost。
         let keychain = KeychainStore()
         for kind in [SecretKind.password, .passphrase, .privateKey] {
             try? keychain.delete(profileID: profile.id, kind: kind)
