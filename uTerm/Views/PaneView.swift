@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import AppKit
 
 /// 渲染一个 `PaneModel`：终端窗格按连接状态显示，文件窗格显示文件浏览内容。
 struct PaneView: View {
@@ -25,6 +26,8 @@ struct PaneView: View {
     @Query private var profiles: [ServerProfile]
 
     @State private var paneSize: CGSize = .zero
+    /// 窗格根视图的屏幕坐标探针；拖拽开始时用于计算抓取偏移。
+    @State private var paneFrameProbe = ViewFrameProbe()
 
     private var profile: ServerProfile? {
         profiles.first { $0.id == pane.serverProfileID }
@@ -43,6 +46,7 @@ struct PaneView: View {
                     .onChange(of: geo.size) { _, newSize in paneSize = newSize }
             }
         )
+        .background(ViewFrameReader(probe: paneFrameProbe))
         // 投放区高亮叠在整块窗格上 —— 与 .onDrop 的 bounds、paneSize 量测
         // 同一坐标系（包含头部，当 showsHeader 为 true 时），高亮位置才与
         // paneDropZone 的归类一致。
@@ -87,10 +91,12 @@ struct PaneView: View {
             }
             .contentShape(Rectangle())
             .onDrag {
-                dragState.begin(paneID: pane.id)
+                dragState.begin(paneID: pane.id, preview: makeDragPreview())
                 return PaneDragPayload.itemProvider(paneID: pane.id)
             } preview: {
-                dragPreview
+                // 让 AppKit 的拖拽图像不可见——可见幽灵由 PaneDragGhostLayer
+                // 渲染（AppKit 的拖拽图像无法可靠控制尺寸）。
+                Color.clear.frame(width: 1, height: 1)
             }
             Button(action: { onSplit(autoSplitDirection) }) {
                 Image(systemName: "rectangle.split.2x1")
@@ -111,16 +117,18 @@ struct PaneView: View {
         }
     }
 
-    /// 拖拽时跟随光标的小卡片。
-    private var dragPreview: some View {
-        HStack(spacing: 6) {
-            Image(systemName: headerIcon)
-            Text(profile?.name ?? "终端").lineLimit(1)
-        }
-        .font(.caption)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(WS.panel))
+    /// 拖拽开始时捕获幽灵内容快照。
+    private func makeDragPreview() -> PaneDragPreview {
+        PaneDragPreview(
+            name: profile?.name ?? "终端",
+            paneSize: paneSize,
+            grabOffset: grabOffset())
+    }
+
+    /// 抓取点相对窗格左上角的偏移；探针不可用时返回 nil（幽灵居中兜底）。
+    private func grabOffset() -> CGSize? {
+        guard let frame = paneFrameProbe.screenFrame else { return nil }
+        return paneGrabOffset(mouse: NSEvent.mouseLocation, in: frame)
     }
 
     /// 按窗格当前长宽比选分屏方向：偏宽 → 左右分，偏高 → 上下分。

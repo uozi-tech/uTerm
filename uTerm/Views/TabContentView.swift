@@ -13,6 +13,9 @@ struct TabContentView: View {
     var body: some View {
         // root 是单 leaf 时窗格头部由 titlebar chip 代为表达，隐藏 header。
         nodeView(tab.root, showsHeader: !tab.root.isSingleLeaf)
+            // 拖拽幽灵层：跟随光标的浮动 NSPanel，读共享 dragState 的快照。
+            // 处于工作区 NSWindow 视图树内，幽灵子面板能正确认领父窗口。
+            .overlay { PaneDragGhostLayer(dragState: dragState) }
     }
 
     // Returns AnyView to break the opaque-type recursion that arises when a
