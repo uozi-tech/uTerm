@@ -23,14 +23,14 @@ enum WS {
     nonisolated static let panelNSColor = NSColor(srgbRed: 23/255, green: 23/255, blue: 26/255, alpha: 1)
 
     // 描边 —— 白色低 alpha，叠在任意深色面上都是一道发亮的细线。
-    nonisolated static let border     = Color.white.opacity(0.07)
-    nonisolated static let borderHi   = Color.white.opacity(0.10)
+    nonisolated static let border     = Color.white.opacity(0.09)
+    nonisolated static let borderHi   = Color.white.opacity(0.12)
 
     // 文本 —— 主 / 次 / 三 / 四级。
     nonisolated static let text       = Color(hex: 0xEDEDEE)
-    nonisolated static let text2      = Color.white.opacity(0.46)
-    nonisolated static let text3      = Color.white.opacity(0.28)
-    nonisolated static let text4      = Color.white.opacity(0.18)
+    nonisolated static let text2      = Color.white.opacity(0.58)
+    nonisolated static let text3      = Color.white.opacity(0.40)
+    nonisolated static let text4      = Color.white.opacity(0.30)
 
     // 强调（设计稿固定蓝，不跟随系统强调色）。
     nonisolated static let accent     = Color(hex: 0x3B82F6)

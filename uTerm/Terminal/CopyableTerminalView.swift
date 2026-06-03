@@ -94,6 +94,7 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
         guard scrollerEnabledObservation == nil,
               let scroller = subviews.compactMap({ $0 as? NSScroller }).first
         else { return }
+        styleScroller(scroller)
         // .initial 立即按当前 isEnabled 同步一次（启动时 canScroll=false → 淡出）。
         scrollerEnabledObservation = scroller.observe(\.isEnabled, options: [.initial, .new]) { scroller, _ in
             // KVO 回调随 SwiftTerm 在主线程改 isEnabled 同步投递（.initial 也在
@@ -106,5 +107,18 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
                 }
             }
         }
+    }
+
+    /// 把 SwiftTerm 常驻的 NSScroller 从「宽的 legacy 灰条」改成贴合暗色终端的
+    /// 现代 overlay 细条：
+    /// - `.overlay` style：细窄、半透明、悬浮在内容之上（而非占一整条 legacy 轨道），
+    ///   与系统「显示滚动条 = 自动/接鼠标」下默认渲染成的宽 legacy 条解耦。
+    /// - `.light` knobStyle：暗背景下用浅色 knob，对比度更合适
+    ///   （`.dark` 是给浅色背景用的深色 knob，会糊在暗终端上）。
+    ///
+    /// 不依赖系统外观设置，强制一致：终端是恒暗的，scroller 也应恒暗。
+    private func styleScroller(_ scroller: NSScroller) {
+        scroller.scrollerStyle = .overlay
+        scroller.knobStyle = .light
     }
 }

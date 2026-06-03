@@ -336,11 +336,20 @@ struct AssistantView: View {
                 .foregroundStyle(WS.text4)
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(message.text.isEmpty && !isStreamingTail ? "…" : message.text)
-                    .font(.system(size: 12.5))
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
-                    .foregroundStyle(isUser ? WS.text2 : WS.text)
+                if isUser {
+                    Text(message.text)
+                        .font(.system(size: 12.5))
+                        .lineSpacing(2)
+                        .textSelection(.enabled)
+                        .foregroundStyle(WS.text2)
+                } else if message.text.isEmpty && !isStreamingTail {
+                    Text("…")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(WS.text3)
+                } else {
+                    StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
+                        .textSelection(.enabled)
+                }
                 if isStreamingTail {
                     StreamingCaret()
                 }

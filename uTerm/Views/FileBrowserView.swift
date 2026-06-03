@@ -10,6 +10,9 @@ struct FileBrowserContent: View {
     @State private var selectedID: RemoteEntry.ID?
     /// 列表容器是否持有键盘焦点。单击行时置 true，让方向键 / 回车导航生效。
     @FocusState private var browserFocused: Bool
+    /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
+    /// 故可安全复用 selectedID 表示「`..` 行被选中」。
+    private static let upRowID = ".."
 
     var body: some View {
         VStack(spacing: 0) {
@@ -127,8 +130,12 @@ struct FileBrowserContent: View {
             .focusEffectDisabled()
             // 选中行后按回车 = 双击：进入文件夹 / 打开文件。
             .onKeyPress(.return) {
-                guard let id = selectedID,
-                      let entry = model.sortedEntries.first(where: { $0.id == id }) else {
+                guard let id = selectedID else { return .ignored }
+                if id == Self.upRowID {
+                    Task { await model.navigateUp() }
+                    return .handled
+                }
+                guard let entry = model.sortedEntries.first(where: { $0.id == id }) else {
                     return .ignored
                 }
                 activate(entry)
@@ -143,27 +150,29 @@ struct FileBrowserContent: View {
                 selectedID = nil
             }
         }
-        // 切目录时：用不透明 WS.bg + 转圈整块盖住列表，避免在取新列表的网络往返
-        // 期间露出”上一个目录的残留行”。盖层即时出现（第一帧就挡住旧内容）、取完
-        // 淡出露出新列表 —— 故用非对称过渡：插入瞬时、移除淡出。
+        // 切目录时：用不透明 WS.bg + 转圈整块盖住列表，挡住取新列表往返期间「上一个
+        // 目录的残留行」。关键：盖层即时显示 / 即时移除、**刻意不加任何过渡动画** ——
+        // 取新列表（entries）与 isNavigating 落回 false 在同一次同步更新里，盖层一撤就
+        // 直接是新列表。若给整块加 .animation(value: isNavigating)，LazyVStack 的行增删
+        // 会被一并动画化，淡出的盖层下就能瞄到旧行渐隐 →「盖层结束后先显示旧列表再变
+        // 新」（前两版的根因）。故此处无动画、硬切，旧列表不再有任何可见窗口。
         .overlay {
             if model.isNavigating {
                 ZStack {
                     WS.bg
                     ProgressView().controlSize(.small).tint(WS.accent)
                 }
-                .transition(.asymmetric(insertion: .identity, removal: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.14), value: model.isNavigating)
     }
 
-    /// `..` 返回上级行。导航 affordance（不是文件），单击直接返回，不参与选中。
+    /// `..` 返回上级行。与文件夹一致：单击选中、双击才返回上一级（回车亦返回）。
     /// 用 onTapGesture 而非 Button —— Button 是 AppKit 控件，在 .focusable 的滚动
     /// 容器里首击会被焦点接管吞掉（要点两次才触发）；gesture 首击即生效，与
     /// entryRow 同款。键盘 / VoiceOver 激活由 .accessibilityAction 补回 button trait。
     private var upRow: some View {
-        HStack(spacing: 9) {
+        let upSelected = selectedID == Self.upRowID
+        return HStack(spacing: 9) {
             SFTPFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
             Text("..")
                 .font(.system(size: 13))
@@ -172,12 +181,24 @@ struct FileBrowserContent: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .hoverBackground(WS.rowHover)
+        // 选中态与 entryRow 同款：满宽底色 + 左侧 2px 蓝条。
+        .background(alignment: .leading) {
+            ZStack(alignment: .leading) {
+                Rectangle().fill(upSelected ? WS.rowSelected : Color.clear)
+                Rectangle().fill(WS.accent).frame(width: 2).opacity(upSelected ? 1 : 0)
+            }
+        }
+        .hoverBackground(WS.rowHover, isActive: upSelected)
         .contentShape(Rectangle())
-        // 单击直接返回上级，并把键盘焦点交给列表容器，使返回后方向键 / 回车可用。
-        .onTapGesture {
-            browserFocused = true
+        // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
+        // count:2 在前 —— SwiftUI 据此把单 / 双击当互斥手势消歧（见 entryRow）。
+        .onTapGesture(count: 2) {
+            selectedID = Self.upRowID
             Task { await model.navigateUp() }
+        }
+        .onTapGesture {
+            selectedID = Self.upRowID
+            browserFocused = true
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
