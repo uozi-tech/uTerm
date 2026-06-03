@@ -181,7 +181,7 @@ private struct UDIconButtonStyle: ButtonStyle {
 // MARK: - Preview
 
 #Preview {
-    func gallery(_ scheme: ColorScheme) -> some View {
+    @MainActor func gallery(_ scheme: ColorScheme) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach([("primary", UDButton.Style.primary),
                      ("secondary", .secondary),

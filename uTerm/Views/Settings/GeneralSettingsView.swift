@@ -7,6 +7,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @AppStorage("startupBehavior") private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
     @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
+    @AppStorage("requireAuthAtLaunch") private var requireAuthAtLaunch = true
     @AppStorage("appearancePreference") private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
     @AppStorage("appLanguage") private var appLanguageRaw: String = AppLanguage.system.rawValue
 
@@ -45,6 +46,10 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "恢复终端会话",
                             hint: "启动时重新加载上次工作区的标签与分屏布局") {
                     UDToggle($restoreTerminalSession)
+                }
+                SettingsRow(label: "启动时验证身份",
+                            hint: "下次启动 uTerm 时要求 Touch ID 或登录密码 · 改动下次启动生效") {
+                    UDToggle($requireAuthAtLaunch)
                 }
             }
 

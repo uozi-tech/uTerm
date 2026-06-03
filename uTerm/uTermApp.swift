@@ -11,6 +11,7 @@ struct uTermApp: App {
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     @State private var appUpdater = AppUpdater()
+    @State private var lockModel: AppLockModel
 
     private var currentAppearance: AppearancePreference {
         AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
@@ -46,6 +47,13 @@ struct uTermApp: App {
         // 写 NSApp.appearance，避免首帧用错外观闪一下。live 切换由 AppAppearanceSync 负责。
         let raw = UserDefaults.standard.string(forKey: "appearancePreference") ?? ""
         NSApplication.shared.appearance = (AppearancePreference(rawValue: raw) ?? .system).nsAppearance
+        // 启动应用锁：读 requireAuthAtLaunch（键不存在视作 true，与 @AppStorage 默认对齐——
+        // 同 appearancePreference，UserDefaults.bool 在缺键时返回 false 会误成「关」，故用 object as? Bool）。
+        // 锁屏遮罩与首次验证由各 Scene 上的 .appLockGate(lockModel) 驱动。
+        let requireAuth = (UserDefaults.standard.object(forKey: "requireAuthAtLaunch") as? Bool) ?? true
+        _lockModel = State(initialValue: AppLockModel(
+            authenticator: SystemBiometricAuthenticator(),
+            requireAuthAtLaunch: requireAuth))
     }
 
     var body: some Scene {
@@ -56,6 +64,7 @@ struct uTermApp: App {
             WelcomeView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
 
@@ -65,6 +74,7 @@ struct uTermApp: App {
             KeyManagerView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
 
@@ -73,6 +83,7 @@ struct uTermApp: App {
             WorkspaceWindowView(windowID: windowID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
         // 自绘 Cursor 式标题栏：隐藏系统标题栏（红绿灯浮在内容上、内容铺满到顶），
@@ -125,6 +136,7 @@ struct uTermApp: App {
             SFTPWindowView(windowID: sftpID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
         // 同工作区窗口：隐藏系统标题栏，红绿灯浮在自绘 SFTPTitleBar 上、内容铺到顶。
@@ -138,6 +150,7 @@ struct uTermApp: App {
                 .modelContainer(modelContainer)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
                 .environment(appUpdater)
         }
     }
