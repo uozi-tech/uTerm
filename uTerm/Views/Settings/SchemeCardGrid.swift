@@ -55,7 +55,7 @@ struct SchemeCard: View {
             HStack {
                 Text(scheme.displayName)
                     .font(.system(size: 11.5))
-                    .foregroundStyle(isSelected ? AppTheme.Palette.textPrimary : AppTheme.Palette.textSecondary)
+                    .foregroundStyle(isSelected ? UD.text : UD.text2)
                 Spacer()
                 if isSelected {
                     Image(systemName: "checkmark")
@@ -69,7 +69,7 @@ struct SchemeCard: View {
         .background(.regularMaterial)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color(nsColor: scheme.accentColor) : AppTheme.Palette.border, lineWidth: 1)
+                .stroke(isSelected ? Color(nsColor: scheme.accentColor) : UD.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .shadow(color: isSelected ? Color(nsColor: scheme.accentColor).opacity(0.2) : .clear, radius: 4)

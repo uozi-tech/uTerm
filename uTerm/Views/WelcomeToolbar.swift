@@ -10,32 +10,28 @@ struct WelcomeToolbar: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(UD.text3)
             TextField("搜索 name / host / group…", text: $query)
                 .textFieldStyle(.plain)
-                .foregroundStyle(AppTheme.Palette.textSecondary)
+                .foregroundStyle(UD.text2)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(UD.text3)
             }
             Spacer(minLength: 12)
-            Button { openWindow(id: "keys") } label: {
-                Label("密钥", systemImage: "key")
-                    .labelStyle(.titleAndIcon)
+            UDButton(title: "密钥", style: .secondary, systemImage: "key") {
+                openWindow(id: "keys")
             }
-            Button(action: onNewServer) {
-                Label("新建", systemImage: "plus")
-                    .labelStyle(.titleAndIcon)
-            }
-            .keyboardShortcut("n", modifiers: .command)
+            UDButton(title: "新建", style: .primary, systemImage: "plus", action: onNewServer)
+                .keyboardShortcut("n", modifiers: .command)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(AppTheme.Palette.bgPanel)
+        .background(UD.bg)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 }

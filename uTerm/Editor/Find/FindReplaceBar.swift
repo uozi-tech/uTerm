@@ -40,10 +40,10 @@ struct FindReplaceBar: View {
             .textFieldStyle(.plain)
             .font(.system(size: 12, design: .monospaced))
             .padding(6)
-            .background(RoundedRectangle(cornerRadius: 3).fill(AppTheme.Palette.bgRaised))
+            .background(RoundedRectangle(cornerRadius: 3).fill(UD.panelHi))
             .overlay(
                 RoundedRectangle(cornerRadius: 3)
-                    .stroke(controller.errorMessage == nil ? Color.clear : AppTheme.Palette.danger,
+                    .stroke(controller.errorMessage == nil ? Color.clear : UD.danger,
                             lineWidth: 1)
             )
             .help(controller.errorMessage ?? "")
@@ -71,10 +71,10 @@ struct FindReplaceBar: View {
         Button(action: action) {
             Text(label).font(.system(size: 11, weight: .medium))
                 .frame(width: 22, height: 18)
-                .foregroundStyle(isOn ? AppTheme.Palette.textPrimary : AppTheme.Palette.textMuted)
+                .foregroundStyle(isOn ? UD.text : UD.text3)
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(isOn ? AppTheme.Palette.accent.opacity(0.6) : Color.clear)
+                        .fill(isOn ? UD.accent.opacity(0.6) : Color.clear)
                 )
         }
         .buttonStyle(.plain)
@@ -83,7 +83,7 @@ struct FindReplaceBar: View {
     private var matchCounter: some View {
         Text(matchCounterText)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(AppTheme.Palette.textMuted)
+            .foregroundStyle(UD.text3)
             .frame(minWidth: 60, alignment: .trailing)
     }
 
@@ -99,7 +99,7 @@ struct FindReplaceBar: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .padding(6)
-                .background(RoundedRectangle(cornerRadius: 3).fill(AppTheme.Palette.bgRaised))
+                .background(RoundedRectangle(cornerRadius: 3).fill(UD.panelHi))
             Button {
                 controller.replaceCurrent()
             } label: {

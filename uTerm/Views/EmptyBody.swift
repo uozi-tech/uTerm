@@ -9,12 +9,12 @@ struct EmptyBody: View {
             HStack {
                 Text("最近打开")
                     .font(.headline)
-                    .foregroundStyle(WS.text)
+                    .foregroundStyle(UD.text)
                 Spacer()
                 if !model.recents.isEmpty {
                     Button("清空") { model.clearRecents() }
                         .buttonStyle(.borderless)
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                 }
             }
             if model.recents.isEmpty {
@@ -38,10 +38,10 @@ struct EmptyBody: View {
         VStack(spacing: 8) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 32, weight: .light))
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
             Text("从左侧选择文件预览")
                 .font(.callout)
-                .foregroundStyle(WS.text2)
+                .foregroundStyle(UD.text2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -51,19 +51,19 @@ struct EmptyBody: View {
         HStack(spacing: 10) {
             Image(systemName: icon(for: entry.kindTag))
                 .frame(width: 16)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
             VStack(alignment: .leading, spacing: 1) {
                 Text((entry.remotePath as NSString).lastPathComponent)
-                    .foregroundStyle(WS.text)
+                    .foregroundStyle(UD.text)
                 Text(entry.remotePath)
                     .font(.caption)
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
             Text(relative(entry.lastOpenedAt))
                 .font(.caption)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
         }
         .padding(.horizontal, 8).padding(.vertical, 6)
         .contentShape(Rectangle())

@@ -11,10 +11,10 @@ struct ComingSoonPlaceholder: View {
         VStack(spacing: 8) {
             Image(systemName: "wrench.and.screwdriver")
                 .font(.system(size: 28, weight: .light))
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(UD.text3)
             Text("\(label) · 敬请期待")
                 .font(.system(size: 13))
-                .foregroundStyle(AppTheme.Palette.textSecondary)
+                .foregroundStyle(UD.text2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

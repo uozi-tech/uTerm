@@ -39,10 +39,10 @@ struct SFTPFileTable: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
             if entries.isEmpty && !showParent {
                 Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
-                    .font(.system(size: 13)).foregroundStyle(WS.text4)
+                    .font(.system(size: 13)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
@@ -98,7 +98,7 @@ struct SFTPFileTable: View {
             headerCell("修改时间", .modified).frame(width: wMtime, alignment: .leading)
             headerCell("大小", .size).frame(width: wSize, alignment: .trailing)
             Text("类型").font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(WS.text3).frame(width: wKind, alignment: .leading)
+                .foregroundStyle(UD.text3).frame(width: wKind, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .frame(height: 38)
@@ -110,10 +110,10 @@ struct SFTPFileTable: View {
         Button { onToggleSort(key) } label: {
             HStack(spacing: 5) {
                 Text(label).font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(active ? WS.text2 : WS.text3)
+                    .foregroundStyle(active ? UD.text2 : UD.text3)
                 Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
                     .opacity(active ? 1 : 0)
             }
             .contentShape(Rectangle())
@@ -126,13 +126,13 @@ struct SFTPFileTable: View {
     private var parentRow: some View {
         HStack(spacing: 12) {
             SFTPFileIcon(kind: .folder, isUp: true).frame(width: 30)
-            Text("..").font(.system(size: 13.5)).foregroundStyle(WS.text2)
+            Text("..").font(.system(size: 13.5)).foregroundStyle(UD.text2)
             Spacer()
         }
         .padding(.horizontal, 16)
         .frame(height: 46)
         .contentShape(Rectangle())
-        .hoverBackground(WS.rowHover)
+        .hoverBackground(UD.rowHover)
         .onTapGesture { focused = true; onUp() }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -148,30 +148,30 @@ struct SFTPFileTable: View {
             SFTPFileIcon(kind: kind).frame(width: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(e.name).font(.system(size: 13.5))
-                    .foregroundStyle(WS.text).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
                 Text(posixPermissionString(e.permissions))
-                    .font(WS.mono(11)).foregroundStyle(WS.text4).lineLimit(1)
+                    .font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(e.modifiedAt.map { SFTPFormat.date($0) } ?? "--")
-                .font(WS.mono(12)).foregroundStyle(WS.text3)
+                .font(UD.mono(12)).foregroundStyle(UD.text3)
                 .frame(width: wMtime, alignment: .leading)
             Text(e.isDirectory || e.size == nil
                  ? "--" : SFTPFormat.bytes(Int64(e.size!)))
-                .font(WS.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? WS.text2 : WS.text4)
+                .font(UD.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? UD.text2 : UD.text4)
                 .frame(width: wSize, alignment: .trailing)
             Text(kind.label).font(.system(size: 12.5))
-                .foregroundStyle(WS.text3).frame(width: wKind, alignment: .leading)
+                .foregroundStyle(UD.text3).frame(width: wKind, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
-                Rectangle().fill(selected ? WS.rowSelected : Color.clear)
-                Rectangle().fill(WS.accent).frame(width: 2).opacity(selected ? 1 : 0)
+                Rectangle().fill(selected ? UD.rowSelected : Color.clear)
+                Rectangle().fill(UD.accent).frame(width: 2).opacity(selected ? 1 : 0)
             }
         }
-        .hoverBackground(WS.rowHover, isActive: selected)
+        .hoverBackground(UD.rowHover, isActive: selected)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
         .onTapGesture { selectedID = e.id; focused = true }

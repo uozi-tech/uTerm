@@ -44,7 +44,7 @@ struct TerminalPreview: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(AppTheme.Palette.border, lineWidth: 1)
+                .stroke(UD.border, lineWidth: 1)
         )
         .font(.system(size: CGFloat(settings.fontSize), design: .monospaced))
     }

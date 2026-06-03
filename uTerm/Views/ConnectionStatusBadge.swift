@@ -6,13 +6,13 @@ nonisolated enum StatusTint: Equatable, Sendable {
 
     var color: Color {
         switch self {
-        case .neutral: return AppTheme.Palette.textMuted
-        case .warning: return AppTheme.Palette.warning
-        case .success: return AppTheme.Palette.success
+        case .neutral: return UD.text3
+        case .warning: return UD.warning
+        case .success: return UD.success
         // Fix #9: caution（已断开）原本和 warning（连接中）同为黄，肉眼无法区分；
         // 现走独立的橙色 token。
-        case .caution: return AppTheme.Palette.caution
-        case .error:   return AppTheme.Palette.danger
+        case .caution: return UD.caution
+        case .error:   return UD.danger
         }
     }
 }
@@ -53,8 +53,8 @@ struct ConnectionStatusBadge: View {
                 .frame(width: 8, height: 8)
             if showsLabel {
                 Text(display.label)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .font(UD.caption)
+                    .foregroundStyle(UD.text3)
             }
         }
         .help(display.label)

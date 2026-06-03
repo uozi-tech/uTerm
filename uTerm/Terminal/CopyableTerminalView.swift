@@ -66,59 +66,110 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
         }
     }
 
-    // MARK: 滚动条仅在有可滚动历史时出现
+    // MARK: 滚动条仅在滚动时浮现（native overlay 手感）
 
     /// SwiftTerm 把它的 NSScroller 当作独立子视图常驻挂在右边缘，从不
-    /// `isHidden`（见 MacTerminalView.setupScroller / updateScroller），所以
-    /// 即便没有任何 scrollback 可滚，也会显示一个静态、禁用的 knob —— 在
-    /// 系统「显示滚动条 = 自动」且接了鼠标时尤其明显（渲染成宽的 legacy 条）。
+    /// `isHidden`（见 MacTerminalView.setupScroller / updateScroller），且
+    /// `scrollerStyle` 默认就是 `.overlay`。只要有 scrollback 可滚（甚至系统
+    /// 「显示滚动条 = 自动/接鼠标」下），这个 knob 就一直停在右边 —— 也就是
+    /// 用户抱怨的「常驻滚动条」。
     ///
-    /// 这里把它改成 VSCode 那种「仅在有历史可滚时才出现」：
-    /// SwiftTerm 在 *每个* updateScroller() 里都会把 `scroller.isEnabled`
-    /// 设成 `canScroll`，而 updateScroller() 覆盖了所有触发点（输出滚动 /
-    /// 手动滚动 / 主备缓冲切换 / changeScrollback / resize），所以 KVO 盯住
-    /// `isEnabled` 是覆盖全部代码路径的唯一可靠信号。
+    /// 这里把它改成真正的 overlay 手感：**静默时完全隐藏**（alpha 0），仅在
+    /// 用户滚动（滚轮/触控板）且确有历史可滚时短暂淡入，停手约 1s 后自动淡出。
+    /// 关键是把「可见」从 `canScroll`（有没有历史）解耦到「正在滚动」这个用户
+    /// 动作上 —— 有历史但没在滚，照样隐藏。
     ///
-    /// 只镜像到 `alphaValue`、*不动* `isHidden`：因为 SwiftTerm 的
-    /// `reservedScrollerWidth` 是按 `isHidden` 预留终端右侧宽度的，切 isHidden
-    /// 会改变可用列数、触发整屏 reflow 抖动（且回收要等到下次 resize 才生效）。
-    /// 切 alpha 纯视觉，零 reflow，预留宽度恒定。
-    private var scrollerEnabledObservation: NSKeyValueObservation?
+    /// 只动 `alphaValue`、*不动* `isHidden`：SwiftTerm 的 `reservedScrollerWidth`
+    /// 按 `isHidden` 预留终端右侧宽度，切 isHidden 会改变可用列数、触发整屏
+    /// reflow 抖动。切 alpha 纯视觉、零 reflow、预留宽度恒定；且 alpha 控制凌驾
+    /// 于系统「显示滚动条」设置之上，Always/Auto 都一致隐藏。
+    private weak var managedScroller: NSScroller?
+
+    /// `.scrollWheel` 本地事件监听。SwiftTerm 把 `scrollWheel` 声明成 `public`
+    /// （非 `open`），子类无法 override，所以改为监听全局滚动事件、再用命中测试
+    /// 判断是否落在本终端上，以此驱动「滚动时才浮现」。`nonisolated(unsafe)` 让
+    /// nonisolated 的 deinit 能释放它（与 TerminalHostView.scrollForwardingMonitor
+    /// 同构：仅在 view 存活期间于 MainActor 改动，deinit 运行时独占访问）。
+    private nonisolated(unsafe) var scrollActivityMonitor: Any?
+
+    /// 停止滚动后多久淡出。
+    private let scrollerIdleHideDelay: TimeInterval = 1.0
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        installScrollerAutoHideIfNeeded()
+        installManagedScrollerIfNeeded()
+        updateScrollActivityMonitor()
     }
 
-    private func installScrollerAutoHideIfNeeded() {
-        guard scrollerEnabledObservation == nil,
+    deinit {
+        removeScrollActivityMonitor()
+    }
+
+    private func installManagedScrollerIfNeeded() {
+        guard managedScroller == nil,
               let scroller = subviews.compactMap({ $0 as? NSScroller }).first
         else { return }
-        styleScroller(scroller)
-        // .initial 立即按当前 isEnabled 同步一次（启动时 canScroll=false → 淡出）。
-        scrollerEnabledObservation = scroller.observe(\.isEnabled, options: [.initial, .new]) { scroller, _ in
-            // KVO 回调随 SwiftTerm 在主线程改 isEnabled 同步投递（.initial 也在
-            // observe() 调用处的主线程同步触发），主线程身份恒定；assumeIsolated
-            // 把这一既有假设显式化，满足 Swift 6 对 @Sendable changeHandler 的隔离检查。
-            MainActor.assumeIsolated {
-                let target: CGFloat = scroller.isEnabled ? 1 : 0
-                if scroller.alphaValue != target {
-                    scroller.alphaValue = target
-                }
+        managedScroller = scroller
+        // overlay 细条 + 暗终端用浅色 knob（.dark 是给浅背景的深色 knob，会糊在暗底上）。
+        scroller.scrollerStyle = .overlay
+        scroller.knobStyle = .light
+        // 静默初值：隐藏。仅滚动时由 handleScrollActivity() 淡入。
+        scroller.alphaValue = 0
+    }
+
+    private func updateScrollActivityMonitor() {
+        if window != nil {
+            guard scrollActivityMonitor == nil else { return }
+            scrollActivityMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handleScrollActivity(event)
+                return event
             }
+        } else {
+            removeScrollActivityMonitor()
         }
     }
 
-    /// 把 SwiftTerm 常驻的 NSScroller 从「宽的 legacy 灰条」改成贴合暗色终端的
-    /// 现代 overlay 细条：
-    /// - `.overlay` style：细窄、半透明、悬浮在内容之上（而非占一整条 legacy 轨道），
-    ///   与系统「显示滚动条 = 自动/接鼠标」下默认渲染成的宽 legacy 条解耦。
-    /// - `.light` knobStyle：暗背景下用浅色 knob，对比度更合适
-    ///   （`.dark` 是给浅色背景用的深色 knob，会糊在暗终端上）。
-    ///
-    /// 不依赖系统外观设置，强制一致：终端是恒暗的，scroller 也应恒暗。
-    private func styleScroller(_ scroller: NSScroller) {
-        scroller.scrollerStyle = .overlay
-        scroller.knobStyle = .light
+    /// `nonisolated`：只碰 `nonisolated(unsafe)` 的 monitor 句柄，
+    /// `NSEvent.removeMonitor` 任意线程可调，好让 deinit 直接调用（与
+    /// TerminalHostView.removeScrollForwardingMonitor 同构）。
+    private nonisolated func removeScrollActivityMonitor() {
+        if let scrollActivityMonitor {
+            NSEvent.removeMonitor(scrollActivityMonitor)
+            self.scrollActivityMonitor = nil
+        }
+    }
+
+    /// 滚动事件命中本终端时淡入 scroller，并 debounce 安排淡出。仅当确有历史
+    /// 可滚（`scroller.isEnabled == canScroll`）才淡入 —— 没历史就不闪出来。
+    private func handleScrollActivity(_ event: NSEvent) {
+        guard let scroller = managedScroller,
+              event.window === window,
+              scroller.isEnabled
+        else { return }
+        // 命中测试：滚动确实发生在本 pane 区域内（多 pane 时别误亮别人的条）。
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+
+        if scroller.alphaValue != 1 {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.12
+                scroller.animator().alphaValue = 1
+            }
+        }
+        // debounce：每来一次滚动就取消上一笔待执行的淡出、重新计时；停手
+        // scrollerIdleHideDelay 后才真正淡出。perform/cancelPrevious 跑在主
+        // run loop，规避 Swift 6 下 Timer/DispatchWorkItem @Sendable 闭包捕获
+        // non-Sendable self/NSScroller 的隔离检查。
+        NSObject.cancelPreviousPerformRequests(withTarget: self,
+                                               selector: #selector(fadeOutScroller),
+                                               object: nil)
+        perform(#selector(fadeOutScroller), with: nil, afterDelay: scrollerIdleHideDelay)
+    }
+
+    @objc private func fadeOutScroller() {
+        guard let scroller = managedScroller else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.4
+            scroller.animator().alphaValue = 0
+        }
     }
 }

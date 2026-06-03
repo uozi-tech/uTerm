@@ -30,42 +30,20 @@ struct AdvancedSettingsView: View {
             SettingsGroup(title: "SSH 连接") {
                 SettingsRow(label: "连接超时",
                             hint: "建立 SSH 握手的最长等待秒数。改动只对下次连接生效。") {
-                    HStack(spacing: 12) {
-                        Slider(value: Binding(
-                            get: { Double(connectTimeout) },
-                            set: { connectTimeout = Int($0) }
-                        ), in: 5...60, step: 5)
-                            .frame(width: 160)
-                        Text("\(connectTimeout) 秒")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(AppTheme.Palette.textMuted)
-                            .frame(width: 56, alignment: .trailing)
-                    }
+                    SettingsNumberField(value: $connectTimeout, width: 80, minValue: 1, suffix: "秒")
                 }
                 SettingsRow(label: "主机密钥校验",
                             hint: hostKeyHint) {
-                    Picker("", selection: hostKeyPolicyBinding) {
-                        ForEach(SSHHostKeyPolicy.allCases) { p in
-                            Text(p.localizedLabel).tag(p)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 280)
+                    UDSegmented(selection: hostKeyPolicyBinding,
+                                options: SSHHostKeyPolicy.allCases.map { ($0, $0.localizedLabel) })
                 }
             }
 
             SettingsGroup(title: "诊断") {
                 SettingsRow(label: "日志等级",
                             hint: "运行时立即生效；低于此等级的日志不会写入系统日志。") {
-                    Picker("", selection: logLevelBinding) {
-                        ForEach(LogLevel.allCases) { l in
-                            Text(l.localizedLabel).tag(l)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 280)
+                    UDSegmented(selection: logLevelBinding,
+                                options: LogLevel.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "显示日志",
                             hint: "打开 Console.app；在 Subsystem 过滤栏输入下方文本可只看 uTerm 的日志。") {
@@ -73,9 +51,9 @@ struct AdvancedSettingsView: View {
                         Button("打开 Console") {
                             openConsole()
                         }
-                        Text("cn.uozi.uTerm")
+                        Text("com.uozi.uTerm")
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(AppTheme.Palette.textMuted)
+                            .foregroundStyle(UD.text3)
                             .textSelection(.enabled)
                     }
                 }

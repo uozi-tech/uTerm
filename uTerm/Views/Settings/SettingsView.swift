@@ -72,7 +72,7 @@ private struct SettingsTabStrip: View {
         .frame(height: 44)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(AppTheme.Palette.border)
+                .fill(UD.border)
                 .frame(height: 1)
         }
     }
@@ -89,7 +89,7 @@ private struct SettingsTabStrip: View {
                 Text(item.label)
                     .font(.system(size: 12.5))
             }
-            .foregroundStyle(isOn ? AppTheme.Palette.textPrimary : AppTheme.Palette.textSecondary)
+            .foregroundStyle(isOn ? UD.text : UD.text2)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? Color.primary.opacity(0.06) : Color.clear))

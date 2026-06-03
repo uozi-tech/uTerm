@@ -18,12 +18,12 @@ struct ImageBody: View {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 28))
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                     Text("无法解码图片")
-                        .foregroundStyle(WS.text2)
+                        .foregroundStyle(UD.text2)
                     Text(buffer.remotePath)
                         .font(.caption)
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// 自绘工作区标题栏（替代系统 toolbar）——彻底脱离系统 Liquid Glass。
-/// 38px 扁平 WS.panel 条 + 底部 1px 描边：左侧让位窗口红绿灯后放「文件」开关，
+/// 38px 扁平 UD.panel 条 + 底部 1px 描边：左侧让位窗口红绿灯后放「文件」开关，
 /// 居中服务器名 + 连接状态胶囊，右侧 Agent 开关。
 struct WorkspaceTitleBar: View {
     let serverName: String
@@ -17,7 +17,7 @@ struct WorkspaceTitleBar: View {
             HStack(spacing: 10) {
                 Text(serverName)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(WS.text)
+                    .foregroundStyle(UD.text)
                 if let session {
                     WSStatusPill(state: session.connectionState)
                 }
@@ -43,12 +43,12 @@ struct WorkspaceTitleBar: View {
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)
-        // WindowDragHandle 既画 WS.panel 实色底，又充当窗口拖动手柄：标题栏空白处
+        // WindowDragHandle 既画 UD.panel 实色底，又充当窗口拖动手柄：标题栏空白处
         // 按下拖动 = 移动窗口（取代整窗 isMovableByWindowBackground）。其上的按钮 /
         // 红绿灯是更靠前的控件，点击/拖拽会被它们自身消费，不会落到手柄。
         .background(WindowDragHandle())
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 }
@@ -64,9 +64,9 @@ struct WSIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 13))
-                .foregroundStyle(hover ? WS.text : WS.text3)
+                .foregroundStyle(hover ? UD.text : UD.text3)
                 .frame(width: 28, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hover ? WS.rowHover : .clear))
+                .background(RoundedRectangle(cornerRadius: 6).fill(hover ? UD.rowHover : .clear))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -78,8 +78,8 @@ struct WSIconButton: View {
 /// 窗口。取代窗口级 `isMovableByWindowBackground`——后者把整窗背景都变成拖动区，连
 /// `WorkspaceColumns` 的列分隔条、`SplitterHandle` 的终端分屏手柄都被 AppKit 抢成
 /// 「拖窗口」，导致无法调宽。标题栏上的按钮 / 红绿灯是更靠前的控件，点击会被它们
-/// 自身消费，不会落到手柄；故只有标题栏空白处拖动才移窗。顺带画上 `WS.panel` 实色
-/// 底（取代原 `.background(WS.panel)`）——若再叠一层 SwiftUI 色块会遮挡命中、夺走拖动。
+/// 自身消费，不会落到手柄；故只有标题栏空白处拖动才移窗。顺带画上 `UD.panel` 实色
+/// 底（取代原 `.background(UD.panel)`）——若再叠一层 SwiftUI 色块会遮挡命中、夺走拖动。
 struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = DragView()

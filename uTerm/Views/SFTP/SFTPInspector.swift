@@ -24,16 +24,16 @@ struct SFTPInspector: View {
         VStack(spacing: 14) {
             Image(systemName: "folder")
                 .font(.system(size: 24))
-                .foregroundStyle(WS.text4)
+                .foregroundStyle(UD.text4)
                 .frame(width: 56, height: 56)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.03)))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(WS.border, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(UD.border, lineWidth: 1))
             VStack(spacing: 6) {
                 Text("未选择文件").font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(WS.text2)
+                    .foregroundStyle(UD.text2)
                 Text("在左侧选择一个文件或文件夹\n即可查看详情并进行操作。")
                     .font(.system(size: 12.5)).multilineTextAlignment(.center)
-                    .foregroundStyle(WS.text4).lineSpacing(3)
+                    .foregroundStyle(UD.text4).lineSpacing(3)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 30)
@@ -60,18 +60,18 @@ struct SFTPInspector: View {
                     VStack(spacing: 14) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18)
-                                .fill(item.isDirectory ? WS.accent.opacity(0.10)
+                                .fill(item.isDirectory ? UD.accent.opacity(0.10)
                                                        : Color.white.opacity(0.03))
                                 .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
-                                    item.isDirectory ? WS.accent.opacity(0.28) : WS.border, lineWidth: 1))
+                                    item.isDirectory ? UD.accent.opacity(0.28) : UD.border, lineWidth: 1))
                                 .frame(width: 84, height: 84)
                             SFTPFileIcon(kind: kind).scaleEffect(2.1)
                         }
                         VStack(spacing: 4) {
                             Text(item.name).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(WS.text)
+                                .foregroundStyle(UD.text)
                                 .multilineTextAlignment(.center)
-                            Text(sizeText).font(WS.mono(12)).foregroundStyle(WS.text3)
+                            Text(sizeText).font(UD.mono(12)).foregroundStyle(UD.text3)
                         }
                     }
                     .padding(.top, 24)
@@ -80,17 +80,17 @@ struct SFTPInspector: View {
                     VStack(spacing: 0) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, r in
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                Text(r.0).font(.system(size: 12)).foregroundStyle(WS.text4)
+                                Text(r.0).font(.system(size: 12)).foregroundStyle(UD.text4)
                                     .frame(width: 64, alignment: .leading)
                                 Spacer(minLength: 0)
                                 Text(r.1)
-                                    .font(r.2 ? WS.mono(12) : .system(size: 12.5))
-                                    .foregroundStyle(WS.text2)
+                                    .font(r.2 ? UD.mono(12) : .system(size: 12.5))
+                                    .foregroundStyle(UD.text2)
                                     .multilineTextAlignment(.trailing)
                             }
                             .padding(.vertical, 9)
                             .overlay(alignment: .top) {
-                                if i > 0 { Rectangle().fill(WS.border).frame(height: 1) }
+                                if i > 0 { Rectangle().fill(UD.border).frame(height: 1) }
                             }
                         }
                     }
@@ -98,21 +98,21 @@ struct SFTPInspector: View {
                     // 路径
                     VStack(alignment: .leading, spacing: 6) {
                         Text("路径").font(.system(size: 10.5, weight: .medium))
-                            .tracking(0.5).foregroundStyle(WS.text4)
-                        Text(fullPath).font(WS.mono(11.5))
-                            .foregroundStyle(WS.text2)
+                            .tracking(0.5).foregroundStyle(UD.text4)
+                        Text(fullPath).font(UD.mono(11.5))
+                            .foregroundStyle(UD.text2)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 11).padding(.vertical, 9)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(WS.terminal))
-                            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(WS.border, lineWidth: 1))
+                            .background(RoundedRectangle(cornerRadius: 7).fill(UD.terminal))
+                            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
                     }
                 }
                 .padding(.horizontal, 22).padding(.bottom, 18)
             }
 
             // 操作区
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
             VStack(spacing: 8) {
                 primaryButton(item)
                 HStack(spacing: 8) {
@@ -136,8 +136,8 @@ struct SFTPInspector: View {
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity).frame(height: 36)
-            .background(RoundedRectangle(cornerRadius: 8).fill(WS.accent))
-            .shadow(color: WS.accent.opacity(0.45), radius: 7, y: 4)
+            .background(RoundedRectangle(cornerRadius: 8).fill(UD.accent))
+            .shadow(color: UD.accent.opacity(0.45), radius: 7, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -154,12 +154,12 @@ struct SFTPSecondaryButton: View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 12.5))
-                .foregroundStyle(danger ? WS.failed : WS.text2)
+                .foregroundStyle(danger ? UD.danger : UD.text2)
                 .frame(maxWidth: .infinity).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 7)
                     .fill(hover ? Color.white.opacity(0.03) : .clear))
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
-                    danger ? WS.failed.opacity(0.32) : WS.border, lineWidth: 1))
+                    danger ? UD.danger.opacity(0.32) : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

@@ -1,8 +1,12 @@
 // uTerm/Views/ServerRow.swift
 import SwiftUI
 
-/// Welcome 主列表的单行。avatar + name + endpoint + group tag + 置顶 ★。
-/// 选中态：左 2px accent 竖条 + bgRaised 浅底；hover 走 hoverBackground。
+/// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
+///
+/// 56pt 行高：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
+/// 连接」相对时间（hover / 选中时淡出）、描边分组 chip、以及一枚品牌蓝连接箭头
+/// （hover / 选中时从左滑入）。选中态用半透明叠底（浅深自适应），不再画左侧竖条
+/// —— 选中由更亮的底色 + 脉冲圆点 + 箭头 + 右侧详情面板共同表达。
 struct ServerRow: View {
     let profile: ServerProfile
     let query: String
@@ -10,79 +14,71 @@ struct ServerRow: View {
     let onTap: () -> Void
     let onDoubleTap: () -> Void
 
+    @State private var hover = false
+
+    /// hover 或选中：淡出时间、显出箭头。
+    private var revealArrow: Bool { hover || isSelected }
+
     var body: some View {
         HStack(spacing: 12) {
-            avatar
+            UDHostDot(pulse: isSelected)
+
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(HighlightedText.attributed(profile.name, highlighting: query))
-                        .foregroundStyle(AppTheme.Palette.textPrimary)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(UD.text)
                         .lineLimit(1)
                     if profile.isPinned {
                         Image(systemName: "star.fill")
                             .font(.system(size: 9))
-                            .foregroundStyle(AppTheme.Palette.warning)
+                            .foregroundStyle(UD.warning)
                     }
                 }
                 Text(HighlightedText.attributed(profile.displayEndpoint, highlighting: query))
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(UD.text3)
                     .lineLimit(1)
             }
+
             Spacer(minLength: 6)
-            groupTag
+
+            Text(WelcomeFormat.relative(profile.lastConnectedAt))
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
+                .opacity(revealArrow ? 0 : 1)
+                .animation(.easeOut(duration: 0.12), value: revealArrow)
+
+            UDGroupChip(groupLabel)
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(UD.accent)
+                .frame(width: 16)
+                .opacity(revealArrow ? 1 : 0)
+                .offset(x: revealArrow ? 0 : -4)
+                .animation(.easeOut(duration: 0.15), value: revealArrow)
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        // 选中态：左 2px accent 竖条 + 浅 bgRaised 底色（doc comment 承诺）。
-        // 不用 bgSelected/bgSelectedInactive（系统语义色下二者有别，与 hover 仍会撞色）。
-        // 非选中时 hover 走 .hoverBackground 反馈。
-        .background(alignment: .leading) {
-            if isSelected {
-                Rectangle()
-                    .fill(AppTheme.Palette.accent)
-                    .frame(width: 2)
-            }
-        }
-        .background(isSelected ? AppTheme.Palette.bgRaised : Color.clear)
-        .hoverBackground(isActive: isSelected)
+        .padding(.horizontal, 18)
+        .frame(height: 56)
+        .background(rowBackground)
         .contentShape(Rectangle())
+        .onHover { hover = $0 }
         .onTapGesture(count: 2) { onDoubleTap() }
         .onTapGesture { onTap() }
     }
 
-    private var avatar: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5)
-                .fill(AppTheme.Palette.bgRaised)
-                .frame(width: 24, height: 24)
-            if profile.isPinned {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.Palette.warning)
-            } else {
-                Circle()
-                    .fill(AppTheme.Palette.accent)
-                    .frame(width: 6, height: 6)
-            }
-        }
+    private var groupLabel: String {
+        if let g = profile.group, !g.isEmpty { return g }
+        return "未分组"
     }
 
-    @ViewBuilder
-    private var groupTag: some View {
-        if let g = profile.group, !g.isEmpty {
-            Text(g)
-                .font(.system(size: 10))
-                .foregroundStyle(AppTheme.Palette.textMuted)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(AppTheme.Palette.bgPanel))
-        } else {
-            Text("未分组")
-                .font(.system(size: 10))
-                .foregroundStyle(AppTheme.Palette.textMuted)
-                .frame(width: 36)
-        }
+    /// 选中 > hover > 透明。用 `Color.primary` 透明叠底，浅色下变深、深色下变浅，
+    /// 与设计稿的 white-alpha 叠底等效且自适应外观设置。
+    private var rowBackground: Color {
+        if isSelected { return Color.primary.opacity(0.06) }
+        if hover { return Color.primary.opacity(0.028) }
+        return .clear
     }
-
 }

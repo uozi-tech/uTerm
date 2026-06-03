@@ -2,6 +2,9 @@ import XCTest
 import SwiftUI
 @testable import uTerm
 
+// BrowserFileKind 持有 SwiftUI Color，在 app 模块的 @MainActor 默认隔离下
+// 其 from/label/tag 及 Equatable 一致性都被钉在主线程；测试类对齐到主 actor。
+@MainActor
 final class FileKindTests: XCTestCase {
     func testFolderKind() {
         XCTAssertEqual(BrowserFileKind.from(name: "Projects", isDirectory: true), .folder)

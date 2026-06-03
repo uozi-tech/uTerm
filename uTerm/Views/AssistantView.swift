@@ -54,7 +54,7 @@ struct AssistantView: View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
                 .font(.system(size: 12))
-                .foregroundStyle(WS.accent)
+                .foregroundStyle(UD.accent)
 
             Button {
                 showSessions.toggle()
@@ -62,12 +62,12 @@ struct AssistantView: View {
                 HStack(spacing: 6) {
                     Text(model.sessionTitle)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(WS.text)
+                        .foregroundStyle(UD.text)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                         .rotationEffect(.degrees(showSessions ? 180 : 0))
                 }
                 .padding(.vertical, 4)
@@ -85,7 +85,7 @@ struct AssistantView: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -96,7 +96,7 @@ struct AssistantView: View {
         .padding(.trailing, 8)
         .frame(height: 36)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 
@@ -115,11 +115,11 @@ struct AssistantView: View {
             providerPicker
         }
         .font(.system(size: 11))
-        .foregroundStyle(WS.text3)
+        .foregroundStyle(UD.text3)
         .padding(.horizontal, 12)
         .frame(height: 26)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 
@@ -145,13 +145,13 @@ struct AssistantView: View {
             Button("管理…") { openSettings() }
         } label: {
             HStack(spacing: 5) {
-                Circle().fill(WS.accent).frame(width: 5, height: 5)
+                Circle().fill(UD.accent).frame(width: 5, height: 5)
                 Text(model.activeProvider?.name ?? "未选择")
                     .font(.system(size: 11))
-                    .foregroundStyle(WS.text2)
+                    .foregroundStyle(UD.text2)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(WS.text4)
+                    .foregroundStyle(UD.text4)
             }
         }
         .menuStyle(.borderlessButton)
@@ -166,19 +166,19 @@ struct AssistantView: View {
             Text("会话历史")
                 .font(.system(size: 10.5))
                 .tracking(0.5)
-                .foregroundStyle(WS.text4)
+                .foregroundStyle(UD.text4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
                 .padding(.bottom, 4)
                 .overlay(alignment: .bottom) {
-                    Rectangle().fill(WS.border).frame(height: 1)
+                    Rectangle().fill(UD.border).frame(height: 1)
                 }
 
             if sessions.isEmpty {
                 Text("还没有历史会话")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(WS.text4)
+                    .foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
             } else {
@@ -200,20 +200,20 @@ struct AssistantView: View {
                     Text("新建对话").font(.system(size: 12))
                     Spacer()
                 }
-                .foregroundStyle(WS.text2)
+                .foregroundStyle(UD.text2)
                 .padding(.vertical, 9)
                 .padding(.horizontal, 10)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .overlay(alignment: .top) {
-                Rectangle().fill(WS.border).frame(height: 1)
+                Rectangle().fill(UD.border).frame(height: 1)
             }
         }
-        .background(WS.panelHi)
+        .background(UD.panelHi)
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(
-            RoundedRectangle(cornerRadius: 9).strokeBorder(WS.borderHi, lineWidth: 1))
+            RoundedRectangle(cornerRadius: 9).strokeBorder(UD.borderHi, lineWidth: 1))
         .shadow(color: .black.opacity(0.55), radius: 18, x: 0, y: 14)
     }
 
@@ -227,17 +227,17 @@ struct AssistantView: View {
                 HStack(spacing: 8) {
                     Text(s.title.isEmpty ? "新对话" : s.title)
                         .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
-                        .foregroundStyle(isActive ? WS.text : WS.text2)
+                        .foregroundStyle(isActive ? UD.text : UD.text2)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(relativeTime(s.updatedAt))
                         .font(.system(size: 10))
-                        .foregroundStyle(WS.text4)
+                        .foregroundStyle(UD.text4)
                 }
                 if !s.preview.isEmpty {
                     Text(s.preview)
                         .font(.system(size: 11))
-                        .foregroundStyle(WS.text4)
+                        .foregroundStyle(UD.text4)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -246,10 +246,10 @@ struct AssistantView: View {
             .padding(.horizontal, 10)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? WS.accent.opacity(0.10) : .clear))
+                    .fill(isActive ? UD.accent.opacity(0.10) : .clear))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isActive ? WS.accent.opacity(0.20) : .clear, lineWidth: 1))
+                    .strokeBorder(isActive ? UD.accent.opacity(0.20) : .clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -286,11 +286,11 @@ struct AssistantView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles")
-                .font(.largeTitle).foregroundStyle(WS.text3)
+                .font(.largeTitle).foregroundStyle(UD.text3)
             Text("还没添加 AI Provider")
-                .font(.headline).foregroundStyle(WS.text)
+                .font(.headline).foregroundStyle(UD.text)
             Text("在 Settings 添加一个 Anthropic / OpenAI 配置。")
-                .font(.caption).foregroundStyle(WS.text3)
+                .font(.caption).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
             Button("打开 Settings") { openSettings() }
                 .buttonStyle(.borderedProminent)
@@ -333,7 +333,7 @@ struct AssistantView: View {
             Text(isUser ? "你" : (model.activeProvider?.name ?? "助手"))
                 .font(.system(size: 10.5))
                 .tracking(0.4)
-                .foregroundStyle(WS.text4)
+                .foregroundStyle(UD.text4)
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 if isUser {
@@ -341,11 +341,11 @@ struct AssistantView: View {
                         .font(.system(size: 12.5))
                         .lineSpacing(2)
                         .textSelection(.enabled)
-                        .foregroundStyle(WS.text2)
+                        .foregroundStyle(UD.text2)
                 } else if message.text.isEmpty && !isStreamingTail {
                     Text("…")
                         .font(.system(size: 12.5))
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                 } else {
                     StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
                         .textSelection(.enabled)
@@ -360,7 +360,7 @@ struct AssistantView: View {
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(isUser ? WS.border : .clear, lineWidth: 1))
+                    .strokeBorder(isUser ? UD.border : .clear, lineWidth: 1))
         }
         .id(message.id)
     }
@@ -373,18 +373,18 @@ struct AssistantView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .font(.system(size: 13))
-                .foregroundStyle(WS.text)
+                .foregroundStyle(UD.text)
                 .onSubmit { sendIfPossible() }
 
             HStack(spacing: 6) {
                 Button {} label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11))
-                        .foregroundStyle(WS.text3)
+                        .foregroundStyle(UD.text3)
                         .frame(width: 24, height: 24)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(WS.border, lineWidth: 1))
+                                .strokeBorder(UD.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(true)
@@ -397,7 +397,7 @@ struct AssistantView: View {
                         Keycap("↩")
                         Text("发送")
                             .font(.system(size: 10.5))
-                            .foregroundStyle(WS.text4)
+                            .foregroundStyle(UD.text4)
                     }
                 }
                 .buttonStyle(.plain)
@@ -407,10 +407,10 @@ struct AssistantView: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.025)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WS.border, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UD.border, lineWidth: 1))
         .padding(10)
         .overlay(alignment: .top) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 
@@ -425,7 +425,7 @@ private struct StreamingCaret: View {
     @State private var on = true
     var body: some View {
         RoundedRectangle(cornerRadius: 1)
-            .fill(WS.accent)
+            .fill(UD.accent)
             .frame(width: 4, height: 12)
             .opacity(on ? 1 : 0.15)
             .onAppear {
@@ -443,10 +443,10 @@ private struct Keycap: View {
     var body: some View {
         Text(label)
             .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(WS.text3)
+            .foregroundStyle(UD.text3)
             .frame(minWidth: 16, minHeight: 16)
             .padding(.horizontal, 3)
             .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(WS.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
     }
 }

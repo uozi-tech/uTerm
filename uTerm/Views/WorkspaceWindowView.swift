@@ -119,7 +119,7 @@ struct WorkspaceWindowView: View {
 
             // status bar 作为兄弟节点（非 safeAreaInset）—— SwiftTerm NSView 会渲染到
             // inset 区域下面挡住末行（issue 反馈）。
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
             StatusBarView(workspace: workspace)
         }
         // 让内容延伸到标题栏区域之下（配合 WorkspaceWindowChrome 的
@@ -127,7 +127,7 @@ struct WorkspaceWindowView: View {
         // 顶到系统标题栏下方，形成「红绿灯一条 + 自绘标题栏一条」的双栏割裂。
         // 忽略顶部安全区后，自绘 38px 标题栏占住标题栏区，红绿灯叠在其左侧留白上。
         .ignoresSafeArea(.container, edges: .top)
-        .background(WS.bg)
+        .background(UD.bg)
         // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明 WS 底 + 深色外观 +
         // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
         // 不可能再有系统玻璃。

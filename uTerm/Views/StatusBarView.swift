@@ -17,15 +17,15 @@ struct StatusBarView: View {
             // 连接状态点（聚焦窗格）
             if let session = workspace.activeTab?.focusedPane?.session {
                 Circle()
-                    .fill(WS.color(for: ConnectionStatusDisplay(state: session.connectionState).tint))
+                    .fill(ConnectionStatusDisplay(state: session.connectionState).tint.color)
                     .frame(width: 6, height: 6)
             }
             // 左：平台 + endpoint
             if let platform = t.platform {
-                metric(icon: "shippingbox", color: WS.mPlatform, text: platform)
+                metric(icon: "shippingbox", color: UD.mPlatform, text: platform)
             }
             if let endpoint = endpointText {
-                metric(icon: "server.rack", color: WS.mEndpoint, text: endpoint)
+                metric(icon: "server.rack", color: UD.mEndpoint, text: endpoint)
             }
 
             Spacer(minLength: 8)
@@ -33,10 +33,10 @@ struct StatusBarView: View {
             // 右：实时指标（仅在取到时显示）
             if t.reachable {
                 if let up = t.uptime {
-                    metric(icon: "clock", color: WS.mUptime, text: up)
+                    metric(icon: "clock", color: UD.mUptime, text: up)
                 }
                 if let load = t.load {
-                    metric(icon: "waveform.path.ecg", color: WS.mLoad, text: load)
+                    metric(icon: "waveform.path.ecg", color: UD.mLoad, text: load)
                 }
                 if let cpu = t.cpuPercent {
                     cpuItem(cpu, cores: t.cores)
@@ -45,41 +45,34 @@ struct StatusBarView: View {
                     memItem(mem, pct: pct)
                 }
                 if let disk = t.diskUsedText {
-                    metric(icon: "internaldrive", color: WS.mDisk, text: diskLabel(disk, pct: t.diskPercent))
+                    metric(icon: "internaldrive", color: UD.mDisk, text: diskLabel(disk, pct: t.diskPercent))
                 }
                 if let ts = t.timestamp {
-                    metric(icon: "calendar", color: WS.mEndpoint, text: ts)
+                    metric(icon: "calendar", color: UD.mEndpoint, text: ts)
                 }
             } else if let tab = workspace.activeTab {
                 // 未连接 / 无遥测：回退到窗格 · 标签计数。
                 Text("\(tab.root.leafCount) 窗格 · \(workspace.tabs.count) 标签")
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
             }
         }
-        .font(WS.mono(10.5))
+        .font(UD.mono(10.5))
         .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(height: 22)
-        .background(WS.panel)
+        .background(UD.panel)
     }
 
     // MARK: - 指标单元
 
     private func metric(icon: String, color: Color, text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 9))
-            Text(text)
-        }
-        .foregroundStyle(color)
+        UDFooterItem(systemImage: icon, color: color, label: text, iconSize: 9)
     }
 
     private func cpuItem(_ pct: Double, cores: Int?) -> some View {
         Button { cpuPopover.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "cpu").font(.system(size: 9))
-                Text(String(format: "%.0f%%", pct))
-            }
-            .foregroundStyle(WS.mCPU)
+            UDFooterItem(systemImage: "cpu", color: UD.mCPU,
+                         label: String(format: "%.0f%%", pct), iconSize: 9)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
@@ -87,25 +80,22 @@ struct StatusBarView: View {
                 title: "CPU 与负载",
                 summary: cores.map { "\($0) 核 · \(String(format: "%.0f%%", pct))" }
                     ?? String(format: "%.0f%%", pct),
-                color: WS.mCPU,
+                color: UD.mCPU,
                 history: workspace.telemetryModel.cpuHistory)
         }
     }
 
     private func memItem(_ text: String, pct: Double) -> some View {
         Button { memPopover.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "memorychip").font(.system(size: 9))
-                Text("\(text) · \(String(format: "%.0f%%", pct))")
-            }
-            .foregroundStyle(WS.mMem)
+            UDFooterItem(systemImage: "memorychip", color: UD.mMem,
+                         label: "\(text) · \(String(format: "%.0f%%", pct))", iconSize: 9)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {
             SparklinePopover(
                 title: "内存负载",
                 summary: "\(text) · \(String(format: "%.0f%%", pct))",
-                color: WS.mMem,
+                color: UD.mMem,
                 history: workspace.telemetryModel.memHistory)
         }
     }
@@ -133,19 +123,19 @@ private struct SparklinePopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(WS.text)
+                Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(UD.text)
                 Spacer()
-                Text(summary).font(WS.mono(11)).foregroundStyle(color)
+                Text(summary).font(UD.mono(11)).foregroundStyle(color)
             }
             sparkline.frame(width: 280, height: 80)
             HStack {
                 Text("-2 min"); Spacer(); Text("现在")
             }
-            .font(WS.mono(9)).foregroundStyle(WS.text4)
+            .font(UD.mono(9)).foregroundStyle(UD.text4)
         }
         .padding(12)
         .frame(width: 304)
-        .background(WS.panelHi)
+        .background(UD.panelHi)
     }
 
     private var sparkline: some View {
@@ -158,7 +148,7 @@ private struct SparklinePopover: View {
                         p.move(to: CGPoint(x: 0, y: y))
                         p.addLine(to: CGPoint(x: geo.size.width, y: y))
                     }
-                    .stroke(WS.border, lineWidth: 1)
+                    .stroke(UD.border, lineWidth: 1)
                 }
                 if pts.count >= 2 {
                     Path { p in
@@ -176,7 +166,7 @@ private struct SparklinePopover: View {
                     .stroke(color, lineWidth: 1.4)
                 } else {
                     Text("采集中…")
-                        .font(WS.mono(10)).foregroundStyle(WS.text4)
+                        .font(UD.mono(10)).foregroundStyle(UD.text4)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

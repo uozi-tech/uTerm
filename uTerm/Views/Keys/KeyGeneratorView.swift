@@ -24,9 +24,9 @@ struct KeyGeneratorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("生成新密钥").font(.system(size: 17, weight: .medium)).foregroundStyle(WS.text)
+                    Text("生成新密钥").font(.system(size: 17, weight: .medium)).foregroundStyle(UD.text)
                     Text("私钥保存在钥匙串，永不离开本机；公钥可一键复制到服务器。")
-                        .font(.system(size: 12)).foregroundStyle(WS.text3)
+                        .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
                 DarkFormSection(title: "基础") {
@@ -34,13 +34,13 @@ struct KeyGeneratorView: View {
                         DarkTextField(placeholder: "例如：default", text: $name)
                     }
                     DarkFormField(label: "类型") {
-                        DarkSegmented(selection: $type, options: [
+                        UDSegmented(selection: $type, options: [
                             (.ed25519, "ed25519（推荐）"), (.rsa, "RSA"),
                         ])
                     }
                     if type == .rsa {
                         DarkFormField(label: "位数") {
-                            DarkSegmented(selection: $rsaBits, options: [
+                            UDSegmented(selection: $rsaBits, options: [
                                 (2048, "2048"), (3072, "3072"), (4096, "4096"),
                             ])
                         }
@@ -56,7 +56,7 @@ struct KeyGeneratorView: View {
 
                 HStack(spacing: 10) {
                     Text(type == .rsa ? "生成约需 1 秒" : "立即生成")
-                        .font(.system(size: 11)).foregroundStyle(WS.text4)
+                        .font(.system(size: 11)).foregroundStyle(UD.text4)
                     Spacer()
                     DarkButton(title: "取消", secondary: true, action: onCancel)
                     DarkButton(title: generating ? "生成中…" : "生成密钥", enabled: canGenerate, action: generate)

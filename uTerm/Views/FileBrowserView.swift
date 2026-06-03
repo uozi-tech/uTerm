@@ -32,8 +32,8 @@ struct FileBrowserContent: View {
     private var header: some View {
         HStack(spacing: 8) {
             Text(model.currentPath)
-                .font(WS.mono(11)).lineLimit(1).truncationMode(.head)
-                .foregroundStyle(WS.text2)
+                .font(UD.mono(11)).lineLimit(1).truncationMode(.head)
+                .foregroundStyle(UD.text2)
             Spacer()
             Menu {
                 Picker("排序方式", selection: Binding(
@@ -80,7 +80,7 @@ struct FileBrowserContent: View {
         .padding(.horizontal, 10)
         .frame(height: 36)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 
@@ -91,9 +91,9 @@ struct FileBrowserContent: View {
             ProgressView("正在连接…").frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             VStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(WS.text3)
-                Text("无法浏览文件").font(.headline).foregroundStyle(WS.text)
-                Text(message).font(.caption).foregroundStyle(WS.text3)
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(UD.text3)
+                Text("无法浏览文件").font(.headline).foregroundStyle(UD.text)
+                Text(message).font(.caption).foregroundStyle(UD.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
@@ -150,7 +150,7 @@ struct FileBrowserContent: View {
                 selectedID = nil
             }
         }
-        // 切目录时：用不透明 WS.bg + 转圈整块盖住列表，挡住取新列表往返期间「上一个
+        // 切目录时：用不透明 UD.bg + 转圈整块盖住列表，挡住取新列表往返期间「上一个
         // 目录的残留行」。关键：盖层即时显示 / 即时移除、**刻意不加任何过渡动画** ——
         // 取新列表（entries）与 isNavigating 落回 false 在同一次同步更新里，盖层一撤就
         // 直接是新列表。若给整块加 .animation(value: isNavigating)，LazyVStack 的行增删
@@ -159,8 +159,8 @@ struct FileBrowserContent: View {
         .overlay {
             if model.isNavigating {
                 ZStack {
-                    WS.bg
-                    ProgressView().controlSize(.small).tint(WS.accent)
+                    UD.bg
+                    ProgressView().controlSize(.small).tint(UD.accent)
                 }
             }
         }
@@ -176,7 +176,7 @@ struct FileBrowserContent: View {
             SFTPFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
             Text("..")
                 .font(.system(size: 13))
-                .foregroundStyle(WS.text2)
+                .foregroundStyle(UD.text2)
             Spacer()
         }
         .padding(.horizontal, 10)
@@ -184,11 +184,11 @@ struct FileBrowserContent: View {
         // 选中态与 entryRow 同款：满宽底色 + 左侧 2px 蓝条。
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
-                Rectangle().fill(upSelected ? WS.rowSelected : Color.clear)
-                Rectangle().fill(WS.accent).frame(width: 2).opacity(upSelected ? 1 : 0)
+                Rectangle().fill(upSelected ? UD.rowSelected : Color.clear)
+                Rectangle().fill(UD.accent).frame(width: 2).opacity(upSelected ? 1 : 0)
             }
         }
-        .hoverBackground(WS.rowHover, isActive: upSelected)
+        .hoverBackground(UD.rowHover, isActive: upSelected)
         .contentShape(Rectangle())
         // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
         // count:2 在前 —— SwiftUI 据此把单 / 双击当互斥手势消歧（见 entryRow）。
@@ -234,24 +234,24 @@ struct FileBrowserContent: View {
             SFTPFileIcon(kind: kind, size: 16).frame(width: 22)
             Text(entry.name)
                 .font(.system(size: 13))
-                .foregroundStyle(WS.text)
+                .foregroundStyle(UD.text)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if let size = entry.size, !entry.isDirectory {
-                Text(byteText(size)).font(WS.mono(11)).foregroundStyle(WS.text3)
+                Text(byteText(size)).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        // 选中态：满宽 WS.rowSelected 底 + 左侧 2px 蓝条，对齐独立窗口 SFTPFileTable。
+        // 选中态：满宽 UD.rowSelected 底 + 左侧 2px 蓝条，对齐独立窗口 SFTPFileTable。
         // 底色优先级高于 hover，故选中时给 hoverBackground 传 isActive 让它让位。
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
-                Rectangle().fill(isSelected ? WS.rowSelected : Color.clear)
-                Rectangle().fill(WS.accent).frame(width: 2).opacity(isSelected ? 1 : 0)
+                Rectangle().fill(isSelected ? UD.rowSelected : Color.clear)
+                Rectangle().fill(UD.accent).frame(width: 2).opacity(isSelected ? 1 : 0)
             }
         }
-        .hoverBackground(WS.rowHover, isActive: isSelected)
+        .hoverBackground(UD.rowHover, isActive: isSelected)
         .contentShape(Rectangle())
         // 单击选中、双击激活（Finder 风）。两个 .onTapGesture 链式、count:2 在前
         // —— SwiftUI 据此把单 / 双击当互斥手势消歧，与主列表 ServerRow 同款。

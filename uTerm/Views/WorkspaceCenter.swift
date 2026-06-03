@@ -16,7 +16,7 @@ struct WorkspaceCenter: View {
                 .frame(minHeight: 200,
                        idealHeight: idealTerminalHeight)
         }
-        .background(WS.bg)
+        .background(UD.bg)
     }
 
     // 默认比例 0.667，参考总高 720 → preview ≈ 480 / terminal ≈ 240，

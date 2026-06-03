@@ -30,7 +30,7 @@ private struct HoverBackground: ViewModifier {
 extension View {
     /// 给可点击行添加 hover 背景。`isActive` 为 true 时不渲染 hover bg（让外部
     /// 的 selected 样式独占）。
-    func hoverBackground(_ active: Color = AppTheme.Palette.bgRaised,
+    func hoverBackground(_ active: Color = UD.panelHi,
                          base: Color = .clear,
                          cornerRadius: CGFloat = 0,
                          isActive: Bool = false) -> some View {
@@ -57,11 +57,11 @@ private struct IconButtonHover: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .foregroundStyle(isHovering ? AppTheme.Palette.textPrimary
-                                        : AppTheme.Palette.textSecondary)
+            .foregroundStyle(isHovering ? UD.text
+                                        : UD.text2)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(isHovering ? AppTheme.Palette.bgSelected : .clear)
+                    .fill(isHovering ? UD.rowSelected : .clear)
             )
             .onHover { isHovering = $0 }
     }
@@ -78,8 +78,8 @@ extension View {
 
 /// `IconButtonHover` 的工作区（WS）版：用恒深色 `WS` 令牌而非随系统外观的
 /// `AppTheme.Palette`。给钉死深色的工作区窗口内的小图标按钮（如 SFTP 侧边栏头部）
-/// 用，让整块视图统一在一套配色系统里。静止图标走 `WS.text2`，hover 提亮到
-/// `WS.text` 并叠一层 `WS.panelHover` 圆角底。同样：用此修饰器的按钮图标 **不要**
+/// 用，让整块视图统一在一套配色系统里。静止图标走 `UD.text2`，hover 提亮到
+/// `UD.text` 并叠一层 `UD.panelHover` 圆角底。同样：用此修饰器的按钮图标 **不要**
 /// 自己再设 `.foregroundStyle`。
 private struct WSIconButtonHover: ViewModifier {
     let cornerRadius: CGFloat
@@ -88,10 +88,10 @@ private struct WSIconButtonHover: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .foregroundStyle(isHovering ? WS.text : WS.text2)
+            .foregroundStyle(isHovering ? UD.text : UD.text2)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(isHovering ? WS.panelHover : .clear)
+                    .fill(isHovering ? UD.panelHover : .clear)
             )
             .onHover { isHovering = $0 }
     }

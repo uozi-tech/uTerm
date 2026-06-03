@@ -17,7 +17,7 @@ struct AboutSettingsView: View {
                     wordmark
                     Text(Self.versionString)
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(AppTheme.Palette.textMuted)
+                        .foregroundStyle(UD.text3)
                 }
             }
 
@@ -25,7 +25,7 @@ struct AboutSettingsView: View {
                 Spacer()
                 Text(Self.copyrightString)
                     .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.Palette.textMuted.opacity(0.7))
+                    .foregroundStyle(UD.text3.opacity(0.7))
                     .padding(.bottom, 24)
             }
         }
@@ -40,9 +40,9 @@ struct AboutSettingsView: View {
     /// 优先级高于 view modifier，故 .font/.tracking 加在外层 Text 上即对两段统一生效。
     private var wordmark: Text {
         var attributed = AttributedString("u")
-        attributed.foregroundColor = AppTheme.Palette.textPrimary
+        attributed.foregroundColor = UD.text
         var term = AttributedString("Term")
-        term.foregroundColor = AppTheme.Palette.accent
+        term.foregroundColor = UD.accent
         attributed.append(term)
         return Text(attributed)
             .font(.system(size: 24, weight: .light))

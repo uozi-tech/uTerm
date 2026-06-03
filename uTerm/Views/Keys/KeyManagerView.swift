@@ -24,11 +24,11 @@ struct KeyManagerView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar.frame(width: 260)
-            Rectangle().fill(WS.border).frame(width: 1)
+            Rectangle().fill(UD.border).frame(width: 1)
             detailPane.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 820, minHeight: 560)
-        .background(WS.bg)
+        .background(UD.bg)
         .background(WorkspaceWindowAppearance())
         .overlay { deleteConfirmOverlay }
         .alert("导入失败", isPresented: Binding(
@@ -50,23 +50,23 @@ struct KeyManagerView: View {
                 Button(action: startGenerating) {
                     Label("生成", systemImage: "plus")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(WS.text)
+                        .foregroundStyle(UD.text)
                         .frame(maxWidth: .infinity).frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(WS.accent.opacity(0.10)))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(WS.accent.opacity(0.33), lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 7).fill(UD.accent.opacity(0.10)))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.accent.opacity(0.33), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 Button(action: importKey) {
                     Label("导入", systemImage: "square.and.arrow.down")
                         .font(.system(size: 12))
-                        .foregroundStyle(WS.text2)
+                        .foregroundStyle(UD.text2)
                         .padding(.horizontal, 10).frame(height: 28)
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(WS.border, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
             .padding(10)
-            .overlay(alignment: .bottom) { Rectangle().fill(WS.border).frame(height: 1) }
+            .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
 
             if keys.isEmpty {
                 emptyList
@@ -87,26 +87,26 @@ struct KeyManagerView: View {
 
             Spacer(minLength: 0)
             HStack(spacing: 6) {
-                Text("\(keys.count) 把密钥").foregroundStyle(WS.text4)
+                Text("\(keys.count) 把密钥").foregroundStyle(UD.text4)
                 Spacer()
-                Label("钥匙串", systemImage: "lock.fill").foregroundStyle(WS.text4)
+                Label("钥匙串", systemImage: "lock.fill").foregroundStyle(UD.text4)
             }
             .font(.system(size: 11))
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .overlay(alignment: .top) { Rectangle().fill(WS.border).frame(height: 1) }
+            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
         }
     }
 
     private var emptyList: some View {
         VStack(spacing: 6) {
-            Text("还没有密钥").font(.system(size: 12)).foregroundStyle(WS.text4)
-            Text("点击「生成」创建第一把密钥").font(.system(size: 11)).foregroundStyle(WS.text4)
+            Text("还没有密钥").font(.system(size: 12)).foregroundStyle(UD.text4)
+            Text("点击「生成」创建第一把密钥").font(.system(size: 11)).foregroundStyle(UD.text4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20).padding(.horizontal, 12)
         .overlay(RoundedRectangle(cornerRadius: 8)
             .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
-            .foregroundStyle(WS.border))
+            .foregroundStyle(UD.border))
         .padding(12)
     }
 
@@ -132,7 +132,7 @@ struct KeyManagerView: View {
             .id(key.id)
         } else {
             Text("选择一把密钥")
-                .font(.system(size: 13)).foregroundStyle(WS.text4)
+                .font(.system(size: 13)).foregroundStyle(UD.text4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -256,20 +256,20 @@ private struct KeyRow: View {
                 HStack(spacing: 6) {
                     Text(key.name)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(selected ? WS.text : WS.text2)
+                        .foregroundStyle(selected ? UD.text : UD.text2)
                         .lineLimit(1)
                     if key.hasPassphrase {
-                        Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(WS.text4)
+                        Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(UD.text4)
                     }
                 }
                 Text("\(key.typeLabel) · \(hostCount) 主机")
-                    .font(WS.mono(11)).foregroundStyle(WS.text4).lineLimit(1)
+                    .font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10).padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: 6)
-            .fill(selected ? WS.rowSelected : Color.clear))
+            .fill(selected ? UD.rowSelected : Color.clear))
         .padding(.horizontal, 6)
     }
 }
@@ -279,7 +279,7 @@ private struct KeyAvatar: View {
     let size: CGFloat
 
     var body: some View {
-        let tint: Color = type == .ed25519 ? WS.accent : Color(hex: 0xFBBF24)
+        let tint: Color = type == .ed25519 ? UD.accent : Color(hex: 0xFBBF24)
         RoundedRectangle(cornerRadius: size * 0.25)
             .fill(tint.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))

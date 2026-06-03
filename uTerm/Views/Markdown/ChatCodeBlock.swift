@@ -19,7 +19,7 @@ struct ChatCodeBlock: View {
             header
             content
         }
-        .background(WS.terminal)
+        .background(UD.terminal)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(style.border, lineWidth: 1))
     }
@@ -44,7 +44,7 @@ struct ChatCodeBlock: View {
                     Text(copied ? "已复制" : "复制")
                 }
                 .font(.system(size: 10.5))
-                .foregroundStyle(copied ? WS.connected : style.textMuted)
+                .foregroundStyle(copied ? UD.success : style.textMuted)
             }
             .buttonStyle(.plain)
         }

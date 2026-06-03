@@ -14,27 +14,27 @@ struct KeySelectorView: View {
             HStack(spacing: 10) {
                 if let key = selected {
                     KeyGlyph(type: key.type)
-                    Text(key.name).font(.system(size: 13, weight: .medium)).foregroundStyle(WS.text)
-                    Text(key.typeLabel).font(WS.mono(11)).foregroundStyle(WS.text3)
+                    Text(key.name).font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
+                    Text(key.typeLabel).font(UD.mono(11)).foregroundStyle(UD.text3)
                     if key.hasPassphrase {
-                        Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(WS.text4)
+                        Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(UD.text4)
                     }
                 } else {
-                    Text("未选择密钥").font(.system(size: 13)).foregroundStyle(WS.text4)
+                    Text("未选择密钥").font(.system(size: 13)).foregroundStyle(UD.text4)
                 }
                 Spacer(minLength: 0)
                 Chevron(open: open)
             }
             .padding(.horizontal, 10).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? WS.accent : WS.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 if keys.isEmpty {
                     Text("密钥管理器里还没有密钥")
-                        .font(.system(size: 12)).foregroundStyle(WS.text4)
+                        .font(.system(size: 12)).foregroundStyle(UD.text4)
                         .padding(.vertical, 20).padding(.horizontal, 12)
                 } else {
                     ScrollView {
@@ -45,20 +45,20 @@ struct KeySelectorView: View {
                     }
                     .frame(maxHeight: 240)
                 }
-                Rectangle().fill(WS.border).frame(height: 1)
+                Rectangle().fill(UD.border).frame(height: 1)
                 Button(action: onManage) {
                     HStack(spacing: 7) {
                         Image(systemName: "plus").font(.system(size: 10, weight: .medium))
                         Text("打开密钥管理…").font(.system(size: 12))
                         Spacer()
                     }
-                    .foregroundStyle(WS.text2)
+                    .foregroundStyle(UD.text2)
                     .padding(.horizontal, 10).padding(.vertical, 9)
                 }
                 .buttonStyle(.plain)
             }
             .frame(width: 320)
-            .background(WS.panelHi)
+            .background(UD.panelHi)
         }
     }
 
@@ -69,19 +69,19 @@ struct KeySelectorView: View {
                 KeyGlyph(type: key.type, size: 22)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
-                        Text(key.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(WS.text)
+                        Text(key.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UD.text)
                         if key.hasPassphrase {
-                            Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(WS.text4)
+                            Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(UD.text4)
                         }
                     }
-                    Text(key.typeLabel).font(WS.mono(11)).foregroundStyle(WS.text4)
+                    Text(key.typeLabel).font(UD.mono(11)).foregroundStyle(UD.text4)
                 }
                 Spacer(minLength: 0)
-                if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(WS.accent) }
+                if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(UD.accent) }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? WS.accent.opacity(0.10) : Color.clear))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSel ? WS.accent.opacity(0.2) : Color.clear, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accent.opacity(0.10) : Color.clear))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSel ? UD.accent.opacity(0.2) : Color.clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -99,30 +99,30 @@ struct JumpHostSelectorView: View {
         Button { open.toggle() } label: {
             HStack(spacing: 10) {
                 if let h = selected {
-                    Circle().fill(WS.accent).frame(width: 6, height: 6)
-                    Text(h.name).font(.system(size: 13, weight: .medium)).foregroundStyle(WS.text)
-                    Text(endpoint(h)).font(WS.mono(11)).foregroundStyle(WS.text3).lineLimit(1)
+                    Circle().fill(UD.accent).frame(width: 6, height: 6)
+                    Text(h.name).font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
+                    Text(endpoint(h)).font(UD.mono(11)).foregroundStyle(UD.text3).lineLimit(1)
                 } else {
-                    Text("从已有服务器选择跳板机…").font(.system(size: 13)).foregroundStyle(WS.text4)
+                    Text("从已有服务器选择跳板机…").font(.system(size: 13)).foregroundStyle(UD.text4)
                 }
                 Spacer(minLength: 0)
                 Chevron(open: open)
             }
             .padding(.horizontal, 10).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? WS.accent : WS.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 Text("已有服务器")
-                    .font(.system(size: 10.5)).tracking(0.5).foregroundStyle(WS.text4)
+                    .font(.system(size: 10.5)).tracking(0.5).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
-                Rectangle().fill(WS.border).frame(height: 1)
+                Rectangle().fill(UD.border).frame(height: 1)
                 if hosts.isEmpty {
                     Text("没有可选的跳板机")
-                        .font(.system(size: 12)).foregroundStyle(WS.text4)
+                        .font(.system(size: 12)).foregroundStyle(UD.text4)
                         .padding(.vertical, 20).padding(.horizontal, 12)
                 } else {
                     ScrollView {
@@ -135,7 +135,7 @@ struct JumpHostSelectorView: View {
                 }
             }
             .frame(width: 320)
-            .background(WS.panelHi)
+            .background(UD.panelHi)
         }
     }
 
@@ -143,21 +143,21 @@ struct JumpHostSelectorView: View {
         let isSel = h.id == selected?.id
         return Button { onPick(h.id) } label: {
             HStack(spacing: 10) {
-                Circle().fill(WS.accent).frame(width: 6, height: 6)
+                Circle().fill(UD.accent).frame(width: 6, height: 6)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(h.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(WS.text)
-                    Text(endpoint(h)).font(WS.mono(11)).foregroundStyle(WS.text4).lineLimit(1)
+                    Text(h.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UD.text)
+                    Text(endpoint(h)).font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let g = h.group, !g.isEmpty {
-                    Text(g).font(.system(size: 10)).foregroundStyle(WS.text4)
+                    Text(g).font(.system(size: 10)).foregroundStyle(UD.text4)
                         .padding(.horizontal, 6).padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(WS.border, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(UD.border, lineWidth: 1))
                 }
-                if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(WS.accent) }
+                if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(UD.accent) }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? WS.accent.opacity(0.10) : Color.clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accent.opacity(0.10) : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -174,7 +174,7 @@ private struct Chevron: View {
     let open: Bool
     var body: some View {
         Image(systemName: "chevron.down")
-            .font(.system(size: 9, weight: .semibold)).foregroundStyle(WS.text3)
+            .font(.system(size: 9, weight: .semibold)).foregroundStyle(UD.text3)
             .rotationEffect(.degrees(open ? 180 : 0))
             .animation(.easeOut(duration: 0.15), value: open)
     }
@@ -184,7 +184,7 @@ private struct KeyGlyph: View {
     let type: SSHKeyKind
     var size: CGFloat = 20
     var body: some View {
-        let tint: Color = type == .ed25519 ? WS.accent : Color(hex: 0xFBBF24)
+        let tint: Color = type == .ed25519 ? UD.accent : Color(hex: 0xFBBF24)
         RoundedRectangle(cornerRadius: size * 0.25)
             .fill(tint.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))

@@ -9,12 +9,12 @@ import os
 ///     AppLogger.info("Connected to \(host)")
 ///     AppLogger.error("SSH handshake failed: \(err)")
 ///
-/// 类别：subsystem 固定 `cn.uozi.uTerm`；category 由 caller 指定（默认 `"app"`）。
+/// 类别：subsystem 固定 `com.uozi.uTerm`（与 bundle id 一致）；category 由 caller 指定（默认 `"app"`）。
 ///
 /// 性能：每次调用读一次 UserDefaults。预期调用频率远低于 1k/s；若未来变高
 /// 可加 in-process cache + AppStorage observer。
 enum AppLogger {
-    private static let subsystem = "cn.uozi.uTerm"
+    private static let subsystem = "com.uozi.uTerm"
 
     /// 测试钩子：传 nil 使用 `.info` 默认值（不读 UserDefaults）；
     /// 生产代码应传入 `currentSettingRaw()` 以反映实际设置。

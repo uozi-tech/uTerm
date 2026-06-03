@@ -34,7 +34,7 @@ nonisolated func paneDropZone(at location: CGPoint, in bounds: CGRect) -> PaneDr
 /// 拖拽悬停时叠在目标窗格上的投放区提示。区域划分与 `paneDropZone` 对应。
 struct PaneDropHighlight: View {
     let zone: PaneDropZone
-    var color: Color = WS.accent
+    var color: Color = UD.accent
 
     var body: some View {
         GeometryReader { geo in

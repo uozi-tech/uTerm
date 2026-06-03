@@ -60,7 +60,7 @@ struct PaneView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(
-                    (isFocused && showsHeader) ? WS.accent : Color.clear,
+                    (isFocused && showsHeader) ? UD.accent : Color.clear,
                     lineWidth: 2)
         )
         .contentShape(Rectangle())
@@ -82,10 +82,10 @@ struct PaneView: View {
             HStack(spacing: 6) {
                 Image(systemName: headerIcon)
                     .font(.caption)
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
                 Text(profile?.name ?? "终端")
                     .font(.caption)
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -111,9 +111,9 @@ struct PaneView: View {
         .font(.caption)
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(WS.panel)
+        .background(UD.panel)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 
@@ -174,10 +174,10 @@ struct PaneView: View {
     private func stateView(systemImage: String, title: String,
                            detail: String, action: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(WS.text3)
-            Text(title).font(.headline).foregroundStyle(WS.text)
+            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(UD.text3)
+            Text(title).font(.headline).foregroundStyle(UD.text)
             if !detail.isEmpty {
-                Text(detail).font(.caption).foregroundStyle(WS.text3)
+                Text(detail).font(.caption).foregroundStyle(UD.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             if profile != nil {

@@ -55,7 +55,7 @@ struct WelcomeView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        .background(AppTheme.Palette.bgBase)
+        .background(UD.panel)
         .sheet(item: $formRoute) { route in
             switch route {
             case .new:

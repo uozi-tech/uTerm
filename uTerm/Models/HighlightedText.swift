@@ -16,8 +16,8 @@ nonisolated enum HighlightedText {
         while let range = lowered.range(of: needle, range: searchStart..<lowered.endIndex) {
             // 把 String.Range<String.Index> 映射到 AttributedString 上。
             if let attrRange = Range(range, in: result) {
-                result[attrRange].backgroundColor = AppTheme.Palette.warning.opacity(0.35)
-                result[attrRange].foregroundColor = AppTheme.Palette.warning
+                result[attrRange].backgroundColor = UD.warning.opacity(0.35)
+                result[attrRange].foregroundColor = UD.warning
             }
             searchStart = range.upperBound
         }

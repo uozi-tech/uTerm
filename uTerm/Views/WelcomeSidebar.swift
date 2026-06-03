@@ -30,9 +30,9 @@ struct WelcomeSidebar: View {
             .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.Palette.bgPanel)
+        .background(UD.bg)
         .overlay(alignment: .trailing) {
-            Rectangle().fill(AppTheme.Palette.border).frame(width: 1)
+            Rectangle().fill(UD.border).frame(width: 1)
         }
     }
 
@@ -50,7 +50,7 @@ struct WelcomeSidebar: View {
             .font(.caption2)
             .textCase(.uppercase)
             .tracking(0.6)
-            .foregroundStyle(AppTheme.Palette.textMuted)
+            .foregroundStyle(UD.text3)
             .padding(.horizontal, 14)
             .padding(.top, 10).padding(.bottom, 4)
     }
@@ -66,16 +66,14 @@ struct WelcomeSidebar: View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .frame(width: 14)
-                .foregroundStyle(isActive ? AppTheme.Palette.textPrimary
-                                          : AppTheme.Palette.textMuted)
+                .foregroundStyle(isActive ? UD.text : UD.text3)
             Text(title)
                 .lineLimit(1)
-                .foregroundStyle(isActive ? AppTheme.Palette.textPrimary
-                                          : AppTheme.Palette.textSecondary)
+                .foregroundStyle(isActive ? UD.text : UD.text2)
             Spacer(minLength: 6)
             Text("\(count)")
                 .font(.caption)
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(UD.text3)
                 .monospacedDigit()
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
@@ -83,7 +81,7 @@ struct WelcomeSidebar: View {
         // 否则 hover 比选中宽 8pt。也与 FileBrowser/全 app 选中风格一致。
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isActive ? AppTheme.Palette.bgSelected : Color.clear)
+                .fill(isActive ? UD.rowSelected : Color.clear)
         )
         // hover 反馈：非 active 时鼠标悬停切 bgRaised。
         .hoverBackground(cornerRadius: 4, isActive: isActive)

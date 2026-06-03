@@ -21,7 +21,7 @@ struct PaneGhostCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .strokeBorder(WS.border, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .opacity(0.9)
         .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
@@ -29,29 +29,29 @@ struct PaneGhostCard: View {
     }
 
     /// 复刻 `PaneView.header`：终端图标 + 服务器名 + 静态分屏/关闭图标。背景用
-    /// `WS.panel`，与真实头部一致。
+    /// `UD.panel`，与真实头部一致。
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "terminal")
                 .font(.caption)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
             Text(name)
                 .font(.caption)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
                 .lineLimit(1)
             Spacer(minLength: 0)
             Image(systemName: "rectangle.split.2x1")
                 .font(.caption)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
             Image(systemName: "xmark")
                 .font(.caption)
-                .foregroundStyle(WS.text3)
+                .foregroundStyle(UD.text3)
         }
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(WS.panel)
+        .background(UD.panel)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 }

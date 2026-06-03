@@ -18,17 +18,17 @@ struct DarkTextField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(WS.text4))
+        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(UD.text4))
             .textFieldStyle(.plain)
             .focused($focused)
-            .font(mono ? WS.mono(13) : .system(size: 13))
-            .foregroundStyle(WS.text)
+            .font(mono ? UD.mono(13) : .system(size: 13))
+            .foregroundStyle(UD.text)
             .padding(.horizontal, 12)
             .frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(focused ? WS.accent : WS.border, lineWidth: 1))
+                    .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
             .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
@@ -41,80 +41,25 @@ struct DarkSecureField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(WS.text4))
+        SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(UD.text4))
             .textFieldStyle(.plain)
             .focused($focused)
             .font(.system(size: 13))
-            .foregroundStyle(WS.text)
+            .foregroundStyle(UD.text)
             .padding(.horizontal, 12)
             .frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(focused ? WS.accent : WS.border, lineWidth: 1))
+                    .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
             .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 
 // MARK: - 分段控件
 
-/// 设计稿 `Segmented`：选中项填 accent、白字；外裹微底 + 细描边。
-struct DarkSegmented<Value: Hashable>: View {
-    @Binding var selection: Value
-    let options: [(value: Value, label: String)]
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(options, id: \.value) { opt in
-                segment(opt.value, opt.label)
-            }
-        }
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(WS.border, lineWidth: 1))
-    }
-
-    @ViewBuilder
-    private func segment(_ value: Value, _ label: String) -> some View {
-        let isOn = value == selection
-        Button {
-            selection = value
-        } label: {
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isOn ? Color.white : WS.text2)
-                .padding(.horizontal, 14).padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(isOn ? WS.accent : Color.clear))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - 开关
-
-/// 设计稿 `Switch`：32×18 胶囊，开 = accent，白色滑块。
-struct DarkSwitch: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                Capsule()
-                    .fill(isOn ? WS.accent : Color.white.opacity(0.1))
-                    .frame(width: 32, height: 18)
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
-                    .padding(.horizontal, 2)
-            }
-        }
-        .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.15), value: isOn)
-    }
-}
+// `DarkSegmented` / `DarkSwitch` 已迁移到 DesignKit `UDSegmented` / `UDToggle`（深 / 浅
+// 动态、设计稿 Forms 段规格）。此文件保留 Input / FormSection / FormField / Button / Chip。
 
 // MARK: - section / field 布局
 
@@ -130,8 +75,8 @@ struct DarkFormSection<Trailing: View, Content: View>: View {
                 Text(title.uppercased())
                     .font(.system(size: 10.5, weight: .medium))
                     .tracking(0.6)
-                    .foregroundStyle(WS.text4)
-                Rectangle().fill(WS.border).frame(height: 1)
+                    .foregroundStyle(UD.text4)
+                Rectangle().fill(UD.border).frame(height: 1)
                 trailing
             }
             content
@@ -156,11 +101,11 @@ struct DarkFormField<Content: View>: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(label)
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(WS.text2)
+                    .foregroundStyle(UD.text2)
                 if let hint {
                     Text(hint)
                         .font(.system(size: 11))
-                        .foregroundStyle(WS.text4)
+                        .foregroundStyle(UD.text4)
                 }
             }
             content
@@ -189,9 +134,9 @@ struct DarkButton: View {
                 .background(background)
                 .overlay(
                     RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(secondary ? WS.border : Color.clear, lineWidth: 1))
+                        .strokeBorder(secondary ? UD.border : Color.clear, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
-                .shadow(color: (!secondary && enabled) ? WS.accent.opacity(0.45) : .clear,
+                .shadow(color: (!secondary && enabled) ? UD.accent.opacity(0.45) : .clear,
                         radius: 7, y: 4)
                 .brightness(hovering && enabled ? (secondary ? 0 : 0.08) : 0)
         }
@@ -201,14 +146,14 @@ struct DarkButton: View {
     }
 
     private var foreground: Color {
-        if secondary { return WS.text2 }
-        return enabled ? .white : WS.text4
+        if secondary { return UD.text2 }
+        return enabled ? .white : UD.text4
     }
 
     private var background: some View {
         RoundedRectangle(cornerRadius: 7)
             .fill(secondary ? Color.clear
-                  : (enabled ? WS.accent : Color.white.opacity(0.06)))
+                  : (enabled ? UD.accent : Color.white.opacity(0.06)))
     }
 }
 
@@ -224,11 +169,11 @@ struct DarkChip: View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 11.5))
-                .foregroundStyle(selected ? WS.text : WS.text3)
+                .foregroundStyle(selected ? UD.text : UD.text3)
                 .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(Capsule().fill(selected ? WS.accent.opacity(0.10) : Color.clear))
+                .background(Capsule().fill(selected ? UD.accent.opacity(0.10) : Color.clear))
                 .overlay(Capsule().strokeBorder(
-                    selected ? WS.accent.opacity(0.4) : WS.border, lineWidth: 1))
+                    selected ? UD.accent.opacity(0.4) : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }

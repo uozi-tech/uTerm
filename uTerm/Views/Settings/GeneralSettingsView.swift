@@ -38,26 +38,26 @@ struct GeneralSettingsView: View {
             SettingsGroup(title: "启动") {
                 SettingsRow(label: "启动时",
                             hint: "打开 uTerm 时首先展示的页面") {
-                    SettingsSegmented(
+                    UDSegmented(
                         selection: startupBehaviorBinding,
                         options: StartupBehavior.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "恢复终端会话",
                             hint: "启动时重新加载上次工作区的标签与分屏布局") {
-                    SettingsSwitch(isOn: $restoreTerminalSession)
+                    UDToggle($restoreTerminalSession)
                 }
             }
 
             SettingsGroup(title: "外观") {
                 SettingsRow(label: "主题",
                             hint: "立即生效。改主题影响 uTerm 窗口外观；终端配色独立，不受此设置影响。") {
-                    SettingsSegmented(
+                    UDSegmented(
                         selection: appearanceBinding,
                         options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "语言",
                             hint: "改语言后需重启 uTerm 生效。") {
-                    SettingsSegmented(
+                    UDSegmented(
                         selection: appLanguageBinding,
                         options: AppLanguage.allCases.map { ($0, $0.localizedLabel) })
                 }
@@ -65,7 +65,7 @@ struct GeneralSettingsView: View {
 
             SettingsGroup(title: "更新") {
                 SettingsRow(label: "自动检查更新") {
-                    SettingsSwitch(isOn: Binding(
+                    UDToggle(Binding(
                         get: { appUpdater.automaticallyChecksForUpdates },
                         set: { appUpdater.automaticallyChecksForUpdates = $0 }
                     ))
@@ -84,16 +84,16 @@ private struct UpdateStatusPanel: View {
     var body: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(AppTheme.Palette.success)
+                .fill(UD.success)
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusLine)
                     .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.Palette.textPrimary)
+                    .foregroundStyle(UD.text)
                 Text("当前版本 \(AppUpdater.currentVersionString)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .foregroundStyle(UD.text3)
             }
 
             Spacer()
@@ -107,7 +107,7 @@ private struct UpdateStatusPanel: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.025)))
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(AppTheme.Palette.border, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
     }
 

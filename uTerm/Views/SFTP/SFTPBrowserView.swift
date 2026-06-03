@@ -58,7 +58,7 @@ struct SFTPBrowserView: View {
                               transfer: model.transfer)
             }
         }
-        .background(WS.bg)
+        .background(UD.bg)
         .onChange(of: model.currentPath) { _, newPath in
             syncHistory(to: newPath)
             selectedID = nil
@@ -104,23 +104,23 @@ struct SFTPBrowserView: View {
         } message: { Text(model.transientError ?? "") }
     }
 
-    private var hairline: some View { Rectangle().fill(WS.border).frame(height: 1) }
+    private var hairline: some View { Rectangle().fill(UD.border).frame(height: 1) }
 
     @ViewBuilder
     private var content: some View {
         switch model.state {
         case .idle, .connecting:
             VStack(spacing: 12) {
-                ProgressView().controlSize(.small).tint(WS.accent)
-                Text("正在连接…").font(.system(size: 13)).foregroundStyle(WS.text2)
+                ProgressView().controlSize(.small).tint(UD.accent)
+                Text("正在连接…").font(.system(size: 13)).foregroundStyle(UD.text2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let msg):
             VStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 26)).foregroundStyle(WS.text3)
-                Text("无法浏览文件").font(.system(size: 15, weight: .medium)).foregroundStyle(WS.text)
-                Text(msg).font(WS.mono(11.5)).foregroundStyle(WS.text3)
+                    .font(.system(size: 26)).foregroundStyle(UD.text3)
+                Text("无法浏览文件").font(.system(size: 15, weight: .medium)).foregroundStyle(UD.text)
+                Text(msg).font(UD.mono(11.5)).foregroundStyle(UD.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .frame(maxWidth: 420)
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
@@ -137,7 +137,7 @@ struct SFTPBrowserView: View {
                     query: query
                 )
                 .frame(maxWidth: .infinity)
-                Rectangle().fill(WS.border).frame(width: 1)
+                Rectangle().fill(UD.border).frame(width: 1)
                 SFTPInspector(
                     item: selected, currentPath: model.currentPath,
                     onDownload: { e in downloadFile(e) },

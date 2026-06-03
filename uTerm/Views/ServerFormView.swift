@@ -45,14 +45,14 @@ struct ServerFormView: View {
     var body: some View {
         VStack(spacing: 0) {
             titleBar
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
             formBody
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
             footer
         }
         .frame(width: 540)
         .frame(maxHeight: 640)
-        .background(WS.bg)
+        .background(UD.bg)
         .background(WorkspaceWindowAppearance())
         .onAppear(perform: loadForEditing)
     }
@@ -62,12 +62,12 @@ struct ServerFormView: View {
     private var titleBar: some View {
         ZStack {
             Text(editing == nil ? "新建服务器" : "编辑服务器")
-                .font(.system(size: 13, weight: .medium)).foregroundStyle(WS.text)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
             HStack {
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .medium)).foregroundStyle(WS.text3)
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(UD.text3)
                         .frame(width: 24, height: 24)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color.clear))
                 }
@@ -109,7 +109,7 @@ struct ServerFormView: View {
                 DarkTextField(placeholder: "root", text: $username, mono: true)
             }
             DarkFormField(label: "认证方式") {
-                DarkSegmented(selection: $authMethod, options: [
+                UDSegmented(selection: $authMethod, options: [
                     (.password, "密码"), (.privateKey, "私钥"),
                 ])
             }
@@ -145,11 +145,11 @@ struct ServerFormView: View {
 
     private var jumpSection: some View {
         DarkFormSection(title: "跳板机", trailing: {
-            DarkSwitch(isOn: $useJumpHost)
+            UDToggle($useJumpHost)
         }) {
             if !useJumpHost {
                 Text("如目标服务器在内网，可通过跳板机间接连接。")
-                    .font(.system(size: 11.5)).foregroundStyle(WS.text4)
+                    .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 DarkFormField(label: "跳板机", hint: "只能从已有服务器中选择") {
@@ -166,13 +166,13 @@ struct ServerFormView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Text("密钥与口令仅保存在系统钥匙串")
-                .font(.system(size: 11)).foregroundStyle(WS.text4)
+                .font(.system(size: 11)).foregroundStyle(UD.text4)
             Spacer()
             DarkButton(title: "取消", secondary: true) { dismiss() }
             DarkButton(title: "保存", enabled: isValid) { save() }
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
-        .background(WS.panel)
+        .background(UD.panel)
     }
 
     // MARK: - 校验

@@ -22,42 +22,54 @@ struct SFTPWindowView: View {
     }
 
     var body: some View {
-        Group {
-            if windowID != nil {
-                if let server {
-                    VStack(spacing: 0) {
-                        SFTPTitleBar(server: server, state: model.state,
-                                     onDisconnect: { model.dispose(); dismiss() })
-                        SFTPBrowserView(model: model, server: server,
-                                        openWorkspace: { openWorkspace(for: server) })
-                    }
-                    .hostKeySheet(model.hostKeyRelay)
-                    .task(id: windowID) {
-                        await model.connect(profile: server, modelContainer: modelContext.container)
-                    }
-                } else {
-                    placeholder("服务器已删除", systemImage: "server.rack")
-                }
-            } else {
-                placeholder("正在恢复…", systemImage: "clock")
-            }
+        content
+            .frame(minWidth: 900, minHeight: 560)
+            .onDisappear { model.dispose() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if windowID != nil, let server {
+            sftpBody(server: server)
+        } else {
+            placeholder(windowID == nil ? "正在恢复…" : "服务器已删除",
+                        systemImage: windowID == nil ? "clock" : "server.rack")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.container, edges: .top)
+                .background(UD.bg)
+                .background(WorkspaceWindowChrome(serverName: "SFTP"))
+                .environment(\.colorScheme, .dark)
         }
-        // 让内容延伸到标题栏区域之下（配合 WorkspaceWindowChrome 的 fullSizeContentView）。
+    }
+
+    /// 主体：自绘标题栏 + 浏览器。窗口 chrome / 去顶部安全区 / 深色 / 连接钩子都挂在
+    /// 这个**稳定的 VStack** 上（而非外层 Group）—— 否则 `.ignoresSafeArea(.top)` 不能
+    /// 把自绘标题栏顶进系统标题栏区，macOS 会继续在上面画自带（Liquid Glass）标题栏，
+    /// 把自绘 header 整条盖住（即之前「header 被遮挡」的根因）。与 WorkspaceWindowView
+    /// 的结构保持一致。
+    @ViewBuilder
+    private func sftpBody(server: ServerProfile) -> some View {
+        VStack(spacing: 0) {
+            SFTPTitleBar(server: server, state: model.state,
+                         onDisconnect: { model.dispose(); dismiss() })
+            SFTPBrowserView(model: model, server: server,
+                            openWorkspace: { openWorkspace(for: server) })
+        }
         .ignoresSafeArea(.container, edges: .top)
-        .background(WS.bg)
-        // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明 WS 底 + 深色外观。
-        // 无系统 toolbar / NavigationSplitView ⇒ 不存在系统玻璃。
-        .background(WorkspaceWindowChrome(serverName: server.map { "SFTP — \($0.name)" } ?? "SFTP"))
+        .background(UD.bg)
+        .background(WorkspaceWindowChrome(serverName: "SFTP — \(server.name)"))
         .environment(\.colorScheme, .dark)
-        .frame(minWidth: 900, minHeight: 560)
-        .onDisappear { model.dispose() }
+        .hostKeySheet(model.hostKeyRelay)
+        .task(id: windowID) {
+            await model.connect(profile: server, modelContainer: modelContext.container)
+        }
     }
 
     private func placeholder(_ title: String, systemImage: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: systemImage)
-                .font(.system(size: 30)).foregroundStyle(WS.text3)
-            Text(title).font(.system(size: 14)).foregroundStyle(WS.text2)
+                .font(.system(size: 30)).foregroundStyle(UD.text3)
+            Text(title).font(.system(size: 14)).foregroundStyle(UD.text2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -71,7 +83,7 @@ struct SFTPWindowView: View {
 
 /// 自绘 SFTP 标题栏（替代系统 toolbar）——对齐设计稿：左侧让位窗口红绿灯，居中
 /// 文件夹图标 + `SFTP` + `user@host`(mono) + 连接状态胶囊，右侧断开按钮。40px 扁平
-/// WS.panel 条 + 底部 1px 描边。彻底脱离系统 Liquid Glass。
+/// UD.panel 条 + 底部 1px 描边。彻底脱离系统 Liquid Glass。
 struct SFTPTitleBar: View {
     let server: ServerProfile
     let state: FileBrowserModel.State
@@ -83,13 +95,13 @@ struct SFTPTitleBar: View {
             HStack(spacing: 9) {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(WS.accent)
+                    .foregroundStyle(UD.accent)
                 Text("SFTP")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(WS.text)
+                    .foregroundStyle(UD.text)
                 Text("\(server.username)@\(server.host)")
-                    .font(WS.mono(12))
-                    .foregroundStyle(WS.text3)
+                    .font(UD.mono(12))
+                    .foregroundStyle(UD.text3)
                 SFTPStatusPill(state: state)
             }
 
@@ -104,11 +116,11 @@ struct SFTPTitleBar: View {
         }
         .frame(height: 40)
         .frame(maxWidth: .infinity)
-        // WindowDragHandle 既画 WS.panel 实色底，又充当窗口拖动手柄（窗口 chrome 已关
+        // WindowDragHandle 既画 UD.panel 实色底，又充当窗口拖动手柄（窗口 chrome 已关
         // isMovableByWindowBackground）。其上的按钮 / 红绿灯更靠前，点击不落到手柄。
         .background(WindowDragHandle())
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WS.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 }
@@ -121,9 +133,9 @@ struct SFTPStatusPill: View {
 
     private var info: (text: String, color: Color) {
         switch state {
-        case .browsing:          return ("已连接", WS.connected)
-        case .connecting, .idle: return ("连接中", WS.connecting)
-        case .failed:            return ("连接失败", WS.failed)
+        case .browsing:          return ("已连接", UD.success)
+        case .connecting, .idle: return ("连接中", UD.warning)
+        case .failed:            return ("连接失败", UD.danger)
         }
     }
 
@@ -140,11 +152,11 @@ struct SFTPStatusPill: View {
             }
             Text(i.text)
                 .font(.system(size: 11))
-                .foregroundStyle(WS.text2)
+                .foregroundStyle(UD.text2)
         }
         .padding(.leading, 7).padding(.trailing, 8).padding(.vertical, 2)
         .background(Capsule().fill(Color.white.opacity(0.04)))
-        .overlay(Capsule().strokeBorder(WS.border, lineWidth: 1))
+        .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
         // 进入 .browsing 才启动脉冲 —— 首帧通常是 .idle/.connecting，故 onAppear 与
         // onChange 都要试一次（否则连上后圆点静止不动）。
         .onAppear { startPulseIfBrowsing() }

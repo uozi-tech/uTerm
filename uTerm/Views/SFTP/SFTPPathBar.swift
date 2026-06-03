@@ -49,7 +49,7 @@ struct SFTPPathBar: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 50)
-        .overlay(alignment: .bottom) { Rectangle().fill(WS.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     // MARK: 后退 / 前进
@@ -58,13 +58,13 @@ struct SFTPPathBar: View {
         Button { if enabled { action() } } label: {
             Image(systemName: name)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(enabled ? WS.text2 : WS.text4)
+                .foregroundStyle(enabled ? UD.text2 : UD.text4)
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .hoverBackground(enabled ? WS.rowHover : .clear, cornerRadius: 7)
+        .hoverBackground(enabled ? UD.rowHover : .clear, cornerRadius: 7)
     }
 
     // MARK: 面包屑
@@ -76,7 +76,7 @@ struct SFTPPathBar: View {
                     if i > 0 {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(WS.text4)
+                            .foregroundStyle(UD.text4)
                     }
                     crumbButton(index: i, name: c.name, full: c.full)
                 }
@@ -90,20 +90,24 @@ struct SFTPPathBar: View {
         return Button { onCrumb(full) } label: {
             HStack(spacing: 5) {
                 if i == 0 {
-                    Image(systemName: "house.fill").font(.system(size: 10))
-                        .foregroundStyle(WS.accent.opacity(0.9))
+                    // 文件系统根 `/` —— 只用磁盘图标，不写「root」文字，避免和真正的
+                    // /root 目录撞名。
+                    Image(systemName: "internaldrive.fill").font(.system(size: 11))
+                        .foregroundStyle(isLast ? UD.accent : UD.accent.opacity(0.85))
+                } else {
+                    Text(name)
+                        .font(.system(size: 13, weight: isLast ? .medium : .regular))
+                        .foregroundStyle(isLast ? UD.text : UD.text2)
                 }
-                Text(i == 0 ? "root" : name)
-                    .font(.system(size: 13, weight: isLast ? .medium : .regular))
-                    .foregroundStyle(isLast ? WS.text : WS.text2)
             }
             .padding(.horizontal, 8).frame(height: 28)
             .contentShape(Rectangle())
         }
+        .help(i == 0 ? "根目录 /" : full)
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 7)
             .fill(isLast ? Color.white.opacity(0.05) : .clear))
-        .hoverBackground(isLast ? .clear : WS.rowHover, cornerRadius: 7, isActive: isLast)
+        .hoverBackground(isLast ? .clear : UD.rowHover, cornerRadius: 7, isActive: isLast)
     }
 
     // MARK: 过滤
@@ -111,18 +115,18 @@ struct SFTPPathBar: View {
     private var filterField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12)).foregroundStyle(WS.text3)
-            TextField("", text: $query, prompt: Text("过滤").foregroundStyle(WS.text4))
+                .font(.system(size: 12)).foregroundStyle(UD.text3)
+            TextField("", text: $query, prompt: Text("过滤").foregroundStyle(UD.text4))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(WS.text)
+                .foregroundStyle(UD.text)
                 .frame(width: 150)
                 .focused($filterFocused)
         }
         .padding(.horizontal, 11).frame(width: 200, height: 32)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
         .overlay(RoundedRectangle(cornerRadius: 8)
-            .strokeBorder(filterFocused ? WS.accent : WS.border, lineWidth: 1))
+            .strokeBorder(filterFocused ? UD.accent : UD.border, lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: filterFocused)
     }
 
@@ -151,13 +155,13 @@ struct SFTPPathBar: View {
             Button("在终端中打开", action: onOpenInTerminal)
         } label: {
             HStack(spacing: 7) {
-                Text("操作").font(.system(size: 13, weight: .medium)).foregroundStyle(WS.text)
+                Text("操作").font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(WS.text3)
+                    .foregroundStyle(UD.text3)
             }
             .padding(.horizontal, 12).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.02)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(WS.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -176,11 +180,11 @@ struct SFTPToolButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 13))
-                .foregroundStyle(hover ? WS.text : WS.text2)
+                .foregroundStyle(hover ? UD.text : UD.text2)
                 .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(hover ? WS.panelHover : Color.white.opacity(0.02)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(WS.border, lineWidth: 1))
+                    .fill(hover ? UD.panelHover : Color.white.opacity(0.02)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

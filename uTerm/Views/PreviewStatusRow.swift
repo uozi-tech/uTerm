@@ -15,7 +15,7 @@ struct PreviewStatusRow: View {
                 }
                 if buf.isDirty {
                     HStack(spacing: 3) {
-                        Circle().fill(AppTheme.Palette.warning).frame(width: 6, height: 6)
+                        Circle().fill(UD.warning).frame(width: 6, height: 6)
                         Text("未保存")
                     }
                 }
@@ -30,13 +30,13 @@ struct PreviewStatusRow: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(AppTheme.Palette.textMuted)
+        .foregroundStyle(UD.text3)
         .padding(.horizontal, 12)
         .frame(height: 22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .overlay(alignment: .top) {
-            Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+            Rectangle().fill(UD.border).frame(height: 1)
         }
     }
 

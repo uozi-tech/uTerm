@@ -17,25 +17,25 @@ struct MarkdownStyle {
     var usesChatCodeBlock: Bool
 
     static let preview = MarkdownStyle(
-        textPrimary: AppTheme.Palette.textPrimary,
-        textSecondary: AppTheme.Palette.textSecondary,
-        textMuted: AppTheme.Palette.textMuted,
-        accent: AppTheme.Palette.accent,
-        border: AppTheme.Palette.border,
-        bgRaised: AppTheme.Palette.bgRaised,
-        inlineCodeBackground: AppTheme.Palette.bgRaised,
+        textPrimary: UD.text,
+        textSecondary: UD.text2,
+        textMuted: UD.text3,
+        accent: UD.accent,
+        border: UD.border,
+        bgRaised: UD.panelHi,
+        inlineCodeBackground: UD.panelHi,
         baseFontSize: 13,
         blockSpacing: 10,
         usesChatCodeBlock: false)
 
     static let chat = MarkdownStyle(
-        textPrimary: WS.text,
-        textSecondary: WS.text2,
-        textMuted: WS.text3,
-        accent: WS.accent,
-        border: WS.border,
-        bgRaised: WS.panelHi,
-        inlineCodeBackground: WS.panelHi,
+        textPrimary: UD.text,
+        textSecondary: UD.text2,
+        textMuted: UD.text3,
+        accent: UD.accent,
+        border: UD.border,
+        bgRaised: UD.panelHi,
+        inlineCodeBackground: UD.panelHi,
         baseFontSize: 12.5,
         blockSpacing: 8,
         usesChatCodeBlock: true)

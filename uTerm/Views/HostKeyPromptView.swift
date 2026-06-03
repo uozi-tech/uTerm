@@ -13,14 +13,14 @@ struct HostKeyPromptView: View {
                 Label("首次连接到此主机", systemImage: "lock.shield")
                     .font(.headline)
                 Text("\(challenge.host):\(String(challenge.port)) 的主机密钥尚未被信任。")
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .foregroundStyle(UD.text3)
                 fingerprintRow("密钥指纹", challenge.newFingerprint)
             case .mismatch:
                 Label("主机密钥已变化", systemImage: "exclamationmark.triangle.fill")
                     .font(.headline)
-                    .foregroundStyle(AppTheme.Palette.danger)
+                    .foregroundStyle(UD.danger)
                 Text("\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。这可能是服务器重装，也可能是中间人攻击。")
-                    .foregroundStyle(AppTheme.Palette.danger)
+                    .foregroundStyle(UD.danger)
                 if let old = challenge.oldFingerprint {
                     fingerprintRow("已信任", old)
                 }
@@ -34,7 +34,7 @@ struct HostKeyPromptView: View {
                     decide(true)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(challenge.kind == .mismatch ? AppTheme.Palette.danger : AppTheme.Palette.accent)
+                .tint(challenge.kind == .mismatch ? UD.danger : UD.accent)
             }
         }
         .padding(20)
@@ -44,7 +44,7 @@ struct HostKeyPromptView: View {
     @ViewBuilder
     private func fingerprintRow(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
+            Text(label).font(.caption).foregroundStyle(UD.text3)
             Text(value).font(.system(.body, design: .monospaced)).textSelection(.enabled)
         }
     }

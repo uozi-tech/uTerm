@@ -58,7 +58,7 @@ struct WorkspaceColumns<Sidebar: View, Center: View, Inspector: View>: View {
     }
 }
 
-/// 列间可拖分隔条：1px WS.border 实线 + 10px 透明命中区；全局坐标拖动调列宽
+/// 列间可拖分隔条：1px UD.border 实线 + 10px 透明命中区；全局坐标拖动调列宽
 /// （`sign` = +1 左 sidebar 往右拖变宽 / −1 右 inspector 往右拖变窄），clamp 到 range。
 struct ColumnResizer: View {
     @Binding var width: Double
@@ -69,7 +69,7 @@ struct ColumnResizer: View {
 
     var body: some View {
         Rectangle()
-            .fill(WS.border)
+            .fill(UD.border)
             .frame(width: 1)
             .frame(maxHeight: .infinity)
             .overlay(

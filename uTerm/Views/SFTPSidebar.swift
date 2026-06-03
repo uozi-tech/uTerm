@@ -9,11 +9,11 @@ struct SFTPSidebar: View {
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        // 铺 WS.bg 实色 —— 主动切断 NavigationSplitView 的 Liquid Glass sidebar
+        // 铺 UD.bg 实色 —— 主动切断 NavigationSplitView 的 Liquid Glass sidebar
         // 材质（去玻璃改造）。窗口已被钉为 .darkAqua，故此处实色恒为深色。
         FileBrowserContent(model: model)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(WS.bg)
+            .background(UD.bg)
             .task(id: server.id) {
                 await model.connect(profile: server, modelContainer: modelContext.container)
             }
