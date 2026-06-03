@@ -2,8 +2,8 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-/// Welcome 窗口：服务器列表 + 增删改 + 连接入口。当前结构为
-/// `NavigationSplitView` + `.searchable` + native `.toolbar`。
+/// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
+/// sidebar + list 三层组合（Termius 风）。
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -30,11 +30,12 @@ struct WelcomeView: View {
         }
     }
 
-    /// 主列表显示用：去掉作为某 profile 跳板的 profile，再走 filter。
+    /// 主列表显示用：直接走 filter。
+    ///
+    /// 跳板机现在是「引用一台已有服务器」（`jumpHost` 指向真实 profile），被引用者
+    /// 本身仍是正常服务器，应保持可见 —— 故不再隐藏被引用的 profile。
     private var visibleProfiles: [ServerProfile] {
-        let jumpIDs = Set(allProfiles.compactMap { $0.jumpHost?.id })
-        let topLevel = allProfiles.filter { !jumpIDs.contains($0.id) }
-        return filter.apply(to: topLevel)
+        filter.apply(to: allProfiles)
     }
 
     private var existingGroups: [String] {
@@ -45,23 +46,16 @@ struct WelcomeView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            WelcomeSidebar(profiles: allProfiles, filter: $filter)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
-        } detail: {
-            bodyContent
-        }
-        .navigationTitle("uTerm")
-        .searchable(text: $filter.query, prompt: "搜索 name / host / group…")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { formRoute = .new } label: {
-                    Label("新建", systemImage: "plus")
-                }
-                .keyboardShortcut("n", modifiers: .command)
+        VStack(spacing: 0) {
+            WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
+            HStack(spacing: 0) {
+                WelcomeSidebar(profiles: allProfiles, filter: $filter)
+                    .frame(width: 200)
+                bodyContent
             }
         }
         .frame(minWidth: 720, minHeight: 480)
+        .background(AppTheme.Palette.bgBase)
         .sheet(item: $formRoute) { route in
             switch route {
             case .new:
@@ -150,6 +144,10 @@ struct WelcomeView: View {
         switch action {
         case .connect:
             openServer(profile)
+        case .openSFTP:
+            profile.lastConnectedAt = Date()
+            try? modelContext.save()
+            openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
         case .togglePin:
             profile.isPinned.toggle()
             try? modelContext.save()

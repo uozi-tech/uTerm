@@ -9,12 +9,12 @@ struct EmptyBody: View {
             HStack {
                 Text("最近打开")
                     .font(.headline)
-                    .foregroundStyle(AppTheme.Palette.textPrimary)
+                    .foregroundStyle(WS.text)
                 Spacer()
                 if !model.recents.isEmpty {
                     Button("清空") { model.clearRecents() }
                         .buttonStyle(.borderless)
-                        .foregroundStyle(AppTheme.Palette.textMuted)
+                        .foregroundStyle(WS.text3)
                 }
             }
             if model.recents.isEmpty {
@@ -38,10 +38,10 @@ struct EmptyBody: View {
         VStack(spacing: 8) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 32, weight: .light))
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(WS.text3)
             Text("从左侧选择文件预览")
                 .font(.callout)
-                .foregroundStyle(AppTheme.Palette.textSecondary)
+                .foregroundStyle(WS.text2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -51,19 +51,19 @@ struct EmptyBody: View {
         HStack(spacing: 10) {
             Image(systemName: icon(for: entry.kindTag))
                 .frame(width: 16)
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(WS.text3)
             VStack(alignment: .leading, spacing: 1) {
                 Text((entry.remotePath as NSString).lastPathComponent)
-                    .foregroundStyle(AppTheme.Palette.textPrimary)
+                    .foregroundStyle(WS.text)
                 Text(entry.remotePath)
                     .font(.caption)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .foregroundStyle(WS.text3)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
             Text(relative(entry.lastOpenedAt))
                 .font(.caption)
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(WS.text3)
         }
         .padding(.horizontal, 8).padding(.vertical, 6)
         .contentShape(Rectangle())

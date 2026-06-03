@@ -75,3 +75,31 @@ extension View {
         modifier(IconButtonHover(cornerRadius: cornerRadius))
     }
 }
+
+/// `IconButtonHover` 的工作区（WS）版：用恒深色 `WS` 令牌而非随系统外观的
+/// `AppTheme.Palette`。给钉死深色的工作区窗口内的小图标按钮（如 SFTP 侧边栏头部）
+/// 用，让整块视图统一在一套配色系统里。静止图标走 `WS.text2`，hover 提亮到
+/// `WS.text` 并叠一层 `WS.panelHover` 圆角底。同样：用此修饰器的按钮图标 **不要**
+/// 自己再设 `.foregroundStyle`。
+private struct WSIconButtonHover: ViewModifier {
+    let cornerRadius: CGFloat
+
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(isHovering ? WS.text : WS.text2)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(isHovering ? WS.panelHover : .clear)
+            )
+            .onHover { isHovering = $0 }
+    }
+}
+
+extension View {
+    /// `iconButtonHover` 的 WS 令牌版，给工作区深色视图内的小图标按钮用。
+    func wsIconButtonHover(cornerRadius: CGFloat = 6) -> some View {
+        modifier(WSIconButtonHover(cornerRadius: cornerRadius))
+    }
+}

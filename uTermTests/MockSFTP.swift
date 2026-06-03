@@ -8,6 +8,10 @@ actor MockSFTP: SFTPProviding {
     private(set) var downloads: [String] = []
     private(set) var didClose = false
     var listError: Error?
+    private(set) var renames: [(from: String, to: String)] = []
+    private(set) var removedFiles: [String] = []
+    private(set) var removedDirs: [String] = []
+    private(set) var createdDirs: [String] = []
 
     /// 内存 blob 存储：path → (data, mtime)。write / read / stat 均走此存储。
     private var blobStore: [String: (Data, Date)] = [:]
@@ -58,6 +62,29 @@ actor MockSFTP: SFTPProviding {
     /// read：别名 download，供测试直接调用（保持 write→read round-trip 语义）。
     func read(_ path: String) async throws -> Data {
         try await download(remotePath: path)
+    }
+
+    /// 遥测 exec 的可控返回值（默认空串 = 无遥测）。
+    var execOutput: String = ""
+    func exec(_ command: String) async throws -> String { execOutput }
+
+    func rename(_ path: String, to newPath: String) async throws {
+        renames.append((path, newPath))
+    }
+    func removeFile(_ path: String) async throws { removedFiles.append(path) }
+    func removeDirectory(_ path: String) async throws { removedDirs.append(path) }
+    func createDirectory(_ path: String) async throws { createdDirs.append(path) }
+
+    func upload(data: Data, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        onProgress?(TransferProgress(bytesDone: Int64(data.count), bytesTotal: Int64(data.count)))
+        uploads.append((toRemotePath, data.count))
+    }
+    func download(remotePath: String,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data {
+        let d = try await download(remotePath: remotePath)
+        onProgress?(TransferProgress(bytesDone: Int64(d.count), bytesTotal: Int64(d.count)))
+        return d
     }
 
     func close() async { didClose = true }

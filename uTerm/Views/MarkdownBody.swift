@@ -10,7 +10,7 @@ struct MarkdownBody: View {
             MarkdownRenderer(source: buffer.text)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .frame(minWidth: 280, idealWidth: 480)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: EditorTheme.background))
         }
     }
 }

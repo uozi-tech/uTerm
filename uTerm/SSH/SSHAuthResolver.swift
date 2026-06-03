@@ -42,14 +42,28 @@ nonisolated enum SSHAuthResolver {
 
     /// 便捷重载：自行从 `KeychainStore` 取出密码 / 私钥 / 口令，再解析。
     /// `PaneModel` 与 `FileBrowserModel` 共用，省去各自一份相同的取钥串逻辑。
+    ///
+    /// 私钥认证时**优先**按 `profile.keyID`（密钥库条目）取私钥与口令；keyID 为 nil
+    /// 或取不到时**回退**到按 `profile.id` 取 —— 兼容密钥库引入前直接存在 profile 名下
+    /// 的旧私钥。密码始终按 `profile.id` 取。
     nonisolated static func resolve(
         profile: ServerProfile,
         keychain: KeychainStore
     ) throws -> ResolvedAuth {
-        try resolve(
+        let privateKey: String?
+        let passphrase: String?
+        if let keyID = profile.keyID,
+           let pk = try? keychain.load(profileID: keyID, kind: .privateKey) {
+            privateKey = pk
+            passphrase = try? keychain.load(profileID: keyID, kind: .passphrase)
+        } else {
+            privateKey = try? keychain.load(profileID: profile.id, kind: .privateKey)
+            passphrase = try? keychain.load(profileID: profile.id, kind: .passphrase)
+        }
+        return try resolve(
             profile: profile,
             password: try? keychain.load(profileID: profile.id, kind: .password),
-            privateKey: try? keychain.load(profileID: profile.id, kind: .privateKey),
-            passphrase: try? keychain.load(profileID: profile.id, kind: .passphrase))
+            privateKey: privateKey,
+            passphrase: passphrase)
     }
 }

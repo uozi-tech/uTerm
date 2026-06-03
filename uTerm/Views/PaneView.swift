@@ -56,7 +56,7 @@ struct PaneView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(
-                    (isFocused && showsHeader) ? AppTheme.Palette.accent : Color.clear,
+                    (isFocused && showsHeader) ? WS.accent : Color.clear,
                     lineWidth: 2)
         )
         .contentShape(Rectangle())
@@ -78,10 +78,10 @@ struct PaneView: View {
             HStack(spacing: 6) {
                 Image(systemName: headerIcon)
                     .font(.caption)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .foregroundStyle(WS.text3)
                 Text(profile?.name ?? "终端")
                     .font(.caption)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
+                    .foregroundStyle(WS.text3)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -105,7 +105,10 @@ struct PaneView: View {
         .font(.caption)
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(WS.panel)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(WS.border).frame(height: 1)
+        }
     }
 
     /// 拖拽时跟随光标的小卡片。
@@ -117,7 +120,7 @@ struct PaneView: View {
         .font(.caption)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(.bar))
+        .background(RoundedRectangle(cornerRadius: 6).fill(WS.panel))
     }
 
     /// 按窗格当前长宽比选分屏方向：偏宽 → 左右分，偏高 → 上下分。
@@ -163,10 +166,10 @@ struct PaneView: View {
     private func stateView(systemImage: String, title: String,
                            detail: String, action: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(AppTheme.Palette.textMuted)
-            Text(title).font(.headline)
+            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(WS.text3)
+            Text(title).font(.headline).foregroundStyle(WS.text)
             if !detail.isEmpty {
-                Text(detail).font(.caption).foregroundStyle(AppTheme.Palette.textMuted)
+                Text(detail).font(.caption).foregroundStyle(WS.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             if profile != nil {

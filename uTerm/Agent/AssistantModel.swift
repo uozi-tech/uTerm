@@ -1,7 +1,11 @@
 import SwiftUI
+import SwiftData
 
 /// AI 助手聊天的对话状态机。多 provider：调用方把 providers 列表与
 /// activeProviderID 灌进来（通常源自 SwiftData @Query 与 @AppStorage）。
+///
+/// 会话历史：注入 `modelContext` 后，每轮对话写穿到 `ChatSession`/
+/// `ChatMessageRecord`；未注入（如单测）时退化为纯内存，行为与旧版一致。
 @MainActor
 @Observable
 final class AssistantModel {
@@ -13,6 +17,17 @@ final class AssistantModel {
     private(set) var messages: [ChatMessage] = []
     var input: String = ""
     private(set) var state: State = .idle
+
+    /// 持久化上下文；nil 时纯内存（单测路径）。由视图 `attach(context:)` 注入。
+    var modelContext: ModelContext?
+    /// 当前会话；首次发送时惰性创建，避免空会话污染历史。
+    private(set) var currentSession: ChatSession?
+
+    /// 顶栏展示的会话标题。
+    var sessionTitle: String {
+        if let t = currentSession?.title, !t.isEmpty { return t }
+        return "新对话"
+    }
 
     /// 全部已配置的 provider（外部灌入，按 sortOrder）。
     var providers: [AIProvider] = []
@@ -28,6 +43,34 @@ final class AssistantModel {
         return providers.min(by: { $0.sortOrder < $1.sortOrder })
     }
     var hasUsableProvider: Bool { activeProvider != nil }
+
+    /// 注入持久化上下文（幂等：仅首次生效）。
+    func attach(context: ModelContext) {
+        guard modelContext == nil else { return }
+        modelContext = context
+    }
+
+    /// 开新对话：清空当前会话与消息，下次发送时再惰性建会话。
+    func startNewSession() {
+        currentSession = nil
+        messages = []
+        if case .failed = state { state = .idle }
+    }
+
+    /// 切换到历史会话，载入其消息。
+    func load(_ session: ChatSession) {
+        guard session.id != currentSession?.id else { return }
+        currentSession = session
+        messages = session.orderedMessages.map(\.asChatMessage)
+        if case .failed = state { state = .idle }
+    }
+
+    /// 从首句话派生会话标题（单行、限长）。
+    nonisolated static func deriveTitle(from prompt: String) -> String {
+        let line = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.count <= 24 ? trimmed : String(trimmed.prefix(24)) + "…"
+    }
 
     private let keychain: AgentKeychain
     /// 测试注入。非 nil 时绕过工厂直接用此 client。
@@ -71,10 +114,18 @@ final class AssistantModel {
         }
 
         input = ""
-        messages.append(ChatMessage(role: .user, text: prompt))
+        let userMessage = ChatMessage(role: .user, text: prompt)
+        messages.append(userMessage)
         let conversation = messages
-        messages.append(ChatMessage(role: .assistant, text: ""))
+
+        // 惰性建会话并落库用户消息（无 context 时纯内存）。
+        let session = ensureSession(firstPrompt: prompt)
+        persist(userMessage, in: session)
+
+        let assistantMessage = ChatMessage(role: .assistant, text: "")
+        messages.append(assistantMessage)
         let assistantIndex = messages.count - 1
+        let assistantRecord = persist(assistantMessage, in: session)
         state = .streaming
 
         let config = LLMRequestConfig(model: provider.model,
@@ -92,6 +143,39 @@ final class AssistantModel {
             messages[assistantIndex].text += "\n[错误：\(message)]"
             state = .failed(message)
         }
+        // 流式结束后把助手最终文本写回记录。
+        finalize(assistantRecord, text: messages[assistantIndex].text, in: session)
+    }
+
+    // MARK: - 持久化（modelContext 为 nil 时全部 no-op）
+
+    /// 取当前会话；无则惰性创建并插入。返回 nil 表示纯内存模式。
+    private func ensureSession(firstPrompt: String) -> ChatSession? {
+        guard let ctx = modelContext else { return nil }
+        if let s = currentSession { return s }
+        let s = ChatSession(title: Self.deriveTitle(from: firstPrompt))
+        ctx.insert(s)
+        currentSession = s
+        return s
+    }
+
+    @discardableResult
+    private func persist(_ message: ChatMessage, in session: ChatSession?) -> ChatMessageRecord? {
+        guard let ctx = modelContext, let session else { return nil }
+        let record = ChatMessageRecord(role: message.role, text: message.text,
+                                       id: message.id, createdAt: Date())
+        record.session = session
+        ctx.insert(record)
+        session.updatedAt = Date()
+        try? ctx.save()
+        return record
+    }
+
+    private func finalize(_ record: ChatMessageRecord?, text: String, in session: ChatSession?) {
+        guard let ctx = modelContext, let record else { return }
+        record.text = text
+        session?.updatedAt = Date()
+        try? ctx.save()
     }
 
     private func resolveBaseURL(for provider: AIProvider) -> URL? {

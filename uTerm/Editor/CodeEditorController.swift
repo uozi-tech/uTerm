@@ -220,9 +220,16 @@ extension CodeEditorController: TextViewDelegate {
         // Track A · VSCode Dark+ 配色
         textView.selectionManager.selectionBackgroundColor = EditorTheme.selectionBg
         textView.selectionManager.insertionPointColor = EditorTheme.caret
-        // 关掉 CodeEditTextView 自带 active-line —— 它 `range.isEmpty` 才绘，
-        // drag-select 时消失（不是 VSCode 行为）；用我们自己的 overlay 替换。
+        // 关掉 CodeEditTextView 自带的"光标行整行底色"。它对空选区（仅光标、无选中）
+        // 无条件绘制（drawSelections: range.isEmpty → drawHighlightedLine），用
+        // selectedLineBackgroundColor（系统选中色）铺满整行 —— 跟我们自己的
+        // ActiveLineOverlay 叠成两条带，多出来那条蓝的就是要去掉的"多余高亮"。
+        // 坑：0.12.1 的 highlightSelectedLine 是死属性（声明后 draw 路径从不读），
+        // 设 false 无效；真正关它得把那条带的填充色清成透明。flag 一并置 false，
+        // 以便将来库把它接回 draw 路径时也走对分支。正文选中走的是另一条路径
+        // （drawSelectedRange + selectionBackgroundColor），不受影响。
         textView.selectionManager.highlightSelectedLine = false
+        textView.selectionManager.selectedLineBackgroundColor = .clear
 
         // active-line 底色 overlay（始终显示，横跨 gutter 区）
         self.activeLineOverlay = ActiveLineOverlay(textView: textView)

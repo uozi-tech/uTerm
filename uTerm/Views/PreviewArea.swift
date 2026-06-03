@@ -11,6 +11,8 @@ struct PreviewArea: View {
             PreviewBodyRouter(model: model)
             PreviewStatusRow(model: model)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        // 预览区主体即编辑器（EditorTheme.background = VS Code #1F1F1F）；铺同色，
+        // tab 条 / 状态行以 WS.panel 叠在其上，编辑器正文无缝。
+        .background(Color(nsColor: EditorTheme.background))
     }
 }

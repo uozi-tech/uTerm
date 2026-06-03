@@ -12,6 +12,7 @@ struct ServerList: View {
 
     enum ContextAction: Equatable {
         case connect
+        case openSFTP
         case togglePin
         case copySSH
         case edit
@@ -37,11 +38,13 @@ struct ServerList: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.Palette.bgBase)
     }
 
     @ViewBuilder
     private func contextMenu(for profile: ServerProfile) -> some View {
         Button("连接") { onContextAction(.connect, profile) }
+        Button("在 SFTP 中打开") { onContextAction(.openSFTP, profile) }
         Button(profile.isPinned ? "取消置顶" : "置顶") {
             onContextAction(.togglePin, profile)
         }

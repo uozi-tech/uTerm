@@ -9,9 +9,11 @@ struct SFTPSidebar: View {
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        // 不再覆盖 .background —— 让 NavigationSplitView 的 Liquid Glass
-        // sidebar 材质透出，圆角/border 整圈才连贯（macOS 26）。
+        // 铺 WS.bg 实色 —— 主动切断 NavigationSplitView 的 Liquid Glass sidebar
+        // 材质（去玻璃改造）。窗口已被钉为 .darkAqua，故此处实色恒为深色。
         FileBrowserContent(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(WS.bg)
             .task(id: server.id) {
                 await model.connect(profile: server, modelContainer: modelContext.container)
             }

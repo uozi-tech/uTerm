@@ -1,163 +1,198 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 
-/// 新建 / 编辑一台服务器的 sheet 表单。非密钥字段写入 `ServerProfile`；
-/// 密码 / passphrase / 私钥内容写入 `KeychainStore`。
+/// 新建 / 编辑一台服务器的暗色模态表单（设计稿 `new-server.jsx`）。固定深色
+/// （`WS` 调色板 + 钉 `.darkAqua`），无视全局浅 / 深外观。
+///
+/// 字段写入 `ServerProfile`；密码写钟匙串（按 profile.id）；私钥改为**引用密钥库**
+/// （`profile.keyID` 指向一把 `SSHKey`，私钥正文由密钥库的钟匙串条目承载）；跳板机
+/// 改为**引用一台已有服务器**（`profile.jumpHost` 指向用户选中的 profile）。
 struct ServerFormView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     /// nil = 新建；非 nil = 编辑现有 profile。
     let editing: ServerProfile?
 
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
+    @Query(sort: \SSHKey.createdAt, order: .reverse) private var allKeys: [SSHKey]
 
     @State private var name = ""
     @State private var host = ""
     @State private var port = "22"
     @State private var username = ""
     @State private var group = ""
-    @State private var authMethod: AuthMethod = .password
+    @State private var authMethod: AuthMethod = .privateKey
     @State private var password = ""
-    @State private var passphrase = ""
-    @State private var privateKeyContent: String?
-    @State private var privateKeyFilename = ""
-
+    @State private var keyID: UUID?
     @State private var useJumpHost = false
-    @State private var jumpName = ""
-    @State private var jumpHostAddr = ""
-    @State private var jumpPort = "22"
-    @State private var jumpUsername = ""
-    @State private var jumpAuthMethod: AuthMethod = .password
-    @State private var jumpPassword = ""
-    @State private var jumpPassphrase = ""
-    @State private var jumpPrivateKeyContent: String?
-    @State private var jumpPrivateKeyFilename = ""
+    @State private var jumpProfileID: UUID?
+
+    @State private var keyPickerOpen = false
+    @State private var jumpPickerOpen = false
 
     private let keychain = KeychainStore()
 
+    private var selectedKey: SSHKey? { allKeys.first { $0.id == keyID } }
+
+    /// 可作跳板机的服务器：除自己外的全部 profile。
+    private var availableJumps: [ServerProfile] {
+        allProfiles.filter { $0.id != editing?.id }
+    }
+    private var selectedJump: ServerProfile? { availableJumps.first { $0.id == jumpProfileID } }
+
     var body: some View {
         VStack(spacing: 0) {
-            Text(editing == nil ? "新建服务器" : "编辑服务器")
-                .font(.headline).padding()
-            Form {
-                serverSection(
-                    title: "目标服务器",
-                    name: $name, host: $host, port: $port, username: $username,
-                    authMethod: $authMethod, password: $password, passphrase: $passphrase,
-                    keyContent: $privateKeyContent, keyFilename: $privateKeyFilename
-                )
-                Section("分组") {
-                    TextField("分组（可选）", text: $group)
-                    if !existingGroups.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(existingGroups, id: \.self) { g in
-                                    Button(g) { group = g }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.small)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
-                }
-                Section("跳板机") {
-                    Toggle("通过跳板机连接", isOn: $useJumpHost)
-                    if useJumpHost {
-                        serverFields(
-                            name: $jumpName, host: $jumpHostAddr, port: $jumpPort,
-                            username: $jumpUsername, authMethod: $jumpAuthMethod,
-                            password: $jumpPassword, passphrase: $jumpPassphrase,
-                            keyContent: $jumpPrivateKeyContent, keyFilename: $jumpPrivateKeyFilename
-                        )
-                    }
-                }
-            }
-            .formStyle(.grouped)
-            HStack {
-                Button("取消") { dismiss() }
-                Spacer()
-                Button("保存") { save() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!isValid)
-            }
-            .padding()
+            titleBar
+            Rectangle().fill(WS.border).frame(height: 1)
+            formBody
+            Rectangle().fill(WS.border).frame(height: 1)
+            footer
         }
-        .frame(width: 460, height: 560)
+        .frame(width: 540)
+        .frame(maxHeight: 640)
+        .background(WS.bg)
+        .background(WorkspaceWindowAppearance())
         .onAppear(perform: loadForEditing)
     }
 
-    private var isValid: Bool {
-        !name.isEmpty && !host.isEmpty && !username.isEmpty && Int(port) != nil
-            && (!useJumpHost || (!jumpHostAddr.isEmpty && !jumpUsername.isEmpty && Int(jumpPort) != nil))
-    }
+    // MARK: - 标题栏
 
-    @ViewBuilder
-    private func serverSection(
-        title: String,
-        name: Binding<String>, host: Binding<String>, port: Binding<String>,
-        username: Binding<String>, authMethod: Binding<AuthMethod>,
-        password: Binding<String>, passphrase: Binding<String>,
-        keyContent: Binding<String?>, keyFilename: Binding<String>
-    ) -> some View {
-        Section(title) {
-            serverFields(name: name, host: host, port: port, username: username,
-                         authMethod: authMethod, password: password, passphrase: passphrase,
-                         keyContent: keyContent, keyFilename: keyFilename)
-        }
-    }
-
-    @ViewBuilder
-    private func serverFields(
-        name: Binding<String>, host: Binding<String>, port: Binding<String>,
-        username: Binding<String>, authMethod: Binding<AuthMethod>,
-        password: Binding<String>, passphrase: Binding<String>,
-        keyContent: Binding<String?>, keyFilename: Binding<String>
-    ) -> some View {
-        TextField("名称", text: name)
-        TextField("主机地址", text: host)
-        TextField("端口", text: port)
-        TextField("用户名", text: username)
-        Picker("认证方式", selection: authMethod) {
-            Text("密码").tag(AuthMethod.password)
-            Text("私钥").tag(AuthMethod.privateKey)
-        }
-        if authMethod.wrappedValue == .password {
-            SecureField("密码", text: password)
-        } else {
+    private var titleBar: some View {
+        ZStack {
+            Text(editing == nil ? "新建服务器" : "编辑服务器")
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(WS.text)
             HStack {
-                Text(keyFilename.wrappedValue.isEmpty ? "未选择私钥" : keyFilename.wrappedValue)
-                    .foregroundStyle(AppTheme.Palette.textMuted)
                 Spacer()
-                Button("选择私钥…") { pickPrivateKey(into: keyContent, filename: keyFilename) }
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(WS.text3)
+                        .frame(width: 24, height: 24)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.clear))
+                }
+                .buttonStyle(.plain)
             }
-            SecureField("私钥口令（可选）", text: passphrase)
+            .padding(.trailing, 10)
+        }
+        .frame(height: 44)
+    }
+
+    // MARK: - 表单体
+
+    private var formBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                targetSection
+                groupSection
+                jumpSection
+            }
+            .padding(.horizontal, 22).padding(.vertical, 20)
         }
     }
 
-    /// 选取私钥文件后立即读取内容到内存，不保留文件路径。
-    private func pickPrivateKey(into content: Binding<String?>, filename: Binding<String>) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.data, .text, UTType.item]
-        panel.message = "选择 SSH 私钥文件"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        content.wrappedValue = text
-        filename.wrappedValue = url.lastPathComponent
+    private var targetSection: some View {
+        DarkFormSection(title: "目标服务器") {
+            DarkFormField(label: "名称") {
+                DarkTextField(placeholder: "例如：api-prod", text: $name)
+            }
+            HStack(alignment: .bottom, spacing: 10) {
+                DarkFormField(label: "主机") {
+                    DarkTextField(placeholder: "host.example.com", text: $host, mono: true)
+                }
+                DarkFormField(label: "端口") {
+                    DarkTextField(placeholder: "22", text: $port, mono: true)
+                }
+                .frame(width: 96)
+            }
+            DarkFormField(label: "用户名") {
+                DarkTextField(placeholder: "root", text: $username, mono: true)
+            }
+            DarkFormField(label: "认证方式") {
+                DarkSegmented(selection: $authMethod, options: [
+                    (.password, "密码"), (.privateKey, "私钥"),
+                ])
+            }
+            if authMethod == .password {
+                DarkFormField(label: "密码") {
+                    DarkSecureField(placeholder: "••••••••", text: $password)
+                }
+            } else {
+                DarkFormField(label: "密钥", hint: "从密钥管理器选择") {
+                    KeySelectorView(
+                        keys: allKeys, selected: selectedKey, open: $keyPickerOpen,
+                        onPick: { keyID = $0; keyPickerOpen = false },
+                        onManage: { openWindow(id: "keys") })
+                }
+            }
+        }
     }
 
-    /// 已有的非空分组名，去重 + locale 排序；表单 chips 行的数据源。
+    private var groupSection: some View {
+        DarkFormSection(title: "分组") {
+            DarkFormField(label: "分组", hint: "可选") {
+                DarkTextField(placeholder: "例如：prod", text: $group)
+            }
+            if !existingGroups.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(existingGroups, id: \.self) { g in
+                        DarkChip(label: g, selected: g == group) { group = g }
+                    }
+                }
+            }
+        }
+    }
+
+    private var jumpSection: some View {
+        DarkFormSection(title: "跳板机", trailing: {
+            DarkSwitch(isOn: $useJumpHost)
+        }) {
+            if !useJumpHost {
+                Text("如目标服务器在内网，可通过跳板机间接连接。")
+                    .font(.system(size: 11.5)).foregroundStyle(WS.text4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                DarkFormField(label: "跳板机", hint: "只能从已有服务器中选择") {
+                    JumpHostSelectorView(
+                        hosts: availableJumps, selected: selectedJump, open: $jumpPickerOpen,
+                        onPick: { jumpProfileID = $0; jumpPickerOpen = false })
+                }
+            }
+        }
+    }
+
+    // MARK: - 页脚
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Text("密钥与口令仅保存在系统钥匙串")
+                .font(.system(size: 11)).foregroundStyle(WS.text4)
+            Spacer()
+            DarkButton(title: "取消", secondary: true) { dismiss() }
+            DarkButton(title: "保存", enabled: isValid) { save() }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 12)
+        .background(WS.panel)
+    }
+
+    // MARK: - 校验
+
+    private var isValid: Bool {
+        guard !name.isEmpty, !host.isEmpty, !username.isEmpty, Int(port) != nil else { return false }
+        if authMethod == .privateKey, keyID == nil { return false }
+        if useJumpHost, jumpProfileID == nil { return false }
+        return true
+    }
+
+    /// 已有的非空分组名，去重 + locale 排序。
     private var existingGroups: [String] {
         Set(allProfiles.compactMap { p -> String? in
             let g = p.group ?? ""
             return g.isEmpty ? nil : g
         }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
+
+    // MARK: - 载入 / 保存
 
     private func loadForEditing() {
         guard let editing else { return }
@@ -167,21 +202,11 @@ struct ServerFormView: View {
         username = editing.username
         group = editing.group ?? ""
         authMethod = editing.authMethod
+        keyID = editing.keyID
         password = (try? keychain.load(profileID: editing.id, kind: .password)) ?? ""
-        passphrase = (try? keychain.load(profileID: editing.id, kind: .passphrase)) ?? ""
-        privateKeyContent = try? keychain.load(profileID: editing.id, kind: .privateKey)
-        if privateKeyContent != nil { privateKeyFilename = "（已保存的私钥）" }
         if let jump = editing.jumpHost {
             useJumpHost = true
-            jumpName = jump.name
-            jumpHostAddr = jump.host
-            jumpPort = String(jump.port)
-            jumpUsername = jump.username
-            jumpAuthMethod = jump.authMethod
-            jumpPassword = (try? keychain.load(profileID: jump.id, kind: .password)) ?? ""
-            jumpPassphrase = (try? keychain.load(profileID: jump.id, kind: .passphrase)) ?? ""
-            jumpPrivateKeyContent = try? keychain.load(profileID: jump.id, kind: .privateKey)
-            if jumpPrivateKeyContent != nil { jumpPrivateKeyFilename = "（已保存的私钥）" }
+            jumpProfileID = jump.id
         }
     }
 
@@ -194,48 +219,20 @@ struct ServerFormView: View {
         let trimmedGroup = group.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.group = trimmedGroup.isEmpty ? nil : trimmedGroup
         profile.authMethod = authMethod
-        writeSecrets(for: profile, authMethod: authMethod,
-                     password: password, passphrase: passphrase, key: privateKeyContent)
 
-        if useJumpHost {
-            let jump = profile.jumpHost ?? ServerProfile()
-            jump.name = jumpName.isEmpty ? "\(name) 跳板机" : jumpName
-            jump.host = jumpHostAddr
-            jump.port = Int(jumpPort) ?? 22
-            jump.username = jumpUsername
-            jump.authMethod = jumpAuthMethod
-            writeSecrets(for: jump, authMethod: jumpAuthMethod,
-                         password: jumpPassword, passphrase: jumpPassphrase, key: jumpPrivateKeyContent)
-            profile.jumpHost = jump
+        if authMethod == .password {
+            try? keychain.save(password, profileID: profile.id, kind: .password)
+            profile.keyID = nil
         } else {
-            if let oldJump = editing?.jumpHost {
-                try? keychain.delete(profileID: oldJump.id, kind: .password)
-                try? keychain.delete(profileID: oldJump.id, kind: .passphrase)
-                try? keychain.delete(profileID: oldJump.id, kind: .privateKey)
-                modelContext.delete(oldJump)
-            }
-            profile.jumpHost = nil
+            profile.keyID = keyID
+            // 私钥正文不再按 profile.id 存（改由密钥库承载）；清掉可能存在的旧密码。
+            try? keychain.delete(profileID: profile.id, kind: .password)
         }
+
+        profile.jumpHost = useJumpHost ? availableJumps.first { $0.id == jumpProfileID } : nil
 
         if editing == nil { modelContext.insert(profile) }
         try? modelContext.save()
         dismiss()
-    }
-
-    private func writeSecrets(for profile: ServerProfile, authMethod: AuthMethod,
-                              password: String, passphrase: String, key: String?) {
-        if authMethod == .password {
-            try? keychain.save(password, profileID: profile.id, kind: .password)
-            try? keychain.delete(profileID: profile.id, kind: .privateKey)
-            try? keychain.delete(profileID: profile.id, kind: .passphrase)
-        } else {
-            if let key { try? keychain.save(key, profileID: profile.id, kind: .privateKey) }
-            if !passphrase.isEmpty {
-                try? keychain.save(passphrase, profileID: profile.id, kind: .passphrase)
-            } else {
-                try? keychain.delete(profileID: profile.id, kind: .passphrase)
-            }
-            try? keychain.delete(profileID: profile.id, kind: .password)
-        }
     }
 }

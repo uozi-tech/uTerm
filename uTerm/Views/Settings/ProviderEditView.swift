@@ -103,7 +103,7 @@ struct ProviderEditView: View {
                     .tag(provider.model)
             }
         }
-        TextField("Model ID（可手打）", text: $provider.model)
+        TextField("Model ID", text: $provider.model)
             .textFieldStyle(.roundedBorder)
     }
 

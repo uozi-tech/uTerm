@@ -23,8 +23,20 @@ final class FileBrowserModel {
         }
     }
 
+    enum TransferDirection: Sendable, Equatable { case up, down }
+
+    /// 进行中的单次传输。空闲为 nil → 状态栏不渲染进度区。
+    struct TransferState: Equatable, Sendable {
+        let fileName: String
+        let direction: TransferDirection
+        var bytesDone: Int64
+        var bytesTotal: Int64
+    }
+
     private(set) var state: State = .idle
     private(set) var currentPath: String = "/"
+    /// 是否正在切换目录（取新列表的网络往返进行中）。驱动视图加载态 + 再入守卫。
+    private(set) var isNavigating = false
     /// 由 provider 返回的原始顺序；UI 应读取 `sortedEntries`（已按当前偏好排好）。
     private(set) var entries: [RemoteEntry] = [] {
         didSet { recomputeSortedEntries() }
@@ -43,6 +55,7 @@ final class FileBrowserModel {
         static let sortKey       = "fileBrowser.sortKey"
         static let sortAscending = "fileBrowser.sortAscending"
         static let foldersFirst  = "fileBrowser.foldersFirst"
+        static let showHidden    = "fileBrowser.showHidden"
     }
 
     var sortKey: SortKey = {
@@ -71,6 +84,14 @@ final class FileBrowserModel {
             recomputeSortedEntries()
         }
     }
+    var showHidden: Bool = {
+        UserDefaults.standard.object(forKey: PrefKey.showHidden) as? Bool ?? false
+    }() {
+        didSet {
+            UserDefaults.standard.set(showHidden, forKey: PrefKey.showHidden)
+            recomputeSortedEntries()
+        }
+    }
 
     /// 按当前排序偏好重算 `sortedEntries`。
     ///
@@ -82,6 +103,7 @@ final class FileBrowserModel {
     private func recomputeSortedEntries() {
         let ascending = sortAscending
         let key = sortKey
+        let source = showHidden ? entries : entries.filter { !$0.name.hasPrefix(".") }
 
         func primary(_ a: RemoteEntry, _ b: RemoteEntry) -> ComparisonResult {
             switch key {
@@ -105,7 +127,7 @@ final class FileBrowserModel {
         }
 
         // 给每一项打原始 index，等值时用 index 当 tiebreaker → 稳定排序。
-        let indexed = entries.enumerated().map { (idx: $0.offset, e: $0.element) }
+        let indexed = source.enumerated().map { (idx: $0.offset, e: $0.element) }
 
         func cmp(_ a: (idx: Int, e: RemoteEntry), _ b: (idx: Int, e: RemoteEntry)) -> Bool {
             let p = primary(a.e, b.e)
@@ -141,6 +163,8 @@ final class FileBrowserModel {
 
     private var provider: (any SFTPProviding)?
     private(set) var transientError: String?
+    /// 进行中的传输（仅 standalone SFTP 窗口使用；侧边栏不写）。
+    private(set) var transfer: TransferState?
 
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
@@ -201,14 +225,49 @@ final class FileBrowserModel {
 
     func navigate(into entry: RemoteEntry) async {
         guard entry.isDirectory else { return }
-        currentPath = Self.join(currentPath, entry.name)
-        await refresh()
+        await navigate(toPath: Self.join(currentPath, entry.name))
     }
 
     func navigateUp() async {
         guard currentPath != "/" else { return }
-        currentPath = Self.parent(of: currentPath)
+        await navigate(toPath: Self.parent(of: currentPath))
+    }
+
+    /// 直接跳到绝对路径（供面包屑 / 历史栈 / 前进后退 / `..` 驱动）。
+    ///
+    /// 再入守卫：一次目录切换的网络往返还没回来时，重复点击（典型是连点 `..`）
+    /// 直接忽略 —— 否则第二次点会基于已经前移的 `currentPath` 再上一级，造成
+    /// 越级。`isNavigating` 同时驱动视图加载态，让单击立刻有反馈、不被误以为没
+    /// 生效（修复“点两次才返回 + 切目录闪烁”同源问题）。
+    func navigate(toPath path: String) async {
+        guard path != currentPath, !isNavigating else { return }
+        isNavigating = true
+        defer { isNavigating = false }
+        currentPath = path
         await refresh()
+    }
+
+    /// 点击符号链接时懒解析：沿链接路径探测 —— `opendir` 跟随符号链接，能列出即
+    /// 目标是目录，直接进入（复用探测到的列表，省一次往返）；否则当文件，`stat`
+    /// 跟随链接取目标 size/mtime 返回，由调用方去打开（侧栏预览）/ 下载（独立窗口）。
+    ///
+    /// 返回 nil = 已进入目录（或非 symlink / 解析进行中）；非 nil = 目标是文件。
+    /// 全程置 `isNavigating`，让侧栏加载层在解析往返期间盖住列表、不露旧目录。
+    func resolveSymlinkForOpen(_ entry: RemoteEntry) async
+        -> (path: String, size: Int64?, mtime: Date?)? {
+        guard let provider, entry.isSymlink, !isNavigating else { return nil }
+        isNavigating = true
+        defer { isNavigating = false }
+        let linkPath = Self.join(currentPath, entry.name)
+        if let targetEntries = try? await provider.list(path: linkPath) {
+            currentPath = linkPath
+            entries = targetEntries
+            state = .browsing
+            transientError = nil
+            return nil
+        }
+        let stat = try? await provider.stat(linkPath)
+        return (linkPath, stat?.size, stat?.mtime)
     }
 
     func download(entry: RemoteEntry) async -> Data? {
@@ -228,6 +287,89 @@ final class FileBrowserModel {
             await refresh()
         } catch {
             transientError = "上传失败：\(error)"
+        }
+    }
+
+    func makeDirectory(name: String) async {
+        guard let provider else { return }
+        do {
+            try await provider.createDirectory(Self.join(currentPath, name))
+            await refresh()
+        } catch { transientError = "新建文件夹失败：\(error)" }
+    }
+
+    func rename(entry: RemoteEntry, to newName: String) async {
+        guard let provider else { return }
+        let from = Self.join(currentPath, entry.name)
+        let to = Self.join(currentPath, newName)
+        do {
+            try await provider.rename(from, to: to)
+            await refresh()
+        } catch { transientError = "重命名失败：\(error)" }
+    }
+
+    func delete(entry: RemoteEntry) async {
+        guard let provider else { return }
+        let path = Self.join(currentPath, entry.name)
+        do {
+            if entry.isDirectory {
+                try await Self.deleteDirectoryRecursive(path, provider: provider)
+            } else {
+                try await provider.removeFile(path)
+            }
+            await refresh()
+        } catch { transientError = "删除失败：\(error)" }
+    }
+
+    /// 递归删目录：先删尽子项（子目录优先递归），最后 rmdir 自身。
+    private static func deleteDirectoryRecursive(_ path: String,
+                                                 provider: any SFTPProviding) async throws {
+        let children = try await provider.list(path: path)
+        for child in children {
+            let childPath = Self.join(path, child.name)
+            if child.isDirectory {
+                try await deleteDirectoryRecursive(childPath, provider: provider)
+            } else {
+                try await provider.removeFile(childPath)
+            }
+        }
+        try await provider.removeDirectory(path)
+    }
+
+    func uploadWithProgress(fileName: String, data: Data) async {
+        guard let provider else { return }
+        let total = Int64(data.count)
+        transfer = TransferState(fileName: fileName, direction: .up, bytesDone: 0, bytesTotal: total)
+        do {
+            try await provider.upload(data: data, toRemotePath: Self.join(currentPath, fileName)) { [weak self] p in
+                Task { @MainActor in
+                    guard let self, var t = self.transfer else { return }
+                    t.bytesDone = p.bytesDone; t.bytesTotal = p.bytesTotal
+                    self.transfer = t
+                }
+            }
+            await refresh()
+        } catch { transientError = "上传失败：\(error)" }
+        transfer = nil
+    }
+
+    /// 下载到内存并返回（保存面板由视图层处理）。带进度。
+    func downloadWithProgress(entry: RemoteEntry) async -> Data? {
+        guard let provider, !entry.isDirectory else { return nil }
+        let total = Int64(entry.size ?? 0)
+        transfer = TransferState(fileName: entry.name, direction: .down, bytesDone: 0, bytesTotal: total)
+        defer { transfer = nil }
+        do {
+            return try await provider.download(remotePath: Self.join(currentPath, entry.name)) { [weak self] p in
+                Task { @MainActor in
+                    guard let self, var t = self.transfer else { return }
+                    t.bytesDone = p.bytesDone; t.bytesTotal = p.bytesTotal
+                    self.transfer = t
+                }
+            }
+        } catch {
+            transientError = "下载失败：\(error)"
+            return nil
         }
     }
 

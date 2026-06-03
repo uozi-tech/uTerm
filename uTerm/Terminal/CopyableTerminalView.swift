@@ -96,9 +96,14 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
         else { return }
         // .initial 立即按当前 isEnabled 同步一次（启动时 canScroll=false → 淡出）。
         scrollerEnabledObservation = scroller.observe(\.isEnabled, options: [.initial, .new]) { scroller, _ in
-            let target: CGFloat = scroller.isEnabled ? 1 : 0
-            if scroller.alphaValue != target {
-                scroller.alphaValue = target
+            // KVO 回调随 SwiftTerm 在主线程改 isEnabled 同步投递（.initial 也在
+            // observe() 调用处的主线程同步触发），主线程身份恒定；assumeIsolated
+            // 把这一既有假设显式化，满足 Swift 6 对 @Sendable changeHandler 的隔离检查。
+            MainActor.assumeIsolated {
+                let target: CGFloat = scroller.isEnabled ? 1 : 0
+                if scroller.alphaValue != target {
+                    scroller.alphaValue = target
+                }
             }
         }
     }

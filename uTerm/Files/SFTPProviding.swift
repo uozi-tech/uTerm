@@ -8,6 +8,14 @@ nonisolated struct RemoteStat: Sendable, Equatable {
     let mtime: Date
 }
 
+// MARK: - TransferProgress
+
+/// 单次传输的进度快照。`bytesTotal == 0` 视为未知总量。
+nonisolated struct TransferProgress: Sendable, Equatable {
+    let bytesDone: Int64
+    let bytesTotal: Int64
+}
+
 // MARK: - SFTPProviding
 
 /// `FileBrowserModel` 和文件预览层依赖的 SFTP 抽象 —— 便于用 `MockSFTP` 单测。
@@ -26,6 +34,23 @@ protocol SFTPProviding: Actor {
 
     /// 获取远程文件元信息（size + mtime）。文件不存在时抛错。
     func stat(_ path: String) async throws -> RemoteStat
+
+    /// 在连接上跑一条一次性命令（非交互 exec channel），返回合并后的输出。
+    /// 供遥测复用 SFTP 的 SSH 连接，不碰交互 PTY。compound 命令（`;` / 管道 /
+    /// 重定向）由 sshd 交给登录 shell 执行，故可直接传整串。
+    func exec(_ command: String) async throws -> String
+
+    // MARK: 目录 / 改名 / 删除
+    func rename(_ path: String, to newPath: String) async throws
+    func removeFile(_ path: String) async throws
+    func removeDirectory(_ path: String) async throws
+    func createDirectory(_ path: String) async throws
+
+    // MARK: 带进度的传输（既有无进度重载保留不动）
+    func upload(data: Data, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws
+    func download(remotePath: String,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data
 
     func close() async
 }

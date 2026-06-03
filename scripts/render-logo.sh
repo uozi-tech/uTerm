@@ -3,6 +3,8 @@
 #   - uTerm/Assets.xcassets/ULogoMark.imageset   (in-app logo, 256 / 512)
 #   - uTerm/Assets.xcassets/AppIcon.appiconset   (macOS app icon, 16…1024)
 # Each size is rendered straight from the vector for maximum sharpness.
+# NOTE: quit Xcode before running — Xcode caches the open asset catalog and can
+#       overwrite the regenerated Contents.json with its stale in-memory state.
 # Requires: rsvg-convert (brew install librsvg)
 set -euo pipefail
 cd "$(dirname "$0")/.."

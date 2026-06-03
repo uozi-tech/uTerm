@@ -34,6 +34,17 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         try? await target.close()
         try? await bastion?.close()
     }
+
+    /// 在目标连接上跑一条一次性命令（exec channel），返回合并后的 stdout/stderr。
+    /// 与 SFTP 子系统多路复用、不碰终端 PTY。放在本 `@unchecked Sendable` 包装上
+    /// （而非 actor 内直接调 `target`）—— 避免把非 Sendable 的 `SSHClient`「sending」
+    /// 出 actor 隔离域（与 `close()` 同样的处理；本文件 `@preconcurrency import
+    /// Citadel` 也抑制了相应并发告警）。
+    func exec(_ command: String) async throws -> String {
+        let buffer = try await target.executeCommand(
+            command, maxResponseSize: 64_000, mergeStreams: true)
+        return String(buffer: buffer)
+    }
 }
 
 /// 终端与 SFTP 共享的 SSH 连接工厂。

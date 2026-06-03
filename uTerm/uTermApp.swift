@@ -29,7 +29,8 @@ struct uTermApp: App {
         )
         do {
             return try ModelContainer(
-                for: ServerProfile.self, KnownHost.self, AIProvider.self,
+                for: ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
+                     ChatSession.self, ChatMessageRecord.self,
                 configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
@@ -58,6 +59,15 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
 
+        // 密钥管理 —— 单实例独立窗口（设计稿 keys.jsx）。从 Welcome 工具栏或
+        // 新建服务器表单的「打开密钥管理…」用 openWindow(id:"keys") 打开。
+        Window("密钥管理", id: "keys") {
+            KeyManagerView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+        }
+        .modelContainer(modelContainer)
+
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
@@ -65,6 +75,11 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
         }
         .modelContainer(modelContainer)
+        // 自绘 Cursor 式标题栏：隐藏系统标题栏（红绿灯浮在内容上、内容铺满到顶），
+        // 标题栏内容由 WorkspaceTitleBar 自绘。比在 NSWindow 上手动设
+        // titlebarAppearsTransparent 可靠 —— 后者在 SwiftUI WindowGroup 下不稳定，
+        // 会被系统不透明标题栏盖住（user 实测）。
+        .windowStyle(.hiddenTitleBar)
         // 不挂 .windowResizability(.contentMinSize)：macOS 26 实测它把窗口
         // 整个禁止 resize（cursor 都不显示），跟文档说的"只限制 min"不符。
         // 单独写 .frame(minWidth:) on view body 已经能把 contentMinSize 推到
@@ -104,6 +119,14 @@ struct uTermApp: App {
                 .keyboardShortcut("2", modifiers: [.command, .option])
             }
         }
+
+        // SFTP 独立窗口 —— 每个绑定一台服务器的纯文件浏览器，可多实例。
+        WindowGroup(for: SFTPWindowID.self) { $sftpID in
+            SFTPWindowView(windowID: sftpID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+        }
+        .modelContainer(modelContainer)
 
         // Settings 窗口（⌘,）—— AI provider 配置面板。未来再加其它 tab。
         Settings {

@@ -1,0 +1,103 @@
+import SwiftUI
+
+/// 生成新密钥面板（设计稿 `keys.jsx` 的 `KeyGenerator`）。按已定方案**不设口令**
+/// —— 生成的私钥明文存钟匙串（系统加密 + iCloud e2e）。生成在后台线程跑（RSA
+/// 4096 约 1 秒），完成回主线程经 `onCreate` 落库。
+struct KeyGeneratorView: View {
+    let onCancel: () -> Void
+    let onCreate: (SSHKey) -> Void
+
+    @State private var name = ""
+    @State private var type: SSHKeyKind = .ed25519
+    @State private var rsaBits = 4096
+    @State private var comment = NSUserName() + "@" + (Host.current().localizedName ?? "mac")
+    @State private var generating = false
+    @State private var errorText: String?
+
+    private let keyStore = KeyStore()
+
+    private var canGenerate: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !generating
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("生成新密钥").font(.system(size: 17, weight: .medium)).foregroundStyle(WS.text)
+                    Text("私钥保存在钥匙串，永不离开本机；公钥可一键复制到服务器。")
+                        .font(.system(size: 12)).foregroundStyle(WS.text3)
+                }
+
+                DarkFormSection(title: "基础") {
+                    DarkFormField(label: "名称", hint: "在 uTerm 内引用") {
+                        DarkTextField(placeholder: "例如：default", text: $name)
+                    }
+                    DarkFormField(label: "类型") {
+                        DarkSegmented(selection: $type, options: [
+                            (.ed25519, "ed25519（推荐）"), (.rsa, "RSA"),
+                        ])
+                    }
+                    if type == .rsa {
+                        DarkFormField(label: "位数") {
+                            DarkSegmented(selection: $rsaBits, options: [
+                                (2048, "2048"), (3072, "3072"), (4096, "4096"),
+                            ])
+                        }
+                    }
+                    DarkFormField(label: "注释", hint: "附在公钥末尾，便于辨识") {
+                        DarkTextField(placeholder: "", text: $comment, mono: true)
+                    }
+                }
+
+                if let errorText {
+                    Text(errorText).font(.system(size: 11.5)).foregroundStyle(Color(hex: 0xF87171))
+                }
+
+                HStack(spacing: 10) {
+                    Text(type == .rsa ? "生成约需 1 秒" : "立即生成")
+                        .font(.system(size: 11)).foregroundStyle(WS.text4)
+                    Spacer()
+                    DarkButton(title: "取消", secondary: true, action: onCancel)
+                    DarkButton(title: generating ? "生成中…" : "生成密钥", enabled: canGenerate, action: generate)
+                }
+            }
+            .padding(.horizontal, 28).padding(.vertical, 24)
+        }
+    }
+
+    private func generate() {
+        generating = true
+        errorText = nil
+        let chosenType = type
+        let bits = rsaBits
+        let cmt = comment
+        let nm = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        Task {
+            do {
+                let generated: SSHKeyGenerator.GeneratedKey = try await Task.detached(priority: .userInitiated) {
+                    switch chosenType {
+                    case .ed25519: return SSHKeyGenerator.generateEd25519(comment: cmt)
+                    case .rsa:     return try SSHKeyGenerator.generateRSA(bits: bits, comment: cmt)
+                    }
+                }.value
+
+                let key = SSHKey()
+                key.name = nm
+                key.type = chosenType
+                key.bits = chosenType == .ed25519 ? 256 : bits
+                key.comment = cmt
+                key.fingerprint = generated.fingerprint
+                key.publicKey = generated.publicKey
+                key.hasPassphrase = false
+                try keyStore.save(keyID: key.id, privateKey: generated.privateKeyText, passphrase: nil)
+                generating = false
+                onCreate(key)
+            } catch {
+                generating = false
+                errorText = "生成失败：\((error as? LocalizedError)?.errorDescription ?? String(describing: error))"
+            }
+        }
+    }
+}

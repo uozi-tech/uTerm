@@ -21,7 +21,7 @@ struct TerminalTabBar: View {
                             .draggable(TabDragItem(tabID: tab.id)) {
                                 Text(tab.title).font(.callout)
                                     .padding(6)
-                                    .foregroundStyle(AppTheme.Palette.textSecondary)
+                                    .foregroundStyle(WS.text2)
                             }
                             .dropDestination(for: TabDragItem.self) { items, _ in
                                 guard let dragged = items.first,
@@ -47,10 +47,10 @@ struct TerminalTabBar: View {
             }
             .frame(maxHeight: .infinity)
         }
-        .frame(height: 32)
-        .background(.regularMaterial)
+        .frame(height: 36)
+        .background(WS.panel)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+            Rectangle().fill(WS.border).frame(height: 1)
         }
     }
 }
@@ -67,40 +67,35 @@ private struct TerminalTabChip: View {
         HStack(spacing: 6) {
             if let session = tab.focusedPane?.session {
                 Circle()
-                    .fill(ConnectionStatusDisplay(state: session.connectionState).tint.color)
+                    .fill(WS.color(for: ConnectionStatusDisplay(state: session.connectionState).tint))
                     .frame(width: 6, height: 6)
             }
-            Image(systemName: "terminal")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Palette.textMuted)
             Text(tab.title)
-                .font(.callout)
+                .font(WS.mono(12))
                 .lineLimit(1)
-                .foregroundStyle(isActive ? AppTheme.Palette.textPrimary
-                                          : AppTheme.Palette.textSecondary)
+                .foregroundStyle(isActive ? WS.text : WS.text3)
             Button(action: onClose) {
                 Image(systemName: "xmark").font(.system(size: 9))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(AppTheme.Palette.textMuted)
+            .foregroundStyle(WS.text3)
             .opacity(isHovered ? 1 : 0)
             .allowsHitTesting(isHovered)
         }
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
         .background(
-            // 活动 tab 用 controlBackgroundColor（=Editor / 终端区同色），视觉上跟下方主区无缝
-            // 衔接；非活动 tab 留空，继承 TabBar 的 .regularMaterial。不用圆角，
-            // 否则跟"无缝"目标矛盾。
-            isActive ? Color(nsColor: .controlBackgroundColor) : Color.clear
+            // 活动 tab 用终端正文同色（TerminalTheme.backgroundColor），与下方终端区
+            // 无缝衔接；非活动 tab 透明，露出 WS.panel 的 tab 条底。不用圆角。
+            isActive ? Color(nsColor: TerminalTheme.backgroundColor) : Color.clear
         )
         .overlay(alignment: .top) {
-            // 顶部 1px accent 横线，VS Code Dark Modern 标示活动 tab 的方式
+            // 顶部 2px accent 横线（设计稿活动 tab 标示）。
             if isActive {
-                Rectangle().fill(AppTheme.Palette.accent).frame(height: 1)
+                Rectangle().fill(WS.accent).frame(height: 2)
             }
         }
-        .hoverBackground(cornerRadius: 0, isActive: isActive)
+        .hoverBackground(WS.rowHover, cornerRadius: 0, isActive: isActive)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }

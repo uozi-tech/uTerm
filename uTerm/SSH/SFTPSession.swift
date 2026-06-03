@@ -25,7 +25,9 @@ actor SFTPSession: SFTPProviding {
                         name: filename,
                         posixPermissions: attributes.permissions,
                         size: attributes.size,
-                        modifiedAt: attributes.accessModificationTime?.modificationTime
+                        modifiedAt: attributes.accessModificationTime?.modificationTime,
+                        uid: attributes.uidgid?.userId,
+                        gid: attributes.uidgid?.groupId
                     )
                 )
             }
@@ -38,32 +40,11 @@ actor SFTPSession: SFTPProviding {
     }
 
     func download(remotePath: String) async throws -> Data {
-        let file = try await sftp.openFile(filePath: remotePath, flags: .read)
-        do {
-            let buffer = try await file.readAll()
-            try await file.close()
-            return Data(buffer.readableBytesView)
-        } catch {
-            try? await file.close()
-            throw error
-        }
+        try await download(remotePath: remotePath, onProgress: nil)
     }
 
     func upload(data: Data, toRemotePath: String) async throws {
-        let file = try await sftp.openFile(
-            filePath: toRemotePath,
-            flags: [.write, .create, .truncate]
-        )
-        do {
-            // `ByteBuffer(data:)` 需额外 import NIOFoundationCompat —— 这里直接 writeBytes 即可。
-            var buffer = ByteBuffer()
-            buffer.writeBytes(data)
-            try await file.write(buffer, at: 0)
-            try await file.close()
-        } catch {
-            try? await file.close()
-            throw error
-        }
+        try await upload(data: data, toRemotePath: toRemotePath, onProgress: nil)
     }
 
     func write(_ path: String, data: Data) async throws {
@@ -87,6 +68,93 @@ actor SFTPSession: SFTPProviding {
         let size = Int64(attrs.size ?? 0)
         let mtime = attrs.accessModificationTime?.modificationTime ?? Date()
         return RemoteStat(size: size, mtime: mtime)
+    }
+
+    /// 一次性命令 exec —— 委托给 `ConnectedClient.exec`（在 Sendable 包装上调用，
+    /// 不把非 Sendable 的 SSHClient 送出 actor）。复用目标 SSH 连接的 exec channel
+    /// （与 SFTP 子系统多路复用，不干扰终端 PTY）。
+    func exec(_ command: String) async throws -> String {
+        try await connected.exec(command)
+    }
+
+    // MARK: 目录 / 改名 / 删除
+
+    func rename(_ path: String, to newPath: String) async throws {
+        try await sftp.rename(at: path, to: newPath)
+    }
+    func removeFile(_ path: String) async throws {
+        try await sftp.remove(at: path)
+    }
+    func removeDirectory(_ path: String) async throws {
+        try await sftp.rmdir(at: path)
+    }
+    func createDirectory(_ path: String) async throws {
+        try await sftp.createDirectory(atPath: path)
+    }
+
+    // MARK: 带进度传输
+
+    func upload(data: Data, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        let total = Int64(data.count)
+        let file = try await sftp.openFile(
+            filePath: toRemotePath, flags: [.write, .create, .truncate])
+        do {
+            let chunk = 32 * 1024
+            var offset = 0
+            var lastPct = 0
+            onProgress?(TransferProgress(bytesDone: 0, bytesTotal: total))
+            while offset < data.count {
+                let end = min(offset + chunk, data.count)
+                var buffer = ByteBuffer()
+                buffer.writeBytes(data[offset..<end])
+                try await file.write(buffer, at: UInt64(offset))
+                offset = end
+                let pct = total > 0 ? Int(Int64(offset) * 100 / total) : 0
+                if pct != lastPct {
+                    onProgress?(TransferProgress(bytesDone: Int64(offset), bytesTotal: total))
+                    lastPct = pct
+                }
+            }
+            try await file.close()
+        } catch {
+            try? await file.close()
+            throw error
+        }
+    }
+
+    func download(remotePath: String,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data {
+        let attrs = try await sftp.getAttributes(at: remotePath)
+        let total = Int64(attrs.size ?? 0)
+        let file = try await sftp.openFile(filePath: remotePath, flags: .read)
+        do {
+            var data = Data()
+            let chunk: UInt32 = 32 * 1024
+            var offset: UInt64 = 0
+            var lastPct = 0
+            onProgress?(TransferProgress(bytesDone: 0, bytesTotal: total))
+            while true {
+                let buf = try await file.read(from: offset, length: chunk)
+                let n = buf.readableBytes
+                if n == 0 { break }
+                data.append(contentsOf: buf.readableBytesView)
+                offset += UInt64(n)
+                let pct = total > 0 ? Int(Int64(offset) * 100 / total) : 0
+                if pct != lastPct {
+                    onProgress?(TransferProgress(bytesDone: Int64(offset), bytesTotal: total))
+                    lastPct = pct
+                }
+            }
+            if total > 0 {
+                onProgress?(TransferProgress(bytesDone: Int64(data.count), bytesTotal: total))
+            }
+            try await file.close()
+            return data
+        } catch {
+            try? await file.close()
+            throw error
+        }
     }
 
     func close() async {

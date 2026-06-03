@@ -13,6 +13,14 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
         set { _previewTerminalRatio = min(0.9, max(0.1, newValue)) }
     }
 
+    /// 自绘三栏的列宽（pt），持久化。clamp 在拖拽处（ColumnResizer）做。
+    var sidebarWidth: Double = 200
+    var inspectorWidth: Double = 300
+
+    /// 左 sidebar 是否可见（自绘布局用）。沿用 `leftSidebarVisibility` 字段存储以
+    /// 保持快照向后兼容：`.detailOnly` = 隐藏，其余 = 显示。
+    var leftSidebarVisible: Bool { leftSidebarVisibility != .detailOnly }
+
     init() {}
 
     init(leftSidebarVisibility: NavigationSplitViewVisibility = .all,
@@ -27,6 +35,7 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case leftSidebarVisibility, rightInspectorPresented, previewTerminalRatio
+        case sidebarWidth, inspectorWidth
     }
 
     private static func visibility(from raw: String) -> NavigationSplitViewVisibility {
@@ -56,6 +65,8 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
         self.rightInspectorPresented = try c.decodeIfPresent(Bool.self, forKey: .rightInspectorPresented) ?? true
         let ratio = try c.decodeIfPresent(Double.self, forKey: .previewTerminalRatio) ?? 0.667
         self.previewTerminalRatio = ratio   // 经 setter clamp
+        self.sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 200
+        self.inspectorWidth = try c.decodeIfPresent(Double.self, forKey: .inspectorWidth) ?? 300
     }
 
     func encode(to encoder: Encoder) throws {
@@ -63,11 +74,15 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
         try c.encode(Self.raw(leftSidebarVisibility), forKey: .leftSidebarVisibility)
         try c.encode(rightInspectorPresented, forKey: .rightInspectorPresented)
         try c.encode(_previewTerminalRatio, forKey: .previewTerminalRatio)
+        try c.encode(sidebarWidth, forKey: .sidebarWidth)
+        try c.encode(inspectorWidth, forKey: .inspectorWidth)
     }
 
     static func == (lhs: WorkspaceUIState, rhs: WorkspaceUIState) -> Bool {
         lhs.leftSidebarVisibility == rhs.leftSidebarVisibility
             && lhs.rightInspectorPresented == rhs.rightInspectorPresented
             && abs(lhs._previewTerminalRatio - rhs._previewTerminalRatio) < 0.0001
+            && abs(lhs.sidebarWidth - rhs.sidebarWidth) < 0.5
+            && abs(lhs.inspectorWidth - rhs.inspectorWidth) < 0.5
     }
 }

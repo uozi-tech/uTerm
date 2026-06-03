@@ -20,6 +20,7 @@ struct WorkspaceWindowView: View {
     /// 用于把全局 CommandGroup 通知限定到当前 key window —— 多窗口下避免后台窗口
     /// 也被切换。`.controlActiveState` 在窗口为 key 时为 `.key`。
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.openSettings) private var openSettings
 
     init(windowID: WorkspaceWindowID?) {
         self.windowID = windowID
@@ -77,58 +78,61 @@ struct WorkspaceWindowView: View {
     private func workspaceBody(server: ServerProfile,
                                windowID: WorkspaceWindowID) -> some View {
         VStack(spacing: 0) {
-            NavigationSplitView(columnVisibility: Binding(
-                get: { workspace.uiState.leftSidebarVisibility },
-                set: { workspace.uiState.leftSidebarVisibility = $0 }
-            )) {
+            // 自绘标题栏（替代系统 toolbar）：左「文件」开关 / 居中服务器名 + 状态
+            // 胶囊 / 右 Agent 开关。彻底脱离系统 toolbar 及其 Liquid Glass。
+            WorkspaceTitleBar(
+                serverName: server.name,
+                session: workspace.focusedTerminalSession(),
+                onToggleSidebar: {
+                    withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
+                },
+                onToggleInspector: {
+                    withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleRightInspector() }
+                },
+                onOpenSettings: { openSettings() })
+
+            // 自绘三栏（替代 NavigationSplitView + .inspector）：列宽 / 折叠态进
+            // uiState 持久化。center 显式 minWidth(480) + 列宽 clamp 保证
+            // sidebar.max(320) + inspector.max(420) + 480 = 1220 ≤ windowMin(1280)，
+            // 永不 overflow 裁切。
+            WorkspaceColumns(
+                sidebarVisible: workspace.uiState.leftSidebarVisible,
+                inspectorVisible: workspace.uiState.rightInspectorPresented,
+                sidebarWidth: Binding(
+                    get: { workspace.uiState.sidebarWidth },
+                    set: { workspace.uiState.sidebarWidth = $0 }),
+                inspectorWidth: Binding(
+                    get: { workspace.uiState.inspectorWidth },
+                    set: { workspace.uiState.inspectorWidth = $0 })
+            ) {
                 SFTPSidebar(model: workspace.fileBrowserModel, server: server)
-                    // 列宽几何约束（2026-05 final round）：
-                    //   sidebar.max(240) + detail.min(480) + inspector.max(360) = 1080
-                    //   再加 splitter ≈ 1085pt < windowMinWidth(1280) — 留 ~195pt
-                    //   缓冲应对 chrome / Liquid Glass 渲染。
-                    // 这条不等式保证：无论用户怎么拖 sidebar / inspector splitter，
-                    // 永远不会出现 sum(列宽) > 窗口宽 的 overflow 裁切。
-                    // max 从 300 收到 240：拖宽空间 80pt 仍够看较长文件名；
-                    // 收得更紧能给 detail 更大保底（之前 max=300 时 detail 只剩 ~500pt）。
-                    .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 240)
-            } detail: {
+            } center: {
                 WorkspaceCenter(workspace: workspace, server: server)
-                    // detail 显式声明 minWidth(480)：sidebar/inspector 拖到 max 时
-                    // detail 仍至少保留 480pt 渲染 terminal/preview，不被挤到 0。
-                    // 不声明的话 SwiftUI 给 detail = 0 让 sidebar/inspector 的
-                    // 内容溢出到 detail 区域 —— 那就是 user 看到的"被遮挡"。
                     .frame(minWidth: 480)
-                    .inspector(isPresented: Binding(
-                        get: { workspace.uiState.rightInspectorPresented },
-                        set: { workspace.uiState.rightInspectorPresented = $0 }
-                    )) {
-                        AgentSidebar(
-                            model: workspace.assistantModel,
-                            serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
-                            activeProviderIDString: $activeProviderIDString)
-                            // inspector.max 从 480 收到 360：上一轮 max 太宽，
-                            // sidebar(300) + inspector(480) = 780pt 占 1280pt 窗口
-                            // 一大半，detail 只剩 ~500pt。
-                            // 收到 360 之后 sum(240+360+480) = 1080 ≤ 1280-chrome，
-                            // 永远不会出现 overflow 裁切。
-                            .inspectorColumnWidth(min: 220, ideal: 280, max: 360)
-                    }
+            } inspector: {
+                AgentSidebar(
+                    model: workspace.assistantModel,
+                    serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
+                    serverName: server.name,
+                    activeProviderIDString: $activeProviderIDString)
             }
-            // status bar 作为 NavigationSplitView 的兄弟节点（而非 safeAreaInset）—
-            // safeAreaInset 在 NavigationSplitView 的 detail 列里不可靠传递，
-            // SwiftTerm NSView 会渲染到 inset 区域下面，挡住末行（issue 反馈）。
-            Rectangle().fill(AppTheme.Palette.border).frame(height: 1)
+
+            // status bar 作为兄弟节点（非 safeAreaInset）—— SwiftTerm NSView 会渲染到
+            // inset 区域下面挡住末行（issue 反馈）。
+            Rectangle().fill(WS.border).frame(height: 1)
             StatusBarView(workspace: workspace)
         }
-        .navigationTitle(server.name)
-        // 隐藏工具栏中央那颗自动渲染的标题胶囊 —— 服务器名在 .principal
-        // 工具栏自渲染；保留 `.navigationTitle` 仅供窗口菜单/调度中心识别。
-        .toolbar(removing: .title)
-        .toolbar { workspaceToolbar(server: server) }
-        // toolbar 背景留给系统 —— macOS 26 的 Liquid Glass sidebar 需要
-        // 顶部透明、内容从 toolbar 下方延伸过去，圆角/border 才整圈连贯。
-        // 强制 bgPanel + .visible 会在 sidebar 顶部封一道平板，把玻璃切断。
-        .background(Color(nsColor: .windowBackgroundColor))
+        // 让内容延伸到标题栏区域之下（配合 WorkspaceWindowChrome 的
+        // .fullSizeContentView）—— 否则 SwiftUI 顶部安全区 inset 会把自绘标题栏
+        // 顶到系统标题栏下方，形成「红绿灯一条 + 自绘标题栏一条」的双栏割裂。
+        // 忽略顶部安全区后，自绘 38px 标题栏占住标题栏区，红绿灯叠在其左侧留白上。
+        .ignoresSafeArea(.container, edges: .top)
+        .background(WS.bg)
+        // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明 WS 底 + 深色外观 +
+        // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
+        // 不可能再有系统玻璃。
+        .background(WorkspaceWindowChrome(serverName: server.name))
+        .environment(\.colorScheme, .dark)
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
@@ -152,6 +156,8 @@ struct WorkspaceWindowView: View {
         // 窗口关闭时释放资源（Fix #8）。WorkspaceModel.dispose 关闭 SFTP 会话
         // 与所有终端 session。SwiftUI 在 view 离开层级时调 onDisappear，
         // 而正常 re-render 不会触发，故此处是安全的窗口生命周期挂点。
+        // 遥测轮询：start() 幂等且独立于视图生命周期；窗口关闭 dispose→stop。
+        .task { workspace.telemetryModel.start() }
         .onDisappear {
             workspace.dispose()
         }
@@ -172,11 +178,11 @@ struct WorkspaceWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleLeftSidebar)) { _ in
             guard controlActiveState == .key else { return }
-            workspace.toggleLeftSidebar()
+            withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleRightInspector)) { _ in
             guard controlActiveState == .key else { return }
-            workspace.toggleRightInspector()
+            withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleRightInspector() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
             guard controlActiveState == .key else { return }
@@ -292,38 +298,6 @@ struct WorkspaceWindowView: View {
         }
     }
 
-    @ToolbarContentBuilder
-    private func workspaceToolbar(server: ServerProfile) -> some ToolbarContent {
-        // 工具栏按钮**不**再绑 keyboardShortcut —— 全靠 CommandGroup 一处注册
-        // （Fix #4）。先前 toolbar 与 commands 同时挂同一快捷键导致每次按键
-        // 触发两次 toggle，净 no-op。
-        //
-        // 左 sidebar toggle 按钮**不**手动加 —— NavigationSplitView 绑了
-        // columnVisibility 后 macOS 会自动注入一颗系统按钮，再加自定义会重复
-        // （issue：截图里两颗 sidebar 图标）。⌘⌥1 由 CommandGroup 提供。
-
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 8) {
-                Text(server.name).font(.headline)
-                    .foregroundStyle(AppTheme.Palette.textPrimary)
-                if let session = workspace.focusedTerminalSession() {
-                    ConnectionStatusBadge(state: session.connectionState)
-                }
-            }
-            // 系统给 .principal 的胶囊外壳贴边渲染文字，左右各留一点呼吸空间。
-            .padding(.horizontal, 10)
-        }
-
-        // 分屏按钮删了 —— ⌘⇧D 在 uTermApp 的 CommandGroup 里挂着，
-        // 工具栏长期占位且不常用。
-
-        ToolbarItem(placement: .primaryAction) {
-            Button { workspace.toggleRightInspector() } label: {
-                Image(systemName: "sparkles")
-            }
-            .help("显示/隐藏 Agent（⌘⌥2）")
-        }
-    }
 }
 
 /// 把 SwiftData providers + @AppStorage activeProviderID 灌进 assistant model。

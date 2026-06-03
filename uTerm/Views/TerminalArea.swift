@@ -28,10 +28,10 @@ struct TerminalArea: View {
         VStack(spacing: 8) {
             Image(systemName: "terminal")
                 .font(.system(size: 28, weight: .light))
-                .foregroundStyle(AppTheme.Palette.textMuted)
+                .foregroundStyle(WS.text3)
             Text("没有打开的终端标签")
                 .font(.callout)
-                .foregroundStyle(AppTheme.Palette.textSecondary)
+                .foregroundStyle(WS.text2)
             Button("新建终端标签") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }

@@ -38,56 +38,37 @@ struct GeneralSettingsView: View {
             SettingsGroup(title: "启动") {
                 SettingsRow(label: "启动时",
                             hint: "打开 uTerm 时首先展示的页面") {
-                    Picker("", selection: startupBehaviorBinding) {
-                        ForEach(StartupBehavior.allCases) { b in
-                            Text(b.localizedLabel).tag(b)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 280)
+                    SettingsSegmented(
+                        selection: startupBehaviorBinding,
+                        options: StartupBehavior.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "恢复终端会话",
                             hint: "启动时重新加载上次工作区的标签与分屏布局") {
-                    Toggle("", isOn: $restoreTerminalSession)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
+                    SettingsSwitch(isOn: $restoreTerminalSession)
                 }
             }
 
             SettingsGroup(title: "外观") {
                 SettingsRow(label: "主题",
                             hint: "立即生效。改主题影响 uTerm 窗口外观；终端配色独立，不受此设置影响。") {
-                    Picker("", selection: appearanceBinding) {
-                        ForEach(AppearancePreference.allCases) { p in
-                            Text(p.localizedLabel).tag(p)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 280)
+                    SettingsSegmented(
+                        selection: appearanceBinding,
+                        options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "语言",
                             hint: "改语言后需重启 uTerm 生效。") {
-                    Picker("", selection: appLanguageBinding) {
-                        ForEach(AppLanguage.allCases) { l in
-                            Text(l.localizedLabel).tag(l)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 280)
+                    SettingsSegmented(
+                        selection: appLanguageBinding,
+                        options: AppLanguage.allCases.map { ($0, $0.localizedLabel) })
                 }
             }
 
             SettingsGroup(title: "更新") {
                 SettingsRow(label: "自动检查更新") {
-                    Toggle("", isOn: Binding(
+                    SettingsSwitch(isOn: Binding(
                         get: { appUpdater.automaticallyChecksForUpdates },
                         set: { appUpdater.automaticallyChecksForUpdates = $0 }
                     ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
                 }
                 UpdateStatusPanel()
             }
@@ -117,19 +98,17 @@ private struct UpdateStatusPanel: View {
 
             Spacer()
 
-            Button("检查更新") {
+            SettingsInlineButton(title: "检查更新", enabled: appUpdater.canCheckForUpdates) {
                 appUpdater.checkForUpdates()
             }
-            .disabled(!appUpdater.canCheckForUpdates)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.quaternary)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.025)))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(AppTheme.Palette.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(AppTheme.Palette.border, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var statusLine: String {

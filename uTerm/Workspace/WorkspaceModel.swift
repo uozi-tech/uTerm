@@ -20,6 +20,10 @@ final class WorkspaceModel {
     /// 预览/编辑区的 model；与 workspace 同生命周期。Spec 2A §1.3。
     let filePreviewModel: FilePreviewModel
 
+    /// 底部状态栏的远程遥测 model；与 workspace 同生命周期。复用 SFTP 连接轮询
+    /// /proc 等，不碰终端 PTY。
+    let telemetryModel: TelemetryModel
+
     init(windowID: WorkspaceWindowID? = nil) {
         // 按 windowID 命名 recents 文件；windowID 为 nil（测试）走临时目录。
         let store: RecentFilesStore
@@ -37,6 +41,9 @@ final class WorkspaceModel {
         self.filePreviewModel = FilePreviewModel(
             recentsStore: store,
             sftpProvider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider })
+        // 遥测复用 SFTP 的连接（同 FilePreviewModel 的延迟取法）。
+        self.telemetryModel = TelemetryModel(
+            provider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider })
     }
 
     /// 从持久化快照重建工作区。便利构造器 —— 内部走 restore(from:) 走同一条路径。
@@ -78,6 +85,7 @@ final class WorkspaceModel {
         for tab in tabs { tab.disposeAll() }
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
+        telemetryModel.stop()
     }
 
     var activeTab: TabModel? { tabs.first { $0.id == activeTabID } }

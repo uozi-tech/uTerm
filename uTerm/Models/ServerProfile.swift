@@ -22,6 +22,9 @@ final class ServerProfile {
     var username: String = ""
     /// `AuthMethod` 的 rawValue。通过 `authMethod` 计算属性读写。
     var authMethodRaw: String = AuthMethod.password.rawValue
+    /// 私钥认证时引用的密钥库 `SSHKey.id`。私钥正文与口令存在该 key 的钟匙串条目下。
+    /// 旧数据为 nil —— 连接时 `SSHAuthResolver` 回退到按 `profile.id` 取私钥。
+    var keyID: UUID?
     var createdAt: Date = Date()
     var sortOrder: Int = 0
 
