@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// 设计稿 `new-server.jsx` / `keys.jsx` 里的表单原语翻译成 SwiftUI。全部用
-/// `WS` 暗色 token，专供「新建服务器」表单与「密钥管理」窗口复用 —— 两处都
-/// 被钉为 `.darkAqua`，故这里的实色恒成立，不随全局浅 / 深外观变化。
+/// 设计稿 `new-server.jsx` / `keys.jsx` 里的表单原语翻译成 SwiftUI。
+/// 表单控件，外观随全局主题；UD 自适应 token 在深 / 浅模式下均正确呈现。
 ///
 /// 设计稿对应：`Input` / `Segmented` / `Switch` / `FormSection` / `FormField`
 /// / `Button` / 分组 chip。
@@ -25,7 +24,7 @@ struct DarkTextField: View {
             .foregroundStyle(UD.text)
             .padding(.horizontal, 12)
             .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
@@ -48,7 +47,7 @@ struct DarkSecureField: View {
             .foregroundStyle(UD.text)
             .padding(.horizontal, 12)
             .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
@@ -153,7 +152,7 @@ struct DarkButton: View {
     private var background: some View {
         RoundedRectangle(cornerRadius: 7)
             .fill(secondary ? Color.clear
-                  : (enabled ? UD.accent : Color.white.opacity(0.06)))
+                  : (enabled ? UD.accent : UD.fillSoft))
     }
 }
 

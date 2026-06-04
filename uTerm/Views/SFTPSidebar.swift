@@ -10,7 +10,7 @@ struct SFTPSidebar: View {
 
     var body: some View {
         // 铺 UD.bg 实色 —— 主动切断 NavigationSplitView 的 Liquid Glass sidebar
-        // 材质（去玻璃改造）。窗口已被钉为 .darkAqua，故此处实色恒为深色。
+        // 材质（去玻璃改造）；随全局主题自适应深 / 浅。
         FileBrowserContent(model: model)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(UD.bg)

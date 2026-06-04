@@ -106,7 +106,7 @@ struct SFTPPathBar: View {
         .help(i == 0 ? "根目录 /" : full)
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 7)
-            .fill(isLast ? Color.white.opacity(0.05) : .clear))
+            .fill(isLast ? UD.fillSoft : .clear))
         .hoverBackground(isLast ? .clear : UD.rowHover, cornerRadius: 7, isActive: isLast)
     }
 
@@ -124,7 +124,7 @@ struct SFTPPathBar: View {
                 .focused($filterFocused)
         }
         .padding(.horizontal, 11).frame(width: 200, height: 32)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
         .overlay(RoundedRectangle(cornerRadius: 8)
             .strokeBorder(filterFocused ? UD.accent : UD.border, lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: filterFocused)
@@ -160,7 +160,7 @@ struct SFTPPathBar: View {
                     .foregroundStyle(UD.text3)
             }
             .padding(.horizontal, 12).frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.02)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
         }
         .menuStyle(.borderlessButton)
@@ -183,7 +183,7 @@ struct SFTPToolButton: View {
                 .foregroundStyle(hover ? UD.text : UD.text2)
                 .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(hover ? UD.panelHover : Color.white.opacity(0.02)))
+                    .fill(hover ? UD.panelHover : UD.fillFaint))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)

@@ -26,6 +26,9 @@ struct TerminalHostView: NSViewRepresentable {
     @AppStorage("terminalScrollback")   private var scrollback: Int = 3_000
     @AppStorage("terminalCopyOnSelect") private var copyOnSelect: Bool = false
 
+    /// app 主题（解钉后即工作区/SFTP 窗口的外观）。变化会触发 updateNSView 重 apply。
+    @Environment(\.colorScheme) private var appColorScheme
+
     private var currentSettings: TerminalSettings {
         TerminalSettings(
             fontName: fontName,
@@ -40,19 +43,24 @@ struct TerminalHostView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> TerminalContainerView {
+        let dark = appColorScheme == .dark
         (terminalView as? CopyableTerminalView)?.copyOnSelect = copyOnSelect
-        TerminalTheme.apply(to: terminalView, settings: currentSettings)
-        return TerminalContainerView(
+        TerminalTheme.apply(to: terminalView, settings: currentSettings, dark: dark)
+        let container = TerminalContainerView(
             terminalView: terminalView,
             forwardsScrollToParent: forwardsScrollToParent
         )
+        container.layer?.backgroundColor = currentSettings.colorScheme(dark: dark).backgroundColor.cgColor
+        return container
     }
 
     func updateNSView(_ nsView: TerminalContainerView, context: Context) {
+        let dark = appColorScheme == .dark
         nsView.forwardsScrollToParent = forwardsScrollToParent
         (terminalView as? CopyableTerminalView)?.copyOnSelect = copyOnSelect
         nsView.attach(terminalView)
-        TerminalTheme.apply(to: terminalView, settings: currentSettings)
+        nsView.layer?.backgroundColor = currentSettings.colorScheme(dark: dark).backgroundColor.cgColor
+        TerminalTheme.apply(to: terminalView, settings: currentSettings, dark: dark)
     }
 
     static func dismantleNSView(_ nsView: TerminalContainerView, coordinator: ()) {

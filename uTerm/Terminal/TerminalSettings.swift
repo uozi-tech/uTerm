@@ -6,7 +6,12 @@ import Foundation
 /// 各字段对应一个 `@AppStorage` key；本 struct **不**绑定 SwiftUI，
 /// 只是值类型。读取由调用方（TerminalHostView / TerminalSettingsView）
 /// 用 `@AppStorage` 单独完成，再传给本结构构造器。
-struct TerminalSettings: Equatable {
+nonisolated struct TerminalSettings: Equatable {
+    static let defaultFontName = "Menlo"
+    static let defaultFontSize: Double = 11
+    static let defaultLineHeight: Double = 1.0
+    static let defaultScrollback = 3_000
+
     var fontName: String
     var fontSize: Double
     var lineHeight: Double
@@ -20,9 +25,9 @@ struct TerminalSettings: Equatable {
     /// 这是测试时的便捷入口；生产代码直接用 @AppStorage 属性。
     static func read(from defaults: UserDefaults = .standard) -> TerminalSettings {
         TerminalSettings(
-            fontName: defaults.string(forKey: "terminalFontName") ?? "Menlo",
-            fontSize: (defaults.object(forKey: "terminalFontSize") as? Double) ?? 11,
-            lineHeight: (defaults.object(forKey: "terminalLineHeight") as? Double) ?? 1.0,
+            fontName: defaults.string(forKey: "terminalFontName") ?? defaultFontName,
+            fontSize: (defaults.object(forKey: "terminalFontSize") as? Double) ?? defaultFontSize,
+            lineHeight: (defaults.object(forKey: "terminalLineHeight") as? Double) ?? defaultLineHeight,
             colorSchemeID: TerminalColorSchemeID(
                 rawValue: defaults.string(forKey: "terminalColorScheme") ?? "vscode-dark"
             ) ?? .vscodeDark,
@@ -30,13 +35,14 @@ struct TerminalSettings: Equatable {
                 rawValue: defaults.string(forKey: "terminalCursorShape") ?? "block"
             ) ?? .block,
             cursorBlink: (defaults.object(forKey: "terminalCursorBlink") as? Bool) ?? false,
-            scrollback: (defaults.object(forKey: "terminalScrollback") as? Int) ?? 3000,
+            scrollback: (defaults.object(forKey: "terminalScrollback") as? Int) ?? defaultScrollback,
             copyOnSelect: (defaults.object(forKey: "terminalCopyOnSelect") as? Bool) ?? false
         )
     }
 
-    /// 解析后的 color scheme（运行时构造，不存）。
-    var colorScheme: TerminalColorScheme {
-        TerminalColorScheme.scheme(for: colorSchemeID)
+    /// 按 app 外观解析后的 color scheme（运行时构造，不存）。
+    @MainActor
+    func colorScheme(dark: Bool) -> TerminalColorScheme {
+        TerminalColorScheme.resolve(colorSchemeID, dark: dark)
     }
 }

@@ -3,7 +3,7 @@ import SwiftData
 import AppKit
 
 /// 密钥管理窗口（设计稿 `keys.jsx`）。集中式 SSH 密钥库：左列表 + 右详情，
-/// 顶部可生成 / 导入。独立 `Window`，钉 `.darkAqua`，全程 `WS` 暗色调色板。
+/// 顶部可生成 / 导入。独立 `Window`，外观随全局主题。
 ///
 /// 私钥正文走 `KeyStore`（钟匙串）；模型 `SSHKey` 只存可公开元数据。「使用此
 /// 密钥的主机」从 `ServerProfile.keyID == key.id` 实时派生。

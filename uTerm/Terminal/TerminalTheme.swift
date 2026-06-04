@@ -4,11 +4,6 @@ import SwiftTerm
 
 enum TerminalTheme {
     static let backgroundColor = NSColor(srgbRed: 0x1E / 255, green: 0x1E / 255, blue: 0x1E / 255, alpha: 1)
-    static let foregroundColor = NSColor(srgbRed: 0xCC / 255, green: 0xCC / 255, blue: 0xCC / 255, alpha: 1)
-    /// VS Code Dark+ `terminalCursor.foreground` (#AEAFAD). Used for the
-    /// caret block fill; pairs with `backgroundColor` as the glyph color so
-    /// the character under the solid block stays readable.
-    static let cursorColor = NSColor(srgbRed: 0xAE / 255, green: 0xAF / 255, blue: 0xAD / 255, alpha: 1)
 
     static func applyScrollback(to view: SwiftTerm.TerminalView, scrollback: Int) {
         guard let terminal = view.terminal else { return }
@@ -26,6 +21,10 @@ enum TerminalTheme {
     /// `terminal.findMatchBackground` (`#A07D27`).
     static let searchMatchColor = NSColor(srgbRed: 0xF1 / 255, green: 0xB5 / 255, blue: 0x3C / 255, alpha: 0.6)
 
+    /// 浅色终端的选区底色。深色用上面的 `normalSelectionColor`（深蓝）；浅色用 VS Code
+    /// 浅蓝 #ADD6FF —— 否则深蓝盖在「浅底 + 深字」上会把选中文字压成不可读。
+    static let lightSelectionColor = NSColor(srgbRed: 0xAD / 255, green: 0xD6 / 255, blue: 0xFF / 255, alpha: 0.8)
+
     // MARK: spec 03 — settings-driven API
 
     /// Spec 03 主 entry：接收完整 settings 一次性 apply。
@@ -33,11 +32,12 @@ enum TerminalTheme {
     /// 调用顺序保证 scheme 先于 cursor —— applyCursor 在 block 形态时
     /// 读 view.nativeBackgroundColor 作为 caretTextColor，需要 scheme
     /// 已生效。
-    static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings) {
+    static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings, dark: Bool) {
+        let scheme = settings.colorScheme(dark: dark)
         applyFont(to: view, fontName: settings.fontName, fontSize: CGFloat(settings.fontSize))
         applyLineSpacing(to: view, lineSpacing: CGFloat(settings.lineHeight))
-        applyColorScheme(to: view, scheme: settings.colorScheme)
-        applyCursor(to: view, shape: settings.cursorShape, blink: settings.cursorBlink)
+        applyColorScheme(to: view, scheme: scheme, dark: dark)
+        applyCursor(to: view, scheme: scheme, shape: settings.cursorShape, blink: settings.cursorBlink)
         applyScrollback(to: view, scrollback: settings.scrollback)
         applyRoundedCorners(to: view)
     }
@@ -59,22 +59,21 @@ enum TerminalTheme {
     }
 
     /// 应用 scheme：bg / fg / installColors / 保留 selection color。
-    static func applyColorScheme(to view: SwiftTerm.TerminalView, scheme: TerminalColorScheme) {
+    static func applyColorScheme(to view: SwiftTerm.TerminalView, scheme: TerminalColorScheme, dark: Bool) {
         view.nativeBackgroundColor = scheme.backgroundColor
         view.nativeForegroundColor = scheme.foregroundColor
         view.installColors(scheme.ansiColors)
-        // selection color 不随 scheme 切——保留 normalSelectionColor 蓝调
-        view.selectedTextBackgroundColor = normalSelectionColor
+        // 选区底色随外观切：深色深蓝 / 浅色浅蓝，保证选中文字在两种底上都可读
+        view.selectedTextBackgroundColor = dark ? normalSelectionColor : lightSelectionColor
     }
 
     /// 光标形状 + 闪烁。注意：caller 必须先 applyColorScheme，因为
     /// block 形态读 view.nativeBackgroundColor 作 caretTextColor。
     static func applyCursor(to view: SwiftTerm.TerminalView,
+                             scheme: TerminalColorScheme,
                              shape: TerminalCursorShape,
                              blink: Bool) {
-        view.caretColor = cursorColor
-        // 仅块形态需要 caretTextColor 让字符在光标下可读；underline / bar
-        // 不覆盖字符（nil = 用 fg）。
+        view.caretColor = scheme.cursorColor
         view.caretTextColor = (shape == .block) ? view.nativeBackgroundColor : nil
         view.feed(text: "\u{1B}[\(shape.decscusrParameter(blink: blink)) q")
     }

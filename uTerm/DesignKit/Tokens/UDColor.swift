@@ -88,6 +88,11 @@ enum UD {
     nonisolated static let rowHover    = dyn(.white(0.025), .black(0.03))
     nonisolated static let rowSelected = dyn(.white(0.055), .hex(0x007AFF, 0.13))
 
+    // MARK: - 叠加填充 Fill（面上的细微实体填充；深=白叠加 / 浅=黑叠加）
+    nonisolated static let fillFaint = dyn(.white(0.03),  .black(0.035))   // 卡片 / 气泡静态底
+    nonisolated static let fillSoft  = dyn(.white(0.05),  .black(0.055))   // 选中段 / 代码片
+    nonisolated static let fillMed   = dyn(.white(0.08),  .black(0.08))    // 进度槽等需更明显处
+
     // MARK: - 遥测分类色 Telemetry（状态栏 / 指标卡，深浅各一套）
     nonisolated static let mPlatform = dyn(.hex(0x409CFF), .hex(0x007AFF))   // 平台
     nonisolated static let mEndpoint = dyn(.hex(0x9AA7B5), .hex(0x6B7681))   // endpoint / 时间戳

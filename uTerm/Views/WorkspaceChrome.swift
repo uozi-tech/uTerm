@@ -104,6 +104,13 @@ struct WindowDragHandle: NSViewRepresentable {
             }
             window.performDrag(with: event)
         }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer?.backgroundColor = WS.panelNSColor.cgColor
+            }
+        }
     }
 }
 
@@ -137,7 +144,7 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
 
         func apply() {
             guard let window else { return }
-            window.appearance = NSAppearance(named: .darkAqua)
+            window.appearance = nil   // 跟随 NSApp.appearance（AppAppearanceSync 驱动）
             window.isOpaque = true
             window.backgroundColor = WS.bgNSColor
             window.titleVisibility = .hidden

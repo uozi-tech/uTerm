@@ -39,7 +39,7 @@ struct SFTPStatusBar: View {
                 .font(UD.mono(11)).foregroundStyle(UD.text2).lineLimit(1)
             if t.bytesTotal > 0 {
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08)).frame(width: 110, height: 5)
+                    Capsule().fill(UD.fillMed).frame(width: 110, height: 5)
                     Capsule().fill(UD.accent).frame(width: 110 * frac, height: 5)
                 }
                 Text("\(Int(frac * 100))%")

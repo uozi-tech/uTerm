@@ -31,6 +31,12 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
     let buffer: FileBuffer
     let language: String
     @Binding var findController: FindReplaceController?
+    @AppStorage("terminalFontName") private var fontName: String = TerminalSettings.defaultFontName
+    @AppStorage("terminalFontSize") private var fontSize: Double = TerminalSettings.defaultFontSize
+
+    private var editorFont: NSFont {
+        EditorTheme.textFont(fontName: fontName, fontSize: CGFloat(fontSize))
+    }
 
     func makeCoordinator() -> CodeEditorController {
         CodeEditorController()
@@ -46,7 +52,7 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
 
         let textView = TextView(
             string: buffer.text,
-            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            font: editorFont,
             textColor: EditorTheme.foreground,
             lineHeightMultiplier: 1.4,
             wrapLines: false,
@@ -92,13 +98,31 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? TextView else { return }
-        if textView.string != buffer.text {
-            context.coordinator.isUpdatingFromBinding = true
+        let coordinator = context.coordinator
+        let targetFont = editorFont
+        if textView.font != targetFont {
+            textView.font = targetFont
+            // TextView.font 只改 typingAttributes（影响后续输入），已加载文本的
+            // .font 属性不会变 —— 必须显式把字体 attr 铺回整段 textStorage，否则
+            // 换字体后正文不重渲染。
+            if let storage = textView.textStorage {
+                let fullRange = NSRange(location: 0, length: storage.length)
+                storage.addAttribute(.font, value: targetFont, range: fullRange)
+                textView.layoutManager.invalidateLayoutForRange(fullRange)
+            }
+            coordinator.ensureGutterAttached()
+        }
+        // SwiftUI 复用同一 coordinator 跨同 kind 文件（body 无 `.id(buffer.id)`），切文件
+        // 只会进到这里而非 makeNSView/attach。先随新 buffer 重选高亮策略 + 重绑 buffer
+        // 引用，否则新文件沿用上个文件的 grammar 上色（残留高亮），且编辑写回旧 FileBuffer。
+        let bufferChanged = coordinator.rebind(to: buffer)
+        if bufferChanged || textView.string != buffer.text {
+            coordinator.isUpdatingFromBinding = true
             textView.setText(buffer.text)
-            context.coordinator.isUpdatingFromBinding = false
+            coordinator.isUpdatingFromBinding = false
             // setText 把 textView 所有 subview 都 removeFromSuperview 了（CodeEditTextView
-            // setTextStorage 的副作用）—— 把 gutter 重新挂回 + 刷宽度/行号。
-            context.coordinator.ensureGutterAttached()
+            // setTextStorage 的副作用）—— 把 gutter 重新挂回 + 刷宽度/行号 + 重高亮。
+            coordinator.ensureGutterAttached()
         }
     }
 }

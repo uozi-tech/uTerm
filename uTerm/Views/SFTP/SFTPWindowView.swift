@@ -4,9 +4,9 @@ import SwiftData
 /// 一个 SFTP 独立窗口：绑定单台服务器（由 `SFTPWindowID` 指定）。纯文件浏览，
 /// 无终端 / 无 Agent。复用 `FileBrowserModel` 作为 SFTP 引擎。
 ///
-/// 视觉：完全对齐设计稿 `pages/sftp.jsx` —— 自绘扁平深色窗口（`WorkspaceWindowChrome`
-/// 透明标题栏 + full-size content + `.darkAqua` + 去玻璃），WS 暗色调色板，**不出现
-/// 任何系统 Liquid Glass**。标题栏自绘（红绿灯让位 + 居中 SFTP·user@host + 状态胶囊）。
+/// 视觉：完全对齐设计稿 `pages/sftp.jsx` —— 自绘扁平窗口，外观随主题（`WorkspaceWindowChrome`
+/// 透明标题栏 + full-size content + 去玻璃），**不出现任何系统 Liquid Glass**。
+/// 标题栏自绘（红绿灯让位 + 居中 SFTP·user@host + 状态胶囊）。
 struct SFTPWindowView: View {
     let windowID: SFTPWindowID?
 
@@ -38,7 +38,6 @@ struct SFTPWindowView: View {
                 .ignoresSafeArea(.container, edges: .top)
                 .background(UD.bg)
                 .background(WorkspaceWindowChrome(serverName: "SFTP"))
-                .environment(\.colorScheme, .dark)
         }
     }
 
@@ -58,7 +57,6 @@ struct SFTPWindowView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "SFTP — \(server.name)"))
-        .environment(\.colorScheme, .dark)
         .hostKeySheet(model.hostKeyRelay)
         .task(id: windowID) {
             await model.connect(profile: server, modelContainer: modelContext.container)
@@ -155,7 +153,7 @@ struct SFTPStatusPill: View {
                 .foregroundStyle(UD.text2)
         }
         .padding(.leading, 7).padding(.trailing, 8).padding(.vertical, 2)
-        .background(Capsule().fill(Color.white.opacity(0.04)))
+        .background(Capsule().fill(UD.fillFaint))
         .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
         // 进入 .browsing 才启动脉冲 —— 首帧通常是 .idle/.connecting，故 onAppear 与
         // onChange 都要试一次（否则连上后圆点静止不动）。

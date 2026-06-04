@@ -1,8 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// 新建 / 编辑一台服务器的暗色模态表单（设计稿 `new-server.jsx`）。固定深色
-/// （`WS` 调色板 + 钉 `.darkAqua`），无视全局浅 / 深外观。
+/// 新建 / 编辑一台服务器的模态表单（设计稿 `new-server.jsx`）。外观随全局主题。
 ///
 /// 字段写入 `ServerProfile`；密码写钟匙串（按 profile.id）；私钥改为**引用密钥库**
 /// （`profile.keyID` 指向一把 `SSHKey`，私钥正文由密钥库的钟匙串条目承载）；跳板机

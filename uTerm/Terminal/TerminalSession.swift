@@ -54,7 +54,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // sane initial so cellDimension is valid when the first frame arrives.
         self.terminalView = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         super.init()
-        TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read())
+        TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
         terminalView.menu = Self.makeContextMenu(for: terminalView)
     }

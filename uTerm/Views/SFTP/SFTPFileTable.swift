@@ -211,7 +211,7 @@ struct SFTPFileIcon: View {
             ZStack(alignment: .center) {
                 Image(systemName: "doc.fill")
                     .font(.system(size: size))
-                    .foregroundStyle(Color.white.opacity(0.16))
+                    .foregroundStyle(UD.text4)
                 Image(systemName: "arrowshape.turn.up.right.fill")
                     .font(.system(size: size * 0.36, weight: .bold))
                     .foregroundStyle(Color(hex: 0x2DD4BF))
@@ -221,7 +221,7 @@ struct SFTPFileIcon: View {
             ZStack(alignment: .center) {
                 Image(systemName: "doc.fill")
                     .font(.system(size: size))
-                    .foregroundStyle(Color.white.opacity(0.16))
+                    .foregroundStyle(UD.text4)
                 if let tag, let color {
                     Text(tag)
                         .font(.system(size: size * 0.316, weight: .bold, design: .monospaced))
@@ -232,7 +232,7 @@ struct SFTPFileIcon: View {
                 } else {
                     Image(systemName: "line.3.horizontal")
                         .font(.system(size: size * 0.316, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.3))
+                        .foregroundStyle(UD.text3)
                         .offset(y: size * 0.105)
                 }
             }

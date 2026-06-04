@@ -79,7 +79,7 @@ struct KeyDetailView: View {
                 CopyButton(text: key.fingerprint)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.025)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
         }
     }
@@ -199,7 +199,7 @@ private struct CopyButton: View {
                 .foregroundStyle(copied ? UD.success : UD.text3)
                 .padding(.horizontal, bordered ? 9 : 0).padding(.vertical, bordered ? 3 : 0)
                 .background(bordered ? AnyView(RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.white.opacity(0.02))
+                    .fill(UD.fillFaint)
                     .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.border, lineWidth: 1)))
                     : AnyView(Color.clear))
         }
@@ -217,7 +217,7 @@ private struct WrapChips: View {
                     Text(name).font(UD.mono(11.5)).foregroundStyle(UD.text2)
                 }
                 .padding(.leading, 8).padding(.trailing, 9).padding(.vertical, 4)
-                .background(Capsule().fill(Color.white.opacity(0.03)))
+                .background(Capsule().fill(UD.fillFaint))
                 .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
             }
         }

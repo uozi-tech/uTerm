@@ -23,6 +23,40 @@ final class CodeEditorController: NSObject {
     // MARK: Track C — 语法高亮
     private var highlighter: SyntaxHighlighter = NoopHighlighter()
 
+    /// 按 buffer 的语言挑高亮策略：注册了 tree-sitter grammar → TreeSitter；
+    /// 其余 code-like 文件 → PatternSyntaxHighlighter；纯文本/图片 → Noop。
+    private func makeHighlighter(for buffer: FileBuffer) -> SyntaxHighlighter {
+        let langId: String
+        switch buffer.kind {
+        case .code(let l): langId = l
+        case .markdown:    langId = "markdown"
+        case .plainText:   langId = ""
+        case .image:       langId = ""
+        }
+        if let entry = GrammarRegistry.entry(for: langId) {
+            return TreeSitterHighlighter(language: entry.language,
+                                         highlightsQueryText: entry.highlightsQueryText)
+        } else if !langId.isEmpty {
+            return PatternSyntaxHighlighter(language: langId)
+        } else {
+            return NoopHighlighter()
+        }
+    }
+
+    /// SwiftUI 把同一 view identity 的 coordinator 复用 —— 两个同 kind 的 .code 文件
+    /// 切换时 body 上没有 `.id(buffer.id)`，不会重跑 makeNSView/attach，只进 updateNSView。
+    /// 所以"每个文件各自一份"的状态（语法高亮策略 + buffer 引用）必须在这里随新 buffer
+    /// 重选，否则新文件会沿用上一个文件的 grammar 上色（残留高亮），且后续编辑会写回上一个
+    /// 文件的 FileBuffer。返回 true 表示 buffer 确实换了（updateNSView 据此强制重渲染）。
+    @discardableResult
+    func rebind(to newBuffer: FileBuffer) -> Bool {
+        guard buffer !== newBuffer else { return false }
+        buffer = newBuffer
+        highlighter.dispose()
+        highlighter = makeHighlighter(for: newBuffer)
+        return true
+    }
+
     // MARK: 外部钩子（订阅文本/选中变化）
     var onTextChange: ((NSRange, String) -> Void)?
     var onSelectionChange: ((NSRange) -> Void)?
@@ -62,6 +96,9 @@ final class CodeEditorController: NSObject {
             storage.addAttribute(.foregroundColor, value: color, range: range)
         }
         storage.endEditing()
+        textView.layoutManager.invalidateLayoutForRange(fullRange)
+        textView.needsLayout = true
+        textView.needsDisplay = true
     }
 
     func clearHighlights(in range: NSRange?) {
@@ -133,11 +170,20 @@ extension CodeEditorController: TextViewDelegate {
 
     /// 在 updateNSView 的 setText 之后调，确保 gutter 还挂着。
     /// 背景：CodeEditTextView 的 `setTextStorage` 会 nuke 所有 subview，
-    /// SFTP 下载完成 / reloadFromRemote 都会触发 setText。
+    /// SFTP 下载完成 / reloadFromRemote 都会触发 setText。setText 也会换掉
+    /// textStorage，所以全文语法色需要跟 gutter 一起恢复。
     func ensureGutterAttached() {
         // 同步跑一次（重挂 / 宽度）+ 异步 bootstrap viewport（等 layout 稳定）
         refreshGutter(bootstrap: false)
         refreshGutter(bootstrap: true, defer: true)
+        rehighlightAllText()
+    }
+
+    private func rehighlightAllText() {
+        guard let text = textView?.string else { return }
+        highlighter.initialHighlight(text: text) { [weak self] pairs in
+            self?.applyHighlights(pairs)
+        }
     }
 
     /// 统一刷新入口。
@@ -309,20 +355,9 @@ extension CodeEditorController: TextViewDelegate {
             }
         }
 
-        // Track C · 初始化语法高亮
-        let langId: String
-        switch buffer.kind {
-        case .code(let l): langId = l
-        case .markdown:    langId = "markdown"
-        case .plainText:   langId = ""
-        case .image:       langId = ""
-        }
-        if let entry = GrammarRegistry.entry(for: langId) {
-            highlighter = TreeSitterHighlighter(language: entry.language,
-                                                highlightsQueryText: entry.highlightsQueryText)
-        } else {
-            highlighter = NoopHighlighter()
-        }
+        // Track C · 初始化语法高亮（策略选择见 makeHighlighter；切文件复用见 rebind）
+        highlighter.dispose()
+        highlighter = makeHighlighter(for: buffer)
         highlighter.initialHighlight(text: buffer.text) { [weak self] pairs in
             self?.applyHighlights(pairs)
         }

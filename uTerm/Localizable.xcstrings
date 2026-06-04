@@ -31,16 +31,6 @@
     "「%@」无结果" : {
 
     },
-    "%@ · %@" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ · %2$@"
-          }
-        }
-      }
-    },
     "%@ · %lld 主机" : {
       "localizations" : {
         "zh-Hans" : {
@@ -110,16 +100,10 @@
     "%lld" : {
 
     },
-    "%lld pt" : {
-
-    },
     "%lld 个最近文件" : {
 
     },
     "%lld 把密钥" : {
-
-    },
-    "%lld 秒" : {
 
     },
     "%lld 窗格 · %lld 标签" : {
@@ -190,7 +174,7 @@
     "Claude" : {
 
     },
-    "cn.uozi.uTerm" : {
+    "com.uozi.uTerm" : {
 
     },
     "echo " : {
@@ -565,6 +549,9 @@
     "点左下角 + 新增第一个 provider" : {
 
     },
+    "热加载" : {
+
+    },
     "现在" : {
 
     },
@@ -588,6 +575,17 @@
     },
     "立即生成" : {
 
+    },
+    "立即生效。改主题影响 uTerm 窗口外观与终端配色（终端按主题自动切深/浅）。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takes effect immediately. The theme affects uTerm's window appearance and terminal colors (the terminal auto-switches light/dark with the theme)."
+          }
+        }
+      }
     },
     "管理…" : {
 

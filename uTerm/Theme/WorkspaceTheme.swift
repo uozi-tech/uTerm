@@ -2,21 +2,30 @@ import SwiftUI
 import AppKit
 
 /// 工作区窗口的**钉色 NSColor**。视图层配色已统一走 DesignKit `UD` token（深 / 浅
-/// 动态，工作区被 `WorkspaceWindowAppearance` 钉死 `.darkAqua` 故恒解析为深色值）；
-/// 这里只剩 AppKit 层窗口去玻璃 / 不透明底所需的 `NSColor`（SwiftUI `Color` 不便直接给
-/// `window.backgroundColor` / `layer.backgroundColor`），与 `UD.bg`/`UD.panel` 同值。
+/// 动态）；这里只剩 AppKit 层窗口去玻璃 / 不透明底所需的 `NSColor`（SwiftUI `Color`
+/// 不便直接给 `window.backgroundColor` / `layer.backgroundColor`），与
+/// `UD.bg`/`UD.panel` 同值，随外观深/浅动态解析。
 ///
 /// 标 `nonisolated` 让常量能在任意上下文读取；`NSColor` 常量跨线程安全。
 enum WS {
-    /// `UD.bg`(#101012) 的 NSColor 版 —— 窗口不透明底色 / AppKit 去玻璃用。
-    nonisolated static let bgNSColor  = NSColor(srgbRed: 16/255, green: 16/255, blue: 18/255, alpha: 1)
-    /// `UD.panel`(#17171A) 的 NSColor 版 —— 标题栏拖动手柄 `WindowDragHandle` 的实色底。
-    nonisolated static let panelNSColor = NSColor(srgbRed: 23/255, green: 23/255, blue: 26/255, alpha: 1)
+    /// `UD.bg` 的 NSColor 版（深 #101012 / 浅 #EDEEF1）—— 窗口不透明底色 / AppKit 去玻璃用。
+    nonisolated static let bgNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 16/255, green: 16/255, blue: 18/255, alpha: 1)
+            : NSColor(srgbRed: 0xED/255, green: 0xEE/255, blue: 0xF1/255, alpha: 1)
+    }
+    /// `UD.panel` 的 NSColor 版（深 #17171A / 浅 #FFFFFF）—— 标题栏拖动手柄实色底。
+    nonisolated static let panelNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 23/255, green: 23/255, blue: 26/255, alpha: 1)
+            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    }
 }
 
-/// 把宿主 `NSWindow` 钉成扁平深色 + 去玻璃，但**不改标题栏样式** —— 给保留系统
-/// 窗口 chrome 的深色窗口用（如新建服务器表单 `ServerFormView`）。工作区主窗口
-/// 用更激进的 `WorkspaceWindowChrome`（透明标题栏 + full-size content）。
+/// 把宿主 `NSWindow` 去玻璃 + 不透明底色，但**不改标题栏样式**，外观跟随全局设置
+///（`NSApp.appearance`，由 `AppAppearanceSync` 驱动） —— 给保留系统窗口 chrome 的
+/// 窗口用（如新建服务器表单 `ServerFormView`、密钥管理窗口）。工作区主窗口用更激进
+/// 的 `WorkspaceWindowChrome`（透明标题栏 + full-size content）。
 struct WorkspaceWindowAppearance: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { PinView() }
     func updateNSView(_ nsView: NSView, context: Context) { (nsView as? PinView)?.apply() }
@@ -31,7 +40,7 @@ struct WorkspaceWindowAppearance: NSViewRepresentable {
         }
         func apply() {
             guard let window else { return }
-            window.appearance = NSAppearance(named: .darkAqua)
+            window.appearance = nil   // 跟随 NSApp.appearance（密钥管理 / 新建服务器表单也随主题）
             window.isOpaque = true
             window.backgroundColor = WS.bgNSColor
             var root: NSView? = window.contentView

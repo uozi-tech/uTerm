@@ -26,7 +26,7 @@ struct SFTPInspector: View {
                 .font(.system(size: 24))
                 .foregroundStyle(UD.text4)
                 .frame(width: 56, height: 56)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.03)))
+                .background(RoundedRectangle(cornerRadius: 14).fill(UD.fillFaint))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(UD.border, lineWidth: 1))
             VStack(spacing: 6) {
                 Text("未选择文件").font(.system(size: 14, weight: .medium))
@@ -61,7 +61,7 @@ struct SFTPInspector: View {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18)
                                 .fill(item.isDirectory ? UD.accent.opacity(0.10)
-                                                       : Color.white.opacity(0.03))
+                                                       : UD.fillFaint)
                                 .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
                                     item.isDirectory ? UD.accent.opacity(0.28) : UD.border, lineWidth: 1))
                                 .frame(width: 84, height: 84)
@@ -157,7 +157,7 @@ struct SFTPSecondaryButton: View {
                 .foregroundStyle(danger ? UD.danger : UD.text2)
                 .frame(maxWidth: .infinity).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(hover ? Color.white.opacity(0.03) : .clear))
+                    .fill(hover ? UD.rowHover : .clear))
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
                     danger ? UD.danger.opacity(0.32) : UD.border, lineWidth: 1))
         }

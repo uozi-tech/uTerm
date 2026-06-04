@@ -1,8 +1,10 @@
 import SwiftUI
+import AppKit
 
 /// 拖拽幽灵的"窗口卡片"——纯 SwiftUI 视图，由 `DragGhostWindowBridge` 装入独立
-/// `NSPanel` 的 `NSHostingView` 渲染。复刻 `PaneView` 的窗格外观：头部条 + 深色
-/// 终端主体（终端走 Metal，拖拽时本就呈深色，无需也无法纳入快照）。卡片不可交互。
+/// `NSPanel` 的 `NSHostingView` 渲染。复刻 `PaneView` 的窗格外观：头部条 + 终端主体
+/// 实色底（终端走 Metal 无法纳入快照，故用纯色填充；底色按当前主题深 / 浅解析所选
+/// 配色，与终端区一致）。卡片不可交互。
 struct PaneGhostCard: View {
     let name: String
     let paneSize: CGSize
@@ -12,10 +14,23 @@ struct PaneGhostCard: View {
     static let shadowPadding: CGFloat = 24
     private static let cornerRadius: CGFloat = 8
 
+    /// 所选终端配色在给定外观下的背景色。`dark` 由调用方按 app 外观计算
+    /// （视图体读 `NSApp.effectiveAppearance`），抽成纯静态便于单测。
+    static func terminalBackgroundColor(dark: Bool, defaults: UserDefaults = .standard) -> NSColor {
+        TerminalSettings.read(from: defaults).colorScheme(dark: dark).backgroundColor
+    }
+
+    /// 终端主体底色。独立 `NSPanel` 拿不到 `@Environment(\.colorScheme)`，故按
+    /// `NSApp.effectiveAppearance` 现算深 / 浅（其余在层级内的视图用环境值）。
+    private var terminalBackground: Color {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return Color(nsColor: Self.terminalBackgroundColor(dark: dark))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Color(nsColor: TerminalTheme.backgroundColor)
+            terminalBackground
         }
         .frame(width: max(paneSize.width, 1), height: max(paneSize.height, 1))
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))

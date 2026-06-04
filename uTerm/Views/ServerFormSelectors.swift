@@ -26,7 +26,7 @@ struct KeySelectorView: View {
                 Chevron(open: open)
             }
             .padding(.horizontal, 10).frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
@@ -109,7 +109,7 @@ struct JumpHostSelectorView: View {
                 Chevron(open: open)
             }
             .padding(.horizontal, 10).frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)

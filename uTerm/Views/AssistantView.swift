@@ -74,7 +74,7 @@ struct AssistantView: View {
                 .padding(.horizontal, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(showSessions ? Color.white.opacity(0.05) : .clear))
+                        .fill(showSessions ? UD.fillSoft : .clear))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -214,7 +214,7 @@ struct AssistantView: View {
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(
             RoundedRectangle(cornerRadius: 9).strokeBorder(UD.borderHi, lineWidth: 1))
-        .shadow(color: .black.opacity(0.55), radius: 18, x: 0, y: 14)
+        .shadow(color: UD.dyn(.black(0.55), .black(0.18)), radius: 18, x: 0, y: 14)
     }
 
     private func sessionRow(_ s: ChatSession) -> some View {
@@ -356,7 +356,7 @@ struct AssistantView: View {
             }
             .padding(isUser ? 10 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isUser ? Color.white.opacity(0.035) : .clear)
+            .background(isUser ? UD.fillFaint : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
@@ -406,7 +406,7 @@ struct AssistantView: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.025)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(UD.fillFaint))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UD.border, lineWidth: 1))
         .padding(10)
         .overlay(alignment: .top) {
@@ -446,7 +446,7 @@ private struct Keycap: View {
             .foregroundStyle(UD.text3)
             .frame(minWidth: 16, minHeight: 16)
             .padding(.horizontal, 3)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
     }
 }

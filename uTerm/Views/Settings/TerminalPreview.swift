@@ -5,18 +5,15 @@ import SwiftTerm
 /// 输出（不接真 SwiftTerm，避免起 PTY）；改 setting 后立即可视。
 struct TerminalPreview: View {
     let settings: TerminalSettings
+    @Environment(\.colorScheme) private var scheme
 
-    // SwiftTerm 也定义 Color 类型 —— 全限定 SwiftUI.Color 消歧
-    private var bg: SwiftUI.Color { SwiftUI.Color(nsColor: settings.colorScheme.backgroundColor) }
-    private var fg: SwiftUI.Color { SwiftUI.Color(nsColor: settings.colorScheme.foregroundColor) }
+    private var resolved: TerminalColorScheme { settings.colorScheme(dark: scheme == .dark) }
+    private var bg: SwiftUI.Color { SwiftUI.Color(nsColor: resolved.backgroundColor) }
+    private var fg: SwiftUI.Color { SwiftUI.Color(nsColor: resolved.foregroundColor) }
 
     private func ansi(_ idx: Int) -> SwiftUI.Color {
-        let c = settings.colorScheme.ansiColors[idx]
-        return SwiftUI.Color(
-            red: Double(c.red) / 65535,
-            green: Double(c.green) / 65535,
-            blue: Double(c.blue) / 65535
-        )
+        let c = resolved.ansiColors[idx]
+        return SwiftUI.Color(red: Double(c.red)/65535, green: Double(c.green)/65535, blue: Double(c.blue)/65535)
     }
 
     var body: some View {

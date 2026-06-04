@@ -8,6 +8,14 @@ struct TerminalTabBar: View {
     let workspace: WorkspaceModel
     let onNewTab: () -> Void
 
+    @AppStorage("terminalColorScheme") private var terminalSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
+    @Environment(\.colorScheme) private var appColorScheme
+
+    private var terminalAreaBG: Color {
+        let id = TerminalColorSchemeID(rawValue: terminalSchemeRaw) ?? .vscodeDark
+        return Color(nsColor: TerminalColorScheme.resolve(id, dark: appColorScheme == .dark).backgroundColor)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -17,7 +25,7 @@ struct TerminalTabBar: View {
                             name: tab.title,
                             active: workspace.activeTabID == tab.id,
                             dotColor: Self.dotColor(for: tab),
-                            activeBackground: Color(nsColor: TerminalTheme.backgroundColor),
+                            activeBackground: terminalAreaBG,
                             onSelect: { workspace.selectTab(tab.id) },
                             onClose:  { workspace.closeTab(tab.id) })
                             .frame(maxHeight: .infinity)

@@ -55,7 +55,7 @@ struct GeneralSettingsView: View {
 
             SettingsGroup(title: "外观") {
                 SettingsRow(label: "主题",
-                            hint: "立即生效。改主题影响 uTerm 窗口外观；终端配色独立，不受此设置影响。") {
+                            hint: "立即生效。改主题影响 uTerm 窗口外观与终端配色（终端按主题自动切深/浅）。") {
                     UDSegmented(
                         selection: appearanceBinding,
                         options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })

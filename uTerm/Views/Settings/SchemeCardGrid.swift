@@ -5,16 +5,18 @@ import SwiftTerm
 /// 示例 + 名字 + 选中态描边/勾。点击切换 @Binding。
 struct SchemeCardGrid: View {
     @Binding var selection: TerminalColorSchemeID
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 160), spacing: 10)],
             spacing: 10
         ) {
-            ForEach(TerminalColorScheme.all, id: \.id) { scheme in
-                SchemeCard(scheme: scheme, isSelected: selection == scheme.id)
+            ForEach(TerminalColorSchemeID.allCases) { id in
+                SchemeCard(scheme: TerminalColorScheme.resolve(id, dark: scheme == .dark),
+                           isSelected: selection == id)
                     .contentShape(Rectangle())
-                    .onTapGesture { selection = scheme.id }
+                    .onTapGesture { selection = id }
             }
         }
     }

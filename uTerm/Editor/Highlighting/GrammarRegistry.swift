@@ -31,33 +31,42 @@ enum GrammarRegistry {
     static func entry(for language: String) -> Entry? {
         switch language {
         case "swift":
-            return Entry(language: Language(language: tree_sitter_swift()),
-                         highlightsQueryText: loadQuery(named: "swift"))
+            let grammar = Language(language: tree_sitter_swift())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "swift", language: grammar))
         case "go":
-            return Entry(language: Language(language: tree_sitter_go()),
-                         highlightsQueryText: loadQuery(named: "go"))
+            let grammar = Language(language: tree_sitter_go())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "go", language: grammar))
 
         case "typescript":
-            return Entry(language: Language(language: tree_sitter_typescript()),
-                         highlightsQueryText: loadQuery(named: "typescript"))
+            let grammar = Language(language: tree_sitter_typescript())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "typescript", language: grammar))
         case "json":
-            return Entry(language: Language(language: tree_sitter_json()),
-                         highlightsQueryText: loadQuery(named: "json"))
+            let grammar = Language(language: tree_sitter_json())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "json", language: grammar))
         case "bash":
-            return Entry(language: Language(language: tree_sitter_bash()),
-                         highlightsQueryText: loadQuery(named: "bash"))
+            let grammar = Language(language: tree_sitter_bash())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "bash", language: grammar))
         case "markdown":
-            return Entry(language: Language(language: tree_sitter_markdown()),
-                         highlightsQueryText: loadQuery(named: "markdown"))
+            let grammar = Language(language: tree_sitter_markdown())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "markdown", language: grammar))
         case "python":
-            return Entry(language: Language(language: tree_sitter_python()),
-                         highlightsQueryText: loadQuery(named: "python"))
+            let grammar = Language(language: tree_sitter_python())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "python", language: grammar))
         case "javascript":
-            return Entry(language: Language(language: tree_sitter_javascript()),
-                         highlightsQueryText: loadQuery(named: "javascript"))
+            let grammar = Language(language: tree_sitter_javascript())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "javascript", language: grammar))
         case "yaml":
-            return Entry(language: Language(language: tree_sitter_yaml()),
-                         highlightsQueryText: loadQuery(named: "yaml"))
+            let grammar = Language(language: tree_sitter_yaml())
+            return Entry(language: grammar,
+                         highlightsQueryText: loadQuery(named: "yaml", language: grammar))
         default:
             return nil
         }
@@ -65,18 +74,77 @@ enum GrammarRegistry {
 
     /// 加载 highlights query 文本。优先用 grammar 包自带的 highlights.scm；
     /// 找不到走内置 fallback（仅 keyword/string/number/comment 四色）。
-    private static func loadQuery(named language: String) -> String {
+    private static func loadQuery(named language: String, language grammar: Language) -> String {
         // Grammar SPM packages ship queries as bundle resources.
         // The bundle resource path depends on SPM layout; try common patterns.
-        let bundleName = "TreeSitter\(language.capitalized)"
-        if let bundleURL = Bundle.main.url(forResource: bundleName, withExtension: "bundle"),
-           let bundle = Bundle(url: bundleURL),
-           let url = bundle.url(forResource: "highlights", withExtension: "scm", subdirectory: "queries"),
-           let text = try? String(contentsOf: url, encoding: .utf8) {
-            return text
+        let baseBundleName = bundleBaseNames[language] ?? "TreeSitter\(language.capitalized)"
+        let bundleNames = [
+            "\(baseBundleName)_\(baseBundleName)",
+            baseBundleName
+        ]
+        for bundleName in bundleNames {
+            if let bundleURL = Bundle.main.url(forResource: bundleName, withExtension: "bundle"),
+               let bundle = Bundle(url: bundleURL),
+               let url = bundle.url(forResource: "highlights", withExtension: "scm", subdirectory: "queries"),
+               let text = try? String(contentsOf: url, encoding: .utf8),
+               canUseQuery(text, language: grammar, sample: sampleSnippets[language] ?? "") {
+                return text
+            }
         }
-        return fallbackQueries[language] ?? ""
+        if let fallback = fallbackQueries[language],
+           canUseQuery(fallback, language: grammar, sample: sampleSnippets[language] ?? "") {
+            return fallback
+        }
+        return ""
     }
+
+    private static func canUseQuery(_ text: String, language: Language, sample: String) -> Bool {
+        guard !text.isEmpty,
+              !sample.isEmpty,
+              let data = text.data(using: .utf8),
+              let query = try? Query(language: language, data: data) else {
+            return false
+        }
+
+        let parser = Parser()
+        do {
+            try parser.setLanguage(language)
+        } catch {
+            return false
+        }
+        guard let tree = parser.parse(sample), let root = tree.rootNode else { return false }
+        let cursor = query.execute(node: root, in: tree)
+        while let match = cursor.next() {
+            if match.captures.contains(where: { capture in
+                let range = capture.node.range
+                return range.location != NSNotFound && range.length > 0
+            }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static let bundleBaseNames: [String: String] = [
+        "swift": "TreeSitterSwift",
+        "go": "TreeSitterGo",
+        "typescript": "TreeSitterTypeScript",
+        "json": "TreeSitterJSON",
+        "bash": "TreeSitterBash",
+        "markdown": "TreeSitterMarkdown"
+    ]
+
+    private static let sampleSnippets: [String: String] = [
+        "swift": "func main() { return }",
+        "go": "func main() { return }",
+        "typescript": "function main() { return 1 }",
+        "json": #"{"value": 1}"#,
+        "bash": "if true; then echo \"ok\"; fi",
+        "markdown": "# Title\n`code`",
+        "python": "def main():\n    return 1",
+        "javascript": "function main() { return 1 }",
+        "yaml": "key: value"
+    ]
 
     // Minimal four-color fallback queries for each language.
     // These cover the most visible tokens without needing the full grammar query file.
@@ -104,7 +172,8 @@ enum GrammarRegistry {
             ["func" "var" "const" "return" "if" "else" "for" "range" "import"
              "package" "type" "struct" "interface" "map" "chan" "go" "defer"
              "select" "case" "default" "break" "continue" "goto" "fallthrough"
-             "switch" "make" "new" "nil" "true" "false"] @keyword
+             "switch"] @keyword
+            [(true) (false) (nil)] @constant
             (int_literal) @number
             (float_literal) @number
             (interpreted_string_literal) @string

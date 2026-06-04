@@ -56,7 +56,7 @@ final class TerminalSettingsTests: XCTestCase {
     func test_colorScheme_resolves_correct_scheme() {
         defaults.set("tokyonight", forKey: "terminalColorScheme")
         let s = TerminalSettings.read(from: defaults)
-        XCTAssertEqual(s.colorScheme.id, .tokyoNight)
-        XCTAssertEqual(s.colorScheme.displayName, "Tokyo Night")
+        XCTAssertEqual(s.colorScheme(dark: true).id, .tokyoNight)
+        XCTAssertEqual(s.colorScheme(dark: true).displayName, "Tokyo Night")
     }
 }

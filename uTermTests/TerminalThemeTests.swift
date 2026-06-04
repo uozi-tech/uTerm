@@ -11,7 +11,7 @@ final class TerminalThemeTests: XCTestCase {
     /// 现在 `apply(...)` 必须保留 SwiftTerm 的默认光标（非清空色）。
     func testApplyKeepsCaretVisible() {
         let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        TerminalTheme.apply(to: view, settings: .read())
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
         XCTAssertNotEqual(view.caretColor, .clear, "光标颜色不应被清空")
     }
 

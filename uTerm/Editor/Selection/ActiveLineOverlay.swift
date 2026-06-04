@@ -17,9 +17,19 @@ final class ActiveLineOverlay {
     init(textView: TextView) {
         self.textView = textView
         self.shapeLayer = CAShapeLayer()
-        shapeLayer.fillColor = EditorTheme.activeLineBg.cgColor
         shapeLayer.zPosition = -1  // 在文字下、selection 之下，gutter 之上的层级由 textView 排
         textView.layer?.insertSublayer(shapeLayer, at: 0)
+        applyFillColor()
+    }
+
+    /// 当前行底色随外观重解析。CAShapeLayer 持 CGColor 快照、不像普通 NSView 那样
+    /// 在外观变化时自动重算动态色，故在 init + 每次 update 时按 textView 的
+    /// effectiveAppearance 重设（切主题后下次光标移动即纠正；底色很淡，可接受）。
+    private func applyFillColor() {
+        guard let textView else { return }
+        textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            shapeLayer.fillColor = EditorTheme.activeLineBg.cgColor
+        }
     }
 
     /// 根据选区起点定位活动行，画整行底色横跨 textView 全宽（含 gutter 区）。
@@ -37,6 +47,7 @@ final class ActiveLineOverlay {
                           width: textView.bounds.width,
                           height: linePos.height)
         shapeLayer.path = CGPath(rect: rect, transform: nil)
+        applyFillColor()
     }
 
     /// 隐藏（textView 释放或 attach 切换时调）。

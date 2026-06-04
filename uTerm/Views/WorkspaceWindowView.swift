@@ -132,7 +132,6 @@ struct WorkspaceWindowView: View {
         // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
         // 不可能再有系统玻璃。
         .background(WorkspaceWindowChrome(serverName: server.name))
-        .environment(\.colorScheme, .dark)
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)

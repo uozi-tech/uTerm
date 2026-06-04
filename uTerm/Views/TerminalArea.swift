@@ -8,6 +8,14 @@ struct TerminalArea: View {
     let workspace: WorkspaceModel
     let server: ServerProfile
 
+    @AppStorage("terminalColorScheme") private var terminalSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
+    @Environment(\.colorScheme) private var appColorScheme
+
+    private var terminalAreaBG: Color {
+        let id = TerminalColorSchemeID(rawValue: terminalSchemeRaw) ?? .vscodeDark
+        return Color(nsColor: TerminalColorScheme.resolve(id, dark: appColorScheme == .dark).backgroundColor)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             TerminalTabBar(workspace: workspace) {
@@ -17,7 +25,7 @@ struct TerminalArea: View {
                 TabContentView(tab: activeTab, onCloseTab: {
                     workspace.closeTab(activeTab.id)
                 })
-                    .background(Color(nsColor: TerminalTheme.backgroundColor))
+                    .background(terminalAreaBG)
             } else {
                 emptyState
             }
@@ -38,6 +46,6 @@ struct TerminalArea: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: TerminalTheme.backgroundColor))
+        .background(terminalAreaBG)
     }
 }
