@@ -1,6 +1,15 @@
 import SwiftUI
 import SwiftData
 
+enum AssistantInputBarLayout {
+    nonisolated static let attachHitSize: CGFloat = 28
+    nonisolated static let attachIconSize: CGFloat = 11
+    nonisolated static let attachCornerRadius: CGFloat = 6
+    nonisolated static let sendButtonHeight: CGFloat = 24
+    nonisolated static let keycapHeight: CGFloat = 20
+    nonisolated static let sendContentAlignment: VerticalAlignment = .center
+}
+
 /// AI 助手聊天面板。布局对齐工作区设计稿的 Agent inspector：
 /// - 顶栏：✦ + 会话标题（点开 → 会话历史下拉）+ 新建对话。
 /// - meta 行：左服务器上下文，右 provider/模型选择器。
@@ -53,7 +62,7 @@ struct AssistantView: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(UD.accent)
 
             Button {
@@ -66,7 +75,7 @@ struct AssistantView: View {
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(UD.text3)
                         .rotationEffect(.degrees(showSessions ? 180 : 0))
                 }
@@ -372,33 +381,36 @@ struct AssistantView: View {
             TextField("问点什么…", text: $model.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(UD.text)
                 .onSubmit { sendIfPossible() }
 
             HStack(spacing: 6) {
-                Button {} label: {
+                Button { attachCurrentContext() } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 11))
+                        .font(.system(size: AssistantInputBarLayout.attachIconSize))
                         .foregroundStyle(UD.text3)
-                        .frame(width: 24, height: 24)
+                        .frame(width: AssistantInputBarLayout.attachHitSize,
+                               height: AssistantInputBarLayout.attachHitSize)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: AssistantInputBarLayout.attachCornerRadius)
                                 .strokeBorder(UD.border, lineWidth: 1))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(true)
-                .help("附加上下文（即将支持）")
+                .help("附加当前上下文")
 
                 Spacer()
 
                 Button { sendIfPossible() } label: {
-                    HStack(spacing: 5) {
+                    HStack(alignment: AssistantInputBarLayout.sendContentAlignment, spacing: 5) {
                         Keycap("↩")
                         Text("发送")
                             .font(.system(size: 10.5))
                             .foregroundStyle(UD.text4)
                     }
+                    .frame(height: AssistantInputBarLayout.sendButtonHeight)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(model.state == .streaming)
@@ -417,6 +429,25 @@ struct AssistantView: View {
     private func sendIfPossible() {
         guard model.state != .streaming else { return }
         Task { await model.send(serverContext: serverContext) }
+    }
+
+    private func attachCurrentContext() {
+        let snippet = currentContextSnippet()
+        guard !snippet.isEmpty else { return }
+        if model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            model.input = snippet
+        } else {
+            model.input += "\n\n\(snippet)"
+        }
+    }
+
+    private func currentContextSnippet() -> String {
+        let context = serverContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !context.isEmpty {
+            return "上下文：\n\(context)"
+        }
+        let name = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "" : "当前服务器：\(name)"
     }
 }
 
@@ -444,7 +475,9 @@ private struct Keycap: View {
         Text(label)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(UD.text3)
-            .frame(minWidth: 16, minHeight: 16)
+            .lineLimit(1)
+            .frame(minWidth: 16)
+            .frame(height: AssistantInputBarLayout.keycapHeight, alignment: .center)
             .padding(.horizontal, 3)
             .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))

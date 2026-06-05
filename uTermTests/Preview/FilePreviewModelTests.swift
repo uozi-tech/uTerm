@@ -65,4 +65,22 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertTrue(m.buffers.isEmpty)
         XCTAssertNil(m.activeBufferID)
     }
+
+    func test_restoreOpenFilesRecreatesTabsAndLoadsAfterProviderIsReady() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.md", data: Data("# A".utf8))
+        try await mock.write("/b.swift", data: Data("let b = 1".utf8))
+
+        m.restoreOpenFiles([
+            OpenFileSnapshot(remotePath: "/a.md", byteSize: 3, mtimeWhenLoaded: nil),
+            OpenFileSnapshot(remotePath: "/b.swift", byteSize: 9, mtimeWhenLoaded: nil),
+        ], activeIndex: 1)
+        await m.loadRestoredBuffersIfNeeded()
+
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/a.md", "/b.swift"])
+        XCTAssertEqual(m.activeBuffer?.remotePath, "/b.swift")
+        XCTAssertEqual(m.buffers[0].text, "# A")
+        XCTAssertEqual(m.buffers[1].text, "let b = 1")
+        XCTAssertEqual(m.buffers.map(\.state), [.loaded, .loaded])
+    }
 }

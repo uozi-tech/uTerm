@@ -107,9 +107,11 @@ struct UDHostDot: View {
 
 // MARK: - 键帽 Kbd
 
-/// 单个键帽（如 ⌘ / K / esc）。深色实体面 + 浅色底部微投影。
+/// 单个键帽（如 ⌘ / K / esc）。深色实体面无投影；浅色仅一道 1px 实线底缘
+/// （设计稿 `0 1px 0 rgba(0,0,0,.06)`），不用软投影。
 struct UDKbd: View {
     let label: String
+    @Environment(\.colorScheme) private var scheme
 
     init(_ label: String) {
         self.label = label
@@ -129,7 +131,9 @@ struct UDKbd: View {
                         RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
                             .strokeBorder(UD.border, lineWidth: 1)
                     )
-                    .udShadow(.sm)
+                    // 浅色：硬边 1px 底缘（radius 0 + y 1）；深色：无投影。
+                    .shadow(color: scheme == .light ? .black.opacity(0.06) : .clear,
+                            radius: 0, y: scheme == .light ? 1 : 0)
             )
     }
 }

@@ -14,7 +14,7 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
     }
 
     /// 自绘三栏的列宽（pt），持久化。clamp 在拖拽处（ColumnResizer）做。
-    var sidebarWidth: Double = 200
+    var sidebarWidth: Double = 300
     var inspectorWidth: Double = 300
 
     /// 左 sidebar 是否可见（自绘布局用）。沿用 `leftSidebarVisibility` 字段存储以
@@ -65,7 +65,7 @@ nonisolated struct WorkspaceUIState: Codable, Equatable, Sendable {
         self.rightInspectorPresented = try c.decodeIfPresent(Bool.self, forKey: .rightInspectorPresented) ?? true
         let ratio = try c.decodeIfPresent(Double.self, forKey: .previewTerminalRatio) ?? 0.667
         self.previewTerminalRatio = ratio   // 经 setter clamp
-        self.sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 200
+        self.sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 300
         self.inspectorWidth = try c.decodeIfPresent(Double.self, forKey: .inspectorWidth) ?? 300
     }
 

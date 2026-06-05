@@ -9,10 +9,10 @@ final class WorkspaceWindowIDTests: XCTestCase {
         XCTAssertEqual(decoded, original)
     }
 
-    func testSameServerDistinctWindowsAreNotEqual() {
+    func testSameServerWindowIDsAreEqual() {
         let serverID = UUID()
-        let a = WorkspaceWindowID(id: UUID(), serverID: serverID)
-        let b = WorkspaceWindowID(id: UUID(), serverID: serverID)
-        XCTAssertNotEqual(a, b)   // 同一服务器、不同窗口 → 不相等
+        let a = WorkspaceWindowID(serverID: serverID)
+        let b = WorkspaceWindowID(serverID: serverID)
+        XCTAssertEqual(a, b)
     }
 }

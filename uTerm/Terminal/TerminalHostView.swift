@@ -50,6 +50,7 @@ struct TerminalHostView: NSViewRepresentable {
             terminalView: terminalView,
             forwardsScrollToParent: forwardsScrollToParent
         )
+        container.identifier = .utermTerminalRegion   // ⌘W 焦点判定标记
         container.layer?.backgroundColor = currentSettings.colorScheme(dark: dark).backgroundColor.cgColor
         return container
     }

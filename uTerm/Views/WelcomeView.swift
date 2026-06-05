@@ -50,12 +50,13 @@ struct WelcomeView: View {
             WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
             HStack(spacing: 0) {
                 WelcomeSidebar(profiles: allProfiles, filter: $filter)
-                    .frame(width: 200)
+                    .frame(width: 224)
                 bodyContent
             }
         }
         .frame(minWidth: 720, minHeight: 480)
         .background(UD.panel)
+        .disablesInitialAutoFocus()  // 不要开屏自动聚焦搜索框（macOS 默认会选中第一个文本框）
         .sheet(item: $formRoute) { route in
             switch route {
             case .new:
@@ -128,7 +129,7 @@ struct WelcomeView: View {
         )
         descriptor.fetchLimit = 1
         guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
-        return WorkspaceWindowID(id: UUID(), serverID: profile.id)
+        return WorkspaceWindowID(serverID: profile.id)
     }
 
     // MARK: actions
@@ -136,7 +137,7 @@ struct WelcomeView: View {
     private func openServer(_ profile: ServerProfile) {
         profile.lastConnectedAt = Date()
         try? modelContext.save()
-        openWindow(value: WorkspaceWindowID(id: UUID(), serverID: profile.id))
+        openWindow(value: WorkspaceWindowID(serverID: profile.id))
     }
 
     private func handleContextAction(_ action: ServerList.ContextAction,

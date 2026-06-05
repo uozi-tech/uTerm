@@ -57,6 +57,21 @@ nonisolated struct TabSnapshot: Codable, Equatable, Sendable {
     var layout: NodeSnapshot
 }
 
+/// 预览/编辑区打开文件的轻量快照。只保存远程路径和加载元信息；
+/// 重连后内容通过 SFTP 重新读取，不保存编辑器正文或未保存修改。
+nonisolated struct OpenFileSnapshot: Codable, Equatable, Sendable {
+    var remotePath: String
+    var byteSize: Int64
+    var mtimeWhenLoaded: Date?
+}
+
+/// Agent inspector 的轻量状态。历史消息本体存在 SwiftData `ChatSession` 中；
+/// workspace 快照只记录当前会话 id 和输入框草稿。
+nonisolated struct AgentSnapshot: Codable, Equatable, Sendable {
+    var currentSessionID: UUID?
+    var input: String
+}
+
 /// 整个工作区的快照。
 nonisolated struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     var tabs: [TabSnapshot]
@@ -65,4 +80,27 @@ nonisolated struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     /// 老的 workspace-<id>.json 没有这个字段，解码后为 nil，由 `WorkspaceModel`
     /// 用默认 `WorkspaceUIState()` 接住。
     var uiState: WorkspaceUIState?
+    /// 左侧 SFTP 当前目录。nil 表示让连接逻辑使用远端 home。
+    var fileBrowserPath: String?
+    /// 预览/编辑区已打开的远程文件 tab。
+    var openFiles: [OpenFileSnapshot]?
+    var activeFileIndex: Int?
+    /// 右侧 Agent 对话框状态。nil 表示旧快照或没有可恢复状态。
+    var agentState: AgentSnapshot?
+
+    init(tabs: [TabSnapshot],
+         activeTabIndex: Int?,
+         uiState: WorkspaceUIState? = nil,
+         fileBrowserPath: String? = nil,
+         openFiles: [OpenFileSnapshot]? = nil,
+         activeFileIndex: Int? = nil,
+         agentState: AgentSnapshot? = nil) {
+        self.tabs = tabs
+        self.activeTabIndex = activeTabIndex
+        self.uiState = uiState
+        self.fileBrowserPath = fileBrowserPath
+        self.openFiles = openFiles
+        self.activeFileIndex = activeFileIndex
+        self.agentState = agentState
+    }
 }

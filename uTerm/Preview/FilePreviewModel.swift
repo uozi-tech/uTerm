@@ -1,11 +1,24 @@
 import SwiftUI
 import AppKit
 
+nonisolated struct FilePreviewPanel: Identifiable, Equatable, Sendable {
+    let id: UUID
+    var bufferID: UUID
+
+    init(id: UUID = UUID(), bufferID: UUID) {
+        self.id = id
+        self.bufferID = bufferID
+    }
+}
+
 @MainActor
 @Observable
 final class FilePreviewModel {
     private(set) var buffers: [FileBuffer] = []
     var activeBufferID: UUID?
+    private(set) var panelRoot: LayoutNode?
+    private(set) var panels: [UUID: FilePreviewPanel] = [:]
+    var focusedPanelID: UUID?
     private(set) var recents: [RecentFileEntry] = []
 
     enum SaveOutcome {
@@ -29,9 +42,30 @@ final class FilePreviewModel {
 
     var activeBuffer: FileBuffer? { buffers.first { $0.id == activeBufferID } }
 
+    var panelBufferIDsInDisplayOrder: [UUID] {
+        guard let panelRoot else { return [] }
+        return panelRoot.leafIDs.compactMap { panels[$0]?.bufferID }
+    }
+
+    var hasMultiplePanels: Bool {
+        (panelRoot?.leafCount ?? 0) > 1
+    }
+
+    func buffer(forPanel panelID: UUID) -> FileBuffer? {
+        guard let bufferID = panels[panelID]?.bufferID else { return nil }
+        return buffers.first { $0.id == bufferID }
+    }
+
     func selectTab(_ id: UUID) {
         guard buffers.contains(where: { $0.id == id }) else { return }
         activeBufferID = id
+        assignActiveBufferToFocusedPanel()
+    }
+
+    func selectPanel(_ id: UUID) {
+        guard let panel = panels[id] else { return }
+        focusedPanelID = id
+        activeBufferID = panel.bufferID
     }
 
     /// SFTPSidebar 文件 tap → 通知 → 调用。
@@ -39,6 +73,7 @@ final class FilePreviewModel {
         // 已打开则只切 tab
         if let existing = buffers.first(where: { $0.remotePath == path }) {
             activeBufferID = existing.id
+            assignActiveBufferToFocusedPanel()
             return
         }
 
@@ -48,6 +83,7 @@ final class FilePreviewModel {
         buf.mtimeWhenLoaded = mtime
         buffers.append(buf)
         activeBufferID = buf.id
+        assignActiveBufferToFocusedPanel()
 
         // 大小检查
         if fileSize > 50 * 1024 * 1024 {
@@ -55,14 +91,64 @@ final class FilePreviewModel {
             return
         }
 
+        await load(buf, failIfProviderMissing: true)
+    }
+
+    func restoreOpenFiles(_ snapshots: [OpenFileSnapshot]?, activeIndex: Int?) {
+        buffers.removeAll()
+        let snapshots = snapshots ?? []
+        for snapshot in snapshots {
+            let buf = FileBuffer(
+                remotePath: snapshot.remotePath,
+                kind: LanguageDetector.kind(forPath: snapshot.remotePath))
+            buf.byteSize = snapshot.byteSize
+            buf.mtimeWhenLoaded = snapshot.mtimeWhenLoaded
+            buffers.append(buf)
+        }
+        if let activeIndex, buffers.indices.contains(activeIndex) {
+            activeBufferID = buffers[activeIndex].id
+        } else {
+            activeBufferID = buffers.first?.id
+        }
+        rebuildSinglePanelForActiveBuffer()
+    }
+
+    func openFileSnapshots() -> ([OpenFileSnapshot], Int?) {
+        var activeIndex: Int?
+        let snapshots = buffers.enumerated().map { index, buf in
+            if buf.id == activeBufferID {
+                activeIndex = index
+            }
+            return OpenFileSnapshot(
+                remotePath: buf.remotePath,
+                byteSize: buf.byteSize,
+                mtimeWhenLoaded: buf.mtimeWhenLoaded)
+        }
+        return (snapshots, activeIndex)
+    }
+
+    func loadRestoredBuffersIfNeeded() async {
+        for buf in buffers where buf.state == .loading {
+            await load(buf, failIfProviderMissing: false)
+        }
+    }
+
+    private func load(_ buf: FileBuffer, failIfProviderMissing: Bool) async {
+        if buf.byteSize > 50 * 1024 * 1024 {
+            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+            return
+        }
+
         guard let sftp = sftpProvider() else {
-            buf.state = .failed("SFTP 通道未就绪")
+            if failIfProviderMissing {
+                buf.state = .failed("SFTP 通道未就绪")
+            }
             return
         }
 
         do {
-            let data = try await sftp.download(remotePath: path)
-            switch kind {
+            let data = try await sftp.download(remotePath: buf.remotePath)
+            switch buf.kind {
             case .image:
                 buf.imageData = data
                 if let img = NSImage(data: data) { buf.imageSize = img.size }
@@ -71,13 +157,13 @@ final class FilePreviewModel {
             }
             // mtime 未外部提供时，stat 获取真实值，供后续 save() 冲突检测
             if buf.mtimeWhenLoaded == nil {
-                buf.mtimeWhenLoaded = (try? await sftp.stat(path))?.mtime
+                buf.mtimeWhenLoaded = (try? await sftp.stat(buf.remotePath))?.mtime
             }
             buf.state = .loaded
             // 更新 recents
             recentsStore.touch(RecentFileEntry(
-                remotePath: path,
-                kindTag: kindTag(for: kind),
+                remotePath: buf.remotePath,
+                kindTag: kindTag(for: buf.kind),
                 lastOpenedAt: Date()))
             recents = recentsStore.load()
         } catch {
@@ -92,7 +178,75 @@ final class FilePreviewModel {
         if activeBufferID == id {
             activeBufferID = buffers.first?.id
         }
+        reconcilePanelsAfterClosingBuffer(id)
         return true
+    }
+
+    @discardableResult
+    func dropBufferOntoFocusedPanel(_ bufferID: UUID, zone: PaneDropZone) -> Bool {
+        guard let targetPanelID = focusedPanelID ?? panelRoot?.firstLeafID else {
+            return false
+        }
+        return dropBuffer(bufferID, onto: targetPanelID, zone: zone)
+    }
+
+    @discardableResult
+    func dropBuffer(_ bufferID: UUID, onto targetPanelID: UUID,
+                    zone: PaneDropZone) -> Bool {
+        guard zone != .center,
+              buffers.contains(where: { $0.id == bufferID }),
+              let panelRoot,
+              panels[targetPanelID] != nil
+        else {
+            return false
+        }
+
+        let direction: SplitDirection
+        let newLeafFirst: Bool
+        switch zone {
+        case .leading:  direction = .horizontal; newLeafFirst = true
+        case .trailing: direction = .horizontal; newLeafFirst = false
+        case .top:      direction = .vertical;   newLeafFirst = true
+        case .bottom:   direction = .vertical;   newLeafFirst = false
+        case .center:   return false
+        }
+
+        let panel = FilePreviewPanel(bufferID: bufferID)
+        panels[panel.id] = panel
+        self.panelRoot = panelRoot.splitting(
+            paneID: targetPanelID,
+            direction: direction,
+            newPaneID: panel.id,
+            splitID: UUID(),
+            newLeafFirst: newLeafFirst)
+        focusedPanelID = panel.id
+        activeBufferID = bufferID
+        return true
+    }
+
+    @discardableResult
+    func closePanel(_ panelID: UUID) -> Bool {
+        guard let panelRoot,
+              panelRoot.leafCount > 1,
+              let newRoot = panelRoot.removingLeaf(paneID: panelID)
+        else {
+            return false
+        }
+
+        panels[panelID] = nil
+        self.panelRoot = newRoot
+        if focusedPanelID == panelID {
+            focusedPanelID = newRoot.firstLeafID
+        }
+        if let focusedPanelID,
+           let bufferID = panels[focusedPanelID]?.bufferID {
+            activeBufferID = bufferID
+        }
+        return true
+    }
+
+    func setPanelFraction(_ fraction: Double, splitID: UUID) {
+        panelRoot = panelRoot?.settingFraction(fraction, splitID: splitID)
     }
 
     func save(_ id: UUID) async -> SaveOutcome {
@@ -160,6 +314,69 @@ final class FilePreviewModel {
     func dispose() {
         buffers.removeAll()
         activeBufferID = nil
+        panelRoot = nil
+        panels.removeAll()
+        focusedPanelID = nil
+    }
+
+    private func assignActiveBufferToFocusedPanel() {
+        guard let activeBufferID else {
+            panelRoot = nil
+            panels.removeAll()
+            focusedPanelID = nil
+            return
+        }
+
+        if panelRoot == nil {
+            let panel = FilePreviewPanel(bufferID: activeBufferID)
+            panelRoot = .leaf(paneID: panel.id)
+            panels = [panel.id: panel]
+            focusedPanelID = panel.id
+            return
+        }
+
+        let targetID = focusedPanelID ?? panelRoot?.firstLeafID
+        guard let targetID, var panel = panels[targetID] else {
+            rebuildSinglePanelForActiveBuffer()
+            return
+        }
+        panel.bufferID = activeBufferID
+        panels[targetID] = panel
+        focusedPanelID = targetID
+    }
+
+    private func rebuildSinglePanelForActiveBuffer() {
+        guard let activeBufferID else {
+            panelRoot = nil
+            panels.removeAll()
+            focusedPanelID = nil
+            return
+        }
+
+        let panel = FilePreviewPanel(bufferID: activeBufferID)
+        panelRoot = .leaf(paneID: panel.id)
+        panels = [panel.id: panel]
+        focusedPanelID = panel.id
+    }
+
+    private func reconcilePanelsAfterClosingBuffer(_ closedID: UUID) {
+        guard let fallbackID = activeBufferID else {
+            panelRoot = nil
+            panels.removeAll()
+            focusedPanelID = nil
+            return
+        }
+
+        for panelID in Array(panels.keys) {
+            guard panels[panelID]?.bufferID == closedID else { continue }
+            var panel = panels[panelID]
+            panel?.bufferID = fallbackID
+            panels[panelID] = panel
+        }
+        if let focusedPanelID,
+           let bufferID = panels[focusedPanelID]?.bufferID {
+            activeBufferID = bufferID
+        }
     }
 
     private func kindTag(for kind: FileKind) -> String {

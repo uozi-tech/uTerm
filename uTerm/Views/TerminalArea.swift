@@ -24,6 +24,14 @@ struct TerminalArea: View {
             if let activeTab = workspace.activeTab {
                 TabContentView(tab: activeTab, onCloseTab: {
                     workspace.closeTab(activeTab.id)
+                }, onDropTab: { sourceTab, targetPane, zone in
+                    workspace.dropTab(sourceTab, onto: targetPane, zone: zone)
+                }, onDropFile: { sourceBuffer, targetPane, zone in
+                    workspace.dropFileBuffer(sourceBuffer, onto: targetPane, zone: zone)
+                }, workspaceDragSource: workspace.dragSource, onBeginPaneDrag: { sourcePane in
+                    workspace.beginDrag(.pane(sourcePane))
+                }, onDropDragSource: { targetPane, zone in
+                    workspace.dropDragSource(onto: targetPane, zone: zone)
                 })
                     .background(terminalAreaBG)
             } else {

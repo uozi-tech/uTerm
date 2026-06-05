@@ -78,6 +78,20 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(model.entries.map(\.name), ["hosts"])
     }
 
+    func testRestoreCurrentPathUsesPathOnFirstConnect() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("home.txt", false)]),
+            "/var/log": dir([("syslog", false)]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+
+        model.restoreCurrentPath("/var/log")
+        await model.refresh()
+
+        XCTAssertEqual(model.currentPath, "/var/log")
+        XCTAssertEqual(model.entries.map(\.name), ["syslog"])
+    }
+
     func testMakeDirectoryForwardsAndRefreshes() async {
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
@@ -139,6 +153,27 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertNil(model.transfer)
         let uploads = await mock.uploads
         XCTAssertEqual(uploads.first?.path, "/home/user/x.txt")
+    }
+
+    func testUploadLocalFilesUploadsEachFileToCurrentDirectory() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uterm-upload-local-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let first = tempDir.appendingPathComponent("first.txt")
+        let second = tempDir.appendingPathComponent("second.log")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+
+        let uploaded = await model.uploadLocalFiles([first, second])
+
+        XCTAssertEqual(uploaded, 2)
+        let uploads = await mock.uploads
+        XCTAssertEqual(uploads.map(\.path), ["/home/user/first.txt", "/home/user/second.log"])
+        XCTAssertEqual(uploads.map(\.bytes), [3, 3])
     }
 }
 

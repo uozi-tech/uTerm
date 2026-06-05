@@ -23,8 +23,9 @@ struct SplitterHandle: View {
         Rectangle()
             .fill(AppTheme.Palette.hitTestFill)
             .overlay(
+                // 设计稿 SplitGap：静息态画 1px UD.border 实线分隔，拖动时提亮为 accent。
                 Rectangle()
-                    .fill(dragStartFraction != nil ? UD.accent.opacity(0.6) : Color.clear)
+                    .fill(dragStartFraction != nil ? UD.accent.opacity(0.6) : UD.border)
                     .frame(
                         width: orientation == .vertical ? 1 : nil,
                         height: orientation == .horizontal ? 1 : nil

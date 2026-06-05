@@ -7,18 +7,21 @@ import SwiftData
 final class PaneModel: Identifiable {
     let id: UUID
     let serverProfileID: UUID
+    let fileBuffer: FileBuffer?
     let session = TerminalSession()
     /// 终端连接的 host-key 审批桥接。
     let hostKeyRelay = HostKeyChallengeRelay()
     private var isConnecting = false
 
-    init(id: UUID = UUID(), serverProfileID: UUID) {
+    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil) {
         self.id = id
         self.serverProfileID = serverProfileID
+        self.fileBuffer = fileBuffer
     }
 
     /// 用给定的服务器配置发起连接。
     func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
+        guard fileBuffer == nil else { return }
         guard !isConnecting else { return }
         // 重访标签时窗格会重新进入视图层级触发 connect；已连接/连接中则视为 no-op。
         guard session.connectionState != .connected,
@@ -49,11 +52,13 @@ final class PaneModel: Identifiable {
 
     /// 服务器配置已不存在时调用。
     func markServerMissing() {
+        guard fileBuffer == nil else { return }
         session.markFailed("服务器配置已被删除")
     }
 
     /// 窗格被关闭/移除时调用。
     func dispose() {
+        guard fileBuffer == nil else { return }
         session.dispose()
         Task { await session.close() }
         hostKeyRelay.resolve(false)

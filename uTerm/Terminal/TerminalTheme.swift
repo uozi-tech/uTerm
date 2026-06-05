@@ -13,17 +13,17 @@ enum TerminalTheme {
         }
     }
 
-    /// Subtle blue overlay used for normal mouse-drag selections.
-    static let normalSelectionColor = NSColor(srgbRed: 0x26 / 255, green: 0x4F / 255, blue: 0x78 / 255, alpha: 0.5)
+    /// Mouse-drag selection colors mirror the editor so terminal and editor
+    /// panes read as one text surface.
+    static let normalSelectionColor = EditorTheme.selectionBackground(dark: true)
 
     /// Bright amber overlay used while a search overlay is open so the active
     /// match is unmistakable against any cell background. Mirrors VS Code's
     /// `terminal.findMatchBackground` (`#A07D27`).
     static let searchMatchColor = NSColor(srgbRed: 0xF1 / 255, green: 0xB5 / 255, blue: 0x3C / 255, alpha: 0.6)
 
-    /// 浅色终端的选区底色。深色用上面的 `normalSelectionColor`（深蓝）；浅色用 VS Code
-    /// 浅蓝 #ADD6FF —— 否则深蓝盖在「浅底 + 深字」上会把选中文字压成不可读。
-    static let lightSelectionColor = NSColor(srgbRed: 0xAD / 255, green: 0xD6 / 255, blue: 0xFF / 255, alpha: 0.8)
+    /// 浅色终端的选区底色。与编辑器同用 VS Code Light+ 选区蓝。
+    static let lightSelectionColor = EditorTheme.selectionBackground(dark: false)
 
     // MARK: spec 03 — settings-driven API
 

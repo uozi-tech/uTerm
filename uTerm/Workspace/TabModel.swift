@@ -39,22 +39,78 @@ final class TabModel: Identifiable {
     /// 对聚焦窗格分屏；新窗格连与聚焦窗格相同的服务器，并成为新的聚焦。
     func splitFocusedPane(direction: SplitDirection) {
         guard let focusedPane else { return }
-        let newPane = PaneModel(serverProfileID: focusedPane.serverProfileID)
+        let newPane = PaneModel(serverProfileID: focusedPane.serverProfileID,
+                                fileBuffer: focusedPane.fileBuffer)
         panes[newPane.id] = newPane
         root = root.splitting(paneID: focusedPane.id, direction: direction,
                               newPaneID: newPane.id, splitID: UUID())
         focusedPaneID = newPane.id
     }
 
-    /// 在 `paneID` 处按 `direction` 分屏，新窗格连 `serverProfileID`。
+    /// 在 `paneID` 处按 `direction` 分屏。终端窗格复制终端；文件窗格复制文件 buffer。
     func splitPane(_ paneID: UUID, direction: SplitDirection,
-                   serverProfileID: UUID) {
-        guard panes[paneID] != nil else { return }
-        let newPane = PaneModel(serverProfileID: serverProfileID)
+                   serverProfileID: UUID, newLeafFirst: Bool = false) {
+        guard let sourcePane = panes[paneID] else { return }
+        let newPane = PaneModel(serverProfileID: serverProfileID,
+                                fileBuffer: sourcePane.fileBuffer)
         panes[newPane.id] = newPane
         root = root.splitting(paneID: paneID, direction: direction,
-                              newPaneID: newPane.id, splitID: UUID())
+                              newPaneID: newPane.id, splitID: UUID(),
+                              newLeafFirst: newLeafFirst)
         focusedPaneID = newPane.id
+    }
+
+    /// 在 `target` 的指定投放区插入一个新窗格。
+    @discardableResult
+    func insertPane(serverProfileID: UUID, toTarget target: UUID,
+                    zone: PaneDropZone) -> Bool {
+        insertPane(serverProfileID: serverProfileID, fileBuffer: nil,
+                   toTarget: target, zone: zone)
+    }
+
+    /// 复制一个已有窗格并插入到 `target` 的指定投放区。用于同 tab 拖拽复制：
+    /// 终端窗格复制服务器，文件窗格复制文件 buffer。
+    @discardableResult
+    func insertPane(copying sourcePane: PaneModel, toTarget target: UUID,
+                    zone: PaneDropZone) -> Bool {
+        insertPane(serverProfileID: sourcePane.serverProfileID,
+                   fileBuffer: sourcePane.fileBuffer,
+                   toTarget: target,
+                   zone: zone)
+    }
+
+    /// 在 `target` 的指定投放区插入一个文件 buffer 窗格。
+    @discardableResult
+    func insertFilePane(_ buffer: FileBuffer, toTarget target: UUID,
+                        zone: PaneDropZone) -> Bool {
+        guard let targetPane = panes[target] else { return false }
+        return insertPane(serverProfileID: targetPane.serverProfileID,
+                          fileBuffer: buffer,
+                          toTarget: target,
+                          zone: zone)
+    }
+
+    @discardableResult
+    private func insertPane(serverProfileID: UUID, fileBuffer: FileBuffer?,
+                            toTarget target: UUID, zone: PaneDropZone) -> Bool {
+        let direction: SplitDirection
+        let newLeafFirst: Bool
+        switch zone {
+        case .leading:  direction = .horizontal; newLeafFirst = true
+        case .trailing: direction = .horizontal; newLeafFirst = false
+        case .top:      direction = .vertical;   newLeafFirst = true
+        case .bottom:   direction = .vertical;   newLeafFirst = false
+        case .center:   return false
+        }
+        guard panes[target] != nil else { return false }
+        let newPane = PaneModel(serverProfileID: serverProfileID,
+                                fileBuffer: fileBuffer)
+        panes[newPane.id] = newPane
+        root = root.splitting(paneID: target, direction: direction,
+                              newPaneID: newPane.id, splitID: UUID(),
+                              newLeafFirst: newLeafFirst)
+        focusedPaneID = newPane.id
+        return true
     }
 
     /// 关闭一个窗格。返回 `false` 表示这是最后一个窗格（标签应被关闭）。

@@ -9,6 +9,8 @@ final class WorkspaceUIStateTests: XCTestCase {
         XCTAssertEqual(s.leftSidebarVisibility, .all)
         XCTAssertTrue(s.rightInspectorPresented)
         XCTAssertEqual(s.previewTerminalRatio, 0.667, accuracy: 0.001)
+        XCTAssertEqual(s.sidebarWidth, s.inspectorWidth, accuracy: 0.001)
+        XCTAssertEqual(s.sidebarWidth, 300, accuracy: 0.001)
     }
 
     func test_roundtripEncoding_allDefault() throws {
@@ -42,6 +44,7 @@ final class WorkspaceUIStateTests: XCTestCase {
         XCTAssertEqual(s.leftSidebarVisibility, .all)
         XCTAssertTrue(s.rightInspectorPresented)
         XCTAssertEqual(s.previewTerminalRatio, 0.667, accuracy: 0.001)
+        XCTAssertEqual(s.sidebarWidth, s.inspectorWidth, accuracy: 0.001)
     }
 
     func test_ratio_clampedToReasonableRange() {

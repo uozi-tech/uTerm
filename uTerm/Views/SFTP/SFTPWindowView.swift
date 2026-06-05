@@ -73,7 +73,7 @@ struct SFTPWindowView: View {
     }
 
     private func openWorkspace(for server: ServerProfile) {
-        openWindow(value: WorkspaceWindowID(id: UUID(), serverID: server.id))
+        openWindow(value: WorkspaceWindowID(serverID: server.id))
     }
 }
 

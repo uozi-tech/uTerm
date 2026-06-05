@@ -7,6 +7,21 @@ nonisolated struct DragHoverTarget: Equatable, Sendable {
     let zone: PaneDropZone
 }
 
+/// Returns the drop highlight zone for a pane. The hover target alone is not
+/// enough: SwiftUI/AppKit can leave a stale hover after the drag ends, so the
+/// visual must be gated by an active pane drag or workspace-level drag source.
+nonisolated func paneDropHighlightZone(
+    paneID: UUID,
+    draggingPaneID: UUID?,
+    workspaceDragSource: WorkspaceDragSource?,
+    hover: DragHoverTarget?
+) -> PaneDropZone? {
+    guard draggingPaneID != nil || workspaceDragSource != nil else { return nil }
+    guard let hover, hover.paneID == paneID else { return nil }
+    guard draggingPaneID != paneID else { return nil }
+    return hover.zone
+}
+
 /// 一次窗格拖拽会话的瞬态状态。不持久化。`TabContentView` 以 `@State`
 /// 持有，透传给每个 `PaneView` 与各窗格的 `PaneDropDelegate`。
 @MainActor

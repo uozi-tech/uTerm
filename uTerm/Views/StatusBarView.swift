@@ -58,7 +58,7 @@ struct StatusBarView: View {
         }
         .font(UD.mono(10.5))
         .lineLimit(1)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 22)
         .background(UD.panel)
     }
@@ -66,13 +66,13 @@ struct StatusBarView: View {
     // MARK: - 指标单元
 
     private func metric(icon: String, color: Color, text: String) -> some View {
-        UDFooterItem(systemImage: icon, color: color, label: text, iconSize: 9)
+        UDFooterItem(systemImage: icon, color: color, label: text, iconSize: 11)
     }
 
     private func cpuItem(_ pct: Double, cores: Int?) -> some View {
         Button { cpuPopover.toggle() } label: {
             UDFooterItem(systemImage: "cpu", color: UD.mCPU,
-                         label: String(format: "%.0f%%", pct), iconSize: 9)
+                         label: String(format: "%.0f%%", pct), iconSize: 11)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
@@ -88,7 +88,7 @@ struct StatusBarView: View {
     private func memItem(_ text: String, pct: Double) -> some View {
         Button { memPopover.toggle() } label: {
             UDFooterItem(systemImage: "memorychip", color: UD.mMem,
-                         label: "\(text) · \(String(format: "%.0f%%", pct))", iconSize: 9)
+                         label: "\(text) · \(String(format: "%.0f%%", pct))", iconSize: 11)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {

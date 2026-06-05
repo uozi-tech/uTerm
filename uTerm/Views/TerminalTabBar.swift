@@ -29,18 +29,17 @@ struct TerminalTabBar: View {
                             onSelect: { workspace.selectTab(tab.id) },
                             onClose:  { workspace.closeTab(tab.id) })
                             .frame(maxHeight: .infinity)
-                            .draggable(TabDragItem(tabID: tab.id)) {
+                            .onDrag {
+                                workspace.beginDrag(.tab(tab.id))
+                                return TabDragPayload.itemProvider(tabID: tab.id)
+                            } preview: {
                                 Text(tab.title).font(.callout)
                                     .padding(6)
                                     .foregroundStyle(UD.text2)
                             }
-                            .dropDestination(for: TabDragItem.self) { items, _ in
-                                guard let dragged = items.first,
-                                      let toIndex = workspace.tabs.firstIndex(where: { $0.id == tab.id })
-                                else { return false }
-                                workspace.moveTab(fromID: dragged.tabID, toIndex: toIndex)
-                                return true
-                            }
+                            .onDrop(of: [.utermTabID], delegate: TabReorderDropDelegate(
+                                workspace: workspace,
+                                targetTabID: tab.id))
                     }
                     Button(action: onNewTab) {
                         // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
@@ -69,5 +68,34 @@ struct TerminalTabBar: View {
     private static func dotColor(for tab: TabModel) -> Color? {
         guard let session = tab.focusedPane?.session else { return nil }
         return ConnectionStatusDisplay(state: session.connectionState).tint.color
+    }
+}
+
+private struct TabReorderDropDelegate: DropDelegate {
+    let workspace: WorkspaceModel
+    let targetTabID: UUID
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utermTabID])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.utermTabID]).first,
+              let toIndex = workspace.tabs.firstIndex(where: { $0.id == targetTabID })
+        else {
+            return false
+        }
+
+        TabDragPayload.load(from: provider) { draggedTabID in
+            guard let draggedTabID else { return }
+            Task { @MainActor in
+                workspace.moveTab(fromID: draggedTabID, toIndex: toIndex)
+            }
+        }
+        return true
     }
 }

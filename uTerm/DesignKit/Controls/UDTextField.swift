@@ -12,6 +12,7 @@ struct UDTextField: View {
     var placeholder: String
     @Binding var text: String
     var errorMessage: String? = nil
+    var autoFocus: Bool = false
 
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focused: Bool
@@ -19,11 +20,13 @@ struct UDTextField: View {
     init(label: String? = nil,
          placeholder: String,
          text: Binding<String>,
-         errorMessage: String? = nil) {
+         errorMessage: String? = nil,
+         autoFocus: Bool = false) {
         self.label = label
         self.placeholder = placeholder
         self._text = text
         self.errorMessage = errorMessage
+        self.autoFocus = autoFocus
     }
 
     private var hasError: Bool { errorMessage != nil }
@@ -57,6 +60,10 @@ struct UDTextField: View {
                         .stroke(ringColor, lineWidth: 3)
                 )
                 .opacity(isEnabled ? 1 : 0.55)
+                .onAppear { focused = autoFocus }
+                .onChange(of: autoFocus) { _, newValue in
+                    focused = newValue
+                }
 
             if let errorMessage {
                 Text(errorMessage)

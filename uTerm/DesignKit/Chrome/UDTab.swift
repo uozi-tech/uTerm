@@ -6,6 +6,13 @@ import SwiftUI
 /// `UDPreviewTab` 用于编辑器 / 预览页（文档图标 + 脏标记）；`UDTermTab` 用于终端会话
 /// （连接点 + 终端实体底）；`UDTabBar` 把若干 Tab 收进顶部圆角、底描边的标签栏。
 
+enum UDTabCloseButtonLayout {
+    nonisolated static let hitWidth: CGFloat = 28
+    nonisolated static let hitHeight: CGFloat = 28
+    nonisolated static let iconSize: CGFloat = 9
+    nonisolated static let cornerRadius: CGFloat = 5
+}
+
 // MARK: - 编辑器 / 预览 Tab
 
 /// 编辑器 / 预览标签页。激活态顶部 2px accent 边、左右 1px 描边、实体面板底；
@@ -45,12 +52,8 @@ struct UDPreviewTab: View {
                     .frame(width: 6, height: 6)
             }
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(active || hovered ? UD.text3 : .clear)
-            }
-            .buttonStyle(.plain)
+            UDTabCloseButton(isVisible: active || hovered,
+                             action: onClose)
         }
         .padding(.horizontal, 12)
         .frame(height: height)
@@ -126,12 +129,8 @@ struct UDTermTab: View {
                 .font(UD.mono(12))
                 .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(active || hovered ? UD.text3 : .clear)
-            }
-            .buttonStyle(.plain)
+            UDTabCloseButton(isVisible: active || hovered,
+                             action: onClose)
         }
         .padding(.horizontal, 12)
         .frame(height: height)
@@ -209,6 +208,32 @@ struct UDTabBar<Content: View>: View {
             )
             .strokeBorder(UD.border, lineWidth: 1)
         )
+    }
+}
+
+private struct UDTabCloseButton: View {
+    let isVisible: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: UDTabCloseButtonLayout.iconSize, weight: .semibold))
+                .foregroundStyle(isVisible || hovered ? UD.text3 : .clear)
+                .frame(width: UDTabCloseButtonLayout.hitWidth,
+                       height: UDTabCloseButtonLayout.hitHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: UDTabCloseButtonLayout.cornerRadius,
+                                     style: .continuous)
+                        .fill(hovered ? UD.rowHover : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("关闭标签")
     }
 }
 

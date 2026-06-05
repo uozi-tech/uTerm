@@ -29,12 +29,12 @@ struct PreviewStatusRow: View {
                 Text("\(model.recents.count) 个最近文件")
             }
         }
-        .font(.caption)
+        .font(UD.mono(10.5))
         .foregroundStyle(UD.text3)
         .padding(.horizontal, 12)
         .frame(height: 22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
+        .background(UD.bg)
         .overlay(alignment: .top) {
             Rectangle().fill(UD.border).frame(height: 1)
         }

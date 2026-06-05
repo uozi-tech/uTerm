@@ -22,6 +22,8 @@ final class AssistantModel {
     var modelContext: ModelContext?
     /// 当前会话；首次发送时惰性创建，避免空会话污染历史。
     private(set) var currentSession: ChatSession?
+    /// workspace 快照可能先于 SwiftData context 恢复；context 注入后再解析。
+    @ObservationIgnored private var pendingRestoredSessionID: UUID?
 
     /// 顶栏展示的会话标题。
     var sessionTitle: String {
@@ -46,8 +48,10 @@ final class AssistantModel {
 
     /// 注入持久化上下文（幂等：仅首次生效）。
     func attach(context: ModelContext) {
-        guard modelContext == nil else { return }
-        modelContext = context
+        if modelContext == nil {
+            modelContext = context
+        }
+        resolvePendingRestoredSessionIfNeeded()
     }
 
     /// 开新对话：清空当前会话与消息，下次发送时再惰性建会话。
@@ -63,6 +67,28 @@ final class AssistantModel {
         currentSession = session
         messages = session.orderedMessages.map(\.asChatMessage)
         if case .failed = state { state = .idle }
+    }
+
+    func snapshot() -> AgentSnapshot {
+        AgentSnapshot(currentSessionID: currentSession?.id, input: input)
+    }
+
+    func restore(from snapshot: AgentSnapshot?) {
+        guard let snapshot else {
+            pendingRestoredSessionID = nil
+            currentSession = nil
+            messages = []
+            input = ""
+            if case .failed = state { state = .idle }
+            return
+        }
+
+        input = snapshot.input
+        pendingRestoredSessionID = snapshot.currentSessionID
+        currentSession = nil
+        messages = []
+        if case .failed = state { state = .idle }
+        resolvePendingRestoredSessionIfNeeded()
     }
 
     /// 从首句话派生会话标题（单行、限长）。
@@ -176,6 +202,18 @@ final class AssistantModel {
         record.text = text
         session?.updatedAt = Date()
         try? ctx.save()
+    }
+
+    private func resolvePendingRestoredSessionIfNeeded() {
+        guard let sessionID = pendingRestoredSessionID,
+              let ctx = modelContext
+        else { return }
+        pendingRestoredSessionID = nil
+        var descriptor = FetchDescriptor<ChatSession>(
+            predicate: #Predicate { $0.id == sessionID })
+        descriptor.fetchLimit = 1
+        guard let session = try? ctx.fetch(descriptor).first else { return }
+        load(session)
     }
 
     private func resolveBaseURL(for provider: AIProvider) -> URL? {

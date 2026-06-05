@@ -8,18 +8,29 @@ struct PreviewBodyRouter: View {
     var body: some View {
         Group {
             if let buf = model.activeBuffer {
-                switch buf.kind {
-                case .code(let lang):
-                    CodeBody(buffer: buf, language: LanguageDetector.grammarId(for: lang))
-                case .markdown:
-                    MarkdownBody(buffer: buf)
-                case .image:
-                    ImageBody(buffer: buf)
-                case .plainText:
-                    CodeBody(buffer: buf, language: "")
-                }
+                PreviewBufferBody(buffer: buf)
             } else {
                 EmptyBody(model: model)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct PreviewBufferBody: View {
+    let buffer: FileBuffer
+
+    var body: some View {
+        Group {
+            switch buffer.kind {
+            case .code(let lang):
+                CodeBody(buffer: buffer, language: LanguageDetector.grammarId(for: lang))
+            case .markdown:
+                MarkdownBody(buffer: buffer)
+            case .image:
+                ImageBody(buffer: buffer)
+            case .plainText:
+                CodeBody(buffer: buffer, language: "")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

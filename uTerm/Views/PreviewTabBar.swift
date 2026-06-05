@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 /// chip 用 DesignKit `UDPreviewTab`；激活底色传编辑器正文色以与下方编辑器无缝衔接。
 struct PreviewTabBar: View {
     let model: FilePreviewModel
+    let onBeginDrag: @MainActor @Sendable (_ bufferID: UUID) -> Void
+    /// 请求关闭某 buffer（含脏文件确认，由上层提供）。
+    let onRequestClose: (UUID) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -19,8 +22,17 @@ struct PreviewTabBar: View {
                             systemImage: Self.icon(for: buf.kind),
                             activeBackground: Color(nsColor: EditorTheme.background),
                             onSelect: { model.selectTab(buf.id) },
-                            onClose:  { model.close(buf.id, savingIfDirty: true) })
+                            onClose:  { onRequestClose(buf.id) })
                             .frame(maxHeight: .infinity)
+                            .onDrag {
+                                onBeginDrag(buf.id)
+                                return FileBufferDragPayload.itemProvider(bufferID: buf.id)
+                            } preview: {
+                                Label(buf.displayName, systemImage: Self.icon(for: buf.kind))
+                                    .font(.callout)
+                                    .padding(6)
+                                    .foregroundStyle(UD.text2)
+                            }
                     }
                 }
                 .frame(maxHeight: .infinity)

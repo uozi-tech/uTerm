@@ -14,6 +14,26 @@
 				<string>public.data</string>
 			</array>
 		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.uozi.uterm.tab-id</string>
+			<key>UTTypeDescription</key>
+			<string>uTerm tab drag identifier</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.uozi.uterm.file-buffer-id</string>
+			<key>UTTypeDescription</key>
+			<string>uTerm file buffer drag identifier</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

@@ -70,6 +70,9 @@ enum UD {
     nonisolated static let accentInk  = dyn(.hex(0x4DA3FF), .hex(0x0067E0))
     /// accent 软底（选中底 / ghost hover）。深 10% / 浅 13%。
     nonisolated static let accentSoft = dyn(.hex(0x0A84FF, 0.10), .hex(0x007AFF, 0.13))
+    /// 按下态去饱和板岩蓝（设计稿 active：按下时颜色往回收而非更跳，饱和度低于 hover）。
+    /// 深色作半透明叠加底（×0.26 填 / ×0.55 描边），浅色用实底（#5A7099）。
+    nonisolated static let accentPressed = dyn(.hex(0x96ACCD), .hex(0x5A7099))
 
     // 备选强调色（设计稿固定 macOS 系统色，深浅同值）。
     nonisolated static let accentViolet = ColorSpec.hex(0xBF5AF2).color()   // 雾紫

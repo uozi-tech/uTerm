@@ -71,7 +71,8 @@ struct ProvidersSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
     }
 
     // MARK: - 右列

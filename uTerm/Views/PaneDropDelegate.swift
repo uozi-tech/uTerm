@@ -9,9 +9,19 @@ struct PaneDropDelegate: DropDelegate {
     let bounds: CGRect
     /// 落点回调，参数为被拖拽窗格 id 与命中的投放区。
     let onDrop: @MainActor @Sendable (_ source: UUID, _ zone: PaneDropZone) -> Void
+    /// 标签落点回调，参数为被拖拽标签 id 与命中的投放区。
+    let onTabDrop: @MainActor @Sendable (_ sourceTab: UUID, _ zone: PaneDropZone) -> Void
+    /// 文件 buffer 落点回调，参数为被拖拽 buffer id 与命中的投放区。
+    let onFileDrop: @MainActor @Sendable (_ sourceBuffer: UUID, _ zone: PaneDropZone) -> Void
+    /// Workspace 级同步拖拽源。存在时优先使用它分发 drop，provider 只作兜底。
+    let workspaceDragSource: @MainActor @Sendable () -> WorkspaceDragSource?
+    /// Workspace 级同步 drop 入口。
+    let onWorkspaceDrop: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.utermPaneID])
+            || info.hasItemsConforming(to: [.utermTabID])
+            || info.hasItemsConforming(to: [.utermFileBufferID])
     }
 
     func dropEntered(info: DropInfo) {
@@ -37,13 +47,39 @@ struct PaneDropDelegate: DropDelegate {
         let onDrop = onDrop
         // 立刻结束拖拽会话，让高亮在落点瞬间消失。end() 幂等。
         dragState.end()
-        guard let provider = info.itemProviders(for: [.utermPaneID]).first else {
+        if workspaceDragSource() != nil {
+            return onWorkspaceDrop(zone)
+        }
+
+        if let provider = info.itemProviders(for: [.utermPaneID]).first {
+            PaneDragPayload.load(from: provider) { source in
+                guard let source, source != target else { return }
+                Task { @MainActor in
+                    onDrop(source, zone)
+                }
+            }
+            return true
+        }
+
+        if let provider = info.itemProviders(for: [.utermTabID]).first {
+            let onTabDrop = onTabDrop
+            TabDragPayload.load(from: provider) { sourceTab in
+                guard let sourceTab else { return }
+                Task { @MainActor in
+                    onTabDrop(sourceTab, zone)
+                }
+            }
+            return true
+        }
+
+        guard let provider = info.itemProviders(for: [.utermFileBufferID]).first else {
             return false
         }
-        PaneDragPayload.load(from: provider) { source in
-            guard let source, source != target else { return }
+        let onFileDrop = onFileDrop
+        FileBufferDragPayload.load(from: provider) { sourceBuffer in
+            guard let sourceBuffer else { return }
             Task { @MainActor in
-                onDrop(source, zone)
+                onFileDrop(sourceBuffer, zone)
             }
         }
         return true

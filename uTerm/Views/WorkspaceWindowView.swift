@@ -107,7 +107,8 @@ struct WorkspaceWindowView: View {
             ) {
                 SFTPSidebar(model: workspace.fileBrowserModel, server: server)
             } center: {
-                WorkspaceCenter(workspace: workspace, server: server)
+                WorkspaceCenter(workspace: workspace, server: server,
+                                onRequestCloseBuffer: { requestCloseBuffer($0) })
                     .frame(minWidth: 480)
             } inspector: {
                 AgentSidebar(
@@ -132,6 +133,10 @@ struct WorkspaceWindowView: View {
         // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
         // 不可能再有系统玻璃。
         .background(WorkspaceWindowChrome(serverName: server.name))
+        // ⌘W：仅工作区窗口接管，按焦点先关内容、最后关窗口（见 handleCloseShortcut）。
+        .background(WorkspaceCloseShortcutInstaller { window in
+            handleCloseShortcut(window: window)
+        })
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
@@ -151,6 +156,9 @@ struct WorkspaceWindowView: View {
             } else {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
+            if workspace.fileBrowserModel.state == .browsing {
+                await workspace.filePreviewModel.loadRestoredBuffersIfNeeded()
+            }
         }
         // 窗口关闭时释放资源（Fix #8）。WorkspaceModel.dispose 关闭 SFTP 会话
         // 与所有终端 session。SwiftUI 在 view 离开层级时调 onDisappear，
@@ -168,6 +176,10 @@ struct WorkspaceWindowView: View {
                 guard !Task.isCancelled else { return }
                 try? store.save(newSnapshot)
             }
+        }
+        .onChange(of: workspace.fileBrowserModel.state) { _, state in
+            guard state == .browsing else { return }
+            Task { await workspace.filePreviewModel.loadRestoredBuffersIfNeeded() }
         }
         // 全局 CommandGroup 通知会广播到所有打开的工作区窗口；用
         // controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
@@ -244,6 +256,55 @@ struct WorkspaceWindowView: View {
     }
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）
+
+    /// 关闭一个文件标签；脏文件先弹「保存 / 不保存 / 取消」。⌘W 与标签 X 共用此入口。
+    @MainActor
+    private func requestCloseBuffer(_ id: UUID) {
+        let model = workspace.filePreviewModel
+        guard let buf = model.buffers.first(where: { $0.id == id }) else { return }
+        guard buf.isDirty else {
+            model.close(id, savingIfDirty: false)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "是否保存对「\(buf.displayName)」的更改？"
+        alert.informativeText = "如果不保存，你的更改将丢失。"
+        alert.addButton(withTitle: "保存")        // .alertFirstButtonReturn
+        alert.addButton(withTitle: "不保存")      // .alertSecondButtonReturn
+        alert.addButton(withTitle: "取消")        // .alertThirdButtonReturn
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:             // 保存
+            Task { @MainActor in
+                await handleSave(id: id)          // 既有流程，含远程 mtime 冲突检测与失败提示
+                if let b = model.buffers.first(where: { $0.id == id }), !b.isDirty {
+                    model.close(id, savingIfDirty: false)   // 仅保存成功才关
+                }
+            }
+        case .alertSecondButtonReturn:            // 不保存
+            model.close(id, savingIfDirty: false)
+        default:                                  // 取消：什么都不做
+            break
+        }
+    }
+
+    /// ⌘W：按键盘焦点先关当前文件标签 / 终端聚焦窗格；都没有可关时才关窗口。
+    @MainActor
+    private func handleCloseShortcut(window: NSWindow) {
+        let region = WorkspaceCloseShortcut.focusRegion(in: window)
+        switch workspace.closeIntent(focusedRegion: region) {
+        case .closeFileBuffer(let id):
+            requestCloseBuffer(id)
+        case .closeTerminalFocusedPane(let tabID):
+            guard let tab = workspace.tabs.first(where: { $0.id == tabID }) else { return }
+            if let pid = tab.focusedPaneID {
+                if !tab.closePane(pid) { workspace.closeTab(tab.id) }   // 关聚焦窗格；最后一个窗格→关标签
+            } else {
+                workspace.closeTab(tab.id)
+            }
+        case .closeWindow:
+            window.performClose(nil)
+        }
+    }
 
     private func byteSize(_ n: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: n, countStyle: .file)

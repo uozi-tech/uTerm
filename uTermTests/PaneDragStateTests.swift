@@ -48,4 +48,21 @@ final class PaneDragStateTests: XCTestCase {
         XCTAssertNil(state.hover)
         XCTAssertNil(state.paneDragPreview)
     }
+
+    func testDropHighlightRequiresActiveDrag() {
+        let pane = UUID()
+        let hover = DragHoverTarget(paneID: pane, zone: .trailing)
+
+        XCTAssertNil(paneDropHighlightZone(
+            paneID: pane,
+            draggingPaneID: nil,
+            workspaceDragSource: nil,
+            hover: hover))
+
+        XCTAssertEqual(paneDropHighlightZone(
+            paneID: pane,
+            draggingPaneID: nil,
+            workspaceDragSource: .tab(UUID()),
+            hover: hover), .trailing)
+    }
 }

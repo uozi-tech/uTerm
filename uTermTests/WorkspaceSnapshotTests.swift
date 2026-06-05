@@ -14,6 +14,7 @@ final class WorkspaceSnapshotTests: XCTestCase {
     }
 
     func testWorkspaceSnapshotRoundTrip() throws {
+        let mtime = Date(timeIntervalSince1970: 1_717_171_717)
         let snap = WorkspaceSnapshot(
             tabs: [
                 TabSnapshot(title: "cluster", layout: .leaf(serverProfileID: UUID())),
@@ -22,7 +23,17 @@ final class WorkspaceSnapshotTests: XCTestCase {
                     first: .leaf(serverProfileID: UUID()),
                     second: .leaf(serverProfileID: UUID()))),
             ],
-            activeTabIndex: 1)
+            activeTabIndex: 1,
+            uiState: nil,
+            fileBrowserPath: "/var/log",
+            openFiles: [
+                OpenFileSnapshot(remotePath: "/var/log/nginx.conf",
+                                 byteSize: 42,
+                                 mtimeWhenLoaded: mtime)
+            ],
+            activeFileIndex: 0,
+            agentState: AgentSnapshot(currentSessionID: UUID(),
+                                      input: "summarize errors"))
         let data = try JSONEncoder().encode(snap)
         let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
         XCTAssertEqual(decoded, snap)

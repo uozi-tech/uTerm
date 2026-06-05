@@ -5,6 +5,19 @@ struct TabContentView: View {
     let tab: TabModel
     /// 关闭整个标签（关闭最后一个窗格时触发）。
     let onCloseTab: () -> Void
+    /// 标签拖到当前 tab 的某个 pane 时触发。
+    let onDropTab: @MainActor @Sendable (_ sourceTab: UUID, _ targetPane: UUID,
+                                         _ zone: PaneDropZone) -> Void
+    /// 文件 buffer 拖到当前 tab 的某个 pane 时触发。
+    let onDropFile: @MainActor @Sendable (_ sourceBuffer: UUID, _ targetPane: UUID,
+                                          _ zone: PaneDropZone) -> Void
+    /// Workspace 级拖拽源。
+    let workspaceDragSource: WorkspaceDragSource?
+    /// 窗格拖拽开始时通知 workspace 登记源。
+    let onBeginPaneDrag: @MainActor @Sendable (_ sourcePane: UUID) -> Void
+    /// Workspace 级同步 drop 入口。
+    let onDropDragSource: @MainActor @Sendable (_ targetPane: UUID,
+                                                _ zone: PaneDropZone) -> Bool
 
     /// 当前标签的拖拽会话状态，所有窗格共享一份。拖拽全程鼠标按住，
     /// 切不了标签，故无需随 tab 重建。
@@ -16,6 +29,11 @@ struct TabContentView: View {
             // 拖拽幽灵层：跟随光标的浮动 NSPanel，读共享 dragState 的快照。
             // 处于工作区 NSWindow 视图树内，幽灵子面板能正确认领父窗口。
             .overlay { PaneDragGhostLayer(dragState: dragState) }
+            .onChange(of: workspaceDragSource) { _, source in
+                if source == nil, dragState.draggingPaneID == nil {
+                    dragState.hover = nil
+                }
+            }
     }
 
     // Returns AnyView to break the opaque-type recursion that arises when a
@@ -29,7 +47,9 @@ struct TabContentView: View {
                     pane: pane,
                     isFocused: tab.focusedPaneID == paneID,
                     dragState: dragState,
+                    workspaceDragSource: workspaceDragSource,
                     onFocus: { tab.focusedPaneID = paneID },
+                    onBeginPaneDrag: onBeginPaneDrag,
                     onSplit: { direction in
                         tab.splitPane(paneID, direction: direction,
                                       serverProfileID: pane.serverProfileID)
@@ -40,6 +60,15 @@ struct TabContentView: View {
                         } else {
                             tab.movePane(source, toTarget: paneID, zone: zone)
                         }
+                    },
+                    onTabDrop: { sourceTab, zone in
+                        onDropTab(sourceTab, paneID, zone)
+                    },
+                    onFileDrop: { sourceBuffer, zone in
+                        onDropFile(sourceBuffer, paneID, zone)
+                    },
+                    onWorkspaceDrop: { zone in
+                        onDropDragSource(paneID, zone)
                     },
                     onClose: {
                         if !tab.closePane(paneID) { onCloseTab() }

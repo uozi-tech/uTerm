@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 整个终端工作区：有序标签 + 当前活动标签 + 三栏 UI 状态 + 左/右栏的内置 model。
@@ -23,6 +24,12 @@ final class WorkspaceModel {
     /// 底部状态栏的远程遥测 model；与 workspace 同生命周期。复用 SFTP 连接轮询
     /// /proc 等，不碰终端 PTY。
     let telemetryModel: TelemetryModel
+
+    /// 当前 workspace 内正在拖拽的源。用于 drop 时同步分发，避免依赖
+    /// `NSItemProvider.loadDataRepresentation` 的异步回调决定 UI 是否更新。
+    private(set) var dragSource: WorkspaceDragSource?
+
+    @ObservationIgnored private var dragEndPollTask: Task<Void, Never>?
 
     init(windowID: WorkspaceWindowID? = nil) {
         // 按 windowID 命名 recents 文件；windowID 为 nil（测试）走临时目录。
@@ -77,11 +84,17 @@ final class WorkspaceModel {
         if let ui = snapshot.uiState {
             self.uiState = ui
         }
+        if let path = snapshot.fileBrowserPath {
+            fileBrowserModel.restoreCurrentPath(path)
+        }
+        filePreviewModel.restoreOpenFiles(snapshot.openFiles, activeIndex: snapshot.activeFileIndex)
+        assistantModel.restore(from: snapshot.agentState)
     }
 
     /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
     /// 预览 buffers。AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
     func dispose() {
+        endDrag()
         for tab in tabs { tab.disposeAll() }
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
@@ -142,27 +155,206 @@ final class WorkspaceModel {
         tabs.insert(tab, at: clamped)
     }
 
+    /// 记录一次 workspace 内拖拽源。`.onDrag` 没有结束回调，因此与 pane
+    /// drag state 一样轮询鼠标释放兜底清理。
+    func beginDrag(_ source: WorkspaceDragSource) {
+        dragSource = source
+        dragEndPollTask?.cancel()
+        dragEndPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(30))
+                if Task.isCancelled { return }
+                if (NSEvent.pressedMouseButtons & 1) == 0 {
+                    // Give SwiftUI/AppKit's drop target a brief chance to run
+                    // `performDrop` before clearing the in-process source.
+                    // Successful drops still clear immediately via
+                    // `dropDragSource`.
+                    try? await Task.sleep(for: .milliseconds(120))
+                    if Task.isCancelled { return }
+                    self?.endDrag()
+                    return
+                }
+            }
+        }
+    }
+
+    /// 清除当前 workspace 拖拽源。幂等。
+    func endDrag() {
+        dragSource = nil
+        dragEndPollTask?.cancel()
+        dragEndPollTask = nil
+    }
+
+    /// 把当前登记的拖拽源投放到 `targetPaneID`。这是 UI drop 的同步入口：
+    /// provider 只用于系统识别拖拽类型，真正的源 id 从 `dragSource` 读取。
+    @discardableResult
+    func dropDragSource(onto targetPaneID: UUID, zone: PaneDropZone) -> Bool {
+        guard let dragSource else { return false }
+        defer { endDrag() }
+
+        switch dragSource {
+        case .pane(let sourcePaneID):
+            return dropPane(sourcePaneID, onto: targetPaneID, zone: zone)
+        case .tab(let sourceTabID):
+            return dropTab(sourceTabID, onto: targetPaneID, zone: zone)
+        case .fileBuffer(let bufferID):
+            return dropFileBuffer(bufferID, onto: targetPaneID, zone: zone)
+        }
+    }
+
+    /// 把当前登记的拖拽源投放到当前活动 terminal tab 的聚焦窗格。
+    /// PreviewArea 使用独立的 file panel layout，不走这个入口。
+    @discardableResult
+    func dropDragSourceOntoFocusedPane(zone: PaneDropZone) -> Bool {
+        guard let targetPaneID = activeTab?.focusedPaneID
+                ?? activeTab?.root.firstLeafID
+        else {
+            endDrag()
+            return false
+        }
+        return dropDragSource(onto: targetPaneID, zone: zone)
+    }
+
+    /// 把当前文件拖拽源投放到预览/编辑区的聚焦文件 panel。
+    /// 文件预览区有自己的 panel layout，不能把文件 tab 转投到 terminal pane tree。
+    @discardableResult
+    func dropDragSourceOntoFocusedPreviewPanel(zone: PaneDropZone) -> Bool {
+        guard let dragSource else { return false }
+        defer { endDrag() }
+
+        guard case .fileBuffer(let bufferID) = dragSource else {
+            return false
+        }
+        return filePreviewModel.dropBufferOntoFocusedPanel(bufferID, zone: zone)
+    }
+
+    /// 把当前文件拖拽源投放到指定预览/编辑区 panel。
+    @discardableResult
+    func dropDragSource(ontoPreviewPanel targetPanelID: UUID,
+                        zone: PaneDropZone) -> Bool {
+        guard let dragSource else { return false }
+        defer { endDrag() }
+
+        guard case .fileBuffer(let bufferID) = dragSource else {
+            return false
+        }
+        return filePreviewModel.dropBuffer(bufferID, onto: targetPanelID, zone: zone)
+    }
+
+    @discardableResult
+    private func dropPane(_ sourcePaneID: UUID, onto targetPaneID: UUID,
+                          zone: PaneDropZone) -> Bool {
+        guard sourcePaneID != targetPaneID,
+              let targetTab = activeTab,
+              targetTab.panes[sourcePaneID] != nil,
+              targetTab.panes[targetPaneID] != nil
+        else {
+            return false
+        }
+        if zone == .center {
+            targetTab.swapPanes(sourcePaneID, targetPaneID)
+        } else {
+            targetTab.movePane(sourcePaneID, toTarget: targetPaneID, zone: zone)
+        }
+        return true
+    }
+
+    /// 把一个标签作为新窗格投放到当前活动标签的某个窗格旁边。
+    /// 源标签是当前标签时复制当前聚焦窗格；否则源标签关闭，目标标签保持活动。
+    @discardableResult
+    func dropTab(_ sourceTabID: UUID, onto targetPaneID: UUID,
+                 zone: PaneDropZone) -> Bool {
+        guard zone != .center,
+              let targetTab = activeTab,
+              targetTab.panes[targetPaneID] != nil,
+              let sourceTab = tabs.first(where: { $0.id == sourceTabID }),
+              let sourcePane = sourceTab.focusedPane
+                ?? sourceTab.root.firstLeafID.flatMap({ sourceTab.panes[$0] })
+        else {
+            return false
+        }
+
+        let inserted = targetTab.insertPane(
+            copying: sourcePane,
+            toTarget: targetPaneID,
+            zone: zone)
+        guard inserted else { return false }
+        if targetTab.id != sourceTabID {
+            closeTab(sourceTabID)
+        }
+        activeTabID = targetTab.id
+        return true
+    }
+
+    /// 把一个文件预览 buffer 作为新窗格投放到当前活动标签的某个窗格旁边。
+    @discardableResult
+    func dropFileBuffer(_ bufferID: UUID, onto targetPaneID: UUID,
+                        zone: PaneDropZone) -> Bool {
+        guard let buffer = filePreviewModel.buffers.first(where: { $0.id == bufferID }) else {
+            return false
+        }
+        return dropFileBuffer(buffer, onto: targetPaneID, zone: zone)
+    }
+
+    /// 测试与内部调用用重载：允许直接传入已持有的 FileBuffer。
+    @discardableResult
+    func dropFileBuffer(_ buffer: FileBuffer, onto targetPaneID: UUID,
+                        zone: PaneDropZone) -> Bool {
+        guard zone != .center,
+              let targetTab = activeTab,
+              targetTab.panes[targetPaneID] != nil
+        else {
+            return false
+        }
+        return targetTab.insertFilePane(buffer, toTarget: targetPaneID, zone: zone)
+    }
+
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {
-        let tabSnaps = tabs.map { tab in
-            TabSnapshot(title: tab.title,
-                        layout: Self.nodeSnapshot(tab.root, panes: tab.panes))
+        var activeIdx: Int?
+        var tabSnaps: [TabSnapshot] = []
+        for tab in tabs {
+            guard let layout = Self.nodeSnapshot(tab.root, panes: tab.panes) else {
+                continue
+            }
+            if tab.id == activeTabID {
+                activeIdx = tabSnaps.count
+            }
+            tabSnaps.append(TabSnapshot(title: tab.title, layout: layout))
         }
-        let activeIdx = tabs.firstIndex { $0.id == activeTabID }
-        return WorkspaceSnapshot(tabs: tabSnaps, activeTabIndex: activeIdx, uiState: uiState)
+        let (openFiles, activeFileIndex) = filePreviewModel.openFileSnapshots()
+        return WorkspaceSnapshot(
+            tabs: tabSnaps,
+            activeTabIndex: activeIdx,
+            uiState: uiState,
+            fileBrowserPath: fileBrowserModel.snapshotCurrentPath,
+            openFiles: openFiles,
+            activeFileIndex: activeFileIndex,
+            agentState: assistantModel.snapshot())
     }
 
     private static func nodeSnapshot(_ node: LayoutNode,
-                                     panes: [UUID: PaneModel]) -> NodeSnapshot {
+                                     panes: [UUID: PaneModel]) -> NodeSnapshot? {
         switch node {
         case .leaf(let paneID):
             let pane = panes[paneID]
+            guard pane?.fileBuffer == nil else { return nil }
             return .leaf(serverProfileID: pane?.serverProfileID ?? UUID())
         case .split(let s):
-            return .split(direction: s.direction, fraction: s.fraction,
-                          first: nodeSnapshot(s.first, panes: panes),
-                          second: nodeSnapshot(s.second, panes: panes))
+            let first = nodeSnapshot(s.first, panes: panes)
+            let second = nodeSnapshot(s.second, panes: panes)
+            switch (first, second) {
+            case let (first?, second?):
+                return .split(direction: s.direction, fraction: s.fraction,
+                              first: first, second: second)
+            case let (first?, nil):
+                return first
+            case let (nil, second?):
+                return second
+            case (nil, nil):
+                return nil
+            }
         }
     }
 

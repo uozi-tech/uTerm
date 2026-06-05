@@ -46,6 +46,223 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(ws.tabs.map(\.id), [t3.id, t1.id, t2.id])
     }
 
+    func testDropTabOntoActivePaneSplitsAndClosesSourceTab() {
+        let ws = WorkspaceModel()
+        let targetServer = UUID()
+        let sourceServer = UUID()
+        let targetTab = ws.openServer(profileID: targetServer, title: "target")
+        let sourceTab = ws.openServer(profileID: sourceServer, title: "source")
+        ws.selectTab(targetTab.id)
+
+        guard let targetPaneID = targetTab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+
+        XCTAssertTrue(ws.dropTab(sourceTab.id, onto: targetPaneID, zone: .trailing))
+        XCTAssertEqual(ws.tabs.map(\.id), [targetTab.id])
+        XCTAssertEqual(ws.activeTabID, targetTab.id)
+        XCTAssertEqual(targetTab.root.leafIDs.count, 2)
+        XCTAssertEqual(Set(targetTab.panes.values.map(\.serverProfileID)),
+                       [targetServer, sourceServer])
+    }
+
+    func testDropActiveTabOntoItsPaneCopiesFocusedPane() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("tab should have a focused pane")
+            return
+        }
+
+        XCTAssertTrue(ws.dropTab(tab.id, onto: targetPaneID, zone: .trailing))
+        XCTAssertEqual(ws.tabs.map(\.id), [tab.id])
+        XCTAssertEqual(ws.activeTabID, tab.id)
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        XCTAssertEqual(tab.panes.values.filter { $0.serverProfileID == server }.count, 2)
+    }
+
+    func testDropRegisteredTabDragSourceSplitsAndClosesSourceTab() {
+        let ws = WorkspaceModel()
+        let targetServer = UUID()
+        let sourceServer = UUID()
+        let targetTab = ws.openServer(profileID: targetServer, title: "target")
+        let sourceTab = ws.openServer(profileID: sourceServer, title: "source")
+        ws.selectTab(targetTab.id)
+
+        guard let targetPaneID = targetTab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+
+        ws.beginDrag(.tab(sourceTab.id))
+        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .trailing))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(ws.tabs.map(\.id), [targetTab.id])
+        XCTAssertEqual(targetTab.root.leafIDs.count, 2)
+        XCTAssertEqual(Set(targetTab.panes.values.map(\.serverProfileID)),
+                       [targetServer, sourceServer])
+    }
+
+    func testDropRegisteredActiveTabDragSourceCopiesFocusedPane() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+
+        ws.beginDrag(.tab(tab.id))
+        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .trailing))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(ws.tabs.map(\.id), [tab.id])
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        XCTAssertEqual(tab.panes.values.filter { $0.serverProfileID == server }.count, 2)
+    }
+
+    func testDropRegisteredFileBufferDragSourceCreatesFilePane() async {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
+
+        guard let targetPaneID = tab.focusedPaneID,
+              let buffer = ws.filePreviewModel.buffers.first else {
+            XCTFail("workspace should have a focused pane and a preview buffer")
+            return
+        }
+
+        ws.beginDrag(.fileBuffer(buffer.id))
+        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .bottom))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
+    }
+
+    func testDropRegisteredFileBufferDragSourceOntoFocusedPaneCreatesFilePane() async {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
+
+        guard let buffer = ws.filePreviewModel.buffers.first else {
+            XCTFail("workspace should have a preview buffer")
+            return
+        }
+
+        ws.beginDrag(.fileBuffer(buffer.id))
+        XCTAssertTrue(ws.dropDragSourceOntoFocusedPane(zone: .trailing))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
+    }
+
+    func testDropRegisteredFileBufferDragSourceOntoPreviewCreatesPreviewPanelNotTerminalPane() async {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
+
+        guard let buffer = ws.filePreviewModel.buffers.first else {
+            XCTFail("workspace should have a preview buffer")
+            return
+        }
+
+        ws.beginDrag(.fileBuffer(buffer.id))
+        XCTAssertTrue(ws.dropDragSourceOntoFocusedPreviewPanel(zone: .trailing))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(tab.root.leafIDs.count, 1)
+        XCTAssertEqual(ws.filePreviewModel.panelBufferIDsInDisplayOrder, [buffer.id, buffer.id])
+    }
+
+    func testSplittingFilePaneCopiesFileBuffer() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
+        guard let filePaneID = tab.panes.values.first(where: { $0.fileBuffer?.id == buffer.id })?.id else {
+            XCTFail("file pane should exist")
+            return
+        }
+
+        tab.splitPane(filePaneID, direction: .horizontal, serverProfileID: server)
+
+        XCTAssertEqual(tab.root.leafIDs.count, 3)
+        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 2)
+        XCTAssertEqual(tab.focusedPane?.fileBuffer?.id, buffer.id)
+    }
+
+    func testDropActiveTabWithFocusedFilePaneCopiesFilePane() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
+        guard let filePaneID = tab.panes.values.first(where: { $0.fileBuffer?.id == buffer.id })?.id else {
+            XCTFail("file pane should exist")
+            return
+        }
+        tab.focusedPaneID = filePaneID
+
+        XCTAssertTrue(ws.dropTab(tab.id, onto: targetPaneID, zone: .trailing))
+
+        XCTAssertEqual(tab.root.leafIDs.count, 3)
+        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 2)
+        XCTAssertEqual(tab.focusedPane?.fileBuffer?.id, buffer.id)
+    }
+
+    func testDropFileBufferOntoActivePaneCreatesFilePane() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+
+        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        let filePanes = tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }
+        XCTAssertEqual(filePanes.count, 1)
+        XCTAssertEqual(tab.focusedPaneID, filePanes.first?.id)
+    }
+
+    func testSnapshotSkipsFileBufferPanes() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
+
+        guard let targetPaneID = tab.focusedPaneID else {
+            XCTFail("target tab should have a focused pane")
+            return
+        }
+        ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom)
+
+        let restored = WorkspaceModel(snapshot: ws.snapshot())
+        XCTAssertEqual(restored.tabs.count, 1)
+        XCTAssertEqual(restored.tabs[0].root.leafIDs.count, 1)
+        XCTAssertNil(restored.tabs[0].panes.values.first?.fileBuffer)
+        XCTAssertEqual(restored.tabs[0].panes.values.first?.serverProfileID, server)
+    }
+
     func testSnapshotRoundTrip() {
         let ws = WorkspaceModel()
         let s1 = UUID(), s2 = UUID()
@@ -82,6 +299,29 @@ final class WorkspaceModelTests: XCTestCase {
         ws.uiState.rightInspectorPresented = false
         let snap = ws.snapshot()
         XCTAssertEqual(snap.uiState?.rightInspectorPresented, false)
+    }
+
+    func testSnapshotIncludesFileBrowserPathAndOpenFiles() async {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        _ = ws.openServer(profileID: server, title: "target")
+        ws.fileBrowserModel.restoreCurrentPath("/etc/nginx")
+        await ws.filePreviewModel.open(path: "/etc/nginx/nginx.conf", fileSize: 12, mtime: nil)
+
+        let snap = ws.snapshot()
+
+        XCTAssertEqual(snap.fileBrowserPath, "/etc/nginx")
+        XCTAssertEqual(snap.openFiles?.map(\.remotePath), ["/etc/nginx/nginx.conf"])
+        XCTAssertEqual(snap.activeFileIndex, 0)
+    }
+
+    func testSnapshotIncludesAgentDraftInput() {
+        let ws = WorkspaceModel()
+        ws.assistantModel.input = "explain this host"
+
+        let snap = ws.snapshot()
+
+        XCTAssertEqual(snap.agentState?.input, "explain this host")
     }
 
     func testInitFromSnapshotRestoresUIState() {

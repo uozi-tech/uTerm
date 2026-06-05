@@ -17,6 +17,7 @@ struct SFTPBrowserView: View {
     @State private var deleteTarget: RemoteEntry?
     @State private var newFolderPresented = false
     @State private var newFolderText = ""
+    @State private var isDropTargeted = false
 
     private var canBack: Bool { hIdx > 0 }
     private var canFwd: Bool { hIdx < history.count - 1 }
@@ -59,6 +60,8 @@ struct SFTPBrowserView: View {
             }
         }
         .background(UD.bg)
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: uploadDroppedFiles)
+        .overlay { dropOverlay }
         .onChange(of: model.currentPath) { _, newPath in
             syncHistory(to: newPath)
             selectedID = nil
@@ -105,6 +108,29 @@ struct SFTPBrowserView: View {
     }
 
     private var hairline: some View { Rectangle().fill(UD.border).frame(height: 1) }
+
+    @ViewBuilder
+    private var dropOverlay: some View {
+        if isDropTargeted {
+            ZStack {
+                Rectangle().fill(UD.accent.opacity(0.08))
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(UD.accent.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+                    .padding(12)
+                Label("拖放文件上传到 \(model.currentPath)", systemImage: "arrow.up.doc.fill")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(UD.bg.opacity(0.92), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(UD.border.opacity(0.9))
+                    }
+            }
+            .allowsHitTesting(false)
+        }
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -203,6 +229,24 @@ struct SFTPBrowserView: View {
             }).value else { return }
             await model.uploadWithProgress(fileName: url.lastPathComponent, data: data)
         }
+    }
+
+    private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        guard case .browsing = model.state else { return false }
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+        for provider in fileProviders {
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                guard let data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                Task { @MainActor [model] in
+                    await model.uploadLocalFiles([url])
+                }
+            }
+        }
+        return true
     }
 
     private func downloadFile(_ entry: RemoteEntry) {

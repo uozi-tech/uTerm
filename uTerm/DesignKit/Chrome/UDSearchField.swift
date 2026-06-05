@@ -9,10 +9,12 @@ import SwiftUI
 struct UDSearchField: View {
     @Binding var text: String
     var width: CGFloat? = nil
+    var autoFocus: Bool = false
 
-    init(text: Binding<String>, width: CGFloat? = nil) {
+    init(text: Binding<String>, width: CGFloat? = nil, autoFocus: Bool = false) {
         self._text = text
         self.width = width
+        self.autoFocus = autoFocus
     }
 
     @FocusState private var focused: Bool
@@ -29,7 +31,7 @@ struct UDSearchField: View {
                 .textFieldStyle(.plain)
                 .focused($focused)
 
-            Text("⌘K")
+            Text("⌘ K")
                 .font(UD.monoKbd)
                 .foregroundStyle(UD.text4)
                 .padding(.vertical, 2)
@@ -56,6 +58,22 @@ struct UDSearchField: View {
             RoundedRectangle(cornerRadius: UD.Radius.md)
                 .stroke(UD.accent.opacity(focused ? 0.13 : 0), lineWidth: 3)
         )
+        // ⌘K 聚焦搜索框（对应尾部提示芯片）。隐藏的零尺寸按钮承载快捷键，
+        // 在所在窗口为 key 时生效，焦点在别处也能触发。
+        .background(hotkey)
+        .onAppear { focused = autoFocus }
+        .onChange(of: autoFocus) { _, newValue in
+            focused = newValue
+        }
+    }
+
+    /// 承载 ⌘K 快捷键的隐藏按钮：把键盘焦点交给搜索输入框。
+    private var hotkey: some View {
+        Button("") { focused = true }
+            .keyboardShortcut("k", modifiers: .command)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 }
 

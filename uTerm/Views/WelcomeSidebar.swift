@@ -9,7 +9,7 @@ struct WelcomeSidebar: View {
         let counts = ServerFilter.counts(for: profiles, query: filter.query)
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
-                navHeader("视图")
+                UDSidebarSectionHeader("视图")
                 navRow(.allHosts, icon: "square.grid.2x2", title: "所有主机", counts: counts)
                 if (counts[.pinned] ?? 0) > 0 {
                     navRow(.pinned, icon: "star.fill", title: "置顶", counts: counts)
@@ -18,7 +18,8 @@ struct WelcomeSidebar: View {
                     navRow(.recent, icon: "clock", title: "最近", counts: counts)
                 }
                 if !customGroups.isEmpty || (counts[.ungrouped] ?? 0) > 0 {
-                    navHeader("分组")
+                    UDSidebarSectionHeader("分组")
+                        .padding(.top, 14)
                 }
                 ForEach(customGroups, id: \.self) { g in
                     navRow(.group(g), icon: "circle.fill", title: g, counts: counts)
@@ -27,7 +28,7 @@ struct WelcomeSidebar: View {
                     navRow(.ungrouped, icon: "minus.circle", title: "未分组", counts: counts)
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(UD.bg)
@@ -45,16 +46,6 @@ struct WelcomeSidebar: View {
         return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    private func navHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2)
-            .textCase(.uppercase)
-            .tracking(0.6)
-            .foregroundStyle(UD.text3)
-            .padding(.horizontal, 14)
-            .padding(.top, 10).padding(.bottom, 4)
-    }
-
     @ViewBuilder
     private func navRow(_ section: NavSection, icon: String, title: String,
                         counts: [NavSection: Int]) -> some View {
@@ -63,33 +54,17 @@ struct WelcomeSidebar: View {
         // 搜索时不命中的 section（除 allHosts 之外）半透明 + 禁点击
         let isDimmed = !filter.query.isEmpty && count == 0 && section != .allHosts
 
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .frame(width: 14)
-                .foregroundStyle(isActive ? UD.text : UD.text3)
-            Text(title)
-                .lineLimit(1)
-                .foregroundStyle(isActive ? UD.text : UD.text2)
-            Spacer(minLength: 6)
-            Text("\(count)")
-                .font(.caption)
-                .foregroundStyle(UD.text3)
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        // 选中态圆角底：与 hoverBackground 同几何（全宽、cornerRadius 4、无横向内缩），
-        // 否则 hover 比选中宽 8pt。也与 FileBrowser/全 app 选中风格一致。
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isActive ? UD.rowSelected : Color.clear)
+        // 复用 DesignKit `UDSidebarRow`：高 28、圆角 6、选中 `rowSelected` / hover
+        // `rowHover`。外缩 8pt（设计稿 `margin: 0 8px`）让选中底两侧留白，不再贴边。
+        UDSidebarRow(
+            systemImage: icon,
+            label: title,
+            count: count,
+            selected: isActive,
+            action: { filter.section = section }
         )
-        // hover 反馈：非 active 时鼠标悬停切 bgRaised。
-        .hoverBackground(cornerRadius: 4, isActive: isActive)
+        .padding(.horizontal, 8)
         .opacity(isDimmed ? 0.4 : 1.0)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isDimmed else { return }
-            filter.section = section
-        }
+        .allowsHitTesting(!isDimmed)
     }
 }

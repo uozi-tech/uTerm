@@ -165,10 +165,14 @@ final class FileBrowserModel {
     private(set) var transientError: String?
     /// 进行中的传输（仅 standalone SFTP 窗口使用；侧边栏不写）。
     private(set) var transfer: TransferState?
+    private var restoredInitialPath: String?
 
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
     var sftpProvider: (any SFTPProviding)? { provider }
+    var snapshotCurrentPath: String? {
+        state == .browsing || restoredInitialPath != nil ? currentPath : nil
+    }
 
     init() {}
 
@@ -205,11 +209,22 @@ final class FileBrowserModel {
                 hostKeyVerifier: verifier, hostKeyApprover: approver)
             let session = try await SFTPSession(connected: connected)
             provider = session
-            currentPath = (try? await session.realPath(".")) ?? "/"
+            if let restoredInitialPath {
+                currentPath = restoredInitialPath
+                self.restoredInitialPath = nil
+            } else {
+                currentPath = (try? await session.realPath(".")) ?? "/"
+            }
             await refresh()
         } catch {
             state = .failed("\(error)")
         }
+    }
+
+    func restoreCurrentPath(_ path: String) {
+        guard !path.isEmpty else { return }
+        currentPath = path
+        restoredInitialPath = path
     }
 
     func refresh() async {
@@ -351,6 +366,29 @@ final class FileBrowserModel {
             await refresh()
         } catch { transientError = "上传失败：\(error)" }
         transfer = nil
+    }
+
+    @discardableResult
+    func uploadLocalFiles(_ urls: [URL]) async -> Int {
+        var uploadedCount = 0
+        for url in urls where !url.hasDirectoryPath {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            do {
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try Data(contentsOf: url)
+                }.value
+                await uploadWithProgress(fileName: url.lastPathComponent, data: data)
+                uploadedCount += 1
+            } catch {
+                transientError = "上传失败：\(error)"
+            }
+        }
+        return uploadedCount
     }
 
     /// 下载到内存并返回（保存面板由视图层处理）。带进度。

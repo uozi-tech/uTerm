@@ -66,6 +66,7 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
         scrollView.documentView = textView
+        scrollView.identifier = .utermPreviewRegion   // ⌘W 焦点判定标记
 
         context.coordinator.attach(textView: textView, scrollView: scrollView, buffer: buffer)
 

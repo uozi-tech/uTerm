@@ -206,6 +206,34 @@ final class AssistantModelTests: XCTestCase {
         XCTAssertEqual(model.messages[1].text, "reply")
     }
 
+    func testRestoreSnapshotBeforeAttachLoadsCurrentSessionAndDraft() throws {
+        let context = try makeInMemoryContext()
+        let sessionID = UUID()
+        let session = ChatSession(title: "saved agent session", id: sessionID)
+        let user = ChatMessageRecord(role: .user, text: "remember agent",
+                                     createdAt: Date(timeIntervalSince1970: 1))
+        let assistant = ChatMessageRecord(role: .assistant, text: "restored",
+                                          createdAt: Date(timeIntervalSince1970: 2))
+        context.insert(session)
+        user.session = session
+        assistant.session = session
+        context.insert(user)
+        context.insert(assistant)
+        try context.save()
+
+        let model = AssistantModel(client: MockLLMClient(deltas: []),
+                                   provider: makeProvider(), apiKey: "sk-test")
+        model.restore(from: AgentSnapshot(currentSessionID: sessionID,
+                                          input: "draft command"))
+
+        XCTAssertNil(model.currentSession)
+        model.attach(context: context)
+
+        XCTAssertEqual(model.input, "draft command")
+        XCTAssertEqual(model.currentSession?.id, sessionID)
+        XCTAssertEqual(model.messages.map(\.text), ["remember agent", "restored"])
+    }
+
     func testNoContextKeepsInMemoryOnly() async throws {
         let context = try makeInMemoryContext()
         let model = AssistantModel(client: MockLLMClient(deltas: ["x"]),
