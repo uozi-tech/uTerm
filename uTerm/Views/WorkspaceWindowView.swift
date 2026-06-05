@@ -170,6 +170,12 @@ struct WorkspaceWindowView: View {
         // 而正常 re-render 不会触发，故此处是安全的窗口生命周期挂点。
         // 遥测轮询：start() 幂等且独立于视图生命周期；窗口关闭 dispose→stop。
         .task { workspace.telemetryModel.start() }
+        // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
+        // 解析失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 不提供工具。
+        .task(id: server.id) {
+            workspace.assistantModel.executor = try? WorkspaceCommandExecutorFactory.make(
+                server: server, container: modelContext.container)
+        }
         .onDisappear {
             workspace.dispose()
         }

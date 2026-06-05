@@ -350,8 +350,25 @@ struct AssistantView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
                     .strokeBorder(isUser ? UD.border : .clear, lineWidth: 1))
+
+            ForEach(message.toolCalls) { call in
+                UDToolCall(
+                    label: call.explanation ?? "运行命令",
+                    command: call.command,
+                    status: udStatus(call),
+                    onRun: { Task { await model.approveAndRun(id: call.id) } },
+                    onSkip: { Task { await model.skip(id: call.id) } }
+                )
+            }
         }
         .id(message.id)
+    }
+
+    private func udStatus(_ call: ToolCallState) -> UDToolCall.Status {
+        switch call.status {
+        case .pending, .running: return .pending
+        case .done, .failed, .skipped: return .done(output: call.output)
+        }
     }
 
     // MARK: - 输入区

@@ -11,12 +11,23 @@ import SwiftData
 final class AssistantModel {
     enum State: Equatable {
         case idle, streaming
+        /// 流式结束后存在待确认（pending）的工具调用，等待用户批准/跳过。
+        case awaitingApproval
+        /// 已批准的工具调用正在执行。
+        case running
         case failed(String)
     }
 
     private(set) var messages: [ChatMessage] = []
     var input: String = ""
     private(set) var state: State = .idle
+
+    /// 命令执行器；nil 时不向模型暴露工具，行为退化为纯文本对话（旧版）。
+    /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
+    var executor: CommandExecutor?
+
+    /// 最近一次 `send` 携带的 serverContext，供工具续轮复用 system prompt。
+    @ObservationIgnored private var lastServerContext = ""
 
     /// 持久化上下文；nil 时纯内存（单测路径）。由视图 `attach(context:)` 注入。
     var modelContext: ModelContext?
@@ -123,7 +134,7 @@ final class AssistantModel {
 
     /// 发送当前输入。`serverContext` 是当前活动服务器的简述，进 system prompt。
     func send(serverContext: String) async {
-        guard state != .streaming else { return }
+        guard state != .streaming, state != .running else { return }
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard let provider = activeProvider else {
@@ -139,41 +150,111 @@ final class AssistantModel {
             return
         }
 
+        lastServerContext = serverContext
         input = ""
         let userMessage = ChatMessage(role: .user, text: prompt)
         messages.append(userMessage)
-        let conversation = messages
 
         // 惰性建会话并落库用户消息（无 context 时纯内存）。
         let session = ensureSession(firstPrompt: prompt)
         persist(userMessage, in: session)
 
+        await streamAssistantTurn(provider: provider, key: key, baseURL: baseURL,
+                                  serverContext: serverContext, session: session)
+    }
+
+    /// 一轮助手流式：追加空 assistant 消息 → 落库 → 流式消费 `LLMEvent`
+    /// （文本累加、工具调用追加为 pending 卡片）→ 依据是否有 pending 决定终态。
+    /// `send` 与工具续轮（`continueAfterTools`）共用此实现。
+    private func streamAssistantTurn(provider: AIProvider, key: String, baseURL: URL,
+                                     serverContext: String, session: ChatSession?) async {
+        let conversation = messages
         let assistantMessage = ChatMessage(role: .assistant, text: "")
         messages.append(assistantMessage)
         let assistantIndex = messages.count - 1
         let assistantRecord = persist(assistantMessage, in: session)
         state = .streaming
 
-        let config = LLMRequestConfig(model: provider.model,
-                                       baseURL: baseURL, apiKey: key)
+        var config = LLMRequestConfig(model: provider.model,
+                                      baseURL: baseURL, apiKey: key)
+        config.tools = executor != nil ? [.runCommand] : []
         let client = clientOverride ?? LLMClientFactory.make(for: provider)
         let system = Self.systemPrompt(serverContext: serverContext)
         do {
             for try await event in client.stream(messages: conversation,
                                                   system: system, config: config) {
-                if case let .text(delta) = event {
+                switch event {
+                case .text(let delta):
                     messages[assistantIndex].text += delta
+                case .toolCall(let call):
+                    messages[assistantIndex].toolCalls.append(ToolCallState(from: call))
                 }
-                // .toolCall handled in Task 13
             }
-            state = .idle
+            let pending = messages[assistantIndex].toolCalls.contains { $0.status == .pending }
+            state = pending ? .awaitingApproval : .idle
         } catch {
             let message = errorMessage(for: error, kind: provider.kind)
             messages[assistantIndex].text += "\n[错误：\(message)]"
             state = .failed(message)
         }
-        // 流式结束后把助手最终文本写回记录。
-        finalize(assistantRecord, text: messages[assistantIndex].text, in: session)
+        // 流式结束后把助手最终文本与工具调用写回记录。
+        finalize(assistantRecord, text: messages[assistantIndex].text,
+                 toolCalls: messages[assistantIndex].toolCalls, in: session)
+    }
+
+    // MARK: - 工具调用：批准 / 跳过 / 执行 / 续轮
+
+    /// 批准并执行某条工具调用；全部 resolved 后自动续轮。
+    func approveAndRun(id: String) async {
+        guard let exec = executor,
+              let (mi, ci) = locate(id) else { return }
+        messages[mi].toolCalls[ci].status = .running
+        state = .running
+        do {
+            let r = try await exec.run(messages[mi].toolCalls[ci].command)
+            messages[mi].toolCalls[ci].status = .done
+            messages[mi].toolCalls[ci].output = r.output
+            messages[mi].toolCalls[ci].exitCode = r.exitCode
+        } catch {
+            messages[mi].toolCalls[ci].status = .failed
+            messages[mi].toolCalls[ci].output = error.localizedDescription
+        }
+        persistToolCalls(at: mi)
+        await continueIfResolved(messageIndex: mi)
+    }
+
+    /// 跳过某条工具调用；全部 resolved 后自动续轮。
+    func skip(id: String) async {
+        guard let (mi, ci) = locate(id) else { return }
+        messages[mi].toolCalls[ci].status = .skipped
+        persistToolCalls(at: mi)
+        await continueIfResolved(messageIndex: mi)
+    }
+
+    /// 在所有消息里定位某工具调用 id → (消息下标, 调用下标)。
+    private func locate(_ id: String) -> (Int, Int)? {
+        for (mi, m) in messages.enumerated() {
+            if let ci = m.toolCalls.firstIndex(where: { $0.id == id }) { return (mi, ci) }
+        }
+        return nil
+    }
+
+    /// 该消息的工具调用若仍有未决（pending/running）则停在待确认；否则自动续轮。
+    private func continueIfResolved(messageIndex mi: Int) async {
+        let unresolved = messages[mi].toolCalls.contains {
+            $0.status == .pending || $0.status == .running
+        }
+        if unresolved { state = .awaitingApproval; return }
+        await continueAfterTools(serverContext: lastServerContext)
+    }
+
+    /// 工具结果已并入会话后再起一轮：复用流式实现（不追加新用户消息）。
+    private func continueAfterTools(serverContext: String) async {
+        guard let provider = activeProvider,
+              let key = keyOverride ?? keychain.load(for: provider.id),
+              let baseURL = resolveBaseURL(for: provider) else { state = .idle; return }
+        await streamAssistantTurn(provider: provider, key: key, baseURL: baseURL,
+                                  serverContext: serverContext, session: currentSession)
     }
 
     // MARK: - 持久化（modelContext 为 nil 时全部 no-op）
@@ -201,10 +282,24 @@ final class AssistantModel {
         return record
     }
 
-    private func finalize(_ record: ChatMessageRecord?, text: String, in session: ChatSession?) {
+    private func finalize(_ record: ChatMessageRecord?, text: String,
+                          toolCalls: [ToolCallState], in session: ChatSession?) {
         guard let ctx = modelContext, let record else { return }
         record.text = text
+        record.toolCalls = toolCalls
         session?.updatedAt = Date()
+        try? ctx.save()
+    }
+
+    /// 把某条消息当前的工具调用状态写回其持久化记录（批准/跳过/执行后）。
+    private func persistToolCalls(at messageIndex: Int) {
+        guard let ctx = modelContext, let session = currentSession,
+              messages.indices.contains(messageIndex) else { return }
+        let message = messages[messageIndex]
+        guard let record = session.orderedMessages.first(where: { $0.id == message.id })
+        else { return }
+        record.toolCalls = message.toolCalls
+        session.updatedAt = Date()
         try? ctx.save()
     }
 
