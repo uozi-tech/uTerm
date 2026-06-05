@@ -30,16 +30,26 @@ struct WelcomeView: View {
         }
     }
 
+    /// Tweaks 调试覆盖后的显示数据源（DEBUG）。Release 恒等于真实 `allProfiles`，
+    /// 不引入任何行为变化。
+    private var displayProfiles: [ServerProfile] {
+        #if DEBUG
+        TweaksModel.shared.resolvedProfiles(real: allProfiles)
+        #else
+        allProfiles
+        #endif
+    }
+
     /// 主列表显示用：直接走 filter。
     ///
     /// 跳板机现在是「引用一台已有服务器」（`jumpHost` 指向真实 profile），被引用者
     /// 本身仍是正常服务器，应保持可见 —— 故不再隐藏被引用的 profile。
     private var visibleProfiles: [ServerProfile] {
-        filter.apply(to: allProfiles)
+        filter.apply(to: displayProfiles)
     }
 
     private var existingGroups: [String] {
-        Set(allProfiles.compactMap { p -> String? in
+        Set(displayProfiles.compactMap { p -> String? in
             let g = p.group ?? ""
             return g.isEmpty ? nil : g
         }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -49,7 +59,7 @@ struct WelcomeView: View {
         VStack(spacing: 0) {
             WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
             HStack(spacing: 0) {
-                WelcomeSidebar(profiles: allProfiles, filter: $filter)
+                WelcomeSidebar(profiles: displayProfiles, filter: $filter)
                     .frame(width: 224)
                 bodyContent
             }
@@ -92,7 +102,7 @@ struct WelcomeView: View {
 
     @ViewBuilder
     private var bodyContent: some View {
-        if allProfiles.isEmpty {
+        if displayProfiles.isEmpty {
             EmptyServersState(onNewServer: { formRoute = .new })
         } else {
             ServerList(profiles: visibleProfiles,
@@ -135,6 +145,10 @@ struct WelcomeView: View {
     // MARK: actions
 
     private func openServer(_ profile: ServerProfile) {
+        #if DEBUG
+        // Mock / 空态下的行为对应假数据，拦截以免弹出无法解析的工作区窗口或误写真库。
+        if TweaksModel.shared.welcomeSource != .real { return }
+        #endif
         profile.lastConnectedAt = Date()
         try? modelContext.save()
         openWindow(value: WorkspaceWindowID(serverID: profile.id))
@@ -142,6 +156,9 @@ struct WelcomeView: View {
 
     private func handleContextAction(_ action: ServerList.ContextAction,
                                       _ profile: ServerProfile) {
+        #if DEBUG
+        if TweaksModel.shared.welcomeSource != .real { return }
+        #endif
         switch action {
         case .connect:
             openServer(profile)

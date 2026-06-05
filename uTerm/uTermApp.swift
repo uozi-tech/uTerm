@@ -156,6 +156,18 @@ struct uTermApp: App {
         .commands {
             AppInfoCommands()
         }
+
+        #if DEBUG
+        // 仅 DEBUG：Tweaks 调试窗口 + 顶部「Debug」菜单（⌃⌘T 打开）。
+        // 不挂 .appLockGate / .modelContainer —— 调试窗口免锁，且不直接查询 SwiftData。
+        Window("Tweaks", id: "tweaks") {
+            TweaksWindow()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+        }
+        .windowStyle(.hiddenTitleBar)
+        .commands { DebugCommands() }
+        #endif
     }
 }
 
