@@ -11,7 +11,6 @@ struct EmptyServersState: View {
     let onNewServer: () -> Void
 
     @State private var caretOn = true
-    @State private var ctaHover = false
 
     /// 光标闪烁节拍（设计稿 u-blink ≈ 1.1s steps，硬切而非渐变）。
     private let blink = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
@@ -33,9 +32,7 @@ struct EmptyServersState: View {
                 wordmark.padding(.top, 18)
                 tagline.padding(.top, 10)
 
-                Button(action: onNewServer) { ctaLabel }
-                    .buttonStyle(.plain)
-                    .onHover { ctaHover = $0 }
+                UDButton(title: "新建主机", systemImage: "plus", action: onNewServer)
                     .padding(.top, 36)
 
                 importHint.padding(.top, 18)
@@ -65,26 +62,6 @@ struct EmptyServersState: View {
                 .frame(width: 6, height: 13)
                 .opacity(caretOn ? 1 : 0)
         }
-    }
-
-    private var ctaLabel: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "plus")
-                .font(.system(size: 11, weight: .semibold))
-            Text("新建主机")
-                .font(.system(size: 12.5, weight: .medium))
-            KbdChip(text: "⌘N")
-        }
-        .foregroundColor(UD.text)
-        .padding(.horizontal, 16)
-        .frame(height: 34)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(UD.accent.opacity(ctaHover ? 0.20 : 0.12)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(UD.accent.opacity(ctaHover ? 0.55 : 0.35), lineWidth: 1))
-        .animation(.easeOut(duration: 0.15), value: ctaHover)
     }
 
     private var importHint: some View {

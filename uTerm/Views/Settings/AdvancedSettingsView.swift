@@ -48,9 +48,7 @@ struct AdvancedSettingsView: View {
                 SettingsRow(label: "显示日志",
                             hint: "打开 Console.app；在 Subsystem 过滤栏输入下方文本可只看 uTerm 的日志。") {
                     VStack(alignment: .trailing, spacing: 6) {
-                        Button("打开 Console") {
-                            openConsole()
-                        }
+                        UDButton(title: "打开 Console", style: .secondary, action: openConsole)
                         Text("com.uozi.uTerm")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(UD.text3)

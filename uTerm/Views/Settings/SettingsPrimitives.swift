@@ -81,7 +81,7 @@ struct SettingsRow<Trailing: View>: View {
 // 设计稿 Forms 段规格）。本文件保留 SettingsScroll/Group/Row、SettingsNumberField、
 // SettingsInlineButton 等布局原语。
 
-/// 设置行里的整数输入框。外观对齐 `DarkTextField`，但改用语义色 token（Settings
+/// 设置行里的整数输入框。外观对齐 DesignKit 输入框，但改用语义色 token（Settings
 /// 窗口随全局浅 / 深外观变化），focus 时描边换 accent。供需要精确数值、不便用滑块
 /// 的设置项直接键入。`minValue` 在提交时钳下界（默认 0），`suffix` 可在框右侧附单位。
 struct SettingsNumberField: View {
@@ -123,21 +123,8 @@ struct SettingsInlineButton: View {
     var enabled: Bool = true
     let action: () -> Void
 
-    @State private var hovering = false
-
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11.5))
-                .foregroundStyle(enabled ? UD.text2 : UD.text3)
-                .padding(.horizontal, 10)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovering && enabled ? Color.primary.opacity(0.06) : Color.clear))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        UDButton(title: title, style: .secondary, action: action)
         .disabled(!enabled)
-        .onHover { hovering = $0 }
     }
 }

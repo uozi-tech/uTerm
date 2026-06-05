@@ -292,7 +292,7 @@ struct DesignKitGallery: View {
 
     // MARK: 对话与状态 · Comms
     private var commsSection: some View {
-        Section(title: "对话与状态 · Agent · Footer", subtitle: "对话气泡 / 输入区 / 遥测状态栏") {
+        Section(title: "对话与状态 · Agent · Footer", subtitle: "对话气泡 / 工具调用 / 输入区 / 遥测状态栏") {
             HStack(alignment: .top, spacing: 28) {
                 UDChatMessage(role: .user) {
                     Text("为什么 nginx 偶尔会 502？日志里看不出明显规律。")
@@ -303,7 +303,21 @@ struct DesignKitGallery: View {
                         UDCodeChip("nginx -T | grep -E \"worker|upstream\"")
                     }
                 }
-                UDComposer(text: $composer)
+                UDComposer(text: $composer, width: 300) { UDModelPill(label: "claude-sonnet") }
+            }
+            Group(label: "工具调用 ToolCall · Cursor 风格审批卡片") {
+                VStack(alignment: .leading, spacing: 0) {
+                    UDToolCall(
+                        command: "grep ' 502 ' /var/log/nginx/access.log | awk '{print $4}' | cut -d: -f2 | sort | uniq -c",
+                        status: .done(output: "     2 09\n     3 10\n    47 14\n    51 15\n     4 16")
+                    )
+                    UDToolCall(
+                        label: "运行命令 · 需要确认",
+                        command: "for i in $(seq 1 20); do curl -s -o /dev/null -w \"%{http_code} %{time_total}\\n\" http://127.0.0.1:8080/health; done",
+                        status: .pending
+                    )
+                }
+                .frame(width: 300)
             }
             Group(label: "遥测状态栏 StatusBar") {
                 UDStatusBar()

@@ -137,7 +137,8 @@ struct SFTPBrowserView: View {
         switch model.state {
         case .idle, .connecting:
             VStack(spacing: 12) {
-                ProgressView().controlSize(.small).tint(UD.accent)
+                UDIndeterminateBar()
+                    .frame(width: 120)
                 Text("正在连接…").font(.system(size: 13)).foregroundStyle(UD.text2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

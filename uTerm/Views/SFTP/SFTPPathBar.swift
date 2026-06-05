@@ -19,8 +19,6 @@ struct SFTPPathBar: View {
     let sortKey: FileBrowserModel.SortKey
     let onSetSort: (FileBrowserModel.SortKey) -> Void
 
-    @FocusState private var filterFocused: Bool
-
     private var crumbs: [(name: String, full: String)] {
         let comps = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         var acc = ""
@@ -113,21 +111,7 @@ struct SFTPPathBar: View {
     // MARK: 过滤
 
     private var filterField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12)).foregroundStyle(UD.text3)
-            TextField("", text: $query, prompt: Text("过滤").foregroundStyle(UD.text4))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(UD.text)
-                .frame(width: 150)
-                .focused($filterFocused)
-        }
-        .padding(.horizontal, 11).frame(width: 200, height: 32)
-        .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .strokeBorder(filterFocused ? UD.accent : UD.border, lineWidth: 1))
-        .animation(.easeOut(duration: 0.15), value: filterFocused)
+        UDSearchField(text: $query, width: 200)
     }
 
     // MARK: 操作菜单

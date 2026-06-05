@@ -206,8 +206,14 @@ struct PaneView: View {
         } else {
             switch pane.session.connectionState {
             case .idle, .connecting:
-                ProgressView("正在连接…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    UDIndeterminateBar()
+                        .frame(width: 140)
+                    Text("正在连接…")
+                        .font(UD.caption)
+                        .foregroundStyle(UD.text3)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .connected:
                 TerminalHostView(terminalView: pane.session.terminalView)
             case .failed(let message):
@@ -253,8 +259,7 @@ struct PaneView: View {
                     .multilineTextAlignment(.center).textSelection(.enabled)
             }
             if profile != nil {
-                Button(action) { Task { await connect() } }
-                    .buttonStyle(.borderedProminent)
+                UDButton(title: action) { Task { await connect() } }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

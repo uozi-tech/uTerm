@@ -31,19 +31,13 @@ struct KeyDeleteConfirm: View {
                 }
                 HStack(spacing: 8) {
                     Spacer()
-                    DarkButton(title: "取消", secondary: true, action: onCancel)
-                    Button(action: onConfirm) {
-                        Text("删除").font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                            .padding(.horizontal, 16).frame(height: 32)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(danger))
-                            .shadow(color: danger.opacity(0.6), radius: 7, y: 4)
-                    }
-                    .buttonStyle(.plain)
+                    UDButton(title: "取消", style: .secondary, action: onCancel)
+                    UDButton(title: "删除", style: .danger, action: onConfirm)
                 }
             }
             .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)
             .frame(width: 400)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(hex: 0x16161A)))
+            .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlayHi))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
             .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
         }

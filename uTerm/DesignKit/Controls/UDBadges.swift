@@ -29,6 +29,32 @@ struct UDGroupChip: View {
     }
 }
 
+/// 可选择的分组标签芯片。用于表单里的分组快速填充，选中态用 accent 软底 + accent 描边。
+struct UDSelectableGroupChip: View {
+    let label: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(UD.caption)
+                .foregroundStyle(selected ? UD.text : UD.text3)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
+                        .fill(selected ? UD.accent.opacity(0.12) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
+                        .strokeBorder(selected ? UD.accent.opacity(0.40) : UD.border, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - 计数徽章 CountBadge
 
 /// 计数小徽章（未读 / 数量）。`accent` 为高亮态（蓝软底）。
@@ -161,6 +187,7 @@ struct UDKeyCombo: View {
     VStack(alignment: .leading, spacing: UD.Space.xxl) {
         HStack(spacing: UD.Space.md) {
             UDGroupChip("生产环境")
+            UDSelectableGroupChip(label: "测试", selected: true) {}
             UDCountBadge(12)
             UDCountBadge(4, accent: true)
             UDCountBadge("99+")

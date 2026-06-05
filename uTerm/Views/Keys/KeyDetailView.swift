@@ -33,7 +33,7 @@ struct KeyDetailView: View {
             KeyAvatarLarge(type: key.type)
             VStack(alignment: .leading, spacing: 4) {
                 if renaming {
-                    DarkTextField(placeholder: "名称", text: $draftName)
+                    UDTextField(placeholder: "名称", text: $draftName)
                         .frame(maxWidth: 260)
                         .onSubmit(commitRename)
                 } else {
@@ -44,13 +44,13 @@ struct KeyDetailView: View {
                 Text(metaLine).font(UD.mono(12)).foregroundStyle(UD.text3)
             }
             Spacer(minLength: 0)
-            Button { if renaming { commitRename() } else { startRename() } } label: {
-                Text(renaming ? "完成" : "重命名")
-                    .font(.system(size: 12)).foregroundStyle(UD.text2)
-                    .padding(.horizontal, 10).frame(height: 28)
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
+            UDButton(title: renaming ? "完成" : "重命名", style: .secondary) {
+                if renaming {
+                    commitRename()
+                } else {
+                    startRename()
+                }
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -156,12 +156,7 @@ struct KeyDetailView: View {
                     .font(.system(size: 11.5)).foregroundStyle(UD.text2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            Button(action: onDelete) {
-                Text("删除").font(.system(size: 12.5, weight: .medium)).foregroundStyle(danger)
-                    .padding(.horizontal, 14).frame(height: 30)
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(danger.opacity(0.4), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
+            UDButton(title: "删除", style: .danger, action: onDelete)
         }
         .padding(.horizontal, 16).padding(.vertical, 14)
         .background(RoundedRectangle(cornerRadius: 8).fill(danger.opacity(0.06)))
@@ -187,23 +182,13 @@ private struct CopyButton: View {
     @State private var copied = false
 
     var body: some View {
-        Button {
+        UDButton(title: copied ? "已复制" : label, style: bordered ? .secondary : .ghost) {
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
-        } label: {
-            Text(copied ? "已复制" : label)
-                .font(.system(size: 11))
-                .foregroundStyle(copied ? UD.success : UD.text3)
-                .padding(.horizontal, bordered ? 9 : 0).padding(.vertical, bordered ? 3 : 0)
-                .background(bordered ? AnyView(RoundedRectangle(cornerRadius: 5)
-                    .fill(UD.fillFaint)
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.border, lineWidth: 1)))
-                    : AnyView(Color.clear))
         }
-        .buttonStyle(.plain)
     }
 }
 

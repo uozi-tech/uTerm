@@ -13,6 +13,8 @@ struct UDTextField: View {
     @Binding var text: String
     var errorMessage: String? = nil
     var autoFocus: Bool = false
+    var monospaced: Bool = false
+    var isSecure: Bool = false
 
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focused: Bool
@@ -21,12 +23,16 @@ struct UDTextField: View {
          placeholder: String,
          text: Binding<String>,
          errorMessage: String? = nil,
-         autoFocus: Bool = false) {
+         autoFocus: Bool = false,
+         monospaced: Bool = false,
+         isSecure: Bool = false) {
         self.label = label
         self.placeholder = placeholder
         self._text = text
         self.errorMessage = errorMessage
         self.autoFocus = autoFocus
+        self.monospaced = monospaced
+        self.isSecure = isSecure
     }
 
     private var hasError: Bool { errorMessage != nil }
@@ -39,9 +45,9 @@ struct UDTextField: View {
                     .foregroundStyle(UD.text3)
             }
 
-            TextField(placeholder, text: $text)
+            field
                 .textFieldStyle(.plain)
-                .font(UD.body)
+                .font(monospaced ? UD.mono(13) : UD.body)
                 .foregroundStyle(UD.text)
                 .focused($focused)
                 .disabled(!isEnabled)
@@ -70,6 +76,15 @@ struct UDTextField: View {
                     .font(UD.font(10.5))
                     .foregroundStyle(UD.danger)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var field: some View {
+        if isSecure {
+            SecureField(placeholder, text: $text)
+        } else {
+            TextField(placeholder, text: $text)
         }
     }
 

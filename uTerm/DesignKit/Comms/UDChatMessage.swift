@@ -19,13 +19,17 @@ struct UDChatMessage<Content: View>: View {
 
     let role: Role
     let streaming: Bool
+    /// 是否显示角色标签（你 / Claude）。最终工作区设计已移除标签，故默认关闭；
+    /// 画廊等需要标注角色的场景可显式开启。
+    let showLabel: Bool
     let content: Content
 
     @Environment(\.colorScheme) private var scheme
 
-    init(role: Role, streaming: Bool = false, @ViewBuilder content: () -> Content) {
+    init(role: Role, streaming: Bool = false, showLabel: Bool = false, @ViewBuilder content: () -> Content) {
         self.role = role
         self.streaming = streaming
+        self.showLabel = showLabel
         self.content = content()
     }
 
@@ -41,10 +45,12 @@ struct UDChatMessage<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(isUser ? "你" : "Claude")
-                .font(UD.font(10.5))
-                .tracking(0.4)
-                .foregroundStyle(UD.text4)
+            if showLabel {
+                Text(isUser ? "你" : "Claude")
+                    .font(UD.font(10.5))
+                    .tracking(0.4)
+                    .foregroundStyle(UD.text4)
+            }
 
             bodyContainer
         }

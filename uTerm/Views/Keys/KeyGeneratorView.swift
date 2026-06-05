@@ -29,9 +29,9 @@ struct KeyGeneratorView: View {
                         .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
-                DarkFormSection(title: "基础") {
+                    DarkFormSection(title: "基础") {
                     DarkFormField(label: "名称", hint: "在 uTerm 内引用") {
-                        DarkTextField(placeholder: "例如：default", text: $name)
+                        UDTextField(placeholder: "例如：default", text: $name)
                     }
                     DarkFormField(label: "类型") {
                         UDSegmented(selection: $type, options: [
@@ -46,7 +46,7 @@ struct KeyGeneratorView: View {
                         }
                     }
                     DarkFormField(label: "注释", hint: "附在公钥末尾，便于辨识") {
-                        DarkTextField(placeholder: "", text: $comment, mono: true)
+                        UDTextField(placeholder: "", text: $comment, monospaced: true)
                     }
                 }
 
@@ -58,8 +58,9 @@ struct KeyGeneratorView: View {
                     Text(type == .rsa ? "生成约需 1 秒" : "立即生成")
                         .font(.system(size: 11)).foregroundStyle(UD.text4)
                     Spacer()
-                    DarkButton(title: "取消", secondary: true, action: onCancel)
-                    DarkButton(title: generating ? "生成中…" : "生成密钥", enabled: canGenerate, action: generate)
+                    UDButton(title: "取消", style: .secondary, action: onCancel)
+                    UDButton(title: generating ? "生成中…" : "生成密钥", action: generate)
+                        .disabled(!canGenerate)
                 }
             }
             .padding(.horizontal, 28).padding(.vertical, 24)

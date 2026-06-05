@@ -25,64 +25,73 @@ struct ProviderEditView: View {
         "不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。"
 
     var body: some View {
-        Form {
-            Section("基本") {
-                TextField("名称", text: $provider.name)
-
-                Picker("类型", selection: kindBinding) {
-                    ForEach(ProviderKind.allCases) { k in
-                        Text(k.displayName).tag(k)
-                    }
+        SettingsScroll {
+            SettingsGroup(title: "基本") {
+                ProviderFormField(label: "名称") {
+                    UDTextField(placeholder: "名称", text: $provider.name)
+                        .frame(width: 320)
                 }
 
-                TextField("Base URL", text: $provider.baseURL, prompt: Text("如 https://api.openai.com"))
-                    .textFieldStyle(.roundedBorder)
-                    .help(baseURLHelpText)
+                ProviderFormField(label: "类型") {
+                    UDSegmented(
+                        selection: kindBinding,
+                        options: ProviderKind.allCases.map { (value: $0, label: $0.displayName) }
+                    )
+                }
+
+                ProviderFormField(label: "Base URL", hint: baseURLHelpText) {
+                    UDTextField(placeholder: "如 https://api.openai.com", text: $provider.baseURL)
+                        .frame(width: 360)
+                        .help(baseURLHelpText)
+                }
             }
 
-            Section("模型") {
+            SettingsGroup(title: "模型") {
                 modelPicker
+                ProviderFormField(label: "Model ID") {
+                    UDTextField(placeholder: "Model ID", text: $provider.model, monospaced: true)
+                        .frame(width: 320)
+                }
             }
 
-            Section("API Key") {
-                SecureField("sk-…", text: $keyDraft, prompt: Text("粘贴新 key 后按下方保存"))
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Button("保存 Key") { saveKey() }
-                        .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if keySaved {
-                        Label("已保存", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    }
-                    if let err = keySaveError {
-                        Label(err, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                    }
-                    Spacer()
-                    if keychain.load(for: provider.id) != nil {
-                        Text("已有 Key").foregroundStyle(.secondary).font(.caption)
-                    } else {
-                        Text("尚未设置 Key").foregroundStyle(.orange).font(.caption)
+            SettingsGroup(title: "API Key") {
+                ProviderFormField(label: "密钥") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        UDTextField(
+                            placeholder: "粘贴新 key 后按下方保存",
+                            text: $keyDraft,
+                            isSecure: true
+                        )
+                        .frame(width: 360)
+
+                        HStack(spacing: 10) {
+                            UDButton(title: "保存 Key", style: .secondary) { saveKey() }
+                                .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            keyStatus
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
             }
 
-            Section("诊断") {
-                HStack {
-                    Button("测试连接") { Task { await testConnection() } }
-                        .disabled(testInFlight)
-                    if testInFlight { ProgressView().controlSize(.small) }
-                    if let r = testResult {
-                        Label(r.message,
-                              systemImage: r.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                            .foregroundStyle(r.ok ? .green : .red)
+            SettingsGroup(title: "诊断") {
+                HStack(spacing: 10) {
+                    UDButton(title: "测试连接", style: .secondary) {
+                        Task { await testConnection() }
                     }
-                    Spacer()
+                    .disabled(testInFlight)
+
+                    if testInFlight {
+                        UDIndeterminateBar()
+                            .frame(width: 72)
+                    }
+                    if let r = testResult {
+                        statusLabel(r.message, ok: r.ok)
+                    }
+                    Spacer(minLength: 0)
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding(.top, 4)
         .id(provider.id)              // 切换选中行时重建本视图，清空 keyDraft 等本地状态。
         .onChange(of: provider.id) { _, _ in
             keyDraft = ""
@@ -96,15 +105,44 @@ struct ProviderEditView: View {
     @ViewBuilder
     private var modelPicker: some View {
         let presets = ProviderPreset.models(for: provider.kind)
-        Picker("预置", selection: $provider.model) {
-            ForEach(presets, id: \.self) { Text($0).tag($0) }
-            if !presets.contains(provider.model) {
-                Text(provider.model.isEmpty ? "（自定义）" : provider.model)
-                    .tag(provider.model)
-            }
+        let options = presetOptions(presets)
+        ProviderFormField(label: "预置") {
+            UDSegmented(selection: $provider.model, options: options)
         }
-        TextField("Model ID", text: $provider.model)
-            .textFieldStyle(.roundedBorder)
+    }
+
+    @ViewBuilder
+    private var keyStatus: some View {
+        if keySaved {
+            statusLabel("已保存", ok: true)
+        }
+        if let err = keySaveError {
+            statusLabel(err, ok: false)
+        }
+        if keychain.load(for: provider.id) != nil {
+            Text("已有 Key")
+                .font(UD.caption)
+                .foregroundStyle(UD.text3)
+        } else {
+            Text("尚未设置 Key")
+                .font(UD.caption)
+                .foregroundStyle(UD.warning)
+        }
+    }
+
+    private func statusLabel(_ message: String, ok: Bool) -> some View {
+        Label(message, systemImage: ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+            .font(UD.caption)
+            .foregroundStyle(ok ? UD.success : UD.danger)
+            .lineLimit(1)
+    }
+
+    private func presetOptions(_ presets: [String]) -> [(value: String, label: String)] {
+        var options = presets.map { (value: $0, label: $0) }
+        if !provider.model.isEmpty, !presets.contains(provider.model) {
+            options.append((value: provider.model, label: "自定义"))
+        }
+        return options
     }
 
     /// kind 改时若 baseURL 是另一 kind 的预置，自动同步过来；用户已自定义的 baseURL 不动。
@@ -171,5 +209,28 @@ struct ProviderEditView: View {
             keySaveError = "保存到钥匙串失败：\(error)"
             keySaved = false
         }
+    }
+}
+
+private struct ProviderFormField<Content: View>: View {
+    let label: String
+    var hint: String?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(UD.text2)
+            content()
+            if let hint {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 420, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

@@ -47,23 +47,13 @@ struct KeyManagerView: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Button(action: startGenerating) {
-                    Label("生成", systemImage: "plus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(UD.text)
-                        .frame(maxWidth: .infinity).frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(UD.accent.opacity(0.10)))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.accent.opacity(0.33), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                Button(action: importKey) {
-                    Label("导入", systemImage: "square.and.arrow.down")
-                        .font(.system(size: 12))
-                        .foregroundStyle(UD.text2)
-                        .padding(.horizontal, 10).frame(height: 28)
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+                UDButton(title: "生成", systemImage: "plus", action: startGenerating)
+                UDButton(
+                    title: "导入",
+                    style: .secondary,
+                    systemImage: "square.and.arrow.down",
+                    action: importKey
+                )
             }
             .padding(10)
             .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }

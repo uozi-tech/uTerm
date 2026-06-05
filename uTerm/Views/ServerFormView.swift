@@ -64,13 +64,7 @@ struct ServerFormView: View {
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
             HStack {
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .medium)).foregroundStyle(UD.text3)
-                        .frame(width: 24, height: 24)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.clear))
-                }
-                .buttonStyle(.plain)
+                UDIconButton(systemImage: "xmark") { dismiss() }
             }
             .padding(.trailing, 10)
         }
@@ -93,19 +87,19 @@ struct ServerFormView: View {
     private var targetSection: some View {
         DarkFormSection(title: "目标服务器") {
             DarkFormField(label: "名称") {
-                DarkTextField(placeholder: "例如：api-prod", text: $name)
+                UDTextField(placeholder: "例如：api-prod", text: $name)
             }
             HStack(alignment: .bottom, spacing: 10) {
                 DarkFormField(label: "主机") {
-                    DarkTextField(placeholder: "host.example.com", text: $host, mono: true)
+                    UDTextField(placeholder: "host.example.com", text: $host, monospaced: true)
                 }
                 DarkFormField(label: "端口") {
-                    DarkTextField(placeholder: "22", text: $port, mono: true)
+                    UDTextField(placeholder: "22", text: $port, monospaced: true)
                 }
                 .frame(width: 96)
             }
             DarkFormField(label: "用户名") {
-                DarkTextField(placeholder: "root", text: $username, mono: true)
+                UDTextField(placeholder: "root", text: $username, monospaced: true)
             }
             DarkFormField(label: "认证方式") {
                 UDSegmented(selection: $authMethod, options: [
@@ -114,7 +108,7 @@ struct ServerFormView: View {
             }
             if authMethod == .password {
                 DarkFormField(label: "密码") {
-                    DarkSecureField(placeholder: "••••••••", text: $password)
+                    UDTextField(placeholder: "••••••••", text: $password, isSecure: true)
                 }
             } else {
                 DarkFormField(label: "密钥", hint: "从密钥管理器选择") {
@@ -130,12 +124,12 @@ struct ServerFormView: View {
     private var groupSection: some View {
         DarkFormSection(title: "分组") {
             DarkFormField(label: "分组", hint: "可选") {
-                DarkTextField(placeholder: "例如：prod", text: $group)
+                UDTextField(placeholder: "例如：prod", text: $group)
             }
             if !existingGroups.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(existingGroups, id: \.self) { g in
-                        DarkChip(label: g, selected: g == group) { group = g }
+                        UDSelectableGroupChip(label: g, selected: g == group) { group = g }
                     }
                 }
             }
@@ -167,8 +161,9 @@ struct ServerFormView: View {
             Text("密钥与口令仅保存在系统钥匙串")
                 .font(.system(size: 11)).foregroundStyle(UD.text4)
             Spacer()
-            DarkButton(title: "取消", secondary: true) { dismiss() }
-            DarkButton(title: "保存", enabled: isValid) { save() }
+            UDButton(title: "取消", style: .secondary) { dismiss() }
+            UDButton(title: "保存") { save() }
+                .disabled(!isValid)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(UD.panel)

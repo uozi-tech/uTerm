@@ -12,9 +12,7 @@ struct EmptyBody: View {
                     .foregroundStyle(UD.text)
                 Spacer()
                 if !model.recents.isEmpty {
-                    Button("清空") { model.clearRecents() }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(UD.text3)
+                    UDButton(title: "清空", style: .ghost) { model.clearRecents() }
                 }
             }
             if model.recents.isEmpty {

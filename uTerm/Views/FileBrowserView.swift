@@ -10,6 +10,7 @@ struct FileBrowserContent: View {
     @State private var selectedID: RemoteEntry.ID?
     /// 列表容器是否持有键盘焦点。单击行时置 true，让方向键 / 回车导航生效。
     @FocusState private var browserFocused: Bool
+    @State private var sortPopoverPresented = false
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
@@ -35,46 +36,18 @@ struct FileBrowserContent: View {
                 .font(UD.mono(11)).lineLimit(1).truncationMode(.head)
                 .foregroundStyle(UD.text2)
             Spacer()
-            Menu {
-                Picker("排序方式", selection: Binding(
-                    get: { model.sortKey },
-                    set: { model.sortKey = $0 }
-                )) {
-                    ForEach(FileBrowserModel.SortKey.allCases) { key in
-                        Text(key.label).tag(key)
-                    }
-                }
-                Divider()
-                Toggle("升序", isOn: Binding(
-                    get: { model.sortAscending },
-                    set: { model.sortAscending = $0 }
-                ))
-                Toggle("文件夹优先", isOn: Binding(
-                    get: { model.foldersFirst },
-                    set: { model.foldersFirst = $0 }
-                ))
-            } label: {
-                Image(systemName: "arrow.up.arrow.down")
-                    .frame(width: 22, height: 22)
+            UDIconButton(systemImage: "arrow.up.arrow.down") {
+                sortPopoverPresented.toggle()
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.plain)
-            .wsIconButtonHover()
+            .popover(isPresented: $sortPopoverPresented, arrowEdge: .bottom) {
+                sortPopover
+            }
             .help("排序方式")
-            Button { Task { await model.refresh() } } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 22, height: 22)
+            UDIconButton(systemImage: "arrow.clockwise") {
+                Task { await model.refresh() }
             }
-            .buttonStyle(.plain)
-            .wsIconButtonHover()
             .help("刷新")
-            Button { uploadFile() } label: {
-                Image(systemName: "icloud.and.arrow.up")
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(.plain)
-            .wsIconButtonHover()
+            UDIconButton(systemImage: "icloud.and.arrow.up", action: uploadFile)
             .help("上传文件到当前目录")
         }
         .padding(.horizontal, 10)
@@ -84,11 +57,63 @@ struct FileBrowserContent: View {
         }
     }
 
+    private var sortPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("排序")
+                .font(UD.caption)
+                .foregroundStyle(UD.text3)
+                .textCase(.uppercase)
+
+            UDSegmented(
+                selection: Binding(
+                    get: { model.sortKey },
+                    set: { model.sortKey = $0 }
+                ),
+                options: FileBrowserModel.SortKey.allCases.map { (value: $0, label: $0.label) }
+            )
+
+            sortToggleRow(
+                label: "升序",
+                binding: Binding(
+                    get: { model.sortAscending },
+                    set: { model.sortAscending = $0 }
+                )
+            )
+            sortToggleRow(
+                label: "文件夹优先",
+                binding: Binding(
+                    get: { model.foldersFirst },
+                    set: { model.foldersFirst = $0 }
+                )
+            )
+        }
+        .padding(12)
+        .frame(width: 260, alignment: .leading)
+        .background(UD.overlay)
+    }
+
+    private func sortToggleRow(label: String, binding: Binding<Bool>) -> some View {
+        HStack {
+            Text(label)
+                .font(UD.body)
+                .foregroundStyle(UD.text2)
+            Spacer()
+            UDToggle(binding)
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch model.state {
         case .idle, .connecting:
-            ProgressView("正在连接…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 10) {
+                UDIndeterminateBar()
+                    .frame(width: 140)
+                Text("正在连接…")
+                    .font(UD.caption)
+                    .foregroundStyle(UD.text3)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             VStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(UD.text3)
@@ -160,7 +185,8 @@ struct FileBrowserContent: View {
             if model.isNavigating {
                 ZStack {
                     UD.bg
-                    ProgressView().controlSize(.small).tint(UD.accent)
+                    UDIndeterminateBar()
+                        .frame(width: 96)
                 }
             }
         }

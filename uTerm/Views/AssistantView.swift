@@ -2,19 +2,21 @@ import SwiftUI
 import SwiftData
 
 enum AssistantInputBarLayout {
+    /// 底栏图标钮（附加 / 发送）点击区，对齐设计稿 28×28。
     nonisolated static let attachHitSize: CGFloat = 28
-    nonisolated static let attachIconSize: CGFloat = 11
-    nonisolated static let attachCornerRadius: CGFloat = 6
-    nonisolated static let sendButtonHeight: CGFloat = 24
+    nonisolated static let attachIconSize: CGFloat = 12
+    nonisolated static let attachCornerRadius: CGFloat = 7
+    /// 发送钮与附加钮同尺寸（28²），保持底栏对称。
+    nonisolated static let sendButtonHeight: CGFloat = 28
     nonisolated static let keycapHeight: CGFloat = 20
     nonisolated static let sendContentAlignment: VerticalAlignment = .center
 }
 
-/// AI 助手聊天面板。布局对齐工作区设计稿的 Agent inspector：
+/// AI 助手聊天面板。布局对齐工作区设计稿（`workspace.jsx`）的 Agent inspector
+/// 最终形态（Cursor 风格）：
 /// - 顶栏：✦ + 会话标题（点开 → 会话历史下拉）+ 新建对话。
-/// - meta 行：左服务器上下文，右 provider/模型选择器。
-/// - 聊天区：角色标签 + 气泡（用户）/ 平铺（助手）+ 流式光标。
-/// - 输入区：圆角卡片 + 附加按钮 + ↩ 发送。
+/// - 聊天区：对话直接平铺在标题下——用户气泡 / 助手裸文本 + 流式光标（无角色标签、无 meta 行）。
+/// - 输入区：圆角卡片，底栏左侧模型胶囊 `● <模型> ▾`，右侧附件 + ↩ 发送（去掉上方分割线）。
 ///
 /// 0 provider：空状态 + 「打开 Settings」按钮。
 struct AssistantView: View {
@@ -39,7 +41,6 @@ struct AssistantView: View {
                 ZStack(alignment: .top) {
                     VStack(spacing: 0) {
                         header
-                        metaRow
                         chat
                     }
                     if showSessions {
@@ -109,34 +110,10 @@ struct AssistantView: View {
         }
     }
 
-    // MARK: - meta 行（服务器上下文 + 模型选择器）
+    // MARK: - 模型选择胶囊（输入区底栏，Cursor 风格 ● <模型> ▾）
 
-    private var metaRow: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Image(systemName: "clock")
-                    .font(.system(size: 9))
-                Text(metaContext)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            providerPicker
-        }
-        .font(.system(size: 11))
-        .foregroundStyle(UD.text3)
-        .padding(.horizontal, 12)
-        .frame(height: 26)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
-    }
-
-    private var metaContext: String {
-        serverName.isEmpty ? "当前会话" : "\(serverName) · 当前会话"
-    }
-
-    private var providerPicker: some View {
+    /// 底栏模型胶囊：原 meta 行的 provider 选择器，移到输入框页脚（设计稿 chat8）。
+    private var modelPill: some View {
         Menu {
             ForEach(model.providers) { p in
                 Button {
@@ -153,19 +130,22 @@ struct AssistantView: View {
             Divider()
             Button("管理…") { openSettings() }
         } label: {
-            HStack(spacing: 5) {
-                Circle().fill(UD.accent).frame(width: 5, height: 5)
-                Text(model.activeProvider?.name ?? "未选择")
-                    .font(.system(size: 11))
-                    .foregroundStyle(UD.text2)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(UD.text4)
-            }
+            UDModelPillLabel(modelPillLabel)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    /// 胶囊文案：优先显示模型名（如 `claude-sonnet`），否则 provider 名；过长则省略。
+    private var modelPillLabel: String {
+        let raw: String
+        if let p = model.activeProvider {
+            raw = p.model.isEmpty ? p.name : p.model
+        } else {
+            raw = "未选择"
+        }
+        return raw.count > 22 ? String(raw.prefix(21)) + "…" : raw
     }
 
     // MARK: - 会话历史下拉
@@ -301,8 +281,9 @@ struct AssistantView: View {
             Text("在 Settings 添加一个 Anthropic / OpenAI 配置。")
                 .font(.caption).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
-            Button("打开 Settings") { openSettings() }
-                .buttonStyle(.borderedProminent)
+            UDButton(title: "打开 Settings", systemImage: "gearshape") {
+                openSettings()
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -339,11 +320,6 @@ struct AssistantView: View {
             && message.id == model.messages.last?.id
             && model.state == .streaming
         VStack(alignment: .leading, spacing: 6) {
-            Text(isUser ? "你" : (model.activeProvider?.name ?? "助手"))
-                .font(.system(size: 10.5))
-                .tracking(0.4)
-                .foregroundStyle(UD.text4)
-
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 if isUser {
                     Text(message.text)
@@ -377,53 +353,13 @@ struct AssistantView: View {
     // MARK: - 输入区
 
     private var inputBar: some View {
-        VStack(spacing: 10) {
-            TextField("问点什么…", text: $model.input, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .font(.system(size: 12))
-                .foregroundStyle(UD.text)
-                .onSubmit { sendIfPossible() }
-
-            HStack(spacing: 6) {
-                Button { attachCurrentContext() } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: AssistantInputBarLayout.attachIconSize))
-                        .foregroundStyle(UD.text3)
-                        .frame(width: AssistantInputBarLayout.attachHitSize,
-                               height: AssistantInputBarLayout.attachHitSize)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: AssistantInputBarLayout.attachCornerRadius)
-                                .strokeBorder(UD.border, lineWidth: 1))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("附加当前上下文")
-
-                Spacer()
-
-                Button { sendIfPossible() } label: {
-                    HStack(alignment: AssistantInputBarLayout.sendContentAlignment, spacing: 5) {
-                        Keycap("↩")
-                        Text("发送")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(UD.text4)
-                    }
-                    .frame(height: AssistantInputBarLayout.sendButtonHeight)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(model.state == .streaming)
-            }
-        }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(UD.fillFaint))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UD.border, lineWidth: 1))
+        UDComposer(
+            text: $model.input,
+            onSend: sendIfPossible,
+            onAttach: attachCurrentContext,
+            modelControl: { modelPill }
+        )
         .padding(10)
-        .overlay(alignment: .top) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
     }
 
     private func sendIfPossible() {
@@ -464,22 +400,5 @@ private struct StreamingCaret: View {
                     on = false
                 }
             }
-    }
-}
-
-/// 小键帽（如 ↩）。
-private struct Keycap: View {
-    let label: String
-    init(_ label: String) { self.label = label }
-    var body: some View {
-        Text(label)
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(UD.text3)
-            .lineLimit(1)
-            .frame(minWidth: 16)
-            .frame(height: AssistantInputBarLayout.keycapHeight, alignment: .center)
-            .padding(.horizontal, 3)
-            .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
     }
 }

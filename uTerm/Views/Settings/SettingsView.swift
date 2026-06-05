@@ -6,11 +6,23 @@ import SwiftUI
 /// `settings.jsx` 的窗口内 tab 条：图标 + 文字横排、左对齐、选中态微底 pill。
 /// 窗口标题栏（红绿灯 + 居中标题）仍由系统原生 chrome 提供。
 struct SettingsView: View {
-    @State private var tab: SettingsTab = .general
+    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsTab.general.rawValue
+
+    private var tab: SettingsTab {
+        SettingsTabSelection.tab(from: selectedTab)
+    }
+
+    private var tabBinding: Binding<SettingsTab> {
+        Binding {
+            SettingsTabSelection.tab(from: selectedTab)
+        } set: { newValue in
+            selectedTab = newValue.rawValue
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsTabStrip(selection: $tab)
+            SettingsTabStrip(selection: tabBinding)
 
             // 内容区
             Group {
@@ -52,6 +64,15 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .advanced:  return "slider.horizontal.3"
         case .about:     return "info.circle"
         }
+    }
+}
+
+nonisolated enum SettingsTabSelection {
+    static let key = "settingsTabSelection"
+    static let aboutMenuTarget = SettingsTab.about.rawValue
+
+    static func tab(from rawValue: String?) -> SettingsTab {
+        rawValue.flatMap(SettingsTab.init(rawValue:)) ?? .general
     }
 }
 

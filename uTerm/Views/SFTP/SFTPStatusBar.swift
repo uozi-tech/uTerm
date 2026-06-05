@@ -38,16 +38,15 @@ struct SFTPStatusBar: View {
             Text("\(t.direction == .up ? "上传" : "下载") \(t.fileName)")
                 .font(UD.mono(11)).foregroundStyle(UD.text2).lineLimit(1)
             if t.bytesTotal > 0 {
-                ZStack(alignment: .leading) {
-                    Capsule().fill(UD.fillMed).frame(width: 110, height: 5)
-                    Capsule().fill(UD.accent).frame(width: 110 * frac, height: 5)
-                }
+                UDLinearBar(progress: frac, height: 5)
+                    .frame(width: 110)
                 Text("\(Int(frac * 100))%")
                     .font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 34, alignment: .trailing)
                 Text(SFTPFormat.bytes(t.bytesTotal)).font(UD.mono(11)).foregroundStyle(UD.text4)
             } else {
-                ProgressView().controlSize(.small).tint(UD.accent)
+                UDIndeterminateBar()
+                    .frame(width: 72)
             }
         }
     }

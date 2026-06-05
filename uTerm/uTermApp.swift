@@ -153,6 +153,35 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
                 .environment(appUpdater)
         }
+        .commands {
+            AppInfoCommands()
+        }
+    }
+}
+
+struct AppInfoCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            AboutMenuButton()
+        }
+    }
+}
+
+private struct AboutMenuButton: View {
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsTab.general.rawValue
+
+    var body: some View {
+        Button("关于 \(appName)") {
+            selectedTab = SettingsTabSelection.aboutMenuTarget
+            openSettings()
+        }
+    }
+
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? ProcessInfo.processInfo.processName
     }
 }
 

@@ -48,10 +48,9 @@ struct TerminalArea: View {
             Text("没有打开的终端标签")
                 .font(.callout)
                 .foregroundStyle(UD.text2)
-            Button("新建终端标签") {
+            UDButton(title: "新建终端标签", systemImage: "plus") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
-            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(terminalAreaBG)

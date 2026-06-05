@@ -37,18 +37,10 @@ struct ProvidersSettingsView: View {
             Divider()
 
             HStack(spacing: 4) {
-                Button { addProvider() } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 24, height: 20)
-                }
-                .buttonStyle(.borderless)
+                UDIconButton(systemImage: "plus") { addProvider() }
                 .help("新增 provider")
 
-                Button { deleteSelected() } label: {
-                    Image(systemName: "minus")
-                        .frame(width: 24, height: 20)
-                }
-                .buttonStyle(.borderless)
+                UDIconButton(systemImage: "minus") { deleteSelected() }
                 .disabled(selectedID == nil)
                 .help("删除选中 provider")
 

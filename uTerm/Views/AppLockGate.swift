@@ -42,7 +42,8 @@ private struct LockCoverView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(UD.text2)
                 if case .authenticating = model.state {
-                    ProgressView().controlSize(.small)
+                    UDIndeterminateBar()
+                        .frame(width: 84)
                 } else {
                     UDButton(title: "解锁", style: .primary, systemImage: "lock.open") {
                         Task { await model.authenticate() }
