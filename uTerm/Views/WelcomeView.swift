@@ -173,6 +173,7 @@ struct WelcomeView: View {
                 formRoute = .new
             })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        items.append(contentsOf: commandPaletteAccentItems())
         return items
     }
 

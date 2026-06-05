@@ -314,6 +314,7 @@ struct WorkspaceWindowView: View {
 
         // 设置
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        items.append(contentsOf: commandPaletteAccentItems())
         return items
     }
 
