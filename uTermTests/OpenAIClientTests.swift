@@ -107,9 +107,9 @@ final class OpenAIClientTests: XCTestCase {
         let config = LLMRequestConfig(model: "gpt-5",
                                         baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
         var out = ""
-        for try await d in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
-                                          system: "", config: config) {
-            out += d
+        for try await event in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {
+            if case let .text(delta) = event { out += delta }
         }
         XCTAssertEqual(out, "Hi there")
     }

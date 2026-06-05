@@ -5,46 +5,46 @@ final class OpenAISSEParserTests: XCTestCase {
     func testDeltaContentLineYieldsText() {
         var p = OpenAISSEParser()
         let line = #"data: {"choices":[{"delta":{"content":"Hello"}}]}"#
-        XCTAssertEqual(p.parse(line: line), "Hello")
+        XCTAssertEqual(p.parse(line: line), [.text("Hello")])
     }
 
-    func testDoneSentinelYieldsNil() {
+    func testDoneSentinelYieldsEmpty() {
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: "data: [DONE]"))
+        XCTAssertEqual(p.parse(line: "data: [DONE]"), [])
     }
 
-    func testNonDataLineYieldsNil() {
+    func testNonDataLineYieldsEmpty() {
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: "event: foo"))
-        XCTAssertNil(p.parse(line: ""))
+        XCTAssertEqual(p.parse(line: "event: foo"), [])
+        XCTAssertEqual(p.parse(line: ""), [])
     }
 
-    func testEmptyDeltaYieldsNil() {
+    func testEmptyDeltaYieldsEmpty() {
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: #"data: {"choices":[{"delta":{}}]}"#))
+        XCTAssertEqual(p.parse(line: #"data: {"choices":[{"delta":{}}]}"#), [])
     }
 
-    func testMissingChoicesYieldsNil() {
+    func testMissingChoicesYieldsEmpty() {
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: #"data: {"foo":"bar"}"#))
+        XCTAssertEqual(p.parse(line: #"data: {"foo":"bar"}"#), [])
     }
 
-    func testRoleOnlyDeltaYieldsNil() {
+    func testRoleOnlyDeltaYieldsEmpty() {
         // OpenAI 流首个 delta 通常只含 role，无 content。
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: #"data: {"choices":[{"delta":{"role":"assistant"}}]}"#))
+        XCTAssertEqual(p.parse(line: #"data: {"choices":[{"delta":{"role":"assistant"}}]}"#), [])
     }
 
-    func testMalformedJSONYieldsNil() {
+    func testMalformedJSONYieldsEmpty() {
         var p = OpenAISSEParser()
-        XCTAssertNil(p.parse(line: "data: not json"))
+        XCTAssertEqual(p.parse(line: "data: not json"), [])
     }
 
     func testSequenceOfDeltas() {
         var p = OpenAISSEParser()
         let l1 = #"data: {"choices":[{"delta":{"content":"foo"}}]}"#
         let l2 = #"data: {"choices":[{"delta":{"content":"bar"}}]}"#
-        XCTAssertEqual(p.parse(line: l1), "foo")
-        XCTAssertEqual(p.parse(line: l2), "bar")
+        XCTAssertEqual(p.parse(line: l1), [.text("foo")])
+        XCTAssertEqual(p.parse(line: l2), [.text("bar")])
     }
 }

@@ -159,9 +159,12 @@ final class AssistantModel {
         let client = clientOverride ?? LLMClientFactory.make(for: provider)
         let system = Self.systemPrompt(serverContext: serverContext)
         do {
-            for try await delta in client.stream(messages: conversation,
+            for try await event in client.stream(messages: conversation,
                                                   system: system, config: config) {
-                messages[assistantIndex].text += delta
+                if case let .text(delta) = event {
+                    messages[assistantIndex].text += delta
+                }
+                // .toolCall handled in Task 13
             }
             state = .idle
         } catch {
@@ -189,6 +192,7 @@ final class AssistantModel {
     private func persist(_ message: ChatMessage, in session: ChatSession?) -> ChatMessageRecord? {
         guard let ctx = modelContext, let session else { return nil }
         let record = ChatMessageRecord(role: message.role, text: message.text,
+                                       toolCalls: message.toolCalls,
                                        id: message.id, createdAt: Date())
         record.session = session
         ctx.insert(record)

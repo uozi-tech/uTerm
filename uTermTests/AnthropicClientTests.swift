@@ -75,9 +75,9 @@ final class AnthropicClientTests: XCTestCase {
         let client = AnthropicClient(session: makeStubbedSession())
         let config = LLMRequestConfig(model: "x", baseURL: URL(string: "https://api.anthropic.com")!, apiKey: "k")
         var out = ""
-        for try await delta in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+        for try await event in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
                                               system: "", config: config) {
-            out += delta
+            if case let .text(delta) = event { out += delta }
         }
         XCTAssertEqual(out, "Hi there")
     }

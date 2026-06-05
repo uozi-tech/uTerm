@@ -45,21 +45,40 @@ final class ChatMessageRecord {
     var roleRaw: String = ChatMessage.Role.user.rawValue
     var text: String = ""
     var createdAt: Date = Date()
+    /// 工具调用以 JSON 串落库（可选列；旧记录默认空串 → 解码为空数组，无需迁移）。
+    var toolCallsJSON: String = ""
     var session: ChatSession?
 
     init() {}
 
-    init(role: ChatMessage.Role, text: String,
+    init(role: ChatMessage.Role, text: String, toolCalls: [ToolCallState] = [],
          id: UUID = UUID(), createdAt: Date = Date()) {
         self.id = id
         self.roleRaw = role.rawValue
         self.text = text
+        self.toolCallsJSON = Self.encode(toolCalls)
         self.createdAt = createdAt
     }
 
     var role: ChatMessage.Role { ChatMessage.Role(rawValue: roleRaw) ?? .user }
 
+    var toolCalls: [ToolCallState] {
+        get {
+            guard !toolCallsJSON.isEmpty,
+                  let data = toolCallsJSON.data(using: .utf8),
+                  let v = try? JSONDecoder().decode([ToolCallState].self, from: data)
+            else { return [] }
+            return v
+        }
+        set { toolCallsJSON = Self.encode(newValue) }
+    }
+
+    static func encode(_ calls: [ToolCallState]) -> String {
+        guard !calls.isEmpty, let data = try? JSONEncoder().encode(calls) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     var asChatMessage: ChatMessage {
-        ChatMessage(id: id, role: role, text: text)
+        ChatMessage(id: id, role: role, text: text, toolCalls: toolCalls)
     }
 }

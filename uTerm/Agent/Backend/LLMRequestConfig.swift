@@ -6,4 +6,5 @@ struct LLMRequestConfig: Sendable, Equatable {
     let model: String
     let baseURL: URL
     let apiKey: String
+    var tools: [ToolSpec] = []
 }
