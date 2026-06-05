@@ -44,10 +44,10 @@ enum UD {
     }
 
     // MARK: - 表面 Surfaces
-    nonisolated static let bg         = dyn(.hex(0x101012), .hex(0xF4F3F1))
-    nonisolated static let panel      = dyn(.hex(0x17171A), .hex(0xFFFFFF))
-    nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xF7F6F4))
-    nonisolated static let panelHover = dyn(.hex(0x202026), .black(0.045))
+    nonisolated static let bg         = dyn(.hex(0x101012), .hex(0xFFFFFF))
+    nonisolated static let panel      = dyn(.hex(0x17171A), .hex(0xF6F6F3))
+    nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xEEEEEA))
+    nonisolated static let panelHover = dyn(.hex(0x202026), .black(0.05))
     nonisolated static let terminal   = dyn(.hex(0x08080A), .hex(0x0B0B0D))
     /// 浮层实体面（下拉 / 菜单 / popover）。浅色用纯白面板。
     nonisolated static let overlay    = dyn(.hex(0x1B1B1F), .hex(0xFFFFFF))
@@ -56,13 +56,13 @@ enum UD {
 
     // MARK: - 描边 Stroke（深=白叠加 / 浅=黑叠加）
     nonisolated static let border     = dyn(.white(0.07), .black(0.10))
-    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.16))
+    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.14))
 
     // MARK: - 文本 Text（深=白叠加 / 浅=黑叠加）
-    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x1C1C1E))
-    nonisolated static let text2      = dyn(.white(0.46), .black(0.56))
-    nonisolated static let text3      = dyn(.white(0.28), .black(0.40))
-    nonisolated static let text4      = dyn(.white(0.18), .black(0.26))
+    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x1D1D1F))
+    nonisolated static let text2      = dyn(.white(0.46), .black(0.58))
+    nonisolated static let text3      = dyn(.white(0.28), .black(0.46))
+    nonisolated static let text4      = dyn(.white(0.18), .black(0.34))
 
     // MARK: - 强调 Accent（macOS 系统蓝）
     nonisolated static let accent     = dyn(.hex(0x0A84FF), .hex(0x007AFF))
@@ -88,7 +88,7 @@ enum UD {
     nonisolated static let info    = dyn(.hex(0x64D2FF), .hex(0x007AFF))
 
     // MARK: - 行态 Row（hover / selected 底）
-    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.03))
+    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.04))
     nonisolated static let rowSelected = dyn(.white(0.055), .hex(0x007AFF, 0.13))
 
     // MARK: - 叠加填充 Fill（面上的细微实体填充；深=白叠加 / 浅=黑叠加）

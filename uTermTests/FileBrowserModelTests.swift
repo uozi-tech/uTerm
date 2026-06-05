@@ -9,6 +9,28 @@ final class FileBrowserModelTests: XCTestCase {
                                 size: $0.1 ? nil : 10, modifiedAt: nil) }
     }
 
+    /// 轮询直到 condition 成立或超时（async 调度不确定时用）。
+    private func waitUntil(timeout: TimeInterval = 3.0,
+                           _ condition: @MainActor () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    /// 写入 n 个临时文件，返回其 URL（每个内容 = 文件名，便于断言字节数）。
+    private func tempFiles(_ names: [String]) throws -> (dir: URL, urls: [URL]) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uterm-xfer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let urls = try names.map { name -> URL in
+            let u = dir.appendingPathComponent(name)
+            try Data(name.utf8).write(to: u)
+            return u
+        }
+        return (dir, urls)
+    }
+
     func testLoadHomeListsEntries() async {
         let mock = MockSFTP(tree: ["/home/user": dir([("etc", true), ("a.txt", false)])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
@@ -145,35 +167,131 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(Set(model.sortedEntries.map(\.name)), [".bashrc", "a.txt"])
     }
 
-    func testUploadWithProgressSetsAndClearsTransfer() async {
+    func testEnqueueUploadCompletesAndForwardsToProvider() async {
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
-        await model.refresh()
-        await model.uploadWithProgress(fileName: "x.txt", data: Data("hi".utf8))
-        XCTAssertNil(model.transfer)
+        model.enqueueUpload(fileName: "x.txt", data: Data("hi".utf8))
+        await waitUntil { model.transfers.first?.status == .done }
+        XCTAssertEqual(model.transfers.first?.status, .done)
         let uploads = await mock.uploads
         XCTAssertEqual(uploads.first?.path, "/home/user/x.txt")
     }
 
-    func testUploadLocalFilesUploadsEachFileToCurrentDirectory() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("uterm-upload-local-files-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let first = tempDir.appendingPathComponent("first.txt")
-        let second = tempDir.appendingPathComponent("second.log")
-        try Data("one".utf8).write(to: first)
-        try Data("two".utf8).write(to: second)
+    func testUploadShowsSpeedAfterFirstEarlyProgressSample() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        await mock.setUploadPartialProgress(bytesDone: 512 * 1024,
+                                            delayNanoseconds: 120_000_000)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
 
+        model.enqueueUpload(fileName: "big.iso", data: Data(count: 8 * 1024 * 1024))
+
+        await waitUntil { model.transfers.first?.bytesDone == 512 * 1024 }
+        let transfer = try? XCTUnwrap(model.transfers.first)
+        XCTAssertEqual(transfer?.status, .active)
+        XCTAssertGreaterThan(transfer?.speedBytesPerSec ?? 0, 0)
+
+        await mock.release()
+        await waitUntil { model.transfers.first?.status == .done }
+    }
+
+    func testEnqueueUploadsUploadsEachFileToCurrentDirectory() async throws {
+        let (tmp, urls) = try tempFiles(["first.txt", "second.log"])  // 9 + 10 bytes
+        defer { try? FileManager.default.removeItem(at: tmp) }
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
 
-        let uploaded = await model.uploadLocalFiles([first, second])
+        model.enqueueUploads(urls)
 
-        XCTAssertEqual(uploaded, 2)
+        await waitUntil { model.transfers.filter { $0.status == .done }.count == 2 }
         let uploads = await mock.uploads
-        XCTAssertEqual(uploads.map(\.path), ["/home/user/first.txt", "/home/user/second.log"])
-        XCTAssertEqual(uploads.map(\.bytes), [3, 3])
+        XCTAssertEqual(Set(uploads.map(\.path)),
+                       ["/home/user/first.txt", "/home/user/second.log"])
+        XCTAssertEqual(Set(uploads.map(\.bytes)), [9, 10])  // "first.txt"=9, "second.log"=10
+    }
+
+    func testEnqueueUploadsRespectsConcurrencyLimit() async throws {
+        UserDefaults.standard.set(2, forKey: "sftpMaxConcurrentTransfers")
+        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt", "b.txt", "c.txt", "d.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        model.enqueueUploads(urls)
+
+        await waitUntil { model.transfers.filter { $0.status == .active }.count == 2 }
+        XCTAssertEqual(model.transfers.count, 4)
+        XCTAssertEqual(model.transfers.filter { $0.status == .active }.count, 2)
+        XCTAssertEqual(model.transfers.filter { $0.status == .queued }.count, 2)
+
+        await mock.release()
+        await waitUntil { model.transfers.allSatisfy { $0.status == .done } }
+        XCTAssertEqual(model.transfers.filter { $0.status == .done }.count, 4)
+        let uploads = await mock.uploads
+        XCTAssertEqual(Set(uploads.map(\.path)),
+                       ["/home/user/a.txt", "/home/user/b.txt", "/home/user/c.txt", "/home/user/d.txt"])
+    }
+
+    func testCancelQueuedRemovesImmediately() async throws {
+        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
+        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt", "b.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .active } }
+        let queued = model.transfers.first { $0.status == .queued }!
+        model.cancelTransfer(queued.id)
+        XCTAssertFalse(model.transfers.contains { $0.id == queued.id })
+        XCTAssertEqual(model.transfers.count, 1)
+    }
+
+    func testCancelActiveRemovesAfterUnwind() async throws {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .active } }
+        let active = model.transfers.first { $0.status == .active }!
+        model.cancelTransfer(active.id)
+        await waitUntil { model.transfers.isEmpty }
+        XCTAssertTrue(model.transfers.isEmpty)
+    }
+
+    func testFailedUploadMarksFailedThenRetryRequeues() async throws {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setFailingUploadPaths(["/home/user/a.txt"])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .failed } }
+        XCTAssertEqual(model.transfers.first?.status, .failed)
+
+        await mock.setFailingUploadPaths([])      // next attempt succeeds
+        model.retryTransfer(model.transfers.first!.id)
+        await waitUntil { model.transfers.contains { $0.status == .done } }
+        XCTAssertEqual(model.transfers.first?.status, .done)
+    }
+
+    func testClearFinishedRemovesDoneAndFailed() async throws {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setFailingUploadPaths(["/home/user/b.txt"])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt", "b.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.enqueueUploads(urls)
+        await waitUntil {
+            model.transfers.filter { $0.status == .done || $0.status == .failed }.count == 2
+        }
+        model.clearFinishedTransfers()
+        XCTAssertTrue(model.transfers.isEmpty)
     }
 }
 

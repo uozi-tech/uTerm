@@ -25,10 +25,9 @@ struct UDToggle: View {
             ZStack(alignment: isOn ? .trailing : .leading) {
                 track
                 knob
+                    .padding(2)   // knob 在 2px 内边距里滑动（含上下，故 20+2+2=24 撑满轨道高）
             }
             .frame(width: 40, height: 24)
-            .padding(.horizontal, 2)
-            .frame(width: 40, height: 24)   // 锁定外框（padding 在内 ZStack 上生效）
             .animation(.easeOut(duration: 0.2), value: isOn)
         }
         .buttonStyle(.plain)

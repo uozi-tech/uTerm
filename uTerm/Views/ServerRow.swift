@@ -4,9 +4,8 @@ import SwiftUI
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
 /// 56pt 行高：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
-/// 连接」相对时间（hover / 选中时淡出）、描边分组 chip、以及一枚品牌蓝连接箭头
-/// （hover / 选中时从左滑入）。选中态用半透明叠底（浅深自适应），不再画左侧竖条
-/// —— 选中由更亮的底色 + 脉冲圆点 + 箭头 + 右侧详情面板共同表达。
+/// 连接」相对时间与描边分组 chip。选中态用半透明叠底（浅深自适应），不再画左侧竖条
+/// —— 选中由更亮的底色 + 脉冲圆点 + 右侧详情面板共同表达。
 struct ServerRow: View {
     let profile: ServerProfile
     let query: String
@@ -15,9 +14,6 @@ struct ServerRow: View {
     let onDoubleTap: () -> Void
 
     @State private var hover = false
-
-    /// hover 或选中：淡出时间、显出箭头。
-    private var revealArrow: Bool { hover || isSelected }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -47,18 +43,8 @@ struct ServerRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)
-                .opacity(revealArrow ? 0 : 1)
-                .animation(.easeOut(duration: 0.12), value: revealArrow)
 
             UDGroupChip(groupLabel)
-
-            Image(systemName: "arrow.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(UD.accent)
-                .frame(width: 16)
-                .opacity(revealArrow ? 1 : 0)
-                .offset(x: revealArrow ? 0 : -4)
-                .animation(.easeOut(duration: 0.15), value: revealArrow)
         }
         .padding(.horizontal, 18)
         .frame(height: 56)

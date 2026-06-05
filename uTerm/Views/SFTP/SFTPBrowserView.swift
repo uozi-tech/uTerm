@@ -56,7 +56,11 @@ struct SFTPBrowserView: View {
                 SFTPStatusBar(path: model.currentPath,
                               entries: model.sortedEntries,
                               selectedCount: selected == nil ? 0 : 1,
-                              transfer: model.transfer)
+                              transfers: model.transfers,
+                              onCancel: { model.cancelTransfer($0) },
+                              onCancelAll: { model.cancelAllActiveTransfers() },
+                              onClearFinished: { model.clearFinishedTransfers() },
+                              onRetry: { model.retryTransfer($0) })
             }
         }
         .background(UD.bg)
@@ -222,14 +226,9 @@ struct SFTPBrowserView: View {
     private func uploadFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true; panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            guard let data = try? await Task.detached(priority: .userInitiated, operation: {
-                try Data(contentsOf: url)
-            }).value else { return }
-            await model.uploadWithProgress(fileName: url.lastPathComponent, data: data)
-        }
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        model.enqueueUploads(panel.urls)
     }
 
     private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
@@ -243,7 +242,7 @@ struct SFTPBrowserView: View {
                 guard let data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                 Task { @MainActor [model] in
-                    await model.uploadLocalFiles([url])
+                    model.enqueueUploads([url])
                 }
             }
         }
@@ -260,3 +259,4 @@ struct SFTPBrowserView: View {
         }
     }
 }
+

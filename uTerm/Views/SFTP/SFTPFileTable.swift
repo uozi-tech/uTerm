@@ -11,6 +11,20 @@ enum SFTPFormat {
     }()
     static func date(_ d: Date) -> String { dateFormatter.string(from: d) }
     static func bytes(_ n: Int64) -> String { byteFormatter.string(fromByteCount: n) }
+
+    /// 传输速率（B/s → "x.x MB/s"；0 → "--"）。
+    static func transferSpeed(_ bytesPerSec: Double) -> String {
+        bytesPerSec > 0 ? bytes(Int64(bytesPerSec)) + "/s" : "--"
+    }
+    /// 剩余时间（剩余字节 / 速率）。
+    static func eta(_ remaining: Int64, speed: Double) -> String {
+        guard speed > 0, remaining > 0 else { return remaining <= 0 ? "即将完成" : "—" }
+        let s = Double(remaining) / speed
+        if s < 1 { return "即将完成" }
+        if s < 60 { return "剩余 \(Int(s.rounded())) 秒" }
+        let m = Int(s) / 60
+        return "剩余 \(m) 分 \(Int(s) % 60) 秒"
+    }
 }
 
 /// 文件表：列头（名称/修改时间/大小/类型，可点击排序）+ `..` 行 + 文件行。

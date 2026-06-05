@@ -88,6 +88,7 @@ struct SettingsNumberField: View {
     @Binding var value: Int
     var width: CGFloat = 110
     var minValue: Int = 0
+    var maxValue: Int = .max
     var suffix: String? = nil
 
     @FocusState private var focused: Bool
@@ -96,7 +97,7 @@ struct SettingsNumberField: View {
         HStack(spacing: 8) {
             TextField("", value: Binding(
                 get: { value },
-                set: { value = max(minValue, $0) }
+                set: { value = min(maxValue, max(minValue, $0)) }
             ), format: .number)
                 .textFieldStyle(.plain)
                 .focused($focused)

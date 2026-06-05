@@ -67,6 +67,10 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
+        // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
+        // 否则系统暗夜标题栏（更浅的灰）盖在设计稿 #101012 之上 —— 即「chrome 还是系统默认
+        // 暗夜配色」的根因。与 workspace / SFTP 窗口一致。
+        .windowStyle(.hiddenTitleBar)
 
         // 密钥管理 —— 单实例独立窗口（设计稿 keys.jsx）。从 Welcome 工具栏或
         // 新建服务器表单的「打开密钥管理…」用 openWindow(id:"keys") 打开。
@@ -77,6 +81,8 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
         }
         .modelContainer(modelContainer)
+        // 同上：隐藏系统标题栏，让密钥管理窗口走自绘扁平 chrome（KeyManagerView 顶部自绘标题栏）。
+        .windowStyle(.hiddenTitleBar)
 
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
@@ -153,6 +159,8 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
                 .environment(appUpdater)
         }
+        // 同其它窗口：隐藏系统标题栏，让设置窗走自绘扁平 chrome（SettingsView 顶部自绘标题栏）。
+        .windowStyle(.hiddenTitleBar)
         .commands {
             AppInfoCommands()
         }

@@ -16,6 +16,49 @@ nonisolated struct TransferProgress: Sendable, Equatable {
     let bytesTotal: Int64
 }
 
+/// 控制真实传输进度回调频率：首个数据块立即上报，后续按时间节流，完成必达。
+nonisolated struct TransferProgressEmitter: Sendable {
+    private let totalBytes: Int64
+    private let minimumInterval: TimeInterval
+    private var lastEmittedBytes: Int64?
+    private var lastEmittedAt: Date?
+    private var emittedNonZero = false
+
+    init(totalBytes: Int64, minimumInterval: TimeInterval = 0.25) {
+        self.totalBytes = max(0, totalBytes)
+        self.minimumInterval = max(0, minimumInterval)
+    }
+
+    mutating func shouldEmit(bytesDone: Int64, at now: Date = Date()) -> Bool {
+        let upperBound = totalBytes > 0 ? totalBytes : Int64.max
+        let clampedBytes = min(max(0, bytesDone), upperBound)
+        guard let lastEmittedBytes else {
+            record(bytesDone: clampedBytes, at: now)
+            return true
+        }
+        guard clampedBytes > lastEmittedBytes else { return false }
+        if clampedBytes > 0, !emittedNonZero {
+            record(bytesDone: clampedBytes, at: now)
+            return true
+        }
+        if totalBytes > 0, clampedBytes >= totalBytes {
+            record(bytesDone: clampedBytes, at: now)
+            return true
+        }
+        if let lastEmittedAt, now.timeIntervalSince(lastEmittedAt) >= minimumInterval {
+            record(bytesDone: clampedBytes, at: now)
+            return true
+        }
+        return false
+    }
+
+    private mutating func record(bytesDone: Int64, at date: Date) {
+        lastEmittedBytes = bytesDone
+        lastEmittedAt = date
+        if bytesDone > 0 { emittedNonZero = true }
+    }
+}
+
 // MARK: - SFTPProviding
 
 /// `FileBrowserModel` 和文件预览层依赖的 SFTP 抽象 —— 便于用 `MockSFTP` 单测。

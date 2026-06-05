@@ -14,7 +14,9 @@ struct ProvidersSettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Divider()
+            // 设计稿 settings.jsx：左列 borderRight 1px。用 UD.border 实色描边，
+            // 取代系统 Divider（与 KeyManagerView 一致）。
+            Rectangle().fill(UD.border).frame(width: 1)
             detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -27,14 +29,35 @@ struct ProvidersSettingsView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: $selectedID) {
-                ForEach(providers) { p in
-                    row(p).tag(p.id)
-                }
-            }
-            .listStyle(.sidebar)
+            // 设计稿 settings.jsx：列头「已配置」（10.5pt、UD.text4、大写、字距 0.6）。
+            Text("已配置")
+                .font(.system(size: 10.5, weight: .medium))
+                .tracking(0.6)
+                .textCase(.uppercase)
+                .foregroundStyle(UD.text4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
 
-            Divider()
+            // 自绘扁平列表（取代 .listStyle(.sidebar) 的半透明侧边栏材质底——后者
+            // 正是「侧边栏背景不对」的来源）。坐在 UD.bg 上，行用头像 tile + 名称 +
+            // 模型，选中 / hover 用 UD.rowSelected / UD.rowHover。与 KeyManagerView 同构。
+            ScrollView {
+                LazyVStack(spacing: 1) {
+                    ForEach(providers) { p in
+                        ProviderRow(provider: p, selected: p.id == selectedID)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectedID = p.id }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+            }
+
+            // 设计稿 settings.jsx 列底栏：borderTop 1px + padding 6 + 间距 4 的
+            // 幽灵 +/− 按钮。用 UD.border 实色描边取代系统 Divider，与列右描边一致。
+            Rectangle().fill(UD.border).frame(height: 1)
 
             HStack(spacing: 4) {
                 UDIconButton(systemImage: "plus") { addProvider() }
@@ -46,25 +69,11 @@ struct ProvidersSettingsView: View {
 
                 Spacer()
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(6)
         }
         .frame(width: 220)
-    }
-
-    private func row(_ p: AIProvider) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(p.name).font(.body)
-            HStack(spacing: 6) {
-                Text(p.kind.displayName)
-                Text("·")
-                Text(p.model.isEmpty ? "未设置模型" : p.model)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 4)
+        // 列整体坐在 UD.bg 上（与设计稿一致：列无独立底色，仅靠 borderRight 区隔）。
+        .background(UD.bg)
     }
 
     // MARK: - 右列
@@ -108,5 +117,44 @@ struct ProvidersSettingsView: View {
         modelContext.delete(p)
         try? modelContext.save()
         selectedID = providers.first?.id
+    }
+}
+
+/// 设计稿 settings.jsx 列表行：22×22 accent 头像 tile（首字母）+ 名称（12.5pt medium）
+/// + 模型（11pt mono、UD.text3、省略号）。选中 = UD.rowSelected 底，hover = UD.rowHover。
+private struct ProviderRow: View {
+    let provider: AIProvider
+    let selected: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(provider.name.prefix(1).uppercased())
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(UD.accent)
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5).fill(UD.accent.opacity(0.10)))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.accent.opacity(0.20)))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(provider.name)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                Text(provider.model.isEmpty ? "未设置模型" : provider.model)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(selected ? UD.rowSelected : (hovering ? UD.rowHover : Color.clear))
+        )
+        .onHover { hovering = $0 }
     }
 }

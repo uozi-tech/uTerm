@@ -31,6 +31,8 @@ struct PaneView: View {
     let onTabDrop: @MainActor @Sendable (_ sourceTab: UUID, _ zone: PaneDropZone) -> Void
     /// 文件 buffer 落点：把 `sourceBuffer` 作为新窗格插到本窗格旁边。
     let onFileDrop: @MainActor @Sendable (_ sourceBuffer: UUID, _ zone: PaneDropZone) -> Void
+    /// 文件窗格里的不可预览提示下载入口。来源于 Workspace 共享的 FilePreviewModel。
+    var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
     /// Workspace 级同步 drop 入口。
     let onWorkspaceDrop: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
     /// 头部「关闭窗格」按钮。
@@ -228,16 +230,7 @@ struct PaneView: View {
 
     @ViewBuilder
     private func fileBufferBody(_ buffer: FileBuffer) -> some View {
-        switch buffer.kind {
-        case .code(let lang):
-            CodeBody(buffer: buffer, language: LanguageDetector.grammarId(for: lang))
-        case .markdown:
-            MarkdownBody(buffer: buffer)
-        case .image:
-            ImageBody(buffer: buffer)
-        case .plainText:
-            CodeBody(buffer: buffer, language: "")
-        }
+        PreviewBufferBody(buffer: buffer, onDownload: onDownloadFile)
     }
 
     private func connect() async {

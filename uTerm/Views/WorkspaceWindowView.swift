@@ -17,10 +17,13 @@ struct WorkspaceWindowView: View {
     /// 大文件确认 / 阻断 sheet 的状态（Spec 2A §1.5 / §7）。
     @State private var largeFileConfirm: LargeFileConfirm?
     @State private var blockedFile: BlockedFile?
+    @State private var palette = CommandPaletteModel()
     /// 用于把全局 CommandGroup 通知限定到当前 key window —— 多窗口下避免后台窗口
     /// 也被切换。`.controlActiveState` 在窗口为 key 时为 `.key`。
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     init(windowID: WorkspaceWindowID?) {
         self.windowID = windowID
@@ -140,6 +143,7 @@ struct WorkspaceWindowView: View {
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
+        .commandPalette(model: palette) { workspaceCommandItems(server: server) }
         .task {
             // 仅首次执行：载入本窗口的持久化布局，无则开一个默认终端标签。
             // 在原 workspace 实例上 mutate（不再替换实例）—— SFTPSidebar 的
@@ -156,6 +160,7 @@ struct WorkspaceWindowView: View {
             } else {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
+            await workspace.connectSharedSFTP(profile: server, modelContainer: modelContext.container)
             if workspace.fileBrowserModel.state == .browsing {
                 await workspace.filePreviewModel.loadRestoredBuffersIfNeeded()
             }
@@ -253,6 +258,63 @@ struct WorkspaceWindowView: View {
             providers: providers,
             activeProviderIDString: activeProviderIDString))
         // .frame(minWidth:) 在 body 根（见上）。
+    }
+
+    /// 工作区窗口的命令项：主机（连接=当前工作区开新 tab）/ 最近文件 / 命令 / 设置深链。
+    @MainActor
+    private func workspaceCommandItems(server: ServerProfile) -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+
+        // 主机：连接 = 在当前工作区开新 tab
+        for p in profiles.sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) {
+            let id = p.id
+            let name = p.name.isEmpty ? p.host : p.name
+            items.append(CommandPaletteItem(
+                id: "host.\(id.uuidString)", kind: .host,
+                title: name, detail: "\(p.username)@\(p.host)",
+                hint: "连接", group: p.group) {
+                    workspace.openServer(profileID: id, title: name)
+                })
+        }
+
+        // 文件（最近）：stat 取真实 size/mtime 后走既有 .openRemoteFile 大文件门
+        for entry in workspace.filePreviewModel.recents {
+            let path = entry.remotePath
+            items.append(CommandPaletteItem(
+                id: "file.\(path)", kind: .file,
+                title: (path as NSString).lastPathComponent, detail: path,
+                hint: "打开", group: "最近") {
+                    let browser = workspace.fileBrowserModel
+                    Task { @MainActor in
+                        guard let sftp = browser.sftpProvider,
+                              let stat = try? await sftp.stat(path) else { return }
+                        NotificationCenter.default.post(
+                            name: .openRemoteFile, object: nil,
+                            userInfo: ["path": path, "size": stat.size, "mtime": stat.mtime])
+                    }
+                })
+        }
+
+        // 命令
+        items.append(CommandPaletteItem(
+            id: "cmd.splitPane", kind: .command,
+            title: "新建终端窗格", detail: "在当前工作区分屏", hint: "⇧⌘D", group: nil) {
+                workspace.activeTab?.splitFocusedPane(direction: .vertical)
+            })
+        items.append(CommandPaletteItem(
+            id: "cmd.closeTab", kind: .command,
+            title: "关闭当前 tab", detail: "", hint: "⌘W", group: nil) {
+                if let id = workspace.activeTabID { workspace.closeTab(id) }
+            })
+        items.append(CommandPaletteItem(
+            id: "cmd.newHost", kind: .command,
+            title: "新建主机…", detail: "创建一台新服务器", hint: "↵", group: nil) {
+                openWindow(id: "welcome")
+            })
+
+        // 设置
+        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        return items
     }
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）

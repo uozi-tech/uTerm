@@ -22,14 +22,21 @@ struct KeyManagerView: View {
     private var selected: SSHKey? { keys.first { $0.id == selectedID } }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar.frame(width: 260)
-            Rectangle().fill(UD.border).frame(width: 1)
-            detailPane.frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            KeysTitleBar()
+            HStack(spacing: 0) {
+                sidebar.frame(width: 260)
+                Rectangle().fill(UD.border).frame(width: 1)
+                detailPane.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(minWidth: 820, minHeight: 560)
+        // 自绘扁平 chrome：透明系统标题栏 + full-size content + 不透明 #101012 底，
+        // 让位红绿灯由 KeysTitleBar 顶部预留。取代 WorkspaceWindowAppearance（保留系统
+        // 暗夜标题栏）——后者正是「chrome 还是系统默认暗夜配色」的来源。
+        .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowAppearance())
+        .background(WorkspaceWindowChrome(serverName: "密钥管理"))
         .overlay { deleteConfirmOverlay }
         .alert("导入失败", isPresented: Binding(
             get: { importErrorText != nil },
@@ -276,5 +283,34 @@ private struct KeyAvatar: View {
             .frame(width: size, height: size)
             .overlay(Image(systemName: "key.fill")
                 .font(.system(size: size * 0.45)).foregroundStyle(tint))
+    }
+}
+
+/// 密钥管理窗口自绘扁平标题栏（对齐工作区 / SFTP 的自绘 chrome）：左侧让位窗口红绿灯
+/// （~68pt），居中钥匙图标 + "密钥管理"。40px 扁平 UD.panel 条 + 底部 1px 描边。
+/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿 #101012 之上。
+private struct KeysTitleBar: View {
+    var body: some View {
+        ZStack {
+            HStack(spacing: 9) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(UD.accent)
+                Text("密钥管理")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+            }
+            HStack(spacing: 0) {
+                Color.clear.frame(width: 68)   // 让位窗口红绿灯
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+        }
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
+        .background(WindowDragHandle())
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
     }
 }

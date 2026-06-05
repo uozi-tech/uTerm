@@ -132,7 +132,10 @@ struct AssistantView: View {
         } label: {
             UDModelPillLabel(modelPillLabel)
         }
-        .menuStyle(.borderlessButton)
+        // .button + plain 渲染完整自定义 label（含蓝点 + 末尾 ▾ + 描边胶囊）；
+        // .borderlessButton 会把自定义 label 压扁成纯文本 + 前置系统箭头。
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
     }
@@ -339,7 +342,8 @@ struct AssistantView: View {
                     StreamingCaret()
                 }
             }
-            .padding(isUser ? 10 : 0)
+            .padding(.vertical, isUser ? 10 : 0)
+            .padding(.horizontal, isUser ? 12 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isUser ? UD.fillFaint : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 9))

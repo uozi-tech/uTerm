@@ -11,6 +11,8 @@ struct TabContentView: View {
     /// 文件 buffer 拖到当前 tab 的某个 pane 时触发。
     let onDropFile: @MainActor @Sendable (_ sourceBuffer: UUID, _ targetPane: UUID,
                                           _ zone: PaneDropZone) -> Void
+    /// 文件 pane 中不可预览提示的下载入口。
+    var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
     /// Workspace 级拖拽源。
     let workspaceDragSource: WorkspaceDragSource?
     /// 窗格拖拽开始时通知 workspace 登记源。
@@ -67,6 +69,7 @@ struct TabContentView: View {
                     onFileDrop: { sourceBuffer, zone in
                         onDropFile(sourceBuffer, paneID, zone)
                     },
+                    onDownloadFile: onDownloadFile,
                     onWorkspaceDrop: { zone in
                         onDropDragSource(paneID, zone)
                     },

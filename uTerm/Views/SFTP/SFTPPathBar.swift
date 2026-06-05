@@ -111,7 +111,7 @@ struct SFTPPathBar: View {
     // MARK: 过滤
 
     private var filterField: some View {
-        UDSearchField(text: $query, width: 200)
+        UDSearchField(text: $query, width: 200, showsHotkeyChip: false)
     }
 
     // MARK: 操作菜单

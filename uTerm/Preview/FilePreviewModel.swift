@@ -28,6 +28,20 @@ final class FilePreviewModel {
         case noop
     }
 
+    enum PreviewDownloadError: LocalizedError {
+        case providerUnavailable
+        case missingBuffer
+
+        var errorDescription: String? {
+            switch self {
+            case .providerUnavailable:
+                return "SFTP 通道未就绪"
+            case .missingBuffer:
+                return "文件缓冲区不存在"
+            }
+        }
+    }
+
     private let recentsStore: RecentFilesStore
     /// 工厂：每次取一个最新的 SFTP provider（由 WorkspaceModel 注入；
     /// 共享 FileBrowserModel 的 SFTP 会话）。
@@ -91,6 +105,11 @@ final class FilePreviewModel {
             return
         }
 
+        if let reason = Self.unsupportedPreviewReason(forPath: path) {
+            buf.state = .failed(reason)
+            return
+        }
+
         await load(buf, failIfProviderMissing: true)
     }
 
@@ -139,6 +158,11 @@ final class FilePreviewModel {
             return
         }
 
+        if let reason = Self.unsupportedPreviewReason(forPath: buf.remotePath) {
+            buf.state = .failed(reason)
+            return
+        }
+
         guard let sftp = sftpProvider() else {
             if failIfProviderMissing {
                 buf.state = .failed("SFTP 通道未就绪")
@@ -148,13 +172,7 @@ final class FilePreviewModel {
 
         do {
             let data = try await sftp.download(remotePath: buf.remotePath)
-            switch buf.kind {
-            case .image:
-                buf.imageData = data
-                if let img = NSImage(data: data) { buf.imageSize = img.size }
-            default:
-                buf.text = String(decoding: data, as: UTF8.self)
-            }
+            guard Self.applyDownloadedData(data, to: buf) else { return }
             // mtime 未外部提供时，stat 获取真实值，供后续 save() 冲突检测
             if buf.mtimeWhenLoaded == nil {
                 buf.mtimeWhenLoaded = (try? await sftp.stat(buf.remotePath))?.mtime
@@ -169,6 +187,16 @@ final class FilePreviewModel {
         } catch {
             buf.state = .failed("\(error)")
         }
+    }
+
+    func download(_ buffer: FileBuffer) async throws -> Data {
+        guard buffers.contains(where: { $0.id == buffer.id }) else {
+            throw PreviewDownloadError.missingBuffer
+        }
+        guard let sftp = sftpProvider() else {
+            throw PreviewDownloadError.providerUnavailable
+        }
+        return try await sftp.download(remotePath: buffer.remotePath)
     }
 
     @discardableResult
@@ -256,6 +284,7 @@ final class FilePreviewModel {
         case .image: return .noop
         case .code, .markdown, .plainText: break
         }
+        guard case .loaded = buf.state else { return .noop }
         guard buf.isDirty else { return .noop }
         guard let sftp = sftpProvider() else { return .failed("SFTP 通道未就绪") }
 
@@ -290,7 +319,7 @@ final class FilePreviewModel {
         guard let sftp = sftpProvider() else { return }
         do {
             let data = try await sftp.download(remotePath: buf.remotePath)
-            buf.text = String(decoding: data, as: UTF8.self)
+            guard Self.applyDownloadedData(data, to: buf) else { return }
             let stat = try? await sftp.stat(buf.remotePath)
             buf.mtimeWhenLoaded = stat?.mtime
             buf.isDirty = false
@@ -387,4 +416,56 @@ final class FilePreviewModel {
         case .plainText:      return "text"
         }
     }
+
+    private static func applyDownloadedData(_ data: Data, to buf: FileBuffer) -> Bool {
+        switch buf.kind {
+        case .image:
+            guard let img = NSImage(data: data) else {
+                buf.imageData = nil
+                buf.imageSize = .zero
+                buf.state = .failed("图片无法解码，不支持预览。请下载到本地后使用外部应用打开。")
+                return false
+            }
+            buf.imageData = data
+            buf.imageSize = img.size
+        case .code, .markdown, .plainText:
+            guard let text = previewableText(from: data) else {
+                buf.text = ""
+                buf.state = .failed("检测到二进制内容，不支持预览。请下载到本地后使用外部应用打开。")
+                return false
+            }
+            buf.text = text
+        }
+        return true
+    }
+
+    private static func previewableText(from data: Data) -> String? {
+        guard !containsBinaryControlByte(data),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text
+    }
+
+    private static func containsBinaryControlByte(_ data: Data) -> Bool {
+        data.contains { byte in
+            byte == 0 || byte < 0x09 || (byte > 0x0D && byte < 0x20)
+        }
+    }
+
+    private static func unsupportedPreviewReason(forPath path: String) -> String? {
+        let ext = ((path as NSString).lastPathComponent as NSString)
+            .pathExtension
+            .lowercased()
+        guard unsupportedPreviewExtensions.contains(ext) else { return nil }
+        return "此文件类型不支持预览。请下载到本地后使用外部应用打开。"
+    }
+
+    private static let unsupportedPreviewExtensions: Set<String> = [
+        "db", "db3", "sqlite", "sqlite3", "sqlite-shm", "sqlite-wal",
+        "db-shm", "db-wal", "db-journal", "mdb", "accdb",
+        "bin", "exe", "dll", "dylib", "so", "a", "o",
+        "class", "jar", "war", "pyc", "pyo", "wasm",
+        "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar"
+    ]
 }

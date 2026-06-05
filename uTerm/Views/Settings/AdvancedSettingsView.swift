@@ -11,6 +11,7 @@ struct AdvancedSettingsView: View {
     @AppStorage("sshConnectTimeout") private var connectTimeout: Int = 30
     @AppStorage("sshHostKeyPolicy")  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
     @AppStorage("logLevel")          private var logLevelRaw: String = LogLevel.info.rawValue
+    @AppStorage("sftpMaxConcurrentTransfers") private var maxConcurrentUploads: Int = 4
 
     private var hostKeyPolicyBinding: Binding<SSHHostKeyPolicy> {
         Binding(
@@ -36,6 +37,14 @@ struct AdvancedSettingsView: View {
                             hint: hostKeyHint) {
                     UDSegmented(selection: hostKeyPolicyBinding,
                                 options: SSHHostKeyPolicy.allCases.map { ($0, $0.localizedLabel) })
+                }
+            }
+
+            SettingsGroup(title: "文件传输") {
+                SettingsRow(label: "并发上传数",
+                            hint: "SFTP 同时上传的文件数上限（1–64）。超出的文件排队，随槽位空出依次开始。改动对新开始的传输生效。") {
+                    SettingsNumberField(value: $maxConcurrentUploads,
+                                        width: 80, minValue: 1, maxValue: 64, suffix: "个")
                 }
             }
 

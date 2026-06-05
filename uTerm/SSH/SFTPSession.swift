@@ -102,20 +102,23 @@ actor SFTPSession: SFTPProviding {
         do {
             let chunk = 32 * 1024
             var offset = 0
-            var lastPct = 0
-            onProgress?(TransferProgress(bytesDone: 0, bytesTotal: total))
+            var progressEmitter = TransferProgressEmitter(totalBytes: total)
+            func emitProgress(_ bytesDone: Int64) {
+                if progressEmitter.shouldEmit(bytesDone: bytesDone) {
+                    onProgress?(TransferProgress(bytesDone: bytesDone, bytesTotal: total))
+                }
+            }
+            emitProgress(0)
             while offset < data.count {
+                try Task.checkCancellation()
                 let end = min(offset + chunk, data.count)
                 var buffer = ByteBuffer()
                 buffer.writeBytes(data[offset..<end])
                 try await file.write(buffer, at: UInt64(offset))
                 offset = end
-                let pct = total > 0 ? Int(Int64(offset) * 100 / total) : 0
-                if pct != lastPct {
-                    onProgress?(TransferProgress(bytesDone: Int64(offset), bytesTotal: total))
-                    lastPct = pct
-                }
+                emitProgress(Int64(offset))
             }
+            emitProgress(total)
             try await file.close()
         } catch {
             try? await file.close()
@@ -132,23 +135,23 @@ actor SFTPSession: SFTPProviding {
             var data = Data()
             let chunk: UInt32 = 32 * 1024
             var offset: UInt64 = 0
-            var lastPct = 0
-            onProgress?(TransferProgress(bytesDone: 0, bytesTotal: total))
+            var progressEmitter = TransferProgressEmitter(totalBytes: total)
+            func emitProgress(_ bytesDone: Int64) {
+                if progressEmitter.shouldEmit(bytesDone: bytesDone) {
+                    onProgress?(TransferProgress(bytesDone: bytesDone, bytesTotal: total))
+                }
+            }
+            emitProgress(0)
             while true {
+                try Task.checkCancellation()
                 let buf = try await file.read(from: offset, length: chunk)
                 let n = buf.readableBytes
                 if n == 0 { break }
                 data.append(contentsOf: buf.readableBytesView)
                 offset += UInt64(n)
-                let pct = total > 0 ? Int(Int64(offset) * 100 / total) : 0
-                if pct != lastPct {
-                    onProgress?(TransferProgress(bytesDone: Int64(offset), bytesTotal: total))
-                    lastPct = pct
-                }
+                emitProgress(Int64(offset))
             }
-            if total > 0 {
-                onProgress?(TransferProgress(bytesDone: Int64(data.count), bytesTotal: total))
-            }
+            emitProgress(Int64(data.count))
             try await file.close()
             return data
         } catch {

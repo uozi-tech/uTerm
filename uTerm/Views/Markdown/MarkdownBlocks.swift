@@ -127,7 +127,8 @@ private struct MDInlineView: View {
     let style: MarkdownStyle
     var body: some View {
         Text(attributed(node))
-            .foregroundStyle(style.textSecondary)
+            .foregroundStyle(style.bodyColor)
+            .lineSpacing(style.lineSpacing)
     }
 
     private func attributed(_ node: Markup) -> AttributedString {

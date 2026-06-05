@@ -112,7 +112,7 @@ struct SFTPTitleBar: View {
             }
             .padding(.horizontal, 8)
         }
-        .frame(height: 40)
+        .frame(height: 38)
         .frame(maxWidth: .infinity)
         // WindowDragHandle 既画 UD.panel 实色底，又充当窗口拖动手柄（窗口 chrome 已关
         // isMovableByWindowBackground）。其上的按钮 / 红绿灯更靠前，点击不落到手柄。

@@ -20,9 +20,11 @@ struct PreviewArea: View {
             previewBody
             PreviewStatusRow(model: model)
         }
-        // 预览区主体即编辑器（EditorTheme.background = VS Code #1F1F1F）；铺同色，
-        // tab 条 / 状态行以 UD.panel 叠在其上，编辑器正文无缝。
-        .background(Color(nsColor: EditorTheme.background))
+        // 预览区底色对齐设计稿 = UD.bg（#101012）：空态 / 最近打开 / 图片棋盘
+        // 边距等非编辑器区域都落在这层深底上。真实代码编辑器（CodeEditTextView）
+        // 自带 EditorTheme.background（#1F1F1F）的 NSView 覆在其上，故代码正文外观不变，
+        // 仅编辑器以外的留白从灰底回归设计稿深底。
+        .background(UD.bg)
     }
 
     private var previewBody: some View {
@@ -117,7 +119,9 @@ private struct PreviewPanelView: View {
     @ViewBuilder
     private var content: some View {
         if let buffer = model.buffer(forPanel: panelID) {
-            PreviewBufferBody(buffer: buffer)
+            PreviewBufferBody(buffer: buffer, onDownload: { buffer in
+                try await model.download(buffer)
+            })
         } else {
             EmptyBody(model: model)
         }

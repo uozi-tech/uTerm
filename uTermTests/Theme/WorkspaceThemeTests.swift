@@ -18,11 +18,11 @@ final class WorkspaceThemeTests: XCTestCase {
 
     func test_bgNSColor_resolves_dark_and_light() {
         XCTAssertTrue(near(srgb(WS.bgNSColor, .darkAqua), 16/255, 16/255, 18/255), "dark = #101012")
-        XCTAssertTrue(near(srgb(WS.bgNSColor, .aqua), 0xED/255, 0xEE/255, 0xF1/255), "light = #EDEEF1")
+        XCTAssertTrue(near(srgb(WS.bgNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
     }
 
     func test_panelNSColor_resolves_dark_and_light() {
         XCTAssertTrue(near(srgb(WS.panelNSColor, .darkAqua), 23/255, 23/255, 26/255), "dark = #17171A")
-        XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
+        XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 0xF6/255, 0xF6/255, 0xF3/255), "light = #F6F6F3")
     }
 }

@@ -6,6 +6,12 @@ import SwiftData
 @MainActor
 @Observable
 final class FileBrowserModel {
+    typealias SFTPConnector = @MainActor (
+        _ profile: ServerProfile,
+        _ modelContainer: ModelContainer,
+        _ hostKeyRelay: HostKeyChallengeRelay
+    ) async throws -> any SFTPProviding
+
     enum State: Equatable {
         case idle, connecting, browsing
         case failed(String)
@@ -25,12 +31,16 @@ final class FileBrowserModel {
 
     enum TransferDirection: Sendable, Equatable { case up, down }
 
-    /// 进行中的单次传输。空闲为 nil → 状态栏不渲染进度区。
-    struct TransferState: Equatable, Sendable {
+    /// 队列中的一次传输（上传或下载）。值类型，驱动传输 Dock / 列表。
+    struct TransferItem: Identifiable, Equatable, Sendable {
+        enum Status: Sendable, Equatable { case queued, active, done, failed }
+        let id: UUID
         let fileName: String
         let direction: TransferDirection
         var bytesDone: Int64
         var bytesTotal: Int64
+        var speedBytesPerSec: Double
+        var status: Status
     }
 
     private(set) var state: State = .idle
@@ -163,9 +173,30 @@ final class FileBrowserModel {
 
     private var provider: (any SFTPProviding)?
     private(set) var transientError: String?
-    /// 进行中的传输（仅 standalone SFTP 窗口使用；侧边栏不写）。
-    private(set) var transfer: TransferState?
+    /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
+    private(set) var transfers: [TransferItem] = []
+
+    /// 每个传输的不可展示状态：数据来源、取消句柄、测速采样点。
+    /// MainActor 隔离，用 class 便于原地改可变字段。
+    private final class TransferContext {
+        enum Source { case uploadURL(URL); case uploadData(Data); case download }
+        let source: Source
+        var cancel: (() -> Void)?
+        var lastSampleTime: Date?
+        var lastSampleBytes: Int64 = 0
+        init(source: Source) { self.source = source }
+    }
+    private var contexts: [UUID: TransferContext] = [:]
+
+    /// 最大并发上传数（用户设置；默认 4，钳 1…64）。下载不计入此上限。
+    static var maxConcurrentUploads: Int {
+        let raw = UserDefaults.standard.object(forKey: "sftpMaxConcurrentTransfers") as? Int ?? 4
+        return min(64, max(1, raw))
+    }
+    private static let transferSpeedSampleInterval: TimeInterval = 0.10
+
     private var restoredInitialPath: String?
+    private let sftpConnector: SFTPConnector
 
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
@@ -174,9 +205,12 @@ final class FileBrowserModel {
         state == .browsing || restoredInitialPath != nil ? currentPath : nil
     }
 
-    init() {}
+    init(sftpConnector: @escaping SFTPConnector = FileBrowserModel.makeLiveSFTPProvider) {
+        self.sftpConnector = sftpConnector
+    }
 
     init(testProvider: any SFTPProviding, startPath: String) {
+        self.sftpConnector = { _, _, _ in testProvider }
         self.provider = testProvider
         self.currentPath = startPath
         self.state = .browsing
@@ -194,20 +228,8 @@ final class FileBrowserModel {
                 state = .idle
             }
         }
-        let keychain = KeychainStore()
         do {
-            let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
-            var jumpAuth: ResolvedAuth?
-            if let jump = profile.jumpHost {
-                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-            }
-            let verifier = HostKeyVerifier(modelContainer: modelContainer)
-            let approver = hostKeyRelay.makeApprover()
-            let connected = try await SSHClientFactory.connect(
-                profile: SSHConnection.ProfileSnapshot(profile),
-                auth: auth, jumpHostAuth: jumpAuth,
-                hostKeyVerifier: verifier, hostKeyApprover: approver)
-            let session = try await SFTPSession(connected: connected)
+            let session = try await sftpConnector(profile, modelContainer, hostKeyRelay)
             provider = session
             if let restoredInitialPath {
                 currentPath = restoredInitialPath
@@ -219,6 +241,26 @@ final class FileBrowserModel {
         } catch {
             state = .failed("\(error)")
         }
+    }
+
+    private static func makeLiveSFTPProvider(
+        profile: ServerProfile,
+        modelContainer: ModelContainer,
+        hostKeyRelay: HostKeyChallengeRelay
+    ) async throws -> any SFTPProviding {
+        let keychain = KeychainStore()
+        let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
+        var jumpAuth: ResolvedAuth?
+        if let jump = profile.jumpHost {
+            jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
+        }
+        let verifier = HostKeyVerifier(modelContainer: modelContainer)
+        let approver = hostKeyRelay.makeApprover()
+        let connected = try await SSHClientFactory.connect(
+            profile: SSHConnection.ProfileSnapshot(profile),
+            auth: auth, jumpHostAuth: jumpAuth,
+            hostKeyVerifier: verifier, hostKeyApprover: approver)
+        return try await SFTPSession(connected: connected)
     }
 
     func restoreCurrentPath(_ path: String) {
@@ -351,64 +393,194 @@ final class FileBrowserModel {
         try await provider.removeDirectory(path)
     }
 
-    func uploadWithProgress(fileName: String, data: Data) async {
-        guard let provider else { return }
-        let total = Int64(data.count)
-        transfer = TransferState(fileName: fileName, direction: .up, bytesDone: 0, bytesTotal: total)
-        do {
-            try await provider.upload(data: data, toRemotePath: Self.join(currentPath, fileName)) { [weak self] p in
-                Task { @MainActor in
-                    guard let self, var t = self.transfer else { return }
-                    t.bytesDone = p.bytesDone; t.bytesTotal = p.bytesTotal
-                    self.transfer = t
-                }
-            }
-            await refresh()
-        } catch { transientError = "上传失败：\(error)" }
-        transfer = nil
+    // MARK: - 传输队列
+
+    /// 入队多个本地文件上传（文件选择器 / 拖放）。目录跳过。
+    /// 懒读：文件数据在槽位激活时再读，避免一次性把全部排队文件读入内存。
+    func enqueueUploads(_ urls: [URL]) {
+        for url in urls where !url.hasDirectoryPath {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 }
+            let id = UUID()
+            transfers.append(TransferItem(
+                id: id, fileName: url.lastPathComponent, direction: .up,
+                bytesDone: 0, bytesTotal: Int64(size ?? 0),
+                speedBytesPerSec: 0, status: .queued))
+            contexts[id] = TransferContext(source: .uploadURL(url))
+        }
+        pumpQueue()
     }
 
-    @discardableResult
-    func uploadLocalFiles(_ urls: [URL]) async -> Int {
-        var uploadedCount = 0
-        for url in urls where !url.hasDirectoryPath {
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer {
-                if didAccess {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            do {
-                let data = try await Task.detached(priority: .userInitiated) {
+    /// 入队一个内存数据上传（供测试 / 程序化上传）。
+    func enqueueUpload(fileName: String, data: Data) {
+        let id = UUID()
+        transfers.append(TransferItem(
+            id: id, fileName: fileName, direction: .up,
+            bytesDone: 0, bytesTotal: Int64(data.count),
+            speedBytesPerSec: 0, status: .queued))
+        contexts[id] = TransferContext(source: .uploadData(data))
+        pumpQueue()
+    }
+
+    /// 调度：把 .queued 上传提升为 .active，直到活动上传数达到上限。下载不计入。
+    private func pumpQueue() {
+        let limit = Self.maxConcurrentUploads
+        var active = transfers.filter { $0.direction == .up && $0.status == .active }.count
+        for idx in transfers.indices where active < limit {
+            guard transfers[idx].direction == .up, transfers[idx].status == .queued else { continue }
+            startUpload(id: transfers[idx].id)
+            active += 1
+        }
+    }
+
+    private func startUpload(id: UUID) {
+        guard let idx = transfers.firstIndex(where: { $0.id == id }),
+              let ctx = contexts[id], let provider else { return }
+        transfers[idx].status = .active
+        let remotePath = Self.join(currentPath, transfers[idx].fileName)
+        let source = ctx.source
+        let task = Task { [weak self] in
+            await self?.runUpload(id: id, source: source, remotePath: remotePath, provider: provider)
+        }
+        ctx.cancel = { task.cancel() }
+    }
+
+    private func runUpload(id: UUID, source: TransferContext.Source,
+                           remotePath: String, provider: any SFTPProviding) async {
+        do {
+            let data: Data
+            switch source {
+            case .uploadData(let d): data = d
+            case .uploadURL(let url):
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                data = try await Task.detached(priority: .userInitiated) {
                     try Data(contentsOf: url)
                 }.value
-                await uploadWithProgress(fileName: url.lastPathComponent, data: data)
-                uploadedCount += 1
-            } catch {
-                transientError = "上传失败：\(error)"
+            case .download:
+                return
             }
+            try Task.checkCancellation()
+            updateTransfer(id) { $0.bytesTotal = Int64(data.count) }
+            try await provider.upload(data: data, toRemotePath: remotePath) { [weak self] p in
+                Task { @MainActor in self?.applyProgress(id: id, p) }
+            }
+            finishTransfer(id, status: .done)
+            await refresh()
+        } catch is CancellationError {
+            removeTransfer(id)
+        } catch {
+            finishTransfer(id, status: .failed)
         }
-        return uploadedCount
+        contexts[id]?.cancel = nil
+        pumpQueue()
     }
 
-    /// 下载到内存并返回（保存面板由视图层处理）。带进度。
+    /// 下载到内存并返回（保存面板由视图层处理）。登记为 .down 传输项，可在 Dock 取消。
     func downloadWithProgress(entry: RemoteEntry) async -> Data? {
         guard let provider, !entry.isDirectory else { return nil }
-        let total = Int64(entry.size ?? 0)
-        transfer = TransferState(fileName: entry.name, direction: .down, bytesDone: 0, bytesTotal: total)
-        defer { transfer = nil }
-        do {
-            return try await provider.download(remotePath: Self.join(currentPath, entry.name)) { [weak self] p in
-                Task { @MainActor in
-                    guard let self, var t = self.transfer else { return }
-                    t.bytesDone = p.bytesDone; t.bytesTotal = p.bytesTotal
-                    self.transfer = t
+        let id = UUID()
+        transfers.append(TransferItem(
+            id: id, fileName: entry.name, direction: .down,
+            bytesDone: 0, bytesTotal: Int64(entry.size ?? 0),
+            speedBytesPerSec: 0, status: .active))
+        contexts[id] = TransferContext(source: .download)
+        let remotePath = Self.join(currentPath, entry.name)
+
+        enum Outcome { case data(Data); case cancelled; case failed }
+        let task = Task { () -> Outcome in
+            do {
+                let data = try await provider.download(remotePath: remotePath) { [weak self] p in
+                    Task { @MainActor in self?.applyProgress(id: id, p) }
                 }
-            }
-        } catch {
-            transientError = "下载失败：\(error)"
-            return nil
+                return .data(data)
+            } catch is CancellationError { return .cancelled }
+            catch { return .failed }
         }
+        contexts[id]?.cancel = { task.cancel() }
+
+        switch await task.value {
+        case .data(let d):
+            finishTransfer(id, status: .done); contexts[id]?.cancel = nil; return d
+        case .cancelled:
+            removeTransfer(id); return nil
+        case .failed:
+            finishTransfer(id, status: .failed); contexts[id]?.cancel = nil
+            transientError = "下载失败"; return nil
+        }
+    }
+
+    /// 取消一个传输。排队 / 完成 / 失败 → 直接移除该行；活动 → 取消其 Task（runner 捕获后移除）。
+    func cancelTransfer(_ id: TransferItem.ID) {
+        guard let item = transfers.first(where: { $0.id == id }) else { return }
+        switch item.status {
+        case .queued, .done, .failed: removeTransfer(id)
+        case .active: contexts[id]?.cancel?()
+        }
+    }
+
+    /// 全部取消：清空所有进行中（排队 + 活动）的传输。
+    func cancelAllActiveTransfers() {
+        let ids = transfers.filter { $0.status == .queued || $0.status == .active }.map(\.id)
+        for id in ids { cancelTransfer(id) }
+    }
+
+    /// 清除已完成 / 失败的传输行。
+    func clearFinishedTransfers() {
+        let ids = transfers.filter { $0.status == .done || $0.status == .failed }.map(\.id)
+        for id in ids { contexts[id] = nil }
+        transfers.removeAll { $0.status == .done || $0.status == .failed }
+    }
+
+    /// 重试失败的上传（重新入队，复用原数据源）。下载不支持重试。
+    func retryTransfer(_ id: TransferItem.ID) {
+        guard let idx = transfers.firstIndex(where: { $0.id == id }),
+              transfers[idx].direction == .up, transfers[idx].status == .failed,
+              contexts[id] != nil else { return }
+        transfers[idx].status = .queued
+        transfers[idx].bytesDone = 0
+        transfers[idx].speedBytesPerSec = 0
+        pumpQueue()
+    }
+
+    private func updateTransfer(_ id: UUID, _ mutate: (inout TransferItem) -> Void) {
+        guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&transfers[idx])
+    }
+
+    private func finishTransfer(_ id: UUID, status: TransferItem.Status) {
+        updateTransfer(id) {
+            $0.status = status
+            $0.speedBytesPerSec = 0
+            if status == .done { $0.bytesDone = $0.bytesTotal }
+        }
+    }
+
+    private func removeTransfer(_ id: UUID) {
+        transfers.removeAll { $0.id == id }
+        contexts[id] = nil
+    }
+
+    /// 进度回调：更新已传字节，按 ~100ms 采样计算平滑速率。
+    private func applyProgress(id: UUID, _ p: TransferProgress) {
+        guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        if let ctx = contexts[id] {
+            let now = Date()
+            if let last = ctx.lastSampleTime {
+                let dt = now.timeIntervalSince(last)
+                if dt >= Self.transferSpeedSampleInterval {
+                    let inst = Double(p.bytesDone - ctx.lastSampleBytes) / dt
+                    let prev = transfers[idx].speedBytesPerSec
+                    transfers[idx].speedBytesPerSec = max(0, prev <= 0 ? inst : prev * 0.6 + inst * 0.4)
+                    ctx.lastSampleTime = now
+                    ctx.lastSampleBytes = p.bytesDone
+                }
+            } else {
+                ctx.lastSampleTime = now
+                ctx.lastSampleBytes = p.bytesDone
+            }
+        }
+        transfers[idx].bytesDone = p.bytesDone
+        if transfers[idx].bytesTotal == 0 { transfers[idx].bytesTotal = p.bytesTotal }
     }
 
     func dispose() {

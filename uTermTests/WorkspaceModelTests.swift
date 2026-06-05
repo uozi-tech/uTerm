@@ -1,8 +1,15 @@
 import XCTest
+import SwiftData
 @testable import uTerm
 
 @MainActor
 final class WorkspaceModelTests: XCTestCase {
+    private func makeContext() throws -> ModelContext {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ServerProfile.self, configurations: config)
+        return ModelContext(container)
+    }
+
     func testOpenServerAddsActiveTab() {
         let ws = WorkspaceModel()
         let server = UUID()
@@ -44,6 +51,30 @@ final class WorkspaceModelTests: XCTestCase {
         let t3 = ws.openServer(profileID: UUID(), title: "c")
         ws.moveTab(fromID: t3.id, toIndex: 0)
         XCTAssertEqual(ws.tabs.map(\.id), [t3.id, t1.id, t2.id])
+    }
+
+    func testConnectSharedSFTPStartsFileBrowserConnectionForTelemetryOnWorkspaceOpen() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        let mock = MockSFTP(tree: ["/home/user": []])
+        var connectCount = 0
+        let browser = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            return mock
+        })
+        let ws = WorkspaceModel(fileBrowserModel: browser)
+
+        await ws.connectSharedSFTP(profile: server, modelContainer: context.container)
+
+        XCTAssertEqual(connectCount, 1)
+        XCTAssertEqual(ws.fileBrowserModel.state, .browsing)
+        XCTAssertNotNil(ws.fileBrowserModel.sftpProvider)
     }
 
     func testDropTabOntoActivePaneSplitsAndClosesSourceTab() {

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftData
 
 /// 整个终端工作区：有序标签 + 当前活动标签 + 三栏 UI 状态 + 左/右栏的内置 model。
 @MainActor
@@ -12,7 +13,7 @@ final class WorkspaceModel {
     var uiState = WorkspaceUIState()
 
     /// 左 sidebar 的 SFTP 浏览器 model；与 workspace 同生命周期。
-    let fileBrowserModel = FileBrowserModel()
+    let fileBrowserModel: FileBrowserModel
 
     /// 右 inspector 的 AI 助手 model；与 workspace 同生命周期，
     /// 避免 inspector toggle 时丢失 chat 历史。
@@ -31,7 +32,9 @@ final class WorkspaceModel {
 
     @ObservationIgnored private var dragEndPollTask: Task<Void, Never>?
 
-    init(windowID: WorkspaceWindowID? = nil) {
+    init(windowID: WorkspaceWindowID? = nil,
+         fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
+        self.fileBrowserModel = fileBrowserModel
         // 按 windowID 命名 recents 文件；windowID 为 nil（测试）走临时目录。
         let store: RecentFilesStore
         if let wid = windowID {
@@ -119,6 +122,10 @@ final class WorkspaceModel {
     /// 工具栏徽标与状态栏按此决定要不要渲染。
     func focusedTerminalSession() -> TerminalSession? {
         activeTab?.focusedPane?.session
+    }
+
+    func connectSharedSFTP(profile: ServerProfile, modelContainer: ModelContainer) async {
+        await fileBrowserModel.connect(profile: profile, modelContainer: modelContainer)
     }
 
     /// 新开一个标签连指定服务器，并设为活动标签。

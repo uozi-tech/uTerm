@@ -1,19 +1,13 @@
 // uTerm/Views/EmptyServersState.swift
 import SwiftUI
-import Combine
 
 /// 还没有任何服务器时的空态（设计稿 Variant A · EmptyA）。
 ///
 /// 居中构图：朦胧径向点阵 + 品牌微光打底 → ULogo（84）→「uTerm」字标（细体，
-/// 「Term」用品牌蓝）→ 等宽提示 `~ ssh user@host` + 闪烁光标 → 品牌蓝「新建主机」
+/// 「Term」用品牌蓝）→ 等宽提示 `~ ssh user@host` + 静态光标 → 品牌蓝「新建主机」
 /// 主按钮（⌘N 提示）→ 拖拽导入软提示。
 struct EmptyServersState: View {
     let onNewServer: () -> Void
-
-    @State private var caretOn = true
-
-    /// 光标闪烁节拍（设计稿 u-blink ≈ 1.1s steps，硬切而非渐变）。
-    private let blink = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -40,7 +34,6 @@ struct EmptyServersState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(UD.panel)
-        .onReceive(blink) { _ in caretOn.toggle() }
     }
 
     // MARK: pieces
@@ -60,7 +53,6 @@ struct EmptyServersState: View {
             Rectangle()
                 .fill(UD.accent)
                 .frame(width: 6, height: 13)
-                .opacity(caretOn ? 1 : 0)
         }
     }
 

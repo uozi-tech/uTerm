@@ -155,10 +155,31 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
             // WindowDragHandle 单独承担拖窗（见下）。
             window.isMovableByWindowBackground = false
             if !serverName.isEmpty { window.title = serverName }   // 供窗口菜单 / 调度中心
+            Self.centerTrafficLights(window)
             // 兜底：清掉任何残留系统材质（正常情况下没有）。
             var root: NSView? = window.contentView
             while let parent = root?.superview { root = parent }
             if let root { Self.deglass(root) }
+        }
+
+        /// 自绘标题栏统一高度——所有自绘标题栏（workspace / SFTP / welcome / keys / settings）
+        /// 都用 38，红绿灯按此居中后与栏内自绘元素同处一条水平线。
+        static let selfDrawnTitleBarHeight: CGFloat = 38
+
+        /// 把窗口红绿灯垂直居中到自绘标题栏高度。系统默认把它们按标准 ~28px 标题栏居中，
+        /// 比 38px 自绘栏里居中的图标 / 文字高约 5px，造成「红绿灯与自绘元素不在一条线」
+        /// （user 反馈）。这里按 38px 重设其 `frame.origin.y`（幂等，每次 `apply()` 重设）。
+        private static func centerTrafficLights(_ window: NSWindow) {
+            for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                guard let button = window.standardWindowButton(type),
+                      let container = button.superview else { continue }
+                // 容错：superview 必须是标准标题栏视图（高约 28）。若不是（高度异常），
+                // 不动按钮——避免把红绿灯算到窗口中间/外面。
+                guard container.bounds.height < 60 else { continue }
+                // AppKit 左下原点：container 顶边贴窗口顶，从顶往下 height/2 处放按钮中心。
+                let y = container.bounds.height - selfDrawnTitleBarHeight / 2 - button.frame.height / 2
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: y))
+            }
         }
 
         private static func deglass(_ view: NSView) {

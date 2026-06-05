@@ -287,6 +287,9 @@ struct DesignKitGallery: View {
                                  summary: "1.2 GB / 4.0 GB · 30.0%",
                                  color: UD.mMem, samples: Self.sparkSamples)
             }
+            Group(label: "命令面板 · Command Palette") {
+                CommandPaletteGalleryDemo()
+            }
         }
     }
 
@@ -386,6 +389,30 @@ private extension DesignKitGallery {
                 }
             }
         }
+    }
+}
+
+private struct CommandPaletteGalleryDemo: View {
+    @State private var query = ""
+
+    private var sections: [CommandPaletteSection] {
+        groupCommandPalette([
+            CommandPaletteItem(id: "h1", kind: .host, title: "demo-server",
+                               detail: "root@203.0.113.10", hint: "连接") {},
+            CommandPaletteItem(id: "h2", kind: .host, title: "api-prod-01",
+                               detail: "deploy@10.0.4.18", hint: "连接") {},
+            CommandPaletteItem(id: "c1", kind: .command, title: "新建主机…",
+                               detail: "创建一台新服务器", hint: "⌘N") {},
+            CommandPaletteItem(id: "f1", kind: .file, title: "main.go",
+                               detail: "~/src/main.go", hint: "打开") {},
+            CommandPaletteItem(id: "s1", kind: .setting, title: "设置 · 终端",
+                               detail: "字体、颜色、行距", hint: "↵") {},
+        ])
+    }
+
+    var body: some View {
+        UDCommandPalette(query: $query, sections: sections,
+                         selectedID: sections.first?.items.first?.id)
     }
 }
 

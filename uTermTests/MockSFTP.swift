@@ -16,6 +16,30 @@ actor MockSFTP: SFTPProviding {
     /// 内存 blob 存储：path → (data, mtime)。write / read / stat 均走此存储。
     private var blobStore: [String: (Data, Date)] = [:]
 
+    /// 当为 true 时，带进度的 upload/download 会挂起直到 `release()`，并在挂起期间
+    /// 响应 Task 取消（用于测试并发上限 / 取消 / 完成时机）。默认 false = 立即完成。
+    var blockTransfers = false
+    private var released = false
+    /// 这些远程路径的 upload 会抛错（测试失败态）。
+    var failingUploadPaths: Set<String> = []
+    private var uploadPartialProgress: (bytesDone: Int64, delayNanoseconds: UInt64)?
+
+    func release() { released = true }
+    func setBlockTransfers(_ v: Bool) { blockTransfers = v }
+    func setFailingUploadPaths(_ paths: Set<String>) { failingUploadPaths = paths }
+    func setUploadPartialProgress(bytesDone: Int64, delayNanoseconds: UInt64) {
+        uploadPartialProgress = (bytesDone, delayNanoseconds)
+    }
+
+    /// 当 blockTransfers 时挂起直到 release；其间每 2ms 检查一次取消。
+    private func awaitReleaseIfBlocking() async throws {
+        guard blockTransfers else { return }
+        while !released {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+    }
+
     init(tree: [String: [RemoteEntry]] = [:]) {
         self.tree = tree
     }
@@ -64,6 +88,10 @@ actor MockSFTP: SFTPProviding {
         try await download(remotePath: path)
     }
 
+    func downloadedPaths() -> [String] {
+        downloads
+    }
+
     /// 遥测 exec 的可控返回值（默认空串 = 无遥测）。
     var execOutput: String = ""
     func exec(_ command: String) async throws -> String { execOutput }
@@ -77,12 +105,27 @@ actor MockSFTP: SFTPProviding {
 
     func upload(data: Data, toRemotePath: String,
                 onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
-        onProgress?(TransferProgress(bytesDone: Int64(data.count), bytesTotal: Int64(data.count)))
+        let total = Int64(data.count)
+        onProgress?(TransferProgress(bytesDone: 0, bytesTotal: total))
+        if failingUploadPaths.contains(toRemotePath) {
+            throw NSError(domain: "MockSFTP", code: 9,
+                          userInfo: [NSLocalizedDescriptionKey: "upload failed: \(toRemotePath)"])
+        }
+        if let uploadPartialProgress {
+            try await Task.sleep(nanoseconds: uploadPartialProgress.delayNanoseconds)
+            onProgress?(TransferProgress(
+                bytesDone: min(uploadPartialProgress.bytesDone, total),
+                bytesTotal: total))
+        }
+        try await awaitReleaseIfBlocking()
+        onProgress?(TransferProgress(bytesDone: total, bytesTotal: total))
         uploads.append((toRemotePath, data.count))
     }
     func download(remotePath: String,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data {
-        let d = try await download(remotePath: remotePath)
+        let d = try await download(remotePath: remotePath)   // records `downloads`
+        onProgress?(TransferProgress(bytesDone: 0, bytesTotal: Int64(d.count)))
+        try await awaitReleaseIfBlocking()
         onProgress?(TransferProgress(bytesDone: Int64(d.count), bytesTotal: Int64(d.count)))
         return d
     }

@@ -30,6 +30,33 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertFalse(m.buffers.first?.isDirty ?? true)
     }
 
+    func test_openDatabaseFileMarksUnpreviewableWithoutDownloading() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/var/app/state.db", data: Data([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]))
+
+        await m.open(path: "/var/app/state.db", fileSize: 4096, mtime: nil)
+
+        guard case .failed(let message) = m.buffers.first?.state else {
+            return XCTFail("expected database file to be unpreviewable")
+        }
+        XCTAssertTrue(message.contains("不支持预览"))
+        let downloaded = await mock.downloadedPaths()
+        XCTAssertEqual(downloaded, [])
+    }
+
+    func test_openBinaryContentMarksUnpreviewableInsteadOfDecodingText() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/tmp/payload.unknown", data: Data([0x00, 0xff, 0x01, 0x02]))
+
+        await m.open(path: "/tmp/payload.unknown", fileSize: 4, mtime: nil)
+
+        guard case .failed(let message) = m.buffers.first?.state else {
+            return XCTFail("expected binary content to be unpreviewable")
+        }
+        XCTAssertTrue(message.contains("二进制"))
+        XCTAssertEqual(m.buffers.first?.text, "")
+    }
+
     func test_save_writesToSFTPAndClearsDirty() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/x.swift", data: Data("a".utf8))

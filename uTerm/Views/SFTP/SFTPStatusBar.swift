@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// 状态栏（28px）：远程路径（mono）+ 文件夹/文件计数 +（仅传输时）真实进度条。
+/// 状态栏（28px）：远程路径（mono）+ 文件夹/文件计数 + 传输 Dock。
 /// WS 暗色调色板，对齐设计稿 `pages/sftp.jsx` 的 `SftpStatusBar`。
 struct SFTPStatusBar: View {
     let path: String
     let entries: [RemoteEntry]
     let selectedCount: Int
-    let transfer: FileBrowserModel.TransferState?
+    let transfers: [FileBrowserModel.TransferItem]
+    let onCancel: (UUID) -> Void
+    let onCancelAll: () -> Void
+    let onClearFinished: () -> Void
+    let onRetry: (UUID) -> Void
 
     private var folderCount: Int { entries.filter(\.isDirectory).count }
     private var fileCount: Int { entries.count - folderCount }
@@ -22,32 +26,13 @@ struct SFTPStatusBar: View {
                 + (selectedCount > 0 ? " · 已选择 \(selectedCount) 项" : ""))
                 .font(.system(size: 11)).foregroundStyle(UD.text4).lineLimit(1)
             Spacer(minLength: 12)
-            if let t = transfer { transferView(t) }
+            SFTPTransfersDock(transfers: transfers,
+                              onCancel: onCancel, onCancelAll: onCancelAll,
+                              onClearFinished: onClearFinished, onRetry: onRetry)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
         .frame(height: 28)
         .background(UD.panel)
-    }
-
-    @ViewBuilder
-    private func transferView(_ t: FileBrowserModel.TransferState) -> some View {
-        let frac = t.bytesTotal > 0 ? min(1, max(0, Double(t.bytesDone) / Double(t.bytesTotal))) : 0
-        HStack(spacing: 9) {
-            Image(systemName: t.direction == .up ? "arrow.up" : "arrow.down")
-                .font(.system(size: 11, weight: .medium)).foregroundStyle(UD.accent)
-            Text("\(t.direction == .up ? "上传" : "下载") \(t.fileName)")
-                .font(UD.mono(11)).foregroundStyle(UD.text2).lineLimit(1)
-            if t.bytesTotal > 0 {
-                UDLinearBar(progress: frac, height: 5)
-                    .frame(width: 110)
-                Text("\(Int(frac * 100))%")
-                    .font(UD.mono(11)).foregroundStyle(UD.text3)
-                    .frame(width: 34, alignment: .trailing)
-                Text(SFTPFormat.bytes(t.bytesTotal)).font(UD.mono(11)).foregroundStyle(UD.text4)
-            } else {
-                UDIndeterminateBar()
-                    .frame(width: 72)
-            }
-        }
     }
 }

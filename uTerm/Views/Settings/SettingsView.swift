@@ -22,6 +22,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            SettingsTitleBar()
             SettingsTabStrip(selection: tabBinding)
 
             // 内容区
@@ -37,6 +38,36 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 720, height: 480)
+        // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #101012）。其余主窗
+        // （工作区 / SFTP / 表单 / 密钥）皆已 .background(UD.bg)，设置窗补齐对齐。
+        // 自绘扁平 chrome：透明系统标题栏 + full-size content，红绿灯让位由 SettingsTitleBar
+        // 预留。取代原「系统原生标题栏」——后者暗夜下是更浅的系统灰，与设计稿 #101012 不符。
+        .ignoresSafeArea(.container, edges: .top)
+        .background(UD.bg)
+        .background(WorkspaceWindowChrome(serverName: "设置"))
+    }
+}
+
+/// 设置窗口自绘扁平标题栏（对齐其它窗口的自绘 chrome）：左侧让位窗口红绿灯（~68pt），
+/// 居中 "设置"。38px 扁平 UD.panel 条 + 底部 1px 描边。替代 macOS 系统标题栏。
+private struct SettingsTitleBar: View {
+    var body: some View {
+        ZStack {
+            Text("设置")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(UD.text)
+            HStack(spacing: 0) {
+                Color.clear.frame(width: 68)   // 让位窗口红绿灯
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+        }
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
+        .background(WindowDragHandle())
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
     }
 }
 

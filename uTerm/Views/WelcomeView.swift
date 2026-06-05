@@ -8,6 +8,7 @@ struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openSettings) private var openSettings
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
 
     @AppStorage("startupBehavior")
@@ -18,6 +19,7 @@ struct WelcomeView: View {
     @State private var selectedProfileID: UUID?
     @State private var pendingDelete: ServerProfile?
     @State private var didApplyStartupBehavior = false
+    @State private var palette = CommandPaletteModel()
 
     private enum FormRoute: Identifiable {
         case new
@@ -57,6 +59,7 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            WelcomeTitleBar()
             WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
             HStack(spacing: 0) {
                 WelcomeSidebar(profiles: displayProfiles, filter: $filter)
@@ -65,8 +68,14 @@ struct WelcomeView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        .background(UD.panel)
+        // 自绘扁平窗口 chrome（透明系统标题栏 + full-size content + 不透明 #101012 底）。
+        // .ignoresSafeArea(.top) 把自绘标题栏顶进系统标题栏区，否则 macOS 仍在上面画
+        // 系统暗夜标题栏盖住自绘 header。与 SFTPWindowView 结构一致。
+        .ignoresSafeArea(.container, edges: .top)
+        .background(UD.bg)
+        .background(WorkspaceWindowChrome(serverName: "uTerm"))
         .disablesInitialAutoFocus()  // 不要开屏自动聚焦搜索框（macOS 默认会选中第一个文本框）
+        .commandPalette(model: palette) { welcomeCommandItems() }
         .sheet(item: $formRoute) { route in
             switch route {
             case .new:
@@ -144,6 +153,29 @@ struct WelcomeView: View {
 
     // MARK: actions
 
+    /// Welcome 窗口的命令项：主机（连接=开工作区窗）/ 新建主机 / 设置深链。
+    @MainActor
+    private func welcomeCommandItems() -> [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+        for p in allProfiles {
+            let id = p.id
+            let name = p.name.isEmpty ? p.host : p.name
+            items.append(CommandPaletteItem(
+                id: "host.\(id.uuidString)", kind: .host,
+                title: name, detail: "\(p.username)@\(p.host)",
+                hint: "连接", group: p.group) {
+                    openServer(p)
+                })
+        }
+        items.append(CommandPaletteItem(
+            id: "cmd.newHost", kind: .command,
+            title: "新建主机…", detail: "创建一台新服务器", hint: "⌘N", group: nil) {
+                formRoute = .new
+            })
+        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        return items
+    }
+
     private func openServer(_ profile: ServerProfile) {
         #if DEBUG
         // Mock / 空态下的行为对应假数据，拦截以免弹出无法解析的工作区窗口或误写真库。
@@ -217,5 +249,29 @@ struct WelcomeView: View {
         modelContext.delete(profile)
         try? modelContext.save()
         if selectedProfileID == profile.id { selectedProfileID = nil }
+    }
+}
+
+/// Welcome 窗口自绘扁平标题栏（对齐设计稿 `u-window.jsx` 的 `TitleBar`）：左侧让位
+/// 窗口红绿灯（~68pt），随后 "uTerm" 标识，36px 扁平 UD.panel 条 + 底部 1px 描边。
+/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿 #101012 之上。
+/// `WindowDragHandle` 既画实色底又充当窗口拖动手柄（红绿灯更靠前、点击不落到手柄）。
+struct WelcomeTitleBar: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            // 让位窗口红绿灯：系统红绿灯簇约占 ~x13–72，左对齐文字须躲到其右侧。
+            // 对齐设计稿 u-window.jsx TitleBar（14px 内边距 + 52px 灯 + 16px 间隙 ≈ 82）。
+            Color.clear.frame(width: 84)
+            Text("uTerm")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(UD.text2)
+            Spacer()
+        }
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
+        .background(WindowDragHandle())
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
     }
 }
