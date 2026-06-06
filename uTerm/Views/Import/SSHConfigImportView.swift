@@ -15,6 +15,7 @@ struct SSHConfigImportView: View {
     @State private var dir: URL?
     @State private var result = SSHConfigImporter.Result()
     @State private var pickError: String?
+    @State private var stagingRoot: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,14 +34,9 @@ struct SSHConfigImportView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "导入 SSH 配置"))
-        .onAppear {
-            if phase == .done {
-                phase = .pick
-                rows = []
-                selection = []
-                pickError = nil
-            }
-        }
+        .onAppear { consumeInboxOrResetIfDone() }
+        .onChange(of: ImportInbox.shared.serial) { _, _ in consumeInbox() }
+        .onDisappear { cleanupStaging() }
     }
 
     private var phaseSteps: some View {
@@ -155,6 +151,41 @@ struct SSHConfigImportView: View {
         guard let dir else { return }
         result = SSHConfigImporter(context: modelContext).run(rows: rows, selected: selection, dir: dir)
         phase = .done
+        cleanupStaging()  // run 已读完私钥，安全释放拷贝
+    }
+
+    // MARK: 拖放预载
+
+    /// 拖放把解析结果放进 ImportInbox：载入 rows + 默认勾选，直接进 review。
+    private func consumeInbox() {
+        guard let p = ImportInbox.shared.take() else { return }
+        cleanupStaging()  // 先删上一份未用的 staging
+        rows = p.rows
+        dir = p.dir
+        stagingRoot = p.stagingRoot
+        selection = Set(rows.filter { !$0.host.isWildcard && !$0.existing }.map(\.id))
+        pickError = nil
+        phase = .review
+    }
+
+    /// 首次打开：有 pending 就消费（窗口已开走 onChange）；否则若停在 done 则重置回 pick。
+    private func consumeInboxOrResetIfDone() {
+        if ImportInbox.shared.pending != nil {
+            consumeInbox()
+        } else if phase == .done {
+            phase = .pick
+            rows = []
+            selection = []
+            pickError = nil
+        }
+    }
+
+    /// 删除 staging（拖放路径才有；NSOpenPanel 路径 stagingRoot 恒 nil）。幂等。
+    private func cleanupStaging() {
+        if let r = stagingRoot {
+            try? FileManager.default.removeItem(at: r)
+            stagingRoot = nil
+        }
     }
 
     // MARK: done

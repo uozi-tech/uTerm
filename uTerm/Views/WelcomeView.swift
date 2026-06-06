@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import UniformTypeIdentifiers
 
 /// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
 /// sidebar + list 三层组合（Termius 风）。
@@ -21,6 +22,7 @@ struct WelcomeView: View {
     @State private var didApplyStartupBehavior = false
     @State private var didReconcileGroups = false
     @State private var palette = CommandPaletteModel()
+    @State private var isDropTargeted = false
 
     private enum FormRoute: Identifiable {
         case new
@@ -113,6 +115,26 @@ struct WelcomeView: View {
             didReconcileGroups = true
             GroupStore(context: modelContext).reconcile()
         }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleConfigDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(UD.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .padding(8)
+                    .overlay(alignment: .bottom) {
+                        Text("松开以导入 SSH 配置")
+                            .font(UD.caption).foregroundStyle(UD.accent)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(UD.panel, in: Capsule())
+                            .padding(.bottom, 24)
+                    }
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isDropTargeted)
     }
 
     @ViewBuilder
@@ -191,6 +213,66 @@ struct WelcomeView: View {
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
+    }
+
+    /// 拖入 config 文件或 ~/.ssh 目录 → 拷进容器 staging → 解析 → 经 ImportInbox 打开向导到 review。
+    /// 受理返回 true（实际处理异步）。沙箱：在源 URL 安全作用域内拷贝，之后只读容器内拷贝件。
+    private func handleConfigDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }) else { return false }
+
+        // 主线程先快照现有名字 + openWindow 动作，避免在后台回调里碰 @Query / 捕获整个 View。
+        let existingNames = Set(allProfiles.map(\.name))
+        let open = openWindow
+
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            guard let url = Self.fileURL(from: item) else { Self.failDrop("loadItem 未解出 fileURL"); return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("uTerm-ssh-import", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            do {
+                let staged = try SSHConfigDropStaging.stage(source: url, intoRoot: root)
+                guard let located = SSHConfigDropStaging.locateConfig(in: staged) else {
+                    try? FileManager.default.removeItem(at: root); Self.failDrop("locateConfig 失败/无 config"); return
+                }
+                let text = try String(contentsOf: located.config, encoding: .utf8)
+                let hosts = parseSSHConfig(text)
+                guard !hosts.isEmpty else {
+                    try? FileManager.default.removeItem(at: root); Self.failDrop("config 未解析出 Host"); return
+                }
+                let dir = located.dir
+                Task { @MainActor in
+                    let rows = SSHConfigImporter.plan(hosts, existingNames: existingNames)
+                    ImportInbox.shared.enqueue(.init(rows: rows, dir: dir, stagingRoot: root))
+                    open(id: "import")
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: root)
+                Self.failDrop("\(error)")
+            }
+        }
+        return true
+    }
+
+    /// loadItem 回调里把 item 解成 fileURL：可能是 URL，或 URL 的 dataRepresentation（非 bookmark）。
+    /// nonisolated：在 loadItem 的后台线程上调用，不能跨进主 actor。
+    nonisolated private static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL { return url }
+        if let data = item as? Data { return URL(dataRepresentation: data, relativeTo: nil) }
+        return nil
+    }
+
+    /// 拖放导入失败：记日志 + 提示音（在后台线程调用，故 nonisolated）。
+    nonisolated private static func failDrop(_ reason: String) {
+        // 包进 Task { @MainActor in }：日志与 NSSound.beep() 都要在主线程执行。
+        Task { @MainActor in
+            AppLogger.error("SSH config 拖放导入失败：\(reason)", category: "import")
+            NSSound.beep()
+        }
     }
 
     private func openServer(_ profile: ServerProfile) {
