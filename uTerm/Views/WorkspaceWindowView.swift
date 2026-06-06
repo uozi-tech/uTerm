@@ -324,6 +324,12 @@ struct WorkspaceWindowView: View {
                 openWindow(id: "groups")
             })
 
+        items.append(CommandPaletteItem(
+            id: "cmd.importConfig", kind: .command,
+            title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
+                openWindow(id: "import")
+            })
+
         // 设置
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())

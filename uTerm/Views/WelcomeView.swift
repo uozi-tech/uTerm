@@ -183,6 +183,11 @@ struct WelcomeView: View {
             title: "管理分组…", detail: "新建 / 重命名 / 删除分组", hint: "↵", group: nil) {
                 openWindow(id: "groups")
             })
+        items.append(CommandPaletteItem(
+            id: "cmd.importConfig", kind: .command,
+            title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
+                openWindow(id: "import")
+            })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items

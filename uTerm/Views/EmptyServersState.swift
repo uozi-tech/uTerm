@@ -8,6 +8,7 @@ import SwiftUI
 /// 主按钮（⌘N 提示）→ 拖拽导入软提示。
 struct EmptyServersState: View {
     let onNewServer: () -> Void
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ZStack {
@@ -57,9 +58,14 @@ struct EmptyServersState: View {
     }
 
     private var importHint: some View {
-        Text("或拖拽 \(Text("~/.ssh/config").font(.system(size: 11.5, design: .monospaced)).foregroundColor(UD.text3)) 到此处导入")
-            .font(.system(size: 11.5))
-            .foregroundColor(UD.text3.opacity(0.8))
+        Button {
+            openWindow(id: "import")
+        } label: {
+            Text("或拖拽 \(Text("~/.ssh/config").font(.system(size: 11.5, design: .monospaced)).foregroundColor(UD.text3)) 到此处导入")
+                .font(.system(size: 11.5))
+                .foregroundColor(UD.text3.opacity(0.8))
+        }
+        .buttonStyle(.plain)
     }
 }
 

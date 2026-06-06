@@ -93,6 +93,15 @@ struct uTermApp: App {
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
 
+        Window("导入 SSH 配置", id: "import") {
+            SSHConfigImportView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+        }
+        .modelContainer(modelContainer)
+        .windowStyle(.hiddenTitleBar)
+
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
             WorkspaceWindowView(windowID: windowID)
