@@ -11,6 +11,7 @@ struct FileBrowserContent: View {
     /// 列表容器是否持有键盘焦点。单击行时置 true，让方向键 / 回车导航生效。
     @FocusState private var browserFocused: Bool
     @State private var sortPopoverPresented = false
+    @State private var isDropTargeted = false
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
@@ -20,6 +21,8 @@ struct FileBrowserContent: View {
             header
             content
         }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: uploadDroppedFiles)
+        .overlay { uploadDropOverlay }
         .alert("操作失败", isPresented: Binding(
             get: { model.transientError != nil },
             set: { if !$0 { model.clearTransientError() } }
@@ -27,6 +30,32 @@ struct FileBrowserContent: View {
             Button("好") { model.clearTransientError() }
         } message: {
             Text(model.transientError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private var uploadDropOverlay: some View {
+        if isDropTargeted {
+            if case .browsing = model.state {
+                ZStack {
+                    Rectangle().fill(UD.accent.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(UD.accent.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                        .padding(8)
+                    Label("上传到当前目录", systemImage: "arrow.up.doc.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(UD.text)
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(UD.bg.opacity(0.92), in: RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(UD.border.opacity(0.9))
+                        }
+                }
+                .allowsHitTesting(false)
+            }
         }
     }
 
@@ -303,6 +332,24 @@ struct FileBrowserContent: View {
         }
     }
 
+    private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        guard case .browsing = model.state else { return false }
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+        for provider in fileProviders {
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                guard let data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                Task { @MainActor [model] in
+                    model.enqueueUploads([url])
+                }
+            }
+        }
+        return true
+    }
+
     /// 行被激活（鼠标 tap / Space / Enter）：目录则进入，文件则发通知由
     /// PreviewArea 打开（Spec 2A §3.1）。
     private func activate(_ entry: RemoteEntry) {
@@ -360,17 +407,15 @@ struct FileBrowserContent: View {
         }
     }
 
+    /// 上传文件到当前目录：入队到 FileBrowserModel 的传输队列（`enqueueUploads`），
+    /// 进度 / 取消 / 重试统一在工作区状态栏的传输 Dock 呈现 —— 与独立 SFTP 窗口
+    /// 复用同一套上传列表组件（懒读 + 并发上限 + 逐项进度）。支持多选。
     private func uploadFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            guard let data = try? await Task.detached(priority: .userInitiated, operation: {
-                try Data(contentsOf: url)
-            }).value else { return }
-            await model.upload(fileName: url.lastPathComponent, data: data)
-        }
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        model.enqueueUploads(panel.urls)
     }
 }
