@@ -31,7 +31,7 @@ struct uTermApp: App {
         do {
             return try ModelContainer(
                 for: ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
-                     ChatSession.self, ChatMessageRecord.self,
+                     ChatSession.self, ChatMessageRecord.self, ServerGroup.self,
                 configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
@@ -82,6 +82,15 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         // 同上：隐藏系统标题栏，让密钥管理窗口走自绘扁平 chrome（KeyManagerView 顶部自绘标题栏）。
+        .windowStyle(.hiddenTitleBar)
+
+        Window("分组管理", id: "groups") {
+            GroupsManagerView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+        }
+        .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
 
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。

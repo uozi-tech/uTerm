@@ -7,6 +7,8 @@ import SwiftUI
 struct UDSidebarRow: View {
     /// 前导 SF Symbol 名。
     let systemImage: String
+    /// 图标颜色（nil = 默认 UD.text3）。
+    let iconColor: Color?
     /// 行标题。
     let label: String
     /// 尾部计数徽标（nil 不显示）。
@@ -21,9 +23,11 @@ struct UDSidebarRow: View {
         label: String,
         count: Int? = nil,
         selected: Bool = false,
-        action: @escaping () -> Void = {}
+        action: @escaping () -> Void = {},
+        iconColor: Color? = nil
     ) {
         self.systemImage = systemImage
+        self.iconColor = iconColor
         self.label = label
         self.count = count
         self.selected = selected
@@ -37,7 +41,7 @@ struct UDSidebarRow: View {
             HStack(spacing: 8) {
                 Image(systemName: systemImage)
                     .font(UD.font(12.5))
-                    .foregroundStyle(UD.text3)
+                    .foregroundStyle(iconColor ?? UD.text3)
                     .frame(width: 14)
 
                 Text(label)

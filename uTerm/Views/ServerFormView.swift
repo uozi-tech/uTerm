@@ -212,6 +212,9 @@ struct ServerFormView: View {
         profile.username = username
         let trimmedGroup = group.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.group = trimmedGroup.isEmpty ? nil : trimmedGroup
+        if let g = profile.group {
+            GroupStore(context: modelContext).ensure(name: g)
+        }
         profile.authMethod = authMethod
 
         if authMethod == .password {

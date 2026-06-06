@@ -1,9 +1,12 @@
 // uTerm/Views/WelcomeSidebar.swift
 import SwiftUI
+import SwiftData
 
 struct WelcomeSidebar: View {
     let profiles: [ServerProfile]
     @Binding var filter: ServerFilter
+    @Query private var groups: [ServerGroup]
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let counts = ServerFilter.counts(for: profiles, query: filter.query)
@@ -17,12 +20,24 @@ struct WelcomeSidebar: View {
                 if (counts[.recent] ?? 0) > 0 {
                     navRow(.recent, icon: "clock", title: "最近", counts: counts)
                 }
-                if !customGroups.isEmpty || (counts[.ungrouped] ?? 0) > 0 {
-                    UDSidebarSectionHeader("分组")
-                        .padding(.top, 14)
+                if !groups.isEmpty || (counts[.ungrouped] ?? 0) > 0 {
+                    HStack(spacing: 0) {
+                        UDSidebarSectionHeader("分组")
+                        Spacer()
+                        Button { openWindow(id: "groups") } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 11))
+                                .foregroundStyle(UD.text4)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 14)
+                        .help("管理分组")
+                    }
+                    .padding(.top, 14)
                 }
-                ForEach(customGroups, id: \.self) { g in
-                    navRow(.group(g), icon: "circle.fill", title: g, counts: counts)
+                ForEach(GroupStore.sortedForSidebar(groups), id: \.persistentModelID) { g in
+                    navRow(.group(g.name), icon: "circle.fill", title: g.name,
+                           counts: counts, iconColor: g.color)
                 }
                 if (counts[.ungrouped] ?? 0) > 0 {
                     navRow(.ungrouped, icon: "minus.circle", title: "未分组", counts: counts)
@@ -37,18 +52,9 @@ struct WelcomeSidebar: View {
         }
     }
 
-    /// 已有自定义分组名（去重、locale 排序）。
-    private var customGroups: [String] {
-        let set = Set(profiles.compactMap { p -> String? in
-            let g = p.group ?? ""
-            return g.isEmpty ? nil : g
-        })
-        return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
-
     @ViewBuilder
     private func navRow(_ section: NavSection, icon: String, title: String,
-                        counts: [NavSection: Int]) -> some View {
+                        counts: [NavSection: Int], iconColor: Color? = nil) -> some View {
         let count = counts[section] ?? 0
         let isActive = filter.section == section
         // 搜索时不命中的 section（除 allHosts 之外）半透明 + 禁点击
@@ -61,7 +67,8 @@ struct WelcomeSidebar: View {
             label: title,
             count: count,
             selected: isActive,
-            action: { filter.section = section }
+            action: { filter.section = section },
+            iconColor: iconColor
         )
         .padding(.horizontal, 8)
         .opacity(isDimmed ? 0.4 : 1.0)

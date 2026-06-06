@@ -318,6 +318,12 @@ struct WorkspaceWindowView: View {
                 openWindow(id: "welcome")
             })
 
+        items.append(CommandPaletteItem(
+            id: "cmd.manageGroups", kind: .command,
+            title: "管理分组…", detail: "新建 / 重命名 / 删除分组", hint: "↵", group: nil) {
+                openWindow(id: "groups")
+            })
+
         // 设置
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())

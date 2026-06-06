@@ -19,6 +19,7 @@ struct WelcomeView: View {
     @State private var selectedProfileID: UUID?
     @State private var pendingDelete: ServerProfile?
     @State private var didApplyStartupBehavior = false
+    @State private var didReconcileGroups = false
     @State private var palette = CommandPaletteModel()
 
     private enum FormRoute: Identifiable {
@@ -107,6 +108,11 @@ struct WelcomeView: View {
             didApplyStartupBehavior = true
             await applyStartupBehavior()
         }
+        .task {
+            guard !didReconcileGroups else { return }
+            didReconcileGroups = true
+            GroupStore(context: modelContext).reconcile()
+        }
     }
 
     @ViewBuilder
@@ -172,6 +178,11 @@ struct WelcomeView: View {
             title: "新建主机…", detail: "创建一台新服务器", hint: "⌘N", group: nil) {
                 formRoute = .new
             })
+        items.append(CommandPaletteItem(
+            id: "cmd.manageGroups", kind: .command,
+            title: "管理分组…", detail: "新建 / 重命名 / 删除分组", hint: "↵", group: nil) {
+                openWindow(id: "groups")
+            })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
@@ -211,6 +222,7 @@ struct WelcomeView: View {
             formRoute = .edit(profile)
         case .moveToGroup(let g):
             profile.group = g
+            if let g { GroupStore(context: modelContext).ensure(name: g) }
             try? modelContext.save()
         case .newGroup:
             promptForNewGroup(for: profile)
@@ -232,6 +244,7 @@ struct WelcomeView: View {
             let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty {
                 profile.group = name
+                GroupStore(context: modelContext).ensure(name: name)
                 try? modelContext.save()
             }
         }
