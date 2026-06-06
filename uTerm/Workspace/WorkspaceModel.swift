@@ -248,6 +248,17 @@ final class WorkspaceModel {
         return filePreviewModel.dropBuffer(bufferID, onto: targetPanelID, zone: zone)
     }
 
+    /// 从 `NSItemProvider` 载荷兜底投放文件 buffer。
+    /// SwiftUI 有时会在 workspace dragSource 刷新前先命中 drop target；
+    /// 这条路径让预览区不用依赖同步登记状态也能完成分屏。
+    @discardableResult
+    func dropFileBufferProviderPayload(_ bufferID: UUID,
+                                       ontoPreviewPanel targetPanelID: UUID,
+                                       zone: PaneDropZone) -> Bool {
+        defer { endDrag() }
+        return filePreviewModel.dropBuffer(bufferID, onto: targetPanelID, zone: zone)
+    }
+
     @discardableResult
     private func dropPane(_ sourcePaneID: UUID, onto targetPaneID: UUID,
                           zone: PaneDropZone) -> Bool {

@@ -11,6 +11,7 @@ struct UDCommandPalette: View {
     var onHover: (String) -> Void = { _ in }
     var onExecute: () -> Void = {}
     var onClose: () -> Void = {}
+    var isSearching: Bool = false
 
     @FocusState private var searchFocused: Bool
 
@@ -57,6 +58,9 @@ struct UDCommandPalette: View {
                 .onSubmit { onExecute() }
                 .onKeyPress(.upArrow)   { onMove(-1); return .handled }
                 .onKeyPress(.downArrow) { onMove(1);  return .handled }
+            if isSearching {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
+            }
             UDKbd("⌘K")
         }
         .padding(.horizontal, 16)
@@ -223,7 +227,7 @@ private struct CommandPaletteEmpty: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            (Text("没有匹配「") + Text(query).foregroundColor(UD.text2) + Text("」的结果"))
+            Text("没有匹配「\(Text(verbatim: query).foregroundColor(UD.text2))」的结果")
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text3)
             Text("试试 host、md、导入")

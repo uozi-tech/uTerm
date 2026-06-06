@@ -15,7 +15,7 @@ enum MockNameStyle: Hashable {
 /// 故上层每次现算即可、无需缓存。
 enum MockServerFactory {
     /// 锚定时间戳 2023-11-14T22:13:20Z。确定性，避免依赖 `Date()` 当前时刻。
-    private nonisolated(unsafe) static let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+    private nonisolated static let anchor = Date(timeIntervalSince1970: 1_700_000_000)
 
     /// 计数在内部钳到合法区间：serverCount 0...50；groupCount 0...6（0 → 全 nil）；
     /// pinnedCount / recentCount 0...serverCount（取前 N 条）。

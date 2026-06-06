@@ -95,6 +95,7 @@ actor MockSFTP: SFTPProviding {
     /// 遥测 exec 的可控返回值（默认空串 = 无遥测）。
     var execOutput: String = ""
     func exec(_ command: String) async throws -> String { execOutput }
+    func setExecOutput(_ s: String) { execOutput = s }
 
     func rename(_ path: String, to newPath: String) async throws {
         renames.append((path, newPath))

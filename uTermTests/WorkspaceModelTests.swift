@@ -210,6 +210,26 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(ws.filePreviewModel.panelBufferIDsInDisplayOrder, [buffer.id, buffer.id])
     }
 
+    func testDropFileBufferProviderPayloadOntoPreviewCreatesPreviewPanelWithoutDragSource() async {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        let tab = ws.openServer(profileID: server, title: "target")
+        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
+
+        guard let buffer = ws.filePreviewModel.buffers.first,
+              let panelID = ws.filePreviewModel.panelRoot?.firstLeafID else {
+            XCTFail("workspace should have a preview buffer and panel")
+            return
+        }
+
+        XCTAssertTrue(ws.dropFileBufferProviderPayload(buffer.id,
+                                                       ontoPreviewPanel: panelID,
+                                                       zone: .trailing))
+        XCTAssertNil(ws.dragSource)
+        XCTAssertEqual(tab.root.leafIDs.count, 1)
+        XCTAssertEqual(ws.filePreviewModel.panelBufferIDsInDisplayOrder, [buffer.id, buffer.id])
+    }
+
     func testSplittingFilePaneCopiesFileBuffer() {
         let ws = WorkspaceModel()
         let server = UUID()

@@ -143,7 +143,10 @@ struct WorkspaceWindowView: View {
         // host-key sheet 放在 NavigationSplitView 根，sidebar 折叠时也能弹（Fix #2）。
         // SFTPSidebar 不再自挂 sheet —— 二处同名 sheet 会互相抢占。
         .hostKeySheet(workspace.fileBrowserModel.hostKeyRelay)
-        .commandPalette(model: palette) { workspaceCommandItems(server: server) }
+        .commandPalette(model: palette,
+                        searchProvider: workspaceFileSearch()) {
+            workspaceCommandItems(server: server)
+        }
         .task {
             // 仅首次执行：载入本窗口的持久化布局，无则开一个默认终端标签。
             // 在原 workspace 实例上 mutate（不再替换实例）—— SFTPSidebar 的
@@ -334,6 +337,51 @@ struct WorkspaceWindowView: View {
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
+    }
+
+    /// 注入命令面板的异步文件搜索：query → 远程 find → 命令项（文件→预览、目录→进浏览器）。
+    @MainActor
+    private func workspaceFileSearch() -> (@MainActor (String) async -> [CommandPaletteItem]) {
+        let workspace = self.workspace
+        return { query in
+            let browser = workspace.fileBrowserModel
+            guard let sftp = browser.sftpProvider else { return [] }
+            // SFTP 把 "." 解析为会话起始目录（通常是家目录）；失败回落当前浏览路径。
+            let home = (try? await sftp.realPath(".")) ?? browser.currentPath
+            let hits = (try? await RemoteFileSearch.search(query: query, home: home, provider: sftp)) ?? []
+            return hits.map { Self.mapHitToItem($0, workspace: workspace) }
+        }
+    }
+
+    /// RemoteHit → 命令项。文件 id 与 recents 同（file.<path>）便于去重；目录 id 用 dir.<path>。
+    @MainActor
+    private static func mapHitToItem(_ hit: RemoteHit, workspace: WorkspaceModel) -> CommandPaletteItem {
+        let path = hit.path
+        let name = (path as NSString).lastPathComponent
+        if hit.isDirectory {
+            return CommandPaletteItem(
+                id: "dir.\(path)", kind: .file, title: name, detail: path,
+                hint: "进入", group: "目录") {
+                    let browser = workspace.fileBrowserModel
+                    // 显示左侧文件 sidebar（leftSidebarVisibility 是真实字段；.detailOnly = 隐藏）。
+                    // 先显示侧栏给即时反馈，再异步导航（导航完成后列表自然刷新）。
+                    workspace.uiState.leftSidebarVisibility = .all
+                    Task { @MainActor in await browser.navigate(toPath: path) }
+                }
+        } else {
+            return CommandPaletteItem(
+                id: "file.\(path)", kind: .file, title: name, detail: path,
+                hint: "打开", group: "文件") {
+                    let browser = workspace.fileBrowserModel
+                    Task { @MainActor in
+                        guard let sftp = browser.sftpProvider,
+                              let stat = try? await sftp.stat(path) else { return }
+                        NotificationCenter.default.post(
+                            name: .openRemoteFile, object: nil,
+                            userInfo: ["path": path, "size": stat.size, "mtime": stat.mtime])
+                    }
+                }
+        }
     }
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）

@@ -4,6 +4,7 @@ import SwiftUI
 /// `itemsBuilder` 每次开面板时重新构建，保证主机/最近文件是最新的。
 struct CommandPaletteHost: ViewModifier {
     let model: CommandPaletteModel
+    var searchProvider: (@MainActor (String) async -> [CommandPaletteItem])?
     let itemsBuilder: () -> [CommandPaletteItem]
 
     func body(content: Content) -> some View {
@@ -20,6 +21,7 @@ struct CommandPaletteHost: ViewModifier {
             if model.isPresented {
                 model.close()
             } else {
+                model.searchProvider = searchProvider
                 model.open(items: itemsBuilder())
             }
         }
@@ -46,7 +48,8 @@ struct CommandPaletteHost: ViewModifier {
                 onMove: { model.moveSelection(by: $0) },
                 onHover: { model.hover(itemID: $0) },
                 onExecute: { model.executeSelected() },
-                onClose: { model.close() }
+                onClose: { model.close() },
+                isSearching: model.isSearching
             )
             .frame(maxWidth: 560)
             .padding(.horizontal, 24)
@@ -57,8 +60,10 @@ struct CommandPaletteHost: ViewModifier {
 
 extension View {
     /// 在窗口根挂命令面板。`model` 由窗口持有（`@State`），`items` 在开面板时求值。
+    /// `searchProvider`（可选）：query → 异步搜索结果，并入面板（如工作区文件搜索）。
     func commandPalette(model: CommandPaletteModel,
+                        searchProvider: (@MainActor (String) async -> [CommandPaletteItem])? = nil,
                         items: @escaping () -> [CommandPaletteItem]) -> some View {
-        modifier(CommandPaletteHost(model: model, itemsBuilder: items))
+        modifier(CommandPaletteHost(model: model, searchProvider: searchProvider, itemsBuilder: items))
     }
 }

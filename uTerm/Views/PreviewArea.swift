@@ -11,6 +11,9 @@ struct PreviewArea: View {
     let onBeginDrag: @MainActor @Sendable (_ bufferID: UUID) -> Void
     let onDropFileDragSource: @MainActor @Sendable (_ targetPanelID: UUID,
                                                      _ zone: PaneDropZone) -> Bool
+    let onDropFileProviderPayload: @MainActor @Sendable (_ targetPanelID: UUID,
+                                                         _ bufferID: UUID,
+                                                         _ zone: PaneDropZone) -> Bool
     /// 请求关闭某 buffer（含脏文件确认，由上层提供）。
     let onRequestClose: (UUID) -> Void
 
@@ -46,7 +49,10 @@ struct PreviewArea: View {
                 showsHeader: showsHeader,
                 isFocused: model.focusedPanelID == panelID,
                 workspaceDragSource: workspaceDragSource,
-                onDropFile: { zone in onDropFileDragSource(panelID, zone) }))
+                onDropFile: { zone in onDropFileDragSource(panelID, zone) },
+                onDropFileProviderPayload: { bufferID, zone in
+                    onDropFileProviderPayload(panelID, bufferID, zone)
+                }))
         case .split(let split):
             return AnyView(SplitContainerView(
                 direction: split.direction,
@@ -65,6 +71,8 @@ private struct PreviewPanelView: View {
     let isFocused: Bool
     let workspaceDragSource: WorkspaceDragSource?
     let onDropFile: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
+    let onDropFileProviderPayload: @MainActor @Sendable (_ bufferID: UUID,
+                                                         _ zone: PaneDropZone) -> Bool
 
     @State private var panelSize: CGSize = .zero
     @State private var hoverZone: PaneDropZone?
@@ -85,20 +93,8 @@ private struct PreviewPanelView: View {
             }
         )
         .overlay {
-            if fileDragActive, let hoverZone {
+            if let hoverZone {
                 PaneDropHighlight(zone: hoverZone)
-            }
-        }
-        .overlay {
-            if fileDragActive {
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-                    .onDrop(of: [.utermFileBufferID],
-                            delegate: PreviewPanelDropDelegate(
-                                bounds: CGRect(origin: .zero, size: panelSize),
-                                hoverZone: $hoverZone,
-                                onDrop: onDropFile))
             }
         }
         .overlay(
@@ -109,6 +105,12 @@ private struct PreviewPanelView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { model.selectPanel(panelID) }
+        .onDrop(of: [.utermFileBufferID],
+                delegate: PreviewPanelDropDelegate(
+                    bounds: CGRect(origin: .zero, size: panelSize),
+                    hoverZone: $hoverZone,
+                    onDrop: onDropFile,
+                    onProviderDrop: onDropFileProviderPayload))
         .onChange(of: workspaceDragSource) { _, source in
             if source == nil {
                 hoverZone = nil
@@ -160,13 +162,6 @@ private struct PreviewPanelView: View {
         }
     }
 
-    private var fileDragActive: Bool {
-        if case .fileBuffer = workspaceDragSource {
-            return true
-        }
-        return false
-    }
-
     private static func icon(for kind: FileKind) -> String {
         switch kind {
         case .code: return "doc.text"
@@ -181,6 +176,8 @@ private struct PreviewPanelDropDelegate: DropDelegate {
     let bounds: CGRect
     @Binding var hoverZone: PaneDropZone?
     let onDrop: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
+    let onProviderDrop: @MainActor @Sendable (_ bufferID: UUID,
+                                              _ zone: PaneDropZone) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.utermFileBufferID])
@@ -204,7 +201,20 @@ private struct PreviewPanelDropDelegate: DropDelegate {
         guard let zone = actionableZone(info) else {
             return false
         }
-        return onDrop(zone)
+        if onDrop(zone) {
+            return true
+        }
+
+        guard let provider = info.itemProviders(for: [.utermFileBufferID]).first else {
+            return false
+        }
+        FileBufferDragPayload.load(from: provider) { bufferID in
+            guard let bufferID else { return }
+            Task { @MainActor in
+                _ = onProviderDrop(bufferID, zone)
+            }
+        }
+        return true
     }
 
     private func updateHover(_ info: DropInfo) {

@@ -20,6 +20,11 @@ struct WorkspaceCenter: View {
                 onDropFileDragSource: { targetPanelID, zone in
                     workspace.dropDragSource(ontoPreviewPanel: targetPanelID, zone: zone)
                 },
+                onDropFileProviderPayload: { targetPanelID, bufferID, zone in
+                    workspace.dropFileBufferProviderPayload(bufferID,
+                                                            ontoPreviewPanel: targetPanelID,
+                                                            zone: zone)
+                },
                 onRequestClose: onRequestCloseBuffer)
                 .frame(minHeight: 120,
                        idealHeight: idealPreviewHeight)

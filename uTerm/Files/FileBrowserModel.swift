@@ -197,6 +197,12 @@ final class FileBrowserModel {
 
     private var restoredInitialPath: String?
     private let sftpConnector: SFTPConnector
+    @ObservationIgnored private var lastConnectionRequest: ConnectionRequest?
+
+    private struct ConnectionRequest {
+        let profile: ServerProfile
+        let modelContainer: ModelContainer
+    }
 
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
@@ -217,9 +223,18 @@ final class FileBrowserModel {
     }
 
     func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
+        lastConnectionRequest = ConnectionRequest(profile: profile, modelContainer: modelContainer)
+        await connectUsingLastRequest(force: false, initialPath: nil)
+    }
+
+    private func connectUsingLastRequest(force: Bool, initialPath: String?) async {
+        guard let lastConnectionRequest else { return }
         // 视图层 `.task(id:)` 会在视图重建时重新触发 connect；已连接/连接中则视为
         // no-op，不撕掉活动 SFTP 会话。仅 .idle（首次）/ .failed（重试）才继续。
-        guard state == .idle || { if case .failed = state { return true } else { return false } }() else { return }
+        guard force || state == .idle || Self.isFailed(state) else { return }
+        if force {
+            closeCurrentProvider()
+        }
         state = .connecting
         // 任务被取消（如 sidebar 折叠 / 窗口关闭）时把 .connecting 重置回 .idle，
         // 否则下一次 connect 被 guard 直接跳过、永远停在 spinner 上（Fix #7）。
@@ -229,16 +244,22 @@ final class FileBrowserModel {
             }
         }
         do {
-            let session = try await sftpConnector(profile, modelContainer, hostKeyRelay)
+            let session = try await sftpConnector(
+                lastConnectionRequest.profile,
+                lastConnectionRequest.modelContainer,
+                hostKeyRelay)
             provider = session
-            if let restoredInitialPath {
+            if let initialPath {
+                currentPath = initialPath
+            } else if let restoredInitialPath {
                 currentPath = restoredInitialPath
                 self.restoredInitialPath = nil
             } else {
                 currentPath = (try? await session.realPath(".")) ?? "/"
             }
-            await refresh()
+            await refresh(reconnectOnTransportFailure: false)
         } catch {
+            provider = nil
             state = .failed("\(error)")
         }
     }
@@ -270,14 +291,34 @@ final class FileBrowserModel {
     }
 
     func refresh() async {
-        guard let provider else { return }
+        await refresh(reconnectOnTransportFailure: true)
+    }
+
+    private func refresh(reconnectOnTransportFailure: Bool) async {
+        guard let provider else {
+            if reconnectOnTransportFailure {
+                _ = await reconnectPreservingCurrentPath()
+            }
+            return
+        }
         do {
             entries = try await provider.list(path: currentPath)
             state = .browsing
             transientError = nil
         } catch {
+            if reconnectOnTransportFailure,
+               Self.isRecoverableTransportError(error),
+               await reconnectPreservingCurrentPath() {
+                return
+            }
             state = .failed("\(error)")
         }
+    }
+
+    private func reconnectPreservingCurrentPath() async -> Bool {
+        guard lastConnectionRequest != nil else { return false }
+        await connectUsingLastRequest(force: true, initialPath: currentPath)
+        return state == .browsing
     }
 
     func navigate(into entry: RemoteEntry) async {
@@ -585,9 +626,7 @@ final class FileBrowserModel {
 
     func dispose() {
         hostKeyRelay.resolve(false)
-        let p = provider
-        provider = nil
-        Task { await p?.close() }
+        closeCurrentProvider()
     }
 
     /// 清除一次性错误（绑定到错误 alert 的关闭）。
@@ -609,5 +648,34 @@ final class FileBrowserModel {
         var comps = path.split(separator: "/", omittingEmptySubsequences: true)
         comps.removeLast()
         return comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+    }
+
+    private func closeCurrentProvider() {
+        let p = provider
+        provider = nil
+        Task { await p?.close() }
+    }
+
+    private static func isFailed(_ state: State) -> Bool {
+        if case .failed = state { return true }
+        return false
+    }
+
+    private static func isRecoverableTransportError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        let message = "\(error) \(nsError.localizedDescription)".lowercased()
+        return [
+            "i/o channel close",
+            "io channel close",
+            "channel closed",
+            "channel close",
+            "connection reset",
+            "connection closed",
+            "connection lost",
+            "broken pipe",
+            "network is unreachable",
+            "socket is not connected",
+            "not connected",
+        ].contains { message.contains($0) }
     }
 }

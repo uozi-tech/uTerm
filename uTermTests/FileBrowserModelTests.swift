@@ -1,8 +1,15 @@
 import XCTest
+import SwiftData
 @testable import uTerm
 
 @MainActor
 final class FileBrowserModelTests: XCTestCase {
+    private func makeContext() throws -> ModelContext {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ServerProfile.self, configurations: config)
+        return ModelContext(container)
+    }
+
     private func dir(_ names: [(String, Bool)]) -> [RemoteEntry] {
         names.map { RemoteEntry(name: $0.0,
                                 posixPermissions: $0.1 ? 0o040755 : 0o100644,
@@ -77,6 +84,47 @@ final class FileBrowserModelTests: XCTestCase {
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
         await model.refresh()
         guard case .failed = model.state else { return XCTFail("应为 .failed") }
+    }
+
+    func testRefreshReconnectsAfterClosedSFTPChannelAndKeepsPath() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        let first = MockSFTP(tree: [
+            "/home/user": dir([("logs", true)]),
+            "/home/user/logs": dir([("old.log", false)]),
+        ])
+        let second = MockSFTP(tree: [
+            "/home/user/logs": dir([("fresh.log", false)]),
+        ])
+        var connectCount = 0
+        let model = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            return connectCount == 1 ? first : second
+        })
+
+        await model.connect(profile: server, modelContainer: context.container)
+        await model.navigate(toPath: "/home/user/logs")
+        XCTAssertEqual(model.entries.map(\.name), ["old.log"])
+
+        let closedChannel = NSError(domain: "Citadel", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "I/O Channel Close",
+        ])
+        await first.setListError(closedChannel)
+
+        await model.refresh()
+
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertEqual(model.state, .browsing)
+        XCTAssertEqual(model.currentPath, "/home/user/logs")
+        XCTAssertEqual(model.entries.map(\.name), ["fresh.log"])
+        let didCloseFirstProvider = await first.didClose
+        XCTAssertTrue(didCloseFirstProvider)
     }
 
     func testUploadForwardsToProvider() async {

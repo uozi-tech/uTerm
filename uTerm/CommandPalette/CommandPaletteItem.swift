@@ -89,6 +89,12 @@ nonisolated func groupCommandPalette(_ items: [CommandPaletteItem]) -> [CommandP
         }
 }
 
+/// 按 id 去重，保留首次出现（静态项在前 → 压过同 id 的动态搜索命中）。
+nonisolated func dedupeCommandPaletteByID(_ items: [CommandPaletteItem]) -> [CommandPaletteItem] {
+    var seen = Set<String>()
+    return items.filter { seen.insert($0.id).inserted }
+}
+
 /// 共享的「设置」命令项：写 SettingsTabSelection.key 后打开设置窗，深链到对应 tab。
 /// `openSettings` 由各窗口注入（`@Environment(\.openSettings)` 包成闭包）。
 @MainActor

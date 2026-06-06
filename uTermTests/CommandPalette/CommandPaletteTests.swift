@@ -160,4 +160,80 @@ final class CommandPaletteTests: XCTestCase {
         m.executeSelected()                    // 不崩、不触发
         XCTAssertEqual(fired, 0)
     }
+
+    // MARK: 去重纯函数
+    func testDedupeByIDKeepsFirstOccurrence() {
+        let items = [
+            item("file:/a", .file, title: "first"),
+            item("file:/a", .file, title: "dup"),
+            item("h1", .host, title: "h"),
+        ]
+        let r = dedupeCommandPaletteByID(items)
+        XCTAssertEqual(r.map(\.id), ["file:/a", "h1"])
+        XCTAssertEqual(r.first?.title, "first")
+    }
+
+    // MARK: 异步搜索
+    private func fileItem(_ q: String) -> CommandPaletteItem {
+        item("file:/x/\(q)", .file, title: "\(q)")
+    }
+
+    func testSearchProviderTriggersAtTwoCharsAndMergesIntoResults() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 0
+        m.searchProvider = { [self] q in [fileItem(q)] }
+        m.open(items: [item("h1", .host, title: "host")])
+        m.setQuery("ab")
+        await m.waitForSearch()
+        XCTAssertTrue(m.results.contains { $0.id == "file:/x/ab" })
+    }
+
+    func testSearchProviderNotTriggeredBelowTwoChars() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 0
+        var calls = 0
+        m.searchProvider = { _ in calls += 1; return [] }
+        m.open(items: [])
+        m.setQuery("a")
+        await m.waitForSearch()    // searchTask 为 nil → 立即返回
+        XCTAssertEqual(calls, 0)
+        XCTAssertTrue(m.dynamicItems.isEmpty)
+    }
+
+    func testDynamicAndStaticDedupeBySameID() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 0
+        m.searchProvider = { [self] q in [fileItem(q)] }
+        m.open(items: [item("file:/x/ab", .file, title: "recent-ab")])
+        m.setQuery("ab")
+        await m.waitForSearch()
+        XCTAssertEqual(m.results.filter { $0.id == "file:/x/ab" }.count, 1)
+        XCTAssertEqual(m.results.first { $0.id == "file:/x/ab" }?.title, "recent-ab")  // 静态在前胜出
+    }
+
+    func testRapidSetQueryCancelsPriorSearch() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 20_000_000   // 20ms：第一发在 sleep 中被取消
+        var queriesRun: [String] = []
+        m.searchProvider = { [self] q in queriesRun.append(q); return [fileItem(q)] }
+        m.open(items: [])
+        m.setQuery("aa")
+        m.setQuery("bb")     // 同步取消 aa 的 task
+        await m.waitForSearch()
+        XCTAssertEqual(queriesRun, ["bb"])
+        XCTAssertTrue(m.results.contains { $0.id == "file:/x/bb" })
+    }
+
+    func testCloseClearsDynamicState() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 0
+        m.searchProvider = { [self] q in [fileItem(q)] }
+        m.open(items: [])
+        m.setQuery("ab")
+        await m.waitForSearch()
+        XCTAssertFalse(m.dynamicItems.isEmpty)
+        m.close()
+        XCTAssertTrue(m.dynamicItems.isEmpty)
+        XCTAssertFalse(m.isSearching)
+    }
 }

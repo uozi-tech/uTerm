@@ -10,9 +10,19 @@ final class CommandPaletteModel {
     var isPresented: Bool = false
     private(set) var allItems: [CommandPaletteItem] = []
 
+    /// 注入的异步搜索（query → 命令项）。nil = 不搜。
+    var searchProvider: (@MainActor (String) async -> [CommandPaletteItem])?
+    private(set) var dynamicItems: [CommandPaletteItem] = []
+    private(set) var isSearching = false
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    /// 防抖时长；测试可置 0 以确定性等待。
+    var searchDebounceNanos: UInt64 = 200_000_000
+
     /// 分组（供渲染）：过滤后按 kind 分组。
     var sections: [CommandPaletteSection] {
-        groupCommandPalette(filterCommandPalette(allItems, query: query))
+        let merged = dedupeCommandPaletteByID(
+            filterCommandPalette(allItems, query: query) + dynamicItems)
+        return groupCommandPalette(merged)
     }
 
     /// 扁平结果（供选中索引）——顺序与 `sections` 的显示顺序一致。
@@ -31,18 +41,47 @@ final class CommandPaletteModel {
         query = ""
         selectedIndex = 0
         isPresented = true
+        dynamicItems = []
+        isSearching = false
+        searchTask?.cancel()
+        searchTask = nil
     }
 
     func close() {
         isPresented = false
         query = ""
         selectedIndex = 0
+        searchTask?.cancel()
+        searchTask = nil
+        dynamicItems = []
+        isSearching = false
     }
 
     func setQuery(_ q: String) {
         query = q
         selectedIndex = 0            // 复刻设计稿 useEffect([query])
+        searchTask?.cancel()
+        let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, let provider = searchProvider else {
+            dynamicItems = []
+            isSearching = false
+            searchTask = nil
+            return
+        }
+        let debounce = searchDebounceNanos
+        searchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: debounce)
+            guard !Task.isCancelled, let self else { return }
+            self.isSearching = true
+            let items = await provider(trimmed)
+            guard !Task.isCancelled else { return }
+            self.dynamicItems = items
+            self.isSearching = false
+        }
     }
+
+    /// 测试用：等当前搜索任务跑完（含防抖）。
+    func waitForSearch() async { await searchTask?.value }
 
     func moveSelection(by delta: Int) {
         let count = results.count
