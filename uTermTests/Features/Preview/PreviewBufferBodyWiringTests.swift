@@ -4,9 +4,9 @@ import XCTest
 final class PreviewBufferBodyWiringTests: XCTestCase {
     func testEveryPreviewBufferBodyCallWiresMarkdownImageLoader() throws {
         let files = [
-            "uTerm/Views/PreviewBodyRouter.swift",
-            "uTerm/Views/PreviewArea.swift",
-            "uTerm/Views/PaneView.swift",
+            "uTerm/Features/Preview/Views/PreviewBodyRouter.swift",
+            "uTerm/Features/Preview/Views/PreviewArea.swift",
+            "uTerm/Features/Workspace/Views/PaneView.swift",
         ]
 
         for file in files {
@@ -25,6 +25,7 @@ final class PreviewBufferBodyWiringTests: XCTestCase {
 
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
