@@ -306,6 +306,7 @@ struct AssistantView: View {
                 .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.messages.last?.id) { _, _ in scrollToBottom(proxy) }
             }
+            queueStrip
             inputBar
         }
     }
@@ -318,19 +319,33 @@ struct AssistantView: View {
 
     @ViewBuilder
     private func messageRow(_ message: ChatMessage) -> some View {
-        let isUser = message.role == .user
-        let isStreamingTail = !isUser
-            && message.id == model.messages.last?.id
+        if message.role == .user {
+            UserMessageRow(
+                message: message,
+                isEditing: model.editingMessageID == message.id,
+                canEdit: !model.isBusy,
+                onBeginEdit: { model.editingMessageID = message.id },
+                onCancel: { model.editingMessageID = nil },
+                onCommit: { newText in
+                    Task {
+                        await model.editAndResend(id: message.id, newText: newText,
+                                                  serverContext: serverContext)
+                    }
+                }
+            )
+            .id(message.id)
+        } else {
+            assistantMessageRow(message)
+        }
+    }
+
+    @ViewBuilder
+    private func assistantMessageRow(_ message: ChatMessage) -> some View {
+        let isStreamingTail = message.id == model.messages.last?.id
             && model.state == .streaming
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                if isUser {
-                    Text(message.text)
-                        .font(.system(size: 12.5))
-                        .lineSpacing(2)
-                        .textSelection(.enabled)
-                        .foregroundStyle(UD.text2)
-                } else if message.text.isEmpty && !isStreamingTail {
+                if message.text.isEmpty && !isStreamingTail {
                     Text("…")
                         .font(.system(size: 12.5))
                         .foregroundStyle(UD.text3)
@@ -342,14 +357,7 @@ struct AssistantView: View {
                     StreamingCaret()
                 }
             }
-            .padding(.vertical, isUser ? 10 : 0)
-            .padding(.horizontal, isUser ? 12 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isUser ? UD.inputBg : .clear)   // 用户气泡 = UDInput 的白（日间纯白 + 描边）
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(isUser ? UD.border : .clear, lineWidth: 1))
 
             ForEach(message.toolCalls) { call in
                 UDToolCall(
@@ -374,9 +382,56 @@ struct AssistantView: View {
 
     // MARK: - 输入区
 
+    /// 待发队列条带：聊天区与输入框之间，列出尚未发出的排队消息（Agent 忙碌时累积）。
+    @ViewBuilder
+    private var queueStrip: some View {
+        if !model.queuedMessages.isEmpty {
+            VStack(spacing: 4) {
+                ForEach(model.queuedMessages) { queuedRow($0) }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+        }
+    }
+
+    private func queuedRow(_ item: QueuedMessage) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .font(.system(size: 10))
+                .foregroundStyle(UD.text4)
+            Text(item.text)
+                .font(.system(size: 12))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { model.loadQueuedForEditing(id: item.id) } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 10)).foregroundStyle(UD.text4)
+                    .frame(width: 20, height: 20).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("编辑")
+            Button { model.removeQueued(id: item.id) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10)).foregroundStyle(UD.text4)
+                    .frame(width: 20, height: 20).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("移除")
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(UD.border, style: StrokeStyle(lineWidth: 1, dash: [3]))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { model.loadQueuedForEditing(id: item.id) }
+    }
+
     private var inputBar: some View {
         UDComposer(
             text: $model.input,
+            queueing: model.isBusy,
             onSend: sendIfPossible,
             onAttach: attachCurrentContext,
             modelControl: { modelPill }
@@ -385,8 +440,7 @@ struct AssistantView: View {
     }
 
     private func sendIfPossible() {
-        guard model.state != .streaming else { return }
-        Task { await model.send(serverContext: serverContext) }
+        Task { await model.submit(serverContext: serverContext) }
     }
 
     private func attachCurrentContext() {
@@ -422,5 +476,83 @@ private struct StreamingCaret: View {
                     on = false
                 }
             }
+    }
+}
+
+/// 用户消息气泡：常态展示 + 悬停露铅笔；编辑态原地变可编辑框 + ✓重发 / ✕取消。
+private struct UserMessageRow: View {
+    let message: ChatMessage
+    let isEditing: Bool
+    let canEdit: Bool
+    let onBeginEdit: () -> Void
+    let onCancel: () -> Void
+    let onCommit: (String) -> Void
+
+    @State private var draft: String = ""
+    @State private var hovering = false
+
+    var body: some View {
+        Group {
+            if isEditing {
+                editor
+            } else {
+                bubble
+            }
+        }
+        .onChange(of: isEditing, initial: true) { _, now in
+            if now { draft = message.text }
+        }
+    }
+
+    /// 常态气泡：点击进入编辑（仅空闲可编辑）。悬停仅描边变色提示，
+    /// 不插入/移除任何子视图 → 无布局抖动、无闪烁（去掉了旧的悬停铅笔钮）。
+    private var bubble: some View {
+        Text(message.text)
+            .font(.system(size: 12.5))
+            .lineSpacing(2)
+            .foregroundStyle(UD.text2)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(UD.inputBg)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .strokeBorder(hovering && canEdit ? UD.accent.opacity(0.35) : UD.border,
+                                  lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+            .onHover { hovering = $0 }
+            .onTapGesture { if canEdit { onBeginEdit() } }
+            .help(canEdit ? "点击编辑并重发" : "")
+    }
+
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("", text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .lineLimit(1...8)
+                .foregroundStyle(UD.text)
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    Text("✕").font(.system(size: 12)).foregroundStyle(UD.text3)
+                        .frame(width: 26, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("取消")
+                Button { onCommit(draft) } label: {
+                    Text("✓").font(.system(size: 12)).foregroundStyle(UD.accent)
+                        .frame(width: 26, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("重发（截断其后并重新生成）")
+                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(UD.inputBg)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.accent.opacity(0.4), lineWidth: 1))
     }
 }

@@ -19,6 +19,10 @@ final class AssistantModel {
     }
 
     private(set) var messages: [ChatMessage] = []
+    /// 待发队列：Agent 忙碌时提交的消息，空闲后逐条派发。纯内存。
+    private(set) var queuedMessages: [QueuedMessage] = []
+    /// 当前处于内联编辑态的用户消息 id（视图驱动；会话切换时清空）。
+    var editingMessageID: UUID?
     var input: String = ""
     private(set) var state: State = .idle
 
@@ -69,6 +73,8 @@ final class AssistantModel {
     func startNewSession() {
         currentSession = nil
         messages = []
+        queuedMessages = []
+        editingMessageID = nil
         if case .failed = state { state = .idle }
     }
 
@@ -77,6 +83,8 @@ final class AssistantModel {
         guard session.id != currentSession?.id else { return }
         currentSession = session
         messages = session.orderedMessages.map(\.asChatMessage)
+        queuedMessages = []
+        editingMessageID = nil
         if case .failed = state { state = .idle }
     }
 
@@ -89,6 +97,8 @@ final class AssistantModel {
             pendingRestoredSessionID = nil
             currentSession = nil
             messages = []
+            queuedMessages = []
+            editingMessageID = nil
             input = ""
             if case .failed = state { state = .idle }
             return
@@ -98,6 +108,8 @@ final class AssistantModel {
         pendingRestoredSessionID = snapshot.currentSessionID
         currentSession = nil
         messages = []
+        queuedMessages = []
+        editingMessageID = nil
         if case .failed = state { state = .idle }
         resolvePendingRestoredSessionIfNeeded()
     }
@@ -132,35 +144,55 @@ final class AssistantModel {
         self.activeProviderID = provider.id
     }
 
-    /// 发送当前输入。`serverContext` 是当前活动服务器的简述，进 system prompt。
-    func send(serverContext: String) async {
-        guard state != .streaming, state != .running else { return }
+    /// 是否忙碌：流式 / 工具执行 / 待批准。忙碌时提交即入队。
+    var isBusy: Bool {
+        switch state {
+        case .streaming, .running, .awaitingApproval: return true
+        case .idle, .failed: return false
+        }
+    }
+
+    /// 视图统一提交入口：读+清空输入；忙碌则入队，空闲则发送。
+    func submit(serverContext: String) async {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
-        guard let provider = activeProvider else {
-            state = .failed("尚未配置 AI provider")
-            return
-        }
-        guard let key = keyOverride ?? keychain.load(for: provider.id) else {
-            state = .failed("当前 provider 缺少 API Key")
-            return
-        }
-        guard let baseURL = resolveBaseURL(for: provider) else {
-            state = .failed("当前 provider 的 baseURL 非法")
-            return
-        }
-
-        lastServerContext = serverContext
         input = ""
+        if isBusy {
+            enqueue(prompt)
+        } else {
+            await dispatch(prompt: prompt, serverContext: serverContext)
+        }
+    }
+
+    /// 兼容旧调用方/测试：等价于 submit。
+    func send(serverContext: String) async {
+        await submit(serverContext: serverContext)
+    }
+
+    /// 发送一条用户 prompt：校验凭据 → 追加消息 → 落库 → 流式。
+    private func dispatch(prompt: String, serverContext: String) async {
+        guard let ctx = resolvedTurnContext() else { return }
+        lastServerContext = serverContext
         let userMessage = ChatMessage(role: .user, text: prompt)
         messages.append(userMessage)
-
-        // 惰性建会话并落库用户消息（无 context 时纯内存）。
         let session = ensureSession(firstPrompt: prompt)
         persist(userMessage, in: session)
-
-        await streamAssistantTurn(provider: provider, key: key, baseURL: baseURL,
+        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
                                   serverContext: serverContext, session: session)
+    }
+
+    /// provider/key/baseURL 校验；任一缺失置 .failed 并返回 nil。
+    private func resolvedTurnContext() -> (provider: AIProvider, key: String, baseURL: URL)? {
+        guard let provider = activeProvider else {
+            state = .failed("尚未配置 AI provider"); return nil
+        }
+        guard let key = keyOverride ?? keychain.load(for: provider.id) else {
+            state = .failed("当前 provider 缺少 API Key"); return nil
+        }
+        guard let baseURL = resolveBaseURL(for: provider) else {
+            state = .failed("当前 provider 的 baseURL 非法"); return nil
+        }
+        return (provider, key, baseURL)
     }
 
     /// 一轮助手流式：追加空 assistant 消息 → 落库 → 流式消费 `LLMEvent`
@@ -200,6 +232,8 @@ final class AssistantModel {
         // 流式结束后把助手最终文本与工具调用写回记录。
         finalize(assistantRecord, text: messages[assistantIndex].text,
                  toolCalls: messages[assistantIndex].toolCalls, in: session)
+        // 本轮结算回 idle 时，逐条冲掉队列（.awaitingApproval/.failed 不冲）。
+        if state == .idle { await flushNextQueued() }
     }
 
     // MARK: - 工具调用：批准 / 跳过 / 执行 / 续轮
@@ -252,11 +286,75 @@ final class AssistantModel {
 
     /// 工具结果已并入会话后再起一轮：复用流式实现（不追加新用户消息）。
     private func continueAfterTools(serverContext: String) async {
-        guard let provider = activeProvider,
-              let key = keyOverride ?? keychain.load(for: provider.id),
-              let baseURL = resolveBaseURL(for: provider) else { state = .idle; return }
-        await streamAssistantTurn(provider: provider, key: key, baseURL: baseURL,
+        guard let ctx = resolvedTurnContext() else { return }
+        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
                                   serverContext: serverContext, session: currentSession)
+    }
+
+    // MARK: - 队列消息
+
+    /// 入队一条待发消息（trim 后非空才入队）。
+    func enqueue(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queuedMessages.append(QueuedMessage(text: trimmed))
+    }
+
+    /// 移除一条排队消息。
+    func removeQueued(id: UUID) {
+        queuedMessages.removeAll { $0.id == id }
+    }
+
+    /// 把某条排队消息载回输入框编辑（草稿非空则前置追加），并出队。
+    func loadQueuedForEditing(id: UUID) {
+        guard let item = queuedMessages.first(where: { $0.id == id }) else { return }
+        let draft = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        input = draft.isEmpty ? item.text : item.text + "\n\n" + draft
+        removeQueued(id: id)
+    }
+
+    /// 弹出队首消息派发为新一轮（逐条依次）。仅在结算回 idle 时调用。
+    /// 经 dispatch→streamAssistantTurn→flushNextQueued 递归，深度 = 队列长度（有界）。
+    private func flushNextQueued() async {
+        guard state == .idle, !queuedMessages.isEmpty else { return }
+        let next = queuedMessages.removeFirst()
+        await dispatch(prompt: next.text, serverContext: lastServerContext)
+    }
+
+    // MARK: - 编辑 + 分叉重生
+
+    /// 编辑某条用户消息并从该处分叉重生：截断其后全部内容（含助手回复/工具调用），
+    /// 用新文本重发并重新生成。仅空闲/失败态可用（忙碌时由调用方禁用入口）。
+    func editAndResend(id: UUID, newText: String, serverContext: String) async {
+        guard !isBusy else { return }
+        let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let index = messages.firstIndex(where: { $0.id == id }),
+              messages[index].role == .user else { return }
+        guard let ctx = resolvedTurnContext() else { return }
+
+        lastServerContext = serverContext
+        // 注意：不清空 queuedMessages——编辑分叉仍在同一会话内，已排队的待发消息
+        // 在重生轮结算回 idle 后照常逐条派发（队列仅在切换/新建/恢复会话时清空）。
+        editingMessageID = nil
+
+        // 持久化：删除该消息及其之后的记录。
+        let droppedIDs = messages[index...].map(\.id)
+        deleteRecords(ids: droppedIDs)
+
+        // 内存：截断到该消息之前，再追加编辑后的用户消息（保留原 id 稳序）。
+        let edited = ChatMessage(id: id, role: .user, text: trimmed)
+        messages = Array(messages.prefix(index))
+        messages.append(edited)
+
+        let session = currentSession
+        persist(edited, in: session)
+        if index == 0, let session {            // 首条决定标题 → 重派生
+            session.title = Self.deriveTitle(from: trimmed)
+            try? modelContext?.save()
+        }
+        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
+                                  serverContext: serverContext, session: session)
     }
 
     // MARK: - 持久化（modelContext 为 nil 时全部 no-op）
@@ -301,6 +399,17 @@ final class AssistantModel {
         guard let record = session.orderedMessages.first(where: { $0.id == message.id })
         else { return }
         record.toolCalls = message.toolCalls
+        session.updatedAt = Date()
+        try? ctx.save()
+    }
+
+    /// 删除当前会话中匹配 ids 的记录（纯内存模式 no-op）。
+    private func deleteRecords(ids: [UUID]) {
+        guard let ctx = modelContext, let session = currentSession else { return }
+        let set = Set(ids)
+        for record in session.orderedMessages where set.contains(record.id) {
+            ctx.delete(record)
+        }
         session.updatedAt = Date()
         try? ctx.save()
     }

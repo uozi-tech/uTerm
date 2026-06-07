@@ -18,3 +18,14 @@ nonisolated struct ChatMessage: Equatable, Sendable, Identifiable {
         self.toolCalls = toolCalls
     }
 }
+
+/// 一条尚未发出的排队消息（Agent 忙碌时提交的待发输入）。运行期纯内存，不落库。
+nonisolated struct QueuedMessage: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let text: String
+
+    init(id: UUID = UUID(), text: String) {
+        self.id = id
+        self.text = text
+    }
+}

@@ -17,6 +17,8 @@ struct UDComposer<ModelControl: View>: View {
     var placeholder: String = "问点什么…"
     /// 固定宽度（DesignKit 画廊用 300 spec）；`nil` 则撑满容器（真实 Agent 面板用）。
     var width: CGFloat? = nil
+    /// Agent 忙碌时为 true：发送钮变「排队」形态（提交即入队而非直发）。
+    var queueing: Bool = false
     var onSend: () -> Void = {}
     var onAttach: () -> Void = {}
     @ViewBuilder var modelControl: () -> ModelControl
@@ -43,11 +45,11 @@ struct UDComposer<ModelControl: View>: View {
                 .help("附加上下文")
 
                 Button(action: submit) {
-                    Text("↩")
+                    Text(queueing ? "⊕" : "↩")
                         .font(UD.font(12))
                 }
                 .buttonStyle(UDComposerIconStyle())
-                .help("发送")
+                .help(queueing ? "排队发送（Agent 忙碌中）" : "发送")
             }
         }
         .padding(UDComposerLayout.contentPadding)
@@ -74,11 +76,13 @@ extension UDComposer where ModelControl == EmptyView {
     init(text: Binding<String>,
          placeholder: String = "问点什么…",
          width: CGFloat? = nil,
+         queueing: Bool = false,
          onSend: @escaping () -> Void = {},
          onAttach: @escaping () -> Void = {}) {
         self.init(text: text,
                   placeholder: placeholder,
                   width: width,
+                  queueing: queueing,
                   onSend: onSend,
                   onAttach: onAttach,
                   modelControl: { EmptyView() })

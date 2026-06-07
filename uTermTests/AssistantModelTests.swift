@@ -72,16 +72,19 @@ final class AssistantModelTests: XCTestCase {
         XCTAssertTrue(backend.captured.system.contains("cluster-main"))
     }
 
-    func testSecondSendIgnoredWhileStreaming() async {
+    func testSecondSubmitWhileStreamingIsQueued() async {
         let model = AssistantModel(client: BlockingLLMClient(),
-                                    provider: makeProvider(), apiKey: "sk-test")
+                                   provider: makeProvider(), apiKey: "sk-test")
         model.input = "first"
         let task = Task { await model.send(serverContext: "") }
         while model.state != .streaming { await Task.yield() }
         model.input = "second"
-        await model.send(serverContext: "")
+        await model.submit(serverContext: "")
+        // 入队后不进 messages（仍只有 first 用户 + 空 assistant），队列里有 second。
         XCTAssertEqual(model.messages.count, 2)
         XCTAssertEqual(model.messages[0].text, "first")
+        XCTAssertEqual(model.queuedMessages.map(\.text), ["second"])
+        XCTAssertEqual(model.input, "")
         task.cancel()
         _ = await task.value
     }
@@ -245,5 +248,198 @@ final class AssistantModelTests: XCTestCase {
         XCTAssertNil(model.currentSession)
         let sessions = try context.fetch(FetchDescriptor<ChatSession>())
         XCTAssertTrue(sessions.isEmpty)
+    }
+
+    // MARK: - 队列：数据层
+
+    private func queueModel() -> AssistantModel {
+        AssistantModel(client: MockLLMClient(deltas: []),
+                       provider: makeProvider(), apiKey: "sk-test")
+    }
+
+    func testEnqueueTrimsAndIgnoresEmpty() {
+        let model = queueModel()
+        model.enqueue("  hi  ")
+        model.enqueue("   ")
+        XCTAssertEqual(model.queuedMessages.map(\.text), ["hi"])
+    }
+
+    func testRemoveQueuedDropsMatchingItem() {
+        let model = queueModel()
+        model.enqueue("a"); model.enqueue("b")
+        let firstID = model.queuedMessages[0].id
+        model.removeQueued(id: firstID)
+        XCTAssertEqual(model.queuedMessages.map(\.text), ["b"])
+    }
+
+    func testLoadQueuedForEditingMovesTextToEmptyInput() {
+        let model = queueModel()
+        model.enqueue("draft msg")
+        let id = model.queuedMessages[0].id
+        model.loadQueuedForEditing(id: id)
+        XCTAssertEqual(model.input, "draft msg")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+    }
+
+    func testLoadQueuedForEditingPrependsToExistingDraft() {
+        let model = queueModel()
+        model.input = "current"
+        model.enqueue("queued")
+        let id = model.queuedMessages[0].id
+        model.loadQueuedForEditing(id: id)
+        XCTAssertEqual(model.input, "queued\n\ncurrent")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+    }
+
+    func testStartNewSessionClearsQueueAndEditing() {
+        let model = queueModel()
+        model.enqueue("a")
+        model.editingMessageID = UUID()
+        model.startNewSession()
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertNil(model.editingMessageID)
+    }
+
+    func testLoadSessionClearsQueueAndEditing() {
+        let model = queueModel()
+        let session = ChatSession(title: "s")
+        model.enqueue("queued")
+        model.editingMessageID = UUID()
+        model.load(session)
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertNil(model.editingMessageID)
+    }
+
+    func testSubmitWhileIdleSendsImmediately() async {
+        let model = AssistantModel(client: MockLLMClient(deltas: ["ok"]),
+                                   provider: makeProvider(), apiKey: "sk-test")
+        model.input = "hi"
+        await model.submit(serverContext: "")
+        XCTAssertEqual(model.messages.count, 2)
+        XCTAssertEqual(model.messages[0].text, "hi")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(model.state, .idle)
+    }
+
+    func testQueuedMessagesDrainOneAtATimeInOrder() async {
+        // 预置队列后发首条；首轮结算回 idle 即逐条冲完。
+        let client = MockLLMClient(scripts: [[.text("r0")], [.text("rA")], [.text("rB")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.enqueue("A")
+        model.enqueue("B")
+        model.input = "start"
+        await model.send(serverContext: "")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(client.captured.callCount, 3)
+        XCTAssertEqual(model.messages.map(\.text),
+                       ["start", "r0", "A", "rA", "B", "rB"])
+        XCTAssertEqual(model.messages.map(\.role),
+                       [.user, .assistant, .user, .assistant, .user, .assistant])
+        XCTAssertEqual(model.state, .idle)
+    }
+
+    // MARK: - 编辑 + 分叉重生
+
+    func testEditAndResendForksFromEditedMessage() async {
+        let client = MockLLMClient(scripts: [[.text("first reply")], [.text("second reply")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.input = "original"
+        await model.send(serverContext: "")
+        XCTAssertEqual(model.messages.count, 2)
+        let userID = model.messages[0].id
+
+        await model.editAndResend(id: userID, newText: "edited", serverContext: "")
+        XCTAssertEqual(model.messages.count, 2)
+        XCTAssertEqual(model.messages[0].role, .user)
+        XCTAssertEqual(model.messages[0].text, "edited")
+        XCTAssertEqual(model.messages[0].id, userID)     // 保留原 id
+        XCTAssertEqual(model.messages[1].text, "second reply")
+        XCTAssertEqual(model.state, .idle)
+    }
+
+    func testEditTruncatesAllLaterMessages() async {
+        let client = MockLLMClient(scripts: [[.text("r1")], [.text("r2")], [.text("r-edited")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.input = "msg1"; await model.send(serverContext: "")
+        model.input = "msg2"; await model.send(serverContext: "")
+        XCTAssertEqual(model.messages.count, 4)          // u1,a1,u2,a2
+        let firstUserID = model.messages[0].id
+
+        await model.editAndResend(id: firstUserID, newText: "msg1-edited", serverContext: "")
+        XCTAssertEqual(model.messages.map(\.text), ["msg1-edited", "r-edited"])
+    }
+
+    func testEditLastUserMessageRegeneratesOnlyThatTurn() async {
+        let client = MockLLMClient(scripts: [[.text("a1")], [.text("a2")], [.text("a2-new")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.input = "u1"; await model.send(serverContext: "")
+        model.input = "u2"; await model.send(serverContext: "")
+        XCTAssertEqual(model.messages.map(\.text), ["u1", "a1", "u2", "a2"])
+        let u2id = model.messages[2].id
+        await model.editAndResend(id: u2id, newText: "u2-edited", serverContext: "")
+        XCTAssertEqual(model.messages.map(\.text), ["u1", "a1", "u2-edited", "a2-new"])
+        XCTAssertEqual(model.messages[2].id, u2id)   // 保留原 id
+        XCTAssertEqual(model.state, .idle)
+    }
+
+    func testEditDeletesOrphanedRecords() async throws {
+        let context = try makeInMemoryContext()
+        let client = MockLLMClient(scripts: [[.text("r1")], [.text("r2")], [.text("r-edit")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.attach(context: context)
+        model.input = "m1"; await model.send(serverContext: "")
+        model.input = "m2"; await model.send(serverContext: "")
+        let session = try XCTUnwrap(model.currentSession)
+        XCTAssertEqual(session.orderedMessages.count, 4)
+        let firstUserID = model.messages[0].id
+
+        await model.editAndResend(id: firstUserID, newText: "m1-edited", serverContext: "")
+        let ordered = session.orderedMessages
+        XCTAssertEqual(ordered.count, 2)
+        XCTAssertEqual(ordered[0].role, .user)
+        XCTAssertEqual(ordered[0].text, "m1-edited")
+        XCTAssertEqual(ordered[1].text, "r-edit")
+        XCTAssertEqual(session.title, "m1-edited")       // 首条改了 → 标题重派生
+    }
+
+    func testEditIgnoredWhileBusy() async {
+        let model = AssistantModel(client: BlockingLLMClient(),
+                                   provider: makeProvider(), apiKey: "sk-test")
+        model.input = "first"
+        let task = Task { await model.send(serverContext: "") }
+        while model.state != .streaming { await Task.yield() }
+        let userID = model.messages[0].id
+        await model.editAndResend(id: userID, newText: "nope", serverContext: "")
+        XCTAssertEqual(model.messages[0].text, "first")  // 未改
+        task.cancel()
+        _ = await task.value
+    }
+
+    func testEditNonUserMessageIsNoOp() async {
+        let client = MockLLMClient(deltas: ["reply"])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.input = "hi"; await model.send(serverContext: "")
+        let assistantID = model.messages[1].id
+        await model.editAndResend(id: assistantID, newText: "x", serverContext: "")
+        XCTAssertEqual(model.messages.map(\.text), ["hi", "reply"])   // 不变
+    }
+
+    func testRestoreNilClearsQueueAndEditing() {
+        let model = queueModel()
+        model.enqueue("q")
+        model.editingMessageID = UUID()
+        model.restore(from: nil)
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertNil(model.editingMessageID)
+    }
+
+    func testRestoreSnapshotClearsQueueAndEditing() {
+        let model = queueModel()
+        model.enqueue("q")
+        model.editingMessageID = UUID()
+        model.restore(from: AgentSnapshot(currentSessionID: nil, input: "draft"))
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertNil(model.editingMessageID)
+        XCTAssertEqual(model.input, "draft")
     }
 }

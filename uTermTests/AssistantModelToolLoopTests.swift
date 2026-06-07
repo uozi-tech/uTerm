@@ -147,6 +147,36 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertEqual(toolMsg?.toolCalls.first?.status, .done)
         XCTAssertEqual(toolMsg?.toolCalls.first?.output, "a")
     }
+
+    // MARK: - 队列 × 工具循环
+
+    func testQueuedMessageDispatchesAfterToolLoopResolves() async {
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"ls"}"#))],
+            [.text("tool done")],          // 工具结果后的续答
+            [.text("answer to queued")],   // 队列消息那一轮
+        ])
+        let exec = MockCommandExecutor()
+        exec.results["ls"] = CommandResult(output: "a", exitCode: 0)
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        model.input = "列目录"
+        await model.send(serverContext: "")
+        XCTAssertEqual(model.state, .awaitingApproval)
+
+        // 待批准期间提交 → 入队，不立刻发。
+        model.input = "再看看磁盘"
+        await model.submit(serverContext: "")
+        XCTAssertEqual(model.queuedMessages.map(\.text), ["再看看磁盘"])
+
+        // 批准 → 工具续轮结算回 idle → 自动冲队列。
+        await model.approveAndRun(id: "c1")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(model.messages.last?.text, "answer to queued")
+        XCTAssertNotNil(model.messages.first { $0.role == .user && $0.text == "再看看磁盘" })
+        XCTAssertEqual(model.state, .idle)
+    }
 }
 
 private actor DelayedCommandExecutor: CommandExecutor {
