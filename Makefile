@@ -211,7 +211,7 @@ tag:
 		printf '%s\n' "Created tag v$$v. Push with: git push origin v$$v"; \
 	fi
 
-release: require-distribution-identity clean dmg verify notarize staple tag
+release: require-distribution-identity clean dmg verify notarize staple
 
 sparkle-tools:
 	@if [ -x "$(GENERATE_APPCAST)" ]; then \
