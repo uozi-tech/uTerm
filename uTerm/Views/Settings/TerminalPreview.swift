@@ -16,18 +16,14 @@ struct TerminalPreview: View {
         return SwiftUI.Color(red: Double(c.red)/65535, green: Double(c.green)/65535, blue: Double(c.blue)/65535)
     }
 
-    /// 跟真实终端一致用配置的字体族（`NSFont(name:)`），fallback 到等宽系统字体。
-    /// 原来写死 `.system(design: .monospaced)` 只认字号，换字体不生效。
+    /// 跟真实终端一致使用系统等宽字体。
     private var previewFont: SwiftUI.Font {
-        let size = CGFloat(settings.fontSize)
-        if let nsFont = NSFont(name: settings.fontName, size: size) {
-            return SwiftUI.Font(nsFont)
-        }
-        return .system(size: size, design: .monospaced)
+        let size = CGFloat(TerminalSettings.fontSize)
+        return SwiftUI.Font(TerminalSettings.textFont(ofSize: size))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CGFloat(settings.fontSize) * (settings.lineHeight - 1)) {
+        VStack(alignment: .leading, spacing: CGFloat(TerminalSettings.fontSize) * (TerminalSettings.lineHeight - 1)) {
             promptLine(cmd: "ls -la")
             outputLine(parts: [
                 (ansi(6),       "drwxr-xr-x"),

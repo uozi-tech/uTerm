@@ -3,7 +3,7 @@ import SwiftUI
 /// uTerm DesignKit 浮层 —— 抬升的指标卡（设计稿 metrics popover）。
 ///
 /// 纯展示组件：所有数据经普通值输入，不依赖任何 domain model。容器为 `overlayHi`
-/// 实体面 + `borderHi` 描边 + `udShadow(.lg)`，顶部带一道内高光。主体含标题行、
+/// 实体面 + 单层 `border` 细发丝边 + `udShadow(.lg)`（无内高光）。主体含标题行、
 /// 摘要、Sparkline 折线，以及可选的每核占用网格；`showsPointer` 时在底-尾挂一个
 /// 45° 方块以暗示指向箭头。
 ///
@@ -78,21 +78,10 @@ struct UDMetricsPopover: View {
                 .fill(UD.overlayHi)
         )
         .overlay(
+            // 浮层细发丝边：单层 UD.border（白 7% / 黑 10%），无内高光。
             RoundedRectangle(cornerRadius: UD.Radius.lg)
-                .strokeBorder(UD.borderHi, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
-        .overlay(alignment: .top) {
-            // 顶部内高光
-            RoundedRectangle(cornerRadius: UD.Radius.lg)
-                .strokeBorder(UD.dyn(.white(0.06), .white(0.9)), lineWidth: 1)
-                .mask(
-                    LinearGradient(
-                        colors: [.white, .clear],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                )
-        }
         .udShadow(.lg)
         .overlay(alignment: .bottomTrailing) {
             if showsPointer {
@@ -100,7 +89,7 @@ struct UDMetricsPopover: View {
                     .fill(UD.overlayHi)
                     .overlay(
                         Rectangle()
-                            .strokeBorder(UD.borderHi, lineWidth: 1)
+                            .strokeBorder(UD.border, lineWidth: 1)
                     )
                     .frame(width: 10, height: 10)
                     .rotationEffect(.degrees(45))

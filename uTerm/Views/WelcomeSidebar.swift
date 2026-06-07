@@ -6,7 +6,17 @@ struct WelcomeSidebar: View {
     let profiles: [ServerProfile]
     @Binding var filter: ServerFilter
     @Query private var groups: [ServerGroup]
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @State private var draggingGroupID: PersistentIdentifier?
+
+    private var sortedGroups: [ServerGroup] {
+        GroupStore.sortedForSidebar(groups)
+    }
+
+    private var store: GroupStore {
+        GroupStore(context: modelContext)
+    }
 
     var body: some View {
         let counts = ServerFilter.counts(for: profiles, query: filter.query)
@@ -35,9 +45,15 @@ struct WelcomeSidebar: View {
                     }
                     .padding(.top, 14)
                 }
-                ForEach(GroupStore.sortedForSidebar(groups), id: \.persistentModelID) { g in
+                ForEach(sortedGroups, id: \.persistentModelID) { g in
                     navRow(.group(g.name), icon: "circle.fill", title: g.name,
                            counts: counts, iconColor: g.color)
+                    .modifier(GroupRowDragModifier(
+                        enabled: !isDimmedGroup(g, counts: counts),
+                        groupID: g.persistentModelID,
+                        draggingID: $draggingGroupID,
+                        onMove: moveGroup
+                    ))
                 }
                 if (counts[.ungrouped] ?? 0) > 0 {
                     navRow(.ungrouped, icon: "minus.circle", title: "未分组", counts: counts)
@@ -73,5 +89,21 @@ struct WelcomeSidebar: View {
         .padding(.horizontal, 8)
         .opacity(isDimmed ? 0.4 : 1.0)
         .allowsHitTesting(!isDimmed)
+    }
+
+    private func isDimmedGroup(_ group: ServerGroup, counts: [NavSection: Int]) -> Bool {
+        !filter.query.isEmpty && (counts[.group(group.name)] ?? 0) == 0
+    }
+
+    private func moveGroup(_ from: PersistentIdentifier, _ to: PersistentIdentifier) {
+        var order = sortedGroups
+        guard let fromIdx = order.firstIndex(where: { $0.persistentModelID == from }),
+              let toIdx = order.firstIndex(where: { $0.persistentModelID == to }),
+              fromIdx != toIdx else { return }
+        let moved = order.remove(at: fromIdx)
+        order.insert(moved, at: min(toIdx, order.count))
+        withAnimation(.easeInOut(duration: 0.18)) {
+            store.reorder(order)
+        }
     }
 }

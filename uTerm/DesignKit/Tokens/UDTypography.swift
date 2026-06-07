@@ -5,8 +5,7 @@ import SwiftUI
 /// 界面用 SF Pro / system-ui；代码、数值、终端用等宽。层级靠字号 + 文本透明度，
 /// 权重只用 400 / 500 / 600（`.regular` / `.medium` / `.semibold`）。
 ///
-/// 等宽字体：设计稿首选 JetBrains Mono，回退 SF Mono / Menlo。工程未打包字体，
-/// 这里直接用系统等宽（即设计稿 fallback 链），与 `WS.mono` 一致。
+/// 等宽字体直接用系统等宽，不打包或注册自定义字体。
 extension UD {
     // MARK: - 界面字阶 SF Pro Text
     /// 标题 28 / 600。
@@ -20,7 +19,7 @@ extension UD {
     /// 次要 11 / 400。
     nonisolated static let caption = Font.system(size: 11, weight: .regular)
 
-    // MARK: - 等宽字阶 JetBrains Mono（回退系统等宽）
+    // MARK: - 系统等宽字阶
     /// 终端 / 代码 12.5。
     nonisolated static let monoTerminal = Font.system(size: 12.5, weight: .regular, design: .monospaced)
     /// 数值 / 指标 11。

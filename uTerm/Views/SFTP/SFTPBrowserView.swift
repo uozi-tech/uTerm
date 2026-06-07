@@ -15,6 +15,7 @@ struct SFTPBrowserView: View {
     @State private var renameTarget: RemoteEntry?
     @State private var renameText = ""
     @State private var deleteTarget: RemoteEntry?
+    @State private var permissionTarget: RemoteEntry?
     @State private var newFolderPresented = false
     @State private var newFolderText = ""
     @State private var isDropTargeted = false
@@ -46,6 +47,7 @@ struct SFTPBrowserView: View {
                 showHidden: model.showHidden,
                 onToggleHidden: { model.showHidden.toggle() },
                 onOpenInTerminal: openWorkspace,
+                onOpenWorkspace: openWorkspace,
                 sortKey: model.sortKey,
                 onSetSort: { setSort($0) }
             )
@@ -109,6 +111,27 @@ struct SFTPBrowserView: View {
             set: { if !$0 { model.clearTransientError() } })) {
             Button("好") { model.clearTransientError() }
         } message: { Text(model.transientError ?? "") }
+        .sheet(item: $permissionTarget) { target in
+            SFTPPermissionSheet(entry: target) { mode, recursive in
+                Task { await model.setPermissions(entry: target, mode: mode, recursive: recursive) }
+            }
+        }
+    }
+
+    /// 文件表 / 检视器右键菜单共用的行为集合（独立窗口版：主操作 = 下载、含「在工作区
+    /// 打开」「显示简介」）。
+    private var rowActions: SFTPRowActions {
+        SFTPRowActions(
+            currentPath: model.currentPath,
+            fileActionLabel: "下载",
+            fileActionIcon: "arrow.down.circle",
+            onActivate: activate,
+            onOpenWorkspace: openWorkspace,
+            onShowInfo: { selectedID = $0.id },
+            onRename: { renameTarget = $0; renameText = $0.name },
+            onPermissions: { permissionTarget = $0 },
+            onDelete: { deleteTarget = $0 }
+        )
     }
 
     private var hairline: some View { Rectangle().fill(UD.border).frame(height: 1) }
@@ -170,7 +193,8 @@ struct SFTPBrowserView: View {
                         moveRemoteItems(providers, into: entry)
                     },
                     onDropRemoteItemsToParent: moveRemoteItemsToParent,
-                    query: query
+                    query: query,
+                    rowActions: rowActions
                 )
                 .frame(maxWidth: .infinity)
                 Rectangle().fill(UD.border).frame(width: 1)
@@ -178,6 +202,8 @@ struct SFTPBrowserView: View {
                     item: selected, currentPath: model.currentPath,
                     onDownload: { e in downloadFile(e) },
                     onOpenFolder: { e in activate(e) },
+                    onOpenWorkspace: openWorkspace,
+                    onPermissions: { e in permissionTarget = e },
                     onRename: { e in renameTarget = e; renameText = e.name },
                     onDelete: { e in deleteTarget = e }
                 )

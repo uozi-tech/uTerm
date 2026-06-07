@@ -10,14 +10,17 @@ struct PreviewTabBar: View {
     /// 请求关闭某 buffer（含脏文件确认，由上层提供）。
     let onRequestClose: (UUID) -> Void
 
+    static let tabBarBackgroundColor = EditorTheme.background
+
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(model.buffers) { buf in
+                    ForEach(Array(model.buffers.enumerated()), id: \.element.id) { index, buf in
                         UDPreviewTab(
                             name: buf.displayName,
                             active: model.activeBufferID == buf.id,
+                            first: index == 0,
                             dirty: buf.isDirty,
                             systemImage: Self.icon(for: buf.kind),
                             activeBackground: Color(nsColor: EditorTheme.background),
@@ -40,7 +43,7 @@ struct PreviewTabBar: View {
             .frame(maxHeight: .infinity)
         }
         .frame(height: 36)
-        .background(UD.panel)
+        .background(Color(nsColor: Self.tabBarBackgroundColor))
         .overlay(alignment: .bottom) {
             Rectangle().fill(UD.border).frame(height: 1)
         }

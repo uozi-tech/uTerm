@@ -12,6 +12,8 @@ actor MockSFTP: SFTPProviding {
     private(set) var removedFiles: [String] = []
     private(set) var removedDirs: [String] = []
     private(set) var createdDirs: [String] = []
+    private(set) var permissionChanges: [(path: String, mode: UInt32)] = []
+    private(set) var execCommands: [String] = []
 
     /// 内存 blob 存储：path → (data, mtime)。write / read / stat 均走此存储。
     private var blobStore: [String: (Data, Date)] = [:]
@@ -94,7 +96,10 @@ actor MockSFTP: SFTPProviding {
 
     /// 遥测 exec 的可控返回值（默认空串 = 无遥测）。
     var execOutput: String = ""
-    func exec(_ command: String) async throws -> String { execOutput }
+    func exec(_ command: String) async throws -> String {
+        execCommands.append(command)
+        return execOutput
+    }
     func setExecOutput(_ s: String) { execOutput = s }
 
     func rename(_ path: String, to newPath: String) async throws {
@@ -103,6 +108,9 @@ actor MockSFTP: SFTPProviding {
     func removeFile(_ path: String) async throws { removedFiles.append(path) }
     func removeDirectory(_ path: String) async throws { removedDirs.append(path) }
     func createDirectory(_ path: String) async throws { createdDirs.append(path) }
+    func setPermissions(path: String, mode: UInt32) async throws {
+        permissionChanges.append((path, mode & 0o777))
+    }
 
     func upload(data: Data, toRemotePath: String,
                 onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {

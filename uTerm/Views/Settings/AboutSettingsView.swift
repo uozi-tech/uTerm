@@ -75,5 +75,5 @@ struct AboutSettingsView: View {
 #Preview {
     AboutSettingsView()
         .frame(width: 720, height: 480)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(UD.bg)
 }

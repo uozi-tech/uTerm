@@ -105,7 +105,7 @@ struct SettingsNumberField: View {
                 .foregroundStyle(UD.text)
                 .padding(.horizontal, 12)
                 .frame(width: width, height: 32)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.04)))
+                .background(RoundedRectangle(cornerRadius: 7).fill(UD.inputBg))
                 .overlay(RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
                 .animation(.easeOut(duration: 0.15), value: focused)

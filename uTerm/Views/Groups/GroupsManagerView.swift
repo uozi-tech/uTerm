@@ -1,7 +1,5 @@
 import SwiftUI
 import SwiftData
-import AppKit
-import UniformTypeIdentifiers
 
 struct GroupRenameEditorState<ID: Hashable>: Equatable {
     var editingID: ID?
@@ -159,7 +157,7 @@ struct GroupsManagerView: View {
         .padding(.leading, 8)
         .padding(.trailing, 3)
         .frame(height: 28)
-        .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
+        .background(RoundedRectangle(cornerRadius: 7).fill(UD.inputBg))   // 日间纯白底
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
         .padding(.horizontal, 12)
         .padding(.top, 12)
@@ -329,22 +327,11 @@ private struct GroupRowView: View {
             nameLabel
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // 主机数（hover 时淡出，让位删除按钮）
-            Text("\(count)")
-                .font(UD.monoMetric)
-                .foregroundStyle(UD.text3)
-                .opacity(hover && !builtin ? 0 : 1)
+            trailingSlot
         }
         .padding(.leading, 10)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        // 删除按钮绝对定位浮现（对齐设计稿 position:absolute）——不撑高行，行高只由点/名/数决定。
-        .overlay(alignment: .trailing) {
-            if hover && !builtin {
-                rowIconButton("trash", danger: true, action: onDelete)
-                    .padding(.trailing, 8)
-            }
-        }
         .background(RoundedRectangle(cornerRadius: 6)
             .fill(selected ? UD.rowSelected : (hover ? UD.rowHover : .clear)))
         .padding(.horizontal, 6)
@@ -358,6 +345,20 @@ private struct GroupRowView: View {
                 Button("删除", role: .destructive, action: onDelete)
             }
         }
+    }
+
+    /// Count and hover action share one fixed trailing column, so rows stay aligned.
+    private var trailingSlot: some View {
+        Text("\(count)")
+            .font(UD.monoMetric)
+            .foregroundStyle(UD.text3)
+            .opacity(hover && !builtin ? 0 : 1)
+            .frame(width: GroupRowDeleteButtonLayout.hitWidth, alignment: .center)
+            .overlay {
+                if hover && !builtin {
+                    rowIconButton("trash", danger: true, action: onDelete)
+                }
+            }
     }
 
     @ViewBuilder
@@ -825,47 +826,6 @@ func serverProfileMemberDisplayName(_ profile: ServerProfile) -> String {
 private func memberInitials(_ name: String) -> String {
     let parts = name.split(whereSeparator: { $0 == "-" || $0 == "_" })
     return String(parts.compactMap(\.first).prefix(2))
-}
-
-// MARK: - 拖拽排序
-
-/// 给组行挂上拖拽源 + 落点。重命名中（`enabled == false`）不挂，避免与文本编辑冲突。
-private struct GroupRowDragModifier: ViewModifier {
-    let enabled: Bool
-    let groupID: PersistentIdentifier
-    @Binding var draggingID: PersistentIdentifier?
-    let onMove: (PersistentIdentifier, PersistentIdentifier) -> Void
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                .onDrag {
-                    draggingID = groupID
-                    return NSItemProvider(object: "group" as NSString)
-                }
-                .onDrop(of: [.text], delegate: GroupReorderDropDelegate(
-                    targetID: groupID, draggingID: $draggingID, onMove: onMove))
-        } else {
-            content
-        }
-    }
-}
-
-/// 拖拽进入某组行时把被拖组移到该行位置（实时重排）；落下时清空拖拽态。
-private struct GroupReorderDropDelegate: DropDelegate {
-    let targetID: PersistentIdentifier
-    @Binding var draggingID: PersistentIdentifier?
-    let onMove: (PersistentIdentifier, PersistentIdentifier) -> Void
-
-    func dropEntered(info: DropInfo) {
-        guard let from = draggingID, from != targetID else { return }
-        onMove(from, targetID)
-    }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool {
-        draggingID = nil
-        return true
-    }
 }
 
 /// 分组管理窗口自绘扁平标题栏：左侧让位窗口红绿灯（~68pt），居中 "分组管理"。

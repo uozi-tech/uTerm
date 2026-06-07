@@ -148,10 +148,10 @@ struct KeyDetailView: View {
     // MARK: - 危险区
 
     private var dangerZone: some View {
-        let danger = Color(hex: 0xF87171)
+        let danger = UD.danger   // 主题 token：日间跟随低饱和红
         return HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("删除此密钥").font(.system(size: 13, weight: .medium)).foregroundStyle(Color(hex: 0xFCA5A5))
+                Text("删除此密钥").font(.system(size: 13, weight: .medium)).foregroundStyle(danger)
                 Text("密钥将从钥匙串移除，使用此密钥的 \(usedByNames.count) 台主机将无法连接，需重新选择。")
                     .font(.system(size: 11.5)).foregroundStyle(UD.text2).fixedSize(horizontal: false, vertical: true)
             }

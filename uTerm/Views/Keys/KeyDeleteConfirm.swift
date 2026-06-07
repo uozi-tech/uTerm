@@ -8,7 +8,7 @@ struct KeyDeleteConfirm: View {
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
-    private let danger = Color(hex: 0xF87171)
+    private let danger = UD.danger   // 主题 token：日间跟随低饱和红
 
     var body: some View {
         ZStack {

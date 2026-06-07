@@ -63,6 +63,31 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
     }
 
+    func testApproveIgnoresSecondApprovalWhileCommandIsRunning() async {
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"ls"}"#))],
+            [.text("结果已读取")],
+            [.text("不应出现第二轮")],
+        ])
+        let exec = DelayedCommandExecutor()
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        model.input = "列目录"
+        await model.send(serverContext: "")
+        XCTAssertEqual(model.state, .awaitingApproval)
+
+        async let first: Void = model.approveAndRun(id: "c1")
+        await Task.yield()
+        async let second: Void = model.approveAndRun(id: "c1")
+        _ = await (first, second)
+
+        let ranCommands = await exec.ranCommands()
+        XCTAssertEqual(ranCommands, ["ls"])
+        XCTAssertEqual(client.captured.callCount, 2)
+        XCTAssertEqual(model.messages.last?.text, "结果已读取")
+    }
+
     func testSkipFeedsPlaceholderAndContinues() async {
         let client = MockLLMClient(scripts: [
             [.toolCall(LLMToolCall(id: "c1", name: "run_command",
@@ -121,5 +146,19 @@ final class AssistantModelToolLoopTests: XCTestCase {
         let toolMsg = sent.first { !$0.toolCalls.isEmpty }
         XCTAssertEqual(toolMsg?.toolCalls.first?.status, .done)
         XCTAssertEqual(toolMsg?.toolCalls.first?.output, "a")
+    }
+}
+
+private actor DelayedCommandExecutor: CommandExecutor {
+    private var ran: [String] = []
+
+    func run(_ command: String) async throws -> CommandResult {
+        ran.append(command)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        return CommandResult(output: "ok", exitCode: 0)
+    }
+
+    func ranCommands() -> [String] {
+        ran
     }
 }

@@ -345,7 +345,7 @@ struct AssistantView: View {
             .padding(.vertical, isUser ? 10 : 0)
             .padding(.horizontal, isUser ? 12 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isUser ? UD.fillFaint : .clear)
+            .background(isUser ? UD.inputBg : .clear)   // 用户气泡 = UDInput 的白（日间纯白 + 描边）
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
@@ -366,7 +366,8 @@ struct AssistantView: View {
 
     private func udStatus(_ call: ToolCallState) -> UDToolCall.Status {
         switch call.status {
-        case .pending, .running: return .pending
+        case .pending: return .pending
+        case .running: return .running
         case .done, .failed, .skipped: return .done(output: call.output)
         }
     }

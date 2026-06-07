@@ -6,4 +6,13 @@ final class UDTabCloseButtonLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(UDTabCloseButtonLayout.hitWidth, 28)
         XCTAssertGreaterThanOrEqual(UDTabCloseButtonLayout.hitHeight, 28)
     }
+
+    func testCloseButtonVisibleChromeStaysCompact() {
+        XCTAssertLessThan(UDTabCloseButtonLayout.visibleSize, UDTabCloseButtonLayout.hitWidth)
+        XCTAssertLessThan(UDTabCloseButtonLayout.visibleSize, UDTabCloseButtonLayout.hitHeight)
+    }
+
+    func testTabTrailingPaddingIsTighterThanLeadingPadding() {
+        XCTAssertLessThan(UDTabLayout.trailingPadding, UDTabLayout.leadingPadding)
+    }
 }

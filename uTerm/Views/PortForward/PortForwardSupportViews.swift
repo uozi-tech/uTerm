@@ -77,11 +77,11 @@ struct PortForwardDeleteConfirm: View {
     }
 
     private var message: Text {
-        Text("将移除这条 \(rule.kind.label) 规则")
-            .foregroundStyle(UD.text2)
-        + Text(" \(rule.kind.flag) \(rule.listenHost):\(rule.listenPort)")
+        let lead = Text("将移除这条 \(rule.kind.label) 规则").foregroundStyle(UD.text2)
+        let addr = Text(" \(rule.kind.flag) \(rule.listenHost):\(rule.listenPort)")
             .font(UD.mono(12)).foregroundStyle(UD.text3)
-        + Text("。").foregroundStyle(UD.text2)
+        let tail = Text("。").foregroundStyle(UD.text2)
+        return Text("\(lead)\(addr)\(tail)")
     }
 }
 

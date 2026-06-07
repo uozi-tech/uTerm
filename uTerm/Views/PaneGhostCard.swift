@@ -14,10 +14,10 @@ struct PaneGhostCard: View {
     static let shadowPadding: CGFloat = 24
     private static let cornerRadius: CGFloat = 8
 
-    /// 所选终端配色在给定外观下的背景色。`dark` 由调用方按 app 外观计算
+    /// 终端配色在给定外观下的背景色。`dark` 由调用方按 app 外观计算
     /// （视图体读 `NSApp.effectiveAppearance`），抽成纯静态便于单测。
-    static func terminalBackgroundColor(dark: Bool, defaults: UserDefaults = .standard) -> NSColor {
-        TerminalSettings.read(from: defaults).colorScheme(dark: dark).backgroundColor
+    static func terminalBackgroundColor(dark: Bool) -> NSColor {
+        TerminalColorScheme.resolve(dark: dark).backgroundColor
     }
 
     /// 终端主体底色。独立 `NSPanel` 拿不到 `@Environment(\.colorScheme)`，故按

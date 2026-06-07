@@ -28,9 +28,9 @@ final class LineNumberGutter: NSView {
     /// 当前 mouseDown 时记录的起锚行号；mouseDragged 用来跨行扩选。
     private var dragAnchorLineIndex: Int?
 
-    private let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private let font = EditorTheme.textFont()
     private let rightPadding: CGFloat = 6
-    /// 13pt 等宽数字字符约 7.8pt，按 10pt 留 buffer 防止系统字体替换时溢出。
+    /// 按 10pt 留 buffer 防止系统字体替换或字号调整时数字溢出。
     /// 配合 max(40, ...)：1 位 40 / 2 位 40 / 3 位 40 / 4 位 50 / 5 位 60。
     private let digitWidth: CGFloat = 10
 

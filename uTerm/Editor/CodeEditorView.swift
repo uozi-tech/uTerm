@@ -31,11 +31,9 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
     let buffer: FileBuffer
     let language: String
     @Binding var findController: FindReplaceController?
-    @AppStorage("terminalFontName") private var fontName: String = TerminalSettings.defaultFontName
-    @AppStorage("terminalFontSize") private var fontSize: Double = TerminalSettings.defaultFontSize
 
     private var editorFont: NSFont {
-        EditorTheme.textFont(fontName: fontName, fontSize: CGFloat(fontSize))
+        EditorTheme.textFont()
     }
 
     func makeCoordinator() -> CodeEditorController {

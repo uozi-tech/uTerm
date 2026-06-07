@@ -14,6 +14,7 @@ struct UDToolCall: View {
     /// 卡片状态。`pending` 待用户审批；`done` 已执行并可附带输出。
     enum Status: Equatable {
         case pending
+        case running
         case done(output: String? = nil)
     }
 
@@ -32,6 +33,23 @@ struct UDToolCall: View {
         return false
     }
 
+    private var isRunning: Bool {
+        if case .running = status { return true }
+        return false
+    }
+
+    private var statusText: String {
+        switch status {
+        case .pending: return "待确认"
+        case .running: return "执行中"
+        case .done: return "已完成"
+        }
+    }
+
+    private var statusColor: Color {
+        isDone ? UD.success : UD.accent
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -40,6 +58,8 @@ struct UDToolCall: View {
                 outputRow(output)
             }
             if case .pending = status {
+                actions
+            } else if case .running = status {
                 actions
             }
         }
@@ -68,9 +88,9 @@ struct UDToolCall: View {
 
             HStack(spacing: 4) {
                 Circle()
-                    .fill(isDone ? UD.success : UD.accent)
+                    .fill(statusColor)
                     .frame(width: 5, height: 5)
-                Text(isDone ? "已完成" : "待确认")
+                Text(statusText)
                     .font(UD.font(10))
                     .foregroundStyle(isDone ? UD.success : UD.text4)
             }
@@ -125,10 +145,20 @@ struct UDToolCall: View {
         HStack(spacing: 7) {
             Button(action: onRun) {
                 HStack(spacing: 6) {
-                    Text("运行")
-                        .font(UD.font(11.5, weight: .semibold))
-                        .foregroundStyle(UD.text)
-                    UDKbd("⌘↵")
+                    if isRunning {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.62)
+                            .frame(width: 12, height: 12)
+                        Text("运行中")
+                            .font(UD.font(11.5, weight: .semibold))
+                            .foregroundStyle(UD.text3)
+                    } else {
+                        Text("运行")
+                            .font(UD.font(11.5, weight: .semibold))
+                            .foregroundStyle(UD.text)
+                        UDKbd("⌘↵")
+                    }
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 26)
@@ -143,11 +173,12 @@ struct UDToolCall: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(isRunning)
 
             Button(action: onSkip) {
                 Text("跳过")
                     .font(UD.font(11.5))
-                    .foregroundStyle(UD.text3)
+                    .foregroundStyle(isRunning ? UD.text4 : UD.text3)
                     .padding(.horizontal, 12)
                     .frame(height: 26)
                     .overlay(
@@ -157,10 +188,11 @@ struct UDToolCall: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(isRunning)
 
             Spacer(minLength: 0)
 
-            Text("运行前会请求确认")
+            Text(isRunning ? "命令执行中" : "运行前会请求确认")
                 .font(UD.font(10))
                 .foregroundStyle(UD.text4)
         }
@@ -204,6 +236,12 @@ private struct UDCommandGlyph: Shape {
             label: "运行命令 · 需要确认",
             command: "for i in $(seq 1 20); do curl -s -o /dev/null -w \"%{http_code} %{time_total}\\n\" http://127.0.0.1:8080/health; done",
             status: .pending
+        )
+
+        UDToolCall(
+            label: "运行命令 · 执行中",
+            command: "tail -f /var/log/nginx/error.log",
+            status: .running
         )
     }
     .frame(width: 300)

@@ -1,9 +1,10 @@
 import XCTest
 import AppKit
+import CodeEditTextView
 @testable import uTerm
 
-/// EditorTheme 现为随外观切换的动态 NSColor（深 VS Code Dark / 浅 VS Code Light+）。
-/// 旧测试断言「钉死 #1F1F1F/#CCCCCC」已不成立——改为按外观解析到对应变体。
+/// EditorTheme 现为随外观切换的动态 NSColor（深色背景对齐工作区 / 浅 VS Code Light+）。
+/// 旧测试断言「钉死编辑器深灰/#CCCCCC」已不成立——改为按外观解析到对应变体。
 @MainActor
 final class EditorThemeTests: XCTestCase {
 
@@ -34,9 +35,9 @@ final class EditorThemeTests: XCTestCase {
         abs(a.3 - b.3) < 0.01
     }
 
-    /// 背景：深 VS Code Dark #1F1F1F / 浅 VS Code Light #FFFFFF。
+    /// 背景：暗色跟工作区/侧栏基底一致，浅色保留 VS Code Light #FFFFFF。
     func test_editor_background_resolves_dark_and_light() {
-        XCTAssertTrue(near(sRGB(EditorTheme.background, .darkAqua), Double(0x1F)/255, Double(0x1F)/255, Double(0x1F)/255), "深 #1F1F1F")
+        XCTAssertTrue(near(sRGB(EditorTheme.background, .darkAqua), 16/255, 16/255, 18/255), "深 #101012")
         XCTAssertTrue(near(sRGB(EditorTheme.background, .aqua), 1, 1, 1), "浅 #FFFFFF")
     }
 
@@ -53,9 +54,49 @@ final class EditorThemeTests: XCTestCase {
     }
 
     func test_editor_and_terminal_share_default_font_settings() {
-        let terminalDefaults = TerminalSettings.read(from: UserDefaults(suiteName: "EditorThemeTests-\(UUID().uuidString)")!)
-        XCTAssertEqual(EditorTheme.textFontName, terminalDefaults.fontName)
-        XCTAssertEqual(EditorTheme.textFontSize, CGFloat(terminalDefaults.fontSize))
+        XCTAssertEqual(EditorTheme.textFontName, TerminalSettings.fontName)
+        XCTAssertEqual(EditorTheme.textFontSize, CGFloat(TerminalSettings.fontSize))
+    }
+
+    func test_editor_uses_fixed_pitch_font() {
+        XCTAssertTrue(EditorTheme.textFont().isFixedPitch)
+    }
+
+    func test_line_number_gutter_uses_editor_font_size() {
+        let controller = CodeEditorController()
+        let textView = TextView(
+            string: "echo test\n",
+            font: EditorTheme.textFont(),
+            textColor: EditorTheme.foreground,
+            lineHeightMultiplier: 1.4,
+            wrapLines: false,
+            isEditable: true,
+            isSelectable: true,
+            letterSpacing: 1.0,
+            useSystemCursor: false,
+            delegate: controller
+        )
+        let gutter = LineNumberGutter(textView: textView)
+        let font = Mirror(reflecting: gutter).children.first { $0.label == "font" }?.value as? NSFont
+
+        guard let font else {
+            XCTFail("LineNumberGutter should keep a concrete drawing font")
+            return
+        }
+        XCTAssertEqual(font.pointSize, EditorTheme.textFontSize, accuracy: 0.01)
+    }
+
+    func test_cursor_frame_is_clamped_to_font_height_and_centered() {
+        let font = EditorTheme.textFont()
+        let glyphHeight = ceil(font.ascender - font.descender)
+        let frame = CGRect(x: 48, y: 20, width: 1, height: glyphHeight * 1.4)
+
+        let normalized = CodeEditorController.normalizedCursorFrame(frame, font: font)
+
+        XCTAssertEqual(normalized.height, glyphHeight, accuracy: 0.01)
+        XCTAssertEqual(normalized.minY, frame.minY + (frame.height - glyphHeight) / 2, accuracy: 0.01)
+        XCTAssertEqual(normalized.minX, frame.minX, accuracy: 0.01)
+        XCTAssertEqual(normalized.width, frame.width, accuracy: 0.01)
     }
 
     func test_editor_and_terminal_share_selection_background_colors() {

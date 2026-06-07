@@ -62,8 +62,9 @@ struct UDTextField: View {
                         .strokeBorder(borderColor, lineWidth: 1)
                 )
                 .overlay(
+                    // 聚焦 / 错误焦点环：2px 细环（强调色 ~13% / 错误 ~12%），不用粗发光。
                     RoundedRectangle(cornerRadius: UD.Radius.md)
-                        .stroke(ringColor, lineWidth: 3)
+                        .stroke(ringColor, lineWidth: 2)
                 )
                 .overlay(
                     UDInputFocusDismissMonitor(isFocused: $focused)
@@ -95,7 +96,7 @@ struct UDTextField: View {
         if !isEnabled {
             return UD.dyn(.white(0.015), .black(0.02))
         }
-        return UD.dyn(.white(0.035), .hex(0xFFFFFF))
+        return UD.inputBg   // 暗夜白叠加细底 / 日间纯白
     }
 
     private var borderColor: Color {

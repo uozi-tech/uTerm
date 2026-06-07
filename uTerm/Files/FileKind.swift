@@ -76,3 +76,13 @@ func posixPermissionString(_ mode: UInt32?) -> String {
     for (mask, ch) in bits { s += (mode & mask) != 0 ? ch : "-" }
     return s
 }
+
+/// POSIX 权限位 → `"755"` / 含特殊位时 `"4755"`。`mode` 为 nil 返回 `"—"`。
+/// 只取低 12 位（`& 0o7777`，含 setuid/setgid/sticky）；文件类型位被忽略。
+func posixOctalString(_ mode: UInt32?) -> String {
+    guard let mode else { return "—" }
+    let perm = mode & 0o7777
+    let special = (perm >> 9) & 0o7
+    let base = String((perm >> 6) & 7) + String((perm >> 3) & 7) + String(perm & 7)
+    return special != 0 ? String(special) + base : base
+}

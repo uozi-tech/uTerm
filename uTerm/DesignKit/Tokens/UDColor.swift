@@ -44,8 +44,12 @@ enum UD {
     }
 
     // MARK: - 表面 Surfaces
+    // 日间「全部统一用 UDInput 的白」= 纯白 #FFFFFF（用户定）。画布 + 面板 + chrome（标题栏 /
+    // 侧栏）+ 输入 + 浮层全用 #FFFFFF，整 app 单一纯白面、区域靠 1px 描边分区、无缝。
+    // 次面板 #EEEEEA（嵌套 / code block，比白基面略深一档）。深色保持原分层。
+    // 中性灰一律用纯黑 alpha（rgba(0,0,0,α)），不发蓝。
     nonisolated static let bg         = dyn(.hex(0x101012), .hex(0xFFFFFF))
-    nonisolated static let panel      = dyn(.hex(0x17171A), .hex(0xF6F6F3))
+    nonisolated static let panel      = dyn(.hex(0x17171A), .hex(0xFFFFFF))
     nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xEEEEEA))
     nonisolated static let panelHover = dyn(.hex(0x202026), .black(0.05))
     nonisolated static let terminal   = dyn(.hex(0x08080A), .hex(0x0B0B0D))
@@ -54,15 +58,15 @@ enum UD {
     /// 模态实体面（指标卡 / 菜单栏面板）。
     nonisolated static let overlayHi  = dyn(.hex(0x202024), .hex(0xFFFFFF))
 
-    // MARK: - 描边 Stroke（深=白叠加 / 浅=黑叠加）
+    // MARK: - 描边 Stroke（深=白叠加 / 浅=纯黑叠加）
     nonisolated static let border     = dyn(.white(0.07), .black(0.10))
-    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.14))
+    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.16))
 
-    // MARK: - 文本 Text（深=白叠加 / 浅=黑叠加）
-    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x1D1D1F))
-    nonisolated static let text2      = dyn(.white(0.46), .black(0.58))
-    nonisolated static let text3      = dyn(.white(0.28), .black(0.46))
-    nonisolated static let text4      = dyn(.white(0.18), .black(0.34))
+    // MARK: - 文本 Text（深=白叠加 / 浅=纯黑叠加，中性不发蓝）
+    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x1C1C1E))
+    nonisolated static let text2      = dyn(.white(0.46), .black(0.56))
+    nonisolated static let text3      = dyn(.white(0.28), .black(0.40))
+    nonisolated static let text4      = dyn(.white(0.18), .black(0.26))
 
     // MARK: - 强调 Accent（可切换；见 AccentColor / AccentState。getter 同步读 selected →
     // SwiftUI body 求值期访问被 Observation 追踪 → 切色全局自动重渲染。默认蓝 = 原手调值。）
@@ -89,21 +93,50 @@ enum UD {
     nonisolated static let accentGold   = ColorSpec.hex(0xFFD60A).color()   // 黯金
     nonisolated static let accentRose   = ColorSpec.hex(0xFF5A5A).color()   // 藕薇
 
-    // MARK: - 语义状态 Semantic（macOS 系统色，浅色用更深档）
-    nonisolated static let success = dyn(.hex(0x30D158), .hex(0x34C759))
-    nonisolated static let warning = dyn(.hex(0xFFD60A), .hex(0xFFAA00))
-    nonisolated static let caution = dyn(.hex(0xFF9F0A), .hex(0xFF8A00))   // 断开
-    nonisolated static let danger  = dyn(.hex(0xFF5A5A), .hex(0xFF3B30))
-    nonisolated static let info    = dyn(.hex(0x64D2FF), .hex(0x007AFF))
+    // MARK: - 语义状态 Semantic（设计稿 --u-status-*）
+    // 暗夜：iOS 鲜艳系统色（保持原样）。日间：低饱和、年轻化——白底上仍清晰可辨，
+    // 由设计稿 oklch 值转 sRGB（绿 0.70/0.13/156、黄 0.78/0.115/82、橙 0.72/0.125/56、
+    // 红 0.64/0.15/24、蓝 0.67/0.115/242）。状态点 / 徽章 / danger 态等全经此 token。
+    nonisolated static let success = dyn(.hex(0x30D158), .hex(0x4EB67C))   // 已连接
+    nonisolated static let warning = dyn(.hex(0xFFD60A), .hex(0xDCB05B))   // 连接中
+    nonisolated static let caution = dyn(.hex(0xFF9F0A), .hex(0xE08E52))   // 断开
+    nonisolated static let danger  = dyn(.hex(0xFF5A5A), .hex(0xD8625E))   // 失败 / 危险
+    nonisolated static let info    = dyn(.hex(0x64D2FF), .hex(0x4D9DD6))   // 信息
+
+    // MARK: - 文件夹 / 图标色 Folder & Icon（设计稿 --u-folder-1/2 · --u-icon-teal）
+    // 暗夜保持原样（鲜艳双色蓝 + 青）；日间文件夹换 macOS Finder 风格鲜亮饱和蓝
+    // （旧低饱和雾霾蓝看起来发灰），符号链接转向箭头仍柔青。
+    nonisolated static let folder1    = dyn(.hex(0x5B8FD6), .hex(0x2B86E6))   // 文件夹背片（深蓝）
+    nonisolated static let folder2    = dyn(.hex(0x79A9E8), .hex(0x4CA7F8))   // 文件夹前片（亮蓝，主填充）
+    nonisolated static let folderArrow = dyn(.hex(0x0E2742), .hex(0xFFFFFF))  // 文件夹「返回上级」箭头
+    nonisolated static let iconTeal   = dyn(.hex(0x2DD4BF), .hex(0x0FB6AC))   // 符号链接转向箭头（日间 = oklch(0.70 0.12 188)）
+
+    // MARK: - 文档图标色 Doc（设计稿 --u-doc-bg/line/fold/detail）
+    // 暗夜：白叠加纸面（半透叠在深底）。日间：纯白纸 + 1pt 暖中性灰描边 + 暖白右上折角 +
+    // 暖灰内文线——取代旧「灰色纸片」（doc.fill 填 text4），且不发蓝（与暖中性白底统一）。
+    nonisolated static let docBg     = dyn(.white(0.09), .hex(0xFFFFFF))   // 纸张填充
+    nonisolated static let docLine   = dyn(.white(0.26), .hex(0xC9C7C4))   // 描边（纸 + 折角共用）
+    nonisolated static let docFold   = dyn(.white(0.16), .hex(0xEEEDEA))   // 右上折角
+    nonisolated static let docDetail = dyn(.white(0.32), .hex(0xA8A6A3))   // 内部文本线
+
+    // MARK: - 输入底 Input（设计稿 --u-input-bg / --u-input-bg-soft）
+    // 暗夜：白叠加细底（原样）。日间：纯白底（配 UD.border 细描边——更干净）。
+    nonisolated static let inputBg     = dyn(.white(0.035), .hex(0xFFFFFF))
+    nonisolated static let inputBgSoft = dyn(.white(0.03),  .hex(0xFFFFFF))
 
     // MARK: - 行态 Row（hover / selected 底）
-    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.04))
+    // 日间 hover = 纯黑 4.5% 叠加（中性，不发蓝）；selected = accent-soft #007AFF 13%
+    // —— 设计稿里唯一允许的「选中填充」（kit L.sel）。深色保持原中性白叠加。
+    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.045))
     nonisolated static let rowSelected = dyn(.white(0.055), .hex(0x007AFF, 0.13))
 
-    // MARK: - 叠加填充 Fill（面上的细微实体填充；深=白叠加 / 浅=黑叠加）
-    nonisolated static let fillFaint = dyn(.white(0.03),  .black(0.035))   // 卡片 / 气泡静态底
-    nonisolated static let fillSoft  = dyn(.white(0.05),  .black(0.055))   // 选中段 / 代码片
-    nonisolated static let fillMed   = dyn(.white(0.08),  .black(0.08))    // 进度槽等需更明显处
+    // MARK: - 叠加填充 Fill（面上的细微实体填充）
+    // 深色=白叠加。日间：基面是暖白 #F6F6F3，卡片 / 气泡 / chip 用比基面略深一档、同色温的
+    // 暖灰实底（嵌套感、可见、不发蓝）。fillMed 用中性黑叠加——进度槽等**功能轨道**，
+    // handoff 要求保留中性灰。
+    nonisolated static let fillFaint = dyn(.white(0.03),  .hex(0xF0F0ED))   // 卡片 / 气泡静态底（暖、略深于基面）
+    nonisolated static let fillSoft  = dyn(.white(0.05),  .hex(0xE9E9E5))   // 选中段 / 代码片（暖、更深一档）
+    nonisolated static let fillMed   = dyn(.white(0.08),  .black(0.08))     // 进度槽等功能轨道（保留中性灰）
 
     // MARK: - 遥测分类色 Telemetry（状态栏 / 指标卡，深浅各一套）
     nonisolated static let mPlatform = dyn(.hex(0x409CFF), .hex(0x007AFF))   // 平台

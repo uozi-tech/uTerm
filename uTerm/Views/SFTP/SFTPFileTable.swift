@@ -46,13 +46,17 @@ struct SFTPFileTable: View {
     let onDropRemoteItems: ([NSItemProvider], RemoteEntry) -> Bool
     let onDropRemoteItemsToParent: ([NSItemProvider]) -> Bool
     let query: String
+    /// 行右键菜单行为（进入/下载 · 在工作区打开 · 权限设置 · 拷贝 · 删除…）。
+    let rowActions: SFTPRowActions
 
     @FocusState private var focused: Bool
 
-    // 列宽（对齐设计稿 FileTableHeader / FileRow）。
-    private let wMtime: CGFloat = 148
-    private let wSize: CGFloat = 84
-    private let wKind: CGFloat = 96
+    // 列宽（对齐设计稿 FileTableHeader / FileRow）：名称(flex) | 所有者 | 权限 | 修改时间 | 大小。
+    // 「类型」列已删（种类由图标 + 检视器表达），名称腾出更多宽度。
+    private let wOwner: CGFloat = 92
+    private let wPerm: CGFloat = 64
+    private let wMtime: CGFloat = 116
+    private let wSize: CGFloat = 60
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,14 +116,21 @@ struct SFTPFileTable: View {
 
     private var header: some View {
         HStack(spacing: 12) {
+            // 与文件行 leading 图标（30）对齐——让「名称」列头压在文件名上方而非图标上。
+            Color.clear.frame(width: 30)
             headerCell("名称", .name).frame(maxWidth: .infinity, alignment: .leading)
+            staticHeader("所有者").frame(width: wOwner, alignment: .leading)
+            staticHeader("权限").frame(width: wPerm, alignment: .leading)
             headerCell("修改时间", .modified).frame(width: wMtime, alignment: .leading)
             headerCell("大小", .size).frame(width: wSize, alignment: .trailing)
-            Text("类型").font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(UD.text3).frame(width: wKind, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .frame(height: 38)
+    }
+
+    /// 静态（不可排序）列头文案——所有者 / 权限两列只展示不排序。
+    private func staticHeader(_ label: String) -> some View {
+        Text(label).font(.system(size: 11.5, weight: .medium)).foregroundStyle(UD.text3)
     }
 
     @ViewBuilder
@@ -167,22 +178,24 @@ struct SFTPFileTable: View {
         let selected = e.id == selectedID
         let base = HStack(spacing: 12) {
             SFTPFileIcon(kind: kind).frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(e.name).font(.system(size: 13.5))
-                    .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
-                Text(posixPermissionString(e.permissions))
-                    .font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // 名称（权限已移到独立列，去掉原本的副标题）。
+            Text(e.name).font(.system(size: 13.5))
+                .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // 所有者：uid · gid（SFTP 不返回用户名，按数字显示）。
+            Text(ownerText(e))
+                .font(UD.mono(12)).foregroundStyle(UD.text2)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(width: wOwner, alignment: .leading)
+            // 权限：八进制 chip（hover 出完整 drwxr-xr-x）。
+            permChip(e).frame(width: wPerm, alignment: .leading)
             Text(e.modifiedAt.map { SFTPFormat.date($0) } ?? "--")
-                .font(UD.mono(12)).foregroundStyle(UD.text3)
+                .font(UD.mono(12)).foregroundStyle(UD.text3).lineLimit(1)
                 .frame(width: wMtime, alignment: .leading)
             Text(e.isDirectory || e.size == nil
                  ? "--" : SFTPFormat.bytes(Int64(e.size!)))
                 .font(UD.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? UD.text2 : UD.text4)
                 .frame(width: wSize, alignment: .trailing)
-            Text(kind.label).font(.system(size: 12.5))
-                .foregroundStyle(UD.text3).frame(width: wKind, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -202,8 +215,26 @@ struct SFTPFileTable: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onActivate(e) }
+        .contextMenu { SFTPRowMenu(entry: e, actions: rowActions) }
 
         return remoteMoveDropTarget(base, entry: e)
+    }
+
+    /// 所有者展示：`uid · gid`（SFTP 协议不返回用户名，缺失显示 `?`）。
+    private func ownerText(_ e: RemoteEntry) -> String {
+        "\(e.uid.map(String.init) ?? "?") · \(e.gid.map(String.init) ?? "?")"
+    }
+
+    /// 八进制权限 chip：mono 11 + `UD.fillSoft` 底 + `UD.border` 描边胶囊；tooltip
+    /// 给完整符号串（drwxr-xr-x）。
+    @ViewBuilder
+    private func permChip(_ e: RemoteEntry) -> some View {
+        Text(posixOctalString(e.permissions))
+            .font(UD.mono(11)).foregroundStyle(UD.text2)
+            .padding(.horizontal, 6).padding(.vertical, 1.5)
+            .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
+            .help(posixPermissionString(e.permissions))
     }
 
     @ViewBuilder
@@ -219,61 +250,166 @@ struct SFTPFileTable: View {
     }
 }
 
-/// 文件夹（双色蓝）/ 文件（灰 + 可选语言角标）图标。对齐设计稿 `FileIcon`。
+/// 文件夹（双色亮蓝）/ 文件（白纸 + 折角 + 可选语言角标）图标。
 ///
-/// `size` 控制主图标字号，内部角标 / 上箭头按比例缩放（比值取自设计稿 19pt 基准）。
-/// 默认 19 = 独立 SFTP 窗口原值（像素不变）；工作区侧边栏传更小值复用同一组件。
+/// 自绘矢量，逐路径对齐设计稿 `pages/workspace.jsx` 的 `SftpFileIcon`（24×24 viewBox，
+/// 注明「mirrors SFTPFileIcon.swift」）：文件夹后/前片填 `UD.folder1/2`，「返回上级」箭头
+/// 填 `UD.folderArrow`；文档为 `UD.docBg` 白纸 + `UD.docLine` 描边 + `UD.docFold` 右上折角，
+/// 带类型者叠彩色角标，否则画 `UD.docDetail` 内文线，符号链接叠 `UD.iconTeal` 转向箭头。
+///
+/// `size` = 图标边长（点）。默认 19 = 独立 SFTP 窗口原值；工作区侧边栏传更小值复用同一组件。
+/// 所有坐标 / 线宽以 24 单位画布乘 `size/24` 缩放，故 `.scaleEffect` 放大时描边按比例变粗。
 struct SFTPFileIcon: View {
     let kind: BrowserFileKind
     var isUp: Bool = false
     var size: CGFloat = 19
 
-    private static let folderBlue = Color(hex: 0x79A9E8)
-
     var body: some View {
-        switch kind {
-        case .folder:
-            ZStack {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: size))
-                    .foregroundStyle(Self.folderBlue)
-                if isUp {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: size * 0.42, weight: .bold))
-                        .foregroundStyle(Color(hex: 0x0E2742))
-                        .offset(y: size * 0.053)
-                }
-            }
-        case .symlink:
-            // 统一链接图标：灰 doc 底 + 青色转向箭头角标（不预判目标是目录/文件）。
-            ZStack(alignment: .center) {
-                Image(systemName: "doc.fill")
-                    .font(.system(size: size))
-                    .foregroundStyle(UD.text4)
-                Image(systemName: "arrowshape.turn.up.right.fill")
-                    .font(.system(size: size * 0.36, weight: .bold))
-                    .foregroundStyle(Color(hex: 0x2DD4BF))
-                    .offset(y: size * 0.12)
-            }
-        case .file(_, let tag, let color):
-            ZStack(alignment: .center) {
-                Image(systemName: "doc.fill")
-                    .font(.system(size: size))
-                    .foregroundStyle(UD.text4)
+        ZStack {
+            switch kind {
+            case .folder:
+                folder
+            case .symlink:
+                doc
+                symlinkBadge
+            case .file(_, let tag, let color):
+                doc
                 if let tag, let color {
-                    Text(tag)
-                        .font(.system(size: size * 0.316, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(hex: 0x0C1320))
-                        .padding(.horizontal, size * 0.105).padding(.vertical, size * 0.026)
-                        .background(color, in: RoundedRectangle(cornerRadius: size * 0.105))
-                        .offset(y: size * 0.158)
+                    tagLabel(tag, color)
                 } else {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: size * 0.316, weight: .regular))
-                        .foregroundStyle(UD.text3)
-                        .offset(y: size * 0.105)
+                    detailLines
                 }
             }
         }
+        .frame(width: size, height: size)
+    }
+
+    /// 24 单位画布坐标 → 点。
+    private func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        CGPoint(x: x * size / 24, y: y * size / 24)
+    }
+    /// 24 单位画布线宽 → 点。
+    private func w(_ width: CGFloat) -> CGFloat { width * size / 24 }
+
+    // MARK: 文件夹（后片 folder1 + 前片 folder2 + 可选返回箭头）
+
+    private var folder: some View {
+        ZStack {
+            folderBack.fill(UD.folder1)
+            folderFront.fill(UD.folder2)
+            if isUp {
+                folderArrow.stroke(UD.folderArrow,
+                    style: StrokeStyle(lineWidth: w(1.7), lineCap: .round, lineJoin: .round))
+            }
+        }
+    }
+
+    private var folderBack: Path {
+        var path = Path()
+        path.move(to: p(2.5, 7.4))
+        path.addQuadCurve(to: p(4.05, 5.85), control: p(2.5, 5.85))   // 左上圆角
+        path.addLine(to: p(8.95, 5.85))                              // 顶边
+        path.addLine(to: p(10.85, 7.9))                             // 标签斜边
+        path.addLine(to: p(20.45, 7.9))
+        path.addQuadCurve(to: p(22, 9.45), control: p(22, 7.9))      // 右上圆角
+        path.addLine(to: p(22, 18.15))
+        path.addQuadCurve(to: p(20.45, 19.7), control: p(22, 19.7))  // 右下圆角
+        path.addLine(to: p(4.05, 19.7))
+        path.addQuadCurve(to: p(2.5, 18.15), control: p(2.5, 19.7))  // 左下圆角
+        path.closeSubpath()
+        return path
+    }
+
+    private var folderFront: Path {
+        var path = Path()
+        path.move(to: p(2.5, 10.7))
+        path.addLine(to: p(21.55, 10.7))
+        path.addLine(to: p(21.55, 18.15))
+        path.addQuadCurve(to: p(20, 19.7), control: p(21.55, 19.7))
+        path.addLine(to: p(4.05, 19.7))
+        path.addQuadCurve(to: p(2.5, 18.15), control: p(2.5, 19.7))
+        path.closeSubpath()
+        return path
+    }
+
+    private var folderArrow: Path {
+        var path = Path()
+        path.move(to: p(12, 17.6)); path.addLine(to: p(12, 13.5))            // 竖杆
+        path.move(to: p(9.7, 15.4)); path.addLine(to: p(12, 13.1)); path.addLine(to: p(14.3, 15.4))  // 箭头
+        return path
+    }
+
+    // MARK: 文档（白纸 + 折角）
+
+    private var doc: some View {
+        let stroke = StrokeStyle(lineWidth: w(1.1), lineJoin: .round)
+        return ZStack {
+            docBody.fill(UD.docBg)
+            docBody.stroke(UD.docLine, style: stroke)
+            docFold.fill(UD.docFold)
+            docFold.stroke(UD.docLine, style: stroke)
+        }
+    }
+
+    private var docBody: Path {
+        var path = Path()
+        path.move(to: p(6.4, 3))
+        path.addLine(to: p(12.7, 3))                                 // 顶边
+        path.addLine(to: p(18, 8.2))                                // 折角斜边
+        path.addLine(to: p(18, 20))
+        path.addQuadCurve(to: p(17, 21), control: p(18, 21))         // 右下圆角
+        path.addLine(to: p(6.4, 21))
+        path.addQuadCurve(to: p(5.4, 20), control: p(5.4, 21))       // 左下圆角
+        path.addLine(to: p(5.4, 4))
+        path.addQuadCurve(to: p(6.4, 3), control: p(5.4, 3))         // 左上圆角
+        path.closeSubpath()
+        return path
+    }
+
+    private var docFold: Path {
+        var path = Path()
+        path.move(to: p(12.6, 3.05))
+        path.addLine(to: p(12.6, 7.2))
+        path.addQuadCurve(to: p(13.6, 8.2), control: p(12.6, 8.2))
+        path.addLine(to: p(17.8, 8.2))
+        path.closeSubpath()
+        return path
+    }
+
+    // MARK: 文档叠加（符号链接箭头 / 类型角标 / 内文线）
+
+    private var symlinkBadge: some View {
+        let stroke = StrokeStyle(lineWidth: w(1.6), lineCap: .round, lineJoin: .round)
+        var arc = Path()
+        arc.move(to: p(9, 18.3)); arc.addLine(to: p(9, 16.1))
+        arc.addQuadCurve(to: p(10.7, 14.4), control: p(9, 14.4))
+        arc.addLine(to: p(13.3, 14.4))
+        var head = Path()
+        head.move(to: p(11.6, 12.6)); head.addLine(to: p(14.2, 14.4)); head.addLine(to: p(11.6, 16.2))
+        return ZStack {
+            arc.stroke(UD.iconTeal, style: stroke)
+            head.stroke(UD.iconTeal, style: stroke)
+        }
+    }
+
+    private func tagLabel(_ tag: String, _ color: Color) -> some View {
+        // 设计稿 rect x6 y12.4 w12 h6.2 rx1.4，文本居中 (12, 15.5)。
+        ZStack {
+            RoundedRectangle(cornerRadius: w(1.4))
+                .fill(color)
+                .frame(width: w(12), height: w(6.2))
+            Text(tag)
+                .font(.system(size: w(5), weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(hex: 0x0C1320))
+        }
+        .position(p(12, 15.5))
+    }
+
+    private var detailLines: some View {
+        var path = Path()
+        path.move(to: p(8.2, 12.6)); path.addLine(to: p(15.8, 12.6))
+        path.move(to: p(8.2, 15.1)); path.addLine(to: p(15.8, 15.1))
+        path.move(to: p(8.2, 17.6)); path.addLine(to: p(12.8, 17.6))
+        return path.stroke(UD.docDetail, style: StrokeStyle(lineWidth: w(1.2), lineCap: .round))
     }
 }

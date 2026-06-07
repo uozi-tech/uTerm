@@ -418,6 +418,61 @@ final class FileBrowserModelTests: XCTestCase {
         model.clearFinishedTransfers()
         XCTAssertTrue(model.transfers.isEmpty)
     }
+    // MARK: - 权限设置（chmod）
+
+    func testSetPermissionsFileGoesThroughSetstat() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let file = model.entries[0]
+        await model.setPermissions(entry: file, mode: 0o755, recursive: false)
+        let changes = await mock.permissionChanges
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?.path, "/home/user/a.txt")
+        XCTAssertEqual(changes.first?.mode, 0o755)
+        let execs = await mock.execCommands
+        XCTAssertTrue(execs.isEmpty, "非递归不应走 exec chmod -R")
+    }
+
+    /// `mode` 高位（文件类型位等）应被 `& 0o777` 截掉，只下发权限位。
+    func testSetPermissionsMasksToLow9Bits() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        await model.setPermissions(entry: model.entries[0], mode: 0o100644, recursive: false)
+        let changes = await mock.permissionChanges
+        XCTAssertEqual(changes.first?.mode, 0o644)
+    }
+
+    func testSetPermissionsRecursiveDirectoryRunsChmodR() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("etc", true)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let folder = model.entries[0]
+        await model.setPermissions(entry: folder, mode: 0o750, recursive: true)
+        let execs = await mock.execCommands
+        XCTAssertEqual(execs, ["chmod -R 750 '/home/user/etc'"])
+        let changes = await mock.permissionChanges
+        XCTAssertTrue(changes.isEmpty, "递归走 exec，不走 setstat")
+    }
+
+    /// recursive=true 但目标是文件 → 仍走单个 setstat（chmod -R 对文件无意义）。
+    func testSetPermissionsRecursiveOnFileStillUsesSetstat() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        await model.setPermissions(entry: model.entries[0], mode: 0o600, recursive: true)
+        let changes = await mock.permissionChanges
+        XCTAssertEqual(changes.first?.mode, 0o600)
+        let execs = await mock.execCommands
+        XCTAssertTrue(execs.isEmpty)
+    }
+
+    func testShellQuoteWrapsAndEscapes() {
+        XCTAssertEqual(FileBrowserModel.shellQuote("/home/root"), "'/home/root'")
+        XCTAssertEqual(FileBrowserModel.shellQuote("/a b/c"), "'/a b/c'")
+        XCTAssertEqual(FileBrowserModel.shellQuote("/it's"), "'/it'\\''s'")
+    }
 }
 
 enum SFTPTestError: Error { case boom }

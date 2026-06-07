@@ -208,6 +208,7 @@ final class AssistantModel {
     func approveAndRun(id: String) async {
         guard let exec = executor,
               let (mi, ci) = locate(id) else { return }
+        guard messages[mi].toolCalls[ci].status == .pending else { return }
         messages[mi].toolCalls[ci].status = .running
         state = .running
         do {
@@ -226,6 +227,7 @@ final class AssistantModel {
     /// 跳过某条工具调用；全部 resolved 后自动续轮。
     func skip(id: String) async {
         guard let (mi, ci) = locate(id) else { return }
+        guard messages[mi].toolCalls[ci].status == .pending else { return }
         messages[mi].toolCalls[ci].status = .skipped
         persistToolCalls(at: mi)
         await continueIfResolved(messageIndex: mi)

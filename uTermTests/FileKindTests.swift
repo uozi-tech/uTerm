@@ -43,6 +43,30 @@ final class FileKindTests: XCTestCase {
     func testPermissionStringNil() {
         XCTAssertEqual(posixPermissionString(nil), "----------")
     }
+
+    // MARK: 八进制权限串
+
+    func testOctalStringDirectory() {
+        XCTAssertEqual(posixOctalString(0o040755), "755")
+    }
+
+    func testOctalStringFile() {
+        XCTAssertEqual(posixOctalString(0o100644), "644")
+    }
+
+    func testOctalStringPrivateDir() {
+        XCTAssertEqual(posixOctalString(0o040700), "700")
+    }
+
+    /// 含特殊位（setuid 4 / setgid 2 / sticky 1）时前缀一位八进制。
+    func testOctalStringWithSpecialBits() {
+        XCTAssertEqual(posixOctalString(0o104755), "4755")   // setuid 可执行
+        XCTAssertEqual(posixOctalString(0o041777), "1777")   // sticky 目录（/tmp）
+    }
+
+    func testOctalStringNil() {
+        XCTAssertEqual(posixOctalString(nil), "—")
+    }
 }
 
 extension FileKindTests {

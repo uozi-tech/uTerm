@@ -3,12 +3,12 @@ import SwiftUI
 /// uTerm DesignKit 进度原语 —— 线性条 / 不定态条 / 环形 / 传输行，集中于此一文件。
 ///
 /// 全部为纯展示组件：进度值统一为 `Double`（0...1），不依赖任何 domain model。
-/// 颜色 / 度量均取自 UD token；深色态线性条带柔光，浅色态传输卡片带 `udShadow(.sm)`。
+/// 颜色 / 度量均取自 UD token；进度填充为纯色（无发光），传输卡片带 `udShadow(.sm)`。
 
 // MARK: - 线性进度条
 
-/// 确定态线性进度条。轨道为半透明 Capsule，填充为 `color` 上色的 Capsule，
-/// 宽度按 `progress` 比例，深色态带柔光。
+/// 确定态线性进度条。轨道为半透明 Capsule，填充为 `color` 上色的纯色 Capsule，
+/// 宽度按 `progress` 比例（无发光）。
 struct UDLinearBar: View {
     var progress: Double
     var color: Color = UD.accent
@@ -26,7 +26,6 @@ struct UDLinearBar: View {
                 Capsule()
                     .fill(color)
                     .frame(width: geo.size.width * clamped, height: height)
-                    .shadow(color: color.opacity(0.4), radius: 4)
             }
             .frame(height: height)
         }

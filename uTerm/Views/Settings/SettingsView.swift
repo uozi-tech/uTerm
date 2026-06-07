@@ -156,7 +156,7 @@ private struct SettingsTabStrip: View {
             .foregroundStyle(isOn ? UD.text : UD.text2)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? Color.primary.opacity(0.06) : Color.clear))
+            .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? UD.accentSoft : Color.clear))   // 选中 = accent-soft（去黑 6% 灰底）
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

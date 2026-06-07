@@ -3,16 +3,20 @@ import SwiftUI
 /// uTerm DesignKit 分段控制 —— 设计稿 `Components.html` 分段控制组。
 ///
 /// `DarkSegmented` 的 drop-in 替代：泛型选项（`Value: Hashable`），等宽分段，
-/// 选中段填 `UD.accent` + 白字 + 顶部高光；未选段悬停浅底；相邻**均未选**的
+/// 选中段 = 纯 `UD.accent` 填充 + 白字（无内高光）；未选段悬停浅底；相邻**均未选**的
 /// 两段之间显示 1px 竖分隔。纯展示组件，只读 `UD` token + 普通值输入，不依赖
 /// 任何 domain model。
 struct UDSegmented<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(value: Value, label: String)]
+    let labelFont: Font
 
-    init(selection: Binding<Value>, options: [(value: Value, label: String)]) {
+    init(selection: Binding<Value>,
+         options: [(value: Value, label: String)],
+         labelFont: Font = UD.font(12, weight: .medium)) {
         self._selection = selection
         self.options = options
+        self.labelFont = labelFont
     }
 
     var body: some View {
@@ -32,8 +36,10 @@ struct UDSegmented<Value: Hashable>: View {
         .padding(3)
         .frame(height: 30)
         .background(
+            // 容器底：深色=白叠加细底；日间=纯白（设计稿 kit「白容器 + 描边，仅选中段 accent」，
+            // 去掉旧黑 4% 灰轨）。
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(UD.dyn(.white(0.05), .black(0.04)))
+                .fill(UD.dyn(.white(0.05), .hex(0xFFFFFF)))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -51,7 +57,7 @@ struct UDSegmented<Value: Hashable>: View {
                 selection = value
             }
         } label: {
-            SegmentLabel(label: label, selected: selected)
+            SegmentLabel(label: label, selected: selected, font: labelFont)
         }
         .buttonStyle(.plain)
     }
@@ -70,11 +76,12 @@ struct UDSegmented<Value: Hashable>: View {
 private struct SegmentLabel: View {
     let label: String
     let selected: Bool
+    let font: Font
     @State private var hovering = false
 
     var body: some View {
         Text(label)
-            .font(UD.font(12, weight: .medium))
+            .font(font)
             .foregroundStyle(selected ? Color.white : UD.text2)
             .padding(.horizontal, 16)
             .frame(minWidth: 56)
@@ -82,16 +89,9 @@ private struct SegmentLabel: View {
             .frame(maxHeight: .infinity)
             .background {
                 if selected {
+                    // 选中段 = 纯强调色填充（无内高光）。
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(UD.accent)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-                                .mask(
-                                    LinearGradient(colors: [.white, .clear],
-                                                   startPoint: .top, endPoint: .bottom)
-                                )
-                        )
                 } else if hovering {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(UD.dyn(.white(0.05), .black(0.05)))

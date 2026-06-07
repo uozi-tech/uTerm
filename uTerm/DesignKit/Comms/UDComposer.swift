@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum UDComposerLayout {
+    /// 输入框内容到圆角边框的四周内边距，保持上下左右一致。
+    nonisolated static let contentPadding: CGFloat = UD.Space.lg
+}
+
 /// uTerm DesignKit 对话输入区 —— 设计稿 `workspace.jsx` Agent 输入区（Cursor 风格）。
 ///
 /// `UDComposer` 是一块约 300 宽的聊天输入框：纵向 `TextField`（1...5 行）在上，
@@ -23,6 +28,8 @@ struct UDComposer<ModelControl: View>: View {
                 .font(UD.font(12))
                 .foregroundStyle(UD.text)
                 .lineLimit(1...5)
+                .submitLabel(.send)
+                .onSubmit(submit)
 
             HStack(spacing: 6) {
                 modelControl()
@@ -35,7 +42,7 @@ struct UDComposer<ModelControl: View>: View {
                 .buttonStyle(UDComposerIconStyle())
                 .help("附加上下文")
 
-                Button(action: onSend) {
+                Button(action: submit) {
                     Text("↩")
                         .font(UD.font(12))
                 }
@@ -43,18 +50,21 @@ struct UDComposer<ModelControl: View>: View {
                 .help("发送")
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .padding(UDComposerLayout.contentPadding)
         .frame(width: width)
         .frame(maxWidth: width == nil ? .infinity : nil)
         .background(
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
-                .fill(UD.dyn(.white(0.025), .black(0.042)))
+                .fill(UD.inputBg)   // 日间纯白底 / 暗夜白叠加细底
         )
         .overlay(
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
                 .strokeBorder(UD.border, lineWidth: 1)
         )
+    }
+
+    private func submit() {
+        onSend()
     }
 }
 
@@ -104,7 +114,7 @@ struct UDModelPillLabel: View {
         .frame(height: 28)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(UD.dyn(.white(0.02), .black(0.035)))
+                .fill(UD.dyn(.white(0.02), .hex(0xFFFFFF)))   // 日间 = UDInput 的白（纯白 + 描边）
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)

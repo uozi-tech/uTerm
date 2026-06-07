@@ -501,6 +501,26 @@ final class FileBrowserModel {
         } catch { transientError = "删除失败：\(error)" }
     }
 
+    /// 设置文件 / 文件夹权限（chmod）。`mode` 取低 9 位（`& 0o777`）。
+    /// - 非递归（或文件）：走 SFTP `setstat`（`provider.setPermissions`）。
+    /// - 递归（目录 + `recursive`）：开 exec channel 跑 `chmod -R <oct> <path>`，
+    ///   一次性把整棵子树改掉（比逐项 setstat 可靠且快）。
+    /// 完成后刷新列表；失败置 `transientError`。
+    func setPermissions(entry: RemoteEntry, mode: UInt32, recursive: Bool) async {
+        guard let provider else { return }
+        let path = Self.join(currentPath, entry.name)
+        let perm = mode & 0o777
+        do {
+            if recursive && entry.isDirectory {
+                let oct = String(perm, radix: 8)
+                _ = try await provider.exec("chmod -R \(oct) \(Self.shellQuote(path))")
+            } else {
+                try await provider.setPermissions(path: path, mode: perm)
+            }
+            await refresh()
+        } catch { transientError = "权限设置失败：\(error)" }
+    }
+
     /// 递归删目录：先删尽子项（子目录优先递归），最后 rmdir 自身。
     private static func deleteDirectoryRecursive(_ path: String,
                                                  provider: any SFTPProviding) async throws {
@@ -751,6 +771,12 @@ final class FileBrowserModel {
         var comps = path.split(separator: "/", omittingEmptySubsequences: true)
         comps.removeLast()
         return comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+    }
+
+    /// 把路径包成单引号串供 shell（exec channel）安全使用：单引号内一切原样，
+    /// 内嵌单引号用 `'\''` 收尾再续。供 `chmod -R` 等命令拼接，杜绝路径注入 / 空格问题。
+    static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func canMoveRemoteDragItem(sourcePath: String,

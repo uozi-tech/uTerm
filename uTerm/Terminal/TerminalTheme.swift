@@ -3,7 +3,7 @@ import AppKit
 import SwiftTerm
 
 enum TerminalTheme {
-    static let backgroundColor = NSColor(srgbRed: 0x1E / 255, green: 0x1E / 255, blue: 0x1E / 255, alpha: 1)
+    static let backgroundColor = NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x12 / 255, alpha: 1)
 
     static func applyScrollback(to view: SwiftTerm.TerminalView, scrollback: Int) {
         guard let terminal = view.terminal else { return }
@@ -34,18 +34,16 @@ enum TerminalTheme {
     /// 已生效。
     static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings, dark: Bool) {
         let scheme = settings.colorScheme(dark: dark)
-        applyFont(to: view, fontName: settings.fontName, fontSize: CGFloat(settings.fontSize))
-        applyLineSpacing(to: view, lineSpacing: CGFloat(settings.lineHeight))
+        applyFont(to: view, font: TerminalSettings.textFont())
+        applyLineSpacing(to: view, lineSpacing: CGFloat(TerminalSettings.lineHeight))
         applyColorScheme(to: view, scheme: scheme, dark: dark)
         applyCursor(to: view, scheme: scheme, shape: settings.cursorShape, blink: settings.cursorBlink)
         applyScrollback(to: view, scrollback: settings.scrollback)
         applyRoundedCorners(to: view)
     }
 
-    /// 字体名 + 字号同时设定。
-    static func applyFont(to view: SwiftTerm.TerminalView, fontName: String, fontSize: CGFloat) {
-        let font = NSFont(name: fontName, size: fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    /// 字体 + 字号同时设定。
+    static func applyFont(to view: SwiftTerm.TerminalView, font: NSFont) {
         if view.font != font {
             view.font = font
         }

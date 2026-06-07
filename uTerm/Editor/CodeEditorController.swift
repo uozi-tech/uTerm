@@ -23,6 +23,16 @@ final class CodeEditorController: NSObject {
     // MARK: Track C — 语法高亮
     private var highlighter: SyntaxHighlighter = NoopHighlighter()
 
+    static func normalizedCursorFrame(_ frame: CGRect, font: NSFont) -> CGRect {
+        let targetHeight = min(frame.height, max(1, ceil(font.ascender - font.descender)))
+        guard frame.height > targetHeight else { return frame }
+
+        var normalized = frame
+        normalized.origin.y += (frame.height - targetHeight) / 2
+        normalized.size.height = targetHeight
+        return normalized
+    }
+
     /// 按 buffer 的语言挑高亮策略：注册了 tree-sitter grammar → TreeSitter；
     /// 其余 code-like 文件 → PatternSyntaxHighlighter；纯文本/图片 → Noop。
     private func makeHighlighter(for buffer: FileBuffer) -> SyntaxHighlighter {
@@ -65,6 +75,9 @@ final class CodeEditorController: NSObject {
     /// 当前行底色 overlay。CodeEditTextView 内置 `highlightSelectedLine` 只在选区
     /// 为空时绘，drag-select 会消失（VSCode 是常显），所以走自己的 overlay。
     private var activeLineOverlay: ActiveLineOverlay?
+    /// VSCode-style indentation guide overlay, driven by the same visible-line
+    /// refresh cadence as the gutter.
+    private var indentGuideOverlay: IndentGuideOverlay?
     // nonisolated(unsafe): deinit is nonisolated and needs to remove this observer
     nonisolated(unsafe) private var selectionObserver: NSObjectProtocol?
 
@@ -186,6 +199,16 @@ extension CodeEditorController: TextViewDelegate {
         }
     }
 
+    private func normalizeEditorCursorHeights() {
+        guard let textView else { return }
+        for cursorView in textView.subviews where cursorView is CursorView {
+            let normalized = Self.normalizedCursorFrame(cursorView.frame, font: textView.font)
+            if cursorView.frame != normalized {
+                cursorView.frame = normalized
+            }
+        }
+    }
+
     /// 统一刷新入口。
     ///
     /// `bootstrap`：是否需要显式启 CodeEditTextView 的 viewport-driven layout 链
@@ -248,6 +271,8 @@ extension CodeEditorController: TextViewDelegate {
         let active = lineIndex(ofOffset: activeOffset) ?? lastActiveLineIndex
         if let active { lastActiveLineIndex = active }
         updateGutter(activeLineIndex: active)
+        updateIndentGuides(activeLineIndex: active)
+        normalizeEditorCursorHeights()
     }
 
     func attach(textView: TextView, scrollView: NSScrollView, buffer: FileBuffer) {
@@ -282,6 +307,9 @@ extension CodeEditorController: TextViewDelegate {
         let initial = textView.selectionManager.textSelections.first?.range ?? NSRange(location: 0, length: 0)
         self.activeLineOverlay?.update(selection: initial)
 
+        self.indentGuideOverlay?.removeFromTextView()
+        self.indentGuideOverlay = IndentGuideOverlay(textView: textView)
+
         // 行号 gutter —— 挂在 textView 子视图，随文档滚动。
         let gutter = LineNumberGutter(textView: textView)
         gutter.frame = NSRect(x: 0, y: 0, width: gutter.gutterWidth, height: textView.bounds.height)
@@ -306,7 +334,10 @@ extension CodeEditorController: TextViewDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.updateGutter(activeLineIndex: self?.lastActiveLineIndex)
+                guard let self else { return }
+                self.updateGutter(activeLineIndex: self.lastActiveLineIndex)
+                self.updateIndentGuides(activeLineIndex: self.lastActiveLineIndex)
+                self.normalizeEditorCursorHeights()
             }
         }
 
@@ -350,6 +381,8 @@ extension CodeEditorController: TextViewDelegate {
                 let idx = self.lineIndex(ofOffset: range.location)
                 if let idx { self.lastActiveLineIndex = idx }
                 self.updateGutter(activeLineIndex: idx ?? self.lastActiveLineIndex)
+                self.updateIndentGuides(activeLineIndex: idx ?? self.lastActiveLineIndex)
+                self.normalizeEditorCursorHeights()
                 self.onSelectionChange?(range)
                 self.scheduleSameWordRefresh(selection: range)
             }
@@ -505,5 +538,12 @@ extension CodeEditorController {
         guard let gutter = lineNumberGutter, let scrollView else { return }
         gutter.update(visibleRect: scrollView.documentVisibleRect,
                       activeLineIndex: activeLineIndex)
+    }
+
+    /// 用当前 scrollView 可视带刷新缩进指示线。
+    fileprivate func updateIndentGuides(activeLineIndex: Int?) {
+        guard let scrollView else { return }
+        indentGuideOverlay?.update(visibleRect: scrollView.documentVisibleRect,
+                                   activeLineIndex: activeLineIndex)
     }
 }

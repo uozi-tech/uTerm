@@ -4,8 +4,8 @@ import SwiftUI
 ///
 /// `UDToggle` 是 `Button(.plain)` 包装的 on/off 拨动开关：40×24 Capsule 轨道，
 /// Ø20 白色圆形 knob 在 2px 内边距里左 / 右滑动（`.easeOut(0.2)`）。
-/// ON 时轨道填 `UD.accent`、knob 居右；OFF 时填 `UD.dyn(.white(0.10), .black(0.10))`
-/// 并叠一层顶部内阴影近似，knob 居左。
+/// ON 时轨道填纯 `UD.accent`、无描边、knob 居右；OFF 时填中性 `UD.panelHover` +
+/// 1px `UD.border` 细描边（无内阴影），knob 居左。knob 自带投影。
 ///
 /// 通过 `@Environment(\.isEnabled)` 响应 `.disabled()`：整体降透明 ~0.45 且不响应点击。
 /// 纯展示组件，只读 `UD` token + `Bool` 绑定，不依赖任何 domain model。
@@ -41,10 +41,9 @@ struct UDToggle: View {
         Capsule()
             .fill(isOn ? UD.accent : UD.panelHover)
             .overlay(
-                // OFF 态：顶部细描边 + 轻模糊，近似内嵌阴影
+                // OFF 态：中性底 + 1px 细描边（无内阴影）。ON 态纯强调色填充、无描边。
                 Capsule()
-                    .stroke(.black.opacity(0.12), lineWidth: 1)
-                    .blur(radius: 1)
+                    .strokeBorder(UD.border, lineWidth: 1)
                     .opacity(isOn ? 0 : 1)
             )
             .clipShape(Capsule())

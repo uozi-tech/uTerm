@@ -12,9 +12,17 @@ struct FileBrowserContent: View {
     @FocusState private var browserFocused: Bool
     @State private var sortPopoverPresented = false
     @State private var isDropTargeted = false
+    // 右键菜单驱动的对话框目标（重命名 / 删除 / 权限设置）。侧栏原先只有「下载…」，
+    // 现补齐完整右键菜单——这些状态承载各操作的目标项与输入。
+    @State private var renameTarget: RemoteEntry?
+    @State private var renameText = ""
+    @State private var deleteTarget: RemoteEntry?
+    @State private var permissionTarget: RemoteEntry?
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
+    private static let sortPopoverLabelFont = UD.font(13)
+    private static let sortPopoverControlFont = UD.font(13, weight: .medium)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +39,49 @@ struct FileBrowserContent: View {
         } message: {
             Text(model.transientError ?? "")
         }
+        .alert("重命名", isPresented: Binding(
+            get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
+            TextField("新名称", text: $renameText)
+            Button("取消", role: .cancel) { renameTarget = nil }
+            Button("重命名") {
+                if let t = renameTarget, !renameText.isEmpty {
+                    Task { await model.rename(entry: t, to: renameText) }
+                }
+                renameTarget = nil
+            }
+        }
+        .confirmationDialog("删除「\(deleteTarget?.name ?? "")」？",
+            isPresented: Binding(get: { deleteTarget != nil },
+                                 set: { if !$0 { deleteTarget = nil } }),
+            presenting: deleteTarget) { t in
+            Button("删除", role: .destructive) {
+                Task { await model.delete(entry: t) }
+                deleteTarget = nil
+            }
+            Button("取消", role: .cancel) { deleteTarget = nil }
+        } message: { t in
+            Text(t.isDirectory ? "该文件夹及其内容将被永久删除。" : "该文件将被永久删除。")
+        }
+        .sheet(item: $permissionTarget) { target in
+            SFTPPermissionSheet(entry: target) { mode, recursive in
+                Task { await model.setPermissions(entry: target, mode: mode, recursive: recursive) }
+            }
+        }
+    }
+
+    /// 工作区侧栏右键菜单行为（精简版：主操作 = 预览、含独立「下载…」、无「在工作区
+    /// 打开」「显示简介」——侧栏已在工作区内且无检视器）。
+    private var sidebarActions: SFTPRowActions {
+        SFTPRowActions(
+            currentPath: model.currentPath,
+            fileActionLabel: "预览",
+            fileActionIcon: "eye",
+            onActivate: activate,
+            onDownload: { downloadFile($0) },
+            onRename: { renameTarget = $0; renameText = $0.name },
+            onPermissions: { permissionTarget = $0 },
+            onDelete: { deleteTarget = $0 }
+        )
     }
 
     @ViewBuilder
@@ -89,16 +140,16 @@ struct FileBrowserContent: View {
     private var sortPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("排序")
-                .font(UD.caption)
-                .foregroundStyle(UD.text3)
-                .textCase(.uppercase)
+                .font(Self.sortPopoverLabelFont)
+                .foregroundStyle(UD.text2)
 
             UDSegmented(
                 selection: Binding(
                     get: { model.sortKey },
                     set: { model.sortKey = $0 }
                 ),
-                options: FileBrowserModel.SortKey.allCases.map { (value: $0, label: $0.label) }
+                options: FileBrowserModel.SortKey.allCases.map { (value: $0, label: $0.label) },
+                labelFont: Self.sortPopoverControlFont
             )
 
             sortToggleRow(
@@ -124,7 +175,7 @@ struct FileBrowserContent: View {
     private func sortToggleRow(label: String, binding: Binding<Bool>) -> some View {
         HStack {
             Text(label)
-                .font(UD.body)
+                .font(Self.sortPopoverLabelFont)
                 .foregroundStyle(UD.text2)
             Spacer()
             UDToggle(binding)
@@ -331,11 +382,7 @@ struct FileBrowserContent: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { activate(entry) }
-        .contextMenu {
-            if !entry.isDirectory {
-                Button("下载…") { downloadFile(entry) }
-            }
-        }
+        .contextMenu { SFTPRowMenu(entry: entry, actions: sidebarActions) }
 
         return remoteMoveDropTarget(base, entry: entry)
     }

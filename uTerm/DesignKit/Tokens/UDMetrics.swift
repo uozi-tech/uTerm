@@ -5,6 +5,10 @@ import SwiftUI
 ///
 /// 圆角随容器尺寸递增；间距以 2 的倍数为节奏；阴影用实体投影（无玻璃 / 模糊），
 /// 深色更重、浅色更轻，故 `udShadow` 随系统外观自适应。
+///
+/// 阴影调柔（组件视觉交接最终版）：**单层、低不透明度**，不再多层堆叠。
+/// 设计稿 CSS 阴影含负 spread（如 `0 8 24 -12`）收紧投影，SwiftUI `.shadow` 无 spread，
+/// 故以 `radius ≈ blur/2` 近似模糊半径、再适当压低不透明度补偿缺失的负 spread。
 extension UD {
     /// 圆角 Radius。
     enum Radius {
@@ -32,17 +36,17 @@ extension UD {
         nonisolated static let xxxl: CGFloat = 24
     }
 
-    /// 阴影层级 Elevation。
+    /// 阴影层级 Elevation。各级均为**单层**柔和投影（不再多层堆叠）。
     enum Shadow {
-        /// 卡片 / 行悬停。
+        /// 卡片 / 行悬停。设计稿 `--u-shadow-sm` `0 2 8 -4`。
         case sm
-        /// 下拉 / 菜单 / 弹层。
+        /// 下拉 / 菜单 / 弹层。设计稿 `--u-shadow-md` `0 8 24 -12`。
         case md
-        /// 指标卡 / 菜单栏 / 对话框。
+        /// 指标卡 / 菜单栏 / 对话框。设计稿 `--u-shadow-lg` `0 16 40 -16`。
         case lg
-        /// 命令面板 / 浮动菜单专用合成投影（设计稿 `--u-menu-shadow`）。
-        /// 比 `.md` 略深的柔和 drop shadow，且**不含**窗口级的 `0 0 0 1px` 描边环——
-        /// 浮层只配一条 `UD.border` 细边即可，避免描边叠描边。
+        /// 命令面板 / 浮动菜单专用投影（设计稿 `--u-menu-shadow` `0 12 32 -14`）。
+        /// 单层柔和 drop shadow，且**不含**窗口级的 `0 0 0 1px` 描边环——浮层只配一条
+        /// `UD.border` 细边即可，避免描边叠描边。
         case menu
     }
 }
@@ -65,35 +69,28 @@ private struct UDShadowModifier: ViewModifier {
         }
     }
 
-    /// 设计稿 CSS 投影 → SwiftUI 近似（radius ≈ blur/2）。深色重、浅色轻。
+    /// 设计稿 CSS 投影 → SwiftUI 单层近似。
+    /// `radius = blur/2`，`y = offsetY`，不透明度在设计稿值基础上略压低（补偿 SwiftUI
+    /// 无负 spread 致投影偏满）。深色重、浅色轻。
     private var layers: [UDShadowLayer] {
         let dark = scheme == .dark
         switch level {
-        case .sm:
+        case .sm:   // CSS 0 2 8 -4  · 深 0.40 / 浅 0.12
             return dark
-                ? [UDShadowLayer(opacity: 0.45, radius: 6, y: 4)]
-                : [UDShadowLayer(opacity: 0.08, radius: 3, y: 1)]
-        case .md:
+                ? [UDShadowLayer(opacity: 0.34, radius: 4, y: 2)]
+                : [UDShadowLayer(opacity: 0.10, radius: 4, y: 2)]
+        case .md:   // CSS 0 8 24 -12 · 深 0.50 / 浅 0.14
             return dark
-                ? [UDShadowLayer(opacity: 0.40, radius: 6, y: 4),
-                   UDShadowLayer(opacity: 0.60, radius: 16, y: 10)]
-                : [UDShadowLayer(opacity: 0.08, radius: 4, y: 2),
-                   UDShadowLayer(opacity: 0.14, radius: 12, y: 8)]
-        case .lg:
+                ? [UDShadowLayer(opacity: 0.42, radius: 12, y: 8)]
+                : [UDShadowLayer(opacity: 0.12, radius: 12, y: 8)]
+        case .lg:   // CSS 0 16 40 -16 · 深 0.55 / 浅 0.18
             return dark
-                ? [UDShadowLayer(opacity: 0.50, radius: 9, y: 6),
-                   UDShadowLayer(opacity: 0.72, radius: 30, y: 16)]
-                : [UDShadowLayer(opacity: 0.10, radius: 6, y: 4),
-                   UDShadowLayer(opacity: 0.20, radius: 24, y: 18)]
-        case .menu:
-            // 设计稿 --u-menu-shadow：
-            // 深 0 18px 50px -16px /.7 + 0 4px 12px -4px /.4
-            // 浅 0 14px 36px -16px /.22 + 0 3px 10px -4px /.12
+                ? [UDShadowLayer(opacity: 0.46, radius: 20, y: 16)]
+                : [UDShadowLayer(opacity: 0.16, radius: 20, y: 16)]
+        case .menu: // CSS 0 12 32 -14 · 深 0.55 / 浅 0.16
             return dark
-                ? [UDShadowLayer(opacity: 0.40, radius: 6, y: 4),
-                   UDShadowLayer(opacity: 0.70, radius: 25, y: 18)]
-                : [UDShadowLayer(opacity: 0.12, radius: 5, y: 3),
-                   UDShadowLayer(opacity: 0.22, radius: 18, y: 14)]
+                ? [UDShadowLayer(opacity: 0.46, radius: 16, y: 12)]
+                : [UDShadowLayer(opacity: 0.14, radius: 16, y: 12)]
         }
     }
 }

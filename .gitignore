@@ -2,6 +2,8 @@
 .claude/worktrees/
 # typo guard for .claude/worktrees/ — earlier runs leaked into .claire/
 .claire/
+# leaked worktree clone dir from earlier runs
+.clone/
 
 # Swift coverage instrumentation output
 *.profraw

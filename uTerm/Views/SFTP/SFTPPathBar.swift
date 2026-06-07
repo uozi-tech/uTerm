@@ -16,6 +16,8 @@ struct SFTPPathBar: View {
     let showHidden: Bool
     let onToggleHidden: () -> Void
     let onOpenInTerminal: () -> Void
+    /// 「在工作区打开」显眼按钮（accent 着色）——打开该服务器的工作区窗口。
+    let onOpenWorkspace: () -> Void
     let sortKey: FileBrowserModel.SortKey
     let onSetSort: (FileBrowserModel.SortKey) -> Void
 
@@ -42,6 +44,8 @@ struct SFTPPathBar: View {
             SFTPToolButton(systemName: "square.and.arrow.up", help: "上传文件", action: onUpload)
             SFTPToolButton(systemName: "folder.badge.plus", help: "新建文件夹", action: onNewFolder)
             SFTPToolButton(systemName: "arrow.clockwise", help: "刷新", action: onRefresh)
+
+            SFTPOpenWorkspaceButton(action: onOpenWorkspace)
 
             actionsMenu
         }
@@ -173,5 +177,32 @@ struct SFTPToolButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+    }
+}
+
+/// 路径栏「在工作区打开」显眼按钮：accent 着色描边 + 终端图标 + 文案。对齐设计稿
+/// `pages/sftp.jsx` 里操作菜单左侧那枚强调按钮（着色态，非实心）。
+struct SFTPOpenWorkspaceButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: "terminal").font(.system(size: 12))
+                    .foregroundStyle(UD.accent)
+                Text("在工作区打开").font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+            }
+            .padding(.horizontal, 12).frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(UD.accent.opacity(hover ? 0.18 : 0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(UD.accent.opacity(hover ? 0.50 : 0.33), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .fixedSize()
+        .help("在工作区中打开此连接（终端 + Agent）")
     }
 }

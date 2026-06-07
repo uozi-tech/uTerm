@@ -89,6 +89,10 @@ protocol SFTPProviding: Actor {
     func removeDirectory(_ path: String) async throws
     func createDirectory(_ path: String) async throws
 
+    /// 设置文件权限（chmod，单个路径，非递归）。`mode` 取低 9 位（`& 0o777`），
+    /// 只改权限位、保留文件类型位。递归由上层走 exec `chmod -R`（见 FileBrowserModel）。
+    func setPermissions(path: String, mode: UInt32) async throws
+
     // MARK: 带进度的传输（既有无进度重载保留不动）
     func upload(data: Data, toRemotePath: String,
                 onProgress: (@Sendable (TransferProgress) -> Void)?) async throws

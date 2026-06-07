@@ -92,6 +92,13 @@ actor SFTPSession: SFTPProviding {
         try await sftp.createDirectory(atPath: path)
     }
 
+    func setPermissions(path: String, mode: UInt32) async throws {
+        // SFTP setstat：只带权限位（`& 0o777`），保留文件类型位不动。
+        var attrs = SFTPFileAttributes()
+        attrs.permissions = mode & 0o777
+        try await sftp.setAttributes(at: path, to: attrs)
+    }
+
     // MARK: 带进度传输
 
     func upload(data: Data, toRemotePath: String,

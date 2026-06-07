@@ -22,7 +22,7 @@ struct UDChatSessionItem: Identifiable {
 
 /// uTerm DesignKit 会话历史下拉 —— AI 助手的会话列表浮层（设计稿 `Components.html`）。
 ///
-/// 纯展示组件：只读 `UD` token + 普通值输入。实体浮层面 `UD.overlay` + `UD.borderHi`
+/// 纯展示组件：只读 `UD` token + 普通值输入。实体浮层面 `UD.overlay` + `UD.border`
 /// 描边 + `.md` 投影 + 顶部内高光。活动会话用 `UD.accent` 软底高亮，尾部「新建对话」按钮。
 struct UDSessionsDropdown: View {
     /// 会话列表。
@@ -47,27 +47,9 @@ struct UDSessionsDropdown: View {
                 .fill(UD.overlay)
         )
         .overlay(
+            // 浮层细发丝边：单层 UD.border（白 7% / 黑 10%），无内高光。
             RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(UD.borderHi, lineWidth: 1)
-        )
-        .overlay(
-            // 顶部内高光。
-            RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [UD.dyn(.white(0.06), .white(0.6)), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
-                .mask(
-                    LinearGradient(
-                        colors: [.white, .clear],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                )
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .udShadow(.md)

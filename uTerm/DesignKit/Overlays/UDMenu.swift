@@ -49,16 +49,10 @@ struct UDMenu: View {
             RoundedRectangle(cornerRadius: 9)
                 .fill(UD.overlay)
         )
-        .overlay(alignment: .top) {
-            // 内顶高光：顶部 1px 白 5%。
-            Rectangle()
-                .fill(UD.dyn(.white(0.05), .white(0.0)))
-                .frame(height: 1)
-                .padding(.horizontal, 1)
-        }
         .overlay(
+            // 浮层细发丝边：单层 UD.border（白 7% / 黑 10%），无内高光。
             RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(UD.borderHi, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .udShadow(.md)

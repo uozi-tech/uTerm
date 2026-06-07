@@ -8,22 +8,21 @@ struct TerminalTabBar: View {
     let workspace: WorkspaceModel
     let onNewTab: () -> Void
 
-    @AppStorage("terminalColorScheme") private var terminalSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
     @Environment(\.colorScheme) private var appColorScheme
 
     private var terminalAreaBG: Color {
-        let id = TerminalColorSchemeID(rawValue: terminalSchemeRaw) ?? .vscodeDark
-        return Color(nsColor: TerminalColorScheme.resolve(id, dark: appColorScheme == .dark).backgroundColor)
+        Color(nsColor: TerminalColorScheme.resolve(dark: appColorScheme == .dark).backgroundColor)
     }
 
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(workspace.tabs) { tab in
+                    ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
                         UDTermTab(
                             name: tab.title,
                             active: workspace.activeTabID == tab.id,
+                            first: index == 0,
                             dotColor: Self.dotColor(for: tab),
                             activeBackground: terminalAreaBG,
                             onSelect: { workspace.selectTab(tab.id) },
@@ -58,7 +57,8 @@ struct TerminalTabBar: View {
             .frame(maxHeight: .infinity)
         }
         .frame(height: 36)
-        .background(UD.panel)
+        // 与上方预览区/状态条统一为 UD.bg —— 避免在分隔条两侧出现深浅不一的色块。
+        .background(UD.bg)
         .overlay(alignment: .bottom) {
             Rectangle().fill(UD.border).frame(height: 1)
         }

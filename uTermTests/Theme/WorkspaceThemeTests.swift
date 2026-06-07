@@ -23,6 +23,6 @@ final class WorkspaceThemeTests: XCTestCase {
 
     func test_panelNSColor_resolves_dark_and_light() {
         XCTAssertTrue(near(srgb(WS.panelNSColor, .darkAqua), 23/255, 23/255, 26/255), "dark = #17171A")
-        XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 0xF6/255, 0xF6/255, 0xF3/255), "light = #F6F6F3")
+        XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
     }
 }

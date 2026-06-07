@@ -14,11 +14,12 @@ enum WS {
             ? NSColor(srgbRed: 16/255, green: 16/255, blue: 18/255, alpha: 1)
             : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
-    /// `UD.panel` 的 NSColor 版（深 #17171A / 浅 #F6F6F3）—— 标题栏拖动手柄实色底。
+    /// `UD.panel` 的 NSColor 版（深 #17171A / 浅 #FFFFFF）—— 标题栏拖动手柄实色底。
+    /// 日间与 `bgNSColor` 同值（全部统一纯白 = UDInput 的白）：标题栏 chrome 与窗口底无缝。
     nonisolated static let panelNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor(srgbRed: 23/255, green: 23/255, blue: 26/255, alpha: 1)
-            : NSColor(srgbRed: 0xF6/255, green: 0xF6/255, blue: 0xF3/255, alpha: 1)
+            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
 }
 

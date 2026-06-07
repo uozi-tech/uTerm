@@ -1,7 +1,7 @@
 // uTerm/Editor/EditorTheme.swift
 import AppKit
 
-/// 编辑器配色单点真相。**随 app 外观切换**：深 = VS Code Dark Modern，浅 = VS Code Light+。
+/// 编辑器配色单点真相。**随 app 外观切换**：深色背景跟工作区基底一致，浅 = VS Code Light+。
 /// 与 AppTheme.Palette 隔离 —— 编辑器色域闭环（17 token），混进全局会污染。
 ///
 /// 实现：每个 token 是动态 `NSColor(name:dynamicProvider:)`，按当前绘制外观解析。
@@ -23,19 +23,23 @@ nonisolated enum EditorTheme {
         }
     }
 
-    // MARK: 内容表面（深 VS Code Dark / 浅 VS Code Light）
-    /// 编辑器内容背景。Dark Modern #1F1F1F / Light #FFFFFF。
-    static let background = dyn(0x1F1F1F, 0xFFFFFF)
+    // MARK: 内容表面（深 = Workspace bg / 浅 VS Code Light）
+    /// 编辑器内容背景。Dark #101012（对齐工作区侧栏）/ Light #FFFFFF。
+    static let background = dyn(0x101012, 0xFFFFFF)
     /// 编辑器默认（未高亮）文字色。Dark #CCCCCC / Light #3B3B3B。
     static let foreground = dyn(0xCCCCCC, 0x3B3B3B)
 
     // MARK: 字体（与终端共用设置默认值）
-    static let textFontName = TerminalSettings.defaultFontName
-    static let textFontSize = CGFloat(TerminalSettings.defaultFontSize)
+    static let textFontName = TerminalSettings.fontName
+    static let textFontSize = CGFloat(TerminalSettings.fontSize)
 
+    @MainActor
     static func textFont(fontName: String = textFontName,
                          fontSize: CGFloat = textFontSize) -> NSFont {
-        NSFont(name: fontName, size: fontSize)
+        if fontName == textFontName {
+            return TerminalSettings.textFont(ofSize: fontSize)
+        }
+        return NSFont(name: fontName, size: fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 

@@ -8,12 +8,10 @@ struct TerminalArea: View {
     let workspace: WorkspaceModel
     let server: ServerProfile
 
-    @AppStorage("terminalColorScheme") private var terminalSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
     @Environment(\.colorScheme) private var appColorScheme
 
     private var terminalAreaBG: Color {
-        let id = TerminalColorSchemeID(rawValue: terminalSchemeRaw) ?? .vscodeDark
-        return Color(nsColor: TerminalColorScheme.resolve(id, dark: appColorScheme == .dark).backgroundColor)
+        Color(nsColor: TerminalColorScheme.resolve(dark: appColorScheme == .dark).backgroundColor)
     }
 
     var body: some View {

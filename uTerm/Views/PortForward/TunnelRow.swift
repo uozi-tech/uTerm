@@ -116,18 +116,16 @@ struct TunnelRow: View {
         .onTapGesture(count: 2, perform: onEdit)
     }
 
-    @ViewBuilder
-    private var flow: some View {
+    private var flow: Text {
+        let src = Text("\(rule.listenHost):\(rule.listenPort)").foregroundStyle(UD.text)
         if kind == .dynamic {
-            (Text("\(rule.listenHost):\(rule.listenPort)").foregroundStyle(UD.text)
-             + Text(" · SOCKS5").foregroundStyle(UD.text4))
-        } else {
-            (Text("\(rule.listenHost):\(rule.listenPort)").foregroundStyle(UD.text)
-             + Text(kind.reverse ? "  ←  " : "  →  ")
-                 .foregroundStyle(isError ? UD.danger : kind.tint)
-             + Text("\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(rule.destPort)" : "")")
-                 .foregroundStyle(UD.text2))
+            return Text("\(src)\(Text(" · SOCKS5").foregroundStyle(UD.text4))")
         }
+        let arrow = Text(kind.reverse ? "  ←  " : "  →  ")
+            .foregroundStyle(isError ? UD.danger : kind.tint)
+        let dst = Text("\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(rule.destPort)" : "")")
+            .foregroundStyle(UD.text2)
+        return Text("\(src)\(arrow)\(dst)")
     }
 
     private var errorChip: some View {
@@ -145,15 +143,21 @@ struct TunnelRow: View {
 
     // MARK: - 原因条
 
+    /// 原因条文案：本规则名（加粗）— 错误信息。用 Text 插值拼接（macOS 26 弃用 Text + Text）。
+    private var reasonText: Text {
+        let name = Text(rule.name).font(.system(size: 12, weight: .medium)).foregroundStyle(UD.text)
+        let dash = Text(" — ").foregroundStyle(UD.text4)
+        let msg = Text(errorInfo?.message ?? "").foregroundStyle(UD.text2)
+        return Text("\(name)\(dash)\(msg)")
+    }
+
     private var errorStrip: some View {
         HStack(spacing: 9) {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 11))
                 .foregroundStyle(UD.danger)
             // 以本规则名加粗开头，避免与原因里可能提到的冲突服务名混淆。
-            (Text(rule.name).font(.system(size: 12, weight: .medium)).foregroundStyle(UD.text)
-             + Text(" — ").foregroundStyle(UD.text4)
-             + Text(errorInfo?.message ?? "").foregroundStyle(UD.text2))
+            reasonText
                 .font(.system(size: 12))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)

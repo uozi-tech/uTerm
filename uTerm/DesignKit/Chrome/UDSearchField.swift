@@ -51,16 +51,19 @@ struct UDSearchField: View {
         .frame(maxWidth: width == nil ? .infinity : nil)
         .background(
             RoundedRectangle(cornerRadius: UD.Radius.md) // 8
-                .fill(focused ? UD.dyn(.white(0.05), .black(0.05))
-                              : UD.dyn(.white(0.035), .black(0.035)))
+                // 日间纯白底（聚焦靠 accent 描边 / 焦点环示意，不再压灰）；
+                // 暗夜保持原样：聚焦白叠加 .05、闲置 .035（= UD.inputBg）。
+                .fill(focused ? UD.dyn(.white(0.05), .hex(0xFFFFFF))
+                              : UD.inputBg)
         )
         .overlay(
             RoundedRectangle(cornerRadius: UD.Radius.md)
                 .strokeBorder(focused ? UD.accent.opacity(0.53) : UD.border, lineWidth: 1)
         )
         .overlay(
+            // 聚焦焦点环：2px 细环（强调色 ~13%），不用粗发光。
             RoundedRectangle(cornerRadius: UD.Radius.md)
-                .stroke(UD.accent.opacity(focused ? 0.13 : 0), lineWidth: 3)
+                .stroke(UD.accent.opacity(focused ? 0.13 : 0), lineWidth: 2)
         )
         .overlay(
             UDInputFocusDismissMonitor(isFocused: $focused)

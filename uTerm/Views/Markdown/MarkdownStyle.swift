@@ -7,8 +7,7 @@ struct MarkdownStyle {
     var textPrimary: Color
     var textSecondary: Color
     var textMuted: Color
-    /// 正文段落色。预览=次要色（text2，对齐设计稿预览页）；聊天=主色（text，
-    /// 对齐工作区设计稿助手消息 `color: U.text` 的高对比正文）。
+    /// 正文段落色。预览 / 聊天都用主色，避免长文在深色 Markdown 预览里发灰。
     var bodyColor: Color
     var accent: Color
     var border: Color
@@ -27,12 +26,12 @@ struct MarkdownStyle {
         textPrimary: UD.text,
         textSecondary: UD.text2,
         textMuted: UD.text3,
-        bodyColor: UD.text2,
+        bodyColor: UD.text,
         accent: UD.accent,
         border: UD.border,
         bgRaised: UD.panelHi,
-        codeBlockBackground: UD.panelHi,
-        inlineCodeBackground: UD.panelHi,
+        codeBlockBackground: UD.inputBg,
+        inlineCodeBackground: UD.inputBg,
         baseFontSize: 13,
         blockSpacing: 10,
         lineSpacing: 0,
@@ -46,8 +45,8 @@ struct MarkdownStyle {
         accent: UD.accent,
         border: UD.border,
         bgRaised: UD.panelHi,
-        codeBlockBackground: UD.panelHi,
-        inlineCodeBackground: UD.panelHi,
+        codeBlockBackground: UD.inputBg,
+        inlineCodeBackground: UD.inputBg,
         baseFontSize: 12.5,
         blockSpacing: 8,
         lineSpacing: 3,

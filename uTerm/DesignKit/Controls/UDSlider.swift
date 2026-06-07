@@ -3,8 +3,8 @@ import SwiftUI
 /// uTerm DesignKit 滑块原语 —— 可拖拽取值的水平滑块。
 ///
 /// 纯展示组件：值统一为 `Double`，绑定外部 state，不依赖任何 domain model。
-/// 颜色 / 度量均取自 UD token；填充带柔光，旋钮为白色圆 + 投影 + `UD.border` 描边环。
-/// 通过 `@Environment(\.isEnabled)` 响应 `.disabled()`：降透明度并禁用手势。
+/// 颜色 / 度量均取自 UD token；填充为纯色（无发光），旋钮为白色圆 + 自带投影 +
+/// `UD.border` 描边环。通过 `@Environment(\.isEnabled)` 响应 `.disabled()`：降透明度并禁用手势。
 struct UDSlider: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
@@ -71,12 +71,11 @@ struct UDSlider: View {
                     .fill(UD.dyn(.white(0.07), .black(0.08)))
                     .frame(width: width, height: trackHeight)
 
-                // 填充（0% 时不渲染）
+                // 填充（0% 时不渲染）。纯色，无发光。
                 if fraction > 0 {
                     Capsule()
                         .fill(color)
                         .frame(width: fillWidth, height: trackHeight)
-                        .shadow(color: color.opacity(0.4), radius: 4)
                 }
 
                 // 刻度点（轨道下方 6pt）

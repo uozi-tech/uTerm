@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// 底部状态栏：设计稿 Telemetry 风格的密集语义色指标行。
-/// 左：连接状态点 · 平台 · endpoint；右：uptime · load · CPU* · 内存* · 磁盘 · 时间
+/// 左：连接状态点 · 平台 · endpoint；右：uptime · load+CPU* · 内存* · 磁盘 · 时间
 /// （`*` 可点，弹出滚动 sparkline）。遥测取不到时回退到「窗格 · 标签」计数。
 struct StatusBarView: View {
     let workspace: WorkspaceModel
@@ -45,11 +45,10 @@ struct StatusBarView: View {
                 if let up = t.uptime {
                     metric(icon: "clock", color: UD.mUptime, text: up)
                 }
-                if let load = t.load {
-                    metric(icon: "waveform.path.ecg", color: UD.mLoad, text: load)
-                }
                 if let cpu = t.cpuPercent {
-                    cpuItem(cpu, cores: t.cores)
+                    cpuLoadItem(load: t.load, cpu: cpu, cores: t.cores)
+                } else if let load = t.load {
+                    metric(icon: "waveform.path.ecg", color: UD.mLoad, text: load)
                 }
                 if let mem = t.memUsedText, let pct = t.memPercent {
                     memItem(mem, pct: pct)
@@ -79,17 +78,34 @@ struct StatusBarView: View {
         UDFooterItem(systemImage: icon, color: color, label: text, iconSize: 11)
     }
 
-    private func cpuItem(_ pct: Double, cores: Int?) -> some View {
+    static func cpuLoadSummary(load: String?, cpuPercent: Double, cores: Int?) -> String {
+        var parts: [String] = []
+        if let load {
+            parts.append("负载 \(load)")
+        }
+        if let cores {
+            parts.append("\(cores) 核")
+        }
+        parts.append("CPU \(String(format: "%.0f%%", cpuPercent))")
+        return parts.joined(separator: " · ")
+    }
+
+    private func cpuLoadItem(load: String?, cpu: Double, cores: Int?) -> some View {
         Button { cpuPopover.toggle() } label: {
-            UDFooterItem(systemImage: "cpu", color: UD.mCPU,
-                         label: String(format: "%.0f%%", pct), iconSize: 11)
+            HStack(spacing: 8) {
+                if let load {
+                    UDFooterItem(systemImage: "waveform.path.ecg", color: UD.mLoad,
+                                 label: load, iconSize: 11)
+                }
+                UDFooterItem(systemImage: "cpu", color: UD.mCPU,
+                             label: String(format: "%.0f%%", cpu), iconSize: 11)
+            }
         }
         .buttonStyle(.plain)
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
             SparklinePopover(
                 title: "CPU 与负载",
-                summary: cores.map { "\($0) 核 · \(String(format: "%.0f%%", pct))" }
-                    ?? String(format: "%.0f%%", pct),
+                summary: Self.cpuLoadSummary(load: load, cpuPercent: cpu, cores: cores),
                 color: UD.mCPU,
                 history: workspace.telemetryModel.cpuHistory)
         }

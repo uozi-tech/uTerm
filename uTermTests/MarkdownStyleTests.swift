@@ -6,12 +6,21 @@ import AppKit
 final class MarkdownStyleTests: XCTestCase {
 
     private func sRGB(_ color: Color, _ appearance: NSAppearance.Name) -> (Double, Double, Double) {
-        var out: (Double, Double, Double) = (0, 0, 0)
+        let rgba = sRGBA(color, appearance)
+        let base = appearance == .darkAqua ? (0.0, 0.0, 0.0) : (1.0, 1.0, 1.0)
+        return (rgba.0 * rgba.3 + base.0 * (1 - rgba.3),
+                rgba.1 * rgba.3 + base.1 * (1 - rgba.3),
+                rgba.2 * rgba.3 + base.2 * (1 - rgba.3))
+    }
+
+    private func sRGBA(_ color: Color, _ appearance: NSAppearance.Name) -> (Double, Double, Double, Double) {
+        var out: (Double, Double, Double, Double) = (0, 0, 0, 0)
         NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
             let resolved = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
             out = (Double(resolved.redComponent),
                    Double(resolved.greenComponent),
-                   Double(resolved.blueComponent))
+                   Double(resolved.blueComponent),
+                   Double(resolved.alphaComponent))
         }
         return out
     }
@@ -25,5 +34,16 @@ final class MarkdownStyleTests: XCTestCase {
                              "Light mode chat code blocks should use a light surface.")
         XCTAssertLessThan(dark.0 + dark.1 + dark.2, 0.6,
                           "Dark mode chat code blocks should keep a dark surface.")
+    }
+
+    @MainActor
+    func test_previewBodyColor_usesOpaquePrimaryTextForReadability() {
+        let light = sRGBA(MarkdownStyle.preview.bodyColor, .aqua)
+        let dark = sRGBA(MarkdownStyle.preview.bodyColor, .darkAqua)
+
+        XCTAssertEqual(light.3, 1, accuracy: 0.001,
+                       "Light preview body text should not use muted alpha text.")
+        XCTAssertEqual(dark.3, 1, accuracy: 0.001,
+                       "Dark preview body text should not use muted alpha text.")
     }
 }

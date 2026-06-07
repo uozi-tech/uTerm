@@ -19,12 +19,14 @@ final class TerminalSettingsTests: XCTestCase {
         super.tearDown()
     }
 
+    func test_fixed_font_constants() {
+        XCTAssertEqual(TerminalSettings.fontName,   "System Monospaced")
+        XCTAssertEqual(TerminalSettings.fontSize,   11)
+        XCTAssertEqual(TerminalSettings.lineHeight, 1.0)
+    }
+
     func test_read_empty_defaults_returns_all_defaults() {
         let s = TerminalSettings.read(from: defaults)
-        XCTAssertEqual(s.fontName,       "Menlo")
-        XCTAssertEqual(s.fontSize,       11)
-        XCTAssertEqual(s.lineHeight,     1.0)
-        XCTAssertEqual(s.colorSchemeID,  .vscodeDark)
         XCTAssertEqual(s.cursorShape,    .block)
         XCTAssertEqual(s.cursorBlink,    false)
         XCTAssertEqual(s.scrollback,     3000)
@@ -32,19 +34,12 @@ final class TerminalSettingsTests: XCTestCase {
     }
 
     func test_read_partial_defaults_only_overrides_written() {
-        defaults.set("SF Mono", forKey: "terminalFontName")
-        defaults.set(14.0,      forKey: "terminalFontSize")
+        defaults.set(5000, forKey: "terminalScrollback")
+        defaults.set(true, forKey: "terminalCopyOnSelect")
         let s = TerminalSettings.read(from: defaults)
-        XCTAssertEqual(s.fontName,    "SF Mono")
-        XCTAssertEqual(s.fontSize,    14)
-        XCTAssertEqual(s.lineHeight,  1.0)         // unchanged default
-        XCTAssertEqual(s.scrollback,  3000)        // unchanged default
-    }
-
-    func test_read_corrupt_scheme_raw_falls_back_to_vscodeDark() {
-        defaults.set("garbage", forKey: "terminalColorScheme")
-        let s = TerminalSettings.read(from: defaults)
-        XCTAssertEqual(s.colorSchemeID, .vscodeDark)
+        XCTAssertEqual(s.scrollback,   5000)
+        XCTAssertEqual(s.copyOnSelect, true)
+        XCTAssertEqual(s.cursorShape,  .block)   // unchanged default
     }
 
     func test_read_corrupt_cursor_shape_falls_back_to_block() {
@@ -53,10 +48,9 @@ final class TerminalSettingsTests: XCTestCase {
         XCTAssertEqual(s.cursorShape, .block)
     }
 
-    func test_colorScheme_resolves_correct_scheme() {
-        defaults.set("tokyonight", forKey: "terminalColorScheme")
+    func test_colorScheme_resolves_by_appearance() {
         let s = TerminalSettings.read(from: defaults)
-        XCTAssertEqual(s.colorScheme(dark: true).id, .tokyoNight)
-        XCTAssertEqual(s.colorScheme(dark: true).displayName, "Tokyo Night")
+        XCTAssertEqual(s.colorScheme(dark: true).displayName,  "VS Code Dark")
+        XCTAssertEqual(s.colorScheme(dark: false).displayName, "VS Code Light")
     }
 }

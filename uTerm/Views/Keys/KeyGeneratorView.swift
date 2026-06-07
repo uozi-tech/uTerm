@@ -51,7 +51,7 @@ struct KeyGeneratorView: View {
                 }
 
                 if let errorText {
-                    Text(errorText).font(.system(size: 11.5)).foregroundStyle(Color(hex: 0xF87171))
+                    Text(errorText).font(.system(size: 11.5)).foregroundStyle(UD.danger)
                 }
 
                 HStack(spacing: 10) {

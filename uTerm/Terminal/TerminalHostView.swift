@@ -15,10 +15,6 @@ struct TerminalHostView: NSViewRepresentable {
     let terminalView: SwiftTerm.TerminalView
     var forwardsScrollToParent = false
 
-    @AppStorage("terminalFontName")     private var fontName: String = "Menlo"
-    @AppStorage("terminalFontSize")     private var fontSize: Double = 11
-    @AppStorage("terminalLineHeight")   private var lineHeight: Double = 1.0
-    @AppStorage("terminalColorScheme")  private var colorSchemeRaw: String = TerminalColorSchemeID.vscodeDark.rawValue
     @AppStorage("terminalCursorShape")  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
     @AppStorage("terminalCursorBlink")  private var cursorBlink: Bool = false
     /// Small live scrollback as a per-pane memory bound.
@@ -31,10 +27,6 @@ struct TerminalHostView: NSViewRepresentable {
 
     private var currentSettings: TerminalSettings {
         TerminalSettings(
-            fontName: fontName,
-            fontSize: fontSize,
-            lineHeight: lineHeight,
-            colorSchemeID: TerminalColorSchemeID(rawValue: colorSchemeRaw) ?? .vscodeDark,
             cursorShape: TerminalCursorShape(rawValue: cursorShapeRaw) ?? .block,
             cursorBlink: cursorBlink,
             scrollback: scrollback,

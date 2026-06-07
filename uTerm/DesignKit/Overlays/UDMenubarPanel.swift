@@ -20,8 +20,9 @@ struct UDMenubarPanel: View {
         .frame(width: 340)
         .background(UD.overlayHi)
         .overlay(
+            // 浮层细发丝边：单层 UD.border（白 7% / 黑 10%）。
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(UD.borderHi, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .udShadow(.lg)

@@ -7,6 +7,8 @@ struct SFTPInspector: View {
     let currentPath: String
     let onDownload: (RemoteEntry) -> Void
     let onOpenFolder: (RemoteEntry) -> Void
+    let onOpenWorkspace: () -> Void
+    let onPermissions: (RemoteEntry) -> Void
     let onRename: (RemoteEntry) -> Void
     let onDelete: (RemoteEntry) -> Void
 
@@ -115,6 +117,8 @@ struct SFTPInspector: View {
             Rectangle().fill(UD.border).frame(height: 1)
             VStack(spacing: 8) {
                 primaryButton(item)
+                SFTPSecondaryButton(label: "在工作区打开", systemImage: "terminal") { onOpenWorkspace() }
+                SFTPSecondaryButton(label: "权限设置…", systemImage: "lock") { onPermissions(item) }
                 HStack(spacing: 8) {
                     SFTPSecondaryButton(label: "重命名") { onRename(item) }
                     SFTPSecondaryButton(label: "删除", danger: true) { onDelete(item) }
@@ -146,14 +150,19 @@ struct SFTPInspector: View {
 /// 检视器底部次级按钮：默认 WS 描边；danger 用红色描边 + 红字。
 struct SFTPSecondaryButton: View {
     let label: String
+    var systemImage: String? = nil
     var danger: Bool = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
-            Text(label)
-                .font(.system(size: 12.5))
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 12))
+                }
+                Text(label).font(.system(size: 12.5))
+            }
                 .foregroundStyle(danger ? UD.danger : UD.text2)
                 .frame(maxWidth: .infinity).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 7)
