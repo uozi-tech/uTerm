@@ -180,14 +180,7 @@ private struct MDImageBlockView: View {
         case .idle, .loading:
             loadingView
         case .loaded(let image):
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .frame(maxWidth: .infinity, maxHeight: 520, alignment: .leading)
-                .background(style.bgRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 0.5))
+            MDLoadedImageView(image: image, style: style)
         case .failed(let message):
             failureView(message)
         }
@@ -254,7 +247,7 @@ private struct MDImageBlockView: View {
         phase = .loading
         do {
             let data = try await imageLoader(source)
-            guard let loaded = NSImage(data: data) else {
+            guard let loaded = await MarkdownImageDecoder.decode(data) else {
                 phase = .failed("无法解码图片")
                 return
             }
@@ -269,6 +262,69 @@ private struct MDImageBlockView: View {
         case loading
         case loaded(NSImage)
         case failed(String)
+    }
+}
+
+struct MarkdownImageLayout {
+    nonisolated static let maxPreviewHeight: CGFloat = 520
+
+    nonisolated static func displaySize(intrinsic: CGSize,
+                                        availableWidth: CGFloat,
+                                        maxHeight: CGFloat = maxPreviewHeight) -> CGSize {
+        guard intrinsic.width.isFinite,
+              intrinsic.height.isFinite,
+              intrinsic.width > 0,
+              intrinsic.height > 0
+        else {
+            return .zero
+        }
+
+        let widthLimit = availableWidth.isFinite && availableWidth > 0
+            ? availableWidth
+            : intrinsic.width
+        let heightLimit = maxHeight.isFinite && maxHeight > 0
+            ? maxHeight
+            : intrinsic.height
+        let scale = min(1, widthLimit / intrinsic.width, heightLimit / intrinsic.height)
+
+        return CGSize(
+            width: (intrinsic.width * scale).rounded(.down),
+            height: (intrinsic.height * scale).rounded(.down))
+    }
+
+    nonisolated static func frameLimit(intrinsic: CGSize,
+                                       maxHeight: CGFloat = maxPreviewHeight) -> CGSize {
+        guard intrinsic.width.isFinite,
+              intrinsic.height.isFinite,
+              intrinsic.width > 0,
+              intrinsic.height > 0
+        else {
+            return .zero
+        }
+
+        return CGSize(width: intrinsic.width,
+                      height: min(intrinsic.height, maxHeight))
+    }
+}
+
+private struct MDLoadedImageView: View {
+    let image: NSImage
+    let style: MarkdownStyle
+
+    var body: some View {
+        let frameLimit = MarkdownImageLayout.frameLimit(intrinsic: image.size)
+
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(maxWidth: frameLimit.width,
+                   maxHeight: frameLimit.height,
+                   alignment: .leading)
+            .background(style.bgRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 0.5))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
