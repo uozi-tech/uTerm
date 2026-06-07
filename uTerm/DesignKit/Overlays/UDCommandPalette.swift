@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 命令面板浮层（纯展示）——像素级还原设计稿 command-palette.jsx。
 /// 只吃绑定与回调，不依赖任何 domain model；可在 Gallery 用静态数据演示。
-/// 宽 560、圆角 14、UD.overlayHi 底 + UD.borderHi 描边；搜索头 / 结果区(maxHeight 380) / 底栏。
+/// 宽 560、圆角 14、UD.overlayHi 底 + UD.border 单层细边 + .menu 弹层阴影；搜索头 / 结果区(maxHeight 380) / 底栏。
 struct UDCommandPalette: View {
     @Binding var query: String
     let sections: [CommandPaletteSection]
@@ -31,10 +31,12 @@ struct UDCommandPalette: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(UD.borderHi, lineWidth: 1)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: .black.opacity(0.45), radius: 30, y: 18)
+        // 浮层只配一条细边 + 柔和弹层阴影；不用窗口级阴影（那一档自带 0 0 0 1px 描边环，
+        // 与外描边叠成 ~2px 粗边）。.menu 随主题自适应，浅色给轻投影。
+        .udShadow(.menu)
         .background(escHotkey)
         .onAppear { searchFocused = true }
     }
@@ -112,7 +114,9 @@ struct UDCommandPalette: View {
         .foregroundStyle(UD.text3)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.25))
+        // 下沉面板色（次级面板）：深色比卡片主体略暗、浅色略灰，始终呈凹陷条；
+        // 不写死半透明黑（浅色下会糊成脏灰带）。键帽走自适应的 UDKbd，无需在此处理。
+        .background(UD.panel)
     }
 
     // esc 关闭（隐藏零尺寸按钮承载 cancelAction）。

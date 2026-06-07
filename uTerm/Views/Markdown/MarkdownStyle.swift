@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// Markdown 渲染的主题 token —— 颜色 + 字号 + 间距。
-/// 两个预设：`.preview`（文件预览，AppTheme 跟随系统外观）/ `.chat`（工作区 WS 固定暗色）。
+/// 两个预设：`.preview`（文件预览）/ `.chat`（Agent 聊天），都跟随 UD 深浅色 token。
 struct MarkdownStyle {
     var textPrimary: Color
     var textSecondary: Color
@@ -13,6 +13,8 @@ struct MarkdownStyle {
     var accent: Color
     var border: Color
     var bgRaised: Color
+    /// 块级代码背景独立于 inline code，避免聊天代码块误用固定终端黑底。
+    var codeBlockBackground: Color
     var inlineCodeBackground: Color
     var baseFontSize: CGFloat
     var blockSpacing: CGFloat
@@ -29,6 +31,7 @@ struct MarkdownStyle {
         accent: UD.accent,
         border: UD.border,
         bgRaised: UD.panelHi,
+        codeBlockBackground: UD.panelHi,
         inlineCodeBackground: UD.panelHi,
         baseFontSize: 13,
         blockSpacing: 10,
@@ -43,6 +46,7 @@ struct MarkdownStyle {
         accent: UD.accent,
         border: UD.border,
         bgRaised: UD.panelHi,
+        codeBlockBackground: UD.panelHi,
         inlineCodeBackground: UD.panelHi,
         baseFontSize: 12.5,
         blockSpacing: 8,

@@ -146,7 +146,7 @@ struct DesignKitGallery: View {
                             Text(item.0).font(UD.monoKbd).foregroundStyle(UD.text3)
                         }
                     }
-                    ForEach([("sm", UD.Shadow.sm), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg)], id: \.0) { item in
+                    ForEach([("sm", UD.Shadow.sm), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg), ("menu", UD.Shadow.menu)], id: \.0) { item in
                         VStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: UD.Radius.lg)
                                 .fill(UD.panel)

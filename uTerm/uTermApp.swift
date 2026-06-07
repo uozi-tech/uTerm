@@ -11,6 +11,7 @@ struct uTermApp: App {
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     @State private var appUpdater = AppUpdater()
+    @State private var forwardingCoordinator = ForwardingCoordinator()
     @State private var lockModel: AppLockModel
 
     private var currentAppearance: AppearancePreference {
@@ -32,6 +33,7 @@ struct uTermApp: App {
             return try ModelContainer(
                 for: ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
                      ChatSession.self, ChatMessageRecord.self, ServerGroup.self,
+                     ForwardingRule.self,
                 configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
@@ -108,6 +110,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .environment(forwardingCoordinator)
         }
         .modelContainer(modelContainer)
         // 自绘 Cursor 式标题栏：隐藏系统标题栏（红绿灯浮在内容上、内容铺满到顶），
@@ -168,8 +171,23 @@ struct uTermApp: App {
         // 在 SwiftUI WindowGroup 下不稳定，会被系统不透明标题栏盖住（即「自定义 header 被遮挡」）。
         .windowStyle(.hiddenTitleBar)
 
-        // Settings 窗口（⌘,）—— AI provider 配置面板。未来再加其它 tab。
-        Settings {
+        // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。
+        WindowGroup(for: PortForwardWindowID.self) { $pfID in
+            PortForwardWindowView(windowID: pfID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+                .environment(forwardingCoordinator)
+        }
+        .modelContainer(modelContainer)
+        .windowStyle(.hiddenTitleBar)
+
+        // 设置窗口（⌘,）—— AI provider 等配置面板。
+        // 用普通 Window 而非 macOS `Settings` 场景：后者不可靠地忽略
+        // `.windowStyle(.hiddenTitleBar)`、始终画系统标题栏，自绘 chrome 盖不住。
+        // 普通 Window + hiddenTitleBar 与 Welcome / Keys / Groups 同构，
+        // WorkspaceWindowChrome 才能真正接管标题栏。⌘, 由 SettingsWindowCommands 重绑。
+        Window("设置", id: SettingsWindow.id) {
             SettingsView()
                 .modelContainer(modelContainer)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
@@ -177,10 +195,11 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
                 .environment(appUpdater)
         }
-        // 同其它窗口：隐藏系统标题栏，让设置窗走自绘扁平 chrome（SettingsView 顶部自绘标题栏）。
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
         .commands {
             AppInfoCommands()
+            SettingsWindowCommands()
         }
 
         #if DEBUG
@@ -205,14 +224,32 @@ struct AppInfoCommands: Commands {
     }
 }
 
+/// 重绑 macOS「设置…」菜单项（⌘,）到自绘的设置 Window（取代 Settings 场景自带项）。
+struct SettingsWindowCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            SettingsMenuButton()
+        }
+    }
+}
+
+private struct SettingsMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("设置…") { openWindow(id: SettingsWindow.id) }
+            .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
 private struct AboutMenuButton: View {
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsTab.general.rawValue
 
     var body: some View {
         Button("关于 \(appName)") {
             selectedTab = SettingsTabSelection.aboutMenuTarget
-            openSettings()
+            openWindow(id: SettingsWindow.id)
         }
     }
 

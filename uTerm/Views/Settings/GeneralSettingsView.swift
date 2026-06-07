@@ -85,7 +85,7 @@ struct GeneralSettingsView: View {
     }
 }
 
-/// 强调色色板：横排 5 个圆色板，当前选中描环 + ✓。点选写 AccentState.shared.selected。
+/// 强调色色板：横排 5 个圆色板，当前选中显示 ✓。点选写 AccentState.shared.selected。
 private struct AccentSwatchPicker: View {
     @Bindable private var accent = AccentState.shared
     @Environment(\.colorScheme) private var scheme
@@ -97,11 +97,6 @@ private struct AccentSwatchPicker: View {
                 Circle()
                     .fill(color.base(dark: scheme == .dark).color())
                     .frame(width: 20, height: 20)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(isSelected ? UD.text : Color.clear, lineWidth: 2)
-                            .padding(-3)
-                    )
                     .overlay(
                         Image(systemName: "checkmark")
                             .font(.system(size: 9, weight: .bold))

@@ -34,6 +34,16 @@
 				<string>public.data</string>
 			</array>
 		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.uozi.uterm.remote-file</string>
+			<key>UTTypeDescription</key>
+			<string>uTerm remote file drag identifier</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

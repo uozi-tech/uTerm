@@ -99,6 +99,16 @@ struct GroupStore {
     func setColor(_ group: ServerGroup, hex: String) { group.colorHex = hex; try? context.save() }
     func setPinned(_ group: ServerGroup, _ pinned: Bool) { group.isPinned = pinned; try? context.save() }
 
+    /// 拖拽排序后按给定可视顺序重写 `sortOrder`（0…n）。只改有变化的行，幂等。
+    func reorder(_ ordered: [ServerGroup]) {
+        var changed = false
+        for (i, g) in ordered.enumerated() where g.sortOrder != i {
+            g.sortOrder = i
+            changed = true
+        }
+        if changed { try? context.save() }
+    }
+
     /// 把 profile 加入组（从原组移走；单组归属）。
     func addMember(_ profile: ServerProfile, to name: String) { profile.group = name; try? context.save() }
     func removeMember(_ profile: ServerProfile) { profile.group = nil; try? context.save() }

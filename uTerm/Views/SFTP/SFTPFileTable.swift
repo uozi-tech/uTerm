@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// SFTP 视图共享的格式化器（日期 `yyyy/MM/dd HH:mm`；字节 file 风格）。三处视图
 /// （文件表 / 检视器 / 状态栏）共用，避免重复实例化。
@@ -41,6 +42,9 @@ struct SFTPFileTable: View {
     let onToggleSort: (FileBrowserModel.SortKey) -> Void
     let onActivate: (RemoteEntry) -> Void
     let onUp: () -> Void
+    let onDragProvider: (RemoteEntry) -> NSItemProvider
+    let onDropRemoteItems: ([NSItemProvider], RemoteEntry) -> Bool
+    let onDropRemoteItemsToParent: ([NSItemProvider]) -> Bool
     let query: String
 
     @FocusState private var focused: Bool
@@ -148,6 +152,9 @@ struct SFTPFileTable: View {
         .contentShape(Rectangle())
         .hoverBackground(UD.rowHover)
         .onTapGesture { focused = true; onUp() }
+        .onDrop(of: [.utermRemoteFile],
+                isTargeted: nil,
+                perform: onDropRemoteItemsToParent)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onUp() }
@@ -158,7 +165,7 @@ struct SFTPFileTable: View {
     private func row(_ e: RemoteEntry) -> some View {
         let kind = BrowserFileKind.from(name: e.name, isDirectory: e.isDirectory, isSymlink: e.isSymlink)
         let selected = e.id == selectedID
-        return HStack(spacing: 12) {
+        let base = HStack(spacing: 12) {
             SFTPFileIcon(kind: kind).frame(width: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(e.name).font(.system(size: 13.5))
@@ -189,9 +196,26 @@ struct SFTPFileTable: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
         .onTapGesture { selectedID = e.id; focused = true }
+        .onDrag {
+            onDragProvider(e)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onActivate(e) }
+
+        return remoteMoveDropTarget(base, entry: e)
+    }
+
+    @ViewBuilder
+    private func remoteMoveDropTarget<Content: View>(_ content: Content,
+                                                     entry: RemoteEntry) -> some View {
+        if entry.isDirectory {
+            content.onDrop(of: [.utermRemoteFile], isTargeted: nil) { providers in
+                onDropRemoteItems(providers, entry)
+            }
+        } else {
+            content
+        }
     }
 }
 

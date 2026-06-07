@@ -33,7 +33,9 @@ struct ServerList: View {
         HStack(spacing: 0) {
             listColumn
             if let selected = selectedProfile {
-                HostDetailPanel(profile: selected, onConnect: { onOpen(selected) })
+                HostDetailPanel(profile: selected,
+                                onConnect: { onOpen(selected) },
+                                onBrowseSFTP: { onContextAction(.openSFTP, selected) })
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -94,7 +96,10 @@ struct ServerList: View {
 
     @ViewBuilder
     private func contextMenu(for profile: ServerProfile) -> some View {
-        Button("连接") { onContextAction(.connect, profile) }
+        // 「仅 SFTP」主机禁用终端会话，隐藏「连接」，仅保留 SFTP 浏览入口。
+        if !profile.sftpOnly {
+            Button("连接") { onContextAction(.connect, profile) }
+        }
         Button("在 SFTP 中打开") { onContextAction(.openSFTP, profile) }
         Button(profile.isPinned ? "取消置顶" : "置顶") {
             onContextAction(.togglePin, profile)

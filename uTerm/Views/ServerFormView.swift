@@ -25,6 +25,7 @@ struct ServerFormView: View {
     @State private var authMethod: AuthMethod = .privateKey
     @State private var password = ""
     @State private var keyID: UUID?
+    @State private var sftpOnly = false
     @State private var useJumpHost = false
     @State private var jumpProfileID: UUID?
 
@@ -78,6 +79,7 @@ struct ServerFormView: View {
             VStack(alignment: .leading, spacing: 20) {
                 targetSection
                 groupSection
+                sftpSection
                 jumpSection
             }
             .padding(.horizontal, 22).padding(.vertical, 20)
@@ -132,6 +134,42 @@ struct ServerFormView: View {
                         UDSelectableGroupChip(label: g, selected: g == group) { group = g }
                     }
                 }
+            }
+        }
+    }
+
+    /// 「仅 SFTP 连接」小节（设计稿 `new-server.jsx`）：与「跳板机」一致的开关样式。
+    /// 关：提示默认开启终端会话；开：强调色说明卡，声明终端会话与命令执行均被禁用。
+    private var sftpSection: some View {
+        DarkFormSection(title: "仅 SFTP 连接", trailing: {
+            UDToggle($sftpOnly)
+        }) {
+            if !sftpOnly {
+                Text("默认开启终端会话，并可随时打开 SFTP 文件浏览。")
+                    .font(.system(size: 11.5)).foregroundStyle(UD.text4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(UD.accent)
+                        .padding(.top, 1)
+                    Text("\(Text("仅 SFTP 文件传输").foregroundStyle(UD.text).fontWeight(.medium))。该主机将只能浏览与传输文件，\(Text("终端会话与命令执行均被禁用").foregroundStyle(UD.text3))。")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(UD.text2)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(UD.accent.opacity(0.07))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(UD.accent.opacity(0.19), lineWidth: 1)
+                )
             }
         }
     }
@@ -197,6 +235,7 @@ struct ServerFormView: View {
         group = editing.group ?? ""
         authMethod = editing.authMethod
         keyID = editing.keyID
+        sftpOnly = editing.sftpOnly
         password = (try? keychain.load(profileID: editing.id, kind: .password)) ?? ""
         if let jump = editing.jumpHost {
             useJumpHost = true
@@ -216,6 +255,7 @@ struct ServerFormView: View {
             GroupStore(context: modelContext).ensure(name: g)
         }
         profile.authMethod = authMethod
+        profile.sftpOnly = sftpOnly
 
         if authMethod == .password {
             try? keychain.save(password, profileID: profile.id, kind: .password)

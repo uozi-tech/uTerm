@@ -5,6 +5,8 @@ import AppKit
 /// 聊天代码块：顶栏（语言名 + 复制）+ 高亮正文。
 /// 流式中只渲染纯等宽（不跑高亮），落定后做一次高亮，避免每 token 重 parse。
 struct ChatCodeBlock: View {
+    static let containerCornerRadius = UD.Radius.lg
+
     let code: String
     let language: String?
     let isStreaming: Bool
@@ -13,15 +15,18 @@ struct ChatCodeBlock: View {
     @State private var copied = false
 
     private var trimmed: String { code.trimmingCharacters(in: .newlines) }
+    private var containerShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Self.containerCornerRadius, style: .continuous)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             content
         }
-        .background(UD.terminal)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(style.border, lineWidth: 1))
+        .background(containerShape.fill(style.codeBlockBackground))
+        .clipShape(containerShape)
+        .overlay(containerShape.strokeBorder(style.border, lineWidth: 1))
     }
 
     private var header: some View {

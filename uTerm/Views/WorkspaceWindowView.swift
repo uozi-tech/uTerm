@@ -22,8 +22,9 @@ struct WorkspaceWindowView: View {
     /// 也被切换。`.controlActiveState` 在窗口为 key 时为 `.key`。
     @Environment(\.modelContext) private var modelContext
     @Environment(\.controlActiveState) private var controlActiveState
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
+    /// 全局端口转发协调器（由 App 根注入）。标题栏读活跃隧道数；打开管理窗用 openWindow。
+    @Environment(ForwardingCoordinator.self) private var forwarding
 
     init(windowID: WorkspaceWindowID?) {
         self.windowID = windowID
@@ -86,13 +87,17 @@ struct WorkspaceWindowView: View {
             WorkspaceTitleBar(
                 serverName: server.name,
                 session: workspace.focusedTerminalSession(),
+                activeForwardCount: forwarding.activeCount(forServer: server.id),
                 onToggleSidebar: {
                     withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
                 },
                 onToggleInspector: {
                     withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleRightInspector() }
                 },
-                onOpenSettings: { openSettings() })
+                onOpenForwarding: {
+                    openWindow(value: PortForwardWindowID(id: UUID(), serverID: server.id))
+                },
+                onOpenSettings: { openWindow(id: SettingsWindow.id) })
 
             // 自绘三栏（替代 NavigationSplitView + .inspector）：列宽 / 折叠态进
             // uiState 持久化。center 显式 minWidth(480) + 列宽 clamp 保证
@@ -334,7 +339,7 @@ struct WorkspaceWindowView: View {
             })
 
         // 设置
-        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
     }

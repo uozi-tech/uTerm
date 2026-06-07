@@ -9,7 +9,6 @@ struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.openSettings) private var openSettings
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
 
     @AppStorage("startupBehavior")
@@ -210,7 +209,7 @@ struct WelcomeView: View {
             title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
                 openWindow(id: "import")
             })
-        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openSettings() }))
+        items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
     }
@@ -280,9 +279,18 @@ struct WelcomeView: View {
         // Mock / 空态下的行为对应假数据，拦截以免弹出无法解析的工作区窗口或误写真库。
         if TweaksModel.shared.welcomeSource != .real { return }
         #endif
+        // 「仅 SFTP」主机禁用终端会话：任何「连接 / 在工作区打开」入口统一重定向到 SFTP 浏览。
+        if profile.sftpOnly { openSFTP(profile); return }
         profile.lastConnectedAt = Date()
         try? modelContext.save()
         openWindow(value: WorkspaceWindowID(serverID: profile.id))
+    }
+
+    /// 打开 SFTP 文件浏览窗口。`.openSFTP` 动作与「仅 SFTP」主机的连接重定向共用此入口。
+    private func openSFTP(_ profile: ServerProfile) {
+        profile.lastConnectedAt = Date()
+        try? modelContext.save()
+        openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
     }
 
     private func handleContextAction(_ action: ServerList.ContextAction,
@@ -294,9 +302,7 @@ struct WelcomeView: View {
         case .connect:
             openServer(profile)
         case .openSFTP:
-            profile.lastConnectedAt = Date()
-            try? modelContext.save()
-            openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
+            openSFTP(profile)
         case .togglePin:
             profile.isPinned.toggle()
             try? modelContext.save()
@@ -338,13 +344,20 @@ struct WelcomeView: View {
     }
 
     private func deleteProfile(_ profile: ServerProfile) {
-        // 删除语义：清 keychain secrets + jumpHost。
+        // 删除语义：清 keychain secrets + jumpHost + 端口转发规则（孤儿清理）。
         let keychain = KeychainStore()
         for kind in [SecretKind.password, .passphrase, .privateKey] {
             try? keychain.delete(profileID: profile.id, kind: kind)
             if let jump = profile.jumpHost {
                 try? keychain.delete(profileID: jump.id, kind: kind)
             }
+        }
+        // 端口转发规则按 serverID 关联，删服务器须连带删——否则成无主孤儿。
+        // jumpHost 仅作跳板、不直接挂转发规则，但仍按其 id 兜底清一遍。
+        let forwardingStore = ForwardingRuleStore(context: modelContext)
+        forwardingStore.deleteAll(forServer: profile.id)
+        if let jump = profile.jumpHost {
+            forwardingStore.deleteAll(forServer: jump.id)
         }
         if let jump = profile.jumpHost { modelContext.delete(jump) }
         modelContext.delete(profile)

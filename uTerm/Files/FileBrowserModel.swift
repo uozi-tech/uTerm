@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// 文件浏览面板的状态机。导航/刷新/上传/下载经一个 `SFTPProviding`。
 /// 生产用 `connect(...)` 建一个真实 `SFTPSession`；测试用 `init(testProvider:startPath:)`。
@@ -172,6 +173,7 @@ final class FileBrowserModel {
     let hostKeyRelay = HostKeyChallengeRelay()
 
     private var provider: (any SFTPProviding)?
+    let remoteDragScopeID = UUID()
     private(set) var transientError: String?
     /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
     private(set) var transfers: [TransferItem] = []
@@ -317,6 +319,7 @@ final class FileBrowserModel {
 
     private func reconnectPreservingCurrentPath() async -> Bool {
         guard lastConnectionRequest != nil else { return false }
+        guard state != .connecting else { return false }
         await connectUsingLastRequest(force: true, initialPath: currentPath)
         return state == .browsing
     }
@@ -404,6 +407,85 @@ final class FileBrowserModel {
             try await provider.rename(from, to: to)
             await refresh()
         } catch { transientError = "重命名失败：\(error)" }
+    }
+
+    func remoteDragItem(for entry: RemoteEntry) -> RemoteFileDragItem {
+        RemoteFileDragItem(
+            scopeID: remoteDragScopeID,
+            path: Self.join(currentPath, entry.name),
+            name: entry.name,
+            isDirectory: entry.isDirectory)
+    }
+
+    func remoteDragProvider(for entry: RemoteEntry) -> NSItemProvider {
+        let item = remoteDragItem(for: entry)
+        let provider = RemoteFileDragPayload.itemProvider(item: item)
+        provider.suggestedName = entry.name
+
+        guard !entry.isDirectory else { return provider }
+        let size = Self.int64Size(entry.size)
+        let type = Self.contentType(forFileName: entry.name)
+        provider.registerFileRepresentation(
+            forTypeIdentifier: type.identifier,
+            fileOptions: [],
+            visibility: .all
+        ) { [weak self] completion in
+            let progress = Progress(totalUnitCount: max(1, size))
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    completion(nil, false, CocoaError(.userCancelled))
+                    return
+                }
+                guard let data = await self.downloadWithProgress(
+                    remotePath: item.path,
+                    fileName: item.name,
+                    size: size) else {
+                    completion(nil, false, NSError(
+                        domain: "uTerm.RemoteFileDrag",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "下载失败"]))
+                    return
+                }
+                do {
+                    let url = try Self.writePromisedDownload(data: data, fileName: item.name)
+                    progress.completedUnitCount = progress.totalUnitCount
+                    completion(url, false, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+            }
+            return progress
+        }
+        return provider
+    }
+
+    @discardableResult
+    func moveRemoteDragItem(_ item: RemoteFileDragItem, into target: RemoteEntry) async -> Bool {
+        guard target.isDirectory else { return false }
+        return await moveRemoteDragItem(item, intoDirectory: Self.join(currentPath, target.name))
+    }
+
+    @discardableResult
+    func moveRemoteDragItem(_ item: RemoteFileDragItem,
+                            intoDirectory targetDirectoryPath: String) async -> Bool {
+        guard let provider, item.scopeID == remoteDragScopeID else { return false }
+        let source = Self.normalizedRemotePath(item.path)
+        let targetDirectory = Self.normalizedRemotePath(targetDirectoryPath)
+        guard Self.canMoveRemoteDragItem(
+            sourcePath: source,
+            itemName: item.name,
+            isDirectory: item.isDirectory,
+            targetDirectoryPath: targetDirectory) else { return false }
+
+        let destination = Self.join(targetDirectory, item.name)
+        do {
+            try await provider.rename(source, to: destination)
+            await refresh()
+            return true
+        } catch {
+            transientError = "移动失败：\(error)"
+            return false
+        }
     }
 
     func delete(entry: RemoteEntry) async {
@@ -519,13 +601,34 @@ final class FileBrowserModel {
     /// 下载到内存并返回（保存面板由视图层处理）。登记为 .down 传输项，可在 Dock 取消。
     func downloadWithProgress(entry: RemoteEntry) async -> Data? {
         guard let provider, !entry.isDirectory else { return nil }
+        return await downloadWithProgress(
+            remotePath: Self.join(currentPath, entry.name),
+            fileName: entry.name,
+            size: Self.int64Size(entry.size),
+            provider: provider)
+    }
+
+    private func downloadWithProgress(remotePath: String,
+                                      fileName: String,
+                                      size: Int64) async -> Data? {
+        guard let provider else { return nil }
+        return await downloadWithProgress(
+            remotePath: remotePath,
+            fileName: fileName,
+            size: size,
+            provider: provider)
+    }
+
+    private func downloadWithProgress(remotePath: String,
+                                      fileName: String,
+                                      size: Int64,
+                                      provider: any SFTPProviding) async -> Data? {
         let id = UUID()
         transfers.append(TransferItem(
-            id: id, fileName: entry.name, direction: .down,
-            bytesDone: 0, bytesTotal: Int64(entry.size ?? 0),
+            id: id, fileName: fileName, direction: .down,
+            bytesDone: 0, bytesTotal: size,
             speedBytesPerSec: 0, status: .active))
         contexts[id] = TransferContext(source: .download)
-        let remotePath = Self.join(currentPath, entry.name)
 
         enum Outcome { case data(Data); case cancelled; case failed }
         let task = Task { () -> Outcome in
@@ -648,6 +751,52 @@ final class FileBrowserModel {
         var comps = path.split(separator: "/", omittingEmptySubsequences: true)
         comps.removeLast()
         return comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+    }
+
+    private static func canMoveRemoteDragItem(sourcePath: String,
+                                              itemName: String,
+                                              isDirectory: Bool,
+                                              targetDirectoryPath: String) -> Bool {
+        guard !itemName.isEmpty, sourcePath != "/" else { return false }
+        let destination = join(targetDirectoryPath, itemName)
+        guard destination != sourcePath else { return false }
+        if isDirectory {
+            guard targetDirectoryPath != sourcePath else { return false }
+            guard !targetDirectoryPath.hasPrefix(sourcePath + "/") else { return false }
+        }
+        return true
+    }
+
+    private static func normalizedRemotePath(_ path: String) -> String {
+        guard !path.isEmpty else { return "/" }
+        var value = path.hasPrefix("/") ? path : "/" + path
+        while value.count > 1, value.hasSuffix("/") {
+            value.removeLast()
+        }
+        return value
+    }
+
+    private static func int64Size(_ size: UInt64?) -> Int64 {
+        guard let size else { return 0 }
+        return size > UInt64(Int64.max) ? Int64.max : Int64(size)
+    }
+
+    private static func contentType(forFileName fileName: String) -> UTType {
+        let ext = (fileName as NSString).pathExtension
+        if !ext.isEmpty, let type = UTType(filenameExtension: ext) {
+            return type
+        }
+        return .data
+    }
+
+    private static func writePromisedDownload(data: Data, fileName: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uterm-drag-downloads", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent(fileName, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+        return url
     }
 
     private func closeCurrentProvider() {

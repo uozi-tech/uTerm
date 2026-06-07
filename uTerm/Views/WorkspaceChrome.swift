@@ -7,8 +7,12 @@ import AppKit
 struct WorkspaceTitleBar: View {
     let serverName: String
     let session: TerminalSession?
+    /// 当前服务器活跃隧道数（>0 时在端口转发按钮右上角叠计数徽章）。
+    let activeForwardCount: Int
     let onToggleSidebar: () -> Void
     let onToggleInspector: () -> Void
+    /// 打开本服务器的端口转发管理窗口。
+    let onOpenForwarding: () -> Void
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -31,10 +35,23 @@ struct WorkspaceTitleBar: View {
                              help: "显示/隐藏文件（⌘⌥1）",
                              action: onToggleSidebar)
                 Spacer()
-                // 右侧图标簇：Agent 聊天气泡 + 设置齿轮（对齐 Cursor 右上）。
+                // 右侧图标簇：Agent 聊天气泡 + 端口转发 + 设置齿轮（对齐 Cursor 右上）。
                 WSIconButton(systemName: "bubble.left",
                              help: "显示/隐藏 Agent（⌘⌥2）",
                              action: onToggleInspector)
+                // 端口转发：有活跃隧道时右上角叠计数徽章（ZStack .topTrailing + 小偏移，
+                // 避免徽章溢出 38px 栏；clipping 关掉让徽章可探出按钮命中框外）。
+                ZStack(alignment: .topTrailing) {
+                    WSIconButton(systemName: "arrow.left.arrow.right",
+                                 help: "端口转发",
+                                 action: onOpenForwarding)
+                    if activeForwardCount > 0 {
+                        UDCountBadge(activeForwardCount, accent: true)
+                            .scaleEffect(0.72)
+                            .offset(x: 6, y: -5)
+                            .allowsHitTesting(false)
+                    }
+                }
                 WSIconButton(systemName: "gearshape",
                              help: "设置（⌘,）",
                              action: onOpenSettings)

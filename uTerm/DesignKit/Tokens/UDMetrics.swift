@@ -40,6 +40,10 @@ extension UD {
         case md
         /// 指标卡 / 菜单栏 / 对话框。
         case lg
+        /// 命令面板 / 浮动菜单专用合成投影（设计稿 `--u-menu-shadow`）。
+        /// 比 `.md` 略深的柔和 drop shadow，且**不含**窗口级的 `0 0 0 1px` 描边环——
+        /// 浮层只配一条 `UD.border` 细边即可，避免描边叠描边。
+        case menu
     }
 }
 
@@ -81,6 +85,15 @@ private struct UDShadowModifier: ViewModifier {
                    UDShadowLayer(opacity: 0.72, radius: 30, y: 16)]
                 : [UDShadowLayer(opacity: 0.10, radius: 6, y: 4),
                    UDShadowLayer(opacity: 0.20, radius: 24, y: 18)]
+        case .menu:
+            // 设计稿 --u-menu-shadow：
+            // 深 0 18px 50px -16px /.7 + 0 4px 12px -4px /.4
+            // 浅 0 14px 36px -16px /.22 + 0 3px 10px -4px /.12
+            return dark
+                ? [UDShadowLayer(opacity: 0.40, radius: 6, y: 4),
+                   UDShadowLayer(opacity: 0.70, radius: 25, y: 18)]
+                : [UDShadowLayer(opacity: 0.12, radius: 5, y: 3),
+                   UDShadowLayer(opacity: 0.22, radius: 18, y: 14)]
         }
     }
 }

@@ -35,6 +35,11 @@ final class ServerProfile {
     /// 最近一次成功连接的时间。连接成功后由调用方赋值。
     var lastConnectedAt: Date?
 
+    /// 「仅 SFTP」连接模式：该主机只允许文件浏览 / 传输，禁用终端会话与命令执行。
+    /// 默认 false（普通主机）。CloudKit 安全：有默认值。开启后，任何「在工作区打开 /
+    /// 连接」的入口都会被重定向到 SFTP 浏览（见 `WelcomeView.openServer`）。
+    var sftpOnly: Bool = false
+
     /// 单跳跳板机配置。自引用可选关系。M1 只用一层，
     /// 嵌套的 `jumpHost?.jumpHost` 不暴露、不连接。
     var jumpHost: ServerProfile?

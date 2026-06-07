@@ -62,6 +62,9 @@ struct UDSearchField: View {
             RoundedRectangle(cornerRadius: UD.Radius.md)
                 .stroke(UD.accent.opacity(focused ? 0.13 : 0), lineWidth: 3)
         )
+        .overlay(
+            UDInputFocusDismissMonitor(isFocused: $focused)
+        )
         .onAppear { focused = autoFocus }
         .onChange(of: autoFocus) { _, newValue in
             focused = newValue

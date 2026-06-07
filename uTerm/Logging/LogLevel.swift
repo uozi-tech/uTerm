@@ -7,7 +7,7 @@ import Foundation
 ///
 /// 注意：与 `OSLogType` 没有 1:1 映射（os 没有 warn 级别）。本 enum
 /// 是 user-facing 4 档；映射到 OSLogType 时 `.warn` → `.error` + `[WARN]` 前缀。
-enum LogLevel: String, CaseIterable, Identifiable {
+nonisolated enum LogLevel: String, CaseIterable, Identifiable {
     case error
     case warn
     case info

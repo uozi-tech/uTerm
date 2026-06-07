@@ -28,11 +28,9 @@ struct StatusBarView: View {
                 metric(icon: "server.rack", color: UD.mEndpoint, text: endpoint)
             }
 
-            // 文件传输 —— 复用独立 SFTP 窗口的传输 Dock（设计稿 `pages/workspace.jsx`
-            // 的 `WorkspaceStatusBar`：endpoint 后接一道竖分隔 + TransfersDock）。
+            // 文件传输 —— 复用独立 SFTP 窗口的传输 Dock。
             // 喂同一个 workspace.fileBrowserModel —— 与左侧 SFTPSidebar 的上传共享
             // 队列、进度与取消/重试，单文件内联进度、多文件点击展开上传列表。
-            Rectangle().fill(UD.border).frame(width: 1, height: 12)
             SFTPTransfersDock(
                 transfers: workspace.fileBrowserModel.transfers,
                 onCancel: { workspace.fileBrowserModel.cancelTransfer($0) },

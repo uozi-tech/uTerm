@@ -40,6 +40,8 @@ enum MockServerFactory {
             p.group = (g == 0) ? nil : groupName(i % g)
             p.isPinned = i < pinned
             p.lastConnectedAt = i < recent ? anchor.addingTimeInterval(-Double(i) * 86_400) : nil
+            // 每 6 台掺一台「仅 SFTP」主机，便于在 Tweaks 预览里验证徽标 / 详情禁用态。
+            p.sftpOnly = (i % 6 == 5)
             return p
         }
     }

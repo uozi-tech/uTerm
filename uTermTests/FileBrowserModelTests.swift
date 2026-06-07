@@ -25,6 +25,14 @@ final class FileBrowserModelTests: XCTestCase {
         }
     }
 
+    private func waitUntilAsync(timeout: TimeInterval = 3.0,
+                                _ condition: () async -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !(await condition()) && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     /// 写入 n 个临时文件，返回其 URL（每个内容 = 文件名，便于断言字节数）。
     private func tempFiles(_ names: [String]) throws -> (dir: URL, urls: [URL]) {
         let dir = FileManager.default.temporaryDirectory
@@ -123,6 +131,7 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(model.state, .browsing)
         XCTAssertEqual(model.currentPath, "/home/user/logs")
         XCTAssertEqual(model.entries.map(\.name), ["fresh.log"])
+        await waitUntilAsync { await first.didClose }
         let didCloseFirstProvider = await first.didClose
         XCTAssertTrue(didCloseFirstProvider)
     }
@@ -179,6 +188,74 @@ final class FileBrowserModelTests: XCTestCase {
         let renames = await mock.renames
         XCTAssertEqual(renames.first?.from, "/home/user/a.txt")
         XCTAssertEqual(renames.first?.to, "/home/user/b.txt")
+    }
+
+    func testMoveRemoteDragItemIntoDirectoryRenamesToTargetDirectory() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("logs", true), ("a.txt", false)]),
+            "/home/user/logs": dir([]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        guard let file = model.entries.first(where: { $0.name == "a.txt" }),
+              let target = model.entries.first(where: { $0.name == "logs" }) else {
+            XCTFail("test fixture should contain a file and target directory")
+            return
+        }
+        let moved = await model.moveRemoteDragItem(model.remoteDragItem(for: file), into: target)
+
+        XCTAssertTrue(moved)
+        let renames = await mock.renames
+        XCTAssertEqual(renames.first?.from, "/home/user/a.txt")
+        XCTAssertEqual(renames.first?.to, "/home/user/logs/a.txt")
+    }
+
+    func testMoveRemoteDragItemRejectsDifferentScope() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("logs", true), ("a.txt", false)]),
+            "/home/user/logs": dir([]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        guard let target = model.entries.first(where: { $0.name == "logs" }) else {
+            XCTFail("test fixture should contain target directory")
+            return
+        }
+        let foreign = RemoteFileDragItem(
+            scopeID: UUID(),
+            path: "/home/user/a.txt",
+            name: "a.txt",
+            isDirectory: false)
+
+        let moved = await model.moveRemoteDragItem(foreign, into: target)
+
+        XCTAssertFalse(moved)
+        let renames = await mock.renames
+        XCTAssertTrue(renames.isEmpty)
+    }
+
+    func testMoveRemoteDragItemRejectsDirectoryDroppedIntoItself() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("logs", true)]),
+            "/home/user/logs": dir([("archive", true)]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user/logs")
+        await model.refresh()
+        guard let archive = model.entries.first(where: { $0.name == "archive" }) else {
+            XCTFail("test fixture should contain nested target directory")
+            return
+        }
+        let source = RemoteFileDragItem(
+            scopeID: model.remoteDragScopeID,
+            path: "/home/user/logs",
+            name: "logs",
+            isDirectory: true)
+
+        let moved = await model.moveRemoteDragItem(source, into: archive)
+
+        XCTAssertFalse(moved)
+        let renames = await mock.renames
+        XCTAssertTrue(renames.isEmpty)
     }
 
     func testDeleteFile() async {

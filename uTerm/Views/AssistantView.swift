@@ -27,7 +27,7 @@ struct AssistantView: View {
     @Bindable var model: AssistantModel
     @Binding var activeProviderIDString: String
 
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
 
@@ -128,7 +128,7 @@ struct AssistantView: View {
                 }
             }
             Divider()
-            Button("管理…") { openSettings() }
+            Button("管理…") { openWindow(id: SettingsWindow.id) }
         } label: {
             UDModelPillLabel(modelPillLabel)
         }
@@ -285,7 +285,7 @@ struct AssistantView: View {
                 .font(.caption).foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
             UDButton(title: "打开 Settings", systemImage: "gearshape") {
-                openSettings()
+                openWindow(id: SettingsWindow.id)
             }
         }
         .padding()

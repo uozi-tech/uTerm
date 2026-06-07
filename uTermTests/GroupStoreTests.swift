@@ -210,6 +210,29 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertTrue(g.isPinned)
     }
 
+    func testReorderRewritesSortOrderByPosition() throws {
+        let ctx = try makeContext()
+        let a = ServerGroup(name: "a", sortOrder: 0)
+        let b = ServerGroup(name: "b", sortOrder: 1)
+        let c = ServerGroup(name: "c", sortOrder: 2)
+        [a, b, c].forEach { ctx.insert($0) }
+        let store = GroupStore(context: ctx)
+        store.reorder([c, a, b])                 // 新可视顺序
+        XCTAssertEqual(c.sortOrder, 0)
+        XCTAssertEqual(a.sortOrder, 1)
+        XCTAssertEqual(b.sortOrder, 2)
+    }
+
+    func testReorderIsNoOpWhenAlreadyInOrder() throws {
+        let ctx = try makeContext()
+        let a = ServerGroup(name: "a", sortOrder: 0)
+        let b = ServerGroup(name: "b", sortOrder: 1)
+        [a, b].forEach { ctx.insert($0) }
+        GroupStore(context: ctx).reorder([a, b])
+        XCTAssertEqual(a.sortOrder, 0)
+        XCTAssertEqual(b.sortOrder, 1)
+    }
+
     func testAddMemberMovesAndRemoveUngroups() throws {
         let ctx = try makeContext()
         let p = profile("p1", group: "dev"); ctx.insert(p)
@@ -227,5 +250,98 @@ final class GroupStoreTests: XCTestCase {
         let m = GroupStore.members(of: "dev", in: [a, b, c])
         XCTAssertEqual(Set(m.map(\.name)), ["a", "b"])
         XCTAssertTrue(GroupStore.members(of: "nope", in: [a, b, c]).isEmpty)
+    }
+
+    func testMemberDisplayNameUsesServerNameBeforeHost() {
+        let p = profile("prod-main", group: nil)
+        p.host = "203.0.113.10"
+
+        XCTAssertEqual(serverProfileMemberDisplayName(p), "prod-main")
+    }
+
+    func testMemberDisplayNameFallsBackToHostWhenServerNameIsEmpty() {
+        let p = profile("", group: nil)
+        p.host = "203.0.113.10"
+
+        XCTAssertEqual(serverProfileMemberDisplayName(p), "203.0.113.10")
+    }
+
+    // MARK: detail rename editor state
+
+    func testDetailRenameEditorBeginPrefillsDraftAndClearsError() {
+        var state = GroupRenameEditorState<String>()
+        state.draft = "stale"
+        state.hasError = true
+
+        state.begin(id: "group-1", currentName: "prod")
+
+        XCTAssertTrue(state.isEditing("group-1"))
+        XCTAssertEqual(state.draft, "prod")
+        XCTAssertFalse(state.hasError)
+    }
+
+    func testDetailRenameEditorSaveClosesOnSuccess() {
+        var state = GroupRenameEditorState<String>()
+        state.begin(id: "group-1", currentName: "prod")
+        state.draft = "vps"
+        var submittedName: String?
+
+        let saved = state.save(id: "group-1") { draft in
+            submittedName = draft
+            return true
+        }
+
+        XCTAssertTrue(saved)
+        XCTAssertEqual(submittedName, "vps")
+        XCTAssertFalse(state.isEditing("group-1"))
+        XCTAssertFalse(state.hasError)
+    }
+
+    func testDetailRenameEditorSaveFailureKeepsEditorOpen() {
+        var state = GroupRenameEditorState<String>()
+        state.begin(id: "group-1", currentName: "prod")
+        state.draft = "existing"
+
+        let saved = state.save(id: "group-1") { _ in false }
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(state.isEditing("group-1"))
+        XCTAssertEqual(state.draft, "existing")
+        XCTAssertTrue(state.hasError)
+    }
+
+    func testDetailRenameEditorBlankSaveDoesNotSubmit() {
+        var state = GroupRenameEditorState<String>()
+        state.begin(id: "group-1", currentName: "prod")
+        state.draft = "   "
+        var didSubmit = false
+
+        let saved = state.save(id: "group-1") { _ in
+            didSubmit = true
+            return true
+        }
+
+        XCTAssertFalse(saved)
+        XCTAssertFalse(didSubmit)
+        XCTAssertTrue(state.isEditing("group-1"))
+        XCTAssertTrue(state.hasError)
+    }
+
+    func testDetailRenameEditorCancelClearsEditingState() {
+        var state = GroupRenameEditorState<String>()
+        state.begin(id: "group-1", currentName: "prod")
+        state.draft = "changed"
+        state.hasError = true
+
+        state.cancel(currentName: "prod")
+
+        XCTAssertFalse(state.isEditing("group-1"))
+        XCTAssertEqual(state.draft, "prod")
+        XCTAssertFalse(state.hasError)
+    }
+
+    func testGroupRowDeleteButtonUsesLargeHitTarget() {
+        XCTAssertGreaterThanOrEqual(GroupRowDeleteButtonLayout.hitWidth, 28)
+        XCTAssertGreaterThanOrEqual(GroupRowDeleteButtonLayout.hitHeight, 28)
     }
 }

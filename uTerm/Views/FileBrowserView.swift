@@ -255,6 +255,9 @@ struct FileBrowserContent: View {
             selectedID = Self.upRowID
             browserFocused = true
         }
+        .onDrop(of: [.utermRemoteFile],
+                isTargeted: nil,
+                perform: moveRemoteItemsToParent)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { Task { await model.navigateUp() } }
@@ -283,7 +286,7 @@ struct FileBrowserContent: View {
         // trait + 激活能力（双击是鼠标专属，键盘走选中 + 回车）。
         let kind = BrowserFileKind.from(name: entry.name, isDirectory: entry.isDirectory, isSymlink: entry.isSymlink)
         let isSelected = entry.id == selectedID
-        return HStack(spacing: 9) {
+        let base = HStack(spacing: 9) {
             // 复用独立 SFTP 窗口同款图标（双色蓝文件夹 + 文件类型彩色角标），按
             // 侧边栏窄栏缩到 16pt。
             SFTPFileIcon(kind: kind, size: 16).frame(width: 22)
@@ -322,6 +325,9 @@ struct FileBrowserContent: View {
             selectedID = entry.id
             browserFocused = true
         }
+        .onDrag {
+            model.remoteDragProvider(for: entry)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { activate(entry) }
@@ -329,6 +335,20 @@ struct FileBrowserContent: View {
             if !entry.isDirectory {
                 Button("下载…") { downloadFile(entry) }
             }
+        }
+
+        return remoteMoveDropTarget(base, entry: entry)
+    }
+
+    @ViewBuilder
+    private func remoteMoveDropTarget<Content: View>(_ content: Content,
+                                                     entry: RemoteEntry) -> some View {
+        if entry.isDirectory {
+            content.onDrop(of: [.utermRemoteFile], isTargeted: nil) { providers in
+                moveRemoteItems(providers, into: entry)
+            }
+        } else {
+            content
         }
     }
 
@@ -344,6 +364,33 @@ struct FileBrowserContent: View {
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                 Task { @MainActor [model] in
                     model.enqueueUploads([url])
+                }
+            }
+        }
+        return true
+    }
+
+    private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {
+        moveRemoteItems(providers, intoDirectory: FileBrowserModel.parent(of: model.currentPath))
+    }
+
+    private func moveRemoteItems(_ providers: [NSItemProvider],
+                                 into entry: RemoteEntry) -> Bool {
+        guard entry.isDirectory else { return false }
+        return moveRemoteItems(providers, intoDirectory: FileBrowserModel.join(model.currentPath, entry.name))
+    }
+
+    private func moveRemoteItems(_ providers: [NSItemProvider],
+                                 intoDirectory targetDirectoryPath: String) -> Bool {
+        let remoteProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.utermRemoteFile.identifier)
+        }
+        guard !remoteProviders.isEmpty else { return false }
+        for provider in remoteProviders {
+            RemoteFileDragPayload.load(from: provider) { item in
+                guard let item else { return }
+                Task { @MainActor [model] in
+                    await model.moveRemoteDragItem(item, intoDirectory: targetDirectoryPath)
                 }
             }
         }

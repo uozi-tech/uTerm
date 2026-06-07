@@ -37,7 +37,11 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 720, height: 480)
+        // 用 minHeight（而非固定 height）让内容**铺满整窗**——与 Welcome / Keys 一致。
+        // 固定 height:480 + .ignoresSafeArea(.top) 会把内容上提、底部空出一条未覆盖区，
+        // 露出窗口默认（浅色）底，短内容的「通用」tab 上显成「底部 footer」。铺满后
+        // 该条由 UD.bg 覆盖消失。窗口初始尺寸由 Scene 的 .defaultSize 决定。
+        .frame(minWidth: 720, minHeight: 480)
         // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #101012）。其余主窗
         // （工作区 / SFTP / 表单 / 密钥）皆已 .background(UD.bg)，设置窗补齐对齐。
         // 自绘扁平 chrome：透明系统标题栏 + full-size content，红绿灯让位由 SettingsTitleBar
@@ -105,6 +109,14 @@ nonisolated enum SettingsTabSelection {
     static func tab(from rawValue: String?) -> SettingsTab {
         rawValue.flatMap(SettingsTab.init(rawValue:)) ?? .general
     }
+}
+
+/// 设置窗口标识。改用普通 `Window`（而非 macOS `Settings`/Preferences 场景）打开，
+/// 原因：Preferences 场景不可靠地忽略 `.windowStyle(.hiddenTitleBar)`，始终画系统标题栏，
+/// 自绘 chrome（`SettingsTitleBar` + `WorkspaceWindowChrome`）盖不住。改普通 Window 后
+/// 与 Welcome / Keys / Groups 同构，chrome 才能真正接管。⌘, 由 `.appSettings` 命令组重绑。
+nonisolated enum SettingsWindow {
+    static let id = "settings"
 }
 
 /// 设计稿 tab 条：高 44、左对齐、tab 间距 4、底部 1px 描边。

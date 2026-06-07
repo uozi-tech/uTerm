@@ -13,7 +13,7 @@ import os
 ///
 /// 性能：每次调用读一次 UserDefaults。预期调用频率远低于 1k/s；若未来变高
 /// 可加 in-process cache + AppStorage observer。
-enum AppLogger {
+nonisolated enum AppLogger {
     private static let subsystem = "com.uozi.uTerm"
 
     /// 测试钩子：传 nil 使用 `.info` 默认值（不读 UserDefaults）；

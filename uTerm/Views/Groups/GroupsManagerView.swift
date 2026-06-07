@@ -1,9 +1,67 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import UniformTypeIdentifiers
 
-/// 分组管理窗口（设计稿 `groups.jsx`）。两窗格：左=新建+组列表+未分组只读行；
-/// 右=选中组详情（色板/置顶/重命名/删/成员增删）。独立 `Window`，外观随全局主题。
+struct GroupRenameEditorState<ID: Hashable>: Equatable {
+    var editingID: ID?
+    var draft = ""
+    var hasError = false
+
+    var canSave: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func isEditing(_ id: ID) -> Bool {
+        editingID == id
+    }
+
+    mutating func begin(id: ID, currentName: String) {
+        editingID = id
+        draft = currentName
+        hasError = false
+    }
+
+    @discardableResult
+    mutating func save(id: ID, commit: (String) -> Bool) -> Bool {
+        guard isEditing(id), canSave else {
+            hasError = true
+            return false
+        }
+        guard commit(draft) else {
+            hasError = true
+            return false
+        }
+        editingID = nil
+        hasError = false
+        return true
+    }
+
+    mutating func cancel(currentName: String) {
+        draft = currentName
+        editingID = nil
+        hasError = false
+    }
+}
+
+enum GroupRowDeleteButtonLayout {
+    static let hitWidth: CGFloat = 30
+    static let hitHeight: CGFloat = 30
+    static let visibleSize: CGFloat = 22
+    static let iconSize: CGFloat = 10
+}
+
+/// 分组管理窗口（设计稿 `groups.jsx`）。两窗格：左=新建输入 + 组列表（含底部统计）+
+/// 未分组只读行；右=选中组详情（图标头 / 重命名 / 色板 / 成员「成员·添加」分页增删）。
+/// 独立 `Window`，外观随全局主题。
+///
+/// 与设计稿差异说明：
+/// - 「置顶」组在设计稿里只展示星标、未给开关；本实现保留语义（影响侧栏排序），
+///   故置顶切换收进组行右键菜单（不破坏设计稿视觉）。
+/// - 「未分组」在设计稿里是一条 builtin 组行；这里是由 `ServerProfile.group` 为空派生的
+///   计算行，成员只读（既不能移出也不能再加入），其余视觉对齐 builtin 组。
+/// - 组行拖拽手柄 hover 浮现，整行可拖拽重排（实时重排 + 持久化 `sortOrder`，见 `moveGroup`）；
+///   「未分组」builtin 行不参与拖拽，始终置底。
 struct GroupsManagerView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServerGroup.sortOrder) private var groups: [ServerGroup]
@@ -13,13 +71,14 @@ struct GroupsManagerView: View {
 
     @State private var selection: ManagerSelection?
     @State private var newGroupName = ""
-    @State private var renameDraft = ""
-    @State private var renameError = false
+    @State private var renameEditor = GroupRenameEditorState<PersistentIdentifier>()
     @State private var pendingDelete: ServerGroup?
+    @State private var draggingID: PersistentIdentifier?
 
     private var store: GroupStore { GroupStore(context: modelContext) }
     private var sortedGroups: [ServerGroup] { GroupStore.sortedForSidebar(groups) }
     private var ungroupedCount: Int { profiles.filter { ($0.group ?? "").isEmpty }.count }
+    private var totalHosts: Int { profiles.count }
     private var selectedGroup: ServerGroup? {
         if case .group(let id) = selection { return groups.first { $0.persistentModelID == id } }
         return nil
@@ -29,243 +88,803 @@ struct GroupsManagerView: View {
         VStack(spacing: 0) {
             GroupsTitleBar()
             HStack(spacing: 0) {
-                leftPane.frame(width: 280)
+                leftPane.frame(width: 240)
                 Rectangle().fill(UD.border).frame(width: 1)
                 rightPane.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 820, minHeight: 560)
+        .frame(minWidth: 860, minHeight: 580)
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "分组管理"))
-        .confirmationDialog("删除分组？",
-            isPresented: Binding(get: { pendingDelete != nil },
-                                 set: { if !$0 { pendingDelete = nil } }),
-            presenting: pendingDelete) { g in
-                Button("删除", role: .destructive) {
-                    store.delete(g); selection = nil; pendingDelete = nil
-                }
-                Button("取消", role: .cancel) {}
-            } message: { g in
-                Text("「\(g.name)」将被删除，其主机会变为未分组。")
+        .overlay { deleteConfirmOverlay }
+        .onAppear {
+            if selection == nil {
+                selection = sortedGroups.first.map { .group($0.persistentModelID) }
             }
+        }
     }
 
-    // MARK: 左栏
+    // MARK: - 左栏
 
     private var leftPane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                TextField("新建分组…", text: $newGroupName)
-                    .textFieldStyle(.plain)
-                    .font(UD.body)
-                    .foregroundStyle(UD.text)
-                    .onSubmit(createGroup)
-                Button("添加", action: createGroup)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(UD.accent)
-                    .disabled(newGroupName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(12)
+            createBar
             Rectangle().fill(UD.border).frame(height: 1)
-
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(spacing: 0) {
                     ForEach(sortedGroups, id: \.persistentModelID) { g in
                         groupRow(g)
                     }
                     if ungroupedCount > 0 {
-                        ungroupedRow
+                        GroupRowView(
+                            name: "未分组",
+                            color: groupPaletteColor("#9aa7b5"),
+                            count: ungroupedCount,
+                            pinned: false,
+                            builtin: true,
+                            selected: selection == .ungrouped,
+                            onSelect: { selection = .ungrouped }
+                        )
                     }
                 }
                 .padding(.vertical, 6)
             }
+            Rectangle().fill(UD.border).frame(height: 1)
+            footer
         }
         .frame(maxHeight: .infinity)
         .background(UD.bg)
     }
 
-    private func groupRow(_ g: ServerGroup) -> some View {
-        let isSel = selection == .group(g.persistentModelID)
-        return HStack(spacing: 10) {
-            Circle().fill(g.color).frame(width: 10, height: 10)
-            Text(g.name).font(UD.body).foregroundStyle(isSel ? UD.text : UD.text2).lineLimit(1)
-            if g.isPinned {
-                Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(UD.text4)
+    private var createBar: some View {
+        HStack(spacing: 6) {
+            TextField("新建分组…", text: $newGroupName)
+                .textFieldStyle(.plain)
+                .font(UD.font(12.5))
+                .foregroundStyle(UD.text)
+                .onSubmit(createGroup)
+            Button(action: createGroup) {
+                Text("添加")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(canCreate ? .white : UD.text4)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 5)
+                        .fill(canCreate ? UD.accent : UD.fillSoft))
             }
-            Spacer(minLength: 6)
-            Text("\(GroupStore.members(of: g.name, in: profiles).count)")
-                .font(UD.monoMetric).foregroundStyle(UD.text4)
+            .buttonStyle(.plain)
+            .disabled(!canCreate)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.rowSelected : .clear))
-        .padding(.horizontal, 8)
-        .contentShape(Rectangle())
-        .onTapGesture { select(.group(g.persistentModelID), draft: g.name) }
+        .padding(.leading, 8)
+        .padding(.trailing, 3)
+        .frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
     }
 
-    private var ungroupedRow: some View {
-        let isSel = selection == .ungrouped
-        return HStack(spacing: 10) {
-            Image(systemName: "minus.circle").font(.system(size: 11)).foregroundStyle(UD.text4)
-            Text("未分组").font(UD.body).foregroundStyle(isSel ? UD.text : UD.text2)
-            Spacer(minLength: 6)
-            Text("\(ungroupedCount)").font(UD.monoMetric).foregroundStyle(UD.text4)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.rowSelected : .clear))
-        .padding(.horizontal, 8)
-        .contentShape(Rectangle())
-        .onTapGesture { selection = .ungrouped }
+    private var canCreate: Bool {
+        !newGroupName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    // MARK: 右栏
+    private func groupRow(_ g: ServerGroup) -> some View {
+        GroupRowView(
+            name: g.name,
+            color: g.color,
+            count: GroupStore.members(of: g.name, in: profiles).count,
+            pinned: g.isPinned,
+            builtin: false,
+            selected: selection == .group(g.persistentModelID),
+            onSelect: { selection = .group(g.persistentModelID) },
+            onDelete: { pendingDelete = g },
+            onTogglePin: { store.setPinned(g, !g.isPinned) }
+        )
+        .modifier(GroupRowDragModifier(
+            enabled: !renameEditor.isEditing(g.persistentModelID),
+            groupID: g.persistentModelID,
+            draggingID: $draggingID,
+            onMove: moveGroup
+        ))
+    }
+
+    /// 把 `from` 组拖到 `to` 组的位置（拖拽中实时调用），并持久化新的 `sortOrder`。
+    private func moveGroup(_ from: PersistentIdentifier, _ to: PersistentIdentifier) {
+        var order = sortedGroups
+        guard let fromIdx = order.firstIndex(where: { $0.persistentModelID == from }),
+              let toIdx = order.firstIndex(where: { $0.persistentModelID == to }),
+              fromIdx != toIdx else { return }
+        let moved = order.remove(at: fromIdx)
+        order.insert(moved, at: min(toIdx, order.count))
+        withAnimation(.easeInOut(duration: 0.18)) {
+            store.reorder(order)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Text("\(sortedGroups.count + (ungroupedCount > 0 ? 1 : 0)) 个分组")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(totalHosts) 主机")
+                .font(UD.monoMetric)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(UD.text4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - 右栏
 
     @ViewBuilder
     private var rightPane: some View {
         if let g = selectedGroup {
-            groupDetail(g)
+            GroupDetailView(
+                group: g,
+                members: GroupStore.members(of: g.name, in: profiles),
+                candidates: profiles.filter { $0.group != g.name },
+                isRenaming: renameEditor.isEditing(g.persistentModelID),
+                renameDraft: $renameEditor.draft,
+                renameError: renameEditor.hasError,
+                canSaveRename: renameEditor.canSave,
+                onBeginRename: { beginRename(g) },
+                onCommitRename: { commitRename(g) },
+                onCancelRename: { cancelRename(g) },
+                onSetColor: { store.setColor(g, hex: $0) },
+                onAdd: { store.addMember($0, to: g.name) },
+                onRemove: { store.removeMember($0) }
+            )
+            .id(g.persistentModelID)
         } else if selection == .ungrouped {
-            ungroupedDetail
+            UngroupedDetailView(members: profiles.filter { ($0.group ?? "").isEmpty })
         } else {
-            VStack { Text("选择一个分组").font(UD.body).foregroundStyle(UD.text4) }
+            Text("从左侧选择一个分组")
+                .font(UD.body)
+                .foregroundStyle(UD.text4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func groupDetail(_ g: ServerGroup) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                // 头：大色块 + 重命名
-                HStack(spacing: 14) {
-                    RoundedRectangle(cornerRadius: 10).fill(g.color).frame(width: 44, height: 44)
-                    VStack(alignment: .leading, spacing: 4) {
-                        TextField("分组名", text: $renameDraft)
-                            .textFieldStyle(.plain).font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(UD.text)
-                            .onSubmit { commitRename(g) }
-                        Text(renameError ? "名称已被占用" :
-                                "\(GroupStore.members(of: g.name, in: profiles).count) 台主机")
-                            .font(UD.caption).foregroundStyle(renameError ? UD.danger : UD.text3)
+    // MARK: - 删除确认
+
+    @ViewBuilder
+    private var deleteConfirmOverlay: some View {
+        if let g = pendingDelete {
+            GroupDeleteConfirm(
+                groupName: g.name,
+                hostCount: GroupStore.members(of: g.name, in: profiles).count,
+                onCancel: { pendingDelete = nil },
+                onConfirm: {
+                    let remaining = sortedGroups.filter { $0.persistentModelID != g.persistentModelID }
+                    store.delete(g)
+                    if selection == .group(g.persistentModelID) {
+                        selection = remaining.first.map { .group($0.persistentModelID) }
                     }
-                    Spacer()
-                    Button(role: .destructive) { pendingDelete = g } label: {
-                        Image(systemName: "trash").foregroundStyle(UD.danger)
-                    }.buttonStyle(.plain)
+                    pendingDelete = nil
                 }
-                // 颜色
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("颜色").font(UD.caption).foregroundStyle(UD.text3)
-                    HStack(spacing: 10) {
-                        ForEach(ServerGroup.palette, id: \.self) { hex in
-                            let sel = g.colorHex == hex
-                            Circle().fill(colorFor(hex)).frame(width: 20, height: 20)
-                                .overlay(Circle().strokeBorder(sel ? UD.text : .clear, lineWidth: 2).padding(-3))
-                                .contentShape(Circle())
-                                .onTapGesture { store.setColor(g, hex: hex) }
-                        }
-                    }
-                }
-                // 置顶
-                Toggle(isOn: Binding(get: { g.isPinned }, set: { store.setPinned(g, $0) })) {
-                    Text("置顶显示").font(UD.body).foregroundStyle(UD.text)
-                }.toggleStyle(.switch)
-                // 成员
-                memberSection(g)
-            }
-            .padding(.horizontal, 26).padding(.vertical, 22)
+            )
         }
     }
 
-    private func memberSection(_ g: ServerGroup) -> some View {
-        let members = GroupStore.members(of: g.name, in: profiles)
-        let candidates = profiles.filter { $0.group != g.name }
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("成员（\(members.count)）").font(UD.caption).foregroundStyle(UD.text3)
-            VStack(spacing: 1) {
-                ForEach(members, id: \.id) { p in
-                    HStack {
-                        Text(p.name.isEmpty ? p.host : p.name).font(UD.body).foregroundStyle(UD.text2)
-                        Spacer()
-                        Button { store.removeMember(p) } label: {
-                            Image(systemName: "minus.circle.fill").foregroundStyle(UD.text4)
-                        }.buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                }
-            }
-            if !candidates.isEmpty {
-                Text("添加成员").font(UD.caption).foregroundStyle(UD.text3).padding(.top, 6)
-                VStack(spacing: 1) {
-                    ForEach(candidates, id: \.id) { p in
-                        HStack {
-                            Text(p.name.isEmpty ? p.host : p.name).font(UD.body).foregroundStyle(UD.text3)
-                            Spacer()
-                            Button { store.addMember(p, to: g.name) } label: {
-                                Image(systemName: "plus.circle").foregroundStyle(UD.accent)
-                            }.buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                    }
-                }
-            }
-        }
-    }
-
-    private var ungroupedDetail: some View {
-        let members = profiles.filter { ($0.group ?? "").isEmpty }
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("未分组").font(.system(size: 16, weight: .medium)).foregroundStyle(UD.text)
-                Text("系统内置，不可删除 · \(members.count) 台主机").font(UD.caption).foregroundStyle(UD.text4)
-                VStack(spacing: 1) {
-                    ForEach(members, id: \.id) { p in
-                        Text(p.name.isEmpty ? p.host : p.name).font(UD.body).foregroundStyle(UD.text2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                    }
-                }
-            }
-            .padding(.horizontal, 26).padding(.vertical, 22)
-        }
-    }
-
-    // MARK: 动作
+    // MARK: - 动作
 
     private func createGroup() {
         guard let g = store.create(name: newGroupName) else { return }
         newGroupName = ""
-        select(.group(g.persistentModelID), draft: g.name)
+        selection = .group(g.persistentModelID)
     }
 
-    private func select(_ s: ManagerSelection, draft: String) {
-        selection = s; renameDraft = draft; renameError = false
+    private func beginRename(_ g: ServerGroup) {
+        renameEditor.begin(id: g.persistentModelID, currentName: g.name)
     }
 
-    private func commitRename(_ g: ServerGroup) {
-        if store.rename(g, to: renameDraft) {
-            renameError = false; renameDraft = g.name
-        } else {
-            renameError = true
-        }
+    /// 提交重命名。成功关闭编辑器；失败（重名 / 空名）保持编辑器打开并标红，让用户改正。
+    @discardableResult
+    private func commitRename(_ g: ServerGroup) -> Bool {
+        renameEditor.save(id: g.persistentModelID) { store.rename(g, to: $0) }
     }
 
-    private func colorFor(_ hex: String) -> Color {
-        let (r, gg, b) = groupHexRGB(hex)
-        return Color(.sRGB, red: r, green: gg, blue: b)
+    private func cancelRename(_ g: ServerGroup) {
+        renameEditor.cancel(currentName: g.name)
     }
 }
 
-/// 分组管理窗口自绘扁平标题栏（仿 KeysTitleBar）。
+// MARK: - 组行（设计稿 GroupRow）
+
+/// 单条分组行：拖拽手柄（hover 浮现）/ 彩点 / 名称（含星标·系统徽标）/ 主机数。
+/// hover 时主机数淡出、浮现删除图标按钮。builtin 行（未分组）无 hover 动作、无拖拽手柄。
+private struct GroupRowView: View {
+    let name: String
+    let color: Color
+    let count: Int
+    let pinned: Bool
+    let builtin: Bool
+    let selected: Bool
+    var onSelect: () -> Void
+    var onDelete: () -> Void = {}
+    var onTogglePin: () -> Void = {}
+
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // 拖拽手柄：2×3 圆点 grip（hover 且非 builtin 时浮现）
+            VStack(spacing: 2.5) {
+                ForEach(0..<3, id: \.self) { _ in
+                    HStack(spacing: 2.5) {
+                        Circle().frame(width: 2, height: 2)
+                        Circle().frame(width: 2, height: 2)
+                    }
+                }
+            }
+            .foregroundStyle(hover && !builtin ? UD.text4 : .clear)
+            .frame(width: 8)
+
+            // 彩点 + 1px 同色描边
+            Circle().fill(color).frame(width: 9, height: 9)
+                .overlay(Circle().strokeBorder(color.opacity(0.2), lineWidth: 1).padding(-1))
+
+            nameLabel
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // 主机数（hover 时淡出，让位删除按钮）
+            Text("\(count)")
+                .font(UD.monoMetric)
+                .foregroundStyle(UD.text3)
+                .opacity(hover && !builtin ? 0 : 1)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        // 删除按钮绝对定位浮现（对齐设计稿 position:absolute）——不撑高行，行高只由点/名/数决定。
+        .overlay(alignment: .trailing) {
+            if hover && !builtin {
+                rowIconButton("trash", danger: true, action: onDelete)
+                    .padding(.trailing, 8)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 6)
+            .fill(selected ? UD.rowSelected : (hover ? UD.rowHover : .clear)))
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture { onSelect() }
+        .contextMenu {
+            if !builtin {
+                Button(pinned ? "取消置顶" : "置顶", action: onTogglePin)
+                Divider()
+                Button("删除", role: .destructive, action: onDelete)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var nameLabel: some View {
+        HStack(spacing: 6) {
+            Text(name)
+                .font(UD.font(12.5))
+                .foregroundStyle(selected ? UD.text : UD.text2)
+                .lineLimit(1)
+            if pinned {
+                Image(systemName: "star")
+                    .font(.system(size: 9))
+                    .foregroundStyle(UD.text3)
+            }
+            if builtin {
+                Text("系统")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(UD.text4)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(UD.border, lineWidth: 1))
+            }
+        }
+    }
+
+}
+
+/// 组行 hover 浮现的小图标按钮（22×22 / r5 / 细微底）。
+private func rowIconButton(_ symbol: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(UD.fillFaint)
+                .frame(width: GroupRowDeleteButtonLayout.visibleSize,
+                       height: GroupRowDeleteButtonLayout.visibleSize)
+            Image(systemName: symbol)
+                .font(.system(size: GroupRowDeleteButtonLayout.iconSize))
+                .foregroundStyle(danger ? UD.danger : UD.text3)
+        }
+        .frame(width: GroupRowDeleteButtonLayout.hitWidth,
+               height: GroupRowDeleteButtonLayout.hitHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+}
+
+// MARK: - 组详情（设计稿 GroupDetail）
+
+private struct GroupDetailView: View {
+    let group: ServerGroup
+    let members: [ServerProfile]
+    let candidates: [ServerProfile]
+    let isRenaming: Bool
+    @Binding var renameDraft: String
+    let renameError: Bool
+    let canSaveRename: Bool
+    var onBeginRename: () -> Void
+    var onCommitRename: () -> Bool
+    var onCancelRename: () -> Void
+    var onSetColor: (String) -> Void
+    var onAdd: (ServerProfile) -> Void
+    var onRemove: (ServerProfile) -> Void
+
+    @State private var tab = 0   // 0 = 成员, 1 = 添加
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                header
+                colorSection
+                memberSection
+            }
+            .padding(.horizontal, 26)
+            .padding(.vertical, 22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 14) {
+            groupGlyph(color: group.color)
+            VStack(alignment: .leading, spacing: 4) {
+                titleEditor
+                Text("\(members.count) 台主机")
+                    .font(.system(size: 12))
+                    .foregroundStyle(UD.text3)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var titleEditor: some View {
+        if isRenaming {
+            HStack(alignment: .top, spacing: 8) {
+                UDTextField(
+                    placeholder: "分组名",
+                    text: $renameDraft,
+                    errorMessage: renameError ? "名称不能为空或已存在" : nil,
+                    autoFocus: true
+                )
+                .frame(width: 220)
+                .onSubmit { _ = onCommitRename() }
+                .onExitCommand(perform: onCancelRename)
+
+                UDButton(title: "保存", style: .primary) {
+                    _ = onCommitRename()
+                }
+                .disabled(!canSaveRename)
+            }
+        } else {
+            HStack(spacing: 10) {
+                Text(group.name)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(UD.text)
+                Button(action: onBeginRename) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text3)
+                        .frame(width: 22, height: 22)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(UD.fillFaint))
+                }
+                .buttonStyle(.plain)
+                .help("重命名")
+            }
+        }
+    }
+
+    private var colorSection: some View {
+        GroupFormSection(title: "颜色") {
+            HStack(spacing: 8) {
+                ForEach(ServerGroup.palette, id: \.self) { hex in
+                    colorSwatch(hex)
+                }
+            }
+        }
+    }
+
+    private func colorSwatch(_ hex: String) -> some View {
+        let active = group.colorHex == hex
+        let c = groupPaletteColor(hex)
+        return Button { onSetColor(hex) } label: {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(c)
+                .frame(width: 26, height: 26)
+                // 选中：内圈 2px 背景色描边（留白缝）+ 外圈 2px 同色描边 + 白勾（设计稿双环）。
+                .overlay {
+                    if active {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(UD.bg, lineWidth: 2)
+                    }
+                }
+                .overlay {
+                    if active {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .overlay {
+                    if active {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(c, lineWidth: 2)
+                            .padding(-3)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var memberSection: some View {
+        GroupFormSection(title: "成员") {
+            memberTabs
+        } content: {
+            if tab == 0 {
+                if members.isEmpty {
+                    emptyBox(title: "这个分组还没有主机", hint: "切到「添加」标签把已有主机加入此分组")
+                } else {
+                    memberList(members, action: .remove, scroll: false)
+                }
+            } else {
+                if candidates.isEmpty {
+                    emptyBox(title: "所有主机都在这个分组里", hint: nil)
+                } else {
+                    memberList(candidates, action: .add, scroll: true)
+                }
+            }
+        }
+    }
+
+    private var memberTabs: some View {
+        HStack(spacing: 0) {
+            segButton("成员 \(members.count)", index: 0)
+            segButton("添加 \(candidates.count)", index: 1)
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillSoft))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
+    }
+
+    private func segButton(_ label: String, index: Int) -> some View {
+        Button { tab = index } label: {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tab == index ? UD.text : UD.text3)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(tab == index ? UD.fillMed : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func memberList(_ items: [ServerProfile], action: MemberRowView.Action, scroll: Bool) -> some View {
+        let rows = VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.persistentModelID) { idx, p in
+                MemberRowView(
+                    name: serverProfileMemberDisplayName(p),
+                    isLast: idx == items.count - 1,
+                    action: action,
+                    onAction: { action == .remove ? onRemove(p) : onAdd(p) }
+                )
+            }
+        }
+        return Group {
+            if scroll {
+                ScrollView { rows }.frame(maxHeight: 220)
+            } else {
+                rows
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
+    }
+
+    private func emptyBox(title: String, hint: String?) -> some View {
+        VStack(spacing: 6) {
+            Text(title).font(.system(size: 12.5)).foregroundStyle(UD.text4)
+            if let hint {
+                Text(hint).font(.system(size: 11)).foregroundStyle(UD.text4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .padding(.horizontal, 16)
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+    }
+}
+
+// MARK: - 成员行（设计稿 MemberRow）
+
+private struct MemberRowView: View {
+    enum Action { case remove, add }
+
+    let name: String
+    let isLast: Bool
+    let action: Action?       // nil = 只读（未分组）
+    var onAction: () -> Void = {}
+
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(memberInitials(name))
+                .font(UD.monoMetric)
+                .foregroundStyle(UD.text3)
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5).fill(UD.fillFaint))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.border, lineWidth: 1))
+
+            Text(name)
+                .font(UD.mono(12.5))
+                .foregroundStyle(UD.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let action {
+                Button(action: onAction) {
+                    Text(action == .remove ? "移出" : "+ 加入")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(action == .remove ? UD.text2 : UD.accent)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(RoundedRectangle(cornerRadius: 6)
+                            .fill(action == .remove ? Color.clear : UD.accent.opacity(0.1)))
+                        .overlay(RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(action == .remove ? UD.border : UD.accent.opacity(0.33), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .opacity(hover ? 1 : 0.7)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(hover ? UD.rowHover : Color.clear)
+        .overlay(alignment: .bottom) {
+            if !isLast { Rectangle().fill(UD.border).frame(height: 1) }
+        }
+        .onHover { hover = $0 }
+    }
+}
+
+// MARK: - 未分组详情（builtin，成员只读）
+
+private struct UngroupedDetailView: View {
+    let members: [ServerProfile]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top, spacing: 14) {
+                    groupGlyph(color: groupPaletteColor("#9aa7b5"))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("未分组")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(UD.text)
+                        Text("\(members.count) 台主机\(Text("  ·  系统内置，不可删除").foregroundStyle(UD.text4))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(UD.text3)
+                    }
+                    Spacer(minLength: 0)
+                }
+                GroupFormSection(title: "成员") {
+                    if members.isEmpty {
+                        Text("没有未分组的主机")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(UD.text4)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(Array(members.enumerated()), id: \.element.persistentModelID) { idx, p in
+                                MemberRowView(
+                                    name: serverProfileMemberDisplayName(p),
+                                    isLast: idx == members.count - 1,
+                                    action: nil
+                                )
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
+                    }
+                }
+            }
+            .padding(.horizontal, 26)
+            .padding(.vertical, 22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - 表单小节（设计稿 FormSection：标题 + 可选右槽 + 内容）
+
+private struct GroupFormSection<Right: View, Content: View>: View {
+    let title: String
+    let right: Right
+    let content: () -> Content
+
+    init(title: String,
+         @ViewBuilder right: () -> Right,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.right = right()
+        self.content = content
+    }
+
+    init(title: String, @ViewBuilder content: @escaping () -> Content) where Right == EmptyView {
+        self.title = title
+        self.right = EmptyView()
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title).font(UD.caption).foregroundStyle(UD.text3)
+                Spacer()
+                right
+            }
+            content()
+        }
+    }
+}
+
+// MARK: - 删除确认弹层（设计稿 DeleteConfirm）
+
+private struct GroupDeleteConfirm: View {
+    let groupName: String
+    let hostCount: Int
+    var onCancel: () -> Void
+    var onConfirm: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+                .onTapGesture(perform: onCancel)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(UD.danger.opacity(0.14))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UD.danger.opacity(0.3), lineWidth: 1))
+                        .frame(width: 36, height: 36)
+                        .overlay(Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 16, weight: .medium)).foregroundStyle(UD.danger))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("删除分组「\(groupName)」？")
+                            .font(.system(size: 14, weight: .medium)).foregroundStyle(UD.text)
+                        message
+                            .font(.system(size: 12))
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                HStack(spacing: 8) {
+                    Spacer()
+                    UDButton(title: "取消", style: .secondary, action: onCancel)
+                    UDButton(title: "删除", style: .danger, action: onConfirm)
+                }
+            }
+            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)
+            .frame(width: 380)
+            .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
+            .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
+        }
+    }
+
+    private var message: Text {
+        Text("里面的 \(Text("\(hostCount)").font(UD.mono(12)).foregroundStyle(UD.text)) 台主机会移到「未分组」，不会被删除。")
+            .foregroundStyle(UD.text2)
+    }
+}
+
+// MARK: - 共享小工具
+
+/// 详情头部 38×38 圆角图标：同色低透明底 + 同色描边 + 中心发光彩点。
+private func groupGlyph(color: Color) -> some View {
+    RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(color.opacity(0.1))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(color.opacity(0.33), lineWidth: 1))
+        .frame(width: 38, height: 38)
+        .overlay(
+            Circle().fill(color).frame(width: 12, height: 12)
+                .shadow(color: color.opacity(0.6), radius: 6)
+        )
+}
+
+/// 调色板 hex → SwiftUI 颜色。
+private func groupPaletteColor(_ hex: String) -> Color {
+    let (r, g, b) = groupHexRGB(hex)
+    return Color(.sRGB, red: r, green: g, blue: b)
+}
+
+func serverProfileMemberDisplayName(_ profile: ServerProfile) -> String {
+    let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return name.isEmpty ? profile.host.trimmingCharacters(in: .whitespacesAndNewlines) : name
+}
+
+/// 成员显示名首字母缩写（按 `-` / `_` 拆词取首字母，最多两位）——设计稿成员头像。
+private func memberInitials(_ name: String) -> String {
+    let parts = name.split(whereSeparator: { $0 == "-" || $0 == "_" })
+    return String(parts.compactMap(\.first).prefix(2))
+}
+
+// MARK: - 拖拽排序
+
+/// 给组行挂上拖拽源 + 落点。重命名中（`enabled == false`）不挂，避免与文本编辑冲突。
+private struct GroupRowDragModifier: ViewModifier {
+    let enabled: Bool
+    let groupID: PersistentIdentifier
+    @Binding var draggingID: PersistentIdentifier?
+    let onMove: (PersistentIdentifier, PersistentIdentifier) -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .onDrag {
+                    draggingID = groupID
+                    return NSItemProvider(object: "group" as NSString)
+                }
+                .onDrop(of: [.text], delegate: GroupReorderDropDelegate(
+                    targetID: groupID, draggingID: $draggingID, onMove: onMove))
+        } else {
+            content
+        }
+    }
+}
+
+/// 拖拽进入某组行时把被拖组移到该行位置（实时重排）；落下时清空拖拽态。
+private struct GroupReorderDropDelegate: DropDelegate {
+    let targetID: PersistentIdentifier
+    @Binding var draggingID: PersistentIdentifier?
+    let onMove: (PersistentIdentifier, PersistentIdentifier) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let from = draggingID, from != targetID else { return }
+        onMove(from, targetID)
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool {
+        draggingID = nil
+        return true
+    }
+}
+
+/// 分组管理窗口自绘扁平标题栏：左侧让位窗口红绿灯（~68pt），居中 "分组管理"。
 private struct GroupsTitleBar: View {
     var body: some View {
-        HStack(spacing: 0) {
-            Color.clear.frame(width: 84)
-            Text("分组管理").font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text2)
-            Spacer()
+        ZStack {
+            Text("分组管理")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(UD.text)
+            HStack(spacing: 0) {
+                Color.clear.frame(width: 68)
+                Spacer()
+            }
         }
-        .frame(height: 38).frame(maxWidth: .infinity)
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
         .background(WindowDragHandle())
-        .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(UD.border).frame(height: 1)
+        }
     }
 }

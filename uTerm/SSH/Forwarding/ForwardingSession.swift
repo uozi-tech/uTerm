@@ -1,0 +1,213 @@
+import Foundation
+@preconcurrency import Citadel
+import NIOCore
+import NIOSSH
+
+/// 一条隧道的状态（由 `ForwardingCoordinator` 观察、驱动 UI 行）。
+nonisolated enum TunnelStatus: Sendable, Equatable {
+    case inactive
+    case starting
+    case active
+    case error(ForwardingError)
+}
+
+/// 一台主机的专用转发会话（actor），镜像 `SSHConnection` 的生命周期 / 防泄漏范式。
+///
+/// - `ConnectedClient`（`@unchecked Sendable`）在 connect 成功后由 actor 隔离字段持有，
+///   所有监听器 / 通道操作经它进行（与 `SFTPSession` 一致）—— 非 `Sendable` 的
+///   `SSHClient` 只在 `ConnectedClient` 包装内、本 actor 作用域内触碰，不跨隔离域
+///   并发使用。`close()` 独占负责 teardown（`connected.close()`）。
+/// - 每条规则一个 `TunnelHandle`：一个驱动 Task + 可选的本地监听 actor（local/dynamic）。
+///   `stop` 取消 Task 并关监听；`close` 拆掉全部隧道再关连接。
+/// - `connect()` 建立连接并持有 `ConnectedClient`。`start()` 在连接就绪后开隧道，
+///   按 `kind` 分派到 `-R` / `-L` / `-D` 三条路径，并经 `onStatus` 回报状态。
+actor ForwardingSession {
+
+    // MARK: - 注入
+
+    private let profile: SSHConnection.ProfileSnapshot
+    private let auth: ResolvedAuth
+    private let jumpHostAuth: ResolvedAuth?
+    private let hostKeyVerifier: HostKeyVerifier
+    private let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
+    private let onStatus: @Sendable (UUID, TunnelStatus) -> Void
+
+    // MARK: - 运行时
+
+    /// 已建立的连接（仅在 connect 成功后、close 之前可用）。
+    /// 与 `SFTPSession` 一致：监听器/通道操作都经它进行。`@unchecked Sendable`。
+    private var connected: ConnectedClient?
+    private var isClosed = false
+
+    /// 每条规则的运行句柄。
+    private struct TunnelHandle {
+        let task: Task<Void, Never>
+        /// local 的本地监听器；remote/dynamic 为 nil。
+        let localListener: LocalForwardListener?
+        /// dynamic 的本地 SOCKS5 监听器；remote/local 为 nil。
+        let socksListener: SOCKS5ForwardListener?
+    }
+    private var tunnels: [UUID: TunnelHandle] = [:]
+
+    init(profile: SSHConnection.ProfileSnapshot,
+         auth: ResolvedAuth,
+         jumpHostAuth: ResolvedAuth?,
+         hostKeyVerifier: HostKeyVerifier,
+         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+         onStatus: @escaping @Sendable (UUID, TunnelStatus) -> Void) {
+        self.profile = profile
+        self.auth = auth
+        self.jumpHostAuth = jumpHostAuth
+        self.hostKeyVerifier = hostKeyVerifier
+        self.hostKeyApprover = hostKeyApprover
+        self.onStatus = onStatus
+    }
+
+    /// 安全网（仿 SSHConnection.deinit）：消费者未 close 就丢弃会话时，取消所有
+    /// 隧道 Task。连接本身的关闭依赖 `close()` 被调用 —— `ForwardingCoordinator`
+    /// 在 teardown 时负责调用，与 SFTP 窗口一致。
+    deinit {
+        for handle in tunnels.values { handle.task.cancel() }
+    }
+
+    // MARK: - connect
+
+    /// 建立专用转发连接。失败抛出（由上层归类）。
+    func connect() async throws {
+        guard !isClosed else { throw SSHConnection.SSHConnectionError.alreadyClosed }
+        let connected = try await SSHClientFactory.connect(
+            profile: profile,
+            auth: auth,
+            jumpHostAuth: jumpHostAuth,
+            hostKeyVerifier: hostKeyVerifier,
+            hostKeyApprover: hostKeyApprover)
+        self.connected = connected
+        AppLogger.info("转发会话已连接 \(self.profile.host):\(self.profile.port)",
+                       category: ForwardingLog.category)
+    }
+
+    // MARK: - start / stop
+
+    /// 启动一条规则的隧道。按 `kind` 分派。重复启动同一规则先停旧的。
+    func start(_ rule: ForwardingRuleSnapshot) async {
+        guard !isClosed, let connected else {
+            onStatus(rule.id, .error(ForwardingError(
+                kind: .unknown, message: "\(rule.name)：转发连接尚未建立")))
+            return
+        }
+        // 幂等：已在跑的先停。
+        if tunnels[rule.id] != nil { await stop(rule.id) }
+        onStatus(rule.id, .starting)
+
+        switch rule.kind {
+        case .remote:
+            startRemote(rule, connected: connected)
+        case .local:
+            startLocal(rule, connected: connected)
+        case .dynamic:
+            startDynamic(rule, connected: connected)
+        }
+    }
+
+    /// `-R` 远程：子 Task 跑 `runRemotePortForward`，`onOpen` 回报 active；
+    /// Task 阻塞至取消；抛错 → 归类后报 error。
+    private func startRemote(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
+        let onStatus = self.onStatus
+        // remote 需要本地目标地址；缺失时退化到回环（与 ssh -R 默认一致）。
+        let destHost = rule.destHost ?? "127.0.0.1"
+        let task = Task {
+            do {
+                try await connected.target.runRemotePortForward(
+                    host: rule.listenHost,
+                    port: rule.listenPort,
+                    forwardingTo: destHost,
+                    port: rule.destPort,
+                    onOpen: { _ in
+                        onStatus(rule.id, .active)
+                        AppLogger.info(
+                            "远程转发已建立 \(rule.listenHost):\(rule.listenPort) → \(destHost):\(rule.destPort)",
+                            category: ForwardingLog.category)
+                    })
+                // 正常取消（stop）→ runRemotePortForward 返回，不报 error。
+            } catch {
+                if !Task.isCancelled {
+                    onStatus(rule.id, .error(ForwardingError.classify(error, rule: rule)))
+                    AppLogger.error(
+                        "远程转发失败 \(rule.name)：\(error.localizedDescription)",
+                        category: ForwardingLog.category)
+                }
+            }
+        }
+        tunnels[rule.id] = TunnelHandle(task: task, localListener: nil, socksListener: nil)
+    }
+
+    /// `-L` 本地：起 `LocalForwardListener`，bind 失败归类报 error。
+    private func startLocal(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
+        let listener = LocalForwardListener(
+            connected: connected,
+            listenHost: rule.listenHost, listenPort: rule.listenPort,
+            destHost: rule.destHost ?? "127.0.0.1", destPort: rule.destPort)
+        let onStatus = self.onStatus
+        // 驱动 Task：start() 抛错（bind 冲突）→ 归类报 error；成功 → active。
+        let task = Task {
+            do {
+                try await listener.start()
+                onStatus(rule.id, .active)
+            } catch {
+                onStatus(rule.id, .error(ForwardingError.classify(error, rule: rule)))
+                AppLogger.error("本地转发失败 \(rule.name)：\(error.localizedDescription)",
+                                category: ForwardingLog.category)
+            }
+        }
+        tunnels[rule.id] = TunnelHandle(task: task, localListener: listener, socksListener: nil)
+    }
+
+    /// `-D` 动态：起 `SOCKS5ForwardListener`，bind 失败归类报 error。
+    private func startDynamic(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
+        let listener = SOCKS5ForwardListener(
+            connected: connected,
+            listenHost: rule.listenHost, listenPort: rule.listenPort)
+        let onStatus = self.onStatus
+        let task = Task {
+            do {
+                try await listener.start()
+                onStatus(rule.id, .active)
+            } catch {
+                onStatus(rule.id, .error(ForwardingError.classify(error, rule: rule)))
+                AppLogger.error("动态转发失败 \(rule.name)：\(error.localizedDescription)",
+                                category: ForwardingLog.category)
+            }
+        }
+        tunnels[rule.id] = TunnelHandle(task: task, localListener: nil, socksListener: listener)
+    }
+
+    /// 停止一条规则：取消驱动 Task + 关闭其监听器。报回 inactive。
+    func stop(_ ruleID: UUID) async {
+        guard let handle = tunnels.removeValue(forKey: ruleID) else { return }
+        handle.task.cancel()
+        await handle.localListener?.close()
+        await handle.socksListener?.close()
+        // remote 隧道靠取消 Task 触发 runRemotePortForward 内部的 cancellation 请求。
+        onStatus(ruleID, .inactive)
+    }
+
+    // MARK: - close
+
+    /// 拆掉所有隧道并关闭底层连接。幂等。
+    func close() async {
+        guard !isClosed else { return }
+        isClosed = true
+        for (ruleID, handle) in tunnels {
+            handle.task.cancel()
+            await handle.localListener?.close()
+            await handle.socksListener?.close()
+            onStatus(ruleID, .inactive)
+        }
+        tunnels.removeAll()
+        // 关闭底层 SSH 连接（先目标、再跳板机）。connect 失败 / 从未连接时为 nil，无害。
+        await connected?.close()
+        connected = nil
+        AppLogger.info("转发会话已关闭 \(self.profile.host):\(self.profile.port)",
+                       category: ForwardingLog.category)
+    }
+}

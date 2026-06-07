@@ -65,6 +65,9 @@ struct UDTextField: View {
                     RoundedRectangle(cornerRadius: UD.Radius.md)
                         .stroke(ringColor, lineWidth: 3)
                 )
+                .overlay(
+                    UDInputFocusDismissMonitor(isFocused: $focused)
+                )
                 .opacity(isEnabled ? 1 : 0.55)
                 .onAppear { focused = autoFocus }
                 .onChange(of: autoFocus) { _, newValue in

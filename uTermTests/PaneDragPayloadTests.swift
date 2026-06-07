@@ -34,4 +34,19 @@ final class PaneDragPayloadTests: XCTestCase {
         }
         wait(for: [exp], timeout: 2)
     }
+
+    func testRemoteFileItemProviderRoundTrip() {
+        let item = RemoteFileDragItem(
+            scopeID: UUID(),
+            path: "/home/user/a.txt",
+            name: "a.txt",
+            isDirectory: false)
+        let provider = RemoteFileDragPayload.itemProvider(item: item)
+        let exp = expectation(description: "load remote file")
+        RemoteFileDragPayload.load(from: provider) { loaded in
+            XCTAssertEqual(loaded, item)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+    }
 }

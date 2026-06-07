@@ -58,7 +58,7 @@ private struct MDBlockView: View {
                 .foregroundStyle(style.textSecondary)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(style.bgRaised)
+                .background(style.codeBlockBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
     }

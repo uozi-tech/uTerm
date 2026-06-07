@@ -55,10 +55,8 @@ struct ProvidersSettingsView: View {
                 .padding(.vertical, 2)
             }
 
-            // 设计稿 settings.jsx 列底栏：borderTop 1px + padding 6 + 间距 4 的
-            // 幽灵 +/− 按钮。用 UD.border 实色描边取代系统 Divider，与列右描边一致。
-            Rectangle().fill(UD.border).frame(height: 1)
-
+            // 列底栏 +/− 按钮：按用户要求去掉分隔条与底色，按钮直接坐在 UD.bg 上
+            // （flush，无 borderTop / 无 panel 底）。
             HStack(spacing: 4) {
                 UDIconButton(systemImage: "plus") { addProvider() }
                 .help("新增 provider")
