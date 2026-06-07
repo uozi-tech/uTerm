@@ -11,6 +11,8 @@ struct PreviewBodyRouter: View {
             if let buf = model.activeBuffer {
                 PreviewBufferBody(buffer: buf, onDownload: { buffer in
                     try await model.download(buffer)
+                }, onLoadMarkdownImage: { source, buffer in
+                    try await model.loadMarkdownImage(source: source, referencedBy: buffer)
                 })
             } else {
                 EmptyBody(model: model)
@@ -23,6 +25,7 @@ struct PreviewBodyRouter: View {
 struct PreviewBufferBody: View {
     let buffer: FileBuffer
     var onDownload: ((FileBuffer) async throws -> Data)?
+    var onLoadMarkdownImage: ((String, FileBuffer) async throws -> Data)?
 
     var body: some View {
         Group {
@@ -48,11 +51,18 @@ struct PreviewBufferBody: View {
         case .code(let lang):
             CodeBody(buffer: buffer, language: LanguageDetector.grammarId(for: lang))
         case .markdown:
-            MarkdownBody(buffer: buffer)
+            MarkdownBody(buffer: buffer, imageLoader: markdownImageLoader)
         case .image:
             ImageBody(buffer: buffer)
         case .plainText:
             CodeBody(buffer: buffer, language: "")
+        }
+    }
+
+    private var markdownImageLoader: MarkdownImageLoader? {
+        guard let onLoadMarkdownImage else { return nil }
+        return { source in
+            try await onLoadMarkdownImage(source, buffer)
         }
     }
 }

@@ -1,5 +1,6 @@
 // uTerm/Views/Markdown/MarkdownBlocks.swift
 import SwiftUI
+import AppKit
 import Markdown
 
 /// Markdown 渲染内核：把已解析的 Document 渲染成纵向 block 列表（无内层 ScrollView，
@@ -7,12 +8,15 @@ import Markdown
 struct MarkdownBlocks: View {
     let document: Document
     let style: MarkdownStyle
+    var imageLoader: MarkdownImageLoader?
     var isStreaming: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: style.blockSpacing) {
             ForEach(Array(document.blockChildren.enumerated()), id: \.offset) { _, block in
-                MDBlockView(block: block, style: style, isStreaming: isStreaming)
+                MDBlockView(block: block, style: style,
+                            imageLoader: imageLoader,
+                            isStreaming: isStreaming)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -22,12 +26,13 @@ struct MarkdownBlocks: View {
 private struct MDBlockView: View {
     let block: Markup
     let style: MarkdownStyle
+    var imageLoader: MarkdownImageLoader?
     var isStreaming: Bool = false
 
     var body: some View {
         switch block {
         case let h as Heading:        AnyView(headingView(h))
-        case let p as Paragraph:      AnyView(MDInlineView(node: p, style: style))
+        case let p as Paragraph:      AnyView(paragraphView(p))
         case let cb as CodeBlock:     AnyView(codeBlockView(cb))
         case let ul as UnorderedList: AnyView(listView(items: Array(ul.listItems), ordered: false))
         case let ol as OrderedList:   AnyView(listView(items: Array(ol.listItems), ordered: true))
@@ -45,6 +50,15 @@ private struct MDBlockView: View {
             .font(.system(size: sizes[min(h.level - 1, 5)], weight: .semibold))
             .foregroundStyle(style.textPrimary)
             .padding(.top, h.level <= 2 ? 8 : 4)
+    }
+
+    @ViewBuilder
+    private func paragraphView(_ p: Paragraph) -> some View {
+        if let image = imageOnly(in: p) {
+            MDImageBlockView(image: image, style: style, imageLoader: imageLoader)
+        } else {
+            MDInlineView(node: p, style: style)
+        }
     }
 
     @ViewBuilder
@@ -72,7 +86,9 @@ private struct MDBlockView: View {
                         .foregroundStyle(style.textMuted)
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(item.blockChildren.enumerated()), id: \.offset) { _, child in
-                            MDBlockView(block: child, style: style, isStreaming: isStreaming)
+                            MDBlockView(block: child, style: style,
+                                        imageLoader: imageLoader,
+                                        isStreaming: isStreaming)
                         }
                     }
                 }
@@ -87,7 +103,9 @@ private struct MDBlockView: View {
             Rectangle().fill(style.border).frame(width: 3)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(bq.blockChildren.enumerated()), id: \.offset) { _, c in
-                    MDBlockView(block: c, style: style, isStreaming: isStreaming)
+                    MDBlockView(block: c, style: style,
+                                imageLoader: imageLoader,
+                                isStreaming: isStreaming)
                 }
             }
             .padding(.leading, 10)
@@ -118,6 +136,138 @@ private struct MDBlockView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 5).stroke(style.border, lineWidth: 0.5))
+    }
+
+    private func imageOnly(in node: Markup) -> MarkdownImage? {
+        let children = Array(node.children)
+        guard children.count == 1 else { return nil }
+        if let image = children[0] as? MarkdownImage {
+            return image
+        }
+        if children[0] is MarkdownLink {
+            return imageOnly(in: children[0])
+        }
+        return nil
+    }
+}
+
+private struct MDImageBlockView: View {
+    let image: MarkdownImage
+    let style: MarkdownStyle
+    var imageLoader: MarkdownImageLoader?
+
+    @State private var phase: Phase = .idle
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            content
+            if !altText.isEmpty {
+                Text(altText)
+                    .font(UD.caption)
+                    .foregroundStyle(style.textMuted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: source) {
+            await load()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch phase {
+        case .idle, .loading:
+            loadingView
+        case .loaded(let image):
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: 520, alignment: .leading)
+                .background(style.bgRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 0.5))
+        case .failed(let message):
+            failureView(message)
+        }
+    }
+
+    private var loadingView: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(style.bgRaised)
+            .frame(maxWidth: .infinity, minHeight: 120)
+            .overlay {
+                VStack(spacing: 8) {
+                    UDIndeterminateBar()
+                        .frame(width: 120)
+                    Text("正在加载图片…")
+                        .font(UD.caption)
+                        .foregroundStyle(style.textMuted)
+                }
+            }
+    }
+
+    private func failureView(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "photo.badge.exclamationmark")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(style.textMuted)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message)
+                    .font(UD.caption)
+                    .foregroundStyle(style.textSecondary)
+                Text(source)
+                    .font(UD.mono(10.5))
+                    .foregroundStyle(style.textMuted)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(style.bgRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 0.5))
+    }
+
+    private var source: String {
+        image.source?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var altText: String {
+        plainText(in: image)
+    }
+
+    @MainActor
+    private func load() async {
+        guard !source.isEmpty else {
+            phase = .failed("图片地址为空")
+            return
+        }
+        guard let imageLoader else {
+            phase = .failed("图片预览不可用")
+            return
+        }
+
+        phase = .loading
+        do {
+            let data = try await imageLoader(source)
+            guard let loaded = NSImage(data: data) else {
+                phase = .failed("无法解码图片")
+                return
+            }
+            phase = .loaded(loaded)
+        } catch {
+            phase = .failed("图片加载失败：\(error.localizedDescription)")
+        }
+    }
+
+    private enum Phase {
+        case idle
+        case loading
+        case loaded(NSImage)
+        case failed(String)
     }
 }
 
@@ -164,6 +314,18 @@ private struct MDInlineView: View {
         }
         return result
     }
+}
+
+private func plainText(in node: Markup) -> String {
+    var result = ""
+    for child in node.children {
+        if let text = child as? MarkdownText {
+            result += text.string
+        } else {
+            result += plainText(in: child)
+        }
+    }
+    return result
 }
 
 private typealias MarkdownText = Markdown.Text

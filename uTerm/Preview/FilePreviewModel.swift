@@ -31,6 +31,9 @@ final class FilePreviewModel {
     enum PreviewDownloadError: LocalizedError {
         case providerUnavailable
         case missingBuffer
+        case invalidMarkdownImageSource
+        case unsupportedMarkdownImageSource(String)
+        case markdownImageHTTPError(Int)
 
         var errorDescription: String? {
             switch self {
@@ -38,6 +41,12 @@ final class FilePreviewModel {
                 return "SFTP 通道未就绪"
             case .missingBuffer:
                 return "文件缓冲区不存在"
+            case .invalidMarkdownImageSource:
+                return "图片地址为空或无效"
+            case .unsupportedMarkdownImageSource(let source):
+                return "不支持的图片地址：\(source)"
+            case .markdownImageHTTPError(let code):
+                return "图片下载失败（HTTP \(code)）"
             }
         }
     }
@@ -46,6 +55,7 @@ final class FilePreviewModel {
     /// 工厂：每次取一个最新的 SFTP provider（由 WorkspaceModel 注入；
     /// 共享 FileBrowserModel 的 SFTP 会话）。
     private let sftpProvider: () -> (any SFTPProviding)?
+    private var markdownImageCache: [String: Data] = [:]
 
     init(recentsStore: RecentFilesStore,
          sftpProvider: @escaping () -> (any SFTPProviding)?) {
@@ -199,6 +209,36 @@ final class FilePreviewModel {
         return try await sftp.download(remotePath: buffer.remotePath)
     }
 
+    func loadMarkdownImage(source: String, referencedBy buffer: FileBuffer) async throws -> Data {
+        guard buffers.contains(where: { $0.id == buffer.id }) else {
+            throw PreviewDownloadError.missingBuffer
+        }
+
+        let resource = try Self.markdownImageResource(source: source, baseRemotePath: buffer.remotePath)
+        if let cached = markdownImageCache[resource.cacheKey] {
+            return cached
+        }
+
+        let data: Data
+        switch resource {
+        case .remotePath(let path):
+            guard let sftp = sftpProvider() else {
+                throw PreviewDownloadError.providerUnavailable
+            }
+            data = try await sftp.download(remotePath: path)
+        case .url(let url):
+            let (loaded, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse,
+               !(200..<300).contains(http.statusCode) {
+                throw PreviewDownloadError.markdownImageHTTPError(http.statusCode)
+            }
+            data = loaded
+        }
+
+        markdownImageCache[resource.cacheKey] = data
+        return data
+    }
+
     @discardableResult
     func close(_ id: UUID, savingIfDirty: Bool) -> Bool {
         guard let idx = buffers.firstIndex(where: { $0.id == id }) else { return false }
@@ -346,6 +386,7 @@ final class FilePreviewModel {
         panelRoot = nil
         panels.removeAll()
         focusedPanelID = nil
+        markdownImageCache.removeAll()
     }
 
     private func assignActiveBufferToFocusedPanel() {
@@ -468,4 +509,95 @@ final class FilePreviewModel {
         "class", "jar", "war", "pyc", "pyo", "wasm",
         "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar"
     ]
+
+    private enum MarkdownImageResource {
+        case remotePath(String)
+        case url(URL)
+
+        var cacheKey: String {
+            switch self {
+            case .remotePath(let path): return "sftp:\(path)"
+            case .url(let url): return "url:\(url.absoluteString)"
+            }
+        }
+    }
+
+    private static func markdownImageResource(source: String,
+                                              baseRemotePath: String) throws -> MarkdownImageResource {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw PreviewDownloadError.invalidMarkdownImageSource
+        }
+
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
+           !scheme.isEmpty {
+            guard scheme == "http" || scheme == "https" else {
+                throw PreviewDownloadError.unsupportedMarkdownImageSource(trimmed)
+            }
+            return .url(url)
+        }
+
+        let path = markdownImageRemotePath(source: trimmed, baseRemotePath: baseRemotePath)
+        guard !path.isEmpty else {
+            throw PreviewDownloadError.invalidMarkdownImageSource
+        }
+        return .remotePath(path)
+    }
+
+    private static func markdownImageRemotePath(source: String, baseRemotePath: String) -> String {
+        let localSource = sanitizedLocalMarkdownResource(source)
+        if localSource.hasPrefix("/") {
+            return normalizedRemotePath(localSource)
+        }
+
+        let baseDir = remoteDirectory(of: baseRemotePath)
+        return normalizedRemotePath(joinRemotePath(baseDir, localSource))
+    }
+
+    private static func sanitizedLocalMarkdownResource(_ source: String) -> String {
+        let withoutFragment = source.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? source
+        let withoutQuery = withoutFragment.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? withoutFragment
+        return withoutQuery.removingPercentEncoding ?? withoutQuery
+    }
+
+    private static func remoteDirectory(of path: String) -> String {
+        let directory = (path as NSString).deletingLastPathComponent
+        return directory == "." ? "" : directory
+    }
+
+    private static func joinRemotePath(_ baseDir: String, _ child: String) -> String {
+        if baseDir.isEmpty { return child }
+        if baseDir == "/" { return "/\(child)" }
+        return "\(baseDir)/\(child)"
+    }
+
+    private static func normalizedRemotePath(_ path: String) -> String {
+        let isAbsolute = path.hasPrefix("/")
+        var parts: [String] = []
+
+        for rawPart in path.split(separator: "/", omittingEmptySubsequences: true) {
+            let part = String(rawPart)
+            switch part {
+            case ".":
+                continue
+            case "..":
+                if !parts.isEmpty {
+                    parts.removeLast()
+                } else if !isAbsolute {
+                    parts.append(part)
+                }
+            default:
+                parts.append(part)
+            }
+        }
+
+        let joined = parts.joined(separator: "/")
+        if isAbsolute {
+            return joined.isEmpty ? "/" : "/\(joined)"
+        }
+        return joined
+    }
 }

@@ -30,6 +30,40 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertFalse(m.buffers.first?.isDirty ?? true)
     }
 
+    func test_loadMarkdownImage_resolvesRelativePathFromMarkdownDirectory() async throws {
+        let (m, mock) = makeModel()
+        let imageData = Data([0x89, 0x50, 0x4E, 0x47])
+        try await mock.write("/srv/nginx-ui/README.md", data: Data("# README".utf8))
+        try await mock.write("/srv/nginx-ui/resources/screenshots/dashboard.png", data: imageData)
+
+        await m.open(path: "/srv/nginx-ui/README.md", fileSize: 8, mtime: nil)
+        let buffer = try XCTUnwrap(m.buffers.first)
+        let loaded = try await m.loadMarkdownImage(
+            source: "resources/screenshots/dashboard.png",
+            referencedBy: buffer)
+
+        XCTAssertEqual(loaded, imageData)
+        let downloaded = await mock.downloadedPaths()
+        XCTAssertEqual(downloaded.last, "/srv/nginx-ui/resources/screenshots/dashboard.png")
+    }
+
+    func test_loadMarkdownImage_normalizesParentDirectorySegments() async throws {
+        let (m, mock) = makeModel()
+        let imageData = Data([0xFF, 0xD8, 0xFF])
+        try await mock.write("/srv/docs/guide/README.md", data: Data("# README".utf8))
+        try await mock.write("/srv/docs/assets/logo.jpg", data: imageData)
+
+        await m.open(path: "/srv/docs/guide/README.md", fileSize: 8, mtime: nil)
+        let buffer = try XCTUnwrap(m.buffers.first)
+        let loaded = try await m.loadMarkdownImage(
+            source: "../assets/logo.jpg",
+            referencedBy: buffer)
+
+        XCTAssertEqual(loaded, imageData)
+        let downloaded = await mock.downloadedPaths()
+        XCTAssertEqual(downloaded.last, "/srv/docs/assets/logo.jpg")
+    }
+
     func test_openDatabaseFileMarksUnpreviewableWithoutDownloading() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/var/app/state.db", data: Data([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]))
