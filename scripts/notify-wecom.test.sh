@@ -29,4 +29,13 @@ for needle in "1.0.1" "504" "uTerm-1.0.1-504.dmg"; do
 	case "$body" in *"$needle"*) echo "ok: body contains $needle" ;; *) echo "FAIL: body missing $needle"; fail=1 ;; esac
 done
 
+# 3) JSON validity when notes contains a double quote (regression: esc() over-escaping)
+OUT="$tmp/body2.json" WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --version 1.0.1 --build 504 --url "http://x/u.dmg" --notes 'say "hi" now' >/dev/null
+if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$tmp/body2.json" 2>/dev/null; then
+	echo "ok: body with quotes is valid JSON"
+else
+	echo "FAIL: body with quotes is invalid JSON"; fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "TESTS FAILED"; exit 1; }

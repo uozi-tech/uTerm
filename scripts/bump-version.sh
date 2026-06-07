@@ -40,7 +40,7 @@ write_version() {
 		exit 1
 	fi
 	local tmp
-	tmp="$(mktemp)"
+	tmp="$(mktemp "$(dirname "$XCCONFIG")/.Version.xcconfig.XXXXXX")"
 	sed -E "s/^([[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*).*/\1$new/" "$XCCONFIG" > "$tmp"
 	mv "$tmp" "$XCCONFIG"
 	printf '%s\n' "$new"

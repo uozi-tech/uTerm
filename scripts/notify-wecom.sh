@@ -36,7 +36,7 @@ content="uTerm $version (build $build) 已发布\n下载：$url"
 if [ -n "$notes" ]; then content="$content\n更新：$notes"; fi
 
 # Build markdown payload. Escape backslashes/quotes for JSON safety.
-esc() { printf '%s' "$1" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'; }
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 payload="{\"msgtype\":\"markdown\",\"markdown\":{\"content\":\"$(esc "$content")\"}}"
 
 "$CURL" --fail --silent --show-error \

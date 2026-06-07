@@ -85,7 +85,7 @@ print-version:
 	@scripts/bump-version.sh print
 
 set-version:
-	@if [ -z "$(VERSION)" ]; then echo 'Usage: make set-version VERSION=x.y.z' >&2; exit 1; fi
+	@[ "$(origin VERSION)" = "command line" ] || { echo 'Usage: make set-version VERSION=x.y.z' >&2; exit 1; }
 	@scripts/bump-version.sh set "$(VERSION)"
 
 bump-patch:
