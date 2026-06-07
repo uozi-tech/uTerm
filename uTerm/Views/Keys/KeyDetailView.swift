@@ -75,6 +75,7 @@ struct KeyDetailView: View {
                 Text(key.fingerprint.isEmpty ? "—" : key.fingerprint)
                     .font(UD.mono(11.5)).foregroundStyle(UD.text2)
                     .lineLimit(1).truncationMode(.middle)
+                    .help(key.fingerprint.isEmpty ? "" : key.fingerprint)
                 Spacer(minLength: 0)
                 CopyButton(text: key.fingerprint)
             }
@@ -165,6 +166,7 @@ struct KeyDetailView: View {
 
     private func sectionLabel(_ t: String) -> some View {
         Text(t.uppercased()).font(.system(size: 10.5, weight: .medium)).tracking(0.6).foregroundStyle(UD.text4)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private static let dateFmt: DateFormatter = {
@@ -187,8 +189,11 @@ private struct CopyButton: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
+            AccessibilityNotification.Announcement("已复制").post()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
         }
+        .accessibilityLabel(label)
+        .help(label)
     }
 }
 

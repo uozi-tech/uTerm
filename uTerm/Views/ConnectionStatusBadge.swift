@@ -58,5 +58,9 @@ struct ConnectionStatusBadge: View {
             }
         }
         .help(display.label)
+        // 仅圆点（紧凑）模式下没有可见文字，显式给 VoiceOver 念读状态文案；
+        // 含文字模式合并为一个元素，避免「圆点 + 文案」分两次念。
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(display.label))
     }
 }

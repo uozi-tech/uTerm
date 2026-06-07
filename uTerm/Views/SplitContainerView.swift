@@ -64,6 +64,8 @@ struct SplitterHandle: View {
                         dragStartFraction = nil
                     }
             )
+            .accessibilityLabel(Text(orientation == .vertical ? "调整左右窗格宽度" : "调整上下窗格高度"))
+            .accessibilityAddTraits(.allowsDirectInteraction)
     }
 }
 

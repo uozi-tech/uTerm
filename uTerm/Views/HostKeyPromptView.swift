@@ -45,7 +45,9 @@ struct HostKeyPromptView: View {
     private func fingerprintRow(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(UD.text3)
+                .accessibilityAddTraits(.isHeader)
             Text(value).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                .help(value)
         }
     }
 }

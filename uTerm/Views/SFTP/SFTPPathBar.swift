@@ -32,8 +32,8 @@ struct SFTPPathBar: View {
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
-                navArrow("chevron.left", enabled: canBack, action: onBack)
-                navArrow("chevron.right", enabled: canFwd, action: onFwd)
+                navArrow("chevron.left", enabled: canBack, label: "后退", action: onBack)
+                navArrow("chevron.right", enabled: canFwd, label: "前进", action: onFwd)
             }
 
             breadcrumbs
@@ -56,7 +56,7 @@ struct SFTPPathBar: View {
 
     // MARK: 后退 / 前进
 
-    private func navArrow(_ name: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func navArrow(_ name: String, enabled: Bool, label: String, action: @escaping () -> Void) -> some View {
         Button { if enabled { action() } } label: {
             Image(systemName: name)
                 .font(.system(size: 13, weight: .medium))
@@ -67,6 +67,8 @@ struct SFTPPathBar: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .hoverBackground(enabled ? UD.rowHover : .clear, cornerRadius: 7)
+        .accessibilityLabel(label)
+        .help(label)
     }
 
     // MARK: 面包屑
@@ -106,6 +108,8 @@ struct SFTPPathBar: View {
             .contentShape(Rectangle())
         }
         .help(i == 0 ? "根目录 /" : full)
+        .accessibilityLabel(i == 0 ? "根目录" : "进入目录 \(name)")
+        .accessibilityValue(full)
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 7)
             .fill(isLast ? UD.fillSoft : .clear))
@@ -154,6 +158,8 @@ struct SFTPPathBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .accessibilityLabel("操作菜单")
+        .help("排序、显示隐藏文件、在终端中打开")
     }
 }
 
@@ -177,6 +183,7 @@ struct SFTPToolButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -204,5 +211,6 @@ struct SFTPOpenWorkspaceButton: View {
         .onHover { hover = $0 }
         .fixedSize()
         .help("在工作区中打开此连接（终端 + Agent）")
+        .accessibilityLabel("在工作区打开")
     }
 }

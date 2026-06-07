@@ -18,6 +18,8 @@ struct PreviewStatusRow: View {
                         Circle().fill(UD.warning).frame(width: 6, height: 6)
                         Text("未保存")
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(Text("未保存"))
                 }
                 if case .image = buf.kind, buf.imageSize != .zero {
                     Text("\(Int(buf.imageSize.width))×\(Int(buf.imageSize.height))")

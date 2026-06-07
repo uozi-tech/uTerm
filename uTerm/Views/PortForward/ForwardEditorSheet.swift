@@ -60,6 +60,24 @@ struct ForwardEditorSheet: View {
     private var portNum: Int { Int(listenPortText) ?? 0 }
     private var needsDest: Bool { kind.needsDest }
 
+    /// 监听端口范围校验（1–65535）。空值不在此处报错（交给禁用按钮 + 命令预览 `?`）。
+    private var listenPortRangeError: String? {
+        guard !listenPortText.isEmpty else { return nil }
+        return (portNum >= 1 && portNum <= 65535) ? nil : "端口需在 1–65535 之间"
+    }
+
+    private var destPortNum: Int { Int(destPortText) ?? 0 }
+    private var destPortRangeError: String? {
+        guard needsDest, !destPortText.isEmpty else { return nil }
+        return (destPortNum >= 1 && destPortNum <= 65535) ? nil : "端口需在 1–65535 之间"
+    }
+
+    /// 监听端口字段的错误文案：范围错误优先于冲突。
+    private var listenPortError: String? {
+        if let listenPortRangeError { return listenPortRangeError }
+        return conflict != nil ? "" : nil
+    }
+
     /// 当前端口冲突（同侧规则或知名端口）。空端口 → 无冲突。
     private var conflict: PortConflictChecker.Conflict? {
         guard portNum > 0 else { return nil }
@@ -79,10 +97,10 @@ struct ForwardEditorSheet: View {
 
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
-            && portNum > 0
+            && portNum >= 1 && portNum <= 65535
             && conflict == nil
             && (!needsDest || (!destHost.trimmingCharacters(in: .whitespaces).isEmpty
-                               && (Int(destPortText) ?? 0) > 0))
+                               && destPortNum >= 1 && destPortNum <= 65535))
     }
 
     var body: some View {
@@ -152,11 +170,14 @@ struct ForwardEditorSheet: View {
                     FormField(label: "端口", flex: 1) {
                         UDTextField(placeholder: "端口",
                                     text: portBinding($listenPortText),
-                                    errorMessage: conflict != nil ? "" : nil,
+                                    errorMessage: listenPortError,
                                     monospaced: true)
+                            .accessibilityValue(listenPortRangeError ?? (conflict != nil ? "端口冲突" : ""))
                     }
                 }
-                if let conflict {
+                if let listenPortRangeError {
+                    dangerRow(listenPortRangeError)
+                } else if let conflict {
                     conflictRow(conflict)
                 } else if privileged {
                     privilegedRow
@@ -174,7 +195,9 @@ struct ForwardEditorSheet: View {
                         FormField(label: "端口", flex: 1) {
                             UDTextField(placeholder: "端口",
                                         text: portBinding($destPortText),
+                                        errorMessage: destPortRangeError,
                                         monospaced: true)
+                                .accessibilityValue(destPortRangeError ?? "")
                         }
                     }
                 }
@@ -226,6 +249,19 @@ struct ForwardEditorSheet: View {
         }
     }
 
+    /// 通用危险提示行（端口范围错误等），UD.danger 主题感知。
+    private func dangerRow(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 11))
+                .foregroundStyle(UD.danger)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.danger)
+            Spacer(minLength: 0)
+        }
+    }
+
     private var privilegedRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
@@ -246,6 +282,8 @@ struct ForwardEditorSheet: View {
         .font(UD.mono(11.5))
         .lineLimit(1)
         .truncationMode(.tail)
+        .help(previewCommand)
+        .accessibilityLabel("命令预览：\(previewCommand)")
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 8).fill(UD.terminal))

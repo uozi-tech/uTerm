@@ -27,6 +27,11 @@ struct PreviewTabBar: View {
                             onSelect: { model.selectTab(buf.id) },
                             onClose:  { onRequestClose(buf.id) })
                             .frame(maxHeight: .infinity)
+                            // 选中态供 VoiceOver 念读；脏标记并入文件名标签。
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(Text(buf.isDirty ? "\(buf.displayName)（未保存）" : buf.displayName))
+                            .accessibilityAddTraits(
+                                model.activeBufferID == buf.id ? [.isButton, .isSelected] : .isButton)
                             .onDrag {
                                 onBeginDrag(buf.id)
                                 return FileBufferDragPayload.itemProvider(bufferID: buf.id)
@@ -39,6 +44,7 @@ struct PreviewTabBar: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
             }
             .frame(maxHeight: .infinity)
         }

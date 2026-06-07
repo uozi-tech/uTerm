@@ -105,12 +105,13 @@ struct UDHostDot: View {
     }
 
     @State private var animate = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let size: CGFloat = 8
 
     var body: some View {
         ZStack {
-            if pulse {
+            if pulse && !reduceMotion {
                 Circle()
                     .fill(color)
                     .padding(-2)

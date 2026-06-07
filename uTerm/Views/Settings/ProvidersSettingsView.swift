@@ -39,6 +39,7 @@ struct ProvidersSettingsView: View {
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 6)
+                .accessibilityAddTraits(.isHeader)
 
             // 自绘扁平列表（取代 .listStyle(.sidebar) 的半透明侧边栏材质底——后者
             // 正是「侧边栏背景不对」的来源）。坐在 UD.bg 上，行用头像 tile + 名称 +
@@ -49,6 +50,10 @@ struct ProvidersSettingsView: View {
                         ProviderRow(provider: p, selected: p.id == selectedID)
                             .contentShape(Rectangle())
                             .onTapGesture { selectedID = p.id }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(p.name)
+                            .accessibilityValue(p.model.isEmpty ? "未设置模型" : p.model)
+                            .accessibilityAddTraits(p.id == selectedID ? [.isButton, .isSelected] : .isButton)
                     }
                 }
                 .padding(.horizontal, 6)
@@ -60,10 +65,12 @@ struct ProvidersSettingsView: View {
             HStack(spacing: 4) {
                 UDIconButton(systemImage: "plus") { addProvider() }
                 .help("新增 provider")
+                .accessibilityLabel("新增 provider")
 
                 UDIconButton(systemImage: "minus") { deleteSelected() }
                 .disabled(selectedID == nil)
                 .help("删除选中 provider")
+                .accessibilityLabel("删除选中 provider")
 
                 Spacer()
             }

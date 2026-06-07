@@ -76,6 +76,11 @@ struct KeyManagerView: View {
                                    selected: key.id == selectedID)
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedID = key.id; generating = false }
+                                .focusable()
+                                .accessibilityElement(children: .combine)
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityAddTraits(key.id == selectedID ? .isSelected : [])
+                                .accessibilityLabel("\(key.name)，\(key.typeLabel)，\(hostCount(for: key)) 台主机")
                         }
                     }
                     .padding(.vertical, 6)

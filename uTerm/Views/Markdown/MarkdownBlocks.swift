@@ -50,6 +50,7 @@ private struct MDBlockView: View {
             .font(.system(size: sizes[min(h.level - 1, 5)], weight: .semibold))
             .foregroundStyle(style.textPrimary)
             .padding(.top, h.level <= 2 ? 8 : 4)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder

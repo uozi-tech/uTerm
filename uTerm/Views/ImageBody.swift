@@ -13,6 +13,11 @@ struct ImageBody: View {
                 ScrollView([.horizontal, .vertical]) {
                     image(img)
                         .onTapGesture { oneToOne.toggle() }
+                        .accessibilityLabel("图片预览")
+                        .accessibilityValue(oneToOne ? "原始尺寸" : "适应窗口")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("点击切换原始尺寸与适应窗口")
+                        .help(oneToOne ? "点击适应窗口" : "点击查看原始尺寸")
                 }
             } else {
                 VStack(spacing: 8) {

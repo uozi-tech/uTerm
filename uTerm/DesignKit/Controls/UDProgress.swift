@@ -41,6 +41,7 @@ struct UDIndeterminateBar: View {
     var height: CGFloat = 4
 
     @State private var animating = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -55,11 +56,14 @@ struct UDIndeterminateBar: View {
                 Capsule()
                     .fill(UD.accent)
                     .frame(width: sliderWidth, height: height)
-                    .offset(x: animating ? width : -sliderWidth)
+                    // Reduce Motion：停掉往复滑动，滑块静置居中（瞬时态）。
+                    .offset(x: reduceMotion ? (width - sliderWidth) / 2
+                            : (animating ? width : -sliderWidth))
             }
             .frame(width: width, height: height)
             .clipShape(Capsule())
             .onAppear {
+                guard !reduceMotion else { return }
                 withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false)) {
                     animating = true
                 }

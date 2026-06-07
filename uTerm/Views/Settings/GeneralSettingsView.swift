@@ -89,11 +89,13 @@ struct GeneralSettingsView: View {
 private struct AccentSwatchPicker: View {
     @Bindable private var accent = AccentState.shared
     @Environment(\.colorScheme) private var scheme
+    @FocusState private var focusedColor: AccentColor?
 
     var body: some View {
         HStack(spacing: 12) {
             ForEach(AccentColor.allCases) { color in
                 let isSelected = accent.selected == color
+                let isFocused = focusedColor == color
                 Circle()
                     .fill(color.base(dark: scheme == .dark).color())
                     .frame(width: 20, height: 20)
@@ -103,11 +105,23 @@ private struct AccentSwatchPicker: View {
                             .foregroundStyle(.white)
                             .opacity(isSelected ? 1 : 0)
                     )
+                    // 键盘焦点环：focusable 时 accent 描边外扩 3pt（与圆色板区隔）。
+                    .overlay(
+                        Circle()
+                            .strokeBorder(UD.accent, lineWidth: isFocused ? 2 : 0)
+                            .padding(-3)
+                    )
                     .contentShape(Circle())
                     .onTapGesture { accent.selected = color }
+                    .focusable()
+                    .focused($focusedColor, equals: color)
                     .help(color.label)
+                    .accessibilityLabel(color.label)
+                    .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("强调色")
     }
 }
 

@@ -33,6 +33,8 @@ struct PaneView: View {
     let onFileDrop: @MainActor @Sendable (_ sourceBuffer: UUID, _ zone: PaneDropZone) -> Void
     /// 文件窗格里的不可预览提示下载入口。来源于 Workspace 共享的 FilePreviewModel。
     var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
+    /// 文件窗格里的 Markdown 图片加载入口。来源于 Workspace 共享的 FilePreviewModel。
+    let onLoadMarkdownImage: MarkdownBufferImageLoader
     /// Workspace 级同步 drop 入口。
     let onWorkspaceDrop: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
     /// 头部「关闭窗格」按钮。
@@ -124,6 +126,8 @@ struct PaneView: View {
                     .font(UD.font(10.5))
                     .foregroundStyle(isFocused ? UD.text2 : UD.text3)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(headerTitle)
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
@@ -230,7 +234,9 @@ struct PaneView: View {
 
     @ViewBuilder
     private func fileBufferBody(_ buffer: FileBuffer) -> some View {
-        PreviewBufferBody(buffer: buffer, onDownload: onDownloadFile)
+        PreviewBufferBody(buffer: buffer,
+                          onDownload: onDownloadFile,
+                          onLoadMarkdownImage: onLoadMarkdownImage)
     }
 
     private func connect() async {
@@ -284,5 +290,6 @@ private struct PaneHeaderIconButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 }

@@ -34,6 +34,7 @@ struct SettingsGroup<Content: View>: View {
                 .tracking(0.6)
                 .textCase(.uppercase)
                 .foregroundStyle(UD.text3)
+                .accessibilityAddTraits(.isHeader)
             VStack(alignment: .leading, spacing: 4) {
                 content()
             }
@@ -68,7 +69,11 @@ struct SettingsRow<Trailing: View>: View {
                 }
             }
             Spacer()
+            // 把行 label 关联到右侧控件——UDToggle / UDSegmented / Slider 等
+            // 无内建 label，VoiceOver 借此念出「<标签> 开关 / 选择」而非孤立的「开/关」。
             trailing()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
         }
         .frame(minHeight: 36)
         .padding(.vertical, 4)
@@ -109,6 +114,7 @@ struct SettingsNumberField: View {
                 .overlay(RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
                 .animation(.easeOut(duration: 0.15), value: focused)
+                .accessibilityValue(suffix.map { "\(value) \($0)" } ?? "\(value)")
             if let suffix {
                 Text(suffix)
                     .font(.system(size: 13))

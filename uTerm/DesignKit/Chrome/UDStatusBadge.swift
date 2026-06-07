@@ -51,6 +51,7 @@ struct UDStatusBadge: View {
     }
 
     @SwiftUI.State private var animate = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let dotSize: CGFloat = 7
 
@@ -75,7 +76,7 @@ struct UDStatusBadge: View {
 
     private var dot: some View {
         ZStack {
-            if state.pulse {
+            if state.pulse && !reduceMotion {
                 Circle()
                     .fill(state.color)
                     .opacity(0.2)

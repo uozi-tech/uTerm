@@ -128,6 +128,7 @@ struct SFTPTitleBar: View {
 struct SFTPStatusPill: View {
     let state: FileBrowserModel.State
     @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var info: (text: String, color: Color) {
         switch state {
@@ -141,7 +142,7 @@ struct SFTPStatusPill: View {
         let i = info
         return HStack(spacing: 6) {
             ZStack {
-                if case .browsing = state {
+                if case .browsing = state, !reduceMotion {
                     Circle().fill(i.color).frame(width: 9, height: 9)
                         .opacity(pulse ? 0.0 : 0.35)
                         .scaleEffect(pulse ? 1.8 : 1)
@@ -155,6 +156,9 @@ struct SFTPStatusPill: View {
         .padding(.leading, 7).padding(.trailing, 8).padding(.vertical, 2)
         .background(Capsule().fill(UD.fillFaint))
         .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("连接状态")
+        .accessibilityValue(i.text)
         // 进入 .browsing 才启动脉冲 —— 首帧通常是 .idle/.connecting，故 onAppear 与
         // onChange 都要试一次（否则连上后圆点静止不动）。
         .onAppear { startPulseIfBrowsing() }
@@ -162,7 +166,7 @@ struct SFTPStatusPill: View {
     }
 
     private func startPulseIfBrowsing() {
-        guard case .browsing = state, !pulse else { return }
+        guard case .browsing = state, !pulse, !reduceMotion else { return }
         withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) {
             pulse = true
         }

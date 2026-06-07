@@ -122,6 +122,8 @@ private struct PreviewPanelView: View {
         if let buffer = model.buffer(forPanel: panelID) {
             PreviewBufferBody(buffer: buffer, onDownload: { buffer in
                 try await model.download(buffer)
+            }, onLoadMarkdownImage: { source, buffer in
+                try await model.loadMarkdownImage(source: source, referencedBy: buffer)
             })
         } else {
             EmptyBody(model: model)
@@ -139,6 +141,8 @@ private struct PreviewPanelView: View {
                     .font(UD.font(10.5))
                     .foregroundStyle(isFocused ? UD.text2 : UD.text3)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(buffer.displayName)
                 Spacer(minLength: 0)
                 Button {
                     _ = model.closePanel(panelID)
@@ -151,6 +155,7 @@ private struct PreviewPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .help("关闭窗格")
+                .accessibilityLabel(Text("关闭窗格"))
             }
             .padding(.horizontal, 8)
             .frame(height: 22)

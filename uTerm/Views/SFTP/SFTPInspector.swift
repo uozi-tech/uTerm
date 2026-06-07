@@ -73,6 +73,7 @@ struct SFTPInspector: View {
                             Text(item.name).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(UD.text)
                                 .multilineTextAlignment(.center)
+                                .help(item.name)
                             Text(sizeText).font(UD.mono(12)).foregroundStyle(UD.text3)
                         }
                     }
@@ -101,6 +102,7 @@ struct SFTPInspector: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("路径").font(.system(size: 10.5, weight: .medium))
                             .tracking(0.5).foregroundStyle(UD.text4)
+                            .accessibilityAddTraits(.isHeader)
                         Text(fullPath).font(UD.mono(11.5))
                             .foregroundStyle(UD.text2)
                             .textSelection(.enabled)

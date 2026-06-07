@@ -115,6 +115,9 @@ struct FileBrowserContent: View {
             Text(model.currentPath)
                 .font(UD.mono(11)).lineLimit(1).truncationMode(.head)
                 .foregroundStyle(UD.text2)
+                .help(model.currentPath)
+                .accessibilityLabel("当前目录")
+                .accessibilityValue(model.currentPath)
             Spacer()
             UDIconButton(systemImage: "arrow.up.arrow.down") {
                 sortPopoverPresented.toggle()
@@ -123,12 +126,15 @@ struct FileBrowserContent: View {
                 sortPopover
             }
             .help("排序方式")
+            .accessibilityLabel("排序方式")
             UDIconButton(systemImage: "arrow.clockwise") {
                 Task { await model.refresh() }
             }
             .help("刷新")
+            .accessibilityLabel("刷新")
             UDIconButton(systemImage: "icloud.and.arrow.up", action: uploadFile)
             .help("上传文件到当前目录")
+            .accessibilityLabel("上传文件到当前目录")
         }
         .padding(.horizontal, 10)
         .frame(height: 36)
@@ -295,7 +301,13 @@ struct FileBrowserContent: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: upSelected)
+        .overlay {
+            if upSelected {
+                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
+            }
+        }
         .contentShape(Rectangle())
+        .focusable()
         // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
         // count:2 在前 —— SwiftUI 据此把单 / 双击当互斥手势消歧（见 entryRow）。
         .onTapGesture(count: 2) {
@@ -310,7 +322,8 @@ struct FileBrowserContent: View {
                 isTargeted: nil,
                 perform: moveRemoteItemsToParent)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(upSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel("上级目录")
         .accessibilityAction { Task { await model.navigateUp() } }
     }
 
@@ -361,7 +374,14 @@ struct FileBrowserContent: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: isSelected)
+        .overlay {
+            // 选中时叠加可见焦点环（accent 描边）——键盘 / VoiceOver 导航有清晰指示。
+            if isSelected {
+                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
+            }
+        }
         .contentShape(Rectangle())
+        .focusable()
         // 单击选中、双击激活（Finder 风）。两个 .onTapGesture 链式、count:2 在前
         // —— SwiftUI 据此把单 / 双击当互斥手势消歧，与主列表 ServerRow 同款。
         // 不能用 simultaneousGesture(count:2)：那让单 / 双击各自独立计时、互相抢，
@@ -380,11 +400,22 @@ struct FileBrowserContent: View {
             model.remoteDragProvider(for: entry)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(entry.name)
+        .accessibilityValue(entryAccessibilityValue(entry, kind: kind))
         .accessibilityAction { activate(entry) }
         .contextMenu { SFTPRowMenu(entry: entry, actions: sidebarActions) }
 
         return remoteMoveDropTarget(base, entry: entry)
+    }
+
+    /// VoiceOver 朗读值：种类 + 大小，方便无障碍用户不依赖列布局了解条目。
+    private func entryAccessibilityValue(_ entry: RemoteEntry, kind: BrowserFileKind) -> String {
+        var parts: [String] = [kind.label]
+        if !entry.isDirectory, let size = entry.size {
+            parts.append(byteText(size))
+        }
+        return parts.joined(separator: "，")
     }
 
     @ViewBuilder

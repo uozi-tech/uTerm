@@ -31,6 +31,8 @@ struct ServerFormView: View {
 
     @State private var keyPickerOpen = false
     @State private var jumpPickerOpen = false
+    /// 主机字段是否已被用户编辑过——避免开屏即把必填项标红。
+    @State private var hostTouched = false
 
     private let keychain = KeychainStore()
 
@@ -66,6 +68,8 @@ struct ServerFormView: View {
             HStack {
                 Spacer()
                 UDIconButton(systemImage: "xmark") { dismiss() }
+                    .accessibilityLabel("关闭")
+                    .help("关闭")
             }
             .padding(.trailing, 10)
         }
@@ -91,12 +95,17 @@ struct ServerFormView: View {
             DarkFormField(label: "名称") {
                 UDTextField(placeholder: "例如：api-prod", text: $name)
             }
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 DarkFormField(label: "主机") {
-                    UDTextField(placeholder: "host.example.com", text: $host, monospaced: true)
+                    UDTextField(placeholder: "host.example.com", text: $host,
+                                errorMessage: hostError, monospaced: true)
+                        .accessibilityValue(host.isEmpty ? "未填写" : host)
+                        .onChange(of: host) { _, _ in hostTouched = true }
                 }
                 DarkFormField(label: "端口") {
-                    UDTextField(placeholder: "22", text: $port, monospaced: true)
+                    UDTextField(placeholder: "22", text: $port,
+                                errorMessage: portError, monospaced: true)
+                        .accessibilityValue(port.isEmpty ? "未填写" : port)
                 }
                 .frame(width: 96)
             }
@@ -210,10 +219,25 @@ struct ServerFormView: View {
     // MARK: - 校验
 
     private var isValid: Bool {
-        guard !name.isEmpty, !host.isEmpty, !username.isEmpty, Int(port) != nil else { return false }
+        guard !name.isEmpty, !host.isEmpty, !username.isEmpty, hostError == nil, portError == nil else { return false }
         if authMethod == .privateKey, keyID == nil { return false }
         if useJumpHost, jumpProfileID == nil { return false }
         return true
+    }
+
+    /// 主机名 inline 校验：必填。仅在用户编辑过又清空时提示（避免开屏 / 编辑态即红）。
+    private var hostError: String? {
+        guard hostTouched else { return nil }
+        return host.trimmingCharacters(in: .whitespaces).isEmpty ? "请填写主机地址" : nil
+    }
+
+    /// 端口 inline 校验：必须是 1–65535 的整数。空 / 非法均给出提示。
+    private var portError: String? {
+        let trimmed = port.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return nil }
+        guard let p = Int(trimmed) else { return "端口必须是数字" }
+        guard (1...65535).contains(p) else { return "端口需在 1–65535 之间" }
+        return nil
     }
 
     /// 已有的非空分组名，去重 + locale 排序。

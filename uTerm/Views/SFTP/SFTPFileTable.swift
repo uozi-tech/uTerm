@@ -126,6 +126,8 @@ struct SFTPFileTable: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 38)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isHeader)
     }
 
     /// 静态（不可排序）列头文案——所有者 / 权限两列只展示不排序。
@@ -148,6 +150,8 @@ struct SFTPFileTable: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("按\(label)排序")
+        .help("按\(label)排序")
     }
 
     // MARK: `..` 行
@@ -168,6 +172,7 @@ struct SFTPFileTable: View {
                 perform: onDropRemoteItemsToParent)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("上级目录")
         .accessibilityAction { onUp() }
     }
 
@@ -206,18 +211,39 @@ struct SFTPFileTable: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: selected)
+        .overlay {
+            // 选中时叠加可见焦点环（accent 描边），键盘 / VoiceOver 导航有清晰指示。
+            if selected {
+                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
+            }
+        }
         .contentShape(Rectangle())
+        .focusable()
         .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
         .onTapGesture { selectedID = e.id; focused = true }
         .onDrag {
             onDragProvider(e)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(e.name)
+        .accessibilityValue(accessibilityValue(e, kind: kind))
         .accessibilityAction { onActivate(e) }
         .contextMenu { SFTPRowMenu(entry: e, actions: rowActions) }
 
         return remoteMoveDropTarget(base, entry: e)
+    }
+
+    /// VoiceOver 朗读值：种类 + 大小 + 修改时间，让无障碍用户不依赖列布局即可了解条目。
+    private func accessibilityValue(_ e: RemoteEntry, kind: BrowserFileKind) -> String {
+        var parts: [String] = [kind.label]
+        if e.isDirectory {
+            // 文件夹无大小
+        } else if let size = e.size {
+            parts.append(SFTPFormat.bytes(Int64(size)))
+        }
+        if let m = e.modifiedAt { parts.append(SFTPFormat.date(m)) }
+        return parts.joined(separator: "，")
     }
 
     /// 所有者展示：`uid · gid`（SFTP 协议不返回用户名，缺失显示 `?`）。

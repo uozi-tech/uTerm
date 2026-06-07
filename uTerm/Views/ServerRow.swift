@@ -14,6 +14,7 @@ struct ServerRow: View {
     let onDoubleTap: () -> Void
 
     @State private var hover = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -25,6 +26,8 @@ struct ServerRow: View {
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(UD.text)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(profile.name)
                     if profile.isPinned {
                         Image(systemName: "star.fill")
                             .font(.system(size: 9))
@@ -35,6 +38,8 @@ struct ServerRow: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(UD.text3)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(profile.displayEndpoint)
             }
 
             Spacer(minLength: 6)
@@ -49,10 +54,25 @@ struct ServerRow: View {
         .padding(.horizontal, 18)
         .frame(height: 56)
         .background(rowBackground)
+        .overlay(focusRing)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture(count: 2) { onDoubleTap() }
         .onTapGesture { onTap() }
+        .focusable()
+        .focused($focused)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(profile.name)，\(profile.displayEndpoint)")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// 键盘焦点环：accent 描边，仅在该行获得焦点时可见（鼠标点选不画）。
+    @ViewBuilder
+    private var focusRing: some View {
+        if focused {
+            Rectangle()
+                .strokeBorder(UD.accent, lineWidth: 2)
+        }
     }
 
     private var groupLabel: String {

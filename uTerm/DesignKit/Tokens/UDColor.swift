@@ -63,10 +63,13 @@ enum UD {
     nonisolated static let borderHi   = dyn(.white(0.10), .black(0.16))
 
     // MARK: - 文本 Text（深=白叠加 / 浅=纯黑叠加，中性不发蓝）
-    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x1C1C1E))
-    nonisolated static let text2      = dyn(.white(0.46), .black(0.56))
-    nonisolated static let text3      = dyn(.white(0.28), .black(0.40))
-    nonisolated static let text4      = dyn(.white(0.18), .black(0.26))
+    // 中性文本 ramp 对比度达标（Ink Floor Rule）：承载信息的文字 ≥ text2；
+    // text4 只用于分隔线 / 行号 / 禁用图标等装饰·结构层，绝不放数据。
+    // 暗色对比：text2 ~5.3:1（正文层）· text3 ~4.05:1（次要信息层）· text4 ~2.7:1（仅装饰）。
+    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x16181D))
+    nonisolated static let text2      = dyn(.white(0.50), .black(0.66))   // 正文层
+    nonisolated static let text3      = dyn(.white(0.42), .black(0.54))   // 次要信息层（数据放这，别放 text4）
+    nonisolated static let text4      = dyn(.white(0.30), .black(0.42))   // 仅装饰 / 结构层
 
     // MARK: - 强调 Accent（可切换；见 AccentColor / AccentState。getter 同步读 selected →
     // SwiftUI body 求值期访问被 Observation 追踪 → 切色全局自动重渲染。默认蓝 = 原手调值。）

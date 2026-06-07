@@ -88,8 +88,10 @@ struct SFTPPermissionSheet: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("权限").font(.system(size: 14, weight: .semibold)).foregroundStyle(UD.text)
+                .accessibilityAddTraits(.isHeader)
             Text(entry.name).font(UD.mono(12)).foregroundStyle(UD.text3)
                 .lineLimit(1).truncationMode(.middle)
+                .help(entry.name)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
@@ -125,7 +127,8 @@ struct SFTPPermissionSheet: View {
             ForEach(Array(Self.classes.enumerated()), id: \.offset) { ri, name in
                 if ri > 0 { Rectangle().fill(UD.border).frame(height: 1) }
                 gridRow(leading: Text(name).font(.system(size: 13)).foregroundStyle(UD.text)) { col in
-                    PermCheckbox(on: bits[ri * 3 + col]) { bits[ri * 3 + col].toggle() }
+                    PermCheckbox(on: bits[ri * 3 + col],
+                                 label: "\(name) \(Self.cols[col])") { bits[ri * 3 + col].toggle() }
                 }
                 .frame(height: 42)
             }
@@ -170,6 +173,7 @@ struct SFTPPermissionSheet: View {
 /// 未选 `UD.fillSoft` 底 + `UD.border` 描边）。不用系统 `.checkbox` 以避免系统蓝。
 private struct PermCheckbox: View {
     let on: Bool
+    var label: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -188,5 +192,8 @@ private struct PermCheckbox: View {
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label ?? "")
+        .accessibilityValue(on ? "已启用" : "已关闭")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 }

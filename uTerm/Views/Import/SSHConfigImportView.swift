@@ -129,6 +129,9 @@ struct SSHConfigImportView: View {
                 Text("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(h.port)" +
                      (h.identityFile.map { "  ·  " + ($0 as NSString).lastPathComponent } ?? ""))
                     .font(UD.monoMetric).foregroundStyle(UD.text4)
+                    .lineLimit(1).truncationMode(.middle)
+                    .help("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(h.port)" +
+                          (h.identityFile.map { "  ·  " + $0 } ?? ""))
             }
             Spacer()
         }
@@ -139,6 +142,11 @@ struct SSHConfigImportView: View {
             guard !disabled else { return }
             if selection.contains(row.id) { selection.remove(row.id) } else { selection.insert(row.id) }
         }
+        .focusable(!disabled)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selection.contains(row.id) ? .isSelected : [])
+        .accessibilityLabel("\(h.alias)\(h.isWildcard ? "，通配" : "")\(row.existing ? "，已存在" : "")")
     }
 
     private func tag(_ s: String, _ c: Color) -> some View {

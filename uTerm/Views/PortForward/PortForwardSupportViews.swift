@@ -97,6 +97,7 @@ struct FormSection<Content: View>: View {
             Text(title)
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text3)
+                .accessibilityAddTraits(.isHeader)
             content()
         }
     }

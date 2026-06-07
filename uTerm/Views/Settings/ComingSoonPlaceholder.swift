@@ -12,6 +12,7 @@ struct ComingSoonPlaceholder: View {
             Image(systemName: "wrench.and.screwdriver")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(UD.text3)
+                .accessibilityHidden(true)
             Text("\(label) · 敬请期待")
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text2)

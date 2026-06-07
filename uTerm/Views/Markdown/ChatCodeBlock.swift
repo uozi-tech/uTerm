@@ -27,6 +27,8 @@ struct ChatCodeBlock: View {
         .background(containerShape.fill(style.codeBlockBackground))
         .clipShape(containerShape)
         .overlay(containerShape.strokeBorder(style.border, lineWidth: 1))
+        // 代码块在浅色主题下保持深色渲染（高亮配色面向深底）。
+        .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
@@ -40,6 +42,7 @@ struct ChatCodeBlock: View {
                 pb.clearContents()
                 pb.setString(trimmed, forType: .string)
                 copied = true
+                AccessibilityNotification.Announcement("已复制代码").post()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     copied = false
                 }
@@ -52,6 +55,8 @@ struct ChatCodeBlock: View {
                 .foregroundStyle(copied ? UD.success : style.textMuted)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(copied ? "已复制代码" : "复制代码")
+            .help("复制代码")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

@@ -24,12 +24,40 @@ struct ProviderEditView: View {
     private let baseURLHelpText: String =
         "不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。"
 
+    /// Base URL 必填且须为合法 http(s) URL；空 / 非法时返回错误文案（驱动 danger 描边）。
+    private var baseURLError: String? {
+        let trimmed = provider.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Base URL 不能为空" }
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            return "请填写合法的 http(s) 地址"
+        }
+        return nil
+    }
+
+    /// 名称必填；空时返回错误文案。
+    private var nameError: String? {
+        provider.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "名称不能为空" : nil
+    }
+
+    /// 待保存的 API Key 草稿（去空白）。
+    private var keyDraftTrimmed: String {
+        keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
         SettingsScroll {
             SettingsGroup(title: "基本") {
                 ProviderFormField(label: "名称") {
-                    UDTextField(placeholder: "名称", text: $provider.name)
+                    UDTextField(placeholder: "名称",
+                                text: $provider.name,
+                                errorMessage: nameError)
                         .frame(width: 320)
+                        .accessibilityLabel("名称")
+                        .accessibilityValue(nameError ?? provider.name)
                 }
 
                 ProviderFormField(label: "类型") {
@@ -40,9 +68,13 @@ struct ProviderEditView: View {
                 }
 
                 ProviderFormField(label: "Base URL", hint: baseURLHelpText) {
-                    UDTextField(placeholder: "如 https://api.openai.com", text: $provider.baseURL)
+                    UDTextField(placeholder: "如 https://api.openai.com",
+                                text: $provider.baseURL,
+                                errorMessage: baseURLError)
                         .frame(width: 360)
                         .help(baseURLHelpText)
+                        .accessibilityLabel("Base URL")
+                        .accessibilityValue(baseURLError ?? provider.baseURL)
                 }
             }
 
@@ -51,6 +83,8 @@ struct ProviderEditView: View {
                 ProviderFormField(label: "Model ID") {
                     UDTextField(placeholder: "Model ID", text: $provider.model, monospaced: true)
                         .frame(width: 320)
+                        .accessibilityLabel("Model ID")
+                        .accessibilityValue(provider.model.isEmpty ? "未设置" : provider.model)
                 }
             }
 
@@ -63,10 +97,12 @@ struct ProviderEditView: View {
                             isSecure: true
                         )
                         .frame(width: 360)
+                        .accessibilityLabel("API Key")
+                        .accessibilityValue(keyDraftTrimmed.isEmpty ? "未输入" : "已输入新 key")
 
                         HStack(spacing: 10) {
                             UDButton(title: "保存 Key", style: .secondary) { saveKey() }
-                                .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .disabled(keyDraftTrimmed.isEmpty)
                             keyStatus
                             Spacer(minLength: 0)
                         }
@@ -79,7 +115,7 @@ struct ProviderEditView: View {
                     UDButton(title: "测试连接", style: .secondary) {
                         Task { await testConnection() }
                     }
-                    .disabled(testInFlight)
+                    .disabled(testInFlight || baseURLError != nil)
 
                     if testInFlight {
                         UDIndeterminateBar()

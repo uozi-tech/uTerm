@@ -60,6 +60,8 @@ struct UDCommandPalette: View {
                 .onSubmit { onExecute() }
                 .onKeyPress(.upArrow)   { onMove(-1); return .handled }
                 .onKeyPress(.downArrow) { onMove(1);  return .handled }
+                .accessibilityLabel("搜索主机、文件、命令")
+                .accessibilityAddTraits(.isSearchField)
             if isSearching {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
             }
@@ -72,30 +74,43 @@ struct UDCommandPalette: View {
     // MARK: 结果区
 
     private var resultsArea: some View {
-        ScrollView {
-            if !hasResults {
-                CommandPaletteEmpty(query: query)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(sections) { section in
-                        Text(section.label)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(UD.text4)
-                            .kerning(0.6)
-                            .padding(.top, 8)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        ForEach(section.items) { item in
-                            CommandPaletteRow(
-                                item: item, query: query,
-                                selected: selectedID == item.id,
-                                onHover: { onHover(item.id) },
-                                onTap: { onHover(item.id); onExecute() })
+        ScrollViewReader { proxy in
+            ScrollView {
+                if !hasResults {
+                    CommandPaletteEmpty(query: query)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(sections) { section in
+                            Text(section.label)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(UD.text4)
+                                .kerning(0.6)
+                                .padding(.top, 8)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(section.items) { item in
+                                CommandPaletteRow(
+                                    item: item, query: query,
+                                    selected: selectedID == item.id,
+                                    onHover: { onHover(item.id) },
+                                    onTap: { onHover(item.id); onExecute() })
+                                    .id(item.id)
+                            }
                         }
                     }
+                    .padding(6)
+                    // 候选列表整体作为一个无障碍容器（VoiceOver 念为列表）。
+                    .accessibilityElement(children: .contain)
                 }
-                .padding(6)
+            }
+            // 键盘上下移动选中项时把高亮项滚动入视。
+            .onChange(of: selectedID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
             }
         }
         .frame(maxHeight: 380)
@@ -172,6 +187,16 @@ private struct CommandPaletteRow: View {
         .contentShape(Rectangle())
         .onHover { if $0 { onHover() } }
         .onTapGesture { onTap() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var accessibilityText: String {
+        var parts = [item.title]
+        if !item.detail.isEmpty { parts.append(item.detail) }
+        if !item.hint.isEmpty { parts.append(item.hint) }
+        return parts.joined(separator: "，")
     }
 }
 

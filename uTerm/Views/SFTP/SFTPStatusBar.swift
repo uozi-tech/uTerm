@@ -20,8 +20,12 @@ struct SFTPStatusBar: View {
             HStack(spacing: 6) {
                 Circle().fill(UD.success).frame(width: 6, height: 6)
                 Text(path).font(UD.mono(11))
-                    .foregroundStyle(UD.text3).lineLimit(1)
+                    .foregroundStyle(UD.text3).lineLimit(1).truncationMode(.middle)
+                    .help(path)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("已连接")
+            .accessibilityValue(path)
             Text("\(folderCount) 个文件夹 · \(fileCount) 个文件"
                 + (selectedCount > 0 ? " · 已选择 \(selectedCount) 项" : ""))
                 .font(.system(size: 11)).foregroundStyle(UD.text4).lineLimit(1)

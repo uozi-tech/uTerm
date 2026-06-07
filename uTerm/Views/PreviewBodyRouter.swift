@@ -25,7 +25,7 @@ struct PreviewBodyRouter: View {
 struct PreviewBufferBody: View {
     let buffer: FileBuffer
     var onDownload: ((FileBuffer) async throws -> Data)?
-    var onLoadMarkdownImage: ((String, FileBuffer) async throws -> Data)?
+    let onLoadMarkdownImage: MarkdownBufferImageLoader
 
     var body: some View {
         Group {
@@ -60,7 +60,6 @@ struct PreviewBufferBody: View {
     }
 
     private var markdownImageLoader: MarkdownImageLoader? {
-        guard let onLoadMarkdownImage else { return nil }
         return { source in
             try await onLoadMarkdownImage(source, buffer)
         }

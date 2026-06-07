@@ -69,10 +69,13 @@ struct SFTPTransfersDock: View {
                 UDLinearBar(progress: queued ? 0 : Double(pct) / 100, height: 5).frame(width: 96)
                 Text(queued ? "排队" : "\(pct)%").font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 32, alignment: .trailing)
-                Text(SFTPFormat.transferSpeed(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text4)
+                Text(SFTPFormat.transferSpeed(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(s.direction == .up ? "上传" : "下载") \(s.fileName)")
+        .accessibilityValue(queued ? "排队中" : "\(pct)%")
         DockCancelButton(title: "取消传输 \(s.fileName)") { onCancel(s.id) }
     }
 
@@ -91,6 +94,10 @@ struct SFTPTransfersDock: View {
             .padding(.horizontal, 8).frame(height: 22)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(allUp ? "上传" : "传输") \(active.count) 个文件")
+        .accessibilityValue("\(Int(aggPct * 100))%")
+        .accessibilityHint("展开传输列表")
     }
 
     @ViewBuilder private var finishedChip: some View {
@@ -145,7 +152,7 @@ private struct DockCancelButton: View {
                 .frame(width: 20, height: 20)
                 .background(hover ? UD.danger.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 5))
         }
-        .buttonStyle(.plain).help(title).onHover { hover = $0 }
+        .buttonStyle(.plain).help(title).accessibilityLabel(title).onHover { hover = $0 }
     }
 }
 
@@ -194,6 +201,7 @@ struct SFTPTransfersPanel: View {
     private var header: some View {
         HStack(spacing: 9) {
             Text("传输").font(.system(size: 13, weight: .semibold)).foregroundStyle(UD.text)
+                .accessibilityAddTraits(.isHeader)
             Text(activeCount > 0 ? "\(activeCount) 进行中" : "\(doneCount) 已完成")
                 .font(UD.mono(10.5)).foregroundStyle(UD.text2)
                 .padding(.horizontal, 7).padding(.vertical, 1)
@@ -290,6 +298,9 @@ struct SFTPTransferRow: View {
         .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 10)
         .background(hover ? UD.rowHover : .clear)
         .onHover { hover = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(item.direction == .up ? "上传" : "下载") \(item.fileName)")
+        .accessibilityValue(item.status == .active ? "\(pct)%，\(subtitle.0)" : subtitle.0)
     }
 
     @ViewBuilder private var control: some View {
@@ -325,6 +336,6 @@ private struct RowControlButton: View {
                 .background(hover ? (redOnHover ? UD.danger.opacity(0.12) : UD.fillSoft) : .clear,
                             in: RoundedRectangle(cornerRadius: 6))
         }
-        .buttonStyle(.plain).help(title).onHover { hover = $0 }
+        .buttonStyle(.plain).help(title).accessibilityLabel(title).onHover { hover = $0 }
     }
 }

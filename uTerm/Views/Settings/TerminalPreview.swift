@@ -50,6 +50,9 @@ struct TerminalPreview: View {
                 .stroke(UD.border, lineWidth: 1)
         )
         .font(previewFont)
+        // 整块作为单个示意元素：VoiceOver 不逐行念假终端输出。
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("终端外观实时预览")
     }
 
     @ViewBuilder

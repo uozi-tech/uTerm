@@ -101,7 +101,7 @@ struct JumpHostSelectorView: View {
                 if let h = selected {
                     Circle().fill(UD.accent).frame(width: 6, height: 6)
                     Text(h.name).font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
-                    Text(endpoint(h)).font(UD.mono(11)).foregroundStyle(UD.text3).lineLimit(1)
+                    Text(endpoint(h)).font(UD.mono(11)).foregroundStyle(UD.text3).lineLimit(1).truncationMode(.middle)
                 } else {
                     Text("从已有服务器选择跳板机…").font(.system(size: 13)).foregroundStyle(UD.text4)
                 }

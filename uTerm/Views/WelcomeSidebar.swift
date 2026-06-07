@@ -23,6 +23,7 @@ struct WelcomeSidebar: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 UDSidebarSectionHeader("视图")
+                    .accessibilityAddTraits(.isHeader)
                 navRow(.allHosts, icon: "square.grid.2x2", title: "所有主机", counts: counts)
                 if (counts[.pinned] ?? 0) > 0 {
                     navRow(.pinned, icon: "star.fill", title: "置顶", counts: counts)
@@ -33,6 +34,7 @@ struct WelcomeSidebar: View {
                 if !groups.isEmpty || (counts[.ungrouped] ?? 0) > 0 {
                     HStack(spacing: 0) {
                         UDSidebarSectionHeader("分组")
+                            .accessibilityAddTraits(.isHeader)
                         Spacer()
                         Button { openWindow(id: "groups") } label: {
                             Image(systemName: "slider.horizontal.3")
@@ -41,6 +43,7 @@ struct WelcomeSidebar: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.trailing, 14)
+                        .accessibilityLabel("管理分组")
                         .help("管理分组")
                     }
                     .padding(.top, 14)

@@ -10,6 +10,7 @@ struct EmptyBody: View {
                 Text("最近打开")
                     .font(.headline)
                     .foregroundStyle(UD.text)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if !model.recents.isEmpty {
                     UDButton(title: "清空", style: .ghost) { model.clearRecents() }
@@ -53,6 +54,7 @@ struct EmptyBody: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text((entry.remotePath as NSString).lastPathComponent)
                     .foregroundStyle(UD.text)
+                    .lineLimit(1).truncationMode(.tail)
                 Text(entry.remotePath)
                     .font(.caption)
                     .foregroundStyle(UD.text3)
@@ -74,6 +76,9 @@ struct EmptyBody: View {
         .onHover { _ in
             // SwiftUI 无 hover 持久背景；如果想要 hover 高亮，包成 stateful 子 view
         }
+        .focusable()
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 
     private func icon(for kindTag: String) -> String {

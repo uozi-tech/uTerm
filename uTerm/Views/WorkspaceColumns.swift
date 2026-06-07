@@ -92,6 +92,8 @@ struct ColumnResizer: View {
                             }
                             .onEnded { _ in startWidth = nil }
                     )
+                    .accessibilityLabel(Text("调整列宽"))
+                    .accessibilityAddTraits(.allowsDirectInteraction)
             )
     }
 }

@@ -28,6 +28,10 @@ struct TerminalArea: View {
                     workspace.dropFileBuffer(sourceBuffer, onto: targetPane, zone: zone)
                 }, onDownloadFile: { buffer in
                     try await workspace.filePreviewModel.download(buffer)
+                }, onLoadMarkdownImage: { source, buffer in
+                    try await workspace.filePreviewModel.loadMarkdownImage(
+                        source: source,
+                        referencedBy: buffer)
                 }, workspaceDragSource: workspace.dragSource, onBeginPaneDrag: { sourcePane in
                     workspace.beginDrag(.pane(sourcePane))
                 }, onDropDragSource: { targetPane, zone in

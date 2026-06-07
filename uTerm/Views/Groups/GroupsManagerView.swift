@@ -338,6 +338,11 @@ private struct GroupRowView: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { onSelect() }
+        .focusable()
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel("\(name)，\(count) 台主机\(builtin ? "，系统内置" : "")")
         .contextMenu {
             if !builtin {
                 Button(pinned ? "取消置顶" : "置顶", action: onTogglePin)
@@ -403,6 +408,8 @@ private func rowIconButton(_ symbol: String, danger: Bool = false, action: @esca
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(danger ? "删除分组" : "")
+    .help(danger ? "删除分组" : "")
 }
 
 // MARK: - 组详情（设计稿 GroupDetail）
@@ -483,6 +490,7 @@ private struct GroupDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .help("重命名")
+                .accessibilityLabel("重命名")
             }
         }
     }
@@ -527,6 +535,9 @@ private struct GroupDetailView: View {
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("颜色 \(hex)")
+        .accessibilityAddTraits(active ? .isSelected : [])
+        .help("颜色 \(hex)")
     }
 
     private var memberSection: some View {
@@ -739,6 +750,7 @@ private struct GroupFormSection<Right: View, Content: View>: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(title).font(UD.caption).foregroundStyle(UD.text3)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 right
             }

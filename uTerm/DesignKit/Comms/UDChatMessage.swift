@@ -101,15 +101,18 @@ struct UDChatMessage<Content: View>: View {
 /// 流式回答尾随的闪烁光标（≈4×11 accent 方块，1↔0 透明度 ~1.1s 往复）。
 private struct UDStreamCaret: View {
     @State private var on = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Rectangle()
             .fill(UD.accent)
             .frame(width: 4, height: 11)
-            .opacity(on ? 1 : 0)
-            .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+            // Reduce Motion：停掉闪烁，光标常显（瞬时态）。
+            .opacity(reduceMotion ? 1 : (on ? 1 : 0))
+            .animation(reduceMotion ? nil
+                       : .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
                        value: on)
-            .onAppear { on = false }
+            .onAppear { if !reduceMotion { on = false } }
     }
 }
 

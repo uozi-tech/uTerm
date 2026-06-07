@@ -28,6 +28,11 @@ struct TerminalTabBar: View {
                             onSelect: { workspace.selectTab(tab.id) },
                             onClose:  { workspace.closeTab(tab.id) })
                             .frame(maxHeight: .infinity)
+                            // 选中态供 VoiceOver 念读；整条 tab 区 .contain 聚合为一组。
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(Text(tab.title))
+                            .accessibilityAddTraits(
+                                workspace.activeTabID == tab.id ? [.isButton, .isSelected] : .isButton)
                             .onDrag {
                                 workspace.beginDrag(.tab(tab.id))
                                 return TabDragPayload.itemProvider(tabID: tab.id)
@@ -48,11 +53,13 @@ struct TerminalTabBar: View {
                     .buttonStyle(.plain)
                     .iconButtonHover()
                     .help("新建终端标签（⌘T）")
+                    .accessibilityLabel(Text("新建终端标签"))
                     .padding(.leading, 4)
                     // ⌘T 走 uTermApp 的 CommandGroup 单独注册 —— 按在终端焦点
                     // 区时也能正确触发（Fix #10）；这里只是 UI 按钮入口。
                 }
                 .frame(maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
             }
             .frame(maxHeight: .infinity)
         }

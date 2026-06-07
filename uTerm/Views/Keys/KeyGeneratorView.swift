@@ -13,11 +13,20 @@ struct KeyGeneratorView: View {
     @State private var comment = NSUserName() + "@" + (Host.current().localizedName ?? "mac")
     @State private var generating = false
     @State private var errorText: String?
+    @State private var nameTouched = false
 
     private let keyStore = KeyStore()
 
+    private var nameEmpty: Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var nameError: String? {
+        (nameTouched && nameEmpty) ? "名称不能为空" : nil
+    }
+
     private var canGenerate: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !generating
+        !nameEmpty && !generating
     }
 
     var body: some View {
@@ -31,7 +40,10 @@ struct KeyGeneratorView: View {
 
                     DarkFormSection(title: "基础") {
                     DarkFormField(label: "名称", hint: "在 uTerm 内引用") {
-                        UDTextField(placeholder: "例如：default", text: $name)
+                        UDTextField(placeholder: "例如：default", text: $name,
+                                    errorMessage: nameError)
+                            .accessibilityValue(nameError ?? "")
+                            .onChange(of: name) { _, _ in nameTouched = true }
                     }
                     DarkFormField(label: "类型") {
                         UDSegmented(selection: $type, options: [

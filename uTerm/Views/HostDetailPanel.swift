@@ -47,6 +47,8 @@ struct HostDetailPanel: View {
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(UD.text)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .help(profile.name)
             Spacer(minLength: 6)
             if profile.sftpOnly {
                 SftpOnlyBadge()
@@ -62,6 +64,7 @@ struct HostDetailPanel: View {
             .foregroundColor(UD.text2)
             .lineLimit(1)
             .truncationMode(.middle)
+            .help("\(profile.username)@\(profile.host):\(profile.port)")
     }
 
     // MARK: meta grid
@@ -96,7 +99,11 @@ struct HostDetailPanel: View {
                 .font(.system(size: 13, design: mono ? .monospaced : .default))
                 .foregroundStyle(UD.text)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .help(value)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label)：\(value)")
     }
 
     // MARK: actions
@@ -158,7 +165,7 @@ struct HostDetailPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("仅文件传输")
                 .font(.system(size: 11.5))
-                .foregroundStyle(UD.text4)
+                .foregroundStyle(UD.text3)
         }
         .foregroundStyle(UD.text3)
         .padding(.horizontal, 13)

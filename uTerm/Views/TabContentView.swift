@@ -13,6 +13,8 @@ struct TabContentView: View {
                                           _ zone: PaneDropZone) -> Void
     /// 文件 pane 中不可预览提示的下载入口。
     var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
+    /// 文件 pane 中 Markdown 图片加载入口。
+    let onLoadMarkdownImage: MarkdownBufferImageLoader
     /// Workspace 级拖拽源。
     let workspaceDragSource: WorkspaceDragSource?
     /// 窗格拖拽开始时通知 workspace 登记源。
@@ -70,6 +72,7 @@ struct TabContentView: View {
                         onDropFile(sourceBuffer, paneID, zone)
                     },
                     onDownloadFile: onDownloadFile,
+                    onLoadMarkdownImage: onLoadMarkdownImage,
                     onWorkspaceDrop: { zone in
                         onDropDragSource(paneID, zone)
                     },

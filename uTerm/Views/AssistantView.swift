@@ -88,6 +88,8 @@ struct AssistantView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("会话历史")
+            .help("会话历史")
 
             Button {
                 model.startNewSession()
@@ -100,6 +102,7 @@ struct AssistantView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("新建对话")
             .help("新建对话")
         }
         .padding(.leading, 12)
@@ -163,6 +166,7 @@ struct AssistantView: View {
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
                 .padding(.bottom, 4)
+                .accessibilityAddTraits(.isHeader)
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(UD.border).frame(height: 1)
                 }
@@ -221,16 +225,18 @@ struct AssistantView: View {
                         .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? UD.text : UD.text2)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(relativeTime(s.updatedAt))
                         .font(.system(size: 10))
-                        .foregroundStyle(UD.text4)
+                        .foregroundStyle(UD.text3)
                 }
                 if !s.preview.isEmpty {
                     Text(s.preview)
                         .font(.system(size: 11))
-                        .foregroundStyle(UD.text4)
+                        .foregroundStyle(UD.text3)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -245,6 +251,7 @@ struct AssistantView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             Button("删除", role: .destructive) { delete(s) }
         }
@@ -305,6 +312,12 @@ struct AssistantView: View {
                 }
                 .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.messages.last?.id) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.state) { old, now in
+                    // 流式落定时给 VoiceOver 播报，无需用户盯着屏幕。
+                    if old == .streaming && now != .streaming {
+                        AccessibilityNotification.Announcement("回答已完成").post()
+                    }
+                }
             }
             queueStrip
             inputBar
@@ -355,6 +368,7 @@ struct AssistantView: View {
                 }
                 if isStreamingTail {
                     StreamingCaret()
+                        .accessibilityHidden(true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -409,13 +423,13 @@ struct AssistantView: View {
                     .font(.system(size: 10)).foregroundStyle(UD.text4)
                     .frame(width: 20, height: 20).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).help("编辑")
+            .buttonStyle(.plain).accessibilityLabel("编辑").help("编辑")
             Button { model.removeQueued(id: item.id) } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10)).foregroundStyle(UD.text4)
                     .frame(width: 20, height: 20).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).help("移除")
+            .buttonStyle(.plain).accessibilityLabel("移除").help("移除")
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 10)
@@ -466,12 +480,15 @@ struct AssistantView: View {
 /// 流式输出时的闪烁光标。
 private struct StreamingCaret: View {
     @State private var on = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         RoundedRectangle(cornerRadius: 1)
             .fill(UD.accent)
             .frame(width: 4, height: 12)
-            .opacity(on ? 1 : 0.15)
+            // Reduce Motion：停掉闪烁，光标常显（瞬时态）。
+            .opacity(reduceMotion ? 1 : (on ? 1 : 0.15))
             .onAppear {
+                guard !reduceMotion else { return }
                 withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
                     on = false
                 }
@@ -539,12 +556,12 @@ private struct UserMessageRow: View {
                     Text("✕").font(.system(size: 12)).foregroundStyle(UD.text3)
                         .frame(width: 26, height: 24).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).help("取消")
+                .buttonStyle(.plain).accessibilityLabel("取消").help("取消")
                 Button { onCommit(draft) } label: {
                     Text("✓").font(.system(size: 12)).foregroundStyle(UD.accent)
                         .frame(width: 26, height: 24).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).help("重发（截断其后并重新生成）")
+                .buttonStyle(.plain).accessibilityLabel("重发").help("重发（截断其后并重新生成）")
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

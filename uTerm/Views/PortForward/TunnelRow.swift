@@ -91,6 +91,7 @@ struct TunnelRow: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .opacity(active ? 1 : 0.5)
+                .help(flowPlain)
 
             // hover 编辑/删除。
             HStack(spacing: 2) {
@@ -105,6 +106,7 @@ struct TunnelRow: View {
             } else {
                 UDToggle(Binding(get: { active }, set: { _ in onToggle() }))
                     .frame(width: Self.actionWidth, alignment: .trailing)
+                    .accessibilityLabel(active ? "停止隧道「\(rule.name)」" : "启动隧道「\(rule.name)」")
             }
         }
         .padding(.leading, isError ? 14 : 12)
@@ -126,6 +128,15 @@ struct TunnelRow: View {
         let dst = Text("\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(rule.destPort)" : "")")
             .foregroundStyle(UD.text2)
         return Text("\(src)\(arrow)\(dst)")
+    }
+
+    /// 流向纯文本（用于 .help / 无障碍，去掉富文本着色）。
+    private var flowPlain: String {
+        let src = "\(rule.listenHost):\(rule.listenPort)"
+        if kind == .dynamic { return "\(src) · SOCKS5" }
+        let arrow = kind.reverse ? " ← " : " → "
+        let dst = "\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(rule.destPort)" : "")"
+        return "\(src)\(arrow)\(dst)"
     }
 
     private var errorChip: some View {
@@ -186,6 +197,7 @@ struct TunnelRow: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private func recoveryButton(_ title: String, icon: String?,

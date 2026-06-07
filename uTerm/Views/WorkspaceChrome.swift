@@ -22,6 +22,9 @@ struct WorkspaceTitleBar: View {
                 Text(serverName)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(serverName)
                 if let session {
                     WSStatusPill(state: session.connectionState)
                 }
@@ -88,6 +91,16 @@ struct WSIconButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+        // 纯图标按钮：用 help 文案兜底无障碍标签（去掉「（⌘…）」快捷键后缀更干净）。
+        .accessibilityLabel(Text(accessibilityLabel))
+    }
+
+    /// help 文案去掉括号内快捷键提示，作为 VoiceOver 念读的用途标签。
+    private var accessibilityLabel: String {
+        if let range = help.range(of: "（") {
+            return String(help[..<range.lowerBound])
+        }
+        return help
     }
 }
 

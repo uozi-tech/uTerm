@@ -16,9 +16,13 @@ struct StatusBarView: View {
         HStack(spacing: 10) {
             // 连接状态点（聚焦窗格）
             if let session = workspace.activeTab?.focusedPane?.session {
+                let display = ConnectionStatusDisplay(state: session.connectionState)
                 Circle()
-                    .fill(ConnectionStatusDisplay(state: session.connectionState).tint.color)
+                    .fill(display.tint.color)
                     .frame(width: 6, height: 6)
+                    // 纯色状态点：给 VoiceOver 念读「已连接 / 连接中…」等文案。
+                    .accessibilityLabel(Text(display.label))
+                    .help(display.label)
             }
             // 左：平台 + endpoint
             if let platform = t.platform {
@@ -102,6 +106,8 @@ struct StatusBarView: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text(Self.cpuLoadSummary(load: load, cpuPercent: cpu, cores: cores)))
+        .help("查看 CPU 与负载历史")
         .popover(isPresented: $cpuPopover, arrowEdge: .bottom) {
             SparklinePopover(
                 title: "CPU 与负载",
@@ -117,6 +123,8 @@ struct StatusBarView: View {
                          label: "\(text) · \(String(format: "%.0f%%", pct))", iconSize: 11)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text("内存 \(text) · \(String(format: "%.0f%%", pct))"))
+        .help("查看内存负载历史")
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {
             SparklinePopover(
                 title: "内存负载",
