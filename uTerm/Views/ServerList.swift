@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 服务器列表（设计稿 Variant A）：左侧主机行 + 右侧滑入的详情面板。
 ///
@@ -12,6 +14,10 @@ struct ServerList: View {
     let onOpen: (ServerProfile) -> Void
     let onContextAction: (ContextAction, ServerProfile) -> Void
     let existingGroups: [String]
+    var reorderEnabled = false
+    var onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void = { _, _ in }
+
+    @State private var draggingProfileID: UUID?
 
     enum ContextAction: Equatable {
         case connect
@@ -62,6 +68,12 @@ struct ServerList: View {
                                       selectedID = profile.id
                                       onContextAction(.connect, profile)
                                   })
+                            .modifier(ServerRowDragModifier(
+                                enabled: reorderEnabled,
+                                profileID: profile.id,
+                                draggingProfileID: $draggingProfileID,
+                                onMove: onMove
+                            ))
                             .contextMenu { contextMenu(for: profile) }
                     }
                 }
@@ -118,5 +130,49 @@ struct ServerList: View {
         Button("删除…", role: .destructive) {
             onContextAction(.delete, profile)
         }
+    }
+}
+
+private struct ServerRowDragModifier: ViewModifier {
+    let enabled: Bool
+    let profileID: UUID
+    @Binding var draggingProfileID: UUID?
+    let onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .onDrag {
+                    draggingProfileID = profileID
+                    return NSItemProvider(object: "server" as NSString)
+                }
+                .onDrop(of: [.text], delegate: ServerRowReorderDropDelegate(
+                    targetID: profileID,
+                    draggingProfileID: $draggingProfileID,
+                    onMove: onMove
+                ))
+        } else {
+            content
+        }
+    }
+}
+
+private struct ServerRowReorderDropDelegate: DropDelegate {
+    let targetID: UUID
+    @Binding var draggingProfileID: UUID?
+    let onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let sourceID = draggingProfileID, sourceID != targetID else { return }
+        onMove(sourceID, targetID)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingProfileID = nil
+        return true
     }
 }

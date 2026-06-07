@@ -52,6 +52,19 @@ struct WelcomeView: View {
         filter.apply(to: displayProfiles)
     }
 
+    private var canReorderVisibleProfiles: Bool {
+        #if DEBUG
+        guard TweaksModel.shared.welcomeSource == .real else { return false }
+        #endif
+        guard filter.query.isEmpty else { return false }
+        switch filter.section {
+        case .group, .ungrouped:
+            return true
+        case .allHosts, .pinned, .recent:
+            return false
+        }
+    }
+
     private var existingGroups: [String] {
         Set(displayProfiles.compactMap { p -> String? in
             let g = p.group ?? ""
@@ -146,7 +159,9 @@ struct WelcomeView: View {
                        selectedID: $selectedProfileID,
                        onOpen: { openServer($0) },
                        onContextAction: handleContextAction,
-                       existingGroups: existingGroups)
+                       existingGroups: existingGroups,
+                       reorderEnabled: canReorderVisibleProfiles,
+                       onMove: moveVisibleProfile)
         }
     }
 
@@ -340,6 +355,20 @@ struct WelcomeView: View {
                 GroupStore(context: modelContext).ensure(name: name)
                 try? modelContext.save()
             }
+        }
+    }
+
+    private func moveVisibleProfile(from sourceID: UUID, to targetID: UUID) {
+        guard canReorderVisibleProfiles else { return }
+        var order = visibleProfiles
+        guard let fromIdx = order.firstIndex(where: { $0.id == sourceID }),
+              let toIdx = order.firstIndex(where: { $0.id == targetID }),
+              fromIdx != toIdx else { return }
+        let moved = order.remove(at: fromIdx)
+        order.insert(moved, at: min(toIdx, order.count))
+        selectedProfileID = sourceID
+        withAnimation(.easeInOut(duration: 0.18)) {
+            ServerProfileStore(context: modelContext).reorderVisible(order, within: displayProfiles)
         }
     }
 

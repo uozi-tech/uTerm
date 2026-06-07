@@ -244,11 +244,15 @@ struct ServerFormView: View {
     }
 
     private func save() {
+        let isNew = editing == nil
         let profile = editing ?? ServerProfile()
         profile.name = name
         profile.host = host
         profile.port = Int(port) ?? 22
         profile.username = username
+        if isNew {
+            profile.sortOrder = ServerProfileStore(context: modelContext).nextSortOrder()
+        }
         let trimmedGroup = group.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.group = trimmedGroup.isEmpty ? nil : trimmedGroup
         if let g = profile.group {
@@ -268,7 +272,7 @@ struct ServerFormView: View {
 
         profile.jumpHost = useJumpHost ? availableJumps.first { $0.id == jumpProfileID } : nil
 
-        if editing == nil { modelContext.insert(profile) }
+        if isNew { modelContext.insert(profile) }
         try? modelContext.save()
         dismiss()
     }
