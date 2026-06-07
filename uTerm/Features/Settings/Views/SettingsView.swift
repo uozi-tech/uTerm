@@ -124,7 +124,6 @@ nonisolated enum SettingsWindow {
 /// 选中 = 微底 + 主文本色，未选 = 次要文本色。
 private struct SettingsTabStrip: View {
     @Binding var selection: SettingsTab
-    @FocusState private var focusedTab: SettingsTab?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -145,7 +144,6 @@ private struct SettingsTabStrip: View {
     @ViewBuilder
     private func tabButton(_ item: SettingsTab) -> some View {
         let isOn = item == selection
-        let focused = focusedTab == item
         Button {
             selection = item
         } label: {
@@ -159,16 +157,11 @@ private struct SettingsTabStrip: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? UD.accentSoft : Color.clear))   // 选中 = accent-soft（去黑 6% 灰底）
-            // 键盘焦点环：focusable 时画 accent 描边（VoiceOver / Tab 导航可见）。
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(UD.accent, lineWidth: focused ? 2 : 0)
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .focusable()
-        .focused($focusedTab, equals: item)
+        // 原设计无任何 tab 描边：选中态仅靠 accentSoft 填充。原生 Button 本就键盘可达，
+        // 不再叠 .focusable()（会多生一个可聚焦元素 + macOS 系统焦点环 → 双层 border）。
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 }
