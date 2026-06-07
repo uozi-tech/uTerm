@@ -457,8 +457,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUFeedURL = "https://updates.example.com/uTerm/appcast.xml";
+				INFOPLIST_KEY_SUFeedURL = "https://downloads.example.com/uTerm/appcast.xml";
 				INFOPLIST_KEY_SUPublicEDKey = "";
+				INFOPLIST_KEY_SUScheduledCheckInterval = 14400;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -493,8 +494,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUFeedURL = "https://updates.example.com/uTerm/appcast.xml";
+				INFOPLIST_KEY_SUFeedURL = "https://downloads.example.com/uTerm/appcast.xml";
 				INFOPLIST_KEY_SUPublicEDKey = "";
+				INFOPLIST_KEY_SUScheduledCheckInterval = 14400;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
