@@ -22,12 +22,16 @@ nonisolated struct KeyStore {
         }
     }
 
-    func privateKey(keyID: UUID) -> String? {
-        try? keychain.load(profileID: keyID, kind: .privateKey)
+    /// 读取私钥正文。条目不存在返回 `nil`（沿用 `KeychainStore.load` 语义）；
+    /// 钥匙串读取失败（被锁 / `errSecAuthFailed` 等）则上抛，调用方据此区分
+    /// 「没存私钥」与「钥匙串访问出错」，不再被 `try?` 静默吞成 `nil`。
+    func privateKey(keyID: UUID) throws -> String? {
+        try keychain.load(profileID: keyID, kind: .privateKey)
     }
 
-    func passphrase(keyID: UUID) -> String? {
-        try? keychain.load(profileID: keyID, kind: .passphrase)
+    /// 读取导入口令。语义同 `privateKey(keyID:)`：不存在返回 `nil`，访问出错上抛。
+    func passphrase(keyID: UUID) throws -> String? {
+        try keychain.load(profileID: keyID, kind: .passphrase)
     }
 
     /// 删除一把密钥的全部钟匙串条目（删除密钥时调用）。

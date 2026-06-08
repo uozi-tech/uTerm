@@ -114,6 +114,65 @@ final class OpenAIClientTests: XCTestCase {
         XCTAssertEqual(out, "Hi there")
     }
 
+    // MARK: - FIX #29: EOF 兜底 flush 工具调用
+
+    /// 流以 finish_reason "stop" 收尾且不发 [DONE]：累积的工具调用必须靠 client
+    /// 在字节流 EOF 后的兜底 flush 产出，否则被静默丢弃。
+    func testToolCallFlushedOnEofWhenFinishReasonStopNoDone() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_eof","function":{"name":"run_command","arguments":"{\\"command\\":\\"pwd\\"}"}}]}}]}
+
+        data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+        """
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
+        var toolCalls: [LLMToolCall] = []
+        for try await event in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {
+            if case let .toolCall(c) = event { toolCalls.append(c) }
+        }
+        XCTAssertEqual(toolCalls, [LLMToolCall(id: "call_eof", name: "run_command",
+                                               argumentsJSON: #"{"command":"pwd"}"#)])
+    }
+
+    /// [DONE] 收尾的流：循环内已 flush，EOF 兜底 flush 不得重复产出同一工具调用。
+    func testToolCallNotDoubleEmittedWhenDoneTerminated() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_once","function":{"name":"run_command","arguments":"{}"}}]}}]}
+
+        data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
+        """
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200,
+                                        httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
+        var toolCalls: [LLMToolCall] = []
+        for try await event in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {
+            if case let .toolCall(c) = event { toolCalls.append(c) }
+        }
+        XCTAssertEqual(toolCalls, [LLMToolCall(id: "call_once", name: "run_command",
+                                               argumentsJSON: "{}")])
+    }
+
     func testHttpErrorMapped() async {
         StubURLProtocol.install { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 401,

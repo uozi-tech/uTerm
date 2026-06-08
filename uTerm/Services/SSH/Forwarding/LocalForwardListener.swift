@@ -49,6 +49,12 @@ actor LocalForwardListener {
         let bootstrap = ServerBootstrap(group: eventLoop)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            // 半关键设(#5)：客户端发完请求后半关写端(FIN)时**不要**把整通道判为关闭。
+            // 默认 allowRemoteHalfClosure=false 下对端 FIN 会触发 channelInactive(整通道关)，
+            // 于是目标仍在流式回包就被 TunnelGlue 取消截断。设 true 后对端 FIN 只让本地入站读到
+            // EOF、出站仍可写 → 目标的响应能完整写回客户端；配合 isOutboundHalfClosureEnabled
+            // 让响应排空后 outbound.finish() 真的向客户端发 FIN。
+            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
             .childChannelInitializer { childChannel in
                 // 把本地 socket 立即设为 NIOAsyncChannel 之前不加任何 handler；
                 // 实际的 direct-tcpip 开通道 + 粘合在 accept 后的 Task 里做。
@@ -109,8 +115,12 @@ actor LocalForwardListener {
                     originatorAddress: originator),
                 initialize: { $0.eventLoop.makeSucceededVoidFuture() })
 
+            // 本地端开出站半关：响应排空后 TunnelGlue 的 outbound.finish() 向客户端发 FIN，
+            // 让客户端读到 EOF（默认 false 时 finish() 只本地结束、不发 FIN）。
             let localAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                wrappingChannelSynchronously: localChannel)
+                wrappingChannelSynchronously: localChannel,
+                configuration: .init(isOutboundHalfClosureEnabled: true))
+            // 远端 direct-tcpip 是 SSH 通道，半关语义交由 NIOSSH/Citadel 默认处理，不在此开启。
             let remoteAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
                 wrappingChannelSynchronously: directChannel)
 

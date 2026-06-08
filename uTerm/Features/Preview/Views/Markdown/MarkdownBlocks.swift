@@ -160,18 +160,14 @@ private struct MDImageBlockView: View {
     @State private var phase: Phase = .idle
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            content
-            if !altText.isEmpty {
-                Text(altText)
-                    .font(UD.caption)
-                    .foregroundStyle(style.textMuted)
+        // Alt text is preserved for accessibility instead of rendered as a
+        // visible gray caption (see MarkdownImageCaptionTests).
+        content
+            .accessibilityLabel(accessibilityLabel)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .task(id: source) {
+                await load()
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: source) {
-            await load()
-        }
     }
 
     @ViewBuilder
@@ -231,6 +227,11 @@ private struct MDImageBlockView: View {
 
     private var altText: String {
         plainText(in: image)
+    }
+
+    /// 无障碍标签：优先用图片的 alt 文本，缺失时回落到图片地址。
+    private var accessibilityLabel: String {
+        altText.isEmpty ? source : altText
     }
 
     @MainActor

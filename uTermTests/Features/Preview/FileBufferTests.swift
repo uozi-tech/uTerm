@@ -29,4 +29,20 @@ final class FileBufferTests: XCTestCase {
         buf.isDirty = true
         XCTAssertTrue(buf.isDirty)
     }
+
+    func test_dataVersion_bumpsOnEveryImageDataAssignment() {
+        let buf = FileBuffer(remotePath: "/img.png", kind: .image)
+        XCTAssertEqual(buf.dataVersion, 0)
+
+        buf.imageData = Data([0x1, 0x2, 0x3])
+        XCTAssertEqual(buf.dataVersion, 1)
+
+        // 字节数相同但内容不同的「重载」——版本号仍必须递增，否则解码键不变、旧图残留。
+        buf.imageData = Data([0x4, 0x5, 0x6])
+        XCTAssertEqual(buf.dataVersion, 2)
+
+        // 清空也算重新赋值。
+        buf.imageData = nil
+        XCTAssertEqual(buf.dataVersion, 3)
+    }
 }

@@ -64,6 +64,45 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertEqual(downloaded.last, "/srv/docs/assets/logo.jpg")
     }
 
+    func test_loadMarkdownImage_rejectsImageOverPerImageCap() async throws {
+        let (m, mock) = makeModel()
+        let oversized = Data(repeating: 0xAB, count: MarkdownImageCache.perImageByteCap + 1)
+        try await mock.write("/srv/docs/README.md", data: Data("# README".utf8))
+        try await mock.write("/srv/docs/huge.png", data: oversized)
+
+        await m.open(path: "/srv/docs/README.md", fileSize: 8, mtime: nil)
+        let buffer = try XCTUnwrap(m.buffers.first)
+
+        do {
+            _ = try await m.loadMarkdownImage(source: "huge.png", referencedBy: buffer)
+            XCTFail("expected oversized image to be rejected")
+        } catch let error as FilePreviewModel.PreviewDownloadError {
+            guard case .markdownImageTooLarge(let bytes) = error else {
+                return XCTFail("expected .markdownImageTooLarge, got \(error)")
+            }
+            XCTAssertEqual(bytes, oversized.count)
+        }
+    }
+
+    func test_loadMarkdownImage_cachesWithinCapAndAvoidsRefetch() async throws {
+        let (m, mock) = makeModel()
+        let small = Data(repeating: 0x01, count: 1_024)
+        try await mock.write("/srv/docs/README.md", data: Data("# README".utf8))
+        try await mock.write("/srv/docs/ok.png", data: small)
+
+        await m.open(path: "/srv/docs/README.md", fileSize: 8, mtime: nil)
+        let buffer = try XCTUnwrap(m.buffers.first)
+
+        let first = try await m.loadMarkdownImage(source: "ok.png", referencedBy: buffer)
+        let second = try await m.loadMarkdownImage(source: "ok.png", referencedBy: buffer)
+
+        XCTAssertEqual(first, small)
+        XCTAssertEqual(second, small)
+        // Second call served from cache → image downloaded exactly once.
+        let imageDownloads = await mock.downloadedPaths().filter { $0 == "/srv/docs/ok.png" }
+        XCTAssertEqual(imageDownloads.count, 1)
+    }
+
     func test_openDatabaseFileMarksUnpreviewableWithoutDownloading() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/var/app/state.db", data: Data([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]))

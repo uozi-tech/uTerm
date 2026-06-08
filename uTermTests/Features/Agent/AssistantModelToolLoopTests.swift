@@ -177,6 +177,60 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertNotNil(model.messages.first { $0.role == .user && $0.text == "再看看磁盘" })
         XCTAssertEqual(model.state, .idle)
     }
+
+    // MARK: - FIX #28: 流式期间不可批准/跳过
+
+    /// 流式仍在飞行（state == .streaming，但卡片已渲染成 pending）时，approveAndRun
+    /// 必须被状态门禁挡住：不执行命令、不重入第二轮 streamAssistantTurn。
+    func testApproveIgnoredWhileStreaming() async {
+        let client = ToolThenBlockingLLMClient(
+            firstTurn: [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                              argumentsJSON: #"{"command":"ls"}"#))])
+        let exec = MockCommandExecutor()
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        model.input = "列目录"
+
+        // 不 await send：流永不结束，模型停在 .streaming。
+        let send = Task { await model.send(serverContext: "") }
+        // 让流先 yield 出 toolCall 并把模型推进 .streaming。
+        while model.state != .streaming || (model.messages.last?.toolCalls.isEmpty ?? true) {
+            await Task.yield()
+        }
+        XCTAssertEqual(model.state, .streaming)
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.status, .pending)
+
+        // 流式期间点「运行」→ 被门禁挡住：命令未执行，状态仍 .streaming。
+        await model.approveAndRun(id: "c1")
+        XCTAssertTrue(exec.ran.isEmpty)
+        XCTAssertEqual(model.state, .streaming)
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.status, .pending)
+        // 同理「跳过」也被挡。
+        await model.skip(id: "c1")
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.status, .pending)
+
+        send.cancel()
+        _ = await send.value
+    }
+}
+
+/// 第一轮先 yield 出预设事件，然后永不结束（钉在 .streaming，直到流被取消）。
+/// 用于验证流式期间 approveAndRun/skip 被门禁挡住。
+private struct ToolThenBlockingLLMClient: LLMClient {
+    let firstTurn: [LLMEvent]
+
+    func stream(messages: [ChatMessage], system: String,
+                config: LLMRequestConfig) -> AsyncThrowingStream<LLMEvent, Error> {
+        let firstTurn = firstTurn
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                for e in firstTurn { continuation.yield(e) }
+                try? await Task.sleep(for: .seconds(60))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 private actor DelayedCommandExecutor: CommandExecutor {

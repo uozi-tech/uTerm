@@ -56,4 +56,47 @@ final class FindMatcherTests: XCTestCase {
                                       options: .init(caseSensitive: false, regex: false, wholeWord: false))
         XCTAssertEqual(r.map { $0.location }, [4, 9])
     }
+
+    // MARK: - Replacement template expansion (#33)
+
+    func test_replacement_literalMode_returnsTemplateVerbatim() {
+        // In literal mode "$1" must be written verbatim, not expanded.
+        let text = "foo bar"
+        let r = FindMatcher.replacement(for: NSRange(location: 0, length: 3),
+                                        in: text, query: "foo", template: "[$1]",
+                                        options: .init(caseSensitive: false, regex: false, wholeWord: false))
+        XCTAssertEqual(r, "[$1]")
+    }
+
+    func test_replacement_regexMode_expandsCaptureGroup() {
+        // (\w+)=(\w+) → $2:$1  on "key=val"
+        let text = "key=val"
+        let opts = FindMatcher.Options(caseSensitive: false, regex: true, wholeWord: false)
+        let matches = try! FindMatcher.find(in: text, query: "(\\w+)=(\\w+)", options: opts)
+        XCTAssertEqual(matches.count, 1)
+        let r = FindMatcher.replacement(for: matches[0], in: text,
+                                        query: "(\\w+)=(\\w+)", template: "$2:$1", options: opts)
+        XCTAssertEqual(r, "val:key")
+    }
+
+    func test_replacement_regexMode_perMatchExpansion() {
+        // Each match expands $1 from its own capture group.
+        let text = "a1 b2 c3"
+        let opts = FindMatcher.Options(caseSensitive: false, regex: true, wholeWord: false)
+        let matches = try! FindMatcher.find(in: text, query: "([a-z])(\\d)", options: opts)
+        XCTAssertEqual(matches.count, 3)
+        let expanded = matches.map {
+            FindMatcher.replacement(for: $0, in: text, query: "([a-z])(\\d)", template: "$2$1", options: opts)
+        }
+        XCTAssertEqual(expanded, ["1a", "2b", "3c"])
+    }
+
+    func test_replacement_regexMode_dollarZeroIsWholeMatch() {
+        let text = "wrap me"
+        let opts = FindMatcher.Options(caseSensitive: false, regex: true, wholeWord: false)
+        let matches = try! FindMatcher.find(in: text, query: "wrap", options: opts)
+        let r = FindMatcher.replacement(for: matches[0], in: text,
+                                        query: "wrap", template: "<$0>", options: opts)
+        XCTAssertEqual(r, "<wrap>")
+    }
 }

@@ -373,22 +373,21 @@ struct WelcomeView: View {
     }
 
     private func deleteProfile(_ profile: ServerProfile) {
-        // 删除语义：清 keychain secrets + jumpHost + 端口转发规则（孤儿清理）。
+        // 删除语义：只清**被删 profile 自己**的 keychain secrets + 端口转发规则。
+        // `jumpHost` 是「引用一台已有服务器」（指向真实 profile），被引用者本身仍是
+        // 正常服务器，必须保留 —— 故绝不删 `profile.jumpHost` 或它的 secrets / 规则。
         let keychain = KeychainStore()
         for kind in [SecretKind.password, .passphrase, .privateKey] {
             try? keychain.delete(profileID: profile.id, kind: kind)
-            if let jump = profile.jumpHost {
-                try? keychain.delete(profileID: jump.id, kind: kind)
-            }
         }
         // 端口转发规则按 serverID 关联，删服务器须连带删——否则成无主孤儿。
-        // jumpHost 仅作跳板、不直接挂转发规则，但仍按其 id 兜底清一遍。
         let forwardingStore = ForwardingRuleStore(context: modelContext)
         forwardingStore.deleteAll(forServer: profile.id)
-        if let jump = profile.jumpHost {
-            forwardingStore.deleteAll(forServer: jump.id)
+        // 清除悬空引用：任何把**本 profile**当跳板机的其它服务器，置空其 jumpHost，
+        // 否则删除后会留下指向已删服务器的悬空引用。
+        for other in allProfiles where other.id != profile.id && other.jumpHost?.id == profile.id {
+            other.jumpHost = nil
         }
-        if let jump = profile.jumpHost { modelContext.delete(jump) }
         modelContext.delete(profile)
         try? modelContext.save()
         if selectedProfileID == profile.id { selectedProfileID = nil }

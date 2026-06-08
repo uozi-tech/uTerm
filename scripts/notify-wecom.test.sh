@@ -5,6 +5,12 @@ NOTIFY="$SCRIPT_DIR/notify-wecom.sh"
 fail=0
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
+# Run the script from an isolated repo root so the real repo .env (which provides
+# WECHAT_WEBHOOK_URL) cannot leak into tests and trigger real notifications.
+mkdir -p "$tmp/scripts"
+cp "$NOTIFY" "$tmp/scripts/notify-wecom.sh"
+NOTIFY="$tmp/scripts/notify-wecom.sh"
+
 # 1) 缺 WECHAT_WEBHOOK_URL -> 非零退出
 if WECHAT_WEBHOOK_URL="" "$NOTIFY" --version 1.0.1 --build 504 --url http://x/u.dmg 2>/dev/null; then
 	echo "FAIL: missing webhook accepted"; fail=1
@@ -28,6 +34,30 @@ body="$(cat "$tmp/body.json")"
 for needle in "1.0.1" "504" "uTerm-1.0.1-504.dmg"; do
 	case "$body" in *"$needle"*) echo "ok: body contains $needle" ;; *) echo "FAIL: body missing $needle"; fail=1 ;; esac
 done
+
+# 2b) line breaks must be a proper JSON \n escape (single backslash + n),
+# NOT a literal double-backslash \\n (regression: esc() over-escaping the separator).
+# Decode the JSON content and require it to contain an actual newline character.
+if python3 - "$tmp/body.json" <<'PY'
+import json, sys
+content = json.load(open(sys.argv[1]))["markdown"]["content"]
+sys.exit(0 if "\n" in content else 1)
+PY
+then
+	echo "ok: body content has a real line break (JSON \\n escape)"
+else
+	echo "FAIL: body content has no real line break (separator over-escaped to literal \\\\n)"; fail=1
+fi
+# Belt-and-suspenders on the raw payload bytes:
+# - a double-backslash escape (\\n: backslash backslash n) is the bug -> must be absent.
+# - a single-backslash escape (\n: backslash n) is correct -> must be present.
+if printf '%s' "$body" | grep -qF '\\n'; then
+	echo "FAIL: raw payload contains over-escaped \\\\n separator"; fail=1
+elif printf '%s' "$body" | grep -qF '\n'; then
+	echo "ok: raw payload uses single-backslash \\n separator"
+else
+	echo "FAIL: raw payload has no \\n separator at all"; fail=1
+fi
 
 # 3) JSON validity when notes contains a double quote (regression: esc() over-escaping)
 OUT="$tmp/body2.json" WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
