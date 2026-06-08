@@ -25,9 +25,16 @@ enum MarkdownImageDecoder {
 
 @MainActor
 private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
+    /// 渲染挂起的兜底超时：导航卡死时仍能 resume continuation，避免泄漏
+    /// renderer + WKWebView。
+    private static let renderTimeout: Duration = .seconds(5)
+
     private let data: Data
     private var continuation: CheckedContinuation<NSImage?, Never>?
     private var webView: WKWebView?
+    private var timeoutTask: Task<Void, Never>?
+    /// 一次性闸：保证 continuation 恰好 resume 一次（超时与导航回调互斥）。
+    private var didFinish = false
 
     init(data: Data) {
         self.data = data
@@ -52,7 +59,16 @@ private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
 
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
+            scheduleTimeout()
             webView.loadHTMLString(Self.html(for: data, size: size), baseURL: nil)
+        }
+    }
+
+    private func scheduleTimeout() {
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.renderTimeout)
+            guard !Task.isCancelled else { return }
+            self?.finish(nil)
         }
     }
 
@@ -104,10 +120,21 @@ private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func finish(_ image: NSImage?) {
-        continuation?.resume(returning: image)
-        continuation = nil
+        // 一次性：超时兜底与导航回调可能竞争，只允许首个 resume 生效。
+        guard !didFinish else { return }
+        didFinish = true
+
+        timeoutTask?.cancel()
+        timeoutTask = nil
+
+        let continuation = self.continuation
+        self.continuation = nil
+
+        webView?.stopLoading()
         webView?.navigationDelegate = nil
         webView = nil
+
+        continuation?.resume(returning: image)
     }
 
     private static func html(for data: Data, size: CGSize) -> String {

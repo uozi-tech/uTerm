@@ -11,6 +11,73 @@ nonisolated struct FilePreviewPanel: Identifiable, Equatable, Sendable {
     }
 }
 
+/// 有界的 markdown 图片缓存。按插入顺序（FIFO）淘汰，受单图上限、总字节上限
+/// 和条目数上限三重约束，防止引用大量/超大远程图片时撑爆内存。
+/// 纯值类型，便于单测淘汰逻辑（网络/SFTP 路径本身不可单测）。
+nonisolated struct MarkdownImageCache: Sendable {
+    /// 单张图片允许的最大体积；超过则拒绝缓存与预览。
+    static let perImageByteCap = 8 * 1024 * 1024
+    /// 缓存总字节上限。
+    static let totalByteCap = 64 * 1024 * 1024
+    /// 缓存条目数上限（即便单图都很小，也防止条目无限增长）。
+    static let maxEntryCount = 64
+
+    private let perImageByteCap: Int
+    private let totalByteCap: Int
+    private let maxEntryCount: Int
+
+    /// 插入顺序（最旧在前），用于 FIFO 淘汰。
+    private var order: [String] = []
+    private var storage: [String: Data] = [:]
+    private(set) var totalBytes = 0
+
+    init(perImageByteCap: Int = MarkdownImageCache.perImageByteCap,
+         totalByteCap: Int = MarkdownImageCache.totalByteCap,
+         maxEntryCount: Int = MarkdownImageCache.maxEntryCount) {
+        self.perImageByteCap = perImageByteCap
+        self.totalByteCap = totalByteCap
+        self.maxEntryCount = maxEntryCount
+    }
+
+    var count: Int { storage.count }
+
+    subscript(key: String) -> Data? { storage[key] }
+
+    /// 插入一条。超出单图上限的不缓存；插入后按总字节/条目数上限从最旧开始淘汰。
+    /// 返回是否成功缓存（超单图上限时为 false）。
+    @discardableResult
+    mutating func insert(_ data: Data, forKey key: String) -> Bool {
+        guard data.count <= perImageByteCap else { return false }
+
+        if let existing = storage[key] {
+            totalBytes -= existing.count
+            order.removeAll { $0 == key }
+        }
+        storage[key] = data
+        order.append(key)
+        totalBytes += data.count
+
+        evictIfNeeded()
+        return true
+    }
+
+    mutating func removeAll() {
+        order.removeAll()
+        storage.removeAll()
+        totalBytes = 0
+    }
+
+    private mutating func evictIfNeeded() {
+        while !order.isEmpty,
+              (totalBytes > totalByteCap || storage.count > maxEntryCount) {
+            let oldest = order.removeFirst()
+            if let removed = storage.removeValue(forKey: oldest) {
+                totalBytes -= removed.count
+            }
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class FilePreviewModel {
@@ -34,6 +101,7 @@ final class FilePreviewModel {
         case invalidMarkdownImageSource
         case unsupportedMarkdownImageSource(String)
         case markdownImageHTTPError(Int)
+        case markdownImageTooLarge(bytes: Int)
 
         var errorDescription: String? {
             switch self {
@@ -47,6 +115,10 @@ final class FilePreviewModel {
                 return "不支持的图片地址：\(source)"
             case .markdownImageHTTPError(let code):
                 return "图片下载失败（HTTP \(code)）"
+            case .markdownImageTooLarge(let bytes):
+                let cap = Double(MarkdownImageCache.perImageByteCap) / (1024 * 1024)
+                let actual = Double(bytes) / (1024 * 1024)
+                return String(format: "图片超过 %.0f MB（实际约 %.1f MB），已跳过预览", cap, actual)
             }
         }
     }
@@ -55,7 +127,7 @@ final class FilePreviewModel {
     /// 工厂：每次取一个最新的 SFTP provider（由 WorkspaceModel 注入；
     /// 共享 FileBrowserModel 的 SFTP 会话）。
     private let sftpProvider: () -> (any SFTPProviding)?
-    private var markdownImageCache: [String: Data] = [:]
+    private var markdownImageCache = MarkdownImageCache()
 
     init(recentsStore: RecentFilesStore,
          sftpProvider: @escaping () -> (any SFTPProviding)?) {
@@ -235,7 +307,13 @@ final class FilePreviewModel {
             data = loaded
         }
 
-        markdownImageCache[resource.cacheKey] = data
+        // 单图体积上限：超限直接拒绝，避免巨图把内存撑爆。
+        guard data.count <= MarkdownImageCache.perImageByteCap else {
+            throw PreviewDownloadError.markdownImageTooLarge(bytes: data.count)
+        }
+
+        // 写入有界缓存（按插入顺序淘汰最旧条目），防止大量远程图累积。
+        markdownImageCache.insert(data, forKey: resource.cacheKey)
         return data
     }
 
@@ -386,6 +464,10 @@ final class FilePreviewModel {
         panelRoot = nil
         panels.removeAll()
         focusedPanelID = nil
+        markdownImageCache.removeAll()
+    }
+
+    func clearMarkdownImageCache() {
         markdownImageCache.removeAll()
     }
 
