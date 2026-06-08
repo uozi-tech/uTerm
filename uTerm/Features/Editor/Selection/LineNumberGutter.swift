@@ -160,16 +160,35 @@ final class LineNumberGutter: NSView {
         super.rightMouseDown(with: event)
     }
 
-    /// 把单行 range 末尾的换行字节剥掉（\n / \r）。最后一行无换行时返回原 range。
+    /// 把单行 range 末尾的整个行终止符剥掉（\n / \r / \r\n）。最后一行无换行时返回原 range。
     private func trimmedLineRange(_ range: NSRange, in textView: TextView) -> NSRange {
+        Self.trimmedLineRange(range, in: textView.string as NSString)
+    }
+
+    /// 纯函数：剥掉单行 range 末尾的整个行终止符（\n / \r / \r\n）。
+    ///
+    /// CRLF 行尾是两个码元 0x0D 0x0A：只剥一个 0x0A 会把 0x0D 留在选区里，
+    /// collapse 时光标停在 \r 之前（视觉上像行末，但选区仍含一个孤立 \r）。
+    /// 先剥掉末尾的 \n，再把紧邻的 \r 一并剥掉；仅末尾为孤立 \r 时也剥掉。
+    /// nonisolated + 注入 NSString：可脱离 TextView 单测。
+    nonisolated static func trimmedLineRange(_ range: NSRange, in ns: NSString) -> NSRange {
         guard range.length > 0 else { return range }
-        let ns = textView.string as NSString
-        let lastIdx = range.location + range.length - 1
+        var length = range.length
+        let lastIdx = range.location + length - 1
         guard lastIdx < ns.length else { return range }
-        let c = ns.character(at: lastIdx)
-        if c == 0x0A || c == 0x0D {
-            return NSRange(location: range.location, length: range.length - 1)
+
+        let last = ns.character(at: lastIdx)
+        if last == 0x0A {
+            length -= 1
+            // CRLF：剥掉 \n 后若前一个码元是 \r，连它一起剥。
+            let prevIdx = range.location + length - 1
+            if length > 0, prevIdx >= range.location, ns.character(at: prevIdx) == 0x0D {
+                length -= 1
+            }
+        } else if last == 0x0D {
+            // 孤立 \r 行尾（老式 Mac 换行）。
+            length -= 1
         }
-        return range
+        return NSRange(location: range.location, length: length)
     }
 }

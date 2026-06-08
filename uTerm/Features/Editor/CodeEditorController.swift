@@ -362,8 +362,13 @@ extension CodeEditorController: TextViewDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                guard let self else { return }
                 // refreshGutter 一站包：重挂检查 + 宽度 + edgeInsets + 行号
-                self?.refreshGutter(bootstrap: false)
+                self.refreshGutter(bootstrap: false)
+                // find bar 开着时，文本被外部编辑会让缓存的 NSRange 失效（缩短文本后
+                // next()/previous() 会用越界 range 命中 NSRangeException）。重跑 search()
+                // 让匹配重新对齐新文本。replace* 自身会重搜，重复一次也无害（幂等）。
+                self.currentFindController?.search()
             }
         }
 
@@ -483,15 +488,24 @@ extension CodeEditorController {
         clearEmphases(group: "find")
         clearEmphases(group: "find.active")
         guard !fc.matches.isEmpty else { return }
+        // 防御性裁剪：若文本在 search 与本次绘制之间又被改短，越界 range 喂给
+        // EmphasisManager（内部走 attributedSubstring / rangeOfComposedCharacterSequence）
+        // 会抛 NSRangeException 直接崩。upperBound 超出文本长度的 range 一律跳过。
+        let textLength = textView?.textStorage?.length ?? 0
+        let validMatches = fc.matches.filter { $0.location >= 0 && NSMaxRange($0) <= textLength }
+        guard !validMatches.isEmpty else { return }
         // Non-active matches
-        applyEmphases(fc.matches, group: "find",
+        applyEmphases(validMatches, group: "find",
                       style: .standard, active: nil)
         // Active match (outline + fill)
         // findMatchBorder = #F38518 from EditorTheme (Track A); inline here so Track B compiles standalone
         let findMatchBorderColor = NSColor(red: 0xF3/255, green: 0x85/255, blue: 0x18/255, alpha: 1)
-        applyEmphases([fc.matches[fc.activeIndex]], group: "find.active",
-                      style: .outline(color: findMatchBorderColor, fill: true),
-                      active: 0)
+        let active = fc.matches.indices.contains(fc.activeIndex) ? fc.matches[fc.activeIndex] : nil
+        if let active, active.location >= 0, NSMaxRange(active) <= textLength {
+            applyEmphases([active], group: "find.active",
+                          style: .outline(color: findMatchBorderColor, fill: true),
+                          active: 0)
+        }
     }
 }
 

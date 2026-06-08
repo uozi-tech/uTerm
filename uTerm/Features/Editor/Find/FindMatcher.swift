@@ -71,4 +71,33 @@ nonisolated enum FindMatcher {
         }
         return isBoundary(before) && isBoundary(after)
     }
+
+    // MARK: - Replacement
+
+    /// 把一个匹配范围算出实际写入的替换文本。
+    /// - literal 模式：直接返回 `template`（按字面写入，`$1` 不展开）。
+    /// - regex 模式：用 `NSRegularExpression` 的 template 替换，`$1`/`$0` 等捕获组展开。
+    ///
+    /// regex 模式下需要重跑一次正则去定位 `range` 对应的 `NSTextCheckingResult`
+    /// —— 因为 capture-group 展开必须拿到那一次匹配的子组。无法定位（理论上不该
+    /// 发生：调用方传的 range 来自 `find`）或正则非法时，退回字面 template，绝不抛。
+    static func replacement(for range: NSRange,
+                            in text: String,
+                            query: String,
+                            template: String,
+                            options: Options) -> String {
+        guard options.regex else { return template }
+        var regexOptions: NSRegularExpression.Options = []
+        if !options.caseSensitive { regexOptions.insert(.caseInsensitive) }
+        guard let regex = try? NSRegularExpression(pattern: query, options: regexOptions) else {
+            return template
+        }
+        let ns = text as NSString
+        let searchRange = NSRange(location: 0, length: ns.length)
+        // 在全文里重跑一遍，按 range 精确定位那一次匹配 —— 不能用 firstMatch(in:range:)
+        // 限制到子范围搜，否则带 ^ / \b / lookaround 的模式在子范围里会错配或不配。
+        guard let match = regex.matches(in: text, range: searchRange).first(where: { $0.range == range })
+        else { return template }
+        return regex.replacementString(for: match, in: text, offset: 0, template: template)
+    }
 }
