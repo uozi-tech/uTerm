@@ -22,6 +22,8 @@ final class AssistantInputBarLayoutTests: XCTestCase {
         let testsURL = URL(fileURLWithPath: #filePath)
         let sourceURL = testsURL.deletingLastPathComponent()
             .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent("uTerm/DesignKit/Comms/UDComposer.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 

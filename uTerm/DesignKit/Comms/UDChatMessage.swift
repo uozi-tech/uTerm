@@ -7,6 +7,11 @@ import SwiftUI
 /// 一文件多原语：消息气泡 `UDChatMessage`、内联代码标签 `UDMonoTag`、
 /// 块级代码片 `UDCodeChip`。气泡靠 `@Environment(\.colorScheme)` 区分深浅样式。
 
+enum UDChatMessageLayout {
+    /// 用户消息气泡内容到圆角背景边界的四周内边距。
+    nonisolated static let userBubblePadding: CGFloat = UD.Space.lg
+}
+
 // MARK: - 对话气泡 ChatMessage
 
 /// 单条对话消息。`user`（深=描边软底胶囊 / 浅=accent 实底）；
@@ -72,8 +77,7 @@ struct UDChatMessage<Content: View>: View {
 
         if isUser {
             inner
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
+                .padding(UDChatMessageLayout.userBubblePadding)
                 .background(userBubbleBackground)
         } else {
             inner

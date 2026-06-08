@@ -5,6 +5,11 @@ import SwiftUI
 /// 全部为纯展示组件：进度值统一为 `Double`（0...1），不依赖任何 domain model。
 /// 颜色 / 度量均取自 UD token；进度填充为纯色（无发光），传输卡片带 `udShadow(.sm)`。
 
+enum UDTransferRowLayout {
+    /// 文件传输卡片内容到圆角背景边界的四周内边距。
+    nonisolated static let cardPadding: CGFloat = UD.Space.lg
+}
+
 // MARK: - 线性进度条
 
 /// 确定态线性进度条。轨道为半透明 Capsule，填充为 `color` 上色的纯色 Capsule，
@@ -143,8 +148,7 @@ struct UDTransferRow: View {
             .font(UD.mono(9.5))
             .foregroundStyle(UD.text4)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .padding(UDTransferRowLayout.cardPadding)
         .frame(width: 320)
         .background(
             RoundedRectangle(cornerRadius: UD.Radius.lg)

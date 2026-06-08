@@ -1,6 +1,11 @@
 import SwiftUI
 import SwiftData
 
+enum ServerFormLayout {
+    /// 表单内说明卡内容到圆角背景边界的四周内边距。
+    nonisolated static let infoCardPadding: CGFloat = UD.Space.lg
+}
+
 /// 新建 / 编辑一台服务器的模态表单（设计稿 `new-server.jsx`）。外观随全局主题。
 ///
 /// 字段写入 `ServerProfile`；密码写钟匙串（按 profile.id）；私钥改为**引用密钥库**
@@ -170,7 +175,7 @@ struct ServerFormView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
+                .padding(ServerFormLayout.infoCardPadding)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
                         .fill(UD.accent.opacity(0.07))

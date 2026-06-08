@@ -1,9 +1,14 @@
 // uTerm/Views/ServerRow.swift
 import SwiftUI
 
+enum ServerRowLayout {
+    /// Welcome 主列表行内容到选中/焦点背景边界的四周内边距。
+    nonisolated static let contentPadding: CGFloat = UD.Space.xl
+}
+
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
-/// 56pt 行高：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
+/// 等边内距：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
 /// 连接」相对时间与描边分组 chip。选中态用半透明叠底（浅深自适应），不再画左侧竖条
 /// —— 选中由更亮的底色 + 脉冲圆点 + 右侧详情面板共同表达。
 struct ServerRow: View {
@@ -51,8 +56,7 @@ struct ServerRow: View {
 
             UDGroupChip(groupLabel)
         }
-        .padding(.horizontal, 18)
-        .frame(height: 56)
+        .padding(ServerRowLayout.contentPadding)
         .background(rowBackground)
         .overlay(focusRing)
         .contentShape(Rectangle())
