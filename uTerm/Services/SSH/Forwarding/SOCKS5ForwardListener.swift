@@ -210,11 +210,12 @@ actor SOCKS5ForwardListener {
                 // 远端粘合子任务：作用域管 direct-tcpip 通道，双向泵。
                 let remoteAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
                     wrappingChannelSynchronously: directChannel)
-                remoteTask = Task {
+                remoteTask = Task { [bridge] in
                     await Self.glueRemote(
                         remoteAsync,
                         localChannel: localChannel,
                         localToRemote: localToRemote,
+                        bridge: bridge,
                         localOutbound: outbound)
                 }
 
@@ -254,6 +255,16 @@ actor SOCKS5ForwardListener {
     /// `localOutbound`（`NIOAsyncChannelOutboundWriter` 是 `Sendable`，跨任务写本地出站安全）。
     /// 用 `executeThenClose` 作用域管 direct-tcpip 通道生命周期 —— 闭包返回即关闭，防泄漏。
     ///
+    /// **优雅半关**：某方向读到 EOF 时只半关对端写端（`remoteOut.finish()` / `localOutbound.finish()`），
+    /// 另一方向继续把缓冲 / 在途字节排空，直到它也读到 EOF；两个方向**都**收尾后才返回。不要在第一个
+    /// 方向结束时就 `cancelAll()`，否则会截断仍在流动的对向响应。只有某方向**抛错**时才取消整组、抛出。
+    ///
+    /// 与 `TunnelGlue.pipe` 的对称两端不同：本地→目标这一向不是真 NIO 入站流，而是 `localToRemote`
+    /// **桥**，其结束由 `handleAccepted` 的本地读循环 `bridge.finish()` 控制。若目标→本地先读到 EOF
+    /// 却不收桥，本地→目标这向会一直阻塞在桥上、优雅排空永不完成 → 死锁。故目标→本地 EOF 时除半关
+    /// 本地写端外，**还要 `bridge.finish()`** 让桥消费向收尾。`AsyncStream.Continuation.finish()` 幂等，
+    /// `handleAccepted` 末尾再 `finish()` 一次无害。
+    ///
     /// 泄漏紧致性：远端先关时（目标→本地 EOF / 重置），本函数返回后必须主动关掉 `localChannel`，
     /// 否则 `handleAccepted` 里另一 Task 的本地读循环 `for try await … in inbound` 会一直阻塞在本地入站、
     /// 留下半开 socket 且本地→目标桥缓冲可无界增长。故本函数所有退出路径（远端 EOF / 出错 / 取消，
@@ -264,6 +275,7 @@ actor SOCKS5ForwardListener {
         _ remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         localChannel: Channel,
         localToRemote: AsyncStream<ByteBuffer>,
+        bridge: AsyncStream<ByteBuffer>.Continuation,
         localOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>
     ) async {
         do {
@@ -274,6 +286,7 @@ actor SOCKS5ForwardListener {
                         for await chunk in localToRemote {
                             try await remoteOut.write(chunk)
                         }
+                        // 桥结束（本地入站 EOF / 关闭）：半关目标写端，让目标→本地排空。
                         remoteOut.finish()
                     }
                     // 目标 → 本地。
@@ -281,10 +294,20 @@ actor SOCKS5ForwardListener {
                         for try await chunk in remoteIn {
                             try await localOutbound.write(chunk)
                         }
+                        // 目标 EOF：半关本地写端，并收桥让本地→目标这向收尾（否则它阻塞在桥上、
+                        // 优雅排空死锁）。`finish()` 幂等。
                         localOutbound.finish()
+                        bridge.finish()
                     }
-                    defer { group.cancelAll() }
-                    try await group.next()
+                    // 优雅排空：等**两个**方向都正常结束（各返回一次）。某方向先到 EOF 只半关对端
+                    // 写端、不取消对向。任一方向抛错才取消整组并抛出（交由外层 catch 吞掉），避免
+                    // 泄漏未结束的子任务。
+                    do {
+                        while try await group.next() != nil {}
+                    } catch {
+                        group.cancelAll()
+                        throw error
+                    }
                 }
             }
         } catch {
