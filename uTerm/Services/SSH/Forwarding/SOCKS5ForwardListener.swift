@@ -35,6 +35,9 @@ actor SOCKS5ForwardListener {
         let bootstrap = ServerBootstrap(group: eventLoop)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            // 半关键设(#6)：SOCKS 客户端发完请求半关写端(FIN)时不要整通道关闭，否则目标仍在
+            // 流式回包就被 glueRemote 取消截断。设 true 让对端 FIN 只让本地入站 EOF、出站仍可写。
+            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
             .childChannelInitializer { $0.eventLoop.makeSucceededVoidFuture() }
 
         let serverChannel = try await bootstrap.bind(host: listenHost, port: listenPort).get()
@@ -80,8 +83,11 @@ actor SOCKS5ForwardListener {
         connected: ConnectedClient
     ) async {
         do {
+            // 本地端开出站半关：glueRemote 在目标 EOF 后 localOutbound.finish() 向 SOCKS 客户端
+            // 发 FIN（默认 false 时只本地结束写端、不发 FIN）。
             let localAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                wrappingChannelSynchronously: localChannel)
+                wrappingChannelSynchronously: localChannel,
+                configuration: .init(isOutboundHalfClosureEnabled: true))
 
             try await localAsync.executeThenClose { inbound, outbound in
                 var phase = HandshakePhase.greeting
@@ -271,7 +277,9 @@ actor SOCKS5ForwardListener {
     /// 都会被下面 do/catch 收口、控制流必到函数末尾）末尾 `try? await localChannel.close()`：关本地
     /// → 读循环的 inbound 序列终止 → 其 `executeThenClose` 返回。`Channel.close()` 幂等，本地若已在
     /// 收尾（本地先关那条路径）则无害。
-    private static func glueRemote(
+    // internal(非 private)：让转发测试能直接驱动「目标→本地先 EOF 时 bridge.finish() 收桥、
+    // 避免本地→目标桥消费向死锁」这条最高风险路径(#6)。
+    static func glueRemote(
         _ remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         localChannel: Channel,
         localToRemote: AsyncStream<ByteBuffer>,

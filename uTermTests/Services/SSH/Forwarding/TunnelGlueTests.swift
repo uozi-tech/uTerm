@@ -135,4 +135,65 @@ final class TunnelGlueTests: XCTestCase {
         await stopB()
         try? await group.shutdownGracefully()
     }
+
+    /// FIX #6 回归：`SOCKS5ForwardListener.glueRemote` 在「目标→本地先 EOF」时必须自己
+    /// `bridge.finish()` 收桥 —— 否则「本地→目标」子任务会永远阻塞在 `for await … in localToRemote`
+    /// 上、`group.next()` 永不集齐两端、优雅排空**死锁**。
+    ///
+    /// 这里桥**不**从外部 finish：只能靠 glueRemote 在远端 EOF 时收桥。若回归（删掉
+    /// SOCKS5ForwardListener.swift 里目标→本地分支的 `bridge.finish()`），glueRemote 永不返回 →
+    /// `withTimeout` 触发、测试失败而非整套假死。消费形态贴合生产：glueRemote 在子 Task 跑（只用
+    /// Sendable 的 outbound/桥/远端通道），本地入站在 `executeThenClose` 主体里消费，避免把单消费者
+    /// 入站流跨 Task 发送（区域隔离会编译失败）。
+    func testGlueRemoteFinishesBridgeOnRemoteEOFAvoidsDeadlock() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+
+        // 远端「目标服务器」侧：立刻半关写端 → glueRemote 的 remoteIn 立刻 EOF（目标→本地先结束）；
+        // 再排空入站直到我方 remoteOut.finish() 的 FIN 到达。
+        let remotePeer: @Sendable (NIOAsyncChannel<ByteBuffer, ByteBuffer>) async -> Void = { ac in
+            try? await ac.executeThenClose { inbound, outbound in
+                outbound.finish()
+                for try await _ in inbound {}
+            }
+        }
+        // 本地「SOCKS 客户端」侧：保持连接，读到 EOF（glueRemote 末尾 close 本地通道）即返回。
+        let localPeer: @Sendable (NIOAsyncChannel<ByteBuffer, ByteBuffer>) async -> Void = { ac in
+            try? await ac.executeThenClose { inbound, _ in
+                for try await _ in inbound {}
+            }
+        }
+
+        let (remotePort, stopRemote) = try await startServer(group: group, handle: remotePeer)
+        let (localPort, stopLocal) = try await startServer(group: group, handle: localPeer)
+
+        let remoteAsync = try await connect(group: group, port: remotePort)
+        let localAsync = try await connect(group: group, port: localPort)
+        let localRaw = localAsync.channel
+
+        // 桥：故意**不**外部 finish —— 必须靠 glueRemote 在远端 EOF 时自己收桥。
+        let (localToRemote, bridge) = AsyncStream<ByteBuffer>.makeStream()
+
+        // withTimeout 的 operation 是非抛出闭包；用 try? 吸收 executeThenClose 的抛出
+        // （本测断言的是「不死锁/不超时」，而非内部数据正确性）。死锁则 withTimeout 抛超时、测试失败。
+        try await withTimeout(seconds: 10) {
+            try? await localAsync.executeThenClose { localIn, localOut in
+                // glueRemote 在子 Task 跑：只捕获 Sendable 的 localOut / 桥 / 远端通道，不碰 localIn。
+                let glueTask = Task {
+                    await SOCKS5ForwardListener.glueRemote(
+                        remoteAsync,
+                        localChannel: localRaw,
+                        localToRemote: localToRemote,
+                        bridge: bridge,
+                        localOutbound: localOut)
+                }
+                // 本地入站在主体消费到 EOF（glueRemote 收尾会 close localRaw → EOF）。
+                for try await _ in localIn {}
+                await glueTask.value
+            }
+        }
+
+        await stopRemote()
+        await stopLocal()
+        try? await group.shutdownGracefully()
+    }
 }
