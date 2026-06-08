@@ -1,6 +1,18 @@
 import SwiftUI
 import AppKit
 
+enum ServerChromeTitle {
+    nonisolated static func serverTitle(serverName: String, groupName: String?) -> String {
+        let group = groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !group.isEmpty else { return serverName }
+        return "\(serverName) · \(group)"
+    }
+
+    nonisolated static func sftpWindowTitle(serverName: String, groupName: String?) -> String {
+        "SFTP — \(serverTitle(serverName: serverName, groupName: groupName))"
+    }
+}
+
 /// 自绘工作区标题栏（替代系统 toolbar）——彻底脱离系统 Liquid Glass。
 /// 38px 扁平 UD.panel 条 + 底部 1px 描边：左侧让位窗口红绿灯后放「文件」开关，
 /// 居中服务器名 + 连接状态胶囊，右侧 Agent 开关。

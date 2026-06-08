@@ -28,7 +28,73 @@ enum SFTPFormat {
     }
 }
 
-/// 文件表：列头（名称/修改时间/大小/类型，可点击排序）+ `..` 行 + 文件行。
+struct SFTPFileTableColumnWidths: Equatable {
+    static let horizontalPadding: CGFloat = 16
+    static let iconWidth: CGFloat = 30
+    static let spacing: CGFloat = 12
+
+    private static let minimumName: CGFloat = 240
+    private static let maximumName: CGFloat = 720
+
+    private static let ownerRange: ClosedRange<CGFloat> = 88...112
+    private static let permissionsRange: ClosedRange<CGFloat> = 60...72
+    private static let modifiedRange: ClosedRange<CGFloat> = 132...156
+    private static let sizeRange: ClosedRange<CGFloat> = 64...84
+
+    let name: CGFloat
+    let owner: CGFloat
+    let permissions: CGFloat
+    let modified: CGFloat
+    let size: CGFloat
+
+    init(containerWidth: CGFloat) {
+        let contentWidth = max(0, containerWidth - Self.horizontalPadding * 2)
+        let fixedChrome = Self.iconWidth + Self.spacing * 5
+        let availableForColumns = max(0, contentWidth - fixedChrome)
+        let preferredMetadata = Self.preferredMetadataWidth
+        let minimumMetadata = Self.minimumMetadataWidth
+
+        if availableForColumns >= Self.minimumName + preferredMetadata {
+            owner = Self.ownerRange.upperBound
+            permissions = Self.permissionsRange.upperBound
+            modified = Self.modifiedRange.upperBound
+            size = Self.sizeRange.upperBound
+            name = min(Self.maximumName, availableForColumns - preferredMetadata)
+        } else if availableForColumns >= Self.minimumName + minimumMetadata {
+            let progress = (availableForColumns - Self.minimumName - minimumMetadata)
+                / (preferredMetadata - minimumMetadata)
+            owner = Self.interpolate(Self.ownerRange, progress: progress)
+            permissions = Self.interpolate(Self.permissionsRange, progress: progress)
+            modified = Self.interpolate(Self.modifiedRange, progress: progress)
+            size = Self.interpolate(Self.sizeRange, progress: progress)
+            name = Self.minimumName
+        } else {
+            owner = Self.ownerRange.lowerBound
+            permissions = Self.permissionsRange.lowerBound
+            modified = Self.modifiedRange.lowerBound
+            size = Self.sizeRange.lowerBound
+            name = max(120, availableForColumns - minimumMetadata)
+        }
+    }
+
+    var occupiedContentWidth: CGFloat {
+        Self.iconWidth + Self.spacing * 5 + name + owner + permissions + modified + size
+    }
+
+    private static var preferredMetadataWidth: CGFloat {
+        ownerRange.upperBound + permissionsRange.upperBound + modifiedRange.upperBound + sizeRange.upperBound
+    }
+
+    private static var minimumMetadataWidth: CGFloat {
+        ownerRange.lowerBound + permissionsRange.lowerBound + modifiedRange.lowerBound + sizeRange.lowerBound
+    }
+
+    private static func interpolate(_ range: ClosedRange<CGFloat>, progress: CGFloat) -> CGFloat {
+        range.lowerBound + (range.upperBound - range.lowerBound) * min(1, max(0, progress))
+    }
+}
+
+/// 文件表：列头（名称/所有者/权限/修改时间/大小，可点击排序）+ `..` 行 + 文件行。
 ///
 /// 刻意不用 SwiftUI `List` —— List 会套系统样式（蓝色选中胶囊 / 玻璃材质 / 固定
 /// inset），与设计稿暗色语言冲突。改用 ScrollView + LazyVStack + 手动 selectedID
@@ -51,34 +117,32 @@ struct SFTPFileTable: View {
 
     @FocusState private var focused: Bool
 
-    // 列宽（对齐设计稿 FileTableHeader / FileRow）：名称(flex) | 所有者 | 权限 | 修改时间 | 大小。
-    // 「类型」列已删（种类由图标 + 检视器表达），名称腾出更多宽度。
-    private let wOwner: CGFloat = 92
-    private let wPerm: CGFloat = 64
-    private let wMtime: CGFloat = 116
-    private let wSize: CGFloat = 60
-
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(UD.border).frame(height: 1)
-            if entries.isEmpty && !showParent {
-                Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
-                    .font(.system(size: 13)).foregroundStyle(UD.text4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                list
+        GeometryReader { proxy in
+            let widths = SFTPFileTableColumnWidths(containerWidth: proxy.size.width)
+
+            VStack(spacing: 0) {
+                header(widths)
+                Rectangle().fill(UD.border).frame(height: 1)
+                if entries.isEmpty && !showParent {
+                    Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
+                        .font(.system(size: 13)).foregroundStyle(UD.text4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    list(widths)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var list: some View {
+    private func list(_ widths: SFTPFileTableColumnWidths) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     if showParent { parentRow }
-                    ForEach(entries) { e in row(e).id(e.id) }
+                    ForEach(entries) { e in row(e, widths: widths).id(e.id) }
                 }
             }
             .focusable()
@@ -114,17 +178,18 @@ struct SFTPFileTable: View {
 
     // MARK: 列头
 
-    private var header: some View {
-        HStack(spacing: 12) {
+    private func header(_ widths: SFTPFileTableColumnWidths) -> some View {
+        HStack(spacing: SFTPFileTableColumnWidths.spacing) {
             // 与文件行 leading 图标（30）对齐——让「名称」列头压在文件名上方而非图标上。
-            Color.clear.frame(width: 30)
-            headerCell("名称", .name).frame(maxWidth: .infinity, alignment: .leading)
-            staticHeader("所有者").frame(width: wOwner, alignment: .leading)
-            staticHeader("权限").frame(width: wPerm, alignment: .leading)
-            headerCell("修改时间", .modified).frame(width: wMtime, alignment: .leading)
-            headerCell("大小", .size).frame(width: wSize, alignment: .trailing)
+            Color.clear.frame(width: SFTPFileTableColumnWidths.iconWidth)
+            headerCell("名称", .name).frame(width: widths.name, alignment: .leading)
+            staticHeader("所有者").frame(width: widths.owner, alignment: .leading)
+            staticHeader("权限").frame(width: widths.permissions, alignment: .leading)
+            headerCell("修改时间", .modified).frame(width: widths.modified, alignment: .leading)
+            headerCell("大小", .size).frame(width: widths.size, alignment: .trailing)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, SFTPFileTableColumnWidths.horizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 38)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isHeader)
@@ -178,31 +243,34 @@ struct SFTPFileTable: View {
 
     // MARK: 文件行
 
-    private func row(_ e: RemoteEntry) -> some View {
+    private func row(_ e: RemoteEntry, widths: SFTPFileTableColumnWidths) -> some View {
         let kind = BrowserFileKind.from(name: e.name, isDirectory: e.isDirectory, isSymlink: e.isSymlink)
         let selected = e.id == selectedID
-        let base = HStack(spacing: 12) {
-            SFTPFileIcon(kind: kind).frame(width: 30)
+        let base = HStack(spacing: SFTPFileTableColumnWidths.spacing) {
+            SFTPFileIcon(kind: kind).frame(width: SFTPFileTableColumnWidths.iconWidth)
             // 名称（权限已移到独立列，去掉原本的副标题）。
             Text(e.name).font(.system(size: 13.5))
                 .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // 所有者：uid · gid（SFTP 不返回用户名，按数字显示）。
-            Text(ownerText(e))
+                .frame(width: widths.name, alignment: .leading)
+            // 所有者：能解析用户名 / 组名时显示名字，否则回退 uid · gid。
+            Text(e.ownerDisplayText)
                 .font(UD.mono(12)).foregroundStyle(UD.text2)
                 .lineLimit(1).truncationMode(.tail)
-                .frame(width: wOwner, alignment: .leading)
+                .frame(width: widths.owner, alignment: .leading)
             // 权限：八进制 chip（hover 出完整 drwxr-xr-x）。
-            permChip(e).frame(width: wPerm, alignment: .leading)
+            permChip(e).frame(width: widths.permissions, alignment: .leading)
             Text(e.modifiedAt.map { SFTPFormat.date($0) } ?? "--")
-                .font(UD.mono(12)).foregroundStyle(UD.text3).lineLimit(1)
-                .frame(width: wMtime, alignment: .leading)
+                .font(UD.mono(12)).foregroundStyle(UD.text3)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(width: widths.modified, alignment: .leading)
             Text(e.isDirectory || e.size == nil
                  ? "--" : SFTPFormat.bytes(Int64(e.size!)))
                 .font(UD.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? UD.text2 : UD.text4)
-                .frame(width: wSize, alignment: .trailing)
+                .lineLimit(1)
+                .frame(width: widths.size, alignment: .trailing)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, SFTPFileTableColumnWidths.horizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 52)
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
@@ -244,11 +312,6 @@ struct SFTPFileTable: View {
         }
         if let m = e.modifiedAt { parts.append(SFTPFormat.date(m)) }
         return parts.joined(separator: "，")
-    }
-
-    /// 所有者展示：`uid · gid`（SFTP 协议不返回用户名，缺失显示 `?`）。
-    private func ownerText(_ e: RemoteEntry) -> String {
-        "\(e.uid.map(String.init) ?? "?") · \(e.gid.map(String.init) ?? "?")"
     }
 
     /// 八进制权限 chip：mono 11 + `UD.fillSoft` 底 + `UD.border` 描边胶囊；tooltip

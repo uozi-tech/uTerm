@@ -53,7 +53,7 @@ struct SFTPInspector: View {
             ("大小", sizeText, false),
             ("修改时间", item.modifiedAt.map { SFTPFormat.date($0) } ?? "--", false),
             ("权限", posixPermissionString(item.permissions), true),
-            ("所有者", "\(item.uid.map(String.init) ?? "?") · \(item.gid.map(String.init) ?? "?")", false),
+            ("所有者", item.ownerDisplayText, false),
         ]
         return VStack(spacing: 0) {
             ScrollView {

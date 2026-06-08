@@ -344,4 +344,29 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(GroupRowDeleteButtonLayout.hitWidth, 28)
         XCTAssertGreaterThanOrEqual(GroupRowDeleteButtonLayout.hitHeight, 28)
     }
+
+    func testGroupsManagerRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Groups/Views/GroupsManagerView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".focusable("))
+        XCTAssertFalse(source.contains(".focusEffectDisabled("))
+    }
+
+    func testGroupsManagerRenameInputDoesNotAutofocus() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Groups/Views/GroupsManagerView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("autoFocus: true"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

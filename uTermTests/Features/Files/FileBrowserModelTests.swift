@@ -54,6 +54,28 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(model.entries.map(\.name), ["etc", "a.txt"])
     }
 
+    func testRefreshResolvesOwnerAndGroupNamesFromStatOutput() async {
+        let entries = [
+            RemoteEntry(name: "etc", posixPermissions: 0o040755,
+                        size: nil, modifiedAt: nil, uid: 0, gid: 0),
+            RemoteEntry(name: "app.log", posixPermissions: 0o100644,
+                        size: 10, modifiedAt: nil, uid: 1001, gid: 1001),
+        ]
+        let mock = MockSFTP(tree: ["/srv": entries])
+        await mock.setExecOutput("0\t0\troot\troot\n1001\t1001\tdeploy\tdeploy\n")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/srv")
+
+        await model.refresh()
+
+        XCTAssertEqual(model.entries.map(\.ownerDisplayText),
+                       ["root · root", "deploy · deploy"])
+        let commands = await mock.execCommands
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertTrue(commands[0].contains("stat"))
+        XCTAssertTrue(commands[0].contains("/srv/etc"))
+        XCTAssertTrue(commands[0].contains("/srv/app.log"))
+    }
+
     func testNavigateIntoDirectory() async {
         let mock = MockSFTP(tree: [
             "/home/user": dir([("etc", true)]),

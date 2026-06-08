@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum ServerListLayout {
+    /// Welcome 主列表行贴齐列表列边界；行自身负责内容内距。
+    nonisolated static let contentPadding: CGFloat = 0
+    nonisolated static let rowSpacing: CGFloat = 0
+}
+
 /// 服务器列表（设计稿 Variant A）：左侧主机行 + 右侧滑入的详情面板。
 ///
 /// 纯展示组件，接受已过滤排序后的 profiles。上层（WelcomeView）负责数据过滤 /
@@ -11,19 +17,19 @@ struct ServerList: View {
     let profiles: [ServerProfile]
     let query: String
     @Binding var selectedID: UUID?
+    @Binding var draggingProfileID: UUID?
     let onOpen: (ServerProfile) -> Void
     let onContextAction: (ContextAction, ServerProfile) -> Void
     let existingGroups: [String]
+    let groupColorHexes: [String: String]
+    var rowDragEnabled = true
     var reorderEnabled = false
     var onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void = { _, _ in }
-
-    @State private var draggingProfileID: UUID?
 
     enum ContextAction: Equatable {
         case connect
         case openSFTP
         case togglePin
-        case copySSH
         case edit
         case moveToGroup(String?)    // nil → 未分组
         case newGroup
@@ -58,18 +64,21 @@ struct ServerList: View {
             noMatchState
         } else {
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: ServerListLayout.rowSpacing) {
                     ForEach(profiles) { profile in
                         ServerRow(profile: profile,
                                   query: query,
                                   isSelected: selectedID == profile.id,
+                                  groupColor: ServerGroupBadgeTint.color(for: profile.group,
+                                                                         in: groupColorHexes),
                                   onTap: { selectedID = profile.id },
                                   onDoubleTap: {
                                       selectedID = profile.id
                                       onContextAction(.connect, profile)
                                   })
                             .modifier(ServerRowDragModifier(
-                                enabled: reorderEnabled,
+                                dragEnabled: rowDragEnabled,
+                                reorderEnabled: reorderEnabled,
                                 profileID: profile.id,
                                 draggingProfileID: $draggingProfileID,
                                 onMove: onMove
@@ -77,6 +86,7 @@ struct ServerList: View {
                             .contextMenu { contextMenu(for: profile) }
                     }
                 }
+                .padding(ServerListLayout.contentPadding)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -116,7 +126,6 @@ struct ServerList: View {
         Button(profile.isPinned ? "取消置顶" : "置顶") {
             onContextAction(.togglePin, profile)
         }
-        Button("复制 SSH 连接") { onContextAction(.copySSH, profile) }
         Button("编辑…") { onContextAction(.edit, profile) }
         Menu("移动到分组") {
             ForEach(existingGroups, id: \.self) { g in
@@ -134,25 +143,32 @@ struct ServerList: View {
 }
 
 private struct ServerRowDragModifier: ViewModifier {
-    let enabled: Bool
+    let dragEnabled: Bool
+    let reorderEnabled: Bool
     let profileID: UUID
     @Binding var draggingProfileID: UUID?
     let onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        if enabled {
+        if !dragEnabled {
             content
-                .onDrag {
-                    draggingProfileID = profileID
-                    return NSItemProvider(object: "server" as NSString)
-                }
+        } else if reorderEnabled {
+            draggable(content)
                 .onDrop(of: [.text], delegate: ServerRowReorderDropDelegate(
                     targetID: profileID,
                     draggingProfileID: $draggingProfileID,
                     onMove: onMove
                 ))
         } else {
-            content
+            draggable(content)
+        }
+    }
+
+    private func draggable(_ content: Content) -> some View {
+        content.onDrag {
+            draggingProfileID = profileID
+            return NSItemProvider(object: "profile" as NSString)
         }
     }
 }

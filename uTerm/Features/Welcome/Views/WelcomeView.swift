@@ -10,6 +10,7 @@ struct WelcomeView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
+    @Query private var groups: [ServerGroup]
 
     @AppStorage("startupBehavior")
     private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
@@ -17,11 +18,18 @@ struct WelcomeView: View {
     @State private var filter = ServerFilter()
     @State private var formRoute: FormRoute?
     @State private var selectedProfileID: UUID?
+    @State private var draggingProfileID: UUID?
     @State private var pendingDelete: ServerProfile?
+    @State private var newGroupPrompt: NewGroupPrompt?
     @State private var didApplyStartupBehavior = false
     @State private var didReconcileGroups = false
     @State private var palette = CommandPaletteModel()
     @State private var isDropTargeted = false
+
+    private struct NewGroupPrompt: Identifiable {
+        let profile: ServerProfile
+        var id: UUID { profile.id }
+    }
 
     private enum FormRoute: Identifiable {
         case new
@@ -65,6 +73,13 @@ struct WelcomeView: View {
         }
     }
 
+    private var canDragVisibleProfiles: Bool {
+        #if DEBUG
+        guard TweaksModel.shared.welcomeSource == .real else { return false }
+        #endif
+        return true
+    }
+
     private var existingGroups: [String] {
         Set(displayProfiles.compactMap { p -> String? in
             let g = p.group ?? ""
@@ -72,12 +87,23 @@ struct WelcomeView: View {
         }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
+    private var groupColorHexes: [String: String] {
+        var result: [String: String] = [:]
+        for group in groups {
+            result[group.name] = group.colorHex
+        }
+        return result
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             WelcomeTitleBar()
             WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
             HStack(spacing: 0) {
-                WelcomeSidebar(profiles: displayProfiles, filter: $filter)
+                WelcomeSidebar(profiles: displayProfiles,
+                               filter: $filter,
+                               draggingProfileID: $draggingProfileID,
+                               onDropProfileToGroup: moveProfileToGroup)
                     .frame(width: 224)
                 bodyContent
             }
@@ -97,6 +123,12 @@ struct WelcomeView: View {
                 ServerFormView(editing: nil)
             case .edit(let p):
                 ServerFormView(editing: p)
+            }
+        }
+        .sheet(item: $newGroupPrompt) { prompt in
+            NewGroupPromptSheet(profileName: prompt.profile.name) { name in
+                assignNewGroup(named: name, to: prompt.profile)
+                newGroupPrompt = nil
             }
         }
         .confirmationDialog(
@@ -157,9 +189,12 @@ struct WelcomeView: View {
             ServerList(profiles: visibleProfiles,
                        query: filter.query,
                        selectedID: $selectedProfileID,
+                       draggingProfileID: $draggingProfileID,
                        onOpen: { openServer($0) },
                        onContextAction: handleContextAction,
                        existingGroups: existingGroups,
+                       groupColorHexes: groupColorHexes,
+                       rowDragEnabled: canDragVisibleProfiles,
                        reorderEnabled: canReorderVisibleProfiles,
                        onMove: moveVisibleProfile)
         }
@@ -321,11 +356,6 @@ struct WelcomeView: View {
         case .togglePin:
             profile.isPinned.toggle()
             try? modelContext.save()
-        case .copySSH:
-            let port = profile.port == 22 ? "" : " -p \(profile.port)"
-            let ssh = "ssh \(profile.username)@\(profile.host)\(port)"
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(ssh, forType: .string)
         case .edit:
             formRoute = .edit(profile)
         case .moveToGroup(let g):
@@ -333,28 +363,18 @@ struct WelcomeView: View {
             if let g { GroupStore(context: modelContext).ensure(name: g) }
             try? modelContext.save()
         case .newGroup:
-            promptForNewGroup(for: profile)
+            newGroupPrompt = NewGroupPrompt(profile: profile)
         case .delete:
             pendingDelete = profile
         }
     }
 
-    private func promptForNewGroup(for profile: ServerProfile) {
-        let alert = NSAlert()
-        alert.messageText = "新分组"
-        alert.informativeText = "为「\(profile.name)」指定一个新分组名："
-        alert.addButton(withTitle: "确定")
-        alert.addButton(withTitle: "取消")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        input.placeholderString = "分组名"
-        alert.accessoryView = input
-        if alert.runModal() == .alertFirstButtonReturn {
-            let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty {
-                profile.group = name
-                GroupStore(context: modelContext).ensure(name: name)
-                try? modelContext.save()
-            }
+    private func assignNewGroup(named rawName: String, to profile: ServerProfile) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            profile.group = name
+            GroupStore(context: modelContext).ensure(name: name)
+            try? modelContext.save()
         }
     }
 
@@ -369,6 +389,17 @@ struct WelcomeView: View {
         selectedProfileID = sourceID
         withAnimation(.easeInOut(duration: 0.18)) {
             ServerProfileStore(context: modelContext).reorderVisible(order, within: displayProfiles)
+        }
+    }
+
+    private func moveProfileToGroup(_ profileID: UUID, _ groupName: String?) {
+        #if DEBUG
+        if TweaksModel.shared.welcomeSource != .real { return }
+        #endif
+        guard let profile = allProfiles.first(where: { $0.id == profileID }) else { return }
+        selectedProfileID = profileID
+        withAnimation(.easeInOut(duration: 0.18)) {
+            handleContextAction(.moveToGroup(groupName), profile)
         }
     }
 
@@ -391,6 +422,61 @@ struct WelcomeView: View {
         modelContext.delete(profile)
         try? modelContext.save()
         if selectedProfileID == profile.id { selectedProfileID = nil }
+    }
+}
+
+private struct NewGroupPromptSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let profileName: String
+    let onSubmit: (String) -> Void
+
+    @State private var name = ""
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmit: Bool {
+        !trimmedName.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("新分组")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                Text("为「\(profileName)」指定一个新分组名：")
+                    .font(UD.caption)
+                    .foregroundStyle(UD.text3)
+            }
+
+            UDTextField(placeholder: "分组名", text: $name)
+                .onSubmit(submit)
+
+            HStack(spacing: 8) {
+                Spacer()
+                UDButton(title: "取消", style: .secondary) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                UDButton(title: "确定", style: .primary, action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSubmit)
+            }
+        }
+        .padding(22)
+        .frame(width: 360)
+        .background(UD.bg)
+        .onExitCommand {
+            dismiss()
+        }
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        onSubmit(trimmedName)
     }
 }
 

@@ -11,21 +11,39 @@ import SwiftUI
 /// 分组标签芯片（如「生产环境」「测试」）。低饱和描边胶囊。
 struct UDGroupChip: View {
     let label: String
+    let tint: Color?
 
-    init(_ label: String) {
+    init(_ label: String, tint: Color? = nil) {
         self.label = label
+        self.tint = tint
     }
 
     var body: some View {
         Text(label)
             .font(UD.caption)
-            .foregroundStyle(UD.text3)
+            .foregroundStyle(textColor)
             .padding(.vertical, 2)
             .padding(.horizontal, 8)
             .background(
                 RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                    .strokeBorder(UD.border, lineWidth: 1)
+                    .fill(fillColor)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
+                    .strokeBorder(strokeColor, lineWidth: 1)
+            )
+    }
+
+    private var textColor: Color {
+        tint ?? UD.text3
+    }
+
+    private var fillColor: Color {
+        tint?.opacity(0.10) ?? Color.clear
+    }
+
+    private var strokeColor: Color {
+        tint?.opacity(0.42) ?? UD.border
     }
 }
 

@@ -48,15 +48,18 @@ struct SFTPWindowView: View {
     /// 的结构保持一致。
     @ViewBuilder
     private func sftpBody(server: ServerProfile) -> some View {
+        let chromeTitle = ServerChromeTitle.serverTitle(serverName: server.name, groupName: server.group)
         VStack(spacing: 0) {
-            SFTPTitleBar(server: server, state: model.state,
+            SFTPTitleBar(server: server, serverTitle: chromeTitle, state: model.state,
                          onDisconnect: { model.dispose(); dismiss() })
             SFTPBrowserView(model: model, server: server,
                             openWorkspace: { openWorkspace(for: server) })
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: "SFTP — \(server.name)"))
+        .background(WorkspaceWindowChrome(serverName: ServerChromeTitle.sftpWindowTitle(
+            serverName: server.name,
+            groupName: server.group)))
         .hostKeySheet(model.hostKeyRelay)
         .task(id: windowID) {
             await model.connect(profile: server, modelContainer: modelContext.container)
@@ -84,6 +87,7 @@ struct SFTPWindowView: View {
 /// UD.panel 条 + 底部 1px 描边。彻底脱离系统 Liquid Glass。
 struct SFTPTitleBar: View {
     let server: ServerProfile
+    let serverTitle: String
     let state: FileBrowserModel.State
     let onDisconnect: () -> Void
 
@@ -97,6 +101,12 @@ struct SFTPTitleBar: View {
                 Text("SFTP")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UD.text)
+                Text(serverTitle)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(serverTitle)
                 Text("\(server.username)@\(server.host)")
                     .font(UD.mono(12))
                     .foregroundStyle(UD.text3)

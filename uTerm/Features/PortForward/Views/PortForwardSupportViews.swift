@@ -87,6 +87,14 @@ struct PortForwardDeleteConfirm: View {
 
 // MARK: - 表单原语（编辑器用，仿 GroupsManagerView 的 FormSection）
 
+enum PortForwardFormLayout {
+    static let compactFieldMinWidth: CGFloat = 104
+
+    static func minWidth(forFlex flex: Int?) -> CGFloat? {
+        flex == 1 ? compactFieldMinWidth : nil
+    }
+}
+
 /// 表单小节：标题（caption / text3）+ 内容。对齐设计稿 `FormSection`。
 struct FormSection<Content: View>: View {
     let title: String
@@ -137,7 +145,9 @@ struct FormField<Content: View>: View {
             }
             content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minWidth: PortForwardFormLayout.minWidth(forFlex: flex),
+               maxWidth: .infinity,
+               alignment: .leading)
         .layoutPriority(flex.map { Double($0) } ?? 1)
     }
 }

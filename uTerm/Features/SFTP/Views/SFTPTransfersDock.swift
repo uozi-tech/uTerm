@@ -1,5 +1,12 @@
 import SwiftUI
 
+enum SFTPTransfersDockLayout {
+    static let statusChipHeight: CGFloat = 22
+    static let statusIconFrame = CGSize(width: 12, height: statusChipHeight)
+    static let statusIconSize: CGFloat = 11
+    static let statusArrowYOffset: CGFloat = 1
+}
+
 /// SFTP 传输 Dock —— 状态栏自适应芯片 + 可展开的传输列表浮层。
 /// 对齐设计稿 `pages/sftp.jsx` 的 TransfersDock / TransfersPanel / TransferRow：
 ///   · 仅 1 个进行中 → 状态栏内联进度 + 取消 ✕
@@ -83,7 +90,8 @@ struct SFTPTransfersDock: View {
         let allUp = active.allSatisfy { $0.direction == .up }
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.up").font(.system(size: 11, weight: .medium)).foregroundStyle(UD.accent)
+                statusIcon("arrow.up", color: UD.accent, weight: .medium,
+                           yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
                 Text("\(allUp ? "上传" : "传输") \(active.count) 个文件").foregroundStyle(UD.text2)
                 UDLinearBar(progress: aggPct, height: 5).frame(width: 72)
                 Text("\(Int(aggPct * 100))%").font(UD.mono(11)).foregroundStyle(UD.text3)
@@ -107,7 +115,7 @@ struct SFTPTransfersDock: View {
                     Circle().fill(UD.danger).frame(width: 7, height: 7)
                     Text("\(failedCount) 个传输失败").foregroundStyle(UD.text2)
                 } else {
-                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(UD.success)
+                    statusIcon("checkmark", color: UD.success, size: 9, weight: .bold)
                     Text("传输完成").foregroundStyle(UD.text2)
                 }
                 chevron
@@ -121,7 +129,8 @@ struct SFTPTransfersDock: View {
     @ViewBuilder private var idleChip: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.up").font(.system(size: 11)).foregroundStyle(UD.text4)
+                statusIcon("arrow.up", color: UD.text4,
+                           yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
                 Text("无进行中的传输").foregroundStyle(UD.text4)
             }
             .font(.system(size: 11))
@@ -131,8 +140,21 @@ struct SFTPTransfersDock: View {
     }
 
     private func arrow(_ d: FileBrowserModel.TransferDirection) -> some View {
-        Image(systemName: d == .up ? "arrow.up" : "arrow.down")
-            .font(.system(size: 11, weight: .medium)).foregroundStyle(UD.accent)
+        statusIcon(d == .up ? "arrow.up" : "arrow.down", color: UD.accent, weight: .medium,
+                   yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
+    }
+    private func statusIcon(_ systemName: String,
+                            color: Color,
+                            size: CGFloat = SFTPTransfersDockLayout.statusIconSize,
+                            weight: Font.Weight = .regular,
+                            yOffset: CGFloat = 0) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: size, weight: weight))
+            .foregroundStyle(color)
+            .frame(width: SFTPTransfersDockLayout.statusIconFrame.width,
+                   height: SFTPTransfersDockLayout.statusIconFrame.height,
+                   alignment: .center)
+            .offset(y: yOffset)
     }
     private var chevron: some View {
         Image(systemName: open ? "chevron.up" : "chevron.down")

@@ -177,6 +177,7 @@ final class FileBrowserModel {
     private(set) var transientError: String?
     /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
     private(set) var transfers: [TransferItem] = []
+    private static let ownerStatChunkSize = 80
 
     /// 每个传输的不可展示状态：数据来源、取消句柄、测速采样点。
     /// MainActor 隔离，用 class 便于原地改可变字段。
@@ -312,7 +313,8 @@ final class FileBrowserModel {
             return
         }
         do {
-            entries = try await provider.list(path: currentPath)
+            let listed = try await provider.list(path: currentPath)
+            entries = await resolveOwnerNames(for: listed, provider: provider, directoryPath: currentPath)
             state = .browsing
             transientError = nil
         } catch {
@@ -370,7 +372,7 @@ final class FileBrowserModel {
         let linkPath = Self.join(currentPath, entry.name)
         if let targetEntries = try? await provider.list(path: linkPath) {
             currentPath = linkPath
-            entries = targetEntries
+            entries = await resolveOwnerNames(for: targetEntries, provider: provider, directoryPath: linkPath)
             state = .browsing
             transientError = nil
             return nil
@@ -825,6 +827,80 @@ final class FileBrowserModel {
     /// 内嵌单引号用 `'\''` 收尾再续。供 `chmod -R` 等命令拼接，杜绝路径注入 / 空格问题。
     static func shellQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private struct OwnerStatRow {
+        let uid: UInt32?
+        let gid: UInt32?
+        let ownerName: String?
+        let groupName: String?
+    }
+
+    private func resolveOwnerNames(for entries: [RemoteEntry],
+                                   provider: any SFTPProviding,
+                                   directoryPath: String) async -> [RemoteEntry] {
+        guard !entries.isEmpty else { return entries }
+        var resolved = entries
+        let indexedEntries = entries.enumerated()
+            .filter { $0.element.uid != nil || $0.element.gid != nil }
+            .map { (index: $0.offset, entry: $0.element) }
+        guard !indexedEntries.isEmpty else { return entries }
+
+        for start in stride(from: 0, to: indexedEntries.count, by: Self.ownerStatChunkSize) {
+            let end = min(start + Self.ownerStatChunkSize, indexedEntries.count)
+            let chunk = Array(indexedEntries[start..<end])
+            let paths = chunk.map { Self.join(directoryPath, $0.entry.name) }
+            let command = Self.ownerStatCommand(paths: paths)
+            guard let output = try? await provider.exec(command) else { continue }
+            let rows = Self.parseOwnerStatOutput(output)
+            guard rows.count == chunk.count else { continue }
+
+            for (indexed, row) in zip(chunk, rows) {
+                resolved[indexed.index] = Self.entry(indexed.entry, applying: row)
+            }
+        }
+        return resolved
+    }
+
+    private static func entry(_ entry: RemoteEntry, applying row: OwnerStatRow) -> RemoteEntry {
+        let uid = row.uid ?? entry.uid
+        let gid = row.gid ?? entry.gid
+        let ownerName = row.uid == entry.uid || entry.uid == nil ? row.ownerName : nil
+        let groupName = row.gid == entry.gid || entry.gid == nil ? row.groupName : nil
+        return entry.withOwnerInfo(
+            uid: uid,
+            gid: gid,
+            ownerName: ownerName,
+            groupName: groupName)
+    }
+
+    private static func ownerStatCommand(paths: [String]) -> String {
+        let quotedPaths = paths.map(shellQuote).joined(separator: " ")
+        let gnuFormat = shellQuote("%u\t%g\t%U\t%G")
+        let bsdFormat = shellQuote("%u\t%g\t%Su\t%Sg")
+        return "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || " +
+            "stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null"
+    }
+
+    private static func parseOwnerStatOutput(_ output: String) -> [OwnerStatRow] {
+        output.split(whereSeparator: \.isNewline).compactMap { line in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 4 else { return nil }
+            let uid = UInt32(fields[0])
+            let gid = UInt32(fields[1])
+            return OwnerStatRow(
+                uid: uid,
+                gid: gid,
+                ownerName: normalizedOwnerName(fields[2], numericID: uid),
+                groupName: normalizedOwnerName(fields[3], numericID: gid))
+        }
+    }
+
+    private static func normalizedOwnerName(_ raw: Substring, numericID: UInt32?) -> String? {
+        let value = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value != "UNKNOWN", value != "?" else { return nil }
+        if let numericID, value == String(numericID) { return nil }
+        return value
     }
 
     private static func canMoveRemoteDragItem(sourcePath: String,

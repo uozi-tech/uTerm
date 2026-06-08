@@ -6,6 +6,15 @@ enum ServerRowLayout {
     nonisolated static let contentPadding: CGFloat = UD.Space.xl
 }
 
+enum ServerGroupBadgeTint {
+    nonisolated static func color(for groupName: String?, in groupColorHexes: [String: String]) -> Color? {
+        guard let groupName, !groupName.isEmpty,
+              let colorHex = groupColorHexes[groupName] else { return nil }
+        let rgb = groupHexRGB(colorHex)
+        return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
+    }
+}
+
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
 /// 等边内距：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
@@ -15,68 +24,60 @@ struct ServerRow: View {
     let profile: ServerProfile
     let query: String
     let isSelected: Bool
+    let groupColor: Color?
     let onTap: () -> Void
     let onDoubleTap: () -> Void
 
     @State private var hover = false
-    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
-            UDHostDot(pulse: isSelected)
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                UDHostDot(color: groupColor ?? UD.accent, pulse: isSelected)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(HighlightedText.attributed(profile.name, highlighting: query))
-                        .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(UD.text)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(profile.name)
-                    if profile.isPinned {
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(UD.warning)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(HighlightedText.attributed(profile.name, highlighting: query))
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(UD.text)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(profile.name)
+                        if profile.isPinned {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(UD.warning)
+                        }
                     }
+                    Text(HighlightedText.attributed(profile.displayEndpoint, highlighting: query))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(UD.text3)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(profile.displayEndpoint)
                 }
-                Text(HighlightedText.attributed(profile.displayEndpoint, highlighting: query))
-                    .font(.system(size: 12, design: .monospaced))
+
+                Spacer(minLength: 6)
+
+                Text(WelcomeFormat.relative(profile.lastConnectedAt))
+                    .font(.system(size: 11))
                     .foregroundStyle(UD.text3)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(profile.displayEndpoint)
+
+                UDGroupChip(groupLabel, tint: groupColor)
             }
-
-            Spacer(minLength: 6)
-
-            Text(WelcomeFormat.relative(profile.lastConnectedAt))
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
-
-            UDGroupChip(groupLabel)
+            .padding(ServerRowLayout.contentPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding(ServerRowLayout.contentPadding)
+        .buttonStyle(.plain)
         .background(rowBackground)
-        .overlay(focusRing)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture(count: 2) { onDoubleTap() }
-        .onTapGesture { onTap() }
-        .focusable()
-        .focused($focused)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { onDoubleTap() })
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.name)，\(profile.displayEndpoint)")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-
-    /// 键盘焦点环：accent 描边，仅在该行获得焦点时可见（鼠标点选不画）。
-    @ViewBuilder
-    private var focusRing: some View {
-        if focused {
-            Rectangle()
-                .strokeBorder(UD.accent, lineWidth: 2)
-        }
     }
 
     private var groupLabel: String {

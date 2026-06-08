@@ -10,6 +10,10 @@ enum UDTabCloseButtonLayout {
     nonisolated static let hitWidth: CGFloat = 28
     nonisolated static let hitHeight: CGFloat = 28
     nonisolated static let visibleSize: CGFloat = 22
+    nonisolated static let visibleLeadingInset: CGFloat = 0
+    nonisolated static var visibleTrailingInset: CGFloat {
+        hitWidth - visibleSize - visibleLeadingInset
+    }
     nonisolated static let iconSize: CGFloat = 9
     nonisolated static let cornerRadius: CGFloat = 5
 }
@@ -17,6 +21,8 @@ enum UDTabCloseButtonLayout {
 enum UDTabLayout {
     nonisolated static let leadingPadding: CGFloat = 12
     nonisolated static let trailingPadding: CGFloat = 4
+    nonisolated static let contentSpacing: CGFloat = 8
+    nonisolated static let closeButtonSpacing: CGFloat = 4
 }
 
 // MARK: - 编辑器 / 预览 Tab
@@ -47,23 +53,26 @@ struct UDPreviewTab: View {
         // macOS 上 `Button` 套 `Button` 时，外层控件会吞掉落在内层关闭按钮上的点击，
         // `onClose` 永不触发、tab 关不掉。手势会让位给子控件，内层关闭 `Button` 才能
         // 拦下自己区域的点击。
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 11))
-                .foregroundStyle(active ? UD.text2 : UD.text4)
+        HStack(spacing: 0) {
+            HStack(spacing: UDTabLayout.contentSpacing) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(active ? UD.text2 : UD.text4)
 
-            Text(name)
-                .font(UD.mono(12))
-                .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
+                Text(name)
+                    .font(UD.mono(12))
+                    .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
 
-            if dirty {
-                Circle()
-                    .fill(UD.accent)
-                    .frame(width: 6, height: 6)
+                if dirty {
+                    Circle()
+                        .fill(UD.accent)
+                        .frame(width: 6, height: 6)
+                }
             }
 
             UDTabCloseButton(isVisible: active || hovered,
                              action: onClose)
+                .padding(.leading, UDTabLayout.closeButtonSpacing)
         }
         .padding(.leading, UDTabLayout.leadingPadding)
         .padding(.trailing, UDTabLayout.trailingPadding)
@@ -136,17 +145,20 @@ struct UDTermTab: View {
         // macOS 上 `Button` 套 `Button` 时，外层控件会吞掉落在内层关闭按钮上的点击，
         // `onClose` 永不触发、tab 关不掉。手势会让位给子控件，内层关闭 `Button` 才能
         // 拦下自己区域的点击。
-        HStack(spacing: 8) {
-            Circle()
-                .fill(dotColor ?? (active ? UD.success : UD.text4))
-                .frame(width: 6, height: 6)
+        HStack(spacing: 0) {
+            HStack(spacing: UDTabLayout.contentSpacing) {
+                Circle()
+                    .fill(dotColor ?? (active ? UD.success : UD.text4))
+                    .frame(width: 6, height: 6)
 
-            Text(name)
-                .font(UD.mono(12))
-                .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
+                Text(name)
+                    .font(UD.mono(12))
+                    .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
+            }
 
             UDTabCloseButton(isVisible: active || hovered,
                              action: onClose)
+                .padding(.leading, UDTabLayout.closeButtonSpacing)
         }
         .padding(.leading, UDTabLayout.leadingPadding)
         .padding(.trailing, UDTabLayout.trailingPadding)
@@ -242,14 +254,17 @@ private struct UDTabCloseButton: View {
                 RoundedRectangle(cornerRadius: UDTabCloseButtonLayout.cornerRadius,
                                  style: .continuous)
                     .fill(hovered ? UD.rowHover : .clear)
-                    .frame(width: UDTabCloseButtonLayout.visibleSize,
-                           height: UDTabCloseButtonLayout.visibleSize)
                 Image(systemName: "xmark")
                     .font(.system(size: UDTabCloseButtonLayout.iconSize, weight: .semibold))
                     .foregroundStyle(isVisible || hovered ? UD.text3 : .clear)
             }
+            .frame(width: UDTabCloseButtonLayout.visibleSize,
+                   height: UDTabCloseButtonLayout.visibleSize)
+            .padding(.leading, UDTabCloseButtonLayout.visibleLeadingInset)
+            .padding(.trailing, UDTabCloseButtonLayout.visibleTrailingInset)
             .frame(width: UDTabCloseButtonLayout.hitWidth,
-                   height: UDTabCloseButtonLayout.hitHeight)
+                   height: UDTabCloseButtonLayout.hitHeight,
+                   alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

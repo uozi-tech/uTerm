@@ -81,11 +81,12 @@ struct WorkspaceWindowView: View {
     @ViewBuilder
     private func workspaceBody(server: ServerProfile,
                                windowID: WorkspaceWindowID) -> some View {
+        let chromeTitle = serverChromeTitle(for: server)
         VStack(spacing: 0) {
             // 自绘标题栏（替代系统 toolbar）：左「文件」开关 / 居中服务器名 + 状态
             // 胶囊 / 右 Agent 开关。彻底脱离系统 toolbar 及其 Liquid Glass。
             WorkspaceTitleBar(
-                serverName: server.name,
+                serverName: chromeTitle,
                 session: workspace.focusedTerminalSession(),
                 activeForwardCount: forwarding.activeCount(forServer: server.id),
                 onToggleSidebar: {
@@ -140,7 +141,7 @@ struct WorkspaceWindowView: View {
         // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明 WS 底 + 深色外观 +
         // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
         // 不可能再有系统玻璃。
-        .background(WorkspaceWindowChrome(serverName: server.name))
+        .background(WorkspaceWindowChrome(serverName: chromeTitle))
         // ⌘W：仅工作区窗口接管，按焦点先关内容、最后关窗口（见 handleCloseShortcut）。
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
@@ -273,6 +274,10 @@ struct WorkspaceWindowView: View {
             providers: providers,
             activeProviderIDString: activeProviderIDString))
         // .frame(minWidth:) 在 body 根（见上）。
+    }
+
+    private func serverChromeTitle(for server: ServerProfile) -> String {
+        ServerChromeTitle.serverTitle(serverName: server.name, groupName: server.group)
     }
 
     /// 工作区窗口的命令项：主机（连接=当前工作区开新 tab）/ 最近文件 / 命令 / 设置深链。

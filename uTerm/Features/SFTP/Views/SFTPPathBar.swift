@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum SFTPPathBarLayout {
+    nonisolated static let currentCrumbLeadingGap: CGFloat = 8
+
+    nonisolated static func leadingGapForCrumb(index: Int, isLast: Bool) -> CGFloat {
+        isLast && index > 0 ? currentCrumbLeadingGap : 0
+    }
+}
+
 /// 路径栏（50px）：后退/前进 + 可点击面包屑 + 过滤框 + 上传/新建/刷新 + 操作菜单。
 /// WS 暗色调色板，对齐设计稿 `pages/sftp.jsx` 的 `SftpPathBar`。
 struct SFTPPathBar: View {
@@ -114,6 +122,7 @@ struct SFTPPathBar: View {
         .background(RoundedRectangle(cornerRadius: 7)
             .fill(isLast ? UD.fillSoft : .clear))
         .hoverBackground(isLast ? .clear : UD.rowHover, cornerRadius: 7, isActive: isLast)
+        .padding(.leading, SFTPPathBarLayout.leadingGapForCrumb(index: i, isLast: isLast))
     }
 
     // MARK: 过滤

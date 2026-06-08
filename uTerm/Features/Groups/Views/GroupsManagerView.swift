@@ -338,7 +338,6 @@ private struct GroupRowView: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { onSelect() }
-        .focusable()
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -464,8 +463,7 @@ private struct GroupDetailView: View {
                 UDTextField(
                     placeholder: "分组名",
                     text: $renameDraft,
-                    errorMessage: renameError ? "名称不能为空或已存在" : nil,
-                    autoFocus: true
+                    errorMessage: renameError ? "名称不能为空或已存在" : nil
                 )
                 .frame(width: 220)
                 .onSubmit { _ = onCommitRename() }
