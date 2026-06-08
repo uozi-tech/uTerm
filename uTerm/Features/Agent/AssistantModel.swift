@@ -240,6 +240,10 @@ final class AssistantModel {
 
     /// 批准并执行某条工具调用；全部 resolved 后自动续轮。
     func approveAndRun(id: String) async {
+        // 仅在「待批准」态放行：流式（.streaming）/ 执行中（.running）期间，视图可能
+        // 已渲染出 pending 卡片，但状态机仍在飞行；此时点击会重入并并发起第二轮
+        // streamAssistantTurn，打乱消息顺序与状态。门禁 state 即可挡住。
+        guard state == .awaitingApproval else { return }
         guard let exec = executor,
               let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
@@ -260,6 +264,8 @@ final class AssistantModel {
 
     /// 跳过某条工具调用；全部 resolved 后自动续轮。
     func skip(id: String) async {
+        // 同 approveAndRun：仅「待批准」态放行，挡住流式/执行中期间的重入。
+        guard state == .awaitingApproval else { return }
         guard let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
         messages[mi].toolCalls[ci].status = .skipped

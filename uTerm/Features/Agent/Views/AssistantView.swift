@@ -378,6 +378,9 @@ struct AssistantView: View {
                     label: call.explanation ?? "运行命令",
                     command: call.command,
                     status: udStatus(call),
+                    // 仅在状态机真正进入「待批准」时才允许点运行/跳过；流式（卡片可能
+                    // 已渲染成 pending）期间禁用，避免在流未结束时触发状态机重入。
+                    approvalEnabled: model.state == .awaitingApproval,
                     onRun: { Task { await model.approveAndRun(id: call.id) } },
                     onSkip: { Task { await model.skip(id: call.id) } }
                 )

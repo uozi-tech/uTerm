@@ -23,6 +23,10 @@ struct UDToolCall: View {
     /// 待执行 / 已执行的命令文本。
     let command: String
     var status: Status = .pending
+    /// 待确认态审批是否可点。默认 `true`（纯展示/Gallery 场景）。
+    /// 接入状态机时由调用方仅在「真正等待批准」时置 `true`——流式仍在进行（卡片虽已
+    /// 渲染成 pending）时置 `false`，避免用户在流未结束时点「运行」触发状态机重入。
+    var approvalEnabled: Bool = true
     /// 待确认态「运行」回调。
     var onRun: () -> Void = {}
     /// 待确认态「跳过」回调。
@@ -37,6 +41,9 @@ struct UDToolCall: View {
         if case .running = status { return true }
         return false
     }
+
+    /// 审批按钮是否禁用：执行中，或调用方尚未进入「等待批准」（流式仍在飞行）。
+    private var approvalsDisabled: Bool { isRunning || !approvalEnabled }
 
     private var statusText: String {
         switch status {
@@ -156,7 +163,7 @@ struct UDToolCall: View {
                     } else {
                         Text("运行")
                             .font(UD.font(11.5, weight: .semibold))
-                            .foregroundStyle(UD.text)
+                            .foregroundStyle(approvalsDisabled ? UD.text4 : UD.text)
                         UDKbd("⌘↵")
                     }
                 }
@@ -164,21 +171,21 @@ struct UDToolCall: View {
                 .frame(height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                        .fill(UD.accent.opacity(0.12))
+                        .fill(UD.accent.opacity(approvalsDisabled ? 0.06 : 0.12))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                        .strokeBorder(UD.accent.opacity(0.4), lineWidth: 1)
+                        .strokeBorder(UD.accent.opacity(approvalsDisabled ? 0.2 : 0.4), lineWidth: 1)
                 )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isRunning)
+            .disabled(approvalsDisabled)
 
             Button(action: onSkip) {
                 Text("跳过")
                     .font(UD.font(11.5))
-                    .foregroundStyle(isRunning ? UD.text4 : UD.text3)
+                    .foregroundStyle(approvalsDisabled ? UD.text4 : UD.text3)
                     .padding(.horizontal, 12)
                     .frame(height: 26)
                     .overlay(
@@ -188,7 +195,7 @@ struct UDToolCall: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isRunning)
+            .disabled(approvalsDisabled)
 
             Spacer(minLength: 0)
 

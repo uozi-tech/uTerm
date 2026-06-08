@@ -87,6 +87,12 @@ nonisolated struct OpenAIClient: LLMClient {
                             continuation.yield(event)
                         }
                     }
+                    // EOF 兜底：有的兼容端点以 finish_reason "stop"/"length" 收尾且不发
+                    // [DONE]，累积的工具调用永不会在循环内 flush。这里无脑再 flush 一次；
+                    // 已 flush 过（[DONE] / "tool_calls"）时 parser 幂等返回空，不重复产出。
+                    for event in parser.flush() {
+                        continuation.yield(event)
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
