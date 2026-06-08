@@ -460,17 +460,39 @@ struct FileBrowserContent: View {
         let model = self.model
         let pendingBinding = $overwritePendingURLs
         let conflictBinding = $overwriteConflictNames
-        for provider in fileProviders {
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-                guard let data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                Task { @MainActor in
-                    Self.requestUpload([url], model: model,
-                                       pending: pendingBinding, conflicts: conflictBinding)
-                }
-            }
+        // 先把每个 provider 的 URL 全部 await 进一个批次，再 **一次性** 调
+        // requestUpload —— 这样批量冲突检查 + 单个覆盖确认覆盖所有被拖入的文件。
+        // 若像旧实现那样逐 provider 各调一次 requestUpload，多个冲突文件会争抢同一
+        // 组 @State binding，只有最后一个冲突会弹窗，其余静默入队。
+        Task { @MainActor in
+            let urls = await Self.collectDroppedURLs(from: fileProviders)
+            guard !urls.isEmpty else { return }
+            Self.requestUpload(urls, model: model,
+                               pending: pendingBinding, conflicts: conflictBinding)
         }
         return true
+    }
+
+    /// 把一批文件 provider 的 URL 依序异步取出，保持拖入顺序、跳过取不到的项。
+    /// nonisolated 纯算（只接 [NSItemProvider] → [URL]，不碰 self / @State）。
+    ///
+    /// 逐个 `await`（不用 withTaskGroup）：`NSItemProvider` 非 Sendable，放进任务组的并发子任务
+    /// 闭包会被判为 'sending' 数据竞争。`withCheckedContinuation` 的 body 在当前上下文内联执行，
+    /// 故捕获 `provider` 不跨并发边界；`loadDataRepresentation` 的 @Sendable 回调只回传 Sendable 的
+    /// `Data`。拖入文件数很少，串行取 URL 足够。
+    private nonisolated static func collectDroppedURLs(from providers: [NSItemProvider]) async -> [URL] {
+        var urls: [URL] = []
+        for provider in providers {
+            let url = await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
+                _ = provider.loadDataRepresentation(
+                    forTypeIdentifier: UTType.fileURL.identifier
+                ) { data, _ in
+                    cont.resume(returning: data.flatMap { URL(dataRepresentation: $0, relativeTo: nil) })
+                }
+            }
+            if let url { urls.append(url) }
+        }
+        return urls
     }
 
     /// 上传前先查远端是否有同名文件：有冲突则弹覆盖确认（镜像删除确认），

@@ -598,6 +598,37 @@ final class FileBrowserModelTests: XCTestCase {
         let conflicts = await model.existingRemoteNames(uploadFileNames: ["a.txt"])
         XCTAssertTrue(conflicts.isEmpty, "列目录失败应返回空，宁可走正常上传也不误报覆盖")
     }
+
+    /// 一批文件里有多个同名冲突时，**全部**冲突都要报出来 —— 拖入多文件修复的核心：
+    /// 单个覆盖确认要覆盖整批所有冲突文件，而不是只剩最后一个。
+    func testExistingRemoteNamesReportsAllConflictsInBatch() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("a.txt", false), ("b.txt", false), ("c.txt", false)]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let conflicts = await model.existingRemoteNames(
+            uploadFileNames: ["a.txt", "b.txt", "c.txt", "new.txt"])
+        XCTAssertEqual(Set(conflicts), ["a.txt", "b.txt", "c.txt"],
+                       "整批里全部同名冲突都应报出，单个覆盖确认才能覆盖所有被拖入文件")
+    }
+
+    /// 通过 forUploading: 的 URL 入口同样要报全部冲突（拖放 / 文件选择器走这条）。
+    func testExistingRemoteNamesForUploadingURLsReportsAllConflicts() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("a.txt", false), ("b.txt", false)]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let urls = [
+            URL(fileURLWithPath: "/local/a.txt"),
+            URL(fileURLWithPath: "/local/b.txt"),
+            URL(fileURLWithPath: "/local/fresh.txt"),
+        ]
+        let conflicts = await model.existingRemoteNames(forUploading: urls)
+        XCTAssertEqual(Set(conflicts), ["a.txt", "b.txt"],
+                       "URL 入口也应报出整批全部冲突")
+    }
 }
 
 enum SFTPTestError: Error { case boom }
