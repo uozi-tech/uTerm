@@ -14,11 +14,18 @@ enum KeychainError: Error {
     case dataEncodingFailed
 }
 
+/// 读取一条钥匙串密钥的最小可注入接口。`SSHAuthResolver` 据此解析认证材料，
+/// 单测可注入抛错 / not-found 的桩，端到端驱动「钥匙串被锁」与「条目不存在」两条路径。
+nonisolated protocol KeychainReading {
+    /// 条目不存在返回 `nil`；其余错误（钥匙串被锁、`errSecAuthFailed` 等）抛出。
+    func load(profileID: UUID, kind: SecretKind) throws -> String?
+}
+
 /// 对 macOS 钥匙串的封装。所有写入条目设 `kSecAttrSynchronizable = true`，
 /// 从而通过 iCloud Keychain 端到端加密同步到用户的其它设备。
 ///
 /// `nonisolated`：纯非 UI 工具类型，仅与 Security 框架交互，无需 MainActor 隔离。
-nonisolated struct KeychainStore {
+nonisolated struct KeychainStore: KeychainReading {
     private let service: String
 
     init(service: String = "com.uozi.uTerm") {

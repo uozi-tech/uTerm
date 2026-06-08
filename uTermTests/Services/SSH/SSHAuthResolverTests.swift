@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import uTerm
 
@@ -161,5 +162,92 @@ final class SSHAuthResolverTests: XCTestCase {
         XCTAssertNotEqual(SSHAuthError.keychainAccessFailed("locked"), .missingPassword)
         XCTAssertEqual(SSHAuthError.keychainAccessFailed("locked"),
                        .keychainAccessFailed("locked"))
+    }
+
+    // MARK: - 钥匙串读取抛错的端到端路径（Fix #15-residual）
+
+    /// 注入用桩：可配置每种 `SecretKind` 的读取结果（抛错 / 返回值 / not-found=nil）。
+    /// 让 `SSHAuthResolver.resolve(profile:keychain:)` 在「钥匙串被锁」场景下被端到端驱动，
+    /// 而不必真正锁住用户钥匙串。
+    private struct StubKeychain: KeychainReading {
+        /// 各 kind 的行为：`.success(nil)` = not-found，`.success(v)` = 命中，`.failure` = 抛错。
+        var results: [SecretKind: Result<String?, Error>]
+
+        func load(profileID: UUID, kind: SecretKind) throws -> String? {
+            switch results[kind] ?? .success(nil) {
+            case .success(let value): return value
+            case .failure(let error): throw error
+            }
+        }
+    }
+
+    /// Fix #15-residual：私钥认证下，私钥读取**抛错**（钥匙串被锁 / `errSecAuthFailed`）时，
+    /// resolve 必须包成 `keychainAccessFailed` 上抛，而**不是**误报成 `missingPrivateKey`。
+    func testKeychainOverloadPrivateKeyThrowYieldsKeychainAccessFailed() {
+        let profile = ServerProfile()
+        profile.username = "deploy"
+        profile.authMethod = .privateKey
+        let stub = StubKeychain(results: [
+            .privateKey: .failure(KeychainError.unexpectedStatus(errSecAuthFailed)),
+        ])
+        XCTAssertThrowsError(try SSHAuthResolver.resolve(profile: profile, keychain: stub)) {
+            guard case .keychainAccessFailed = $0 as? SSHAuthError else {
+                return XCTFail("应为 .keychainAccessFailed，实际：\(String(describing: $0 as? SSHAuthError))")
+            }
+        }
+    }
+
+    /// Fix #15-residual：keyID 名下私钥读取抛错时同样上抛 `keychainAccessFailed`——
+    /// keyID 路径下钥匙串错误不会被静默吞掉当作「条目不存在」而回退。
+    func testKeychainOverloadKeyIDPrivateKeyThrowYieldsKeychainAccessFailed() {
+        let profile = ServerProfile()
+        profile.username = "deploy"
+        profile.authMethod = .privateKey
+        profile.keyID = UUID()
+        let stub = StubKeychain(results: [
+            .privateKey: .failure(KeychainError.unexpectedStatus(errSecAuthFailed)),
+        ])
+        XCTAssertThrowsError(try SSHAuthResolver.resolve(profile: profile, keychain: stub)) {
+            guard case .keychainAccessFailed = $0 as? SSHAuthError else {
+                return XCTFail("应为 .keychainAccessFailed，实际：\(String(describing: $0 as? SSHAuthError))")
+            }
+        }
+    }
+
+    /// Fix #15-residual：密码认证下，密码读取**抛错**时上抛 `keychainAccessFailed`，
+    /// 而非误报 `missingPassword`。
+    func testKeychainOverloadPasswordThrowYieldsKeychainAccessFailed() {
+        let profile = ServerProfile()
+        profile.username = "root"
+        profile.authMethod = .password
+        let stub = StubKeychain(results: [
+            .password: .failure(KeychainError.unexpectedStatus(errSecAuthFailed)),
+        ])
+        XCTAssertThrowsError(try SSHAuthResolver.resolve(profile: profile, keychain: stub)) {
+            guard case .keychainAccessFailed = $0 as? SSHAuthError else {
+                return XCTFail("应为 .keychainAccessFailed，实际：\(String(describing: $0 as? SSHAuthError))")
+            }
+        }
+    }
+
+    /// Fix #15-residual（对照组）：所有 kind 都是 not-found（桩返回 nil）时仍走原有
+    /// `missingPrivateKey` 路径——确认抛错与 not-found 经同一注入接口被正确区分。
+    func testStubKeychainNotFoundPrivateKeyThrowsMissingPrivateKey() {
+        let profile = ServerProfile()
+        profile.authMethod = .privateKey
+        let stub = StubKeychain(results: [:])  // 全部默认 .success(nil) = not-found
+        XCTAssertThrowsError(try SSHAuthResolver.resolve(profile: profile, keychain: stub)) {
+            XCTAssertEqual($0 as? SSHAuthError, .missingPrivateKey)
+        }
+    }
+
+    /// Fix #15-residual（对照组）：密码认证下全 not-found 仍走 `missingPassword`。
+    func testStubKeychainNotFoundPasswordThrowsMissingPassword() {
+        let profile = ServerProfile()
+        profile.authMethod = .password
+        let stub = StubKeychain(results: [:])
+        XCTAssertThrowsError(try SSHAuthResolver.resolve(profile: profile, keychain: stub)) {
+            XCTAssertEqual($0 as? SSHAuthError, .missingPassword)
+        }
     }
 }

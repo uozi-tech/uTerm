@@ -51,7 +51,7 @@ nonisolated enum SSHAuthResolver {
     /// 的旧私钥。密码始终按 `profile.id` 取。
     nonisolated static func resolve(
         profile: ServerProfile,
-        keychain: KeychainStore
+        keychain: some KeychainReading
     ) throws -> ResolvedAuth {
         let privateKey: String?
         let passphrase: String?
@@ -77,7 +77,7 @@ nonisolated enum SSHAuthResolver {
     /// 读取一条钥匙串密钥：条目不存在返回 `nil`（沿用 `KeychainStore.load` 的语义），
     /// 其余任何错误（钥匙串被锁等）包成 `SSHAuthError.keychainAccessFailed` 上抛。
     private nonisolated static func load(
-        _ keychain: KeychainStore,
+        _ keychain: some KeychainReading,
         profileID: UUID,
         kind: SecretKind
     ) throws -> String? {
