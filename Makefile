@@ -65,7 +65,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
 	build archive export-app test clean dmg dmg-background sign-release-app install verify \
-	verify-distribution-signing require-distribution-identity notarize staple \
+	verify-distribution-signing notarize staple \
 	release tag notify sparkle-tools sparkle-keys appcast publish distribute dry-run
 
 help:
@@ -212,7 +212,7 @@ verify:
 	test -d "$(EXPORT_APP)"
 	codesign --verify --deep --strict --verbose=2 "$(EXPORT_APP)"
 	@spctl --assess --type execute --verbose "$(EXPORT_APP)" 2>&1 || \
-		printf '%s\n' 'Gatekeeper rejected the app. Build with CODE_SIGN_IDENTITY="Developer ID Application".'
+		printf '%s\n' 'Gatekeeper rejected the app. Ensure Xcode is signed in to an Apple ID with a "Developer ID Application" certificate for TEAM_ID, then re-run make release.'
 	@if [ -f "$(DMG_PATH)" ]; then \
 		spctl --assess --type open --verbose "$(DMG_PATH)" 2>&1 || \
 		printf '%s\n' 'DMG Gatekeeper assessment pending (expected before notarize+staple).'; \
@@ -223,21 +223,13 @@ verify-distribution-signing:
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
 	@sign_info=$$(codesign -dv --verbose=4 "$(EXPORT_APP)" 2>&1); \
 	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Developer ID Application'; then \
-		printf '%s\n' 'ERROR: App is not signed with a Developer ID Application certificate.'; \
-		printf '%s\n' '  make dmg CODE_SIGN_IDENTITY="Developer ID Application"'; \
+		printf '%s\n' 'ERROR: Exported app is not signed with a Developer ID Application certificate.'; \
+		printf '%s\n' '  The release flow uses automatic developer-id signing via xcodebuild -exportArchive.'; \
+		printf '%s\n' '  Ensure Xcode is signed in to an Apple ID with a "Developer ID Application"'; \
+		printf '%s\n' "  certificate for TEAM_ID=$(TEAM_ID), then re-run make release."; \
 		printf '%s\n' "$$sign_info" | grep '^Authority=' || true; \
 		exit 1; \
 	fi
-
-require-distribution-identity:
-	@if [ -z "$(CODE_SIGN_IDENTITY)" ]; then \
-		printf '%s\n' 'ERROR: CODE_SIGN_IDENTITY is required for release builds.'; \
-		exit 1; \
-	fi
-	@case "$(CODE_SIGN_IDENTITY)" in \
-		*Developer\ ID\ Application*) ;; \
-		*) printf '%s\n' 'ERROR: CODE_SIGN_IDENTITY must be a Developer ID Application certificate.'; exit 1 ;; \
-	esac
 
 notarize: verify-distribution-signing
 	@if [ -z "$(NOTARY_PROFILE)" ]; then printf '%s\n' 'ERROR: NOTARY_PROFILE is required.'; exit 1; fi
@@ -263,7 +255,12 @@ tag:
 		printf '%s\n' "Created tag v$$v. Push with: git push origin v$$v"; \
 	fi
 
-release: require-distribution-identity clean dmg verify notarize staple
+# The release artifact is produced by archive + export with AUTOMATIC developer-id
+# signing (tied to the Xcode-logged-in Apple ID + TEAM_ID); CODE_SIGN_IDENTITY /
+# SIGNING_ARGS do NOT affect it (they only feed the non-release `build`/`sign-release-app`
+# targets). So the real gate is `verify-distribution-signing`, which greps the exported
+# app's codesign output for "Authority=Developer ID Application" after export.
+release: clean dmg verify-distribution-signing verify notarize staple
 
 sparkle-tools:
 	@if [ -x "$(GENERATE_APPCAST)" ]; then \
