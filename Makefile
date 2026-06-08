@@ -27,6 +27,19 @@ TIMESTAMP_ARG := $(if $(CODE_SIGN_IDENTITY),OTHER_CODE_SIGN_FLAGS=--timestamp,)
 ENTITLEMENTS_ARG := $(if $(CODE_SIGN_IDENTITY),CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO,)
 SIGNING_ARGS := CODE_SIGN_STYLE=$(CODE_SIGN_STYLE) ENABLE_HARDENED_RUNTIME=YES $(DEVELOPMENT_TEAM_ARG) $(CODE_SIGN_IDENTITY_ARG) $(TIMESTAMP_ARG) $(ENTITLEMENTS_ARG)
 
+# Developer ID distribution uses an archive + export flow (not a plain `build`). The app
+# target carries iCloud / CloudKit entitlements, which require a Developer ID provisioning
+# profile that includes the iCloud.com.uozi.uTerm container. `xcodebuild -exportArchive`
+# with method=developer-id (automatic signing + -allowProvisioningUpdates) mints/refreshes
+# that profile via your Apple Developer account, applies it to the app target only (SPM
+# framework targets do not take profiles), and produces a Developer-ID-signed, hardened,
+# timestamped, notarizable app with the profile embedded. Requires Xcode signed in to an
+# Apple ID with access to TEAM_ID and a "Developer ID Application" certificate.
+ARCHIVE_PATH := $(BUILD_DIR)/$(APP_NAME).xcarchive
+EXPORT_DIR := $(BUILD_DIR)/export
+EXPORT_APP := $(EXPORT_DIR)/$(APP_NAME).app
+EXPORT_OPTIONS := $(BUILD_DIR)/export-options.plist
+
 INSTALL_DIR := /Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
@@ -51,7 +64,7 @@ APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
-	build test clean dmg dmg-background sign-release-app install verify \
+	build archive export-app test clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing require-distribution-identity notarize staple \
 	release tag notify sparkle-tools sparkle-keys appcast publish distribute dry-run
 
@@ -62,14 +75,16 @@ help:
 	@printf '%s\n' '  make set-version VERSION=x.y.z         Set the semantic version'
 	@printf '%s\n' '  make bump-patch|bump-minor|bump-major  Increment the semantic version'
 	@printf '%s\n' '  make build                             Build the macOS app in Release mode'
+	@printf '%s\n' '  make archive                           Archive the app (automatic signing)'
+	@printf '%s\n' '  make export-app                        Export a Developer ID-signed app from the archive'
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
-	@printf '%s\n' '  make dmg                               Build and package build/uTerm.dmg'
+	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
 	@printf '%s\n' '  make verify                            Verify app signing / Gatekeeper'
 	@printf '%s\n' '  make notarize                          Submit the DMG for notarization'
 	@printf '%s\n' '  make staple                            Staple the notarization ticket'
-	@printf '%s\n' '  make release                           Build, package, verify, notarize, staple, tag'
+	@printf '%s\n' '  make release                           Archive, export, package, verify, notarize, staple'
 	@printf '%s\n' '  make sparkle-tools                     Download Sparkle CLI tools'
 	@printf '%s\n' '  make sparkle-keys                      Generate the one-time Sparkle EdDSA keypair'
 	@printf '%s\n' '  make appcast                           Stage DMG and generate appcast.xml'
@@ -107,6 +122,43 @@ build:
 		$(SIGNING_ARGS) \
 		build
 
+# Archive with automatic signing (development); the Developer ID profile + re-signing
+# happen at the export-app step. Kept separate so a failed export does not waste the build.
+archive:
+	rm -rf "$(ARCHIVE_PATH)"
+	xcodebuild archive \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(CONFIGURATION)" \
+		-destination "generic/platform=macOS" \
+		-archivePath "$(ARCHIVE_PATH)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-allowProvisioningUpdates \
+		CODE_SIGN_STYLE=Automatic \
+		DEVELOPMENT_TEAM=$(TEAM_ID) \
+		ENABLE_HARDENED_RUNTIME=YES
+
+# Export a Developer ID-signed, notarizable app (profile minted/embedded for the app target).
+export-app: archive
+	rm -rf "$(EXPORT_DIR)"
+	@printf '%s\n' \
+		'<?xml version="1.0" encoding="UTF-8"?>' \
+		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		'<plist version="1.0">' \
+		'<dict>' \
+		'	<key>method</key><string>developer-id</string>' \
+		'	<key>teamID</key><string>$(TEAM_ID)</string>' \
+		'	<key>signingStyle</key><string>automatic</string>' \
+		'</dict>' \
+		'</plist>' > "$(EXPORT_OPTIONS)"
+	xcodebuild -exportArchive \
+		-archivePath "$(ARCHIVE_PATH)" \
+		-exportPath "$(EXPORT_DIR)" \
+		-exportOptionsPlist "$(EXPORT_OPTIONS)" \
+		-allowProvisioningUpdates
+	test -d "$(EXPORT_APP)"
+	@printf '%s\n' "Exported Developer ID app: $(EXPORT_APP)"
+
 test:
 	xcodebuild \
 		-project "$(PROJECT)" \
@@ -123,18 +175,18 @@ dmg-background:
 	mkdir -p "$(BUILD_DIR)"
 	python3 scripts/generate-dmg-background.py "$(DMG_BG)"
 
-dmg: build sign-release-app dmg-background
-	test -d "$(APP_PATH)"
+dmg: export-app dmg-background
+	test -d "$(EXPORT_APP)"
 	rm -f "$(DMG_PATH)" "$(DMG_RW)"
 	hdiutil detach "$(DMG_MOUNT)" 2>/dev/null || true
 	hdiutil create -size 200m -fs HFS+ -volname "$(APP_NAME)" "$(DMG_RW)"
 	hdiutil attach "$(DMG_RW)" -noautoopen -mountpoint "$(DMG_MOUNT)"
-	cp -R "$(APP_PATH)" "$(DMG_MOUNT)/"
+	cp -R "$(EXPORT_APP)" "$(DMG_MOUNT)/"
 	ln -s /Applications "$(DMG_MOUNT)/Applications"
 	mkdir -p "$(DMG_MOUNT)/.background"
 	cp "$(DMG_BG)" "$(DMG_MOUNT)/.background/"
 	osascript scripts/dmg-window.applescript "$(APP_NAME)"
-	swift scripts/set-volume-icon.swift "$(APP_PATH)/Contents/Resources/AppIcon.icns" "$(DMG_MOUNT)"
+	swift scripts/set-volume-icon.swift "$(EXPORT_APP)/Contents/Resources/AppIcon.icns" "$(DMG_MOUNT)"
 	sync
 	hdiutil detach "$(DMG_MOUNT)"
 	hdiutil convert "$(DMG_RW)" -format UDZO -o "$(DMG_PATH)"
@@ -157,9 +209,9 @@ install: build
 	@printf '%s\n' "Installed: $(INSTALLED_APP)"
 
 verify:
-	test -d "$(APP_PATH)"
-	codesign --verify --deep --strict --verbose=2 "$(APP_PATH)"
-	@spctl --assess --type execute --verbose "$(APP_PATH)" 2>&1 || \
+	test -d "$(EXPORT_APP)"
+	codesign --verify --deep --strict --verbose=2 "$(EXPORT_APP)"
+	@spctl --assess --type execute --verbose "$(EXPORT_APP)" 2>&1 || \
 		printf '%s\n' 'Gatekeeper rejected the app. Build with CODE_SIGN_IDENTITY="Developer ID Application".'
 	@if [ -f "$(DMG_PATH)" ]; then \
 		spctl --assess --type open --verbose "$(DMG_PATH)" 2>&1 || \
@@ -167,9 +219,9 @@ verify:
 	fi
 
 verify-distribution-signing:
-	test -d "$(APP_PATH)"
-	codesign --verify --deep --strict --verbose=4 "$(APP_PATH)"
-	@sign_info=$$(codesign -dv --verbose=4 "$(APP_PATH)" 2>&1); \
+	test -d "$(EXPORT_APP)"
+	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
+	@sign_info=$$(codesign -dv --verbose=4 "$(EXPORT_APP)" 2>&1); \
 	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Developer ID Application'; then \
 		printf '%s\n' 'ERROR: App is not signed with a Developer ID Application certificate.'; \
 		printf '%s\n' '  make dmg CODE_SIGN_IDENTITY="Developer ID Application"'; \
