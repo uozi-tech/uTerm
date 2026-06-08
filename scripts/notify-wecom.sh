@@ -32,11 +32,15 @@ if [ -z "$version" ] || [ -z "$build" ] || [ -z "$url" ]; then
 	exit 1
 fi
 
-content="uTerm $version (build $build) 已发布\n下载：$url"
-if [ -n "$notes" ]; then content="$content\n更新：$notes"; fi
+content="uTerm $version (build $build) 已发布
+下载：$url"
+if [ -n "$notes" ]; then content="$content
+更新：$notes"; fi
 
-# Build markdown payload. Escape backslashes/quotes for JSON safety.
-esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# Build markdown payload. Escape backslashes/quotes for JSON safety, then turn
+# real newlines into the JSON \n escape (single backslash + n) as the LAST step
+# so WeCom renders line breaks instead of literal backslash-n.
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g'; }
 payload="{\"msgtype\":\"markdown\",\"markdown\":{\"content\":\"$(esc "$content")\"}}"
 
 "$CURL" --fail --silent --show-error \
