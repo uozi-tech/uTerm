@@ -5,8 +5,8 @@ final class KeyImportCryptoTests: XCTestCase {
 
     /// RFC 6070：P="password", S="salt", c=1, dkLen=20, PRF=HMAC-SHA1
     /// -> 0c60c80f961f0e71f3a9b524af6012062fe037a6
-    func testPBKDF2SHA1KnownVector() {
-        let dk = KeyImportCrypto.pbkdf2(
+    func testPBKDF2SHA1KnownVector() throws {
+        let dk = try KeyImportCrypto.pbkdf2(
             password: Array("password".utf8), salt: Array("salt".utf8),
             iterations: 1, keyLength: 20, prf: .sha1)
         XCTAssertEqual(dk.map { String(format: "%02x", $0) }.joined(),
@@ -47,5 +47,75 @@ final class KeyImportCryptoTests: XCTestCase {
         let pt = try KeyImportCrypto.cbcCrypt(.aes, encrypt: false,
                                               key: key, iv: iv, input: ct)
         XCTAssertEqual(pt, plaintext)
+    }
+
+    // MARK: - 安全：不可信输入校验
+
+    /// 短 IV（小于块大小）必须抛错而非把短缓冲交给 CCCrypt 触发堆越界读。
+    func testShortIVThrowsInsteadOfCrashing() {
+        let key: [UInt8] = Array(0..<32)
+        let shortIV: [UInt8] = [0x01]                              // 1 字节，远小于 AES 块（16）
+        let input: [UInt8] = Array(repeating: 0, count: 16)
+        XCTAssertThrowsError(try KeyImportCrypto.cbcCrypt(
+            .aes, encrypt: false, key: key, iv: shortIV, input: input)) {
+            XCTAssertEqual($0 as? PrivateKeyImportError,
+                           .malformedKey(reason: "IV 长度与块大小不符"))
+        }
+    }
+
+    /// 过长 IV 同样应被拒（CCCrypt 只读块大小字节，多余字节静默忽略会掩盖结构错误）。
+    func testOverlongIVThrows() {
+        let key: [UInt8] = Array(0..<32)
+        let longIV: [UInt8] = Array(repeating: 0x09, count: 32)    // 32 字节，长于 AES 块
+        let input: [UInt8] = Array(repeating: 0, count: 16)
+        XCTAssertThrowsError(try KeyImportCrypto.cbcCrypt(
+            .aes, encrypt: false, key: key, iv: longIV, input: input)) {
+            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+        }
+    }
+
+    /// 3DES/DES 的块大小为 8，短 IV 同样应被拒。
+    func testShortIVThrowsForTripleDES() {
+        let key: [UInt8] = Array(0..<24)
+        let shortIV: [UInt8] = [0x01]                              // 1 字节，小于 8
+        let input: [UInt8] = Array(repeating: 0, count: 8)
+        XCTAssertThrowsError(try KeyImportCrypto.cbcCrypt(
+            .tripleDES, encrypt: false, key: key, iv: shortIV, input: input)) {
+            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+        }
+    }
+
+    /// 超大派生密钥长度必须在分配缓冲前被拒，避免 ~4GB 内存分配。
+    func testOversizedKeyLengthRejected() {
+        let bigLen = Int(UInt32.max)                               // ~4.29e9，攻击者可控
+        XCTAssertGreaterThan(bigLen, KeyImportCrypto.maxDerivedKeyLength)
+        XCTAssertThrowsError(try KeyImportCrypto.pbkdf2(
+            password: Array("pw".utf8), salt: Array("salt".utf8),
+            iterations: 1, keyLength: bigLen, prf: .sha1)) {
+            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+        }
+    }
+
+    /// keyLength 为 0 也应被拒（非法长度）。
+    func testZeroKeyLengthRejected() {
+        XCTAssertThrowsError(try KeyImportCrypto.pbkdf2(
+            password: Array("pw".utf8), salt: Array("salt".utf8),
+            iterations: 1, keyLength: 0, prf: .sha1)) {
+            XCTAssertEqual($0 as? PrivateKeyImportError, .malformedKey(reason: ""))
+        }
+    }
+
+    /// 恰好等于上限的派生长度应放行（边界正向用例）。
+    func testKeyLengthAtMaxAllowed() throws {
+        let dk = try KeyImportCrypto.pbkdf2(
+            password: Array("pw".utf8), salt: Array("salt".utf8),
+            iterations: 1, keyLength: KeyImportCrypto.maxDerivedKeyLength, prf: .sha1)
+        XCTAssertEqual(dk.count, KeyImportCrypto.maxDerivedKeyLength)
+    }
+
+    /// 迭代次数上限为正且足够大，覆盖正常密钥的迭代区间。
+    func testPBKDF2IterationCeilingIsSane() {
+        XCTAssertGreaterThan(KeyImportCrypto.maxPBKDF2Iterations, 1_000_000)
+        XCTAssertLessThan(KeyImportCrypto.maxPBKDF2Iterations, Int(UInt32.max))
     }
 }

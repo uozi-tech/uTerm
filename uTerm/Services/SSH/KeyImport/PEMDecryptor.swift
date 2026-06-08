@@ -84,10 +84,15 @@ nonisolated enum PEMDecryptor {
         }
         let (salt, iterations, prf, keyLenHint) = try parsePBKDF2(pbes2[0])
         let (cipher, keyLen, iv) = try parseEncScheme(pbes2[1])
-        let derivedLen = keyLenHint ?? keyLen
-        let key = KeyImportCrypto.pbkdf2(
+        // keyLength 一律取自 encryptionScheme 指定的密码（keyLen），不信任 PBKDF2-params
+        // 里的可选 keyLength 提示——它不可信且会被直接用于分配缓冲。
+        // 若提示存在，仅校验其与密码所需长度一致，不一致则视为结构损坏。
+        if let hint = keyLenHint, hint != keyLen {
+            throw PrivateKeyImportError.malformedKey(reason: "PBKDF2 密钥长度与加密算法不符")
+        }
+        let key = try KeyImportCrypto.pbkdf2(
             password: password, salt: salt, iterations: iterations,
-            keyLength: derivedLen, prf: prf)
+            keyLength: keyLen, prf: prf)
         let encrypted = try DERKeyDecoder.primitiveBytes(top[1])
         let raw = try KeyImportCrypto.cbcCrypt(
             cipher, encrypt: false, key: key, iv: iv, input: encrypted)
@@ -111,6 +116,11 @@ nonisolated enum PEMDecryptor {
         }
         let salt = try DERKeyDecoder.primitiveBytes(params[0])
         let iterations = try intValue(params[1])
+        // 迭代次数来自不可信 DER，仅受 4 字节宽度约束（最高约 4.29 亿）。
+        // 不设上限会让构造的密钥强制执行多分钟级 HMAC，造成 CPU DoS / 界面卡死。
+        guard iterations >= 1, iterations <= KeyImportCrypto.maxPBKDF2Iterations else {
+            throw PrivateKeyImportError.malformedKey(reason: "PBKDF2 迭代次数超出允许范围")
+        }
         var keyLen: Int?
         var prf: KeyImportCrypto.PRF = .sha1            // 默认 hmacWithSHA1
         for extra in params.dropFirst(2) {
