@@ -41,8 +41,10 @@ struct ImageBody: View {
         }
         .background(Color(nsColor: EditorTheme.background))
         // 仅在 buffer 或其图片数据变化时解码一次，而非每次渲染。用
-        // (id, 字节数) 作为轻量标识，避免对大 Data 做整段相等比较。
-        .task(id: DecodeKey(id: buffer.id, byteCount: buffer.imageData?.count)) {
+        // (id, 字节数, 数据版本) 作为轻量标识，避免对大 Data 做整段相等比较。
+        // dataVersion 在 imageData 每次重新赋值时单调递增，覆盖「字节数相同但内容
+        // 不同」的重载场景——否则 (id, byteCount) 不变会让旧图残留在屏幕上。
+        .task(id: DecodeKey(id: buffer.id, byteCount: buffer.imageData?.count, dataVersion: buffer.dataVersion)) {
             if let img = buffer.imageData.flatMap(NSImage.init(data:)) {
                 phase = .decoded(img)
             } else {
@@ -61,6 +63,7 @@ struct ImageBody: View {
     private struct DecodeKey: Equatable {
         let id: UUID
         let byteCount: Int?
+        let dataVersion: Int
     }
 
     @ViewBuilder
