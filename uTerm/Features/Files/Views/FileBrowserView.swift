@@ -18,6 +18,9 @@ struct FileBrowserContent: View {
     @State private var renameText = ""
     @State private var deleteTarget: RemoteEntry?
     @State private var permissionTarget: RemoteEntry?
+    /// 待确认覆盖的上传：检查发现选中文件里有同名远端文件时挂这里，弹覆盖确认。
+    @State private var overwritePendingURLs: [URL]?
+    @State private var overwriteConflictNames: [String] = []
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
@@ -61,6 +64,21 @@ struct FileBrowserContent: View {
             Button("取消", role: .cancel) { deleteTarget = nil }
         } message: { t in
             Text(t.isDirectory ? "该文件夹及其内容将被永久删除。" : "该文件将被永久删除。")
+        }
+        .confirmationDialog(overwriteDialogTitle,
+            isPresented: Binding(get: { overwritePendingURLs != nil },
+                                 set: { if !$0 { overwritePendingURLs = nil; overwriteConflictNames = [] } })) {
+            Button("覆盖", role: .destructive) {
+                if let urls = overwritePendingURLs { model.enqueueUploads(urls) }
+                overwritePendingURLs = nil
+                overwriteConflictNames = []
+            }
+            Button("取消", role: .cancel) {
+                overwritePendingURLs = nil
+                overwriteConflictNames = []
+            }
+        } message: {
+            Text(overwriteDialogMessage)
         }
         .sheet(item: $permissionTarget) { target in
             SFTPPermissionSheet(entry: target) { mode, recursive in
@@ -436,16 +454,59 @@ struct FileBrowserContent: View {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
         guard !fileProviders.isEmpty else { return false }
+        // `loadDataRepresentation` 的回调是 @Sendable（在后台队列触发）—— 不能在其中
+        // 捕获 self（View）。只捕获 Sendable 局部值：model + 两个 @State 的 Binding
+        // （Binding<Value: Sendable> 自身 Sendable），覆盖确认状态经 binding 回写。
+        let model = self.model
+        let pendingBinding = $overwritePendingURLs
+        let conflictBinding = $overwriteConflictNames
         for provider in fileProviders {
             provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
                 guard let data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                Task { @MainActor [model] in
-                    model.enqueueUploads([url])
+                Task { @MainActor in
+                    Self.requestUpload([url], model: model,
+                                       pending: pendingBinding, conflicts: conflictBinding)
                 }
             }
         }
         return true
+    }
+
+    /// 上传前先查远端是否有同名文件：有冲突则弹覆盖确认（镜像删除确认），
+    /// 用户确认「覆盖」才真正入队；没有冲突直接入队。
+    private func requestUpload(_ urls: [URL]) {
+        Self.requestUpload(urls, model: model,
+                           pending: $overwritePendingURLs, conflicts: $overwriteConflictNames)
+    }
+
+    /// 纯 Sendable 入参版本：供 @Sendable 拖放回调调用（不捕获 self）。
+    @MainActor
+    private static func requestUpload(_ urls: [URL],
+                                      model: FileBrowserModel,
+                                      pending: Binding<[URL]?>,
+                                      conflicts: Binding<[String]>) {
+        Task { @MainActor in
+            let found = await model.existingRemoteNames(forUploading: urls)
+            if found.isEmpty {
+                model.enqueueUploads(urls)
+            } else {
+                conflicts.wrappedValue = found
+                pending.wrappedValue = urls
+            }
+        }
+    }
+
+    private var overwriteDialogTitle: String {
+        overwriteConflictNames.count == 1
+            ? "「\(overwriteConflictNames[0])」已存在，覆盖？"
+            : "\(overwriteConflictNames.count) 个文件已存在，覆盖？"
+    }
+
+    private var overwriteDialogMessage: String {
+        overwriteConflictNames.count == 1
+            ? "该远程文件将被覆盖。"
+            : "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: "、"))"
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {
@@ -526,9 +587,15 @@ struct FileBrowserContent: View {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = entry.name
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            try? await Task.detached(priority: .userInitiated) {
-                try data.write(to: url)
-            }.value
+            // 不能 `try?` 吞掉写盘错误：磁盘满 / 无权限时用户会以为已保存成功。
+            // 失败时经「操作失败」alert 上报。
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try data.write(to: url)
+                }.value
+            } catch {
+                model.reportTransientError("保存失败：\(error.localizedDescription)")
+            }
         }
     }
 
@@ -541,6 +608,6 @@ struct FileBrowserContent: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        model.enqueueUploads(panel.urls)
+        requestUpload(panel.urls)
     }
 }

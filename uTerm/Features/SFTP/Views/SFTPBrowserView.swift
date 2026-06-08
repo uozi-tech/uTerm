@@ -19,9 +19,15 @@ struct SFTPBrowserView: View {
     @State private var newFolderPresented = false
     @State private var newFolderText = ""
     @State private var isDropTargeted = false
+    /// 待确认覆盖的上传：检查发现选中文件里有同名远端文件时挂这里，弹覆盖确认。
+    /// nil = 无待确认；非 nil = 弹窗（即便冲突名为空也仅在有冲突时才设值）。
+    @State private var overwritePendingURLs: [URL]?
+    @State private var overwriteConflictNames: [String] = []
 
-    private var canBack: Bool { hIdx > 0 }
-    private var canFwd: Bool { hIdx < history.count - 1 }
+    // 导航往返进行中时禁用前进 / 后退：navigate(toPath:) 在 isNavigating 时早退，
+    // 若此时仍允许点击、hIdx 已经移动，就会与 currentPath 脱钩（连点 Back 丢一步）。
+    private var canBack: Bool { hIdx > 0 && !model.isNavigating }
+    private var canFwd: Bool { hIdx < history.count - 1 && !model.isNavigating }
 
     private var visible: [RemoteEntry] {
         guard !query.isEmpty else { return model.sortedEntries }
@@ -105,6 +111,21 @@ struct SFTPBrowserView: View {
             Button("取消", role: .cancel) { deleteTarget = nil }
         } message: { t in
             Text(t.isDirectory ? "该文件夹及其内容将被永久删除。" : "该文件将被永久删除。")
+        }
+        .confirmationDialog(overwriteDialogTitle,
+            isPresented: Binding(get: { overwritePendingURLs != nil },
+                                 set: { if !$0 { overwritePendingURLs = nil; overwriteConflictNames = [] } })) {
+            Button("覆盖", role: .destructive) {
+                if let urls = overwritePendingURLs { model.enqueueUploads(urls) }
+                overwritePendingURLs = nil
+                overwriteConflictNames = []
+            }
+            Button("取消", role: .cancel) {
+                overwritePendingURLs = nil
+                overwriteConflictNames = []
+            }
+        } message: {
+            Text(overwriteDialogMessage)
         }
         .alert("操作失败", isPresented: Binding(
             get: { model.transientError != nil },
@@ -216,13 +237,16 @@ struct SFTPBrowserView: View {
         if path == model.currentPath { return }
         Task { await model.navigate(toPath: path) }
     }
+    // goBack/goFwd：只在导航空闲时才移动 hIdx 并发起导航。canBack/canFwd 已含
+    // `!isNavigating`，这里再 guard 一次防止键盘 / 非按钮路径在往返中触发，确保
+    // hIdx 与 currentPath 不会因连点而脱钩（修复「点两次才返回」同源问题）。
     private func goBack() {
-        guard canBack else { return }
+        guard hIdx > 0, !model.isNavigating else { return }
         hIdx -= 1
         Task { await model.navigate(toPath: history[hIdx]) }
     }
     private func goFwd() {
-        guard canFwd else { return }
+        guard hIdx < history.count - 1, !model.isNavigating else { return }
         hIdx += 1
         Task { await model.navigate(toPath: history[hIdx]) }
     }
@@ -259,7 +283,7 @@ struct SFTPBrowserView: View {
         panel.canChooseFiles = true; panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        model.enqueueUploads(panel.urls)
+        requestUpload(panel.urls)
     }
 
     private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
@@ -268,16 +292,59 @@ struct SFTPBrowserView: View {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
         guard !fileProviders.isEmpty else { return false }
+        // `loadDataRepresentation` 的回调是 @Sendable（在后台队列触发）—— 不能在其中
+        // 捕获 self（View）。只捕获 Sendable 局部值：model + 两个 @State 的 Binding
+        // （Binding<Value: Sendable> 自身 Sendable），覆盖确认状态经 binding 回写。
+        let model = self.model
+        let pendingBinding = $overwritePendingURLs
+        let conflictBinding = $overwriteConflictNames
         for provider in fileProviders {
             provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
                 guard let data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                Task { @MainActor [model] in
-                    model.enqueueUploads([url])
+                Task { @MainActor in
+                    Self.requestUpload([url], model: model,
+                                       pending: pendingBinding, conflicts: conflictBinding)
                 }
             }
         }
         return true
+    }
+
+    /// 上传前先查远端是否有同名文件：有冲突则弹覆盖确认（镜像删除确认），
+    /// 用户确认「覆盖」才真正入队；没有冲突直接入队。
+    private func requestUpload(_ urls: [URL]) {
+        Self.requestUpload(urls, model: model,
+                           pending: $overwritePendingURLs, conflicts: $overwriteConflictNames)
+    }
+
+    /// 纯 Sendable 入参版本：供 @Sendable 拖放回调调用（不捕获 self）。
+    @MainActor
+    private static func requestUpload(_ urls: [URL],
+                                      model: FileBrowserModel,
+                                      pending: Binding<[URL]?>,
+                                      conflicts: Binding<[String]>) {
+        Task { @MainActor in
+            let found = await model.existingRemoteNames(forUploading: urls)
+            if found.isEmpty {
+                model.enqueueUploads(urls)
+            } else {
+                conflicts.wrappedValue = found
+                pending.wrappedValue = urls
+            }
+        }
+    }
+
+    private var overwriteDialogTitle: String {
+        overwriteConflictNames.count == 1
+            ? "「\(overwriteConflictNames[0])」已存在，覆盖？"
+            : "\(overwriteConflictNames.count) 个文件已存在，覆盖？"
+    }
+
+    private var overwriteDialogMessage: String {
+        overwriteConflictNames.count == 1
+            ? "该远程文件将被覆盖。"
+            : "这些远程文件将被覆盖：\(overwriteConflictNames.joined(separator: "、"))"
     }
 
     private func moveRemoteItemsToParent(_ providers: [NSItemProvider]) -> Bool {
@@ -313,7 +380,13 @@ struct SFTPBrowserView: View {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = entry.name
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            try? await Task.detached(priority: .userInitiated) { try data.write(to: url) }.value
+            // 不能 `try?` 吞掉写盘错误：磁盘满 / 无权限时用户会以为已保存成功。
+            // 失败时经「操作失败」alert 上报。
+            do {
+                try await Task.detached(priority: .userInitiated) { try data.write(to: url) }.value
+            } catch {
+                model.reportTransientError("保存失败：\(error.localizedDescription)")
+            }
         }
     }
 }

@@ -183,10 +183,18 @@ final class FileBrowserModel {
     private final class TransferContext {
         enum Source { case uploadURL(URL); case uploadData(Data); case download }
         let source: Source
+        /// 入队时捕获的目标目录（上传用）。槽位激活时机不确定，若上传时再读 live
+        /// `currentPath` 会把排队中的上传落到当时正好停留的目录（用户已切走）；故在
+        /// `enqueueUploads`/`enqueueUpload` 入队那一刻就锚定目录，传输/重试都用它。
+        /// 下载项不用此字段（remotePath 在下载入口已锚定）。
+        let destinationDir: String
         var cancel: (() -> Void)?
         var lastSampleTime: Date?
         var lastSampleBytes: Int64 = 0
-        init(source: Source) { self.source = source }
+        init(source: Source, destinationDir: String) {
+            self.source = source
+            self.destinationDir = destinationDir
+        }
     }
     private var contexts: [UUID: TransferContext] = [:]
 
@@ -536,11 +544,34 @@ final class FileBrowserModel {
         try await provider.removeDirectory(path)
     }
 
+    // MARK: - 上传覆盖检查
+
+    /// 上传前的覆盖检查：列当前目录，返回 `urls` 中文件名已存在于远端的那些
+    /// （即会被覆盖 / 截断的文件）。空数组 = 没有冲突，可直接上传。
+    ///
+    /// 单独一次 `list` 往返覆盖整批选择文件（不逐文件 stat），失败时（取不到列表）
+    /// 返回空 —— 宁可正常走上传（带原有错误处理），也不因列目录失败误报覆盖、
+    /// 拦住用户。视图据此决定是否弹覆盖确认（镜像删除确认）。
+    func existingRemoteNames(forUploading urls: [URL]) async -> [String] {
+        await existingRemoteNames(uploadFileNames: urls
+            .filter { !$0.hasDirectoryPath }
+            .map(\.lastPathComponent))
+    }
+
+    /// 同上，但入参是文件名（供测试 / 程序化上传）。
+    func existingRemoteNames(uploadFileNames names: [String]) async -> [String] {
+        guard let provider, !names.isEmpty else { return [] }
+        guard let listed = try? await provider.list(path: currentPath) else { return [] }
+        let existing = Set(listed.map(\.name))
+        return names.filter { existing.contains($0) }
+    }
+
     // MARK: - 传输队列
 
     /// 入队多个本地文件上传（文件选择器 / 拖放）。目录跳过。
     /// 懒读：文件数据在槽位激活时再读，避免一次性把全部排队文件读入内存。
     func enqueueUploads(_ urls: [URL]) {
+        let destinationDir = currentPath
         for url in urls where !url.hasDirectoryPath {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 }
             let id = UUID()
@@ -548,7 +579,7 @@ final class FileBrowserModel {
                 id: id, fileName: url.lastPathComponent, direction: .up,
                 bytesDone: 0, bytesTotal: Int64(size ?? 0),
                 speedBytesPerSec: 0, status: .queued))
-            contexts[id] = TransferContext(source: .uploadURL(url))
+            contexts[id] = TransferContext(source: .uploadURL(url), destinationDir: destinationDir)
         }
         pumpQueue()
     }
@@ -560,7 +591,7 @@ final class FileBrowserModel {
             id: id, fileName: fileName, direction: .up,
             bytesDone: 0, bytesTotal: Int64(data.count),
             speedBytesPerSec: 0, status: .queued))
-        contexts[id] = TransferContext(source: .uploadData(data))
+        contexts[id] = TransferContext(source: .uploadData(data), destinationDir: currentPath)
         pumpQueue()
     }
 
@@ -579,7 +610,9 @@ final class FileBrowserModel {
         guard let idx = transfers.firstIndex(where: { $0.id == id }),
               let ctx = contexts[id], let provider else { return }
         transfers[idx].status = .active
-        let remotePath = Self.join(currentPath, transfers[idx].fileName)
+        // 用入队时锚定的目录（而非 live currentPath），避免槽位激活时用户已切走目录
+        // 导致上传落错地方。
+        let remotePath = Self.join(ctx.destinationDir, transfers[idx].fileName)
         let source = ctx.source
         let task = Task { [weak self] in
             await self?.runUpload(id: id, source: source, remotePath: remotePath, provider: provider)
@@ -648,7 +681,8 @@ final class FileBrowserModel {
             id: id, fileName: fileName, direction: .down,
             bytesDone: 0, bytesTotal: size,
             speedBytesPerSec: 0, status: .active))
-        contexts[id] = TransferContext(source: .download)
+        // 下载项不使用 destinationDir（remotePath 已锚定），传 currentPath 占位。
+        contexts[id] = TransferContext(source: .download, destinationDir: currentPath)
 
         enum Outcome { case data(Data); case cancelled; case failed }
         let task = Task { () -> Outcome in
@@ -725,8 +759,16 @@ final class FileBrowserModel {
     }
 
     /// 进度回调：更新已传字节，按 ~100ms 采样计算平滑速率。
-    private func applyProgress(id: UUID, _ p: TransferProgress) {
+    /// `internal`（非 `private`）以便单测直接验证终态守卫（迟到进度不回退已完成行）。
+    func applyProgress(id: UUID, _ p: TransferProgress) {
         guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        // 进度回调走独立 Task { @MainActor }，与 finishTransfer 之间无顺序保证。
+        // 一旦传输已进入终态（.done/.failed），迟到的进度若继续写入就会回退
+        // bytesDone（低于 total）/ 复活速率，把已完成的行打花。终态直接忽略。
+        switch transfers[idx].status {
+        case .done, .failed: return
+        case .queued, .active: break
+        }
         if let ctx = contexts[id] {
             let now = Date()
             if let last = ctx.lastSampleTime {
@@ -755,6 +797,12 @@ final class FileBrowserModel {
     /// 清除一次性错误（绑定到错误 alert 的关闭）。
     func clearTransientError() {
         transientError = nil
+    }
+
+    /// 由视图层上报一次性错误（如本地保存下载内容失败），复用同一「操作失败」alert。
+    /// `transientError` 是 `private(set)`，视图无法直接写，经此方法统一入口。
+    func reportTransientError(_ message: String) {
+        transientError = message
     }
 
     /// 服务器配置已删除等外部原因导致不可用时调用。

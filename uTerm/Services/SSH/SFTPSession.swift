@@ -9,7 +9,15 @@ actor SFTPSession: SFTPProviding {
 
     init(connected: ConnectedClient) async throws {
         self.connected = connected
-        self.sftp = try await connected.target.openSFTP()
+        // openSFTP 失败时，已建立的 SSH 传输（target + 可选 bastion）没人持有、
+        // 不会被释放（actor 还没初始化完成、没有 deinit，调用方也拿不到实例去关）。
+        // 故失败时先关闭 connected（关 target，再关 bastion），再把错误抛出去。
+        do {
+            self.sftp = try await connected.target.openSFTP()
+        } catch {
+            await connected.close()
+            throw error
+        }
     }
 
     func list(path: String) async throws -> [RemoteEntry] {

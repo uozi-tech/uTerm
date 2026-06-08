@@ -473,6 +473,131 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(FileBrowserModel.shellQuote("/a b/c"), "'/a b/c'")
         XCTAssertEqual(FileBrowserModel.shellQuote("/it's"), "'/it'\\''s'")
     }
+
+    // MARK: - Fix #21：上传目标目录在入队时锚定（槽位激活时不读 live currentPath）
+
+    /// 入队上传后切换目录，传输完成时应落到入队时的目录、而非切换后的当前目录。
+    func testEnqueuedUploadLandsInDirectoryCapturedAtEnqueueTime() async throws {
+        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
+        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("sub", true)]),
+            "/home/user/sub": dir([]),
+        ])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+
+        let (tmp, urls) = try tempFiles(["a.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // 入队时 currentPath = /home/user → 目标目录被锚定为此。
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .active } }
+
+        // 槽位激活后切走到子目录。传输还在阻塞中。
+        await model.navigate(toPath: "/home/user/sub")
+        XCTAssertEqual(model.currentPath, "/home/user/sub")
+
+        await mock.release()
+        await waitUntil { model.transfers.first?.status == .done }
+
+        let uploads = await mock.uploads
+        XCTAssertEqual(uploads.first?.path, "/home/user/a.txt",
+                       "上传应落到入队时的目录，而非切换后的当前目录")
+    }
+
+    /// 重试一个失败的上传时，也应使用入队时锚定的目录（即便 currentPath 已变）。
+    func testRetryUsesDirectoryCapturedAtEnqueueTime() async throws {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("sub", true)]),
+            "/home/user/sub": dir([]),
+        ])
+        await mock.setFailingUploadPaths(["/home/user/a.txt"])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let (tmp, urls) = try tempFiles(["a.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .failed } }
+
+        // 切走目录后再重试 —— 重试仍应走入队时锚定的 /home/user。
+        await model.navigate(toPath: "/home/user/sub")
+        await mock.setFailingUploadPaths([])
+        model.retryTransfer(model.transfers.first!.id)
+        await waitUntil { model.transfers.contains { $0.status == .done } }
+
+        let uploads = await mock.uploads
+        XCTAssertEqual(uploads.first?.path, "/home/user/a.txt",
+                       "重试应使用入队时锚定的目录")
+    }
+
+    // MARK: - Fix #24：迟到的进度回调不能回退 / 复活已进入终态的传输
+
+    func testLateProgressDoesNotClobberDoneTransfer() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        model.enqueueUpload(fileName: "x.txt", data: Data(count: 1000))
+        await waitUntil { model.transfers.first?.status == .done }
+        guard let done = model.transfers.first else { return XCTFail("应有一条传输") }
+        XCTAssertEqual(done.status, .done)
+        let total = done.bytesTotal
+        XCTAssertEqual(done.bytesDone, total)
+
+        // 模拟一条迟到的进度回调：字节数低于 total、带非零瞬时速率。
+        model.applyProgress(id: done.id, TransferProgress(bytesDone: 10, bytesTotal: total))
+
+        let after = model.transfers.first
+        XCTAssertEqual(after?.status, .done)
+        XCTAssertEqual(after?.bytesDone, total, "迟到进度不应把 bytesDone 退回 total 以下")
+        XCTAssertEqual(after?.speedBytesPerSec, 0, "已完成的行速率应保持 0")
+    }
+
+    func testLateProgressDoesNotReviveFailedTransfer() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setFailingUploadPaths(["/home/user/x.txt"])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        model.enqueueUpload(fileName: "x.txt", data: Data(count: 1000))
+        await waitUntil { model.transfers.first?.status == .failed }
+        guard let failed = model.transfers.first else { return XCTFail("应有一条传输") }
+
+        model.applyProgress(id: failed.id, TransferProgress(bytesDone: 500, bytesTotal: 1000))
+
+        let after = model.transfers.first
+        XCTAssertEqual(after?.status, .failed, "迟到进度不应改动失败态")
+        XCTAssertEqual(after?.bytesDone, 0, "失败行的 bytesDone 不应被迟到进度改写")
+    }
+
+    // MARK: - Fix #2：上传前的远端同名文件（覆盖）检查
+
+    func testExistingRemoteNamesReportsConflicts() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("a.txt", false), ("b.txt", false)]),
+        ])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let conflicts = await model.existingRemoteNames(
+            uploadFileNames: ["a.txt", "c.txt"])
+        XCTAssertEqual(conflicts, ["a.txt"], "只应报告确实已存在的同名文件")
+    }
+
+    func testExistingRemoteNamesEmptyWhenNoConflict() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let conflicts = await model.existingRemoteNames(uploadFileNames: ["new.txt"])
+        XCTAssertTrue(conflicts.isEmpty)
+    }
+
+    /// 列目录失败时返回空（不误报覆盖、不拦住上传）。
+    func testExistingRemoteNamesEmptyWhenListFails() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        await mock.setListError(SFTPTestError.boom)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let conflicts = await model.existingRemoteNames(uploadFileNames: ["a.txt"])
+        XCTAssertTrue(conflicts.isEmpty, "列目录失败应返回空，宁可走正常上传也不误报覆盖")
+    }
 }
 
 enum SFTPTestError: Error { case boom }
