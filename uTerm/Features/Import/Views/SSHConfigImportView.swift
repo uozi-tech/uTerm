@@ -202,7 +202,7 @@ struct SSHConfigImportView: View {
             Spacer()
             Image(systemName: "checkmark.circle.fill").font(.system(size: 36)).foregroundStyle(UD.success)
             Text("导入完成").font(.system(size: 16, weight: .medium)).foregroundStyle(UD.text)
-            Text("新建 \(result.created) · 更新 \(result.updated) · 导入密钥 \(result.keysImported) · 跳过密钥 \(result.keysSkipped)")
+            Text("新建 \(result.created) · 更新 \(result.updated) · 导入密钥 \(result.keysImported) · 关联已有密钥 \(result.keysLinked) · 跳过密钥 \(result.keysSkipped)")
                 .font(UD.caption).foregroundStyle(UD.text3)
             HStack(spacing: 10) {
                 Button("再次导入") { phase = .pick; rows = []; selection = [] }.buttonStyle(.plain).foregroundStyle(UD.accent)

@@ -6,8 +6,32 @@ nonisolated struct ParsedSSHHost: Equatable {
     let hostName: String      // HostName，缺省回退 alias
     let user: String          // User，缺省 ""
     let port: Int             // Port，缺省 22
-    let identityFile: String? // IdentityFile 原文（可能 ~ 开头）
+    let identityFiles: [String] // IdentityFile 原文（可能 ~ 开头），按 config 顺序保留
     let isWildcard: Bool      // 任一 Host token 含 * 或 ?
+
+    var identityFile: String? { identityFiles.first }
+
+    init(alias: String, hostName: String, user: String, port: Int,
+         identityFile: String?, isWildcard: Bool) {
+        self.init(
+            alias: alias,
+            hostName: hostName,
+            user: user,
+            port: port,
+            identityFiles: identityFile.map { [$0] } ?? [],
+            isWildcard: isWildcard
+        )
+    }
+
+    init(alias: String, hostName: String, user: String, port: Int,
+         identityFiles: [String], isWildcard: Bool) {
+        self.alias = alias
+        self.hostName = hostName
+        self.user = user
+        self.port = port
+        self.identityFiles = identityFiles
+        self.isWildcard = isWildcard
+    }
 }
 
 /// 解析 ~/.ssh/config 文本 → [ParsedSSHHost]。逐 Host 块；大小写不敏感关键字；
@@ -15,7 +39,8 @@ nonisolated struct ParsedSSHHost: Equatable {
 nonisolated func parseSSHConfig(_ text: String) -> [ParsedSSHHost] {
     var hosts: [ParsedSSHHost] = []
     var aliases: [String]? = nil
-    var hostName: String?, user: String?, identity: String?
+    var hostName: String?, user: String?
+    var identities: [String] = []
     var port: Int?
 
     func flush() {
@@ -24,8 +49,8 @@ nonisolated func parseSSHConfig(_ text: String) -> [ParsedSSHHost] {
         let alias = aliases.first { !($0.contains("*") || $0.contains("?")) } ?? aliases[0]
         hosts.append(ParsedSSHHost(
             alias: alias, hostName: hostName ?? alias, user: user ?? "",
-            port: port ?? 22, identityFile: identity, isWildcard: isWild))
-        hostName = nil; user = nil; identity = nil; port = nil
+            port: port ?? 22, identityFiles: identities, isWildcard: isWild))
+        hostName = nil; user = nil; identities = []; port = nil
     }
 
     for raw in text.components(separatedBy: .newlines) {
@@ -38,10 +63,10 @@ nonisolated func parseSSHConfig(_ text: String) -> [ParsedSSHHost] {
         case "host":
             flush()
             aliases = value.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        case "hostname":     hostName = value
-        case "user":         user = value
+        case "hostname":     hostName = unquoteConfigValue(value)
+        case "user":         user = unquoteConfigValue(value)
         case "port":         port = Int(value)
-        case "identityfile": identity = value
+        case "identityfile": identities.append(unquoteConfigValue(value))
         default: break
         }
     }
@@ -58,4 +83,30 @@ private nonisolated func splitConfigLine(_ line: String) -> (key: String, value:
     let rest = String(line[line.index(after: sep)...])
     let value = rest.trimmingCharacters(in: CharacterSet(charactersIn: " \t="))
     return (key, value)
+}
+
+private nonisolated func unquoteConfigValue(_ value: String) -> String {
+    var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.count >= 2,
+       let first = text.first,
+       let last = text.last,
+       (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+        text.removeFirst()
+        text.removeLast()
+    }
+
+    var output = ""
+    var escaping = false
+    for character in text {
+        if escaping {
+            output.append(character)
+            escaping = false
+        } else if character == "\\" {
+            escaping = true
+        } else {
+            output.append(character)
+        }
+    }
+    if escaping { output.append("\\") }
+    return output
 }

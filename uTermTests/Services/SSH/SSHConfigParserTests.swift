@@ -19,6 +19,7 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(h.user, "deploy")
         XCTAssertEqual(h.port, 2222)
         XCTAssertEqual(h.identityFile, "~/.ssh/id_ed25519")
+        XCTAssertEqual(h.identityFiles, ["~/.ssh/id_ed25519"])
         XCTAssertFalse(h.isWildcard)
     }
 
@@ -76,5 +77,20 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(hosts.first?.alias, "win")
         XCTAssertEqual(hosts.first?.hostName, "5.5.5.5")
         XCTAssertEqual(hosts.first?.port, 2400)
+    }
+
+    func testMultipleQuotedIdentityFilesPreservedInOrder() {
+        let cfg = """
+        Host app
+            IdentityFile "~/.ssh/keys/app key"
+            IdentityFile ~/.ssh/fallback\\ key
+        """
+
+        let h = parseSSHConfig(cfg)[0]
+        XCTAssertEqual(h.identityFile, "~/.ssh/keys/app key")
+        XCTAssertEqual(h.identityFiles, [
+            "~/.ssh/keys/app key",
+            "~/.ssh/fallback key",
+        ])
     }
 }
