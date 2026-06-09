@@ -8,6 +8,8 @@
 	<string>ZkS07iKmIlPCyTcEyY8jFluP/0HKIpy7vCpPZGeeIqI=</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>14400</integer>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
