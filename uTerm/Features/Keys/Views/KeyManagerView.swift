@@ -188,8 +188,23 @@ struct KeyManagerView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.message = "选择 SSH 私钥文件"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard panel.runModal() == .OK else { return }
+        guard let url = panel.url else { return }
+
+        let text: String
+        do {
+            text = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            importErrorText = KeyImportErrorMessage.message(
+                for: NSError(domain: "uTerm.keys", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "无法读取私钥文件",
+                    NSLocalizedFailureReasonErrorKey: "读取 \(url.lastPathComponent) 时失败：\((error as NSError).localizedDescription)",
+                    NSLocalizedRecoverySuggestionErrorKey: "请确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
+                ]),
+                fallback: "无法读取私钥文件"
+            )
+            return
+        }
 
         let filename = url.deletingPathExtension().lastPathComponent
         do {
@@ -198,7 +213,7 @@ struct KeyManagerView: View {
                 PrivateKeyImportError.incorrectPassphrase {
             promptPassphraseAndImport(text: text, defaultName: filename)
         } catch {
-            importErrorText = (error as? LocalizedError)?.errorDescription ?? "无法识别该私钥"
+            importErrorText = KeyImportErrorMessage.message(for: error, fallback: "无法识别该私钥")
         }
     }
 
@@ -214,7 +229,7 @@ struct KeyManagerView: View {
         do {
             try finishImport(text: text, passphrase: field.stringValue, defaultName: defaultName)
         } catch {
-            importErrorText = (error as? LocalizedError)?.errorDescription ?? "口令错误或私钥无法解析"
+            importErrorText = KeyImportErrorMessage.message(for: error, fallback: "口令错误或私钥无法解析")
         }
     }
 
@@ -225,7 +240,9 @@ struct KeyManagerView: View {
             material = try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")
         } catch {
             throw NSError(domain: "uTerm.keys", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "密钥库目前支持 ed25519 / RSA / ECDSA 密钥",
+                NSLocalizedDescriptionKey: "无法加入密钥库",
+                NSLocalizedFailureReasonErrorKey: "私钥解析成功，但无法生成密钥库所需的公钥或指纹元数据。",
+                NSLocalizedRecoverySuggestionErrorKey: "请确认密钥算法为 RSA、Ed25519 或 ECDSA；如果仍失败，可用 ssh-keygen -y -f <key> 检查该私钥。",
             ])
         }
         let key = SSHKey()
