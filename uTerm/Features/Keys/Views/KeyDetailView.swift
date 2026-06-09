@@ -4,6 +4,8 @@ import AppKit
 /// 单把密钥的详情面板（设计稿 `keys.jsx` 的 `KeyDetail`）：头部（头像 + 可重命名
 /// 名称 + 算法/创建时间）、指纹、公钥、元信息三宫格、使用此密钥的主机、危险区删除。
 struct KeyDetailView: View {
+    static let publicKeyBlockBackground = UD.panelHi
+
     let key: SSHKey
     let usedByNames: [String]
     let onRename: (String) -> Void
@@ -105,7 +107,7 @@ struct KeyDetailView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 7).fill(UD.terminal))
+                .background(RoundedRectangle(cornerRadius: 7).fill(Self.publicKeyBlockBackground))
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
         }
     }
