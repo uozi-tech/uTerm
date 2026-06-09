@@ -142,7 +142,6 @@ struct SSHConfigImportView: View {
             guard !disabled else { return }
             if selection.contains(row.id) { selection.remove(row.id) } else { selection.insert(row.id) }
         }
-        .focusable(!disabled)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selection.contains(row.id) ? .isSelected : [])

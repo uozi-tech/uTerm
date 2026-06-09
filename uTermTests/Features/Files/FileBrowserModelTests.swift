@@ -651,6 +651,31 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(Set(conflicts), ["a.txt", "b.txt"],
                        "URL 入口也应报出整批全部冲突")
     }
+
+    func testFileBrowserRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Files/Views/FileBrowserView.swift"
+        ), encoding: .utf8)
+        let code = sourceCodeWithoutLineComments(source)
+
+        XCTAssertEqual(code.components(separatedBy: ".focusable()").count - 1, 1)
+        XCTAssertTrue(code.contains(".focusEffectDisabled()"))
+        XCTAssertFalse(code.contains("strokeBorder(UD.accent.opacity(0.6)"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func sourceCodeWithoutLineComments(_ source: String) -> String {
+        source.split(separator: "\n")
+            .filter { !String($0).trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
 }
 
 enum SFTPTestError: Error { case boom }

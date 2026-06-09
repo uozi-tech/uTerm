@@ -319,13 +319,7 @@ struct FileBrowserContent: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: upSelected)
-        .overlay {
-            if upSelected {
-                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
-            }
-        }
         .contentShape(Rectangle())
-        .focusable()
         // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
         // count:2 在前 —— SwiftUI 据此把单 / 双击当互斥手势消歧（见 entryRow）。
         .onTapGesture(count: 2) {
@@ -392,14 +386,7 @@ struct FileBrowserContent: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: isSelected)
-        .overlay {
-            // 选中时叠加可见焦点环（accent 描边）——键盘 / VoiceOver 导航有清晰指示。
-            if isSelected {
-                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
-            }
-        }
         .contentShape(Rectangle())
-        .focusable()
         // 单击选中、双击激活（Finder 风）。两个 .onTapGesture 链式、count:2 在前
         // —— SwiftUI 据此把单 / 双击当互斥手势消歧，与主列表 ServerRow 同款。
         // 不能用 simultaneousGesture(count:2)：那让单 / 双击各自独立计时、互相抢，

@@ -23,6 +23,15 @@ final class PreviewBufferBodyWiringTests: XCTestCase {
         }
     }
 
+    func testRecentFileRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Preview/Views/EmptyBody.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".focusable("))
+        XCTAssertFalse(source.contains(".focusEffectDisabled("))
+    }
+
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

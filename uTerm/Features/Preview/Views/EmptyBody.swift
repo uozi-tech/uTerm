@@ -76,7 +76,6 @@ struct EmptyBody: View {
         .onHover { _ in
             // SwiftUI 无 hover 持久背景；如果想要 hover 高亮，包成 stateful 子 view
         }
-        .focusable()
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }

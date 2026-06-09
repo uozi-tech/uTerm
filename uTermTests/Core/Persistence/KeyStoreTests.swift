@@ -42,4 +42,21 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertNil(try store.privateKey(keyID: keyID))
         XCTAssertNil(try store.passphrase(keyID: keyID))
     }
+
+    func testKeyManagerRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Keys/Views/KeyManagerView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".focusable("))
+        XCTAssertFalse(source.contains(".focusEffectDisabled("))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

@@ -76,7 +76,6 @@ struct KeyManagerView: View {
                                    selected: key.id == selectedID)
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedID = key.id; generating = false }
-                                .focusable()
                                 .accessibilityElement(children: .combine)
                                 .accessibilityAddTraits(.isButton)
                                 .accessibilityAddTraits(key.id == selectedID ? .isSelected : [])

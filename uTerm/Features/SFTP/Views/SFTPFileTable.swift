@@ -279,14 +279,7 @@ struct SFTPFileTable: View {
             }
         }
         .hoverBackground(UD.rowHover, isActive: selected)
-        .overlay {
-            // 选中时叠加可见焦点环（accent 描边），键盘 / VoiceOver 导航有清晰指示。
-            if selected {
-                Rectangle().strokeBorder(UD.accent.opacity(0.6), lineWidth: 2)
-            }
-        }
         .contentShape(Rectangle())
-        .focusable()
         .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
         .onTapGesture { selectedID = e.id; focused = true }
         .onDrag {

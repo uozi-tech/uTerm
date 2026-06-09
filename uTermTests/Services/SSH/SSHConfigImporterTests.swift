@@ -23,4 +23,21 @@ final class SSHConfigImporterTests: XCTestCase {
         XCTAssertTrue(rows[0].host.isWildcard)
         XCTAssertFalse(rows[0].existing)
     }
+
+    func testImportReviewRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Import/Views/SSHConfigImportView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".focusable("))
+        XCTAssertFalse(source.contains(".focusEffectDisabled("))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

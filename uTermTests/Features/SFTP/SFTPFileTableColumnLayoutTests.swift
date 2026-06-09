@@ -49,4 +49,29 @@ final class SFTPFileTableColumnLayoutTests: XCTestCase {
         XCTAssertLessThan(modified, 156)
         XCTAssertLessThanOrEqual(occupiedContentWidth, availableContentWidth)
     }
+
+    func testRowsDoNotDeclareKeyboardFocusRing() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/SFTP/Views/SFTPFileTable.swift"
+        ), encoding: .utf8)
+        let code = sourceCodeWithoutLineComments(source)
+
+        XCTAssertEqual(code.components(separatedBy: ".focusable()").count - 1, 1)
+        XCTAssertTrue(code.contains(".focusEffectDisabled()"))
+        XCTAssertFalse(code.contains("strokeBorder(UD.accent.opacity(0.6)"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func sourceCodeWithoutLineComments(_ source: String) -> String {
+        source.split(separator: "\n")
+            .filter { !String($0).trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
 }
