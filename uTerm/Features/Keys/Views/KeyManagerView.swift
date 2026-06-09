@@ -225,7 +225,7 @@ struct KeyManagerView: View {
             material = try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")
         } catch {
             throw NSError(domain: "uTerm.keys", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "密钥库目前只支持 ed25519 / RSA 密钥",
+                NSLocalizedDescriptionKey: "密钥库目前支持 ed25519 / RSA / ECDSA 密钥",
             ])
         }
         let key = SSHKey()
@@ -280,7 +280,11 @@ private struct KeyAvatar: View {
     let size: CGFloat
 
     var body: some View {
-        let tint: Color = type == .ed25519 ? UD.accent : Color(hex: 0xFBBF24)
+        let tint: Color = switch type {
+        case .ed25519: UD.accent
+        case .rsa: Color(hex: 0xFBBF24)
+        case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
+        }
         RoundedRectangle(cornerRadius: size * 0.25)
             .fill(tint.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))

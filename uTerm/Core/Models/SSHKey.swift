@@ -5,12 +5,18 @@ import SwiftData
 enum SSHKeyKind: String, CaseIterable, Sendable {
     case ed25519
     case rsa
+    case ecdsaP256
+    case ecdsaP384
+    case ecdsaP521
 
     /// 列表 / 详情里的算法标签，如 `ed25519` 或 `rsa 4096`。
     nonisolated func label(bits: Int) -> String {
         switch self {
-        case .ed25519: return "ed25519"
-        case .rsa:     return "rsa \(bits)"
+        case .ed25519:  return "ed25519"
+        case .rsa:      return "rsa \(bits)"
+        case .ecdsaP256: return "ecdsa p256"
+        case .ecdsaP384: return "ecdsa p384"
+        case .ecdsaP521: return "ecdsa p521"
         }
     }
 }
@@ -28,7 +34,7 @@ final class SSHKey {
     var name: String = ""
     /// `SSHKeyKind` 的 rawValue，通过 `type` 计算属性读写。
     var typeRaw: String = SSHKeyKind.ed25519.rawValue
-    /// 位数：ed25519 恒 256；rsa 为 2048 / 3072 / 4096。
+    /// 位数：ed25519 恒 256；rsa 为 2048 / 3072 / 4096；ecdsa 为曲线位数。
     var bits: Int = 256
     /// 公钥末尾注释（如 `sz@laptop`）。
     var comment: String = ""

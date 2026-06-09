@@ -21,6 +21,14 @@ nonisolated enum SSHPublicMaterial {
         return w.bytes
     }
 
+    static func ecdsaBlob(algorithm: String, curve: String, publicKey: [UInt8]) -> [UInt8] {
+        var w = SSHWireWriter()
+        w.writeString(algorithm)
+        w.writeString(curve)
+        w.writeString(publicKey)
+        return w.bytes
+    }
+
     /// `<prefix> <base64(blob)> <comment>`。
     static func publicKeyLine(prefix: String, blob: [UInt8], comment: String) -> String {
         let b64 = Data(blob).base64EncodedString()

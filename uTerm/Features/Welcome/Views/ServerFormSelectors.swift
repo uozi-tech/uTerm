@@ -184,7 +184,11 @@ private struct KeyGlyph: View {
     let type: SSHKeyKind
     var size: CGFloat = 20
     var body: some View {
-        let tint: Color = type == .ed25519 ? UD.accent : Color(hex: 0xFBBF24)
+        let tint: Color = switch type {
+        case .ed25519: UD.accent
+        case .rsa: Color(hex: 0xFBBF24)
+        case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
+        }
         RoundedRectangle(cornerRadius: size * 0.25)
             .fill(tint.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))

@@ -17,6 +17,35 @@ struct KeyGeneratorView: View {
 
     private let keyStore = KeyStore()
 
+    private enum KeyFamily: Hashable {
+        case ed25519
+        case rsa
+        case ecdsa
+    }
+
+    private var familyBinding: Binding<KeyFamily> {
+        Binding {
+            switch type {
+            case .ed25519: .ed25519
+            case .rsa: .rsa
+            case .ecdsaP256, .ecdsaP384, .ecdsaP521: .ecdsa
+            }
+        } set: { family in
+            switch family {
+            case .ed25519: type = .ed25519
+            case .rsa: type = .rsa
+            case .ecdsa: type = .ecdsaP256
+            }
+        }
+    }
+
+    private var isECDSA: Bool {
+        switch type {
+        case .ecdsaP256, .ecdsaP384, .ecdsaP521: true
+        case .ed25519, .rsa: false
+        }
+    }
+
     private var nameEmpty: Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -46,9 +75,16 @@ struct KeyGeneratorView: View {
                             .onChange(of: name) { _, _ in nameTouched = true }
                     }
                     DarkFormField(label: "类型") {
-                        UDSegmented(selection: $type, options: [
-                            (.ed25519, "ed25519（推荐）"), (.rsa, "RSA"),
+                        UDSegmented(selection: familyBinding, options: [
+                            (.ed25519, "ed25519（推荐）"), (.rsa, "RSA"), (.ecdsa, "ECDSA"),
                         ])
+                    }
+                    if isECDSA {
+                        DarkFormField(label: "曲线") {
+                            UDSegmented(selection: $type, options: [
+                                (.ecdsaP256, "P-256"), (.ecdsaP384, "P-384"), (.ecdsaP521, "P-521"),
+                            ])
+                        }
                     }
                     if type == .rsa {
                         DarkFormField(label: "位数") {
@@ -93,13 +129,21 @@ struct KeyGeneratorView: View {
                     switch chosenType {
                     case .ed25519: return SSHKeyGenerator.generateEd25519(comment: cmt)
                     case .rsa:     return try SSHKeyGenerator.generateRSA(bits: bits, comment: cmt)
+                    case .ecdsaP256, .ecdsaP384, .ecdsaP521:
+                        return try SSHKeyGenerator.generateECDSA(type: chosenType, comment: cmt)
                     }
                 }.value
 
                 let key = SSHKey()
                 key.name = nm
                 key.type = chosenType
-                key.bits = chosenType == .ed25519 ? 256 : bits
+                key.bits = switch chosenType {
+                case .ed25519: 256
+                case .rsa: bits
+                case .ecdsaP256: 256
+                case .ecdsaP384: 384
+                case .ecdsaP521: 521
+                }
                 key.comment = cmt
                 key.fingerprint = generated.fingerprint
                 key.publicKey = generated.publicKey

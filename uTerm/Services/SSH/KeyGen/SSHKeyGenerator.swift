@@ -7,6 +7,8 @@ import Security
 ///  - **ed25519**：`Curve25519.Signing.PrivateKey`（swift-crypto）→ 手写 **未加密**
 ///    `openssh-key-v1` 私钥容器；
 ///  - **rsa**：`SecKeyCreateRandomKey` → PKCS#1 DER → `BEGIN RSA PRIVATE KEY` PEM。
+///  - **ecdsa**：`P256/P384/P521.Signing.PrivateKey` → 手写 **未加密**
+///    `openssh-key-v1` 私钥容器。
 ///
 /// 生成的私钥不加口令（靠钟匙串加密），公钥串与 `SHA256:` 指纹自算。产物文本可被
 /// `PrivateKeyImporter.resolve(pem:passphrase:)` 原样回读，连接路径无需特判。
@@ -21,6 +23,7 @@ nonisolated enum SSHKeyGenerator {
     enum GenerationError: Error {
         case rsaGenerationFailed(String)
         case rsaExportFailed
+        case unsupportedKeyType(SSHKeyKind)
     }
 
     // MARK: - ed25519
@@ -65,6 +68,52 @@ nonisolated enum SSHKeyGenerator {
             fingerprint: SSHPublicMaterial.fingerprint(of: pubBlob))
     }
 
+    // MARK: - ecdsa
+
+    static func generateECDSA(type: SSHKeyKind, comment: String) throws -> GeneratedKey {
+        switch type {
+        case .ecdsaP256:
+            let priv = P256.Signing.PrivateKey()
+            return ecdsaKey(
+                algorithm: "ecdsa-sha2-nistp256",
+                curve: "nistp256",
+                publicKey: [UInt8](priv.publicKey.x963Representation),
+                scalar: [UInt8](priv.rawRepresentation),
+                comment: comment)
+        case .ecdsaP384:
+            let priv = P384.Signing.PrivateKey()
+            return ecdsaKey(
+                algorithm: "ecdsa-sha2-nistp384",
+                curve: "nistp384",
+                publicKey: [UInt8](priv.publicKey.x963Representation),
+                scalar: [UInt8](priv.rawRepresentation),
+                comment: comment)
+        case .ecdsaP521:
+            let priv = P521.Signing.PrivateKey()
+            return ecdsaKey(
+                algorithm: "ecdsa-sha2-nistp521",
+                curve: "nistp521",
+                publicKey: [UInt8](priv.publicKey.x963Representation),
+                scalar: [UInt8](priv.rawRepresentation),
+                comment: comment)
+        default:
+            throw GenerationError.unsupportedKeyType(type)
+        }
+    }
+
+    private static func ecdsaKey(algorithm: String, curve: String, publicKey: [UInt8],
+                                 scalar: [UInt8], comment: String) -> GeneratedKey {
+        let pubBlob = SSHPublicMaterial.ecdsaBlob(
+            algorithm: algorithm, curve: curve, publicKey: publicKey)
+        let text = openSSHECDSAPrivateKey(
+            algorithm: algorithm, curve: curve, pubBlob: pubBlob,
+            publicKey: publicKey, scalar: scalar, comment: comment)
+        return GeneratedKey(
+            privateKeyText: text,
+            publicKey: SSHPublicMaterial.publicKeyLine(prefix: algorithm, blob: pubBlob, comment: comment),
+            fingerprint: SSHPublicMaterial.fingerprint(of: pubBlob))
+    }
+
     // MARK: - OpenSSH 未加密私钥容器
 
     /// 序列化 `openssh-key-v1`（cipher=none / kdf=none，单密钥）。
@@ -85,6 +134,30 @@ nonisolated enum SSHKeyGenerator {
             inner.writeRawBytes([pad]); pad += 1
         }
 
+        return openSSHPrivateKeyContainer(pubBlob: pubBlob, privateSection: inner.bytes)
+    }
+
+    /// 序列化 OpenSSH ECDSA 私钥段：algorithm, curve name, Q(point), d(scalar), comment。
+    private static func openSSHECDSAPrivateKey(algorithm: String, curve: String,
+                                               pubBlob: [UInt8], publicKey: [UInt8],
+                                               scalar: [UInt8], comment: String) -> String {
+        var inner = SSHWireWriter()
+        let check: UInt32 = 0x756F_7A69
+        inner.writeUInt32(check)
+        inner.writeUInt32(check)
+        inner.writeString(algorithm)
+        inner.writeString(curve)
+        inner.writeString(publicKey)
+        inner.writeMPInt(scalar)
+        inner.writeString(comment.trimmingCharacters(in: .whitespacesAndNewlines))
+        var pad: UInt8 = 1
+        while inner.bytes.count % 8 != 0 {
+            inner.writeRawBytes([pad]); pad += 1
+        }
+        return openSSHPrivateKeyContainer(pubBlob: pubBlob, privateSection: inner.bytes)
+    }
+
+    private static func openSSHPrivateKeyContainer(pubBlob: [UInt8], privateSection: [UInt8]) -> String {
         var w = SSHWireWriter()
         w.writeRawBytes(Array("openssh-key-v1\0".utf8))
         w.writeString("none")             // ciphername
@@ -92,7 +165,7 @@ nonisolated enum SSHKeyGenerator {
         w.writeString([])                 // kdfoptions（空）
         w.writeUInt32(1)                  // 密钥数
         w.writeString(pubBlob)            // 公钥 blob
-        w.writeString(inner.bytes)        // 私钥段
+        w.writeString(privateSection)     // 私钥段
 
         let b64 = Data(w.bytes).base64EncodedString()
         return pemBody(base64: b64, label: "OPENSSH PRIVATE KEY", lineWidth: 70)

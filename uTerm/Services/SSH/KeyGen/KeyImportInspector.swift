@@ -8,10 +8,10 @@ import Crypto
 ///  - **OpenSSH 容器**（`-----BEGIN OPENSSH PRIVATE KEY-----`）：公钥 blob 以明文
 ///    嵌在文件里，直接抽出来即可——对任何算法（含加口令的）都成立，无需私钥分量。
 ///  - **PEM**：无内嵌公钥，从 `ParsedPrivateKey` 反推（ed25519 用公钥原始字节，
-///    RSA 用 `RSAKeyComponents` 的 e/n）。
+///    RSA 用 `RSAKeyComponents` 的 e/n，ECDSA 用 X9.63 公钥点）。
 ///
-/// 密钥库模型只表达 ed25519 / rsa（对齐设计稿）；其余算法（ecdsa 等）抛
-/// `unsupportedAlgorithm`，由调用方提示用户。
+/// 密钥库模型表达 ed25519 / rsa / ecdsa；DSA 等旧算法抛 `unsupportedAlgorithm`，
+/// 由调用方提示用户。
 nonisolated enum KeyImportInspector {
 
     struct Material {
@@ -35,8 +35,26 @@ nonisolated enum KeyImportInspector {
         case .rsa(let comps):
             let blob = SSHPublicMaterial.rsaBlob(e: comps.publicExponent, n: comps.modulus)
             return material(type: .rsa, bits: comps.modulus.count * 8, blob: blob, comment: comment)
-        case .legacyOpenSSHRSA, .p256, .p384, .p521:
-            // 这些要么应已走 OpenSSH 内嵌路径，要么是密钥库不建模的算法。
+        case .p256(let key):
+            let blob = SSHPublicMaterial.ecdsaBlob(
+                algorithm: "ecdsa-sha2-nistp256",
+                curve: "nistp256",
+                publicKey: [UInt8](key.publicKey.x963Representation))
+            return material(type: .ecdsaP256, bits: 256, blob: blob, comment: comment)
+        case .p384(let key):
+            let blob = SSHPublicMaterial.ecdsaBlob(
+                algorithm: "ecdsa-sha2-nistp384",
+                curve: "nistp384",
+                publicKey: [UInt8](key.publicKey.x963Representation))
+            return material(type: .ecdsaP384, bits: 384, blob: blob, comment: comment)
+        case .p521(let key):
+            let blob = SSHPublicMaterial.ecdsaBlob(
+                algorithm: "ecdsa-sha2-nistp521",
+                curve: "nistp521",
+                publicKey: [UInt8](key.publicKey.x963Representation))
+            return material(type: .ecdsaP521, bits: 521, blob: blob, comment: comment)
+        case .legacyOpenSSHRSA:
+            // OpenSSH RSA 应已走容器内嵌公钥路径。
             throw InspectError.unsupportedAlgorithm
         }
     }
@@ -46,9 +64,19 @@ nonisolated enum KeyImportInspector {
     private static func material(type: SSHKeyKind, bits: Int, blob: [UInt8], comment: String) -> Material {
         Material(
             type: type, bits: bits,
-            publicKey: SSHPublicMaterial.publicKeyLine(prefix: type == .rsa ? "ssh-rsa" : "ssh-ed25519",
+            publicKey: SSHPublicMaterial.publicKeyLine(prefix: publicKeyPrefix(for: type),
                                                        blob: blob, comment: comment),
             fingerprint: SSHPublicMaterial.fingerprint(of: blob))
+    }
+
+    private static func publicKeyPrefix(for type: SSHKeyKind) -> String {
+        switch type {
+        case .ed25519:   return "ssh-ed25519"
+        case .rsa:       return "ssh-rsa"
+        case .ecdsaP256: return "ecdsa-sha2-nistp256"
+        case .ecdsaP384: return "ecdsa-sha2-nistp384"
+        case .ecdsaP521: return "ecdsa-sha2-nistp521"
+        }
     }
 
     /// 从公钥 blob 的算法标识判定类型与位数。
@@ -62,9 +90,27 @@ nonisolated enum KeyImportInspector {
             _ = try? reader.readMPInt()                 // e
             let n = (try? reader.readMPInt()) ?? []     // n（已去前导零的幅值）
             return material(type: .rsa, bits: max(n.count * 8, 0), blob: blob, comment: comment)
+        case "ecdsa-sha2-nistp256":
+            return try ecdsaMaterial(blob: blob, reader: &reader, expectedCurve: "nistp256",
+                                     type: .ecdsaP256, bits: 256, comment: comment)
+        case "ecdsa-sha2-nistp384":
+            return try ecdsaMaterial(blob: blob, reader: &reader, expectedCurve: "nistp384",
+                                     type: .ecdsaP384, bits: 384, comment: comment)
+        case "ecdsa-sha2-nistp521":
+            return try ecdsaMaterial(blob: blob, reader: &reader, expectedCurve: "nistp521",
+                                     type: .ecdsaP521, bits: 521, comment: comment)
         default:
             throw InspectError.unsupportedAlgorithm
         }
+    }
+
+    private static func ecdsaMaterial(blob: [UInt8], reader: inout SSHWireReader,
+                                      expectedCurve: String, type: SSHKeyKind,
+                                      bits: Int, comment: String) throws -> Material {
+        let curve = String(decoding: try reader.readString(), as: UTF8.self)
+        guard curve == expectedCurve else { throw InspectError.malformed }
+        _ = try reader.readString() // Q: SEC1/X9.63 public point
+        return material(type: type, bits: bits, blob: blob, comment: comment)
     }
 
     /// 解析 `openssh-key-v1` 容器，抽出明文公钥 blob。失败（非 OpenSSH 格式）返回 nil。

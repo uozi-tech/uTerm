@@ -55,7 +55,13 @@ struct KeyDetailView: View {
     }
 
     private var metaLine: String {
-        let algo = key.type == .ed25519 ? "ed25519 · 256 bit" : "rsa · \(key.bits) bit"
+        let algo: String = switch key.type {
+        case .ed25519: "ed25519 · 256 bit"
+        case .rsa: "rsa · \(key.bits) bit"
+        case .ecdsaP256: "ecdsa p256 · 256 bit"
+        case .ecdsaP384: "ecdsa p384 · 384 bit"
+        case .ecdsaP521: "ecdsa p521 · 521 bit"
+        }
         return "\(algo) · 创建于 \(Self.dateFmt.string(from: key.createdAt))"
     }
 
@@ -217,7 +223,11 @@ private struct WrapChips: View {
 private struct KeyAvatarLarge: View {
     let type: SSHKeyKind
     var body: some View {
-        let tint: Color = type == .ed25519 ? UD.accent : Color(hex: 0xFBBF24)
+        let tint: Color = switch type {
+        case .ed25519: UD.accent
+        case .rsa: Color(hex: 0xFBBF24)
+        case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
+        }
         RoundedRectangle(cornerRadius: 8)
             .fill(tint.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint.opacity(0.3), lineWidth: 1))
