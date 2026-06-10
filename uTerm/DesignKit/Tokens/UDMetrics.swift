@@ -49,6 +49,9 @@ extension UD {
         /// `UD.border` 细边即可，避免描边叠描边。
         case menu
     }
+
+    /// 模态卡片投影色：暗夜保留浮层深度，日间保持扁平、无 box-shadow。
+    nonisolated static let modalShadowColor = dyn(.black(0.6), .black(0))
 }
 
 /// 单条投影描述（SwiftUI `.shadow` 无 spread，故用 blur/2 近似设计稿的模糊半径）。

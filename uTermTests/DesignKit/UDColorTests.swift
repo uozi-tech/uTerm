@@ -112,4 +112,13 @@ final class UDColorTests: XCTestCase {
         assertHex(UD.inputBg,     .darkAqua, 0xFFFFFF, alpha: 0.035, "inputBg dark = white@3.5%")
         assertHex(UD.inputBgSoft, .darkAqua, 0xFFFFFF, alpha: 0.03,  "inputBgSoft dark = white@3%")
     }
+
+    // MARK: - 模态投影：暗夜保留深度 / 日间无 box-shadow
+
+    func test_modal_shadow_color_is_clear_in_light_mode() {
+        assertHex(UD.modalShadowColor, .aqua, 0x000000, alpha: 0,
+                  "modalShadowColor light = clear")
+        assertHex(UD.modalShadowColor, .darkAqua, 0x000000, alpha: 0.6,
+                  "modalShadowColor dark = black@60%")
+    }
 }

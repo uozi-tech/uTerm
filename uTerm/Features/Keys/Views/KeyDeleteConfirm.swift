@@ -39,7 +39,7 @@ struct KeyDeleteConfirm: View {
             .frame(width: 400)
             .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlayHi))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-            .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
+            .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
         }
     }
 

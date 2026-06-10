@@ -767,12 +767,12 @@
     "新建" : {
 
     },
-    "新建 %lld · 更新 %lld · 导入密钥 %lld · 跳过密钥 %lld" : {
+    "新建 %lld · 更新 %lld · 导入密钥 %lld · 关联已有密钥 %lld · 跳过密钥 %lld" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "新建 %1$lld · 更新 %2$lld · 导入密钥 %3$lld · 跳过密钥 %4$lld"
+            "value" : "新建 %1$lld · 更新 %2$lld · 导入密钥 %3$lld · 关联已有密钥 %4$lld · 跳过密钥 %5$lld"
           }
         }
       }

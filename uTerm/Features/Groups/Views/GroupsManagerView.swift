@@ -796,7 +796,7 @@ private struct GroupDeleteConfirm: View {
             .frame(width: 380)
             .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-            .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
+            .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
         }
     }
 

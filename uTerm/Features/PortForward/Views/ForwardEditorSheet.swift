@@ -23,6 +23,8 @@ struct ForwardEditorDraft: Equatable {
 /// +「端口 X 已被『Y』占用」+「改用 N」建议 chip（点击填入 `suggestFreePort`）；冲突未解决
 /// 禁用保存、底部「端口冲突，请先解决」；`<1024` 非阻断 amber 警告。
 struct ForwardEditorSheet: View {
+    static let commandPreviewBackground = UD.panelHi
+
     let server: ServerProfile
     let existing: ForwardingRule?
     let allRules: [ForwardingRuleSnapshot]
@@ -123,7 +125,7 @@ struct ForwardEditorSheet: View {
         .frame(maxHeight: 620)
         .background(RoundedRectangle(cornerRadius: 12).fill(UD.overlay))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(UD.borderHi, lineWidth: 1))
-        .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
+        .shadow(color: UD.modalShadowColor, radius: 30, y: 18)
     }
 
     private var header: some View {
@@ -286,7 +288,7 @@ struct ForwardEditorSheet: View {
         .accessibilityLabel("命令预览：\(previewCommand)")
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(UD.terminal))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Self.commandPreviewBackground))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
     }
 
