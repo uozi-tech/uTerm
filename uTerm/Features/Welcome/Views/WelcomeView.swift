@@ -3,6 +3,12 @@ import SwiftData
 import AppKit
 import UniformTypeIdentifiers
 
+/// Welcome 窗口的内容分区：主机列表 或 快捷命令库。
+nonisolated enum WelcomePane: Hashable, Sendable {
+    case hosts
+    case quickCommands
+}
+
 /// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
 /// sidebar + list 三层组合（Termius 风）。
 struct WelcomeView: View {
@@ -16,6 +22,8 @@ struct WelcomeView: View {
     private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
 
     @State private var filter = ServerFilter()
+    @State private var pane: WelcomePane = .hosts
+    @State private var didPruneCommands = false
     @State private var formRoute: FormRoute?
     @State private var selectedProfileID: UUID?
     @State private var draggingProfileID: UUID?
@@ -102,6 +110,7 @@ struct WelcomeView: View {
             HStack(spacing: 0) {
                 WelcomeSidebar(profiles: displayProfiles,
                                filter: $filter,
+                               pane: $pane,
                                draggingProfileID: $draggingProfileID,
                                onDropProfileToGroup: moveProfileToGroup)
                     .frame(width: 224)
@@ -159,6 +168,12 @@ struct WelcomeView: View {
             didReconcileGroups = true
             GroupStore(context: modelContext).reconcile()
         }
+        .task {
+            // 快捷命令执行日志 30 天滚动清理（功能文档 §7）：启动时跑一次。
+            guard !didPruneCommands else { return }
+            didPruneCommands = true
+            QuickCommandStore(context: modelContext).pruneExpiredRuns()
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleConfigDrop(providers)
         }
@@ -183,7 +198,9 @@ struct WelcomeView: View {
 
     @ViewBuilder
     private var bodyContent: some View {
-        if displayProfiles.isEmpty {
+        if pane == .quickCommands {
+            QuickCommandList(hosts: displayProfiles)
+        } else if displayProfiles.isEmpty {
             EmptyServersState(onNewServer: { formRoute = .new })
         } else {
             ServerList(profiles: visibleProfiles,

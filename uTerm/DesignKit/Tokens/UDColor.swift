@@ -93,6 +93,10 @@ enum UD {
         return dyn(a.pressedSpec(dark: true), a.pressedSpec(dark: false))
     }
 
+    /// AI 介入固定紫（设计稿 `#a78bfa`，§6）。与连接强调色刻意区分；深浅同值。
+    /// 快捷命令「AI 介入」徽标 / 开关 / 闪标 / 图标染色专用。
+    nonisolated static let aiAccent = ColorSpec.hex(0xA78BFA).color()
+
     // 备选强调色（设计稿固定 macOS 系统色，深浅同值）。
     nonisolated static let accentViolet = ColorSpec.hex(0xBF5AF2).color()   // 雾紫
     nonisolated static let accentSage   = ColorSpec.hex(0x30D158).color()   // 鼠尾草

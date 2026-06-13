@@ -11,9 +11,12 @@ import SwiftUI
 /// 纯展示组件，只读 `UD` token + `Bool` 绑定，不依赖任何 domain model。
 struct UDToggle: View {
     @Binding var isOn: Bool
+    /// ON 态轨道填充色（默认 `UD.accent`）。AI 介入开关传 `UD.aiAccent` 显紫。
+    var tint: Color
 
-    init(_ isOn: Binding<Bool>) {
+    init(_ isOn: Binding<Bool>, tint: Color = UD.accent) {
         self._isOn = isOn
+        self.tint = tint
     }
 
     @Environment(\.isEnabled) private var isEnabled
@@ -39,7 +42,7 @@ struct UDToggle: View {
 
     private var track: some View {
         Capsule()
-            .fill(isOn ? UD.accent : UD.panelHover)
+            .fill(isOn ? tint : UD.panelHover)
             .overlay(
                 // OFF 态：中性底 + 1px 细描边（无内阴影）。ON 态纯强调色填充、无描边。
                 Capsule()

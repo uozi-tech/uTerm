@@ -185,6 +185,9 @@ struct WorkspaceWindowView: View {
             workspace.assistantModel.executor = try? WorkspaceCommandExecutorFactory.make(
                 server: server, container: modelContext.container)
         }
+        // 快捷命令「AI 介入」运行入口：欢迎页把命令入队 QuickCommandInbox 并打开本窗口。
+        // 抽成独立 ViewModifier —— 内联 .task + .onChange 会把本就庞大的 body 推过类型检查上限。
+        .modifier(QuickCommandInboxConsumer(workspace: workspace, server: server))
         .onDisappear {
             workspace.dispose()
         }
@@ -410,4 +413,31 @@ struct WorkspaceWindowView: View {
         }
     }
 
+}
+
+/// 消费 `QuickCommandInbox`：欢迎页「AI 介入」命令运行 → 露出 Agent 检视器并把命令预填进输入框
+/// （用户复核后发送）。抽成独立 ViewModifier，避免内联 .task/.onChange 撑爆 `body` 类型检查。
+/// 首开走 `.task`；窗口已开则靠 `onChange(serial)` 消费（仿 `ImportInbox`→`SSHConfigImportView`）。
+private struct QuickCommandInboxConsumer: ViewModifier {
+    let workspace: WorkspaceModel
+    let server: ServerProfile
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: server.id) { consume() }
+            .onChange(of: QuickCommandInbox.shared.serial) { _, _ in consume() }
+    }
+
+    @MainActor
+    private func consume() {
+        guard let command = QuickCommandInbox.shared.take(for: server.id) else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            workspace.uiState.rightInspectorPresented = true
+        }
+        // 不覆盖用户在 Agent 输入框里正在写的内容：非空则换行追加。
+        let existing = workspace.assistantModel.input
+        workspace.assistantModel.input = existing.isEmpty
+            ? command
+            : existing + (existing.hasSuffix("\n") ? "" : "\n") + command
+    }
 }

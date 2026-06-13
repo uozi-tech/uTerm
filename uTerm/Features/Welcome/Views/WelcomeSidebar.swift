@@ -172,9 +172,11 @@ nonisolated struct WelcomeSidebarProfileDropTarget: Equatable {
 struct WelcomeSidebar: View {
     let profiles: [ServerProfile]
     @Binding var filter: ServerFilter
+    @Binding var pane: WelcomePane
     @Binding var draggingProfileID: UUID?
     let onDropProfileToGroup: (_ profileID: UUID, _ groupName: String?) -> Void
     @Query private var groups: [ServerGroup]
+    @Query private var quickCommands: [QuickCommand]
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
     @State private var draggingGroupID: PersistentIdentifier?
@@ -259,6 +261,19 @@ struct WelcomeSidebar: View {
                             onDropProfileToGroup: onDropProfileToGroup
                         ))
                 }
+
+                // 动作分组：快捷命令库入口（功能文档 §1 入口；闪电图标 + 数量徽标，始终可见）。
+                UDSidebarSectionHeader("动作")
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.top, (showViewSection || showGroupSection) ? 14 : 0)
+                UDSidebarRow(
+                    systemImage: "bolt.fill",
+                    label: "快捷命令",
+                    count: quickCommands.count,
+                    selected: pane == .quickCommands,
+                    action: { pane = .quickCommands }
+                )
+                .padding(.horizontal, 8)
             }
             .padding(.vertical, 14)
         }
@@ -273,7 +288,8 @@ struct WelcomeSidebar: View {
     private func navRow(_ section: NavSection, icon: String, title: String,
                         counts: [NavSection: Int], iconColor: Color? = nil) -> some View {
         let count = counts[section] ?? 0
-        let isActive = filter.section == section
+        // 仅当处于主机面板时高亮主机 section；切到快捷命令面板时主机行全不选中。
+        let isActive = pane == .hosts && filter.section == section
         // 搜索时不命中的 section（除 allHosts 之外）半透明 + 禁点击
         let isDimmed = !filter.query.isEmpty && count == 0 && section != .allHosts
 
@@ -284,7 +300,7 @@ struct WelcomeSidebar: View {
             label: title,
             count: count,
             selected: isActive,
-            action: { filter.section = section },
+            action: { pane = .hosts; filter.section = section },
             iconColor: iconColor
         )
         .padding(.horizontal, 8)
