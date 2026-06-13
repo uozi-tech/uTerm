@@ -121,6 +121,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // different backend at the same generation boundary.
         guard feedGeneration == myGen, self.backend === backend else { return }
         connectionState = .connected
+        // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
+        // 「已连接」徽标静默挂着。弱引用注册，幂等。
+        ConnectionWatchdog.shared.register(self)
         if let latestReportedResize {
             forwardResizeImmediately(latestReportedResize)
         }
@@ -261,4 +264,16 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         return true
     }
 
+}
+
+// MARK: - 连接健康探测（ConnectionWatchdog）
+
+extension TerminalSession: ConnectionHealthProbing {
+    /// 系统唤醒 / 网络恢复后由 `ConnectionWatchdog` 调用。只在自认「已连接」时
+    /// 探测；后端判死时会自行强制关闭通道，`exitStream` 级联把状态翻到
+    /// `.disconnected`（窗格盖上「连接已断开 / 重新连接」），这里不写任何状态。
+    func probeConnectionHealth() async {
+        guard connectionState == .connected, let backend else { return }
+        _ = await backend.verifyConnectionAlive()
+    }
 }

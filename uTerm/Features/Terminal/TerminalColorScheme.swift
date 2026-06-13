@@ -8,6 +8,16 @@ import SwiftTerm
 /// 配色不再可自定义：终端固定用 VS Code 家族的前景 / ANSI 色，按 app 外观自动取
 /// 深 / 浅变体（`resolve(dark:)`）。深色背景对齐工作区基底。
 struct TerminalColorScheme {
+    /// 渲染期最低 WCAG 对比度（VS Code `minimumContrastRatio` 同思路）。远端
+    /// prompt / TUI（p10k 等）常按深色背景硬编码 256 色 / 真彩色，不经过下面的
+    /// 16 色 ANSI 表——浅色背景下唯一可靠的解法是渲染时钳制前景色（vendored
+    /// SwiftTerm 补丁，见 vendor/SwiftTerm/UTERM-PATCHES.md）。
+    ///
+    /// 取 3.0（WCAG 大字号 / UI 组件 AA 下限）而非 VS Code 的 4.5：钳制是
+    /// 保色相的（OKLCH 只调明度），但 4.5 在中灰底上数学上只有逼近纯黑 / 纯白
+    /// 才达标，色彩会被洗掉；3.0 在可读性与还原 prompt 配色之间取平衡。
+    static let minimumContrastRatio: CGFloat = 3.0
+
     let displayName: String
     let backgroundColor: NSColor
     let foregroundColor: NSColor
@@ -73,8 +83,11 @@ struct TerminalColorScheme {
             white:   (0xCC, 0xCC, 0xCC))
     )
 
-    /// VS Code Light Modern 终端色。源：microsoft/vscode 内置主题。
-    /// yellow/brightYellow 在浅色提示符灰底上太浅，改为更深的琥珀色以保证可读性。
+    /// VS Code Light Modern 终端色。源：microsoft/vscode 内置主题，官方原值。
+    /// 不要为「某种段底可读」改暗单个颜色（曾把 yellow 写死成 #3F3200）：palette
+    /// 是全局的，深灰段底上起点过暗的黄会被对比度钳制往更暗方向修成暗橄榄。
+    /// 逐 cell 可读性由渲染期 minimumContrastRatio 兜底——浅灰段底上压暗、
+    /// 深灰段底上提亮，两种方向都正确。
     static let vscodeLight = TerminalColorScheme(
         displayName: "VS Code Light",
         backgroundColor: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
@@ -82,9 +95,9 @@ struct TerminalColorScheme {
         accentColor: NSColor(srgbRed: 0x00/255, green: 0x5F/255, blue: 0xB8/255, alpha: 1),
         cursorColor: NSColor(srgbRed: 0x3B/255, green: 0x3B/255, blue: 0x3B/255, alpha: 1),
         ansiColors: makeAnsi(
-            normals: [(0x00,0x00,0x00),(0xCD,0x31,0x31),(0x00,0xBC,0x00),(0x3F,0x32,0x00),
+            normals: [(0x00,0x00,0x00),(0xCD,0x31,0x31),(0x00,0xBC,0x00),(0x94,0x98,0x00),
                       (0x04,0x51,0xA5),(0xBC,0x05,0xBC),(0x05,0x98,0xBC),(0x55,0x55,0x55)],
-            brights: [(0x66,0x66,0x66),(0xCD,0x31,0x31),(0x14,0xCE,0x14),(0x3F,0x32,0x00),
+            brights: [(0x66,0x66,0x66),(0xCD,0x31,0x31),(0x14,0xCE,0x14),(0xB5,0xBA,0x00),
                       (0x04,0x51,0xA5),(0xBC,0x05,0xBC),(0x05,0x98,0xBC),(0xA5,0xA5,0xA5)])
     )
 

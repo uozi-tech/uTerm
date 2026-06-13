@@ -222,7 +222,7 @@
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				A1B2C3D4E5F6789ABCDEF000 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
@@ -604,17 +604,13 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
 		};
+		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/SwiftTerm;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		A1B2C3D4E5F6789ABCDEF000 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
-			requirement = {
-				kind = revision;
-				revision = c068a905c5aeab60852fb865bee05dc8a5af190c;
-			};
-		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-asn1.git";
@@ -739,7 +735,7 @@
 		};
 		A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF000 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
 			productName = SwiftTerm;
 		};
 		A50000000000000000000001 /* SwiftASN1 */ = {

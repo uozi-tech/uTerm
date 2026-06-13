@@ -42,6 +42,8 @@ actor ForwardingSession {
     /// 每条规则的运行句柄。
     private struct TunnelHandle {
         let task: Task<Void, Never>
+        /// 规则快照 —— 看门狗判死时构造 `.error` 文案（规则名）用。
+        let rule: ForwardingRuleSnapshot
         /// local 的本地监听器；remote/dynamic 为 nil。
         let localListener: LocalForwardListener?
         /// dynamic 的本地 SOCKS5 监听器；remote/local 为 nil。
@@ -138,7 +140,7 @@ actor ForwardingSession {
                 }
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, localListener: nil, socksListener: nil)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil, socksListener: nil)
     }
 
     /// `-L` 本地：起 `LocalForwardListener`，bind 失败归类报 error。
@@ -159,7 +161,7 @@ actor ForwardingSession {
                                 category: ForwardingLog.category)
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, localListener: listener, socksListener: nil)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: listener, socksListener: nil)
     }
 
     /// `-D` 动态：起 `SOCKS5ForwardListener`，bind 失败归类报 error。
@@ -178,7 +180,7 @@ actor ForwardingSession {
                                 category: ForwardingLog.category)
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, localListener: nil, socksListener: listener)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil, socksListener: listener)
     }
 
     /// 停止一条规则：取消驱动 Task + 关闭其监听器。报回 inactive。
@@ -209,5 +211,75 @@ actor ForwardingSession {
         connected = nil
         AppLogger.info("转发会话已关闭 \(self.profile.host):\(self.profile.port)",
                        category: ForwardingLog.category)
+    }
+
+    // MARK: - 存活探测
+
+    /// 主动探测底层 SSH 传输是否存活（系统唤醒 / 网络恢复后由
+    /// `ForwardingCoordinator.probeConnectionHealth` 调用）。
+    ///
+    /// 长时间待机断网形成的半死 TCP 上，本地监听端口还在，但新转发连接建不
+    /// 起来或挂死，规则状态却停在 active。与 `SSHConnection.verifyConnectionAlive`
+    /// 一致：在专用转发连接上开一次性 exec channel 跑 `true`（与隧道通道
+    /// 多路复用、不影响在跑的转发）：
+    /// - 任何应答（含服务器拒开 channel 等应用层失败）都证明传输活着，
+    ///   只有超时 / 传输层错误才判死；
+    /// - 判死 → 强制关闭底层连接（本地操作、立即完成，同时解除可能挂死的
+    ///   探测子任务），再 `failTunnelsAfterTransportDeath()` 拆掉全部隧道。
+    ///   此后本会话不可复用 —— 调用方负责丢弃它，使「重试」重建连接；
+    /// - 连接尚未建立（connect 在飞或已失败）时无从探测，返回 true：在飞的
+    ///   connect 会自行成功或经既有 start 路径报错，绝不能在这里误杀。
+    func verifyConnectionAlive() async -> Bool {
+        await verifyConnectionAlive(timeout: .seconds(10))
+    }
+
+    func verifyConnectionAlive(timeout: Duration) async -> Bool {
+        guard !isClosed else { return false }
+        guard let connected else { return true }
+        let alive = await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                do {
+                    _ = try await connected.exec("true")
+                    return true
+                } catch {
+                    return !SSHTransportFailure.isTransportFailure(error)
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil   // nil = 超时
+            }
+            let first = await group.next() ?? nil
+            if first != true {
+                // 判死：先把底层通道关掉。这同时解除可能挂死的探测子任务
+                // （exec 拿到「通道已关」错误后返回），TaskGroup 才能收尾。
+                await connected.close()
+            }
+            group.cancelAll()
+            return first == true
+        }
+        if !alive {
+            await failTunnelsAfterTransportDeath()
+        }
+        return alive
+    }
+
+    /// 判死收尾：置 `isClosed`（后续 start 直接报错，不在死连接上挂死）、
+    /// 拆掉全部隧道 —— 本地监听器关闭（半死端口不再静默吞新连接）、每条
+    /// 规则报 `.error`（UI 行出现「重试」入口）。底层连接已在探测路径强制
+    /// 关闭。与并发而至的 `close()` 互为幂等（先到者置 isClosed，后到者跳过）。
+    private func failTunnelsAfterTransportDeath() async {
+        guard !isClosed else { return }
+        isClosed = true
+        for (ruleID, handle) in tunnels {
+            handle.task.cancel()
+            await handle.localListener?.close()
+            await handle.socksListener?.close()
+            onStatus(ruleID, .error(.connectionLost(rule: handle.rule)))
+        }
+        tunnels.removeAll()
+        connected = nil
+        AppLogger.error("转发连接判死 \(self.profile.host):\(self.profile.port)，已拆除全部隧道",
+                        category: ForwardingLog.category)
     }
 }

@@ -142,4 +142,15 @@ actor MockSFTP: SFTPProviding {
     func close() async { didClose = true }
 
     func setListError(_ error: Error) { listError = error }
+
+    // MARK: - 存活探测（ConnectionWatchdog 路径）
+
+    /// 探测返回值（默认 true=活）。记录调用次数供断言。
+    var aliveOnProbe = true
+    private(set) var probeCount = 0
+    func setAliveOnProbe(_ v: Bool) { aliveOnProbe = v }
+    func verifyConnectionAlive() async -> Bool {
+        probeCount += 1
+        return aliveOnProbe
+    }
 }

@@ -224,6 +224,9 @@ struct FileBrowserContent: View {
                 Text("无法浏览文件").font(.headline).foregroundStyle(UD.text)
                 Text(message).font(.caption).foregroundStyle(UD.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
+                // refresh() 对死连接会自动重连并保留当前目录（传输错误分类
+                // 见 SSHTransportFailure）；顶栏 ⟳ 同效，这里给个显眼入口。
+                UDButton(title: "重新连接") { Task { await model.refresh() } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:

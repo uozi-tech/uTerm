@@ -77,4 +77,39 @@ final class TerminalSessionTests: XCTestCase {
         let written = await backend.writtenData
         XCTAssertEqual(written.map { String(decoding: $0, as: UTF8.self) }.joined(), "ls\n")
     }
+
+    /// 看门狗探测：后端报活 → 状态不动。
+    func testProbeConnectionHealthKeepsConnectedWhenAlive() async {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await session.connect(using: backend)
+
+        await session.probeConnectionHealth()
+
+        XCTAssertEqual(session.connectionState, .connected)
+        let probes = await backend.probeCount
+        XCTAssertEqual(probes, 1)
+    }
+
+    /// 看门狗探测：后端判死（真实实现会强制关通道 → exitStream 产元素）→
+    /// 状态翻到 .disconnected，窗格据此盖「连接已断开 / 重新连接」。
+    func testProbeConnectionHealthFlipsToDisconnectedWhenDead() async {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await session.connect(using: backend)
+        await backend.setAliveOnProbe(false)
+
+        await session.probeConnectionHealth()
+
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(session.connectionState, .disconnected)
+    }
+
+    /// 未连接（idle / failed / disconnected）不探测 —— 避免对早已收尾的
+    /// 后端做无意义往返。
+    func testProbeConnectionHealthSkippedWhenNotConnected() async {
+        let session = TerminalSession()
+        await session.probeConnectionHealth()
+        XCTAssertEqual(session.connectionState, .idle)
+    }
 }

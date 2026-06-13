@@ -147,8 +147,9 @@ final class ForwardingCoordinator {
         try await connectTasks[serverID]?.value
     }
 
-    /// 连接失败后清掉缓存的会话与连接屏障，使下一次 start/retry 能重建连接并真正重连。
-    /// 仅在「连接阶段」失败时调用——此时该 server 名下不可能有在跑的隧道。
+    /// 清掉缓存的会话与连接屏障，使下一次 start/retry 能重建连接并真正重连。
+    /// 两个调用点：①连接阶段失败（此时该 server 名下不可能有在跑的隧道）；
+    /// ②看门狗判死（会话已在 actor 内部拆光隧道并把各规则翻成 `.error`）。
     /// 只动 `connectTasks`/`sessions`，不碰 `runtime`/`ruleServer`（保留刚写入的 `.error` 给 UI）。
     private func evictSession(_ serverID: UUID) {
         connectTasks[serverID]?.cancel()
@@ -169,6 +170,10 @@ final class ForwardingCoordinator {
     private func obtainSession(for server: ServerProfile,
                                relay: HostKeyChallengeRelay,
                                modelContainer: ModelContainer) -> ForwardingSession? {
+        // 注册到看门狗（幂等、弱引用）：系统唤醒 / 网络恢复后主动探测各主机的
+        // 专用转发连接，半死隧道不再顶着 active 徽标静默挂着。放在会话创建的
+        // 单一漏斗处 —— 从未用过转发的用户不触发注册。
+        ConnectionWatchdog.shared.register(self)
         if let existing = sessions[server.id] { return existing }
 
         // 认证解析 —— 镜像 FileBrowserModel.makeLiveSFTPProvider（@MainActor）。
@@ -219,5 +224,39 @@ final class ForwardingCoordinator {
             }
         }
         return session
+    }
+
+    // MARK: - 测试 seam
+
+    /// 仅测试用：绕过认证解析 / SwiftData，直接把现成会话挂到指定主机名下。
+    func injectSessionForTesting(_ session: ForwardingSession, serverID: UUID) {
+        sessions[serverID] = session
+    }
+
+    /// 仅测试用：某主机是否仍持有缓存会话（探测后被驱逐与否的观察点）。
+    func hasSessionForTesting(serverID: UUID) -> Bool {
+        sessions[serverID] != nil
+    }
+}
+
+// MARK: - 连接健康探测（ConnectionWatchdog）
+
+extension ForwardingCoordinator: ConnectionHealthProbing {
+    /// 系统唤醒 / 网络恢复后由 `ConnectionWatchdog` 调用：并发探测各主机的
+    /// 专用转发连接，全部等完。判死的会话已在 actor 内部拆光隧道、关闭本地
+    /// 监听、把各规则翻成 `.error`（UI 行出现「重试」）—— 这里只负责把它从
+    /// 缓存驱逐，使「重试」/ 重开窗口重建连接。幂等：连接尚未建立的会话
+    /// 探测视作存活，不会误杀在飞的 connect。
+    func probeConnectionHealth() async {
+        guard !sessions.isEmpty else { return }
+        // 镜像 `ConnectionWatchdog.sweep`：非结构化 Task 数组并发起跑、逐个
+        // 等完（region 隔离检查器不认 for-in + addTask 的捕获模式）。
+        let probes = sessions.map { serverID, session in
+            Task { (serverID, await session.verifyConnectionAlive()) }
+        }
+        for probe in probes {
+            let (serverID, alive) = await probe.value
+            if !alive { evictSession(serverID) }
+        }
     }
 }

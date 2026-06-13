@@ -179,4 +179,43 @@ actor SFTPSession: SFTPProviding {
         try? await sftp.close()
         await connected.close()
     }
+
+    // MARK: - 存活探测
+
+    /// 主动探测底层 SSH 传输是否存活（看门狗在系统唤醒 / 网络恢复后调用）。
+    ///
+    /// 用 SFTP 协议自身的 REALPATH（"."）当探测包 —— 走既有 SFTP channel、
+    /// 不依赖 exec（SFTP-only 受限账户也安全）、对端必须应答：
+    /// - 任何应答（含 SFTP 状态错误）都证明传输活着；
+    /// - 超时 / 传输层错误 → 强制关闭底层连接（本地操作、立即完成），让
+    ///   后续操作立刻拿到「通道已关」错误而非无限挂死，由
+    ///   `FileBrowserModel.refresh` 的自动重连路径接管。
+    func verifyConnectionAlive() async -> Bool {
+        await withTaskGroup(of: Bool?.self) { group in
+            group.addTask { await self.probeRoundTrip() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(10))
+                return nil   // nil = 超时
+            }
+            let first = await group.next() ?? nil
+            if first != true {
+                // 判死：关掉底层通道。这同时解除可能挂死的探测子任务
+                // （REALPATH 拿到「通道已关」错误后返回），TaskGroup 才能收尾。
+                await connected.close()
+            }
+            group.cancelAll()
+            return first == true
+        }
+    }
+
+    /// 一次探测往返。应用层错误（SFTP 状态码等）= 对端在应答 = 活；
+    /// 只有传输层错误才判死。
+    private func probeRoundTrip() async -> Bool {
+        do {
+            _ = try await sftp.getRealPath(atPath: ".")
+            return true
+        } catch {
+            return !SSHTransportFailure.isTransportFailure(error)
+        }
+    }
 }

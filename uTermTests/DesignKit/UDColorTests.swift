@@ -87,16 +87,18 @@ final class UDColorTests: XCTestCase {
         assertHex(UD.bg,      .aqua, 0xFFFFFF, "bg light = 统一纯白 = UDInput 的白 #FFFFFF")
         assertHex(UD.panel,   .aqua, 0xFFFFFF, "panel light = 纯白 #FFFFFF")
         assertHex(UD.panelHi, .aqua, 0xEEEEEA, "panelHi light = 次面板 #EEEEEA")
-        assertHex(UD.text,    .aqua, 0x1C1C1E, "text light = 中性主文字 #1C1C1E")
+        assertHex(UD.text,    .aqua, 0x16181D, "text light = 中性主文字 #16181D（a11y pass 由 #1C1C1E 加深）")
     }
 
     func test_neutrals_light_use_neutral_black() {
         assertHex(UD.panelHover,  .aqua, 0x000000, alpha: 0.05,  "panelHover = 纯黑@5%")
         assertHex(UD.border,      .aqua, 0x000000, alpha: 0.10,  "border = 纯黑@10%")
         assertHex(UD.borderHi,    .aqua, 0x000000, alpha: 0.16,  "borderHi = 纯黑@16%")
-        assertHex(UD.text2,       .aqua, 0x000000, alpha: 0.56,  "text2 = 纯黑@56%")
-        assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.40,  "text3 = 纯黑@40%")
-        assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.26,  "text4 = 纯黑@26%")
+        // 文本 ramp 真值 = UDColor.swift「Ink Floor Rule」a11y 加深版
+        // （取代 2026-06-03 design-kit spec 的 56/40/26%）。
+        assertHex(UD.text2,       .aqua, 0x000000, alpha: 0.66,  "text2 = 纯黑@66%（正文层）")
+        assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.54,  "text3 = 纯黑@54%（次要信息层）")
+        assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.42,  "text4 = 纯黑@42%（仅装饰 / 结构层）")
         assertHex(UD.rowHover,    .aqua, 0x000000, alpha: 0.045, "rowHover = 纯黑@4.5%")
         assertHex(UD.rowSelected, .aqua, 0x007AFF, alpha: 0.13,  "rowSelected = accent-soft @13%")
     }

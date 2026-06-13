@@ -10,13 +10,13 @@ import AppKit
 nonisolated struct TerminalSettings: Equatable {
     /// 统一系统等宽字体族，不注册或打包自定义字体。
     static let fontName = "System Monospaced"
-    static let fontSize: Double = 11
+    static let fontSize: Double = 12
     static let lineHeight: Double = 1.0
     static let defaultScrollback = 3_000
 
     @MainActor
     static func textFont(ofSize size: CGFloat = CGFloat(fontSize)) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        NSFont.monospacedSystemFont(ofSize: size, weight: .medium)
     }
 
     var cursorShape: TerminalCursorShape

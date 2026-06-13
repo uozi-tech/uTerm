@@ -1,34 +1,11 @@
 import XCTest
 import Foundation
+import AppKit
 import SwiftTerm
 @testable import uTerm
 
 @MainActor
 final class TerminalColorSchemeTests: XCTestCase {
-    private func luminance(_ color: SwiftTerm.Color) -> Double {
-        let toLinear: (Double) -> Double = { component in
-            component <= 0.03928
-                ? component / 12.92
-                : pow((component + 0.055) / 1.055, 2.4)
-        }
-        let red = toLinear(Double(color.red) / Double(UInt16.max))
-        let green = toLinear(Double(color.green) / Double(UInt16.max))
-        let blue = toLinear(Double(color.blue) / Double(UInt16.max))
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-    }
-
-    private func contrastRatio(_ first: SwiftTerm.Color, _ second: SwiftTerm.Color) -> Double {
-        let firstLum = luminance(first)
-        let secondLum = luminance(second)
-        let lighter = max(firstLum, secondLum)
-        let darker = min(firstLum, secondLum)
-        return (lighter + 0.05) / (darker + 0.05)
-    }
-
-    private func ansi(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> SwiftTerm.Color {
-        SwiftTerm.Color(red: UInt16(r) * 257, green: UInt16(g) * 257, blue: UInt16(b) * 257)
-    }
-
     func test_both_schemes_have_16_ansi_colors() {
         for scheme in [TerminalColorScheme.vscodeDark, .vscodeLight] {
             XCTAssertEqual(scheme.ansiColors.count, 16,
@@ -53,21 +30,52 @@ final class TerminalColorSchemeTests: XCTestCase {
         XCTAssertEqual(bright.blue,  0xFFFF)
     }
 
-    func test_vscode_light_yellow_prompt_text_has_readable_contrast() {
-        let scheme = TerminalColorScheme.resolve(dark: false)
-        let terminalBackground = ansi(0xFF, 0xFF, 0xFF)
-        let promptSegmentBackground = scheme.ansiColors[15]
+    private func nsColor(_ c: SwiftTerm.Color) -> NSColor {
+        NSColor(srgbRed: CGFloat(c.red) / 65535,
+                green: CGFloat(c.green) / 65535,
+                blue: CGFloat(c.blue) / 65535,
+                alpha: 1)
+    }
 
-        for index in [3, 11] {
-            let color = scheme.ansiColors[index]
-            XCTAssertGreaterThanOrEqual(
-                contrastRatio(color, terminalBackground), 4.5,
-                "ANSI \(index) should remain readable on the light terminal background"
-            )
-            XCTAssertGreaterThanOrEqual(
-                contrastRatio(color, promptSegmentBackground), 4.5,
-                "ANSI \(index) should remain readable on light prompt segment backgrounds"
-            )
+    /// 浅色方案的 yellow / brightYellow 用 VS Code 官方原值，不再为某种段底
+    /// 单独改暗（曾写死 #3F3200，导致深灰段底上的黄起点过暗、被钳成暗橄榄）。
+    func test_vscode_light_yellow_uses_official_values() {
+        let scheme = TerminalColorScheme.resolve(dark: false)
+        XCTAssertEqual(scheme.ansiColors[3].red >> 8, 0x94)
+        XCTAssertEqual(scheme.ansiColors[3].green >> 8, 0x98)
+        XCTAssertEqual(scheme.ansiColors[3].blue >> 8, 0x00)
+        XCTAssertEqual(scheme.ansiColors[11].red >> 8, 0xB5)
+        XCTAssertEqual(scheme.ansiColors[11].green >> 8, 0xBA)
+        XCTAssertEqual(scheme.ansiColors[11].blue >> 8, 0x00)
+    }
+
+    /// 黄字的逐 cell 可读性由渲染期钳制兜底：白底 / 浅灰段底 / 深灰段底
+    /// （powerline 常用 ANSI 15 / 8 当段底）上钳后都必须达到最低对比度。
+    func test_vscode_light_yellow_readable_after_contrast_clamp() {
+        let scheme = TerminalColorScheme.resolve(dark: false)
+        let yellow = nsColor(scheme.ansiColors[3])
+        let ratio = TerminalColorScheme.minimumContrastRatio
+        let backgrounds = [
+            NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),  // 终端白底
+            nsColor(scheme.ansiColors[15]),                    // 浅灰段底 #A5A5A5
+            nsColor(scheme.ansiColors[8]),                     // 深灰段底 #666666
+        ]
+        for bg in backgrounds {
+            let shown = TerminalContrast.ensureContrast(fg: yellow, bg: bg, ratio: ratio)
+            XCTAssertGreaterThanOrEqual(TerminalContrast.contrastRatio(shown, bg), ratio - 0.01)
         }
+    }
+
+    /// 2026-06-13 回归：深灰段底上的黄必须往亮处钳（保持「亮字配深底」），
+    /// 不允许往暗处修成暗橄榄。
+    func test_vscode_light_yellow_brightens_on_dark_segment() {
+        let scheme = TerminalColorScheme.resolve(dark: false)
+        let yellow = nsColor(scheme.ansiColors[3])
+        let darkSegment = nsColor(scheme.ansiColors[8])
+        let shown = TerminalContrast.ensureContrast(
+            fg: yellow, bg: darkSegment, ratio: TerminalColorScheme.minimumContrastRatio)
+        XCTAssertGreaterThan(TerminalContrast.relativeLuminance(shown),
+                             TerminalContrast.relativeLuminance(yellow),
+                             "深灰段底上的黄应该被提亮而不是压暗")
     }
 }

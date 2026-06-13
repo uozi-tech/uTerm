@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import NIOCore
 @testable import uTerm
 
 @MainActor
@@ -156,6 +157,129 @@ final class FileBrowserModelTests: XCTestCase {
         await waitUntilAsync { await first.didClose }
         let didCloseFirstProvider = await first.didClose
         XCTAssertTrue(didCloseFirstProvider)
+    }
+
+    /// 真实断网场景：NIO 抛的是 `ChannelError.ioOnClosedChannel`，文案
+    /// "I/O on closed channel"（"closed channel" 词序）。v1.2.3 的词表只认
+    /// "channel closed"，导致刷新永远走不到重连分支（即用户报告的
+    /// 「文件刷新还是这样」）。此用例用真实错误类型钉死自动重连 + 保留路径。
+    func testRefreshReconnectsAfterRealNIOClosedChannelError() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        let first = MockSFTP(tree: [
+            "/home/user": dir([("projects", true)]),
+            "/home/user/projects": dir([("a.md", false)]),
+        ])
+        let second = MockSFTP(tree: [
+            "/home/user/projects": dir([("a.md", false), ("b.md", false)]),
+        ])
+        var connectCount = 0
+        let model = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            return connectCount == 1 ? first : second
+        })
+
+        await model.connect(profile: server, modelContainer: context.container)
+        await model.navigate(toPath: "/home/user/projects")
+        XCTAssertEqual(model.entries.map(\.name), ["a.md"])
+
+        await first.setListError(ChannelError.ioOnClosedChannel)
+
+        await model.refresh()
+
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertEqual(model.state, .browsing)
+        XCTAssertEqual(model.currentPath, "/home/user/projects")
+        XCTAssertEqual(model.entries.map(\.name), ["a.md", "b.md"])
+    }
+
+    /// 看门狗探测（系统唤醒 / 网络恢复）：provider 判死 → 自动 refresh →
+    /// 重连并保留当前目录，全程无需用户操作。
+    func testProbeConnectionHealthReconnectsWhenProviderDead() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        let first = MockSFTP(tree: ["/home/user": dir([("x", true)])])
+        let second = MockSFTP(tree: ["/home/user": dir([("x", true), ("y", true)])])
+        var connectCount = 0
+        let model = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            return connectCount == 1 ? first : second
+        })
+        await model.connect(profile: server, modelContainer: context.container)
+        XCTAssertEqual(model.state, .browsing)
+
+        // 模拟真实判死后果：底层通道已被强制关闭，后续 list 立刻拿到传输错误。
+        await first.setAliveOnProbe(false)
+        await first.setListError(ChannelError.ioOnClosedChannel)
+
+        await model.probeConnectionHealth()
+
+        let probes = await first.probeCount
+        XCTAssertEqual(probes, 1)
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertEqual(model.state, .browsing)
+        XCTAssertEqual(model.currentPath, "/home/user")
+        XCTAssertEqual(model.entries.map(\.name), ["x", "y"])
+    }
+
+    /// 探测到连接仍活着时不动任何状态、不发起重连。
+    func testProbeConnectionHealthNoopWhenAlive() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        XCTAssertEqual(model.state, .browsing)
+
+        await model.probeConnectionHealth()
+
+        let probes = await mock.probeCount
+        XCTAssertEqual(probes, 1)
+        XCTAssertEqual(model.state, .browsing)
+        XCTAssertEqual(model.entries.map(\.name), ["a.txt"])
+    }
+
+    /// 首次连接就失败（如断网启动）→ 重试不应把起始目录钉死到占位 "/"，
+    /// 而是按未浏览处理、落到远端家目录。
+    func testRetryAfterInitialConnectFailureLandsOnHome() async throws {
+        let context = try makeContext()
+        let server = ServerProfile()
+        server.name = "s1"
+        server.host = "127.0.0.1"
+        server.username = "root"
+        context.insert(server)
+        try context.save()
+
+        let healthy = MockSFTP(tree: ["/home/user": dir([("ok", true)])])
+        var connectCount = 0
+        let model = FileBrowserModel(sftpConnector: { _, _, _ in
+            connectCount += 1
+            if connectCount == 1 {
+                throw ChannelError.ioOnClosedChannel
+            }
+            return healthy
+        })
+
+        await model.connect(profile: server, modelContainer: context.container)
+        guard case .failed = model.state else { return XCTFail("应为 .failed") }
+
+        // 失败态重试（「重新连接」按钮 / 顶栏 ⟳ 都走 refresh()）。
+        await model.refresh()
+
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertEqual(model.state, .browsing)
+        XCTAssertEqual(model.currentPath, "/home/user")   // realPath(".") 的家目录
+        XCTAssertEqual(model.entries.map(\.name), ["ok"])
     }
 
     func testUploadForwardsToProvider() async {

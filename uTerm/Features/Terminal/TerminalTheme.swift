@@ -63,6 +63,9 @@ enum TerminalTheme {
         view.installColors(scheme.ansiColors)
         // 选区底色随外观切：深色深蓝 / 浅色浅蓝，保证选中文字在两种底上都可读
         view.selectedTextBackgroundColor = dark ? normalSelectionColor : lightSelectionColor
+        // 渲染期最低对比度：服务器端按深色背景硬编码的 256 色 / 真彩色
+        // （powerline prompt 等）不走 ANSI 16 色表，只能在渲染时钳制
+        view.minimumContrastRatio = TerminalColorScheme.minimumContrastRatio
     }
 
     /// 光标形状 + 闪烁。注意：caller 必须先 applyColorScheme，因为

@@ -198,6 +198,8 @@ struct SFTPBrowserView: View {
                 Text(msg).font(UD.mono(11.5)).foregroundStyle(UD.text3)
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .frame(maxWidth: 420)
+                // refresh() 对死连接会自动重连并保留当前目录（SSHTransportFailure）。
+                UDButton(title: "重新连接") { Task { await model.refresh() } }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:
             HStack(spacing: 0) {

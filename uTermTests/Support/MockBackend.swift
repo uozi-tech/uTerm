@@ -52,4 +52,19 @@ actor MockBackend: TerminalBackend {
     func emitOutput(_ data: Data) { outputContinuation.yield(data) }
     func emitExit() { exitContinuation.yield(()); exitContinuation.finish() }
     func setConnectError(_ error: Error) { connectError = error }
+
+    // MARK: - 存活探测（ConnectionWatchdog 路径）
+
+    /// 探测返回值（默认 true=活）。判死时模拟真实后端的行为：强制收尾并
+    /// 在 exitStream 产出元素（真实 SSHConnection 判死会关通道触发同样级联）。
+    var aliveOnProbe = true
+    private(set) var probeCount = 0
+    func setAliveOnProbe(_ v: Bool) { aliveOnProbe = v }
+    func verifyConnectionAlive() async -> Bool {
+        probeCount += 1
+        if !aliveOnProbe {
+            emitExit()
+        }
+        return aliveOnProbe
+    }
 }

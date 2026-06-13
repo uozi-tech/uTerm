@@ -16,4 +16,13 @@ protocol TerminalBackend: Actor {
     func resize(cols: UInt16, rows: UInt16) async
     /// 关闭通道与连接。幂等。
     func close() async
+    /// 主动探测连接是否仍然存活（系统唤醒 / 网络恢复后由看门狗调用）。
+    /// 判死的实现应自行强制关闭底层通道，让 `exitStream` 走既有收尾级联；
+    /// 调用方不需要根据返回值做状态翻转。
+    func verifyConnectionAlive() async -> Bool
+}
+
+extension TerminalBackend {
+    /// 默认恒真 —— 非网络后端（测试 mock）没有「静默断死」的概念。
+    func verifyConnectionAlive() async -> Bool { true }
 }

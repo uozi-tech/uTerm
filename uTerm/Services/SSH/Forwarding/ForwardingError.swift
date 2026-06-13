@@ -50,6 +50,13 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         return ForwardingError(kind: kind, message: "\(rule.name)：\(reason)")
     }
 
+    /// 看门狗判死（底层 SSH 传输已断）的专用文案。kind 取 `.unreachable`：
+    /// 非 conflict → UI 行的恢复操作是「重试」，重试经 coordinator 重建连接。
+    static func connectionLost(rule: ForwardingRuleSnapshot) -> ForwardingError {
+        ForwardingError(kind: .unreachable,
+                        message: "\(rule.name)：\(String(localized: "SSH 连接已断开"))")
+    }
+
     // MARK: - 私有归类
 
     private static func classifyKind(_ error: Error) -> ForwardingErrorKind {

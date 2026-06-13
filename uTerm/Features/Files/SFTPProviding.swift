@@ -99,5 +99,15 @@ protocol SFTPProviding: Actor {
     func download(remotePath: String,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data
 
+    /// 主动探测底层连接是否仍然存活（系统唤醒 / 网络恢复后由看门狗触发）。
+    /// 判死的实现应自行强制关闭底层连接，让后续操作快速失败（而非挂死），
+    /// 由调用方的刷新/重连路径接管。
+    func verifyConnectionAlive() async -> Bool
+
     func close() async
+}
+
+extension SFTPProviding {
+    /// 默认恒真 —— 非网络实现（测试 mock）没有「静默断死」的概念。
+    func verifyConnectionAlive() async -> Bool { true }
 }

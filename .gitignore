@@ -8,9 +8,11 @@
 # Swift coverage instrumentation output
 *.profraw
 
-# vendored grammar 包的本地构建产物
+# vendored 包的本地构建产物
 vendor/tree-sitter-grammars/.build/
 vendor/tree-sitter-grammars/.swiftpm/
+vendor/SwiftTerm/.build/
+vendor/SwiftTerm/.swiftpm/
 
 # Release credentials (never commit)
 .env

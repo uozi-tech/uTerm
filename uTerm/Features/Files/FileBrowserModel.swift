@@ -207,6 +207,10 @@ final class FileBrowserModel {
     private static let transferSpeedSampleInterval: TimeInterval = 0.10
 
     private var restoredInitialPath: String?
+    /// 是否成功浏览过至少一次。重连「保留当前目录」只在浏览过后才成立 ——
+    /// 首次连接就失败时 `currentPath` 还是占位 "/"，强行保留会把重连后的
+    /// 起始目录从用户家目录钉死到根目录。
+    private var didEverBrowse = false
     private let sftpConnector: SFTPConnector
     @ObservationIgnored private var lastConnectionRequest: ConnectionRequest?
 
@@ -234,6 +238,8 @@ final class FileBrowserModel {
     }
 
     func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
+        // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再静默挂着。
+        ConnectionWatchdog.shared.register(self)
         lastConnectionRequest = ConnectionRequest(profile: profile, modelContainer: modelContainer)
         await connectUsingLastRequest(force: false, initialPath: nil)
     }
@@ -316,6 +322,7 @@ final class FileBrowserModel {
             let listed = try await provider.list(path: currentPath)
             entries = await resolveOwnerNames(for: listed, provider: provider, directoryPath: currentPath)
             state = .browsing
+            didEverBrowse = true
             transientError = nil
         } catch {
             if reconnectOnTransportFailure,
@@ -330,7 +337,8 @@ final class FileBrowserModel {
     private func reconnectPreservingCurrentPath() async -> Bool {
         guard lastConnectionRequest != nil else { return false }
         guard state != .connecting else { return false }
-        await connectUsingLastRequest(force: true, initialPath: currentPath)
+        await connectUsingLastRequest(force: true,
+                                      initialPath: didEverBrowse ? currentPath : nil)
         return state == .browsing
     }
 
@@ -374,6 +382,7 @@ final class FileBrowserModel {
             currentPath = linkPath
             entries = await resolveOwnerNames(for: targetEntries, provider: provider, directoryPath: linkPath)
             state = .browsing
+            didEverBrowse = true
             transientError = nil
             return nil
         }
@@ -808,8 +817,11 @@ final class FileBrowserModel {
     }
 
     /// 服务器配置已删除等外部原因导致不可用时调用。
+    /// 同时清掉重连请求：配置都没了，看门狗 / 刷新不应再对它发起重连
+    /// （持有已删除的 SwiftData 模型还可能在访问属性时崩溃）。
     func markUnavailable(_ message: String) {
         state = .failed(message)
+        lastConnectionRequest = nil
     }
 
     static func join(_ base: String, _ name: String) -> String {
@@ -960,21 +972,35 @@ final class FileBrowserModel {
         return false
     }
 
+    /// 传输层失败（连接已死）→ 走自动重连；应用层错误（权限等）→ 原样报错。
+    /// 判定委托给 `SSHTransportFailure`：按错误类型精确匹配 + 修正过词序的
+    /// 字符串兜底（NIO 实际报 "I/O on closed channel"，旧词表只认
+    /// "channel closed"，导致断网后刷新永远不重连）。
     private static func isRecoverableTransportError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        let message = "\(error) \(nsError.localizedDescription)".lowercased()
-        return [
-            "i/o channel close",
-            "io channel close",
-            "channel closed",
-            "channel close",
-            "connection reset",
-            "connection closed",
-            "connection lost",
-            "broken pipe",
-            "network is unreachable",
-            "socket is not connected",
-            "not connected",
-        ].contains { message.contains($0) }
+        SSHTransportFailure.isTransportFailure(error)
+    }
+}
+
+// MARK: - 连接健康探测（ConnectionWatchdog）
+
+extension FileBrowserModel: ConnectionHealthProbing {
+    /// 系统唤醒 / 网络恢复后由 `ConnectionWatchdog` 调用。
+    /// - 浏览中：探测底层传输是否还活着；判死时 provider 的底层通道已被
+    ///   强制关闭，`refresh()` 会立刻拿到传输错误并自动重连、保留当前目录。
+    /// - 失败态：直接试一次 `refresh()`（断网期间失败 → 网络恢复后侧栏自愈）。
+    ///   `markUnavailable`（服务器配置已删除）会清掉 `lastConnectionRequest`，
+    ///   不会对已删除的服务器发起重连。
+    func probeConnectionHealth() async {
+        switch state {
+        case .browsing:
+            guard let provider else { return }
+            if await provider.verifyConnectionAlive() { return }
+            await refresh()
+        case .failed:
+            guard lastConnectionRequest != nil else { return }
+            await refresh()
+        case .idle, .connecting:
+            return
+        }
     }
 }

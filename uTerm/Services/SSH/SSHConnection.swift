@@ -108,6 +108,10 @@ actor SSHConnection: TerminalBackend {
     /// 诊断。会话任务的强本地副本已保证客户端在整个会话期间存活（I1）。
     private var sessionTask: Task<Void, Never>?
     private var isClosed = false
+    /// 连接成功后保留的客户端束引用，供存活探测（`verifyConnectionAlive`）在
+    /// 既有连接上开一次性 exec channel。teardown 仍由 `sessionTask` 的强本地
+    /// 副本独占负责 —— 此引用只用于探测与探测判死后的强制关闭（幂等）。
+    private var connectedClient: ConnectedClient?
 
     /// `connect` 前 `resize` 被调用时记下，用作 PTY 初始尺寸。
     /// connect 之后的 resize 走有序发送路径（C1/M2），不再读这两个字段。
@@ -175,6 +179,13 @@ actor SSHConnection: TerminalBackend {
         let cols = Int(pendingCols)
         let rows = Int(pendingRows)
         let state = self.state
+        self.connectedClient = connected
+        // 传输层关闭（FIN/RST 到达、或内核在断网后终于放弃重传）→ 立刻发 close
+        // 信号：withPTY 闭包退出 → sessionTask 收尾 → exitStream 产元素 →
+        // TerminalSession 翻到 .disconnected。不等 inbound 流自己察觉。
+        // 正常 close() 路径会再触发一次 —— signalClose 幂等，无害。
+        connected.target.onDisconnect { state.signalClose() }
+        connected.bastion?.onDisconnect { state.signalClose() }
         // M1：输出泵直接捕获 Sendable 的 outputContinuation，逐块 yield，
         // 不再每块都 hop 回 actor。
         let outputContinuation = self.outputContinuation
@@ -261,7 +272,51 @@ actor SSHConnection: TerminalBackend {
         // 所有 stdin 写入要么已 flush、要么已确定性放弃，底层传输也已关闭。
         await sessionTask?.value
         sessionTask = nil
+        connectedClient = nil
         finishStreams()
+    }
+
+    // MARK: - 存活探测
+
+    /// 主动探测连接是否仍然存活（系统唤醒 / 网络恢复后由 `ConnectionWatchdog`
+    /// 经 `TerminalSession` 调用）。
+    ///
+    /// 长时间待机断网形成的半死 TCP：对端没发过 FIN/RST，NIO 通道看起来仍
+    /// active，inbound 永不结束、写入只进内核缓冲 —— 唯一可靠的判定是发一笔
+    /// 需要对端应答的流量。Citadel 0.12.1 没有 SSH 层 keepalive，这里在既有
+    /// 连接上开一次性 exec channel 跑 `true`：
+    /// - 任何应答都证明传输活着 —— 包括服务器拒绝开 channel（MaxSessions=1
+    ///   之类的应用层失败），只有传输层错误才判死；
+    /// - 超时 / 传输层错误 → 强制关闭底层通道（本地操作、立即完成），由此
+    ///   级联：inbound 结束 → withPTY 返回 → exitStream → UI 置「连接已断开」。
+    func verifyConnectionAlive() async -> Bool {
+        await verifyConnectionAlive(timeout: .seconds(10))
+    }
+
+    func verifyConnectionAlive(timeout: Duration) async -> Bool {
+        guard !isClosed, let connected = connectedClient else { return false }
+        return await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                do {
+                    _ = try await connected.exec("true")
+                    return true
+                } catch {
+                    return !SSHTransportFailure.isTransportFailure(error)
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil   // nil = 超时
+            }
+            let first = await group.next() ?? nil
+            if first != true {
+                // 判死：先把底层通道关掉。这同时解除可能挂死的探测子任务
+                // （exec 拿到「通道已关」错误后返回），TaskGroup 才能收尾。
+                await connected.close()
+            }
+            group.cancelAll()
+            return first == true
+        }
     }
 
     // MARK: - 私有
@@ -274,6 +329,7 @@ actor SSHConnection: TerminalBackend {
         isClosed = true
         // 此处不调用 state.signalClose()：withPTY 已经返回，信号无意义（I3）。
         // 客户端已由 sessionTask 的强本地副本关闭，actor 不再持有引用。
+        connectedClient = nil
         finishStreams()
     }
 
@@ -391,12 +447,22 @@ private nonisolated final class SessionState: Sendable {
                     break
                 }
 
-                switch op {
-                case .write(let data):
-                    try? await writer.write(ByteBuffer(bytes: data))
-                case .resize(let cols, let rows):
-                    try? await writer.changeSize(
-                        cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                do {
+                    switch op {
+                    case .write(let data):
+                        try await writer.write(ByteBuffer(bytes: data))
+                    case .resize(let cols, let rows):
+                        try await writer.changeSize(
+                            cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                    }
+                } catch {
+                    // 写入 / 改尺寸失败 = stdin 通道已坏（典型：断网后第一笔写
+                    // 触发 EPIPE / 通道已关）。继续吞错会让用户对着假活终端打字
+                    // —— 发 close 信号让 withPTY 闭包退出、会话立刻收尾，UI 翻
+                    // 到「连接已断开 / 重新连接」。正常 close() 期间在飞的写入
+                    // 撞上通道关闭也会走到这里 —— signalClose 幂等，无害。
+                    signalClose()
+                    return
                 }
             }
         }
