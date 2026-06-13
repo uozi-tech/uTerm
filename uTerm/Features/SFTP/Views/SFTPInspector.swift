@@ -104,7 +104,9 @@ struct SFTPInspector: View {
                             .tracking(0.5).foregroundStyle(UD.text4)
                             .accessibilityAddTraits(.isHeader)
                         Text(fullPath).font(UD.mono(11.5))
-                            .foregroundStyle(UD.text2)
+                            // 路径框底为 UD.terminal（始终近黑）—— 用 terminalText 浅色，
+                            // 否则日间 text2 深灰落在深底上不可读（同命令卡）。
+                            .foregroundStyle(UD.terminalText)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 11).padding(.vertical, 9)

@@ -72,7 +72,7 @@ struct TerminalWindowView: View {
                 TerminalArea(workspace: workspace, server: server)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Rectangle().fill(UD.border).frame(height: 1)
-                TerminalWindowStatusBar(workspace: workspace, server: server)
+                StatusBarView(workspace: workspace)
             case .agent:
                 TerminalAgentView(
                     model: workspace.assistantModel,
@@ -269,50 +269,6 @@ struct TerminalModeToggle: View {
 }
 
 // MARK: - 状态栏
-
-/// 终端模式状态栏（mono）：主机 · :端口 · SSH-2.0 · UTF-8 · N 窗格 · 时钟。
-struct TerminalWindowStatusBar: View {
-    let workspace: WorkspaceModel
-    let server: ServerProfile
-
-    private var paneCount: Int { workspace.activeTab?.root.leafCount ?? 0 }
-    private var session: TerminalSession? { workspace.focusedTerminalSession() }
-    private var dotColor: Color {
-        guard let session else { return UD.text4 }
-        return ConnectionStatusDisplay(state: session.connectionState).tint.color
-    }
-
-    var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Circle().fill(dotColor).frame(width: 6, height: 6)
-                Text(server.displayEndpoint)
-            }
-            Text(":\(server.port)").foregroundStyle(UD.text4)
-            Text("SSH-2.0")
-            Spacer(minLength: 8)
-            Text("UTF-8")
-            Text("\(paneCount) 窗格").foregroundStyle(UD.text2)
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                Text(Self.clockFormatter.string(from: ctx.date)).foregroundStyle(UD.text4)
-            }
-        }
-        .font(UD.mono(11))
-        .foregroundStyle(UD.text3)
-        .lineLimit(1)
-        .padding(.horizontal, 12)
-        .frame(height: 28)
-        .frame(maxWidth: .infinity)
-        .background(UD.panel)
-    }
-
-    private static let clockFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
-}
 
 /// Agent 模式状态栏（mono）：主机 · 模型 · 安全档位。
 struct TerminalAgentStatusBar: View {

@@ -26,6 +26,12 @@ final class AssistantModel {
     var input: String = ""
     private(set) var state: State = .idle
 
+    /// 「猜你想问」追问气泡：每条助手回复落定后按上下文生成（优先 LLM，回退启发式）。
+    /// 运行期纯内存，新消息 / 新会话即清空。
+    private(set) var followUps: [String] = []
+    private(set) var followUpsLoading = false
+    @ObservationIgnored private var followUpTask: Task<Void, Never>?
+
     /// 命令执行器；nil 时不向模型暴露工具，行为退化为纯文本对话（旧版）。
     /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
     var executor: CommandExecutor?
@@ -75,6 +81,7 @@ final class AssistantModel {
         messages = []
         queuedMessages = []
         editingMessageID = nil
+        clearFollowUps()
         if case .failed = state { state = .idle }
     }
 
@@ -85,6 +92,7 @@ final class AssistantModel {
         messages = session.orderedMessages.map(\.asChatMessage)
         queuedMessages = []
         editingMessageID = nil
+        clearFollowUps()
         if case .failed = state { state = .idle }
     }
 
@@ -175,6 +183,7 @@ final class AssistantModel {
         lastServerContext = serverContext
         let userMessage = ChatMessage(role: .user, text: prompt)
         messages.append(userMessage)
+        clearFollowUps()   // 新用户输入 → 旧追问作废
         let session = ensureSession(firstPrompt: prompt)
         persist(userMessage, in: session)
         await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
@@ -361,6 +370,127 @@ final class AssistantModel {
         }
         await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
                                   serverContext: serverContext, session: session)
+    }
+
+    // MARK: - 「猜你想问」动态追问
+
+    /// 刷新追问气泡：取消上一次未完成生成，按当前对话重新生成。仅当最后一条是助手时
+    /// 有意义（否则清空）。「换一批」与「回复落定」均调用此入口。
+    func refreshFollowUps(serverContext: String) {
+        followUpTask?.cancel()
+        guard messages.last?.role == .assistant else {
+            followUps = []; followUpsLoading = false; return
+        }
+        followUps = []
+        followUpsLoading = true
+        let snapshot = messages
+        followUpTask = Task { [weak self] in
+            guard let self else { return }
+            let result = await self.generateFollowUps(from: snapshot, serverContext: serverContext)
+            if Task.isCancelled { return }
+            self.followUps = result
+            self.followUpsLoading = false
+        }
+    }
+
+    /// 清空追问（新消息 / 新会话时调用）。
+    private func clearFollowUps() {
+        followUpTask?.cancel()
+        followUpTask = nil
+        followUps = []
+        followUpsLoading = false
+    }
+
+    /// 生成追问：优先 LLM（复用现有 client，单轮收集文本），失败 / 离线回退启发式。
+    private func generateFollowUps(from msgs: [ChatMessage], serverContext: String) async -> [String] {
+        if let llm = await llmFollowUps(from: msgs, serverContext: serverContext), !llm.isEmpty {
+            return Array(llm.prefix(3))
+        }
+        return Self.heuristicFollowUps(msgs)
+    }
+
+    /// 调一次 LLM 让其产出 3 条追问的 JSON 数组。**不动 `state`**（与正轮解耦）：
+    /// 缺 provider/key 或解析失败均回退 nil → 上层走启发式。
+    private func llmFollowUps(from msgs: [ChatMessage], serverContext: String) async -> [String]? {
+        guard let provider = activeProvider,
+              let key = keyOverride ?? keychain.load(for: provider.id),
+              let baseURL = resolveBaseURL(for: provider) else { return nil }
+        let recent = msgs.suffix(5).map { m -> String in
+            let who = m.role == .user ? "用户" : "Agent"
+            let body = m.text.isEmpty
+                ? (m.toolCalls.first.map { "给出命令：\($0.command)" } ?? "")
+                : m.text
+            return "\(who)：\(body.prefix(200))"
+        }.joined(separator: "\n")
+        var system = "你是 SSH 运维终端 uTerm 的助手。"
+        if !serverContext.isEmpty { system += "\n当前上下文：\(serverContext)" }
+        let user = """
+        基于以下对话，猜测用户接下来最可能想问的 3 条追问。要求：贴合当前运维场景、\
+        每条不超过 12 个汉字、口语化、可直接作为下一句输入。只输出 JSON 字符串数组，不要任何解释。
+
+        对话：
+        \(recent)
+        """
+        var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
+        config.tools = []
+        let client = clientOverride ?? LLMClientFactory.make(for: provider)
+        var acc = ""
+        do {
+            for try await event in client.stream(messages: [ChatMessage(role: .user, text: user)],
+                                                  system: system, config: config) {
+                if Task.isCancelled { return nil }
+                if case .text(let delta) = event { acc += delta }
+            }
+        } catch {
+            return nil
+        }
+        return Self.parseJSONArray(acc)
+    }
+
+    /// 从模型输出里抠出第一个 JSON 字符串数组（容忍前后说明 / ``` 包裹）。
+    nonisolated static func parseJSONArray(_ raw: String) -> [String]? {
+        guard let start = raw.firstIndex(of: "["),
+              let end = raw.lastIndex(of: "]"), start < end else { return nil }
+        let slice = String(raw[start...end])
+        guard let data = slice.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return nil }
+        let out = arr.compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return out.isEmpty ? nil : out
+    }
+
+    /// 启发式回退：读最近对话的关键词 + 命令卡状态路由到追问池，去重取前 3。
+    /// 镜像原型 `followUpHeuristic`（去掉我们暂无的 plan/diff 卡分支）。
+    nonisolated static func heuristicFollowUps(_ msgs: [ChatMessage]) -> [String] {
+        let recent = Array(msgs.suffix(4))
+        let blob = recent.map { m -> String in
+            m.text.isEmpty
+                ? m.toolCalls.map { ($0.explanation ?? "") + " " + $0.command }.joined(separator: " ")
+                : m.text
+        }.joined(separator: "  ")
+        func has(_ pattern: String) -> Bool {
+            blob.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        var pools: [String] = []
+        let hasPending = recent.contains { $0.toolCalls.contains { $0.status == .pending } }
+        let hasDone = recent.contains { $0.toolCalls.contains { $0.status == .done } }
+        if hasPending { pools += ["先看看会影响什么", "执行后怎么验证"] }
+        if hasDone { pools += ["解释下这段输出", "导出结果到文件"] }
+        if has("磁盘|disk|分区|docker|/var/log|日志|清理") { pools += ["还有哪些大文件", "清理后还剩多少空间", "设置磁盘告警阈值"] }
+        if has("内存|mem|oom") { pools += ["哪个进程最吃内存", "要不要加 swap"] }
+        if has("cpu|负载|load") { pools += ["看看是哪个进程", "近一小时负载曲线"] }
+        if has("nginx|502|upstream|gzip|keepalive|反向代理") { pools += ["看 nginx 错误日志", "压测健康检查", "加上访问限流"] }
+        if has("重启|restart|部署|deploy|回滚|reload") { pools += ["确认服务已起来", "看看启动日志", "回滚到上一版本"] }
+        pools += ["当前服务器健康度", "列出最近的告警", "生成一份巡检报告"]
+
+        var seen = Set<String>()
+        var out: [String] = []
+        for s in pools where !seen.contains(s) {
+            seen.insert(s); out.append(s)
+            if out.count >= 3 { break }
+        }
+        return out
     }
 
     // MARK: - 持久化（modelContext 为 nil 时全部 no-op）

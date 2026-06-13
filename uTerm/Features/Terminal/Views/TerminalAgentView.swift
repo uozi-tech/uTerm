@@ -3,9 +3,10 @@ import SwiftData
 
 /// 终端窗口的「纯 Agent 模式」：用自然语言驱动运维。对齐设计稿 `pages/terminal-agent.jsx`。
 ///
-/// 布局：上下文条（主机 · 历史 · 新对话）→ 居中对话区（max 760，命令卡 = 真实
-/// `run_command` 工具调用）→ 输入区（安全档位拨盘 + 模型胶囊 + 建议 + 发送）。
-/// 复用 `AssistantModel`（真实流式 + 工具审批）与 DesignKit `UDToolCall` / `UDComposer`。
+/// 布局：上下文条（主机 · 历史 · 新对话）→ 居中对话区（max 760；空状态居中、命令卡
+/// 整宽 = 真实 `run_command` 工具调用；每条回复下方「猜你想问」动态追问）→ 输入区
+/// （安全档位拨盘 + 模型胶囊 + 发送）。
+/// 复用 `AssistantModel`（真实流式 + 工具审批 + 追问生成）与 DesignKit `UDToolCall` / `UDComposer`。
 struct TerminalAgentView: View {
     @Bindable var model: AssistantModel
     let host: String
@@ -34,10 +35,18 @@ struct TerminalAgentView: View {
         .onAppear { model.attach(context: modelContext) }
         // 「自动执行」档位：进入「待确认」即自动批准首个 pending（逐条迭代——每条执行
         // 完后状态机若仍有 pending 会再回到 .awaitingApproval，触发本回调批准下一条）。
-        .onChange(of: model.state) { _, now in
-            guard safety.autoApprovesPending, now == .awaitingApproval,
-                  let id = firstPendingToolCallID() else { return }
-            Task { await model.approveAndRun(id: id) }
+        .onChange(of: model.state) { old, now in
+            // 「自动执行」档位：进入待确认即自动批准首个 pending（逐条迭代）。
+            if safety.autoApprovesPending, now == .awaitingApproval,
+               let id = firstPendingToolCallID() {
+                Task { await model.approveAndRun(id: id) }
+            }
+            // 回复落定（流式/执行 → idle 或 非自动的待确认）→ 刷新「猜你想问」追问。
+            let wasActive = (old == .streaming || old == .running)
+            let settled = now == .idle || (now == .awaitingApproval && !safety.autoApprovesPending)
+            if wasActive && settled, model.messages.last?.role == .assistant {
+                model.refreshFollowUps(serverContext: serverContext)
+            }
         }
     }
 
@@ -86,7 +95,7 @@ struct TerminalAgentView: View {
         if model.messages.isEmpty {
             // 空状态：居中铺满（不进 ScrollView），避免内容偏上 + 出现滚动条。
             emptyState
-                .frame(maxWidth: 760)
+                .frame(maxWidth: 480)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 24)
         } else {
@@ -94,6 +103,10 @@ struct TerminalAgentView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(model.messages) { messageRow($0) }
+                        // 最后一条是助手 → 其下方「猜你想问」动态追问。
+                        if model.messages.last?.role == .assistant {
+                            followUpsView
+                        }
                     }
                     .frame(maxWidth: 760, alignment: .leading)
                     .frame(maxWidth: .infinity)
@@ -101,12 +114,14 @@ struct TerminalAgentView: View {
                     .padding(.vertical, 20)
                 }
                 .frame(maxHeight: .infinity)
-                // 默认贴底；新消息 / 流式增量 / 工具状态变化都滚到底（工具卡输出增长不改
-                // message.text，故还要听 messages.count 与 state）。
+                // 默认贴底；新消息 / 流式增量 / 工具状态变化 / 追问出现都滚到底（工具卡输出
+                // 增长不改 message.text，故还要听 messages.count 与 state）。
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: model.messages.count) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.state) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.followUps) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.followUpsLoading) { _, _ in scrollToBottom(proxy) }
             }
         }
     }
@@ -132,28 +147,33 @@ struct TerminalAgentView: View {
             }
             .id(m.id)
         } else {
-            HStack(alignment: .top, spacing: 10) {
-                agentAvatar
-                VStack(alignment: .leading, spacing: 6) {
-                    if !m.text.isEmpty {
+            // 文本带头像；命令卡整宽（不跟随头像缩进 → 左右对称，去掉头像下方竖直空槽）。
+            VStack(alignment: .leading, spacing: 8) {
+                if !m.text.isEmpty {
+                    HStack(alignment: .top, spacing: 10) {
+                        agentAvatar
                         StreamingMarkdownView(text: m.text, isStreaming: isStreamingTail(m))
                             .textSelection(.enabled)
-                    } else if !isStreamingTail(m) && m.toolCalls.isEmpty {
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if !isStreamingTail(m) && m.toolCalls.isEmpty {
+                    HStack(alignment: .top, spacing: 10) {
+                        agentAvatar
                         Text("…").font(.system(size: 13)).foregroundStyle(UD.text3)
                     }
-                    ForEach(m.toolCalls) { call in
-                        UDToolCall(
-                            label: call.explanation ?? "运行命令",
-                            command: call.command,
-                            status: udStatus(call),
-                            // 自动执行档位下卡片按钮禁用（由 onChange 自动批准）。
-                            approvalEnabled: model.state == .awaitingApproval && !safety.autoApprovesPending,
-                            onRun: { Task { await model.approveAndRun(id: call.id) } },
-                            onSkip: { Task { await model.skip(id: call.id) } })
-                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(m.toolCalls) { call in
+                    UDToolCall(
+                        label: call.explanation ?? "运行命令",
+                        command: call.command,
+                        status: udStatus(call),
+                        // 自动执行档位下卡片按钮禁用（由 onChange 自动批准）。
+                        approvalEnabled: model.state == .awaitingApproval && !safety.autoApprovesPending,
+                        onRun: { Task { await model.approveAndRun(id: call.id) } },
+                        onSkip: { Task { await model.skip(id: call.id) } })
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .id(m.id)
         }
     }
@@ -186,7 +206,75 @@ struct TerminalAgentView: View {
         return nil
     }
 
-    // MARK: - 空状态（按诊断 / 配置 / 部署分组的示例）
+    // MARK: - 「猜你想问」动态追问（替换写死建议）
+
+    @ViewBuilder
+    private var followUpsView: some View {
+        // 流式 / 执行中不显示（回复尚未落定）。
+        if model.state != .streaming && model.state != .running {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11)).foregroundStyle(UD.accent.opacity(0.85))
+                    Text("猜你想问").font(.system(size: 11)).tracking(0.3).foregroundStyle(UD.text4)
+                    Spacer(minLength: 8)
+                    Button { model.refreshFollowUps(serverContext: serverContext) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                            Text("换一批").font(.system(size: 11))
+                        }
+                        .foregroundStyle(UD.text3)
+                        .padding(.horizontal, 8).frame(height: 22)
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help("换一批").disabled(model.followUpsLoading)
+                }
+
+                if model.followUpsLoading {
+                    WrapLayout(spacing: 8, lineSpacing: 8, alignment: .leading) {
+                        ForEach([CGFloat(64), 92, 78], id: \.self) { w in
+                            Capsule().fill(UD.fillFaint)
+                                .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
+                                .frame(width: w, height: 30)
+                                .modifier(SkeletonShimmer())
+                        }
+                    }
+                } else {
+                    WrapLayout(spacing: 8, lineSpacing: 8, alignment: .leading) {
+                        ForEach(model.followUps, id: \.self) { s in
+                            Button { model.input = s } label: { followUpChip(s) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 2)
+            // 进入视图且对话已落定但尚无追问 → 生成一次（覆盖载入历史会话的情形；与状态
+            // 落定的 onChange 互不重复——后者已置 loading=true，这里被 guard 跳过）。
+            .onAppear {
+                if (model.state == .idle || model.state == .awaitingApproval),
+                   model.followUps.isEmpty, !model.followUpsLoading {
+                    model.refreshFollowUps(serverContext: serverContext)
+                }
+            }
+        }
+    }
+
+    private func followUpChip(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold)).foregroundStyle(UD.accent)
+            Text(text).font(.system(size: 12)).foregroundStyle(UD.text2)
+        }
+        .padding(.vertical, 6).padding(.horizontal, 12)
+        .background(Capsule().fill(UD.accent.opacity(0.06)))
+        .overlay(Capsule().strokeBorder(UD.accent.opacity(0.20), lineWidth: 1))
+        .contentShape(Capsule())
+    }
+
+    // MARK: - 空状态（按诊断 / 配置 / 部署分组的示例，居中）
 
     private var emptyState: some View {
         VStack(spacing: 22) {
@@ -208,65 +296,51 @@ struct TerminalAgentView: View {
 
             VStack(spacing: 14) {
                 ForEach(Self.emptyGroups, id: \.tag) { group in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(spacing: 8) {
+                        // 分组标题居中
                         Text(group.tag)
                             .font(.system(size: 10.5, weight: .medium))
                             .tracking(0.5).foregroundStyle(UD.text4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 8)],
-                                  alignment: .leading, spacing: 8) {
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        // 气泡居中换行
+                        WrapLayout(spacing: 8, lineSpacing: 8, alignment: .center) {
                             ForEach(group.items, id: \.self) { item in
-                                Button { model.input = item } label: {
-                                    Text(item)
-                                        .font(.system(size: 12)).foregroundStyle(UD.text2)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 7).padding(.horizontal, 11)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
-                                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
+                                Button { model.input = item } label: { exampleChip(item) }
+                                    .buttonStyle(.plain)
                             }
                         }
                     }
                 }
             }
+            .frame(maxWidth: 430)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func exampleChip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12)).foregroundStyle(UD.text2)
+            .multilineTextAlignment(.center)
+            .padding(.vertical, 7).padding(.horizontal, 11)
+            .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
+            .contentShape(Rectangle())
     }
 
     // MARK: - 输入区
 
     private var composer: some View {
-        VStack(spacing: 9) {
-            if !model.messages.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Self.suggestions, id: \.self) { s in
-                            Button { model.input = s } label: {
-                                Text(s)
-                                    .font(.system(size: 11.5)).foregroundStyle(UD.text3)
-                                    .padding(.vertical, 5).padding(.horizontal, 10)
-                                    .background(Capsule().fill(UD.fillFaint))
-                                    .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
-            UDComposer(
-                text: $model.input,
-                placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
-                queueing: model.isBusy,
-                onSend: { Task { await model.submit(serverContext: serverContext) } },
-                onAttach: attachContext
-            ) {
-                HStack(spacing: 6) {
-                    SafetyDial(safety: $safety)
-                    modelPill
-                }
+        // 写死建议条已移除 —— 改为每条助手回复下方的「猜你想问」动态追问（见 followUpsView）。
+        UDComposer(
+            text: $model.input,
+            placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
+            queueing: model.isBusy,
+            onSend: { Task { await model.submit(serverContext: serverContext) } },
+            onAttach: attachContext
+        ) {
+            HStack(spacing: 6) {
+                SafetyDial(safety: $safety)
+                modelPill
             }
         }
         .frame(maxWidth: 760)
@@ -334,12 +408,6 @@ struct TerminalAgentView: View {
         .init(tag: "配置", items: ["给 upstream 加上 keepalive", "把 SSH 端口改成 2222", "开启 gzip 压缩"]),
         .init(tag: "部署", items: ["拉取最新代码并重启服务", "回滚到上一个版本", "查看 systemd 服务状态"]),
     ]
-    private static let suggestions: [String] = [
-        "看看内存占用最高的 5 个进程",
-        "为什么 14 点前后 502 变多",
-        "把 nginx 日志大小限制到 100M",
-        "重启 nginx 并验证健康检查",
-    ]
 }
 
 // MARK: - 安全档位拨盘
@@ -375,5 +443,22 @@ struct SafetyDial: View {
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .help(safety.detail)
+    }
+}
+
+// MARK: - 加载骨架呼吸
+
+/// 「猜你想问」加载时骨架气泡的轻微呼吸（尊重 Reduce Motion）。
+private struct SkeletonShimmer: ViewModifier {
+    @State private var on = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(reduceMotion ? 0.6 : (on ? 0.4 : 0.75))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { on = true }
+            }
     }
 }

@@ -178,7 +178,10 @@ struct KeyDetailView: View {
     }
 
     private static let dateFmt: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
     }()
     private static let relFmt = RelativeDateTimeFormatter()
 }

@@ -156,7 +156,8 @@ struct UDCodeChip: View {
     var body: some View {
         Text(text)
             .font(UD.mono(11.5))
-            .foregroundStyle(UD.text2)
+            // 终端底（UD.terminal 始终近黑）上用 terminalText 浅色，避免日间不可读。
+            .foregroundStyle(UD.terminalText)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 6)
             .padding(.horizontal, 8)

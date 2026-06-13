@@ -1,11 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// SFTP 视图共享的格式化器（日期 `yyyy/MM/dd HH:mm`；字节 file 风格）。三处视图
-/// （文件表 / 检视器 / 状态栏）共用，避免重复实例化。
+/// SFTP 视图共享的格式化器（日期 `yyyy-MM-dd HH:mm:ss`，en_US_POSIX 定格式 + 本地时区，
+/// 秒来自 SFTP mtime 真实精度；字节 file 风格）。三处视图（文件表 / 检视器 / 状态栏）
+/// 共用，避免重复实例化。
 enum SFTPFormat {
     private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy/MM/dd HH:mm"; return f
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
     }()
     private static let byteFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter(); f.countStyle = .file; return f
@@ -38,7 +42,8 @@ struct SFTPFileTableColumnWidths: Equatable {
 
     private static let ownerRange: ClosedRange<CGFloat> = 88...112
     private static let permissionsRange: ClosedRange<CGFloat> = 60...72
-    private static let modifiedRange: ClosedRange<CGFloat> = 132...156
+    // 下限 146：容纳 `yyyy-MM-dd HH:mm:ss`（19 字符等宽 ≈137pt）压缩时也不截断。
+    private static let modifiedRange: ClosedRange<CGFloat> = 146...156
     private static let sizeRange: ClosedRange<CGFloat> = 64...84
 
     let name: CGFloat
