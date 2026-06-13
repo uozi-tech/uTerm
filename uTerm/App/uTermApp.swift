@@ -125,10 +125,15 @@ struct uTermApp: App {
                 .keyboardShortcut("s", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
-                Button("水平分屏") {
+                Button("向下分屏") {
                     NotificationCenter.default.post(name: .splitFocusedPaneVertical, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Button("向右分屏") {
+                    NotificationCenter.default.post(name: .splitFocusedPaneHorizontal, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
 
                 Divider()
 
@@ -155,6 +160,18 @@ struct uTermApp: App {
         // 同工作区窗口：隐藏系统标题栏，红绿灯浮在自绘 SFTPTitleBar 上、内容铺到顶。
         // 这一句是关键修复 —— 仅靠 WorkspaceWindowChrome 的 NSWindow.titlebarAppearsTransparent
         // 在 SwiftUI WindowGroup 下不稳定，会被系统不透明标题栏盖住（即「自定义 header 被遮挡」）。
+        .windowStyle(.hiddenTitleBar)
+
+        // 纯终端独立窗口 —— 每个绑定一台服务器的「终端 ⇄ Agent」窗口，可多实例。
+        // 复用 WorkspaceModel 的多标签 + 分屏 + Agent，但不含 SFTP 侧栏 / 预览区。
+        WindowGroup(for: TerminalWindowID.self) { $termID in
+            TerminalWindowView(windowID: termID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+                .environment(forwardingCoordinator)
+        }
+        .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
 
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。

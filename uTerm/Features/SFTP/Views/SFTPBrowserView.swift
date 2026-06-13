@@ -23,6 +23,9 @@ struct SFTPBrowserView: View {
     /// nil = 无待确认；非 nil = 弹窗（即便冲突名为空也仅在有冲突时才设值）。
     @State private var overwritePendingURLs: [URL]?
     @State private var overwriteConflictNames: [String] = []
+    /// 文件表 ↔ 检视器分隔条拖动出的检视器宽度（clamp 248–460，对齐设计稿 `pane-split.jsx`
+    /// 的 EdgeResizer）。每个浏览器实例各自持有 → 多标签下各 tab 检视器宽度互不干扰。
+    @State private var inspectorWidth: Double = 300
 
     // 导航往返进行中时禁用前进 / 后退：navigate(toPath:) 在 isNavigating 时早退，
     // 若此时仍允许点击、hIdx 已经移动，就会与 currentPath 脱钩（连点 Back 丢一步）。
@@ -220,7 +223,9 @@ struct SFTPBrowserView: View {
                     rowActions: rowActions
                 )
                 .frame(maxWidth: .infinity)
-                Rectangle().fill(UD.border).frame(width: 1)
+                // 可拖拽分隔条（复用工作区 inspector 同款 ColumnResizer）：右侧检视器，
+                // 往右拖变窄（sign −1），宽度 clamp 248–460。
+                ColumnResizer(width: $inspectorWidth, range: 248...460, sign: -1)
                 SFTPInspector(
                     item: selected, currentPath: model.currentPath,
                     onDownload: { e in downloadFile(e) },
@@ -230,7 +235,7 @@ struct SFTPBrowserView: View {
                     onRename: { e in renameTarget = e; renameText = e.name },
                     onDelete: { e in deleteTarget = e }
                 )
-                .frame(width: 300)
+                .frame(width: inspectorWidth)
             }
         }
     }

@@ -343,6 +343,13 @@ struct WelcomeView: View {
         openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
     }
 
+    /// 打开纯终端窗口（「终端 ⇄ Agent」两态），与 SFTP 窗口并列的轻量入口。
+    private func openTerminalWindow(_ profile: ServerProfile) {
+        profile.lastConnectedAt = Date()
+        try? modelContext.save()
+        openWindow(value: TerminalWindowID(id: UUID(), serverID: profile.id))
+    }
+
     private func handleContextAction(_ action: ServerList.ContextAction,
                                       _ profile: ServerProfile) {
         #if DEBUG
@@ -351,6 +358,8 @@ struct WelcomeView: View {
         switch action {
         case .connect:
             openServer(profile)
+        case .openTerminalWindow:
+            openTerminalWindow(profile)
         case .openSFTP:
             openSFTP(profile)
         case .togglePin:

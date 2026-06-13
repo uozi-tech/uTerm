@@ -28,6 +28,7 @@ struct ServerList: View {
 
     enum ContextAction: Equatable {
         case connect
+        case openTerminalWindow
         case openSFTP
         case togglePin
         case edit
@@ -121,6 +122,7 @@ struct ServerList: View {
         // 「仅 SFTP」主机禁用终端会话，隐藏「连接」，仅保留 SFTP 浏览入口。
         if !profile.sftpOnly {
             Button("连接") { onContextAction(.connect, profile) }
+            Button("在终端窗口打开") { onContextAction(.openTerminalWindow, profile) }
         }
         Button("在 SFTP 中打开") { onContextAction(.openSFTP, profile) }
         Button(profile.isPinned ? "取消置顶" : "置顶") {
