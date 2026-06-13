@@ -173,6 +173,8 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
+        // 默认尺寸足够容纳 Agent 空状态（分组示例）不出现滚动；用户可自由缩放。
+        .defaultSize(width: 1000, height: 720)
 
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。
         WindowGroup(for: PortForwardWindowID.self) { $pfID in

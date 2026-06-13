@@ -53,6 +53,9 @@ enum UD {
     nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xEEEEEA))
     nonisolated static let panelHover = dyn(.hex(0x202026), .black(0.05))
     nonisolated static let terminal   = dyn(.hex(0x08080A), .hex(0x0B0B0D))
+    /// 终端底（`terminal` 两套外观都是近黑）上的前景文字：始终用浅色，
+    /// 否则日间的 `text2`（深灰）落到深底上不可读。命令卡 `$ cmd` 等用。
+    nonisolated static let terminalText = dyn(.white(0.82), .white(0.82))
     /// 浮层实体面（下拉 / 菜单 / popover）。浅色用纯白面板。
     nonisolated static let overlay    = dyn(.hex(0x1B1B1F), .hex(0xFFFFFF))
     /// 模态实体面（指标卡 / 菜单栏面板）。

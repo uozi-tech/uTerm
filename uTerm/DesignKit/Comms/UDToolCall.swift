@@ -116,7 +116,9 @@ struct UDToolCall: View {
             Text("$")
                 .foregroundStyle(UD.accent)
             Text(command)
-                .foregroundStyle(UD.text2)
+                // 命令落在 `UD.terminal`（始终近黑）上 —— 用 terminalText 浅色，
+                // 否则日间 text2 深灰会与深底糊在一起（不可读）。
+                .foregroundStyle(UD.terminalText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)

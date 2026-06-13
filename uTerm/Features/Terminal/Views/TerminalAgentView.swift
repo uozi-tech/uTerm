@@ -81,25 +81,33 @@ struct TerminalAgentView: View {
 
     // MARK: - 对话区
 
+    @ViewBuilder
     private var conversation: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Group {
-                    if model.messages.isEmpty {
-                        emptyState
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(model.messages) { messageRow($0) }
-                        }
-                    }
-                }
-                .frame(maxWidth: 760, alignment: .leading)
-                .frame(maxWidth: .infinity)
+        if model.messages.isEmpty {
+            // 空状态：居中铺满（不进 ScrollView），避免内容偏上 + 出现滚动条。
+            emptyState
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 24)
-                .padding(.vertical, 20)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(model.messages) { messageRow($0) }
+                    }
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
+                }
+                .frame(maxHeight: .infinity)
+                // 默认贴底；新消息 / 流式增量 / 工具状态变化都滚到底（工具卡输出增长不改
+                // message.text，故还要听 messages.count 与 state）。
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: model.messages.count) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.state) { _, _ in scrollToBottom(proxy) }
             }
-            .onChange(of: model.messages.last?.id) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
         }
     }
 
@@ -197,7 +205,6 @@ struct TerminalAgentView: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            .padding(.top, 28)
 
             VStack(spacing: 14) {
                 ForEach(Self.emptyGroups, id: \.tag) { group in
