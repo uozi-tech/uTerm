@@ -8,6 +8,8 @@ struct ParallelAgentView: View {
     let states: [ParallelServerState]
     let synthesis: String
     let allDone: Bool
+    /// 某台「主机指纹未信任」时，用户点泳道内「信任并重试」的回调（serverID）。
+    let onTrustAndRetry: (UUID) -> Void
 
     private var total: Int { states.count }
     private var resolvedAll: Bool { states.allSatisfy { $0.tone != .running } }
@@ -32,7 +34,7 @@ struct ParallelAgentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     opening
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(states) { ParallelAILane(state: $0) }
+                        ForEach(states) { ParallelAILane(state: $0, onTrustAndRetry: onTrustAndRetry) }
                     }
                     .padding(.leading, 32)
 
@@ -110,7 +112,9 @@ struct ParallelAgentView: View {
 /// 单台自然语言泳道卡。执行/诊断中显 spinner；落定后显结论 + （自愈时）处理步骤。
 struct ParallelAILane: View {
     let state: ParallelServerState
+    var onTrustAndRetry: (UUID) -> Void = { _ in }
     @State private var stepsOpen = false
+    @State private var rawOpen = false
 
     private var resolved: Bool { state.tone != .running }
     private var tint: Color {
@@ -191,11 +195,51 @@ struct ParallelAILane: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // 主机指纹未信任：内联展示指纹 +「信任并重试」。
+            if case .hostKeyUntrusted(let challenge) = state.failure {
+                HostKeyRetryCard(challenge: challenge) { onTrustAndRetry(state.id) }
+            }
+
             if !state.steps.isEmpty {
                 stepsDisclosure
             }
+            // 原始命令 + 原始输出（说人话之外，给用户看真实下发的命令与 shell 输出）。
+            if !state.lines.isEmpty {
+                rawDisclosure
+            }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 11, trailing: 12))
+    }
+
+    private var rawDisclosure: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation(.easeOut(duration: 0.15)) { rawOpen.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(UD.text3)
+                        .rotationEffect(.degrees(rawOpen ? 90 : 0))
+                    Image(systemName: "terminal").font(.system(size: 10)).foregroundStyle(UD.text3)
+                    Text(rawOpen ? "收起原始命令与输出" : "查看原始命令与输出")
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text3)
+                }
+                .padding(.leading, 7)
+                .padding(.trailing, 9)
+                .frame(height: 24)
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if rawOpen {
+                ParTermLinesView(lines: state.lines)
+                    .padding(EdgeInsets(top: 9, leading: 11, bottom: 9, trailing: 11))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ParTermSurface.bg))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+            }
+        }
     }
 
     private var stepsDisclosure: some View {

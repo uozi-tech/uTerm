@@ -22,6 +22,19 @@ nonisolated enum ParallelLaneTone: Sendable, Equatable {
     case failed
 }
 
+/// 单台「连接层失败」原因——命令根本没跑起来（区别于命令执行后非零退出）。
+/// - `hostKeyUntrusted`：主机指纹未信任 / 已变更，并行路径无交互入口直接拒了连接 →
+///   触发泳道内联「信任并重试」（携带与终端 / SFTP 征询同源的 `HostKeyChallenge`）。
+/// - `connection`：其它连接 / 认证 / 超时失败，仅展示原因文案，无自动重试。
+///
+/// 不声明 `Equatable`：`HostKeyChallenge` 的 `Equatable` 遵从在本项目
+///（`-default-isolation=MainActor` + `InferIsolatedConformances`）下被推断为 `@MainActor`
+/// 隔离，无法用于本 `nonisolated` 枚举的合成 `==`；本类型也无处需要比较。
+nonisolated enum ParallelLaneFailure: Sendable {
+    case hostKeyUntrusted(HostKeyChallenge)
+    case connection(String)
+}
+
 /// Shell 视图里的一行输出。渲染：`cmd`→强调色 `$`、`ok`→绿 `✓`、`err`→红 `✕`、`out`→普通。
 nonisolated struct ParallelTermLine: Identifiable, Sendable, Equatable {
     nonisolated enum Kind: Sendable, Equatable { case cmd, out, ok, err }
@@ -57,6 +70,9 @@ struct ParallelServerState: Identifiable {
     var diagnosing: Bool = false
     var summary: String = ""
     var steps: [String] = []
+
+    /// 连接层失败原因（命令未能执行）。`hostKeyUntrusted` 触发泳道 / 窗格内联「信任并重试」。
+    var failure: ParallelLaneFailure?
 
     /// AI 泳道右侧状态徽标文案。
     var laneStatusText: String {

@@ -3,14 +3,12 @@ import SwiftUI
 /// 并行执行窗口的 chrome：自绘标题栏、广播条、状态栏，及共享小件。
 /// AI 紫 = `UD.aiAccent`；Shell 蓝/绿走 `UD.accent` / `UD.success`。
 
-/// 终端深底（broadcast 命令块 / Shell 网格 body）上的**固定亮色**文字 —— 不随日/夜翻色。
-/// 设计稿 `term-bg` 恒为深底，若用随主题翻色的 `UD.text`/`text3`/`text4`，日间会变深字落到
-/// 近黑底上读不出（即日间命令块「黑条看不见字」的根因）。取值镜像深色主题的中性 ramp，故
-/// 日 / 夜观感一致。
-enum ParTermInk {
-    static let text  = UD.ColorSpec.hex(0xEDEDEE).color()   // == UD.text 深色档
-    static let dim   = UD.ColorSpec.white(0.42).color()     // == UD.text3 深色档
-    static let faint = UD.ColorSpec.white(0.30).color()     // == UD.text4 深色档
+/// 命令块 / Shell 网格的「终端面」底色 —— 对齐设计稿 `--u-term-bg`：**暗夜 #08080a / 日间 #ffffff**
+///（`u-window.jsx` DARK/LIGHT 两档）。**不能**用 `UD.terminal`（它日 / 夜都深，是真实 SwiftTerm
+/// 终端用的）——否则日间得到一条「黑底」命令块，与白色日间主题格格不入、且字读不出（用户实测）。
+/// 面随主题翻后，其上文字直接用 `UD.text`/`text3`/`text4`（深底亮字 / 白底深字）即两档都可读。
+enum ParTermSurface {
+    static let bg = UD.dyn(.hex(0x08080A), .hex(0xFFFFFF))
 }
 
 // MARK: - 标题栏
@@ -126,7 +124,9 @@ private struct ParModeToggle: View {
 
 /// 命令代码块（深底等宽 + 广播至 N 台）+ 聚合进度条 + 统计。
 struct ParallelBroadcastBar: View {
-    let command: String
+    /// 广播文案：`isIntent` 为真时是自然语言意图（AI 命令无等效 shell），否则是 `$ command`。
+    let text: String
+    let isIntent: Bool
     let mode: ParallelViewMode
     let total: Int
     let doneCount: Int
@@ -155,19 +155,24 @@ struct ParallelBroadcastBar: View {
 
     private var commandBlock: some View {
         HStack(spacing: 9) {
-            QCParallelIcon(size: 13, color: tint)
-            Text("$").foregroundStyle(tint)
-            Text(command)
-                .foregroundStyle(ParTermInk.text)
+            if isIntent {
+                Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(tint)
+            } else {
+                QCParallelIcon(size: 13, color: tint)
+                Text("$").foregroundStyle(tint)
+            }
+            Text(text)
+                .font(isIntent ? .system(size: 12.5) : .system(size: 12.5, design: .monospaced))
+                .foregroundStyle(UD.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            Text("广播至 \(total) 台").font(.system(size: 11)).foregroundStyle(ParTermInk.faint)
+            Text("广播至 \(total) 台").font(.system(size: 11)).foregroundStyle(UD.text4)
         }
         .font(.system(size: 12.5, design: .monospaced))
         .padding(.horizontal, 11)
         .frame(minHeight: 36)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.terminal))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ParTermSurface.bg))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
     }
 

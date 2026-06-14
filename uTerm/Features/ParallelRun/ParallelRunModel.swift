@@ -23,6 +23,8 @@ final class ParallelRunModel {
 
     let commandName: String
     let command: String
+    /// AI 指令（自然语言）。AI 命令的真正目标在此——`command`（等效 shell）可留空。
+    let intent: String
     let aiAssisted: Bool
 
     var mode: ParallelViewMode
@@ -39,16 +41,18 @@ final class ParallelRunModel {
     private let doctor: ParallelAIDoctor?
     private let safety: AgentSafety
 
-    /// 已完成（resolve）的台数——每台 `runServer` 收尾时 +1，达 N 即终局。
-    private var completedCount = 0
     private var running = false
-    /// 单调递增的轮次号：每次 start() +1。异步的 synthesize/落库尾活捕获它，写回前比对，
-    /// 丢弃被「重新运行」作废的上一轮回写（防陈旧汇总盖到新一轮）。
+    /// 单调递增的轮次号：每次 start()/trustAndRetry() +1。异步的 synthesize/落库尾活捕获它，
+    /// 写回前比对，丢弃被「重新运行」/「信任并重试」作废的上一轮回写（防陈旧汇总盖到新一轮）。
     private var generation = 0
+    /// 本轮终局是否写一条新执行日志。`start()`（含 rerun）置 true；单台「信任并重试」置 false
+    /// ——只更新窗口实时状态与跨台汇总，不再追加重复日志。
+    private var recordOnFinalize = true
 
     init(commandID: UUID,
          commandName: String,
          command: String,
+         intent: String,
          aiAssisted: Bool,
          targets: [ServerProfile],
          doctor: ParallelAIDoctor?,
@@ -58,6 +62,7 @@ final class ParallelRunModel {
         self.commandID = commandID
         self.commandName = commandName
         self.command = command
+        self.intent = intent
         self.aiAssisted = aiAssisted
         self.targets = targets
         self.doctor = doctor
@@ -84,6 +89,10 @@ final class ParallelRunModel {
     var failedCount: Int { states.filter { $0.tone == .failed }.count }
     var allDone: Bool { finishedAt != nil }
 
+    /// 广播条展示文案：AI 命令且无等效 shell 时显示自然语言意图（无 `$`），否则显示 `$ command`。
+    var broadcastIsIntent: Bool { aiAssisted && command.isEmpty && !intent.isEmpty }
+    var broadcastText: String { broadcastIsIntent ? intent : command }
+
     /// 一台是否已落定——以 `tone` 为准（与 AI 泳道 / Shell spinner 判据一致）：诊断 / 续接命令
     /// 期间 tone 仍为 `.running`，故不会出现「进度条已计完成、徽标却还在转」的错位。
     private func resolved(_ s: ParallelServerState) -> Bool { s.tone != .running }
@@ -95,20 +104,13 @@ final class ParallelRunModel {
         guard !running else { return }
         running = true
         generation += 1
+        recordOnFinalize = true
         startedAt = Date()
         finishedAt = nil
         synthesis = ""
-        completedCount = 0
 
         // 在 MainActor 解析每台的建连材料为 Sendable 执行器，再带进逐台任务。
-        var execTargets: [ExecTarget] = []
-        for profile in targets {
-            let executor = try? WorkspaceCommandExecutorFactory.make(server: profile, container: container)
-            execTargets.append(ExecTarget(id: profile.id,
-                                          name: QuickCommandTargets.displayName(profile),
-                                          endpoint: QuickCommandTargets.endpoint(profile),
-                                          executor: executor))
-        }
+        let execTargets = targets.map { makeExecTarget(profile: $0, trustNewKeys: false) }
         // N 台真并发（N 通常 2–5，不另设滑动窗口）。Task 继承 MainActor：off-main 跑
         // exec/LLM，回主线程增量更新 states[index]。
         for (index, target) in execTargets.enumerated() {
@@ -116,72 +118,161 @@ final class ParallelRunModel {
         }
     }
 
+    /// 解析单台的建连材料为 `Sendable` 执行器 + host-key sink，包成逐台任务的 `ExecTarget`。
+    /// `trustNewKeys` 为真时该执行器遇未知 / 不匹配密钥会**信任并继续**（「信任并重试」用）。
+    /// 认证解析抛错 → executor 为 nil，原因落 `setupErrorText` 供失败提示展示。
+    private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) -> ExecTarget {
+        var executor: SSHCommandExecutor?
+        var sink: HostKeyChallengeSink?
+        var setupError: String?
+        do {
+            let made = try WorkspaceCommandExecutorFactory.make(
+                server: profile, container: container, trustNewKeys: trustNewKeys)
+            executor = made.executor
+            sink = made.hostKeyChallenges
+        } catch {
+            setupError = error.localizedDescription
+        }
+        return ExecTarget(id: profile.id,
+                          name: QuickCommandTargets.displayName(profile),
+                          endpoint: QuickCommandTargets.endpoint(profile),
+                          executor: executor,
+                          hostKeyChallenges: sink,
+                          setupErrorText: setupError)
+    }
+
     /// 重新运行：重置全部台状态后再跑一轮。仅在已结束时允许（标题栏按钮也据 allDone 门禁）。
     func rerun() {
         guard finishedAt != nil else { return }
-        for i in states.indices {
-            states[i].status = .running
-            states[i].exitCode = nil
-            states[i].durationMs = nil
-            states[i].lines = []
-            states[i].tone = .running
-            states[i].diagnosing = false
-            states[i].summary = ""
-            states[i].steps = []
-        }
+        for i in states.indices { resetLane(i) }
         running = false
         start()
+    }
+
+    /// 把单台状态清回「执行中」初值（rerun 全清 / trustAndRetry 单清共用）。
+    private func resetLane(_ i: Int) {
+        states[i].status = .running
+        states[i].exitCode = nil
+        states[i].durationMs = nil
+        states[i].lines = []
+        states[i].tone = .running
+        states[i].diagnosing = false
+        states[i].summary = ""
+        states[i].steps = []
+        states[i].failure = nil
+    }
+
+    /// 「信任并重试」：信任该台当前出示的主机密钥后，仅重跑这一台。用一个会信任新密钥的
+    /// 执行器重建该台 —— 握手成功即把密钥写入信任库（TOFU），随后照常执行 / 自愈。
+    /// 仅对「主机指纹未信任」失败可用；先匹配 `failure` 再 `resetLane`（清掉 failure）即作为
+    /// 防重入闸——重置后再次点击会因 `failure` 不再是 `.hostKeyUntrusted` 而早返回。
+    func trustAndRetry(serverID: UUID) {
+        guard let index = states.firstIndex(where: { $0.id == serverID }),
+              case .hostKeyUntrusted = states[index].failure,
+              let profile = targets.first(where: { $0.id == serverID }) else { return }
+
+        resetLane(index)
+        // 重新打开终局：该台（及其它仍在重试的台）全部落定后再次 finalize 更新汇总。
+        // generation +1 作废上一轮陈旧的 synthesize/落库；本次重试不写新日志。
+        finishedAt = nil
+        generation += 1
+        recordOnFinalize = false
+        running = true
+
+        let target = makeExecTarget(profile: profile, trustNewKeys: true)
+        Task { await self.runServer(at: index, target: target) }
     }
 
     private func runServer(at index: Int, target: ExecTarget) async {
         states[index].status = .running
         states[index].tone = .running
-        states[index].lines = [ParallelTermLine(kind: .cmd, text: command)]
+        states[index].lines = []
+        states[index].failure = nil
 
-        // 1) 真实执行原命令。
-        let start = Date()
-        let result = await Self.execBounded(executor: target.executor, command: command)
-        states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
-        let exit = result?.exitCode
-        states[index].exitCode = exit
-        states[index].lines.append(contentsOf: Self.outputLines(from: result, failed: exit != 0))
-        let ok = (exit == 0)
-        states[index].status = ok ? .succeeded : .failed
+        // 1) 有等效 shell 才先真实跑一次原命令（非 AI 必有；AI 可留空）。AI 命令留空时**不**跑空命令——
+        //    真正目标是自然语言 intent，交给下面的 Agent 据 intent 逐条下发。
+        var ranInitial = false
+        var initialOutput: String?
+        var initialExit: Int?
+        if !command.isEmpty {
+            states[index].lines = [ParallelTermLine(kind: .cmd, text: command)]
+            let start = Date()
+            let outcome = await Self.execBounded(executor: target.executor, command: command)
+            states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
+            guard let result = outcome.result else {
+                // 连接层失败：命令根本没跑起来。识别原因（指纹未信任 / 连接错误 / 超时），
+                // 给确定性结论、暴露指纹，**不**跑 AI 自愈（连不上，自愈无意义且会让模型瞎猜）。
+                markUnreachable(at: index, target: target, outcome: outcome)
+                finishServer()
+                return
+            }
+            initialExit = result.exitCode
+            initialOutput = result.output
+            states[index].exitCode = initialExit
+            states[index].lines.append(contentsOf: Self.outputLines(from: result, failed: initialExit != 0))
+            states[index].status = (initialExit == 0) ? .succeeded : .failed
+            ranInitial = true
+        } else if doctor != nil {
+            // AI 意图（无等效命令）：跑 Agent 前先做一次连通性预检（`true`），尽早暴露
+            // 「指纹未信任 / 连不上」，否则 Agent 会对着连不上的机器空跑、并瞎猜结论。
+            let start = Date()
+            let probe = await Self.execBounded(executor: target.executor, command: "true")
+            if probe.result == nil {
+                states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
+                markUnreachable(at: index, target: target, outcome: probe)
+                finishServer()
+                return
+            }
+        }
+        let ok = ranInitial && (initialExit == 0)
 
-        // 2) 非 AI 命令：AI 视图用模板叙述，不调 LLM、不自愈。
+        // 2) 非 AI 命令：必有 command（表单校验），按退出码模板叙述。
         guard aiAssisted else {
             states[index].tone = ok ? .ok : .failed
             states[index].summary = ok
                 ? "命令执行完成，退出码 0。"
-                : "命令以退出码 \(exitText(exit)) 结束，执行失败。"
+                : "命令以退出码 \(exitText(initialExit)) 结束，执行失败。"
             finishServer()
             return
         }
 
-        // 3) AI 命令：多步自愈 Agent 循环（无可用 provider → 退回模板叙述）。
+        // 3) AI 命令：多步 Agent（无可用 provider → 退回模板叙述）。
         guard let doctor else {
-            states[index].tone = ok ? .ok : .failed
-            states[index].summary = ok
-                ? "命令执行完成，退出码 0。"
-                : "命令执行失败（退出码 \(exitText(exit))）。未配置 AI provider，无法自动诊断修复。"
+            if ranInitial {
+                states[index].tone = ok ? .ok : .failed
+                states[index].summary = ok
+                    ? "命令执行完成，退出码 0。"
+                    : "命令执行失败（退出码 \(exitText(initialExit))）。未配置 AI provider，无法自动诊断修复。"
+            } else {
+                states[index].tone = .failed
+                states[index].summary = "未配置 AI provider，无法按「\(goalText)」自主下发命令。请到设置里配置 AI provider。"
+            }
             finishServer()
             return
         }
-        await runAgent(at: index, target: target, doctor: doctor,
-                       initialOutput: result?.output ?? "", initialExit: exit)
+        await runAgent(at: index, target: target, doctor: doctor, ranInitial: ranInitial,
+                       initialOutput: initialOutput ?? "", initialExit: initialExit)
         finishServer()
+    }
+
+    /// AI 命令交给 Agent 的自然语言目标：优先 intent，其次等效命令，再次命令名。
+    private var goalText: String {
+        if !intent.isEmpty { return intent }
+        if !command.isEmpty { return command }
+        return commandName
     }
 
     /// 多步自愈 Agent 循环：把目标 + 初始结果交给模型，它用 `run_command` 逐条推进，每条真实结果
     /// 回喂；按安全档位决定**自动执行**还是**仅建议**。模型停止调用工具并给出结论 JSON 即收束。
     private func runAgent(at index: Int, target: ExecTarget, doctor: ParallelAIDoctor,
-                         initialOutput: String, initialExit: Int?) async {
+                         ranInitial: Bool, initialOutput: String, initialExit: Int?) async {
         let autoExecute = safety.autoApprovesPending
-        states[index].diagnosing = (initialExit != 0)
+        // 跑过初始命令且失败 → 诊断中；否则（无初始命令）显「执行中」直到 Agent 下发命令。
+        states[index].diagnosing = ranInitial && (initialExit != 0)
 
         let system = Self.agentSystemPrompt(autoExecute: autoExecute, safetyLabel: safety.label)
         var convo: [ChatMessage] = [ChatMessage(role: .user,
-            text: agentInitialPrompt(target: target, output: initialOutput, exit: initialExit))]
+            text: agentInitialPrompt(target: target, ranInitial: ranInitial, output: initialOutput, exit: initialExit))]
         var executedAny = false
         var lastExit = initialExit
         var conclusion: (status: String, summary: String)?
@@ -220,7 +311,7 @@ final class ParallelRunModel {
                     st.status = .failed; st.output = "(空命令)"; resolvedCalls.append(st); continue
                 }
                 states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
-                let r = await Self.execBounded(executor: target.executor, command: st.command)
+                let r = await Self.execBounded(executor: target.executor, command: st.command).result
                 let cmdExit = r?.exitCode
                 states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
                 st.output = r?.output ?? "（无输出或执行失败）"
@@ -236,12 +327,14 @@ final class ParallelRunModel {
 
         states[index].diagnosing = false
         applyConclusion(at: index, conclusion: conclusion, executedAny: executedAny,
-                        lastExit: lastExit, initialExit: initialExit, stoppedForSafety: stoppedForSafety)
+                        lastExit: lastExit, initialExit: initialExit, ranInitial: ranInitial,
+                        stoppedForSafety: stoppedForSafety)
     }
 
     /// 把 Agent 结论落到该台的 `tone` / `summary`。
     private func applyConclusion(at index: Int, conclusion: (status: String, summary: String)?,
-                                 executedAny: Bool, lastExit: Int?, initialExit: Int?, stoppedForSafety: Bool) {
+                                 executedAny: Bool, lastExit: Int?, initialExit: Int?,
+                                 ranInitial: Bool, stoppedForSafety: Bool) {
         let status = conclusion?.status ?? ""
         let tone: ParallelLaneTone
         if stoppedForSafety {
@@ -253,34 +346,63 @@ final class ParallelRunModel {
         } else if status == "failed" {
             tone = .failed
         } else if !executedAny {
-            tone = (initialExit == 0) ? .ok : .failed
+            // 没下发任何命令：有初始命令且成功 → ok；否则（无初始命令，Agent 又没动手）→ failed。
+            tone = (ranInitial && initialExit == 0) ? .ok : .failed
         } else {
             tone = (lastExit == 0) ? .healed : .failed
         }
         states[index].tone = tone
         let summary = (conclusion?.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        states[index].summary = summary.isEmpty ? defaultSummary(tone: tone, exit: initialExit) : summary
+        states[index].summary = summary.isEmpty ? defaultSummary(tone: tone, exit: ranInitial ? initialExit : lastExit) : summary
     }
 
-    /// 一台收尾：计数 +1，达 N 则终局（AI 汇总 → 落库）。
+    /// 连接层失败（命令没跑起来）落定该台：识别原因、给确定性结论，并在「指纹未信任」时
+    /// 记下 `HostKeyChallenge`（驱动泳道内联「信任并重试」）。**不**跑 AI 自愈。
+    private func markUnreachable(at index: Int, target: ExecTarget, outcome: ExecOutcome) {
+        states[index].status = .failed
+        states[index].tone = .failed
+        states[index].exitCode = nil
+
+        if let challenge = target.hostKeyChallenges?.take() {
+            states[index].failure = .hostKeyUntrusted(challenge)
+            states[index].lines.append(ParallelTermLine(kind: .err, text: "主机指纹未信任，连接被拒绝"))
+            states[index].summary = challenge.kind == .mismatch
+                ? "无法连接：该主机的密钥与已信任的不一致（可能是服务器重装，也可能存在中间人风险）。请核对指纹，确认无误后「信任并重试」。"
+                : "无法连接：尚未信任该主机的指纹。请核对指纹，确认无误后点「信任并重试」。"
+        } else if outcome.timedOut {
+            let reason = "连接 / 执行超时（超过 \(Self.timeoutSeconds) 秒）"
+            states[index].failure = .connection(reason)
+            states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
+            states[index].summary = "\(reason)，未能确认结果。"
+        } else {
+            let reason = Self.connectionReason(outcome.errorText ?? target.setupErrorText)
+            states[index].failure = .connection(reason)
+            states[index].lines.append(ParallelTermLine(kind: .err, text: "连接失败：\(reason)"))
+            states[index].summary = "无法连接到该服务器：\(reason)。命令未执行。"
+        }
+    }
+
+    /// 一台收尾：全部台都落定（`tone != .running`）才终局（AI 汇总 → 落库）。
+    /// 用「全部已落定」判据而非计数：单台「信任并重试」会把该台重置回 running，待其
+    /// 重跑落定后自然再次触发终局；并发的多台重试也只在最后一台落定时收束一次。
     private func finishServer() {
-        completedCount += 1
-        guard completedCount >= states.count else { return }
+        guard states.allSatisfy({ resolved($0) }) else { return }
         finalize()
     }
 
     private func finalize() {
         finishedAt = Date()
+        let record = recordOnFinalize
         // 非 AI：无跨台汇总，直接落库。
-        guard aiAssisted else { recordRun(); return }
+        guard aiAssisted else { if record { recordRun() }; return }
         // AI 但无 provider：用模板汇总（否则视图「汇总中」spinner 永久转、汇总卡不出）。
         guard let doctor else {
             synthesis = fallbackSynthesis()
-            recordRun()
+            if record { recordRun() }
             return
         }
         // AI：先取 LLM 跨台汇总，再落库——保证执行日志里的 aiRecord.summary 与窗口实时汇总一致。
-        // 捕获 generation：若期间「重新运行」开了新一轮，丢弃这条陈旧回写与落库。
+        // 捕获 generation：若期间「重新运行」/「信任并重试」开了新一轮，丢弃这条陈旧回写与落库。
         let gen = generation
         let lanes = states.map { (name: $0.name, tone: $0.laneStatusText, summary: $0.summary) }
         let name = commandName
@@ -288,7 +410,7 @@ final class ParallelRunModel {
             let text = await doctor.synthesize(commandName: name, lanes: lanes)
             guard gen == self.generation else { return }
             self.synthesis = text ?? self.fallbackSynthesis()
-            self.recordRun()
+            if record { self.recordRun() }
         }
     }
 
@@ -329,19 +451,31 @@ final class ParallelRunModel {
 
     // MARK: - 提示词
 
-    private func agentInitialPrompt(target: ExecTarget, output: String, exit: Int?) -> String {
-        """
-        目标：在服务器「\(target.name)」(\(target.endpoint)) 上完成下面这条命令并确认成功：
-        \(command)
+    private func agentInitialPrompt(target: ExecTarget, ranInitial: Bool, output: String, exit: Int?) -> String {
+        var s = """
+        目标（自然语言）：\(goalText)
+        服务器：\(target.name)（\(target.endpoint)）
 
-        这条命令的初始执行结果：
-        退出码：\(exitText(exit))
-        输出：
-        \(output.isEmpty ? "（无输出）" : output)
 
-        若已成功，直接给结论；若失败或需要后续步骤（例如更新后要重启服务、改完配置后要 reload 或做一次健康检查），\
-        就用 run_command 工具逐条执行，每条命令我会把真实输出与退出码回给你，直到目标达成或确认无法自动修复。
         """
+        if ranInitial {
+            s += """
+            我已先执行了等效命令 `\(command)`，结果：
+            退出码：\(exitText(exit))
+            输出：
+            \(output.isEmpty ? "（无输出）" : output)
+
+            若已达成目标，直接给结论；若还需后续步骤（例如更新后要重启服务、改完配置后要 reload 或做一次健康检查），\
+            就用 run_command 工具逐条继续，每条命令我会把真实输出与退出码回给你，直到达成或确认无法自动完成。
+            """
+        } else {
+            s += """
+            目前还没有执行任何命令。请你根据上面的「目标」，用 run_command 工具逐条执行来达成它\
+            （例如「更新软件包」就执行对应包管理器的命令；按需多步：更新 → 必要时重启服务 → 做一次校验）。\
+            每条命令我会把真实输出与退出码回给你，直到达成目标或确认无法自动完成。
+            """
+        }
+        return s
     }
 
     nonisolated static func agentSystemPrompt(autoExecute: Bool, safetyLabel: String) -> String {
@@ -379,6 +513,15 @@ final class ParallelRunModel {
 
     private func exitText(_ code: Int?) -> String { code.map(String.init) ?? "未知" }
 
+    /// 单台超时秒数（取自 `perServerTimeout`），用于失败文案。
+    nonisolated static var timeoutSeconds: Int { Int(perServerTimeout.components.seconds) }
+
+    /// 把连接错误信息整理成一句可读原因（去空白；空则给兜底）。
+    private nonisolated static func connectionReason(_ text: String?) -> String {
+        let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "无法建立连接" : t
+    }
+
     /// 把一次执行结果切成渲染用的逐行 `ParallelTermLine`。失败时末行标红。
     /// 输出为空（含纯空白）时给占位行——`"".split` 会得到 `[""]` 而非空数组，故不能靠 isEmpty 判空。
     nonisolated static func outputLines(from result: CommandResult?, failed: Bool) -> [ParallelTermLine] {
@@ -397,50 +540,72 @@ final class ParallelRunModel {
 
     // MARK: - 并发执行器 + 超时
 
-    /// 带进逐台任务的 `Sendable` 目标（执行器解析失败 → executor 为 nil → 记失败）。
+    /// 带进逐台任务的 `Sendable` 目标。`executor` 为 nil = 认证解析失败（原因在 `setupErrorText`）；
+    /// `hostKeyChallenges` 收集建连时被拒的主机密钥指纹（驱动「信任并重试」）。
     private nonisolated struct ExecTarget: Sendable {
         let id: UUID
         let name: String
         let endpoint: String
         let executor: SSHCommandExecutor?
+        let hostKeyChallenges: HostKeyChallengeSink?
+        let setupErrorText: String?
     }
 
-    /// 执行命令；超过 `perServerTimeout` 即放弃等待（返回 nil）。用非结构化 `Task` + 一次性闸门——
-    /// Citadel exec 流不可取消，结构化任务组会被挂死命令永久阻塞（详见 `QuickCommandRunner.runBounded`）。
-    private nonisolated static func execBounded(executor: SSHCommandExecutor?, command: String) async -> CommandResult? {
-        guard let executor else { return nil }
+    /// 一次执行的归类结果：跑出结果 / 抛错（连接 / 认证失败，带原因）/ 超时。
+    nonisolated struct ExecOutcome: Sendable {
+        let result: CommandResult?
+        /// 执行器抛出的错误描述（连接 / 认证失败）；超时与「无执行器」时为 nil。
+        let errorText: String?
+        let timedOut: Bool
+    }
+
+    private enum GateOutcome: Sendable {
+        case completed(CommandResult?)
+        case failed(String)
+        case timedOut
+    }
+
+    /// 执行命令并归类结果；超过 `perServerTimeout` 即放弃等待（记超时）。用非结构化 `Task` +
+    /// 一次性闸门——Citadel exec 流不可取消，结构化任务组会被挂死命令永久阻塞
+    ///（详见 `QuickCommandRunner.runBounded`）。
+    private nonisolated static func execBounded(executor: SSHCommandExecutor?, command: String) async -> ExecOutcome {
+        guard let executor else { return ExecOutcome(result: nil, errorText: nil, timedOut: false) }
         let gate = OneShotGate()
         _ = Task<Void, Never> {
-            let result = try? await executor.run(command)
-            await gate.deliver(result)
+            do { await gate.deliver(.completed(try await executor.run(command))) }
+            catch { await gate.deliver(.failed(error.localizedDescription)) }
         }
         let timer = Task<Void, Never> {
             try? await Task.sleep(for: perServerTimeout)
-            await gate.deliver(nil)
+            await gate.deliver(.timedOut)
         }
-        let result = await gate.wait()
+        let outcome = await gate.wait()
         timer.cancel()
-        return result
+        switch outcome {
+        case .completed(let r): return ExecOutcome(result: r, errorText: nil, timedOut: false)
+        case .failed(let msg):  return ExecOutcome(result: nil, errorText: msg, timedOut: false)
+        case .timedOut:         return ExecOutcome(result: nil, errorText: nil, timedOut: true)
+        }
     }
 
     /// 一次性闸门：exec 与超时谁先到谁定结果。
     private actor OneShotGate {
         private var delivered = false
-        private var stored: CommandResult??
-        private var waiter: CheckedContinuation<CommandResult?, Never>?
+        private var stored: GateOutcome?
+        private var waiter: CheckedContinuation<GateOutcome, Never>?
 
-        func deliver(_ value: CommandResult?) {
+        func deliver(_ value: GateOutcome) {
             guard !delivered else { return }
             delivered = true
             if let waiter {
                 waiter.resume(returning: value)
                 self.waiter = nil
             } else {
-                stored = .some(value)
+                stored = value
             }
         }
 
-        func wait() async -> CommandResult? {
+        func wait() async -> GateOutcome {
             if let stored { return stored }
             return await withCheckedContinuation { waiter = $0 }
         }

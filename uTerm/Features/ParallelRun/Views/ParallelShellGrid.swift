@@ -4,6 +4,8 @@ import SwiftUI
 /// 同一条命令在各台并行下发，窗格各自独立展示输出 + 退出码。
 struct ParallelShellGrid: View {
     let states: [ParallelServerState]
+    /// 某台「主机指纹未信任」时，用户点窗格内「信任并重试」的回调（serverID）。
+    var onTrustAndRetry: (UUID) -> Void = { _ in }
 
     private var columns: Int { states.count <= 3 ? max(1, states.count) : 2 }
 
@@ -17,12 +19,13 @@ struct ParallelShellGrid: View {
                 ForEach(Array(states.enumerated()), id: \.element.id) { index, state in
                     ParallelShellPane(state: state,
                                       edgeRight: index % cols != cols - 1,
-                                      edgeBottom: index < states.count - cols)
+                                      edgeBottom: index < states.count - cols,
+                                      onTrustAndRetry: onTrustAndRetry)
                         .frame(width: cellW, height: cellH)
                 }
             }
         }
-        .background(UD.terminal)
+        .background(ParTermSurface.bg)
     }
 }
 
@@ -32,6 +35,7 @@ struct ParallelShellPane: View {
     let state: ParallelServerState
     let edgeRight: Bool
     let edgeBottom: Bool
+    var onTrustAndRetry: (UUID) -> Void = { _ in }
 
     private var running: Bool { state.status == .running }
     private var failed: Bool { state.status == .failed }
@@ -84,21 +88,17 @@ struct ParallelShellPane: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(state.lines) { line in
-                        HStack(alignment: .top, spacing: 7) {
-                            prefix(for: line.kind)
-                            Text(line.text)
-                                .foregroundStyle(color(for: line.kind))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                    ParTermLinesView(lines: state.lines)
+                    // 主机指纹未信任：窗格内联展示指纹 +「信任并重试」。
+                    if case .hostKeyUntrusted(let challenge) = state.failure {
+                        HostKeyRetryCard(challenge: challenge) { onTrustAndRetry(state.id) }
+                            .padding(.top, 8)
                     }
                     if running {
                         BlinkingCaret().padding(.top, 1)
                     }
                     Color.clear.frame(height: 1).id("shell-bottom")
                 }
-                .font(.system(size: 11.5, design: .monospaced))
                 .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -109,8 +109,34 @@ struct ParallelShellPane: View {
         }
     }
 
+    private var durationText: String {
+        guard let ms = state.durationMs else { return "—" }
+        return String(format: "%.1fs", Double(ms) / 1000)
+    }
+}
+
+/// 终端逐行输出渲染（Shell 窗格 / AI 泳道「原始命令与输出」共用）。终端面随主题翻
+/// （深底亮字 / 白底深字），故文字直接用 UD 主题色；ok/err 用语义绿红，两档均可读。
+struct ParTermLinesView: View {
+    let lines: [ParallelTermLine]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(lines) { line in
+                HStack(alignment: .top, spacing: 7) {
+                    Self.prefix(line.kind)
+                    Text(line.text)
+                        .foregroundStyle(Self.color(line.kind))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .font(.system(size: 11.5, design: .monospaced))
+    }
+
     @ViewBuilder
-    private func prefix(for kind: ParallelTermLine.Kind) -> some View {
+    static func prefix(_ kind: ParallelTermLine.Kind) -> some View {
         switch kind {
         case .cmd: Text("$").foregroundStyle(UD.accent)
         case .ok:  Text("✓").foregroundStyle(UD.success)
@@ -119,19 +145,13 @@ struct ParallelShellPane: View {
         }
     }
 
-    private func color(for kind: ParallelTermLine.Kind) -> Color {
-        // 终端深底上用固定亮色 ink（日/夜不翻），ok/err 用语义绿红（两档均可读）。
+    static func color(_ kind: ParallelTermLine.Kind) -> Color {
         switch kind {
-        case .cmd: return ParTermInk.text
+        case .cmd: return UD.text
         case .ok:  return UD.success
         case .err: return UD.danger
-        case .out: return ParTermInk.dim
+        case .out: return UD.text3
         }
-    }
-
-    private var durationText: String {
-        guard let ms = state.durationMs else { return "—" }
-        return String(format: "%.1fs", Double(ms) / 1000)
     }
 }
 

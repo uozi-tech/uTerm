@@ -58,7 +58,8 @@ struct ParallelRunWindowView: View {
                                     running: !model.allDone,
                                     onRerun: { model.rerun() },
                                     onClose: { dismiss() })
-                ParallelBroadcastBar(command: model.command,
+                ParallelBroadcastBar(text: model.broadcastText,
+                                     isIntent: model.broadcastIsIntent,
                                      mode: model.mode,
                                      total: model.total,
                                      doneCount: model.doneCount,
@@ -73,9 +74,11 @@ struct ParallelRunWindowView: View {
                                           aiAssisted: model.aiAssisted,
                                           states: model.states,
                                           synthesis: model.synthesis,
-                                          allDone: model.allDone)
+                                          allDone: model.allDone,
+                                          onTrustAndRetry: { model.trustAndRetry(serverID: $0) })
                     } else {
-                        ParallelShellGrid(states: model.states)
+                        ParallelShellGrid(states: model.states,
+                                          onTrustAndRetry: { model.trustAndRetry(serverID: $0) })
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -126,6 +129,7 @@ struct ParallelRunWindowView: View {
         let m = ParallelRunModel(commandID: command.id,
                                  commandName: command.name,
                                  command: command.command,
+                                 intent: command.intent,
                                  aiAssisted: command.aiAssisted,
                                  targets: targets,
                                  doctor: command.aiAssisted ? makeDoctor() : nil,

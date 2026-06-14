@@ -64,7 +64,7 @@ final class QuickCommandRunner {
 
         var built: [Target] = []
         for profile in uniqueTargets {
-            let executor = try? WorkspaceCommandExecutorFactory.make(server: profile, container: container)
+            let executor = (try? WorkspaceCommandExecutorFactory.make(server: profile, container: container))?.executor
             built.append(Target(id: profile.id,
                                  name: profile.name.isEmpty ? profile.host : profile.name,
                                  endpoint: "\(profile.username)@\(profile.host):\(profile.port)",

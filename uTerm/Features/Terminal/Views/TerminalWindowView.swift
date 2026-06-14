@@ -101,8 +101,8 @@ struct TerminalWindowView: View {
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 退化为纯文本对话。
         .task(id: server.id) {
-            workspace.assistantModel.executor = try? WorkspaceCommandExecutorFactory.make(
-                server: server, container: modelContext.container)
+            workspace.assistantModel.executor = (try? WorkspaceCommandExecutorFactory.make(
+                server: server, container: modelContext.container))?.executor
         }
         .onDisappear { workspace.dispose() }
         // 全局 CommandGroup 通知广播到所有窗口；controlActiveState == .key 守卫，只让

@@ -182,8 +182,8 @@ struct WorkspaceWindowView: View {
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 解析失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 不提供工具。
         .task(id: server.id) {
-            workspace.assistantModel.executor = try? WorkspaceCommandExecutorFactory.make(
-                server: server, container: modelContext.container)
+            workspace.assistantModel.executor = (try? WorkspaceCommandExecutorFactory.make(
+                server: server, container: modelContext.container))?.executor
         }
         // 快捷命令「AI 介入」运行入口：欢迎页把命令入队 QuickCommandInbox 并打开本窗口。
         // 抽成独立 ViewModifier —— 内联 .task + .onChange 会把本就庞大的 body 推过类型检查上限。
