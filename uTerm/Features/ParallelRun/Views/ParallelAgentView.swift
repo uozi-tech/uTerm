@@ -16,33 +16,50 @@ struct ParallelAgentView: View {
         !resolvedAll || (aiAssisted && allDone && synthesis.isEmpty)
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                opening
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(states) { ParallelAILane(state: $0) }
-                }
-                .padding(.leading, 32)
+    /// 自动跟随到底部的锚点 id。
+    private static let bottomAnchor = "par-agent-bottom"
 
-                if allDone && !synthesis.isEmpty {
-                    synthesisCard
-                }
-                if showProgress {
-                    HStack(spacing: 9) {
-                        ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
-                        Text(resolvedAll ? "正在生成跨服务器汇总…" : "正在并行执行并汇总…")
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .foregroundStyle(UD.text3)
+    /// 内容增长的指纹：泳道落定 / 摘要 / 步骤数 / 汇总 / 进度指示变化即触发跟随滚动。
+    /// 不含步骤展开态（stepsOpen 属泳道局部、用户手动），避免完成后展开步骤被甩回底部。
+    private var scrollKey: String {
+        states.map { "\($0.tone == .running ? 0 : 1):\($0.summary.count):\($0.steps.count)" }
+            .joined(separator: "|") + "#\(synthesis.count)#\(showProgress ? 1 : 0)"
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    opening
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(states) { ParallelAILane(state: $0) }
                     }
                     .padding(.leading, 32)
+
+                    if allDone && !synthesis.isEmpty {
+                        synthesisCard
+                    }
+                    if showProgress {
+                        HStack(spacing: 9) {
+                            ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
+                            Text(resolvedAll ? "正在生成跨服务器汇总…" : "正在并行执行并汇总…")
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(UD.text3)
+                        }
+                        .padding(.leading, 32)
+                    }
+                    // 跟随锚点（置于内容末，scrollTo 对齐到视口底）。
+                    Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }
+                .frame(maxWidth: 720, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(EdgeInsets(top: 20, leading: 24, bottom: 24, trailing: 24))
             }
-            .frame(maxWidth: 720, alignment: .leading)
-            .frame(maxWidth: .infinity)
-            .padding(EdgeInsets(top: 20, leading: 24, bottom: 24, trailing: 24))
+            .background(UD.bg)
+            .onChange(of: scrollKey) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+            }
         }
-        .background(UD.bg)
     }
 
     /// 「N 台」加粗强调，其余继承正文。用 AttributedString 避免 Text `+`（macOS 26 弃用）。

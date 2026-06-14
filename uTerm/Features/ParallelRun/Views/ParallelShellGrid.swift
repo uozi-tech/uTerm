@@ -81,24 +81,31 @@ struct ParallelShellPane: View {
     }
 
     private var body_: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(state.lines) { line in
-                    HStack(alignment: .top, spacing: 7) {
-                        prefix(for: line.kind)
-                        Text(line.text)
-                            .foregroundStyle(color(for: line.kind))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(state.lines) { line in
+                        HStack(alignment: .top, spacing: 7) {
+                            prefix(for: line.kind)
+                            Text(line.text)
+                                .foregroundStyle(color(for: line.kind))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
+                    if running {
+                        BlinkingCaret().padding(.top, 1)
+                    }
+                    Color.clear.frame(height: 1).id("shell-bottom")
                 }
-                if running {
-                    BlinkingCaret().padding(.top, 1)
-                }
+                .font(.system(size: 11.5, design: .monospaced))
+                .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.system(size: 11.5, design: .monospaced))
-            .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // 终端跟随：输出增量追加时滚到底（自愈多步会持续追加命令输出）。
+            .onChange(of: state.lines.count) { _, _ in
+                withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("shell-bottom", anchor: .bottom) }
+            }
         }
     }
 
