@@ -17,7 +17,8 @@ import SwiftData
 final class ParallelRunModel {
 
     /// 单台单条命令执行超时：超过即记失败收尾，避免挂死命令永久卡「执行中」。
-    nonisolated static let perServerTimeout: Duration = .seconds(120)
+    /// 取 300s——`apt upgrade` 升级上百个包等运维操作合理地需要数分钟，120s 会误判超时。
+    nonisolated static let perServerTimeout: Duration = .seconds(300)
     /// 自愈 Agent 每台最多步数（每步 = 一轮 LLM + 其工具调用），有界防失控。
     nonisolated static let maxAgentSteps = 6
 
@@ -124,12 +125,16 @@ final class ParallelRunModel {
     private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) -> ExecTarget {
         var executor: SSHCommandExecutor?
         var sink: HostKeyChallengeSink?
+        var connection: ReusableSSHConnection?
         var setupError: String?
         do {
+            // reuseConnection: true —— 同台多条命令复用一条 SSH 连接、断线自动重连（健壮性）。
             let made = try WorkspaceCommandExecutorFactory.make(
-                server: profile, container: container, trustNewKeys: trustNewKeys)
+                server: profile, container: container,
+                trustNewKeys: trustNewKeys, reuseConnection: true)
             executor = made.executor
             sink = made.hostKeyChallenges
+            connection = made.connection
         } catch {
             setupError = error.localizedDescription
         }
@@ -138,6 +143,7 @@ final class ParallelRunModel {
                           endpoint: QuickCommandTargets.endpoint(profile),
                           executor: executor,
                           hostKeyChallenges: sink,
+                          connection: connection,
                           setupErrorText: setupError)
     }
 
@@ -183,7 +189,14 @@ final class ParallelRunModel {
         Task { await self.runServer(at: index, target: target) }
     }
 
+    /// 逐台入口：跑完该台 → 关闭其复用连接（释放资源 / 防泄漏）→ 记一台落定。
     private func runServer(at index: Int, target: ExecTarget) async {
+        await runLane(at: index, target: target)
+        await target.connection?.close()
+        finishServer()
+    }
+
+    private func runLane(at index: Int, target: ExecTarget) async {
         states[index].status = .running
         states[index].tone = .running
         states[index].lines = []
@@ -203,7 +216,6 @@ final class ParallelRunModel {
                 // 连接层失败：命令根本没跑起来。识别原因（指纹未信任 / 连接错误 / 超时），
                 // 给确定性结论、暴露指纹，**不**跑 AI 自愈（连不上，自愈无意义且会让模型瞎猜）。
                 markUnreachable(at: index, target: target, outcome: outcome)
-                finishServer()
                 return
             }
             initialExit = result.exitCode
@@ -220,7 +232,6 @@ final class ParallelRunModel {
             if probe.result == nil {
                 states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
                 markUnreachable(at: index, target: target, outcome: probe)
-                finishServer()
                 return
             }
         }
@@ -232,7 +243,6 @@ final class ParallelRunModel {
             states[index].summary = ok
                 ? "命令执行完成，退出码 0。"
                 : "命令以退出码 \(exitText(initialExit)) 结束，执行失败。"
-            finishServer()
             return
         }
 
@@ -247,12 +257,10 @@ final class ParallelRunModel {
                 states[index].tone = .failed
                 states[index].summary = "未配置 AI provider，无法按「\(goalText)」自主下发命令。请到设置里配置 AI provider。"
             }
-            finishServer()
             return
         }
         await runAgent(at: index, target: target, doctor: doctor, ranInitial: ranInitial,
                        initialOutput: initialOutput ?? "", initialExit: initialExit)
-        finishServer()
     }
 
     /// AI 命令交给 Agent 的自然语言目标：优先 intent，其次等效命令，再次命令名。
@@ -311,10 +319,20 @@ final class ParallelRunModel {
                     st.status = .failed; st.output = "(空命令)"; resolvedCalls.append(st); continue
                 }
                 states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
-                let r = await Self.execBounded(executor: target.executor, command: st.command).result
-                let cmdExit = r?.exitCode
-                states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
-                st.output = r?.output ?? "（无输出或执行失败）"
+                let outcome = await Self.execBounded(executor: target.executor, command: st.command)
+                let cmdExit = outcome.result?.exitCode
+                if let r = outcome.result {
+                    states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
+                    st.output = r.output
+                } else {
+                    // 真实失败原因回喂模型 + 显示在原始输出里（不再笼统「连接或执行失败」），
+                    // 让模型据「超时 / 连接失败」做对的决定，也方便用户判断。
+                    let reason = outcome.timedOut
+                        ? "执行超时（超过 \(Self.timeoutSeconds) 秒）"
+                        : "连接失败：\(Self.connectionReason(outcome.errorText))"
+                    states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
+                    st.output = reason
+                }
                 st.exitCode = cmdExit
                 st.status = .done
                 lastExit = cmdExit
@@ -541,13 +559,15 @@ final class ParallelRunModel {
     // MARK: - 并发执行器 + 超时
 
     /// 带进逐台任务的 `Sendable` 目标。`executor` 为 nil = 认证解析失败（原因在 `setupErrorText`）；
-    /// `hostKeyChallenges` 收集建连时被拒的主机密钥指纹（驱动「信任并重试」）。
+    /// `hostKeyChallenges` 收集建连时被拒的主机密钥指纹（驱动「信任并重试」）；
+    /// `connection` 是该台复用的 SSH 连接，跑完该台后须 `close()`（防泄漏）。
     private nonisolated struct ExecTarget: Sendable {
         let id: UUID
         let name: String
         let endpoint: String
         let executor: SSHCommandExecutor?
         let hostKeyChallenges: HostKeyChallengeSink?
+        let connection: ReusableSSHConnection?
         let setupErrorText: String?
     }
 
