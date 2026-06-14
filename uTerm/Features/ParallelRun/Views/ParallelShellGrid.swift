@@ -95,7 +95,7 @@ struct ParallelShellPane: View {
                             .padding(.top, 8)
                     }
                     if running {
-                        BlinkingCaret().padding(.top, 1)
+                        RunningCaret().padding(.top, 1)
                     }
                     Color.clear.frame(height: 1).id("shell-bottom")
                 }
@@ -160,16 +160,12 @@ struct ParTermLinesView: View {
     }
 }
 
-/// 运行中末行的闪烁光标块。
-struct BlinkingCaret: View {
-    @State private var on = true
+/// 运行中末行的**稳定**光标块（不闪烁，对齐项目稳定光标的设计语言）。运行态由窗格头部
+/// 「运行中」spinner 表达，此光标只作终端视觉收尾。
+struct RunningCaret: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 1)
             .fill(UD.accent)
             .frame(width: 7, height: 13)
-            .opacity(on ? 1 : 0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { on = false }
-            }
     }
 }
