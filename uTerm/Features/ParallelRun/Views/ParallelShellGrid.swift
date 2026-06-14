@@ -103,8 +103,13 @@ struct ParallelShellPane: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             // 终端跟随：输出增量追加时滚到底（自愈多步会持续追加命令输出）。
+            // 大块输出常一次性追加（execBounded 整条命令跑完才回 → 多行同时进 lines）：同步
+            // scrollTo 会滚到「旧底部」（新行还没布局），结果停在最新输出上方。用
+            // Task{@MainActor} 推迟一拍，待新行布局完成后再滚，稳定贴底。
             .onChange(of: state.lines.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("shell-bottom", anchor: .bottom) }
+                Task { @MainActor in
+                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("shell-bottom", anchor: .bottom) }
+                }
             }
         }
     }
