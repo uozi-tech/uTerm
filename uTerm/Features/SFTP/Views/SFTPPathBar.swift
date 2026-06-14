@@ -134,41 +134,33 @@ struct SFTPPathBar: View {
     // MARK: 操作菜单
 
     private var actionsMenu: some View {
-        Menu {
-            Section("排序") {
-                ForEach(FileBrowserModel.SortKey.allCases) { key in
-                    Button { onSetSort(key) } label: {
-                        HStack {
-                            Text(key.label)
-                            if key == sortKey { Image(systemName: "checkmark") }
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button { onToggleHidden() } label: {
-                HStack {
-                    Text("显示隐藏文件")
-                    if showHidden { Image(systemName: "checkmark") }
-                }
-            }
-            Divider()
-            Button("在终端中打开", action: onOpenInTerminal)
-        } label: {
+        UDDropdown(anchor: .trailing) { open in
             HStack(spacing: 7) {
                 Text("操作").font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(UD.text3)
+                    .rotationEffect(.degrees(open ? 180 : 0))
             }
             .padding(.horizontal, 12).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        } content: {
+            UDMenu(width: 200, head: "排序", items: actionsMenuItems)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .accessibilityLabel("操作菜单")
         .help("排序、显示隐藏文件、在终端中打开")
+    }
+
+    private var actionsMenuItems: [UDMenuItem] {
+        var items: [UDMenuItem] = FileBrowserModel.SortKey.allCases.map { key in
+            UDMenuItem(label: key.label, active: key == sortKey, action: { onSetSort(key) })
+        }
+        items.append(.divider())
+        items.append(UDMenuItem(label: "显示隐藏文件", active: showHidden, action: onToggleHidden))
+        items.append(.divider())
+        items.append(UDMenuItem(label: "在终端中打开", systemImage: "terminal", action: onOpenInTerminal))
+        return items
     }
 }
 

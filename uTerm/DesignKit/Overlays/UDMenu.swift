@@ -59,12 +59,22 @@ struct UDMenu: View {
     }
 }
 
-/// 单条菜单行（hover 态内部自管理）。
+/// 单条菜单行（hover 态内部自管理）。`item.action` 非 nil 时整行可点（功能菜单）；
+/// 为 nil 时为纯展示（Gallery）。
 private struct UDMenuItemRow: View {
     let item: UDMenuItem
     @State private var hovered = false
 
     var body: some View {
+        if let action = item.action {
+            Button(action: action) { rowBody }
+                .buttonStyle(.plain)
+        } else {
+            rowBody
+        }
+    }
+
+    private var rowBody: some View {
         HStack(spacing: 8) {
             if let dotColor = item.dotColor {
                 Circle()
@@ -133,6 +143,8 @@ struct UDMenuItem: Identifiable {
     var danger: Bool
     /// 是否为分隔线。
     var isDivider: Bool
+    /// 点击回调。非 nil 时整行变 `Button`（功能菜单）；nil 为纯展示（Gallery）。
+    var action: (() -> Void)?
 
     init(
         label: String,
@@ -141,7 +153,8 @@ struct UDMenuItem: Identifiable {
         kbd: String? = nil,
         active: Bool = false,
         danger: Bool = false,
-        isDivider: Bool = false
+        isDivider: Bool = false,
+        action: (() -> Void)? = nil
     ) {
         self.label = label
         self.systemImage = systemImage
@@ -150,6 +163,7 @@ struct UDMenuItem: Identifiable {
         self.active = active
         self.danger = danger
         self.isDivider = isDivider
+        self.action = action
     }
 
     /// 分隔线项。

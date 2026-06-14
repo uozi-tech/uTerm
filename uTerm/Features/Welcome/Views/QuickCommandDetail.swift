@@ -15,6 +15,8 @@ struct QuickCommandDetail: View {
 
     @Query private var runs: [QuickCommandRun]
     @State private var copied = false
+    /// AI 指令块里「查看等效命令」折叠态（默认收起，只呈现说人话的意图）。
+    @State private var showEquivalent = false
 
     init(command: QuickCommand,
          hosts: [ServerProfile],
@@ -52,7 +54,7 @@ struct QuickCommandDetail: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header
                     targetSection.padding(.top, 16)
-                    commandBlock.padding(.top, 16)
+                    commandRegion.padding(.top, 16)
                     metaGrid.padding(.top, 18)
                     aiToggleRow.padding(.top, 18)
                     QuickCommandRunLog(runs: runs).padding(.top, 18)
@@ -157,6 +159,72 @@ struct QuickCommandDetail: View {
         }
     }
 
+    // MARK: 命令区（AI 介入 → 自然语言指令块；非 AI → shell 代码块）
+
+    /// AI 命令以自然语言意图为主；等效 shell 收进折叠，默认不堆在用户面前。
+    @ViewBuilder
+    private var commandRegion: some View {
+        if command.aiAssisted {
+            intentBlock
+        } else {
+            commandBlock
+        }
+    }
+
+    // MARK: AI 指令块（自然语言 + 等效命令折叠）
+
+    private var intentBlock: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(UD.aiAccent)
+                Text("AI 指令 · 自然语言")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.2)
+                    .foregroundStyle(UD.aiAccent)
+            }
+            Text(QuickCommandLogic.aiIntentText(name: command.name, intent: command.intent))
+                .font(.system(size: 13))
+                .foregroundStyle(UD.text)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 7)
+
+            // 等效命令留空（让 AI 自行决定）时无可展开内容，整块折叠入口隐藏。
+            if !command.command.isEmpty {
+                Button { withAnimation(.easeOut(duration: 0.15)) { showEquivalent.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(UD.text3)
+                            .rotationEffect(.degrees(showEquivalent ? 90 : 0))
+                        Text(showEquivalent ? "隐藏等效命令" : "查看等效命令")
+                            .font(.system(size: 11))
+                            .foregroundStyle(UD.text3)
+                    }
+                    .padding(.leading, 7)
+                    .padding(.trailing, 9)
+                    .frame(height: 24)
+                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
+
+                if showEquivalent {
+                    commandBlock.padding(.top, 9)
+                }
+            }
+        }
+        .padding(EdgeInsets(top: 11, leading: 12, bottom: 12, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.aiAccent.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(UD.aiAccent.opacity(0.20), lineWidth: 1))
+    }
+
     // MARK: 命令块
 
     private var commandBlock: some View {
@@ -170,7 +238,7 @@ struct QuickCommandDetail: View {
             .textSelection(.enabled)
             .padding(EdgeInsets(top: 12, leading: 13, bottom: 12, trailing: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.terminal))
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.panelHi))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
 
             Button(action: copy) {

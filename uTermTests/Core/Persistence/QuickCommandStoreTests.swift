@@ -52,6 +52,24 @@ final class QuickCommandStoreTests: XCTestCase {
         XCTAssertTrue(cmd.aiAssisted)
     }
 
+    func testCreateAndUpdatePersistIntentTrimmed() throws {
+        let ctx = try makeContext()
+        let store = QuickCommandStore(context: ctx)
+        // 默认无 intent（向后兼容旧签名）。
+        let plain = store.create(name: "a", serverIDs: [UUID()], command: "x", aiAssisted: false)
+        XCTAssertEqual(plain.intent, "")
+        // 带 intent 创建：去首尾空白；等效命令可留空。
+        let cmd = store.create(name: "n", serverIDs: [UUID()], command: "",
+                               intent: "  重启 Nginx 后做健康检查  ", aiAssisted: true)
+        XCTAssertEqual(cmd.intent, "重启 Nginx 后做健康检查")
+        XCTAssertEqual(cmd.command, "")
+        // 更新改写 intent + 清空等效命令。
+        store.update(cmd, name: "n", serverIDs: cmd.serverIDs, command: " pm2 reload ",
+                     intent: " 只说人话 ", aiAssisted: true)
+        XCTAssertEqual(cmd.command, "pm2 reload")
+        XCTAssertEqual(cmd.intent, "只说人话")
+    }
+
     func testSetAIAssistedToggles() throws {
         let ctx = try makeContext()
         let store = QuickCommandStore(context: ctx)

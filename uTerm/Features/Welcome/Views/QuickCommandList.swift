@@ -149,14 +149,16 @@ struct QuickCommandList: View {
 
     private func saveCreate(_ data: QuickCommandForm.FormData) {
         let cmd = store.create(name: data.name, serverIDs: data.serverIDs,
-                               command: data.command, aiAssisted: data.aiAssisted)
+                               command: data.command, intent: data.intent,
+                               aiAssisted: data.aiAssisted)
         selectedID = cmd.id
         withAnimation(.easeOut(duration: 0.18)) { mode = .view }
     }
 
     private func saveEdit(_ cmd: QuickCommand, _ data: QuickCommandForm.FormData) {
         store.update(cmd, name: data.name, serverIDs: data.serverIDs,
-                     command: data.command, aiAssisted: data.aiAssisted)
+                     command: data.command, intent: data.intent,
+                     aiAssisted: data.aiAssisted)
         withAnimation(.easeOut(duration: 0.18)) { mode = .view }
     }
 
@@ -174,17 +176,26 @@ struct QuickCommandList: View {
         mode = .view
     }
 
-    /// 运行：AI 介入命令路由到首台可执行服务器的工作区 Agent；普通命令真实并行执行。
-    /// 两路均剔除「仅 SFTP」主机 —— 它们禁命令执行，不能作为目标。
+    /// 运行：多台 → 独立并行执行窗口（广播）；单台 + AI → 工作区 Agent；单台 → 真实执行。
+    /// 三路均剔除「仅 SFTP」主机 —— 它们禁命令执行，不能作为目标。
     private func run(_ cmd: QuickCommand) {
         let targets = cmd.serverIDs
             .compactMap { id in hosts.first { $0.id == id } }
             .filter { !$0.sftpOnly }
         guard !targets.isEmpty else { return }
 
+        // 多台 → 独立并行执行窗口（广播 + 逐台结果 / AI 自愈）。运行计数与日志由该窗口
+        // 在执行落定后经 QuickCommandStore.recordRun 写入，故此处不再 recordInvocation。
+        if targets.count > 1 {
+            openWindow(value: ParallelRunWindowID(commandID: cmd.id))
+            return
+        }
+
         if cmd.aiAssisted {
             let primary = targets[0]
-            QuickCommandInbox.shared.enqueue(serverID: primary.id, command: cmd.command)
+            // AI 命令以自然语言意图为主预填给 Agent（缺失则退回等效命令）。
+            let prefill = QuickCommandLogic.agentPrefill(name: cmd.name, intent: cmd.intent, command: cmd.command)
+            QuickCommandInbox.shared.enqueue(serverID: primary.id, command: prefill)
             primary.lastConnectedAt = Date()
             // AI 命令在 Agent 会话里交互执行，无逐台退出码可记 —— 只更新 上次运行/运行次数。
             store.recordInvocation(cmd)
@@ -222,10 +233,7 @@ struct QuickCommandRow: View {
                         .foregroundStyle(UD.text)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text(commandPreview)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    subtitle
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -249,6 +257,28 @@ struct QuickCommandRow: View {
         .background(rowBackground)
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.14), value: hover)
+    }
+
+    /// 副标题：AI 命令显示自然语言意图（前置紫色火花、无 `$`）；非 AI 显示 `$ 命令` 等宽预览。
+    @ViewBuilder
+    private var subtitle: some View {
+        if command.aiAssisted {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundStyle(UD.aiAccent)
+                Text(QuickCommandLogic.aiIntentText(name: command.name, intent: command.intent))
+                    .font(.system(size: 12))
+                    .foregroundStyle(UD.text3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        } else {
+            Text(commandPreview)
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
     }
 
     private var commandPreview: AttributedString {

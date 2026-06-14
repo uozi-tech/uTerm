@@ -28,19 +28,23 @@ struct TerminalAgentView: View {
                     conversation
                     composer
                 }
+                .background(commandReturnShortcut)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(UD.bg)
-        .onAppear { model.attach(context: modelContext) }
+        // 进入视图即补批一次：覆盖「auto 档下带着既有 pending 从终端模式切回」——此时
+        // 无状态跃迁，下面的 onChange(model.state) 不会触发，缺这一下会卡死在「待确认」。
+        .onAppear {
+            model.attach(context: modelContext)
+            autoApproveNextIfNeeded()
+        }
+        // 切到「自动执行」档时若已有 pending：切档不改 model.state，onChange 不触发，这里补批。
+        .onChange(of: safety) { _, _ in autoApproveNextIfNeeded() }
         // 「自动执行」档位：进入「待确认」即自动批准首个 pending（逐条迭代——每条执行
         // 完后状态机若仍有 pending 会再回到 .awaitingApproval，触发本回调批准下一条）。
         .onChange(of: model.state) { old, now in
-            // 「自动执行」档位：进入待确认即自动批准首个 pending（逐条迭代）。
-            if safety.autoApprovesPending, now == .awaitingApproval,
-               let id = firstPendingToolCallID() {
-                Task { await model.approveAndRun(id: id) }
-            }
+            autoApproveNextIfNeeded()
             // 回复落定（流式/执行 → idle 或 非自动的待确认）→ 刷新「猜你想问」追问。
             let wasActive = (old == .streaming || old == .running)
             let settled = now == .idle || (now == .awaitingApproval && !safety.autoApprovesPending)
@@ -94,8 +98,9 @@ struct TerminalAgentView: View {
     private var conversation: some View {
         if model.messages.isEmpty {
             // 空状态：居中铺满（不进 ScrollView），避免内容偏上 + 出现滚动条。
+            // 加宽到 640，使每组 3 条建议能并排放在同一行。
             emptyState
-                .frame(maxWidth: 480)
+                .frame(maxWidth: 640)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 24)
         } else {
@@ -107,6 +112,8 @@ struct TerminalAgentView: View {
                         if model.messages.last?.role == .assistant {
                             followUpsView
                         }
+                        // 贴底锚点：滚到这里才能露出追问（追问在最后一条消息之下）。
+                        Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
                     .frame(maxWidth: 760, alignment: .leading)
                     .frame(maxWidth: .infinity)
@@ -126,8 +133,11 @@ struct TerminalAgentView: View {
         }
     }
 
+    private static let bottomAnchorID = "ta.bottom"
+
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        if let last = model.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+        // 滚到贴底锚点（在追问之下）——否则只滚到最后一条消息，追问被挡在折叠线下。
+        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
     }
 
     @ViewBuilder
@@ -150,15 +160,17 @@ struct TerminalAgentView: View {
             // 文本带头像；命令卡整宽（不跟随头像缩进 → 左右对称，去掉头像下方竖直空槽）。
             VStack(alignment: .leading, spacing: 8) {
                 if !m.text.isEmpty {
-                    HStack(alignment: .top, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
                         agentAvatar
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                         StreamingMarkdownView(text: m.text, isStreaming: isStreamingTail(m))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else if !isStreamingTail(m) && m.toolCalls.isEmpty {
-                    HStack(alignment: .top, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
                         agentAvatar
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                         Text("…").font(.system(size: 13)).foregroundStyle(UD.text3)
                     }
                 }
@@ -204,6 +216,15 @@ struct TerminalAgentView: View {
             if let c = m.toolCalls.first(where: { $0.status == .pending }) { return c.id }
         }
         return nil
+    }
+
+    /// 「自动执行」档下批准首个待确认的 pending 工具调用（无则 no-op）。状态跃迁 / 视图重入 /
+    /// 切到 auto 档三处共用。`approveAndRun` 自带 `.awaitingApproval` 门禁且 @MainActor 串行，
+    /// 重复调用安全——第二次会因 state 已变 `.running` 早退，绝不重复执行命令。
+    private func autoApproveNextIfNeeded() {
+        guard safety.autoApprovesPending, model.state == .awaitingApproval,
+              let id = firstPendingToolCallID() else { return }
+        Task { await model.approveAndRun(id: id) }
     }
 
     // MARK: - 「猜你想问」动态追问（替换写死建议）
@@ -302,8 +323,8 @@ struct TerminalAgentView: View {
                             .font(.system(size: 10.5, weight: .medium))
                             .tracking(0.5).foregroundStyle(UD.text4)
                             .frame(maxWidth: .infinity, alignment: .center)
-                        // 气泡居中换行
-                        WrapLayout(spacing: 8, lineSpacing: 8, alignment: .center) {
+                        // 同组建议放在同一行（居中、不换行）。
+                        HStack(spacing: 8) {
                             ForEach(group.items, id: \.self) { item in
                                 Button { model.input = item } label: { exampleChip(item) }
                                     .buttonStyle(.plain)
@@ -312,7 +333,6 @@ struct TerminalAgentView: View {
                     }
                 }
             }
-            .frame(maxWidth: 430)
         }
         .frame(maxWidth: .infinity)
     }
@@ -334,8 +354,9 @@ struct TerminalAgentView: View {
         UDComposer(
             text: $model.input,
             placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
+            minLines: 3,
             queueing: model.isBusy,
-            onSend: { Task { await model.submit(serverContext: serverContext) } },
+            onSend: sendInput,
             onAttach: attachContext
         ) {
             HStack(spacing: 6) {
@@ -357,6 +378,33 @@ struct TerminalAgentView: View {
         } else {
             model.input += "\n\n\(snippet)"
         }
+    }
+
+    /// 发送当前输入：**同步**清空输入再异步发送 —— 避免回车后「先全选再发」的闪烁。
+    private func sendInput() {
+        let text = model.input
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        model.input = ""
+        Task { await model.submit(text: text, serverContext: serverContext) }
+    }
+
+    /// ⌘↵：有待确认命令则运行首个 pending；否则发送当前输入。
+    private func handleCommandReturn() {
+        if model.state == .awaitingApproval, let id = firstPendingToolCallID() {
+            Task { await model.approveAndRun(id: id) }
+        } else {
+            sendInput()
+        }
+    }
+
+    /// 承载 ⌘↵ 快捷键的 0 尺寸隐藏按钮（命令卡「运行 ⌘↵」/ 回车发送都靠它）。
+    private var commandReturnShortcut: some View {
+        Button("", action: handleCommandReturn)
+            .keyboardShortcut(.return, modifiers: .command)
+            .buttonStyle(.plain)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 
     private var modelPill: some View {

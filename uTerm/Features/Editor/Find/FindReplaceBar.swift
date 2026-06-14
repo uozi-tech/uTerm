@@ -40,7 +40,9 @@ struct FindReplaceBar: View {
             .textFieldStyle(.plain)
             .font(.system(size: 12, design: .monospaced))
             .padding(6)
-            .background(RoundedRectangle(cornerRadius: 3).fill(UD.panelHi))
+            // 玻璃查找栏上的可编辑输入：overlay（浅色纯白 / 深色不透明深面），不透明保证
+            // 默认无边框时字段轮廓仍清晰（inputBg 的微透白在玻璃上会糊掉）。
+            .background(RoundedRectangle(cornerRadius: 3).fill(UD.overlay))
             .overlay(
                 RoundedRectangle(cornerRadius: 3)
                     .stroke(controller.errorMessage == nil ? Color.clear : UD.danger,
@@ -99,7 +101,7 @@ struct FindReplaceBar: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .padding(6)
-                .background(RoundedRectangle(cornerRadius: 3).fill(UD.panelHi))
+                .background(RoundedRectangle(cornerRadius: 3).fill(UD.overlay))
             Button {
                 controller.replaceCurrent()
             } label: {

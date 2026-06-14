@@ -187,6 +187,18 @@ struct uTermApp: App {
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
 
+        // 并行执行窗口 —— 一条快捷命令在其绑定的多台服务器上「广播」执行，可多实例
+        //（按 commandID 去重）。Shell 广播网格 / AI 自然语言自愈两视图，标题栏可切。
+        WindowGroup(for: ParallelRunWindowID.self) { $parallelID in
+            ParallelRunWindowView(windowID: parallelID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+        }
+        .modelContainer(modelContainer)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1080, height: 720)
+
         // 设置窗口（⌘,）—— AI provider 等配置面板。
         // 用普通 Window 而非 macOS `Settings` 场景：后者不可靠地忽略
         // `.windowStyle(.hiddenTitleBar)`、始终画系统标题栏，自绘 chrome 盖不住。

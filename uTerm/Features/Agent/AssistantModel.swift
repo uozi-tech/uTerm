@@ -162,9 +162,16 @@ final class AssistantModel {
 
     /// 视图统一提交入口：读+清空输入；忙碌则入队，空闲则发送。
     func submit(serverContext: String) async {
-        let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
+        let text = input
         input = ""
+        await submit(text: text, serverContext: serverContext)
+    }
+
+    /// 显式文本提交入口：视图在 `onSubmit` 里**同步**清空输入后调它 —— 避免「回车后先
+    /// 全选再发送」的闪烁（异步清空会留一帧选中态）。
+    func submit(text: String, serverContext: String) async {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
         if isBusy {
             enqueue(prompt)
         } else {

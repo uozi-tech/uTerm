@@ -24,10 +24,12 @@ struct QuickCommandStore {
     // MARK: - CRUD
 
     @discardableResult
-    func create(name: String, serverIDs: [UUID], command: String, aiAssisted: Bool) -> QuickCommand {
+    func create(name: String, serverIDs: [UUID], command: String,
+                intent: String = "", aiAssisted: Bool) -> QuickCommand {
         let cmd = QuickCommand(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                serverIDs: serverIDs,
                                command: command.trimmingCharacters(in: .whitespacesAndNewlines),
+                               intent: intent.trimmingCharacters(in: .whitespacesAndNewlines),
                                aiAssisted: aiAssisted,
                                sortOrder: nextSortOrder())
         context.insert(cmd)
@@ -36,10 +38,12 @@ struct QuickCommandStore {
     }
 
     /// 原地更新一条命令的可编辑字段。
-    func update(_ cmd: QuickCommand, name: String, serverIDs: [UUID], command: String, aiAssisted: Bool) {
+    func update(_ cmd: QuickCommand, name: String, serverIDs: [UUID], command: String,
+                intent: String = "", aiAssisted: Bool) {
         cmd.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         cmd.serverIDs = serverIDs
         cmd.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        cmd.intent = intent.trimmingCharacters(in: .whitespacesAndNewlines)
         cmd.aiAssisted = aiAssisted
         try? context.save()
     }

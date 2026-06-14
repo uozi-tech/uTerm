@@ -204,24 +204,10 @@ struct WorkspaceWindowView: View {
             guard state == .browsing else { return }
             Task { await workspace.filePreviewModel.loadRestoredBuffersIfNeeded() }
         }
-        // 全局 CommandGroup 通知会广播到所有打开的工作区窗口；用
-        // controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
-        .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
-            guard controlActiveState == .key else { return }
-            workspace.activeTab?.splitFocusedPane(direction: .vertical)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleLeftSidebar)) { _ in
-            guard controlActiveState == .key else { return }
-            withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleRightInspector)) { _ in
-            guard controlActiveState == .key else { return }
-            withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleRightInspector() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
-            guard controlActiveState == .key else { return }
-            workspace.openServer(profileID: server.id, title: server.name)
-        }
+        // 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）会广播到所有
+        // 打开的工作区窗口；内部用 controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
+        // 抽成独立 ViewModifier —— 五个内联 .onReceive 会把本就庞大的 body 推过类型检查上限。
+        .modifier(WorkspaceGlobalCommandHandlers(workspace: workspace, server: server))
         // SFTPSidebar 文件 tap → 通知 → 在 PreviewArea 打开。Spec 2A §3.1。
         .onReceive(NotificationCenter.default.publisher(for: .openRemoteFile)) { note in
             guard controlActiveState == .key,
@@ -413,6 +399,39 @@ struct WorkspaceWindowView: View {
         }
     }
 
+}
+
+/// 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）的接收端：广播到所有
+/// 打开的工作区窗口，用 `controlActiveState == .key` 守卫，只让前台 key 窗口响应（Fix #6）。
+/// 抽成独立 ViewModifier —— 一串内联 `.onReceive` 会把本就庞大的 `workspaceBody` 推过类型检查上限。
+private struct WorkspaceGlobalCommandHandlers: ViewModifier {
+    let workspace: WorkspaceModel
+    let server: ServerProfile
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
+                guard controlActiveState == .key else { return }
+                workspace.activeTab?.splitFocusedPane(direction: .vertical)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneHorizontal)) { _ in
+                guard controlActiveState == .key else { return }
+                workspace.activeTab?.splitFocusedPane(direction: .horizontal)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleLeftSidebar)) { _ in
+                guard controlActiveState == .key else { return }
+                withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleRightInspector)) { _ in
+                guard controlActiveState == .key else { return }
+                withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleRightInspector() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
+                guard controlActiveState == .key else { return }
+                workspace.openServer(profileID: server.id, title: server.name)
+            }
+    }
 }
 
 /// 消费 `QuickCommandInbox`：欢迎页「AI 介入」命令运行 → 露出 Agent 检视器并把命令预填进输入框

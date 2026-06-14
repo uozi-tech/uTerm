@@ -156,15 +156,14 @@ struct UDCodeChip: View {
     var body: some View {
         Text(text)
             .font(UD.mono(11.5))
-            // 终端底（UD.terminal 始终近黑）上用 terminalText 浅色，避免日间不可读。
-            .foregroundStyle(UD.terminalText)
+            .foregroundStyle(UD.text2)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                    .fill(UD.terminal)
+                    .fill(UD.panelHi)
                     .overlay(
                         RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
                             .strokeBorder(UD.border, lineWidth: 1)

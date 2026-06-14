@@ -457,7 +457,11 @@ struct AssistantView: View {
     }
 
     private func sendIfPossible() {
-        Task { await model.submit(serverContext: serverContext) }
+        // 同步清空输入再异步发送，避免回车后「先全选再发」的一帧闪烁（与终端 Agent 一致）。
+        let text = model.input
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        model.input = ""
+        Task { await model.submit(text: text, serverContext: serverContext) }
     }
 
     private func attachCurrentContext() {

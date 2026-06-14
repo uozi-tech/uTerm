@@ -12,12 +12,14 @@ struct QuickCommandForm: View {
         var name: String
         var serverIDs: [UUID]
         var command: String
+        var intent: String
         var aiAssisted: Bool
     }
 
     @State private var name: String
     @State private var selected: Set<UUID>
     @State private var command: String
+    @State private var intent: String
     @State private var aiAssisted: Bool
     @State private var serverPopoverOpen = false
 
@@ -31,6 +33,7 @@ struct QuickCommandForm: View {
         self.onSave = onSave
         _name = State(initialValue: initial?.name ?? "")
         _command = State(initialValue: initial?.command ?? "")
+        _intent = State(initialValue: initial?.intent ?? "")
         _aiAssisted = State(initialValue: initial?.aiAssisted ?? false)
         // 创建时默认选中第一台（对齐原型）；编辑时沿用既有绑定。
         // 仅保留仍可选的主机 id（剔除已删除 / 现为 sftpOnly 的悬空绑定）——
@@ -47,9 +50,8 @@ struct QuickCommandForm: View {
     }
 
     private var valid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !selected.isEmpty
-            && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        QuickCommandLogic.isSaveable(name: name, hasServers: !selected.isEmpty,
+                                     command: command, intent: intent, ai: aiAssisted)
     }
 
     var body: some View {
@@ -72,7 +74,15 @@ struct QuickCommandForm: View {
                     QCField(label: "关联服务器", hint: "可多选 · 并行执行") {
                         serverMultiSelect
                     }
-                    QCField(label: "执行命令", hint: "支持 && 串联多条") {
+                    // AI 介入开启时先出现「AI 指令（自然语言）」——AI 命令以说人话为主。
+                    if aiAssisted {
+                        QCField(label: "AI 指令", hint: "自然语言 · 描述你想让 AI 做什么") {
+                            intentEditor
+                        }
+                    }
+                    // AI 时命令字段降级为「等效命令 · AI 实际执行 · 可留空让 AI 自行决定」；非 AI 时为必填的执行命令。
+                    QCField(label: aiAssisted ? "等效命令" : "执行命令",
+                            hint: aiAssisted ? "AI 实际执行 · 可留空让 AI 自行决定" : "支持 && 串联多条") {
                         commandEditor
                     }
                     QCField(label: "AI 介入", hint: "可选") {
@@ -91,6 +101,7 @@ struct QuickCommandForm: View {
                     onSave(FormData(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                     serverIDs: orderedSelection,
                                     command: command.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    intent: intent.trimmingCharacters(in: .whitespacesAndNewlines),
                                     aiAssisted: aiAssisted))
                 }
                 .disabled(!valid)
@@ -262,6 +273,30 @@ struct QuickCommandForm: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: AI 指令（自然语言）
+
+    /// 紫色淡底多行编辑器，存 `intent`。正文走默认字体（说人话，非等宽），区别于下方等宽命令字段。
+    private var intentEditor: some View {
+        ZStack(alignment: .topLeading) {
+            if intent.isEmpty {
+                Text("例如：重启 Nginx 后做健康检查，异常就自动诊断修复")
+                    .font(.system(size: 13))
+                    .foregroundStyle(UD.text4)
+                    .padding(EdgeInsets(top: 10, leading: 13, bottom: 10, trailing: 12))
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $intent)
+                .font(.system(size: 13))
+                .foregroundStyle(UD.text)
+                .scrollContentBackground(.hidden)
+                .padding(EdgeInsets(top: 8, leading: 9, bottom: 8, trailing: 8))
+                .frame(minHeight: 64)
+        }
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(UD.aiAccent.opacity(0.20), lineWidth: 1))
+    }
+
     // MARK: 执行命令
 
     private var commandEditor: some View {
@@ -280,7 +315,8 @@ struct QuickCommandForm: View {
                 .padding(EdgeInsets(top: 8, leading: 9, bottom: 8, trailing: 8))
                 .frame(minHeight: 80)
         }
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.terminal))
+        // 可编辑输入用 inputBg（浅色纯白 #FFFFFF / 深色微透白）——区别于只读命令展示块的 panelHi。
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.inputBg))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
     }
 

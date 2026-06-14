@@ -14,8 +14,11 @@ final class QuickCommand {
     var name: String = ""
     /// 关联服务器（外键 → `ServerProfile.id`，可一台或多台 · 并行）。
     var serverIDs: [UUID] = []
-    /// 执行命令（支持 `&&` 串联多条）。
+    /// 执行命令（支持 `&&` 串联多条）。**AI 介入时为「等效命令」，可留空让 AI 自行决定。**
     var command: String = ""
+    /// AI 指令（自然语言）：开启 AI 介入时描述「想让 AI 做什么」。非 AI 命令留空。
+    /// 与 `command`（等效 shell）解耦——AI 命令在列表 / 详情 / 表单三处都以此自然语言为主。
+    var intent: String = ""
     /// AI 介入：开启后运行路由到工作区 Agent 会话。
     var aiAssisted: Bool = false
     /// 上次运行时间（展示用，相对格式化）。
@@ -32,6 +35,7 @@ final class QuickCommand {
     convenience init(name: String,
                      serverIDs: [UUID],
                      command: String,
+                     intent: String = "",
                      aiAssisted: Bool = false,
                      sortOrder: Int = 0,
                      id: UUID = UUID(),
@@ -41,6 +45,7 @@ final class QuickCommand {
         self.name = name
         self.serverIDs = serverIDs
         self.command = command
+        self.intent = intent
         self.aiAssisted = aiAssisted
         self.sortOrder = sortOrder
         self.createdAt = createdAt

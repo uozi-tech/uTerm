@@ -116,9 +116,7 @@ struct UDToolCall: View {
             Text("$")
                 .foregroundStyle(UD.accent)
             Text(command)
-                // 命令落在 `UD.terminal`（始终近黑）上 —— 用 terminalText 浅色，
-                // 否则日间 text2 深灰会与深底糊在一起（不可读）。
-                .foregroundStyle(UD.terminalText)
+                .foregroundStyle(UD.text2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -127,7 +125,8 @@ struct UDToolCall: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(UD.terminal)
+        // 代码块底用 panelHi（日间 #EEEEEA / 夜间 #1C1C20）随主题——日间不再是黑底白字。
+        .background(UD.panelHi)
     }
 
     // MARK: - 输出（已完成）

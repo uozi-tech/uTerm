@@ -104,13 +104,12 @@ struct SFTPInspector: View {
                             .tracking(0.5).foregroundStyle(UD.text4)
                             .accessibilityAddTraits(.isHeader)
                         Text(fullPath).font(UD.mono(11.5))
-                            // 路径框底为 UD.terminal（始终近黑）—— 用 terminalText 浅色，
-                            // 否则日间 text2 深灰落在深底上不可读（同命令卡）。
-                            .foregroundStyle(UD.terminalText)
+                            .foregroundStyle(UD.text2)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 11).padding(.vertical, 9)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(UD.terminal))
+                            // 代码块底用 panelHi（随主题）——日间浅底深字、夜间深底浅字。
+                            .background(RoundedRectangle(cornerRadius: 7).fill(UD.panelHi))
                             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
                     }
                 }

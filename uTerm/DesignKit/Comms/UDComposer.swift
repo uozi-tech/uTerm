@@ -17,6 +17,8 @@ struct UDComposer<ModelControl: View>: View {
     var placeholder: String = "问点什么…"
     /// 固定宽度（DesignKit 画廊用 300 spec）；`nil` 则撑满容器（真实 Agent 面板用）。
     var width: CGFloat? = nil
+    /// 输入框最少显示行数（默认 1；真实 Agent 面板传更大值让输入区更高）。
+    var minLines: Int = 1
     /// Agent 忙碌时为 true：发送钮变「排队」形态（提交即入队而非直发）。
     var queueing: Bool = false
     var onSend: () -> Void = {}
@@ -29,7 +31,7 @@ struct UDComposer<ModelControl: View>: View {
                 .textFieldStyle(.plain)
                 .font(UD.font(12))
                 .foregroundStyle(UD.text)
-                .lineLimit(1...5)
+                .lineLimit(minLines...max(minLines + 4, 8))
                 .submitLabel(.send)
                 .onSubmit(submit)
 
@@ -76,12 +78,14 @@ extension UDComposer where ModelControl == EmptyView {
     init(text: Binding<String>,
          placeholder: String = "问点什么…",
          width: CGFloat? = nil,
+         minLines: Int = 1,
          queueing: Bool = false,
          onSend: @escaping () -> Void = {},
          onAttach: @escaping () -> Void = {}) {
         self.init(text: text,
                   placeholder: placeholder,
                   width: width,
+                  minLines: minLines,
                   queueing: queueing,
                   onSend: onSend,
                   onAttach: onAttach,

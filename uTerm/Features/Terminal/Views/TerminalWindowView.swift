@@ -67,12 +67,11 @@ struct TerminalWindowView: View {
                 },
                 onDisconnect: { dismiss() })
 
+            // 内容区两态切换；分隔线 + 状态栏两态共用，提到 switch 外避免重复。
             switch mode {
             case .terminal:
                 TerminalArea(workspace: workspace, server: server)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Rectangle().fill(UD.border).frame(height: 1)
-                StatusBarView(workspace: workspace)
             case .agent:
                 TerminalAgentView(
                     model: workspace.assistantModel,
@@ -81,11 +80,9 @@ struct TerminalWindowView: View {
                     safety: safetyBinding,
                     activeProviderIDString: $activeProviderIDString,
                     onOpenSettings: { openWindow(id: SettingsWindow.id) })
-                Rectangle().fill(UD.border).frame(height: 1)
-                TerminalAgentStatusBar(model: workspace.assistantModel,
-                                       host: server.displayEndpoint,
-                                       safety: safetyBinding.wrappedValue)
             }
+            Rectangle().fill(UD.border).frame(height: 1)
+            StatusBarView(workspace: workspace)
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
@@ -265,41 +262,5 @@ struct TerminalModeToggle: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(label))
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-// MARK: - 状态栏
-
-/// Agent 模式状态栏（mono）：主机 · 模型 · 安全档位。
-struct TerminalAgentStatusBar: View {
-    let model: AssistantModel
-    let host: String
-    let safety: AgentSafety
-
-    var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Circle().fill(UD.success).frame(width: 6, height: 6)
-                Text(host)
-            }
-            if let p = model.activeProvider {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles").font(.system(size: 10)).foregroundStyle(UD.accent)
-                    Text(p.model.isEmpty ? p.name : p.model).foregroundStyle(UD.text2)
-                }
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Image(systemName: "shield.lefthalf.filled").font(.system(size: 10))
-                Text(safety.label)
-            }
-        }
-        .font(UD.mono(11))
-        .foregroundStyle(UD.text3)
-        .lineLimit(1)
-        .padding(.horizontal, 12)
-        .frame(height: 28)
-        .frame(maxWidth: .infinity)
-        .background(UD.panel)
     }
 }

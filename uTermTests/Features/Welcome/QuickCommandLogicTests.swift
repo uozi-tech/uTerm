@@ -73,6 +73,41 @@ final class QuickCommandLogicTests: XCTestCase {
         XCTAssertEqual(QuickCommandLogic.runLabel(serverCount: 3, ai: true), "并行运行 · 3 台")
     }
 
+    // MARK: AI 意图文案 / Agent 预填
+
+    func testAiIntentTextPrefersIntentElseFallback() {
+        XCTAssertEqual(QuickCommandLogic.aiIntentText(name: "重启 Nginx", intent: "  做一次健康检查  "),
+                       "做一次健康检查")
+        let fallback = QuickCommandLogic.aiIntentText(name: "重启 Nginx", intent: "   ")
+        XCTAssertTrue(fallback.contains("重启 Nginx"))
+    }
+
+    func testAgentPrefillIntentThenCommandThenFallback() {
+        XCTAssertEqual(QuickCommandLogic.agentPrefill(name: "n", intent: " 意图 ", command: "cmd"), "意图")
+        XCTAssertEqual(QuickCommandLogic.agentPrefill(name: "n", intent: "  ", command: " cmd "), "cmd")
+        let f = QuickCommandLogic.agentPrefill(name: "清理 Docker", intent: "", command: "")
+        XCTAssertTrue(f.contains("清理 Docker"))
+    }
+
+    // MARK: isSaveable 校验
+
+    func testIsSaveableNonAIRequiresCommand() {
+        XCTAssertTrue(QuickCommandLogic.isSaveable(name: "n", hasServers: true, command: "x", intent: "", ai: false))
+        // 非 AI：仅有 intent 不够，命令必填。
+        XCTAssertFalse(QuickCommandLogic.isSaveable(name: "n", hasServers: true, command: " ", intent: "i", ai: false))
+    }
+
+    func testIsSaveableAIRequiresEitherIntentOrCommand() {
+        XCTAssertTrue(QuickCommandLogic.isSaveable(name: "n", hasServers: true, command: "", intent: "i", ai: true))
+        XCTAssertTrue(QuickCommandLogic.isSaveable(name: "n", hasServers: true, command: "c", intent: "", ai: true))
+        XCTAssertFalse(QuickCommandLogic.isSaveable(name: "n", hasServers: true, command: " ", intent: " ", ai: true))
+    }
+
+    func testIsSaveableNeedsNameAndServers() {
+        XCTAssertFalse(QuickCommandLogic.isSaveable(name: " ", hasServers: true, command: "x", intent: "", ai: false))
+        XCTAssertFalse(QuickCommandLogic.isSaveable(name: "n", hasServers: false, command: "x", intent: "", ai: false))
+    }
+
     // MARK: 格式化
 
     func testDurationSecondsOneDecimal() {

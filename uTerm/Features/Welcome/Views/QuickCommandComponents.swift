@@ -118,6 +118,34 @@ nonisolated enum QuickCommandLogic {
         if serverCount > 1 { return "并行运行 · \(serverCount) 台" }
         return ai ? "运行 · AI 介入" : "运行命令"
     }
+
+    /// AI 命令的「说人话」文案（复刻原型 `qcAiIntent`）：优先 `intent`（去空白），
+    /// 缺失时由名称兜底成一句。列表行副标题 / 详情指令块共用，保证两处一致。
+    static func aiIntentText(name: String, intent: String) -> String {
+        let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return "执行「\(name)」：运行后让 AI 读取输出、自动诊断并续接下一步。"
+    }
+
+    /// AI 命令运行时交给 Agent 的预填文案：自然语言意图优先，其次等效命令，
+    /// 两者皆空再兜底成一句——保证 Agent 输入框总有可读内容。
+    static func agentPrefill(name: String, intent: String, command: String) -> String {
+        let i = intent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !i.isEmpty { return i }
+        let c = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !c.isEmpty { return c }
+        return aiIntentText(name: name, intent: "")
+    }
+
+    /// 保存校验（复刻原型 `QcForm.valid`）：名称非空 + 至少一台服务器 +
+    /// （AI 时 `intent` 或 `command` 至少有一；非 AI 时 `command` 必填）。纯函数、可单测。
+    static func isSaveable(name: String, hasServers: Bool,
+                           command: String, intent: String, ai: Bool) -> Bool {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasServers else { return false }
+        let hasCommand = !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasIntent = !intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return ai ? (hasIntent || hasCommand) : hasCommand
+    }
 }
 
 // MARK: - 图标 Shapes（复刻原型自绘 SVG）
