@@ -43,7 +43,7 @@ nonisolated struct ParallelAIDoctor: Sendable {
     /// 全部台落定后产出一句跨服务器汇总。`lanes` = 逐台 (名称, 语气标签, 结论)。
     func synthesize(commandName: String, lanes: [(name: String, tone: String, summary: String)]) async -> String? {
         let system = "你是 uTerm 的运维助手。根据多台服务器的逐台执行结论，用 1-2 句中文白话给出整体汇总；"
-            + "若有自愈或失败的服务器，点名并给一句复核建议。只输出汇总文本，不要 JSON、不要列表。"
+            + "若有失败的服务器，点名并给一句复核建议（只讲成功 / 失败，不要单列「自愈」）。只输出汇总文本，不要 JSON、不要列表。"
         let body = lanes.map { "- \($0.name)：[\($0.tone)] \($0.summary)" }.joined(separator: "\n")
         let user = "命令「\(commandName)」在 \(lanes.count) 台服务器执行完成。逐台结论：\n\(body)"
         let t = await turn(messages: [ChatMessage(role: .user, text: user)], system: system, withTools: false)
@@ -53,7 +53,7 @@ nonisolated struct ParallelAIDoctor: Sendable {
 
     // MARK: - 结论解析
 
-    /// 从模型「不再调用工具」那轮的文本里抠出结论 JSON：`{"status":"ok|healed|failed","summary":"…"}`。
+    /// 从模型「不再调用工具」那轮的文本里抠出结论 JSON：`{"status":"ok|failed","summary":"…"}`。
     /// 容忍前后说明 / ``` 包裹。无 JSON 时返回 nil（由调用方按是否执行过命令推断语气、用原文兜底摘要）。
     nonisolated static func parseConclusion(_ raw: String) -> (status: String, summary: String)? {
         guard let start = raw.firstIndex(of: "{"),

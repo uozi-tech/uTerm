@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// AI 视图：不堆 shell 输出，Agent 用自然语言逐台汇报（正常 / 已自愈 / 需处理），
+/// AI 视图：不堆 shell 输出，Agent 用自然语言逐台汇报（只报「成功 / 失败」，不单列自愈），
 /// 失败台被自动诊断并修复；末尾一段跨服务器 AI 汇总。居中收窄内容列（≈720）。
 struct ParallelAgentView: View {
     let commandName: String
@@ -60,6 +60,12 @@ struct ParallelAgentView: View {
             .background(UD.bg)
             .onChange(of: scrollKey) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+            }
+            // 切换屏幕（AI↔Shell 切回）后贴底：切走时累积的汇报，切回应看最新。
+            .onAppear {
+                Task { @MainActor in
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
             }
         }
     }
@@ -121,11 +127,10 @@ struct ParallelAILane: View {
         switch state.tone {
         case .running: return UD.aiAccent
         case .ok:      return UD.success
-        case .healed:  return UD.caution
         case .failed:  return UD.danger
         }
     }
-    private var emphasised: Bool { state.tone == .healed || state.tone == .failed }
+    private var emphasised: Bool { state.tone == .failed }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -179,9 +184,8 @@ struct ParallelAILane: View {
     private var badgeText: String {
         switch state.tone {
         case .running: return state.laneStatusText
-        case .ok:      return "✓ 正常"
-        case .healed:  return "⚠ 已自愈"
-        case .failed:  return "✕ 需处理"
+        case .ok:      return "✓ 成功"
+        case .failed:  return "✕ 失败"
         }
     }
 

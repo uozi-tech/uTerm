@@ -13,12 +13,11 @@ nonisolated enum ParallelRunStatus: Sendable, Equatable {
     case failed
 }
 
-/// AI 视图单台泳道语气：
-/// - `running` 执行/诊断中；`ok` 正常；`healed` 出错后已自动修复；`failed` 仍失败/需人工。
+/// AI 视图单台泳道语气（只报成功 / 失败，不单列「自愈」）：
+/// - `running` 执行/诊断中；`ok` 成功（无论是一开始就正常，还是执行/修复后达成）；`failed` 失败/需人工。
 nonisolated enum ParallelLaneTone: Sendable, Equatable {
     case running
     case ok
-    case healed
     case failed
 }
 
@@ -78,9 +77,8 @@ struct ParallelServerState: Identifiable {
     var laneStatusText: String {
         switch tone {
         case .running: return diagnosing ? "诊断中…" : "执行中…"
-        case .ok:      return "正常"
-        case .healed:  return "已自愈"
-        case .failed:  return "需处理"
+        case .ok:      return "成功"
+        case .failed:  return "失败"
         }
     }
 }

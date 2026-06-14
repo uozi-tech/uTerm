@@ -84,9 +84,7 @@ final class ParallelRunModel {
     var total: Int { states.count }
     var doneCount: Int { states.filter { resolved($0) }.count }
     var okCount: Int { states.filter { $0.tone == .ok }.count }
-    /// 出错后自动修复成功的台数（AI 视图橙色「已自愈」）。
-    var healedCount: Int { states.filter { $0.tone == .healed }.count }
-    /// 仍失败 / 需人工的台数（红色）。
+    /// 失败 / 需人工的台数（红色）。
     var failedCount: Int { states.filter { $0.tone == .failed }.count }
     var allDone: Bool { finishedAt != nil }
 
@@ -353,21 +351,21 @@ final class ParallelRunModel {
     private func applyConclusion(at index: Int, conclusion: (status: String, summary: String)?,
                                  executedAny: Bool, lastExit: Int?, initialExit: Int?,
                                  ranInitial: Bool, stoppedForSafety: Bool) {
+        // 只报成功 / 失败：达成目标（含修复后达成）= ok，未达成 = failed，不单列「自愈」。
         let status = conclusion?.status ?? ""
         let tone: ParallelLaneTone
         if stoppedForSafety {
             tone = .failed
         } else if status == "ok" {
             tone = .ok
-        } else if status == "healed" {
-            tone = executedAny ? .healed : .ok
         } else if status == "failed" {
             tone = .failed
         } else if !executedAny {
             // 没下发任何命令：有初始命令且成功 → ok；否则（无初始命令，Agent 又没动手）→ failed。
             tone = (ranInitial && initialExit == 0) ? .ok : .failed
         } else {
-            tone = (lastExit == 0) ? .healed : .failed
+            // 动过手：末次命令退出码 0 即视为达成（无论中途是否修复过）。
+            tone = (lastExit == 0) ? .ok : .failed
         }
         states[index].tone = tone
         let summary = (conclusion?.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -432,17 +430,14 @@ final class ParallelRunModel {
         }
     }
 
-    /// LLM 汇总不可用时的模板兜底。
+    /// LLM 汇总不可用时的模板兜底（只讲成功 / 失败）。
     private func fallbackSynthesis() -> String {
-        let healed = states.filter { $0.tone == .healed }.map(\.name)
         let failed = states.filter { $0.tone == .failed }.map(\.name)
-        if failed.isEmpty && healed.isEmpty {
+        if failed.isEmpty {
             return "\(total) 台全部执行成功，无异常。"
         }
-        var parts: [String] = ["\(total) 台均已完成。"]
-        if !healed.isEmpty { parts.append("其中 \(healed.joined(separator: "、")) 出现异常并已自动修复恢复。") }
-        if !failed.isEmpty { parts.append("\(failed.joined(separator: "、")) 仍未通过，建议人工复核最近一次相关改动。") }
-        return parts.joined()
+        let okCount = total - failed.count
+        return "\(total) 台中 \(okCount) 台成功，\(failed.joined(separator: "、")) 失败，建议人工复核。"
     }
 
     /// 把本轮真实结果落为一条执行日志（含 AI 记录），同步更新命令的 lastRunAt/runCount。
@@ -451,11 +446,11 @@ final class ParallelRunModel {
         let results = states.map { s in
             QuickCommandServerResult(serverID: s.id, serverName: s.name, endpoint: s.endpoint,
                                      exitCode: s.exitCode, durationMs: s.durationMs ?? 0,
-                                     ok: s.tone == .ok || s.tone == .healed)
+                                     ok: s.tone == .ok)
         }
         var aiRecord: QuickCommandAIRecord?
         if aiAssisted {
-            let notable = states.filter { $0.tone == .healed || $0.tone == .failed }
+            let notable = states.filter { $0.tone == .failed }
             let summary = synthesis.isEmpty ? fallbackSynthesis() : synthesis
             aiRecord = QuickCommandAIRecord(summary: summary,
                                             steps: notable.flatMap { lane in
@@ -502,9 +497,14 @@ final class ParallelRunModel {
         你可以用 run_command 工具逐条执行 shell 命令；每条命令我会把真实的标准输出/错误与退出码回给你。
         请像人一样按需多步操作：例如更新代码后若需要重启服务就再执行重启，改完配置后做一次校验或健康检查。
         命令要保守、最小必要，避免破坏性操作（不要 rm -rf、不要动与目标无关的服务）。
+        每条命令执行上限约 \(Self.timeoutSeconds) 秒，超时会被中止并标记「执行超时」——但远端进程通常仍在后台继续（例如 apt 升级会自己跑完）。所以：
+        - 绝不要用无限等待循环（如 `while …; do sleep N; done`、`tail -f`、死等某进程或锁释放）——这会把本台一直拖到超时，看起来像卡死。
+        - 遇到 dpkg/apt 锁被占用（"Could not get lock /var/lib/dpkg/…"）：多半是上一条超时但仍在后台跑的 apt 持锁。先用 `ps aux | grep apt` 看持锁进程；**不要无限等**，最多有界等一次（如 `sleep 30` 后重试一次），仍不行就直接给 failed 结论，说明「上次升级仍在后台进行 / 锁被其他进程占用，建议稍后复核」。
+        - 长操作尽量用非交互、可中断方式；若被超时中止导致 dpkg 半完成，用 `dpkg --configure -a` 收尾。
         当目标达成、或确认无法自动修复时，停止调用工具，并只输出一个 JSON 作为结论：
-        {"status":"ok|healed|failed","summary":"不超过2句中文白话结论"}
-        其中 ok=一开始就成功、无需修复；healed=出现问题且你已修复并验证恢复；failed=无法自动修复（说明原因与人工建议）。
+        {"status":"ok|failed","summary":"不超过2句中文白话结论"}
+        其中 ok=目标已达成（无论是一开始就正常，还是你执行/修复后达成并验证）；failed=无法达成（说明原因与人工建议）。
+        只判成功或失败，不要单独区分「已修复」。
         """
         if !autoExecute {
             s += "\n\n注意：当前安全档位为「\(safetyLabel)」，不允许自动执行写操作。若需要修复，请用 run_command "
@@ -523,8 +523,7 @@ final class ParallelRunModel {
     private func defaultSummary(tone: ParallelLaneTone, exit: Int?) -> String {
         switch tone {
         case .ok:      return "命令执行完成，退出码 0。"
-        case .healed:  return "出现异常并已自动修复，现已恢复正常。"
-        case .failed:  return "命令执行失败（退出码 \(exitText(exit))），未能自动修复，需人工介入。"
+        case .failed:  return "命令执行失败（退出码 \(exitText(exit))），需人工介入。"
         case .running: return ""
         }
     }

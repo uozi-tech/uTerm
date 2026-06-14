@@ -8,9 +8,10 @@ final class ParallelRunLogicTests: XCTestCase {
     // MARK: - ParallelAIDoctor.parseConclusion
 
     func testParseConclusionCleanObject() {
-        let raw = #"{"status":"healed","summary":"更新后进程未起，已重启并验证 online。"}"#
+        // 结论只判 ok|failed —— 修复后达成也统一报 ok（不再单列 healed）。
+        let raw = #"{"status":"ok","summary":"更新后进程未起，已重启并验证 online。"}"#
         let c = ParallelAIDoctor.parseConclusion(raw)
-        XCTAssertEqual(c?.status, "healed")
+        XCTAssertEqual(c?.status, "ok")
         XCTAssertEqual(c?.summary, "更新后进程未起，已重启并验证 online。")
     }
 

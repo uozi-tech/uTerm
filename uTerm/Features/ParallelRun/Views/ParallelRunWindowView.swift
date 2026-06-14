@@ -64,7 +64,6 @@ struct ParallelRunWindowView: View {
                                      total: model.total,
                                      doneCount: model.doneCount,
                                      okCount: model.okCount,
-                                     healedCount: model.healedCount,
                                      failedCount: model.failedCount,
                                      startedAt: model.startedAt,
                                      finishedAt: model.finishedAt)
@@ -85,7 +84,6 @@ struct ParallelRunWindowView: View {
                 ParallelStatusBar(mode: model.mode,
                                   total: model.total,
                                   doneCount: model.doneCount,
-                                  healedCount: model.healedCount,
                                   failedCount: model.failedCount,
                                   allDone: model.allDone)
             }

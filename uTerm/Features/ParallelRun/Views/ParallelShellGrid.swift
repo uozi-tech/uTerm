@@ -111,6 +111,12 @@ struct ParallelShellPane: View {
                     withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("shell-bottom", anchor: .bottom) }
                 }
             }
+            // 切换屏幕（Shell↔AI 切回、窗格重建）后贴底：切走时累积的输出，切回应看最新。
+            .onAppear {
+                Task { @MainActor in
+                    proxy.scrollTo("shell-bottom", anchor: .bottom)
+                }
+            }
         }
     }
 

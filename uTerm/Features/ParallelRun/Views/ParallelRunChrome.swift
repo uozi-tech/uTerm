@@ -131,7 +131,6 @@ struct ParallelBroadcastBar: View {
     let total: Int
     let doneCount: Int
     let okCount: Int
-    let healedCount: Int
     let failedCount: Int
     let startedAt: Date
     let finishedAt: Date?
@@ -181,7 +180,7 @@ struct ParallelBroadcastBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(UD.fillMed)
                 Capsule()
-                    .fill(failedCount + healedCount > 0
+                    .fill(failedCount > 0
                           ? LinearGradient(colors: [tint, UD.warning], startPoint: .leading, endPoint: .trailing)
                           : LinearGradient(colors: [tint, tint], startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(0, geo.size.width * pct))
@@ -199,7 +198,6 @@ struct ParallelBroadcastBar: View {
                 Text("/\(total)").foregroundStyle(UD.text3)
             }
             statDot(color: UD.success, text: "\(okCount) 成功")
-            if healedCount > 0 { statDot(color: UD.caution, text: "\(healedCount) 已自愈") }
             if failedCount > 0 { statDot(color: UD.danger, text: "\(failedCount) 失败") }
             TimelineView(.periodic(from: startedAt, by: 0.1)) { ctx in
                 let end = finishedAt ?? ctx.date
@@ -225,7 +223,6 @@ struct ParallelStatusBar: View {
     let mode: ParallelViewMode
     let total: Int
     let doneCount: Int
-    let healedCount: Int
     let failedCount: Int
     let allDone: Bool
 
@@ -239,7 +236,6 @@ struct ParallelStatusBar: View {
             }
             Text("\(total) 台").foregroundStyle(UD.text2)
             Text("完成 \(doneCount)/\(total)").foregroundStyle(UD.text3)
-            if healedCount > 0 { Text("\(healedCount) 自愈").foregroundStyle(UD.caution) }
             if failedCount > 0 { Text("\(failedCount) 失败").foregroundStyle(UD.danger) }
             Spacer()
             Text(allDone ? "已完成" : "执行中").foregroundStyle(UD.text3)
