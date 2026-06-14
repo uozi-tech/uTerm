@@ -73,7 +73,8 @@ struct ParallelShellPane: View {
                     Text("运行中").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(UD.text3)
                 }
             } else {
-                Text("退出码 \(state.exitCode.map(String.init) ?? "?") · \(durationText)")
+                // 有单条退出码（非 AI / AI 带初始命令）就显退出码；intent-only AI 无单一退出码 → 显成功/失败。
+                Text(state.exitCode.map { "退出码 \($0) · \(durationText)" } ?? "\(failed ? "失败" : "成功") · \(durationText)")
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(failed ? UD.danger : UD.text4)
             }

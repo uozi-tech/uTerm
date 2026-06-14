@@ -187,9 +187,19 @@ final class ParallelRunModel {
         Task { await self.runServer(at: index, target: target) }
     }
 
-    /// 逐台入口：跑完该台 → 关闭其复用连接（释放资源 / 防泄漏）→ 记一台落定。
+    /// 逐台入口：跑完该台 → status 与 tone 收口对齐 → 关闭其复用连接（释放资源 / 防泄漏）→ 记一台落定。
     private func runServer(at index: Int, target: ExecTarget) async {
+        let started = Date()
         await runLane(at: index, target: target)
+        // Shell 窗格用 status、聚合用 tone：AI 泳道（尤其 intent-only）在 runLane 里只动 tone，
+        // status 会残留 .running——不收口就会出现「聚合已完成、窗格仍在运行中」的纯显示错位。
+        if states[index].tone != .running {
+            states[index].status = (states[index].tone == .failed) ? .failed : .succeeded
+        }
+        // intent-only AI 命令没有「初始命令耗时」，给个泳道总耗时，免得窗格头显示「—」。
+        if states[index].durationMs == nil {
+            states[index].durationMs = Int(Date().timeIntervalSince(started) * 1000)
+        }
         await target.connection?.close()
         finishServer()
     }
@@ -220,7 +230,11 @@ final class ParallelRunModel {
             initialOutput = result.output
             states[index].exitCode = initialExit
             states[index].lines.append(contentsOf: Self.outputLines(from: result, failed: initialExit != 0))
-            states[index].status = (initialExit == 0) ? .succeeded : .failed
+            // 非 AI：这条命令就是全部，立刻定终态。AI：后面 Agent 还要接着跑，status 先保持 .running，
+            // 等整条泳道落定再按 tone 收口（见 runServer），否则 Shell 窗格会在自愈期间提前显示「完成」。
+            if !aiAssisted {
+                states[index].status = (initialExit == 0) ? .succeeded : .failed
+            }
             ranInitial = true
         } else if doctor != nil {
             // AI 意图（无等效命令）：跑 Agent 前先做一次连通性预检（`true`），尽早暴露
