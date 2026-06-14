@@ -278,13 +278,16 @@ struct QuickCommandForm: View {
     /// 紫色淡底多行编辑器，存 `intent`。正文走默认字体（说人话，非等宽），区别于下方等宽命令字段。
     private var intentEditor: some View {
         ZStack(alignment: .topLeading) {
-            if intent.isEmpty {
-                Text("例如：重启 Nginx 后做健康检查，异常就自动诊断修复")
-                    .font(.system(size: 13))
-                    .foregroundStyle(UD.text4)
-                    .padding(EdgeInsets(top: 10, leading: 13, bottom: 10, trailing: 12))
-                    .allowsHitTesting(false)
-            }
+            // 占位用 .opacity 切显隐而非 `if` 增删：TextEditor 在 ZStack 里被 `if` 移除兄弟节点时，
+            // SwiftUI 的位置身份 diff 偶发不真正移除占位视图，导致占位与正文重叠（残影）。
+            // 恒驻树 + 透明度切换可彻底避免该类身份错乱。
+            Text("例如：重启 Nginx 后做健康检查，异常就自动诊断修复")
+                .font(.system(size: 13))
+                .foregroundStyle(UD.text4)
+                .padding(EdgeInsets(top: 10, leading: 13, bottom: 10, trailing: 12))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .opacity(intent.isEmpty ? 1 : 0)
             TextEditor(text: $intent)
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text)
@@ -301,13 +304,14 @@ struct QuickCommandForm: View {
 
     private var commandEditor: some View {
         ZStack(alignment: .topLeading) {
-            if command.isEmpty {
-                Text("sudo systemctl restart nginx && curl -fsS localhost/healthz")
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundStyle(UD.text4)
-                    .padding(EdgeInsets(top: 10, leading: 13, bottom: 10, trailing: 12))
-                    .allowsHitTesting(false)
-            }
+            // 占位用 .opacity 切显隐而非 `if` 增删，避免 ZStack 内 TextEditor 占位残影（详见 intentEditor 注释）。
+            Text("sudo systemctl restart nginx && curl -fsS localhost/healthz")
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(UD.text4)
+                .padding(EdgeInsets(top: 10, leading: 13, bottom: 10, trailing: 12))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .opacity(command.isEmpty ? 1 : 0)
             TextEditor(text: $command)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(UD.text)

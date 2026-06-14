@@ -3,6 +3,16 @@ import SwiftUI
 /// 并行执行窗口的 chrome：自绘标题栏、广播条、状态栏，及共享小件。
 /// AI 紫 = `UD.aiAccent`；Shell 蓝/绿走 `UD.accent` / `UD.success`。
 
+/// 终端深底（broadcast 命令块 / Shell 网格 body）上的**固定亮色**文字 —— 不随日/夜翻色。
+/// 设计稿 `term-bg` 恒为深底，若用随主题翻色的 `UD.text`/`text3`/`text4`，日间会变深字落到
+/// 近黑底上读不出（即日间命令块「黑条看不见字」的根因）。取值镜像深色主题的中性 ramp，故
+/// 日 / 夜观感一致。
+enum ParTermInk {
+    static let text  = UD.ColorSpec.hex(0xEDEDEE).color()   // == UD.text 深色档
+    static let dim   = UD.ColorSpec.white(0.42).color()     // == UD.text3 深色档
+    static let faint = UD.ColorSpec.white(0.30).color()     // == UD.text4 深色档
+}
+
 // MARK: - 标题栏
 
 /// 38pt 自绘标题栏（与全工程其它窗口同高，红绿灯由 `WorkspaceWindowChrome` 居中到 38）：
@@ -148,11 +158,11 @@ struct ParallelBroadcastBar: View {
             QCParallelIcon(size: 13, color: tint)
             Text("$").foregroundStyle(tint)
             Text(command)
-                .foregroundStyle(UD.text)
+                .foregroundStyle(ParTermInk.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            Text("广播至 \(total) 台").font(.system(size: 11)).foregroundStyle(UD.text4)
+            Text("广播至 \(total) 台").font(.system(size: 11)).foregroundStyle(ParTermInk.faint)
         }
         .font(.system(size: 12.5, design: .monospaced))
         .padding(.horizontal, 11)

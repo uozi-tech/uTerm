@@ -113,11 +113,12 @@ struct ParallelShellPane: View {
     }
 
     private func color(for kind: ParallelTermLine.Kind) -> Color {
+        // 终端深底上用固定亮色 ink（日/夜不翻），ok/err 用语义绿红（两档均可读）。
         switch kind {
-        case .cmd: return UD.text
+        case .cmd: return ParTermInk.text
         case .ok:  return UD.success
         case .err: return UD.danger
-        case .out: return UD.text3
+        case .out: return ParTermInk.dim
         }
     }
 
