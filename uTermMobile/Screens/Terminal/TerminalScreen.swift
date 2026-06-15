@@ -75,6 +75,10 @@ struct TerminalScreen: View {
         .onChange(of: showPicker) { _, picking in
             if picking { resignActive() } else { focusActiveTerminal() }
         }
+        // 连接中页撤下（连接完成）后再弹键盘——建连期刻意不弹（见 SwiftTermView.autoFocus）。
+        .onChange(of: store.connecting?.id) { _, id in
+            if id == nil { focusActiveTerminal() }
+        }
         // 连接中页取消 / 重试：拆掉对应会话 tab 的视图状态（控制器已由 store 关闭）。
         .onChange(of: store.terminalTeardownID) { _, id in
             guard let id else { return }
@@ -362,6 +366,7 @@ struct SessionTabBar: View {
 struct TerminalSessionBody: View {
     let tab: TermTab
     var onClose: () -> Void
+    @Environment(MobileStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
     private var terminalBg: Color { MTerminalColors.background(dark: colorScheme == .dark) }
     private var serverContext: String { "\(tab.host.name)（\(tab.host.displayEndpoint)）" }
@@ -389,7 +394,9 @@ struct TerminalSessionBody: View {
                 failedView(msg)
             } else {
                 VStack(spacing: 0) {
-                    SwiftTermView(controller: tab.controller, isActive: tab.mode == .terminal)
+                    // 连接中页期间不自动弹键盘（autoFocus=false）；中转页撤下后由终端屏重新聚焦。
+                    SwiftTermView(controller: tab.controller, isActive: tab.mode == .terminal,
+                                  autoFocus: store.connecting == nil)
                         .background(terminalBg)
                     TerminalKeyBar(controller: tab.controller)
                 }

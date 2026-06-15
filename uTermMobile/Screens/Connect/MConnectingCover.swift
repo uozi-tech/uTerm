@@ -128,8 +128,15 @@ struct ConnectingCoverView: View {
                     .padding(.bottom, 30)
             }
             .padding(.top, 8)
+            // 中转页对软键盘免疫：底层会话即便弹出键盘也不会顶起本页布局（防动画错乱）。
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .contentShape(Rectangle())   // 不透明全屏：吸收所有落到下层导航的误触
+        // 出现即收起任何残留键盘（来源页 / 上一个终端会话的键盘），避免盖在中转页上。
+        .onAppear {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+        }
         // 阶段计时推进；keyed by attempt → 重试时重跑并复位。
         .task(id: request.attempt) { stageProgress = 0; await pace() }
         // 连接态最短可见时长。
@@ -268,17 +275,9 @@ struct ConnectingCoverView: View {
                 .frame(maxWidth: 320)
             }
             .transition(.opacity)
-        } else if !success {
-            VStack(spacing: 10) {
-                // 已提交成功（finishing）后取消失效：规避「已连上又被取消」竞态。
-                HoldToCancelButton(onCancel: { if !finishing { onCancel() } })
-                Text("连接进行中 · 长按可中断，轻点不会退出")
-                    .font(M.sans(11.5)).foregroundStyle(M.text4)
-                    .opacity(finishing ? 0 : 1)
-            }
-            .transition(.opacity)
         }
-        // 成功态：隐藏整段（避免「已连上又被取消」竞态）。
+        // 连接中 / 成功态：底部留空（取消按钮已移除——连接不可中途中断，
+        // 仅失败时给「返回 / 重试」）。固定高度仍保留，三态切换中部不位移。
     }
 }
 
@@ -388,51 +387,6 @@ private struct ConnStageRow: View {
         case .active: return M.text
         case .done: return M.text2
         case .failed: return M.danger
-        }
-    }
-}
-
-// MARK: - 长按取消按钮（设计稿底部「按住取消连接」）
-
-/// 按住约 0.72s 才触发取消；按住期间一条红色填充条从左到右铺满（与 0.72s 同步），
-/// 松手即回弹复位、不取消。单击 / 轻点不做任何事。
-private struct HoldToCancelButton: View {
-    var onCancel: () -> Void
-
-    /// 与长按阈值同步：填充条铺满耗时 = 触发阈值。
-    private let hold: Double = 0.72
-    private let activeText = Color(hexString: "#fca5a5")
-
-    @State private var holding = false
-    @State private var fill: CGFloat = 0
-
-    var body: some View {
-        ZStack {
-            GeometryReader { geo in
-                Rectangle()
-                    .fill(M.danger.opacity(0.26))
-                    .frame(width: geo.size.width * fill)
-            }
-            HStack(spacing: 8) {
-                MIcon(name: "x", size: 15, color: holding ? activeText : M.text3, weight: .semibold)
-                Text(holding ? "继续按住以取消…" : "按住取消连接")
-                    .font(M.sans(15, weight: .medium))
-                    .foregroundStyle(holding ? activeText : M.text2)
-            }
-        }
-        .frame(maxWidth: 320).frame(height: 50)
-        .background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(M.border, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 13))
-        .contentShape(Rectangle())
-        .onLongPressGesture(minimumDuration: hold, maximumDistance: 40) {
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            onCancel()
-        } onPressingChanged: { pressing in
-            holding = pressing
-            withAnimation(pressing ? .linear(duration: hold) : .easeOut(duration: 0.18)) {
-                fill = pressing ? 1 : 0
-            }
         }
     }
 }

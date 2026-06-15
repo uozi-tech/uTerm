@@ -11,6 +11,9 @@ struct SwiftTermView: UIViewRepresentable {
     /// 是否为当前激活视图（终端模式）。Agent 模式时终端被移出屏外，传 false → 主动 resign；
     /// 否则 SwiftTerm 的 TerminalView 会一直抢第一响应者，把终端键盘悬在 Agent 输入框上。
     var isActive: Bool = true
+    /// 是否允许会话出现即自动弹键盘。连接中页期间传 false——否则键盘会盖住中转页、
+    /// 并因软键盘安全区收缩把中转页内容顶上去（动画错乱）。中转页撤下后由终端屏重新聚焦。
+    var autoFocus: Bool = true
     @Environment(\.colorScheme) private var colorScheme
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
@@ -25,8 +28,8 @@ struct SwiftTermView: UIViewRepresentable {
         // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁）。
         view.feed(text: "\u{1B}[2 q")
         controller.attach(view)
-        // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态）。
-        if isActive { DispatchQueue.main.async { _ = view.becomeFirstResponder() } }
+        // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态、且非连接中页期间）。
+        if isActive, autoFocus { DispatchQueue.main.async { _ = view.becomeFirstResponder() } }
         return view
     }
 
