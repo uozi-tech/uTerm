@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 
 /// 旧的系统语义色 token 命名空间。全 app chrome 已迁移到 DesignKit `UD`（深 / 浅
 /// 动态固定色板）；生产代码现仅剩 `hitTestFill` 一处在用（命中区填充，非配色）。

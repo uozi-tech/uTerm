@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// uTerm DesignKit 色彩 token —— Claude Design 交付包 `Components.html` 的设计系统。
 ///
@@ -17,9 +21,15 @@ enum UD {
     nonisolated struct ColorSpec: Sendable, Equatable {
         let r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat
 
+        #if canImport(AppKit)
         nonisolated func nsColor() -> NSColor {
             NSColor(srgbRed: r, green: g, blue: b, alpha: a)
         }
+        #elseif canImport(UIKit)
+        nonisolated func uiColor() -> UIColor {
+            UIColor(red: r, green: g, blue: b, alpha: a)
+        }
+        #endif
         nonisolated func color() -> Color {
             Color(.sRGB, red: r, green: g, blue: b, opacity: a)
         }
@@ -37,10 +47,19 @@ enum UD {
 
     /// 把 (深, 浅) 两个 spec 合成一个随系统外观切换的动态 `Color`。
     nonisolated static func dyn(_ dark: ColorSpec, _ light: ColorSpec) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        #if canImport(AppKit)
+        return Color(nsColor: NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             return (isDark ? dark : light).nsColor()
         })
+        #elseif canImport(UIKit)
+        return Color(uiColor: UIColor { traits in
+            let isDark = traits.userInterfaceStyle == .dark
+            return (isDark ? dark : light).uiColor()
+        })
+        #else
+        return dark.color()
+        #endif
     }
 
     // MARK: - 表面 Surfaces

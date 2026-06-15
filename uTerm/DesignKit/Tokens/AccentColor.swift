@@ -77,7 +77,9 @@ extension UD.ColorSpec {
     }
 }
 
+#if canImport(AppKit)
 /// 命令面板「设置」组里的 5 个强调色项；点选即切（didSet 自动持久化 + 全局重渲染）。
+/// 仅 macOS 命令面板使用；iOS 端命令面板独立实现，故此处用 `canImport(AppKit)` 隔离。
 @MainActor
 func commandPaletteAccentItems() -> [CommandPaletteItem] {
     let current = AccentState.shared.selected
@@ -91,3 +93,4 @@ func commandPaletteAccentItems() -> [CommandPaletteItem] {
             }
     }
 }
+#endif

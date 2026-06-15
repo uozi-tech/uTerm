@@ -1,0 +1,171 @@
+import SwiftUI
+import SwiftData
+
+/// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作 / 外观 / 终端 / 安全 / 关于。
+/// 保持五标签结构不变——设计稿「更多」分区在此承载（命令面板 / 密钥 / 分组 / 指纹）。
+struct SettingsScreen: View {
+    @AppStorage("appearancePreference")
+    private var appearanceRaw: String = AppearancePreference.system.rawValue
+    @Environment(\.mAccent) private var accent
+    @Environment(MobileStore.self) private var store
+
+    @Query private var hosts: [ServerProfile]
+    @Query private var keys: [SSHKey]
+    @Query private var groups: [ServerGroup]
+    @Query private var knownHosts: [KnownHost]
+    @Query private var forwards: [ForwardingRule]
+
+    private var appearance: Binding<AppearancePreference> {
+        Binding(get: { AppearancePreference(rawValue: appearanceRaw) ?? .system },
+                set: { appearanceRaw = $0.rawValue })
+    }
+
+    var body: some View {
+        NavigationStack {
+            MScreen(title: "设置") {
+                VStack(spacing: 0) {
+                    profileCard
+                    actionsGroup
+                    appearanceGroup
+                    terminalGroup
+                    securityGroup
+                    aboutGroup
+                    copyrightFooter
+                }
+            }
+            .navigationBarHidden(true)
+        }
+    }
+
+    // 版权（年份自动取当年，与 macOS「关于」页一致）
+    private var copyrightFooter: some View {
+        Text(copyrightString)
+            .font(M.sans(11))
+            .foregroundStyle(M.text4)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 4)
+            .padding(.bottom, 24)
+    }
+
+    private var copyrightString: String {
+        let year = Calendar.current.component(.year, from: Date())
+        return "© \(year) 柚子星云科技（深圳）有限公司"
+    }
+
+    // 品牌卡
+    private var profileCard: some View {
+        HStack(spacing: 14) {
+            ULogo(size: 48)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("uTerm").font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
+                Text("\(hosts.count) 台主机 · \(keys.count) 个密钥 · \(syncStatus)")
+                    .font(M.mono(12.5)).foregroundStyle(M.text3)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .background(M.panel)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(M.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 22)
+    }
+
+    // 动作（快捷命令已升为底部「命令」主标签，此处仅留命令面板）
+    @ViewBuilder private var actionsGroup: some View {
+        MInsetGroup(header: "动作") {
+            MInsetRow(icon: "cmd", label: "命令面板", sub: "搜索主机、命令、文件",
+                      chevron: true, last: true, onTap: { store.showPalette = true })
+        }
+    }
+
+    // 外观：主题 + 强调色
+    private var appearanceGroup: some View {
+        MInsetGroup(header: "外观") {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("主题").font(M.sans(14)).foregroundStyle(M.text2)
+                Picker("主题", selection: appearance) {
+                    ForEach(AppearancePreference.allCases) { p in Text(p.localizedLabel).tag(p) }
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(14)
+            .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+
+            VStack(alignment: .leading, spacing: 11) {
+                Text("强调色").font(M.sans(14)).foregroundStyle(M.text2)
+                AccentPickerRow()
+            }
+            .padding(14)
+        }
+    }
+
+    // 终端（iOS 端为固定外观，作信息展示）
+    private var terminalGroup: some View {
+        MInsetGroup(header: "终端") {
+            MInsetRow(label: "字体", value: "系统等宽", valueMono: true)
+            MInsetRow(label: "字号", value: "13 pt")
+            MInsetRow(label: "光标", value: "稳定块", last: true)
+        }
+    }
+
+    // 安全：密钥 / 分组 / 指纹 / 端口转发
+    private var securityGroup: some View {
+        MInsetGroup(header: "安全") {
+            NavigationLink { KeysScreen() } label: {
+                MInsetRow(icon: "key", label: "SSH 密钥", value: "\(keys.count)", chevron: true)
+            }.buttonStyle(MRowStyle())
+            NavigationLink { GroupsScreen() } label: {
+                MInsetRow(icon: "tag", label: "主机分组", value: "\(groups.count)", chevron: true)
+            }.buttonStyle(MRowStyle())
+            NavigationLink { FingerprintsView() } label: {
+                MInsetRow(icon: "shield", label: "已知主机指纹", value: "\(knownHosts.count)", chevron: true)
+            }.buttonStyle(MRowStyle())
+            MInsetRow(icon: "forward", label: "端口转发规则", value: "\(forwards.count)",
+                      chevron: true, last: true)
+        }
+    }
+
+    // 关于
+    private var aboutGroup: some View {
+        MInsetGroup(header: "关于",
+                    footer: "uTerm · 现代化 SSH 终端 / 文件 / AI 助手。iOS 与 macOS 通过 iCloud 同步主机与密钥。") {
+            MInsetRow(label: "版本", value: appVersion, last: true)
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    /// 如实的同步状态：本地存储（CloudKit 未建成）/ 未登录 iCloud / iCloud 同步。
+    private var syncStatus: String {
+        guard MobileModelContainer.usingCloudKit else { return "本地存储" }
+        return FileManager.default.ubiquityIdentityToken != nil ? "iCloud 同步" : "未登录 iCloud"
+    }
+}
+
+/// 强调色选择（5 色，写 AccentState，全局即时重染）。
+struct AccentPickerRow: View {
+    @State private var selected: AccentColor = AccentState.shared.selected
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(AccentColor.allCases) { color in
+                let c = color.base(dark: true).color()
+                Circle().fill(c)
+                    .frame(width: 30, height: 30)
+                    .overlay(Circle().stroke(.white, lineWidth: selected == color ? 2.5 : 0))
+                    .overlay(Circle().stroke(M.border, lineWidth: 1))
+                    .scaleEffect(selected == color ? 1.08 : 1)
+                    .onTapGesture {
+                        withAnimation(.spring(duration: 0.25)) {
+                            selected = color
+                            AccentState.shared.selected = color
+                        }
+                    }
+            }
+            Spacer()
+        }
+    }
+}

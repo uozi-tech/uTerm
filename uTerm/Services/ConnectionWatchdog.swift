@@ -1,4 +1,9 @@
+#if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 import Network
 
 /// 注册到 `ConnectionWatchdog` 的对象：在系统唤醒 / 网络恢复后被要求探测
@@ -93,6 +98,8 @@ final class ConnectionWatchdog {
         guard observesSystemEvents, !observersInstalled else { return }
         observersInstalled = true
 
+        // 系统唤醒（macOS 睡眠 → 唤醒；iOS 后台 → 前台）后都视为「高度可疑」时刻。
+        #if canImport(AppKit)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
         ) { @Sendable _ in
@@ -100,6 +107,15 @@ final class ConnectionWatchdog {
                 ConnectionWatchdog.shared.scheduleSweep()
             }
         }
+        #elseif canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
+        ) { @Sendable _ in
+            Task { @MainActor in
+                ConnectionWatchdog.shared.scheduleSweep()
+            }
+        }
+        #endif
 
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { @Sendable path in

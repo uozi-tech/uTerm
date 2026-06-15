@@ -14,6 +14,18 @@ enum KeychainError: Error {
     case dataEncodingFailed
 }
 
+extension KeychainError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .unexpectedStatus(let status):
+            let msg = (SecCopyErrorMessageString(status, nil) as String?) ?? "未知"
+            return "钥匙串错误 \(status)（\(msg)）"
+        case .dataEncodingFailed:
+            return "密钥数据编码失败"
+        }
+    }
+}
+
 /// 读取一条钥匙串密钥的最小可注入接口。`SSHAuthResolver` 据此解析认证材料，
 /// 单测可注入抛错 / not-found 的桩，端到端驱动「钥匙串被锁」与「条目不存在」两条路径。
 nonisolated protocol KeychainReading {

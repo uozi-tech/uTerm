@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.uozi.uTerm</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<!-- 与已发布的 macOS 版同处 Production 数据库（否则 Xcode 调试构建默认走 Development，看不到正式数据）。
+	     若你的 macOS 数据来自 Xcode 调试运行（Development），把此值改成 Development。 -->
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>Production</string>
+	<!-- 与 macOS 版共用同一钥匙串访问组，读取 iCloud 钥匙串同步过来的密码 / 私钥；
+	     缺此项时 iOS 用默认组（com.uozi.uTermMobile），既读不到 macOS 存的密钥，
+	     访问同步项还会以 errSecMissingEntitlement(-34018) 失败。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.uozi.uTerm</string>
+	</array>
+</dict>
+</plist>

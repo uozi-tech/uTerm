@@ -142,8 +142,19 @@ struct SSHConfigImporter {
 }
 
 nonisolated enum SSHIdentityFileResolver {
+    /// 跨平台 home 目录：macOS 用 `homeDirectoryForCurrentUser`（真实用户 home，含 ~/.ssh）；
+    /// iOS 该 API 不可用，退回沙盒 home（`NSHomeDirectory()`）——仅为编译可用，
+    /// iOS 端无 ~/.ssh 配置导入语义。
+    static var defaultHomeDirectory: URL {
+        #if os(macOS)
+        FileManager.default.homeDirectoryForCurrentUser
+        #else
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        #endif
+    }
+
     static func urls(for identityFile: String, configDir: URL,
-                     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+                     homeDirectory: URL = SSHIdentityFileResolver.defaultHomeDirectory) -> [URL] {
         let path = normalize(identityFile)
         guard !path.isEmpty else { return [] }
 

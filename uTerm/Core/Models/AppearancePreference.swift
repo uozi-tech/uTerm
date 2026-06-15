@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#endif
 
 /// 用户对 app 主题的选择。UserDefaults key: `appearancePreference`。默认 `.system`。
 ///
@@ -42,6 +44,7 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    #if canImport(AppKit)
     /// 写到 `NSApplication.shared.appearance` 的值；nil = 跟随系统。
     /// 这是 app 真正应用的映射——见类型文档解释为何不用 `.preferredColorScheme`。
     var nsAppearance: NSAppearance? {
@@ -51,4 +54,5 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
         case .system: return nil
         }
     }
+    #endif
 }

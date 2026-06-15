@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 系统启动屏：用固定深底（星云最暗色 #050509）桥接到「星空之上」开屏 SplashView，
+	     避免冷启动在浅色模式下先闪一帧白屏。其余 Info.plist 键由 GENERATE_INFOPLIST_FILE
+	     的 INFOPLIST_KEY_* 合并注入（同 macOS target 用 INFOPLIST_FILE + 生成的写法）。 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>SplashLaunchBackground</string>
+	</dict>
+</dict>
+</plist>

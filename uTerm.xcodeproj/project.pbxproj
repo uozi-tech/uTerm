@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D1 /* SwiftTerm */; };
+		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
+		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
+		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
@@ -40,14 +44,226 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				App/AppCommands.swift,
+				App/AppEnvironmentModifiers.swift,
+				App/AppModelContainer.swift,
+				App/uTermApp.swift,
+				Core/Security/Views/AppLockGate.swift,
+				Core/Theme/WorkspaceTheme.swift,
+				DesignKit/Chrome/UDSearchField.swift,
+				DesignKit/Chrome/UDSidebarRow.swift,
+				DesignKit/Chrome/UDStatusBadge.swift,
+				DesignKit/Chrome/UDTab.swift,
+				DesignKit/Chrome/UDToolbar.swift,
+				DesignKit/Chrome/UDTrafficLights.swift,
+				DesignKit/Comms/UDChatMessage.swift,
+				DesignKit/Comms/UDComposer.swift,
+				DesignKit/Comms/UDStatusBar.swift,
+				DesignKit/Comms/UDToolCall.swift,
+				DesignKit/Controls/UDBadges.swift,
+				DesignKit/Controls/UDButton.swift,
+				DesignKit/Controls/UDInputFocusDismissal.swift,
+				DesignKit/Controls/UDProgress.swift,
+				DesignKit/Controls/UDSegmented.swift,
+				DesignKit/Controls/UDSlider.swift,
+				DesignKit/Controls/UDTextField.swift,
+				DesignKit/Controls/UDToggle.swift,
+				DesignKit/Gallery/DesignKitGallery.swift,
+				DesignKit/Layout/WrapLayout.swift,
+				DesignKit/Overlays/UDCommandPalette.swift,
+				DesignKit/Overlays/UDDropdown.swift,
+				DesignKit/Overlays/UDMenu.swift,
+				DesignKit/Overlays/UDMenubarPanel.swift,
+				DesignKit/Overlays/UDMetricsPopover.swift,
+				DesignKit/Overlays/UDSessionsDropdown.swift,
+				Features/Agent/AssistantModel.swift,
+				Features/Agent/Views/AgentSidebar.swift,
+				Features/Agent/Views/AssistantView.swift,
+				Features/CommandPalette/CommandPaletteHost.swift,
+				Features/CommandPalette/CommandPaletteItem.swift,
+				Features/CommandPalette/CommandPaletteModel.swift,
+				Features/Editor/CodeEditorController.swift,
+				Features/Editor/CodeEditorView.swift,
+				Features/Editor/EditorTheme.swift,
+				Features/Editor/Find/FindMatcher.swift,
+				Features/Editor/Find/FindReplaceBar.swift,
+				Features/Editor/Find/FindReplaceController.swift,
+				Features/Editor/Highlighting/CodeHighlighter.swift,
+				Features/Editor/Highlighting/GrammarRegistry.swift,
+				Features/Editor/Highlighting/NoopHighlighter.swift,
+				Features/Editor/Highlighting/PatternSyntaxHighlighter.swift,
+				Features/Editor/Highlighting/SyntaxHighlighter.swift,
+				Features/Editor/Highlighting/TreeSitterHighlighter.swift,
+				Features/Editor/Selection/ActiveLineOverlay.swift,
+				Features/Editor/Selection/IndentGuideOverlay.swift,
+				Features/Editor/Selection/LineNumberGutter.swift,
+				Features/Editor/Selection/SameWordEmphasis.swift,
+				Features/Files/FileBrowserModel.swift,
+				Features/Files/RemoteFileDragPayload.swift,
+				Features/Files/Views/FileBrowserView.swift,
+				Features/Groups/Views/GroupRowDragModifier.swift,
+				Features/Groups/Views/GroupsManagerView.swift,
+				Features/Import/Views/ImportInbox.swift,
+				Features/Import/Views/SSHConfigDropStaging.swift,
+				Features/Import/Views/SSHConfigImportView.swift,
+				Features/Keys/Views/KeyDeleteConfirm.swift,
+				Features/Keys/Views/KeyDetailView.swift,
+				Features/Keys/Views/KeyGeneratorView.swift,
+				Features/Keys/Views/KeyManagerView.swift,
+				Features/ParallelRun/ParallelAIDoctor.swift,
+				Features/ParallelRun/ParallelRunModel.swift,
+				Features/ParallelRun/ParallelRunTypes.swift,
+				Features/ParallelRun/ParallelRunWindowID.swift,
+				Features/ParallelRun/Views/ParallelAgentView.swift,
+				Features/ParallelRun/Views/ParallelHostKeyCard.swift,
+				Features/ParallelRun/Views/ParallelRunChrome.swift,
+				Features/ParallelRun/Views/ParallelRunWindowView.swift,
+				Features/ParallelRun/Views/ParallelShellGrid.swift,
+				Features/PortForward/Views/ForwardEditorSheet.swift,
+				"Features/PortForward/Views/ForwardKind+Tint.swift",
+				Features/PortForward/Views/PortForwardListView.swift,
+				Features/PortForward/Views/PortForwardSupportViews.swift,
+				Features/PortForward/Views/PortForwardWindowView.swift,
+				Features/PortForward/Views/TunnelRow.swift,
+				Features/Preview/FileBuffer.swift,
+				Features/Preview/FileBufferDragPayload.swift,
+				Features/Preview/FilePreviewModel.swift,
+				Features/Preview/LanguageDetector.swift,
+				Features/Preview/MarkdownImageDecoder.swift,
+				Features/Preview/MarkdownRenderer.swift,
+				Features/Preview/RecentFileEntry.swift,
+				Features/Preview/RecentFilesStore.swift,
+				Features/Preview/Views/CodeBody.swift,
+				Features/Preview/Views/EmptyBody.swift,
+				Features/Preview/Views/ImageBody.swift,
+				Features/Preview/Views/Markdown/ChatCodeBlock.swift,
+				Features/Preview/Views/Markdown/MarkdownBlocks.swift,
+				Features/Preview/Views/Markdown/MarkdownStyle.swift,
+				Features/Preview/Views/Markdown/StreamingMarkdownView.swift,
+				Features/Preview/Views/MarkdownBody.swift,
+				Features/Preview/Views/PreviewArea.swift,
+				Features/Preview/Views/PreviewBodyRouter.swift,
+				Features/Preview/Views/PreviewStatusRow.swift,
+				Features/Preview/Views/PreviewTabBar.swift,
+				Features/Settings/Views/AboutSettingsView.swift,
+				Features/Settings/Views/AdvancedSettingsView.swift,
+				Features/Settings/Views/ComingSoonPlaceholder.swift,
+				Features/Settings/Views/GeneralSettingsView.swift,
+				Features/Settings/Views/ProviderEditView.swift,
+				Features/Settings/Views/ProvidersSettingsView.swift,
+				Features/Settings/Views/SettingsPrimitives.swift,
+				Features/Settings/Views/SettingsView.swift,
+				Features/Settings/Views/TerminalPreview.swift,
+				Features/Settings/Views/TerminalSettingsView.swift,
+				Features/SFTP/Views/SFTPBrowserView.swift,
+				Features/SFTP/Views/SFTPFileTable.swift,
+				Features/SFTP/Views/SFTPInspector.swift,
+				Features/SFTP/Views/SFTPPathBar.swift,
+				Features/SFTP/Views/SFTPPermissionSheet.swift,
+				Features/SFTP/Views/SFTPRowMenu.swift,
+				Features/SFTP/Views/SFTPStatusBar.swift,
+				Features/SFTP/Views/SFTPTransfersDock.swift,
+				Features/SFTP/Views/SFTPWindowView.swift,
+				Features/Terminal/AgentSafety.swift,
+				Features/Terminal/CopyableTerminalView.swift,
+				Features/Terminal/TerminalColorScheme.swift,
+				Features/Terminal/TerminalCursorShape.swift,
+				Features/Terminal/TerminalHostView.swift,
+				Features/Terminal/TerminalOutputBuffer.swift,
+				Features/Terminal/TerminalSession.swift,
+				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
+				Features/Terminal/TerminalSettings.swift,
+				Features/Terminal/TerminalTheme.swift,
+				Features/Terminal/TerminalWindowID.swift,
+				Features/Terminal/Views/TerminalAgentView.swift,
+				Features/Terminal/Views/TerminalWindowView.swift,
+				Features/Tweaks/MockServerFactory.swift,
+				Features/Tweaks/TweaksModel.swift,
+				Features/Tweaks/TweaksWindow.swift,
+				Features/Welcome/QuickCommandInbox.swift,
+				Features/Welcome/QuickCommandRunner.swift,
+				Features/Welcome/Views/EmptyServersState.swift,
+				Features/Welcome/Views/HostDetailPanel.swift,
+				Features/Welcome/Views/QuickCommandComponents.swift,
+				Features/Welcome/Views/QuickCommandDetail.swift,
+				Features/Welcome/Views/QuickCommandForm.swift,
+				Features/Welcome/Views/QuickCommandList.swift,
+				Features/Welcome/Views/QuickCommandRunLog.swift,
+				Features/Welcome/Views/ServerFormSelectors.swift,
+				Features/Welcome/Views/ServerFormView.swift,
+				Features/Welcome/Views/ServerList.swift,
+				Features/Welcome/Views/ServerRow.swift,
+				Features/Welcome/Views/WelcomeComponents.swift,
+				Features/Welcome/Views/WelcomeSidebar.swift,
+				Features/Welcome/Views/WelcomeToolbar.swift,
+				Features/Welcome/Views/WelcomeView.swift,
+				Features/Workspace/CloseIntent.swift,
+				Features/Workspace/LayoutNode.swift,
+				Features/Workspace/PaneDragPayload.swift,
+				Features/Workspace/PaneDragState.swift,
+				Features/Workspace/PaneModel.swift,
+				Features/Workspace/PortForwardWindowID.swift,
+				Features/Workspace/SFTPWindowID.swift,
+				Features/Workspace/TabDragItem.swift,
+				Features/Workspace/TabModel.swift,
+				Features/Workspace/Views/AssistantBindingModifier.swift,
+				Features/Workspace/Views/PaneDragGhostLayer.swift,
+				Features/Workspace/Views/PaneDropDelegate.swift,
+				Features/Workspace/Views/PaneDropZone.swift,
+				Features/Workspace/Views/PaneGhostCard.swift,
+				Features/Workspace/Views/PaneView.swift,
+				Features/Workspace/Views/SFTPSidebar.swift,
+				Features/Workspace/Views/SplitContainerView.swift,
+				Features/Workspace/Views/StatusBarView.swift,
+				Features/Workspace/Views/TabContentView.swift,
+				Features/Workspace/Views/TerminalArea.swift,
+				Features/Workspace/Views/TerminalTabBar.swift,
+				Features/Workspace/Views/WorkspaceCenter.swift,
+				Features/Workspace/Views/WorkspaceChrome.swift,
+				Features/Workspace/Views/WorkspaceCloseShortcut.swift,
+				Features/Workspace/Views/WorkspaceColumns.swift,
+				Features/Workspace/Views/WorkspaceCommandPaletteFactory.swift,
+				Features/Workspace/Views/WorkspaceRemoteFileOpenGate.swift,
+				Features/Workspace/Views/WorkspaceWindowView.swift,
+				Features/Workspace/WorkspaceCommands.swift,
+				Features/Workspace/WorkspaceDragSource.swift,
+				Features/Workspace/WorkspaceModel.swift,
+				Features/Workspace/WorkspaceSnapshot.swift,
+				Features/Workspace/WorkspaceStore.swift,
+				Features/Workspace/WorkspaceUIState.swift,
+				Features/Workspace/WorkspaceWindowID.swift,
+				Services/Update/AppUpdater.swift,
+				Shared/Views/ConnectionStatusBadge.swift,
+				Shared/Views/DragGhostWindowBridge.swift,
+				Shared/Views/HostKeyPromptView.swift,
+				Shared/Views/HostKeySheet.swift,
+				Shared/Views/ViewFrameProbe.swift,
+			);
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		10C0DE0000000000000000B0 /* uTermMobile */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = uTermMobile;
+			sourceTree = "<group>";
+		};
 		85D6BEF12FBC4E7E00FC90D8 /* uTerm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */,
+			);
 			path = uTerm;
 			sourceTree = "<group>";
 		};
@@ -59,6 +275,17 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		10C0DE0000000000000000A4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
+				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
+				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
+				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		85D6BEEC2FBC4E7E00FC90D8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -101,6 +328,7 @@
 			children = (
 				CFCFCFCF000000000000F0F2 /* Config */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
+				10C0DE0000000000000000B0 /* uTermMobile */,
 				B00000000000000000000002 /* uTermTests */,
 				85D6BEF02FBC4E7E00FC90D8 /* Products */,
 			);
@@ -111,6 +339,7 @@
 			children = (
 				85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */,
 				B0000000000000000000000C /* uTermTests.xctest */,
+				10C0DE0000000000000000A6 /* uTermMobile.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -126,6 +355,33 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		10C0DE0000000000000000A1 /* uTermMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */;
+			buildPhases = (
+				10C0DE0000000000000000A3 /* Sources */,
+				10C0DE0000000000000000A4 /* Frameworks */,
+				10C0DE0000000000000000A5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				10C0DE0000000000000000B0 /* uTermMobile */,
+				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
+			);
+			name = uTermMobile;
+			packageProductDependencies = (
+				10C0DE0000000000000000D1 /* SwiftTerm */,
+				10C0DE0000000000000000D2 /* Citadel */,
+				10C0DE0000000000000000D3 /* SwiftASN1 */,
+				10C0DE0000000000000000D4 /* _CryptoExtras */,
+			);
+			productName = uTermMobile;
+			productReference = 10C0DE0000000000000000A6 /* uTermMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
 		85D6BEEE2FBC4E7E00FC90D8 /* uTerm */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 85D6BEFA2FBC4E7E00FC90D8 /* Build configuration list for PBXNativeTarget "uTerm" */;
@@ -202,6 +458,9 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
+					10C0DE0000000000000000A1 = {
+						CreatedOnToolsVersion = 26.5;
+					};
 					85D6BEEE2FBC4E7E00FC90D8 = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -244,12 +503,20 @@
 			projectRoot = "";
 			targets = (
 				85D6BEEE2FBC4E7E00FC90D8 /* uTerm */,
+				10C0DE0000000000000000A1 /* uTermMobile */,
 				B00000000000000000000006 /* uTermTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		10C0DE0000000000000000A5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		85D6BEED2FBC4E7E00FC90D8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -290,6 +557,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		10C0DE0000000000000000A3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		85D6BEEB2FBC4E7E00FC90D8 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -315,6 +589,74 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		10C0DE0000000000000000F1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = uTermMobile/uTermMobile.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "uTermMobile-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		10C0DE0000000000000000F2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = uTermMobile/uTermMobile.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "uTermMobile-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		85D6BEF82FBC4E7E00FC90D8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = CFCFCFCF000000000000F0F0 /* Version.xcconfig */;
@@ -570,6 +912,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		10C0DE0000000000000000A2 /* Build configuration list for PBXNativeTarget "uTermMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10C0DE0000000000000000F1 /* Debug */,
+				10C0DE0000000000000000F2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		85D6BEEA2FBC4E7E00FC90D8 /* Build configuration list for PBXProject "uTerm" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -722,6 +1073,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterPython;
+		};
+		10C0DE0000000000000000D1 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		10C0DE0000000000000000D2 /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
+		};
+		10C0DE0000000000000000D3 /* SwiftASN1 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */;
+			productName = SwiftASN1;
+		};
+		10C0DE0000000000000000D4 /* _CryptoExtras */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */;
+			productName = _CryptoExtras;
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;

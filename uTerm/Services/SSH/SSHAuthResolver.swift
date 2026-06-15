@@ -8,6 +8,19 @@ nonisolated enum SSHAuthError: Error, Equatable {
     case keychainAccessFailed(String)
 }
 
+extension SSHAuthError: LocalizedError {
+    nonisolated var errorDescription: String? {
+        switch self {
+        case .missingPassword:
+            return "未找到该主机的密码。请在「编辑主机」里重新填写密码后重试。"
+        case .missingPrivateKey:
+            return "未找到该主机的私钥。请确认密钥已通过 iCloud 钥匙串同步到本机，或在「编辑主机」里重新选择 / 导入私钥。"
+        case .keychainAccessFailed(let detail):
+            return "钥匙串访问失败：\(detail)。请确认已登录 iCloud 并开启「钥匙串」，且 App 已获得钥匙串访问权限。"
+        }
+    }
+}
+
 /// 解析后的认证材料 —— 纯数据，不含 Citadel 类型，便于单测。
 /// `SSHConnection` 据此构造实际的 Citadel `SSHAuthenticationMethod`。
 nonisolated enum ResolvedAuth: Equatable {
@@ -84,7 +97,7 @@ nonisolated enum SSHAuthResolver {
         do {
             return try keychain.load(profileID: profileID, kind: kind)
         } catch {
-            throw SSHAuthError.keychainAccessFailed("\(error)")
+            throw SSHAuthError.keychainAccessFailed(error.localizedDescription)
         }
     }
 }
