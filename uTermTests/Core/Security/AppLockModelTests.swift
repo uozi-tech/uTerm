@@ -113,4 +113,20 @@ final class AppLockModelTests: XCTestCase {
         XCTAssertEqual(fake.callCount, 0)
         XCTAssertTrue(model.isUnlocked)
     }
+
+    /// iOS 从后台回前台：relock() 把状态拨回 .locked 并重置首验 guard，可再次触发验证。
+    func testRelockReArmsInitialAuth() async {
+        let (model, fake) = makeModel(availability: .biometrics, outcomes: [.success, .success])
+        await model.startInitialAuthIfNeeded()
+        XCTAssertEqual(model.state, .unlocked)
+        XCTAssertEqual(fake.callCount, 1)
+
+        model.relock()
+        XCTAssertEqual(model.state, .locked)
+        XCTAssertFalse(model.isUnlocked)
+
+        await model.startInitialAuthIfNeeded()
+        XCTAssertEqual(model.state, .unlocked)
+        XCTAssertEqual(fake.callCount, 2)
+    }
 }

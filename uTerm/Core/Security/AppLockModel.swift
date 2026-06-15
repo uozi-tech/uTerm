@@ -45,6 +45,13 @@ final class AppLockModel {
         await authenticate()
     }
 
+    /// iOS：从后台回前台时重新上锁（macOS 仅冷启动，用不到）。把状态拨回 `.locked`
+    /// 并重置首验 guard，让下一次 `startInitialAuthIfNeeded()` 能再触发一次系统验证。
+    func relock() {
+        state = .locked
+        didStartInitialAuth = false
+    }
+
     /// 触发一次验证（锁屏「解锁」按钮也调它重试）。
     func authenticate() async {
         state = .authenticating

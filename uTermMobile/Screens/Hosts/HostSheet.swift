@@ -9,7 +9,6 @@ struct HostSheet: View {
     var onEdit: () -> Void
     @Environment(\.mAccent) private var accent
     @State private var contentHeight: CGFloat = 380
-    @State private var safeBottom: CGFloat = 0
 
     private var statusColor: Color {
         guard let last = host.lastConnectedAt else { return M.text4 }
@@ -47,21 +46,13 @@ struct HostSheet: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 测量内容真实高度 → 抽屉竖屏按内容贴合不留空白；横屏高度不足时滚动而非裁切。
-            .background(GeometryReader { g in
-                Color.clear.preference(key: HostSheetHeightKey.self, value: g.size.height)
-            })
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
-        // `.height` detent 是整张抽屉高度，系统会从中扣掉底部安全区（Home 指示条）给内容留白。
-        // 不把安全区加回 detent，内容就被顶上去、底部空出一条 ≈ 安全区高度的间隔——这正是要去掉的「间隔」。
-        .background(GeometryReader { g in
-            Color.clear.preference(key: HostSheetSafeKey.self, value: g.safeAreaInsets.bottom)
-        })
-        .onPreferenceChange(HostSheetHeightKey.self) { contentHeight = $0 }
-        .onPreferenceChange(HostSheetSafeKey.self) { safeBottom = $0 }
-        .presentationDetents([.height(contentHeight + safeBottom)])
+        .presentationDetents([.height(contentHeight)])
         .presentationDragIndicator(.visible)
+        // 不透明抽屉底色：默认材质是半透明的，底部 home indicator 区会透出标签栏，显得有道「间隔」。
+        .presentationBackground(M.bg)
     }
 
     private var metaGrid: some View {
@@ -94,16 +85,4 @@ struct HostSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 13))
         }.buttonStyle(MPressStyle())
     }
-}
-
-/// 抽屉内容真实高度的测量 key（用于按内容贴合 detent）。
-private struct HostSheetHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 380
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-/// 抽屉底部安全区（Home 指示条）测量 key：加回 detent 以消除底部留白间隔。
-private struct HostSheetSafeKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

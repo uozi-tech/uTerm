@@ -88,7 +88,14 @@ struct HostsScreen: View {
                           DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editing = h } })
         }
         .sheet(isPresented: $creating) {
-            HostFormSheet(host: nil).presentationDragIndicator(.visible)
+            // 新建主机保存后自动连接（sftpOnly → 文件浏览，否则 → 终端），走连接中页。
+            // 延后到 sheet 关闭后再呈现中转页覆盖层，避免与 sheet dismiss 同帧冲突。
+            HostFormSheet(host: nil) { newHost in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    store.requestConnect(newHost, kind: newHost.sftpOnly ? .sftp : .terminal)
+                }
+            }
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $editing) { host in
             HostFormSheet(host: host).presentationDragIndicator(.visible)

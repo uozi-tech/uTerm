@@ -4,6 +4,8 @@ import SwiftData
 /// 新建 / 编辑服务器表单（真实写入 SwiftData + 钥匙串）。
 struct HostFormSheet: View {
     let host: ServerProfile?
+    /// 新建成功后回调（用于「保存后自动连接」）；编辑不触发。
+    var onSaved: ((ServerProfile) -> Void)? = nil
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -155,6 +157,7 @@ struct HostFormSheet: View {
         if auth == .password, !password.isEmpty {
             try? KeychainStore().save(password, profileID: profile.id, kind: .password)
         }
+        if host == nil { onSaved?(profile) }
         dismiss()
     }
 }

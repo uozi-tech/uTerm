@@ -76,6 +76,7 @@ struct CommandFormSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
+    @Query(sort: [SortDescriptor(\ServerGroup.sortOrder)]) private var groups: [ServerGroup]
 
     @State private var name = ""
     @State private var command = ""
@@ -112,19 +113,7 @@ struct CommandFormSheet: View {
                             .padding(.horizontal, 16)
                     }
 
-                    MInsetGroup(header: "关联主机") {
-                        if hosts.isEmpty {
-                            MInsetRow(label: "暂无主机", last: true)
-                        } else {
-                            ForEach(Array(hosts.enumerated()), id: \.element.id) { idx, h in
-                                let check: AnyView? = serverIDs.contains(h.id)
-                                    ? AnyView(MIcon(name: "check", size: 15, color: M.accent)) : nil
-                                MInsetRow(icon: "server", label: h.name, sub: h.displayEndpoint,
-                                          last: idx == hosts.count - 1, trailing: check,
-                                          onTap: { toggle(h.id) })
-                            }
-                        }
-                    }
+                    hostSection
                 }
                 .padding(.vertical, 12)
                 .mReadableColumn()
@@ -149,21 +138,186 @@ struct CommandFormSheet: View {
     private func toggle(_ id: UUID) {
         if serverIDs.contains(id) { serverIDs.remove(id) } else { serverIDs.insert(id) }
     }
+
+    // MARK: 关联主机（分组 + 全组选择，对齐 macOS QuickCommandForm）
+
+    /// 可关联的主机：剔除「仅 SFTP」的主机（无法执行命令），对齐 macOS `QuickCommandList.hostRefs`。
+    private var selectableHosts: [ServerProfile] { hosts.filter { !$0.sftpOnly } }
+    /// 按分组保序归类（首次出现顺序，空 → 「未分组」），对齐 `HostsScreen.grouped`。
+    private var grouped: [(name: String, hosts: [ServerProfile])] {
+        var order: [String] = []
+        var map: [String: [ServerProfile]] = [:]
+        for h in selectableHosts {
+            let g = (h.group?.isEmpty == false ? h.group! : "未分组")
+            if map[g] == nil { order.append(g) }
+            map[g, default: []].append(h)
+        }
+        return order.map { (name: $0, hosts: map[$0] ?? []) }
+    }
+    /// 组名 → colorHex 映射（对齐 macOS `ServerList.groupColorHexes`）。
+    private var groupColorHexes: [String: String] {
+        Dictionary(groups.map { ($0.name, $0.colorHex) }, uniquingKeysWith: { a, _ in a })
+    }
+    /// 可选主机里已选的台数（不含已删除 / 仅 SFTP 主机的悬空 id）。
+    private var selectedVisibleCount: Int { selectableHosts.filter { serverIDs.contains($0.id) }.count }
+    /// 全部可选主机均已选。
+    private var allSelected: Bool { !selectableHosts.isEmpty && selectableHosts.allSatisfy { serverIDs.contains($0.id) } }
+
+    /// 某组三态：`all`（整组都已选）/ `some`（部分已选，含全选）。
+    private func groupState(_ gHosts: [ServerProfile]) -> (all: Bool, some: Bool) {
+        guard !gHosts.isEmpty else { return (false, false) }
+        let picked = gHosts.filter { serverIDs.contains($0.id) }.count
+        return (picked == gHosts.count, picked > 0)
+    }
+    private func toggleGroup(_ gHosts: [ServerProfile], all: Bool) {
+        let ids = gHosts.map(\.id)
+        if all { ids.forEach { serverIDs.remove($0) } } else { ids.forEach { serverIDs.insert($0) } }
+    }
+
+    private var hostSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("关联主机".uppercased())
+                    .font(M.sans(12, weight: .semibold)).tracking(0.4).foregroundStyle(M.text4)
+                Spacer()
+                if !selectableHosts.isEmpty {
+                    Text("\(selectedVisibleCount)/\(selectableHosts.count) 台")
+                        .font(M.mono(11)).foregroundStyle(M.text4)
+                    Button {
+                        if allSelected { selectableHosts.forEach { serverIDs.remove($0.id) } }
+                        else { selectableHosts.forEach { serverIDs.insert($0.id) } }
+                    } label: {
+                        Text(allSelected ? "清空" : "全选")
+                            .font(M.sans(12, weight: .medium)).foregroundStyle(M.text2)
+                            .padding(.horizontal, 10).frame(height: 26)
+                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(M.border, lineWidth: 1))
+                    }.buttonStyle(MPressStyle())
+                }
+            }
+            .padding(.horizontal, 20).padding(.bottom, 7)
+
+            VStack(spacing: 0) {
+                if selectableHosts.isEmpty {
+                    Text(hosts.isEmpty ? "暂无主机" : "暂无可用主机").font(M.sans(14)).foregroundStyle(M.text4)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                } else {
+                    ForEach(Array(grouped.enumerated()), id: \.element.name) { gi, sec in
+                        groupHeader(sec.name, hosts: sec.hosts)
+                        ForEach(Array(sec.hosts.enumerated()), id: \.element.id) { hi, h in
+                            hostRow(h, last: gi == grouped.count - 1 && hi == sec.hosts.count - 1)
+                        }
+                    }
+                }
+            }
+            .background(M.panel)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 16)
+        }
+        .padding(.bottom, 22)
+    }
+
+    private func groupHeader(_ name: String, hosts gHosts: [ServerProfile]) -> some View {
+        let st = groupState(gHosts)
+        let picked = gHosts.filter { serverIDs.contains($0.id) }.count
+        let tint = MGroupTint.color(for: name == "未分组" ? nil : name, in: groupColorHexes)
+        return Button { toggleGroup(gHosts, all: st.all) } label: {
+            HStack(spacing: 10) {
+                MGroupCheck(on: st.all, partial: st.some && !st.all)
+                MDot(color: tint ?? M.text4, size: 7)
+                Text(name.uppercased())
+                    .font(M.sans(11.5, weight: .semibold)).tracking(0.4).foregroundStyle(M.text3).lineLimit(1)
+                Text("\(picked)/\(gHosts.count)").font(M.mono(11)).foregroundStyle(M.text4)
+                Spacer(minLength: 6)
+                Text(st.all ? "取消整组" : "选择整组")
+                    .font(M.sans(11.5)).foregroundStyle(st.some ? M.accent : M.text4)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9).frame(minHeight: 44)
+            .background(M.fillFaint)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 14) }
+        }.buttonStyle(MRowStyle())
+    }
+
+    private func hostRow(_ h: ServerProfile, last: Bool) -> some View {
+        let on = serverIDs.contains(h.id)
+        return Button { toggle(h.id) } label: {
+            HStack(spacing: 11) {
+                MCheckbox(checked: on)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(h.name.isEmpty ? h.host : h.name)
+                        .font(M.sans(14.5, weight: .medium)).foregroundStyle(M.text).lineLimit(1)
+                    Text(h.displayEndpoint)
+                        .font(M.mono(11.5)).foregroundStyle(M.text4).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 6)
+            }
+            .padding(.leading, 16).padding(.trailing, 14).padding(.vertical, 9)
+            .frame(minHeight: 50)
+            .background(on ? M.accent.opacity(0.08) : .clear)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                if !last { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 16) }
+            }
+        }.buttonStyle(MRowStyle())
+    }
+
     private func load() {
         guard let cmd else { return }
         name = cmd.name; command = cmd.command; intent = cmd.intent
-        ai = cmd.aiAssisted; serverIDs = Set(cmd.serverIDs)
+        ai = cmd.aiAssisted
+        // 仅保留仍可选的绑定（剔除已删除 / 现为仅 SFTP 的悬空 id），否则三态 / 全选计数对不上。
+        // 对齐 macOS `QuickCommandForm` 的 seed 过滤。
+        let selectableIDs = Set(selectableHosts.map(\.id))
+        serverIDs = Set(cmd.serverIDs).intersection(selectableIDs)
     }
     private func save() {
         let c = cmd ?? QuickCommand()
         c.name = name.trimmingCharacters(in: .whitespaces)
         c.command = command; c.intent = intent; c.aiAssisted = ai
-        c.serverIDs = Array(serverIDs)
+        // 按可选主机顺序收口（剔除已删除 / 仅 SFTP），对齐 macOS `orderedSelection`。
+        c.serverIDs = selectableHosts.filter { serverIDs.contains($0.id) }.map(\.id)
         if cmd == nil {
             c.sortOrder = ((try? context.fetch(FetchDescriptor<QuickCommand>()))?.map(\.sortOrder).max() ?? -1) + 1
             context.insert(c)
         }
         try? context.save()
         dismiss()
+    }
+}
+
+// MARK: - 勾选件（对齐 macOS QCCheckbox / QCGroupCheck）
+
+/// 单台复选框：选中 = accent 填充 + 白勾。
+private struct MCheckbox: View {
+    let checked: Bool
+    var body: some View {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(checked ? M.accent : M.fillFaint)
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(checked ? M.accent : M.border, lineWidth: 1))
+            .overlay { if checked { MIcon(name: "check", size: 10, color: .white, weight: .bold) } }
+            .frame(width: 19, height: 19)
+    }
+}
+
+/// 分组三态勾选：全选 = 勾 / 半选 = 横线 / 未选 = 空。
+private struct MGroupCheck: View {
+    let on: Bool
+    let partial: Bool
+    private var active: Bool { on || partial }
+    var body: some View {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(active ? M.accent : M.fillFaint)
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(active ? M.accent : M.border, lineWidth: 1))
+            .overlay {
+                if on {
+                    MIcon(name: "check", size: 10, color: .white, weight: .bold)
+                } else if partial {
+                    Capsule().fill(.white).frame(width: 9, height: 2)
+                }
+            }
+            .frame(width: 19, height: 19)
     }
 }

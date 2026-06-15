@@ -16,6 +16,11 @@ final class MobileSFTPController {
     @ObservationIgnored private var session: SFTPSession?
     @ObservationIgnored private var started = false
 
+    /// 记下首次建连参数，供失败后 `restart()`（连接中页「重试」）重连。
+    @ObservationIgnored private var lastProfile: ServerProfile?
+    @ObservationIgnored private var lastContainer: ModelContainer?
+    @ObservationIgnored private var lastRelay: HostKeyChallengeRelay?
+
     static func markConnected(_ pid: PersistentIdentifier, in container: ModelContainer) {
         let ctx = container.mainContext
         if let profile = ctx.model(for: pid) as? ServerProfile {
@@ -28,6 +33,7 @@ final class MobileSFTPController {
         guard !started else { return }
         started = true
         state = .connecting
+        lastProfile = profile; lastContainer = container; lastRelay = relay
 
         let snapshot = SSHConnection.ProfileSnapshot(profile)
         let keychain = KeychainStore()
@@ -109,6 +115,20 @@ final class MobileSFTPController {
         let s = session
         Task { await s?.close() }
         session = nil
+    }
+
+    /// 失败后重连（连接中页「重试」）；只有处于失败态时才生效。
+    func restart() {
+        guard case .failed = state,
+              let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
+        let old = session
+        Task { await old?.close() }
+        session = nil
+        entries = []
+        path = "/"
+        started = false
+        state = .idle
+        start(profile: profile, container: container, relay: relay)
     }
 
     // MARK: - 文件操作（设计稿 FileActionSheet / PermissionSheet）

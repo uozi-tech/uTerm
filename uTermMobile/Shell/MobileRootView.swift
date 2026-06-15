@@ -42,6 +42,23 @@ struct MobileRootView: View {
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
         }
+        // 连接中页：选定主机后、会话/文件浏览打开前的全屏中转页（防误触打断半开连接）。
+        // 用 overlay（非 fullScreenCover）以便下面的主机密钥信任弹层仍能叠在其上。
+        .overlay {
+            if let req = store.connecting {
+                ConnectingCoverView(
+                    request: req,
+                    onFinish: { store.finishConnect() },
+                    onCancel: { store.cancelConnect() },
+                    onRetry: { store.retryConnect() })
+                    .environment(store)
+                    .environment(hostKeyRelay)
+                    .environment(\.mAccent, M.accent)
+                    .tint(M.accent)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.22), value: store.connecting?.id)
         // 主机密钥信任弹层：连接遇到首次 / 变化的密钥时，覆盖所有标签居中呈现。
         .overlay {
             if let challenge = hostKeyRelay.pendingChallenge {

@@ -15,15 +15,63 @@ final class MobileTerminalController {
 
     var state: State = .idle
     var title: String = ""
+    /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
+    /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
+    private(set) var hadConnected = false
+    /// Ctrl 粘滞修饰是否已「上膛」：键盘条上点 ctrl 后亮起，下一个软键盘字符按住 Ctrl 发送
+    ///（Ctrl+L/R/C/U……）。底层复用 SwiftTerm `TerminalView.controlModifier`——它在 insertText
+    /// 里消费并自动复位，复位时发 `.terminalViewControlModifierReset`，据此把按钮高亮同步关掉。
+    var controlArmed = false
 
     @ObservationIgnored private(set) weak var terminalView: SwiftTerm.TerminalView?
     @ObservationIgnored private var connection: SSHConnection?
     @ObservationIgnored private var outputTask: Task<Void, Never>?
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    // nonisolated(unsafe)：在 nonisolated deinit 里清理这个非 Sendable 的观察者 token。
+    // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
+    @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
+
+    /// 记下首次建连参数，供失败后 `restart()` 在同一控制器 / 同一终端视图上重连。
+    @ObservationIgnored private var lastProfile: ServerProfile?
+    @ObservationIgnored private var lastContainer: ModelContainer?
+    @ObservationIgnored private var lastRelay: HostKeyChallengeRelay?
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
+        installControlResetObserverIfNeeded()
+    }
+
+    // MARK: Ctrl 粘滞修饰
+
+    /// 点 ctrl 键：切换「上膛」状态并同步给 SwiftTerm 视图。
+    func toggleControl() {
+        controlArmed.toggle()
+        terminalView?.controlModifier = controlArmed
+    }
+
+    /// 取消待生效的 Ctrl（点了其它快捷键时调用，避免 Ctrl 漏到后续按键）。
+    func clearControl() {
+        guard controlArmed else { return }
+        controlArmed = false
+        terminalView?.controlModifier = false
+    }
+
+    /// SwiftTerm 在软键盘按下后会把 controlModifier 复位并发通知；据此关掉按钮高亮。
+    private func installControlResetObserverIfNeeded() {
+        guard ctrlResetObserver == nil else { return }
+        ctrlResetObserver = NotificationCenter.default.addObserver(
+            forName: .terminalViewControlModifierReset, object: nil, queue: .main
+        ) { [weak self] note in
+            // queue: .main → 必在主线程回调，可直接断言 MainActor 同步触碰 UI 状态。
+            // 只把 Sendable 的对象身份带过隔离边界（不要把非 Sendable 的 note 捕获进 MainActor 闭包）。
+            let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let tv = self.terminalView,
+                      objID == ObjectIdentifier(tv) else { return }
+                self.controlArmed = false
+            }
+        }
     }
 
     /// 关闭会话前先收起键盘——否则视图随转场移除后键盘还会残留几百毫秒。
@@ -43,6 +91,7 @@ final class MobileTerminalController {
         started = true
         title = profile.name
         state = .connecting
+        lastProfile = profile; lastContainer = container; lastRelay = relay
 
         let snapshot = SSHConnection.ProfileSnapshot(profile)
         let keychain = KeychainStore()
@@ -86,6 +135,7 @@ final class MobileTerminalController {
                 try await conn.connect()
                 await MainActor.run {
                     self?.state = .connected
+                    self?.hadConnected = true
                     if let profile = container.mainContext.model(for: pid) as? ServerProfile {
                         profile.lastConnectedAt = Date()
                         try? container.mainContext.save()
@@ -119,7 +169,22 @@ final class MobileTerminalController {
         state = .closed
     }
 
+    /// 失败后在同一控制器 / 同一终端视图上重连（连接中页「重试」）。终端视图仍挂着，
+    /// 新的输出泵会喂给它；只有处于失败态时才生效。
+    func restart() {
+        guard case .failed = state,
+              let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
+        outputTask?.cancel(); exitTask?.cancel()
+        let old = connection
+        Task { await old?.close() }
+        connection = nil
+        started = false
+        state = .idle
+        start(profile: profile, container: container, relay: relay)
+    }
+
     deinit {
+        if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         outputTask?.cancel(); exitTask?.cancel()
     }
 }

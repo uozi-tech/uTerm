@@ -31,6 +31,8 @@ enum MGlyph {
         case "term":       return "terminal"
         case "server":     return "server.rack"
         case "lock":       return "lock.fill"
+        case "faceid":     return "faceid"
+        case "touchid":    return "touchid"
         case "gear":       return "gearshape"
         case "ellipsis":   return "ellipsis"
         case "forward":    return "arrow.left.arrow.right"

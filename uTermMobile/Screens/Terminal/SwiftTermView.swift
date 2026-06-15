@@ -17,6 +17,9 @@ struct SwiftTermView: UIViewRepresentable {
         let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let view = SwiftTerm.TerminalView(frame: .zero, font: font)
         view.terminalDelegate = context.coordinator
+        // 去掉 SwiftTerm 自带的键盘附加栏（esc/ctrl/tab/F1/方向键……），它和我们自绘的
+        // `TerminalKeyBar` 重复堆两层。置 nil 后键盘上方只留 `TerminalKeyBar` 一层。
+        view.inputAccessoryView = nil
         view.minimumContrastRatio = MTerminalColors.minimumContrastRatio
         apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: view)
         // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁）。

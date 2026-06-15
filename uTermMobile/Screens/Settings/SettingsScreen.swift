@@ -6,6 +6,9 @@ import SwiftData
 struct SettingsScreen: View {
     @AppStorage("appearancePreference")
     private var appearanceRaw: String = AppearancePreference.system.rawValue
+    /// 应用锁开关，与启动时读的键同源（缺键视作关）。
+    @AppStorage("requireAuthAtLaunch") private var appLockOn = false
+    @State private var lockUnavailable = false
     @Environment(\.mAccent) private var accent
     @Environment(MobileStore.self) private var store
 
@@ -34,7 +37,34 @@ struct SettingsScreen: View {
                 }
             }
             .navigationBarHidden(true)
+            .alert("无法开启应用锁", isPresented: $lockUnavailable) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text("请先在系统「设置」里启用 Face ID / 触控 ID 或设置锁屏密码，再开启应用锁。")
+            }
         }
+    }
+
+    /// 当前机器的生物识别类型（文案 + 图标），用于应用锁开关行。
+    private var biometry: (title: String, icon: String) { MobileBiometry.describe() }
+
+    /// 应用锁开关：开启前先验证一次（确认设备可用 + 取得用户授权），成功才真正打开，
+    /// 避免一拨开关就把下次启动锁死却无从解锁。关闭则直接生效。
+    private var appLockBinding: Binding<Bool> {
+        Binding(
+            get: { appLockOn },
+            set: { wantOn in
+                guard wantOn else { appLockOn = false; return }
+                Task {
+                    let outcome = await MobileBiometry.confirmEnable()
+                    if case .success = outcome {
+                        appLockOn = true
+                    } else {
+                        appLockOn = false
+                        if case .unavailable = outcome { lockUnavailable = true }
+                    }
+                }
+            })
     }
 
     // 版权（年份自动取当年，与 macOS「关于」页一致）
@@ -109,9 +139,12 @@ struct SettingsScreen: View {
         }
     }
 
-    // 安全：密钥 / 分组 / 指纹 / 端口转发
+    // 安全：应用锁 / 密钥 / 分组 / 指纹 / 端口转发
     private var securityGroup: some View {
         MInsetGroup(header: "安全") {
+            MInsetRow(icon: biometry.icon, label: "\(biometry.title) 解锁",
+                      sub: "回到 uTerm 时需验证身份",
+                      trailing: AnyView(MSwitch(on: appLockBinding)))
             NavigationLink { KeysScreen() } label: {
                 MInsetRow(icon: "key", label: "SSH 密钥", value: "\(keys.count)", chevron: true)
             }.buttonStyle(MRowStyle())

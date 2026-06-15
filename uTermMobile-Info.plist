@@ -10,5 +10,9 @@
 		<key>UIColorName</key>
 		<string>SplashLaunchBackground</string>
 	</dict>
+	<!-- 应用锁用 Face ID 时系统要求的用途说明（缺它则调用生物识别会崩溃）。
+	     Touch ID 设备不读此键。 -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。</string>
 </dict>
 </plist>

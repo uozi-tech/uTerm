@@ -53,6 +53,8 @@ struct TerminalScreen: View {
         .onAppear { consumeTarget(store.terminalTarget) }
         .onChange(of: activeID) { _, id in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                // 连接中页期间不要弹键盘——键盘窗口恒在最上，会盖住中转页的取消按钮。
+                guard store.connecting == nil else { return }
                 guard let tab = tabs.first(where: { $0.id == id }) else { return }
                 if tab.mode == .terminal {
                     // 终端会话：becomeFirstResponder 隐式接管旧响应者，无闪烁。
@@ -73,6 +75,18 @@ struct TerminalScreen: View {
         .onChange(of: showPicker) { _, picking in
             if picking { resignActive() } else { focusActiveTerminal() }
         }
+        // 连接中页取消 / 重试：拆掉对应会话 tab 的视图状态（控制器已由 store 关闭）。
+        .onChange(of: store.terminalTeardownID) { _, id in
+            guard let id else { return }
+            if let tab = tabs.first(where: { $0.id == id }) {
+                tab.controller.resignKeyboard()
+                tab.agent.stop()
+            }
+            tabs.removeAll { $0.id == id }
+            if activeID == id { activeID = tabs.last?.id }
+            if tabs.isEmpty { showPicker = false }
+            store.terminalTeardownID = nil
+        }
         .sheet(isPresented: $picking) { newTabSheet }
     }
 
@@ -83,21 +97,37 @@ struct TerminalScreen: View {
     private func consumeTarget(_ t: PersistentIdentifier?) {
         guard let t else { return }
         store.terminalTarget = nil
-        if let host = hosts.first(where: { $0.persistentModelID == t }), !host.sftpOnly {
-            openTab(host, allowDuplicate: false)
+        guard let host = hosts.first(where: { $0.persistentModelID == t }), !host.sftpOnly else {
+            // 找不到主机 / 仅 SFTP：开不了终端会话——撤下正在等待绑定的连接中页，避免空转卡死。
+            if let req = store.connecting, req.kind == .terminal, req.terminal == nil,
+               req.host.persistentModelID == t {
+                store.cancelConnect()
+            }
+            return
         }
+        openTab(host, allowDuplicate: store.connecting?.allowDuplicate ?? false)
     }
 
     private func openTab(_ host: ServerProfile, allowDuplicate: Bool) {
         if !allowDuplicate,
            let existing = tabs.first(where: { $0.host.persistentModelID == host.persistentModelID }) {
             activeID = existing.id
+            bindConnecting(existing)   // 已有会话（多半已连）：让连接中页据其状态立即收尾
             return
         }
         let tab = TermTab(host: host)
         tab.controller.start(profile: host, container: context.container, relay: relay)
         tabs.append(tab)
         activeID = tab.id
+        bindConnecting(tab)
+    }
+
+    /// 若此次开 tab 由连接中页发起，则把会话控制器回填给请求，供连接中页观察真实状态并推进阶段。
+    private func bindConnecting(_ tab: TermTab) {
+        guard let req = store.connecting, req.kind == .terminal, req.terminal == nil,
+              req.host.persistentModelID == tab.host.persistentModelID else { return }
+        req.terminal = tab.controller
+        req.terminalTabID = tab.id
     }
 
     private func closeTab(_ id: UUID) {
@@ -128,7 +158,7 @@ struct TerminalScreen: View {
     /// 重新聚焦当前会话的终端（回到终端标签 / 会话时弹回键盘）。
     private func focusActiveTerminal() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard !showPicker,
+            guard store.connecting == nil, store.tab == .terminal, !showPicker,
                   let tab = tabs.first(where: { $0.id == activeID }), tab.mode == .terminal else { return }
             tab.controller.focusKeyboard()
         }
@@ -180,7 +210,8 @@ struct TerminalScreen: View {
                         .padding(.horizontal, 20).padding(.top, 4)
                     LazyVStack(spacing: 10) {
                         ForEach(connectable) { host in
-                            hostRow(host) { openTab(host, allowDuplicate: false); showPicker = false }
+                            // 走连接中页（与主机详情 / 命令面板一致）；showPicker 先关，连接完成后露出会话。
+                            hostRow(host) { showPicker = false; store.openTerminal(host) }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -198,7 +229,13 @@ struct TerminalScreen: View {
                             .frame(maxWidth: .infinity).padding(.top, 40)
                     } else {
                         ForEach(connectable) { host in
-                            hostRow(host) { openTab(host, allowDuplicate: true); picking = false }
+                            // 新建终端会话也走连接中页（强制新开一个会话）。
+                            hostRow(host) {
+                                picking = false
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                    store.requestConnect(host, kind: .terminal, allowDuplicate: true)
+                                }
+                            }
                         }
                     }
                 }
@@ -392,6 +429,7 @@ struct TerminalSessionBody: View {
 
 struct TerminalKeyBar: View {
     let controller: MobileTerminalController
+    @Environment(\.mAccent) private var accent
 
     private let keys: [(String, String)] = [
         ("esc", "\u{1b}"), ("tab", "\t"), ("⌃C", "\u{03}"), ("⌃D", "\u{04}"),
@@ -400,24 +438,43 @@ struct TerminalKeyBar: View {
     ]
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(keys, id: \.0) { key in
-                    Button { controller.sendText(key.1) } label: {
-                        Text(key.0)
-                            .font(M.mono(13, weight: .medium))
-                            .foregroundStyle(M.text)
-                            .padding(.horizontal, 12).frame(height: 34)
-                            .background(M.panelHi)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(M.border, lineWidth: 1))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(MPressStyle())
-                }
+        HStack(spacing: 6) {
+            // Ctrl 粘滞修饰键：常驻最左、不随横向滚动。点亮后下一个软键盘字符按住 Ctrl 发送
+            //（如 Ctrl+L / Ctrl+R / Ctrl+U）；再点一次或点其它快捷键即取消。
+            Button { controller.toggleControl() } label: {
+                keyCap("ctrl", active: controller.controlArmed)
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
+            .buttonStyle(MPressStyle())
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(keys, id: \.0) { key in
+                        Button {
+                            controller.clearControl()
+                            controller.sendText(key.1)
+                        } label: {
+                            keyCap(key.0, active: false)
+                        }
+                        .buttonStyle(MPressStyle())
+                    }
+                }
+                .padding(.trailing, 10)
+            }
         }
+        .padding(.leading, 10).padding(.vertical, 7)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+    }
+
+    /// 单个键帽样式；`active` 时用强调色描边+底色（ctrl 上膛态）。
+    private func keyCap(_ text: String, active: Bool) -> some View {
+        Text(text)
+            .font(M.mono(13, weight: .medium))
+            .foregroundStyle(active ? accent : M.text)
+            .padding(.horizontal, 12).frame(height: 34)
+            .background(active ? accent.opacity(0.15) : M.panelHi)
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(active ? accent.opacity(0.5) : M.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

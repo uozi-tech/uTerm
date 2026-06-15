@@ -32,18 +32,40 @@ struct SFTPScreen: View {
             if let host = targetHost {
                 browser(host)
                     .transition(.mDrill)
-                    .onAppear {
-                        if activeTarget != host.persistentModelID {
-                            activeTarget = host.persistentModelID
-                            controller.start(profile: host, container: context.container, relay: relay)
-                        }
-                    }
             } else {
                 picker
                     .transition(.mFade)
             }
         }
         .animation(.mSwap, value: store.sftpTarget)
+        // 目标主机变化（含切换主机）驱动会话生命周期——状态驱动，不依赖视图 onAppear 重触发。
+        .onChange(of: store.sftpTarget) { _, t in consumeSFTPTarget(t) }
+        .onAppear { consumeSFTPTarget(store.sftpTarget) }
+        // 同主机再次发起浏览（sftpTarget 不变）：onChange(sftpTarget) 不触发，靠请求代次回填控制器。
+        .onChange(of: store.connecting?.id) { _, _ in consumeSFTPTarget(store.sftpTarget) }
+        // 连接中页取消 / 重试：关闭并复位当前 SFTP 会话（控制器已由 store 关闭）。
+        .onChange(of: store.sftpTeardownPending) { _, pending in
+            guard pending else { return }
+            activeTarget = nil
+            controller = MobileSFTPController()
+            store.sftpTeardownPending = false
+        }
+    }
+
+    /// 消费 SFTP 目标主机（镜像终端 `consumeTarget`，状态驱动）：切换主机时换新控制器并连接；
+    /// 同主机已在浏览则只把控制器回填给连接中页（多半已连，连接中页据此立即收尾）。
+    private func consumeSFTPTarget(_ t: PersistentIdentifier?) {
+        guard let t, let host = hosts.first(where: { $0.persistentModelID == t }) else { return }
+        if activeTarget != t {
+            if activeTarget != nil { controller.close(); controller = MobileSFTPController() }
+            activeTarget = t
+            controller.start(profile: host, container: context.container, relay: relay)
+        }
+        // 回填给连接中页（若此次浏览由其发起）。
+        if let req = store.connecting, req.kind == .sftp, req.sftp == nil,
+           req.host.persistentModelID == t {
+            req.sftp = controller
+        }
     }
 
     private var picker: some View {
