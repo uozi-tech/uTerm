@@ -25,12 +25,17 @@ protocol ConnectionHealthProbing: AnyObject, Sendable {
 /// （v1.2.3 及之前的实况）。Citadel 0.12.1 没有 SSH 层 keepalive，
 /// 唯一可靠的判活手段是主动发一笔需要对端应答的流量。
 ///
-/// 本服务在两个「高度可疑」时刻出手：
+/// 本服务在三类时刻出手：
 ///   1. 系统从睡眠唤醒（`NSWorkspace.didWakeNotification`）；
-///   2. 网络路径从不可用恢复为可用（`NWPathMonitor` unsatisfied → satisfied）。
-/// 等网络 settle 几秒后，对注册表里所有存活对象并发探测；判死的连接由各自的
-/// `probeConnectionHealth` 走既有恢复通道（终端：exitStream → 「重新连接」
-/// 覆盖层；SFTP：自动重连并保留当前目录）。
+///   2. 网络路径从不可用恢复为可用（`NWPathMonitor` unsatisfied → satisfied）；
+///   3. **周期心跳**（`probeInterval`，默认 30s）—— 因为机器一直醒着、网也没断时，
+///      空闲连接仍可能被中间 NAT / 防火墙的空闲超时、或服务器端 `ClientAliveInterval`
+///      静默掐断；只靠 1/2 的反应式探测盖不住这个场景。周期探测发的 `exec true`
+///      流量同时充当 keepalive（重置对端 / NAT 空闲计时）与判死手段，等价于
+///      `ssh -o ServerAliveInterval`，补上 Citadel 没有 SSH 层 keepalive 的缺口。
+/// 等网络 settle 几秒后（周期心跳无需 settle，直接扫），对注册表里所有存活对象并发
+/// 探测；判死的连接由各自的 `probeConnectionHealth` 走既有恢复通道（终端：exitStream
+/// → 「重新连接」覆盖层；SFTP：自动重连并保留当前目录；转发：拆隧道并亮「重试」）。
 ///
 /// 注册表持弱引用：窗格关闭 / 窗口销毁后条目自动失效，无需显式注销。
 @MainActor
@@ -41,6 +46,11 @@ final class ConnectionWatchdog {
     /// 立即探测会把「网络还没回来」误判成「连接已死」。
     var settleDelay: Duration = .seconds(3)
 
+    /// 周期心跳间隔（keepalive + 判死）。够短以在 NAT/服务端空闲超时前发流量保活、
+    /// 并较快发现僵尸连接；够长以免 exec 探测开销可感。仅在 `observesSystemEvents`
+    /// 为真时启动（测试关闭，由测试直接驱动 `sweep()`）。
+    var probeInterval: Duration = .seconds(30)
+
     private struct WeakEntry {
         weak var value: (any ConnectionHealthProbing)?
     }
@@ -49,6 +59,7 @@ final class ConnectionWatchdog {
     private var pathMonitor: NWPathMonitor?
     private var lastPathSatisfied = true
     private var pendingSweep: Task<Void, Never>?
+    private var periodicTask: Task<Void, Never>?
     private var observersInstalled = false
     private let observesSystemEvents: Bool
 
@@ -126,6 +137,24 @@ final class ConnectionWatchdog {
         }
         monitor.start(queue: DispatchQueue(label: "uTerm.ConnectionWatchdog.path"))
         pathMonitor = monitor
+
+        startPeriodicProbing()
+    }
+
+    /// 启动周期心跳：每 `probeInterval` 直接扫一遍（不走 settleDelay —— 那是给
+    /// 唤醒/网络恢复留的网络收敛窗口，周期心跳无此需要）。`sweep()` 在无注册目标
+    /// 时立即返回，故空闲（无连接）期的开销仅是一次定时唤醒。系统睡眠期间进程
+    /// 冻结、`Task.sleep` 自然挂起，醒来由 didWake 处理、本循环继续计时。
+    private func startPeriodicProbing() {
+        guard periodicTask == nil else { return }
+        periodicTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.probeInterval else { return }
+                try? await Task.sleep(for: interval)
+                guard let self else { return }
+                await self.sweep()
+            }
+        }
     }
 
     /// 只在「断 → 通」的恢复沿触发：网络刚回来的瞬间正是既有 TCP 状态最可疑、

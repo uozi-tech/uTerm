@@ -46,51 +46,49 @@ actor LocalForwardListener {
         let destHost = self.destHost
         let destPort = self.destPort
 
-        let bootstrap = ServerBootstrap(group: eventLoop)
-            .serverChannelOption(ChannelOptions.backlog, value: 16)
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            // 半关键设(#5)：客户端发完请求后半关写端(FIN)时**不要**把整通道判为关闭。
-            // 默认 allowRemoteHalfClosure=false 下对端 FIN 会触发 channelInactive(整通道关)，
-            // 于是目标仍在流式回包就被 TunnelGlue 取消截断。设 true 后对端 FIN 只让本地入站读到
-            // EOF、出站仍可写 → 目标的响应能完整写回客户端；配合 isOutboundHalfClosureEnabled
-            // 让响应排空后 outbound.finish() 真的向客户端发 FIN。
-            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-            .childChannelInitializer { childChannel in
-                // 把本地 socket 立即设为 NIOAsyncChannel 之前不加任何 handler；
-                // 实际的 direct-tcpip 开通道 + 粘合在 accept 后的 Task 里做。
-                childChannel.eventLoop.makeSucceededVoidFuture()
-            }
-
-        let serverChannel: Channel
+        // 关键（修早期字节丢弃竞态，PG「客户端先说话」一连上就发 SSLRequest）：用 bind 的
+        // async 重载，在 childChannelInitializer 里、**child 激活之前、于其 EventLoop 上**就把
+        // 本地 socket 包成 NIOAsyncChannel —— 消费 handler 在第一个 read 之前装好，既不会把客户端
+        // 抢先发来的首字节读进空 pipeline 丢弃，读也由 NIOAsyncChannel 正常驱动（autoRead 保持默认）。
+        // accept 循环拿到的就是「已包好的」NIOAsyncChannel<ByteBuffer,ByteBuffer>。
+        //   反例（曾导致 closed unexpectedly / 超时）：accept 后才在 handleAccepted 里包 —— accept 到
+        //   wrap 之间有空窗，autoRead 抢读首字节丢弃；而关掉 autoRead 又会掐死 NIOAsyncChannel 读路。
+        // 半关(#5)：allowRemoteHalfClosure=true 让对端 FIN 只让本地入站 EOF、出站仍可写；
+        // isOutboundHalfClosureEnabled=true 让响应排空后 finish() 真向客户端发 FIN。
+        // makeCompletedFuture 在 child 的 EL 上同步跑闭包 → wrappingChannelSynchronously 的
+        // preconditionInEventLoop 满足（不会 trap）。
+        let listener: NIOAsyncChannel<NIOAsyncChannel<ByteBuffer, ByteBuffer>, Never>
         do {
-            serverChannel = try await bootstrap.bind(host: listenHost, port: listenPort).get()
+            listener = try await ServerBootstrap(group: eventLoop)
+                .serverChannelOption(ChannelOptions.backlog, value: 16)
+                .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+                .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+                .bind(host: listenHost, port: listenPort) { childChannel in
+                    childChannel.eventLoop.makeCompletedFuture {
+                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                            wrappingChannelSynchronously: childChannel,
+                            configuration: .init(isOutboundHalfClosureEnabled: true))
+                    }
+                }
         } catch {
             // bind 失败 —— 端口被占用 / 权限不足。原样抛出，由上层归类。
             throw error
         }
-        self.serverChannel = serverChannel
+        self.serverChannel = listener.channel
 
         AppLogger.info(
             "本地转发已绑定 \(self.listenHost):\(self.listenPort) → \(self.destHost):\(self.destPort)",
             category: ForwardingLog.category)
 
-        // 接受循环：把 server channel 包成 NIOAsyncChannel<本地 socket Channel>，
-        // 每个新连接派一个子 Task 开 direct-tcpip 并粘合。
-        // NIOAsyncChannel(wrappingChannelSynchronously:) 内部有 preconditionInEventLoop，
-        // 必须在该 channel 的 EventLoop 上调用；本方法在 actor 执行器（协作线程）上跑，
-        // 故经 eventLoop.submit 回到 EL 再包装（否则 trap，见 1.4.1 崩溃）。
-        let asyncServer = try await serverChannel.eventLoop.submit {
-            try NIOAsyncChannel<Channel, Never>(wrappingChannelSynchronously: serverChannel)
-        }.get()
-
+        // 接受循环：每个新连接（已是包好的 NIOAsyncChannel）派一个子 Task 开 direct-tcpip 并粘合。
         Task {
             do {
-                try await asyncServer.executeThenClose { inbound in
+                try await listener.executeThenClose { inbound in
                     try await withThrowingDiscardingTaskGroup { group in
-                        for try await localChannel in inbound {
+                        for try await localAsync in inbound {
                             group.addTask {
                                 await Self.handleAccepted(
-                                    localChannel,
+                                    localAsync,
                                     connected: connected,
                                     destHost: destHost, destPort: destPort)
                             }
@@ -103,31 +101,23 @@ actor LocalForwardListener {
         }
     }
 
-    /// 处理一个 accept 的本地连接：开 direct-tcpip 到目标 → 双向粘合。
+    /// 处理一个 accept 的本地连接（已在 childChannelInitializer 包成 NIOAsyncChannel）：
+    /// 开 direct-tcpip 到目标 → 双向粘合。
     private static func handleAccepted(
-        _ localChannel: Channel,
+        _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         connected: ConnectedClient,
         destHost: String, destPort: Int
     ) async {
         do {
-            // 目标地址快照（SOCKS5 / direct-tcpip 的 originator 用占位地址即可）。
-            let originator = try SocketAddress(ipAddress: "fe80::1", port: 22)
-            let directChannel = try await connected.target.createDirectTCPIPChannel(
-                using: SSHChannelType.DirectTCPIP(
-                    targetHost: destHost,
-                    targetPort: destPort,
-                    originatorAddress: originator),
-                initialize: { $0.eventLoop.makeSucceededVoidFuture() })
-
-            // 本地端开出站半关：响应排空后 TunnelGlue 的 outbound.finish() 向客户端发 FIN，
-            // 让客户端读到 EOF（默认 false 时 finish() 只本地结束、不发 FIN）。
-            // wrappingChannelSynchronously 须在各自 channel 的 EventLoop 上调用，经 submit 回到 EL。
-            let localAsync = try await localChannel.eventLoop.submit {
-                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                    wrappingChannelSynchronously: localChannel,
-                    configuration: .init(isOutboundHalfClosureEnabled: true))
-            }.get()
-            // 远端 direct-tcpip 是 SSH 通道，半关语义交由 NIOSSH/Citadel 默认处理，不在此开启。
+            // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错→
+            // 下方 catch 关本地 socket，客户端快速拿到 reset、不堆 CLOSE_WAIT）。
+            let directChannel = try await withForwardingTimeout(.seconds(10)) {
+                try await connected.openDirectTCPIP(host: destHost, port: destPort)
+            }
+            // 远端 direct-tcpip 是 SSH 通道；Citadel 的 DataToBufferCodec 已在该通道上开了
+            // allowRemoteHalfClosure，半关由其处理，这里不再设置。DB 是「服务端后说话」+
+            // NIOSSH 把入站缓进 pendingReads，故远端这侧不存在本地那种早期字节丢弃。
+            // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
             let remoteAsync = try await directChannel.eventLoop.submit {
                 try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
             }.get()
@@ -137,7 +127,7 @@ actor LocalForwardListener {
             AppLogger.error(
                 "本地转发开通道失败 → \(destHost):\(destPort)：\(error.localizedDescription)",
                 category: ForwardingLog.category)
-            try? await localChannel.close()
+            try? await localAsync.channel.close()
         }
     }
 

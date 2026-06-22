@@ -32,33 +32,40 @@ actor SOCKS5ForwardListener {
         let eventLoop = connected.target.eventLoop
         let connected = self.connected
 
-        let bootstrap = ServerBootstrap(group: eventLoop)
-            .serverChannelOption(ChannelOptions.backlog, value: 16)
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            // 半关键设(#6)：SOCKS 客户端发完请求半关写端(FIN)时不要整通道关闭，否则目标仍在
-            // 流式回包就被 glueRemote 取消截断。设 true 让对端 FIN 只让本地入站 EOF、出站仍可写。
-            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-            .childChannelInitializer { $0.eventLoop.makeSucceededVoidFuture() }
-
-        let serverChannel = try await bootstrap.bind(host: listenHost, port: listenPort).get()
-        self.serverChannel = serverChannel
+        // 同 LocalForwardListener（修早期字节丢弃竞态）：用 bind 的 async 重载，在
+        // childChannelInitializer 里、child 激活之前、于其 EL 上就把本地 socket 包成 NIOAsyncChannel
+        // —— SOCKS 客户端也是「先说话」(greeting)，handler 必须在第一个 read 之前装好，否则空窗里
+        // 被 autoRead 读丢。accept 循环拿到的就是已包好的 NIOAsyncChannel。
+        // isOutboundHalfClosureEnabled=true：glueRemote 在目标 EOF 后向 SOCKS 客户端发 FIN。
+        let listener: NIOAsyncChannel<NIOAsyncChannel<ByteBuffer, ByteBuffer>, Never>
+        do {
+            listener = try await ServerBootstrap(group: eventLoop)
+                .serverChannelOption(ChannelOptions.backlog, value: 16)
+                .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+                // 半关(#6)：对端 FIN 只让本地入站 EOF、出站仍可写（否则目标流式回包被截断）。
+                .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+                .bind(host: listenHost, port: listenPort) { childChannel in
+                    childChannel.eventLoop.makeCompletedFuture {
+                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                            wrappingChannelSynchronously: childChannel,
+                            configuration: .init(isOutboundHalfClosureEnabled: true))
+                    }
+                }
+        } catch {
+            throw error
+        }
+        self.serverChannel = listener.channel
 
         AppLogger.info("动态转发(SOCKS5) 已绑定 \(self.listenHost):\(self.listenPort)",
                        category: ForwardingLog.category)
 
-        // wrappingChannelSynchronously 内部 preconditionInEventLoop，须在 channel 的 EventLoop 上
-        // 调用；本方法在 actor 执行器（协作线程）上跑，经 eventLoop.submit 回到 EL 再包装。
-        let asyncServer = try await serverChannel.eventLoop.submit {
-            try NIOAsyncChannel<Channel, Never>(wrappingChannelSynchronously: serverChannel)
-        }.get()
-
         Task {
             do {
-                try await asyncServer.executeThenClose { inbound in
+                try await listener.executeThenClose { inbound in
                     try await withThrowingDiscardingTaskGroup { group in
-                        for try await localChannel in inbound {
+                        for try await localAsync in inbound {
                             group.addTask {
-                                await Self.handleAccepted(localChannel, connected: connected)
+                                await Self.handleAccepted(localAsync, connected: connected)
                             }
                         }
                     }
@@ -82,19 +89,13 @@ actor SOCKS5ForwardListener {
     /// 作用域管 direct-tcpip 通道：从桥读本地→目标、从 `remoteIn` 读目标→本地写回 `outbound`
     /// （`NIOAsyncChannelOutboundWriter` 是 `Sendable`，跨任务写本地出站安全）。
     private static func handleAccepted(
-        _ localChannel: Channel,
+        _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         connected: ConnectedClient
     ) async {
+        // 已在 childChannelInitializer 包好（半关已开）。底层 Channel 供握手状态机 / glueRemote
+        // 关闭与传参用。
+        let localChannel = localAsync.channel
         do {
-            // 本地端开出站半关：glueRemote 在目标 EOF 后 localOutbound.finish() 向 SOCKS 客户端
-            // 发 FIN（默认 false 时只本地结束写端、不发 FIN）。
-            // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
-            let localAsync = try await localChannel.eventLoop.submit {
-                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                    wrappingChannelSynchronously: localChannel,
-                    configuration: .init(isOutboundHalfClosureEnabled: true))
-            }.get()
-
             try await localAsync.executeThenClose { inbound, outbound in
                 var phase = HandshakePhase.greeting
                 var buffer: [UInt8] = []
@@ -198,16 +199,13 @@ actor SOCKS5ForwardListener {
             case .ok(let request, let usedBytes):
                 buffer.removeFirst(usedBytes)
 
-                // 开 direct-tcpip 到目标。
+                // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起）。
                 let directChannel: Channel
                 do {
-                    let originator = try SocketAddress(ipAddress: "fe80::1", port: 22)
-                    directChannel = try await connected.target.createDirectTCPIPChannel(
-                        using: SSHChannelType.DirectTCPIP(
-                            targetHost: request.host,
-                            targetPort: request.port,
-                            originatorAddress: originator),
-                        initialize: { $0.eventLoop.makeSucceededVoidFuture() })
+                    let targetHost = request.host, targetPort = request.port
+                    directChannel = try await withForwardingTimeout(.seconds(10)) {
+                        try await connected.openDirectTCPIP(host: targetHost, port: targetPort)
+                    }
                 } catch {
                     AppLogger.error(
                         "SOCKS5 开通道失败 → \(request.host):\(request.port)：\(error.localizedDescription)",

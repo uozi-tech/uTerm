@@ -45,6 +45,21 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
             command, maxResponseSize: 64_000, mergeStreams: true)
         return String(buffer: buffer)
     }
+
+    /// 在目标连接上开一条 direct-tcpip 通道到 `host:port`（`-L` / `-D` 每连接转发用）。
+    /// 与 `exec` / `close` 一样作为本 `@unchecked Sendable` 包装的方法 —— 避免把非
+    /// `Sendable` 的 `SSHClient` 漏出隔离域。originator 用占位地址（SSH 不据此路由）。
+    /// Citadel 已在返回通道上加好 `DataToBufferCodec`。**调用方应套
+    /// `withForwardingTimeout`**：半死传输上本调用可能无限挂起。
+    func openDirectTCPIP(host: String, port: Int) async throws -> Channel {
+        let originator = try SocketAddress(ipAddress: "fe80::1", port: 22)
+        return try await target.createDirectTCPIPChannel(
+            using: SSHChannelType.DirectTCPIP(
+                targetHost: host,
+                targetPort: port,
+                originatorAddress: originator),
+            initialize: { $0.eventLoop.makeSucceededVoidFuture() })
+    }
 }
 
 /// 终端与 SFTP 共享的 SSH 连接工厂。
