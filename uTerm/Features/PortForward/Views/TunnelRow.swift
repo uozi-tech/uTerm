@@ -119,13 +119,13 @@ struct TunnelRow: View {
     }
 
     private var flow: Text {
-        let src = Text("\(rule.listenHost):\(rule.listenPort)").foregroundStyle(UD.text)
+        let src = Text("\(rule.listenHost):\(String(rule.listenPort))").foregroundStyle(UD.text)
         if kind == .dynamic {
             return Text("\(src)\(Text(" · SOCKS5").foregroundStyle(UD.text4))")
         }
         let arrow = Text(kind.reverse ? "  ←  " : "  →  ")
             .foregroundStyle(isError ? UD.danger : kind.tint)
-        let dst = Text("\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(rule.destPort)" : "")")
+        let dst = Text("\(rule.destHost ?? "")\(rule.destPort > 0 ? ":\(String(rule.destPort))" : "")")
             .foregroundStyle(UD.text2)
         return Text("\(src)\(arrow)\(dst)")
     }

@@ -113,7 +113,7 @@ struct PortForwardListView: View {
     private var list: some View {
         ScrollView {
             if visible.isEmpty {
-                PFEmptyState(filtered: filter != nil) { editing = .new }
+                PFEmptyState(kind: filter) { editing = .new }
                     .padding(.top, 8)
             } else {
                 VStack(spacing: 0) {

@@ -231,12 +231,12 @@ struct ForwardEditorSheet: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 11))
                 .foregroundStyle(UD.danger)
-            Text("端口 \(conflict.port) 已被「\(conflict.occupant)」占用")
+            Text("端口 \(String(conflict.port)) 已被「\(conflict.occupant)」占用")
                 .font(.system(size: 11.5))
                 .foregroundStyle(UD.danger)
             if let suggested = suggestedPort {
                 Button { listenPortText = String(suggested) } label: {
-                    Text("改用 \(suggested)")
+                    Text("改用 \(String(suggested))")
                         .font(UD.mono(11))
                         .foregroundStyle(UD.accent)
                         .padding(.horizontal, 8)

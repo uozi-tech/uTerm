@@ -126,7 +126,7 @@ struct SSHConfigImportView: View {
                     if h.isWildcard { tag("通配", UD.text4) }
                     if row.existing { tag("已存在", UD.caution) }
                 }
-                Text("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(h.port)" +
+                Text("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(String(h.port))" +
                      (h.identityFile.map { "  ·  " + ($0 as NSString).lastPathComponent } ?? ""))
                     .font(UD.monoMetric).foregroundStyle(UD.text4)
                     .lineLimit(1).truncationMode(.middle)

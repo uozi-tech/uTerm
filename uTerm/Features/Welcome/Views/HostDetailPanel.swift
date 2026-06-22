@@ -59,7 +59,7 @@ struct HostDetailPanel: View {
     }
 
     private var endpointLine: some View {
-        Text("\(profile.username)@\(profile.host)\(Text(":\(profile.port)").foregroundColor(UD.text3))")
+        Text("\(profile.username)@\(profile.host)\(Text(":\(String(profile.port))").foregroundColor(UD.text3))")
             .font(.system(size: 12, design: .monospaced))
             .foregroundColor(UD.text2)
             .lineLimit(1)

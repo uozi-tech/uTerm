@@ -2,18 +2,24 @@ import SwiftUI
 
 // MARK: - 空状态（设计稿 PFEmpty）
 
-/// 端口转发空状态：虚线框 + 文案 +「新建转发」。`filtered` 区分「该类型暂无」与
-/// 「还没有任何规则」（对齐设计稿 `PFEmpty` 的两套文案）。
+/// 端口转发空状态：虚线框 + 文案 +「新建转发」。`kind` 区分「该类型暂无」与
+/// 「还没有任何规则」（对齐设计稿 `PFEmpty` 的两套文案）；副标题按类型复用
+/// `ForwardKind.desc`，避免「远程 -R」tab 误显「映射到本机」之类反向说明。
 struct PFEmptyState: View {
-    let filtered: Bool
+    /// 当前筛选类型；nil = 「全部」tab（即一条规则都没有）。
+    let kind: ForwardKind?
     let onAdd: () -> Void
+
+    private var subtitle: String {
+        kind?.desc ?? "把端口经 SSH 隧道在本机与远端之间打通，或开一个 SOCKS5 代理。"
+    }
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(filtered ? "该类型暂无转发规则" : "还没有端口转发规则")
+            Text(kind == nil ? "还没有端口转发规则" : "该类型暂无转发规则")
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text2)
-            Text("把远端数据库等服务映射到本机，或开一个 SOCKS5 代理。")
+            Text(subtitle)
                 .font(.system(size: 12))
                 .foregroundStyle(UD.text4)
                 .multilineTextAlignment(.center)
@@ -78,7 +84,7 @@ struct PortForwardDeleteConfirm: View {
 
     private var message: Text {
         let lead = Text("将移除这条 \(rule.kind.label) 规则").foregroundStyle(UD.text2)
-        let addr = Text(" \(rule.kind.flag) \(rule.listenHost):\(rule.listenPort)")
+        let addr = Text(" \(rule.kind.flag) \(rule.listenHost):\(String(rule.listenPort))")
             .font(UD.mono(12)).foregroundStyle(UD.text3)
         let tail = Text("。").foregroundStyle(UD.text2)
         return Text("\(lead)\(addr)\(tail)")
