@@ -46,8 +46,11 @@ actor SOCKS5ForwardListener {
         AppLogger.info("动态转发(SOCKS5) 已绑定 \(self.listenHost):\(self.listenPort)",
                        category: ForwardingLog.category)
 
-        let asyncServer = try NIOAsyncChannel<Channel, Never>(
-            wrappingChannelSynchronously: serverChannel)
+        // wrappingChannelSynchronously 内部 preconditionInEventLoop，须在 channel 的 EventLoop 上
+        // 调用；本方法在 actor 执行器（协作线程）上跑，经 eventLoop.submit 回到 EL 再包装。
+        let asyncServer = try await serverChannel.eventLoop.submit {
+            try NIOAsyncChannel<Channel, Never>(wrappingChannelSynchronously: serverChannel)
+        }.get()
 
         Task {
             do {
@@ -85,9 +88,12 @@ actor SOCKS5ForwardListener {
         do {
             // 本地端开出站半关：glueRemote 在目标 EOF 后 localOutbound.finish() 向 SOCKS 客户端
             // 发 FIN（默认 false 时只本地结束写端、不发 FIN）。
-            let localAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                wrappingChannelSynchronously: localChannel,
-                configuration: .init(isOutboundHalfClosureEnabled: true))
+            // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
+            let localAsync = try await localChannel.eventLoop.submit {
+                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                    wrappingChannelSynchronously: localChannel,
+                    configuration: .init(isOutboundHalfClosureEnabled: true))
+            }.get()
 
             try await localAsync.executeThenClose { inbound, outbound in
                 var phase = HandshakePhase.greeting
@@ -214,8 +220,10 @@ actor SOCKS5ForwardListener {
                 try await Self.writeReply(SOCKS5Handshake.connectReply(success: true), to: outbound)
 
                 // 远端粘合子任务：作用域管 direct-tcpip 通道，双向泵。
-                let remoteAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                    wrappingChannelSynchronously: directChannel)
+                // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
+                let remoteAsync = try await directChannel.eventLoop.submit {
+                    try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
+                }.get()
                 remoteTask = Task { [bridge] in
                     await Self.glueRemote(
                         remoteAsync,

@@ -76,8 +76,12 @@ actor LocalForwardListener {
 
         // 接受循环：把 server channel 包成 NIOAsyncChannel<本地 socket Channel>，
         // 每个新连接派一个子 Task 开 direct-tcpip 并粘合。
-        let asyncServer = try NIOAsyncChannel<Channel, Never>(
-            wrappingChannelSynchronously: serverChannel)
+        // NIOAsyncChannel(wrappingChannelSynchronously:) 内部有 preconditionInEventLoop，
+        // 必须在该 channel 的 EventLoop 上调用；本方法在 actor 执行器（协作线程）上跑，
+        // 故经 eventLoop.submit 回到 EL 再包装（否则 trap，见 1.4.1 崩溃）。
+        let asyncServer = try await serverChannel.eventLoop.submit {
+            try NIOAsyncChannel<Channel, Never>(wrappingChannelSynchronously: serverChannel)
+        }.get()
 
         Task {
             do {
@@ -117,12 +121,16 @@ actor LocalForwardListener {
 
             // 本地端开出站半关：响应排空后 TunnelGlue 的 outbound.finish() 向客户端发 FIN，
             // 让客户端读到 EOF（默认 false 时 finish() 只本地结束、不发 FIN）。
-            let localAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                wrappingChannelSynchronously: localChannel,
-                configuration: .init(isOutboundHalfClosureEnabled: true))
+            // wrappingChannelSynchronously 须在各自 channel 的 EventLoop 上调用，经 submit 回到 EL。
+            let localAsync = try await localChannel.eventLoop.submit {
+                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                    wrappingChannelSynchronously: localChannel,
+                    configuration: .init(isOutboundHalfClosureEnabled: true))
+            }.get()
             // 远端 direct-tcpip 是 SSH 通道，半关语义交由 NIOSSH/Citadel 默认处理，不在此开启。
-            let remoteAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                wrappingChannelSynchronously: directChannel)
+            let remoteAsync = try await directChannel.eventLoop.submit {
+                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
+            }.get()
 
             await TunnelGlue.pipe(localAsync, remoteAsync)
         } catch {
