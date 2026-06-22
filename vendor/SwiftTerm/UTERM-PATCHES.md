@@ -39,3 +39,19 @@ cell 的前景色按 WCAG 对比度向黑/白方向钳制。
 
 uTerm 侧入口：`TerminalTheme.applyColorScheme` 统一设
 `view.minimumContrastRatio = TerminalColorScheme.minimumContrastRatio`（4.5）。
+
+## 2. iOS 终端键盘可强制英文 ASCII
+
+上游 `iOSTerminalView.swift` 的 `keyboardType` 是 get-only 计算属性，恒返回
+`.default`（跟随用户当前语言键盘，可能弹出中文等候选栏）。移动端终端的命令输入
+应为纯 ASCII，故让该属性可写。
+
+涉及文件：
+
+- `Sources/SwiftTerm/iOS/iOSTerminalView.swift`
+  - `keyboardType` 由 get-only 计算属性改为可写存储属性
+    `public var keyboardType: UIKeyboardType = .default`（默认不变，保持上游语义）。
+
+uTerm 侧入口：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `makeUIView`
+设 `view.keyboardType = .asciiCapable`。联想 / 自动更正 / 智能标点上游已默认关闭
+（`autocorrectionType` 等均为 `.no`）。Agent（AI 模式）走独立 SwiftUI 输入框，不受影响。

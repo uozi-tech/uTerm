@@ -8,6 +8,10 @@ struct MobileRootView: View {
     @State private var store = MobileStore()
     /// host-key 信任挑战桥：终端 / SFTP 控制器共用一份，根视图据此弹出信任弹层。
     @State private var hostKeyRelay = HostKeyChallengeRelay()
+    /// 终端会话集合在根视图持有（高于 compact/regular 外壳切换），横屏切 size class 时不丢会话。
+    @State private var terminalSessions = TerminalSessions()
+    /// SFTP 会话同理在根视图持有，横屏切 size class 时不丢会话 / 不退回根目录。
+    @State private var sftpSession = MobileSFTPSession()
 
     var body: some View {
         @Bindable var store = store
@@ -20,6 +24,8 @@ struct MobileRootView: View {
         }
         .environment(store)
         .environment(hostKeyRelay)
+        .environment(terminalSessions)
+        .environment(sftpSession)
         .environment(\.mAccent, M.accent)
         .tint(M.accent)
         // ⌘K 硬件快捷键（iPad 外接键盘）：唤起命令面板。

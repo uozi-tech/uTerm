@@ -1593,12 +1593,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // iOS Keyboard input
     
     // UITextInputTraits
-    public var keyboardType: UIKeyboardType {
-        get {
-            .`default`
-        }
-    }
-    
+    // uTerm 补丁：上游此处为 get-only 计算属性恒返回 `.default`（跟随用户当前语言键盘，
+    // 可能弹出中文候选栏）。改为可写存储属性，让宿主能强制英文键盘（`.asciiCapable`）。
+    // 默认仍为 `.default`，保持上游语义不变。
+    public var keyboardType: UIKeyboardType = .`default`
+
     public var keyboardAppearance: UIKeyboardAppearance = .`default`
     public var returnKeyType: UIReturnKeyType = .`default`
     

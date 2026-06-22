@@ -1,20 +1,42 @@
 import SwiftUI
 import SwiftData
+import Observation
 import UniformTypeIdentifiers
 
 /// 分享面板用的可识别本地文件项。
 private struct ShareFileItem: Identifiable { let id = UUID(); let url: URL }
 
+/// SFTP 会话状态：把 `controller` / `activeTarget` 从 `SFTPScreen` 的 `@State` 上移到此处，由根视图
+/// `MobileRootView` 持有并注入。这样 iPhone Plus/Max 横屏切换 size class（compact ⇄ regular）
+/// 导致外壳在 `MobileTabShell` / `MobileSplitShell` 间切换、`SFTPScreen` 被重建时，SFTP 会话
+///（及其当前浏览路径）仍存活，不会被连带销毁而「横屏丢失会话、回到根目录」。
+/// 名字带 `Mobile` 前缀避开 Citadel 的 `SFTPSession`（控制器内部复用的真实远程会话）类型撞名。
+@MainActor
+@Observable
+final class MobileSFTPSession {
+    var controller = MobileSFTPController()
+    var activeTarget: PersistentIdentifier?
+}
+
 /// 文件标签：未选主机时给出主机列表；选定后用真实 SFTP 会话浏览远程文件树。
 struct SFTPScreen: View {
     @Environment(MobileStore.self) private var store
     @Environment(HostKeyChallengeRelay.self) private var relay
+    @Environment(MobileSFTPSession.self) private var session
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
 
-    @State private var controller = MobileSFTPController()
-    @State private var activeTarget: PersistentIdentifier?
+    // 会话状态存活在 `session`（根视图持有），跨外壳切换不丢；这里以计算属性透出，
+    // 沿用原有 `controller` / `activeTarget` 读写点，改动最小。
+    private var controller: MobileSFTPController {
+        get { session.controller }
+        nonmutating set { session.controller = newValue }
+    }
+    private var activeTarget: PersistentIdentifier? {
+        get { session.activeTarget }
+        nonmutating set { session.activeTarget = newValue }
+    }
     @State private var pendingDelete: RemoteEntry?
     @State private var actionEntry: RemoteEntry?
     @State private var renameEntry: RemoteEntry?

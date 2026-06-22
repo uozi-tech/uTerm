@@ -22,15 +22,25 @@ final class MobileTerminalController {
     ///（Ctrl+L/R/C/U……）。底层复用 SwiftTerm `TerminalView.controlModifier`——它在 insertText
     /// 里消费并自动复位，复位时发 `.terminalViewControlModifierReset`，据此把按钮高亮同步关掉。
     var controlArmed = false
+    /// Alt/Meta 粘滞修饰是否已「上膛」：与 ctrl 对称，下一个软键盘字符前发 ESC 前缀
+    ///（Alt+f/b/d/. 等 readline/emacs 词操作）。底层复用 SwiftTerm `TerminalView.metaModifier`——
+    /// 它在 insertText 里发 `\u{1b}` + 字符并自动复位，复位时发 `.terminalViewMetaModifierReset`。
+    /// 注：粘滞修饰只作用于系统软键盘字符；点键盘条上的快捷键会先 `clearStickyModifiers()`。
+    var altArmed = false
 
-    @ObservationIgnored private(set) weak var terminalView: SwiftTerm.TerminalView?
+    // 强引用：控制器持有终端视图，使其跨「外壳切换 / TerminalScreen 重建」存活，保活
+    // SwiftTerm 内部的屏幕缓冲与回滚——iPhone Plus/Max 横屏翻 size class 时外壳在
+    // Tab/Split 间切换、TerminalScreen 重建，复用同一视图既不空白也不断连。
+    // 无循环引用：SwiftTerm 的 `terminalDelegate` 是 weak，view 不强持 coordinator。
+    @ObservationIgnored private(set) var terminalView: SwiftTerm.TerminalView?
     @ObservationIgnored private var connection: SSHConnection?
     @ObservationIgnored private var outputTask: Task<Void, Never>?
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
-    // nonisolated(unsafe)：在 nonisolated deinit 里清理这个非 Sendable 的观察者 token。
+    // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var metaResetObserver: NSObjectProtocol?
 
     /// 记下首次建连参数，供失败后 `restart()` 在同一控制器 / 同一终端视图上重连。
     @ObservationIgnored private var lastProfile: ServerProfile?
@@ -39,15 +49,21 @@ final class MobileTerminalController {
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
-        installControlResetObserverIfNeeded()
+        installModifierResetObserversIfNeeded()
     }
 
-    // MARK: Ctrl 粘滞修饰
+    // MARK: Ctrl / Alt 粘滞修饰
 
     /// 点 ctrl 键：切换「上膛」状态并同步给 SwiftTerm 视图。
     func toggleControl() {
         controlArmed.toggle()
         terminalView?.controlModifier = controlArmed
+    }
+
+    /// 点 alt 键：切换「上膛」状态并同步给 SwiftTerm 视图。
+    func toggleAlt() {
+        altArmed.toggle()
+        terminalView?.metaModifier = altArmed
     }
 
     /// 取消待生效的 Ctrl（点了其它快捷键时调用，避免 Ctrl 漏到后续按键）。
@@ -57,19 +73,45 @@ final class MobileTerminalController {
         terminalView?.controlModifier = false
     }
 
-    /// SwiftTerm 在软键盘按下后会把 controlModifier 复位并发通知；据此关掉按钮高亮。
-    private func installControlResetObserverIfNeeded() {
-        guard ctrlResetObserver == nil else { return }
-        ctrlResetObserver = NotificationCenter.default.addObserver(
-            forName: .terminalViewControlModifierReset, object: nil, queue: .main
-        ) { [weak self] note in
-            // queue: .main → 必在主线程回调，可直接断言 MainActor 同步触碰 UI 状态。
-            // 只把 Sendable 的对象身份带过隔离边界（不要把非 Sendable 的 note 捕获进 MainActor 闭包）。
-            let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
-            MainActor.assumeIsolated {
-                guard let self, let tv = self.terminalView,
-                      objID == ObjectIdentifier(tv) else { return }
-                self.controlArmed = false
+    /// 取消待生效的 Alt。
+    func clearAlt() {
+        guard altArmed else { return }
+        altArmed = false
+        terminalView?.metaModifier = false
+    }
+
+    /// 取消所有粘滞修饰（点键盘条快捷键前调用——修饰只作用于系统软键盘字符）。
+    func clearStickyModifiers() {
+        clearControl()
+        clearAlt()
+    }
+
+    /// SwiftTerm 在软键盘按下后会把 control/meta 修饰复位并发通知；据此关掉按钮高亮。
+    private func installModifierResetObserversIfNeeded() {
+        if ctrlResetObserver == nil {
+            ctrlResetObserver = NotificationCenter.default.addObserver(
+                forName: .terminalViewControlModifierReset, object: nil, queue: .main
+            ) { [weak self] note in
+                // queue: .main → 必在主线程回调，可直接断言 MainActor 同步触碰 UI 状态。
+                // 只把 Sendable 的对象身份带过隔离边界（不要把非 Sendable 的 note 捕获进 MainActor 闭包）。
+                let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
+                MainActor.assumeIsolated {
+                    guard let self, let tv = self.terminalView,
+                          objID == ObjectIdentifier(tv) else { return }
+                    self.controlArmed = false
+                }
+            }
+        }
+        if metaResetObserver == nil {
+            metaResetObserver = NotificationCenter.default.addObserver(
+                forName: .terminalViewMetaModifierReset, object: nil, queue: .main
+            ) { [weak self] note in
+                let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
+                MainActor.assumeIsolated {
+                    guard let self, let tv = self.terminalView,
+                          objID == ObjectIdentifier(tv) else { return }
+                    self.altArmed = false
+                }
             }
         }
     }
@@ -185,6 +227,7 @@ final class MobileTerminalController {
 
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
+        if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
         outputTask?.cancel(); exitTask?.cancel()
     }
 }

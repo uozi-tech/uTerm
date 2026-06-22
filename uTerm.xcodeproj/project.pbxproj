@@ -11,6 +11,7 @@
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
+		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
@@ -86,7 +87,6 @@
 				DesignKit/Overlays/UDMenubarPanel.swift,
 				DesignKit/Overlays/UDMetricsPopover.swift,
 				DesignKit/Overlays/UDSessionsDropdown.swift,
-				Features/Agent/AssistantModel.swift,
 				Features/Agent/Views/AgentSidebar.swift,
 				Features/Agent/Views/AssistantView.swift,
 				Features/CommandPalette/CommandPaletteHost.swift,
@@ -174,7 +174,6 @@
 				Features/SFTP/Views/SFTPStatusBar.swift,
 				Features/SFTP/Views/SFTPTransfersDock.swift,
 				Features/SFTP/Views/SFTPWindowView.swift,
-				Features/Terminal/AgentSafety.swift,
 				Features/Terminal/CopyableTerminalView.swift,
 				Features/Terminal/TerminalColorScheme.swift,
 				Features/Terminal/TerminalCursorShape.swift,
@@ -283,6 +282,7 @@
 				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
 				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
+				10C0DE0000000000000000E5 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -377,6 +377,7 @@
 				10C0DE0000000000000000D2 /* Citadel */,
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
 				10C0DE0000000000000000D4 /* _CryptoExtras */,
+				10C0DE0000000000000000D5 /* Markdown */,
 			);
 			productName = uTermMobile;
 			productReference = 10C0DE0000000000000000A6 /* uTermMobile.app */;
@@ -1093,6 +1094,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */;
 			productName = _CryptoExtras;
+		};
+		10C0DE0000000000000000D5 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;

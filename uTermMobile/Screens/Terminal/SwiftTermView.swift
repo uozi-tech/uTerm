@@ -7,7 +7,7 @@ import UIKit
 /// 配色随 app 外观（日 / 夜）自动取 VS Code Light / Dark（对齐 macOS `TerminalColorScheme`）。
 struct SwiftTermView: UIViewRepresentable {
     let controller: MobileTerminalController
-    var fontSize: CGFloat = 13
+    var fontSize: CGFloat = 11
     /// 是否为当前激活视图（终端模式）。Agent 模式时终端被移出屏外，传 false → 主动 resign；
     /// 否则 SwiftTerm 的 TerminalView 会一直抢第一响应者，把终端键盘悬在 Agent 输入框上。
     var isActive: Bool = true
@@ -17,16 +17,27 @@ struct SwiftTermView: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
-        let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        let view = SwiftTerm.TerminalView(frame: .zero, font: font)
+        // 复用控制器已持有的终端视图：横屏翻 size class 会令外壳在 Tab/Split 间切换、
+        // TerminalScreen 连带重建——复用同一视图可保活 SwiftTerm 的屏幕缓冲与回滚，
+        // 既不空白也不断连。仅首次创建新视图。
+        let isFresh = controller.terminalView == nil
+        let view = controller.terminalView ?? SwiftTerm.TerminalView(
+            frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
+        // 把（可能是新建的）coordinator 接上：复用旧视图时旧 coordinator 已随旧表示层销毁。
         view.terminalDelegate = context.coordinator
+        // 终端强制英文 ASCII 键盘：避免跟随系统语言弹出中文等候选栏（命令输入应纯 ASCII）。
+        // 联想 / 自动更正 / 智能标点已由 SwiftTerm 默认关闭（autocorrection 等均为 .no）。
+        // 注：Agent（AI 模式）走独立的 SwiftUI 输入框，不受此限制。
+        view.keyboardType = .asciiCapable
         // 去掉 SwiftTerm 自带的键盘附加栏（esc/ctrl/tab/F1/方向键……），它和我们自绘的
         // `TerminalKeyBar` 重复堆两层。置 nil 后键盘上方只留 `TerminalKeyBar` 一层。
         view.inputAccessoryView = nil
         view.minimumContrastRatio = MTerminalColors.minimumContrastRatio
         apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: view)
-        // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁）。
-        view.feed(text: "\u{1B}[2 q")
+        if isFresh {
+            // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁），仅新建时设一次。
+            view.feed(text: "\u{1B}[2 q")
+        }
         controller.attach(view)
         // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态、且非连接中页期间）。
         if isActive, autoFocus { DispatchQueue.main.async { _ = view.becomeFirstResponder() } }
@@ -36,6 +47,11 @@ struct SwiftTermView: UIViewRepresentable {
     func updateUIView(_ uiView: SwiftTerm.TerminalView, context: Context) {
         // 外观切换（日 / 夜）时实时重应用配色。
         apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: uiView)
+        // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时实时换字（换字会触发
+        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。阈值过滤避免无意义重排。
+        if abs(uiView.font.pointSize - fontSize) > 0.1 {
+            uiView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
         // Agent 模式（isActive=false）：主动收键盘，否则终端键盘盖住 Agent 输入框。
         if !isActive, uiView.isFirstResponder { _ = uiView.resignFirstResponder() }
     }

@@ -65,12 +65,8 @@ nonisolated struct OpenFileSnapshot: Codable, Equatable, Sendable {
     var mtimeWhenLoaded: Date?
 }
 
-/// Agent inspector 的轻量状态。历史消息本体存在 SwiftData `ChatSession` 中；
-/// workspace 快照只记录当前会话 id 和输入框草稿。
-nonisolated struct AgentSnapshot: Codable, Equatable, Sendable {
-    var currentSessionID: UUID?
-    var input: String
-}
+// `AgentSnapshot` 已抽到共享文件 `Features/Agent/AgentSnapshot.swift`
+// （随 `AssistantModel` 一并进入移动端 target）。
 
 /// 整个工作区的快照。
 nonisolated struct WorkspaceSnapshot: Codable, Equatable, Sendable {

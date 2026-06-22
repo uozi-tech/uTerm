@@ -6,7 +6,8 @@ import Observation
 enum MTerminalMode: Hashable { case terminal, agent }
 
 /// 一个终端会话标签：一台主机 + 独立 `MobileTerminalController`（独立 SSH 会话）+
-/// 该会话专属的 `MobileAgentController`（Agent 模式对话，跨「终端 / Agent」切换保活）。
+/// 该会话专属的 `AssistantModel`（复用 macOS Agent 状态机：流式 Markdown + `run_command`
+/// 工具调用 + 审批 / 工具循环，跨「终端 / Agent」切换保活）。
 /// 引用类型：放进 `@State` 数组里，跨标签切换时会话与回滚缓冲都保活。
 /// `@Observable` —— `mode` 切换驱动标签栏开关与会话主体重渲染。
 @MainActor
@@ -15,23 +16,45 @@ final class TermTab: Identifiable {
     let id = UUID()
     let host: ServerProfile
     let controller = MobileTerminalController()
-    let agent = MobileAgentController()
+    let agent = AssistantModel()
+    /// Agent 在途驱动 Task 集：会话关闭时取消，停掉在途 LLM 流 / 工具循环（见 `MAgentTaskBag`）。
+    let agentTasks = MAgentTaskBag()
     /// 当前是纯终端还是 Agent 模式。
     var mode: MTerminalMode = .terminal
     init(host: ServerProfile) { self.host = host }
+}
+
+/// 终端会话集合：把 `tabs` / `activeID` 从 `TerminalScreen` 的 `@State` 上移到此处，由根视图
+/// `MobileRootView` 持有并注入。这样 iPhone Plus/Max 横屏切换 size class（compact ⇄ regular）
+/// 导致外壳在 `MobileTabShell` / `MobileSplitShell` 间切换、`TerminalScreen` 被重建时，会话
+/// （及其 SSH 连接 / 回滚缓冲）仍存活，不会被连带销毁而「横屏自动关闭」。
+@MainActor
+@Observable
+final class TerminalSessions {
+    var tabs: [TermTab] = []
+    var activeID: UUID?
 }
 
 /// 终端标签：无会话时给出主机列表；有会话时多 Tab 并存，可新建 / 切换 / 关闭。
 struct TerminalScreen: View {
     @Environment(MobileStore.self) private var store
     @Environment(HostKeyChallengeRelay.self) private var relay
+    @Environment(TerminalSessions.self) private var sessions
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
     @Environment(\.colorScheme) private var colorScheme
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
 
-    @State private var tabs: [TermTab] = []
-    @State private var activeID: UUID?
+    // 会话状态存活在 `sessions`（根视图持有），跨外壳切换不丢；这里以计算属性透出，
+    // 沿用原有 `tabs` / `activeID` 读写点，改动最小。
+    private var tabs: [TermTab] {
+        get { sessions.tabs }
+        nonmutating set { sessions.tabs = newValue }
+    }
+    private var activeID: UUID? {
+        get { sessions.activeID }
+        nonmutating set { sessions.activeID = newValue }
+    }
     @State private var picking = false
     /// 会话进行中时返回主机列表（会话不断、仍可回到）。
     @State private var showPicker = false
@@ -84,7 +107,7 @@ struct TerminalScreen: View {
             guard let id else { return }
             if let tab = tabs.first(where: { $0.id == id }) {
                 tab.controller.resignKeyboard()
-                tab.agent.stop()
+                tab.agentTasks.cancelAll()
             }
             tabs.removeAll { $0.id == id }
             if activeID == id { activeID = tabs.last?.id }
@@ -138,7 +161,7 @@ struct TerminalScreen: View {
         if let tab = tabs.first(where: { $0.id == id }) {
             tab.controller.resignKeyboard()
             tab.controller.close()
-            tab.agent.stop()
+            tab.agentTasks.cancelAll()
         }
         tabs.removeAll { $0.id == id }
         if activeID == id { activeID = tabs.last?.id }
@@ -178,7 +201,8 @@ struct TerminalScreen: View {
                           onAgent: toggleAgent)
             ZStack {
                 ForEach(tabs) { tab in
-                    TerminalSessionBody(tab: tab, onClose: { closeTab(tab.id) })
+                    TerminalSessionBody(tab: tab, isActive: tab.id == activeID,
+                                        onClose: { closeTab(tab.id) })
                         .opacity(tab.id == activeID ? 1 : 0)
                         .allowsHitTesting(tab.id == activeID)
                 }
@@ -365,6 +389,8 @@ struct SessionTabBar: View {
 
 struct TerminalSessionBody: View {
     let tab: TermTab
+    /// 该会话是否为当前激活标签（用于 Agent 仅在前台自动批准命令）。
+    var isActive: Bool = false
     var onClose: () -> Void
     @Environment(MobileStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
@@ -374,7 +400,9 @@ struct TerminalSessionBody: View {
     var body: some View {
         ZStack {
             // Agent 层（底）：始终挂载，保活对话 / 草稿 / 滚动位置。
-            MobileAgentChat(controller: tab.agent, serverContext: serverContext)
+            // isActive 仅在「激活标签 + Agent 模式」时为真——后台标签不在 .auto 档自动执行命令。
+            MobileAgentChat(model: tab.agent, host: tab.host, tasks: tab.agentTasks,
+                            isActive: isActive && tab.mode == .agent, serverContext: serverContext)
                 .opacity(tab.mode == .agent ? 1 : 0)
                 .allowsHitTesting(tab.mode == .agent)
             // 终端层（顶）：SwiftTerm 是 UIViewRepresentable，其 UIView 会无视 ZStack 顺序盖在
@@ -395,13 +423,27 @@ struct TerminalSessionBody: View {
             } else {
                 VStack(spacing: 0) {
                     // 连接中页期间不自动弹键盘（autoFocus=false）；中转页撤下后由终端屏重新聚焦。
-                    SwiftTermView(controller: tab.controller, isActive: tab.mode == .terminal,
-                                  autoFocus: store.connecting == nil)
-                        .background(terminalBg)
+                    // 字号随可用宽度自适应（窄屏更小、宽屏 / iPad / 分屏更大）。
+                    GeometryReader { geo in
+                        SwiftTermView(controller: tab.controller,
+                                      fontSize: adaptiveFontSize(width: geo.size.width),
+                                      isActive: tab.mode == .terminal,
+                                      autoFocus: store.connecting == nil)
+                    }
+                    .background(terminalBg)
                     TerminalKeyBar(controller: tab.controller)
                 }
             }
         }
+    }
+
+    /// 终端字号随可用宽度自适应：以 iPhone 14/15 竖屏逻辑宽度 390pt 为参考点对应 11pt 基准，
+    /// 按比例缩放并夹在可读区间 [9, 16]——窄屏（SE）字更小以容纳更多列，宽屏（Pro Max /
+    /// iPad / 分屏）字更大。
+    private func adaptiveFontSize(width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 11 }
+        let reference: CGFloat = 390, base: CGFloat = 11
+        return min(max(base * width / reference, 9), 16)
     }
 
     private func failedView(_ msg: String) -> some View {
@@ -437,48 +479,140 @@ struct TerminalSessionBody: View {
 struct TerminalKeyBar: View {
     let controller: MobileTerminalController
     @Environment(\.mAccent) private var accent
+    /// 是否展开多行面板（默认收起为单行；最左 ∧/∨ 切换）。
+    @State private var expanded = false
 
-    private let keys: [(String, String)] = [
-        ("esc", "\u{1b}"), ("tab", "\t"), ("⌃C", "\u{03}"), ("⌃D", "\u{04}"),
-        ("↑", "\u{1b}[A"), ("↓", "\u{1b}[B"), ("←", "\u{1b}[D"), ("→", "\u{1b}[C"),
-        ("/", "/"), ("|", "|"), ("~", "~"), ("-", "-"),
+    /// 一个快捷键：`label` 显示文本、`send` 发送给终端的字节序列。
+    private struct TermKey: Identifiable {
+        let label: String
+        let send: String
+        var id: String { label }
+    }
+
+    // 紧凑行常驻的高频键（横向滚动）。
+    private let quickKeys: [TermKey] = [
+        .init(label: "esc", send: "\u{1b}"), .init(label: "tab", send: "\t"),
+        .init(label: "←", send: "\u{1b}[D"), .init(label: "↑", send: "\u{1b}[A"),
+        .init(label: "↓", send: "\u{1b}[B"), .init(label: "→", send: "\u{1b}[C"),
+        .init(label: "⌃C", send: "\u{03}"), .init(label: "/", send: "/"),
+        .init(label: "|", send: "|"), .init(label: "~", send: "~"), .init(label: "-", send: "-"),
     ]
+    // 展开面板：导航键（home/end 用 xterm 普通光标态序列）。
+    private let navKeys: [TermKey] = [
+        .init(label: "home", send: "\u{1b}[H"), .init(label: "end", send: "\u{1b}[F"),
+        .init(label: "pgUp", send: "\u{1b}[5~"), .init(label: "pgDn", send: "\u{1b}[6~"),
+        .init(label: "del", send: "\u{1b}[3~"), .init(label: "ins", send: "\u{1b}[2~"),
+    ]
+    // 展开面板：常用 Ctrl 组合。
+    private let ctrlKeys: [TermKey] = [
+        .init(label: "^A", send: "\u{01}"), .init(label: "^C", send: "\u{03}"),
+        .init(label: "^D", send: "\u{04}"), .init(label: "^E", send: "\u{05}"),
+        .init(label: "^K", send: "\u{0b}"), .init(label: "^L", send: "\u{0c}"),
+        .init(label: "^R", send: "\u{12}"), .init(label: "^U", send: "\u{15}"),
+        .init(label: "^W", send: "\u{17}"), .init(label: "^Z", send: "\u{1a}"),
+    ]
+    // 展开面板：功能键（F1–F4 用 SS3，F5–F12 用 CSI ~ 序列，对齐 xterm）。
+    private let fnKeys: [TermKey] = [
+        .init(label: "F1", send: "\u{1b}OP"), .init(label: "F2", send: "\u{1b}OQ"),
+        .init(label: "F3", send: "\u{1b}OR"), .init(label: "F4", send: "\u{1b}OS"),
+        .init(label: "F5", send: "\u{1b}[15~"), .init(label: "F6", send: "\u{1b}[17~"),
+        .init(label: "F7", send: "\u{1b}[18~"), .init(label: "F8", send: "\u{1b}[19~"),
+        .init(label: "F9", send: "\u{1b}[20~"), .init(label: "F10", send: "\u{1b}[21~"),
+        .init(label: "F11", send: "\u{1b}[23~"), .init(label: "F12", send: "\u{1b}[24~"),
+    ]
+    // 展开面板：常用 shell 符号（label 即发送内容）。
+    private let symbolKeys: [TermKey] = [
+        "/", "\\", "|", "~", "-", "_", "=", "+", ":", ";", ",", ".", "?", "!",
+        "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">",
+    ].map { TermKey(label: $0, send: $0) }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if expanded {
+                expandedPanel
+                Rectangle().fill(M.border).frame(height: 1)
+            }
+            compactRow
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .animation(.easeOut(duration: 0.18), value: expanded)
+    }
+
+    // MARK: 紧凑行（始终可见）
+
+    private var compactRow: some View {
         HStack(spacing: 6) {
-            // Ctrl 粘滞修饰键：常驻最左、不随横向滚动。点亮后下一个软键盘字符按住 Ctrl 发送
-            //（如 Ctrl+L / Ctrl+R / Ctrl+U）；再点一次或点其它快捷键即取消。
+            // 展开 / 收起多行面板。
+            Button { expanded.toggle() } label: {
+                keyCap(expanded ? "∨" : "∧", active: expanded)
+            }
+            .buttonStyle(MPressStyle())
+            // Ctrl 粘滞修饰：点亮后下一个软键盘字符按住 Ctrl 发送（Ctrl+L/R/U……）；点其它快捷键取消。
             Button { controller.toggleControl() } label: {
                 keyCap("ctrl", active: controller.controlArmed)
+            }
+            .buttonStyle(MPressStyle())
+            // Alt/Meta 粘滞修饰：点亮后下一个软键盘字符前发 ESC（Alt+f/b/d/. ……）。
+            Button { controller.toggleAlt() } label: {
+                keyCap("alt", active: controller.altArmed)
             }
             .buttonStyle(MPressStyle())
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(keys, id: \.0) { key in
-                        Button {
-                            controller.clearControl()
-                            controller.sendText(key.1)
-                        } label: {
-                            keyCap(key.0, active: false)
-                        }
-                        .buttonStyle(MPressStyle())
+                    ForEach(quickKeys) { key in
+                        Button { tap(key) } label: { keyCap(key.label, active: false) }
+                            .buttonStyle(MPressStyle())
                     }
                 }
                 .padding(.trailing, 10)
             }
         }
         .padding(.leading, 10).padding(.vertical, 7)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
     }
 
-    /// 单个键帽样式；`active` 时用强调色描边+底色（ctrl 上膛态）。
-    private func keyCap(_ text: String, active: Bool) -> some View {
+    // MARK: 展开面板（多行网格，纵向可滚）
+
+    private var expandedPanel: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                section("导航", navKeys)
+                section("Ctrl", ctrlKeys)
+                section("功能键", fnKeys)
+                section("符号", symbolKeys)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 10)
+        }
+        .frame(maxHeight: 220)
+    }
+
+    private func section(_ title: String, _ keys: [TermKey]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(M.sans(11, weight: .semibold)).foregroundStyle(M.text3)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 46), spacing: 6)], spacing: 6) {
+                ForEach(keys) { key in
+                    Button { tap(key) } label: { keyCap(key.label, active: false, expand: true) }
+                        .buttonStyle(MPressStyle())
+                }
+            }
+        }
+    }
+
+    /// 发送一个快捷键：先清掉粘滞修饰（修饰只作用于系统软键盘字符），再发字节序列。
+    private func tap(_ key: TermKey) {
+        controller.clearStickyModifiers()
+        controller.sendText(key.send)
+    }
+
+    /// 单个键帽样式；`active` 时用强调色描边+底色（修饰上膛态）。`expand` 时撑满网格列宽。
+    private func keyCap(_ text: String, active: Bool, expand: Bool = false) -> some View {
         Text(text)
             .font(M.mono(13, weight: .medium))
             .foregroundStyle(active ? accent : M.text)
-            .padding(.horizontal, 12).frame(height: 34)
+            .lineLimit(1)
+            .padding(.horizontal, expand ? 4 : 12)
+            .frame(maxWidth: expand ? .infinity : nil, minHeight: 34, maxHeight: 34)
             .background(active ? accent.opacity(0.15) : M.panelHi)
             .overlay(RoundedRectangle(cornerRadius: 8)
                 .stroke(active ? accent.opacity(0.5) : M.border, lineWidth: 1))
