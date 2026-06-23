@@ -94,6 +94,9 @@ struct ConnectingCoverView: View {
     @State private var finishing = false
     /// 连接态最短可见（~0.6s）后置真：瞬连时也先让连接动画走一段，避免状态一闪而过。
     @State private var minShown = false
+    /// 连接耗时过长（~5s 仍未成功/失败）后露出「返回」逃生口：快速连接不显示，
+    /// 保留「不可中途打断」的设计意图；卡在某一握手阶段（如认证）时给用户退路。
+    @State private var canCancel = false
 
     private var isSftp: Bool { request.kind == .sftp }
     private var host: ServerProfile { request.host }
@@ -141,6 +144,13 @@ struct ConnectingCoverView: View {
         .task(id: request.attempt) { stageProgress = 0; await pace() }
         // 连接态最短可见时长。
         .task { try? await Task.sleep(nanoseconds: 600_000_000); minShown = true }
+        // 连接耗时过长后露出「返回」；keyed by attempt → 重试时复位重新计时。
+        .task(id: request.attempt) {
+            canCancel = false
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            canCancel = true
+        }
         // 已连接即闩锁（连上后即便立刻断开也按成功收尾，会话自身再展示断开态）。
         .onChange(of: connectedNow) { _, c in if c { finishing = true } }
         .onAppear { if connectedNow { finishing = true } }
@@ -154,6 +164,7 @@ struct ConnectingCoverView: View {
         .animation(.smooth(duration: 0.32), value: success)
         .animation(.smooth(duration: 0.3), value: failureMessage != nil)
         .animation(.smooth(duration: 0.3), value: finishing)
+        .animation(.smooth(duration: 0.3), value: canCancel)
     }
 
     // 计时只推进到「认证」一项激活（解析 / 建立安全连接 两项标完成是允许的近似），
@@ -275,9 +286,17 @@ struct ConnectingCoverView: View {
                 .frame(maxWidth: 320)
             }
             .transition(.opacity)
+        } else if canCancel && !finishing {
+            // 连接耗时过长仍未成功/失败：露出「返回」逃生口，避免卡在某一握手阶段无法退出。
+            VStack(spacing: 10) {
+                Text("连接耗时较长，可返回重试")
+                    .font(M.sans(12.5)).foregroundStyle(M.text4)
+                MBtn(title: "返回", kind: .secondary, full: true, height: 48, action: onCancel)
+                    .frame(maxWidth: 320)
+            }
+            .transition(.opacity)
         }
-        // 连接中 / 成功态：底部留空（取消按钮已移除——连接不可中途中断，
-        // 仅失败时给「返回 / 重试」）。固定高度仍保留，三态切换中部不位移。
+        // 连接中（5s 内）/ 成功态：底部留空（不可中途中断）。固定高度仍保留，切换中部不位移。
     }
 }
 
