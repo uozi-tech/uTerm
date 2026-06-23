@@ -25,6 +25,18 @@ final class ForwardingCoordinator {
     /// `session.start` 前先 `await` 它。connect 只发生一次（并发 await 同一 Task），
     /// 消除「connect 还在挂起、start 先跑」导致的虚假「转发连接尚未建立」错误。
     @ObservationIgnored private var connectTasks: [UUID: Task<Void, Error>] = [:]
+    /// 每台主机的「自动重连上下文」：重建会话所需的 server/relay/modelContainer + 当前
+    /// **期望运行**的规则快照。看门狗判死后据此自动重连（见 `probeConnectionHealth`）。
+    /// 规则在 start/autostart 时加入、stop 时移除、teardown 时整条清掉 —— 用户关掉的规则
+    /// 或关掉的窗口不再自动重连。
+    @ObservationIgnored private var reconnectContexts: [UUID: ReconnectContext] = [:]
+
+    private struct ReconnectContext {
+        let server: ServerProfile
+        let relay: HostKeyChallengeRelay
+        let modelContainer: ModelContainer
+        var rules: [UUID: ForwardingRuleSnapshot]
+    }
 
     init() {}
 
@@ -63,6 +75,7 @@ final class ForwardingCoordinator {
         for rule in autostart {
             ruleServer[rule.id] = server.id
             runtime[rule.id] = .starting
+            rememberForReconnect(rule, server: server, relay: relay, modelContainer: modelContainer)
         }
         // 单 Task：先 await connect 屏障，再依次开各隧道；connect 失败 → 把这批
         // 自启规则统一标成分类后的 .error（真实原因），不再卡在 generic 状态。
@@ -94,6 +107,7 @@ final class ForwardingCoordinator {
         }
         ruleServer[rule.id] = server.id
         runtime[rule.id] = .starting
+        rememberForReconnect(rule, server: server, relay: relay, modelContainer: modelContainer)
         // 单 Task：先 await connect 屏障，再开隧道；只有 connect 失败才在此处分类报 error
         // （隧道自身的 active/error 由 session.start 经 onStatus 回报）。
         Task { @MainActor in
@@ -109,6 +123,10 @@ final class ForwardingCoordinator {
 
     /// 停止单条规则（行开关关闭）。
     func stop(_ ruleID: UUID) {
+        // 用户主动停 → 不再是「期望运行」，从自动重连上下文移除。
+        if let serverID = ruleServer[ruleID] {
+            reconnectContexts[serverID]?.rules[ruleID] = nil
+        }
         guard let serverID = ruleServer[ruleID], let session = sessions[serverID] else {
             runtime[ruleID] = .inactive
             return
@@ -129,6 +147,8 @@ final class ForwardingCoordinator {
     func teardown(serverID: UUID) {
         // 取消并丢弃 connect 屏障，使重新打开时重新发起连接。
         connectTasks.removeValue(forKey: serverID)?.cancel()
+        // 窗口关 / 主机断 → 不再自动重连该主机。
+        reconnectContexts[serverID] = nil
         guard let session = sessions.removeValue(forKey: serverID) else { return }
         // 清理该主机所有规则的运行时状态。
         for (ruleID, owner) in ruleServer where owner == serverID {
@@ -155,6 +175,21 @@ final class ForwardingCoordinator {
         connectTasks[serverID]?.cancel()
         connectTasks[serverID] = nil
         sessions[serverID] = nil
+    }
+
+    /// 记住一条「期望运行」的规则 + 其重建上下文，供看门狗判死后自动重连。
+    private func rememberForReconnect(_ rule: ForwardingRuleSnapshot,
+                                     server: ServerProfile,
+                                     relay: HostKeyChallengeRelay,
+                                     modelContainer: ModelContainer) {
+        if var ctx = reconnectContexts[server.id] {
+            ctx.rules[rule.id] = rule
+            reconnectContexts[server.id] = ctx
+        } else {
+            reconnectContexts[server.id] = ReconnectContext(
+                server: server, relay: relay, modelContainer: modelContainer,
+                rules: [rule.id: rule])
+        }
     }
 
     /// 认证解析失败的兜底错误：交给 `ForwardingError.classify` 归类成 `.auth`。
@@ -242,21 +277,39 @@ final class ForwardingCoordinator {
 // MARK: - 连接健康探测（ConnectionWatchdog）
 
 extension ForwardingCoordinator: ConnectionHealthProbing {
-    /// 系统唤醒 / 网络恢复后由 `ConnectionWatchdog` 调用：并发探测各主机的
-    /// 专用转发连接，全部等完。判死的会话已在 actor 内部拆光隧道、关闭本地
-    /// 监听、把各规则翻成 `.error`（UI 行出现「重试」）—— 这里只负责把它从
-    /// 缓存驱逐，使「重试」/ 重开窗口重建连接。幂等：连接尚未建立的会话
-    /// 探测视作存活，不会误杀在飞的 connect。
+    /// 周期心跳（30s）/ 系统唤醒 / 网络恢复后由 `ConnectionWatchdog` 调用。两步：
+    /// ① 并发探测各主机的专用转发连接，判死的驱逐（会话已在 actor 内部拆光隧道、关闭
+    ///    本地监听、把各规则翻成 `.error`）。在飞的 connect（connected==nil）探测视作存活，
+    ///    不会误杀。
+    /// ② **自动重连**：对「有期望运行的规则、但当前无会话」的主机（刚被判死驱逐 / 上轮重连
+    ///    失败被驱逐），走既有 `start()` 路径重建连接并拉起这些规则。每轮心跳重试一次 ——
+    ///    天然 30s 退避；规则被用户停掉(stop)或窗口关闭(teardown)即从上下文移除、不再重连。
+    ///    转连成功即恢复 active；仍失败则停在 `.error`（「重试」仍可手点），下轮再自动试。
     func probeConnectionHealth() async {
-        guard !sessions.isEmpty else { return }
-        // 镜像 `ConnectionWatchdog.sweep`：非结构化 Task 数组并发起跑、逐个
-        // 等完（region 隔离检查器不认 for-in + addTask 的捕获模式）。
-        let probes = sessions.map { serverID, session in
-            Task { (serverID, await session.verifyConnectionAlive()) }
+        // ① 探活 + 判死驱逐。
+        if !sessions.isEmpty {
+            // 镜像 `ConnectionWatchdog.sweep`：非结构化 Task 数组并发起跑、逐个等完
+            // （region 隔离检查器不认 for-in + addTask 的捕获模式）。
+            let probes = sessions.map { serverID, session in
+                Task { (serverID, await session.verifyConnectionAlive()) }
+            }
+            for probe in probes {
+                let (serverID, alive) = await probe.value
+                if !alive { evictSession(serverID) }
+            }
         }
-        for probe in probes {
-            let (serverID, alive) = await probe.value
-            if !alive { evictSession(serverID) }
+
+        // ② 自动重连：先快照（start() 会回写 reconnectContexts/sessions，不能边迭代边改）。
+        let toReconnect = reconnectContexts.filter { serverID, ctx in
+            sessions[serverID] == nil && !ctx.rules.isEmpty
+        }
+        for (_, ctx) in toReconnect {
+            AppLogger.info(
+                "转发自动重连 \(ctx.server.host)：\(ctx.rules.count) 条规则",
+                category: ForwardingLog.category)
+            for rule in ctx.rules.values {
+                start(rule, on: ctx.server, relay: ctx.relay, modelContainer: ctx.modelContainer)
+            }
         }
     }
 }
