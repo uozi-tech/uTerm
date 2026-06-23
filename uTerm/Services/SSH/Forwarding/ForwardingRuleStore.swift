@@ -20,6 +20,13 @@ struct ForwardingRuleStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// 跨主机的全部规则，按 `sortOrder` 升序（全局端口转发面板的数据源；分组在视图层做）。
+    func allRules() -> [ForwardingRule] {
+        let descriptor = FetchDescriptor<ForwardingRule>(
+            sortBy: [SortDescriptor(\.sortOrder, order: .forward)])
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
     /// 插入一条规则并保存。
     func add(_ rule: ForwardingRule) {
         context.insert(rule)

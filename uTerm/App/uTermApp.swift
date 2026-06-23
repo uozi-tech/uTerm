@@ -12,6 +12,12 @@ struct uTermApp: App {
 
     @State private var appUpdater = AppUpdater()
     @State private var forwardingCoordinator = ForwardingCoordinator()
+    /// 全局端口转发的「启动自动化」编排器（App 级，注入 Welcome 与全局转发窗口）。
+    @State private var globalForwarding = GlobalForwardingModel()
+    /// 应用级共享的 host-key 中转：启动序列与全局转发窗口共用一个，使首连主机的
+    /// 信任弹窗能在任一可见窗口里解决 —— `.hostKeySheet` 同时挂在 Welcome（默认启动模式
+    /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
+    @State private var launchRelay = HostKeyChallengeRelay()
     @State private var lockModel: AppLockModel
 
     private var currentAppearance: AppearancePreference {
@@ -53,6 +59,11 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                // 注入转发协调器 + 全局自启编排器 + 共享 host-key 中转：
+                // Welcome 是最稳定的启动钩，在此（app 起来后）触发「随 uTerm 启动」的隧道。
+                .environment(forwardingCoordinator)
+                .environment(globalForwarding)
+                .environment(launchRelay)
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
@@ -186,6 +197,22 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
+
+        // 全局端口转发 —— 单实例跨主机统一管理面 + 应用级自启编排。从 Welcome 工具栏
+        // 「全局转发」或命令面板用 openWindow(id:"global-forwarding") 打开。与单主机端口转发
+        // 窗口共享同一份规则（SwiftData）与 forwardingCoordinator 运行态。
+        Window("全局端口转发", id: "global-forwarding") {
+            GlobalForwardingWindowView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+                .environment(forwardingCoordinator)
+                .environment(globalForwarding)
+                .environment(launchRelay)
+        }
+        .modelContainer(modelContainer)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 760, height: 620)
 
         // 并行执行窗口 —— 一条快捷命令在其绑定的多台服务器上「广播」执行，可多实例
         //（按 commandID 去重）。Shell 广播网格 / AI 自然语言自愈两视图，标题栏可切。

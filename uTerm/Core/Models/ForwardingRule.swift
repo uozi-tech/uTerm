@@ -90,7 +90,12 @@ final class ForwardingRule {
     var destPort: Int = 0
     /// 目标的人类可读别名（可空，仅展示）。
     var destLabel: String? = nil
+    /// **连接级**自启：连到该主机（打开端口转发窗口）时自动拉起本规则。
     var autostart: Bool = false
+    /// **应用级**自启：uTerm 启动时自动建立本隧道（全局端口转发面板的「随 uTerm 启动 / 自启」）。
+    /// 与 `autostart` 互不干扰 —— 一个是「连到主机时」，一个是「开 App 时」（见全局端口转发 spec §5）。
+    /// CloudKit 约束：须有默认值（旧记录迁移后为 false）。
+    var launchAtAppStart: Bool = false
     var sortOrder: Int = 0
     var createdAt: Date = Date()
 
@@ -106,7 +111,8 @@ final class ForwardingRule {
     convenience init(serverID: UUID, name: String, kind: ForwardKind,
                      listenHost: String, listenPort: Int,
                      destHost: String?, destPort: Int,
-                     destLabel: String?, autostart: Bool, sortOrder: Int) {
+                     destLabel: String?, autostart: Bool, sortOrder: Int,
+                     launchAtAppStart: Bool = false) {
         self.init()
         self.serverID = serverID
         self.name = name
@@ -118,6 +124,7 @@ final class ForwardingRule {
         self.destLabel = destLabel
         self.autostart = autostart
         self.sortOrder = sortOrder
+        self.launchAtAppStart = launchAtAppStart
     }
 
     /// 不可变 `Sendable` 快照 —— 把规则配置带出 `@MainActor`/SwiftData 上下文

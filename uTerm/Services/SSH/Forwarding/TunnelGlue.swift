@@ -1,5 +1,25 @@
 import Foundation
 import NIOCore
+import os
+
+/// 一条隧道的累计收发字节（线程安全）。在转泵热循环里每块累加，故用 `OSAllocatedUnfairLock`
+/// 做内部可变性而非 actor —— 避免每个 chunk 跳隔离域。`Sendable`，可自由跨 actor / Task 传递。
+/// 多个连接（同一规则的多条 socket）共享同一个计数器，于是得到的是**该规则**的合计流量。
+/// 上行 = 本地→远端（客户端发出）；下行 = 远端→本地（返回）。`-R` 走 Citadel 内部转发，
+/// 不经本计数器，故远程转发恒为 0（UI 标「不统计」）。
+nonisolated final class TunnelByteCounter: Sendable {
+    private let state = OSAllocatedUnfairLock<(up: UInt64, down: UInt64)>(initialState: (0, 0))
+
+    func addUp(_ n: Int) {
+        guard n > 0 else { return }
+        state.withLock { $0.up &+= UInt64(n) }
+    }
+    func addDown(_ n: Int) {
+        guard n > 0 else { return }
+        state.withLock { $0.down &+= UInt64(n) }
+    }
+    var snapshot: (up: UInt64, down: UInt64) { state.withLock { $0 } }
+}
 
 /// 双向把两个 `NIOAsyncChannel<ByteBuffer, ByteBuffer>` 粘合起来（A↔B 全双工）。
 ///
@@ -16,25 +36,29 @@ import NIOCore
 enum TunnelGlue {
 
     /// 全双工粘合 `a` 与 `b`，直到**两个**方向都读到 EOF / 出错。返回时两端均已关闭。
+    /// `counter`（可选）按方向计字节：A→B 记上行、B→A 记下行（调用方约定 a=本地、b=远端）。
     static func pipe(
         _ a: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
-        _ b: NIOAsyncChannel<ByteBuffer, ByteBuffer>
+        _ b: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
+        counter: TunnelByteCounter? = nil
     ) async {
         do {
             try await a.executeThenClose { inboundA, outboundA in
                 try await b.executeThenClose { inboundB, outboundB in
                     try await withThrowingTaskGroup(of: Void.self) { group in
-                        // A → B
+                        // A → B（本地 → 远端 = 上行）
                         group.addTask {
                             for try await chunk in inboundA {
+                                counter?.addUp(chunk.readableBytes)
                                 try await outboundB.write(chunk)
                             }
                             // A 侧 EOF：半关 B 的写端，让 B→A 继续把在途字节排空、自然收尾。
                             outboundB.finish()
                         }
-                        // B → A
+                        // B → A（远端 → 本地 = 下行）
                         group.addTask {
                             for try await chunk in inboundB {
+                                counter?.addDown(chunk.readableBytes)
                                 try await outboundA.write(chunk)
                             }
                             outboundA.finish()

@@ -25,18 +25,22 @@ actor LocalForwardListener {
     private let listenPort: Int
     private let destHost: String
     private let destPort: Int
+    /// 本规则的流量计数器（所有 accept 的连接共享，得到规则合计）。
+    private let counter: TunnelByteCounter?
 
     /// 绑定后的监听通道，`close()` 时关闭。
     private var serverChannel: Channel?
 
     init(connected: ConnectedClient,
          listenHost: String, listenPort: Int,
-         destHost: String, destPort: Int) {
+         destHost: String, destPort: Int,
+         counter: TunnelByteCounter? = nil) {
         self.connected = connected
         self.listenHost = listenHost
         self.listenPort = listenPort
         self.destHost = destHost
         self.destPort = destPort
+        self.counter = counter
     }
 
     /// 绑定本地监听并开始接受连接。`bind` 失败时抛出（端口冲突 / 权限）。
@@ -45,6 +49,7 @@ actor LocalForwardListener {
         let connected = self.connected
         let destHost = self.destHost
         let destPort = self.destPort
+        let counter = self.counter
 
         // 关键（修早期字节丢弃竞态，PG「客户端先说话」一连上就发 SSLRequest）：用 bind 的
         // async 重载，在 childChannelInitializer 里、**child 激活之前、于其 EventLoop 上**就把
@@ -90,7 +95,8 @@ actor LocalForwardListener {
                                 await Self.handleAccepted(
                                     localAsync,
                                     connected: connected,
-                                    destHost: destHost, destPort: destPort)
+                                    destHost: destHost, destPort: destPort,
+                                    counter: counter)
                             }
                         }
                     }
@@ -106,7 +112,8 @@ actor LocalForwardListener {
     private static func handleAccepted(
         _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         connected: ConnectedClient,
-        destHost: String, destPort: Int
+        destHost: String, destPort: Int,
+        counter: TunnelByteCounter?
     ) async {
         do {
             // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错→
@@ -122,7 +129,7 @@ actor LocalForwardListener {
                 try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
             }.get()
 
-            await TunnelGlue.pipe(localAsync, remoteAsync)
+            await TunnelGlue.pipe(localAsync, remoteAsync, counter: counter)
         } catch {
             AppLogger.error(
                 "本地转发开通道失败 → \(destHost):\(destPort)：\(error.localizedDescription)",

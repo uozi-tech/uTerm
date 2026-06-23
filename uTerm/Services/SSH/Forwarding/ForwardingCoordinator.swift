@@ -55,6 +55,18 @@ final class ForwardingCoordinator {
         }
     }
 
+    /// 跨所有主机会话的累计流量快照（按 ruleID）。全局面板每秒拉一次算速率 + 累计。
+    /// 逐会话 await（会话数很少）；ruleID 全局唯一，直接合并不会撞键。
+    func trafficSnapshot() async -> [UUID: TunnelBytes] {
+        var merged: [UUID: TunnelBytes] = [:]
+        for session in sessions.values {
+            for (id, bytes) in await session.trafficSnapshot() {
+                merged[id] = bytes
+            }
+        }
+        return merged
+    }
+
     // MARK: - 会话生命周期
 
     /// 窗口打开时调用：确保该主机会话存在，并拉起所有 autostart 规则。

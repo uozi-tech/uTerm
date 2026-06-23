@@ -15,8 +15,13 @@ struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
+    // 全局端口转发：app 启动时在此触发「随 uTerm 启动」的隧道（见全局端口转发 spec §4.1）。
+    @Environment(ForwardingCoordinator.self) private var forwardingCoordinator
+    @Environment(GlobalForwardingModel.self) private var globalForwarding
+    @Environment(HostKeyChallengeRelay.self) private var launchRelay
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query private var groups: [ServerGroup]
+    @Query private var allRules: [ForwardingRule]
 
     @AppStorage("startupBehavior")
     private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
@@ -169,6 +174,10 @@ struct WelcomeView: View {
             // 后由 dismissWindow 关掉自己。
             guard !didApplyStartupBehavior else { return }
             didApplyStartupBehavior = true
+            // 先同步触发「随 uTerm 启动」的隧道（fire-and-forget，序列由 globalForwarding 持有），
+            // 再应用启动行为 —— .restore/.lastHost 模式下 applyStartupBehavior 会关掉 Welcome，
+            // 必须赶在关窗之前把序列踢起来。
+            triggerLaunchForwardsIfNeeded()
             await applyStartupBehavior()
         }
         .task {
@@ -182,6 +191,10 @@ struct WelcomeView: View {
             didPruneCommands = true
             QuickCommandStore(context: modelContext).pruneExpiredRuns()
         }
+        // 应用级自启序列用 launchRelay 起隧道；首连未知主机需要信任弹窗。Welcome 在默认
+        // 启动模式下常驻可见，是启动期最稳的弹窗宿主（全局转发窗口启动时尚未打开）。
+        // .sheet(item:) 仅在有 pendingChallenge 时才弹，与新建表单 sheet 不冲突。
+        .hostKeySheet(launchRelay)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleConfigDrop(providers)
         }
@@ -347,9 +360,39 @@ struct WelcomeView: View {
             title: "导入 ~/.ssh/config", detail: "从本地 SSH config 批量导入", hint: "↵", group: nil) {
                 openWindow(id: "import")
             })
+        items.append(CommandPaletteItem(
+            id: "cmd.globalForwarding", kind: .command,
+            title: "全局转发…", detail: "跨主机管理端口转发 + 随 uTerm 启动", hint: "↵", group: nil) {
+                openWindow(id: "global-forwarding")
+            })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
+    }
+
+    /// 应用级自启（spec §4.1）：app 起来后跑一次，把标记「随 uTerm 启动」的规则逐条建立。
+    /// 与服务器列表做主机外键 join；孤儿规则（主机已删）被丢弃。一次性 / 空 / 总开关关闭
+    /// 的兜底都在 `GlobalForwardingModel.autoTriggerIfNeeded` 内部处理。
+    @MainActor
+    private func triggerLaunchForwardsIfNeeded() {
+        // **直接从 store 同步取**，不靠 @Query：冷启动时本 `.task` 往往跑在 @Query 回填之前，
+        // `allRules`/`allProfiles` 还是空 —— 一次性触发会被空集合白白消耗，导致「随 uTerm 启动」
+        // 永远不生效（用户报告：能开但重启不自动连）。容器在 app init 就建好、store 已打开，
+        // 直接 fetch 必然拿到已持久化的规则。
+        let context = modelContext
+        let launchRules = ForwardingRuleStore(context: context).allRules().filter(\.launchAtAppStart)
+        let profiles = (try? context.fetch(FetchDescriptor<ServerProfile>(
+            sortBy: [SortDescriptor(\.sortOrder, order: .forward)]))) ?? []
+        // 按主机分组顺序展开（主机 = sortOrder，组内 = 规则 sortOrder），与全局面板自上而下一致；
+        // 孤儿规则（主机已删）天然被丢弃。
+        let items: [GlobalForwardingModel.LaunchItem] = profiles.flatMap { profile in
+            launchRules
+                .filter { $0.serverID == profile.id }
+                .map { GlobalForwardingModel.LaunchItem(rule: $0.snapshot, server: profile) }
+        }
+        globalForwarding.autoTriggerIfNeeded(
+            items: items, coordinator: forwardingCoordinator,
+            relay: launchRelay, container: context.container)
     }
 
     /// 拖入 config 文件或 ~/.ssh 目录 → 拷进容器 staging → 解析 → 经 ImportInbox 打开向导到 review。
@@ -584,6 +627,8 @@ private struct NewGroupPromptSheet: View {
 /// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿 #101012 之上。
 /// `WindowDragHandle` 既画实色底又充当窗口拖动手柄（红绿灯更靠前、点击不落到手柄）。
 struct WelcomeTitleBar: View {
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         HStack(spacing: 0) {
             // 让位窗口红绿灯：系统红绿灯簇约占 ~x13–72，左对齐文字须躲到其右侧。
@@ -593,6 +638,12 @@ struct WelcomeTitleBar: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(UD.text2)
             Spacer()
+            // 全局转发入口：标题栏右侧 icon（按钮覆于 WindowDragHandle 之上，独立接收点击）。
+            UDIconButton(systemImage: "arrow.left.arrow.right") {
+                openWindow(id: "global-forwarding")
+            }
+            .help("全局转发")
+            .padding(.trailing, 8)
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)

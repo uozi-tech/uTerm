@@ -18,19 +18,24 @@ actor SOCKS5ForwardListener {
     private let connected: ConnectedClient
     private let listenHost: String
     private let listenPort: Int
+    /// 本规则的流量计数器（所有 SOCKS 连接共享，得到规则合计）。
+    private let counter: TunnelByteCounter?
 
     private var serverChannel: Channel?
 
-    init(connected: ConnectedClient, listenHost: String, listenPort: Int) {
+    init(connected: ConnectedClient, listenHost: String, listenPort: Int,
+         counter: TunnelByteCounter? = nil) {
         self.connected = connected
         self.listenHost = listenHost
         self.listenPort = listenPort
+        self.counter = counter
     }
 
     /// 绑定本地 SOCKS5 监听。bind 失败抛出。
     func start() async throws {
         let eventLoop = connected.target.eventLoop
         let connected = self.connected
+        let counter = self.counter
 
         // 同 LocalForwardListener（修早期字节丢弃竞态）：用 bind 的 async 重载，在
         // childChannelInitializer 里、child 激活之前、于其 EL 上就把本地 socket 包成 NIOAsyncChannel
@@ -65,7 +70,7 @@ actor SOCKS5ForwardListener {
                     try await withThrowingDiscardingTaskGroup { group in
                         for try await localAsync in inbound {
                             group.addTask {
-                                await Self.handleAccepted(localAsync, connected: connected)
+                                await Self.handleAccepted(localAsync, connected: connected, counter: counter)
                             }
                         }
                     }
@@ -90,7 +95,8 @@ actor SOCKS5ForwardListener {
     /// （`NIOAsyncChannelOutboundWriter` 是 `Sendable`，跨任务写本地出站安全）。
     private static func handleAccepted(
         _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
-        connected: ConnectedClient
+        connected: ConnectedClient,
+        counter: TunnelByteCounter?
     ) async {
         // 已在 childChannelInitializer 包好（半关已开）。底层 Channel 供握手状态机 / glueRemote
         // 关闭与传参用。
@@ -118,7 +124,7 @@ actor SOCKS5ForwardListener {
                             localChannel: localChannel,
                             outbound: outbound, connected: connected,
                             localToRemote: localToRemote, bridge: bridge,
-                            remoteTask: &remoteTask)
+                            remoteTask: &remoteTask, counter: counter)
                         switch step {
                         case .needMoreBytes:
                             break parseLoop
@@ -169,7 +175,8 @@ actor SOCKS5ForwardListener {
         connected: ConnectedClient,
         localToRemote: AsyncStream<ByteBuffer>,
         bridge: AsyncStream<ByteBuffer>.Continuation,
-        remoteTask: inout Task<Void, Never>?
+        remoteTask: inout Task<Void, Never>?,
+        counter: TunnelByteCounter?
     ) async throws -> HandshakeStep {
         switch phase {
         case .greeting:
@@ -228,7 +235,8 @@ actor SOCKS5ForwardListener {
                         localChannel: localChannel,
                         localToRemote: localToRemote,
                         bridge: bridge,
-                        localOutbound: outbound)
+                        localOutbound: outbound,
+                        counter: counter)
                 }
 
                 // 把握手后已读但未消费的剩余字节先喂给桥（→ 目标）。
@@ -290,22 +298,26 @@ actor SOCKS5ForwardListener {
         localChannel: Channel,
         localToRemote: AsyncStream<ByteBuffer>,
         bridge: AsyncStream<ByteBuffer>.Continuation,
-        localOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>
+        localOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>,
+        counter: TunnelByteCounter? = nil
     ) async {
         do {
             try await remoteAsync.executeThenClose { remoteIn, remoteOut in
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    // 本地 → 目标（消费桥）。
+                    // 本地 → 目标（消费桥）= 上行。桥承载了握手后剩余字节 + relay 阶段所有本地字节，
+                    // 故上行全量在此计。
                     group.addTask {
                         for await chunk in localToRemote {
+                            counter?.addUp(chunk.readableBytes)
                             try await remoteOut.write(chunk)
                         }
                         // 桥结束（本地入站 EOF / 关闭）：半关目标写端，让目标→本地排空。
                         remoteOut.finish()
                     }
-                    // 目标 → 本地。
+                    // 目标 → 本地 = 下行。
                     group.addTask {
                         for try await chunk in remoteIn {
+                            counter?.addDown(chunk.readableBytes)
                             try await localOutbound.write(chunk)
                         }
                         // 目标 EOF：半关本地写端，并收桥让本地→目标这向收尾（否则它阻塞在桥上、

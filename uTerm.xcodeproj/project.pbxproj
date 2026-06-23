@@ -129,6 +129,10 @@
 				Features/ParallelRun/Views/ParallelRunChrome.swift,
 				Features/ParallelRun/Views/ParallelRunWindowView.swift,
 				Features/ParallelRun/Views/ParallelShellGrid.swift,
+				Features/PortForward/Global/GlobalForwardingModel.swift,
+				Features/PortForward/Global/GlobalForwardingSupport.swift,
+				Features/PortForward/Global/GlobalForwardingWindowView.swift,
+				Features/PortForward/Global/GlobalForwardRow.swift,
 				Features/PortForward/Views/ForwardEditorSheet.swift,
 				"Features/PortForward/Views/ForwardKind+Tint.swift",
 				Features/PortForward/Views/PortForwardListView.swift,
@@ -203,6 +207,7 @@
 				Features/Welcome/Views/ServerList.swift,
 				Features/Welcome/Views/ServerRow.swift,
 				Features/Welcome/Views/WelcomeComponents.swift,
+				Features/Welcome/Views/WelcomeKeyboard.swift,
 				Features/Welcome/Views/WelcomeSidebar.swift,
 				Features/Welcome/Views/WelcomeToolbar.swift,
 				Features/Welcome/Views/WelcomeView.swift,
@@ -596,6 +601,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = uTermMobile/uTermMobile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ABCDE12345;
@@ -603,6 +609,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -614,6 +621,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -630,6 +638,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = uTermMobile/uTermMobile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ABCDE12345;
@@ -637,6 +646,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -648,6 +658,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

@@ -11,6 +11,13 @@ nonisolated enum TunnelStatus: Sendable, Equatable {
     case error(ForwardingError)
 }
 
+/// 一条隧道的累计收发字节快照（上行=本地→远端，下行=远端→本地）。
+nonisolated struct TunnelBytes: Sendable, Equatable {
+    let up: UInt64
+    let down: UInt64
+    static let zero = TunnelBytes(up: 0, down: 0)
+}
+
 /// 一台主机的专用转发会话（actor），镜像 `SSHConnection` 的生命周期 / 防泄漏范式。
 ///
 /// - `ConnectedClient`（`@unchecked Sendable`）在 connect 成功后由 actor 隔离字段持有，
@@ -48,6 +55,8 @@ actor ForwardingSession {
         let localListener: LocalForwardListener?
         /// dynamic 的本地 SOCKS5 监听器；remote/local 为 nil。
         let socksListener: SOCKS5ForwardListener?
+        /// 本规则的流量计数器（-L/-D 由监听器喂；-R 走 Citadel 内部不计，恒 0）。
+        let counter: TunnelByteCounter
     }
     private var tunnels: [UUID: TunnelHandle] = [:]
 
@@ -117,6 +126,8 @@ actor ForwardingSession {
         let onStatus = self.onStatus
         // remote 需要本地目标地址；缺失时退化到回环（与 ssh -R 默认一致）。
         let destHost = rule.destHost ?? "127.0.0.1"
+        // -R 走 Citadel runRemotePortForward 内部转发，不经我们的粘合点 → 计数器恒 0（UI 标「不统计」）。
+        let counter = TunnelByteCounter()
         let task = Task {
             do {
                 try await connected.target.runRemotePortForward(
@@ -140,15 +151,18 @@ actor ForwardingSession {
                 }
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil, socksListener: nil)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil,
+                                        socksListener: nil, counter: counter)
     }
 
     /// `-L` 本地：起 `LocalForwardListener`，bind 失败归类报 error。
     private func startLocal(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
+        let counter = TunnelByteCounter()
         let listener = LocalForwardListener(
             connected: connected,
             listenHost: rule.listenHost, listenPort: rule.listenPort,
-            destHost: rule.destHost ?? "127.0.0.1", destPort: rule.destPort)
+            destHost: rule.destHost ?? "127.0.0.1", destPort: rule.destPort,
+            counter: counter)
         let onStatus = self.onStatus
         // 驱动 Task：start() 抛错（bind 冲突）→ 归类报 error；成功 → active。
         let task = Task {
@@ -161,14 +175,17 @@ actor ForwardingSession {
                                 category: ForwardingLog.category)
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: listener, socksListener: nil)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: listener,
+                                        socksListener: nil, counter: counter)
     }
 
     /// `-D` 动态：起 `SOCKS5ForwardListener`，bind 失败归类报 error。
     private func startDynamic(_ rule: ForwardingRuleSnapshot, connected: ConnectedClient) {
+        let counter = TunnelByteCounter()
         let listener = SOCKS5ForwardListener(
             connected: connected,
-            listenHost: rule.listenHost, listenPort: rule.listenPort)
+            listenHost: rule.listenHost, listenPort: rule.listenPort,
+            counter: counter)
         let onStatus = self.onStatus
         let task = Task {
             do {
@@ -180,7 +197,18 @@ actor ForwardingSession {
                                 category: ForwardingLog.category)
             }
         }
-        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil, socksListener: listener)
+        tunnels[rule.id] = TunnelHandle(task: task, rule: rule, localListener: nil,
+                                        socksListener: listener, counter: counter)
+    }
+
+    /// 当前所有隧道的累计流量快照（按 ruleID）。`ForwardingCoordinator` 周期拉取算速率。
+    func trafficSnapshot() -> [UUID: TunnelBytes] {
+        var out: [UUID: TunnelBytes] = [:]
+        for (id, handle) in tunnels {
+            let s = handle.counter.snapshot
+            out[id] = TunnelBytes(up: s.up, down: s.down)
+        }
+        return out
     }
 
     /// 停止一条规则：取消驱动 Task + 关闭其监听器。报回 inactive。
