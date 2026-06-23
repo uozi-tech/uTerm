@@ -19,6 +19,8 @@ struct UDButton: View {
     let title: String
     var style: Style = .primary
     var systemImage: String? = nil
+    /// 按钮内尾部的键位提示（如 "esc"、"⌘↵"）；nil 不显示。随按钮文本色自适应。
+    var trailingHint: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -28,9 +30,29 @@ struct UDButton: View {
                     Image(systemName: systemImage)
                 }
                 Text(title)
+                if let trailingHint {
+                    UDButtonKbd(text: trailingHint).padding(.leading, 1)
+                }
             }
         }
         .buttonStyle(UDButtonStyle(style: style))
+    }
+}
+
+/// 按钮内嵌的键位小帽：背景用当前前景色的低透明度叠底，文本继承按钮前景色，
+/// 故在实心 / 半透明 / 各风格按钮上都自洽（无需感知具体风格）。
+private struct UDButtonKbd: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.primary.opacity(0.14))
+            )
+            .opacity(0.9)
     }
 }
 

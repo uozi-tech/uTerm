@@ -42,10 +42,12 @@ struct WelcomeView: View {
     private enum FormRoute: Identifiable {
         case new
         case edit(ServerProfile)
+        case duplicate(ServerProfile)
         var id: String {
             switch self {
             case .new:                  return "new"
             case .edit(let p):          return p.id.uuidString
+            case .duplicate(let p):     return "dup-\(p.id.uuidString)"
             }
         }
     }
@@ -112,6 +114,7 @@ struct WelcomeView: View {
                                filter: $filter,
                                pane: $pane,
                                draggingProfileID: $draggingProfileID,
+                               paletteActive: palette.isPresented,
                                onDropProfileToGroup: moveProfileToGroup)
                     .frame(width: 224)
                 bodyContent
@@ -124,6 +127,9 @@ struct WelcomeView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "uTerm"))
+        // 主机列表键盘导航：↑↓ 移动选中、⌘↑↓ 首末、⌘E 编辑、⌘⌫ 删除。装在窗口级本地
+        // 监听里（无需先点中列表）；sheet / 命令面板打开时自动让位（见 handleListKey）。
+        .background(WelcomeKeyboardMonitor(handle: handleListKey).frame(width: 0, height: 0))
         .disablesInitialAutoFocus()  // 不要开屏自动聚焦搜索框（macOS 默认会选中第一个文本框）
         .commandPalette(model: palette) { welcomeCommandItems() }
         .sheet(item: $formRoute) { route in
@@ -132,6 +138,8 @@ struct WelcomeView: View {
                 ServerFormView(editing: nil)
             case .edit(let p):
                 ServerFormView(editing: p)
+            case .duplicate(let p):
+                ServerFormView(editing: nil, duplicating: p)
             }
         }
         .sheet(item: $newGroupPrompt) { prompt in
@@ -243,6 +251,69 @@ struct WelcomeView: View {
         descriptor.fetchLimit = 1
         guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
         return WorkspaceWindowID(serverID: profile.id)
+    }
+
+    // MARK: 键盘导航
+
+    /// 窗口级 keyDown 回调（见 `WelcomeKeyboardMonitor`）。返回 true = 消费该事件。
+    ///
+    /// 仅在「主机列表」面板、列表非空、且命令面板未开时接管 ↑↓ / ⌘↑↓ / ⌘E / ⌘⌫；其余
+    /// 一律放行（return false），把 ↩ / ⌘↩（HostDetailPanel 按钮）、命令面板、文本输入等
+    /// 交回系统。sheet（编辑/新分组）是独立子窗口，monitor 的 `event.window === key` 判定
+    /// 已把它们排除，这里无需再判。
+    private func handleListKey(_ event: NSEvent) -> Bool {
+        guard !palette.isPresented else { return false }     // 面板开着时让它自己处理上下键
+        guard pane == .hosts else { return false }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isTextEditing = event.window?.firstResponder is NSText
+        guard let action = WelcomeKeymap.listAction(
+            keyCode: event.keyCode,
+            chars: event.charactersIgnoringModifiers?.lowercased() ?? "",
+            command: mods.contains(.command),
+            option: mods.contains(.option),
+            control: mods.contains(.control),
+            isTextEditing: isTextEditing
+        ) else { return false }
+
+        let list = visibleProfiles
+        guard !list.isEmpty else { return false }
+
+        switch action {
+        case .prev, .next, .first, .last:
+            moveSelection(action, in: list)
+        case .edit:
+            guard let p = currentSelectedProfile(in: list) else { return false }
+            formRoute = .edit(p)
+        case .delete:
+            guard let p = currentSelectedProfile(in: list) else { return false }
+            pendingDelete = p
+        case .duplicate:
+            guard let p = currentSelectedProfile(in: list) else { return false }
+            formRoute = .duplicate(p)
+        }
+        return true
+    }
+
+    private func currentSelectedProfile(in list: [ServerProfile]) -> ServerProfile? {
+        if let id = selectedProfileID, let p = list.first(where: { $0.id == id }) { return p }
+        return list.first
+    }
+
+    /// 在当前可见列表里按动作移动选中项（钳制在两端，不回绕）。无选中时 ↑/↓ 落到首/末。
+    private func moveSelection(_ action: WelcomeListKey, in list: [ServerProfile]) {
+        guard let id = selectedProfileID, let idx = list.firstIndex(where: { $0.id == id }) else {
+            selectedProfileID = (action == .last ? list.last : list.first)?.id
+            return
+        }
+        let newIdx: Int
+        switch action {
+        case .prev:  newIdx = max(0, idx - 1)
+        case .next:  newIdx = min(list.count - 1, idx + 1)
+        case .first: newIdx = 0
+        case .last:  newIdx = list.count - 1
+        case .edit, .delete, .duplicate: return
+        }
+        selectedProfileID = list[newIdx].id
     }
 
     // MARK: actions
@@ -390,6 +461,8 @@ struct WelcomeView: View {
             try? modelContext.save()
         case .newGroup:
             newGroupPrompt = NewGroupPrompt(profile: profile)
+        case .duplicate:
+            formRoute = .duplicate(profile)
         case .delete:
             pendingDelete = profile
         }

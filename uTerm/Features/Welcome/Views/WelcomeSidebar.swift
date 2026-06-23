@@ -174,6 +174,9 @@ struct WelcomeSidebar: View {
     @Binding var filter: ServerFilter
     @Binding var pane: WelcomePane
     @Binding var draggingProfileID: UUID?
+    /// 命令面板是否打开。开着时停用侧栏 ⌘1…9 / ⌥↑↓，与 WelcomeView 的列表监听一致——
+    /// 面板打开期间由它独占键盘导航（见 `WelcomeView.handleListKey` 的 palette 守卫）。
+    var paletteActive = false
     let onDropProfileToGroup: (_ profileID: UUID, _ groupName: String?) -> Void
     @Query private var groups: [ServerGroup]
     @Query private var quickCommands: [QuickCommand]
@@ -205,6 +208,14 @@ struct WelcomeSidebar: View {
             ungroupedCount: ungroupedCount
         )
         let groupBuiltIns = WelcomeSidebarLayout.groupBuiltInRows(ungroupedCount: ungroupedCount)
+        // ⌘1…⌘9 / ⌥↑↓ 的条目顺序，必须与下面的渲染顺序逐项对齐。
+        let navEntries = WelcomeSidebarNav.entries(
+            pinnedCount: pinnedCount,
+            recentCount: recentCount,
+            showsGroupSection: showGroupSection,
+            groupNames: sortedGroups.map(\.name),
+            ungroupedCount: ungroupedCount
+        )
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 if showViewSection {
@@ -212,10 +223,10 @@ struct WelcomeSidebar: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 if pinnedCount > 0 {
-                    navRow(.pinned, icon: "star.fill", title: "置顶", counts: counts)
+                    navRow(.pinned, icon: "star.fill", title: "置顶", counts: counts, entries: navEntries)
                 }
                 if recentCount > 0 {
-                    navRow(.recent, icon: "clock", title: "最近", counts: counts)
+                    navRow(.recent, icon: "clock", title: "最近", counts: counts, entries: navEntries)
                 }
                 if showGroupSection {
                     HStack(spacing: 0) {
@@ -234,12 +245,13 @@ struct WelcomeSidebar: View {
                     }
                     .padding(.top, showViewSection ? 14 : 0)
                     if let allRow = groupBuiltIns.first(where: { $0.section == .allHosts }) {
-                        navRow(allRow.section, icon: allRow.icon, title: allRow.title, counts: counts)
+                        navRow(allRow.section, icon: allRow.icon, title: allRow.title,
+                               counts: counts, entries: navEntries)
                     }
                 }
                 ForEach(sortedGroups, id: \.persistentModelID) { g in
                     navRow(.group(g.name), icon: "circle.fill", title: g.name,
-                           counts: counts, iconColor: g.color)
+                           counts: counts, entries: navEntries, iconColor: g.color)
                     .modifier(WelcomeSidebarGroupDragModifier(
                         enabled: !isDimmedGroup(g, counts: counts),
                         groupID: g.persistentModelID,
@@ -254,7 +266,8 @@ struct WelcomeSidebar: View {
                     navRow(ungroupedRow.section,
                            icon: ungroupedRow.icon,
                            title: ungroupedRow.title,
-                           counts: counts)
+                           counts: counts,
+                           entries: navEntries)
                         .modifier(SidebarProfileDropModifier(
                             target: WelcomeSidebarProfileDropTarget(section: .ungrouped),
                             draggingProfileID: $draggingProfileID,
@@ -271,7 +284,8 @@ struct WelcomeSidebar: View {
                     label: "快捷命令",
                     count: quickCommands.count,
                     selected: pane == .quickCommands,
-                    action: { pane = .quickCommands }
+                    action: { pane = .quickCommands },
+                    shortcutHint: WelcomeSidebarNav.shortcutHint(for: .quickCommands, in: navEntries)
                 )
                 .padding(.horizontal, 8)
             }
@@ -279,14 +293,37 @@ struct WelcomeSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(UD.bg)
+        // 侧栏快捷键：⌘1…⌘9 直达第 N 项、⌥↑/⌥↓ 顺序切换。隐藏的零尺寸按钮承载 key
+        // equivalent（与命令面板 escHotkey 同款），故输入框聚焦时也能触发、不会被吃成文本。
+        .background(
+            WelcomeSidebarShortcuts(entries: navEntries, current: currentTarget, onSelect: select)
+                .disabled(paletteActive)
+        )
         .overlay(alignment: .trailing) {
             Rectangle().fill(UD.border).frame(width: 1)
         }
     }
 
+    /// 当前侧栏选中的目标（用于 ⌥↑↓ 计算相邻项）。
+    private var currentTarget: WelcomeNavTarget {
+        pane == .quickCommands ? .quickCommands : .section(filter.section)
+    }
+
+    /// 应用一次侧栏跳转：主机分区切回主机面板并设 section；「快捷命令」切到命令面板。
+    private func select(_ target: WelcomeNavTarget) {
+        switch target {
+        case .section(let s):
+            pane = .hosts
+            filter.section = s
+        case .quickCommands:
+            pane = .quickCommands
+        }
+    }
+
     @ViewBuilder
     private func navRow(_ section: NavSection, icon: String, title: String,
-                        counts: [NavSection: Int], iconColor: Color? = nil) -> some View {
+                        counts: [NavSection: Int], entries: [WelcomeNavTarget],
+                        iconColor: Color? = nil) -> some View {
         let count = counts[section] ?? 0
         // 仅当处于主机面板时高亮主机 section；切到快捷命令面板时主机行全不选中。
         let isActive = pane == .hosts && filter.section == section
@@ -301,7 +338,8 @@ struct WelcomeSidebar: View {
             count: count,
             selected: isActive,
             action: { pane = .hosts; filter.section = section },
-            iconColor: iconColor
+            iconColor: iconColor,
+            shortcutHint: WelcomeSidebarNav.shortcutHint(for: .section(section), in: entries)
         )
         .padding(.horizontal, 8)
         .opacity(isDimmed ? 0.4 : 1.0)
@@ -322,5 +360,35 @@ struct WelcomeSidebar: View {
         withAnimation(.easeInOut(duration: 0.18)) {
             store.reorder(order)
         }
+    }
+}
+
+/// 侧栏键盘快捷键载体：一组零尺寸隐藏按钮承载 ⌘1…⌘9（直达第 N 项）与 ⌥↑/⌥↓（顺序切换）。
+/// 不渲染任何可见内容；只在 Welcome 窗口为 key 时由 `.keyboardShortcut` 触发。
+private struct WelcomeSidebarShortcuts: View {
+    let entries: [WelcomeNavTarget]
+    let current: WelcomeNavTarget
+    let onSelect: (WelcomeNavTarget) -> Void
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(entries.prefix(9).enumerated()), id: \.offset) { index, target in
+                Button("") { onSelect(target) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+            }
+            Button("") { move(-1) }.keyboardShortcut(.upArrow, modifiers: .option)
+            Button("") { move(1) }.keyboardShortcut(.downArrow, modifiers: .option)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    /// ⌥↑/⌥↓：在 `entries` 里把选中项移动一格（钳制两端，不回绕）。
+    private func move(_ delta: Int) {
+        guard !entries.isEmpty else { return }
+        let idx = entries.firstIndex(of: current) ?? 0
+        let new = max(0, min(entries.count - 1, idx + delta))
+        onSelect(entries[new])
     }
 }

@@ -32,6 +32,7 @@ struct ServerList: View {
         case openSFTP
         case togglePin
         case edit
+        case duplicate
         case moveToGroup(String?)    // nil → 未分组
         case newGroup
         case delete
@@ -64,32 +65,41 @@ struct ServerList: View {
         if profiles.isEmpty {
             noMatchState
         } else {
-            ScrollView {
-                LazyVStack(spacing: ServerListLayout.rowSpacing) {
-                    ForEach(profiles) { profile in
-                        ServerRow(profile: profile,
-                                  query: query,
-                                  isSelected: selectedID == profile.id,
-                                  groupColor: ServerGroupBadgeTint.color(for: profile.group,
-                                                                         in: groupColorHexes),
-                                  onTap: { selectedID = profile.id },
-                                  onDoubleTap: {
-                                      selectedID = profile.id
-                                      onContextAction(.connect, profile)
-                                  })
-                            .modifier(ServerRowDragModifier(
-                                dragEnabled: rowDragEnabled,
-                                reorderEnabled: reorderEnabled,
-                                profileID: profile.id,
-                                draggingProfileID: $draggingProfileID,
-                                onMove: onMove
-                            ))
-                            .contextMenu { contextMenu(for: profile) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: ServerListLayout.rowSpacing) {
+                        ForEach(profiles) { profile in
+                            ServerRow(profile: profile,
+                                      query: query,
+                                      isSelected: selectedID == profile.id,
+                                      groupColor: ServerGroupBadgeTint.color(for: profile.group,
+                                                                             in: groupColorHexes),
+                                      onTap: { selectedID = profile.id },
+                                      onDoubleTap: {
+                                          selectedID = profile.id
+                                          onContextAction(.connect, profile)
+                                      })
+                                .id(profile.id)
+                                .modifier(ServerRowDragModifier(
+                                    dragEnabled: rowDragEnabled,
+                                    reorderEnabled: reorderEnabled,
+                                    profileID: profile.id,
+                                    draggingProfileID: $draggingProfileID,
+                                    onMove: onMove
+                                ))
+                                .contextMenu { contextMenu(for: profile) }
+                        }
                     }
+                    .padding(ServerListLayout.contentPadding)
                 }
-                .padding(ServerListLayout.contentPadding)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 键盘上下移动选中行时把它滚进可视区（无 anchor = 最小滚动，已可见则不动，
+                // 不打扰鼠标点击已可见行的场景）。
+                .onChange(of: selectedID) { _, id in
+                    guard let id else { return }
+                    withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -119,16 +129,25 @@ struct ServerList: View {
 
     @ViewBuilder
     private func contextMenu(for profile: ServerProfile) -> some View {
+        // keyboardShortcut 让菜单项右侧显示键位提示（↩ / ⌘↩ / ⌘E / ⌘⌫），与列表全局
+        // 快捷键一致。菜单内容惰性构建，不会注册成常驻 key equivalent；⌘E/⌘⌫ 又被
+        // WelcomeView 的本地监听抢先消费，故不存在重复触发。
         // 「仅 SFTP」主机禁用终端会话，隐藏「连接」，仅保留 SFTP 浏览入口。
         if !profile.sftpOnly {
             Button("连接") { onContextAction(.connect, profile) }
+                .keyboardShortcut(.return, modifiers: [])
             Button("在终端窗口打开") { onContextAction(.openTerminalWindow, profile) }
         }
+        // 普通主机 SFTP = ⌘↩；「仅 SFTP」主机 SFTP 是主操作 = ↩（对齐 HostDetailPanel）。
         Button("在 SFTP 中打开") { onContextAction(.openSFTP, profile) }
+            .keyboardShortcut(.return, modifiers: profile.sftpOnly ? [] : .command)
         Button(profile.isPinned ? "取消置顶" : "置顶") {
             onContextAction(.togglePin, profile)
         }
         Button("编辑…") { onContextAction(.edit, profile) }
+            .keyboardShortcut("e", modifiers: .command)
+        Button("复制为新服务器…") { onContextAction(.duplicate, profile) }
+            .keyboardShortcut("d", modifiers: .command)
         Menu("移动到分组") {
             ForEach(existingGroups, id: \.self) { g in
                 Button(g) { onContextAction(.moveToGroup(g), profile) }
@@ -141,6 +160,7 @@ struct ServerList: View {
         Button("删除…", role: .destructive) {
             onContextAction(.delete, profile)
         }
+        .keyboardShortcut(.delete, modifiers: .command)
     }
 }
 

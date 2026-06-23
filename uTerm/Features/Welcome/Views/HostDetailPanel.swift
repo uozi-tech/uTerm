@@ -1,5 +1,6 @@
 // uTerm/Views/HostDetailPanel.swift
 import SwiftUI
+import AppKit
 
 /// 选中主机后右侧滑入的详情面板（设计稿 Variant A · DetailPanel）。
 ///
@@ -18,6 +19,13 @@ struct HostDetailPanel: View {
     let profile: ServerProfile
     let onConnect: () -> Void
     let onBrowseSFTP: () -> Void
+
+    /// 刚复制过的字段（用于「已复制」瞬时反馈，非 nil 即显示）。
+    @State private var copiedField: String?
+    /// 反馈自动消失的代际令牌：快速连点时只让最后一次的清除生效。
+    @State private var copiedToken = 0
+
+    private var fullEndpoint: String { "\(profile.username)@\(profile.host):\(profile.port)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -58,13 +66,62 @@ struct HostDetailPanel: View {
         }
     }
 
+    /// 端点行重设计为「点击即复制」：用户名 / 主机各为可点段（分别复制 user / IP），
+    /// 尾部图标复制完整 `user@host:port`；复制后图标短暂变「✓ 已复制」。
     private var endpointLine: some View {
-        Text("\(profile.username)@\(profile.host)\(Text(":\(String(profile.port))").foregroundColor(UD.text3))")
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundColor(UD.text2)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help("\(profile.username)@\(profile.host):\(profile.port)")
+        HStack(spacing: 0) {
+            EndpointCopyChip(text: profile.username, emphasized: false) {
+                copy(profile.username, field: "user")
+            }
+            Text("@")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(UD.text3)
+            EndpointCopyChip(text: profile.host, emphasized: true) {
+                copy(profile.host, field: "host")
+            }
+            Text(":\(String(profile.port))")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(UD.text3)
+            Spacer(minLength: 6)
+            copyAllControl
+        }
+        .animation(.easeInOut(duration: 0.15), value: copiedField != nil)
+    }
+
+    /// 尾部复制控件：默认是复制图标，复制后 1.4s 内显示「✓ 已复制」。点击复制完整端点。
+    private var copyAllControl: some View {
+        Button { copy(fullEndpoint, field: "all") } label: {
+            Group {
+                if copiedField != nil {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark")
+                        Text("已复制")
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(UD.success)
+                } else {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
+                        .foregroundStyle(UD.text3)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("复制 \(fullEndpoint)")
+    }
+
+    /// 写剪贴板 + 触发瞬时「已复制」反馈（与 SFTP / 密钥详情的复制实现一致）。
+    private func copy(_ value: String, field: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        copiedField = field
+        copiedToken += 1
+        let token = copiedToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.4))
+            if token == copiedToken { copiedField = nil }
+        }
     }
 
     // MARK: meta grid
@@ -246,6 +303,36 @@ struct HostDetailPanel: View {
     private var jumpLabel: String {
         if let jump = profile.jumpHost, !jump.name.isEmpty { return jump.name }
         return "无"
+    }
+}
+
+/// 端点行里的可点复制段（用户名 / 主机）：等宽文本，hover 浅 accent 底，点击复制。
+private struct EndpointCopyChip: View {
+    let text: String
+    /// 主机段更亮（UD.text），用户名段次级（UD.text2）。
+    let emphasized: Bool
+    let onCopy: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: onCopy) {
+            Text(text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(emphasized ? UD.text : UD.text2)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(hover ? UD.accent.opacity(0.14) : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("点击复制：\(text)")
     }
 }
 

@@ -13,6 +13,8 @@ struct UDSidebarRow: View {
     let label: String
     /// 尾部计数徽标（nil 不显示）。
     let count: Int?
+    /// hover 时尾部显示的快捷键提示（如 "⌘1"）；nil 不显示。优先于计数。
+    let shortcutHint: String?
     /// 是否选中。
     let selected: Bool
     /// 点击回调。
@@ -24,7 +26,8 @@ struct UDSidebarRow: View {
         count: Int? = nil,
         selected: Bool = false,
         action: @escaping () -> Void = {},
-        iconColor: Color? = nil
+        iconColor: Color? = nil,
+        shortcutHint: String? = nil
     ) {
         self.systemImage = systemImage
         self.iconColor = iconColor
@@ -32,6 +35,7 @@ struct UDSidebarRow: View {
         self.count = count
         self.selected = selected
         self.action = action
+        self.shortcutHint = shortcutHint
     }
 
     @State private var hovered = false
@@ -49,7 +53,9 @@ struct UDSidebarRow: View {
                     .foregroundStyle(selected ? UD.text : UD.text2)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let count {
+                if hovered, let shortcutHint {
+                    UDKbd(shortcutHint)
+                } else if let count {
                     Text("\(count)")
                         .font(UD.monoMetric)
                         .foregroundStyle(UD.text3)

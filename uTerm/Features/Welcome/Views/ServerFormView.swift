@@ -18,6 +18,8 @@ struct ServerFormView: View {
 
     /// nil = 新建；非 nil = 编辑现有 profile。
     let editing: ServerProfile?
+    /// 非 nil = 「复制」：用该 profile 预填字段，但保存为**新**服务器（`editing` 须为 nil）。
+    var duplicating: ServerProfile? = nil
 
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query(sort: \SSHKey.createdAt, order: .reverse) private var allKeys: [SSHKey]
@@ -68,7 +70,7 @@ struct ServerFormView: View {
 
     private var titleBar: some View {
         ZStack {
-            Text(editing == nil ? "新建服务器" : "编辑服务器")
+            Text(titleText)
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text)
             HStack {
                 Spacer()
@@ -213,8 +215,10 @@ struct ServerFormView: View {
             Text("密钥与口令仅保存在系统钥匙串")
                 .font(.system(size: 11)).foregroundStyle(UD.text4)
             Spacer()
-            UDButton(title: "取消", style: .secondary) { dismiss() }
-            UDButton(title: "保存") { save() }
+            UDButton(title: "取消", style: .secondary, trailingHint: "esc") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            UDButton(title: "保存", trailingHint: "⌘↵") { save() }
+                .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!isValid)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
@@ -253,23 +257,38 @@ struct ServerFormView: View {
         }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
+    /// 标题：编辑 / 复制 / 新建。
+    private var titleText: String {
+        if editing != nil { return "编辑服务器" }
+        if duplicating != nil { return "复制服务器" }
+        return "新建服务器"
+    }
+
     // MARK: - 载入 / 保存
 
     private func loadForEditing() {
-        guard let editing else { return }
-        name = editing.name
-        host = editing.host
-        port = String(editing.port)
-        username = editing.username
-        group = editing.group ?? ""
-        authMethod = editing.authMethod
-        keyID = editing.keyID
-        sftpOnly = editing.sftpOnly
-        password = (try? keychain.load(profileID: editing.id, kind: .password)) ?? ""
-        if let jump = editing.jumpHost {
+        // 编辑 → 用现有 profile；复制 → 用源 profile 预填但存为新。
+        guard let source = editing ?? duplicating else { return }
+        // 复制时给名字加「副本」后缀，避免与源同名混淆；编辑时保持原名。
+        name = editing == nil ? duplicateName(of: source.name) : source.name
+        host = source.host
+        port = String(source.port)
+        username = source.username
+        group = source.group ?? ""
+        authMethod = source.authMethod
+        keyID = source.keyID
+        sftpOnly = source.sftpOnly
+        password = (try? keychain.load(profileID: source.id, kind: .password)) ?? ""
+        if let jump = source.jumpHost {
             useJumpHost = true
             jumpProfileID = jump.id
         }
+    }
+
+    /// 复制时的默认新名：`原名 副本`（原名为空则只 "副本"）。
+    private func duplicateName(of original: String) -> String {
+        let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "副本" : "\(trimmed) 副本"
     }
 
     private func save() {
