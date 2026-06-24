@@ -1,9 +1,12 @@
 import SwiftUI
 
 struct AppInfoCommands: Commands {
+    let appUpdater: AppUpdater
+
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             AboutMenuButton()
+            CheckForUpdatesMenuButton(appUpdater: appUpdater)
         }
     }
 }
@@ -23,6 +26,19 @@ private struct SettingsMenuButton: View {
     var body: some View {
         Button("设置…") { openWindow(id: SettingsWindow.id) }
             .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
+/// 应用菜单「检查更新…」——复用 Settings 里同一个 `AppUpdater`，
+/// 走 Sparkle 默认 UI driver 弹窗报告结果。check 进行中时禁用防 double-click。
+private struct CheckForUpdatesMenuButton: View {
+    let appUpdater: AppUpdater
+
+    var body: some View {
+        Button("检查更新…") {
+            appUpdater.checkForUpdates()
+        }
+        .disabled(!appUpdater.canCheckForUpdates)
     }
 }
 

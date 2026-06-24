@@ -242,7 +242,7 @@ struct uTermApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
         .commands {
-            AppInfoCommands()
+            AppInfoCommands(appUpdater: appUpdater)
             SettingsWindowCommands()
         }
 

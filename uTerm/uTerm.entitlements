@@ -23,6 +23,12 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
+	<!-- 让所有 macOS 构建（含 Xcode 调试）都走 Production CloudKit，和 iOS / 发布版统一，
+	     避免调试构建默认落到 Development 库造成数据分裂。
+	     ⚠️ 代价：调试运行产生的数据也会进 Production。若想恢复「调试走 Development」，删掉此键即可
+	     （发布版用 Developer ID 签名本就默认 Production，不依赖此键）。 -->
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>Production</string>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
 	<key>keychain-access-groups</key>
