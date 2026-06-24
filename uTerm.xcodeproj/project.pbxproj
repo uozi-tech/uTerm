@@ -488,6 +488,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
+				A1B2C3D4E5F6789ABCDEF0AA /* XCLocalSwiftPackageReference "vendor/swift-nio-ssh" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
@@ -970,6 +971,10 @@
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/SwiftTerm;
+		};
+		A1B2C3D4E5F6789ABCDEF0AA /* XCLocalSwiftPackageReference "vendor/swift-nio-ssh" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/swift-nio-ssh;
 		};
 /* End XCLocalSwiftPackageReference section */
 

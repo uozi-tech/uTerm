@@ -13,6 +13,8 @@ vendor/tree-sitter-grammars/.build/
 vendor/tree-sitter-grammars/.swiftpm/
 vendor/SwiftTerm/.build/
 vendor/SwiftTerm/.swiftpm/
+vendor/swift-nio-ssh/.build/
+vendor/swift-nio-ssh/.swiftpm/
 
 # Release credentials (never commit)
 .env
