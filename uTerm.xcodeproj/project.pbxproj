@@ -974,7 +974,7 @@
 		};
 		A1B2C3D4E5F6789ABCDEF0AA /* XCLocalSwiftPackageReference "vendor/swift-nio-ssh" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/swift-nio-ssh;
+			relativePath = "vendor/swift-nio-ssh";
 		};
 /* End XCLocalSwiftPackageReference section */
 

@@ -12,6 +12,8 @@ struct AdvancedSettingsView: View {
     @AppStorage("sshHostKeyPolicy")  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
     @AppStorage("logLevel")          private var logLevelRaw: String = LogLevel.info.rawValue
     @AppStorage("sftpMaxConcurrentTransfers") private var maxConcurrentUploads: Int = 4
+    /// CloudKit 同步实时状态（uTermApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
+    @Environment(CloudKitSyncMonitor.self) private var sync
 
     private var hostKeyPolicyBinding: Binding<SSHHostKeyPolicy> {
         Binding(
@@ -49,6 +51,16 @@ struct AdvancedSettingsView: View {
             }
 
             SettingsGroup(title: "诊断") {
+                SettingsRow(label: "iCloud 同步", hint: syncHint) {
+                    HStack(spacing: 6) {
+                        Image(systemName: syncIcon)
+                            .font(.system(size: 12))
+                            .foregroundStyle(syncTint)
+                        Text(syncLabel)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(UD.text2)
+                    }
+                }
                 SettingsRow(label: "日志等级",
                             hint: "运行时立即生效；低于此等级的日志不会写入系统日志。") {
                     UDSegmented(selection: logLevelBinding,
@@ -79,5 +91,45 @@ struct AdvancedSettingsView: View {
     private func openConsole() {
         let url = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
         NSWorkspace.shared.open(url)
+    }
+
+    // ─── iCloud 同步实时状态映射（先过「是否登录 iCloud」门，再叠 monitor.phase）──────
+    private var loggedIntoiCloud: Bool { FileManager.default.ubiquityIdentityToken != nil }
+
+    private var syncLabel: String {
+        guard loggedIntoiCloud else { return "未登录 iCloud" }
+        switch sync.phase {
+        case .setup:     return "连接中…"
+        case .importing: return "下载中…"
+        case .exporting: return "上传中…"
+        case .error:     return "同步出错"
+        case .idle:      return sync.lastSyncedAt != nil ? "已同步" : "等待同步"
+        }
+    }
+
+    private var syncIcon: String {
+        guard loggedIntoiCloud else { return "person.crop.circle.badge.xmark" }
+        switch sync.phase {
+        case .setup:     return "arrow.triangle.2.circlepath"
+        case .importing: return "icloud.and.arrow.down"
+        case .exporting: return "icloud.and.arrow.up"
+        case .error:     return "exclamationmark.icloud"
+        case .idle:      return sync.lastSyncedAt != nil ? "checkmark.icloud" : "icloud"
+        }
+    }
+
+    private var syncTint: Color {
+        switch sync.phase {
+        case .error:                          return .orange
+        case .setup, .importing, .exporting:  return UD.accent
+        case .idle:                           return UD.text3
+        }
+    }
+
+    private var syncHint: String {
+        if sync.phase == .error, let e = sync.lastError {
+            return "最近一次同步出错：\(e)。完整日志见下方「显示日志」。"
+        }
+        return "SwiftData 通过 CloudKit 镜像在设备间同步主机 / 密钥；后台分批进行，非即时。完整事件日志见下方「显示日志」。"
     }
 }

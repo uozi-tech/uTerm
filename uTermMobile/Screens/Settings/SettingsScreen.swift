@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作 / 外观 / 终端 / 安全 / 关于。
 /// 保持五标签结构不变——设计稿「更多」分区在此承载（命令面板 / 密钥 / 分组 / 指纹）。
@@ -9,8 +10,11 @@ struct SettingsScreen: View {
     /// 应用锁开关，与启动时读的键同源（缺键视作关）。
     @AppStorage("requireAuthAtLaunch") private var appLockOn = false
     @State private var lockUnavailable = false
+    @State private var showSyncDiag = false
     @Environment(\.mAccent) private var accent
     @Environment(MobileStore.self) private var store
+    /// CloudKit 同步实时状态（MobileApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
+    @Environment(CloudKitSyncMonitor.self) private var sync
 
     @Query private var hosts: [ServerProfile]
     @Query private var keys: [SSHKey]
@@ -41,6 +45,9 @@ struct SettingsScreen: View {
                 Button("好", role: .cancel) {}
             } message: {
                 Text("请先在系统「设置」里启用 Face ID / 触控 ID 或设置锁屏密码，再开启应用锁。")
+            }
+            .sheet(isPresented: $showSyncDiag) {
+                MSyncDiagSheet(sync: sync)
             }
         }
     }
@@ -88,7 +95,7 @@ struct SettingsScreen: View {
             ULogo(size: 48)
             VStack(alignment: .leading, spacing: 2) {
                 Text("uTerm").font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
-                Text("\(hosts.count) 台主机 · \(keys.count) 个密钥 · \(syncStatus)")
+                Text("\(hosts.count) 台主机 · \(keys.count) 个密钥 · \(liveSyncStatus)")
                     .font(M.mono(12.5)).foregroundStyle(M.text3)
             }
             Spacer()
@@ -163,6 +170,8 @@ struct SettingsScreen: View {
     private var aboutGroup: some View {
         MInsetGroup(header: "关于",
                     footer: "uTerm · 现代化 SSH 终端 / 文件 / AI 助手。iOS 与 macOS 通过 iCloud 同步主机与密钥。") {
+            MInsetRow(icon: "icloud", label: "同步诊断", sub: syncDiagSub,
+                      chevron: true, onTap: { showSyncDiag = true })
             MInsetRow(label: "版本", value: appVersion, last: true)
         }
     }
@@ -175,6 +184,83 @@ struct SettingsScreen: View {
     private var syncStatus: String {
         guard MobileModelContainer.usingCloudKit else { return "本地存储" }
         return FileManager.default.ubiquityIdentityToken != nil ? "iCloud 同步" : "未登录 iCloud"
+    }
+
+    /// 在 `syncStatus`（本地 / 未登录 / iCloud）基础上叠 monitor.phase 的进行态。
+    private var liveSyncStatus: String {
+        guard MobileModelContainer.usingCloudKit,
+              FileManager.default.ubiquityIdentityToken != nil else { return syncStatus }
+        switch sync.phase {
+        case .setup:     return "连接中…"
+        case .importing: return "下载中…"
+        case .exporting: return "上传中…"
+        case .error:     return "同步出错"
+        case .idle:      return "iCloud 同步"
+        }
+    }
+
+    /// 「同步诊断」行副标题：登录后显示最近事件数，否则提示基础状态。
+    private var syncDiagSub: String {
+        guard MobileModelContainer.usingCloudKit,
+              FileManager.default.ubiquityIdentityToken != nil
+        else { return syncStatus }
+        return sync.lastError ?? "查看最近同步事件 · 复制日志"
+    }
+}
+
+/// 同步诊断弹窗：展示 CloudKit 最近事件（环形缓冲，新→旧）+ 复制日志。
+/// iOS 无 Console，故在 app 内提供——对照 macOS「高级 › 显示日志」的 Console 入口。
+private struct MSyncDiagSheet: View {
+    let sync: CloudKitSyncMonitor
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("同步诊断").font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
+                Spacer()
+                Button("完成") { dismiss() }
+                    .font(M.sans(15)).foregroundStyle(M.accent)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            Rectangle().fill(M.border).frame(height: 1)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if sync.recentEvents.isEmpty {
+                        Text("暂无同步事件。保持 app 前台、已登录 iCloud 后，setup / import / export 事件会出现在这里。")
+                            .font(M.sans(13)).foregroundStyle(M.text4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 24)
+                    } else {
+                        ForEach(sync.recentEvents.reversed()) { e in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(Self.timeText(e.date))
+                                    .font(M.mono(11)).foregroundStyle(M.text4)
+                                    .frame(width: 62, alignment: .leading)
+                                Text(e.text).font(M.mono(12)).foregroundStyle(M.text2)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            }
+
+            MBtn(title: "复制日志", kind: .secondary, full: true, height: 48) {
+                UIPasteboard.general.string = sync.exportText()
+            }
+            .padding(16)
+        }
+        .presentationBackground(M.panel)
+        .presentationDetents([.medium, .large])
+    }
+
+    private static func timeText(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: d)
     }
 }
 

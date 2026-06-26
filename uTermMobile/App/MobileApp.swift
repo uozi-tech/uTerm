@@ -16,6 +16,8 @@ struct MobileApp: App {
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
     @State private var lock: AppLockModel
+    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给设置页品牌卡/同步诊断实时状态。
+    @State private var cloudKitSync = CloudKitSyncMonitor()
 
     let modelContainer: ModelContainer = MobileModelContainer.make()
 
@@ -35,6 +37,8 @@ struct MobileApp: App {
     var body: some Scene {
         WindowGroup {
             MobileLaunchRoot(appearance: appearance, lock: lock)
+                .environment(cloudKitSync)
+                .task { cloudKitSync.start() }
         }
         .modelContainer(modelContainer)
     }

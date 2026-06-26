@@ -11,6 +11,8 @@ struct uTermApp: App {
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     @State private var appUpdater = AppUpdater()
+    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
+    @State private var cloudKitSync = CloudKitSyncMonitor()
     @State private var forwardingCoordinator = ForwardingCoordinator()
     /// 全局端口转发的「启动自动化」编排器（App 级，注入 Welcome 与全局转发窗口）。
     @State private var globalForwarding = GlobalForwardingModel()
@@ -64,6 +66,8 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
                 .environment(launchRelay)
+                // Welcome 是默认常驻窗口，作为 CloudKit 监听器的单一启动点（start 幂等）。
+                .task { cloudKitSync.start() }
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
@@ -238,6 +242,7 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(appUpdater)
+                .environment(cloudKitSync)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
