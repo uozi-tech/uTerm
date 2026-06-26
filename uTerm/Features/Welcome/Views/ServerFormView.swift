@@ -41,6 +41,19 @@ struct ServerFormView: View {
     /// 主机字段是否已被用户编辑过——避免开屏即把必填项标红。
     @State private var hostTouched = false
 
+    // MARK: 测试连接状态
+    /// 是否有一次测试连接正在进行（驱动按钮文案与进度条）。
+    @State private var testInFlight = false
+    /// 最近一次测试结果：成功 / 失败 + 文案。nil = 尚未测过。
+    @State private var testResult: (ok: Bool, message: String)?
+    /// 当前测试任务，用于取消。
+    @State private var testTask: Task<Void, Never>?
+    /// 测试「世代」：每次开始 / 取消 +1。陈旧任务据此丢弃自己的结果与收尾，
+    /// 避免取消后或开新测试时，旧任务异步返回覆盖最新 UI 状态。
+    @State private var testGeneration = 0
+    /// host-key TOFU 征询桥接：首连未知主机时弹信任窗（与正式连接一致的体验）。
+    @State private var hostKeyRelay = HostKeyChallengeRelay()
+
     private let keychain = KeychainStore()
 
     private var selectedKey: SSHKey? { allKeys.first { $0.id == keyID } }
@@ -64,6 +77,13 @@ struct ServerFormView: View {
         .background(UD.bg)
         .background(WorkspaceWindowAppearance())
         .onAppear(perform: loadForEditing)
+        // 首连未知主机的信任弹窗 —— 测试连接走与正式连接一致的 host-key TOFU 流程。
+        .hostKeySheet(hostKeyRelay)
+        // 关表单时取消进行中的测试，并放掉可能挂起的 host-key 续延，避免任务 / 续延泄漏。
+        .onDisappear {
+            testTask?.cancel()
+            hostKeyRelay.resolve(false)
+        }
     }
 
     // MARK: - 标题栏
@@ -125,7 +145,7 @@ struct ServerFormView: View {
                 ])
             }
             if authMethod == .password {
-                DarkFormField(label: "密码") {
+                DarkFormField(label: "密码", hint: "仅保存在系统钥匙串") {
                     UDTextField(placeholder: "••••••••", text: $password, isSecure: true)
                 }
             } else {
@@ -212,9 +232,19 @@ struct ServerFormView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Text("密钥与口令仅保存在系统钥匙串")
-                .font(.system(size: 11)).foregroundStyle(UD.text4)
-            Spacer()
+            UDButton(title: testInFlight ? "取消测试" : "测试连接", style: .secondary) {
+                if testInFlight { cancelTest() } else { startTest() }
+            }
+            .disabled(!testInFlight && !canTest)
+            .help("用当前填写的主机、认证方式即时验证 SSH 连接（无需先保存）")
+
+            if testInFlight {
+                UDIndeterminateBar().frame(width: 60)
+            } else if let r = testResult {
+                testStatusLabel(r.message, ok: r.ok)
+            }
+
+            Spacer(minLength: 8)
             UDButton(title: "取消", style: .secondary, trailingHint: "esc") { dismiss() }
                 .keyboardShortcut(.cancelAction)
             UDButton(title: "保存", trailingHint: "⌘↵") { save() }
@@ -223,6 +253,17 @@ struct ServerFormView: View {
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(UD.panel)
+    }
+
+    /// 测试结果标签：成功绿勾 / 失败红叉；单行截断，完整文案走 `help`。
+    private func testStatusLabel(_ message: String, ok: Bool) -> some View {
+        Label(message, systemImage: ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+            .font(UD.caption)
+            .foregroundStyle(ok ? UD.success : UD.danger)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: 240, alignment: .leading)
+            .help(message)
     }
 
     // MARK: - 校验
@@ -262,6 +303,118 @@ struct ServerFormView: View {
         if editing != nil { return "编辑服务器" }
         if duplicating != nil { return "复制服务器" }
         return "新建服务器"
+    }
+
+    // MARK: - 测试连接
+
+    /// 是否具备发起测试的最小条件：必填项齐、端口合法、认证材料就绪、跳板机已选。
+    /// 测试进行中时由 footer 单独判定（按钮转「取消测试」），此处不含 inFlight。
+    private var canTest: Bool {
+        guard !host.trimmingCharacters(in: .whitespaces).isEmpty,
+              !username.trimmingCharacters(in: .whitespaces).isEmpty,
+              portError == nil else { return false }
+        if useJumpHost, jumpProfileID == nil { return false }
+        switch authMethod {
+        case .password: return !password.isEmpty
+        case .privateKey: return keyID != nil
+        }
+    }
+
+    /// 发起一次测试。bump 世代使任何在途旧任务作废，再起新任务。
+    private func startTest() {
+        testGeneration &+= 1
+        let gen = testGeneration
+        testResult = nil
+        testInFlight = true
+        testTask = Task { await runTest(generation: gen) }
+    }
+
+    /// 取消进行中的测试：bump 世代作废在途任务的收尾 / 结果，取消任务，
+    /// 放掉可能挂起的 host-key 续延，并立即给 UI 反馈。
+    private func cancelTest() {
+        testGeneration &+= 1
+        testTask?.cancel()
+        testTask = nil
+        hostKeyRelay.resolve(false)
+        testInFlight = false
+        testResult = nil
+    }
+
+    /// 用**当前表单输入**（而非已保存的 profile）建立一次 SSH 连接以验证可达性 +
+    /// 认证，随即断开。跳板机鉴权仍从钥匙串按所选的已有 profile 读取。
+    private func runTest(generation gen: Int) async {
+        defer { if gen == testGeneration { testInFlight = false } }
+        func publish(_ ok: Bool, _ message: String) {
+            guard gen == testGeneration else { return }
+            testResult = (ok, message)
+        }
+
+        // 1. 认证材料：密码取表单输入；私钥按所选密钥库条目从钥匙串读正文 + 口令。
+        let auth: ResolvedAuth
+        do {
+            auth = try resolvedAuthFromForm()
+        } catch {
+            publish(false, describe(error)); return
+        }
+
+        // 2. 跳板机鉴权：跳板机只能选已有 profile，凭据已在钥匙串。
+        var jumpAuth: ResolvedAuth?
+        let jump = useJumpHost ? selectedJump : nil
+        if let jump {
+            do {
+                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
+            } catch {
+                publish(false, "跳板机认证读取失败：\(describe(error))"); return
+            }
+        }
+
+        // 3. 用表单标量字段建快照（尚未保存，无 profile 可摘）。
+        let snapshot = SSHConnection.ProfileSnapshot(
+            host: host.trimmingCharacters(in: .whitespaces),
+            port: Int(port.trimmingCharacters(in: .whitespaces)) ?? 22,
+            jumpHost: jump.map {
+                SSHConnection.ProfileSnapshot.JumpHostSnapshot(host: $0.host, port: $0.port)
+            })
+
+        // 4. 连接 → 开一次性 exec 通道确认认证 + 通道可用 → 断开。
+        let verifier = HostKeyVerifier(modelContainer: modelContext.container)
+        let approver = hostKeyRelay.makeApprover()
+        do {
+            let connected = try await SSHClientFactory.connect(
+                profile: snapshot, auth: auth, jumpHostAuth: jumpAuth,
+                hostKeyVerifier: verifier, hostKeyApprover: approver)
+            _ = try? await connected.exec("true")
+            await connected.close()
+            guard !Task.isCancelled else { return }
+            publish(true, "连接成功")
+        } catch {
+            guard !Task.isCancelled else { return }
+            publish(false, describe(error))
+        }
+    }
+
+    /// 由当前表单输入解析认证材料。复用 `SSHAuthResolver` 的纯函数变体 ——
+    /// 用一个临时 `ServerProfile`（不插入 context）承载 username / authMethod，
+    /// 密码取表单输入，私钥正文 / 口令按所选密钥库条目从钥匙串读出。
+    private func resolvedAuthFromForm() throws -> ResolvedAuth {
+        let probe = ServerProfile()
+        probe.username = username.trimmingCharacters(in: .whitespaces)
+        probe.authMethod = authMethod
+        var pem: String?
+        var passphrase: String?
+        if authMethod == .privateKey, let keyID {
+            pem = try keychain.load(profileID: keyID, kind: .privateKey)
+            passphrase = try keychain.load(profileID: keyID, kind: .passphrase)
+        }
+        return try SSHAuthResolver.resolve(
+            profile: probe, password: password,
+            privateKey: pem, passphrase: passphrase)
+    }
+
+    /// 取 `LocalizedError` 的本地化描述（SSH / 认证错误都给了中文文案），否则兜底。
+    private func describe(_ error: Error) -> String {
+        if let e = error as? LocalizedError, let d = e.errorDescription { return d }
+        return error.localizedDescription
     }
 
     // MARK: - 载入 / 保存

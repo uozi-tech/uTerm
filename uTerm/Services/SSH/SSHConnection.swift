@@ -86,6 +86,14 @@ actor SSHConnection: TerminalBackend {
                 JumpHostSnapshot(host: $0.host, port: $0.port)
             }
         }
+
+        /// 直接用标量字段构造快照。给「编辑表单测试连接」用 —— 此时用户尚未保存，
+        /// 没有可摘取的 `ServerProfile`，需用表单当前输入的 host/port/跳板机直接建快照。
+        init(host: String, port: Int, jumpHost: JumpHostSnapshot?) {
+            self.host = host
+            self.port = port
+            self.jumpHost = jumpHost
+        }
     }
 
     private let profile: ProfileSnapshot
