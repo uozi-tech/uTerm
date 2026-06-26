@@ -162,7 +162,10 @@ actor ForwardingSession {
             connected: connected,
             listenHost: rule.listenHost, listenPort: rule.listenPort,
             destHost: rule.destHost ?? "127.0.0.1", destPort: rule.destPort,
-            counter: counter)
+            counter: counter,
+            onChannelFailure: { [weak self] error in
+                Task { await self?.handleForwardChannelFailure(rule, error: error) }
+            })
         let onStatus = self.onStatus
         // 驱动 Task：start() 抛错（bind 冲突）→ 归类报 error；成功 → active。
         let task = Task {
@@ -264,7 +267,7 @@ actor ForwardingSession {
     func verifyConnectionAlive(timeout: Duration) async -> Bool {
         guard !isClosed else { return false }
         guard let connected else { return true }
-        let alive = await withTaskGroup(of: Bool?.self) { group in
+        let transportAlive = await withTaskGroup(of: Bool?.self) { group in
             group.addTask {
                 do {
                     _ = try await connected.exec("true")
@@ -286,10 +289,35 @@ actor ForwardingSession {
             group.cancelAll()
             return first == true
         }
-        if !alive {
+        if !transportAlive {
             await failTunnelsAfterTransportDeath()
+            return false
         }
-        return alive
+        return true
+    }
+
+    /// 新进来的本地连接无法打开 direct-tcpip 时，不再只关掉该 socket。传输层类错误
+    /// 说明整条 SSH 连接已半死，拆整会话；普通目标不可达则只让该规则进入 error。
+    private func handleForwardChannelFailure(_ rule: ForwardingRuleSnapshot, error: Error) async {
+        guard !isClosed, tunnels[rule.id] != nil else { return }
+        if Self.isTransportDeath(error) {
+            await connected?.close()
+            await failTunnelsAfterTransportDeath()
+            return
+        }
+        await failTunnel(rule.id, error: ForwardingError.classify(error, rule: rule))
+    }
+
+    private func failTunnel(_ ruleID: UUID, error: ForwardingError) async {
+        guard let handle = tunnels.removeValue(forKey: ruleID) else { return }
+        handle.task.cancel()
+        await handle.localListener?.close()
+        await handle.socksListener?.close()
+        onStatus(ruleID, .error(error))
+    }
+
+    private static func isTransportDeath(_ error: Error) -> Bool {
+        SSHTransportFailure.isTransportFailure(error) || error is ForwardingTimeoutError
     }
 
     /// 判死收尾：置 `isClosed`（后续 start 直接报错，不在死连接上挂死）、

@@ -27,6 +27,7 @@ actor LocalForwardListener {
     private let destPort: Int
     /// 本规则的流量计数器（所有 accept 的连接共享，得到规则合计）。
     private let counter: TunnelByteCounter?
+    private let onChannelFailure: @Sendable (Error) -> Void
 
     /// 绑定后的监听通道，`close()` 时关闭。
     private var serverChannel: Channel?
@@ -34,13 +35,15 @@ actor LocalForwardListener {
     init(connected: ConnectedClient,
          listenHost: String, listenPort: Int,
          destHost: String, destPort: Int,
-         counter: TunnelByteCounter? = nil) {
+         counter: TunnelByteCounter? = nil,
+         onChannelFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
         self.connected = connected
         self.listenHost = listenHost
         self.listenPort = listenPort
         self.destHost = destHost
         self.destPort = destPort
         self.counter = counter
+        self.onChannelFailure = onChannelFailure
     }
 
     /// 绑定本地监听并开始接受连接。`bind` 失败时抛出（端口冲突 / 权限）。
@@ -50,6 +53,7 @@ actor LocalForwardListener {
         let destHost = self.destHost
         let destPort = self.destPort
         let counter = self.counter
+        let onChannelFailure = self.onChannelFailure
 
         // 关键（修早期字节丢弃竞态，PG「客户端先说话」一连上就发 SSLRequest）：用 bind 的
         // async 重载，在 childChannelInitializer 里、**child 激活之前、于其 EventLoop 上**就把
@@ -96,7 +100,8 @@ actor LocalForwardListener {
                                     localAsync,
                                     connected: connected,
                                     destHost: destHost, destPort: destPort,
-                                    counter: counter)
+                                    counter: counter,
+                                    onChannelFailure: onChannelFailure)
                             }
                         }
                     }
@@ -113,7 +118,8 @@ actor LocalForwardListener {
         _ localAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         connected: ConnectedClient,
         destHost: String, destPort: Int,
-        counter: TunnelByteCounter?
+        counter: TunnelByteCounter?,
+        onChannelFailure: @escaping @Sendable (Error) -> Void
     ) async {
         do {
             // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错→
@@ -134,6 +140,7 @@ actor LocalForwardListener {
             AppLogger.error(
                 "本地转发开通道失败 → \(destHost):\(destPort)：\(error.localizedDescription)",
                 category: ForwardingLog.category)
+            onChannelFailure(error)
             try? await localAsync.channel.close()
         }
     }
