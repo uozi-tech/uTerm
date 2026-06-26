@@ -609,6 +609,23 @@ extension ChildChannelStateMachine {
         }
     }
 
+    // uTerm patch #2: whether sending a CHANNEL_WINDOW_ADJUST is legal in the
+    // current state. This is the EXACT accepting set of `sendChannelWindowAdjust`
+    // and is strictly narrower than `isActiveOnChannel`, which also returns true
+    // for `.closedLocally` and `.closedRemotely` — states in which a window adjust
+    // hits a `preconditionFailure` and aborts the process. `sentClose` (patch #1)
+    // only excluded `.closedLocally`/`.closed`; `.closedRemotely` (peer sent
+    // CHANNEL_CLOSE first — the network-flap case) still leaked through. Gating on
+    // this predicate closes that gap and keeps the legality set in one place.
+    var canSendWindowAdjust: Bool {
+        switch self.state {
+        case .active, .halfClosedLocal, .halfClosedRemote, .quiescent:
+            return true
+        case .idle, .requestedLocally, .requestedRemotely, .closedLocally, .closedRemotely, .closed:
+            return false
+        }
+    }
+
     /// The local identifier for this channel. We always know this identifier.
     var localChannelIdentifier: UInt32 {
         switch self.state {

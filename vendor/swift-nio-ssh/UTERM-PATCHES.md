@@ -60,3 +60,48 @@ window，于是构造 `CHANNEL_WINDOW_ADJUST` 并 `processOutboundMessage` →
 这与 apple/swift-nio-ssh 上游 `deliverSingleRead` 的现行实现一致（上游正是用
 `!self.didClose, !self.state.sentClose` 守卫修掉同一个 precondition 崩溃）。fork
 合上游或升级 Citadel 到改用已修 nio-ssh 的版本后，此补丁可去除。
+
+## 2. 补全 window-adjust 崩溃：覆盖 `.closedRemotely`（对端先关）
+
+补丁 #1 的 `!self.state.sentClose` 守卫**只覆盖我方先关**方向：`sentClose` 仅对
+`.closedLocally`/`.closed` 返回 true。但 `.closedRemotely`（“远端已发 CHANNEL_CLOSE、
+我方还没回”——**正是网络波动 / 远端先掉线的场景**）`sentClose` 返回 **false**，而
+`isActiveOnChannel` 对它返回 **true**、`sendChannelWindowAdjust` 对它仍 `preconditionFailure`
+（`ChildChannelStateMachine.swift` 三者分别在 line 607 / 595 / 431）。于是补丁 #1 之后，
+**同一条 line:432 崩溃经“对端先关”这扇门照样触发**：
+
+```
+对端 DATA+CLOSE 同段到达
+  → receiveChannelClose: .active → .closedRemotely
+  → 父 channelReadComplete → tryToRead（guard isActiveOnChannel 对 .closedRemotely == true，放行）
+  → deliverPendingReads → deliverSingleRead(.data)
+  → 补丁 #1 守卫 `!didClose && !sentClose` 在 .closedRemotely 下双双为 false → 放行
+  → unbufferBytes 出增量 → processOutboundMessage(.channelWindowAdjust)
+  → sendChannelWindowAdjust 命中 .closedRemotely → preconditionFailure → 进程 abort
+```
+
+（TCP 掉线那条路径**不是**第二入口：`errorEncountered` 先把 `didClose = true` 再排空读，
+被 `!didClose` 半边挡住。真正漏的只有 inbound-CHANNEL_CLOSE 即 `.closedRemotely` 这条。）
+
+根因是结构性的：window-adjust 的合法状态集
+（`.active`/`.halfClosedLocal`/`.halfClosedRemote`/`.quiescent`）**严格窄于** `isActiveOnChannel`
+（后者还含 `.closedLocally`/`.closedRemotely`）。补丁 #1 只中和了 `.closedLocally` 一臂。
+
+涉及文件：
+
+- `Sources/NIOSSH/Child Channels/ChildChannelStateMachine.swift`：在 `sentClose` 之后新增计算
+  属性 `canSendWindowAdjust`，只对 `sendChannelWindowAdjust` 接受的 4 个状态返回 true（与
+  该方法的接受集逐一对齐，把“合法性”收敛到一处）。
+- `Sources/NIOSSH/Child Channels/SSHChildChannel.swift`：`deliverSingleRead` 的 `.data` 分支
+  守卫从 `if !self.didClose, !self.state.sentClose, …` 改为
+  `if !self.didClose, self.state.canSendWindowAdjust, …`。`.closedRemotely` 下短路、不再尝试
+  发 window-adjust（对端已走，回 ACK 本就无意义；与补丁 #1 对 `.closedLocally` 的短路行为一致，
+  顺带也不会在该状态调用 `unbufferBytes` 的无符号减法）。
+
+升级上游 / Citadel 换用已修 nio-ssh 后，补丁 #1、#2 一并可去除（届时核对上游
+`deliverSingleRead` 是否已对两个关闭方向都不发 window-adjust）。
+
+> ⚠️ 验证：vendored 包改完后需在 Xcode reset package caches 重解析再编译；线上崩溃只在
+> `-L`/`-D`/长连在**远端先断**时复现，**发版前务必真机 flap smoke 验证**（编译过 ≠ 修好）。
+> SourceKit 在 fresh checkout 对本 target 报「Cannot find type SSHChannelIdentifier / 不符合
+> Equatable」是已知假阳性，信 xcodebuild。

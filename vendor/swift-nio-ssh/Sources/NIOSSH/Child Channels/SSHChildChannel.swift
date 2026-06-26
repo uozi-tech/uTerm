@@ -649,13 +649,18 @@ private extension SSHChildChannel {
     private func deliverSingleRead(_ data: PendingContent) {
         switch data {
         case .data(let data):
-            // We only futz with the window manager if the channel is not already closed.
-            // uTerm patch: also skip when we've sent CHANNEL_CLOSE (state .closedLocally/.closed).
-            // Draining buffered reads while in a closed-locally state would otherwise emit a
-            // CHANNEL_WINDOW_ADJUST, which the state machine rejects with a preconditionFailure
-            // ("Sent channel window adjust on channel in invalid state") and crashes the process.
-            // This mirrors the `!self.state.sentClose` guard added in upstream apple/swift-nio-ssh.
-            if !self.didClose, !self.state.sentClose, let increment = self.windowManager.unbufferBytes(data.data.readableBytes) {
+            // We only futz with the window manager if the channel is still in a state that
+            // accepts a CHANNEL_WINDOW_ADJUST. Draining buffered reads while the channel is
+            // closing would otherwise emit a window adjust, which the state machine rejects with
+            // a preconditionFailure ("Sent channel window adjust on channel in invalid state")
+            // and crashes the whole process on the EventLoop thread.
+            //
+            // uTerm patch #1 used `!self.state.sentClose`, which only excluded the WE-closed
+            // direction (.closedLocally/.closed). The peer-closed-first direction (.closedRemotely
+            // — the network-flap case) still passed the guard and crashed. uTerm patch #2 gates on
+            // `canSendWindowAdjust`, the exact accepting set of `sendChannelWindowAdjust`, covering
+            // both directions. See vendor/swift-nio-ssh/UTERM-PATCHES.md.
+            if !self.didClose, self.state.canSendWindowAdjust, let increment = self.windowManager.unbufferBytes(data.data.readableBytes) {
                 let update = SSHMessage.ChannelWindowAdjustMessage(recipientChannel: self.state.remoteChannelIdentifier!, bytesToAdd: UInt32(increment))
                 self.processOutboundMessage(.channelWindowAdjust(update), promise: nil)
             }
