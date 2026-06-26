@@ -64,4 +64,46 @@ final class ConnectionWatchdogTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(a.probeCount, 1)
     }
+
+    /// `NWPathMonitor` 启动时会立即回调一次当前路径；首次 satisfied 只记录状态，
+    /// 避免应用带网启动时无谓探测。
+    func testInitialSatisfiedPathUpdateDoesNotSweep() async {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .milliseconds(50)
+        let a = ProbeSpy()
+        dog.register(a)
+
+        dog.handlePathUpdate(satisfied: true)
+
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(a.probeCount, 0)
+    }
+
+    /// Wi-Fi / 热点 / VPN 切换常见表现是 satisfied → satisfied，而不是先
+    /// unsatisfied；后续可用路径更新必须主动扫一次，才能及时判死半开 SSH。
+    func testSatisfiedToSatisfiedPathUpdateSchedulesSweep() async {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .milliseconds(50)
+        let a = ProbeSpy()
+        dog.register(a)
+
+        dog.handlePathUpdate(satisfied: true)
+        dog.handlePathUpdate(satisfied: true)
+
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(a.probeCount, 1)
+    }
+
+    func testUnsatisfiedToSatisfiedPathUpdateSchedulesSweep() async {
+        let dog = ConnectionWatchdog(observingSystemEvents: false)
+        dog.settleDelay = .milliseconds(50)
+        let a = ProbeSpy()
+        dog.register(a)
+
+        dog.handlePathUpdate(satisfied: false)
+        dog.handlePathUpdate(satisfied: true)
+
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(a.probeCount, 1)
+    }
 }

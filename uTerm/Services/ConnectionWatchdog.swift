@@ -27,7 +27,9 @@ protocol ConnectionHealthProbing: AnyObject, Sendable {
 ///
 /// 本服务在三类时刻出手：
 ///   1. 系统从睡眠唤醒（`NSWorkspace.didWakeNotification`）；
-///   2. 网络路径从不可用恢复为可用（`NWPathMonitor` unsatisfied → satisfied）；
+///   2. 网络路径变动后的可用状态（`NWPathMonitor` satisfied 更新，含
+///      unsatisfied → satisfied，以及 Wi-Fi / 热点 / VPN 这类 satisfied → satisfied
+///      的网络环境切换）；
 ///   3. **周期心跳**（`probeInterval`，默认 30s）—— 因为机器一直醒着、网也没断时，
 ///      空闲连接仍可能被中间 NAT / 防火墙的空闲超时、或服务器端 `ClientAliveInterval`
 ///      静默掐断；只靠 1/2 的反应式探测盖不住这个场景。周期探测发的 `exec true`
@@ -57,7 +59,7 @@ final class ConnectionWatchdog {
 
     private var entries: [ObjectIdentifier: WeakEntry] = [:]
     private var pathMonitor: NWPathMonitor?
-    private var lastPathSatisfied = true
+    private var hasSeenPathUpdate = false
     private var pendingSweep: Task<Void, Never>?
     private var periodicTask: Task<Void, Never>?
     private var observersInstalled = false
@@ -157,12 +159,15 @@ final class ConnectionWatchdog {
         }
     }
 
-    /// 只在「断 → 通」的恢复沿触发：网络刚回来的瞬间正是既有 TCP 状态最可疑、
-    /// 探测又能得到真实应答的时刻。监视器启动时会立刻回调一次当前状态 ——
-    /// `lastPathSatisfied` 初始为 true，应用带网启动不会触发无谓扫描。
-    private func handlePathUpdate(satisfied: Bool) {
-        defer { lastPathSatisfied = satisfied }
-        if satisfied && !lastPathSatisfied {
+    /// 网络路径更新时触发：除「断 → 通」外，Wi-Fi / 热点 / VPN 切换经常表现为
+    /// satisfied → satisfied，既有 TCP 连接同样高度可疑。监视器启动时的首次回调
+    /// 只记录状态，不扫描，避免应用带网启动立刻做一次无谓探测。
+    func handlePathUpdate(satisfied: Bool) {
+        defer {
+            hasSeenPathUpdate = true
+        }
+        guard hasSeenPathUpdate else { return }
+        if satisfied {
             scheduleSweep()
         }
     }
