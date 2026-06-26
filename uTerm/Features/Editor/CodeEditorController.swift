@@ -428,7 +428,8 @@ extension CodeEditorController {
 
     func handleKeyEvent(_ event: NSEvent,
                         openFind: (_ showReplace: Bool) -> Void,
-                        closeFind: () -> Void) -> Bool {
+                        closeFind: () -> Void,
+                        requestSave: () -> Void) -> Bool {
         guard event.type == .keyDown else { return false }
         let cmd   = event.modifierFlags.contains(.command)
         let opt   = event.modifierFlags.contains(.option)
@@ -444,10 +445,29 @@ extension CodeEditorController {
             currentFindController?.next(); return true
         case (true, false, true, "g"):
             currentFindController?.previous(); return true
+        case (true, false, false, "s"):
+            // ⌘S 在编辑器聚焦时直接保存“正在编辑的这个 buffer”——而不是依赖窗口的
+            // activeBufferID。分屏下点进非聚焦面板的编辑器，NSTextView 吃掉点击，
+            // PreviewPanelView 的 onTapGesture 不触发 → focusedPanelID/activeBufferID
+            // 不更新 → 老路径会把 ⌘S 投到另一个未脏 buffer 上变成 no-op。由本地 keyDown
+            // 监听器拦截（已确保只在 textView 是 firstResponder 的 key 窗口里触发），
+            // 消费事件（return true）避免菜单项再触发一次造成双保存。
+            requestSave(); return true
         default:
             // Esc handled by FindReplaceBar via .keyboardShortcut(.escape)
             return false
         }
+    }
+
+    /// 由本地 keyDown 监听器在 ⌘S 时调用：把“当前编辑的 buffer”的 id 带进
+    /// `.savePreviewBuffer` 通知，让 WorkspaceWindowView 精确保存它（而非 activeBufferID）。
+    /// buffer 未绑定时静默忽略。
+    func requestSaveCurrentBuffer() {
+        guard let buffer else { return }
+        NotificationCenter.default.post(
+            name: .savePreviewBuffer,
+            object: nil,
+            userInfo: [SavePreviewBufferKey.bufferID: buffer.id])
     }
 
     func openFindController(showReplace: Bool) -> FindReplaceController {

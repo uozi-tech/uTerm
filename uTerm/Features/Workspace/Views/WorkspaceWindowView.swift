@@ -224,9 +224,15 @@ struct WorkspaceWindowView: View {
                 Task { await workspace.filePreviewModel.open(path: path, fileSize: size, mtime: mtime) }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { _ in
-            guard controlActiveState == .key,
-                  let id = workspace.filePreviewModel.activeBufferID else { return }
+        .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { note in
+            guard controlActiveState == .key else { return }
+            // 编辑器聚焦时由本地 keyDown 监听器带入正在编辑的 buffer id（分屏下精确保存它，
+            // 不被过期的 activeBufferID 误导）；菜单点击 / 非编辑器聚焦时回落到 activeBufferID。
+            let requested = note.userInfo?[SavePreviewBufferKey.bufferID] as? UUID
+            guard let id = requested ?? workspace.filePreviewModel.activeBufferID else { return }
+            // 多窗口下通知会广播到所有工作区窗口：带入的 bufferID 只存在于来源窗口的模型里，
+            // 非来源窗口直接忽略（避免对不属于自己的 id 触发一次空保存路径）。
+            guard workspace.filePreviewModel.buffers.contains(where: { $0.id == id }) else { return }
             Task { await handleSave(id: id) }
         }
         .confirmationDialog(

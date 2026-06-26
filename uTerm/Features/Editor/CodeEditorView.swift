@@ -87,6 +87,8 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
                     context.coordinator.dismissFindController()
                     findBinding.wrappedValue = nil
                 }
+            }, requestSave: {
+                context.coordinator.requestSaveCurrentBuffer()
             })
             return handled ? nil : event
         }

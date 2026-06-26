@@ -143,6 +143,30 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertEqual(String(decoding: onRemote, as: UTF8.self), "b")
     }
 
+    /// 回归：分屏下编辑非聚焦面板的文件，⌘S 经编辑器带入“正在编辑的 buffer id”，
+    /// 即使 activeBufferID 指向另一个（未脏）buffer，也必须精确保存被编辑的那个。
+    func test_save_savesSpecifiedBuffer_evenWhenNotActive() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil)
+        let bufA = m.buffers.first { $0.remotePath == "/a.swift" }!
+        let bufB = m.buffers.first { $0.remotePath == "/b.swift" }!
+        // 模拟分屏焦点错位：activeBufferID 停在 A（未脏），实际被编辑的是 B。
+        m.activeBufferID = bufA.id
+        bufB.text = "edited"; bufB.isDirty = true
+
+        let result = await m.save(bufB.id)        // 编辑器带入 B 的 id
+        if case .saved = result {} else { return XCTFail("expected .saved, got \(result)") }
+        XCTAssertFalse(bufB.isDirty, "被编辑的 B 应已保存并清脏")
+        let onRemote = try await mock.read("/b.swift")
+        XCTAssertEqual(String(decoding: onRemote, as: UTF8.self), "edited")
+        // A 不应被动到
+        let aRemote = try await mock.read("/a.swift")
+        XCTAssertEqual(String(decoding: aRemote, as: UTF8.self), "a")
+    }
+
     func test_save_detectsConflict_whenRemoteMtimeAdvanced() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/x.swift", data: Data("a".utf8))
