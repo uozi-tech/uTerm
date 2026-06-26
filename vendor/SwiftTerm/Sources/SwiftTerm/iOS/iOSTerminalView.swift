@@ -234,9 +234,6 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
-    // Variant of `attributes` without the minimum-contrast clamp, used by
-    // contrast-exempt decorative glyphs (uTerm patch, see UTERM-PATCHES.md)
-    var noContrastAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
 
     /// Minimum WCAG contrast ratio (1...21) enforced between a cell's
     /// foreground and background at render time, mirroring VS Code's

@@ -101,22 +101,18 @@ final class TerminalContrastTests: XCTestCase {
                              "中灰底上不应被漂白成白色")
     }
 
-    // MARK: 装饰字形豁免
+    // MARK: 装饰字形也钳制
 
-    /// 盒线 / 块元素 / powerline 字形靠与相邻 cell 背景同色无缝拼接，必须豁免。
-    func test_decorative_glyphs_are_contrast_exempt() {
-        XCTAssertTrue(TerminalContrast.isContrastExempt(codePoint: 0x2500))  // ─ 盒线
-        XCTAssertTrue(TerminalContrast.isContrastExempt(codePoint: 0x2580))  // ▀ 块元素
-        XCTAssertTrue(TerminalContrast.isContrastExempt(codePoint: 0x259F))
-        XCTAssertTrue(TerminalContrast.isContrastExempt(codePoint: 0xE0B0))  //  powerline
-        XCTAssertTrue(TerminalContrast.isContrastExempt(codePoint: 0xE0BF))
-    }
-
-    func test_regular_text_is_not_contrast_exempt() {
-        XCTAssertFalse(TerminalContrast.isContrastExempt(codePoint: UInt32(UnicodeScalar("A").value)))
-        XCTAssertFalse(TerminalContrast.isContrastExempt(codePoint: 0x24FF))  // 豁免段前界外
-        XCTAssertFalse(TerminalContrast.isContrastExempt(codePoint: 0x25A0))  // ■ 几何图形不豁免
-        XCTAssertFalse(TerminalContrast.isContrastExempt(codePoint: 0xE0C0))  // powerline 段外
+    /// 装饰字形（盒线 / 块元素 / powerline）不再豁免——远端 prompt 按深色背景
+    /// 硬编码的灰色分隔符在浅底上是不可读的灰块，必须和普通文本一样钳制。
+    /// 典型场景：p10k 段分隔用的中灰 (#8A8A8A) 在白底上对比 ~3.1，钳到 4.5 须变深。
+    func test_decorative_glyph_color_is_clamped_on_light_background() {
+        let sep = srgb(0x8A8A8A), bg = srgb(0xFFFFFF)
+        XCTAssertLessThan(TerminalContrast.contrastRatio(sep, bg), 4.5, "前提：原始灰对比不足")
+        let adjusted = TerminalContrast.ensureContrast(fg: sep, bg: bg, ratio: 4.5)
+        XCTAssertGreaterThanOrEqual(TerminalContrast.contrastRatio(adjusted, bg), 4.5)
+        XCTAssertLessThan(TerminalContrast.relativeLuminance(adjusted),
+                          TerminalContrast.relativeLuminance(sep), "白底上的灰分隔符应变深可读")
     }
 
     // MARK: TerminalTheme 接线

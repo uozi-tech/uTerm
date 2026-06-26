@@ -111,7 +111,6 @@ extension TerminalView {
     {
         self.attributes = [:]
         self.urlAttributes = [:]
-        self.noContrastAttributes = [:]
         self.colors = Array(repeating: nil, count: 256)
         self.trueColors = [:]
     }
@@ -320,7 +319,6 @@ extension TerminalView {
     {
         urlAttributes = [:]
         attributes = [:]
-        noContrastAttributes = [:]
 
         terminal.updateFullScreen ()
         queuePendingDisplay()
@@ -469,13 +467,9 @@ extension TerminalView {
     //
     // Given a vt100 attribute, return the NSAttributedString attributes used to render it
     //
-    func getAttributes (_ attribute: Attribute, withUrl: Bool, contrastExempt: Bool = false) -> [NSAttributedString.Key:Any]?
+    func getAttributes (_ attribute: Attribute, withUrl: Bool) -> [NSAttributedString.Key:Any]?
     {
-        if contrastExempt {
-            if !withUrl, let result = noContrastAttributes [attribute] {
-                return result
-            }
-        } else if let result = withUrl ? urlAttributes [attribute] : attributes [attribute] {
+        if let result = withUrl ? urlAttributes [attribute] : attributes [attribute] {
             return result
         }
 
@@ -517,8 +511,11 @@ extension TerminalView {
         var fgColor = mapColor (color: fg, isFg: true, isBold: isBold, useBrightColors: useBrightColors)
         let bgColor = mapColor (color: bg, isFg: false, isBold: false)
         // Minimum-contrast clamp (uTerm patch, see UTERM-PATCHES.md). Applied
-        // before dim so SGR 2 still reads as intentionally faint.
-        if minimumContrastRatio > 1, !contrastExempt {
+        // before dim so SGR 2 still reads as intentionally faint. Decorative
+        // glyphs (box drawing / block elements / powerline) are clamped too:
+        // remote prompts hardcode dark-tuned grays for their separators, which
+        // render as unreadable gray blocks on a light terminal background.
+        if minimumContrastRatio > 1 {
             fgColor = TerminalContrast.ensureContrast(fg: fgColor, bg: bgColor, ratio: minimumContrastRatio)
         }
         // Apply dim/faint attribute (SGR 2)
@@ -549,14 +546,8 @@ extension TerminalView {
             nsattr [.underlineColor] = fgColor
             nsattr [SwiftTermUnderlineStyleKey] = Int(UnderlineStyle.dashed.rawValue)
 
-            if contrastExempt {
-                // Rare combination (decorative glyph inside a link), skip caching
-                return nsattr
-            }
             // Add to cache
             urlAttributes [attribute] = nsattr
-        } else if contrastExempt {
-            noContrastAttributes [attribute] = nsattr
         } else {
             // Just add to cache
             attributes [attribute] = nsattr
@@ -672,7 +663,6 @@ extension TerminalView {
         var lastAttr: Attribute? = nil
         var lastHasUrl = false
         var lastIsSelected = false
-        var lastContrastExempt = false
 
         func flushPending() {
             if !pendingText.isEmpty, let attrs = pendingAttrs {
@@ -686,11 +676,7 @@ extension TerminalView {
             let width = max(1, Int(ch.width))
             let attr = ch.attribute
             let hasUrl = shouldUnderlineLink(row: row, column: col, width: width, cell: ch)
-            // Decorative glyphs (box drawing / block elements / powerline) keep
-            // their raw colors so they tile seamlessly with neighboring cells
-            // even when minimumContrastRatio clamps regular text.
-            let contrastExempt = TerminalContrast.isContrastExempt(codePoint: UInt32(bitPattern: ch.code))
-            guard let attributes = getAttributes(attr, withUrl: hasUrl, contrastExempt: contrastExempt) else {
+            guard let attributes = getAttributes(attr, withUrl: hasUrl) else {
                 flushPending()
                 if let finished = builder?.buildIfNeeded() {
                     segments.append(finished)
@@ -713,12 +699,11 @@ extension TerminalView {
             let isSelected = isColumnSelected(selectionColumns, column: col, width: width)
 
             // Flush batch when attributes change
-            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected || contrastExempt != lastContrastExempt {
+            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected {
                 flushPending()
                 lastAttr = attr
                 lastHasUrl = hasUrl
                 lastIsSelected = isSelected
-                lastContrastExempt = contrastExempt
             }
 
             let currentAttributes: [NSAttributedString.Key: Any]

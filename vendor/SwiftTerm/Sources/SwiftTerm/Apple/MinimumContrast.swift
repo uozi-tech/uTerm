@@ -207,20 +207,6 @@ public enum TerminalContrast {
         }
         return TTColor.make(red: best.r, green: best.g, blue: best.b, alpha: 1)
     }
-
-    /// Decorative glyphs excluded from contrast adjustment: box drawing
-    /// (U+2500–257F), block elements (U+2580–259F) and powerline symbols
-    /// (U+E0B0–E0BF). Their foregrounds intentionally match adjacent cell
-    /// backgrounds to tile into seamless segments/bars — clamping them would
-    /// break prompt separators and block-art. Same exemption as xterm.js.
-    public static func isContrastExempt(codePoint: UInt32) -> Bool {
-        switch codePoint {
-        case 0x2500...0x259F, 0xE0B0...0xE0BF:
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 private extension CGFloat {
