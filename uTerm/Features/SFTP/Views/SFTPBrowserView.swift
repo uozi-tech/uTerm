@@ -18,6 +18,8 @@ struct SFTPBrowserView: View {
     @State private var permissionTarget: RemoteEntry?
     @State private var newFolderPresented = false
     @State private var newFolderText = ""
+    @State private var newFilePresented = false
+    @State private var newFileText = ""
     @State private var isDropTargeted = false
     /// 待确认覆盖的上传：检查发现选中文件里有同名远端文件时挂这里，弹覆盖确认。
     /// nil = 无待确认；非 nil = 弹窗（即便冲突名为空也仅在有冲突时才设值）。
@@ -101,6 +103,13 @@ struct SFTPBrowserView: View {
             Button("取消", role: .cancel) {}
             Button("创建") {
                 if !newFolderText.isEmpty { Task { await model.makeDirectory(name: newFolderText) } }
+            }
+        }
+        .alert("新建文件", isPresented: $newFilePresented) {
+            TextField("文件名", text: $newFileText)
+            Button("取消", role: .cancel) {}
+            Button("创建") {
+                if !newFileText.isEmpty { Task { await model.makeFile(name: newFileText) } }
             }
         }
         .confirmationDialog("删除「\(deleteTarget?.name ?? "")」？",
@@ -220,7 +229,9 @@ struct SFTPBrowserView: View {
                     },
                     onDropRemoteItemsToParent: moveRemoteItemsToParent,
                     query: query,
-                    rowActions: rowActions
+                    rowActions: rowActions,
+                    onNewFolder: { newFolderText = ""; newFolderPresented = true },
+                    onNewFile: { newFileText = ""; newFilePresented = true }
                 )
                 .frame(maxWidth: .infinity)
                 // 可拖拽分隔条（复用工作区 inspector 同款 ColumnResizer）：右侧检视器，

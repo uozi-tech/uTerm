@@ -100,6 +100,17 @@ actor SFTPSession: SFTPProviding {
         try await sftp.createDirectory(atPath: path)
     }
 
+    /// 新建空文件：`.create | .forceCreate`（SSH_FXF_CREAT | SSH_FXF_EXCL）——
+    /// EXCL 让服务器在路径已存在时直接拒绝，绝不截断既有文件。开成功即关闭，
+    /// 留下一个 0 字节文件。
+    func createFile(_ path: String) async throws {
+        let file = try await sftp.openFile(
+            filePath: path,
+            flags: [.write, .create, .forceCreate]
+        )
+        try await file.close()
+    }
+
     func setPermissions(path: String, mode: UInt32) async throws {
         // SFTP setstat：只带权限位（`& 0o777`），保留文件类型位不动。
         var attrs = SFTPFileAttributes()

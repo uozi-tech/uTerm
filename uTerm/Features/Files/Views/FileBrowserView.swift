@@ -18,6 +18,11 @@ struct FileBrowserContent: View {
     @State private var renameText = ""
     @State private var deleteTarget: RemoteEntry?
     @State private var permissionTarget: RemoteEntry?
+    // 空白处右键「新建文件夹 / 新建文件」驱动的输入对话框状态。
+    @State private var newFolderPresented = false
+    @State private var newFolderText = ""
+    @State private var newFilePresented = false
+    @State private var newFileText = ""
     /// 待确认覆盖的上传：检查发现选中文件里有同名远端文件时挂这里，弹覆盖确认。
     @State private var overwritePendingURLs: [URL]?
     @State private var overwriteConflictNames: [String] = []
@@ -51,6 +56,20 @@ struct FileBrowserContent: View {
                     Task { await model.rename(entry: t, to: renameText) }
                 }
                 renameTarget = nil
+            }
+        }
+        .alert("新建文件夹", isPresented: $newFolderPresented) {
+            TextField("文件夹名", text: $newFolderText)
+            Button("取消", role: .cancel) {}
+            Button("创建") {
+                if !newFolderText.isEmpty { Task { await model.makeDirectory(name: newFolderText) } }
+            }
+        }
+        .alert("新建文件", isPresented: $newFilePresented) {
+            TextField("文件名", text: $newFileText)
+            Button("取消", role: .cancel) {}
+            Button("创建") {
+                if !newFileText.isEmpty { Task { await model.makeFile(name: newFileText) } }
             }
         }
         .confirmationDialog("删除「\(deleteTarget?.name ?? "")」？",
@@ -296,6 +315,14 @@ struct FileBrowserContent: View {
                         .frame(width: 96)
                 }
             }
+        }
+        // 列表空白处右键：在当前目录新建文件夹 / 新建文件（行 / `..` 各有自己的菜单
+        // 或不响应，命中行时由行菜单接管）。
+        .contentShape(Rectangle())
+        .contextMenu {
+            SFTPBackgroundMenu(
+                onNewFolder: { newFolderText = ""; newFolderPresented = true },
+                onNewFile: { newFileText = ""; newFilePresented = true })
         }
     }
 

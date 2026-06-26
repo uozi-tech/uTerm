@@ -89,6 +89,9 @@ protocol SFTPProviding: Actor {
     func removeDirectory(_ path: String) async throws
     func createDirectory(_ path: String) async throws
 
+    /// 新建一个空文件（fail-if-exists：路径已存在则抛错，绝不覆盖既有文件）。
+    func createFile(_ path: String) async throws
+
     /// 设置文件权限（chmod，单个路径，非递归）。`mode` 取低 9 位（`& 0o777`），
     /// 只改权限位、保留文件类型位。递归由上层走 exec `chmod -R`（见 FileBrowserModel）。
     func setPermissions(path: String, mode: UInt32) async throws

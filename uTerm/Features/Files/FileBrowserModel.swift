@@ -418,6 +418,15 @@ final class FileBrowserModel {
         } catch { transientError = "新建文件夹失败：\(error)" }
     }
 
+    /// 在当前目录新建一个空文件（fail-if-exists，见 `SFTPProviding.createFile`）。
+    func makeFile(name: String) async {
+        guard let provider else { return }
+        do {
+            try await provider.createFile(Self.join(currentPath, name))
+            await refresh()
+        } catch { transientError = "新建文件失败：\(error)" }
+    }
+
     func rename(entry: RemoteEntry, to newName: String) async {
         guard let provider else { return }
         let from = Self.join(currentPath, entry.name)

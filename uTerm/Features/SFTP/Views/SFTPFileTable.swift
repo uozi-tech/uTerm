@@ -119,6 +119,9 @@ struct SFTPFileTable: View {
     let query: String
     /// 行右键菜单行为（进入/下载 · 在工作区打开 · 权限设置 · 拷贝 · 删除…）。
     let rowActions: SFTPRowActions
+    /// 空白处右键：在当前目录新建文件夹 / 新建文件。
+    let onNewFolder: () -> Void
+    let onNewFile: () -> Void
 
     @FocusState private var focused: Bool
 
@@ -129,12 +132,21 @@ struct SFTPFileTable: View {
             VStack(spacing: 0) {
                 header(widths)
                 Rectangle().fill(UD.border).frame(height: 1)
-                if entries.isEmpty && !showParent {
-                    Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
-                        .font(.system(size: 13)).foregroundStyle(UD.text4)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    list(widths)
+                Group {
+                    if entries.isEmpty && !showParent {
+                        Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
+                            .font(.system(size: 13)).foregroundStyle(UD.text4)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        list(widths)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 列表空白处（含空目录）右键：新建文件夹 / 新建文件。文件行 / `..` 行
+                // 各有自己的 contextMenu（或不响应），右键命中行时由行菜单接管。
+                .contentShape(Rectangle())
+                .contextMenu {
+                    SFTPBackgroundMenu(onNewFolder: onNewFolder, onNewFile: onNewFile)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

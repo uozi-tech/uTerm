@@ -86,3 +86,15 @@ struct SFTPRowMenu: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 }
+
+/// 文件列表空白处的右键菜单：在当前目录新建文件夹 / 新建文件。独立 SFTP 窗口与
+/// 工作区侧栏共用。用法：`.contextMenu { SFTPBackgroundMenu(onNewFolder:onNewFile:) }`。
+struct SFTPBackgroundMenu: View {
+    let onNewFolder: () -> Void
+    let onNewFile: () -> Void
+
+    var body: some View {
+        Button { onNewFolder() } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
+        Button { onNewFile() } label: { Label("新建文件", systemImage: "doc.badge.plus") }
+    }
+}

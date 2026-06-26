@@ -12,6 +12,7 @@ actor MockSFTP: SFTPProviding {
     private(set) var removedFiles: [String] = []
     private(set) var removedDirs: [String] = []
     private(set) var createdDirs: [String] = []
+    private(set) var createdFiles: [String] = []
     private(set) var permissionChanges: [(path: String, mode: UInt32)] = []
     private(set) var execCommands: [String] = []
 
@@ -108,6 +109,16 @@ actor MockSFTP: SFTPProviding {
     func removeFile(_ path: String) async throws { removedFiles.append(path) }
     func removeDirectory(_ path: String) async throws { removedDirs.append(path) }
     func createDirectory(_ path: String) async throws { createdDirs.append(path) }
+    /// 新建空文件：记录路径供断言，并把空 blob 落库（mirror 真实 EXCL：路径
+    /// 已存在则抛错，不覆盖）。
+    func createFile(_ path: String) async throws {
+        if blobStore[path] != nil {
+            throw NSError(domain: "MockSFTP", code: 17,
+                          userInfo: [NSLocalizedDescriptionKey: "file exists: \(path)"])
+        }
+        createdFiles.append(path)
+        blobStore[path] = (Data(), Date())
+    }
     func setPermissions(path: String, mode: UInt32) async throws {
         permissionChanges.append((path, mode & 0o777))
     }

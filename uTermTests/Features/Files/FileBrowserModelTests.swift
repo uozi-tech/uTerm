@@ -326,6 +326,30 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(created, ["/home/user/newdir"])
     }
 
+    func testMakeFileForwardsAndRefreshes() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        await model.makeFile(name: "notes.txt")
+        let created = await mock.createdFiles
+        XCTAssertEqual(created, ["/home/user/notes.txt"])
+        XCTAssertNil(model.transientError)
+    }
+
+    /// fail-if-exists：对已存在的路径再次 makeFile，provider 抛错（mirror SFTP EXCL），
+    /// 模型置 transientError、不静默覆盖。
+    func testMakeFileWhenExistingReportsError() async {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        await model.makeFile(name: "dup.txt")
+        await model.makeFile(name: "dup.txt")
+        let created = await mock.createdFiles
+        XCTAssertEqual(created, ["/home/user/dup.txt"])   // 只成功记录一次
+        XCTAssertNotNil(model.transientError)
+        XCTAssertTrue(model.transientError?.contains("新建文件失败") ?? false)
+    }
+
     func testRenameForwards() async {
         let mock = MockSFTP(tree: ["/home/user": dir([("a.txt", false)])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
