@@ -12,8 +12,7 @@ struct KeyDeleteConfirm: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55).ignoresSafeArea()
-                .onTapGesture(perform: onCancel)
+            UDModalBackdrop(onDismiss: onCancel)
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 12) {
                     RoundedRectangle(cornerRadius: 10)

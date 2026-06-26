@@ -87,7 +87,7 @@ struct PortForwardListView: View {
             }
 
             UDButton(title: "新建", style: .primary, systemImage: "plus") {
-                editing = .new
+                beginEdit(.new)
             }
         }
         .padding(.horizontal, 16)
@@ -113,7 +113,7 @@ struct PortForwardListView: View {
     private var list: some View {
         ScrollView {
             if visible.isEmpty {
-                PFEmptyState(kind: filter) { editing = .new }
+                PFEmptyState(kind: filter) { beginEdit(.new) }
                     .padding(.top, 8)
             } else {
                 VStack(spacing: 0) {
@@ -124,9 +124,9 @@ struct PortForwardListView: View {
                             isLast: idx == visible.count - 1,
                             onToggle: { toggle(rule) },
                             onRetry: { retry(rule) },
-                            onChangePort: { editing = .rule(rule) },
-                            onEdit: { editing = .rule(rule) },
-                            onDelete: { confirmDelete = rule }
+                            onChangePort: { beginEdit(.rule(rule)) },
+                            onEdit: { beginEdit(.rule(rule)) },
+                            onDelete: { requestDelete(rule) }
                         )
                     }
                 }
@@ -171,6 +171,19 @@ struct PortForwardListView: View {
     }
 
     // MARK: - 动作
+
+    /// 打开编辑器（新建 / 编辑）。已有任一弹层时忽略——保证连点 / 双击不会让
+    /// `editing` 在一拍内反复横跳（见 TunnelRow 双击手势的根因注释）。
+    private func beginEdit(_ target: EditTarget) {
+        guard editing == nil, confirmDelete == nil else { return }
+        editing = target
+    }
+
+    /// 请求删除确认。同样的幂等守卫：弹层已开则忽略。
+    private func requestDelete(_ rule: ForwardingRule) {
+        guard editing == nil, confirmDelete == nil else { return }
+        confirmDelete = rule
+    }
 
     private func toggle(_ rule: ForwardingRule) {
         // error 行的开关被红「异常」chip 取代，不会走到这里（防御性再判一次）。

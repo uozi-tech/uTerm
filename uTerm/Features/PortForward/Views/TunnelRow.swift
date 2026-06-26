@@ -57,41 +57,51 @@ struct TunnelRow: View {
 
     private var mainRow: some View {
         HStack(spacing: 12) {
-            TypeBadge(kind: kind, dim: !active)
+            // 主内容区（徽标 · 名称 · 流向）：双击此区域 = 编辑。
+            // 双击手势**只**挂在主内容区，刻意不覆盖尾部的编辑/删除按钮与开关——
+            // 否则双击这些控件会同时触发本行的 count:2 手势（与按钮自身动作竞争）：
+            // 弹层弹出后第二下又落到背板上 onCancel，导致 `editing` 在一拍内
+            // value→nil→value 反复横跳、跨越刚插入的 overlay，把转场/AttributeGraph
+            // 卡死（连点「编辑」直接卡页面的根因）。
+            HStack(spacing: 12) {
+                TypeBadge(kind: kind, dim: !active)
 
-            // 名称列（150pt 固定）：名称(+autostart 闪电) + 可选 destLabel 副标题。
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(rule.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(active ? UD.text : UD.text2)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if rule.autostart {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 8))
+                // 名称列（150pt 固定）：名称(+autostart 闪电) + 可选 destLabel 副标题。
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(rule.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(active ? UD.text : UD.text2)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if rule.autostart {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(UD.text4)
+                                .help("连接时自动启动")
+                        }
+                    }
+                    if let label = rule.destLabel, !label.isEmpty {
+                        Text(label)
+                            .font(.system(size: 11))
                             .foregroundStyle(UD.text4)
-                            .help("连接时自动启动")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
-                if let label = rule.destLabel, !label.isEmpty {
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(UD.text4)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .frame(width: 150, alignment: .leading)
+                .frame(width: 150, alignment: .leading)
 
-            // 内联等宽流向。
-            flow
-                .font(UD.mono(12))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(active ? 1 : 0.5)
-                .help(flowPlain)
+                // 内联等宽流向。
+                flow
+                    .font(UD.mono(12))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(active ? 1 : 0.5)
+                    .help(flowPlain)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onEdit)
 
             // hover 编辑/删除。
             HStack(spacing: 2) {
@@ -115,7 +125,6 @@ struct TunnelRow: View {
         .background(!isError && hover ? UD.rowHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture(count: 2, perform: onEdit)
     }
 
     private var flow: Text {

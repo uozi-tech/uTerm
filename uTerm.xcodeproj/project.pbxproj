@@ -86,6 +86,7 @@
 				DesignKit/Overlays/UDMenu.swift,
 				DesignKit/Overlays/UDMenubarPanel.swift,
 				DesignKit/Overlays/UDMetricsPopover.swift,
+				DesignKit/Overlays/UDModalBackdrop.swift,
 				DesignKit/Overlays/UDSessionsDropdown.swift,
 				Features/Agent/Views/AgentSidebar.swift,
 				Features/Agent/Views/AssistantView.swift,
