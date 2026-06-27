@@ -108,12 +108,20 @@ actor SOCKS5ForwardListener {
                 var phase = HandshakePhase.greeting
                 var buffer: [UInt8] = []
 
-                // 本地→目标 字节桥：握手后由本循环 yield，远端子任务消费写给 direct-tcpip。
-                let (localToRemote, bridge) = AsyncStream<ByteBuffer>.makeStream()
+                // 本地→目标 有界背压字节桥：relay 阶段由本循环 send（缓冲满则挂起 → 反传本地
+                // socket 入站背压，杜绝慢隧道上无界堆内存），远端子任务消费写给 direct-tcpip。
+                let bridge = BoundedByteBridge()
                 // 远端粘合子任务句柄，循环结束 / 出错时等它收尾。
                 var remoteTask: Task<Void, Never>?
 
                 for try await readChunk in inbound {
+                    // relay 阶段零拷贝：入站 ByteBuffer 直接经桥喂给远端，不再
+                    // ByteBuffer→[UInt8]→ByteBuffer 往返；背压在 send 内（缓冲满则挂起本读循环）。
+                    if phase == .relay {
+                        await bridge.send(readChunk)
+                        continue
+                    }
+
                     var chunk = readChunk
                     if let bytes = chunk.readBytes(length: chunk.readableBytes) {
                         buffer.append(contentsOf: bytes)
@@ -125,7 +133,7 @@ actor SOCKS5ForwardListener {
                             phase: phase, buffer: &buffer,
                             localChannel: localChannel,
                             outbound: outbound, connected: connected,
-                            localToRemote: localToRemote, bridge: bridge,
+                            bridge: bridge,
                             remoteTask: &remoteTask, counter: counter)
                         switch step {
                         case .needMoreBytes:
@@ -175,8 +183,7 @@ actor SOCKS5ForwardListener {
         localChannel: Channel,
         outbound: NIOAsyncChannelOutboundWriter<ByteBuffer>,
         connected: ConnectedClient,
-        localToRemote: AsyncStream<ByteBuffer>,
-        bridge: AsyncStream<ByteBuffer>.Continuation,
+        bridge: BoundedByteBridge,
         remoteTask: inout Task<Void, Never>?,
         counter: TunnelByteCounter?
     ) async throws -> HandshakeStep {
@@ -235,7 +242,6 @@ actor SOCKS5ForwardListener {
                     await Self.glueRemote(
                         remoteAsync,
                         localChannel: localChannel,
-                        localToRemote: localToRemote,
                         bridge: bridge,
                         localOutbound: outbound,
                         counter: counter)
@@ -245,20 +251,15 @@ actor SOCKS5ForwardListener {
                 if !buffer.isEmpty {
                     var leftover = ByteBuffer()
                     leftover.writeBytes(buffer)
-                    bridge.yield(leftover)
+                    await bridge.send(leftover)
                     buffer.removeAll(keepingCapacity: false)
                 }
                 return .relaying
             }
 
         case .relay:
-            // 本地→目标：把本 chunk 的字节经桥喂给远端子任务。
-            if !buffer.isEmpty {
-                var fwd = ByteBuffer()
-                fwd.writeBytes(buffer)
-                buffer.removeAll(keepingCapacity: true)
-                bridge.yield(fwd)
-            }
+            // relay 阶段已由 handleAccepted 读循环零拷贝直发（不再经此函数），此分支不可达，
+            // 仅为 switch 穷尽；返回 .needMoreBytes 是安全的退化行为。
             return .needMoreBytes
         }
     }
@@ -284,7 +285,7 @@ actor SOCKS5ForwardListener {
     /// 与 `TunnelGlue.pipe` 的对称两端不同：本地→目标这一向不是真 NIO 入站流，而是 `localToRemote`
     /// **桥**，其结束由 `handleAccepted` 的本地读循环 `bridge.finish()` 控制。若目标→本地先读到 EOF
     /// 却不收桥，本地→目标这向会一直阻塞在桥上、优雅排空永不完成 → 死锁。故目标→本地 EOF 时除半关
-    /// 本地写端外，**还要 `bridge.finish()`** 让桥消费向收尾。`AsyncStream.Continuation.finish()` 幂等，
+    /// 本地写端外，**还要 `bridge.finish()`** 让桥消费向收尾。`BoundedByteBridge.finish()` 幂等，
     /// `handleAccepted` 末尾再 `finish()` 一次无害。
     ///
     /// 泄漏紧致性：远端先关时（目标→本地 EOF / 重置），本函数返回后必须主动关掉 `localChannel`，
@@ -298,8 +299,7 @@ actor SOCKS5ForwardListener {
     static func glueRemote(
         _ remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
         localChannel: Channel,
-        localToRemote: AsyncStream<ByteBuffer>,
-        bridge: AsyncStream<ByteBuffer>.Continuation,
+        bridge: BoundedByteBridge,
         localOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>,
         counter: TunnelByteCounter? = nil
     ) async {
@@ -309,7 +309,7 @@ actor SOCKS5ForwardListener {
                     // 本地 → 目标（消费桥）= 上行。桥承载了握手后剩余字节 + relay 阶段所有本地字节，
                     // 故上行全量在此计。
                     group.addTask {
-                        for await chunk in localToRemote {
+                        while let chunk = await bridge.next() {
                             counter?.addUp(chunk.readableBytes)
                             try await remoteOut.write(chunk)
                         }

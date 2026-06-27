@@ -171,7 +171,7 @@ final class TunnelGlueTests: XCTestCase {
         let localRaw = localAsync.channel
 
         // 桥：故意**不**外部 finish —— 必须靠 glueRemote 在远端 EOF 时自己收桥。
-        let (localToRemote, bridge) = AsyncStream<ByteBuffer>.makeStream()
+        let bridge = BoundedByteBridge()
 
         // withTimeout 的 operation 是非抛出闭包；用 try? 吸收 executeThenClose 的抛出
         // （本测断言的是「不死锁/不超时」，而非内部数据正确性）。死锁则 withTimeout 抛超时、测试失败。
@@ -182,7 +182,6 @@ final class TunnelGlueTests: XCTestCase {
                     await SOCKS5ForwardListener.glueRemote(
                         remoteAsync,
                         localChannel: localRaw,
-                        localToRemote: localToRemote,
                         bridge: bridge,
                         localOutbound: localOut)
                 }
