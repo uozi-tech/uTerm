@@ -123,7 +123,7 @@ nonisolated enum SSHClientFactory {
             )
         } catch {
             // I4：连接/认证失败 —— 抛出后由调用方结束流，让消费者干净终止。
-            throw SSHConnection.SSHConnectionError.connectFailed(error.localizedDescription)
+            throw SSHConnection.SSHConnectionError.connectFailed(FriendlyError.describe(error))
         }
     }
 
@@ -149,7 +149,7 @@ nonisolated enum SSHClientFactory {
             bastionAuthMethod = try makeAuthMethod(from: jumpHostAuth)
             targetAuthMethod = try makeAuthMethod(from: auth)
         } catch {
-            throw SSHConnection.SSHConnectionError.jumpHostFailed(error.localizedDescription)
+            throw SSHConnection.SSHConnectionError.jumpHostFailed(FriendlyError.describe(error))
         }
 
         let bastion: SSHClient
@@ -166,7 +166,7 @@ nonisolated enum SSHClientFactory {
             )
         } catch {
             throw SSHConnection.SSHConnectionError.jumpHostFailed(
-                "无法连接跳板机 \(jumpHost.host):\(jumpHost.port) —— \(error.localizedDescription)")
+                "无法连接跳板机 \(jumpHost.host):\(jumpHost.port) —— \(FriendlyError.describe(error))")
         }
 
         // `SSHClientSettings.authenticationMethod` 是 `@Sendable () -> SSHAuthenticationMethod`
@@ -186,7 +186,7 @@ nonisolated enum SSHClientFactory {
             // jump 失败 —— 跳板机连接已建立，必须就地关闭，避免泄漏。
             try? await bastion.close()
             throw SSHConnection.SSHConnectionError.jumpHostFailed(
-                "经跳板机连接目标 \(profile.host):\(profile.port) 失败 —— \(error.localizedDescription)")
+                "经跳板机连接目标 \(profile.host):\(profile.port) 失败 —— \(FriendlyError.describe(error))")
         }
 
         // 成功 —— 跳板机连接与目标客户端一起返回，由调用方持有并做生命周期管理。
@@ -212,7 +212,7 @@ nonisolated enum SSHClientFactory {
             } catch let error as SSHConnection.SSHConnectionError {
                 throw error
             } catch {
-                throw SSHConnection.SSHConnectionError.connectFailed(error.localizedDescription)
+                throw SSHConnection.SSHConnectionError.connectFailed(FriendlyError.describe(error))
             }
         }
     }

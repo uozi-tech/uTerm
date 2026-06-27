@@ -414,7 +414,9 @@ struct ServerFormView: View {
     /// 取 `LocalizedError` 的本地化描述（SSH / 认证错误都给了中文文案），否则兜底。
     private func describe(_ error: Error) -> String {
         if let e = error as? LocalizedError, let d = e.errorDescription { return d }
-        return error.localizedDescription
+        // 兜底交给 FriendlyError，避免把 NIOCore.IOError/NSError 的「未能完成操作（…错误N）」
+        // 这类技术串直接显示给用户。
+        return FriendlyError.describe(error)
     }
 
     // MARK: - 载入 / 保存

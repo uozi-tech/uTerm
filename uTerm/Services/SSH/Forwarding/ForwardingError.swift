@@ -1,5 +1,4 @@
 import Foundation
-import NIOCore
 
 /// 转发失败的归类 —— 决定 UI 行的恢复操作（改端口 / 重试）。
 nonisolated enum ForwardingErrorKind: String, Sendable, Equatable {
@@ -53,7 +52,10 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         case .auth:
             reason = String(localized: "认证失败")
         case .unknown:
-            reason = error.localizedDescription
+            // 不直接抛 localizedDescription —— 对 NIOCore.IOError / NSError 那只是「未能完成
+            // 操作（…错误N）」之类技术噪音。交给 FriendlyError 翻成可读中文（或通用兜底），
+            // 保证用户永远看不到裸 errno 数字。
+            reason = FriendlyError.describe(error)
         }
         return ForwardingError(kind: kind, message: "\(rule.name)：\(reason)")
     }
@@ -68,25 +70,14 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
     // MARK: - 私有归类
 
     private static func classifyKind(_ error: Error) -> ForwardingErrorKind {
-        // 1. 强类型 POSIXError —— 最可靠。
-        if let posix = error as? POSIXError {
-            if let k = kind(forErrno: posix.code.rawValue) { return k }
+        // 1. POSIX errno —— 最可靠。FriendlyError.posixErrno 统一覆盖 POSIXError /
+        //    NIOCore.IOError（NIO 的 bind/connect 真实抛出类型，既非 POSIXError 也不带
+        //    NSPOSIXErrorDomain）/ NSError(NSPOSIXErrorDomain)，避免遗漏任一来源 ——
+        //    否则 EADDRINUSE/EACCES/EPERM 等会落到 .unknown、对用户显示成无意义的「错误N」。
+        if let code = FriendlyError.posixErrno(of: error), let k = kind(forErrno: code) {
+            return k
         }
-        // 1b. NIOCore.IOError —— NIO 的 bind/listen/connect 失败真正抛出的类型。它**不是**
-        //     `POSIXError`，桥接成 `NSError` 的 domain 也不是 `NSPOSIXErrorDomain`，且不带
-        //     `LocalizedError` ——`localizedDescription` 只会是通用的「未能完成操作
-        //     （NIOCore.IOError 错误1）」(这里的 1 是 Swift→NSError 的默认 code，**不是**
-        //     errno)。必须直接读 `errnoCode` 才能归类，否则 EADDRINUSE/EACCES/EPERM 等本可
-        //     恢复的错误会全部落到 `.unknown`，对用户显示成无意义的「错误1」。
-        if let io = error as? IOError {
-            if let k = kind(forErrno: io.errnoCode) { return k }
-        }
-        // 2. NSError(domain: NSPOSIXErrorDomain) —— NIO 常这么包 bind/connect 失败。
-        let ns = error as NSError
-        if ns.domain == NSPOSIXErrorDomain {
-            if let k = kind(forErrno: Int32(ns.code)) { return k }
-        }
-        // 3. 文本子串匹配（大小写无关）—— 覆盖 Citadel/NIOSSH 的文本化错误。
+        // 2. 文本子串匹配（大小写无关）—— 覆盖 Citadel/NIOSSH 的文本化错误。
         let text = error.localizedDescription.lowercased()
         if text.contains("address already in use") || text.contains("eaddrinuse") {
             return .conflict
