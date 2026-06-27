@@ -53,6 +53,18 @@ final class TerminalContrastTests: XCTestCase {
                              TerminalContrast.relativeLuminance(srgb(0x333333)))
     }
 
+    /// 回归：中灰段底（#6D6D6D，p10k powerline 常用）上、比段底略暗的前景
+    /// （ansi31 路径分隔符 #3D6D7E）必须随段底一起「提亮」，不能因方向取错被压成
+    /// 近黑——这正是 `/` 在中灰段上发黑的根因。方向按背景判定（深/中灰一律提亮）。
+    func test_ensure_contrast_lightens_near_bg_fg_on_midgray_segment() {
+        let fg = srgb(0x3D6D7E), bg = srgb(0x6D6D6D)
+        let adjusted = TerminalContrast.ensureContrast(fg: fg, bg: bg, ratio: 4.0)
+        XCTAssertGreaterThanOrEqual(TerminalContrast.contrastRatio(adjusted, bg), 3.99)
+        XCTAssertGreaterThan(TerminalContrast.relativeLuminance(adjusted),
+                             TerminalContrast.relativeLuminance(bg),
+                             "中灰段底上的前景应被提亮到比段底更亮，而非压黑")
+    }
+
     /// 已达标的颜色原样返回，不做任何改动。
     func test_ensure_contrast_keeps_compliant_color() {
         let fg = srgb(0x3B3B3B), bg = srgb(0xFFFFFF)
@@ -125,7 +137,7 @@ final class TerminalContrastTests: XCTestCase {
             XCTAssertEqual(view.minimumContrastRatio, TerminalColorScheme.minimumContrastRatio,
                            "dark=\(dark) 时 minimumContrastRatio 未生效")
         }
-        // 3.0 = WCAG 大字号 / UI 组件 AA 下限；4.5 会在中灰底上把颜色推到黑白极点
+        // 3.0 = WCAG 大字号 / UI 组件 AA 下限（方向按背景判定，深 / 中灰段底统一提亮）
         XCTAssertEqual(TerminalColorScheme.minimumContrastRatio, 3.0)
     }
 }

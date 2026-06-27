@@ -197,7 +197,20 @@ public enum TerminalContrast {
             return (delinearize(final.rgb.r), delinearize(final.rgb.g), delinearize(final.rgb.b), achieved)
         }
 
-        let preferLighten = fgY >= bgY
+        // Adjustment direction keys off the BACKGROUND, not fg-vs-bg: lighten the
+        // foreground on a dark/medium background (so prompt text reads bright on a
+        // powerline segment), darken it only on a genuinely light background. If
+        // lightening can't reach the ratio (light-gray segment), the opposite-
+        // direction fallback below darkens instead.
+        //
+        // (xterm.js instead keys off whether the fg is lighter/darker than the bg.
+        // That preserves a color's "intent" on clearly dark/light backgrounds, but
+        // on a MEDIUM-gray segment a foreground sitting a hair below the bg gets
+        // driven to pure black while one a hair above goes to white — e.g. a teal
+        // path separator `ansi31` #3D6D7E on a #6D6D6D powerline segment collapsing
+        // to #000206 while the bright path text lightens. Keying off the background
+        // keeps every foreground on that segment moving the same, readable way.)
+        let preferLighten = bgY < 0.5
         var best = attempt(lighten: preferLighten)
         if best.achieved < ratio - 0.01 {
             let opposite = attempt(lighten: !preferLighten)
