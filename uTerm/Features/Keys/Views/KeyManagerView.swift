@@ -198,7 +198,7 @@ struct KeyManagerView: View {
             importErrorText = KeyImportErrorMessage.message(
                 for: NSError(domain: "uTerm.keys", code: 2, userInfo: [
                     NSLocalizedDescriptionKey: "无法读取私钥文件",
-                    NSLocalizedFailureReasonErrorKey: "读取 \(url.lastPathComponent) 时失败：\((error as NSError).localizedDescription)",
+                    NSLocalizedFailureReasonErrorKey: "读取 \(url.lastPathComponent) 时失败：\(FriendlyError.describe(error))",
                     NSLocalizedRecoverySuggestionErrorKey: "请确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
                 ]),
                 fallback: "无法读取私钥文件"

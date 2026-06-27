@@ -425,7 +425,7 @@ struct SFTPBrowserView: View {
             do {
                 try await Task.detached(priority: .userInitiated) { try data.write(to: url) }.value
             } catch {
-                model.reportTransientError("保存失败：\(error.localizedDescription)")
+                model.reportTransientError("保存失败：\(FriendlyError.describe(error))")
             }
         }
     }

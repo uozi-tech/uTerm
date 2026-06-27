@@ -17,7 +17,7 @@ nonisolated struct RSASHA512Signer {
                 q: components.prime2)
         } catch {
             throw PrivateKeyImportError.malformedKey(
-                reason: "RSA 私钥构造失败：\(error.localizedDescription)")
+                reason: "RSA 私钥构造失败：\(FriendlyError.describe(error))")
         }
     }
 

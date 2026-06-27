@@ -254,7 +254,7 @@ private struct MDImageBlockView: View {
             }
             phase = .loaded(loaded)
         } catch {
-            phase = .failed("图片加载失败：\(error.localizedDescription)")
+            phase = .failed("图片加载失败：\(FriendlyError.describe(error))")
         }
     }
 

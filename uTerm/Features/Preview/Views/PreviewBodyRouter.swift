@@ -155,7 +155,7 @@ private struct PreviewUnavailableBody: View {
                 try data.write(to: url)
             }.value
         } catch {
-            downloadError = "下载失败：\(error.localizedDescription)"
+            downloadError = "下载失败：\(FriendlyError.describe(error))"
         }
     }
 }

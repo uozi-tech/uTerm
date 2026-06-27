@@ -229,7 +229,7 @@ struct ProviderEditView: View {
                 testResult = (false, "服务器返回了无法解析的响应")
             }
         } catch {
-            testResult = (false, "请求失败：\(error.localizedDescription)")
+            testResult = (false, "请求失败：\(FriendlyError.describe(error))")
         }
     }
 

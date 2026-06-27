@@ -134,7 +134,7 @@ final class ParallelRunModel {
             sink = made.hostKeyChallenges
             connection = made.connection
         } catch {
-            setupError = error.localizedDescription
+            setupError = FriendlyError.describe(error)
         }
         return ExecTarget(id: profile.id,
                           name: QuickCommandTargets.displayName(profile),
@@ -607,7 +607,7 @@ final class ParallelRunModel {
         let gate = OneShotGate()
         _ = Task<Void, Never> {
             do { await gate.deliver(.completed(try await executor.run(command))) }
-            catch { await gate.deliver(.failed(error.localizedDescription)) }
+            catch { await gate.deliver(.failed(FriendlyError.describe(error))) }
         }
         let timer = Task<Void, Never> {
             try? await Task.sleep(for: perServerTimeout)
