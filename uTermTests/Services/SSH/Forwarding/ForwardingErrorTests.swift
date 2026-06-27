@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import NIOCore
 @testable import uTerm
 
 final class ForwardingErrorTests: XCTestCase {
@@ -88,6 +89,56 @@ final class ForwardingErrorTests: XCTestCase {
         // errno EPERM：特权端口绑定 → .denied。
         let err = POSIXError(.EPERM)
         XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .denied)
+    }
+
+    // MARK: - NIOCore.IOError（NIO 实际抛出的类型 —— 回归：errnoCode 必须被读取）
+
+    // NIO 的 bind/listen/connect 失败抛 `NIOCore.IOError`，它不是 POSIXError、桥接
+    // NSError 的 domain 也不是 NSPOSIXErrorDomain、localizedDescription 只是通用的
+    // 「未能完成操作（NIOCore.IOError 错误1）」。修复前这些全部落到 .unknown，把可恢复
+    // 错误显示成无意义的「错误1」（即线上 -L TimescaleDB 报错的真因）。
+
+    func testIOErrorEADDRINUSEClassifiesAsConflict() {
+        // -L 转 DB 最常见：本地端口已被占用（本机已跑 Postgres/Timescale 或转发未关）。
+        let err = IOError(errnoCode: EADDRINUSE, reason: "bind(descriptor:ptr:bytes:)")
+        XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .conflict)
+    }
+
+    func testIOErrorECONNREFUSEDClassifiesAsUnreachable() {
+        let err = IOError(errnoCode: ECONNREFUSED, reason: "connect")
+        XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .unreachable)
+    }
+
+    func testIOErrorEPERMClassifiesAsDenied() {
+        // 沙盒/特权端口 bind 被拒 errno 1 —— 用户看到的「NIOCore.IOError 错误1」。
+        let err = IOError(errnoCode: EPERM, reason: "bind")
+        XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .denied)
+    }
+
+    func testIOErrorEACCESClassifiesAsDenied() {
+        let err = IOError(errnoCode: EACCES, reason: "bind")
+        XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .denied)
+    }
+
+    func testIOErrorUnknownErrnoFallsBackToUnknown() {
+        // 不在已知集合的 errno 仍走 .unknown（兜底不变）。
+        let err = IOError(errnoCode: ENOTTY, reason: "ioctl")
+        XCTAssertEqual(ForwardingError.classify(err, rule: rule()).kind, .unknown)
+    }
+
+    // MARK: - denied 文案按方向区分（本地 bind 权限 vs 远端 GatewayPorts）
+
+    func testLocalDeniedMessageMentionsPrivilegedPortNotGatewayPorts() {
+        let msg = ForwardingError.classify(IOError(errnoCode: EPERM, reason: "bind"),
+                                           rule: rule(kind: .local)).message
+        XCTAssertTrue(msg.contains("管理员权限"), "本地 -L 拒绝应提示管理员权限：\(msg)")
+        XCTAssertFalse(msg.contains("GatewayPorts"), "本地 -L 拒绝不应误报 GatewayPorts：\(msg)")
+    }
+
+    func testRemoteDeniedMessageMentionsGatewayPorts() {
+        let msg = ForwardingError.classify(IOError(errnoCode: EPERM, reason: "bind"),
+                                           rule: rule(kind: .remote)).message
+        XCTAssertTrue(msg.contains("GatewayPorts"), "远端 -R 拒绝应提示 GatewayPorts：\(msg)")
     }
 
     // MARK: - auth

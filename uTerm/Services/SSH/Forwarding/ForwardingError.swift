@@ -1,4 +1,5 @@
 import Foundation
+import NIOCore
 
 /// 转发失败的归类 —— 决定 UI 行的恢复操作（改端口 / 重试）。
 nonisolated enum ForwardingErrorKind: String, Sendable, Equatable {
@@ -41,7 +42,14 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         case .unreachable:
             reason = String(localized: "目标地址无法连接")
         case .denied:
-            reason = String(localized: "远端拒绝建立转发（可能需要服务器开启 GatewayPorts）")
+            // EACCES/EPERM 在本地监听侧（-L/-D）= 本机 bind 权限问题（特权端口 <1024 或
+            // App Sandbox），在远端侧（-R）= 服务器拒绝绑定。按规则方向给对症文案，避免对
+            // 本地转发误报「需要 GatewayPorts」。
+            if rule.kind == .remote {
+                reason = String(localized: "远端拒绝建立转发（可能需要服务器开启 GatewayPorts）")
+            } else {
+                reason = String(localized: "本地端口 \(rule.listenPort) 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）")
+            }
         case .auth:
             reason = String(localized: "认证失败")
         case .unknown:
@@ -63,6 +71,15 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
         // 1. 强类型 POSIXError —— 最可靠。
         if let posix = error as? POSIXError {
             if let k = kind(forErrno: posix.code.rawValue) { return k }
+        }
+        // 1b. NIOCore.IOError —— NIO 的 bind/listen/connect 失败真正抛出的类型。它**不是**
+        //     `POSIXError`，桥接成 `NSError` 的 domain 也不是 `NSPOSIXErrorDomain`，且不带
+        //     `LocalizedError` ——`localizedDescription` 只会是通用的「未能完成操作
+        //     （NIOCore.IOError 错误1）」(这里的 1 是 Swift→NSError 的默认 code，**不是**
+        //     errno)。必须直接读 `errnoCode` 才能归类，否则 EADDRINUSE/EACCES/EPERM 等本可
+        //     恢复的错误会全部落到 `.unknown`，对用户显示成无意义的「错误1」。
+        if let io = error as? IOError {
+            if let k = kind(forErrno: io.errnoCode) { return k }
         }
         // 2. NSError(domain: NSPOSIXErrorDomain) —— NIO 常这么包 bind/connect 失败。
         let ns = error as NSError
