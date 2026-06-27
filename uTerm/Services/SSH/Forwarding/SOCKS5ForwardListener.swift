@@ -49,6 +49,8 @@ actor SOCKS5ForwardListener {
                 .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
                 // 半关(#6)：对端 FIN 只让本地入站 EOF、出站仍可写（否则目标流式回包被截断）。
                 .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+                // 禁用 Nagle：与 -L 同理，降低请求/响应往返延迟，对齐 OpenSSH。
+                .childChannelOption(ChannelOptions.socketOption(.tcp_nodelay), value: 1)
                 .bind(host: listenHost, port: listenPort) { childChannel in
                     childChannel.eventLoop.makeCompletedFuture {
                         try NIOAsyncChannel<ByteBuffer, ByteBuffer>(

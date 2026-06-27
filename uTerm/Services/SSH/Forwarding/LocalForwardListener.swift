@@ -72,6 +72,9 @@ actor LocalForwardListener {
                 .serverChannelOption(ChannelOptions.backlog, value: 16)
                 .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
                 .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+                // 禁用 Nagle：转发连接多为请求/响应（DB 等），Nagle + delayed-ACK 会给每个
+                // 往返叠加 ~40ms 延迟。对齐 OpenSSH 对 forwarded 连接的默认行为。
+                .childChannelOption(ChannelOptions.socketOption(.tcp_nodelay), value: 1)
                 .bind(host: listenHost, port: listenPort) { childChannel in
                     childChannel.eventLoop.makeCompletedFuture {
                         try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
