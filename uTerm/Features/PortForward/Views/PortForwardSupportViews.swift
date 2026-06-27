@@ -103,14 +103,22 @@ enum PortForwardFormLayout {
 /// 表单小节：标题（caption / text3）+ 内容。对齐设计稿 `FormSection`。
 struct FormSection<Content: View>: View {
     let title: String
+    var hint: String? = nil
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 11))
-                .foregroundStyle(UD.text3)
-                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.text3)
+                    .accessibilityAddTraits(.isHeader)
+                if let hint {
+                    Text(hint)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(UD.text4)
+                }
+            }
             content()
         }
     }

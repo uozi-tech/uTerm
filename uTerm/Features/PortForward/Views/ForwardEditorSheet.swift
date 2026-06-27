@@ -162,7 +162,7 @@ struct ForwardEditorSheet: View {
             }
 
             // 监听段。
-            FormSection(title: kind.srcLabel) {
+            FormSection(title: kind.srcLabel, hint: kind.srcHint) {
                 FormRow {
                     FormField(label: "地址", flex: 2) {
                         UDTextField(placeholder: kind == .remote ? "0.0.0.0" : "127.0.0.1",
@@ -187,7 +187,7 @@ struct ForwardEditorSheet: View {
 
             // 目标段（dynamic 隐藏）。
             if needsDest, let dstLabel = kind.dstLabel {
-                FormSection(title: dstLabel) {
+                FormSection(title: dstLabel, hint: kind.dstHint) {
                     FormRow {
                         FormField(label: "主机", flex: 2) {
                             UDTextField(placeholder: kind == .remote ? "localhost" : "10.0.0.1",

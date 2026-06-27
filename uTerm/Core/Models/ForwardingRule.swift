@@ -35,28 +35,49 @@ enum ForwardKind: String, CaseIterable, Sendable {
         }
     }
 
-    /// 类型说明（编辑器分段下方的描述行）。
+    /// 类型说明（编辑器分段下方 + 空状态副标题）。以使用场景开头，帮用户选对类型。
     nonisolated var desc: String {
         switch self {
-        case .local:   return "把本地端口的流量经 SSH 转发到远端可达的目标地址。"
-        case .remote:  return "把远端服务器端口的流量经 SSH 转发回本地可达的目标地址。"
-        case .dynamic: return "在本地开一个 SOCKS5 代理，由客户端按需选择目标。"
+        case .local:
+            return "将远端服务映射到本机端口：连本机端口即连到服务器能访问的数据库 / 内网服务。"
+        case .remote:
+            return "将本地端口映射到服务器上：在服务器开一个端口，连它即连到你本机（或本机可达）的服务。"
+        case .dynamic:
+            return "在本机开一个 SOCKS5 代理，由客户端按需选目标。用于浏览器 / 工具经此服务器访问内网。"
         }
     }
 
-    /// 监听侧字段标题。local/dynamic 监听本地，remote 监听远端。
+    /// 监听侧字段标题（开在哪一侧的端口）。
     nonisolated var srcLabel: String {
         switch self {
-        case .local, .dynamic: return "本地监听"
-        case .remote:          return "远端监听"
+        case .local, .dynamic: return "本机监听端口"
+        case .remote:          return "服务器监听端口"
+        }
+    }
+
+    /// 监听侧提示（字段标题下，说明这个口怎么用）。
+    nonisolated var srcHint: String? {
+        switch self {
+        case .local:   return "之后用客户端连这里，如 127.0.0.1:5432"
+        case .dynamic: return "把它设为浏览器 / 系统的 SOCKS5 代理"
+        case .remote:  return "在服务器上开放的端口（对外访问需服务器开启 GatewayPorts）"
         }
     }
 
     /// 目标侧字段标题。dynamic 无固定目标 → nil。
     nonisolated var dstLabel: String? {
         switch self {
-        case .local:   return "目标地址"
-        case .remote:  return "本地目标"
+        case .local:   return "要访问的目标"
+        case .remote:  return "本机目标地址"
+        case .dynamic: return nil
+        }
+    }
+
+    /// 目标侧提示。
+    nonisolated var dstHint: String? {
+        switch self {
+        case .local:   return "目标在服务器内网的地址，如 数据库 10.0.0.1:5432"
+        case .remote:  return "把流量转回本机可达的地址，如 127.0.0.1:3000"
         case .dynamic: return nil
         }
     }
