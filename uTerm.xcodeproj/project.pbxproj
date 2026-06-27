@@ -489,9 +489,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
-				A1B2C3D4E5F6789ABCDEF0AA /* XCLocalSwiftPackageReference "vendor/swift-nio-ssh" */,
+				A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
-				C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
 				B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */,
 				CE7EF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "CodeEditTextView" */,
@@ -973,9 +972,9 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/SwiftTerm;
 		};
-		A1B2C3D4E5F6789ABCDEF0AA /* XCLocalSwiftPackageReference "vendor/swift-nio-ssh" */ = {
+		A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "vendor/swift-nio-ssh";
+			relativePath = vendor/Citadel;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -1002,14 +1001,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.15.1;
-			};
-		};
-		C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/orlandos-nl/Citadel";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.0;
 			};
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "CodeEditTextView" */ = {
@@ -1099,7 +1090,7 @@
 		};
 		10C0DE0000000000000000D2 /* Citadel */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			package = A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */;
 			productName = Citadel;
 		};
 		10C0DE0000000000000000D3 /* SwiftASN1 */ = {
@@ -1154,7 +1145,7 @@
 		};
 		C17ADE1000000000000001 /* Citadel */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C17ADE1000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			package = A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */;
 			productName = Citadel;
 		};
 		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {

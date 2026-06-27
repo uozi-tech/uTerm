@@ -8,10 +8,14 @@ revision `a05e6bbe6b141ee68da3030e00275504c0595d4d`（tag `0.3.6`）。
 换成 apple 上游）。这个 fork 是 swift-nio-ssh **修复前**的快照，缺了 Apple 后来
 加的 `!self.state.sentClose` 守卫，会在连接拆除时崩溃（见下）。
 
-引用方式：pbxproj 以 `XCLocalSwiftPackageReference "vendor/swift-nio-ssh"` 引用。
-本地 path 包的 identity = 目录名 `swift-nio-ssh`，与 Citadel 远程依赖的 identity
-相同，因此**覆盖**掉那条 transitive 远程依赖（SwiftPM 的 local override 机制，无视
-版本区间）。`Package.resolved` 里不再出现 `swift-nio-ssh` 即表示覆盖生效。
+引用方式（2026-06-27 改）：现由 vendored Citadel 的 `Package.swift` 用
+`.package(path: "../swift-nio-ssh")` 直接拉入本包，根工程**不再**有
+`XCLocalSwiftPackageReference "vendor/swift-nio-ssh"`。改前靠「根工程声明同名本地包覆盖
+Citadel 远程 nio-ssh」的 identity-override，虽有效但会触发 SwiftPM 6（Xcode 26）的
+「Conflicting identity for swift-nio-ssh」警告（同 identity、一个远程 URL 一个本地 path）。
+vendor Citadel 后依赖图里不再有任何 nio-ssh 远程 URL，警告消除。来龙去脉见
+`vendor/Citadel/UTERM-PATCHES.md`。`Package.resolved` 里 `swift-nio-ssh` 解析为本地 path
+即表示生效。
 
 更新方式：拉取上游 fork 新 revision，用其 `Sources/NIOSSH` 覆盖本目录的
 `Sources/NIOSSH`（保留本文件与裁剪版 `Package.swift`），然后逐条重放下列补丁。
