@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Citadel
+import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
 import NIOSSH
@@ -22,6 +23,10 @@ actor SOCKS5ForwardListener {
     private let counter: TunnelByteCounter?
 
     private var serverChannel: Channel?
+    /// 关闭中标志（线程安全，供 childChannelInitializer 在 EventLoop 上读取）。同 LocalForwardListener：
+    /// 置位后新 accept 的 child 不再包成 NIOAsyncChannel，避免关闭竞态下「来不及消费即析构」的
+    /// NIOAsyncChannel 出站 writer 未 finish → NIO preconditionFailure abort。
+    private let closing = NIOLockedValueBox(false)
 
     init(connected: ConnectedClient, listenHost: String, listenPort: Int,
          counter: TunnelByteCounter? = nil) {
@@ -36,6 +41,7 @@ actor SOCKS5ForwardListener {
         let eventLoop = connected.target.eventLoop
         let connected = self.connected
         let counter = self.counter
+        let closing = self.closing
 
         // 同 LocalForwardListener（修早期字节丢弃竞态）：用 bind 的 async 重载，在
         // childChannelInitializer 里、child 激活之前、于其 EL 上就把本地 socket 包成 NIOAsyncChannel
@@ -53,7 +59,11 @@ actor SOCKS5ForwardListener {
                 .childChannelOption(ChannelOptions.socketOption(.tcp_nodelay), value: 1)
                 .bind(host: listenHost, port: listenPort) { childChannel in
                     childChannel.eventLoop.makeCompletedFuture {
-                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                        // 关闭竞态守卫（同 LocalForwardListener）：关闭中不再包装，抛错让 NIO 关掉该 child。
+                        guard !closing.withLockedValue({ $0 }) else {
+                            throw ChannelError.ioOnClosedChannel
+                        }
+                        return try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
                             wrappingChannelSynchronously: childChannel,
                             configuration: .init(isOutboundHalfClosureEnabled: true))
                     }
@@ -347,6 +357,8 @@ actor SOCKS5ForwardListener {
 
     /// 关闭监听通道。
     func close() async {
+        // 先置「关闭中」：此后新 accept 的 child 在 initializer 里被拒绝包装（见 start）。
+        closing.withLockedValue { $0 = true }
         if let serverChannel {
             try? await serverChannel.close()
             self.serverChannel = nil

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Citadel
+import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
 import NIOSSH
@@ -31,6 +32,10 @@ actor LocalForwardListener {
 
     /// 绑定后的监听通道，`close()` 时关闭。
     private var serverChannel: Channel?
+    /// 关闭中标志（线程安全，供 childChannelInitializer 在 EventLoop 上读取）。置位后新 accept
+    /// 的 child 不再包成 NIOAsyncChannel —— 否则「关闭 ↔ accept」竞态下，来不及被 accept 循环
+    /// 消费的 child 其出站 writer 未 finish 即析构 → NIO preconditionFailure abort（崩溃栈即此）。
+    private let closing = NIOLockedValueBox(false)
 
     init(connected: ConnectedClient,
          listenHost: String, listenPort: Int,
@@ -54,6 +59,7 @@ actor LocalForwardListener {
         let destPort = self.destPort
         let counter = self.counter
         let onChannelFailure = self.onChannelFailure
+        let closing = self.closing
 
         // 关键（修早期字节丢弃竞态，PG「客户端先说话」一连上就发 SSLRequest）：用 bind 的
         // async 重载，在 childChannelInitializer 里、**child 激活之前、于其 EventLoop 上**就把
@@ -77,7 +83,12 @@ actor LocalForwardListener {
                 .childChannelOption(ChannelOptions.socketOption(.tcp_nodelay), value: 1)
                 .bind(host: listenHost, port: listenPort) { childChannel in
                     childChannel.eventLoop.makeCompletedFuture {
-                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                        // 关闭竞态守卫：监听器正在关闭时不再包装，抛错让 NIO 直接关掉该 child
+                        // （无 NIOAsyncChannel 被创建 → 无未 finish 的出站 writer → 不 abort）。
+                        guard !closing.withLockedValue({ $0 }) else {
+                            throw ChannelError.ioOnClosedChannel
+                        }
+                        return try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
                             wrappingChannelSynchronously: childChannel,
                             configuration: .init(isOutboundHalfClosureEnabled: true))
                     }
@@ -124,9 +135,9 @@ actor LocalForwardListener {
         counter: TunnelByteCounter?,
         onChannelFailure: @escaping @Sendable (Error) -> Void
     ) async {
+        let remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>
         do {
-            // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错→
-            // 下方 catch 关本地 socket，客户端快速拿到 reset、不堆 CLOSE_WAIT）。
+            // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错）。
             let directChannel = try await withForwardingTimeout(.seconds(10)) {
                 try await connected.openDirectTCPIP(host: destHost, port: destPort)
             }
@@ -134,22 +145,32 @@ actor LocalForwardListener {
             // allowRemoteHalfClosure，半关由其处理，这里不再设置。DB 是「服务端后说话」+
             // NIOSSH 把入站缓进 pendingReads，故远端这侧不存在本地那种早期字节丢弃。
             // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
-            let remoteAsync = try await directChannel.eventLoop.submit {
+            remoteAsync = try await directChannel.eventLoop.submit {
                 try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
             }.get()
-
-            await TunnelGlue.pipe(localAsync, remoteAsync, counter: counter)
         } catch {
             AppLogger.error(
                 "本地转发开通道失败 → \(destHost):\(destPort)：\(error.localizedDescription)",
                 category: ForwardingLog.category)
             onChannelFailure(error)
-            try? await localAsync.channel.close()
+            // 关键：此时 localAsync 尚未被消费，**必须**经 executeThenClose 收尾——它会 finish 出站
+            // writer 再关通道。仅 `channel.close()` 只 finish sink、**不** finish writer，localAsync
+            // 析构时 writer 未 finish → NIO `preconditionFailure("Deinited NIOAsyncWriter without
+            // calling finish()")` 把整进程 abort（线上目标抖动 / 开通道超时即崩）。空闭包即正常收尾、
+            // 丢弃这条客户端连接。
+            try? await localAsync.executeThenClose { _, _ in }
+            return
         }
+        // 成功：双向粘合。TunnelGlue.pipe 经 executeThenClose 消费 localAsync 与 remoteAsync
+        // （两端 writer 都会 finish）；非抛出。
+        await TunnelGlue.pipe(localAsync, remoteAsync, counter: counter)
     }
 
     /// 关闭监听通道并停止接受新连接。已建立的隧道由各自的粘合 Task 自然收尾。
     func close() async {
+        // 先置「关闭中」：此后新 accept 的 child 在 initializer 里被拒绝包装（见 start），
+        // 避免与 server channel 关闭竞态产生「来不及消费即析构」的 NIOAsyncChannel。
+        closing.withLockedValue { $0 = true }
         if let serverChannel {
             try? await serverChannel.close()
             self.serverChannel = nil
