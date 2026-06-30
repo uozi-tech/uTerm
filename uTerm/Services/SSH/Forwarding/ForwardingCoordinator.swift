@@ -30,6 +30,9 @@ final class ForwardingCoordinator {
     /// 规则在 start/autostart 时加入、stop 时移除、teardown 时整条清掉 —— 用户关掉的规则
     /// 或关掉的窗口不再自动重连。
     @ObservationIgnored private var reconnectContexts: [UUID: ReconnectContext] = [:]
+    /// 探测/重连进行中标志：串行化 `probeConnectionHealth`（防心跳重入），并让「即时重连」
+    /// 在心跳探测在跑时让路（交给探测的 step ② 处理），避免两路同时驱逐/重建互踩。
+    @ObservationIgnored private var isProbing = false
 
     private struct ReconnectContext {
         let server: ServerProfile
@@ -189,6 +192,22 @@ final class ForwardingCoordinator {
         sessions[serverID] = nil
     }
 
+    /// 会话经数据通路确认判死、自拆后调用（`ForwardingSession.onTransportDeath`）：立即驱逐
+    /// 并按「期望运行」规则重连，不必等看门狗 30s 心跳。守卫：
+    /// - `isProbing`：心跳探测正在跑 → 让路（其 step ② 会处理这台被判死的主机），防互踩；
+    /// - `sessions[serverID] == nil`：已被驱逐 / 已重连过 → 跳过，防重复重连。
+    /// 本方法同步执行（无 await，@MainActor 原子），`start()` 内部再异步建连。
+    private func reconnectAfterDeath(_ serverID: UUID) {
+        guard !isProbing, sessions[serverID] != nil else { return }
+        evictSession(serverID)
+        guard let ctx = reconnectContexts[serverID], !ctx.rules.isEmpty else { return }
+        AppLogger.info("转发即时重连 \(ctx.server.host)：\(ctx.rules.count) 条规则",
+                       category: ForwardingLog.category)
+        for rule in ctx.rules.values {
+            start(rule, on: ctx.server, relay: ctx.relay, modelContainer: ctx.modelContainer)
+        }
+    }
+
     /// 记住一条「期望运行」的规则 + 其重建上下文，供看门狗判死后自动重连。
     private func rememberForReconnect(_ rule: ForwardingRuleSnapshot,
                                      server: ServerProfile,
@@ -248,13 +267,19 @@ final class ForwardingCoordinator {
             }
         }
 
+        // 会话经数据通路确认判死、自拆后：立即驱逐 + 按期望规则重连（不必等 30s 心跳）。
+        let serverID = server.id
+        let onTransportDeath: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor in self?.reconnectAfterDeath(serverID) }
+        }
         let session = ForwardingSession(
             profile: SSHConnection.ProfileSnapshot(server),
             auth: auth,
             jumpHostAuth: jumpAuth,
             hostKeyVerifier: verifier,
             hostKeyApprover: approver,
-            onStatus: onStatus)
+            onStatus: onStatus,
+            onTransportDeath: onTransportDeath)
         sessions[server.id] = session
 
         // 建立 connect 屏障（每台主机一条，connect 只在此发起一次）。所有 start 路径
@@ -298,6 +323,10 @@ extension ForwardingCoordinator: ConnectionHealthProbing {
     ///    天然 30s 退避；规则被用户停掉(stop)或窗口关闭(teardown)即从上下文移除、不再重连。
     ///    转连成功即恢复 active；仍失败则停在 `.error`（「重试」仍可手点），下轮再自动试。
     func probeConnectionHealth() async {
+        // 串行化：心跳重入 / 与「即时重连」并发会互踩驱逐。在跑就跳过（在跑的那次或下次心跳覆盖）。
+        guard !isProbing else { return }
+        isProbing = true
+        defer { isProbing = false }
         // ① 探活 + 判死驱逐。
         if !sessions.isEmpty {
             // 镜像 `ConnectionWatchdog.sweep`：非结构化 Task 数组并发起跑、逐个等完

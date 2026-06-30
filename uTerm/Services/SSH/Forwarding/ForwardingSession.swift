@@ -38,6 +38,9 @@ actor ForwardingSession {
     private let hostKeyVerifier: HostKeyVerifier
     private let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
     private let onStatus: @Sendable (UUID, TunnelStatus) -> Void
+    /// 传输确认判死、会话自拆后回调（默认空，供测试/旧调用省略）。协调器据此**立即**驱逐并
+    /// 按期望规则重连，不必等看门狗 30s 心跳。
+    private let onTransportDeath: @Sendable () -> Void
 
     // MARK: - 运行时
 
@@ -65,13 +68,15 @@ actor ForwardingSession {
          jumpHostAuth: ResolvedAuth?,
          hostKeyVerifier: HostKeyVerifier,
          hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
-         onStatus: @escaping @Sendable (UUID, TunnelStatus) -> Void) {
+         onStatus: @escaping @Sendable (UUID, TunnelStatus) -> Void,
+         onTransportDeath: @escaping @Sendable () -> Void = {}) {
         self.profile = profile
         self.auth = auth
         self.jumpHostAuth = jumpHostAuth
         self.hostKeyVerifier = hostKeyVerifier
         self.hostKeyApprover = hostKeyApprover
         self.onStatus = onStatus
+        self.onTransportDeath = onTransportDeath
     }
 
     /// 安全网（仿 SSHConnection.deinit）：消费者未 close 就丢弃会话时，取消所有
@@ -296,27 +301,30 @@ actor ForwardingSession {
         return true
     }
 
-    /// 新进来的本地连接无法打开 direct-tcpip 时，不再只关掉该 socket。传输层类错误
-    /// 说明整条 SSH 连接已半死，拆整会话；普通目标不可达则只让该规则进入 error。
+    /// 单条入站连接无法打开 direct-tcpip 通道时的处理。**单连接失败 ≠ 规则/会话坏**：
+    /// 该连接的本地 socket 已被监听器关闭、监听器继续 accept，规则保持 active 服务其他连接
+    /// （对齐 `ssh -L`：目标某次连不上不该停掉整条转发）。
+    ///
+    /// 只有 SSH **传输确实已死**才拆会话+触发重连——但「开通道超时 / 传输层错误」既可能是
+    /// 传输半死、也可能只是该次目标慢/拒绝，故不凭单次错误就拆，而是**主动探测确认**
+    /// （`verifyConnectionAlive`：判死则其内部 `failTunnelsAfterTransportDeath()` 拆会话并触发
+    /// 重连，活着则放过）。这修掉了「一个慢目标连接的 10s 超时把整台主机的全部转发莫名其妙
+    /// 拆掉」。普通目标不可达（connection refused 等）不在探测集，仅记日志、规则继续服务。
     private func handleForwardChannelFailure(_ rule: ForwardingRuleSnapshot, error: Error) async {
         guard !isClosed, tunnels[rule.id] != nil else { return }
-        if Self.isTransportDeath(error) {
-            await connected?.close()
-            await failTunnelsAfterTransportDeath()
-            return
+        if Self.suspectsTransportDeath(error) {
+            // 探测确认（5s）。死 → verifyConnectionAlive 内部拆会话+触发重连；活 → 保留规则。
+            _ = await verifyConnectionAlive(timeout: .seconds(5))
+        } else {
+            AppLogger.info(
+                "转发单连接开通道失败（目标侧问题，保留规则继续服务）\(rule.name)：\(FriendlyError.describe(error))",
+                category: ForwardingLog.category)
         }
-        await failTunnel(rule.id, error: ForwardingError.classify(error, rule: rule))
     }
 
-    private func failTunnel(_ ruleID: UUID, error: ForwardingError) async {
-        guard let handle = tunnels.removeValue(forKey: ruleID) else { return }
-        handle.task.cancel()
-        await handle.localListener?.close()
-        await handle.socksListener?.close()
-        onStatus(ruleID, .error(error))
-    }
-
-    private static func isTransportDeath(_ error: Error) -> Bool {
+    /// 是否「疑似」传输已死、值得主动探测确认：传输层错误，或开通道超时（超时可能是传输
+    /// 半死、也可能只是目标慢——故仅作**探测触发**条件，绝不作直接拆会话依据）。
+    private static func suspectsTransportDeath(_ error: Error) -> Bool {
         SSHTransportFailure.isTransportFailure(error) || error is ForwardingTimeoutError
     }
 
@@ -337,5 +345,7 @@ actor ForwardingSession {
         connected = nil
         AppLogger.error("转发连接判死 \(self.profile.host):\(self.profile.port)，已拆除全部隧道",
                         category: ForwardingLog.category)
+        // 通知协调器立即驱逐+按期望规则重连（不必等看门狗 30s 心跳）。
+        onTransportDeath()
     }
 }
