@@ -18,6 +18,8 @@ struct GlobalForwardRow: View {
     let isLast: Bool
     /// 本规则的实时流量（累计 + 速率）；面板每秒刷新。-R 无数据。
     let traffic: GFTrafficStat?
+    /// 编辑本规则配置（双击主内容区 / hover 铅笔触发）。
+    let onEdit: () -> Void
 
     @Environment(\.modelContext) private var modelContext
     @Environment(ForwardingCoordinator.self) private var coordinator
@@ -35,26 +37,37 @@ struct GlobalForwardRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            TypeBadge(kind: rule.kind, dim: !active)
+            // 主内容区（徽标 · 名称 · 流向）：双击 = 编辑配置。双击手势**只**挂主内容区，刻意不
+            // 覆盖尾部铅笔/状态/开关——否则与控件自身动作竞争、弹层一拍内反复横跳卡页面
+            // （见 TunnelRow 双击注释）。
+            HStack(spacing: 12) {
+                TypeBadge(kind: rule.kind, dim: !active)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(rule.name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(active ? UD.text : UD.text2)
-                    .lineLimit(1).truncationMode(.tail)
-                if let label = rule.destLabel, !label.isEmpty {
-                    Text(label)
-                        .font(.system(size: 11)).foregroundStyle(UD.text4)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rule.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(active ? UD.text : UD.text2)
                         .lineLimit(1).truncationMode(.tail)
+                    if let label = rule.destLabel, !label.isEmpty {
+                        Text(label)
+                            .font(.system(size: 11)).foregroundStyle(UD.text4)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
                 }
-            }
-            .frame(width: Self.nameWidth, alignment: .leading)
+                .frame(width: Self.nameWidth, alignment: .leading)
 
-            flow
-                .font(UD.mono(12)).lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(active ? 1 : 0.5)
-                .help(flowPlain)
+                flow
+                    .font(UD.mono(12)).lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(active ? 1 : 0.5)
+                    .help(flowPlain)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onEdit)
+
+            // hover 浮现「编辑配置」铅笔（双击的可发现入口）。
+            iconButton("pencil", tint: UD.text3, help: "编辑配置", action: onEdit)
+                .opacity(hover ? 1 : 0)
 
             trafficView
 
@@ -74,6 +87,21 @@ struct GlobalForwardRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
+    }
+
+    /// hover 浮现的小图标按钮（镜像 `TunnelRow.iconButton`）。
+    private func iconButton(_ symbol: String, tint: Color, help: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     // MARK: - 流向

@@ -18,6 +18,14 @@ struct GlobalForwardingWindowView: View {
     @State private var traffic: [UUID: GFTrafficStat] = [:]
     /// 上一次拉到的累计字节，用来算每秒速率。
     @State private var lastBytes: [UUID: TunnelBytes] = [:]
+    /// 当前正在编辑配置的规则（nil = 关闭）。全局面板只编辑既有规则；新建仍在单主机页。
+    @State private var editing: GFEditTarget?
+
+    /// 编辑目标：携带规则与其所属主机（编辑器需 `ServerProfile` 做端口冲突校验 / 重启）。
+    struct GFEditTarget {
+        let rule: ForwardingRule
+        let server: ServerProfile
+    }
 
     // MARK: - 派生数据
 
@@ -59,6 +67,7 @@ struct GlobalForwardingWindowView: View {
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "全局端口转发"))
         .hostKeySheet(relay)
+        .overlay { editorOverlay }
         .task { await pollTraffic() }
     }
 
@@ -167,7 +176,8 @@ struct GlobalForwardingWindowView: View {
                 ForEach(Array(group.rules.enumerated()), id: \.element.id) { idx, rule in
                     GlobalForwardRow(rule: rule, server: host, relay: relay,
                                      isLast: idx == group.rules.count - 1,
-                                     traffic: traffic[rule.id])
+                                     traffic: traffic[rule.id],
+                                     onEdit: { beginEdit(rule, on: host) })
                 }
             }
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
@@ -206,6 +216,50 @@ struct GlobalForwardingWindowView: View {
     private func reconnectAll() {
         model.runSequence(items: launchItems, coordinator: coordinator,
                           relay: relay, container: modelContext.container)
+    }
+
+    // MARK: - 编辑配置
+
+    @ViewBuilder
+    private var editorOverlay: some View {
+        if let editing {
+            ForwardEditorSheet(
+                server: editing.server,
+                existing: editing.rule,
+                // 端口冲突校验只针对**同一主机**的规则（监听端口冲突是主机本地的事）。
+                allRules: rules.filter { $0.serverID == editing.server.id }.map(\.snapshot),
+                onCancel: { self.editing = nil },
+                onSave: { draft in
+                    save(draft, on: editing.server)
+                    self.editing = nil
+                }
+            )
+        }
+    }
+
+    /// 打开编辑器。已开则忽略（幂等守卫，防双击在一拍内反复横跳，见 TunnelRow 注释）。
+    private func beginEdit(_ rule: ForwardingRule, on server: ServerProfile) {
+        guard editing == nil else { return }
+        editing = GFEditTarget(rule: rule, server: server)
+    }
+
+    /// 保存编辑（全局面板只改既有规则）。就地写字段 + 持久化；该规则若处于「保持连接」则用新配置
+    /// **重启**隧道立即生效，否则只断开旧隧道（避免旧端口残留，与单主机页一致）。
+    private func save(_ draft: ForwardEditorDraft, on server: ServerProfile) {
+        guard let rule = draft.editingID.flatMap({ id in rules.first { $0.id == id } }) else { return }
+        rule.name = draft.name
+        rule.typeRaw = draft.kind.rawValue
+        rule.listenHost = draft.listenHost
+        rule.listenPort = draft.listenPort
+        rule.destHost = draft.destHost
+        rule.destPort = draft.destPort
+        rule.autostart = draft.autostart
+        try? modelContext.save()
+        coordinator.stop(rule.id)
+        if rule.launchAtAppStart {
+            coordinator.start(rule.snapshot, on: server,
+                              relay: relay, modelContainer: modelContext.container)
+        }
     }
 }
 
