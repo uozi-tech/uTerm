@@ -21,9 +21,10 @@ struct GlobalForwardingWindowView: View {
     /// 当前正在编辑配置的规则（nil = 关闭）。全局面板只编辑既有规则；新建仍在单主机页。
     @State private var editing: GFEditTarget?
 
-    /// 编辑目标：携带规则与其所属主机（编辑器需 `ServerProfile` 做端口冲突校验 / 重启）。
+    /// 编辑器目标：携带规则与其所属主机（编辑器需 `ServerProfile` 做端口冲突校验 / 重启）。
+    /// `rule == nil` = 在该主机上**新建**一条转发。
     struct GFEditTarget {
-        let rule: ForwardingRule
+        let rule: ForwardingRule?
         let server: ServerProfile
     }
 
@@ -116,6 +117,7 @@ struct GlobalForwardingWindowView: View {
                 Text("\(summary.launchTotal) 条保持连接")
             }
             Spacer()
+            if !profiles.isEmpty { newForwardMenu }
             Text("共 \(summary.ruleTotal) 条规则")
         }
         .font(.system(size: 11.5))
@@ -123,6 +125,30 @@ struct GlobalForwardingWindowView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
+    }
+
+    /// 「新建」：列出全部主机，选一台 = 在该主机上新建转发（开既有 ForwardEditorSheet，
+    /// 含 -L/-R/-D 三种）。全局面板跨主机，故新建须先选主机；该主机的跳板机 / 连接细节仍在
+    /// 其「服务器」表单里配（jumpHost 是连接级共享设置，不在单条转发里改）。
+    private var newForwardMenu: some View {
+        Menu {
+            ForEach(profiles) { p in
+                Button(p.name.isEmpty ? p.host : p.name) { beginNew(on: p) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                Text("新建").font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(UD.accent)
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(RoundedRectangle(cornerRadius: 6).fill(UD.accentSoft))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.accent.opacity(0.3), lineWidth: 1))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     // MARK: - 分组列表
@@ -237,28 +263,50 @@ struct GlobalForwardingWindowView: View {
         }
     }
 
-    /// 打开编辑器。已开则忽略（幂等守卫，防双击在一拍内反复横跳，见 TunnelRow 注释）。
+    /// 打开编辑器（编辑既有 / 新建）。已开则忽略（幂等守卫，防双击在一拍内反复横跳，见 TunnelRow）。
     private func beginEdit(_ rule: ForwardingRule, on server: ServerProfile) {
         guard editing == nil else { return }
         editing = GFEditTarget(rule: rule, server: server)
     }
 
-    /// 保存编辑（全局面板只改既有规则）。就地写字段 + 持久化；该规则若处于「保持连接」则用新配置
-    /// **重启**隧道立即生效，否则只断开旧隧道（避免旧端口残留，与单主机页一致）。
+    /// 在指定主机上新建一条转发（来自「新建」菜单选主机）。
+    private func beginNew(on server: ServerProfile) {
+        guard editing == nil else { return }
+        editing = GFEditTarget(rule: nil, server: server)
+    }
+
+    /// 保存草稿。编辑既有：就地写字段 + 持久化；若「保持连接」则用新配置**重启**隧道立即生效，
+    /// 否则只断开旧隧道（避免旧端口残留）。新建：插入新规则并分配 sortOrder（与单主机页一致，
+    /// 默认不自动起 —— 用户在行上点「保持连接」再建立）。
     private func save(_ draft: ForwardEditorDraft, on server: ServerProfile) {
-        guard let rule = draft.editingID.flatMap({ id in rules.first { $0.id == id } }) else { return }
-        rule.name = draft.name
-        rule.typeRaw = draft.kind.rawValue
-        rule.listenHost = draft.listenHost
-        rule.listenPort = draft.listenPort
-        rule.destHost = draft.destHost
-        rule.destPort = draft.destPort
-        rule.autostart = draft.autostart
-        try? modelContext.save()
-        coordinator.stop(rule.id)
-        if rule.launchAtAppStart {
-            coordinator.start(rule.snapshot, on: server,
-                              relay: relay, modelContainer: modelContext.container)
+        if let id = draft.editingID, let rule = rules.first(where: { $0.id == id }) {
+            rule.name = draft.name
+            rule.typeRaw = draft.kind.rawValue
+            rule.listenHost = draft.listenHost
+            rule.listenPort = draft.listenPort
+            rule.destHost = draft.destHost
+            rule.destPort = draft.destPort
+            rule.autostart = draft.autostart
+            try? modelContext.save()
+            coordinator.stop(rule.id)
+            if rule.launchAtAppStart {
+                coordinator.start(rule.snapshot, on: server,
+                                  relay: relay, modelContainer: modelContext.container)
+            }
+        } else {
+            let store = ForwardingRuleStore(context: modelContext)
+            let rule = ForwardingRule(
+                serverID: server.id,
+                name: draft.name,
+                kind: draft.kind,
+                listenHost: draft.listenHost,
+                listenPort: draft.listenPort,
+                destHost: draft.destHost,
+                destPort: draft.destPort,
+                destLabel: nil,
+                autostart: draft.autostart,
+                sortOrder: store.nextSortOrder(forServer: server.id))
+            store.add(rule)
         }
     }
 }
