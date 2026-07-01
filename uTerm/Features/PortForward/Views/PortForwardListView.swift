@@ -121,6 +121,7 @@ struct PortForwardListView: View {
                         TunnelRow(
                             rule: rule,
                             status: coordinator.status(rule.id),
+                            recentIssue: coordinator.connectionIssue(rule.id)?.reason,
                             isLast: idx == visible.count - 1,
                             onToggle: { toggle(rule) },
                             onRetry: { retry(rule) },

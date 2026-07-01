@@ -34,6 +34,11 @@ struct GlobalForwardRow: View {
         if case .error(let e) = status { return e.message }
         return nil
     }
+    /// 规则仍 active 但近期有单连接开通道失败 → 徽标转琥珀「已连接·近期失败」，
+    /// 消除 wedge 期「一直绿的已连接却连不上」的误导。
+    private var recentIssue: String? {
+        active ? coordinator.connectionIssue(rule.id)?.reason : nil
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -71,8 +76,8 @@ struct GlobalForwardRow: View {
 
             trafficView
 
-            TunnelStatusBadge(status: status, onRetry: retry)
-                .help(errorMessage ?? "")
+            TunnelStatusBadge(status: status, recentIssue: recentIssue, onRetry: retry)
+                .help(errorMessage ?? recentIssue.map { "最近连接失败：\($0)" } ?? "")
 
             UDToggle(Binding(get: { rule.launchAtAppStart }, set: { setKeepConnected($0) }))
                 .help("保持连接 · 随 uTerm 启动自动建立")
@@ -175,6 +180,9 @@ struct GlobalForwardRow: View {
 /// 由 `ForwardingCoordinator.status(_:)` 驱动 —— 启动序列与手动开关共用同一套状态。
 struct TunnelStatusBadge: View {
     let status: TunnelStatus
+    /// 规则仍 active 但近期有单连接开通道失败时的原因（nil = 正常）。非空 → 徽标转琥珀，
+    /// 加警示三角 + tooltip，提示「已连接但近期有连接失败」，消除 wedge 期的误导。
+    var recentIssue: String? = nil
     let onRetry: () -> Void
 
     var body: some View {
@@ -188,7 +196,16 @@ struct TunnelStatusBadge: View {
                     Text("连接中").font(.system(size: 11)).foregroundStyle(UD.accent)
                 }
             case .active:
-                dotLabel("已连接", dot: UD.success, text: UD.success)
+                if recentIssue != nil {
+                    HStack(spacing: 5) {
+                        Circle().fill(UD.warning).frame(width: 6, height: 6)
+                        Text("已连接").font(.system(size: 11)).foregroundStyle(UD.warning)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8)).foregroundStyle(UD.warning)
+                    }
+                } else {
+                    dotLabel("已连接", dot: UD.success, text: UD.success)
+                }
             case .error:
                 Button(action: onRetry) {
                     HStack(spacing: 5) {

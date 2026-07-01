@@ -41,6 +41,9 @@ actor ForwardingSession {
     /// 传输确认判死、会话自拆后回调（默认空，供测试/旧调用省略）。协调器据此**立即**驱逐并
     /// 按期望规则重连，不必等看门狗 30s 心跳。
     private let onTransportDeath: @Sendable () -> Void
+    /// 单条入站连接开通道失败（规则仍 active、监听继续服务）时回报 (ruleID, 友好原因)，
+    /// 供 UI 把「一直绿的已连接」纠正为「已连接·近期失败」，消除 wedge 期的误导。默认空。
+    private let onConnectionIssue: @Sendable (UUID, String) -> Void
 
     // MARK: - 运行时
 
@@ -69,7 +72,8 @@ actor ForwardingSession {
          hostKeyVerifier: HostKeyVerifier,
          hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
          onStatus: @escaping @Sendable (UUID, TunnelStatus) -> Void,
-         onTransportDeath: @escaping @Sendable () -> Void = {}) {
+         onTransportDeath: @escaping @Sendable () -> Void = {},
+         onConnectionIssue: @escaping @Sendable (UUID, String) -> Void = { _, _ in }) {
         self.profile = profile
         self.auth = auth
         self.jumpHostAuth = jumpHostAuth
@@ -77,6 +81,7 @@ actor ForwardingSession {
         self.hostKeyApprover = hostKeyApprover
         self.onStatus = onStatus
         self.onTransportDeath = onTransportDeath
+        self.onConnectionIssue = onConnectionIssue
     }
 
     /// 安全网（仿 SSHConnection.deinit）：消费者未 close 就丢弃会话时，取消所有
@@ -316,8 +321,11 @@ actor ForwardingSession {
             // 探测确认（5s）。死 → verifyConnectionAlive 内部拆会话+触发重连；活 → 保留规则。
             _ = await verifyConnectionAlive(timeout: .seconds(5))
         } else {
+            let reason = FriendlyError.describe(error)
+            // 规则仍 active、监听继续服务其他连接；把这次失败回报 UI，纠正「一直绿的已连接」误导。
+            onConnectionIssue(rule.id, reason)
             AppLogger.info(
-                "转发单连接开通道失败（目标侧问题，保留规则继续服务）\(rule.name)：\(FriendlyError.describe(error))",
+                "转发单连接开通道失败（目标侧问题，保留规则继续服务）\(rule.name)：\(reason)",
                 category: ForwardingLog.category)
         }
     }

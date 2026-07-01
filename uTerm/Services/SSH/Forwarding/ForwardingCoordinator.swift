@@ -1,6 +1,14 @@
 import Foundation
 import SwiftData
 
+/// 一条规则「最近一次单连接开通道失败」：规则仍在服务（监听未拆、状态仍 active），但近期
+/// 有入站连接开通道失败（如目标暂时不可达 / 服务器暂拒转发）。用于 UI 把「一直绿的已连接」
+/// 纠正为「已连接·近期失败」，消除 wedge 期「显示已连接却连不上」的误导。
+nonisolated struct ForwardingConnectionIssue: Sendable, Equatable {
+    let reason: String
+    let at: Date
+}
+
 /// 转发协调器（app 级，注入 environment）。`@MainActor @Observable`。
 ///
 /// - 每台主机一条专用 `ForwardingSession`（keyed by `serverID`）。
@@ -19,6 +27,9 @@ final class ForwardingCoordinator {
     @ObservationIgnored private var sessions: [UUID: ForwardingSession] = [:]
     /// 每条规则的最新状态（观察源）。
     private var runtime: [UUID: TunnelStatus] = [:]
+    /// 每条规则「最近一次单连接开通道失败」（观察源）。仅在规则仍 active 时写入，
+    /// 状态转非 active / stop / teardown 时清除；读取时按 2 分钟窗口过期。
+    private var connectionIssues: [UUID: ForwardingConnectionIssue] = [:]
     /// 规则 → 所属主机，供 `activeCount(forServer:)` 反查。
     @ObservationIgnored private var ruleServer: [UUID: UUID] = [:]
     /// 每台主机一条 connect 屏障（keyed by serverID）：所有 start 路径在调用
@@ -48,6 +59,14 @@ final class ForwardingCoordinator {
     /// 某条规则的当前状态。未知规则视作 `.inactive`。
     func status(_ ruleID: UUID) -> TunnelStatus {
         runtime[ruleID] ?? .inactive
+    }
+
+    /// 某规则最近一次单连接开通道失败（仅在近 2 分钟内有意义）。nil = 无近期失败。
+    /// UI 据此在「已连接」旁提示近期失败，让 wedge 期「显示已连接却连不上」不再无声。
+    func connectionIssue(_ ruleID: UUID) -> ForwardingConnectionIssue? {
+        guard let issue = connectionIssues[ruleID] else { return nil }
+        guard Date().timeIntervalSince(issue.at) < 120 else { return nil }
+        return issue
     }
 
     /// 某主机当前 active 的隧道数（驱动标题栏绿色徽章）。
@@ -142,6 +161,7 @@ final class ForwardingCoordinator {
         if let serverID = ruleServer[ruleID] {
             reconnectContexts[serverID]?.rules[ruleID] = nil
         }
+        connectionIssues[ruleID] = nil
         guard let serverID = ruleServer[ruleID], let session = sessions[serverID] else {
             runtime[ruleID] = .inactive
             return
@@ -168,6 +188,7 @@ final class ForwardingCoordinator {
         // 清理该主机所有规则的运行时状态。
         for (ruleID, owner) in ruleServer where owner == serverID {
             runtime[ruleID] = .inactive
+            connectionIssues[ruleID] = nil
             ruleServer[ruleID] = nil
         }
         Task { await session.close() }
@@ -264,6 +285,15 @@ final class ForwardingCoordinator {
         let onStatus: @Sendable (UUID, TunnelStatus) -> Void = { [weak self] ruleID, status in
             Task { @MainActor in
                 self?.runtime[ruleID] = status
+                // 非 active（重启/失败/停止）→ 清掉「近期连接失败」提示，让更强的状态接管。
+                if status != .active { self?.connectionIssues[ruleID] = nil }
+            }
+        }
+        // 单连接开通道失败（规则仍 active、监听继续服务）→ 记录，供行内「已连接·近期失败」提示。
+        let onConnectionIssue: @Sendable (UUID, String) -> Void = { [weak self] ruleID, reason in
+            Task { @MainActor in
+                guard self?.runtime[ruleID] == .active else { return }
+                self?.connectionIssues[ruleID] = ForwardingConnectionIssue(reason: reason, at: Date())
             }
         }
 
@@ -279,7 +309,8 @@ final class ForwardingCoordinator {
             hostKeyVerifier: verifier,
             hostKeyApprover: approver,
             onStatus: onStatus,
-            onTransportDeath: onTransportDeath)
+            onTransportDeath: onTransportDeath,
+            onConnectionIssue: onConnectionIssue)
         sessions[server.id] = session
 
         // 建立 connect 屏障（每台主机一条，connect 只在此发起一次）。所有 start 路径

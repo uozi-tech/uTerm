@@ -12,6 +12,8 @@ import SwiftUI
 struct TunnelRow: View {
     let rule: ForwardingRule
     let status: TunnelStatus
+    /// 规则仍 active 但近期有单连接开通道失败时的原因（nil = 正常）。琥珀警示 + tooltip。
+    var recentIssue: String? = nil
     let isLast: Bool
     let onToggle: () -> Void
     let onRetry: () -> Void
@@ -110,6 +112,14 @@ struct TunnelRow: View {
             }
             .opacity(hover ? 1 : 0)
 
+            // 规则仍 active 但近期有单连接失败 → 琥珀警示（tooltip 给原因），消除「一直绿却连不上」误导。
+            if active, let issue = recentIssue {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(UD.warning)
+                    .help("最近连接失败：\(issue)")
+                    .accessibilityLabel("最近连接失败：\(issue)")
+            }
             // 右侧：error 显红 chip，否则 UDToggle。共享 76pt 宽。
             if isError {
                 errorChip
