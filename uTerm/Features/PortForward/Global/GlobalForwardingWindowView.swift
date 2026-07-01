@@ -18,8 +18,10 @@ struct GlobalForwardingWindowView: View {
     @State private var traffic: [UUID: GFTrafficStat] = [:]
     /// 上一次拉到的累计字节，用来算每秒速率。
     @State private var lastBytes: [UUID: TunnelBytes] = [:]
-    /// 当前正在编辑配置的规则（nil = 关闭）。全局面板只编辑既有规则；新建仍在单主机页。
+    /// 编辑器目标（nil = 关闭）：编辑既有规则，或在某主机上新建。
     @State private var editing: GFEditTarget?
+    /// 「新建」主机选择器（分组弹窗）是否展开。
+    @State private var newPickerOpen = false
 
     /// 编辑器目标：携带规则与其所属主机（编辑器需 `ServerProfile` 做端口冲突校验 / 重启）。
     /// `rule == nil` = 在该主机上**新建**一条转发。
@@ -127,15 +129,11 @@ struct GlobalForwardingWindowView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
-    /// 「新建」：列出全部主机，选一台 = 在该主机上新建转发（开既有 ForwardEditorSheet，
-    /// 含 -L/-R/-D 三种）。全局面板跨主机，故新建须先选主机；该主机的跳板机 / 连接细节仍在
-    /// 其「服务器」表单里配（jumpHost 是连接级共享设置，不在单条转发里改）。
+    /// 「新建」按钮 + 分组主机选择弹窗：选一台 = 在该主机上新建转发（开既有 ForwardEditorSheet，
+    /// 含 -L/-R/-D 三种）。全局面板跨主机，故新建须先选主机；该主机的跳板机 / 连接细节仍在其
+    /// 「服务器」表单里配（jumpHost 是连接级共享设置，不在单条转发里改）。
     private var newForwardMenu: some View {
-        Menu {
-            ForEach(profiles) { p in
-                Button(p.name.isEmpty ? p.host : p.name) { beginNew(on: p) }
-            }
-        } label: {
+        Button { newPickerOpen.toggle() } label: {
             HStack(spacing: 4) {
                 Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
                 Text("新建").font(.system(size: 11.5, weight: .medium))
@@ -146,9 +144,60 @@ struct GlobalForwardingWindowView: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(UD.accentSoft))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.accent.opacity(0.3), lineWidth: 1))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .popover(isPresented: $newPickerOpen, arrowEdge: .bottom) { newHostPicker }
+    }
+
+    /// 新建时的主机选择弹窗：按**分组**分区列出全部主机（复用 `QuickCommandLogic.grouped` 的分组
+    /// 逻辑 + `QuickCommandHostRef`，行样式对齐 `JumpHostSelectorView` 的名称 + 端点）。单选：点一台
+    /// = 在其上新建转发。
+    private var newHostPicker: some View {
+        let refs = profiles.map {
+            QuickCommandHostRef(id: $0.id, name: QuickCommandTargets.displayName($0),
+                                group: $0.group, username: $0.username, host: $0.host, port: $0.port)
+        }
+        return VStack(spacing: 0) {
+            Text("选择主机 · 新建转发")
+                .font(.system(size: 10.5)).tracking(0.5).foregroundStyle(UD.text4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
+            Rectangle().fill(UD.border).frame(height: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(QuickCommandLogic.grouped(refs), id: \.group) { group in
+                        Text(group.group.uppercased())
+                            .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
+                            .foregroundStyle(UD.text3)
+                            .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 2)
+                        ForEach(group.hosts) { ref in newHostRow(ref) }
+                    }
+                }
+                .padding(4)
+            }
+            .frame(maxHeight: 300)
+        }
+        .frame(width: 320)
+        .background(UD.overlay)
+    }
+
+    private func newHostRow(_ ref: QuickCommandHostRef) -> some View {
+        Button {
+            newPickerOpen = false
+            if let p = profiles.first(where: { $0.id == ref.id }) { beginNew(on: p) }
+        } label: {
+            HStack(spacing: 10) {
+                Circle().fill(UD.accent).frame(width: 6, height: 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(ref.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UD.text).lineLimit(1)
+                    Text(ref.endpoint).font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "plus.circle.fill").font(.system(size: 12.5)).foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 分组列表
