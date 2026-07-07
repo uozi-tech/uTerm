@@ -29,6 +29,9 @@ actor LocalForwardListener {
     /// 本规则的流量计数器（所有 accept 的连接共享，得到规则合计）。
     private let counter: TunnelByteCounter?
     private let onChannelFailure: @Sendable (Error) -> Void
+    /// 一条隧道结束时回报概况，供上层识别「开通道成功但后端瞬间 0 字节 EOF」这类失败
+    /// （对 `onChannelFailure`——只在开通道失败时触发——不可见）。
+    private let onTunnelClosed: @Sendable (TunnelOutcome) -> Void
 
     /// 绑定后的监听通道，`close()` 时关闭。
     private var serverChannel: Channel?
@@ -41,7 +44,8 @@ actor LocalForwardListener {
          listenHost: String, listenPort: Int,
          destHost: String, destPort: Int,
          counter: TunnelByteCounter? = nil,
-         onChannelFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+         onChannelFailure: @escaping @Sendable (Error) -> Void = { _ in },
+         onTunnelClosed: @escaping @Sendable (TunnelOutcome) -> Void = { _ in }) {
         self.connected = connected
         self.listenHost = listenHost
         self.listenPort = listenPort
@@ -49,6 +53,7 @@ actor LocalForwardListener {
         self.destPort = destPort
         self.counter = counter
         self.onChannelFailure = onChannelFailure
+        self.onTunnelClosed = onTunnelClosed
     }
 
     /// 绑定本地监听并开始接受连接。`bind` 失败时抛出（端口冲突 / 权限）。
@@ -59,6 +64,7 @@ actor LocalForwardListener {
         let destPort = self.destPort
         let counter = self.counter
         let onChannelFailure = self.onChannelFailure
+        let onTunnelClosed = self.onTunnelClosed
         let closing = self.closing
 
         // 关键（修早期字节丢弃竞态，PG「客户端先说话」一连上就发 SSLRequest）：用 bind 的
@@ -115,7 +121,8 @@ actor LocalForwardListener {
                                     connected: connected,
                                     destHost: destHost, destPort: destPort,
                                     counter: counter,
-                                    onChannelFailure: onChannelFailure)
+                                    onChannelFailure: onChannelFailure,
+                                    onTunnelClosed: onTunnelClosed)
                             }
                         }
                     }
@@ -133,7 +140,8 @@ actor LocalForwardListener {
         connected: ConnectedClient,
         destHost: String, destPort: Int,
         counter: TunnelByteCounter?,
-        onChannelFailure: @escaping @Sendable (Error) -> Void
+        onChannelFailure: @escaping @Sendable (Error) -> Void,
+        onTunnelClosed: @escaping @Sendable (TunnelOutcome) -> Void
     ) async {
         let remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>
         do {
@@ -165,8 +173,10 @@ actor LocalForwardListener {
             return
         }
         // 成功：双向粘合。TunnelGlue.pipe 经 executeThenClose 消费 localAsync 与 remoteAsync
-        // （两端 writer 都会 finish）；非抛出。
-        await TunnelGlue.pipe(localAsync, remoteAsync, counter: counter)
+        // （两端 writer 都会 finish）；非抛出。返回隧道概况供上层识别「开通道成功但后端瞬间
+        // 0 字节 EOF」——此形对 onChannelFailure（只在开通道失败时触发）不可见。
+        let outcome = await TunnelGlue.pipe(localAsync, remoteAsync, counter: counter)
+        onTunnelClosed(outcome)
     }
 
     /// 关闭监听通道并停止接受新连接。已建立的隧道由各自的粘合 Task 自然收尾。

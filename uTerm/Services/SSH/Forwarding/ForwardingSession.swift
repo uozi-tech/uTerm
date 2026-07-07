@@ -181,6 +181,9 @@ actor ForwardingSession {
             counter: counter,
             onChannelFailure: { [weak self] error in
                 Task { await self?.handleForwardChannelFailure(rule, error: error) }
+            },
+            onTunnelClosed: { [weak self] outcome in
+                Task { await self?.handleTunnelClosed(rule, outcome: outcome) }
             })
         let onStatus = self.onStatus
         // 驱动 Task：start() 抛错（bind 冲突）→ 归类报 error；成功 → active。
@@ -317,6 +320,24 @@ actor ForwardingSession {
         onConnectionIssue(rule.id, reason)
         AppLogger.info(
             "转发单连接开通道失败（目标侧问题，保留规则继续服务）\(rule.name)：\(reason)",
+            category: ForwardingLog.category)
+    }
+
+    /// 一条隧道结束时的概况处理。识别「开通道成功但后端瞬间 0 字节 EOF」——`openDirectTCPIP`
+    /// 在 CHANNEL_OPEN_CONFIRMATION 就 resolve（此时尚无数据），跳板机随后 upstream connect 目标
+    /// 失败会立刻 EOF 该通道；`TunnelGlue.pipe` 把它当普通空隧道吞掉、`onChannelFailure`（只在
+    /// 开通道失败时触发）从不被调用，于是规则一直显示已连接、访问却立刻 EOF、须重启才好。
+    ///
+    /// 处理：只做可见性、按目标侧失败回报 UI（amber），**不重建会话**——该失败在服务器/后端侧
+    /// （跳板机到目标的 upstream connect 失败），重建本会话既不会让后端变可达、又会拖垮同主机
+    /// 其它转发。有任何回程数据即视作转发正常，不误报（客户端主动断开 = 本地先关，也不算疑似）。
+    private func handleTunnelClosed(_ rule: ForwardingRuleSnapshot, outcome: TunnelOutcome) async {
+        guard !isClosed, tunnels[rule.id] != nil else { return }
+        guard outcome.suspectsInstantClose else { return }
+        let reason = String(localized: "目标连接被立即关闭（无数据返回），后端可能暂时不可用")
+        onConnectionIssue(rule.id, reason)
+        AppLogger.info(
+            "转发开通道成功但远端 0 字节即关（后端侧问题，保留规则继续服务）\(rule.name)：\(reason)",
             category: ForwardingLog.category)
     }
 
