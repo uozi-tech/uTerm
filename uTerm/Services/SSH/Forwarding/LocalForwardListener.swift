@@ -138,7 +138,10 @@ actor LocalForwardListener {
         let remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>
         do {
             // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错）。
-            let directChannel = try await withForwardingTimeout(.seconds(10)) {
+            let directChannel = try await withForwardingTimeout(
+                .seconds(10),
+                lateResultCleanup: { channel in try? await channel.close() }
+            ) {
                 try await connected.openDirectTCPIP(host: destHost, port: destPort)
             }
             // 远端 direct-tcpip 是 SSH 通道；Citadel 的 DataToBufferCodec 已在该通道上开了

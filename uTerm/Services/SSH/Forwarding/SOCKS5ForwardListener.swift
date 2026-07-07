@@ -229,7 +229,10 @@ actor SOCKS5ForwardListener {
                 let directChannel: Channel
                 do {
                     let targetHost = request.host, targetPort = request.port
-                    directChannel = try await withForwardingTimeout(.seconds(10)) {
+                    directChannel = try await withForwardingTimeout(
+                        .seconds(10),
+                        lateResultCleanup: { channel in try? await channel.close() }
+                    ) {
                         try await connected.openDirectTCPIP(host: targetHost, port: targetPort)
                     }
                 } catch {
