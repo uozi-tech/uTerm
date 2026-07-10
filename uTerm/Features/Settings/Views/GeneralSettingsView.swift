@@ -153,11 +153,7 @@ private struct UpdateStatusPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.025)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(UD.border, lineWidth: 1)
-        )
+        .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
     }
 
     private var statusLine: String {

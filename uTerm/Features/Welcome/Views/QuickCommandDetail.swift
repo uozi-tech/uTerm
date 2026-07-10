@@ -131,8 +131,7 @@ struct QuickCommandDetail: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.fillFaint))
     }
 
     @ViewBuilder
@@ -208,7 +207,7 @@ struct QuickCommandDetail: View {
                     .padding(.leading, 7)
                     .padding(.trailing, 9)
                     .frame(height: 24)
-                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -221,8 +220,7 @@ struct QuickCommandDetail: View {
         }
         .padding(EdgeInsets(top: 11, leading: 12, bottom: 12, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.aiAccent.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(UD.aiAccent.opacity(0.20), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.aiAccent.opacity(0.08)))
     }
 
     // MARK: 命令块
@@ -239,7 +237,6 @@ struct QuickCommandDetail: View {
             .padding(EdgeInsets(top: 12, leading: 13, bottom: 12, trailing: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.panelHi))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
 
             Button(action: copy) {
                 Text(copied ? "已复制" : "复制")
@@ -362,7 +359,7 @@ private struct KbdReturn: View {
     }
 }
 
-/// 40×40 描边方钮（编辑 / 删除）。删除态 hover 转红。
+/// 40×40 方钮（编辑 / 删除）。删除态 hover 红 tint 底 + 红描边。
 private struct SquareActionButton: View {
     let systemImage: String
     let help: String
@@ -390,11 +387,12 @@ private struct SquareActionButton: View {
         return UD.text2
     }
     private var fill: Color {
-        if danger { return .clear }
-        return Color.primary.opacity(hover ? 0.06 : 0.045)
+        if danger { return hover ? UD.danger.opacity(0.14) : UD.fillFaint }
+        return hover ? UD.fillSoft : UD.fillFaint
     }
     private var border: Color {
-        if danger { return hover ? UD.danger.opacity(0.40) : UD.border }
-        return UD.borderHi
+        // 危险钮 hover 保留红描边（对齐 UDButton .danger）
+        if danger, hover { return UD.danger.opacity(0.40) }
+        return .clear
     }
 }

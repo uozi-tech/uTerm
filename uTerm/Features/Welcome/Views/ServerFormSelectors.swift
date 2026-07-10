@@ -27,7 +27,7 @@ struct KeySelectorView: View {
             }
             .padding(.horizontal, 10).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
@@ -80,8 +80,7 @@ struct KeySelectorView: View {
                 if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(UD.accent) }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accent.opacity(0.10) : Color.clear))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSel ? UD.accent.opacity(0.2) : Color.clear, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accentSoft : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -110,7 +109,7 @@ struct JumpHostSelectorView: View {
             }
             .padding(.horizontal, 10).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : UD.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(open ? UD.accent : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
@@ -152,12 +151,12 @@ struct JumpHostSelectorView: View {
                 if let g = h.group, !g.isEmpty {
                     Text(g).font(.system(size: 10)).foregroundStyle(UD.text4)
                         .padding(.horizontal, 6).padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(UD.border, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 3).fill(UD.fillFaint))
                 }
                 if isSel { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(UD.accent) }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accent.opacity(0.10) : Color.clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? UD.accentSoft : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -190,8 +189,7 @@ private struct KeyGlyph: View {
         case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
         }
         RoundedRectangle(cornerRadius: size * 0.25)
-            .fill(tint.opacity(0.12))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))
+            .fill(tint.opacity(0.14))
             .frame(width: size, height: size)
             .overlay(Image(systemName: "key.fill").font(.system(size: size * 0.5)).foregroundStyle(tint))
     }

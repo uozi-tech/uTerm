@@ -39,7 +39,7 @@ struct GroupsScreen: View {
                 }
             }
         }
-        .background(M.bg)
+        .background(M.canvas)
         .navigationTitle("分组")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -89,7 +89,7 @@ struct GroupFormSheet: View {
                 .padding(.vertical, 12)
                 .mReadableColumn()
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle(group == nil ? "新建分组" : "编辑分组")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -148,7 +148,7 @@ struct GroupDetailView: View {
             .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 24)
             .mReadableColumn()
         }
-        .background(M.bg)
+        .background(M.canvas)
         .navigationTitle(group.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { name = group.name }
@@ -162,8 +162,7 @@ struct GroupDetailView: View {
         HStack(spacing: 14) {
             Circle().fill(group.color).frame(width: 18, height: 18)
                 .frame(width: 46, height: 46)
-                .background(group.color.opacity(0.12))
-                .overlay(RoundedRectangle(cornerRadius: 13).stroke(group.color.opacity(0.4), lineWidth: 1))
+                .background(group.color.opacity(0.14))
                 .clipShape(RoundedRectangle(cornerRadius: 13))
             VStack(alignment: .leading, spacing: 3) {
                 Text(group.name).font(M.sans(19, weight: .bold)).tracking(-0.3).foregroundStyle(M.text)
@@ -172,7 +171,8 @@ struct GroupDetailView: View {
             Spacer()
             Button { pendingDelete = true } label: {
                 MIcon(name: "trash", size: 17, color: M.text3).frame(width: 38, height: 38)
-                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, lineWidth: 1))
+                    .background(M.fillFaint)
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
             }.buttonStyle(MPressStyle())
         }
     }
@@ -200,7 +200,7 @@ struct GroupDetailView: View {
                             .frame(width: 32, height: 32)
                             .overlay { if on { MIcon(name: "check", size: 15, color: .white, weight: .bold) } }
                             .clipShape(RoundedRectangle(cornerRadius: 9))
-                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.bg, lineWidth: on ? 2 : 0))
+                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.canvas, lineWidth: on ? 2 : 0))
                             .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color(.sRGB, red: r, green: g, blue: b), lineWidth: on ? 2 : 0).padding(-2))
                     }.buttonStyle(MPressStyle())
                 }
@@ -219,7 +219,6 @@ struct GroupDetailView: View {
                     segBtn(1, "添加 \(candidates.count)")
                 }
                 .padding(3).background(M.fillFaint)
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.border, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 9))
             }
             let list = tab == 0 ? members : candidates
@@ -234,8 +233,9 @@ struct GroupDetailView: View {
                     }
                 }
             }
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(M.border, lineWidth: 1))
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .udShadow(.card)
         }
         .padding(.top, 22)
     }
@@ -243,9 +243,9 @@ struct GroupDetailView: View {
     private func segBtn(_ i: Int, _ label: String) -> some View {
         Button { tab = i } label: {
             Text(label).font(M.sans(12.5, weight: .medium))
-                .foregroundStyle(tab == i ? M.text : M.text3)
+                .foregroundStyle(tab == i ? accent : M.text3)
                 .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(tab == i ? accent.opacity(0.15) : .clear)
+                .background(tab == i ? accent.opacity(0.14) : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())   // 整段可点，不必点到文字
         }.buttonStyle(MPressStyle())
@@ -254,8 +254,7 @@ struct GroupDetailView: View {
     private func memberRow(_ h: ServerProfile, last: Bool) -> some View {
         HStack(spacing: 11) {
             Text(initials(h.name)).font(M.mono(11.5)).foregroundStyle(M.text3)
-                .frame(width: 26, height: 26).background(M.fillFaint)
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(M.border, lineWidth: 1))
+                .frame(width: 26, height: 26).background(M.fillMed)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
             Text(h.name).font(M.mono(14)).foregroundStyle(M.text).lineLimit(1)
             Spacer(minLength: 6)
@@ -266,13 +265,12 @@ struct GroupDetailView: View {
                 Text(tab == 0 ? "移出" : "+ 加入").font(M.sans(12.5, weight: .medium))
                     .foregroundStyle(tab == 0 ? M.text2 : accent)
                     .padding(.horizontal, 12).frame(height: 30)
-                    .background(tab == 0 ? Color.clear : accent.opacity(0.1))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(tab == 0 ? M.border : accent.opacity(0.34), lineWidth: 1))
+                    .background(tab == 0 ? M.fillMed : accent.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }.buttonStyle(MPressStyle())
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
-        .overlay(alignment: .bottom) { if !last { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 13) } }
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 13) } }
     }
 
     private func initials(_ s: String) -> String {

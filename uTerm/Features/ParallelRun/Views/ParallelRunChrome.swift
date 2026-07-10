@@ -66,7 +66,6 @@ struct ParallelRunTitleBar: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.borderHi, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .disabled(running)
@@ -98,7 +97,6 @@ private struct ParModeToggle: View {
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.fillFaint))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
     }
 
     private func tab(_ value: ParallelViewMode, label: String, systemImage: String, tint: Color) -> some View {
@@ -172,7 +170,6 @@ struct ParallelBroadcastBar: View {
         .padding(.horizontal, 11)
         .frame(minHeight: 36)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ParTermSurface.bg))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
     }
 
     private var progressTrack: some View {
@@ -277,8 +274,7 @@ struct ParBadge: View {
         .padding(.leading, 8)
         .padding(.trailing, 9)
         .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(tint.opacity(0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(tint.opacity(0.38), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(tint.opacity(0.14)))
         .fixedSize()
     }
 }
@@ -288,9 +284,7 @@ struct ParAgentAvatar: View {
     var size: CGFloat = 26
     var body: some View {
         RoundedRectangle(cornerRadius: size * 8 / 30, style: .continuous)
-            .fill(UD.aiAccent.opacity(0.12))
-            .overlay(RoundedRectangle(cornerRadius: size * 8 / 30, style: .continuous)
-                .strokeBorder(UD.aiAccent.opacity(0.30), lineWidth: 1))
+            .fill(UD.aiAccent.opacity(0.15))
             .overlay(Image(systemName: "sparkles").font(.system(size: size * 0.46)).foregroundStyle(UD.aiAccent))
             .frame(width: size, height: size)
     }

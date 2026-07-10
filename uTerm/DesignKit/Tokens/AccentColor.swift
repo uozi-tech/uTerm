@@ -35,7 +35,8 @@ nonisolated enum AccentColor: String, CaseIterable, Identifiable {
     }
 
     func softSpec(dark: Bool) -> UD.ColorSpec {
-        base(dark: dark).withAlpha(dark ? 0.10 : 0.13)
+        // v2「填充即边界」：选中 / 主操作 tint 底 = accent 14%（无描边；hover 用 22%）。
+        base(dark: dark).withAlpha(0.14)
     }
 
     func pressedSpec(dark: Bool) -> UD.ColorSpec {

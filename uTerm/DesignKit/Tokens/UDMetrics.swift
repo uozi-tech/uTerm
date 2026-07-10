@@ -40,6 +40,8 @@ extension UD {
     enum Shadow {
         /// 卡片 / 行悬停。设计稿 `--u-shadow-sm` `0 2 8 -4`。
         case sm
+        /// 悬浮卡片（移动端白卡）：四周等宽（y=0）、淡且发散（user 定）。
+        case card
         /// 下拉 / 菜单 / 弹层。设计稿 `--u-shadow-md` `0 8 24 -12`。
         case md
         /// 指标卡 / 菜单栏 / 对话框。设计稿 `--u-shadow-lg` `0 16 40 -16`。
@@ -82,6 +84,10 @@ private struct UDShadowModifier: ViewModifier {
             return dark
                 ? [UDShadowLayer(opacity: 0.34, radius: 4, y: 2)]
                 : [UDShadowLayer(opacity: 0.10, radius: 4, y: 2)]
+        case .card: // CSS 0 0 20 · 无偏移四周等宽，淡而发散
+            return dark
+                ? [UDShadowLayer(opacity: 0.22, radius: 10, y: 0)]
+                : [UDShadowLayer(opacity: 0.06, radius: 10, y: 0)]
         case .md:   // CSS 0 8 24 -12 · 深 0.50 / 浅 0.14
             return dark
                 ? [UDShadowLayer(opacity: 0.42, radius: 12, y: 8)]

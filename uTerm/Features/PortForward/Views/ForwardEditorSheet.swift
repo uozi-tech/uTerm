@@ -237,12 +237,10 @@ struct ForwardEditorSheet: View {
                 Button { listenPortText = String(suggested) } label: {
                     Text("改用 \(String(suggested))")
                         .font(UD.mono(11))
-                        .foregroundStyle(UD.accent)
+                        .foregroundStyle(UD.accentInk)
                         .padding(.horizontal, 8)
                         .frame(height: 22)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(UD.accent.opacity(0.1)))
-                        .overlay(RoundedRectangle(cornerRadius: 5)
-                            .strokeBorder(UD.accent.opacity(0.33), lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 5).fill(UD.accentSoft))
                 }
                 .buttonStyle(.plain)
             }
@@ -288,7 +286,6 @@ struct ForwardEditorSheet: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 8).fill(Self.commandPreviewBackground))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
     }
 
     private var footer: some View {

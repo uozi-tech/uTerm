@@ -148,7 +148,7 @@ struct QuickCommandForm: View {
             .frame(minHeight: 34)
             .background(RoundedRectangle(cornerRadius: UD.Radius.md, style: .continuous).fill(UD.inputBg))
             .overlay(RoundedRectangle(cornerRadius: UD.Radius.md, style: .continuous)
-                .strokeBorder(serverPopoverOpen ? UD.accent : UD.border, lineWidth: 1))
+                .strokeBorder(serverPopoverOpen ? UD.accent : .clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -189,7 +189,7 @@ struct QuickCommandForm: View {
                     .foregroundStyle(UD.text2)
                     .padding(.horizontal, 9)
                     .frame(height: 24)
-                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(UD.fillFaint))
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -265,9 +265,7 @@ struct QuickCommandForm: View {
             .padding(.trailing, 10)
             .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(on ? UD.accent.opacity(0.10) : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(on ? UD.accent.opacity(0.20) : .clear, lineWidth: 1))
+                .fill(on ? UD.accentSoft : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -295,9 +293,7 @@ struct QuickCommandForm: View {
                 .padding(EdgeInsets(top: 8, leading: 9, bottom: 8, trailing: 8))
                 .frame(minHeight: 64)
         }
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(UD.aiAccent.opacity(0.20), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.08)))
     }
 
     // MARK: 执行命令
@@ -319,9 +315,8 @@ struct QuickCommandForm: View {
                 .padding(EdgeInsets(top: 8, leading: 9, bottom: 8, trailing: 8))
                 .frame(minHeight: 80)
         }
-        // 可编辑输入用 inputBg（浅色纯白 #FFFFFF / 深色微透白）——区别于只读命令展示块的 panelHi。
+        // 可编辑输入用 inputBg（可见灰底、无描边）——区别于只读命令展示块的 panelHi。
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.inputBg))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
     }
 
     // MARK: AI 介入
@@ -376,9 +371,7 @@ private struct QCCheckbox: View {
     let checked: Bool
     var body: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(checked ? UD.accent : Color.primary.opacity(0.04))
-            .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .strokeBorder(checked ? UD.accent : UD.border, lineWidth: 1))
+            .fill(checked ? UD.accent : UD.fillMed)
             .overlay {
                 if checked {
                     Image(systemName: "checkmark")
@@ -398,9 +391,7 @@ private struct QCGroupCheck: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(active ? UD.accent : Color.primary.opacity(0.04))
-            .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .strokeBorder(active ? UD.accent : UD.border, lineWidth: 1))
+            .fill(active ? UD.accent : UD.fillMed)
             .overlay {
                 if on {
                     Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)

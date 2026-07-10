@@ -177,12 +177,9 @@ private struct CommandPaletteRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
+            // 选中行 = accent 14% 填充、无 accent 描边（v2）。
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected ? UD.accent.opacity(0.12) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(selected ? UD.accent.opacity(0.33) : Color.clear, lineWidth: 1)
+                .fill(selected ? UD.accentSoft : Color.clear)
         )
         .contentShape(Rectangle())
         .onHover { if $0 { onHover() } }
@@ -208,12 +205,8 @@ private struct CommandPaletteKindIcon: View {
     var body: some View {
         let isHost = kind == .host
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(isHost ? UD.accent.opacity(0.10) : UD.dyn(.white(0.04), .black(0.04)))
+            .fill(isHost ? UD.accent.opacity(0.10) : UD.dyn(.white(0.055), .black(0.065)))
             .frame(width: 26, height: 26)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(UD.border, lineWidth: 1)
-            )
             .overlay(
                 Image(systemName: kind.symbol)
                     .font(.system(size: 12))

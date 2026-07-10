@@ -138,8 +138,7 @@ private struct ProviderRow: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(UD.accent)
                 .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 5).fill(UD.accent.opacity(0.10)))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.accent.opacity(0.20)))
+                .background(RoundedRectangle(cornerRadius: 5).fill(UD.accentSoft))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(provider.name)

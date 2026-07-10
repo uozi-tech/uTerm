@@ -94,15 +94,16 @@ struct UDTextField: View {
 
     private var fieldBackground: Color {
         if !isEnabled {
-            return UD.dyn(.white(0.015), .black(0.02))
+            return UD.dyn(.white(0.015), .black(0.028))
         }
-        return UD.inputBg   // 暗夜白叠加细底 / 日间纯白
+        return UD.inputBg   // 淡灰底（深=白 6% / 浅=黑 5%），无描边
     }
 
     private var borderColor: Color {
         if hasError { return UD.danger }
         if focused { return UD.accent }
-        return UD.dyn(.white(0.07), .black(0.16)) // UD.border (dark) / UD.borderHi (light)
+        // 静止态无描边（1px 透明占位防聚焦切换跳动）；边界由淡灰填充承担。
+        return .clear
     }
 
     private var ringColor: Color {

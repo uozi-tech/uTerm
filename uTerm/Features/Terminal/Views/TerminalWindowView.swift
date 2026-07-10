@@ -241,7 +241,6 @@ struct TerminalModeToggle: View {
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
     }
 
     private func segment(_ m: TerminalWindowContentMode, label: String, systemImage: String) -> some View {

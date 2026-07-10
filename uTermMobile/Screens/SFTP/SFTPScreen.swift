@@ -101,7 +101,7 @@ struct SFTPScreen: View {
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20).padding(.top, 4)
-                    LazyVStack(spacing: 10) {
+                    MCardList {
                         ForEach(hosts) { host in
                             Button { store.openSFTP(host) } label: {
                                 HStack(spacing: 12) {
@@ -117,9 +117,9 @@ struct SFTPScreen: View {
                                     MIcon(name: "chev", size: 14, color: M.text4, weight: .semibold)
                                 }
                                 .padding(14)
-                                .background(M.panel)
-                                .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+                                .background(M.card)
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                                .udShadow(.card)
                             }
                             .buttonStyle(MPressStyle())
                         }
@@ -188,8 +188,9 @@ struct SFTPScreen: View {
                 .fixedSize()
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
+        .background(M.overlay)
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func header(_ host: ServerProfile) -> some View {
@@ -226,7 +227,7 @@ struct SFTPScreen: View {
             .padding(.horizontal, 16).padding(.vertical, 8)
         }
         .background(M.panel)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func pathSegments(_ path: String) -> [(label: String, full: String)] {
@@ -247,7 +248,7 @@ struct SFTPScreen: View {
             Spacer()
         }
         .padding(.horizontal, 16).frame(height: 56)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 16) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
         .contentShape(Rectangle())
         .onTapGesture { controller.goUp() }
     }
@@ -324,7 +325,7 @@ struct SFTPRow: View {
             }
         }
         .padding(.horizontal, 16).frame(height: 56)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 16) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
     }
 
     private var subtitle: String {

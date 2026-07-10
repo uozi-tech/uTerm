@@ -22,9 +22,11 @@ struct PreviewTabBar: View {
                             active: model.activeBufferID == buf.id,
                             first: index == 0,
                             dirty: buf.isDirty,
+                            transient: model.isPreviewTab(buf.id),
                             systemImage: Self.icon(for: buf.kind),
                             activeBackground: Color(nsColor: EditorTheme.background),
                             onSelect: { model.selectTab(buf.id) },
+                            onDoubleTap: { model.keepTab(buf.id) },   // 双击 tab：预览转正
                             onClose:  { onRequestClose(buf.id) })
                             .frame(maxHeight: .infinity)
                             // 选中态供 VoiceOver 念读；脏标记并入文件名标签。

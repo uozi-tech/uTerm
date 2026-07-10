@@ -31,7 +31,7 @@ extension View {
         ZStack {
             self
             if isPresented.wrappedValue {
-                Color.black.opacity(0.55).ignoresSafeArea()
+                M.backdrop.ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { if dismissable { isPresented.wrappedValue = false } }
                     .transition(.opacity)
@@ -50,7 +50,7 @@ extension View {
         ZStack {
             self
             if let value = item.wrappedValue {
-                Color.black.opacity(0.55).ignoresSafeArea()
+                M.backdrop.ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { if dismissable { item.wrappedValue = nil } }
                     .transition(.opacity)

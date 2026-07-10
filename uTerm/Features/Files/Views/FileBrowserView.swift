@@ -341,13 +341,8 @@ struct FileBrowserContent: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        // 选中态与 entryRow 同款：满宽底色 + 左侧 2px 蓝条。
-        .background(alignment: .leading) {
-            ZStack(alignment: .leading) {
-                Rectangle().fill(upSelected ? UD.rowSelected : Color.clear)
-                Rectangle().fill(UD.accent).frame(width: 2).opacity(upSelected ? 1 : 0)
-            }
-        }
+        // 选中态与 entryRow 同款：满宽底色（无左侧强调条，填充即边界）。
+        .background(Rectangle().fill(upSelected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: upSelected)
         .contentShape(Rectangle())
         // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
@@ -407,18 +402,17 @@ struct FileBrowserContent: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        // 选中态：满宽 UD.rowSelected 底 + 左侧 2px 蓝条，对齐独立窗口 SFTPFileTable。
-        // 底色优先级高于 hover，故选中时给 hoverBackground 传 isActive 让它让位。
-        .background(alignment: .leading) {
-            ZStack(alignment: .leading) {
-                Rectangle().fill(isSelected ? UD.rowSelected : Color.clear)
-                Rectangle().fill(UD.accent).frame(width: 2).opacity(isSelected ? 1 : 0)
-            }
-        }
+        // 选中态：满宽 UD.rowSelected 底（无左侧强调条，填充即边界），对齐独立窗口
+        // SFTPFileTable。底色优先级高于 hover，故选中时给 hoverBackground 传 isActive
+        // 让它让位。
+        .background(Rectangle().fill(isSelected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: isSelected)
         .contentShape(Rectangle())
-        // 单击选中、双击激活（Finder 风）。两个 .onTapGesture 链式、count:2 在前
-        // —— SwiftUI 据此把单 / 双击当互斥手势消歧，与主列表 ServerRow 同款。
+        // 单击选中，且文件立即以「预览 tab」临时打开（VS Code 风，会顶替上一个预览
+        // tab）；双击 / 回车永久打开。目录仍双击才进入（本侧栏是整列表替换式导航，
+        // 单击进目录会让双击的第二下落到新列表的行上，误选 / 误预览）。
+        // 两个 .onTapGesture 链式、count:2 在前 —— SwiftUI 据此把单 / 双击当互斥
+        // 手势消歧，与主列表 ServerRow 同款。
         // 不能用 simultaneousGesture(count:2)：那让单 / 双击各自独立计时、互相抢，
         // 导致两次慢单击被当成双击（单击却进入）、或真双击第二下在 selectedID 改动
         // 触发行重渲染后丢失（要连点好几下才进）。单击同时把键盘焦点交给列表容器，
@@ -430,6 +424,7 @@ struct FileBrowserContent: View {
         .onTapGesture {
             selectedID = entry.id
             browserFocused = true
+            if !entry.isDirectory { open(entry, asPreview: true) }
         }
         .onDrag {
             model.remoteDragProvider(for: entry)
@@ -575,9 +570,13 @@ struct FileBrowserContent: View {
         return true
     }
 
-    /// 行被激活（鼠标 tap / Space / Enter）：目录则进入，文件则发通知由
-    /// PreviewArea 打开（Spec 2A §3.1）。
+    /// 行被激活（双击 / Space / Enter / 右键「预览」）：目录则进入，文件则**永久**
+    /// 打开（Spec 2A §3.1）。单击走 `open(_:asPreview: true)` 临时打开。
     private func activate(_ entry: RemoteEntry) {
+        open(entry, asPreview: false)
+    }
+
+    private func open(_ entry: RemoteEntry, asPreview: Bool) {
         if entry.isDirectory {
             Task { await model.navigate(into: entry) }
             return
@@ -586,7 +585,8 @@ struct FileBrowserContent: View {
             // 解析链接：目标是目录则 model 已进入；是文件则返回真实路径，这里开预览。
             Task {
                 if let f = await model.resolveSymlinkForOpen(entry) {
-                    postOpenRemoteFile(path: f.path, size: f.size ?? 0, mtime: f.mtime)
+                    postOpenRemoteFile(path: f.path, size: f.size ?? 0, mtime: f.mtime,
+                                       asPreview: asPreview)
                 }
             }
             return
@@ -595,18 +595,20 @@ struct FileBrowserContent: View {
         let fullPath = basePath.hasSuffix("/")
             ? basePath + entry.name
             : basePath + "/" + entry.name
-        postOpenRemoteFile(path: fullPath, size: Int64(entry.size ?? 0), mtime: entry.modifiedAt)
+        postOpenRemoteFile(path: fullPath, size: Int64(entry.size ?? 0),
+                           mtime: entry.modifiedAt, asPreview: asPreview)
     }
 
     /// 发通知让 PreviewArea 打开远程文件（普通文件 / 解析后的链接目标共用）。
-    private func postOpenRemoteFile(path: String, size: Int64, mtime: Date?) {
+    private func postOpenRemoteFile(path: String, size: Int64, mtime: Date?, asPreview: Bool) {
         NotificationCenter.default.post(
             name: .openRemoteFile,
             object: nil,
             userInfo: [
                 "path": path,
                 "size": size,
-                "mtime": mtime as Any
+                "mtime": mtime as Any,
+                "preview": asPreview
             ])
     }
 

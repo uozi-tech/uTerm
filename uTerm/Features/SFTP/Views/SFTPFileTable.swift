@@ -289,12 +289,8 @@ struct SFTPFileTable: View {
         .padding(.horizontal, SFTPFileTableColumnWidths.horizontalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 52)
-        .background(alignment: .leading) {
-            ZStack(alignment: .leading) {
-                Rectangle().fill(selected ? UD.rowSelected : Color.clear)
-                Rectangle().fill(UD.accent).frame(width: 2).opacity(selected ? 1 : 0)
-            }
-        }
+        // 选中态：满宽底色（无左侧强调条，填充即边界），与工作区侧栏文件行一致。
+        .background(Rectangle().fill(selected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: selected)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
@@ -324,7 +320,7 @@ struct SFTPFileTable: View {
         return parts.joined(separator: "，")
     }
 
-    /// 八进制权限 chip：mono 11 + `UD.fillSoft` 底 + `UD.border` 描边胶囊；tooltip
+    /// 八进制权限 chip：mono 11 + `UD.fillSoft` 底胶囊；tooltip
     /// 给完整符号串（drwxr-xr-x）。
     @ViewBuilder
     private func permChip(_ e: RemoteEntry) -> some View {
@@ -332,7 +328,6 @@ struct SFTPFileTable: View {
             .font(UD.mono(11)).foregroundStyle(UD.text2)
             .padding(.horizontal, 6).padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
             .help(posixPermissionString(e.permissions))
     }
 

@@ -58,7 +58,7 @@ struct HostsScreen: View {
                                 message: "添加一台服务器即可开始连接终端、浏览文件或运行命令。",
                                 actionTitle: "添加服务器", action: { creating = true })
                 } else if filter == .recent {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    MCardList(alignment: .leading) {
                         sectionLabel("最近连接 · \(recent.count)")
                         if recent.isEmpty {
                             Text("还没有连接记录").font(M.sans(13)).foregroundStyle(M.text4)
@@ -68,7 +68,7 @@ struct HostsScreen: View {
                     }
                     .padding(.horizontal, 16)
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    MCardList(alignment: .leading) {
                         ForEach(grouped, id: \.name) { sec in
                             sectionLabel("\(sec.name) · \(sec.hosts.count)")
                             ForEach(sec.hosts) { host in card(host) }
@@ -197,9 +197,9 @@ struct HostCard: View {
                 }
             }
             .padding(14)
-            .background(M.panel)
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(M.border, lineWidth: 1))
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .udShadow(.card)
         }
         .buttonStyle(MPressStyle())
         .contextMenu {
@@ -214,8 +214,7 @@ struct HostCard: View {
         Text(String(host.name.prefix(1)).uppercased())
             .font(M.mono(16, weight: .semibold)).foregroundStyle(accent)
             .frame(width: 38, height: 38)
-            .background(accent.opacity(0.12))
-            .overlay(RoundedRectangle(cornerRadius: 11).stroke(accent.opacity(0.22), lineWidth: 1))
+            .background(accent.opacity(0.14))
             .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 }

@@ -18,10 +18,19 @@ enum M {
     /// `ParTermSurface`）。不要用 `terminalBg`（日夜都深，是真实终端用的）：否则日间得到黑底命令块，
     /// 其上的 text/text2/text3 深字读不出。翻面后文字直接用 M.text/text2/text3 即两档都可读。
     static let cmdSurface = UD.dyn(.hex(0x08080A), .hex(0xFFFFFF))
+    /// 屏幕画布：承载卡片的屏 / 滚动区 / 卡片式抽屉的底。暗夜与 `bg` 同值（视觉零变化）；
+    /// 日间浅灰，让白卡浮起。bar（M.overlay）/ 真实终端面别用它。
+    static let canvas = UD.dyn(.hex(0x101012), .hex(0xF4F4F5))
+    /// 卡片面：暗夜与 `fillFaint` 同值（视觉零变化）；日间纯白，配 `.udShadow(.card)` 悬浮于
+    /// `canvas` 之上。chip / 键帽 / 次按钮等小控件仍用 fillFaint/fillMed，别用它。
+    static let card = UD.dyn(.white(0.045), .hex(0xFFFFFF))
 
     // 描边
     static var border: Color { UD.border }
     static var borderHi: Color { UD.borderHi }
+    /// 分割线专用 hairline（比 `border` 浅一档）：行分隔 / 区块分区用它；
+    /// 控件描边（stroke / 容器边框）仍用 `border`。
+    static let divider = UD.dyn(.white(0.05), .black(0.06))
 
     // 文本
     static var text: Color { UD.text }
@@ -44,6 +53,10 @@ enum M {
     static var inputBg: Color { UD.inputBg }
     static var rowSelected: Color { UD.rowSelected }
     static var fillFaint: Color { UD.fillFaint }
+    static var fillMed: Color { UD.fillMed }
+
+    // 弹层遮罩（暗夜黑 35% / 日间透明）
+    static var backdrop: Color { UD.backdrop }
 
     // 文件夹 / 文档（SFTP 文件图标，对齐设计稿 SftpFileIcon）
     static var folder1: Color { UD.folder1 }

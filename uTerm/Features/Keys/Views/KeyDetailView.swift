@@ -89,7 +89,6 @@ struct KeyDetailView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
         }
     }
 
@@ -108,7 +107,6 @@ struct KeyDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Self.publicKeyBlockBackground))
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
         }
     }
 
@@ -219,7 +217,6 @@ private struct WrapChips: View {
                 }
                 .padding(.leading, 8).padding(.trailing, 9).padding(.vertical, 4)
                 .background(Capsule().fill(UD.fillFaint))
-                .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
             }
         }
     }
@@ -234,8 +231,7 @@ private struct KeyAvatarLarge: View {
         case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
         }
         RoundedRectangle(cornerRadius: 8)
-            .fill(tint.opacity(0.12))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint.opacity(0.3), lineWidth: 1))
+            .fill(tint.opacity(0.14))
             .frame(width: 32, height: 32)
             .overlay(Image(systemName: "key.fill").font(.system(size: 15)).foregroundStyle(tint))
     }

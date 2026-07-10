@@ -11,8 +11,8 @@ enum MGroupTint {
     }
 }
 
-/// 分组标签 chip（对齐 macOS `UDGroupChip`）：有组色时 文字=组色 / 底=组色 10% / 描边=组色 42%；
-/// 无组色回退中性（text3 / 透明 / border）。
+/// 分组标签 chip（对齐 macOS `UDGroupChip`，v2 填充即边界）：有组色时 文字=组色 / 底=组色 14%；
+/// 无组色回退中性（text3 / fillSoft——常嵌在 fillFaint 卡片里，深一档才成形）。不描边。
 struct MGroupChip: View {
     let label: String
     var tint: Color? = nil
@@ -23,13 +23,11 @@ struct MGroupChip: View {
     }
 
     var body: some View {
-        let fill: Color = tint?.opacity(0.10) ?? .clear
-        let stroke: Color = tint?.opacity(0.42) ?? M.border
+        let fill: Color = tint?.opacity(0.14) ?? UD.fillSoft
         return Text(label)
             .font(M.sans(11, weight: .medium))
             .foregroundStyle(tint ?? M.text3)
             .padding(.vertical, 2).padding(.horizontal, 8)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(stroke, lineWidth: 1))
     }
 }

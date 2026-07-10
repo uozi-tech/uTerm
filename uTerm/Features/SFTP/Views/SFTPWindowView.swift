@@ -301,7 +301,6 @@ struct SFTPStatusPill: View {
         }
         .padding(.leading, 7).padding(.trailing, 8).padding(.vertical, 2)
         .background(Capsule().fill(UD.fillFaint))
-        .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("连接状态")
         .accessibilityValue(i.text)

@@ -24,8 +24,7 @@ struct HostKeyTrustModal: View {
         HStack(alignment: .top, spacing: 13) {
             MIcon(name: unknown ? "shield" : "warn", size: 19, color: tint)
                 .frame(width: 38, height: 38)
-                .background(tint.opacity(unknown ? 0.10 : 0.16))
-                .overlay(RoundedRectangle(cornerRadius: 11).stroke(tint.opacity(unknown ? 0.5 : 0.4), lineWidth: 1))
+                .background(tint.opacity(0.14))
                 .clipShape(RoundedRectangle(cornerRadius: 11))
             VStack(alignment: .leading, spacing: 5) {
                 Text(unknown ? "首次连接到此主机" : "主机密钥已变化")
@@ -40,7 +39,7 @@ struct HostKeyTrustModal: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var fingerprints: some View {
@@ -72,7 +71,7 @@ struct HostKeyTrustModal: View {
                  kind: unknown ? .primary : .danger, full: true, height: 46, action: onTrust)
         }
         .padding(.horizontal, 16).padding(.vertical, 14).padding(.top, 16)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func fpRow(label: String, value: String, dim: Bool = false, danger: Bool = false) -> some View {
@@ -86,7 +85,8 @@ struct HostKeyTrustModal: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(M.fillFaint)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(danger ? M.danger.opacity(0.5) : M.border, lineWidth: 1))
+            // danger 为状态描边（密钥不匹配警示），保留；常态不描边
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(danger ? M.danger.opacity(0.5) : .clear, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }

@@ -66,9 +66,9 @@ struct UDSlider: View {
             let fillWidth = knobX + knobSize / 2
 
             ZStack(alignment: .leading) {
-                // 轨道
+                // 轨道（功能轨道保留中性灰；v2 无描边设计下加深一档 = fillMed）
                 Capsule()
-                    .fill(UD.dyn(.white(0.07), .black(0.08)))
+                    .fill(UD.fillMed)
                     .frame(width: width, height: trackHeight)
 
                 // 填充（0% 时不渲染）。纯色，无发光。
@@ -84,12 +84,12 @@ struct UDSlider: View {
                         .offset(y: trackHeight / 2 + 6)
                 }
 
-                // 旋钮
+                // 旋钮（白色纯白填充必须带边 + 柔投影，设计稿 0 1 3 /.22）
                 Circle()
                     .fill(Color.white)
                     .frame(width: knobSize, height: knobSize)
                     .overlay(Circle().strokeBorder(UD.border, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
                     .offset(x: knobX)
             }
             .frame(width: width, height: knobSize)

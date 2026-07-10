@@ -63,32 +63,38 @@ enum UD {
     }
 
     // MARK: - 表面 Surfaces
-    // 日间「全部统一用 UDInput 的白」= 纯白 #FFFFFF（用户定）。画布 + 面板 + chrome（标题栏 /
-    // 侧栏）+ 输入 + 浮层全用 #FFFFFF，整 app 单一纯白面、区域靠 1px 描边分区、无缝。
-    // 次面板 #EEEEEA（嵌套 / code block，比白基面略深一档）。深色保持原分层。
+    // 设计语言 v2「填充即边界」：日间大表面（窗口 / 侧栏 / 工具栏 / 浮层）纯白 #FFFFFF，
+    // 区域靠 1px hairline 分区；小控件用黑 4–7% 淡灰填充、无描边。
+    // 次面板 panelHi 仅 active / 代码底用（纯灰 #F2F2F3，不发蓝）。深色保持原分层。
     // 中性灰一律用纯黑 alpha（rgba(0,0,0,α)），不发蓝。
     nonisolated static let bg         = dyn(.hex(0x101012), .hex(0xFFFFFF))
     nonisolated static let panel      = dyn(.hex(0x17171A), .hex(0xFFFFFF))
-    nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xEEEEEA))
+    nonisolated static let panelHi    = dyn(.hex(0x1C1C20), .hex(0xF2F2F3))
     nonisolated static let panelHover = dyn(.hex(0x202026), .black(0.05))
+    /// 页面画布（窗口后面的底，设计稿 --u-page-bg）。
+    nonisolated static let pageBg     = dyn(.hex(0x050506), .hex(0xF4F4F5))
     nonisolated static let terminal   = dyn(.hex(0x08080A), .hex(0x0B0B0D))
     /// 浮层实体面（下拉 / 菜单 / popover）。浅色用纯白面板。
     nonisolated static let overlay    = dyn(.hex(0x1B1B1F), .hex(0xFFFFFF))
     /// 模态实体面（指标卡 / 菜单栏面板）。
     nonisolated static let overlayHi  = dyn(.hex(0x202024), .hex(0xFFFFFF))
+    /// 模态遮罩（设计稿 --u-backdrop-hint）：深色黑 35%；日间无遮罩（transparent）。
+    nonisolated static let backdrop   = dyn(.black(0.35), .black(0))
 
     // MARK: - 描边 Stroke（深=白叠加 / 浅=纯黑叠加）
-    nonisolated static let border     = dyn(.white(0.07), .black(0.10))
-    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.16))
+    // v2 仅四处保留描边：分区 hairline / 窗框与浮层边缘 / 白底列表容器 / 状态描边
+    // （focus 环 · 错误红 · 拖放虚线 · 选中 ring）。有填充的元素一律无描边。
+    nonisolated static let border     = dyn(.white(0.07), .black(0.09))
+    nonisolated static let borderHi   = dyn(.white(0.10), .black(0.13))
 
     // MARK: - 文本 Text（深=白叠加 / 浅=纯黑叠加，中性不发蓝）
-    // 中性文本 ramp 对比度达标（Ink Floor Rule）：承载信息的文字 ≥ text2；
-    // text4 只用于分隔线 / 行号 / 禁用图标等装饰·结构层，绝不放数据。
-    // 暗色对比：text2 ~5.3:1（正文层）· text3 ~4.05:1（次要信息层）· text4 ~2.7:1（仅装饰）。
-    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x16181D))
-    nonisolated static let text2      = dyn(.white(0.50), .black(0.66))   // 正文层
-    nonisolated static let text3      = dyn(.white(0.42), .black(0.54))   // 次要信息层（数据放这，别放 text4）
-    nonisolated static let text4      = dyn(.white(0.30), .black(0.42))   // 仅装饰 / 结构层
+    // 暗色保留 Ink Floor Rule 提档（text2 ~5.3:1 · text3 ~4.05:1 · text4 ~2.7:1）；
+    // 日间按 v2 定稿黑 60% / 46% / 32%。text4 只用于分隔线 / 行号 / 禁用图标等
+    // 装饰·结构层，绝不放数据。
+    nonisolated static let text       = dyn(.hex(0xEDEDEE), .hex(0x171718))
+    nonisolated static let text2      = dyn(.white(0.50), .black(0.60))   // 正文层
+    nonisolated static let text3      = dyn(.white(0.42), .black(0.46))   // 次要信息层（数据放这，别放 text4）
+    nonisolated static let text4      = dyn(.white(0.30), .black(0.32))   // 仅装饰 / 结构层
 
     // MARK: - 强调 Accent（可切换；见 AccentColor / AccentState。getter 同步读 selected →
     // SwiftUI body 求值期访问被 Observation 追踪 → 切色全局自动重渲染。默认蓝 = 原手调值。）
@@ -112,6 +118,12 @@ enum UD {
     /// AI 介入固定紫（设计稿 `#a78bfa`，§6）。与连接强调色刻意区分；深浅同值。
     /// 快捷命令「AI 介入」徽标 / 开关 / 闪标 / 图标染色专用。
     nonisolated static let aiAccent = ColorSpec.hex(0xA78BFA).color()
+
+    /// 品牌蓝（`ULogoMark` 资产烘焙的 logo 主色 `#3b82f6`）。开屏 / 品牌 lockup 专用，
+    /// 与用户可切换的 UI accent 解耦——品牌时刻需与居中的 logo 协调；深浅同值。
+    /// （设计稿 `splash.jsx` 用 `#0a84ff` 占位，因其 `ULogo` 会按 accent 重新着色；
+    /// 真实 logo 是固定 PNG，故品牌场景统一到烘焙色而非占位色。）
+    nonisolated static let brand = ColorSpec.hex(0x3B82F6).color()
 
     // 备选强调色（设计稿固定 macOS 系统色，深浅同值）。
     nonisolated static let accentViolet = ColorSpec.hex(0xBF5AF2).color()   // 雾紫
@@ -146,23 +158,22 @@ enum UD {
     nonisolated static let docDetail = dyn(.white(0.32), .hex(0xA8A6A3))   // 内部文本线
 
     // MARK: - 输入底 Input（设计稿 --u-input-bg / --u-input-bg-soft）
-    // 暗夜：白叠加细底（原样）。日间：纯白底（配 UD.border 细描边——更干净）。
-    nonisolated static let inputBg     = dyn(.white(0.035), .hex(0xFFFFFF))
-    nonisolated static let inputBgSoft = dyn(.white(0.03),  .hex(0xFFFFFF))
+    // v2：淡灰底、无描边（深=白 6% / 浅=黑 5%），聚焦靠 accent 描边 + 柔环。
+    nonisolated static let inputBg     = dyn(.white(0.06), .black(0.05))
+    nonisolated static let inputBgSoft = dyn(.white(0.05), .black(0.04))
 
-    // MARK: - 行态 Row（hover / selected 底）
-    // 日间 hover = 纯黑 4.5% 叠加（中性，不发蓝）；selected = accent-soft #007AFF 13%
-    // —— 设计稿里唯一允许的「选中填充」（kit L.sel）。深色保持原中性白叠加。
-    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.045))
-    nonisolated static let rowSelected = dyn(.white(0.055), .hex(0x007AFF, 0.13))
+    // MARK: - 行态 Row（hover / selected 底，设计稿 --u-row-hover/-sel）
+    // 中性灰（深=白叠加 / 浅=黑叠加）。accent 型选中（⌘K 行 / pill / 底部导航）
+    // 用 `UD.accentSoft`（accent 14%），不走本 token。
+    nonisolated static let rowHover    = dyn(.white(0.025), .black(0.04))
+    nonisolated static let rowSelected = dyn(.white(0.055), .black(0.06))
 
-    // MARK: - 叠加填充 Fill（面上的细微实体填充）
-    // 深色=白叠加。日间：基面是暖白 #F6F6F3，卡片 / 气泡 / chip 用比基面略深一档、同色温的
-    // 暖灰实底（嵌套感、可见、不发蓝）。fillMed 用中性黑叠加——进度槽等**功能轨道**，
-    // handoff 要求保留中性灰。
-    nonisolated static let fillFaint = dyn(.white(0.03),  .hex(0xF0F0ED))   // 卡片 / 气泡静态底（暖、略深于基面）
-    nonisolated static let fillSoft  = dyn(.white(0.05),  .hex(0xE9E9E5))   // 选中段 / 代码片（暖、更深一档）
-    nonisolated static let fillMed   = dyn(.white(0.08),  .black(0.08))     // 进度槽等功能轨道（保留中性灰）
+    // MARK: - 叠加填充 Fill（面上的细微实体填充，--uw-* 阶梯）
+    // v2 无描边设计：填充是唯一边界，故整体较 v1 加深一档（≈1.5×）。
+    // 对应 --uw-0_03 / 0_05 / 0_08（深=白叠加 / 浅=黑叠加，纯中性不发蓝）。
+    nonisolated static let fillFaint = dyn(.white(0.045), .black(0.055))   // 卡片 / 气泡 / chip 静态底
+    nonisolated static let fillSoft  = dyn(.white(0.065), .black(0.075))   // 选中段 / 代码片（更深一档）
+    nonisolated static let fillMed   = dyn(.white(0.10),  .black(0.11))    // 进度槽等功能轨道 / 未选 checkbox
 
     // MARK: - 遥测分类色 Telemetry（状态栏 / 指标卡，深浅各一套）
     nonisolated static let mPlatform = dyn(.hex(0x409CFF), .hex(0x007AFF))   // 平台

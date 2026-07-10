@@ -71,9 +71,7 @@ struct QCAiToggleRow<Content: View>: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(isOn ? UD.aiAccent.opacity(0.07) : Color.primary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .strokeBorder(isOn ? UD.aiAccent.opacity(0.20) : UD.border, lineWidth: 1))
+            .fill(isOn ? UD.aiAccent.opacity(0.11) : UD.fillFaint))
     }
 }
 
@@ -192,7 +190,7 @@ struct QCParallelIcon: View {
 // MARK: - 提示符字形图标 PromptGlyph
 
 /// `>_` 字形图标块。AI 介入时染固定紫 `UD.aiAccent`，否则用连接强调色 `UD.accent`。
-/// 圆角方块（tint 11% 底 + tint 23% 描边 + tint 字形），用于列表行 / 详情头 / 空态。
+/// 圆角方块（tint 14% 底 + tint 字形），用于列表行 / 详情头 / 空态。
 struct QCPromptGlyph: View {
     var size: CGFloat = 30
     var ai: Bool = false
@@ -201,11 +199,7 @@ struct QCPromptGlyph: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 8 / 30, style: .continuous)
-            .fill(tint.opacity(0.11))
-            .overlay(
-                RoundedRectangle(cornerRadius: size * 8 / 30, style: .continuous)
-                    .strokeBorder(tint.opacity(0.23), lineWidth: 1)
-            )
+            .fill(tint.opacity(0.14))
             .overlay(
                 PromptChevronShape()
                     .stroke(tint, style: StrokeStyle(lineWidth: size * 1.5 / 30,
@@ -218,7 +212,7 @@ struct QCPromptGlyph: View {
 
 // MARK: - AI 介入徽标
 
-/// 「AI 介入」徽标（固定紫描边胶囊 + sparkles）。`compact` 为列表行用的更小尺寸。
+/// 「AI 介入」徽标（固定紫 tint 底 + sparkles）。`compact` 为列表行用的更小尺寸。
 struct QCAiBadge: View {
     var compact: Bool = false
 
@@ -235,11 +229,7 @@ struct QCAiBadge: View {
         .padding(.vertical, compact ? 2 : 3)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(UD.aiAccent.opacity(0.09))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .strokeBorder(UD.aiAccent.opacity(0.23), lineWidth: 1)
+                .fill(UD.aiAccent.opacity(0.13))
         )
         .fixedSize()
     }
@@ -264,9 +254,9 @@ struct QCServersBadge: View {
             .padding(.leading, 7)
             .padding(.trailing, 9)
             .padding(.vertical, 2)
-            .overlay(
+            .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(UD.border, lineWidth: 1)
+                    .fill(UD.fillFaint)
             )
             .fixedSize()
         } else if count > 1 {
@@ -281,11 +271,7 @@ struct QCServersBadge: View {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(UD.success.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(UD.success.opacity(0.32), lineWidth: 1)
+                    .fill(UD.success.opacity(0.14))
             )
             .fixedSize()
         }
@@ -303,7 +289,6 @@ struct QCParallelTag: View {
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 1)
-        .background(Capsule().fill(UD.success.opacity(0.12)))
-        .overlay(Capsule().strokeBorder(UD.success.opacity(0.35), lineWidth: 1))
+        .background(Capsule().fill(UD.success.opacity(0.14)))
     }
 }

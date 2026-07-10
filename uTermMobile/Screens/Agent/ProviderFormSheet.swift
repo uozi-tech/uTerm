@@ -50,7 +50,7 @@ struct ProviderFormSheet: View {
                 }
                 .padding(.vertical, 12)
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle("添加 Provider")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -74,7 +74,7 @@ struct ProviderFormSheet: View {
                     .multilineTextAlignment(.trailing)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            if !last { Divider().overlay(M.border).padding(.leading, 14) }
+            if !last { Divider().overlay(M.divider).padding(.leading, 14) }
         }
     }
 
@@ -104,7 +104,6 @@ struct FlowChips: View {
                     Text(item).font(M.mono(12)).foregroundStyle(M.text2)
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(M.fillFaint)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(M.border, lineWidth: 1))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(MPressStyle())

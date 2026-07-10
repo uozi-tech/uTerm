@@ -69,7 +69,7 @@ struct MobileRootView: View {
         .overlay {
             if let challenge = hostKeyRelay.pendingChallenge {
                 ZStack {
-                    Color.black.opacity(0.55).ignoresSafeArea()
+                    M.backdrop.ignoresSafeArea()
                     MCenterModalContainer(width: 400) {
                         HostKeyTrustModal(challenge: challenge,
                                           onCancel: { hostKeyRelay.resolve(false) },

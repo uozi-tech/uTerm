@@ -6,9 +6,9 @@ import SwiftUI
 /// danger），统一 32 高、14 横向内边距、`UD.Radius.md` 圆角、`UD.control` 字体；
 /// 通过自定义 `ButtonStyle` 读 hover（`.onHover`）+ `configuration.isPressed`。
 ///
-/// 设计稿约定：**状态切换仅靠底色与描边——无位移（transform）、无四周投影（shadow）**。
+/// v2「填充即边界」：**有填充就没有描边**——tint / 灰填充按钮一律无 1px 描边（保留
+/// 1px 透明占位防跳动），状态切换仅靠底色；唯 danger 保留红色状态描边。
 /// 按下（active）用去饱和板岩蓝 `UD.accentPressed` 收敛，而非更亮的 hover 色。
-/// 深 / 浅两套配色由 `@Environment(\.colorScheme)` 驱动（见 `colors(...)`）。
 /// 纯展示组件，只读 `UD` token + 普通值输入，不依赖任何 domain model。
 struct UDButton: View {
     /// 按钮风格。
@@ -100,58 +100,40 @@ private struct UDButtonStyle: ButtonStyle {
 
         switch style {
         case .primary:
-            if dark {
-                guard isEnabled else {
-                    return Palette(bg: .white.opacity(0.03), border: UD.border, text: UD.text4)
-                }
-                if down {   // active：去饱和板岩蓝叠加 + 白字（按下往回收，非更亮）
-                    return Palette(bg: UD.accentPressed.opacity(0.26),
-                                   border: UD.accentPressed.opacity(0.55), text: .white)
-                }
-                let bg = hover ? UD.accent.opacity(0.19) : UD.accent.opacity(0.10)
-                let border = hover ? UD.accent.opacity(0.47) : UD.accent.opacity(0.33)
-                return Palette(bg: bg, border: border, text: UD.text)
-            } else {
-                guard isEnabled else {
-                    return Palette(bg: .black.opacity(0.06), border: .clear, text: UD.text4)
-                }
-                // 实心填充：default accent → hover accentInk → active 板岩蓝。
-                let bg = down ? UD.accentPressed : (hover ? UD.accentInk : UD.accent)
-                return Palette(bg: bg, border: .clear, text: .white)
+            // 「驾驶舱」高亮形式（双主题同构）：accent 14% tint 底 + accent 文字/图标、
+            // 无描边；hover 22%（设计稿 accent24 / accent38）。
+            guard isEnabled else {
+                return Palette(bg: dark ? Color.white.opacity(0.03) : Color.black.opacity(0.06),
+                               border: .clear, text: UD.text4)
             }
+            if down {   // active：去饱和板岩蓝收敛（按下往回收，非更亮）
+                return Palette(bg: UD.accentPressed.opacity(0.26), border: .clear,
+                               text: dark ? .white : UD.accentInk)
+            }
+            let bg = hover ? UD.accent.opacity(0.22) : UD.accentSoft
+            return Palette(bg: bg, border: .clear, text: UD.accentInk)
 
         case .secondary:
-            if dark {
-                guard isEnabled else {
-                    return Palette(bg: .clear, border: UD.border, text: UD.text4)
-                }
-                if down {
-                    return Palette(bg: .white.opacity(0.11), border: UD.borderHi, text: UD.text)
-                }
-                let bg: Color = hover ? .white.opacity(0.08) : .white.opacity(0.045)
-                return Palette(bg: bg, border: hover ? UD.borderHi : UD.border,
-                               text: hover ? UD.text : UD.text2)
-            } else {
-                guard isEnabled else {
-                    return Palette(bg: UD.panel, border: UD.border, text: UD.text4)
-                }
-                let bg = down ? Self.secondaryPressedLight : (hover ? UD.panelHi : UD.panel)
-                return Palette(bg: bg, border: UD.borderHi, text: UD.text)
+            // 中性淡灰填充、无描边（--uw 阶梯，深浅同规则；不再有「白底 + 描边」形态）。
+            guard isEnabled else {
+                return Palette(bg: UD.dyn(.white(0.055), .black(0.065)), border: .clear,
+                               text: UD.text4)
             }
+            if down {
+                return Palette(bg: UD.dyn(.white(0.11), .black(0.11)), border: .clear, text: UD.text)
+            }
+            let bg = hover ? UD.dyn(.white(0.08), .black(0.085))
+                           : UD.dyn(.white(0.045), .black(0.055))
+            return Palette(bg: bg, border: .clear, text: hover ? UD.text : UD.text2)
 
         case .ghost:
+            // 幽灵：静止透明，hover / active 淡灰填充（中性，深浅同规则），无描边。
             guard isEnabled else {
                 return Palette(bg: .clear, border: .clear, text: UD.text4)
             }
-            if dark {
-                let bg: Color = down ? .white.opacity(0.08)
-                                     : (hover ? .white.opacity(0.05) : .clear)
-                return Palette(bg: bg, border: .clear, text: (hover || down) ? UD.text : UD.text2)
-            } else {
-                let bg: Color = down ? UD.accent.opacity(0.16)
-                                     : (hover ? UD.accentSoft : .clear)
-                return Palette(bg: bg, border: .clear, text: UD.accentInk)
-            }
+            let bg: Color = down ? UD.dyn(.white(0.08), .black(0.085))
+                                 : (hover ? UD.dyn(.white(0.05), .black(0.06)) : .clear)
+            return Palette(bg: bg, border: .clear, text: (hover || down) ? UD.text : UD.text2)
 
         case .danger:
             guard isEnabled else {
@@ -164,9 +146,6 @@ private struct UDButtonStyle: ButtonStyle {
             return Palette(bg: bg, border: border, text: UD.danger)
         }
     }
-
-    /// 浅色次按钮按下态实底（设计稿 #EEEDE9，暖中性灰）。
-    private static let secondaryPressedLight = UD.ColorSpec.hex(0xEEEDE9).color()
 }
 
 // MARK: - UDIconButton

@@ -85,12 +85,12 @@ struct ParallelRunView: View {
             Button { c.rerun() } label: {
                 MIcon(name: "rerun", size: 17, color: c.allDone ? M.text2 : M.text4)
                     .frame(width: 36, height: 36).background(M.fillFaint)
-                    .overlay(Circle().stroke(M.borderHi, lineWidth: 1)).clipShape(Circle())
+                    .clipShape(Circle())
             }.disabled(!c.allDone)
         }
         .padding(.horizontal, 14).padding(.top, M.topBreath).padding(.bottom, 11)
         .background(M.panel)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func modeToggle(_ c: ParallelRunController) -> some View {
@@ -113,7 +113,6 @@ struct ParallelRunView: View {
             }
         }
         .padding(3).background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
         .padding(.horizontal, 16).padding(.top, 10)
         .background(M.panel)
@@ -154,7 +153,7 @@ struct ParallelRunView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(M.panel)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func shellBody(_ c: ParallelRunController) -> some View {
@@ -162,7 +161,7 @@ struct ParallelRunView: View {
             LazyVStack(spacing: 0) {
                 ForEach(c.states) { s in
                     ParShellPane(state: s, accent: accent) { c.trustAndRetry(serverID: s.id) }
-                    Rectangle().fill(M.border).frame(height: 1)
+                    Rectangle().fill(M.divider).frame(height: 1)
                 }
             }
         }
@@ -190,8 +189,7 @@ struct ParallelRunView: View {
                             Text(c.synthesis).font(M.sans(14)).foregroundStyle(M.text).lineSpacing(2)
                         }
                         .padding(13)
-                        .background(M.aiAccent.opacity(0.06))
-                        .overlay(RoundedRectangle(cornerRadius: 13).stroke(M.aiAccent.opacity(0.18), lineWidth: 1))
+                        .background(M.aiAccent.opacity(0.10))
                         .clipShape(RoundedRectangle(cornerRadius: 13))
                     }
                 }
@@ -220,14 +218,13 @@ struct ParallelRunView: View {
         }
         .font(M.mono(11)).frame(height: 30).padding(.horizontal, 14)
         .background(M.panel)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var agentAvatar: some View {
         MIcon(name: "spark", size: 15, color: M.aiAccent)
             .frame(width: 30, height: 30)
-            .background(M.aiAccent.opacity(0.11))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.aiAccent.opacity(0.22), lineWidth: 1))
+            .background(M.aiAccent.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 9))
     }
 
@@ -238,8 +235,7 @@ struct ParallelRunView: View {
             Text(ai ? "AI · \(n) 台" : "并行 · \(n) 台").font(M.sans(11.5, weight: .medium)).foregroundStyle(c)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(c.opacity(0.12))
-        .overlay(Capsule().stroke(c.opacity(0.38), lineWidth: 1))
+        .background(c.opacity(0.14))
         .clipShape(Capsule())
     }
 }
@@ -277,7 +273,7 @@ private struct ParShellPane: View {
             .padding(.horizontal, 12).frame(height: 34)
             .background(M.panel)
             .overlay(alignment: .top) { Rectangle().fill(tint).frame(height: 2) }
-            .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+            .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(state.lines) { line in
@@ -345,7 +341,7 @@ private struct ParAILane: View {
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 11)
-            .overlay(alignment: .bottom) { if resolved { Rectangle().fill(M.border).frame(height: 1) } }
+            .overlay(alignment: .bottom) { if resolved { Rectangle().fill(M.divider).frame(height: 1) } }
 
             if resolved {
                 VStack(alignment: .leading, spacing: 0) {
@@ -364,7 +360,8 @@ private struct ParAILane: View {
                                     .font(M.sans(12)).foregroundStyle(M.text3)
                             }
                             .padding(.horizontal, 9).frame(height: 28)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(M.border, lineWidth: 1))
+                            .background(M.fillMed)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }.buttonStyle(MPressStyle()).padding(.top, 9)
                         if open {
                             VStack(alignment: .leading, spacing: 7) {
@@ -385,7 +382,8 @@ private struct ParAILane: View {
             }
         }
         .background(state.tone == .failed ? M.danger.opacity(0.05) : M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(state.tone == .failed ? M.danger.opacity(0.25) : M.border, lineWidth: 1))
+        // 失败态保留红描边（状态边）；常态卡片按 v2 只靠灰填充成形
+        .overlay(RoundedRectangle(cornerRadius: 13).stroke(state.tone == .failed ? M.danger.opacity(0.25) : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 13))
     }
 }

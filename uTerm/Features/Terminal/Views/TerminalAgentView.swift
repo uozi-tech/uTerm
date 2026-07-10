@@ -151,9 +151,7 @@ struct TerminalAgentView: View {
                     .textSelection(.enabled)
                     .padding(.vertical, 10).padding(.horizontal, 13)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(UD.accent.opacity(0.12)))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(UD.accent.opacity(0.22), lineWidth: 1))
+                        .fill(UD.accentSoft))
             }
             .id(m.id)
         } else {
@@ -195,8 +193,7 @@ struct TerminalAgentView: View {
             .font(.system(size: 12))
             .foregroundStyle(UD.accent)
             .frame(width: 22, height: 22)
-            .background(RoundedRectangle(cornerRadius: 7).fill(UD.accent.opacity(0.12)))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.accent.opacity(0.28), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.accentSoft))
     }
 
     private func isStreamingTail(_ m: ChatMessage) -> Bool {
@@ -246,7 +243,7 @@ struct TerminalAgentView: View {
                         }
                         .foregroundStyle(UD.text3)
                         .padding(.horizontal, 8).frame(height: 22)
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillFaint))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).help("换一批").disabled(model.followUpsLoading)
@@ -256,7 +253,6 @@ struct TerminalAgentView: View {
                     WrapLayout(spacing: 8, lineSpacing: 8, alignment: .leading) {
                         ForEach([CGFloat(64), 92, 78], id: \.self) { w in
                             Capsule().fill(UD.fillFaint)
-                                .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
                                 .frame(width: w, height: 30)
                                 .modifier(SkeletonShimmer())
                         }
@@ -286,12 +282,11 @@ struct TerminalAgentView: View {
     private func followUpChip(_ text: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold)).foregroundStyle(UD.accent)
-            Text(text).font(.system(size: 12)).foregroundStyle(UD.text2)
+                .font(.system(size: 9, weight: .semibold)).foregroundStyle(UD.accentInk)
+            Text(text).font(.system(size: 12)).foregroundStyle(UD.accentInk)
         }
         .padding(.vertical, 6).padding(.horizontal, 12)
-        .background(Capsule().fill(UD.accent.opacity(0.06)))
-        .overlay(Capsule().strokeBorder(UD.accent.opacity(0.20), lineWidth: 1))
+        .background(Capsule().fill(UD.accent.opacity(0.10)))
         .contentShape(Capsule())
     }
 
@@ -303,8 +298,7 @@ struct TerminalAgentView: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 24)).foregroundStyle(UD.accent)
                     .frame(width: 48, height: 48)
-                    .background(RoundedRectangle(cornerRadius: 14).fill(UD.accent.opacity(0.12)))
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(UD.accent.opacity(0.28), lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 14).fill(UD.accentSoft))
                 VStack(spacing: 5) {
                     Text("用自然语言操作 \(host)")
                         .font(.system(size: 16, weight: .medium)).foregroundStyle(UD.text)
@@ -343,7 +337,6 @@ struct TerminalAgentView: View {
             .multilineTextAlignment(.center)
             .padding(.vertical, 7).padding(.horizontal, 11)
             .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
             .contentShape(Rectangle())
     }
 
@@ -486,7 +479,6 @@ struct SafetyDial: View {
             .padding(.leading, 9).padding(.trailing, 8)
             .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()

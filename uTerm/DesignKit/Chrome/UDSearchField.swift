@@ -39,9 +39,9 @@ struct UDSearchField: View {
                     .foregroundStyle(UD.text4)
                     .padding(.vertical, 2)
                     .padding(.horizontal, 6)
-                    .overlay(
+                    .background(
                         RoundedRectangle(cornerRadius: UD.Radius.xs) // 4
-                            .strokeBorder(UD.border, lineWidth: 1)
+                            .fill(UD.dyn(.white(0.055), .black(0.065)))   // 键帽淡灰底，无描边
                     )
             }
         }
@@ -51,14 +51,11 @@ struct UDSearchField: View {
         .frame(maxWidth: width == nil ? .infinity : nil)
         .background(
             RoundedRectangle(cornerRadius: UD.Radius.md) // 8
-                // 日间纯白底（聚焦靠 accent 描边 / 焦点环示意，不再压灰）；
-                // 暗夜保持原样：聚焦白叠加 .05、闲置 .035（= UD.inputBg）。
-                .fill(focused ? UD.dyn(.white(0.05), .hex(0xFFFFFF))
-                              : UD.inputBg)
+                .fill(UD.inputBg)   // 淡灰底、无描边；聚焦靠 accent 描边 + 焦点环
         )
         .overlay(
             RoundedRectangle(cornerRadius: UD.Radius.md)
-                .strokeBorder(focused ? UD.accent.opacity(0.53) : UD.border, lineWidth: 1)
+                .strokeBorder(focused ? UD.accent.opacity(0.53) : .clear, lineWidth: 1)
         )
         .overlay(
             // 聚焦焦点环：2px 细环（强调色 ~13%），不用粗发光。

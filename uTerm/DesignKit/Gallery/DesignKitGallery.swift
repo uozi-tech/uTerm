@@ -51,6 +51,7 @@ struct DesignKitGallery: View {
             formsSection
             overlaysSection
             commsSection
+            brandSection
         }
         .padding(28)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -117,7 +118,7 @@ struct DesignKitGallery: View {
             Group(label: "表面 Surfaces") {
                 swatchRow([("窗口 bg", UD.bg), ("面板 panel", UD.panel),
                            ("高亮 panelHi", UD.panelHi), ("悬停 hover", UD.panelHover),
-                           ("终端 term", UD.terminal)])
+                           ("画布 pageBg", UD.pageBg), ("终端 term", UD.terminal)])
             }
             Group(label: "文本 / 描边") {
                 swatchRow([("text", UD.text), ("text2", UD.text2), ("text3", UD.text3),
@@ -142,11 +143,10 @@ struct DesignKitGallery: View {
                             RoundedRectangle(cornerRadius: item.1)
                                 .fill(UD.panelHi)
                                 .frame(width: 60, height: 44)
-                                .overlay(RoundedRectangle(cornerRadius: item.1).strokeBorder(UD.borderHi))
                             Text(item.0).font(UD.monoKbd).foregroundStyle(UD.text3)
                         }
                     }
-                    ForEach([("sm", UD.Shadow.sm), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg), ("menu", UD.Shadow.menu)], id: \.0) { item in
+                    ForEach([("sm", UD.Shadow.sm), ("card", UD.Shadow.card), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg), ("menu", UD.Shadow.menu)], id: \.0) { item in
                         VStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: UD.Radius.lg)
                                 .fill(UD.panel)
@@ -331,6 +331,18 @@ struct DesignKitGallery: View {
         }
     }
 
+    // MARK: 品牌 · Brand
+    private var brandSection: some View {
+        Section(title: "品牌 · Brand", subtitle: "文字标识 / 开屏「星空之上」（splash.jsx · v2 定稿）") {
+            Group(label: "文字标识 Wordmark") {
+                BrandChip { UDWordmark(size: 46) }
+            }
+            Group(label: "开屏 Splash · 星空之上（定稿，其余方向已废弃）") {
+                SplashCard(label: "星空之上") { UDSplashNebula() }
+            }
+        }
+    }
+
     // 确定性折线样本（避免在视图体里用随机 / 时间）。
     private static let sparkSamples: [Double] = [
         55, 58, 52, 60, 64, 61, 57, 63, 70, 66, 62, 59, 65, 72, 68, 64, 58, 55, 61, 67,
@@ -413,6 +425,39 @@ private struct CommandPaletteGalleryDemo: View {
     var body: some View {
         UDCommandPalette(query: $query, sections: sections,
                          selectedID: sections.first?.items.first?.id)
+    }
+}
+
+/// 品牌元素演示底：文字标识默认近白（恒暗场景用），浅色画廊下也垫一块夜空底。
+private struct BrandChip<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .padding(.horizontal, 22)
+            .frame(height: 88)
+            .background(RoundedRectangle(cornerRadius: UD.Radius.lg)
+                .fill(UD.ColorSpec.hex(0x101012).color()))
+    }
+}
+
+/// 开屏方向缩放预览卡：按 iPhone 逻辑尺寸 390×844 渲染再整体缩放。
+private struct SplashCard<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    private let scale: CGFloat = 0.34
+
+    var body: some View {
+        VStack(spacing: 8) {
+            content
+                .frame(width: 390, height: 844)
+                .scaleEffect(scale, anchor: .topLeading)
+                .frame(width: 390 * scale, height: 844 * scale, alignment: .topLeading)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(UD.border))
+            Text(label).font(UD.caption).foregroundStyle(UD.text3)
+        }
     }
 }
 

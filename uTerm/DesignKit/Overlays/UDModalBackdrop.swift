@@ -15,13 +15,13 @@ import AppKit
 ///
 /// 显式「取消」按钮请直接调用其闭包、绕开本背板，不受武装延迟影响。
 struct UDModalBackdrop: View {
-    var opacity: Double = 0.55
     let onDismiss: () -> Void
 
     @State private var armed = false
 
     var body: some View {
-        Color.black.opacity(opacity)
+        // v2：深色黑 35% 遮罩；日间无遮罩（透明，仍捕获点外关闭）。
+        UD.backdrop
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture { if armed { onDismiss() } }

@@ -303,8 +303,7 @@ private struct KeyAvatar: View {
         case .ecdsaP256, .ecdsaP384, .ecdsaP521: Color(hex: 0x34D399)
         }
         RoundedRectangle(cornerRadius: size * 0.25)
-            .fill(tint.opacity(0.12))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.25).strokeBorder(tint.opacity(0.3), lineWidth: 1))
+            .fill(tint.opacity(0.14))
             .frame(width: size, height: size)
             .overlay(Image(systemName: "key.fill")
                 .font(.system(size: size * 0.45)).foregroundStyle(tint))

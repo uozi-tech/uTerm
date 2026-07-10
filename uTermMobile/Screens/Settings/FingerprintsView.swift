@@ -31,7 +31,7 @@ struct FingerprintsView: View {
                 }
             }
         }
-        .background(M.bg)
+        .background(M.canvas)
         .navigationTitle("已知主机指纹")
         .navigationBarTitleDisplayMode(.inline)
     }

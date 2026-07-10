@@ -164,19 +164,16 @@ struct UDToolCall: View {
                     } else {
                         Text("运行")
                             .font(UD.font(11.5, weight: .semibold))
-                            .foregroundStyle(approvalsDisabled ? UD.text4 : UD.text)
+                            .foregroundStyle(approvalsDisabled ? UD.text4 : UD.accentInk)
                         UDKbd("⌘↵")
                     }
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 26)
                 .background(
+                    // tint 型主操作：accent 14% 底、无描边（v2；禁用降为 8%）。
                     RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                        .fill(UD.accent.opacity(approvalsDisabled ? 0.06 : 0.12))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                        .strokeBorder(UD.accent.opacity(approvalsDisabled ? 0.2 : 0.4), lineWidth: 1)
+                        .fill(UD.accent.opacity(approvalsDisabled ? 0.08 : 0.14))
                 )
                 .contentShape(Rectangle())
             }
@@ -189,9 +186,10 @@ struct UDToolCall: View {
                     .foregroundStyle(approvalsDisabled ? UD.text4 : UD.text3)
                     .padding(.horizontal, 12)
                     .frame(height: 26)
-                    .overlay(
+                    .background(
+                        // 次操作淡灰填充、无描边（v2）。
                         RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                            .strokeBorder(UD.border, lineWidth: 1)
+                            .fill(UD.dyn(.white(0.045), .black(0.055)))
                     )
                     .contentShape(Rectangle())
             }

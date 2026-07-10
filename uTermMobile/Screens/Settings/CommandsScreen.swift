@@ -17,7 +17,7 @@ struct CommandsScreen: View {
                                 actionTitle: "新建命令", action: { creating = true })
                 } else {
                     ScrollView {
-                        VStack(spacing: 10) {
+                        MCardList {
                             ForEach(commands) { cmd in
                                 NavigationLink { QuickCommandDetailView(cmd: cmd) } label: {
                                     CommandCard(cmd: cmd)
@@ -30,7 +30,7 @@ struct CommandsScreen: View {
                     }
                 }
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle("快捷命令")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -65,9 +65,9 @@ struct CommandCard: View {
                 }
             }
             .padding(14)
-            .background(M.panel)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
+            .udShadow(.card)
     }
 }
 
@@ -118,7 +118,7 @@ struct CommandFormSheet: View {
                 .padding(.vertical, 12)
                 .mReadableColumn()
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle(cmd == nil ? "新建命令" : "编辑命令")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -190,7 +190,8 @@ struct CommandFormSheet: View {
                         Text(allSelected ? "清空" : "全选")
                             .font(M.sans(12, weight: .medium)).foregroundStyle(M.text2)
                             .padding(.horizontal, 10).frame(height: 26)
-                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(M.border, lineWidth: 1))
+                            .background(M.fillFaint)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }.buttonStyle(MPressStyle())
                 }
             }
@@ -209,9 +210,9 @@ struct CommandFormSheet: View {
                     }
                 }
             }
-            .background(M.panel)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
+            .udShadow(.card)
             .padding(.horizontal, 16)
         }
         .padding(.bottom, 22)
@@ -233,9 +234,9 @@ struct CommandFormSheet: View {
                     .font(M.sans(11.5)).foregroundStyle(st.some ? M.accent : M.text4)
             }
             .padding(.horizontal, 14).padding(.vertical, 9).frame(minHeight: 44)
-            .background(M.fillFaint)
+            .background(UD.fillSoft)   // 容器已是卡片面，组头再深一档区分
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 14) }
+            .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 14) }
         }.buttonStyle(MRowStyle())
     }
 
@@ -254,10 +255,10 @@ struct CommandFormSheet: View {
             }
             .padding(.leading, 16).padding(.trailing, 14).padding(.vertical, 9)
             .frame(minHeight: 50)
-            .background(on ? M.accent.opacity(0.08) : .clear)
+            .background(on ? M.accent.opacity(0.12) : .clear)
             .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
-                if !last { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 16) }
+                if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
             }
         }.buttonStyle(MRowStyle())
     }
@@ -288,14 +289,12 @@ struct CommandFormSheet: View {
 
 // MARK: - 勾选件（对齐 macOS QCCheckbox / QCGroupCheck）
 
-/// 单台复选框：选中 = accent 填充 + 白勾。
+/// 单台复选框：选中 = accent 填充 + 白勾；未选 = 中灰填充，不描边（v2）。
 private struct MCheckbox: View {
     let checked: Bool
     var body: some View {
         RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(checked ? M.accent : M.fillFaint)
-            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(checked ? M.accent : M.border, lineWidth: 1))
+            .fill(checked ? M.accent : M.fillMed)
             .overlay { if checked { MIcon(name: "check", size: 10, color: .white, weight: .bold) } }
             .frame(width: 19, height: 19)
     }
@@ -308,9 +307,7 @@ private struct MGroupCheck: View {
     private var active: Bool { on || partial }
     var body: some View {
         RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(active ? M.accent : M.fillFaint)
-            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(active ? M.accent : M.border, lineWidth: 1))
+            .fill(active ? M.accent : M.fillMed)
             .overlay {
                 if on {
                     MIcon(name: "check", size: 10, color: .white, weight: .bold)

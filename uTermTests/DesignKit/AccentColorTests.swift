@@ -25,8 +25,9 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(AccentColor.blue.accentSpec(dark: false),  UD.ColorSpec.hex(0x007AFF))
         XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x4DA3FF))
         XCTAssertEqual(AccentColor.blue.inkSpec(dark: false),     UD.ColorSpec.hex(0x0067E0))
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x0A84FF, 0.10))
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x007AFF, 0.13))
+        // v2「填充即边界」：soft = accent 14%（深浅同档）。
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x0A84FF, 0.14))
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x007AFF, 0.14))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: true),  UD.ColorSpec.hex(0x96ACCD))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: false), UD.ColorSpec.hex(0x5A7099))
     }
@@ -37,8 +38,8 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(rgb(s).0, base.r, accuracy: 0.0001)
         XCTAssertEqual(rgb(s).1, base.g, accuracy: 0.0001)
         XCTAssertEqual(rgb(s).2, base.b, accuracy: 0.0001)
-        XCTAssertEqual(s.a, 0.10, accuracy: 0.0001)
-        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.13, accuracy: 0.0001)
+        XCTAssertEqual(s.a, 0.14, accuracy: 0.0001)
+        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.14, accuracy: 0.0001)
     }
 
     func testInkBrightensInDarkDeepensInLight() {

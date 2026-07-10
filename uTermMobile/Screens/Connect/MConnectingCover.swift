@@ -118,7 +118,7 @@ struct ConnectingCoverView: View {
 
     var body: some View {
         ZStack {
-            M.bg.ignoresSafeArea()
+            M.canvas.ignoresSafeArea()
             VStack(spacing: 0) {
                 topChip
                 Spacer(minLength: 8)
@@ -187,9 +187,10 @@ struct ConnectingCoverView: View {
                 .font(M.sans(12.5)).foregroundStyle(M.text2)
         }
         .padding(.horizontal, 13).padding(.vertical, 6)
-        .background(M.fillFaint)
-        .overlay(Capsule().stroke(M.border, lineWidth: 1))
+        // 悬浮卡片形态：白卡 + 四周柔散投影（与下方阶段卡一致；深色下 card 与 fillFaint 同值）。
+        .background(M.card)
         .clipShape(Capsule())
+        .udShadow(.card)
     }
 
     // MARK: 中部
@@ -234,16 +235,16 @@ struct ConnectingCoverView: View {
         VStack(spacing: 0) {
             ForEach(Array(stages.enumerated()), id: \.offset) { i, st in
                 if i > 0 {
-                    Rectangle().fill(M.border).frame(height: 1).opacity(0.6)
+                    Rectangle().fill(M.divider).frame(height: 1)
                 }
                 ConnStageRow(label: st.label, detail: st.detail, state: stageState(i))
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 6)
         .frame(maxWidth: 320)
-        .background(M.panel)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(M.border, lineWidth: 1))
+        .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .udShadow(.card)
     }
 
     /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。
@@ -345,9 +346,7 @@ private struct ConnRing: View {
 
     private var innerTile: some View {
         RoundedRectangle(cornerRadius: 16)
-            .fill(tint.opacity(mode == .connecting ? 0.08 : 0.14))
-            .overlay(RoundedRectangle(cornerRadius: 16)
-                .stroke(tint.opacity(mode == .connecting ? 0.2 : 0.34), lineWidth: 1))
+            .fill(tint.opacity(0.14))
             .frame(width: 56, height: 56)
             .overlay {
                 switch mode {

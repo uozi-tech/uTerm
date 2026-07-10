@@ -29,7 +29,6 @@ struct SFTPInspector: View {
                 .foregroundStyle(UD.text4)
                 .frame(width: 56, height: 56)
                 .background(RoundedRectangle(cornerRadius: 14).fill(UD.fillFaint))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(UD.border, lineWidth: 1))
             VStack(spacing: 6) {
                 Text("未选择文件").font(.system(size: 14, weight: .medium))
                     .foregroundStyle(UD.text2)
@@ -62,10 +61,7 @@ struct SFTPInspector: View {
                     VStack(spacing: 14) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18)
-                                .fill(item.isDirectory ? UD.accent.opacity(0.10)
-                                                       : UD.fillFaint)
-                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
-                                    item.isDirectory ? UD.accent.opacity(0.28) : UD.border, lineWidth: 1))
+                                .fill(item.isDirectory ? UD.accentSoft : UD.fillFaint)
                                 .frame(width: 84, height: 84)
                             SFTPFileIcon(kind: kind).scaleEffect(2.1)
                         }
@@ -110,7 +106,6 @@ struct SFTPInspector: View {
                             .padding(.horizontal, 11).padding(.vertical, 9)
                             // 代码块底用 panelHi（随主题）——日间浅底深字、夜间深底浅字。
                             .background(RoundedRectangle(cornerRadius: 7).fill(UD.panelHi))
-                            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
                     }
                 }
                 .padding(.horizontal, 22).padding(.bottom, 18)
@@ -150,7 +145,7 @@ struct SFTPInspector: View {
     }
 }
 
-/// 检视器底部次级按钮：默认 WS 描边；danger 用红色描边 + 红字。
+/// 检视器底部次级按钮：中性淡底（填充即边界）；danger 用红色淡底 + 红字。
 struct SFTPSecondaryButton: View {
     let label: String
     var systemImage: String? = nil
@@ -169,9 +164,8 @@ struct SFTPSecondaryButton: View {
                 .foregroundStyle(danger ? UD.danger : UD.text2)
                 .frame(maxWidth: .infinity).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(hover ? UD.rowHover : .clear))
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
-                    danger ? UD.danger.opacity(0.32) : UD.border, lineWidth: 1))
+                    .fill(danger ? UD.danger.opacity(hover ? 0.18 : 0.12)
+                                 : (hover ? UD.rowHover : UD.fillFaint)))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

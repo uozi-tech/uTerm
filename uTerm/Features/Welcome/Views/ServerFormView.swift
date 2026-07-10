@@ -200,11 +200,7 @@ struct ServerFormView: View {
                 .padding(ServerFormLayout.infoCardPadding)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(UD.accent.opacity(0.07))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(UD.accent.opacity(0.19), lineWidth: 1)
+                        .fill(UD.accent.opacity(0.11))
                 )
             }
         }

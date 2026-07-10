@@ -37,11 +37,15 @@ struct UDPreviewTab: View {
     /// 共用同一条 1px 线（避免 1+1=2px 双层描边）。
     var first: Bool = false
     var dirty: Bool = false
+    /// 临时（预览）tab —— VS Code 风：标题斜体，提示它会被下一次单击打开顶替。
+    var transient: Bool = false
     /// 前导图标（默认通用文档；调用方可按文件类型传入）。
     var systemImage: String = "doc"
     /// 激活态底色（默认 `UD.panel`；调用方可传编辑器正文色保持无缝接缝）。
     var activeBackground: Color? = nil
     var onSelect: () -> Void = {}
+    /// 双击整片 tab（调用方一般用来把临时 tab 转正）。nil = 不挂双击手势。
+    var onDoubleTap: (() -> Void)? = nil
     var onClose: () -> Void = {}
 
     @State private var hovered = false
@@ -61,6 +65,7 @@ struct UDPreviewTab: View {
 
                 Text(name)
                     .font(UD.mono(12))
+                    .italic(transient)
                     .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
 
                 if dirty {
@@ -81,7 +86,7 @@ struct UDPreviewTab: View {
         .overlay(activeTopBorder, alignment: .top)
         .overlay(activeSideBorders)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .modifier(TabTapGestures(onSelect: onSelect, onDoubleTap: onDoubleTap))
         .onHover { hovered = $0 }
     }
 
@@ -114,6 +119,28 @@ struct UDPreviewTab: View {
                 Rectangle().fill(first ? Color.clear : UD.border).frame(width: 1)
                 Spacer(minLength: 0)
                 Rectangle().fill(UD.border).frame(width: 1)
+            }
+        }
+    }
+}
+
+/// 单击选中 +（可选）双击回调。
+///
+/// 不用 `.onTapGesture(count: 2)` + `.onTapGesture` 手势链：`count: 2` 手势会让
+/// 整片 tab ——包括内层关闭 `Button`—— 的每次点击都先等一个双击消歧窗口（实测
+/// ~350ms）才派发，关闭/选中手感明显变钝。改为单一单击手势，从
+/// `NSApp.currentEvent.clickCount` 判双击：第一击立即 `onSelect`，双击的第二击走
+/// `onDoubleTap`（VS Code 同款语义——单击先选中预览，第二击转正）。
+private struct TabTapGestures: ViewModifier {
+    let onSelect: () -> Void
+    let onDoubleTap: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        content.onTapGesture {
+            if let onDoubleTap, (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+                onDoubleTap()
+            } else {
+                onSelect()
             }
         }
     }

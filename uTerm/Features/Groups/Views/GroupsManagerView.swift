@@ -157,8 +157,7 @@ struct GroupsManagerView: View {
         .padding(.leading, 8)
         .padding(.trailing, 3)
         .frame(height: 28)
-        .background(RoundedRectangle(cornerRadius: 7).fill(UD.inputBg))   // 日间纯白底
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 7).fill(UD.inputBg))   // 日间浅灰底
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 10)
@@ -383,7 +382,7 @@ private struct GroupRowView: View {
                     .foregroundStyle(UD.text4)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(UD.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 3).fill(UD.fillFaint))
             }
         }
     }
@@ -565,7 +564,6 @@ private struct GroupDetailView: View {
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillSoft))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(UD.border, lineWidth: 1))
     }
 
     private func segButton(_ label: String, index: Int) -> some View {
@@ -599,6 +597,8 @@ private struct GroupDetailView: View {
                 rows
             }
         }
+        // 成员列表 = 白底容器（panel 底 + 描边 + 行分隔线），非灰底。
+        .background(RoundedRectangle(cornerRadius: 8).fill(UD.panel))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
     }
@@ -637,7 +637,6 @@ private struct MemberRowView: View {
                 .foregroundStyle(UD.text3)
                 .frame(width: 22, height: 22)
                 .background(RoundedRectangle(cornerRadius: 5).fill(UD.fillFaint))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(UD.border, lineWidth: 1))
 
             Text(name)
                 .font(UD.mono(12.5))
@@ -650,13 +649,11 @@ private struct MemberRowView: View {
                 Button(action: onAction) {
                     Text(action == .remove ? "移出" : "+ 加入")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(action == .remove ? UD.text2 : UD.accent)
+                        .foregroundStyle(action == .remove ? UD.text2 : UD.accentInk)
                         .padding(.horizontal, 10)
                         .frame(height: 24)
                         .background(RoundedRectangle(cornerRadius: 6)
-                            .fill(action == .remove ? Color.clear : UD.accent.opacity(0.1)))
-                        .overlay(RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(action == .remove ? UD.border : UD.accent.opacity(0.33), lineWidth: 1))
+                            .fill(action == .remove ? UD.fillFaint : UD.accentSoft))
                 }
                 .buttonStyle(.plain)
                 .opacity(hover ? 1 : 0.7)
@@ -711,6 +708,8 @@ private struct UngroupedDetailView: View {
                                 )
                             }
                         }
+                        // 成员列表 = 白底容器（panel 底 + 描边 + 行分隔线），与 GroupDetailView 一致。
+                        .background(RoundedRectangle(cornerRadius: 8).fill(UD.panel))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
                     }
@@ -807,12 +806,10 @@ private struct GroupDeleteConfirm: View {
 
 // MARK: - 共享小工具
 
-/// 详情头部 38×38 圆角图标：同色低透明底 + 同色描边 + 中心发光彩点。
+/// 详情头部 38×38 圆角图标：同色低透明底 + 中心发光彩点。
 private func groupGlyph(color: Color) -> some View {
     RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(color.opacity(0.1))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(color.opacity(0.33), lineWidth: 1))
+        .fill(color.opacity(0.14))
         .frame(width: 38, height: 38)
         .overlay(
             Circle().fill(color).frame(width: 12, height: 12)

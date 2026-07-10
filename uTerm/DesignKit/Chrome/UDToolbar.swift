@@ -67,16 +67,13 @@ struct UDToolbarNewButton: View {
                 Text("新建")
             }
             .font(UD.control)
-            .foregroundStyle(UD.text)
+            .foregroundStyle(UD.accentInk)
             .padding(.horizontal, 14)
             .frame(height: 32)
             .background(
+                // 「驾驶舱」高亮：accent 14% 底 + accent 文字/图标、无描边（v2）。
                 RoundedRectangle(cornerRadius: UD.Radius.md, style: .continuous)
-                    .fill(UD.accent.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: UD.Radius.md, style: .continuous)
-                    .strokeBorder(UD.accent.opacity(0.33), lineWidth: 1)
+                    .fill(UD.accentSoft)
             )
         }
         .buttonStyle(.plain)

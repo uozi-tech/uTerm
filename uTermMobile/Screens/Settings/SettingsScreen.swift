@@ -101,9 +101,9 @@ struct SettingsScreen: View {
             Spacer()
         }
         .padding(16)
-        .background(M.panel)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(M.border, lineWidth: 1))
+        .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .udShadow(.card)
         .padding(.horizontal, 16)
         .padding(.bottom, 22)
     }
@@ -127,7 +127,7 @@ struct SettingsScreen: View {
                 .pickerStyle(.segmented)
             }
             .padding(14)
-            .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+            .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
             VStack(alignment: .leading, spacing: 11) {
                 Text("强调色").font(M.sans(14)).foregroundStyle(M.text2)
@@ -223,7 +223,7 @@ private struct MSyncDiagSheet: View {
                     .font(M.sans(15)).foregroundStyle(M.accent)
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
-            Rectangle().fill(M.border).frame(height: 1)
+            Rectangle().fill(M.divider).frame(height: 1)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {

@@ -151,7 +151,7 @@ struct SSHConfigImportView: View {
     private func tag(_ s: String, _ c: Color) -> some View {
         Text(s).font(.system(size: 9)).foregroundStyle(c)
             .padding(.horizontal, 5).padding(.vertical, 1)
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(c.opacity(0.5), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 3).fill(c.opacity(0.14)))
     }
 
     private func runImport() {

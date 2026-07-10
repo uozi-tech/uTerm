@@ -143,7 +143,6 @@ struct SFTPPathBar: View {
             }
             .padding(.horizontal, 12).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         } content: {
             UDMenu(width: 200, head: "排序", items: actionsMenuItems)
@@ -164,7 +163,7 @@ struct SFTPPathBar: View {
     }
 }
 
-/// 路径栏右侧带描边的方形图标按钮（WS 配色，hover 提亮 + 提底）。
+/// 路径栏右侧淡底方形图标按钮（WS 配色，hover 提亮 + 提底）。
 struct SFTPToolButton: View {
     let systemName: String
     let help: String
@@ -179,7 +178,6 @@ struct SFTPToolButton: View {
                 .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 8)
                     .fill(hover ? UD.panelHover : UD.fillFaint))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -188,7 +186,7 @@ struct SFTPToolButton: View {
     }
 }
 
-/// 路径栏「在工作区打开」显眼按钮：accent 着色描边 + 终端图标 + 文案。对齐设计稿
+/// 路径栏「在工作区打开」显眼按钮：accent 着色淡底 + 终端图标 + 文案。对齐设计稿
 /// `pages/sftp.jsx` 里操作菜单左侧那枚强调按钮（着色态，非实心）。
 struct SFTPOpenWorkspaceButton: View {
     let action: () -> Void
@@ -198,15 +196,13 @@ struct SFTPOpenWorkspaceButton: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: "terminal").font(.system(size: 12))
-                    .foregroundStyle(UD.accent)
+                    .foregroundStyle(UD.accentInk)
                 Text("在工作区打开").font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(UD.text)
+                    .foregroundStyle(UD.accentInk)
             }
             .padding(.horizontal, 12).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8)
-                .fill(UD.accent.opacity(hover ? 0.18 : 0.10)))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(UD.accent.opacity(hover ? 0.50 : 0.33), lineWidth: 1))
+                .fill(hover ? UD.accent.opacity(0.22) : UD.accentSoft))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

@@ -87,7 +87,7 @@ struct SettingsRow<Trailing: View>: View {
 // SettingsInlineButton 等布局原语。
 
 /// 设置行里的整数输入框。外观对齐 DesignKit 输入框，但改用语义色 token（Settings
-/// 窗口随全局浅 / 深外观变化），focus 时描边换 accent。供需要精确数值、不便用滑块
+/// 窗口随全局浅 / 深外观变化），focus 时加 accent 描边。供需要精确数值、不便用滑块
 /// 的设置项直接键入。`minValue` 在提交时钳下界（默认 0），`suffix` 可在框右侧附单位。
 struct SettingsNumberField: View {
     @Binding var value: Int
@@ -112,7 +112,7 @@ struct SettingsNumberField: View {
                 .frame(width: width, height: 32)
                 .background(RoundedRectangle(cornerRadius: 7).fill(UD.inputBg))
                 .overlay(RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(focused ? UD.accent : UD.border, lineWidth: 1))
+                    .strokeBorder(focused ? UD.accent : .clear, lineWidth: 1))
                 .animation(.easeOut(duration: 0.15), value: focused)
                 .accessibilityValue(suffix.map { "\(value) \($0)" } ?? "\(value)")
             if let suffix {

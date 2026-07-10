@@ -36,14 +36,9 @@ struct UDSegmented<Value: Hashable>: View {
         .padding(3)
         .frame(height: 30)
         .background(
-            // 容器底：深色=白叠加细底；日间=纯白（设计稿 kit「白容器 + 描边，仅选中段 accent」，
-            // 去掉旧黑 4% 灰轨）。
+            // 容器底：淡灰填充、无描边（v2「填充即边界」，深=白 5% / 浅=黑 6%）。
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(UD.dyn(.white(0.05), .hex(0xFFFFFF)))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(UD.border, lineWidth: 1)
+                .fill(UD.dyn(.white(0.05), .black(0.06)))
         )
         .fixedSize(horizontal: true, vertical: false)
     }

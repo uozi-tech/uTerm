@@ -106,12 +106,9 @@ struct UDSessionsDropdown: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .background(
+            // 选中行 = accent 14% 填充、无 accent 描边（v2）。
             RoundedRectangle(cornerRadius: UD.Radius.sm)
-                .fill(session.active ? UD.accent.opacity(0.10) : .clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: UD.Radius.sm)
-                .strokeBorder(session.active ? UD.accent.opacity(0.20) : .clear, lineWidth: 1)
+                .fill(session.active ? UD.accentSoft : .clear)
         )
     }
 

@@ -228,7 +228,6 @@ struct SFTPTransfersPanel: View {
                 .font(UD.mono(10.5)).foregroundStyle(UD.text2)
                 .padding(.horizontal, 7).padding(.vertical, 1)
                 .background(UD.fillSoft, in: Capsule())
-                .overlay(Capsule().strokeBorder(UD.border))
             Spacer()
             if activeCount > 0 {
                 PanelLinkButton(title: "全部取消", danger: true, action: onCancelAll)

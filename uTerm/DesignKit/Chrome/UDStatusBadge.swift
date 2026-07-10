@@ -66,11 +66,9 @@ struct UDStatusBadge: View {
         .padding(.trailing, 8)
         .padding(.vertical, 2)
         .background(
+            // 淡灰填充胶囊、无描边（v2）。
             Capsule()
-                .fill(UD.dyn(.white(0.04), .black(0.04)))
-                .overlay(
-                    Capsule().strokeBorder(UD.border, lineWidth: 1)
-                )
+                .fill(UD.dyn(.white(0.055), .black(0.065)))
         )
     }
 

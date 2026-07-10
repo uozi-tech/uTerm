@@ -90,12 +90,9 @@ struct UDChatMessage<Content: View>: View {
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
                 .fill(UD.accent)
         } else {
+            // 深色：灰填充胶囊、无描边（v2，去边后加深一档）。
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
-                .fill(UD.dyn(.white(0.035), .white(0.035)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
-                        .strokeBorder(UD.border, lineWidth: 1)
-                )
+                .fill(.white.opacity(0.05))
         }
     }
 }
@@ -145,7 +142,7 @@ struct UDMonoTag: View {
 
 // MARK: - 块级代码片 CodeChip
 
-/// 块级等宽代码片（命令 / 片段）。终端底 + 描边，自动换行。
+/// 块级等宽代码片（命令 / 片段）。次面板灰填充、无描边（v2），自动换行。
 struct UDCodeChip: View {
     let text: String
 
@@ -164,10 +161,6 @@ struct UDCodeChip: View {
             .background(
                 RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
                     .fill(UD.panelHi)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
-                            .strokeBorder(UD.border, lineWidth: 1)
-                    )
             )
             .padding(.vertical, 6)
     }

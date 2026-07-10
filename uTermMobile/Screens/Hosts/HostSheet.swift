@@ -52,7 +52,7 @@ struct HostSheet: View {
         .presentationDetents([.height(contentHeight)])
         .presentationDragIndicator(.visible)
         // 不透明抽屉底色：默认材质是半透明的，底部 home indicator 区会透出标签栏，显得有道「间隔」。
-        .presentationBackground(M.bg)
+        .presentationBackground(M.canvas)
     }
 
     private var metaGrid: some View {
@@ -81,7 +81,6 @@ struct HostSheet: View {
             }
             .frame(maxWidth: .infinity).frame(height: 56)
             .background(M.fillFaint)
-            .overlay(RoundedRectangle(cornerRadius: 13).stroke(M.borderHi, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 13))
         }.buttonStyle(MPressStyle())
     }

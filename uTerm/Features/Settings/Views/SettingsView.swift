@@ -121,7 +121,7 @@ nonisolated enum SettingsWindow {
 
 /// 设计稿 tab 条：高 44、左对齐、tab 间距 4、底部 1px 描边。
 /// 每个 tab：padding 6×12、圆角 7、图标 + 文字横排（间距 7）、12.5pt；
-/// 选中 = 微底 + 主文本色，未选 = 次要文本色。
+/// 选中 = accent 淡底 + accentInk（驾驶舱 pill），未选 = 次要文本色。
 private struct SettingsTabStrip: View {
     @Binding var selection: SettingsTab
 
@@ -153,7 +153,7 @@ private struct SettingsTabStrip: View {
                 Text(item.label)
                     .font(.system(size: 12.5))
             }
-            .foregroundStyle(isOn ? UD.text : UD.text2)
+            .foregroundStyle(isOn ? UD.accentInk : UD.text2)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? UD.accentSoft : Color.clear))   // 选中 = accent-soft（去黑 6% 灰底）

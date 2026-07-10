@@ -81,38 +81,45 @@ final class UDColorTests: XCTestCase {
         assertHex(UD.docDetail, .aqua, 0xA8A6A3, "docDetail light = 暖灰内文线")
     }
 
-    // MARK: - 日间表面 / 中性色：暖中性白 + 纯黑叠加（去灰、不发蓝）
+    // MARK: - 日间表面 / 中性色：v2「填充即边界」定稿（纯白大表面 + 纯灰中性）
 
-    func test_surfaces_light_are_warm_white() {
-        assertHex(UD.bg,      .aqua, 0xFFFFFF, "bg light = 统一纯白 = UDInput 的白 #FFFFFF")
+    func test_surfaces_light_are_pure_white_and_neutral_gray() {
+        assertHex(UD.bg,      .aqua, 0xFFFFFF, "bg light = 纯白 #FFFFFF")
         assertHex(UD.panel,   .aqua, 0xFFFFFF, "panel light = 纯白 #FFFFFF")
-        assertHex(UD.panelHi, .aqua, 0xEEEEEA, "panelHi light = 次面板 #EEEEEA")
-        assertHex(UD.text,    .aqua, 0x16181D, "text light = 中性主文字 #16181D（a11y pass 由 #1C1C1E 加深）")
+        assertHex(UD.panelHi, .aqua, 0xF2F2F3, "panelHi light = 次面板纯灰 #F2F2F3（仅 active / 代码底）")
+        assertHex(UD.pageBg,  .aqua, 0xF4F4F5, "pageBg light = 画布 #F4F4F5")
+        assertHex(UD.text,    .aqua, 0x171718, "text light = 纯灰主文字 #171718（去蓝调）")
     }
 
     func test_neutrals_light_use_neutral_black() {
         assertHex(UD.panelHover,  .aqua, 0x000000, alpha: 0.05,  "panelHover = 纯黑@5%")
-        assertHex(UD.border,      .aqua, 0x000000, alpha: 0.10,  "border = 纯黑@10%")
-        assertHex(UD.borderHi,    .aqua, 0x000000, alpha: 0.16,  "borderHi = 纯黑@16%")
-        // 文本 ramp 真值 = UDColor.swift「Ink Floor Rule」a11y 加深版
-        // （取代 2026-06-03 design-kit spec 的 56/40/26%）。
-        assertHex(UD.text2,       .aqua, 0x000000, alpha: 0.66,  "text2 = 纯黑@66%（正文层）")
-        assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.54,  "text3 = 纯黑@54%（次要信息层）")
-        assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.42,  "text4 = 纯黑@42%（仅装饰 / 结构层）")
-        assertHex(UD.rowHover,    .aqua, 0x000000, alpha: 0.045, "rowHover = 纯黑@4.5%")
-        assertHex(UD.rowSelected, .aqua, 0x007AFF, alpha: 0.13,  "rowSelected = accent-soft @13%")
+        assertHex(UD.border,      .aqua, 0x000000, alpha: 0.09,  "border = 纯黑@9%")
+        assertHex(UD.borderHi,    .aqua, 0x000000, alpha: 0.13,  "borderHi = 纯黑@13%")
+        // 文本 ramp 真值 = v2 定稿 黑 60/46/32%（暗色侧仍保留 Ink Floor a11y 提档）。
+        assertHex(UD.text2,       .aqua, 0x000000, alpha: 0.60,  "text2 = 纯黑@60%（正文层）")
+        assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.46,  "text3 = 纯黑@46%（次要信息层）")
+        assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.32,  "text4 = 纯黑@32%（仅装饰 / 结构层）")
+        assertHex(UD.rowHover,    .aqua, 0x000000, alpha: 0.04,  "rowHover = 纯黑@4%")
+        assertHex(UD.rowSelected, .aqua, 0x000000, alpha: 0.06,  "rowSelected = 中性纯黑@6%（accent 型选中走 accentSoft）")
     }
 
-    // MARK: - 输入底：暗夜白叠加细底 / 日间纯白
+    // MARK: - 输入底：v2 淡灰无描边（深=白 6% / 浅=黑 5%）
 
-    func test_input_bg_light_is_pure_white() {
-        assertHex(UD.inputBg,     .aqua, 0xFFFFFF, alpha: 1, "inputBg light = white")
-        assertHex(UD.inputBgSoft, .aqua, 0xFFFFFF, alpha: 1, "inputBgSoft light = white")
+    func test_input_bg_light_is_faint_black_overlay() {
+        assertHex(UD.inputBg,     .aqua, 0x000000, alpha: 0.05, "inputBg light = black@5%")
+        assertHex(UD.inputBgSoft, .aqua, 0x000000, alpha: 0.04, "inputBgSoft light = black@4%")
     }
 
     func test_input_bg_dark_is_faint_white_overlay() {
-        assertHex(UD.inputBg,     .darkAqua, 0xFFFFFF, alpha: 0.035, "inputBg dark = white@3.5%")
-        assertHex(UD.inputBgSoft, .darkAqua, 0xFFFFFF, alpha: 0.03,  "inputBgSoft dark = white@3%")
+        assertHex(UD.inputBg,     .darkAqua, 0xFFFFFF, alpha: 0.06, "inputBg dark = white@6%")
+        assertHex(UD.inputBgSoft, .darkAqua, 0xFFFFFF, alpha: 0.05, "inputBgSoft dark = white@5%")
+    }
+
+    // MARK: - 模态遮罩：暗夜黑 35% / 日间无遮罩
+
+    func test_backdrop_is_transparent_in_light_mode() {
+        assertHex(UD.backdrop, .aqua, 0x000000, alpha: 0,    "backdrop light = transparent（日间无遮罩）")
+        assertHex(UD.backdrop, .darkAqua, 0x000000, alpha: 0.35, "backdrop dark = black@35%")
     }
 
     // MARK: - 模态投影：暗夜保留深度 / 日间无 box-shadow

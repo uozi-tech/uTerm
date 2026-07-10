@@ -55,7 +55,7 @@ struct MobileAgentChat: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             }
         }
-        .background(M.bg)
+        .background(M.canvas)
         .sheet(isPresented: $addingProvider) { ProviderFormSheet() }
         .onAppear { configureModel() }
         .onChange(of: providers) { _, list in model.providers = list }
@@ -132,8 +132,9 @@ struct MobileAgentChat: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 7)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
+        .background(M.overlay)
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     // MARK: - 消息列表
@@ -273,7 +274,8 @@ struct MobileAgentChat: View {
                     .lineLimit(1...5)
                     .textInputAutocapitalization(.sentences)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(M.inputBg)
+                    // v2 composer 浮层化：实体 overlay 面 + 细边、无投影（user 定）
+                    .background(M.overlay)
                     .overlay(RoundedRectangle(cornerRadius: 20).stroke(M.border, lineWidth: 1))
                     .clipShape(RoundedRectangle(cornerRadius: 20))
 
@@ -287,8 +289,9 @@ struct MobileAgentChat: View {
             }
         }
         .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 10)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
+        .background(M.overlay)
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var canSend: Bool {

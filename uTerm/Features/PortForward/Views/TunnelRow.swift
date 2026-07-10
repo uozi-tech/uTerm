@@ -167,7 +167,7 @@ struct TunnelRow: View {
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(UD.danger)
         .frame(width: Self.actionWidth, height: 24)
-        .background(RoundedRectangle(cornerRadius: 6).fill(UD.danger.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(UD.danger.opacity(0.12)))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.danger.opacity(0.3), lineWidth: 1))
     }
 
@@ -232,7 +232,6 @@ struct TunnelRow: View {
             .foregroundStyle(UD.text2)
             .frame(width: Self.actionWidth, height: 24)
             .background(RoundedRectangle(cornerRadius: 6).fill(UD.fillSoft))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -240,7 +239,7 @@ struct TunnelRow: View {
 
 // MARK: - 类型徽标
 
-/// 类型徽标（设计稿 `TypeBadge`）：类型短名 + flag（mono），类型色低透明底 + 同色描边；
+/// 类型徽标（设计稿 `TypeBadge`）：类型短名 + flag（mono），类型色低透明底；
 /// `dim`（隧道未活跃）时退成中性灰底。
 struct TypeBadge: View {
     let kind: ForwardKind
@@ -258,9 +257,7 @@ struct TypeBadge: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
         .background(RoundedRectangle(cornerRadius: 5)
-            .fill(dim ? UD.fillSoft : kind.tint.opacity(0.1)))
-        .overlay(RoundedRectangle(cornerRadius: 5)
-            .strokeBorder(dim ? UD.border : kind.tint.opacity(0.25), lineWidth: 1))
+            .fill(dim ? UD.fillSoft : kind.tint.opacity(0.14)))
         .fixedSize()
     }
 }

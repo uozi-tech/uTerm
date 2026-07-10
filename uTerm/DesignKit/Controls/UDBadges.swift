@@ -8,7 +8,7 @@ import SwiftUI
 
 // MARK: - 分组芯片 GroupChip
 
-/// 分组标签芯片（如「生产环境」「测试」）。低饱和描边胶囊。
+/// 分组标签芯片（如「生产环境」「测试」）。淡灰 / tint 填充胶囊，无描边（v2）。
 struct UDGroupChip: View {
     let label: String
     let tint: Color?
@@ -28,10 +28,6 @@ struct UDGroupChip: View {
                 RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
                     .fill(fillColor)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                    .strokeBorder(strokeColor, lineWidth: 1)
-            )
     }
 
     private var textColor: Color {
@@ -39,15 +35,12 @@ struct UDGroupChip: View {
     }
 
     private var fillColor: Color {
-        tint?.opacity(0.10) ?? Color.clear
-    }
-
-    private var strokeColor: Color {
-        tint?.opacity(0.42) ?? UD.border
+        tint?.opacity(0.14) ?? UD.dyn(.white(0.055), .black(0.065))
     }
 }
 
-/// 可选择的分组标签芯片。用于表单里的分组快速填充，选中态用 accent 软底 + accent 描边。
+/// 可选择的分组标签芯片。用于表单里的分组快速填充；选中 = accent 14% 软底 + accent 文字
+/// （「驾驶舱」样式），未选 = 淡灰填充；均无描边（v2）。
 struct UDSelectableGroupChip: View {
     let label: String
     let selected: Bool
@@ -57,16 +50,12 @@ struct UDSelectableGroupChip: View {
         Button(action: action) {
             Text(label)
                 .font(UD.caption)
-                .foregroundStyle(selected ? UD.text : UD.text3)
+                .foregroundStyle(selected ? UD.accentInk : UD.text3)
                 .padding(.vertical, 4)
                 .padding(.horizontal, 10)
                 .background(
                     RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                        .fill(selected ? UD.accent.opacity(0.12) : Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                        .strokeBorder(selected ? UD.accent.opacity(0.40) : UD.border, lineWidth: 1)
+                        .fill(selected ? UD.accentSoft : UD.dyn(.white(0.045), .black(0.055)))
                 )
         }
         .buttonStyle(.plain)
@@ -100,12 +89,7 @@ struct UDCountBadge: View {
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(accent ? UD.accent.opacity(0.15)
-                                 : UD.dyn(.white(0.06), .black(0.06)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(accent ? UD.accent.opacity(0.27) : UD.border,
-                                          lineWidth: 1)
-                    )
+                                 : UD.dyn(.white(0.06), .black(0.07)))
             )
     }
 }
@@ -152,11 +136,9 @@ struct UDHostDot: View {
 
 // MARK: - 键帽 Kbd
 
-/// 单个键帽（如 ⌘ / K / esc）。深色实体面无投影；浅色仅一道 1px 实线底缘
-/// （设计稿 `0 1px 0 rgba(0,0,0,.06)`），不用软投影。
+/// 单个键帽（如 ⌘ / K / esc）。淡灰填充、无描边、无投影（v2 拍平）。
 struct UDKbd: View {
     let label: String
-    @Environment(\.colorScheme) private var scheme
 
     init(_ label: String) {
         self.label = label
@@ -171,14 +153,7 @@ struct UDKbd: View {
             .frame(height: 20)
             .background(
                 RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                    .fill(UD.dyn(.white(0.04), .hex(0xFFFFFF)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UD.Radius.xs, style: .continuous)
-                            .strokeBorder(UD.border, lineWidth: 1)
-                    )
-                    // 浅色：硬边 1px 底缘（radius 0 + y 1）；深色：无投影。
-                    .shadow(color: scheme == .light ? .black.opacity(0.06) : .clear,
-                            radius: 0, y: scheme == .light ? 1 : 0)
+                    .fill(UD.dyn(.white(0.04), .black(0.055)))
             )
     }
 }

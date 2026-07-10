@@ -61,7 +61,7 @@ struct MToolCall: View {
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var commandRow: some View {
@@ -88,7 +88,7 @@ struct MToolCall: View {
         }
         .frame(maxHeight: 160)
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var actions: some View {
@@ -106,9 +106,7 @@ struct MToolCall: View {
                 }
                 .padding(.horizontal, 14).frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(M.accent.opacity(approvalsDisabled ? 0.06 : 0.14)))
-                .overlay(RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(M.accent.opacity(approvalsDisabled ? 0.2 : 0.45), lineWidth: 1))
+                    .fill(M.accent.opacity(approvalsDisabled ? 0.08 : 0.14)))
                 .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
@@ -117,7 +115,7 @@ struct MToolCall: View {
             Button(action: onSkip) {
                 Text("跳过").font(M.sans(12.5)).foregroundStyle(approvalsDisabled ? M.text4 : M.text3)
                     .padding(.horizontal, 14).frame(height: 34)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(M.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(M.fillFaint))
                     .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
@@ -129,7 +127,7 @@ struct MToolCall: View {
                 .font(M.sans(10)).foregroundStyle(M.text4)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
 
@@ -158,7 +156,6 @@ struct MSafetyDial: View {
             }
             .padding(.leading, 10).padding(.trailing, 9).frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8).fill(M.fillFaint))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(M.border, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
     }

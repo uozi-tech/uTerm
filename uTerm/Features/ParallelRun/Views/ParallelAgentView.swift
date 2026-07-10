@@ -108,8 +108,7 @@ struct ParallelAgentView: View {
             }
             .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(UD.aiAccent.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(UD.aiAccent.opacity(0.18), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(UD.aiAccent.opacity(0.08)))
         }
         .transition(.opacity)
     }
@@ -140,9 +139,7 @@ struct ParallelAILane: View {
             }
         }
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .fill(emphasised ? tint.opacity(0.06) : Color.primary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(emphasised ? tint.opacity(0.30) : UD.border, lineWidth: 1))
+            .fill(emphasised ? tint.opacity(0.14) : UD.fillFaint))
     }
 
     private var header: some View {
@@ -174,8 +171,7 @@ struct ParallelAILane: View {
                 .frame(height: resolved ? 20 : nil)
                 .background {
                     if resolved {
-                        Capsule().fill(tint.opacity(0.12))
-                            .overlay(Capsule().strokeBorder(tint.opacity(0.38), lineWidth: 1))
+                        Capsule().fill(tint.opacity(0.14))
                     }
                 }
         }
@@ -231,7 +227,7 @@ struct ParallelAILane: View {
                 .padding(.leading, 7)
                 .padding(.trailing, 9)
                 .frame(height: 24)
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -241,7 +237,6 @@ struct ParallelAILane: View {
                     .padding(EdgeInsets(top: 9, leading: 11, bottom: 9, trailing: 11))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ParTermSurface.bg))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
             }
         }
     }
@@ -261,7 +256,7 @@ struct ParallelAILane: View {
                 .padding(.leading, 7)
                 .padding(.trailing, 9)
                 .frame(height: 24)
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.fillFaint))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -274,7 +269,7 @@ struct ParallelAILane: View {
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(UD.aiAccent)
                                 .frame(width: 16, height: 16)
-                                .background(Circle().fill(UD.aiAccent.opacity(0.12)))
+                                .background(Circle().fill(UD.aiAccent.opacity(0.15)))
                             Text(step)
                                 .font(.system(size: 12))
                                 .foregroundStyle(UD.text3)

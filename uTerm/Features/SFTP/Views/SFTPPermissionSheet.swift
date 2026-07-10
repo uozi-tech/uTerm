@@ -133,7 +133,6 @@ struct SFTPPermissionSheet: View {
                 .frame(height: 42)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 9))
     }
 
@@ -170,7 +169,7 @@ struct SFTPPermissionSheet: View {
 }
 
 /// 权限网格用的小方形勾选框（自绘，匹配 WS 暗色语言：选中 accent 填充 + 白勾，
-/// 未选 `UD.fillSoft` 底 + `UD.border` 描边）。不用系统 `.checkbox` 以避免系统蓝。
+/// 未选 `UD.fillMed` 底）。不用系统 `.checkbox` 以避免系统蓝。
 private struct PermCheckbox: View {
     let on: Bool
     var label: String? = nil
@@ -179,9 +178,7 @@ private struct PermCheckbox: View {
     var body: some View {
         Button(action: action) {
             RoundedRectangle(cornerRadius: 4)
-                .fill(on ? UD.accent : UD.fillSoft)
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(on ? UD.accent : UD.border, lineWidth: 1))
+                .fill(on ? UD.accent : UD.fillMed)
                 .frame(width: 18, height: 18)
                 .overlay {
                     if on {

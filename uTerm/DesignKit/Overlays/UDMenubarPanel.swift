@@ -182,16 +182,13 @@ private struct UDMenubarRunningRow: View {
             } label: {
                 Text("聚焦")
                     .font(UD.font(11.5, weight: .medium))
-                    .foregroundStyle(UD.text)
+                    .foregroundStyle(UD.accentInk)
                     .padding(.vertical, 4)
                     .padding(.horizontal, 12)
                     .background(
+                        // 「驾驶舱」高亮：accent 14% 底 + accent 文字、无描边（v2）。
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(UD.accent.opacity(0.10))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(UD.accent.opacity(0.33), lineWidth: 1)
+                            .fill(UD.accentSoft)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 7))
             }

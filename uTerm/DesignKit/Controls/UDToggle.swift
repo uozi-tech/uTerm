@@ -41,15 +41,9 @@ struct UDToggle: View {
     // MARK: - 轨道
 
     private var track: some View {
+        // OFF 态中性灰填充 / ON 态纯强调色填充；均无描边、无内阴影（v2 拍平）。
         Capsule()
             .fill(isOn ? tint : UD.panelHover)
-            .overlay(
-                // OFF 态：中性底 + 1px 细描边（无内阴影）。ON 态纯强调色填充、无描边。
-                Capsule()
-                    .strokeBorder(UD.border, lineWidth: 1)
-                    .opacity(isOn ? 0 : 1)
-            )
-            .clipShape(Capsule())
     }
 
     // MARK: - knob
@@ -58,7 +52,7 @@ struct UDToggle: View {
         Circle()
             .fill(.white)
             .frame(width: 20, height: 20)
-            .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+            .shadow(color: .black.opacity(0.18), radius: 1, y: 1)   // 设计稿 0 1 2 /.18
     }
 }
 

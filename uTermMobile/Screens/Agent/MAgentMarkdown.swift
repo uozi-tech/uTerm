@@ -90,7 +90,7 @@ private struct MMDBlockView: View {
         case let ol as OrderedList:    AnyView(listView(items: Array(ol.listItems), ordered: true))
         case let bq as BlockQuote:     AnyView(blockQuoteView(bq))
         case let tbl as MarkdownTable: AnyView(tableView(tbl))
-        case is ThematicBreak:         AnyView(Rectangle().fill(M.border).frame(height: 1).padding(.vertical, 4))
+        case is ThematicBreak:         AnyView(Rectangle().fill(M.divider).frame(height: 1).padding(.vertical, 4))
         default:                       AnyView(EmptyView())
         }
     }
@@ -156,7 +156,7 @@ private struct MMDBlockView: View {
                     }
                 }
                 .padding(.vertical, 4).padding(.horizontal, 6)
-                .overlay(Rectangle().fill(M.border).frame(height: 0.5), alignment: .top)
+                .overlay(Rectangle().fill(M.divider).frame(height: 0.5), alignment: .top)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -243,7 +243,6 @@ struct MChatCodeBlock: View {
         }
         .background(shape.fill(M.inputBg))
         .clipShape(shape)
-        .overlay(shape.strokeBorder(M.border, lineWidth: 1))
     }
 
     private var header: some View {
@@ -266,7 +265,7 @@ struct MChatCodeBlock: View {
             .accessibilityLabel(copied ? "已复制代码" : "复制代码")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
 

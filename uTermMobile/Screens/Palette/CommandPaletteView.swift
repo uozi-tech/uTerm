@@ -104,7 +104,7 @@ struct CommandPaletteView: View {
         }
         .padding(.horizontal, 16).frame(height: 52)
         .background(M.overlayHi)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private var emptyState: some View {
@@ -129,8 +129,7 @@ struct CommandPaletteView: View {
             HStack(spacing: 12) {
                 MIcon(name: icon, size: 16, color: tinted ? accent : M.text2)
                     .frame(width: 32, height: 32)
-                    .background(tinted ? accent.opacity(0.1) : M.fillFaint)
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(tinted ? accent.opacity(0.2) : M.border, lineWidth: 1))
+                    .background(tinted ? accent.opacity(0.14) : M.fillFaint)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 2) {
                     highlight(title).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)

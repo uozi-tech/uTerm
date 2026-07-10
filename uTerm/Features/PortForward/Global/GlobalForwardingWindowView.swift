@@ -138,11 +138,10 @@ struct GlobalForwardingWindowView: View {
                 Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
                 Text("新建").font(.system(size: 11.5, weight: .medium))
             }
-            .foregroundStyle(UD.accent)
+            .foregroundStyle(UD.accentInk)
             .padding(.horizontal, 9)
             .frame(height: 22)
             .background(RoundedRectangle(cornerRadius: 6).fill(UD.accentSoft))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.accent.opacity(0.3), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $newPickerOpen, arrowEdge: .bottom) { newHostPicker }
@@ -238,7 +237,7 @@ struct GlobalForwardingWindowView: View {
                     Text("未连接")
                         .font(.system(size: 10.5)).foregroundStyle(UD.text3)
                         .padding(.horizontal, 6).padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(UD.border, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillFaint))
                 }
                 Spacer()
                 Text("\(activeN)/\(group.rules.count) 活跃")
@@ -399,7 +398,6 @@ struct StartupAutomationBanner: View {
         HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 9).fill(UD.accentSoft)
-                RoundedRectangle(cornerRadius: 9).strokeBorder(UD.accent.opacity(0.35), lineWidth: 1)
                 Image(systemName: "bolt.fill").font(.system(size: 15)).foregroundStyle(UD.accent)
             }
             .frame(width: 34, height: 34)
@@ -426,7 +424,6 @@ struct StartupAutomationBanner: View {
                     .foregroundStyle(UD.text2)
                     .padding(.horizontal, 10).frame(height: 24)
                     .background(RoundedRectangle(cornerRadius: 6).fill(UD.panelHover))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UD.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }

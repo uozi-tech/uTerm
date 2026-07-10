@@ -5,7 +5,7 @@ import SwiftUI
 /// 列表行 `ServerRow` 与详情面板 `HostDetailPanel` 复用这里的 `KbdChip` /
 /// `WelcomeFormat`，避免重复实现。
 
-/// 键位提示小胶囊（设计稿 Kbd）。等宽、描边、半透明底，浅深自适应。
+/// 键位提示小胶囊（设计稿 Kbd）。等宽、软底，浅深自适应。
 struct KbdChip: View {
     let text: String
 
@@ -17,11 +17,7 @@ struct KbdChip: View {
             .frame(minWidth: 18, minHeight: 20)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.primary.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(UD.border, lineWidth: 1)
+                    .fill(UD.fillSoft)
             )
     }
 }

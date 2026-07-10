@@ -47,7 +47,7 @@ struct QuickCommandDetailView: View {
             }
             actionBar
         }
-        .background(M.bg)
+        .background(M.canvas)
         .navigationTitle(cmd.name)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $editing) { CommandFormSheet(cmd: cmd) }
@@ -91,8 +91,7 @@ struct QuickCommandDetailView: View {
                     }
                 }
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-                .background(M.aiAccent.opacity(0.05))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(M.aiAccent.opacity(0.2), lineWidth: 1))
+                .background(M.aiAccent.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 Text("$ \(cmd.command)").font(M.mono(13.5)).foregroundStyle(M.text)
@@ -122,9 +121,9 @@ struct QuickCommandDetailView: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(M.panel)
-                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, lineWidth: 1))
+                    .background(M.card)
                     .clipShape(RoundedRectangle(cornerRadius: 11))
+                    .udShadow(.card)
                 }
                 if targets.isEmpty {
                     Text("尚未绑定主机").font(M.sans(13)).foregroundStyle(M.text4)
@@ -166,9 +165,9 @@ struct QuickCommandDetailView: View {
             MSwitch(on: Binding(get: { cmd.aiAssisted }, set: { cmd.aiAssisted = $0; try? context.save() }))
         }
         .padding(.horizontal, 13).padding(.vertical, 12)
-        .background(cmd.aiAssisted ? M.aiAccent.opacity(0.06) : M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(cmd.aiAssisted ? M.aiAccent.opacity(0.2) : M.border, lineWidth: 1))
+        .background(cmd.aiAssisted ? M.aiAccent.opacity(0.10) : M.card)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .udShadow(.card)
         .padding(.top, 18)
     }
 
@@ -178,7 +177,8 @@ struct QuickCommandDetailView: View {
                 MSectionCap(text: "执行日志")
                 Text("保留近 30 天").font(M.sans(10.5)).foregroundStyle(M.text3)
                     .padding(.horizontal, 8).padding(.vertical, 1)
-                    .overlay(Capsule().stroke(M.border, lineWidth: 1))
+                    .background(M.fillFaint)
+                    .clipShape(Capsule())
                 Spacer()
                 Text("\(runs.count) 条").font(M.mono(12)).foregroundStyle(M.text4)
             }
@@ -201,25 +201,25 @@ struct QuickCommandDetailView: View {
             }
             Button { editing = true } label: {
                 MIcon(name: "edit", size: 18, color: M.text2).frame(width: 48, height: 48)
-                    .background(M.fillFaint).overlay(RoundedRectangle(cornerRadius: 13).stroke(M.borderHi, lineWidth: 1))
+                    .background(M.fillFaint)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
             }.buttonStyle(MPressStyle())
             Button { pendingDelete = true } label: {
                 MIcon(name: "trash", size: 18, color: M.text3).frame(width: 48, height: 48)
-                    .overlay(RoundedRectangle(cornerRadius: 13).stroke(M.border, lineWidth: 1))
+                    .background(M.fillFaint)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
             }.buttonStyle(MPressStyle())
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(M.panel)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     // MARK: 元件
     private func qcGlyph(size: CGFloat) -> some View {
         MIcon(name: cmd.aiAssisted ? "spark" : "bolt", size: size * 0.5, color: tint)
             .frame(width: size, height: size)
-            .background(tint.opacity(0.11))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.28).stroke(tint.opacity(0.23), lineWidth: 1))
+            .background(tint.opacity(0.14))
             .clipShape(RoundedRectangle(cornerRadius: size * 0.28))
     }
     private var serversBadge: some View {
@@ -227,15 +227,16 @@ struct QuickCommandDetailView: View {
             if n <= 1 {
                 Text(targets.first?.name ?? "\(n) 台").font(M.sans(12)).foregroundStyle(M.text3)
                     .padding(.horizontal, 9).padding(.vertical, 3)
-                    .overlay(Capsule().stroke(M.border, lineWidth: 1))
+                    .background(M.fillFaint)
+                    .clipShape(Capsule())
             } else {
                 HStack(spacing: 5) {
                     MIcon(name: "parallel", size: 11, color: M.success)
                     Text("\(n) 台并行").font(M.sans(12, weight: .medium)).foregroundStyle(M.success)
                 }
                 .padding(.horizontal, 9).padding(.vertical, 3)
-                .background(M.success.opacity(0.11))
-                .overlay(Capsule().stroke(M.success.opacity(0.34), lineWidth: 1)).clipShape(Capsule())
+                .background(M.success.opacity(0.14))
+                .clipShape(Capsule())
             }
         }
     }
@@ -245,8 +246,8 @@ struct QuickCommandDetailView: View {
             Text("AI 介入").font(M.sans(12, weight: .medium)).foregroundStyle(M.aiAccent)
         }
         .padding(.horizontal, 9).padding(.vertical, 3)
-        .background(M.aiAccent.opacity(0.12))
-        .overlay(Capsule().stroke(M.aiAccent.opacity(0.25), lineWidth: 1)).clipShape(Capsule())
+        .background(M.aiAccent.opacity(0.15))
+        .clipShape(Capsule())
     }
     private var lastRunText: String {
         guard let d = cmd.lastRunAt else { return "从未" }
@@ -285,8 +286,8 @@ private struct RunLogRow: View {
                             Text("AI").font(M.sans(10.5)).foregroundStyle(M.aiAccent)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(M.aiAccent.opacity(0.12))
-                        .overlay(Capsule().stroke(M.aiAccent.opacity(0.23), lineWidth: 1)).clipShape(Capsule())
+                        .background(M.aiAccent.opacity(0.15))
+                        .clipShape(Capsule())
                     }
                     MIcon(name: "chev", size: 13, color: M.text4, weight: .semibold).rotationEffect(.degrees(open ? 90 : 0))
                 }
@@ -320,18 +321,17 @@ private struct RunLogRow: View {
                             }
                         }
                         .padding(11).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(M.aiAccent.opacity(0.05))
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.aiAccent.opacity(0.18), lineWidth: 1))
+                        .background(M.aiAccent.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 9))
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
-                .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+                .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
             }
         }
-        .background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, lineWidth: 1))
+        .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 11))
+        .udShadow(.card)
     }
 
     private var timeText: String {

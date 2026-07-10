@@ -58,8 +58,9 @@ struct UDComposer<ModelControl: View>: View {
         .frame(width: width)
         .frame(maxWidth: width == nil ? .infinity : nil)
         .background(
+            // v2 浮层化：实体浮层底 + 1px 描边、无投影（user 定：composer 不带阴影）。
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
-                .fill(UD.inputBg)   // 日间纯白底 / 暗夜白叠加细底
+                .fill(UD.overlay)
         )
         .overlay(
             RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous)
@@ -121,12 +122,9 @@ struct UDModelPillLabel: View {
         .padding(.trailing, 8)
         .frame(height: 28)
         .background(
+            // 小控件淡灰填充、无描边（v2）。
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(UD.dyn(.white(0.02), .hex(0xFFFFFF)))   // 日间 = UDInput 的白（纯白 + 描边）
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(UD.border, lineWidth: 1)
+                .fill(UD.dyn(.white(0.045), .black(0.055)))
         )
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
@@ -158,10 +156,6 @@ private struct UDComposerIconStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(hovering ? UD.panelHover : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(UD.border, lineWidth: 1)
             )
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .onHover { hovering = $0 }

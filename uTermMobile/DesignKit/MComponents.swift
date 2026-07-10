@@ -50,16 +50,15 @@ struct MBtn: View {
         switch kind {
         case .primary: return accent
         case .danger: return M.danger
-        case .tinted: return accent.opacity(0.12)
+        case .tinted: return accent.opacity(0.14)
         case .dangerTint: return .clear
         case .secondary: return M.fillFaint
         }
     }
+    // v2「填充即边界」：tinted/secondary 靠填充成形，不再描边；dangerTint 属危险态描边，保留。
     private var stroke: Color {
         switch kind {
-        case .tinted: return accent.opacity(0.25)
         case .dangerTint: return M.danger.opacity(0.4)
-        case .secondary: return M.border
         default: return .clear
         }
     }
@@ -79,7 +78,6 @@ struct MRoundBtn: View {
                   weight: filled ? .semibold : .medium)
                 .frame(width: 36, height: 36)
                 .background(filled ? accent : M.fillFaint)
-                .overlay(Circle().stroke(filled ? .clear : M.border, lineWidth: 1))
                 .clipShape(Circle())
         }
         .buttonStyle(MPressStyle())
@@ -128,7 +126,7 @@ struct MInput: View {
         .keyboardType(keyboard)
         .padding(.horizontal, 13).padding(.vertical, 11)
         .background(M.inputBg)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : M.border, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 }
@@ -157,7 +155,7 @@ struct MTextArea: View {
         }
         .frame(minHeight: minHeight, alignment: .topLeading)
         .background(M.inputBg)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : M.border, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 }
@@ -185,9 +183,9 @@ struct MCheck: View {
     var body: some View {
         Button(action: { onChange(!checked) }) {
             ZStack {
+                // v2：未选中用中灰填充成形，选中实心 accent + 白勾，不描边
                 Circle()
-                    .fill(active ? accent : .clear)
-                    .overlay(Circle().stroke(active ? accent : M.text4, lineWidth: 1.6))
+                    .fill(active ? accent : M.fillMed)
                     .frame(width: 22, height: 22)
                 if checked {
                     MIcon(name: "check", size: 13, color: .white, weight: .bold)
@@ -239,8 +237,8 @@ struct MChip: View {
         }
         .foregroundStyle(fg)
         .padding(.horizontal, 8).padding(.vertical, 2.5)
-        .background(tone == .accent ? accent.opacity(0.08) : .clear)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(tone == .accent ? accent.opacity(0.25) : M.border, lineWidth: 1))
+        // 中性 chip 用 fillSoft：常嵌在 fillFaint 卡片里，深一档才成形
+        .background(tone == .accent ? accent.opacity(0.12) : UD.fillSoft)
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
     private var fg: Color { tone == .accent ? accent : M.text3 }
@@ -263,9 +261,9 @@ struct MInsetGroup<Content: View>: View {
                     .padding(.horizontal, 20).padding(.bottom, 7)
             }
             VStack(spacing: 0) { content }
-                .background(M.panel)
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+                .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                .udShadow(.card)
                 .padding(.horizontal, 16)
             if let footer {
                 Text(footer)
@@ -300,8 +298,7 @@ struct MInsetRow: View {
                 let c = danger ? M.danger : (iconColor ?? accent)
                 MIcon(name: icon, size: 16, color: c)
                     .frame(width: 30, height: 30)
-                    .background(c.opacity(0.10))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.opacity(0.2), lineWidth: 1))
+                    .background(c.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -324,7 +321,7 @@ struct MInsetRow: View {
         .frame(minHeight: 50)
         .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
-            if !last { Rectangle().fill(M.border).frame(height: 1).padding(.leading, 14) }
+            if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 14) }
         }
 
         if let onTap {
@@ -402,7 +399,6 @@ struct MCopyField: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(M.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
@@ -420,10 +416,9 @@ struct MSegmented<T: Hashable>: View {
                 let active = item.value == selection
                 Text(item.label)
                     .font(M.sans(13, weight: active ? .semibold : .medium))
-                    .foregroundStyle(active ? M.text : M.text2)
+                    .foregroundStyle(active ? accent : M.text2)
                     .frame(maxWidth: .infinity).frame(height: 30)
-                    .background(active ? accent.opacity(0.15) : .clear)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(active ? accent.opacity(0.33) : .clear, lineWidth: 1))
+                    .background(active ? accent.opacity(0.14) : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selection = item.value } }
@@ -431,7 +426,6 @@ struct MSegmented<T: Hashable>: View {
         }
         .padding(2)
         .background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(M.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
@@ -456,7 +450,7 @@ struct MSearchField: View {
         }
         .padding(.horizontal, 12).frame(height: 38)
         .background(M.fillFaint)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : M.border, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 }
@@ -470,5 +464,32 @@ extension EnvironmentValues {
     var mAccent: Color {
         get { self[MAccentKey.self] }
         set { self[MAccentKey.self] = newValue }
+    }
+}
+
+// MARK: - 卡片列表（弹性间距）
+
+/// 卡片列表间距：随容器宽度弹性缩放（业界断点惯例的连续化）。
+/// 比率 5%、clamp 14–24、2pt 网格取整：iPhone SE(375) ≈ 18、6.1"(393) ≈ 20、
+/// 6.9"(430) ≈ 22、iPad 阅读列宽 ≥ 480 封顶 24。未量到宽度前缺省 20。
+nonisolated func mCardSpacing(for width: CGFloat) -> CGFloat {
+    guard width > 0 else { return 20 }
+    let clamped = min(max(width * 0.05, 14), 24)
+    return (clamped / 2).rounded() * 2
+}
+
+/// 自量宽度、按 `mCardSpacing` 弹性设置间距的竖向卡片列表容器。
+/// 主机 / 终端 / 文件 / 命令四个 tab 的卡片列表共用，替代写死的 spacing。
+struct MCardList<Content: View>: View {
+    var alignment: HorizontalAlignment = .center
+    @ViewBuilder var content: Content
+
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        LazyVStack(alignment: alignment, spacing: mCardSpacing(for: width)) {
+            content
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }

@@ -26,7 +26,7 @@ struct MSheetNavHeader: View {
         }
         .padding(.horizontal, 14).padding(.top, M.topBreath).padding(.bottom, 10)
         .background(M.bg)   // pinned 头部需不透明底，避免内容滚动时透出
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
 
@@ -81,7 +81,7 @@ struct PermissionGrid: View {
                 HStack(spacing: 14) {
                     Text(POSIXPerm.octal(bits)).font(M.mono(30, weight: .bold))
                         .foregroundStyle(accent).tracking(1)
-                    Rectangle().fill(M.border).frame(width: 1, height: 26)
+                    Rectangle().fill(M.divider).frame(width: 1, height: 26)
                     Text(POSIXPerm.symbolic(bits, isDir: entry.isDirectory))
                         .font(M.mono(16)).foregroundStyle(M.text2).tracking(1)
                 }
@@ -95,8 +95,8 @@ struct PermissionGrid: View {
                             Text(c.0).font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.text3).frame(width: 64)
                         }
                     }
-                    .padding(.vertical, 9).background(M.fillFaint)
-                    .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+                    .padding(.vertical, 9).background(UD.fillSoft)   // 容器已是卡片面，表头再深一档区分
+                    .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
                     ForEach(Array(classes.enumerated()), id: \.element.0) { ci, cls in
                         HStack(spacing: 0) {
@@ -108,11 +108,12 @@ struct PermissionGrid: View {
                             }
                         }
                         .frame(height: 52)
-                        .overlay(alignment: .top) { if ci > 0 { Rectangle().fill(M.border).frame(height: 1) } }
+                        .overlay(alignment: .top) { if ci > 0 { Rectangle().fill(M.divider).frame(height: 1) } }
                     }
                 }
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(M.border, lineWidth: 1))
+                .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                .udShadow(.card)
                 .padding(.horizontal, 16)
 
                 MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPerm.mode(from: bits)) }
@@ -120,7 +121,7 @@ struct PermissionGrid: View {
             }
             .padding(.vertical, 8)
         }
-        .background(M.bg)
+        .background(M.canvas)
         .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: "权限") }
         .toolbar(.hidden, for: .navigationBar)   // 整栈隐藏系统栏：下钻全程 top inset 恒定
     }
@@ -150,7 +151,7 @@ struct FileInfoView: View {
             }
             .padding(.top, 12)
         }
-        .background(M.bg)
+        .background(M.canvas)
         .safeAreaInset(edge: .top, spacing: 0) { MSheetNavHeader(title: "简介") }
         .toolbar(.hidden, for: .navigationBar)   // 整栈隐藏系统栏：下钻全程 top inset 恒定
     }
@@ -210,13 +211,13 @@ struct FileActionSheet: View {
                     NavigationLink { FileInfoView(entry: entry, fullPath: fullPath) } label: {
                         actionLabel("info", "简介", chevron: true)
                     }.buttonStyle(MRowStyle())
-                    Rectangle().fill(M.border).frame(height: 1).padding(.vertical, 8)
+                    Rectangle().fill(M.divider).frame(height: 1).padding(.vertical, 8)
                     actionRow("trash", "删除", danger: true, action: onDelete)
                 }
                 .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 30)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(M.bg)
+            .background(M.canvas)
             .toolbar(.hidden, for: .navigationBar)   // 根（动作单）自绘头部；整栈同一隐藏 API → 下钻无栏过渡
         }
         .presentationDetents([.medium, .large])
@@ -226,8 +227,7 @@ struct FileActionSheet: View {
     private var header: some View {
         HStack(spacing: 12) {
             MIcon(name: isFolder ? "folder" : "file", size: 18, color: accent)
-                .frame(width: 38, height: 38).background(accent.opacity(0.1))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(accent.opacity(0.2), lineWidth: 1))
+                .frame(width: 38, height: 38).background(accent.opacity(0.14))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name).font(M.sans(16, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
@@ -236,7 +236,7 @@ struct FileActionSheet: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 6).padding(.top, 4).padding(.bottom, 14)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func actionRow(_ icon: String, _ label: String, danger: Bool = false, chevron: Bool = false,

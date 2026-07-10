@@ -83,6 +83,10 @@ nonisolated struct MarkdownImageCache: Sendable {
 final class FilePreviewModel {
     private(set) var buffers: [FileBuffer] = []
     var activeBufferID: UUID?
+    /// 预览（临时）tab 的 buffer id（VS Code 风）：侧栏单击以预览方式打开，下一次
+    /// 预览打开会**顶替**它；双击 / 编辑 / 保存 / 拖拽分屏则「转正」（置 nil）。
+    /// 全局至多一个预览 tab。
+    private(set) var previewTabBufferID: UUID?
     private(set) var panelRoot: LayoutNode?
     private(set) var panels: [UUID: FilePreviewPanel] = [:]
     var focusedPanelID: UUID?
@@ -164,12 +168,14 @@ final class FilePreviewModel {
         activeBufferID = panel.bufferID
     }
 
-    /// SFTPSidebar 文件 tap → 通知 → 调用。
-    func open(path: String, fileSize: Int64, mtime: Date?) async {
-        // 已打开则只切 tab
+    /// SFTPSidebar 文件 tap → 通知 → 调用。`asPreview` = 以预览（临时）tab 打开：
+    /// 顶替现有预览 tab 而不是新增；永久打开（双击）同一路径会把预览 tab 转正。
+    func open(path: String, fileSize: Int64, mtime: Date?, asPreview: Bool = false) async {
+        // 已打开则只切 tab；永久打开命中预览 tab 时转正。
         if let existing = buffers.first(where: { $0.remotePath == path }) {
             activeBufferID = existing.id
             assignActiveBufferToFocusedPanel()
+            if !asPreview { keepTab(existing.id) }
             return
         }
 
@@ -177,7 +183,11 @@ final class FilePreviewModel {
         let buf = FileBuffer(remotePath: path, kind: kind)
         buf.byteSize = fileSize
         buf.mtimeWhenLoaded = mtime
-        buffers.append(buf)
+        if asPreview {
+            insertReplacingPreviewTab(buf)
+        } else {
+            buffers.append(buf)
+        }
         activeBufferID = buf.id
         assignActiveBufferToFocusedPanel()
 
@@ -195,8 +205,40 @@ final class FilePreviewModel {
         await load(buf, failIfProviderMissing: true)
     }
 
+    /// 该 buffer 是否处于「预览（临时）」状态。编辑中（脏）即视作已转正 ——
+    /// 与 VS Code 一致：改动过的内容不能被下一次单击顶掉。
+    func isPreviewTab(_ id: UUID) -> Bool {
+        guard id == previewTabBufferID,
+              let buf = buffers.first(where: { $0.id == id }) else { return false }
+        return !buf.isDirty
+    }
+
+    /// 把预览 tab 转正（双击 tab / 永久打开同一文件 / 保存 / 拖拽分屏时调用）。
+    func keepTab(_ id: UUID) {
+        if previewTabBufferID == id { previewTabBufferID = nil }
+    }
+
+    /// 新预览 buffer 顶替旧预览 tab 的位置（tab 不位移）；脏的旧预览不能丢 ——
+    /// 原地转正保留，新预览追加在末尾。
+    private func insertReplacingPreviewTab(_ buf: FileBuffer) {
+        defer { previewTabBufferID = buf.id }
+        guard let oldID = previewTabBufferID,
+              let oldIdx = buffers.firstIndex(where: { $0.id == oldID }),
+              !buffers[oldIdx].isDirty else {
+            buffers.append(buf)
+            return
+        }
+        buffers[oldIdx] = buf
+        // 分屏面板可能引用被顶替的 buffer，一并改指新 buffer，避免悬空 id。
+        for panelID in Array(panels.keys) where panels[panelID]?.bufferID == oldID {
+            panels[panelID]?.bufferID = buf.id
+        }
+        if activeBufferID == oldID { activeBufferID = buf.id }
+    }
+
     func restoreOpenFiles(_ snapshots: [OpenFileSnapshot]?, activeIndex: Int?) {
         buffers.removeAll()
+        previewTabBufferID = nil   // 恢复的标签一律永久
         let snapshots = snapshots ?? []
         for snapshot in snapshots {
             let buf = FileBuffer(
@@ -321,6 +363,7 @@ final class FilePreviewModel {
     func close(_ id: UUID, savingIfDirty: Bool) -> Bool {
         guard let idx = buffers.firstIndex(where: { $0.id == id }) else { return false }
         buffers.remove(at: idx)
+        if previewTabBufferID == id { previewTabBufferID = nil }
         if activeBufferID == id {
             activeBufferID = buffers.first?.id
         }
@@ -367,6 +410,7 @@ final class FilePreviewModel {
             newLeafFirst: newLeafFirst)
         focusedPanelID = panel.id
         activeBufferID = bufferID
+        keepTab(bufferID)   // 拖去分屏 = 用户要留着它，预览转正
         return true
     }
 
@@ -424,6 +468,7 @@ final class FilePreviewModel {
             buf.mtimeWhenLoaded = newStat?.mtime ?? Date()
             buf.isDirty = false
             buf.state = .loaded
+            keepTab(id)   // 保存过的文件不该再被下一次单击顶掉
             return .saved
         } catch {
             buf.state = .failed("\(error)")
@@ -461,6 +506,7 @@ final class FilePreviewModel {
     func dispose() {
         buffers.removeAll()
         activeBufferID = nil
+        previewTabBufferID = nil
         panelRoot = nil
         panels.removeAll()
         focusedPanelID = nil

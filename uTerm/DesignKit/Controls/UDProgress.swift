@@ -151,14 +151,10 @@ struct UDTransferRow: View {
         .padding(UDTransferRowLayout.cardPadding)
         .frame(width: 320)
         .background(
+            // 卡片淡灰底、无描边、无投影（v2 拍平；深=白 2.5% / 浅=黑 5%）。
             RoundedRectangle(cornerRadius: UD.Radius.lg)
-                .fill(UD.dyn(.white(0.025), .hex(0xFFFFFF)))
+                .fill(UD.dyn(.white(0.025), .black(0.05)))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: UD.Radius.lg)
-                .strokeBorder(UD.border, lineWidth: 1)
-        )
-        .udShadow(.sm)
     }
 }
 

@@ -38,7 +38,7 @@ struct KeysScreen: View {
                 }
             }
         }
-        .background(M.bg)
+        .background(M.canvas)
         .navigationTitle("SSH 密钥")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -115,7 +115,7 @@ struct KeyDetailSheet: View {
                 .padding(.vertical, 12)
                 .mReadableColumn()
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle(key.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -148,8 +148,8 @@ struct FlowChipsView: View {
                     Text(name).font(M.mono(12.5)).foregroundStyle(M.text2)
                 }
                 .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(M.panel)
-                .overlay(Capsule().stroke(M.border, lineWidth: 1)).clipShape(Capsule())
+                .background(M.fillFaint)
+                .clipShape(Capsule())
             }
         }
     }

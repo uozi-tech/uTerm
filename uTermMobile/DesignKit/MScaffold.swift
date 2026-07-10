@@ -2,6 +2,9 @@ import SwiftUI
 
 /// 大标题首页骨架（设计稿 `BigHeader` + 滚动体）。底部为标签栏预留安全间距。
 /// 滚动体最小高度撑满可视区，使空状态等 `maxHeight: .infinity` 内容可垂直居中。
+/// 标题头悬浮于滚动体之上，内容从其下滚过：iOS 26 用 `safeAreaBar`，由系统液态玻璃
+/// scroll edge effect 渐进虚化标题头 + 状态栏区域（自定义背景会与其冲突，不要加）；
+/// iOS 26 以下无液态玻璃，回退 `safeAreaInset` + 毛玻璃材质、背景上延盖住状态栏。
 struct MScreen<Header: View, Content: View>: View {
     var title: String
     var sub: String? = nil
@@ -9,36 +12,54 @@ struct MScreen<Header: View, Content: View>: View {
     @ViewBuilder var content: Content
     /// 系统 TabView 已为内容预留底部安全区，这里只补少量呼吸留白。
     var bottomInset: CGFloat = 12
+    @State private var headerHeight: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .lastTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(M.sans(30, weight: .bold)).tracking(-0.6)
-                        .foregroundStyle(M.text)
-                    if let sub {
-                        Text(sub).font(M.mono(13)).foregroundStyle(M.text3)
-                    }
-                }
-                Spacer()
-                HStack(spacing: 8) { actions }
+        GeometryReader { proxy in
+            let scroll = ScrollView {
+                content
+                    .padding(.bottom, bottomInset)
+                    .frame(maxWidth: .infinity,
+                           minHeight: max(0, proxy.size.height - headerHeight),
+                           alignment: .top)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, M.topBreath)
-            .padding(.bottom, 12)
+            .scrollIndicators(.hidden)
 
-            GeometryReader { proxy in
-                ScrollView {
-                    content
-                        .padding(.bottom, bottomInset)
-                        .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .top)
-                }
-                .scrollIndicators(.hidden)
+            if #available(iOS 26.0, *) {
+                scroll
+                    .scrollEdgeEffectStyle(.soft, for: .top)
+                    .safeAreaBar(edge: .top, spacing: 0) { headerBar }
+            } else {
+                scroll
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        headerBar.background {
+                            Rectangle().fill(.ultraThinMaterial)
+                                .ignoresSafeArea(edges: .top)
+                        }
+                    }
             }
         }
         .frame(maxWidth: M.readableWidth)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(M.bg)
+        .background(M.canvas)
+    }
+
+    private var headerBar: some View {
+        HStack(alignment: .lastTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(M.sans(30, weight: .bold)).tracking(-0.6)
+                    .foregroundStyle(M.text)
+                if let sub {
+                    Text(sub).font(M.mono(13)).foregroundStyle(M.text3)
+                }
+            }
+            Spacer()
+            HStack(spacing: 8) { actions }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, M.topBreath)
+        .padding(.bottom, 12)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
     }
 }
 

@@ -190,6 +190,96 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertNil(m.activeBufferID)
     }
 
+    // MARK: 预览（临时）tab 语义 —— VS Code 风：单击预览打开、双击 / 编辑 / 保存转正
+
+    func test_openAsPreview_replacesPreviousPreviewTab() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
+
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/b.swift"], "新预览应顶替旧预览")
+        let b = try XCTUnwrap(m.buffers.first)
+        XCTAssertTrue(m.isPreviewTab(b.id))
+        XCTAssertEqual(m.activeBufferID, b.id)
+    }
+
+    func test_openAsPreview_keepsTabPositionAndSkipsPermanentTabs() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+        try await mock.write("/c.swift", data: Data("c".utf8))
+
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil)              // 永久
+        await m.open(path: "/c.swift", fileSize: 1, mtime: nil, asPreview: true)
+
+        // 预览 tab 在原位（index 0）被 c 顶替，永久 tab b 不受影响。
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/c.swift", "/b.swift"])
+        XCTAssertTrue(m.isPreviewTab(m.buffers[0].id))
+        XCTAssertFalse(m.isPreviewTab(m.buffers[1].id))
+    }
+
+    func test_permanentOpen_promotesExistingPreviewTab() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        let a = try XCTUnwrap(m.buffers.first)
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)   // 双击同一文件
+
+        XCTAssertFalse(m.isPreviewTab(a.id), "永久打开同一路径应把预览 tab 转正")
+        // 转正后，下一个预览不再顶替它。
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/a.swift", "/b.swift"])
+    }
+
+    func test_dirtyPreviewTab_isPromotedNotReplaced() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        let a = try XCTUnwrap(m.buffers.first)
+        a.text = "edited"; a.isDirty = true
+        XCTAssertFalse(m.isPreviewTab(a.id), "编辑中的预览 tab 应视作已转正")
+
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/a.swift", "/b.swift"],
+                       "脏预览不能被顶掉，新预览追加")
+        XCTAssertTrue(m.isPreviewTab(m.buffers[1].id))
+    }
+
+    func test_save_promotesPreviewTab() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        let a = try XCTUnwrap(m.buffers.first)
+        a.text = "edited"; a.isDirty = true
+
+        let result = await m.save(a.id)
+        if case .saved = result {} else { return XCTFail("expected .saved, got \(result)") }
+        // 保存清脏后若未显式转正，isPreviewTab 会回退为 true（又能被顶掉）——须为 false。
+        XCTAssertFalse(m.isPreviewTab(a.id))
+    }
+
+    func test_closePreviewTab_clearsPreviewState() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
+        let a = try XCTUnwrap(m.buffers.first)
+        m.close(a.id, savingIfDirty: false)
+
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
+        XCTAssertEqual(m.buffers.map(\.remotePath), ["/b.swift"])
+        XCTAssertTrue(m.isPreviewTab(m.buffers[0].id))
+    }
+
     func test_restoreOpenFilesRecreatesTabsAndLoadsAfterProviderIsReady() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/a.md", data: Data("# A".utf8))

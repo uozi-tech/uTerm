@@ -236,7 +236,7 @@ struct TerminalScreen: View {
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20).padding(.top, 4)
-                    LazyVStack(spacing: 10) {
+                    MCardList {
                         ForEach(connectable) { host in
                             // 走连接中页（与主机详情 / 命令面板一致）；showPicker 先关，连接完成后露出会话。
                             hostRow(host) { showPicker = false; store.openTerminal(host) }
@@ -251,7 +251,7 @@ struct TerminalScreen: View {
     private var newTabSheet: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 10) {
+                MCardList {
                     if connectable.isEmpty {
                         Text("没有可连接的主机").font(M.sans(14)).foregroundStyle(M.text3)
                             .frame(maxWidth: .infinity).padding(.top, 40)
@@ -269,7 +269,7 @@ struct TerminalScreen: View {
                 }
                 .padding(16)
             }
-            .background(M.bg)
+            .background(M.canvas)
             .navigationTitle("新建终端")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { picking = false } } }
@@ -292,9 +292,9 @@ struct TerminalScreen: View {
                 MIcon(name: "run", size: 15, color: accent)
             }
             .padding(14)
-            .background(M.panel)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(M.border, lineWidth: 1))
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
+            .udShadow(.card)
         }
         .buttonStyle(MPressStyle())
     }
@@ -331,7 +331,8 @@ struct SessionTabBar: View {
                     Button(action: onNew) {
                         MIcon(name: "plus", size: 14, color: M.text2, weight: .semibold)
                             .frame(width: 30, height: 30)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(M.border, lineWidth: 1))
+                            .background(M.fillFaint)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(MPressStyle())
                 }
@@ -341,8 +342,7 @@ struct SessionTabBar: View {
                 MIcon(name: agentOn ? "term" : "spark", size: 17,
                       color: agentOn ? .white : M.aiAccent, weight: .semibold)
                     .frame(width: 34, height: 34)
-                    .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.12))
-                    .overlay(Circle().stroke(agentOn ? .clear : M.aiAccent.opacity(0.3), lineWidth: 1))
+                    .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
                     .clipShape(Circle())
             }
             .buttonStyle(MPressStyle())
@@ -350,8 +350,9 @@ struct SessionTabBar: View {
             .accessibilityAddTraits(agentOn ? [.isButton, .isSelected] : .isButton)
         }
         .padding(.horizontal, 12).frame(height: 48)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.border).frame(height: 1) }
+        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
+        .background(M.overlay)
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func chip(_ tab: TermTab) -> some View {
@@ -360,16 +361,15 @@ struct SessionTabBar: View {
             MDot(color: dotColor(tab.controller.state), pulse: tab.controller.state == .connecting, size: 6)
             Text(tab.controller.title.isEmpty ? tab.host.name : tab.controller.title)
                 .font(M.mono(12.5, weight: on ? .semibold : .regular))
-                .foregroundStyle(on ? M.text : M.text3).lineLimit(1)
+                .foregroundStyle(on ? accent : M.text3).lineLimit(1)
             Button { onClose(tab.id) } label: {
-                MIcon(name: "x", size: 11, color: on ? M.text2 : M.text4, weight: .semibold)
+                MIcon(name: "x", size: 11, color: on ? accent : M.text4, weight: .semibold)
                     .padding(3).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
         .padding(.leading, 11).padding(.trailing, 6).frame(height: 30)
-        .background(on ? accent.opacity(0.15) : Color.clear)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? accent.opacity(0.5) : M.border, lineWidth: 1))
+        .background(on ? accent.opacity(0.14) : M.fillFaint)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .onTapGesture { onSelect(tab.id) }
@@ -413,7 +413,7 @@ struct TerminalSessionBody: View {
                 .allowsHitTesting(tab.mode == .terminal)
                 .offset(x: tab.mode == .terminal ? 0 : -100_000)
         }
-        .background(tab.mode == .terminal ? terminalBg : M.bg)
+        .background(tab.mode == .terminal ? terminalBg : M.canvas)
     }
 
     private var terminalLayer: some View {
@@ -530,12 +530,13 @@ struct TerminalKeyBar: View {
         VStack(spacing: 0) {
             if expanded {
                 expandedPanel
-                Rectangle().fill(M.border).frame(height: 1)
+                Rectangle().fill(M.divider).frame(height: 1)
             }
             compactRow
         }
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) { Rectangle().fill(M.border).frame(height: 1) }
+        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
+        .background(M.overlay)
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
         .animation(.easeOut(duration: 0.18), value: expanded)
     }
 
@@ -605,7 +606,7 @@ struct TerminalKeyBar: View {
         controller.sendText(key.send)
     }
 
-    /// 单个键帽样式；`active` 时用强调色描边+底色（修饰上膛态）。`expand` 时撑满网格列宽。
+    /// 单个键帽样式；`active` 时用强调色淡底 + 强调色字（修饰上膛态）。`expand` 时撑满网格列宽。
     private func keyCap(_ text: String, active: Bool, expand: Bool = false) -> some View {
         Text(text)
             .font(M.mono(13, weight: .medium))
@@ -613,9 +614,7 @@ struct TerminalKeyBar: View {
             .lineLimit(1)
             .padding(.horizontal, expand ? 4 : 12)
             .frame(maxWidth: expand ? .infinity : nil, minHeight: 34, maxHeight: 34)
-            .background(active ? accent.opacity(0.15) : M.panelHi)
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(active ? accent.opacity(0.5) : M.border, lineWidth: 1))
+            .background(active ? accent.opacity(0.14) : M.panelHi)
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

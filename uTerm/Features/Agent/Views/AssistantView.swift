@@ -206,10 +206,10 @@ struct AssistantView: View {
                 Rectangle().fill(UD.border).frame(height: 1)
             }
         }
-        .background(UD.panelHi)
+        // 浮层：实体浮层底 + 1px 细边 + 阴影（v2 保留描边的「浮层边缘」情形）。
+        .background(UD.overlay)
         .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(
-            RoundedRectangle(cornerRadius: 9).strokeBorder(UD.borderHi, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
         .shadow(color: UD.dyn(.black(0.55), .black(0.18)), radius: 18, x: 0, y: 14)
     }
 
@@ -244,10 +244,7 @@ struct AssistantView: View {
             .padding(.horizontal, 10)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? UD.accent.opacity(0.10) : .clear))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isActive ? UD.accent.opacity(0.20) : .clear, lineWidth: 1))
+                    .fill(isActive ? UD.accentSoft : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -513,7 +510,6 @@ private struct UserMessageRow: View {
     let onCommit: (String) -> Void
 
     @State private var draft: String = ""
-    @State private var hovering = false
 
     var body: some View {
         Group {
@@ -528,8 +524,8 @@ private struct UserMessageRow: View {
         }
     }
 
-    /// 常态气泡：点击进入编辑（仅空闲可编辑）。悬停仅描边变色提示，
-    /// 不插入/移除任何子视图 → 无布局抖动、无闪烁（去掉了旧的悬停铅笔钮）。
+    /// 常态气泡：点击进入编辑（仅空闲可编辑）。不插入/移除任何子视图
+    /// → 无布局抖动、无闪烁（去掉了旧的悬停铅笔钮）。
     private var bubble: some View {
         Text(message.text)
             .font(.system(size: 12.5))
@@ -542,10 +538,8 @@ private struct UserMessageRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(hovering && canEdit ? UD.accent.opacity(0.35) : UD.border,
-                                  lineWidth: 1))
+                    .strokeBorder(UD.border, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 9))
-            .onHover { hovering = $0 }
             .onTapGesture { if canEdit { onBeginEdit() } }
             .help(canEdit ? "点击编辑并重发" : "")
     }
@@ -577,6 +571,6 @@ private struct UserMessageRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(UD.inputBg)
         .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.accent.opacity(0.4), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
     }
 }

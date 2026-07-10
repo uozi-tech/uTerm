@@ -13,7 +13,6 @@ struct WorkspaceWindowView: View {
     @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
     @State private var workspace: WorkspaceModel
     @State private var didRestore = false
-    @State private var saveTask: Task<Void, Never>?
     /// 大文件确认 / 阻断 sheet 的状态（Spec 2A §1.5 / §7）。
     @State private var largeFileConfirm: LargeFileConfirm?
     @State private var blockedFile: BlockedFile?
@@ -38,6 +37,8 @@ struct WorkspaceWindowView: View {
         let path: String
         let size: Int64
         let mtime: Date?
+        /// 确认后按原打开方式（单击预览 / 双击永久）继续。
+        let asPreview: Bool
     }
     private struct BlockedFile: Identifiable {
         let id = UUID()
@@ -191,19 +192,9 @@ struct WorkspaceWindowView: View {
         .onDisappear {
             workspace.dispose()
         }
-        .onChange(of: workspace.snapshot()) { _, newSnapshot in
-            saveTask?.cancel()
-            let store = WorkspaceStore(windowID: windowID)
-            saveTask = Task {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled else { return }
-                try? store.save(newSnapshot)
-            }
-        }
-        .onChange(of: workspace.fileBrowserModel.state) { _, state in
-            guard state == .browsing else { return }
-            Task { await workspace.filePreviewModel.loadRestoredBuffersIfNeeded() }
-        }
+        // 快照防抖保存 + SFTP 进入 browsing 后恢复预览缓冲。抽成独立 ViewModifier ——
+        // 两个内联 .onChange 会把本就庞大的 body 推过类型检查上限。
+        .modifier(WorkspaceSnapshotAutosave(workspace: workspace, windowID: windowID))
         // 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）会广播到所有
         // 打开的工作区窗口；内部用 controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
         // 抽成独立 ViewModifier —— 五个内联 .onReceive 会把本就庞大的 body 推过类型检查上限。
@@ -215,13 +206,18 @@ struct WorkspaceWindowView: View {
                   let path = info["path"] as? String,
                   let size = info["size"] as? Int64 else { return }
             let mtime = info["mtime"] as? Date
+            let asPreview = (info["preview"] as? Bool) ?? false
             switch WorkspaceRemoteFileOpenGate.decision(forSize: size) {
             case .block:
                 blockedFile = BlockedFile(path: path, size: size)
             case .confirmLargeFile:
-                largeFileConfirm = LargeFileConfirm(path: path, size: size, mtime: mtime)
+                largeFileConfirm = LargeFileConfirm(path: path, size: size, mtime: mtime,
+                                                    asPreview: asPreview)
             case .openDirectly:
-                Task { await workspace.filePreviewModel.open(path: path, fileSize: size, mtime: mtime) }
+                Task {
+                    await workspace.filePreviewModel.open(
+                        path: path, fileSize: size, mtime: mtime, asPreview: asPreview)
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .savePreviewBuffer)) { note in
@@ -244,7 +240,8 @@ struct WorkspaceWindowView: View {
                 Button("继续") {
                     Task {
                         await workspace.filePreviewModel.open(
-                            path: confirm.path, fileSize: confirm.size, mtime: confirm.mtime)
+                            path: confirm.path, fileSize: confirm.size, mtime: confirm.mtime,
+                            asPreview: confirm.asPreview)
                     }
                 }
                 Button("取消", role: .cancel) {}
@@ -410,6 +407,32 @@ struct WorkspaceWindowView: View {
 /// 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）的接收端：广播到所有
 /// 打开的工作区窗口，用 `controlActiveState == .key` 守卫，只让前台 key 窗口响应（Fix #6）。
 /// 抽成独立 ViewModifier —— 一串内联 `.onReceive` 会把本就庞大的 `workspaceBody` 推过类型检查上限。
+/// 工作区快照防抖保存（500ms）+ SFTP 进入 `browsing` 后恢复上次会话的预览缓冲。
+/// 抽成独立 ViewModifier，避免内联 .onChange 撑爆 `WorkspaceWindowView.body` 的类型检查预算。
+private struct WorkspaceSnapshotAutosave: ViewModifier {
+    let workspace: WorkspaceModel
+    let windowID: WorkspaceWindowID
+    @State private var saveTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: workspace.snapshot()) { _, newSnapshot in
+                saveTask?.cancel()
+                let store = WorkspaceStore(windowID: windowID)
+                saveTask = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+                    try? store.save(newSnapshot)
+                }
+            }
+            .onChange(of: workspace.fileBrowserModel.state) { _, state in
+                if case .browsing = state {
+                    Task { await workspace.filePreviewModel.loadRestoredBuffersIfNeeded() }
+                }
+            }
+    }
+}
+
 private struct WorkspaceGlobalCommandHandlers: ViewModifier {
     let workspace: WorkspaceModel
     let server: ServerProfile

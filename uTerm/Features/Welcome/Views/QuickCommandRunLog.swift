@@ -17,7 +17,7 @@ struct QuickCommandRunLog: View {
                     .foregroundStyle(UD.text3)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 1)
-                    .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
+                    .background(Capsule().fill(UD.fillFaint))
                 Spacer()
                 Text("\(runs.count) 条")
                     .font(.system(size: 11, design: .monospaced))
@@ -108,8 +108,7 @@ struct QuickCommandLogEntry: View {
                 .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
             }
         }
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(UD.border, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.fillFaint))
     }
 
     private var overview: String {
@@ -128,8 +127,7 @@ struct QuickCommandLogEntry: View {
         .foregroundStyle(UD.aiAccent)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(UD.aiAccent.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(UD.aiAccent.opacity(0.23), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(UD.aiAccent.opacity(0.12)))
     }
 
     private func serverResultRow(_ result: QuickCommandServerResult) -> some View {
@@ -184,8 +182,7 @@ struct QuickCommandLogEntry: View {
         .padding(.top, 4)
         .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(UD.aiAccent.opacity(0.20), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.10)))
     }
 }
 

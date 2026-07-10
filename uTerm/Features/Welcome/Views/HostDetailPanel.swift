@@ -265,7 +265,7 @@ struct HostDetailPanel: View {
         .keyboardShortcut(.return, modifiers: [])
     }
 
-    /// 次操作：描边软底 + ⌘↵ 键帽，复用通用 `KbdChip`；⌘+回车进 SFTP 浏览。
+    /// 次操作：软底 + ⌘↵ 键帽，复用通用 `KbdChip`；⌘+回车进 SFTP 浏览。
     private var browseSFTPButton: some View {
         Button(action: onBrowseSFTP) {
             HStack(spacing: 8) {
@@ -279,10 +279,6 @@ struct HostDetailPanel: View {
             .background(
                 RoundedRectangle(cornerRadius: 9)
                     .fill(UD.fillSoft)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(UD.borderHi, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -337,7 +333,7 @@ private struct EndpointCopyChip: View {
 }
 
 /// 「仅 SFTP」强调徽标 —— 标记仅允许文件传输（无终端会话）的主机。
-/// 对齐设计稿 `variant-a.jsx · SftpOnlyBadge`：accent 描边 + 浅 accent 底 + accent 字。
+/// 对齐设计稿 `variant-a.jsx · SftpOnlyBadge`：浅 accent 底 + accent 字。
 struct SftpOnlyBadge: View {
     var body: some View {
         HStack(spacing: 4) {
@@ -352,11 +348,7 @@ struct SftpOnlyBadge: View {
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(UD.accent.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(UD.accent.opacity(0.23), lineWidth: 1)
+                .fill(UD.accent.opacity(0.12))
         )
         .fixedSize()
     }

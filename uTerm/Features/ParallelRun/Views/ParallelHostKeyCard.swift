@@ -49,8 +49,7 @@ struct HostKeyRetryCard: View {
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(tint.opacity(0.28), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.opacity(0.10)))
     }
 
     @ViewBuilder
