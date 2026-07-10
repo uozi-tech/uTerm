@@ -270,7 +270,7 @@ struct GroupDetailView: View {
             }.buttonStyle(MPressStyle())
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
-        .overlay(alignment: .bottom) { if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 13) } }
+        .overlay(alignment: .bottom) { if !last { MRowDivider(inset: 50) } }
     }
 
     private func initials(_ s: String) -> String {

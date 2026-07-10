@@ -127,7 +127,7 @@ struct SettingsScreen: View {
                 .pickerStyle(.segmented)
             }
             .padding(14)
-            .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+            .overlay(alignment: .bottom) { MRowDivider() }
 
             VStack(alignment: .leading, spacing: 11) {
                 Text("强调色").font(M.sans(14)).foregroundStyle(M.text2)

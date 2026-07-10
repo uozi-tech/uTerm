@@ -50,7 +50,7 @@ struct HostFormSheet: View {
                         .padding(12)
 
                         if auth == .password {
-                            Divider().overlay(M.divider)
+                            MRowDivider()
                             HStack {
                                 Text("密码").font(M.sans(15)).foregroundStyle(M.text)
                                 Spacer()
@@ -60,7 +60,7 @@ struct HostFormSheet: View {
                             }
                             .padding(.horizontal, 14).padding(.vertical, 11)
                         } else {
-                            Divider().overlay(M.divider)
+                            MRowDivider()
                             if keys.isEmpty {
                                 MInsetRow(label: "未找到密钥", sub: "请先在「设置 › 密钥」中添加", last: true)
                             } else {
@@ -124,7 +124,7 @@ struct HostFormSheet: View {
                     .autocorrectionDisabled().multilineTextAlignment(.trailing)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            if !last { Divider().overlay(M.divider).padding(.leading, 14) }
+            if !last { MRowDivider() }
         }
     }
 

@@ -236,7 +236,7 @@ struct CommandFormSheet: View {
             .padding(.horizontal, 14).padding(.vertical, 9).frame(minHeight: 44)
             .background(UD.fillSoft)   // 容器已是卡片面，组头再深一档区分
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 14) }
+            .overlay(alignment: .bottom) { MRowDivider() }
         }.buttonStyle(MRowStyle())
     }
 
@@ -258,7 +258,7 @@ struct CommandFormSheet: View {
             .background(on ? M.accent.opacity(0.12) : .clear)
             .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
-                if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
+                if !last { MRowDivider(inset: 46) }
             }
         }.buttonStyle(MRowStyle())
     }

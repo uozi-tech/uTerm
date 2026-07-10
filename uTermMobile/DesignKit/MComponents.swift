@@ -277,6 +277,15 @@ struct MInsetGroup<Content: View>: View {
     }
 }
 
+/// 行分隔线：对齐系统 List 默认样式（hairline 粗细 + 系统 separator 色）。
+/// `inset` 为左缩进，按系统惯例与行内标题文本起点对齐（图标行传图标后的文本起点）；0 = 通栏。
+struct MRowDivider: View {
+    var inset: CGFloat = 14
+    var body: some View {
+        Divider().padding(.leading, inset)
+    }
+}
+
 struct MInsetRow: View {
     var icon: String? = nil
     var iconColor: Color? = nil
@@ -321,7 +330,7 @@ struct MInsetRow: View {
         .frame(minHeight: 50)
         .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
-            if !last { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 14) }
+            if !last { MRowDivider(inset: icon != nil ? 56 : 14) }
         }
 
         if let onTap {

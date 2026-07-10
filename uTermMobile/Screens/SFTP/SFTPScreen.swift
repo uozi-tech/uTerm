@@ -248,7 +248,7 @@ struct SFTPScreen: View {
             Spacer()
         }
         .padding(.horizontal, 16).frame(height: 56)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
+        .overlay(alignment: .bottom) { MRowDivider(inset: 55) }
         .contentShape(Rectangle())
         .onTapGesture { controller.goUp() }
     }
@@ -325,7 +325,7 @@ struct SFTPRow: View {
             }
         }
         .padding(.horizontal, 16).frame(height: 56)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1).padding(.leading, 16) }
+        .overlay(alignment: .bottom) { MRowDivider(inset: 55) }
     }
 
     private var subtitle: String {

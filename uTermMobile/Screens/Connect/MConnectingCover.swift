@@ -235,7 +235,7 @@ struct ConnectingCoverView: View {
         VStack(spacing: 0) {
             ForEach(Array(stages.enumerated()), id: \.offset) { i, st in
                 if i > 0 {
-                    Rectangle().fill(M.divider).frame(height: 1)
+                    MRowDivider(inset: 0)
                 }
                 ConnStageRow(label: st.label, detail: st.detail, state: stageState(i))
             }

@@ -74,7 +74,7 @@ struct ProviderFormSheet: View {
                     .multilineTextAlignment(.trailing)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            if !last { Divider().overlay(M.divider).padding(.leading, 14) }
+            if !last { MRowDivider() }
         }
     }
 
