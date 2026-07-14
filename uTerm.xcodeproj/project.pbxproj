@@ -14,6 +14,10 @@
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
+		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
+		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
+		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
+		555353484B49540000000013 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000003 /* USSHKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
@@ -61,33 +65,10 @@
 				App/uTermApp.swift,
 				Core/Security/Views/AppLockGate.swift,
 				Core/Theme/WorkspaceTheme.swift,
-				DesignKit/Chrome/UDSearchField.swift,
-				DesignKit/Chrome/UDSidebarRow.swift,
-				DesignKit/Chrome/UDStatusBadge.swift,
-				DesignKit/Chrome/UDTab.swift,
-				DesignKit/Chrome/UDToolbar.swift,
-				DesignKit/Chrome/UDTrafficLights.swift,
-				DesignKit/Comms/UDChatMessage.swift,
-				DesignKit/Comms/UDComposer.swift,
-				DesignKit/Comms/UDStatusBar.swift,
-				DesignKit/Comms/UDToolCall.swift,
-				DesignKit/Controls/UDBadges.swift,
-				DesignKit/Controls/UDButton.swift,
-				DesignKit/Controls/UDInputFocusDismissal.swift,
-				DesignKit/Controls/UDProgress.swift,
-				DesignKit/Controls/UDSegmented.swift,
-				DesignKit/Controls/UDSlider.swift,
-				DesignKit/Controls/UDTextField.swift,
-				DesignKit/Controls/UDToggle.swift,
-				DesignKit/Gallery/DesignKitGallery.swift,
-				DesignKit/Layout/WrapLayout.swift,
-				DesignKit/Overlays/UDCommandPalette.swift,
-				DesignKit/Overlays/UDDropdown.swift,
-				DesignKit/Overlays/UDMenu.swift,
-				DesignKit/Overlays/UDMenubarPanel.swift,
-				DesignKit/Overlays/UDMetricsPopover.swift,
-				DesignKit/Overlays/UDModalBackdrop.swift,
-				DesignKit/Overlays/UDSessionsDropdown.swift,
+				DesignKitExtras/DesignKitGallery.swift,
+				DesignKitExtras/UDCommandPalette.swift,
+				DesignKitExtras/UDMenubarPanel.swift,
+				DesignKitExtras/UDSplash.swift,
 				Features/Agent/Views/AgentSidebar.swift,
 				Features/Agent/Views/AssistantView.swift,
 				Features/CommandPalette/CommandPaletteHost.swift,
@@ -284,6 +265,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				555353484B49540000000012 /* USSHKit in Frameworks */,
 				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
 				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
@@ -296,6 +278,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5544455349474E0000000011 /* UDesignKit in Frameworks */,
+				555353484B49540000000011 /* USSHKit in Frameworks */,
 				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
@@ -322,6 +306,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				555353484B49540000000013 /* USSHKit in Frameworks */,
 				TC000000000000000000004 /* SwiftTreeSitter in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -379,6 +364,7 @@
 			);
 			name = uTermMobile;
 			packageProductDependencies = (
+				555353484B49540000000002 /* USSHKit */,
 				10C0DE0000000000000000D1 /* SwiftTerm */,
 				10C0DE0000000000000000D2 /* Citadel */,
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
@@ -407,6 +393,8 @@
 			);
 			name = uTerm;
 			packageProductDependencies = (
+				5544455349474E0000000001 /* UDesignKit */,
+				555353484B49540000000001 /* USSHKit */,
 				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
 				SPRK00000000000000000001 /* Sparkle */,
 				C17ADE1000000000000001 /* Citadel */,
@@ -449,6 +437,7 @@
 			);
 			name = uTermTests;
 			packageProductDependencies = (
+				555353484B49540000000003 /* USSHKit */,
 				TC000000000000000000003 /* SwiftTreeSitter */,
 			);
 			productName = uTermTests;
@@ -488,6 +477,8 @@
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */,
+				555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */,
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
 				A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -816,6 +807,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_SUEnableInstallerLauncherService = YES;
 				INFOPLIST_KEY_SUFeedURL = "https://downloads.example.com/uTerm/appcast.xml";
@@ -855,6 +847,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_SUEnableInstallerLauncherService = YES;
 				INFOPLIST_KEY_SUFeedURL = "https://downloads.example.com/uTerm/appcast.xml";
@@ -967,6 +960,14 @@
 		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
+		};
+		5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../uTable/Packages/UDesignKit;
+		};
+		555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/USSHKit;
 		};
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -1112,6 +1113,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterINI;
+		};
+		5544455349474E0000000001 /* UDesignKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */;
+			productName = UDesignKit;
+		};
+		555353484B49540000000001 /* USSHKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
+			productName = USSHKit;
+		};
+		555353484B49540000000002 /* USSHKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
+			productName = USSHKit;
+		};
+		555353484B49540000000003 /* USSHKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
+			productName = USSHKit;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
