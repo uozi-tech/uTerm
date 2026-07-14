@@ -12,18 +12,38 @@ import Crypto
 ///
 /// 密钥库模型表达 ed25519 / rsa / ecdsa；DSA 等旧算法抛 `unsupportedAlgorithm`，
 /// 由调用方提示用户。
-nonisolated enum KeyImportInspector {
+public nonisolated enum KeyImportInspector {
 
-    struct Material {
-        let type: SSHKeyKind
-        let bits: Int
-        let publicKey: String
-        let fingerprint: String
+    public struct Material: Sendable {
+        public let type: SSHPrivateKeyKind
+        public let bits: Int
+        public let publicKey: String
+        public let fingerprint: String
     }
 
-    enum InspectError: Error { case unsupportedAlgorithm, malformed }
+    public enum InspectError: Error { case unsupportedAlgorithm, malformed }
 
-    static func inspect(rawText: String, parsed: ParsedPrivateKey, comment: String) throws -> Material {
+    public static func inspect(
+        rawText: String,
+        parsed key: SSHPrivateKey,
+        comment: String
+    ) throws -> Material {
+        try inspectParsed(rawText: rawText, parsed: key.parsed, comment: comment)
+    }
+
+    static func inspect(
+        rawText: String,
+        parsed: ParsedPrivateKey,
+        comment: String
+    ) throws -> Material {
+        try inspectParsed(rawText: rawText, parsed: parsed, comment: comment)
+    }
+
+    private static func inspectParsed(
+        rawText: String,
+        parsed: ParsedPrivateKey,
+        comment: String
+    ) throws -> Material {
         if let blob = openSSHEmbeddedPublicBlob(rawText) {
             return try material(fromBlob: blob, comment: comment)
         }
@@ -61,7 +81,7 @@ nonisolated enum KeyImportInspector {
 
     // MARK: - 私有
 
-    private static func material(type: SSHKeyKind, bits: Int, blob: [UInt8], comment: String) -> Material {
+    private static func material(type: SSHPrivateKeyKind, bits: Int, blob: [UInt8], comment: String) -> Material {
         Material(
             type: type, bits: bits,
             publicKey: SSHPublicMaterial.publicKeyLine(prefix: publicKeyPrefix(for: type),
@@ -69,7 +89,7 @@ nonisolated enum KeyImportInspector {
             fingerprint: SSHPublicMaterial.fingerprint(of: blob))
     }
 
-    private static func publicKeyPrefix(for type: SSHKeyKind) -> String {
+    private static func publicKeyPrefix(for type: SSHPrivateKeyKind) -> String {
         switch type {
         case .ed25519:   return "ssh-ed25519"
         case .rsa:       return "ssh-rsa"
@@ -105,7 +125,7 @@ nonisolated enum KeyImportInspector {
     }
 
     private static func ecdsaMaterial(blob: [UInt8], reader: inout SSHWireReader,
-                                      expectedCurve: String, type: SSHKeyKind,
+                                      expectedCurve: String, type: SSHPrivateKeyKind,
                                       bits: Int, comment: String) throws -> Material {
         let curve = String(decoding: try reader.readString(), as: UTF8.self)
         guard curve == expectedCurve else { throw InspectError.malformed }

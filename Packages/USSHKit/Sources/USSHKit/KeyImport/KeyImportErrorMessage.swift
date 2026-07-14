@@ -1,7 +1,7 @@
 import Foundation
 
-nonisolated enum KeyImportErrorMessage {
-    static func message(for error: Error, fallback: String) -> String {
+public nonisolated enum KeyImportErrorMessage {
+    public static func message(for error: Error, fallback: String) -> String {
         let localized = error as? LocalizedError
         let nsError = error as NSError
 

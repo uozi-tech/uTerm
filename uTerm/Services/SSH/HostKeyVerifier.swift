@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import USSHKit
 
 /// 主机密钥的分类结果。`keyBlob` 相等即视为同一密钥。
 enum HostKeyClassification: Sendable {
@@ -100,5 +101,33 @@ actor HostKeyVerifier {
     /// 测试辅助：某 host:port 的记录条数。
     func knownHostCount(host: String, port: Int) -> Int {
         existing(host: host, port: port).count
+    }
+}
+
+extension HostKeyVerifier: USSHKit.HostKeyStore {
+    func verify(_ hostKey: USSHKit.SSHHostKey) -> USSHKit.SSHHostKeyVerification {
+        switch classify(
+            host: hostKey.host,
+            port: hostKey.port,
+            keyBlob: hostKey.keyBlob,
+            fingerprint: hostKey.fingerprint
+        ) {
+        case .trusted:
+            return .trusted
+        case .unknown:
+            return .unknown
+        case .mismatch(_, let oldFingerprint):
+            return .mismatch(previousFingerprint: oldFingerprint)
+        }
+    }
+
+    func remember(_ hostKey: USSHKit.SSHHostKey) {
+        trust(
+            host: hostKey.host,
+            port: hostKey.port,
+            keyBlob: hostKey.keyBlob,
+            keyType: hostKey.keyType,
+            fingerprint: hostKey.fingerprint
+        )
     }
 }

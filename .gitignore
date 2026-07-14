@@ -23,3 +23,6 @@ vendor/Citadel/.swiftpm/
 
 # Release build artifacts
 build/
+
+# SPM 构建产物（任意包，含 Packages/*/.build）
+.build/

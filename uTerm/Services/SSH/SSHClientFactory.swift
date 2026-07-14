@@ -1,82 +1,34 @@
 import Foundation
 @preconcurrency import Citadel
 import NIOCore
-import NIOSSH
+@_spi(uTermIntegration) import USSHKit
 
-/// 读 UserDefaults `sshConnectTimeout`（秒）并转 Citadel `TimeAmount`。
-/// 默认 30 秒（与 Citadel `SSHClient.connect` 的 default 一致）。
-private func currentConnectTimeout() -> TimeAmount {
-    let seconds = (UserDefaults.standard.object(forKey: "sshConnectTimeout") as? Int) ?? 30
-    return .seconds(Int64(seconds))
-}
-
-/// 已建立的 SSH 连接束：目标客户端，以及（若经跳板机）跳板机客户端。
-///
-/// 终端（`SSHConnection`）与 SFTP 共享同一套连接建立逻辑 —— 它们都需要连到
-/// 一个 `ServerProfile`（直连或单跳跳板机），并完成主机密钥校验。`SSHClientFactory`
-/// 把这套逻辑从 `SSHConnection` 中抽出，`ConnectedClient` 则把建立结果打包成一个
-/// `Sendable` 值，便于被持有它的并发任务（如 `SSHConnection` 的 `sessionTask`）
-/// 捕获并独占负责 teardown。
-///
-/// `SSHClient` 本身非 `Sendable`；但 `ConnectedClient` 仅在构造后被传递、不再
-/// 跨隔离域并发触碰，因此声明为 `@unchecked Sendable` —— 与 `SSHConnection`
-/// 原先把目标/跳板机客户端作为区域隔离局部值 `sending` 进 `sessionTask` 的做法
-/// 语义一致。
+/// App-local compatibility view over USSHKit's SPI connection handle.
 nonisolated struct ConnectedClient: @unchecked Sendable {
-    /// 目标主机的 SSH 客户端（开 PTY / SFTP 子系统的对象）。
-    let target: SSHClient
-    /// 跳板机客户端；直连时为 `nil`。
-    let bastion: SSHClient?
+    let shared: USSHKit.ConnectedClient
 
-    /// 关闭连接 —— 先关目标、再关跳板机，与 `SSHConnection` 原 teardown 顺序一致。
-    /// 每步 `try?`，不抛错。
+    init(shared: USSHKit.ConnectedClient) {
+        self.shared = shared
+    }
+
+    var target: SSHClient { shared.target }
+    var bastion: SSHClient? { shared.bastion }
+
     func close() async {
-        try? await target.close()
-        try? await bastion?.close()
+        await shared.close()
     }
 
-    /// 在目标连接上跑一条一次性命令（exec channel），返回合并后的 stdout/stderr。
-    /// 与 SFTP 子系统多路复用、不碰终端 PTY。放在本 `@unchecked Sendable` 包装上
-    /// （而非 actor 内直接调 `target`）—— 避免把非 Sendable 的 `SSHClient`「sending」
-    /// 出 actor 隔离域（与 `close()` 同样的处理；本文件 `@preconcurrency import
-    /// Citadel` 也抑制了相应并发告警）。
     func exec(_ command: String) async throws -> String {
-        let buffer = try await target.executeCommand(
-            command, maxResponseSize: 64_000, mergeStreams: true)
-        return String(buffer: buffer)
+        try await shared.exec(command)
     }
 
-    /// 在目标连接上开一条 direct-tcpip 通道到 `host:port`（`-L` / `-D` 每连接转发用）。
-    /// 与 `exec` / `close` 一样作为本 `@unchecked Sendable` 包装的方法 —— 避免把非
-    /// `Sendable` 的 `SSHClient` 漏出隔离域。originator 用占位地址（SSH 不据此路由）。
-    /// Citadel 已在返回通道上加好 `DataToBufferCodec`。**调用方应套
-    /// `withForwardingTimeout`**：半死传输上本调用可能无限挂起。
     func openDirectTCPIP(host: String, port: Int) async throws -> Channel {
-        let originator = try SocketAddress(ipAddress: "fe80::1", port: 22)
-        return try await target.createDirectTCPIPChannel(
-            using: SSHChannelType.DirectTCPIP(
-                targetHost: host,
-                targetPort: port,
-                originatorAddress: originator),
-            initialize: { $0.eventLoop.makeSucceededVoidFuture() })
+        try await shared.openDirectTCPIP(host: host, port: port)
     }
 }
 
-/// 终端与 SFTP 共享的 SSH 连接工厂。
-///
-/// 把原先内嵌在 `SSHConnection` 中的 `connectDirect` / `connectViaJumpHost` /
-/// `makeAuthMethod` 逐字搬到此处。行为与 `SSHConnection` 之前完全一致：
-/// 直连走目标 `host:port`，跳板机走 Citadel 原生 `jump(to:)`；每次连接都用
-/// 针对自身 `host:port` 的 `HostKeyValidationDelegate` 做主机密钥校验。
-///
-/// 错误处理：与原实现一致 —— 直连失败抛 `connectFailed`，跳板机/jump 失败抛
-/// `jumpHostFailed`，`jump` 失败时已建立的跳板机连接就地关闭。流的收尾
-/// （`finishStreams` / `isClosed`）是调用方的 actor 状态，仍由调用方在捕获到
-/// 抛出的错误后完成。
+/// uTerm's model/UI adapter around the shared connection engine.
 nonisolated enum SSHClientFactory {
-
-    /// 建立到 `profile` 的 SSH 连接。`profile.jumpHost == nil` 走直连，
-    /// 否则走单跳跳板机；返回的 `ConnectedClient` 由调用方负责生命周期管理。
     static func connect(
         profile: SSHConnection.ProfileSnapshot,
         auth: ResolvedAuth,
@@ -84,136 +36,121 @@ nonisolated enum SSHClientFactory {
         hostKeyVerifier: HostKeyVerifier,
         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
     ) async throws -> ConnectedClient {
-        if let jumpHost = profile.jumpHost {
-            // 配置了跳板机：必须有跳板机认证材料，否则报错 —— 绝不静默回退直连。
+        let target = packageAuth(auth)
+        let jumpHost: USSHKit.SSHJumpHost?
+        if let jump = profile.jumpHost {
             guard let jumpHostAuth else {
                 throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少跳板机认证材料")
             }
-            return try await connectViaJumpHost(
-                profile: profile, jumpHost: jumpHost,
-                auth: auth, jumpHostAuth: jumpHostAuth,
-                hostKeyVerifier: hostKeyVerifier, hostKeyApprover: hostKeyApprover)
+            let jumpMaterial = packageAuth(jumpHostAuth)
+            jumpHost = USSHKit.SSHJumpHost(
+                host: jump.host,
+                port: jump.port,
+                username: jumpMaterial.username,
+                credential: jumpMaterial.credential
+            )
         } else {
-            let target = try await connectDirect(
-                profile: profile, auth: auth,
-                hostKeyVerifier: hostKeyVerifier, hostKeyApprover: hostKeyApprover)
-            return ConnectedClient(target: target, bastion: nil)
-        }
-    }
-
-    /// 直连路径：连接 `profile.host:profile.port`。失败抛 `connectFailed`。
-    private static func connectDirect(
-        profile: SSHConnection.ProfileSnapshot,
-        auth: ResolvedAuth,
-        hostKeyVerifier: HostKeyVerifier,
-        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
-    ) async throws -> SSHClient {
-        let authMethod = try makeAuthMethod(from: auth)
-
-        do {
-            return try await SSHClient.connect(
-                host: profile.host,
-                port: profile.port,
-                authenticationMethod: authMethod,
-                hostKeyValidator: .custom(HostKeyValidationDelegate(
-                    host: profile.host, port: profile.port,
-                    verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never,
-                connectTimeout: currentConnectTimeout()
-            )
-        } catch {
-            // I4：连接/认证失败 —— 抛出后由调用方结束流，让消费者干净终止。
-            throw SSHConnection.SSHConnectionError.connectFailed(FriendlyError.describe(error))
-        }
-    }
-
-    /// 跳板机路径（Task 9）：先连跳板机，再用 Citadel 原生 `jump(to:)` 在
-    /// 跳板机连接上开 `direct-tcpip` 通道并完成第二次 SSH 握手，得到目标客户端。
-    ///
-    /// 生命周期：成功时把跳板机连接与目标客户端一起打包成 `ConnectedClient` 返回，
-    /// 由调用方持有。
-    ///
-    /// 错误处理：每一步失败都抛 `jumpHostFailed("<detail>")`，已打开的资源
-    /// （`jump` 失败时的跳板机连接）就地关闭，不留任何泄漏 / 挂起。
-    private static func connectViaJumpHost(
-        profile: SSHConnection.ProfileSnapshot,
-        jumpHost: SSHConnection.ProfileSnapshot.JumpHostSnapshot,
-        auth: ResolvedAuth,
-        jumpHostAuth: ResolvedAuth,
-        hostKeyVerifier: HostKeyVerifier,
-        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
-    ) async throws -> ConnectedClient {
-        let bastionAuthMethod: SSHAuthenticationMethod
-        let targetAuthMethod: SSHAuthenticationMethod
-        do {
-            bastionAuthMethod = try makeAuthMethod(from: jumpHostAuth)
-            targetAuthMethod = try makeAuthMethod(from: auth)
-        } catch {
-            throw SSHConnection.SSHConnectionError.jumpHostFailed(FriendlyError.describe(error))
+            jumpHost = nil
         }
 
-        let bastion: SSHClient
-        do {
-            bastion = try await SSHClient.connect(
-                host: jumpHost.host,
-                port: jumpHost.port,
-                authenticationMethod: bastionAuthMethod,
-                hostKeyValidator: .custom(HostKeyValidationDelegate(
-                    host: jumpHost.host, port: jumpHost.port,
-                    verifier: hostKeyVerifier, approver: hostKeyApprover)),
-                reconnect: .never,
-                connectTimeout: currentConnectTimeout()
-            )
-        } catch {
-            throw SSHConnection.SSHConnectionError.jumpHostFailed(
-                "无法连接跳板机 \(jumpHost.host):\(jumpHost.port) —— \(FriendlyError.describe(error))")
-        }
-
-        // `SSHClientSettings.authenticationMethod` 是 `@Sendable () -> SSHAuthenticationMethod`
-        // 转义闭包。
-        let targetSettings = SSHClientSettings(
+        let endpoint = USSHKit.SSHEndpoint(
             host: profile.host,
             port: profile.port,
-            authenticationMethod: { targetAuthMethod },
-            hostKeyValidator: .custom(HostKeyValidationDelegate(
-                host: profile.host, port: profile.port,
-                verifier: hostKeyVerifier, approver: hostKeyApprover))
+            username: target.username,
+            jumpHost: jumpHost
         )
-        let target: SSHClient
-        do {
-            target = try await bastion.jump(to: targetSettings)
-        } catch {
-            // jump 失败 —— 跳板机连接已建立，必须就地关闭，避免泄漏。
-            try? await bastion.close()
-            throw SSHConnection.SSHConnectionError.jumpHostFailed(
-                "经跳板机连接目标 \(profile.host):\(profile.port) 失败 —— \(FriendlyError.describe(error))")
-        }
 
-        // 成功 —— 跳板机连接与目标客户端一起返回，由调用方持有并做生命周期管理。
-        return ConnectedClient(target: target, bastion: bastion)
+        do {
+            let shared = try await USSHKitIntegration.connect(
+                endpoint: endpoint,
+                credential: target.credential,
+                hostKeyStore: hostKeyVerifier,
+                hostKeyPolicy: packageHostKeyPolicy(),
+                connectTimeout: .seconds(connectTimeoutSeconds()),
+                approver: packageApprover(hostKeyApprover)
+            )
+            return ConnectedClient(shared: shared)
+        } catch let error as USSHKit.SSHConnectionError {
+            switch error {
+            case .jumpHostFailed(let message):
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
+            default:
+                throw SSHConnection.SSHConnectionError.connectFailed(
+                    error.errorDescription ?? FriendlyError.describe(error)
+                )
+            }
+        } catch {
+            let message = FriendlyError.describe(error)
+            if profile.jumpHost != nil {
+                throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
+            }
+            throw SSHConnection.SSHConnectionError.connectFailed(message)
+        }
     }
 
-    // MARK: - 认证材料构造
-
-    /// 把 `ResolvedAuth` 转为 Citadel 的 `SSHAuthenticationMethod`。
-    /// 私钥解析委托给 `PrivateKeyImporter`。
+    /// Kept as a narrow compatibility entry point for callers/tests that need
+    /// a Citadel authentication method without owning key parsing.
     static func makeAuthMethod(from auth: ResolvedAuth) throws -> SSHAuthenticationMethod {
+        let material = packageAuth(auth)
+        do {
+            return try USSHKitIntegration.makeAuthenticationMethod(
+                username: material.username,
+                credential: material.credential
+            )
+        } catch let error as USSHKit.SSHConnectionError {
+            throw SSHConnection.SSHConnectionError.connectFailed(
+                error.errorDescription ?? FriendlyError.describe(error)
+            )
+        }
+    }
+
+    private static func packageAuth(
+        _ auth: ResolvedAuth
+    ) -> (username: String, credential: USSHKit.SSHCredential) {
         switch auth {
         case .password(let username, let password):
-            return .passwordBased(username: username, password: password)
-
+            return (username, .password(password))
         case .privateKey(let username, let pem, let passphrase):
-            do {
-                let key = try PrivateKeyImporter.resolve(pem: pem, passphrase: passphrase)
-                return try key.authenticationMethod(username: username)
-            } catch let error as PrivateKeyImportError {
-                throw SSHConnection.SSHConnectionError.connectFailed(
-                    error.errorDescription ?? "私钥导入失败")
-            } catch let error as SSHConnection.SSHConnectionError {
-                throw error
-            } catch {
-                throw SSHConnection.SSHConnectionError.connectFailed(FriendlyError.describe(error))
-            }
+            return (username, .privateKey(pem: pem, passphrase: passphrase))
         }
+    }
+
+    private static func packageHostKeyPolicy() -> USSHKit.SSHHostKeyPolicy {
+        let raw = UserDefaults.standard.string(forKey: "sshHostKeyPolicy")
+            ?? SSHHostKeyPolicy.ask.rawValue
+        switch SSHHostKeyPolicy(rawValue: raw) ?? .ask {
+        case .strict:
+            return .strict
+        case .ask:
+            return .ask
+        case .none:
+            return .insecureAcceptAll
+        }
+    }
+
+    private static func packageApprover(
+        _ approver: @escaping @Sendable (HostKeyChallenge) async -> Bool
+    ) -> @Sendable (USSHKit.SSHHostKeyChallenge) async -> Bool {
+        { challenge in
+            let kind: HostKeyChallenge.Kind
+            switch challenge.kind {
+            case .unknown:
+                kind = .unknown
+            case .mismatch:
+                kind = .mismatch
+            }
+            return await approver(HostKeyChallenge(
+                host: challenge.hostKey.host,
+                port: challenge.hostKey.port,
+                kind: kind,
+                newFingerprint: challenge.hostKey.fingerprint,
+                oldFingerprint: challenge.previousFingerprint
+            ))
+        }
+    }
+
+    private static func connectTimeoutSeconds() -> Int64 {
+        let seconds = (UserDefaults.standard.object(forKey: "sshConnectTimeout") as? Int) ?? 30
+        return Int64(seconds)
     }
 }

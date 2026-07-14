@@ -12,23 +12,23 @@ import Security
 ///
 /// 生成的私钥不加口令（靠钟匙串加密），公钥串与 `SHA256:` 指纹自算。产物文本可被
 /// `PrivateKeyImporter.resolve(pem:passphrase:)` 原样回读，连接路径无需特判。
-nonisolated enum SSHKeyGenerator {
+public nonisolated enum SSHKeyGenerator {
 
-    struct GeneratedKey {
-        let privateKeyText: String   // OpenSSH 或 PEM，明文
-        let publicKey: String        // `ssh-... AAAA... comment`
-        let fingerprint: String      // `SHA256:...`
+    public struct GeneratedKey: Sendable {
+        public let privateKeyText: String   // OpenSSH 或 PEM，明文
+        public let publicKey: String        // `ssh-... AAAA... comment`
+        public let fingerprint: String      // `SHA256:...`
     }
 
-    enum GenerationError: Error {
+    public enum GenerationError: Error {
         case rsaGenerationFailed(String)
         case rsaExportFailed
-        case unsupportedKeyType(SSHKeyKind)
+        case unsupportedKeyType(SSHPrivateKeyKind)
     }
 
     // MARK: - ed25519
 
-    static func generateEd25519(comment: String) -> GeneratedKey {
+    public static func generateEd25519(comment: String) -> GeneratedKey {
         let priv = Curve25519.Signing.PrivateKey()
         let pub = [UInt8](priv.publicKey.rawRepresentation)   // 32
         let seed = [UInt8](priv.rawRepresentation)            // 32
@@ -43,7 +43,7 @@ nonisolated enum SSHKeyGenerator {
 
     // MARK: - rsa
 
-    static func generateRSA(bits: Int, comment: String) throws -> GeneratedKey {
+    public static func generateRSA(bits: Int, comment: String) throws -> GeneratedKey {
         let attrs: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: bits,
@@ -70,7 +70,7 @@ nonisolated enum SSHKeyGenerator {
 
     // MARK: - ecdsa
 
-    static func generateECDSA(type: SSHKeyKind, comment: String) throws -> GeneratedKey {
+    public static func generateECDSA(type: SSHPrivateKeyKind, comment: String) throws -> GeneratedKey {
         switch type {
         case .ecdsaP256:
             let priv = P256.Signing.PrivateKey()

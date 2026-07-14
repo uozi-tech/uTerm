@@ -20,12 +20,12 @@ nonisolated final class RSASHA512AuthDelegate: NIOSSHClientUserAuthenticationDel
     ) {
         guard !offered else {
             // 第二次调用 = 服务器拒绝了上次 offer，无更多可试。
-            nextChallengePromise.fail(SSHConnection.SSHConnectionError.connectFailed(
+            nextChallengePromise.fail(USSHKitInternalError.authenticationFailed(
                 "认证失败：服务器拒绝了 RSA 公钥"))
             return
         }
         guard availableMethods.contains(.publicKey) else {
-            nextChallengePromise.fail(SSHConnection.SSHConnectionError.connectFailed(
+            nextChallengePromise.fail(USSHKitInternalError.authenticationFailed(
                 "服务器不支持公钥认证"))
             return
         }

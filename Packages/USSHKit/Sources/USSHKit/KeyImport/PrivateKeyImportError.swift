@@ -1,7 +1,7 @@
 import Foundation
 
 /// 私钥导入失败原因。`Equatable` 只比较 case，不比较关联文本（便于测试）。
-nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
+public nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
     case malformedPEM(reason: String)
     case unsupportedFormat(label: String)
     case dsaUnsupported
@@ -11,7 +11,7 @@ nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
     case unsupportedKDF(name: String)
     case malformedKey(reason: String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .malformedPEM(let reason):
             return "私钥内容无法识别：\(reason)"
@@ -32,7 +32,7 @@ nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
         }
     }
 
-    var failureReason: String? {
+    public var failureReason: String? {
         switch self {
         case .malformedPEM:
             return "文件不是可识别的 PEM 私钥，或 BEGIN/END 标记不完整。"
@@ -53,7 +53,7 @@ nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
         }
     }
 
-    var recoverySuggestion: String? {
+    public var recoverySuggestion: String? {
         switch self {
         case .malformedPEM:
             return "请选择私钥文件（如 id_ed25519、id_rsa），不要选择 .pub 公钥；确认文件以 -----BEGIN ... PRIVATE KEY----- 开头，且一次只导入一把私钥。"
@@ -74,7 +74,7 @@ nonisolated enum PrivateKeyImportError: Error, LocalizedError, Equatable {
         }
     }
 
-    nonisolated static func == (lhs: PrivateKeyImportError, rhs: PrivateKeyImportError) -> Bool {
+    public nonisolated static func == (lhs: PrivateKeyImportError, rhs: PrivateKeyImportError) -> Bool {
         switch (lhs, rhs) {
         case (.malformedPEM, .malformedPEM), (.unsupportedFormat, .unsupportedFormat),
              (.dsaUnsupported, .dsaUnsupported),

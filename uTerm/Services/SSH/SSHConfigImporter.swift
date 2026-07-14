@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import USSHKit
 
 nonisolated protocol SSHConfigKeyStoring {
     func save(keyID: UUID, privateKey: String, passphrase: String?) throws
@@ -122,7 +123,7 @@ struct SSHConfigImporter {
             return nil
         }
         do {
-            let parsed = try PrivateKeyImporter.resolve(pem: text, passphrase: nil)
+            let parsed = try SSHPrivateKeyParser.parse(pem: text, passphrase: nil)
             let material = try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")
             let key = SSHKey()
             key.name = displayName.isEmpty ? "imported-key" : displayName
