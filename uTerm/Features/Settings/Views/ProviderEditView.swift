@@ -24,17 +24,12 @@ struct ProviderEditView: View {
     private let baseURLHelpText: String =
         "不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。"
 
-    /// Base URL 必填且须为合法 http(s) URL；空 / 非法时返回错误文案（驱动 danger 描边）。
+    /// Base URL 必填；远程端点须 HTTPS，loopback 开发服务可用 HTTP。
     private var baseURLError: String? {
         let trimmed = provider.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "Base URL 不能为空" }
-        guard let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host != nil else {
-            return "请填写合法的 http(s) 地址"
-        }
-        return nil
+        return ProviderEndpointPolicy.validationMessage(
+            configuredBaseURL: trimmed, kind: provider.kind)
     }
 
     /// 名称必填；空时返回错误文案。
@@ -205,10 +200,11 @@ struct ProviderEditView: View {
             testResult = (false, "请先填或保存 API Key")
             return
         }
-        let baseURL = URL(string: provider.baseURL.isEmpty
-                           ? ProviderPreset.defaultBaseURL(for: provider.kind)
-                           : provider.baseURL)
-            ?? URL(string: ProviderPreset.defaultBaseURL(for: provider.kind))!
+        guard case .success(let baseURL) = ProviderEndpointPolicy.resolve(
+            configuredBaseURL: provider.baseURL, kind: provider.kind) else {
+            testResult = (false, baseURLError ?? "Base URL 非法或不安全")
+            return
+        }
         let config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
         let client = LLMClientFactory.make(for: provider)
         do {

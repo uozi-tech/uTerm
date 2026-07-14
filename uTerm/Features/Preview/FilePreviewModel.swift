@@ -104,7 +104,6 @@ final class FilePreviewModel {
         case missingBuffer
         case invalidMarkdownImageSource
         case unsupportedMarkdownImageSource(String)
-        case markdownImageHTTPError(Int)
         case markdownImageTooLarge(bytes: Int)
 
         var errorDescription: String? {
@@ -116,9 +115,7 @@ final class FilePreviewModel {
             case .invalidMarkdownImageSource:
                 return "图片地址为空或无效"
             case .unsupportedMarkdownImageSource(let source):
-                return "不支持的图片地址：\(source)"
-            case .markdownImageHTTPError(let code):
-                return "图片下载失败（HTTP \(code)）"
+                return "为保护本机网络，Markdown 只预览同一 SFTP 主机上的图片：\(source)"
             case .markdownImageTooLarge(let bytes):
                 let cap = Double(MarkdownImageCache.perImageByteCap) / (1024 * 1024)
                 let actual = Double(bytes) / (1024 * 1024)
@@ -339,14 +336,14 @@ final class FilePreviewModel {
             guard let sftp = sftpProvider() else {
                 throw PreviewDownloadError.providerUnavailable
             }
-            data = try await sftp.download(remotePath: path)
-        case .url(let url):
-            let (loaded, response) = try await URLSession.shared.data(from: url)
-            if let http = response as? HTTPURLResponse,
-               !(200..<300).contains(http.statusCode) {
-                throw PreviewDownloadError.markdownImageHTTPError(http.statusCode)
+            do {
+                data = try await sftp.download(
+                    remotePath: path,
+                    maximumBytes: MarkdownImageCache.perImageByteCap)
+            } catch let error as SFTPDownloadLimitExceeded {
+                let clamped = min(error.observedBytes, Int64(Int.max))
+                throw PreviewDownloadError.markdownImageTooLarge(bytes: Int(clamped))
             }
-            data = loaded
         }
 
         // 单图体积上限：超限直接拒绝，避免巨图把内存撑爆。
@@ -640,12 +637,10 @@ final class FilePreviewModel {
 
     private enum MarkdownImageResource {
         case remotePath(String)
-        case url(URL)
 
         var cacheKey: String {
             switch self {
             case .remotePath(let path): return "sftp:\(path)"
-            case .url(let url): return "url:\(url.absoluteString)"
             }
         }
     }
@@ -660,10 +655,10 @@ final class FilePreviewModel {
         if let url = URL(string: trimmed),
            let scheme = url.scheme?.lowercased(),
            !scheme.isEmpty {
-            guard scheme == "http" || scheme == "https" else {
-                throw PreviewDownloadError.unsupportedMarkdownImageSource(trimmed)
-            }
-            return .url(url)
+            // 远程 Markdown 属于不可信输入。自动访问其中的 http(s) 地址会泄漏
+            // 本机网络可达性/IP，并可被用来探测 localhost、路由器或云元数据服务。
+            // 图片必须留在已经通过 SSH 主机密钥验证的 SFTP 信任边界内。
+            throw PreviewDownloadError.unsupportedMarkdownImageSource(trimmed)
         }
 
         let path = markdownImageRemotePath(source: trimmed, baseRemotePath: baseRemotePath)

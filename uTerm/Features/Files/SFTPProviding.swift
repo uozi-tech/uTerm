@@ -16,6 +16,13 @@ nonisolated struct TransferProgress: Sendable, Equatable {
     let bytesTotal: Int64
 }
 
+/// 有界下载超过调用方上限。`observedBytes` 来自下载前 stat，或流式读取时实际
+/// 看到的字节数；两条路径都让调用方能在分配无界内存前终止。
+nonisolated struct SFTPDownloadLimitExceeded: Error, Sendable, Equatable {
+    let observedBytes: Int64
+    let maximumBytes: Int
+}
+
 /// 控制真实传输进度回调频率：首个数据块立即上报，后续按时间节流，完成必达。
 nonisolated struct TransferProgressEmitter: Sendable {
     private let totalBytes: Int64
@@ -69,6 +76,9 @@ protocol SFTPProviding: Actor {
     /// 下载远程文件，返回完整内容。
     func download(remotePath: String) async throws -> Data
 
+    /// 有界下载。预览不可信远程资源时必须走此入口，不能先完整读入再检查大小。
+    func download(remotePath: String, maximumBytes: Int) async throws -> Data
+
     /// 上传数据到远程路径。
     func upload(data: Data, toRemotePath: String) async throws
 
@@ -111,6 +121,23 @@ protocol SFTPProviding: Actor {
 }
 
 extension SFTPProviding {
+    /// 通用实现先 stat 拦截已知超限文件，再对返回值复核。真实 `SFTPSession`
+    /// 另有流式实现，可覆盖 stat 竞态/未知大小；测试 mock 复用这里即可。
+    func download(remotePath: String, maximumBytes: Int) async throws -> Data {
+        let limit = max(0, maximumBytes)
+        let metadata = try await stat(remotePath)
+        if metadata.size > Int64(limit) {
+            throw SFTPDownloadLimitExceeded(observedBytes: metadata.size,
+                                            maximumBytes: limit)
+        }
+        let data = try await download(remotePath: remotePath)
+        guard data.count <= limit else {
+            throw SFTPDownloadLimitExceeded(observedBytes: Int64(data.count),
+                                            maximumBytes: limit)
+        }
+        return data
+    }
+
     /// 默认恒真 —— 非网络实现（测试 mock）没有「静默断死」的概念。
     func verifyConnectionAlive() async -> Bool { true }
 }

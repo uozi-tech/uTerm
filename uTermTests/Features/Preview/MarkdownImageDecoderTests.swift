@@ -4,6 +4,16 @@ import XCTest
 
 @MainActor
 final class MarkdownImageDecoderTests: XCTestCase {
+    func testSVGHTMLBlocksNetworkSubresources() {
+        let svg = Data("<svg width=\"1\" height=\"1\"></svg>".utf8)
+        let html = MarkdownImageDecoder.htmlForSVG(svg, size: CGSize(width: 1, height: 1))
+
+        XCTAssertTrue(html.contains("default-src 'none'"))
+        XCTAssertTrue(html.contains("img-src data:"))
+        XCTAssertFalse(html.contains("http://"))
+        XCTAssertFalse(html.contains("https://"))
+    }
+
     func testSVGBadgeRendersTextLayer() async throws {
         let decoded = await MarkdownImageDecoder.decode(Data(Self.badgeSVG.utf8))
         let image = try XCTUnwrap(decoded)

@@ -61,9 +61,8 @@ nonisolated struct ParallelDoctor: Sendable {
         guard let provider else { return nil }
         let key = AgentKeychain().load(for: provider.id) ?? ""
         guard !key.isEmpty else { return nil }
-        let baseURLString = provider.baseURL.isEmpty
-            ? ProviderPreset.defaultBaseURL(for: provider.kind) : provider.baseURL
-        guard let baseURL = URL(string: baseURLString) else { return nil }
+        guard case .success(let baseURL) = ProviderEndpointPolicy.resolve(
+            configuredBaseURL: provider.baseURL, kind: provider.kind) else { return nil }
         let model = provider.model.isEmpty
             ? (ProviderPreset.models(for: provider.kind).first ?? "") : provider.model
         return ParallelDoctor(client: LLMClientFactory.make(for: provider),

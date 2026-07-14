@@ -389,10 +389,9 @@ struct WorkspaceWindowView: View {
     private func downloadAndOpenExternally(_ path: String) async {
         guard let sftp = workspace.fileBrowserModel.sftpProvider else { return }
         let basename = (path as NSString).lastPathComponent
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(basename)
         do {
             let data = try await sftp.download(remotePath: path)
-            try data.write(to: dest)
+            let dest = try ExternalFileStager.stage(data: data, suggestedName: basename)
             NSWorkspace.shared.open(dest)
         } catch {
             let alert = NSAlert()

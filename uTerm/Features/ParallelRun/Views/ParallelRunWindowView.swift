@@ -154,7 +154,10 @@ struct ParallelRunWindowView: View {
     }
 
     private func resolveBaseURL(for provider: AIProvider) -> URL? {
-        if !provider.baseURL.isEmpty, let url = URL(string: provider.baseURL) { return url }
-        return URL(string: ProviderPreset.defaultBaseURL(for: provider.kind))
+        switch ProviderEndpointPolicy.resolve(configuredBaseURL: provider.baseURL,
+                                              kind: provider.kind) {
+        case .success(let url): return url
+        case .failure: return nil
+        }
     }
 }

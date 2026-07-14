@@ -38,6 +38,10 @@ nonisolated protocol KeychainReading {
 ///
 /// `nonisolated`：纯非 UI 工具类型，仅与 Security 框架交互，无需 MainActor 隔离。
 nonisolated struct KeychainStore: KeychainReading {
+    /// SSH 密码、私钥与 Provider key 只应在设备已解锁时可用。`AfterFirstUnlock`
+    /// 会让锁屏后的后台进程继续读取凭据，与应用锁的执行边界相冲突。
+    static let accessibility = kSecAttrAccessibleWhenUnlocked as String
+
     private let service: String
 
     init(service: String = "com.uozi.uTerm") {
@@ -66,7 +70,7 @@ nonisolated struct KeychainStore: KeychainReading {
         try delete(account: account)
         var query = baseQuery(account: account)
         query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        query[kSecAttrAccessible as String] = Self.accessibility
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw KeychainError.unexpectedStatus(status)

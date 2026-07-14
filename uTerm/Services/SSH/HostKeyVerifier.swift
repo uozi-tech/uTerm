@@ -40,35 +40,51 @@ struct HostKeyChallenge: Equatable, Sendable, Identifiable {
 /// 构造的隔离 `ModelContext`（`ModelContainer` 是 `Sendable`，`ModelContext` 不是）。
 @ModelActor
 actor HostKeyVerifier {
-    /// 按 host:port 取既有记录（应至多一条；多于一条时取第一条）。
-    private func existing(host: String, port: Int) -> KnownHost? {
+    /// 按 host:port 取全部既有记录。
+    ///
+    /// SwiftData + CloudKit 不能给 `host + port` 建唯一约束；离线设备合并时可能
+    /// 产生重复记录。主机密钥是安全边界，绝不能像普通展示数据一样随便取 `.first`：
+    /// 若重复记录里同时存在不同密钥，取值顺序会决定是否错误地静默信任旧密钥。
+    private func existing(host: String, port: Int) -> [KnownHost] {
         let h = host
         let p = port
         let descriptor = FetchDescriptor<KnownHost>(
-            predicate: #Predicate { $0.host == h && $0.port == p }
+            predicate: #Predicate { $0.host == h && $0.port == p },
+            sortBy: [SortDescriptor(\.firstTrustedAt, order: .reverse)]
         )
-        return try? modelContext.fetch(descriptor).first
+        return (try? modelContext.fetch(descriptor)) ?? []
     }
 
     func classify(host: String, port: Int,
                   keyBlob: Data, fingerprint: String) -> HostKeyClassification {
-        guard let known = existing(host: host, port: port) else {
+        let knownHosts = existing(host: host, port: port)
+        guard !knownHosts.isEmpty else {
             return .unknown(fingerprint: fingerprint)
         }
-        if known.keyBlob == keyBlob {
+        // 只有全部同步副本都同意当前密钥才可静默通过。一个匹配、一个冲突也必须
+        // fail closed 进入 mismatch，让用户明确处理 CloudKit 冲突/主机换钥。
+        if knownHosts.allSatisfy({ $0.keyBlob == keyBlob }) {
             return .trusted
         }
-        return .mismatch(newFingerprint: fingerprint, oldFingerprint: known.fingerprint)
+        let conflicting = knownHosts.first { $0.keyBlob != keyBlob } ?? knownHosts[0]
+        return .mismatch(newFingerprint: fingerprint,
+                         oldFingerprint: conflicting.fingerprint)
     }
 
     /// 写入新记录，或用新密钥覆盖既有记录（不匹配后用户选择信任）。
     func trust(host: String, port: Int, keyBlob: Data,
                keyType: String, fingerprint: String) {
-        if let known = existing(host: host, port: port) {
+        let knownHosts = existing(host: host, port: port)
+        if let known = knownHosts.first {
             known.keyBlob = keyBlob
             known.keyTypeRaw = keyType
             known.fingerprint = fingerprint
             known.firstTrustedAt = Date()
+            // 用户已经明确批准当前密钥：收敛 CloudKit 产生的重复项，避免下一次
+            // classify 再被陈旧副本影响。保留排序后的最新项作为 canonical 记录。
+            for duplicate in knownHosts.dropFirst() {
+                modelContext.delete(duplicate)
+            }
         } else {
             let h = KnownHost()
             h.host = host
@@ -83,11 +99,6 @@ actor HostKeyVerifier {
 
     /// 测试辅助：某 host:port 的记录条数。
     func knownHostCount(host: String, port: Int) -> Int {
-        let h = host
-        let p = port
-        let descriptor = FetchDescriptor<KnownHost>(
-            predicate: #Predicate { $0.host == h && $0.port == p }
-        )
-        return (try? modelContext.fetch(descriptor).count) ?? 0
+        existing(host: host, port: port).count
     }
 }

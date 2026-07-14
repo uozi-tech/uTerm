@@ -21,6 +21,47 @@ enum MarkdownImageDecoder {
         }
         return text.contains("<svg")
     }
+
+    /// 把 SVG 放进无网络权限的 HTML 壳。SVG 来自远程主机，即便 Markdown 层只允许
+    /// SFTP 路径，SVG 自身仍可通过 `<image href>` / CSS url() 引入第三方资源；CSP
+    /// 把 WKWebView 的子资源限制为当前 data image 与内联样式。
+    nonisolated static func htmlForSVG(_ data: Data, size: CGSize) -> String {
+        let width = cssNumber(size.width)
+        let height = cssNumber(size.height)
+        let encoded = data.base64EncodedString()
+
+        return """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
+        <style>
+        html, body {
+          margin: 0;
+          padding: 0;
+          width: \(width)px;
+          height: \(height)px;
+          overflow: hidden;
+          background: transparent;
+        }
+        img {
+          display: block;
+          width: \(width)px;
+          height: \(height)px;
+        }
+        </style>
+        </head>
+        <body><img alt="" src="data:image/svg+xml;base64,\(encoded)"></body>
+        </html>
+        """
+    }
+
+    private nonisolated static func cssNumber(_ value: CGFloat) -> String {
+        String(format: "%.3f",
+               locale: Locale(identifier: "en_US_POSIX"),
+               Double(value))
+    }
 }
 
 @MainActor
@@ -60,7 +101,8 @@ private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
             scheduleTimeout()
-            webView.loadHTMLString(Self.html(for: data, size: size), baseURL: nil)
+            webView.loadHTMLString(MarkdownImageDecoder.htmlForSVG(data, size: size),
+                                   baseURL: nil)
         }
     }
 
@@ -137,42 +179,6 @@ private final class SVGSnapshotRenderer: NSObject, WKNavigationDelegate {
         continuation?.resume(returning: image)
     }
 
-    private static func html(for data: Data, size: CGSize) -> String {
-        let width = cssNumber(size.width)
-        let height = cssNumber(size.height)
-        let encoded = data.base64EncodedString()
-
-        return """
-        <!doctype html>
-        <html>
-        <head>
-        <meta charset="utf-8">
-        <style>
-        html, body {
-          margin: 0;
-          padding: 0;
-          width: \(width)px;
-          height: \(height)px;
-          overflow: hidden;
-          background: transparent;
-        }
-        img {
-          display: block;
-          width: \(width)px;
-          height: \(height)px;
-        }
-        </style>
-        </head>
-        <body><img alt="" src="data:image/svg+xml;base64,\(encoded)"></body>
-        </html>
-        """
-    }
-
-    private static func cssNumber(_ value: CGFloat) -> String {
-        String(format: "%.3f",
-               locale: Locale(identifier: "en_US_POSIX"),
-               Double(value))
-    }
 }
 
 private enum SVGMetadata {

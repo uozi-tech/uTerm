@@ -1,23 +1,26 @@
 import SwiftUI
 
-/// 把锁屏遮罩挂到任意 Scene 根视图：未解锁时 overlay 一层不透明 `LockCoverView`，
-/// 并在视图出现时触发一次启动验证（多窗口由 `AppLockModel` 内 guard 收敛为只跑一次）。
+/// 把应用锁挂到任意 Scene 根视图：未解锁时**不挂载受保护内容**，只展示
+/// `LockCoverView`，并触发一次启动验证（多窗口由 `AppLockModel` 内 guard 收敛）。
 ///
-/// 注：首验跑在首个出现窗口的 `.task` 上。冷启动时 Welcome 窗口常驻，故安全；
-/// 本期「仅冷启动」不处理「验证中途关掉唯一窗口」这种极端情形（YAGNI）。
+/// 不能用 `content.overlay { ... }`：overlay 只是视觉遮挡，底层 `WelcomeView.task`
+/// 仍会在验证前执行，包括恢复上次窗口、读取凭据和启动 SSH 转发。条件挂载让应用锁
+/// 成为真正的执行边界，而不只是遮罩。
 struct AppLockGate: ViewModifier {
     let model: AppLockModel   // @Observable：在 body 里读 isUnlocked 即建立依赖
 
     func body(content: Content) -> some View {
-        content
-            .overlay {
-                if !model.isUnlocked {
-                    LockCoverView(model: model)
-                        .transition(.opacity)
-                }
+        ZStack {
+            if model.isUnlocked {
+                content
+                    .transition(.opacity)
+            } else {
+                LockCoverView(model: model)
+                    .transition(.opacity)
             }
-            .animation(.easeInOut(duration: 0.25), value: model.isUnlocked)
-            .task { await model.startInitialAuthIfNeeded() }
+        }
+        .animation(.easeInOut(duration: 0.25), value: model.isUnlocked)
+        .task { await model.startInitialAuthIfNeeded() }
     }
 }
 

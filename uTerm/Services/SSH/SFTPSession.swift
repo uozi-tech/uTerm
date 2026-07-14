@@ -48,7 +48,12 @@ actor SFTPSession: SFTPProviding {
     }
 
     func download(remotePath: String) async throws -> Data {
-        try await download(remotePath: remotePath, onProgress: nil)
+        try await download(remotePath: remotePath, onProgress: nil, maximumBytes: nil)
+    }
+
+    func download(remotePath: String, maximumBytes: Int) async throws -> Data {
+        try await download(remotePath: remotePath, onProgress: nil,
+                           maximumBytes: max(0, maximumBytes))
     }
 
     func upload(data: Data, toRemotePath: String) async throws {
@@ -73,7 +78,7 @@ actor SFTPSession: SFTPProviding {
 
     func stat(_ path: String) async throws -> RemoteStat {
         let attrs = try await sftp.getAttributes(at: path)
-        let size = Int64(attrs.size ?? 0)
+        let size = Self.clampedSize(attrs.size)
         let mtime = attrs.accessModificationTime?.modificationTime ?? Date()
         return RemoteStat(size: size, mtime: mtime)
     }
@@ -154,8 +159,23 @@ actor SFTPSession: SFTPProviding {
 
     func download(remotePath: String,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data {
+        try await download(remotePath: remotePath, onProgress: onProgress,
+                           maximumBytes: nil)
+    }
+
+    /// 真正的流式下载内核。`maximumBytes` 非 nil 时同时在 stat 后与每个 chunk
+    /// append 前检查，既挡已知大文件，也挡下载期间被替换/错误上报 size 的对象。
+    private func download(
+        remotePath: String,
+        onProgress: (@Sendable (TransferProgress) -> Void)?,
+        maximumBytes: Int?
+    ) async throws -> Data {
         let attrs = try await sftp.getAttributes(at: remotePath)
-        let total = Int64(attrs.size ?? 0)
+        let total = Self.clampedSize(attrs.size)
+        if let maximumBytes, total > Int64(maximumBytes) {
+            throw SFTPDownloadLimitExceeded(observedBytes: total,
+                                            maximumBytes: maximumBytes)
+        }
         let file = try await sftp.openFile(filePath: remotePath, flags: .read)
         do {
             var data = Data()
@@ -173,6 +193,12 @@ actor SFTPSession: SFTPProviding {
                 let buf = try await file.read(from: offset, length: chunk)
                 let n = buf.readableBytes
                 if n == 0 { break }
+                if let maximumBytes,
+                   (n > maximumBytes || data.count > maximumBytes - n) {
+                    throw SFTPDownloadLimitExceeded(
+                        observedBytes: Int64(data.count) + Int64(n),
+                        maximumBytes: maximumBytes)
+                }
                 data.append(contentsOf: buf.readableBytesView)
                 offset += UInt64(n)
                 emitProgress(Int64(offset))
@@ -184,6 +210,13 @@ actor SFTPSession: SFTPProviding {
             try? await file.close()
             throw error
         }
+    }
+
+    /// SFTP size 是 UInt64；恶意/损坏服务端可回报大于 Int64.max 的值。直接
+    /// `Int64(value)` 会 trap，把网络输入变成进程级 DoS，因此统一饱和转换。
+    nonisolated static func clampedSize(_ size: UInt64?) -> Int64 {
+        guard let size else { return 0 }
+        return size > UInt64(Int64.max) ? Int64.max : Int64(size)
     }
 
     func close() async {

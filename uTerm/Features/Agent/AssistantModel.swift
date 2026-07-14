@@ -206,7 +206,7 @@ final class AssistantModel {
             state = .failed("当前 provider 缺少 API Key"); return nil
         }
         guard let baseURL = resolveBaseURL(for: provider) else {
-            state = .failed("当前 provider 的 baseURL 非法"); return nil
+            state = .failed("当前 provider 的 baseURL 非法或不安全"); return nil
         }
         return (provider, key, baseURL)
     }
@@ -570,10 +570,13 @@ final class AssistantModel {
     }
 
     private func resolveBaseURL(for provider: AIProvider) -> URL? {
-        if !provider.baseURL.isEmpty, let url = URL(string: provider.baseURL) {
+        switch ProviderEndpointPolicy.resolve(configuredBaseURL: provider.baseURL,
+                                              kind: provider.kind) {
+        case .success(let url):
             return url
+        case .failure:
+            return nil
         }
-        return URL(string: ProviderPreset.defaultBaseURL(for: provider.kind))
     }
 
     private func errorMessage(for error: Error, kind: ProviderKind) -> String {

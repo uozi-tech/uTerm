@@ -12,9 +12,14 @@ struct ProviderFormSheet: View {
     @State private var model = ""
     @State private var apiKey = ""
 
+    private var baseURLError: String? {
+        ProviderEndpointPolicy.validationMessage(configuredBaseURL: baseURL, kind: kind)
+    }
+
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !apiKey.trimmingCharacters(in: .whitespaces).isEmpty
+        !apiKey.trimmingCharacters(in: .whitespaces).isEmpty &&
+        baseURLError == nil
     }
 
     var body: some View {
@@ -33,12 +38,17 @@ struct ProviderFormSheet: View {
                         formRow("Base URL", ProviderPreset.defaultBaseURL(for: kind), $baseURL, last: false)
                         formRow("模型", ProviderPreset.models(for: kind).first ?? "", $model, last: true)
                     }
+                    if let baseURLError {
+                        Text(baseURLError)
+                            .font(M.sans(12)).foregroundStyle(M.danger)
+                            .padding(.horizontal, 20)
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
                         MSectionCap(text: "API Key").padding(.horizontal, 20)
                         MInput(text: $apiKey, placeholder: "sk-…", mono: true, secure: true)
                             .padding(.horizontal, 16)
-                        Text("仅存于本机钥匙串，不会上传。")
+                        Text("保存在 iCloud 钥匙串；请求时仅发送给所选 Provider。")
                             .font(M.sans(12)).foregroundStyle(M.text4).padding(.horizontal, 20)
                     }
 

@@ -6,7 +6,7 @@ import LocalAuthentication
 /// 复用与 macOS 共享的 `AppLockModel` 状态机（`requireAuthAtLaunch` 决定是否上锁、按机器能力
 /// 选策略、指纹被锁退回设备密码）；这里只补 iOS 特有的三件事：
 ///  - 回到后台即重新上锁（`relock()`）、回前台再触发一次验证；
-///  - 用移动端 `M` 设计令牌画锁屏遮罩（macOS 的 `AppLockGate` 用 `UD*` 组件，已被 target 排除）；
+///  - 用移动端 `M` 设计令牌画锁屏界面（macOS 的 `AppLockGate` 用 `UD*` 组件，已被 target 排除）；
 ///  - 识别当前机器的生物识别类型，给设置开关与锁屏文案/图标。
 
 /// 当前机器的生物识别类型 → 展示用文案与图标名。
@@ -49,31 +49,35 @@ private struct MobileAppLockGate: ViewModifier {
     @AppStorage("requireAuthAtLaunch") private var requireAuth = false
 
     func body(content: Content) -> some View {
-        content
-            .overlay {
+        ZStack {
+            if model.isUnlocked {
+                content
+                    .transition(.opacity)
+            } else {
+                // 不仅盖住内容，还要让内容离开视图树：否则锁定期间终端/Agent 的
+                // task 仍可继续运行，应用锁只剩视觉效果。
+                MobileLockCover(model: model)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: model.isUnlocked)
+        // 冷启动首验：didStart guard 让它与下面的 .active 分支去重，只跑一次。
+        .task { await model.startInitialAuthIfNeeded() }
+        .onChange(of: scenePhase) { _, phase in
+            guard requireAuth else { return }
+            switch phase {
+            case .background:
+                // 离开 App 即上锁；回前台时由 .active 分支再触发验证。
+                model.relock()
+            case .active:
+                // relock 已重置 guard，从后台回来这里能再次触发；冷启动则被 guard 挡掉。
                 if !model.isUnlocked {
-                    MobileLockCover(model: model)
-                        .transition(.opacity)
+                    Task { await model.startInitialAuthIfNeeded() }
                 }
+            default:
+                break
             }
-            .animation(.easeInOut(duration: 0.22), value: model.isUnlocked)
-            // 冷启动首验：didStart guard 让它与下面的 .active 分支去重，只跑一次。
-            .task { await model.startInitialAuthIfNeeded() }
-            .onChange(of: scenePhase) { _, phase in
-                guard requireAuth else { return }
-                switch phase {
-                case .background:
-                    // 离开 App 即上锁；回前台时由 .active 分支再触发验证。
-                    model.relock()
-                case .active:
-                    // relock 已重置 guard，从后台回来这里能再次触发；冷启动则被 guard 挡掉。
-                    if !model.isUnlocked {
-                        Task { await model.startInitialAuthIfNeeded() }
-                    }
-                default:
-                    break
-                }
-            }
+        }
     }
 }
 

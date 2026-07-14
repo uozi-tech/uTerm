@@ -82,6 +82,27 @@ final class FilePreviewModelTests: XCTestCase {
             }
             XCTAssertEqual(bytes, oversized.count)
         }
+        let downloaded = await mock.downloadedPaths()
+        XCTAssertFalse(downloaded.contains("/srv/docs/huge.png"),
+                       "known oversized images must be rejected before download")
+    }
+
+    func test_loadMarkdownImage_rejectsAutomaticHTTPRequests() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/srv/docs/README.md", data: Data("# README".utf8))
+        await m.open(path: "/srv/docs/README.md", fileSize: 8, mtime: nil)
+        let buffer = try XCTUnwrap(m.buffers.first)
+
+        do {
+            _ = try await m.loadMarkdownImage(
+                source: "http://127.0.0.1:8080/admin.png", referencedBy: buffer)
+            XCTFail("expected external URL to be rejected")
+        } catch let error as FilePreviewModel.PreviewDownloadError {
+            guard case .unsupportedMarkdownImageSource(let source) = error else {
+                return XCTFail("expected unsupported source, got \(error)")
+            }
+            XCTAssertEqual(source, "http://127.0.0.1:8080/admin.png")
+        }
     }
 
     func test_loadMarkdownImage_cachesWithinCapAndAvoidsRefetch() async throws {
