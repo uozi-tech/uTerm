@@ -1,6 +1,8 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 import AppKit
+import USSHKit
 
 /// 密钥管理窗口（设计稿 `keys.jsx`）。集中式 SSH 密钥库：左列表 + 右详情，
 /// 顶部可生成 / 导入。独立 `Window`，外观随全局主题。
@@ -234,7 +236,7 @@ struct KeyManagerView: View {
     }
 
     private func finishImport(text: String, passphrase: String?, defaultName: String) throws {
-        let parsed = try PrivateKeyImporter.resolve(pem: text, passphrase: passphrase)
+        let parsed = try SSHPrivateKeyParser.parse(pem: text, passphrase: passphrase)
         let material: KeyImportInspector.Material
         do {
             material = try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")

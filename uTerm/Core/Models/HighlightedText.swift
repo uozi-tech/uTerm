@@ -1,3 +1,4 @@
+import UDesignKit
 // uTerm/Models/HighlightedText.swift
 import SwiftUI
 

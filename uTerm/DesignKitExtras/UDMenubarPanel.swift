@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// uTerm DesignKit 菜单栏状态面板 —— macOS 菜单栏下拉的状态浮层

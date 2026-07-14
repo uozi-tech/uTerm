@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 设置 · 终端 tab。Spec 03 实现，后简化：终端/编辑器字体（系统等宽）与配色已不可

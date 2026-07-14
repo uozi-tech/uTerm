@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// macOS Settings 窗口（⌘,）—— 自定义 tab 壳。

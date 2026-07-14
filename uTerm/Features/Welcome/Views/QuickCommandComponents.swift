@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 快捷命令的共享小件与纯逻辑助手（复刻原型 `pages/quick-commands.jsx`）。

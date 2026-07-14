@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// AI 视图：不堆 shell 输出，Agent 用自然语言逐台汇报（只报「成功 / 失败」，不单列自愈），

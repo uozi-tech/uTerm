@@ -1,5 +1,7 @@
+import UDesignKit
 import SwiftUI
 import AppKit
+import USSHKit
 
 /// 单把密钥的详情面板（设计稿 `keys.jsx` 的 `KeyDetail`）：头部（头像 + 可重命名
 /// 名称 + 算法/创建时间）、指纹、公钥、元信息三宫格、使用此密钥的主机、危险区删除。

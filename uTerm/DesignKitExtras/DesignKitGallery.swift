@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// DesignKit 组件画廊 —— Claude Design 交付包 `Components.html` 的 SwiftUI 复刻。
@@ -118,7 +119,7 @@ struct DesignKitGallery: View {
             Group(label: "表面 Surfaces") {
                 swatchRow([("窗口 bg", UD.bg), ("面板 panel", UD.panel),
                            ("高亮 panelHi", UD.panelHi), ("悬停 hover", UD.panelHover),
-                           ("画布 pageBg", UD.pageBg), ("终端 term", UD.terminal)])
+                           ("画布 pageBg", UD.pageBg), ("终端 termBg", UD.termBg)])
             }
             Group(label: "文本 / 描边") {
                 swatchRow([("text", UD.text), ("text2", UD.text2), ("text3", UD.text3),
@@ -146,7 +147,7 @@ struct DesignKitGallery: View {
                             Text(item.0).font(UD.monoKbd).foregroundStyle(UD.text3)
                         }
                     }
-                    ForEach([("sm", UD.Shadow.sm), ("card", UD.Shadow.card), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg), ("menu", UD.Shadow.menu)], id: \.0) { item in
+                    ForEach([("sm", UD.Shadow.sm), ("md", UD.Shadow.md), ("lg", UD.Shadow.lg), ("menu", UD.Shadow.menu)], id: \.0) { item in
                         VStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: UD.Radius.lg)
                                 .fill(UD.panel)
@@ -306,7 +307,7 @@ struct DesignKitGallery: View {
                         UDCodeChip("nginx -T | grep -E \"worker|upstream\"")
                     }
                 }
-                UDComposer(text: $composer, width: 300) { UDModelPill(label: "claude-sonnet") }
+                UDComposer(text: $composer, width: 300) { UDModelPill("claude-sonnet") }
             }
             Group(label: "工具调用 ToolCall · Cursor 风格审批卡片") {
                 VStack(alignment: .leading, spacing: 0) {

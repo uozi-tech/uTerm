@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// PreviewArea 没有 active buffer 时的空态：展示最近打开。

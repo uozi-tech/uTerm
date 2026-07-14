@@ -1,14 +1,11 @@
 import Foundation
 import SwiftData
+import USSHKit
 
 /// 密钥算法类型。以 rawValue 持久化（同 `AuthMethod` 的 CloudKit 取舍）。
-enum SSHKeyKind: String, CaseIterable, Sendable {
-    case ed25519
-    case rsa
-    case ecdsaP256
-    case ecdsaP384
-    case ecdsaP521
+typealias SSHKeyKind = SSHPrivateKeyKind
 
+extension SSHPrivateKeyKind {
     /// 列表 / 详情里的算法标签，如 `ed25519` 或 `rsa 4096`。
     nonisolated func label(bits: Int) -> String {
         switch self {

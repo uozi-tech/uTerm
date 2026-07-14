@@ -2,8 +2,8 @@ import Foundation
 
 /// SSH 主机密钥校验策略。UserDefaults key: `sshHostKeyPolicy`。默认 `.ask`。
 ///
-/// 由 `HostKeyValidationDelegate.validateHostKey` 在收到 SSH 握手期间的
-/// 主机密钥时读取。setting 改了只对**下次 SSH 连接**生效——老连接保留
+/// 由 `SSHClientFactory` 在创建共享包的主机密钥校验器时读取。
+/// setting 改了只对**下次 SSH 连接**生效——老连接保留
 /// 原 policy 行为。
 enum SSHHostKeyPolicy: String, CaseIterable, Identifiable {
     /// 严格：未知 / 不匹配主机密钥直接 reject 连接（不弹窗）。

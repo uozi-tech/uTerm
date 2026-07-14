@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 右侧检视器（300px）：空态 / 选中态（大图标 + 属性表 + 远程路径 + 下载/重命名/删除）。

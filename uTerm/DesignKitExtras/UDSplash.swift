@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 // uTerm DesignKit 品牌 · 开屏 —— Claude Design 交付包 `splash.jsx` 的 SwiftUI 复刻。
@@ -11,7 +12,7 @@ import SwiftUI
 // - `UDSplashNebula` 开屏「星空之上」—— 品牌优先，星云场 + 居中标记锁定
 //
 // 开屏为**静态**画面（无动效，符合 Apple 启动屏规范）、恒暗色（品牌时刻自带
-// 夜空）。强调色默认 `UD.brand`（logo 烘焙色），不随用户可切换的 UI accent 变化。
+// 夜空）。强调色默认品牌蓝 `#3B82F6`（logo 烘焙色），不随用户可切换的 UI accent 变化。
 
 // MARK: - 文字标识 Wordmark
 
@@ -24,7 +25,7 @@ struct UDWordmark: View {
     /// 字号（pt）。设计稿：开屏 46 / iPad 58。
     var size: CGFloat = 46
     /// "Term" 的强调色。默认品牌蓝（logo 烘焙色）。
-    var accent: Color = UD.brand
+    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
     /// "u" 的颜色。默认设计稿定值近白 `#f3f3f5`（恒暗场景用）；
     /// 放在随主题的面上时传 `UD.text`。
     var color: Color = UD.ColorSpec.hex(0xF3F3F5).color()
@@ -49,7 +50,7 @@ struct UDWordmark: View {
 /// 全屏星云：暗夜径向底 + 三团色晕（accent / 紫 / 粉）+ 26 颗确定性星点
 /// （坐标固定，画面稳定可截图 / 导出）。logo「星空之上」identity 的全屏铺开。
 struct UDNebulaField: View {
-    var accent: Color = UD.brand
+    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
 
     /// `[x%, y%, 半径pt, 不透明度]`——直接搬运自 `splash.jsx` 的 `SPLASH_STARS`。
     static let stars: [(x: CGFloat, y: CGFloat, r: CGFloat, o: Double)] = [
@@ -115,7 +116,7 @@ struct UDNebulaField: View {
 /// 开屏「星空之上」——品牌优先：星云场 + 居中 `ULogo` 与文字标识锁定。
 /// 恒暗色；铺满宿主给的空间（Shell 侧自行 `.ignoresSafeArea()`）。
 struct UDSplashNebula: View {
-    var accent: Color = UD.brand
+    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
     /// 宽屏尺寸档（iPad / regular size class）。
     var big: Bool = false
 

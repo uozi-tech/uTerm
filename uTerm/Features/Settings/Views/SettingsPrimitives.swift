@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 设置 tab 的滚动容器。外边距 + 区组之间 28pt spacing。

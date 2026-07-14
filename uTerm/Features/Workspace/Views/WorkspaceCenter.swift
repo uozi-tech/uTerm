@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 工作区中央列：上预览 / 下终端。原生 VSplitView 的分隔条无法染色、在暗色下

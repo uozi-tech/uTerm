@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 执行日志区（复刻原型 `QcRunLog` / `QcLogEntry`）：保留近 30 天，每条可展开看

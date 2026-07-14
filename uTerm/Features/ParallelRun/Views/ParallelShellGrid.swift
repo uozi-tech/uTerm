@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// Shell 视图：每台一个迷你终端窗格的网格。N≤3 → N 列；N≥4 → 2 列。

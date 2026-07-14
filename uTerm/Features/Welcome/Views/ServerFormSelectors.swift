@@ -1,4 +1,6 @@
+import UDesignKit
 import SwiftUI
+import USSHKit
 
 /// 新建服务器表单里的「密钥」下拉选择器（设计稿 `new-server.jsx` 的 `KeySelector`）。
 /// 从密钥库里挑一把 `SSHKey`；底部「打开密钥管理…」跳独立窗口。

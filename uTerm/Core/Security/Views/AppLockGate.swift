@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 把应用锁挂到任意 Scene 根视图：未解锁时**不挂载受保护内容**，只展示

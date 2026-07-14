@@ -1,3 +1,4 @@
+import UDesignKit
 // uTerm/Views/HostDetailPanel.swift
 import SwiftUI
 import AppKit

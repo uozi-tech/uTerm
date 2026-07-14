@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 工作区右 inspector：AI 助手。

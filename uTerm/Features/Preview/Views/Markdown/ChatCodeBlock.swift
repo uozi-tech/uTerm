@@ -1,3 +1,4 @@
+import UDesignKit
 // uTerm/Views/Markdown/ChatCodeBlock.swift
 import SwiftUI
 import AppKit

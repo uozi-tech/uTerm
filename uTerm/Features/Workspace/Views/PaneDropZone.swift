@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 一个窗格的 5 个投放区。窗格区域划分为：

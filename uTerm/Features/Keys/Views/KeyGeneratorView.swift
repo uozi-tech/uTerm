@@ -1,4 +1,6 @@
+import UDesignKit
 import SwiftUI
+import USSHKit
 
 /// 生成新密钥面板（设计稿 `keys.jsx` 的 `KeyGenerator`）。按已定方案**不设口令**
 /// —— 生成的私钥明文存钟匙串（系统加密 + iCloud e2e）。生成在后台线程跑（RSA

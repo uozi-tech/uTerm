@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 预览区底部状态条。Mode-aware：代码显示语言/编码/未保存；图片显示尺寸；空态显示就绪。

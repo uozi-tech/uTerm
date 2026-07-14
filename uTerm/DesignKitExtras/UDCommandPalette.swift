@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 命令面板浮层（纯展示）——像素级还原设计稿 command-palette.jsx。

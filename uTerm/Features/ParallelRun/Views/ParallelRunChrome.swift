@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 并行执行窗口的 chrome：自绘标题栏、广播条、状态栏，及共享小件。

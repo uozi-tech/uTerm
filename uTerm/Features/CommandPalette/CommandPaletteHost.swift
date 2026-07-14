@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 把命令面板挂到任意窗口根视图：⌘K 开关 + 浮层 + 点外关闭。

@@ -1,3 +1,4 @@
+import UDesignKit
 import Foundation
 
 /// 命令面板条目的种类。决定分组标题、显示顺序、图标。
@@ -112,5 +113,22 @@ func commandPaletteSettingsItems(openSettings: @escaping () -> Void) -> [Command
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTabSelection.key)
                 openSettings()
             }
+    }
+}
+
+/// uTerm-only command-palette bridge for the shared package's accent state.
+@MainActor
+func commandPaletteAccentItems() -> [CommandPaletteItem] {
+    AccentColor.allCases.map { color in
+        CommandPaletteItem(
+            id: "setting.accent.\(color.rawValue)",
+            kind: .setting,
+            title: "强调色 · \(color.label)",
+            detail: "切换全局界面强调色",
+            hint: AccentState.shared.selected == color ? "当前" : "↵",
+            group: nil
+        ) {
+            AccentState.shared.selected = color
+        }
     }
 }

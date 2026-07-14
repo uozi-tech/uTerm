@@ -1,3 +1,4 @@
+import UDesignKit
 // uTerm/Views/WelcomeToolbar.swift
 import SwiftUI
 import AppKit

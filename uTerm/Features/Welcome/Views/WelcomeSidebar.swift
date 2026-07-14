@@ -1,3 +1,4 @@
+import UDesignKit
 // uTerm/Views/WelcomeSidebar.swift
 import SwiftUI
 import SwiftData
