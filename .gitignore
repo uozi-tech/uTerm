@@ -26,3 +26,6 @@ build/
 
 # SPM 构建产物（任意包，含 Packages/*/.build）
 .build/
+
+# Xcode/SwiftPM per-user 状态
+xcuserdata/
