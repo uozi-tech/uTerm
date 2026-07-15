@@ -133,6 +133,7 @@ archive:
 		-destination "generic/platform=macOS" \
 		-archivePath "$(ARCHIVE_PATH)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
+		-skipPackagePluginValidation \
 		-allowProvisioningUpdates \
 		CODE_SIGN_STYLE=Automatic \
 		DEVELOPMENT_TEAM=$(TEAM_ID) \
