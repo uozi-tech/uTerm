@@ -226,12 +226,12 @@ actor SOCKS5ForwardListener {
                 buffer.removeFirst(usedBytes)
 
                 // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起）。
-                let directChannel: Channel
+                let remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>
                 do {
                     let targetHost = request.host, targetPort = request.port
-                    directChannel = try await withForwardingTimeout(
+                    remoteAsync = try await withForwardingTimeout(
                         .seconds(10),
-                        lateResultCleanup: { channel in try? await channel.close() }
+                        lateResultCleanup: { channel in try? await channel.channel.close() }
                     ) {
                         try await connected.openDirectTCPIP(host: targetHost, port: targetPort)
                     }
@@ -247,10 +247,6 @@ actor SOCKS5ForwardListener {
                 try await Self.writeReply(SOCKS5Handshake.connectReply(success: true), to: outbound)
 
                 // 远端粘合子任务：作用域管 direct-tcpip 通道，双向泵。
-                // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
-                let remoteAsync = try await directChannel.eventLoop.submit {
-                    try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
-                }.get()
                 remoteTask = Task { [bridge] in
                     await Self.glueRemote(
                         remoteAsync,

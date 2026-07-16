@@ -489,8 +489,9 @@ extension SSHChildChannel: Channel, ChannelCore {
             self.processOutboundMessage(.channelOpen(message), promise: nil)
             self.writePendingToMultiplexer()
         } else {
-            // Already closed, just fail this promise.
-            self.closeFuture.cascadeFailure(to: userPromise)
+            // Already closed, just fail this promise. (Do not cascade from closeFuture:
+            // it never fails — cascadeFailure would leave the promise forever pending.)
+            userPromise?.fail(ChannelError.ioOnClosedChannel)
         }
     }
 
@@ -591,7 +592,13 @@ extension SSHChildChannel: Channel, ChannelCore {
 
         self.eventLoop.execute {
             self.removeHandlers(pipeline: self.pipeline)
-            self.closePromise.fail(error)
+            // `Channel.closeFuture` must never fail (NIOCore contract): `NIOAsyncChannel`'s
+            // `executeThenClose` asserts on a failed closeFuture, which turned abrupt SSH
+            // transport teardown (`NIOSSHError.tcpShutdown` via `parentChannelInactive`) into
+            // a debug-build crash for wrapped direct-tcpip channels. The error itself has
+            // already been surfaced via `fireErrorCaught`, failed pending writes, and the
+            // pending close promise above — the closeFuture only reports "closed".
+            self.closePromise.succeed(())
             self.multiplexer.childChannelErrored(channelID: self.state.localChannelIdentifier, expectClose: !self.state.isClosed)
         }
     }

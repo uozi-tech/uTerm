@@ -9,6 +9,9 @@ public actor SSHLocalForwardingTunnel: SSHForwardingTunnel {
     private let approvalTimeout: Duration
     private let approver: @Sendable (SSHHostKeyChallenge) async -> Bool
     private let logger: any SSHLogger
+    /// 隧道建立后、某条本地连接开 direct-tcpip 通道失败时回调（已归类）。
+    /// 供应用层把「隧道通了但跳板机开不到目标」的真实原因浮出到 UI。
+    private let onChannelFailure: @Sendable (SSHForwardingChannelFailure) -> Void
 
     private var connected: ConnectedClient?
     private var listener: LocalForwardListener?
@@ -22,7 +25,8 @@ public actor SSHLocalForwardingTunnel: SSHForwardingTunnel {
         channelOpenTimeout: Duration = .seconds(10),
         approvalTimeout: Duration = .seconds(180),
         logger: any SSHLogger = NoOpSSHLogger(),
-        approver: @escaping @Sendable (SSHHostKeyChallenge) async -> Bool = { _ in false }
+        approver: @escaping @Sendable (SSHHostKeyChallenge) async -> Bool = { _ in false },
+        onChannelFailure: @escaping @Sendable (SSHForwardingChannelFailure) -> Void = { _ in }
     ) {
         self.request = request
         self.hostKeyStore = hostKeyStore
@@ -32,6 +36,7 @@ public actor SSHLocalForwardingTunnel: SSHForwardingTunnel {
         self.approvalTimeout = approvalTimeout
         self.logger = logger
         self.approver = approver
+        self.onChannelFailure = onChannelFailure
     }
 
     public func open() async throws -> SSHForwardingEndpoint {
@@ -52,6 +57,7 @@ public actor SSHLocalForwardingTunnel: SSHForwardingTunnel {
             approver: approver
         )
 
+        let onChannelFailure = self.onChannelFailure
         let listener = LocalForwardListener(
             connected: connected,
             listenHost: request.localHost,
@@ -59,7 +65,10 @@ public actor SSHLocalForwardingTunnel: SSHForwardingTunnel {
             destHost: request.target.host,
             destPort: request.target.port,
             channelOpenTimeout: channelOpenTimeout,
-            logger: logger
+            logger: logger,
+            onChannelFailure: { error in
+                onChannelFailure(SSHForwardingChannelFailure(classifying: error))
+            }
         )
         do {
             let port = try await listener.start()

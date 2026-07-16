@@ -39,7 +39,11 @@ let package = Package(
         ),
         .testTarget(
             name: "USSHKitTests",
-            dependencies: ["USSHKit"]
+            dependencies: [
+                "USSHKit",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOEmbedded", package: "swift-nio"),
+            ]
         ),
     ]
 )

@@ -22,7 +22,10 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         try await shared.exec(command)
     }
 
-    func openDirectTCPIP(host: String, port: Int) async throws -> Channel {
+    func openDirectTCPIP(
+        host: String,
+        port: Int
+    ) async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
         try await shared.openDirectTCPIP(host: host, port: port)
     }
 }

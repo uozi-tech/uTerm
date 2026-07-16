@@ -162,23 +162,19 @@ public actor LocalForwardListener {
         let remoteAsync: NIOAsyncChannel<ByteBuffer, ByteBuffer>
         do {
             // 开 direct-tcpip 到目标，套超时（半死传输上开通道可能无限挂起，超时则抛错）。
-            let directChannel = try await withForwardingTimeout(
+            remoteAsync = try await withForwardingTimeout(
                 channelOpenTimeout,
-                lateResultCleanup: { channel in try? await channel.close() }
+                lateResultCleanup: { channel in try? await channel.channel.close() }
             ) {
                 try await connected.openDirectTCPIP(host: destHost, port: destPort)
             }
-            // 远端 direct-tcpip 是 SSH 通道；Citadel 的 DataToBufferCodec 已在该通道上开了
-            // allowRemoteHalfClosure，半关由其处理，这里不再设置。DB 是「服务端后说话」+
-            // NIOSSH 把入站缓进 pendingReads，故远端这侧不存在本地那种早期字节丢弃。
-            // wrappingChannelSynchronously 须在 channel 的 EventLoop 上调用，经 submit 回到 EL。
-            remoteAsync = try await directChannel.eventLoop.submit {
-                try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: directChannel)
-            }.get()
         } catch {
+            // 归类成人话再进日志 —— 原始 NIOSSHError 经 localizedDescription 只会
+            // 显示「NIOSSH.NIOSSHError错误1」这类 NSError 桥接文本，没法排查。
+            let failure = SSHForwardingChannelFailure(classifying: error)
             logger.log(SSHLogEvent(
                 level: .error,
-                message: "本地转发开通道失败 → \(destHost):\(destPort)：\(error.localizedDescription)"
+                message: "本地转发开通道失败：\(failure.userMessage(targetHost: destHost, targetPort: destPort))［\(failure.detail)］"
             ))
             onChannelFailure(error)
             // 关键：此时 localAsync 尚未被消费，**必须**经 executeThenClose 收尾——它会 finish 出站

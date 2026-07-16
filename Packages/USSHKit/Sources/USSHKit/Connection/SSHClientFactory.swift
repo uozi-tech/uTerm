@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Citadel
+import NIOConcurrencyHelpers
 import NIOCore
 import NIOSSH
 
@@ -27,15 +28,48 @@ public nonisolated struct ConnectedClient: @unchecked Sendable {
         return String(buffer: buffer)
     }
 
-    public func openDirectTCPIP(host: String, port: Int) async throws -> Channel {
+    public func openDirectTCPIP(
+        host: String,
+        port: Int
+    ) async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
         let originator = try SocketAddress(ipAddress: "127.0.0.1", port: 0)
-        return try await target.createDirectTCPIPChannel(
+        let prepared = NIOLockedValueBox<NIOAsyncChannel<ByteBuffer, ByteBuffer>?>(nil)
+
+        _ = try await target.createDirectTCPIPChannel(
             using: SSHChannelType.DirectTCPIP(
                 targetHost: host,
                 targetPort: port,
                 originatorAddress: originator
             ),
-            initialize: { $0.eventLoop.makeSucceededVoidFuture() }
+            initialize: { channel in
+                // Install NIOAsyncChannel before the direct-tcpip channel is
+                // activated. Server-first protocols such as MySQL may send
+                // their greeting immediately; wrapping after create returns
+                // leaves an empty-pipeline window that drops those bytes.
+                channel.eventLoop.makeCompletedFuture {
+                    let asyncChannel = try DirectTCPIPAsyncChannelPreparation.wrap(channel)
+                    prepared.withLockedValue { $0 = asyncChannel }
+                }
+            }
+        )
+
+        guard let asyncChannel = prepared.withLockedValue({ $0 }) else {
+            throw SSHConnectionError.connectFailed(
+                "direct-tcpip channel activated before its async reader was installed"
+            )
+        }
+        return asyncChannel
+    }
+}
+
+/// Installs the async sequence handlers while the direct-tcpip channel is still
+/// inside its initializer and therefore cannot have delivered protocol bytes.
+nonisolated enum DirectTCPIPAsyncChannelPreparation {
+    static func wrap(
+        _ channel: Channel
+    ) throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
+        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+            wrappingChannelSynchronously: channel
         )
     }
 }
