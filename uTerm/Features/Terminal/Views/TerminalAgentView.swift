@@ -18,6 +18,8 @@ struct TerminalAgentView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
+    @State private var followsConversationTail = true
+    @State private var pendingTailScroll: DispatchWorkItem?
 
     var body: some View {
         Group {
@@ -125,20 +127,47 @@ struct TerminalAgentView: View {
                 // 默认贴底；新消息 / 流式增量 / 工具状态变化 / 追问出现都滚到底（工具卡输出
                 // 增长不改 message.text，故还要听 messages.count 与 state）。
                 .defaultScrollAnchor(.bottom)
-                .onChange(of: model.messages.count) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.state) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.followUps) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.followUpsLoading) { _, _ in scrollToBottom(proxy) }
+                .onScrollPhaseChange { _, phase, context in
+                    if phase == .tracking || phase == .interacting {
+                        followsConversationTail = false
+                        pendingTailScroll?.cancel()
+                        pendingTailScroll = nil
+                    }
+                    if phase == .idle {
+                        followsConversationTail = AgentScrollPolicy.isNearBottom(
+                            visibleMaxY: context.geometry.visibleRect.maxY,
+                            contentHeight: context.geometry.contentSize.height)
+                    }
+                }
+                .onChange(of: model.messages.count) { _, _ in scheduleScrollToBottom(proxy) }
+                .onChange(of: model.messages.last?.text) { _, _ in scheduleScrollToBottom(proxy) }
+                .onChange(of: model.state) { _, _ in scheduleScrollToBottom(proxy) }
+                .onChange(of: model.followUps) { _, _ in scheduleScrollToBottom(proxy) }
+                .onChange(of: model.followUpsLoading) { _, _ in scheduleScrollToBottom(proxy) }
+                .onDisappear {
+                    pendingTailScroll?.cancel()
+                    pendingTailScroll = nil
+                }
             }
         }
     }
 
     private static let bottomAnchorID = "ta.bottom"
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        // 滚到贴底锚点（在追问之下）——否则只滚到最后一条消息，追问被挡在折叠线下。
-        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+    private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
+        guard followsConversationTail, pendingTailScroll == nil else { return }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                pendingTailScroll = nil
+                // 滚到追问下方的贴底锚点；合并到最多每 100ms 一次，与 Markdown
+                // 重排节奏一致，避免逐 token 重入 LazyVStack 布局。
+                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+            }
+        }
+        pendingTailScroll = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AgentScrollPolicy.coalescingDelay,
+            execute: work)
     }
 
     @ViewBuilder
@@ -159,17 +188,15 @@ struct TerminalAgentView: View {
             // 文本带头像；命令卡整宽（不跟随头像缩进 → 左右对称，去掉头像下方竖直空槽）。
             VStack(alignment: .leading, spacing: 8) {
                 if !m.text.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
                         agentAvatar
-                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                         StreamingMarkdownView(text: m.text, isStreaming: isStreamingTail(m))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else if !isStreamingTail(m) && m.toolCalls.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
                         agentAvatar
-                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                         Text("…").font(.system(size: 13)).foregroundStyle(UD.text3)
                     }
                 }

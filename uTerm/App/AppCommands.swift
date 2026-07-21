@@ -1,5 +1,29 @@
 import SwiftUI
 
+/// 将所有 Scene 的系统“新建”入口统一成 Welcome 单实例窗口。
+/// `Window` 的 `openWindow(id:)` 在窗口已存在时会将其带到前台，关闭后则重新创建。
+struct NewWelcomeWindowCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("新建窗口") {
+                openWindow(id: "welcome")
+            }
+            .keyboardShortcut("n", modifiers: .command)
+        }
+    }
+}
+
+extension Scene {
+    /// 每个窗口 Scene 都应用同一份 `⌘N` 路由，避免焦点切换后退回系统默认建窗行为。
+    func routesNewWindowToWelcome() -> some Scene {
+        commands {
+            NewWelcomeWindowCommands()
+        }
+    }
+}
+
 struct AppInfoCommands: Commands {
     let appUpdater: AppUpdater
 

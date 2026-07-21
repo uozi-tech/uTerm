@@ -3,6 +3,14 @@ import XCTest
 
 @MainActor
 final class StartupBehaviorTests: XCTestCase {
+    func testStartupBehaviorGateCanOnlyBeClaimedOnce() {
+        let gate = StartupBehaviorGate()
+
+        XCTAssertTrue(gate.claim())
+        XCTAssertFalse(gate.claim())
+        XCTAssertTrue(gate.hasApplied)
+    }
+
     func test_allCases_order_and_count() {
         XCTAssertEqual(StartupBehavior.allCases, [.welcome, .restore, .lastHost])
     }

@@ -28,8 +28,6 @@ struct ChatCodeBlock: View {
         .background(containerShape.fill(style.codeBlockBackground))
         .clipShape(containerShape)
         .overlay(containerShape.strokeBorder(style.border, lineWidth: 1))
-        // 代码块在浅色主题下保持深色渲染（高亮配色面向深底）。
-        .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
@@ -66,17 +64,22 @@ struct ChatCodeBlock: View {
 
     @ViewBuilder
     private var content: some View {
-        Group {
-            if isStreaming {
-                Text(trimmed)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(style.textPrimary)
-            } else {
-                Text(CodeHighlighter.attributed(code: trimmed, language: language))
+        ScrollView(.horizontal) {
+            Group {
+                if isStreaming {
+                    Text(trimmed)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(style.textPrimary)
+                } else {
+                    Text(CodeHighlighter.attributed(code: trimmed, language: language))
+                }
             }
+            // 代码和预格式化诊断依赖列对齐；窄侧边栏中应横向滚动，不应把行尾
+            // emoji 折到下一行。
+            .fixedSize(horizontal: true, vertical: false)
+            .textSelection(.enabled)
+            .padding(10)
         }
-        .textSelection(.enabled)
-        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

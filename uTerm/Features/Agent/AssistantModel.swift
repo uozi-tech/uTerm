@@ -228,19 +228,34 @@ final class AssistantModel {
         config.tools = executor != nil ? [.runCommand] : []
         let client = clientOverride ?? LLMClientFactory.make(for: provider)
         let system = Self.systemPrompt(serverContext: serverContext)
+        var textAccumulator = StreamingTextAccumulator()
         do {
             for try await event in client.stream(messages: conversation,
                                                   system: system, config: config) {
                 switch event {
                 case .text(let delta):
-                    messages[assistantIndex].text += delta
+                    // SSE 往往按 token 甚至更小片段到达。逐片段写入 @Observable 数组会让
+                    // 整个聊天树逐 token 重算；长回复叠加自动滚动后会把主线程拖进持续
+                    // AttributeGraph 布局。首片立即显示，后续按短窗口合并发布。
+                    if let text = textAccumulator.append(delta, at: .now) {
+                        messages[assistantIndex].text += text
+                    }
                 case .toolCall(let call):
+                    if let text = textAccumulator.flush() {
+                        messages[assistantIndex].text += text
+                    }
                     messages[assistantIndex].toolCalls.append(ToolCallState(from: call))
                 }
+            }
+            if let text = textAccumulator.flush() {
+                messages[assistantIndex].text += text
             }
             let pending = messages[assistantIndex].toolCalls.contains { $0.status == .pending }
             state = pending ? .awaitingApproval : .idle
         } catch {
+            if let text = textAccumulator.flush() {
+                messages[assistantIndex].text += text
+            }
             let message = errorMessage(for: error, kind: provider.kind)
             messages[assistantIndex].text += "\n[错误：\(message)]"
             state = .failed(message)
@@ -604,5 +619,41 @@ final class AssistantModel {
             s += "\n\n当前上下文：\(serverContext)"
         }
         return s
+    }
+}
+
+/// 将高频 SSE 文本碎片合并成低频 UI 发布。首片立即返回，保证首字延迟不增加；随后
+/// 最多每个 `publishInterval` 返回一次，流结束时由 `flush()` 冲掉尾片。
+nonisolated struct StreamingTextAccumulator {
+    static let publishInterval: Duration = .milliseconds(50)
+
+    private var pending = ""
+    private var lastPublication: ContinuousClock.Instant?
+
+    mutating func append(
+        _ delta: String,
+        at now: ContinuousClock.Instant,
+        interval: Duration = publishInterval
+    ) -> String? {
+        guard !delta.isEmpty else { return nil }
+        pending += delta
+
+        if let lastPublication,
+           lastPublication.duration(to: now) < interval {
+            return nil
+        }
+        lastPublication = now
+        return drain()
+    }
+
+    mutating func flush() -> String? {
+        drain()
+    }
+
+    private mutating func drain() -> String? {
+        guard !pending.isEmpty else { return nil }
+        let text = pending
+        pending = ""
+        return text
     }
 }

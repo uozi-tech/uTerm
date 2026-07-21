@@ -20,3 +20,16 @@ enum StartupBehavior: String, CaseIterable, Identifiable {
         }
     }
 }
+
+/// 进程级启动行为闸门。Welcome 窗口关闭后再由“新建窗口”重开时，不应再次执行
+/// `.restore` / `.lastHost` 并立刻把用户从欢迎页转走。
+@MainActor
+final class StartupBehaviorGate {
+    private(set) var hasApplied = false
+
+    func claim() -> Bool {
+        guard !hasApplied else { return false }
+        hasApplied = true
+        return true
+    }
+}

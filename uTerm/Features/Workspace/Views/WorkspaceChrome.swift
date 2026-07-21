@@ -187,6 +187,12 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
 
         func apply() {
             guard let window else { return }
+            // 禁用 AppKit 原生窗口 Tab：uTerm 已有自己的终端标签，系统 Tab 只会重复一层
+            // chrome。先收起可能由窗口恢复带回来的 Tab Bar，再禁止本窗口参与后续合并。
+            if window.tabbedWindows != nil {
+                window.toggleTabBar(nil)
+            }
+            window.tabbingMode = .disallowed
             window.appearance = nil   // 跟随 NSApp.appearance（AppAppearanceSync 驱动）
             window.isOpaque = true
             window.backgroundColor = WS.bgNSColor

@@ -33,6 +33,8 @@ struct AssistantView: View {
     @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
 
     @State private var showSessions = false
+    @State private var followsChatTail = true
+    @State private var pendingTailScroll: DispatchWorkItem?
 
     var body: some View {
         Group {
@@ -53,6 +55,7 @@ struct AssistantView: View {
                             .padding(.horizontal, 12)
                     }
                 }
+                .background(commandReturnShortcut)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -305,16 +308,39 @@ struct AssistantView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(model.messages) { messageRow($0) }
+                        Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
                     .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
                 }
-                .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.messages.last?.id) { _, _ in scrollToBottom(proxy) }
+                .defaultScrollAnchor(.bottom)
+                .onScrollPhaseChange { _, phase, context in
+                    if phase == .tracking || phase == .interacting {
+                        followsChatTail = false
+                        pendingTailScroll?.cancel()
+                        pendingTailScroll = nil
+                    }
+                    if phase == .idle {
+                        followsChatTail = AgentScrollPolicy.isNearBottom(
+                            visibleMaxY: context.geometry.visibleRect.maxY,
+                            contentHeight: context.geometry.contentSize.height)
+                    }
+                }
+                .onChange(of: model.messages.last?.text) { _, _ in
+                    scheduleScrollToBottom(proxy)
+                }
+                .onChange(of: model.messages.last?.id) { _, _ in
+                    scheduleScrollToBottom(proxy)
+                }
                 .onChange(of: model.state) { old, now in
+                    scheduleScrollToBottom(proxy)
                     // 流式落定时给 VoiceOver 播报，无需用户盯着屏幕。
                     if old == .streaming && now != .streaming {
                         AccessibilityNotification.Announcement("回答已完成").post()
                     }
+                }
+                .onDisappear {
+                    pendingTailScroll?.cancel()
+                    pendingTailScroll = nil
                 }
             }
             queueStrip
@@ -322,10 +348,20 @@ struct AssistantView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        if let last = model.messages.last {
-            proxy.scrollTo(last.id, anchor: .bottom)
+    private static let bottomAnchorID = "assistant.bottom"
+
+    private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
+        guard followsChatTail, pendingTailScroll == nil else { return }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                pendingTailScroll = nil
+                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+            }
         }
+        pendingTailScroll = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AgentScrollPolicy.coalescingDelay,
+            execute: work)
     }
 
     @ViewBuilder
@@ -355,7 +391,10 @@ struct AssistantView: View {
         let isStreamingTail = message.id == model.messages.last?.id
             && model.state == .streaming
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
+            // MarkdownBlocks 的根是多层 VStack。对它请求 firstTextBaseline 会递归遍历
+            // 整棵 Markdown 布局树；长流式回复会在 AttributeGraph 中形成极深的
+            // explicitAlignment/sizeThatFits 热点。顶部对齐不需要递归基线测量。
+            HStack(alignment: .top, spacing: 2) {
                 if message.text.isEmpty && !isStreamingTail {
                     Text("…")
                         .font(.system(size: 12.5))
@@ -366,6 +405,7 @@ struct AssistantView: View {
                 }
                 if isStreamingTail {
                     StreamingCaret()
+                        .padding(.top, 3)
                         .accessibilityHidden(true)
                 }
             }
@@ -393,6 +433,15 @@ struct AssistantView: View {
         case .running: return .running
         case .done, .failed, .skipped: return .done(output: call.output)
         }
+    }
+
+    private func firstPendingToolCallID() -> String? {
+        for message in model.messages {
+            if let call = message.toolCalls.first(where: { $0.status == .pending }) {
+                return call.id
+            }
+        }
+        return nil
     }
 
     // MARK: - 输入区
@@ -460,6 +509,26 @@ struct AssistantView: View {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         model.input = ""
         Task { await model.submit(text: text, serverContext: serverContext) }
+    }
+
+    /// 工作区 Agent 与终端 Agent 共用同一条 ⌘↵ 语义：待确认时优先运行命令，
+    /// 否则发送当前输入。
+    private func handleCommandReturn() {
+        if model.state == .awaitingApproval, let id = firstPendingToolCallID() {
+            Task { await model.approveAndRun(id: id) }
+        } else {
+            sendIfPossible()
+        }
+    }
+
+    /// `UDToolCall` 只展示「⌘↵」提示；由容器统一注册真实快捷键，避免多张命令卡重复绑定。
+    private var commandReturnShortcut: some View {
+        Button("", action: handleCommandReturn)
+            .keyboardShortcut(.return, modifiers: .command)
+            .buttonStyle(.plain)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 
     private func attachCurrentContext() {

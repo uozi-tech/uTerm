@@ -21,6 +21,8 @@ struct uTermApp: App {
     /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
     @State private var launchRelay = HostKeyChallengeRelay()
     @State private var lockModel: AppLockModel
+    /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
+    private let startupBehaviorGate = StartupBehaviorGate()
 
     private var currentAppearance: AppearancePreference {
         AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
@@ -35,6 +37,9 @@ struct uTermApp: App {
     let modelContainer: ModelContainer = AppModelContainer.make()
 
     init() {
+        // uTerm 自己已有工作区/终端标签，禁用 macOS 把独立窗口再合并成系统 Tab。
+        // 必须在任何 Scene 创建 NSWindow 前设置，才能阻止系统按用户偏好自动合并。
+        NSWindow.allowsAutomaticWindowTabbing = false
         // Spec 1 之前的单份 workspace.json 已不再使用 —— 启动时清掉。
         WorkspaceStore.purgeLegacyWorkspaceFile()
         // M5 单 anthropic-api-key keychain 条目已被 AIProvider 多 key 取代——清掉旧条目。
@@ -57,7 +62,7 @@ struct uTermApp: App {
         // 主题由 AppAppearanceSync 驱动（colorScheme env + NSApp.appearance 两路），
         // 不挂 .preferredColorScheme——原因见 AppearancePreference 类型文档。
         Window("uTerm", id: "welcome") {
-            WelcomeView()
+            WelcomeView(startupBehaviorGate: startupBehaviorGate)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
@@ -74,6 +79,7 @@ struct uTermApp: App {
         // 否则系统暗夜标题栏（更浅的灰）盖在设计稿 #101012 之上 —— 即「chrome 还是系统默认
         // 暗夜配色」的根因。与 workspace / SFTP 窗口一致。
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         // 密钥管理 —— 单实例独立窗口（设计稿 keys.jsx）。从 Welcome 工具栏或
         // 新建服务器表单的「打开密钥管理…」用 openWindow(id:"keys") 打开。
@@ -86,6 +92,7 @@ struct uTermApp: App {
         .modelContainer(modelContainer)
         // 同上：隐藏系统标题栏，让密钥管理窗口走自绘扁平 chrome（KeyManagerView 顶部自绘标题栏）。
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         Window("分组管理", id: "groups") {
             GroupsManagerView()
@@ -95,6 +102,7 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         Window("导入 SSH 配置", id: "import") {
             SSHConfigImportView()
@@ -104,6 +112,7 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         // 工作区窗口 —— 每个绑定一台服务器，可多实例。
         WindowGroup(for: WorkspaceWindowID.self) { $windowID in
@@ -123,6 +132,7 @@ struct uTermApp: App {
         // 整个禁止 resize（cursor 都不显示），跟文档说的"只限制 min"不符。
         // 单独写 .frame(minWidth:) on view body 已经能把 contentMinSize 推到
         // AppKit（已 probe 验证 NSWindow.contentMinSize=(1280, 772)），不必加这条。
+        .routesNewWindowToWelcome()
         .commands {
             // 所有工作区级快捷键的唯一注册点 —— 工具栏按钮不再挂 .keyboardShortcut，
             // 避免双重注册导致的双触发 no-op（Fix #4 + #10）。
@@ -176,6 +186,7 @@ struct uTermApp: App {
         // 这一句是关键修复 —— 仅靠 WorkspaceWindowChrome 的 NSWindow.titlebarAppearsTransparent
         // 在 SwiftUI WindowGroup 下不稳定，会被系统不透明标题栏盖住（即「自定义 header 被遮挡」）。
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         // 纯终端独立窗口 —— 每个绑定一台服务器的「终端 ⇄ Agent」窗口，可多实例。
         // 复用 WorkspaceModel 的多标签 + 分屏 + Agent，但不含 SFTP 侧栏 / 预览区。
@@ -190,6 +201,7 @@ struct uTermApp: App {
         .windowStyle(.hiddenTitleBar)
         // 默认尺寸足够容纳 Agent 空状态（分组示例）不出现滚动；用户可自由缩放。
         .defaultSize(width: 1000, height: 720)
+        .routesNewWindowToWelcome()
 
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。
         WindowGroup(for: PortForwardWindowID.self) { $pfID in
@@ -201,6 +213,7 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
 
         // 全局端口转发 —— 单实例跨主机统一管理面 + 应用级自启编排。从 Welcome 工具栏
         // 「全局转发」或命令面板用 openWindow(id:"global-forwarding") 打开。与单主机端口转发
@@ -217,6 +230,7 @@ struct uTermApp: App {
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 760, height: 620)
+        .routesNewWindowToWelcome()
 
         // 并行执行窗口 —— 一条快捷命令在其绑定的多台服务器上「广播」执行，可多实例
         //（按 commandID 去重）。Shell 广播网格 / AI 自然语言自愈两视图，标题栏可切。
@@ -229,6 +243,7 @@ struct uTermApp: App {
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
+        .routesNewWindowToWelcome()
 
         // 设置窗口（⌘,）—— AI provider 等配置面板。
         // 用普通 Window 而非 macOS `Settings` 场景：后者不可靠地忽略
@@ -246,6 +261,7 @@ struct uTermApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
+        .routesNewWindowToWelcome()
         .commands {
             AppInfoCommands(appUpdater: appUpdater)
             SettingsWindowCommands()
@@ -260,6 +276,7 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
         }
         .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
         .commands { DebugCommands() }
         #endif
     }

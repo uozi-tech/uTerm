@@ -20,7 +20,6 @@ struct WelcomeToolbar: View {
                 openWindow(id: "keys")
             }
             UDButton(title: "新建", style: .primary, systemImage: "plus", action: onNewServer)
-                .keyboardShortcut("n", modifiers: .command)
         }
         .padding(.horizontal, 12)
         .frame(height: 52)

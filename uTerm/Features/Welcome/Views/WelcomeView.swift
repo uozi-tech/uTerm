@@ -13,6 +13,8 @@ nonisolated enum WelcomePane: Hashable, Sendable {
 /// Welcome 窗口：服务器列表 + 增删改 + 连接入口。Spec 3 重写为 toolbar +
 /// sidebar + list 三层组合（Termius 风）。
 struct WelcomeView: View {
+    let startupBehaviorGate: StartupBehaviorGate
+
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
@@ -35,7 +37,6 @@ struct WelcomeView: View {
     @State private var draggingProfileID: UUID?
     @State private var pendingDelete: ServerProfile?
     @State private var newGroupPrompt: NewGroupPrompt?
-    @State private var didApplyStartupBehavior = false
     @State private var didReconcileGroups = false
     @State private var palette = CommandPaletteModel()
     @State private var isDropTargeted = false
@@ -173,8 +174,7 @@ struct WelcomeView: View {
             // 第一个 view（Welcome 窗有 .defaultLaunchBehavior 默认 .presented），
             // 是最稳定的启动钩。.restore 和 .lastHost 模式下 Welcome 闪一下
             // 后由 dismissWindow 关掉自己。
-            guard !didApplyStartupBehavior else { return }
-            didApplyStartupBehavior = true
+            guard startupBehaviorGate.claim() else { return }
             // 先同步触发「随 uTerm 启动」的隧道（fire-and-forget，序列由 globalForwarding 持有），
             // 再应用启动行为 —— .restore/.lastHost 模式下 applyStartupBehavior 会关掉 Welcome，
             // 必须赶在关窗之前把序列踢起来。
