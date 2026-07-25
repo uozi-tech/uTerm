@@ -11,6 +11,15 @@ nonisolated struct FilePreviewPanel: Identifiable, Equatable, Sendable {
     }
 }
 
+/// 编辑器键盘焦点请求。用户**主动**打开文件 / 点击标签时代数 +1，
+/// `CodeEditorView` 消费后把窗口第一响应者交给文本视图，让 ⌘A/⌘C 等编辑菜单
+/// 快捷键立即作用于文件内容（而不是停留在文件树 / 终端等旧焦点上）。
+/// 会话恢复（`restoreOpenFiles`）不发请求 —— 避免开窗时抢终端焦点。
+nonisolated struct EditorFocusRequest: Equatable, Sendable {
+    let generation: Int
+    let bufferID: UUID
+}
+
 /// 有界的 markdown 图片缓存。按插入顺序（FIFO）淘汰，受单图上限、总字节上限
 /// 和条目数上限三重约束，防止引用大量/超大远程图片时撑爆内存。
 /// 纯值类型，便于单测淘汰逻辑（网络/SFTP 路径本身不可单测）。
@@ -91,6 +100,8 @@ final class FilePreviewModel {
     private(set) var panels: [UUID: FilePreviewPanel] = [:]
     var focusedPanelID: UUID?
     private(set) var recents: [RecentFileEntry] = []
+    /// 最近一次编辑器焦点请求（语义见 `EditorFocusRequest`）。
+    private(set) var editorFocusRequest: EditorFocusRequest?
 
     enum SaveOutcome {
         case saved
@@ -157,6 +168,13 @@ final class FilePreviewModel {
         guard buffers.contains(where: { $0.id == id }) else { return }
         activeBufferID = id
         assignActiveBufferToFocusedPanel()
+        requestEditorFocus(id)
+    }
+
+    /// 用户主动打开 / 切换文件 → 请求把键盘焦点交给对应编辑器。
+    private func requestEditorFocus(_ bufferID: UUID) {
+        let next = (editorFocusRequest?.generation ?? 0) + 1
+        editorFocusRequest = EditorFocusRequest(generation: next, bufferID: bufferID)
     }
 
     func selectPanel(_ id: UUID) {
@@ -173,6 +191,7 @@ final class FilePreviewModel {
             activeBufferID = existing.id
             assignActiveBufferToFocusedPanel()
             if !asPreview { keepTab(existing.id) }
+            requestEditorFocus(existing.id)
             return
         }
 
@@ -187,6 +206,7 @@ final class FilePreviewModel {
         }
         activeBufferID = buf.id
         assignActiveBufferToFocusedPanel()
+        requestEditorFocus(buf.id)
 
         // 大小检查
         if fileSize > 50 * 1024 * 1024 {
@@ -504,6 +524,7 @@ final class FilePreviewModel {
         buffers.removeAll()
         activeBufferID = nil
         previewTabBufferID = nil
+        editorFocusRequest = nil
         panelRoot = nil
         panels.removeAll()
         focusedPanelID = nil

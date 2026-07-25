@@ -5,8 +5,9 @@ import SwiftUI
 struct CodeBody: View {
     let buffer: FileBuffer
     var language: String = ""
+    var focusRequest: EditorFocusRequest? = nil
 
     var body: some View {
-        CodeEditorView(buffer: buffer, language: language)
+        CodeEditorView(buffer: buffer, language: language, focusRequest: focusRequest)
     }
 }

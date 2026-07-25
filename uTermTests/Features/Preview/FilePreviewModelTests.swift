@@ -318,4 +318,49 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertEqual(m.buffers[1].text, "let b = 1")
         XCTAssertEqual(m.buffers.map(\.state), [.loaded, .loaded])
     }
+
+    // MARK: - 编辑器焦点请求（⌘A/⌘C 需要键盘焦点先落到编辑器）
+
+    func test_open_requestsEditorFocusForOpenedBuffer() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/x.swift", data: Data("hi".utf8))
+
+        await m.open(path: "/x.swift", fileSize: 2, mtime: nil)
+        let first = try XCTUnwrap(m.editorFocusRequest)
+        XCTAssertEqual(first.bufferID, m.buffers[0].id)
+
+        // 重复打开同一路径（已存在 buffer）也应再次请求焦点 —— 代数递增。
+        await m.open(path: "/x.swift", fileSize: 2, mtime: nil)
+        let second = try XCTUnwrap(m.editorFocusRequest)
+        XCTAssertEqual(second.bufferID, m.buffers[0].id)
+        XCTAssertGreaterThan(second.generation, first.generation)
+    }
+
+    func test_selectTab_requestsEditorFocus() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.md", data: Data("# A".utf8))
+        try await mock.write("/b.swift", data: Data("let b = 1".utf8))
+        await m.open(path: "/a.md", fileSize: 3, mtime: nil)
+        await m.open(path: "/b.swift", fileSize: 9, mtime: nil)
+        let before = try XCTUnwrap(m.editorFocusRequest)
+
+        m.selectTab(m.buffers[0].id)
+
+        let after = try XCTUnwrap(m.editorFocusRequest)
+        XCTAssertEqual(after.bufferID, m.buffers[0].id)
+        XCTAssertGreaterThan(after.generation, before.generation)
+    }
+
+    func test_restoreOpenFiles_doesNotRequestEditorFocus() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.md", data: Data("# A".utf8))
+
+        // 会话恢复不该抢焦点（开窗时终端才是默认焦点）。
+        m.restoreOpenFiles([
+            OpenFileSnapshot(remotePath: "/a.md", byteSize: 3, mtimeWhenLoaded: nil),
+        ], activeIndex: 0)
+        await m.loadRestoredBuffersIfNeeded()
+
+        XCTAssertNil(m.editorFocusRequest)
+    }
 }

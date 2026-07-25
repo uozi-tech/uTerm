@@ -7,11 +7,14 @@ import CodeEditTextView
 struct CodeEditorView: View {
     let buffer: FileBuffer
     var language: String = ""
+    /// 用户主动打开 / 切换文件时的焦点请求（FilePreviewModel 发起）。
+    var focusRequest: EditorFocusRequest? = nil
     @State private var findController: FindReplaceController?
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             CodeEditorViewRepresentable(buffer: buffer, language: language,
+                                        focusRequest: focusRequest,
                                         findController: $findController)
                 .background(Color(nsColor: EditorTheme.background))
             if let fc = findController {
@@ -30,6 +33,7 @@ struct CodeEditorView: View {
 private struct CodeEditorViewRepresentable: NSViewRepresentable {
     let buffer: FileBuffer
     let language: String
+    let focusRequest: EditorFocusRequest?
     @Binding var findController: FindReplaceController?
 
     private var editorFont: NSFont {
@@ -43,7 +47,10 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
+        // 编辑器 wrapLines=false（VSCode 默认不折行），超长行必须能横向滚动 ——
+        // 关掉横向 scroller 会让超长内容（如 authorized_keys 单行公钥）直接
+        // overflow 且无法查看。autohides=true：内容不超宽时滚动条不出现。
+        scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.backgroundColor = EditorTheme.background
@@ -124,6 +131,16 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
             // setText 把 textView 所有 subview 都 removeFromSuperview 了（CodeEditTextView
             // setTextStorage 的副作用）—— 把 gutter 重新挂回 + 刷宽度/行号 + 重高亮。
             coordinator.ensureGutterAttached()
+        }
+
+        // 用户主动打开 / 切换文件（FilePreviewModel 焦点请求代数变了）→ 把键盘焦点
+        // 交给编辑器正文，⌘A/⌘C 等编辑菜单快捷键立即作用于文件内容，而不是留在
+        // 文件树 / 终端等旧焦点上。按 bufferID 匹配：分屏下只有目标 buffer 的编辑器接手。
+        if let focusRequest, focusRequest.generation != coordinator.handledFocusGeneration {
+            coordinator.handledFocusGeneration = focusRequest.generation
+            if focusRequest.bufferID == buffer.id {
+                coordinator.focusTextView()
+            }
         }
     }
 }

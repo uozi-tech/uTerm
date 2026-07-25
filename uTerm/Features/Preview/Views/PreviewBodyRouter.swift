@@ -10,7 +10,8 @@ struct PreviewBodyRouter: View {
     var body: some View {
         Group {
             if let buf = model.activeBuffer {
-                PreviewBufferBody(buffer: buf, onDownload: { buffer in
+                PreviewBufferBody(buffer: buf, focusRequest: model.editorFocusRequest,
+                                  onDownload: { buffer in
                     try await model.download(buffer)
                 }, onLoadMarkdownImage: { source, buffer in
                     try await model.loadMarkdownImage(source: source, referencedBy: buffer)
@@ -25,6 +26,8 @@ struct PreviewBodyRouter: View {
 
 struct PreviewBufferBody: View {
     let buffer: FileBuffer
+    /// 编辑器焦点请求（透传给 CodeBody → CodeEditorView 消费）。
+    var focusRequest: EditorFocusRequest? = nil
     var onDownload: ((FileBuffer) async throws -> Data)?
     let onLoadMarkdownImage: MarkdownBufferImageLoader
 
@@ -50,13 +53,14 @@ struct PreviewBufferBody: View {
     private var previewContent: some View {
         switch buffer.kind {
         case .code(let lang):
-            CodeBody(buffer: buffer, language: LanguageDetector.grammarId(for: lang))
+            CodeBody(buffer: buffer, language: LanguageDetector.grammarId(for: lang),
+                     focusRequest: focusRequest)
         case .markdown:
             MarkdownBody(buffer: buffer, imageLoader: markdownImageLoader)
         case .image:
             ImageBody(buffer: buffer)
         case .plainText:
-            CodeBody(buffer: buffer, language: "")
+            CodeBody(buffer: buffer, language: "", focusRequest: focusRequest)
         }
     }
 

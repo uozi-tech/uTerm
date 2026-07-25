@@ -71,8 +71,15 @@ final class LineNumberGutter: NSView {
 
     /// 由外部 controller 在滚动 / 文本变化 / 选中变化时调，触发重绘。
     /// 全 view invalidate；draw(_:rect:) 内部 clip 到可视带，cost 仍然 O(visible)。
-    func update(visibleRect _: CGRect, activeLineIndex: Int?) {
+    func update(visibleRect: CGRect, activeLineIndex: Int?) {
         self.activeLineIndex = activeLineIndex
+        // 行号列钉在可视区左缘（VS Code 行为）：编辑器 wrapLines=false，横向滚动时
+        // gutter 是 textView 子视图会跟文档一起滑走 —— 按 documentVisibleRect.minX
+        // 回钉。未横滚时 minX=0（左 contentInset 为 0），恒等于原位。
+        let pinnedX = max(0, visibleRect.minX)
+        if frame.origin.x != pinnedX {
+            frame.origin.x = pinnedX
+        }
         needsDisplay = true
     }
 
@@ -92,6 +99,13 @@ final class LineNumberGutter: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let textView else { return }
+
+        // 横滚后行号列悬浮在正文之上 —— 垫一层编辑器底色，挡住滑到其下的文本；
+        // 未横滚（x=0）保持透明，让 active-line 底色带横跨 gutter（VSCode 同款）。
+        if frame.origin.x > 0 {
+            EditorTheme.background.setFill()
+            bounds.fill()
+        }
 
         let visible = textView.enclosingScrollView?.documentVisibleRect ?? bounds
 

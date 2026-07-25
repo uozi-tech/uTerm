@@ -14,6 +14,25 @@ final class CodeEditorController: NSObject {
     fileprivate(set) weak var buffer: FileBuffer?
     private var _isUpdatingFromBinding = false
 
+    // MARK: 焦点请求（FilePreviewModel.editorFocusRequest）
+    /// 已消费的焦点请求代数 —— updateNSView 用它判重，避免每次视图刷新都抢焦点。
+    var handledFocusGeneration = 0
+
+    /// 把窗口第一响应者交给编辑器正文。updateNSView 调用时视图可能还没进 window
+    /// （makeNSView 后的首次 update），异步一帧后重试一次（与 refreshGutter 同款兜底）。
+    func focusTextView(retryIfNoWindow: Bool = true) {
+        guard let textView else { return }
+        if let window = textView.window {
+            if window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            }
+        } else if retryIfNoWindow {
+            DispatchQueue.main.async { [weak self] in
+                self?.focusTextView(retryIfNoWindow: false)
+            }
+        }
+    }
+
     // MARK: Find/Replace（Track B）
     var currentFindController: FindReplaceController?
     /// Local key event monitor installed in makeNSView; removed on deinit。
@@ -437,6 +456,14 @@ extension CodeEditorController {
         let chars = event.charactersIgnoringModifiers ?? ""
 
         switch (cmd, opt, shift, chars) {
+        case (true, false, false, "a"):
+            // ⌘A 全选 / ⌘C 复制本该由 Edit 菜单走响应链，但工作区窗口里该路径
+            // 不可靠（user 实测编辑器内 ⌘A/⌘C 无效）。与 ⌘S 同款：编辑器聚焦时
+            // 由本地监听器直接消费，行为确定；消费掉事件也避免菜单路径二次触发。
+            textView?.selectAll(nil); return true
+        case (true, false, false, "c"):
+            guard let textView else { return false }
+            textView.copy(textView); return true
         case (true, false, _, "f"):
             openFind(false); return true
         case (true, true, _, "f"):
