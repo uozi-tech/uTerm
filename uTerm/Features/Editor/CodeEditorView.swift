@@ -68,8 +68,12 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
             delegate: context.coordinator
         )
         textView.edgeInsets = HorizontalEdgeInsets(left: 12, right: 12)
+        // 顶部 contentInset 会在文档 y=0 之上留一条谁都画不到的空带（selection / active-line /
+        // gutter 全在文档坐标系里，y >= 0），全选时露成一条空白 padding；它还会让
+        // TextView.visibleRect 把 minY 上移，visibleTextRange 因此漏掉顶部那条半可见行，
+        // 那一行有行号却没有选中底色。VSCode 的 editor.padding.top 默认同样为 0。
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
+        scrollView.contentInsets = NSEdgeInsets()
         scrollView.documentView = textView
         scrollView.identifier = .utermPreviewRegion   // ⌘W 焦点判定标记
 
