@@ -82,18 +82,26 @@ extension TextSelectionManager {
 
             let maxRect: CGRect
             let endOfLine = fragmentRange.max <= range.max || range.contains(fragmentRange.max)
-            let endOfDocument = intersectionRange.max == layoutManager.lineStorage.length
-            let emptyLine = linePosition.range.isEmpty
 
             // If the selection is at the end of the line, or contains the end of the fragment, and is not the end
             // of the document, we select the entire line to the right of the selection point.
-            // true, !true = false, false
-            // true, !true = false, true
-            // uTerm 补丁 #2 附加守卫：只有「本 fragment 是该行最后一个 fragment」时才
+            // uTerm 补丁 #2 附加守卫其一：只有「本 fragment 是该行最后一个 fragment」时才
             // 算真正的行尾。uTerm 恒为 wrapLines=false（一行一个 fragment），该条件恒真；
             // 若将来开折行，没有这个守卫的话中间 fragment 也会被补上换行方块。
             let isLastFragmentOfLine = fragmentRange.max >= linePosition.range.max
-            if endOfLine && isLastFragmentOfLine && !(endOfDocument && !emptyLine) {
+            // 附加守卫其二：换行方块只补给「后面确实还有行」的行 —— 即本行真的以换行符结尾。
+            //
+            // 上游用的是 `!(endOfDocument && !emptyLine)`，而 `endOfDocument` 判的是
+            // `intersectionRange.max == lineStorage.length`。文件以 \n 结尾时，**最后一个
+            // 真实行**的 range 末尾（含那个 \n）恰好等于文档长度（幽灵空行零长），于是它被
+            // 误判成「文档末行」走 else 分支，`rectForOffset(行尾)` 落在幽灵空行的原点 →
+            // 零宽矩形 → 整行没有任何选中底色。配置文件几乎都以换行结尾，命中率很高。
+            // 反过来幽灵空行自己是空行，却因 `!emptyLine` 为假而被补上一个方块（VSCode 不画）。
+            //
+            // 改判「后面还有没有行」两头都对：末行有 \n → 补方块；幽灵空行 / 无 \n 的末行
+            // → 不补，走 else 贴文本右缘（幽灵空行因此得零宽矩形，不绘制）。中间空行不变。
+            let hasLineBreak = linePosition.index + 1 < layoutManager.lineCount
+            if endOfLine && isLastFragmentOfLine && hasLineBreak {
                 // uTerm 补丁 #2：上游把「选区盖到行尾」的行一路填到 rect.maxX
                 // （= edgeInsets.left + max(最长行宽, 视口宽)），⌘A 于是糊成一整块横跨
                 // 视口的蓝色，空行也整行铺满。改成只包住本行自己的文本，行尾补一个约等于

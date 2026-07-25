@@ -104,6 +104,28 @@ VSCode 的画法。`maxWidth` 同步加上这个方块宽，否则最长那行�
 不折行时恒真，折行时保证换行方块只补在该行**最后**一个 fragment 之后，中间 fragment 走
 `else` 分支贴文本右缘。
 
+### 顺带修掉的上游 bug：以 `\n` 结尾的文件，最后一个真实行没有选中底色
+
+上游用 `endOfDocument`（`intersectionRange.max == lineStorage.length`）判「文档末行」。
+文件以 `\n` 结尾时，`lineStorage` 末尾会有一个零长的「幽灵空行」，于是**最后一个真实行**
+的 range 末尾（含那个 `\n`）恰好等于文档长度 → 被误判成文档末行 → 走 `else` 分支，
+`rectForOffset(行尾)` 落在幽灵空行的原点 → 零宽矩形 → **整行没有任何选中底色**。
+配置文件几乎都以换行结尾，命中率很高；这是上游既有行为，1.9.3 / 1.9.4 均可复现
+（未打补丁的构建实测：⌘A 只填到倒数第二行）。反过来幽灵空行自己因 `!emptyLine` 为假
+而**被**补上一个方块，VSCode 不画它。
+
+改判「后面还有没有行」，两头都对：
+
+```swift
+let hasLineBreak = linePosition.index + 1 < layoutManager.lineCount
+```
+
+末行带 `\n` → 补方块；幽灵空行 / 无 `\n` 的末行 → 不补，走 `else` 贴文本右缘（幽灵空行
+因此得零宽矩形，不绘制）。中间空行不受影响，仍有方块。`endOfDocument` 随之不再需要。
+
+实测（doc = 4 个真实行 + 幽灵空行，其中第 3 行是中间空行，⌘A）：
+`119 / 245 / 7（中间空行方块）/ 141 / 不画（幽灵空行）` —— 修前第 4 行完全没有填充。
+
 `lineBreakFillWidth()` 按 `font + kern` 记忆化到 `TextSelectionManager.cachedLineBreakFill`
 （该存储属性加在 `TextSelectionManager.swift`，因为 Swift extension 不能有存储属性）——
 否则每个选区每帧都要量一次空格宽，列选择下是 O(选中行数)/帧。
@@ -173,7 +195,7 @@ product 依赖改指向本地包。`TextStory` / `swift-collections` 仍由本�
 1. 取上游新 tag 的源码，比对本文件列出的补丁是否已被上游修掉。
 2. 未修掉：把 `Sources/` 整体换成新版本，重放补丁 #1（搜
    `var maxFoundLineWidth = maxFoundLineWidth`）、补丁 #2（搜
-   `x: rect.maxX,`，在 `TextSelectionManager+FillRects.swift` 里，连同
+   `x: rect.maxX,` 与 `endOfDocument`，在 `TextSelectionManager+FillRects.swift` 里，连同
    `TextSelectionManager.swift` 里的 `cachedLineBreakFill` 存储属性）与补丁 #3（搜
    `CGRectArray+BoundingRect.swift` 里的 `$0.maxY < $1.maxY`），
    再按上面两条重做 manifest 裁剪。
