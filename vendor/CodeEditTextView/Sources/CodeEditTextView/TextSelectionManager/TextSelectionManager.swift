@@ -46,6 +46,9 @@ public class TextSelectionManager: NSObject {
     }
 
     internal(set) public var textSelections: [TextSelection] = []
+    /// uTerm 补丁 #2：换行方块宽度的缓存（见 TextSelectionManager+FillRects.swift）。
+    /// 每个选区每帧都要量一次空格宽，列选择下就是 O(选中行数)/帧；按 font + kern 记忆化。
+    var cachedLineBreakFill: (font: NSFont, kern: CGFloat, width: CGFloat)?
     weak var layoutManager: TextLayoutManager?
     weak var textStorage: NSTextStorage?
     weak var textView: TextView?

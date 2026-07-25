@@ -5,6 +5,16 @@
 
 ## 为什么 vendor
 
+三个补丁都改不到包外。
+
+补丁 #3 改的 `CGRectArray.boundingRect()` 是 internal 扩展方法，包外不可见、也无法替换
+其调用方。
+
+补丁 #2 涉及 `TextSelectionManager` 的 internal `getFillRects` 与 private
+`drawSelectedRange`：`TextSelectionManager` 是 `public class` 而非 `open`（无法子类化），
+`TextView.selectionManager` 是 `package(set) public`（无法换实例），
+`TextView.draw(_:)` 声明在 extension 里且是 `public` 而非 `open`（无法 override）。
+
 补丁 #1 修的是**上游的数据流 bug**，它让「不折行 + 横向滚动」这条路彻底走不通。
 涉及 `TextLayoutManager` 的 private 方法与 internal 属性 `maxLineWidth`，
 从包外既改不了也覆盖不了：
@@ -48,6 +58,100 @@ return (yContentAdjustment, wasLineHeightChanged)   // ← 宽度没有任何出
 恒等于 `edgeInsets.horizontal`、`frame.width == clipView.bounds.width`；修后
 `estimatedWidth` 为真实行宽、`frame.width > clipView.bounds.width`，横向滚动条出现。
 
+## 补丁 #2：整行被选中的行填到视口宽，⌘A 糊成一整块蓝
+
+文件：`Sources/CodeEditTextView/TextSelectionManager/TextSelectionManager+FillRects.swift`
+
+上游 `getFillRects(in:for:)` 先算一个「可绘制区」上界：
+
+```swift
+let maxWidth = max(textWidth, layoutManager.wrapLinesWidth)
+let validTextDrawingRect = CGRect(x: layoutManager.edgeInsets.left, y: rect.minY,
+                                  width: maxWidth, height: rect.height).intersection(rect)
+```
+
+再在每个 fragment 上，只要选区盖到了行尾（`endOfLine`）且不是文档最后一行，就把右边界
+直接怼到这个上界：
+
+```swift
+if endOfLine && !(endOfDocument && !emptyLine) {
+    maxRect = CGRect(x: rect.maxX, ...)   // ← rect 就是 validTextDrawingRect
+}
+```
+
+后果链：`wrapLinesWidth`（= `textViewportSize().width - edgeInsets.horizontal`）并不受
+`wrapLines` 开关约束，`maxLineLayoutWidth` 在 `wrapLines = false` 时恒为
+`.greatestFiniteMagnitude`，于是 `textWidth` 取 `maxLineWidth`（真实最长行宽），再被
+`max(..., wrapLinesWidth)` 抬到**视口宽**。任何比窗口窄的文件，⌘A 后每一行都从正文左缘
+一路填到滚动条 —— 空行（`emptyLine` 判的是 `linePosition.range.isEmpty`，装着 `"\n"`
+的空行为 `false`）也整行铺满，逐行矩形上下相接，视觉上就是一整块实心蓝。只有文档最后
+一行靠 `endOfDocument` 走 `else` 分支贴住文本。
+
+这是上游沿用 NSTextView/Xcode 的约定，不是补丁 #1 引入的回归；补丁 #1 只是把「有超宽行」
+的文件的这个上界从视口宽换成了文档宽。⌘A 快捷键（`CodeEditorController.handleKeyEvent`）
+只是让这个问题第一次被看见。
+
+修法：`endOfLine` 分支不再取 `rect.maxX`，改成本行 fragment 自己的文本右缘
+（`edgeInsets.left + fragment.width`）再补一个空格宽的小方块代表被选中的换行符 ——
+VSCode 的画法。`maxWidth` 同步加上这个方块宽，否则最长那行的方块会被函数末尾的
+`.intersection(validTextDrawingRect)` 削掉。方块宽由新的私有 `lineBreakFillWidth()`
+按 `textView.font` / `textView.kern` 量一个空格得到（文件的 `import Foundation` 因此
+改成 `import AppKit`）。
+
+注意：uTerm 恒为 `wrapLines = false`，一行一个 fragment。折行时中间 fragment 现在也贴
+文本右缘而不是填到折行宽，与上游有差异 —— 若将来开折行需重新评估。为此 `endOfLine`
+分支额外加了 `isLastFragmentOfLine`（`fragmentRange.max >= linePosition.range.max`）守卫：
+不折行时恒真，折行时保证换行方块只补在该行**最后**一个 fragment 之后，中间 fragment 走
+`else` 分支贴文本右缘。
+
+`lineBreakFillWidth()` 按 `font + kern` 记忆化到 `TextSelectionManager.cachedLineBreakFill`
+（该存储属性加在 `TextSelectionManager.swift`，因为 Swift extension 不能有存储属性）——
+否则每个选区每帧都要量一次空格宽，列选择下是 O(选中行数)/帧。
+
+复现/验证：打开一个比窗口窄的文件（如 `app.ini`）按 ⌘A。修前整块蓝横跨到滚动条、空行
+铺满；修后右缘随每行长短参差，空行只剩一个空格宽的小方块，最后一行不带方块。
+离线可重跑的像素级验证脚手架见「验证方法」一节。
+
+## 补丁 #3：`CGRectArray.boundingRect()` 宽度取错
+
+文件：`Sources/CodeEditTextView/Extensions/CGRectArray+BoundingRect.swift`
+
+上游宽度取的是「`maxY` 最大那个 rect」的 `maxX`，而不是所有 rect 里最大的 `maxX`：
+
+```swift
+let max = self.max(by: { $0.maxY < $1.maxY }) ?? .zero
+let size = CGSize(width: max.maxX - minX, height: max.maxY - minY)
+```
+
+只要各行右缘不齐，包围盒宽度就会被算窄。上游各行选区恒等宽（都填到同一右缘），这个
+bug 一直不可见；**补丁 #2 把右缘改成参差之后才暴露**：三行选区 `[52…171] / [52…297] /
+[52…90]` 会算出宽度 38，实际应为 245。
+
+消费方：`TextView+ReplaceCharacters.swift`（`!visibleRect.contains(selection.boundingRect)`
+的「要不要滚动到选区」判据，宽度偏小只会少滚一次、不会误滚）、
+`TextView+Accessibility.swift` 的 `accessibilityFrame(for:)`（VoiceOver 报的范围偏窄）。
+
+修法：`maxX` / `maxY` 各自独立取最大值。
+
+## 验证方法（离线、可重跑）
+
+补丁 #1 与 #2 都在热绘制路径上，公式复算容易自欺。用像素级 probe 量**真实落笔**：
+把选区色设成纯红，调 public 的 `selectionManager.drawSelections(in:)` 画进离屏
+`NSBitmapImageRep`，再逐行扫描取每行填充的 `minX` / `maxX`。
+
+坑：①依赖 `.o` 要列全（漏 `ContainersPreview` 会 undefined symbol）②C target 用
+`GeneratedModuleMaps` 里的 modulemap ③产物带覆盖率插桩 → probe 也要 `-profile-generate`
+④**必须把视图挂进真实 `NSWindow` 并跑 runloop**，否则不布局，量出来全是假的
+⑤`bitmapImageRepForCachingDisplay` 给的是**像素**尺寸（Retina 2x），按点坐标采样会全部错位。
+
+实测基线（视口 600pt、`edgeInsets` l=52 r=12、最长行 5326pt）：
+
+| 场景 | 补丁 #1 前 | 仅补丁 #1 | 补丁 #1+#2 |
+|---|---|---|---|
+| 整行选中含换行 | x[52→588] | x[52→600] | x[52→297] |
+| ⌘A 全选 | 整块 [52→588] | 整块 [52→600] | 171/297/600/304/193/82 参差 |
+| 横滚到 x=2000 | — | 2000→2600 整屏铺满 | 仅超宽行有色 |
+
 ## manifest 改动（相对上游）
 
 `Package.swift` 两处裁剪，源码不受影响：
@@ -68,6 +172,10 @@ product 依赖改指向本地包。`TextStory` / `swift-collections` 仍由本�
 
 1. 取上游新 tag 的源码，比对本文件列出的补丁是否已被上游修掉。
 2. 未修掉：把 `Sources/` 整体换成新版本，重放补丁 #1（搜
-   `var maxFoundLineWidth = maxFoundLineWidth`），再按上面两条重做 manifest 裁剪。
+   `var maxFoundLineWidth = maxFoundLineWidth`）、补丁 #2（搜
+   `x: rect.maxX,`，在 `TextSelectionManager+FillRects.swift` 里，连同
+   `TextSelectionManager.swift` 里的 `cachedLineBreakFill` 存储属性）与补丁 #3（搜
+   `CGRectArray+BoundingRect.swift` 里的 `$0.maxY < $1.maxY`），
+   再按上面两条重做 manifest 裁剪。
 3. 更新本文件顶部的基线 tag / revision。
-4. 用上面的验证方法确认横向滚动仍然生效。
+4. 用各补丁的验证方法确认横向滚动与 ⌘A 选区右缘仍然正确。
