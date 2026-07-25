@@ -39,6 +39,10 @@ final class LineNumberGutter: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        // 行号列必须压过 textView 的其它子 layer/子视图：CursorView（caret）与
+        // EmphasisManager 的高亮框/文字层都挂在同一棵树上，且创建得比 gutter 晚，
+        // 默认次序下会画到行号数字上（横滚后 gutter 覆盖正文区，尤其明显）。
+        layer?.zPosition = 10
         _ = recomputeWidth()
     }
 
@@ -71,16 +75,26 @@ final class LineNumberGutter: NSView {
 
     /// 由外部 controller 在滚动 / 文本变化 / 选中变化时调，触发重绘。
     /// 全 view invalidate；draw(_:rect:) 内部 clip 到可视带，cost 仍然 O(visible)。
-    func update(visibleRect: CGRect, activeLineIndex: Int?) {
+    func update(visibleRect _: CGRect, activeLineIndex: Int?) {
         self.activeLineIndex = activeLineIndex
-        // 行号列钉在可视区左缘（VS Code 行为）：编辑器 wrapLines=false，横向滚动时
-        // gutter 是 textView 子视图会跟文档一起滑走 —— 按 documentVisibleRect.minX
-        // 回钉。未横滚时 minX=0（左 contentInset 为 0），恒等于原位。
-        let pinnedX = max(0, visibleRect.minX)
-        if frame.origin.x != pinnedX {
-            frame.origin.x = pinnedX
-        }
         needsDisplay = true
+    }
+
+    /// 行号列钉在可视区左缘（VS Code 行为）：编辑器 wrapLines=false，横向滚动时
+    /// gutter 作为 textView 的子视图会跟文档一起滑走，必须按 documentVisibleRect.minX
+    /// 回钉。未横滚时 minX = 0，恒等于原位。
+    ///
+    /// 回钉放在 `viewWillDraw()` 而不是滚动通知回调里：`boundsDidChange` 是**事后**
+    /// 通知，AppKit 可能已经用旧 frame 画过一帧，横滚时行号列会明显抖一下。
+    /// `viewWillDraw` 在同一次绘制事务里、真正落笔之前跑，位置与内容天然同步。
+    override func viewWillDraw() {
+        if let visible = textView?.enclosingScrollView?.documentVisibleRect {
+            let pinnedX = max(0, visible.minX)
+            if frame.origin.x != pinnedX {
+                frame.origin.x = pinnedX
+            }
+        }
+        super.viewWillDraw()
     }
 
     /// 加入窗口时强制画一次 —— 否则 attach() 时 scrollView 可能还没 layout，

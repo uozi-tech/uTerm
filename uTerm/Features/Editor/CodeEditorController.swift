@@ -356,6 +356,9 @@ extension CodeEditorController: TextViewDelegate {
                 guard let self else { return }
                 self.updateGutter(activeLineIndex: self.lastActiveLineIndex)
                 self.updateIndentGuides(activeLineIndex: self.lastActiveLineIndex)
+                // 不折行时文档宽度会随排版到更长的行而增长，当前行底色带的宽度是
+                // 快照 —— 不在滚动时重画，横滚过视口宽后那条带会半路截断。
+                self.activeLineOverlay?.refresh()
                 self.normalizeEditorCursorHeights()
             }
         }
@@ -370,7 +373,9 @@ extension CodeEditorController: TextViewDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.refreshGutter(bootstrap: false)
+                guard let self else { return }
+                self.refreshGutter(bootstrap: false)
+                self.activeLineOverlay?.refresh()   // 视口尺寸变了，底色带宽度要跟上
             }
         }
 

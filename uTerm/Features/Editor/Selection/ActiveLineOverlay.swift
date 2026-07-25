@@ -2,22 +2,30 @@
 import AppKit
 import CodeEditTextView
 
-/// 当前光标所在行的整行底色。覆盖 gutter 区域，且在 text 选择期间也保持
-/// 可见（VSCode 行为）—— CodeEditTextView 自带的 `highlightSelectedLine` 是
-/// `if textSelection.range.isEmpty` 才绘，drag-select 时整条带消失，是个回归。
-/// 这里走 CAShapeLayer 自绘，与内置完全独立、不打架。
+/// 当前光标所在行的整行底色。覆盖 gutter 区域。
+///
+/// **仅在选区为空（只有光标）时绘制** —— 与 VSCode 一致：
+/// `currentLineHighlight.ts` 的 `_shouldRenderInContent()` 要求 `selectionIsEmpty`。
+/// 早期注释写反了，说「选择期间保持可见才是 VSCode 行为」，实际相反；而且选区填充
+/// 是 `TextView.draw(_:)` 画进宿主 layer 的 contents，任何子 layer（哪怕 zPosition
+/// 为负）都合成在它**之上**，所以拖选时这条带会从参差的选区右侧露出来。
 ///
 /// 用法：`init(textView:)` 一次性挂为 textView 的子 layer；
-///       `update(selection:)` 在选中变化时调，传"选区起点所在行"作为活动行。
+///       `update(selection:)` 在选中变化时调；横滚 / 尺寸变化时调 `refresh()`
+///       （文档宽度会随排版到更长的行而增长，路径宽度是快照，不刷新就会半路截断）。
 @MainActor
 final class ActiveLineOverlay {
     private weak var textView: TextView?
     private let shapeLayer: CAShapeLayer
+    /// 最近一次的选区，供 refresh() 在滚动 / resize 时按新文档宽度重画。
+    private var lastSelection = NSRange(location: 0, length: 0)
 
     init(textView: TextView) {
         self.textView = textView
         self.shapeLayer = CAShapeLayer()
-        shapeLayer.zPosition = -1  // 在文字下、selection 之下，gutter 之上的层级由 textView 排
+        // 负 zPosition 只把它压在其它**子 layer** 之下；宿主自身 draw 的内容（正文与
+        // 选区填充）永远更靠下，压不到。留负值仅为排在缩进线之下。
+        shapeLayer.zPosition = -1
         textView.layer?.insertSublayer(shapeLayer, at: 0)
         applyFillColor()
     }
@@ -32,9 +40,22 @@ final class ActiveLineOverlay {
         }
     }
 
+    /// 按当前文档宽度重画最近一次的活动行。滚动 / 尺寸变化时调 ——
+    /// 不折行时 `textView.bounds.width` 会随排版到更长的行而增长，
+    /// 而 path 里的宽度是写死的快照，不重画就会在半路截断。
+    func refresh() {
+        update(selection: lastSelection)
+    }
+
     /// 根据选区起点定位活动行，画整行底色横跨 textView 全宽（含 gutter 区）。
+    /// 选区非空时不画（VSCode 行为，见类型注释）。
     /// layout 还没跑、找不到行就把 path 清掉避免画在错误位置。
     func update(selection: NSRange) {
+        lastSelection = selection
+        guard selection.length == 0 else {
+            shapeLayer.path = nil
+            return
+        }
         guard let textView,
               let linePos = textView.layoutManager.textLineForOffset(selection.location) else {
             shapeLayer.path = nil
