@@ -500,6 +500,7 @@ struct AssistantView: View {
             onAttach: attachCurrentContext,
             modelControl: { modelPill }
         )
+        .clipShape(RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous))
         .padding(10)
     }
 
