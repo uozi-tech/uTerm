@@ -33,7 +33,7 @@ struct PaneView: View {
     /// 文件 buffer 落点：把 `sourceBuffer` 作为新窗格插到本窗格旁边。
     let onFileDrop: @MainActor @Sendable (_ sourceBuffer: UUID, _ zone: PaneDropZone) -> Void
     /// 文件窗格里的不可预览提示下载入口。来源于 Workspace 共享的 FilePreviewModel。
-    var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
+    var onDownloadFile: ((FileBuffer, URL) async throws -> Void)? = nil
     /// 文件窗格里的 Markdown 图片加载入口。来源于 Workspace 共享的 FilePreviewModel。
     let onLoadMarkdownImage: MarkdownBufferImageLoader
     /// Workspace 级同步 drop 入口。

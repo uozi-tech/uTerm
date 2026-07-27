@@ -122,8 +122,8 @@ private struct PreviewPanelView: View {
     private var content: some View {
         if let buffer = model.buffer(forPanel: panelID) {
             PreviewBufferBody(buffer: buffer, focusRequest: model.editorFocusRequest,
-                              onDownload: { buffer in
-                try await model.download(buffer)
+                              onDownload: { buffer, localURL in
+                try await model.download(buffer, to: localURL)
             }, onLoadMarkdownImage: { source, buffer in
                 try await model.loadMarkdownImage(source: source, referencedBy: buffer)
             })

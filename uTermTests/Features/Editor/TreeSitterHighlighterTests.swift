@@ -9,6 +9,24 @@ import TreeSitterGo
 @MainActor
 final class TreeSitterHighlighterTests: XCTestCase {
 
+    private func waitForColor(in textView: TextView, at location: Int) async -> NSColor? {
+        for _ in 0..<100 {
+            if let color = textView.textStorage?.attribute(
+                .foregroundColor,
+                at: location,
+                effectiveRange: nil
+            ) as? NSColor, color != EditorTheme.foreground {
+                return color
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return textView.textStorage?.attribute(
+            .foregroundColor,
+            at: location,
+            effectiveRange: nil
+        ) as? NSColor
+    }
+
     private func sRGB(_ color: NSColor, _ appearance: NSAppearance.Name = .darkAqua) -> (Double, Double, Double) {
         var out: (Double, Double, Double) = (0, 0, 0)
         NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
@@ -40,30 +58,37 @@ final class TreeSitterHighlighterTests: XCTestCase {
                                      debounceMs: 0)
     }
 
-    func test_go_simpleSnippet_yieldsKeywordAndNumber() {
+    func test_go_simpleSnippet_yieldsKeywordAndNumber() async {
         let h = makeGoHighlighter()
         var captured: [(NSRange, NSColor)] = []
-        h.initialHighlight(text: "package main") { captured = $0 }
+        let applied = expectation(description: "background highlight")
+        h.initialHighlight(text: "package main") { captured = $0; applied.fulfill() }
+        await fulfillment(of: [applied], timeout: 1)
         XCTAssertFalse(captured.isEmpty, "Expected at least one highlight")
         XCTAssertTrue(captured.contains(where: { $0.1 == EditorTheme.synKeyword }),
                       "Expected a keyword color for 'package'")
     }
 
-    func test_initialHighlight_returnsNonEmptyForKnownTokens() {
+    func test_initialHighlight_returnsNonEmptyForKnownTokens() async {
         let h = makeGoHighlighter()
         var captured: [(NSRange, NSColor)] = []
-        h.initialHighlight(text: "func main() { var x = 1 }") { captured = $0 }
+        let applied = expectation(description: "background highlight")
+        h.initialHighlight(text: "func main() { var x = 1 }") { captured = $0; applied.fulfill() }
+        await fulfillment(of: [applied], timeout: 1)
         XCTAssertFalse(captured.isEmpty)
     }
 
-    func test_incrementalEdit_reusesTreeAndFindsComment() {
+    func test_incrementalEdit_reusesTreeAndFindsComment() async {
         let h = makeGoHighlighter()
-        h.initialHighlight(text: "var x = 1") { _ in }
+        let initial = expectation(description: "initial highlight")
+        h.initialHighlight(text: "var x = 1") { _ in initial.fulfill() }
+        await fulfillment(of: [initial], timeout: 1)
         var applied: [(NSRange, NSColor)] = []
-        // Append " // hello" at the end — synchronous because debounceMs == 0
+        let edited = expectation(description: "incremental highlight")
         h.didEdit(range: NSRange(location: 9, length: 0),
                   replacement: " // hello",
-                  fullText: "var x = 1 // hello") { applied = $0 }
+                  fullText: "var x = 1 // hello") { applied = $0; edited.fulfill() }
+        await fulfillment(of: [edited], timeout: 1)
         XCTAssertTrue(applied.contains(where: { $0.1 == EditorTheme.synComment }),
                       "Expected comment color after incremental edit")
     }
@@ -75,14 +100,16 @@ final class TreeSitterHighlighterTests: XCTestCase {
         h.dispose()
     }
 
-    func test_emptyText_returnsNoHighlights() {
+    func test_emptyText_returnsNoHighlights() async {
         let h = makeGoHighlighter()
         var captured: [(NSRange, NSColor)] = []
-        h.initialHighlight(text: "") { captured = $0 }
+        let applied = expectation(description: "empty highlight")
+        h.initialHighlight(text: "") { captured = $0; applied.fulfill() }
+        await fulfillment(of: [applied], timeout: 1)
         XCTAssertTrue(captured.isEmpty)
     }
 
-    func test_registryGoQuery_yieldsHighlights() {
+    func test_registryGoQuery_yieldsHighlights() async {
         guard let entry = GrammarRegistry.entry(for: "go") else {
             XCTFail("Expected Go grammar entry")
             return
@@ -91,13 +118,16 @@ final class TreeSitterHighlighterTests: XCTestCase {
                                                         highlightsQueryText: entry.highlightsQueryText,
                                                         debounceMs: 0)
         var registryPairs: [(NSRange, NSColor)] = []
+        let applied = expectation(description: "registry highlight")
         registryHighlighter.initialHighlight(text: "func main() { return }") {
             registryPairs = $0
+            applied.fulfill()
         }
+        await fulfillment(of: [applied], timeout: 1)
         XCTAssertFalse(registryPairs.isEmpty)
     }
 
-    func test_bindingDrivenTextReplacement_reappliesSyntaxHighlights() {
+    func test_bindingDrivenTextReplacement_reappliesSyntaxHighlights() async {
         let buffer = FileBuffer(remotePath: "/tmp/main.go", kind: .code(language: "go"))
         let controller = CodeEditorController()
         let scrollView = NSScrollView()
@@ -122,16 +152,14 @@ final class TreeSitterHighlighterTests: XCTestCase {
         controller.ensureGutterAttached()
 
         let keywordRange = ("func main() { return }" as NSString).range(of: "func")
-        let color = textView.textStorage?.attribute(.foregroundColor,
-                                                    at: keywordRange.location,
-                                                    effectiveRange: nil) as? NSColor
+        let color = await waitForColor(in: textView, at: keywordRange.location)
         XCTAssertNotNil(color)
         let actual = sRGB(color ?? .clear)
         let expected = sRGB(EditorTheme.synKeyword)
         XCTAssertTrue(near(actual, expected), "actual \(actual), expected keyword \(expected)")
     }
 
-    func test_unsupportedDetectedCodeLanguage_usesFallbackHighlights() {
+    func test_unsupportedDetectedCodeLanguage_usesFallbackHighlights() async {
         let buffer = FileBuffer(remotePath: "/etc/nginx/nginx.conf", kind: .code(language: "nginx"))
         let controller = CodeEditorController()
         let scrollView = NSScrollView()
@@ -157,9 +185,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         controller.ensureGutterAttached()
 
         let numberRange = (source as NSString).range(of: "80")
-        let color = textView.textStorage?.attribute(.foregroundColor,
-                                                    at: numberRange.location,
-                                                    effectiveRange: nil) as? NSColor
+        let color = await waitForColor(in: textView, at: numberRange.location)
         XCTAssertNotNil(color)
         let actual = sRGB(color ?? .clear)
         let expected = sRGB(EditorTheme.synNumber)
@@ -195,7 +221,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         return (controller, textView)
     }
 
-    func test_switchingToAnotherCodeLanguage_dropsPreviousHighlighter() {
+    func test_switchingToAnotherCodeLanguage_dropsPreviousHighlighter() async {
         // Previous file: Go (tree-sitter strategy).
         let goBuffer = FileBuffer(remotePath: "/tmp/main.go", kind: .code(language: "go"))
         let (controller, textView) = attachedController(for: goBuffer,
@@ -216,9 +242,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         // "server" is an nginx keyword but a bare identifier to the Go grammar; with the
         // stale Go highlighter still in effect it would stay foreground (the bug).
         let range = (source as NSString).range(of: "server")
-        let color = textView.textStorage?.attribute(.foregroundColor,
-                                                     at: range.location,
-                                                     effectiveRange: nil) as? NSColor
+        let color = await waitForColor(in: textView, at: range.location)
         XCTAssertNotNil(color)
         let actual = sRGB(color ?? .clear)
         let expected = sRGB(EditorTheme.synKeyword)

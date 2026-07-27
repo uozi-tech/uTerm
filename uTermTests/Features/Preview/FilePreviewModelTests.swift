@@ -30,6 +30,35 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertFalse(m.buffers.first?.isDirty ?? true)
     }
 
+    func test_openWithUnknownSizeUsesBoundedDownload() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/unknown.swift", data: Data("let x = 1".utf8))
+
+        await m.open(path: "/unknown.swift", fileSize: nil, mtime: nil)
+
+        let requests = await mock.boundedDownloads
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.path, "/unknown.swift")
+        XCTAssertEqual(requests.first?.maximumBytes, 50 * 1024 * 1024)
+        XCTAssertEqual(m.activeBuffer?.state, .loaded)
+        XCTAssertEqual(m.activeBuffer?.byteSize, 9)
+    }
+
+    func test_reloadFromRemoteUsesBoundedDownload() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/x.swift", data: Data("old".utf8))
+        await m.open(path: "/x.swift", fileSize: 3, mtime: nil)
+        let buffer = try XCTUnwrap(m.activeBuffer)
+        try await mock.write("/x.swift", data: Data("new".utf8))
+
+        await m.reloadFromRemote(buffer.id)
+
+        let requests = await mock.boundedDownloads
+        XCTAssertEqual(requests.map(\.path), ["/x.swift", "/x.swift"])
+        XCTAssertTrue(requests.allSatisfy { $0.maximumBytes == 50 * 1024 * 1024 })
+        XCTAssertEqual(buffer.text, "new")
+    }
+
     func test_loadMarkdownImage_resolvesRelativePathFromMarkdownDirectory() async throws {
         let (m, mock) = makeModel()
         let imageData = Data([0x89, 0x50, 0x4E, 0x47])
@@ -199,6 +228,37 @@ final class FilePreviewModelTests: XCTestCase {
         try await mock.write("/x.swift", data: Data("X".utf8))
         let result = await m.save(buf.id)
         if case .conflict = result { /* ok */ } else { return XCTFail("expected .conflict") }
+    }
+
+    func test_refreshAfterRemoteCommandReloadsVisibleFileWhenMetadataIsUnchanged() async throws {
+        let (m, mock) = makeModel()
+        let mtime = Date(timeIntervalSince1970: 1_000)
+        await mock.setFile("/x.swift", data: Data("old".utf8), mtime: mtime)
+        await m.open(path: "/x.swift", fileSize: 3, mtime: mtime)
+
+        // 常见于秒级 mtime 的远端文件系统：内容等长改写，但 size/mtime 快照相同。
+        await mock.setFile("/x.swift", data: Data("new".utf8), mtime: mtime)
+        await m.refreshAfterRemoteCommand()
+
+        XCTAssertEqual(m.activeBuffer?.text, "new")
+        XCTAssertEqual(m.activeBuffer?.state, .loaded)
+    }
+
+    func test_refreshAfterRemoteCommandNeverOverwritesDirtyBuffer() async throws {
+        let (m, mock) = makeModel()
+        let mtime = Date(timeIntervalSince1970: 1_000)
+        await mock.setFile("/x.swift", data: Data("old".utf8), mtime: mtime)
+        await m.open(path: "/x.swift", fileSize: 3, mtime: mtime)
+        let buffer = try XCTUnwrap(m.activeBuffer)
+        buffer.text = "local edit"
+        buffer.isDirty = true
+
+        await mock.setFile("/x.swift", data: Data("remote".utf8),
+                           mtime: mtime.addingTimeInterval(1))
+        await m.refreshAfterRemoteCommand()
+
+        XCTAssertEqual(buffer.text, "local edit")
+        XCTAssertTrue(buffer.isDirty)
     }
 
     func test_close_removesBuffer() async throws {

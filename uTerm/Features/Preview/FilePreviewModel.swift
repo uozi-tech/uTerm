@@ -90,6 +90,8 @@ nonisolated struct MarkdownImageCache: Sendable {
 @MainActor
 @Observable
 final class FilePreviewModel {
+    private static let maximumPreviewBytes: Int64 = 50 * 1024 * 1024
+
     private(set) var buffers: [FileBuffer] = []
     var activeBufferID: UUID?
     /// 预览（临时）tab 的 buffer id（VS Code 风）：侧栏单击以预览方式打开，下一次
@@ -140,6 +142,7 @@ final class FilePreviewModel {
     /// 共享 FileBrowserModel 的 SFTP 会话）。
     private let sftpProvider: () -> (any SFTPProviding)?
     private var markdownImageCache = MarkdownImageCache()
+    private var remoteCommandRefreshGeneration = 0
 
     init(recentsStore: RecentFilesStore,
          sftpProvider: @escaping () -> (any SFTPProviding)?) {
@@ -185,7 +188,7 @@ final class FilePreviewModel {
 
     /// SFTPSidebar 文件 tap → 通知 → 调用。`asPreview` = 以预览（临时）tab 打开：
     /// 顶替现有预览 tab 而不是新增；永久打开（双击）同一路径会把预览 tab 转正。
-    func open(path: String, fileSize: Int64, mtime: Date?, asPreview: Bool = false) async {
+    func open(path: String, fileSize: Int64?, mtime: Date?, asPreview: Bool = false) async {
         // 已打开则只切 tab；永久打开命中预览 tab 时转正。
         if let existing = buffers.first(where: { $0.remotePath == path }) {
             activeBufferID = existing.id
@@ -209,7 +212,7 @@ final class FilePreviewModel {
         requestEditorFocus(buf.id)
 
         // 大小检查
-        if fileSize > 50 * 1024 * 1024 {
+        if let fileSize, fileSize > Self.maximumPreviewBytes {
             buf.state = .failed("文件超过 50 MB，请用外部编辑器")
             return
         }
@@ -293,8 +296,110 @@ final class FilePreviewModel {
         }
     }
 
+    /// Agent 的远端命令结束后同步已打开文件。
+    ///
+    /// 当前可见文件始终重读，避免远端文件系统只有秒级 mtime、且内容等长改写时
+    /// size/mtime 都未变化而继续展示旧内容；其余标签先比较元信息，减少不必要下载。
+    /// 本地脏 buffer 与正在保存的 buffer 必须跳过，不能让后台刷新覆盖用户输入。
+    func refreshAfterRemoteCommand() async {
+        let generation = await refreshVisibleAfterRemoteCommand()
+        await refreshInactiveAfterRemoteCommand(generation: generation)
+    }
+
+    /// Agent 续轮的关键刷新：只等待当前可见 buffer。返回 generation 给后台标签刷新，
+    /// 新命令到来时旧 generation 的结果不会覆盖更新后的内容。
+    @discardableResult
+    func refreshVisibleAfterRemoteCommand() async -> Int {
+        remoteCommandRefreshGeneration &+= 1
+        let generation = remoteCommandRefreshGeneration
+        let visibleID = activeBufferID
+        let visible = buffers.filter { $0.id == visibleID }
+        await refreshBuffersAfterRemoteCommand(
+            visible,
+            visibleID: visibleID,
+            generation: generation)
+        return generation
+    }
+
+    /// 非活动标签仅在元信息变化时重读，由 WorkspaceModel 放到非结构化后台任务。
+    func refreshInactiveAfterRemoteCommand(generation: Int) async {
+        guard generation == remoteCommandRefreshGeneration else { return }
+        let visibleID = activeBufferID
+        let inactive = buffers.filter { $0.id != visibleID }
+        await refreshBuffersAfterRemoteCommand(
+            inactive,
+            visibleID: visibleID,
+            generation: generation)
+    }
+
+    private func refreshBuffersAfterRemoteCommand(_ candidates: [FileBuffer],
+                                                  visibleID: UUID?,
+                                                  generation: Int) async {
+        guard generation == remoteCommandRefreshGeneration,
+              let sftp = sftpProvider() else { return }
+        var didReload = false
+
+        for buf in candidates {
+            guard generation == remoteCommandRefreshGeneration,
+                  !Task.isCancelled else { return }
+            guard !buf.isDirty else { continue }
+            if case .saving = buf.state { continue }
+            guard Self.unsupportedPreviewReason(forPath: buf.remotePath) == nil else { continue }
+
+            do {
+                let remote = try await sftp.stat(buf.remotePath)
+                guard generation == remoteCommandRefreshGeneration else { return }
+                let metadataChanged = buf.byteSize != remote.size
+                    || buf.mtimeWhenLoaded != remote.mtime
+                guard buf.id == visibleID || metadataChanged else { continue }
+
+                guard remote.size <= Self.maximumPreviewBytes else {
+                    buf.byteSize = remote.size
+                    buf.mtimeWhenLoaded = remote.mtime
+                    buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+                    continue
+                }
+
+                let data = try await sftp.download(
+                    remotePath: buf.remotePath,
+                    maximumBytes: Int(Self.maximumPreviewBytes))
+
+                // 下载期间用户可能已经开始输入或关闭标签；完成后再次确认，避免异步
+                // 回包覆盖新编辑，也避免继续修改已从模型移除的 buffer 引用。
+                guard generation == remoteCommandRefreshGeneration,
+                      buffers.contains(where: { $0.id == buf.id }),
+                      !buf.isDirty else { continue }
+                if case .saving = buf.state { continue }
+
+                // 读命令也会触发本刷新。内容没变时不要重复给 text/imageData 赋值，
+                // 否则编辑器会做一次无意义的全文更新，光标/选区也可能被扰动。
+                if !Self.downloadedDataMatchesCurrentContent(data, of: buf) {
+                    guard Self.applyDownloadedData(data, to: buf) else { continue }
+                }
+
+                let latest = (try? await sftp.stat(buf.remotePath)) ?? remote
+                guard generation == remoteCommandRefreshGeneration else { return }
+                buf.byteSize = latest.size
+                buf.mtimeWhenLoaded = latest.mtime
+                buf.state = .loaded
+                didReload = true
+            } catch {
+                // 当前可见文件不能静默保留旧快照；非活动标签则保留现状，避免一次
+                // 瞬时网络错误把所有后台标签都切成失败页。
+                if buf.id == visibleID, !buf.isDirty {
+                    Self.applyPreviewLoadFailure(error, to: buf)
+                }
+            }
+        }
+
+        if didReload {
+            // Agent 也可能同时改动 Markdown 引用的同主机图片。
+            markdownImageCache.removeAll()
+        }
+    }
+
     private func load(_ buf: FileBuffer, failIfProviderMissing: Bool) async {
-        if buf.byteSize > 50 * 1024 * 1024 {
+        if let byteSize = buf.byteSize, byteSize > Self.maximumPreviewBytes {
             buf.state = .failed("文件超过 50 MB，请用外部编辑器")
             return
         }
@@ -312,7 +417,10 @@ final class FilePreviewModel {
         }
 
         do {
-            let data = try await sftp.download(remotePath: buf.remotePath)
+            let data = try await sftp.download(
+                remotePath: buf.remotePath,
+                maximumBytes: Int(Self.maximumPreviewBytes))
+            buf.byteSize = Int64(data.count)
             guard Self.applyDownloadedData(data, to: buf) else { return }
             // mtime 未外部提供时，stat 获取真实值，供后续 save() 冲突检测
             if buf.mtimeWhenLoaded == nil {
@@ -326,18 +434,21 @@ final class FilePreviewModel {
                 lastOpenedAt: Date()))
             recents = recentsStore.load()
         } catch {
-            buf.state = .failed("\(error)")
+            Self.applyPreviewLoadFailure(error, to: buf)
         }
     }
 
-    func download(_ buffer: FileBuffer) async throws -> Data {
+    func download(_ buffer: FileBuffer, to localURL: URL) async throws {
         guard buffers.contains(where: { $0.id == buffer.id }) else {
             throw PreviewDownloadError.missingBuffer
         }
         guard let sftp = sftpProvider() else {
             throw PreviewDownloadError.providerUnavailable
         }
-        return try await sftp.download(remotePath: buffer.remotePath)
+        try await sftp.download(
+            remotePath: buffer.remotePath,
+            toLocalURL: localURL,
+            onProgress: nil)
     }
 
     func loadMarkdownImage(source: String, referencedBy buffer: FileBuffer) async throws -> Data {
@@ -488,7 +599,7 @@ final class FilePreviewModel {
             keepTab(id)   // 保存过的文件不该再被下一次单击顶掉
             return .saved
         } catch {
-            buf.state = .failed("\(error)")
+            Self.applyPreviewLoadFailure(error, to: buf)
             return .failed("\(error)")
         }
     }
@@ -498,7 +609,10 @@ final class FilePreviewModel {
         guard let buf = buffers.first(where: { $0.id == id }) else { return }
         guard let sftp = sftpProvider() else { return }
         do {
-            let data = try await sftp.download(remotePath: buf.remotePath)
+            let data = try await sftp.download(
+                remotePath: buf.remotePath,
+                maximumBytes: Int(Self.maximumPreviewBytes))
+            buf.byteSize = Int64(data.count)
             guard Self.applyDownloadedData(data, to: buf) else { return }
             let stat = try? await sftp.stat(buf.remotePath)
             buf.mtimeWhenLoaded = stat?.mtime
@@ -511,8 +625,8 @@ final class FilePreviewModel {
 
     /// EmptyBody 行点击 → 重开。
     func reopen(_ entry: RecentFileEntry) async {
-        // 大小未知（不在 entry 里），open 走默认 0 → 不会触发 50MB 阻断
-        await open(path: entry.remotePath, fileSize: 0, mtime: nil)
+        // 最近记录没有可信 size；load 内部仍会用有界下载强制执行 50 MB 上限。
+        await open(path: entry.remotePath, fileSize: nil, mtime: nil)
     }
 
     func clearRecents() {
@@ -521,6 +635,7 @@ final class FilePreviewModel {
     }
 
     func dispose() {
+        remoteCommandRefreshGeneration &+= 1
         buffers.removeAll()
         activeBufferID = nil
         previewTabBufferID = nil
@@ -624,6 +739,26 @@ final class FilePreviewModel {
             buf.text = text
         }
         return true
+    }
+
+    private static func applyPreviewLoadFailure(_ error: Error, to buf: FileBuffer) {
+        if let limitError = error as? SFTPDownloadLimitExceeded {
+            buf.byteSize = limitError.observedBytes
+            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+        } else {
+            buf.state = .failed("\(error)")
+        }
+    }
+
+    private static func downloadedDataMatchesCurrentContent(_ data: Data,
+                                                            of buf: FileBuffer) -> Bool {
+        switch buf.kind {
+        case .image:
+            return buf.imageData == data
+        case .code, .markdown, .plainText:
+            guard let text = previewableText(from: data) else { return false }
+            return buf.text == text
+        }
     }
 
     private static func previewableText(from data: Data) -> String? {

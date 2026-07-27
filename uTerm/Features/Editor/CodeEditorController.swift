@@ -13,6 +13,7 @@ final class CodeEditorController: NSObject {
     fileprivate(set) weak var scrollView: NSScrollView?
     fileprivate(set) weak var buffer: FileBuffer?
     private var _isUpdatingFromBinding = false
+    private var renderedTextVersion: Int?
 
     // MARK: 焦点请求（FilePreviewModel.editorFocusRequest）
     /// 已消费的焦点请求代数 —— updateNSView 用它判重，避免每次视图刷新都抢焦点。
@@ -41,6 +42,8 @@ final class CodeEditorController: NSObject {
 
     // MARK: Track C — 语法高亮
     private var highlighter: SyntaxHighlighter = NoopHighlighter()
+    private var latestHighlights: [(NSRange, NSColor)] = []
+    private var highlightedApplicationRange: NSRange?
 
     static func normalizedCursorFrame(_ frame: CGRect, font: NSFont) -> CGRect {
         let targetHeight = min(frame.height, max(1, ceil(font.ascender - font.descender)))
@@ -81,6 +84,9 @@ final class CodeEditorController: NSObject {
     func rebind(to newBuffer: FileBuffer) -> Bool {
         guard buffer !== newBuffer else { return false }
         buffer = newBuffer
+        renderedTextVersion = nil
+        latestHighlights = []
+        highlightedApplicationRange = nil
         highlighter.dispose()
         highlighter = makeHighlighter(for: newBuffer)
         return true
@@ -118,25 +124,62 @@ final class CodeEditorController: NSObject {
     // MARK: 高亮（Track C 实现）
     func applyHighlights(_ pairs: [(NSRange, NSColor)]) {
         guard let textView, let storage = textView.textStorage else { return }
+        latestHighlights = pairs
+        applyCachedHighlights(to: storage, in: highlightApplicationRange(storageLength: storage.length))
+    }
+
+    private func applyCachedHighlights(to storage: NSTextStorage, in target: NSRange) {
+        guard let textView, target.length > 0 else { return }
         storage.beginEditing()
-        let fullRange = NSRange(location: 0, length: storage.length)
-        storage.removeAttribute(.foregroundColor, range: fullRange)
+        storage.removeAttribute(.foregroundColor, range: target)
         storage.addAttribute(.foregroundColor,
                              value: EditorTheme.foreground,
-                             range: fullRange)
-        for (range, color) in pairs where NSMaxRange(range) <= storage.length {
-            storage.addAttribute(.foregroundColor, value: color, range: range)
+                             range: target)
+        for (range, color) in latestHighlights where range.location < NSMaxRange(target) {
+            let intersection = NSIntersectionRange(range, target)
+            if intersection.length > 0, NSMaxRange(intersection) <= storage.length {
+                storage.addAttribute(.foregroundColor, value: color, range: intersection)
+            }
         }
         storage.endEditing()
-        textView.layoutManager.invalidateLayoutForRange(fullRange)
+        highlightedApplicationRange = target
+        textView.layoutManager.invalidateLayoutForRange(target)
         textView.needsLayout = true
         textView.needsDisplay = true
+    }
+
+    private func highlightApplicationRange(storageLength: Int) -> NSRange {
+        EditorHighlightWindow.applicationRange(
+            textLength: storageLength,
+            visibleRange: textView?.visibleTextRange
+        )
+    }
+
+    private func refreshVisibleHighlightsIfNeeded() {
+        guard let textView, let storage = textView.textStorage,
+              storage.length > EditorHighlightWindow.fullDocumentThreshold,
+              let visibleRange = textView.visibleTextRange else { return }
+        if let highlightedApplicationRange,
+           EditorHighlightWindow.contains(visibleRange, in: highlightedApplicationRange) {
+            return
+        }
+        applyCachedHighlights(
+            to: storage,
+            in: EditorHighlightWindow.applicationRange(
+                textLength: storage.length,
+                visibleRange: visibleRange
+            )
+        )
     }
 
     func clearHighlights(in range: NSRange?) {
         guard let textView, let storage = textView.textStorage else { return }
         let target = range ?? NSRange(location: 0, length: storage.length)
         storage.removeAttribute(.foregroundColor, range: target)
+        if range == nil {
+            latestHighlights = []
+            highlightedApplicationRange = nil
+        }
     }
 
     // MARK: Emphasis（Track B / PR-final 调）
@@ -306,6 +349,7 @@ extension CodeEditorController: TextViewDelegate {
         self.textView = textView
         self.scrollView = scrollView
         self.buffer = buffer
+        renderedTextVersion = buffer.textVersion
 
         // Track A · VSCode Dark+ 配色
         textView.selectionManager.selectionBackgroundColor = EditorTheme.selectionBg
@@ -360,6 +404,7 @@ extension CodeEditorController: TextViewDelegate {
                 // 快照 —— 不在滚动时重画，横滚过视口宽后那条带会半路截断。
                 self.activeLineOverlay?.refresh()
                 self.normalizeEditorCursorHeights()
+                self.refreshVisibleHighlightsIfNeeded()
             }
         }
 
@@ -424,16 +469,6 @@ extension CodeEditorController: TextViewDelegate {
             self?.applyHighlights(pairs)
         }
 
-        // Track C · 文本变化时增量重高亮。包裹既有 onTextChange，避免覆盖订阅者。
-        let existingOnTextChange = onTextChange
-        onTextChange = { [weak self] range, str in
-            existingOnTextChange?(range, str)
-            guard let self else { return }
-            let full = self.textView?.string ?? ""
-            self.highlighter.didEdit(range: range, replacement: str, fullText: full) { [weak self] pairs in
-                self?.applyHighlights(pairs)
-            }
-        }
     }
 
     func textView(_ textView: TextView,
@@ -443,7 +478,20 @@ extension CodeEditorController: TextViewDelegate {
         let newText = textView.string
         buffer?.text = newText
         buffer?.isDirty = true
+        renderedTextVersion = buffer?.textVersion
         onTextChange?(range, string)
+        highlighter.didEdit(range: range, replacement: string, fullText: newText) { [weak self] pairs in
+            self?.applyHighlights(pairs)
+        }
+    }
+
+    /// SwiftUI updateNSView 只比较整数代数，不再为每次按键读取并比较整个 TextView.string。
+    func needsBindingTextUpdate(for buffer: FileBuffer) -> Bool {
+        self.buffer !== buffer || renderedTextVersion != buffer.textVersion
+    }
+
+    func didRenderBindingText(for buffer: FileBuffer) {
+        renderedTextVersion = buffer.textVersion
     }
 }
 

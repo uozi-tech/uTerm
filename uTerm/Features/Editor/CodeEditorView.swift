@@ -128,10 +128,11 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
         // 只会进到这里而非 makeNSView/attach。先随新 buffer 重选高亮策略 + 重绑 buffer
         // 引用，否则新文件沿用上个文件的 grammar 上色（残留高亮），且编辑写回旧 FileBuffer。
         let bufferChanged = coordinator.rebind(to: buffer)
-        if bufferChanged || textView.string != buffer.text {
+        if bufferChanged || coordinator.needsBindingTextUpdate(for: buffer) {
             coordinator.isUpdatingFromBinding = true
             textView.setText(buffer.text)
             coordinator.isUpdatingFromBinding = false
+            coordinator.didRenderBindingText(for: buffer)
             // setText 把 textView 所有 subview 都 removeFromSuperview 了（CodeEditTextView
             // setTextStorage 的副作用）—— 把 gutter 重新挂回 + 刷宽度/行号 + 重高亮。
             coordinator.ensureGutterAttached()

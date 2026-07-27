@@ -503,6 +503,60 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(Set(uploads.map(\.path)),
                        ["/home/user/first.txt", "/home/user/second.log"])
         XCTAssertEqual(Set(uploads.map(\.bytes)), [9, 10])  // "first.txt"=9, "second.log"=10
+        let streamingUploads = await mock.streamingUploads
+        XCTAssertEqual(Set(streamingUploads.map(\.remotePath)),
+                       ["/home/user/first.txt", "/home/user/second.log"])
+    }
+
+    func testDownloadStreamsDirectlyToSelectedURL() async throws {
+        let mock = MockSFTP(tree: ["/home/user": dir([("remote.bin", false)])])
+        let payload = Data("streamed payload".utf8)
+        try await mock.write("/home/user/remote.bin", data: payload)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let destinationRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uterm-download-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: destinationRoot) }
+        let destination = destinationRoot.appendingPathComponent("remote.bin")
+
+        let succeeded = await model.downloadWithProgress(
+            entry: try XCTUnwrap(model.entries.first),
+            to: destination)
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(try Data(contentsOf: destination), payload)
+        let streamingDownloads = await mock.streamingDownloads
+        XCTAssertEqual(streamingDownloads.map(\.remotePath), ["/home/user/remote.bin"])
+        XCTAssertEqual(model.transfers.first?.status, .done)
+    }
+
+    func testUploadAndDownloadShareConcurrencyLimit() async throws {
+        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
+        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
+        let mock = MockSFTP(tree: ["/home/user": dir([("remote.bin", false)])])
+        try await mock.write("/home/user/remote.bin", data: Data("remote".utf8))
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        model.enqueueUpload(fileName: "upload.bin", data: Data("upload".utf8))
+        await waitUntil { model.transfers.first?.status == .active }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uterm-queued-download-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let download = Task {
+            await model.downloadWithProgress(entry: model.entries[0], to: destination)
+        }
+        await waitUntil { model.transfers.count == 2 }
+        XCTAssertEqual(model.transfers.filter { $0.status == .active }.count, 1)
+        XCTAssertEqual(model.transfers.filter { $0.status == .queued }.count, 1)
+
+        await mock.release()
+        let downloadSucceeded = await download.value
+        XCTAssertTrue(downloadSucceeded)
+        await waitUntil { model.transfers.allSatisfy { $0.status == .done } }
+        XCTAssertEqual(model.transfers.filter { $0.status == .done }.count, 2)
     }
 
     func testEnqueueUploadsRespectsConcurrencyLimit() async throws {
@@ -557,6 +611,24 @@ final class FileBrowserModelTests: XCTestCase {
         model.cancelTransfer(active.id)
         await waitUntil { model.transfers.isEmpty }
         XCTAssertTrue(model.transfers.isEmpty)
+    }
+
+    func testDisposeCancelsActiveTransfersAndClosesProvider() async throws {
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let (tmp, urls) = try tempFiles(["a.txt"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.enqueueUploads(urls)
+        await waitUntil { model.transfers.contains { $0.status == .active } }
+
+        model.dispose()
+
+        await waitUntil { model.transfers.isEmpty }
+        await waitUntilAsync { await mock.didClose }
+        XCTAssertTrue(model.transfers.isEmpty)
+        let didClose = await mock.didClose
+        XCTAssertTrue(didClose)
     }
 
     func testFailedUploadMarksFailedThenRetryRequeues() async throws {

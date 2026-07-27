@@ -36,6 +36,11 @@ final class AssistantModel {
     /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
     var executor: CommandExecutor?
 
+    /// 一条远端命令执行尝试结束后的通知。命令可能通过重定向、sed 等任意 shell
+    /// 语法改动文件，无法可靠地从命令文本推断写集；工作区据此刷新目录与已打开文件。
+    /// 即使执行器抛错也要通知——远端可能已经完成了部分写入，只是回包时断线。
+    @ObservationIgnored var onCommandExecutionFinished: (@MainActor () async -> Void)?
+
     /// 测试可缩短；生产默认 60 秒无文本 / 工具事件即结束静默 SSE。
     @ObservationIgnored var streamIdleTimeout: Duration = .seconds(60)
 
@@ -297,6 +302,7 @@ final class AssistantModel {
             messages[mi].toolCalls[ci].output = error.localizedDescription
         }
         persistToolCalls(at: mi)
+        await onCommandExecutionFinished?()
         await continueIfResolved(messageIndex: mi)
     }
 

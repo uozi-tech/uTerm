@@ -6,6 +6,9 @@ actor MockSFTP: SFTPProviding {
     var tree: [String: [RemoteEntry]]
     private(set) var uploads: [(path: String, bytes: Int)] = []
     private(set) var downloads: [String] = []
+    private(set) var boundedDownloads: [(path: String, maximumBytes: Int)] = []
+    private(set) var streamingUploads: [(localURL: URL, remotePath: String)] = []
+    private(set) var streamingDownloads: [(remotePath: String, localURL: URL)] = []
     private(set) var didClose = false
     var listError: Error?
     private(set) var renames: [(from: String, to: String)] = []
@@ -15,6 +18,9 @@ actor MockSFTP: SFTPProviding {
     private(set) var createdFiles: [String] = []
     private(set) var permissionChanges: [(path: String, mode: UInt32)] = []
     private(set) var execCommands: [String] = []
+    private var blockExec = false
+    private var execReleased = false
+    private var execStarted = false
 
     /// 内存 blob 存储：path → (data, mtime)。write / read / stat 均走此存储。
     private var blobStore: [String: (Data, Date)] = [:]
@@ -65,6 +71,20 @@ actor MockSFTP: SFTPProviding {
         return Data("file:\(remotePath)".utf8)
     }
 
+    func download(remotePath: String, maximumBytes: Int) async throws -> Data {
+        let limit = max(0, maximumBytes)
+        boundedDownloads.append((remotePath, limit))
+        let metadata = try await stat(remotePath)
+        if metadata.size > Int64(limit) {
+            throw SFTPDownloadLimitExceeded(observedBytes: metadata.size, maximumBytes: limit)
+        }
+        let data = try await download(remotePath: remotePath)
+        guard data.count <= limit else {
+            throw SFTPDownloadLimitExceeded(observedBytes: Int64(data.count), maximumBytes: limit)
+        }
+        return data
+    }
+
     func upload(data: Data, toRemotePath: String) async throws {
         uploads.append((toRemotePath, data.count))
     }
@@ -73,6 +93,11 @@ actor MockSFTP: SFTPProviding {
 
     func write(_ path: String, data: Data) async throws {
         blobStore[path] = (data, Date())
+    }
+
+    /// 用指定 mtime 写入测试文件，覆盖“同一秒、等长改写”这类仅靠 stat 无法识别的场景。
+    func setFile(_ path: String, data: Data, mtime: Date) {
+        blobStore[path] = (data, mtime)
     }
 
     func stat(_ path: String) async throws -> RemoteStat {
@@ -99,9 +124,21 @@ actor MockSFTP: SFTPProviding {
     var execOutput: String = ""
     func exec(_ command: String) async throws -> String {
         execCommands.append(command)
+        execStarted = true
+        while blockExec && !execReleased {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(2))
+        }
         return execOutput
     }
     func setExecOutput(_ s: String) { execOutput = s }
+    func setBlockExec(_ value: Bool) {
+        blockExec = value
+        execReleased = !value
+        execStarted = false
+    }
+    func releaseExec() { execReleased = true }
+    func didStartExec() -> Bool { execStarted }
 
     func rename(_ path: String, to newPath: String) async throws {
         renames.append((path, newPath))
@@ -148,6 +185,24 @@ actor MockSFTP: SFTPProviding {
         try await awaitReleaseIfBlocking()
         onProgress?(TransferProgress(bytesDone: Int64(d.count), bytesTotal: Int64(d.count)))
         return d
+    }
+
+    func upload(localURL: URL, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        streamingUploads.append((localURL, toRemotePath))
+        let data = try Data(contentsOf: localURL)
+        try await upload(data: data, toRemotePath: toRemotePath, onProgress: onProgress)
+    }
+
+    func download(remotePath: String, toLocalURL localURL: URL,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        streamingDownloads.append((remotePath, localURL))
+        let data = try await download(remotePath: remotePath)
+        onProgress?(TransferProgress(bytesDone: 0, bytesTotal: Int64(data.count)))
+        try await awaitReleaseIfBlocking()
+        try Task.checkCancellation()
+        try data.write(to: localURL, options: .atomic)
+        onProgress?(TransferProgress(bytesDone: Int64(data.count), bytesTotal: Int64(data.count)))
     }
 
     func close() async { didClose = true }

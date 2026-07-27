@@ -16,7 +16,12 @@ final class FileBuffer: Identifiable {
     let id = UUID()
     let remotePath: String
     let kind: FileKind
-    var text: String = ""
+    var text: String = "" {
+        didSet { textVersion &+= 1 }
+    }
+    /// 文本内容代数。编辑器用它判断 SwiftUI 更新是否真的来自外部，避免每次按键后
+    /// 再从 TextView 取一次全文做 O(n) 字符串比较。
+    private(set) var textVersion: Int = 0
     var imageData: Data? {
         didSet { dataVersion &+= 1 }
     }
@@ -26,7 +31,9 @@ final class FileBuffer: Identifiable {
     private(set) var dataVersion: Int = 0
     var imageSize: CGSize = .zero
     var mtimeWhenLoaded: Date?
-    var byteSize: Int64 = 0
+    /// 远端已知大小。`nil` 表示目录列表 / 最近记录没有提供可信大小；不能把未知
+    /// 当成 0，否则调用方容易误以为资源很小而绕过预览门禁。
+    var byteSize: Int64?
     var isDirty: Bool = false
     var state: State = .loading
 

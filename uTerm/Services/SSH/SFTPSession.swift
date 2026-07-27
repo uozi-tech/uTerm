@@ -157,10 +157,112 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
+    func upload(localURL: URL, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        let values = try localURL.resourceValues(forKeys: [.fileSizeKey])
+        let total = Int64(max(0, values.fileSize ?? 0))
+        let localFile = try FileHandle(forReadingFrom: localURL)
+        do {
+            let remoteFile = try await sftp.openFile(
+                filePath: toRemotePath, flags: [.write, .create, .truncate])
+            do {
+                let chunkSize = 32 * 1024
+                var offset: UInt64 = 0
+                var progressEmitter = TransferProgressEmitter(totalBytes: total)
+                func emitProgress(_ bytesDone: Int64) {
+                    if progressEmitter.shouldEmit(bytesDone: bytesDone) {
+                        onProgress?(TransferProgress(bytesDone: bytesDone, bytesTotal: total))
+                    }
+                }
+                emitProgress(0)
+                while let data = try localFile.read(upToCount: chunkSize), !data.isEmpty {
+                    try Task.checkCancellation()
+                    var buffer = ByteBuffer()
+                    buffer.writeBytes(data)
+                    try await remoteFile.write(buffer, at: offset)
+                    offset += UInt64(data.count)
+                    emitProgress(Int64(clamping: offset))
+                }
+                emitProgress(Int64(clamping: offset))
+                try localFile.close()
+                try await remoteFile.close()
+            } catch {
+                try? await remoteFile.close()
+                throw error
+            }
+        } catch {
+            try? localFile.close()
+            throw error
+        }
+    }
+
     func download(remotePath: String,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data {
         try await download(remotePath: remotePath, onProgress: onProgress,
                            maximumBytes: nil)
+    }
+
+    func download(remotePath: String, toLocalURL localURL: URL,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws {
+        let attrs = try await sftp.getAttributes(at: remotePath)
+        let total = Self.clampedSize(attrs.size)
+        let remoteFile = try await sftp.openFile(filePath: remotePath, flags: .read)
+        let temporaryURL = Self.temporaryDownloadURL(for: localURL)
+        let fileManager = FileManager.default
+        do {
+            guard fileManager.createFile(atPath: temporaryURL.path, contents: nil) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let localFile = try FileHandle(forWritingTo: temporaryURL)
+            do {
+                let chunk: UInt32 = 32 * 1024
+                var offset: UInt64 = 0
+                var progressEmitter = TransferProgressEmitter(totalBytes: total)
+                func emitProgress(_ bytesDone: Int64) {
+                    if progressEmitter.shouldEmit(bytesDone: bytesDone) {
+                        onProgress?(TransferProgress(bytesDone: bytesDone, bytesTotal: total))
+                    }
+                }
+                emitProgress(0)
+                while true {
+                    try Task.checkCancellation()
+                    let buffer = try await remoteFile.read(from: offset, length: chunk)
+                    let count = buffer.readableBytes
+                    guard count > 0 else { break }
+                    try localFile.write(contentsOf: Data(buffer.readableBytesView))
+                    offset += UInt64(count)
+                    emitProgress(Int64(clamping: offset))
+                }
+                try localFile.synchronize()
+                try localFile.close()
+                try await remoteFile.close()
+                try Self.installDownloadedFile(at: temporaryURL, replacing: localURL)
+                emitProgress(Int64(clamping: offset))
+            } catch {
+                try? localFile.close()
+                throw error
+            }
+        } catch {
+            try? await remoteFile.close()
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
+    private static func temporaryDownloadURL(for destinationURL: URL) -> URL {
+        destinationURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(destinationURL.lastPathComponent).uterm-\(UUID().uuidString).part",
+            isDirectory: false)
+    }
+
+    private static func installDownloadedFile(at temporaryURL: URL,
+                                              replacing destinationURL: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        }
     }
 
     /// 真正的流式下载内核。`maximumBytes` 非 nil 时同时在 stat 后与每个 chunk

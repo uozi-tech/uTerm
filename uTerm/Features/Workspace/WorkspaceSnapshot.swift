@@ -61,7 +61,8 @@ nonisolated struct TabSnapshot: Codable, Equatable, Sendable {
 /// 重连后内容通过 SFTP 重新读取，不保存编辑器正文或未保存修改。
 nonisolated struct OpenFileSnapshot: Codable, Equatable, Sendable {
     var remotePath: String
-    var byteSize: Int64
+    /// nil 表示保存快照时远端大小未知。Optional 同时兼容旧快照中的整数值。
+    var byteSize: Int64?
     var mtimeWhenLoaded: Date?
 }
 

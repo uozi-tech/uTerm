@@ -112,6 +112,15 @@ protocol SFTPProviding: Actor {
     func download(remotePath: String,
                   onProgress: (@Sendable (TransferProgress) -> Void)?) async throws -> Data
 
+    /// 把远端文件流式写到本地 URL。实现必须使用固定大小缓冲，并在成功前通过同目录
+    /// 临时文件保护既有目标；失败或取消不能留下半截目标文件。
+    func download(remotePath: String, toLocalURL localURL: URL,
+                  onProgress: (@Sendable (TransferProgress) -> Void)?) async throws
+
+    /// 从本地文件 URL 流式上传；不能先构造文件大小级的 `Data`。
+    func upload(localURL: URL, toRemotePath: String,
+                onProgress: (@Sendable (TransferProgress) -> Void)?) async throws
+
     /// 主动探测底层连接是否仍然存活（系统唤醒 / 网络恢复后由看门狗触发）。
     /// 判死的实现应自行强制关闭底层连接，让后续操作快速失败（而非挂死），
     /// 由调用方的刷新/重连路径接管。

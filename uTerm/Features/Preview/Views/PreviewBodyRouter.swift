@@ -11,8 +11,8 @@ struct PreviewBodyRouter: View {
         Group {
             if let buf = model.activeBuffer {
                 PreviewBufferBody(buffer: buf, focusRequest: model.editorFocusRequest,
-                                  onDownload: { buffer in
-                    try await model.download(buffer)
+                                  onDownload: { buffer, localURL in
+                    try await model.download(buffer, to: localURL)
                 }, onLoadMarkdownImage: { source, buffer in
                     try await model.loadMarkdownImage(source: source, referencedBy: buffer)
                 })
@@ -28,7 +28,7 @@ struct PreviewBufferBody: View {
     let buffer: FileBuffer
     /// 编辑器焦点请求（透传给 CodeBody → CodeEditorView 消费）。
     var focusRequest: EditorFocusRequest? = nil
-    var onDownload: ((FileBuffer) async throws -> Data)?
+    var onDownload: ((FileBuffer, URL) async throws -> Void)?
     let onLoadMarkdownImage: MarkdownBufferImageLoader
 
     var body: some View {
@@ -89,7 +89,7 @@ private struct PreviewUnavailableBody: View {
     let buffer: FileBuffer
     let title: String
     let message: String
-    let onDownload: ((FileBuffer) async throws -> Data)?
+    let onDownload: ((FileBuffer, URL) async throws -> Void)?
 
     @State private var isDownloading = false
     @State private var downloadError: String?
@@ -116,8 +116,8 @@ private struct PreviewUnavailableBody: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: 520)
 
-            if buffer.byteSize > 0 {
-                Text(ByteCountFormatter.string(fromByteCount: buffer.byteSize, countStyle: .file))
+            if let byteSize = buffer.byteSize, byteSize > 0 {
+                Text(ByteCountFormatter.string(fromByteCount: byteSize, countStyle: .file))
                     .font(UD.mono(10.5))
                     .foregroundStyle(UD.text4)
             }
@@ -155,10 +155,7 @@ private struct PreviewUnavailableBody: View {
         defer { isDownloading = false }
 
         do {
-            let data = try await onDownload(buffer)
-            try await Task.detached(priority: .userInitiated) {
-                try data.write(to: url)
-            }.value
+            try await onDownload(buffer, url)
         } catch {
             downloadError = "下载失败：\(FriendlyError.describe(error))"
         }

@@ -204,14 +204,16 @@ struct WorkspaceWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openRemoteFile)) { note in
             guard controlActiveState == .key,
                   let info = note.userInfo,
-                  let path = info["path"] as? String,
-                  let size = info["size"] as? Int64 else { return }
+                  let path = info["path"] as? String else { return }
+            let size = info["size"] as? Int64
             let mtime = info["mtime"] as? Date
             let asPreview = (info["preview"] as? Bool) ?? false
             switch WorkspaceRemoteFileOpenGate.decision(forSize: size) {
             case .block:
+                guard let size else { return }
                 blockedFile = BlockedFile(path: path, size: size)
             case .confirmLargeFile:
+                guard let size else { return }
                 largeFileConfirm = LargeFileConfirm(path: path, size: size, mtime: mtime,
                                                     asPreview: asPreview)
             case .openDirectly:

@@ -12,7 +12,7 @@ struct TabContentView: View {
     let onDropFile: @MainActor @Sendable (_ sourceBuffer: UUID, _ targetPane: UUID,
                                           _ zone: PaneDropZone) -> Void
     /// 文件 pane 中不可预览提示的下载入口。
-    var onDownloadFile: ((FileBuffer) async throws -> Data)? = nil
+    var onDownloadFile: ((FileBuffer, URL) async throws -> Void)? = nil
     /// 文件 pane 中 Markdown 图片加载入口。
     let onLoadMarkdownImage: MarkdownBufferImageLoader
     /// Workspace 级拖拽源。

@@ -586,7 +586,7 @@ struct FileBrowserContent: View {
             // 解析链接：目标是目录则 model 已进入；是文件则返回真实路径，这里开预览。
             Task {
                 if let f = await model.resolveSymlinkForOpen(entry) {
-                    postOpenRemoteFile(path: f.path, size: f.size ?? 0, mtime: f.mtime,
+                    postOpenRemoteFile(path: f.path, size: f.size, mtime: f.mtime,
                                        asPreview: asPreview)
                 }
             }
@@ -596,21 +596,23 @@ struct FileBrowserContent: View {
         let fullPath = basePath.hasSuffix("/")
             ? basePath + entry.name
             : basePath + "/" + entry.name
-        postOpenRemoteFile(path: fullPath, size: Int64(entry.size ?? 0),
+        let knownSize = entry.size.map { Int64(clamping: $0) }
+        postOpenRemoteFile(path: fullPath, size: knownSize,
                            mtime: entry.modifiedAt, asPreview: asPreview)
     }
 
     /// 发通知让 PreviewArea 打开远程文件（普通文件 / 解析后的链接目标共用）。
-    private func postOpenRemoteFile(path: String, size: Int64, mtime: Date?, asPreview: Bool) {
+    private func postOpenRemoteFile(path: String, size: Int64?, mtime: Date?, asPreview: Bool) {
+        var userInfo: [String: Any] = [
+            "path": path,
+            "mtime": mtime as Any,
+            "preview": asPreview
+        ]
+        if let size { userInfo["size"] = size }
         NotificationCenter.default.post(
             name: .openRemoteFile,
             object: nil,
-            userInfo: [
-                "path": path,
-                "size": size,
-                "mtime": mtime as Any,
-                "preview": asPreview
-            ])
+            userInfo: userInfo)
     }
 
     private static let byteFormatter: ByteCountFormatter = {
@@ -624,21 +626,10 @@ struct FileBrowserContent: View {
     }
 
     private func downloadFile(_ entry: RemoteEntry) {
-        Task {
-            guard let data = await model.download(entry: entry) else { return }
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = entry.name
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            // 不能 `try?` 吞掉写盘错误：磁盘满 / 无权限时用户会以为已保存成功。
-            // 失败时经「操作失败」alert 上报。
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try data.write(to: url)
-                }.value
-            } catch {
-                model.reportTransientError("保存失败：\(FriendlyError.describe(error))")
-            }
-        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = entry.name
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { _ = await model.downloadWithProgress(entry: entry, to: url) }
     }
 
     /// 上传文件到当前目录：入队到 FileBrowserModel 的传输队列（`enqueueUploads`），

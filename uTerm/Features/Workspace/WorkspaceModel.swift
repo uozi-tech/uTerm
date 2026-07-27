@@ -31,6 +31,7 @@ final class WorkspaceModel {
     private(set) var dragSource: WorkspaceDragSource?
 
     @ObservationIgnored private var dragEndPollTask: Task<Void, Never>?
+    @ObservationIgnored private var agentBackgroundRefreshTask: Task<Void, Never>?
 
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
@@ -54,6 +55,24 @@ final class WorkspaceModel {
         // 遥测复用 SFTP 的连接（同 FilePreviewModel 的延迟取法）。
         self.telemetryModel = TelemetryModel(
             provider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider })
+
+        // Agent 的 run_command 可以通过任意 shell 语法改动远端文件。命令结算后先
+        // 刷新左侧目录（也负责断线重连），再重读已打开的安全 buffer。
+        assistantModel.onCommandExecutionFinished = { [weak self] in
+            await self?.refreshAfterAgentCommandAttempt()
+        }
+    }
+
+    private func refreshAfterAgentCommandAttempt() async {
+        // 关键顺序保持：文件树原始列表先发布，再重读当前可见文件，最后才允许 Agent 续轮。
+        await fileBrowserModel.refreshListingAfterRemoteCommand()
+        let generation = await filePreviewModel.refreshVisibleAfterRemoteCommand()
+
+        // owner/group 补全由 FileBrowserModel 自己后台完成；非活动 buffer 也不阻塞续轮。
+        agentBackgroundRefreshTask?.cancel()
+        agentBackgroundRefreshTask = Task { [weak preview = filePreviewModel] in
+            await preview?.refreshInactiveAfterRemoteCommand(generation: generation)
+        }
     }
 
     /// 从持久化快照重建工作区。便利构造器 —— 内部走 restore(from:) 走同一条路径。
@@ -98,6 +117,8 @@ final class WorkspaceModel {
     /// 预览 buffers。AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
     func dispose() {
         endDrag()
+        agentBackgroundRefreshTask?.cancel()
+        agentBackgroundRefreshTask = nil
         for tab in tabs { tab.disposeAll() }
         fileBrowserModel.dispose()
         filePreviewModel.dispose()

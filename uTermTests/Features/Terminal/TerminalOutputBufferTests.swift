@@ -18,6 +18,20 @@ final class TerminalOutputBufferTests: XCTestCase {
         XCTAssertEqual(String(decoding: rest, as: UTF8.self), "456789")
     }
 
+    func testHighFrequencySmallChunksCoalesceIntoBoundedFlushes() {
+        let buf = TerminalOutputBuffer(capacityBytes: 128 * 1024)
+        for _ in 0..<50_000 {
+            buf.append(Data([0x41]), generation: 1)
+        }
+
+        let firstFrame = buf.drain(maxBytes: 32 * 1024, generation: 1)
+        let secondFrame = buf.drain(maxBytes: 32 * 1024, generation: 1)
+
+        XCTAssertEqual(firstFrame.count, 32 * 1024)
+        XCTAssertEqual(secondFrame.count, 50_000 - 32 * 1024)
+        XCTAssertTrue(buf.drain(maxBytes: 32 * 1024, generation: 1).isEmpty)
+    }
+
     func testStaleGenerationChunksAreDropped() {
         let buf = TerminalOutputBuffer(capacityBytes: 1024)
         buf.append(Data("old".utf8), generation: 1)

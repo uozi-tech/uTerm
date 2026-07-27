@@ -45,4 +45,15 @@ final class FileBufferTests: XCTestCase {
         buf.imageData = nil
         XCTAssertEqual(buf.dataVersion, 3)
     }
+
+    func test_textVersion_bumpsOnEveryEditorSnapshotAssignment() {
+        let buf = FileBuffer(remotePath: "/tmp/main.swift", kind: .code(language: "swift"))
+        XCTAssertEqual(buf.textVersion, 0)
+
+        buf.text = "let value = 1"
+        XCTAssertEqual(buf.textVersion, 1)
+
+        buf.text = "let value = 2"
+        XCTAssertEqual(buf.textVersion, 2)
+    }
 }

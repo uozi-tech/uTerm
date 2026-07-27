@@ -416,18 +416,9 @@ struct SFTPBrowserView: View {
     }
 
     private func downloadFile(_ entry: RemoteEntry) {
-        Task {
-            guard let data = await model.downloadWithProgress(entry: entry) else { return }
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = entry.name
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            // 不能 `try?` 吞掉写盘错误：磁盘满 / 无权限时用户会以为已保存成功。
-            // 失败时经「操作失败」alert 上报。
-            do {
-                try await Task.detached(priority: .userInitiated) { try data.write(to: url) }.value
-            } catch {
-                model.reportTransientError("保存失败：\(FriendlyError.describe(error))")
-            }
-        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = entry.name
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { _ = await model.downloadWithProgress(entry: entry, to: url) }
     }
 }

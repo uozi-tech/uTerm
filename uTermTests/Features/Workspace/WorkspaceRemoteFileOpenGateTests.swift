@@ -6,6 +6,10 @@ final class WorkspaceRemoteFileOpenGateTests: XCTestCase {
         XCTAssertEqual(WorkspaceRemoteFileOpenGate.decision(forSize: 5 * 1024 * 1024), .openDirectly)
     }
 
+    func testUnknownSizeOpensThroughBoundedPreviewPath() {
+        XCTAssertEqual(WorkspaceRemoteFileOpenGate.decision(forSize: nil), .openDirectly)
+    }
+
     func testFileOverFiveMegabytesRequiresConfirmation() {
         XCTAssertEqual(WorkspaceRemoteFileOpenGate.decision(forSize: 5 * 1024 * 1024 + 1), .confirmLargeFile)
     }

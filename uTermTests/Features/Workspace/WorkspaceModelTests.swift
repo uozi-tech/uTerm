@@ -77,6 +77,52 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNotNil(ws.fileBrowserModel.sftpProvider)
     }
 
+    func testAgentCommandRefreshHookReloadsOpenWorkspaceFile() async throws {
+        let mtime = Date(timeIntervalSince1970: 1_000)
+        let mock = MockSFTP(tree: ["/srv": []])
+        await mock.setFile("/srv/app.ini", data: Data("old".utf8), mtime: mtime)
+        let browser = FileBrowserModel(testProvider: mock, startPath: "/srv")
+        let ws = WorkspaceModel(fileBrowserModel: browser)
+        await ws.filePreviewModel.open(
+            path: "/srv/app.ini", fileSize: 3, mtime: mtime)
+
+        await mock.setFile("/srv/app.ini", data: Data("new".utf8), mtime: mtime)
+        await ws.assistantModel.onCommandExecutionFinished?()
+
+        XCTAssertEqual(ws.filePreviewModel.activeBuffer?.text, "new")
+    }
+
+    func testAgentCommandContinuationDoesNotWaitForOwnerNameEnrichment() async throws {
+        let mtime = Date(timeIntervalSince1970: 1_000)
+        let entry = RemoteEntry(
+            name: "app.ini",
+            posixPermissions: 0o100644,
+            size: 3,
+            modifiedAt: mtime,
+            uid: 501,
+            gid: 20)
+        let mock = MockSFTP(tree: ["/srv": [entry]])
+        await mock.setFile("/srv/app.ini", data: Data("old".utf8), mtime: mtime)
+        let browser = FileBrowserModel(testProvider: mock, startPath: "/srv")
+        let ws = WorkspaceModel(fileBrowserModel: browser)
+        await ws.filePreviewModel.open(path: "/srv/app.ini", fileSize: 3, mtime: mtime)
+        await mock.setFile("/srv/app.ini", data: Data("new".utf8), mtime: mtime)
+        await mock.setBlockExec(true)
+
+        let finished = expectation(description: "critical refresh completes")
+        Task {
+            await ws.assistantModel.onCommandExecutionFinished?()
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 1)
+
+        XCTAssertEqual(ws.fileBrowserModel.entries.map(\.name), ["app.ini"])
+        XCTAssertEqual(ws.filePreviewModel.activeBuffer?.text, "new")
+        let ownerLookupStarted = await mock.didStartExec()
+        XCTAssertTrue(ownerLookupStarted)
+        await mock.releaseExec()
+    }
+
     func testAutosaveStructureSnapshotIgnoresDraftButFullSnapshotKeepsIt() {
         let ws = WorkspaceModel()
         ws.assistantModel.input = "first draft"

@@ -178,11 +178,17 @@ final class FileBrowserModel {
     /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
     private(set) var transfers: [TransferItem] = []
     private static let ownerStatChunkSize = 80
+    @ObservationIgnored private var ownerEnrichmentTask: Task<Void, Never>?
+    private var ownerEnrichmentGeneration = 0
 
     /// 每个传输的不可展示状态：数据来源、取消句柄、测速采样点。
     /// MainActor 隔离，用 class 便于原地改可变字段。
     private final class TransferContext {
-        enum Source { case uploadURL(URL); case uploadData(Data); case download }
+        enum Source {
+            case uploadURL(URL)
+            case uploadData(Data)
+            case download(remotePath: String, localURL: URL)
+        }
         let source: Source
         /// 入队时捕获的目标目录（上传用）。槽位激活时机不确定，若上传时再读 live
         /// `currentPath` 会把排队中的上传落到当时正好停留的目录（用户已切走）；故在
@@ -190,6 +196,7 @@ final class FileBrowserModel {
         /// 下载项不用此字段（remotePath 在下载入口已锚定）。
         let destinationDir: String
         var cancel: (() -> Void)?
+        var downloadCompletion: ((Bool) -> Void)?
         var lastSampleTime: Date?
         var lastSampleBytes: Int64 = 0
         init(source: Source, destinationDir: String) {
@@ -199,8 +206,8 @@ final class FileBrowserModel {
     }
     private var contexts: [UUID: TransferContext] = [:]
 
-    /// 最大并发上传数（用户设置；默认 4，钳 1…64）。下载不计入此上限。
-    static var maxConcurrentUploads: Int {
+    /// 上传和下载共用的总并发预算（用户设置；默认 4，钳 1…64）。
+    static var maxConcurrentTransfers: Int {
         let raw = UserDefaults.standard.object(forKey: "sftpMaxConcurrentTransfers") as? Int ?? 4
         return min(64, max(1, raw))
     }
@@ -244,7 +251,8 @@ final class FileBrowserModel {
         await connectUsingLastRequest(force: false, initialPath: nil)
     }
 
-    private func connectUsingLastRequest(force: Bool, initialPath: String?) async {
+    private func connectUsingLastRequest(force: Bool, initialPath: String?,
+                                         waitForOwnerNames: Bool = true) async {
         guard let lastConnectionRequest else { return }
         // 视图层 `.task(id:)` 会在视图重建时重新触发 connect；已连接/连接中则视为
         // no-op，不撕掉活动 SFTP 会话。仅 .idle（首次）/ .failed（重试）才继续。
@@ -274,7 +282,8 @@ final class FileBrowserModel {
             } else {
                 currentPath = (try? await session.realPath(".")) ?? "/"
             }
-            await refresh(reconnectOnTransportFailure: false)
+            await refresh(reconnectOnTransportFailure: false,
+                          waitForOwnerNames: waitForOwnerNames)
         } catch {
             provider = nil
             state = .failed("\(error)")
@@ -308,37 +317,81 @@ final class FileBrowserModel {
     }
 
     func refresh() async {
-        await refresh(reconnectOnTransportFailure: true)
+        await refresh(reconnectOnTransportFailure: true, waitForOwnerNames: true)
     }
 
-    private func refresh(reconnectOnTransportFailure: Bool) async {
+    /// Agent 命令后的关键路径只等待目录列表。owner/group 的 exec 补全在后台继续，
+    /// 让模型续轮不再被每 80 项一次的串行 shell 往返阻塞。
+    func refreshListingAfterRemoteCommand() async {
+        await refresh(reconnectOnTransportFailure: true, waitForOwnerNames: false)
+    }
+
+    private func refresh(reconnectOnTransportFailure: Bool,
+                         waitForOwnerNames: Bool) async {
         guard let provider else {
             if reconnectOnTransportFailure {
-                _ = await reconnectPreservingCurrentPath()
+                _ = await reconnectPreservingCurrentPath(waitForOwnerNames: waitForOwnerNames)
             }
             return
         }
+        ownerEnrichmentTask?.cancel()
+        ownerEnrichmentGeneration &+= 1
+        let generation = ownerEnrichmentGeneration
+        let directoryPath = currentPath
         do {
-            let listed = try await provider.list(path: currentPath)
-            entries = await resolveOwnerNames(for: listed, provider: provider, directoryPath: currentPath)
+            let listed = try await provider.list(path: directoryPath)
+            // 先发布 SFTP 原始 uid/gid；名字补全不是目录正确性的前置条件。
+            entries = listed
             state = .browsing
             didEverBrowse = true
             transientError = nil
+            if waitForOwnerNames {
+                let enriched = await resolveOwnerNames(
+                    for: listed,
+                    provider: provider,
+                    directoryPath: directoryPath)
+                publishOwnerEnrichment(
+                    enriched,
+                    generation: generation,
+                    directoryPath: directoryPath)
+            } else {
+                ownerEnrichmentTask = Task { [weak self, provider] in
+                    guard let self else { return }
+                    let enriched = await self.resolveOwnerNames(
+                        for: listed,
+                        provider: provider,
+                        directoryPath: directoryPath)
+                    guard !Task.isCancelled else { return }
+                    self.publishOwnerEnrichment(
+                        enriched,
+                        generation: generation,
+                        directoryPath: directoryPath)
+                }
+            }
         } catch {
             if reconnectOnTransportFailure,
                Self.isRecoverableTransportError(error),
-               await reconnectPreservingCurrentPath() {
+               await reconnectPreservingCurrentPath(waitForOwnerNames: waitForOwnerNames) {
                 return
             }
             state = .failed("\(error)")
         }
     }
 
-    private func reconnectPreservingCurrentPath() async -> Bool {
+    private func publishOwnerEnrichment(_ enriched: [RemoteEntry],
+                                        generation: Int,
+                                        directoryPath: String) {
+        guard generation == ownerEnrichmentGeneration,
+              currentPath == directoryPath else { return }
+        entries = enriched
+    }
+
+    private func reconnectPreservingCurrentPath(waitForOwnerNames: Bool = true) async -> Bool {
         guard lastConnectionRequest != nil else { return false }
         guard state != .connecting else { return false }
         await connectUsingLastRequest(force: true,
-                                      initialPath: didEverBrowse ? currentPath : nil)
+                                      initialPath: didEverBrowse ? currentPath : nil,
+                                      waitForOwnerNames: waitForOwnerNames)
         return state == .browsing
     }
 
@@ -388,16 +441,6 @@ final class FileBrowserModel {
         }
         let stat = try? await provider.stat(linkPath)
         return (linkPath, stat?.size, stat?.mtime)
-    }
-
-    func download(entry: RemoteEntry) async -> Data? {
-        guard let provider, !entry.isDirectory else { return nil }
-        do {
-            return try await provider.download(remotePath: Self.join(currentPath, entry.name))
-        } catch {
-            transientError = "下载失败：\(error)"
-            return nil
-        }
     }
 
     func upload(fileName: String, data: Data) async {
@@ -464,23 +507,26 @@ final class FileBrowserModel {
                     completion(nil, false, CocoaError(.userCancelled))
                     return
                 }
-                guard let data = await self.downloadWithProgress(
+                let destinationURL: URL
+                do {
+                    destinationURL = try Self.promisedDownloadURL(fileName: item.name)
+                } catch {
+                    completion(nil, false, error)
+                    return
+                }
+                guard await self.downloadWithProgress(
                     remotePath: item.path,
                     fileName: item.name,
-                    size: size) else {
+                    size: size,
+                    to: destinationURL) else {
                     completion(nil, false, NSError(
                         domain: "uTerm.RemoteFileDrag",
                         code: 1,
                         userInfo: [NSLocalizedDescriptionKey: "下载失败"]))
                     return
                 }
-                do {
-                    let url = try Self.writePromisedDownload(data: data, fileName: item.name)
-                    progress.completedUnitCount = progress.totalUnitCount
-                    completion(url, false, nil)
-                } catch {
-                    completion(nil, false, error)
-                }
+                progress.completedUnitCount = progress.totalUnitCount
+                completion(destinationURL, false, nil)
             }
             return progress
         }
@@ -615,27 +661,36 @@ final class FileBrowserModel {
         pumpQueue()
     }
 
-    /// 调度：把 .queued 上传提升为 .active，直到活动上传数达到上限。下载不计入。
+    /// 调度：上传和下载共用一个槽位池，避免多个下载绕过用户设置并放大内存/网络压力。
     private func pumpQueue() {
-        let limit = Self.maxConcurrentUploads
-        var active = transfers.filter { $0.direction == .up && $0.status == .active }.count
+        let limit = Self.maxConcurrentTransfers
+        var active = transfers.filter { $0.status == .active }.count
         for idx in transfers.indices where active < limit {
-            guard transfers[idx].direction == .up, transfers[idx].status == .queued else { continue }
-            startUpload(id: transfers[idx].id)
+            guard transfers[idx].status == .queued else { continue }
+            startTransfer(id: transfers[idx].id)
             active += 1
         }
     }
 
-    private func startUpload(id: UUID) {
+    private func startTransfer(id: UUID) {
         guard let idx = transfers.firstIndex(where: { $0.id == id }),
               let ctx = contexts[id], let provider else { return }
         transfers[idx].status = .active
-        // 用入队时锚定的目录（而非 live currentPath），避免槽位激活时用户已切走目录
-        // 导致上传落错地方。
-        let remotePath = Self.join(ctx.destinationDir, transfers[idx].fileName)
         let source = ctx.source
-        let task = Task { [weak self] in
-            await self?.runUpload(id: id, source: source, remotePath: remotePath, provider: provider)
+        let task: Task<Void, Never>
+        switch source {
+        case .uploadURL, .uploadData:
+            // 用入队时锚定的目录（而非 live currentPath），避免槽位激活时用户已切走目录。
+            let remotePath = Self.join(ctx.destinationDir, transfers[idx].fileName)
+            task = Task { [weak self] in
+                await self?.runUpload(id: id, source: source,
+                                      remotePath: remotePath, provider: provider)
+            }
+        case .download(let remotePath, let localURL):
+            task = Task { [weak self] in
+                await self?.runDownload(id: id, remotePath: remotePath,
+                                        localURL: localURL, provider: provider)
+            }
         }
         ctx.cancel = { task.cancel() }
     }
@@ -643,22 +698,19 @@ final class FileBrowserModel {
     private func runUpload(id: UUID, source: TransferContext.Source,
                            remotePath: String, provider: any SFTPProviding) async {
         do {
-            let data: Data
             switch source {
-            case .uploadData(let d): data = d
+            case .uploadData(let data):
+                try await provider.upload(data: data, toRemotePath: remotePath) { [weak self] p in
+                    Task { @MainActor in self?.applyProgress(id: id, p) }
+                }
             case .uploadURL(let url):
                 let didAccess = url.startAccessingSecurityScopedResource()
                 defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-                data = try await Task.detached(priority: .userInitiated) {
-                    try Data(contentsOf: url)
-                }.value
+                try await provider.upload(localURL: url, toRemotePath: remotePath) { [weak self] p in
+                    Task { @MainActor in self?.applyProgress(id: id, p) }
+                }
             case .download:
                 return
-            }
-            try Task.checkCancellation()
-            updateTransfer(id) { $0.bytesTotal = Int64(data.count) }
-            try await provider.upload(data: data, toRemotePath: remotePath) { [weak self] p in
-                Task { @MainActor in self?.applyProgress(id: id, p) }
             }
             finishTransfer(id, status: .done)
             await refresh()
@@ -671,67 +723,69 @@ final class FileBrowserModel {
         pumpQueue()
     }
 
-    /// 下载到内存并返回（保存面板由视图层处理）。登记为 .down 传输项，可在 Dock 取消。
-    func downloadWithProgress(entry: RemoteEntry) async -> Data? {
-        guard let provider, !entry.isDirectory else { return nil }
+    /// 流式下载到本地 URL。登记为 .down 队列项并与上传共用并发预算。
+    func downloadWithProgress(entry: RemoteEntry, to localURL: URL) async -> Bool {
+        guard provider != nil, !entry.isDirectory else { return false }
         return await downloadWithProgress(
             remotePath: Self.join(currentPath, entry.name),
             fileName: entry.name,
             size: Self.int64Size(entry.size),
-            provider: provider)
-    }
-
-    private func downloadWithProgress(remotePath: String,
-                                      fileName: String,
-                                      size: Int64) async -> Data? {
-        guard let provider else { return nil }
-        return await downloadWithProgress(
-            remotePath: remotePath,
-            fileName: fileName,
-            size: size,
-            provider: provider)
+            to: localURL)
     }
 
     private func downloadWithProgress(remotePath: String,
                                       fileName: String,
                                       size: Int64,
-                                      provider: any SFTPProviding) async -> Data? {
+                                      to localURL: URL) async -> Bool {
+        guard provider != nil, !Task.isCancelled else { return false }
         let id = UUID()
-        transfers.append(TransferItem(
-            id: id, fileName: fileName, direction: .down,
-            bytesDone: 0, bytesTotal: size,
-            speedBytesPerSec: 0, status: .active))
-        // 下载项不使用 destinationDir（remotePath 已锚定），传 currentPath 占位。
-        contexts[id] = TransferContext(source: .download, destinationDir: currentPath)
-
-        enum Outcome { case data(Data); case cancelled; case failed }
-        let task = Task { () -> Outcome in
-            do {
-                let data = try await provider.download(remotePath: remotePath) { [weak self] p in
-                    Task { @MainActor in self?.applyProgress(id: id, p) }
-                }
-                return .data(data)
-            } catch is CancellationError { return .cancelled }
-            catch { return .failed }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                transfers.append(TransferItem(
+                    id: id, fileName: fileName, direction: .down,
+                    bytesDone: 0, bytesTotal: size,
+                    speedBytesPerSec: 0, status: .queued))
+                let context = TransferContext(
+                    source: .download(remotePath: remotePath, localURL: localURL),
+                    destinationDir: currentPath)
+                context.downloadCompletion = { continuation.resume(returning: $0) }
+                contexts[id] = context
+                pumpQueue()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelTransfer(id) }
         }
-        contexts[id]?.cancel = { task.cancel() }
+    }
 
-        switch await task.value {
-        case .data(let d):
-            finishTransfer(id, status: .done); contexts[id]?.cancel = nil; return d
-        case .cancelled:
-            removeTransfer(id); return nil
-        case .failed:
-            finishTransfer(id, status: .failed); contexts[id]?.cancel = nil
-            transientError = "下载失败"; return nil
+    private func runDownload(id: UUID, remotePath: String, localURL: URL,
+                             provider: any SFTPProviding) async {
+        do {
+            try await provider.download(remotePath: remotePath, toLocalURL: localURL) { [weak self] p in
+                Task { @MainActor in self?.applyProgress(id: id, p) }
+            }
+            finishTransfer(id, status: .done)
+            completeDownload(id: id, success: true)
+        } catch is CancellationError {
+            completeDownload(id: id, success: false)
+            removeTransfer(id)
+        } catch {
+            finishTransfer(id, status: .failed)
+            contexts[id]?.cancel = nil
+            transientError = "下载失败：\(FriendlyError.describe(error))"
+            completeDownload(id: id, success: false)
         }
+        contexts[id]?.cancel = nil
+        pumpQueue()
     }
 
     /// 取消一个传输。排队 / 完成 / 失败 → 直接移除该行；活动 → 取消其 Task（runner 捕获后移除）。
     func cancelTransfer(_ id: TransferItem.ID) {
         guard let item = transfers.first(where: { $0.id == id }) else { return }
         switch item.status {
-        case .queued, .done, .failed: removeTransfer(id)
+        case .queued, .done, .failed:
+            completeDownload(id: id, success: false)
+            removeTransfer(id)
+            pumpQueue()
         case .active: contexts[id]?.cancel?()
         }
     }
@@ -778,6 +832,12 @@ final class FileBrowserModel {
         contexts[id] = nil
     }
 
+    private func completeDownload(id: UUID, success: Bool) {
+        let completion = contexts[id]?.downloadCompletion
+        contexts[id]?.downloadCompletion = nil
+        completion?(success)
+    }
+
     /// 进度回调：更新已传字节，按 ~100ms 采样计算平滑速率。
     /// `internal`（非 `private`）以便单测直接验证终态守卫（迟到进度不回退已完成行）。
     func applyProgress(id: UUID, _ p: TransferProgress) {
@@ -811,6 +871,10 @@ final class FileBrowserModel {
 
     func dispose() {
         hostKeyRelay.resolve(false)
+        ownerEnrichmentTask?.cancel()
+        ownerEnrichmentTask = nil
+        ownerEnrichmentGeneration &+= 1
+        cancelAllActiveTransfers()
         closeCurrentProvider()
     }
 
@@ -960,14 +1024,12 @@ final class FileBrowserModel {
         return .data
     }
 
-    private static func writePromisedDownload(data: Data, fileName: String) throws -> URL {
+    private static func promisedDownloadURL(fileName: String) throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("uterm-drag-downloads", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let url = root.appendingPathComponent(fileName, isDirectory: false)
-        try data.write(to: url, options: .atomic)
-        return url
+        return root.appendingPathComponent(fileName, isDirectory: false)
     }
 
     private func closeCurrentProvider() {

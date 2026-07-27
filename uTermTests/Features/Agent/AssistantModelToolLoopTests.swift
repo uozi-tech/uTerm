@@ -74,6 +74,47 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
     }
 
+    func testApproveNotifiesWorkspaceAfterCommandAttempt() async {
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"sed -i s/a/b/ file"}"#))],
+            [.text("已更新")],
+        ])
+        let exec = MockCommandExecutor()
+        exec.results["sed -i s/a/b/ file"] = CommandResult(output: "", exitCode: 0)
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        var refreshCount = 0
+        model.onCommandExecutionFinished = { refreshCount += 1 }
+        model.input = "修改文件"
+        await model.send(serverContext: "")
+
+        await model.approveAndRun(id: "c1")
+
+        XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testExecutorErrorStillNotifiesWorkspaceBecauseRemoteMayHavePartiallyWritten() async {
+        struct Boom: Error {}
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"write then disconnect"}"#))],
+            [.text("连接已中断")],
+        ])
+        let exec = MockCommandExecutor()
+        exec.error = Boom()
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        var refreshCount = 0
+        model.onCommandExecutionFinished = { refreshCount += 1 }
+        model.input = "执行"
+        await model.send(serverContext: "")
+
+        await model.approveAndRun(id: "c1")
+
+        XCTAssertEqual(refreshCount, 1)
+    }
+
     func testApproveIgnoresSecondApprovalWhileCommandIsRunning() async {
         let client = MockLLMClient(scripts: [
             [.toolCall(LLMToolCall(id: "c1", name: "run_command",

@@ -35,8 +35,13 @@ final class MobileTerminalController {
     @ObservationIgnored private(set) var terminalView: SwiftTerm.TerminalView?
     @ObservationIgnored private var connection: SSHConnection?
     @ObservationIgnored private var outputTask: Task<Void, Never>?
+    @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
+    @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    private var outputGeneration = 0
+    private let outputFlushActiveMs = 16
+    private let maxBytesPerOutputFlush = 32 * 1024
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
@@ -157,12 +162,18 @@ final class MobileTerminalController {
         let outStream = conn.outputStream
         let exitStream = conn.exitStream
         let pid = profile.persistentModelID
+        resetOutputPipeline()
+        let generation = outputGeneration
+        let buffer = outputBuffer
 
-        outputTask = Task { [weak self] in
+        // SSH 入站不再每个 chunk 都 hop MainActor；先进入有界缓冲，再按帧合并 feed。
+        outputTask = Task.detached(priority: .userInitiated) {
             for await chunk in outStream {
-                await MainActor.run { self?.terminalView?.feed(byteArray: ArraySlice(chunk)) }
+                if Task.isCancelled { break }
+                buffer.append(chunk, generation: generation)
             }
         }
+        startOutputFlushLoop(generation: generation)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
                 await MainActor.run {
@@ -204,7 +215,8 @@ final class MobileTerminalController {
     }
 
     func close() {
-        outputTask?.cancel(); exitTask?.cancel()
+        resetOutputPipeline()
+        exitTask?.cancel()
         let conn = connection
         Task { await conn?.close() }
         connection = nil
@@ -216,7 +228,8 @@ final class MobileTerminalController {
     func restart() {
         guard case .failed = state,
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
-        outputTask?.cancel(); exitTask?.cancel()
+        resetOutputPipeline()
+        exitTask?.cancel()
         let old = connection
         Task { await old?.close() }
         connection = nil
@@ -225,9 +238,44 @@ final class MobileTerminalController {
         start(profile: profile, container: container, relay: relay)
     }
 
+    private func resetOutputPipeline() {
+        outputGeneration &+= 1
+        outputTask?.cancel()
+        outputTask = nil
+        outputFlushTask?.cancel()
+        outputFlushTask = nil
+        outputBuffer.clear()
+    }
+
+    private func startOutputFlushLoop(generation: Int) {
+        outputFlushTask?.cancel()
+        let buffer = outputBuffer
+        outputFlushTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.outputGeneration == generation else { return }
+                guard let terminalView = self.terminalView else {
+                    // attach 通常早于 start；若视图尚未挂上，保留 buffer 并低频重试。
+                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                    continue
+                }
+
+                let chunk = buffer.drain(
+                    maxBytes: self.maxBytesPerOutputFlush,
+                    generation: generation)
+                if chunk.isEmpty {
+                    await buffer.waitForData()
+                } else {
+                    terminalView.feed(byteArray: ArraySlice([UInt8](chunk)))
+                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                }
+            }
+        }
+    }
+
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
-        outputTask?.cancel(); exitTask?.cancel()
+        outputTask?.cancel(); outputFlushTask?.cancel(); exitTask?.cancel()
+        outputBuffer.clear()
     }
 }

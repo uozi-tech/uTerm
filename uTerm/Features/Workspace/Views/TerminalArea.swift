@@ -27,8 +27,8 @@ struct TerminalArea: View {
                     workspace.dropTab(sourceTab, onto: targetPane, zone: zone)
                 }, onDropFile: { sourceBuffer, targetPane, zone in
                     workspace.dropFileBuffer(sourceBuffer, onto: targetPane, zone: zone)
-                }, onDownloadFile: { buffer in
-                    try await workspace.filePreviewModel.download(buffer)
+                }, onDownloadFile: { buffer, localURL in
+                    try await workspace.filePreviewModel.download(buffer, to: localURL)
                 }, onLoadMarkdownImage: { source, buffer in
                     try await workspace.filePreviewModel.loadMarkdownImage(
                         source: source,
