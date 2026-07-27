@@ -4,4 +4,5 @@ import Foundation
 enum LLMClientError: Error, Equatable {
     case httpError(status: Int, body: String)
     case invalidResponse
+    case streamIdleTimeout
 }

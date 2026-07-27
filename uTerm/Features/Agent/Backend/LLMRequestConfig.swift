@@ -7,4 +7,7 @@ struct LLMRequestConfig: Sendable, Equatable {
     let baseURL: URL
     let apiKey: String
     var tools: [ToolSpec] = []
+    /// 连续多久没有产出任何可消费的文本 / 工具事件，就认为 SSE 已失去进展。
+    /// 这是应用层 idle timeout，不依赖 URLSession 对长连接超时的实现细节。
+    var streamIdleTimeout: Duration = .seconds(60)
 }

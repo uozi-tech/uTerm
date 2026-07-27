@@ -224,6 +224,8 @@ struct ProviderEditView: View {
                 testResult = (false, "HTTP \(s)：\(body.prefix(120))")
             case .invalidResponse:
                 testResult = (false, "服务器返回了无法解析的响应")
+            case .streamIdleTimeout:
+                testResult = (false, "响应流长时间没有新输出")
             }
         } catch {
             testResult = (false, "请求失败：\(FriendlyError.describe(error))")

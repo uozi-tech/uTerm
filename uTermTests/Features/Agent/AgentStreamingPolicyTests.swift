@@ -1,28 +1,48 @@
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class AgentStreamingPolicyTests: XCTestCase {
-    func testStreamingAccumulatorPublishesFirstDeltaImmediatelyAndCoalescesBurst() {
-        let start = ContinuousClock.now
-        var accumulator = StreamingTextAccumulator()
+    func testStreamingBufferPublishesTailWithoutAnotherEvent() async {
+        let tailPublished = expectation(description: "buffered tail published by timer")
+        var publications: [String] = []
+        let buffer = StreamingTextBuffer(publishInterval: .milliseconds(20)) { text in
+            publications.append(text)
+            if publications.count == 2 { tailPublished.fulfill() }
+        }
 
-        XCTAssertEqual(accumulator.append("A", at: start), "A")
-        XCTAssertNil(accumulator.append("B", at: start.advanced(by: .milliseconds(10))))
-        XCTAssertNil(accumulator.append("C", at: start.advanced(by: .milliseconds(49))))
-        XCTAssertEqual(
-            accumulator.append("D", at: start.advanced(by: .milliseconds(50))),
-            "BCD")
-        XCTAssertNil(accumulator.flush())
+        buffer.append("A")
+        buffer.append("B")
+        buffer.append("C")
+
+        XCTAssertEqual(publications, ["A"])
+        await fulfillment(of: [tailPublished], timeout: 1)
+        XCTAssertEqual(publications, ["A", "BC"])
     }
 
-    func testStreamingAccumulatorFlushesUnpublishedTail() {
-        let start = ContinuousClock.now
-        var accumulator = StreamingTextAccumulator()
+    func testStreamingBufferManualFlushCancelsScheduledPublication() async throws {
+        var publications: [String] = []
+        let buffer = StreamingTextBuffer(publishInterval: .milliseconds(40)) {
+            publications.append($0)
+        }
 
-        XCTAssertEqual(accumulator.append("first", at: start), "first")
-        XCTAssertNil(accumulator.append(" tail", at: start.advanced(by: .milliseconds(5))))
-        XCTAssertEqual(accumulator.flush(), " tail")
-        XCTAssertNil(accumulator.flush())
+        buffer.append("first")
+        buffer.append(" tail")
+        buffer.flush()
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(publications, ["first", " tail"])
+    }
+
+    func testMarkdownRendererUsesLatestSourceAtThrottleDeadline() async throws {
+        let renderer = StreamingMarkdownRenderer(reparseDelay: .milliseconds(20))
+        renderer.renderImmediately("A")
+
+        renderer.update("AB", isStreaming: true)
+        renderer.update("ABC", isStreaming: true)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(renderer.renderedSource, "ABC")
     }
 
     func testNearBottomPolicyAllowsShortContentAndToleranceBand() {

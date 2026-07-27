@@ -36,6 +36,9 @@ final class AssistantModel {
     /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
     var executor: CommandExecutor?
 
+    /// 测试可缩短；生产默认 60 秒无文本 / 工具事件即结束静默 SSE。
+    @ObservationIgnored var streamIdleTimeout: Duration = .seconds(60)
+
     /// 最近一次 `send` 携带的 serverContext，供工具续轮复用 system prompt。
     @ObservationIgnored private var lastServerContext = ""
 
@@ -226,36 +229,31 @@ final class AssistantModel {
         var config = LLMRequestConfig(model: provider.model,
                                       baseURL: baseURL, apiKey: key)
         config.tools = executor != nil ? [.runCommand] : []
+        config.streamIdleTimeout = streamIdleTimeout
         let client = clientOverride ?? LLMClientFactory.make(for: provider)
         let system = Self.systemPrompt(serverContext: serverContext)
-        var textAccumulator = StreamingTextAccumulator()
+        let textBuffer = StreamingTextBuffer { [weak self] text in
+            guard let self, self.messages.indices.contains(assistantIndex) else { return }
+            self.messages[assistantIndex].text += text
+        }
         do {
-            for try await event in client.stream(messages: conversation,
-                                                  system: system, config: config) {
+            let events = withIdleTimeout(client.stream(
+                messages: conversation, system: system, config: config),
+                timeout: config.streamIdleTimeout)
+            for try await event in events {
                 switch event {
                 case .text(let delta):
-                    // SSE 往往按 token 甚至更小片段到达。逐片段写入 @Observable 数组会让
-                    // 整个聊天树逐 token 重算；长回复叠加自动滚动后会把主线程拖进持续
-                    // AttributeGraph 布局。首片立即显示，后续按短窗口合并发布。
-                    if let text = textAccumulator.append(delta, at: .now) {
-                        messages[assistantIndex].text += text
-                    }
+                    textBuffer.append(delta)
                 case .toolCall(let call):
-                    if let text = textAccumulator.flush() {
-                        messages[assistantIndex].text += text
-                    }
+                    textBuffer.flush()
                     messages[assistantIndex].toolCalls.append(ToolCallState(from: call))
                 }
             }
-            if let text = textAccumulator.flush() {
-                messages[assistantIndex].text += text
-            }
+            textBuffer.flush()
             let pending = messages[assistantIndex].toolCalls.contains { $0.status == .pending }
             state = pending ? .awaitingApproval : .idle
         } catch {
-            if let text = textAccumulator.flush() {
-                messages[assistantIndex].text += text
-            }
+            textBuffer.flush()
             let message = errorMessage(for: error, kind: provider.kind)
             messages[assistantIndex].text += "\n[错误：\(message)]"
             state = .failed(message)
@@ -455,11 +453,15 @@ final class AssistantModel {
         """
         var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
         config.tools = []
+        config.streamIdleTimeout = streamIdleTimeout
         let client = clientOverride ?? LLMClientFactory.make(for: provider)
         var acc = ""
         do {
-            for try await event in client.stream(messages: [ChatMessage(role: .user, text: user)],
-                                                  system: system, config: config) {
+            let events = withIdleTimeout(client.stream(
+                messages: [ChatMessage(role: .user, text: user)],
+                system: system, config: config),
+                timeout: config.streamIdleTimeout)
+            for try await event in events {
                 if Task.isCancelled { return nil }
                 if case .text(let delta) = event { acc += delta }
             }
@@ -609,6 +611,8 @@ final class AssistantModel {
             return "请求失败（HTTP \(status)）：\(body)"
         case .invalidResponse:
             return "服务器返回了无法解析的响应。"
+        case .streamIdleTimeout:
+            return "响应流长时间没有新输出，已停止等待；请重试。"
         }
     }
 
@@ -622,38 +626,69 @@ final class AssistantModel {
     }
 }
 
-/// 将高频 SSE 文本碎片合并成低频 UI 发布。首片立即返回，保证首字延迟不增加；随后
-/// 最多每个 `publishInterval` 返回一次，流结束时由 `flush()` 冲掉尾片。
-nonisolated struct StreamingTextAccumulator {
+/// 将高频 SSE 文本碎片合并成低频 UI 发布。与只在下一事件到达时检查时钟的 accumulator
+/// 不同，本 buffer 会真实启动定时任务：provider 发完一批后即使保持连接静默，尾片也会
+/// 在窗口截止时发布，不会一直扣到 EOF / 下一事件。
+@MainActor
+final class StreamingTextBuffer {
     static let publishInterval: Duration = .milliseconds(50)
 
+    private let publishInterval: Duration
+    private let publish: (String) -> Void
     private var pending = ""
     private var lastPublication: ContinuousClock.Instant?
+    private var pendingFlush: Task<Void, Never>?
 
-    mutating func append(
-        _ delta: String,
-        at now: ContinuousClock.Instant,
-        interval: Duration = publishInterval
-    ) -> String? {
-        guard !delta.isEmpty else { return nil }
+    init(
+        publishInterval: Duration = StreamingTextBuffer.publishInterval,
+        publish: @escaping (String) -> Void
+    ) {
+        self.publishInterval = publishInterval
+        self.publish = publish
+    }
+
+    func append(_ delta: String, at now: ContinuousClock.Instant = .now) {
+        guard !delta.isEmpty else { return }
         pending += delta
 
-        if let lastPublication,
-           lastPublication.duration(to: now) < interval {
-            return nil
+        guard let lastPublication else {
+            publishPending(at: now)
+            return
         }
-        lastPublication = now
-        return drain()
+        let elapsed = lastPublication.duration(to: now)
+        if elapsed >= publishInterval {
+            pendingFlush?.cancel()
+            pendingFlush = nil
+            publishPending(at: now)
+        } else if pendingFlush == nil {
+            scheduleFlush(after: publishInterval - elapsed)
+        }
     }
 
-    mutating func flush() -> String? {
-        drain()
+    func flush() {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        publishPending(at: .now)
     }
 
-    private mutating func drain() -> String? {
-        guard !pending.isEmpty else { return nil }
+    private func scheduleFlush(after delay: Duration) {
+        pendingFlush = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFlush = nil
+            self.publishPending(at: .now)
+        }
+    }
+
+    private func publishPending(at now: ContinuousClock.Instant) {
+        guard !pending.isEmpty else { return }
         let text = pending
         pending = ""
-        return text
+        lastPublication = now
+        publish(text)
     }
 }

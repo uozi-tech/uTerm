@@ -10,39 +10,77 @@ struct StreamingMarkdownView: View {
     let isStreaming: Bool
     var style: MarkdownStyle = .chat
 
-    @State private var renderedSource: String = ""
-    @State private var document: Document = Document(parsing: "")
-    @State private var pendingWork: DispatchWorkItem?
+    @State private var renderer = StreamingMarkdownRenderer()
 
     var body: some View {
-        MarkdownBlocks(document: document, style: style, isStreaming: isStreaming)
-            .onAppear { reparse(force: true) }
-            .onChange(of: text) { _, _ in scheduleReparse() }
+        MarkdownBlocks(document: renderer.document, style: style, isStreaming: isStreaming)
+            .onAppear { renderer.renderImmediately(text) }
+            .onChange(of: text) { _, newText in
+                renderer.update(newText, isStreaming: isStreaming)
+            }
             .onChange(of: isStreaming) { _, streaming in
-                if !streaming {
-                    pendingWork?.cancel(); pendingWork = nil
-                    reparse(force: true)   // 落定：取消在途节流，立即最终解析
-                }
+                renderer.update(text, isStreaming: streaming)
             }
-            .onDisappear { pendingWork?.cancel(); pendingWork = nil }
+            .onDisappear { renderer.cancel() }
+    }
+}
+
+/// 保存节流窗口内的最新 source，而不是让 `DispatchWorkItem` 捕获安排任务时的旧 View
+/// 值。定时器触发时总是解析 `latestSource`；流落定时则立即冲掉最终文本。
+@MainActor
+@Observable
+final class StreamingMarkdownRenderer {
+    static let reparseDelay: Duration = .milliseconds(100)
+
+    private(set) var document: Document
+    private(set) var renderedSource: String
+
+    @ObservationIgnored private let reparseDelay: Duration
+    @ObservationIgnored private var latestSource: String
+    @ObservationIgnored private var pendingReparse: Task<Void, Never>?
+
+    init(reparseDelay: Duration = StreamingMarkdownRenderer.reparseDelay) {
+        self.reparseDelay = reparseDelay
+        self.latestSource = ""
+        self.renderedSource = ""
+        self.document = Document(parsing: "")
     }
 
-    private func scheduleReparse() {
-        guard isStreaming else { reparse(force: true); return }
-        guard pendingWork == nil else { return }   // 节流窗口内已排队
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingWork = nil
-                reparse(force: false)
-            }
+    func renderImmediately(_ source: String) {
+        latestSource = source
+        pendingReparse?.cancel()
+        pendingReparse = nil
+        renderLatest()
+    }
+
+    func update(_ source: String, isStreaming: Bool) {
+        latestSource = source
+        guard isStreaming else {
+            renderImmediately(source)
+            return
         }
-        pendingWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+        guard latestSource != renderedSource, pendingReparse == nil else { return }
+        let reparseDelay = reparseDelay
+        pendingReparse = Task { [weak self] in
+            do {
+                try await Task.sleep(for: reparseDelay)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.pendingReparse = nil
+            self.renderLatest()
+        }
     }
 
-    private func reparse(force: Bool) {
-        guard force || text != renderedSource else { return }
-        renderedSource = text
-        document = Document(parsing: text)
+    func cancel() {
+        pendingReparse?.cancel()
+        pendingReparse = nil
+    }
+
+    private func renderLatest() {
+        guard latestSource != renderedSource else { return }
+        renderedSource = latestSource
+        document = Document(parsing: latestSource)
     }
 }

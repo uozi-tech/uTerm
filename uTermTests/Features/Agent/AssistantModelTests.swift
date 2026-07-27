@@ -64,6 +64,21 @@ final class AssistantModelTests: XCTestCase {
         guard case .failed = model.state else { return XCTFail("应为 .failed") }
     }
 
+    func testStreamWithoutFurtherEventsTimesOutAndSettlesVisibleText() async {
+        let backend = HangingAfterEventsLLMClient(events: [.text("A"), .text("B")])
+        let model = AssistantModel(client: backend, provider: makeProvider(), apiKey: "sk-test")
+        model.streamIdleTimeout = .milliseconds(80)
+        model.input = "hello"
+
+        await model.send(serverContext: "")
+
+        XCTAssertTrue(model.messages.last?.text.hasPrefix("AB") == true)
+        guard case .failed(let message) = model.state else {
+            return XCTFail("静默流应结束为可重试失败态")
+        }
+        XCTAssertTrue(message.contains("长时间没有新输出"))
+    }
+
     func testServerContextGoesIntoSystemPrompt() async {
         let backend = MockLLMClient(deltas: ["x"])
         let model = AssistantModel(client: backend, provider: makeProvider(), apiKey: "sk-test")

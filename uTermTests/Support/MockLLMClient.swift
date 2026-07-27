@@ -72,3 +72,20 @@ struct BlockingLLMClient: LLMClient {
         }
     }
 }
+
+/// 先发送一批事件，随后保持连接静默，复现 provider 已有输出但 SSE 不结束的现场。
+struct HangingAfterEventsLLMClient: LLMClient {
+    let events: [LLMEvent]
+
+    func stream(messages: [ChatMessage], system: String,
+                config: LLMRequestConfig) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            for event in events { continuation.yield(event) }
+            let task = Task {
+                try? await Task.sleep(for: .seconds(60))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
