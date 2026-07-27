@@ -37,6 +37,17 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertEqual(model.messages.last?.text, "纯文本回答")
     }
 
+    func testEmptySuccessfulStreamBecomesExplicitFailure() async {
+        let client = MockLLMClient(events: [])
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.input = "你好"
+
+        await model.send(serverContext: "")
+
+        XCTAssertEqual(model.state, .failed("模型未返回任何内容"))
+        XCTAssertEqual(model.messages.last?.text, "[错误：模型未返回任何内容]")
+    }
+
     // MARK: - Task 14: 批准 / 跳过 / 续轮
 
     func testApproveRunsExecutesFeedsResultAndContinues() async {

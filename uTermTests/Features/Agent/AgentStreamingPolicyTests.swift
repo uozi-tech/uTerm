@@ -72,6 +72,15 @@ final class AgentStreamingPolicyTests: XCTestCase {
             "Short assistant conversations must align to the top without losing tail following.")
     }
 
+    func testWorkspaceAssistantDoesNotRenderSettledEmptyMessageAsEllipsis() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Agent/Views/AssistantView.swift"),
+                                encoding: .utf8)
+
+        XCTAssertTrue(source.contains("if !message.text.isEmpty || isStreamingTail"))
+        XCTAssertFalse(source.contains("Text(\"…\")"))
+    }
+
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

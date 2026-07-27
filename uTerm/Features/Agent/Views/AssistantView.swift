@@ -398,22 +398,22 @@ struct AssistantView: View {
             // MarkdownBlocks 的根是多层 VStack。对它请求 firstTextBaseline 会递归遍历
             // 整棵 Markdown 布局树；长流式回复会在 AttributeGraph 中形成极深的
             // explicitAlignment/sizeThatFits 热点。顶部对齐不需要递归基线测量。
-            HStack(alignment: .top, spacing: 2) {
-                if message.text.isEmpty && !isStreamingTail {
-                    Text("…")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(UD.text3)
-                } else {
-                    StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
-                        .textSelection(.enabled)
+            // 空文本的已结算消息可能只承载工具卡；不要把它误画成仍在等待的“…”。
+            // 真正的流式空消息只显示闪烁光标，收到正文后再挂载 Markdown。
+            if !message.text.isEmpty || isStreamingTail {
+                HStack(alignment: .top, spacing: 2) {
+                    if !message.text.isEmpty {
+                        StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
+                            .textSelection(.enabled)
+                    }
+                    if isStreamingTail {
+                        StreamingCaret()
+                            .padding(.top, 3)
+                            .accessibilityHidden(true)
+                    }
                 }
-                if isStreamingTail {
-                    StreamingCaret()
-                        .padding(.top, 3)
-                        .accessibilityHidden(true)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             ForEach(message.toolCalls) { call in
                 UDToolCall(

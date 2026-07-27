@@ -250,8 +250,17 @@ final class AssistantModel {
                 }
             }
             textBuffer.flush()
-            let pending = messages[assistantIndex].toolCalls.contains { $0.status == .pending }
-            state = pending ? .awaitingApproval : .idle
+            let toolCalls = messages[assistantIndex].toolCalls
+            let visibleText = messages[assistantIndex].text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if visibleText.isEmpty && toolCalls.isEmpty {
+                let message = "模型未返回任何内容"
+                messages[assistantIndex].text = "[错误：\(message)]"
+                state = .failed(message)
+            } else {
+                let pending = toolCalls.contains { $0.status == .pending }
+                state = pending ? .awaitingApproval : .idle
+            }
         } catch {
             textBuffer.flush()
             let message = errorMessage(for: error, kind: provider.kind)
