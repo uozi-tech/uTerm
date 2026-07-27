@@ -13,7 +13,7 @@ struct MarkdownBlocks: View {
     var isStreaming: Bool = false
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: style.blockSpacing) {
+        VStack(alignment: .leading, spacing: style.blockSpacing) {
             ForEach(Array(document.blockChildren.enumerated()), id: \.offset) { _, block in
                 MDBlockView(block: block, style: style,
                             imageLoader: imageLoader,
