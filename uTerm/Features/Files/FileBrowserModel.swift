@@ -44,6 +44,30 @@ final class FileBrowserModel {
         var status: Status
     }
 
+    /// 递归删除的进度快照。值类型，驱动侧栏 / 独立窗口顶部的删除进度条。
+    ///
+    /// 两段式：先深度优先枚举整棵子树（总数未知 → 不定态 + 已发现计数），
+    /// 再逐项删（确定态 done/total）。删一个几千项的目录要几千次网络往返，
+    /// 没有这条状态用户只能对着不动的列表干等。
+    struct DeletionProgress: Equatable, Sendable {
+        enum Phase: Sendable, Equatable { case counting, deleting }
+        /// 被删的顶层项名（展示用）。
+        let name: String
+        var phase: Phase
+        /// counting 阶段 = 已发现条目数；deleting 阶段 = 已删除条目数。
+        var count: Int
+        /// 待删总条目数（含目录自身）。counting 阶段为 nil。
+        var total: Int?
+        /// 用户已点取消，正在等当前这次网络往返返回。
+        var isCancelling: Bool
+
+        /// 确定态进度（0...1）。counting 阶段恒 0（视图此时用不定态条）。
+        var fraction: Double {
+            guard let total, total > 0 else { return 0 }
+            return min(1, Double(count) / Double(total))
+        }
+    }
+
     private(set) var state: State = .idle
     private(set) var currentPath: String = "/"
     /// 是否正在切换目录（取新列表的网络往返进行中）。驱动视图加载态 + 再入守卫。
@@ -177,6 +201,14 @@ final class FileBrowserModel {
     private(set) var transientError: String?
     /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
     private(set) var transfers: [TransferItem] = []
+    /// 正在进行的递归删除；nil = 无。同一时刻只允许一个（见 `delete(entry:)` 的守卫）。
+    private(set) var deletion: DeletionProgress?
+    /// 取消旗标。`cancelDeletion()` 置位，删除循环在每次往返前检查。
+    private var deletionCancelled = false
+    /// 上一次把删除进度写回 `deletion` 的时刻（节流用）。
+    private var lastDeletionPublish: Date?
+    /// 删除进度写回的最小间隔：每删一项都写会让 SwiftUI 在大目录上每秒重渲染上千次。
+    private static let deletionPublishInterval: TimeInterval = 0.10
     private static let ownerStatChunkSize = 80
     @ObservationIgnored private var ownerEnrichmentTask: Task<Void, Never>?
     private var ownerEnrichmentGeneration = 0
@@ -562,17 +594,119 @@ final class FileBrowserModel {
         }
     }
 
+    /// 删除一个条目。文件 = 一次 `removeFile`；目录 = 枚举整棵子树后逐项删，
+    /// 全程把进度写进 `deletion` 驱动进度条，并可中途取消（`cancelDeletion()`）。
+    ///
+    /// 无论成功 / 失败 / 取消，收尾都会 `refresh()` —— 失败或取消时远端多半已被删掉
+    /// 一部分，列表必须跟着变。旧实现只在成功路径刷新，中途出错（典型：某个子项
+    /// 无权限）就把已经不存在的项继续挂在侧栏上。错误消息在 refresh **之后**再置，
+    /// 因为 refresh 成功会清空 `transientError`。
     func delete(entry: RemoteEntry) async {
         guard let provider else { return }
+        // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
+        // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
+        guard deletion == nil else {
+            transientError = "正在删除「\(deletion?.name ?? "")」，请等它结束后再删下一项。"
+            return
+        }
         let path = Self.join(currentPath, entry.name)
-        do {
-            if entry.isDirectory {
-                try await Self.deleteDirectoryRecursive(path, provider: provider)
-            } else {
-                try await provider.removeFile(path)
+        var failure: String?
+        if entry.isDirectory {
+            deletionCancelled = false
+            lastDeletionPublish = nil
+            deletion = DeletionProgress(name: entry.name, phase: .counting,
+                                        count: 0, total: nil, isCancelling: false)
+            do {
+                try await deleteTree(at: path, provider: provider)
+            } catch is DeletionCancelled {
+                // 用户主动取消：不是错误，只把已删掉的部分刷出来。
+            } catch {
+                failure = "删除失败：\(FriendlyError.describe(error))"
             }
-            await refresh()
-        } catch { transientError = "删除失败：\(error)" }
+            deletion = nil
+        } else {
+            do {
+                try await provider.removeFile(path)
+            } catch {
+                failure = "删除失败：\(FriendlyError.describe(error))"
+            }
+        }
+        await refresh()
+        if let failure { transientError = failure }
+    }
+
+    /// 请求中止正在进行的递归删除。已经删掉的部分不会回滚（SFTP 没有事务），
+    /// 中止后照常刷新列表把剩下的显示出来。
+    func cancelDeletion() {
+        guard deletion != nil, !deletionCancelled else { return }
+        deletionCancelled = true
+        deletion?.isCancelling = true
+    }
+
+    /// 内部流程控制哨兵：用户取消删除。不上报给用户（不是错误）。
+    private struct DeletionCancelled: Error {}
+
+    /// 递归删目录：先一趟广度优先枚举拿到全部待删项（顺带得到总数 → 进度条能给
+    /// 确定态），再先删文件、后按发现顺序**倒序**删目录。
+    ///
+    /// 倒序即可保证 rmdir 时目录一定已空：枚举是前序的（父一定先于子入列），
+    /// 倒过来自然子先于父。这样整棵树只需一次 list 遍历，不必边删边重列。
+    private func deleteTree(at root: String, provider: any SFTPProviding) async throws {
+        // 前序：`directories[0]` 是 root，父恒排在子之前。
+        var directories: [String] = [root]
+        var files: [String] = []
+        var cursor = 0
+        while cursor < directories.count {
+            try checkDeletionCancelled()
+            let dir = directories[cursor]
+            cursor += 1
+            for child in try await provider.list(path: dir) {
+                let childPath = Self.join(dir, child.name)
+                // symlink 的 isDirectory 恒 false（列目录走 lstat）→ 只 unlink 链接
+                // 本身，绝不跟随它进目标目录删别人的东西。
+                if child.isDirectory {
+                    directories.append(childPath)
+                } else {
+                    files.append(childPath)
+                }
+            }
+            publishDeletionCount(files.count + directories.count, force: false)
+        }
+
+        try checkDeletionCancelled()
+        deletion?.phase = .deleting
+        deletion?.count = 0
+        deletion?.total = files.count + directories.count
+        lastDeletionPublish = nil
+
+        var done = 0
+        for file in files {
+            try checkDeletionCancelled()
+            try await provider.removeFile(file)
+            done += 1
+            publishDeletionCount(done, force: false)
+        }
+        for directory in directories.reversed() {
+            try checkDeletionCancelled()
+            try await provider.removeDirectory(directory)
+            done += 1
+            publishDeletionCount(done, force: false)
+        }
+        publishDeletionCount(done, force: true)
+    }
+
+    private func checkDeletionCancelled() throws {
+        if deletionCancelled { throw DeletionCancelled() }
+    }
+
+    /// 把计数写回 `deletion`，按 `deletionPublishInterval` 节流。
+    /// `force` 用于阶段收尾，保证最后一帧（100%）一定落到 UI 上。
+    private func publishDeletionCount(_ count: Int, force: Bool) {
+        let now = Date()
+        if !force, let last = lastDeletionPublish,
+           now.timeIntervalSince(last) < Self.deletionPublishInterval { return }
+        lastDeletionPublish = now
+        deletion?.count = count
     }
 
     /// 设置文件 / 文件夹权限（chmod）。`mode` 取低 9 位（`& 0o777`）。
@@ -593,21 +727,6 @@ final class FileBrowserModel {
             }
             await refresh()
         } catch { transientError = "权限设置失败：\(error)" }
-    }
-
-    /// 递归删目录：先删尽子项（子目录优先递归），最后 rmdir 自身。
-    private static func deleteDirectoryRecursive(_ path: String,
-                                                 provider: any SFTPProviding) async throws {
-        let children = try await provider.list(path: path)
-        for child in children {
-            let childPath = Self.join(path, child.name)
-            if child.isDirectory {
-                try await deleteDirectoryRecursive(childPath, provider: provider)
-            } else {
-                try await provider.removeFile(childPath)
-            }
-        }
-        try await provider.removeDirectory(path)
     }
 
     // MARK: - 上传覆盖检查

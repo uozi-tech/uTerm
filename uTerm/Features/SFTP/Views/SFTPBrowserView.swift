@@ -63,6 +63,10 @@ struct SFTPBrowserView: View {
                 sortKey: model.sortKey,
                 onSetSort: { setSort($0) }
             )
+            // 删目录期间的进度条（枚举不定态 → 逐项确定态 + 取消），与工作区侧栏共用。
+            if let deletion = model.deletion {
+                SFTPDeletionBar(progress: deletion) { model.cancelDeletion() }
+            }
             content
             // 状态栏只在已连接浏览时显示 —— 连接中 / 失败时不该亮绿点报「已连接」。
             if case .browsing = model.state {

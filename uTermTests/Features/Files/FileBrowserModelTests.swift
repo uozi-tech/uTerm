@@ -452,6 +452,85 @@ final class FileBrowserModelTests: XCTestCase {
         XCTAssertEqual(dirs, ["/home/user/d/sub", "/home/user/d"])
     }
 
+    /// 删目录期间必须有可展示的进度：统计阶段总数未知，删除阶段给出 done/total，
+    /// 收尾后清空（进度条随之撤掉）。
+    func testDeleteDirectoryPublishesProgressThenClearsIt() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("d", true)]),
+            "/home/user/d": dir([("inner.txt", false), ("sub", true)]),
+            "/home/user/d/sub": dir([("deep.txt", false)]),
+        ])
+        await mock.setBlockRemovals(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let target = model.entries[0]
+
+        let deleting = Task { await model.delete(entry: target) }
+        await waitUntil { model.deletion?.phase == .deleting }
+        // 4 项 = d + d/sub + inner.txt + deep.txt。
+        XCTAssertEqual(model.deletion?.total, 4)
+        XCTAssertEqual(model.deletion?.name, "d")
+        XCTAssertEqual(model.deletion?.isCancelling, false)
+
+        await mock.releaseRemovals()
+        await deleting.value
+        XCTAssertNil(model.deletion)
+        XCTAssertNil(model.transientError)
+    }
+
+    /// 取消：停在当前这项之后，已删掉的部分不回滚，列表照常刷新。
+    func testCancelDeletionStopsEarlyAndRefreshes() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("d", true)]),
+            "/home/user/d": dir([("a.txt", false), ("b.txt", false)]),
+        ])
+        await mock.setBlockRemovals(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let target = model.entries[0]
+
+        let deleting = Task { await model.delete(entry: target) }
+        await waitUntil { model.deletion?.phase == .deleting }
+        model.cancelDeletion()
+        XCTAssertEqual(model.deletion?.isCancelling, true)
+        await mock.releaseRemovals()
+        await deleting.value
+
+        // 闸门放开时第一项已在途 → 它会删掉；随后的取消检查中止剩余项。
+        let removedFiles = await mock.removedFiles
+        let removedDirs = await mock.removedDirs
+        XCTAssertLessThan(removedFiles.count, 2)
+        XCTAssertTrue(removedDirs.isEmpty)
+        XCTAssertNil(model.deletion)
+        // 取消不是错误，不弹「操作失败」。
+        XCTAssertNil(model.transientError)
+    }
+
+    /// 中途失败（典型：某个子项无权限）也必须重列目录 —— 否则侧栏会继续显示
+    /// 远端已经不存在的项。错误消息在刷新之后仍然保留。
+    func testDeleteFailureStillRefreshesList() async {
+        let mock = MockSFTP(tree: [
+            "/home/user": dir([("d", true)]),
+            "/home/user/d": dir([("a.txt", false)]),
+        ])
+        await mock.setFailingRemovePaths(["/home/user/d/a.txt"])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        await model.refresh()
+        let target = model.entries[0]
+        // 父目录在此期间已变（模拟别处的改动），但待删子树仍存在且会在删文件时失败：
+        // 失败路径也必须重列，不能继续显示旧的 d。
+        await mock.setTree([
+            "/home/user": dir([("kept.txt", false)]),
+            "/home/user/d": dir([("a.txt", false)]),
+        ])
+
+        await model.delete(entry: target)
+
+        XCTAssertEqual(model.entries.map(\.name), ["kept.txt"])
+        XCTAssertNotNil(model.transientError)
+        XCTAssertNil(model.deletion)
+    }
+
     func testShowHiddenFiltersDotfiles() async {
         let mock = MockSFTP(tree: ["/home/user": dir([(".bashrc", false), ("a.txt", false)])])
         let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")

@@ -143,8 +143,38 @@ actor MockSFTP: SFTPProviding {
     func rename(_ path: String, to newPath: String) async throws {
         renames.append((path, newPath))
     }
-    func removeFile(_ path: String) async throws { removedFiles.append(path) }
-    func removeDirectory(_ path: String) async throws { removedDirs.append(path) }
+    func removeFile(_ path: String) async throws {
+        try await gateRemoval(path)
+        removedFiles.append(path)
+    }
+    func removeDirectory(_ path: String) async throws {
+        try await gateRemoval(path)
+        removedDirs.append(path)
+    }
+
+    // MARK: - 删除闸门（测试递归删除的进度 / 取消）
+
+    /// 为 true 时每次 remove 都挂起，直到 `releaseRemovals()`；用于在删除进行中
+    /// 观察 `FileBrowserModel.deletion` 的中间态、或在中途请求取消。
+    private var blockRemovals = false
+    private var removalsReleased = false
+    /// 这些路径的 remove 会抛错（测试中途失败）。
+    private var failingRemovePaths: Set<String> = []
+
+    func setBlockRemovals(_ v: Bool) { blockRemovals = v }
+    func releaseRemovals() { removalsReleased = true }
+    func setFailingRemovePaths(_ paths: Set<String>) { failingRemovePaths = paths }
+    func setTree(_ newTree: [String: [RemoteEntry]]) { tree = newTree }
+
+    private func gateRemoval(_ path: String) async throws {
+        while blockRemovals && !removalsReleased {
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        if failingRemovePaths.contains(path) {
+            throw NSError(domain: "MockSFTP", code: 13,
+                          userInfo: [NSLocalizedDescriptionKey: "remove denied: \(path)"])
+        }
+    }
     func createDirectory(_ path: String) async throws { createdDirs.append(path) }
     /// 新建空文件：记录路径供断言，并把空 blob 落库（mirror 真实 EXCL：路径
     /// 已存在则抛错，不覆盖）。

@@ -149,6 +149,7 @@
 				Features/Settings/Views/TerminalPreview.swift,
 				Features/Settings/Views/TerminalSettingsView.swift,
 				Features/SFTP/Views/SFTPBrowserView.swift,
+				Features/SFTP/Views/SFTPDeletionBar.swift,
 				Features/SFTP/Views/SFTPFileTable.swift,
 				Features/SFTP/Views/SFTPInspector.swift,
 				Features/SFTP/Views/SFTPPathBar.swift,

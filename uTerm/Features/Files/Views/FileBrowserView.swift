@@ -36,6 +36,12 @@ struct FileBrowserContent: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            // 删目录是几千次网络往返的长活儿；进度条挂在列表上方，与独立 SFTP 窗口
+            // 共用一套组件。刻意不加插入 / 移除动画 —— 与下面 isNavigating 盖层同理，
+            // 动画会把列表行的增删一起卷进去。
+            if let deletion = model.deletion {
+                SFTPDeletionBar(progress: deletion) { model.cancelDeletion() }
+            }
             content
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: uploadDroppedFiles)
