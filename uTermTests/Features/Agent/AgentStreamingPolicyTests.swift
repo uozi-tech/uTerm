@@ -40,4 +40,23 @@ final class AgentStreamingPolicyTests: XCTestCase {
         XCTAssertFalse(AgentScrollPolicy.isNearBottom(
             visibleMaxY: 1_000, contentHeight: .infinity))
     }
+
+    func testWorkspaceAssistantAlignsShortConversationToTop() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Agent/Views/AssistantView.swift"),
+                                encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".defaultScrollAnchor(.bottom)"))
+        XCTAssertTrue(
+            source.contains(".defaultScrollAnchor(.top, for: .alignment)"),
+            "Short assistant conversations must align to the top without losing tail following.")
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

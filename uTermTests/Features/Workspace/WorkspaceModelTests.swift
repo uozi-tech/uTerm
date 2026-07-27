@@ -338,6 +338,34 @@ final class WorkspaceModelTests: XCTestCase {
         _ = ws.assistantModel
     }
 
+    func testAssistantContextIncludesActiveRemoteFilePath() {
+        let ws = WorkspaceModel()
+        let server = ServerProfile()
+        server.name = "prod"
+        server.username = "root"
+        server.host = "10.0.0.24"
+        ws.filePreviewModel.restoreOpenFiles([
+            OpenFileSnapshot(remotePath: "/usr/local/etc/xray/config.json",
+                             byteSize: 2_048,
+                             mtimeWhenLoaded: nil),
+        ], activeIndex: 0)
+
+        XCTAssertEqual(
+            ws.assistantContext(for: server),
+            "服务器：prod（root@10.0.0.24）\n当前文件：/usr/local/etc/xray/config.json")
+    }
+
+    func testAssistantContextOmitsFileLineWhenNoFileIsOpen() {
+        let ws = WorkspaceModel()
+        let server = ServerProfile()
+        server.name = "prod"
+        server.username = "root"
+        server.host = "10.0.0.24"
+
+        XCTAssertEqual(ws.assistantContext(for: server),
+                       "服务器：prod（root@10.0.0.24）")
+    }
+
     func testDefaultUIState() {
         let ws = WorkspaceModel()
         XCTAssertEqual(ws.uiState.leftSidebarVisibility, .all)

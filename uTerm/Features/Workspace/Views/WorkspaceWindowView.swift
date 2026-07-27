@@ -124,7 +124,7 @@ struct WorkspaceWindowView: View {
             } inspector: {
                 AgentSidebar(
                     model: workspace.assistantModel,
-                    serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
+                    serverContext: workspace.assistantContext(for: server),
                     serverName: server.name,
                     activeProviderIDString: $activeProviderIDString)
             }

@@ -313,6 +313,10 @@ struct AssistantView: View {
                     .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
                 }
                 .defaultScrollAnchor(.bottom)
+                // `.bottom` 同时会把短于视口的聊天内容贴到容器底部，形成顶部大块
+                // 空白。只覆盖短内容的 alignment 角色；长会话的初始位置与内容增长
+                // 仍沿用上面的 bottom anchor。
+                .defaultScrollAnchor(.top, for: .alignment)
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
                         followsChatTail = false

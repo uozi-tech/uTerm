@@ -106,6 +106,16 @@ final class WorkspaceModel {
 
     var activeTab: TabModel? { tabs.first { $0.id == activeTabID } }
 
+    /// 每次向工作区 Agent 发送消息时使用的实时上下文。活动文件来自预览模型，因而
+    /// 切换编辑标签或分屏焦点后，Agent 能直接定位当前窗口对应的远端绝对路径。
+    func assistantContext(for server: ServerProfile) -> String {
+        var lines = ["服务器：\(server.name)（\(server.displayEndpoint)）"]
+        if let path = filePreviewModel.activeBuffer?.remotePath {
+            lines.append("当前文件：\(path)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// 折叠/展开左 sidebar —— 任何非 `.detailOnly` 状态都归到 `.detailOnly`；
     /// `.detailOnly` 归到 `.all`。这样窗口被 SwiftUI 自动 reflow 成 `.doubleColumn`
     /// 等中间态时，切换仍能可靠地隐藏/展开（Fix #5）。
