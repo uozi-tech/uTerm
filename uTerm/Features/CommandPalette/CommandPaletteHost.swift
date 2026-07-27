@@ -46,7 +46,10 @@ struct CommandPaletteHost: ViewModifier {
                 query: Binding(get: { model.query }, set: { model.setQuery($0) }),
                 sections: model.sections,
                 selectedID: model.selectedItemID,
-                onMove: { model.moveSelection(by: $0) },
+                onMove: { delta in
+                    model.moveSelection(by: delta)
+                    return model.selectedItemID
+                },
                 onHover: { model.hover(itemID: $0) },
                 onExecute: { model.executeSelected() },
                 onClose: { model.close() },

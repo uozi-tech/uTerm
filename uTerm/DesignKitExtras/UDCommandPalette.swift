@@ -1,4 +1,5 @@
 import UDesignKit
+import Foundation
 import SwiftUI
 
 /// 命令面板浮层（纯展示）——像素级还原设计稿 command-palette.jsx。
@@ -8,13 +9,19 @@ struct UDCommandPalette: View {
     @Binding var query: String
     let sections: [CommandPaletteSection]
     let selectedID: String?
-    var onMove: (Int) -> Void = { _ in }
+    var onMove: (Int) -> String? = { _ in nil }
     var onHover: (String) -> Void = { _ in }
     var onExecute: () -> Void = {}
     var onClose: () -> Void = {}
     var isSearching: Bool = false
 
     @FocusState private var searchFocused: Bool
+    @State private var keyboardScrollRequest: KeyboardScrollRequest?
+
+    private struct KeyboardScrollRequest: Equatable {
+        let token = UUID()
+        let targetID: String
+    }
 
     private var hasResults: Bool { !sections.isEmpty }
 
@@ -39,7 +46,13 @@ struct UDCommandPalette: View {
         // 与外描边叠成 ~2px 粗边）。.menu 随主题自适应，浅色给轻投影。
         .udShadow(.menu)
         .background(escHotkey)
-        .onAppear { searchFocused = true }
+        .task {
+            // 等浮层和 TextField 真正进入窗口层级后再请求焦点。同步 onAppear
+            // 会与触发面板的按键/点击处于同一轮事件中，焦点可能被原控件抢回。
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            searchFocused = true
+        }
     }
 
     private var hairline: some View {
@@ -59,8 +72,8 @@ struct UDCommandPalette: View {
                 .foregroundStyle(UD.text)
                 .focused($searchFocused)
                 .onSubmit { onExecute() }
-                .onKeyPress(.upArrow)   { onMove(-1); return .handled }
-                .onKeyPress(.downArrow) { onMove(1);  return .handled }
+                .onKeyPress(.upArrow)   { requestKeyboardMove(by: -1); return .handled }
+                .onKeyPress(.downArrow) { requestKeyboardMove(by: 1);  return .handled }
                 .accessibilityLabel("搜索主机、文件、命令")
                 .accessibilityAddTraits(.isSearchField)
             if isSearching {
@@ -106,15 +119,20 @@ struct UDCommandPalette: View {
                     .accessibilityElement(children: .contain)
                 }
             }
-            // 键盘上下移动选中项时把高亮项滚动入视。
-            .onChange(of: selectedID) { _, id in
-                guard let id else { return }
+            // 只响应键盘导航的滚动请求。鼠标 hover 仍更新高亮，但不移动列表。
+            .onChange(of: keyboardScrollRequest) { _, request in
+                guard let request else { return }
                 withAnimation(.easeInOut(duration: 0.12)) {
-                    proxy.scrollTo(id, anchor: .center)
+                    proxy.scrollTo(request.targetID, anchor: .center)
                 }
             }
         }
         .frame(maxHeight: 380)
+    }
+
+    private func requestKeyboardMove(by delta: Int) {
+        guard let targetID = onMove(delta) else { return }
+        keyboardScrollRequest = KeyboardScrollRequest(targetID: targetID)
     }
 
     // MARK: 底栏

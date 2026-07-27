@@ -236,4 +236,24 @@ final class CommandPaletteTests: XCTestCase {
         XCTAssertTrue(m.dynamicItems.isEmpty)
         XCTAssertFalse(m.isSearching)
     }
+
+    // MARK: interaction
+
+    func testMouseSelectionDoesNotDrivePaletteScrolling() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/DesignKitExtras/UDCommandPalette.swift"
+        ), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".onChange(of: selectedID)"))
+        XCTAssertTrue(source.contains(".onChange(of: keyboardScrollRequest)"))
+        XCTAssertTrue(source.contains("proxy.scrollTo(request.targetID"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }
