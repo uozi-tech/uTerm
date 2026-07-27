@@ -340,6 +340,18 @@ final class WorkspaceModel {
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {
+        makeSnapshot(agentState: assistantModel.snapshot())
+    }
+
+    /// 自动保存的结构变化签名。草稿单独由轻量 `onChange(input)` 监听，避免每次按键
+    /// 都遍历标签布局、打开文件并构造完整快照；真正写盘前再调用 `snapshot()` 取最新值。
+    func autosaveStructureSnapshot() -> WorkspaceSnapshot {
+        makeSnapshot(agentState: AgentSnapshot(
+            currentSessionID: assistantModel.currentSession?.id,
+            input: ""))
+    }
+
+    private func makeSnapshot(agentState: AgentSnapshot) -> WorkspaceSnapshot {
         var activeIdx: Int?
         var tabSnaps: [TabSnapshot] = []
         for tab in tabs {
@@ -359,7 +371,7 @@ final class WorkspaceModel {
             fileBrowserPath: fileBrowserModel.snapshotCurrentPath,
             openFiles: openFiles,
             activeFileIndex: activeFileIndex,
-            agentState: assistantModel.snapshot())
+            agentState: agentState)
     }
 
     private static func nodeSnapshot(_ node: LayoutNode,

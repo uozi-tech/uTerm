@@ -1,6 +1,5 @@
 // uTerm/Preview/MarkdownRenderer.swift
 import SwiftUI
-import Markdown
 
 typealias MarkdownImageLoader = @MainActor (String) async throws -> Data
 typealias MarkdownBufferImageLoader = @MainActor (String, FileBuffer) async throws -> Data
@@ -13,9 +12,11 @@ struct MarkdownRenderer: View {
 
     var body: some View {
         ScrollView {
-            MarkdownBlocks(document: Document(parsing: source),
-                           style: .preview,
-                           imageLoader: imageLoader)
+            StreamingMarkdownView(
+                text: source,
+                isStreaming: true,
+                style: .preview,
+                imageLoader: imageLoader)
                 .padding(.vertical, 4)
         }
     }

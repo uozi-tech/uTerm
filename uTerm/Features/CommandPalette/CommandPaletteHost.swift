@@ -35,7 +35,7 @@ struct CommandPaletteHost: ViewModifier {
     private var paletteOverlay: some View {
         // ZStack 子节点顺序很重要：捕获层在下、面板在上 —— SwiftUI 从顶层子节点开始命中
         // 测试，所以点面板内落在面板上（不关闭），点面板外才落到捕获层（关闭）。切勿调换顺序。
-        ZStack(alignment: .top) {
+        ZStack(alignment: .center) {
             // 透明点击捕获层：点面板外关闭（背景不变暗，忠于设计稿）。
             Color.black.opacity(0.001)
                 .ignoresSafeArea()
@@ -50,14 +50,13 @@ struct CommandPaletteHost: ViewModifier {
                     model.moveSelection(by: delta)
                     return model.selectedItemID
                 },
-                onHover: { model.hover(itemID: $0) },
                 onExecute: { model.executeSelected() },
+                onExecuteItem: { model.execute(itemID: $0) },
                 onClose: { model.close() },
                 isSearching: model.isSearching
             )
             .frame(maxWidth: 560)
             .padding(.horizontal, 24)
-            .padding(.top, 80)
         }
     }
 }

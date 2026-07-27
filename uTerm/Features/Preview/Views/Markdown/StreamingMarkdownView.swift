@@ -9,11 +9,16 @@ struct StreamingMarkdownView: View {
     let text: String
     let isStreaming: Bool
     var style: MarkdownStyle = .chat
+    var imageLoader: MarkdownImageLoader?
 
     @State private var renderer = StreamingMarkdownRenderer()
 
     var body: some View {
-        MarkdownBlocks(document: renderer.document, style: style, isStreaming: isStreaming)
+        MarkdownBlocks(
+            document: renderer.document,
+            style: style,
+            imageLoader: imageLoader,
+            isStreaming: isStreaming)
             .onAppear { renderer.renderImmediately(text) }
             .onChange(of: text) { _, newText in
                 renderer.update(newText, isStreaming: isStreaming)

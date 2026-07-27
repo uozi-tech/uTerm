@@ -4,7 +4,7 @@ import Foundation
 /// 按服务器分文件：`workspace-<serverID>.json`，存于
 /// `~/Library/Application Support/uTerm/`。不走 iCloud。同一服务器重连会命中
 /// 同一份快照。
-nonisolated struct WorkspaceStore {
+nonisolated struct WorkspaceStore: Sendable {
     private let fileURL: URL
     private let directory: URL
 

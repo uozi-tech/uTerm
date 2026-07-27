@@ -18,11 +18,11 @@ final class CommandPaletteModel {
     /// 防抖时长；测试可置 0 以确定性等待。
     var searchDebounceNanos: UInt64 = 200_000_000
 
-    /// 分组（供渲染）：过滤后按 kind 分组。
+    /// 分组（供渲染）：完全匹配优先，其余结果按 kind 分组。
     var sections: [CommandPaletteSection] {
         let merged = dedupeCommandPaletteByID(
             filterCommandPalette(allItems, query: query) + dynamicItems)
-        return groupCommandPalette(merged)
+        return groupCommandPaletteByMatchPriority(merged, query: query)
     }
 
     /// 扁平结果（供选中索引）——顺序与 `sections` 的显示顺序一致。
@@ -89,16 +89,18 @@ final class CommandPaletteModel {
         selectedIndex = min(max(selectedIndex + delta, 0), count - 1)
     }
 
-    func hover(itemID: String) {
-        if let idx = results.firstIndex(where: { $0.id == itemID }) {
-            selectedIndex = idx
-        }
-    }
-
     func executeSelected() {
         let r = results
         guard r.indices.contains(selectedIndex) else { return }
-        let item = r[selectedIndex]
+        execute(r[selectedIndex])
+    }
+
+    func execute(itemID: String) {
+        guard let item = results.first(where: { $0.id == itemID }) else { return }
+        execute(item)
+    }
+
+    private func execute(_ item: CommandPaletteItem) {
         close()
         item.run()
     }

@@ -198,16 +198,17 @@ struct SFTPTransfersPanel: View {
     }
 
     var body: some View {
+        let orderedRows = rows
         VStack(spacing: 0) {
             header
             Divider().overlay(UD.border)
-            if rows.isEmpty {
+            if orderedRows.isEmpty {
                 Text("没有传输任务").font(.system(size: 12.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity).padding(.vertical, 34)
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(rows) { t in
+                    LazyVStack(spacing: 0) {
+                        ForEach(orderedRows) { t in
                             SFTPTransferRow(item: t, onCancel: { onCancel(t.id) }, onRetry: { onRetry(t.id) })
                         }
                     }

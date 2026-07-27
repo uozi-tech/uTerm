@@ -10,8 +10,8 @@ struct UDCommandPalette: View {
     let sections: [CommandPaletteSection]
     let selectedID: String?
     var onMove: (Int) -> String? = { _ in nil }
-    var onHover: (String) -> Void = { _ in }
     var onExecute: () -> Void = {}
+    var onExecuteItem: (String) -> Void = { _ in }
     var onClose: () -> Void = {}
     var isSearching: Bool = false
 
@@ -23,13 +23,18 @@ struct UDCommandPalette: View {
         let targetID: String
     }
 
+    private var hasQuery: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     private var hasResults: Bool { !sections.isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
             searchHeader
-            hairline
-            resultsArea
+            if hasQuery {
+                hairline
+                resultsArea
+            }
             hairline
             footer
         }
@@ -93,7 +98,7 @@ struct UDCommandPalette: View {
                 if !hasResults {
                     CommandPaletteEmpty(query: query)
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(sections) { section in
                             Text(section.label)
                                 .font(.system(size: 10.5, weight: .medium))
@@ -108,8 +113,7 @@ struct UDCommandPalette: View {
                                 CommandPaletteRow(
                                     item: item, query: query,
                                     selected: selectedID == item.id,
-                                    onHover: { onHover(item.id) },
-                                    onTap: { onHover(item.id); onExecute() })
+                                    onTap: { onExecuteItem(item.id) })
                                     .id(item.id)
                             }
                         }
@@ -119,12 +123,12 @@ struct UDCommandPalette: View {
                     .accessibilityElement(children: .contain)
                 }
             }
-            // 只响应键盘导航的滚动请求。鼠标 hover 仍更新高亮，但不移动列表。
+            // 只响应键盘导航的滚动请求；鼠标移动不改变高亮项。
             .onChange(of: keyboardScrollRequest) { _, request in
                 guard let request else { return }
-                withAnimation(.easeInOut(duration: 0.12)) {
-                    proxy.scrollTo(request.targetID, anchor: .center)
-                }
+                // 不指定 anchor 时只滚动让目标完整可见所需的最小距离；目标已可见
+                // 则不会移动。避免连续按键时反复启动并叠加居中动画。
+                proxy.scrollTo(request.targetID)
             }
         }
         .frame(maxHeight: 380)
@@ -169,7 +173,6 @@ private struct CommandPaletteRow: View {
     let item: CommandPaletteItem
     let query: String
     let selected: Bool
-    let onHover: () -> Void
     let onTap: () -> Void
 
     var body: some View {
@@ -201,7 +204,6 @@ private struct CommandPaletteRow: View {
                 .fill(selected ? UD.accentSoft : Color.clear)
         )
         .contentShape(Rectangle())
-        .onHover { if $0 { onHover() } }
         .onTapGesture { onTap() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)

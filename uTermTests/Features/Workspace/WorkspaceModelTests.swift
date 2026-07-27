@@ -77,6 +77,18 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNotNil(ws.fileBrowserModel.sftpProvider)
     }
 
+    func testAutosaveStructureSnapshotIgnoresDraftButFullSnapshotKeepsIt() {
+        let ws = WorkspaceModel()
+        ws.assistantModel.input = "first draft"
+        let firstStructure = ws.autosaveStructureSnapshot()
+
+        ws.assistantModel.input = "second draft"
+        let secondStructure = ws.autosaveStructureSnapshot()
+
+        XCTAssertEqual(firstStructure, secondStructure)
+        XCTAssertEqual(ws.snapshot().agentState?.input, "second draft")
+    }
+
     func testDropTabOntoActivePaneSplitsAndClosesSourceTab() {
         let ws = WorkspaceModel()
         let targetServer = UUID()

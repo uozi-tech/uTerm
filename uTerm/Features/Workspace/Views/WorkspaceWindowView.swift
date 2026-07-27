@@ -416,20 +416,36 @@ private struct WorkspaceSnapshotAutosave: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: workspace.snapshot()) { _, newSnapshot in
-                saveTask?.cancel()
-                let store = WorkspaceStore(windowID: windowID)
-                saveTask = Task {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    guard !Task.isCancelled else { return }
-                    try? store.save(newSnapshot)
-                }
-            }
+            .onChange(of: workspace.autosaveStructureSnapshot()) { _, _ in scheduleSave() }
+            .onChange(of: workspace.assistantModel.input) { _, _ in scheduleSave() }
             .onChange(of: workspace.fileBrowserModel.state) { _, state in
                 if case .browsing = state {
                     Task { await workspace.filePreviewModel.loadRestoredBuffersIfNeeded() }
                 }
             }
+            .onDisappear {
+                saveTask?.cancel()
+                let snapshot = workspace.snapshot()
+                let store = WorkspaceStore(windowID: windowID)
+                saveTask = Task {
+                    await Task.detached(priority: .utility) {
+                        try? store.save(snapshot)
+                    }.value
+                }
+            }
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            let snapshot = workspace.snapshot()
+            let store = WorkspaceStore(windowID: windowID)
+            await Task.detached(priority: .utility) {
+                try? store.save(snapshot)
+            }.value
+        }
     }
 }
 

@@ -38,6 +38,9 @@ struct ParallelShellPane: View {
     let edgeBottom: Bool
     var onTrustAndRetry: (UUID) -> Void = { _ in }
 
+    @State private var followsTail = true
+    @State private var pendingTailScroll: DispatchWorkItem?
+
     private var running: Bool { state.status == .running }
     private var failed: Bool { state.status == .failed }
     private var stateTint: Color {
@@ -104,14 +107,23 @@ struct ParallelShellPane: View {
                 .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onScrollPhaseChange { _, phase, context in
+                if phase == .tracking || phase == .interacting {
+                    followsTail = false
+                    cancelPendingTailScroll()
+                }
+                if phase == .idle {
+                    followsTail = AgentScrollPolicy.isNearBottom(
+                        visibleMaxY: context.geometry.visibleRect.maxY,
+                        contentHeight: context.geometry.contentSize.height)
+                }
+            }
             // 终端跟随：输出增量追加时滚到底（自愈多步会持续追加命令输出）。
             // 大块输出常一次性追加（execBounded 整条命令跑完才回 → 多行同时进 lines）：同步
             // scrollTo 会滚到「旧底部」（新行还没布局），结果停在最新输出上方。用
-            // Task{@MainActor} 推迟一拍，待新行布局完成后再滚，稳定贴底。
+            // 合并到下一批布局之后再滚，避免大输出时反复重入 LazyVStack 布局。
             .onChange(of: state.lines.count) { _, _ in
-                Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("shell-bottom", anchor: .bottom) }
-                }
+                scheduleTailScroll(proxy)
             }
             // 切换屏幕（Shell↔AI 切回、窗格重建）后贴底：切走时累积的输出，切回应看最新。
             .onAppear {
@@ -119,7 +131,27 @@ struct ParallelShellPane: View {
                     proxy.scrollTo("shell-bottom", anchor: .bottom)
                 }
             }
+            .onDisappear { cancelPendingTailScroll() }
         }
+    }
+
+    private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
+        guard followsTail, pendingTailScroll == nil else { return }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                pendingTailScroll = nil
+                proxy.scrollTo("shell-bottom", anchor: .bottom)
+            }
+        }
+        pendingTailScroll = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AgentScrollPolicy.coalescingDelay,
+            execute: work)
+    }
+
+    private func cancelPendingTailScroll() {
+        pendingTailScroll?.cancel()
+        pendingTailScroll = nil
     }
 
     private var durationText: String {
@@ -134,7 +166,7 @@ struct ParTermLinesView: View {
     let lines: [ParallelTermLine]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        LazyVStack(alignment: .leading, spacing: 1) {
             ForEach(lines) { line in
                 HStack(alignment: .top, spacing: 7) {
                     Self.prefix(line.kind)

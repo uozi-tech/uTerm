@@ -57,4 +57,24 @@ final class MarkdownRendererTests: XCTestCase {
         let view = MarkdownRenderer(source: src)
         _ = view.body
     }
+
+    func testMarkdownPreviewCoalescesParsingAndUsesLazyBlocks() throws {
+        let rendererSource = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Preview/MarkdownRenderer.swift"), encoding: .utf8)
+        let blocksSource = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Preview/Views/Markdown/MarkdownBlocks.swift"), encoding: .utf8)
+
+        XCTAssertTrue(rendererSource.contains("StreamingMarkdownView("))
+        XCTAssertTrue(rendererSource.contains("isStreaming: true"))
+        XCTAssertFalse(rendererSource.contains("Document(parsing: source)"))
+        XCTAssertTrue(blocksSource.contains("LazyVStack(alignment: .leading"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

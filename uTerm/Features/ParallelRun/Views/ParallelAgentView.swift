@@ -12,6 +12,9 @@ struct ParallelAgentView: View {
     /// 某台「主机指纹未信任」时，用户点泳道内「信任并重试」的回调（serverID）。
     let onTrustAndRetry: (UUID) -> Void
 
+    @State private var followsTail = true
+    @State private var pendingTailScroll: DispatchWorkItem?
+
     private var total: Int { states.count }
     private var resolvedAll: Bool { states.allSatisfy { $0.tone != .running } }
     /// 仍在执行/诊断中，或 AI 命令已落定但跨台汇总尚未回来——都显示「汇总中」指示。
@@ -32,7 +35,7 @@ struct ParallelAgentView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     opening
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(states) { ParallelAILane(state: $0, onTrustAndRetry: onTrustAndRetry) }
@@ -59,8 +62,19 @@ struct ParallelAgentView: View {
                 .padding(EdgeInsets(top: 20, leading: 24, bottom: 24, trailing: 24))
             }
             .background(UD.bg)
+            .onScrollPhaseChange { _, phase, context in
+                if phase == .tracking || phase == .interacting {
+                    followsTail = false
+                    cancelPendingTailScroll()
+                }
+                if phase == .idle {
+                    followsTail = AgentScrollPolicy.isNearBottom(
+                        visibleMaxY: context.geometry.visibleRect.maxY,
+                        contentHeight: context.geometry.contentSize.height)
+                }
+            }
             .onChange(of: scrollKey) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+                scheduleTailScroll(proxy)
             }
             // 切换屏幕（AI↔Shell 切回）后贴底：切走时累积的汇报，切回应看最新。
             .onAppear {
@@ -68,7 +82,27 @@ struct ParallelAgentView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
+            .onDisappear { cancelPendingTailScroll() }
         }
+    }
+
+    private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
+        guard followsTail, pendingTailScroll == nil else { return }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                pendingTailScroll = nil
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+        }
+        pendingTailScroll = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AgentScrollPolicy.coalescingDelay,
+            execute: work)
+    }
+
+    private func cancelPendingTailScroll() {
+        pendingTailScroll?.cancel()
+        pendingTailScroll = nil
     }
 
     /// 「N 台」加粗强调，其余继承正文。用 AttributedString 避免 Text `+`（macOS 26 弃用）。

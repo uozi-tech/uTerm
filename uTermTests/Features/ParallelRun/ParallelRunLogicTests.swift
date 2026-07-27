@@ -70,4 +70,29 @@ final class ParallelRunLogicTests: XCTestCase {
         let fail = ParallelRunModel.outputLines(from: CommandResult(output: "", exitCode: 1), failed: true)
         XCTAssertEqual(fail.map(\.text), ["（无输出）"])
     }
+
+    func testParallelOutputUsesLazyRowsAndCoalescedTailFollowing() throws {
+        let shellSource = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/ParallelRun/Views/ParallelShellGrid.swift"),
+                                     encoding: .utf8)
+        let agentSource = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/ParallelRun/Views/ParallelAgentView.swift"),
+                                     encoding: .utf8)
+
+        XCTAssertTrue(shellSource.contains("LazyVStack(alignment: .leading, spacing: 1)"))
+        XCTAssertTrue(shellSource.contains(".onScrollPhaseChange"))
+        XCTAssertTrue(agentSource.contains(".onScrollPhaseChange"))
+        XCTAssertTrue(shellSource.contains("AgentScrollPolicy.coalescingDelay"))
+        XCTAssertTrue(agentSource.contains("AgentScrollPolicy.coalescingDelay"))
+        XCTAssertFalse(shellSource.contains("withAnimation(.easeOut(duration: 0.18))"))
+        XCTAssertFalse(agentSource.contains("withAnimation(.easeOut(duration: 0.2))"))
+    }
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

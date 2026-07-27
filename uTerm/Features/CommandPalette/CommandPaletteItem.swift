@@ -65,12 +65,12 @@ nonisolated struct CommandPaletteSection: Identifiable {
     let items: [CommandPaletteItem]
 }
 
-/// 子串过滤：query 为空（或纯空白）→ 原样返回；否则 title/detail/kind 任一含 query（小写）即保留。
+/// 子串过滤：query 为空（或纯空白）→ 不显示建议；否则 title/detail/kind 任一含 query（小写）即保留。
 /// 复刻设计稿 filterCommands。
 nonisolated func filterCommandPalette(_ items: [CommandPaletteItem],
                                       query: String) -> [CommandPaletteItem] {
     let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    guard !q.isEmpty else { return items }
+    guard !q.isEmpty else { return [] }
     // kind.rawValue（英文：host/command/file/setting）也参与匹配：power-user 可直接键入类型名筛选。
     return items.filter {
         $0.title.lowercased().contains(q) ||
@@ -88,6 +88,49 @@ nonisolated func groupCommandPalette(_ items: [CommandPaletteItem]) -> [CommandP
             return group.isEmpty ? nil
                 : CommandPaletteSection(kind: kind, label: kind.label, items: group)
         }
+}
+
+/// 完全匹配优先：title 或 detail 与 query 相等（忽略大小写和首尾空白）。
+/// 精确项及其分组都会稳定前移，其余条目仍保持原有分组与输入顺序。
+nonisolated func groupCommandPaletteByMatchPriority(
+    _ items: [CommandPaletteItem],
+    query: String
+) -> [CommandPaletteSection] {
+    let normalizedQuery = normalizedCommandPaletteText(query)
+    guard !normalizedQuery.isEmpty else { return groupCommandPalette(items) }
+
+    var exactItems: [CommandPaletteItem] = []
+    var otherItems: [CommandPaletteItem] = []
+    var exactKinds = Set<CommandPaletteKind>()
+    exactItems.reserveCapacity(items.count)
+    otherItems.reserveCapacity(items.count)
+
+    for item in items {
+        if isExactCommandPaletteMatch(item, normalizedQuery: normalizedQuery) {
+            exactItems.append(item)
+            exactKinds.insert(item.kind)
+        } else {
+            otherItems.append(item)
+        }
+    }
+
+    guard !exactItems.isEmpty else { return groupCommandPalette(items) }
+
+    let sections = groupCommandPalette(exactItems + otherItems)
+    return sections.filter { exactKinds.contains($0.kind) }
+        + sections.filter { !exactKinds.contains($0.kind) }
+}
+
+nonisolated private func normalizedCommandPaletteText(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+}
+
+nonisolated private func isExactCommandPaletteMatch(
+    _ item: CommandPaletteItem,
+    normalizedQuery: String
+) -> Bool {
+    normalizedCommandPaletteText(item.title) == normalizedQuery
+        || normalizedCommandPaletteText(item.detail) == normalizedQuery
 }
 
 /// 按 id 去重，保留首次出现（静态项在前 → 压过同 id 的动态搜索命中）。

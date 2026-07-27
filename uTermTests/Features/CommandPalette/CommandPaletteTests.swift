@@ -24,9 +24,9 @@ final class CommandPaletteTests: XCTestCase {
 
     // MARK: filter
 
-    func testFilterEmptyQueryReturnsAll() {
-        XCTAssertEqual(filterCommandPalette(sample(), query: "").count, 4)
-        XCTAssertEqual(filterCommandPalette(sample(), query: "   ").count, 4)
+    func testFilterEmptyQueryReturnsNoSuggestions() {
+        XCTAssertTrue(filterCommandPalette(sample(), query: "").isEmpty)
+        XCTAssertTrue(filterCommandPalette(sample(), query: "   ").isEmpty)
     }
 
     func testFilterMatchesTitleCaseInsensitive() {
@@ -83,6 +83,34 @@ final class CommandPaletteTests: XCTestCase {
         XCTAssertEqual(sections.first?.items.map(\.id), ["h1"])
     }
 
+    func testExactDetailMatchRanksFirstAndKeepsOtherResultsStable() {
+        let items = [
+            item("nested", .file, title: "Etc", detail: "/snap/core/usr/share/zoneinfo/right/Etc"),
+            item("config", .file, title: ":etc:rsyslog.d:50-default.conf",
+                 detail: "/snap/core/var/lib/ucf/cache/:etc:rsyslog.d:50-default.conf"),
+            item("exact", .file, title: "etc", detail: "/etc"),
+            item("child", .file, title: "balena-etcher", detail: "/etc/apparmor.d/balena-etcher"),
+        ]
+
+        let filtered = filterCommandPalette(items, query: "/etc")
+        let sections = groupCommandPaletteByMatchPriority(filtered, query: "/etc")
+
+        XCTAssertEqual(sections.flatMap(\.items).map(\.id), ["exact", "nested", "config", "child"])
+    }
+
+    func testExactMatchMovesItsKindAheadOfEarlierDefaultKinds() {
+        let items = [
+            item("host", .host, title: "proxy", detail: "mounts /etc remotely"),
+            item("file", .file, title: "etc", detail: "/etc"),
+        ]
+
+        let filtered = filterCommandPalette(items, query: " /ETC ")
+        let sections = groupCommandPaletteByMatchPriority(filtered, query: " /ETC ")
+
+        XCTAssertEqual(sections.map(\.kind), [.file, .host])
+        XCTAssertEqual(sections.flatMap(\.items).map(\.id), ["file", "host"])
+    }
+
     // MARK: model
 
     private func model(with items: [CommandPaletteItem]) -> CommandPaletteModel {
@@ -96,11 +124,13 @@ final class CommandPaletteTests: XCTestCase {
         XCTAssertTrue(m.isPresented)
         XCTAssertEqual(m.query, "")
         XCTAssertEqual(m.selectedIndex, 0)
-        XCTAssertEqual(m.results.count, 4)
+        XCTAssertTrue(m.results.isEmpty)
+        XCTAssertNil(m.selectedItemID)
     }
 
     func testMoveSelectionClampsBounds() {
         let m = model(with: sample())
+        m.setQuery("i")                       // results: h1,f1,s1
         m.moveSelection(by: -1)               // 已在顶，不越界
         XCTAssertEqual(m.selectedIndex, 0)
         m.moveSelection(by: 99)               // 越过底，clamp 到末项
@@ -110,34 +140,42 @@ final class CommandPaletteTests: XCTestCase {
     func testResultsFollowGroupedDisplayOrder() {
         // 打乱顺序输入，results 应跟分组显示顺序（host, command, file, setting）
         let m = model(with: [
-            item("s1", .setting, title: "s"),
-            item("h1", .host, title: "h"),
-            item("c1", .command, title: "c"),
-            item("f1", .file, title: "f"),
+            item("s1", .setting, title: "s", detail: "match"),
+            item("h1", .host, title: "h", detail: "match"),
+            item("c1", .command, title: "c", detail: "match"),
+            item("f1", .file, title: "f", detail: "match"),
         ])
+        m.setQuery("match")
         XCTAssertEqual(m.results.map(\.id), ["h1", "c1", "f1", "s1"])
     }
 
     func testSetQueryResetsSelection() {
         let m = model(with: sample())
+        m.setQuery("i")
         m.moveSelection(by: 2)
         XCTAssertEqual(m.selectedIndex, 2)
         m.setQuery("x")
         XCTAssertEqual(m.selectedIndex, 0)
     }
 
-    func testHoverSelectsMatchingIndex() {
-        let m = model(with: sample())          // results: h1,c1,f1,s1
-        m.hover(itemID: "f1")
-        XCTAssertEqual(m.selectedIndex, 2)
-        XCTAssertEqual(m.selectedItemID, "f1")
+    func testFirstResultIsSelectedWhenQueryProducesResults() {
+        let m = model(with: sample())
+        XCTAssertNil(m.selectedItemID)
+        m.setQuery("i")                       // results: h1,f1,s1
+        XCTAssertEqual(m.selectedIndex, 0)
+        XCTAssertEqual(m.selectedItemID, "h1")
     }
 
-    func testHoverUnknownIDIsNoOp() {
-        let m = model(with: sample())
-        m.moveSelection(by: 1)                 // selectedIndex = 1
-        m.hover(itemID: "does-not-exist")
-        XCTAssertEqual(m.selectedIndex, 1)     // unchanged
+    func testExactMatchBecomesFirstResultAndDefaultSelection() {
+        let m = model(with: [
+            item("host", .host, title: "proxy", detail: "mounts /etc remotely"),
+            item("file", .file, title: "etc", detail: "/etc"),
+        ])
+
+        m.setQuery("/etc")
+
+        XCTAssertEqual(m.results.map(\.id), ["file", "host"])
+        XCTAssertEqual(m.selectedItemID, "file")
     }
 
     func testExecuteRunsSelectedItemAndCloses() {
@@ -146,6 +184,7 @@ final class CommandPaletteTests: XCTestCase {
             item("a", .host, title: "alpha", run: { fired.append("a") }),
             item("b", .host, title: "beta", run: { fired.append("b") }),
         ])
+        m.setQuery("a")
         m.moveSelection(by: 1)                 // 选中 beta
         m.executeSelected()
         XCTAssertEqual(fired, ["b"])
@@ -159,6 +198,21 @@ final class CommandPaletteTests: XCTestCase {
         XCTAssertTrue(m.results.isEmpty)
         m.executeSelected()                    // 不崩、不触发
         XCTAssertEqual(fired, 0)
+    }
+
+    func testExecuteItemByIDDoesNotUseKeyboardSelection() {
+        var fired: [String] = []
+        let m = model(with: [
+            item("a", .host, title: "alpha", run: { fired.append("a") }),
+            item("b", .host, title: "beta", run: { fired.append("b") }),
+        ])
+        m.setQuery("a")
+        XCTAssertEqual(m.selectedItemID, "a")
+
+        m.execute(itemID: "b")
+
+        XCTAssertEqual(fired, ["b"])
+        XCTAssertFalse(m.isPresented)
     }
 
     // MARK: 去重纯函数
@@ -239,14 +293,37 @@ final class CommandPaletteTests: XCTestCase {
 
     // MARK: interaction
 
-    func testMouseSelectionDoesNotDrivePaletteScrolling() throws {
+    func testMouseHoverDoesNotChangePaletteSelection() throws {
         let source = try String(contentsOf: repoRoot.appendingPathComponent(
             "uTerm/DesignKitExtras/UDCommandPalette.swift"
         ), encoding: .utf8)
 
+        XCTAssertFalse(source.contains(".onHover"))
+        XCTAssertFalse(source.contains("onHover:"))
         XCTAssertFalse(source.contains(".onChange(of: selectedID)"))
         XCTAssertTrue(source.contains(".onChange(of: keyboardScrollRequest)"))
         XCTAssertTrue(source.contains("proxy.scrollTo(request.targetID"))
+        XCTAssertTrue(source.contains("onExecuteItem(item.id)"))
+    }
+
+    func testPaletteUsesLazyRowsAndMinimalKeyboardScrolling() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/DesignKitExtras/UDCommandPalette.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("LazyVStack(alignment: .leading, spacing: 0)"))
+        XCTAssertTrue(source.contains("proxy.scrollTo(request.targetID)"))
+        XCTAssertFalse(source.contains("proxy.scrollTo(request.targetID, anchor: .center)"))
+        XCTAssertFalse(source.contains(".easeInOut(duration: 0.12)"))
+    }
+
+    func testPaletteIsVerticallyCentered() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/CommandPalette/CommandPaletteHost.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("ZStack(alignment: .center)"))
+        XCTAssertFalse(source.contains(".padding(.top,"))
     }
 
     private var repoRoot: URL {
