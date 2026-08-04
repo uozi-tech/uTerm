@@ -28,6 +28,28 @@ struct CodeEditorView: View {
     }
 }
 
+// MARK: - TextView 子类：上屏前修 caret
+
+/// 只为拿一个「layout 之后、绘制之前」的钩子。
+///
+/// caret（`CursorView`）的 frame 由包在 `layout()` → `updateSelectionViews()` 里
+/// 重设：宽度是写死的 1pt，高度是整行行高（这里 1.4 倍）。这条路径不只跟着选中变化跑
+/// —— `setSelectedRange` 只在 range 真变了才发 `selectionChangedNotification`，而
+/// `scrollToVisible`、`prepareContent`、`setTextStorage` 都会各自触发它。只订阅选中
+/// 变化补不全。
+///
+/// `layout()` 在包的 extension 里声明成 `public` 而非 `open`，包外 override 不了；
+/// `viewWillDraw()` 是 NSView 自己的方法，没被包动过，可以 override，且正好在
+/// layout 跑完、像素落地之前 —— 改子视图 frame 的最后时机。
+private final class EditorTextView: TextView {
+    var onWillDraw: (() -> Void)?
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        onWillDraw?()
+    }
+}
+
 // MARK: - NSViewRepresentable
 
 private struct CodeEditorViewRepresentable: NSViewRepresentable {
@@ -55,7 +77,7 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.backgroundColor = EditorTheme.background
 
-        let textView = TextView(
+        let textView = EditorTextView(
             string: buffer.text,
             font: editorFont,
             textColor: EditorTheme.foreground,
@@ -78,6 +100,9 @@ private struct CodeEditorViewRepresentable: NSViewRepresentable {
         scrollView.identifier = .utermPreviewRegion   // ⌘W 焦点判定标记
 
         context.coordinator.attach(textView: textView, scrollView: scrollView, buffer: buffer)
+        textView.onWillDraw = { [weak coordinator = context.coordinator] in
+            coordinator?.normalizeEditorCursors()
+        }
 
         // Install a local event monitor for find/replace key shortcuts.
         // We filter to events where this textView's window is key and textView is first responder,

@@ -45,13 +45,33 @@ final class CodeEditorController: NSObject {
     private var latestHighlights: [(NSRange, NSColor)] = []
     private var highlightedApplicationRange: NSRange?
 
-    static func normalizedCursorFrame(_ frame: CGRect, font: NSFont) -> CGRect {
-        let targetHeight = min(frame.height, max(1, ceil(font.ascender - font.descender)))
-        guard frame.height > targetHeight else { return frame }
+    /// caret 宽度。CodeEditTextView 的 `CursorView` 固定 1pt（`init` 是 internal，
+    /// 包外改不了默认值），1pt 在 Retina 上只有 2 个物理像素 —— 浅色主题下细到看不见。
+    /// 取 2pt 起步并随字号线性放大（当前 `EditorTheme.textFontSize` = 12 → 2pt），
+    /// 上限 4pt 免得字号调大后盖住半个字符位。
+    static func cursorWidth(for font: NSFont) -> CGFloat {
+        min(4, max(2, (font.pointSize / 7).rounded()))
+    }
 
+    /// 把库给的 caret frame 修成：高度夹到字形高度并垂直居中（行高 1.4 倍时不顶满整行）、
+    /// 宽度取 ``cursorWidth(for:)``、x 吸附到物理像素网格。
+    ///
+    /// 像素对齐是 caret 这类实心细矩形的必需项：排版给的 x 常带小数，2pt 的矩形落在
+    /// 半像素上会被抗锯齿摊成两条半透明边 —— 看上去比 1pt 还虚。`scale` 传窗口的
+    /// `backingScaleFactor`，非正值时跳过对齐。
+    static func normalizedCursorFrame(_ frame: CGRect, font: NSFont, scale: CGFloat = 2) -> CGRect {
         var normalized = frame
-        normalized.origin.y += (frame.height - targetHeight) / 2
-        normalized.size.height = targetHeight
+
+        let targetHeight = min(frame.height, max(1, ceil(font.ascender - font.descender)))
+        if frame.height > targetHeight {
+            normalized.origin.y += (frame.height - targetHeight) / 2
+            normalized.size.height = targetHeight
+        }
+
+        normalized.size.width = cursorWidth(for: font)
+        if scale > 0 {
+            normalized.origin.x = (normalized.origin.x * scale).rounded() / scale
+        }
         return normalized
     }
 
@@ -261,10 +281,14 @@ extension CodeEditorController: TextViewDelegate {
         }
     }
 
-    private func normalizeEditorCursorHeights() {
+    /// 由 `EditorTextView.viewWillDraw` 每轮绘制前调用，另外选中变化 / 滚动 / 视口
+    /// resize 时也各调一次（那几处顺带把 gutter、底色带一起刷了）。幂等：frame 已经
+    /// 是目标值就不写，不会自己触发新一轮绘制。
+    func normalizeEditorCursors() {
         guard let textView else { return }
+        let scale = textView.window?.backingScaleFactor ?? 2
         for cursorView in textView.subviews where cursorView is CursorView {
-            let normalized = Self.normalizedCursorFrame(cursorView.frame, font: textView.font)
+            let normalized = Self.normalizedCursorFrame(cursorView.frame, font: textView.font, scale: scale)
             if cursorView.frame != normalized {
                 cursorView.frame = normalized
             }
@@ -334,7 +358,7 @@ extension CodeEditorController: TextViewDelegate {
         if let active { lastActiveLineIndex = active }
         updateGutter(activeLineIndex: active)
         updateIndentGuides(activeLineIndex: active)
-        normalizeEditorCursorHeights()
+        normalizeEditorCursors()
     }
 
     func attach(textView: TextView, scrollView: NSScrollView, buffer: FileBuffer) {
@@ -403,7 +427,7 @@ extension CodeEditorController: TextViewDelegate {
                 // 不折行时文档宽度会随排版到更长的行而增长，当前行底色带的宽度是
                 // 快照 —— 不在滚动时重画，横滚过视口宽后那条带会半路截断。
                 self.activeLineOverlay?.refresh()
-                self.normalizeEditorCursorHeights()
+                self.normalizeEditorCursors()
                 self.refreshVisibleHighlightsIfNeeded()
             }
         }
@@ -456,7 +480,7 @@ extension CodeEditorController: TextViewDelegate {
                 if let idx { self.lastActiveLineIndex = idx }
                 self.updateGutter(activeLineIndex: idx ?? self.lastActiveLineIndex)
                 self.updateIndentGuides(activeLineIndex: idx ?? self.lastActiveLineIndex)
-                self.normalizeEditorCursorHeights()
+                self.normalizeEditorCursors()
                 self.onSelectionChange?(range)
                 self.scheduleSameWordRefresh(selection: range)
             }

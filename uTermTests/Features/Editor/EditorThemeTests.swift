@@ -96,7 +96,35 @@ final class EditorThemeTests: XCTestCase {
         XCTAssertEqual(normalized.height, glyphHeight, accuracy: 0.01)
         XCTAssertEqual(normalized.minY, frame.minY + (frame.height - glyphHeight) / 2, accuracy: 0.01)
         XCTAssertEqual(normalized.minX, frame.minX, accuracy: 0.01)
-        XCTAssertEqual(normalized.width, frame.width, accuracy: 0.01)
+        XCTAssertEqual(normalized.width, CodeEditorController.cursorWidth(for: font), accuracy: 0.01)
+    }
+
+    /// caret 不能用库默认的 1pt（Retina 上仅 2 物理像素，浅色下几乎不可见）：
+    /// 2pt 起步，随字号放大，封顶 4pt。
+    func test_cursor_width_starts_at_two_points_and_scales_with_font() {
+        let small = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
+        let normal = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let large = NSFont.monospacedSystemFont(ofSize: 22, weight: .regular)
+        let huge = NSFont.monospacedSystemFont(ofSize: 96, weight: .regular)
+
+        XCTAssertEqual(CodeEditorController.cursorWidth(for: small), 2, accuracy: 0.01)
+        XCTAssertEqual(CodeEditorController.cursorWidth(for: normal), 2, accuracy: 0.01)
+        XCTAssertEqual(CodeEditorController.cursorWidth(for: large), 3, accuracy: 0.01)
+        XCTAssertEqual(CodeEditorController.cursorWidth(for: huge), 4, accuracy: 0.01)
+    }
+
+    /// 小数 x 上的实心细矩形会被抗锯齿摊成两条半透明边（看着比 1pt 还虚），
+    /// 所以要吸附到物理像素网格；scale <= 0 时保持原值。
+    func test_cursor_x_snaps_to_backing_pixel_grid() {
+        let font = EditorTheme.textFont()
+        let frame = CGRect(x: 48.3, y: 20, width: 1, height: 10)
+
+        XCTAssertEqual(CodeEditorController.normalizedCursorFrame(frame, font: font, scale: 2).minX,
+                       48.5, accuracy: 0.001)
+        XCTAssertEqual(CodeEditorController.normalizedCursorFrame(frame, font: font, scale: 1).minX,
+                       48, accuracy: 0.001)
+        XCTAssertEqual(CodeEditorController.normalizedCursorFrame(frame, font: font, scale: 0).minX,
+                       48.3, accuracy: 0.001)
     }
 
     func test_editor_and_terminal_share_selection_background_colors() {
