@@ -1,3 +1,4 @@
+import AppKit
 import UDesignKit
 import SwiftUI
 import SwiftData
@@ -13,13 +14,61 @@ enum AssistantInputBarLayout {
     nonisolated static let sendContentAlignment: VerticalAlignment = .center
 }
 
-/// AI 助手聊天面板。布局对齐工作区设计稿（`workspace.jsx`）的 Agent inspector
-/// 最终形态（Cursor 风格）：
-/// - 顶栏：✦ + 会话标题（点开 → 会话历史下拉）+ 新建对话。
-/// - 聊天区：对话直接平铺在标题下——用户气泡 / 助手裸文本 + 流式光标（无角色标签、无 meta 行）。
-/// - 输入区：圆角卡片，底栏左侧模型胶囊 `● <模型> ▾`，右侧附件 + ↩ 发送（去掉上方分割线）。
-///
-/// 0 provider：空状态 + 「打开 Settings」按钮。
+/// Agent 顶栏几何。高度与文件浏览器路径栏（`FileBrowserContent.header`）、编辑器
+/// tab 栏（`PreviewTabBar`）、终端 tab 栏（`TerminalTabBar`）统一为 36，让工作区
+/// 三栏顶部落在同一条基线上。
+enum AssistantHeaderLayout {
+    nonisolated static let height: CGFloat = 36
+    /// 会话历史下拉的顶部内边距：顶栏高 + 2pt 间隙。
+    nonisolated static let dropdownTopInset: CGFloat = height + 2
+}
+
+/// Tool-call states stay domain-level in `ToolCallState`; this value translates them into the
+/// richer labels used by the Agent surface without collapsing failures and skips into success.
+nonisolated struct AgentToolCallPresentation: Equatable, Sendable {
+    enum Tone: Equatable, Sendable {
+        case accent, success, warning, danger, muted
+    }
+
+    let title: String
+    let systemImage: String
+    let tone: Tone
+    let isProgressVisible: Bool
+    let isApprovalVisible: Bool
+
+    static func resolve(_ call: ToolCallState) -> AgentToolCallPresentation {
+        switch call.status {
+        case .pending:
+            return AgentToolCallPresentation(
+                title: "等待确认", systemImage: "hand.raised.fill", tone: .warning,
+                isProgressVisible: false, isApprovalVisible: true)
+        case .running:
+            return AgentToolCallPresentation(
+                title: "执行中", systemImage: "terminal.fill", tone: .accent,
+                isProgressVisible: true, isApprovalVisible: false)
+        case .done:
+            if let exitCode = call.exitCode, exitCode != 0 {
+                return AgentToolCallPresentation(
+                    title: "退出码 \(exitCode)", systemImage: "exclamationmark.triangle.fill",
+                    tone: .danger, isProgressVisible: false, isApprovalVisible: false)
+            }
+            return AgentToolCallPresentation(
+                title: "已完成", systemImage: "checkmark.circle.fill", tone: .success,
+                isProgressVisible: false, isApprovalVisible: false)
+        case .failed:
+            return AgentToolCallPresentation(
+                title: "执行失败", systemImage: "xmark.circle.fill", tone: .danger,
+                isProgressVisible: false, isApprovalVisible: false)
+        case .skipped:
+            return AgentToolCallPresentation(
+                title: "已跳过", systemImage: "forward.end.fill", tone: .muted,
+                isProgressVisible: false, isApprovalVisible: false)
+        }
+    }
+}
+
+/// Workspace Agent inspector: session navigation, streamed turns, tool approval/results,
+/// contextual follow-ups, queued prompts, and the composer live in one compact surface.
 struct AssistantView: View {
     /// 当前活动服务器的简述，进 system prompt（无则空串）。
     let serverContext: String
@@ -51,7 +100,7 @@ struct AssistantView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { showSessions = false }
                         sessionsDropdown
-                            .padding(.top, 38)
+                            .padding(.top, AssistantHeaderLayout.dropdownTopInset)
                             .padding(.horizontal, 12)
                     }
                 }
@@ -65,30 +114,30 @@ struct AssistantView: View {
     // MARK: - 顶栏
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 13))
-                .foregroundStyle(UD.accent)
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(UD.accentTint)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(UD.accent)
+            }
+            .frame(width: 28, height: 28)
 
             Button {
                 showSessions.toggle()
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Text(model.sessionTitle)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(UD.text)
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(UD.text3)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(UD.text4)
                         .rotationEffect(.degrees(showSessions ? 180 : 0))
                 }
-                .padding(.vertical, 4)
-                .padding(.horizontal, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(showSessions ? UD.fillSoft : .clear))
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -100,18 +149,20 @@ struct AssistantView: View {
                 showSessions = false
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(UD.text3)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(UD.text2)
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(UD.uw04))
+                    .contentShape(RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("新建对话")
             .help("新建对话")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .frame(height: 36)
+        .padding(.horizontal, 10)
+        // 与左侧文件浏览器路径栏 / 编辑器 tab 栏同高（36），三条顶栏在一条水平线上。
+        .frame(height: AssistantHeaderLayout.height)
+        .background(UD.panel)
         .overlay(alignment: .bottom) {
             Rectangle().fill(UD.border).frame(height: 1)
         }
@@ -306,11 +357,18 @@ struct AssistantView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(model.messages) { messageRow($0) }
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        if model.messages.isEmpty {
+                            conversationEmptyState
+                        } else {
+                            ForEach(model.messages) { messageRow($0) }
+                            if model.messages.last?.role == .assistant {
+                                followUpsView
+                            }
+                        }
                         Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
-                    .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
+                    .padding(EdgeInsets(top: 16, leading: 14, bottom: 10, trailing: 14))
                 }
                 .defaultScrollAnchor(.bottom)
                 // `.bottom` 同时会把短于视口的聊天内容贴到容器底部，形成顶部大块
@@ -335,11 +393,24 @@ struct AssistantView: View {
                 .onChange(of: model.messages.last?.id) { _, _ in
                     scheduleScrollToBottom(proxy)
                 }
+                .onChange(of: model.messages.last?.toolCalls) { _, _ in
+                    scheduleScrollToBottom(proxy)
+                }
+                .onChange(of: model.followUps) { _, _ in
+                    scheduleScrollToBottom(proxy)
+                }
+                .onChange(of: model.followUpsLoading) { _, _ in
+                    scheduleScrollToBottom(proxy)
+                }
                 .onChange(of: model.state) { old, now in
                     scheduleScrollToBottom(proxy)
-                    // 流式落定时给 VoiceOver 播报，无需用户盯着屏幕。
                     if old == .streaming && now != .streaming {
                         AccessibilityNotification.Announcement("回答已完成").post()
+                    }
+                    let wasActive = old == .streaming || old == .running
+                    let isSettled = now == .idle || now == .awaitingApproval
+                    if wasActive, isSettled, model.messages.last?.role == .assistant {
+                        model.refreshFollowUps(serverContext: serverContext)
                     }
                 }
                 .onDisappear {
@@ -349,6 +420,147 @@ struct AssistantView: View {
             }
             queueStrip
             inputBar
+        }
+    }
+
+    private static let starterPrompts = [
+        "检查服务器健康状态",
+        "分析最近的错误日志",
+        "给出当前服务的排查步骤",
+    ]
+
+    private var conversationEmptyState: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(UD.accentTint)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(UD.accent)
+                }
+                .frame(width: 42, height: 42)
+
+                Text("让 Agent 接手下一步")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                Text("描述目标即可。Agent 会结合当前服务器上下文分析问题，并在运行命令前等待你的确认。")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(UD.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                capabilityLabel("读上下文", systemImage: "doc.text.magnifyingglass")
+                capabilityLabel("工具审批", systemImage: "hand.raised")
+                capabilityLabel("持续追问", systemImage: "arrow.trianglehead.2.clockwise")
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("可以从这里开始")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(UD.text4)
+                ForEach(Self.starterPrompts, id: \.self) { prompt in
+                    Button { model.input = prompt } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(UD.accent)
+                            Text(prompt)
+                                .font(.system(size: 12))
+                                .foregroundStyle(UD.text2)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 32)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(UD.uw03))
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 12)
+    }
+
+    private func capabilityLabel(_ title: String, systemImage: String) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11))
+                .foregroundStyle(UD.text3)
+            Text(title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(UD.text3)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var followUpsView: some View {
+        if model.state != .streaming, model.state != .running {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(UD.accent)
+                    Text("下一步")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(UD.text4)
+                    Spacer(minLength: 8)
+                    Button { model.refreshFollowUps(serverContext: serverContext) } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(UD.text3)
+                            .frame(width: 22, height: 22)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(UD.uw03))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.followUpsLoading)
+                    .help("换一批建议")
+                }
+
+                if model.followUpsLoading {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.small)
+                        Text("正在生成建议")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(UD.text3)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                } else {
+                    ForEach(model.followUps, id: \.self) { suggestion in
+                        Button { model.input = suggestion } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(UD.accent)
+                                Text(suggestion)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(UD.text2)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 31)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(UD.uw03))
+                            .contentShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+                if (model.state == .idle || model.state == .awaitingApproval),
+                   model.followUps.isEmpty, !model.followUpsLoading {
+                    model.refreshFollowUps(serverContext: serverContext)
+                }
+            }
         }
     }
 
@@ -394,49 +606,65 @@ struct AssistantView: View {
     private func assistantMessageRow(_ message: ChatMessage) -> some View {
         let isStreamingTail = message.id == model.messages.last?.id
             && model.state == .streaming
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             // MarkdownBlocks 的根是多层 VStack。对它请求 firstTextBaseline 会递归遍历
             // 整棵 Markdown 布局树；长流式回复会在 AttributeGraph 中形成极深的
             // explicitAlignment/sizeThatFits 热点。顶部对齐不需要递归基线测量。
             // 空文本的已结算消息可能只承载工具卡；不要把它误画成仍在等待的“…”。
             // 真正的流式空消息只显示闪烁光标，收到正文后再挂载 Markdown。
             if !message.text.isEmpty || isStreamingTail {
-                HStack(alignment: .top, spacing: 2) {
-                    if !message.text.isEmpty {
-                        StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
-                            .textSelection(.enabled)
-                    }
-                    if isStreamingTail {
-                        StreamingCaret()
-                            .padding(.top, 3)
-                            .accessibilityHidden(true)
+                HStack(alignment: .top, spacing: 9) {
+                    agentAvatar
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text("Agent")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(UD.text3)
+                            if isStreamingTail {
+                                Text("正在处理")
+                                    .font(.system(size: 9.5, weight: .medium))
+                                    .foregroundStyle(UD.accent)
+                                    .padding(.horizontal, 6)
+                                    .frame(height: 18)
+                                    .background(Capsule().fill(UD.accentTint))
+                            }
+                        }
+                        HStack(alignment: .top, spacing: 2) {
+                            if !message.text.isEmpty {
+                                StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
+                                    .textSelection(.enabled)
+                            }
+                            if isStreamingTail {
+                                StreamingCaret()
+                                    .padding(.top, 3)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             ForEach(message.toolCalls) { call in
-                UDToolCall(
-                    label: call.explanation ?? "运行命令",
-                    command: call.command,
-                    status: udStatus(call),
-                    // 仅在状态机真正进入「待批准」时才允许点运行/跳过；流式（卡片可能
-                    // 已渲染成 pending）期间禁用，避免在流未结束时触发状态机重入。
+                AgentToolCallCard(
+                    call: call,
                     approvalEnabled: model.state == .awaitingApproval,
                     onRun: { Task { await model.approveAndRun(id: call.id) } },
                     onSkip: { Task { await model.skip(id: call.id) } }
                 )
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .id(message.id)
     }
 
-    private func udStatus(_ call: ToolCallState) -> UDToolCall.Status {
-        switch call.status {
-        case .pending: return .pending
-        case .running: return .running
-        case .done, .failed, .skipped: return .done(output: call.output)
-        }
+    private var agentAvatar: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(UD.accent)
+            .frame(width: 24, height: 24)
+            .background(RoundedRectangle(cornerRadius: 7).fill(UD.accentTint))
     }
 
     private func firstPendingToolCallID() -> String? {
@@ -499,6 +727,8 @@ struct AssistantView: View {
     private var inputBar: some View {
         UDComposer(
             text: $model.input,
+            placeholder: "描述目标，Agent 会分析并在使用工具前请求确认…",
+            minLines: 2,
             queueing: model.isBusy,
             onSend: sendIfPossible,
             onAttach: attachCurrentContext,
@@ -556,6 +786,254 @@ struct AssistantView: View {
     }
 }
 
+/// A compact execution trace for one Agent tool call. It keeps command approval, progress,
+/// result disclosure, exit status, and copying in the conversation instead of a separate modal.
+private struct AgentToolCallCard: View {
+    let call: ToolCallState
+    let approvalEnabled: Bool
+    let onRun: () -> Void
+    let onSkip: () -> Void
+
+    @State private var isResultExpanded = false
+    @State private var isCommandCopied = false
+
+    private var presentation: AgentToolCallPresentation {
+        AgentToolCallPresentation.resolve(call)
+    }
+
+    private var toneColor: Color {
+        switch presentation.tone {
+        case .accent: return UD.accent
+        case .success: return UD.success
+        case .warning: return UD.warning
+        case .danger: return UD.danger
+        case .muted: return UD.text3
+        }
+    }
+
+    private var displayTitle: String {
+        let explanation = call.explanation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return explanation.isEmpty ? "运行 Shell 命令" : explanation
+    }
+
+    private var toolLabel: String {
+        call.name == "run_command" ? "Shell" : call.name
+    }
+
+    private var hasResult: Bool {
+        guard let output = call.output else { return false }
+        return !output.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            commandRow
+            if hasResult {
+                resultDisclosure
+            }
+            if presentation.isApprovalVisible || presentation.isProgressVisible {
+                actionFooter
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(UD.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(UD.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onAppear {
+            if call.status == .failed { isResultExpanded = true }
+        }
+        .onChange(of: call.status) { _, status in
+            if status == .failed { isResultExpanded = true }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "terminal")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(toneColor)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 7).fill(toneColor.opacity(0.12)))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayTitle)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(2)
+                Text("工具 · \(toolLabel)")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(UD.text4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 5) {
+                if presentation.isProgressVisible {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.68)
+                        .frame(width: 11, height: 11)
+                } else {
+                    Image(systemName: presentation.systemImage)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(toneColor)
+                }
+                Text(presentation.title)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(toneColor)
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(Capsule().fill(toneColor.opacity(0.11)))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+    }
+
+    private var commandRow: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("$")
+                .foregroundStyle(UD.accent)
+            Text(call.command.isEmpty ? "正在接收工具参数…" : call.command)
+                .foregroundStyle(call.command.isEmpty ? UD.text4 : UD.text2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Button(action: copyCommand) {
+                Image(systemName: isCommandCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(isCommandCopied ? UD.success : UD.text3)
+                    .frame(width: 22, height: 22)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(UD.uw04))
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .disabled(call.command.isEmpty)
+            .accessibilityLabel(isCommandCopied ? "命令已复制" : "复制命令")
+            .help(isCommandCopied ? "已复制" : "复制命令")
+        }
+        .font(UD.mono(11))
+        .padding(.leading, 11)
+        .padding(.trailing, 8)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(UD.termBg)
+        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
+    }
+
+    private var resultDisclosure: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isResultExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 9.5))
+                    Text(call.status == .failed ? "错误输出" : "工具输出")
+                        .font(.system(size: 10.5, weight: .medium))
+                    if let exitCode = call.exitCode {
+                        Text("exit \(exitCode)")
+                            .font(UD.mono(9.5))
+                            .foregroundStyle(exitCode == 0 ? UD.text4 : UD.danger)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .rotationEffect(.degrees(isResultExpanded ? 180 : 0))
+                }
+                .foregroundStyle(UD.text3)
+                .padding(.horizontal, 10)
+                .frame(height: 31)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isResultExpanded, let output = call.output {
+                ScrollView {
+                    Text(output)
+                        .font(UD.mono(10.5))
+                        .foregroundStyle(call.status == .failed ? UD.danger : UD.text3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 140)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 9)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionFooter: some View {
+        if presentation.isProgressVisible {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text("命令正在远端执行")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(UD.text3)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
+        } else {
+            HStack(spacing: 7) {
+                Button(action: onRun) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill").font(.system(size: 8))
+                        Text("运行").font(.system(size: 11, weight: .semibold))
+                        Text("⌘↵").font(UD.mono(9.5)).foregroundStyle(UD.text3)
+                    }
+                    .foregroundStyle(approvalEnabled ? UD.text : UD.text4)
+                    .padding(.horizontal, 10)
+                    .frame(height: 27)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(UD.accentTint))
+                    .contentShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .disabled(!approvalEnabled)
+
+                Button(action: onSkip) {
+                    Text("跳过")
+                        .font(.system(size: 11))
+                        .foregroundStyle(approvalEnabled ? UD.text3 : UD.text4)
+                        .padding(.horizontal, 10)
+                        .frame(height: 27)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(UD.uw04))
+                        .contentShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .disabled(!approvalEnabled)
+
+                Spacer(minLength: 0)
+                Text(approvalEnabled ? "需要你的确认" : "正在准备操作")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 43)
+            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
+        }
+    }
+
+    private func copyCommand() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(call.command, forType: .string)
+        isCommandCopied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            isCommandCopied = false
+        }
+    }
+}
+
 /// 流式输出时的闪烁光标。
 private struct StreamingCaret: View {
     @State private var on = true
@@ -585,6 +1063,7 @@ private struct UserMessageRow: View {
     let onCommit: (String) -> Void
 
     @State private var draft: String = ""
+    @State private var isHovering = false
 
     var body: some View {
         Group {
@@ -602,21 +1081,33 @@ private struct UserMessageRow: View {
     /// 常态气泡：点击进入编辑（仅空闲可编辑）。不插入/移除任何子视图
     /// → 无布局抖动、无闪烁（去掉了旧的悬停铅笔钮）。
     private var bubble: some View {
-        Text(message.text)
-            .font(.system(size: 12.5))
-            .lineSpacing(2)
-            .foregroundStyle(UD.text2)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(UD.inputBg)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(UD.border, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 9))
-            .onTapGesture { if canEdit { onBeginEdit() } }
-            .help(canEdit ? "点击编辑并重发" : "")
+        HStack(alignment: .top) {
+            Spacer(minLength: 26)
+            Text(message.text)
+                .font(.system(size: 12.5))
+                .lineSpacing(2)
+                .foregroundStyle(UD.text)
+                .textSelection(.enabled)
+                .padding(.vertical, 10)
+                .padding(.leading, 12)
+                .padding(.trailing, canEdit ? 28 : 12)
+                .background(UD.accentTint)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if canEdit {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(UD.text3)
+                            .frame(width: 24, height: 24)
+                            .opacity(isHovering ? 1 : 0)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .onTapGesture { if canEdit { onBeginEdit() } }
+                .onHover { isHovering = $0 }
+                .help(canEdit ? "点击编辑并重发" : "")
+        }
     }
 
     private var editor: some View {
