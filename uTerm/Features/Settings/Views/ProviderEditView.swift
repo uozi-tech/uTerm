@@ -90,7 +90,8 @@ struct ProviderEditView: View {
                         UDTextField(
                             placeholder: "粘贴新 key 后按下方保存",
                             text: $keyDraft,
-                            isSecure: true
+                            isSecure: true,
+                            revealable: true
                         )
                         .frame(width: 360)
                         .accessibilityLabel("API Key")

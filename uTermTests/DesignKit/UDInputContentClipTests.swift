@@ -8,6 +8,7 @@ import XCTest
 final class UDInputContentClipTests: XCTestCase {
     private let fieldRect = CGRect(x: 0, y: 0, width: 200, height: 34)
 
+    /// 内容框语义：内缩一个水平内边距，正好落在文本槽位的左右边界上。
     func testClipMatchesContentBoxHorizontally() {
         let clip = UDInputContentClip(horizontalInset: UDTextField.horizontalPadding)
             .path(in: fieldRect).boundingRect
@@ -41,7 +42,18 @@ final class UDInputContentClipTests: XCTestCase {
         XCTAssertEqual(clip.height, slot.height + 32, accuracy: 0.001)
     }
 
-    /// 默认不外扩，`UDTextField` 那侧的行为不受影响。
+    /// `UDTextField` 的密码框尾部要放显隐钮，裁剪改套在字段槽位上（横向不再内缩），
+    /// 靠 `verticalOutset` 半个控件高把裁剪盒撑回整行 —— 34 高的控件用 17。
+    func testVerticalOutsetOfHalfControlHeightCoversTheWholeRow() {
+        let slot = CGRect(x: 0, y: 0, width: 200, height: 16)
+        let clip = UDInputContentClip(horizontalInset: 0, verticalOutset: 17)
+            .path(in: slot).boundingRect
+
+        XCTAssertGreaterThanOrEqual(clip.height, fieldRect.height)
+        XCTAssertEqual(clip.midY, slot.midY, accuracy: 0.001)
+    }
+
+    /// 默认不外扩。
     func testVerticalOutsetDefaultsToZero() {
         let clip = UDInputContentClip(horizontalInset: 0).path(in: fieldRect).boundingRect
 

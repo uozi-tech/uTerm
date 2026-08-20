@@ -224,6 +224,8 @@ struct DesignKitGallery: View {
                     UDTextField(label: "主机地址", placeholder: "请输入主机地址",
                                 text: .constant("root@203.0.113.10"), errorMessage: "无法解析该地址")
                         .frame(width: 240)
+                    UDTextFieldDemo(label: "密码", placeholder: "••••••••",
+                                    isSecure: true, revealable: true)
                 }
             }
             Group(label: "徽章 / Chip / Kbd") {
@@ -466,10 +468,13 @@ private struct SplashCard<Content: View>: View {
 private struct UDTextFieldDemo: View {
     let label: String
     let placeholder: String
+    var isSecure = false
+    var revealable = false
     @State private var text = ""
 
     var body: some View {
-        UDTextField(label: label, placeholder: placeholder, text: $text)
+        UDTextField(label: label, placeholder: placeholder, text: $text,
+                    isSecure: isSecure, revealable: revealable)
             .frame(width: 240)
     }
 }

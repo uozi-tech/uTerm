@@ -18,9 +18,11 @@ struct HostFormSheet: View {
     @State private var username = ""
     @State private var auth: AuthMethod = .password
     @State private var password = ""
+    @State private var passwordRevealed = false
     @State private var selectedKey: UUID?
     @State private var group = ""
     @State private var sftpOnly = false
+    @FocusState private var passwordFocused: Bool
 
     private var isEdit: Bool { host != nil }
     private var valid: Bool {
@@ -51,14 +53,25 @@ struct HostFormSheet: View {
 
                         if auth == .password {
                             MRowDivider()
-                            HStack {
+                            HStack(spacing: 4) {
                                 Text("密码").font(M.sans(15)).foregroundStyle(M.text)
                                 Spacer()
-                                SecureField("••••••••", text: $password)
-                                    .font(M.mono(14)).multilineTextAlignment(.trailing)
-                                    .frame(maxWidth: 180)
+                                Group {
+                                    if passwordRevealed {
+                                        TextField("••••••••", text: $password)
+                                    } else {
+                                        SecureField("••••••••", text: $password)
+                                    }
+                                }
+                                .font(M.mono(14)).multilineTextAlignment(.trailing)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .focused($passwordFocused)
+                                .frame(maxWidth: 180)
+
+                                MRevealButton(revealed: passwordRevealed, action: togglePasswordReveal)
                             }
-                            .padding(.horizontal, 14).padding(.vertical, 11)
+                            .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 11)
                         } else {
                             MRowDivider()
                             if keys.isEmpty {
@@ -103,6 +116,18 @@ struct HostFormSheet: View {
     }
 
     @ViewBuilder
+    /// 掩码 ⇄ 明文。`SecureField` 与 `TextField` 是两个不同的 UIKit 视图，换一个必然丢焦点
+    /// —— 原来在编辑就等这拍界面更新落地后把焦点还回去，键盘不收。
+    private func togglePasswordReveal() {
+        let wasFocused = passwordFocused
+        passwordRevealed.toggle()
+        guard wasFocused else { return }
+        Task {
+            await Task.yield()
+            passwordFocused = true
+        }
+    }
+
     private func keyRow(_ key: SSHKey, last: Bool) -> some View {
         let selected = selectedKey == key.id
         let check: AnyView? = selected ? AnyView(MIcon(name: "check", size: 15, color: accent)) : nil

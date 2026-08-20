@@ -104,30 +104,67 @@ struct MInput: View {
     var placeholder: String = ""
     var mono: Bool = false
     var secure: Bool = false
+    /// 掩码输入框尾部给一个眼睛钮，点一下看原文。只对 `secure` 生效。
+    var revealable: Bool = false
     var keyboard: UIKeyboardType = .default
     var autocap: TextInputAutocapitalization = .never
 
     @FocusState private var focused: Bool
+    @State private var revealed = false
     @Environment(\.mAccent) private var accent
 
     var body: some View {
-        Group {
-            if secure {
-                SecureField(placeholder, text: $text)
-            } else {
-                TextField(placeholder, text: $text)
+        HStack(spacing: 8) {
+            Group {
+                if secure, !revealed {
+                    SecureField(placeholder, text: $text)
+                } else {
+                    TextField(placeholder, text: $text)
+                }
+            }
+            .focused($focused)
+            .font(mono ? M.mono(15) : M.sans(15))
+            .foregroundStyle(M.text)
+            .textInputAutocapitalization(autocap)
+            .autocorrectionDisabled()
+            .keyboardType(keyboard)
+
+            if secure, revealable {
+                MRevealButton(revealed: revealed, action: toggleReveal)
             }
         }
-        .focused($focused)
-        .font(mono ? M.mono(15) : M.sans(15))
-        .foregroundStyle(M.text)
-        .textInputAutocapitalization(autocap)
-        .autocorrectionDisabled()
-        .keyboardType(keyboard)
         .padding(.horizontal, 13).padding(.vertical, 11)
         .background(M.inputBg)
         .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
+    }
+
+    /// 掩码 ⇄ 明文。`SecureField` 与 `TextField` 是两个不同的 UIKit 视图，换一个必然丢焦点
+    /// —— 原来在编辑就等这拍界面更新落地后把焦点还回去，键盘不收。
+    private func toggleReveal() {
+        let wasFocused = focused
+        revealed.toggle()
+        guard wasFocused else { return }
+        Task {
+            await Task.yield()
+            focused = true
+        }
+    }
+}
+
+/// 掩码输入框尾部的眼睛钮：点一下在 •••• 与原文之间切。切换本身由调用方管。
+struct MRevealButton: View {
+    var revealed: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            MIcon(name: revealed ? "eye" : "eye-off", size: 15, color: M.text3)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(revealed ? "隐藏原文" : "查看原文")
     }
 }
 

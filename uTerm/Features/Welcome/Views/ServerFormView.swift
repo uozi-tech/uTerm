@@ -147,7 +147,8 @@ struct ServerFormView: View {
             }
             if authMethod == .password {
                 DarkFormField(label: "密码", hint: "仅保存在系统钥匙串") {
-                    UDTextField(placeholder: "••••••••", text: $password, isSecure: true)
+                    UDTextField(placeholder: "••••••••", text: $password,
+                                isSecure: true, revealable: true)
                 }
             } else {
                 DarkFormField(label: "密钥", hint: "从密钥管理器选择") {

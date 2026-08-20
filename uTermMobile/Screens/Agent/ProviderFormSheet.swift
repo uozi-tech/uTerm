@@ -46,7 +46,7 @@ struct ProviderFormSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         MSectionCap(text: "API Key").padding(.horizontal, 20)
-                        MInput(text: $apiKey, placeholder: "sk-…", mono: true, secure: true)
+                        MInput(text: $apiKey, placeholder: "sk-…", mono: true, secure: true, revealable: true)
                             .padding(.horizontal, 16)
                         Text("保存在 iCloud 钥匙串；请求时仅发送给所选 Provider。")
                             .font(M.sans(12)).foregroundStyle(M.text4).padding(.horizontal, 20)
