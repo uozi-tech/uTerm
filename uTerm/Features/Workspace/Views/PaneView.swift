@@ -99,6 +99,13 @@ struct PaneView: View {
         .onDrop(of: [.utermPaneID, .utermTabID],
                 delegate: paneDropDelegate)
         .task(id: pane.id) { await connect() }
+        // `.task(id:)` 只在窗格 id 变化时重跑，@Query 结果迟到不会让它重来一遍。
+        // 服务器列表到齐后补连一次，避免窗格永远停在「未连接」。
+        .onChange(of: profiles.count) { _, _ in
+            guard pane.fileBuffer == nil,
+                  pane.session.connectionState == .idle else { return }
+            Task { await connect() }
+        }
         .hostKeySheet(pane.hostKeyRelay)
     }
 
@@ -243,6 +250,12 @@ struct PaneView: View {
     private func connect() async {
         if let profile {
             await pane.connect(profile: profile, modelContainer: modelContext.container)
+        } else if profiles.isEmpty {
+            // ServerProfile 还没被 @Query 载入（store 打开 / CloudKit 同步的瞬态）。
+            // 此时判「配置已删除」是假阳性，而且那是个终态：窗格会挂着
+            // 「连接失败 / 服务器配置已被删除」再也不重试。留在 .idle，
+            // 等上面的 onChange(profiles.count) 拿到真数据再决定。
+            return
         } else {
             pane.markServerMissing()
         }

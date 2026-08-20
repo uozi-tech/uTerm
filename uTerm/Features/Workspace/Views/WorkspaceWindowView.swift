@@ -167,8 +167,15 @@ struct WorkspaceWindowView: View {
             guard !didRestore else { return }
             didRestore = true
             if restoreTerminalSession, let snapshot = WorkspaceStore(windowID: windowID).load() {
-                workspace.restore(from: snapshot)
-            } else {
+                // 白名单 = 当前真实存在的服务器。指向已删除（或历史上被写坏成随机
+                // UUID）的叶子在恢复时就被剪掉，不会变成一个卡在
+                // 「服务器配置已被删除」的死窗格。
+                workspace.restore(from: snapshot,
+                                  knownServerIDs: Set(profiles.map(\.id)))
+            }
+            // 兜底：快照为空 / 关了自动恢复 / 叶子全被剪掉 —— 都必须留下一个
+            // 连本窗口服务器的可用终端。
+            if workspace.tabs.isEmpty {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
             await workspace.connectSharedSFTP(profile: server, modelContainer: modelContext.container)

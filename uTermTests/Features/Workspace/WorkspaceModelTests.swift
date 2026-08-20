@@ -577,4 +577,86 @@ final class WorkspaceModelTests: XCTestCase {
         ws.openServer(profileID: UUID(), title: "b")
         ws.dispose()  // 不应抛错
     }
+
+    // MARK: 拆除期快照不得写坏 serverProfileID
+
+    /// 窗口关闭时 `.onDisappear` 会同时跑「dispose」与「保存快照」，SwiftUI 不保证
+    /// 先后。dispose 先跑会清空 panes 映射 —— 旧实现在那之后取快照会给每个叶子写进
+    /// 一个随机 UUID，下次打开工作区就恢复出一个永远「服务器配置已被删除」的终端。
+    func testSnapshotAfterDisposeKeepsRealServerIDs() {
+        let ws = WorkspaceModel()
+        let server = UUID()
+        ws.openServer(profileID: server, title: "a")
+        ws.dispose()
+
+        let snap = ws.snapshot()
+        XCTAssertEqual(snap.tabs.count, 1, "dispose 后取快照不能丢掉标签")
+        XCTAssertEqual(snap.tabs[0].layout, .leaf(serverProfileID: server),
+                       "dispose 后取快照必须仍是真实的 serverProfileID")
+    }
+
+    /// 自动保存走的是 `autosaveStructureSnapshot()`，同样不能在拆除后漂移
+    /// （旧实现每次调用都会生成新的随机 UUID，onChange 会被无限触发）。
+    func testAutosaveSnapshotIsStableAfterDispose() {
+        let ws = WorkspaceModel()
+        ws.openServer(profileID: UUID(), title: "a")
+        ws.dispose()
+        XCTAssertEqual(ws.autosaveStructureSnapshot(), ws.autosaveStructureSnapshot())
+    }
+
+    // MARK: restore 的服务器白名单校验
+
+    func testRestoreDropsTabsPointingAtUnknownServers() {
+        let ws = WorkspaceModel()
+        let dead = UUID()
+        let snap = WorkspaceSnapshot(
+            tabs: [TabSnapshot(title: "坏的", layout: .leaf(serverProfileID: dead))],
+            activeTabIndex: 0, uiState: nil)
+        ws.restore(from: snap, knownServerIDs: [UUID()])
+        XCTAssertTrue(ws.tabs.isEmpty, "指向不存在服务器的标签必须被剪掉")
+        XCTAssertNil(ws.activeTabID)
+    }
+
+    func testRestoreWithEmptyWhitelistSkipsValidation() {
+        let ws = WorkspaceModel()
+        let unknown = UUID()
+        let snap = WorkspaceSnapshot(
+            tabs: [TabSnapshot(title: "x", layout: .leaf(serverProfileID: unknown))],
+            activeTabIndex: 0, uiState: nil)
+        ws.restore(from: snap, knownServerIDs: [])
+        XCTAssertEqual(ws.tabs.count, 1, "空白名单 = 不校验（ServerProfile 未载入时不误伤）")
+    }
+
+    /// 分屏里只有一侧指向已删除服务器时，保留另一侧而不是整个标签作废。
+    func testRestoreCollapsesSplitWhenOneSideIsUnknown() {
+        let ws = WorkspaceModel()
+        let live = UUID()
+        let dead = UUID()
+        let snap = WorkspaceSnapshot(
+            tabs: [TabSnapshot(title: "x", layout: .split(
+                direction: .horizontal, fraction: 0.5,
+                first: .leaf(serverProfileID: dead),
+                second: .leaf(serverProfileID: live)))],
+            activeTabIndex: 0, uiState: nil)
+        ws.restore(from: snap, knownServerIDs: [live])
+        XCTAssertEqual(ws.tabs.count, 1)
+        XCTAssertEqual(ws.tabs[0].root.leafIDs.count, 1)
+        XCTAssertEqual(ws.tabs[0].panes.values.first?.serverProfileID, live)
+    }
+
+    /// 剪掉靠前的标签后，activeTabIndex 必须跟着重映射，不能指到别的标签上。
+    func testRestoreRemapsActiveTabIndexAfterPruning() {
+        let ws = WorkspaceModel()
+        let live = UUID()
+        let snap = WorkspaceSnapshot(
+            tabs: [
+                TabSnapshot(title: "坏的", layout: .leaf(serverProfileID: UUID())),
+                TabSnapshot(title: "好的", layout: .leaf(serverProfileID: live)),
+            ],
+            activeTabIndex: 1, uiState: nil)
+        ws.restore(from: snap, knownServerIDs: [live])
+        XCTAssertEqual(ws.tabs.count, 1)
+        XCTAssertEqual(ws.activeTabID, ws.tabs[0].id)
+        XCTAssertEqual(ws.activeTab?.title, "好的")
+    }
 }

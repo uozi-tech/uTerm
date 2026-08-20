@@ -33,6 +33,13 @@ final class WorkspaceModel {
     @ObservationIgnored private var dragEndPollTask: Task<Void, Never>?
     @ObservationIgnored private var agentBackgroundRefreshTask: Task<Void, Never>?
 
+    /// `dispose()` 时冻结的最后一份快照。窗口拆除时 `.onDisappear` 会同时触发
+    /// 「释放资源」与「保存快照」两条路径，SwiftUI 不保证先后；先跑 dispose 会把
+    /// `TabModel.panes` 清空，之后再取快照就丢掉了整棵布局树 —— 历史上还会给每个
+    /// 叶子写进一个随机 `serverProfileID`，于是下次打开工作区恢复出一个永远
+    /// 「服务器配置已被删除」的终端。dispose 前冻结一份，之后一律返回它。
+    @ObservationIgnored private var frozenSnapshot: WorkspaceSnapshot?
+
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
         self.fileBrowserModel = fileBrowserModel
@@ -87,19 +94,33 @@ final class WorkspaceModel {
     /// 不替换 fileBrowserModel/assistantModel —— 让 SFTPSidebar/AgentSidebar
     /// 的 .task(id:) 持有的引用始终稳定，避免「窗口实例换了但 view 的 task
     /// 不重启」的卡死。
-    func restore(from snapshot: WorkspaceSnapshot) {
+    ///
+    /// `knownServerIDs` 非空时用作白名单：指向不存在服务器的叶子直接丢弃，叶子被
+    /// 丢光的标签也一并丢弃。旧版本写坏的快照（叶子是随机 UUID）会在这里被清掉，
+    /// 调用方随后靠「没有标签就开一个」兜底出一个真正可用的终端，而不是恢复出一个
+    /// 永远卡在「服务器配置已被删除」的窗格。传空集合表示跳过校验（测试场景，或
+    /// ServerProfile 尚未载入时不做误判）。
+    func restore(from snapshot: WorkspaceSnapshot, knownServerIDs: Set<UUID> = []) {
         // 先 dispose 旧 tab 的资源（虽然实践中 restore 通常在空 model 上调用，
         // 但保留正确语义供未来"重连/切换布局"复用）。
         for tab in tabs { tab.disposeAll() }
         tabs.removeAll()
 
-        for tabSnap in snapshot.tabs {
+        // 记录每个保留下来的标签在快照里的原始下标，pruning 丢掉标签后
+        // activeTabIndex 才不会指到别的标签上。
+        var keptSourceIndices: [Int] = []
+        for (index, tabSnap) in snapshot.tabs.enumerated() {
+            guard let layout = Self.pruningUnknownServers(tabSnap.layout,
+                                                          knownServerIDs: knownServerIDs)
+            else { continue }
             var panes: [UUID: PaneModel] = [:]
-            let root = Self.buildNode(tabSnap.layout, into: &panes)
+            let root = Self.buildNode(layout, into: &panes)
             tabs.append(TabModel(title: tabSnap.title, root: root, panes: panes))
+            keptSourceIndices.append(index)
         }
-        if let idx = snapshot.activeTabIndex, tabs.indices.contains(idx) {
-            activeTabID = tabs[idx].id
+        if let idx = snapshot.activeTabIndex,
+           let position = keptSourceIndices.firstIndex(of: idx) {
+            activeTabID = tabs[position].id
         } else {
             activeTabID = tabs.first?.id
         }
@@ -116,6 +137,11 @@ final class WorkspaceModel {
     /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
     /// 预览 buffers。AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
     func dispose() {
+        // 拆资源之前先把快照冻结：之后 tab.disposeAll() 会清空 panes 映射，
+        // 再取快照就只剩空布局（见 `frozenSnapshot`）。
+        if frozenSnapshot == nil {
+            frozenSnapshot = makeSnapshot(agentState: assistantModel.snapshot())
+        }
         endDrag()
         agentBackgroundRefreshTask?.cancel()
         agentBackgroundRefreshTask = nil
@@ -361,13 +387,15 @@ final class WorkspaceModel {
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {
-        makeSnapshot(agentState: assistantModel.snapshot())
+        if let frozenSnapshot { return frozenSnapshot }
+        return makeSnapshot(agentState: assistantModel.snapshot())
     }
 
     /// 自动保存的结构变化签名。草稿单独由轻量 `onChange(input)` 监听，避免每次按键
     /// 都遍历标签布局、打开文件并构造完整快照；真正写盘前再调用 `snapshot()` 取最新值。
     func autosaveStructureSnapshot() -> WorkspaceSnapshot {
-        makeSnapshot(agentState: AgentSnapshot(
+        if let frozenSnapshot { return frozenSnapshot }
+        return makeSnapshot(agentState: AgentSnapshot(
             currentSessionID: assistantModel.currentSession?.id,
             input: ""))
     }
@@ -399,9 +427,11 @@ final class WorkspaceModel {
                                      panes: [UUID: PaneModel]) -> NodeSnapshot? {
         switch node {
         case .leaf(let paneID):
-            let pane = panes[paneID]
-            guard pane?.fileBuffer == nil else { return nil }
-            return .leaf(serverProfileID: pane?.serverProfileID ?? UUID())
+            // 窗格查不到就丢掉这个叶子。旧代码在这里回落 `UUID()`，把一个不存在的
+            // serverProfileID 写进快照 —— 下次打开工作区恢复出的终端永远显示
+            // 「连接失败 / 服务器配置已被删除」，且没有可用的重试入口。
+            guard let pane = panes[paneID], pane.fileBuffer == nil else { return nil }
+            return .leaf(serverProfileID: pane.serverProfileID)
         case .split(let s):
             let first = nodeSnapshot(s.first, panes: panes)
             let second = nodeSnapshot(s.second, panes: panes)
@@ -415,6 +445,27 @@ final class WorkspaceModel {
                 return second
             case (nil, nil):
                 return nil
+            }
+        }
+    }
+
+    /// 剪掉指向未知服务器的叶子；某个 split 的两侧都被剪掉时整个 split 也返回 nil。
+    /// `knownServerIDs` 为空表示不做校验，原样返回。
+    nonisolated static func pruningUnknownServers(
+        _ snap: NodeSnapshot, knownServerIDs: Set<UUID>) -> NodeSnapshot? {
+        guard !knownServerIDs.isEmpty else { return snap }
+        switch snap {
+        case .leaf(let serverProfileID):
+            return knownServerIDs.contains(serverProfileID) ? snap : nil
+        case .split(let direction, let fraction, let first, let second):
+            let f = pruningUnknownServers(first, knownServerIDs: knownServerIDs)
+            let s = pruningUnknownServers(second, knownServerIDs: knownServerIDs)
+            switch (f, s) {
+            case let (f?, s?):
+                return .split(direction: direction, fraction: fraction, first: f, second: s)
+            case let (f?, nil):  return f
+            case let (nil, s?):  return s
+            case (nil, nil):     return nil
             }
         }
     }
