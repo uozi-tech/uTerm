@@ -224,7 +224,9 @@ final class AssistantModel {
     /// `send` 与工具续轮（`continueAfterTools`）共用此实现。
     private func streamAssistantTurn(provider: AIProvider, key: String, baseURL: URL,
                                      serverContext: String, session: ChatSession?) async {
-        let conversation = messages
+        // 出站上下文自动压缩：内存与聊天记录保留全文，超预算的历史在发送
+        // 副本上折叠旧命令输出 / 省略最旧轮次（ContextCompressor 注释详述）。
+        let conversation = ContextCompressor.compress(messages)
         let assistantMessage = ChatMessage(role: .assistant, text: "")
         messages.append(assistantMessage)
         let assistantIndex = messages.count - 1
