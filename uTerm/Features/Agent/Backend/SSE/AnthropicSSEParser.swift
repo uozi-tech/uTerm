@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 解析 Anthropic Claude Messages SSE。逐行喂入，产出 `[LLMEvent]`。

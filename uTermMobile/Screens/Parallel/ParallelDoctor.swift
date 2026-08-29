@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 并行执行 AI 视图的 LLM 后端（移植自 macOS `ParallelAIDoctor`，依赖均为 iOS 已编入的

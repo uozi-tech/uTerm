@@ -1,3 +1,4 @@
+import AgentKit
 import XCTest
 @testable import uTerm
 

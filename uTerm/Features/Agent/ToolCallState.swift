@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 运行期/UI 状态：一次工具调用从「待确认」到「完成」的全过程。Codable 以便落库。

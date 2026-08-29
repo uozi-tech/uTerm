@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 调用 Anthropic Claude Messages API（流式 SSE）。

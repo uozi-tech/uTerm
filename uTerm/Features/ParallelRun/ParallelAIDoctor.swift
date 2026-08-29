@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 并行执行窗口 AI 视图的 LLM 后端。两个能力：

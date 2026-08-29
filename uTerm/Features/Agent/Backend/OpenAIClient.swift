@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 调用 OpenAI Chat Completions API（流式 SSE）。

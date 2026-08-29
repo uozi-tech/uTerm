@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 @testable import uTerm
 

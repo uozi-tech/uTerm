@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 解析 OpenAI Chat Completions（及兼容端点）SSE。逐行喂入，产出 `[LLMEvent]`。

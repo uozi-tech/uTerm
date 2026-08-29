@@ -1,14 +1,10 @@
+import AgentKit
 import Foundation
 
-/// LLM 流式输出的一个事件。Spec B 把 `stream` 从 `<String>` 升到 `<LLMEvent>`。
-nonisolated enum LLMEvent: Sendable, Equatable {
-    case text(String)            // 文本增量
-    case toolCall(LLMToolCall)   // 一次完整的工具调用请求（参数已聚合完）
-}
+/// LLM 流式输出的一个事件。类型现由 `AgentKit.LLMEvent` 统一定义
+/// （与 uTable 共享——两边的 SSE 累积器都聚合成这一形状再 yield），本文件只
+/// 收口本地名字，行为零变化。见 AgentKit HANDOFF 二期笔记。
+typealias LLMEvent = AgentKit.LLMEvent
 
-/// 模型发起的一次工具调用。
-nonisolated struct LLMToolCall: Sendable, Equatable {
-    let id: String              // provider 的 tool_use id / tool_call id
-    let name: String            // "run_command"
-    let argumentsJSON: String   // 原始 JSON 参数字符串
-}
+/// 模型发起的一次工具调用。同上，收口为包类型的别名。
+typealias LLMToolCall = AgentKit.LLMToolCall
