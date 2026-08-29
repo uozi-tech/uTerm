@@ -47,6 +47,17 @@ pbxproj 以 `XCLocalSwiftPackageReference "vendor/Citadel"` 引用本目录，�
    依赖）和 `CitadelTests` 测试 target。只保留 `CCitadelBcrypt`（C target）和 `Citadel`
    library target + `Citadel` library product。其余依赖（swift-nio / swift-log / BigInt /
    swift-crypto）原样保留。
+3. 版本区间放宽（2026-08-29，为 uTable 升 swift-crypto 4.5.1 / BigInt 6，修
+   CVE-2026-43823——crypto 3.x 无回补）：
+   ```
+   - .package(url: "https://github.com/attaswift/BigInt.git", from: "5.2.0")
+   + .package(url: "https://github.com/attaswift/BigInt.git", "5.2.0"..<"7.0.0")
+   - .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3")
+   + .package(url: "https://github.com/apple/swift-crypto.git", "3.12.3"..<"5.0.0")
+   ```
+   上游 Citadel 仍钉 crypto `<4.0.0` / BigInt `<6.0.0`；放宽区间不强制任何工程升级
+   （uTerm 自己的 Package.resolved 钉住的 3.x/5.x 仍在区间内），只是允许 uTable 解析到
+   4.x/6.x。升级上游时注意保留这两行。
 
 ## 更新方式
 

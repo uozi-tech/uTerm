@@ -37,8 +37,8 @@ let package = Package(
         .package(path: "../swift-nio-ssh"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
-        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.2.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3"),
+        .package(url: "https://github.com/attaswift/BigInt.git", "5.2.0"..<"7.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.12.3"..<"5.0.0"),
     ],
     targets: [
         .target(name: "CCitadelBcrypt"),

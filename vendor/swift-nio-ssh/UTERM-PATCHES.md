@@ -25,6 +25,11 @@ vendor Citadel 后依赖图里不再有任何 nio-ssh 远程 URL，警告消除�
 `NIOSSHServer` / `NIOSSHPerformanceTester` 可执行 target、测试 target，以及
 `swift-docc-plugin` 依赖都已删除。
 
+版本区间放宽（2026-08-29，为 uTable 升 swift-crypto 4.5.1，修 CVE-2026-43823）：
+`Package.swift` 的 swift-crypto 依赖从 `"1.0.0"..<"4.0.0"` 放宽到 `"1.0.0"..<"5.0.0"`，
+与 apple/swift-nio-ssh 上游现行区间一致。放宽不强制任何工程升级（已 pin 的 3.x 仍在
+区间内），只是允许 uTable 解析到 4.x。升级 fork 时保留这一行。
+
 ## 1. 修复 channel 拆除期的 window-adjust 崩溃
 
 崩溃签名（线上 1.6.0 build 134 实测）：
