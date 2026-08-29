@@ -45,7 +45,7 @@ INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
 
 # Sparkle auto-update / OSS publishing
-SPARKLE_VERSION ?= 2.6.4
+SPARKLE_VERSION ?= 2.9.6
 SPARKLE_TARBALL := Sparkle-$(SPARKLE_VERSION).tar.xz
 SPARKLE_URL := https://github.com/sparkle-project/Sparkle/releases/download/$(SPARKLE_VERSION)/$(SPARKLE_TARBALL)
 SPARKLE_DIR := $(BUILD_DIR)/sparkle-tools

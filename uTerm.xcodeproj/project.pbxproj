@@ -1020,7 +1020,7 @@
 			repositoryURL = "https://github.com/apple/swift-crypto.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 3.15.1;
+				minimumVersion = 4.0.0;
 			};
 		};
 		DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
