@@ -18,6 +18,9 @@
 		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
 		555353484B49540000000013 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000003 /* USSHKit */; };
+		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
+		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
+		4147454E544B495400000013 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000003 /* AgentKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
@@ -263,6 +266,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				555353484B49540000000012 /* USSHKit in Frameworks */,
+				4147454E544B495400000012 /* AgentKit in Frameworks */,
 				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
 				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
@@ -277,6 +281,7 @@
 			files = (
 				5544455349474E0000000011 /* UDesignKit in Frameworks */,
 				555353484B49540000000011 /* USSHKit in Frameworks */,
+				4147454E544B495400000011 /* AgentKit in Frameworks */,
 				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
@@ -304,6 +309,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				555353484B49540000000013 /* USSHKit in Frameworks */,
+				4147454E544B495400000013 /* AgentKit in Frameworks */,
 				TC000000000000000000004 /* SwiftTreeSitter in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -362,6 +368,7 @@
 			name = uTermMobile;
 			packageProductDependencies = (
 				555353484B49540000000002 /* USSHKit */,
+				4147454E544B495400000002 /* AgentKit */,
 				10C0DE0000000000000000D1 /* SwiftTerm */,
 				10C0DE0000000000000000D2 /* Citadel */,
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
@@ -392,6 +399,7 @@
 			packageProductDependencies = (
 				5544455349474E0000000001 /* UDesignKit */,
 				555353484B49540000000001 /* USSHKit */,
+				4147454E544B495400000001 /* AgentKit */,
 				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
 				SPRK00000000000000000001 /* Sparkle */,
 				C17ADE1000000000000001 /* Citadel */,
@@ -435,6 +443,7 @@
 			name = uTermTests;
 			packageProductDependencies = (
 				555353484B49540000000003 /* USSHKit */,
+				4147454E544B495400000003 /* AgentKit */,
 				TC000000000000000000003 /* SwiftTreeSitter */,
 			);
 			productName = uTermTests;
@@ -476,6 +485,7 @@
 			packageReferences = (
 				5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */,
 				555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */,
+				4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */,
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
 				A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -970,6 +980,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/USSHKit;
 		};
+		4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AgentKit;
+		};
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/SwiftTerm;
@@ -1130,6 +1144,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
 			productName = USSHKit;
+		};
+		4147454E544B495400000001 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			productName = AgentKit;
+		};
+		4147454E544B495400000002 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			productName = AgentKit;
+		};
+		4147454E544B495400000003 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			productName = AgentKit;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;

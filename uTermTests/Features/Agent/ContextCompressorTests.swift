@@ -1,3 +1,4 @@
+import AgentKit
 import XCTest
 @testable import uTerm
 
@@ -29,7 +30,7 @@ final class ContextCompressorTests: XCTestCase {
         var policy = ContextCompressor.Policy()
         policy.tokenBudget = 5_000
         policy.keptRecentMessages = 2
-        policy.foldedOutputCap = 100
+        policy.foldedToolResultCap = 100
         let out = ContextCompressor.compress(messages, policy: policy)
 
         XCTAssertEqual(out.count, messages.count)
@@ -50,7 +51,7 @@ final class ContextCompressorTests: XCTestCase {
         var policy = ContextCompressor.Policy()
         policy.tokenBudget = 3_000
         policy.keptRecentMessages = 2
-        policy.foldedOutputCap = 3000
+        policy.foldedToolResultCap = 3000
         let out = ContextCompressor.compress(messages, policy: policy)
 
         // 首条是摘要 user note，含最早请求与命令次数。

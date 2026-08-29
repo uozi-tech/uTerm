@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 import SwiftData
 
@@ -130,11 +131,10 @@ final class AssistantModel {
         resolvePendingRestoredSessionIfNeeded()
     }
 
-    /// 从首句话派生会话标题（单行、限长）。
+    /// 从首句话派生会话标题（单行、限长）。算法现由 `AgentKit.AgentTitle`
+    /// 统一实现（与 uTable `AgentChatStore.deriveTitle` 同一份逻辑）。
     nonisolated static func deriveTitle(from prompt: String) -> String {
-        let line = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.count <= 24 ? trimmed : String(trimmed.prefix(24)) + "…"
+        AgentTitle.derive(from: prompt)
     }
 
     private let keychain: AgentKeychain
@@ -549,8 +549,8 @@ final class AssistantModel {
     @discardableResult
     private func persist(_ message: ChatMessage, in session: ChatSession?) -> ChatMessageRecord? {
         guard let ctx = modelContext, let session else { return nil }
-        let record = ChatMessageRecord(role: message.role, text: message.text,
-                                       toolCalls: message.toolCalls,
+        let record = ChatMessageRecord(roleRaw: message.role.rawValue, text: message.text,
+                                       toolCallsJSON: ChatMessageRecord.encode(message.toolCalls),
                                        id: message.id, createdAt: Date())
         record.session = session
         ctx.insert(record)

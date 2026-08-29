@@ -1,3 +1,4 @@
+import AgentKit
 import XCTest
 import SwiftData
 @testable import uTerm
@@ -228,9 +229,9 @@ final class AssistantModelTests: XCTestCase {
         let context = try makeInMemoryContext()
         let sessionID = UUID()
         let session = ChatSession(title: "saved agent session", id: sessionID)
-        let user = ChatMessageRecord(role: .user, text: "remember agent",
+        let user = ChatMessageRecord(roleRaw: ChatMessage.Role.user.rawValue, text: "remember agent",
                                      createdAt: Date(timeIntervalSince1970: 1))
-        let assistant = ChatMessageRecord(role: .assistant, text: "restored",
+        let assistant = ChatMessageRecord(roleRaw: ChatMessage.Role.assistant.rawValue, text: "restored",
                                           createdAt: Date(timeIntervalSince1970: 2))
         context.insert(session)
         user.session = session
