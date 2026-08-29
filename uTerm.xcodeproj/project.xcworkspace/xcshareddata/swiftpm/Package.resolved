@@ -1,5 +1,5 @@
 {
-  "originHash" : "632ff0907080ad2854be8baa78354edbf4c6ac88d17b9975e5be49ad6ee2d9cc",
+  "originHash" : "b5d7800fbd1ef8ed1c1cee5be23d96fe8a1df0c10a2297aa02776c27f21fbbbb",
   "pins" : [
     {
       "identity" : "bigint",
@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/swift-tree-sitter",
       "state" : {
-        "revision" : "08ef81eb8620617b55b08868126707ad72bf754f",
-        "version" : "0.25.0"
+        "revision" : "f97df585296977d8fcaf644cbde567151d1367b8",
+        "version" : "0.10.0"
       }
     },
     {
@@ -141,7 +141,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-bash",
       "state" : {
-        "branch" : "master",
         "revision" : "a06c2e4415e9bc0346c6b86d401879ffb44058f7"
       }
     },
@@ -150,7 +149,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-go",
       "state" : {
-        "branch" : "master",
         "revision" : "2346a3ab1bb3857b48b29d779a1ef9799a248cd7"
       }
     },
@@ -159,7 +157,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-json",
       "state" : {
-        "branch" : "master",
         "revision" : "254c42a6476413b776221e03982ac8ae159eeb72"
       }
     },
@@ -168,7 +165,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter-grammars/tree-sitter-markdown",
       "state" : {
-        "branch" : "split_parser",
         "revision" : "a0a00f817d02412bd92c54d316f164d827b57b5c"
       }
     },
@@ -177,7 +173,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/alex-pinkus/tree-sitter-swift",
       "state" : {
-        "branch" : "with-generated-files",
         "revision" : "31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5"
       }
     },
@@ -186,7 +181,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-typescript",
       "state" : {
-        "branch" : "master",
         "revision" : "75b3874edb2dc714fb1fd77a32013d0f8699989f"
       }
     }
