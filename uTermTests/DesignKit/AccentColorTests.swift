@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UDesignKit
 @testable import uTerm
 
 final class AccentColorTests: XCTestCase {

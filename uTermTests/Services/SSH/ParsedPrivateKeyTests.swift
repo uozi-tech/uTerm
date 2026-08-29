@@ -2,6 +2,7 @@ import XCTest
 import Crypto
 @preconcurrency import Citadel
 @testable import uTerm
+@testable import USSHKit
 
 final class ParsedPrivateKeyTests: XCTestCase {
     func testEd25519MapsToAuthenticationMethod() throws {

@@ -17,10 +17,8 @@
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
-		555353484B49540000000013 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000003 /* USSHKit */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
-		4147454E544B495400000013 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000003 /* AgentKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
@@ -33,7 +31,6 @@
 		CE7EF0F0F0F0F0F0F0F00002 /* CodeEditTextView in Frameworks */ = {isa = PBXBuildFile; productRef = CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */; };
 		SPRK00000000000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = SPRK00000000000000000001 /* Sparkle */; };
 		TC000000000000000000001 /* SwiftTreeSitter in Frameworks */ = {isa = PBXBuildFile; productRef = TC000000000000000000002 /* SwiftTreeSitter */; };
-		TC000000000000000000004 /* SwiftTreeSitter in Frameworks */ = {isa = PBXBuildFile; productRef = TC000000000000000000003 /* SwiftTreeSitter */; };
 		TC000200000000000000001 /* TreeSitterGo in Frameworks */ = {isa = PBXBuildFile; productRef = TC000200000000000000002 /* TreeSitterGo */; };
 		TC000500000000000000001 /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = TC000500000000000000002 /* TreeSitterTypeScript */; };
 		TC000600000000000000001 /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = TC000600000000000000002 /* TreeSitterJSON */; };
@@ -308,9 +305,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				555353484B49540000000013 /* USSHKit in Frameworks */,
-				4147454E544B495400000013 /* AgentKit in Frameworks */,
-				TC000000000000000000004 /* SwiftTreeSitter in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -441,11 +435,6 @@
 				B00000000000000000000002 /* uTermTests */,
 			);
 			name = uTermTests;
-			packageProductDependencies = (
-				555353484B49540000000003 /* USSHKit */,
-				4147454E544B495400000003 /* AgentKit */,
-				TC000000000000000000003 /* SwiftTreeSitter */,
-			);
 			productName = uTermTests;
 			productReference = B0000000000000000000000C /* uTermTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1140,22 +1129,12 @@
 			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
 			productName = USSHKit;
 		};
-		555353484B49540000000003 /* USSHKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
-			productName = USSHKit;
-		};
 		4147454E544B495400000001 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
 			productName = AgentKit;
 		};
 		4147454E544B495400000002 /* AgentKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
-			productName = AgentKit;
-		};
-		4147454E544B495400000003 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
 			productName = AgentKit;
@@ -1216,11 +1195,6 @@
 			productName = Sparkle;
 		};
 		TC000000000000000000002 /* SwiftTreeSitter */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = TC000000000000000000000 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */;
-			productName = SwiftTreeSitter;
-		};
-		TC000000000000000000003 /* SwiftTreeSitter */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = TC000000000000000000000 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */;
 			productName = SwiftTreeSitter;

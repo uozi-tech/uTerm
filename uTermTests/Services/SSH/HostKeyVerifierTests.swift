@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 @testable import uTerm
+@testable import USSHKit
 
 @MainActor
 final class HostKeyVerifierTests: XCTestCase {

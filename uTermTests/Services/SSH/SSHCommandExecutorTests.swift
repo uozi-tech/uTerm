@@ -1,5 +1,6 @@
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 final class SSHCommandExecutorTests: XCTestCase {
     func testWrapsCommandAndParsesExitCode() async throws {

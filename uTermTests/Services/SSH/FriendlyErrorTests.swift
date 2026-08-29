@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 import NIOCore
 @testable import uTerm
+@testable import USSHKit
 
 final class FriendlyErrorTests: XCTestCase {
 

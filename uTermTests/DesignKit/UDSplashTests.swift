@@ -1,4 +1,5 @@
 import XCTest
+@testable import UDesignKit
 @testable import uTerm
 
 final class UDSplashTests: XCTestCase {

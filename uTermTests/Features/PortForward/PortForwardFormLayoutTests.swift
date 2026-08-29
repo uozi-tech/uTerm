@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import UDesignKit
 @testable import uTerm
 
 @MainActor

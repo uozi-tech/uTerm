@@ -3,6 +3,7 @@ import NIOCore
 import NIOEmbedded
 @preconcurrency import NIOSSH
 @testable import uTerm
+@testable import USSHKit
 
 final class RSASHA512AuthDelegateTests: XCTestCase {
     private func makeDelegate() throws -> RSASHA512AuthDelegate {

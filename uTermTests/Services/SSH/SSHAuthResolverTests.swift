@@ -1,6 +1,7 @@
 import Security
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 final class SSHAuthResolverTests: XCTestCase {
     func testPasswordAuthUsesKeychainPassword() throws {

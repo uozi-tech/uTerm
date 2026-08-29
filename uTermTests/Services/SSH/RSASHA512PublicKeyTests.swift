@@ -1,6 +1,7 @@
 import XCTest
 import NIOCore
 @testable import uTerm
+@testable import USSHKit
 
 final class RSASHA512PublicKeyTests: XCTestCase {
     func testPrefixIsRSASHA2512() {

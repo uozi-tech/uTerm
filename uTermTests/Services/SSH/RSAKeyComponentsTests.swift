@@ -1,5 +1,6 @@
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 final class RSAKeyComponentsTests: XCTestCase {
     /// 从 PEM 文本取 DER 的小助手。

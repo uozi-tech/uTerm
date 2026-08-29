@@ -1,6 +1,7 @@
 import XCTest
 import NIOCore
 @testable import uTerm
+@testable import USSHKit
 
 final class RSASHA512SignatureTests: XCTestCase {
     func testPrefix() {

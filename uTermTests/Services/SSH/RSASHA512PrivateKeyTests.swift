@@ -1,5 +1,6 @@
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 final class RSASHA512PrivateKeyTests: XCTestCase {
     private func components() throws -> RSAKeyComponents {

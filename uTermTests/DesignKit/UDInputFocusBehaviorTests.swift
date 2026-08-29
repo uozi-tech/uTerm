@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import XCTest
+@testable import UDesignKit
 @testable import uTerm
 
 final class UDInputFocusBehaviorTests: XCTestCase {

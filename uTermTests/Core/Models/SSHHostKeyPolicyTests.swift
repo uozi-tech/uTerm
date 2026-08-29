@@ -1,6 +1,9 @@
 import XCTest
 @testable import uTerm
 
+// USSHKit 也导出同名类型（Support/USSHKitTestExports.swift 里 @_exported），这里固定测 app 侧的那个。
+private typealias SSHHostKeyPolicy = uTerm.SSHHostKeyPolicy
+
 @MainActor
 final class SSHHostKeyPolicyTests: XCTestCase {
     func test_allCases_order() {

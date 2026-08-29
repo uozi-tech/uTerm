@@ -1,5 +1,6 @@
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 /// `SSHConnection.ProfileSnapshot` 两个 init 的单测。
 ///

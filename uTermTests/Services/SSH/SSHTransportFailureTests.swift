@@ -2,6 +2,7 @@ import XCTest
 import NIOCore
 import Citadel
 @testable import uTerm
+@testable import USSHKit
 
 /// `SSHTransportFailure` 分类器：传输层失败（该重连）vs 应用层错误（该报错）。
 final class SSHTransportFailureTests: XCTestCase {

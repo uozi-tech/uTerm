@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 @testable import uTerm
+@testable import USSHKit
 
 /// RSA rsa-sha2-512 公钥认证集成测试 —— 需要真实服务器，默认 SKIP。
 ///

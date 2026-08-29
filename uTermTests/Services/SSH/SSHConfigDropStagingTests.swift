@@ -1,5 +1,6 @@
 import XCTest
 @testable import uTerm
+@testable import USSHKit
 
 final class SSHConfigDropStagingTests: XCTestCase {
     private func makeTmpRoot() throws -> URL {

@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 @testable import uTerm
+@testable import USSHKit
 
 /// 集成测试 —— 对本地 sshd。无 sshd / 无密码时 SKIP（不 FAIL）。
 final class SSHConnectionIntegrationTests: XCTestCase {

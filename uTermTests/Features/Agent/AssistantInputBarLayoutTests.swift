@@ -1,4 +1,5 @@
 import XCTest
+import UDesignKit
 @testable import uTerm
 
 final class AssistantInputBarLayoutTests: XCTestCase {

@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 import NIOCore
+import UDesignKit
 @testable import uTerm
 
 @MainActor
