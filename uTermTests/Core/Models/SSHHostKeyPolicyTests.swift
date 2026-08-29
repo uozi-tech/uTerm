@@ -1,7 +1,8 @@
 import XCTest
 @testable import uTerm
 
-// USSHKit 也导出同名类型（Support/USSHKitTestExports.swift 里 @_exported），这里固定测 app 侧的那个。
+// USSHKit 也有个 public 的同名类型；本文件只 import uTerm，typealias 明确钉住 app 侧的那个，
+// 免得日后谁补上 `@testable import USSHKit` 就变歧义。
 private typealias SSHHostKeyPolicy = uTerm.SSHHostKeyPolicy
 
 @MainActor

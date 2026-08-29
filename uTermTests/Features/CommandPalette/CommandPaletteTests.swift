@@ -96,7 +96,10 @@ final class CommandPaletteTests: XCTestCase {
         let filtered = filterCommandPalette(items, query: "/etc")
         let sections = groupCommandPaletteByMatchPriority(filtered, query: "/etc")
 
-        XCTAssertEqual(sections.flatMap(\.items).map(\.id), ["exact", "nested", "config", "child"])
+        // filterCommandPalette 是纯子串匹配（非模糊）：`:etc:` 形式的路径不含 "/etc"，
+        // 故 config 项在过滤阶段就出局，排序阶段根本看不到它。
+        XCTAssertEqual(filtered.map(\.id), ["nested", "exact", "child"])
+        XCTAssertEqual(sections.flatMap(\.items).map(\.id), ["exact", "nested", "child"])
     }
 
     func testExactMatchMovesItsKindAheadOfEarlierDefaultKinds() {

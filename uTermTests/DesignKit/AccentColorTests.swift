@@ -26,9 +26,11 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(AccentColor.blue.accentSpec(dark: false),  UD.ColorSpec.hex(0x007AFF))
         XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x4DA3FF))
         XCTAssertEqual(AccentColor.blue.inkSpec(dark: false),     UD.ColorSpec.hex(0x0067E0))
-        // v2「填充即边界」：soft = accent 14%（深浅同档）。
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x0A84FF, 0.14))
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x007AFF, 0.14))
+        // softSpec 是 uTable canonical 值（深 10% / 浅 13%）。uTerm 自有 DesignKit 时期的
+        // v2「深浅同档 14%」已随 UDesignKit 共享包收编作废；14% 那一档现在叫 `UD.accentTint`
+        // （选中 / 主操作底），与 accentSoft 是两个 token。
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x0A84FF, 0.10))
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x007AFF, 0.13))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: true),  UD.ColorSpec.hex(0x96ACCD))
         XCTAssertEqual(AccentColor.blue.pressedSpec(dark: false), UD.ColorSpec.hex(0x5A7099))
     }
@@ -39,8 +41,8 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(rgb(s).0, base.r, accuracy: 0.0001)
         XCTAssertEqual(rgb(s).1, base.g, accuracy: 0.0001)
         XCTAssertEqual(rgb(s).2, base.b, accuracy: 0.0001)
-        XCTAssertEqual(s.a, 0.14, accuracy: 0.0001)
-        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.14, accuracy: 0.0001)
+        XCTAssertEqual(s.a, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.13, accuracy: 0.0001)
     }
 
     func testInkBrightensInDarkDeepensInLight() {
@@ -113,16 +115,24 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(Set(items.map(\.id)).count, 5)
         XCTAssertEqual(items.map(\.title),
                        ["强调色 · 蓝", "强调色 · 紫", "强调色 · 绿", "强调色 · 橙", "强调色 · 红"])
-        XCTAssertEqual(items.first { $0.id == "accent.green" }?.detail, "当前")
-        XCTAssertEqual(items.first { $0.id == "accent.blue" }?.detail, "")
+        // 迁到共享包后重写的桥接：id 跟 commandPaletteSettingsItems 同族用 `setting.` 前缀，
+        // detail 固定为说明文案，「当前」标记挪到 hint 位。
+        XCTAssertEqual(items.map(\.id), ["setting.accent.blue", "setting.accent.purple",
+                                        "setting.accent.green", "setting.accent.orange",
+                                        "setting.accent.red"])
+        XCTAssertTrue(items.allSatisfy { $0.detail == "切换全局界面强调色" })
+        XCTAssertEqual(items.first { $0.id == "setting.accent.green" }?.hint, "当前")
+        XCTAssertEqual(items.first { $0.id == "setting.accent.blue" }?.hint, "↵")
     }
 
     @MainActor
-    func testAccentPaletteItemRunSwitchesAccent() {
+    func testAccentPaletteItemRunSwitchesAccent() throws {
         defer { AccentState.shared.selected = .blue }
         AccentState.shared.selected = .blue
         let items = commandPaletteAccentItems()
-        items.first { $0.id == "accent.red" }?.run()
+        // XCTUnwrap：id 若再漂移，这里直接失败，而不是静默不 run 后断言「还是蓝」。
+        let red = try XCTUnwrap(items.first { $0.id == "setting.accent.red" })
+        red.run()
         XCTAssertEqual(AccentState.shared.selected, .red)
     }
 }

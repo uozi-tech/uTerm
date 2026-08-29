@@ -20,12 +20,16 @@ final class AssistantInputBarLayoutTests: XCTestCase {
     }
 
     func testComposerRoutesReturnKeyToSendAction() throws {
-        let testsURL = URL(fileURLWithPath: #filePath)
-        let sourceURL = testsURL.deletingLastPathComponent()
+        // UDComposer 已随 DesignKit 收编进共享包；Xcode 以本地包引用
+        // `../uTable/Packages/UDesignKit` 挂它，源码守卫按同一相对路径找过去。
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Agent
+            .deletingLastPathComponent()   // Features
+            .deletingLastPathComponent()   // uTermTests
+            .deletingLastPathComponent()   // <uTerm repo root>
+        let sourceURL = repoRoot
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("uTerm/DesignKit/Comms/UDComposer.swift")
+            .appendingPathComponent("uTable/Packages/UDesignKit/Sources/UDesignKit/Comms/UDComposer.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         let handlesReturn = source.contains(".onSubmit")

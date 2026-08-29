@@ -101,7 +101,16 @@ final class UDColorTests: XCTestCase {
         assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.46,  "text3 = 纯黑@46%（次要信息层）")
         assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.32,  "text4 = 纯黑@32%（仅装饰 / 结构层）")
         assertHex(UD.rowHover,    .aqua, 0x000000, alpha: 0.04,  "rowHover = 纯黑@4%")
-        assertHex(UD.rowSelected, .aqua, 0x000000, alpha: 0.06,  "rowSelected = 中性纯黑@6%（accent 型选中走 accentSoft）")
+    }
+
+    // MARK: - 行选中：canonical 设计里不是中性色，而是 accent tint
+
+    /// uTerm 自有 DesignKit 时期 rowSelected = 中性黑 6%；收编到 UDesignKit 共享包后
+    /// 改为 uTable canonical 的 v2 规则——导航类选中态（列表行 / pill / ⌘K 行 / 底部导航）
+    /// = accent 14% 填充（与 `UD.accentTint` 同档），无 accent 描边。固定蓝，不随强调色切换。
+    func test_row_selected_is_blue_accent_tint() {
+        assertHex(UD.rowSelected, .aqua,     0x007AFF, alpha: 0.14, "rowSelected light = 蓝 accent@14%")
+        assertHex(UD.rowSelected, .darkAqua, 0x0A84FF, alpha: 0.14, "rowSelected dark = 蓝 accent@14%")
     }
 
     // MARK: - 输入底：v2 淡灰无描边（深=白 6% / 浅=黑 5%）

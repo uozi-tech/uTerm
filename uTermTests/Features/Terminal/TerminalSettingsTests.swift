@@ -21,7 +21,7 @@ final class TerminalSettingsTests: XCTestCase {
 
     func test_fixed_font_constants() {
         XCTAssertEqual(TerminalSettings.fontName,   "System Monospaced")
-        XCTAssertEqual(TerminalSettings.fontSize,   11)
+        XCTAssertEqual(TerminalSettings.fontSize,   12)
         XCTAssertEqual(TerminalSettings.lineHeight, 1.0)
     }
 
