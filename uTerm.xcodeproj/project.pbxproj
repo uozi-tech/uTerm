@@ -1027,8 +1027,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
 			requirement = {
-				branch = "with-generated-files";
-				kind = branch;
+				kind = revision;
+				revision = 31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5;
 			};
 		};
 		SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
@@ -1051,40 +1051,40 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/tree-sitter-go";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = revision;
+				revision = 2346a3ab1bb3857b48b29d779a1ef9799a248cd7;
 			};
 		};
 		TC000500000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/tree-sitter-typescript";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = revision;
+				revision = 75b3874edb2dc714fb1fd77a32013d0f8699989f;
 			};
 		};
 		TC000600000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-json" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/tree-sitter-json";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = revision;
+				revision = 254c42a6476413b776221e03982ac8ae159eeb72;
 			};
 		};
 		TC000700000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-bash" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/tree-sitter-bash";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = revision;
+				revision = a06c2e4415e9bc0346c6b86d401879ffb44058f7;
 			};
 		};
 		TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-markdown";
 			requirement = {
-				branch = split_parser;
-				kind = branch;
+				kind = revision;
+				revision = a0a00f817d02412bd92c54d316f164d827b57b5c;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
