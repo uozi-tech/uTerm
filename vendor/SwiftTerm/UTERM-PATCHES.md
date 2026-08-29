@@ -1,10 +1,15 @@
 # uTerm 对 vendored SwiftTerm 的本地补丁
 
 上游：`https://github.com/migueldeicaza/SwiftTerm`，基线 revision
-`c068a905c5aeab60852fb865bee05dc8a5af190c`（2026-05-17）。
+`464df5207fc2432e16c9a23abe538187196daf5f`（tag `v1.19.0`，2026-08-18）。
 
 更新方式：拉取上游新 revision 覆盖 `Sources/SwiftTerm`（保留本文件与裁剪版
-`Package.swift`），然后逐条重放下列补丁。
+`Package.swift`），然后逐条重放下列补丁。**不要直接整目录覆盖**——`Sources/SwiftTerm`
+里混着本地新增文件（`Apple/MinimumContrast.swift`、`SwiftTermBuildInfo.swift`），
+整目录覆盖会把它们冲掉。
+
+校验手法：把上游对应 revision 的 tarball 解到临时目录，`diff -rq` 比对
+`Sources/SwiftTerm`，输出应当**恰好**是下面三条补丁涉及的文件，多一个少一个都要查。
 
 ## 1. 渲染期最低对比度（minimum contrast ratio）
 
@@ -15,7 +20,7 @@ cell 的前景色按 WCAG 对比度向黑/白方向钳制。
 
 涉及文件：
 
-- `Sources/SwiftTerm/Apple/MinimumContrast.swift`（**新增**）
+- `Sources/SwiftTerm/Apple/MinimumContrast.swift`（**新增**，纯本地文件，上游无对应物）
   - `TerminalContrast`：WCAG 相对亮度 / 对比度计算 + `ensureContrast(fg:bg:ratio:)`。
     方向按**背景**判定（`preferLighten = bgY < 0.5`）：深 / 中灰段底一律提亮
     前景（prompt 文字在 powerline 段上读作亮色），仅在确为浅背景时压暗；提亮
@@ -33,15 +38,24 @@ cell 的前景色按 WCAG 对比度向黑/白方向钳制。
     贴着彩色段的分隔三角出现轻微色差，也不要灰块。
 - `Sources/SwiftTerm/Mac/MacTerminalView.swift` / `Sources/SwiftTerm/iOS/iOSTerminalView.swift`
   - 新增存储属性 `public var minimumContrastRatio: CGFloat = 1`（1 = 关闭，
-    保持上游默认行为；didSet 触发 `colorsChanged()` 重建属性缓存）。
+    保持上游默认行为；didSet 触发 `colorsChanged()` 重建属性缓存）。锚点是
+    `attributes` / `urlAttributes` 两个缓存字典的声明处。
 - `Sources/SwiftTerm/Apple/AppleTerminalView.swift`
   - `getAttributes(_:withUrl:)`：fg 经 `mapColor` 后、dim 处理前做对比度钳制
     （先钳制再 dim，保留 SGR 2 的「变暗」语义）；所有 cell 走同一条钳制路径。
-  - `buildAttributedString` 的盒线 / 块元素自绘分支取 `getAttributes` 已钳制的
-    前景色（不再有未钳制变体）。
+    这是本组补丁在 AppleTerminalView 里**唯一**的改动。
+
+  注意：装饰字形（盒线 / 块元素 / powerline）**不需要**单独打补丁。
+  `buildAttributedString` 里那三个自绘分支都是从
+  `currentAttributes[.foregroundColor]` 把前景色读回来的，而这个值正是
+  `getAttributes` 产出的、已钳制的颜色，所以它们自动继承钳制。
+  （v1.19.0 新增的 `Apple/PowerlineRenderer.swift` 同理——它接收的
+  `foregroundColor` 也来自同一个属性字典。）
 
 uTerm 侧入口：`TerminalTheme.applyColorScheme` 统一设
-`view.minimumContrastRatio = TerminalColorScheme.minimumContrastRatio`（4.5）。
+`view.minimumContrastRatio = TerminalColorScheme.minimumContrastRatio`；
+移动端在 `SwiftTermView.makeUIView` 设 `MTerminalColors.minimumContrastRatio`。
+两侧当前取值均为 **3.0**。
 
 ## 2. iOS 终端键盘可强制英文 ASCII
 
@@ -58,3 +72,58 @@ uTerm 侧入口：`TerminalTheme.applyColorScheme` 统一设
 uTerm 侧入口：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `makeUIView`
 设 `view.keyboardType = .asciiCapable`。联想 / 自动更正 / 智能标点上游已默认关闭
 （`autocorrectionType` 等均为 `.no`）。Agent（AI 模式）走独立 SwiftUI 输入框，不受影响。
+
+## 3. 手写 SwiftTermBuildInfo，替掉上游的 build tool plugin
+
+**v1.19.0 新增的补丁**（基线 c068a905 时不存在此问题）。
+
+上游从 v1.19.0 起，把 `SwiftTermBuildInfo`（XTVERSION 应答用的版本信息）改成由
+build tool plugin `SwiftTermBuildInfoPlugin` + 可执行 target
+`SwiftTermBuildInfoGenerator` 在编译期生成。vendored 副本不带这两个 target，
+改为手写一份固定值。
+
+涉及文件：
+
+- `Sources/SwiftTerm/SwiftTermBuildInfo.swift`（**新增**，替代上游的生成物）
+- `Package.swift`：不声明 `plugins:`，不带 generator / plugin 两个 target。
+
+不采用上游 plugin 的原因：
+
+1. **它会报错版本**。plugin 把 `context.package.directoryURL` 传给 generator 去跑
+   git，而这个目录是 `<uTerm 仓库>/vendor/SwiftTerm`——git 会一路向上找到 uTerm
+   自己的 `.git`，于是 XTVERSION 报出去的分支 / commit / dirty 状态是 **uTerm 的**，
+   不是 SwiftTerm 的。对 vendored 副本来说这是错的。
+2. vendored 副本本就钉死在一个上游 revision 上，版本信息是常量，没有「编译期才
+   知道」的部分；带上 plugin 只会让 xcodebuild 多一步 host 工具构建和 plugin 校验。
+
+唯一消费者是 `Terminal.cmdXTVERSION`（`CSI > 0 q` 的应答）。**升级 vendored 副本时，
+记得把该文件里的 `tag` / `commit` 两个常量改成新的上游 tag / commit。**
+
+## 升级记录
+
+### c068a905 → v1.19.0（464df520，2026-08-29）
+
+上游跨了 128 个提交。三条补丁的重放结果：
+
+- 补丁 1（最低对比度）：**原样重放，仅行号偏移**。`getAttributes` 里
+  `mapColor` → dim 的代码形状与基线逐字节相同，钳制块插在同一位置。
+  上游对该函数唯一的改动是给 `attributes` / `urlAttributes` 缓存加了 4096 条上限
+  （truecolor 属性无界，超了就整体清空）——钳制结果本就是 (fg, bg, ratio) 的纯函数，
+  缓存被清只是重算，语义不受影响。`colorsChanged()` 仍然清这两个缓存，
+  `minimumContrastRatio` 的 didSet 契约成立。
+- 补丁 2（iOS keyboardType）：**原样重放**。上游该属性一字未动。
+- 补丁 3（SwiftTermBuildInfo）：**本次新增**，见上。
+
+顺带确认的上游结构变化（不需要改补丁，但值得知道）：
+
+- 新增 `Apple/PowerlineRenderer.swift`（#605，powerline 分隔符改为按 cell 几何自绘）。
+  它的前景色取自 `getAttributes` 的属性字典，**自动继承最低对比度钳制**——与补丁 1
+  「装饰字形一律钳制」的既定意图一致，无需额外打补丁。
+- 新增 BiDi（阿拉伯语 / 希伯来语）渲染整套：`Bidi.swift`、`Apple/TerminalBidi.swift`、
+  `Apple/ArabicShapingData.swift`、`Apple/BidiMirroringData.swift`。
+- 新增 `SemanticPrompt.swift`（OSC 133）、`Apple/BellStyle.swift`、
+  `Apple/ColorBridge.swift`（Color ↔ NSColor/UIColor 公开桥接）、`HangulInput.swift`、
+  `SyncDebug.swift`。
+- 反色（reverse video）改为「交换默认前景 / 背景色」而非按位取反。
+- macOS 滚动条语义未变（仍然从不设 `isHidden`，`scrollerStyle` 默认 `.overlay`），
+  所以 uTerm 的 `CopyableTerminalView` 用 `alphaValue` 管理浮现 / 淡出的做法继续成立。
