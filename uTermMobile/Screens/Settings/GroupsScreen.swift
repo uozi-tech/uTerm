@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 
@@ -235,7 +236,7 @@ struct GroupDetailView: View {
             }
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .udShadow(.card)
+            .udShadow(.sm)
         }
         .padding(.top, 22)
     }

@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftData
 
 /// iOS/iPadOS 的 SwiftData 容器。注册与 macOS (`AppModelContainer`) 完全一致的 `@Model` 全集，

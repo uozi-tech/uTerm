@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// uTerm 开屏页面 · 方向 A「星空之上」。

@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 
@@ -123,7 +124,7 @@ struct QuickCommandDetailView: View {
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     .background(M.card)
                     .clipShape(RoundedRectangle(cornerRadius: 11))
-                    .udShadow(.card)
+                    .udShadow(.sm)
                 }
                 if targets.isEmpty {
                     Text("尚未绑定主机").font(M.sans(13)).foregroundStyle(M.text4)
@@ -167,7 +168,7 @@ struct QuickCommandDetailView: View {
         .padding(.horizontal, 13).padding(.vertical, 12)
         .background(cmd.aiAssisted ? M.aiAccent.opacity(0.10) : M.card)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .udShadow(.card)
+        .udShadow(.sm)
         .padding(.top, 18)
     }
 
@@ -331,7 +332,7 @@ private struct RunLogRow: View {
         }
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 11))
-        .udShadow(.card)
+        .udShadow(.sm)
     }
 
     private var timeText: String {

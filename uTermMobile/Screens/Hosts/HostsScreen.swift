@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 
@@ -199,7 +200,7 @@ struct HostCard: View {
             .padding(14)
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .udShadow(.card)
+            .udShadow(.sm)
         }
         .buttonStyle(MPressStyle())
         .contextMenu {

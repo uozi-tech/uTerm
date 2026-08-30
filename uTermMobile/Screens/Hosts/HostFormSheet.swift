@@ -131,7 +131,7 @@ struct HostFormSheet: View {
     private func keyRow(_ key: SSHKey, last: Bool) -> some View {
         let selected = selectedKey == key.id
         let check: AnyView? = selected ? AnyView(MIcon(name: "check", size: 15, color: accent)) : nil
-        MInsetRow(icon: "key", label: key.name, sub: key.typeLabel,
+        return MInsetRow(icon: "key", label: key.name, sub: key.typeLabel,
                   last: last, trailing: check, onTap: { selectedKey = key.id })
     }
 

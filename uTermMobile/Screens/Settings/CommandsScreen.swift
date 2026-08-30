@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 
@@ -67,7 +68,7 @@ struct CommandCard: View {
             .padding(14)
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .udShadow(.card)
+            .udShadow(.sm)
     }
 }
 
@@ -212,7 +213,7 @@ struct CommandFormSheet: View {
             }
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .udShadow(.card)
+            .udShadow(.sm)
             .padding(.horizontal, 16)
         }
         .padding(.bottom, 22)

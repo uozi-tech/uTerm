@@ -1,4 +1,3 @@
-import UDesignKit
 import SwiftUI
 
 /// uTerm 官方品牌 logo（设计稿 05 号 · 星空之上）。

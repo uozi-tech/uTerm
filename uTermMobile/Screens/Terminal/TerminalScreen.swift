@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 import Observation
@@ -294,7 +295,7 @@ struct TerminalScreen: View {
             .padding(14)
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .udShadow(.card)
+            .udShadow(.sm)
         }
         .buttonStyle(MPressStyle())
     }

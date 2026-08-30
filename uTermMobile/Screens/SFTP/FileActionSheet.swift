@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 // MARK: - 下钻页自绘内联头部
@@ -113,7 +114,7 @@ struct PermissionGrid: View {
                 }
                 .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .udShadow(.card)
+                .udShadow(.sm)
                 .padding(.horizontal, 16)
 
                 MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPerm.mode(from: bits)) }

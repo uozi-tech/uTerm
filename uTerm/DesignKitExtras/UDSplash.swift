@@ -1,5 +1,15 @@
-import UDesignKit
 import SwiftUI
+
+/// 本文件被 uTermMobile 共享，而 UDesignKit 是 macOS-only 包——这里只用到
+/// 十六进制转 sRGB Color 一个能力，本地化成纯 SwiftUI helper 以保持跨平台。
+/// 语义与 `UD.ColorSpec.hex(_:).color()` 一致（sRGB、不透明）。
+private func splashHex(_ h: UInt32) -> Color {
+    Color(.sRGB,
+          red: Double((h >> 16) & 0xFF) / 255,
+          green: Double((h >> 8) & 0xFF) / 255,
+          blue: Double(h & 0xFF) / 255,
+          opacity: 1)
+}
 
 // uTerm DesignKit 品牌 · 开屏 —— Claude Design 交付包 `splash.jsx` 的 SwiftUI 复刻。
 //
@@ -25,10 +35,10 @@ struct UDWordmark: View {
     /// 字号（pt）。设计稿：开屏 46 / iPad 58。
     var size: CGFloat = 46
     /// "Term" 的强调色。默认品牌蓝（logo 烘焙色）。
-    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
+    var accent: Color = splashHex(0x3B82F6)
     /// "u" 的颜色。默认设计稿定值近白 `#f3f3f5`（恒暗场景用）；
     /// 放在随主题的面上时传 `UD.text`。
-    var color: Color = UD.ColorSpec.hex(0xF3F3F5).color()
+    var color: Color = splashHex(0xF3F3F5)
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
@@ -50,7 +60,7 @@ struct UDWordmark: View {
 /// 全屏星云：暗夜径向底 + 三团色晕（accent / 紫 / 粉）+ 26 颗确定性星点
 /// （坐标固定，画面稳定可截图 / 导出）。logo「星空之上」identity 的全屏铺开。
 struct UDNebulaField: View {
-    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
+    var accent: Color = splashHex(0x3B82F6)
 
     /// `[x%, y%, 半径pt, 不透明度]`——直接搬运自 `splash.jsx` 的 `SPLASH_STARS`。
     static let stars: [(x: CGFloat, y: CGFloat, r: CGFloat, o: Double)] = [
@@ -71,17 +81,17 @@ struct UDNebulaField: View {
                 // 暗夜径向底（顶部略亮，向下沉到近黑）。
                 RadialGradient(
                     gradient: Gradient(stops: [
-                        .init(color: UD.ColorSpec.hex(0x0C0C16).color(), location: 0),
-                        .init(color: UD.ColorSpec.hex(0x07070D).color(), location: 0.6),
-                        .init(color: UD.ColorSpec.hex(0x050509).color(), location: 1),
+                        .init(color: splashHex(0x0C0C16), location: 0),
+                        .init(color: splashHex(0x07070D), location: 0.6),
+                        .init(color: splashHex(0x050509), location: 1),
                     ]),
                     center: UnitPoint(x: 0.5, y: 0),
                     startRadius: 0, endRadius: max(w, h) * 1.05)
 
                 // 三团色晕：accent（左下）/ 紫（中）/ 粉（右上），低透明度软晕。
                 bloom(accent,                              o0: 0.149, o1: 0.05, cx: 0.26, cy: 0.74, r: w * 0.70)
-                bloom(UD.ColorSpec.hex(0xA78BFA).color(),  o0: 0.20,  o1: 0.05, cx: 0.55, cy: 0.46, r: w * 0.88)
-                bloom(UD.ColorSpec.hex(0xF472B6).color(),  o0: 0.14,  o1: 0.04, cx: 0.80, cy: 0.22, r: w * 0.64)
+                bloom(splashHex(0xA78BFA),  o0: 0.20,  o1: 0.05, cx: 0.55, cy: 0.46, r: w * 0.88)
+                bloom(splashHex(0xF472B6),  o0: 0.14,  o1: 0.04, cx: 0.80, cy: 0.22, r: w * 0.64)
 
                 // 星点（白点 + 柔光）。
                 ForEach(Array(Self.stars.enumerated()), id: \.offset) { _, s in
@@ -116,7 +126,7 @@ struct UDNebulaField: View {
 /// 开屏「星空之上」——品牌优先：星云场 + 居中 `ULogo` 与文字标识锁定。
 /// 恒暗色；铺满宿主给的空间（Shell 侧自行 `.ignoresSafeArea()`）。
 struct UDSplashNebula: View {
-    var accent: Color = UD.ColorSpec.hex(0x3B82F6).color()
+    var accent: Color = splashHex(0x3B82F6)
     /// 宽屏尺寸档（iPad / regular size class）。
     var big: Bool = false
 
@@ -125,7 +135,7 @@ struct UDSplashNebula: View {
     private var gap: CGFloat { big ? 30 : 24 }
 
     /// 星云最暗的底色，用作兜底背景，避免任何缝隙露出宿主底色。
-    private static let base = UD.ColorSpec.hex(0x050509).color()
+    private static let base = splashHex(0x050509)
 
     var body: some View {
         ZStack {

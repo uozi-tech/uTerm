@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 
 /// 分组色解析（对齐 macOS `ServerGroupBadgeTint`）：组名 → `ServerGroup.colorHex` → Color。

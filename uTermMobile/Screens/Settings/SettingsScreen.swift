@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 import UIKit
@@ -103,7 +104,7 @@ struct SettingsScreen: View {
         .padding(16)
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .udShadow(.card)
+        .udShadow(.sm)
         .padding(.horizontal, 16)
         .padding(.bottom, 22)
     }

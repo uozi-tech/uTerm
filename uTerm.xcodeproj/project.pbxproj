@@ -14,11 +14,11 @@
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
+		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
+		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
-		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
-		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
@@ -63,8 +63,14 @@
 				App/AppEnvironmentModifiers.swift,
 				App/AppModelContainer.swift,
 				App/uTermApp.swift,
+				Core/Models/HighlightedText.swift,
 				Core/Security/Views/AppLockGate.swift,
+				Core/Theme/DarkFormControls.swift,
+				Core/Theme/HoverBackground.swift,
 				Core/Theme/WorkspaceTheme.swift,
+				DesignKitExtras/DesignKitGallery.swift,
+				DesignKitExtras/UDCommandPalette.swift,
+				DesignKitExtras/UDMenubarPanel.swift,
 				Features/Agent/Views/AgentSidebar.swift,
 				Features/Agent/Views/AssistantView.swift,
 				Features/CommandPalette/CommandPaletteHost.swift,
@@ -108,10 +114,10 @@
 				Features/ParallelRun/Views/ParallelRunChrome.swift,
 				Features/ParallelRun/Views/ParallelRunWindowView.swift,
 				Features/ParallelRun/Views/ParallelShellGrid.swift,
+				Features/PortForward/Global/GlobalForwardRow.swift,
 				Features/PortForward/Global/GlobalForwardingModel.swift,
 				Features/PortForward/Global/GlobalForwardingSupport.swift,
 				Features/PortForward/Global/GlobalForwardingWindowView.swift,
-				Features/PortForward/Global/GlobalForwardRow.swift,
 				Features/PortForward/Views/ForwardEditorSheet.swift,
 				"Features/PortForward/Views/ForwardKind+Tint.swift",
 				Features/PortForward/Views/PortForwardListView.swift,
@@ -138,16 +144,6 @@
 				Features/Preview/Views/PreviewBodyRouter.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
 				Features/Preview/Views/PreviewTabBar.swift,
-				Features/Settings/Views/AboutSettingsView.swift,
-				Features/Settings/Views/AdvancedSettingsView.swift,
-				Features/Settings/Views/ComingSoonPlaceholder.swift,
-				Features/Settings/Views/GeneralSettingsView.swift,
-				Features/Settings/Views/ProviderEditView.swift,
-				Features/Settings/Views/ProvidersSettingsView.swift,
-				Features/Settings/Views/SettingsPrimitives.swift,
-				Features/Settings/Views/SettingsView.swift,
-				Features/Settings/Views/TerminalPreview.swift,
-				Features/Settings/Views/TerminalSettingsView.swift,
 				Features/SFTP/Views/SFTPBrowserView.swift,
 				Features/SFTP/Views/SFTPDeletionBar.swift,
 				Features/SFTP/Views/SFTPFileTable.swift,
@@ -158,12 +154,22 @@
 				Features/SFTP/Views/SFTPStatusBar.swift,
 				Features/SFTP/Views/SFTPTransfersDock.swift,
 				Features/SFTP/Views/SFTPWindowView.swift,
+				Features/Settings/Views/AboutSettingsView.swift,
+				Features/Settings/Views/AdvancedSettingsView.swift,
+				Features/Settings/Views/ComingSoonPlaceholder.swift,
+				Features/Settings/Views/GeneralSettingsView.swift,
+				Features/Settings/Views/ProviderEditView.swift,
+				Features/Settings/Views/ProvidersSettingsView.swift,
+				Features/Settings/Views/SettingsPrimitives.swift,
+				Features/Settings/Views/SettingsView.swift,
+				Features/Settings/Views/TerminalPreview.swift,
+				Features/Settings/Views/TerminalSettingsView.swift,
 				Features/Terminal/CopyableTerminalView.swift,
 				Features/Terminal/TerminalColorScheme.swift,
 				Features/Terminal/TerminalCursorShape.swift,
 				Features/Terminal/TerminalHostView.swift,
-				Features/Terminal/TerminalSession.swift,
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
+				Features/Terminal/TerminalSession.swift,
 				Features/Terminal/TerminalSettings.swift,
 				Features/Terminal/TerminalTheme.swift,
 				Features/Terminal/TerminalWindowID.swift,
@@ -361,6 +367,7 @@
 			);
 			name = uTermMobile;
 			packageProductDependencies = (
+				5544455349474E0000000002 /* UDesignKit */,
 				555353484B49540000000002 /* USSHKit */,
 				4147454E544B495400000002 /* AgentKit */,
 				10C0DE0000000000000000D1 /* SwiftTerm */,
@@ -957,6 +964,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AgentKit;
+		};
 		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
@@ -968,10 +979,6 @@
 		555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/USSHKit;
-		};
-		4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/AgentKit;
 		};
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -1109,12 +1116,27 @@
 			package = AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */;
 			productName = Markdown;
 		};
+		4147454E544B495400000001 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			productName = AgentKit;
+		};
+		4147454E544B495400000002 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			productName = AgentKit;
+		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterINI;
 		};
 		5544455349474E0000000001 /* UDesignKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */;
+			productName = UDesignKit;
+		};
+		5544455349474E0000000002 /* UDesignKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */;
 			productName = UDesignKit;
@@ -1128,16 +1150,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
 			productName = USSHKit;
-		};
-		4147454E544B495400000001 /* AgentKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
-			productName = AgentKit;
-		};
-		4147454E544B495400000002 /* AgentKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
-			productName = AgentKit;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
