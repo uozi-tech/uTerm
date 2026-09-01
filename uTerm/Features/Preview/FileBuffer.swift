@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// 文件类型 —— 影响 PreviewBodyRouter 走哪个 body。
+/// 文件类型 —— 影响 PreviewBufferBody 走哪个 body。
 nonisolated enum FileKind: Equatable, Sendable {
     case code(language: String)
     case markdown
@@ -34,7 +34,21 @@ final class FileBuffer: Identifiable {
     /// 远端已知大小。`nil` 表示目录列表 / 最近记录没有提供可信大小；不能把未知
     /// 当成 0，否则调用方容易误以为资源很小而绕过预览门禁。
     var byteSize: Int64?
-    var isDirty: Bool = false
+    var isDirty: Bool = false {
+        didSet {
+            if isDirty, !oldValue { onBecameDirty?(self) }
+        }
+    }
+    /// 内容第一次变脏时的回调（`FilePreviewModel` 用它把预览标签就地转正）。
+    ///
+    /// VS Code 语义「改动过的内容不能被下一次单击顶掉」原先靠 `isPreviewTab` 里
+    /// 那句 `!buf.isDirty` 现算；改用共享组件 `UPaneGroups` 之后，「是不是预览标签」
+    /// 变成 `UPaneTab.isTransient` 这个**存储**状态（斜体与顶替都读它），组件不接受
+    /// 调用方覆盖它的显示。所以必须在变脏那一刻主动转正，而不是等到要顶替时才判断
+    /// —— 否则脏文件的标签会一直挂着斜体。
+    ///
+    /// 参数是 buffer 自己：闭包由 buffer 持有，再捕获 buffer 就成环了。
+    @ObservationIgnored var onBecameDirty: ((FileBuffer) -> Void)?
     var state: State = .loading
 
     enum State: Equatable {
@@ -49,7 +63,7 @@ final class FileBuffer: Identifiable {
         self.kind = kind
     }
 
-    /// 文件名 —— PreviewTabBar 显示用。
+    /// 文件名 —— 标签条显示用。
     var displayName: String {
         (remotePath as NSString).lastPathComponent.isEmpty ? remotePath
             : (remotePath as NSString).lastPathComponent

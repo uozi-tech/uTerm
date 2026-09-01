@@ -2,28 +2,11 @@ import UDesignKit
 import SwiftUI
 import AppKit
 
-/// 按 `FileBuffer.kind` 路由到具体 body；无活动 buffer 时走空态。
-/// Spec 2A §2.3。
-struct PreviewBodyRouter: View {
-    let model: FilePreviewModel
-
-    var body: some View {
-        Group {
-            if let buf = model.activeBuffer {
-                PreviewBufferBody(buffer: buf, focusRequest: model.editorFocusRequest,
-                                  onDownload: { buffer, localURL in
-                    try await model.download(buffer, to: localURL)
-                }, onLoadMarkdownImage: { source, buffer in
-                    try await model.loadMarkdownImage(source: source, referencedBy: buffer)
-                })
-            } else {
-                EmptyBody(model: model)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
+/// 按 `FileBuffer.kind` 路由到具体 body。
+///
+/// 改造前这个文件里还有一个 `PreviewBodyRouter`（「没有面板树时画单文件正文，
+/// 否则画空态」）—— 组模型下永远有组，空组由 `UPaneGroupArea` 的 `emptyGroup`
+/// 闭包画「最近打开」，那层路由没有存在意义了。
 struct PreviewBufferBody: View {
     let buffer: FileBuffer
     /// 编辑器焦点请求（透传给 CodeBody → CodeEditorView 消费）。

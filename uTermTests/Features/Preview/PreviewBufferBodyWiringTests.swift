@@ -3,8 +3,10 @@ import XCTest
 
 final class PreviewBufferBodyWiringTests: XCTestCase {
     func testEveryPreviewBufferBodyCallWiresMarkdownImageLoader() throws {
+        // PreviewBodyRouter 已经删掉（组模型下空组由 `emptyGroup` 闭包画，
+        // 文件正文一律由标签的载荷驱动），它那条调用现在住在 PreviewArea 的
+        // content 闭包里；剩下的 PreviewBufferBody 定义搬去了同名文件。
         let files = [
-            "uTerm/Features/Preview/Views/PreviewBodyRouter.swift",
             "uTerm/Features/Preview/Views/PreviewArea.swift",
             "uTerm/Features/Workspace/Views/PaneView.swift",
         ]

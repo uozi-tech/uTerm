@@ -281,43 +281,6 @@ final class WorkspaceModel {
         return dropDragSource(onto: targetPaneID, zone: zone)
     }
 
-    /// 把当前文件拖拽源投放到预览/编辑区的聚焦文件 panel。
-    /// 文件预览区有自己的 panel layout，不能把文件 tab 转投到 terminal pane tree。
-    @discardableResult
-    func dropDragSourceOntoFocusedPreviewPanel(zone: PaneDropZone) -> Bool {
-        guard let dragSource else { return false }
-        defer { endDrag() }
-
-        guard case .fileBuffer(let bufferID) = dragSource else {
-            return false
-        }
-        return filePreviewModel.dropBufferOntoFocusedPanel(bufferID, zone: zone)
-    }
-
-    /// 把当前文件拖拽源投放到指定预览/编辑区 panel。
-    @discardableResult
-    func dropDragSource(ontoPreviewPanel targetPanelID: UUID,
-                        zone: PaneDropZone) -> Bool {
-        guard let dragSource else { return false }
-        defer { endDrag() }
-
-        guard case .fileBuffer(let bufferID) = dragSource else {
-            return false
-        }
-        return filePreviewModel.dropBuffer(bufferID, onto: targetPanelID, zone: zone)
-    }
-
-    /// 从 `NSItemProvider` 载荷兜底投放文件 buffer。
-    /// SwiftUI 有时会在 workspace dragSource 刷新前先命中 drop target；
-    /// 这条路径让预览区不用依赖同步登记状态也能完成分屏。
-    @discardableResult
-    func dropFileBufferProviderPayload(_ bufferID: UUID,
-                                       ontoPreviewPanel targetPanelID: UUID,
-                                       zone: PaneDropZone) -> Bool {
-        defer { endDrag() }
-        return filePreviewModel.dropBuffer(bufferID, onto: targetPanelID, zone: zone)
-    }
-
     @discardableResult
     private func dropPane(_ sourcePaneID: UUID, onto targetPaneID: UUID,
                           zone: PaneDropZone) -> Bool {
@@ -364,10 +327,13 @@ final class WorkspaceModel {
     }
 
     /// 把一个文件预览 buffer 作为新窗格投放到当前活动标签的某个窗格旁边。
+    ///
+    /// `id` 可能是预览**标签** id（`UPaneGroupArea` 写进拖拽载荷的就是它），也可能是
+    /// buffer id（旧路径 / 测试），由 `buffer(forDragPayloadID:)` 统一解析。
     @discardableResult
-    func dropFileBuffer(_ bufferID: UUID, onto targetPaneID: UUID,
+    func dropFileBuffer(_ id: UUID, onto targetPaneID: UUID,
                         zone: PaneDropZone) -> Bool {
-        guard let buffer = filePreviewModel.buffers.first(where: { $0.id == bufferID }) else {
+        guard let buffer = filePreviewModel.buffer(forDragPayloadID: id) else {
             return false
         }
         return dropFileBuffer(buffer, onto: targetPaneID, zone: zone)

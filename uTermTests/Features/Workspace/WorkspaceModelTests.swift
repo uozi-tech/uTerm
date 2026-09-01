@@ -251,42 +251,26 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
     }
 
-    func testDropRegisteredFileBufferDragSourceOntoPreviewCreatesPreviewPanelNotTerminalPane() async {
+    /// 预览区内部的分屏投放已经整个搬进 `UPaneGroupArea`（`WorkspaceModel` 那三个
+    /// `…ontoPreviewPanel` 入口随之删掉），但**跨区**的「预览标签拖进终端窗格」必须
+    /// 还在。组件写进拖拽载荷的是**标签** id，所以这条路径要能按标签 id 解析。
+    func testDropFileBufferAcceptsPreviewTabIDAsDragPayload() async {
         let ws = WorkspaceModel()
         let server = UUID()
         let tab = ws.openServer(profileID: server, title: "target")
         await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
 
-        guard let buffer = ws.filePreviewModel.buffers.first else {
-            XCTFail("workspace should have a preview buffer")
+        guard let targetPaneID = tab.focusedPaneID,
+              let buffer = ws.filePreviewModel.buffers.first,
+              let previewTabID = ws.filePreviewModel.tabIDsInDisplayOrder.first else {
+            XCTFail("workspace should have a focused pane and a preview tab")
             return
         }
+        XCTAssertNotEqual(previewTabID, buffer.id, "标签 id 与 buffer id 是两回事")
 
-        ws.beginDrag(.fileBuffer(buffer.id))
-        XCTAssertTrue(ws.dropDragSourceOntoFocusedPreviewPanel(zone: .trailing))
-        XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(tab.root.leafIDs.count, 1)
-        XCTAssertEqual(ws.filePreviewModel.panelBufferIDsInDisplayOrder, [buffer.id, buffer.id])
-    }
-
-    func testDropFileBufferProviderPayloadOntoPreviewCreatesPreviewPanelWithoutDragSource() async {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
-
-        guard let buffer = ws.filePreviewModel.buffers.first,
-              let panelID = ws.filePreviewModel.panelRoot?.firstLeafID else {
-            XCTFail("workspace should have a preview buffer and panel")
-            return
-        }
-
-        XCTAssertTrue(ws.dropFileBufferProviderPayload(buffer.id,
-                                                       ontoPreviewPanel: panelID,
-                                                       zone: .trailing))
-        XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(tab.root.leafIDs.count, 1)
-        XCTAssertEqual(ws.filePreviewModel.panelBufferIDsInDisplayOrder, [buffer.id, buffer.id])
+        XCTAssertTrue(ws.dropFileBuffer(previewTabID, onto: targetPaneID, zone: .bottom))
+        XCTAssertEqual(tab.root.leafIDs.count, 2)
+        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
     }
 
     func testSplittingFilePaneCopiesFileBuffer() {

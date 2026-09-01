@@ -16,6 +16,7 @@
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
 		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
+		5550414E4750000000000011 /* UPaneGroups in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E4750000000000001 /* UPaneGroups */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
@@ -143,9 +144,9 @@
 				Features/Preview/Views/Markdown/StreamingMarkdownView.swift,
 				Features/Preview/Views/MarkdownBody.swift,
 				Features/Preview/Views/PreviewArea.swift,
-				Features/Preview/Views/PreviewBodyRouter.swift,
+				Features/Preview/Views/PreviewBufferBody.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
-				Features/Preview/Views/PreviewTabBar.swift,
+				Features/Preview/Views/PreviewTabMenu.swift,
 				Features/SFTP/Views/SFTPBrowserView.swift,
 				Features/SFTP/Views/SFTPDeletionBar.swift,
 				Features/SFTP/Views/SFTPFileTable.swift,
@@ -288,6 +289,7 @@
 				555353484B49540000000011 /* USSHKit in Frameworks */,
 				4147454E544B495400000011 /* AgentKit in Frameworks */,
 				5541424B0000000000000011 /* UAppKitBridge in Frameworks */,
+				5550414E4750000000000011 /* UPaneGroups in Frameworks */,
 				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
@@ -406,6 +408,7 @@
 				555353484B49540000000001 /* USSHKit */,
 				4147454E544B495400000001 /* AgentKit */,
 				5541424B0000000000000001 /* UAppKitBridge */,
+				5550414E4750000000000001 /* UPaneGroups */,
 				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
 				SPRK00000000000000000001 /* Sparkle */,
 				C17ADE1000000000000001 /* Citadel */,
@@ -995,7 +998,7 @@
 			repositoryURL = "https://github.com/uozi-tech/uAppKit";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.2.0;
+				minimumVersion = 1.3.0;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
@@ -1128,6 +1131,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UAppKitBridge;
+		};
+		5550414E4750000000000001 /* UPaneGroups */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UPaneGroups;
 		};
 		4147454E544B495400000002 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;

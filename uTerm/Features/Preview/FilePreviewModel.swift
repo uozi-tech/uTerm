@@ -1,16 +1,6 @@
-import UPaneTree
+import UPaneGroups
 import SwiftUI
 import AppKit
-
-nonisolated struct FilePreviewPanel: Identifiable, Equatable, Sendable {
-    let id: UUID
-    var bufferID: UUID
-
-    init(id: UUID = UUID(), bufferID: UUID) {
-        self.id = id
-        self.bufferID = bufferID
-    }
-}
 
 /// 编辑器键盘焦点请求。用户**主动**打开文件 / 点击标签时代数 +1，
 /// `CodeEditorView` 消费后把窗口第一响应者交给文本视图，让 ⌘A/⌘C 等编辑菜单
@@ -93,15 +83,17 @@ nonisolated struct MarkdownImageCache: Sendable {
 final class FilePreviewModel {
     private static let maximumPreviewBytes: Int64 = 50 * 1024 * 1024
 
+    /// 打开着的**文档**集合。注意这不是标签顺序 —— 标签（顺序、分组、前台）住在
+    /// `panes` 里，同一个文档可以同时有多个标签落在不同的组。这里只是「谁被打开着」
+    /// 的去重集合，供刷新循环与按 id 查找用；最后一个引用它的标签被关掉时移除。
     private(set) var buffers: [FileBuffer] = []
-    var activeBufferID: UUID?
-    /// 预览（临时）tab 的 buffer id（VS Code 风）：侧栏单击以预览方式打开，下一次
-    /// 预览打开会**顶替**它；双击 / 编辑 / 保存 / 拖拽分屏则「转正」（置 nil）。
-    /// 全局至多一个预览 tab。
-    private(set) var previewTabBufferID: UUID?
-    private(set) var panelRoot: LayoutNode?
-    private(set) var panels: [UUID: FilePreviewPanel] = [:]
-    var focusedPanelID: UUID?
+
+    /// 预览区的编辑组树（VS Code 模型：分屏的叶子是组，组里一排标签）。
+    /// 载荷直接就是 `FileBuffer` —— 面板因此不必再在自己的 body 里扫 `buffers`
+    /// 数组（改造前 `buffer(forPanel:)` 就是那么干的，保活之后会让每个面板都挂在
+    /// 这个 @Observable 数组上，开/关任意标签全体重算）。
+    let panes: UPaneGroupsModel<FileBuffer>
+
     private(set) var recents: [RecentFileEntry] = []
     /// 最近一次编辑器焦点请求（语义见 `EditorFocusRequest`）。
     private(set) var editorFocusRequest: EditorFocusRequest?
@@ -149,30 +141,64 @@ final class FilePreviewModel {
          sftpProvider: @escaping () -> (any SFTPProviding)?) {
         self.recentsStore = recentsStore
         self.sftpProvider = sftpProvider
+        // 保活取默认的 .allTabs：面板内容是 CodeEditTextView 的 NSView 这类静止时
+        // 不干活的编辑器（与 uTable 的数据网格同款），拍平挂载成立 —— 切标签是纯
+        // 透明度翻转，不重建。（终端区是另一回事，隐藏的终端仍在全速重绘。）
+        self.panes = UPaneGroupsModel<FileBuffer>(policy: UPaneGroupsPolicy(
+            splitButtonMaxGroups: nil,      // 改造前预览区分屏就不限组数
+            collapsesEmptyGroups: true,
+            allowsLastGroupEmpty: true,     // 最后一个组空着显示「最近打开」
+            releasesHiddenEditorFocusOnTabSwitch: true,
+            keepAlive: .allTabs))
         self.recents = recentsStore.load()
+
+        // 关标签 → 引用计数 → 没人再引用才释放文档。改造前是「关 buffer」，于是
+        // 同一个文件被两个面板引用时必然出岔子（见 reconcilePanelsAfterClosingBuffer）。
+        panes.onTabRemoved = { [weak self] removed, remaining in
+            self?.releaseBufferIfUnreferenced(removed.payload, remaining: remaining)
+        }
+        // 组里唯一的标签被拖到本组边缘：克隆一个指向**同一个文档**的新标签。
+        // 这正是改造前 `dropBuffer` 的语义（新面板复用同一个 buffer）。
+        panes.cloneTab = { tab in UPaneTab(payload: tab.payload) }
+        // 分屏按钮开**空**组（空态显示「最近打开」），不克隆当前文件。
+        panes.makeTabForNewGroup = { nil }
     }
 
-    var activeBuffer: FileBuffer? { buffers.first { $0.id == activeBufferID } }
+    /// 活动组的前台标签所对应的文档。
+    var activeBuffer: FileBuffer? { panes.activeTab?.payload }
+    /// 兼容旧调用点（⌘W 的 `CloseIntent`、⌘S 的回落目标）。只读。
+    var activeBufferID: UUID? { panes.activeTab?.payload.id }
+    /// 活动组前台标签的 id（⌘W 的关闭目标）。
+    var activeTabID: UUID? { panes.activeTab?.id }
+    /// 标签在整个预览区的显示顺序（深度优先：先按分屏树走组，组内从左到右）。
+    var tabIDsInDisplayOrder: [UUID] { panes.allTabs.map(\.id) }
+    /// 同上，取每个标签背后的文档 id（测试与调试用）。
+    var tabBufferIDsInDisplayOrder: [UUID] { panes.allTabs.map(\.payload.id) }
 
-    var panelBufferIDsInDisplayOrder: [UUID] {
-        guard let panelRoot else { return [] }
-        return panelRoot.leafIDs.compactMap { panels[$0]?.bufferID }
+    /// 一次拖拽载荷里的 id 到底指谁。
+    ///
+    /// 预览标签的拖拽类型仍是 `.utermFileBufferID`（终端区的窗格投放代理认这个类型，
+    /// 「预览标签拖进终端窗格」这条既有路径不能丢），但组件写进 `NSItemProvider`
+    /// 的是**标签** id 而不是 buffer id —— 所以这里两种都认。
+    func buffer(forDragPayloadID id: UUID) -> FileBuffer? {
+        if let tab = panes.tab(id) { return tab.payload }
+        return buffers.first { $0.id == id }
     }
 
-    var hasMultiplePanels: Bool {
-        (panelRoot?.leafCount ?? 0) > 1
+    /// 关一个标签之前要知道的两件事：它背后的文档，以及它是不是**最后一个**引用该
+    /// 文档的标签 —— 只有那时关掉才会丢内容，脏文件确认也只在那时才该弹。
+    func closeContext(forTab tabID: UUID) -> (buffer: FileBuffer, isLastReference: Bool)? {
+        guard let tab = panes.tab(tabID) else { return nil }
+        let references = panes.allTabs.reduce(0) { $0 + ($1.payload === tab.payload ? 1 : 0) }
+        return (tab.payload, references <= 1)
     }
 
-    func buffer(forPanel panelID: UUID) -> FileBuffer? {
-        guard let bufferID = panels[panelID]?.bufferID else { return nil }
-        return buffers.first { $0.id == bufferID }
-    }
-
-    func selectTab(_ id: UUID) {
-        guard buffers.contains(where: { $0.id == id }) else { return }
-        activeBufferID = id
-        assignActiveBufferToFocusedPanel()
-        requestEditorFocus(id)
+    /// 切到某个标签（点 chip 之外的入口用；chip 自己由组件处理）。
+    func selectTab(_ tabID: UUID) {
+        guard let at = panes.locateTab(tabID),
+              let buffer = panes.groups[at.groupID]?.tabs[at.index].payload else { return }
+        panes.activateTab(groupID: at.groupID, index: at.index)
+        requestEditorFocus(buffer.id)
     }
 
     /// 用户主动打开 / 切换文件 → 请求把键盘焦点交给对应编辑器。
@@ -181,35 +207,32 @@ final class FilePreviewModel {
         editorFocusRequest = EditorFocusRequest(generation: next, bufferID: bufferID)
     }
 
-    func selectPanel(_ id: UUID) {
-        guard let panel = panels[id] else { return }
-        focusedPanelID = id
-        activeBufferID = panel.bufferID
-    }
-
     /// SFTPSidebar 文件 tap → 通知 → 调用。`asPreview` = 以预览（临时）tab 打开：
     /// 顶替现有预览 tab 而不是新增；永久打开（双击）同一路径会把预览 tab 转正。
     func open(path: String, fileSize: Int64?, mtime: Date?, asPreview: Bool = false) async {
-        // 已打开则只切 tab；永久打开命中预览 tab 时转正。
-        if let existing = buffers.first(where: { $0.remotePath == path }) {
-            activeBufferID = existing.id
-            assignActiveBufferToFocusedPanel()
-            if !asPreview { keepTab(existing.id) }
-            requestEditorFocus(existing.id)
+        // 已打开（在任何一个组里）则只切过去；永久打开命中预览标签时转正。
+        if let existing = panes.allTabs.first(where: { $0.payload.remotePath == path }) {
+            selectTab(existing.id)
+            if !asPreview { panes.promoteTransient(existing.id) }
             return
         }
 
-        let kind = LanguageDetector.kind(forPath: path)
-        let buf = FileBuffer(remotePath: path, kind: kind)
-        buf.byteSize = fileSize
-        buf.mtimeWhenLoaded = mtime
-        if asPreview {
-            insertReplacingPreviewTab(buf)
-        } else {
-            buffers.append(buf)
+        let buf = makeBuffer(remotePath: path, byteSize: fileSize, mtime: mtime)
+        buffers.append(buf)
+        // asPreview 时组件会顶替**活动组**里已有的那个 transient 标签，位置不动。
+        // 脏的预览标签在变脏那一刻就已经转正（见 FileBuffer.onBecameDirty），
+        // 所以这里不会顶掉用户改过的内容。
+        //
+        // 被顶替的那个标签是**就地覆盖**的，组件不会为它发 `onTabRemoved`
+        // （`openTab` 里 `group.tabs[slot] = tab`），所以它背后的文档得在这里自己
+        // 收 —— 否则每顶替一次就漏一个 buffer。
+        let displaced = asPreview
+            ? panes.activeGroup?.tabs.first(where: { $0.isTransient })?.payload
+            : nil
+        panes.openTab({ UPaneTab(payload: buf) }, asTransient: asPreview)
+        if let displaced {
+            releaseBufferIfUnreferenced(displaced, remaining: panes.allTabs)
         }
-        activeBufferID = buf.id
-        assignActiveBufferToFocusedPanel()
         requestEditorFocus(buf.id)
 
         // 大小检查
@@ -226,67 +249,86 @@ final class FilePreviewModel {
         await load(buf, failIfProviderMissing: true)
     }
 
-    /// 该 buffer 是否处于「预览（临时）」状态。编辑中（脏）即视作已转正 ——
-    /// 与 VS Code 一致：改动过的内容不能被下一次单击顶掉。
-    func isPreviewTab(_ id: UUID) -> Bool {
-        guard id == previewTabBufferID,
-              let buf = buffers.first(where: { $0.id == id }) else { return false }
-        return !buf.isDirty
-    }
+    /// 该标签是否处于「预览（临时）」状态（斜体、会被下一次单击顶替）。
+    /// 编辑中（脏）的标签在变脏那一刻已经转正，所以这里恒为 false。
+    func isTransientTab(_ tabID: UUID) -> Bool { panes.tab(tabID)?.isTransient ?? false }
 
-    /// 把预览 tab 转正（双击 tab / 永久打开同一文件 / 保存 / 拖拽分屏时调用）。
-    func keepTab(_ id: UUID) {
-        if previewTabBufferID == id { previewTabBufferID = nil }
-    }
+    /// 把预览标签转正（双击 / 右键「保留标签页」/ 永久打开同一文件 / 保存时调用）。
+    func keepTab(_ tabID: UUID) { panes.promoteTransient(tabID) }
 
-    /// 新预览 buffer 顶替旧预览 tab 的位置（tab 不位移）；脏的旧预览不能丢 ——
-    /// 原地转正保留，新预览追加在末尾。
-    private func insertReplacingPreviewTab(_ buf: FileBuffer) {
-        defer { previewTabBufferID = buf.id }
-        guard let oldID = previewTabBufferID,
-              let oldIdx = buffers.firstIndex(where: { $0.id == oldID }),
-              !buffers[oldIdx].isDirty else {
-            buffers.append(buf)
-            return
+    /// 把指向某文档的所有预览标签一起转正（保存 / 变脏走这条 —— 它们只认得 buffer）。
+    private func promoteTransientTabs(for buffer: FileBuffer) {
+        for tab in panes.allTabs where tab.payload === buffer && tab.isTransient {
+            panes.promoteTransient(tab.id)
         }
-        buffers[oldIdx] = buf
-        // 分屏面板可能引用被顶替的 buffer，一并改指新 buffer，避免悬空 id。
-        for panelID in Array(panels.keys) where panels[panelID]?.bufferID == oldID {
-            panels[panelID]?.bufferID = buf.id
-        }
-        if activeBufferID == oldID { activeBufferID = buf.id }
     }
 
+    /// 新建一个文档并接上「变脏即转正」的钩子。所有 buffer 都必须走这里。
+    private func makeBuffer(remotePath: String, byteSize: Int64?, mtime: Date?) -> FileBuffer {
+        let buf = FileBuffer(remotePath: remotePath,
+                             kind: LanguageDetector.kind(forPath: remotePath))
+        buf.byteSize = byteSize
+        buf.mtimeWhenLoaded = mtime
+        buf.onBecameDirty = { [weak self] buffer in
+            self?.promoteTransientTabs(for: buffer)
+        }
+        return buf
+    }
+
+    /// `onTabRemoved` 钩子：没有别的标签再引用这个文档时才真的释放它。
+    /// 改造前是「关标签 = 关 buffer」，于是同一个文件被两个面板引用时必然出岔子。
+    private func releaseBufferIfUnreferenced(_ buffer: FileBuffer,
+                                             remaining: [UPaneTab<FileBuffer>]) {
+        guard !remaining.contains(where: { $0.payload === buffer }) else { return }
+        buffer.onBecameDirty = nil
+        buffers.removeAll { $0 === buffer }
+    }
+
+    /// 恢复上次打开的文件。
+    ///
+    /// 快照格式一个字节都没变（`openFiles` 平铺列表 + `activeFileIndex`）：改造前
+    /// 面板树本来就不持久化，恢复时 `rebuildSinglePanelForActiveBuffer()` 只重建
+    /// 一个面板。所以迁到组模型是**恒等映射** —— 全部标签塞进唯一一个组，
+    /// `activeFileIndex` 成为该组的 `activeIndex`，既不丢东西也不需要迁移代码。
     func restoreOpenFiles(_ snapshots: [OpenFileSnapshot]?, activeIndex: Int?) {
+        for buf in buffers { buf.onBecameDirty = nil }
         buffers.removeAll()
-        previewTabBufferID = nil   // 恢复的标签一律永久
         let snapshots = snapshots ?? []
-        for snapshot in snapshots {
-            let buf = FileBuffer(
-                remotePath: snapshot.remotePath,
-                kind: LanguageDetector.kind(forPath: snapshot.remotePath))
-            buf.byteSize = snapshot.byteSize
-            buf.mtimeWhenLoaded = snapshot.mtimeWhenLoaded
-            buffers.append(buf)
+        let restored = UPaneGroupsSnapshot<OpenFileSnapshot>(
+            root: .leaf(groupIndex: 0),
+            groups: [.init(tabs: snapshots, activeIndex: activeIndex ?? 0)],
+            activeGroupIndex: 0)
+        panes.restore(restored) { [weak self] snapshot in
+            guard let self else { return nil }
+            let buf = self.makeBuffer(remotePath: snapshot.remotePath,
+                                      byteSize: snapshot.byteSize,
+                                      mtime: snapshot.mtimeWhenLoaded)
+            self.buffers.append(buf)
+            return UPaneTab(payload: buf)   // 恢复的标签一律永久，不是预览标签
         }
-        if let activeIndex, buffers.indices.contains(activeIndex) {
-            activeBufferID = buffers[activeIndex].id
-        } else {
-            activeBufferID = buffers.first?.id
-        }
-        rebuildSinglePanelForActiveBuffer()
     }
 
+    /// 存盘用的打开文件清单。按**标签显示顺序**（深度优先）平铺，同一个文档被多个
+    /// 标签引用时只写一条 —— 与改造前的格式逐字相同。
     func openFileSnapshots() -> ([OpenFileSnapshot], Int?) {
         var activeIndex: Int?
-        let snapshots = buffers.enumerated().map { index, buf in
-            if buf.id == activeBufferID {
-                activeIndex = index
+        var indexByBuffer: [ObjectIdentifier: Int] = [:]
+        var snapshots: [OpenFileSnapshot] = []
+        let activeTabID = panes.activeTab?.id
+        for tab in panes.allTabs {
+            let key = ObjectIdentifier(tab.payload)
+            let index: Int
+            if let existing = indexByBuffer[key] {
+                index = existing
+            } else {
+                index = snapshots.count
+                indexByBuffer[key] = index
+                snapshots.append(OpenFileSnapshot(
+                    remotePath: tab.payload.remotePath,
+                    byteSize: tab.payload.byteSize,
+                    mtimeWhenLoaded: tab.payload.mtimeWhenLoaded))
             }
-            return OpenFileSnapshot(
-                remotePath: buf.remotePath,
-                byteSize: buf.byteSize,
-                mtimeWhenLoaded: buf.mtimeWhenLoaded)
+            if tab.id == activeTabID { activeIndex = index }
         }
         return (snapshots, activeIndex)
     }
@@ -488,84 +530,13 @@ final class FilePreviewModel {
         return data
     }
 
+    /// 关一个标签。文档由 `onTabRemoved` 的引用计数负责释放。
+    /// 脏文件确认在上层（`WorkspaceWindowView.requestCloseTab`），这里是真关。
     @discardableResult
-    func close(_ id: UUID, savingIfDirty: Bool) -> Bool {
-        guard let idx = buffers.firstIndex(where: { $0.id == id }) else { return false }
-        buffers.remove(at: idx)
-        if previewTabBufferID == id { previewTabBufferID = nil }
-        if activeBufferID == id {
-            activeBufferID = buffers.first?.id
-        }
-        reconcilePanelsAfterClosingBuffer(id)
+    func closeTab(_ tabID: UUID) -> Bool {
+        guard let at = panes.locateTab(tabID) else { return false }
+        panes.closeTab(groupID: at.groupID, index: at.index)
         return true
-    }
-
-    @discardableResult
-    func dropBufferOntoFocusedPanel(_ bufferID: UUID, zone: PaneDropZone) -> Bool {
-        guard let targetPanelID = focusedPanelID ?? panelRoot?.firstLeafID else {
-            return false
-        }
-        return dropBuffer(bufferID, onto: targetPanelID, zone: zone)
-    }
-
-    @discardableResult
-    func dropBuffer(_ bufferID: UUID, onto targetPanelID: UUID,
-                    zone: PaneDropZone) -> Bool {
-        guard zone != .center,
-              buffers.contains(where: { $0.id == bufferID }),
-              let panelRoot,
-              panels[targetPanelID] != nil
-        else {
-            return false
-        }
-
-        let direction: SplitDirection
-        let newLeafFirst: Bool
-        switch zone {
-        case .leading:  direction = .horizontal; newLeafFirst = true
-        case .trailing: direction = .horizontal; newLeafFirst = false
-        case .top:      direction = .vertical;   newLeafFirst = true
-        case .bottom:   direction = .vertical;   newLeafFirst = false
-        case .center:   return false
-        }
-
-        let panel = FilePreviewPanel(bufferID: bufferID)
-        panels[panel.id] = panel
-        self.panelRoot = panelRoot.splitting(
-            paneID: targetPanelID,
-            direction: direction,
-            newPaneID: panel.id,
-            splitID: UUID(),
-            newLeafFirst: newLeafFirst)
-        focusedPanelID = panel.id
-        activeBufferID = bufferID
-        keepTab(bufferID)   // 拖去分屏 = 用户要留着它，预览转正
-        return true
-    }
-
-    @discardableResult
-    func closePanel(_ panelID: UUID) -> Bool {
-        guard let panelRoot,
-              panelRoot.leafCount > 1,
-              let newRoot = panelRoot.removingLeaf(paneID: panelID)
-        else {
-            return false
-        }
-
-        panels[panelID] = nil
-        self.panelRoot = newRoot
-        if focusedPanelID == panelID {
-            focusedPanelID = newRoot.firstLeafID
-        }
-        if let focusedPanelID,
-           let bufferID = panels[focusedPanelID]?.bufferID {
-            activeBufferID = bufferID
-        }
-        return true
-    }
-
-    func setPanelFraction(_ fraction: Double, splitID: UUID) {
-        panelRoot = panelRoot?.settingFraction(fraction, splitID: splitID)
     }
 
     func save(_ id: UUID) async -> SaveOutcome {
@@ -597,7 +568,7 @@ final class FilePreviewModel {
             buf.mtimeWhenLoaded = newStat?.mtime ?? Date()
             buf.isDirty = false
             buf.state = .loaded
-            keepTab(id)   // 保存过的文件不该再被下一次单击顶掉
+            promoteTransientTabs(for: buf)   // 保存过的文件不该再被下一次单击顶掉
             return .saved
         } catch {
             Self.applyPreviewLoadFailure(error, to: buf)
@@ -637,78 +608,16 @@ final class FilePreviewModel {
 
     func dispose() {
         remoteCommandRefreshGeneration &+= 1
+        for buf in buffers { buf.onBecameDirty = nil }
         buffers.removeAll()
-        activeBufferID = nil
-        previewTabBufferID = nil
         editorFocusRequest = nil
-        panelRoot = nil
-        panels.removeAll()
-        focusedPanelID = nil
+        // reset 不走 onTabRemoved —— 释放整个工作区不是逐个关标签。
+        panes.reset()
         markdownImageCache.removeAll()
     }
 
     func clearMarkdownImageCache() {
         markdownImageCache.removeAll()
-    }
-
-    private func assignActiveBufferToFocusedPanel() {
-        guard let activeBufferID else {
-            panelRoot = nil
-            panels.removeAll()
-            focusedPanelID = nil
-            return
-        }
-
-        if panelRoot == nil {
-            let panel = FilePreviewPanel(bufferID: activeBufferID)
-            panelRoot = .leaf(paneID: panel.id)
-            panels = [panel.id: panel]
-            focusedPanelID = panel.id
-            return
-        }
-
-        let targetID = focusedPanelID ?? panelRoot?.firstLeafID
-        guard let targetID, var panel = panels[targetID] else {
-            rebuildSinglePanelForActiveBuffer()
-            return
-        }
-        panel.bufferID = activeBufferID
-        panels[targetID] = panel
-        focusedPanelID = targetID
-    }
-
-    private func rebuildSinglePanelForActiveBuffer() {
-        guard let activeBufferID else {
-            panelRoot = nil
-            panels.removeAll()
-            focusedPanelID = nil
-            return
-        }
-
-        let panel = FilePreviewPanel(bufferID: activeBufferID)
-        panelRoot = .leaf(paneID: panel.id)
-        panels = [panel.id: panel]
-        focusedPanelID = panel.id
-    }
-
-    private func reconcilePanelsAfterClosingBuffer(_ closedID: UUID) {
-        guard let fallbackID = activeBufferID else {
-            panelRoot = nil
-            panels.removeAll()
-            focusedPanelID = nil
-            return
-        }
-
-        for panelID in Array(panels.keys) {
-            guard panels[panelID]?.bufferID == closedID else { continue }
-            var panel = panels[panelID]
-            panel?.bufferID = fallbackID
-            panels[panelID] = panel
-        }
-        if let focusedPanelID,
-           let bufferID = panels[focusedPanelID]?.bufferID {
-            activeBufferID = bufferID
-        }
     }
 
     private func kindTag(for kind: FileKind) -> String {
