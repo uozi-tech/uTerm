@@ -1,4 +1,5 @@
 import UDesignKit
+import UAppKitBridge
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
@@ -95,7 +96,14 @@ struct PaneView: View {
                     lineWidth: 1.5)
         )
         .contentShape(Rectangle())
-        .onTapGesture { onFocus() }
+        // 不能用 SwiftUI 手势设置聚焦：窗格内容是 SwiftTerm 的终端视图（NSView，
+        // 自己实现 mouseDown 并抢 first responder），而 SwiftUI 在 macOS 上不装
+        // NSGestureRecognizer，命中测试一落到那个 NSView，NSHostingView.mouseDown
+        // 就不会被调用 —— 挂在这里的 .onTapGesture 永不触发。症状是点进另一个窗格
+        // 的终端后，焦点蓝框不动，随后的 ⌘D 分屏、⌘W 关窗格、状态栏显示的会话，
+        // 全都还作用在上一个窗格上。改用 NSEvent 旁观探针（不消费事件、对命中测试
+        // 透明，终端的选中/拖拽/first responder 照常）。
+        .onPointerDown { onFocus() }
         .onDrop(of: [.utermPaneID, .utermTabID],
                 delegate: paneDropDelegate)
         .task(id: pane.id) { await connect() }
