@@ -482,10 +482,8 @@
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */,
 				555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */,
-				4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */,
-				5541424B0000000000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UAppKitBridge" */,
+				5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */,
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
 				A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -968,21 +966,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/AgentKit;
-		};
-		5541424B0000000000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UAppKitBridge" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../uTable/Packages/UAppKitBridge;
-		};
 		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
-		};
-		5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../uTable/Packages/UDesignKit;
 		};
 		555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -1003,6 +989,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/uozi-tech/uAppKit";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-asn1.git";
@@ -1126,17 +1120,17 @@
 		};
 		4147454E544B495400000001 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = AgentKit;
 		};
 		5541424B0000000000000001 /* UAppKitBridge */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5541424B0000000000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UAppKitBridge" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UAppKitBridge;
 		};
 		4147454E544B495400000002 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4147454E544B495400000000 /* XCLocalSwiftPackageReference "Packages/AgentKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = AgentKit;
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
@@ -1146,12 +1140,12 @@
 		};
 		5544455349474E0000000001 /* UDesignKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UDesignKit;
 		};
 		5544455349474E0000000002 /* UDesignKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5544455349474E0000000000 /* XCLocalSwiftPackageReference "../uTable/Packages/UDesignKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UDesignKit;
 		};
 		555353484B49540000000001 /* USSHKit */ = {

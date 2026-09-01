@@ -1,5 +1,5 @@
 {
-  "originHash" : "b5d7800fbd1ef8ed1c1cee5be23d96fe8a1df0c10a2297aa02776c27f21fbbbb",
+  "originHash" : "743289598bb8b2ff21cea441938e3094e62f2540f1024f27946d40af076cf4ad",
   "pins" : [
     {
       "identity" : "bigint",
@@ -182,6 +182,15 @@
       "location" : "https://github.com/tree-sitter/tree-sitter-typescript",
       "state" : {
         "revision" : "75b3874edb2dc714fb1fd77a32013d0f8699989f"
+      }
+    },
+    {
+      "identity" : "uappkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/uozi-tech/uAppKit",
+      "state" : {
+        "revision" : "3cbcd171a4d603efebace9fff4a31ddd9b0955ff",
+        "version" : "1.0.0"
       }
     }
   ],
