@@ -254,6 +254,41 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         }
     }
 
+    /// 无条件 feed —— 后台（非活动）标签也在全速解析 VT，这是**有意保留**的。
+    ///
+    /// 2026-09-01 量过它的成本结构，别再凭「批量化能省」的直觉来改这里。
+    /// 测法：同进程内交替翻转块大小做配对测量（这台机器 load 在 4–14 乱跳，
+    /// 跨进程不可比），6 个 `TerminalView` 交错喂同一份 `script(1)` 录的真实
+    /// 语料（带色 git log/ls -laR + vim 进出 alternate screen + top 全屏重绘），
+    /// 每轮正逆序交替、7 轮取中位数，Release 构建。
+    ///
+    ///   每次 feed 的块大小    调用次数    6.57 MB 总耗时
+    ///   64 B                 107 719     176.8 ms
+    ///   433 B（线上实测均值）  15 922      157.4 ms
+    ///   32 KB                211         153.3 ms
+    ///   256 KB               27          153.9 ms
+    ///
+    /// 拟合出来：**每次调用的固定开销只有 0.21 µs，按字节的解析是 23.3 ms/MB**
+    /// （随内容在 9–27 ms/MB 之间浮动）。也就是说线上那 433 B 的包里，固定开销
+    /// 只占 feed 总耗时的 2.6%；把 flush 从 433 B 攒到 32 KB 就只能省这 2.6%，
+    /// 连 64 B → 256 KB 的极端全跨度也只有 13%。批量化在这里没有收益可拿，
+    /// 而调大 `maxBytesPerOutputFlush` / `outputFlushActiveMs` 会实打实地推高
+    /// echo 延迟。
+    ///
+    /// 绝对量级也不值得动：6 个后台标签合计 142 KB/s 的输出，在 Release 下
+    /// ≈ 3.3 ms/s 主线程时间（0.3% 单核）。`uAppKit/docs/pane-groups-design.md`
+    /// §6-2 记的 31.5–65 ms/s 是 **Debug** 构建（`-Onone`）量的，不代表发布版：
+    /// 同一份语料同一套测法，Debug 224.8 ms/MB vs Release 23.9 ms/MB，差 9.4×。
+    ///
+    /// 再往下就只剩「后台标签先不解析、切回来再补」。它省不到 CPU（字节一个不少
+    /// 还是要解析，只是挪到切回来的那一刻，反而制造一次卡顿），却必然改变行为：
+    /// 补 feed 之前若发生过 resize，积压字节会按新 cols 重排，切回来的内容与不
+    /// 优化时不再逐字相同。为 3.3 ms/s 付这个代价不划算。
+    ///
+    /// 顺带钉住一条：SwiftTerm 的解析器对分块边界是中立的 —— 上面五种块大小
+    /// 喂完同一份语料后，主屏/alt 屏全文、逐格字符与属性、scrollback、光标位置
+    /// 全部逐字相同（实测比对过指纹）。所以将来真要改批量策略，正确性这一侧
+    /// 是安全的，不安全的只有上面那条「延迟到可见时再补」。
     private func flushPendingOutput(generation: Int) -> Bool {
         guard feedGeneration == generation else { return false }
         let chunk = outputBuffer.drain(maxBytes: maxBytesPerOutputFlush, generation: generation)
