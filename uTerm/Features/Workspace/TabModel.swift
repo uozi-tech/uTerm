@@ -1,3 +1,4 @@
+import UPaneTree
 import SwiftUI
 
 /// 一个工作区标签：持有一棵 `LayoutNode` 布局树、窗格 id → `PaneModel` 映射、

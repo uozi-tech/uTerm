@@ -1,3 +1,4 @@
+import UPaneTree
 import AgentKit
 import AppKit
 import SwiftUI

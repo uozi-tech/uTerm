@@ -18,6 +18,7 @@
 		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
+		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
 		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
@@ -198,7 +199,6 @@
 				Features/Welcome/Views/WelcomeToolbar.swift,
 				Features/Welcome/Views/WelcomeView.swift,
 				Features/Workspace/CloseIntent.swift,
-				Features/Workspace/LayoutNode.swift,
 				Features/Workspace/PaneDragPayload.swift,
 				Features/Workspace/PaneDragState.swift,
 				Features/Workspace/PaneModel.swift,
@@ -284,6 +284,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5544455349474E0000000011 /* UDesignKit in Frameworks */,
+				5550414E45540000000011 /* UPaneTree in Frameworks */,
 				555353484B49540000000011 /* USSHKit in Frameworks */,
 				4147454E544B495400000011 /* AgentKit in Frameworks */,
 				5541424B0000000000000011 /* UAppKitBridge in Frameworks */,
@@ -401,6 +402,7 @@
 			name = uTerm;
 			packageProductDependencies = (
 				5544455349474E0000000001 /* UDesignKit */,
+				5550414E45540000000001 /* UPaneTree */,
 				555353484B49540000000001 /* USSHKit */,
 				4147454E544B495400000001 /* AgentKit */,
 				5541424B0000000000000001 /* UAppKitBridge */,
@@ -993,7 +995,7 @@
 			repositoryURL = "https://github.com/uozi-tech/uAppKit";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.1.0;
+				minimumVersion = 1.2.0;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
@@ -1141,6 +1143,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UDesignKit;
+		};
+		5550414E45540000000001 /* UPaneTree */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UPaneTree;
 		};
 		5544455349474E0000000002 /* UDesignKit */ = {
 			isa = XCSwiftPackageProductDependency;

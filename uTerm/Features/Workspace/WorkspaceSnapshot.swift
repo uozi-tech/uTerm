@@ -1,3 +1,4 @@
+import UPaneTree
 import Foundation
 
 /// 持久化用的布局树快照。叶子记录 `serverProfileID`。

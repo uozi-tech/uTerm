@@ -1,3 +1,4 @@
+import UPaneTree
 import XCTest
 @testable import uTerm
 

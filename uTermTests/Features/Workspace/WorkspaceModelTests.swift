@@ -1,3 +1,4 @@
+import UPaneTree
 import XCTest
 import SwiftData
 @testable import uTerm
