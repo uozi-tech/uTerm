@@ -482,10 +482,9 @@
 			mainGroup = 85D6BEE62FBC4E7E00FC90D8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */,
 				5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */,
 				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
-				A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */,
+				C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
 				B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */,
@@ -970,17 +969,9 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
 		};
-		555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/USSHKit;
-		};
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/SwiftTerm;
-		};
-		A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = vendor/Citadel;
 		};
 		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -989,12 +980,20 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/uozi-tech/Citadel";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
 		5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/uozi-tech/uAppKit";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.0.0;
+				minimumVersion = 1.1.0;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
@@ -1100,7 +1099,7 @@
 		};
 		10C0DE0000000000000000D2 /* Citadel */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */;
+			package = C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
 			productName = Citadel;
 		};
 		10C0DE0000000000000000D3 /* SwiftASN1 */ = {
@@ -1150,12 +1149,12 @@
 		};
 		555353484B49540000000001 /* USSHKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = USSHKit;
 		};
 		555353484B49540000000002 /* USSHKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 555353484B49540000000000 /* XCLocalSwiftPackageReference "Packages/USSHKit" */;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = USSHKit;
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
@@ -1190,7 +1189,7 @@
 		};
 		C17ADE1000000000000001 /* Citadel */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF0CC /* XCLocalSwiftPackageReference "vendor/Citadel" */;
+			package = C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
 			productName = Citadel;
 		};
 		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {
