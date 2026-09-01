@@ -1,8 +1,18 @@
+import UPaneGroups
 import XCTest
 @testable import uTerm
 
 @MainActor
 final class FilePreviewModelTests: XCTestCase {
+
+    /// 标签的显示顺序（改造后标签顺序住在 `panes` 里，不再等于 `buffers` 的插入顺序）。
+    private func tabPaths(_ m: FilePreviewModel) -> [String] {
+        m.panes.allTabs.map(\.payload.remotePath)
+    }
+
+    private func tabID(_ m: FilePreviewModel, path: String) -> UUID? {
+        m.panes.allTabs.first { $0.payload.remotePath == path }?.id
+    }
 
     private func makeModel() -> (FilePreviewModel, MockSFTP) {
         let mock = MockSFTP()
@@ -203,8 +213,9 @@ final class FilePreviewModelTests: XCTestCase {
         await m.open(path: "/b.swift", fileSize: 1, mtime: nil)
         let bufA = m.buffers.first { $0.remotePath == "/a.swift" }!
         let bufB = m.buffers.first { $0.remotePath == "/b.swift" }!
-        // 模拟分屏焦点错位：activeBufferID 停在 A（未脏），实际被编辑的是 B。
-        m.activeBufferID = bufA.id
+        // 模拟分屏焦点错位：活动标签停在 A（未脏），实际被编辑的是 B。
+        m.selectTab(try XCTUnwrap(tabID(m, path: "/a.swift")))
+        XCTAssertEqual(m.activeBufferID, bufA.id)
         bufB.text = "edited"; bufB.isDirty = true
 
         let result = await m.save(bufB.id)        // 编辑器带入 B 的 id
@@ -261,14 +272,14 @@ final class FilePreviewModelTests: XCTestCase {
         XCTAssertTrue(buffer.isDirty)
     }
 
-    func test_close_removesBuffer() async throws {
+    func test_closeTab_releasesBuffer() async throws {
         let (m, mock) = makeModel()
         try await mock.write("/x.swift", data: Data("a".utf8))
         await m.open(path: "/x.swift", fileSize: 1, mtime: nil)
-        let id = m.buffers.first!.id
-        m.close(id, savingIfDirty: false)
+        m.closeTab(try XCTUnwrap(tabID(m, path: "/x.swift")))
         XCTAssertTrue(m.buffers.isEmpty)
         XCTAssertNil(m.activeBufferID)
+        XCTAssertEqual(m.panes.groupCount, 1, "最后一个组留着显示「最近打开」空态")
     }
 
     // MARK: 预览（临时）tab 语义 —— VS Code 风：单击预览打开、双击 / 编辑 / 保存转正
@@ -281,9 +292,9 @@ final class FilePreviewModelTests: XCTestCase {
         await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
         await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
 
-        XCTAssertEqual(m.buffers.map(\.remotePath), ["/b.swift"], "新预览应顶替旧预览")
+        XCTAssertEqual(tabPaths(m), ["/b.swift"], "新预览应顶替旧预览")
         let b = try XCTUnwrap(m.buffers.first)
-        XCTAssertTrue(m.isPreviewTab(b.id))
+        XCTAssertTrue(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/b.swift"))))
         XCTAssertEqual(m.activeBufferID, b.id)
     }
 
@@ -298,9 +309,9 @@ final class FilePreviewModelTests: XCTestCase {
         await m.open(path: "/c.swift", fileSize: 1, mtime: nil, asPreview: true)
 
         // 预览 tab 在原位（index 0）被 c 顶替，永久 tab b 不受影响。
-        XCTAssertEqual(m.buffers.map(\.remotePath), ["/c.swift", "/b.swift"])
-        XCTAssertTrue(m.isPreviewTab(m.buffers[0].id))
-        XCTAssertFalse(m.isPreviewTab(m.buffers[1].id))
+        XCTAssertEqual(tabPaths(m), ["/c.swift", "/b.swift"])
+        XCTAssertTrue(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/c.swift"))))
+        XCTAssertFalse(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/b.swift"))))
     }
 
     func test_permanentOpen_promotesExistingPreviewTab() async throws {
@@ -309,13 +320,13 @@ final class FilePreviewModelTests: XCTestCase {
         try await mock.write("/b.swift", data: Data("b".utf8))
 
         await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
-        let a = try XCTUnwrap(m.buffers.first)
         await m.open(path: "/a.swift", fileSize: 1, mtime: nil)   // 双击同一文件
 
-        XCTAssertFalse(m.isPreviewTab(a.id), "永久打开同一路径应把预览 tab 转正")
+        XCTAssertFalse(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/a.swift"))),
+                       "永久打开同一路径应把预览 tab 转正")
         // 转正后，下一个预览不再顶替它。
         await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
-        XCTAssertEqual(m.buffers.map(\.remotePath), ["/a.swift", "/b.swift"])
+        XCTAssertEqual(tabPaths(m), ["/a.swift", "/b.swift"])
     }
 
     func test_dirtyPreviewTab_isPromotedNotReplaced() async throws {
@@ -326,12 +337,13 @@ final class FilePreviewModelTests: XCTestCase {
         await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
         let a = try XCTUnwrap(m.buffers.first)
         a.text = "edited"; a.isDirty = true
-        XCTAssertFalse(m.isPreviewTab(a.id), "编辑中的预览 tab 应视作已转正")
+        XCTAssertFalse(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/a.swift"))),
+                       "编辑中的预览 tab 应在变脏那一刻就地转正")
 
         await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
-        XCTAssertEqual(m.buffers.map(\.remotePath), ["/a.swift", "/b.swift"],
+        XCTAssertEqual(tabPaths(m), ["/a.swift", "/b.swift"],
                        "脏预览不能被顶掉，新预览追加")
-        XCTAssertTrue(m.isPreviewTab(m.buffers[1].id))
+        XCTAssertTrue(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/b.swift"))))
     }
 
     func test_save_promotesPreviewTab() async throws {
@@ -343,8 +355,8 @@ final class FilePreviewModelTests: XCTestCase {
 
         let result = await m.save(a.id)
         if case .saved = result {} else { return XCTFail("expected .saved, got \(result)") }
-        // 保存清脏后若未显式转正，isPreviewTab 会回退为 true（又能被顶掉）——须为 false。
-        XCTAssertFalse(m.isPreviewTab(a.id))
+        // 保存清脏后若未显式转正，标签会回退成预览态（又能被顶掉）——须为 false。
+        XCTAssertFalse(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/a.swift"))))
     }
 
     func test_closePreviewTab_clearsPreviewState() async throws {
@@ -353,12 +365,11 @@ final class FilePreviewModelTests: XCTestCase {
         try await mock.write("/b.swift", data: Data("b".utf8))
 
         await m.open(path: "/a.swift", fileSize: 1, mtime: nil, asPreview: true)
-        let a = try XCTUnwrap(m.buffers.first)
-        m.close(a.id, savingIfDirty: false)
+        m.closeTab(try XCTUnwrap(tabID(m, path: "/a.swift")))
 
         await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
-        XCTAssertEqual(m.buffers.map(\.remotePath), ["/b.swift"])
-        XCTAssertTrue(m.isPreviewTab(m.buffers[0].id))
+        XCTAssertEqual(tabPaths(m), ["/b.swift"])
+        XCTAssertTrue(m.isTransientTab(try XCTUnwrap(tabID(m, path: "/b.swift"))))
     }
 
     func test_restoreOpenFilesRecreatesTabsAndLoadsAfterProviderIsReady() async throws {
@@ -404,7 +415,7 @@ final class FilePreviewModelTests: XCTestCase {
         await m.open(path: "/b.swift", fileSize: 9, mtime: nil)
         let before = try XCTUnwrap(m.editorFocusRequest)
 
-        m.selectTab(m.buffers[0].id)
+        m.selectTab(try XCTUnwrap(tabID(m, path: "/a.md")))
 
         let after = try XCTUnwrap(m.editorFocusRequest)
         XCTAssertEqual(after.bufferID, m.buffers[0].id)
@@ -422,5 +433,134 @@ final class FilePreviewModelTests: XCTestCase {
         await m.loadRestoredBuffersIfNeeded()
 
         XCTAssertNil(m.editorFocusRequest)
+    }
+
+    // MARK: - 编辑组模型（P2：改用 uAppKit 的 UPaneGroups）
+
+    /// 分屏出去的第二个组拿到的是**同一个文档**的第二个标签 —— 改造前
+    /// `dropBuffer` 建的新面板也是复用同一个 buffer，语义不变。
+    func test_dragToOwnEdge_clonesTabOntoSameDocument() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)
+
+        let tab = try XCTUnwrap(m.panes.allTabs.first)
+        let group = try XCTUnwrap(m.panes.activeGroupID)
+        m.panes.moveTab(tab.id, toGroup: group, zone: .trailing)
+
+        XCTAssertEqual(m.panes.groupCount, 2)
+        XCTAssertEqual(m.panes.allTabs.count, 2)
+        XCTAssertEqual(m.buffers.count, 1, "两个标签指向同一个文档，不该复制文档")
+        XCTAssertTrue(m.panes.allTabs.allSatisfy { $0.payload === m.buffers[0] })
+    }
+
+    /// 关标签走引用计数：还有别的标签指着同一个文档时不释放它。
+    /// 改造前 `close(bufferID:)` 直接删 buffer，再由
+    /// `reconcilePanelsAfterClosingBuffer` 把剩下的面板改指 activeBufferID ——
+    /// 结果两个面板显示同一个文件。那段整个删掉了。
+    func test_closeTab_keepsDocumentWhileAnotherTabStillReferencesIt() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        try await mock.write("/b.swift", data: Data("b".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil)
+
+        let aTab = try XCTUnwrap(tabID(m, path: "/a.swift"))
+        let group = try XCTUnwrap(m.panes.activeGroupID)
+        m.panes.moveTab(aTab, toGroup: group, zone: .bottom)   // a 搬到新组
+        XCTAssertEqual(m.panes.groupCount, 2)
+
+        // 再把 a 克隆一份：同一个文档两个标签。
+        let movedTab = try XCTUnwrap(tabID(m, path: "/a.swift"))
+        let aGroup = try XCTUnwrap(m.panes.locateTab(movedTab)?.groupID)
+        m.panes.moveTab(movedTab, toGroup: aGroup, zone: .trailing)
+        XCTAssertEqual(m.panes.allTabs.filter { $0.payload.remotePath == "/a.swift" }.count, 2)
+
+        let aBuffer = try XCTUnwrap(m.buffers.first { $0.remotePath == "/a.swift" })
+        m.closeTab(try XCTUnwrap(tabID(m, path: "/a.swift")))
+        XCTAssertTrue(m.buffers.contains { $0 === aBuffer }, "还有一个标签指着它，不该释放")
+
+        m.closeTab(try XCTUnwrap(tabID(m, path: "/a.swift")))
+        XCTAssertFalse(m.buffers.contains { $0 === aBuffer }, "最后一个引用没了才释放")
+        XCTAssertEqual(tabPaths(m), ["/b.swift"])
+    }
+
+    /// 持久化是恒等映射：`openFiles` 平铺列表 + `activeFileIndex` 一个字节没变，
+    /// 恢复时全部塞进唯一一个组。
+    func test_openFileSnapshots_roundTripsThroughOneGroup() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.md", data: Data("# A".utf8))
+        try await mock.write("/b.swift", data: Data("let b = 1".utf8))
+        await m.open(path: "/a.md", fileSize: 3, mtime: nil)
+        await m.open(path: "/b.swift", fileSize: 9, mtime: nil)
+        m.selectTab(try XCTUnwrap(tabID(m, path: "/a.md")))
+
+        let (snapshots, activeIndex) = m.openFileSnapshots()
+        XCTAssertEqual(snapshots.map(\.remotePath), ["/a.md", "/b.swift"])
+        XCTAssertEqual(activeIndex, 0)
+
+        let (restored, _) = makeModel()
+        restored.restoreOpenFiles(snapshots, activeIndex: activeIndex)
+        XCTAssertEqual(tabPaths(restored), ["/a.md", "/b.swift"])
+        XCTAssertEqual(restored.panes.groupCount, 1)
+        XCTAssertEqual(restored.activeBuffer?.remotePath, "/a.md")
+        XCTAssertTrue(restored.panes.allTabs.allSatisfy { !$0.isTransient },
+                      "恢复的标签一律永久，不是预览标签")
+    }
+
+    /// 同一个文档被两个标签引用时，快照里只写一条（格式与改造前逐字相同）。
+    func test_openFileSnapshots_dedupesDocumentsSharedByTwoTabs() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)
+        let tab = try XCTUnwrap(m.panes.allTabs.first)
+        m.panes.moveTab(tab.id, toGroup: try XCTUnwrap(m.panes.activeGroupID), zone: .trailing)
+
+        let (snapshots, activeIndex) = m.openFileSnapshots()
+        XCTAssertEqual(snapshots.map(\.remotePath), ["/a.swift"])
+        XCTAssertEqual(activeIndex, 0)
+    }
+
+    /// 拖拽载荷里的 id 既可能是标签 id（组件写的），也可能是 buffer id（旧路径）。
+    func test_bufferForDragPayloadID_acceptsBothTabAndBufferIDs() async throws {
+        let (m, mock) = makeModel()
+        try await mock.write("/a.swift", data: Data("a".utf8))
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)
+
+        let buffer = try XCTUnwrap(m.buffers.first)
+        let tab = try XCTUnwrap(m.panes.allTabs.first)
+        XCTAssertNotEqual(tab.id, buffer.id)
+        XCTAssertTrue(m.buffer(forDragPayloadID: tab.id) === buffer)
+        XCTAssertTrue(m.buffer(forDragPayloadID: buffer.id) === buffer)
+        XCTAssertNil(m.buffer(forDragPayloadID: UUID()))
+    }
+
+    /// 预览标签是**每组**至多一个（改造前是全局至多一个）。
+    func test_transientTab_isPerGroup() async throws {
+        let (m, mock) = makeModel()
+        for path in ["/a.swift", "/b.swift", "/c.swift", "/d.swift"] {
+            try await mock.write(path, data: Data("x".utf8))
+        }
+        await m.open(path: "/a.swift", fileSize: 1, mtime: nil)               // 永久
+        await m.open(path: "/b.swift", fileSize: 1, mtime: nil, asPreview: true)
+
+        // 把永久标签 a 拖到右边成第二个组，b 的预览标签留在原组。
+        let firstGroup = try XCTUnwrap(m.panes.activeGroupID)
+        m.panes.moveTab(try XCTUnwrap(tabID(m, path: "/a.swift")),
+                        toGroup: firstGroup, zone: .trailing)
+        XCTAssertEqual(m.panes.groupCount, 2)
+
+        // 新组里再开一个预览：两个组各自持有一个预览标签。
+        await m.open(path: "/c.swift", fileSize: 1, mtime: nil, asPreview: true)
+        XCTAssertEqual(m.panes.allTabs.filter(\.isTransient).count, 2,
+                       "两个组各自可以有一个预览标签")
+
+        // 同组内再开预览只顶替**本组**那一个，另一个组的预览标签不受影响。
+        await m.open(path: "/d.swift", fileSize: 1, mtime: nil, asPreview: true)
+        XCTAssertEqual(m.panes.allTabs.filter(\.isTransient).count, 2)
+        XCTAssertFalse(tabPaths(m).contains("/c.swift"), "本组的预览标签被顶替")
+        XCTAssertTrue(tabPaths(m).contains("/b.swift"), "另一个组的预览标签不受影响")
+        XCTAssertFalse(m.buffers.contains { $0.remotePath == "/c.swift" },
+                       "被顶替的文档要一起收掉，不能漏")
     }
 }

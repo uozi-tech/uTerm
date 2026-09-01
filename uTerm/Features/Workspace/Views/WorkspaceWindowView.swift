@@ -120,7 +120,7 @@ struct WorkspaceWindowView: View {
                 SFTPSidebar(model: workspace.fileBrowserModel, server: server)
             } center: {
                 WorkspaceCenter(workspace: workspace, server: server,
-                                onRequestCloseBuffer: { requestCloseBuffer($0) })
+                                onRequestCloseTab: { requestCloseTab($0) })
                     .frame(minWidth: 480)
             } inspector: {
                 AgentSidebar(
@@ -312,13 +312,20 @@ struct WorkspaceWindowView: View {
 
     // MARK: 大文件 / 保存 helpers（Spec 2A §1.5）
 
-    /// 关闭一个文件标签；脏文件先弹「保存 / 不保存 / 取消」。⌘W 与标签 X 共用此入口。
+    /// 关闭一个文件标签；脏文件先弹「保存 / 不保存 / 取消」。⌘W 与 chip 的 × 共用此入口。
+    ///
+    /// 组件（`UPaneGroupArea`）只发「请求关闭」，真关由这里做 —— 关闭是模态 + 异步的：
+    /// 选「保存」时起一个 Task，`await handleSave` 之后再判断 `!isDirty` 才真的关，
+    /// 保存失败就不关。
+    ///
+    /// 参数是**标签** id。同一个文件可以在两个组里各有一个标签，只有关掉**最后一个**
+    /// 引用它的标签才会丢内容，所以确认框也只在那时才弹。
     @MainActor
-    private func requestCloseBuffer(_ id: UUID) {
+    private func requestCloseTab(_ tabID: UUID) {
         let model = workspace.filePreviewModel
-        guard let buf = model.buffers.first(where: { $0.id == id }) else { return }
-        guard buf.isDirty else {
-            model.close(id, savingIfDirty: false)
+        guard let (buf, isLastReference) = model.closeContext(forTab: tabID) else { return }
+        guard buf.isDirty, isLastReference else {
+            model.closeTab(tabID)
             return
         }
         let alert = NSAlert()
@@ -330,13 +337,13 @@ struct WorkspaceWindowView: View {
         switch alert.runModal() {
         case .alertFirstButtonReturn:             // 保存
             Task { @MainActor in
-                await handleSave(id: id)          // 既有流程，含远程 mtime 冲突检测与失败提示
-                if let b = model.buffers.first(where: { $0.id == id }), !b.isDirty {
-                    model.close(id, savingIfDirty: false)   // 仅保存成功才关
+                await handleSave(id: buf.id)      // 既有流程，含远程 mtime 冲突检测与失败提示
+                if !buf.isDirty {
+                    model.closeTab(tabID)         // 仅保存成功才关
                 }
             }
         case .alertSecondButtonReturn:            // 不保存
-            model.close(id, savingIfDirty: false)
+            model.closeTab(tabID)
         default:                                  // 取消：什么都不做
             break
         }
@@ -347,8 +354,11 @@ struct WorkspaceWindowView: View {
     private func handleCloseShortcut(window: NSWindow) {
         let region = WorkspaceCloseShortcut.focusRegion(in: window)
         switch workspace.closeIntent(focusedRegion: region) {
-        case .closeFileBuffer(let id):
-            requestCloseBuffer(id)
+        case .closeFileBuffer:
+            // 意图里带的是 activeBufferID，而它本来就是活动组前台标签的文档 ——
+            // 直接关那个标签，免得同一个文件开在两个组里时关错一个。
+            guard let tabID = workspace.filePreviewModel.activeTabID else { return }
+            requestCloseTab(tabID)
         case .closeTerminalFocusedPane(let tabID):
             guard let tab = workspace.tabs.first(where: { $0.id == tabID }) else { return }
             if let pid = tab.focusedPaneID {

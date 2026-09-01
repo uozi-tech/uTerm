@@ -10,8 +10,8 @@ import SwiftUI
 struct WorkspaceCenter: View {
     let workspace: WorkspaceModel
     let server: ServerProfile
-    /// 请求关闭某文件 buffer（含脏文件确认，由 WorkspaceWindowView 提供）。
-    let onRequestCloseBuffer: (UUID) -> Void
+    /// 请求关闭某文件**标签**（含脏文件确认，由 WorkspaceWindowView 提供）。
+    let onRequestCloseTab: (UUID) -> Void
 
     var body: some View {
         GeometryReader { geo in
@@ -22,21 +22,10 @@ struct WorkspaceCenter: View {
                 set: { workspace.uiState.previewTerminalRatio = $0 })
 
             VStack(spacing: 0) {
-                PreviewArea(
-                    model: workspace.filePreviewModel,
-                    workspaceDragSource: workspace.dragSource,
-                    onBeginDrag: { bufferID in
-                        workspace.beginDrag(.fileBuffer(bufferID))
-                    },
-                    onDropFileDragSource: { targetPanelID, zone in
-                        workspace.dropDragSource(ontoPreviewPanel: targetPanelID, zone: zone)
-                    },
-                    onDropFileProviderPayload: { targetPanelID, bufferID, zone in
-                        workspace.dropFileBufferProviderPayload(bufferID,
-                                                                ontoPreviewPanel: targetPanelID,
-                                                                zone: zone)
-                    },
-                    onRequestClose: onRequestCloseBuffer)
+                // 预览区自己是一整套编辑组区域（标签拖拽 / 分屏 / 投放高亮都在
+                // `UPaneGroupArea` 里），不再需要工作区级的拖拽源与投放回调。
+                PreviewArea(model: workspace.filePreviewModel,
+                            onRequestClose: onRequestCloseTab)
                     .frame(height: topHeight)
                 TerminalArea(workspace: workspace, server: server)
                     .frame(maxHeight: .infinity)

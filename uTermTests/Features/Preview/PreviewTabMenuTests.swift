@@ -2,20 +2,12 @@ import XCTest
 import AppKit
 @testable import uTerm
 
+// 改造前这里还有一条 `test_tabBarBackground_matches_editor_background_in_dark_mode`：
+// 预览区自绘的标签条把底色调成 `EditorTheme.background`，好和下方编辑器无缝衔接。
+// 标签条现在由共享组件 `UPaneGroupArea` 画，底色统一成 `UD.panel`（与 uTable 的
+// 编辑组一致），那条断言的对象已经不存在。
 @MainActor
-final class PreviewTabBarTests: XCTestCase {
-    func test_tabBarBackground_matches_editor_background_in_dark_mode() {
-        var resolved = PreviewTabBar.tabBarBackgroundColor
-        NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
-            resolved = PreviewTabBar.tabBarBackgroundColor.usingColorSpace(NSColorSpace.sRGB)
-                ?? PreviewTabBar.tabBarBackgroundColor
-        }
-
-        XCTAssertEqual(Double(resolved.redComponent), 16/255, accuracy: 0.01)
-        XCTAssertEqual(Double(resolved.greenComponent), 16/255, accuracy: 0.01)
-        XCTAssertEqual(Double(resolved.blueComponent), 18/255, accuracy: 0.01)
-    }
-
+final class PreviewTabMenuTests: XCTestCase {
     func test_contextMenuCloseTargets_followTabOrderAndScope() {
         let first = UUID()
         let target = UUID()

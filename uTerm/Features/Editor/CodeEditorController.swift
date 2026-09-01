@@ -556,10 +556,11 @@ extension CodeEditorController {
             // 再触发一次造成双保存。
             //
             // 这条路径原本是在绕一个根因：分屏下点进非聚焦面板的编辑器，NSTextView
-            // 吃掉点击、`PreviewArea` 的 `.onTapGesture` 不触发，`focusedPanelID` /
-            // `activeBufferID` 不更新，⌘S 就投到另一个未脏 buffer 上变成 no-op。
-            // 该根因已修（`PreviewArea` 改用 `onPointerDown`，NSEvent 旁观探针），
-            // 这里保留是双保险：它按 firstResponder 认 buffer，比按窗口状态更直接。
+            // 吃掉点击、`PreviewArea` 的 `.onTapGesture` 不触发，活动面板与活动
+            // buffer 都不更新，⌘S 就投到另一个未脏 buffer 上变成 no-op。该根因已修
+            // （按下即激活改走 NSEvent 旁观探针 `onPointerDown`，现在在共享组件
+            // `UPaneGroupArea` 里），这里保留是双保险：它按 firstResponder 认 buffer，
+            // 比按窗口状态更直接。
             requestSave(); return true
         default:
             // Esc handled by FindReplaceBar via .keyboardShortcut(.escape)
