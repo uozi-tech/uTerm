@@ -282,10 +282,10 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(restored.terminalGroups.allTabs.first?.payload.serverProfileID, server)
     }
 
-    /// ⚠️ TODO(P4)：终端区持久化目前是**退化**的 —— 会话与顺序一条不丢，
-    /// 分屏形状不进盘，重启后全部标签回到同一个组。这条钉住的是「退化到什么程度」，
-    /// P4 加上 `terminalGroups` 快照键后要改成保形断言。
-    func testSnapshotRoundTripFlattensGroupsIntoOne() {
+    /// P4 起分屏形状进盘：往返后组数、每组的标签、活动标签全部还在。
+    /// （P3 这条钉的是退化行为 —— 那时每次重启都会把分屏拍平成一个组。）
+    /// 逐项保形的详细断言在 `TerminalGroupsPersistenceTests`。
+    func testSnapshotRoundTripPreservesGroups() {
         let ws = WorkspaceModel()
         let s1 = UUID(), s2 = UUID()
         _ = ws.openServer(profileID: s1, title: "a")
@@ -295,10 +295,16 @@ final class WorkspaceModelTests: XCTestCase {
 
         let restored = WorkspaceModel(snapshot: ws.snapshot())
         XCTAssertEqual(restored.terminalGroups.allTabs.count, 3)
-        XCTAssertEqual(restored.terminalGroups.groupCount, 1, "P4 之前分屏形状不持久化")
+        XCTAssertEqual(restored.terminalGroups.groupCount, 2, "分屏形状必须还原")
         XCTAssertEqual(restored.terminalGroups.allTabs.map(\.customTitle), ["a", "a", "b"])
         XCTAssertEqual(restored.terminalGroups.allTabs.map(\.payload.serverProfileID),
                        [s1, s1, s2])
+        XCTAssertEqual(restored.terminalGroups.activeTab?.customTitle, "b")
+        // 第一个组一个标签，第二个组两个（分屏克隆的 + 后开的 b）。
+        let groupTabCounts = restored.terminalGroups.groupIDs.map {
+            restored.terminalGroups.groups[$0]?.tabs.count ?? 0
+        }
+        XCTAssertEqual(groupTabCounts, [1, 2])
     }
 
     // MARK: ownership + UI state（Spec 1 §3.1）

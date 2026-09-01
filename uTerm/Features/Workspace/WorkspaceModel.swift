@@ -188,47 +188,29 @@ final class WorkspaceModel {
     /// 的 .task(id:) 持有的引用始终稳定，避免「窗口实例换了但 view 的 task
     /// 不重启」的卡死。
     ///
-    /// `knownServerIDs` 非空时用作白名单：指向不存在服务器的叶子直接丢弃，叶子被
-    /// 丢光的标签也一并丢弃。旧版本写坏的快照（叶子是随机 UUID）会在这里被清掉，
+    /// `knownServerIDs` 非空时用作白名单：指向不存在服务器的标签直接丢弃，标签被
+    /// 丢光的组也一并丢弃。旧版本写坏的快照（叶子是随机 UUID）会在这里被清掉，
     /// 调用方随后靠「没有标签就开一个」兜底出一个真正可用的终端，而不是恢复出一个
     /// 永远卡在「服务器配置已被删除」的窗格。传空集合表示跳过校验（测试场景，或
     /// ServerProfile 尚未载入时不做误判）。
     func restore(from snapshot: WorkspaceSnapshot, knownServerIDs: Set<UUID> = []) {
         // 先 dispose 旧标签的资源（实践中 restore 通常在空 model 上调用，但保留
-        // 正确语义供未来「重连 / 切换布局」复用）。`reset()` 不走 `onTabRemoved`
-        // ——它是换作用域，不是逐个关标签——所以这里手动 dispose。
+        // 正确语义供未来「重连 / 切换布局」复用）。组件的 `restore` 整树替换、
+        // 不走 `onTabRemoved`（它是换作用域，不是逐个关标签），所以这里手动 dispose。
         for tab in terminalGroups.allTabs { tab.payload.dispose() }
-        terminalGroups.reset()
 
-        // ⚠️ TODO(P4)：终端区持久化迁移**尚未做**（设计文档 §4.2 的 M2 规则 +
-        // 新的 `terminalGroups` 快照键）。这里是**退化恢复**：老快照里每个标签的
-        // 窗格树被摊平，每个叶子变成唯一那个组里的一个标签，**分屏形状与
-        // fraction 全部丢弃**。会话一条不丢（都会重连），丢的只是布局。
-        // 写盘同样降级（见 `makeSnapshot`），所以这条退化不只影响一次升级，而是
-        // 每次重启都会把分屏拍平 —— P4 补上新键后才恢复。
-        var restored: [(serverID: UUID, title: String, sourceIndex: Int)] = []
-        for (index, tabSnap) in snapshot.tabs.enumerated() {
-            guard let layout = Self.pruningUnknownServers(tabSnap.layout,
-                                                          knownServerIDs: knownServerIDs)
-            else { continue }
-            for serverID in Self.leafServerIDs(layout) {
-                restored.append((serverID, tabSnap.title, index))
-            }
-        }
-        var activePosition: Int?
-        for (position, entry) in restored.enumerated() {
-            if activePosition == nil, entry.sourceIndex == snapshot.activeTabIndex {
-                activePosition = position
-            }
-            terminalGroups.openTab {
-                TerminalTab(payload: PaneModel(serverProfileID: entry.serverID),
-                            customTitle: entry.title)
-            }
-        }
-        // 旧快照的 `activeTabIndex` 指的是**标签**，新模型里那个层次没有了；
-        // 退化成「该旧标签摊平后的第一个标签」。
-        if let position = activePosition, let groupID = terminalGroups.activeGroupID {
-            terminalGroups.activateTab(groupID: groupID, index: position)
+        // 终端区：新快照直接吃 `terminalGroups` 组树；老快照（该键为 nil）按设计
+        // 文档 §4.2 的 M2 规则迁移 —— 见 `WorkspaceSnapshot.migratingLegacyTabs`。
+        //
+        // 白名单剪枝在下面这个 `make` 闭包里，对新老两种格式一视同仁：返回 nil 的
+        // 标签丢掉 → 标签被丢光的组丢掉 → split 只剩一侧就把那一侧上提 → 整棵树都
+        // 没剩下就回落到一个空组，由调用方「没有标签就开一个」兜底。
+        // **绝不给缺失项回落一个随机 UUID。**
+        terminalGroups.restore(snapshot.terminalGroupsForRestore) { tabSnap in
+            guard knownServerIDs.isEmpty || knownServerIDs.contains(tabSnap.serverProfileID)
+            else { return nil }
+            return TerminalTab(payload: PaneModel(serverProfileID: tabSnap.serverProfileID),
+                               customTitle: tabSnap.title)
         }
 
         if let ui = snapshot.uiState {
@@ -458,20 +440,29 @@ final class WorkspaceModel {
             input: ""))
     }
 
-    /// ⚠️ TODO(P4)：终端区还在写**旧格式**。新模型是「全窗口一棵组树」，而
-    /// `WorkspaceSnapshot.tabs` 只能表达「一列标签，每个标签一棵窗格树」——
-    /// 这里把组树降维成「一个标签一条 `TabSnapshot`，layout 恒为单叶」：
-    /// 会话与顺序一条不丢，**分屏形状与 fraction 不进盘**，重启后全部标签回到
-    /// 同一个组。P4 会加 `terminalGroups: UPaneGroupsSnapshot<…>` 新键
-    /// （见设计文档 §4.2），旧键作为降级回滚保留。
+    /// 终端区**同时写两份**：
+    ///
+    /// - 新键 `terminalGroups`：整棵组树（分屏形状 / fraction / 每组的标签顺序 /
+    ///   每组前台标签 / 活动组），恢复时逐项还原。走组件的 `snapshot(_:)`。
+    /// - 旧键 `tabs` + `activeTabIndex`：**降级回滚通道**（设计文档 §4.2 末条）。
+    ///   把组树降维成「一个标签一条 `TabSnapshot`，layout 恒为单叶」——会话一条
+    ///   不丢，装回旧版本会看到它们摊成一排窗口级标签，只是分屏形状没了。
+    ///   （文档建议的「一个组一条」会把每个组的后台标签整条丢掉，这里不采纳。）
+    ///
+    /// 两份都**绝不给缺失项回落随机 UUID** —— 那会写进一个不存在的
+    /// serverProfileID，恢复出永远「服务器配置已被删除」的终端。文件窗格返回 nil
+    /// 直接丢掉（buffer 由 `openFiles` 单独持久化）。
     private func makeSnapshot(agentState: AgentSnapshot) -> WorkspaceSnapshot {
+        let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
+            guard tab.payload.fileBuffer == nil else { return nil }
+            return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
+                                       title: tab.customTitle ?? "终端")
+        }
+
         var activeIdx: Int?
         var tabSnaps: [TabSnapshot] = []
         let activeTabID = terminalGroups.activeTab?.id
         for tab in terminalGroups.allTabs {
-            // 文件窗格不进终端快照（buffer 由 `openFiles` 单独持久化）。
-            // 这里绝不给缺失项回落一个随机 UUID —— 那会写进一个不存在的
-            // serverProfileID，恢复出永远「服务器配置已被删除」的终端。
             guard tab.payload.fileBuffer == nil else { continue }
             if tab.id == activeTabID {
                 activeIdx = tabSnaps.count
@@ -484,42 +475,11 @@ final class WorkspaceModel {
         return WorkspaceSnapshot(
             tabs: tabSnaps,
             activeTabIndex: activeIdx,
+            terminalGroups: groups,
             uiState: uiState,
             fileBrowserPath: fileBrowserModel.snapshotCurrentPath,
             openFiles: openFiles,
             activeFileIndex: activeFileIndex,
             agentState: agentState)
-    }
-
-    /// 剪掉指向未知服务器的叶子；某个 split 的两侧都被剪掉时整个 split 也返回 nil。
-    /// `knownServerIDs` 为空表示不做校验，原样返回。
-    nonisolated static func pruningUnknownServers(
-        _ snap: NodeSnapshot, knownServerIDs: Set<UUID>) -> NodeSnapshot? {
-        guard !knownServerIDs.isEmpty else { return snap }
-        switch snap {
-        case .leaf(let serverProfileID):
-            return knownServerIDs.contains(serverProfileID) ? snap : nil
-        case .split(let direction, let fraction, let first, let second):
-            let f = pruningUnknownServers(first, knownServerIDs: knownServerIDs)
-            let s = pruningUnknownServers(second, knownServerIDs: knownServerIDs)
-            switch (f, s) {
-            case let (f?, s?):
-                return .split(direction: direction, fraction: fraction, first: f, second: s)
-            case let (f?, nil):  return f
-            case let (nil, s?):  return s
-            case (nil, nil):     return nil
-            }
-        }
-    }
-
-    /// 把一棵旧窗格树摊平成它的 `serverProfileID` 序列（深度优先，保序）。
-    /// TODO(P4)：迁移做起来后这里要换成保形迁移（每个叶子 → 一个**组**）。
-    nonisolated static func leafServerIDs(_ snap: NodeSnapshot) -> [UUID] {
-        switch snap {
-        case .leaf(let serverProfileID):
-            return [serverProfileID]
-        case .split(_, _, let first, let second):
-            return leafServerIDs(first) + leafServerIDs(second)
-        }
     }
 }
