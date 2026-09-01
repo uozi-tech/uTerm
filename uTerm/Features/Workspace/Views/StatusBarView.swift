@@ -1,5 +1,5 @@
-import UPaneTree
 import UDesignKit
+import UPaneGroups
 import SwiftUI
 import SwiftData
 
@@ -16,8 +16,8 @@ struct StatusBarView: View {
     var body: some View {
         let t = workspace.telemetryModel.display
         HStack(spacing: 10) {
-            // 连接状态点（聚焦窗格）
-            if let session = workspace.activeTab?.focusedPane?.session {
+            // 连接状态点（活动组的前台标签）
+            if let session = workspace.terminalGroups.activeTab?.payload.session {
                 let display = ConnectionStatusDisplay(state: session.connectionState)
                 Circle()
                     .fill(display.tint.color)
@@ -65,9 +65,10 @@ struct StatusBarView: View {
                 if let ts = t.timestamp {
                     metric(icon: "calendar", color: UD.mEndpoint, text: ts)
                 }
-            } else if let tab = workspace.activeTab {
-                // 未连接 / 无遥测：回退到窗格 · 标签计数。
-                Text("\(tab.root.leafCount) 窗格 · \(workspace.tabs.count) 标签")
+            } else if !workspace.terminalGroups.isEmpty {
+                // 未连接 / 无遥测：回退到分组 · 标签计数（旧文案是「窗格 · 标签」，
+                // 但窗口级标签这个层次已经没有了，数的是组与全部标签）。
+                Text("\(workspace.terminalGroups.groupCount) 分组 · \(workspace.terminalGroups.allTabs.count) 标签")
                     .foregroundStyle(UD.text3)
             }
         }
@@ -142,7 +143,7 @@ struct StatusBarView: View {
     }
 
     private var endpointText: String? {
-        guard let pane = workspace.activeTab?.focusedPane,
+        guard let pane = workspace.terminalGroups.activeTab?.payload,
               let profile = profiles.first(where: { $0.id == pane.serverProfileID })
         else { return nil }
         return profile.displayEndpoint

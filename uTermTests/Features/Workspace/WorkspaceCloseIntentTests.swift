@@ -16,7 +16,7 @@ final class WorkspaceCloseIntentTests: XCTestCase {
 
     func test_preview_noBuffer_fallsBackToTerminal() {
         let t = UUID()
-        XCTAssertEqual(resolveCloseIntent(ctx(.preview, file: nil, tab: t)), .closeTerminalFocusedPane(tabID: t))
+        XCTAssertEqual(resolveCloseIntent(ctx(.preview, file: nil, tab: t)), .closeTerminalActiveTab(tabID: t))
     }
 
     func test_preview_nothing_closesWindow() {
@@ -25,7 +25,7 @@ final class WorkspaceCloseIntentTests: XCTestCase {
 
     func test_terminal_withTab_closesThatPane() {
         let t = UUID()
-        XCTAssertEqual(resolveCloseIntent(ctx(.terminal, file: UUID(), tab: t)), .closeTerminalFocusedPane(tabID: t))
+        XCTAssertEqual(resolveCloseIntent(ctx(.terminal, file: UUID(), tab: t)), .closeTerminalActiveTab(tabID: t))
     }
 
     func test_terminal_noTab_fallsBackToFile() {
@@ -40,7 +40,7 @@ final class WorkspaceCloseIntentTests: XCTestCase {
 
     func test_unknown_onlyTerminal_closesTerminal() {
         let t = UUID()
-        XCTAssertEqual(resolveCloseIntent(ctx(.unknown, file: nil, tab: t)), .closeTerminalFocusedPane(tabID: t))
+        XCTAssertEqual(resolveCloseIntent(ctx(.unknown, file: nil, tab: t)), .closeTerminalActiveTab(tabID: t))
     }
 
     func test_unknown_nothing_closesWindow() {
