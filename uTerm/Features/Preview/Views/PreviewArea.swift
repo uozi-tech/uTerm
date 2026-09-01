@@ -35,9 +35,9 @@ struct PreviewArea: View {
                 // buffer id 变成了标签 id，解析走 `buffer(forDragPayloadID:)`。
                 dragType: .utermFileBufferID,
                 stripHeight: Self.stripHeight,
-                // 活动组焦点框：改造前 `PreviewPanelView` 在多面板时画 1.5px accent
-                // 描边，组件里同样只在多组时画。
-                showsActiveGroupRing: true,
+                // 不画活动组焦点框：焦点已经由标签条表达（全工作区唯一的 accent 顶条），
+                // 再套一圈蓝框是同一件事说两遍。与 uTable 及终端区保持一致。
+                showsActiveGroupRing: false,
                 descriptor: Self.descriptor(for:),
                 content: { tab, _ in
                     PreviewPaneBody(model: model, buffer: tab.payload,

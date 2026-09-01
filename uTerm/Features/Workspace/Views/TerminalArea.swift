@@ -41,9 +41,10 @@ struct TerminalArea: View {
             // 36pt：与旧终端标签条、上方预览区状态条对齐。
             stripHeight: 36,
             showsSplitButton: true,
-            // 终端区靠焦点框认「焦点在哪一格」（旧 `PaneView` 的 1.5px accent 描边，
-            // 只在多窗格时画）。组件同样只在多组时画。
-            showsActiveGroupRing: true,
+            // 不画活动组焦点框：焦点已经由标签条表达 —— 全工作区只有一条 accent 顶条，
+            // 就在当前标签上。再套一圈蓝框是同一件事说两遍，而且框住整格比一条顶条抢眼
+            // 得多。uTable 一直是这样，两边就此一致。
+            showsActiveGroupRing: false,
             // 旧 pane header 的分屏按钮按窗格长宽比自动选方向（`autoSplitDirection`）。
             splitButtonDirection: .automatic,
             splitButtonIcon: .system("rectangle.split.2x1"),
