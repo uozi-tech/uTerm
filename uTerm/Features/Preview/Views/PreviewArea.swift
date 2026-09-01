@@ -1,5 +1,6 @@
 import UDesignKit
 import SwiftUI
+import UAppKitBridge
 import UniformTypeIdentifiers
 
 /// 工作区中央上半部的预览/编辑区。Spec 2A 真正动起来 ——
@@ -104,7 +105,12 @@ private struct PreviewPanelView: View {
                     lineWidth: 1.5)
         )
         .contentShape(Rectangle())
-        .onTapGesture { model.selectPanel(panelID) }
+        // 与 `PaneView` 同因：面板内容是 `CodeEditorView`（CodeEditTextView 的
+        // NSView）这类自己处理 mouseDown 的 AppKit 视图，而 SwiftUI 在 macOS 上不装
+        // NSGestureRecognizer——命中测试一落到那个 NSView，NSHostingView.mouseDown
+        // 就不会被调用，挂在这里的 .onTapGesture 永不触发。症状是点进另一个预览
+        // 面板的正文后焦点框不动，随后的分屏、关闭、打开新文件都作用在上一个面板上。
+        .onPointerDown { model.selectPanel(panelID) }
         .onDrop(of: [.utermFileBufferID],
                 delegate: PreviewPanelDropDelegate(
                     bounds: CGRect(origin: .zero, size: panelSize),

@@ -551,11 +551,15 @@ extension CodeEditorController {
             currentFindController?.previous(); return true
         case (true, false, false, "s"):
             // ⌘S 在编辑器聚焦时直接保存“正在编辑的这个 buffer”——而不是依赖窗口的
-            // activeBufferID。分屏下点进非聚焦面板的编辑器，NSTextView 吃掉点击，
-            // PreviewPanelView 的 onTapGesture 不触发 → focusedPanelID/activeBufferID
-            // 不更新 → 老路径会把 ⌘S 投到另一个未脏 buffer 上变成 no-op。由本地 keyDown
-            // 监听器拦截（已确保只在 textView 是 firstResponder 的 key 窗口里触发），
-            // 消费事件（return true）避免菜单项再触发一次造成双保存。
+            // activeBufferID。由本地 keyDown 监听器拦截（已确保只在 textView 是
+            // firstResponder 的 key 窗口里触发），消费事件（return true）避免菜单项
+            // 再触发一次造成双保存。
+            //
+            // 这条路径原本是在绕一个根因：分屏下点进非聚焦面板的编辑器，NSTextView
+            // 吃掉点击、`PreviewArea` 的 `.onTapGesture` 不触发，`focusedPanelID` /
+            // `activeBufferID` 不更新，⌘S 就投到另一个未脏 buffer 上变成 no-op。
+            // 该根因已修（`PreviewArea` 改用 `onPointerDown`，NSEvent 旁观探针），
+            // 这里保留是双保险：它按 firstResponder 认 buffer，比按窗口状态更直接。
             requestSave(); return true
         default:
             // Esc handled by FindReplaceBar via .keyboardShortcut(.escape)
