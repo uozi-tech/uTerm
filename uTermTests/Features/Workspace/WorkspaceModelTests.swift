@@ -1,3 +1,4 @@
+import UPaneGroups
 import UPaneTree
 import XCTest
 import SwiftData
@@ -11,47 +12,59 @@ final class WorkspaceModelTests: XCTestCase {
         return ModelContext(container)
     }
 
-    func testOpenServerAddsActiveTab() {
+    func testOpenServerAddsTabToActiveGroup() {
         let ws = WorkspaceModel()
         let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "s1")
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.activeTabID, tab.id)
-        XCTAssertEqual(tab.panes.values.first?.serverProfileID, server)
+        let tabID = ws.openServer(profileID: server, title: "s1")
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
+        XCTAssertEqual(ws.terminalGroups.activeTab?.id, tabID)
+        XCTAssertEqual(ws.terminalGroups.activeTab?.payload.serverProfileID, server)
+        XCTAssertEqual(ws.terminalGroups.groupCount, 1)
     }
 
-    func testCloseTabSelectsNeighbor() {
+    func testCloseActiveTabSelectsNeighbor() {
+        let ws = WorkspaceModel()
+        let t1 = ws.openServer(profileID: UUID(), title: "a")
+        _ = ws.openServer(profileID: UUID(), title: "b")
+        XCTAssertTrue(ws.closeActiveTerminalTab())
+        XCTAssertEqual(ws.terminalGroups.allTabs.map(\.id), [t1])
+        XCTAssertEqual(ws.terminalGroups.activeTab?.id, t1)
+    }
+
+    /// 最后一个标签关掉后，唯一的那个组留着显示空态（`allowsLastGroupEmpty`）——
+    /// 不再是旧模型的「关掉整个标签、activeTabID 变 nil」。再按一次 ⌘W 没东西可关，
+    /// 由调用方回落到关窗口。
+    func testCloseLastTabLeavesOneEmptyGroup() {
+        let ws = WorkspaceModel()
+        _ = ws.openServer(profileID: UUID(), title: "a")
+        XCTAssertTrue(ws.closeActiveTerminalTab())
+        XCTAssertTrue(ws.terminalGroups.isEmpty)
+        XCTAssertEqual(ws.terminalGroups.groupCount, 1)
+        XCTAssertNil(ws.terminalGroups.activeTab)
+        XCTAssertFalse(ws.closeActiveTerminalTab())
+    }
+
+    func testReorderTabWithinGroup() {
         let ws = WorkspaceModel()
         let t1 = ws.openServer(profileID: UUID(), title: "a")
         let t2 = ws.openServer(profileID: UUID(), title: "b")
-        ws.closeTab(t2.id)
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.activeTabID, t1.id)
+        ws.terminalGroups.reorderTab(t2, before: t1)
+        XCTAssertEqual(ws.terminalGroups.allTabs.map(\.id), [t2, t1])
     }
 
-    func testCloseLastTabClearsActive() {
+    /// ⌘D / ⇧⌘D：新组里放一条**新会话**，服务器跟随当前活动标签
+    /// （旧 `splitFocusedPane` 就是复制聚焦窗格的 serverProfileID）。
+    func testSplitActiveGroupSeedsNewSessionOnSameServer() {
         let ws = WorkspaceModel()
-        let t = ws.openServer(profileID: UUID(), title: "a")
-        ws.closeTab(t.id)
-        XCTAssertTrue(ws.tabs.isEmpty)
-        XCTAssertNil(ws.activeTabID)
-    }
+        let server = UUID()
+        let first = ws.openServer(profileID: server, title: "a")
+        ws.splitActiveGroup(direction: .horizontal)
 
-    func testMoveTabReorders() {
-        let ws = WorkspaceModel()
-        let t1 = ws.openServer(profileID: UUID(), title: "a")
-        let t2 = ws.openServer(profileID: UUID(), title: "b")
-        ws.moveTab(fromID: t1.id, toIndex: 1)
-        XCTAssertEqual(ws.tabs.map(\.id), [t2.id, t1.id])
-    }
-
-    func testMoveTabBackward() {
-        let ws = WorkspaceModel()
-        let t1 = ws.openServer(profileID: UUID(), title: "a")
-        let t2 = ws.openServer(profileID: UUID(), title: "b")
-        let t3 = ws.openServer(profileID: UUID(), title: "c")
-        ws.moveTab(fromID: t3.id, toIndex: 0)
-        XCTAssertEqual(ws.tabs.map(\.id), [t3.id, t1.id, t2.id])
+        XCTAssertEqual(ws.terminalGroups.groupCount, 2)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 2)
+        XCTAssertEqual(Set(ws.terminalGroups.allTabs.map(\.payload.serverProfileID)), [server])
+        XCTAssertNotEqual(ws.terminalGroups.activeTab?.id, first, "新组成为活动组")
+        XCTAssertEqual(ws.terminalGroups.activeGroup?.tabs.count, 1)
     }
 
     func testConnectSharedSFTPStartsFileBrowserConnectionForTelemetryOnWorkspaceOpen() async throws {
@@ -136,241 +149,108 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(ws.snapshot().agentState?.input, "second draft")
     }
 
-    func testDropTabOntoActivePaneSplitsAndClosesSourceTab() {
+    /// 标签在组之间移动由 `UPaneGroups` 全权处理：**真移动**，不复制、不关源。
+    /// 旧 `dropTab` 是「复制源标签的聚焦窗格，源标签若非当前则整个关掉」。
+    func testMoveTabToEdgeSplitsIntoNewGroup() {
         let ws = WorkspaceModel()
         let targetServer = UUID()
         let sourceServer = UUID()
-        let targetTab = ws.openServer(profileID: targetServer, title: "target")
-        let sourceTab = ws.openServer(profileID: sourceServer, title: "source")
-        ws.selectTab(targetTab.id)
-
-        guard let targetPaneID = targetTab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
+        let target = ws.openServer(profileID: targetServer, title: "target")
+        let source = ws.openServer(profileID: sourceServer, title: "source")
+        guard let groupID = ws.terminalGroups.locateTab(target)?.groupID else {
+            XCTFail("target tab should live in a group")
             return
         }
 
-        XCTAssertTrue(ws.dropTab(sourceTab.id, onto: targetPaneID, zone: .trailing))
-        XCTAssertEqual(ws.tabs.map(\.id), [targetTab.id])
-        XCTAssertEqual(ws.activeTabID, targetTab.id)
-        XCTAssertEqual(targetTab.root.leafIDs.count, 2)
-        XCTAssertEqual(Set(targetTab.panes.values.map(\.serverProfileID)),
+        ws.terminalGroups.moveTab(source, toGroup: groupID, zone: .trailing)
+
+        XCTAssertEqual(ws.terminalGroups.groupCount, 2)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 2, "移动不复制，也不关掉源")
+        XCTAssertEqual(ws.terminalGroups.activeTab?.id, source)
+        XCTAssertEqual(Set(ws.terminalGroups.allTabs.map(\.payload.serverProfileID)),
                        [targetServer, sourceServer])
     }
 
-    func testDropActiveTabOntoItsPaneCopiesFocusedPane() {
+    /// 组里唯一的标签拖到**本组**边缘 → 走 `cloneTab`：同服务器新开一条会话。
+    /// 真移动会让源组塌缩，分完还是一个组，等于没分。
+    func testMoveOnlyTabToOwnEdgeClonesSession() {
         let ws = WorkspaceModel()
         let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("tab should have a focused pane")
+        let only = ws.openServer(profileID: server, title: "target")
+        guard let groupID = ws.terminalGroups.locateTab(only)?.groupID else {
+            XCTFail("tab should live in a group")
             return
         }
 
-        XCTAssertTrue(ws.dropTab(tab.id, onto: targetPaneID, zone: .trailing))
-        XCTAssertEqual(ws.tabs.map(\.id), [tab.id])
-        XCTAssertEqual(ws.activeTabID, tab.id)
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        XCTAssertEqual(tab.panes.values.filter { $0.serverProfileID == server }.count, 2)
+        ws.terminalGroups.moveTab(only, toGroup: groupID, zone: .trailing)
+
+        XCTAssertEqual(ws.terminalGroups.groupCount, 2)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 2)
+        XCTAssertEqual(
+            ws.terminalGroups.allTabs.filter { $0.payload.serverProfileID == server }.count, 2)
     }
 
-    func testDropRegisteredTabDragSourceSplitsAndClosesSourceTab() {
+    /// 预览标签拖进终端组：组件不认识这个载荷，转给 app 的 `onForeignDrop`。
+    /// 同步拖拽源优先，不依赖 provider 的异步回调。
+    func testDropRegisteredFileBufferDragSourceCreatesFileTab() async {
         let ws = WorkspaceModel()
-        let targetServer = UUID()
-        let sourceServer = UUID()
-        let targetTab = ws.openServer(profileID: targetServer, title: "target")
-        let sourceTab = ws.openServer(profileID: sourceServer, title: "source")
-        ws.selectTab(targetTab.id)
-
-        guard let targetPaneID = targetTab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
-            return
-        }
-
-        ws.beginDrag(.tab(sourceTab.id))
-        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .trailing))
-        XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(ws.tabs.map(\.id), [targetTab.id])
-        XCTAssertEqual(targetTab.root.leafIDs.count, 2)
-        XCTAssertEqual(Set(targetTab.panes.values.map(\.serverProfileID)),
-                       [targetServer, sourceServer])
-    }
-
-    func testDropRegisteredActiveTabDragSourceCopiesFocusedPane() {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
-            return
-        }
-
-        ws.beginDrag(.tab(tab.id))
-        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .trailing))
-        XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(ws.tabs.map(\.id), [tab.id])
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        XCTAssertEqual(tab.panes.values.filter { $0.serverProfileID == server }.count, 2)
-    }
-
-    func testDropRegisteredFileBufferDragSourceCreatesFilePane() async {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
+        _ = ws.openServer(profileID: UUID(), title: "target")
         await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
 
-        guard let targetPaneID = tab.focusedPaneID,
+        guard let groupID = ws.terminalGroups.activeGroupID,
               let buffer = ws.filePreviewModel.buffers.first else {
-            XCTFail("workspace should have a focused pane and a preview buffer")
+            XCTFail("workspace should have a group and a preview buffer")
             return
         }
 
         ws.beginDrag(.fileBuffer(buffer.id))
-        XCTAssertTrue(ws.dropDragSource(onto: targetPaneID, zone: .bottom))
+        XCTAssertTrue(ws.dropForeignPayload([], ontoGroup: groupID, zone: .bottom))
         XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
+        XCTAssertEqual(ws.terminalGroups.groupCount, 2)
+        XCTAssertEqual(
+            ws.terminalGroups.allTabs.filter { $0.payload.fileBuffer?.id == buffer.id }.count, 1)
     }
 
-    func testDropRegisteredFileBufferDragSourceOntoFocusedPaneCreatesFilePane() async {
+    func testSnapshotSkipsFileBufferTabs() {
         let ws = WorkspaceModel()
         let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
-
-        guard let buffer = ws.filePreviewModel.buffers.first else {
-            XCTFail("workspace should have a preview buffer")
-            return
-        }
-
-        ws.beginDrag(.fileBuffer(buffer.id))
-        XCTAssertTrue(ws.dropDragSourceOntoFocusedPane(zone: .trailing))
-        XCTAssertNil(ws.dragSource)
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
-    }
-
-    /// 预览区内部的分屏投放已经整个搬进 `UPaneGroupArea`（`WorkspaceModel` 那三个
-    /// `…ontoPreviewPanel` 入口随之删掉），但**跨区**的「预览标签拖进终端窗格」必须
-    /// 还在。组件写进拖拽载荷的是**标签** id，所以这条路径要能按标签 id 解析。
-    func testDropFileBufferAcceptsPreviewTabIDAsDragPayload() async {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        await ws.filePreviewModel.open(path: "/tmp/readme.md", fileSize: 0, mtime: nil)
-
-        guard let targetPaneID = tab.focusedPaneID,
-              let buffer = ws.filePreviewModel.buffers.first,
-              let previewTabID = ws.filePreviewModel.tabIDsInDisplayOrder.first else {
-            XCTFail("workspace should have a focused pane and a preview tab")
-            return
-        }
-        XCTAssertNotEqual(previewTabID, buffer.id, "标签 id 与 buffer id 是两回事")
-
-        XCTAssertTrue(ws.dropFileBuffer(previewTabID, onto: targetPaneID, zone: .bottom))
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 1)
-    }
-
-    func testSplittingFilePaneCopiesFileBuffer() {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
+        _ = ws.openServer(profileID: server, title: "target")
         let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
+        guard let groupID = ws.terminalGroups.activeGroupID else {
+            XCTFail("workspace should have a group")
             return
         }
-        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
-        guard let filePaneID = tab.panes.values.first(where: { $0.fileBuffer?.id == buffer.id })?.id else {
-            XCTFail("file pane should exist")
-            return
-        }
-
-        tab.splitPane(filePaneID, direction: .horizontal, serverProfileID: server)
-
-        XCTAssertEqual(tab.root.leafIDs.count, 3)
-        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 2)
-        XCTAssertEqual(tab.focusedPane?.fileBuffer?.id, buffer.id)
-    }
-
-    func testDropActiveTabWithFocusedFilePaneCopiesFilePane() {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
-            return
-        }
-        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
-        guard let filePaneID = tab.panes.values.first(where: { $0.fileBuffer?.id == buffer.id })?.id else {
-            XCTFail("file pane should exist")
-            return
-        }
-        tab.focusedPaneID = filePaneID
-
-        XCTAssertTrue(ws.dropTab(tab.id, onto: targetPaneID, zone: .trailing))
-
-        XCTAssertEqual(tab.root.leafIDs.count, 3)
-        XCTAssertEqual(tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }.count, 2)
-        XCTAssertEqual(tab.focusedPane?.fileBuffer?.id, buffer.id)
-    }
-
-    func testDropFileBufferOntoActivePaneCreatesFilePane() {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
-            return
-        }
-
-        XCTAssertTrue(ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom))
-        XCTAssertEqual(tab.root.leafIDs.count, 2)
-        let filePanes = tab.panes.values.filter { $0.fileBuffer?.id == buffer.id }
-        XCTAssertEqual(filePanes.count, 1)
-        XCTAssertEqual(tab.focusedPaneID, filePanes.first?.id)
-    }
-
-    func testSnapshotSkipsFileBufferPanes() {
-        let ws = WorkspaceModel()
-        let server = UUID()
-        let tab = ws.openServer(profileID: server, title: "target")
-        let buffer = FileBuffer(remotePath: "/tmp/readme.md", kind: .markdown)
-
-        guard let targetPaneID = tab.focusedPaneID else {
-            XCTFail("target tab should have a focused pane")
-            return
-        }
-        ws.dropFileBuffer(buffer, onto: targetPaneID, zone: .bottom)
+        ws.dropFileBuffer(buffer, ontoGroup: groupID, zone: .center)
 
         let restored = WorkspaceModel(snapshot: ws.snapshot())
-        XCTAssertEqual(restored.tabs.count, 1)
-        XCTAssertEqual(restored.tabs[0].root.leafIDs.count, 1)
-        XCTAssertNil(restored.tabs[0].panes.values.first?.fileBuffer)
-        XCTAssertEqual(restored.tabs[0].panes.values.first?.serverProfileID, server)
+        XCTAssertEqual(restored.terminalGroups.allTabs.count, 1)
+        XCTAssertNil(restored.terminalGroups.allTabs.first?.payload.fileBuffer)
+        XCTAssertEqual(restored.terminalGroups.allTabs.first?.payload.serverProfileID, server)
     }
 
-    func testSnapshotRoundTrip() {
+    /// P4 起分屏形状进盘：往返后组数、每组的标签、活动标签全部还在。
+    /// （P3 这条钉的是退化行为 —— 那时每次重启都会把分屏拍平成一个组。）
+    /// 逐项保形的详细断言在 `TerminalGroupsPersistenceTests`。
+    func testSnapshotRoundTripPreservesGroups() {
         let ws = WorkspaceModel()
         let s1 = UUID(), s2 = UUID()
-        let t1 = ws.openServer(profileID: s1, title: "a")
-        t1.splitFocusedPane(direction: .vertical)
+        _ = ws.openServer(profileID: s1, title: "a")
+        ws.splitActiveGroup(direction: .vertical)
         _ = ws.openServer(profileID: s2, title: "b")
+        XCTAssertEqual(ws.terminalGroups.groupCount, 2)
 
-        let snapshot = ws.snapshot()
-        let restored = WorkspaceModel(snapshot: snapshot)
-        XCTAssertEqual(restored.tabs.count, 2)
-        XCTAssertEqual(restored.tabs[0].root.leafIDs.count, 2)
-        XCTAssertEqual(restored.tabs[0].title, "a")
-        let restoredServers = restored.tabs[0].panes.values.map(\.serverProfileID)
-        XCTAssertEqual(Set(restoredServers), [s1])
+        let restored = WorkspaceModel(snapshot: ws.snapshot())
+        XCTAssertEqual(restored.terminalGroups.allTabs.count, 3)
+        XCTAssertEqual(restored.terminalGroups.groupCount, 2, "分屏形状必须还原")
+        XCTAssertEqual(restored.terminalGroups.allTabs.map(\.customTitle), ["a", "a", "b"])
+        XCTAssertEqual(restored.terminalGroups.allTabs.map(\.payload.serverProfileID),
+                       [s1, s1, s2])
+        XCTAssertEqual(restored.terminalGroups.activeTab?.customTitle, "b")
+        // 第一个组一个标签，第二个组两个（分屏克隆的 + 后开的 b）。
+        let groupTabCounts = restored.terminalGroups.groupIDs.map {
+            restored.terminalGroups.groups[$0]?.tabs.count ?? 0
+        }
+        XCTAssertEqual(groupTabCounts, [1, 2])
     }
 
     // MARK: ownership + UI state（Spec 1 §3.1）
@@ -501,10 +381,12 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(ws.focusedTerminalSession())
     }
 
-    func testFocusedTerminalSessionReturnsSessionForFocusedPane() {
+    /// 新语义 = 活动组的前台标签（旧语义是活动标签的聚焦窗格）。
+    func testFocusedTerminalSessionReturnsSessionForActiveTab() {
         let ws = WorkspaceModel()
         ws.openServer(profileID: UUID(), title: "x")
         XCTAssertNotNil(ws.focusedTerminalSession())
+        XCTAssertTrue(ws.focusedTerminalSession() === ws.terminalGroups.activeTab?.payload.session)
     }
 
     // MARK: restore(from:) & dispose（Fix #1 / #8）
@@ -531,7 +413,7 @@ final class WorkspaceModelTests: XCTestCase {
         let ws = WorkspaceModel()
         ws.openServer(profileID: UUID(), title: "old1")
         ws.openServer(profileID: UUID(), title: "old2")
-        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 2)
 
         let restoredServer = UUID()
         let snap = WorkspaceSnapshot(
@@ -539,8 +421,8 @@ final class WorkspaceModelTests: XCTestCase {
                                layout: .leaf(serverProfileID: restoredServer))],
             activeTabIndex: 0, uiState: nil)
         ws.restore(from: snap)
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.tabs[0].title, "restored")
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
+        XCTAssertEqual(ws.terminalGroups.allTabs[0].customTitle, "restored")
     }
 
     func testConvenienceInitFromSnapshotGoesThroughRestore() {
@@ -549,13 +431,12 @@ final class WorkspaceModelTests: XCTestCase {
             tabs: [TabSnapshot(title: "x", layout: .leaf(serverProfileID: id))],
             activeTabIndex: 0, uiState: nil)
         let ws = WorkspaceModel(snapshot: snap)
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.activeTabID, ws.tabs[0].id)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
+        XCTAssertEqual(ws.terminalGroups.activeTab?.id, ws.terminalGroups.allTabs[0].id)
     }
 
-    /// Fix #8：dispose 必须清理所有 tab 的窗格 + 左 sidebar 的 SFTP 会话。
-    /// 这里用 tabs.count 间接验证（disposeAll 不影响 count，但调用是否完成）；
-    /// FileBrowserModel/PaneModel 的真实 close 在自己的单测里覆盖。
+    /// Fix #8：dispose 必须清理所有终端标签的会话 + 左 sidebar 的 SFTP 会话。
+    /// FileBrowserModel / PaneModel 的真实 close 在自己的单测里覆盖。
     func testDisposeDoesNotCrash() {
         let ws = WorkspaceModel()
         ws.openServer(profileID: UUID(), title: "a")
@@ -598,8 +479,8 @@ final class WorkspaceModelTests: XCTestCase {
             tabs: [TabSnapshot(title: "坏的", layout: .leaf(serverProfileID: dead))],
             activeTabIndex: 0, uiState: nil)
         ws.restore(from: snap, knownServerIDs: [UUID()])
-        XCTAssertTrue(ws.tabs.isEmpty, "指向不存在服务器的标签必须被剪掉")
-        XCTAssertNil(ws.activeTabID)
+        XCTAssertTrue(ws.terminalGroups.isEmpty, "指向不存在服务器的标签必须被剪掉")
+        XCTAssertNil(ws.terminalGroups.activeTab)
     }
 
     func testRestoreWithEmptyWhitelistSkipsValidation() {
@@ -609,7 +490,8 @@ final class WorkspaceModelTests: XCTestCase {
             tabs: [TabSnapshot(title: "x", layout: .leaf(serverProfileID: unknown))],
             activeTabIndex: 0, uiState: nil)
         ws.restore(from: snap, knownServerIDs: [])
-        XCTAssertEqual(ws.tabs.count, 1, "空白名单 = 不校验（ServerProfile 未载入时不误伤）")
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1,
+                       "空白名单 = 不校验（ServerProfile 未载入时不误伤）")
     }
 
     /// 分屏里只有一侧指向已删除服务器时，保留另一侧而不是整个标签作废。
@@ -624,9 +506,8 @@ final class WorkspaceModelTests: XCTestCase {
                 second: .leaf(serverProfileID: live)))],
             activeTabIndex: 0, uiState: nil)
         ws.restore(from: snap, knownServerIDs: [live])
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.tabs[0].root.leafIDs.count, 1)
-        XCTAssertEqual(ws.tabs[0].panes.values.first?.serverProfileID, live)
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
+        XCTAssertEqual(ws.terminalGroups.allTabs[0].payload.serverProfileID, live)
     }
 
     /// 剪掉靠前的标签后，activeTabIndex 必须跟着重映射，不能指到别的标签上。
@@ -640,8 +521,8 @@ final class WorkspaceModelTests: XCTestCase {
             ],
             activeTabIndex: 1, uiState: nil)
         ws.restore(from: snap, knownServerIDs: [live])
-        XCTAssertEqual(ws.tabs.count, 1)
-        XCTAssertEqual(ws.activeTabID, ws.tabs[0].id)
-        XCTAssertEqual(ws.activeTab?.title, "好的")
+        XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
+        XCTAssertEqual(ws.terminalGroups.activeTab?.id, ws.terminalGroups.allTabs[0].id)
+        XCTAssertEqual(ws.terminalGroups.activeTab?.customTitle, "好的")
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import UPaneGroups
 
 /// ⌘W 关闭时，用户键盘焦点所在的内容区。
 enum FocusRegion: Equatable {
@@ -10,7 +11,10 @@ enum FocusRegion: Equatable {
 /// ⌘W 决策结果。
 enum CloseIntent: Equatable {
     case closeFileBuffer(UUID)
-    case closeTerminalFocusedPane(tabID: UUID)
+    /// 关终端区**活动组的前台标签**；组因此空掉就从分屏树里塌缩。
+    /// 旧名 `closeTerminalFocusedPane` —— 那时是「关活动标签的聚焦窗格，
+    /// 最后一个窗格再关掉整个标签」，窗口级标签这个层次现在没有了。
+    case closeTerminalActiveTab(tabID: UUID)
     case closeWindow
 }
 
@@ -27,13 +31,13 @@ nonisolated func resolveCloseIntent(_ ctx: CloseContext) -> CloseIntent {
     case .preview:
         if let id = ctx.activeFileBufferID { return .closeFileBuffer(id) }
     case .terminal:
-        if let id = ctx.activeTerminalTabID { return .closeTerminalFocusedPane(tabID: id) }
+        if let id = ctx.activeTerminalTabID { return .closeTerminalActiveTab(tabID: id) }
     case .unknown:
         break
     }
     // 回退优先级：文件 → 终端 → 窗口
     if let id = ctx.activeFileBufferID  { return .closeFileBuffer(id) }
-    if let id = ctx.activeTerminalTabID { return .closeTerminalFocusedPane(tabID: id) }
+    if let id = ctx.activeTerminalTabID { return .closeTerminalActiveTab(tabID: id) }
     return .closeWindow
 }
 
@@ -43,6 +47,15 @@ extension WorkspaceModel {
         resolveCloseIntent(CloseContext(
             focusedRegion: focusedRegion,
             activeFileBufferID: filePreviewModel.activeBufferID,
-            activeTerminalTabID: activeTab?.id))   // activeTab 非 nil 才有真实活动标签
+            activeTerminalTabID: terminalCloseTargetID))
+    }
+
+    /// ⌘W 在终端区有没有东西可关：活动组的前台标签；活动组是空的（分屏开出来还
+    /// 没放东西）但树里还有别的组时，可关的是那个**空组**本身 —— 用组 id 顶上，
+    /// `closeActiveTerminalTab()` 会把它收掉。都没有则 nil，回落到关窗口。
+    private var terminalCloseTargetID: UUID? {
+        if let id = terminalGroups.activeTab?.id { return id }
+        guard terminalGroups.groupCount > 1 else { return nil }
+        return terminalGroups.activeGroupID
     }
 }

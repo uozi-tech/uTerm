@@ -1,15 +1,53 @@
+import UPaneGroups
 import UPaneTree
 import AgentKit
 import AppKit
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
-/// 整个终端工作区：有序标签 + 当前活动标签 + 三栏 UI 状态 + 左/右栏的内置 model。
+/// 终端区标签的载荷就是 `PaneModel` —— 一条终端会话与一个标签 1:1，不可共享。
+typealias TerminalTab = UPaneTab<PaneModel>
+
+/// `UPaneGroups` 的 5 投放区。app 自己也有一个同名 `PaneDropZone`
+/// （`Views/PaneDropZone.swift`，预览区仍在用），同模块类型会遮蔽导入的同名类型，
+/// 故终端区一律用这个别名指组件那一个。
+typealias GroupDropZone = UPaneGroups.PaneDropZone
+
+/// 终端区那一套 `UPaneGroups` 参数里**唯一需要反复权衡**的一项，单独拎出来，
+/// 免得散落在多处。
+enum TerminalPaneAreaTuning {
+    /// 终端区的保活策略。
+    ///
+    /// **暂定 `.activeTabPerGroup`，待 Release 构建复测确认。** 曾有一轮实测说
+    /// 「隐藏但挂载的终端在全速重绘、拍平挂载太贵」，但那轮跑的是 **Debug** 构建，
+    /// 而 VT 解析成本 Debug 与 Release 实测差 9.4×，绘制的加速比未知 —— 结论可能
+    /// 反转成「可以用 `.allTabs`」。见 uAppKit `docs/pane-groups-design.md` §3.1
+    /// 与「未确认清单」第 2 条。
+    ///
+    /// 改成 `.allTabs` 只需要动这一行：切标签会从「重挂 NSView」变成「纯透明度
+    /// 翻转」，scrollback 两种取法都不丢（`TerminalHostView` 本来就复用
+    /// `TerminalSession` 持有的那个 NSView，重挂只是 attach/detach）。
+    static let keepAlive: UPaneGroupsPolicy.KeepAlive = .activeTabPerGroup
+}
+
+/// 整个终端工作区：一棵终端组树 + 三栏 UI 状态 + 左/右栏的内置 model。
+///
+/// 终端区是 **VSCode 编辑组模型**：全窗口一棵分屏树，树的叶子是「组」，每个组有
+/// 自己的一条标签条与一个前台标签。旧模型（窗口级标签，每个标签内部一棵窗格树）
+/// 连同 `TabModel` 已整个删除 —— 代价是「每个标签一套自己的分屏布局」这个能力在
+/// 新模型下无法表达（设计文档 §4.4(b)，已确认接受）。
 @MainActor
 @Observable
 final class WorkspaceModel {
-    private(set) var tabs: [TabModel] = []
-    var activeTabID: UUID?
+    /// 终端区的组树。所有开 / 关 / 切 / 分屏 / 拖拽都走它。
+    let terminalGroups: UPaneGroupsModel<PaneModel>
+
+    /// 本窗口绑定的服务器。没有活动标签时（区域空掉、或分屏按钮开在空组上）的
+    /// 回落来源，由 `TerminalArea` 注入。
+    /// `@ObservationIgnored`：是接线不是状态，改它不该让任何视图失效。
+    @ObservationIgnored private var defaultServerProfileID: UUID?
+    @ObservationIgnored private var defaultServerTitle: String = "终端"
 
     /// 三栏 UI 状态：sidebar 折叠 / inspector 显隐 / 预览-终端比例。持久化进 snapshot。
     var uiState = WorkspaceUIState()
@@ -45,6 +83,15 @@ final class WorkspaceModel {
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
         self.fileBrowserModel = fileBrowserModel
+        // 分屏按钮不限组数（uTerm 一向无上限，与 uTable 的 3 组封顶不同）；
+        // 组丢掉最后一个标签就塌缩，但整棵树的最后一个组留着显示
+        // 「没有打开的终端标签」空态 —— 那正是旧 `TerminalArea` 的空态。
+        self.terminalGroups = UPaneGroupsModel<PaneModel>(policy: UPaneGroupsPolicy(
+            splitButtonMaxGroups: nil,
+            collapsesEmptyGroups: true,
+            allowsLastGroupEmpty: true,
+            releasesHiddenEditorFocusOnTabSwitch: true,
+            keepAlive: TerminalPaneAreaTuning.keepAlive))
         // 按 windowID 命名 recents 文件；windowID 为 nil（测试）走临时目录。
         let store: RecentFilesStore
         if let wid = windowID {
@@ -70,6 +117,50 @@ final class WorkspaceModel {
         assistantModel.onCommandExecutionFinished = { [weak self] in
             await self?.refreshAfterAgentCommandAttempt()
         }
+        wireTerminalGroups()
+    }
+
+    /// 组树的三个钩子。组件对载荷零操作，会话生命周期全在这里收口。
+    private func wireTerminalGroups() {
+        // 标签被移出模型 = 那条会话该关（关 PTY + 解 host-key relay）。
+        // 文件窗格的 `dispose()` 自带 no-op 守卫：buffer 归 FilePreviewModel 所有，
+        // 关掉一个引用它的终端标签不该把它释放掉。
+        terminalGroups.onTabRemoved = { removed, _ in removed.payload.dispose() }
+        // 组内唯一标签拖到本组边缘 → 克隆。终端标签克隆 = 同服务器新开一条会话；
+        // 文件标签克隆 = 同一个 buffer 再挂一份（对齐旧 `insertPane(copying:)`）。
+        terminalGroups.cloneTab = { tab in
+            if let buffer = tab.payload.fileBuffer {
+                return TerminalTab(payload: PaneModel(serverProfileID: tab.payload.serverProfileID,
+                                                      fileBuffer: buffer))
+            }
+            return TerminalTab(payload: PaneModel(serverProfileID: tab.payload.serverProfileID),
+                               customTitle: tab.customTitle)
+        }
+        // 分屏按钮 / ⌘D 开的新组里放一条新会话 —— **保留旧的克隆语义**
+        // （uTable 那边是有意开空组，理由是克隆大表的数据网格；终端没有这个问题，
+        // 空的终端组只能显示一个「新建终端」按钮，白白多一次点击）。
+        terminalGroups.makeTabForNewGroup = { [weak self] in
+            guard let self, let seed = self.splitSeedServer() else { return nil }
+            return TerminalTab(payload: PaneModel(serverProfileID: seed.id),
+                               customTitle: seed.title)
+        }
+    }
+
+    /// 分屏开新组时新会话连哪台服务器：跟随当前活动标签（旧
+    /// `splitFocusedPane` 就是复制聚焦窗格的 `serverProfileID`），没有活动标签时
+    /// 回落到本窗口绑定的服务器。
+    private func splitSeedServer() -> (id: UUID, title: String)? {
+        if let tab = terminalGroups.activeTab, tab.payload.fileBuffer == nil {
+            return (tab.payload.serverProfileID, tab.customTitle ?? defaultServerTitle)
+        }
+        guard let id = defaultServerProfileID else { return nil }
+        return (id, defaultServerTitle)
+    }
+
+    /// 由 `TerminalArea` 注入本窗口绑定的服务器。
+    func bindDefaultServer(id: UUID, title: String) {
+        defaultServerProfileID = id
+        defaultServerTitle = title
     }
 
     private func refreshAfterAgentCommandAttempt() async {
@@ -97,35 +188,31 @@ final class WorkspaceModel {
     /// 的 .task(id:) 持有的引用始终稳定，避免「窗口实例换了但 view 的 task
     /// 不重启」的卡死。
     ///
-    /// `knownServerIDs` 非空时用作白名单：指向不存在服务器的叶子直接丢弃，叶子被
-    /// 丢光的标签也一并丢弃。旧版本写坏的快照（叶子是随机 UUID）会在这里被清掉，
+    /// `knownServerIDs` 非空时用作白名单：指向不存在服务器的标签直接丢弃，标签被
+    /// 丢光的组也一并丢弃。旧版本写坏的快照（叶子是随机 UUID）会在这里被清掉，
     /// 调用方随后靠「没有标签就开一个」兜底出一个真正可用的终端，而不是恢复出一个
     /// 永远卡在「服务器配置已被删除」的窗格。传空集合表示跳过校验（测试场景，或
     /// ServerProfile 尚未载入时不做误判）。
     func restore(from snapshot: WorkspaceSnapshot, knownServerIDs: Set<UUID> = []) {
-        // 先 dispose 旧 tab 的资源（虽然实践中 restore 通常在空 model 上调用，
-        // 但保留正确语义供未来"重连/切换布局"复用）。
-        for tab in tabs { tab.disposeAll() }
-        tabs.removeAll()
+        // 先 dispose 旧标签的资源（实践中 restore 通常在空 model 上调用，但保留
+        // 正确语义供未来「重连 / 切换布局」复用）。组件的 `restore` 整树替换、
+        // 不走 `onTabRemoved`（它是换作用域，不是逐个关标签），所以这里手动 dispose。
+        for tab in terminalGroups.allTabs { tab.payload.dispose() }
 
-        // 记录每个保留下来的标签在快照里的原始下标，pruning 丢掉标签后
-        // activeTabIndex 才不会指到别的标签上。
-        var keptSourceIndices: [Int] = []
-        for (index, tabSnap) in snapshot.tabs.enumerated() {
-            guard let layout = Self.pruningUnknownServers(tabSnap.layout,
-                                                          knownServerIDs: knownServerIDs)
-            else { continue }
-            var panes: [UUID: PaneModel] = [:]
-            let root = Self.buildNode(layout, into: &panes)
-            tabs.append(TabModel(title: tabSnap.title, root: root, panes: panes))
-            keptSourceIndices.append(index)
+        // 终端区：新快照直接吃 `terminalGroups` 组树；老快照（该键为 nil）按设计
+        // 文档 §4.2 的 M2 规则迁移 —— 见 `WorkspaceSnapshot.migratingLegacyTabs`。
+        //
+        // 白名单剪枝在下面这个 `make` 闭包里，对新老两种格式一视同仁：返回 nil 的
+        // 标签丢掉 → 标签被丢光的组丢掉 → split 只剩一侧就把那一侧上提 → 整棵树都
+        // 没剩下就回落到一个空组，由调用方「没有标签就开一个」兜底。
+        // **绝不给缺失项回落一个随机 UUID。**
+        terminalGroups.restore(snapshot.terminalGroupsForRestore) { tabSnap in
+            guard knownServerIDs.isEmpty || knownServerIDs.contains(tabSnap.serverProfileID)
+            else { return nil }
+            return TerminalTab(payload: PaneModel(serverProfileID: tabSnap.serverProfileID),
+                               customTitle: tabSnap.title)
         }
-        if let idx = snapshot.activeTabIndex,
-           let position = keptSourceIndices.firstIndex(of: idx) {
-            activeTabID = tabs[position].id
-        } else {
-            activeTabID = tabs.first?.id
-        }
+
         if let ui = snapshot.uiState {
             self.uiState = ui
         }
@@ -147,13 +234,11 @@ final class WorkspaceModel {
         endDrag()
         agentBackgroundRefreshTask?.cancel()
         agentBackgroundRefreshTask = nil
-        for tab in tabs { tab.disposeAll() }
+        for tab in terminalGroups.allTabs { tab.payload.dispose() }
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
         telemetryModel.stop()
     }
-
-    var activeTab: TabModel? { tabs.first { $0.id == activeTabID } }
 
     /// 每次向工作区 Agent 发送消息时使用的实时上下文。活动文件来自预览模型，因而
     /// 切换编辑标签或分屏焦点后，Agent 能直接定位当前窗口对应的远端绝对路径。
@@ -177,48 +262,42 @@ final class WorkspaceModel {
         uiState.rightInspectorPresented.toggle()
     }
 
-    /// 当前活动 tab 的聚焦终端会话；无活动 tab / 无聚焦窗格则返回 nil。
+    /// 活动组的前台终端会话；没有活动标签则返回 nil。
     /// 工具栏徽标与状态栏按此决定要不要渲染。
+    ///
+    /// 旧语义是「活动标签的**聚焦窗格**」；新语义是「活动组的前台标签」——
+    /// 全窗口唯一，语义反而更准（旧模型里一个标签四个窗格连四台机器时，
+    /// 这里只反映聚焦那一个）。
     func focusedTerminalSession() -> TerminalSession? {
-        activeTab?.focusedPane?.session
+        terminalGroups.activeTab?.payload.session
     }
 
     func connectSharedSFTP(profile: ServerProfile, modelContainer: ModelContainer) async {
         await fileBrowserModel.connect(profile: profile, modelContainer: modelContainer)
     }
 
-    /// 新开一个标签连指定服务器，并设为活动标签。
+    /// 在活动组（或指定组）里新开一个标签连指定服务器，并设为该组的前台标签。
+    /// 旧 `openServer` 是「新开一个窗口级标签」；⌘T 的行为等价。
     @discardableResult
-    func openServer(profileID: UUID, title: String) -> TabModel {
-        let tab = TabModel(title: title, rootServerProfileID: profileID)
-        tabs.append(tab)
-        activeTabID = tab.id
-        return tab
+    func openServer(profileID: UUID, title: String, in groupID: UUID? = nil) -> UUID {
+        terminalGroups.openTab({
+            TerminalTab(payload: PaneModel(serverProfileID: profileID), customTitle: title)
+        }, in: groupID)
     }
 
-    func selectTab(_ id: UUID) {
-        guard tabs.contains(where: { $0.id == id }) else { return }
-        activeTabID = id
+    /// ⌘D / ⇧⌘D / 标签条右侧的分屏按钮：对活动组分屏，新组里放一条新会话。
+    func splitActiveGroup(direction: SplitDirection) {
+        guard let groupID = terminalGroups.activeGroupID ?? terminalGroups.root.firstLeafID
+        else { return }
+        terminalGroups.splitGroup(groupID, direction: direction)
     }
 
-    func closeTab(_ id: UUID) {
-        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
-        tabs[idx].disposeAll()
-        tabs.remove(at: idx)
-        if activeTabID == id {
-            activeTabID = tabs.indices.contains(idx) ? tabs[idx].id
-                : tabs.indices.contains(idx - 1) ? tabs[idx - 1].id
-                : tabs.first?.id
-        }
-    }
-
-    /// 把某标签移到 `toIndex`（`toIndex` 即目标标签槽位）。
-    func moveTab(fromID: UUID, toIndex: Int) {
-        guard let from = tabs.firstIndex(where: { $0.id == fromID }) else { return }
-        let clamped = max(0, min(toIndex, tabs.count - 1))
-        guard from != clamped else { return }
-        let tab = tabs.remove(at: from)
-        tabs.insert(tab, at: clamped)
+    /// ⌘W 的终端分支：关活动组的前台标签；组因此空掉就从分屏树里塌缩。
+    /// 活动组是空的（分屏开出来还没放东西）时改为收掉那个空组。
+    /// 返回 false = 终端区没东西可关，调用方回落到关窗口。
+    @discardableResult
+    func closeActiveTerminalTab() -> Bool {
+        terminalGroups.closeActiveTab()
     }
 
     /// 记录一次 workspace 内拖拽源。`.onDrag` 没有结束回调，因此与 pane
@@ -251,105 +330,63 @@ final class WorkspaceModel {
         dragEndPollTask = nil
     }
 
-    /// 把当前登记的拖拽源投放到 `targetPaneID`。这是 UI drop 的同步入口：
-    /// provider 只用于系统识别拖拽类型，真正的源 id 从 `dragSource` 读取。
-    @discardableResult
-    func dropDragSource(onto targetPaneID: UUID, zone: PaneDropZone) -> Bool {
-        guard let dragSource else { return false }
-        defer { endDrag() }
-
-        switch dragSource {
-        case .pane(let sourcePaneID):
-            return dropPane(sourcePaneID, onto: targetPaneID, zone: zone)
-        case .tab(let sourceTabID):
-            return dropTab(sourceTabID, onto: targetPaneID, zone: zone)
-        case .fileBuffer(let bufferID):
-            return dropFileBuffer(bufferID, onto: targetPaneID, zone: zone)
-        }
-    }
-
-    /// 把当前登记的拖拽源投放到当前活动 terminal tab 的聚焦窗格。
-    /// PreviewArea 使用独立的 file panel layout，不走这个入口。
-    @discardableResult
-    func dropDragSourceOntoFocusedPane(zone: PaneDropZone) -> Bool {
-        guard let targetPaneID = activeTab?.focusedPaneID
-                ?? activeTab?.root.firstLeafID
-        else {
-            endDrag()
-            return false
-        }
-        return dropDragSource(onto: targetPaneID, zone: zone)
-    }
-
-    @discardableResult
-    private func dropPane(_ sourcePaneID: UUID, onto targetPaneID: UUID,
-                          zone: PaneDropZone) -> Bool {
-        guard sourcePaneID != targetPaneID,
-              let targetTab = activeTab,
-              targetTab.panes[sourcePaneID] != nil,
-              targetTab.panes[targetPaneID] != nil
-        else {
-            return false
-        }
-        if zone == .center {
-            targetTab.swapPanes(sourcePaneID, targetPaneID)
-        } else {
-            targetTab.movePane(sourcePaneID, toTarget: targetPaneID, zone: zone)
-        }
-        return true
-    }
-
-    /// 把一个标签作为新窗格投放到当前活动标签的某个窗格旁边。
-    /// 源标签是当前标签时复制当前聚焦窗格；否则源标签关闭，目标标签保持活动。
-    @discardableResult
-    func dropTab(_ sourceTabID: UUID, onto targetPaneID: UUID,
-                 zone: PaneDropZone) -> Bool {
-        guard zone != .center,
-              let targetTab = activeTab,
-              targetTab.panes[targetPaneID] != nil,
-              let sourceTab = tabs.first(where: { $0.id == sourceTabID }),
-              let sourcePane = sourceTab.focusedPane
-                ?? sourceTab.root.firstLeafID.flatMap({ sourceTab.panes[$0] })
-        else {
-            return false
-        }
-
-        let inserted = targetTab.insertPane(
-            copying: sourcePane,
-            toTarget: targetPaneID,
-            zone: zone)
-        guard inserted else { return false }
-        if targetTab.id != sourceTabID {
-            closeTab(sourceTabID)
-        }
-        activeTabID = targetTab.id
-        return true
-    }
-
-    /// 把一个文件预览 buffer 作为新窗格投放到当前活动标签的某个窗格旁边。
+    /// 外来拖拽落到终端区的某个组（组件的 `onForeignDrop`）。
+    /// 终端区自己的标签拖拽由 `UPaneGroups` 全权处理（真移动，不复制、不关源），
+    /// 这里只剩「预览标签的文件 buffer → 终端组」这一种外来载荷。
     ///
-    /// `id` 可能是预览**标签** id（`UPaneGroupArea` 写进拖拽载荷的就是它），也可能是
-    /// buffer id（旧路径 / 测试），由 `buffer(forDragPayloadID:)` 统一解析。
+    /// **同步拖拽源优先**：不依赖 `NSItemProvider.loadDataRepresentation` 的异步
+    /// 回调决定 UI 是否更新；provider 只作兜底。
     @discardableResult
-    func dropFileBuffer(_ id: UUID, onto targetPaneID: UUID,
-                        zone: PaneDropZone) -> Bool {
-        guard let buffer = filePreviewModel.buffer(forDragPayloadID: id) else {
-            return false
+    func dropForeignPayload(_ providers: [NSItemProvider], ontoGroup groupID: UUID,
+                            zone: GroupDropZone) -> Bool {
+        if case .fileBuffer(let bufferID)? = dragSource {
+            endDrag()
+            return dropFileBuffer(bufferID, ontoGroup: groupID, zone: zone)
         }
-        return dropFileBuffer(buffer, onto: targetPaneID, zone: zone)
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.utermFileBufferID.identifier)
+        }) else { return false }
+        endDrag()
+        FileBufferDragPayload.load(from: provider) { [weak self] bufferID in
+            guard let bufferID else { return }
+            Task { @MainActor in
+                _ = self?.dropFileBuffer(bufferID, ontoGroup: groupID, zone: zone)
+            }
+        }
+        return true
+    }
+
+    /// 把一个预览 buffer 作为新标签投放到终端区的某个组。
+    /// `center` = 并入该组；边缘 = 在那一侧开一个新组装它。
+    @discardableResult
+    /// `id` 可能是预览**标签** id（`UPaneGroupArea` 写进拖拽载荷的就是它），也可能是
+    /// buffer id（旧路径 / 测试），由 `buffer(forDragPayloadID:)` 统一解析。只按 buffer id
+    /// 查的话，从预览区拖标签到终端组会静默失败。
+    func dropFileBuffer(_ id: UUID, ontoGroup groupID: UUID, zone: GroupDropZone) -> Bool {
+        guard let buffer = filePreviewModel.buffer(forDragPayloadID: id) else { return false }
+        return dropFileBuffer(buffer, ontoGroup: groupID, zone: zone)
     }
 
     /// 测试与内部调用用重载：允许直接传入已持有的 FileBuffer。
     @discardableResult
-    func dropFileBuffer(_ buffer: FileBuffer, onto targetPaneID: UUID,
-                        zone: PaneDropZone) -> Bool {
-        guard zone != .center,
-              let targetTab = activeTab,
-              targetTab.panes[targetPaneID] != nil
-        else {
-            return false
+    func dropFileBuffer(_ buffer: FileBuffer, ontoGroup groupID: UUID,
+                        zone: GroupDropZone) -> Bool {
+        guard let group = terminalGroups.groups[groupID] else { return false }
+        // 文件窗格跟着目标组当前那台服务器走（旧 `insertFilePane` 取的是目标窗格的
+        // `serverProfileID`）。
+        let serverID = group.activeTab?.payload.serverProfileID
+            ?? defaultServerProfileID
+            ?? UUID()
+        let tab = TerminalTab(payload: PaneModel(serverProfileID: serverID, fileBuffer: buffer))
+        // 空组的边缘 = 把一个空组再劈成两半，没有意义；一律并入。
+        guard zone != .center, !group.tabs.isEmpty else {
+            terminalGroups.openTab({ tab }, in: groupID)
+            return true
         }
-        return targetTab.insertFilePane(buffer, toTarget: targetPaneID, zone: zone)
+        // 组件的 `moveTab` 只搬**已经在树里**的标签，所以先开进目标组再搬到边缘。
+        let id = terminalGroups.openTab({ tab }, in: groupID)
+        terminalGroups.moveTab(id, toGroup: groupID, zone: zone)
+        return true
     }
 
     // MARK: 快照
@@ -368,88 +405,46 @@ final class WorkspaceModel {
             input: ""))
     }
 
+    /// 终端区**同时写两份**：
+    ///
+    /// - 新键 `terminalGroups`：整棵组树（分屏形状 / fraction / 每组的标签顺序 /
+    ///   每组前台标签 / 活动组），恢复时逐项还原。走组件的 `snapshot(_:)`。
+    /// - 旧键 `tabs` + `activeTabIndex`：**降级回滚通道**（设计文档 §4.2 末条）。
+    ///   把组树降维成「一个标签一条 `TabSnapshot`，layout 恒为单叶」——会话一条
+    ///   不丢，装回旧版本会看到它们摊成一排窗口级标签，只是分屏形状没了。
+    ///   （文档建议的「一个组一条」会把每个组的后台标签整条丢掉，这里不采纳。）
+    ///
+    /// 两份都**绝不给缺失项回落随机 UUID** —— 那会写进一个不存在的
+    /// serverProfileID，恢复出永远「服务器配置已被删除」的终端。文件窗格返回 nil
+    /// 直接丢掉（buffer 由 `openFiles` 单独持久化）。
     private func makeSnapshot(agentState: AgentSnapshot) -> WorkspaceSnapshot {
+        let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
+            guard tab.payload.fileBuffer == nil else { return nil }
+            return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
+                                       title: tab.customTitle ?? "终端")
+        }
+
         var activeIdx: Int?
         var tabSnaps: [TabSnapshot] = []
-        for tab in tabs {
-            guard let layout = Self.nodeSnapshot(tab.root, panes: tab.panes) else {
-                continue
-            }
+        let activeTabID = terminalGroups.activeTab?.id
+        for tab in terminalGroups.allTabs {
+            guard tab.payload.fileBuffer == nil else { continue }
             if tab.id == activeTabID {
                 activeIdx = tabSnaps.count
             }
-            tabSnaps.append(TabSnapshot(title: tab.title, layout: layout))
+            tabSnaps.append(TabSnapshot(
+                title: tab.customTitle ?? "终端",
+                layout: .leaf(serverProfileID: tab.payload.serverProfileID)))
         }
         let (openFiles, activeFileIndex) = filePreviewModel.openFileSnapshots()
         return WorkspaceSnapshot(
             tabs: tabSnaps,
             activeTabIndex: activeIdx,
+            terminalGroups: groups,
             uiState: uiState,
             fileBrowserPath: fileBrowserModel.snapshotCurrentPath,
             openFiles: openFiles,
             activeFileIndex: activeFileIndex,
             agentState: agentState)
-    }
-
-    private static func nodeSnapshot(_ node: LayoutNode,
-                                     panes: [UUID: PaneModel]) -> NodeSnapshot? {
-        switch node {
-        case .leaf(let paneID):
-            // 窗格查不到就丢掉这个叶子。旧代码在这里回落 `UUID()`，把一个不存在的
-            // serverProfileID 写进快照 —— 下次打开工作区恢复出的终端永远显示
-            // 「连接失败 / 服务器配置已被删除」，且没有可用的重试入口。
-            guard let pane = panes[paneID], pane.fileBuffer == nil else { return nil }
-            return .leaf(serverProfileID: pane.serverProfileID)
-        case .split(let s):
-            let first = nodeSnapshot(s.first, panes: panes)
-            let second = nodeSnapshot(s.second, panes: panes)
-            switch (first, second) {
-            case let (first?, second?):
-                return .split(direction: s.direction, fraction: s.fraction,
-                              first: first, second: second)
-            case let (first?, nil):
-                return first
-            case let (nil, second?):
-                return second
-            case (nil, nil):
-                return nil
-            }
-        }
-    }
-
-    /// 剪掉指向未知服务器的叶子；某个 split 的两侧都被剪掉时整个 split 也返回 nil。
-    /// `knownServerIDs` 为空表示不做校验，原样返回。
-    nonisolated static func pruningUnknownServers(
-        _ snap: NodeSnapshot, knownServerIDs: Set<UUID>) -> NodeSnapshot? {
-        guard !knownServerIDs.isEmpty else { return snap }
-        switch snap {
-        case .leaf(let serverProfileID):
-            return knownServerIDs.contains(serverProfileID) ? snap : nil
-        case .split(let direction, let fraction, let first, let second):
-            let f = pruningUnknownServers(first, knownServerIDs: knownServerIDs)
-            let s = pruningUnknownServers(second, knownServerIDs: knownServerIDs)
-            switch (f, s) {
-            case let (f?, s?):
-                return .split(direction: direction, fraction: fraction, first: f, second: s)
-            case let (f?, nil):  return f
-            case let (nil, s?):  return s
-            case (nil, nil):     return nil
-            }
-        }
-    }
-
-    private static func buildNode(_ snap: NodeSnapshot,
-                                  into panes: inout [UUID: PaneModel]) -> LayoutNode {
-        switch snap {
-        case .leaf(let serverProfileID):
-            let pane = PaneModel(serverProfileID: serverProfileID)
-            panes[pane.id] = pane
-            return .leaf(paneID: pane.id)
-        case .split(let direction, let fraction, let first, let second):
-            return .split(SplitNode(
-                id: UUID(), direction: direction, fraction: fraction,
-                first: buildNode(first, into: &panes),
-                second: buildNode(second, into: &panes)))
-        }
     }
 }

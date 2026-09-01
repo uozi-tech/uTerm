@@ -1,11 +1,9 @@
-import UPaneTree
 import UDesignKit
-import UAppKitBridge
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
-import AppKit
 
+/// 面板头部小图标按钮的命中区尺寸。终端区的窗格头已随本次改造删除，但预览区
+/// （`PreviewArea`）还在用同一套尺寸，故留在这里。
 enum PaneHeaderButtonLayout {
     nonisolated static let hitWidth: CGFloat = 28
     nonisolated static let hitHeight: CGFloat = 22
@@ -13,219 +11,50 @@ enum PaneHeaderButtonLayout {
     nonisolated static let cornerRadius: CGFloat = 5
 }
 
-/// 渲染一个 `PaneModel`：终端窗格按连接状态显示，文件窗格显示文件浏览内容。
+/// 一个终端标签的面板内容：终端窗格按连接状态显示，文件窗格显示文件预览。
+///
+/// **只剩内容。** 标题 / 关闭 / 分屏 / 拖拽手柄都搬到了组件的标签条上，旧的 22px
+/// 窗格头整条消失（设计文档 §4.4(g)）；焦点框、五区落点、按下即激活的 NSEvent
+/// 探针也都由 `UPaneGroupArea` 提供 —— 那个探针不能退回 SwiftUI 手势：终端内容是
+/// SwiftTerm 的 NSView，自己吃掉 `mouseDown`，而 SwiftUI 在 macOS 上不装
+/// `NSGestureRecognizer`，祖先的 `.onTapGesture` 永不触发。
 struct PaneView: View {
     let pane: PaneModel
-    /// 该窗格是否为所在标签的聚焦窗格（用于高亮）。
-    let isFocused: Bool
-    /// 当前标签的拖拽会话状态（所有窗格共享一份）。
-    let dragState: PaneDragState
-    /// Workspace 级拖拽源；tab/file/pane drag 都会登记到这里，drop 时同步消费。
-    let workspaceDragSource: WorkspaceDragSource?
-    /// 点击窗格时通知上层设置聚焦。
-    let onFocus: () -> Void
-    /// 窗格拖拽开始时通知 workspace 登记源。
-    let onBeginPaneDrag: @MainActor @Sendable (_ sourcePane: UUID) -> Void
-    /// 头部「分屏」按钮；方向由 `PaneView` 按窗格长宽比算出后传出。
-    let onSplit: (SplitDirection) -> Void
-    /// 拖拽落点：把 `source` 窗格按 `zone` 移到本窗格 / 与本窗格交换。
-    let onMoveOrSwap: @MainActor @Sendable (_ source: UUID, _ zone: PaneDropZone) -> Void
-    /// 标签落点：把 `sourceTab` 作为新窗格插到本窗格旁边。
-    let onTabDrop: @MainActor @Sendable (_ sourceTab: UUID, _ zone: PaneDropZone) -> Void
-    /// 文件 buffer 落点：把 `sourceBuffer` 作为新窗格插到本窗格旁边。
-    let onFileDrop: @MainActor @Sendable (_ sourceBuffer: UUID, _ zone: PaneDropZone) -> Void
+    /// 由 `TerminalArea` 在区域层解析后传下来 —— 面板不自己扫 `@Query` 数组。
+    let profile: ServerProfile?
+    /// 已载入的 `ServerProfile` 数量。为 0 时不判「配置已删除」（那是终态，
+    /// 在 store 打开 / CloudKit 同步的瞬态里判就是假阳性）。
+    let profileCount: Int
+    /// 终端配色方案的背景色，由区域层算好传下来。
+    let background: Color
     /// 文件窗格里的不可预览提示下载入口。来源于 Workspace 共享的 FilePreviewModel。
     var onDownloadFile: ((FileBuffer, URL) async throws -> Void)? = nil
     /// 文件窗格里的 Markdown 图片加载入口。来源于 Workspace 共享的 FilePreviewModel。
     let onLoadMarkdownImage: MarkdownBufferImageLoader
-    /// Workspace 级同步 drop 入口。
-    let onWorkspaceDrop: @MainActor @Sendable (_ zone: PaneDropZone) -> Bool
-    /// 头部「关闭窗格」按钮。
-    let onClose: () -> Void
-    /// 是否渲染窗格头部（图标 + 服务器名 + 分屏 + 关闭）。
-    /// 单窗格 tab 由 titlebar 上的 chip 表达标题，header 多余。
-    let showsHeader: Bool
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var profiles: [ServerProfile]
-
-    @State private var paneSize: CGSize = .zero
-    /// 窗格根视图的屏幕坐标探针；拖拽开始时用于计算抓取偏移。
-    @State private var paneFrameProbe = ViewFrameProbe()
-
-    private var profile: ServerProfile? {
-        profiles.first { $0.id == pane.serverProfileID }
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if showsHeader { header }
-            content
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { paneSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in paneSize = newSize }
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(background)
+            .task(id: pane.id) { await connect() }
+            // `.task(id:)` 只在窗格 id 变化时重跑，服务器列表迟到不会让它重来一遍。
+            // 列表到齐后补连一次，避免窗格永远停在「未连接」。
+            .onChange(of: profileCount) { _, _ in
+                guard pane.fileBuffer == nil,
+                      pane.session.connectionState == .idle else { return }
+                Task { await connect() }
             }
-        )
-        .background(ViewFrameReader(probe: paneFrameProbe))
-        // 投放区高亮叠在整块窗格上 —— 与 .onDrop 的 bounds、paneSize 量测
-        // 同一坐标系（包含头部，当 showsHeader 为 true 时），高亮位置才与
-        // paneDropZone 的归类一致。
-        .overlay {
-            if let zone = dropHighlightZone {
-                PaneDropHighlight(zone: zone)
-            }
-        }
-        .overlay {
-            if shouldCatchDrop {
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-                    .onDrop(of: [.utermPaneID, .utermTabID],
-                            delegate: paneDropDelegate)
-            }
-        }
-        // 焦点蓝框：只在多窗格 tab（即显示 header 时）出现 —— 单窗格 tab 时
-        // 整块区域就是唯一焦点，框纯是视觉噪声。
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(
-                    (isFocused && showsHeader) ? UD.accent : Color.clear,
-                    lineWidth: 1.5)
-        )
-        .contentShape(Rectangle())
-        // 不能用 SwiftUI 手势设置聚焦：窗格内容是 SwiftTerm 的终端视图（NSView，
-        // 自己实现 mouseDown 并抢 first responder），而 SwiftUI 在 macOS 上不装
-        // NSGestureRecognizer，命中测试一落到那个 NSView，NSHostingView.mouseDown
-        // 就不会被调用 —— 挂在这里的 .onTapGesture 永不触发。症状是点进另一个窗格
-        // 的终端后，焦点蓝框不动，随后的 ⌘D 分屏、⌘W 关窗格、状态栏显示的会话，
-        // 全都还作用在上一个窗格上。改用 NSEvent 旁观探针（不消费事件、对命中测试
-        // 透明，终端的选中/拖拽/first responder 照常）。
-        .onPointerDown { onFocus() }
-        .onDrop(of: [.utermPaneID, .utermTabID],
-                delegate: paneDropDelegate)
-        .task(id: pane.id) { await connect() }
-        // `.task(id:)` 只在窗格 id 变化时重跑，@Query 结果迟到不会让它重来一遍。
-        // 服务器列表到齐后补连一次，避免窗格永远停在「未连接」。
-        .onChange(of: profiles.count) { _, _ in
-            guard pane.fileBuffer == nil,
-                  pane.session.connectionState == .idle else { return }
-            Task { await connect() }
-        }
-        .hostKeySheet(pane.hostKeyRelay)
-    }
-
-    private var paneDropDelegate: PaneDropDelegate {
-        PaneDropDelegate(
-            targetID: pane.id,
-            dragState: dragState,
-            bounds: CGRect(origin: .zero, size: paneSize),
-            onDrop: onMoveOrSwap,
-            onTabDrop: onTabDrop,
-            onFileDrop: onFileDrop,
-            workspaceDragSource: { workspaceDragSource },
-            onWorkspaceDrop: onWorkspaceDrop)
-    }
-
-    /// 窗格头部条：拖拽手柄（图标 + 服务器名）+ 分屏 / 关闭控制。
-    private var header: some View {
-        HStack(spacing: 6) {
-            // 图标 + 名称区域兼作拖拽手柄；尾部按钮在手柄之外，故按钮的
-            // mouseDown 不会进入 .onDrag 的潜在拖拽态，保持可点。
-            HStack(spacing: 6) {
-                Image(systemName: headerIcon)
-                    .font(UD.font(10.5))
-                    .foregroundStyle(UD.text3)
-                Text(headerTitle)
-                    .font(UD.font(10.5))
-                    .foregroundStyle(isFocused ? UD.text2 : UD.text3)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .help(headerTitle)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .onDrag {
-                dragState.begin(paneID: pane.id, preview: makeDragPreview())
-                onBeginPaneDrag(pane.id)
-                return PaneDragPayload.itemProvider(paneID: pane.id)
-            } preview: {
-                // 让 AppKit 的拖拽图像不可见——可见幽灵由 PaneDragGhostLayer
-                // 渲染（AppKit 的拖拽图像无法可靠控制尺寸）。
-                Color.clear.frame(width: 1, height: 1)
-            }
-            HStack(spacing: 0) {
-                PaneHeaderIconButton(systemName: "rectangle.split.2x1",
-                                     help: "分屏") {
-                    onSplit(autoSplitDirection)
-                }
-                PaneHeaderIconButton(systemName: "xmark",
-                                     help: "关闭窗格",
-                                     action: onClose)
-            }
-        }
-        .font(UD.font(10.5))
-        .padding(.horizontal, 8)
-        .frame(height: 22)
-        .background(UD.panel)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
-    }
-
-    /// 拖拽开始时捕获幽灵内容快照。
-    private func makeDragPreview() -> PaneDragPreview {
-        PaneDragPreview(
-            name: profile?.name ?? "终端",
-            paneSize: paneSize,
-            grabOffset: grabOffset())
-    }
-
-    /// 抓取点相对窗格左上角的偏移；探针不可用时返回 nil（幽灵居中兜底）。
-    private func grabOffset() -> CGSize? {
-        guard let frame = paneFrameProbe.screenFrame else { return nil }
-        return paneGrabOffset(mouse: NSEvent.mouseLocation, in: frame)
-    }
-
-    /// 按窗格当前长宽比选分屏方向：偏宽 → 左右分，偏高 → 上下分。
-    private var autoSplitDirection: SplitDirection {
-        paneSize.width >= paneSize.height ? .horizontal : .vertical
-    }
-
-    /// 当前应在本窗格上显示的投放区高亮；非拖拽悬停目标时为 nil。
-    private var dropHighlightZone: PaneDropZone? {
-        paneDropHighlightZone(
-            paneID: pane.id,
-            draggingPaneID: dragState.draggingPaneID,
-            workspaceDragSource: workspaceDragSource,
-            hover: dragState.hover)
-    }
-
-    private var shouldCatchDrop: Bool {
-        if dragState.draggingPaneID != nil {
-            return true
-        }
-        switch workspaceDragSource {
-        case .pane, .tab:
-            return true
-        case .fileBuffer, nil:
-            return false
-        }
-    }
-
-    private var headerIcon: String { pane.fileBuffer == nil ? "terminal" : "doc.text" }
-
-    private var headerTitle: String {
-        pane.fileBuffer?.displayName ?? profile?.name ?? "终端"
+            .hostKeySheet(pane.hostKeyRelay)
     }
 
     @ViewBuilder
     private var content: some View {
         if let buffer = pane.fileBuffer {
-            fileBufferBody(buffer)
+            PreviewBufferBody(buffer: buffer,
+                              onDownload: onDownloadFile,
+                              onLoadMarkdownImage: onLoadMarkdownImage)
         } else {
             switch pane.session.connectionState {
             case .idle, .connecting:
@@ -249,21 +78,14 @@ struct PaneView: View {
         }
     }
 
-    @ViewBuilder
-    private func fileBufferBody(_ buffer: FileBuffer) -> some View {
-        PreviewBufferBody(buffer: buffer,
-                          onDownload: onDownloadFile,
-                          onLoadMarkdownImage: onLoadMarkdownImage)
-    }
-
     private func connect() async {
         if let profile {
             await pane.connect(profile: profile, modelContainer: modelContext.container)
-        } else if profiles.isEmpty {
+        } else if profileCount == 0 {
             // ServerProfile 还没被 @Query 载入（store 打开 / CloudKit 同步的瞬态）。
             // 此时判「配置已删除」是假阳性，而且那是个终态：窗格会挂着
             // 「连接失败 / 服务器配置已被删除」再也不重试。留在 .idle，
-            // 等上面的 onChange(profiles.count) 拿到真数据再决定。
+            // 等上面的 onChange(profileCount) 拿到真数据再决定。
             return
         } else {
             pane.markServerMissing()
@@ -286,33 +108,5 @@ struct PaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
-    }
-}
-
-private struct PaneHeaderIconButton: View {
-    let systemName: String
-    let help: String
-    let action: () -> Void
-
-    @State private var hover = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: PaneHeaderButtonLayout.iconSize))
-                .foregroundStyle(hover ? UD.text : UD.text3)
-                .frame(width: PaneHeaderButtonLayout.hitWidth,
-                       height: PaneHeaderButtonLayout.hitHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: PaneHeaderButtonLayout.cornerRadius,
-                                     style: .continuous)
-                        .fill(hover ? UD.rowHover : .clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-        .help(help)
-        .accessibilityLabel(Text(help))
     }
 }

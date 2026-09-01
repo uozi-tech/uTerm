@@ -206,7 +206,6 @@
 				Features/Workspace/PortForwardWindowID.swift,
 				Features/Workspace/SFTPWindowID.swift,
 				Features/Workspace/TabDragItem.swift,
-				Features/Workspace/TabModel.swift,
 				Features/Workspace/Views/AssistantBindingModifier.swift,
 				Features/Workspace/Views/PaneDragGhostLayer.swift,
 				Features/Workspace/Views/PaneDropDelegate.swift,
@@ -216,9 +215,7 @@
 				Features/Workspace/Views/SFTPSidebar.swift,
 				Features/Workspace/Views/SplitContainerView.swift,
 				Features/Workspace/Views/StatusBarView.swift,
-				Features/Workspace/Views/TabContentView.swift,
 				Features/Workspace/Views/TerminalArea.swift,
-				Features/Workspace/Views/TerminalTabBar.swift,
 				Features/Workspace/Views/WorkspaceCenter.swift,
 				Features/Workspace/Views/WorkspaceChrome.swift,
 				Features/Workspace/Views/WorkspaceCloseShortcut.swift,
@@ -1092,6 +1089,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5550414E4750000000000001 /* UPaneGroups */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UPaneGroups;
+		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;

@@ -1,3 +1,4 @@
+import UPaneGroups
 import Foundation
 
 /// 工作区快照的本地 JSON 持久化。
@@ -80,8 +81,13 @@ nonisolated struct WorkspaceStore: Sendable {
 }
 
 private extension WorkspaceSnapshot {
+    /// 老文件名扫描的匹配依据。老快照只有 `tabs`；新快照两份都写，但也一并看
+    /// `terminalGroups`，免得哪天旧键真的停写时这条扫描静默失效。
     nonisolated func containsServer(_ serverID: UUID) -> Bool {
-        tabs.contains { $0.layout.containsServer(serverID) }
+        if tabs.contains(where: { $0.layout.containsServer(serverID) }) { return true }
+        return terminalGroups?.groups.contains { group in
+            group.tabs.contains { $0.serverProfileID == serverID }
+        } ?? false
     }
 }
 

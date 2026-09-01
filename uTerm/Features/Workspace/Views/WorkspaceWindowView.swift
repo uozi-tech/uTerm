@@ -1,3 +1,4 @@
+import UPaneGroups
 import UPaneTree
 import UDesignKit
 import SwiftUI
@@ -176,7 +177,7 @@ struct WorkspaceWindowView: View {
             }
             // 兜底：快照为空 / 关了自动恢复 / 叶子全被剪掉 —— 都必须留下一个
             // 连本窗口服务器的可用终端。
-            if workspace.tabs.isEmpty {
+            if workspace.terminalGroups.isEmpty {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
             await workspace.connectSharedSFTP(profile: server, modelContainer: modelContext.container)
@@ -349,7 +350,7 @@ struct WorkspaceWindowView: View {
         }
     }
 
-    /// ⌘W：按键盘焦点先关当前文件标签 / 终端聚焦窗格；都没有可关时才关窗口。
+    /// ⌘W：按键盘焦点先关当前文件标签 / 终端活动标签；都没有可关时才关窗口。
     @MainActor
     private func handleCloseShortcut(window: NSWindow) {
         let region = WorkspaceCloseShortcut.focusRegion(in: window)
@@ -359,13 +360,10 @@ struct WorkspaceWindowView: View {
             // 直接关那个标签，免得同一个文件开在两个组里时关错一个。
             guard let tabID = workspace.filePreviewModel.activeTabID else { return }
             requestCloseTab(tabID)
-        case .closeTerminalFocusedPane(let tabID):
-            guard let tab = workspace.tabs.first(where: { $0.id == tabID }) else { return }
-            if let pid = tab.focusedPaneID {
-                if !tab.closePane(pid) { workspace.closeTab(tab.id) }   // 关聚焦窗格；最后一个窗格→关标签
-            } else {
-                workspace.closeTab(tab.id)
-            }
+        case .closeTerminalActiveTab:
+            // 关活动组的前台标签；组因此空掉就塌缩，最后一个组留着显示空态
+            // （工作区窗口不会因为终端区空掉而关闭）。
+            _ = workspace.closeActiveTerminalTab()
         case .closeWindow:
             window.performClose(nil)
         }
@@ -478,11 +476,11 @@ private struct WorkspaceGlobalCommandHandlers: ViewModifier {
         content
             .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
                 guard controlActiveState == .key else { return }
-                workspace.activeTab?.splitFocusedPane(direction: .vertical)
+                workspace.splitActiveGroup(direction: .vertical)
             }
             .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneHorizontal)) { _ in
                 guard controlActiveState == .key else { return }
-                workspace.activeTab?.splitFocusedPane(direction: .horizontal)
+                workspace.splitActiveGroup(direction: .horizontal)
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleLeftSidebar)) { _ in
                 guard controlActiveState == .key else { return }

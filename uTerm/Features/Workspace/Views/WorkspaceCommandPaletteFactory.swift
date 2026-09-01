@@ -50,13 +50,13 @@ enum WorkspaceCommandPaletteFactory {
         // 命令
         items.append(CommandPaletteItem(
             id: "cmd.splitPane", kind: .command,
-            title: "新建终端窗格", detail: "在当前工作区分屏", hint: "⇧⌘D", group: nil) {
-                workspace.activeTab?.splitFocusedPane(direction: .vertical)
+            title: "新建终端分组", detail: "在当前工作区分屏", hint: "⇧⌘D", group: nil) {
+                workspace.splitActiveGroup(direction: .vertical)
             })
         items.append(CommandPaletteItem(
             id: "cmd.closeTab", kind: .command,
-            title: "关闭当前 tab", detail: "", hint: "⌘W", group: nil) {
-                if let id = workspace.activeTabID { workspace.closeTab(id) }
+            title: "关闭当前终端标签", detail: "", hint: "⌘W", group: nil) {
+                _ = workspace.closeActiveTerminalTab()
             })
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
