@@ -29,3 +29,7 @@ build/
 
 # Xcode/SwiftPM per-user 状态
 xcuserdata/
+
+# 本地开发用：把 ../uAppKit 挂进来覆盖同名远程依赖。
+# 每人本地的东西，不提交——提交了发版也会走本地覆盖，按 tag 钉版本就白做了。
+uTerm-dev.xcworkspace/
