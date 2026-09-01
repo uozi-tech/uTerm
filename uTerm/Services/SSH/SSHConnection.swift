@@ -127,6 +127,27 @@ actor SSHConnection: TerminalBackend {
     private var pendingRows: UInt16 = 24
     private var didConnect = false
 
+    // MARK: - PTY 环境变量
+
+    /// 开 PTY 时随通道发出的 `env` 请求（在 pty-req / shell 之前发）。
+    ///
+    /// 不发 `LANG` 时远端登录 shell 落在 C/POSIX locale，`less`/`man` 这类按
+    /// locale 判断可打印性的程序会把 UTF-8 字节逐个反显成 `<E5><BC><80>`，
+    /// 中文全部不可读（终端这侧的解码是好的，字节也完整）。系统 `ssh` 不犯这个
+    /// 错，是因为 `/etc/ssh/ssh_config` 默认带 `SendEnv LANG LC_*` —— 这里等价补上。
+    ///
+    /// 固定 `en_US.UTF-8` 而不跟随本机 locale：远端未生成 `zh_CN.UTF-8` 时
+    /// setlocale 失败会回落 C —— 既没修好又多刷一行警告；`en_US.UTF-8` 在
+    /// macOS 与主流发行版上都存在。只发 `LANG`（不发 `LC_ALL`），远端 rc 里
+    /// 自己设的 `LC_*` 仍然优先。
+    ///
+    /// `wantReply: false` 是必须的：Citadel 对每个 env 请求 `try await`
+    /// `triggerUserOutboundEvent`，服务端没配 `AcceptEnv` 而拒绝时，带 reply
+    /// 的请求会把错误抛出去、整条连接建不起来。不要 reply 就退化成"收不到就忽略"。
+    nonisolated private static let ptyEnvironment: [SSHChannelRequestEvent.EnvironmentRequest] = [
+        .init(wantReply: false, name: "LANG", value: "en_US.UTF-8")
+    ]
+
     /// 构造器只接受 `Sendable` 的 `ProfileSnapshot` —— 调用方须在自身隔离域内
     /// 先把非 `Sendable` 的 `@Model` `ServerProfile` 摘成快照（`ProfileSnapshot(_:)`），
     /// 再传入。这样无论从主 actor 还是别处构造 `SSHConnection` 都不会跨隔离域
@@ -210,7 +231,7 @@ actor SSHConnection: TerminalBackend {
                 terminalModes: SSHTerminalModes([:])
             )
             do {
-                try await targetClient.withPTY(request) { inbound, outbound in
+                try await targetClient.withPTY(request, environment: Self.ptyEnvironment) { inbound, outbound in
                     // 1. 发布 stdin writer 并启动单一有序 drain 任务，使 write()/resize() 生效。
                     state.attach(writer: outbound)
                     // 2. 并发：泵出站输出 + 等待 close 信号。
