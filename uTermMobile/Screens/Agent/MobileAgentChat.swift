@@ -309,8 +309,8 @@ struct MobileAgentChat: View {
 }
 
 /// Agent 的在途驱动 Task 集合（提交 / 批准 / 跳过 / 自动批准）。`TermTab` 持有一份，会话关闭
-/// （`closeTab` / 连接中页取消）时 `cancelAll()`——取消会令 `AssistantModel` 里消费 LLM 字节流的
-/// `for try await` 随之结束（`AsyncThrowingStream` 对消费方取消会 finish），不再空耗 token / 网络。
+/// （`closeTab` / 连接中页取消）时先 `AssistantModel.dispose()`，再 `cancelAll()`，停止模型请求
+/// 和自动续轮。已经发往服务器的命令保留结果收尾，取消驱动任务不表示远端进程已停止。
 /// 等价于旧 `MobileAgentController.stop()`，补回随状态机迁移而丢失的取消能力。**只在显式关闭路径
 /// 取消**（不挂 `onDisappear`——横屏切换 size class 重建外壳时视图会 disappear，但会话仍存活）。
 @MainActor

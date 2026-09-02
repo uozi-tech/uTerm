@@ -35,7 +35,9 @@ final class AssistantModel {
 
     /// 命令执行器；nil 时不向模型暴露工具，行为退化为纯文本对话（旧版）。
     /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
-    var executor: CommandExecutor?
+    var executor: CommandExecutor? {
+        didSet { commandScope = UUID() }
+    }
 
     /// 一条远端命令执行尝试结束后的通知。命令可能通过重定向、sed 等任意 shell
     /// 语法改动文件，无法可靠地从命令文本推断写集；工作区据此刷新目录与已打开文件。
@@ -47,6 +49,45 @@ final class AssistantModel {
 
     /// 最近一次 `send` 携带的 serverContext，供工具续轮复用 system prompt。
     @ObservationIgnored private var lastServerContext = ""
+    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var commandScope = UUID()
+    @ObservationIgnored private var activeOperationID: UUID?
+    @ObservationIgnored private var activeStream: StreamOperation?
+    @ObservationIgnored private var commands: [UUID: CommandOperation] = [:]
+    @ObservationIgnored private var isDisposed = false
+    @ObservationIgnored private var lastTurnContext: TurnContext?
+
+    /// Values are captured before suspending; changing providers cannot retarget a running turn.
+    private struct TurnContext {
+        var config: LLMRequestConfig
+        let kind: ProviderKind
+        let client: LLMClient
+    }
+
+    private final class StreamOperation {
+        let id = UUID()
+        let generation: UUID
+        let sessionID: UUID?
+        var message: ChatMessage
+        var finalState: State = .idle
+        var buffer: StreamingTextBuffer?
+        var task: Task<Void, Never>?
+
+        init(generation: UUID, sessionID: UUID?, message: ChatMessage) {
+            self.generation = generation
+            self.sessionID = sessionID
+            self.message = message
+        }
+    }
+
+    private struct CommandOperation {
+        let id: UUID
+        let generation: UUID
+        let scope: UUID
+        let sessionID: UUID?
+        let messageID: UUID
+        let callID: String
+    }
 
     /// 持久化上下文；nil 时纯内存（单测路径）。由视图 `attach(context:)` 注入。
     var modelContext: ModelContext?
@@ -86,23 +127,38 @@ final class AssistantModel {
 
     /// 开新对话：清空当前会话与消息，下次发送时再惰性建会话。
     func startNewSession() {
+        leaveSession()
+        pendingRestoredSessionID = nil
         currentSession = nil
         messages = []
-        queuedMessages = []
-        editingMessageID = nil
-        clearFollowUps()
-        if case .failed = state { state = .idle }
     }
 
     /// 切换到历史会话，载入其消息。
     func load(_ session: ChatSession) {
+        guard !isDisposed else { return }
         guard session.id != currentSession?.id else { return }
+        leaveSession()
+        pendingRestoredSessionID = nil
         currentSession = session
         messages = session.orderedMessages.map(\.asChatMessage)
-        queuedMessages = []
-        editingMessageID = nil
-        clearFollowUps()
-        if case .failed = state { state = .idle }
+        // A process may have exited while a command was running. Never offer to run it again
+        // merely because its result was not recorded.
+        for mi in messages.indices {
+            for ci in messages[mi].toolCalls.indices where messages[mi].toolCalls[ci].status == .running {
+                let messageID = messages[mi].id
+                let callID = messages[mi].toolCalls[ci].id
+                let live = commands.values.contains {
+                    $0.sessionID == session.id && $0.messageID == messageID && $0.callID == callID
+                }
+                if !live {
+                    messages[mi].toolCalls[ci].status = .failed
+                    messages[mi].toolCalls[ci].output = "上次命令的执行结果未知，请先核实服务器状态。"
+                    // This model cannot observe the execution. Keep the durable record intact:
+                    // another window may still own the command and save its actual result.
+                }
+            }
+        }
+        settleVisibleState()
     }
 
     func snapshot() -> AgentSnapshot {
@@ -110,6 +166,8 @@ final class AssistantModel {
     }
 
     func restore(from snapshot: AgentSnapshot?) {
+        leaveSession()
+        commandScope = UUID()
         guard let snapshot else {
             pendingRestoredSessionID = nil
             currentSession = nil
@@ -129,6 +187,44 @@ final class AssistantModel {
         editingMessageID = nil
         if case .failed = state { state = .idle }
         resolvePendingRestoredSessionIfNeeded()
+    }
+
+    /// Invalidate ownership before a new session can submit. Commands already sent to SSH
+    /// retain their result handling, but lose permission to continue the conversation.
+    private func leaveSession() {
+        if let stream = activeStream {
+            stream.buffer?.flush()
+            persistStream(stream)
+            stream.buffer?.cancel()
+            stream.task?.cancel()
+        }
+        generation = UUID()
+        activeOperationID = nil
+        activeStream = nil
+        queuedMessages = []
+        editingMessageID = nil
+        lastServerContext = ""
+        lastTurnContext = nil
+        clearFollowUps()
+        state = .idle
+    }
+
+    func dispose() {
+        leaveSession()
+        isDisposed = true
+        commandScope = UUID()
+        onCommandExecutionFinished = nil
+        executor = nil
+    }
+
+    private func owns(_ id: UUID, generation expected: UUID) -> Bool {
+        !isDisposed && generation == expected && activeOperationID == id
+    }
+
+    private func settleVisibleState() {
+        let calls = messages.flatMap(\.toolCalls)
+        state = calls.contains { $0.status == .running } ? .running
+            : calls.contains { $0.status == .pending } ? .awaitingApproval : .idle
     }
 
     /// 从首句话派生会话标题（单行、限长）。算法现由 `AgentKit.AgentTitle`
@@ -178,6 +274,7 @@ final class AssistantModel {
     /// 显式文本提交入口：视图在 `onSubmit` 里**同步**清空输入后调它 —— 避免「回车后先
     /// 全选再发送」的闪烁（异步清空会留一帧选中态）。
     func submit(text: String, serverContext: String) async {
+        guard !isDisposed, !Task.isCancelled else { return }
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         if isBusy {
@@ -194,19 +291,20 @@ final class AssistantModel {
 
     /// 发送一条用户 prompt：校验凭据 → 追加消息 → 落库 → 流式。
     private func dispatch(prompt: String, serverContext: String) async {
+        guard !isDisposed, !Task.isCancelled else { return }
         guard let ctx = resolvedTurnContext() else { return }
+        lastTurnContext = ctx
         lastServerContext = serverContext
         let userMessage = ChatMessage(role: .user, text: prompt)
         messages.append(userMessage)
         clearFollowUps()   // 新用户输入 → 旧追问作废
         let session = ensureSession(firstPrompt: prompt)
         persist(userMessage, in: session)
-        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
-                                  serverContext: serverContext, session: session)
+        await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: session?.id)
     }
 
     /// provider/key/baseURL 校验；任一缺失置 .failed 并返回 nil。
-    private func resolvedTurnContext() -> (provider: AIProvider, key: String, baseURL: URL)? {
+    private func resolvedTurnContext() -> TurnContext? {
         guard let provider = activeProvider else {
             state = .failed("尚未配置 AI provider"); return nil
         }
@@ -216,69 +314,101 @@ final class AssistantModel {
         guard let baseURL = resolveBaseURL(for: provider) else {
             state = .failed("当前 provider 的 baseURL 非法或不安全"); return nil
         }
-        return (provider, key, baseURL)
+        var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
+        config.tools = executor != nil ? [.runCommand] : []
+        config.streamIdleTimeout = streamIdleTimeout
+        return TurnContext(config: config, kind: provider.kind,
+                           client: clientOverride ?? LLMClientFactory.make(for: provider))
     }
 
     /// 一轮助手流式：追加空 assistant 消息 → 落库 → 流式消费 `LLMEvent`
     /// （文本累加、工具调用追加为 pending 卡片）→ 依据是否有 pending 决定终态。
     /// `send` 与工具续轮（`continueAfterTools`）共用此实现。
-    private func streamAssistantTurn(provider: AIProvider, key: String, baseURL: URL,
-                                     serverContext: String, session: ChatSession?) async {
+    private func streamAssistantTurn(context: TurnContext, serverContext: String, sessionID: UUID?) async {
+        guard !isDisposed, !Task.isCancelled else { return }
         // 出站上下文自动压缩：内存与聊天记录保留全文，超预算的历史在发送
         // 副本上折叠旧命令输出 / 省略最旧轮次（ContextCompressor 注释详述）。
         let conversation = ContextCompressor.compress(messages)
         let assistantMessage = ChatMessage(role: .assistant, text: "")
         messages.append(assistantMessage)
-        let assistantIndex = messages.count - 1
-        let assistantRecord = persist(assistantMessage, in: session)
+        persist(assistantMessage, in: currentSession)
+        let operation = StreamOperation(generation: generation, sessionID: sessionID, message: assistantMessage)
+        activeStream = operation
+        activeOperationID = operation.id
         state = .streaming
-
-        var config = LLMRequestConfig(model: provider.model,
-                                      baseURL: baseURL, apiKey: key)
-        config.tools = executor != nil ? [.runCommand] : []
-        config.streamIdleTimeout = streamIdleTimeout
-        let client = clientOverride ?? LLMClientFactory.make(for: provider)
         let system = Self.systemPrompt(serverContext: serverContext)
-        let textBuffer = StreamingTextBuffer { [weak self] text in
-            guard let self, self.messages.indices.contains(assistantIndex) else { return }
-            self.messages[assistantIndex].text += text
+        operation.buffer = StreamingTextBuffer { [weak self, weak operation] text in
+            guard let self, let operation,
+                  self.owns(operation.id, generation: operation.generation) else { return }
+            operation.message.text += text
+            self.publishStream(operation)
         }
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.consumeStream(operation, context: context, conversation: conversation, system: system)
+        }
+        operation.task = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+        guard owns(operation.id, generation: operation.generation) else { return }
+        operation.buffer?.flush()
+        operation.buffer?.cancel()
+        persistStream(operation)
+        activeStream = nil
+        activeOperationID = nil
+        // Publish the terminal state only after saving the reply and releasing ownership.
+        // Otherwise a newly submitted turn could overtake this driver's task resumption.
+        state = Task.isCancelled ? .idle : operation.finalState
+        if Task.isCancelled { return }
+        if state == .idle { await flushNextQueued() }
+    }
+
+    private func publishStream(_ operation: StreamOperation) {
+        guard owns(operation.id, generation: operation.generation),
+              let index = messages.firstIndex(where: { $0.id == operation.message.id }) else { return }
+        messages[index] = operation.message
+    }
+
+    private func consumeStream(_ operation: StreamOperation, context: TurnContext,
+                               conversation: [ChatMessage], system: String) async {
+        guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
         do {
-            let events = withIdleTimeout(client.stream(
-                messages: conversation, system: system, config: config),
-                timeout: config.streamIdleTimeout)
+            let events = withIdleTimeout(context.client.stream(
+                messages: conversation, system: system, config: context.config),
+                timeout: context.config.streamIdleTimeout)
             for try await event in events {
+                guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
                 switch event {
                 case .text(let delta):
-                    textBuffer.append(delta)
+                    operation.buffer?.append(delta)
                 case .toolCall(let call):
-                    textBuffer.flush()
-                    messages[assistantIndex].toolCalls.append(ToolCallState(from: call))
+                    operation.buffer?.flush()
+                    operation.message.toolCalls.append(ToolCallState(from: call))
+                    publishStream(operation)
                 }
             }
-            textBuffer.flush()
-            let toolCalls = messages[assistantIndex].toolCalls
-            let visibleText = messages[assistantIndex].text
+            guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
+            operation.buffer?.flush()
+            let toolCalls = operation.message.toolCalls
+            let visibleText = operation.message.text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if visibleText.isEmpty && toolCalls.isEmpty {
                 let message = "模型未返回任何内容"
-                messages[assistantIndex].text = "[错误：\(message)]"
-                state = .failed(message)
+                operation.message.text = "[错误：\(message)]"
+                operation.finalState = .failed(message)
             } else {
                 let pending = toolCalls.contains { $0.status == .pending }
-                state = pending ? .awaitingApproval : .idle
+                operation.finalState = pending ? .awaitingApproval : .idle
             }
         } catch {
-            textBuffer.flush()
-            let message = errorMessage(for: error, kind: provider.kind)
-            messages[assistantIndex].text += "\n[错误：\(message)]"
-            state = .failed(message)
+            guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
+            operation.buffer?.flush()
+            let message = errorMessage(for: error, kind: context.kind)
+            operation.message.text += "\n[错误：\(message)]"
+            operation.finalState = .failed(message)
         }
-        // 流式结束后把助手最终文本与工具调用写回记录。
-        finalize(assistantRecord, text: messages[assistantIndex].text,
-                 toolCalls: messages[assistantIndex].toolCalls, in: session)
-        // 本轮结算回 idle 时，逐条冲掉队列（.awaitingApproval/.failed 不冲）。
-        if state == .idle { await flushNextQueued() }
+        publishStream(operation)
     }
 
     // MARK: - 工具调用：批准 / 跳过 / 执行 / 续轮
@@ -288,35 +418,55 @@ final class AssistantModel {
         // 仅在「待批准」态放行：流式（.streaming）/ 执行中（.running）期间，视图可能
         // 已渲染出 pending 卡片，但状态机仍在飞行；此时点击会重入并并发起第二轮
         // streamAssistantTurn，打乱消息顺序与状态。门禁 state 即可挡住。
-        guard state == .awaitingApproval else { return }
+        guard !isDisposed, !Task.isCancelled, state == .awaitingApproval else { return }
         guard let exec = executor,
               let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
+        guard let context = lastTurnContext ?? resolvedTurnContext() else { return }
+        let operation = CommandOperation(id: UUID(), generation: generation, scope: commandScope,
+                                         sessionID: currentSession?.id, messageID: messages[mi].id, callID: id)
+        let command = messages[mi].toolCalls[ci].command
+        let serverContext = lastServerContext
+        let refresh = onCommandExecutionFinished
+        commands[operation.id] = operation
+        activeOperationID = operation.id
         messages[mi].toolCalls[ci].status = .running
+        persistToolCalls(messageID: operation.messageID, sessionID: operation.sessionID)
         state = .running
-        do {
-            let r = try await exec.run(messages[mi].toolCalls[ci].command)
-            messages[mi].toolCalls[ci].status = .done
-            messages[mi].toolCalls[ci].output = r.output
-            messages[mi].toolCalls[ci].exitCode = r.exitCode
-        } catch {
-            messages[mi].toolCalls[ci].status = .failed
-            messages[mi].toolCalls[ci].output = error.localizedDescription
+        // Once sent, do not equate cancelling the UI driver with stopping a remote process.
+        let task = Task { () -> Result<CommandResult, Error> in
+            do { return .success(try await exec.run(command)) }
+            catch { return .failure(error) }
         }
-        persistToolCalls(at: mi)
-        await onCommandExecutionFinished?()
-        await continueIfResolved(messageIndex: mi)
+        let result = await task.value
+        completeCommand(operation, result: result)
+        if !isDisposed, operation.scope == commandScope { await refresh?() }
+        commands[operation.id] = nil
+        guard owns(operation.id, generation: operation.generation),
+              operation.scope == commandScope, !Task.isCancelled else {
+            // Returning to the originating session may show this command, but must not
+            // resurrect its former automatic tool loop or dispatch a newer queue.
+            if isVisible(operation), activeOperationID == nil { settleVisibleState() }
+            if owns(operation.id, generation: operation.generation) {
+                activeOperationID = nil
+                settleVisibleState()
+            }
+            return
+        }
+        activeOperationID = nil
+        await continueIfResolved(messageID: operation.messageID, context: context, serverContext: serverContext)
     }
 
     /// 跳过某条工具调用；全部 resolved 后自动续轮。
     func skip(id: String) async {
         // 同 approveAndRun：仅「待批准」态放行，挡住流式/执行中期间的重入。
-        guard state == .awaitingApproval else { return }
+        guard !isDisposed, !Task.isCancelled, state == .awaitingApproval else { return }
         guard let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
         messages[mi].toolCalls[ci].status = .skipped
-        persistToolCalls(at: mi)
-        await continueIfResolved(messageIndex: mi)
+        let messageID = messages[mi].id
+        persistToolCalls(messageID: messageID, sessionID: currentSession?.id)
+        await continueIfResolved(messageID: messageID, context: lastTurnContext, serverContext: lastServerContext)
     }
 
     /// 在所有消息里定位某工具调用 id → (消息下标, 调用下标)。
@@ -328,19 +478,19 @@ final class AssistantModel {
     }
 
     /// 该消息的工具调用若仍有未决（pending/running）则停在待确认；否则自动续轮。
-    private func continueIfResolved(messageIndex mi: Int) async {
+    private func continueIfResolved(messageID: UUID, context: TurnContext?, serverContext: String) async {
+        guard let mi = messages.firstIndex(where: { $0.id == messageID }) else { state = .idle; return }
         let unresolved = messages[mi].toolCalls.contains {
             $0.status == .pending || $0.status == .running
         }
         if unresolved { state = .awaitingApproval; return }
-        await continueAfterTools(serverContext: lastServerContext)
+        await continueAfterTools(context: context, serverContext: serverContext)
     }
 
     /// 工具结果已并入会话后再起一轮：复用流式实现（不追加新用户消息）。
-    private func continueAfterTools(serverContext: String) async {
-        guard let ctx = resolvedTurnContext() else { return }
-        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
-                                  serverContext: serverContext, session: currentSession)
+    private func continueAfterTools(context: TurnContext?, serverContext: String) async {
+        guard let ctx = context ?? resolvedTurnContext() else { return }
+        await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: currentSession?.id)
     }
 
     // MARK: - 队列消息
@@ -368,7 +518,7 @@ final class AssistantModel {
     /// 弹出队首消息派发为新一轮（逐条依次）。仅在结算回 idle 时调用。
     /// 经 dispatch→streamAssistantTurn→flushNextQueued 递归，深度 = 队列长度（有界）。
     private func flushNextQueued() async {
-        guard state == .idle, !queuedMessages.isEmpty else { return }
+        guard !isDisposed, !Task.isCancelled, state == .idle, !queuedMessages.isEmpty else { return }
         let next = queuedMessages.removeFirst()
         await dispatch(prompt: next.text, serverContext: lastServerContext)
     }
@@ -378,7 +528,7 @@ final class AssistantModel {
     /// 编辑某条用户消息并从该处分叉重生：截断其后全部内容（含助手回复/工具调用），
     /// 用新文本重发并重新生成。仅空闲/失败态可用（忙碌时由调用方禁用入口）。
     func editAndResend(id: UUID, newText: String, serverContext: String) async {
-        guard !isBusy else { return }
+        guard !isDisposed, !Task.isCancelled, !isBusy else { return }
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let index = messages.firstIndex(where: { $0.id == id }),
@@ -386,6 +536,7 @@ final class AssistantModel {
         guard let ctx = resolvedTurnContext() else { return }
 
         lastServerContext = serverContext
+        lastTurnContext = ctx
         // 注意：不清空 queuedMessages——编辑分叉仍在同一会话内，已排队的待发消息
         // 在重生轮结算回 idle 后照常逐条派发（队列仅在切换/新建/恢复会话时清空）。
         editingMessageID = nil
@@ -405,8 +556,7 @@ final class AssistantModel {
             session.title = Self.deriveTitle(from: trimmed)
             try? modelContext?.save()
         }
-        await streamAssistantTurn(provider: ctx.provider, key: ctx.key, baseURL: ctx.baseURL,
-                                  serverContext: serverContext, session: session)
+        await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: session?.id)
     }
 
     // MARK: - 「猜你想问」动态追问
@@ -415,6 +565,8 @@ final class AssistantModel {
     /// 有意义（否则清空）。「换一批」与「回复落定」均调用此入口。
     func refreshFollowUps(serverContext: String) {
         followUpTask?.cancel()
+        guard !isDisposed else { return }
+        let expectedGeneration = generation
         guard messages.last?.role == .assistant else {
             followUps = []; followUpsLoading = false; return
         }
@@ -424,7 +576,7 @@ final class AssistantModel {
         followUpTask = Task { [weak self] in
             guard let self else { return }
             let result = await self.generateFollowUps(from: snapshot, serverContext: serverContext)
-            if Task.isCancelled { return }
+            guard !Task.isCancelled, !self.isDisposed, self.generation == expectedGeneration else { return }
             self.followUps = result
             self.followUpsLoading = false
         }
@@ -559,25 +711,65 @@ final class AssistantModel {
         return record
     }
 
-    private func finalize(_ record: ChatMessageRecord?, text: String,
-                          toolCalls: [ToolCallState], in session: ChatSession?) {
-        guard let ctx = modelContext, let record else { return }
-        record.text = text
-        record.toolCalls = toolCalls
-        session?.updatedAt = Date()
-        try? ctx.save()
+    /// Re-fetch by identity after suspension; never retain a possibly deleted SwiftData
+    /// record or resolve a command against whichever session happens to be visible now.
+    private func record(messageID: UUID, sessionID: UUID?) -> ChatMessageRecord? {
+        guard let ctx = modelContext, let sessionID else { return nil }
+        var descriptor = FetchDescriptor<ChatMessageRecord>(predicate: #Predicate { $0.id == messageID })
+        descriptor.fetchLimit = 1
+        guard let record = try? ctx.fetch(descriptor).first,
+              !record.isDeleted, let session = record.session, !session.isDeleted,
+              session.id == sessionID else { return nil }
+        return record
     }
 
-    /// 把某条消息当前的工具调用状态写回其持久化记录（批准/跳过/执行后）。
-    private func persistToolCalls(at messageIndex: Int) {
-        guard let ctx = modelContext, let session = currentSession,
-              messages.indices.contains(messageIndex) else { return }
-        let message = messages[messageIndex]
-        guard let record = session.orderedMessages.first(where: { $0.id == message.id })
-        else { return }
+    private func persistStream(_ operation: StreamOperation) {
+        guard let record = record(messageID: operation.message.id, sessionID: operation.sessionID) else { return }
+        record.text = operation.message.text
+        record.toolCalls = operation.message.toolCalls
+        record.session?.updatedAt = Date()
+        try? modelContext?.save()
+    }
+
+    private func persistToolCalls(messageID: UUID, sessionID: UUID?) {
+        guard let message = messages.first(where: { $0.id == messageID }),
+              let record = record(messageID: messageID, sessionID: sessionID) else { return }
         record.toolCalls = message.toolCalls
-        session.updatedAt = Date()
-        try? ctx.save()
+        record.session?.updatedAt = Date()
+        try? modelContext?.save()
+    }
+
+    private func isVisible(_ operation: CommandOperation) -> Bool {
+        guard !isDisposed else { return false }
+        if let sessionID = operation.sessionID { return currentSession?.id == sessionID }
+        return generation == operation.generation
+    }
+
+    private func completeCommand(_ operation: CommandOperation, result: Result<CommandResult, Error>) {
+        func update(_ call: inout ToolCallState) {
+            switch result {
+            case .success(let value):
+                call.status = .done
+                call.output = value.output
+                call.exitCode = value.exitCode
+            case .failure(let error):
+                call.status = .failed
+                call.output = error.localizedDescription
+            }
+        }
+        if let record = record(messageID: operation.messageID, sessionID: operation.sessionID) {
+            var calls = record.toolCalls
+            if let ci = calls.firstIndex(where: { $0.id == operation.callID }) {
+                update(&calls[ci])
+                record.toolCalls = calls
+                record.session?.updatedAt = Date()
+                try? modelContext?.save()
+            }
+        }
+        if isVisible(operation), let mi = messages.firstIndex(where: { $0.id == operation.messageID }),
+           let ci = messages[mi].toolCalls.firstIndex(where: { $0.id == operation.callID }) {
+            update(&messages[mi].toolCalls[ci])
+        }
     }
 
     /// 删除当前会话中匹配 ids 的记录（纯内存模式 no-op）。
@@ -686,6 +878,12 @@ final class StreamingTextBuffer {
         pendingFlush?.cancel()
         pendingFlush = nil
         publishPending(at: .now)
+    }
+
+    func cancel() {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        pending = ""
     }
 
     private func scheduleFlush(after delay: Duration) {

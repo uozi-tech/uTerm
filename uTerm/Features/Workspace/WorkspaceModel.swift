@@ -72,6 +72,7 @@ final class WorkspaceModel {
 
     @ObservationIgnored private var dragEndPollTask: Task<Void, Never>?
     @ObservationIgnored private var agentBackgroundRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var agentRefreshGeneration = UUID()
 
     /// `dispose()` 时冻结的最后一份快照。窗口拆除时 `.onDisappear` 会同时触发
     /// 「释放资源」与「保存快照」两条路径，SwiftUI 不保证先后；先跑 dispose 会把
@@ -164,9 +165,12 @@ final class WorkspaceModel {
     }
 
     private func refreshAfterAgentCommandAttempt() async {
+        let expectedGeneration = agentRefreshGeneration
         // 关键顺序保持：文件树原始列表先发布，再重读当前可见文件，最后才允许 Agent 续轮。
         await fileBrowserModel.refreshListingAfterRemoteCommand()
+        guard agentRefreshGeneration == expectedGeneration else { return }
         let generation = await filePreviewModel.refreshVisibleAfterRemoteCommand()
+        guard agentRefreshGeneration == expectedGeneration else { return }
 
         // owner/group 补全由 FileBrowserModel 自己后台完成；非活动 buffer 也不阻塞续轮。
         agentBackgroundRefreshTask?.cancel()
@@ -194,6 +198,9 @@ final class WorkspaceModel {
     /// 永远卡在「服务器配置已被删除」的窗格。传空集合表示跳过校验（测试场景，或
     /// ServerProfile 尚未载入时不做误判）。
     func restore(from snapshot: WorkspaceSnapshot, knownServerIDs: Set<UUID> = []) {
+        agentRefreshGeneration = UUID()
+        agentBackgroundRefreshTask?.cancel()
+        agentBackgroundRefreshTask = nil
         // 先 dispose 旧标签的资源（实践中 restore 通常在空 model 上调用，但保留
         // 正确语义供未来「重连 / 切换布局」复用）。组件的 `restore` 整树替换、
         // 不走 `onTabRemoved`（它是换作用域，不是逐个关标签），所以这里手动 dispose。
@@ -224,14 +231,16 @@ final class WorkspaceModel {
     }
 
     /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
-    /// 预览 buffers。AssistantModel 不持有持续资源（chat session 用完即关），无需显式 dispose。
+    /// 预览 buffers，同时停止 Agent 的模型请求和自动续轮。
     func dispose() {
+        agentRefreshGeneration = UUID()
         // 拆资源之前先把快照冻结：之后 tab.disposeAll() 会清空 panes 映射，
         // 再取快照就只剩空布局（见 `frozenSnapshot`）。
         if frozenSnapshot == nil {
             frozenSnapshot = makeSnapshot(agentState: assistantModel.snapshot())
         }
         endDrag()
+        assistantModel.dispose()
         agentBackgroundRefreshTask?.cancel()
         agentBackgroundRefreshTask = nil
         for tab in terminalGroups.allTabs { tab.payload.dispose() }

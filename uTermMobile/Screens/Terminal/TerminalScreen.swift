@@ -108,6 +108,7 @@ struct TerminalScreen: View {
             guard let id else { return }
             if let tab = tabs.first(where: { $0.id == id }) {
                 tab.controller.resignKeyboard()
+                tab.agent.dispose()
                 tab.agentTasks.cancelAll()
             }
             tabs.removeAll { $0.id == id }
@@ -162,6 +163,7 @@ struct TerminalScreen: View {
         if let tab = tabs.first(where: { $0.id == id }) {
             tab.controller.resignKeyboard()
             tab.controller.close()
+            tab.agent.dispose()
             tab.agentTasks.cancelAll()
         }
         tabs.removeAll { $0.id == id }

@@ -15,14 +15,15 @@
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
-		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
-		5550414E4750000000000011 /* UPaneGroups in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E4750000000000001 /* UPaneGroups */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
+		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
+		5550414E4750000000000011 /* UPaneGroups in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E4750000000000001 /* UPaneGroups */; };
 		555353484B49540000000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000001 /* USSHKit */; };
 		555353484B49540000000012 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555353484B49540000000002 /* USSHKit */; };
 		61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */ = {isa = PBXBuildFile; productRef = 4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */; };
+		851030E33047167600A370DF /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000002 /* UDesignKit */; };
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
@@ -117,10 +118,10 @@
 				Features/ParallelRun/Views/ParallelRunChrome.swift,
 				Features/ParallelRun/Views/ParallelRunWindowView.swift,
 				Features/ParallelRun/Views/ParallelShellGrid.swift,
-				Features/PortForward/Global/GlobalForwardRow.swift,
 				Features/PortForward/Global/GlobalForwardingModel.swift,
 				Features/PortForward/Global/GlobalForwardingSupport.swift,
 				Features/PortForward/Global/GlobalForwardingWindowView.swift,
+				Features/PortForward/Global/GlobalForwardRow.swift,
 				Features/PortForward/Views/ForwardEditorSheet.swift,
 				"Features/PortForward/Views/ForwardKind+Tint.swift",
 				Features/PortForward/Views/PortForwardListView.swift,
@@ -147,16 +148,6 @@
 				Features/Preview/Views/PreviewBufferBody.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
 				Features/Preview/Views/PreviewTabMenu.swift,
-				Features/SFTP/Views/SFTPBrowserView.swift,
-				Features/SFTP/Views/SFTPDeletionBar.swift,
-				Features/SFTP/Views/SFTPFileTable.swift,
-				Features/SFTP/Views/SFTPInspector.swift,
-				Features/SFTP/Views/SFTPPathBar.swift,
-				Features/SFTP/Views/SFTPPermissionSheet.swift,
-				Features/SFTP/Views/SFTPRowMenu.swift,
-				Features/SFTP/Views/SFTPStatusBar.swift,
-				Features/SFTP/Views/SFTPTransfersDock.swift,
-				Features/SFTP/Views/SFTPWindowView.swift,
 				Features/Settings/Views/AboutSettingsView.swift,
 				Features/Settings/Views/AdvancedSettingsView.swift,
 				Features/Settings/Views/ComingSoonPlaceholder.swift,
@@ -167,12 +158,22 @@
 				Features/Settings/Views/SettingsView.swift,
 				Features/Settings/Views/TerminalPreview.swift,
 				Features/Settings/Views/TerminalSettingsView.swift,
+				Features/SFTP/Views/SFTPBrowserView.swift,
+				Features/SFTP/Views/SFTPDeletionBar.swift,
+				Features/SFTP/Views/SFTPFileTable.swift,
+				Features/SFTP/Views/SFTPInspector.swift,
+				Features/SFTP/Views/SFTPPathBar.swift,
+				Features/SFTP/Views/SFTPPermissionSheet.swift,
+				Features/SFTP/Views/SFTPRowMenu.swift,
+				Features/SFTP/Views/SFTPStatusBar.swift,
+				Features/SFTP/Views/SFTPTransfersDock.swift,
+				Features/SFTP/Views/SFTPWindowView.swift,
 				Features/Terminal/CopyableTerminalView.swift,
 				Features/Terminal/TerminalColorScheme.swift,
 				Features/Terminal/TerminalCursorShape.swift,
 				Features/Terminal/TerminalHostView.swift,
-				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
 				Features/Terminal/TerminalSession.swift,
+				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
 				Features/Terminal/TerminalSettings.swift,
 				Features/Terminal/TerminalTheme.swift,
 				Features/Terminal/TerminalWindowID.swift,
@@ -267,6 +268,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				851030E33047167600A370DF /* UDesignKit in Frameworks */,
 				555353484B49540000000012 /* USSHKit in Frameworks */,
 				4147454E544B495400000012 /* AgentKit in Frameworks */,
 				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
@@ -982,14 +984,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/uozi-tech/Citadel";
-			requirement = {
-				kind = exactVersion;
-				version = 1.0.0;
-			};
-		};
 		5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/uozi-tech/uAppKit";
@@ -1020,6 +1014,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 4.0.0;
+			};
+		};
+		C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/uozi-tech/Citadel";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
 			};
 		};
 		DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
@@ -1089,11 +1091,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		5550414E4750000000000001 /* UPaneGroups */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = UPaneGroups;
-		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
@@ -1129,16 +1126,6 @@
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = AgentKit;
 		};
-		5541424B0000000000000001 /* UAppKitBridge */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = UAppKitBridge;
-		};
-		5550414E4750000000000001 /* UPaneGroups */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = UPaneGroups;
-		};
 		4147454E544B495400000002 /* AgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
@@ -1149,7 +1136,17 @@
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
 			productName = TreeSitterINI;
 		};
+		5541424B0000000000000001 /* UAppKitBridge */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UAppKitBridge;
+		};
 		5544455349474E0000000001 /* UDesignKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = UDesignKit;
+		};
+		5544455349474E0000000002 /* UDesignKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UDesignKit;
@@ -1159,10 +1156,10 @@
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = UPaneTree;
 		};
-		5544455349474E0000000002 /* UDesignKit */ = {
+		5550414E4750000000000001 /* UPaneGroups */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
-			productName = UDesignKit;
+			productName = UPaneGroups;
 		};
 		555353484B49540000000001 /* USSHKit */ = {
 			isa = XCSwiftPackageProductDependency;

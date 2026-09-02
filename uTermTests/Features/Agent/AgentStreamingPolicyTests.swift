@@ -34,6 +34,19 @@ final class AgentStreamingPolicyTests: XCTestCase {
         XCTAssertEqual(publications, ["first", " tail"])
     }
 
+    func testCancelledStreamingBufferDiscardsScheduledTail() async throws {
+        var publications: [String] = []
+        let buffer = StreamingTextBuffer(publishInterval: .milliseconds(20)) {
+            publications.append($0)
+        }
+        buffer.append("first")
+        buffer.append("obsolete tail")
+        buffer.cancel()
+        try await Task.sleep(for: .milliseconds(60))
+        buffer.flush()
+        XCTAssertEqual(publications, ["first"])
+    }
+
     func testMarkdownRendererUsesLatestSourceAtThrottleDeadline() async throws {
         let renderer = StreamingMarkdownRenderer(reparseDelay: .milliseconds(20))
         renderer.renderImmediately("A")
