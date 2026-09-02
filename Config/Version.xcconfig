@@ -1,4 +1,4 @@
 // 唯一真值源：uTerm 的用户可见版本号 (main.feat.patch)。
 // 由 scripts/bump-version.sh / make bump-* / make set-version 维护。
 // project 级 baseConfigurationReference 引用本文件，所有 target 继承。
-MARKETING_VERSION = 1.10.2
+MARKETING_VERSION = 1.10.3
