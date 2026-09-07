@@ -55,6 +55,9 @@ struct ProvidersSettingsView: View {
                             .accessibilityLabel(p.name)
                             .accessibilityValue(p.model.isEmpty ? "未设置模型" : p.model)
                             .accessibilityAddTraits(p.id == selectedID ? [.isButton, .isSelected] : .isButton)
+                            // `onTapGesture` 不带 AX 默认动作，只标 `.isButton`
+                            // 的话读屏 / 全键盘控制按下去是空转。显式补上。
+                            .accessibilityAction { selectedID = p.id }
                     }
                 }
                 .padding(.horizontal, 6)

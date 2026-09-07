@@ -356,6 +356,9 @@ private struct GroupRowView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityLabel("\(name)，\(count) 台主机\(builtin ? "，系统内置" : "")")
+        // `onTapGesture` 不像 `Button` 那样自带 AX 默认动作：只标 `.isButton`
+        // 的话 VoiceOver / 全键盘控制按下去是空转。显式补一条默认动作。
+        .accessibilityAction { onSelect() }
         .contextMenu {
             if !builtin {
                 Button(pinned ? "取消置顶" : "置顶", action: onTogglePin)

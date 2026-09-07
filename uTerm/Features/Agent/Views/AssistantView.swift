@@ -774,6 +774,16 @@ struct AssistantView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { model.loadQueuedForEditing(id: item.id) }
+        // 整行可点（= 载入编辑），但 `onTapGesture` 对 AX 完全不可见：
+        // 合成一个元素，显式给 label / isButton / 默认动作，并把两个图标钮的
+        // 语义保留成命名动作，读屏与全键盘控制才按得动。
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("排队消息：\(item.text)")
+        .accessibilityHint("点按载入到输入框编辑")
+        .accessibilityAction { model.loadQueuedForEditing(id: item.id) }
+        .accessibilityAction(named: "编辑") { model.loadQueuedForEditing(id: item.id) }
+        .accessibilityAction(named: "移除") { model.removeQueued(id: item.id) }
     }
 
     private var inputBar: some View {
@@ -1186,6 +1196,21 @@ private struct UserMessageRow: View {
                 // 悬停门控：行上本来就有 `isHovering`，不悬停的行不必给
                 // `NSToolTipManager` 留一块每个滚动 tick 都要重算的区域。
                 .help(whenHovering: isHovering && canEdit, "点击编辑并重发")
+                // 悬停铅笔是纯装饰（`accessibilityHidden`），点击进编辑的能力
+                // 全靠 `onTapGesture` —— 对 AX 完全不可见。显式补 label +
+                // isButton + 默认动作 + 命名动作，读屏 / 全键盘控制才进得去编辑态。
+                //
+                // `accessibilityElement(children: .combine)` 不是可有可无的：
+                // 实测只加 label / traits / action 而不合成元素时，AX 树里那个
+                // 元素的 role 确实是 button，但 `accessibilityPerformPress()`
+                // 返回 false —— 动作根本没挂上去。合成之后才真的能按
+                // （`TapGestureRowAccessibilityTests.testUserBubbleIsAccessibleAndBeginsEditing`）。
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(message.text)
+                .accessibilityAddTraits(canEdit ? .isButton : [])
+                .accessibilityHint(canEdit ? "点按编辑并重发" : "")
+                .accessibilityAction { if canEdit { onBeginEdit() } }
+                .accessibilityAction(named: "编辑") { if canEdit { onBeginEdit() } }
         }
     }
 

@@ -85,6 +85,9 @@ struct KeyManagerView: View {
                                 .accessibilityAddTraits(.isButton)
                                 .accessibilityAddTraits(key.id == selectedID ? .isSelected : [])
                                 .accessibilityLabel("\(key.name)，\(key.typeLabel)，\(n) 台主机")
+                                // `onTapGesture` 不带 AX 默认动作，只标 `.isButton`
+                                // 的话读屏 / 全键盘控制按下去是空转。显式补上。
+                                .accessibilityAction { selectedID = key.id; generating = false }
                         }
                     }
                     .padding(.vertical, 6)

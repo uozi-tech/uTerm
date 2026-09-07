@@ -154,6 +154,12 @@ struct SSHConfigImportView: View {
         .accessibilityAddTraits(selection.contains(row.id) ? .isSelected : [])
         .accessibilityLabel("\(h.alias)\(h.isWildcard ? "，通配" : "")\(row.existing ? "，已存在" : "")")
         .accessibilityValue(endpoint + identityFull)
+        // `onTapGesture` 不带 AX 默认动作：只标 `.isButton` 的话读屏 / 全键盘
+        // 控制按下去勾不上也取消不掉。显式补一条与手势同语义的默认动作。
+        .accessibilityAction {
+            guard !disabled else { return }
+            if selection.contains(row.id) { selection.remove(row.id) } else { selection.insert(row.id) }
+        }
     }
 
     private func tag(_ s: String, _ c: Color) -> some View {
