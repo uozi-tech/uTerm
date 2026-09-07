@@ -16,11 +16,16 @@ struct TerminalAgentView: View {
     @Binding var safety: AgentSafety
     @Binding var activeProviderIDString: String
     let onOpenSettings: () -> Void
+    /// 一次最多挂载多少条消息（`AgentMessageWindow`）。与工作区 Agent 面板同一形态、
+    /// 同一处方：`docs/scroll-perf-findings.md`「Agent 消息流」。
+    var messageWindowLimit: Int = AgentMessageWindow.defaultLimit
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
     @State private var followsConversationTail = true
     @State private var pendingTailScroll: DispatchWorkItem?
+    /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
+    @State private var expandedWindowLimit: Int?
 
     var body: some View {
         Group {
@@ -111,7 +116,8 @@ struct TerminalAgentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(model.messages) { messageRow($0) }
+                        earlierMessagesButton
+                        ForEach(mountedMessages) { messageRow($0) }
                         // 最后一条是助手 → 其下方「猜你想问」动态追问。
                         if model.messages.last?.role == .assistant {
                             followUpsView
@@ -141,6 +147,8 @@ struct TerminalAgentView: View {
                     }
                 }
                 .onChange(of: model.messages.count) { _, _ in scheduleScrollToBottom(proxy) }
+                // 换会话时把渲染窗口收回默认值。
+                .onChange(of: model.messages.first?.id) { _, _ in expandedWindowLimit = nil }
                 .onChange(of: model.messages.last?.text) { _, _ in scheduleScrollToBottom(proxy) }
                 .onChange(of: model.state) { _, _ in scheduleScrollToBottom(proxy) }
                 .onChange(of: model.followUps) { _, _ in scheduleScrollToBottom(proxy) }
@@ -150,6 +158,50 @@ struct TerminalAgentView: View {
                     pendingTailScroll = nil
                 }
             }
+        }
+    }
+
+    // MARK: - 渲染窗口
+
+    private var effectiveWindowLimit: Int {
+        max(expandedWindowLimit ?? messageWindowLimit, 1)
+    }
+
+    /// 真正挂进视图树的那一段；`model.messages` / SwiftData / 模型上下文一条不裁。
+    private var mountedMessages: ArraySlice<ChatMessage> {
+        let start = AgentMessageWindow.startIndex(count: model.messages.count,
+                                                  limit: effectiveWindowLimit)
+        return model.messages[start...]
+    }
+
+    @ViewBuilder
+    private var earlierMessagesButton: some View {
+        let hidden = AgentMessageWindow.hiddenCount(count: model.messages.count,
+                                                    limit: effectiveWindowLimit)
+        if hidden > 0 {
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    expandedWindowLimit = AgentMessageWindow.expanded(
+                        effectiveWindowLimit, count: model.messages.count)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("显示更早的 \(min(hidden, AgentMessageWindow.step)) 条")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(UD.text3)
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .background(Capsule().fill(UD.fillSoft))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("显示更早的消息，还有 \(hidden) 条")
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 

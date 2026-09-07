@@ -10,6 +10,9 @@ struct StreamingMarkdownView: View {
     let isStreaming: Bool
     var style: MarkdownStyle = .chat
     var imageLoader: MarkdownImageLoader?
+    /// 分段渲染的一段大小（见 `MarkdownBlockWindow`）；聊天皮肤不分段。
+    var maxBlocks: Int = .max
+    var moreBlocks: ((Int) -> AnyView)?
 
     @State private var renderer = StreamingMarkdownRenderer()
 
@@ -18,7 +21,9 @@ struct StreamingMarkdownView: View {
             document: renderer.document,
             style: style,
             imageLoader: imageLoader,
-            isStreaming: isStreaming)
+            isStreaming: isStreaming,
+            maxBlocks: maxBlocks,
+            moreBlocks: moreBlocks)
             .onAppear { renderer.renderImmediately(text) }
             .onChange(of: text) { _, newText in
                 renderer.update(newText, isStreaming: isStreaming)

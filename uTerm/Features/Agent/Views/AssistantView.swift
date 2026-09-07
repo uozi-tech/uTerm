@@ -77,6 +77,9 @@ struct AssistantView: View {
     var serverName: String = ""
     @Bindable var model: AssistantModel
     @Binding var activeProviderIDString: String
+    /// 一次最多挂载多少条消息（`AgentMessageWindow`）。会话数据不受影响；
+    /// 探针把它调成 `Int.max` 就是改前的「全量挂载」臂。
+    var messageWindowLimit: Int = AgentMessageWindow.defaultLimit
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
@@ -85,6 +88,8 @@ struct AssistantView: View {
     @State private var showSessions = false
     @State private var followsChatTail = true
     @State private var pendingTailScroll: DispatchWorkItem?
+    /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
+    @State private var expandedWindowLimit: Int?
 
     var body: some View {
         Group {
@@ -362,7 +367,8 @@ struct AssistantView: View {
                         if model.messages.isEmpty {
                             conversationEmptyState
                         } else {
-                            ForEach(model.messages) { messageRow($0) }
+                            earlierMessagesButton
+                            ForEach(mountedMessages) { messageRow($0) }
                             if model.messages.last?.role == .assistant {
                                 followUpsView
                             }
@@ -388,20 +394,17 @@ struct AssistantView: View {
                             contentHeight: context.geometry.contentSize.height)
                     }
                 }
-                .onChange(of: model.messages.last?.text) { _, _ in
+                // 尾部签名：把「尾消息 id / 正文长度 / 工具卡状态 / 追问」四路变化
+                // 合成一个 Equatable 值，一个 onChange 顶掉原来的五个。原先每个
+                // onChange 都在 ScrollView 上挂一个 AttributeGraph 节点、各存一份
+                // 旧值（其中 toolCalls 还是数组），而它们的动作完全相同。
+                .onChange(of: ChatTailSignature(model)) { _, _ in
                     scheduleScrollToBottom(proxy)
                 }
-                .onChange(of: model.messages.last?.id) { _, _ in
-                    scheduleScrollToBottom(proxy)
-                }
-                .onChange(of: model.messages.last?.toolCalls) { _, _ in
-                    scheduleScrollToBottom(proxy)
-                }
-                .onChange(of: model.followUps) { _, _ in
-                    scheduleScrollToBottom(proxy)
-                }
-                .onChange(of: model.followUpsLoading) { _, _ in
-                    scheduleScrollToBottom(proxy)
+                // 换会话（含「新对话」）时把渲染窗口收回默认值，
+                // 否则上一段会话点开的「显示更早」会带进下一段。
+                .onChange(of: model.messages.first?.id) { _, _ in
+                    expandedWindowLimit = nil
                 }
                 .onChange(of: model.state) { old, now in
                     scheduleScrollToBottom(proxy)
@@ -579,6 +582,52 @@ struct AssistantView: View {
         DispatchQueue.main.asyncAfter(
             deadline: .now() + AgentScrollPolicy.coalescingDelay,
             execute: work)
+    }
+
+    // MARK: - 渲染窗口
+
+    /// 当前生效的挂载上限：用户点过「显示更早」就用放大后的值。
+    private var effectiveWindowLimit: Int {
+        max(expandedWindowLimit ?? messageWindowLimit, 1)
+    }
+
+    /// 真正挂进视图树的那一段。整段消息仍完整留在 `model.messages` /
+    /// SwiftData / 模型上下文里，这里只是不把它们全建成视图。
+    private var mountedMessages: ArraySlice<ChatMessage> {
+        let start = AgentMessageWindow.startIndex(count: model.messages.count,
+                                                  limit: effectiveWindowLimit)
+        return model.messages[start...]
+    }
+
+    @ViewBuilder
+    private var earlierMessagesButton: some View {
+        let hidden = AgentMessageWindow.hiddenCount(count: model.messages.count,
+                                                    limit: effectiveWindowLimit)
+        if hidden > 0 {
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    expandedWindowLimit = AgentMessageWindow.expanded(
+                        effectiveWindowLimit, count: model.messages.count)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("显示更早的 \(min(hidden, AgentMessageWindow.step)) 条")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(UD.text3)
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .background(Capsule().fill(UD.fillSoft))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("显示更早的消息，还有 \(hidden) 条")
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     @ViewBuilder
@@ -789,6 +838,28 @@ struct AssistantView: View {
 
 /// A compact execution trace for one Agent tool call. It keeps command approval, progress,
 /// result disclosure, exit status, and copying in the conversation instead of a separate modal.
+/// 「贴底跟随」要监听的四路变化压成一个 Equatable 值：尾消息身份、正文长度、
+/// 尾消息的工具卡、追问。正文用 `utf8.count`（原生 Swift 字符串是 O(1)）而不是
+/// 整串——流式期间正文只增不减，长度就是忠实的变化指纹，也省掉每次 body 求值
+/// 都把一份长文本存进 onChange 的旧值里。
+private struct ChatTailSignature: Equatable {
+    let lastID: UUID?
+    let lastTextLength: Int
+    let toolCalls: [ToolCallState]
+    let followUps: [String]
+    let followUpsLoading: Bool
+
+    @MainActor
+    init(_ model: AssistantModel) {
+        let last = model.messages.last
+        lastID = last?.id
+        lastTextLength = last?.text.utf8.count ?? 0
+        toolCalls = last?.toolCalls ?? []
+        followUps = model.followUps
+        followUpsLoading = model.followUpsLoading
+    }
+}
+
 private struct AgentToolCallCard: View {
     let call: ToolCallState
     let approvalEnabled: Bool
@@ -797,6 +868,8 @@ private struct AgentToolCallCard: View {
 
     @State private var isResultExpanded = false
     @State private var isCommandCopied = false
+    /// 命令行整行一个 `onHover`，只用来门控 tooltip（见 `HoverGatedHelp`）。
+    @State private var isHoveringCommandRow = false
 
     private var presentation: AgentToolCallPresentation {
         AgentToolCallPresentation.resolve(call)
@@ -913,13 +986,14 @@ private struct AgentToolCallCard: View {
             .buttonStyle(.plain)
             .disabled(call.command.isEmpty)
             .accessibilityLabel(isCommandCopied ? "命令已复制" : "复制命令")
-            .help(isCommandCopied ? "已复制" : "复制命令")
+            .help(whenHovering: isHoveringCommandRow, isCommandCopied ? "已复制" : "复制命令")
         }
         .font(UD.mono(11))
         .padding(.leading, 11)
         .padding(.trailing, 8)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { isHoveringCommandRow = $0 }
         .background(UD.termBg)
         .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
         .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
@@ -1107,7 +1181,9 @@ private struct UserMessageRow: View {
                 .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 .onTapGesture { if canEdit { onBeginEdit() } }
                 .onHover { isHovering = $0 }
-                .help(canEdit ? "点击编辑并重发" : "")
+                // 悬停门控：行上本来就有 `isHovering`，不悬停的行不必给
+                // `NSToolTipManager` 留一块每个滚动 tick 都要重算的区域。
+                .help(whenHovering: isHovering && canEdit, "点击编辑并重发")
         }
     }
 

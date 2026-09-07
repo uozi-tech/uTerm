@@ -11,13 +11,26 @@ struct MarkdownBlocks: View {
     let style: MarkdownStyle
     var imageLoader: MarkdownImageLoader?
     var isStreaming: Bool = false
+    /// 一次最多挂多少个顶层块（`MarkdownBlockWindow`）。默认不裁；
+    /// 文件预览把它设成一段的大小，剩下的由 `moreBlocks` 的按钮放开。
+    /// **这不是懒栈**：外层仍是 `VStack`（`1a0bd63d` 的窗口缩放卡死修复），
+    /// 只是不把 5 万块一次全建出来。
+    var maxBlocks: Int = .max
+    /// 还有块没挂时，渲染这个「继续渲染」的尾巴。nil 表示调用方不提供
+    /// （聊天皮肤不分段）。
+    var moreBlocks: ((Int) -> AnyView)?
 
     var body: some View {
+        let all = Array(document.blockChildren)
+        let shown = maxBlocks > 0 && maxBlocks < all.count ? maxBlocks : all.count
         VStack(alignment: .leading, spacing: style.blockSpacing) {
-            ForEach(Array(document.blockChildren.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(all.prefix(shown).enumerated()), id: \.offset) { _, block in
                 MDBlockView(block: block, style: style,
                             imageLoader: imageLoader,
                             isStreaming: isStreaming)
+            }
+            if shown < all.count, let moreBlocks {
+                moreBlocks(all.count - shown)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
