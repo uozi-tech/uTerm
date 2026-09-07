@@ -139,6 +139,36 @@ final class WelcomeSidebarCostTests: XCTestCase {
                           "2000 台 / 60 组：改后 \(tuned2000x60)ms 必须快于改前 \(legacy2000x60)ms")
     }
 
+    /// `WelcomeView.body` 里另外两个「每次 body 都重算」的派生量，单独称一次。
+    ///
+    /// 它们不在侧栏里，但**和侧栏的 `counts` 是同一类账**：随 `WelcomeView.body`
+    /// 重跑（每次击键、每按一次 ↑/↓），而且 `existingGroups` 要扫一遍全部
+    /// profiles 取 `group`（SwiftData 属性读）。本轮没有改它们 ——
+    /// 这条只是把「还欠多少」量出来钉在案上（见 `docs/scroll-perf-findings.md`）。
+    func testWelcomeViewPerBodyDerivationsCost() {
+        for (hosts, groups) in [(100, 10), (2000, 60)] {
+            let profiles = WelcomeServerListCostTests.makeProfiles(count: hosts, groups: groups)
+            // `WelcomeView.existingGroups` 的逐字等价。
+            func existingGroups() -> [String] {
+                Set(profiles.compactMap { p -> String? in
+                    let g = p.group ?? ""
+                    return g.isEmpty ? nil : g
+                }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            }
+            _ = existingGroups()
+            var samples: [Double] = []
+            for _ in 0..<50 {
+                let start = CFAbsoluteTimeGetCurrent()
+                _ = existingGroups()
+                samples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+            }
+            let p50 = ProbeMetrics.percentile(samples, 0.5)
+            print(String(format: "[welcome-body-derive] hosts=%d groups=%d existingGroups-p50=%.3fms",
+                         hosts, groups, p50))
+            XCTAssertGreaterThan(p50, 0)
+        }
+    }
+
     // MARK: - 尺 ②：挂载 + 一次真 body 重跑 + NSView
 
     /// 让探针能从外面改 query 并**真的**触发 `WelcomeSidebar.body` 重跑。
