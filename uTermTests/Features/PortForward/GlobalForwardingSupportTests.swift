@@ -115,4 +115,76 @@ final class GlobalForwardingSupportTests: XCTestCase {
         XCTAssertEqual(fetched?.launchAtAppStart, false)   // 未传 → 默认 false
         XCTAssertEqual(fetched?.autostart, true)
     }
+
+    // MARK: - gfDerivedCounts（一遍扫完；必须与改前的四次分别扫描逐字段等价）
+
+    private struct DR { let id: UUID; let serverID: UUID; let launch: Bool; let status: TunnelStatus }
+
+    /// 改前的算法：`gfSummary` 扫一遍 + 每台主机各自 `isHostOnline` 全表扫一遍 +
+    /// 每组一次 activeN filter。新的 `gfDerivedCounts` 必须给出**一模一样**的三份结果。
+    private func legacyReference(hosts: [UUID], rules: [DR])
+        -> (GFSummary, Set<UUID>, [UUID: Int]) {
+        let summary = gfSummary(statuses: rules.map(\.status), launchFlags: rules.map(\.launch))
+        var online: Set<UUID> = []
+        var active: [UUID: Int] = [:]
+        for host in hosts {
+            for r in rules where r.serverID == host {
+                switch r.status {
+                case .active, .starting: online.insert(host)
+                default: break
+                }
+            }
+            let n = rules.filter { $0.serverID == host && $0.status == .active }.count
+            if n > 0 { active[host] = n }
+        }
+        return (summary, online, active)
+    }
+
+    func testDerivedCountsMatchTheLegacyPerHostScans() {
+        let h = (0..<5).map { _ in UUID() }
+        let statuses: [TunnelStatus] = [.active, .inactive, .starting, err(), .active, .active]
+        var rules: [DR] = []
+        for (i, host) in h.enumerated() {
+            for j in 0..<6 {
+                rules.append(DR(id: UUID(), serverID: host,
+                                launch: (i &+ j) % 2 == 0,
+                                status: statuses[(i &+ j) % statuses.count]))
+            }
+        }
+        // 孤儿规则（主机外键对不上）：只进 summary，不进任何主机的在线 / 活跃计数。
+        rules.append(DR(id: UUID(), serverID: UUID(), launch: true, status: .active))
+
+        let (refSummary, refOnline, refActive) = legacyReference(hosts: h, rules: rules)
+        let got = gfDerivedCounts(rules: rules,
+                                  ruleServerID: { $0.serverID },
+                                  status: { $0.status },
+                                  launchFlag: { $0.launch })
+
+        XCTAssertEqual(got.summary, refSummary, "汇总计数必须与改前逐次扫描一致")
+        XCTAssertEqual(got.onlineHosts.intersection(Set(h)), refOnline,
+                       "「主机在线」（名下有 active/starting）必须与改前的 isHostOnline 一致")
+        XCTAssertEqual(got.activeByHost.filter { h.contains($0.key) && $0.value > 0 }, refActive,
+                       "每台主机的活跃隧道数必须与改前的 filter 一致")
+    }
+
+    /// `.starting` 让主机算在线但**不**计入活跃数（组头「N/M 活跃」只数 active）。
+    func testStartingCountsAsOnlineButNotActive() {
+        let host = UUID()
+        let rules = [DR(id: UUID(), serverID: host, launch: false, status: .starting)]
+        let got = gfDerivedCounts(rules: rules, ruleServerID: { $0.serverID },
+                                  status: { $0.status }, launchFlag: { $0.launch })
+        XCTAssertTrue(got.onlineHosts.contains(host))
+        XCTAssertNil(got.activeByHost[host])
+        XCTAssertEqual(got.summary.activeTotal, 0)
+    }
+
+    /// 空输入不产生任何计数（组头 / 汇总条的空态）。
+    func testDerivedCountsOnEmptyRules() {
+        let got = gfDerivedCounts(rules: [DR](), ruleServerID: { $0.serverID },
+                                  status: { $0.status }, launchFlag: { $0.launch })
+        XCTAssertEqual(got.summary, GFSummary(ruleTotal: 0, activeTotal: 0,
+                                              launchTotal: 0, upCount: 0, failCount: 0))
+        XCTAssertTrue(got.onlineHosts.isEmpty)
+        XCTAssertTrue(got.activeByHost.isEmpty)
+    }
 }

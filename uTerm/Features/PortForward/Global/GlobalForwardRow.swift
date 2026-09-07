@@ -66,7 +66,9 @@ struct GlobalForwardRow: View {
                     .font(UD.mono(12)).lineLimit(1).truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(active ? 1 : 0.5)
-                    .help(flowPlain)
+                    // 行内 tooltip 一律走悬停门控：不悬停就不装那块常驻追踪区
+                    // （一行 5 处 × 上千行，滚动时全要跟着重算）。见 `help(whenHovering:)`。
+                    .help(whenHovering: hover, flowPlain)
             }
             .contentShape(Rectangle())
             .onTapGesture(count: 2, perform: onEdit)
@@ -78,10 +80,11 @@ struct GlobalForwardRow: View {
             trafficView
 
             TunnelStatusBadge(status: status, recentIssue: recentIssue, onRetry: retry)
-                .help(errorMessage ?? recentIssue.map { "最近连接失败：\($0)" } ?? "")
+                .help(whenHovering: hover,
+                      errorMessage ?? recentIssue.map { "最近连接失败：\($0)" } ?? "")
 
             UDToggle(Binding(get: { rule.launchAtAppStart }, set: { setKeepConnected($0) }))
-                .help("保持连接 · 随 uTerm 启动自动建立")
+                .help(whenHovering: hover, "保持连接 · 随 uTerm 启动自动建立")
                 .accessibilityLabel(rule.launchAtAppStart
                     ? "停止并取消保持「\(rule.name)」" : "保持连接「\(rule.name)」")
         }
@@ -96,6 +99,8 @@ struct GlobalForwardRow: View {
     }
 
     /// hover 浮现的小图标按钮（镜像 `TunnelRow.iconButton`）。
+    /// hover 才浮现的小图标按钮：tooltip 同样只在悬停时才装（按钮本身 `opacity(0)`
+    /// 时根本看不到，常驻一块 tooltip 区纯属浪费）。AX 标签不门控，读屏任何时候都要读得到。
     private func iconButton(_ symbol: String, tint: Color, help: String,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -106,7 +111,7 @@ struct GlobalForwardRow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(whenHovering: hover, help)
         .accessibilityLabel(help)
     }
 
@@ -147,7 +152,8 @@ struct GlobalForwardRow: View {
                 .font(UD.mono(10))
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)
-                .help("累计  ↑ \(gfFormatBytes(t.up)) · ↓ \(gfFormatBytes(t.down))")
+                .help(whenHovering: hover,
+                      "累计  ↑ \(gfFormatBytes(t.up)) · ↓ \(gfFormatBytes(t.down))")
             }
         }
         .frame(width: 104, alignment: .trailing)

@@ -72,6 +72,60 @@ nonisolated func gfSummary(statuses: [TunnelStatus], launchFlags: [Bool]) -> GFS
                      upCount: up, failCount: fail)
 }
 
+/// 一遍扫完的派生计数：汇总条 / 横幅要的 `GFSummary`、组头要的「主机在线吗」与
+/// 「该主机几条活跃」。
+///
+/// **为什么要合并**：原来这三件事各自扫一遍规则，而且 `isHostOnline` 是**逐组**
+/// 线性扫全部规则 —— 总成本 O(主机数 × 规则数)。50 主机 × 1000 条规则时，
+/// 每次 body 求值要做 5 万次状态查表；而全局面板每秒替换一次 `traffic`，
+/// body 每秒至少重求一遍。合并后每条规则只查一次状态，成本 O(规则数)。
+nonisolated struct GFDerivedCounts: Equatable, Sendable {
+    let summary: GFSummary
+    /// 名下有任一隧道 active/starting 的主机（组头的绿点）。
+    let onlineHosts: Set<UUID>
+    /// 每台主机 active 的隧道数（组头的「N/M 活跃」）。缺键 = 0。
+    let activeByHost: [UUID: Int]
+}
+
+/// 单遍扫描算出全部派生计数。取键 / 取状态用闭包，既能喂 `@Model`，也能在单测里喂值类型。
+nonisolated func gfDerivedCounts<Rule>(
+    rules: [Rule],
+    ruleServerID: (Rule) -> UUID,
+    status: (Rule) -> TunnelStatus,
+    launchFlag: (Rule) -> Bool
+) -> GFDerivedCounts {
+    var active = 0, launch = 0, up = 0, fail = 0
+    var onlineHosts: Set<UUID> = []
+    var activeByHost: [UUID: Int] = [:]
+    for rule in rules {
+        // 每条规则只查一次状态 —— 这是整条优化的关键。
+        let s = status(rule)
+        let host = ruleServerID(rule)
+        switch s {
+        case .active:
+            active += 1
+            onlineHosts.insert(host)
+            activeByHost[host, default: 0] += 1
+        case .starting:
+            onlineHosts.insert(host)
+        case .inactive, .error:
+            break
+        }
+        guard launchFlag(rule) else { continue }
+        launch += 1
+        switch s {
+        case .active: up += 1
+        case .error:  fail += 1
+        default: break
+        }
+    }
+    return GFDerivedCounts(
+        summary: GFSummary(ruleTotal: rules.count, activeTotal: active,
+                           launchTotal: launch, upCount: up, failCount: fail),
+        onlineHosts: onlineHosts,
+        activeByHost: activeByHost)
+}
+
 // MARK: - 流量
 
 /// 一条隧道的展示用流量：累计 + 实时速率（B/s）。由面板每秒拉 `TunnelBytes` 快照算差得出。

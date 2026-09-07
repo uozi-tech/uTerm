@@ -15,10 +15,6 @@ struct GlobalForwardingWindowView: View {
     @Environment(GlobalForwardingModel.self) private var model
     @Environment(HostKeyChallengeRelay.self) private var relay
 
-    /// 每条规则的展示流量（累计 + 速率），由下方 1s 轮询刷新。
-    @State private var traffic: [UUID: GFTrafficStat] = [:]
-    /// 上一次拉到的累计字节，用来算每秒速率。
-    @State private var lastBytes: [UUID: TunnelBytes] = [:]
     /// 编辑器目标（nil = 关闭）：编辑既有规则，或在某主机上新建。
     @State private var editing: GFEditTarget?
     /// 「新建」主机选择器（分组弹窗）是否展开。
@@ -33,38 +29,31 @@ struct GlobalForwardingWindowView: View {
 
     // MARK: - 派生数据
 
-    private var groups: [GFGroup<ServerProfile, ForwardingRule>] {
-        gfGroupByHost(hosts: profiles, rules: rules,
-                      hostID: { $0.id }, ruleServerID: { $0.serverID })
-    }
-
-    private var summary: GFSummary {
-        gfSummary(statuses: rules.map { coordinator.status($0.id) },
-                  launchFlags: rules.map(\.launchAtAppStart))
-    }
-
-    /// 标记自启的规则 + 其主机（手动「重新连接」用）。按 `groups` 顺序展开 —— 序列推进
-    /// 顺序与列表自上而下一致，过程态芯片才会按视觉顺序逐条点亮（规则的全局 sortOrder
-    /// 是按主机各自计数的，直接 filter 会跨主机交错）。孤儿规则随 `groups` 一并被丢弃。
-    private var launchItems: [GlobalForwardingModel.LaunchItem] {
-        groups.flatMap { group in
-            group.rules.filter(\.launchAtAppStart).map {
-                GlobalForwardingModel.LaunchItem(rule: $0.snapshot, server: group.host)
-            }
-        }
+    /// 一次 body 求值只算一遍（见 `GlobalForwardingDerived`）。改前这里是四个独立的
+    /// 计算属性，`groups` 一次 body 里被算 2~3 遍、`isHostOnline` 逐组扫全表。
+    private var derived: GlobalForwardingDerived {
+        GlobalForwardingDerived(profiles: profiles, rules: rules, coordinator: coordinator)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            GlobalForwardingTitleBar(hostCount: groups.count)
+        // 算一次、往下传。
+        let derived = self.derived
+        return VStack(spacing: 0) {
+            GlobalForwardingTitleBar(hostCount: derived.sections.count)
             StartupAutomationBanner(
                 model: model,
-                launchCount: summary.launchTotal,
-                upCount: summary.upCount,
-                failCount: summary.failCount,
-                onReconnect: reconnectAll)
-            summaryStrip
-            listBody
+                launchCount: derived.summary.launchTotal,
+                upCount: derived.summary.upCount,
+                failCount: derived.summary.failCount,
+                onReconnect: { reconnectAll(derived.launchItems) })
+            summaryStrip(derived.summary)
+            // 流量轮询与列表一起下沉到 `GlobalForwardingList`：每秒那一拍只让**列表**
+            // 重求，标题栏 / 横幅 / 汇总条 / 派生数据都不再跟着重算。
+            GlobalForwardingList(sections: derived.sections,
+                                 counts: derived.counts,
+                                 relay: relay,
+                                 coordinator: coordinator,
+                                 onEdit: { rule, host in beginEdit(rule, on: host) })
         }
         .frame(minWidth: 680, minHeight: 560)
         .ignoresSafeArea(.container, edges: .top)
@@ -72,43 +61,11 @@ struct GlobalForwardingWindowView: View {
         .background(WorkspaceWindowChrome(serverName: "全局端口转发"))
         .hostKeySheet(relay)
         .overlay { editorOverlay }
-        .task { await pollTraffic() }
-    }
-
-    /// 每秒拉一次累计字节快照，与上次做差得到速率，刷新 `traffic`。窗口可见时运行，
-    /// 关闭即随 `.task` 取消。`-L`/`-D` 有数；`-R` 恒 0（UI 标「不统计」）。
-    private func pollTraffic() async {
-        let clock = ContinuousClock()
-        var lastTick = clock.now
-        while !Task.isCancelled {
-            let now = await coordinator.trafficSnapshot()
-            // 按**真实**间隔算速率（不是假定 1s）—— 快照 await + 调度抖动 + 休眠/唤醒间隙都会
-            // 让两次采样间隔 >1s；除以实测秒数，`/s` 才名副其实，长间隙后也不会把多秒增量误标成一秒。
-            let tick = clock.now
-            let d = tick - lastTick
-            let elapsed = max(0.25, Double(d.components.seconds)
-                              + Double(d.components.attoseconds) * 1e-18)
-            lastTick = tick
-            var stats: [UUID: GFTrafficStat] = [:]
-            for (id, bytes) in now {
-                let prev = lastBytes[id]
-                // 计数器在隧道重启时会清零 → 差为负时按 0（不显示虚假尖峰）。
-                let upDelta = prev.map { bytes.up >= $0.up ? bytes.up - $0.up : 0 } ?? 0
-                let downDelta = prev.map { bytes.down >= $0.down ? bytes.down - $0.down : 0 } ?? 0
-                stats[id] = GFTrafficStat(
-                    up: bytes.up, down: bytes.down,
-                    upRate: UInt64(Double(upDelta) / elapsed),
-                    downRate: UInt64(Double(downDelta) / elapsed))
-            }
-            lastBytes = now
-            traffic = stats
-            try? await Task.sleep(for: .seconds(1))
-        }
     }
 
     // MARK: - 汇总条
 
-    private var summaryStrip: some View {
+    private func summaryStrip(_ summary: GFSummary) -> some View {
         HStack(spacing: 16) {
             HStack(spacing: 6) {
                 Circle().fill(summary.activeTotal > 0 ? UD.success : UD.text4)
@@ -200,67 +157,8 @@ struct GlobalForwardingWindowView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 分组列表
-
-    @ViewBuilder
-    private var listBody: some View {
-        ScrollView {
-            if groups.isEmpty {
-                emptyState
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(groups, id: \.host.id) { group in
-                        groupSection(group)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 18)
-            }
-        }
-    }
-
-    private func groupSection(_ group: GFGroup<ServerProfile, ForwardingRule>) -> some View {
-        let host = group.host
-        let online = isHostOnline(host.id)
-        let activeN = group.rules.filter { coordinator.status($0.id) == .active }.count
-        return VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                ZStack {
-                    if online { Circle().fill(UD.success.opacity(0.18)).frame(width: 12, height: 12) }
-                    Circle().fill(online ? UD.success : UD.text4).frame(width: 6, height: 6)
-                }
-                .frame(width: 12, height: 12)
-                Text(host.name.isEmpty ? host.host : host.name)
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(UD.text)
-                Text(host.host).font(UD.mono(11)).foregroundStyle(UD.text4)
-                if !online {
-                    Text("未连接")
-                        .font(.system(size: 10.5)).foregroundStyle(UD.text3)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillFaint))
-                }
-                Spacer()
-                Text("\(activeN)/\(group.rules.count) 活跃")
-                    .font(.system(size: 11)).foregroundStyle(UD.text4)
-            }
-            .padding(.horizontal, 2)
-            .padding(.bottom, 7)
-
-            VStack(spacing: 0) {
-                ForEach(Array(group.rules.enumerated()), id: \.element.id) { idx, rule in
-                    GlobalForwardRow(rule: rule, server: host, relay: relay,
-                                     isLast: idx == group.rules.count - 1,
-                                     traffic: traffic[rule.id],
-                                     onEdit: { beginEdit(rule, on: host) })
-                }
-            }
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-        }
-    }
-
-    private var emptyState: some View {
+    /// 空态（无任何规则时列表区显示）。列表组件复用它。
+    static var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "arrow.left.arrow.right")
                 .font(.system(size: 28)).foregroundStyle(UD.text4)
@@ -277,19 +175,8 @@ struct GlobalForwardingWindowView: View {
 
     // MARK: - 逻辑
 
-    /// 「在线」= 该主机名下有任一隧道处于 active/starting（无 app 级可达性标志，故以运行态为准）。
-    private func isHostOnline(_ hostID: UUID) -> Bool {
-        for r in rules where r.serverID == hostID {
-            switch coordinator.status(r.id) {
-            case .active, .starting: return true
-            default: continue
-            }
-        }
-        return false
-    }
-
-    private func reconnectAll() {
-        model.runSequence(items: launchItems, coordinator: coordinator,
+    private func reconnectAll(_ items: [GlobalForwardingModel.LaunchItem]) {
+        model.runSequence(items: items, coordinator: coordinator,
                           relay: relay, container: modelContext.container)
     }
 
@@ -358,6 +245,184 @@ struct GlobalForwardingWindowView: View {
             store.add(rule)
         }
     }
+}
+
+// MARK: - 分组列表
+
+/// 按主机分组的规则列表 + 每秒一次的流量轮询。
+///
+/// **为什么单独成一个视图**：`traffic` 每秒被整体替换一次，谁持有它谁就每秒重求一次
+/// body。放在窗口根视图上时，那一拍连标题栏、启动横幅、汇总条和全部派生数据一起重算；
+/// 下沉到这里之后，每秒那一拍只碰列表。
+///
+/// **为什么 `LazyVStack` 只包到分组这一层**：真正会长的是主机数（`@Query` 无上限），
+/// 单台主机的规则数天然有限。分组一层走 lazy，屏外的主机连行都不建；组内仍是普通
+/// `VStack`，圆角卡片容器 / 组内分隔线 / `isLast` 判定这些视觉契约一点没动。
+/// （playbook 的反例表：小规模档换懒栈可能更慢 —— 所以只在会长的那一维上懒。）
+struct GlobalForwardingList: View {
+    let sections: [GFGroup<ServerProfile, ForwardingRule>]
+    let counts: GFDerivedCounts
+    let relay: HostKeyChallengeRelay
+    let coordinator: ForwardingCoordinator
+    let onEdit: (ForwardingRule, ServerProfile) -> Void
+
+    /// 每条规则的展示流量（累计 + 速率），由下方 1s 轮询刷新。
+    @State private var traffic: [UUID: GFTrafficStat] = [:]
+    /// 上一次拉到的累计字节，用来算每秒速率。
+    @State private var lastBytes: [UUID: TunnelBytes] = [:]
+
+    /// 分组这一层什么时候才值得走 `LazyVStack`（按**总规则数**分档）。
+    ///
+    /// 「换懒栈一定更快」是错的（playbook 反例表）。本屏同轮实测：
+    /// - 10 组 / 50 行：非 lazy 单帧 p95 **2.00ms**、超预算 0%；换 lazy 后 p95 **15.41ms**、超预算 9.5%。
+    /// - 50 组 / 1000 行：非 lazy p95 **17.90ms**、超预算 99.5%；换 lazy 后 p95 **7.23ms**、超预算 4.0%。
+    ///
+    /// 所以小规模留非 lazy、大规模才懒。120 取在「四五屏」的量级（行高 52pt，
+    /// 一屏约 13 行）；两档之间的确切拐点没量过，见 `docs/scroll-perf-findings.md`。
+    static let lazyRowThreshold = 120
+
+    private var totalRules: Int { sections.reduce(0) { $0 + $1.rules.count } }
+
+    var body: some View {
+        ScrollView {
+            if sections.isEmpty {
+                GlobalForwardingWindowView.emptyState
+            } else if totalRules > Self.lazyRowThreshold {
+                LazyVStack(spacing: 12) {
+                    ForEach(sections, id: \.host.id) { group in
+                        section(group)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 18)
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(sections, id: \.host.id) { group in
+                        section(group)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 18)
+            }
+        }
+        .task { await pollTraffic() }
+    }
+
+    private func section(_ group: GFGroup<ServerProfile, ForwardingRule>) -> some View {
+        let host = group.host
+        // 在线 / 活跃数直接查表（改前是逐组扫一遍全部规则，O(主机 × 规则)）。
+        let online = counts.onlineHosts.contains(host.id)
+        let activeN = counts.activeByHost[host.id] ?? 0
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                ZStack {
+                    if online { Circle().fill(UD.success.opacity(0.18)).frame(width: 12, height: 12) }
+                    Circle().fill(online ? UD.success : UD.text4).frame(width: 6, height: 6)
+                }
+                .frame(width: 12, height: 12)
+                Text(host.name.isEmpty ? host.host : host.name)
+                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(UD.text)
+                Text(host.host).font(UD.mono(11)).foregroundStyle(UD.text4)
+                if !online {
+                    Text("未连接")
+                        .font(.system(size: 10.5)).foregroundStyle(UD.text3)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillFaint))
+                }
+                Spacer()
+                Text("\(activeN)/\(group.rules.count) 活跃")
+                    .font(.system(size: 11)).foregroundStyle(UD.text4)
+            }
+            .padding(.horizontal, 2)
+            .padding(.bottom, 7)
+
+            VStack(spacing: 0) {
+                ForEach(Array(group.rules.enumerated()), id: \.element.id) { idx, rule in
+                    GlobalForwardRow(rule: rule, server: host, relay: relay,
+                                     isLast: idx == group.rules.count - 1,
+                                     traffic: traffic[rule.id],
+                                     onEdit: { onEdit(rule, host) })
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+        }
+    }
+
+    /// 每秒拉一次累计字节快照，与上次做差得到速率，刷新 `traffic`。窗口可见时运行，
+    /// 关闭即随 `.task` 取消。`-L`/`-D` 有数；`-R` 恒 0（UI 标「不统计」）。
+    private func pollTraffic() async {
+        let clock = ContinuousClock()
+        var lastTick = clock.now
+        while !Task.isCancelled {
+            let now = await coordinator.trafficSnapshot()
+            // 按**真实**间隔算速率（不是假定 1s）—— 快照 await + 调度抖动 + 休眠/唤醒间隙都会
+            // 让两次采样间隔 >1s；除以实测秒数，`/s` 才名副其实，长间隙后也不会把多秒增量误标成一秒。
+            let tick = clock.now
+            let d = tick - lastTick
+            let elapsed = max(0.25, Double(d.components.seconds)
+                              + Double(d.components.attoseconds) * 1e-18)
+            lastTick = tick
+            var stats: [UUID: GFTrafficStat] = [:]
+            stats.reserveCapacity(now.count)
+            for (id, bytes) in now {
+                let prev = lastBytes[id]
+                // 计数器在隧道重启时会清零 → 差为负时按 0（不显示虚假尖峰）。
+                let upDelta = prev.map { bytes.up >= $0.up ? bytes.up - $0.up : 0 } ?? 0
+                let downDelta = prev.map { bytes.down >= $0.down ? bytes.down - $0.down : 0 } ?? 0
+                stats[id] = GFTrafficStat(
+                    up: bytes.up, down: bytes.down,
+                    upRate: UInt64(Double(upDelta) / elapsed),
+                    downRate: UInt64(Double(downDelta) / elapsed))
+            }
+            lastBytes = now
+            // 一字未变就别写回 —— 全部隧道都闲着时（速率归零后每拍的快照完全一样），
+            // 这一步省掉的是整张列表每秒一次的重求。
+            if stats != traffic { traffic = stats }
+            try? await Task.sleep(for: .seconds(1))
+        }
+    }
+}
+
+// MARK: - 一次 body 求值要的全部派生数据
+
+/// 全局面板一次 body 求值要的全部派生数据，**一遍算完**。
+///
+/// 原来这些是四个各自独立的计算属性（`groups` / `summary` / `launchItems` / `isHostOnline`），
+/// 一次 body 求值里 `groups` 被算 2~3 遍、`isHostOnline` 逐组扫全部规则
+/// （O(主机数 × 规则数)）、`summary` 又把每条规则的状态查一遍。而 `pollTraffic`
+/// **每秒**替换一次 `@State traffic`，整窗 body 至少每秒重求一遍 —— 这些账每秒都要还一次。
+///
+/// 现在：分组一遍、计数一遍（每条规则查一次状态），组头要的在线 / 活跃数直接查表。
+@MainActor
+struct GlobalForwardingDerived {
+    let sections: [GFGroup<ServerProfile, ForwardingRule>]
+    let counts: GFDerivedCounts
+    let launchItems: [GlobalForwardingModel.LaunchItem]
+
+    var summary: GFSummary { counts.summary }
+
+    init(profiles: [ServerProfile], rules: [ForwardingRule],
+         coordinator: ForwardingCoordinator) {
+        sections = gfGroupByHost(hosts: profiles, rules: rules,
+                                 hostID: { $0.id }, ruleServerID: { $0.serverID })
+        counts = gfDerivedCounts(rules: rules,
+                                 ruleServerID: { $0.serverID },
+                                 status: { coordinator.status($0.id) },
+                                 launchFlag: { $0.launchAtAppStart })
+        // 按 `sections` 顺序展开 —— 序列推进顺序与列表自上而下一致（规则的全局
+        // sortOrder 是按主机各自计数的，直接 filter 会跨主机交错）。
+        launchItems = sections.flatMap { group in
+            group.rules.filter(\.launchAtAppStart).map {
+                GlobalForwardingModel.LaunchItem(rule: $0.snapshot, server: group.host)
+            }
+        }
+    }
+
+    func isOnline(_ hostID: UUID) -> Bool { counts.onlineHosts.contains(hostID) }
+    func activeCount(_ hostID: UUID) -> Int { counts.activeByHost[hostID] ?? 0 }
 }
 
 // MARK: - 标题栏

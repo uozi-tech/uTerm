@@ -44,6 +44,8 @@ final class ForwardingCoordinator {
     /// 探测/重连进行中标志：串行化 `probeConnectionHealth`（防心跳重入），并让「即时重连」
     /// 在心跳探测在跑时让路（交给探测的 step ② 处理），避免两路同时驱逐/重建互踩。
     @ObservationIgnored private var isProbing = false
+    /// 仅测试用的流量注入（见 `injectTrafficForTesting`）。nil = 生产路径，零开销。
+    @ObservationIgnored private var injectedTraffic: [UUID: TunnelBytes]?
 
     private struct ReconnectContext {
         let server: ServerProfile
@@ -80,7 +82,7 @@ final class ForwardingCoordinator {
     /// 跨所有主机会话的累计流量快照（按 ruleID）。全局面板每秒拉一次算速率 + 累计。
     /// 逐会话 await（会话数很少）；ruleID 全局唯一，直接合并不会撞键。
     func trafficSnapshot() async -> [UUID: TunnelBytes] {
-        var merged: [UUID: TunnelBytes] = [:]
+        var merged: [UUID: TunnelBytes] = injectedTraffic ?? [:]
         for session in sessions.values {
             for (id, bytes) in await session.trafficSnapshot() {
                 merged[id] = bytes
@@ -339,6 +341,20 @@ final class ForwardingCoordinator {
     /// 仅测试用：某主机是否仍持有缓存会话（探测后被驱逐与否的观察点）。
     func hasSessionForTesting(serverID: UUID) -> Bool {
         sessions[serverID] != nil
+    }
+
+    /// 仅测试用：直接写一条规则的运行态。性能探针要在**没有任何真实会话**的前提下
+    /// 造出 active / error 混排的行（`active` 才画流量列、`error` 才把状态徽标换成
+    /// `Button`），否则量到的是一屏「未连接」，比真实界面便宜。
+    func setStatusForTesting(_ status: TunnelStatus, for ruleID: UUID) {
+        runtime[ruleID] = status
+    }
+
+    /// 仅测试用：让 `trafficSnapshot()` 额外返回一份注入的累计字节。
+    /// 全局面板每秒拉一次快照算速率 —— 没有真实会话时快照恒空、行上永远不画流量列，
+    /// 每秒那一拍的开销也就量不准。nil（默认）时零额外开销。
+    func injectTrafficForTesting(_ bytes: [UUID: TunnelBytes]?) {
+        injectedTraffic = bytes
     }
 }
 
