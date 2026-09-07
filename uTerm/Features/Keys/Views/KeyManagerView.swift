@@ -72,16 +72,19 @@ struct KeyManagerView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        // 一趟聚合成 [keyID: 台数]。原来每行 `hostCount(for:)` 扫一遍
+                        // 全部 profile，而且行里调了**两次**（行文案 + AX 标签）：
+                        // 50 把密钥 × 2000 台 = 每次 body 最多 20 万次比较。
+                        let counts = hostCounts
                         ForEach(keys) { key in
-                            KeyRow(key: key,
-                                   hostCount: hostCount(for: key),
-                                   selected: key.id == selectedID)
+                            let n = counts[key.id] ?? 0
+                            KeyRow(key: key, hostCount: n, selected: key.id == selectedID)
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedID = key.id; generating = false }
                                 .accessibilityElement(children: .combine)
                                 .accessibilityAddTraits(.isButton)
                                 .accessibilityAddTraits(key.id == selectedID ? .isSelected : [])
-                                .accessibilityLabel("\(key.name)，\(key.typeLabel)，\(hostCount(for: key)) 台主机")
+                                .accessibilityLabel("\(key.name)，\(key.typeLabel)，\(n) 台主机")
                         }
                     }
                     .padding(.vertical, 6)
@@ -162,6 +165,16 @@ struct KeyManagerView: View {
         profiles.filter { $0.keyID == key.id }
     }
     private func hostCount(for key: SSHKey) -> Int { profilesUsing(key).count }
+
+    /// `keyID → 使用该密钥的主机数`，一趟建好给列表查表用。
+    private var hostCounts: [UUID: Int] {
+        var counts: [UUID: Int] = [:]
+        for p in profiles {
+            guard let id = p.keyID else { continue }
+            counts[id, default: 0] += 1
+        }
+        return counts
+    }
     private func usedByNames(for key: SSHKey) -> [String] {
         profilesUsing(key).map(\.name).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }

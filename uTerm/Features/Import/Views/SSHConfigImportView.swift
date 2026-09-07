@@ -98,7 +98,9 @@ struct SSHConfigImportView: View {
     private var reviewPane: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: 1) {
+                // 懒栈：~/.ssh/config 里 2000 条 Host 的机器上，原来的 `VStack`
+                // 会在进入复核页的那一帧把 2000 行全建出来。
+                LazyVStack(spacing: 1) {
                     ForEach(rows) { row in importRowView(row) }
                 }
                 .padding(12)
@@ -118,6 +120,10 @@ struct SSHConfigImportView: View {
     private func importRowView(_ row: ImportRow) -> some View {
         let h = row.host
         let disabled = h.isWildcard
+        let userPrefix = h.user.isEmpty ? "" : h.user + "@"
+        let endpoint = userPrefix + h.hostName + ":" + String(h.port)
+        let identityShort = h.identityFile.map { "  ·  " + ($0 as NSString).lastPathComponent } ?? ""
+        let identityFull = h.identityFile.map { "  ·  " + $0 } ?? ""
         return HStack(spacing: 10) {
             Image(systemName: selection.contains(row.id) ? "checkmark.square.fill" : "square")
                 .foregroundStyle(disabled ? UD.text4 : (selection.contains(row.id) ? UD.accent : UD.text3))
@@ -127,12 +133,12 @@ struct SSHConfigImportView: View {
                     if h.isWildcard { tag("通配", UD.text4) }
                     if row.existing { tag("已存在", UD.caution) }
                 }
-                Text("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(String(h.port))" +
-                     (h.identityFile.map { "  ·  " + ($0 as NSString).lastPathComponent } ?? ""))
+                // 去掉每行的 `.help`：tooltip 的 NSTrackingArea 是按行建的，
+                // 2000 行就是 2000 个（playbook「.help tooltip 风暴」）。完整的
+                // endpoint / 私钥路径改挂到行的 AX 值上，读屏仍拿得到。
+                Text(endpoint + identityShort)
                     .font(UD.monoMetric).foregroundStyle(UD.text4)
                     .lineLimit(1).truncationMode(.middle)
-                    .help("\(h.user.isEmpty ? "" : h.user + "@")\(h.hostName):\(h.port)" +
-                          (h.identityFile.map { "  ·  " + $0 } ?? ""))
             }
             Spacer()
         }
@@ -147,6 +153,7 @@ struct SSHConfigImportView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selection.contains(row.id) ? .isSelected : [])
         .accessibilityLabel("\(h.alias)\(h.isWildcard ? "，通配" : "")\(row.existing ? "，已存在" : "")")
+        .accessibilityValue(endpoint + identityFull)
     }
 
     private func tag(_ s: String, _ c: Color) -> some View {

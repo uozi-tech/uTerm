@@ -76,7 +76,20 @@ struct GroupsManagerView: View {
 
     private var store: GroupStore { GroupStore(context: modelContext) }
     private var sortedGroups: [ServerGroup] { GroupStore.sortedForSidebar(groups) }
-    private var ungroupedCount: Int { profiles.filter { ($0.group ?? "").isEmpty }.count }
+
+    /// 每个组名的成员数，**一趟聚合**。原来每行都 `GroupStore.members(of:in:profiles).count`
+    /// 全表扫一遍：60 组 × 2000 台 = 每次 body 12 万次比较，而且每次比较都要过
+    /// SwiftData 的属性访问器。这里一趟 O(profiles) 建字典，行里改成 O(1) 查表。
+    private var memberCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for p in profiles {
+            let g = p.group ?? ""
+            guard !g.isEmpty else { continue }
+            counts[g, default: 0] += 1
+        }
+        return counts
+    }
+    private var ungroupedCount: Int { profiles.count - memberCounts.values.reduce(0, +) }
     private var totalHosts: Int { profiles.count }
     private var selectedGroup: ServerGroup? {
         if case .group(let id) = selection { return groups.first { $0.persistentModelID == id } }
@@ -111,9 +124,10 @@ struct GroupsManagerView: View {
             createBar
             Rectangle().fill(UD.border).frame(height: 1)
             ScrollView {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
+                    let counts = memberCounts
                     ForEach(sortedGroups, id: \.persistentModelID) { g in
-                        groupRow(g)
+                        groupRow(g, counts: counts)
                     }
                     if ungroupedCount > 0 {
                         GroupRowView(
@@ -168,11 +182,11 @@ struct GroupsManagerView: View {
         !newGroupName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private func groupRow(_ g: ServerGroup) -> some View {
+    private func groupRow(_ g: ServerGroup, counts: [String: Int]) -> some View {
         GroupRowView(
             name: g.name,
             color: g.color,
-            count: GroupStore.members(of: g.name, in: profiles).count,
+            count: counts[g.name] ?? 0,
             pinned: g.isPinned,
             builtin: false,
             selected: selection == .group(g.persistentModelID),
@@ -581,7 +595,8 @@ private struct GroupDetailView: View {
     }
 
     private func memberList(_ items: [ServerProfile], action: MemberRowView.Action, scroll: Bool) -> some View {
-        let rows = VStack(spacing: 0) {
+        // 懒栈：2000 台的组切进来时，原来 `VStack` 会把 2000 行连同 2000 个 Button 一次性建出来。
+        let rows = LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.persistentModelID) { idx, p in
                 MemberRowView(
                     name: serverProfileMemberDisplayName(p),
@@ -647,17 +662,23 @@ private struct MemberRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let action {
-                Button(action: onAction) {
-                    Text(action == .remove ? "移出" : "+ 加入")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(action == .remove ? UD.text2 : UD.accentInk)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(RoundedRectangle(cornerRadius: 6)
-                            .fill(action == .remove ? UD.fillFaint : UD.accentSoft))
-                }
-                .buttonStyle(.plain)
-                .opacity(hover ? 1 : 0.7)
+                // 不用 `Button`：密集行里每个 Button 都要建一棵平台控件子树
+                // （playbook §三「Button 才是主因」）。命中区 + 手势 + AX traits
+                // 能拿到一样的行为与可访问性，代价是 0 个平台视图。
+                Text(action == .remove ? "移出" : "+ 加入")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(action == .remove ? UD.text2 : UD.accentInk)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(action == .remove ? UD.fillFaint : UD.accentSoft))
+                    .opacity(hover ? 1 : 0.7)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onAction)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(action == .remove ? "移出 \(name)" : "把 \(name) 加入分组")
+                    .accessibilityAction { onAction() }
             }
         }
         .padding(.horizontal, 12)
@@ -700,7 +721,7 @@ private struct UngroupedDetailView: View {
                             .overlay(RoundedRectangle(cornerRadius: 8)
                                 .strokeBorder(UD.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                     } else {
-                        VStack(spacing: 0) {
+                        LazyVStack(spacing: 0) {
                             ForEach(Array(members.enumerated()), id: \.element.persistentModelID) { idx, p in
                                 MemberRowView(
                                     name: serverProfileMemberDisplayName(p),
