@@ -27,8 +27,9 @@ enum ServerGroupBadgeTint {
 /// `RelativeDateTimeFormatter`。2000 台档下每行的常驻平台视图与 tooltip 区域
 /// 是挂载与 hitTest 的主项。现在三处都收掉了 —— 改动时请守住：
 ///
-/// 1. **不要把行重新包进 `Button`**。点击走 `onTapGesture`，无障碍语义靠下面
-///    手工补的 `accessibilityAction`（VoiceOver / 全键盘控制走的就是这条路）。
+/// 1. **不要把行重新包进 `Button`**。鼠标点击由 `ServerList` 的容器级透明层接
+///    （`clickToSelect`），无障碍语义靠下面手工补的 `accessibilityAction`
+///    （VoiceOver / 全键盘控制走的就是这条路）。
 /// 2. **`.help` 只在悬停行挂**（`help(whenHovering:)`）。`NSToolTipManager`
 ///    每个滚动 tick 全量重算全窗 tooltip 区域，常驻 `.help` 是按行数收费的。
 /// 3. **别在行体里现建 `Formatter`**。`WelcomeFormat` 里有共享实例。
@@ -82,10 +83,11 @@ struct ServerRow: View {
         .background(rowBackground)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        // 单击选中 / 双击连接。`TapGesture(count: 2)` 挂在前面：SwiftUI 会让
-        // 双击优先，单击仍照常触发（与改前 `Button` + `simultaneousGesture` 同行为）。
-        .onTapGesture(count: 2) { onDoubleTap() }
-        .onTapGesture { onTap() }
+        // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
+        // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
+        // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`
+        // 分派：第一下按下即选中、第二下即连接（见 `ClickSelectActivate.swift`）。
+        // 行本身仍保留 `onTap` / `onDoubleTap`，它们是下面 AX 动作的落点。
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.name)，\(profile.displayEndpoint)")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)

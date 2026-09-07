@@ -13,7 +13,11 @@ import XCTest
 /// 三条路都驱动不了 `onTapGesture`，而且**改前那版 `Button` 同样点不动**
 /// （uTable playbook §五·八·④ 已用对照臂证明这是夹具边界，不是改动回归）。
 /// `accessibilityPerformPress` 是 VoiceOver 与「全键盘控制」按下一行走的
-/// 真实路径，不是后门。真鼠标那条路留给人肉验收。
+/// 真实路径，不是后门。
+///
+/// **鼠标那条路 2026-09-08 起量得到了**：单 / 双击已搬到 `ServerList` 的容器级
+/// AppKit 点击层，合成 `NSEvent` 走 `NSApp.sendEvent` 就能驱动它 ——
+/// 见 `ClickSelectActivateTests`。这里保留的是 AX 那条路的契约。
 @MainActor
 final class WelcomeServerListContractTests: XCTestCase {
 
@@ -181,20 +185,38 @@ final class WelcomeServerListContractTests: XCTestCase {
     /// 换掉 `Button` 是有账的（每行一个 `_FocusRingView` + `KeyViewProxy`，
     /// 见 `WelcomeServerListCostTests`）。这条闸门守住形态不回退，
     /// 同时守住「换掉之后必须补 AX」这条配套义务。
-    func testServerRowKeepsTapGestureAndHandWrittenAccessibility() throws {
+    ///
+    /// **单 / 双击这一条改成钉行为，不钉源码字符串**：鼠标点击已从行里搬到
+    /// `ServerList` 的容器级 `clickToSelect` —— 行里两个 `onTapGesture` 链式会让
+    /// SwiftUI 等满系统双击间隔才发单击（实测点一行 390~510ms 才高亮，用户报的
+    /// 就是这个）。行里因此**不该**再有任何 `onTapGesture`；「按下即选中、第二下
+    /// 才连接」由 `ClickSelectActivateTests` 用真 `NSEvent` 断言。
+    func testServerRowKeepsHandWrittenAccessibilityAndNoTapGesture() throws {
         let source = try String(contentsOf: Self.repoRoot.appendingPathComponent(
             "uTerm/Features/Welcome/Views/ServerRow.swift"), encoding: .utf8)
 
         XCTAssertFalse(source.contains("Button(action: onTap)"),
                        "行不能包回 Button —— 每行会多出一个 _FocusRingView + KeyViewProxy")
-        XCTAssertTrue(source.contains(".onTapGesture { onTap() }"), "单击选中")
-        XCTAssertTrue(source.contains(".onTapGesture(count: 2) { onDoubleTap() }"), "双击连接")
+        XCTAssertFalse(source.contains(".onTapGesture"),
+                       "行里不能再挂点击手势 —— 单 / 双击互斥消歧会让单击延迟半秒；"
+                       + "鼠标点击走 ServerList 的 clickToSelect 容器层")
         XCTAssertTrue(source.contains(".accessibilityAction { onTap() }"),
                       "不是 Button 就必须手工补默认动作")
         XCTAssertTrue(source.contains("accessibilityAddTraits(isSelected ? [.isButton, .isSelected]"),
                       "AX 角色与选中态必须手工补")
         XCTAssertFalse(source.contains("@FocusState"))
         XCTAssertFalse(source.contains(".focusable("))
+    }
+
+    /// 容器层接线仍在：`ServerList` 必须给整个 `LazyVStack` 装上点击层，
+    /// 且第二下真的走「连接」。
+    func testServerListWiresContainerClickLayer() throws {
+        let source = try String(contentsOf: Self.repoRoot.appendingPathComponent(
+            "uTerm/Features/Welcome/Views/ServerList.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".clickToSelect("), "整列表一个容器级点击层")
+        XCTAssertTrue(source.contains("onContextAction(.connect, profile)"),
+                      "第二下必须走连接")
     }
 
     /// 常驻 `.help` 收成悬停门控（`NSToolTipManager` 每个滚动 tick 全量重算全窗

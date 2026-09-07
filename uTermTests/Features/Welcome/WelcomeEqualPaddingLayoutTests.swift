@@ -30,14 +30,26 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
     /// 于是这条重新钉在**契约**上而不是实现上：单击必须选中、双击必须打开、
     /// 而且换掉 `Button` 之后必须手工把 AX 默认动作补回来（这一条比原来更严）。
     /// 真按下去有没有反应由 `WelcomeServerListContractTests` 走 AX 树验。
+    ///
+    /// 2026-09-08 再改一次：鼠标的单 / 双击从行里搬到了 `ServerList` 的容器级
+    /// `clickToSelect`（行里两个 `onTapGesture` 链式会让 SwiftUI 等满系统双击间隔
+    /// 才发单击，实测点一行 390~510ms 才高亮）。所以这里钉的是「行里没有点击手势 +
+    /// 容器层接线在 + AX 默认动作在」，真按下去零延迟由 `ClickSelectActivateTests`
+    /// 用真 `NSEvent` 验。
     func testServerRowKeepsSingleTapSelectionWithHandWrittenAccessibility() throws {
         let source = try String(contentsOf: repoRoot.appendingPathComponent(
             "uTerm/Features/Welcome/Views/ServerRow.swift"
         ), encoding: .utf8)
+        let listSource = try String(contentsOf: repoRoot.appendingPathComponent(
+            "uTerm/Features/Welcome/Views/ServerList.swift"
+        ), encoding: .utf8)
 
-        XCTAssertTrue(source.contains(".onTapGesture { onTap() }"))
-        XCTAssertTrue(source.contains(".onTapGesture(count: 2) { onDoubleTap() }"))
+        XCTAssertFalse(source.contains(".onTapGesture"),
+                       "行里不能挂点击手势 —— 单 / 双击互斥消歧会让单击延迟半秒")
+        XCTAssertTrue(listSource.contains(".clickToSelect("), "单 / 双击走容器级点击层")
         XCTAssertTrue(source.contains(".accessibilityAction { onTap() }"))
+        XCTAssertTrue(source.contains("accessibilityAction(named: Text(\"打开\"))"),
+                      "双击的 AX 等价路径必须还在")
         XCTAssertFalse(source.contains("Button(action: onTap)"))
     }
 

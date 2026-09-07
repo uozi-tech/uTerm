@@ -277,12 +277,13 @@ final class FileBrowserProbeRig {
 
     /// 一次真单击的读数。
     ///
-    /// **为什么要分两个数**：两个列表的行都是 `onTapGesture(count: 2)` 链
-    /// `onTapGesture`（单 / 双击互斥消歧），所以单击必须先等双击超时才落地。
-    /// 那段等待是系统的双击间隔常数、不是渲染成本，把它算进「一次单击多贵」
-    /// 就量错了对象。故：
-    /// - `latencyMS`：事件进去到那一行像素变掉的墙钟（含双击消歧等待）。
-    /// - `repaintMS`：等待期间**最贵的那一步** `layoutSubtreeIfNeeded + displayIfNeeded`
+    /// **为什么要分两个数**：两个列表的行**改前**都是 `onTapGesture(count: 2)` 链
+    /// `onTapGesture`（单 / 双击互斥消歧），单击必须先等双击超时才落地 —— 那段
+    /// 等待是系统的双击间隔常数、不是渲染成本，把它算进「一次单击多贵」就量错了
+    /// 对象。改后两处都换成容器级 `NSEvent.clickCount` 分派
+    /// （`ClickSelectActivate.swift`），那段等待归零，`latencyMS` 从此就是真成本。
+    /// - `latencyMS`：事件进去到那一行像素变掉的墙钟。
+    /// - `repaintMS`：其间**最贵的那一步** `layoutSubtreeIfNeeded + displayIfNeeded`
     ///   —— 选中态落地时真正要付的那一帧。
     struct ClickReading {
         let latencyMS: Double
@@ -291,6 +292,9 @@ final class FileBrowserProbeRig {
     }
 
     /// 往窗口里真打一次左键单击（down + up），然后一小步一小步转 runloop 等选中态落地。
+    ///
+    /// **必须走 `NSApp.sendEvent`**：行的点击层是挂在 `NSApplication` 上的本地事件
+    /// 监视器（`RowClickLayerView`），`window.sendEvent` 绕过 `NSApp` 就收不到。
     func click(_ fixture: Fixture, rowHeight: CGFloat) async -> ClickReading {
         let host = fixture.host
         let scrollInHost = fixture.scroll.convert(fixture.scroll.bounds, to: host)
@@ -310,13 +314,13 @@ final class FileBrowserProbeRig {
                 windowNumber: fixture.window.windowNumber, context: nil,
                 eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)
             else { continue }
-            fixture.window.sendEvent(event)
+            NSApp.sendEvent(event)
         }
 
         var repaintMS = 0.0
         var delta = 0.0
         var latencyMS = 0.0
-        // 双击消歧最长 ~0.5s，留足 2s。
+        // 改后按下即落地；上限留足 2s，好在回退时也能把「等了多久」量出来。
         for _ in 0..<100 {
             try? await Task.sleep(for: .milliseconds(20))
             let stepStart = CFAbsoluteTimeGetCurrent()
@@ -389,8 +393,9 @@ final class FileBrowserProbeRig {
 /// `SFTPFileTable`（`uTerm/Features/SFTP/Views/SFTPFileTable.swift:108/161`）经真
 /// `SFTPBrowserView` 挂载后的读数。
 ///
-/// 每行的交互元件：双击 / 单击两个 `onTapGesture` + `onDrag` + `contextMenu` +
-/// `hoverBackground` 的 `onHover` + 目录行 `onDrop` + `permChip` 的 `.help`。
+/// 每行的交互元件：`onDrag` + `contextMenu` + `hoverBackground` 的 `onHover` +
+/// `permChip` 的 `.help`。单 / 双击与目录行 `onDrop` 都已收到整表一个的容器级层
+/// （`ClickSelectActivate.swift` / `RemoteRowDropTargeting.swift`）。
 @MainActor
 final class SFTPFileTableScrollCostTests: XCTestCase {
 

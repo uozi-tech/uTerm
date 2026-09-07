@@ -294,6 +294,12 @@ struct FileBrowserContent: View {
                         moveRemoteItems(providers, into: entry)
                     },
                     onDropToParent: moveRemoteItemsToParent))
+                // 整列表一个透明点击层：第一下按下即选中（零等待）、第二下才进目录 /
+                // 打开。行里不能挂 `onTapGesture(count: 2) + onTapGesture` —— SwiftUI
+                // 要等满系统双击间隔才发单击（见 `ClickSelectActivate.swift`）。
+                // 落点 → 行号复用整表拖放那套算术，**同样必须挂在 `.padding` 之前**。
+                .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
+                               activate: { y, _ in clickRow(atY: y, activating: true) })
                 // 行已满宽（内部 padding 10 对齐头部）；列表不再加横向内缩，让选中
                 // 底色 + 左侧蓝条铺到面板边缘，与独立 SFTP 窗口一致。
                 .padding(.vertical, 2)
@@ -370,21 +376,48 @@ struct FileBrowserContent: View {
         .background(Rectangle().fill(upSelected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: upSelected)
         .contentShape(Rectangle())
-        // 与文件夹一致：单击只选中、双击才返回上一级。两个 onTapGesture 链式、
-        // count:2 在前 —— SwiftUI 据此把单 / 双击当互斥手势消歧（见 entryRow）。
-        .onTapGesture(count: 2) {
-            selectedID = Self.upRowID
-            Task { await model.navigateUp() }
-        }
-        .onTapGesture {
-            selectedID = Self.upRowID
-            browserFocused = true
-        }
+        // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`），行里不挂
+        // 手势 —— 两个 `onTapGesture` 链式会让单击等满系统双击间隔（见 entryRow）。
         // 拖入上一级由整表的 `RemoteRowDropDelegate` 接（本行不再自带 `.onDrop`）。
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(upSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel("上级目录")
         .accessibilityAction { Task { await model.navigateUp() } }
+    }
+
+    /// 整表点击层的落点分派：`activating == false` 是第一下（选中 + 预览），
+    /// `true` 是第二下（进目录 / 永久打开）。落点 → 行号复用整表拖放那套算术
+    /// （`RemoteRowDropTargeting`，固定行高，纯算术）。
+    private func clickRow(atY y: CGFloat, activating: Bool) {
+        let entries = model.sortedEntries
+        let target = RemoteRowDropTargeting.target(atY: y,
+                                                   showsParentRow: model.currentPath != "/",
+                                                   parentRowHeight: Self.rowHeight,
+                                                   rowHeight: Self.rowHeight,
+                                                   entryCount: entries.count)
+        // **第二下只认「第一下刚选中的那一行」**：进目录 / 回上级会整列表换掉，
+        // 没有这条守卫，第二下就可能落在新列表的另一行上并把它打开。
+        // 对齐 `NSTableView` 的 doubleAction 语义。
+        switch target {
+        case .parent:
+            guard !activating else {
+                if selectedID == Self.upRowID { Task { await model.navigateUp() } }
+                return
+            }
+            selectedID = Self.upRowID
+            browserFocused = true
+        case .entry(let index):
+            let entry = entries[index]
+            guard !activating else {
+                if selectedID == entry.id { activate(entry) }
+                return
+            }
+            selectedID = entry.id
+            browserFocused = true
+            if !entry.isDirectory { open(entry, asPreview: true) }
+        case nil:
+            break
+        }
     }
 
     /// 方向键移动选中：在 sortedEntries 里前后挪一格并滚动到可见。selectedID 为
@@ -431,24 +464,17 @@ struct FileBrowserContent: View {
         .background(Rectangle().fill(isSelected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: isSelected)
         .contentShape(Rectangle())
-        // 单击选中，且文件立即以「预览 tab」临时打开（VS Code 风，会顶替上一个预览
-        // tab）；双击 / 回车永久打开。目录仍双击才进入（本侧栏是整列表替换式导航，
-        // 单击进目录会让双击的第二下落到新列表的行上，误选 / 误预览）。
-        // 两个 .onTapGesture 链式、count:2 在前 —— SwiftUI 据此把单 / 双击当互斥
-        // 手势消歧，与主列表 ServerRow 同款。
-        // 不能用 simultaneousGesture(count:2)：那让单 / 双击各自独立计时、互相抢，
-        // 导致两次慢单击被当成双击（单击却进入）、或真双击第二下在 selectedID 改动
-        // 触发行重渲染后丢失（要连点好几下才进）。单击同时把键盘焦点交给列表容器，
-        // 使选中后方向键 / 回车立即可用。
-        .onTapGesture(count: 2) {
-            selectedID = entry.id
-            activate(entry)
-        }
-        .onTapGesture {
-            selectedID = entry.id
-            browserFocused = true
-            if !entry.isDirectory { open(entry, asPreview: true) }
-        }
+        // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`）：单击选中，
+        // 且文件立即以「预览 tab」临时打开（VS Code 风，会顶替上一个预览 tab）；
+        // 双击 / 回车永久打开。目录仍双击才进入（本侧栏是整列表替换式导航，单击进
+        // 目录会让双击的第二下落到新列表的行上，误选 / 误预览）。
+        //
+        // 行里**不能**写 `onTapGesture(count: 2)` + `onTapGesture`：SwiftUI 把两者
+        // 当互斥手势消歧，单击要等满系统双击间隔才发出（实测点一行 390~510ms 才高亮，
+        // 用户报的就是这个）。也不能换 `simultaneousGesture(count: 2)`：那让单 / 双击
+        // 各自独立计时、互相抢，两次慢单击被当成双击、真双击第二下又常在 selectedID
+        // 改动触发行重渲染后丢失。出路是 AppKit 的 `NSEvent.clickCount` —— 系统已经
+        // 做完消歧，第一下不用等（见 `ClickSelectActivate.swift`）。
         .onDrag {
             model.remoteDragProvider(for: entry)
         }

@@ -179,6 +179,12 @@ struct SFTPFileTable: View {
                     rowHeight: Self.rowHeight,
                     onDropToEntry: onDropRemoteItems,
                     onDropToParent: onDropRemoteItemsToParent))
+                // 整表一个透明点击层：第一下按下即选中（零等待）、第二下才打开。
+                // 行里不能挂 `onTapGesture(count: 2) + onTapGesture` —— SwiftUI 把
+                // 两者当互斥手势消歧，单击要等满系统双击间隔才发出（见
+                // `ClickSelectActivate.swift`）。落点 → 行号复用整表拖放那套算术。
+                .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
+                               activate: { y, _ in clickRow(atY: y, activating: true) })
             }
             .focusable()
             .focused($focused)
@@ -196,6 +202,38 @@ struct SFTPFileTable: View {
                 guard !entries.isEmpty else { return .ignored }
                 move(1, proxy); return .handled
             }
+        }
+    }
+
+    /// 整表点击层的落点分派：`activating == false` 是第一下（`..` 行直接返回上级、
+    /// 条目行选中），`true` 是第二下（打开）。落点 → 行号复用整表拖放那套算术
+    /// （`RemoteRowDropTargeting`，固定行高，纯算术）。
+    private func clickRow(atY y: CGFloat, activating: Bool) {
+        let target = RemoteRowDropTargeting.target(atY: y,
+                                                   showsParentRow: showParent,
+                                                   parentRowHeight: Self.parentRowHeight,
+                                                   rowHeight: Self.rowHeight,
+                                                   entryCount: entries.count)
+        switch target {
+        case .parent:
+            // `..` 在这份表里一直是单击就上一级（不同于工作区侧栏的「单击选中」）。
+            guard !activating else { return }
+            focused = true
+            onUp()
+        case .entry(let index):
+            let e = entries[index]
+            guard !activating else {
+                // **第二下只认「第一下刚选中的那一行」**：`..` 的第一下会立刻换目录，
+                // 第二下落在的已经是新列表 —— 没有这条守卫，「双击 `..` 回到根目录」
+                // 会顺手打开新列表里同位置的那个条目（`showParent` 在根目录变 false，
+                // 同一个 y 于是落到 entry 0 上）。对齐 `NSTableView` 的 doubleAction。
+                if selectedID == e.id { onActivate(e) }
+                return
+            }
+            selectedID = e.id
+            focused = true
+        case nil:
+            break
         }
     }
 
@@ -266,7 +304,8 @@ struct SFTPFileTable: View {
         .frame(height: Self.parentRowHeight)
         .contentShape(Rectangle())
         .hoverBackground(UD.rowHover)
-        .onTapGesture { focused = true; onUp() }
+        // 点击由整表的透明点击层接（`clickRow(atY:activating:)`）—— 本行第一下就
+        // 返回上一级，与改前的单击语义一致，只是不再走 SwiftUI 手势。
         // 拖入上一级由整表的 `RemoteRowDropDelegate` 接（本行不再自带 `.onDrop`）。
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -309,8 +348,8 @@ struct SFTPFileTable: View {
         .background(Rectangle().fill(selected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: selected)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { selectedID = e.id; onActivate(e) }
-        .onTapGesture { selectedID = e.id; focused = true }
+        // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`）。行里写两个
+        // `onTapGesture` 会让单击等满系统双击间隔（实测 390~510ms 才高亮）。
         .onDrag {
             onDragProvider(e)
         }

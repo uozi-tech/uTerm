@@ -91,6 +91,27 @@ struct ServerList: View {
                                 .contextMenu { contextMenu(for: profile) }
                         }
                     }
+                    // 整列表一个透明点击层：第一下按下就选中（零等待），第二下连接。
+                    // 行里不能挂 `onTapGesture(count: 2) + onTapGesture` —— SwiftUI
+                    // 要等满系统双击间隔才发单击（见 `ClickSelectActivate.swift`）。
+                    // **必须挂在 `.padding` 之前**，落点坐标才与行容器同源。
+                    .clickToSelect(
+                        select: { y, height in
+                            guard let i = UniformRowHit.index(atY: y,
+                                                              containerHeight: height,
+                                                              rowCount: profiles.count)
+                            else { return }
+                            selectedID = profiles[i].id
+                        },
+                        activate: { y, height in
+                            guard let i = UniformRowHit.index(atY: y,
+                                                              containerHeight: height,
+                                                              rowCount: profiles.count)
+                            else { return }
+                            let profile = profiles[i]
+                            selectedID = profile.id
+                            onContextAction(.connect, profile)
+                        })
                     .padding(ServerListLayout.contentPadding)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
