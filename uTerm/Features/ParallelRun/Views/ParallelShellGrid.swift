@@ -40,6 +40,10 @@ struct ParallelShellPane: View {
 
     @State private var followsTail = true
     @State private var pendingTailScroll: DispatchWorkItem?
+    /// 输出停下来之后补发「真·底部」的那一发（把运行光标 / 指纹卡带进视野）。
+    @State private var pendingSettleScroll: DispatchWorkItem?
+    /// 最后一行的 id —— 热路径贴底就贴它（在 `LazyVStack` 里面，跳过去便宜）。
+    @State private var tailLineID: UUID?
 
     private var running: Bool { state.status == .running }
     private var failed: Bool { state.status == .failed }
@@ -102,7 +106,7 @@ struct ParallelShellPane: View {
                     if running {
                         RunningCaret().padding(.top, 1)
                     }
-                    Color.clear.frame(height: 1).id("shell-bottom")
+                    Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }
                 .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -123,35 +127,78 @@ struct ParallelShellPane: View {
             // scrollTo 会滚到「旧底部」（新行还没布局），结果停在最新输出上方。用
             // 合并到下一批布局之后再滚，避免大输出时反复重入 LazyVStack 布局。
             .onChange(of: state.lines.count) { _, _ in
+                tailLineID = state.lines.last?.id
                 scheduleTailScroll(proxy)
             }
             // 切换屏幕（Shell↔AI 切回、窗格重建）后贴底：切走时累积的输出，切回应看最新。
             .onAppear {
+                tailLineID = state.lines.last?.id
                 Task { @MainActor in
-                    proxy.scrollTo("shell-bottom", anchor: .bottom)
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
             .onDisappear { cancelPendingTailScroll() }
         }
     }
 
+    /// 内容末尾的跟随锚点。**它是 `LazyVStack` 的兄弟、不是它的孩子**——解析它必须
+    /// 先知道整条懒栈的真实高度，所以它只能走「冷却后补一次」的凉路径，热路径必须
+    /// 贴到懒栈**里面**的最后一行（见 `scheduleTailScroll`）。
+    fileprivate static let bottomAnchor = "shell-bottom"
+
+    /// 输出停多久之后补一次「真·底部」。比 `coalescingDelay` 大一档，
+    /// 保证连续输出期间它一直被推后、只在一阵输出跑完时发一次。
+    private static let settleDelay: Double = 0.35
+
+    /// 贴底跟随分两条路：
+    ///
+    /// - **热路径**（每批追加，100ms 合并）：`scrollTo(最后一行的 id)`。这一行在
+    ///   `ParTermLinesView` 的 `LazyVStack` **里面**，懒栈能按它在 `ForEach` 里的
+    ///   序号带估高直接跳过去，不必把 1200 行全量出来。
+    /// - **凉路径**（输出停 350ms 后一次）：`scrollTo("shell-bottom")`，把最后一行
+    ///   底下的运行光标 / 主机指纹卡也带进视野。它贵，但一阵输出只发一次。
+    ///
+    /// 实测（24 台 × 1200 行、50 行/秒/台，`ParallelRunScrollCostTests`
+    /// 变体归因，两轮交替）：只发 `"shell-bottom"` 的老写法单帧 p50 59.1 / 62.8ms、
+    /// 8ms 心跳 39 / 44 拍；换成最后一行的 id 后 p50 15.4 / 14.3ms、心跳 73 / 77 拍。
+    /// 「把锚点挪进懒栈里」（仍是懒栈的最后一个孩子）只修好 p50、p95 仍 65ms，
+    /// 所以锚点必须是 `ForEach` 里的真行。
     private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
-        guard followsTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
+        guard followsTail else { return }
+        if pendingTailScroll == nil {
+            let work = DispatchWorkItem {
+                MainActor.assumeIsolated {
+                    pendingTailScroll = nil
+                    // 读的是 @State 的当前值（不是排队时的快照），合并窗口里又进了
+                    // 几行也贴得到真正的最后一行。
+                    if let id = tailLineID {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    } else {
+                        proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                    }
+                }
+            }
+            pendingTailScroll = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + AgentScrollPolicy.coalescingDelay,
+                execute: work)
+        }
+        pendingSettleScroll?.cancel()
+        let settle = DispatchWorkItem {
             MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                proxy.scrollTo("shell-bottom", anchor: .bottom)
+                pendingSettleScroll = nil
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
         }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AgentScrollPolicy.coalescingDelay,
-            execute: work)
+        pendingSettleScroll = settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: settle)
     }
 
     private func cancelPendingTailScroll() {
         pendingTailScroll?.cancel()
         pendingTailScroll = nil
+        pendingSettleScroll?.cancel()
+        pendingSettleScroll = nil
     }
 
     private var durationText: String {
