@@ -194,6 +194,11 @@ struct WelcomeSidebar: View {
     }
 
     var body: some View {
+        // `sortedGroups` 一次 body 只求一次值（改前 `navEntries` 与下面的
+        // `ForEach` 各求一次，等于每次击键 / 每按一次 ↑↓ 都多排一遍序）。
+        let sortedGroups = self.sortedGroups
+        // 这一行的成本模型见 `ServerFilter.counts` 的注释：改前它一行就要 50ms
+        // （2000 台 / 60 组），而 body 每次击键与每按一次 ↑↓ 都重跑。
         let counts = ServerFilter.counts(for: profiles, query: filter.query)
         let pinnedCount = counts[.pinned] ?? 0
         let recentCount = counts[.recent] ?? 0

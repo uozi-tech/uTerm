@@ -76,4 +76,30 @@ final class ServerFilterTests: XCTestCase {
         XCTAssertEqual(counts[.allHosts], 1)
         XCTAssertEqual(counts[.group("生产")], 1)
     }
+
+    /// 分组键取自 **profiles 自身**（不是 `ServerGroup` 表），而且一个分组即使
+    /// 被 query 全过滤掉也要留在字典里、值为 0 —— 侧栏靠它把不命中的分组行
+    /// 变暗（`WelcomeSidebar.isDimmedGroup`）。
+    ///
+    /// 2026-09-08 把 `counts` 从「每段扫一遍」改成一趟过（2000 台 / 60 组
+    /// 52 → 2.4ms，见 `WelcomeSidebarCostTests`）时，这一条是最容易被改丢的
+    /// 语义，所以单独钉住。
+    func test_counts_keepsZeroHitGroupsInTheDictionary() {
+        let ps = [make("alpha", group: "生产"), make("beta", group: "预发")]
+        let counts = ServerFilter.counts(for: ps, query: "alpha")
+        XCTAssertEqual(counts[.group("生产")], 1)
+        XCTAssertEqual(counts[.group("预发")], 0,
+                       "被 query 全过滤掉的分组仍要在字典里、值为 0")
+        XCTAssertNil(counts[.group("不存在的组")],
+                     "没有任何 profile 属于它的分组不该凭空出现")
+    }
+
+    /// 一趟过之后四个内建 section 必须恒有值（哪怕是 0）—— 调用方直接下标读。
+    func test_counts_alwaysCarriesTheFourBuiltInSections() {
+        let counts = ServerFilter.counts(for: [], query: "")
+        XCTAssertEqual(counts[.allHosts], 0)
+        XCTAssertEqual(counts[.pinned], 0)
+        XCTAssertEqual(counts[.recent], 0)
+        XCTAssertEqual(counts[.ungrouped], 0)
+    }
 }
