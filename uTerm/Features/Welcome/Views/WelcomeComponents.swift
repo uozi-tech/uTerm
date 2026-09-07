@@ -25,11 +25,20 @@ struct KbdChip: View {
 
 /// 欢迎页用的相对时间格式化（「上次连接」/ 行尾时间）。
 enum WelcomeFormat {
+    /// 共享格式化器。**别改回「每次现建一个」** —— 这个方法在 `ServerRow` 里是
+    /// 逐行调用的，2000 台的列表滚一屏就要现建几十个 `RelativeDateTimeFormatter`。
+    /// 与 `QuickCommandFormat` 里的两个 `DateFormatter` 同一处方；
+    /// 仅 MainActor 的欢迎页视图调用，故 `@MainActor` 静态存储，
+    /// 避开 `RelativeDateTimeFormatter` 非 Sendable。
+    @MainActor private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
     /// `nil` → 「从未」，否则按当前 locale 输出「2 小时前 / 昨天 / 刚刚」之类。
-    static func relative(_ date: Date?) -> String {
+    @MainActor static func relative(_ date: Date?) -> String {
         guard let date else { return "从未" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
