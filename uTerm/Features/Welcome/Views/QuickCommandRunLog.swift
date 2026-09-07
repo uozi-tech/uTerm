@@ -3,6 +3,17 @@ import SwiftUI
 
 /// 执行日志区（复刻原型 `QcRunLog` / `QcLogEntry`）：保留近 30 天，每条可展开看
 /// 逐台退出码/耗时；若该次启用过 AI 介入，附紫色「AI 介入记录」块（诊断摘要 + 处置步骤）。
+///
+/// **渲染成本形态（见 `docs/scroll-perf-findings.md`「快捷命令执行日志」）**：
+/// 行数 = 近 30 天的执行记录数，**没有上限**（`QuickCommandStore.runs(for:)`
+/// 只按时间过滤、不 `fetchLimit`；每 10 分钟一次的巡检命令 30 天就是 4320 条）。
+/// 改动时请守住三条：
+///
+/// 1. **列表保持 `LazyVStack`**（外层 `QuickCommandDetail` 已经是 `ScrollView`）。
+/// 2. **行不要包回 `Button`**：展开走 `onTapGesture` + 手工 AX（`.isButton` +
+///    展开态进 AX value + 默认动作）。
+/// 3. **一次 body 只取一次 `results` / `aiRecord`**。它们背后是
+///    `JSONDecoder`（模型侧已加 `@Transient` 解码缓存，但别再退回「随手多取几次」）。
 struct QuickCommandRunLog: View {
     let runs: [QuickCommandRun]
 
@@ -41,7 +52,7 @@ struct QuickCommandRunLog: View {
                     .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .foregroundStyle(UD.border))
             } else {
-                VStack(spacing: 7) {
+                LazyVStack(spacing: 7) {
                     ForEach(runs) { run in
                         QuickCommandLogEntry(run: run)
                     }
@@ -61,47 +72,58 @@ struct QuickCommandRunLog: View {
 }
 
 /// 单条执行日志（可展开）。
+///
+/// 行体里 `results` / `aiRecord` **各只取一次值**（它们背后是 `JSONDecoder`），
+/// 取出来的值往下传；别改回「行体里逐处再取一次」。
 struct QuickCommandLogEntry: View {
     let run: QuickCommandRun
     @State private var open = false
 
-    private var results: [QuickCommandServerResult] { run.results }
-    private var failCount: Int { run.failureCount }
-    private var allOK: Bool { run.allSucceeded }
-    private var statusColor: Color { allOK ? UD.success : UD.danger }
-
     var body: some View {
+        // 一次 body 只解一次 —— 下面所有派生量都从这两个局部量算。
+        let results = run.results
+        let aiRecord = run.aiRecord
+        let failCount = results.reduce(0) { $0 + ($1.ok ? 0 : 1) }
+        let allOK = !results.isEmpty && failCount == 0
+        let statusColor = allOK ? UD.success : UD.danger
+        let summary = overview(results: results, failCount: failCount)
+
         VStack(spacing: 0) {
-            Button { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } label: {
-                HStack(spacing: 9) {
-                    Circle().fill(statusColor).frame(width: 7, height: 7)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(QuickCommandFormat.logTimestamp(run.startedAt))
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(UD.text)
-                        Text(overview)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(UD.text4)
-                    }
-                    Spacer(minLength: 4)
-                    if run.aiRecord != nil { aiRecordTag }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+            HStack(spacing: 9) {
+                Circle().fill(statusColor).frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(QuickCommandFormat.logTimestamp(run.startedAt))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(UD.text)
+                    Text(summary)
+                        .font(.system(size: 10.5))
                         .foregroundStyle(UD.text4)
-                        .rotationEffect(.degrees(open ? 90 : 0))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
+                Spacer(minLength: 4)
+                if aiRecord != nil { aiRecordTag }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(UD.text4)
+                    .rotationEffect(.degrees(open ? 90 : 0))
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            // 展开头不再是 `Button`（每行一个 plain Button 会常驻一个
+            // `_FocusRingView` + 一个 `KeyViewProxy`），AX 语义手工补回。
+            .onTapGesture { toggle() }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(QuickCommandFormat.logTimestamp(run.startedAt))，\(summary)")
+            .accessibilityValue(open ? "已展开" : "已折叠")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { toggle() }
 
             if open {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(results) { result in
                         serverResultRow(result)
                     }
-                    if let ai = run.aiRecord { aiRecordBlock(ai) }
+                    if let aiRecord { aiRecordBlock(aiRecord) }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -112,7 +134,11 @@ struct QuickCommandLogEntry: View {
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.fillFaint))
     }
 
-    private var overview: String {
+    private func toggle() {
+        withAnimation(.easeOut(duration: 0.15)) { open.toggle() }
+    }
+
+    private func overview(results: [QuickCommandServerResult], failCount: Int) -> String {
         let ok = results.count - failCount
         var parts = ["\(results.count) 台", "成功 \(ok)"]
         if failCount > 0 { parts.append("失败 \(failCount)") }

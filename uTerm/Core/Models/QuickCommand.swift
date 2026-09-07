@@ -88,35 +88,68 @@ final class QuickCommandRun {
         self.aiRecord = aiRecord
     }
 
-    /// 每台服务器的结果（由 `resultsJSON` 编解码）。
+    /// 解码缓存（不入库）。**别删。**
+    ///
+    /// `results` / `aiRecord` 是「每次 get 都解码」的计算属性，而执行日志视图
+    /// 折叠态**一行一次 body 就要取 5 次值**（`allSucceeded` → `failureCount`
+    /// → `results` 两次 + `aiRecord`）。3000 条日志滚一遍就是上万次
+    /// `JSONDecoder`。缓存按**当前 JSON 字符串**判失效，所以任何一条写入路径
+    /// （含直接改 `resultsJSON`）都会自动让缓存作废，不需要手工 invalidate。
+    /// 读数与闸门见 `uTermTests/Features/Welcome/QuickCommandRunLogCostTests`。
+    @Transient private var decodedResults: (json: String, value: [QuickCommandServerResult])?
+    @Transient private var decodedAIRecord: (json: String?, value: QuickCommandAIRecord?)?
+
+    /// 每台服务器的结果（由 `resultsJSON` 编解码，带 `@Transient` 解码缓存）。
     var results: [QuickCommandServerResult] {
-        get { (try? JSONDecoder().decode([QuickCommandServerResult].self,
-                                          from: Data(resultsJSON.utf8))) ?? [] }
+        get {
+            let json = resultsJSON
+            if let cached = decodedResults, cached.json == json { return cached.value }
+            let value = (try? JSONDecoder().decode([QuickCommandServerResult].self,
+                                                   from: Data(json.utf8))) ?? []
+            decodedResults = (json, value)
+            return value
+        }
         set {
             let data = (try? JSONEncoder().encode(newValue)) ?? Data("[]".utf8)
-            resultsJSON = String(decoding: data, as: UTF8.self)
+            let json = String(decoding: data, as: UTF8.self)
+            resultsJSON = json
+            decodedResults = (json, newValue)
         }
     }
 
     /// AI 介入记录（由 `aiRecordJSON` 编解码；nil 表示该次未启用 AI）。
     var aiRecord: QuickCommandAIRecord? {
         get {
-            guard let json = aiRecordJSON, !json.isEmpty else { return nil }
-            return try? JSONDecoder().decode(QuickCommandAIRecord.self, from: Data(json.utf8))
+            let json = aiRecordJSON
+            if let cached = decodedAIRecord, cached.json == json { return cached.value }
+            let value: QuickCommandAIRecord?
+            if let json, !json.isEmpty {
+                value = try? JSONDecoder().decode(QuickCommandAIRecord.self, from: Data(json.utf8))
+            } else {
+                value = nil
+            }
+            decodedAIRecord = (json, value)
+            return value
         }
         set {
             guard let newValue, let data = try? JSONEncoder().encode(newValue) else {
                 aiRecordJSON = nil
+                decodedAIRecord = (nil, nil)
                 return
             }
-            aiRecordJSON = String(decoding: data, as: UTF8.self)
+            let json = String(decoding: data, as: UTF8.self)
+            aiRecordJSON = json
+            decodedAIRecord = (json, newValue)
         }
     }
 
-    /// 失败台数（退出码非 0 或执行报错）。
+    /// 失败台数（退出码非 0 或执行报错）。走 `results` 的解码缓存。
     var failureCount: Int { results.filter { !$0.ok }.count }
-    /// 是否整体成功（无失败台）。
-    var allSucceeded: Bool { failureCount == 0 && !results.isEmpty }
+    /// 是否整体成功（无失败台）。走 `results` 的解码缓存。
+    var allSucceeded: Bool {
+        let r = results
+        return !r.isEmpty && !r.contains { !$0.ok }
+    }
 }
 
 /// 一次运行里某台服务器的结果。`Sendable` 值类型，可跨 actor 带出执行任务组。
