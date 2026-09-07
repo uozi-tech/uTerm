@@ -21,7 +21,8 @@ struct TerminalAgentView: View {
     var messageWindowLimit: Int = AgentMessageWindow.defaultLimit
 
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
+    // 同 `AssistantView`：会话历史只取最近 `ChatSessionQueries.recentLimit` 条。
+    @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
     @State private var followsConversationTail = true
     @State private var pendingTailScroll: DispatchWorkItem?
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。

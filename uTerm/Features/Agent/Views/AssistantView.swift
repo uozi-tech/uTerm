@@ -83,7 +83,9 @@ struct AssistantView: View {
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \ChatSession.updatedAt, order: .reverse) private var sessions: [ChatSession]
+    // 会话历史下拉只列最近 `ChatSessionQueries.recentLimit` 条（原来无 fetchLimit，
+    // 一开窗就把库里全部会话物化出来）。
+    @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
 
     @State private var showSessions = false
     @State private var followsChatTail = true
@@ -240,7 +242,7 @@ struct AssistantView: View {
                     .padding(10)
             } else {
                 ScrollView {
-                    VStack(spacing: 2) {
+                    LazyVStack(spacing: 2) {
                         ForEach(sessions) { sessionRow($0) }
                     }
                     .padding(4)
