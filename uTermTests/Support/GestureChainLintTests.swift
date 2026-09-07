@@ -28,11 +28,7 @@ final class GestureChainLintTests: XCTestCase {
     ///
     /// 清单按**文件名**匹配，不是路径 —— 新增同名文件也会被误放行，
     /// 所以它只该短期存在。
-    private static let knownPendingFiles: Set<String> = [
-        "ServerRow.swift",         // 欢迎页主机行：onTap + onTapGesture(count: 2)
-        "FileBrowserView.swift",   // SFTP 文件浏览：两处
-        "SFTPFileTable.swift",     // SFTP 表格行
-    ]
+    private static let knownPendingFiles: Set<String> = []  // 09-08：ServerRow / FileBrowserView / SFTPFileTable 的单击延迟已修（4dc1bbda），清单清空
 
     // MARK: - 闸门
 
