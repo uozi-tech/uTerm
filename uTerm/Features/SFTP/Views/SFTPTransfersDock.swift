@@ -8,6 +8,51 @@ enum SFTPTransfersDockLayout {
     static let statusArrowYOffset: CGFloat = 1
 }
 
+/// 状态栏芯片一次 body 求值要的全部计数，**一遍扫完**。
+///
+/// 改前是六次独立的全表扫描：`active`（filter）在芯片分支、聚合芯片、浮层参数里各求
+/// 一次，再加 `doneCount` / `failedCount` / `aggPct`（两次 reduce）/ `aggSpeed`（filter + reduce）。
+/// 而**每一次进度回调都会写 `transfers[idx]`**（`@Observable` 数组元素），这个 body
+/// 也就跟着重求一次 —— 队列里攒了上千条已完成的行时，那是每次进度几千次元素访问。
+/// （`@MainActor` 而非 `nonisolated`：`TransferItem` 及其枚举都嵌在 `@MainActor` 的
+/// `FileBrowserModel` 里，它们的 `Equatable` 一致性也带主 actor 隔离。）
+@MainActor
+struct SFTPTransfersDockSummary {
+    /// 进行中（排队 + 活动）的条数。
+    private(set) var activeCount = 0
+    private(set) var doneCount = 0
+    private(set) var failedCount = 0
+    /// 进行中的全是上传（聚合芯片的文案在「上传」/「传输」之间切）。空集合视作 true。
+    private(set) var allActiveAreUploads = true
+    /// 仅活动态的速率之和（浮层底部的聚合速率）。排队中的不计。
+    private(set) var aggregateSpeed: Double = 0
+    /// 进行中条目的整体完成度 0…1。
+    private(set) var aggregateFraction: Double = 0
+    /// 恰好只有一条进行中时的那一条（状态栏内联进度那一档），否则 nil。
+    private(set) var single: FileBrowserModel.TransferItem?
+
+    init(_ transfers: [FileBrowserModel.TransferItem]) {
+        var totalBytes: Int64 = 0
+        var doneBytes: Int64 = 0
+        for item in transfers {
+            switch item.status {
+            case .queued, .active:
+                activeCount += 1
+                if item.direction != .up { allActiveAreUploads = false }
+                totalBytes += item.bytesTotal
+                doneBytes += item.bytesDone
+                if activeCount == 1 { single = item } else { single = nil }
+                if item.status == .active { aggregateSpeed += item.speedBytesPerSec }
+            case .done:
+                doneCount += 1
+            case .failed:
+                failedCount += 1
+            }
+        }
+        aggregateFraction = totalBytes > 0 ? min(1, Double(doneBytes) / Double(totalBytes)) : 0
+    }
+}
+
 /// SFTP 传输 Dock —— 状态栏自适应芯片 + 可展开的传输列表浮层。
 /// 对齐设计稿 `pages/sftp.jsx` 的 TransfersDock / TransfersPanel / TransferRow：
 ///   · 仅 1 个进行中 → 状态栏内联进度 + 取消 ✕
@@ -23,43 +68,30 @@ struct SFTPTransfersDock: View {
 
     @State private var open = false
 
-    private var active: [FileBrowserModel.TransferItem] {
-        transfers.filter { $0.status == .queued || $0.status == .active }
-    }
-    private var doneCount: Int { transfers.filter { $0.status == .done }.count }
-    private var failedCount: Int { transfers.filter { $0.status == .failed }.count }
-    private var single: FileBrowserModel.TransferItem? { active.count == 1 ? active[0] : nil }
-
-    private var aggPct: Double {
-        let total = active.reduce(0) { $0 + $1.bytesTotal }
-        guard total > 0 else { return 0 }
-        let done = active.reduce(0) { $0 + $1.bytesDone }
-        return min(1, Double(done) / Double(total))
-    }
-    private var aggSpeed: Double {
-        transfers.filter { $0.status == .active }.reduce(0) { $0 + $1.speedBytesPerSec }
-    }
+    /// 一次 body 求值只扫一遍（见 `SFTPTransfersDockSummary`）。
+    private var summary: SFTPTransfersDockSummary { SFTPTransfersDockSummary(transfers) }
 
     var body: some View {
-        HStack(spacing: 4) {
-            chip
+        let summary = self.summary
+        return HStack(spacing: 4) {
+            chip(summary)
         }
         .popover(isPresented: $open, arrowEdge: .bottom) {
             SFTPTransfersPanel(
-                transfers: transfers, aggSpeed: aggSpeed,
-                activeCount: active.count, doneCount: doneCount,
+                transfers: transfers, aggSpeed: summary.aggregateSpeed,
+                activeCount: summary.activeCount, doneCount: summary.doneCount,
                 onCancel: onCancel, onCancelAll: onCancelAll,
                 onClearFinished: onClearFinished, onRetry: onRetry)
         }
     }
 
-    @ViewBuilder private var chip: some View {
-        if let s = single {
+    @ViewBuilder private func chip(_ summary: SFTPTransfersDockSummary) -> some View {
+        if let s = summary.single {
             singleChip(s)
-        } else if active.count >= 2 {
-            aggregateChip
-        } else if doneCount > 0 || failedCount > 0 {
-            finishedChip
+        } else if summary.activeCount >= 2 {
+            aggregateChip(summary)
+        } else if summary.doneCount > 0 || summary.failedCount > 0 {
+            finishedChip(summary)
         } else {
             idleChip
         }
@@ -87,13 +119,15 @@ struct SFTPTransfersDock: View {
         DockCancelButton(title: "取消传输 \(s.fileName)") { onCancel(s.id) }
     }
 
-    @ViewBuilder private var aggregateChip: some View {
-        let allUp = active.allSatisfy { $0.direction == .up }
+    @ViewBuilder private func aggregateChip(_ summary: SFTPTransfersDockSummary) -> some View {
+        let allUp = summary.allActiveAreUploads
+        let aggPct = summary.aggregateFraction
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
                 statusIcon("arrow.up", color: UD.accent, weight: .medium,
                            yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
-                Text("\(allUp ? "上传" : "传输") \(active.count) 个文件").foregroundStyle(UD.text2)
+                Text("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
+                    .foregroundStyle(UD.text2)
                 UDLinearBar(progress: aggPct, height: 5).frame(width: 72)
                 Text("\(Int(aggPct * 100))%").font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 32, alignment: .trailing)
@@ -104,17 +138,17 @@ struct SFTPTransfersDock: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(allUp ? "上传" : "传输") \(active.count) 个文件")
+        .accessibilityLabel("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
         .accessibilityValue("\(Int(aggPct * 100))%")
         .accessibilityHint("展开传输列表")
     }
 
-    @ViewBuilder private var finishedChip: some View {
+    @ViewBuilder private func finishedChip(_ summary: SFTPTransfersDockSummary) -> some View {
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
-                if failedCount > 0 {
+                if summary.failedCount > 0 {
                     Circle().fill(UD.danger).frame(width: 7, height: 7)
-                    Text("\(failedCount) 个传输失败").foregroundStyle(UD.text2)
+                    Text("\(summary.failedCount) 个传输失败").foregroundStyle(UD.text2)
                 } else {
                     statusIcon("checkmark", color: UD.success, size: 9, weight: .bold)
                     Text("传输完成").foregroundStyle(UD.text2)

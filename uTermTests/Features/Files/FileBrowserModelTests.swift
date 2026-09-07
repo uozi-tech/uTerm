@@ -976,6 +976,69 @@ final class FileBrowserModelTests: XCTestCase {
             .filter { !String($0).trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
     }
+    // MARK: - 传输行下标表（applyProgress 的 O(1) 查行）在增删后仍然对得上
+
+    /// `applyProgress` 现在走 `id → 下标` 缓存而不是每次线性扫。
+    /// 结构变更（取消 / 清除已完成 / 重试）之后，缓存必须仍然指向正确的行 ——
+    /// 指错了就会把进度写到别人身上，是最难查的一类串行错。
+    func testProgressStillLandsOnTheRightRowAfterRemovals() async {
+        UserDefaults.standard.set(6, forKey: "sftpMaxConcurrentTransfers")
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        await mock.setBlockTransfers(true)
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        for i in 0..<6 {
+            model.enqueueUpload(fileName: "f\(i).bin", data: Data(count: 4096))
+        }
+        await waitUntil { model.transfers.filter { $0.status == .active }.count == 6 }
+        let ids = model.transfers.map(\.id)
+        XCTAssertEqual(ids.count, 6)
+
+        // 取消最前面两条 —— 后面四条的下标全体前移 2。
+        model.cancelTransfer(ids[0])
+        model.cancelTransfer(ids[1])
+        await waitUntil { model.transfers.count == 4 }
+
+        // 给现在排在最后的那条写进度：下标表要是没跟上，就会写到别的行上。
+        let target = ids[5]
+        model.applyProgress(id: target, TransferProgress(bytesDone: 1234, bytesTotal: 4096))
+        let hit = model.transfers.first { $0.id == target }
+        XCTAssertEqual(hit?.bytesDone, 1234, "进度必须落在目标行上")
+        for other in model.transfers where other.id != target {
+            XCTAssertEqual(other.bytesDone, 0, "别的行不该被写脏：\(other.fileName)")
+        }
+
+        // 已经被移除的行再来迟到进度：查不到就该安静返回，不能崩、不能写到别人身上。
+        model.applyProgress(id: ids[0], TransferProgress(bytesDone: 999, bytesTotal: 4096))
+        XCTAssertNil(model.transfers.first { $0.bytesDone == 999 },
+                     "已移除行的迟到进度不能落到任何行上")
+        model.dispose()
+    }
+
+    /// 「清除已完成」之后，仍在跑的那条的进度还得写对地方。
+    func testProgressStillLandsOnTheRightRowAfterClearingFinished() async {
+        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
+        let mock = MockSFTP(tree: ["/home/user": dir([])])
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        // 先让三条真的跑完（.done 留在数组里）。
+        for i in 0..<3 {
+            model.enqueueUpload(fileName: "done\(i).bin", data: Data(count: 128))
+        }
+        await waitUntil { model.transfers.filter { $0.status == .done }.count == 3 }
+        // 再挂一条在飞的。
+        await mock.setBlockTransfers(true)
+        model.enqueueUpload(fileName: "live.bin", data: Data(count: 4096))
+        await waitUntil { model.transfers.contains { $0.status == .active } }
+        let live = model.transfers.first { $0.status == .active }?.id
+        let liveID = try! XCTUnwrap(live)
+
+        model.clearFinishedTransfers()
+        XCTAssertEqual(model.transfers.count, 1, "清完只剩在飞的那条")
+
+        model.applyProgress(id: liveID, TransferProgress(bytesDone: 2048, bytesTotal: 4096))
+        XCTAssertEqual(model.transfers.first?.id, liveID)
+        XCTAssertEqual(model.transfers.first?.bytesDone, 2048)
+        model.dispose()
+    }
 }
 
 enum SFTPTestError: Error { case boom }

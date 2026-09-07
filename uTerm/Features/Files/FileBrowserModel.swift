@@ -238,6 +238,15 @@ final class FileBrowserModel {
     }
     private var contexts: [UUID: TransferContext] = [:]
 
+    /// `TransferItem.id → transfers 下标`。
+    ///
+    /// **为什么要它**：进度回调走 `applyProgress`，改前用 `transfers.firstIndex(where:)`
+    /// 找行 —— O(队列长度)。而传输行**不会自动清**（完成 / 失败的留着等用户点
+    /// 「清除已完成」），新起的传输永远排在一堆已完成行的后面，于是每一次进度回调
+    /// 都要先扫过那一堆。实测历史 20 条 0.00202ms/次 → 历史 1000 条 0.07064ms/次（35×）。
+    /// 结构变更（增删）时重建一次；改元素值不动下标。
+    @ObservationIgnored private var transferIndexByID: [UUID: Int] = [:]
+
     /// 上传和下载共用的总并发预算（用户设置；默认 4，钳 1…64）。
     static var maxConcurrentTransfers: Int {
         let raw = UserDefaults.standard.object(forKey: "sftpMaxConcurrentTransfers") as? Int ?? 4
@@ -765,6 +774,7 @@ final class FileBrowserModel {
                 bytesDone: 0, bytesTotal: Int64(size ?? 0),
                 speedBytesPerSec: 0, status: .queued))
             contexts[id] = TransferContext(source: .uploadURL(url), destinationDir: destinationDir)
+            transferIndexByID[id] = transfers.count - 1
         }
         pumpQueue()
     }
@@ -777,6 +787,7 @@ final class FileBrowserModel {
             bytesDone: 0, bytesTotal: Int64(data.count),
             speedBytesPerSec: 0, status: .queued))
         contexts[id] = TransferContext(source: .uploadData(data), destinationDir: currentPath)
+        transferIndexByID[id] = transfers.count - 1
         pumpQueue()
     }
 
@@ -792,7 +803,7 @@ final class FileBrowserModel {
     }
 
     private func startTransfer(id: UUID) {
-        guard let idx = transfers.firstIndex(where: { $0.id == id }),
+        guard let idx = transferIndex(id),
               let ctx = contexts[id], let provider else { return }
         transfers[idx].status = .active
         let source = ctx.source
@@ -869,6 +880,7 @@ final class FileBrowserModel {
                     destinationDir: currentPath)
                 context.downloadCompletion = { continuation.resume(returning: $0) }
                 contexts[id] = context
+                transferIndexByID[id] = transfers.count - 1
                 pumpQueue()
             }
         } onCancel: {
@@ -920,11 +932,12 @@ final class FileBrowserModel {
         let ids = transfers.filter { $0.status == .done || $0.status == .failed }.map(\.id)
         for id in ids { contexts[id] = nil }
         transfers.removeAll { $0.status == .done || $0.status == .failed }
+        rebuildTransferIndex()
     }
 
     /// 重试失败的上传（重新入队，复用原数据源）。下载不支持重试。
     func retryTransfer(_ id: TransferItem.ID) {
-        guard let idx = transfers.firstIndex(where: { $0.id == id }),
+        guard let idx = transferIndex(id),
               transfers[idx].direction == .up, transfers[idx].status == .failed,
               contexts[id] != nil else { return }
         transfers[idx].status = .queued
@@ -933,8 +946,30 @@ final class FileBrowserModel {
         pumpQueue()
     }
 
+    /// 结构变更后重建下标表。增删是低频操作，进度回调才是高频的。
+    private func rebuildTransferIndex() {
+        transferIndexByID.removeAll(keepingCapacity: true)
+        transferIndexByID.reserveCapacity(transfers.count)
+        for (index, item) in transfers.enumerated() { transferIndexByID[item.id] = index }
+    }
+
+    /// O(1) 查行；缓存过期（有人漏了 `rebuildTransferIndex`）时**自愈**：
+    /// 校验缓存下标处真的是这一条，不是就退回线性扫描并把表修好。
+    private func transferIndex(_ id: UUID) -> Int? {
+        if let index = transferIndexByID[id], index < transfers.count,
+           transfers[index].id == id {
+            return index
+        }
+        guard let index = transfers.firstIndex(where: { $0.id == id }) else {
+            transferIndexByID[id] = nil
+            return nil
+        }
+        transferIndexByID[id] = index
+        return index
+    }
+
     private func updateTransfer(_ id: UUID, _ mutate: (inout TransferItem) -> Void) {
-        guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = transferIndex(id) else { return }
         mutate(&transfers[idx])
     }
 
@@ -949,6 +984,7 @@ final class FileBrowserModel {
     private func removeTransfer(_ id: UUID) {
         transfers.removeAll { $0.id == id }
         contexts[id] = nil
+        rebuildTransferIndex()
     }
 
     private func completeDownload(id: UUID, success: Bool) {
@@ -960,7 +996,7 @@ final class FileBrowserModel {
     /// 进度回调：更新已传字节，按 ~100ms 采样计算平滑速率。
     /// `internal`（非 `private`）以便单测直接验证终态守卫（迟到进度不回退已完成行）。
     func applyProgress(id: UUID, _ p: TransferProgress) {
-        guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = transferIndex(id) else { return }
         // 进度回调走独立 Task { @MainActor }，与 finishTransfer 之间无顺序保证。
         // 一旦传输已进入终态（.done/.failed），迟到的进度若继续写入就会回退
         // bytesDone（低于 total）/ 复活速率，把已完成的行打花。终态直接忽略。
