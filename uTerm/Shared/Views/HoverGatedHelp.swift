@@ -11,12 +11,20 @@ extension View {
     /// 但不悬停的行一块区域都不注册。
     ///
     /// 调用方自己维护 `isHovering`（一行一个 `onHover` 就够，别每个元件一个）。
+    ///
+    /// 文案是 `@autoclosure`：调用点常写成
+    /// `"最近连接失败：\(issue)"`、`"累计 ↑ \(fmt(up)) · ↓ \(fmt(down))"` 这类
+    /// **每次 body 求值都要拼一遍**的插值串。门控挡住的只是 tooltip 区域，
+    /// 挡不住实参求值 —— 上千行 × 一行几处，不悬停的行照样逐帧拼字符串。
+    /// 改成延迟求值后，只有真悬停的那一行付这笔账。
     @ViewBuilder
-    func help(whenHovering isHovering: Bool, _ text: String) -> some View {
-        if isHovering, !text.isEmpty {
-            self.help(text)
-        } else {
+    func help(whenHovering isHovering: Bool, _ text: @autoclosure () -> String) -> some View {
+        // 空串守卫仍在，但只在 active 分支里求值一次（不悬停时一次都不求）。
+        let resolved = isHovering ? text() : ""
+        if resolved.isEmpty {
             self
+        } else {
+            self.help(resolved)
         }
     }
 }

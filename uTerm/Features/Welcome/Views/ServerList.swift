@@ -96,6 +96,32 @@ struct ServerList: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // 键盘上下移动选中行时把它滚进可视区（无 anchor = 最小滚动，已可见则不动，
                 // 不打扰鼠标点击已可见行的场景）。
+                //
+                // ## 这里是 uTable `753575d` 的同形态，但**量过了，动画不是账**
+                //
+                // `LazyVStack` + 程序性 `scrollTo` + `withAnimation` 三件套正是
+                // playbook §七 判据 1 点名的形状。2026-09-08 用
+                // `ServerListSelectionScrollProbeTests` 把它复现了一遍
+                // （2000 台 / 60 组，连续 200 次换选中行 + 20 次搜索过滤切换，
+                // 两臂各两轮交替）：
+                //
+                // | 2000 台 · 一次「换选中行 + 布局」 | p50 | p95 | max | 3s 心跳 |
+                // |---|---|---|---|---|
+                // | 带 `withAnimation`（现状） | 34.97 / 36.69ms | 91.21 / 56.19ms | 98 / 61ms | 242 / 246 拍 |
+                // | 去掉 `withAnimation` | 39.11 / 39.79ms | 63.91 / 64.25ms | 67 / 67ms | 245 / 251 拍 |
+                // | 连 `scrollTo` 一起去掉（归因臂） | **6.59ms** | **9.16ms** | **11ms** | **333 拍** |
+                //
+                // 两条结论，都跟去之前的先验相反：
+                // 1. **753575d 那个失效模式在这里不发生**：没有单次 3s+ 的布局事务，
+                //    心跳 242~251 拍（掉死的话是个位数），NSView 恒 39 不随规模涨
+                //    （§七 第四条：判「回不回收」只看扫完之后数 NSView）。
+                // 2. **去掉动画不是收益**：p50 反而 35 → 39ms，100 台真实档也从
+                //    6.2 → 8.6ms；只有尾部收紧一点。真正的账在 `scrollTo` 本身——
+                //    它逼 `LazyVStack` 解析 2000 行的目标偏移（35ms vs 6.6ms）。
+                //
+                // 所以动画**留着**（它是键盘导航的设计语义），闸门改成钉后果：
+                // 心跳拍数、单步不得出现 500ms 级的长事务、NSView 不随规模涨。
+                // 真要再往下，要动的是 `scrollTo` 那 35ms，不是这 0.12 秒补间。
                 .onChange(of: selectedID) { _, id in
                     guard let id else { return }
                     withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
