@@ -35,14 +35,21 @@ struct SFTPBrowserView: View {
     private var canBack: Bool { hIdx > 0 && !model.isNavigating }
     private var canFwd: Bool { hIdx < history.count - 1 && !model.isNavigating }
 
+    /// 「排好序的列表 + 筛选词 → 可见列表」的记忆化缓存（`@State` 持有，跨 body 存活）。
+    ///
+    /// 以前 `visible` 是纯 computed property，一次 body 要跑**三遍**全表
+    /// `localizedCaseInsensitiveContains`（文件表一遍、检视器经 `selected` 一遍、
+    /// 状态栏的 selectedCount 再经 `selected` 一遍）。20000 条目下一次筛选击键
+    /// 端到端 112~130ms。改成按「整份 sortedEntries 值 + 筛选词」记忆化后一次一遍。
+    @State private var entryFilter = RemoteEntryFilter()
+
     private var visible: [RemoteEntry] {
-        guard !query.isEmpty else { return model.sortedEntries }
-        return model.sortedEntries.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        entryFilter.apply(model.sortedEntries, query: query)
     }
     /// 从 `visible` 取（而非 sortedEntries）—— 选中项被过滤隐藏后，检视器与计数
     /// 应同步清空，不再展示一个列表里看不到的条目。
     private var selected: RemoteEntry? {
-        visible.first { $0.id == selectedID }
+        entryFilter.entry(id: selectedID, in: model.sortedEntries, query: query)
     }
 
     var body: some View {

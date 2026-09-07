@@ -30,6 +30,10 @@ struct FileBrowserContent: View {
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
+    /// 行高（`..` 行与条目行同高）。**整表一个拖放目标**靠它把落点换算成行号
+    /// （见 `RemoteRowDropTargeting`），所以这个常量与 `upRow` / `entryRow` 的
+    /// `.frame(height:)` 必须同源。
+    static let rowHeight: CGFloat = 30
     private static let sortPopoverLabelFont = UD.font(13)
     private static let sortPopoverControlFont = UD.font(13, weight: .medium)
 
@@ -276,6 +280,20 @@ struct FileBrowserContent: View {
                             .id(entry.id)
                     }
                 }
+                // 整表一个远端拖放目标（落点 → 行号由固定行高算）。**必须挂在
+                // `.padding` 之前** —— 落点坐标是本修饰器所在视图的局部坐标，
+                // 挂在 padding 之后会整体偏移 2pt。以前是「目录行各挂一个
+                // `.onDrop`」，每行因此常驻两个平台视图；20000 条目滚一遍攒出
+                // 122 对 = 244 个 NSView，单帧 p95 越线（见 `RemoteRowDropTargeting`）。
+                .onDrop(of: [.utermRemoteFile], delegate: RemoteRowDropDelegate(
+                    entries: model.sortedEntries,
+                    showsParentRow: model.currentPath != "/",
+                    parentRowHeight: Self.rowHeight,
+                    rowHeight: Self.rowHeight,
+                    onDropToEntry: { providers, entry in
+                        moveRemoteItems(providers, into: entry)
+                    },
+                    onDropToParent: moveRemoteItemsToParent))
                 // 行已满宽（内部 padding 10 对齐头部）；列表不再加横向内缩，让选中
                 // 底色 + 左侧蓝条铺到面板边缘，与独立 SFTP 窗口一致。
                 .padding(.vertical, 2)
@@ -347,7 +365,7 @@ struct FileBrowserContent: View {
             Spacer()
         }
         .padding(.horizontal, 10)
-        .frame(height: 30)
+        .frame(height: Self.rowHeight)
         // 选中态与 entryRow 同款：满宽底色（无左侧强调条，填充即边界）。
         .background(Rectangle().fill(upSelected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: upSelected)
@@ -362,9 +380,7 @@ struct FileBrowserContent: View {
             selectedID = Self.upRowID
             browserFocused = true
         }
-        .onDrop(of: [.utermRemoteFile],
-                isTargeted: nil,
-                perform: moveRemoteItemsToParent)
+        // 拖入上一级由整表的 `RemoteRowDropDelegate` 接（本行不再自带 `.onDrop`）。
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(upSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel("上级目录")
@@ -408,7 +424,7 @@ struct FileBrowserContent: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 30)
+        .frame(height: Self.rowHeight)
         // 选中态：满宽 UD.rowSelected 底（无左侧强调条，填充即边界），对齐独立窗口
         // SFTPFileTable。底色优先级高于 hover，故选中时给 hoverBackground 传 isActive
         // 让它让位。
@@ -443,7 +459,9 @@ struct FileBrowserContent: View {
         .accessibilityAction { activate(entry) }
         .contextMenu { SFTPRowMenu(entry: entry, actions: sidebarActions) }
 
-        return remoteMoveDropTarget(base, entry: entry)
+        // 目录行的「拖进来」由整表一个 `RemoteRowDropDelegate` 接管，行本身
+        // 不再挂 `.onDrop` —— 每行一个 `.onDrop` 就是每行两个常驻平台视图。
+        return base
     }
 
     /// VoiceOver 朗读值：种类 + 大小，方便无障碍用户不依赖列布局了解条目。
@@ -453,18 +471,6 @@ struct FileBrowserContent: View {
             parts.append(byteText(size))
         }
         return parts.joined(separator: "，")
-    }
-
-    @ViewBuilder
-    private func remoteMoveDropTarget<Content: View>(_ content: Content,
-                                                     entry: RemoteEntry) -> some View {
-        if entry.isDirectory {
-            content.onDrop(of: [.utermRemoteFile], isTargeted: nil) { providers in
-                moveRemoteItems(providers, into: entry)
-            }
-        } else {
-            content
-        }
     }
 
     private func uploadDroppedFiles(_ providers: [NSItemProvider]) -> Bool {

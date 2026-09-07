@@ -126,6 +126,12 @@ struct SFTPFileTable: View {
 
     @FocusState private var focused: Bool
 
+    /// 两种行的固定高度。**整表一个拖放目标**靠它把落点换算成行号
+    /// （见 `RemoteRowDropTargeting`），所以这里的常量与下面
+    /// `parentRow` / `row` 的 `.frame(height:)` 必须同源 —— 改一处就得改两处。
+    static let parentRowHeight: CGFloat = 46
+    static let rowHeight: CGFloat = 52
+
     var body: some View {
         GeometryReader { proxy in
             let widths = SFTPFileTableColumnWidths(containerWidth: proxy.size.width)
@@ -162,6 +168,17 @@ struct SFTPFileTable: View {
                     if showParent { parentRow }
                     ForEach(entries) { e in row(e, widths: widths).id(e.id) }
                 }
+                // 整表一个远端拖放目标（落点 → 行号由固定行高算）。以前是
+                // 「目录行各挂一个 `.onDrop`」，每行因此常驻两个平台视图，
+                // LazyVStack 又不释放已实例化的行 —— 滚一遍就攒出上百个。
+                // 见 `RemoteRowDropTargeting` 的注释与那一轮 A/B 读数。
+                .onDrop(of: [.utermRemoteFile], delegate: RemoteRowDropDelegate(
+                    entries: entries,
+                    showsParentRow: showParent,
+                    parentRowHeight: Self.parentRowHeight,
+                    rowHeight: Self.rowHeight,
+                    onDropToEntry: onDropRemoteItems,
+                    onDropToParent: onDropRemoteItemsToParent))
             }
             .focusable()
             .focused($focused)
@@ -246,13 +263,11 @@ struct SFTPFileTable: View {
             Spacer()
         }
         .padding(.horizontal, 16)
-        .frame(height: 46)
+        .frame(height: Self.parentRowHeight)
         .contentShape(Rectangle())
         .hoverBackground(UD.rowHover)
         .onTapGesture { focused = true; onUp() }
-        .onDrop(of: [.utermRemoteFile],
-                isTargeted: nil,
-                perform: onDropRemoteItemsToParent)
+        // 拖入上一级由整表的 `RemoteRowDropDelegate` 接（本行不再自带 `.onDrop`）。
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("上级目录")
@@ -289,7 +304,7 @@ struct SFTPFileTable: View {
         }
         .padding(.horizontal, SFTPFileTableColumnWidths.horizontalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 52)
+        .frame(height: Self.rowHeight)
         // 选中态：满宽底色（无左侧强调条，填充即边界），与工作区侧栏文件行一致。
         .background(Rectangle().fill(selected ? UD.rowSelected : Color.clear))
         .hoverBackground(UD.rowHover, isActive: selected)
@@ -306,7 +321,9 @@ struct SFTPFileTable: View {
         .accessibilityAction { onActivate(e) }
         .contextMenu { SFTPRowMenu(entry: e, actions: rowActions) }
 
-        return remoteMoveDropTarget(base, entry: e)
+        // 目录行的「拖进来」由整表一个 `RemoteRowDropDelegate` 接管，行本身
+        // 不再挂 `.onDrop` —— 每行一个 `.onDrop` 就是每行两个常驻平台视图。
+        return base
     }
 
     /// VoiceOver 朗读值：种类 + 大小 + 修改时间，让无障碍用户不依赖列布局即可了解条目。
@@ -330,18 +347,6 @@ struct SFTPFileTable: View {
             .padding(.horizontal, 6).padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
             .help(posixPermissionString(e.permissions))
-    }
-
-    @ViewBuilder
-    private func remoteMoveDropTarget<Content: View>(_ content: Content,
-                                                     entry: RemoteEntry) -> some View {
-        if entry.isDirectory {
-            content.onDrop(of: [.utermRemoteFile], isTargeted: nil) { providers in
-                onDropRemoteItems(providers, entry)
-            }
-        } else {
-            content
-        }
     }
 }
 
