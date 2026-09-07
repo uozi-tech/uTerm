@@ -26,6 +26,9 @@ struct TunnelRow: View {
 
     /// 右侧状态列 / 恢复按钮共享宽度（对齐设计稿 PF_ACTION_W）。
     private static let actionWidth: CGFloat = 76
+    /// hover 才浮现的「编辑 + 删除」两个 26pt 图标按钮 + 2pt 间距。
+    /// 不悬停时用等宽占位块顶住，避免鼠标进出时整行几何跳动。
+    private static let hoverActionsWidth: CGFloat = 26 + 2 + 26
 
     private var kind: ForwardKind { rule.kind }
     private var active: Bool { status == .active }
@@ -81,7 +84,9 @@ struct TunnelRow: View {
                             Image(systemName: "bolt.fill")
                                 .font(.system(size: 8))
                                 .foregroundStyle(UD.text4)
-                                .help("连接时自动启动")
+                                // 行内 tooltip 一律走悬停门控：不悬停就不装那块常驻追踪区
+                                // （一行 4 处 × 上百行，滚动时全要跟着重算）。
+                                .help(whenHovering: hover, "连接时自动启动")
                         }
                     }
                     if let label = rule.destLabel, !label.isEmpty {
@@ -101,24 +106,30 @@ struct TunnelRow: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(active ? 1 : 0.5)
-                    .help(flowPlain)
+                    .help(whenHovering: hover, flowPlain)
             }
             .contentShape(Rectangle())
             .onTapGesture(count: 2, perform: onEdit)
 
-            // hover 编辑/删除。
+            // hover 编辑/删除。**悬停才建**：改前是常驻两个 `Button` 再 `opacity(0)` 藏起来，
+            // 上百行时那就是上百对真控件。不悬停时换成等宽的占位色块，几何一模一样
+            // （26 + 2 + 26 = 54pt），看得见的东西一点没变；无障碍也没变差 —— 完全透明的
+            // 视图本来就被 SwiftUI 排除在无障碍树之外。
             HStack(spacing: 2) {
-                iconButton("pencil", tint: UD.text3, help: "编辑", action: onEdit)
-                iconButton("trash", tint: UD.danger, help: "删除", action: onDelete)
+                if hover {
+                    iconButton("pencil", tint: UD.text3, help: "编辑", action: onEdit)
+                    iconButton("trash", tint: UD.danger, help: "删除", action: onDelete)
+                } else {
+                    Color.clear.frame(width: Self.hoverActionsWidth, height: 26)
+                }
             }
-            .opacity(hover ? 1 : 0)
 
             // 规则仍 active 但近期有单连接失败 → 琥珀警示（tooltip 给原因），消除「一直绿却连不上」误导。
             if active, let issue = recentIssue {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(UD.warning)
-                    .help("最近连接失败：\(issue)")
+                    .help(whenHovering: hover, "最近连接失败：\(issue)")
                     .accessibilityLabel("最近连接失败：\(issue)")
             }
             // 右侧：error 显红 chip，否则 UDToggle。共享 76pt 宽。
@@ -216,7 +227,7 @@ struct TunnelRow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(whenHovering: hover, help)
         .accessibilityLabel(help)
     }
 

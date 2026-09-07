@@ -90,6 +90,30 @@ final class ForwardingListContractTests: XCTestCase {
         return nil
     }
 
+    /// 逐屏滚到底。
+    ///
+    /// **不能一步跳到 `maxOffset`**：懒栈是先估后修的，行高不一（失败行多一条原因条），
+    /// 一次性跳过去时 documentView 的高度还是估出来的，落点其实没到真正的末尾。
+    /// 一屏一屏往下走、每步交付一次布局，估高被逐段修正，最后才真的到底。
+    private func scrollToBottom(_ mounted: ForwardingProbeFixture.Mounted) {
+        let scroll = mounted.scroll
+        let step = max(1, scroll.contentSize.height * 0.8)
+        var guard_ = 0
+        while guard_ < 400 {
+            guard_ += 1
+            let maxOffset = max(0, (scroll.documentView?.frame.height ?? 0) - scroll.contentSize.height)
+            let current = scroll.contentView.bounds.origin.y
+            if current >= maxOffset - 0.5 { break }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxOffset, current + step)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            mounted.host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        mounted.host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        mounted.host.layoutSubtreeIfNeeded()
+    }
+
     // MARK: - 全局面板
 
     private struct GlobalHarness {
@@ -149,13 +173,9 @@ final class ForwardingListContractTests: XCTestCase {
         defer { closeAllWindows() }
         let seeded = try mountGlobal(hosts: 50, rulesPerHost: 20)
         let scroll = seeded.mounted.scroll
-        let maxOffset = max(0, seeded.mounted.document.frame.height - scroll.contentSize.height)
-        XCTAssertGreaterThan(maxOffset, 0, "1000 行必须超过一屏")
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: maxOffset))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        seeded.mounted.host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-        seeded.mounted.host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(max(0, seeded.mounted.document.frame.height - scroll.contentSize.height),
+                             0, "1000 行必须超过一屏")
+        scrollToBottom(seeded.mounted)
 
         let joined = axStrings(seeded.mounted.host).joined(separator: "\n")
         let last = try XCTUnwrap(seeded.rules.last)
@@ -208,4 +228,96 @@ final class ForwardingListContractTests: XCTestCase {
                       "首个分组组头应显示「\(expected)」")
     }
 
+
+    // MARK: - 单主机面板
+
+    private struct SingleHostHarness {
+        let mounted: ForwardingProbeFixture.Mounted
+        let coordinator: ForwardingCoordinator
+        let rules: [ForwardingRule]
+    }
+
+    private func mountSingleHost(rules count: Int) throws -> SingleHostHarness {
+        closeAllWindows()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        let seeded = try ForwardingProbeFixture.seed(hosts: 1, rulesPerHost: count)
+        let root = AnyView(
+            PortForwardListView(server: seeded.profiles[0],
+                                rules: seeded.rules,
+                                hostKeyRelay: HostKeyChallengeRelay())
+                .environment(seeded.coordinator)
+                .modelContainer(seeded.container))
+        let mounted = try ForwardingProbeFixture.mount(root,
+                                                       size: NSSize(width: 820, height: 640),
+                                                       windows: &windows)
+        return SingleHostHarness(mounted: mounted, coordinator: seeded.coordinator,
+                                 rules: seeded.rules)
+    }
+
+    /// 工具栏的六个计数改成一遍扫完之后，数值必须与逐条重算一致
+    /// （全部 / 本地 / 远程 / 动态 + N 活跃 + M 异常）。
+    func testSingleHostToolbarCountsMatchTheRules() throws {
+        defer { closeAllWindows() }
+        let harness = try mountSingleHost(rules: 24)
+        harness.mounted.host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        harness.mounted.host.layoutSubtreeIfNeeded()
+
+        let strings = axStrings(harness.mounted.host)
+        let rules = harness.rules
+        let expectedSegments = [
+            "全部 \(rules.count)",
+            "本地 \(rules.filter { $0.kind == .local }.count)",
+            "远程 \(rules.filter { $0.kind == .remote }.count)",
+            "动态 \(rules.filter { $0.kind == .dynamic }.count)",
+        ]
+        for segment in expectedSegments {
+            XCTAssertTrue(strings.contains(segment),
+                          "类型分段必须显示「\(segment)」；实收 \(strings.prefix(30))")
+        }
+        let active = rules.filter { harness.coordinator.status($0.id) == .active }.count
+        let failed = rules.filter {
+            if case .error = harness.coordinator.status($0.id) { return true } else { return false }
+        }.count
+        XCTAssertTrue(strings.contains("\(active) 活跃"), "汇总点必须显示「\(active) 活跃」")
+        if failed > 0 {
+            XCTAssertTrue(strings.contains("\(failed) 异常"), "汇总点必须显示「\(failed) 异常」")
+        }
+    }
+
+    /// 单主机列表懒栈不吞数据：200 条滚到底，最后一条规则仍渲染得出来。
+    func testSingleHostLazyListStillRendersTheLastRule() throws {
+        defer { closeAllWindows() }
+        let harness = try mountSingleHost(rules: 200)
+        let scroll = harness.mounted.scroll
+        XCTAssertGreaterThan(max(0, harness.mounted.document.frame.height - scroll.contentSize.height),
+                             0, "200 条必须超过一屏")
+        scrollToBottom(harness.mounted)
+
+        let last = try XCTUnwrap(harness.rules.last)
+        XCTAssertTrue(axStrings(harness.mounted.host).joined(separator: "\n").contains(last.name),
+                      "滚到底必须能看到最后一条规则「\(last.name)」")
+    }
+
+    /// 隧道行的开关文案随状态走（active → 「停止隧道」，否则「启动隧道」）。
+    func testSingleHostRowToggleLabelTracksStatus() throws {
+        defer { closeAllWindows() }
+        let harness = try mountSingleHost(rules: 12)
+        harness.mounted.host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        harness.mounted.host.layoutSubtreeIfNeeded()
+
+        let target = try XCTUnwrap(harness.rules.first {
+            harness.coordinator.status($0.id) == .active
+        }, "夹具里必须有一条活跃规则")
+        XCTAssertNotNil(axElement(harness.mounted.host, label: "停止隧道「\(target.name)」"),
+                        "活跃行的开关动作文案应是「停止隧道」")
+
+        harness.coordinator.setStatusForTesting(.inactive, for: target.id)
+        harness.mounted.host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        harness.mounted.host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(axElement(harness.mounted.host, label: "启动隧道「\(target.name)」"),
+                        "状态转 inactive 后，开关动作文案必须翻成「启动隧道」")
+    }
 }

@@ -73,9 +73,14 @@ struct GlobalForwardRow: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2, perform: onEdit)
 
-            // hover 浮现「编辑配置」铅笔（双击的可发现入口）。
-            iconButton("pencil", tint: UD.text3, help: "编辑配置", action: onEdit)
-                .opacity(hover ? 1 : 0)
+            // hover 浮现「编辑配置」铅笔（双击的可发现入口）。**悬停才建**：改前是常驻一个
+            // `Button` 再 `opacity(0)` 藏起来，上千行时那就是上千个真控件。不悬停时换成
+            // 等宽占位色块，几何一模一样（26pt）。
+            if hover {
+                iconButton("pencil", tint: UD.text3, help: "编辑配置", action: onEdit)
+            } else {
+                Color.clear.frame(width: 26, height: 26)
+            }
 
             trafficView
 

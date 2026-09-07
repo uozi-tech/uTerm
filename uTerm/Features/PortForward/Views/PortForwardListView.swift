@@ -46,17 +46,32 @@ struct PortForwardListView: View {
         return rules.filter { $0.kind == filter }
     }
 
-    private var activeCount: Int {
-        rules.filter { coordinator.status($0.id) == .active }.count
+    /// 工具栏要的全部计数，**一遍扫完**。
+    ///
+    /// 改前是五次独立的 `rules.filter`：活跃数、异常数、以及三个类型各一次；活跃 / 异常
+    /// 那两次还各自把每条规则的状态查一遍。合并后每条规则只查一次状态、只走一遍数组。
+    private struct ToolbarCounts {
+        var active = 0
+        var error = 0
+        var byKind: [ForwardKind: Int] = [:]
     }
 
-    private var errorCount: Int {
-        rules.filter { if case .error = coordinator.status($0.id) { return true } else { return false } }.count
+    private var toolbarCounts: ToolbarCounts {
+        var counts = ToolbarCounts()
+        for rule in rules {
+            counts.byKind[rule.kind, default: 0] += 1
+            switch coordinator.status(rule.id) {
+            case .active: counts.active += 1
+            case .error:  counts.error += 1
+            case .inactive, .starting: break
+            }
+        }
+        return counts
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
+            toolbar(toolbarCounts)
             Rectangle().fill(UD.border).frame(height: 1)
             list
         }
@@ -67,23 +82,23 @@ struct PortForwardListView: View {
 
     // MARK: - 工具栏
 
-    private var toolbar: some View {
+    private func toolbar(_ counts: ToolbarCounts) -> some View {
         HStack(spacing: 12) {
             UDSegmented(selection: $filter, options: [
                 (value: ForwardKind?.none, label: "全部 \(rules.count)"),
-                (value: ForwardKind?.some(.local), label: "本地 \(count(.local))"),
-                (value: ForwardKind?.some(.remote), label: "远程 \(count(.remote))"),
-                (value: ForwardKind?.some(.dynamic), label: "动态 \(count(.dynamic))")
+                (value: ForwardKind?.some(.local), label: "本地 \(counts.byKind[.local] ?? 0)"),
+                (value: ForwardKind?.some(.remote), label: "远程 \(counts.byKind[.remote] ?? 0)"),
+                (value: ForwardKind?.some(.dynamic), label: "动态 \(counts.byKind[.dynamic] ?? 0)")
             ])
 
             Spacer(minLength: 0)
 
-            summaryDot(color: activeCount > 0 ? UD.success : UD.text4,
-                       text: "\(activeCount) 活跃",
+            summaryDot(color: counts.active > 0 ? UD.success : UD.text4,
+                       text: "\(counts.active) 活跃",
                        tint: UD.text3)
-            if errorCount > 0 {
+            if counts.error > 0 {
                 summaryDot(color: UD.danger,
-                           text: "\(errorCount) 异常",
+                           text: "\(counts.error) 异常",
                            tint: UD.danger)
             }
 
@@ -104,42 +119,48 @@ struct PortForwardListView: View {
         .foregroundStyle(tint)
     }
 
-    private func count(_ kind: ForwardKind) -> Int {
-        rules.filter { $0.kind == kind }.count
-    }
-
     // MARK: - 列表
 
     @ViewBuilder
     private var list: some View {
+        let visible = self.visible
         ScrollView {
             if visible.isEmpty {
                 PFEmptyState(kind: filter) { beginEdit(.new) }
                     .padding(.top, 8)
+            } else if visible.count > PortForwardListLayout.lazyRowThreshold {
+                // 规则多到几屏以上才走懒栈（小规模档换懒栈反而更慢，见
+                // `PortForwardListLayout.lazyRowThreshold` 的实测数字）。
+                LazyVStack(spacing: 0) { rows(visible) }
+                    .background(UD.bg)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(visible.enumerated()), id: \.element.id) { idx, rule in
-                        TunnelRow(
-                            rule: rule,
-                            status: coordinator.status(rule.id),
-                            recentIssue: coordinator.connectionIssue(rule.id)?.reason,
-                            isLast: idx == visible.count - 1,
-                            onToggle: { toggle(rule) },
-                            onRetry: { retry(rule) },
-                            onChangePort: { beginEdit(.rule(rule)) },
-                            onEdit: { beginEdit(.rule(rule)) },
-                            onDelete: { requestDelete(rule) }
-                        )
-                    }
-                }
-                .background(UD.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
+                VStack(spacing: 0) { rows(visible) }
+                    .background(UD.bg)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 16)
+    }
+
+    private func rows(_ visible: [ForwardingRule]) -> some View {
+        ForEach(Array(visible.enumerated()), id: \.element.id) { idx, rule in
+            TunnelRow(
+                rule: rule,
+                status: coordinator.status(rule.id),
+                recentIssue: coordinator.connectionIssue(rule.id)?.reason,
+                isLast: idx == visible.count - 1,
+                onToggle: { toggle(rule) },
+                onRetry: { retry(rule) },
+                onChangePort: { beginEdit(.rule(rule)) },
+                onEdit: { beginEdit(.rule(rule)) },
+                onDelete: { requestDelete(rule) }
+            )
+        }
     }
 
     // MARK: - 弹层

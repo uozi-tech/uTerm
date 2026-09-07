@@ -271,15 +271,8 @@ struct GlobalForwardingList: View {
     /// 上一次拉到的累计字节，用来算每秒速率。
     @State private var lastBytes: [UUID: TunnelBytes] = [:]
 
-    /// 分组这一层什么时候才值得走 `LazyVStack`（按**总规则数**分档）。
-    ///
-    /// 「换懒栈一定更快」是错的（playbook 反例表）。本屏同轮实测：
-    /// - 10 组 / 50 行：非 lazy 单帧 p95 **2.00ms**、超预算 0%；换 lazy 后 p95 **15.41ms**、超预算 9.5%。
-    /// - 50 组 / 1000 行：非 lazy p95 **17.90ms**、超预算 99.5%；换 lazy 后 p95 **7.23ms**、超预算 4.0%。
-    ///
-    /// 所以小规模留非 lazy、大规模才懒。120 取在「四五屏」的量级（行高 52pt，
-    /// 一屏约 13 行）；两档之间的确切拐点没量过，见 `docs/scroll-perf-findings.md`。
-    static let lazyRowThreshold = 120
+    /// 分组这一层什么时候才值得走 `LazyVStack`（按**总规则数**分档，
+    /// 阈值与单主机列表共用，见 `PortForwardListLayout.lazyRowThreshold`）。
 
     private var totalRules: Int { sections.reduce(0) { $0 + $1.rules.count } }
 
@@ -287,7 +280,7 @@ struct GlobalForwardingList: View {
         ScrollView {
             if sections.isEmpty {
                 GlobalForwardingWindowView.emptyState
-            } else if totalRules > Self.lazyRowThreshold {
+            } else if totalRules > PortForwardListLayout.lazyRowThreshold {
                 LazyVStack(spacing: 12) {
                     ForEach(sections, id: \.host.id) { group in
                         section(group)

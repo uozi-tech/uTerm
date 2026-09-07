@@ -1,6 +1,20 @@
 import UDesignKit
 import SwiftUI
 
+// MARK: - 列表布局常量
+
+/// 两个端口转发列表（单主机 / 全局面板）共用的渲染分档。
+enum PortForwardListLayout {
+    /// 行数超过它才把外层换成 `LazyVStack`。
+    ///
+    /// 「换懒栈一定更快」是错的（uTable playbook 的反例表）。全局面板同轮实测：
+    /// 10 组 / 50 行非 lazy 单帧 p95 **2.00ms** / 超预算 0%，无条件换懒栈后
+    /// p95 **15.41ms** / 超预算 9.5%；而 50 组 / 1000 行换懒栈后 p95 17.90 → 7.23ms。
+    /// 所以小规模留非 lazy、大规模才懒。120 取在「四五屏」的量级（行高 52pt，
+    /// 一屏约 13 行）；两档之间的确切拐点没量过，见 `docs/scroll-perf-findings.md`。
+    static let lazyRowThreshold = 120
+}
+
 // MARK: - 空状态（设计稿 PFEmpty）
 
 /// 端口转发空状态：虚线框 + 文案 +「新建转发」。`kind` 区分「该类型暂无」与
