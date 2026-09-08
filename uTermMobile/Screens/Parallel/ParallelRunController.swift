@@ -71,14 +71,20 @@ final class ParallelRunController {
     private let store: QuickCommandStore
     private let commandID: UUID
     private let doctor: ParallelDoctor?
+    /// 按主机起执行会话的执行器。默认 `SSHParallelExecutor`（与抽协议前逐行等价的真实路径）；
+    /// 探针注入假实现，整屏就能在没有真机器的情况下跑起来。
+    private let executor: ParallelCommandExecuting
 
     private var running = false
     private var generation = 0
     private var recordOnFinalize = true
+    /// 每台一条在跑的任务 —— 只为 `cancel()`（探针拆窗、将来的「中途返回就停」）留把手。
+    private var laneTasks: [Task<Void, Never>] = []
 
     init(commandID: UUID, commandName: String, command: String, intent: String,
          aiAssisted: Bool, targets: [ServerProfile], doctor: ParallelDoctor?,
-         store: QuickCommandStore, container: ModelContainer) {
+         store: QuickCommandStore, container: ModelContainer,
+         executor: ParallelCommandExecuting? = nil) {
         self.commandID = commandID
         self.commandName = commandName
         self.command = command
@@ -88,6 +94,7 @@ final class ParallelRunController {
         self.doctor = doctor
         self.store = store
         self.container = container
+        self.executor = executor ?? SSHParallelExecutor(container: container)
         self.mode = aiAssisted ? .ai : .shell
         self.states = targets.map {
             PServerState(id: $0.id, name: $0.name,
@@ -116,9 +123,16 @@ final class ParallelRunController {
         finishedAt = nil
         synthesis = ""
         let execTargets = targets.map { makeExecTarget(profile: $0, trustNewKeys: false) }
-        for (index, target) in execTargets.enumerated() {
+        laneTasks = execTargets.enumerated().map { index, target in
             Task { await self.runServer(at: index, target: target) }
         }
+    }
+
+    /// 停掉所有在跑的泳道（取消传到会话的 `run`）。**生产当前不调用** —— 关闭覆盖态后
+    /// 仍跑完并记录，与抽协议前一致；这是执行器缝「可取消」那一半的落点，探针拆窗时用。
+    func cancel() {
+        for task in laneTasks { task.cancel() }
+        laneTasks.removeAll()
     }
 
     func rerun() {
@@ -138,7 +152,7 @@ final class ParallelRunController {
         recordOnFinalize = false
         running = true
         let target = makeExecTarget(profile: profile, trustNewKeys: true)
-        Task { await self.runServer(at: index, target: target) }
+        laneTasks.append(Task { await self.runServer(at: index, target: target) })
     }
 
     private func resetLane(_ i: Int) {
@@ -154,24 +168,25 @@ final class ParallelRunController {
     }
 
     private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) -> ExecTarget {
-        var executor: SSHCommandExecutor?
-        var sink: HostKeyChallengeSink?
-        var connection: ReusableSSHConnection?
-        var setupError: String?
-        do {
-            let made = try WorkspaceCommandExecutorFactory.make(
-                server: profile, container: container,
-                trustNewKeys: trustNewKeys, reuseConnection: true)
-            executor = made.executor
-            sink = made.hostKeyChallenges
-            connection = made.connection
-        } catch {
-            setupError = error.localizedDescription
+        ExecTarget(id: profile.id, name: profile.name,
+                   endpoint: "\(profile.username)@\(profile.host):\(profile.port)",
+                   session: executor.makeSession(for: profile, trustNewKeys: trustNewKeys))
+    }
+
+    /// 把「按节拍回吐的行」接回泳道。回调可能在任意线程发生，所以经由主 actor 落地；
+    /// `generation` 守住 rerun / trustAndRetry 之后的迟到批次。
+    private func lineSink(at index: Int, generation gen: Int,
+                          counter: ParallelStreamedLineCount) -> @Sendable ([PLine]) -> Void {
+        { [weak self] lines in
+            guard !lines.isEmpty else { return }
+            counter.add(lines.count)
+            Task { @MainActor in self?.appendStreamed(lines, at: index, generation: gen) }
         }
-        return ExecTarget(id: profile.id, name: profile.name,
-                          endpoint: "\(profile.username)@\(profile.host):\(profile.port)",
-                          executor: executor, hostKeyChallenges: sink,
-                          connection: connection, setupErrorText: setupError)
+    }
+
+    private func appendStreamed(_ lines: [PLine], at index: Int, generation gen: Int) {
+        guard gen == generation, states.indices.contains(index) else { return }
+        states[index].lines.append(contentsOf: lines)
     }
 
     private func runServer(at index: Int, target: ExecTarget) async {
@@ -183,7 +198,7 @@ final class ParallelRunController {
         if states[index].durationMs == nil {
             states[index].durationMs = Int(Date().timeIntervalSince(started) * 1000)
         }
-        await target.connection?.close()
+        await target.session.close()
         finishServer()
     }
 
@@ -199,7 +214,10 @@ final class ParallelRunController {
         if !command.isEmpty {
             states[index].lines = [PLine(kind: .cmd, text: command)]
             let start = Date()
-            let outcome = await Self.execBounded(executor: target.executor, command: command)
+            let streamed = ParallelStreamedLineCount()
+            let outcome = await Self.execBounded(
+                session: target.session, command: command,
+                onLines: lineSink(at: index, generation: generation, counter: streamed))
             states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
             guard let result = outcome.result else {
                 markUnreachable(at: index, target: target, outcome: outcome)
@@ -208,14 +226,18 @@ final class ParallelRunController {
             initialExit = result.exitCode
             initialOutput = result.output
             states[index].exitCode = initialExit
-            states[index].lines.append(contentsOf: Self.outputLines(from: result, failed: initialExit != 0))
+            // 会话已经按节拍把行吐过一遍就别再切一次（真实 SSH 从不吐，走的还是老路）。
+            if streamed.count == 0 {
+                states[index].lines.append(contentsOf: Self.outputLines(from: result, failed: initialExit != 0))
+            }
             if !aiAssisted {
                 states[index].status = (initialExit == 0) ? .succeeded : .failed
             }
             ranInitial = true
         } else if doctor != nil {
             let start = Date()
-            let probe = await Self.execBounded(executor: target.executor, command: "true")
+            let probe = await Self.execBounded(session: target.session, command: "true",
+                                               onLines: { _ in })
             if probe.result == nil {
                 states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
                 markUnreachable(at: index, target: target, outcome: probe)
@@ -279,10 +301,15 @@ final class ParallelRunController {
                     st.status = .failed; st.output = "(空命令)"; resolvedCalls.append(st); continue
                 }
                 states[index].lines.append(PLine(kind: .cmd, text: st.command))
-                let outcome = await Self.execBounded(executor: target.executor, command: st.command)
+                let streamed = ParallelStreamedLineCount()
+                let outcome = await Self.execBounded(
+                    session: target.session, command: st.command,
+                    onLines: lineSink(at: index, generation: generation, counter: streamed))
                 let cmdExit = outcome.result?.exitCode
                 if let r = outcome.result {
-                    states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
+                    if streamed.count == 0 {
+                        states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
+                    }
                     st.output = r.output
                 } else {
                     let reason = outcome.timedOut
@@ -330,7 +357,7 @@ final class ParallelRunController {
         states[index].status = .failed
         states[index].tone = .failed
         states[index].exitCode = nil
-        if let challenge = target.hostKeyChallenges?.take() {
+        if let challenge = target.session.takeHostKeyChallenge() {
             let mismatch: Bool = { if case .mismatch = challenge.kind { return true }; return false }()
             states[index].failure = .hostKeyUntrusted(challenge)
             states[index].lines.append(PLine(kind: .err, text: "主机指纹未信任，连接被拒绝"))
@@ -343,7 +370,7 @@ final class ParallelRunController {
             states[index].lines.append(PLine(kind: .err, text: reason))
             states[index].summary = "\(reason)，未能确认结果。"
         } else {
-            let reason = Self.connectionReason(outcome.errorText ?? target.setupErrorText)
+            let reason = Self.connectionReason(outcome.errorText ?? target.session.setupErrorText)
             states[index].failure = .connection(reason)
             states[index].lines.append(PLine(kind: .err, text: "连接失败：\(reason)"))
             states[index].summary = "无法连接到该服务器：\(reason)。命令未执行。"
@@ -473,10 +500,8 @@ final class ParallelRunController {
         let id: UUID
         let name: String
         let endpoint: String
-        let executor: SSHCommandExecutor?
-        let hostKeyChallenges: HostKeyChallengeSink?
-        let connection: ReusableSSHConnection?
-        let setupErrorText: String?
+        /// 这一台的执行会话（真实 SSH 或探针注入的假实现）。
+        let session: ParallelExecutionSession
     }
     nonisolated struct ExecOutcome: Sendable {
         let result: CommandResult?
@@ -485,18 +510,30 @@ final class ParallelRunController {
     }
     private enum GateOutcome: Sendable { case completed(CommandResult?); case failed(String); case timedOut }
 
-    private nonisolated static func execBounded(executor: SSHCommandExecutor?, command: String) async -> ExecOutcome {
-        guard let executor else { return ExecOutcome(result: nil, errorText: nil, timedOut: false) }
+    /// 会话建不起来（`setupErrorText != nil`）等价于抽协议前的 `executor == nil`：
+    /// 不执行、`errorText` 留空，交 `markUnreachable` 用 `setupErrorText` 兜底。
+    private nonisolated static func execBounded(
+        session: ParallelExecutionSession, command: String,
+        onLines: @escaping @Sendable ([PLine]) -> Void
+    ) async -> ExecOutcome {
+        guard session.setupErrorText == nil else {
+            return ExecOutcome(result: nil, errorText: nil, timedOut: false)
+        }
         let gate = OneShotGate()
-        _ = Task<Void, Never> {
-            do { await gate.deliver(.completed(try await executor.run(command))) }
+        let work = Task<Void, Never> {
+            do { await gate.deliver(.completed(try await session.run(command, onLines: onLines))) }
             catch { await gate.deliver(.failed(error.localizedDescription)) }
         }
         let timer = Task<Void, Never> {
             try? await Task.sleep(for: perServerTimeout)
             await gate.deliver(.timedOut)
         }
-        let outcome = await gate.wait()
+        // 取消传到会话（生产从不取消这一层，行为不变；`cancel()` 与探针拆窗靠它真的停下来）。
+        let outcome = await withTaskCancellationHandler {
+            await gate.wait()
+        } onCancel: {
+            work.cancel()
+        }
         timer.cancel()
         switch outcome {
         case .completed(let r): return ExecOutcome(result: r, errorText: nil, timedOut: false)

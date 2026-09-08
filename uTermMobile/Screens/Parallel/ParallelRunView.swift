@@ -13,10 +13,24 @@ struct ParallelRunRequest: Identifiable {
     let serverIDs: [UUID]
 }
 
+/// 造并行控制器所需的、只有视图取得到的东西（`@Query` 出的主机与 provider、SwiftData 上下文）。
+/// 见 `ParallelRunView.makeController`。
+@MainActor
+struct ParallelRunSetup {
+    let request: ParallelRunRequest
+    /// 按 `request.serverIDs` 选中的主机（顺序与 serverIDs 一致）。
+    let targets: [ServerProfile]
+    let providers: [AIProvider]
+    let context: ModelContext
+}
+
 /// 并行执行全屏视图（设计稿 `ParallelRun`）：Shell 网格 + AI 泳道两视图共用一次真实执行。
 struct ParallelRunView: View {
     let request: ParallelRunRequest
-    var onClose: () -> Void
+    /// 控制器工厂。默认造真控制器（真实 SSH 执行器），**生产调用点不变**；
+    /// 探针注入一个带假执行器的控制器，整屏就能在没有真机器的情况下挂起来量。
+    let makeController: @MainActor (ParallelRunSetup) -> ParallelRunController
+    let onClose: () -> Void
 
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
@@ -26,6 +40,22 @@ struct ParallelRunView: View {
     @State private var controller: ParallelRunController?
     @State private var now = Date()
     private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    /// - Parameters:
+    ///   - makeController: 控制器工厂，默认造真控制器。
+    ///   - controller: 直接给一个现成的控制器（**探针用**）。给了就跳过 `onAppear` 现造那一步，
+    ///     首帧即内容（否则要先渲一帧 `ProgressView`，探针在那一帧里拿不到 `UIScrollView`）；
+    ///     此时 `start()` 由调用方自己发。生产不传，走工厂。
+    init(request: ParallelRunRequest,
+         makeController: @escaping @MainActor (ParallelRunSetup) -> ParallelRunController
+            = ParallelRunView.defaultController,
+         controller: ParallelRunController? = nil,
+         onClose: @escaping () -> Void) {
+        self.request = request
+        self.makeController = makeController
+        self.onClose = onClose
+        _controller = State(initialValue: controller)
+    }
 
     var body: some View {
         Group {
@@ -41,14 +71,21 @@ struct ParallelRunView: View {
 
     private func setup() {
         let targets = request.serverIDs.compactMap { id in allHosts.first { $0.id == id } }
-        let doctor = ParallelDoctor.make(provider: providers.first)
-        let c = ParallelRunController(
-            commandID: request.commandID, commandName: request.name,
-            command: request.command, intent: request.intent, aiAssisted: request.aiAssisted,
-            targets: targets, doctor: doctor,
-            store: QuickCommandStore(context: context), container: context.container)
+        let c = makeController(ParallelRunSetup(request: request, targets: targets,
+                                                providers: providers, context: context))
         controller = c
         c.start()
+    }
+
+    /// 默认工厂：真 AI doctor + 真 SSH 执行器 + 真 `QuickCommandStore`（与加注入口之前逐行一致）。
+    @MainActor
+    static func defaultController(_ setup: ParallelRunSetup) -> ParallelRunController {
+        ParallelRunController(
+            commandID: setup.request.commandID, commandName: setup.request.name,
+            command: setup.request.command, intent: setup.request.intent,
+            aiAssisted: setup.request.aiAssisted,
+            targets: setup.targets, doctor: ParallelDoctor.make(provider: setup.providers.first),
+            store: QuickCommandStore(context: setup.context), container: setup.context.container)
     }
 
     // MARK: 组合
@@ -242,7 +279,9 @@ struct ParallelRunView: View {
 
 // MARK: - Shell 窗格（逐台真实输出）
 
-private struct ParShellPane: View {
+/// `internal` 而非 `private`：探针要单独挂一格来给「行数 / 台数各自涨多少」归因
+/// （整屏读数分不出这两笔账）。可见性之外没有任何改动。
+struct ParShellPane: View {
     let state: PServerState
     let accent: Color
     var onTrust: () -> Void
@@ -311,10 +350,21 @@ private struct ParShellPane: View {
 
 // MARK: - AI 泳道
 
-private struct ParAILane: View {
+/// `internal` 而非 `private`：探针要量「展开处理过程」这一下的成本，而 `open` 是
+/// `@State`，外部点不到（SwiftUI 的 Button 在视图树里不是 `UIControl`，hitTest 也点不着）。
+struct ParAILane: View {
     let state: PServerState
+    /// 初始就展开「处理过程」。**默认 false = 现状**；只有探针会传 true，用来做展开前→后同轮对照。
+    var initiallyOpen = false
     var onTrust: () -> Void
-    @State private var open = false
+    @State private var open: Bool
+
+    init(state: PServerState, initiallyOpen: Bool = false, onTrust: @escaping () -> Void) {
+        self.state = state
+        self.initiallyOpen = initiallyOpen
+        self.onTrust = onTrust
+        _open = State(initialValue: initiallyOpen)
+    }
 
     private var resolved: Bool { state.tone != .running }
     private var tint: Color {
