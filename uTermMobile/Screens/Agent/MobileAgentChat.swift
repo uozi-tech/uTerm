@@ -23,6 +23,11 @@ struct MobileAgentChat: View {
     var isActive: Bool = true
     /// 当前主机描述（如「web-01（root@10.0.0.1:22）」）。
     var serverContext: String? = nil
+    /// 一次最多挂载多少条消息（`AgentMessageWindow`）。与 macOS `AssistantView` /
+    /// `TerminalAgentView` 同一形态、同一处方：**只裁渲染不裁数据**，
+    /// `model.messages` / SwiftData 记录 / 进模型的上下文一条不动。
+    /// `0` 表示不裁（探针的对照臂）。
+    var messageWindowLimit: Int = AgentMessageWindow.defaultLimit
 
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
@@ -37,6 +42,9 @@ struct MobileAgentChat: View {
     @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
 
     @State private var addingProvider = false
+    /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
+    /// 换会话时收回默认值。
+    @State private var expandedWindowLimit: Int?
     /// 活动 provider 的持久化选择（与 macOS `@AppStorage("activeProviderID")` 对齐：跨会话 / 重启记忆）。
     @AppStorage("mobileAgentActiveProviderID") private var activeProviderIDString = ""
     /// 「自然语言 → 执行」信任档位，持久化（与 macOS `@AppStorage("agentSafety")` 对齐）。
@@ -157,7 +165,8 @@ struct MobileAgentChat: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 40)
                     }
-                    ForEach(model.messages) { msg in
+                    earlierMessagesButton
+                    ForEach(mountedMessages) { msg in
                         messageRow(msg).id(msg.id)
                     }
                     if let err = errorText {
@@ -172,9 +181,57 @@ struct MobileAgentChat: View {
             }
             .scrollIndicators(.hidden)
             .defaultScrollAnchor(.bottom)
-            .onChange(of: model.messages.count) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.messages.last?.text) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.state) { _, _ in scrollToBottom(proxy) }
+            // 贴底跟随的三路监听压成一个 Equatable 指纹（镜像 macOS `ChatTailSignature`）：
+            // 每条 `onChange` 都要在每次 body 求值时算一遍旧值 / 新值，
+            // 其中 `model.messages.last?.text` 会把一整份长正文存进 onChange 的旧值。
+            // 指纹用 `utf8.count`（原生 Swift 字符串 O(1)），流式期间正文只增不减，
+            // 长度就是忠实的变化指纹。
+            .onChange(of: MChatTailSignature(model)) { _, _ in scrollToBottom(proxy) }
+            // 换会话（首条消息换身份）时把「显示更早」放开的窗口收回默认值。
+            .onChange(of: model.messages.first?.id) { _, _ in expandedWindowLimit = nil }
+        }
+    }
+
+    // MARK: - 渲染窗口
+
+    private var effectiveWindowLimit: Int {
+        max(expandedWindowLimit ?? messageWindowLimit, 0)
+    }
+
+    /// 真正挂进视图树的那一段；`model.messages` / SwiftData / 模型上下文一条不裁。
+    private var mountedMessages: ArraySlice<ChatMessage> {
+        let start = AgentMessageWindow.startIndex(count: model.messages.count,
+                                                  limit: effectiveWindowLimit)
+        return model.messages[start...]
+    }
+
+    @ViewBuilder
+    private var earlierMessagesButton: some View {
+        let hidden = AgentMessageWindow.hiddenCount(count: model.messages.count,
+                                                    limit: effectiveWindowLimit)
+        if hidden > 0 {
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    expandedWindowLimit = AgentMessageWindow.expanded(
+                        effectiveWindowLimit, count: model.messages.count)
+                } label: {
+                    HStack(spacing: 6) {
+                        MIcon(name: "chev-down", size: 8, color: M.text3)
+                            .rotationEffect(.degrees(180))
+                        Text("显示更早的 \(min(hidden, AgentMessageWindow.step)) 条")
+                            .font(M.sans(12))
+                    }
+                    .foregroundStyle(M.text3)
+                    .padding(.horizontal, 12).frame(height: 32)
+                    .background(Capsule().fill(M.fillFaint))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(MPressStyle())
+                .accessibilityLabel("显示更早的消息，还有 \(hidden) 条")
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -332,5 +389,26 @@ final class MAgentTaskBag {
     func cancelAll() {
         for task in tasks { task.cancel() }
         tasks.removeAll()
+    }
+}
+
+/// 「贴底跟随」要监听的三路变化压成一个 `Equatable` 值（镜像 macOS `ChatTailSignature`）：
+/// 尾消息身份、正文长度、尾消息的工具卡、状态机态。正文用 `utf8.count`
+/// （原生 Swift 字符串是 O(1)）而不是整串 —— 流式期间正文只增不减，长度就是忠实指纹。
+private struct MChatTailSignature: Equatable {
+    let count: Int
+    let lastID: UUID?
+    let lastTextLength: Int
+    let toolCalls: [ToolCallState]
+    let state: AssistantModel.State
+
+    @MainActor
+    init(_ model: AssistantModel) {
+        let last = model.messages.last
+        count = model.messages.count
+        lastID = last?.id
+        lastTextLength = last?.text.utf8.count ?? 0
+        toolCalls = last?.toolCalls ?? []
+        state = model.state
     }
 }
