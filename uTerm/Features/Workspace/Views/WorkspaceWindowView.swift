@@ -43,12 +43,6 @@ struct WorkspaceWindowView: View {
         /// 确认后按原打开方式（单击预览 / 双击永久）继续。
         let asPreview: Bool
     }
-    private struct BlockedFile: Identifiable {
-        let id = UUID()
-        let path: String
-        let size: Int64
-    }
-
     /// 本窗口绑定的服务器（按 `windowID.serverID` 查；查不到 = 已删除）。
     private var server: ServerProfile? {
         guard let id = windowID?.serverID else { return nil }
@@ -217,10 +211,22 @@ struct WorkspaceWindowView: View {
             let size = info["size"] as? Int64
             let mtime = info["mtime"] as? Date
             let asPreview = (info["preview"] as? Bool) ?? false
-            switch WorkspaceRemoteFileOpenGate.decision(forSize: size) {
+            switch WorkspaceRemoteFileOpenGate.decision(forPath: path, size: size) {
+            case .unsupportedType(let ext):
+                // 单击（预览）只是在浏览目录，逐个文件弹模态没法用 —— 照旧开一个
+                // 临时标签，由预览区就地显示「不支持」。双击 / 命令面板是**明确**
+                // 要打开它，那才值得一个能一键外部打开的 alert。
+                if asPreview {
+                    Task {
+                        await workspace.filePreviewModel.open(
+                            path: path, fileSize: size, mtime: mtime, asPreview: true)
+                    }
+                } else {
+                    blockedFile = BlockedFile(path: path, reason: .unsupportedType(ext: ext))
+                }
             case .block:
                 guard let size else { return }
-                blockedFile = BlockedFile(path: path, size: size)
+                blockedFile = BlockedFile(path: path, reason: .tooLarge(size: size))
             case .confirmLargeFile:
                 guard let size else { return }
                 largeFileConfirm = LargeFileConfirm(path: path, size: size, mtime: mtime,
@@ -260,19 +266,11 @@ struct WorkspaceWindowView: View {
             } message: { confirm in
                 Text(byteSize(confirm.size))
             }
-        .alert(
-            "文件太大",
-            isPresented: Binding(
-                get: { blockedFile != nil },
-                set: { if !$0 { blockedFile = nil } }),
-            presenting: blockedFile) { blocked in
-                Button("外部打开") {
-                    Task { await downloadAndOpenExternally(blocked.path) }
-                }
-                Button("取消", role: .cancel) {}
-            } message: { blocked in
-                Text("该文件 \(byteSize(blocked.size))，超过 50 MB 上限。建议用外部编辑器。")
-            }
+        // 「打不开」的两个 alert（类型不支持 / 太大）。抽成独立 ViewModifier ——
+        // 两串内联 .alert 会把本就庞大的 body 推过类型检查上限。
+        .modifier(BlockedFileAlerts(blocked: $blockedFile) { path in
+            Task { await downloadAndOpenExternally(path) }
+        })
         .modifier(AssistantBindingModifier(
             assistant: workspace.assistantModel,
             providers: providers,
@@ -370,7 +368,7 @@ struct WorkspaceWindowView: View {
     }
 
     private func byteSize(_ n: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+        formattedFileSize(n)
     }
 
     @MainActor
@@ -409,8 +407,11 @@ struct WorkspaceWindowView: View {
         guard let sftp = workspace.fileBrowserModel.sftpProvider else { return }
         let basename = (path as NSString).lastPathComponent
         do {
-            let data = try await sftp.download(remotePath: path)
-            let dest = try ExternalFileStager.stage(data: data, suggestedName: basename)
+            // 流式落盘。走这条路的正是被类型/大小挡下来的文件（几百 MB 的压缩包、
+            // 镜像、视频），先读成 Data 会把整个文件搬进内存。
+            let dest = try ExternalFileStager.prepareDestination(suggestedName: basename)
+            try await sftp.download(remotePath: path, toLocalURL: dest, onProgress: nil)
+            try ExternalFileStager.restrictPermissions(at: dest)
             NSWorkspace.shared.open(dest)
         } catch {
             let alert = NSAlert()
@@ -420,6 +421,71 @@ struct WorkspaceWindowView: View {
         }
     }
 
+}
+
+/// 被挡在编辑器之外的文件：要么类型本就不该进编辑器，要么太大。
+/// 两种都只剩「外部打开 / 取消」两条路。
+private struct BlockedFile: Identifiable {
+    enum Kind { case unsupportedType, tooLarge }
+    enum Reason: Equatable {
+        case unsupportedType(ext: String)
+        case tooLarge(size: Int64)
+
+        var kind: Kind {
+            switch self {
+            case .unsupportedType: return .unsupportedType
+            case .tooLarge:        return .tooLarge
+            }
+        }
+    }
+    let id = UUID()
+    let path: String
+    let reason: Reason
+}
+
+private func formattedFileSize(_ n: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+}
+
+/// 「打不开」的两个 alert。**两个**而不是一个带分支标题的：`.alert` 的标题位置
+/// 只有写成字面量才会被抽进 `Localizable.xcstrings`，用变量（哪怕类型是
+/// `LocalizedStringKey`）这两句标题就从本地化里整个消失。
+private struct BlockedFileAlerts: ViewModifier {
+    @Binding var blocked: BlockedFile?
+    let openExternally: (String) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("不支持的文件类型",
+                   isPresented: presenting(.unsupportedType),
+                   presenting: blocked) { file in
+                actions(for: file)
+            } message: { file in
+                if case .unsupportedType(let ext) = file.reason {
+                    Text(".\(ext) 文件不是文本，无法在编辑器里打开。可以下载到本地用外部应用打开。")
+                }
+            }
+            .alert("文件太大",
+                   isPresented: presenting(.tooLarge),
+                   presenting: blocked) { file in
+                actions(for: file)
+            } message: { file in
+                if case .tooLarge(let size) = file.reason {
+                    Text("该文件 \(formattedFileSize(size))，超过 50 MB 上限。建议用外部编辑器。")
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func actions(for file: BlockedFile) -> some View {
+        Button("外部打开") { openExternally(file.path) }
+        Button("取消", role: .cancel) {}
+    }
+
+    private func presenting(_ kind: BlockedFile.Kind) -> Binding<Bool> {
+        Binding(get: { blocked?.reason.kind == kind },
+                set: { if !$0 { blocked = nil } })
+    }
 }
 
 /// 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）的接收端：广播到所有
