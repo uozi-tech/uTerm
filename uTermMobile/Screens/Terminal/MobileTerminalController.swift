@@ -43,9 +43,32 @@ final class MobileTerminalController {
     @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
+    ///
+    /// `TerminalScreen` 把所有会话常驻挂载（`ZStack { ForEach(tabs) }`，非活动片只是
+    /// `opacity(0)` + 移出屏外），所以后台会话的终端视图**照样每 16ms 被 feed 一次、
+    /// 照样重绘**。探针实测：4 个会话各 2000 行/秒时，只有一个在吐 vs 四个都在吐，
+    /// 主线程单帧 p50 0.06ms → 3.94ms、超 8.33ms 帧 0% → 16.6%（`term-ab-*`）。
+    ///
+    /// 修法是**降频不丢字节**：后台会话把 feed 节拍从 16ms 降到 250ms，单次 drain 上限
+    /// 相应放大，字节照常进有界缓冲一个不少（回滚缓冲、`cat` 的完整输出都不受影响），
+    /// 只是不再每 16ms 逼 SwiftTerm 解析 + 重绘一次。切回前台立刻重启泵，把那一段
+    /// 等待截断——否则切过去最多要干等 250ms 才看到积压。
+    var isForeground = true {
+        didSet {
+            guard isForeground != oldValue, isForeground, outputFlushTask != nil else { return }
+            startOutputFlushLoop(generation: outputGeneration)
+        }
+    }
+
     private var outputGeneration = 0
     private let outputFlushActiveMs = 16
+    /// 后台会话的 feed 节拍（≈4Hz）。
+    private let outputFlushBackgroundMs = 250
     private let maxBytesPerOutputFlush = 32 * 1024
+    /// 后台节拍慢 16 倍，单次上限就得放大同样的量级，否则吞吐被压到 128KB/s，
+    /// 洪水档会把 4MB 环形缓冲挤爆丢字节 —— 那就不是「降频」而是「丢数据」了。
+    private let maxBytesPerBackgroundFlush = 512 * 1024
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
@@ -260,14 +283,17 @@ final class MobileTerminalController {
                     continue
                 }
 
+                let foreground = self.isForeground
                 let chunk = buffer.drain(
-                    maxBytes: self.maxBytesPerOutputFlush,
+                    maxBytes: foreground ? self.maxBytesPerOutputFlush
+                                         : self.maxBytesPerBackgroundFlush,
                     generation: generation)
                 if chunk.isEmpty {
                     await buffer.waitForData()
                 } else {
                     terminalView.feed(byteArray: ArraySlice([UInt8](chunk)))
-                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                    try? await Task.sleep(for: .milliseconds(
+                        foreground ? self.outputFlushActiveMs : self.outputFlushBackgroundMs))
                 }
             }
         }

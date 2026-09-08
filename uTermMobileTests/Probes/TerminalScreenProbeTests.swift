@@ -291,6 +291,79 @@ final class TerminalScreenProbeTests: XCTestCase {
         XCTAssertGreaterThan(four.sleepBeats, 100)
     }
 
+    /// **B 类修正的同轮对照**：4 个会话各 2000 行/秒，只有一个是激活标签。
+    ///
+    /// - 档「全前台」= 改法之前的行为：把每片的 `isForeground` 强行按回 `true`，
+    ///   于是四个终端都按 16ms 节拍 feed + 重绘。
+    /// - 档「按活动态」= 改法之后：`TerminalSessionBody` 把非活动 / Agent 模式的片
+    ///   降到 250ms 节拍（字节照常进有界缓冲，一个不丢）。
+    ///
+    /// 两档在同一轮里跑，只差这一个开关。判定看主线程单帧与超预算比例；
+    /// 同时钉住「降频不等于丢字节」——两档吐出的行数同阶。
+    func testInactiveTabDownshiftAB() async throws {
+        defer { MobileProbeWindow.closeAll() }
+
+        func run(_ label: String, forceAllForeground: Bool) async throws
+            -> (MobileTerminalLoad.Reading, Int, [Int]) {
+            let c = try container()
+            let store = MobileStore()
+            let relay = HostKeyChallengeRelay()
+            let n = 4
+            let script = MobileFakeTerminalScript(linesPerSecond: 2000, seconds: 14)
+            let (sessions, handles) = MobileFakeTerminal.sessions(
+                count: n, hosts: hosts(c, n), script: script, container: c, relay: relay)
+            for tab in sessions.tabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+
+            let rig = MobileProbeRig(label: label)
+            rig.mount(screen(sessions, container: c, store: store, relay: relay))
+            rig.layout()
+            if forceAllForeground {
+                // 视图只在 onAppear / isActive / mode 变化时同步，这里之后不再动它们，
+                // 所以按回去的值在整个量测窗口里都成立。
+                for tab in sessions.tabs { tab.controller.isForeground = true }
+            }
+            let live = sessions.tabs.filter(\.controller.isForeground).count
+            let before = MobileTerminalConsumption.read(sessions.tabs)
+            let reading = try await MobileTerminalLoad.measure(rig, seconds: 8)
+            let after = MobileTerminalConsumption.read(sessions.tabs)
+            let advances = (0..<n).map { after[$0].advanced - before[$0].advanced }
+            var emitted: [Int] = []
+            for h in handles { emitted.append(await h.latest!.ledger.linesEmitted) }
+
+            let shot = await rig.snapshot()
+            rig.report(nil, shot, nil)
+            MobileTerminalLoad.report(label, reading)
+            print("[\(label)-tabs] foreground=\(live)/\(n) advances=\(advances) emitted=\(emitted)")
+            attachProbePNG(shot.png, name: label)
+            XCTAssertGreaterThan(shot.ink, 0.005, "截图是空壳")
+            await rig.close()
+            MobileProbeWindow.closeAll()
+            return (reading, live, emitted)
+        }
+
+        let (before, liveBefore, emittedBefore) = try await run("term-bg-all-foreground", forceAllForeground: true)
+        let (after, liveAfter, emittedAfter) = try await run("term-bg-downshifted", forceAllForeground: false)
+
+        print(String(format: "[term-bg-verdict] foreground %d/4 → %d/4  p50 %.3f → %.3fms (×%.2f)  "
+                     + "p95 %.3f → %.3fms  over-8.33 %.1f%% → %.1f%%  cpu %.3f → %.3fs  "
+                     + "sleep %.2f → %.2f",
+                     liveBefore, liveAfter, before.p50, after.p50,
+                     before.p50 == 0 ? 0 : after.p50 / before.p50,
+                     before.p95, after.p95, before.overStrictPct, after.overStrictPct,
+                     before.cpuSeconds, after.cpuSeconds, before.sleepRatio, after.sleepRatio))
+
+        // 结构判据一：开关真的落到位了。
+        XCTAssertEqual(liveBefore, 4, "「全前台」档没把四片都按成前台")
+        XCTAssertEqual(liveAfter, 1, "「按活动态」档应当只有激活片是前台")
+        // 结构判据二：降频不丢字节 —— 两档吐出的行数同阶（脚本节拍一致）。
+        let sumBefore = emittedBefore.reduce(0, +), sumAfter = emittedAfter.reduce(0, +)
+        XCTAssertGreaterThan(sumAfter, sumBefore / 2,
+                             "降频档吐出的行数掉了一半以上：\(sumBefore) → \(sumAfter)")
+        // 绝对毫秒只打印；这里只挡「两档有一档根本没跑」。
+        XCTAssertGreaterThan(before.sleepBeats, 100)
+        XCTAssertGreaterThan(after.sleepBeats, 100)
+    }
+
     // MARK: - 尺四：键盘面板展开的挂载账
 
     /// `TerminalKeyBar` 收起 vs 展开。展开面板是 4 个 `LazyVGrid` 共 57 个键帽，

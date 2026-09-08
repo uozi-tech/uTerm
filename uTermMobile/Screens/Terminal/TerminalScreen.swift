@@ -422,6 +422,18 @@ struct TerminalSessionBody: View {
                 .offset(x: tab.mode == .terminal ? 0 : -100_000)
         }
         .background(tab.mode == .terminal ? terminalBg : M.canvas)
+        // 非活动 / Agent 模式的会话把终端 feed 节拍降下来（字节照常进缓冲，不丢）。
+        // 所有会话常驻挂载，不降频的话切走的终端仍在按 60Hz 解析 + 重绘。
+        .onAppear { syncForeground() }
+        .onChange(of: isActive) { _, _ in syncForeground() }
+        .onChange(of: tab.mode) { _, _ in syncForeground() }
+    }
+
+    /// 只有「当前激活标签 + 终端模式」的那一片算前台。
+    /// 刻意不接 `onDisappear`：外壳在 Tab/Split 间切换时 `TerminalScreen` 会重建，
+    /// 旧片的 `onDisappear` 可能晚于新片的 `onAppear` 到，置 false 会把会话卡在后台档。
+    private func syncForeground() {
+        tab.controller.isForeground = isActive && tab.mode == .terminal
     }
 
     private var terminalLayer: some View {
