@@ -102,6 +102,11 @@ ENV_FILE := .env
 VERSION_XCCONFIG := Config/Version.xcconfig
 # Single source of truth: read MARKETING_VERSION from the xcconfig; allow VERSION override.
 VERSION ?= $(shell scripts/bump-version.sh print)
+# iOS 的版本号是**另一份**真值源（Config/VersionMobile.xcconfig，由 uTermMobile /
+# uTermMobileTests 的 target 级 baseConfigurationReference 叠在 project 级之上覆盖）。
+# 两个平台在各自的商店里独立递增，所有 mobile 目标一律读 MOBILE_VERSION，不要用 VERSION。
+MOBILE_VERSION_XCCONFIG := Config/VersionMobile.xcconfig
+MOBILE_VERSION ?= $(shell scripts/bump-version.sh --mobile print)
 # Build id; matches the "Set Build Number" Run Script (git commit count).
 BUILD_NUMBER ?= $(shell git rev-list --count HEAD)
 APPCAST_DMG_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).dmg
@@ -109,6 +114,7 @@ APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
+	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile release-mobile \
@@ -141,12 +147,16 @@ help:
 	@printf '%s\n' '  make dry-run                           Validate release commands (no network)'
 	@printf '%s\n' ''
 	@printf '%s\n' '  iOS / TestFlight:'
+	@printf '%s\n' '  make print-version-mobile              Print uTermMobile MARKETING_VERSION'
+	@printf '%s\n' '  make set-version-mobile VERSION=x.y.z  Set the uTermMobile semantic version'
+	@printf '%s\n' '  make bump-{patch,minor,major}-mobile   Increment the uTermMobile semantic version'
 	@printf '%s\n' '  make archive-mobile                    Archive uTermMobile for generic/platform=iOS'
 	@printf '%s\n' '  make export-mobile                     Export an App Store-signed .ipa + verify signing'
 	@printf '%s\n' '  make verify-mobile-signing             Check the .ipa signing authority / entitlements'
 	@printf '%s\n' '  make upload-mobile                     Upload the archive to App Store Connect (TestFlight)'
 	@printf '%s\n' '  make notify-mobile                     Send the WeCom TestFlight notification'
 	@printf '%s\n' '  make release-mobile                    archive, export, upload, notify'
+	@printf '%s\n' '  make tag-mobile                        Create the mobile-v<VERSION> git tag'
 
 list:
 	xcodebuild -list -project "$(PROJECT)"
@@ -166,6 +176,23 @@ bump-minor:
 
 bump-major:
 	@scripts/bump-version.sh major
+
+# 同一个脚本，靠 --mobile 选目标文件（Config/VersionMobile.xcconfig）。
+print-version-mobile:
+	@scripts/bump-version.sh --mobile print
+
+set-version-mobile:
+	@[ "$(origin VERSION)" = "command line" ] || { echo 'Usage: make set-version-mobile VERSION=x.y.z' >&2; exit 1; }
+	@scripts/bump-version.sh --mobile set "$(VERSION)"
+
+bump-patch-mobile:
+	@scripts/bump-version.sh --mobile patch
+
+bump-minor-mobile:
+	@scripts/bump-version.sh --mobile minor
+
+bump-major-mobile:
+	@scripts/bump-version.sh --mobile major
 
 build:
 	xcodebuild \
@@ -428,16 +455,26 @@ upload-mobile:
 		-exportPath "$(MOBILE_UPLOAD_DIR)" \
 		-exportOptionsPlist "$(MOBILE_UPLOAD_OPTIONS)" \
 		-allowProvisioningUpdates $$auth
-	@printf '%s\n' "Uploaded $(MOBILE_APP_NAME) $(VERSION) (build $(BUILD_NUMBER)) to App Store Connect."
+	@printf '%s\n' "Uploaded $(MOBILE_APP_NAME) $(MOBILE_VERSION) (build $(BUILD_NUMBER)) to App Store Connect."
 
 notify-mobile:
 	scripts/notify-wecom.sh \
 		--platform ios \
-		--version "$(VERSION)" \
+		--version "$(MOBILE_VERSION)" \
 		--build "$(BUILD_NUMBER)"
 
 # iOS 没有 Sparkle / OSS 这一段：产物直接交给 App Store Connect，用户从 TestFlight 更新。
 release-mobile: archive-mobile export-mobile upload-mobile notify-mobile
+
+# iOS 的 tag 前缀是 mobile-v，与 macOS 的 v<VERSION> 分开（两套版本号会撞车）。
+tag-mobile:
+	@v="$(MOBILE_VERSION)"; \
+	if git rev-parse "mobile-v$$v" >/dev/null 2>&1; then \
+		printf '%s\n' "Tag mobile-v$$v already exists, skipping."; \
+	else \
+		git tag "mobile-v$$v"; \
+		printf '%s\n' "Created tag mobile-v$$v. Push with: git push origin mobile-v$$v"; \
+	fi
 
 tag:
 	@v="$(VERSION)"; \

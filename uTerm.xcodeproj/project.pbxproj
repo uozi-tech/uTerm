@@ -65,6 +65,7 @@
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000C /* uTermMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = VersionMobile.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -371,6 +372,7 @@
 			isa = PBXGroup;
 			children = (
 				CFCFCFCF000000000000F0F0 /* Version.xcconfig */,
+				CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -688,6 +690,7 @@
 /* Begin XCBuildConfiguration section */
 		10C0DE0000000000000000F1 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -726,6 +729,7 @@
 		};
 		10C0DE0000000000000000F2 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -1022,6 +1026,7 @@
 		};
 		B10000000000000000000007 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
@@ -1047,6 +1052,7 @@
 		};
 		B10000000000000000000008 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;

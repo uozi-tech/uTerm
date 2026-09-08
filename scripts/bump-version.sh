@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Single source of truth version manager for uTerm.
-# Reads / writes MARKETING_VERSION (semver X.Y.Z) in Config/Version.xcconfig.
+# Reads / writes MARKETING_VERSION (semver X.Y.Z) in an xcconfig.
+# 两个平台各有一份，靠「目标文件」参数选，而不是复制一份脚本：
+#   macOS (uTerm)       -> Config/Version.xcconfig        （默认）
+#   iOS   (uTermMobile) -> Config/VersionMobile.xcconfig  （--mobile）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,15 +12,29 @@ XCCONFIG="${VERSION_XCCONFIG:-$REPO_ROOT/Config/Version.xcconfig}"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: bump-version.sh <command>
+Usage: bump-version.sh [--mobile | --file PATH] <command>
   print            Print current MARKETING_VERSION
   patch            X.Y.Z -> X.Y.(Z+1)
   minor            X.Y.Z -> X.(Y+1).0
   major            X.Y.Z -> (X+1).0.0
   set X.Y.Z        Set explicit version
+
+Target file (默认 Config/Version.xcconfig，即 macOS 的 uTerm):
+  --mobile         改用 Config/VersionMobile.xcconfig（iOS 的 uTermMobile）
+  --file PATH      改用任意 xcconfig（测试用；等价的环境变量是 VERSION_XCCONFIG）
 EOF
 	exit 2
 }
+
+# 目标文件选项必须在命令之前。VERSION_XCCONFIG 环境变量仍然有效（自测在用），
+# 显式选项优先级高于环境变量。
+while [ "$#" -gt 0 ]; do
+	case "${1:-}" in
+		--mobile) XCCONFIG="$REPO_ROOT/Config/VersionMobile.xcconfig"; shift ;;
+		--file)   [ "$#" -ge 2 ] || usage; XCCONFIG="$2"; shift 2 ;;
+		*) break ;;
+	esac
+done
 
 read_version() {
 	if [ ! -f "$XCCONFIG" ]; then
@@ -40,7 +57,7 @@ write_version() {
 		exit 1
 	fi
 	local tmp
-	tmp="$(mktemp "$(dirname "$XCCONFIG")/.Version.xcconfig.XXXXXX")"
+	tmp="$(mktemp "$(dirname "$XCCONFIG")/.$(basename "$XCCONFIG").XXXXXX")"
 	sed -E "s/^([[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*).*/\1$new/" "$XCCONFIG" > "$tmp"
 	mv "$tmp" "$XCCONFIG"
 	printf '%s\n' "$new"
