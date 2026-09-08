@@ -10,6 +10,19 @@ nonisolated enum ExternalFileStager {
         suggestedName: String,
         rootDirectory: URL = FileManager.default.temporaryDirectory
     ) throws -> URL {
+        let destination = try prepareDestination(suggestedName: suggestedName,
+                                                 rootDirectory: rootDirectory)
+        try data.write(to: destination, options: .atomic)
+        try restrictPermissions(at: destination)
+        return destination
+    }
+
+    /// 只备好目标路径（0700 私有目录 + 清洗过的文件名），内容由调用方**流式**写入。
+    /// 归档/媒体这类只能外部打开的文件动辄上百 MB，先 `Data` 到内存再落盘不可行。
+    static func prepareDestination(
+        suggestedName: String,
+        rootDirectory: URL = FileManager.default.temporaryDirectory
+    ) throws -> URL {
         let manager = FileManager.default
         let directory = rootDirectory
             .appendingPathComponent("uterm-external-open", isDirectory: true)
@@ -20,13 +33,14 @@ nonisolated enum ExternalFileStager {
             attributes: [.posixPermissions: 0o700])
         try manager.setAttributes([.posixPermissions: 0o700],
                                   ofItemAtPath: directory.path)
-
-        let destination = directory.appendingPathComponent(
+        return directory.appendingPathComponent(
             sanitizedFileName(suggestedName), isDirectory: false)
-        try data.write(to: destination, options: .atomic)
-        try manager.setAttributes([.posixPermissions: 0o600],
-                                  ofItemAtPath: destination.path)
-        return destination
+    }
+
+    /// 内容落盘后收紧到 0600（流式写入的实现走同目录临时文件 + rename，权限得自己压）。
+    static func restrictPermissions(at url: URL) throws {
+        try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                              ofItemAtPath: url.path)
     }
 
     static func sanitizedFileName(_ suggestedName: String) -> String {
