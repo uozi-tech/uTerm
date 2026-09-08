@@ -93,4 +93,84 @@ else
 	echo "ok: macos without --url rejected"
 fi
 
+# 7) --notes-file：分组正文走 markdown_v2，标题/版本行/分组标题都在
+cat > "$tmp/notes.md" <<'MD'
+新功能
+- 加了一个能看见的东西。
+
+性能提升
+- 某处 316ms → 21ms（−93%）。
+MD
+OUT="$tmp/body4.json" WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform ios --version 1.0.0 --build 323 --notes-file "$tmp/notes.md" >/dev/null
+if python3 - "$tmp/body4.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["msgtype"] == "markdown_v2", d["msgtype"]
+c = d["markdown_v2"]["content"]
+for needle in ("# uTermMobile 1.0.0 已上传 TestFlight", "版本：1.0.0 (build 323)",
+               "渠道：TestFlight", "新功能", "性能提升", "316ms → 21ms"):
+    assert needle in c, needle
+assert "\n" in c
+PY
+then
+	echo "ok: --notes-file sends a grouped markdown_v2 body"
+else
+	echo "FAIL: --notes-file body is wrong"; fail=1
+fi
+
+# 7b) 不给 --notes-file 时仍是老的一句话 markdown（回退分支没被改坏）
+if python3 - "$tmp/body3.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if d["msgtype"] == "markdown" else 1)
+PY
+then
+	echo "ok: without --notes-file the one-liner stays msgtype=markdown"
+else
+	echo "FAIL: one-liner fallback changed msgtype"; fail=1
+fi
+
+# 7c) macOS 也能用 --notes-file，正文带下载链接
+OUT="$tmp/body5.json" WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --version 1.11.0 --build 313 --url "http://x/uTerm-1.11.0-313.dmg" \
+	--notes-file "$tmp/notes.md" >/dev/null
+if python3 - "$tmp/body5.json" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))["markdown_v2"]["content"]
+for needle in ("# uTerm 1.11.0 已发布", "下载：http://x/uTerm-1.11.0-313.dmg", "新功能"):
+    assert needle in c, needle
+PY
+then
+	echo "ok: macos --notes-file body carries the DMG link"
+else
+	echo "FAIL: macos --notes-file body is wrong"; fail=1
+fi
+
+# 8) --notes-file 指向不存在的文件 -> 非零退出
+if WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform ios --version 1.0.0 --build 323 --notes-file "$tmp/nope.md" 2>/dev/null; then
+	echo "FAIL: missing notes file accepted"; fail=1
+else
+	echo "ok: missing notes file rejected"
+fi
+
+# 9) --notes-file 是空文件 -> 非零退出（空正文发出去等于没发）
+: > "$tmp/empty.md"
+if WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform ios --version 1.0.0 --build 323 --notes-file "$tmp/empty.md" 2>/dev/null; then
+	echo "FAIL: empty notes file accepted"; fail=1
+else
+	echo "ok: empty notes file rejected"
+fi
+
+# 10) --notes 与 --notes-file 同时给 -> 非零退出
+if WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform ios --version 1.0.0 --build 323 \
+	--notes 'x' --notes-file "$tmp/notes.md" 2>/dev/null; then
+	echo "FAIL: --notes + --notes-file accepted"; fail=1
+else
+	echo "ok: --notes + --notes-file rejected"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "TESTS FAILED"; exit 1; }

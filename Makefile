@@ -65,6 +65,15 @@ MOBILE_UPLOAD_OPTIONS := Config/ExportOptions-ios-upload.plist
 # 想让它照常联网解析依赖就传空值：make archive-mobile MOBILE_PACKAGE_ARGS=
 MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
 
+# 本次发版的分组发布日志（Markdown）。同一份文案喂三个地方：企微分组通告、
+# TestFlight 的 What to Test、RELEASE_LOG.md 的「本次更新」。约定路径带版本与
+# build 号，且**必须在 archive 之前写好**——`make release` 的 clean 会清空 build/，
+# 但 iOS 这条链路不跑 clean，所以放 build/mobile/notes/ 是安全的。
+# 显式覆盖：make notify-mobile NOTES=path/to/notes.md
+# 用递归展开（=，不是 :=）：MOBILE_VERSION / BUILD_NUMBER 在文件更下面才定义。
+MOBILE_NOTES_PATH = $(MOBILE_BUILD_DIR)/notes/$(MOBILE_APP_NAME)-$(MOBILE_VERSION)-$(BUILD_NUMBER).md
+NOTES ?= $(wildcard $(MOBILE_NOTES_PATH))
+
 # App Store Connect 认证片段，archive / export / upload 三处共用一份。
 # 从 $(ENV_FILE) 读 ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH（见 .env.example），三个
 # 都配齐才拼出 xcodebuild 的 -authenticationKey* 三件套并写进 shell 变量 $$auth；否则
@@ -125,7 +134,8 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
-	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile release-mobile \
+	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
+	testflight-notes-mobile release-mobile \
 	release tag notify sparkle-tools sparkle-keys appcast publish distribute dry-run
 
 help:
@@ -162,8 +172,9 @@ help:
 	@printf '%s\n' '  make export-mobile                     Export an App Store-signed .ipa + verify signing'
 	@printf '%s\n' '  make verify-mobile-signing             Check the .ipa signing authority / entitlements'
 	@printf '%s\n' '  make upload-mobile                     Upload the archive to App Store Connect (TestFlight)'
-	@printf '%s\n' '  make notify-mobile                     Send the WeCom TestFlight notification'
-	@printf '%s\n' '  make release-mobile                    archive, export, upload, notify'
+	@printf '%s\n' '  make notify-mobile [NOTES=notes.md]    Send the WeCom TestFlight notification'
+	@printf '%s\n' '  make testflight-notes-mobile NOTES=f   Write TestFlight "What to Test" via the ASC API'
+	@printf '%s\n' '  make release-mobile [NOTES=notes.md]   archive, export, upload, notify, TestFlight notes'
 	@printf '%s\n' '  make tag-mobile                        Create the mobile-v<VERSION> git tag'
 
 list:
@@ -466,14 +477,35 @@ upload-mobile:
 		-allowProvisioningUpdates $$auth
 	@printf '%s\n' "Uploaded $(MOBILE_APP_NAME) $(MOBILE_VERSION) (build $(BUILD_NUMBER)) to App Store Connect."
 
+# NOTES=<markdown> 时发分组通告（markdown_v2：标题 + 版本/渠道行 + 四组），
+# 不给就退回一句话「已上传 TestFlight」。NOTES 缺省取 MOBILE_NOTES_PATH（存在才算）。
 notify-mobile:
 	scripts/notify-wecom.sh \
 		--platform ios \
 		--version "$(MOBILE_VERSION)" \
-		--build "$(BUILD_NUMBER)"
+		--build "$(BUILD_NUMBER)" \
+		$(if $(NOTES),--notes-file "$(NOTES)")
+
+# 把同一份分组日志写进 TestFlight 的「测试信息 / What to Test」。
+# .env 配了 ASC_KEY_* 就走 App Store Connect API 自动写入（会等构建处理完），
+# 没配就把纯文本打印出来让人手动粘贴——两种情况都算成功，不卡发版。
+testflight-notes-mobile:
+	@[ -n "$(NOTES)" ] || { printf '%s\n' 'Usage: make testflight-notes-mobile NOTES=<notes.md>' >&2; \
+		printf '%s\n' '  (缺省会找 $(MOBILE_NOTES_PATH))' >&2; exit 1; }
+	scripts/testflight-notes.sh \
+		--version "$(MOBILE_VERSION)" \
+		--build "$(BUILD_NUMBER)" \
+		--notes-file "$(NOTES)"
 
 # iOS 没有 Sparkle / OSS 这一段：产物直接交给 App Store Connect，用户从 TestFlight 更新。
-release-mobile: archive-mobile export-mobile upload-mobile notify-mobile
+# 顺序写死成串行的 $(MAKE) 调用（不靠先决条件的次序），因为上传必须排在导出之后、
+# 通告必须排在上传之后。NOTES 给了才写 TestFlight 测试信息。
+release-mobile:
+	$(MAKE) export-mobile
+	$(MAKE) upload-mobile
+	$(MAKE) notify-mobile NOTES="$(NOTES)"
+	@if [ -n "$(NOTES)" ]; then $(MAKE) testflight-notes-mobile NOTES="$(NOTES)"; \
+	else printf '%s\n' 'No NOTES=<markdown>; skipped the TestFlight "What to Test" step.'; fi
 
 # iOS 的 tag 前缀是 mobile-v，与 macOS 的 v<VERSION> 分开（两套版本号会撞车）。
 tag-mobile:
