@@ -65,6 +65,26 @@ MOBILE_UPLOAD_OPTIONS := Config/ExportOptions-ios-upload.plist
 # 想让它照常联网解析依赖就传空值：make archive-mobile MOBILE_PACKAGE_ARGS=
 MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
 
+# App Store Connect 认证片段，archive / export / upload 三处共用一份。
+# 从 $(ENV_FILE) 读 ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH（见 .env.example），三个
+# 都配齐才拼出 xcodebuild 的 -authenticationKey* 三件套并写进 shell 变量 $$auth；否则
+# $$auth 为空，回退到 Xcode 已登录的 Apple ID。
+# 这三个参数不只是上传要用：-allowProvisioningUpdates 用它们代替「Xcode 登录的账号」去
+# App Store Connect 自动签发 Apple Distribution 证书与 App Store profile（Xcode 13+），
+# 所以 archive 与 export 也要带上 —— 本机没登录任何有权限的账号时，这是唯一的走法。
+# 用法（必须和 xcodebuild 在同一个 shell 里）：
+#   @set -e; $(MOBILE_ASC_AUTH); xcodebuild ... -allowProvisioningUpdates $$auth
+MOBILE_ASC_AUTH = \
+	if [ -f "$(ENV_FILE)" ]; then set -a; . ./$(ENV_FILE); set +a; fi; \
+	auth=""; \
+	if [ -n "$${ASC_KEY_ID:-}" ] && [ -n "$${ASC_ISSUER_ID:-}" ] && [ -n "$${ASC_KEY_PATH:-}" ]; then \
+		printf '%s\n' "Authenticating with App Store Connect API key $$ASC_KEY_ID"; \
+		test -f "$$ASC_KEY_PATH" || { printf '%s\n' "ERROR: ASC_KEY_PATH=$$ASC_KEY_PATH does not exist."; exit 1; }; \
+		auth="-authenticationKeyPath $$ASC_KEY_PATH -authenticationKeyID $$ASC_KEY_ID -authenticationKeyIssuerID $$ASC_ISSUER_ID"; \
+	else \
+		printf '%s\n' "No ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_PATH in $(ENV_FILE); using the Apple ID Xcode is signed in to."; \
+	fi
+
 INSTALL_DIR := /Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
@@ -299,13 +319,20 @@ staple:
 # 与 macOS 一样分两步：archive 用 automatic 开发签名（不带分发 profile），真正的
 # 分发签名在 export 时重签。分开的好处同样是「export 失败不浪费这次编译」。
 # 前置条件（本机做不了，出错时看 .claude/skills/release/SKILL.md 的 iOS 分支）：
+#   - 认证二选一：Xcode 登录了对 TEAM_ID 有 App Store Connect 权限的 Apple ID，
+#     或 .env 里配好 ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH（见上面的 MOBILE_ASC_AUTH）。
+#     API key 这条路 archive / export / upload 三步都会用，证书与 profile 由
+#     -allowProvisioningUpdates 自动签发，本机不需要登录任何账号；
 #   - App Store Connect 里已有 bundle id com.uozi.uTermMobile 的应用记录；
-#   - 团队 TEAM_ID 下有 Apple Distribution 证书；
+#   - 团队 TEAM_ID 下有 Apple Distribution 证书（没有时 API key 会自动签发一张）；
 #   - App ID 已开 iCloud（容器 iCloud.com.uozi.uTerm）与 Push Notifications 能力，
 #     否则 automatic signing 拉到的 profile 缺能力，export 会在重签这一步失败。
 archive-mobile:
 	rm -rf "$(MOBILE_ARCHIVE_PATH)"
 	mkdir -p "$(MOBILE_BUILD_DIR)"
+	@set -e; \
+	$(MOBILE_ASC_AUTH); \
+	set -x; \
 	xcodebuild archive \
 		-project "$(PROJECT)" \
 		-scheme "$(MOBILE_SCHEME)" \
@@ -315,7 +342,7 @@ archive-mobile:
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-skipPackagePluginValidation \
 		$(MOBILE_PACKAGE_ARGS) \
-		-allowProvisioningUpdates \
+		-allowProvisioningUpdates $$auth \
 		CODE_SIGN_STYLE=Automatic \
 		DEVELOPMENT_TEAM=$(TEAM_ID)
 	test -d "$(MOBILE_ARCHIVE_APP)"
@@ -334,11 +361,14 @@ archive-mobile:
 # 导出 App Store 分发签名的 .ipa 到 build/mobile/export/（不上传）。
 export-mobile: archive-mobile
 	rm -rf "$(MOBILE_EXPORT_DIR)"
+	@set -e; \
+	$(MOBILE_ASC_AUTH); \
+	set -x; \
 	xcodebuild -exportArchive \
 		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
 		-exportPath "$(MOBILE_EXPORT_DIR)" \
 		-exportOptionsPlist "$(MOBILE_EXPORT_OPTIONS)" \
-		-allowProvisioningUpdates
+		-allowProvisioningUpdates $$auth
 	test -f "$(MOBILE_IPA)"
 	@printf '%s\n' "Exported App Store ipa: $(MOBILE_IPA)"
 	$(MAKE) verify-mobile-signing
@@ -384,21 +414,15 @@ verify-mobile-signing:
 	printf '%s\n' 'iCloud container OK: iCloud.com.uozi.uTerm'; \
 	printf '%s\n' "Distribution signing OK: $(MOBILE_IPA)"
 
-# 上传 archive 到 App Store Connect（TestFlight）。认证优先用 .env 里的 API key
-# （ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH，见 .env.example），三个都配齐才生效；
-# 否则回退到 Xcode 已登录的 Apple ID（会话过期时 xcodebuild 会自己报认证失败）。
+# 上传 archive 到 App Store Connect（TestFlight）。认证同 archive / export，走共用的
+# MOBILE_ASC_AUTH：.env 里的 API key 优先，没有则回退到 Xcode 已登录的 Apple ID
+# （会话过期时 xcodebuild 会自己报认证失败）。
 upload-mobile:
 	test -d "$(MOBILE_ARCHIVE_PATH)"
 	mkdir -p "$(MOBILE_UPLOAD_DIR)"
 	@set -e; \
-	if [ -f "$(ENV_FILE)" ]; then set -a; . ./$(ENV_FILE); set +a; fi; \
-	auth=""; \
-	if [ -n "$${ASC_KEY_ID:-}" ] && [ -n "$${ASC_ISSUER_ID:-}" ] && [ -n "$${ASC_KEY_PATH:-}" ]; then \
-		printf '%s\n' "Authenticating with App Store Connect API key $$ASC_KEY_ID"; \
-		auth="-authenticationKeyPath $$ASC_KEY_PATH -authenticationKeyID $$ASC_KEY_ID -authenticationKeyIssuerID $$ASC_ISSUER_ID"; \
-	else \
-		printf '%s\n' "No ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_PATH in $(ENV_FILE); using the Apple ID Xcode is signed in to."; \
-	fi; \
+	$(MOBILE_ASC_AUTH); \
+	set -x; \
 	xcodebuild -exportArchive \
 		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
 		-exportPath "$(MOBILE_UPLOAD_DIR)" \
