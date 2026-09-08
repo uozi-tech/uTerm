@@ -26,6 +26,8 @@ struct MobileAgentChat: View {
 
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
+    /// 工具执行器的工厂注入口（默认 `.live` —— 真 SSH 执行器，生产路径与改前逐字等价）。
+    @Environment(\.agentCommandExecutorFactory) private var executorFactory
     @Query(sort: [SortDescriptor(\AIProvider.sortOrder)]) private var providers: [AIProvider]
     // 会话历史下拉只列最近 `ChatSessionQueries.recentLimit` 条（与 macOS 的
     // `AssistantView` / `TerminalAgentView` 同一个描述符）。改前是无 `fetchLimit`
@@ -89,9 +91,9 @@ struct MobileAgentChat: View {
             }
         }
         // 执行器一次性构造（host 固定不变）：缺失则状态机不暴露工具，退化为纯文本对话。
+        // 经 `\.agentCommandExecutorFactory` 注入口取 —— 默认 `.live` 即改前那两行。
         if model.executor == nil {
-            let made = try? WorkspaceCommandExecutorFactory.make(server: host, container: context.container)
-            model.executor = made?.executor
+            model.executor = executorFactory.make(host, context.container)
         }
         autoApproveNextIfNeeded()
     }
