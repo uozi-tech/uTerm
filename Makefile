@@ -358,7 +358,8 @@ staple:
 #     或 .env 里配好 ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH（见上面的 MOBILE_ASC_AUTH）。
 #     API key 这条路 archive / export / upload 三步都会用，证书与 profile 由
 #     -allowProvisioningUpdates 自动签发，本机不需要登录任何账号；
-#   - App Store Connect 里已有 bundle id com.uozi.uTermMobile 的应用记录；
+#   - App Store Connect 里已有 bundle id com.uozi.uTerm 的应用记录（iOS 与 macOS 共用同一个
+#     bundle id com.uozi.uTerm，进同一个 App Store Connect 记录，即通用购买形态）；
 #   - 团队 TEAM_ID 下有 Apple Distribution 证书（没有时 API key 会自动签发一张）；
 #   - App ID 已开 iCloud（容器 iCloud.com.uozi.uTerm）与 Push Notifications 能力，
 #     否则 automatic signing 拉到的 profile 缺能力，export 会在重签这一步失败。

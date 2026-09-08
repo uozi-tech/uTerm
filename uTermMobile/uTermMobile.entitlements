@@ -24,7 +24,7 @@
 	<key>aps-environment</key>
 	<string>development</string>
 	<!-- 与 macOS 版共用同一钥匙串访问组，读取 iCloud 钥匙串同步过来的密码 / 私钥；
-	     缺此项时 iOS 用默认组（com.uozi.uTermMobile），既读不到 macOS 存的密钥，
+	     缺此项时 iOS 用默认组（等于自己的 bundle id），既读不到 macOS 存的密钥，
 	     访问同步项还会以 errSecMissingEntitlement(-34018) 失败。 -->
 	<key>keychain-access-groups</key>
 	<array>
