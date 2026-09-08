@@ -4,37 +4,23 @@ import SwiftData
 
 /// 假并行执行：n 台各以 50 行/秒追加输出、跑 10 秒、可配失败台数。
 ///
-/// ## 为什么不是「给 ParallelRunController 注入一个假 executor」
+/// ## 三种用法
 ///
-/// `ParallelRunController` 没有 executor 注入点：
+/// 1. **执行器**（`ParallelCommandExecuting`，2026-09-08 产品侧开了缝之后的主用法）：
+///    ```swift
+///    let fake = MobileFakeParallelRun(config: .standard(hosts: 24), targets: hosts)
+///    let controller = ParallelRunController(…, container: container, executor: fake)
+///    ParallelRunView(request: req, makeController: { _ in controller }, onClose: {})
+///    ```
+///    真控制器跑真流程（`runLane` / `markUnreachable` / `finalize` 一条不少），
+///    只是每台的 SSH 会话换成按节拍吐行的假会话 —— **整屏**因此挂得上探针。
+/// 2. `emitAll()`：同步把 `duration × linesPerSecond` 行一次性发完到自己的 `states`。
+///    **行数精确**，自证测试与「一次性挂 N 行有多贵」用这个。
+/// 3. `start()` / `stop()`：自己的 `states` 按真实节拍长（每 20ms 一批），
+///    只量模型侧成本时用。行数受调度抖动影响，只能按区间断言。
 ///
-/// ```swift
-/// private func makeExecTarget(profile:trustNewKeys:) -> ExecTarget {
-///     let made = try WorkspaceCommandExecutorFactory.make(server: profile, container: container, ...)
-/// ```
-///
-/// 工厂在内部按 `ServerProfile` + keychain 现造真连接，控制器只在建连抛错时把
-/// 错误文本记进 `ExecTarget.setupErrorText`。而 `states` 又是 `private(set)`，
-/// 外部连补写都做不到。所以本轮**不碰产品代码**的前提下，假执行只能做成
-/// 「产出同形状 `[PServerState]` 的独立驱动器」：
-///
-/// - 数据形状与 `ParallelRunController.states` **完全一致**（同一个 `PServerState`
-///   类型、同样的 `PLine.Kind` 序列、同样的 tone / exitCode / durationMs 语义），
-///   所以行成本、泳道成本、聚合成本这些**模型侧**的账都量得准；
-/// - 但**挂不进 `ParallelRunView`**：它自己 `@State private var controller` 并在
-///   `onAppear` 里 `setup()` 现造控制器，没有外部注入口；行视图 `ParShellPane` /
-///   `ParAILane` 又是 `private struct`，探针也拿不到。
-///
-/// 要把这一屏整屏挂起来量，产品侧得先开一条缝（`ParallelRunView(controller:)`
-/// 之类的可选注入，或者把 executor 工厂做成可替换）。这条已写进 README 的
-/// 「数据注入口不存在的屏幕」。
-///
-/// ## 两种驱动方式
-///
-/// - `emitAll()`：同步把 `duration × linesPerSecond` 行一次性发完。**行数精确**，
-///   自证测试与「一次性挂载 N 行有多贵」的挂载探针用这个。
-/// - `start()` / `stop()`：真实节拍（`Timer` 每 20ms 发一批），复现「输出一直在长」
-///   的那几秒。行数受调度抖动影响，只能按区间断言。
+/// 2 / 3 产出的 `states` 与 `ParallelRunController.states` **完全同形**（同一个
+/// `PServerState`、同样的 `PLine.Kind` 序列、同样的 tone / exitCode / durationMs 语义）。
 @MainActor
 final class MobileFakeParallelRun {
 
@@ -48,6 +34,11 @@ final class MobileFakeParallelRun {
         var duration: Duration = .seconds(10)
         /// 失败台数（前 `failingHosts` 台以非 0 退出码收尾）。
         var failingHosts: Int = 0
+        /// 连不上的台数（**从末尾数**，与 `failingHosts` 不重叠）：会话 `run` 直接抛错，
+        /// 走控制器的 `markUnreachable`。只在「执行器」用法下生效。
+        var unreachableHosts: Int = 0
+        /// 吐行的节拍（每多少毫秒结算一次「这会儿该吐几行了」）。20ms ≈ 60Hz 一帧多一点。
+        var tickMS: Int = 20
         /// 广播的命令文本（每条泳道第一行是它，`PLine.Kind.cmd`）。
         var command: String = "systemctl restart app && journalctl -u app --since -1min | tail -40"
         /// 确定性随机种子（行内容里的耗时 / 数字靠它）。
@@ -56,13 +47,25 @@ final class MobileFakeParallelRun {
         init(hosts: Int = 8, linesPerSecond: Double = 50,
              duration: Duration = .seconds(10), failingHosts: Int = 0,
              command: String = "systemctl restart app && journalctl -u app --since -1min | tail -40",
-             seedValue: UInt64 = 0x9A11_E15E) {
+             seedValue: UInt64 = 0x9A11_E15E,
+             unreachableHosts: Int = 0, tickMS: Int = 20) {
             self.hosts = hosts
             self.linesPerSecond = linesPerSecond
             self.duration = duration
             self.failingHosts = failingHosts
             self.command = command
             self.seedValue = seedValue
+            self.unreachableHosts = unreachableHosts
+            self.tickMS = tickMS
+        }
+
+        /// 探针档：`hosts` 台在 `seconds` 秒内各流完 `lines` 行（速率 = lines / seconds）。
+        /// 与桌面 `ParallelRunScrollCostTests` 同口径：**不预置历史**，从空开始流。
+        static func streaming(hosts: Int, lines: Int, seconds: Double = 10,
+                              failing: Int = 0, unreachable: Int = 0) -> Config {
+            Config(hosts: hosts, linesPerSecond: Double(lines) / seconds,
+                   duration: .milliseconds(Int(seconds * 1000)), failingHosts: failing,
+                   unreachableHosts: unreachable)
         }
 
         /// 任务给的默认档：n 台 × 50 行/秒 × 10 秒。
@@ -90,6 +93,8 @@ final class MobileFakeParallelRun {
     private var rng: SplitMix64
     private var emitted = 0
     private var pump: Task<Void, Never>?
+    /// 当执行器用时已经发出去几条会话（`makeSession` 对不上 id 时按这个发号）。
+    fileprivate var handedOutSessions = 0
 
     /// 用真主机造泳道（`ServerProfile` 来自 `MobileFixtures`）。
     convenience init(config: Config, targets: [ServerProfile]) {
@@ -190,10 +195,8 @@ final class MobileFakeParallelRun {
             let n = emitted
             for i in states.indices {
                 let failing = i < config.failingHosts
-                // 失败台的输出里混 err 行，成功台是 out/ok —— 四种 `PLine.Kind`
-                // 在一次运行里都要出现，着色分支才走得全。
-                let kind: PLine.Kind = failing && n % 7 == 3 ? .err : (n % 11 == 5 ? .ok : .out)
-                states[i].lines.append(PLine(kind: kind, text: Self.outputLine(host: i, line: n)))
+                states[i].lines.append(PLine(kind: Self.kind(line: n, failing: failing),
+                                             text: Self.outputLine(host: i, line: n)))
             }
             emitted += 1
         }
@@ -216,8 +219,14 @@ final class MobileFakeParallelRun {
         finishedAt = Date()
     }
 
+    /// 失败台的输出里混 err 行，成功台是 out/ok —— 四种 `PLine.Kind`
+    /// 在一次运行里都要出现，着色分支才走得全。
+    nonisolated static func kind(line n: Int, failing: Bool) -> PLine.Kind {
+        failing && n % 7 == 3 ? .err : (n % 11 == 5 ? .ok : .out)
+    }
+
     /// 一行输出。长短混合 + 少量 ANSI 风格的宽字符，逼出真实的排版成本。
-    private static func outputLine(host: Int, line: Int) -> String {
+    nonisolated static func outputLine(host: Int, line: Int) -> String {
         switch line % 6 {
         case 0: return "[\(String(format: "%05d", line))] node-\(host) app.service: active (running)"
         case 1: return "ok"
@@ -229,4 +238,82 @@ final class MobileFakeParallelRun {
         default: return "GET /healthz 200 \(line % 50)ms"
         }
     }
+}
+
+// MARK: - 当执行器用（挂整屏）
+
+extension MobileFakeParallelRun: ParallelCommandExecuting {
+
+    /// 按主机开一条假会话。
+    ///
+    /// 泳道序号优先按 `profile.id` 对上自己的 `states`（用 `targets:` 造的实例走这条），
+    /// 对不上就按调用顺序发号 —— 控制器起任务的顺序就是 `targets` 的顺序。
+    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) -> ParallelExecutionSession {
+        let index = states.firstIndex { $0.id == profile.id } ?? handedOutSessions
+        handedOutSessions += 1
+        let unreachable = index >= config.hosts - config.unreachableHosts
+        let failing = index < config.failingHosts
+        return MobileFakeParallelSession(
+            host: index,
+            totalLines: config.outputLinesPerHost,
+            linesPerSecond: config.linesPerSecond,
+            tickMS: config.tickMS,
+            exitCode: failing ? [1, 2, 127, 137][index % 4] : 0,
+            failing: failing,
+            connectionFailure: unreachable ? "Connection refused (假执行器：第 \(index) 台配成连不上)" : nil)
+    }
+}
+
+/// 一台主机的假会话：按节拍把行吐给控制器，跑满行数后按配置的退出码收尾。
+///
+/// 与真实 `SSHParallelSession` 的唯一差别就是 `onLines` —— 真实 SSH 只能在命令结束后
+/// 一次性给完整输出，这里按 `linesPerSecond` 逐批吐，于是「输出一直在长」的那几秒
+/// 真的在探针里发生（这正是要量的那一段）。
+nonisolated struct MobileFakeParallelSession: ParallelExecutionSession {
+    let host: Int
+    let totalLines: Int
+    let linesPerSecond: Double
+    let tickMS: Int
+    let exitCode: Int
+    let failing: Bool
+    /// 非 nil = 这台压根连不上（`run` 抛错，控制器走 `markUnreachable`）。
+    let connectionFailure: String?
+
+    var setupErrorText: String? { nil }
+
+    func run(_ command: String,
+             onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
+        if let connectionFailure { throw MobileFakeParallelFailure(text: connectionFailure) }
+
+        // 按经过时间结算「这会儿该吐到第几行」，而不是每拍固定几行 ——
+        // 速率不是整数时（1200 行 / 10 秒 = 120 行/秒、每 20ms 2.4 行）这样才不漂。
+        let started = Date()
+        var emitted = 0
+        while emitted < totalLines {
+            try await Task.sleep(for: .milliseconds(tickMS))   // 取消在这里抛
+            let want = min(totalLines, Int(Date().timeIntervalSince(started) * linesPerSecond))
+            guard want > emitted else { continue }
+            onLines((emitted..<want).map { n in
+                PLine(kind: MobileFakeParallelRun.kind(line: n, failing: failing),
+                      text: MobileFakeParallelRun.outputLine(host: host, line: n))
+            })
+            emitted = want
+        }
+        // 收尾行：与 `MobileFakeParallelRun.finish()` 逐字一致。
+        onLines([PLine(kind: failing ? .err : .ok,
+                       text: failing ? "退出码 \(exitCode)" : "完成，退出码 0")])
+        // 行已经吐过了，`output` 只供 AI 提示词与「有没有结果」判定用。
+        return CommandResult(output: "（\(totalLines) 行输出已按节拍回吐）", exitCode: exitCode)
+    }
+
+    func takeHostKeyChallenge() -> HostKeyChallenge? { nil }
+
+    func close() async {}
+}
+
+/// 假会话的连接失败。`localizedDescription` 要如实带出文本 —— 控制器把它摆进
+/// 「连接失败：…」那行，探针据此确认失败路径真的走到了。
+nonisolated struct MobileFakeParallelFailure: LocalizedError {
+    let text: String
+    var errorDescription: String? { text }
 }
