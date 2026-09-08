@@ -68,4 +68,29 @@ else
 	echo "FAIL: body with quotes is invalid JSON"; fail=1
 fi
 
+# 4) --platform ios: TestFlight 文案，且不再强制要求 --url
+OUT="$tmp/body3.json" WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform ios --version 1.11.0 --build 314 >/dev/null
+body3="$(cat "$tmp/body3.json")"
+for needle in "uTermMobile" "1.11.0" "314" "TestFlight"; do
+	case "$body3" in *"$needle"*) echo "ok: ios body contains $needle" ;; *) echo "FAIL: ios body missing $needle"; fail=1 ;; esac
+done
+case "$body3" in *"已发布"*) echo "FAIL: ios body reused the macOS DMG wording"; fail=1 ;; *) echo "ok: ios body uses the TestFlight wording" ;; esac
+
+# 5) 未知 --platform -> 非零退出
+if WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --platform android --version 1.0.0 --build 1 2>/dev/null; then
+	echo "FAIL: unknown platform accepted"; fail=1
+else
+	echo "ok: unknown platform rejected"
+fi
+
+# 6) --platform macos 仍强制要求 --url
+if WECOM_CURL="$tmp/fakecurl" WECHAT_WEBHOOK_URL="http://example/hook" \
+	"$NOTIFY" --version 1.0.0 --build 1 2>/dev/null; then
+	echo "FAIL: macos without --url accepted"; fail=1
+else
+	echo "ok: macos without --url rejected"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "TESTS FAILED"; exit 1; }

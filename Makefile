@@ -46,6 +46,25 @@ EXPORT_DIR := $(BUILD_DIR)/export
 EXPORT_APP := $(EXPORT_DIR)/$(APP_NAME).app
 EXPORT_OPTIONS := $(BUILD_DIR)/export-options.plist
 
+# iOS / TestFlight 分发。与 macOS 同构：archive（automatic 开发签名）+ export（重签成
+# 分发签名）。差别是 method=app-store-connect、产物是 .ipa、终点是 App Store Connect
+# 而不是 OSS + Sparkle —— iOS 没有 Sparkle，更新走 TestFlight / App Store。
+# 导出选项是**受跟踪文件**（Config/ExportOptions-ios*.plist），不像 macOS 那样在 build/ 里现生成，
+# 因为里面写着法务/能力相关的约定（manageAppVersionAndBuildNumber=false 等），值得进版本库。
+MOBILE_APP_NAME := uTermMobile
+MOBILE_BUILD_DIR := $(BUILD_DIR)/mobile
+MOBILE_ARCHIVE_PATH := $(MOBILE_BUILD_DIR)/$(MOBILE_APP_NAME).xcarchive
+MOBILE_EXPORT_DIR := $(MOBILE_BUILD_DIR)/export
+MOBILE_UPLOAD_DIR := $(MOBILE_BUILD_DIR)/upload
+MOBILE_VERIFY_DIR := $(MOBILE_BUILD_DIR)/verify
+MOBILE_IPA := $(MOBILE_EXPORT_DIR)/$(MOBILE_APP_NAME).ipa
+MOBILE_ARCHIVE_APP := $(MOBILE_ARCHIVE_PATH)/Products/Applications/$(MOBILE_APP_NAME).app
+MOBILE_EXPORT_OPTIONS := Config/ExportOptions-ios.plist
+MOBILE_UPLOAD_OPTIONS := Config/ExportOptions-ios-upload.plist
+# 发布 archive 钉住 Package.resolved：依赖版本可复现，且远端偶发不可达时不会整条失败。
+# 想让它照常联网解析依赖就传空值：make archive-mobile MOBILE_PACKAGE_ARGS=
+MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
+
 INSTALL_DIR := /Applications
 INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
@@ -72,6 +91,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
 	build archive export-app test test-mobile clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
+	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile release-mobile \
 	release tag notify sparkle-tools sparkle-keys appcast publish distribute dry-run
 
 help:
@@ -99,6 +119,14 @@ help:
 	@printf '%s\n' '  make notify                            Send WeCom release notification'
 	@printf '%s\n' '  make distribute                        release, appcast, publish, notify'
 	@printf '%s\n' '  make dry-run                           Validate release commands (no network)'
+	@printf '%s\n' ''
+	@printf '%s\n' '  iOS / TestFlight:'
+	@printf '%s\n' '  make archive-mobile                    Archive uTermMobile for generic/platform=iOS'
+	@printf '%s\n' '  make export-mobile                     Export an App Store-signed .ipa + verify signing'
+	@printf '%s\n' '  make verify-mobile-signing             Check the .ipa signing authority / entitlements'
+	@printf '%s\n' '  make upload-mobile                     Upload the archive to App Store Connect (TestFlight)'
+	@printf '%s\n' '  make notify-mobile                     Send the WeCom TestFlight notification'
+	@printf '%s\n' '  make release-mobile                    archive, export, upload, notify'
 
 list:
 	xcodebuild -list -project "$(PROJECT)"
@@ -266,6 +294,127 @@ staple:
 	xcrun stapler staple "$(DMG_PATH)"
 	xcrun stapler validate "$(DMG_PATH)"
 
+# --- iOS / TestFlight ------------------------------------------------------
+#
+# 与 macOS 一样分两步：archive 用 automatic 开发签名（不带分发 profile），真正的
+# 分发签名在 export 时重签。分开的好处同样是「export 失败不浪费这次编译」。
+# 前置条件（本机做不了，出错时看 .claude/skills/release/SKILL.md 的 iOS 分支）：
+#   - App Store Connect 里已有 bundle id com.uozi.uTermMobile 的应用记录；
+#   - 团队 TEAM_ID 下有 Apple Distribution 证书；
+#   - App ID 已开 iCloud（容器 iCloud.com.uozi.uTerm）与 Push Notifications 能力，
+#     否则 automatic signing 拉到的 profile 缺能力，export 会在重签这一步失败。
+archive-mobile:
+	rm -rf "$(MOBILE_ARCHIVE_PATH)"
+	mkdir -p "$(MOBILE_BUILD_DIR)"
+	xcodebuild archive \
+		-project "$(PROJECT)" \
+		-scheme "$(MOBILE_SCHEME)" \
+		-configuration "$(CONFIGURATION)" \
+		-destination "generic/platform=iOS" \
+		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-skipPackagePluginValidation \
+		$(MOBILE_PACKAGE_ARGS) \
+		-allowProvisioningUpdates \
+		CODE_SIGN_STYLE=Automatic \
+		DEVELOPMENT_TEAM=$(TEAM_ID)
+	test -d "$(MOBILE_ARCHIVE_APP)"
+	@printf '%s\n' "Archived: $(MOBILE_ARCHIVE_PATH)"
+	@plutil -p "$(MOBILE_ARCHIVE_APP)/Info.plist" | grep -E 'CFBundleShortVersionString|CFBundleVersion|ITSAppUsesNonExemptEncryption'
+	@have="$$(plutil -extract CFBundleVersion raw -o - "$(MOBILE_ARCHIVE_APP)/Info.plist")"; \
+	want="$(BUILD_NUMBER)"; \
+	if [ "$$have" != "$$want" ]; then \
+		printf '%s\n' "ERROR: CFBundleVersion=$$have but git rev-list --count HEAD=$$want."; \
+		printf '%s\n' '  The uTermMobile "Set Build Number" Run Script did not take effect'; \
+		printf '%s\n' '  (check ENABLE_USER_SCRIPT_SANDBOXING=NO on the uTermMobile target), or HEAD moved mid-build.'; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "Build number OK: CFBundleVersion=$$have"
+
+# 导出 App Store 分发签名的 .ipa 到 build/mobile/export/（不上传）。
+export-mobile: archive-mobile
+	rm -rf "$(MOBILE_EXPORT_DIR)"
+	xcodebuild -exportArchive \
+		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
+		-exportPath "$(MOBILE_EXPORT_DIR)" \
+		-exportOptionsPlist "$(MOBILE_EXPORT_OPTIONS)" \
+		-allowProvisioningUpdates
+	test -f "$(MOBILE_IPA)"
+	@printf '%s\n' "Exported App Store ipa: $(MOBILE_IPA)"
+	$(MAKE) verify-mobile-signing
+
+# 分发签名闸门（对应 macOS 的 verify-distribution-signing）。三条：
+#   1. Authority=Apple Distribution —— 拿到的不是开发证书；
+#   2. entitlements 里 aps-environment=production —— 源文件写的是 development，
+#      Xcode 在 App Store 导出时按 profile 翻成 production；没翻说明拿到的 profile 不对，
+#      装到 TestFlight 上推送注册会失败（CloudKit 同步随之退化）；
+#   3. iCloud 容器 iCloud.com.uozi.uTerm 仍在 —— profile 缺 iCloud 能力时会被悄悄剥掉。
+verify-mobile-signing:
+	test -f "$(MOBILE_IPA)"
+	rm -rf "$(MOBILE_VERIFY_DIR)"
+	mkdir -p "$(MOBILE_VERIFY_DIR)"
+	unzip -q "$(MOBILE_IPA)" -d "$(MOBILE_VERIFY_DIR)"
+	@app="$(MOBILE_VERIFY_DIR)/Payload/$(MOBILE_APP_NAME).app"; \
+	ents="$(MOBILE_VERIFY_DIR)/entitlements.plist"; \
+	test -d "$$app"; \
+	sign_info=$$(codesign -dv --verbose=4 "$$app" 2>&1); \
+	printf '%s\n' "$$sign_info" | grep '^Authority=' || true; \
+	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Apple Distribution'; then \
+		printf '%s\n' 'ERROR: the exported ipa is not signed with an Apple Distribution certificate.'; \
+		printf '%s\n' "  Ensure Xcode is signed in to an Apple ID with an \"Apple Distribution\" certificate for TEAM_ID=$(TEAM_ID)."; \
+		exit 1; \
+	fi; \
+	codesign -d --entitlements - --xml "$$app" > "$$ents" 2>/dev/null || true; \
+	plutil -lint "$$ents" >/dev/null 2>&1 || codesign -d --entitlements :- "$$app" > "$$ents" 2>/dev/null; \
+	aps=$$(plutil -extract 'aps-environment' raw -o - "$$ents" 2>/dev/null || true); \
+	printf '%s\n' "aps-environment=$$aps"; \
+	if [ "$$aps" != "production" ]; then \
+		printf '%s\n' 'ERROR: aps-environment is not "production" in the exported ipa.'; \
+		printf '%s\n' '  TestFlight/App Store builds need the production APNs environment; the source'; \
+		printf '%s\n' '  uTermMobile/uTermMobile.entitlements says development and Xcode rewrites it at'; \
+		printf '%s\n' '  App Store export time. Not rewritten => the profile is not an App Store profile,'; \
+		printf '%s\n' '  or the App ID has no Push Notifications capability.'; \
+		exit 1; \
+	fi; \
+	if ! grep -q 'iCloud.com.uozi.uTerm' "$$ents"; then \
+		printf '%s\n' 'ERROR: the iCloud container iCloud.com.uozi.uTerm is missing from the signed entitlements.'; \
+		printf '%s\n' '  The App ID needs the iCloud/CloudKit capability, otherwise sync with the macOS app breaks.'; \
+		exit 1; \
+	fi; \
+	printf '%s\n' 'iCloud container OK: iCloud.com.uozi.uTerm'; \
+	printf '%s\n' "Distribution signing OK: $(MOBILE_IPA)"
+
+# 上传 archive 到 App Store Connect（TestFlight）。认证优先用 .env 里的 API key
+# （ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH，见 .env.example），三个都配齐才生效；
+# 否则回退到 Xcode 已登录的 Apple ID（会话过期时 xcodebuild 会自己报认证失败）。
+upload-mobile:
+	test -d "$(MOBILE_ARCHIVE_PATH)"
+	mkdir -p "$(MOBILE_UPLOAD_DIR)"
+	@set -e; \
+	if [ -f "$(ENV_FILE)" ]; then set -a; . ./$(ENV_FILE); set +a; fi; \
+	auth=""; \
+	if [ -n "$${ASC_KEY_ID:-}" ] && [ -n "$${ASC_ISSUER_ID:-}" ] && [ -n "$${ASC_KEY_PATH:-}" ]; then \
+		printf '%s\n' "Authenticating with App Store Connect API key $$ASC_KEY_ID"; \
+		auth="-authenticationKeyPath $$ASC_KEY_PATH -authenticationKeyID $$ASC_KEY_ID -authenticationKeyIssuerID $$ASC_ISSUER_ID"; \
+	else \
+		printf '%s\n' "No ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_PATH in $(ENV_FILE); using the Apple ID Xcode is signed in to."; \
+	fi; \
+	xcodebuild -exportArchive \
+		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
+		-exportPath "$(MOBILE_UPLOAD_DIR)" \
+		-exportOptionsPlist "$(MOBILE_UPLOAD_OPTIONS)" \
+		-allowProvisioningUpdates $$auth
+	@printf '%s\n' "Uploaded $(MOBILE_APP_NAME) $(VERSION) (build $(BUILD_NUMBER)) to App Store Connect."
+
+notify-mobile:
+	scripts/notify-wecom.sh \
+		--platform ios \
+		--version "$(VERSION)" \
+		--build "$(BUILD_NUMBER)"
+
+# iOS 没有 Sparkle / OSS 这一段：产物直接交给 App Store Connect，用户从 TestFlight 更新。
+release-mobile: archive-mobile export-mobile upload-mobile notify-mobile
+
 tag:
 	@v="$(VERSION)"; \
 	if git rev-parse "v$$v" >/dev/null 2>&1; then \
@@ -330,3 +479,4 @@ distribute: release sparkle-tools appcast publish notify
 dry-run:
 	$(MAKE) -n sparkle-tools sparkle-keys appcast publish
 	ENV_FILE=.env.example scripts/upload-oss.sh --dry-run
+	$(MAKE) -n archive-mobile export-mobile upload-mobile notify-mobile
