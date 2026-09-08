@@ -27,7 +27,12 @@ struct MobileAgentChat: View {
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\AIProvider.sortOrder)]) private var providers: [AIProvider]
-    @Query(sort: [SortDescriptor(\ChatSession.updatedAt, order: .reverse)]) private var sessions: [ChatSession]
+    // 会话历史下拉只列最近 `ChatSessionQueries.recentLimit` 条（与 macOS 的
+    // `AssistantView` / `TerminalAgentView` 同一个描述符）。改前是无 `fetchLimit`
+    // 的 `@Query`，一开会话就把库里所有 `ChatSession` 取出来物化；
+    // 更糟的是 `TerminalScreen` 给**每个终端 tab** 都挂了一份 `MobileAgentChat`，
+    // 开 n 个标签就是 n 份全表。下拉本身只 `prefix(20)`。
+    @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
 
     @State private var addingProvider = false
     /// 活动 provider 的持久化选择（与 macOS `@AppStorage("activeProviderID")` 对齐：跨会话 / 重启记忆）。
