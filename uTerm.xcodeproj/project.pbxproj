@@ -986,7 +986,7 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/uozi-tech/uAppKit";
+			repositoryURL = "https://github.com/uozi-tech/uAppKit.git";
 			requirement = {
 				kind = upToNextMinorVersion;
 				minimumVersion = 1.4.0;
@@ -994,7 +994,7 @@
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-asn1.git";
+			repositoryURL = "git@github.com:apple/swift-asn1.git";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.7.0;
@@ -1002,7 +1002,7 @@
 		};
 		AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/swiftlang/swift-markdown";
+			repositoryURL = "git@github.com:swiftlang/swift-markdown.git";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 0.4.0;
@@ -1010,7 +1010,7 @@
 		};
 		B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-crypto.git";
+			repositoryURL = "git@github.com:apple/swift-crypto.git";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 4.0.0;
@@ -1018,7 +1018,7 @@
 		};
 		C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/uozi-tech/Citadel";
+			repositoryURL = "https://github.com/uozi-tech/Citadel.git";
 			requirement = {
 				kind = exactVersion;
 				version = 1.0.0;
@@ -1026,7 +1026,7 @@
 		};
 		DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
+			repositoryURL = "git@github.com:alex-pinkus/tree-sitter-swift.git";
 			requirement = {
 				kind = revision;
 				revision = 31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5;
@@ -1034,7 +1034,7 @@
 		};
 		SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			repositoryURL = "git@github.com:sparkle-project/Sparkle.git";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.0.0;
@@ -1042,7 +1042,7 @@
 		};
 		TC000000000000000000000 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/swift-tree-sitter";
+			repositoryURL = "git@github.com:tree-sitter/swift-tree-sitter.git";
 			requirement = {
 				kind = upToNextMinorVersion;
 				minimumVersion = 0.10.0;
@@ -1050,7 +1050,7 @@
 		};
 		TC000200000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-go" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-go";
+			repositoryURL = "git@github.com:tree-sitter/tree-sitter-go.git";
 			requirement = {
 				kind = revision;
 				revision = 2346a3ab1bb3857b48b29d779a1ef9799a248cd7;
@@ -1058,7 +1058,7 @@
 		};
 		TC000500000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-typescript";
+			repositoryURL = "git@github.com:tree-sitter/tree-sitter-typescript.git";
 			requirement = {
 				kind = revision;
 				revision = 75b3874edb2dc714fb1fd77a32013d0f8699989f;
@@ -1066,7 +1066,7 @@
 		};
 		TC000600000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-json" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-json";
+			repositoryURL = "git@github.com:tree-sitter/tree-sitter-json.git";
 			requirement = {
 				kind = revision;
 				revision = 254c42a6476413b776221e03982ac8ae159eeb72;
@@ -1074,7 +1074,7 @@
 		};
 		TC000700000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-bash" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-bash";
+			repositoryURL = "git@github.com:tree-sitter/tree-sitter-bash.git";
 			requirement = {
 				kind = revision;
 				revision = a06c2e4415e9bc0346c6b86d401879ffb44058f7;
@@ -1082,7 +1082,7 @@
 		};
 		TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-markdown";
+			repositoryURL = "git@github.com:tree-sitter-grammars/tree-sitter-markdown.git";
 			requirement = {
 				kind = revision;
 				revision = a0a00f817d02412bd92c54d316f164d827b57b5c;
