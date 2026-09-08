@@ -113,6 +113,34 @@ import XCTest
 /// 手滚镜像只在 ①②③ 的计时段里跑；④ 落点那段归因臂一步都不滚，
 /// 所以 `scrollSpan == 0` 仍然是「产品开关真的关掉了」的自证。
 ///
+/// ## 「落定」也得是轮询出来的（2026-09-08 第四轮，本轮）
+///
+/// 第三轮把时间闸门都换成比值之后，全量套件里翻面的换成了一条**结构判据**：
+/// 「2000 台：动画落定后目标行必须在视口内」——12 个散点只中 10 个判红，
+/// 同一条单跑三次全绿。当时同机还压着 uTable 的全量（本条一步 p50 50~73ms、
+/// 超预算 100%）。
+///
+/// 判据本身没问题（`scrollTo` 必须把目标行滚进视口），坏的是**「落定」的定义**：
+/// ④ 那段原本固定 `Task.sleep(260ms)`，赌 0.12s 补间加 SwiftUI 调度一定跑得完。
+/// 负载一来赌输，读到的就是补间中途的几何——**固定等待量的是机器有多闲，
+/// 不是 `scrollTo` 有没有生效**。这跟第二、三轮是同一个病（绝对量在负载下翻面），
+/// 只是这次穿的是结构判据的外衣。
+///
+/// 现在 ④ 轮询到「目标行进入视口 **且** 视口原点连续两拍不动」为止：8ms 心跳步进，
+/// 每拍 `layoutSubtreeIfNeeded()` + `displayIfNeeded()`，上限 2s（`settleTimeout`）。
+/// 超时才判红。落定耗时逐点记录、**只打印**：
+///
+/// | 落定耗时 | 空闲（三轮） | 人为加负载（14 忙循环 + 同机另一套全量，load ≈ 26） |
+/// |---|---|---|
+/// | 100 台 · 带 `scrollTo` | p50 249~256ms，max 251~270ms | p50 244~253ms，max 249~259ms |
+/// | 2000 台 · 带 `scrollTo` | p50 341~352ms，**max 447~497ms** | p50 467~540ms，**max 682~715ms** |
+/// | 超时 | 0 | 0 |
+///
+/// 也就是说 260ms 那条线**空闲时就已经压不住 2000 台档**（旧写法还能绿，是因为
+/// 「行进了视口」比「补间彻底停下」来得早）；负载一来整档 330~715ms，必然读到中途几何。
+/// 换成轮询后 `landed = 12/12`、`timeouts = 0`，负载轮的同轮比值也照常
+/// （2000 台一步 1.95×、100 台 0.97×）。计时段 ①②③ 一行没改，读数与第三轮可比。
+///
 /// ## 规模来源
 ///
 /// 与 `WelcomeServerListCostTests` 同源：真实档 100 台 / 10 组，极端档
@@ -144,6 +172,12 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
 
     /// NSView 数跨规模允许的常数漂移（`LazyVStack` 在两档裁出的行数会差几行）。
     private static let viewCountSlack = 12
+
+    /// ④ 落点段等「动画落定」的上限（秒）。产品那次补间是 0.12s，这里给到 2s
+    /// 是为了**给负载留足余量**：全量套件里同机压着另一套测试时，一步换选中行
+    /// 就要 50~73ms，260ms 的固定等待连一次补间都盖不住（12 个散点中 10 个假红）。
+    /// 等满 2s 还没把目标行滚进视口，才是 `scrollTo` 真的没生效。
+    private static let settleTimeout = 2.0
 
     // MARK: - 夹具
 
@@ -193,10 +227,17 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
         /// 12 个散点里，动画落定后目标行真的落在视口内的次数。
         var landed = 0
         var landingProbes = 0
+        /// ④ 每个落点等到「落定」花了多久（含首尾那两次量 `scrollSpan` 的）。
+        /// **只打印，不判红**——绝对毫秒在负载下没有可比性。
+        var settleMS: [Double] = []
+        /// 等到超时（`settleTimeout`）还没落定的次数。> 0 才谈得上真回归。
+        var settleTimeouts = 0
 
         var rowHeight: Double { rows > 0 ? docHeight / Double(rows) : 0 }
         /// 满量程：文档高减去视口高。
         var scrollRange: Double { max(0, docHeight - viewportHeight) }
+        var settleP50: Double { ProbeMetrics.percentile(settleMS, 0.5) }
+        var settleMax: Double { settleMS.max() ?? 0 }
     }
 
     /// 一臂的多轮读数（正序一遍 + 反序一遍），比值一律拿均值算。
@@ -227,12 +268,15 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
             [server-list raw] %@ rows=%d scrollTo=%@ mount=%.1fms beats=%d \
             step p50=%.2fms p95=%.2fms max=%.1fms over8.33=%.1f%% \
             filterMax=%.1fms views=%d docH=%.0f rowH=%.2f viewportH=%.0f \
-            span=%.0f/%.0f landed=%d/%d
+            span=%.0f/%.0f landed=%d/%d settle p50=%.0fms max=%.0fms timeouts=%d
             """,
             r.label, r.rows, r.scrollsIntoView ? "on" : "OFF", r.mountMS, r.beats,
             r.stepP50, r.stepP95, r.stepMax, r.overBudget,
             r.filterMax, r.views, r.docHeight, r.rowHeight, r.viewportHeight,
-            r.scrollSpan, r.scrollRange, r.landed, r.landingProbes))
+            r.scrollSpan, r.scrollRange, r.landed, r.landingProbes,
+            r.settleP50, r.settleMax, r.settleTimeouts))
+        print("[server-list raw]   \(r.label) 每个落点的落定耗时(ms)："
+              + r.settleMS.map { String(format: "%.0f", $0) }.joined(separator: " "))
         print("[server-list raw]   \(r.label) 类名直方图：\(r.histogram)")
     }
 
@@ -372,39 +416,76 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
         layout()
         r.filterMax = filters.max() ?? 0
 
-        // ④ 落点：换一行、等动画落定（0.12s 补间）、看目标行在不在视口里。
+        // ④ 落点：换一行、**轮询到动画真的落定**、看目标行在不在视口里。
         //    这是「`scrollTo` 那 35ms 到底买到了什么」的结构判据 —— 时间判据能被
         //    负载翻面，落点不能。
         //    **这一段归因臂不镜像手滚**（`mirrorScroll` 只在 ①②③ 的计时段里跑），
         //    所以分母的视口在这里纹丝不动 —— `scrollSpan == 0` 依然是「产品开关
         //    真的关掉了」的自证。
         if let scroll = scrollView {
-            func settle() async throws {
-                layout()
-                try await Task.sleep(for: .milliseconds(260))
-                layout()
-            }
             func visibleRect() -> CGRect { scroll.contentView.bounds }
+            let rowHeight = r.rowHeight
+            func rowTop(_ index: Int) -> Double {
+                // 文档翻转时行号越大 y 越大；不翻转时相反。
+                flipped
+                    ? Double(index) * rowHeight
+                    : r.docHeight - Double(index + 1) * rowHeight
+            }
+            func rowIsInside(_ index: Int, _ visible: CGRect) -> Bool {
+                let top = rowTop(index)
+                return top + rowHeight > Double(visible.minY) - 2
+                    && top < Double(visible.maxY) + 2
+            }
+
+            // 「落定」以前是**固定等 260ms** —— 那是在赌 `withAnimation` 的 0.12s
+            // 补间加上 SwiftUI 的调度一定跑得完。全量套件里同机还压着另一套测试时
+            // （本条一步 p50 50~73ms、超预算 100%）它赌输了：12 个散点只中 10 个，
+            // 同一条单跑三次全绿。判据本身是对的（`scrollTo` 必须把目标行滚进视口），
+            // 错的是「落定」的定义 —— 固定等待量的是机器有多闲，不是 scrollTo 有没有生效。
+            //
+            // 现在轮询到**目标行进入视口且视口原点连续两拍不动**为止：8ms 心跳步进，
+            // 每拍 `layoutSubtreeIfNeeded` + `displayIfNeeded`，最多等 `settleTimeout`。
+            // 超时才判红 —— 那才是真回归。计时段 ①②③ 一行没动，读数可比。
+            func settle(rowIndex: Int?) async throws -> (ms: Double, settled: Bool) {
+                let start = CFAbsoluteTimeGetCurrent()
+                layout()
+                // 归因臂在 ④ 一步都不滚，没有「落定」可等，保持原来的固定等待。
+                guard scrollsIntoView, let index = rowIndex, rowHeight > 0 else {
+                    try await Task.sleep(for: .milliseconds(260))
+                    layout()
+                    return ((CFAbsoluteTimeGetCurrent() - start) * 1000, true)
+                }
+                var lastY = Double(visibleRect().origin.y)
+                while CFAbsoluteTimeGetCurrent() - start < Self.settleTimeout {
+                    try await Task.sleep(for: .milliseconds(8))
+                    layout()
+                    let visible = visibleRect()
+                    let y = Double(visible.origin.y)
+                    if rowIsInside(index, visible) && abs(y - lastY) < 0.5 {
+                        return ((CFAbsoluteTimeGetCurrent() - start) * 1000, true)
+                    }
+                    lastY = y
+                }
+                return ((CFAbsoluteTimeGetCurrent() - start) * 1000, false)
+            }
+
+            func record(_ outcome: (ms: Double, settled: Bool)) {
+                r.settleMS.append(outcome.ms)
+                if !outcome.settled { r.settleTimeouts += 1 }
+            }
 
             driver.selectedID = profiles[0].id
-            try await settle()
+            record(try await settle(rowIndex: 0))
             let yFirst = Double(visibleRect().origin.y)
             driver.selectedID = profiles[profiles.count - 1].id
-            try await settle()
+            record(try await settle(rowIndex: profiles.count - 1))
             let yLast = Double(visibleRect().origin.y)
             r.scrollSpan = abs(yLast - yFirst)
-            let rowHeight = r.rowHeight
             for k in 0..<12 {
                 let index = k * profiles.count / 12
                 driver.selectedID = profiles[index].id
-                try await settle()
-                let visible = visibleRect()
-                let top = flipped
-                    ? Double(index) * rowHeight
-                    : r.docHeight - Double(index + 1) * rowHeight
-                let inside = top + rowHeight > Double(visible.minY) - 2
-                    && top < Double(visible.maxY) + 2
-                if inside { r.landed += 1 }
+                record(try await settle(rowIndex: index))
+                if rowIsInside(index, visibleRect()) { r.landed += 1 }
                 r.landingProbes += 1
             }
         }
@@ -514,9 +595,12 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
                                  + "100 台 \(small.views) → 2000 台 \(big.first.views)")
 
         // `scrollTo` 真的把选中行送进了视口：12 个散点全中，且视口确实走过了满量程。
+        // 「落定」是轮询出来的（最多等 \(Self.settleTimeout)s），不是固定等待——
+        // 所以这里读到的不中一定是 `scrollTo` 没生效，不是机器慢。
         XCTAssertEqual(big.first.landed, big.first.landingProbes,
-                       "2000 台：动画落定后目标行必须在视口内 —— "
-                       + "12 个散点只中了 \(big.first.landed) 个，`scrollTo` 没把选中行送到位")
+                       "2000 台：等到落定（或 \(Self.settleTimeout)s 超时）后目标行必须在视口内 —— "
+                       + "12 个散点只中了 \(big.first.landed) 个、超时 "
+                       + "\(big.first.settleTimeouts) 次，`scrollTo` 没把选中行送到位")
         XCTAssertGreaterThan(big.first.scrollSpan, big.first.scrollRange * 0.9,
                              "2000 台：选第一行 ⇄ 选最后一行，视口原点只走了 "
                              + "\(String(format: "%.0f", big.first.scrollSpan))pt / 满量程 "
@@ -567,8 +651,9 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
         assertTableShape(arm.first)
         assertTableShape(without.first)
         XCTAssertEqual(arm.first.landed, arm.first.landingProbes,
-                       "100 台：动画落定后目标行必须在视口内 —— "
-                       + "12 个散点只中了 \(arm.first.landed) 个")
+                       "100 台：等到落定（或 \(Self.settleTimeout)s 超时）后目标行必须在视口内 —— "
+                       + "12 个散点只中了 \(arm.first.landed) 个、超时 "
+                       + "\(arm.first.settleTimeouts) 次")
         XCTAssertGreaterThan(arm.first.scrollSpan, arm.first.scrollRange * 0.9,
                              "100 台：选第一行 ⇄ 选最后一行，视口原点只走了 "
                              + "\(String(format: "%.0f", arm.first.scrollSpan))pt / 满量程 "
