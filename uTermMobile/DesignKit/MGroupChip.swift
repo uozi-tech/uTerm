@@ -4,11 +4,26 @@ import SwiftUI
 /// 分组色解析（对齐 macOS `ServerGroupBadgeTint`）：组名 → `ServerGroup.colorHex` → Color。
 /// 无组 / 无色时返回 nil（调用方回退强调色或中性）。
 enum MGroupTint {
-    static func color(for groupName: String?, in groupColorHexes: [String: String]) -> Color? {
-        guard let groupName, !groupName.isEmpty,
-              let hex = groupColorHexes[groupName] else { return nil }
-        let rgb = groupHexRGB(hex)
-        return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
+    /// **一趟**把 `ServerGroup` 表解析成「组名 → Color」，供列表整屏共用。
+    ///
+    /// 改前是 `color(for:in:)`：调用方先拿一个 `[String: String]` 的 hex 字典，
+    /// 而列表里那个字典是**计算属性** —— 每渲染一行就重建一遍整张表
+    /// （O(行 × 组)），再逐行解析一次十六进制。
+    /// 现在在 body 里求一次，行体只做一次字典查表。
+    static func colors(for groups: [ServerGroup]) -> [String: Color] {
+        var out: [String: Color] = [:]
+        out.reserveCapacity(groups.count)
+        for g in groups where out[g.name] == nil {
+            let rgb = groupHexRGB(g.colorHex)
+            out[g.name] = Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
+        }
+        return out
+    }
+
+    /// 查表版：`colors(for:)` 的结果 + 组名 → 组色（无组 / 无色 → nil）。
+    static func color(for groupName: String?, colors: [String: Color]) -> Color? {
+        guard let groupName, !groupName.isEmpty else { return nil }
+        return colors[groupName]
     }
 }
 

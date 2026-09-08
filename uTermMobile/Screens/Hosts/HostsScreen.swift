@@ -20,28 +20,23 @@ struct HostsScreen: View {
     @State private var creating = false
     @State private var pendingDelete: ServerProfile?
 
-    /// 按分组保序归类（首次出现顺序）。
-    private var grouped: [(name: String, hosts: [ServerProfile])] {
-        var order: [String] = []
-        var map: [String: [ServerProfile]] = [:]
-        for h in hosts {
-            let g = (h.group?.isEmpty == false ? h.group! : "未分组")
-            if map[g] == nil { order.append(g) }
-            map[g, default: []].append(h)
-        }
-        return order.map { (name: $0, hosts: map[$0] ?? []) }
-    }
-    private var recent: [ServerProfile] {
-        hosts.filter { $0.lastConnectedAt != nil }
-            .sorted { ($0.lastConnectedAt ?? .distantPast) > ($1.lastConnectedAt ?? .distantPast) }
-    }
-    /// 组名 → colorHex 映射（对齐 macOS `ServerList.groupColorHexes`）。
-    private var groupColorHexes: [String: String] {
-        Dictionary(groups.map { ($0.name, $0.colorHex) }, uniquingKeysWith: { a, _ in a })
-    }
-
     var body: some View {
-        MScreen(title: "主机", sub: "\(hosts.count) 台服务器", actions: {
+        // 三个派生量在这里**各求一次**，往下传。
+        //
+        // 改前它们是三个计算属性，其中 `groupColorHexes` 由 `card(_:)` 逐行调用 ——
+        // 每渲染一行就重建一次整张「组名 → hex」字典再解析一次十六进制，
+        // 也就是 O(主机 × 分组)。`recent` 还没有截断，连过几千台的库会把整张表
+        // 排序后全铺进非 lazy 的 `MCardList`。
+        //
+        // 这里**不做跨 body 的记忆化**：cache key 只能拿 `hosts.count` 之类的
+        // O(1) 签名，而「改了某台主机的分组名」恰恰不改条数 —— 编辑表单一关
+        // 分组就会停在旧值。派生量本来每次 body 也只需要一趟，跨 body 缓存
+        // 换不来什么，却要拿正确性去赌。
+        let groupColors = MGroupTint.colors(for: groups)
+        let sections = ServerGrouping.grouped(hosts)
+        let recent = ServerGrouping.recent(hosts)
+
+        return MScreen(title: "主机", sub: "\(hosts.count) 台服务器", actions: {
             MRoundBtn(icon: "search") { store.showPalette = true }
             MRoundBtn(icon: "plus", filled: true) { creating = true }
         }) {
@@ -65,14 +60,14 @@ struct HostsScreen: View {
                             Text("还没有连接记录").font(M.sans(13)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 24)
                         }
-                        ForEach(recent) { host in card(host) }
+                        ForEach(recent) { host in card(host, groupColors: groupColors) }
                     }
                     .padding(.horizontal, 16)
                 } else {
                     MCardList(alignment: .leading) {
-                        ForEach(grouped, id: \.name) { sec in
+                        ForEach(sections, id: \.name) { sec in
                             sectionLabel("\(sec.name) · \(sec.hosts.count)")
-                            ForEach(sec.hosts) { host in card(host) }
+                            ForEach(sec.hosts) { host in card(host, groupColors: groupColors) }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -82,7 +77,7 @@ struct HostsScreen: View {
         }
         .sheet(item: $inspecting) { host in
             HostSheet(host: host,
-                      groupColor: MGroupTint.color(for: host.group, in: groupColorHexes),
+                      groupColor: MGroupTint.color(for: host.group, colors: groupColors),
                       onConnect: { inspecting = nil; store.openTerminal(host) },
                       onSFTP: { inspecting = nil; store.openSFTP(host) },
                       onEdit: { inspecting = nil; let h = host
@@ -119,9 +114,9 @@ struct HostsScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
     }
 
-    private func card(_ host: ServerProfile) -> some View {
+    private func card(_ host: ServerProfile, groupColors: [String: Color]) -> some View {
         HostCard(host: host,
-                 groupColor: MGroupTint.color(for: host.group, in: groupColorHexes),
+                 groupColor: MGroupTint.color(for: host.group, colors: groupColors),
                  onOpen: { inspecting = host },
                  onConnect: { store.openTerminal(host) },
                  onSFTP: { store.openSFTP(host) },
@@ -155,12 +150,8 @@ struct HostCard: View {
         guard let last = host.lastConnectedAt else { return M.text4 }
         return Date().timeIntervalSince(last) < 3600 ? M.success : M.caution
     }
-    private var lastText: String {
-        guard let last = host.lastConnectedAt else { return "从未连接" }
-        let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        return f.localizedString(for: last, relativeTo: Date())
-    }
+    /// 共享格式化器。**别改回「每行现建一个」**——这是逐行调用的。
+    private var lastText: String { MFormat.relative(host.lastConnectedAt, fallback: "从未连接") }
 
     var body: some View {
         Button(action: onOpen) {

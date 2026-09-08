@@ -9,10 +9,15 @@ struct GroupsScreen: View {
     @Query private var hosts: [ServerProfile]
     @State private var creating = false
 
-    private func count(_ name: String) -> Int { hosts.filter { $0.group == name }.count }
-
     var body: some View {
-        Group {
+        // 「组名 → 台数」一趟过。改前是 `hosts.filter { $0.group == name }.count`
+        // 逐组各扫一遍全表，而且**扫两遍**——列表里每行一次，页脚的
+        // `groups.reduce` 里再来一次，合计 O(2 × 分组 × 主机)。
+        let counts = ServerGrouping.memberCounts(hosts)
+        // 页脚总数仍按 `ServerGroup` 表汇总（组名对不上的悬空 group 不计），与改前一致。
+        let total = groups.reduce(0) { $0 + (counts[$1.name] ?? 0) }
+
+        return Group {
             if groups.isEmpty {
                 MEmptyState(icon: "folder-tag", title: "还没有分组",
                             message: "把主机按环境（prod / dev）或项目归类，列表更清爽。",
@@ -23,14 +28,14 @@ struct GroupsScreen: View {
                         MInsetGroup {
                             ForEach(Array(groups.enumerated()), id: \.element.persistentModelID) { idx, g in
                                 NavigationLink { GroupDetailView(group: g) } label: {
-                                    MInsetRow(label: g.name, value: "\(count(g.name)) 台", chevron: true,
+                                    MInsetRow(label: g.name, value: "\(counts[g.name] ?? 0) 台", chevron: true,
                                               last: idx == groups.count - 1,
                                               trailing: AnyView(Circle().fill(g.color).frame(width: 14, height: 14)
                                                 .overlay(Circle().stroke(M.border, lineWidth: 1))))
                                 }.buttonStyle(MRowStyle())
                             }
                         }
-                        Text("\(groups.count) 个分组 · \(groups.reduce(0) { $0 + count($1.name) }) 主机")
+                        Text("\(groups.count) 个分组 · \(total) 主机")
                             .font(M.sans(12)).foregroundStyle(M.text4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 22).padding(.top, 2)

@@ -142,53 +142,59 @@ struct CommandFormSheet: View {
 
     // MARK: 关联主机（分组 + 全组选择，对齐 macOS QuickCommandForm）
 
-    /// 可关联的主机：剔除「仅 SFTP」的主机（无法执行命令），对齐 macOS `QuickCommandList.hostRefs`。
-    private var selectableHosts: [ServerProfile] { hosts.filter { !$0.sftpOnly } }
-    /// 按分组保序归类（首次出现顺序，空 → 「未分组」），对齐 `HostsScreen.grouped`。
-    private var grouped: [(name: String, hosts: [ServerProfile])] {
-        var order: [String] = []
-        var map: [String: [ServerProfile]] = [:]
-        for h in selectableHosts {
-            let g = (h.group?.isEmpty == false ? h.group! : "未分组")
-            if map[g] == nil { order.append(g) }
-            map[g, default: []].append(h)
-        }
-        return order.map { (name: $0, hosts: map[$0] ?? []) }
+    /// 关联主机区一次求值的全部派生量。
+    ///
+    /// 改前这里是 `selectableHosts` / `grouped` / `groupColorHexes` /
+    /// `selectedVisibleCount` / `allSelected` 五个计算属性，互相还套着
+    /// （`grouped` 里再走一遍 `selectableHosts`）；`hostSection` 一次 body 就要
+    /// 各求好几遍，而 `groupHeader` 又**逐组**重建整张 `groupColorHexes`、
+    /// 逐组再扫一遍成员算 `picked`（`groupState` 一遍、显示用的 `picked` 又一遍）。
+    /// `serverIDs` 是 `@State`，**每点一台主机整个 body 就重跑一次**。
+    private struct HostSelection {
+        var selectable: [ServerProfile] = []
+        var sections: [(name: String, hosts: [ServerProfile])] = []
+        var groupColors: [String: Color] = [:]
+        /// 组名 → 该组已选台数。
+        var pickedByGroup: [String: Int] = [:]
+        var pickedTotal = 0
+        var allSelected: Bool { !selectable.isEmpty && pickedTotal == selectable.count }
     }
-    /// 组名 → colorHex 映射（对齐 macOS `ServerList.groupColorHexes`）。
-    private var groupColorHexes: [String: String] {
-        Dictionary(groups.map { ($0.name, $0.colorHex) }, uniquingKeysWith: { a, _ in a })
-    }
-    /// 可选主机里已选的台数（不含已删除 / 仅 SFTP 主机的悬空 id）。
-    private var selectedVisibleCount: Int { selectableHosts.filter { serverIDs.contains($0.id) }.count }
-    /// 全部可选主机均已选。
-    private var allSelected: Bool { !selectableHosts.isEmpty && selectableHosts.allSatisfy { serverIDs.contains($0.id) } }
 
-    /// 某组三态：`all`（整组都已选）/ `some`（部分已选，含全选）。
-    private func groupState(_ gHosts: [ServerProfile]) -> (all: Bool, some: Bool) {
-        guard !gHosts.isEmpty else { return (false, false) }
-        let picked = gHosts.filter { serverIDs.contains($0.id) }.count
-        return (picked == gHosts.count, picked > 0)
+    /// 一趟算出上面那一整包。三次遍历（筛可选 / 归组 / 数已选），不再是嵌套的 O(组 × 主机)。
+    private var selection: HostSelection {
+        var out = HostSelection()
+        out.selectable = hosts.filter { !$0.sftpOnly }
+        out.sections = ServerGrouping.grouped(out.selectable)
+        out.groupColors = MGroupTint.colors(for: groups)
+        for sec in out.sections {
+            var picked = 0
+            for h in sec.hosts where serverIDs.contains(h.id) { picked += 1 }
+            out.pickedByGroup[sec.name] = picked
+            out.pickedTotal += picked
+        }
+        return out
     }
+
     private func toggleGroup(_ gHosts: [ServerProfile], all: Bool) {
         let ids = gHosts.map(\.id)
         if all { ids.forEach { serverIDs.remove($0) } } else { ids.forEach { serverIDs.insert($0) } }
     }
 
     private var hostSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let sel = selection
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("关联主机".uppercased())
                     .font(M.sans(12, weight: .semibold)).tracking(0.4).foregroundStyle(M.text4)
                 Spacer()
-                if !selectableHosts.isEmpty {
-                    Text("\(selectedVisibleCount)/\(selectableHosts.count) 台")
+                if !sel.selectable.isEmpty {
+                    Text("\(sel.pickedTotal)/\(sel.selectable.count) 台")
                         .font(M.mono(11)).foregroundStyle(M.text4)
                     Button {
-                        if allSelected { selectableHosts.forEach { serverIDs.remove($0.id) } }
-                        else { selectableHosts.forEach { serverIDs.insert($0.id) } }
+                        if sel.allSelected { sel.selectable.forEach { serverIDs.remove($0.id) } }
+                        else { sel.selectable.forEach { serverIDs.insert($0.id) } }
                     } label: {
-                        Text(allSelected ? "清空" : "全选")
+                        Text(sel.allSelected ? "清空" : "全选")
                             .font(M.sans(12, weight: .medium)).foregroundStyle(M.text2)
                             .padding(.horizontal, 10).frame(height: 26)
                             .background(M.fillFaint)
@@ -198,15 +204,19 @@ struct CommandFormSheet: View {
             }
             .padding(.horizontal, 20).padding(.bottom, 7)
 
+            // 容器仍是非 lazy 的 `VStack`：桌面那轮的反例摆着——小规模档换懒栈反而更慢，
+            // 而这里的规模就是「一台机器上的主机数」。要换得先有读数。
             VStack(spacing: 0) {
-                if selectableHosts.isEmpty {
+                if sel.selectable.isEmpty {
                     Text(hosts.isEmpty ? "暂无主机" : "暂无可用主机").font(M.sans(14)).foregroundStyle(M.text4)
                         .frame(maxWidth: .infinity, minHeight: 50)
                 } else {
-                    ForEach(Array(grouped.enumerated()), id: \.element.name) { gi, sec in
-                        groupHeader(sec.name, hosts: sec.hosts)
+                    ForEach(Array(sel.sections.enumerated()), id: \.element.name) { gi, sec in
+                        groupHeader(sec.name, hosts: sec.hosts,
+                                    picked: sel.pickedByGroup[sec.name] ?? 0,
+                                    groupColors: sel.groupColors)
                         ForEach(Array(sec.hosts.enumerated()), id: \.element.id) { hi, h in
-                            hostRow(h, last: gi == grouped.count - 1 && hi == sec.hosts.count - 1)
+                            hostRow(h, last: gi == sel.sections.count - 1 && hi == sec.hosts.count - 1)
                         }
                     }
                 }
@@ -219,20 +229,23 @@ struct CommandFormSheet: View {
         .padding(.bottom, 22)
     }
 
-    private func groupHeader(_ name: String, hosts gHosts: [ServerProfile]) -> some View {
-        let st = groupState(gHosts)
-        let picked = gHosts.filter { serverIDs.contains($0.id) }.count
-        let tint = MGroupTint.color(for: name == "未分组" ? nil : name, in: groupColorHexes)
-        return Button { toggleGroup(gHosts, all: st.all) } label: {
+    private func groupHeader(_ name: String, hosts gHosts: [ServerProfile],
+                             picked: Int, groupColors: [String: Color]) -> some View {
+        // 三态由上面那一趟数出来的 `picked` 直接推，不再逐组重扫成员。
+        let all = !gHosts.isEmpty && picked == gHosts.count
+        let some = picked > 0
+        let tint = MGroupTint.color(for: name == ServerGrouping.ungroupedLabel ? nil : name,
+                                    colors: groupColors)
+        return Button { toggleGroup(gHosts, all: all) } label: {
             HStack(spacing: 10) {
-                MGroupCheck(on: st.all, partial: st.some && !st.all)
+                MGroupCheck(on: all, partial: some && !all)
                 MDot(color: tint ?? M.text4, size: 7)
                 Text(name.uppercased())
                     .font(M.sans(11.5, weight: .semibold)).tracking(0.4).foregroundStyle(M.text3).lineLimit(1)
                 Text("\(picked)/\(gHosts.count)").font(M.mono(11)).foregroundStyle(M.text4)
                 Spacer(minLength: 6)
-                Text(st.all ? "取消整组" : "选择整组")
-                    .font(M.sans(11.5)).foregroundStyle(st.some ? M.accent : M.text4)
+                Text(all ? "取消整组" : "选择整组")
+                    .font(M.sans(11.5)).foregroundStyle(some ? M.accent : M.text4)
             }
             .padding(.horizontal, 14).padding(.vertical, 9).frame(minHeight: 44)
             .background(UD.fillSoft)   // 容器已是卡片面，组头再深一档区分
@@ -270,7 +283,7 @@ struct CommandFormSheet: View {
         ai = cmd.aiAssisted
         // 仅保留仍可选的绑定（剔除已删除 / 现为仅 SFTP 的悬空 id），否则三态 / 全选计数对不上。
         // 对齐 macOS `QuickCommandForm` 的 seed 过滤。
-        let selectableIDs = Set(selectableHosts.map(\.id))
+        let selectableIDs = Set(hosts.lazy.filter { !$0.sftpOnly }.map(\.id))
         serverIDs = Set(cmd.serverIDs).intersection(selectableIDs)
     }
     private func save() {
@@ -278,7 +291,7 @@ struct CommandFormSheet: View {
         c.name = name.trimmingCharacters(in: .whitespaces)
         c.command = command; c.intent = intent; c.aiAssisted = ai
         // 按可选主机顺序收口（剔除已删除 / 仅 SFTP），对齐 macOS `orderedSelection`。
-        c.serverIDs = selectableHosts.filter { serverIDs.contains($0.id) }.map(\.id)
+        c.serverIDs = hosts.filter { !$0.sftpOnly && serverIDs.contains($0.id) }.map(\.id)
         if cmd == nil {
             c.sortOrder = ((try? context.fetch(FetchDescriptor<QuickCommand>()))?.map(\.sortOrder).max() ?? -1) + 1
             context.insert(c)

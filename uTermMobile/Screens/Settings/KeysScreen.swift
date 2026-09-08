@@ -3,14 +3,23 @@ import SwiftData
 
 /// SSH 密钥库（真实 `SSHKey`）。生成（纯 Swift）/ 展示 / 复制公钥 / 删除；详情含使用主机与危险区。
 struct KeysScreen: View {
-    @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\SSHKey.createdAt, order: .reverse)]) private var keys: [SSHKey]
+    /// 「用了这把钥匙的主机数」的数据源。
+    ///
+    /// 改前是行体里 `context.fetch(FetchDescriptor<ServerProfile>())` ——
+    /// **每渲染一行就把整张 `ServerProfile` 表取出来物化一遍**再 filter，
+    /// 十把钥匙就是十趟全表 fetch。`KeyDetailSheet` 本来就是用 `@Query` 拿的，
+    /// 列表页照它写即可。
+    @Query private var hosts: [ServerProfile]
     @State private var detail: SSHKey?
     @State private var generating = false
 
     var body: some View {
-        Group {
+        // 一趟建「keyID → 台数」，行体只查表。
+        let usage = keyUsage
+
+        return Group {
             if keys.isEmpty {
                 MEmptyState(icon: "key", title: "密钥库为空",
                             message: "在此生成 SSH 密钥（私钥存钥匙串），或从 macOS 端经 iCloud 同步。",
@@ -23,7 +32,7 @@ struct KeysScreen: View {
                         MInsetGroup {
                             ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                 MInsetRow(icon: "key", iconColor: M.warning, label: key.name,
-                                          sub: "\(key.typeLabel) · \(usedCount(key)) 主机", chevron: true,
+                                          sub: "\(key.typeLabel) · \(usage[key.id] ?? 0) 主机", chevron: true,
                                           last: idx == keys.count - 1,
                                           onTap: { detail = key })
                             }
@@ -52,8 +61,15 @@ struct KeysScreen: View {
         }
     }
 
-    private func usedCount(_ key: SSHKey) -> Int {
-        (try? context.fetch(FetchDescriptor<ServerProfile>()))?.filter { $0.keyID == key.id }.count ?? 0
+    /// keyID → 使用它的主机数，一趟过。
+    private var keyUsage: [UUID: Int] {
+        var out: [UUID: Int] = [:]
+        out.reserveCapacity(keys.count)
+        for h in hosts {
+            guard let id = h.keyID else { continue }
+            out[id, default: 0] += 1
+        }
+        return out
     }
 }
 
