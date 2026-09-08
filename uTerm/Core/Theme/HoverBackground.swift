@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 
@@ -5,6 +6,13 @@ import SwiftUI
 ///
 /// 用于列表行 / sidebar 行 / tab chip 等可点击元素的视觉反馈。`isActive` 为
 /// true 时（如已选中 / active tab）跳过 hover 切换 —— 选中态优先级高于 hover。
+///
+/// **hover 走 `hoverGated` 而不是 `.onHover`**：光标停着不动、列表在它底下滚
+/// 过去时，每一行经过指针都是一次真的 enter / exit，于是滚动中每帧都有一行
+/// 底色亮起、上一行灭掉，全是白付的重绘。闸门在滚动期间不转发，停下 150ms
+/// 后把最后一个真值补回来（`UAppKitBridge/ScrollHoverGate.swift`）。
+/// 列表容器要相应地挂 `.scrollHoverGate()`；没挂的地方本修饰器与裸
+/// `.onHover` 完全等价，所以这个改动对非滚动场景（路径栏 / toolbar）无副作用。
 private struct HoverBackground: ViewModifier {
     let activeColor: Color
     let baseColor: Color
@@ -19,7 +27,7 @@ private struct HoverBackground: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(backgroundColor)
             )
-            .onHover { isHovering = $0 }
+            .hoverGated { isHovering = $0 }
     }
 
     private var backgroundColor: Color {
@@ -64,7 +72,7 @@ private struct IconButtonHover: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(isHovering ? UD.rowSelected : .clear)
             )
-            .onHover { isHovering = $0 }
+            .hoverGated { isHovering = $0 }
     }
 }
 
@@ -94,7 +102,7 @@ private struct WSIconButtonHover: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(isHovering ? UD.panelHover : .clear)
             )
-            .onHover { isHovering = $0 }
+            .hoverGated { isHovering = $0 }
     }
 }
 

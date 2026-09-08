@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 // uTerm/Views/ServerRow.swift
 import SwiftUI
@@ -82,7 +83,11 @@ struct ServerRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(rowBackground)
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        // 滚动期间不接 hover：光标停在列表上滚轮时，每一行经过指针都会
+        // 触发一次 enter/exit，`hover` 一变这一行的 `.help` 与底色就得重来
+        // （见 `UAppKitBridge/ScrollHoverGate.swift`）。承载行的 `LazyVStack`
+        // 上挂了 `.scrollHoverGate()`。
+        .hoverGated { hover = $0 }
         // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
         // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
         // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`

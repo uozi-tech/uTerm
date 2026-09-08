@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import AppKit
 import SwiftUI
@@ -112,6 +113,10 @@ struct ServerList: View {
                             selectedID = profile.id
                             onContextAction(.connect, profile)
                         })
+                    // 滚动期间关掉行 hover：光标停在列表上滚轮时，每一行经过
+                    // 指针都会触发一次 `.onHover`，`ServerRow` 的底色与两处
+                    // `.help` 因此逐帧重来。见 `UAppKitBridge/ScrollHoverGate.swift`。
+                    .scrollHoverGate()
                     .padding(ServerListLayout.contentPadding)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

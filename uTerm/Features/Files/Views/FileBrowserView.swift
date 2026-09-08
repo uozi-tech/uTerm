@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 import SwiftData
@@ -300,6 +301,10 @@ struct FileBrowserContent: View {
                 // 落点 → 行号复用整表拖放那套算术，**同样必须挂在 `.padding` 之前**。
                 .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
                                activate: { y, _ in clickRow(atY: y, activating: true) })
+                // 滚动期间关掉行 hover（与上面的拖放 / 点击层同一层挂）——
+                // 光标停在树上滚轮时每一行经过指针都会亮一次 hover 底色。
+                // 见 `UAppKitBridge/ScrollHoverGate.swift`。
+                .scrollHoverGate()
                 // 行已满宽（内部 padding 10 对齐头部）；列表不再加横向内缩，让选中
                 // 底色 + 左侧蓝条铺到面板边缘，与独立 SFTP 窗口一致。
                 .padding(.vertical, 2)

@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -185,6 +186,11 @@ struct SFTPFileTable: View {
                 // `ClickSelectActivate.swift`）。落点 → 行号复用整表拖放那套算术。
                 .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
                                activate: { y, _ in clickRow(atY: y, activating: true) })
+                // 滚动期间关掉 hover：光标停在列表上滚轮时，每一行经过指针
+                // 都会触发一次 `.onHover`，行里「悬停才建」的东西被反复建拆。
+                // 闸门挂在承载行的容器上（与上面的拖放 / 点击层同一层），
+                // 见 `UAppKitBridge/ScrollHoverGate.swift`。
+                .scrollHoverGate()
             }
             .focusable()
             .focused($focused)

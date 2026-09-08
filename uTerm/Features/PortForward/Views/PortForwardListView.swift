@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 import SwiftData
@@ -135,11 +136,15 @@ struct PortForwardListView: View {
                     .background(UD.bg)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
+                    // 滚动期间关掉行 hover（`TunnelRow` 的编辑 / 删除同样是
+                    // 悬停才建的真控件）。见 `UAppKitBridge/ScrollHoverGate.swift`。
+                    .scrollHoverGate()
             } else {
                 VStack(spacing: 0) { rows(visible) }
                     .background(UD.bg)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
+                    .scrollHoverGate()
             }
         }
         .padding(.horizontal, 16)

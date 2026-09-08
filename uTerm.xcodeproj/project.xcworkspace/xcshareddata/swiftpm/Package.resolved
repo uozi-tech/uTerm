@@ -207,8 +207,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/uAppKit.git",
       "state" : {
-        "revision" : "ec58ae2f560c0ee917bee55254ccdb91e0dba6d5",
-        "version" : "1.4.1"
+        "revision" : "5a4c1f4283332d3b6787c644f236590cd1101c2d",
+        "version" : "1.4.2"
       }
     }
   ],

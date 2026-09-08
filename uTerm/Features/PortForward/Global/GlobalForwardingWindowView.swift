@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 import SwiftData
@@ -286,6 +287,10 @@ struct GlobalForwardingList: View {
                         section(group)
                     }
                 }
+                // 滚动期间关掉行 hover —— `GlobalForwardRow` 的铅笔按钮是
+                // 「悬停才建」的真控件，光标停在列表上滚一次就会被建拆几十遍。
+                // 见 `UAppKitBridge/ScrollHoverGate.swift`。
+                .scrollHoverGate()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 18)
@@ -295,6 +300,7 @@ struct GlobalForwardingList: View {
                         section(group)
                     }
                 }
+                .scrollHoverGate()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 18)

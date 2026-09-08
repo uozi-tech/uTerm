@@ -87,13 +87,26 @@ import AppKit
 @MainActor
 enum ProbeWindow {
 
-    enum Placement {
+    enum Placement: Equatable {
         /// 屏幕之外。判据是结构 / 几何 / 像素时用它。
         case offScreen
         /// 在最快的那块屏上，但 `alphaValue = 0`。判据是时间时用它。
-        case transparentOnScreen
+        ///
+        /// `cursorAt` 是**窗口坐标系**里谎报的鼠标位置：
+        /// - `nil`（即静态成员 `.transparentOnScreen`）：谎报在窗外
+        ///   （`mouseBlindOrigin`），用户真光标停在哪都点不亮 `.onHover`。
+        ///   判据与 hover 无关的探针都用这一档。
+        /// - 给一个点：谎报鼠标**就停在这个点上**。AppKit 算
+        ///   `NSTrackingArea` 的 enter / exit 时问的就是这个值，所以列表滚动时
+        ///   每一行经过这个点都会真的触发一次 `.onHover` ——
+        ///   这一档量的是「用户把光标停在列表上滚轮」的真实账
+        ///   （见 `ScrollHoverGateProbeTests`）。
+        case transparentOnScreen(cursorAt: NSPoint?)
         /// 真的看得见。只给依赖真实可见性的用例（tooltip / 真光标）。
         case visibleOnScreen
+
+        /// 老写法：谎报鼠标在窗外的透明屏内档。
+        static let transparentOnScreen = Placement.transparentOnScreen(cursorAt: nil)
     }
 
     /// 覆写掉屏幕约束 —— 带标题栏的窗口否则会被 `constrainFrameRect(_:to:)`
@@ -104,15 +117,25 @@ enum ProbeWindow {
         /// 见 `ProbeWindow.mouseBlindOrigin`。`.visibleOnScreen` 那档会关掉它。
         var blindsMouse = true
 
+        /// 非 nil 时谎报「鼠标就停在这个点」（窗口坐标系），优先级高于 `blindsMouse`。
+        ///
+        /// 与谎报在窗外是同一个机制的两个方向：一个把用户的真光标挡在外面，
+        /// 一个把一个**合成光标**按在内容上。后者是量「滚动时 hover 在烧钱」
+        /// 的唯一办法 —— 真拿用户的光标当实验条件，读数取决于那 20 分钟里
+        /// 鼠标停在哪块屏。
+        var fakedMouseLocation: NSPoint?
+
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
             frameRect
         }
 
         /// AppKit 在「视图动到了静止的鼠标底下」时，就是拿这个值去算
         /// `NSTrackingArea` 的 enter / exit 的 —— 谎报一个窗外的点，
-        /// SwiftUI 的 `.onHover` 就再也不会因为用户的光标而亮起来。
+        /// SwiftUI 的 `.onHover` 就再也不会因为用户的光标而亮起来；
+        /// 谎报一个窗内的点，则等价于「用户把光标停在了那里」。
         override var mouseLocationOutsideOfEventStream: NSPoint {
-            blindsMouse ? ProbeWindow.mouseBlindOrigin : super.mouseLocationOutsideOfEventStream
+            if let fakedMouseLocation { return fakedMouseLocation }
+            return blindsMouse ? ProbeWindow.mouseBlindOrigin : super.mouseLocationOutsideOfEventStream
         }
     }
 
@@ -122,6 +145,20 @@ enum ProbeWindow {
     /// 这个窗口是否已经把真鼠标挡在外面（探针可以在 setUp / 建窗后直接断言它）。
     static func blindsRealMouse(_ window: NSWindow) -> Bool {
         window.mouseLocationOutsideOfEventStream == mouseBlindOrigin
+    }
+
+    /// 这个窗口报出来的「窗内鼠标位置」是不是合成的（挡在窗外 **或** 按在指定点）。
+    /// 两种都与用户真光标无关，所以两种都算「读数可复现」。
+    static func reportsSyntheticCursor(_ window: NSWindow) -> Bool {
+        if let unconstrained = window as? Unconstrained, unconstrained.fakedMouseLocation != nil {
+            return true
+        }
+        return blindsRealMouse(window)
+    }
+
+    /// 内容区正中的一点（窗口坐标系）。`.transparentOnScreen(cursorAt:)` 的常用实参。
+    static func contentCenter(of size: NSSize) -> NSPoint {
+        NSPoint(x: size.width / 2, y: size.height / 2)
     }
 
     /// 真鼠标此刻是不是落在这个窗口上 —— 只用来打取证日志。
@@ -190,11 +227,15 @@ enum ProbeWindow {
         // 另外两档一律挡住 —— 探针窗口正落在用户光标底下时，SwiftUI 的
         // `.onHover` 会真的亮起来，把「悬停才建控件」的行全变成活行（见 `Unconstrained`）。
         window.blindsMouse = placement != .visibleOnScreen
+        // `.transparentOnScreen(cursorAt:)` 带点时改成「把合成光标按在这里」。
+        if case .transparentOnScreen(let cursor) = placement { window.fakedMouseLocation = cursor }
         // 建窗时传的 contentRect 会先过一次约束；`Unconstrained` 已经放行，
         // 这里再显式落一次原点，防止 styleMask 变化引入偏移。
         window.setFrameOrigin(origin)
         if let contentView { window.contentView = contentView }
-        if placement == .transparentOnScreen { window.alphaValue = 0 }
+        // 注意用模式匹配而不是 `== .transparentOnScreen`：后者是
+        // `.transparentOnScreen(cursorAt: nil)` 的别名，带光标的那一档比不上。
+        if case .transparentOnScreen = placement { window.alphaValue = 0 }
         if key { window.makeKeyAndOrderFront(nil) } else { window.orderFrontRegardless() }
         logPlacementOnce(window, placement)
         return window

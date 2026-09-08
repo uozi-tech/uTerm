@@ -1,3 +1,4 @@
+import UAppKitBridge
 import AgentKit
 import AppKit
 import UDesignKit
@@ -377,6 +378,9 @@ struct AssistantView: View {
                         }
                         Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
+                    // 滚动期间关掉气泡 hover（悬停铅笔 + tooltip）。
+                    // 见 `UAppKitBridge/ScrollHoverGate.swift`。
+                    .scrollHoverGate()
                     .padding(EdgeInsets(top: 16, leading: 14, bottom: 10, trailing: 14))
                 }
                 .defaultScrollAnchor(.bottom)
@@ -1005,7 +1009,7 @@ private struct AgentToolCallCard: View {
         .padding(.trailing, 8)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onHover { isHoveringCommandRow = $0 }
+        .hoverGated { isHoveringCommandRow = $0 }
         .background(UD.termBg)
         .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
         .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
@@ -1192,7 +1196,9 @@ private struct UserMessageRow: View {
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 .onTapGesture { if canEdit { onBeginEdit() } }
-                .onHover { isHovering = $0 }
+                // 滚动期间不接 hover：消息流滚过指针时每条气泡都会亮一下铅笔
+                // 并挂一次 tooltip（见 `UAppKitBridge/ScrollHoverGate.swift`）。
+                .hoverGated { isHovering = $0 }
                 // 悬停门控：行上本来就有 `isHovering`，不悬停的行不必给
                 // `NSToolTipManager` 留一块每个滚动 tick 都要重算的区域。
                 .help(whenHovering: isHovering && canEdit, "点击编辑并重发")

@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 import SwiftData
@@ -100,7 +101,9 @@ struct GlobalForwardRow: View {
             if !isLast { Rectangle().fill(UD.border).frame(height: 1) }
         }
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        // 滚动期间不接 hover —— 否则光标停在列表上滚一次，铅笔按钮会被建了又拆
+        // 几十上百遍（见 `UAppKitBridge/ScrollHoverGate.swift`）。
+        .hoverGated { hover = $0 }
     }
 
     /// hover 浮现的小图标按钮（镜像 `TunnelRow.iconButton`）。

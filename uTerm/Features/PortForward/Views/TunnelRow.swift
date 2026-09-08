@@ -1,3 +1,4 @@
+import UAppKitBridge
 import UDesignKit
 import SwiftUI
 
@@ -146,7 +147,8 @@ struct TunnelRow: View {
         .frame(height: 52)
         .background(!isError && hover ? UD.rowHover : Color.clear)
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        // 滚动期间不接 hover（理由同 `GlobalForwardRow`）。
+        .hoverGated { hover = $0 }
     }
 
     private var flow: Text {
