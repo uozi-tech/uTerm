@@ -2,6 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 出口合规声明（App Store Connect / TestFlight 每次上传都会问一遍；
+	     声明在 Info.plist 里 App Store Connect 就不再弹窗，构建也不会卡在「缺少合规信息」）。
+
+	     依据：uTerm 客户端只用 Apple 平台自带与开源标准实现的密码学
+	     （swift-crypto / CryptoKit、swift-nio-ssh 的 SSH 传输层、Keychain），
+	     没有自研或私有算法，属于美国出口管制 EAR 15 CFR 740.17(b) 里
+	     「使用标准/公开算法的免除类」——即 Apple 问卷中的 (b) 类豁免，
+	     因此 ITSAppUsesNonExemptEncryption = NO。
+
+	     ⚠️ 这是一条法律声明，不是技术开关。两点须知：
+	     1) 引入自研加密、私有算法或非标准密码学实现时，本值必须改回 YES 并重新走问卷；
+	     2) 即便声明豁免，仍需每年向 BIS/ENC 自行提交一次 self-classification report。
+	     拿不准时以法务/合规意见为准，不要以本注释为最终依据。 -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。</string>
 	<key>UIBackgroundModes</key>

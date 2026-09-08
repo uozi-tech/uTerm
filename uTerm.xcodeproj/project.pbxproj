@@ -385,6 +385,7 @@
 				10C0DE0000000000000000A3 /* Sources */,
 				10C0DE0000000000000000A4 /* Frameworks */,
 				10C0DE0000000000000000A5 /* Resources */,
+				CFCFCFCF000000000000F0F3 /* Set Build Number */,
 			);
 			buildRules = (
 			);
@@ -618,6 +619,26 @@
 			shellPath = /bin/sh;
 			shellScript = "buildNumber=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
 		};
+		CFCFCFCF000000000000F0F3 /* Set Build Number */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Set Build Number";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "buildNumber=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -676,6 +697,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
@@ -713,6 +735,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
