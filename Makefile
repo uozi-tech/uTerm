@@ -74,6 +74,14 @@ MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
 # 所以 archive 与 export 也要带上 —— 本机没登录任何有权限的账号时，这是唯一的走法。
 # 用法（必须和 xcodebuild 在同一个 shell 里）：
 #   @set -e; $(MOBILE_ASC_AUTH); xcodebuild ... -allowProvisioningUpdates $$auth
+# xcodebuild 的 IDEDistributionCreateIPAStep 会调 /usr/bin/rsync 拷 Symbols/Root，而 Apple 的
+# openrsync 客户端会**按 PATH** 再起一个 `rsync` 当服务端。本机 PATH 里 Homebrew 的
+# /opt/homebrew/bin/rsync（3.5.0）排在前面被选中，它不认 openrsync 把 -E 展开成的
+# --extended-attributes，于是整步失败成一句没头没脑的 `error: exportArchive Copy failed`
+# （真话在 /usr/bin/log 里：`rsync: on remote machine: --extended-attributes: unknown option`）。
+# 把系统路径顶到 PATH 最前面，只作用于这一条 xcodebuild。
+MOBILE_EXPORT_PATH_FIX = PATH="/usr/bin:/bin:/usr/sbin:/sbin:$$PATH"
+
 MOBILE_ASC_AUTH = \
 	if [ -f "$(ENV_FILE)" ]; then set -a; . ./$(ENV_FILE); set +a; fi; \
 	auth=""; \
@@ -391,7 +399,7 @@ export-mobile: archive-mobile
 	@set -e; \
 	$(MOBILE_ASC_AUTH); \
 	set -x; \
-	xcodebuild -exportArchive \
+	$(MOBILE_EXPORT_PATH_FIX) xcodebuild -exportArchive \
 		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
 		-exportPath "$(MOBILE_EXPORT_DIR)" \
 		-exportOptionsPlist "$(MOBILE_EXPORT_OPTIONS)" \
@@ -450,7 +458,7 @@ upload-mobile:
 	@set -e; \
 	$(MOBILE_ASC_AUTH); \
 	set -x; \
-	xcodebuild -exportArchive \
+	$(MOBILE_EXPORT_PATH_FIX) xcodebuild -exportArchive \
 		-archivePath "$(MOBILE_ARCHIVE_PATH)" \
 		-exportPath "$(MOBILE_UPLOAD_DIR)" \
 		-exportOptionsPlist "$(MOBILE_UPLOAD_OPTIONS)" \
