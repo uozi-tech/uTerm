@@ -272,6 +272,22 @@ struct SFTPScreen: View {
                             SFTPRow(entry: entry)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
+                                    // 动作面板已经开着就把这次抬手吃掉。
+                                    //
+                                    // 单击和长按挂在同一条修饰链上（`MobileRenderLintTests`
+                                    // 的 iOS 形态扫描会把这一处列出来）。SwiftUI 在这种组合下
+                                    // 「长按满 0.45s 触发一次，抬手时**再**派发一次 tap」是
+                                    // 有可能的——真发生了，长按一个目录就会：动作面板弹出来的
+                                    // 同时目录也在底下被打开了。这台机器上没有可用的 iOS 模拟器
+                                    // runtime，没法把它证实或证伪
+                                    //（见 `docs/scroll-perf-findings.md` 的「uTermMobile」一节），
+                                    // 所以用一个**两种情况下都正确**的守卫。
+                                    //
+                                    // 判据用 `actionEntry`（长按一定会把它置上）而不是时间戳：
+                                    // 时间窗要猜「按住多久才抬手」，按久一点就漏；
+                                    // 而面板开着的时候这一行本来就不该响应点击，
+                                    // 不双触发时这里读到的又恒是 nil，是个惰性守卫。
+                                    guard actionEntry == nil else { return }
                                     if entry.isDirectory || entry.isSymlink { controller.open(entry) }
                                     else { actionEntry = entry }
                                 }
@@ -332,19 +348,32 @@ struct SFTPRow: View {
     private var subtitle: String {
         let perms = permString()
         if entry.isDirectory { return "文件夹 · \(perms)" }
-        let size = entry.size.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "—"
+        // 共享 `ByteCountFormatter`：那个**类方法**每调一次就在内部现建一个 formatter。
+        let size = entry.size.map { MFormat.bytes(Int64($0)) } ?? "—"
         return "\(size) · \(perms)"
     }
 
     /// `drwxr-xr-x` 形式；缺权限位时给类型字符 + 占位。
+    ///
+    /// 改前每渲染一行都要现建一个 9 元组的数组字面量、`map` 成 **9 个 String**、
+    /// 再 `joined()`——一行 10 次小字符串分配。现在直接往一个预留好容量的
+    /// `String` 里追加 `Character`，位表提到 `static let`，一行一次分配。
     private func permString() -> String {
-        let type = entry.isDirectory ? "d" : (entry.isSymlink ? "l" : "-")
-        guard let mode = entry.permissions else { return type + "---------" }
-        let bits: [(UInt32, String)] = [
-            (0o400, "r"), (0o200, "w"), (0o100, "x"),
-            (0o040, "r"), (0o020, "w"), (0o010, "x"),
-            (0o004, "r"), (0o002, "w"), (0o001, "x"),
-        ]
-        return type + bits.map { (mode & $0.0) != 0 ? $0.1 : "-" }.joined()
+        let type: Character = entry.isDirectory ? "d" : (entry.isSymlink ? "l" : "-")
+        var out = ""
+        out.reserveCapacity(10)
+        out.append(type)
+        guard let mode = entry.permissions else {
+            out.append(contentsOf: "---------")
+            return out
+        }
+        for (bit, ch) in Self.permBits { out.append((mode & bit) != 0 ? ch : "-") }
+        return out
     }
+
+    private static let permBits: [(UInt32, Character)] = [
+        (0o400, "r"), (0o200, "w"), (0o100, "x"),
+        (0o040, "r"), (0o020, "w"), (0o010, "x"),
+        (0o004, "r"), (0o002, "w"), (0o001, "x"),
+    ]
 }

@@ -255,7 +255,16 @@ struct MDot: View {
             Circle().fill(color).frame(width: size, height: size)
         }
         .frame(width: size, height: size)
-        .onAppear { if pulse { anim = true } }
+        // 改前只有 `onAppear { if pulse { anim = true } }` —— 这一行**建出来的时候
+        // 往往还不该呼吸**（并行执行是先排队 `.pending` 后 `.running`，终端标签是
+        // 先 `.idle` 后 `.connecting`），等它真的开始跑，置位那一刻早就过去了，
+        // 圈永远不动。这是行为 bug，不是性能。
+        //
+        // 反向也补上：`pulse` 转回 false 时把 `anim` 归零，下一轮才重新起跳；
+        // 而 `if pulse` 本来就会把带 `repeatForever` 的那一层整个撤掉 ——
+        // 所以任何时刻只有**真正在跑的行**挂着无限动画，n 台并行也就 n 个。
+        .onAppear { anim = pulse }
+        .onChange(of: pulse) { _, on in anim = on }
     }
 }
 
