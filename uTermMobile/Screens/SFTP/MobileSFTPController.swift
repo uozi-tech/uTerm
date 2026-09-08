@@ -2,7 +2,11 @@ import SwiftUI
 import SwiftData
 import Observation
 
-/// iOS SFTP 浏览控制器：在一台主机上建连并跑真实 Citadel SFTP（复用 `SFTPSession`）。
+/// iOS SFTP 浏览控制器：在一台主机上建连，之后所有操作都经 `SFTPProviding`。
+///
+/// 生产路径（`start(profile:container:relay:)`）建的仍是真实 Citadel `SFTPSession`；
+/// 依赖只声明到协议上，是为了让测试能注入假会话 —— 与桌面 `FileBrowserModel`
+/// 的 `init(testProvider:startPath:)` 同一条缝、同一个协议。
 @MainActor
 @Observable
 final class MobileSFTPController {
@@ -13,8 +17,24 @@ final class MobileSFTPController {
     var entries: [RemoteEntry] = []
     var loading = false
 
-    @ObservationIgnored private var session: SFTPSession?
+    /// 当前会话。生产是 `SFTPSession`，测试是任意 `SFTPProviding` 实现。
+    @ObservationIgnored private var session: (any SFTPProviding)?
     @ObservationIgnored private var started = false
+
+    init() {}
+
+    /// 测试注入口（镜像 `FileBrowserModel.init(testProvider:startPath:)`）：
+    /// 直接进入「已连上、当前目录 = `startPath`」的浏览态，不建任何真实连接。
+    /// `started = true` 让误触的 `start(...)` 变成 no-op，绝不会回退到真实建连。
+    ///
+    /// 目录内容不在这里读 —— `entries` 仍由 `load(_:)` 走 provider 填，
+    /// 这样测试跑的是产品自己的加载/排序路径。
+    init(testProvider: any SFTPProviding, startPath: String) {
+        self.session = testProvider
+        self.state = .connected
+        self.path = startPath
+        self.started = true
+    }
 
     /// 记下首次建连参数，供失败后 `restart()`（连接中页「重试」）重连。
     @ObservationIgnored private var lastProfile: ServerProfile?
@@ -51,7 +71,7 @@ final class MobileSFTPController {
                 let connected = try await SSHClientFactory.connect(
                     profile: snapshot, auth: auth, jumpHostAuth: jumpAuth,
                     hostKeyVerifier: verifier, hostKeyApprover: approver)
-                let session = try await SFTPSession(connected: connected)
+                let session: any SFTPProviding = try await SFTPSession(connected: connected)
                 let home = (try? await session.realPath(".")) ?? "/"
                 await MainActor.run {
                     self?.session = session
