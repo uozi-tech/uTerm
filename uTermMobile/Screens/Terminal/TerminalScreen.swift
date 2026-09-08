@@ -16,13 +16,18 @@ enum MTerminalMode: Hashable { case terminal, agent }
 final class TermTab: Identifiable {
     let id = UUID()
     let host: ServerProfile
-    let controller = MobileTerminalController()
+    let controller: MobileTerminalController
     let agent = AssistantModel()
     /// Agent 在途驱动 Task 集：会话关闭时取消，停掉在途 LLM 流 / 工具循环（见 `MAgentTaskBag`）。
     let agentTasks = MAgentTaskBag()
     /// 当前是纯终端还是 Agent 模式。
     var mode: MTerminalMode = .terminal
-    init(host: ServerProfile) { self.host = host }
+    /// `transportFactory` 默认真 SSH——生产侧一律用 `TermTab(host:)`，行为不变；
+    /// 探针注入假传输，从而在不发起任何真实连接的前提下把整屏挂起来。
+    init(host: ServerProfile, transportFactory: MobileTerminalTransportFactory = .live) {
+        self.host = host
+        self.controller = MobileTerminalController(transportFactory: transportFactory)
+    }
 }
 
 /// 终端会话集合：把 `tabs` / `activeID` 从 `TerminalScreen` 的 `@State` 上移到此处，由根视图

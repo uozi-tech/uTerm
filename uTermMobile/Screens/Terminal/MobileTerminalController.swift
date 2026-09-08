@@ -33,7 +33,11 @@ final class MobileTerminalController {
     // Tab/Split 间切换、TerminalScreen 重建，复用同一视图既不空白也不断连。
     // 无循环引用：SwiftTerm 的 `terminalDelegate` 是 weak，view 不强持 coordinator。
     @ObservationIgnored private(set) var terminalView: SwiftTerm.TerminalView?
-    @ObservationIgnored private var connection: SSHConnection?
+    /// 后端按协议持有（`TerminalBackend`，桌面 `TerminalSession` 用的同一个抽象）：
+    /// 生产是 `SSHConnection`，测试注入假传输。控制器本身不知道底下是谁。
+    @ObservationIgnored private var connection: (any TerminalBackend)?
+    /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
+    @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
     @ObservationIgnored private var outputTask: Task<Void, Never>?
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
     @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
@@ -51,6 +55,11 @@ final class MobileTerminalController {
     @ObservationIgnored private var lastProfile: ServerProfile?
     @ObservationIgnored private var lastContainer: ModelContainer?
     @ObservationIgnored private var lastRelay: HostKeyChallengeRelay?
+
+    /// `transportFactory` 默认真 SSH——生产侧调用点（`TermTab`）不用改。
+    init(transportFactory: MobileTerminalTransportFactory = .live) {
+        self.transportFactory = transportFactory
+    }
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
@@ -140,23 +149,15 @@ final class MobileTerminalController {
         state = .connecting
         lastProfile = profile; lastContainer = container; lastRelay = relay
 
-        let snapshot = SSHConnection.ProfileSnapshot(profile)
-        let keychain = KeychainStore()
-        let auth: ResolvedAuth
+        let conn: any TerminalBackend
         do {
-            auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
+            conn = try transportFactory.make(
+                MobileTerminalTransportRequest(profile: profile, container: container, relay: relay))
         } catch {
+            // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
             state = .failed("认证材料解析失败：\(error.localizedDescription)")
             return
         }
-        var jumpAuth: ResolvedAuth?
-        if let jump = profile.jumpHost {
-            jumpAuth = try? SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-        }
-        let verifier = HostKeyVerifier(modelContainer: container)
-        // 首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
-        let conn = SSHConnection(profile: snapshot, auth: auth, jumpHostAuth: jumpAuth,
-                                 hostKeyVerifier: verifier, hostKeyApprover: relay.makeApprover())
         connection = conn
 
         let outStream = conn.outputStream
