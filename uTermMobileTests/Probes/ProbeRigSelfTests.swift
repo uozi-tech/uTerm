@@ -273,11 +273,22 @@ final class ProbeRigSelfTests: XCTestCase {
     ///
     /// 拆不干净的后果是下一档的 footprint 带着上一档的账，而 footprint 恰恰是
     /// 「换懒栈到底省没省内存」这类结论的唯一依据。
+    ///
+    /// 断言口径是「**mount 前量到的值**，挂完再拆之后必须一模一样」——
+    /// 不写死 `.normal`、也不拿 `hostLevel` 反推。这条用例本身曾经是跨用例污染的
+    /// 受害者：`MobileFixturesTests` 逐扇 `close(_:)` 拆窗、从不复原宿主，
+    /// 于是它量到的「mount 前」是上一条用例留下的 -100，而 `closeAll()` 把窗口
+    /// 恢复成了真正的原值 0，两边打架（见 README「夹具跨用例契约」）。
     func testCloseAllTearsDownAndRestoresHost() async throws {
         let scene = try XCTUnwrap(MobileProbeWindow.activeScene(), "测试宿主必须有一个前台 scene")
         let hostWindows = scene.windows
-        let before = hostWindows.map(\.windowLevel)
         XCTAssertFalse(hostWindows.isEmpty, "宿主 uTermMobile.app 必须已经建好窗口")
+        // mount 前的层级 —— 前面每条用例都复原过，这里量到的必然是进程原值。
+        let before = hostWindows.map(\.windowLevel)
+        for host in hostWindows {
+            XCTAssertNotEqual(host.windowLevel, MobileProbeWindow.hostLevel,
+                              "进这条用例时宿主不该还压着 —— 说明前面某条用例漏了 closeAll()")
+        }
 
         let rig = MobileProbeRig(label: "teardown", size: Self.size)
         rig.mount(ProbeSmokeTests.rowList(50))
@@ -285,9 +296,11 @@ final class ProbeRigSelfTests: XCTestCase {
         let window = try XCTUnwrap(rig.window)
         XCTAssertGreaterThan(window.windowLevel.rawValue, MobileProbeWindow.hostLevel.rawValue,
                              "探针窗口必须压在宿主之上")
-        for host in hostWindows {
+        for (host, level) in zip(hostWindows, before) {
             XCTAssertEqual(host.windowLevel, MobileProbeWindow.hostLevel,
                            "isolateHost 应该把宿主窗口压到 hostLevel")
+            XCTAssertEqual(MobileProbeWindow.originalHostLevel(of: host), level,
+                           "记下来的「原值」必须是 mount 前那个值，不是被谁压过的残值")
         }
 
         MobileProbeWindow.closeAll()
@@ -296,6 +309,49 @@ final class ProbeRigSelfTests: XCTestCase {
         for (host, level) in zip(hostWindows, before) {
             XCTAssertEqual(host.windowLevel, level, "宿主窗口的 windowLevel 必须复原")
         }
-        print("[teardown] host-windows=\(hostWindows.count) levels-restored=yes")
+        print("[teardown] host-windows=\(hostWindows.count) "
+              + "levels=\(before.map { $0.rawValue }) restored=yes")
+    }
+
+    /// 连跑两轮 isolate / close，宿主层级不漂移。
+    ///
+    /// 这是上一条用例的**根因守卫**，两条性质一起守：
+    ///
+    /// 1. **逐扇 `close(_:)` 也算一条合法退出路径**（`MobileProbeRig.close()`、
+    ///    夹具自证用例走的就是它），拆掉最后一扇之后宿主必须已经抬回去 ——
+    ///    老实现只有 `closeAll()` 负责复原，这一步会把宿主留在 -100。
+    /// 2. **原值只记一次**：第二轮再压再拆，落点必须与第一轮一模一样。老实现每轮
+    ///    重记一次「压之前的层级」，第一轮的残值 -100 会被第二轮当成原值，从此回不去。
+    ///
+    /// 所以两轮分别走两条退出路径：第 0 轮逐扇 `close(_:)`，第 1 轮 `closeAll()`。
+    func testRepeatedIsolateCloseDoesNotDriftHostLevel() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let scene = try XCTUnwrap(MobileProbeWindow.activeScene(), "测试宿主必须有一个前台 scene")
+        let hostWindows = scene.windows
+        let original = hostWindows.map(\.windowLevel)
+
+        var afterEachRound: [[UIWindow.Level]] = []
+        for round in 0..<2 {
+            let rig = MobileProbeRig(label: "drift-\(round)", size: Self.size)
+            rig.mount(ProbeSmokeTests.rowList(30))
+            for host in hostWindows {
+                XCTAssertEqual(host.windowLevel, MobileProbeWindow.hostLevel,
+                               "第 \(round) 轮：isolateHost 应该把宿主压下去")
+            }
+            if round == 0 {
+                // 逐扇拆：拆掉最后一扇时也必须复原。
+                MobileProbeWindow.close(try XCTUnwrap(rig.window))
+            } else {
+                MobileProbeWindow.closeAll()
+            }
+            XCTAssertEqual(MobileProbeWindow.openWindowCount, 0, "第 \(round) 轮：窗口该拆光了")
+            afterEachRound.append(hostWindows.map(\.windowLevel))
+        }
+
+        XCTAssertEqual(afterEachRound[0], original, "第 1 轮（逐扇 close）拆完必须回到原值")
+        XCTAssertEqual(afterEachRound[1], original, "第 2 轮（closeAll）必须回到同一个原值（不漂移）")
+        print("[drift] original=\(original.map { $0.rawValue }) "
+              + "round1=\(afterEachRound[0].map { $0.rawValue }) "
+              + "round2=\(afterEachRound[1].map { $0.rawValue })")
     }
 }

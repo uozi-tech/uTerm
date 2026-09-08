@@ -100,8 +100,46 @@ enum MobileProbeWindow {
     /// 本进程里由 `make(...)` 建出来、还没拆的窗口。`closeAll()` 拿它兜底。
     private static var created: [UIWindow] = []
 
-    /// `isolateHost` 压过层级的宿主窗口 + 它原本的层级。`closeAll()` 时复原。
-    private static var loweredHosts: [(window: UIWindow, level: UIWindow.Level)] = []
+    /// 宿主窗口 → **本进程第一次看到它时**的 `windowLevel`。
+    ///
+    /// 曾经这里记的是「上一次压之前的层级」（每轮 `isolateHost` 重记一次、`closeAll()`
+    /// 消费掉）。那样只要有任何一条用例漏了复原，下一条用例就会把残值 `hostLevel`
+    /// 当成「原值」记进来，两条用例的复原目标从此打架 —— 全量跑一次红的根因就是它
+    /// （`MobileFixturesTests` 走 `close(_:)` 逐扇拆窗、从不复原宿主，之后
+    /// `ProbeRigSelfTests.testCloseAllTearsDownAndRestoresHost` 量到的「mount 前」
+    /// 已经是 -100，而 `closeAll()` 把它恢复成了真正的原值 0）。
+    ///
+    /// 现在改成**只记一次**：某扇窗第一次进 `isolateHostWindows` 时把当时的层级
+    /// 存下来，之后无论被压多少轮都不再更新，复原永远回到进程启动时的那个值。
+    /// 于是「压 → 复原」是幂等的，任何顺序、任何漏拆都不会让原值漂移。
+    private struct HostLevelMemo {
+        /// 弱引用：宿主窗口的生命周期归 scene 管，夹具不该把它钉住。
+        weak var window: UIWindow?
+        let originalLevel: UIWindow.Level
+    }
+    private static var hostLevelMemos: [HostLevelMemo] = []
+
+    /// 记下某扇宿主窗口的原始层级 —— 已经记过的**不覆盖**。
+    private static func rememberOriginalLevel(of window: UIWindow) {
+        hostLevelMemos.removeAll { $0.window == nil }
+        guard !hostLevelMemos.contains(where: { $0.window === window }) else { return }
+        hostLevelMemos.append(HostLevelMemo(window: window, originalLevel: window.windowLevel))
+    }
+
+    /// 本进程第一次看到这扇宿主窗口时的层级。没被 `isolateHost` 碰过则为 nil。
+    /// 自证测试拿它当断言目标。
+    static func originalHostLevel(of window: UIWindow) -> UIWindow.Level? {
+        hostLevelMemos.first { $0.window === window }?.originalLevel
+    }
+
+    /// 把所有被 `isolateHost` 压过的宿主窗口恢复到**进程内首见**的层级。幂等。
+    static func restoreHostWindows() {
+        for memo in hostLevelMemos {
+            guard let window = memo.window else { continue }
+            window.windowLevel = memo.originalLevel
+        }
+        hostLevelMemos.removeAll { $0.window == nil }
+    }
 
     /// 建一个 `UIWindow`，挂上 `UIHostingController(rootView:)`，按 `placement` 摆好。
     ///
@@ -175,12 +213,15 @@ enum MobileProbeWindow {
     /// 宿主自带的窗口里跑着真实应用逻辑（SplashView / SwiftData 容器 / CloudKit 监听），
     /// 盖在探针窗口上会污染读数。桌面那份直接 `orderOut`；iOS 上**不能拆** ——
     /// 拆掉会连带带走 SwiftData 的 `ModelContainer` 环境（README 坑⑤）。
-    /// 这里只把它们压到 `hostLevel`，`closeAll()` 时按记录复原。
+    /// 这里只把它们压到 `hostLevel`，拆掉最后一扇探针窗时按**首见层级**复原。
+    ///
+    /// 不再按「当前层级 != hostLevel」过滤：那个过滤条件的本意是「别把自己压过的
+    /// 值当原值记第二遍」，但记忆改成只记一次之后它就多余了，而且它会漏掉一种情况 ——
+    /// 上一条用例漏了复原时，这一条压根不会把窗口重新登记，谁也不负责把它抬回去。
     static func isolateHostWindows(keeping kept: [UIWindow]) {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for window in scene.windows
-            where !kept.contains(window) && !created.contains(window) && window.windowLevel != hostLevel {
-                loweredHosts.append((window, window.windowLevel))
+            for window in scene.windows where !kept.contains(window) && !created.contains(window) {
+                rememberOriginalLevel(of: window)
                 window.windowLevel = hostLevel
             }
         }
@@ -189,11 +230,15 @@ enum MobileProbeWindow {
     /// 拆一扇窗。`rootViewController = nil` 必须显式做：只置 `isHidden` 的话
     /// hosting controller 与它的图层后备存储会跟着窗口一起被 scene 拖着不放，
     /// 下一档的 footprint 读数就带着上一档的账。
+    ///
+    /// 拆掉**最后一扇**探针窗时顺手复原宿主层级 —— 逐扇拆窗也是一条合法退出路径
+    /// （`MobileProbeRig.close()`、夹具自证用例都走它），不能只有 `closeAll()` 负责复原。
     static func close(_ window: UIWindow) {
         window.isHidden = true
         window.rootViewController = nil
         window.windowScene = nil
         created.removeAll { $0 === window }
+        if created.isEmpty { restoreHostWindows() }
     }
 
     /// 拆掉本进程里所有由 `make(...)` 建的窗，并复原被 `isolateHost` 压过的宿主窗口。
@@ -204,10 +249,8 @@ enum MobileProbeWindow {
     static func closeAll() {
         for window in created { close(window) }
         created.removeAll()
-        for entry in loweredHosts where entry.window.windowLevel == hostLevel {
-            entry.window.windowLevel = entry.level
-        }
-        loweredHosts.removeAll()
+        // 一扇探针窗都没建过时 `close(_:)` 不会被调到，这里兜一次；复原是幂等的。
+        restoreHostWindows()
     }
 
     /// 还没拆的探针窗口数。自证用（拆窗漏了会让下一档带上一档的账）。

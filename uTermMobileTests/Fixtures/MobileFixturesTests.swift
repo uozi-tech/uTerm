@@ -19,11 +19,13 @@ import XCTest
 @MainActor
 final class MobileFixturesTests: XCTestCase {
 
-    private var windows: [UIWindow] = []
-
+    /// 拆窗只走 `MobileProbeWindow.closeAll()` 这一个入口 —— 它同时负责把
+    /// `isolateHost` 压过的宿主窗口层级抬回去。这里曾经自己攒了一个 `windows`
+    /// 数组、逐扇 `close(_:)`，宿主层级从此没人复原，全量跑一次就把
+    /// `ProbeRigSelfTests.testCloseAllTearsDownAndRestoresHost` 拖红了
+    /// （见 README「夹具跨用例契约」）。
     private func closeAllWindows() {
-        for window in windows { MobileProbeWindow.close(window) }
-        windows.removeAll()
+        MobileProbeWindow.closeAll()
     }
 
     // MARK: - 1. 播种：@Query / fetch 数量对得上
@@ -129,11 +131,13 @@ final class MobileFixturesTests: XCTestCase {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         defer { closeAllWindows() }
 
+        // 静态哨兵每次归零：不归零的话「视图压根没 onAppear」会被上一轮的残值盖过去，
+        // 断言变成假绿（夹具跨用例契约：进程内 static 必须由用它的那条用例自己复位）。
+        QueryCountProbe.lastSeenServers = -1
         let probe = QueryCountProbe()
-        let (window, host) = MobileProbeWindow.make(
+        let (_, host) = MobileProbeWindow.make(
             size: CGSize(width: 390, height: 700),
             rootView: AnyView(probe.modelContainer(container)))
-        windows.append(window)
         host.view.layoutIfNeeded()
         CATransaction.flush()
 
@@ -217,9 +221,8 @@ final class MobileFixturesTests: XCTestCase {
                     .environment(session)
                     .modelContainer(container))
             let start = CFAbsoluteTimeGetCurrent()
-            let (window, hostVC) = MobileProbeWindow.make(
+            let (_, hostVC) = MobileProbeWindow.make(
                 size: CGSize(width: 390, height: 844), rootView: root)
-            windows.append(window)
             hostVC.view.layoutIfNeeded()
             CATransaction.flush()
             let mountMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
