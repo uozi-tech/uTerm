@@ -188,7 +188,80 @@ final class MobileFixturesTests: XCTestCase {
         await MobileFakeSFTP.goUp(controller, provider: provider)
         XCTAssertEqual(controller.path, "/")
         XCTAssertEqual(controller.entries.count, 200)
-        XCTAssertEqual(provider.listCallCount, 3, "每次换目录正好一次 list")
+        // 每次换目录正好一次 list（外加建控制器时的那一次）。
+        let listCalls = await provider.listCallCount
+        XCTAssertEqual(listCalls, 3, "每次换目录正好一次 list")
+    }
+
+    /// 假会话现在实现的是产品协议 `SFTPProviding`，控制器的写路径也真的落到树上。
+    func testFakeSFTPMutationsGoThroughController() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 40)
+        let controller = await MobileFakeSFTP.controller(provider: provider)
+        XCTAssertEqual(controller.entries.count, 40)
+
+        // 1. 重命名：产品的 `rename` → 假会话改树 → 产品自己重列目录。
+        let target = try XCTUnwrap(controller.entries.first { $0.isRegularFileForProbe })
+        controller.rename(target, to: "renamed-by-probe.bin")
+        try await MobileFakeSFTP.settle("重命名后列表刷新") {
+            controller.entries.contains { $0.name == "renamed-by-probe.bin" }
+        }
+        XCTAssertEqual(controller.entries.count, 40, "改名不改条目数")
+        XCTAssertFalse(controller.entries.contains { $0.name == target.name })
+
+        // 2. chmod：低 9 位真的变了，文件类型位保留。
+        let renamed = try XCTUnwrap(controller.entries.first { $0.name == "renamed-by-probe.bin" })
+        controller.chmod(renamed, mode: 0o600)
+        try await MobileFakeSFTP.settle("chmod 后列表刷新") {
+            (controller.entries.first { $0.name == "renamed-by-probe.bin" }?
+                .permissions ?? 0) & 0o777 == 0o600
+        }
+
+        // 3. 删除：条目数真的少一条。
+        let victim = try XCTUnwrap(controller.entries.first { $0.name == "renamed-by-probe.bin" })
+        controller.delete(victim)
+        try await MobileFakeSFTP.settle("删除后列表刷新") { controller.entries.count == 39 }
+        XCTAssertFalse(controller.entries.contains { $0.name == "renamed-by-probe.bin" })
+
+        // 4. 上传 + 下载往返：产品的 upload(from:) / download(_:) 都真的走通。
+        let payload = Data((0..<8_192).map { UInt8($0 % 251) })
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("probe-upload-\(UUID().uuidString).bin")
+        try payload.write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        controller.upload(from: localURL)
+        try await MobileFakeSFTP.settle("上传后列表刷新") {
+            controller.entries.contains { $0.name == localURL.lastPathComponent }
+        }
+        let uploaded = try XCTUnwrap(
+            controller.entries.first { $0.name == localURL.lastPathComponent })
+        let downloadedURL = await controller.download(uploaded)
+        let downloaded = try XCTUnwrap(downloadedURL)
+        XCTAssertEqual(try Data(contentsOf: downloaded), payload, "上传下载必须字节一致")
+
+        // 5. 失败注入：删除失败要落到 `.failed` 态。
+        await provider.inject(.removeFile, message: "权限不足")
+        let another = try XCTUnwrap(controller.entries.first { $0.isRegularFileForProbe })
+        controller.delete(another)
+        try await MobileFakeSFTP.settle("失败注入后进入 failed 态") {
+            if case .failed = controller.state { return true }
+            return false
+        }
+    }
+
+    /// 目录进出走产品的 `open` / `goUp`（发射后不管的 `Task`），不再靠夹具回填。
+    func testControllerOpenAndGoUpUseProductPath() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 120, subdirectories: 4,
+                                              childCount: 30, depth: 2)
+        let controller = await MobileFakeSFTP.controller(provider: provider)
+        let dir = try XCTUnwrap(controller.entries.first { $0.isDirectory })
+
+        controller.open(dir)
+        try await MobileFakeSFTP.settle("进子目录") { controller.path == "/\(dir.name)" }
+        XCTAssertEqual(controller.entries.count, 30)
+
+        controller.goUp()
+        try await MobileFakeSFTP.settle("返回上级") { controller.path == "/" }
+        XCTAssertEqual(controller.entries.count, 120)
     }
 
     /// 时延档：50ms 的假网络真的会 sleep。
