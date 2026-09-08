@@ -26,6 +26,15 @@ struct ServerList: View {
     let groupColorHexes: [String: String]
     var rowDragEnabled = true
     var reorderEnabled = false
+    /// 选中变化时把目标行滚进可视区。默认开（产品行为），关掉是**探针的归因臂**：
+    /// `ServerListSelectionScrollProbeTests` 拿「同一份 `ServerList`，只少这一次
+    /// `scrollTo`（滚动改由探针用 `NSClipView.scroll(to:)` 手滚同样的距离）」当分母，
+    /// 闸门才能写成同轮比值而不是绝对毫秒
+    /// （uTable playbook §二·4：绝对基准换台机器就是假红）。
+    /// 归因臂必须是产品代码本身 —— 复刻件的读数只能做同构对比，不能给真实屏定罪
+    /// （playbook §二·五）。用 `#if DEBUG` 的静态开关代替它反而更差：两臂要在同一个
+    /// 进程里交错跑，全局可变状态会互相污染，而且 Release 配置下探针就没法跑了。
+    var scrollsSelectionIntoView = true
     var onMove: (_ sourceID: UUID, _ targetID: UUID) -> Void = { _, _ in }
 
     enum ContextAction: Equatable {
@@ -135,21 +144,26 @@ struct ServerList: View {
                 // |---|---|---|---|---|
                 // | 带 `withAnimation`（现状） | 34.97 / 36.69ms | 91.21 / 56.19ms | 98 / 61ms | 242 / 246 拍 |
                 // | 去掉 `withAnimation` | 39.11 / 39.79ms | 63.91 / 64.25ms | 67 / 67ms | 245 / 251 拍 |
-                // | 连 `scrollTo` 一起去掉（归因臂） | **6.59ms** | **9.16ms** | **11ms** | **333 拍** |
+                // | 连 `scrollTo` 一起去掉（完全不滚） | **6.59ms** | **9.16ms** | **11ms** | **333 拍** |
                 //
                 // 两条结论，都跟去之前的先验相反：
                 // 1. **753575d 那个失效模式在这里不发生**：没有单次 3s+ 的布局事务，
-                //    心跳 242~251 拍（掉死的话是个位数），NSView 恒 39 不随规模涨
+                //    心跳 242~251 拍（掉死的话是个位数），NSView 不随规模涨
                 //    （§七 第四条：判「回不回收」只看扫完之后数 NSView）。
                 // 2. **去掉动画不是收益**：p50 反而 35 → 39ms，100 台真实档也从
-                //    6.2 → 8.6ms；只有尾部收紧一点。真正的账在 `scrollTo` 本身——
-                //    它逼 `LazyVStack` 解析 2000 行的目标偏移（35ms vs 6.6ms）。
+                //    6.2 → 8.6ms；只有尾部收紧一点。真正的账在 `scrollTo` 本身。
+                //
+                // 「完全不滚」那一行里混着整屏重绘的账。把分母换成**手滚同样的距离**
+                // （`NSClipView.scroll(to:)`）之后，纯 `scrollTo` 的税是：
+                // 2000 台 66ms vs 33ms（2.0~2.3×，`LazyVStack` 为一次定位摸行的钱），
+                // **100 台真实档 15.5ms vs 16.8ms —— 不收税**（0.88~0.98×）。
                 //
                 // 所以动画**留着**（它是键盘导航的设计语义），闸门改成钉后果：
-                // 心跳拍数、单步不得出现 500ms 级的长事务、NSView 不随规模涨。
-                // 真要再往下，要动的是 `scrollTo` 那 35ms，不是这 0.12 秒补间。
+                // 结构判据（落点、NSView 数、文档高对行数）+ 同轮两臂比值，
+                // 绝对毫秒只打印。真要再往下，要动的是 2000 行档 `scrollTo` 那 2.2 倍，
+                // 不是这 0.12 秒补间。
                 .onChange(of: selectedID) { _, id in
-                    guard let id else { return }
+                    guard scrollsSelectionIntoView, let id else { return }
                     withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
                 }
             }
