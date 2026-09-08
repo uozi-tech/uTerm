@@ -50,6 +50,13 @@
 			remoteGlobalIDString = 85D6BEEE2FBC4E7E00FC90D8;
 			remoteInfo = uTerm;
 		};
+		B1000000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10C0DE0000000000000000A1;
+			remoteInfo = uTermMobile;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -57,6 +64,7 @@
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		B1000000000000000000000C /* uTermMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -99,6 +107,7 @@
 				Features/Editor/Selection/SameWordEmphasis.swift,
 				Features/Files/FileBrowserModel.swift,
 				Features/Files/RemoteFileDragPayload.swift,
+				Features/Files/RemoteRowDropTargeting.swift,
 				Features/Files/Views/FileBrowserView.swift,
 				Features/Groups/Views/GroupRowDragModifier.swift,
 				Features/Groups/Views/GroupsManagerView.swift,
@@ -232,6 +241,7 @@
 				Features/Workspace/WorkspaceUIState.swift,
 				Features/Workspace/WorkspaceWindowID.swift,
 				Services/Update/AppUpdater.swift,
+				Shared/Views/ClickSelectActivate.swift,
 				Shared/Views/ConnectionStatusBadge.swift,
 				Shared/Views/DragGhostWindowBridge.swift,
 				Shared/Views/HostKeyPromptView.swift,
@@ -259,6 +269,11 @@
 		B00000000000000000000002 /* uTermTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = uTermTests;
+			sourceTree = "<group>";
+		};
+		B10000000000000000000002 /* uTermMobileTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = uTermMobileTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -318,6 +333,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -328,6 +350,7 @@
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 				10C0DE0000000000000000B0 /* uTermMobile */,
 				B00000000000000000000002 /* uTermTests */,
+				B10000000000000000000002 /* uTermMobileTests */,
 				85D6BEF02FBC4E7E00FC90D8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -338,6 +361,7 @@
 				85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */,
 				B0000000000000000000000C /* uTermTests.xctest */,
 				10C0DE0000000000000000A6 /* uTermMobile.app */,
+				B1000000000000000000000C /* uTermMobileTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -453,6 +477,27 @@
 			productReference = B0000000000000000000000C /* uTermTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B10000000000000000000006 /* uTermMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000009 /* Build configuration list for PBXNativeTarget "uTermMobileTests" */;
+			buildPhases = (
+				B10000000000000000000003 /* Sources */,
+				B10000000000000000000004 /* Frameworks */,
+				B10000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B1000000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B10000000000000000000002 /* uTermMobileTests */,
+			);
+			name = uTermMobileTests;
+			productName = uTermMobileTests;
+			productReference = B1000000000000000000000C /* uTermMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -472,6 +517,10 @@
 					B00000000000000000000006 = {
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = 85D6BEEE2FBC4E7E00FC90D8;
+					};
+					B10000000000000000000006 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 10C0DE0000000000000000A1;
 					};
 				};
 			};
@@ -511,6 +560,7 @@
 				85D6BEEE2FBC4E7E00FC90D8 /* uTerm */,
 				10C0DE0000000000000000A1 /* uTermMobile */,
 				B00000000000000000000006 /* uTermTests */,
+				B10000000000000000000006 /* uTermMobileTests */,
 			);
 		};
 /* End PBXProject section */
@@ -531,6 +581,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B00000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -584,6 +641,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -591,6 +655,11 @@
 			isa = PBXTargetDependency;
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
 			targetProxy = B0000000000000000000000A /* PBXContainerItemProxy */;
+		};
+		B1000000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+			targetProxy = B1000000000000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -927,6 +996,56 @@
 			};
 			name = Release;
 		};
+		B10000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/uTermMobile.app/uTermMobile";
+			};
+			name = Debug;
+		};
+		B10000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTermMobileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/uTermMobile.app/uTermMobile";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -962,6 +1081,15 @@
 			buildConfigurations = (
 				B00000000000000000000007 /* Debug */,
 				B00000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000009 /* Build configuration list for PBXNativeTarget "uTermMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000007 /* Debug */,
+				B10000000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -7,6 +7,12 @@ CONFIGURATION ?= Release
 TEST_CONFIGURATION ?= Debug
 DESTINATION ?= platform=macOS
 
+# iOS/iPadOS 模拟器目标（uTermMobile scheme + uTermMobileTests bundle）。
+# 换机器：make test-mobile MOBILE_DESTINATION='platform=iOS Simulator,name=iPad Pro 11-inch (M5)'
+# 这台机器上没有 iOS 模拟器运行时的话先跑一次 `xcodebuild -downloadPlatform iOS`（8.5GB）。
+MOBILE_SCHEME ?= uTermMobile
+MOBILE_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
+
 BUILD_DIR := build
 DERIVED_DATA := $(BUILD_DIR)/DerivedData
 APP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/$(APP_NAME).app
@@ -64,7 +70,7 @@ APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
-	build archive export-app test clean dmg dmg-background sign-release-app install verify \
+	build archive export-app test test-mobile clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
 	release tag notify sparkle-tools sparkle-keys appcast publish distribute dry-run
 
@@ -78,6 +84,7 @@ help:
 	@printf '%s\n' '  make archive                           Archive the app (automatic signing)'
 	@printf '%s\n' '  make export-app                        Export a Developer ID-signed app from the archive'
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
+	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
@@ -166,6 +173,18 @@ test:
 		-scheme "$(SCHEME)" \
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		test
+
+# iOS/iPadOS：宿主是 uTermMobile.app，跑在模拟器上。测试 bundle 靠 TEST_HOST 取符号，
+# Frameworks 阶段是空的（见 uTermMobileTests/README.md）。
+# 不要加 CODE_SIGNING_ALLOWED=NO —— 模拟器走 ad-hoc 签名，entitlements 不挡路。
+test-mobile:
+	xcodebuild \
+		-project "$(PROJECT)" \
+		-scheme "$(MOBILE_SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(MOBILE_DESTINATION)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		test
 
