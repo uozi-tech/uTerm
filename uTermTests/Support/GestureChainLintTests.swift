@@ -74,12 +74,15 @@ final class GestureChainLintTests: XCTestCase {
     /// 两档：严格档是任务点名的那个形状；宽松档是同一族（同一行里既有
     /// `? UD.<色>` 又有 `??` 兜底）。两档都空也照样打印 0，好让人知道扫过了。
     func testReportSelectionOverridesExplicitColor() throws {
-        // 严格：`… ? UD.<色> : (… ?? …)` —— false 支是「显式颜色，没有就退默认」，
+        // 色源在 macOS 是 `UD.<色>`，在 iOS 是 `M.<色>` 或环境里的 `accent`
+        //（`@Environment(\.mAccent)`）——三种形态一起认，否则 iOS 侧等于没扫。
+        let tint = #"(?:UD|M)\.[A-Za-z0-9_]+|accent"#
+        // 严格：`… ? <色> : (… ?? …)` —— false 支是「显式颜色，没有就退默认」，
         // 被 true 支整个盖掉。
         let strict = try NSRegularExpression(
-            pattern: #"\?\s*UD\.[A-Za-z0-9_]+\s*:\s*\(?[^)\n]*\?\?"#)
-        // 宽松：同一行里既有 `? UD.<色>` 又有 `??`。
-        let loose = try NSRegularExpression(pattern: #"\?\s*UD\.[A-Za-z0-9_]+"#)
+            pattern: #"\?\s*(?:"# + tint + #")\s*:\s*\(?[^)\n]*\?\?"#)
+        // 宽松：同一行里既有 `? <色>` 又有 `??`。
+        let loose = try NSRegularExpression(pattern: #"\?\s*(?:"# + tint + #")"#)
 
         var strictHits: [String] = []
         var looseHits: [String] = []
@@ -114,25 +117,43 @@ final class GestureChainLintTests: XCTestCase {
 
     /// 只留仓库内相对路径。不能用 `repoRoot.path` 前缀相减：`#filePath` 里记的是
     /// 编译时那份路径（`/tmp/…`），而 `FileManager` 枚举出来的是解过符号链接的
-    /// `/private/tmp/…`，相减会剩下半截 `/private`。直接从 `/uTerm/` 切。
+    /// `/private/tmp/…`，相减会剩下半截 `/private`。直接从源码根目录名切。
+    ///
+    /// `uTermMobile` 要排在前面：`/uTerm/` 匹配不到 `/uTermMobile/`（后者
+    /// 「uTerm」后面跟的不是 `/`），但顺序写反了以后加新根就容易踩。
     private static func relative(_ url: URL) -> String {
-        guard let r = url.path.range(of: "/uTerm/") else { return url.path }
-        return String(url.path[r.lowerBound...].dropFirst())
+        for marker in ["/uTermMobile/", "/uTerm/"] {
+            if let r = url.path.range(of: marker) {
+                return String(url.path[r.lowerBound...].dropFirst())
+            }
+        }
+        return url.path
     }
 
-    /// `uTerm/` 下的全部 .swift（产品代码；不扫测试、不扫 vendor）。
-    private static func swiftFiles() throws -> [URL] {
-        let root = repoRoot.appendingPathComponent("uTerm")
+    /// `uTerm/` 与 `uTermMobile/` 下的全部 .swift（产品代码；不扫测试、不扫 vendor）。
+    ///
+    /// **iOS 端一并扫**：`uTermMobile/` 是同一批形态的第二现场
+    /// （行体里的手势链、每行现建的 formatter、非 lazy 容器里的 `Button`），
+    /// 而且 iOS 没有测试 target，纯文本 lint 是那边唯一能落的自动化闸门。
+    static func swiftFiles() throws -> [URL] {
         var out: [URL] = []
-        guard let e = FileManager.default.enumerator(at: root,
-                                                     includingPropertiesForKeys: [.isRegularFileKey]) else {
-            return []
+        for root in ["uTerm", "uTermMobile"] {
+            let dir = repoRoot.appendingPathComponent(root)
+            guard let e = FileManager.default.enumerator(
+                at: dir, includingPropertiesForKeys: [.isRegularFileKey]) else { continue }
+            for case let url as URL in e where url.pathExtension == "swift" {
+                out.append(url)
+            }
         }
-        for case let url as URL in e where url.pathExtension == "swift" {
-            out.append(url)
-        }
-        XCTAssertGreaterThan(out.count, 100, "夹具失效：uTerm/ 下应该有上百个 .swift")
+        XCTAssertGreaterThan(out.count, 100, "夹具失效：uTerm/ + uTermMobile/ 下应该有上百个 .swift")
+        XCTAssertTrue(out.contains { $0.path.contains("/uTermMobile/") },
+                      "夹具失效：一个 uTermMobile/ 下的文件都没扫到")
         return out.sorted { $0.path < $1.path }
+    }
+
+    /// 只要 `uTermMobile/` 下的。
+    static func mobileFiles() throws -> [URL] {
+        try swiftFiles().filter { $0.path.contains("/uTermMobile/") }
     }
 
     struct Chain {
