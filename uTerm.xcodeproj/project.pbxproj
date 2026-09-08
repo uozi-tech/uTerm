@@ -63,8 +63,8 @@
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		B1000000000000000000000C /* uTermMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -143,6 +143,7 @@
 				Features/Preview/LanguageDetector.swift,
 				Features/Preview/MarkdownImageDecoder.swift,
 				Features/Preview/MarkdownRenderer.swift,
+				Features/Preview/PreviewFileType.swift,
 				Features/Preview/RecentFileEntry.swift,
 				Features/Preview/RecentFilesStore.swift,
 				Features/Preview/Views/CodeBody.swift,

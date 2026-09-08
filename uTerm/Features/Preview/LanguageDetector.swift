@@ -21,7 +21,8 @@ nonisolated enum LanguageDetector {
         }
 
         // 图片
-        if ["png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tiff"].contains(ext) {
+        if ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp",
+            "tiff", "tif", "ico", "icns"].contains(ext) {
             return .image
         }
         // markdown

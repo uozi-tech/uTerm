@@ -235,14 +235,15 @@ final class FilePreviewModel {
         }
         requestEditorFocus(buf.id)
 
-        // 大小检查
-        if let fileSize, fileSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+        // 类型检查在大小之前：归档/二进制不该因为「碰巧小于 50 MB」就去下载。
+        if let reason = Self.unsupportedPreviewReason(forPath: path) {
+            buf.state = .failed(reason)
             return
         }
 
-        if let reason = Self.unsupportedPreviewReason(forPath: path) {
-            buf.state = .failed(reason)
+        // 大小检查
+        if let fileSize, fileSize > Self.maximumPreviewBytes {
+            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
             return
         }
 
@@ -442,13 +443,14 @@ final class FilePreviewModel {
     }
 
     private func load(_ buf: FileBuffer, failIfProviderMissing: Bool) async {
-        if let byteSize = buf.byteSize, byteSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+        // 与 open() 同序：类型先于大小。
+        if let reason = Self.unsupportedPreviewReason(forPath: buf.remotePath) {
+            buf.state = .failed(reason)
             return
         }
 
-        if let reason = Self.unsupportedPreviewReason(forPath: buf.remotePath) {
-            buf.state = .failed(reason)
+        if let byteSize = buf.byteSize, byteSize > Self.maximumPreviewBytes {
+            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
             return
         }
 
@@ -685,21 +687,11 @@ final class FilePreviewModel {
         }
     }
 
+    /// 与打开门（`WorkspaceRemoteFileOpenGate`）共用同一份类型名单 —— 两处判据分家
+    /// 的话，命令面板/最近文件这些不走门的入口就会漏进来。
     private static func unsupportedPreviewReason(forPath path: String) -> String? {
-        let ext = ((path as NSString).lastPathComponent as NSString)
-            .pathExtension
-            .lowercased()
-        guard unsupportedPreviewExtensions.contains(ext) else { return nil }
-        return "此文件类型不支持预览。请下载到本地后使用外部应用打开。"
+        PreviewFileType.unsupportedReason(forPath: path)
     }
-
-    private static let unsupportedPreviewExtensions: Set<String> = [
-        "db", "db3", "sqlite", "sqlite3", "sqlite-shm", "sqlite-wal",
-        "db-shm", "db-wal", "db-journal", "mdb", "accdb",
-        "bin", "exe", "dll", "dylib", "so", "a", "o",
-        "class", "jar", "war", "pyc", "pyo", "wasm",
-        "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar"
-    ]
 
     private enum MarkdownImageResource {
         case remotePath(String)
