@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UAppKitBridge
 
 // MARK: - 为什么不用 `.onTapGesture`
 
@@ -39,23 +40,12 @@ import SwiftUI
 /// 键盘导航都不受影响。行自己的 `.accessibilityAction` 仍是 VoiceOver /
 /// 全键盘控制的激活路径 —— 那条路跟鼠标这条路各走各的。
 
-// MARK: - 落点换算（纯算术，可单测）
+// MARK: - 落点换算
 
-enum UniformRowHit {
-    /// 等高行容器里，落点 `y` 命中第几行。
-    ///
-    /// 行高不取常量而是**从容器高度反推**（`containerHeight / rowCount`）：
-    /// 欢迎页的行高是内容撑出来的（图标 + 两行文字 + 内距），没有写死的常量可用，
-    /// 而「所有行等高、行间距 0」这条对那份列表是成立的。反推法因此比抄一个
-    /// 容易过期的常量更准。
-    ///
-    /// - Returns: 行下标；容器空 / 落点在容器外返回 nil。
-    static func index(atY y: CGFloat, containerHeight: CGFloat, rowCount: Int) -> Int? {
-        guard rowCount > 0, containerHeight > 0, y >= 0, y < containerHeight else { return nil }
-        let index = Int((y * CGFloat(rowCount) / containerHeight).rounded(.down))
-        return min(max(0, index), rowCount - 1)
-    }
-}
+/// 落点 → 行号的算术住在 `UAppKitBridge.UniformRowHit`（本文件原先自带一份）。
+/// 挪过去是因为**第三个**同构的层要用它：整表一个 tracking area 的悬停跟踪器
+/// （`RowHoverTracker`）。点击层、拖放层（`RemoteRowDropTargeting`）、悬停层
+/// 共用同一份算术 —— 行高改一次，三层一起对。
 
 // MARK: - 透明点击层
 

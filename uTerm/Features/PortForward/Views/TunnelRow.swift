@@ -22,9 +22,15 @@ struct TunnelRow: View {
     let onChangePort: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    /// 整表一个 tracking area 的悬停跟踪器状态（`PortForwardListView` 持有）。
+    /// nil 时本行退回逐行 `.onHover`。
+    var rowHover: RowHoverState?
 
     @State private var hover = false
 
+    /// 行高。**整表一个悬停跟踪器**靠它把落点换算成行号，所以这个常量与下面的
+    /// `.frame(height:)` 必须同源。
+    static let rowHeight: CGFloat = 52
     /// 右侧状态列 / 恢复按钮共享宽度（对齐设计稿 PF_ACTION_W）。
     private static let actionWidth: CGFloat = 76
     /// hover 才浮现的「编辑 + 删除」两个 26pt 图标按钮 + 2pt 间距。
@@ -144,11 +150,12 @@ struct TunnelRow: View {
         }
         .padding(.leading, isError ? 14 : 12)
         .padding(.trailing, 12)
-        .frame(height: 52)
+        .frame(height: Self.rowHeight)
         .background(!isError && hover ? UD.rowHover : Color.clear)
         .contentShape(Rectangle())
-        // 滚动期间不接 hover（理由同 `GlobalForwardRow`）。
-        .hoverGated { hover = $0 }
+        // 本行不装 `.onHover`（理由同 `GlobalForwardRow`）：悬停由
+        // `PortForwardListView` 挂在列表上的那一个 `NSTrackingArea` 算出来。
+        .rowHover(rowHover, id: rule.id) { hover = $0 }
     }
 
     private var flow: Text {

@@ -28,6 +28,10 @@ struct FileBrowserContent: View {
     /// 待确认覆盖的上传：检查发现选中文件里有同名远端文件时挂这里，弹覆盖确认。
     @State private var overwritePendingURLs: [URL]?
     @State private var overwriteConflictNames: [String] = []
+    /// 整表一个 tracking area 的悬停跟踪器状态；行不再各装 `.onHover`
+    /// （见 `UAppKitBridge/RowHoverTracker.swift`）。id 与 `selectedID` 同源
+    /// （`..` 行用 `upRowID` 哨兵）。
+    @State private var rowHover = RowHoverState()
     /// `..` 上级行的 selectedID 哨兵。真实条目名不会是 ".."（SFTP list 已过滤），
     /// 故可安全复用 selectedID 表示「`..` 行被选中」。
     private static let upRowID = ".."
@@ -301,8 +305,22 @@ struct FileBrowserContent: View {
                 // 落点 → 行号复用整表拖放那套算术，**同样必须挂在 `.padding` 之前**。
                 .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
                                activate: { y, _ in clickRow(atY: y, activating: true) })
-                // 滚动期间关掉行 hover（与上面的拖放 / 点击层同一层挂）——
-                // 光标停在树上滚轮时每一行经过指针都会亮一次 hover 底色。
+                // 整表一个 tracking area 的悬停跟踪器：落点 → 行号复用上面拖放 /
+                // 点击层那套算术（固定行高）。行里因此一个 `.onHover` 都没有 ——
+                // SwiftUI 内部那张 hover 区域表按 `.onHover` 个数变长，鼠标位置或
+                // 几何一变就要过一遍。**同样必须挂在
+                // `.padding` 之前**，且挂在 `.scrollHoverGate()` 里面（闸门靠环境传）。
+                .rowHoverTracker(rowHover, geometry: RemoteRowDropTargeting.hoverGeometry(
+                    showsParentRow: model.currentPath != "/",
+                    parentRowHeight: Self.rowHeight,
+                    rowHeight: Self.rowHeight,
+                    entryCount: model.sortedEntries.count,
+                    id: { index in
+                        guard let index else { return Self.upRowID }
+                        let entries = model.sortedEntries
+                        return index < entries.count ? AnyHashable(entries[index].id) : nil
+                    }))
+                // 滚动期间停更悬停；停下 150ms 后跟踪器补算一次。
                 // 见 `UAppKitBridge/ScrollHoverGate.swift`。
                 .scrollHoverGate()
                 // 行已满宽（内部 padding 10 对齐头部）；列表不再加横向内缩，让选中
@@ -379,7 +397,8 @@ struct FileBrowserContent: View {
         .frame(height: Self.rowHeight)
         // 选中态与 entryRow 同款：满宽底色（无左侧强调条，填充即边界）。
         .background(Rectangle().fill(upSelected ? UD.rowSelected : Color.clear))
-        .hoverBackground(UD.rowHover, isActive: upSelected)
+        .hoverBackground(UD.rowHover, isActive: upSelected,
+                         rowHover: rowHover, rowID: Self.upRowID)
         .contentShape(Rectangle())
         // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`），行里不挂
         // 手势 —— 两个 `onTapGesture` 链式会让单击等满系统双击间隔（见 entryRow）。
@@ -467,7 +486,8 @@ struct FileBrowserContent: View {
         // SFTPFileTable。底色优先级高于 hover，故选中时给 hoverBackground 传 isActive
         // 让它让位。
         .background(Rectangle().fill(isSelected ? UD.rowSelected : Color.clear))
-        .hoverBackground(UD.rowHover, isActive: isSelected)
+        .hoverBackground(UD.rowHover, isActive: isSelected,
+                         rowHover: rowHover, rowID: entry.id)
         .contentShape(Rectangle())
         // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`）：单击选中，
         // 且文件立即以「预览 tab」临时打开（VS Code 风，会顶替上一个预览 tab）；

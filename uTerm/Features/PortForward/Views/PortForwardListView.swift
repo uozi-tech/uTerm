@@ -47,6 +47,20 @@ struct PortForwardListView: View {
         return rules.filter { $0.kind == filter }
     }
 
+    /// 整表一个 tracking area 的悬停跟踪器状态（见 `UAppKitBridge/RowHoverTracker.swift`）。
+    @State private var rowHover = RowHoverState()
+
+    /// 有 error 行时**整表几何算不准** —— error 行下面还会长出一条内容撑高的
+    /// 原因条（`TunnelRow.errorStrip`，`lineLimit(2)`，一行还是两行看文案），
+    /// 行不再等高，落点换算就会从第一条异常规则起整体错位。
+    ///
+    /// 正确性优先：那时几何返回 nil、行也拿不到跟踪器状态，两边一起退回逐行
+    /// `.hoverGated`（也就是改前的形态）。常态（一条异常都没有）走整表一块追踪区。
+    private func hasErrorRow(_ visible: [ForwardingRule]) -> Bool {
+        visible.contains { if case .error = coordinator.status($0.id) { return true }
+                           else { return false } }
+    }
+
     /// 工具栏要的全部计数，**一遍扫完**。
     ///
     /// 改前是五次独立的 `rules.filter`：活跃数、异常数、以及三个类型各一次；活跃 / 异常
@@ -136,14 +150,16 @@ struct PortForwardListView: View {
                     .background(UD.bg)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
-                    // 滚动期间关掉行 hover（`TunnelRow` 的编辑 / 删除同样是
-                    // 悬停才建的真控件）。见 `UAppKitBridge/ScrollHoverGate.swift`。
+                    // 整表一个 tracking area 的悬停跟踪器 + 滚动期间停更。
+                    // 见 `UAppKitBridge/RowHoverTracker.swift` / `ScrollHoverGate.swift`。
+                    .rowHoverTracker(rowHover, geometry: hoverGeometry(visible))
                     .scrollHoverGate()
             } else {
                 VStack(spacing: 0) { rows(visible) }
                     .background(UD.bg)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))
+                    .rowHoverTracker(rowHover, geometry: hoverGeometry(visible))
                     .scrollHoverGate()
             }
         }
@@ -152,8 +168,18 @@ struct PortForwardListView: View {
         .padding(.bottom, 16)
     }
 
+    /// 落点 → 行 id。等高行（`TunnelRow.rowHeight`），算术与点击层 / 拖放层同源。
+    private func hoverGeometry(_ visible: [ForwardingRule]) -> RowGeometry {
+        guard !hasErrorRow(visible) else { return RowGeometry { _, _ in nil } }
+        return .fixedHeight(rowHeight: TunnelRow.rowHeight, rowCount: visible.count) { index in
+            guard let index, index < visible.count else { return nil }
+            return AnyHashable(visible[index].id)
+        }
+    }
+
     private func rows(_ visible: [ForwardingRule]) -> some View {
-        ForEach(Array(visible.enumerated()), id: \.element.id) { idx, rule in
+        let rowHover = hasErrorRow(visible) ? nil : self.rowHover
+        return ForEach(Array(visible.enumerated()), id: \.element.id) { idx, rule in
             TunnelRow(
                 rule: rule,
                 status: coordinator.status(rule.id),
@@ -163,7 +189,8 @@ struct PortForwardListView: View {
                 onRetry: { retry(rule) },
                 onChangePort: { beginEdit(.rule(rule)) },
                 onEdit: { beginEdit(.rule(rule)) },
-                onDelete: { requestDelete(rule) }
+                onDelete: { requestDelete(rule) },
+                rowHover: rowHover
             )
         }
     }

@@ -7,27 +7,37 @@ import SwiftUI
 /// 用于列表行 / sidebar 行 / tab chip 等可点击元素的视觉反馈。`isActive` 为
 /// true 时（如已选中 / active tab）跳过 hover 切换 —— 选中态优先级高于 hover。
 ///
-/// **hover 走 `hoverGated` 而不是 `.onHover`**：光标停着不动、列表在它底下滚
-/// 过去时，每一行经过指针都是一次真的 enter / exit，于是滚动中每帧都有一行
-/// 底色亮起、上一行灭掉，全是白付的重绘。闸门在滚动期间不转发，停下 150ms
-/// 后把最后一个真值补回来（`UAppKitBridge/ScrollHoverGate.swift`）。
-/// 列表容器要相应地挂 `.scrollHoverGate()`；没挂的地方本修饰器与裸
-/// `.onHover` 完全等价，所以这个改动对非滚动场景（路径栏 / toolbar）无副作用。
+/// **hover 不走裸 `.onHover`**，两级：
+///
+/// 1. 传了 `rowHover` / `rowID`（长在装了 `.rowHoverTracker` 的列表里）时走
+///    `.rowHover(_:id:)` —— 悬停由整表**一个**跟踪层按行高算出来。逐行 `.onHover`
+///    是按行数收费的：SwiftUI 内部那张 hover 区域表按 `.onHover` 个数变长，鼠标
+///    位置或几何一变就要过一遍（`UAppKitBridge/RowHoverTracker.swift`）。
+/// 2. 没传（路径栏 / toolbar 这类非列表场景，或列表没装跟踪器）时走
+///    `hoverGated`：滚动期间不转发，停下 150ms 后把最后一个真值补回来
+///    （`UAppKitBridge/ScrollHoverGate.swift`）；祖先连闸门都没有时它与裸
+///    `.onHover` 完全等价，所以两级都无副作用。
 private struct HoverBackground: ViewModifier {
     let activeColor: Color
     let baseColor: Color
     let cornerRadius: CGFloat
     let isPriorityActive: Bool
+    let rowHover: RowHoverState?
+    let rowID: AnyHashable?
 
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
-        content
+        let painted = content
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(backgroundColor)
             )
-            .hoverGated { isHovering = $0 }
+        if let rowID {
+            painted.rowHover(rowHover, id: rowID) { isHovering = $0 }
+        } else {
+            painted.hoverGated { isHovering = $0 }
+        }
     }
 
     private var backgroundColor: Color {
@@ -39,14 +49,21 @@ private struct HoverBackground: ViewModifier {
 extension View {
     /// 给可点击行添加 hover 背景。`isActive` 为 true 时不渲染 hover bg（让外部
     /// 的 selected 样式独占）。
+    /// - Parameters:
+    ///   - rowHover: 列表的整表悬停跟踪器状态；连同 `rowID` 一起传才生效。
+    ///   - rowID: 本行在跟踪器里的 id（与容器 `geometry` 算出来的那个 id 同源）。
     func hoverBackground(_ active: Color = UD.panelHi,
                          base: Color = .clear,
                          cornerRadius: CGFloat = 0,
-                         isActive: Bool = false) -> some View {
+                         isActive: Bool = false,
+                         rowHover: RowHoverState? = nil,
+                         rowID: AnyHashable? = nil) -> some View {
         modifier(HoverBackground(activeColor: active,
                                  baseColor: base,
                                  cornerRadius: cornerRadius,
-                                 isPriorityActive: isActive))
+                                 isPriorityActive: isActive,
+                                 rowHover: rowHover,
+                                 rowID: rowID))
     }
 }
 

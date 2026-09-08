@@ -49,6 +49,10 @@ struct ServerList: View {
         case delete
     }
 
+    /// 整表一个 tracking area 的悬停跟踪器状态。行不再各装 `.onHover`
+    /// （见 `UAppKitBridge/RowHoverTracker.swift`）。
+    @State private var rowHover = RowHoverState()
+
     private var selectedProfile: ServerProfile? {
         guard let selectedID else { return nil }
         return profiles.first { $0.id == selectedID }
@@ -89,7 +93,8 @@ struct ServerList: View {
                                       onDoubleTap: {
                                           selectedID = profile.id
                                           onContextAction(.connect, profile)
-                                      })
+                                      },
+                                      rowHover: rowHover)
                                 .id(profile.id)
                                 .modifier(ServerRowDragModifier(
                                     dragEnabled: rowDragEnabled,
@@ -122,9 +127,19 @@ struct ServerList: View {
                             selectedID = profile.id
                             onContextAction(.connect, profile)
                         })
-                    // 滚动期间关掉行 hover：光标停在列表上滚轮时，每一行经过
-                    // 指针都会触发一次 `.onHover`，`ServerRow` 的底色与两处
-                    // `.help` 因此逐帧重来。见 `UAppKitBridge/ScrollHoverGate.swift`。
+                    // 整列表一个 tracking area 的悬停跟踪器：落点 → 行号复用点击层
+                    // 那套算术（行高由容器高度反推）。行里因此一个 `.onHover` 都没有
+                    // —— SwiftUI 内部那张 hover 区域表按 `.onHover` 个数变长，鼠标
+                    // 位置或几何一变就要过一遍，命中之后还要写回 `@State`、让那一行
+                    // 重求 body。
+                    // **挂在 `.scrollHoverGate()` 里面**：闸门是靠环境传下来的，
+                    // 跟踪器要读它才知道现在在不在滚。
+                    .rowHoverTracker(rowHover, geometry: .uniform(rowCount: profiles.count) {
+                        profiles[$0].id
+                    })
+                    // 滚动期间停更悬停（光标没动、内容在它底下滚过去，那一行不该
+                    // 跟着亮）；停下 150ms 后跟踪器补算一次。
+                    // 见 `UAppKitBridge/ScrollHoverGate.swift`。
                     .scrollHoverGate()
                     .padding(ServerListLayout.contentPadding)
                 }

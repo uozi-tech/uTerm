@@ -1,4 +1,5 @@
 import SwiftUI
+import UAppKitBridge
 import UniformTypeIdentifiers
 
 /// 「整表一个拖放目标」用的落点换算 —— 把落点纵坐标映射成「落在哪一行」。
@@ -37,15 +38,27 @@ enum RemoteRowDropTargeting {
                        parentRowHeight: CGFloat,
                        rowHeight: CGFloat,
                        entryCount: Int) -> Target? {
-        guard y >= 0, rowHeight > 0 else { return nil }
-        var offset = y
-        if showsParentRow {
-            if offset < parentRowHeight { return .parent }
-            offset -= parentRowHeight
+        // 算术本身在 `UAppKitBridge.UniformRowHit` —— 点击层、拖放层、悬停跟踪器
+        // 三层共用一份（本枚举原先自带一份，跟点击层那份是同一套式子的两个拷贝）。
+        switch UniformRowHit.slot(atY: y, rowHeight: rowHeight, rowCount: entryCount,
+                                  leadingRowHeight: showsParentRow ? parentRowHeight : nil) {
+        case .leading: return .parent
+        case .row(let index): return .entry(index)
+        case nil: return nil
         }
-        let index = Int((offset / rowHeight).rounded(.down))
-        guard index >= 0, index < entryCount else { return nil }
-        return .entry(index)
+    }
+
+    /// 同一份几何交给悬停跟踪器（整表一个 tracking area）。`id` 收到 nil 表示
+    /// `..` 行。
+    static func hoverGeometry(showsParentRow: Bool,
+                              parentRowHeight: CGFloat,
+                              rowHeight: CGFloat,
+                              entryCount: Int,
+                              id: @escaping (Int?) -> AnyHashable?) -> RowGeometry {
+        .fixedHeight(rowHeight: rowHeight,
+                     rowCount: entryCount,
+                     leadingRowHeight: showsParentRow ? parentRowHeight : nil,
+                     id: id)
     }
 }
 

@@ -22,12 +22,20 @@ struct GlobalForwardRow: View {
     let traffic: GFTrafficStat?
     /// 编辑本规则配置（双击主内容区 / hover 铅笔触发）。
     let onEdit: () -> Void
+    /// 整表一个 tracking area 的悬停跟踪器状态（`GlobalForwardingList` 持有）。
+    /// nil 时本行退回逐行 `.onHover` —— 探针的改前臂走的就是这条。
+    var rowHover: RowHoverState?
 
     @Environment(\.modelContext) private var modelContext
     @Environment(ForwardingCoordinator.self) private var coordinator
     @State private var hover = false
 
     private static let nameWidth: CGFloat = 138
+
+    /// 行高。**整表一个悬停跟踪器**靠它把落点换算成行号
+    /// （见 `UAppKitBridge/RowHoverTracker.swift`），所以这个常量与下面的
+    /// `.frame(height:)` 必须同源 —— 改一处就得改两处。
+    static let rowHeight: CGFloat = 52
 
     private var status: TunnelStatus { coordinator.status(rule.id) }
     private var active: Bool { status == .active }
@@ -95,15 +103,19 @@ struct GlobalForwardRow: View {
                     ? "停止并取消保持「\(rule.name)」" : "保持连接「\(rule.name)」")
         }
         .padding(.horizontal, 12)
-        .frame(height: 52)
+        .frame(height: Self.rowHeight)
         .background(hover ? UD.rowHover : Color.clear)
         .overlay(alignment: .bottom) {
             if !isLast { Rectangle().fill(UD.border).frame(height: 1) }
         }
         .contentShape(Rectangle())
-        // 滚动期间不接 hover —— 否则光标停在列表上滚一次，铅笔按钮会被建了又拆
-        // 几十上百遍（见 `UAppKitBridge/ScrollHoverGate.swift`）。
-        .hoverGated { hover = $0 }
+        // **本行不装 `.onHover`**：悬停由 `GlobalForwardingList` 挂在列表上的
+        // 一个跟踪层按行几何算出来（`UAppKitBridge/RowHoverTracker.swift`）。
+        // SwiftUI 内部那张 hover 区域表按 `.onHover` 个数变长，上千行的表每帧翻
+        // 一遍 —— 实测「光标压在列表上滚」比「光标在窗外」贵 2.27×。滚动期间由
+        // `ScrollHoverGate` 停更，否则光标停在列表上滚一次，铅笔按钮会被建了又拆
+        // 几十上百遍。
+        .rowHover(rowHover, id: rule.id) { hover = $0 }
     }
 
     /// hover 浮现的小图标按钮（镜像 `TunnelRow.iconButton`）。

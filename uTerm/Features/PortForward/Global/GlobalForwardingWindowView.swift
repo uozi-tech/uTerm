@@ -250,6 +250,20 @@ struct GlobalForwardingWindowView: View {
 
 // MARK: - 分组列表
 
+/// 分组列表的几何常量。**整表一个悬停跟踪器**按它们把落点换算成
+/// 「第几组第几行」（`UniformRowHit.groupedRow`），所以这几个数与 `section(_:)`
+/// 里的 `.frame` / `.padding` 必须同源 —— 改一处就得改两处。
+enum GFSectionLayout {
+    /// 组头那一行内容自身的高度（实测 `NSHostingView.fittingSize` 恰为 15）。
+    static let headerContentHeight: CGFloat = 15
+    /// 组头到卡片的间距。
+    static let headerBottomPadding: CGFloat = 7
+    /// 组头整块（含下内距）。
+    static var headerHeight: CGFloat { headerContentHeight + headerBottomPadding }
+    /// 组与组之间的间距。
+    static let spacing: CGFloat = 12
+}
+
 /// 按主机分组的规则列表 + 每秒一次的流量轮询。
 ///
 /// **为什么单独成一个视图**：`traffic` 每秒被整体替换一次，谁持有它谁就每秒重求一次
@@ -271,6 +285,9 @@ struct GlobalForwardingList: View {
     @State private var traffic: [UUID: GFTrafficStat] = [:]
     /// 上一次拉到的累计字节，用来算每秒速率。
     @State private var lastBytes: [UUID: TunnelBytes] = [:]
+    /// 整表一个 tracking area 的悬停跟踪器状态；行不再各装 `.onHover`
+    /// （见 `UAppKitBridge/RowHoverTracker.swift`）。
+    @State private var rowHover = RowHoverState()
 
     /// 分组这一层什么时候才值得走 `LazyVStack`（按**总规则数**分档，
     /// 阈值与单主机列表共用，见 `PortForwardListLayout.lazyRowThreshold`）。
@@ -282,24 +299,33 @@ struct GlobalForwardingList: View {
             if sections.isEmpty {
                 GlobalForwardingWindowView.emptyState
             } else if totalRules > PortForwardListLayout.lazyRowThreshold {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: GFSectionLayout.spacing) {
                     ForEach(sections, id: \.host.id) { group in
                         section(group)
                     }
                 }
-                // 滚动期间关掉行 hover —— `GlobalForwardRow` 的铅笔按钮是
-                // 「悬停才建」的真控件，光标停在列表上滚一次就会被建拆几十遍。
+                // 整表一个 tracking area 的悬停跟踪器：落点 → 「第几组第几行」由
+                // 定高组头 + 定高行 + 组间距算出来（`UniformRowHit.groupedRow`）。
+                // 行里因此一个 `.onHover` 都没有 —— SwiftUI 内部那张 hover 区域表
+                // 按 `.onHover` 个数变长，鼠标位置或几何一变就要过一遍；上千行的
+                // 表每帧翻一遍，实测「光标压在列表上滚」比「光标在窗外」贵 2.27×。
+                // **挂在 `.padding` 之前**（落点坐标要与行容器同源），且挂在
+                // `.scrollHoverGate()` 里面（闸门靠环境传下来）。
+                .rowHoverTracker(rowHover, geometry: hoverGeometry)
+                // 滚动期间停更悬停 —— `GlobalForwardRow` 的铅笔按钮是「悬停才建」
+                // 的真控件，光标停在列表上滚一次就会被建拆几十遍。
                 // 见 `UAppKitBridge/ScrollHoverGate.swift`。
                 .scrollHoverGate()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 18)
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: GFSectionLayout.spacing) {
                     ForEach(sections, id: \.host.id) { group in
                         section(group)
                     }
                 }
+                .rowHoverTracker(rowHover, geometry: hoverGeometry)
                 .scrollHoverGate()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -307,6 +333,20 @@ struct GlobalForwardingList: View {
             }
         }
         .task { await pollTraffic() }
+    }
+
+    /// 落点 → 行 id：组头定高（`GFSectionLayout.headerHeight`）、组内行定高
+    /// （`GlobalForwardRow.rowHeight`）、组间固定间距。算术在
+    /// `UAppKitBridge.UniformRowHit`，与点击层 / 拖放层同源。
+    private var hoverGeometry: RowGeometry {
+        .grouped(headerHeight: GFSectionLayout.headerHeight,
+                 rowHeight: GlobalForwardRow.rowHeight,
+                 spacing: GFSectionLayout.spacing,
+                 rowCounts: sections.map(\.rules.count)) { sectionIndex, rowIndex in
+            guard sectionIndex < sections.count else { return nil }
+            let rules = sections[sectionIndex].rules
+            return rowIndex < rules.count ? AnyHashable(rules[rowIndex].id) : nil
+        }
     }
 
     private func section(_ group: GFGroup<ServerProfile, ForwardingRule>) -> some View {
@@ -335,14 +375,20 @@ struct GlobalForwardingList: View {
                     .font(.system(size: 11)).foregroundStyle(UD.text4)
             }
             .padding(.horizontal, 2)
-            .padding(.bottom, 7)
+            // **组头定高**：整表一个悬停跟踪器靠「组头 + 组内行 + 组间距」这三个
+            // 常量把落点换算成行号，组头一旦随内容漂移，落点就会从这一组起整体
+            // 错位。15pt 是这一行内容自身的高度（实测 `fittingSize` 恰为 15），
+            // 钉住它不改观感，只是把几何从「内容撑出来」变成「说好的」。
+            .frame(height: GFSectionLayout.headerContentHeight)
+            .padding(.bottom, GFSectionLayout.headerBottomPadding)
 
             VStack(spacing: 0) {
                 ForEach(Array(group.rules.enumerated()), id: \.element.id) { idx, rule in
                     GlobalForwardRow(rule: rule, server: host, relay: relay,
                                      isLast: idx == group.rules.count - 1,
                                      traffic: traffic[rule.id],
-                                     onEdit: { onEdit(rule, host) })
+                                     onEdit: { onEdit(rule, host) },
+                                     rowHover: rowHover)
                 }
             }
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UD.border, lineWidth: 1))

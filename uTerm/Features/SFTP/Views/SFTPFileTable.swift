@@ -126,6 +126,13 @@ struct SFTPFileTable: View {
     let onNewFile: () -> Void
 
     @FocusState private var focused: Bool
+    /// 整表一个 tracking area 的悬停跟踪器状态；行不再各装 `.onHover`
+    /// （见 `UAppKitBridge/RowHoverTracker.swift`）。`..` 行的 id 是
+    /// `Self.parentRowHoverID`，条目行是 `entry.id`。
+    @State private var rowHover = RowHoverState()
+
+    /// `..` 行在悬停跟踪器里的 id（条目 id 是路径字符串，不会与它撞）。
+    private static let parentRowHoverID = "\u{0}sftp-parent-row"
 
     /// 两种行的固定高度。**整表一个拖放目标**靠它把落点换算成行号
     /// （见 `RemoteRowDropTargeting`），所以这里的常量与下面
@@ -186,10 +193,22 @@ struct SFTPFileTable: View {
                 // `ClickSelectActivate.swift`）。落点 → 行号复用整表拖放那套算术。
                 .clickToSelect(select: { y, _ in clickRow(atY: y, activating: false) },
                                activate: { y, _ in clickRow(atY: y, activating: true) })
-                // 滚动期间关掉 hover：光标停在列表上滚轮时，每一行经过指针
-                // 都会触发一次 `.onHover`，行里「悬停才建」的东西被反复建拆。
-                // 闸门挂在承载行的容器上（与上面的拖放 / 点击层同一层），
-                // 见 `UAppKitBridge/ScrollHoverGate.swift`。
+                // 整表一个 tracking area 的悬停跟踪器：落点 → 行号复用上面拖放 /
+                // 点击层那套算术（`RemoteRowDropTargeting.hoverGeometry`，固定行高）。
+                // 行里因此一个 `.onHover` 都没有 —— SwiftUI 内部那张 hover 区域表
+                // 按 `.onHover` 个数变长，鼠标位置或几何一变就要过一遍。**挂在 `.scrollHoverGate()` 里面**：闸门靠环境
+                // 传下来，跟踪器要读它才知道现在在不在滚。
+                .rowHoverTracker(rowHover, geometry: RemoteRowDropTargeting.hoverGeometry(
+                    showsParentRow: showParent,
+                    parentRowHeight: Self.parentRowHeight,
+                    rowHeight: Self.rowHeight,
+                    entryCount: entries.count,
+                    id: { index in
+                        guard let index else { return Self.parentRowHoverID }
+                        return index < entries.count ? AnyHashable(entries[index].id) : nil
+                    }))
+                // 滚动期间停更悬停（光标没动、内容在它底下滚过去，那一行不该跟着亮）；
+                // 停下 150ms 后跟踪器补算一次。见 `UAppKitBridge/ScrollHoverGate.swift`。
                 .scrollHoverGate()
             }
             .focusable()
@@ -309,7 +328,7 @@ struct SFTPFileTable: View {
         .padding(.horizontal, 16)
         .frame(height: Self.parentRowHeight)
         .contentShape(Rectangle())
-        .hoverBackground(UD.rowHover)
+        .hoverBackground(UD.rowHover, rowHover: rowHover, rowID: Self.parentRowHoverID)
         // 点击由整表的透明点击层接（`clickRow(atY:activating:)`）—— 本行第一下就
         // 返回上一级，与改前的单击语义一致，只是不再走 SwiftUI 手势。
         // 拖入上一级由整表的 `RemoteRowDropDelegate` 接（本行不再自带 `.onDrop`）。
@@ -352,7 +371,7 @@ struct SFTPFileTable: View {
         .frame(height: Self.rowHeight)
         // 选中态：满宽底色（无左侧强调条，填充即边界），与工作区侧栏文件行一致。
         .background(Rectangle().fill(selected ? UD.rowSelected : Color.clear))
-        .hoverBackground(UD.rowHover, isActive: selected)
+        .hoverBackground(UD.rowHover, isActive: selected, rowHover: rowHover, rowID: e.id)
         .contentShape(Rectangle())
         // 单 / 双击由整表的透明点击层接（`clickRow(atY:activating:)`）。行里写两个
         // `onTapGesture` 会让单击等满系统双击间隔（实测 390~510ms 才高亮）。

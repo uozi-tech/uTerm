@@ -27,10 +27,15 @@ import XCTest
 //    滚动期间的 NSView 波动不得变大。
 // 4. 停下 200ms 后光标所在行的 hover 必须恢复成 true。
 //
-// **原本想立的判据是「in/out 比值 < 1.2」，实测立不住**（三处分别落在
-// 1.37 / 1.53 / 2.56）。剩下那一截不在 SwiftUI 这一层：光标在窗内时 AppKit
-// 每帧仍要重算整窗的 `NSTrackingArea` 并把 enter / exit 派进 hosting view，
-// 我们只是不再往下转发。见 `assertHoverGateContract` 判据 ⑥。
+// **原本想立的判据是「in/out 比值 < 1.2」，这一层立不住**（三处分别落在
+// 1.37 / 1.53 / 2.56）。剩下那一截在「每行一个 `.onHover`」那个形态里：
+// SwiftUI 内部的 hover 区域表按 `.onHover` 个数变长，鼠标位置或几何一变就要
+// 过一遍，闸门只挡掉了命中之后的「写回 + 重求」。
+//
+// **下一轮把形态换掉之后这条线达成了**（`RowHoverTrackerProbeTests`：整表一个
+// 跟踪层，六档 0.90~1.03×）。所以本文件这三条视图级用例现在**显式关掉跟踪器**
+// （`RowHoverState.isEnabledByDefault = false`）：它们量的是闸门本身，而产线
+// 那三处的悬停已经不走逐行 `.onHover` 了。见 `assertHoverGateContract` 判据 ⑥。
 
 // MARK: - 读数
 
@@ -57,16 +62,24 @@ struct HoverGateReading {
     let viewsMax: Int
     let viewsEnd: Int
     let hitP50: Double
+    /// 200 步滚动期间**整表跟踪器**换悬停行的次数（`RowHoverTracker` 那条路）。
+    let rowHoverForwarded: Int
+    /// 同期被滚动闸门吃掉的整表跟踪器更新次数。
+    let rowHoverSuppressed: Int
+    /// 扫掠之后整棵树上的 `NSTrackingArea` 总数。
+    /// **本轮的结构判据**：每行一个 `.onHover` 时它随行数涨，整表一块时它是常数。
+    let trackingAreas: Int
 
     var oneLine: String {
         String(format: """
             cursor=%@ gate=%@ rows=%d mount=%.2fms frame-p50=%.3fms p95=%.3fms max=%.3fms \
-            over-8.33=%.1f%% hover-forwarded=%d hover-suppressed=%d views=%d..%d(end %d) \
-            hit-p50=%.1fus
+            over-8.33=%.1f%% hover-forwarded=%d hover-suppressed=%d row-hover=%d/%d \
+            tracking-areas=%d views=%d..%d(end %d) hit-p50=%.1fus
             """,
             cursorInside ? "inside" : "outside", gated ? "on" : "off",
             rows, mountMS, frameP50, frameP95, frameMax, overBudget,
-            hoverForwarded, hoverSuppressed, viewsMin, viewsMax, viewsEnd, hitP50)
+            hoverForwarded, hoverSuppressed, rowHoverForwarded, rowHoverSuppressed,
+            trackingAreas, viewsMin, viewsMax, viewsEnd, hitP50)
     }
 }
 
@@ -162,6 +175,7 @@ final class ScrollHoverProbeRig {
         try await Task.sleep(for: .milliseconds(300))
 
         HoverGateStats.reset()
+        RowHoverStats.reset()
         var frames: [Double] = []
         var viewSamples: [Int] = []
         for step in 0..<200 {
@@ -175,6 +189,9 @@ final class ScrollHoverProbeRig {
         }
         let forwarded = HoverGateStats.forwarded
         let suppressed = HoverGateStats.suppressed
+        let rowForwarded = RowHoverStats.forwarded
+        let rowSuppressed = RowHoverStats.suppressed
+        let trackingAreas = Self.trackingAreaCount(in: host)
 
         var hits: [Double] = []
         let scrollFrame = scroll.convert(scroll.bounds, to: host)
@@ -206,7 +223,10 @@ final class ScrollHoverProbeRig {
             viewsMin: viewSamples.min() ?? 0,
             viewsMax: viewSamples.max() ?? 0,
             viewsEnd: Self.viewCount(in: host),
-            hitP50: ProbeMetrics.percentile(hits, 0.5))
+            hitP50: ProbeMetrics.percentile(hits, 0.5),
+            rowHoverForwarded: rowForwarded,
+            rowHoverSuppressed: rowSuppressed,
+            trackingAreas: trackingAreas)
         print("[hover-gate] \(label) \(reading.oneLine)")
         return reading
     }
@@ -214,6 +234,22 @@ final class ScrollHoverProbeRig {
     static func viewCount(in root: NSView) -> Int {
         var n = 0
         func walk(_ view: NSView) { n += 1; for sub in view.subviews { walk(sub) } }
+        walk(root)
+        return n
+    }
+
+    /// 整棵树上的 `NSTrackingArea` 总数。
+    ///
+    /// SwiftUI 的每一个 `.onHover` 都要在 hosting view 上留一块追踪区，所以
+    /// 「每行一个 `.onHover`」时这个数随行数涨；换成整表一个跟踪器之后它是常数。
+    /// 光标在窗内时 AppKit 每帧要把它们全部重算一遍 —— 这就是闸门装上之后
+    /// 「光标在内 / 在外」仍差 1.35~2.31× 的那一截。
+    static func trackingAreaCount(in root: NSView) -> Int {
+        var n = 0
+        func walk(_ view: NSView) {
+            n += view.trackingAreas.count
+            for sub in view.subviews { walk(sub) }
+        }
         walk(root)
         return n
     }
@@ -237,7 +273,10 @@ final class ScrollHoverProbeRig {
             viewsMin: readings.map(\.viewsMin).min() ?? 0,
             viewsMax: readings.map(\.viewsMax).max() ?? 0,
             viewsEnd: readings.map(\.viewsEnd).max() ?? 0,
-            hitP50: readings.map(\.hitP50).reduce(0, +) / n)
+            hitP50: readings.map(\.hitP50).reduce(0, +) / n,
+            rowHoverForwarded: readings.map(\.rowHoverForwarded).reduce(0, +) / readings.count,
+            rowHoverSuppressed: readings.map(\.rowHoverSuppressed).reduce(0, +) / readings.count,
+            trackingAreas: readings.map(\.trackingAreas).max() ?? 0)
     }
 }
 
@@ -345,8 +384,10 @@ func assertHoverGateContract(_ readings: [String: HoverGateReading],
     //    剩下的那一截**不在我们这一层**：AppKit 每帧仍要为「光标在窗内」重算
     //    整窗的 `NSTrackingArea` 并把 enter / exit 派进 SwiftUI 的 hosting view，
     //    只是我们不再往下转发。要动它得把每行一个 `.onHover` 换成整表一个
-    //    tracking area + 按行高算命中行（与点击层 / 拖放层同一套算术），
-    //    那是另一轮的事。绊线取 3.0：够松，不会因机器负载假红；够紧，
+    //    tracking area + 按行高算命中行（与点击层 / 拖放层同一套算术）——
+    //    那一轮已经做了（`RowHoverTrackerProbeTests`），并且顺手推翻了上面这句
+    //    归因：`.onHover` 不是一行一块追踪区，整棵树上只有 1~3 块，逐行的账在
+    //    SwiftUI 内部那张 hover 区域表上。绊线取 3.0：够松，不会因机器负载假红；够紧，
     //    形态一退回（比如某处 `hoverGated` 被改回 `.onHover`）就会红。
     XCTAssertLessThan(ratioOn, 3.0,
                       "\(view)：闸门开后 in/out 比值 " + String(format: "%.2f×", ratioOn)
@@ -369,8 +410,14 @@ final class WelcomeServerListHoverGateTests: XCTestCase {
     func testHoverDuringScrollIsGated() async throws {
         defer {
             ScrollHoverGate.isEnabledByDefault = true
+            RowHoverState.isEnabledByDefault = true
             rig.closeAllWindows()
         }
+        // 本条量的是**闸门**，所以整表跟踪器要关掉：产线这三处的悬停已经不再
+        // 走逐行 `.onHover`（`RowHoverTracker` 那一轮），关掉它 `.rowHover` 就
+        // 逐字退回 `.hoverGated`，下面每一条断言的含义因此原样成立。
+        // 跟踪器自己的四臂读数在 `RowHoverTrackerProbeTests`。
+        RowHoverState.isEnabledByDefault = false
         var results: [String: [HoverGateReading]] = [:]
         for arm in HoverGateArm.plan {
             ScrollHoverGate.isEnabledByDefault = arm.gated
@@ -422,8 +469,14 @@ final class SFTPFileTableHoverGateTests: XCTestCase {
     func testHoverDuringScrollIsGated() async throws {
         defer {
             ScrollHoverGate.isEnabledByDefault = true
+            RowHoverState.isEnabledByDefault = true
             rig.closeAllWindows()
         }
+        // 本条量的是**闸门**，所以整表跟踪器要关掉：产线这三处的悬停已经不再
+        // 走逐行 `.onHover`（`RowHoverTracker` 那一轮），关掉它 `.rowHover` 就
+        // 逐字退回 `.hoverGated`，下面每一条断言的含义因此原样成立。
+        // 跟踪器自己的四臂读数在 `RowHoverTrackerProbeTests`。
+        RowHoverState.isEnabledByDefault = false
         let rows = FileBrowserProbeFixture.extreme
         var results: [String: [HoverGateReading]] = [:]
         for arm in HoverGateArm.plan {
@@ -455,8 +508,14 @@ final class GlobalForwardingHoverGateTests: XCTestCase {
     func testHoverDuringScrollIsGated() async throws {
         defer {
             ScrollHoverGate.isEnabledByDefault = true
+            RowHoverState.isEnabledByDefault = true
             rig.closeAllWindows()
         }
+        // 本条量的是**闸门**，所以整表跟踪器要关掉：产线这三处的悬停已经不再
+        // 走逐行 `.onHover`（`RowHoverTracker` 那一轮），关掉它 `.rowHover` 就
+        // 逐字退回 `.hoverGated`，下面每一条断言的含义因此原样成立。
+        // 跟踪器自己的四臂读数在 `RowHoverTrackerProbeTests`。
+        RowHoverState.isEnabledByDefault = false
         // 见 `GlobalForwardingListCostTests`：**所有 SwiftData 容器必须在挂第一个
         // 窗口之前建好** —— 上一档的 `@Query` 观察者还没散时给下一档存盘会
         // 在通知回调里把测试宿主打没。

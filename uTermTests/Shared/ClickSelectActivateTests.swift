@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UAppKitBridge
 import UDesignKit
 import XCTest
 @testable import uTerm
