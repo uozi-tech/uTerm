@@ -14,11 +14,7 @@ struct HostSheet: View {
         guard let last = host.lastConnectedAt else { return M.text4 }
         return Date().timeIntervalSince(last) < 3600 ? M.success : M.caution
     }
-    private var lastText: String {
-        guard let last = host.lastConnectedAt else { return "从未" }
-        let f = RelativeDateTimeFormatter(); f.locale = Locale(identifier: "zh_CN")
-        return f.localizedString(for: last, relativeTo: Date())
-    }
+    private var lastText: String { MFormat.relative(host.lastConnectedAt) }
 
     var body: some View {
         ScrollView {

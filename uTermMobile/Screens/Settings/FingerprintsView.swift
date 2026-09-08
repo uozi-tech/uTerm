@@ -39,9 +39,6 @@ struct FingerprintsView: View {
     private func keyTypeLabel(_ raw: String) -> String {
         raw.hasPrefix("ssh-") ? String(raw.dropFirst(4)) : raw
     }
-    private func addedText(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
-    }
+    // 共享格式化器（`MFormat`）：改前每行现建一个 `DateFormatter`。
+    private func addedText(_ date: Date) -> String { MFormat.day(date) }
 }

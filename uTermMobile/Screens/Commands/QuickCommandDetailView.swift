@@ -250,11 +250,7 @@ struct QuickCommandDetailView: View {
         .background(M.aiAccent.opacity(0.15))
         .clipShape(Capsule())
     }
-    private var lastRunText: String {
-        guard let d = cmd.lastRunAt else { return "从未" }
-        let f = RelativeDateTimeFormatter(); f.locale = Locale(identifier: "zh_CN")
-        return f.localizedString(for: d, relativeTo: Date())
-    }
+    private var lastRunText: String { MFormat.relative(cmd.lastRunAt) }
     private func delete() {
         context.delete(cmd)
         try? context.save()
@@ -335,8 +331,7 @@ private struct RunLogRow: View {
         .udShadow(.sm)
     }
 
-    private var timeText: String {
-        let f = DateFormatter(); f.dateFormat = "MM-dd HH:mm"; return f.string(from: run.startedAt)
-    }
+    // 共享格式化器（`MFormat`）：改前每条执行日志行现建一个 `DateFormatter`。
+    private var timeText: String { MFormat.stamp(run.startedAt) }
     private var secText: String { String(format: "%.1fs", Double(run.durationMs) / 1000) }
 }
