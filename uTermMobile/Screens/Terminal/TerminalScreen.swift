@@ -488,7 +488,14 @@ struct TerminalKeyBar: View {
     let controller: MobileTerminalController
     @Environment(\.mAccent) private var accent
     /// 是否展开多行面板（默认收起为单行；最左 ∧/∨ 切换）。
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    /// `expanded` 的初值。生产侧一律省略（收起），探针用它把展开档也挂起来量——
+    /// `@State` 建出来之后外部改不了，不给初值就没法对照「收起 → 展开」的挂载账。
+    init(controller: MobileTerminalController, expanded: Bool = false) {
+        self.controller = controller
+        _expanded = State(initialValue: expanded)
+    }
 
     /// 一个快捷键：`label` 显示文本、`send` 发送给终端的字节序列。
     private struct TermKey: Identifiable {
