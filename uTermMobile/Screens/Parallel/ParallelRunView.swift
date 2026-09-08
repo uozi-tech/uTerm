@@ -314,7 +314,13 @@ struct ParShellPane: View {
             .overlay(alignment: .top) { Rectangle().fill(tint).frame(height: 2) }
             .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
-            VStack(alignment: .leading, spacing: 1) {
+            // `LazyVStack` 而不是 `VStack`：一格就是一台的全部输出（自愈 6 步 × 200 行
+            // 封顶 1200 行，极端档一格两万多 pt）。外层懒栈只保证「没进视野的**格**不建」，
+            // 一旦某格进了视野，非懒的内层会把这一格的一千两百行**整批**建出来 ——
+            // 实测（`ParallelRunProbeTests`，24 台 × 1200 行）翻到下一台那一跳
+            // p50 316ms / max 367ms，是 16.67ms 预算的 19~22 倍；6 台 × 600 行也要 161ms。
+            // 换成懒栈后只建视野内那几十行。
+            LazyVStack(alignment: .leading, spacing: 1) {
                 ForEach(state.lines) { line in
                     HStack(alignment: .top, spacing: 7) {
                         switch line.kind {
