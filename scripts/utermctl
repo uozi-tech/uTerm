@@ -115,7 +115,7 @@ def build_parser():
     p = sftp_add("stat", "看一个文件的大小与修改时间")
     p.add_argument("path")
 
-    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB）")
+    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
     p.add_argument("path")
     p.add_argument("--max-bytes", type=int)
 
@@ -491,7 +491,7 @@ def render(response, fmt, args):
         if payload.get("text") is not None:
             body = payload["text"]
             if payload.get("truncated"):
-                body += "\n-- 已按 --max-bytes 截断"
+                body += "\n-- 内容不完整：读取期间远端文件变大了"
             return body
         return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `sftp get` 下载后本地处理"
                 % (payload.get("path", "?"), payload.get("bytes", "?")))
@@ -510,6 +510,10 @@ def render(response, fmt, args):
     if table is None:
         return as_json(response)
     header, rows = table
+    # 空表就打服务端的说明。`terminal open` 会在窗口开了、但 6 秒内会话还没注册上来
+    # 时回 `terminals: []` + 一句解释，只印表头等于把这句话吞了。
+    if not rows:
+        return response.get("message") or as_json(response)
     return render_table(header, rows) if fmt == "table" else render_csv(header, rows)
 
 

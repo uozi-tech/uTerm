@@ -308,6 +308,27 @@ extension ControlHandler {
         )
     }
 
+    /// 任意建连失败 → 响应（主机密钥两态带 `hostKey.fingerprint`）。
+    ///
+    /// `ControlFailure` 带不了 `hostKey`，所以建连路径一律**返回响应**而不是抛错 ——
+    /// 技能文档教模型读 `hostKey.fingerprint` 去 `trust`，这个字段丢了模型就卡死。
+    /// `run` / `run-many` / `trust` 直接用 `response(for:id:host:)`；
+    /// SFTP / 转发那种手里只有 `Error` 的路径走这个包装。
+    func connectFailureResponse(
+        _ error: Error,
+        id: String?,
+        profile: ServerProfile
+    ) -> ControlResponse {
+        guard let connect = error as? ControlConnectError else {
+            return .failure(
+                id: id,
+                code: .connect_failed,
+                message: "连接「\(profile.name)」失败：\(FriendlyError.describe(error))"
+            )
+        }
+        return response(for: connect, id: id, host: profile.name)
+    }
+
     /// 去空白后的非空串，否则 nil。
     static func trimmed(_ value: String?) -> String? {
         guard let value else { return nil }

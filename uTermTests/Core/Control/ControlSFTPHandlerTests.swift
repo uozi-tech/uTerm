@@ -21,7 +21,11 @@ final class ControlSFTPHandlerTests: XCTestCase {
 
         func failNext(_ error: Error) { failure = error }
 
-        func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {
+        func executor(
+            for host: HostConnectionSpec,
+            maxLines: Int,
+            maxBytes: Int
+        ) async throws -> SSHCommandExecutor {
             throw ControlConnectError.connectFailed("测试替身不提供 exec 通道")
         }
 
@@ -34,6 +38,10 @@ final class ControlSFTPHandlerTests: XCTestCase {
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
+        func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
+            throw ControlConnectError.connectFailed("测试替身不提供 exec 通道")
+        }
     }
 
     // MARK: - 夹具
@@ -70,13 +78,16 @@ final class ControlSFTPHandlerTests: XCTestCase {
             pool: pool,
             registry: TerminalSessionRegistry())
 
+        // 闭包里不能隐式捕获 `self.container`，先取出局部量。
+        let modelContainer = container!
         ControlHostSpecResolver.overrideForTesting = { profile in
             HostConnectionSpec(
                 id: profile.id,
                 name: profile.name,
                 profile: SSHConnection.ProfileSnapshot(profile),
                 auth: .password(username: profile.username, password: "secret"),
-                jumpAuth: nil)
+                jumpAuth: nil,
+                container: modelContainer)
         }
     }
 

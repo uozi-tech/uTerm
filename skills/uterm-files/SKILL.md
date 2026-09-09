@@ -21,8 +21,9 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 
 - `ls` 的 `path` 不给时默认 `.`（登录目录）。表格里 `kind` 是 `file` / `dir` /
   `link`，`mode` 是八进制权限。
-- `cat` 上限 **1 MiB**，超过会截断（`truncated: true`）。文件不是 UTF-8 文本时不会
-  往终端里吐乱码，而是提示你改用 `sftp get`。
+- `cat` 上限 **1 MiB**，超过**不截断**而是直接回 `file_too_large`（远端没有部分读
+  的原语）—— 改用 `sftp get`（上限 8 MiB）落盘后本地处理，或者用下面那条 `tail`。
+  文件不是 UTF-8 文本时也不会往终端里吐乱码，同样提示你改用 `sftp get`。
 - 想「看日志最后 200 行」，用 `uterm-run` 的 `run -- tail -n 200 …` 更省事，
   别把整份日志 `cat` 下来再筛。
 
@@ -75,7 +76,7 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 | code | 含义 |
 |---|---|
 | `file_not_found` | 远端路径不存在 |
-| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB） |
+| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB；超限不截断，直接报这个码） |
 | `permission_denied` | 远端权限不够 —— 换路径或让用户提权，别自己去试 `sudo` |
 | `is_directory` | 对目录用了文件动作（或反过来） |
 

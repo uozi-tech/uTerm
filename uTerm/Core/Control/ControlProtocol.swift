@@ -496,7 +496,7 @@ nonisolated public struct ControlHostKeyInfo: Codable, Sendable, Equatable {
 }
 
 /// 与 `uTerm/Features/Files/RemoteEntry.swift` 的 `RemoteEntry` 对齐的线上形状。
-/// 时间用 ISO8601 字符串，权限用数字 mode（含类型位）+ 预格式化的 `permissionsText`。
+/// 时间用 ISO8601 字符串，权限用数字 mode（含类型位）—— 格式化成 `rwxr-xr-x` 由客户端做。
 nonisolated public struct ControlRemoteEntry: Codable, Sendable, Equatable {
     public var name: String
     public var isDirectory: Bool
@@ -557,7 +557,9 @@ nonisolated public struct ControlFilePayload: Codable, Sendable, Equatable {
     public var isUTF8: Bool
     public var text: String?
     public var base64: String?
-    /// 被 `maxBytes` 截断（`cat` 才会；`get` 超限直接 `file_too_large`）。
+    /// 内容不完整。`cat` / `get` 都是**先 stat 再决定**：声明大小超上限就直接
+    /// `file_too_large`，从不截断着返回（`SFTPProviding` 没有部分读原语）。
+    /// 因此这个字段实际只在「stat 之后文件又长大了」的竞态里才为 true。
     public var truncated: Bool
 
     public init(

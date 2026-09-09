@@ -91,6 +91,9 @@ struct uTermApp: App {
             } else {
                 server.stop()
                 settings.startupError = nil
+                // 关掉主开关必须连 CLI 自己持有的连接一起松开：`ControlConnectionPool`
+                // 与窗口无关，没有这一步的话 socket 关了、SSH 连接却还挂着。
+                Task { await ControlConnectionPool.shared.disconnectAll() }
             }
         }
     }

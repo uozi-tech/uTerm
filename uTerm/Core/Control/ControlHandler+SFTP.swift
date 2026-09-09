@@ -39,7 +39,7 @@ extension ControlHandler {
         do {
             sftp = try await sftpSession(for: profile, deps)
         } catch {
-            return Self.connectFailureResponse(id: request.id, profile: profile, error: error)
+            return connectFailureResponse(error, id: request.id, profile: profile)
         }
 
         do {
@@ -242,59 +242,5 @@ extension ControlHandler {
     private static func sftpMessage(request: ControlRequest, error: Error) -> String {
         let where_ = request.path.map { "\($0)：" } ?? ""
         return "\(where_)\(FriendlyError.describe(error))"
-    }
-
-    /// 建连失败 → 响应。三种主机密钥状态各自带 fingerprint（`hostKey` 字段）。
-    ///
-    /// 与 `run` 共用同一套映射语义；因为 `ControlFailure` 带不了 `hostKey`，
-    /// 这里直接产出响应而不是抛错。
-    private static func connectFailureResponse(
-        id: String?,
-        profile: ServerProfile,
-        error: Error
-    ) -> ControlResponse {
-        guard let connect = error as? ControlConnectError else {
-            return .failure(
-                id: id,
-                code: .connect_failed,
-                message: "连接「\(profile.name)」失败：\(FriendlyError.describe(error))"
-            )
-        }
-        switch connect {
-        case .hostKeyUnknown(let fingerprint, let algorithm):
-            return .failure(
-                id: id,
-                code: .host_key_unknown,
-                message: "主机「\(profile.name)」的密钥尚未信任；核对后用 trust --fingerprint \(fingerprint) 钉住",
-                hostKey: ControlHostKeyInfo(
-                    host: profile.host,
-                    algorithm: algorithm,
-                    fingerprint: fingerprint,
-                    status: "unknown")
-            )
-        case .hostKeyChanged(let fingerprint, let algorithm):
-            return .failure(
-                id: id,
-                code: .host_key_changed,
-                message: "主机「\(profile.name)」的密钥与信任库不一致，请回 uTerm 界面处理",
-                hostKey: ControlHostKeyInfo(
-                    host: profile.host,
-                    algorithm: algorithm,
-                    fingerprint: fingerprint,
-                    status: "changed")
-            )
-        case .authFailed(let reason):
-            return .failure(
-                id: id,
-                code: .auth_failed,
-                message: "主机「\(profile.name)」认证失败：\(reason)"
-            )
-        case .connectFailed(let reason):
-            return .failure(
-                id: id,
-                code: .connect_failed,
-                message: "连接「\(profile.name)」失败：\(reason)"
-            )
-        }
     }
 }

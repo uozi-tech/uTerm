@@ -11,7 +11,11 @@ final class ControlTerminalHandlerTests: XCTestCase {
 
     /// 连接池在终端组用不到 —— 只有 `ping.openHosts` 会问它要 id。
     private actor StubPool: ControlConnectionPooling {
-        func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {
+        func executor(
+            for host: HostConnectionSpec,
+            maxLines: Int,
+            maxBytes: Int
+        ) async throws -> SSHCommandExecutor {
             throw ControlConnectError.connectFailed("终端组用不到连接池")
         }
         func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
@@ -20,6 +24,10 @@ final class ControlTerminalHandlerTests: XCTestCase {
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
+        func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
+            throw ControlConnectError.connectFailed("终端组用不到连接池")
+        }
     }
 
     private struct Fixture {

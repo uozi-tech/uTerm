@@ -14,7 +14,11 @@ import SwiftData
 final class ControlForwardHandlerTests: XCTestCase {
 
     private actor FakePool: ControlConnectionPooling {
-        func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {
+        func executor(
+            for host: HostConnectionSpec,
+            maxLines: Int,
+            maxBytes: Int
+        ) async throws -> SSHCommandExecutor {
             throw ControlConnectError.connectFailed("测试替身不建连接")
         }
         func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
@@ -23,6 +27,10 @@ final class ControlForwardHandlerTests: XCTestCase {
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
+        func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
+            throw ControlConnectError.connectFailed("测试替身不建连接")
+        }
     }
 
     private var container: ModelContainer!

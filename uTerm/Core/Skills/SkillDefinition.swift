@@ -321,8 +321,9 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 
 - `ls` 的 `path` 不给时默认 `.`（登录目录）。表格里 `kind` 是 `file` / `dir` /
   `link`，`mode` 是八进制权限。
-- `cat` 上限 **1 MiB**，超过会截断（`truncated: true`）。文件不是 UTF-8 文本时不会
-  往终端里吐乱码，而是提示你改用 `sftp get`。
+- `cat` 上限 **1 MiB**，超过**不截断**而是直接回 `file_too_large`（远端没有部分读
+  的原语）—— 改用 `sftp get`（上限 8 MiB）落盘后本地处理，或者用下面那条 `tail`。
+  文件不是 UTF-8 文本时也不会往终端里吐乱码，同样提示你改用 `sftp get`。
 - 想「看日志最后 200 行」，用 `uterm-run` 的 `run -- tail -n 200 …` 更省事，
   别把整份日志 `cat` 下来再筛。
 
@@ -375,7 +376,7 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 | code | 含义 |
 |---|---|
 | `file_not_found` | 远端路径不存在 |
-| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB） |
+| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB；超限不截断，直接报这个码） |
 | `permission_denied` | 远端权限不够 —— 换路径或让用户提权，别自己去试 `sudo` |
 | `is_directory` | 对目录用了文件动作（或反过来） |
 
@@ -553,8 +554,13 @@ description: 查看 uTerm 里正在开着的终端会话、读取某个会话的
 "$UTERMCTL" terminal open -H prod-web
 ```
 
-给一台主机开一个新的终端窗口并连上，返回新会话。这会在用户屏幕上弹出窗口，**先问
-用户**再开，也别一次开一堆。`sftpOnly` 的主机会被拒（`host_sftp_only`）。
+给一台主机开一个新的终端窗口并连上，返回的 `terminals` 里是那条新会话。这会在用户
+屏幕上弹出窗口，**先问用户**再开，也别一次开一堆。`sftpOnly` 的主机会被拒
+（`host_sftp_only`）。
+
+窗口是异步搭起来的：开窗成功但 6 秒内会话还没连上（首连慢、卡在主机密钥确认）时，
+响应仍是 `ok`，但 `terminals` 是**空数组**，`message` 会说明情况 —— 此时窗口确实已经
+开了，隔几秒用 `terminals` 再列一次拿会话 id，不要重复 `open`。
 
 ## 硬约束
 
@@ -695,7 +701,7 @@ def build_parser():
     p = sftp_add("stat", "看一个文件的大小与修改时间")
     p.add_argument("path")
 
-    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB）")
+    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
     p.add_argument("path")
     p.add_argument("--max-bytes", type=int)
 
@@ -1071,7 +1077,7 @@ def render(response, fmt, args):
         if payload.get("text") is not None:
             body = payload["text"]
             if payload.get("truncated"):
-                body += "\n-- 已按 --max-bytes 截断"
+                body += "\n-- 内容不完整：读取期间远端文件变大了"
             return body
         return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `sftp get` 下载后本地处理"
                 % (payload.get("path", "?"), payload.get("bytes", "?")))
@@ -1090,6 +1096,10 @@ def render(response, fmt, args):
     if table is None:
         return as_json(response)
     header, rows = table
+    # 空表就打服务端的说明。`terminal open` 会在窗口开了、但 6 秒内会话还没注册上来
+    # 时回 `terminals: []` + 一句解释，只印表头等于把这句话吞了。
+    if not rows:
+        return response.get("message") or as_json(response)
     return render_table(header, rows) if fmt == "table" else render_csv(header, rows)
 
 
