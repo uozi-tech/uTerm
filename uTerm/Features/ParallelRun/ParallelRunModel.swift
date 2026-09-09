@@ -593,55 +593,15 @@ final class ParallelRunModel {
         let timedOut: Bool
     }
 
-    private enum GateOutcome: Sendable {
-        case completed(CommandResult?)
-        case failed(String)
-        case timedOut
-    }
-
-    /// 执行命令并归类结果；超过 `perServerTimeout` 即放弃等待（记超时）。用非结构化 `Task` +
-    /// 一次性闸门——Citadel exec 流不可取消，结构化任务组会被挂死命令永久阻塞
-    ///（详见 `QuickCommandRunner.runBounded`）。
+    /// 执行命令并归类结果；超过 `perServerTimeout` 即放弃等待（记超时）。`BoundedExec` 用
+    /// 非结构化 `Task` + 一次性闸门——Citadel exec 流不可取消，结构化任务组会被挂死命令
+    /// 永久阻塞（详见 `BoundedExec`）。
     private nonisolated static func execBounded(executor: SSHCommandExecutor?, command: String) async -> ExecOutcome {
         guard let executor else { return ExecOutcome(result: nil, errorText: nil, timedOut: false) }
-        let gate = OneShotGate()
-        _ = Task<Void, Never> {
-            do { await gate.deliver(.completed(try await executor.run(command))) }
-            catch { await gate.deliver(.failed(FriendlyError.describe(error))) }
-        }
-        let timer = Task<Void, Never> {
-            try? await Task.sleep(for: perServerTimeout)
-            await gate.deliver(.timedOut)
-        }
-        let outcome = await gate.wait()
-        timer.cancel()
-        switch outcome {
+        switch await BoundedExec.run(timeout: perServerTimeout, { try await executor.run(command) }) {
         case .completed(let r): return ExecOutcome(result: r, errorText: nil, timedOut: false)
-        case .failed(let msg):  return ExecOutcome(result: nil, errorText: msg, timedOut: false)
+        case .failed(let f):    return ExecOutcome(result: nil, errorText: f.text, timedOut: false)
         case .timedOut:         return ExecOutcome(result: nil, errorText: nil, timedOut: true)
-        }
-    }
-
-    /// 一次性闸门：exec 与超时谁先到谁定结果。
-    private actor OneShotGate {
-        private var delivered = false
-        private var stored: GateOutcome?
-        private var waiter: CheckedContinuation<GateOutcome, Never>?
-
-        func deliver(_ value: GateOutcome) {
-            guard !delivered else { return }
-            delivered = true
-            if let waiter {
-                waiter.resume(returning: value)
-                self.waiter = nil
-            } else {
-                stored = value
-            }
-        }
-
-        func wait() async -> GateOutcome {
-            if let stored { return stored }
-            return await withCheckedContinuation { waiter = $0 }
         }
     }
 }

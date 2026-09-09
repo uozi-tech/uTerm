@@ -157,8 +157,9 @@ final class ControlHandler {
         case .ping:
             return .success(id: request.id, message: "uTerm 正在运行", app: await appInfo(deps))
         case .disconnect:
-            // Wave 1：解析主机 → `deps.pool.disconnect(hostID:)`；无 `--host` 时全部释放。
-            throw ControlFailure.notImplemented("disconnect")
+            // 解析主机 → `deps.pool.disconnect(hostID:)`；无 `--host` 时全部释放。
+            // 实现在 `ControlHandler+Hosts.swift`（它按主机走，与主机组共用解析入口）。
+            return try await handleDisconnect(request, deps)
         default:
             throw ControlFailure(
                 code: .invalid_request,
