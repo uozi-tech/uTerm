@@ -132,7 +132,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
-	build archive export-app test test-mobile clean dmg dmg-background sign-release-app install verify \
+	build archive export-app test test-mobile check-cli check-skills clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
 	testflight-notes-mobile release-mobile \
@@ -149,6 +149,8 @@ help:
 	@printf '%s\n' '  make export-app                        Export a Developer ID-signed app from the archive'
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
+	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
+	@printf '%s\n' '  make check-skills                      Run the SKILL.md / utermctl drift tests'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
@@ -281,6 +283,33 @@ test-mobile:
 		-destination "$(MOBILE_DESTINATION)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		test
+
+# 命令行客户端的离线自测：起一个假的 Unix socket 服务端，把每个子命令跑一遍
+# （请求编码 / 输出格式化 / 退出码映射）。不需要 Xcode，也不需要 uTerm 在跑。
+check-cli:
+	python3 scripts/utermctl --help >/dev/null
+	python3 scripts/utermctl-selftest.py
+
+# 技能文档 ↔ 内嵌常量的漂移闸。改了 skills/*/SKILL.md 或 scripts/utermctl 而忘了同步
+# SkillDefinition.swift 的常量，用户装到的就还是旧文档 —— 只有这两个测试类挡着。
+# 发版前跑一次（release skill 已接进去）。
+check-skills: check-cli
+	xcodebuild build-for-testing \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO
+	xcodebuild test-without-building \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		-only-testing:uTermTests/SkillDefinitionTests \
+		-only-testing:uTermTests/SkillInstallerTests
 
 clean:
 	rm -rf "$(BUILD_DIR)"
