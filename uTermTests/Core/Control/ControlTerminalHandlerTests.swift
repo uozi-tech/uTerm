@@ -102,16 +102,19 @@ final class ControlTerminalHandlerTests: XCTestCase {
 
     func testTerminalsListsRegisteredSessions() async throws {
         let fixture = try makeFixture()
+        // 两条都要**用局部变量接住**：注册表只弱引用会话，`_ =` 会让它当场释放，
+        // 那条 entry 随即被当成幻影行清掉（见 `testTerminalReadOnReleasedSessionIsNotFound`）。
         let a = await attachSession(fixture, serverName: "web-1")
-        _ = await attachSession(fixture, serverName: "db-1",
-                                windowKind: TerminalWindowKind.terminal)
+        let b = await attachSession(fixture, serverName: "db-1",
+                                    windowKind: TerminalWindowKind.terminal)
 
         let response = await fixture.handler.handle(ControlRequest(action: .terminals))
         XCTAssertTrue(response.ok)
         XCTAssertEqual(response.terminals?.count, 2)
-        XCTAssertEqual(response.terminals?[0].id, a.entry.id.uuidString)
-        XCTAssertEqual(response.terminals?[0].serverName, "web-1")
-        XCTAssertEqual(response.terminals?[1].windowKind, "terminal")
+        XCTAssertEqual(response.terminals?.first?.id, a.entry.id.uuidString)
+        XCTAssertEqual(response.terminals?.first?.serverName, "web-1")
+        XCTAssertEqual(response.terminals?.last?.id, b.entry.id.uuidString)
+        XCTAssertEqual(response.terminals?.last?.windowKind, "terminal")
     }
 
     func testTerminalsIsEmptyWithoutSessions() async throws {
@@ -145,6 +148,23 @@ final class ControlTerminalHandlerTests: XCTestCase {
             action: .terminalRead, terminal: attached.entry.id.uuidString, lines: 3))
         XCTAssertEqual(response.screen?.lines, ["row8", "row9", "row10"])
         XCTAssertEqual(response.screen?.truncated, true)
+    }
+
+    /// 回归：**尾部空行超过一屏**时也要读得回内容。
+    ///
+    /// 旧实现只从缓冲区末尾往上多取一屏（`lines + rows`），而
+    /// `TerminalScreenReader.trim` 会把尾随空行**全部**去掉 —— `clear` 之后、
+    /// TUI 退出之后那种几百行空白尾巴，会把多取的一屏整个吃掉，读屏返回空数组。
+    func testTerminalReadSkipsBlankTailLongerThanOneScreen() async throws {
+        let fixture = try makeFixture()
+        let attached = await attachSession(fixture)
+        feed(attached.session, "alpha\r\nbeta\r\ngamma\r\n")
+        feed(attached.session, String(repeating: "\r\n", count: 200))
+
+        let response = await fixture.handler.handle(ControlRequest(
+            action: .terminalRead, terminal: attached.entry.id.uuidString, lines: 3))
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.screen?.lines, ["alpha", "beta", "gamma"])
     }
 
     func testTerminalReadOnEmptyBufferReturnsNoLines() async throws {
@@ -189,8 +209,10 @@ final class ControlTerminalHandlerTests: XCTestCase {
         XCTAssertEqual(response.code, ControlErrorCode.terminal_not_found.rawValue)
     }
 
-    /// 会话对象已释放（窗口没走 dispose 就没了）→ `terminal_disconnected`。
-    func testTerminalReadOnReleasedSessionIsDisconnected() async throws {
+    /// 会话对象已释放（窗口没走 dispose 就没了）→ 注册表把那条 entry 一起清掉，
+    /// 于是既不再出现在 `terminals` 里，读它也是 `terminal_not_found`。
+    /// （从前只清弱引用槽、留着 entry，`terminals` 会永远列着一条读不了的幻影行。）
+    func testTerminalReadOnReleasedSessionIsNotFound() async throws {
         let fixture = try makeFixture()
         let entry = TerminalSessionEntry(
             id: UUID(), serverID: UUID(), serverName: "gone",
@@ -199,9 +221,40 @@ final class ControlTerminalHandlerTests: XCTestCase {
             let session = TerminalSession()
             fixture.registry.register(entry, session: session)
         }
+        let listed = await fixture.handler.handle(ControlRequest(action: .terminals))
+        XCTAssertEqual(listed.terminals, [])
+
         let response = await fixture.handler.handle(ControlRequest(
             action: .terminalRead, terminal: entry.id.uuidString))
-        XCTAssertEqual(response.code, ControlErrorCode.terminal_disconnected.rawValue)
+        XCTAssertEqual(response.code, ControlErrorCode.terminal_not_found.rawValue)
+    }
+
+    /// 远端退出（`exitStream`）后窗格注销自己 —— `terminals` 不再列它，
+    /// `terminal-read` 也不会再回同一张冻结的画面。
+    func testDisconnectedPaneDropsOutOfTerminals() async throws {
+        let fixture = try makeFixture()
+        let pane = PaneModel(serverProfileID: UUID())
+        pane.registrar = TerminalSessionRegistrar(
+            registry: fixture.registry,
+            windowID: UUID(),
+            windowKind: TerminalWindowKind.workspace)
+        let backend = MockBackend()
+        await pane.session.connect(using: backend)
+        // 生产路径上这一步由 `PaneModel.connect` 做（它那时才知道服务器名）。
+        pane.registrar?.register(paneID: pane.id, serverID: pane.serverProfileID,
+                                 serverName: "prod-web", session: pane.session)
+
+        var listed = await fixture.handler.handle(ControlRequest(action: .terminals))
+        XCTAssertEqual(listed.terminals?.count, 1)
+
+        await backend.emitExit()
+        for _ in 0..<200 where pane.session.connectionState != .disconnected {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(pane.session.connectionState, .disconnected)
+
+        listed = await fixture.handler.handle(ControlRequest(action: .terminals))
+        XCTAssertEqual(listed.terminals, [])
     }
 
     // MARK: terminal-send
