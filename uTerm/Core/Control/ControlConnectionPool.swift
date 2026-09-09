@@ -155,6 +155,12 @@ actor ControlConnectionPool: ControlConnectionPooling {
         challenges[hostID]
     }
 
+    /// 池外路径（`forward-start` 的专用转发连接）拿到的挑战也记进同一张表，
+    /// 好让 `trust --fingerprint` 配得上对。与池内 `recordChallenge(_:for:)` 同一份存储。
+    func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async {
+        challenges[hostID] = challenge
+    }
+
     func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
         try await connector.trustHostKey(host, fingerprint)
         // 信任成功：质询作废，否则下一次 `trust` 会拿着陈旧指纹重复批准。

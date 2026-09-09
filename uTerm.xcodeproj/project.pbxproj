@@ -87,7 +87,6 @@
 				"Core/Control/ControlHandler+SFTP.swift",
 				"Core/Control/ControlHandler+Terminal.swift",
 				Core/Control/ControlHandler.swift,
-				Core/Control/ControlHostSpecResolver.swift,
 				Core/Control/ControlProtocol.swift,
 				Core/Control/ControlServer.swift,
 				Core/Control/ControlSettings.swift,

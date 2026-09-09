@@ -3,8 +3,9 @@ import XCTest
 
 final class PortConflictCheckerTests: XCTestCase {
 
-    private func snap(_ kind: ForwardKind, _ port: Int, id: UUID = UUID()) -> ForwardingRuleSnapshot {
-        ForwardingRuleSnapshot(id: id, serverID: UUID(), name: "规则\(port)", kind: kind,
+    private func snap(_ kind: ForwardKind, _ port: Int, id: UUID = UUID(),
+                      name: String? = nil) -> ForwardingRuleSnapshot {
+        ForwardingRuleSnapshot(id: id, serverID: UUID(), name: name ?? "规则\(port)", kind: kind,
                                listenHost: "127.0.0.1", listenPort: port,
                                destHost: nil, destPort: 0, autostart: false)
     }
@@ -29,7 +30,7 @@ final class PortConflictCheckerTests: XCTestCase {
         let existing = snap(.local, 8080)
         let result = PortConflictChecker.conflict(kind: .dynamic, listenPort: 8080,
                                                   excluding: nil, against: [existing])
-        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 8080, occupant: "规则8080"))
+        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 8080, occupant: "规则8080", source: .rule))
     }
 
     func testNoConflictAcrossSides() {
@@ -53,7 +54,7 @@ final class PortConflictCheckerTests: XCTestCase {
     func testConflictWithWellKnownPort() {
         let result = PortConflictChecker.conflict(kind: .local, listenPort: 22,
                                                   excluding: nil, against: [])
-        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "SSH"))
+        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "SSH", source: .wellKnownPort))
     }
 
     func testWellKnownNotAppliedToRemoteSide() {
@@ -67,7 +68,7 @@ final class PortConflictCheckerTests: XCTestCase {
         // 本地绑定（local）落在知名端口 22 → 报 SSH 冲突
         let result = PortConflictChecker.conflict(kind: .local, listenPort: 22,
                                                   excluding: nil, against: [])
-        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "SSH"))
+        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "SSH", source: .wellKnownPort))
     }
 
     func testWellKnownPortTableContents() {
@@ -81,7 +82,22 @@ final class PortConflictCheckerTests: XCTestCase {
         let existing = snap(.local, 22)
         let result = PortConflictChecker.conflict(kind: .local, listenPort: 22,
                                                   excluding: nil, against: [existing])
-        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "规则22"))
+        XCTAssertEqual(result, PortConflictChecker.Conflict(port: 22, occupant: "规则22", source: .rule))
+    }
+
+    /// `occupant` 两支都是名字：规则起名叫 "AirPlay" 时，光看字符串分不出这条是
+    /// 真规则冲突还是知名端口提醒。`source` 就是为这个存在的（CLI 据它决定拦还是提醒）。
+    func testSourceDistinguishesRuleNamedAfterAService() {
+        let existing = snap(.local, 5000, name: "AirPlay")
+        let clash = PortConflictChecker.conflict(kind: .local, listenPort: 5000,
+                                                 excluding: nil, against: [existing])
+        XCTAssertEqual(clash?.occupant, "AirPlay")
+        XCTAssertEqual(clash?.source, .rule, "规则冲突，不是知名端口提醒")
+
+        let wellKnown = PortConflictChecker.conflict(kind: .local, listenPort: 5000,
+                                                    excluding: nil, against: [])
+        XCTAssertEqual(wellKnown?.occupant, "AirPlay")
+        XCTAssertEqual(wellKnown?.source, .wellKnownPort)
     }
 
     // MARK: suggestFreePort —— 跳过同侧已占 + 知名端口

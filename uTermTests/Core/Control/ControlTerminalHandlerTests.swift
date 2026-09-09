@@ -25,6 +25,7 @@ final class ControlTerminalHandlerTests: XCTestCase {
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
         func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async {}
         func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
             throw ControlConnectError.connectFailed("终端组用不到连接池")
         }

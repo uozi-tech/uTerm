@@ -14,6 +14,9 @@ import SwiftData
 final class ControlForwardHandlerTests: XCTestCase {
 
     private actor FakePool: ControlConnectionPooling {
+        /// `forward-start` 拿到挑战后补记进来的那些（hostID, 挑战）。
+        private(set) var recorded: [(UUID, HostKeyChallenge)] = []
+
         func executor(
             for host: HostConnectionSpec,
             maxLines: Int,
@@ -27,7 +30,12 @@ final class ControlForwardHandlerTests: XCTestCase {
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
-        func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? {
+            recorded.last { $0.0 == hostID }?.1
+        }
+        func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async {
+            recorded.append((hostID, challenge))
+        }
         func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
             throw ControlConnectError.connectFailed("测试替身不建连接")
         }
@@ -36,6 +44,7 @@ final class ControlForwardHandlerTests: XCTestCase {
     private var container: ModelContainer!
     private var settings: ControlSettings!
     private var coordinator: ForwardingCoordinator!
+    private var pool: FakePool!
     private var handler: ControlHandler!
     private var server: ServerProfile!
 
@@ -53,6 +62,7 @@ final class ControlForwardHandlerTests: XCTestCase {
         try container.mainContext.save()
 
         coordinator = ForwardingCoordinator()
+        pool = FakePool()
         settings = ControlSettings(defaults: Self.freshDefaults())
         settings.isEnabled = true
         settings.allowMutations = true
@@ -60,11 +70,12 @@ final class ControlForwardHandlerTests: XCTestCase {
             settings: settings,
             modelContainer: container,
             forwardingCoordinator: coordinator,
-            pool: FakePool(),
+            pool: pool,
             registry: TerminalSessionRegistry())
     }
 
     override func tearDown() async throws {
+        ControlHandler.forwardRelayFactoryForTesting = nil
         coordinator?.injectTrafficForTesting(nil)
         handler = nil
         try await super.tearDown()
@@ -104,28 +115,37 @@ final class ControlForwardHandlerTests: XCTestCase {
 
     // MARK: - 规则解析（纯函数四级）
 
+    /// 规则解析复用 `HostResolver`（原先那份 `ControlForwardRuleResolver` 是它的复制品，
+    /// 且已经漂移）。这里断言的是 `HostResolver` 的语义。
     func testRuleResolverLevels() {
-        let a = ControlForwardRuleResolver.Candidate(id: UUID(), name: "pg-tunnel")
-        let b = ControlForwardRuleResolver.Candidate(id: UUID(), name: "Redis-Tunnel")
+        let a = HostResolver.Candidate(id: UUID(), name: "pg-tunnel")
+        let b = HostResolver.Candidate(id: UUID(), name: "Redis-Tunnel")
         let pool = [a, b]
 
-        XCTAssertEqual(ControlForwardRuleResolver.resolve(a.id.uuidString, in: pool),
+        XCTAssertEqual(HostResolver.resolve(a.id.uuidString, in: pool),
                        .matched(a.id), "UUID 直达")
-        XCTAssertEqual(ControlForwardRuleResolver.resolve("pg-tunnel", in: pool),
+        XCTAssertEqual(HostResolver.resolve("pg-tunnel", in: pool),
                        .matched(a.id), "精确")
-        XCTAssertEqual(ControlForwardRuleResolver.resolve("redis-tunnel", in: pool),
+        XCTAssertEqual(HostResolver.resolve("redis-tunnel", in: pool),
                        .matched(b.id), "忽略大小写")
-        XCTAssertEqual(ControlForwardRuleResolver.resolve("pg", in: pool),
+        XCTAssertEqual(HostResolver.resolve("pg", in: pool),
                        .matched(a.id), "唯一前缀")
-        XCTAssertEqual(ControlForwardRuleResolver.resolve("nope", in: pool), .notFound)
-        XCTAssertEqual(ControlForwardRuleResolver.resolve(UUID().uuidString, in: pool),
-                       .notFound, "UUID 没命中就是没有，不再往名字上退")
+        XCTAssertEqual(HostResolver.resolve("nope", in: pool), .notFound)
+    }
+
+    /// `HostResolver` 与被删掉的那份复制品的关键差异：UUID **形状**的 needle 没命中 id 时
+    /// 继续往名字匹配上退，而不是直接 `notFound`。
+    func testUUIDShapedNeedleFallsBackToNameMatching() {
+        let named = HostResolver.Candidate(id: UUID(), name: UUID().uuidString)
+        XCTAssertEqual(HostResolver.resolve(named.name, in: [named]),
+                       .matched(named.id), "UUID 形状但没命中 id → 退回名字匹配")
+        XCTAssertEqual(HostResolver.resolve(UUID().uuidString, in: [named]), .notFound)
     }
 
     func testRuleResolverAmbiguity() {
-        let a = ControlForwardRuleResolver.Candidate(id: UUID(), name: "tunnel-a")
-        let b = ControlForwardRuleResolver.Candidate(id: UUID(), name: "tunnel-b")
-        let outcome = ControlForwardRuleResolver.resolve("tunnel", in: [a, b])
+        let a = HostResolver.Candidate(id: UUID(), name: "tunnel-a")
+        let b = HostResolver.Candidate(id: UUID(), name: "tunnel-b")
+        let outcome = HostResolver.resolve("tunnel", in: [a, b])
         XCTAssertEqual(outcome, .ambiguous([a, b]))
     }
 
@@ -350,6 +370,89 @@ final class ControlForwardHandlerTests: XCTestCase {
             ControlRequest(action: .forwardStart, rule: "orphan"))
 
         XCTAssertEqual(response.code, ControlErrorCode.host_not_found.rawValue)
+    }
+
+    /// 回归：`forward-start` 的挑战落在它自己的临时 relay 上（转发不经连接池），
+    /// 必须补记进池 —— 否则 `trust --fingerprint` 找不到可核对的挑战，
+    /// 技能文档教的「拿指纹 → trust → 重试」在转发这条路上就断了。
+    func testStartRecordsHostKeyChallengeIntoPool() async throws {
+        try makeRule(name: "pg", listenPort: 15_432)
+        let challenge = HostKeyChallenge(
+            host: "192.0.2.20", port: 22, kind: .unknown,
+            newFingerprint: "SHA256:abc", oldFingerprint: nil)
+        // 挑战是异步落到 relay 上的；换一个预置好挑战的 relay，把时间窗去掉。
+        ControlHandler.forwardRelayFactoryForTesting = {
+            let relay = HostKeyChallengeRelay()
+            relay.pendingChallenge = challenge
+            return relay
+        }
+
+        let response = await handler.handle(
+            ControlRequest(action: .forwardStart, rule: "pg"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.host_key_unknown.rawValue,
+                       response.message)
+        XCTAssertEqual(response.hostKey?.fingerprint, "SHA256:abc")
+
+        let recorded = await pool.recorded
+        XCTAssertEqual(recorded.count, 1, "挑战必须补记进连接池")
+        XCTAssertEqual(recorded.first?.0, server.id)
+        XCTAssertEqual(recorded.first?.1.newFingerprint, "SHA256:abc")
+        let paired = await pool.lastHostKeyChallenge(hostID: server.id)
+        XCTAssertEqual(paired?.newFingerprint, "SHA256:abc",
+                       "trust --fingerprint 要能从池里配上对")
+    }
+
+    /// 回归：`stop` / `teardown` 会把状态写成 `.inactive`。并发 stop 后 `waitForStart`
+    /// 必须**立刻**收工回 `forward_failed`，而不是把 `.inactive` 当「仍在启动」空转到超时。
+    func testWaitForStartEndsImmediatelyWhenRuleGoesInactive() async throws {
+        let deps = try XCTUnwrap(handler.dependencies)
+        let ruleID = UUID()
+        coordinator.setStatusForTesting(.starting, for: ruleID)
+
+        let flip = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            self.coordinator.setStatusForTesting(.inactive, for: ruleID)
+        }
+        let started = Date()
+        let outcome = await handler.waitForStart(
+            ruleID: ruleID, relay: HostKeyChallengeRelay(), deps)
+        _ = await flip.value
+
+        guard case .stopped = outcome else {
+            return XCTFail("`.inactive` 应立刻收工，实得 \(outcome)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5,
+                          "不该空转到 sshConnectTimeout")
+    }
+
+    /// 回归：规则冲突的 `occupant` 是**规则名**。用户把规则起名叫知名端口的服务名
+    /// （"AirPlay"）时，真冲突曾被当成「只是个知名端口提醒」吞掉。
+    func testRuleNamedAfterWellKnownServiceStillConflicts() async throws {
+        let running = try makeRule(name: "AirPlay", listenPort: 5_000)
+        coordinator.setStatusForTesting(.active, for: running.id)
+        try makeRule(name: "dup", listenPort: 5_000, sortOrder: 1)
+
+        let response = await handler.handle(
+            ControlRequest(action: .forwardStart, rule: "dup"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.port_in_use.rawValue,
+                       response.message)
+        XCTAssertTrue(response.message.contains("规则「AirPlay」"), response.message)
+    }
+
+    /// 反面：没有任何在跑的同侧规则时，知名端口本身只是警告 —— 不该被 CLI 当成占用拦下。
+    func testWellKnownPortAloneIsNotRejected() async throws {
+        // 本机真跑着 cupsd 时第二道预检（真实 bind）会合法地判占用 —— 那不是本例要测的。
+        try XCTSkipIf(ControlLocalPortProbe.isBusy(host: "127.0.0.1", port: 631),
+                      "本机 631 被真实进程占着，跳过")
+        try makeRule(name: "cups", listenPort: 631)
+
+        let response = await handler.handle(
+            ControlRequest(action: .forwardStart, rule: "cups"))
+
+        XCTAssertNotEqual(response.code, ControlErrorCode.port_in_use.rawValue,
+                          "知名端口只是提醒，交给真实 bind 探测判：\(response.message)")
     }
 
     // MARK: - 端口探测本身

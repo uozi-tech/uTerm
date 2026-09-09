@@ -5,8 +5,10 @@ import SwiftData
 
 /// 文件组 handler 的行为闸：十个动作的正常路径、上限、错误映射、门禁。
 ///
-/// 连接面全部走替身 —— `ControlHostSpecResolver.overrideForTesting` 绕开钥匙串，
-/// `FakePool` 直接回一个 `MockSFTP`，所以整套用例不碰网络、不读 keychain。
+/// 连接面全部走替身 —— `HostConnectionSpec.keychainOverride` 顶掉真实钥匙串
+///（测试宿主的钥匙串里当然没有这台主机的密码，`errSecMissingEntitlement` 会让用例
+/// 在还没走到被测逻辑时就失败），`FakePool` 直接回一个 `MockSFTP`，
+/// 所以整套用例不碰网络、不读 keychain。
 @MainActor
 final class ControlSFTPHandlerTests: XCTestCase {
 
@@ -39,8 +41,16 @@ final class ControlSFTPHandlerTests: XCTestCase {
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }
         func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { nil }
+        func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async {}
         func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
             throw ControlConnectError.connectFailed("测试替身不提供 exec 通道")
+        }
+    }
+
+    /// 顶掉真实钥匙串：`HostConnectionSpec.resolve` 要读密码，测试宿主里没有。
+    private struct StubKeychain: KeychainReading {
+        func load(profileID: UUID, kind: SecretKind) throws -> String? {
+            kind == .password ? "pw" : nil
         }
     }
 
@@ -78,21 +88,11 @@ final class ControlSFTPHandlerTests: XCTestCase {
             pool: pool,
             registry: TerminalSessionRegistry())
 
-        // 闭包里不能隐式捕获 `self.container`，先取出局部量。
-        let modelContainer = container!
-        ControlHostSpecResolver.overrideForTesting = { profile in
-            HostConnectionSpec(
-                id: profile.id,
-                name: profile.name,
-                profile: SSHConnection.ProfileSnapshot(profile),
-                auth: .password(username: profile.username, password: "secret"),
-                jumpAuth: nil,
-                container: modelContainer)
-        }
+        HostConnectionSpec.keychainOverride = StubKeychain()
     }
 
     override func tearDown() async throws {
-        ControlHostSpecResolver.overrideForTesting = nil
+        HostConnectionSpec.keychainOverride = nil
         handler = nil
         try await super.tearDown()
     }

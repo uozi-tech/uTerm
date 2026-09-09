@@ -32,7 +32,8 @@ nonisolated enum ControlFilePayloadBuilder {
         ControlRemoteStat(
             path: path,
             size: remote.size,
-            modifiedAt: ISO8601DateFormatter().string(from: remote.mtime)
+            // `modifiedAt` 非可选；`iso8601` 只在 date 为 nil 时回 nil，这里必有值。
+            modifiedAt: ControlProtocol.iso8601(remote.mtime) ?? ""
         )
     }
 

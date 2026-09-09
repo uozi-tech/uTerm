@@ -50,6 +50,9 @@ final class ControlHandlerTests: XCTestCase {
         func disconnectAll() async { disconnectAllCalls += 1 }
         func heldHostIDs() async -> [UUID] { held }
         func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge? { challenges[hostID] }
+        func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async {
+            challenges[hostID] = challenge
+        }
 
         func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws {
             if let trustError { throw trustError }
