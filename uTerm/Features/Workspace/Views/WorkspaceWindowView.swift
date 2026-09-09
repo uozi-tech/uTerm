@@ -199,6 +199,11 @@ struct WorkspaceWindowView: View {
         // 快照防抖保存 + SFTP 进入 browsing 后恢复预览缓冲。抽成独立 ViewModifier ——
         // 两个内联 .onChange 会把本就庞大的 body 推过类型检查上限。
         .modifier(WorkspaceSnapshotAutosave(workspace: workspace, windowID: windowID))
+        // 把本窗口的终端会话接进跨窗口注册表（CLI 的 terminals / read / send）。
+        .modifier(TerminalRegistryBinding(
+            workspace: workspace,
+            windowID: windowID.id,
+            windowKind: TerminalWindowKind.workspace))
         // 全局 CommandGroup 通知（分屏 / 折叠 sidebar/inspector / 新建终端标签）会广播到所有
         // 打开的工作区窗口；内部用 controlActiveState == .key 守卫，只让前台窗口响应（Fix #6）。
         // 抽成独立 ViewModifier —— 五个内联 .onReceive 会把本就庞大的 body 推过类型检查上限。

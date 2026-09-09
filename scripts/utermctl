@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""uTerm 本机 IPC 客户端。
+
+单一真值源：本文件的内容同时内嵌在 uTerm/Core/Skills/SkillDefinition.swift 里
+（技能安装时物化到磁盘）。两边必须逐字一致，uTermTests/SkillDefinitionTests 会校验。
+
+凭据永远不经过这里：密码 / 私钥 / 口令留在 uTerm 与钥匙串里，客户端只能按名字或
+UUID 指一台**用户已保存**的主机。
+"""
+import argparse
+import base64
+import csv
+import io
+import json
+import os
+import shlex
+import socket
+import sys
+import uuid
+
+ENV_SOCKET = "UTERM_CONTROL_SOCKET"
+
+# macOS 端 Debug 与 Release 都开沙盒，socket 只落在容器里。第二条候选是给
+# 「万一有人跑不带沙盒的构建」留的，成本为零。
+SOCKET_CANDIDATES = [
+    "~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/control.sock",
+    "~/Library/Application Support/uTerm/control.sock",
+]
+
+# 与 ControlProtocol.maxFileBytes 一致：超过就别浪费一次往返，本地先拒。
+MAX_FILE_BYTES = 8 * 1024 * 1024
+
+FORMATS = ["json", "table", "csv"]
+
+# 本地判定（服务端不会发出这两个码）
+CODE_NOT_RUNNING = "uterm_not_running"
+CODE_SOCKET_STALE = "uterm_socket_stale"
+
+# code → 退出码。技能文档里的错误码总表与这张表一一对应。
+EXIT_OK = 0
+EXIT_OTHER = 1
+EXIT_LOCAL = 2       # 连不上 uTerm，或客户端自己的前置检查没过
+EXIT_GATED = 3       # 门禁：两个开关 / 仅 SFTP 主机
+EXIT_NOT_FOUND = 4   # 主机 / 规则 / 会话 / 文件找不到或有歧义
+EXIT_REMOTE = 5      # 建连、认证、主机密钥、转发失败（run-many 全失败也算这一档）
+EXIT_TIMEOUT = 6     # 超时
+EXIT_PARTIAL = 7     # run-many / quick-run：有的主机成了、有的没成
+
+
+def socket_paths():
+    override = os.environ.get(ENV_SOCKET)
+    if override:
+        return [os.path.expanduser(override)]
+    return [os.path.expanduser(p) for p in SOCKET_CANDIDATES]
+
+
+def build_parser():
+    # --format 在子命令前后都能写：父解析器用 SUPPRESS 做默认值，没写就不覆盖顶层的值。
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--format", choices=FORMATS, default=argparse.SUPPRESS)
+
+    parser = argparse.ArgumentParser(
+        prog="utermctl",
+        parents=[shared],
+        description="通过正在运行的 uTerm 使用其已保存的主机执行命令、读写文件、启停转发",
+    )
+    # 别在这里 set_defaults(format=…)：argparse 会把默认值写回**共享的** action 对象，
+    # 于是每个子解析器都拿到一个真实默认值，反手把顶层给的 --format 覆盖掉。
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    def add(name, help_text, host=False, hosts=False):
+        p = sub.add_parser(name, parents=[shared], help=help_text)
+        if host:
+            p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+        if hosts:
+            p.add_argument("--host", "-H", action="append", required=True,
+                           help="主机名或 UUID，可重复")
+        return p
+
+    add("ping", "探活并报告版本与两个开关的状态")
+    add("hosts", "列出已保存的主机")
+    add("host-key", "查一台主机在信任库里的记录", host=True)
+
+    p = add("trust", "按指纹钉住一台主机的密钥", host=True)
+    p.add_argument("--fingerprint", required=True, help="必须与当前挑战一致的 SHA256:… 指纹")
+
+    def with_command(p):
+        p.add_argument("--command", "-c", help="整串 shell 命令（与 -- 之后的 argv 二选一）")
+        p.add_argument("--timeout", type=int, help="秒；默认 60，封顶 300")
+        p.add_argument("--max-lines", type=int, help="输出行数上限，默认 200")
+        p.add_argument("--max-bytes", type=int, help="输出字节上限，默认 16000，封顶 1 MiB")
+        p.add_argument("argv", nargs="*", help="-- 之后的命令与参数（原样拼成一条命令）")
+        return p
+
+    with_command(add("run", "在一台主机上跑一条命令", host=True))
+    with_command(add("run-many", "在多台主机上并行跑同一条命令", hosts=True))
+
+    add("quick-commands", "列出快捷命令")
+    p = sub.add_parser("quick-run", parents=[shared], help="跑一条已保存的快捷命令")
+    p.add_argument("name", help="快捷命令的名字或 UUID")
+    p.add_argument("--host", "-H", action="append", help="覆盖目标主机，可重复")
+    p.add_argument("--timeout", type=int)
+
+    # --- sftp ---
+    sftp = sub.add_parser("sftp", parents=[shared], help="远程文件操作")
+    sftp_sub = sftp.add_subparsers(dest="sftp_action", required=True)
+
+    def sftp_add(name, help_text):
+        p = sftp_sub.add_parser(name, parents=[shared], help=help_text)
+        p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+        return p
+
+    p = sftp_add("ls", "列目录")
+    p.add_argument("path", nargs="?", default=".")
+
+    p = sftp_add("stat", "看一个文件的大小与修改时间")
+    p.add_argument("path")
+
+    p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
+    p.add_argument("path")
+    p.add_argument("--max-bytes", type=int)
+
+    p = sftp_add("get", "下载一个文件到本地（上限 8 MiB）")
+    p.add_argument("path")
+    p.add_argument("local", help="本地落盘路径")
+    p.add_argument("--force", action="store_true", help="覆盖已存在的本地文件")
+
+    p = sftp_add("put", "上传一个本地文件（上限 8 MiB）")
+    p.add_argument("local", help="本地文件路径")
+    p.add_argument("path", help="远端目标路径")
+
+    for name, help_text in (
+        ("mkdir", "建目录"),
+        ("rm", "删文件"),
+        ("rmdir", "删空目录"),
+    ):
+        sftp_add(name, help_text).add_argument("path")
+
+    p = sftp_add("mv", "改名 / 移动")
+    p.add_argument("path")
+    p.add_argument("new_path", metavar="new-path")
+
+    p = sftp_add("chmod", "改权限")
+    p.add_argument("path")
+    p.add_argument("mode", help="八进制，如 644")
+
+    # --- forward ---
+    forward = sub.add_parser("forward", parents=[shared], help="端口转发规则的启停")
+    forward_sub = forward.add_subparsers(dest="forward_action", required=True)
+    forward_sub.add_parser("list", parents=[shared], help="列出规则与运行状态")
+    for name, help_text in (("start", "启动一条规则"), ("stop", "停掉一条规则")):
+        p = forward_sub.add_parser(name, parents=[shared], help=help_text)
+        p.add_argument("--rule", "-r", required=True, help="规则名或 UUID")
+
+    # --- terminal ---
+    add("terminals", "列出所有窗口里的终端会话")
+    terminal = sub.add_parser("terminal", parents=[shared], help="终端会话读屏 / 注入 / 开窗")
+    terminal_sub = terminal.add_subparsers(dest="terminal_action", required=True)
+
+    p = terminal_sub.add_parser("read", parents=[shared], help="读一个会话的当前屏幕（快照）")
+    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
+    p.add_argument("--lines", type=int, help="行数，默认 80")
+
+    p = terminal_sub.add_parser("send", parents=[shared], help="往一个会话注入文本")
+    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
+    p.add_argument("text", help="要写入 PTY 的文本")
+    p.add_argument("--enter", action="store_true", help="末尾追加回车")
+
+    p = terminal_sub.add_parser("open", parents=[shared], help="给一台主机开一个新终端窗口")
+    p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+
+    p = add("disconnect", "松开命令行连接池对主机的持有")
+    p.add_argument("--host", "-H", help="不给就释放全部")
+
+    return parser
+
+
+def resolved_action(args):
+    """把 `sftp ls` / `forward list` / `terminal read` 拼成协议里的 kebab action。"""
+    for group in ("sftp", "forward", "terminal"):
+        leaf = getattr(args, group + "_action", None)
+        if args.action == group and leaf:
+            return "%s-%s" % (group, leaf)
+    return args.action
+
+
+def command_string(args):
+    inline = getattr(args, "command", None)
+    argv = list(getattr(args, "argv", []))
+    # `--` 是命令的一部分，**不能过滤**：`run -H h -- grep -- --include f` 里那个
+    # `--` 是 grep 的参数分隔符，滤掉就变成了另一条命令。
+    # 实测 argparse（本机 3.9.6 / 3.10.21 / 3.13.15 / 3.14.7，含子解析器）只吃掉
+    # 分隔用的**第一个** `--`，不会留在 argv 里；下面这行只是防御：万一某个版本把它
+    # 留下，也只去掉开头那一个。
+    if argv[:1] == ["--"]:
+        argv = argv[1:]
+    if inline and argv:
+        fail("-c 与 -- 之后的命令只能给一个")
+    if inline:
+        return inline
+    if argv:
+        return shlex.join(argv)
+    fail("缺少命令：用 -c \"…\" 或在 -- 之后写命令")
+
+
+def make_request(args):
+    action = resolved_action(args)
+    request = {"id": str(uuid.uuid4()), "action": action}
+
+    host = getattr(args, "host", None)
+    if isinstance(host, list):
+        request["hosts"] = host
+    elif host:
+        request["host"] = host
+
+    if action in ("run", "run-many"):
+        request["command"] = command_string(args)
+    if action == "quick-run":
+        # 协议里 `name` 是按名字指定的显式入口，`command` 也接受「快捷命令的名字 / id」。
+        # 两个都填，服务端读哪个都对。
+        request["name"] = args.name
+        request["command"] = args.name
+
+    for field, key in (
+        ("timeout", "timeoutSeconds"),
+        ("max_lines", "maxLines"),
+        ("max_bytes", "maxBytes"),
+        ("lines", "lines"),
+        ("path", "path"),
+        ("new_path", "newPath"),
+        ("mode", "mode"),
+        ("rule", "rule"),
+        ("terminal", "terminal"),
+        ("text", "text"),
+        ("fingerprint", "fingerprint"),
+    ):
+        value = getattr(args, field, None)
+        if value is not None and value != "":
+            request[key] = value
+
+    if getattr(args, "enter", False):
+        request["enter"] = True
+
+    if action == "sftp-put":
+        request["contentBase64"] = read_local_file(args.local)
+
+    return request
+
+
+def read_local_file(path):
+    expanded = os.path.expanduser(path)
+    if not os.path.isfile(expanded):
+        fail("本地文件不存在：" + expanded)
+    size = os.path.getsize(expanded)
+    if size > MAX_FILE_BYTES:
+        fail("本地文件 %d 字节，超过 uTerm 的 %d 字节上限；请分卷或改用别的通道"
+             % (size, MAX_FILE_BYTES))
+    with open(expanded, "rb") as handle:
+        return base64.b64encode(handle.read()).decode("ascii")
+
+
+def write_local_file(args, response):
+    """`sftp get` 的落盘在客户端做 —— 沙盒里的 uTerm 写不了任意本地路径。"""
+    payload = response.get("file") or {}
+    target = os.path.expanduser(args.local)
+    if os.path.exists(target) and not args.force:
+        fail("本地已存在 " + target + "；要覆盖请加 --force")
+    if payload.get("base64") is not None:
+        data = base64.b64decode(payload["base64"])
+    elif payload.get("text") is not None:
+        data = payload["text"].encode("utf-8")
+    else:
+        fail("响应里既没有 base64 也没有 text，无法落盘")
+    directory = os.path.dirname(os.path.abspath(target))
+    if directory and not os.path.isdir(directory):
+        fail("本地目录不存在：" + directory)
+    with open(target, "wb") as handle:
+        handle.write(data)
+    return "已写入 %s（%d 字节）" % (target, len(data))
+
+
+def fail(message):
+    sys.stderr.write(message + "\n")
+    sys.exit(EXIT_LOCAL)
+
+
+def send_request(request):
+    paths = socket_paths()
+    stale = []
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            return exchange(path, request)
+        except ConnectionRefusedError:
+            # 文件在、没人监听 = 上一个实例被强杀（Xcode 重新 Run、崩溃）留下的残留，
+            # 它自己没机会 unlink。和「uTerm 没装/没开」是两回事，别混成一个错。
+            stale.append(path)
+        except OSError as error:
+            return {
+                "id": request.get("id"),
+                "ok": False,
+                "code": "socket_error",
+                "message": "%s: %s" % (path, error),
+            }
+    if stale:
+        return {
+            "id": request.get("id"),
+            "ok": False,
+            "code": CODE_SOCKET_STALE,
+            "message": ("socket 文件还在但没有进程在监听（" + "、".join(stale) + "）。"
+                        "uTerm 多半正在重启或刚被强制退出 —— 等它起来后重试一次；"
+                        "若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。"),
+        }
+    return {
+        "id": request.get("id"),
+        "ok": False,
+        "code": CODE_NOT_RUNNING,
+        "message": ("uTerm 的 IPC socket 不存在（试过 " + "、".join(paths) + "）。"
+                    "确认 uTerm 正在运行，且设置 ▸ 命令行与技能 里已打开「启用命令行接口」。"),
+    }
+
+
+def read_response(sock):
+    """读到 EOF 并解析成 JSON。空响应或解析不了都返回 None。"""
+    chunks = []
+    try:
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        # 对端已经把连接拆了；已经收到的那部分仍然可能是完整的一条响应。
+        pass
+    if not chunks:
+        return None
+    try:
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def exchange(path, request):
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # run 的封顶超时是 300 秒，客户端要比它宽一点，否则自己先断。
+    sock.settimeout(360)
+    try:
+        sock.connect(path)
+        try:
+            sock.sendall(json.dumps(request).encode("utf-8"))
+            sock.shutdown(socket.SHUT_WR)
+        except (BrokenPipeError, ConnectionResetError):
+            # 服务端可能**在我们写完之前**就回了一条响应并关掉连接 —— 典型是请求体
+            # 超过 maxRequestBytes（大文件 sftp put）时的 `request_too_large`。
+            # AF_UNIX 上已经写回的数据不会因对端 close 而丢，所以先把它读出来：
+            # 读到 JSON 就按正常响应处理，读不到才把 EPIPE 报成 socket_error。
+            response = read_response(sock)
+            if response is not None:
+                return response
+            raise
+        response = read_response(sock)
+    finally:
+        sock.close()
+    if response is None:
+        return {
+            "id": request.get("id"),
+            "ok": False,
+            "code": "empty_response",
+            "message": "uTerm IPC 返回了空响应或读不懂的内容",
+        }
+    return response
+
+
+def exit_code_for(response):
+    if response.get("ok"):
+        return EXIT_OK
+    code = response.get("code") or ""
+    if code in (CODE_NOT_RUNNING, CODE_SOCKET_STALE, "socket_error", "empty_response"):
+        return EXIT_LOCAL
+    if code in ("control_disabled", "mutations_disabled", "host_sftp_only"):
+        return EXIT_GATED
+    if code.endswith("_not_found") or code.endswith("_ambiguous"):
+        return EXIT_NOT_FOUND
+    if (code in ("connect_failed", "auth_failed", "forward_failed")
+            or code.startswith("host_key_") or code.endswith("_refused")):
+        return EXIT_REMOTE
+    if code in ("command_timeout", "handler_timeout"):
+        return EXIT_TIMEOUT
+    # run-many / quick-run：全失败按「远端失败」报，有成有败单独给一档，
+    # 好让脚本能区分「一台都没成」和「大部分成了」。
+    if code == "run_failed":
+        return EXIT_REMOTE
+    if code == "run_partial_failure":
+        return EXIT_PARTIAL
+    return EXIT_OTHER
+
+
+def cell(value):
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "是" if value else ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def octal(value):
+    if value is None:
+        return "-"
+    try:
+        return format(int(value) & 0o7777, "04o")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+TABLES = [
+    ("hosts", ["name", "host", "port", "username", "authMethod", "group", "jumpHost",
+               "sftpOnly", "cliConnected", "activeForwards", "id"]),
+    ("rules", ["name", "serverName", "kind", "listenHost", "listenPort", "destHost",
+               "destPort", "status", "autostart", "bytesIn", "bytesOut", "id"]),
+    ("terminals", ["title", "serverName", "windowKind", "isKeyWindowFocused",
+                   "connectedAt", "id"]),
+    ("quickCommands", ["name", "command", "serverNames", "lastRunAt", "id"]),
+    ("results", ["host", "exitCode", "timedOut", "truncated", "durationMs",
+                 "errorCode", "errorMessage"]),
+]
+
+
+def rows_of(response):
+    """把响应里可表格化的部分取成 (表头, 行) —— 没有就返回 None。"""
+    entries = response.get("entries")
+    if isinstance(entries, list):
+        header = ["name", "kind", "size", "mode", "owner", "group", "modifiedAt"]
+        rows = []
+        for item in entries:
+            kind = "dir" if item.get("isDirectory") else ("link" if item.get("isSymlink") else "file")
+            rows.append([
+                cell(item.get("name")), kind, cell(item.get("size")),
+                octal(item.get("permissions")), cell(item.get("ownerName")),
+                cell(item.get("groupName")), cell(item.get("modifiedAt")),
+            ])
+        return header, rows
+    for key, columns in TABLES:
+        items = response.get(key)
+        if isinstance(items, list):
+            return columns, [[cell(item.get(c)) for c in columns] for item in items]
+    result = response.get("result")
+    if isinstance(result, dict):
+        columns = dict(TABLES)["results"]
+        return columns, [[cell(result.get(c)) for c in columns]]
+    stat = response.get("stat")
+    if isinstance(stat, dict):
+        return ["path", "size", "modifiedAt"], [[cell(stat.get(c)) for c in
+                                                 ("path", "size", "modifiedAt")]]
+    return None
+
+
+def render_table(header, rows, limit=60):
+    widths = [len(h) for h in header]
+    clipped = []
+    for row in rows:
+        cells = []
+        for index, value in enumerate(row):
+            text = value.replace("\n", " ")
+            if len(text) > limit:
+                text = text[: limit - 1] + "…"
+            cells.append(text)
+            widths[index] = max(widths[index], len(text))
+        clipped.append(cells)
+    lines = ["  ".join(h.ljust(widths[i]) for i, h in enumerate(header)).rstrip()]
+    lines.append("  ".join("-" * widths[i] for i in range(len(header))))
+    for row in clipped:
+        lines.append("  ".join(row[i].ljust(widths[i]) for i in range(len(header))).rstrip())
+    return "\n".join(lines)
+
+
+def render_csv(header, rows):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    writer.writerows(rows)
+    return buffer.getvalue().rstrip("\n")
+
+
+def as_json(response):
+    return json.dumps(response, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def run_output(response):
+    """run / run-many 的人类可读输出：逐主机一段，带退出码与超时提醒。"""
+    results = response.get("results")
+    if not isinstance(results, list):
+        single = response.get("result")
+        results = [single] if isinstance(single, dict) else []
+    blocks = []
+    for item in results:
+        head = "── %s" % item.get("host", "?")
+        if item.get("exitCode") is not None:
+            head += "  exit=%s" % item["exitCode"]
+        head += "  %sms" % item.get("durationMs", 0)
+        if item.get("errorCode"):
+            head += "  [%s] %s" % (item["errorCode"], item.get("errorMessage") or "")
+        blocks.append(head)
+        body = item.get("output") or ""
+        if body:
+            blocks.append(body.rstrip("\n"))
+        if item.get("truncated"):
+            blocks.append("-- 输出已截断（--max-lines / --max-bytes 可放宽）")
+        if item.get("timedOut"):
+            blocks.append("-- 已超时；**命令可能还在远端继续跑**")
+    return "\n".join(blocks)
+
+
+# 这两个码的响应带着完整的 results，人类可读格式照常逐主机渲染。
+RUN_BATCH_CODES = ("run_failed", "run_partial_failure")
+
+
+def render(response, fmt, args):
+    if not response.get("ok"):
+        # run-many / quick-run 失败时 results 才是有用的东西（逐台的 errorCode），
+        # 一股脑打 JSON 等于把表格吞了。json 格式仍然原样输出。
+        if (fmt != "json" and response.get("code") in RUN_BATCH_CODES
+                and isinstance(response.get("results"), list)):
+            return run_output(response) + "\n-- " + (response.get("message") or "")
+        return as_json(response)
+    action = resolved_action(args)
+
+    if action == "sftp-get":
+        note = write_local_file(args, response)
+        return as_json(response) if fmt == "json" else note
+
+    if fmt == "json":
+        return as_json(response)
+
+    if action == "sftp-cat":
+        payload = response.get("file") or {}
+        if payload.get("text") is not None:
+            body = payload["text"]
+            if payload.get("truncated"):
+                body += "\n-- 内容不完整：读取期间远端文件变大了"
+            return body
+        return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `sftp get` 下载后本地处理"
+                % (payload.get("path", "?"), payload.get("bytes", "?")))
+
+    screen = response.get("screen")
+    if isinstance(screen, dict):
+        body = "\n".join(screen.get("lines") or [])
+        if screen.get("truncated"):
+            body += "\n-- 读屏已截断"
+        return body
+
+    if action in ("run", "run-many", "quick-run"):
+        return run_output(response)
+
+    table = rows_of(response)
+    if table is None:
+        return as_json(response)
+    header, rows = table
+    # 空表就打服务端的说明。`terminal open` 会在窗口开了、但 6 秒内会话还没注册上来
+    # 时回 `terminals: []` + 一句解释，只印表头等于把这句话吞了。
+    if not rows:
+        return response.get("message") or as_json(response)
+    return render_table(header, rows) if fmt == "table" else render_csv(header, rows)
+
+
+def main():
+    args = build_parser().parse_args()
+    response = send_request(make_request(args))
+    print(render(response, getattr(args, "format", "json"), args))
+    return exit_code_for(response)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

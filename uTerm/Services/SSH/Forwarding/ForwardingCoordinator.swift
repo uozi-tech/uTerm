@@ -25,6 +25,14 @@ final class ForwardingCoordinator {
 
     /// 每台主机一条会话。
     @ObservationIgnored private var sessions: [UUID: ForwardingSession] = [:]
+    /// 每台主机**当前**的 host-key 审批 relay。每次 `start` / `ensureSession` / `retry`
+    /// 都覆写（`obtainSession` 的第一件事）。
+    ///
+    /// 为什么要这张表：会话是按主机缓存的，第二次 `start` 会直接复用已有会话，传进来的
+    /// relay 从此石沉大海。会话若捕获创建时那个 relay，挑战就会弹到**当初**那个 sheet
+    /// 上 —— 窗口可能早关了，CLI 的 `forward-start` 更是每次都新造一个 relay。改成经
+    /// `approveHostKey(serverID:challenge:)` 间接取当前 relay 后，UI 与 CLI 都拿得到挑战。
+    @ObservationIgnored private var relays: [UUID: HostKeyChallengeRelay] = [:]
     /// 每条规则的最新状态（观察源）。
     private var runtime: [UUID: TunnelStatus] = [:]
     /// 每条规则「最近一次单连接开通道失败」（观察源）。仅在规则仍 active 时写入，
@@ -49,6 +57,10 @@ final class ForwardingCoordinator {
 
     private struct ReconnectContext {
         let server: ServerProfile
+        /// 自动重连时喂给 `start` 的 relay。**刻意不跟着 `relays` 刷新**：CLI 的
+        /// `forward-start` 用的是一次性的非交互 relay，它的生命周期只到那次请求结束
+        /// （之后没人 `resolve`，挑战投进去会把连接挂死）。重连要用的是当初建会话那个
+        /// 长命 relay —— 通常是窗口的 sheet。
         let relay: HostKeyChallengeRelay
         let modelContainer: ModelContainer
         var rules: [UUID: ForwardingRuleSnapshot]
@@ -184,8 +196,10 @@ final class ForwardingCoordinator {
     func teardown(serverID: UUID) {
         // 取消并丢弃 connect 屏障，使重新打开时重新发起连接。
         connectTasks.removeValue(forKey: serverID)?.cancel()
-        // 窗口关 / 主机断 → 不再自动重连该主机。
+        // 窗口关 / 主机断 → 不再自动重连该主机，当前 relay 也随之作废
+        //（留着只会让下一次挑战弹到一个已经不在屏幕上的 sheet）。
         reconnectContexts[serverID] = nil
+        relays[serverID] = nil
         guard let session = sessions.removeValue(forKey: serverID) else { return }
         // 清理该主机所有规则的运行时状态。
         for (ruleID, owner) in ruleServer where owner == serverID {
@@ -194,6 +208,18 @@ final class ForwardingCoordinator {
             ruleServer[ruleID] = nil
         }
         Task { await session.close() }
+    }
+
+    // MARK: - host-key 审批
+
+    /// 会话的 host-key 审批出口：把挑战交给该主机**当前**的 relay。
+    ///
+    /// 会话在 `obtainSession` 里捕获的是这个方法（经一个 `@Sendable` 闭包），不是创建时
+    /// 那个 relay —— 于是「已有会话被复用」时挑战也能弹到最新的 sheet / CLI relay 上。
+    /// 没有登记 relay（主机已 teardown）时一律拒绝，绝不静默 TOFU。
+    func approveHostKey(serverID: UUID, challenge: HostKeyChallenge) async -> Bool {
+        guard let relay = relays[serverID] else { return false }
+        return await relay.makeApprover()(challenge)
     }
 
     // MARK: - 私有
@@ -263,6 +289,9 @@ final class ForwardingCoordinator {
         // 专用转发连接，半死隧道不再顶着 active 徽标静默挂着。放在会话创建的
         // 单一漏斗处 —— 从未用过转发的用户不触发注册。
         ConnectionWatchdog.shared.register(self)
+        // 先记下**这一次**传进来的 relay：会话复用时也要更新，否则挑战会弹到上一个
+        // relay（可能是已关窗口的 sheet，或 CLI 上一次 forward-start 的临时 relay）。
+        relays[server.id] = relay
         if let existing = sessions[server.id] { return existing }
 
         // 认证解析 —— 镜像 FileBrowserModel.makeLiveSFTPProvider（@MainActor）。
@@ -281,7 +310,12 @@ final class ForwardingCoordinator {
         }
 
         let verifier = HostKeyVerifier(modelContainer: modelContainer)
-        let approver = relay.makeApprover()
+        // 间接层：会话捕获的是「问协调器要当前 relay」这个动作，而不是当下这个 relay 对象。
+        let approverServerID = server.id
+        let approver: @Sendable (HostKeyChallenge) async -> Bool = { [weak self] challenge in
+            guard let self else { return false }
+            return await self.approveHostKey(serverID: approverServerID, challenge: challenge)
+        }
 
         // onStatus：后台线程触发 → 跳回主 actor 写观察字典（绝不用 DispatchQueue.async）。
         let onStatus: @Sendable (UUID, TunnelStatus) -> Void = { [weak self] ruleID, status in

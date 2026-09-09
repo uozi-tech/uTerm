@@ -39,7 +39,20 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         case idle, connecting, connected, disconnected
         case failed(String)
     }
-    private(set) var connectionState: ConnectionState = .idle
+    private(set) var connectionState: ConnectionState = .idle {
+        didSet {
+            guard connectionState != oldValue else { return }
+            onConnectionStateChange?(connectionState)
+        }
+    }
+
+    /// 连接状态变化的接线钩子。`PaneModel` 用它把「远端退出 / 重连成功」同步给
+    /// 跨窗口注册表 —— 否则断开的会话仍被 `terminals` 列成活的，
+    /// `terminal-read` 会一直回同一张冻结的画面。
+    ///
+    /// `@ObservationIgnored`：是接线不是状态，改它不该让任何视图失效。
+    @ObservationIgnored var onConnectionStateChange: (@MainActor (ConnectionState) -> Void)?
+
     @ObservationIgnored private var exitObserverTask: Task<Void, Never>?
 
     override init() {
@@ -299,6 +312,128 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         return true
     }
 
+}
+
+// MARK: - 读屏与注入（CLI `terminal-read` / `terminal-send`，Agent 的 read_terminal 也走这里）
+
+/// `injectInput` 的失败分类。协议层把它翻成 `terminal_disconnected`。
+nonisolated enum TerminalInjectionError: Error, Equatable {
+    /// 会话没有后端，或后端已断开 —— 注入无处可去。
+    case disconnected
+}
+
+extension TerminalSession {
+
+    /// 抓「最近 `lines` 行」的**快照**（不是流）：既含当前可见屏幕，也兜住刚滚走的输出。
+    ///
+    /// 必须在 MainActor 上跑（`terminalView` 是 NSView，缓冲区随渲染线程更新）——
+    /// 类型本身 `@MainActor`，由编译器保证。
+    ///
+    /// - Note: SwiftTerm 只把 `getScrollInvariantLine(row:)`（越界回 nil）、
+    ///   `buffer.totalLinesTrimmed`、`getTopVisibleRow()`、`rows` 开放出来；
+    ///   `buffer.lines` 与 `buffer.linesTop` 都是 **internal**，包外拿不到「缓冲区共几行」。
+    ///   所以末行靠越界二分反推（见 `scrollInvariantEndRow`）。**不要**为此去改
+    ///   `vendor/SwiftTerm` —— 那是带补丁清单的 vendored 副本，补丁越少越好。
+    func snapshotScreen(
+        lines: Int = ControlProtocol.defaultScreenLines,
+        maxBytes: Int = ControlProtocol.maxScreenBytes
+    ) -> TerminalScreenReader.Result {
+        guard lines > 0, let terminal = terminalView.terminal else {
+            return TerminalScreenReader.Result(lines: [], truncated: false)
+        }
+        let top = terminal.buffer.totalLinesTrimmed  // == buffer.linesTop
+        let end = scrollInvariantEndRow(terminal)    // 排他上界
+        guard end > top else { return TerminalScreenReader.Result(lines: [], truncated: false) }
+
+        // **先向前跳过尾部空行，再往上取 `lines` 行。**
+        //
+        // 不要退回「多取一屏」（`end - (lines + rows)`）那种写法：空白尾巴不止一屏 ——
+        // `clear` 之后、TUI（vim / less）退出还原主屏之后、或者刚 `Ctrl-L` 过，缓冲区
+        // 末尾可以挂着几百行空行。而 `TerminalScreenReader.trim` 会把**全部**尾随空行
+        // 去掉，于是多取的那一屏被裁光，读屏返回空 —— 屏幕上明明有内容。
+        var lastNonEmpty = end - 1
+        while lastNonEmpty >= top, isBlankRow(terminal, lastNonEmpty) { lastNonEmpty -= 1 }
+        guard lastNonEmpty >= top else {
+            return TerminalScreenReader.Result(lines: [], truncated: false)
+        }
+
+        let start = max(top, lastNonEmpty + 1 - lines)
+        var raw: [String] = []
+        raw.reserveCapacity(lastNonEmpty - start + 1)
+        for row in start...lastNonEmpty {
+            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
+            raw.append(line.translateToString(trimRight: true))
+        }
+
+        var result = TerminalScreenReader.trim(lines: raw, maxLines: lines, maxBytes: maxBytes)
+        // 起点被 `lines` 卡住 → 上面还有历史没读出来，如实标截断。
+        if start > top { result.truncated = true }
+        return result
+    }
+
+    /// 这一行在 `TerminalScreenReader.trim` 眼里算不算空行。
+    ///
+    /// 判定必须与 `trim` **逐字一致**（它按 `String.isEmpty` 去尾），否则要么跳不干净
+    /// （读屏又被 trim 掏空），要么跳过头（把有内容的行当空的丢掉）。所以最终裁决权
+    /// 交给和取行时同一个 `translateToString(trimRight:)`；`getTrimmedLength() == 0`
+    /// 只是它的快速路径 —— 整行都是空 cell（`code == 0`）时不必分配字符串。
+    ///
+    /// 注意 `trimRight` 只去空 cell、**不去字面空格**：一行 8 个空格译出来是
+    /// `"        "`，非空，按「有内容」算。实测如此，别按直觉改。
+    private func isBlankRow(_ terminal: SwiftTerm.Terminal, _ row: Int) -> Bool {
+        guard let line = terminal.getScrollInvariantLine(row: row) else { return true }
+        if line.getTrimmedLength() == 0 { return true }
+        return line.translateToString(trimRight: true).isEmpty
+    }
+
+    /// 反推 scroll-invariant 行号的**排他上界**（= `buffer.linesTop + buffer.lines.count`）。
+    ///
+    /// `buffer.lines` 与 `buffer.linesTop` 都是 internal，包外拿不到行数，只能靠
+    /// `getScrollInvariantLine(row:)` 越界回 nil 来二分。上界不用探 ——
+    /// `buffer.getCorrectBufferLength(rows)`（public，`Buffer.swift` ~654）就是那条
+    /// `CircularBufferLineList` 的 `maxLength`（`rows + scrollback`），行数**永远**
+    /// 不超过它，所以 `linesTop + capacity` 必然越界，直接拿它当二分的右端。
+    ///
+    /// 为什么不能只用可见屏（`getTopVisibleRow() + rows`）：用户往上滚过之后，
+    /// 可见屏的底部不再是缓冲区末行，那样会读到「用户正在看的地方」而不是「最近的输出」。
+    private func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
+        let top = terminal.buffer.totalLinesTrimmed
+        guard terminal.getScrollInvariantLine(row: top) != nil else { return top }
+        let capacity = max(terminal.buffer.getCorrectBufferLength(terminal.rows), 1)
+        var known = top                              // 已知合法
+        var unknown = top + capacity                 // 必然越界（见上）
+        // 上游若哪天把 `getScrollInvariantLine` 改成 clamp（越界不再回 nil），
+        // 这个不变量就没了；Debug 下当场炸出来，Release 下二分仍会收敛到
+        // `top + capacity`（不会死循环），只是读到的末行偏大。
+        assert(terminal.getScrollInvariantLine(row: unknown) == nil,
+               "getScrollInvariantLine 不再对越界行返回 nil —— 末行反推失效")
+        while unknown - known > 1 {
+            let mid = known + (unknown - known) / 2
+            if terminal.getScrollInvariantLine(row: mid) != nil {
+                known = mid
+            } else {
+                unknown = mid
+            }
+        }
+        return known + 1
+    }
+
+    /// 往这条会话的 PTY 写文本 —— 与用户键入走**完全相同**的通道
+    /// （`backend.write` → `SSHConnection.write` → `state.enqueue(.write)`）。
+    ///
+    /// 因此：注入与用户键入会交错、**没有输出边界**（uTerm 与 vendored SwiftTerm 都
+    /// 没有 OSC 133 shell-integration 标记），不保证调用方能拿到这条命令的结果。
+    /// 要结果请走 `run`；`terminal-send` 的正当用途是「让用户看见」。
+    ///
+    /// - Parameter appendEnter: 追加 `\r`（回车）执行。
+    /// - Throws: `TerminalInjectionError.disconnected` —— 没有后端或状态不是 `.connected`。
+    func injectInput(_ text: String, appendEnter: Bool = false) async throws {
+        guard connectionState == .connected, let backend else {
+            throw TerminalInjectionError.disconnected
+        }
+        let payload = appendEnter ? text + "\r" : text
+        await backend.write(Data(payload.utf8))
+    }
 }
 
 // MARK: - 连接健康探测（ConnectionWatchdog）
