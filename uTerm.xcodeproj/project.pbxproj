@@ -204,6 +204,7 @@
 				Features/Terminal/TerminalColorScheme.swift,
 				Features/Terminal/TerminalCursorShape.swift,
 				Features/Terminal/TerminalHostView.swift,
+				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
 				Features/Terminal/TerminalSettings.swift,

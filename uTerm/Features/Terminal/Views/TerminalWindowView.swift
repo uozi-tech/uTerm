@@ -94,6 +94,11 @@ struct TerminalWindowView: View {
             handleCloseShortcut(window: window)
         })
         .commandPalette(model: palette) { terminalCommandItems(server: server) }
+        // 把本窗口的终端会话接进跨窗口注册表（CLI 的 terminals / read / send）。
+        .modifier(TerminalRegistryBinding(
+            workspace: workspace,
+            windowID: windowID?.id ?? server.id,
+            windowKind: TerminalWindowKind.terminal))
         .task {
             // 仅首次：开一个默认终端标签。窗格连接由 PaneView 自身的 .task 走
             // 共享 modelContainer 自动建立（与工作区窗口同路径）。
