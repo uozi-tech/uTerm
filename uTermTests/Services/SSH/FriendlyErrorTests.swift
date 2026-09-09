@@ -26,6 +26,27 @@ final class FriendlyErrorTests: XCTestCase {
         XCTAssertNil(FriendlyError.posixErrno(of: NSError(domain: "com.example.Foo", code: 42, userInfo: nil)))
     }
 
+    // MARK: - NIOCore.ChannelError（无 LocalizedError 的枚举，桥接文案只有「错误 N」）
+
+    func testChannelErrorConnectTimeoutIsLocatable() {
+        // 回归：Citadel 的 login timer 到点抛 `ChannelError.connectTimeout`，桥接后是
+        // 「未能完成操作。（NIOCore.ChannelError 错误 0。）」——必须翻成能定位的文案。
+        let text = FriendlyError.describe(ChannelError.connectTimeout(.seconds(10)))
+        XCTAssertTrue(text.contains("10 秒"), text)
+        XCTAssertTrue(text.contains("connectTimeout"), text)
+        XCTAssertFalse(text.contains("错误 0"), text)
+        XCTAssertFalse(text.lowercased().contains("couldn"), text)
+    }
+
+    func testChannelErrorOtherCasesNameTheCase() {
+        XCTAssertTrue(FriendlyError.describe(ChannelError.ioOnClosedChannel).contains("ioOnClosedChannel"))
+        XCTAssertTrue(FriendlyError.describe(ChannelError.eof).contains("eof"))
+        // 未特判的 case 也不能退回「错误 N」：走 NIO 自己的 description + 类型名。
+        let text = FriendlyError.describe(ChannelError.operationUnsupported)
+        XCTAssertTrue(text.contains("NIOCore.ChannelError"), text)
+        XCTAssertFalse(text.contains("错误"), text)
+    }
+
     // MARK: - errno → 中文含义
 
     func testMessageForKnownErrnos() {

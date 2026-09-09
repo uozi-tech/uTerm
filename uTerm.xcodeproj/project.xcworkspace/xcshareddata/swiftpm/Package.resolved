@@ -1,5 +1,5 @@
 {
-  "originHash" : "f411a42873c5b5c1853b55c67190502fa6f7243593486510a89d8bf19fc73d48",
+  "originHash" : "9a2f6eb622195871e94228ea5da79a13e05bf198e6b4a07cf732b585fce76112",
   "pins" : [
     {
       "identity" : "bigint",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/Citadel.git",
       "state" : {
-        "revision" : "7a9f705c5fbea56dac309933aea2911018ab5dd7",
-        "version" : "1.0.0"
+        "revision" : "a5d1393075b759879641fff126cb87c5fcaa9783",
+        "version" : "1.0.1"
       }
     },
     {
@@ -207,8 +207,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/uAppKit.git",
       "state" : {
-        "revision" : "308efa0c1234a1fac1db7e36e61a6e1559d6860d",
-        "version" : "1.4.3"
+        "revision" : "547dea6d8f0f52a923c8092d07727203ab52a43e",
+        "version" : "1.4.4"
       }
     }
   ],

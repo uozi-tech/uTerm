@@ -20,6 +20,9 @@ nonisolated enum FriendlyError {
         if let code = posixErrno(of: error), let msg = message(forErrno: code) {
             return msg
         }
+        if let channelError = error as? ChannelError {
+            return describe(channelError)
+        }
         let raw = (error as NSError).localizedDescription
         if isTechnicalNoise(raw) {
             // 即便不在精选表，也尽量带上中性的错误码信息，而不是误导性的「错误1」。
@@ -30,6 +33,27 @@ nonisolated enum FriendlyError {
         }
         // 描述本身是人类可读的（如服务器返回的拒绝原因），原样返回。
         return raw
+    }
+
+    /// `NIOCore.ChannelError` 是不带 `LocalizedError` 的枚举：桥接后的文案是「未能完成操作
+    /// （NIOCore.ChannelError 错误 N）」，N 是 case 序号（带载荷的 case 排前面，所以
+    /// `connectTimeout` 恰好是 0），无法定位。这里给出可读、可定位的中文。
+    static func describe(_ error: ChannelError) -> String {
+        switch error {
+        case .connectTimeout(let amount):
+            let seconds = Double(amount.nanoseconds) / 1_000_000_000
+            let shown = seconds == seconds.rounded() ? String(Int(seconds)) : String(format: "%.1f", seconds)
+            return String(localized: "登录阶段超时：\(shown) 秒内未完成握手与认证（ChannelError.connectTimeout）")
+        case .ioOnClosedChannel:
+            return String(localized: "连接已关闭（ChannelError.ioOnClosedChannel）")
+        case .alreadyClosed:
+            return String(localized: "连接已关闭（ChannelError.alreadyClosed）")
+        case .eof:
+            return String(localized: "对方已关闭连接（ChannelError.eof）")
+        default:
+            // 其余 case 走 NIO 自己的 description（如 "Connect pending"），附类型名便于定位。
+            return "\(error)（NIOCore.ChannelError）"
+        }
     }
 
     /// 从任意 `Error` 提取 POSIX `errno`：覆盖 `POSIXError` / `NIOCore.IOError` /

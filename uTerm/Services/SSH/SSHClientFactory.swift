@@ -74,9 +74,17 @@ nonisolated enum SSHClientFactory {
             )
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
+            // USSHKit 的 errorDescription 已自带「SSH 连接失败：」等前缀；这里只取正文再包一层
+            // 本地前缀，避免用户看到「SSH 连接失败：SSH 连接失败：…」。
             switch error {
             case .jumpHostFailed(let message):
                 throw SSHConnection.SSHConnectionError.jumpHostFailed(message)
+            case .connectFailed(let message):
+                throw SSHConnection.SSHConnectionError.connectFailed(message)
+            case .authenticationFailed(let message):
+                throw SSHConnection.SSHConnectionError.connectFailed("认证失败：\(message)")
+            case .hostKeyRejected(let message):
+                throw SSHConnection.SSHConnectionError.connectFailed("主机密钥被拒绝：\(message)")
             default:
                 throw SSHConnection.SSHConnectionError.connectFailed(
                     error.errorDescription ?? FriendlyError.describe(error)
