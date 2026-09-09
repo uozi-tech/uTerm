@@ -20,6 +20,12 @@ struct uTermApp: App {
     /// 信任弹窗能在任一可见窗口里解决 —— `.hostKeySheet` 同时挂在 Welcome（默认启动模式
     /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
     @State private var launchRelay = HostKeyChallengeRelay()
+    /// 命令行接口（本机 IPC）的两级门禁开关。`observe` 在 Welcome 的 `.task` 里接上
+    /// `ControlServer` 的起停，见下方。
+    @State private var controlSettings = ControlSettings()
+    /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
+    /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
+    @State private var terminalRegistry = TerminalSessionRegistry()
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
@@ -35,6 +41,9 @@ struct uTermApp: App {
     /// 启用 CloudKit 同步的 SwiftData 容器。`.automatic` 让 SwiftData
     /// 在用户已登录 iCloud 时自动后台同步，未登录时退化为纯本地。
     let modelContainer: ModelContainer = AppModelContainer.make()
+
+    /// 本机 IPC 服务端。`ControlSettings.observe` 按主开关起停它（起停都幂等）。
+    private let controlServer = ControlServer()
 
     init() {
         // uTerm 自己已有工作区/终端标签，禁用 macOS 把独立窗口再合并成系统 Tab。
@@ -57,6 +66,32 @@ struct uTermApp: App {
             requireAuthAtLaunch: requireAuth))
     }
 
+    /// 把命令行接口的开关接到服务端起停上。
+    ///
+    /// `observe` 设置后立刻回调一次，所以开关本来就是开的话这里就把服务端起起来了。
+    /// `start()` 返回非 nil 表示**不会自愈**的启动失败（目前只有 socket 路径超过
+    /// `sun_path` 上限），写进 `startupError` 让设置页显示出来。
+    @MainActor
+    private func startControlInterface() {
+        let server = controlServer
+        let handler = ControlHandler.shared
+        handler.attach(ControlHandler.Dependencies(
+            settings: controlSettings,
+            modelContainer: modelContainer,
+            forwardingCoordinator: forwardingCoordinator,
+            pool: ControlConnectionPool.shared,
+            registry: terminalRegistry
+        ))
+        controlSettings.observe { settings in
+            if settings.isEnabled {
+                settings.startupError = server.start()
+            } else {
+                server.stop()
+                settings.startupError = nil
+            }
+        }
+    }
+
     var body: some Scene {
         // 服务器管理 —— 单实例 Welcome 窗口。自动出现在「窗口」菜单，可重开。
         // 主题由 AppAppearanceSync 驱动（colorScheme env + NSApp.appearance 两路），
@@ -71,8 +106,14 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
                 .environment(launchRelay)
-                // Welcome 是默认常驻窗口，作为 CloudKit 监听器的单一启动点（start 幂等）。
-                .task { cloudKitSync.start() }
+                .environment(controlSettings)
+                .environment(terminalRegistry)
+                // Welcome 是默认常驻窗口，作为 CloudKit 监听器与命令行接口的单一启动点
+                //（两者都幂等）。`observe` 会立刻回调一次，让服务端与持久化的开关对齐。
+                .task {
+                    cloudKitSync.start()
+                    startControlInterface()
+                }
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
@@ -121,6 +162,8 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
+                .environment(controlSettings)
+                .environment(terminalRegistry)
         }
         .modelContainer(modelContainer)
         // 自绘 Cursor 式标题栏：隐藏系统标题栏（红绿灯浮在内容上、内容铺满到顶），
@@ -196,6 +239,8 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
+                .environment(controlSettings)
+                .environment(terminalRegistry)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -210,6 +255,8 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
+                .environment(controlSettings)
+                .environment(terminalRegistry)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -226,6 +273,8 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
                 .environment(launchRelay)
+                .environment(controlSettings)
+                .environment(terminalRegistry)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -258,6 +307,7 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
                 .environment(appUpdater)
                 .environment(cloudKitSync)
+                .environment(controlSettings)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底

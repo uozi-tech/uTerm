@@ -33,6 +33,7 @@ struct SettingsView: View {
                 case .providers: ProvidersSettingsView()
                 case .terminal:  TerminalSettingsView()
                 case .advanced:  AdvancedSettingsView()
+                case .cli:       CLISettingsView()
                 case .about:     AboutSettingsView()
                 }
             }
@@ -80,7 +81,7 @@ private struct SettingsTitleBar: View {
 
 /// 设置 tab 标识。`label` / `symbol` 对应设计稿 `settings.jsx` 的 tab 条。
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, providers, terminal, advanced, about
+    case general, providers, terminal, advanced, cli, about
 
     var id: String { rawValue }
 
@@ -90,6 +91,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .providers: return "AI 服务商"
         case .terminal:  return "终端"
         case .advanced:  return "高级"
+        case .cli:       return "命令行与技能"
         case .about:     return "关于"
         }
     }
@@ -100,6 +102,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .providers: return "sparkles"
         case .terminal:  return "terminal"
         case .advanced:  return "slider.horizontal.3"
+        case .cli:       return "terminal"
         case .about:     return "info.circle"
         }
     }

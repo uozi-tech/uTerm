@@ -1,0 +1,122 @@
+import Foundation
+import Observation
+
+/// 驱动「命令行与技能」设置页的观察式模型。状态住在主线程，文件操作在后台执行。
+/// 按工具「整包装」：每个工具下 catalog 的全部技能一起装/卸，多技能状态聚合成一个。
+@MainActor
+@Observable
+final class SkillManagerModel {
+    private let installers: [SkillInstaller]
+    /// 本机在用的工具（CLI 配置目录存在），即可安装技能的对象。
+    private(set) var availableTargets: [SkillTarget] = []
+    private(set) var statuses: [SkillTarget: SkillInstallStatus] = [:]
+    /// 首次 `load()` 是否完成 —— 用于区分「还在检测」与「确实一个都没有」，避免空状态闪烁。
+    private(set) var didLoad = false
+    /// 正在执行安装/卸载的 target，用于禁用按钮并避免重复点击。
+    private(set) var busyTargets: Set<SkillTarget> = []
+    var lastError: String?
+
+    init(
+        installers: [SkillInstaller] = SkillDefinition.catalog.map { SkillInstaller(definition: $0) }
+    ) {
+        self.installers = installers
+    }
+
+    func status(for target: SkillTarget) -> SkillInstallStatus {
+        statuses[target] ?? .notInstalled
+    }
+
+    func isBusy(_ target: SkillTarget) -> Bool {
+        busyTargets.contains(target)
+    }
+
+    /// 把一个工具下各技能的状态聚合成一个：任一冲突→冲突；全装→已装；全无→未装；其余→需修复。
+    nonisolated static func aggregateStatus(
+        installers: [SkillInstaller], target: SkillTarget
+    ) -> SkillInstallStatus {
+        let pairs = installers.map { ($0.definition.displayName, $0.status(for: target)) }
+        if let conflict = pairs.first(where: { $0.1.conflictReason != nil }) {
+            return .conflict(reason: "\(conflict.0)：\(conflict.1.conflictReason ?? "")")
+        }
+        // 全部一致就直接用那个状态（含「全归另一个实例管」——否则会被笼统报成
+        // 「需修复」，看不出真正的原因）；参差不齐才落到「需修复」。
+        if let first = pairs.first, pairs.allSatisfy({ $0.1 == first.1 }) { return first.1 }
+        return .brokenLink
+    }
+
+    /// 首次加载：后台判定哪些工具在用，自动修复已由 uTerm 管理的技能链接，并计算聚合状态。
+    func load() async {
+        let installers = self.installers
+        let snapshot = await Task.detached {
+            () -> (targets: [SkillTarget], statuses: [SkillTarget: SkillInstallStatus]) in
+            var targets: [SkillTarget] = []
+            var statuses: [SkillTarget: SkillInstallStatus] = [:]
+            for target in SkillTarget.allCases where installers.first?.isToolPresent(target) == true {
+                targets.append(target)
+                try? Self.repairManagedInstallIfNeeded(installers: installers, target: target)
+                statuses[target] = Self.aggregateStatus(installers: installers, target: target)
+            }
+            return (targets, statuses)
+        }.value
+        availableTargets = snapshot.targets
+        statuses = snapshot.statuses
+        didLoad = true
+    }
+
+    func install(_ target: SkillTarget) async {
+        let installers = self.installers
+        await mutate(target) {
+            try Self.forEachInstaller(installers) { try $0.install(target: target) }
+        }
+    }
+
+    func uninstall(_ target: SkillTarget) async {
+        let installers = self.installers
+        await mutate(target) {
+            try Self.forEachInstaller(installers) { try $0.uninstall(target: target) }
+        }
+    }
+
+    /// 对每个 installer 执行操作；保留首个错误并在全部跑完后抛出（保证整包尽力而为）。
+    private nonisolated static func forEachInstaller(
+        _ installers: [SkillInstaller], _ operation: (SkillInstaller) throws -> Void
+    ) throws {
+        var firstError: Error?
+        for installer in installers {
+            do { try operation(installer) } catch { if firstError == nil { firstError = error } }
+        }
+        if let firstError { throw firstError }
+    }
+
+    /// 只要目标里已经存在任一条 uTerm 管理的链接，就把整个 catalog 补齐。
+    /// 这样新增技能或 App Support 源目录丢失时，会在打开设置页时自动恢复；
+    /// 用户主动卸载后的全未安装状态不触发。
+    /// **故意不含 `managedByOtherInstance`**：那种链接归另一个实例管，自动补齐等于
+    /// 静默抢过来，于是两个实例每次打开设置页就互抢一次。接管必须由用户点「安装」。
+    private nonisolated static func repairManagedInstallIfNeeded(
+        installers: [SkillInstaller], target: SkillTarget
+    ) throws {
+        let statuses = installers.map { $0.status(for: target) }
+        guard statuses.contains(where: { $0 == .installed || $0 == .brokenLink }) else { return }
+        try forEachInstaller(installers) { try $0.install(target: target) }
+    }
+
+    /// 执行单个 target 的整包安装/卸载：同一 target 不并发；只在结束时写 `lastError`
+    /// （成功清空、失败置文案），避免新操作抹掉用户尚未看到的旧错误；完成后只重读该 target 聚合状态。
+    private func mutate(_ target: SkillTarget, _ work: @escaping @Sendable () throws -> Void) async {
+        guard !busyTargets.contains(target) else { return }
+        busyTargets.insert(target)
+        defer { busyTargets.remove(target) }
+
+        let installers = self.installers
+        do {
+            try await Task.detached { try work() }.value
+            lastError = nil
+        } catch {
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        statuses[target] = await Task.detached {
+            Self.aggregateStatus(installers: installers, target: target)
+        }.value
+    }
+}

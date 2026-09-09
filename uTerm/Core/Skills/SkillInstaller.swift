@@ -1,0 +1,264 @@
+import Darwin
+import Foundation
+
+nonisolated enum SkillInstallError: Error, LocalizedError, Sendable {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .failed(let message): return message
+        }
+    }
+}
+
+/// `<target>/<slug>` 的安装状态。
+nonisolated enum SkillInstallStatus: Sendable, Equatable {
+    /// 目标位置不存在。
+    case notInstalled
+    /// 目标是符号链接且解析到我们的源目录，且源存在。
+    case installed
+    /// 目标是指向我们源目录的符号链接，但源缺失（悬空）。
+    case brokenLink
+    /// 链接指向**另一个 uTerm 实例**的技能源。
+    ///
+    /// 沙盒（Release）与非沙盒（Debug）的 Application Support 是两个不同路径，
+    /// 同一台机器上两个实例各有各的源目录。按字面路径比较会让彼此都判成冲突、
+    /// 两边都既装不了也卸不掉 —— 所以单独认这一类：它确实是 uTerm 装的，
+    /// 只是归另一个实例管，当前实例可以接管（重建链接）或直接卸载。
+    case managedByOtherInstance(path: String)
+    /// 目标已被占用：普通文件/真实目录，或符号链接指向与 uTerm 无关的位置。
+    case conflict(reason: String)
+
+    var displayLabel: String {
+        switch self {
+        case .notInstalled: return "未安装"
+        case .installed: return "已安装"
+        case .brokenLink: return "需修复"
+        case .managedByOtherInstance: return "其它实例"
+        case .conflict: return "冲突"
+        }
+    }
+
+    /// `notInstalled` / `brokenLink` / 另一个实例装的，都可以（重新）安装。
+    var canInstall: Bool {
+        switch self {
+        case .notInstalled, .brokenLink, .managedByOtherInstance: return true
+        case .installed, .conflict: return false
+        }
+    }
+
+    /// 确认由 uTerm（不论哪个实例）建的链接都可卸载。
+    var canUninstall: Bool {
+        switch self {
+        case .installed, .brokenLink, .managedByOtherInstance: return true
+        case .notInstalled, .conflict: return false
+        }
+    }
+
+    var conflictReason: String? {
+        if case .conflict(let reason) = self { return reason }
+        return nil
+    }
+}
+
+/// 纯 Foundation 的技能安装器：物化源、判定状态、建/删符号链接。
+/// `home` 与 `appSupport` 可注入便于测试；生产用默认值。
+nonisolated struct SkillInstaller: Sendable {
+    let definition: SkillDefinition
+    let homeDirectoryURL: URL
+    let applicationSupportDirectoryURL: URL
+
+    init(
+        definition: SkillDefinition,
+        homeDirectoryURL: URL = SkillTarget.realHomeDirectoryURL,
+        applicationSupportDirectoryURL: URL = ControlProtocol.applicationSupportDirectory
+    ) {
+        self.definition = definition
+        self.homeDirectoryURL = homeDirectoryURL
+        self.applicationSupportDirectoryURL = applicationSupportDirectoryURL
+    }
+
+    /// 技能源目录：`<appSupport>/uTerm/Skills/<slug>/`。
+    var sourceDirectoryURL: URL {
+        applicationSupportDirectoryURL
+            .appending(path: "Skills", directoryHint: .isDirectory)
+            .appending(path: definition.slug, directoryHint: .isDirectory)
+            .standardizedFileURL
+    }
+
+    private var sourceSkillFileURL: URL {
+        sourceDirectoryURL.appending(path: "SKILL.md")
+    }
+
+    func targetLinkURL(for target: SkillTarget) -> URL {
+        target.skillsDirectoryURL(homeDirectoryURL: homeDirectoryURL)
+            .appending(path: definition.slug)
+    }
+
+    /// 用户是否在用该工具：以其 CLI 配置目录 `<home>/.<tool>` 是否存在为判据。
+    /// 跟随符号链接（软链到真实目录也算）。这是技能可安装的判据，与桌面 app 无关。
+    func isToolPresent(_ target: SkillTarget) -> Bool {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: target.configDirectoryURL(homeDirectoryURL: homeDirectoryURL).path,
+            isDirectory: &isDirectory
+        )
+        return exists && isDirectory.boolValue
+    }
+
+    /// 建源目录并写/刷新 `SKILL.md`（内容不一致时覆盖）。
+    func materializeSource() throws {
+        try validateSlug()
+        try FileManager.default.createDirectory(
+            at: sourceDirectoryURL, withIntermediateDirectories: true)
+        let desired = definition.markdownContent
+        let current = try? String(contentsOf: sourceSkillFileURL, encoding: .utf8)
+        if current != desired {
+            try desired.write(to: sourceSkillFileURL, atomically: true, encoding: .utf8)
+        }
+        for file in definition.supportFiles {
+            try materializeSupportFile(file)
+        }
+    }
+
+    func status(for target: SkillTarget) -> SkillInstallStatus {
+        let link = targetLinkURL(for: target)
+        guard let type = Self.fileType(at: link) else {
+            return .notInstalled
+        }
+        guard type == S_IFLNK else {
+            return .conflict(reason: type == S_IFDIR
+                ? "已存在同名目录（非 uTerm 创建）"
+                : "已存在同名文件（非 uTerm 创建）")
+        }
+        guard let destination = try? FileManager.default
+            .destinationOfSymbolicLink(atPath: link.path) else {
+            return .conflict(reason: "无法读取符号链接目标")
+        }
+        let resolved = (destination as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: destination).standardizedFileURL
+            : link.deletingLastPathComponent()
+                .appending(path: destination).standardizedFileURL
+        // 故意按字面路径比较、不做 resolvingSymlinksInPath：链接是用绝对的
+        // sourceDirectoryURL 建的，存的就是这个路径，字面相等即可判定是我们的链接。
+        // 若改成解析符号链接，当 appSupport 本身位于符号链接下（如 /var → /private/var）
+        // 反而可能误判我们自己建的链接。
+        guard resolved.path == sourceDirectoryURL.path else {
+            // 不是这个实例的源，但形如 `…/Application Support/uTerm/Skills/<slug>`
+            // 就是另一个 uTerm 实例（沙盒/非沙盒各一份）装的，可接管、可卸载。
+            if Self.looksLikeManagedSkillSource(resolved, slug: definition.slug) {
+                return .managedByOtherInstance(path: resolved.path)
+            }
+            return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        }
+        // 指向我们的源：源存在 → installed；否则悬空。
+        return Self.fileType(at: sourceDirectoryURL) == S_IFDIR ? .installed : .brokenLink
+    }
+
+    /// 仅在 `notInstalled` / `brokenLink` / 另一实例所装时安装；真冲突抛错，不覆盖用户文件。
+    func install(target: SkillTarget) throws {
+        try materializeSource()
+        let link = targetLinkURL(for: target)
+        switch status(for: target) {
+        case .installed:
+            return // 幂等
+        case .conflict(let reason):
+            throw SkillInstallError.failed("\(target.displayName)：\(reason)")
+        case .brokenLink:
+            // 链接已指向我们的源，物化后即变为有效，无需重建。
+            return
+        case .managedByOtherInstance:
+            // 接管：只删这条我们已确认是 uTerm 建的符号链接，不碰它指向的目录
+            // （那是另一个实例的源，它自己还要用）。
+            do {
+                try FileManager.default.removeItem(at: link)
+            } catch {
+                throw SkillInstallError.failed(
+                    "\(target.displayName)：无法接管既有链接（\(error.localizedDescription)）"
+                )
+            }
+        case .notInstalled:
+            break
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: sourceDirectoryURL)
+        } catch {
+            throw SkillInstallError.failed(
+                "\(target.displayName)：无法写入 \(link.path)（\(error.localizedDescription)）"
+            )
+        }
+    }
+
+    /// 仅删除「确认由 uTerm 建的」符号链接；其它情况抛错且不动文件。
+    func uninstall(target: SkillTarget) throws {
+        switch status(for: target) {
+        case .installed, .brokenLink, .managedByOtherInstance:
+            try FileManager.default.removeItem(at: targetLinkURL(for: target))
+        case .notInstalled:
+            return
+        case .conflict(let reason):
+            throw SkillInstallError.failed("\(target.displayName)：未删除（\(reason)）")
+        }
+    }
+
+    private func validateSlug() throws {
+        let slug = definition.slug
+        guard !slug.isEmpty,
+              slug != ".", slug != "..",
+              !slug.contains("/"), !slug.contains("\\"),
+              !slug.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else {
+            throw SkillInstallError.failed("技能标识无效：\(slug)")
+        }
+    }
+
+    private func materializeSupportFile(_ file: SkillDefinition.SupportFile) throws {
+        let relativePath = try validateSupportFilePath(file.relativePath)
+        let url = sourceDirectoryURL.appending(path: relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let current = try? String(contentsOf: url, encoding: .utf8)
+        if current != file.content {
+            try file.content.write(to: url, atomically: true, encoding: .utf8)
+        }
+        if file.isExecutable {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o755))],
+                ofItemAtPath: url.path
+            )
+        }
+    }
+
+    private func validateSupportFilePath(_ path: String) throws -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !(trimmed as NSString).isAbsolutePath,
+              !trimmed.split(separator: "/").contains("..")
+        else {
+            throw SkillInstallError.failed("技能附加文件路径无效：\(path)")
+        }
+        return trimmed
+    }
+
+    /// 这个路径看起来是不是某个 uTerm 实例的技能源，即末三段为
+    /// `uTerm/Skills/<slug>`。沙盒实例的源在容器里、非沙盒的在真实
+    /// Application Support 下，两者只有前缀不同。
+    static func looksLikeManagedSkillSource(_ url: URL, slug: String) -> Bool {
+        let parts = url.standardizedFileURL.pathComponents
+        guard parts.count >= 3 else { return false }
+        return parts[parts.count - 1] == slug
+            && parts[parts.count - 2] == "Skills"
+            && parts[parts.count - 3] == "uTerm"
+    }
+
+    /// `lstat` 的文件类型位（不跟随符号链接）。路径不存在返回 nil。
+    static func fileType(at url: URL) -> mode_t? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return nil }
+        return info.st_mode & S_IFMT
+    }
+}
