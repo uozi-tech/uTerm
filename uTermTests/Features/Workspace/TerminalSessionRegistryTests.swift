@@ -70,18 +70,33 @@ final class TerminalSessionRegistryTests: XCTestCase {
         XCTAssertEqual(registry.entries.count, 1)
     }
 
-    /// 注册表**绝不延长会话寿命**：会话释放后槽位读出 nil。
-    func testSessionIsHeldWeakly() {
+    /// 注册表**绝不延长会话寿命**：会话释放后槽位读出 nil，
+    /// 而且那条 entry 一并被清掉 —— 否则 `terminals` 会永远列着一条
+    /// 读不了也写不了的幻影行，模型只会对着它反复重试。
+    func testReleasedSessionIsPrunedFromEntries() {
         let registry = TerminalSessionRegistry()
         let entry = makeEntry()
         do {
             let session = TerminalSession()
             registry.register(entry, session: session)
             XCTAssertNotNil(registry.session(for: entry.id))
+            XCTAssertEqual(registry.snapshots().count, 1)
         }
         XCTAssertNil(registry.session(for: entry.id))
-        // entry 本身还在（`terminals` 仍会列出来，read 时才报 terminal_disconnected）。
-        XCTAssertEqual(registry.entries.count, 1)
+        XCTAssertTrue(registry.snapshots().isEmpty)
+        XCTAssertTrue(registry.entries.isEmpty)
+        // 解析也跟着看不到它。
+        XCTAssertTrue(registry.matches(entry.id.uuidString).isEmpty)
+    }
+
+    /// 反过来：**登记时就没给会话本体**（单测 / 占位登记）不算幻影，别误清。
+    func testEntryRegisteredWithoutSessionSurvivesPruning() {
+        let registry = TerminalSessionRegistry()
+        let entry = makeEntry()
+        registry.register(entry)
+        XCTAssertEqual(registry.snapshots().count, 1)
+        XCTAssertNil(registry.session(for: entry.id))
+        XCTAssertEqual(registry.snapshots().count, 1)
     }
 
     // MARK: key window / 焦点
@@ -93,24 +108,36 @@ final class TerminalSessionRegistryTests: XCTestCase {
         let b = makeEntry(serverName: "b", windowID: window)
         registry.register(a)
         registry.register(b)
-        XCTAssertFalse(registry.entries.contains { $0.isKeyWindowFocused })
+        XCTAssertFalse(registry.snapshots().contains { $0.isKeyWindowFocused })
 
         // 只有 key window，没设活动标签 → 仍不算聚焦。
         registry.setKeyWindow(windowID: window, isKey: true)
-        XCTAssertFalse(registry.entries.contains { $0.isKeyWindowFocused })
+        XCTAssertFalse(registry.snapshots().contains { $0.isKeyWindowFocused })
 
         registry.setFocusedSession(a.id, inWindow: window)
-        XCTAssertTrue(registry.entries.first { $0.id == a.id }!.isKeyWindowFocused)
-        XCTAssertFalse(registry.entries.first { $0.id == b.id }!.isKeyWindowFocused)
+        XCTAssertTrue(registry.isKeyWindowFocused(a.id))
+        XCTAssertFalse(registry.isKeyWindowFocused(b.id))
 
         // 切标签。
         registry.setFocusedSession(b.id, inWindow: window)
-        XCTAssertFalse(registry.entries.first { $0.id == a.id }!.isKeyWindowFocused)
-        XCTAssertTrue(registry.entries.first { $0.id == b.id }!.isKeyWindowFocused)
+        XCTAssertFalse(registry.isKeyWindowFocused(a.id))
+        XCTAssertTrue(registry.isKeyWindowFocused(b.id))
 
         // 窗口失去 key。
         registry.setKeyWindow(windowID: window, isKey: false)
-        XCTAssertFalse(registry.entries.contains { $0.isKeyWindowFocused })
+        XCTAssertFalse(registry.snapshots().contains { $0.isKeyWindowFocused })
+    }
+
+    /// 焦点是**读取时现算**的，不是四个 mutator 手工同步的缓存副本：
+    /// 会话在窗口已经是 key、活动标签已经指向它**之后**才登记，也要算聚焦。
+    func testFocusIsComputedAtReadTimeNotCachedAtRegistration() {
+        let registry = TerminalSessionRegistry()
+        let window = UUID()
+        let entry = makeEntry(windowID: window)
+        registry.setKeyWindow(windowID: window, isKey: true)
+        registry.setFocusedSession(entry.id, inWindow: window)
+        registry.register(entry)   // 窗口状态先于登记
+        XCTAssertTrue(registry.snapshots()[0].isKeyWindowFocused)
     }
 
     func testFocusIsPerWindow() {
@@ -123,8 +150,8 @@ final class TerminalSessionRegistryTests: XCTestCase {
         registry.setKeyWindow(windowID: w1, isKey: true)
         registry.setFocusedSession(a.id, inWindow: w1)
         registry.setFocusedSession(b.id, inWindow: w2)  // w2 不是 key
-        XCTAssertTrue(registry.entries.first { $0.id == a.id }!.isKeyWindowFocused)
-        XCTAssertFalse(registry.entries.first { $0.id == b.id }!.isKeyWindowFocused)
+        XCTAssertTrue(registry.isKeyWindowFocused(a.id))
+        XCTAssertFalse(registry.isKeyWindowFocused(b.id))
     }
 
     func testForgetWindowClearsFocusFlag() {
@@ -134,9 +161,9 @@ final class TerminalSessionRegistryTests: XCTestCase {
         registry.register(entry)
         registry.setKeyWindow(windowID: window, isKey: true)
         registry.setFocusedSession(entry.id, inWindow: window)
-        XCTAssertTrue(registry.entries[0].isKeyWindowFocused)
+        XCTAssertTrue(registry.isKeyWindowFocused(entry.id))
         registry.forgetWindow(window)
-        XCTAssertFalse(registry.entries[0].isKeyWindowFocused)
+        XCTAssertFalse(registry.isKeyWindowFocused(entry.id))
     }
 
     // MARK: 解析
@@ -229,6 +256,51 @@ final class TerminalSessionRegistryTests: XCTestCase {
                            serverName: "prod", session: pane.session)
         XCTAssertEqual(registry.entries.count, 1)
         pane.dispose()
+        XCTAssertTrue(registry.entries.isEmpty)
+    }
+
+    /// 登记时的 `title` 取「标签自定义名，没有才回落服务器名」。
+    func testRegistrarPrefersCustomTabTitle() {
+        let registry = TerminalSessionRegistry()
+        let pane = PaneModel(serverProfileID: UUID())
+        let registrar = TerminalSessionRegistrar(
+            registry: registry, windowID: UUID(), windowKind: TerminalWindowKind.workspace,
+            customTitle: { $0 == pane.id ? "生产 web" : nil })
+        registrar.register(paneID: pane.id, serverID: pane.serverProfileID,
+                           serverName: "prod-1", session: pane.session)
+        XCTAssertEqual(registry.snapshots()[0].title, "生产 web")
+        XCTAssertEqual(registry.snapshots()[0].serverName, "prod-1")
+    }
+
+    func testRegistrarFallsBackToServerNameWithoutCustomTitle() {
+        let registry = TerminalSessionRegistry()
+        let pane = PaneModel(serverProfileID: UUID())
+        let registrar = TerminalSessionRegistrar(
+            registry: registry, windowID: UUID(), windowKind: TerminalWindowKind.workspace,
+            customTitle: { _ in nil })
+        registrar.register(paneID: pane.id, serverID: pane.serverProfileID,
+                           serverName: "prod-1", session: pane.session)
+        XCTAssertEqual(registry.snapshots()[0].title, "prod-1")
+    }
+
+    /// 连接断开（远端退出）后窗格自己注销 —— 否则它会以「活会话」的身份一直挂在
+    /// `terminals` 里，`terminal-read` 一直回同一张冻结的画面。
+    func testPaneUnregistersWhenConnectionDrops() async {
+        let registry = TerminalSessionRegistry()
+        let pane = PaneModel(serverProfileID: UUID())
+        pane.registrar = TerminalSessionRegistrar(
+            registry: registry, windowID: UUID(), windowKind: TerminalWindowKind.workspace)
+        let backend = MockBackend()
+        await pane.session.connect(using: backend)
+        pane.registrar?.register(paneID: pane.id, serverID: pane.serverProfileID,
+                                 serverName: "prod", session: pane.session)
+        XCTAssertEqual(registry.entries.count, 1)
+
+        await backend.emitExit()
+        for _ in 0..<200 where pane.session.connectionState != .disconnected {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(pane.session.connectionState, .disconnected)
         XCTAssertTrue(registry.entries.isEmpty)
     }
 

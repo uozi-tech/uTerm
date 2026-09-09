@@ -305,9 +305,31 @@ final class WorkspaceModel {
         windowKind: String
     ) {
         let registrar = TerminalSessionRegistrar(
-            registry: registry, windowID: windowID, windowKind: windowKind)
+            registry: registry, windowID: windowID, windowKind: windowKind,
+            customTitle: { [weak self] paneID in self?.tabCustomTitle(paneID: paneID) })
         sessionRegistrar = registrar
         for tab in terminalGroups.allTabs { tab.payload.adopt(registrar: registrar) }
+        syncTerminalTitles()
+    }
+
+    /// 某个窗格所在标签的自定义名（`UPaneTab.customTitle`），没有则 nil。
+    /// `TerminalSessionRegistrar` 的 title 钩子就查它。
+    func tabCustomTitle(paneID: UUID) -> String? {
+        terminalGroups.allTabs.first { $0.payload.id == paneID }?.customTitle
+    }
+
+    /// 把每条终端标签**当前**的标题推给注册表（`title` = 标签自定义名，没有就服务器名）。
+    ///
+    /// 登记发生在窗格连上的那一刻，而标签的自定义名可能在那之后才定下来
+    ///（窗口视图的 `.task` 晚于窗格建连、标签在组树里被换、恢复出来的标题）——
+    /// 所以注入注册表、开新标签、切前台标签这三处都补一次同步。
+    /// 注册表里没有的窗格自动 no-op。
+    func syncTerminalTitles() {
+        guard let registrar = sessionRegistrar else { return }
+        for tab in terminalGroups.allTabs where tab.payload.fileBuffer == nil {
+            guard let title = tab.customTitle ?? tab.payload.connectedServerName else { continue }
+            registrar.registry.update(id: tab.payload.id, title: title)
+        }
     }
 
     /// 当前前台的**终端**会话 id（文件窗格不算，返回 nil）。
@@ -322,6 +344,7 @@ final class WorkspaceModel {
     func syncFocusedTerminalSession() {
         guard let registrar = sessionRegistrar else { return }
         registrar.registry.setFocusedSession(focusedTerminalSessionID, inWindow: registrar.windowID)
+        syncTerminalTitles()
     }
 
     /// 新建窗格的唯一入口：建出来立刻打上登记凭条。
@@ -345,9 +368,11 @@ final class WorkspaceModel {
     /// 旧 `openServer` 是「新开一个窗口级标签」；⌘T 的行为等价。
     @discardableResult
     func openServer(profileID: UUID, title: String, in groupID: UUID? = nil) -> UUID {
-        terminalGroups.openTab({
+        let id = terminalGroups.openTab({
             TerminalTab(payload: self.makePane(serverProfileID: profileID), customTitle: title)
         }, in: groupID)
+        syncTerminalTitles()
+        return id
     }
 
     /// ⌘D / ⇧⌘D / 标签条右侧的分屏按钮：对活动组分屏，新组里放一条新会话。

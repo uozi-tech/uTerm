@@ -75,7 +75,7 @@ extension ControlHandler {
                 message: "已写入会话「\(entry.title)」"
                     + ((request.enter ?? false) ? "（带回车）" : "（未回车，用户需自己按 Enter）")
                     + "；注入没有输出边界，要结果请改用 run",
-                terminals: [entry.snapshot]
+                terminals: [deps.registry.snapshot(of: entry)]
             )
 
         case .terminalOpen:
@@ -104,7 +104,7 @@ extension ControlHandler {
                 return .success(
                     id: request.id,
                     message: "已为「\(profile.name)」打开终端窗口",
-                    terminals: [entry.snapshot]
+                    terminals: [deps.registry.snapshot(of: entry)]
                 )
             }
             return .success(
@@ -150,9 +150,12 @@ extension ControlHandler {
         action: ControlAction,
         _ deps: Dependencies
     ) throws(ControlFailure) {
-        let profiles = (try? deps.modelContainer.mainContext
-            .fetch(FetchDescriptor<ServerProfile>())) ?? []
-        guard let profile = profiles.first(where: { $0.id == entry.serverID }) else { return }
+        let serverID = entry.serverID
+        var descriptor = FetchDescriptor<ServerProfile>(
+            predicate: #Predicate { $0.id == serverID })
+        descriptor.fetchLimit = 1
+        guard let profile = (try? deps.modelContainer.mainContext.fetch(descriptor))?.first
+        else { return }
         try requireExecCapable(profile, action: action)
     }
 

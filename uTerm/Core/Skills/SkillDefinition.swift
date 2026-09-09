@@ -515,11 +515,16 @@ description: 查看 uTerm 里正在开着的终端会话、读取某个会话的
 ```
 
 列出所有窗口里的终端会话：`id`（`-t` 收它或它的唯一前缀）、`serverName`、
-`windowKind`（`workspace` 工作区窗 / `terminal` 独立终端窗）、`title`（通常是当前
-目录与提示符信息）、`isKeyWindowFocused`（用户此刻正看着哪个）、`connectedAt`。
+`windowKind`（`workspace` 工作区窗 / `terminal` 独立终端窗）、`title`（那条**标签**的
+名字：用户给标签起的自定义名，没起过就是主机名 —— 它**不是**当前目录，也不是提示符）、
+`isKeyWindowFocused`（用户此刻正看着哪个）、`connectedAt`。
 
-会话 id 前缀重复时是 `terminal_ambiguous`，改用完整 id。会话在你操作期间被关掉是
-`terminal_disconnected` —— 重新 `terminals` 一次，别对着旧 id 重试。
+同一台主机开了两条会话时，`serverName` 与 `title` 可能一模一样，**只有 `id` 能区分**。
+
+**这张表只列还连着的会话。** 标签 / 窗口被关掉，或那条 SSH 断了（远端退出、网络掉了），
+会话立刻从表里消失。所以拿旧 id 去操作，通常得到的是 `terminal_not_found` 而不是
+`terminal_disconnected` —— 重新 `terminals` 一次，别对着旧 id 重试。会话 id 前缀
+匹配到多条时是 `terminal_ambiguous`，改用完整 id。
 
 ## 读屏
 
@@ -600,9 +605,9 @@ description: 查看 uTerm 里正在开着的终端会话、读取某个会话的
 
 | code | 含义 |
 |---|---|
-| `terminal_not_found` | 没有这个 id / 前缀的会话 |
+| `terminal_not_found` | 没有这个 id / 前缀的会话 —— 包括已经关掉 / 断开、因而不再出现在 `terminals` 里的 |
 | `terminal_ambiguous` | 前缀匹配到多个会话，改用完整 id |
-| `terminal_disconnected` | 会话已经断开或被关掉了 |
+| `terminal_disconnected` | 你列表之后、操作之前，这条会话正好断了 / 被关了，字节没写进去 |
 
 其余错误码见 `uterm-run`。
 """#

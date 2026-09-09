@@ -10,7 +10,7 @@ struct uTermApp: App {
     @AppStorage("appLanguage")
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
-    /// `terminal-open` 需要从 App 层捕获开窗口动作（见 Welcome 的 `.task`）。
+    /// `terminal-open` 需要从 App 层捕获开窗口动作（见 `installTerminalWindowOpener`）。
     @Environment(\.openWindow) private var openWindow
 
     @State private var appUpdater = AppUpdater()
@@ -23,8 +23,8 @@ struct uTermApp: App {
     /// 信任弹窗能在任一可见窗口里解决 —— `.hostKeySheet` 同时挂在 Welcome（默认启动模式
     /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
     @State private var launchRelay = HostKeyChallengeRelay()
-    /// 命令行接口（本机 IPC）的两级门禁开关。`observe` 在 Welcome 的 `.task` 里接上
-    /// `ControlServer` 的起停，见下方。
+    /// 命令行接口（本机 IPC）的两级门禁开关。`observe` 在 `bootstrapAppServices()`
+    /// 里接上 `ControlServer` 的起停（由第一个出现的窗口触发，不绑定某个具体窗口）。
     @State private var controlSettings = ControlSettings()
     /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
     /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
@@ -32,6 +32,9 @@ struct uTermApp: App {
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
+    /// 应用级服务（CloudKit 监听 / 命令行接口 / 开窗入口）只安装一次。
+    /// 挂在每个 Scene 上，谁先出现谁装 —— 见 `AppServicesGate` 的类型文档。
+    private let appServicesGate = AppServicesGate()
 
     private var currentAppearance: AppearancePreference {
         AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
@@ -67,6 +70,34 @@ struct uTermApp: App {
         _lockModel = State(initialValue: AppLockModel(
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))
+    }
+
+    /// 应用级服务的唯一启动点。由**任意**第一个出现的窗口触发（`bootstrapsAppServices`），
+    /// `appServicesGate` 保证整个进程只跑一次。
+    ///
+    /// 不要把这些搬回某一个具体窗口的 `.task` —— Welcome 窗不一定出现（启动行为
+    /// 「上次会话 / 上次主机」会 dismiss 它，状态恢复也可能只恢复工作区窗口），
+    /// 那时命令行接口从没接上，设置里开开关毫无反应。
+    @MainActor
+    private func bootstrapAppServices() {
+        appServicesGate.install {
+            cloudKitSync.start()
+            startControlInterface()
+            installTerminalWindowOpener()
+        }
+    }
+
+    /// `terminal-open` 的开窗口入口：`TerminalWindowID` 只能在 Scene 环境里开，
+    /// 所以把 App 层的 `openWindow` 捕成闭包塞进注册表（与 `WelcomeView.handleConfigDrop`
+    /// 里 `let open = openWindow` 同款写法）。返回的是**窗口** id，会话要等它自己注册上来。
+    @MainActor
+    private func installTerminalWindowOpener() {
+        let open = openWindow
+        terminalRegistry.openTerminalWindow = { serverID in
+            let windowID = UUID()
+            open(value: TerminalWindowID(id: windowID, serverID: serverID))
+            return windowID
+        }
     }
 
     /// 把命令行接口的开关接到服务端起停上。
@@ -108,28 +139,14 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 // 注入转发协调器 + 全局自启编排器 + 共享 host-key 中转：
-                // Welcome 是最稳定的启动钩，在此（app 起来后）触发「随 uTerm 启动」的隧道。
+                // 「随 uTerm 启动」的隧道由 Welcome 触发（它是默认常驻窗口）。
+                // 应用级服务另走 `bootstrapsAppServices`，不依赖这个窗口存在。
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
                 .environment(launchRelay)
                 .environment(controlSettings)
                 .environment(terminalRegistry)
-                // Welcome 是默认常驻窗口，作为 CloudKit 监听器与命令行接口的单一启动点
-                //（两者都幂等）。`observe` 会立刻回调一次，让服务端与持久化的开关对齐。
-                .task {
-                    cloudKitSync.start()
-                    startControlInterface()
-                    // `terminal-open` 的开窗口入口：`TerminalWindowID` 只能在 Scene
-                    // 环境里开，所以在这里把 `openWindow` 捕成闭包塞进注册表
-                    //（与 `WelcomeView.handleConfigDrop` 里 `let open = openWindow`
-                    // 同款写法）。返回的是**窗口** id，会话要等它自己注册上来。
-                    let open = openWindow
-                    terminalRegistry.openTerminalWindow = { serverID in
-                        let windowID = UUID()
-                        open(value: TerminalWindowID(id: windowID, serverID: serverID))
-                        return windowID
-                    }
-                }
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
@@ -145,6 +162,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         // 同上：隐藏系统标题栏，让密钥管理窗口走自绘扁平 chrome（KeyManagerView 顶部自绘标题栏）。
@@ -156,6 +174,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -166,6 +185,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -180,6 +200,7 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
                 .environment(terminalRegistry)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         // 自绘 Cursor 式标题栏：隐藏系统标题栏（红绿灯浮在内容上、内容铺满到顶），
@@ -239,6 +260,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         // 同工作区窗口：隐藏系统标题栏，红绿灯浮在自绘 SFTPTitleBar 上、内容铺到顶。
@@ -257,6 +279,7 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
                 .environment(terminalRegistry)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -273,6 +296,7 @@ struct uTermApp: App {
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
                 .environment(terminalRegistry)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -291,6 +315,7 @@ struct uTermApp: App {
                 .environment(launchRelay)
                 .environment(controlSettings)
                 .environment(terminalRegistry)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -304,6 +329,7 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
         .windowStyle(.hiddenTitleBar)
@@ -324,6 +350,7 @@ struct uTermApp: App {
                 .environment(appUpdater)
                 .environment(cloudKitSync)
                 .environment(controlSettings)
+                .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
@@ -345,5 +372,37 @@ struct uTermApp: App {
         .routesNewWindowToWelcome()
         .commands { DebugCommands() }
         #endif
+    }
+}
+
+/// 应用级服务（CloudKit 同步监听、命令行接口、`terminal-open` 的开窗入口）的
+/// **一次性**安装闸门。
+///
+/// 这三样原本只挂在 Welcome 窗的 `.task` 里，而 Welcome 窗**不一定出现**：
+/// 启动行为设成「上次会话 / 上次主机」时它会被 dismiss，macOS 恢复窗口状态时也
+/// 可能只恢复工作区 / 终端窗口。那些情况下 `ControlSettings.observe` 从来没装上，
+/// 用户在设置里打开命令行开关**什么都不发生、也没有任何报错**。
+///
+/// 改成挂在每个 Scene 的根视图上（`bootstrapsAppServices`），谁先出现谁装，
+/// 由这个闸门保证只跑一次。
+@MainActor
+final class AppServicesGate {
+    private(set) var hasInstalled = false
+
+    /// 幂等安装：第一次真跑 `body` 并返回 true，之后一律 no-op 并返回 false。
+    @discardableResult
+    func install(_ body: () -> Void) -> Bool {
+        guard !hasInstalled else { return false }
+        hasInstalled = true
+        body()
+        return true
+    }
+}
+
+private extension View {
+    /// 应用级服务的启动钩子。挂在**每个** Scene 的根视图上，幂等性由
+    /// `AppServicesGate` 负责，不要在这里再加条件。
+    func bootstrapsAppServices(_ run: @escaping @MainActor () -> Void) -> some View {
+        task { run() }
     }
 }

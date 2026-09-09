@@ -25,10 +25,8 @@ nonisolated struct TerminalSessionEntry: Identifiable, Sendable, Equatable {
     let windowID: UUID
     /// `workspace` / `terminal` —— 会话所在窗口的种类。
     let windowKind: String
+    /// 标签自定义名（`UPaneTab.customTitle`）优先，没有才是服务器名。
     var title: String
-    /// 该会话是否在当前 key window 里被聚焦（`terminal-send` 前值得提示用户）。
-    /// 由注册表根据窗口状态算出，不要外部直接写。
-    fileprivate(set) var isKeyWindowFocused: Bool
     let connectedAt: Date?
 
     init(
@@ -38,7 +36,6 @@ nonisolated struct TerminalSessionEntry: Identifiable, Sendable, Equatable {
         windowID: UUID = UUID(),
         windowKind: String,
         title: String,
-        isKeyWindowFocused: Bool = false,
         connectedAt: Date? = nil
     ) {
         self.id = id
@@ -47,11 +44,13 @@ nonisolated struct TerminalSessionEntry: Identifiable, Sendable, Equatable {
         self.windowID = windowID
         self.windowKind = windowKind
         self.title = title
-        self.isKeyWindowFocused = isKeyWindowFocused
         self.connectedAt = connectedAt
     }
 
-    var snapshot: ControlTerminalSnapshot {
+    /// 线上形状。`isKeyWindowFocused` **不存在 entry 里** —— 它是「窗口是不是 key」×
+    /// 「它的活动标签是不是我」的派生值，唯一真值在注册表的 `windows` 里，
+    /// 由 `TerminalSessionRegistry.snapshot(of:)` 读取时现算后传进来。
+    func snapshot(isKeyWindowFocused: Bool) -> ControlTerminalSnapshot {
         ControlTerminalSnapshot(
             id: id.uuidString,
             serverID: serverID.uuidString,
@@ -98,7 +97,14 @@ final class TerminalSessionRegistry {
 
     private final class WeakSessionBox {
         weak var value: TerminalSession?
-        init(_ value: TerminalSession?) { self.value = value }
+        /// 登记时到底给没给会话本体。给了却读出 nil = 会话已被释放（幻影行，要清）；
+        /// 一开始就没给（单测 / 占位登记）则不是幻影，别误清。
+        let hadSession: Bool
+        init(_ value: TerminalSession?) {
+            self.value = value
+            self.hadSession = value != nil
+        }
+        var isReleased: Bool { hadSession && value == nil }
     }
 
     private struct WindowState {
@@ -118,7 +124,6 @@ final class TerminalSessionRegistry {
         } else {
             entries.append(entry)
         }
-        refreshFocusFlags()
     }
 
     /// 会话销毁时注销。
@@ -142,7 +147,6 @@ final class TerminalSessionRegistry {
         guard state.isKey != isKey else { return }
         state.isKey = isKey
         windows[windowID] = state
-        refreshFocusFlags()
     }
 
     /// 窗口内的活动终端标签变了。`nil` = 当前没有终端标签在前台。
@@ -151,45 +155,60 @@ final class TerminalSessionRegistry {
         guard state.focusedSessionID != sessionID else { return }
         state.focusedSessionID = sessionID
         windows[windowID] = state
-        refreshFocusFlags()
     }
 
     /// 窗口关闭时丢掉它的状态（会话本身由 `PaneModel.dispose` 各自注销）。
     func forgetWindow(_ windowID: UUID) {
-        guard windows.removeValue(forKey: windowID) != nil else { return }
-        refreshFocusFlags()
+        windows.removeValue(forKey: windowID)
     }
 
-    private func refreshFocusFlags() {
-        for index in entries.indices {
-            let state = windows[entries[index].windowID]
-            let focused = (state?.isKey ?? false) && state?.focusedSessionID == entries[index].id
-            if entries[index].isKeyWindowFocused != focused {
-                entries[index].isKeyWindowFocused = focused
-            }
-        }
+    /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，
+    /// 不在 entry 里留缓存副本 —— 缓存要靠四个 mutator 手动同步，漏一个就说谎。
+    func isKeyWindowFocused(_ id: UUID) -> Bool {
+        guard let entry = entries.first(where: { $0.id == id }) else { return false }
+        return isKeyWindowFocused(entry)
+    }
+
+    private func isKeyWindowFocused(_ entry: TerminalSessionEntry) -> Bool {
+        guard let state = windows[entry.windowID] else { return false }
+        return state.isKey && state.focusedSessionID == entry.id
     }
 
     // MARK: - 查询
 
-    /// 线上形状（`terminals` 动作直接用）。
+    /// 线上形状（`terminals` 动作直接用）。读之前先清一次幻影行。
     func snapshots() -> [ControlTerminalSnapshot] {
-        entries.map(\.snapshot)
+        pruneReleasedSessions()
+        return entries.map { $0.snapshot(isKeyWindowFocused: isKeyWindowFocused($0)) }
     }
 
-    /// 取会话本体。已被释放（窗口关了但没走 `dispose`）时顺手清掉槽位并回 nil。
+    /// 单条会话的线上形状（`terminal-send` / `terminal-open` 的响应用）。
+    func snapshot(of entry: TerminalSessionEntry) -> ControlTerminalSnapshot {
+        entry.snapshot(isKeyWindowFocused: isKeyWindowFocused(entry))
+    }
+
+    /// 会话本体已被释放（窗口没走 `dispose` 就没了）的槽位：连 entry 一起清掉。
+    ///
+    /// 只清槽位不清 entry 的话，`terminals` 会永远列着一条读不了也写不了的幻影行，
+    /// 模型对着它重试到超时。清扫在每个**读取**入口（`snapshots` / `matches` /
+    /// `session(for:)`）前跑一次，代价是一次字典扫描。
+    private func pruneReleasedSessions() {
+        let dead = sessions.compactMap { $0.value.isReleased ? $0.key : nil }
+        guard !dead.isEmpty else { return }
+        for id in dead { sessions.removeValue(forKey: id) }
+        entries.removeAll { dead.contains($0.id) }
+    }
+
+    /// 取会话本体。已被释放时顺手清掉槽位与 entry 并回 nil。
     func session(for id: UUID) -> TerminalSession? {
-        guard let box = sessions[id] else { return nil }
-        guard let session = box.value else {
-            sessions.removeValue(forKey: id)
-            return nil
-        }
-        return session
+        pruneReleasedSessions()
+        return sessions[id]?.value
     }
 
     /// 纯匹配：完整 id（忽略大小写）优先，否则按 uuidString 的**唯一前缀**。
     /// 返回 0 / 1 / 多条，由调用方决定报什么错。
     func matches(_ needle: String) -> [TerminalSessionEntry] {
+        pruneReleasedSessions()
         let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         if let uuid = UUID(uuidString: trimmed),
@@ -248,6 +267,25 @@ struct TerminalSessionRegistrar {
     let registry: TerminalSessionRegistry
     let windowID: UUID
     let windowKind: String
+    /// `paneID` → 该窗格所在标签的自定义名（`UPaneTab.customTitle`）。
+    ///
+    /// 窗格自己不知道自己挂在哪条标签上（`PaneModel` 只有 `serverProfileID`），
+    /// 标签树又只有 `WorkspaceModel` 拿得到，所以由它在 `attachSessionRegistry`
+    /// 里注入这个查询钩子。返回 nil（没自定义名 / 窗格还没进树 / 单测）时
+    /// `title` 回落到服务器名。
+    var customTitle: (@MainActor (UUID) -> String?)?
+
+    init(
+        registry: TerminalSessionRegistry,
+        windowID: UUID,
+        windowKind: String,
+        customTitle: (@MainActor (UUID) -> String?)? = nil
+    ) {
+        self.registry = registry
+        self.windowID = windowID
+        self.windowKind = windowKind
+        self.customTitle = customTitle
+    }
 
     func register(
         paneID: UUID,
@@ -263,7 +301,7 @@ struct TerminalSessionRegistrar {
                 serverName: serverName,
                 windowID: windowID,
                 windowKind: windowKind,
-                title: serverName,
+                title: customTitle?(paneID) ?? serverName,
                 connectedAt: connectedAt
             ),
             session: session
