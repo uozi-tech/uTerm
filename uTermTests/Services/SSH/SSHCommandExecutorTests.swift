@@ -28,6 +28,14 @@ final class SSHCommandExecutorTests: XCTestCase {
         let r = try await exec.run("yes")
         XCTAssertTrue(r.output.contains("[输出已截断]"))
         XCTAssertLessThanOrEqual(r.output.split(separator: "\n").count, 202)
+        // 截断与否由执行器直接带出，调用方不必再去嗅探末尾文案。
+        XCTAssertTrue(r.truncated)
+    }
+
+    func testUntruncatedOutputIsNotFlagged() async throws {
+        let exec = SSHCommandExecutor(maxLines: 200) { _ in "hi\n__UTERM_EXIT__:0\n" }
+        let r = try await exec.run("echo hi")
+        XCTAssertFalse(r.truncated)
     }
 }
 

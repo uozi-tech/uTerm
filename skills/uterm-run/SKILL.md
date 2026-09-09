@@ -91,18 +91,40 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 "$UTERMCTL" run -H prod-web -c "df -h | sort -k5 -r | head"
 
 # 多台并行（有界并发 6），逐主机一条结果
-"$UTERMCTL" run-many -H prod-web -H prod-db -- uptime --format table
+"$UTERMCTL" run-many -H prod-web -H prod-db --format table -- uptime
 ```
 
-`--format` 有 `json`（默认）/ `table` / `csv`，写在子命令前后都行。`table` 会逐主机
-分段打印输出，给人看；要自己解析就用 `json`。
+`--format` 有 `json`（默认）/ `table` / `csv`。**它必须写在 `--` 之前** —— `--`
+之后的一切都被原样当成远程命令的一部分，写在后面就成了 `uptime --format table`，
+在远端跑，不是给客户端看的。`table` 会逐主机分段打印输出，给人看；要自己解析就用
+`json`。
 
 结果里的字段：`output` 是合并后的 stdout/stderr，`exitCode` 是远端真实退出码
-（拿不到时为 `null`），`durationMs` 是耗时。**`exitCode` 非 0 不代表调用失败** ——
-调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output` 去判断。
+（拿不到时为 `null`），`durationMs` 是耗时。**单机 `run` 的 `exitCode` 非 0 不代表
+调用失败** —— 调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output`
+去判断。
 
-`run-many` 里**单台失败不会让整批失败**：那一条的 `errorCode` / `errorMessage` 单独
-写着，其余主机照跑。
+## run-many / quick-run 怎么读结果
+
+多主机动作**不看顶层 `ok` 就下结论是错的**，要先看顶层 `code`：
+
+| 顶层 | 含义 | 退出码 |
+|---|---|---|
+| `ok: true` | 每一台都跑完了且 `exitCode == 0` | 0 |
+| `run_partial_failure` | 有成有败 | 7 |
+| `run_failed` | **一台都没成** | 5 |
+
+不论哪种，`results` 数组都在，**按请求顺序**一台一条。逐条看两件事：`errorCode`
+非空说明这台连都没连上（或超时），`exitCode != 0` 说明命令自己失败了。部分失败时
+不要把整批当成功，也不要把整批当失败 —— 明确说清哪几台没成、为什么。
+
+两个细节：
+
+- **重复的 `-H` 会被合并**。`-H web1 -H web1`、名字加 UUID、大小写不同的写法都指向
+  同一台主机，结果按去重后的主机一台一条（message 里会说明合并了几个）。
+  不要指望「给了几个 `-H` 就有几条结果」。
+- 有主机因为**密钥没信任**而失败时，顶层 `hostKey` 是第一台这样的主机，逐条的
+  `results[].hostKey` 才是完整的那份 —— 多台首连时按逐条的指纹逐台 `trust`。
 
 ## 超时与截断
 
@@ -199,6 +221,8 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `connect_failed` | 建连失败（消息是 SSH 原话，可能是网络或跳板机） |
 | `auth_failed` | 认证失败 —— 用户存的凭据不对，只能他自己改 |
 | `command_timeout` | 超时；**命令可能还在远端继续跑** |
+| `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
+| `run_failed` | `run-many` / `quick-run`：一台都没成 |
 | `file_not_found` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
@@ -207,4 +231,5 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `not_implemented` | 这个动作在当前 uTerm 版本里还没实现 |
 
 客户端的退出码：`0` 成功，`2` 连不上 uTerm 或客户端自己的前置检查没过，`3` 门禁，
-`4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败，`6` 超时，`1` 其它。
+`4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败（含 `run_failed` 的全军覆没），
+`6` 超时，`7` 多主机部分失败（`run_partial_failure`），`1` 其它。

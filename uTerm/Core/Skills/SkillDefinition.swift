@@ -177,18 +177,40 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 "$UTERMCTL" run -H prod-web -c "df -h | sort -k5 -r | head"
 
 # 多台并行（有界并发 6），逐主机一条结果
-"$UTERMCTL" run-many -H prod-web -H prod-db -- uptime --format table
+"$UTERMCTL" run-many -H prod-web -H prod-db --format table -- uptime
 ```
 
-`--format` 有 `json`（默认）/ `table` / `csv`，写在子命令前后都行。`table` 会逐主机
-分段打印输出，给人看；要自己解析就用 `json`。
+`--format` 有 `json`（默认）/ `table` / `csv`。**它必须写在 `--` 之前** —— `--`
+之后的一切都被原样当成远程命令的一部分，写在后面就成了 `uptime --format table`，
+在远端跑，不是给客户端看的。`table` 会逐主机分段打印输出，给人看；要自己解析就用
+`json`。
 
 结果里的字段：`output` 是合并后的 stdout/stderr，`exitCode` 是远端真实退出码
-（拿不到时为 `null`），`durationMs` 是耗时。**`exitCode` 非 0 不代表调用失败** ——
-调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output` 去判断。
+（拿不到时为 `null`），`durationMs` 是耗时。**单机 `run` 的 `exitCode` 非 0 不代表
+调用失败** —— 调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output`
+去判断。
 
-`run-many` 里**单台失败不会让整批失败**：那一条的 `errorCode` / `errorMessage` 单独
-写着，其余主机照跑。
+## run-many / quick-run 怎么读结果
+
+多主机动作**不看顶层 `ok` 就下结论是错的**，要先看顶层 `code`：
+
+| 顶层 | 含义 | 退出码 |
+|---|---|---|
+| `ok: true` | 每一台都跑完了且 `exitCode == 0` | 0 |
+| `run_partial_failure` | 有成有败 | 7 |
+| `run_failed` | **一台都没成** | 5 |
+
+不论哪种，`results` 数组都在，**按请求顺序**一台一条。逐条看两件事：`errorCode`
+非空说明这台连都没连上（或超时），`exitCode != 0` 说明命令自己失败了。部分失败时
+不要把整批当成功，也不要把整批当失败 —— 明确说清哪几台没成、为什么。
+
+两个细节：
+
+- **重复的 `-H` 会被合并**。`-H web1 -H web1`、名字加 UUID、大小写不同的写法都指向
+  同一台主机，结果按去重后的主机一台一条（message 里会说明合并了几个）。
+  不要指望「给了几个 `-H` 就有几条结果」。
+- 有主机因为**密钥没信任**而失败时，顶层 `hostKey` 是第一台这样的主机，逐条的
+  `results[].hostKey` 才是完整的那份 —— 多台首连时按逐条的指纹逐台 `trust`。
 
 ## 超时与截断
 
@@ -285,6 +307,8 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `connect_failed` | 建连失败（消息是 SSH 原话，可能是网络或跳板机） |
 | `auth_failed` | 认证失败 —— 用户存的凭据不对，只能他自己改 |
 | `command_timeout` | 超时；**命令可能还在远端继续跑** |
+| `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
+| `run_failed` | `run-many` / `quick-run`：一台都没成 |
 | `file_not_found` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
@@ -293,7 +317,8 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `not_implemented` | 这个动作在当前 uTerm 版本里还没实现 |
 
 客户端的退出码：`0` 成功，`2` 连不上 uTerm 或客户端自己的前置检查没过，`3` 门禁，
-`4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败，`6` 超时，`1` 其它。
+`4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败（含 `run_failed` 的全军覆没），
+`6` 超时，`7` 多主机部分失败（`run_partial_failure`），`1` 其它。
 """#
 
     /// `skills/uterm-files/SKILL.md` 的逐字副本。
@@ -628,8 +653,9 @@ EXIT_OTHER = 1
 EXIT_LOCAL = 2       # 连不上 uTerm，或客户端自己的前置检查没过
 EXIT_GATED = 3       # 门禁：两个开关 / 仅 SFTP 主机
 EXIT_NOT_FOUND = 4   # 主机 / 规则 / 会话 / 文件找不到或有歧义
-EXIT_REMOTE = 5      # 建连、认证、主机密钥、转发失败
+EXIT_REMOTE = 5      # 建连、认证、主机密钥、转发失败（run-many 全失败也算这一档）
 EXIT_TIMEOUT = 6     # 超时
+EXIT_PARTIAL = 7     # run-many / quick-run：有的主机成了、有的没成
 
 
 def socket_paths():
@@ -771,7 +797,14 @@ def resolved_action(args):
 
 def command_string(args):
     inline = getattr(args, "command", None)
-    argv = [a for a in getattr(args, "argv", []) if a != "--"]
+    argv = list(getattr(args, "argv", []))
+    # `--` 是命令的一部分，**不能过滤**：`run -H h -- grep -- --include f` 里那个
+    # `--` 是 grep 的参数分隔符，滤掉就变成了另一条命令。
+    # 实测 argparse（本机 3.9.6 / 3.10.21 / 3.13.15 / 3.14.7，含子解析器）只吃掉
+    # 分隔用的**第一个** `--`，不会留在 argv 里；下面这行只是防御：万一某个版本把它
+    # 留下，也只去掉开头那一个。
+    if argv[:1] == ["--"]:
+        argv = argv[1:]
     if inline and argv:
         fail("-c 与 -- 之后的命令只能给一个")
     if inline:
@@ -899,30 +932,55 @@ def send_request(request):
     }
 
 
+def read_response(sock):
+    """读到 EOF 并解析成 JSON。空响应或解析不了都返回 None。"""
+    chunks = []
+    try:
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        # 对端已经把连接拆了；已经收到的那部分仍然可能是完整的一条响应。
+        pass
+    if not chunks:
+        return None
+    try:
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    except ValueError:
+        return None
+
+
 def exchange(path, request):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     # run 的封顶超时是 300 秒，客户端要比它宽一点，否则自己先断。
     sock.settimeout(360)
     try:
         sock.connect(path)
-        sock.sendall(json.dumps(request).encode("utf-8"))
-        sock.shutdown(socket.SHUT_WR)
-        chunks = []
-        while True:
-            chunk = sock.recv(65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
+        try:
+            sock.sendall(json.dumps(request).encode("utf-8"))
+            sock.shutdown(socket.SHUT_WR)
+        except (BrokenPipeError, ConnectionResetError):
+            # 服务端可能**在我们写完之前**就回了一条响应并关掉连接 —— 典型是请求体
+            # 超过 maxRequestBytes（大文件 sftp put）时的 `request_too_large`。
+            # AF_UNIX 上已经写回的数据不会因对端 close 而丢，所以先把它读出来：
+            # 读到 JSON 就按正常响应处理，读不到才把 EPIPE 报成 socket_error。
+            response = read_response(sock)
+            if response is not None:
+                return response
+            raise
+        response = read_response(sock)
     finally:
         sock.close()
-    if not chunks:
+    if response is None:
         return {
             "id": request.get("id"),
             "ok": False,
             "code": "empty_response",
-            "message": "uTerm IPC 返回了空响应",
+            "message": "uTerm IPC 返回了空响应或读不懂的内容",
         }
-    return json.loads(b"".join(chunks).decode("utf-8"))
+    return response
 
 
 def exit_code_for(response):
@@ -940,6 +998,12 @@ def exit_code_for(response):
         return EXIT_REMOTE
     if code in ("command_timeout", "handler_timeout"):
         return EXIT_TIMEOUT
+    # run-many / quick-run：全失败按「远端失败」报，有成有败单独给一档，
+    # 好让脚本能区分「一台都没成」和「大部分成了」。
+    if code == "run_failed":
+        return EXIT_REMOTE
+    if code == "run_partial_failure":
+        return EXIT_PARTIAL
     return EXIT_OTHER
 
 
@@ -1060,8 +1124,17 @@ def run_output(response):
     return "\n".join(blocks)
 
 
+# 这两个码的响应带着完整的 results，人类可读格式照常逐主机渲染。
+RUN_BATCH_CODES = ("run_failed", "run_partial_failure")
+
+
 def render(response, fmt, args):
     if not response.get("ok"):
+        # run-many / quick-run 失败时 results 才是有用的东西（逐台的 errorCode），
+        # 一股脑打 JSON 等于把表格吞了。json 格式仍然原样输出。
+        if (fmt != "json" and response.get("code") in RUN_BATCH_CODES
+                and isinstance(response.get("results"), list)):
+            return run_output(response) + "\n-- " + (response.get("message") or "")
         return as_json(response)
     action = resolved_action(args)
 

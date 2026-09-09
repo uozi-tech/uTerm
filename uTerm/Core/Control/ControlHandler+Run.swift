@@ -99,14 +99,13 @@ extension ControlHandler {
         // 是最难收拾的局面。认证解析失败则只算该台失败（那是连接问题，不是指错机器）。
         let prepared = try prepareTargets(needles, action: .runMany, deps)
 
-        let results = await Self.runAll(prepared, command: command, limits: limits, pool: deps.pool)
-        let failed = results.filter { $0.errorCode != nil || ($0.exitCode ?? -1) != 0 }.count
-        return .success(
+        let results = await Self.runAll(
+            prepared.targets, command: command, limits: limits, pool: deps.pool)
+        return batchResponse(
             id: request.id,
-            message: failed == 0
-                ? "\(results.count) 台全部执行成功"
-                : "\(results.count) 台中 \(failed) 台失败",
-            results: results
+            prefix: "",
+            results: results,
+            note: Self.mergedNote(prepared.merged)
         )
     }
 
@@ -184,10 +183,14 @@ extension ControlHandler {
         // 目标：请求里的 --host 覆盖优先，其次命令自带的绑定。
         let overrides = Self.hostNeedles(request)
         let prepared: [PreparedTarget]
+        let merged: Int
         if overrides.isEmpty {
             prepared = preparedTargets(forServerIDs: command.serverIDs, action: .quickRun, deps)
+            merged = command.serverIDs.count - prepared.count
         } else {
-            prepared = try prepareTargets(overrides, action: .quickRun, deps)
+            let resolved = try prepareTargets(overrides, action: .quickRun, deps)
+            prepared = resolved.targets
+            merged = resolved.merged
         }
         guard !prepared.isEmpty else {
             throw ControlFailure(
@@ -204,7 +207,11 @@ extension ControlHandler {
         // 写 30 天日志：字段与 `QuickCommandRunner.run` 记的那份一致，欢迎页的执行
         // 日志里能直接看到 CLI 跑的这次。`recordRun` 自己会更新 lastRunAt / runCount，
         // 所以**不**再调 `recordInvocation`（会把次数记两遍）。
-        let endpoints = Dictionary(uniqueKeysWithValues: prepared.map { ($0.hostID, $0.endpoint) })
+        // 目标已按 hostID 去重，理论上不会撞键；仍用 `uniquingKeysWith` 而不是
+        // `uniqueKeysWithValues` —— 后者撞键直接 trap，为一行日志字段崩掉整个 app
+        // 是不划算的买卖。
+        let endpoints = Dictionary(
+            prepared.map { ($0.hostID, $0.endpoint) }, uniquingKeysWith: { first, _ in first })
         let logged = results.map { result in
             QuickCommandServerResult(
                 serverID: UUID(uuidString: result.hostID) ?? UUID(),
@@ -223,12 +230,63 @@ extension ControlHandler {
                 results: logged
             )
 
-        let failed = logged.filter { !$0.ok }.count
-        return .success(
+        return batchResponse(
             id: request.id,
-            message: failed == 0
-                ? "快捷命令「\(command.name)」在 \(logged.count) 台上全部成功"
-                : "快捷命令「\(command.name)」在 \(logged.count) 台中有 \(failed) 台失败",
+            prefix: "快捷命令「\(command.name)」：",
+            results: results,
+            note: Self.mergedNote(merged)
+        )
+    }
+
+    // MARK: - 多主机结果收口
+
+    /// 一台算不算成功：没有连接层错误码，且远端退出码是 0。
+    nonisolated static func isSuccess(_ result: ControlRunResult) -> Bool {
+        result.errorCode == nil && result.exitCode == 0
+    }
+
+    /// 去重提示。`-H web1 -H web1`、名字 + UUID、大小写变体都会解析到同一台，
+    /// 结果数组按**去重后的主机**一台一条，所以要在 message 里说清楚。
+    nonisolated static func mergedNote(_ merged: Int) -> String {
+        merged > 0 ? "（有 \(merged) 个重复的 -H 已合并，结果按主机去重）" : ""
+    }
+
+    /// `run-many` / `quick-run` 的统一收口。
+    ///
+    /// **不再恒 `ok: true`**：全失败也退出 0 的话，`utermctl run-many … && 继续` 这种
+    /// 写法就成了陷阱。有成有败 → `run_partial_failure`，一台没成 → `run_failed`；
+    /// 逐条结果照旧在 `results` 里。
+    ///
+    /// 顶层 `hostKey` 填**第一台**需要处理主机密钥的主机（模型读顶层就能拿到指纹去
+    /// `trust`）；多台都要处理时，逐条的 `results[].hostKey` 是完整的那份。
+    func batchResponse(
+        id: String?,
+        prefix: String,
+        results: [ControlRunResult],
+        note: String
+    ) -> ControlResponse {
+        let failed = results.filter { !Self.isSuccess($0) }
+        guard !failed.isEmpty else {
+            return .success(
+                id: id,
+                message: prefix + "\(results.count) 台全部执行成功" + note,
+                results: results
+            )
+        }
+        let pendingKey = results.first { $0.hostKey != nil }
+        let allFailed = failed.count == results.count
+        var message = prefix + (allFailed
+            ? "\(results.count) 台全部失败"
+            : "\(results.count) 台中 \(failed.count) 台失败") + note
+        if let info = pendingKey?.hostKey, let fingerprint = info.fingerprint {
+            message += "。主机「\(pendingKey?.host ?? info.host)」的密钥需要先处理"
+                + "（\(fingerprint)）—— 逐条的 hostKey 里有全部待处理的主机。"
+        }
+        return .failure(
+            id: id,
+            code: allFailed ? .run_failed : .run_partial_failure,
+            message: message,
+            hostKey: pendingKey?.hostKey,
             results: results
         )
     }
@@ -252,18 +310,31 @@ extension ControlHandler {
 
     /// 按名字 / UUID 逐个解析。**任一主机解析失败整条拒绝**（不部分执行）；
     /// 认证解析失败只标记该台。
+    ///
+    /// 两件事顺带在这里做掉：
+    /// - **按 hostID 去重（保留首个）**。`-H web1 -H web1`、`-H web1 -H <UUID>`、
+    ///   大小写变体都会解析到同一台；不去重的话同一条命令在同一台机器上跑两遍，
+    ///   而且 `quick-run` 的端点字典会因重复键直接 trap。
+    /// - **只 fetch + 排序一次 `ServerProfile`**，再把候选喂给 `resolveHost(_:in:_:)`。
     private func prepareTargets(
         _ needles: [String],
         action: ControlAction,
         _ deps: Dependencies
-    ) throws(ControlFailure) -> [PreparedTarget] {
+    ) throws(ControlFailure) -> (targets: [PreparedTarget], merged: Int) {
+        let profiles = sortedProfiles(deps)
         var prepared: [PreparedTarget] = []
+        var seen = Set<UUID>()
+        var merged = 0
         for needle in needles {
-            let profile = try resolveHost(needle)
+            let profile = try resolveHost(needle, in: profiles, deps)
             try requireExecCapable(profile, action: action)
+            guard seen.insert(profile.id).inserted else {
+                merged += 1
+                continue
+            }
             prepared.append(preparedTarget(profile, deps))
         }
-        return prepared
+        return (prepared, merged)
     }
 
     /// 快捷命令自带的绑定：档案已删 / 仅 SFTP 的主机各自记一条失败，不拖垮整批
@@ -407,7 +478,7 @@ extension ControlHandler {
                     hostID: target.spec.id.uuidString,
                     output: result.output,
                     exitCode: result.exitCode,
-                    truncated: isTruncated(result.output),
+                    truncated: result.truncated,
                     durationMs: elapsed
                 ),
                 connectError: nil
@@ -506,14 +577,18 @@ extension ControlHandler {
             output: "",
             durationMs: Int(Date().timeIntervalSince(start) * 1000),
             errorCode: error.code.rawValue,
-            errorMessage: error.message(host: name)
+            errorMessage: error.message(host: name),
+            // 主机密钥两态逐条带上指纹：`run-many` 的顶层只报得了一台，
+            // 多台首连时模型要靠这一列才知道每台该 trust 什么。
+            hostKey: error.fingerprint.map { fingerprint in
+                ControlHostKeyInfo(
+                    host: name,
+                    algorithm: error.algorithm,
+                    fingerprint: fingerprint,
+                    status: error.code == .host_key_changed ? "changed" : "unknown"
+                )
+            }
         )
-    }
-
-    /// `SSHCommandExecutor.parse` 截断时会在末尾补一行标记，据此还原 `truncated`
-    ///（`CommandResult` 本身没有这个字段）。
-    private nonisolated static func isTruncated(_ output: String) -> Bool {
-        output.hasSuffix("… [输出已截断]")
     }
 
     // MARK: - 请求解析

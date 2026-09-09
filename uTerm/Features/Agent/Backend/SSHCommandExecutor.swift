@@ -5,6 +5,9 @@ import Foundation
 /// `exec` 闭包由调用方用工作区的 `ConnectedClient.exec` 提供。
 nonisolated struct SSHCommandExecutor: CommandExecutor {
     static let sentinel = "__UTERM_EXIT__"
+    /// 输出被裁剪时追加在末尾的标记。别在别处重复这串字面量 —— 截断与否读
+    /// `CommandResult.truncated`。
+    static let truncationMarker = "… [输出已截断]"
     let maxLines: Int
     let maxBytes: Int
     private let exec: @Sendable (String) async throws -> String
@@ -36,7 +39,7 @@ nonisolated struct SSHCommandExecutor: CommandExecutor {
         if lines.count > maxLines { lines = Array(lines.prefix(maxLines)); truncated = true }
         var out = lines.joined(separator: "\n")
         if out.utf8.count > maxBytes { out = String(out.prefix(maxBytes)); truncated = true }
-        if truncated { out += "\n… [输出已截断]" }
-        return CommandResult(output: out, exitCode: exitCode)
+        if truncated { out += "\n" + truncationMarker }
+        return CommandResult(output: out, exitCode: exitCode, truncated: truncated)
     }
 }

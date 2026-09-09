@@ -458,7 +458,11 @@ nonisolated final class ControlServer: @unchecked Sendable {
     }
 
     private func readRequest(from fd: Int32) throws -> Data {
-        let deadline = makeDeadline()
+        // The read budget grows with what has already arrived, mirroring the
+        // write path: `maxRequestBytes` is sized for an 8 MiB base64 `sftp-put`,
+        // and a fixed 5 s budget would cut those off on a loaded machine. The
+        // total stays bounded because the body itself is capped below.
+        var deadline = makeDeadline()
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 8192)
         while true {
@@ -479,6 +483,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
             if data.count > ControlProtocol.maxRequestBytes {
                 throw ControlSocketError.requestTooLarge
             }
+            deadline = max(deadline, makeDeadline(bytes: data.count))
         }
         guard !data.isEmpty else { throw ControlSocketError.emptyRequest }
         return data

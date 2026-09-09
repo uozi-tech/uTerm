@@ -14,6 +14,10 @@ import Foundation
 ///   跑到一半才从 `BoundedExec` 里冒出来（那里拿不到质询，也没法把指纹回给 CLI）。
 /// - 空闲回收靠 `lastUsedAt` + 一个按需起停的清扫任务，不常驻 Timer；`now` 与间隔都
 ///   可注入，测试里能把 10 分钟压成一瞬。
+/// - **同一台主机的冷启动只建一次**：建连期间以 `Task` 占位（exec / SFTP 各一份），
+///   同时到来的第二个请求 `await` 同一个 Task。没有这层占位时，两条并发的 `run`
+///   会各建一条连接，后者覆盖前者入表，前者永远关不掉 —— fd 泄漏，而且远端多一条
+///   看不见的 SSH 会话。
 actor ControlConnectionPool: ControlConnectionPooling {
 
     /// 建连的三条外部依赖。生产用 `.live`，测试注入假的（池本身不认识 SSH）。
@@ -53,10 +57,12 @@ actor ControlConnectionPool: ControlConnectionPooling {
     private let connector: Connector
     private let idleInterval: Duration
     private let now: @Sendable () -> Date
-    /// 供 `heldHostIDsNow()` 读的同步镜像（`resolveHost` 那条路径不能 await）。
-    private nonisolated let mirror = HeldHostIDsMirror()
 
     private var entries: [UUID: Entry] = [:]
+    /// 建连中的占位。键是 hostID，exec 与 SFTP 各一份（两者独立建立）。
+    /// 后到的请求 `await` 同一个 Task，因此一台主机同一时刻只会有一次冷启动。
+    private var pendingExec: [UUID: Task<any ControlExecChannel, any Error>] = [:]
+    private var pendingSFTP: [UUID: Task<any SFTPProviding, any Error>] = [:]
     /// 最近一次建连被拒的主机密钥质询，按 hostID。`trust` 只认这里的指纹。
     private var challenges: [UUID: HostKeyChallenge] = [:]
     private var sweeper: Task<Void, Never>?
@@ -93,12 +99,34 @@ actor ControlConnectionPool: ControlConnectionPooling {
             touch(host.id)
             return existing
         }
-        let session = try await connect(for: host) { try await self.connector.makeSFTP(host) }
+        // 已经有人在建 → 搭车，不另起一条。
+        let task: Task<any SFTPProviding, any Error>
+        if let pending = pendingSFTP[host.id] {
+            task = pending
+        } else {
+            let make = connector.makeSFTP
+            task = Task.detached { try await make(host) }
+            pendingSFTP[host.id] = task
+        }
+        let session: any SFTPProviding
+        do {
+            session = try await task.value
+        } catch {
+            // 失败必须清掉占位，否则这台主机会一直「记得」上次的失败，重试也拿不到新连接。
+            clearPendingSFTP(host.id, task)
+            throw record(error, for: host)
+        }
+        clearPendingSFTP(host.id, task)
+        if let existing = entries[host.id]?.sftp {
+            // 竞态：别的路径已经先入表。关掉自己这条再复用它 —— 覆盖等于泄漏一条会话。
+            closeDetached(sftp: session)
+            touch(host.id)
+            return existing
+        }
         var entry = entries[host.id] ?? Entry(exec: nil, sftp: nil, lastUsedAt: now())
         entry.sftp = session
         entry.lastUsedAt = now()
         entries[host.id] = entry
-        syncMirror()
         scheduleSweep()
         return session
     }
@@ -109,28 +137,60 @@ actor ControlConnectionPool: ControlConnectionPooling {
             touch(host.id)
             return existing
         }
-        let channel = try await connect(for: host) { try await self.connector.makeExec(host) }
+        let task: Task<any ControlExecChannel, any Error>
+        if let pending = pendingExec[host.id] {
+            task = pending
+        } else {
+            let make = connector.makeExec
+            task = Task.detached { try await make(host) }
+            pendingExec[host.id] = task
+        }
+        let channel: any ControlExecChannel
+        do {
+            channel = try await task.value
+        } catch {
+            clearPendingExec(host.id, task)
+            throw record(error, for: host)
+        }
+        clearPendingExec(host.id, task)
+        if let existing = entries[host.id]?.exec {
+            closeDetached(exec: channel)
+            touch(host.id)
+            return existing
+        }
         var entry = entries[host.id] ?? Entry(exec: nil, sftp: nil, lastUsedAt: now())
         entry.exec = channel
         entry.lastUsedAt = now()
         entries[host.id] = entry
-        syncMirror()
         scheduleSweep()
         return channel
     }
 
-    /// 建连 + 质询缓存。任何 `ControlConnectError` 的主机密钥两态都会在这里落进
-    /// `challenges`，`trust` 再从这里取出来核对指纹。
-    private func connect<T>(
-        for host: HostConnectionSpec,
-        _ body: () async throws -> T
-    ) async throws -> T {
-        do {
-            return try await body()
-        } catch let error as ControlConnectError {
-            recordChallenge(error, for: host)
-            throw error
+    /// 只清掉**自己那次**的占位：搭车者恢复得晚，此时占位可能已经属于新一轮建连了。
+    private func clearPendingExec(_ hostID: UUID, _ task: Task<any ControlExecChannel, any Error>) {
+        if pendingExec[hostID] == task { pendingExec[hostID] = nil }
+    }
+
+    private func clearPendingSFTP(_ hostID: UUID, _ task: Task<any SFTPProviding, any Error>) {
+        if pendingSFTP[hostID] == task { pendingSFTP[hostID] = nil }
+    }
+
+    /// 关掉一条多余的连接。派到独立 Task，免得在建连路径里引入 await 重入。
+    private func closeDetached(exec channel: any ControlExecChannel) {
+        Task.detached { await channel.close() }
+    }
+
+    private func closeDetached(sftp session: any SFTPProviding) {
+        Task.detached { await session.close() }
+    }
+
+    /// 建连失败的收口：主机密钥两态落进 `challenges`（`trust` 从这里取指纹核对），
+    /// 错误原样上抛。
+    private func record(_ error: any Error, for host: HostConnectionSpec) -> any Error {
+        if let connectError = error as? ControlConnectError {
+            recordChallenge(connectError, for: host)
         }
+        return error
     }
 
     private func recordChallenge(_ error: ControlConnectError, for host: HostConnectionSpec) {
@@ -165,7 +225,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     func disconnect(hostID: UUID) async {
         guard let entry = entries.removeValue(forKey: hostID) else { return }
-        syncMirror()
         await close(entry)
     }
 
@@ -173,7 +232,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
         let all = entries
         entries.removeAll()
         challenges.removeAll()
-        syncMirror()
         sweeper?.cancel()
         sweeper = nil
         for entry in all.values {
@@ -183,10 +241,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     func heldHostIDs() async -> [UUID] {
         Array(entries.keys)
-    }
-
-    nonisolated func heldHostIDsNow() -> [UUID] {
-        mirror.value
     }
 
     // MARK: - 空闲回收
@@ -202,7 +256,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
             entries.removeValue(forKey: id)
         }
         guard !expired.isEmpty else { return entries.count }
-        syncMirror()
         let closing = expired
         Task.detached {
             for entry in closing {
@@ -220,10 +273,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
     private func close(_ entry: Entry) async {
         await entry.exec?.close()
         await entry.sftp?.close()
-    }
-
-    private func syncMirror() {
-        mirror.value = Array(entries.keys)
     }
 
     /// 起一个按需的清扫任务（不常驻）：每隔 `idleInterval` 扫一次，池空了就自己收摊。
@@ -360,23 +409,6 @@ extension ControlConnectionPool {
             return .authFailed(text)
         }
         return .connectFailed(text)
-    }
-}
-
-/// `heldHostIDsNow()` 的同步镜像。actor 外只读、actor 内每次增删同步一次。
-private nonisolated final class HeldHostIDsMirror: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: [UUID] = []
-
-    var value: [UUID] {
-        get {
-            lock.lock(); defer { lock.unlock() }
-            return stored
-        }
-        set {
-            lock.lock(); defer { lock.unlock() }
-            stored = newValue
-        }
     }
 }
 
