@@ -129,20 +129,22 @@ final class WorkspaceModel {
         terminalGroups.onTabRemoved = { removed, _ in removed.payload.dispose() }
         // 组内唯一标签拖到本组边缘 → 克隆。终端标签克隆 = 同服务器新开一条会话；
         // 文件标签克隆 = 同一个 buffer 再挂一份（对齐旧 `insertPane(copying:)`）。
-        terminalGroups.cloneTab = { tab in
+        terminalGroups.cloneTab = { [weak self] tab in
             if let buffer = tab.payload.fileBuffer {
-                return TerminalTab(payload: PaneModel(serverProfileID: tab.payload.serverProfileID,
-                                                      fileBuffer: buffer))
+                let pane = PaneModel(serverProfileID: tab.payload.serverProfileID, fileBuffer: buffer)
+                self?.stamp(pane)
+                return TerminalTab(payload: pane)
             }
-            return TerminalTab(payload: PaneModel(serverProfileID: tab.payload.serverProfileID),
-                               customTitle: tab.customTitle)
+            let pane = PaneModel(serverProfileID: tab.payload.serverProfileID)
+            self?.stamp(pane)
+            return TerminalTab(payload: pane, customTitle: tab.customTitle)
         }
         // 分屏按钮 / ⌘D 开的新组里放一条新会话 —— **保留旧的克隆语义**
         // （uTable 那边是有意开空组，理由是克隆大表的数据网格；终端没有这个问题，
         // 空的终端组只能显示一个「新建终端」按钮，白白多一次点击）。
         terminalGroups.makeTabForNewGroup = { [weak self] in
             guard let self, let seed = self.splitSeedServer() else { return nil }
-            return TerminalTab(payload: PaneModel(serverProfileID: seed.id),
+            return TerminalTab(payload: self.makePane(serverProfileID: seed.id),
                                customTitle: seed.title)
         }
     }
@@ -216,7 +218,7 @@ final class WorkspaceModel {
         terminalGroups.restore(snapshot.terminalGroupsForRestore) { tabSnap in
             guard knownServerIDs.isEmpty || knownServerIDs.contains(tabSnap.serverProfileID)
             else { return nil }
-            return TerminalTab(payload: PaneModel(serverProfileID: tabSnap.serverProfileID),
+            return TerminalTab(payload: self.makePane(serverProfileID: tabSnap.serverProfileID),
                                customTitle: tabSnap.title)
         }
 
@@ -244,6 +246,10 @@ final class WorkspaceModel {
         agentBackgroundRefreshTask?.cancel()
         agentBackgroundRefreshTask = nil
         for tab in terminalGroups.allTabs { tab.payload.dispose() }
+        // 窗格各自注销了会话；这里再把本窗口的 key/focus 状态从注册表里抹掉。
+        if let registrar = sessionRegistrar {
+            registrar.registry.forgetWindow(registrar.windowID)
+        }
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
         telemetryModel.stop()
@@ -281,6 +287,56 @@ final class WorkspaceModel {
         terminalGroups.activeTab?.payload.session
     }
 
+    // MARK: - 跨窗口会话注册表（CLI 的 terminals / terminal-read / terminal-send）
+
+    /// 本窗口发给旗下窗格的登记凭条。窗口视图注入注册表后才有值 ——
+    /// 单测 / 预览里为 nil，注册全链路是 no-op。
+    /// `@ObservationIgnored`：是接线不是状态。
+    @ObservationIgnored private(set) var sessionRegistrar: TerminalSessionRegistrar?
+
+    /// 由 `TerminalRegistryBinding`（窗口视图上挂的 ViewModifier）调用。
+    ///
+    /// 幂等：重复注入同一份凭条只会把现有窗格再 stamp 一遍。之所以要 stamp
+    /// **已存在**的窗格，是因为窗口视图的 `.task` 与窗格自己的建连 `.task` 谁先跑
+    /// SwiftUI 不保证 —— 晚到的凭条要能把已经连上的窗格补登记（`PaneModel.adopt`）。
+    func attachSessionRegistry(
+        _ registry: TerminalSessionRegistry,
+        windowID: UUID,
+        windowKind: String
+    ) {
+        let registrar = TerminalSessionRegistrar(
+            registry: registry, windowID: windowID, windowKind: windowKind)
+        sessionRegistrar = registrar
+        for tab in terminalGroups.allTabs { tab.payload.adopt(registrar: registrar) }
+    }
+
+    /// 当前前台的**终端**会话 id（文件窗格不算，返回 nil）。
+    /// `TerminalRegistryBinding` 用它做 `onChange` 的观察源 —— 那边不想 import
+    /// `UPaneGroups` 只为拿一个 `activeTab`。
+    var focusedTerminalSessionID: UUID? {
+        terminalGroups.activeTab.flatMap { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
+    }
+
+    /// 把当前活动的终端标签同步给注册表（喂 `isKeyWindowFocused`）。
+    /// 文件窗格不是终端会话，视作「本窗口没有终端在前台」。
+    func syncFocusedTerminalSession() {
+        guard let registrar = sessionRegistrar else { return }
+        registrar.registry.setFocusedSession(focusedTerminalSessionID, inWindow: registrar.windowID)
+    }
+
+    /// 新建窗格的唯一入口：建出来立刻打上登记凭条。
+    /// 组树的三个钩子（clone / 新组 / restore）与所有 `openXxx` 都必须走它，
+    /// 否则那条会话对 CLI 永远不可见。
+    private func makePane(serverProfileID: UUID, fileBuffer: FileBuffer? = nil) -> PaneModel {
+        let pane = PaneModel(serverProfileID: serverProfileID, fileBuffer: fileBuffer)
+        stamp(pane)
+        return pane
+    }
+
+    private func stamp(_ pane: PaneModel) {
+        pane.registrar = sessionRegistrar
+    }
+
     func connectSharedSFTP(profile: ServerProfile, modelContainer: ModelContainer) async {
         await fileBrowserModel.connect(profile: profile, modelContainer: modelContainer)
     }
@@ -290,7 +346,7 @@ final class WorkspaceModel {
     @discardableResult
     func openServer(profileID: UUID, title: String, in groupID: UUID? = nil) -> UUID {
         terminalGroups.openTab({
-            TerminalTab(payload: PaneModel(serverProfileID: profileID), customTitle: title)
+            TerminalTab(payload: self.makePane(serverProfileID: profileID), customTitle: title)
         }, in: groupID)
     }
 
@@ -386,7 +442,7 @@ final class WorkspaceModel {
         let serverID = group.activeTab?.payload.serverProfileID
             ?? defaultServerProfileID
             ?? UUID()
-        let tab = TerminalTab(payload: PaneModel(serverProfileID: serverID, fileBuffer: buffer))
+        let tab = TerminalTab(payload: makePane(serverProfileID: serverID, fileBuffer: buffer))
         // 空组的边缘 = 把一个空组再劈成两半，没有意义；一律并入。
         guard zone != .center, !group.tabs.isEmpty else {
             terminalGroups.openTab({ tab }, in: groupID)

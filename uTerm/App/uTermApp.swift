@@ -10,6 +10,9 @@ struct uTermApp: App {
     @AppStorage("appLanguage")
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
+    /// `terminal-open` 需要从 App 层捕获开窗口动作（见 Welcome 的 `.task`）。
+    @Environment(\.openWindow) private var openWindow
+
     @State private var appUpdater = AppUpdater()
     /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
     @State private var cloudKitSync = CloudKitSyncMonitor()
@@ -113,6 +116,16 @@ struct uTermApp: App {
                 .task {
                     cloudKitSync.start()
                     startControlInterface()
+                    // `terminal-open` 的开窗口入口：`TerminalWindowID` 只能在 Scene
+                    // 环境里开，所以在这里把 `openWindow` 捕成闭包塞进注册表
+                    //（与 `WelcomeView.handleConfigDrop` 里 `let open = openWindow`
+                    // 同款写法）。返回的是**窗口** id，会话要等它自己注册上来。
+                    let open = openWindow
+                    terminalRegistry.openTerminalWindow = { serverID in
+                        let windowID = UUID()
+                        open(value: TerminalWindowID(id: windowID, serverID: serverID))
+                        return windowID
+                    }
                 }
         }
         .modelContainer(modelContainer)

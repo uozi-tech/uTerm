@@ -301,6 +301,101 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
 
 }
 
+// MARK: - 读屏与注入（CLI `terminal-read` / `terminal-send`，Agent 的 read_terminal 也走这里）
+
+/// `injectInput` 的失败分类。协议层把它翻成 `terminal_disconnected`。
+nonisolated enum TerminalInjectionError: Error, Equatable {
+    /// 会话没有后端，或后端已断开 —— 注入无处可去。
+    case disconnected
+}
+
+extension TerminalSession {
+
+    /// 抓「最近 `lines` 行」的**快照**（不是流）：既含当前可见屏幕，也兜住刚滚走的输出。
+    ///
+    /// 必须在 MainActor 上跑（`terminalView` 是 NSView，缓冲区随渲染线程更新）——
+    /// 类型本身 `@MainActor`，由编译器保证。
+    ///
+    /// - Note: SwiftTerm 只把 `getScrollInvariantLine(row:)`（越界回 nil）、
+    ///   `buffer.totalLinesTrimmed`、`getTopVisibleRow()`、`rows` 开放出来；
+    ///   `buffer.lines` 与 `buffer.linesTop` 都是 **internal**，包外拿不到「缓冲区共几行」。
+    ///   所以末行靠越界探测反推（见 `scrollInvariantEndRow`）。**不要**为此去改
+    ///   `vendor/SwiftTerm` —— 那是带补丁清单的 vendored 副本，补丁越少越好。
+    func snapshotScreen(
+        lines: Int = ControlProtocol.defaultScreenLines,
+        maxBytes: Int = ControlProtocol.maxScreenBytes
+    ) -> TerminalScreenReader.Result {
+        guard lines > 0, let terminal = terminalView.terminal else {
+            return TerminalScreenReader.Result(lines: [], truncated: false)
+        }
+        let top = terminal.buffer.totalLinesTrimmed  // == buffer.linesTop
+        let end = scrollInvariantEndRow(terminal)    // 排他上界
+        guard end > top else { return TerminalScreenReader.Result(lines: [], truncated: false) }
+
+        // 多取一屏：尾部常是整屏空行（光标停在半屏），裁掉之后才够 `lines` 行有内容。
+        let want = lines + max(terminal.rows, 1)
+        let start = max(top, end - want)
+        var raw: [String] = []
+        raw.reserveCapacity(end - start)
+        for row in start..<end {
+            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
+            raw.append(line.translateToString(trimRight: true))
+        }
+
+        var result = TerminalScreenReader.trim(lines: raw, maxLines: lines, maxBytes: maxBytes)
+        // 起点被 `want` 卡住 → 上面还有历史没读出来，如实标截断。
+        if start > top { result.truncated = true }
+        return result
+    }
+
+    /// 反推 scroll-invariant 行号的**排他上界**（= `buffer.linesTop + buffer.lines.count`）。
+    ///
+    /// 两者都是 internal，只能靠 `getScrollInvariantLine(row:)` 越界回 nil 来二分：
+    /// 先从 `linesTop` 指数上探到第一个非法行号，再在 (合法, 非法] 之间收口。
+    /// 每次探测是一次 O(1) 数组下标，十万行 scrollback 也只要几十次。
+    ///
+    /// 为什么不能只用可见屏（`getTopVisibleRow() + rows`）：用户往上滚过之后，
+    /// 可见屏的底部不再是缓冲区末行，那样会读到「用户正在看的地方」而不是「最近的输出」。
+    private func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
+        let top = terminal.buffer.totalLinesTrimmed
+        guard terminal.getScrollInvariantLine(row: top) != nil else { return top }
+        var known = top                              // 已知合法
+        var step = max(terminal.rows, 1)
+        var unknown = known + step                   // 待验证
+        while terminal.getScrollInvariantLine(row: unknown) != nil {
+            known = unknown
+            step *= 2
+            unknown = known + step
+        }
+        while unknown - known > 1 {
+            let mid = known + (unknown - known) / 2
+            if terminal.getScrollInvariantLine(row: mid) != nil {
+                known = mid
+            } else {
+                unknown = mid
+            }
+        }
+        return known + 1
+    }
+
+    /// 往这条会话的 PTY 写文本 —— 与用户键入走**完全相同**的通道
+    /// （`backend.write` → `SSHConnection.write` → `state.enqueue(.write)`）。
+    ///
+    /// 因此：注入与用户键入会交错、**没有输出边界**（uTerm 与 vendored SwiftTerm 都
+    /// 没有 OSC 133 shell-integration 标记），不保证调用方能拿到这条命令的结果。
+    /// 要结果请走 `run`；`terminal-send` 的正当用途是「让用户看见」。
+    ///
+    /// - Parameter appendEnter: 追加 `\r`（回车）执行。
+    /// - Throws: `TerminalInjectionError.disconnected` —— 没有后端或状态不是 `.connected`。
+    func injectInput(_ text: String, appendEnter: Bool = false) async throws {
+        guard connectionState == .connected, let backend else {
+            throw TerminalInjectionError.disconnected
+        }
+        let payload = appendEnter ? text + "\r" : text
+        await backend.write(Data(payload.utf8))
+    }
+}
+
 // MARK: - 连接健康探测（ConnectionWatchdog）
 
 extension TerminalSession: ConnectionHealthProbing {
