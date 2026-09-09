@@ -40,7 +40,32 @@ extension ControlHandler {
     ///
     /// - Important: 所有需要主机的动作都必须经此入口，不要各自 fetch。
     func resolveHost(_ needle: String) throws(ControlFailure) -> ServerProfile {
-        throw ControlFailure.notImplemented("主机解析（resolveHost）")
+        // ⚠️ 临时实现（Wave 1D 为了让 `terminal-open` 可用 / 可测而先填的最小版本）：
+        // 只做「UUID 直达 → 名字精确」两级，**没有**忽略大小写与唯一前缀，
+        // 歧义时也没有把候选放进 `ControlFailure.hosts`。合并时以核心分支
+        //（`HostResolver` + 完整三级解析）为准，直接覆盖本方法。
+        let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ControlFailure(code: .invalid_request, message: "缺少 --host")
+        }
+        guard let deps = dependencies else {
+            throw ControlFailure(code: .app_not_ready, message: "uTerm 尚未完成启动")
+        }
+        let profiles = (try? deps.modelContainer.mainContext
+            .fetch(FetchDescriptor<ServerProfile>())) ?? []
+        if let uuid = UUID(uuidString: trimmed),
+           let hit = profiles.first(where: { $0.id == uuid }) {
+            return hit
+        }
+        let exact = profiles.filter { $0.name == trimmed }
+        if exact.count == 1 { return exact[0] }
+        if exact.count > 1 {
+            throw ControlFailure(
+                code: .host_ambiguous,
+                message: "「\(trimmed)」匹配到 \(exact.count) 台主机，请改用 UUID"
+            )
+        }
+        throw ControlFailure(code: .host_not_found, message: "没有名为「\(trimmed)」的主机")
     }
 
     /// 主机级硬规则：`sftpOnly` 的主机拒绝执行命令与终端操作。
