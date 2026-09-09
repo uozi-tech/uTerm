@@ -485,6 +485,8 @@ struct GlobalForwardingTitleBar: View {
                 Text("· \(hostCount) 台主机")
                     .font(UD.mono(12)).foregroundStyle(UD.text3)
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
             HStack(spacing: 0) { Color.clear.frame(width: 68); Spacer() }
         }
         .frame(height: 38)

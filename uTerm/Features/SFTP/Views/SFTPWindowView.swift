@@ -243,12 +243,13 @@ struct SFTPTitleBar: View {
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(serverTitle)
                 Text("\(server.username)@\(server.host)")
                     .font(UD.mono(12))
                     .foregroundStyle(UD.text3)
                 SFTPStatusPill(state: state)
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
 
             // 两侧：左让位红绿灯（~68px），右断开按钮。
             HStack(spacing: 2) {

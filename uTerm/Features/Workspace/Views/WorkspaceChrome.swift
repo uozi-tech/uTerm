@@ -37,11 +37,12 @@ struct WorkspaceTitleBar: View {
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(serverName)
                 if let session {
                     WSStatusPill(state: session.connectionState)
                 }
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
 
             // 两侧图标簇（Cursor 式，叠在居中内容之上，各自靠边）。
             HStack(spacing: 2) {
@@ -123,6 +124,11 @@ struct WSIconButton: View {
 /// 「拖窗口」，导致无法调宽。标题栏上的按钮 / 红绿灯是更靠前的控件，点击会被它们
 /// 自身消费，不会落到手柄；故只有标题栏空白处拖动才移窗。顺带画上 `UD.panel` 实色
 /// 底（取代原 `.background(UD.panel)`）——若再叠一层 SwiftUI 色块会遮挡命中、夺走拖动。
+///
+/// 标题栏里的**纯展示内容**（居中标题文字、状态胶囊等）必须 `.allowsHitTesting(false)`：
+/// 带 `.help` 的 `Text`、带 `Capsule` 底的胶囊都会被 SwiftUI 判为可命中，宿主视图随即
+/// 截走 mouseDown，`DragView` 收不到 —— 表现为「双击标题栏文字不缩放、按住文字拖不动窗口」
+/// （2026-09-09 在 1.10.3 实测：双击空白处缩放正常，双击服务器名 / 状态胶囊无反应）。
 struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = DragView()

@@ -232,6 +232,7 @@ private struct ImportTitleBar: View {
         HStack(spacing: 0) {
             Color.clear.frame(width: 84)
             Text("导入 SSH 配置").font(.system(size: 13, weight: .medium)).foregroundStyle(UD.text2)
+                .allowsHitTesting(false)   // 纯展示，不截走标题栏双击 / 拖动
             Spacer()
         }
         .frame(height: 38).frame(maxWidth: .infinity)

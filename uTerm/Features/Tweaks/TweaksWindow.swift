@@ -60,6 +60,7 @@ private struct TweaksTitleBar: View {
             Text("Tweaks")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(UD.text2)
+                .allowsHitTesting(false)   // 纯展示，不截走标题栏双击 / 拖动
             Spacer()
         }
         .frame(height: 36)

@@ -39,9 +39,11 @@ struct ParallelRunTitleBar: View {
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(commandName)
+                    // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+                    .allowsHitTesting(false)
                 ParBadge(ai: mode == .ai, count: total)
                     .padding(.leading, 4)
+                    .allowsHitTesting(false)
                 Spacer(minLength: 8)
 
                 ParModeToggle(mode: $mode)

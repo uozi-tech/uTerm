@@ -204,6 +204,8 @@ struct TerminalWindowTitleBar: View {
                     WSStatusPill(state: session.connectionState)
                 }
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
 
             // 两侧簇
             HStack(spacing: 8) {

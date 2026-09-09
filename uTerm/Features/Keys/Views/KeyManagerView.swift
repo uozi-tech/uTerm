@@ -342,6 +342,8 @@ private struct KeysTitleBar: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UD.text)
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
             HStack(spacing: 0) {
                 Color.clear.frame(width: 68)   // 让位窗口红绿灯
                 Spacer()

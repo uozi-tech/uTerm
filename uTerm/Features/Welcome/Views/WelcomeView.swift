@@ -638,6 +638,7 @@ struct WelcomeTitleBar: View {
             Text("uTerm")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(UD.text2)
+                .allowsHitTesting(false)   // 纯展示，不截走标题栏双击 / 拖动
             Spacer()
             // 全局转发入口：标题栏右侧 icon（按钮覆于 WindowDragHandle 之上，独立接收点击）。
             UDIconButton(systemImage: "arrow.left.arrow.right") {

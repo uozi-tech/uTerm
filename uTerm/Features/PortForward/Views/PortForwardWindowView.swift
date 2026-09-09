@@ -111,6 +111,8 @@ struct PortForwardTitleBar: View {
                     .font(UD.mono(12))
                     .foregroundStyle(UD.text3)
             }
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
+            .allowsHitTesting(false)
 
             // 左让位窗口红绿灯（标准位 ~x13–68）。
             HStack(spacing: 0) {
