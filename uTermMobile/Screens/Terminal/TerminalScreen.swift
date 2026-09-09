@@ -143,6 +143,10 @@ struct TerminalScreen: View {
     }
 
     private func openTab(_ host: ServerProfile, allowDuplicate: Bool) {
+        // 外部连接请求一律露出会话：用户可能先按返回「收起」到主机列表（`showPicker == true`，
+        // 右上角只剩「会话 N」胶囊），再从主机页 / 命令面板连同一台——此时 `activeID` 本就指着
+        // 它，若不复位列表态，连接中页收尾后露出的仍是列表，表现为「点了没反应」。
+        showPicker = false
         if !allowDuplicate,
            let existing = tabs.first(where: { $0.host.persistentModelID == host.persistentModelID }) {
             activeID = existing.id
