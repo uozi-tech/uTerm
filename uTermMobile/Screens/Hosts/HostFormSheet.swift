@@ -115,7 +115,6 @@ struct HostFormSheet: View {
         .onAppear(perform: load)
     }
 
-    @ViewBuilder
     /// 掩码 ⇄ 明文。`SecureField` 与 `TextField` 是两个不同的 UIKit 视图，换一个必然丢焦点
     /// —— 原来在编辑就等这拍界面更新落地后把焦点还回去，键盘不收。
     private func togglePasswordReveal() {
