@@ -1,59 +1,11 @@
 import Foundation
 import Darwin
 
-/// 转发组（`forward-*`）的纯逻辑：规则解析、线上形状构造、本机端口占用探测。
+/// 转发组（`forward-*`）的纯逻辑：线上形状构造与本机端口占用探测。
 ///
-/// 三块都不碰 SwiftData / 网络会话，`ControlForwardHandlerTests` 直接断言。
-
-// MARK: - 规则解析
-
-/// 规则名 / UUID → 规则 id 的四级解析。**与主机解析同构**（精确 → 忽略大小写 →
-/// 唯一前缀），但刻意不复用 `HostResolver` —— 两者的候选类型与歧义载荷不同，
-/// 强行共用只会把两边的规则绑死。
-nonisolated enum ControlForwardRuleResolver {
-
-    /// 一条候选规则的轻量元组（不吃 `@Model`：它既非 `Sendable` 也不便造夹具）。
-    struct Candidate: Sendable, Equatable {
-        let id: UUID
-        let name: String
-
-        init(id: UUID, name: String) {
-            self.id = id
-            self.name = name
-        }
-    }
-
-    enum Outcome: Sendable, Equatable {
-        case matched(UUID)
-        /// 同一级命中多条 —— 回 `rule_ambiguous`，并把候选（带 UUID）交给 CLI。
-        case ambiguous([Candidate])
-        case notFound
-    }
-
-    static func resolve(_ needle: String, in candidates: [Candidate]) -> Outcome {
-        let trimmed = needle.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return .notFound }
-
-        // 1) UUID 直达。
-        if let uuid = UUID(uuidString: trimmed) {
-            if candidates.contains(where: { $0.id == uuid }) { return .matched(uuid) }
-            return .notFound
-        }
-
-        // 2) 精确 → 3) 忽略大小写 → 4) 前缀（忽略大小写）。逐级短路。
-        let lowered = trimmed.lowercased()
-        let levels: [[Candidate]] = [
-            candidates.filter { $0.name == trimmed },
-            candidates.filter { $0.name.lowercased() == lowered },
-            candidates.filter { $0.name.lowercased().hasPrefix(lowered) }
-        ]
-        for level in levels {
-            if level.count == 1 { return .matched(level[0].id) }
-            if level.count > 1 { return .ambiguous(level) }
-        }
-        return .notFound
-    }
-}
+/// 两块都不碰 SwiftData / 网络会话，`ControlForwardHandlerTests` 直接断言。
+/// 规则名 / UUID 的解析**不在这里** —— 它与主机解析同构，直接用 `HostResolver`
+/// （`ControlHandler+Forward.resolveRule` 只负责把 outcome 翻成 `rule_*` 错误码）。
 
 // MARK: - 线上形状
 

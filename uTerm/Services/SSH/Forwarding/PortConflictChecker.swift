@@ -8,9 +8,28 @@ nonisolated enum PortConflictChecker {
     static let wellKnownPorts: [Int: String] = [22: "SSH", 631: "CUPS", 5000: "AirPlay"]
 
     /// 一次冲突的描述：被哪个端口、被谁（其它规则名 / 系统服务名）占用。
+    ///
+    /// `source` 必须带着 —— `occupant` 两支都是**名字**，规则起名叫 "AirPlay" 时
+    /// 光看字符串分不出这条是「真撞了另一条规则」还是「只是个知名端口的提醒」。
+    /// 调用方靠它决定拦（规则冲突）还是仅提示（知名端口）。
     struct Conflict: Equatable, Sendable {
+        /// 冲突来源。
+        enum Source: Equatable, Sendable {
+            /// 同侧另一条规则真占着这个口 —— 硬冲突。
+            case rule
+            /// 只是命中知名端口表（22 / 631 / 5000）—— 大概率撞系统服务，但只是提醒。
+            case wellKnownPort
+        }
+
         let port: Int
         let occupant: String
+        let source: Source
+
+        init(port: Int, occupant: String, source: Source) {
+            self.port = port
+            self.occupant = occupant
+            self.source = source
+        }
     }
 
     /// 两种转发是否绑定同一侧（决定端口是否真会互撞）。
@@ -35,11 +54,11 @@ nonisolated enum PortConflictChecker {
                 && r.listenPort == listenPort
                 && sameSide(kind, r.kind)
         }) {
-            return Conflict(port: listenPort, occupant: clash.name)
+            return Conflict(port: listenPort, occupant: clash.name, source: .rule)
         }
         // 2) 知名端口（仅本地绑定侧；remote 规则监听的是远端主机的端口，与本地系统服务无关）
         if !bindsRemoteSide(kind), let service = wellKnownPorts[listenPort] {
-            return Conflict(port: listenPort, occupant: service)
+            return Conflict(port: listenPort, occupant: service, source: .wellKnownPort)
         }
         return nil
     }

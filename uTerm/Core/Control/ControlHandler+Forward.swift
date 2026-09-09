@@ -61,23 +61,22 @@ extension ControlHandler {
         _ deps: Dependencies
     ) async throws -> ControlResponse {
         let rule = try resolveRule(request, deps)
-        let names = serverNames(deps)
-        let traffic = await deps.forwardingCoordinator.trafficSnapshot()
-
-        // 已在跑 → 幂等返回 ok。
-        let current = deps.forwardingCoordinator.status(rule.id)
-        if current == .active || current == .starting {
-            return .success(
-                id: request.id,
-                message: "规则「\(rule.name)」已在运行",
-                rules: [snapshot(of: rule, names: names, traffic: traffic, deps)]
-            )
-        }
-
         guard let profile = serverProfile(rule.serverID, deps) else {
             throw ControlFailure(
                 code: .host_not_found,
                 message: "规则「\(rule.name)」关联的主机档案已不存在"
+            )
+        }
+        let names = [rule.serverID: profile.name]
+
+        // 已在跑 → 幂等返回 ok。流量快照只在真要出快照时才拉（它要逐会话 await）。
+        let current = deps.forwardingCoordinator.status(rule.id)
+        if current == .active || current == .starting {
+            let traffic = await deps.forwardingCoordinator.trafficSnapshot()
+            return .success(
+                id: request.id,
+                message: "规则「\(rule.name)」已在运行",
+                rules: [snapshot(of: rule, names: names, traffic: traffic, deps)]
             )
         }
 
@@ -86,7 +85,7 @@ extension ControlHandler {
         }
 
         // 非交互 host-key：不弹 sheet，也不自动信任 —— 挑战一来就记下 fingerprint 并拒绝。
-        let relay = HostKeyChallengeRelay()
+        let relay = Self.forwardRelayFactoryForTesting?() ?? HostKeyChallengeRelay()
         let ruleSnapshot = rule.snapshot
         deps.forwardingCoordinator.start(
             ruleSnapshot,
@@ -115,6 +114,10 @@ extension ControlHandler {
             )
 
         case .hostKey(let challenge):
+            // 转发走的是自己的专用连接（不经连接池），挑战落在上面那个临时 relay 上。
+            // 补记进池里，`trust --fingerprint <值>` 才配得上对 —— 否则技能文档教的
+            // 「拿指纹 → trust → 重试」在转发这条路上会卡在 `invalid_request`。
+            await deps.pool.recordChallenge(hostID: profile.id, challenge)
             let changed = challenge.kind == .mismatch
             return .failure(
                 id: request.id,
@@ -137,6 +140,14 @@ extension ControlHandler {
                 rules: [snap]
             )
 
+        case .stopped:
+            return .failure(
+                id: request.id,
+                code: .forward_failed,
+                message: "规则「\(ruleSnapshot.name)」在启动期间被停止",
+                rules: [snap]
+            )
+
         case .timedOut(let seconds):
             return .failure(
                 id: request.id,
@@ -147,12 +158,25 @@ extension ControlHandler {
         }
     }
 
+    /// 仅测试用：替换 `forward-start` 那个非交互 relay。
+    ///
+    /// 挑战是异步落到 relay 上的，测试没法卡住那个时间窗；换成一个**预置了
+    /// `pendingChallenge`** 的 relay，「拿到挑战 → 记进连接池 → 回 `host_key_*`」
+    /// 这条链就变成确定的。生产路径永远是 nil（`?? HostKeyChallengeRelay()`）。
+    @MainActor static var forwardRelayFactoryForTesting: (() -> HostKeyChallengeRelay)?
+
     /// `forward-start` 的等待策略：`ForwardingCoordinator.start` 是同步返回、异步建连的，
     /// 所以这里轮询 `status(_:)` 直到离开 `.starting`。每一拍顺带看一眼 relay ——
     /// 有挑战就记下 fingerprint 并**立刻拒绝**（非交互路径不做 TOFU），让建连尽快失败。
     ///
     /// 上限取「设置 ▸ 高级」的 `sshConnectTimeout`（默认 30 s），与 app 自己建连的耐心一致。
-    private func waitForStart(
+    ///
+    /// `.inactive` 是**终态**，不是「还没开始」：`start` 第一件事就把状态推成 `.starting`
+    /// （认证解析失败时直接 `.error`），所以轮询期间再看到 `.inactive` 只可能是并发的
+    /// `stop` / `teardown` 写进去的。当成「仍在启动」空转到超时是纯浪费。
+    /// `internal`（而非 `private`）只为让 `ControlForwardHandlerTests` 直接驱动它：
+    /// `.starting` 期间的并发 `stop` 在端到端路径上没法卡准时间窗。
+    func waitForStart(
         ruleID: UUID,
         relay: HostKeyChallengeRelay,
         _ deps: Dependencies
@@ -172,7 +196,11 @@ extension ControlHandler {
             case .error(let failure):
                 if let challenge { return .hostKey(challenge) }
                 return .failed(failure)
-            case .inactive, .starting:
+            case .inactive:
+                // 并发的 stop / teardown 把规则停了 —— 立刻收工，别空转到超时。
+                if let challenge { return .hostKey(challenge) }
+                return .stopped
+            case .starting:
                 break
             }
             try? await Task.sleep(for: .milliseconds(50))
@@ -181,10 +209,13 @@ extension ControlHandler {
         return .timedOut(timeout)
     }
 
-    private enum ForwardStartOutcome {
+    /// 同 `waitForStart`：`internal` 是为了让测试能对结果做模式匹配。
+    enum ForwardStartOutcome {
         case started
         case hostKey(HostKeyChallenge)
         case failed(ForwardingError)
+        /// 启动期间被并发的 `stop` / `teardown` 停掉（状态回落 `.inactive`）。
+        case stopped
         case timedOut(Int)
     }
 
@@ -201,7 +232,8 @@ extension ControlHandler {
         _ deps: Dependencies
     ) async throws -> ControlResponse {
         let rule = try resolveRule(request, deps)
-        let names = serverNames(deps)
+        // 只需要这一台主机的名字，谓词查一条，别为一个键去 fetch 全表。
+        let names = [rule.serverID: serverProfile(rule.serverID, deps)?.name ?? ""]
         let wasRunning = deps.forwardingCoordinator.status(rule.id) != .inactive
         if wasRunning {
             deps.forwardingCoordinator.stop(rule.id)
@@ -217,10 +249,14 @@ extension ControlHandler {
     // MARK: - 端口预检
 
     /// 两道预检，都在把请求交给 NIO 之前做，让占用变成明确的 `port_in_use`：
-    /// 1. **规则之间**：`PortConflictChecker` 对当前在跑的同侧规则查重（知名端口那一
-    ///    支交给下面的真实探测判，界面里也只是警告而非拦截）；
+    /// 1. **规则之间**：`PortConflictChecker` 对当前在跑的同侧规则查重。只认
+    ///    `Conflict.source == .rule` —— 知名端口那一支（22 / 631 / 5000）在界面里
+    ///    也只是警告，这里交给下面的真实探测判；
     /// 2. **别的进程**：本地绑定侧（`-L` / `-D`）真绑一下 listenHost:listenPort。
     ///    `-R` 的口开在远端，本机探不到，交给远端报错。
+    ///
+    /// 不要退回「拿 `occupant` 去比 `wellKnownPorts` 的服务名」那种写法：`occupant`
+    /// 两支都是名字，用户把规则起名叫 "AirPlay" 时真冲突会被当成知名端口吞掉。
     private func portConflict(for rule: ForwardingRule, _ deps: Dependencies) -> String? {
         let running = forwardingRules(deps)
             .filter { $0.id != rule.id }
@@ -232,7 +268,7 @@ extension ControlHandler {
             listenPort: rule.listenPort,
             excluding: rule.id,
             against: running
-        ), PortConflictChecker.wellKnownPorts[clash.port] != clash.occupant {
+        ), clash.source == .rule {
             return "端口 \(clash.port) 已被规则「\(clash.occupant)」占用"
         }
 
@@ -277,8 +313,10 @@ extension ControlHandler {
 
     // MARK: - 规则解析
 
-    /// `--rule`（或 `--name`）→ `ForwardingRule`：UUID 直达 → 名字精确 → 忽略大小写
-    /// → 唯一前缀。给了 `--host` 时只在该主机的规则里找（同名规则跨主机是常态）。
+    /// `--rule`（或 `--name`）→ `ForwardingRule`：解析规则与主机完全同构，所以直接复用
+    /// `HostResolver`（UUID 直达 → 名字精确 → 忽略大小写 → 唯一前缀），只把错误码换成
+    /// `rule_not_found` / `rule_ambiguous`。给了 `--host` 时只在该主机的规则里找
+    ///（同名规则跨主机是常态）。
     private func resolveRule(
         _ request: ControlRequest,
         _ deps: Dependencies
@@ -297,10 +335,8 @@ extension ControlHandler {
             pool = pool.filter { $0.serverID == serverID }
         }
 
-        let candidates = pool.map {
-            ControlForwardRuleResolver.Candidate(id: $0.id, name: $0.name)
-        }
-        switch ControlForwardRuleResolver.resolve(needle, in: candidates) {
+        let candidates = pool.map { HostResolver.Candidate(id: $0.id, name: $0.name) }
+        switch HostResolver.resolve(needle, in: candidates) {
         case .matched(let id):
             guard let rule = pool.first(where: { $0.id == id }) else {
                 throw ControlFailure(code: .rule_not_found, message: "找不到转发规则「\(needle)」")

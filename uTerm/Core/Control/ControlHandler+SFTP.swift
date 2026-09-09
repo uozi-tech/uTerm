@@ -19,17 +19,6 @@ extension ControlHandler {
         _ request: ControlRequest,
         _ deps: Dependencies
     ) async throws -> ControlResponse {
-        switch request.action {
-        case .sftpLs, .sftpStat, .sftpCat, .sftpGet,
-             .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod:
-            break
-        default:
-            throw ControlFailure(
-                code: .invalid_request,
-                message: "动作 \(request.action.rawValue) 不属于文件组"
-            )
-        }
-
         let profile = try resolveHost(try Self.requiredHostNeedle(request))
         try requireExecCapable(profile, action: request.action)
 
@@ -197,7 +186,7 @@ extension ControlHandler {
         for profile: ServerProfile,
         _ deps: Dependencies
     ) async throws -> any SFTPProviding {
-        let spec = try ControlHostSpecResolver.resolve(
+        let spec = try HostConnectionSpec.resolve(
             profile: profile, container: deps.modelContainer)
         return try await deps.pool.sftp(for: spec)
     }

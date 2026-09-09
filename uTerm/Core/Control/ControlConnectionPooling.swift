@@ -182,6 +182,14 @@ protocol ControlConnectionPooling: Actor {
     /// 没有挑战说明还没跑过会触发建连的动作，`trust` 此时应回 `invalid_request`。
     func lastHostKeyChallenge(hostID: UUID) async -> HostKeyChallenge?
 
+    /// 登记一次**不走连接池**的建连拿到的主机密钥挑战。
+    ///
+    /// `forward-start` 用的是 `ForwardingCoordinator` 自己的专用连接（不经池），
+    /// 挑战落在它临时造的 `HostKeyChallengeRelay` 上。不补这一笔的话，后续
+    /// `trust --fingerprint <值>` 在池里找不到可核对的挑战，只能回 `invalid_request`
+    /// —— 技能文档教模型走的「拿指纹 → trust → 重试」在转发这条路上就断了。
+    func recordChallenge(hostID: UUID, _ challenge: HostKeyChallenge) async
+
     /// 按**钉住的指纹**信任一台主机的密钥：重新握手，只有服务器出示的指纹与
     /// `fingerprint` 逐字相同才批准并写 `KnownHost`（走 `HostKeyVerifier` 的 TOFU 路径）。
     /// 指纹不符抛 `ControlConnectError.hostKeyChanged` —— 绝不盲信。
