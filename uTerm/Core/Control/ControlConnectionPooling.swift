@@ -177,9 +177,6 @@ protocol ControlConnectionPooling: Actor {
     func disconnectAll() async
     /// 当前持有的主机 id（喂 `ping.openHosts` 与 `hosts.cliConnected`）。
     func heldHostIDs() async -> [UUID]
-    /// 同上，但**不需要 await** —— 给 `resolveHost` 这类同步路径填快照用。
-    /// 默认实现返回空数组，只有生产池维护这份镜像。
-    nonisolated func heldHostIDsNow() -> [UUID]
 
     /// 最近一次该主机建连时被拒的主机密钥挑战（`trust` 据此核对指纹）。
     /// 没有挑战说明还没跑过会触发建连的动作，`trust` 此时应回 `invalid_request`。
@@ -199,6 +196,4 @@ extension ControlConnectionPooling {
             maxBytes: ControlProtocol.defaultMaxBytes
         )
     }
-
-    nonisolated func heldHostIDsNow() -> [UUID] { [] }
 }

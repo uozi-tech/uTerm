@@ -186,6 +186,21 @@ extension ControlHandler {
     ///
     /// - Important: 所有需要主机的动作都必须经此入口，不要各自 fetch。
     func resolveHost(_ needle: String) throws(ControlFailure) -> ServerProfile {
+        guard let deps = dependencies else {
+            throw ControlFailure(code: .app_not_ready, message: "uTerm 尚未完成启动")
+        }
+        return try resolveHost(needle, in: sortedProfiles(deps), deps)
+    }
+
+    /// 同上，但吃**已经取好**的候选列表。
+    ///
+    /// `run-many` / `quick-run` 一次要解析 N 台主机，走上面那个重载等于 fetch + 排序
+    /// N 遍（SwiftData 的 fetch 不是免费的）。批量路径先取一次，再逐个喂进来。
+    func resolveHost(
+        _ needle: String,
+        in profiles: [ServerProfile],
+        _ deps: Dependencies
+    ) throws(ControlFailure) -> ServerProfile {
         let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw ControlFailure(
@@ -193,10 +208,6 @@ extension ControlHandler {
                 message: "缺少 --host（先跑 `utermctl hosts` 看有哪些主机）"
             )
         }
-        guard let deps = dependencies else {
-            throw ControlFailure(code: .app_not_ready, message: "uTerm 尚未完成启动")
-        }
-        let profiles = sortedProfiles(deps)
         let candidates = profiles.map { HostResolver.Candidate(id: $0.id, name: $0.name) }
         switch HostResolver.resolve(trimmed, in: candidates) {
         case .matched(let id):
@@ -209,11 +220,11 @@ extension ControlHandler {
             return profile
         case .ambiguous(let matches):
             let ids = Set(matches.map(\.id))
-            // 同步路径拿不到池的 await 结果，用镜像填 `cliConnected`。
-            let held = Set(deps.pool.heldHostIDsNow())
+            // 这里是同步路径，问不到连接池；候选的 `cliConnected` 由
+            // `ControlHandler.handle` 在收口时统一补（那里 await 得起）。
             let snapshots = profiles
                 .filter { ids.contains($0.id) }
-                .map { hostSnapshot($0, held: held, deps) }
+                .map { hostSnapshot($0, held: [], deps) }
             throw ControlFailure(
                 code: .host_ambiguous,
                 message: "「\(trimmed)」匹配到 \(matches.count) 台主机："

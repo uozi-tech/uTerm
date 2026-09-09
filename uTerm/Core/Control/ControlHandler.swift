@@ -136,7 +136,7 @@ final class ControlHandler {
                 id: request.id,
                 code: failure.code,
                 message: failure.message,
-                hosts: failure.hosts
+                hosts: await decorated(failure.hosts, deps)
             )
         } catch {
             return .failure(
@@ -144,6 +144,23 @@ final class ControlHandler {
                 code: .operation_failed,
                 message: error.localizedDescription
             )
+        }
+    }
+
+    /// 给失败响应里的候选主机补 `cliConnected`。
+    ///
+    /// `resolveHost` 是同步的（`throws(ControlFailure)`，各组都在它之后才 await），
+    /// 问不到连接池；而这里是 async 收口，一次 `await` 就能给所有组把这一列填对。
+    private func decorated(
+        _ hosts: [ControlHostSnapshot]?,
+        _ deps: Dependencies
+    ) async -> [ControlHostSnapshot]? {
+        guard let hosts, !hosts.isEmpty else { return hosts }
+        let held = Set(await deps.pool.heldHostIDs())
+        return hosts.map { snapshot in
+            var updated = snapshot
+            updated.cliConnected = UUID(uuidString: snapshot.id).map(held.contains) ?? false
+            return updated
         }
     }
 

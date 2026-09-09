@@ -25,11 +25,15 @@ final class ControlConnectionPoolTests: XCTestCase {
     private actor Factory {
         private(set) var made: [FakeChannel] = []
         var error: ControlConnectError?
+        /// 建连耗时。用来把「并发冷启动」这个竞态做成必然发生。
+        var delay: Duration?
         private(set) var trusted: [(UUID, String)] = []
 
         func setError(_ error: ControlConnectError?) { self.error = error }
+        func setDelay(_ delay: Duration?) { self.delay = delay }
 
-        func make() throws -> FakeChannel {
+        func make() async throws -> FakeChannel {
+            if let delay { try? await Task.sleep(for: delay) }
             if let error { throw error }
             let channel = FakeChannel(serial: made.count)
             made.append(channel)
@@ -112,7 +116,6 @@ final class ControlConnectionPoolTests: XCTestCase {
 
         held = await pool.heldHostIDs()
         XCTAssertEqual(held, [spec.id])
-        XCTAssertEqual(pool.heldHostIDsNow(), [spec.id], "同步镜像要跟着走（resolveHost 那条路要用）")
 
         let other = try makeSpec(name: "prod-db")
         _ = try await pool.executor(for: other)
@@ -139,6 +142,87 @@ final class ControlConnectionPoolTests: XCTestCase {
         await pool.disconnectAll()
     }
 
+    // MARK: 并发冷启动
+
+    /// 同一台主机的两条并发请求撞在「还没建好」的窗口里，只该建**一条**连接。
+    ///
+    /// 回归的是一个真实泄漏：没有 in-flight 占位时两边各建一条，后者覆盖前者入表，
+    /// 前者永远没人 `close()` —— 本机 fd 泄漏，远端还多一条看不见的 SSH 会话。
+    func testConcurrentColdStartsShareASingleConnection() async throws {
+        let factory = Factory()
+        let pool = makePool(factory: factory, clock: Clock())
+        let spec = try makeSpec()
+        await factory.setDelay(.milliseconds(200))
+
+        async let first = pool.executor(for: spec)
+        async let second = pool.executor(for: spec, maxLines: 5, maxBytes: 50)
+        let executors = try await [first, second]
+        XCTAssertEqual(executors.count, 2)
+        XCTAssertEqual(executors[1].maxLines, 5, "搭车者仍拿到自己那份裁剪参数")
+
+        let made = await factory.count()
+        XCTAssertEqual(made, 1, "并发冷启动只该建一条连接（否则后者覆盖前者 = fd 泄漏）")
+        let held = await pool.heldHostIDs()
+        XCTAssertEqual(held, [spec.id], "池里只该有一条记录")
+        await pool.disconnectAll()
+    }
+
+    /// 并发冷启动一起失败：两边都拿到错误，且占位被清掉 —— 下一次请求要能重新建连，
+    /// 不能一直「记得」上次失败。
+    func testConcurrentColdStartFailuresClearTheInFlightSlot() async throws {
+        let factory = Factory()
+        let pool = makePool(factory: factory, clock: Clock())
+        let spec = try makeSpec()
+        await factory.setDelay(.milliseconds(150))
+        await factory.setError(.connectFailed("网络不通"))
+
+        async let first = pool.executor(for: spec)
+        async let second = pool.executor(for: spec)
+        var codes: [ControlErrorCode] = []
+        do {
+            _ = try await first
+            XCTFail("建连失败时不该拿到执行器")
+        } catch {
+            codes.append((error as? ControlConnectError)?.code ?? .operation_failed)
+        }
+        do {
+            _ = try await second
+            XCTFail("搭车者也该拿到同一个失败")
+        } catch {
+            codes.append((error as? ControlConnectError)?.code ?? .operation_failed)
+        }
+        XCTAssertEqual(codes, [.connect_failed, .connect_failed])
+        var held = await pool.heldHostIDs()
+        XCTAssertTrue(held.isEmpty, "建连失败不该在池里留下半条记录")
+
+        // 占位已清 → 恢复正常后能重新建连。
+        await factory.setError(nil)
+        await factory.setDelay(nil)
+        _ = try await pool.executor(for: spec)
+        held = await pool.heldHostIDs()
+        XCTAssertEqual(held, [spec.id])
+        await pool.disconnectAll()
+    }
+
+    /// 并发冷启动撞上主机密钥未信任：两边都拒，且质询照样缓存给 `trust`。
+    func testConcurrentColdStartsStillCacheTheHostKeyChallenge() async throws {
+        let factory = Factory()
+        let pool = makePool(factory: factory, clock: Clock())
+        let spec = try makeSpec()
+        await factory.setDelay(.milliseconds(100))
+        await factory.setError(.hostKeyUnknown(fingerprint: "SHA256:abc", algorithm: ""))
+
+        async let first = pool.executor(for: spec)
+        async let second = pool.executor(for: spec)
+        _ = try? await first
+        _ = try? await second
+
+        let challenge = await pool.lastHostKeyChallenge(hostID: spec.id)
+        let cached = try XCTUnwrap(challenge)
+        XCTAssertEqual(cached.newFingerprint, "SHA256:abc")
+        await pool.disconnectAll()
+    }
+
     // MARK: 释放
 
     func testDisconnectClosesAndForgetsOneHost() async throws {
@@ -150,7 +234,6 @@ final class ControlConnectionPoolTests: XCTestCase {
         await pool.disconnect(hostID: spec.id)
         let held = await pool.heldHostIDs()
         XCTAssertTrue(held.isEmpty)
-        XCTAssertTrue(pool.heldHostIDsNow().isEmpty)
         let closed = await factory.channel(0).isClosed()
         XCTAssertTrue(closed, "释放必须真的关掉连接，否则 fd 泄漏")
 

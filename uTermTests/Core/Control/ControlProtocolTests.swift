@@ -233,6 +233,22 @@ final class ControlProtocolTests: XCTestCase {
 
     // MARK: 上限常量
 
+    /// `sftp-put` 的内容走 base64（膨胀 4/3），整条请求还得装得下 JSON 外壳。
+    /// 请求上限小于这个数时，大文件上传会在**发送途中**被服务端拒掉、连接被关，
+    /// 客户端只看得到 BrokenPipe —— 这条断言就是那次事故的闸。
+    func testRequestLimitFitsABase64EncodedMaximumFile() {
+        XCTAssertGreaterThanOrEqual(
+            ControlProtocol.maxRequestBytes,
+            ControlProtocol.maxFileBytes * 4 / 3,
+            "请求上限装不下 base64 后的 maxFileBytes，8 MiB 的 sftp-put 会在半路被拒"
+        )
+        XCTAssertGreaterThan(
+            ControlProtocol.maxRequestBytes,
+            ControlProtocol.maxFileBytes * 4 / 3,
+            "还要给 JSON 外壳（action / path / id / 转义）留富余"
+        )
+    }
+
     func testLimitsAreOrdered() {
         XCTAssertLessThan(ControlProtocol.defaultRunTimeoutSeconds, ControlProtocol.maxRunTimeoutSeconds)
         XCTAssertLessThan(ControlProtocol.defaultMaxBytes, ControlProtocol.maxOutputBytes)

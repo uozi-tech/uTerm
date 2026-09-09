@@ -154,6 +154,45 @@ class FakeServer(object):
             pass
 
 
+class RejectingServer(object):
+    """收满 1 KB 就回一条 `request_too_large` 并把连接拆掉 —— 复现服务端在客户端
+    还没写完请求时就拒收的场景（真实触发点是 `sftp put` 的请求体超过
+    `ControlProtocol.maxRequestBytes`）。拆连接的顺序与 `ControlServer.finish`
+    一致：先写响应，再 `shutdown(SHUT_RDWR)` + `close`。"""
+
+    def __init__(self, path):
+        self.path = path
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        self.sock.listen(8)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            try:
+                conn.recv(1024)
+                conn.sendall(json.dumps({
+                    "ok": False, "code": "request_too_large",
+                    "message": "IPC request body is too large",
+                }).encode("utf-8"))
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
 def run_cli(server, argv, expect_exit=0, socket_path=None, label=None):
     env = dict(os.environ)
     env["UTERM_CONTROL_SOCKET"] = socket_path if socket_path else server.path
@@ -173,14 +212,16 @@ def last(server):
 def main():
     root = tempfile.mkdtemp(prefix="utermctl-")
     server = FakeServer(os.path.join(root, "s.sock"))
+    rejecting = RejectingServer(os.path.join(root, "reject.sock"))
     try:
-        return exercise(server, root)
+        return exercise(server, root, rejecting)
     finally:
         server.close()
+        rejecting.close()
         shutil.rmtree(root, ignore_errors=True)
 
 
-def exercise(server, root):
+def exercise(server, root, rejecting):
     print("请求编码")
     run_cli(server, ["ping"])
     equal(last(server)["action"], "ping", "ping action")
@@ -201,6 +242,12 @@ def exercise(server, root):
 
     run_cli(server, ["run", "-H", "prod-web", "--", "echo", "a b"])
     equal(last(server)["command"], "echo 'a b'", "run 用 shlex.join 保护空格")
+
+    # `--` 是命令自己的参数分隔符，不能被客户端滤掉（滤掉就成了另一条命令）。
+    run_cli(server, ["run", "-H", "prod-web", "--", "grep", "--", "--include", "f"])
+    equal(last(server)["command"], "grep -- --include f", "命令里的 -- 原样保留")
+    run_cli(server, ["run", "-H", "prod-web", "--", "git", "log", "--", "path/to/file"])
+    equal(last(server)["command"], "git log -- path/to/file", "git log -- <路径> 不被吃掉")
 
     run_cli(server, ["run", "-H", "prod-web", "-c", "uptime", "--timeout", "30",
                      "--max-lines", "50", "--max-bytes", "9000"])
@@ -322,6 +369,46 @@ def exercise(server, root):
     for code, expected in cases:
         server.override = {"ok": False, "code": code, "message": code}
         run_cli(server, ["ping"], expect_exit=expected, label="code " + code)
+
+    print("run-many 的成败语义")
+    partial = {"ok": False, "code": "run_partial_failure",
+               "message": "2 台中 1 台失败",
+               "results": [RESULT, dict(RESULT, host="prod-db", exitCode=None,
+                                        errorCode="connect_failed",
+                                        errorMessage="连不上")]}
+    server.override = dict(partial)
+    proc = run_cli(server, ["run-many", "-H", "a", "-H", "b", "--format", "table",
+                            "--", "uptime"], expect_exit=7, label="run_partial_failure → 7")
+    check("── prod-db" in proc.stdout and "connect_failed" in proc.stdout,
+          "部分失败仍逐主机渲染 results")
+    check("up 12 days" in proc.stdout, "部分失败里成功那台的输出也要打出来")
+
+    server.override = dict(partial)
+    proc = run_cli(server, ["run-many", "-H", "a", "-H", "b", "--", "uptime"],
+                   expect_exit=7, label="run_partial_failure json")
+    check(json.loads(proc.stdout)["code"] == "run_partial_failure",
+          "json 格式失败响应原样输出")
+
+    server.override = {"ok": False, "code": "run_failed", "message": "2 台全部失败",
+                       "hostKey": {"host": "prod-web", "fingerprint": "SHA256:zzz",
+                                   "status": "unknown"},
+                       "results": [dict(RESULT, exitCode=None,
+                                        errorCode="host_key_unknown",
+                                        errorMessage="密钥未信任")]}
+    proc = run_cli(server, ["run-many", "-H", "a", "-H", "b", "--", "uptime"],
+                   expect_exit=5, label="run_failed → 5")
+    check(json.loads(proc.stdout)["hostKey"]["fingerprint"] == "SHA256:zzz",
+          "全失败时顶层 hostKey 可读")
+
+    print("服务端中途拒收")
+    big = os.path.join(root, "toobig.bin")
+    with open(big, "wb") as handle:
+        handle.write(b"\0" * (4 * 1024 * 1024))
+    proc = run_cli(server, ["sftp", "put", "-H", "prod-web", big, "/tmp/big"],
+                   expect_exit=1, socket_path=rejecting.path,
+                   label="请求体被中途拒收")
+    check(json.loads(proc.stdout)["code"] == "request_too_large",
+          "写请求时 EPIPE 要先读服务端已写回的响应，而不是报 socket_error")
 
     server.override = {"ok": False, "code": "host_key_unknown", "message": "未知主机密钥",
                        "hostKey": {"host": "h", "fingerprint": "SHA256:zzz",

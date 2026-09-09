@@ -193,9 +193,13 @@ final class ControlHandlerTests: XCTestCase {
     func testAmbiguousHostReturnsCandidatesWithUUIDs() async {
         let a = makeProfile(name: "web", host: "10.0.0.1")
         let b = makeProfile(name: "web", host: "10.0.0.2")
+        await pool.setHeld([a.id])
         let response = await handler.handle(ControlRequest(action: .run, host: "web", command: "x"))
         XCTAssertEqual(response.code, ControlErrorCode.host_ambiguous.rawValue)
         XCTAssertEqual(Set(response.hosts?.map(\.id) ?? []), [a.id.uuidString, b.id.uuidString])
+        // 候选的 cliConnected 由 `handle` 的收口 await 连接池补上（同步解析路径问不到）。
+        XCTAssertEqual(response.hosts?.first(where: { $0.id == a.id.uuidString })?.cliConnected, true)
+        XCTAssertEqual(response.hosts?.first(where: { $0.id == b.id.uuidString })?.cliConnected, false)
     }
 
     // MARK: - run
@@ -320,12 +324,145 @@ final class ControlHandlerTests: XCTestCase {
         let response = await handler.handle(
             ControlRequest(action: .runMany, hosts: ["c", "b", "a"], command: "uptime")
         )
-        XCTAssertTrue(response.ok)
+        // 有一台失败 → 整体不再是 ok（但另外两台照跑，结果都在）。
+        XCTAssertEqual(response.code, ControlErrorCode.run_partial_failure.rawValue)
         let results = try? XCTUnwrap(response.results)
         XCTAssertEqual(results?.map(\.host), ["c", "b", "a"], "结果必须按请求顺序回")
         XCTAssertEqual(results?[1].errorCode, ControlErrorCode.connect_failed.rawValue)
         XCTAssertNil(results?[0].errorCode)
         XCTAssertEqual(results?[2].exitCode, 0, "一台失败不该影响其它台")
+    }
+
+    /// 同一台主机被指了两次（重复 `-H`、名字 + UUID、大小写变体）只跑一遍。
+    ///
+    /// 回归的是一次崩溃：`quick-run` 用 `Dictionary(uniqueKeysWithValues:)` 建端点
+    /// 字典，重复的 hostID 直接 trap 掉整个 app。
+    func testRunManyMergesDuplicateHosts() async {
+        let web = makeProfile(name: "web")
+        await pool.setExec { _ in Self.wire("ok", exit: 0) }
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany,
+                           hosts: ["web", "web", "WEB", web.id.uuidString],
+                           command: "uptime")
+        )
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.results?.count, 1, "四种写法指的是同一台，只该有一条结果")
+        let requests = await pool.executorRequests
+        XCTAssertEqual(requests.count, 1, "同一台主机不该被跑两遍")
+        XCTAssertTrue(response.message.contains("合并"), response.message)
+    }
+
+    func testQuickRunMergesDuplicateHostOverridesWithoutCrashing() async {
+        let web = makeProfile(name: "web")
+        let store = QuickCommandStore(context: container.mainContext)
+        let command = store.create(name: "磁盘", serverIDs: [web.id], command: "df -h",
+                                   aiAssisted: false)
+        await pool.setExec { _ in Self.wire("ok", exit: 0) }
+
+        let response = await handler.handle(
+            ControlRequest(action: .quickRun,
+                           hosts: ["web", web.id.uuidString, "WEB"],
+                           name: "磁盘")
+        )
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.results?.count, 1)
+        XCTAssertEqual(store.runs(for: command.id).first?.results.count, 1,
+                       "运行日志里也该是去重后的一台")
+    }
+
+    // MARK: - run-many 的成败语义
+
+    /// 全部失败**不能**再回 `ok: true` —— `utermctl run-many … && 下一步` 会被骗。
+    func testRunManyReportsRunFailedWhenNoHostSucceeds() async {
+        makeProfile(name: "a", host: "10.0.0.1", sortOrder: 0)
+        makeProfile(name: "b", host: "10.0.0.2", sortOrder: 1)
+        await pool.setError(.connectFailed("都连不上"))
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany, hosts: ["a", "b"], command: "uptime")
+        )
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.run_failed.rawValue)
+        XCTAssertEqual(response.results?.count, 2, "逐台结果照旧要在")
+    }
+
+    func testRunManyReportsPartialFailure() async {
+        makeProfile(name: "a", host: "10.0.0.1", sortOrder: 0)
+        let b = makeProfile(name: "b", host: "10.0.0.2", sortOrder: 1)
+        await pool.setExec { _ in Self.wire("ok", exit: 0) }
+        await pool.setError(.connectFailed("b 连不上"), for: b.id)
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany, hosts: ["a", "b"], command: "uptime")
+        )
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.run_partial_failure.rawValue)
+        XCTAssertEqual(response.results?.map(\.host), ["a", "b"])
+        XCTAssertNil(response.results?[0].errorCode)
+    }
+
+    /// 命令自己返回非 0 也算这台失败（`run-many` 的语义是「都成了吗」）。
+    func testRunManyCountsNonZeroExitAsAFailedHost() async {
+        makeProfile(name: "a", host: "10.0.0.1", sortOrder: 0)
+        makeProfile(name: "b", host: "10.0.0.2", sortOrder: 1)
+        await pool.setExec { _ in Self.wire("boom", exit: 3) }
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany, hosts: ["a", "b"], command: "false")
+        )
+        XCTAssertEqual(response.code, ControlErrorCode.run_failed.rawValue)
+        XCTAssertEqual(response.results?.first?.exitCode, 3)
+    }
+
+    /// 未知主机密钥：顶层 `hostKey` 要有（模型读顶层拿指纹），逐条也要有
+    /// （多台首连时只有逐条那份说得清是哪几台）。
+    func testRunManySurfacesHostKeyAtTopLevelAndPerResult() async {
+        let a = makeProfile(name: "a", host: "10.0.0.1", sortOrder: 0)
+        let b = makeProfile(name: "b", host: "10.0.0.2", sortOrder: 1)
+        await pool.setError(.hostKeyUnknown(fingerprint: "SHA256:aaa", algorithm: "ssh-ed25519"),
+                            for: a.id)
+        await pool.setError(.hostKeyUnknown(fingerprint: "SHA256:bbb", algorithm: "ssh-rsa"),
+                            for: b.id)
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany, hosts: ["a", "b"], command: "uptime")
+        )
+        XCTAssertEqual(response.code, ControlErrorCode.run_failed.rawValue)
+        XCTAssertEqual(response.hostKey?.fingerprint, "SHA256:aaa", "顶层取第一台")
+        XCTAssertEqual(response.hostKey?.status, "unknown")
+        XCTAssertEqual(response.results?.map { $0.hostKey?.fingerprint },
+                       ["SHA256:aaa", "SHA256:bbb"], "逐条各带各的指纹")
+        XCTAssertEqual(response.results?.last?.hostKey?.algorithm, "ssh-rsa")
+    }
+
+    /// 单机 `run` 的非零退出仍然是 `ok: true` —— 那是命令的结果，不是 IPC 的失败。
+    func testQuickRunReportsRunFailedWhenEveryHostFails() async {
+        let web = makeProfile(name: "web")
+        let store = QuickCommandStore(context: container.mainContext)
+        store.create(name: "磁盘", serverIDs: [web.id], command: "df -h", aiAssisted: false)
+        await pool.setError(.authFailed("密码不对"))
+
+        let response = await handler.handle(ControlRequest(action: .quickRun, name: "磁盘"))
+        XCTAssertEqual(response.code, ControlErrorCode.run_failed.rawValue)
+        XCTAssertEqual(response.results?.first?.errorCode, ControlErrorCode.auth_failed.rawValue)
+    }
+
+    /// 输出被裁剪时 `truncated` 由执行器直接带出（不再靠嗅探末尾文案）。
+    func testRunReportsTruncationFromTheExecutor() async {
+        makeProfile(name: "web")
+        await pool.setExec { _ in
+            Self.wire((1...50).map { "line \($0)" }.joined(separator: "\n"), exit: 0)
+        }
+        let response = await handler.handle(
+            ControlRequest(action: .run, host: "web", command: "seq 50", maxLines: 5)
+        )
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.result?.truncated, true)
+        XCTAssertTrue(
+            response.result?.output.hasSuffix(SSHCommandExecutor.truncationMarker) == true,
+            response.result?.output ?? ""
+        )
     }
 
     func testRunManyRejectsTheWholeBatchWhenAHostNameIsWrong() async {

@@ -443,9 +443,12 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
     public var durationMs: Int
     /// 超时。**语句本身可能还在远端跑**（Citadel exec 不可取消）。
     public var timedOut: Bool
-    /// 该主机单独失败时的错误码（整批不失败）。
+    /// 该主机单独失败时的错误码（`run-many` 里其它台照跑）。
     public var errorCode: String?
     public var errorMessage: String?
+    /// 该主机的主机密钥状态。只在 `host_key_unknown` / `host_key_changed` 时非 nil ——
+    /// `run-many` 的顶层只能挑一台报，逐条带上模型才知道到底是哪几台要 `trust`。
+    public var hostKey: ControlHostKeyInfo?
 
     public init(
         host: String,
@@ -456,7 +459,8 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
         durationMs: Int = 0,
         timedOut: Bool = false,
         errorCode: String? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        hostKey: ControlHostKeyInfo? = nil
     ) {
         self.host = host
         self.hostID = hostID
@@ -467,6 +471,7 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
         self.timedOut = timedOut
         self.errorCode = errorCode
         self.errorMessage = errorMessage
+        self.hostKey = hostKey
     }
 }
 
@@ -736,6 +741,10 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
 
     // 执行
     case command_timeout
+    /// `run-many` / `quick-run`：有成功也有失败。逐条结果在 `results` 里。
+    case run_partial_failure
+    /// `run-many` / `quick-run`：**一台都没成功**。
+    case run_failed
 
     // 文件
     case file_not_found
@@ -767,7 +776,13 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
 // MARK: - 常量与编解码
 
 nonisolated public enum ControlProtocol {
-    public static let maxRequestBytes = 1_048_576
+    /// 一条请求的字节上限。
+    ///
+    /// **必须从 `maxFileBytes` 推导**：`sftp-put` 把文件塞进 `contentBase64`，base64
+    /// 膨胀 4/3，再加上 JSON 字段与路径的开销。写死 1 MiB 时，超过 ~768 KiB 的上传会在
+    /// **发送途中**被服务端拒掉并关连接，客户端只看得到 BrokenPipe，报成毫无线索的
+    /// `socket_error`。64 KiB 的富余留给 JSON 外壳（action / path / id / 转义）。
+    public static let maxRequestBytes = maxFileBytes * 4 / 3 + 64 * 1024
 
     /// `sockaddr_un.sun_path` 的字节上限（含结尾 NUL）。
     ///
@@ -827,9 +842,17 @@ nonisolated public enum ControlProtocol {
         try JSONDecoder().decode(ControlRequest.self, from: data)
     }
 
+    /// 统一的时间序列化用的 formatter。
+    ///
+    /// `ISO8601DateFormatter` 的 `string(from:)` 是**线程安全**的（Foundation 的
+    /// formatter 只要不在使用中改配置就可并发读），而它的构造并不便宜 —— `hosts` /
+    /// `forward-list` 这类列表动作一条快照要调好几次，每次新建一个纯属浪费。
+    /// 这里构造完就再也不改配置，故 `nonisolated(unsafe)` 是安全的。
+    private nonisolated(unsafe) static let iso8601Formatter = ISO8601DateFormatter()
+
     /// 统一的时间序列化（快照里所有时间字段都用它）。
     public static func iso8601(_ date: Date?) -> String? {
         guard let date else { return nil }
-        return ISO8601DateFormatter().string(from: date)
+        return iso8601Formatter.string(from: date)
     }
 }
