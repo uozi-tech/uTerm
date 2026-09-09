@@ -40,7 +40,28 @@ extension ControlHandler {
     ///
     /// - Important: 所有需要主机的动作都必须经此入口，不要各自 fetch。
     func resolveHost(_ needle: String) throws(ControlFailure) -> ServerProfile {
-        throw ControlFailure.notImplemented("主机解析（resolveHost）")
+        // TODO(Wave 1，core 分支)：这是**临时实现**，只做 UUID 直达 + 名字精确匹配，
+        // 为的是让 SFTP / 转发两组 handler 能编译并在单测里跑通。合并时以 core 分支的
+        // `HostResolver` 三级解析（忽略大小写 / 唯一前缀 / 歧义候选）为准，整段丢弃。
+        guard let deps = dependencies else {
+            throw ControlFailure(code: .app_not_ready, message: "uTerm 尚未完成启动")
+        }
+        let profiles = (try? deps.modelContainer.mainContext
+            .fetch(FetchDescriptor<ServerProfile>())) ?? []
+
+        if let uuid = UUID(uuidString: needle),
+           let hit = profiles.first(where: { $0.id == uuid }) {
+            return hit
+        }
+        let exact = profiles.filter { $0.name == needle }
+        if exact.count == 1 { return exact[0] }
+        if exact.count > 1 {
+            throw ControlFailure(
+                code: .host_ambiguous,
+                message: "「\(needle)」匹配到多台主机，请改用 UUID"
+            )
+        }
+        throw ControlFailure(code: .host_not_found, message: "找不到主机「\(needle)」")
     }
 
     /// 主机级硬规则：`sftpOnly` 的主机拒绝执行命令与终端操作。

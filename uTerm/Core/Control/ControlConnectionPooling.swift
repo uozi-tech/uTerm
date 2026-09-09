@@ -43,7 +43,26 @@ nonisolated struct HostConnectionSpec: Sendable {
         profile: ServerProfile,
         container: ModelContainer
     ) throws -> HostConnectionSpec {
-        throw ControlConnectError.connectFailed("HostConnectionSpec.resolve 尚未实现")
+        // TODO(Wave 1，core 分支)：**临时实现**，只走 `SSHAuthResolver.resolve(profile:keychain:)`
+        // 这一条最短路径，为的是让 SFTP 组 handler 能编译。合并时以 core 分支为准。
+        let keychain = KeychainStore()
+        let auth: ResolvedAuth
+        var jumpAuth: ResolvedAuth?
+        do {
+            auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
+            if let jump = profile.jumpHost {
+                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
+            }
+        } catch {
+            throw ControlConnectError.authFailed(FriendlyError.describe(error))
+        }
+        return HostConnectionSpec(
+            id: profile.id,
+            name: profile.name,
+            profile: SSHConnection.ProfileSnapshot(profile),
+            auth: auth,
+            jumpAuth: jumpAuth
+        )
     }
 }
 
