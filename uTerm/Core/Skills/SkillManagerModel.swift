@@ -7,6 +7,8 @@ import Observation
 @Observable
 final class SkillManagerModel {
     private let installers: [SkillInstaller]
+    /// 可选的 `~/.local/bin/utermctl` 链接（默认关，见设置页开关）。
+    private let binLink: BinLinkInstaller
     /// 本机在用的工具（CLI 配置目录存在），即可安装技能的对象。
     private(set) var availableTargets: [SkillTarget] = []
     private(set) var statuses: [SkillTarget: SkillInstallStatus] = [:]
@@ -15,11 +17,16 @@ final class SkillManagerModel {
     /// 正在执行安装/卸载的 target，用于禁用按钮并避免重复点击。
     private(set) var busyTargets: Set<SkillTarget> = []
     var lastError: String?
+    /// `~/.local/bin/utermctl` 的当前状态（与技能安装分开：它是独立开关）。
+    private(set) var binLinkStatus: SkillInstallStatus = .notInstalled
+    private(set) var binLinkBusy = false
 
     init(
-        installers: [SkillInstaller] = SkillDefinition.catalog.map { SkillInstaller(definition: $0) }
+        installers: [SkillInstaller] = SkillDefinition.catalog.map { SkillInstaller(definition: $0) },
+        binLink: BinLinkInstaller = BinLinkInstaller()
     ) {
         self.installers = installers
+        self.binLink = binLink
     }
 
     func status(for target: SkillTarget) -> SkillInstallStatus {
@@ -61,6 +68,38 @@ final class SkillManagerModel {
         availableTargets = snapshot.targets
         statuses = snapshot.statuses
         didLoad = true
+        await refreshBinLink()
+    }
+
+    // MARK: - ~/.local/bin/utermctl
+
+    func refreshBinLink() async {
+        let binLink = self.binLink
+        binLinkStatus = await Task.detached { binLink.status() }.value
+    }
+
+    /// 打开开关就建链接、关掉就删。与技能安装互不影响：不装任何技能也能只要这条链接
+    /// （客户端源目录由 `install()` 里的 `materializeSource()` 顺带物化）。
+    func setBinLinkEnabled(_ enabled: Bool) async {
+        guard !binLinkBusy else { return }
+        binLinkBusy = true
+        defer { binLinkBusy = false }
+        let binLink = self.binLink
+        do {
+            try await Task.detached { enabled ? try binLink.install() : try binLink.uninstall() }.value
+            lastError = nil
+        } catch {
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        await refreshBinLink()
+    }
+
+    /// 开关记在 `UserDefaults` 里，链接却可能被外部删掉（清理脚本、换 home）。
+    /// 打开设置页时按开关状态补一次，只在「开着但没链上」时动手。
+    func reconcileBinLink(enabled: Bool) async {
+        await refreshBinLink()
+        guard enabled, binLinkStatus.canInstall else { return }
+        await setBinLinkEnabled(true)
     }
 
     func install(_ target: SkillTarget) async {

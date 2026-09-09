@@ -262,3 +262,141 @@ nonisolated struct SkillInstaller: Sendable {
         return info.st_mode & S_IFMT
     }
 }
+
+// MARK: - ~/.local/bin/utermctl（可选）
+
+/// 把技能自带的客户端再往 `~/.local/bin/utermctl` 链一条，让它进用户的 PATH。
+///
+/// **默认关**（设置页开关，`UserDefaults` 键 `control.linkToLocalBin`）。技能自带的
+/// `~/.<tool>/skills/uterm-run/bin/utermctl` 才是主路径 —— 装了技能就一定能跑，不依赖
+/// 用户的 shell 环境；这条链接只是给「在自己终端里也想直接敲 utermctl」的人省一步。
+///
+/// 链接目标与技能目录里的那条**同源**（都指向 `<appSupport>/uTerm/Skills/uterm-run/
+/// bin/utermctl`），所以 app 升级时两边同时更新，不存在版本漂移。
+///
+/// 冲突规则与 `SkillInstaller` 一致：只认自己建的符号链接，同名真实文件（比如用户
+/// 自己编译的同名工具）判 `conflict` 且绝不覆盖。
+///
+/// 沙盒下要能写到这里，`uTerm.entitlements` 必须有
+/// `temporary-exception.files.home-relative-path.read-write` 的 `/.local/bin/`。
+nonisolated struct BinLinkInstaller: Sendable {
+    /// 客户端所属的那份技能（`uterm-run`）。
+    let installer: SkillInstaller
+    /// 客户端在技能源目录里的相对路径。
+    let relativeExecutablePath: String
+
+    init(
+        installer: SkillInstaller = SkillInstaller(definition: .uTermRun),
+        relativeExecutablePath: String = "bin/utermctl"
+    ) {
+        self.installer = installer
+        self.relativeExecutablePath = relativeExecutablePath
+    }
+
+    /// `<appSupport>/uTerm/Skills/uterm-run/bin/utermctl`。
+    var sourceURL: URL {
+        installer.sourceDirectoryURL
+            .appending(path: relativeExecutablePath)
+            .standardizedFileURL
+    }
+
+    /// `<home>/.local/bin`。
+    var binDirectoryURL: URL {
+        installer.homeDirectoryURL
+            .appending(path: ".local", directoryHint: .isDirectory)
+            .appending(path: "bin", directoryHint: .isDirectory)
+            .standardizedFileURL
+    }
+
+    /// `<home>/.local/bin/utermctl`。
+    var linkURL: URL {
+        binDirectoryURL.appending(path: executableName)
+    }
+
+    private var executableName: String {
+        String(relativeExecutablePath.split(separator: "/").last ?? "utermctl")
+    }
+
+    func status() -> SkillInstallStatus {
+        guard let type = SkillInstaller.fileType(at: linkURL) else {
+            return .notInstalled
+        }
+        guard type == S_IFLNK else {
+            return .conflict(reason: type == S_IFDIR
+                ? "~/.local/bin/\(executableName) 是一个目录"
+                : "~/.local/bin/\(executableName) 已被别的文件占用（非 uTerm 创建）")
+        }
+        guard let destination = try? FileManager.default
+            .destinationOfSymbolicLink(atPath: linkURL.path) else {
+            return .conflict(reason: "无法读取符号链接目标")
+        }
+        // 与 SkillInstaller 一样按字面路径比较，不做 resolvingSymlinksInPath。
+        let resolved = (destination as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: destination).standardizedFileURL
+            : linkURL.deletingLastPathComponent()
+                .appending(path: destination).standardizedFileURL
+        guard resolved.path == sourceURL.path else {
+            if looksLikeManagedClient(resolved) {
+                return .managedByOtherInstance(path: resolved.path)
+            }
+            return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        }
+        return SkillInstaller.fileType(at: sourceURL) == nil ? .brokenLink : .installed
+    }
+
+    /// 目标形如 `…/uTerm/Skills/<slug>/bin/<executable>` 就是另一个 uTerm 实例
+    /// （沙盒／非沙盒）建的，可接管；否则是与 uTerm 无关的链接，判冲突。
+    private func looksLikeManagedClient(_ url: URL) -> Bool {
+        let parts = url.standardizedFileURL.pathComponents
+        guard parts.count >= 5,
+              parts[parts.count - 1] == executableName,
+              parts[parts.count - 2] == "bin"
+        else { return false }
+        let skillRoot = url.deletingLastPathComponent().deletingLastPathComponent()
+        return SkillInstaller.looksLikeManagedSkillSource(
+            skillRoot, slug: installer.definition.slug)
+    }
+
+    /// 物化客户端 → 建 `~/.local/bin` → 建链接。真冲突抛错，绝不覆盖用户的文件。
+    func install() throws {
+        try installer.materializeSource()
+        switch status() {
+        case .installed, .brokenLink:
+            // brokenLink 的源刚被 materializeSource 补回来了，链接本身还指着它。
+            return
+        case .conflict(let reason):
+            throw SkillInstallError.failed(reason)
+        case .managedByOtherInstance:
+            do {
+                try FileManager.default.removeItem(at: linkURL)
+            } catch {
+                throw SkillInstallError.failed(
+                    "无法接管既有的 ~/.local/bin/\(executableName)（\(error.localizedDescription)）"
+                )
+            }
+        case .notInstalled:
+            break
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: binDirectoryURL, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: sourceURL)
+        } catch {
+            throw SkillInstallError.failed(
+                "无法写入 \(linkURL.path)（\(error.localizedDescription)）"
+            )
+        }
+    }
+
+    /// 只删「确认由 uTerm 建的」符号链接。
+    func uninstall() throws {
+        switch status() {
+        case .installed, .brokenLink, .managedByOtherInstance:
+            try FileManager.default.removeItem(at: linkURL)
+        case .notInstalled:
+            return
+        case .conflict(let reason):
+            throw SkillInstallError.failed("未删除（\(reason)）")
+        }
+    }
+}
