@@ -32,6 +32,27 @@ nonisolated struct SFTPDownloadLimitExceeded: Error, Sendable, Equatable {
     let maximumBytes: Int
 }
 
+/// `create` 模式撞上已存在的文件。
+///
+/// 真实的 `SFTPSession` 走 SSH_FXF_EXCL，服务端回的是 `SSH_FX_FAILURE`（v3 没有
+/// 「已存在」这个码）；内存替身抛这个强类型错误。两条路径最后都被
+/// `ControlFilePayloadBuilder.errorCode(for:)` 归到 `file_exists`。
+nonisolated struct SFTPFileExistsError: Error, Sendable, Equatable {
+    let path: String
+
+    init(path: String) { self.path = path }
+}
+
+/// `writeRange` 的打开语义。
+nonisolated enum SFTPWriteMode: String, Sendable, CaseIterable {
+    /// 已存在 → 失败（SSH_FXF_CREAT | SSH_FXF_EXCL）。默认档，防止误覆盖。
+    case create
+    /// 截断后写（SSH_FXF_CREAT | SSH_FXF_TRUNC）。
+    case overwrite
+    /// 不截断、写到给定 offset，不存在则创建（SSH_FXF_CREAT）。多分片并行写同一文件用这档。
+    case write
+}
+
 /// 控制真实传输进度回调频率：首个数据块立即上报，后续按时间节流，完成必达。
 nonisolated struct TransferProgressEmitter: Sendable {
     private let totalBytes: Int64
@@ -93,6 +114,14 @@ protocol SFTPProviding: Actor {
 
     /// 把 `data` 完整写到 `path`（覆盖）。
     func write(_ path: String, data: Data) async throws
+
+    /// 把 `data` 写到 `path` 的 `[offset, offset + data.count)`，按 `mode` 决定打开语义。
+    /// 分片 / 断点续传的基础原语：多个 `.write` 调用可以并行落在同一文件的不同区间。
+    func writeRange(_ path: String, offset: UInt64, data: Data, mode: SFTPWriteMode) async throws
+
+    /// 读 `path` 的 `[offset, offset + length)`。到 EOF 会短（返回的字节数少于 `length`），
+    /// 不是错误。
+    func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data
 
     /// 获取远程文件元信息（size + mtime）。文件不存在时抛错。
     func stat(_ path: String) async throws -> RemoteStat
@@ -158,4 +187,43 @@ extension SFTPProviding {
 
     /// 默认恒真 —— 非网络实现（测试 mock）没有「静默断死」的概念。
     func verifyConnectionAlive() async -> Bool { true }
+
+    /// 通用回退：读回整文件 → 按 offset 打补丁 → 整文件写回。
+    ///
+    /// 只对**内存替身**成立（测试夹具全部靠它，不必各自重写一遍语义）。真实的
+    /// `SFTPSession` 覆盖成真正的随机写：不读回、不整写，多个分片可以并行落盘。
+    func writeRange(_ path: String, offset: UInt64, data: Data,
+                    mode: SFTPWriteMode) async throws {
+        let exists = (try? await stat(path)) != nil
+        var base: Data
+        switch mode {
+        case .create:
+            if exists { throw SFTPFileExistsError(path: path) }
+            base = Data()
+        case .overwrite:
+            base = Data()
+        case .write:
+            // `Data(...)` 归一化 startIndex —— 下面用的是从 0 起的相对下标。
+            base = exists ? Data((try? await download(remotePath: path)) ?? Data()) : Data()
+        }
+        let start = Int(clamping: offset)
+        // 越过末尾的写在 POSIX 下留空洞（读回来是 0），内存实现照做。
+        if base.count < start { base.append(Data(count: start - base.count)) }
+        let end = start + data.count
+        if base.count < end { base.append(Data(count: end - base.count)) }
+        if !data.isEmpty { base.replaceSubrange(start..<end, with: data) }
+        try await write(path, data: base)
+    }
+
+    /// 通用回退：整文件读回后切片。真实实现覆盖成单次区间读。
+    func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
+        guard length > 0 else { return Data() }
+        // 重新装一次：`download` 的返回值理论上可能是个带非零 startIndex 的切片，
+        // 而下面用的是从 0 起的相对下标。
+        let all = Data(try await download(remotePath: path))
+        let start = min(Int(clamping: offset), all.count)
+        let end = min(start + length, all.count)
+        guard start < end else { return Data() }
+        return all.subdata(in: start..<end)
+    }
 }

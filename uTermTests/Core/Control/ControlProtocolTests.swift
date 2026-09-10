@@ -22,6 +22,9 @@ final class ControlProtocolTests: XCTestCase {
             newPath: "/etc/hosts.bak",
             mode: "644",
             contentBase64: "aGVsbG8=",
+            offset: 8_388_608,
+            length: 65_536,
+            force: true,
             rule: "tunnel-1",
             terminal: "AB12",
             lines: 40,
@@ -33,6 +36,24 @@ final class ControlProtocolTests: XCTestCase {
         let data = try JSONEncoder().encode(request)
         let decoded = try ControlProtocol.decodeRequest(data)
         XCTAssertEqual(decoded, request)
+    }
+
+    /// 分片传输的三个字段：客户端只发这几个键时也要能解出来（缺省全是 nil）。
+    func testRequestDecodesTransferRangeFields() throws {
+        let data = Data(#"{"action":"sftp-put","path":"/tmp/x","offset":33554432,"mode":"write"}"#.utf8)
+        let decoded = try ControlProtocol.decodeRequest(data)
+        XCTAssertEqual(decoded.action, .sftpPut)
+        XCTAssertEqual(decoded.offset, 33_554_432)
+        XCTAssertEqual(decoded.mode, "write")
+        XCTAssertNil(decoded.length)
+        XCTAssertNil(decoded.force)
+    }
+
+    /// `sftp-put` 的三档写入模式与 `SFTPWriteMode` 的 rawValue 逐字一致 ——
+    /// 客户端按这些字符串发，改名会静默变成 `invalid_request`。
+    func testWriteModeRawValuesAreTheWireContract() {
+        XCTAssertEqual(SFTPWriteMode.allCases.map(\.rawValue),
+                       ["create", "overwrite", "write"])
     }
 
     func testRequestDecodesWithOnlyRequiredFields() throws {
@@ -249,6 +270,12 @@ final class ControlProtocolTests: XCTestCase {
             ControlProtocol.maxFileBytes * 4 / 3,
             "还要给 JSON 外壳（action / path / id / 转义）留富余"
         )
+    }
+
+    /// 错误码总表：新增码必须列进来（客户端按 rawValue 做退出码映射）。
+    func testFileExistsIsPartOfTheErrorContract() {
+        XCTAssertTrue(ControlErrorCode.allCases.contains(.file_exists))
+        XCTAssertEqual(ControlErrorCode.file_exists.rawValue, "file_exists")
     }
 
     func testLimitsAreOrdered() {

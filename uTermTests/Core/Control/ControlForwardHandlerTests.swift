@@ -24,9 +24,11 @@ final class ControlForwardHandlerTests: XCTestCase {
         ) async throws -> SSHCommandExecutor {
             throw ControlConnectError.connectFailed("测试替身不建连接")
         }
-        func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+        func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
             throw ControlConnectError.connectFailed("测试替身不建连接")
         }
+
+        func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async {}
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }

@@ -42,9 +42,11 @@ final class ControlHandlerTests: XCTestCase {
             return SSHCommandExecutor(maxLines: maxLines, maxBytes: maxBytes, exec: handler)
         }
 
-        func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+        func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
             throw ControlConnectError.connectFailed("测试不建 SFTP")
         }
+
+        func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async {}
 
         func disconnect(hostID: UUID) async { disconnected.append(hostID) }
         func disconnectAll() async { disconnectAllCalls += 1 }

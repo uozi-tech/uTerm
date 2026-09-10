@@ -152,10 +152,21 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var path: String?
     /// `sftp-mv` 的目标路径。
     public var newPath: String?
-    /// `sftp-chmod` 的八进制权限（如 `"644"`）。
+    /// 两用字段，按 action 解释：
+    /// - `sftp-chmod`：八进制权限（如 `"644"`）；
+    /// - `sftp-put`：写入模式 `create`（默认，已存在 → `file_exists`）/ `overwrite`
+    ///   （截断）/ `write`（不截断，写到 `offset`，分片并行传输用这档）。
     public var mode: String?
     /// `sftp-put` 的文件内容（base64）。
     public var contentBase64: String?
+    /// 区间传输的起始字节。`sftp-put` 缺省 0；`sftp-get` 给了它（或 `length`）
+    /// 就只回该区间。负数是 `invalid_request`。
+    public var offset: Int64?
+    /// `sftp-get` 的区间长度（字节），上限 `maxFileBytes`。
+    public var length: Int?
+    /// `sftp-put`：没有显式 `mode` 时，`true` 等价 `mode: "overwrite"`
+    /// （与 `get` 的 `--force` 对称）。有 `mode` 时以 `mode` 为准。
+    public var force: Bool?
     /// 转发规则 id / name。
     public var rule: String?
     /// 终端会话 id 或其唯一前缀。
@@ -183,6 +194,9 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         newPath: String? = nil,
         mode: String? = nil,
         contentBase64: String? = nil,
+        offset: Int64? = nil,
+        length: Int? = nil,
+        force: Bool? = nil,
         rule: String? = nil,
         terminal: String? = nil,
         lines: Int? = nil,
@@ -204,6 +218,9 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         self.newPath = newPath
         self.mode = mode
         self.contentBase64 = contentBase64
+        self.offset = offset
+        self.length = length
+        self.force = force
         self.rule = rule
         self.terminal = terminal
         self.lines = lines
@@ -570,16 +587,19 @@ nonisolated public struct ControlRemoteStat: Codable, Sendable, Equatable {
     }
 }
 
-/// `sftp-cat` / `sftp-get` 的载荷。UTF-8 可解码时给 `text`，否则给 `base64`。
+/// `sftp-cat` / `sftp-get` 的载荷（`sftp-put` 也用它回报本次写入的字节数）。
+/// UTF-8 可解码时给 `text`，否则给 `base64`；`sftp-put` 的响应里两者都是 nil。
 nonisolated public struct ControlFilePayload: Codable, Sendable, Equatable {
     public var path: String
     public var bytes: Int
     public var isUTF8: Bool
     public var text: String?
     public var base64: String?
-    /// 内容不完整。`cat` / `get` 都是**先 stat 再决定**：声明大小超上限就直接
-    /// `file_too_large`，从不截断着返回（`SFTPProviding` 没有部分读原语）。
-    /// 因此这个字段实际只在「stat 之后文件又长大了」的竞态里才为 true。
+    /// 内容不完整。整文件的 `cat` / `get` 都是**先 stat 再决定**：声明大小超上限
+    /// 就直接 `file_too_large`，从不截断着返回。因此这个字段实际只在
+    /// 「stat 之后文件又长大了」的竞态里才为 true。
+    /// **带 `offset` / `length` 的区间 `get` 恒为 false** —— 少给字节意味着读到了
+    /// 文件末尾，不是被削过。
     public var truncated: Bool
 
     public init(
@@ -766,6 +786,9 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     case file_too_large
     case permission_denied
     case is_directory
+    /// `sftp-put` 的 `mode: create`（默认）撞上已存在的路径。加 `--force`
+    /// （`mode: overwrite`）才覆盖。
+    case file_exists
 
     // 转发
     case rule_not_found

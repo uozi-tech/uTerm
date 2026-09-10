@@ -14,10 +14,13 @@ import Foundation
 ///   跑到一半才从 `BoundedExec` 里冒出来（那里拿不到质询，也没法把指纹回给 CLI）。
 /// - 空闲回收靠 `lastUsedAt` + 一个按需起停的清扫任务，不常驻 Timer；`now` 与间隔都
 ///   可注入，测试里能把 10 分钟压成一瞬。
-/// - **同一台主机的冷启动只建一次**：建连期间以 `Task` 占位（exec / SFTP 各一份），
-///   同时到来的第二个请求 `await` 同一个 Task。没有这层占位时，两条并发的 `run`
-///   会各建一条连接，后者覆盖前者入表，前者永远关不掉 —— fd 泄漏，而且远端多一条
-///   看不见的 SSH 会话。
+/// - **exec 的冷启动只建一次**：建连期间以 `Task` 占位，同时到来的第二个请求
+///   `await` 同一个 Task。没有这层占位时，两条并发的 `run` 会各建一条连接，
+///   后者覆盖前者入表，前者永远关不掉 —— fd 泄漏，而且远端多一条看不见的 SSH 会话。
+/// - **SFTP 是每主机最多 `maxSFTPChannelsPerHost`（4）条的小池子**，借还制
+///   （`borrowSFTP` / `returnSFTP`，或协议扩展里的 `withSFTP(for:_:)`）。
+///   分片并行传输要的就是多条通道各跑各的；到上限的借用者排队等归还。
+///   与 exec 不同，SFTP **不**共享冷启动 —— 那会把并行退化回单通道。
 actor ControlConnectionPool: ControlConnectionPooling {
 
     /// 建连的三条外部依赖。生产用 `.live`，测试注入假的（池本身不认识 SSH）。
@@ -46,23 +49,50 @@ actor ControlConnectionPool: ControlConnectionPooling {
     /// 空闲多久后自动关闭一台主机的持有。
     static let idleTimeout: Duration = .seconds(600)
 
+    /// 每台主机最多几条并行的 SFTP 会话（各自一条独立的 SSH 连接）。
+    ///
+    /// 4 条足够吃满 `ControlServer.maxActiveClients = 8` 下的分片并行传输，
+    /// 又不至于让一台主机上并发的 sshd 会话数失控。超过上限的借用请求排队等归还。
+    static let maxSFTPChannelsPerHost = 4
+
+    /// 一台主机的 SFTP 小池子。会话本身是 actor（引用类型），用 `ObjectIdentifier` 认人。
+    private nonisolated struct SFTPChannels: Sendable {
+        var idle: [any SFTPProviding] = []
+        var busy: [ObjectIdentifier: any SFTPProviding] = [:]
+        /// 正在建的条数（还没进 idle / busy），一并计入上限，免得并发借用超建。
+        var pending = 0
+
+        var total: Int { idle.count + busy.count + pending }
+        var isEmpty: Bool { total == 0 }
+        var all: [any SFTPProviding] { idle + Array(busy.values) }
+    }
+
     private nonisolated struct Entry: Sendable {
         var exec: (any ControlExecChannel)?
-        var sftp: (any SFTPProviding)?
+        var sftp = SFTPChannels()
         var lastUsedAt: Date
 
-        var isEmpty: Bool { exec == nil && sftp == nil }
+        var isEmpty: Bool { exec == nil && sftp.isEmpty }
+    }
+
+    /// 一个在等 SFTP 名额的借用者。
+    private struct SFTPWaiter {
+        let ticket: UUID
+        let continuation: CheckedContinuation<Void, Never>
     }
 
     private let connector: Connector
     private let idleInterval: Duration
+    private let maxSFTPChannels: Int
     private let now: @Sendable () -> Date
 
     private var entries: [UUID: Entry] = [:]
-    /// 建连中的占位。键是 hostID，exec 与 SFTP 各一份（两者独立建立）。
-    /// 后到的请求 `await` 同一个 Task，因此一台主机同一时刻只会有一次冷启动。
+    /// 按主机排队的借用者。名额一腾出来（归还 / 建连失败 / 全量释放）就唤醒一个。
+    private var sftpWaiters: [UUID: [SFTPWaiter]] = [:]
+    /// exec 建连中的占位。后到的请求 `await` 同一个 Task，因此一台主机同一时刻
+    /// 只会有一次 exec 冷启动。（SFTP 不共享冷启动 —— 那正是多通道要的并行，
+    /// 上限由 `SFTPChannels.pending` 计数守住。）
     private var pendingExec: [UUID: Task<any ControlExecChannel, any Error>] = [:]
-    private var pendingSFTP: [UUID: Task<any SFTPProviding, any Error>] = [:]
     /// 最近一次建连被拒的主机密钥质询，按 hostID。`trust` 只认这里的指纹。
     private var challenges: [UUID: HostKeyChallenge] = [:]
     private var sweeper: Task<Void, Never>?
@@ -70,10 +100,12 @@ actor ControlConnectionPool: ControlConnectionPooling {
     init(
         connector: Connector = .live,
         idleInterval: Duration = ControlConnectionPool.idleTimeout,
+        maxSFTPChannels: Int = ControlConnectionPool.maxSFTPChannelsPerHost,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.connector = connector
         self.idleInterval = idleInterval
+        self.maxSFTPChannels = max(1, maxSFTPChannels)
         self.now = now
     }
 
@@ -93,42 +125,130 @@ actor ControlConnectionPool: ControlConnectionPooling {
         }
     }
 
-    func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+    /// 借一条这台主机的 SFTP 会话：
+    /// 有空闲 → 直接拿；没空闲且没到 `maxSFTPChannels` → 新建一条；到上限 → 排队等归还。
+    ///
+    /// 必须与 `returnSFTP(_:for:)` 配对，最省事的写法是协议扩展里的
+    /// `withSFTP(for:_:)`。不归还的话这条会话永远算「在用」，既不会被复用也不会被
+    /// 空闲回收，等于把这台主机的一个名额烧掉。
+    func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
         sweepIdle()
-        if let existing = entries[host.id]?.sftp {
-            touch(host.id)
-            return existing
+        while true {
+            try Task.checkCancellation()
+            var entry = entries[host.id] ?? Entry(lastUsedAt: now())
+            if !entry.sftp.idle.isEmpty {
+                let session = entry.sftp.idle.removeLast()
+                entry.sftp.busy[ObjectIdentifier(session)] = session
+                entry.lastUsedAt = now()
+                entries[host.id] = entry
+                return session
+            }
+            if entry.sftp.total < maxSFTPChannels {
+                entry.sftp.pending += 1
+                entry.lastUsedAt = now()
+                entries[host.id] = entry
+                return try await makeSFTPChannel(for: host)
+            }
+            // 到上限：让出名额给已在跑的传输，等一次归还再重来。
+            await waitForSFTPSlot(host.id)
         }
-        // 已经有人在建 → 搭车，不另起一条。
-        let task: Task<any SFTPProviding, any Error>
-        if let pending = pendingSFTP[host.id] {
-            task = pending
-        } else {
-            let make = connector.makeSFTP
-            task = Task.detached { try await make(host) }
-            pendingSFTP[host.id] = task
+    }
+
+    /// 归还借出的会话。会话回到空闲队列并唤醒一个等待者；
+    /// 期间若这台主机被 `disconnect` / `disconnectAll` 清过，就直接关掉它。
+    func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async {
+        let key = ObjectIdentifier(session)
+        guard var entry = entries[hostID], entry.sftp.busy[key] != nil else {
+            // 池里已经没这条记录（被显式释放过）→ 关掉，别泄漏。
+            closeDetached(sftp: session)
+            resumeOneSFTPWaiter(hostID)
+            return
         }
+        entry.sftp.busy[key] = nil
+        entry.sftp.idle.append(session)
+        entry.lastUsedAt = now()
+        entries[hostID] = entry
+        resumeOneSFTPWaiter(hostID)
+    }
+
+    /// 真正建一条新的 SFTP 会话。调用前已经把 `pending` 加过 1（占住名额）。
+    private func makeSFTPChannel(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+        let make = connector.makeSFTP
+        let task = Task.detached { try await make(host) }
         let session: any SFTPProviding
         do {
             session = try await task.value
         } catch {
-            // 失败必须清掉占位，否则这台主机会一直「记得」上次的失败，重试也拿不到新连接。
-            clearPendingSFTP(host.id, task)
+            releaseSFTPPending(host.id)
             throw record(error, for: host)
         }
-        clearPendingSFTP(host.id, task)
-        if let existing = entries[host.id]?.sftp {
-            // 竞态：别的路径已经先入表。关掉自己这条再复用它 —— 覆盖等于泄漏一条会话。
+        guard var entry = entries[host.id], entry.sftp.pending > 0 else {
+            // 建连期间这台主机被释放了 —— 新会话没人认领，关掉。
             closeDetached(sftp: session)
-            touch(host.id)
-            return existing
+            resumeOneSFTPWaiter(host.id)
+            throw ControlConnectError.connectFailed("连接已被释放")
         }
-        var entry = entries[host.id] ?? Entry(exec: nil, sftp: nil, lastUsedAt: now())
-        entry.sftp = session
+        entry.sftp.pending -= 1
+        entry.sftp.busy[ObjectIdentifier(session)] = session
         entry.lastUsedAt = now()
         entries[host.id] = entry
         scheduleSweep()
         return session
+    }
+
+    /// 建连失败 / 中途作废：把占住的名额还回去并唤醒一个等待者。
+    private func releaseSFTPPending(_ hostID: UUID) {
+        if var entry = entries[hostID], entry.sftp.pending > 0 {
+            entry.sftp.pending -= 1
+            if entry.isEmpty {
+                entries[hostID] = nil
+            } else {
+                entries[hostID] = entry
+            }
+        }
+        resumeOneSFTPWaiter(hostID)
+    }
+
+    /// 等一个 SFTP 名额。任务被取消时把自己从队列里摘掉并立刻恢复，
+    /// 免得借用者挂死在 continuation 上（`borrowSFTP` 回到循环顶端会抛 `CancellationError`）。
+    private func waitForSFTPSlot(_ hostID: UUID) async {
+        let ticket = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                sftpWaiters[hostID, default: []].append(
+                    SFTPWaiter(ticket: ticket, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelSFTPWait(hostID, ticket) }
+        }
+    }
+
+    private func cancelSFTPWait(_ hostID: UUID, _ ticket: UUID) {
+        guard var queue = sftpWaiters[hostID],
+              let index = queue.firstIndex(where: { $0.ticket == ticket }) else { return }
+        let waiter = queue.remove(at: index)
+        sftpWaiters[hostID] = queue.isEmpty ? nil : queue
+        waiter.continuation.resume()
+    }
+
+    private func resumeOneSFTPWaiter(_ hostID: UUID) {
+        guard var queue = sftpWaiters[hostID], !queue.isEmpty else { return }
+        let waiter = queue.removeFirst()
+        sftpWaiters[hostID] = queue.isEmpty ? nil : queue
+        waiter.continuation.resume()
+    }
+
+    private func resumeAllSFTPWaiters(_ hostID: UUID) {
+        guard let queue = sftpWaiters.removeValue(forKey: hostID) else { return }
+        for waiter in queue { waiter.continuation.resume() }
+    }
+
+    private func resumeAllSFTPWaiters() {
+        let all = sftpWaiters
+        sftpWaiters.removeAll()
+        for queue in all.values {
+            for waiter in queue { waiter.continuation.resume() }
+        }
     }
 
     private func execChannel(for host: HostConnectionSpec) async throws -> any ControlExecChannel {
@@ -158,7 +278,7 @@ actor ControlConnectionPool: ControlConnectionPooling {
             touch(host.id)
             return existing
         }
-        var entry = entries[host.id] ?? Entry(exec: nil, sftp: nil, lastUsedAt: now())
+        var entry = entries[host.id] ?? Entry(lastUsedAt: now())
         entry.exec = channel
         entry.lastUsedAt = now()
         entries[host.id] = entry
@@ -169,10 +289,6 @@ actor ControlConnectionPool: ControlConnectionPooling {
     /// 只清掉**自己那次**的占位：搭车者恢复得晚，此时占位可能已经属于新一轮建连了。
     private func clearPendingExec(_ hostID: UUID, _ task: Task<any ControlExecChannel, any Error>) {
         if pendingExec[hostID] == task { pendingExec[hostID] = nil }
-    }
-
-    private func clearPendingSFTP(_ hostID: UUID, _ task: Task<any SFTPProviding, any Error>) {
-        if pendingSFTP[hostID] == task { pendingSFTP[hostID] = nil }
     }
 
     /// 关掉一条多余的连接。派到独立 Task，免得在建连路径里引入 await 重入。
@@ -229,8 +345,12 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     // MARK: - 释放
 
+    /// 关掉这台主机的 exec 与**全部** SFTP 会话（空闲的和正在借出的都关）。
+    /// 借出中的会话归还时会发现自己已经不在表里，随即被关掉。
     func disconnect(hostID: UUID) async {
-        guard let entry = entries.removeValue(forKey: hostID) else { return }
+        let entry = entries.removeValue(forKey: hostID)
+        resumeAllSFTPWaiters(hostID)
+        guard let entry else { return }
         await close(entry)
     }
 
@@ -238,6 +358,7 @@ actor ControlConnectionPool: ControlConnectionPooling {
         let all = entries
         entries.removeAll()
         challenges.removeAll()
+        resumeAllSFTPWaiters()
         sweeper?.cancel()
         sweeper = nil
         for entry in all.values {
@@ -258,6 +379,8 @@ actor ControlConnectionPool: ControlConnectionPooling {
         let deadline = now().addingTimeInterval(-idleInterval.seconds)
         var expired: [Entry] = []
         for (id, entry) in entries where entry.lastUsedAt <= deadline {
+            // 有会话正借在外面（长传输）或正在建 → 这台主机还在用，别回收。
+            guard entry.sftp.busy.isEmpty, entry.sftp.pending == 0 else { continue }
             expired.append(entry)
             entries.removeValue(forKey: id)
         }
@@ -266,7 +389,7 @@ actor ControlConnectionPool: ControlConnectionPooling {
         Task.detached {
             for entry in closing {
                 await entry.exec?.close()
-                await entry.sftp?.close()
+                for session in entry.sftp.all { await session.close() }
             }
         }
         return entries.count
@@ -278,7 +401,7 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     private func close(_ entry: Entry) async {
         await entry.exec?.close()
-        await entry.sftp?.close()
+        for session in entry.sftp.all { await session.close() }
     }
 
     /// 起一个按需的清扫任务（不常驻）：每隔 `idleInterval` 扫一次，池空了就自己收摊。

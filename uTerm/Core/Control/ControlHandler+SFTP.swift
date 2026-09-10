@@ -6,10 +6,12 @@ import Foundation
 /// 硬约束：
 /// - **本地文件 I/O 由 CLI 做**。uTerm 是沙盒 app，写不了任意本地路径；socket 上
 ///   只传 base64（`sftp-put`）或文本 / base64（`sftp-cat` / `sftp-get`）。
-/// - 上限：`cat` 1 MiB（`maxCatBytes`），`get` / `put` 8 MiB（`maxFileBytes`），
-///   超限一律 `file_too_large`，不要先整个读进内存再判 —— 用
-///   `SFTPProviding.download(remotePath:maximumBytes:)` 的有界入口，`get` 更是
-///   **先 stat 再决定**，绝不先拉后拒。
+/// - 上限：`cat` 1 MiB（`maxCatBytes`），`get` / `put` **单次请求** 8 MiB
+///   （`maxFileBytes`），超限一律 `file_too_large`，不要先整个读进内存再判 —— 用
+///   `SFTPProviding.download(remotePath:maximumBytes:)` 的有界入口，整文件 `get`
+///   更是**先 stat 再决定**，绝不先拉后拒。大文件靠客户端分片：`get` 带
+///   `offset`/`length` 取区间，`put` 带 `offset` + `mode: write` 并行写。
+/// - 一次动作**借**一条池里的 SFTP 会话（每主机最多 4 条并行），跑完归还。
 /// - 删除类动作在技能文档层面要求先问用户。
 /// - `sftpOnly` 主机**允许**全部文件动作（`requiresExecCapableHost` 对本组恒 false）。
 /// - 路径不做本地化 / 展开，原样传给远端；只有 `ls` 缺省路径时用 `realPath(".")`。
@@ -22,24 +24,30 @@ extension ControlHandler {
         let profile = try resolveHost(try Self.requiredHostNeedle(request))
         try requireExecCapable(profile, action: request.action)
 
-        // 建连失败要把 fingerprint 一并回给 CLI（`ControlFailure` 带不了 hostKey），
-        // 所以这一段走「直接返回响应」而不是抛。
-        let sftp: any SFTPProviding
+        let spec = try HostConnectionSpec.resolve(
+            profile: profile, container: deps.modelContainer)
         do {
-            sftp = try await sftpSession(for: profile, deps)
-        } catch {
-            return connectFailureResponse(error, id: request.id, profile: profile)
-        }
-
-        do {
-            return try await perform(request, on: sftp)
+            // 借一条 SFTP 会话跑完这次动作再归还（池子每主机最多 4 条并行）。
+            // `perform` 的失败在闭包里就被包成 `ControlFailure`，所以外层 catch 到的
+            // 非 `ControlFailure` 只可能来自**借出阶段**（建连）。
+            return try await deps.pool.withSFTP(for: spec) { sftp in
+                do {
+                    return try await perform(request, on: sftp)
+                } catch let failure as ControlFailure {
+                    throw failure
+                } catch {
+                    throw ControlFailure(
+                        code: ControlFilePayloadBuilder.errorCode(for: error),
+                        message: Self.sftpMessage(request: request, error: error)
+                    )
+                }
+            }
         } catch let failure as ControlFailure {
             throw failure
         } catch {
-            throw ControlFailure(
-                code: ControlFilePayloadBuilder.errorCode(for: error),
-                message: Self.sftpMessage(request: request, error: error)
-            )
+            // 建连失败要把 fingerprint 一并回给 CLI（`ControlFailure` 带不了 hostKey），
+            // 所以这一段走「直接返回响应」而不是抛。
+            return connectFailureResponse(error, id: request.id, profile: profile)
         }
     }
 
@@ -82,25 +90,15 @@ extension ControlHandler {
 
         case .sftpGet:
             let path = try Self.requiredPath(request.path)
+            // 给了 offset 或 length = 区间读（分片下载）；都没给才是原来的整文件语义。
+            if request.offset != nil || request.length != nil {
+                return try await readRange(request, path: path, on: sftp)
+            }
             return try await readFile(
                 request, path: path, limit: ControlProtocol.maxFileBytes, on: sftp)
 
         case .sftpPut:
-            let path = try Self.requiredPath(request.path)
-            guard let encoded = request.contentBase64 else {
-                throw ControlFailure(code: .invalid_request, message: "sftp-put 需要 contentBase64")
-            }
-            guard let data = Data(base64Encoded: encoded, options: [.ignoreUnknownCharacters]) else {
-                throw ControlFailure(code: .invalid_request, message: "contentBase64 不是合法的 base64")
-            }
-            guard data.count <= ControlProtocol.maxFileBytes else {
-                throw ControlFailure(
-                    code: .file_too_large,
-                    message: "内容 \(data.count) 字节，超过上限 \(ControlProtocol.maxFileBytes) 字节"
-                )
-            }
-            try await sftp.upload(data: data, toRemotePath: path)
-            return .success(id: request.id, message: "已写入 \(path)（\(data.count) 字节）")
+            return try await writeFile(request, on: sftp)
 
         case .sftpMkdir:
             let path = try Self.requiredPath(request.path)
@@ -180,15 +178,83 @@ extension ControlHandler {
         )
     }
 
-    // MARK: - 连接
+    /// `sftp-get` 的**区间**读：`offset` / `length` 至少给了一个就走这条。
+    ///
+    /// 语义（`utermctl` 的分片下载照这个来）：
+    /// - `offset` 缺省 0，负数是 `invalid_request`；
+    /// - `length` 缺省 `maxFileBytes`，超过它是 `file_too_large`（客户端自己分片）；
+    /// - 不做整文件的 stat 上限检查 —— 大文件正是靠一段段取回来的；
+    /// - `file.bytes` 是**实际**返回的字节数，到 EOF 会少于 `length`，
+    ///   `truncated` 恒为 false（少给 = 到头，不是被削）。
+    private func readRange(
+        _ request: ControlRequest,
+        path: String,
+        on sftp: any SFTPProviding
+    ) async throws -> ControlResponse {
+        let offset = try Self.requiredOffset(request.offset)
+        let length = try Self.rangeLength(request.length)
+        let data = try await sftp.readRange(path, offset: offset, length: length)
+        return .success(
+            id: request.id,
+            message: "\(path)[\(offset)..<\(offset + UInt64(data.count))]（\(data.count) 字节）",
+            file: ControlFilePayloadBuilder.payload(
+                path: path, data: data, declaredSize: nil)
+        )
+    }
 
-    private func sftpSession(
-        for profile: ServerProfile,
-        _ deps: Dependencies
-    ) async throws -> any SFTPProviding {
-        let spec = try HostConnectionSpec.resolve(
-            profile: profile, container: deps.modelContainer)
-        return try await deps.pool.sftp(for: spec)
+    /// `sftp-put`：按 `mode` + `offset` 写一段。
+    ///
+    /// - `mode` 缺省 `create`（已存在 → `file_exists`）；没给 `mode` 但 `force: true`
+    ///   等价 `overwrite`；`write` 不截断，供分片并行写同一文件。
+    /// - `offset` 缺省 0，负数是 `invalid_request`。
+    /// - 单次内容仍受 `maxFileBytes`（8 MiB）约束 —— 客户端负责分片。
+    /// - 响应的 `file.bytes` 是**本次**写入的字节数。
+    private func writeFile(
+        _ request: ControlRequest,
+        on sftp: any SFTPProviding
+    ) async throws -> ControlResponse {
+        let path = try Self.requiredPath(request.path)
+        guard let encoded = request.contentBase64 else {
+            throw ControlFailure(code: .invalid_request, message: "sftp-put 需要 contentBase64")
+        }
+        guard let data = Data(base64Encoded: encoded, options: [.ignoreUnknownCharacters]) else {
+            throw ControlFailure(code: .invalid_request, message: "contentBase64 不是合法的 base64")
+        }
+        guard data.count <= ControlProtocol.maxFileBytes else {
+            throw ControlFailure(
+                code: .file_too_large,
+                message: "内容 \(data.count) 字节，超过上限 \(ControlProtocol.maxFileBytes) 字节"
+            )
+        }
+        let offset = try Self.requiredOffset(request.offset)
+        let mode = try Self.writeMode(request)
+        do {
+            try await sftp.writeRange(path, offset: offset, data: data, mode: mode)
+        } catch {
+            throw ControlFailure(
+                code: await Self.putErrorCode(error, mode: mode, path: path, on: sftp),
+                message: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))"
+            )
+        }
+        return .success(
+            id: request.id,
+            message: "已写入 \(path)（\(data.count) 字节 @ \(offset)，\(mode.rawValue)）",
+            file: ControlFilePayloadBuilder.written(path: path, bytes: data.count)
+        )
+    }
+
+    /// `create` 撞已存在文件时服务端的回法五花八门（SFTP v3 只有 `SSH_FX_FAILURE`，
+    /// 文案还依实现而定）。所以：先按常规映射；只有落到兜底的 `operation_failed` 时，
+    /// 才多花一次 `stat` 确认路径确实已存在 —— 存在就报 `file_exists`。
+    private static func putErrorCode(
+        _ error: Error,
+        mode: SFTPWriteMode,
+        path: String,
+        on sftp: any SFTPProviding
+    ) async -> ControlErrorCode {
+        let mapped = ControlFilePayloadBuilder.errorCode(for: error)
+        guard mode == .create, mapped == .operation_failed else { return mapped }
+        return (try? await sftp.stat(path)) != nil ? .file_exists : mapped
     }
 
     // MARK: - 参数
@@ -218,6 +284,47 @@ extension ControlHandler {
             throw ControlFailure(code: .invalid_request, message: "缺少 --path")
         }
         return path
+    }
+
+    /// 区间传输的起点。缺省 0，负数是请求错误（`UInt64(bitPattern:)` 会把 -1 变成
+    /// 天文数字，绝不能默默放过去）。
+    private static func requiredOffset(_ raw: Int64?) throws(ControlFailure) -> UInt64 {
+        guard let raw else { return 0 }
+        guard raw >= 0 else {
+            throw ControlFailure(code: .invalid_request, message: "offset 不能为负：\(raw)")
+        }
+        return UInt64(raw)
+    }
+
+    /// `sftp-get` 的区间长度。缺省整段上限；> 0 且 ≤ `maxFileBytes`，超了让客户端自己分片。
+    private static func rangeLength(_ raw: Int?) throws(ControlFailure) -> Int {
+        guard let raw else { return ControlProtocol.maxFileBytes }
+        guard raw > 0 else {
+            throw ControlFailure(code: .invalid_request, message: "length 必须为正：\(raw)")
+        }
+        guard raw <= ControlProtocol.maxFileBytes else {
+            throw ControlFailure(
+                code: .file_too_large,
+                message: "length \(raw) 字节，超过单次上限 \(ControlProtocol.maxFileBytes) 字节"
+            )
+        }
+        return raw
+    }
+
+    /// `sftp-put` 的写入模式。显式 `mode` 优先；没给时 `force: true` 等价 `overwrite`，
+    /// 否则 `create`（拒绝覆盖）。
+    private static func writeMode(_ request: ControlRequest) throws(ControlFailure) -> SFTPWriteMode {
+        guard let raw = trimmed(request.mode) else {
+            return request.force == true ? .overwrite : .create
+        }
+        guard let mode = SFTPWriteMode(rawValue: raw.lowercased()) else {
+            let all = SFTPWriteMode.allCases.map(\.rawValue).joined(separator: " / ")
+            throw ControlFailure(
+                code: .invalid_request,
+                message: "sftp-put 的 mode 无法解析：\(raw)（期望 \(all)）"
+            )
+        }
+        return mode
     }
 
     /// `cat` 的读取上限：客户端可以调小，但封顶在协议常量上。

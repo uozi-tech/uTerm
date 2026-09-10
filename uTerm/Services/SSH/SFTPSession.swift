@@ -61,15 +61,46 @@ actor SFTPSession: SFTPProviding {
     }
 
     func write(_ path: String, data: Data) async throws {
-        let file = try await sftp.openFile(
-            filePath: path,
-            flags: [.write, .create, .truncate]
-        )
+        try await writeRange(path, offset: 0, data: data, mode: .overwrite)
+    }
+
+    // MARK: - 区间读写（分片 / 断点续传的基础原语）
+
+    /// 本地分段大小：每段先攒到内存，再交给流水线切成 32 000 B 并发发出去。
+    /// 4 MiB 让内存占用有界，同时远大于「在途窗口」（64 × 32 000 ≈ 2 MiB），
+    /// 保证段内一直有活干。
+    static let segmentBytes = 4 * 1_048_576
+
+    func writeRange(_ path: String, offset: UInt64, data: Data,
+                    mode: SFTPWriteMode) async throws {
+        let flags: SFTPOpenFileFlags
+        switch mode {
+        // SSH_FXF_EXCL：路径已存在时服务端直接拒绝，绝不截断既有文件。
+        case .create: flags = [.write, .create, .forceCreate]
+        case .overwrite: flags = [.write, .create, .truncate]
+        // 不带 TRUNC / APPEND —— 分片并行写同一文件靠的就是这一档。
+        case .write: flags = [.write, .create]
+        }
+        let file = try await sftp.openFile(filePath: path, flags: flags)
         do {
             var buffer = ByteBuffer()
             buffer.writeBytes(data)
-            try await file.write(buffer, at: 0)
+            try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: offset)
             try await file.close()
+        } catch {
+            try? await file.close()
+            throw error
+        }
+    }
+
+    func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
+        guard length > 0 else { return Data() }
+        let file = try await sftp.openFile(filePath: path, flags: .read)
+        do {
+            let buffer = try await SFTPPipeline.read(
+                CitadelPipelineFile(file), offset: offset, length: length)
+            try await file.close()
+            return Data(buffer.readableBytesView)
         } catch {
             try? await file.close()
             throw error
@@ -131,7 +162,7 @@ actor SFTPSession: SFTPProviding {
         let file = try await sftp.openFile(
             filePath: toRemotePath, flags: [.write, .create, .truncate])
         do {
-            let chunk = 32 * 1024
+            let pipelined = CitadelPipelineFile(file)
             var offset = 0
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             func emitProgress(_ bytesDone: Int64) {
@@ -142,10 +173,10 @@ actor SFTPSession: SFTPProviding {
             emitProgress(0)
             while offset < data.count {
                 try Task.checkCancellation()
-                let end = min(offset + chunk, data.count)
+                let end = min(offset + Self.segmentBytes, data.count)
                 var buffer = ByteBuffer()
-                buffer.writeBytes(data[offset..<end])
-                try await file.write(buffer, at: UInt64(offset))
+                buffer.writeBytes(data[(data.startIndex + offset)..<(data.startIndex + end)])
+                try await SFTPPipeline.write(pipelined, data: buffer, at: UInt64(offset))
                 offset = end
                 emitProgress(Int64(offset))
             }
@@ -166,7 +197,7 @@ actor SFTPSession: SFTPProviding {
             let remoteFile = try await sftp.openFile(
                 filePath: toRemotePath, flags: [.write, .create, .truncate])
             do {
-                let chunkSize = 32 * 1024
+                let pipelined = CitadelPipelineFile(remoteFile)
                 var offset: UInt64 = 0
                 var progressEmitter = TransferProgressEmitter(totalBytes: total)
                 func emitProgress(_ bytesDone: Int64) {
@@ -175,11 +206,13 @@ actor SFTPSession: SFTPProviding {
                     }
                 }
                 emitProgress(0)
-                while let data = try localFile.read(upToCount: chunkSize), !data.isEmpty {
+                // 一次读一段本地文件（内存有界），整段交给流水线并发写出去。
+                while let data = try localFile.read(upToCount: Self.segmentBytes),
+                      !data.isEmpty {
                     try Task.checkCancellation()
                     var buffer = ByteBuffer()
                     buffer.writeBytes(data)
-                    try await remoteFile.write(buffer, at: offset)
+                    try await SFTPPipeline.write(pipelined, data: buffer, at: offset)
                     offset += UInt64(data.count)
                     emitProgress(Int64(clamping: offset))
                 }
@@ -215,7 +248,7 @@ actor SFTPSession: SFTPProviding {
             }
             let localFile = try FileHandle(forWritingTo: temporaryURL)
             do {
-                let chunk: UInt32 = 32 * 1024
+                let pipelined = CitadelPipelineFile(remoteFile)
                 var offset: UInt64 = 0
                 var progressEmitter = TransferProgressEmitter(totalBytes: total)
                 func emitProgress(_ bytesDone: Int64) {
@@ -224,14 +257,20 @@ actor SFTPSession: SFTPProviding {
                     }
                 }
                 emitProgress(0)
+                // 一段 4 MiB，段内 32 000 B 并发读；读不满即 EOF。
+                // 不拿 stat 的 size 当终点 —— 文件在传输期间变长时也要读完。
                 while true {
                     try Task.checkCancellation()
-                    let buffer = try await remoteFile.read(from: offset, length: chunk)
+                    let want = Self.segmentBytes
+                    let buffer = try await SFTPPipeline.read(
+                        pipelined, offset: offset, length: want)
                     let count = buffer.readableBytes
-                    guard count > 0 else { break }
-                    try localFile.write(contentsOf: Data(buffer.readableBytesView))
-                    offset += UInt64(count)
-                    emitProgress(Int64(clamping: offset))
+                    if count > 0 {
+                        try localFile.write(contentsOf: Data(buffer.readableBytesView))
+                        offset += UInt64(count)
+                        emitProgress(Int64(clamping: offset))
+                    }
+                    if count < want { break }
                 }
                 try localFile.synchronize()
                 try localFile.close()
@@ -281,7 +320,7 @@ actor SFTPSession: SFTPProviding {
         let file = try await sftp.openFile(filePath: remotePath, flags: .read)
         do {
             var data = Data()
-            let chunk: UInt32 = 32 * 1024
+            let pipelined = CitadelPipelineFile(file)
             var offset: UInt64 = 0
             var progressEmitter = TransferProgressEmitter(totalBytes: total)
             func emitProgress(_ bytesDone: Int64) {
@@ -292,18 +331,29 @@ actor SFTPSession: SFTPProviding {
             emitProgress(0)
             while true {
                 try Task.checkCancellation()
-                let buf = try await file.read(from: offset, length: chunk)
-                let n = buf.readableBytes
-                if n == 0 { break }
-                if let maximumBytes,
-                   (n > maximumBytes || data.count > maximumBytes - n) {
-                    throw SFTPDownloadLimitExceeded(
-                        observedBytes: Int64(data.count) + Int64(n),
-                        maximumBytes: maximumBytes)
+                // 有上限时只多要 1 字节：读满即证明超限（而不是刚好读到头），
+                // 内存也不会为了判超限先撑到一整段。
+                let want: Int
+                if let maximumBytes {
+                    want = min(Self.segmentBytes, max(1, maximumBytes - data.count + 1))
+                } else {
+                    want = Self.segmentBytes
                 }
-                data.append(contentsOf: buf.readableBytesView)
-                offset += UInt64(n)
-                emitProgress(Int64(offset))
+                let buf = try await SFTPPipeline.read(
+                    pipelined, offset: offset, length: want)
+                let n = buf.readableBytes
+                if n > 0 {
+                    if let maximumBytes, data.count > maximumBytes - n {
+                        throw SFTPDownloadLimitExceeded(
+                            observedBytes: Int64(data.count) + Int64(n),
+                            maximumBytes: maximumBytes)
+                    }
+                    data.append(contentsOf: buf.readableBytesView)
+                    offset += UInt64(n)
+                    emitProgress(Int64(offset))
+                }
+                // 短读 = EOF（流水线读只在到头时给不满）。
+                if n < want { break }
             }
             emitProgress(Int64(data.count))
             try await file.close()

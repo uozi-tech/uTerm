@@ -169,8 +169,11 @@ protocol ControlConnectionPooling: Actor {
         maxLines: Int,
         maxBytes: Int
     ) async throws -> SSHCommandExecutor
-    /// 取（必要时建）该主机的 SFTP 会话。
-    func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding
+    /// **借**一条该主机的 SFTP 会话（必要时新建；到每主机上限则等待归还）。
+    /// 必须与 `returnSFTP(_:for:)` 配对 —— 直接用 `withSFTP(for:_:)` 最不容易漏还。
+    func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding
+    /// 归还一条借出的 SFTP 会话。重复归还、或归还一条已被释放的会话都是安全的。
+    func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async
     /// 松开对某主机的 exec / SFTP 持有。
     func disconnect(hostID: UUID) async
     /// 释放全部持有（主开关关闭 / app 退出）。
@@ -197,6 +200,27 @@ protocol ControlConnectionPooling: Actor {
 }
 
 extension ControlConnectionPooling {
+
+    /// 借 → 用 → 还，一条路上无论抛不抛错都归还。
+    ///
+    /// `nonisolated` 是刻意的：借还两步各自 hop 进池 actor，`body` 留在**调用方**的
+    /// 隔离域里跑（模块开了 `SWIFT_APPROACHABLE_CONCURRENCY`，nonisolated async
+    /// 函数继承调用方 actor）。否则一整趟传输会把池 actor 占死，其他主机的借还全被堵住。
+    nonisolated func withSFTP<T>(
+        for host: HostConnectionSpec,
+        _ body: (any SFTPProviding) async throws -> T
+    ) async throws -> T {
+        let session = try await borrowSFTP(for: host)
+        do {
+            let value = try await body(session)
+            await returnSFTP(session, for: host.id)
+            return value
+        } catch {
+            await returnSFTP(session, for: host.id)
+            throw error
+        }
+    }
+
     func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {
         try await executor(
             for: host,

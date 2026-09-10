@@ -18,9 +18,11 @@ final class ControlTerminalHandlerTests: XCTestCase {
         ) async throws -> SSHCommandExecutor {
             throw ControlConnectError.connectFailed("终端组用不到连接池")
         }
-        func sftp(for host: HostConnectionSpec) async throws -> any SFTPProviding {
+        func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding {
             throw ControlConnectError.connectFailed("终端组用不到连接池")
         }
+
+        func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async {}
         func disconnect(hostID: UUID) async {}
         func disconnectAll() async {}
         func heldHostIDs() async -> [UUID] { [] }

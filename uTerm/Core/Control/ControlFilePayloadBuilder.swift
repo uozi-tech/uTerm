@@ -76,6 +76,18 @@ nonisolated enum ControlFilePayloadBuilder {
         )
     }
 
+    /// `sftp-put` 的响应载荷：只报本次写入的字节数，不回显内容。
+    static func written(path: String, bytes: Int) -> ControlFilePayload {
+        ControlFilePayload(
+            path: path,
+            bytes: bytes,
+            isUTF8: false,
+            text: nil,
+            base64: nil,
+            truncated: false
+        )
+    }
+
     // MARK: - 错误归类
 
     /// SFTP 操作失败 → 协议错误码。
@@ -96,15 +108,24 @@ nonisolated enum ControlFilePayloadBuilder {
     ///   「操作未能完成」，文本兜底也匹配不到 —— `sftp rm` 一个不存在的文件
     ///   于是回了 `operation_failed`。）
     ///
-    /// 契约里没有「目录不为空 / 文件已存在」这类码，一律落到 `operation_failed`
+    /// 「文件已存在」有专码 `file_exists`（`sftp-put` 的 `create` 默认档要用），
+    /// 它有三条来源：内存替身的 `SFTPFileExistsError`、errno `EEXIST`、以及
+    /// 服务端文案里的 "file exists" / "already exists"。SFTP v3 撞 EXCL 时只回
+    /// `SSH_FX_FAILURE`，文案还依实现而定，所以 handler 在落到 `operation_failed`
+    /// 时会再 `stat` 一次兜底（见 `ControlHandler.putErrorCode`）。
+    ///
+    /// 其余没有专码的失败（目录不为空之类）一律落到 `operation_failed`
     /// —— 它是协议的兜底码，比借用一个语义不符的码诚实。
     static func errorCode(for error: Error) -> ControlErrorCode {
         if error is SFTPDownloadLimitExceeded { return .file_too_large }
+        if error is SFTPFileExistsError { return .file_exists }
 
         if let status = sftpStatus(of: error) {
             switch status.errorCode {
             case .noSuchFile: return .file_not_found
             case .permissionDenied: return .permission_denied
+            // SSH_FX_FILE_ALREADY_EXISTS（v4+，v3 只会回 failure + 文案）。
+            case .unknown(11): return .file_exists
             default:
                 // 服务端把 EISDIR 之类塞在 failure 的文本里，再过一遍文本匹配。
                 return errorCode(forText: status.message) ?? .operation_failed
@@ -116,6 +137,7 @@ nonisolated enum ControlFilePayloadBuilder {
             case ENOENT: return .file_not_found
             case EACCES, EPERM: return .permission_denied
             case EISDIR: return .is_directory
+            case EEXIST: return .file_exists
             default: break
             }
         }
@@ -163,6 +185,10 @@ nonisolated enum ControlFilePayloadBuilder {
         }
         if text.contains("too large") || text.contains("efbig") {
             return .file_too_large
+        }
+        if text.contains("file exists") || text.contains("already exists")
+            || text.contains("eexist") {
+            return .file_exists
         }
         return nil
     }

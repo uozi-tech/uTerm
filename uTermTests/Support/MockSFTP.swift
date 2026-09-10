@@ -95,6 +95,56 @@ actor MockSFTP: SFTPProviding {
         blobStore[path] = (data, Date())
     }
 
+    // MARK: - 区间读写（分片传输的原语）
+
+    /// 每次 `writeRange` 的记录，供断言分片的 offset / mode 覆盖。
+    private(set) var rangeWrites: [(path: String, offset: UInt64, bytes: Int, mode: SFTPWriteMode)] = []
+    /// 每次 `readRange` 的记录。
+    private(set) var rangeReads: [(path: String, offset: UInt64, length: Int)] = []
+
+    /// 内存版随机写：`create` 撞已存在文件抛 `SFTPFileExistsError`（与真实 EXCL 同一归类），
+    /// `overwrite` 先截断，`write` 保留既有内容只覆盖 `[offset, offset+count)`；
+    /// 越过末尾写留 0 空洞（POSIX 语义）。
+    func writeRange(_ path: String, offset: UInt64, data: Data,
+                    mode: SFTPWriteMode) async throws {
+        if failingUploadPaths.contains(path) {
+            throw NSError(domain: "MockSFTP", code: 9,
+                          userInfo: [NSLocalizedDescriptionKey: "upload failed: \(path)"])
+        }
+        var base: Data
+        switch mode {
+        case .create:
+            if blobStore[path] != nil { throw SFTPFileExistsError(path: path) }
+            base = Data()
+        case .overwrite:
+            base = Data()
+        case .write:
+            base = blobStore[path]?.0 ?? Data()
+        }
+        let start = Int(clamping: offset)
+        if base.count < start { base.append(Data(count: start - base.count)) }
+        let end = start + data.count
+        if base.count < end { base.append(Data(count: end - base.count)) }
+        if !data.isEmpty { base.replaceSubrange(start..<end, with: data) }
+        blobStore[path] = (base, Date())
+        rangeWrites.append((path, offset, data.count, mode))
+    }
+
+    /// 内存版区间读：到 EOF 会短。
+    func readRange(_ path: String, offset: UInt64, length: Int) async throws -> Data {
+        rangeReads.append((path, offset, length))
+        guard let all = blobStore[path]?.0 else {
+            throw NSError(domain: "MockSFTP", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "no such file: \(path)"
+            ])
+        }
+        guard length > 0 else { return Data() }
+        let start = min(Int(clamping: offset), all.count)
+        let end = min(start + length, all.count)
+        guard start < end else { return Data() }
+        return all.subdata(in: start..<end)
+    }
+
     /// 用指定 mtime 写入测试文件，覆盖“同一秒、等长改写”这类仅靠 stat 无法识别的场景。
     func setFile(_ path: String, data: Data, mtime: Date) {
         blobStore[path] = (data, mtime)
