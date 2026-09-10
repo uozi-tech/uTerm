@@ -35,11 +35,15 @@ final class SkillDefinitionTests: XCTestCase {
             .appending(path: "uterm-skill-materialize-\(UUID().uuidString)",
                        directoryHint: .isDirectory)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        // **有意关掉包内来源**：这里比的是「内嵌常量物化出来的字节」，包内那份是
+        // 构建阶段从仓库直接拷的，拿它比等于自己跟自己比，漏掉常量漂移。
+        // 包内那份另有 `testBundledClientMatchesRepositoryFile` 守着。
         let installer = SkillInstaller(
             definition: definition,
             homeDirectoryURL: root.appending(path: "home", directoryHint: .isDirectory),
             applicationSupportDirectoryURL: root.appending(path: "AppSupport",
-                                                           directoryHint: .isDirectory)
+                                                           directoryHint: .isDirectory),
+            bundleResource: { _ in nil }
         )
         try installer.materializeSource()
         return installer
@@ -66,6 +70,18 @@ final class SkillDefinitionTests: XCTestCase {
         XCTAssertEqual(written, onDisk, "物化出的 utermctl 与 scripts/utermctl 不逐字节相同")
     }
 
+    /// 构建期的「Copy utermctl CLI」阶段把 `scripts/utermctl` 拷进
+    /// `uTerm.app/Contents/Resources/`。技能安装时链过去的就是它，所以它必须与仓库
+    /// 文件逐字节相同 —— 这条同时守着那个 Run Script 阶段没被误删。
+    func testBundledClientMatchesRepositoryFile() throws {
+        guard let bundled = Bundle.main.url(forResource: "utermctl", withExtension: nil) else {
+            throw XCTSkip("宿主包里没有 utermctl（不是 uTerm.app 宿主），跳过")
+        }
+        XCTAssertEqual(try Data(contentsOf: bundled), try repositoryFileData("scripts/utermctl"))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: bundled.path),
+                      "包内脚本要带可执行位")
+    }
+
     /// 常量本身可以没有末尾换行（`#"""…"""#` 天然如此），补齐是物化这一步的活。
     func testMaterializedTextEndsWithExactlyOneNewline() {
         XCTAssertEqual(SkillInstaller.materializedText("a"), "a\n")
@@ -73,18 +89,30 @@ final class SkillDefinitionTests: XCTestCase {
         XCTAssertEqual(SkillInstaller.materializedText("a\n\n"), "a\n\n")
     }
 
-    /// uTerm 是沙盒 app，物化出的 `bin/utermctl` 必然带 `com.apple.quarantine`，
-    /// 直接执行就是 `operation not permitted`，而 **app 自己摘不掉**
-    /// （见 `SkillInstallerTests.testSandboxCannotClearItsOwnQuarantine`）。
-    /// 唯一的出路是让模型在自己那个非沙盒进程里摘，所以定位那一节必须写着怎么做。
-    func testRunSkillTellsTheModelHowToClearQuarantine() {
+    /// 客户端现在是包内脚本（随 app 签名，可以直接执行），所以定位那一节
+    /// **`[ -x ]` 优先**、`[ -r ]` 只作兜底。
+    func testRunSkillPrefersExecutingTheClientDirectly() {
         let doc = SkillDefinition.uTermRun.markdownContent
-        XCTAssertTrue(doc.contains("xattr -d com.apple.quarantine"),
-                      "定位客户端那一节要摘掉隔离属性，否则整套技能一条都跑不通")
-        XCTAssertTrue(doc.contains("python3 \"$UTERMCTL\""),
-                      "还要给出摘不掉时的退路：脚本可读，用解释器跑")
+        XCTAssertTrue(doc.contains("[ -x \"$p\" ]"), "定位要先认可执行的那份")
+        XCTAssertTrue(doc.contains("[ -r \"$p\" ]"), "不可执行时还要留个可读兜底")
+        XCTAssertLessThan(
+            doc.range(of: "[ -x \"$p\" ]")?.lowerBound ?? doc.endIndex,
+            doc.range(of: "[ -r \"$p\" ]")?.lowerBound ?? doc.startIndex,
+            "顺序反了：-x 必须在 -r 前面"
+        )
+    }
+
+    /// 1.12.x 装下的链接指向 app 自己写出的文件（带 `com.apple.quarantine`，
+    /// 见 `SkillInstallerTests.testAppWrittenClientIsQuarantinedAndCannotBeExecuted`）。
+    /// 那批用户升级前撞上的症状必须还写在文档里，附带两条出路。
+    func testRunSkillStillDocumentsTheLegacyQuarantineEscape() {
+        let doc = SkillDefinition.uTermRun.markdownContent
         XCTAssertTrue(doc.contains("operation not permitted"),
                       "要写出症状，模型撞上时才认得出来")
+        XCTAssertTrue(doc.contains("xattr -d com.apple.quarantine"),
+                      "出路一：模型跑在非沙盒进程里，摘得掉")
+        XCTAssertTrue(doc.contains("python3 \"$UTERMCTL\""),
+                      "出路二：脚本可读，用解释器跑")
     }
 
     func testCatalogCoversTheFourSkills() {
@@ -127,6 +155,8 @@ final class SkillDefinitionTests: XCTestCase {
         let file = try XCTUnwrap(carriers.first?.supportFiles.first)
         XCTAssertEqual(file.relativePath, "bin/utermctl")
         XCTAssertTrue(file.isExecutable)
+        // 走包内资源，不由 app 写出 —— 沙盒写出的文件必带 quarantine，exec 必 EPERM。
+        XCTAssertEqual(file.bundleResourceName, "utermctl")
         XCTAssertTrue(file.content.hasPrefix("#!/usr/bin/env python3"))
     }
 

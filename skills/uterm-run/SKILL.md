@@ -16,29 +16,27 @@ uTerm 是 macOS 上的 SSH 终端。它在本机开了一个 Unix domain socket�
 ## 先定位客户端
 
 ```sh
+UTERMCTL=""
 if command -v utermctl >/dev/null 2>&1; then
   UTERMCTL="$(command -v utermctl)"
 else
   for p in "$HOME"/.{claude,codex,cursor}/skills/uterm-run/bin/utermctl; do
-    if [ -r "$p" ]; then UTERMCTL="$p"; break; fi
+    if [ -x "$p" ]; then UTERMCTL="$p"; break; fi
+    if [ -r "$p" ] && [ -z "$UTERMCTL" ]; then UTERMCTL="$p"; fi
   done
 fi
 test -n "$UTERMCTL" || { echo "utermctl not found"; exit 1; }
-
-# uTerm 是沙盒 app，它写出的每个文件都带 com.apple.quarantine，直接执行会报
-# "operation not permitted"。沙盒里摘不掉（app 自己试过，removexattr 一律 EPERM），
-# 在这里摘得掉，而且摘一次长期有效：
-xattr -d com.apple.quarantine "$UTERMCTL" 2>/dev/null || true
 ```
 
-技能自带的那份（`~/.<tool>/skills/uterm-run/bin/utermctl`）随 uTerm 升级自动更新，
-PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才有的符号链接，指向同一个
-源文件，两者不会漂移。**找不到就直说找不到，不要自己写 socket 客户端、也不要改用
-`ssh`。**
+这两条路径都是符号链接，最终指向 `uTerm.app` 包内的脚本（随 app 一起签名），可以直接
+执行。技能自带的那份（`~/.<tool>/skills/uterm-run/bin/utermctl`）随 uTerm 升级自动更新，
+PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才有的，两者不会漂移。
+**找不到就直说找不到，不要自己写 socket 客户端、也不要改用 `ssh`。**
 
-万一 `xattr` 也摘不掉（比如你自己就跑在沙盒里），**不用放弃**：被挡住的只是 exec，
-文件本身照常可读，把所有 `"$UTERMCTL" …` 换成 `python3 "$UTERMCTL" …` 即可，
-行为一模一样（客户端是纯标准库的 Python 3 脚本）。
+万一执行时报 `operation not permitted`（uTerm 1.12.x 装下的旧链接指向 app 自己写出的
+文件，带着 `com.apple.quarantine`），跑一句
+`xattr -d com.apple.quarantine "$UTERMCTL"`，或者干脆把所有 `"$UTERMCTL" …` 换成
+`python3 "$UTERMCTL" …`（客户端是纯标准库的 Python 3 脚本，行为一模一样）。
 
 ## 先探活
 
@@ -46,8 +44,7 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 "$UTERMCTL" ping
 ```
 
-`ok: true` 才能继续。这一步同时验掉了上面的隔离属性：**报
-`operation not permitted` 就是隔离属性还在**，改用 `python3 "$UTERMCTL" ping`。
+`ok: true` 才能继续。
 
 三种常见失败：
 

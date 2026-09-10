@@ -119,6 +119,7 @@ struct uTermApp: App {
         controlSettings.observe { settings in
             if settings.isEnabled {
                 settings.startupError = server.start()
+                SkillInstaller.repairInstalledSourcesOnce()
             } else {
                 server.stop()
                 settings.startupError = nil
