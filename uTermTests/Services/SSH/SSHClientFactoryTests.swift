@@ -24,5 +24,21 @@ final class SSHClientFactoryTests: XCTestCase {
         let size = 1 << 20
         XCTAssertGreaterThanOrEqual(size, 32_768, "低于 RFC 4254 最小包长，NIOSSH 会 precondition 失败")
         XCTAssertLessThanOrEqual(size, 1 << 24, "超过 NIOSSH 上限，NIOSSH 会 precondition 失败")
+        XCTAssertEqual(SSHClientFactory.maximumPacketSizeRange, 32_768...(1 << 24))
+    }
+
+    /// 越界值必须被夹回区间：precondition 越界是**进程 abort**，捕获不到。
+    func testClampedMaximumPacketSizePinsOutOfRangeValues() {
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(0), 32_768)
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(-1), 32_768)
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(1 << 25), 1 << 24)
+        XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(.max), 1 << 24)
+    }
+
+    /// 区间内的值原样通过 —— 夹钳不能顺手改动正常取值。
+    func testClampedMaximumPacketSizePassesInRangeValues() {
+        for size in [32_768, 1 << 17, 1 << 20, 1 << 24] {
+            XCTAssertEqual(SSHClientFactory.clampedMaximumPacketSize(size), size)
+        }
     }
 }

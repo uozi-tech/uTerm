@@ -48,13 +48,23 @@ nonisolated enum SSHClientFactory {
     ///
     /// 这个设置是**每条 SSH 连接**级别的，所以同一连接上的终端 PTY 通道与端口转发通道
     /// 也会拿到 1 MiB 窗口 —— 纯粹是缓冲变大，没有行为变化。跳板机那一跳必须一起设，
-    /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里。
+    /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里；
+    /// `USSHKitIntegration.connect`（uAppKit ≥ 1.4.6）内部对直连与跳板机两跳一并应用。
+    static let channelWindowOptions: Set<SSHProtocolOption> = [
+        .maximumPacketSize(clampedMaximumPacketSize(1 << 20))
+    ]
+
+    /// NIOSSH 允许的最大包长区间。
     ///
-    /// - Note: 目前**还没有接到连接上**：USSHKit（uAppKit 1.4.5）的
-    ///   `USSHKitIntegration.connect` 没有透出 Citadel 的 `protocolOptions`，uTerm 侧
-    ///   够不着。uAppKit 补上参数后，只需把它传给下面 `USSHKitIntegration.connect` 的
-    ///   `protocolOptions:`（uAppKit 内部同时用于直连与跳板机两条路径）。
-    static let channelWindowOptions: Set<SSHProtocolOption> = [.maximumPacketSize(1 << 20)]
+    /// `SSHPacketParser.init` 用两条 **precondition** 卡这个值 —— 越界不是抛错、不是
+    /// 回退默认值，而是直接 `abort()` 掐掉整个进程。所以宁可在这里把值夹回区间里也不
+    /// 能把越界值递下去：常量写错顶多是窗口没调成预期大小，传下去就是启动即崩。
+    static let maximumPacketSizeRange: ClosedRange<Int> = 32_768...(1 << 24)
+
+    /// 把包长夹进 `maximumPacketSizeRange`。
+    static func clampedMaximumPacketSize(_ raw: Int) -> Int {
+        min(max(raw, maximumPacketSizeRange.lowerBound), maximumPacketSizeRange.upperBound)
+    }
 
     static func connect(
         profile: SSHConnection.ProfileSnapshot,
@@ -88,15 +98,14 @@ nonisolated enum SSHClientFactory {
         )
 
         do {
-            // TODO(uAppKit): USSHKit 透出 protocolOptions 后，在这里补
-            // `protocolOptions: Self.channelWindowOptions`（见该常量的注释）。
             let shared = try await USSHKitIntegration.connect(
                 endpoint: endpoint,
                 credential: target.credential,
                 hostKeyStore: hostKeyVerifier,
                 hostKeyPolicy: packageHostKeyPolicy(),
                 connectTimeout: .seconds(connectTimeoutSeconds()),
-                approver: packageApprover(hostKeyApprover)
+                approver: packageApprover(hostKeyApprover),
+                protocolOptions: Self.channelWindowOptions
             )
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {
