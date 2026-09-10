@@ -16,6 +16,8 @@ struct uTermApp: App {
     @State private var appUpdater = AppUpdater()
     /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
     @State private var cloudKitSync = CloudKitSyncMonitor()
+    /// UserDefaults is bundle-local; bridge shared scalar preferences through iCloud KVS.
+    @State private var sharedPreferences = SharedPreferencesSync()
     @State private var forwardingCoordinator = ForwardingCoordinator()
     /// 全局端口转发的「启动自动化」编排器（App 级，注入 Welcome 与全局转发窗口）。
     @State private var globalForwarding = GlobalForwardingModel()
@@ -70,6 +72,10 @@ struct uTermApp: App {
         _lockModel = State(initialValue: AppLockModel(
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))
+        // Pull shared scalar preferences before the first scene body is evaluated.
+        // This matters for stateful services such as AccentState, which initialize
+        // from UserDefaults once rather than observing it continuously.
+        sharedPreferences.start()
     }
 
     /// 应用级服务的唯一启动点。由**任意**第一个出现的窗口触发（`bootstrapsAppServices`），

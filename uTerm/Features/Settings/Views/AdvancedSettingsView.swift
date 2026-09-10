@@ -131,6 +131,6 @@ struct AdvancedSettingsView: View {
         if sync.phase == .error, let e = sync.lastError {
             return "最近一次同步出错：\(e)。完整日志见下方「显示日志」。"
         }
-        return "SwiftData 通过 CloudKit 镜像在设备间同步主机 / 密钥；后台分批进行，非即时。完整事件日志见下方「显示日志」。"
+        return "主机 / 分组 / 密钥等数据通过 CloudKit，同步偏好通过 iCloud KVS 在设备间共享；后台进行，非即时。完整事件日志见下方「显示日志」。"
     }
 }

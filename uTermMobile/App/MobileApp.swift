@@ -18,6 +18,8 @@ struct MobileApp: App {
     @State private var lock: AppLockModel
     /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给设置页品牌卡/同步诊断实时状态。
     @State private var cloudKitSync = CloudKitSyncMonitor()
+    /// UserDefaults is bundle-local; bridge shared scalar preferences through iCloud KVS.
+    @State private var sharedPreferences = SharedPreferencesSync()
 
     let modelContainer: ModelContainer = MobileModelContainer.make()
 
@@ -28,6 +30,8 @@ struct MobileApp: App {
         _lock = State(initialValue: AppLockModel(
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))
+        // Pull shared scalar preferences before the first scene body is evaluated.
+        sharedPreferences.start()
     }
 
     private var appearance: AppearancePreference {
@@ -38,7 +42,10 @@ struct MobileApp: App {
         WindowGroup {
             MobileLaunchRoot(appearance: appearance, lock: lock)
                 .environment(cloudKitSync)
-                .task { cloudKitSync.start() }
+                .task {
+                    sharedPreferences.start()
+                    cloudKitSync.start()
+                }
         }
         .modelContainer(modelContainer)
     }

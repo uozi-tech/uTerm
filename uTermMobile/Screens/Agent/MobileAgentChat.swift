@@ -45,10 +45,10 @@ struct MobileAgentChat: View {
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
     /// 换会话时收回默认值。
     @State private var expandedWindowLimit: Int?
-    /// 活动 provider 的持久化选择（与 macOS `@AppStorage("activeProviderID")` 对齐：跨会话 / 重启记忆）。
-    @AppStorage("mobileAgentActiveProviderID") private var activeProviderIDString = ""
-    /// 「自然语言 → 执行」信任档位，持久化（与 macOS `@AppStorage("agentSafety")` 对齐）。
-    @AppStorage("mobileAgentSafety") private var safetyRaw = AgentSafety.readAuto.rawValue
+    /// 活动 provider 的持久化选择（与 macOS 共用 key，可经 iCloud KVS 同步）。
+    @AppStorage("activeProviderID") private var activeProviderIDString = ""
+    /// 「自然语言 → 执行」信任档位（与 macOS 共用 key，可经 iCloud KVS 同步）。
+    @AppStorage("agentSafety") private var safetyRaw = AgentSafety.readAuto.rawValue
 
     private var ctx: String { serverContext ?? "" }
     private var safety: AgentSafety { AgentSafety(rawValue: safetyRaw) ?? .readAuto }
@@ -75,6 +75,9 @@ struct MobileAgentChat: View {
         .sheet(isPresented: $addingProvider) { ProviderFormSheet() }
         .onAppear { configureModel() }
         .onChange(of: providers) { _, list in model.providers = list }
+        .onChange(of: activeProviderIDString) { _, value in
+            model.activeProviderID = UUID(uuidString: value)
+        }
         // 「自动执行」档位：进入「待确认」即自动批准首个 pending（逐条迭代）；切档 / 切回前台时补批一次。
         .onChange(of: model.state) { _, _ in autoApproveNextIfNeeded() }
         .onChange(of: safetyRaw) { _, _ in autoApproveNextIfNeeded() }
