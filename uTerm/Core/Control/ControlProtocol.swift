@@ -803,6 +803,9 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
 
     // 服务端兜底
     case handler_timeout
+    /// 并发客户端超过 `ControlServer.maxActiveClients`，连接在读请求前就被拒。
+    /// 服务端**不读**请求体就回这条，客户端应退避后重试（这是唯一可重试的服务端码）。
+    case server_busy
     case invalid_request
     case app_not_ready
     case operation_failed

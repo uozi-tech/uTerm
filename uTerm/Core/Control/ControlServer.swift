@@ -327,8 +327,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         _ = fcntl(clientFD, F_SETFD, FD_CLOEXEC)
 
         guard let token = register(clientFD: clientFD, generation: runGeneration) else {
-            Darwin.shutdown(clientFD, SHUT_RDWR)
-            Darwin.close(clientFD)
+            rejectAsBusy(clientFD: clientFD)
             return
         }
 
@@ -338,6 +337,31 @@ nonisolated final class ControlServer: @unchecked Sendable {
                 token: token,
                 generation: runGeneration
             )
+        }
+    }
+
+    /// 槽位满时的拒绝路径：先回一条 `server_busy`，再拆连接。光 shutdown + close
+    /// 的话客户端只看得到空响应，分不清「服务端忙」和「socket 坏了」—— 前者退避重试
+    /// 就好，后者才该报错。
+    ///
+    /// **必须离开 accept 线程**：写走的是和正常响应同一条带 `ioTimeout` 预算的
+    /// 非阻塞 send 路径，把它留在 accept 循环里，一次慢写就会把后面所有连接
+    /// （包括本来拿得到槽位的）一起堵住。写不出去就算了，连接照关。
+    ///
+    /// 这条连接从没进过 `activeClients`，因此没有 token 之争：这个块独占该 fd，
+    /// 也由它自己 shutdown + close。请求体一个字节都不读 —— 拒绝发生在读之前，
+    /// 客户端 `sendall` 撞 EPIPE 时先读一次就能拿到这条响应（AF_UNIX 上已写回的
+    /// 数据不因对端 close 丢失）。
+    private func rejectAsBusy(clientFD: Int32) {
+        let response = ControlResponse.failure(
+            id: nil,
+            code: .server_busy,
+            message: "uTerm 命令行接口并发已满（上限 \(maxActiveClients)），稍后重试"
+        )
+        clientQueue.async { [self] in
+            writeResponse(response, to: clientFD)
+            Darwin.shutdown(clientFD, SHUT_RDWR)
+            Darwin.close(clientFD)
         }
     }
 
@@ -505,7 +529,12 @@ nonisolated final class ControlServer: @unchecked Sendable {
         // race. Exactly one path may claim send/close ownership for this token.
         guard claimCompletion(clientFD: clientFD, token: token) else { return }
         defer { finish(clientFD: clientFD, token: token) }
+        writeResponse(response, to: clientFD)
+    }
 
+    /// 只负责把一条响应编码后写到 fd 上：不碰 `activeClients`、不关 fd。归属与关闭
+    /// 由调用方决定（`writeAndFinish` 靠 token 认领，`rejectAsBusy` 独占未登记的 fd）。
+    private func writeResponse(_ response: ControlResponse, to clientFD: Int32) {
         let data: Data
         do {
             data = try ControlProtocol.encode(response)

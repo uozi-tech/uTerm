@@ -152,9 +152,12 @@ final class ControlServerTests: XCTestCase {
         XCTAssertEqual(after["id"] as? String, "after")
     }
 
-    /// 并发上限：占满槽位后，新连接直接被关掉（不排队、不吃内存），
-    /// 已占位的那条仍然拿到自己的响应。
-    func testConcurrentClientCapClosesExtraConnections() async throws {
+    /// 并发上限：占满槽位后，新连接**先收到 `server_busy` 再**被关掉（不排队、不吃
+    /// 内存），已占位的那条仍然拿到自己的响应。
+    ///
+    /// 关键是那条响应：只 shutdown + close 的话客户端只看得到空响应，分不清
+    /// 「服务端忙、退避重试就好」与「socket 坏了、该报错」。
+    func testConcurrentClientCapAnswersServerBusyBeforeClosing() async throws {
         try await startServer(maxActiveClients: 1, ioTimeout: 1.5) { request in
             .success(id: request.id, message: "pong")
         }
@@ -164,9 +167,20 @@ final class ControlServerTests: XCTestCase {
         let partial = Data(#"{"action":"pi"#.utf8)
         _ = partial.withUnsafeBytes { Darwin.send(holder, $0.baseAddress, partial.count, 0) }
 
-        // 第二条连接：槽位满 → register 返回 nil → 立刻 shutdown+close，读到 EOF（空响应）。
+        // 第二条连接：槽位满 → register 返回 nil → 回一条 server_busy 再 shutdown+close。
         let rejected = try await sendRaw(request("ping", id: "rejected"))
-        XCTAssertTrue(rejected.isEmpty, "超出并发上限的连接应被直接关掉，实际收到：\(rejected)")
+        XCTAssertFalse(rejected.isEmpty, "超出并发上限的连接必须先拿到一条响应，而不是空的 EOF")
+        let payload = try json(rejected)
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(
+            payload["code"] as? String,
+            ControlErrorCode.server_busy.rawValue,
+            "被拒的连接必须能和「socket 坏了」区分开"
+        )
+        XCTAssertFalse(
+            (payload["message"] as? String ?? "").isEmpty,
+            "错误码要配一句能给人看的话"
+        )
 
         // 收尾：第一条连接读到自己的超时响应，槽位随之释放。
         let text = try await drain(holder)
