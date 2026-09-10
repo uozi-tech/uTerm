@@ -243,12 +243,15 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
 | `run_failed` | `run-many` / `quick-run`：一台都没成 |
 | `file_not_found` / `file_exists` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
+| `server_busy` | 服务端的连接槽位满了（一共 8 个）—— 退避重试过仍不行就等一会儿，或把 `--parallel` 调小 |
+| `local_read_failed` / `local_write_failed` | 客户端自己的本地文件 I/O 失败（只出现在 `sftp get` / `put`），见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
 | `handler_timeout` | uTerm 侧 120 秒兜底超时 |
 | `invalid_request` | 缺字段 / 字段冲突 |
 | `not_implemented` | 这个动作在当前 uTerm 版本里还没实现 |
 
-客户端的退出码：`0` 成功，`2` 连不上 uTerm 或客户端自己的前置检查没过，`3` 门禁，
+客户端的退出码：`0` 成功，`2` 连不上 uTerm（含服务端槽位满的 `server_busy`）、客户端
+自己的前置检查没过或本地文件 I/O 失败，`3` 门禁，
 `4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败（含 `run_failed` 的全军覆没），
 `6` 超时，`7` 多主机部分失败（`run_partial_failure`），`1` 其它。

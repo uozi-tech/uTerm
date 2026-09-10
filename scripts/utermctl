@@ -36,14 +36,26 @@ SOCKET_CANDIDATES = [
 # 拒绝，而是由客户端切片后多请求并行传（见「大文件传输」一节）。
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
-# 分片传输的默认值。并发上限 8 = ControlServer.maxActiveClients：再多也只是排队，
-# 还会把别的客户端挤掉。分片上限就是单请求上限。
+# 分片传输的默认值。并发上限 6 < ControlServer.maxActiveClients（8）：超过槽位的连接
+# 服务端**不写响应直接关掉**（客户端看到 `empty_response`）或回 `server_busy`，所以
+# 留两个槽位给校验用的 `run` 和别的 utermctl 调用。分片上限就是单请求上限。
 DEFAULT_CHUNK_BYTES = MAX_FILE_BYTES
 DEFAULT_PARALLEL = 4
-MAX_PARALLEL = 8
+MAX_PARALLEL = 6
 
 # 分片失败重试 2 次，指数退避；仍失败整条传输就失败（不留半截还报成功）。
 CHUNK_RETRY_DELAYS = (0.5, 1.0)
+# 服务端槽位满是**排队问题不是错误**，值得更有耐心：这两个码退避到 4 秒、试 5 次。
+BUSY_RETRY_DELAYS = (0.5, 1.0, 2.0, 4.0, 4.0)
+BUSY_CODES = frozenset(["server_busy", "empty_response"])
+
+# 分片状态 sidecar（见 TransferState）与 get 的半成品后缀。
+SIDECAR_SUFFIX = ".utermctl-transfer.json"
+SIDECAR_VERSION = 1
+PART_SUFFIX = ".part"
+
+# 自测专用：指向一个文件时，重试退避只往里记一行秒数、不真的睡。
+SLEEP_TRACE = os.environ.get("UTERMCTL_SLEEP_TRACE")
 
 # 远端算 sha256：两个工具挑一个，都没有就跳过校验（不算失败）。
 REMOTE_SHA256_TIMEOUT = 300
@@ -142,14 +154,12 @@ def build_parser():
     p = sftp_add("get", "下载一个文件到本地（超过分片大小自动切片并行）")
     p.add_argument("path")
     p.add_argument("local", help="本地落盘路径")
-    p.add_argument("--force", action="store_true", help="覆盖已存在的本地文件")
-    transfer_options(p)
+    transfer_options(p, "覆盖已存在的本地文件")
 
     p = sftp_add("put", "上传一个本地文件（超过分片大小自动切片并行）")
     p.add_argument("local", help="本地文件路径")
     p.add_argument("path", help="远端目标路径")
-    p.add_argument("--force", action="store_true", help="覆盖已存在的远端文件")
-    transfer_options(p)
+    transfer_options(p, "覆盖已存在的远端文件")
 
     for name, help_text in (
         ("mkdir", "建目录"),
@@ -197,10 +207,16 @@ def build_parser():
     return parser
 
 
-def transfer_options(p):
-    """`sftp get` / `sftp put` 共用的分片传输选项。"""
-    p.add_argument("--resume", action="store_true",
-                   help="断点续传：从已有的那部分之后接着传")
+def transfer_options(p, force_help):
+    """`sftp get` / `sftp put` 共用的分片传输选项。
+
+    `--force`（整份重来、覆盖目标）与 `--resume`（补没传完的片）是互相矛盾的两件事，
+    放进同一个互斥组：一起给就是 argparse 报错、退出码 2。
+    """
+    exclusive = p.add_mutually_exclusive_group()
+    exclusive.add_argument("--force", action="store_true", help=force_help)
+    exclusive.add_argument("--resume", action="store_true",
+                           help="断点续传：按分片状态文件补没传完的片（与 --force 互斥）")
     p.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL,
                    help="并行分片数，1–%d，默认 %d" % (MAX_PARALLEL, DEFAULT_PARALLEL))
     p.add_argument("--no-verify", dest="verify", action="store_false", default=True,
@@ -380,7 +396,11 @@ def exit_code_for(response):
     if response.get("ok"):
         return EXIT_OK
     code = response.get("code") or ""
-    if code in (CODE_NOT_RUNNING, CODE_SOCKET_STALE, "socket_error", "empty_response"):
+    # `server_busy` 与 `empty_response` 是同一件事的两种表现（服务端槽位满，后者是它
+    # 直接关连接）；`local_*` 是客户端自己的磁盘 / 本地文件问题 —— 都归「本地」这一档。
+    if code in (CODE_NOT_RUNNING, CODE_SOCKET_STALE, "socket_error", "empty_response",
+                "server_busy", "local_read_failed", "local_write_failed",
+                "local_failure"):
         return EXIT_LOCAL
     if code in ("control_disabled", "mutations_disabled", "host_sftp_only"):
         return EXIT_GATED
@@ -405,20 +425,32 @@ def exit_code_for(response):
 #
 # 单次 IPC 请求上限 8 MiB（ControlProtocol.maxFileBytes），而 SFTP 的往返延迟才是
 # 真正的瓶颈。所以超过一片的文件由客户端切成 [offset, offset+length) 的片，各自开
-# 一条 socket 连接并行发（服务端 maxActiveClients = 8，所以并发上限也是 8）。
+# 一条 socket 连接并行发。并发上限 6 < 服务端的 `maxActiveClients = 8`：超过槽位的
+# 连接服务端**不写响应直接关掉**（客户端看到的是 `empty_response`）或回
+# `server_busy`，留两个槽位给校验用的 `run` 和别的 utermctl 调用。
 #
 # `sftp-put` 的首片决定覆盖语义（create / overwrite），其余片一律 `write`（不截断、
 # 写到 offset）—— 所以首片必须先单独发完再并行，否则一条迟到的 overwrite 会把已经
 # 写进去的尾巴截掉。
+#
+# 并行分片失败留下的是**带空洞的稀疏文件**，不是前缀 —— 按大小续传会永远跳过空洞。
+# 所以每趟分片传输都在本地写一份分片状态 sidecar（见 `TransferState`），`--resume`
+# 只补没成的片；「按大小续传」只在顺序模式（`--parallel 1`）下才可信。
 # ---------------------------------------------------------------------------
 
-# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任。
+# 这些码重试没有意义：门禁、找不到、参数不对、远端已存在、密钥没信任，以及客户端
+# 自己判的本地磁盘 / 本地文件问题（重试改变不了事实）。
 PERMANENT_CODES = frozenset([
     "control_disabled", "mutations_disabled", "host_sftp_only",
     "invalid_request", "not_implemented", "file_exists", "file_too_large",
     "permission_denied", "is_directory", "auth_failed", "request_too_large",
+    "local_read_failed", "local_write_failed", "local_failure",
     CODE_NOT_RUNNING, CODE_SOCKET_STALE,
 ])
+
+# 「不知道服务端到底做没做」的三个码：响应可能是在服务端**已经写完之后**丢的。
+# 首片带 create 时不能照原样重发（会撞自己刚写出来的文件），要先 stat 一下。
+AMBIGUOUS_CODES = frozenset(["empty_response", "handler_timeout", "socket_error"])
 
 
 def new_request(action, **fields):
@@ -438,19 +470,84 @@ def is_retryable(code):
     return not code.startswith("host_key_")
 
 
-def send_chunk(body):
-    """发一片：失败重试 2 次（0.5 / 1 秒退避），仍失败就把最后那条响应原样返回。
+def backoff(seconds):
+    """退避。`UTERMCTL_SLEEP_TRACE`（自测专用）指向一个文件时只记账、不真的睡。"""
+    if SLEEP_TRACE:
+        try:
+            with open(SLEEP_TRACE, "a") as handle:
+                handle.write("%.3f\n" % seconds)
+        except OSError:
+            pass
+        return
+    time.sleep(seconds)
 
-    每次重试换一个 id —— 服务端的日志里能看出这是第几次。`send_request` 自己不共享
+
+def send_with_retry(attempt):
+    """把「一次尝试」按错误码退避重试。
+
+    `attempt(previous)` 返回一条响应，`previous` 是上一次的失败响应（第一次是 None）。
+    槽位满（`server_busy` / 服务端直接关连接时看到的 `empty_response`）更耐心：
+    退避 0.5/1/2/4/4 s；其余可重试码照旧 2 次（0.5 / 1 s）。
+    """
+    response = attempt(None)
+    tries = 0
+    while not response.get("ok"):
+        code = response.get("code") or ""
+        if not is_retryable(code):
+            break
+        delays = BUSY_RETRY_DELAYS if code in BUSY_CODES else CHUNK_RETRY_DELAYS
+        if tries >= len(delays):
+            break
+        backoff(delays[tries])
+        tries += 1
+        response = attempt(response)
+    return response
+
+
+def send_chunk(body, fixup=None):
+    """发一片。每次重试换一个 id —— 服务端日志里能看出这是第几次。
+
+    `fixup(body, previous)` 在重试前调整请求体（首片 create 的幂等修正），返回
+    `(新请求体, 终局响应或 None)`；给了终局响应就不再重发。`send_request` 自己不共享
     任何状态（每次新建 socket），所以线程池里直接调就行。
     """
-    response = send_request(body)
-    for delay in CHUNK_RETRY_DELAYS:
-        if response.get("ok") or not is_retryable(response.get("code") or ""):
-            return response
-        time.sleep(delay)
-        response = send_request(dict(body, id=str(uuid.uuid4())))
-    return response
+    current = dict(body)
+
+    def attempt(previous):
+        if previous is not None and fixup is not None:
+            adjusted, terminal = fixup(dict(current), previous)
+            if terminal is not None:
+                return terminal
+            current.clear()
+            current.update(adjusted)
+        current["id"] = str(uuid.uuid4())
+        return send_request(dict(current))
+
+    return send_with_retry(attempt)
+
+
+def create_fixup(host, path, written):
+    """首片 `create` 的重试幂等修正。
+
+    响应丢了（`AMBIGUOUS_CODES`）不等于没写成。照原样重发 `create` 会撞上自己刚写出
+    来的文件、报成 `file_exists`。所以先 stat：不存在就原样重发；存在且不比首片大
+    （就是我们刚写的那片）改发 `write`；存在且更大 = 别人的文件，报 `file_exists`。
+    """
+    def fixup(body, previous):
+        if body.get("mode") != "create" or (previous.get("code") or "") not in AMBIGUOUS_CODES:
+            return body, None
+        stat, _ = remote_stat(host, path)
+        if stat is None:
+            return body, None
+        size = int(stat.get("size") or 0)
+        if size <= written:
+            return dict(body, mode="write"), None
+        return body, {
+            "id": body.get("id"), "ok": False, "code": "file_exists",
+            "message": ("远端 %s 已存在且有 %d 字节（比刚发出去的首片 %d 字节还大），"
+                        "不是这次上传写的 —— 要覆盖请加 --force" % (path, size, written)),
+        }
+    return fixup
 
 
 def chunk_size_for(args):
@@ -469,8 +566,8 @@ def chunk_size_for(args):
 def parallel_for(args):
     value = getattr(args, "parallel", DEFAULT_PARALLEL)
     if value < 1 or value > MAX_PARALLEL:
-        fail("--parallel 要在 1–%d 之间（服务端并发客户端上限），实得 %d"
-             % (MAX_PARALLEL, value))
+        fail("--parallel 要在 1–%d 之间（服务端并发客户端上限是 8，留两个槽位给校验的 "
+             "run 和别的调用），实得 %d" % (MAX_PARALLEL, value))
     return value
 
 
@@ -530,6 +627,180 @@ class Progress(object):
             sys.stderr.flush()
 
 
+class TransferState(object):
+    """分片状态 sidecar：`<本地路径>.utermctl-transfer.json`（put / get 都写在本地）。
+
+    为什么要它：并行分片失败留下的是**带空洞的稀疏文件**（get 那边还是满尺寸的
+    NUL 洞），按 `stat.size` 续传会永远跳过空洞，拼出一个悄悄错掉的文件。所以哪些片
+    成了必须显式记账：每片成功就原子更新（写 `.tmp` 再 rename），整趟成功后删掉。
+
+    落盘的字段：
+        version / direction（put|get）/ remotePath / localPath / totalBytes /
+        chunkBytes / baseOffset（sidecar 之前就可信的前缀）/ identity（身份）/ done
+    """
+
+    def __init__(self, path, direction, remote, local, total, chunk, identity,
+                 base=0, done=None):
+        self.path = path
+        self.direction = direction
+        self.remote = remote
+        self.local = local
+        self.total = int(total)
+        self.chunk = int(chunk)
+        self.identity = identity
+        self.base = int(base)
+        self.done = set(int(off) for off in (done or []))
+        self.lock = threading.Lock()
+        self.disabled = False
+        self.armed = False        # 落过盘没有（单请求传输不写 sidecar：没什么可续的）
+        self.note = None
+
+    @staticmethod
+    def load(path):
+        """读一份 sidecar；不存在 / 读不懂 / 版本对不上都当没有。"""
+        try:
+            with open(path, "r") as handle:
+                body = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(body, dict) or body.get("version") != SIDECAR_VERSION:
+            return None
+        return body
+
+    @property
+    def slices(self):
+        """[base, total) 上的全部分片。空文件也有一片（长度 0），好把文件建出来。"""
+        if self.total <= self.base:
+            return [(0, 0)] if self.base == 0 else []
+        return [(off, min(self.chunk, self.total - off))
+                for off in range(self.base, self.total, self.chunk)]
+
+    @property
+    def pending(self):
+        return [(off, length) for off, length in self.slices if off not in self.done]
+
+    @property
+    def resumed(self):
+        """目标里已经可信的字节数：sidecar 之前的前缀 + 已完成的片。"""
+        return self.base + sum(length for off, length in self.slices
+                               if off in self.done)
+
+    def complete(self, offset):
+        with self.lock:
+            self.done.add(offset)
+            self._save()
+
+    def save(self):
+        with self.lock:
+            self._save()
+
+    def _save(self):
+        if self.disabled:
+            return
+        body = {
+            "version": SIDECAR_VERSION,
+            "direction": self.direction,
+            "remotePath": self.remote,
+            "localPath": self.local,
+            "totalBytes": self.total,
+            "chunkBytes": self.chunk,
+            "baseOffset": self.base,
+            "identity": self.identity,
+            "done": sorted(self.done),
+            "updatedAt": round(time.time(), 3),
+        }
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w") as handle:
+                json.dump(body, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.path)      # 原子：读的人要么看到旧的、要么看到新的
+            self.armed = True
+        except OSError as error:
+            # 写不了状态文件（目录只读之类）不该让传输失败，但要说清「这趟不能续传」。
+            self.disabled = True
+            self.note = "分片状态文件写不了（%s）—— 这趟传完之前断了就没法 --resume" % error
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def remove(self):
+        for path in (self.path + ".tmp", self.path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def hint(self, target):
+        """失败时给用户的续传提示。"""
+        if self.disabled:
+            return "没有分片状态文件（%s）—— 删掉 %s 整份重传" % (self.note, target)
+        if not self.armed:
+            return "单请求传输，没有分片状态可续 —— 整份重传（目标已存在时加 --force）"
+        return "分片状态在 %s，加 --resume 接着传（别去动 %s）" % (self.path, target)
+
+
+def sidecar_path(local):
+    return local + SIDECAR_SUFFIX
+
+
+def local_identity(path):
+    """put 的身份：本地源文件的大小 + mtime（纳秒）。"""
+    info = os.stat(path)
+    return {"size": info.st_size, "mtimeNs": info.st_mtime_ns}
+
+
+def remote_identity(stat):
+    """get 的身份：远端的大小 + mtime。"""
+    return {"size": int((stat or {}).get("size") or 0),
+            "modifiedAt": (stat or {}).get("modifiedAt")}
+
+
+def identity_matches(saved, current):
+    """大小必须一样；两边都有的时间戳也必须一样（少了一边就只认大小）。"""
+    try:
+        if int(saved.get("size", -1)) != int(current.get("size", -2)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    for key in ("mtimeNs", "modifiedAt"):
+        left, right = saved.get(key), current.get(key)
+        if left is not None and right is not None and left != right:
+            return False
+    return True
+
+
+def state_for(direction, args, saved, local, total, chunk, identity, base):
+    """按 `--resume` 与 sidecar 决定这趟从哪起。前置拒绝一律 `fail()`（退出码 2）。"""
+    path = sidecar_path(local)
+    if not args.resume or saved is None:
+        # 不续传：新传输从头来，顺手把旧 sidecar 盖掉（`base` 只在顺序模式的
+        # 「按大小续传」里才非 0）。
+        return TransferState(path, direction, args.path, local, total, chunk,
+                             identity, base=base)
+    if saved.get("direction") != direction or saved.get("remotePath") != args.path:
+        fail("分片状态文件 %s 记的是 %s %s，与这次的 %s %s 不是一回事 —— "
+             "删掉它，或换一个本地路径" % (path, saved.get("direction"),
+                                      saved.get("remotePath"), direction, args.path))
+    if not identity_matches(saved.get("identity") or {}, identity):
+        fail("分片状态文件 %s 记的文件已经变了（记的 %r，现在 %r）—— 接着传会拼出一个"
+             "错的文件。删掉它再整份重传" % (path, saved.get("identity"), identity))
+    return TransferState(path, direction, args.path, local,
+                         int(saved.get("totalBytes") or total),
+                         int(saved.get("chunkBytes") or chunk),
+                         identity, base=int(saved.get("baseOffset") or 0),
+                         done=saved.get("done") or [])
+
+
+def no_sidecar_resume_error(path, kind):
+    return ("没有分片状态文件 %s：上一趟要是并行传的，留下的是**带空洞的稀疏文件**，"
+            "按大小续传会跳过空洞、拼出一个错的文件。要么去掉 --resume 整份重传"
+            "（%s），要么加 --parallel 1 按大小续传 —— 只有上一趟也是 --parallel 1 "
+            "时这么做才对。" % (path, kind))
+
+
 def local_sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -578,14 +849,15 @@ def verify_pair(args, local_path, chunked):
 
 
 def remote_stat(host, path):
-    """回 (字节数, None) 或 (None, 失败响应)。"""
+    """回 (stat 字典, None) 或 (None, 失败响应)。"""
     response = send_request(new_request("sftp-stat", host=host, path=path))
     if not response.get("ok"):
         return None, response
-    return int((response.get("stat") or {}).get("size") or 0), None
+    return (response.get("stat") or {}), None
 
 
 def decode_payload(payload):
+    """回 bytes；`None` 是**错误**（响应里既没有 base64 也没有 text），不是 EOF。"""
     if payload.get("base64") is not None:
         return base64.b64decode(payload["base64"])
     if payload.get("text") is not None:
@@ -611,6 +883,11 @@ def transfer_stats(kind, args, **fields):
         "sha256": fields.get("sha256"),
         "verified": fields.get("verified", False),
         "verifyNote": fields.get("verifyNote"),
+        # 失败后的恢复账：目标是不是半截的、还能不能 --resume、状态文件与半成品在哪。
+        "incomplete": fields.get("incomplete", False),
+        "resumable": fields.get("resumable", False),
+        "statePath": fields.get("statePath"),
+        "partPath": fields.get("partPath"),
     }
 
 
@@ -626,15 +903,53 @@ def transfer_failure(response, stats):
     }
 
 
-def put_mode(offset, resumed, force):
-    """首片决定覆盖语义，其余片不截断。
+def first_put_mode(args, resuming, host, path):
+    """首片（offset 0）带的覆盖语义，其余片一律 `write`。
 
     与规划里「首片恒 overwrite」不同：没有 `--force` 时首片用 `create`，让服务端回
     `file_exists` —— 否则大文件会绕过 `put` 默认不覆盖的保护，与小文件不一致。
+
+    续传时首片还没成：文件多半已经被上一趟的别的片建出来了。再发 `create` 会撞
+    `file_exists`，所以先 stat：远端有就用 `write`（不截断）。
     """
-    if offset > 0 or resumed > 0:
-        return "write"
-    return "overwrite" if force else "create"
+    if resuming:
+        stat, _ = remote_stat(host, path)
+        if stat is not None:
+            return "write"
+    return "overwrite" if args.force else "create"
+
+
+def run_chunks(plan, workers, worker, stop):
+    """并行跑分片。第一条失败就置停：不再开新片，已经在跑的等它自己结束。
+
+    回 `(成功的字节数, 失败响应或 None)`。worker 任何异常都在里面收口成结构化响应；
+    这里再兜一层 `future.result()`，保证线程里的意外不会变成一坨 traceback。
+    """
+    moved = 0
+    error = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(worker, off, length): (off, length)
+                   for off, length in plan}
+        for future in concurrent.futures.as_completed(futures):
+            # 已经取消掉的片没有结果可取（`result()` 会抛 CancelledError）。
+            if future.cancelled():
+                continue
+            try:
+                outcome = future.result()
+            except BaseException as raised:      # noqa: BLE001
+                outcome = {"ok": False, "code": "local_failure",
+                           "message": "%s: %s" % (type(raised).__name__, raised)}
+            if outcome.get("ok"):
+                moved += futures[future][1]
+                continue
+            if outcome.get("cancelled"):
+                continue
+            if error is None:
+                error = outcome
+                stop.set()
+                for pending in futures:
+                    pending.cancel()
+    return moved, error
 
 
 def do_put(args):
@@ -645,76 +960,113 @@ def do_put(args):
     chunk = chunk_size_for(args)
     workers = parallel_for(args)
     started = time.time()
+    identity = local_identity(local)
 
-    resumed = 0
-    if args.resume:
-        size, error = remote_stat(args.host, args.path)
+    def blank(**extra):
+        fields = dict(started=started, bytes=0, total=total, chunks=0,
+                      parallel=workers, resumed=0)
+        fields.update(extra)
+        return transfer_stats("put", args, **fields)
+
+    saved = TransferState.load(sidecar_path(local))
+    base = 0
+    if args.resume and saved is None:
+        # 没有 sidecar 只能按远端大小续 —— 而那只在顺序模式下可信。
+        if workers != 1:
+            fail(no_sidecar_resume_error(sidecar_path(local), "远端已存在就加 --force"))
+        stat, error = remote_stat(args.host, args.path)
         if error is not None and error.get("code") != "file_not_found":
-            return transfer_failure(error, transfer_stats(
-                "put", args, started=started, bytes=0, total=total,
-                chunks=0, parallel=workers, resumed=0))
-        if size is not None:
+            return transfer_failure(error, blank())
+        if stat is not None:
+            size = int(stat.get("size") or 0)
             if size >= total:
                 fail("远端已有 %d 字节，不小于本地的 %d 字节 —— --resume 无从续起；"
                      "确认要整份重传就去掉 --resume 并加 --force" % (size, total))
-            resumed = size
+            base = size
+    state = state_for("put", args, saved, local, total, chunk, identity, base)
 
-    plan = [(off, min(chunk, total - off)) for off in range(resumed, total, chunk)]
+    plan = state.pending
+    resumed = state.resumed
+    chunked = len(state.slices) > 1 or resumed > 0
     if not plan:
-        plan = [(0, 0)]           # 空文件也要在远端建出来
-    chunked = len(plan) > 1 or resumed > 0
+        fail("分片状态文件 %s 说这份文件已经传完了 —— 要重传就删掉它，或去掉 --resume "
+             "加 --force" % state.path)
+    if chunked:
+        state.save()                      # 传输一开始就落一次盘
     progress = Progress("↑ " + os.path.basename(local), total - resumed,
                         sys.stderr.isatty() and not args.quiet)
+    stop = threading.Event()
 
-    fd = os.open(local, os.O_RDONLY)
+    try:
+        fd = os.open(local, os.O_RDONLY)
+    except OSError as error:
+        progress.finish("上传失败（local_read_failed）：%s" % error)
+        return transfer_failure(
+            {"code": "local_read_failed", "message": "%s：%s" % (local, error)}, blank())
 
-    def send_slice(offset, length):
+    def send_slice(offset, length, mode, fixup=None):
+        """一片的全部本地动作都在这儿收口 —— 线程里裸抛等于 traceback + 死账。"""
+        if stop.is_set():
+            return {"ok": False, "code": "cancelled", "cancelled": True,
+                    "message": "前面的片失败了，这片没发"}
         try:
             data = os.pread(fd, length, offset) if length else b""
-        except OSError as error:
-            return {"ok": False, "code": "local_read_failed", "message": str(error)}
-        return send_chunk(new_request(
-            "sftp-put", host=args.host, path=args.path, offset=offset,
-            mode=put_mode(offset, resumed, args.force),
-            contentBase64=base64.b64encode(data).decode("ascii")))
+            if len(data) != length:
+                return {"ok": False, "code": "local_read_failed",
+                        "message": "本地文件在 %d 处只读到 %d / %d 字节（传输期间被改了？）"
+                                   % (offset, len(data), length)}
+            response = send_chunk(new_request(
+                "sftp-put", host=args.host, path=args.path, offset=offset, mode=mode,
+                contentBase64=base64.b64encode(data).decode("ascii")), fixup=fixup)
+            if response.get("ok"):
+                state.complete(offset)
+                progress.advance(length)
+            return response
+        except Exception as raised:              # noqa: BLE001
+            return {"ok": False, "code": "local_read_failed",
+                    "message": "%s: %s" % (type(raised).__name__, raised)}
 
     try:
         sent = 0
         error = None
-        # 首片单独发完：它带的是 create / overwrite，晚到会截掉别人写好的尾巴。
-        response = send_slice(*plan[0])
-        if response.get("ok"):
-            sent += plan[0][1]
-            progress.advance(plan[0][1])
-        else:
-            error = response
-        if error is None and len(plan) > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(send_slice, off, length): length
-                           for off, length in plan[1:]}
-                for future in concurrent.futures.as_completed(futures):
-                    # 已经取消掉的片没有结果可取（`result()` 会抛 CancelledError）。
-                    if future.cancelled():
-                        continue
-                    outcome = future.result()
-                    if outcome.get("ok"):
-                        sent += futures[future]
-                        progress.advance(futures[future])
-                    elif error is None:
-                        error = outcome
-                        for pending in futures:
-                            pending.cancel()
+        rest = plan
+        if plan[0][0] == 0:
+            # 首片单独发完：它带的是 create / overwrite，晚到会截掉别人写好的尾巴。
+            mode = first_put_mode(args, resumed > 0 or bool(state.done),
+                                  args.host, args.path)
+            outcome = send_slice(plan[0][0], plan[0][1], mode,
+                                 create_fixup(args.host, args.path, plan[0][1]))
+            if outcome.get("ok"):
+                sent += plan[0][1]
+            else:
+                error = outcome
+            rest = plan[1:]
+        if error is None and rest:
+            moved, error = run_chunks(
+                rest, workers, lambda off, length: send_slice(off, length, "write"), stop)
+            sent += moved
     finally:
         os.close(fd)
 
     if error is not None:
-        stats = transfer_stats("put", args, started=started, bytes=sent, total=total,
-                               chunks=len(plan), parallel=workers, resumed=resumed)
-        progress.finish("上传失败（%s）：已传 %s / %s"
-                        % (error.get("code"), human(sent), human(total)))
-        return transfer_failure(error, stats)
+        incomplete = sent > 0 or resumed > 0
+        progress.finish("上传失败（%s）：已传 %s / %s。%s%s"
+                        % (error.get("code"), human(sent), human(total),
+                           ("远端 %s 现在是**不完整**的文件；" % args.path)
+                           if incomplete else "",
+                           state.hint(args.path)))
+        return transfer_failure(error, transfer_stats(
+            "put", args, started=started, bytes=sent, total=total, chunks=len(plan),
+            parallel=workers, resumed=resumed, incomplete=incomplete,
+            resumable=state.armed and not state.disabled,
+            statePath=state.path if state.armed else None))
 
     verdict = verify_pair(args, local, chunked)
+    if state.note and verdict["note"] is None:
+        verdict["note"] = state.note
+    # 全部片都成了：内容对不上是**内容**的问题，补片补不回来，留着 sidecar 只会让
+    # 下一次 --resume 无事可做。删掉它，让用户整份重传。
+    state.remove()
     stats = transfer_stats("put", args, started=started, bytes=sent, total=total,
                            chunks=len(plan), parallel=workers, resumed=resumed,
                            sha256=verdict["sha256"], verified=verdict["verified"],
@@ -733,99 +1085,175 @@ def do_get(args):
     chunk = chunk_size_for(args)
     workers = parallel_for(args)
     started = time.time()
+    # 成功之前绝不占用目标名：半截文件写在 `<目标>.part`，校验过了才 rename 过去。
+    part = local + PART_SUFFIX
 
-    size, error = remote_stat(args.host, args.path)
+    def blank(total=0, **extra):
+        fields = dict(started=started, bytes=0, total=total, chunks=0,
+                      parallel=workers, resumed=0)
+        fields.update(extra)
+        return transfer_stats("get", args, **fields)
+
+    stat, error = remote_stat(args.host, args.path)
     if error is not None:
-        return transfer_failure(error, transfer_stats(
-            "get", args, started=started, bytes=0, total=0,
-            chunks=0, parallel=workers, resumed=0))
+        return transfer_failure(error, blank())
+    size = int(stat.get("size") or 0)
+    identity = remote_identity(stat)
 
-    resumed = 0
-    if args.resume and exists:
-        resumed = os.path.getsize(local)
-        if resumed >= size:
-            fail("本地已有 %d 字节，不小于远端的 %d 字节 —— 无从续起；"
-                 "确认要整份重下就去掉 --resume 并加 --force" % (resumed, size))
+    saved = TransferState.load(sidecar_path(local))
+    base = 0
+    if args.resume:
+        if saved is None:
+            if workers != 1:
+                fail(no_sidecar_resume_error(sidecar_path(local),
+                                             "本地已存在就加 --force"))
+            # 旧版把半截文件直接落在目标名上，所以两处都看一眼；找到就先搬成 .part。
+            source = part if os.path.exists(part) else (local if exists else None)
+            if source is None:
+                fail("本地既没有 %s 也没有 %s —— 没有可续的东西，去掉 --resume 重新下载"
+                     % (part, local))
+            base = os.path.getsize(source)
+            if base >= size:
+                fail("本地已有 %d 字节，不小于远端的 %d 字节 —— 无从续起；"
+                     "确认要整份重下就去掉 --resume 并加 --force" % (base, size))
+            if source != part:
+                try:
+                    os.rename(source, part)
+                except OSError as raised:
+                    fail("把 %s 挪成 %s 失败：%s" % (source, part, raised))
+        elif saved.get("done") and not os.path.exists(part):
+            fail("分片状态文件 %s 在，但半成品 %s 不见了 —— 删掉状态文件重新下载"
+                 % (sidecar_path(local), part))
+    state = state_for("get", args, saved, local, size, chunk, identity, base)
 
-    plan = [(off, min(chunk, size - off)) for off in range(resumed, size, chunk)]
-    chunked = len(plan) > 1 or resumed > 0
+    plan = state.pending
+    resumed = state.resumed
+    chunked = len(state.slices) > 1 or resumed > 0
+    if not plan:
+        fail("分片状态文件 %s 说这份文件已经下完了 —— 要重下就删掉它，或去掉 --resume "
+             "加 --force" % state.path)
     progress = Progress("↓ " + os.path.basename(local), size - resumed,
                         sys.stderr.isatty() and not args.quiet)
-    note = None
+    stop = threading.Event()
 
     if not chunked:
         # 单请求：整文件（≤ 8 MiB），请求形状与旧版一模一样（不带 offset / length）。
         response = send_chunk(new_request("sftp-get", host=args.host, path=args.path))
         if not response.get("ok"):
             progress.finish("下载失败（%s）" % response.get("code"))
-            return transfer_failure(response, transfer_stats(
-                "get", args, started=started, bytes=0, total=size,
-                chunks=1, parallel=workers, resumed=0))
+            return transfer_failure(response, blank(total=size, chunks=1))
         data = decode_payload(response.get("file") or {})
         if data is None:
-            fail("响应里既没有 base64 也没有 text，无法落盘")
-        with open(local, "wb") as handle:
-            handle.write(data)
+            progress.finish("下载失败（invalid_response）")
+            return transfer_failure(
+                {"code": "invalid_response",
+                 "message": "响应里既没有 base64 也没有 text，无法落盘"},
+                blank(total=size, chunks=1))
+        try:
+            with open(part, "wb") as handle:
+                handle.write(data)
+        except OSError as raised:
+            progress.finish("下载失败（local_write_failed）：%s" % raised)
+            return transfer_failure(
+                {"code": "local_write_failed", "message": "%s：%s" % (part, raised)},
+                blank(total=size, chunks=1))
         received = len(data)
-        plan = plan or [(0, 0)]
     else:
-        fd = os.open(local, os.O_RDWR | os.O_CREAT, 0o644)
-        received = 0
-        ends = [resumed]
-        error = None
+        state.save()                      # 传输一开始就落一次盘
+        try:
+            fd = os.open(part, os.O_RDWR | os.O_CREAT, 0o644)
+        except OSError as raised:
+            progress.finish("下载失败（local_write_failed）：%s" % raised)
+            return transfer_failure(
+                {"code": "local_write_failed", "message": "%s：%s" % (part, raised)},
+                blank(total=size))
 
         def fetch(offset, length):
-            got = 0
-            while got < length:
-                response = send_chunk(new_request(
-                    "sftp-get", host=args.host, path=args.path,
-                    offset=offset + got, length=length - got))
-                if not response.get("ok"):
-                    return response, got
-                data = decode_payload(response.get("file") or {})
-                if not data:
-                    break         # 短读到 0 = 远端文件比 stat 时短了
-                os.pwrite(fd, data, offset + got)
-                got += len(data)
-                progress.advance(len(data))
-            return None, got
+            """取一片。**必须收满 `length` 字节** —— 少了是这片失败（可重试），不是
+            EOF：区间是按 stat 的大小切的，短读只能是远端在被改 / 服务端出岔子。"""
+            if stop.is_set():
+                return {"ok": False, "code": "cancelled", "cancelled": True,
+                        "message": "前面的片失败了，这片没取"}
+            high = [0]
+
+            def attempt(previous):
+                got = 0
+                while got < length:
+                    response = send_request(new_request(
+                        "sftp-get", host=args.host, path=args.path,
+                        offset=offset + got, length=length - got))
+                    if not response.get("ok"):
+                        return response
+                    data = decode_payload(response.get("file") or {})
+                    if data is None:
+                        return {"ok": False, "code": "invalid_response",
+                                "message": "响应里既没有 base64 也没有 text"}
+                    if not data:
+                        return {"ok": False, "code": "remote_short_read",
+                                "message": ("远端 %s 在 %d 处只给了 %d / %d 字节"
+                                            "（文件正在被写或被截短？）"
+                                            % (args.path, offset, got, length))}
+                    os.pwrite(fd, data, offset + got)
+                    got += len(data)
+                    if got > high[0]:     # 重试重来一遍时不重复计数
+                        progress.advance(got - high[0])
+                        high[0] = got
+                return {"ok": True, "code": "ok", "bytes": got}
+
+            try:
+                response = send_with_retry(attempt)
+                if response.get("ok"):
+                    state.complete(offset)
+                return response
+            except Exception as raised:          # noqa: BLE001
+                return {"ok": False, "code": "local_write_failed",
+                        "message": "%s: %s" % (type(raised).__name__, raised)}
 
         try:
             os.ftruncate(fd, size)        # 预分配，好让各片按 offset 直接 pwrite
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(fetch, off, length): (off, length)
-                           for off, length in plan}
-                for future in concurrent.futures.as_completed(futures):
-                    if future.cancelled():
-                        continue
-                    outcome, got = future.result()
-                    received += got
-                    ends.append(futures[future][0] + got)
-                    if outcome is not None and error is None:
-                        error = outcome
-                        for pending in futures:
-                            pending.cancel()
-            end = max(ends)
-            if error is None and end < size:
-                os.ftruncate(fd, end)     # 远端文件在传输期间变短了
-                note = "远端文件在传输期间从 %d 缩到了 %d 字节" % (size, end)
+            received, error = run_chunks(plan, workers, fetch, stop)
+        except OSError as raised:
+            received, error = 0, {"ok": False, "code": "local_write_failed",
+                                  "message": "%s：%s" % (part, raised)}
         finally:
             os.close(fd)
 
+        expected = size - resumed
+        if error is None and received != expected:
+            error = {"ok": False, "code": "incomplete_transfer",
+                     "message": "只收到 %d 字节，应为 %d —— 分片没铺满" % (received, expected)}
         if error is not None:
-            progress.finish("下载失败（%s）：已收 %s / %s"
-                            % (error.get("code"), human(received), human(size)))
+            progress.finish(
+                "下载失败（%s）：已收 %s / %s。半成品在 %s（目标 %s 还没生成，"
+                "内容**不完整**）；%s"
+                % (error.get("code"), human(received), human(size), part, local,
+                   state.hint(part)))
             return transfer_failure(error, transfer_stats(
                 "get", args, started=started, bytes=received, total=size,
-                chunks=len(plan), parallel=workers, resumed=resumed))
+                chunks=len(plan), parallel=workers, resumed=resumed,
+                incomplete=received > 0 or resumed > 0,
+                resumable=state.armed and not state.disabled, partPath=part,
+                statePath=state.path if state.armed else None))
 
-    verdict = verify_pair(args, local, chunked)
-    if note and verdict["note"] is None:
-        verdict["note"] = note
+    verdict = verify_pair(args, part, chunked)
+    if state.note and verdict["note"] is None:
+        verdict["note"] = state.note
+    state.remove()
+    mismatched = verdict["remote"] is not None and not verdict["verified"]
+    if not mismatched:
+        try:
+            os.replace(part, local)       # 校验过了才占用目标名
+        except OSError as raised:
+            progress.finish("下载失败（local_write_failed）：%s" % raised)
+            return transfer_failure(
+                {"code": "local_write_failed",
+                 "message": "把 %s 改名成 %s 失败：%s" % (part, local, raised)},
+                blank(total=size, partPath=part))
     stats = transfer_stats("get", args, started=started, bytes=received, total=size,
                            chunks=len(plan), parallel=workers, resumed=resumed,
                            sha256=verdict["sha256"], verified=verdict["verified"],
-                           verifyNote=verdict["note"])
+                           verifyNote=verdict["note"],
+                           partPath=part if mismatched else None)
     return finish_transfer("下载", local, progress, stats, verdict)
 
 
@@ -836,11 +1264,15 @@ def finish_transfer(verb, target, progress, stats, verdict):
     if stats["resumedFrom"]:
         summary += "（从 %s 续传）" % human(stats["resumedFrom"])
     if verdict["remote"] is not None and not verdict["verified"]:
+        # 片都传完了，内容却对不上 —— 补片补不回来，只能整份重传。
+        where = ("半成品留在 %s（目标名没生成）" % stats["partPath"]
+                 if stats.get("partPath") else "远端是完整大小但内容不对")
         progress.finish(summary + "\n" + (verdict["note"] or ""))
         return {
             "id": str(uuid.uuid4()), "ok": False, "code": "checksum_mismatch",
-            "message": (verdict["note"] or "sha256 不一致")
-                       + " —— 加 --resume 续传，或去掉 --resume 整份重传",
+            "message": ((verdict["note"] or "sha256 不一致")
+                        + " —— %s；分片状态已清掉，整份重传（去掉 --resume，"
+                          "目标已存在时加 --force）" % where),
             "transfer": stats,
         }
     if stats["verified"]:
@@ -854,7 +1286,8 @@ def finish_transfer(verb, target, progress, stats, verdict):
 
 TRANSFER_COLUMNS = ["action", "localPath", "remotePath", "bytes", "totalBytes",
                     "chunks", "parallel", "seconds", "mbps", "resumedFrom",
-                    "sha256", "verified", "verifyNote"]
+                    "sha256", "verified", "verifyNote",
+                    "incomplete", "resumable", "statePath", "partPath"]
 
 
 def render_transfer(response, fmt):
@@ -1044,7 +1477,14 @@ def main():
     action = resolved_action(args)
     # 传输是多请求的（stat / 分片 / 校验），自己走一条路；其余动作一请求一响应。
     if action in ("sftp-put", "sftp-get"):
-        response = do_put(args) if action == "sftp-put" else do_get(args)
+        try:
+            response = do_put(args) if action == "sftp-put" else do_get(args)
+        except SystemExit:
+            raise                     # `fail()` 的本地拒绝：消息已经在 stderr 上了
+        except BaseException as raised:      # noqa: BLE001
+            # 传输路径绝不能吐 traceback：调用方（模型 / 脚本）读的是 JSON + 退出码。
+            response = {"id": None, "ok": False, "code": "local_failure",
+                        "message": "%s: %s" % (type(raised).__name__, raised)}
         print(render_transfer(response, fmt))
         return exit_code_for(response)
     response = send_request(make_request(args))
