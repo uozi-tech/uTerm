@@ -41,6 +41,28 @@ nonisolated enum SFTPPipelineError: Error, Sendable, Equatable {
     case sliceOutOfRange
 }
 
+/// 服务端在**不该短**的地方短给了。
+///
+/// 两种来源，都表示数据不完整，绝不能当成「读到头了」静默收尾：
+/// - `requireFullLength` 的读（调用方先 `stat` 过，知道这段一定存在）拿到的段没读满；
+/// - 某段读到 0 字节（EOF）之后，**后面**的段却又有数据 —— 中间凭空多出一个空洞，
+///   这是服务端异常，不是文件到头。
+///
+/// 回归的是一个真实的数据完整性事故：一次短读 / 空读会让 12 MiB 的下载在 116 KiB
+/// 处「成功」收尾，本地文件缺 99%，而且没有任何人报错。
+nonisolated struct SFTPShortReadError: Error, Sendable, Equatable {
+    /// 出问题那一段的**绝对**起点。
+    let offset: UInt64
+    /// 该段期望的字节数（EOF 之后的段期望 0）。
+    let expected: Int
+    /// 实际拿到的字节数。
+    let actual: Int
+
+    var localizedDescription: String {
+        "SFTP 读 \(offset) 起的 \(expected) 字节只拿到 \(actual) 字节（数据不完整）"
+    }
+}
+
 /// SFTP 的**流水线**读写：一条 SFTP 通道上同时压 `inFlight` 个请求，而不是
 /// 每 32 000 B 一个串行往返。
 ///
@@ -102,16 +124,21 @@ nonisolated enum SFTPPipeline {
 
     // MARK: - 读
 
-    /// 读 `[offset, offset + length)`。按 `chunkSize` 分段并发发 READ，段内**短读补发**；
-    /// 撞到 EOF 时返回的字节数会少于 `length`（调用方据此判文件到头）。
+    /// 读 `[offset, offset + length)`。按 `chunkSize` 分段并发发 READ，段内**短读补发**
+    /// （只有「读到 0 字节」才算这一段到头）。
     ///
-    /// 拼装时遇到第一个「没读满」的段就停 —— 它是 EOF，后面的段全在文件之外，
-    /// 即便某个后段因为文件在传输期间变长而拿到了数据，也不能接在空洞后面。
+    /// 两种收尾口径，由 `requireFullLength` 选：
+    /// - `false`（默认，长度未知）：第一个「没读满」的段就是 EOF，返回的字节数会少于
+    ///   `length`。但 EOF **之后**的段必须也是空的 —— 后段还有数据说明中间凭空多了个
+    ///   空洞，抛 `SFTPShortReadError`，绝不把带洞的数据当成功交出去。
+    /// - `true`（调用方先 `stat` 过，这 `length` 个字节一定存在）：任何一段没读满都是
+    ///   `SFTPShortReadError`。下载路径走这一档 —— 一次短读就静默收尾的下载等于悄悄丢数据。
     static func read(
         _ file: some SFTPPipelineFile,
         offset: UInt64,
         length: Int,
-        inFlight: Int = defaultInFlight
+        inFlight: Int = defaultInFlight,
+        requireFullLength: Bool = false
     ) async throws -> ByteBuffer {
         guard length > 0 else { return ByteBuffer() }
         let window = max(1, inFlight)
@@ -142,18 +169,38 @@ nonisolated enum SFTPPipeline {
         }
         var result = ByteBuffer()
         result.reserveCapacity(length)
+        var reachedEOF = false
         for index in 0..<segments {
-            guard var piece = collected[index] else { break }
             let want = min(chunkSize, length - index * chunkSize)
+            let base = offset + UInt64(index * chunkSize)
+            // 每段都有账（TaskGroup 跑完才到这里）；缺一段只可能是本文件算错了下标。
+            guard var piece = collected[index] else {
+                throw SFTPShortReadError(offset: base, expected: want, actual: 0)
+            }
             let got = piece.readableBytes
+            if reachedEOF {
+                // 已经到头了，后面的段必须也是空的；有数据 = 中间是个空洞。
+                guard got == 0 else {
+                    throw SFTPShortReadError(offset: base, expected: 0, actual: got)
+                }
+                continue
+            }
+            if got < want {
+                guard !requireFullLength else {
+                    throw SFTPShortReadError(offset: base, expected: want, actual: got)
+                }
+                reachedEOF = true
+            }
             result.writeBuffer(&piece)
-            if got < want { break }   // 短读 = EOF，后面的段不要
         }
         return result
     }
 
-    /// 一段的读取：服务端可以少给（SFTP 允许短读），就对剩下的区间补发，
-    /// 直到读满 `length` 或读到 0 字节（EOF）。
+    /// 一段的读取：服务端可以少给（SFTP 允许短读），就在**同一 offset 上继续补发**，
+    /// 直到读满 `length` 或读到 0 字节。
+    ///
+    /// 只有「读到 0 字节」才是这一段的终点；返回值短于 `length` 一律交给
+    /// `read(_:offset:length:)` 按上面两种口径裁决，本函数自己不下 EOF 的结论。
     private static func readSegment(
         _ file: some SFTPPipelineFile,
         at base: UInt64,
@@ -167,6 +214,13 @@ nonisolated enum SFTPPipeline {
                 from: base + UInt64(done), length: UInt32(length - done))
             let count = piece.readableBytes
             if count == 0 { break }
+            // 服务端多给（协议不允许，但别让它撑爆调用方的算术）：只收要的那部分。
+            if count > length - done {
+                guard var head = piece.readSlice(length: length - done) else { break }
+                buffer.writeBuffer(&head)
+                done = length
+                break
+            }
             buffer.writeBuffer(&piece)
             done += count
         }

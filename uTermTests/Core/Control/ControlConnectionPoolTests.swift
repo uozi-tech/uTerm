@@ -112,7 +112,8 @@ final class ControlConnectionPoolTests: XCTestCase {
         clock: Clock,
         idleInterval: Duration = .seconds(600),
         sftpFactory: SFTPFactory? = nil,
-        maxSFTPChannels: Int = ControlConnectionPool.maxSFTPChannelsPerHost
+        maxSFTPChannels: Int = ControlConnectionPool.maxSFTPChannelsPerHost,
+        sftpWaitTimeout: Duration = ControlConnectionPool.sftpWaitTimeout
     ) -> ControlConnectionPool {
         let connector = ControlConnectionPool.Connector(
             makeExec: { _ in try await factory.make() },
@@ -128,6 +129,7 @@ final class ControlConnectionPoolTests: XCTestCase {
             connector: connector,
             idleInterval: idleInterval,
             maxSFTPChannels: maxSFTPChannels,
+            sftpWaitTimeout: sftpWaitTimeout,
             now: { [clock] in clock.now }
         )
     }
@@ -418,6 +420,140 @@ final class ControlConnectionPoolTests: XCTestCase {
         await sftpFactory.setError(nil)
         let session = try await pool.borrowSFTP(for: spec)
         await pool.returnSFTP(session, for: spec.id)
+        await pool.disconnectAll()
+    }
+
+    /// 排在前面的等待者被取消后，归还的名额必须传给**下一个**等待者，
+    /// 而不是随着那个取消的等待者一起丢掉（丢了的话后面的人只能等下一次归还）。
+    func testACancelledWaiterHandsTheSlotToTheNextInLine() async throws {
+        let sftpFactory = SFTPFactory()
+        // 等待上限压到 5 s：万一名额真的丢了，这条用例 5 s 就红，而不是挂满 90 s。
+        let pool = makePool(factory: Factory(), clock: Clock(),
+                            sftpFactory: sftpFactory, maxSFTPChannels: 1,
+                            sftpWaitTimeout: .seconds(5))
+        let spec = try makeSpec()
+
+        let held = try await pool.borrowSFTP(for: spec)   // 唯一的名额被占住
+
+        // 两个等待者，先后入队（sleep 保证顺序：first 排在 second 前面）。
+        let first = Task { ObjectIdentifier(try await pool.borrowSFTP(for: spec)) }
+        try await Task.sleep(for: .milliseconds(60))
+        let second = Task { ObjectIdentifier(try await pool.borrowSFTP(for: spec)) }
+        try await Task.sleep(for: .milliseconds(60))
+
+        // 取消**紧接着**归还：`cancel()` 同步打上「已取消」标记，但把自己从队列里摘掉
+        // 要先 hop 进池 actor —— 于是归还大概率先到，唤醒到的正是一个已经取消的等待者。
+        // 唤醒方必须识别出来并把名额继续往下传，否则 second 永远等不到。
+        first.cancel()
+        await pool.returnSFTP(held, for: spec.id)
+        _ = try? await first.value
+
+        // 名额传到了 second 手里（旧实现里这一步会挂死到超时）。
+        let got = try await withThrowingTaskGroup(of: ObjectIdentifier?.self) { group in
+            group.addTask { try await second.value }
+            group.addTask {
+                try await Task.sleep(for: .seconds(3))
+                return nil
+            }
+            let winner = try await group.next() ?? nil
+            group.cancelAll()
+            return winner
+        }
+        XCTAssertEqual(got, ObjectIdentifier(held), "取消的等待者不能把名额一起带走")
+        let made = await sftpFactory.count()
+        XCTAssertEqual(made, 1, "复用归还那条，不该多建")
+        await pool.disconnectAll()
+    }
+
+    /// 重复归还同一条会话必须是 no-op。
+    ///
+    /// 回归的是一个真实事故：旧实现只看「它在不在 busy 里」，第二次归还就落进
+    /// 「池里没这条记录 → 关掉」的分支，把一条**已经躺在空闲队列里、随时会被下一个
+    /// 请求借走**的活会话关掉；下一个借用者拿到的是一条死通道。
+    func testReturningTheSameSessionTwiceKeepsItAlive() async throws {
+        let sftpFactory = SFTPFactory()
+        let pool = makePool(factory: Factory(), clock: Clock(),
+                            sftpFactory: sftpFactory, maxSFTPChannels: 1)
+        let spec = try makeSpec()
+
+        let session = try await pool.borrowSFTP(for: spec)
+        await pool.returnSFTP(session, for: spec.id)
+        await pool.returnSFTP(session, for: spec.id)   // 重复归还
+
+        let closed = await sftpFactory.closedCount()
+        XCTAssertEqual(closed, 0, "重复归还不能关掉躺在空闲队列里的会话")
+
+        // 再借出来的还是同一条，而且真的能用。
+        let again = try await pool.borrowSFTP(for: spec)
+        XCTAssertEqual(ObjectIdentifier(again), ObjectIdentifier(session))
+        let mock = try XCTUnwrap(again as? MockSFTP)
+        let wasClosed = await mock.didClose
+        XCTAssertFalse(wasClosed, "借回来的会话不能是条已关的通道")
+        try await again.write("/tmp/probe", data: Data("ok".utf8))
+        let readBack = try await again.download(remotePath: "/tmp/probe")
+        XCTAssertEqual(readBack, Data("ok".utf8))
+
+        await pool.returnSFTP(again, for: spec.id)
+        let made = await sftpFactory.count()
+        XCTAssertEqual(made, 1)
+        await pool.disconnectAll()
+    }
+
+    /// 通道全忙且一直不还：借用者**有上限地**等，超时抛 `SFTPChannelsBusyError`，
+    /// 不是永远挂着等 `ControlServer` 的 120 s handler 超时来收尸。
+    func testBorrowTimesOutWhenEveryChannelStaysBusy() async throws {
+        let sftpFactory = SFTPFactory()
+        let pool = makePool(factory: Factory(), clock: Clock(),
+                            sftpFactory: sftpFactory, maxSFTPChannels: 4,
+                            sftpWaitTimeout: .milliseconds(300))
+        let spec = try makeSpec()
+
+        var borrowed: [any SFTPProviding] = []
+        for _ in 0..<4 { borrowed.append(try await pool.borrowSFTP(for: spec)) }
+
+        let started = Date()
+        do {
+            _ = try await pool.borrowSFTP(for: spec)
+            XCTFail("4 条全忙时第 5 个借用不该拿到会话")
+        } catch let busy as SFTPChannelsBusyError {
+            XCTAssertEqual(busy.limit, 4)
+            XCTAssertTrue(busy.message(host: "prod-web").contains("SFTP 通道已满"))
+        }
+        let waited = Date().timeIntervalSince(started)
+        XCTAssertGreaterThanOrEqual(waited, 0.25, "得真的等过一轮超时，不是立刻放弃")
+        XCTAssertLessThan(waited, 5, "也不能等到天荒地老")
+
+        let made = await sftpFactory.count()
+        XCTAssertEqual(made, 4, "等超时不该偷偷多建通道")
+        for session in borrowed { await pool.returnSFTP(session, for: spec.id) }
+        await pool.disconnectAll()
+    }
+
+    /// 建连**成功**但期间这台主机被释放：报 `released`（可重试），
+    /// 不是伪装成 `connect_failed` 让人去查根本不存在的网络故障。
+    func testSessionReleasedDuringConnectIsNotReportedAsConnectFailed() async throws {
+        let sftpFactory = SFTPFactory()
+        let pool = makePool(factory: Factory(), clock: Clock(), sftpFactory: sftpFactory)
+        let spec = try makeSpec()
+        await sftpFactory.setDelay(.milliseconds(250))
+
+        let borrowing = Task { try await pool.borrowSFTP(for: spec) }
+        try await Task.sleep(for: .milliseconds(60))
+        await pool.disconnect(hostID: spec.id)
+
+        do {
+            _ = try await borrowing.value
+            XCTFail("建连期间主机被释放，不该把会话交出去")
+        } catch let error as ControlConnectError {
+            guard case .released = error else {
+                return XCTFail("应是 released，实际是 \(error)")
+            }
+            XCTAssertNotEqual(error.code, .connect_failed, "别伪装成连不上")
+            XCTAssertEqual(error.code, .operation_failed)
+            XCTAssertTrue(error.message(host: "prod-web").contains("释放"))
+        }
+        // 那条没人认领的会话要被关掉，不能泄漏。
+        try await waitUntil("孤儿会话被关闭") { await sftpFactory.closedCount() == 1 }
         await pool.disconnectAll()
     }
 

@@ -29,12 +29,18 @@ final class SFTPSessionPipelineTests: XCTestCase {
         var eofAt: Int?
         /// 单次读最多给这么多字节（模拟服务端短读），nil = 给满。
         var shortReadCap: Int?
+        /// 落在这个区间里的读一律回空 —— 模拟服务端在文件中间凭空谎报 EOF。
+        var blackHole: Range<UInt64>?
+        /// 这些 offset 的**第一次**读只给 100 字节，之后正常（一次性短读）。
+        var shortReadOnceOffsets: Set<UInt64> = []
 
         init(contents: [UInt8] = []) { self.storage = contents }
 
         func setLatency(_ value: Duration) { latency = value }
         func setFailingWriteOffsets(_ value: Set<UInt64>) { failingWriteOffsets = value }
         func setShortReadCap(_ value: Int?) { shortReadCap = value }
+        func setBlackHole(_ value: Range<UInt64>?) { blackHole = value }
+        func setShortReadOnceOffsets(_ value: Set<UInt64>) { shortReadOnceOffsets = value }
 
         func bytes() -> [UInt8] { storage }
 
@@ -78,10 +84,15 @@ final class SFTPSessionPipelineTests: XCTestCase {
                 throw error
             }
             reads.append((offset, length))
+            if let blackHole, blackHole.contains(offset) { return ByteBuffer() }
             let limit = eofAt ?? storage.count
             let start = min(Int(offset), limit)
             var want = min(Int(length), limit - start)
             if let shortReadCap { want = min(want, shortReadCap) }
+            if shortReadOnceOffsets.contains(offset) {
+                shortReadOnceOffsets.remove(offset)
+                want = min(want, 100)
+            }
             guard want > 0 else { return ByteBuffer() }
             var buffer = ByteBuffer()
             buffer.writeBytes(storage[start..<(start + want)])
@@ -270,6 +281,85 @@ final class SFTPSessionPipelineTests: XCTestCase {
         XCTAssertEqual(result.readableBytes, 0)
         let reads = await file.reads
         XCTAssertTrue(reads.isEmpty)
+    }
+
+    // MARK: - 读：短读 / 空洞的完整性闸
+
+    /// 一次性短读（服务端某一段先只给 100 B，其余下一次再给）必须在**同一 offset**
+    /// 补发到读满，而不是把这段当成 EOF 把后面的数据全丢掉。
+    func testReadResendsAfterASingleShortSegmentAndKeepsTheRest() async throws {
+        let bytes = payload(96_000)
+        let file = RecordingFile(contents: bytes)
+        await file.setLatency(.zero)
+        await file.setShortReadOnceOffsets([32_000])   // 第 1 段先只给 100 B
+
+        let result = try await SFTPPipeline.read(
+            file, offset: 0, length: 96_000, inFlight: 4, requireFullLength: true)
+
+        XCTAssertEqual(Array(result.readableBytesView), bytes,
+                       "一次短读之后的字节一个都不能少（12 MiB 变 116 KiB 就是这么来的）")
+        let reads = await file.reads
+        XCTAssertEqual(reads.count, 4, "3 段 + 短读那段补发一次")
+    }
+
+    /// 中间某段永远读到空（服务端异常 / 并发截断）：必须抛错，
+    /// **绝不**把「空洞后面的数据」悄悄丢掉然后报成功。
+    func testReadRefusesToSwallowAHoleInTheMiddle() async throws {
+        let bytes = payload(128_000)
+        let file = RecordingFile(contents: bytes)
+        await file.setLatency(.zero)
+        await file.setBlackHole(32_000..<64_000)   // 第 1 段恒空，第 2、3 段仍有数据
+
+        do {
+            _ = try await SFTPPipeline.read(file, offset: 0, length: 128_000, inFlight: 8)
+            XCTFail("中间出现空洞时必须抛错，而不是回一段残缺数据")
+        } catch let error as SFTPShortReadError {
+            XCTAssertEqual(error.offset, 64_000, "报的是空洞之后那段的起点")
+            XCTAssertEqual(error.expected, 0)
+            XCTAssertGreaterThan(error.actual, 0)
+        }
+    }
+
+    /// `requireFullLength`：调用方已经 stat 过，这些字节一定存在 —— 任何一段没读满
+    /// 都是错误，不许当 EOF 收尾。
+    func testReadWithRequireFullLengthRejectsAShortTail() async throws {
+        let bytes = payload(50_000)
+        let file = RecordingFile(contents: bytes)
+        await file.setLatency(.zero)
+
+        do {
+            _ = try await SFTPPipeline.read(
+                file, offset: 0, length: 100_000, inFlight: 4, requireFullLength: true)
+            XCTFail("声明长度读不满必须抛错")
+        } catch let error as SFTPShortReadError {
+            XCTAssertEqual(error.offset, 32_000)
+            XCTAssertEqual(error.expected, 32_000)
+            XCTAssertEqual(error.actual, 18_000)
+        }
+    }
+
+    /// 严格档在数据齐全时照常返回（别把闸门做成永远拦）。
+    func testReadWithRequireFullLengthPassesWhenEverySegmentIsFull() async throws {
+        let bytes = payload(100_000)
+        let file = RecordingFile(contents: bytes)
+        await file.setLatency(.zero)
+
+        let result = try await SFTPPipeline.read(
+            file, offset: 0, length: 100_000, inFlight: 8, requireFullLength: true)
+
+        XCTAssertEqual(Array(result.readableBytesView), bytes)
+    }
+
+    /// EOF 之后的段都是空的 —— 这才是正常的文件到头，非严格档照常短返回。
+    func testReadTreatsTrailingEmptySegmentsAsEOF() async throws {
+        let bytes = payload(40_000)
+        let file = RecordingFile(contents: bytes)
+        await file.setLatency(.zero)
+
+        let result = try await SFTPPipeline.read(file, offset: 0, length: 160_000, inFlight: 8)
+
+        XCTAssertEqual(result.readableBytes, 40_000)
+        XCTAssertEqual(Array(result.readableBytesView), bytes)
     }
 
     /// 外层任务被取消时，流水线要停下来（而不是把剩余分片发完）。

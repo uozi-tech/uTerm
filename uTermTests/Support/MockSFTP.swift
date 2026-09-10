@@ -102,6 +102,17 @@ actor MockSFTP: SFTPProviding {
     /// 每次 `readRange` 的记录。
     private(set) var rangeReads: [(path: String, offset: UInt64, length: Int)] = []
 
+    /// 让 `writeRange` 在**写阶段**失败（磁盘满 / 配额 / 断线）：文件已经被建出来
+    /// （`stat` 查得到），只是内容没落盘。用来验证 handler 不会把这种失败误报成
+    /// `file_exists`。
+    private var writeStageError: Error?
+    /// 让 `writeRange` 在**打开阶段**失败，错误按 `SFTPWriteStageError(stage: .open)`
+    /// 包好 —— handler 只对这一档做「是不是已存在」的 stat 兜底。
+    private var openStageError: Error?
+
+    func setWriteStageError(_ error: Error?) { writeStageError = error }
+    func setOpenStageError(_ error: Error?) { openStageError = error }
+
     /// 内存版随机写：`create` 撞已存在文件抛 `SFTPFileExistsError`（与真实 EXCL 同一归类），
     /// `overwrite` 先截断，`write` 保留既有内容只覆盖 `[offset, offset+count)`；
     /// 越过末尾写留 0 空洞（POSIX 语义）。
@@ -110,6 +121,17 @@ actor MockSFTP: SFTPProviding {
         if failingUploadPaths.contains(path) {
             throw NSError(domain: "MockSFTP", code: 9,
                           userInfo: [NSLocalizedDescriptionKey: "upload failed: \(path)"])
+        }
+        if let openStageError {
+            // 打开就没成；路径照样落一份，好验证 handler 的 stat 兜底确实在这一档生效。
+            if blobStore[path] == nil { blobStore[path] = (Data(), Date()) }
+            throw SFTPWriteStageError(stage: .open, underlying: openStageError)
+        }
+        if let writeStageError {
+            // EXCL 打开成功 → 文件已经存在 → 兜底 stat 必然命中。写失败原样抛，
+            // handler 若还做那次兜底就会把「磁盘满」报成 file_exists。
+            if blobStore[path] == nil { blobStore[path] = (Data(), Date()) }
+            throw writeStageError
         }
         var base: Data
         switch mode {

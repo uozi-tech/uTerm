@@ -44,6 +44,13 @@ extension ControlHandler {
             }
         } catch let failure as ControlFailure {
             throw failure
+        } catch let busy as SFTPChannelsBusyError {
+            // 这台主机的 SFTP 通道全忙且等到超时 —— 不是连不上，是排队没排到。
+            // TODO（与 `fix/control-server-busy` 合并后）：换成 `ControlErrorCode.server_busy`。
+            throw ControlFailure(
+                code: .operation_failed,
+                message: busy.message(host: profile.name)
+            )
         } catch {
             // 建连失败要把 fingerprint 一并回给 CLI（`ControlFailure` 带不了 hostKey），
             // 所以这一段走「直接返回响应」而不是抛。
@@ -182,10 +189,16 @@ extension ControlHandler {
     ///
     /// 语义（`utermctl` 的分片下载照这个来）：
     /// - `offset` 缺省 0，负数是 `invalid_request`；
-    /// - `length` 缺省 `maxFileBytes`，超过它是 `file_too_large`（客户端自己分片）；
+    /// - `length` 缺省 `maxFileBytes`（= 单次封顶），超过它是 `file_too_large`；
     /// - 不做整文件的 stat 上限检查 —— 大文件正是靠一段段取回来的；
-    /// - `file.bytes` 是**实际**返回的字节数，到 EOF 会少于 `length`，
-    ///   `truncated` 恒为 false（少给 = 到头，不是被削）。
+    /// - `file.bytes` 是**实际**返回的字节数。
+    ///
+    /// `truncated` 也先 `stat` 再判，口径按「客户端到底要的是多少」分两种：
+    /// - **给了 `length`**：要的是这一段，期望 `min(length, 剩余)`。拿满 = 完整，
+    ///   到 EOF 短了也是完整（`truncated: false`）。
+    /// - **只给了 `offset`**：要的是「从这里到文件尾」，期望 = 剩余全部。被 8 MiB
+    ///   单次上限截断时 `truncated: true`，并在 message 里给出下一次的 `offset`
+    ///   —— 早先这里恒 false，50 MiB 的文件只回了头 8 MiB 却说「没被削」。
     private func readRange(
         _ request: ControlRequest,
         path: String,
@@ -193,13 +206,23 @@ extension ControlHandler {
     ) async throws -> ControlResponse {
         let offset = try Self.requiredOffset(request.offset)
         let length = try Self.rangeLength(request.length)
+        // stat 拿不到就退回 nil（宁可少报也不谎报）—— 真正的失败会由随后的读抛出来。
+        let remaining: Int64? = (try? await sftp.stat(path)).map {
+            max(0, $0.size - Int64(clamping: offset))
+        }
         let data = try await sftp.readRange(path, offset: offset, length: length)
-        return .success(
-            id: request.id,
-            message: "\(path)[\(offset)..<\(offset + UInt64(data.count))]（\(data.count) 字节）",
-            file: ControlFilePayloadBuilder.payload(
-                path: path, data: data, declaredSize: nil)
-        )
+        let declaredSize: Int64? = remaining.map { rest in
+            request.length == nil ? rest : min(rest, Int64(length))
+        }
+        let payload = ControlFilePayloadBuilder.payload(
+            path: path, data: data, declaredSize: declaredSize)
+        let next = offset + UInt64(data.count)
+        var message = "\(path)[\(offset)..<\(next)]（\(data.count) 字节）"
+        if payload.truncated, let remaining {
+            message += "；本次封顶 \(ControlProtocol.maxFileBytes) 字节，还剩 "
+                + "\(remaining - Int64(data.count)) 字节，用 offset \(next) 继续取"
+        }
+        return .success(id: request.id, message: message, file: payload)
     }
 
     /// `sftp-put`：按 `mode` + `offset` 写一段。
@@ -246,6 +269,11 @@ extension ControlHandler {
     /// `create` 撞已存在文件时服务端的回法五花八门（SFTP v3 只有 `SSH_FX_FAILURE`，
     /// 文案还依实现而定）。所以：先按常规映射；只有落到兜底的 `operation_failed` 时，
     /// 才多花一次 `stat` 确认路径确实已存在 —— 存在就报 `file_exists`。
+    ///
+    /// ⚠️ 这次兜底**只对打开阶段的失败**成立（`SFTPWriteStageError.stage == .open`）。
+    /// EXCL 打开成功之后的写失败（磁盘满、配额、连接断）时文件已经被建出来了，
+    /// 那次 `stat` 必然成功 —— 不加这道门就会把「No space left on device」报成
+    /// `file_exists`，用户照提示加 `--force` 重传，然后再次失败。
     private static func putErrorCode(
         _ error: Error,
         mode: SFTPWriteMode,
@@ -253,7 +281,8 @@ extension ControlHandler {
         on sftp: any SFTPProviding
     ) async -> ControlErrorCode {
         let mapped = ControlFilePayloadBuilder.errorCode(for: error)
-        guard mode == .create, mapped == .operation_failed else { return mapped }
+        guard mode == .create, mapped == .operation_failed,
+              SFTPWriteStageError.isOpenFailure(error) else { return mapped }
         return (try? await sftp.stat(path)) != nil ? .file_exists : mapped
     }
 

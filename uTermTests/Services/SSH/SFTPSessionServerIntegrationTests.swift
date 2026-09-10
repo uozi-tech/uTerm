@@ -25,11 +25,31 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
     private final class MemoryFileSystem: @unchecked Sendable {
         private let lock = NSLock()
         private var files: [String: [UInt8]] = [:]
+        /// 还要短给几次（SFTP 允许服务端少给，客户端必须补发）。
+        private var shortReadBudget = 0
+        /// 从这个 offset 起一律回空 —— 模拟服务端在文件中途谎报 EOF。
+        private var lieAboutEOFFrom: Int?
+
+        func setShortReadBudget(_ count: Int) {
+            lock.lock(); defer { lock.unlock() }
+            shortReadBudget = count
+        }
+
+        func setLieAboutEOF(from offset: Int?) {
+            lock.lock(); defer { lock.unlock() }
+            lieAboutEOFFrom = offset
+        }
 
         func read(_ path: String, at offset: Int, length: Int) -> [UInt8] {
             lock.lock(); defer { lock.unlock() }
             guard let bytes = files[path], offset < bytes.count else { return [] }
-            return Array(bytes[offset..<min(offset + length, bytes.count)])
+            if let lieAboutEOFFrom, offset >= lieAboutEOFFrom { return [] }
+            var end = min(offset + length, bytes.count)
+            if shortReadBudget > 0, end - offset > 1 {
+                shortReadBudget -= 1
+                end = offset + (end - offset) / 2   // 只给一半
+            }
+            return Array(bytes[offset..<end])
         }
 
         func write(_ path: String, at offset: Int, bytes: [UInt8]) {
@@ -283,6 +303,56 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
         let fetched = try await session.download(remotePath: "/home/test/chunked.bin")
         XCTAssertEqual(fetched.count, whole.count)
         XCTAssertEqual(sha256(fetched), sha256(whole))
+    }
+
+    // MARK: - 下载的数据完整性
+
+    /// 下载到本地文件：字节数必须**等于** stat 报的大小，一个字节都不能少。
+    func testDownloadToLocalURLMatchesTheStatSize() async throws {
+        let source = payload(9 * 1_048_576)
+        fs.put("/home/test/exact.bin", Array(source))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let localOut = directory.appendingPathComponent("exact.bin")
+
+        let declared = try await session.stat("/home/test/exact.bin").size
+        try await session.download(remotePath: "/home/test/exact.bin",
+                                   toLocalURL: localOut, onProgress: nil)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: localOut.path)
+        let localSize = try XCTUnwrap(attributes[.size] as? Int)
+        XCTAssertEqual(Int64(localSize), declared, "落地大小必须等于 stat.size")
+        XCTAssertEqual(sha256(try Data(contentsOf: localOut)), sha256(source))
+    }
+
+    /// 服务端一路短给（SFTP 允许）：客户端补发到读满，内容仍逐字节一致。
+    func testDownloadRetriesServerShortReads() async throws {
+        let source = payload(2 * 1_048_576)
+        fs.put("/home/test/short.bin", Array(source))
+        fs.setShortReadBudget(40)   // 前 40 个 READ 只给一半
+
+        let fetched = try await session.download(remotePath: "/home/test/short.bin")
+
+        XCTAssertEqual(fetched.count, source.count)
+        XCTAssertEqual(sha256(fetched), sha256(source), "短读补发之后内容要一致")
+    }
+
+    /// 服务端在文件中途开始回空（谎报 EOF）：下载必须**失败**，
+    /// 而不是回一个「成功」的残缺文件 —— 这正是 12 MiB 下成 116 KiB 的形状。
+    func testDownloadFailsInsteadOfSilentlyTruncating() async throws {
+        let source = payload(4 * 1_048_576)
+        fs.put("/home/test/liar.bin", Array(source))
+        fs.setLieAboutEOF(from: 128 * 1_024)
+
+        do {
+            let fetched = try await session.download(remotePath: "/home/test/liar.bin")
+            XCTFail("服务端中途回空必须抛错，实际拿回了 \(fetched.count) 字节并报成功")
+        } catch is SFTPShortReadError {
+            // 预期：声明有 4 MiB，读不满就是数据不完整。
+        }
+        fs.setLieAboutEOF(from: nil)
     }
 
     /// 区间读：读回的就是那一段；越过末尾只是短，不报错。

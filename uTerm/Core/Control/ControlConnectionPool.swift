@@ -76,14 +76,47 @@ actor ControlConnectionPool: ControlConnectionPooling {
     }
 
     /// 一个在等 SFTP 名额的借用者。
+    ///
+    /// `continuation` 的 `Bool`：true = 有名额了（或被取消，交给借用者自己的
+    /// `checkCancellation` 收场），false = 等到超时。
     private struct SFTPWaiter {
         let ticket: UUID
-        let continuation: CheckedContinuation<Void, Never>
+        let flag: SFTPWaitFlag
+        let continuation: CheckedContinuation<Bool, Never>
     }
+
+    /// 等待者「已被取消」的标记。
+    ///
+    /// `withTaskCancellationHandler` 的 `onCancel` 在**取消方**的线程上同步跑，进不了
+    /// 本 actor，所以只能用一个带锁的小盒子把状态立刻记下来 —— 唤醒方据此跳过已取消的
+    /// 等待者，把名额传给下一个。少了这一层，唤醒一个已取消的等待者就等于把名额丢掉：
+    /// 它醒来只会抛 `CancellationError`，而后面还排着的人永远等不到下一次归还。
+    private final class SFTPWaitFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        func markCancelled() {
+            lock.lock(); defer { lock.unlock() }
+            cancelled = true
+        }
+
+        var isCancelled: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return cancelled
+        }
+    }
+
+    /// 借一条 SFTP 会话最多等多久。
+    ///
+    /// 必须**短于** `ControlServer` 的 handler 超时（120 s），否则等待方永远等不到
+    /// 自己的答案：请求先被服务端按 `handler_timeout` 掐掉，客户端只看到一个不说明
+    /// 原因的超时，而排队者还占着 `maxActiveClients` 的名额。
+    static let sftpWaitTimeout: Duration = .seconds(90)
 
     private let connector: Connector
     private let idleInterval: Duration
     private let maxSFTPChannels: Int
+    private let sftpWaitTimeout: Duration
     private let now: @Sendable () -> Date
 
     private var entries: [UUID: Entry] = [:]
@@ -101,11 +134,13 @@ actor ControlConnectionPool: ControlConnectionPooling {
         connector: Connector = .live,
         idleInterval: Duration = ControlConnectionPool.idleTimeout,
         maxSFTPChannels: Int = ControlConnectionPool.maxSFTPChannelsPerHost,
+        sftpWaitTimeout: Duration = ControlConnectionPool.sftpWaitTimeout,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.connector = connector
         self.idleInterval = idleInterval
         self.maxSFTPChannels = max(1, maxSFTPChannels)
+        self.sftpWaitTimeout = sftpWaitTimeout
         self.now = now
     }
 
@@ -126,7 +161,8 @@ actor ControlConnectionPool: ControlConnectionPooling {
     }
 
     /// 借一条这台主机的 SFTP 会话：
-    /// 有空闲 → 直接拿；没空闲且没到 `maxSFTPChannels` → 新建一条；到上限 → 排队等归还。
+    /// 有空闲 → 直接拿；没空闲且没到 `maxSFTPChannels` → 新建一条；到上限 → 排队等归还
+    /// （最多 `sftpWaitTimeout`，等不到抛 `SFTPChannelsBusyError`）。
     ///
     /// 必须与 `returnSFTP(_:for:)` 配对，最省事的写法是协议扩展里的
     /// `withSFTP(for:_:)`。不归还的话这条会话永远算「在用」，既不会被复用也不会被
@@ -150,24 +186,48 @@ actor ControlConnectionPool: ControlConnectionPooling {
                 return try await makeSFTPChannel(for: host)
             }
             // 到上限：让出名额给已在跑的传输，等一次归还再重来。
-            await waitForSFTPSlot(host.id)
+            let granted = await waitForSFTPSlot(host.id)
+            guard granted else {
+                throw SFTPChannelsBusyError(
+                    limit: maxSFTPChannels,
+                    waitedSeconds: sftpWaitTimeout.seconds
+                )
+            }
+            if Task.isCancelled {
+                // 被唤醒但自己已经取消：名额传给下一个等待者，别让它烂在这里。
+                resumeOneSFTPWaiter(host.id)
+                try Task.checkCancellation()
+            }
         }
     }
 
     /// 归还借出的会话。会话回到空闲队列并唤醒一个等待者；
     /// 期间若这台主机被 `disconnect` / `disconnectAll` 清过，就直接关掉它。
+    ///
+    /// **重复归还是 no-op**（协议明说安全）。判据必须是「它是不是已经在 idle 里」，
+    /// 而不是「它在不在 busy 里」—— 只看 busy 的话，第二次归还会走进「池里没这条记录」
+    /// 的分支，把一条**刚被别人借走、正在传输**的活会话关掉。
     func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async {
         let key = ObjectIdentifier(session)
-        guard var entry = entries[hostID], entry.sftp.busy[key] != nil else {
-            // 池里已经没这条记录（被显式释放过）→ 关掉，别泄漏。
+        guard var entry = entries[hostID] else {
+            // 池里已经没这台主机（被显式释放过）→ 关掉，别泄漏。
             closeDetached(sftp: session)
             resumeOneSFTPWaiter(hostID)
             return
         }
-        entry.sftp.busy[key] = nil
-        entry.sftp.idle.append(session)
-        entry.lastUsedAt = now()
-        entries[hostID] = entry
+        if entry.sftp.busy[key] != nil {
+            entry.sftp.busy[key] = nil
+            entry.sftp.idle.append(session)
+            entry.lastUsedAt = now()
+            entries[hostID] = entry
+            resumeOneSFTPWaiter(hostID)
+            return
+        }
+        if entry.sftp.idle.contains(where: { ObjectIdentifier($0) == key }) {
+            return   // 重复归还：已经在空闲队列里了，不关也不重复唤醒。
+        }
+        // 既不在 busy 也不在 idle：这条会话不属于当前的这台主机记录（释放后重建过）。
+        closeDetached(sftp: session)
         resumeOneSFTPWaiter(hostID)
     }
 
@@ -186,7 +246,9 @@ actor ControlConnectionPool: ControlConnectionPooling {
             // 建连期间这台主机被释放了 —— 新会话没人认领，关掉。
             closeDetached(sftp: session)
             resumeOneSFTPWaiter(host.id)
-            throw ControlConnectError.connectFailed("连接已被释放")
+            // 不是 `connectFailed`：握手、认证、主机密钥全过了，纯粹是建连期间
+            // 这台主机被 disconnect 掉。报成「连接失败」会把人引去查不存在的网络故障。
+            throw ControlConnectError.released("建立期间该主机被断开")
         }
         entry.sftp.pending -= 1
         entry.sftp.busy[ObjectIdentifier(session)] = session
@@ -209,45 +271,84 @@ actor ControlConnectionPool: ControlConnectionPooling {
         resumeOneSFTPWaiter(hostID)
     }
 
-    /// 等一个 SFTP 名额。任务被取消时把自己从队列里摘掉并立刻恢复，
-    /// 免得借用者挂死在 continuation 上（`borrowSFTP` 回到循环顶端会抛 `CancellationError`）。
-    private func waitForSFTPSlot(_ hostID: UUID) async {
+    /// 等一个 SFTP 名额，最多等 `sftpWaitTimeout`。返回 true = 有名额了（或本任务被
+    /// 取消，由 `borrowSFTP` 的 `checkCancellation` 收场），false = 超时。
+    ///
+    /// 三条出路都必须恢复 continuation，否则借用者永久挂死：
+    /// - 有人归还 / 主机被释放 → `resumeOneSFTPWaiter` / `resumeAllSFTPWaiters`；
+    /// - 本任务被取消 → `onCancel` 先立刻打标记（唤醒方据此跳过它），再把自己从队列摘掉；
+    /// - 等够 `sftpWaitTimeout` → 计时器把自己从队列摘掉并回 false。
+    private func waitForSFTPSlot(_ hostID: UUID) async -> Bool {
         let ticket = UUID()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        let flag = SFTPWaitFlag()
+        let timeout = sftpWaitTimeout
+        let timer = Task { [weak self] in
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return   // 名额到手 / 被取消 → 计时器作废
+            }
+            await self?.expireSFTPWait(hostID, ticket)
+        }
+        defer { timer.cancel() }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                // 已经取消就别进队列了：`onCancel` 可能已经跑过，没人再来叫醒我们。
+                guard !Task.isCancelled, !flag.isCancelled else {
+                    continuation.resume(returning: true)
+                    return
+                }
                 sftpWaiters[hostID, default: []].append(
-                    SFTPWaiter(ticket: ticket, continuation: continuation))
+                    SFTPWaiter(ticket: ticket, flag: flag, continuation: continuation))
             }
         } onCancel: {
+            flag.markCancelled()
             Task { await self.cancelSFTPWait(hostID, ticket) }
         }
     }
 
     private func cancelSFTPWait(_ hostID: UUID, _ ticket: UUID) {
-        guard var queue = sftpWaiters[hostID],
-              let index = queue.firstIndex(where: { $0.ticket == ticket }) else { return }
-        let waiter = queue.remove(at: index)
-        sftpWaiters[hostID] = queue.isEmpty ? nil : queue
-        waiter.continuation.resume()
+        guard let waiter = removeSFTPWaiter(hostID, ticket) else { return }
+        // true：让 `borrowSFTP` 回到循环顶端，由它的 `checkCancellation` 抛出去。
+        waiter.continuation.resume(returning: true)
     }
 
-    private func resumeOneSFTPWaiter(_ hostID: UUID) {
-        guard var queue = sftpWaiters[hostID], !queue.isEmpty else { return }
-        let waiter = queue.removeFirst()
+    /// 等超时：摘掉自己并回 false，`borrowSFTP` 据此抛 `SFTPChannelsBusyError`。
+    private func expireSFTPWait(_ hostID: UUID, _ ticket: UUID) {
+        guard let waiter = removeSFTPWaiter(hostID, ticket) else { return }
+        waiter.continuation.resume(returning: false)
+    }
+
+    private func removeSFTPWaiter(_ hostID: UUID, _ ticket: UUID) -> SFTPWaiter? {
+        guard var queue = sftpWaiters[hostID],
+              let index = queue.firstIndex(where: { $0.ticket == ticket }) else { return nil }
+        let waiter = queue.remove(at: index)
         sftpWaiters[hostID] = queue.isEmpty ? nil : queue
-        waiter.continuation.resume()
+        return waiter
+    }
+
+    /// 把一个名额交给队首。队首若已经取消，就叫醒它让它自行收场，**继续往下传**，
+    /// 直到有人真的接手或队列空 —— 否则一次归还的名额会随着一个已取消的等待者一起丢掉，
+    /// 后面还排着的人只能等下一次归还（最坏情况：再也没有下一次）。
+    private func resumeOneSFTPWaiter(_ hostID: UUID) {
+        while var queue = sftpWaiters[hostID], !queue.isEmpty {
+            let waiter = queue.removeFirst()
+            sftpWaiters[hostID] = queue.isEmpty ? nil : queue
+            waiter.continuation.resume(returning: true)
+            if !waiter.flag.isCancelled { return }
+        }
     }
 
     private func resumeAllSFTPWaiters(_ hostID: UUID) {
         guard let queue = sftpWaiters.removeValue(forKey: hostID) else { return }
-        for waiter in queue { waiter.continuation.resume() }
+        for waiter in queue { waiter.continuation.resume(returning: true) }
     }
 
     private func resumeAllSFTPWaiters() {
         let all = sftpWaiters
         sftpWaiters.removeAll()
         for queue in all.values {
-            for waiter in queue { waiter.continuation.resume() }
+            for waiter in queue { waiter.continuation.resume(returning: true) }
         }
     }
 

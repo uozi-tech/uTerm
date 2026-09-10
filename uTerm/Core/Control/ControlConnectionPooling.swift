@@ -90,6 +90,12 @@ nonisolated enum ControlConnectError: Error, Sendable {
     case hostKeyChanged(fingerprint: String, algorithm: String)
     case connectFailed(String)
     case authFailed(String)
+    /// 建连**成功了**，但这条连接刚建好就没人认领 —— 建连期间该主机被
+    /// `disconnect` / `disconnectAll` 释放（用户关了主开关、或显式断开）。
+    ///
+    /// 单独一个 case 而不是塞进 `connectFailed`：网络、认证、主机密钥全都没问题，
+    /// 报成「连接失败」会让人 / 模型去查根本不存在的网络故障。重试一次就好。
+    case released(String)
 }
 
 extension ControlConnectError {
@@ -100,6 +106,8 @@ extension ControlConnectError {
         case .hostKeyChanged: return .host_key_changed
         case .connectFailed: return .connect_failed
         case .authFailed: return .auth_failed
+        // 没有「稍后重试」的专码，落兜底 —— 但 message 说清是释放不是连不上。
+        case .released: return .operation_failed
         }
     }
 
@@ -116,6 +124,8 @@ extension ControlConnectError {
             return "连接「\(host)」失败：\(reason)"
         case .authFailed(let reason):
             return "「\(host)」认证失败：\(reason)"
+        case .released(let reason):
+            return "「\(host)」的连接在建立过程中被释放（\(reason)），请重试。"
         }
     }
 
@@ -137,6 +147,27 @@ extension ControlConnectError {
         default:
             return nil
         }
+    }
+}
+
+/// 一台主机的 SFTP 通道全忙，排队等到超时。
+///
+/// 借不到通道**不是**建连失败：链路好好的，只是这台主机的 4 个名额都被别的传输占着。
+/// 有上限地等（默认 90 s，短于 `ControlServer` 的 120 s handler 超时）而不是无限等 ——
+/// 无限等的后果是请求挂到服务端超时，客户端拿到 `handler_timeout`，既看不出原因也
+/// 占着 `maxActiveClients` 的名额，一条卡死的传输能把整个 CLI 拖垮。
+///
+/// TODO（协议侧 `server_busy` 落地后）：handler 把它映射成 `ControlErrorCode.server_busy`；
+/// 现在先落 `operation_failed` + 明确 message。
+nonisolated struct SFTPChannelsBusyError: Error, Sendable, Equatable {
+    /// 每主机的通道上限（`ControlConnectionPool.maxSFTPChannelsPerHost`）。
+    let limit: Int
+    /// 等了多少秒才放弃。
+    let waitedSeconds: Double
+
+    func message(host: String) -> String {
+        "主机「\(host)」的 SFTP 通道已满（\(limit) 条全在传输中），"
+            + "等待 \(Int(waitedSeconds.rounded())) 秒仍未排到，请稍后重试。"
     }
 }
 
@@ -169,7 +200,8 @@ protocol ControlConnectionPooling: Actor {
         maxLines: Int,
         maxBytes: Int
     ) async throws -> SSHCommandExecutor
-    /// **借**一条该主机的 SFTP 会话（必要时新建；到每主机上限则等待归还）。
+    /// **借**一条该主机的 SFTP 会话（必要时新建；到每主机上限则**有上限地**等待归还，
+    /// 等不到抛 `SFTPChannelsBusyError`）。
     /// 必须与 `returnSFTP(_:for:)` 配对 —— 直接用 `withSFTP(for:_:)` 最不容易漏还。
     func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding
     /// 归还一条借出的 SFTP 会话。重复归还、或归还一条已被释放的会话都是安全的。

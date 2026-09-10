@@ -387,6 +387,42 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(writes.map(\.offset), [0, 8, 16, 24, 32])
     }
 
+    /// **写阶段**失败（磁盘满 / 配额）不能被误报成 `file_exists`。
+    ///
+    /// `create` 用 EXCL 打开成功之后文件就已经建出来了，此时再 `stat` 一次必然命中 ——
+    /// 旧实现据此把「No space left on device」报成 `file_exists`，用户照提示加
+    /// `--force` 重传，然后再失败一次。
+    func testPutWriteStageFailureIsNotReportedAsFileExists() async throws {
+        await sftp.setWriteStageError(NSError(
+            domain: NSPOSIXErrorDomain, code: 28,
+            userInfo: [NSLocalizedDescriptionKey: "No space left on device"]))
+
+        let response = await handler.handle(
+            request(.sftpPut, path: "/tmp/out.bin",
+                    contentBase64: Data("payload".utf8).base64EncodedString()))
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.operation_failed.rawValue,
+                       "写阶段失败是 operation_failed，不是 file_exists")
+        XCTAssertTrue(response.message.contains("No space left on device"),
+                      "message 要带原话，实际是：\(response.message)")
+    }
+
+    /// **打开阶段**失败仍然走「再 stat 一次」的兜底：SFTP v3 撞 EXCL 只回
+    /// `SSH_FX_FAILURE` + 依实现而定的文案，没有这层兜底就报不出 `file_exists`。
+    func testPutOpenStageFailureStillFallsBackToFileExists() async throws {
+        await sftp.setOpenStageError(NSError(
+            domain: "sshd", code: 4,
+            userInfo: [NSLocalizedDescriptionKey: "Failure"]))
+
+        let response = await handler.handle(
+            request(.sftpPut, path: "/tmp/out.bin",
+                    contentBase64: Data("payload".utf8).base64EncodedString()))
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.code, ControlErrorCode.file_exists.rawValue)
+    }
+
     func testPutRejectsNegativeOffset() async throws {
         let response = await handler.handle(
             request(.sftpPut, path: "/tmp/out.txt",
@@ -467,6 +503,49 @@ final class ControlSFTPHandlerTests: XCTestCase {
                     offset: Int64(ControlProtocol.maxFileBytes), length: 1_000))
         XCTAssertTrue(ranged.ok, ranged.message)
         XCTAssertEqual(ranged.file?.bytes, 1_000)
+    }
+
+    /// 只给 `offset` 的区间读 = 「从这里到文件尾」，被 8 MiB 单次上限截断时
+    /// 必须 `truncated: true` 并给出下一段的 offset。
+    ///
+    /// 旧实现这里恒 false：50 MiB 的文件只回了头 8 MiB，客户端却以为已经取完 ——
+    /// 分片下载会静默丢掉 42 MiB。
+    func testGetWithOnlyOffsetFlagsTruncationAtTheSingleRequestCap() async throws {
+        let huge = Data(repeating: 0x41, count: 50 * 1_048_576)
+        await sftp.setFile("/tmp/huge.bin", data: huge, mtime: Date())
+
+        let response = await handler.handle(request(.sftpGet, path: "/tmp/huge.bin", offset: 0))
+
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.file?.bytes, ControlProtocol.maxFileBytes)
+        XCTAssertEqual(response.file?.truncated, true, "只回了 8 MiB 就说没被削，等于让客户端丢数据")
+        XCTAssertTrue(response.message.contains("offset \(ControlProtocol.maxFileBytes)"),
+                      "要告诉调用方下一段从哪儿接：\(response.message)")
+    }
+
+    /// 给了 `length` 且整段都在文件里：拿满 = 完整，`truncated: false`。
+    func testGetRangeFullyInsideTheFileIsNotTruncated() async throws {
+        let body = Data(repeating: 0x42, count: 4_096)
+        await sftp.setFile("/tmp/mid.bin", data: body, mtime: Date())
+
+        let response = await handler.handle(
+            request(.sftpGet, path: "/tmp/mid.bin", offset: 1_000, length: 500))
+
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.file?.bytes, 500)
+        XCTAssertEqual(response.file?.truncated, false, "要多少给多少就不是截断")
+    }
+
+    /// 给了 `length` 但越过 EOF：短返回，仍然 **不是** 截断（文件就这么大）。
+    func testGetRangeCrossingEOFIsShortButNotTruncated() async throws {
+        await sftp.setFile("/tmp/small.bin", data: Data("0123456789".utf8), mtime: Date())
+
+        let response = await handler.handle(
+            request(.sftpGet, path: "/tmp/small.bin", offset: 6, length: 1_000))
+
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.file?.bytes, 4)
+        XCTAssertEqual(response.file?.truncated, false)
     }
 
     func testGetRejectsOversizedLength() async throws {

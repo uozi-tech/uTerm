@@ -116,8 +116,12 @@ nonisolated enum ControlFilePayloadBuilder {
     ///
     /// 其余没有专码的失败（目录不为空之类）一律落到 `operation_failed`
     /// —— 它是协议的兜底码，比借用一个语义不符的码诚实。
-    static func errorCode(for error: Error) -> ControlErrorCode {
+    static func errorCode(for rawError: Error) -> ControlErrorCode {
+        // `writeRange` 给「打开阶段」的失败包了一层阶段标记（见 `SFTPWriteStageError`）；
+        // 归类前先剥掉，否则服务端状态码被藏在里面，一切都落到 operation_failed。
+        let error = SFTPWriteStageError.unwrap(rawError)
         if error is SFTPDownloadLimitExceeded { return .file_too_large }
+        if error is SFTPShortReadError { return .operation_failed }
         if error is SFTPFileExistsError { return .file_exists }
 
         if let status = sftpStatus(of: error) {
@@ -157,7 +161,8 @@ nonisolated enum ControlFilePayloadBuilder {
     /// CLI 面向模型 / 开发者，`FriendlyError.describe` 那句「操作未能完成，请稍后
     /// 重试」对排查毫无价值。服务端状态在的话优先给它自带的文案 + `SSH_FX` 码
     /// （`No such file (SSH_FX 2)`），否则退到 `String(describing:)`。
-    static func errorDetail(for error: Error) -> String {
+    static func errorDetail(for rawError: Error) -> String {
+        let error = SFTPWriteStageError.unwrap(rawError)
         if let status = sftpStatus(of: error) {
             let text = status.message.trimmingCharacters(in: .whitespacesAndNewlines)
             let code = "SSH_FX \(status.errorCode.rawValue)"
@@ -165,6 +170,9 @@ nonisolated enum ControlFilePayloadBuilder {
         }
         if let limit = error as? SFTPDownloadLimitExceeded {
             return "内容超过本次上限（\(limit.observedBytes) > \(limit.maximumBytes) 字节）"
+        }
+        if let short = error as? SFTPShortReadError {
+            return short.localizedDescription
         }
         return String(describing: error)
     }

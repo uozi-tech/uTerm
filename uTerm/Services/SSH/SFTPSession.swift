@@ -2,6 +2,37 @@ import Foundation
 import Citadel
 import NIOCore
 
+/// `writeRange` 的失败发生在**哪一阶段**。
+///
+/// 为什么要分：`create` 档用 SSH_FXF_EXCL 打开，撞上已存在的路径时 SFTP v3 只回
+/// `SSH_FX_FAILURE` + 依实现而定的文案，所以 handler 落到兜底码时会再 `stat` 一次
+/// 确认「是不是已存在」。但 EXCL **打开成功之后**的写失败（磁盘满、配额、连接断）
+/// 此时文件已经被建出来了，那次兜底 `stat` 必然成功 —— 「磁盘满」就被误报成
+/// `file_exists`，用户照着提示加 `--force` 重传，然后再次失败。
+///
+/// 于是只给**打开阶段**的失败包这一层；写阶段的错误原样上抛（`ControlFilePayloadBuilder`
+/// 还要认服务端状态码），handler 见不到 `.open` 就不做那次 stat 兜底。
+nonisolated struct SFTPWriteStageError: Error, Sendable {
+    nonisolated enum Stage: Sendable, Equatable {
+        /// 打开文件（含 EXCL 冲突、权限、路径不存在）。
+        case open
+    }
+
+    let stage: Stage
+    let underlying: any Error
+
+    /// 剥掉阶段外壳拿原错误；不是本类型就原样返回。错误归类（`errorCode(for:)` /
+    /// `errorDetail(for:)`）一律先过这一道，免得包装把服务端状态码藏起来。
+    static func unwrap(_ error: any Error) -> any Error {
+        (error as? SFTPWriteStageError)?.underlying ?? error
+    }
+
+    /// 这个错误是不是「打开阶段」失败。
+    static func isOpenFailure(_ error: any Error) -> Bool {
+        (error as? SFTPWriteStageError)?.stage == .open
+    }
+}
+
 /// 真实 SFTP 会话：在一个已连上的 `ConnectedClient` 上跑 Citadel SFTP。
 actor SFTPSession: SFTPProviding {
     private let connected: ConnectedClient
@@ -81,13 +112,20 @@ actor SFTPSession: SFTPProviding {
         // 不带 TRUNC / APPEND —— 分片并行写同一文件靠的就是这一档。
         case .write: flags = [.write, .create]
         }
-        let file = try await sftp.openFile(filePath: path, flags: flags)
+        let file: SFTPFile
+        do {
+            file = try await sftp.openFile(filePath: path, flags: flags)
+        } catch {
+            // 打开阶段失败：包上阶段标记，handler 才敢做「是不是已存在」的 stat 兜底。
+            throw SFTPWriteStageError(stage: .open, underlying: error)
+        }
         do {
             var buffer = ByteBuffer()
             buffer.writeBytes(data)
             try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: offset)
             try await file.close()
         } catch {
+            // 写阶段失败原样上抛（文件已经建出来了，此时的 stat 兜底只会误报 file_exists）。
             try? await file.close()
             throw error
         }
@@ -257,20 +295,13 @@ actor SFTPSession: SFTPProviding {
                     }
                 }
                 emitProgress(0)
-                // 一段 4 MiB，段内 32 000 B 并发读；读不满即 EOF。
-                // 不拿 stat 的 size 当终点 —— 文件在传输期间变长时也要读完。
-                while true {
-                    try Task.checkCancellation()
-                    let want = Self.segmentBytes
-                    let buffer = try await SFTPPipeline.read(
-                        pipelined, offset: offset, length: want)
-                    let count = buffer.readableBytes
-                    if count > 0 {
-                        try localFile.write(contentsOf: Data(buffer.readableBytesView))
-                        offset += UInt64(count)
-                        emitProgress(Int64(clamping: offset))
-                    }
-                    if count < want { break }
+                // 按 stat 的 size 精确分段（每段必须读满），再把传输期间长出来的尾巴读完。
+                _ = try await readWholeFile(
+                    pipelined, declaredSize: total, maximumBytes: nil
+                ) { buffer in
+                    try localFile.write(contentsOf: Data(buffer.readableBytesView))
+                    offset += UInt64(buffer.readableBytes)
+                    emitProgress(Int64(clamping: offset))
                 }
                 try localFile.synchronize()
                 try localFile.close()
@@ -329,31 +360,12 @@ actor SFTPSession: SFTPProviding {
                 }
             }
             emitProgress(0)
-            while true {
-                try Task.checkCancellation()
-                // 有上限时只多要 1 字节：读满即证明超限（而不是刚好读到头），
-                // 内存也不会为了判超限先撑到一整段。
-                let want: Int
-                if let maximumBytes {
-                    want = min(Self.segmentBytes, max(1, maximumBytes - data.count + 1))
-                } else {
-                    want = Self.segmentBytes
-                }
-                let buf = try await SFTPPipeline.read(
-                    pipelined, offset: offset, length: want)
-                let n = buf.readableBytes
-                if n > 0 {
-                    if let maximumBytes, data.count > maximumBytes - n {
-                        throw SFTPDownloadLimitExceeded(
-                            observedBytes: Int64(data.count) + Int64(n),
-                            maximumBytes: maximumBytes)
-                    }
-                    data.append(contentsOf: buf.readableBytesView)
-                    offset += UInt64(n)
-                    emitProgress(Int64(offset))
-                }
-                // 短读 = EOF（流水线读只在到头时给不满）。
-                if n < want { break }
+            _ = try await readWholeFile(
+                pipelined, declaredSize: total, maximumBytes: maximumBytes
+            ) { buffer in
+                data.append(contentsOf: buffer.readableBytesView)
+                offset += UInt64(buffer.readableBytes)
+                emitProgress(Int64(clamping: offset))
             }
             emitProgress(Int64(data.count))
             try await file.close()
@@ -362,6 +374,68 @@ actor SFTPSession: SFTPProviding {
             try? await file.close()
             throw error
         }
+    }
+
+    /// 整文件读的**唯一**内核：先按 `declaredSize`（stat 的大小）精确分段读，每段
+    /// 必须读满；`declaredSize` 之后再用非严格模式把「stat 之后文件又长大」的尾巴读完。
+    ///
+    /// 这两句合起来堵的是一个数据完整性事故：以前的判据是「这一段返回的字节数少于
+    /// 请求 = EOF，收工」。服务端一次短读 / 空读（网络抖动、并发写、实现偷懒）就能让
+    /// 12 MiB 的下载在 116 KiB 处**报成功**。现在长度已知的部分一律
+    /// `requireFullLength`，短了就抛 `SFTPShortReadError`，绝不静默收尾。
+    ///
+    /// `onSegment` 逐段消费（写本地文件 / 追加进内存），保证内存有界。
+    /// 返回实际读到的总字节数。
+    private func readWholeFile(
+        _ file: some SFTPPipelineFile,
+        declaredSize: Int64,
+        maximumBytes: Int?,
+        onSegment: (ByteBuffer) throws -> Void
+    ) async throws -> Int64 {
+        var offset: UInt64 = 0
+        var produced: Int64 = 0
+        var remaining = max(0, declaredSize)
+        while remaining > 0 {
+            try Task.checkCancellation()
+            let want = Int(min(Int64(Self.segmentBytes), remaining))
+            try Self.checkDownloadLimit(maximumBytes, produced: produced, incoming: want)
+            let buffer = try await SFTPPipeline.read(
+                file, offset: offset, length: want, requireFullLength: true)
+            try onSegment(buffer)
+            offset += UInt64(want)
+            produced += Int64(want)
+            remaining -= Int64(want)
+        }
+        // stat 之后还在长（日志文件之类）：非严格地续读，读不满才是真的到头。
+        // 第一发只探一个 32 000 B 的请求 —— 绝大多数文件没在长，拿整段 4 MiB 去探
+        // 等于每次下载白发 132 个必然落空的并发 READ。确认在长了再切回整段。
+        var want = SFTPPipeline.chunkSize
+        while true {
+            try Task.checkCancellation()
+            let buffer = try await SFTPPipeline.read(file, offset: offset, length: want)
+            let count = buffer.readableBytes
+            if count > 0 {
+                try Self.checkDownloadLimit(maximumBytes, produced: produced, incoming: count)
+                try onSegment(buffer)
+                offset += UInt64(count)
+                produced += Int64(count)
+            }
+            if count < want { break }
+            want = Self.segmentBytes
+        }
+        return produced
+    }
+
+    /// 有界下载的闸：**追加之前**判，绝不先把超限的数据收进内存再说。
+    private nonisolated static func checkDownloadLimit(
+        _ maximumBytes: Int?,
+        produced: Int64,
+        incoming: Int
+    ) throws {
+        guard let maximumBytes else { return }
+        let after = produced + Int64(incoming)
+        guard after > Int64(maximumBytes) else { return }
+        throw SFTPDownloadLimitExceeded(observedBytes: after, maximumBytes: maximumBytes)
     }
 
     /// SFTP size 是 UInt64；恶意/损坏服务端可回报大于 Int64.max 的值。直接
