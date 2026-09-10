@@ -58,6 +58,10 @@ final class SkillManagerModel {
             () -> (targets: [SkillTarget], statuses: [SkillTarget: SkillInstallStatus]) in
             var targets: [SkillTarget] = []
             var statuses: [SkillTarget: SkillInstallStatus] = [:]
+            // 已经物化过的源目录做一次自检自愈：1.12.0 及更早版本写出的
+            // `bin/utermctl` 带着 `com.apple.quarantine`，直接执行会 EPERM。
+            // 只修已存在的源，没装过技能的用户不会因此被凭空造出一份。
+            for installer in installers { try? installer.repairSourceIfNeeded() }
             for target in SkillTarget.allCases where installers.first?.isToolPresent(target) == true {
                 targets.append(target)
                 try? Self.repairManagedInstallIfNeeded(installers: installers, target: target)

@@ -17,33 +17,74 @@ final class SkillDefinitionTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    private func repositoryFile(_ relativePath: String) throws -> String {
+    private func repositoryFileData(_ relativePath: String) throws -> Data {
         let url = repositoryRoot.appending(path: relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("仓库文件不可见（\(relativePath)），跳过同步校验")
         }
-        return try String(contentsOf: url, encoding: .utf8)
-            .trimmingCharacters(in: .newlines)
+        return try Data(contentsOf: url)
     }
 
-    func testMarkdownMatchesRepositoryFiles() throws {
+    /// 真的物化一遍，再拿**磁盘上的字节**跟仓库文件比。
+    ///
+    /// 以前是拿常量 trim 掉末尾换行后比字符串，于是「常量没有末尾换行」这个差异
+    /// 被自己的断言掩盖了：装到用户机器上的 `SKILL.md` / `bin/utermctl` 与仓库里
+    /// 的 `cmp` 一比就报 EOF 差异。逐字节比物化结果才挡得住。
+    private func materialize(_ definition: SkillDefinition) throws -> SkillInstaller {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "uterm-skill-materialize-\(UUID().uuidString)",
+                       directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let installer = SkillInstaller(
+            definition: definition,
+            homeDirectoryURL: root.appending(path: "home", directoryHint: .isDirectory),
+            applicationSupportDirectoryURL: root.appending(path: "AppSupport",
+                                                           directoryHint: .isDirectory)
+        )
+        try installer.materializeSource()
+        return installer
+    }
+
+    func testMaterializedMarkdownIsByteIdenticalToRepositoryFiles() throws {
         for definition in SkillDefinition.catalog {
-            let onDisk = try repositoryFile("skills/\(definition.slug)/SKILL.md")
+            let onDisk = try repositoryFileData("skills/\(definition.slug)/SKILL.md")
+            let installer = try materialize(definition)
+            let written = try Data(
+                contentsOf: installer.sourceDirectoryURL.appending(path: "SKILL.md"))
             XCTAssertEqual(
-                definition.markdownContent,
-                onDisk,
-                "\(definition.slug) 的内嵌文档与 skills/\(definition.slug)/SKILL.md 不一致"
+                written, onDisk,
+                "\(definition.slug) 物化出的 SKILL.md 与 skills/\(definition.slug)/SKILL.md 不逐字节相同"
             )
         }
     }
 
-    func testClientScriptMatchesRepositoryFile() throws {
-        let onDisk = try repositoryFile("scripts/utermctl")
-        XCTAssertEqual(
-            SkillDefinition.controlClientScript,
-            onDisk,
-            "内嵌的 utermctl 与 scripts/utermctl 不一致"
-        )
+    func testMaterializedClientScriptIsByteIdenticalToRepositoryFile() throws {
+        let onDisk = try repositoryFileData("scripts/utermctl")
+        let installer = try materialize(.uTermRun)
+        let written = try Data(
+            contentsOf: installer.sourceDirectoryURL.appending(path: "bin/utermctl"))
+        XCTAssertEqual(written, onDisk, "物化出的 utermctl 与 scripts/utermctl 不逐字节相同")
+    }
+
+    /// 常量本身可以没有末尾换行（`#"""…"""#` 天然如此），补齐是物化这一步的活。
+    func testMaterializedTextEndsWithExactlyOneNewline() {
+        XCTAssertEqual(SkillInstaller.materializedText("a"), "a\n")
+        XCTAssertEqual(SkillInstaller.materializedText("a\n"), "a\n")
+        XCTAssertEqual(SkillInstaller.materializedText("a\n\n"), "a\n\n")
+    }
+
+    /// uTerm 是沙盒 app，物化出的 `bin/utermctl` 必然带 `com.apple.quarantine`，
+    /// 直接执行就是 `operation not permitted`，而 **app 自己摘不掉**
+    /// （见 `SkillInstallerTests.testSandboxCannotClearItsOwnQuarantine`）。
+    /// 唯一的出路是让模型在自己那个非沙盒进程里摘，所以定位那一节必须写着怎么做。
+    func testRunSkillTellsTheModelHowToClearQuarantine() {
+        let doc = SkillDefinition.uTermRun.markdownContent
+        XCTAssertTrue(doc.contains("xattr -d com.apple.quarantine"),
+                      "定位客户端那一节要摘掉隔离属性，否则整套技能一条都跑不通")
+        XCTAssertTrue(doc.contains("python3 \"$UTERMCTL\""),
+                      "还要给出摘不掉时的退路：脚本可读，用解释器跑")
+        XCTAssertTrue(doc.contains("operation not permitted"),
+                      "要写出症状，模型撞上时才认得出来")
     }
 
     func testCatalogCoversTheFourSkills() {

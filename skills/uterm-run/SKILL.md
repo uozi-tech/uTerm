@@ -20,10 +20,15 @@ if command -v utermctl >/dev/null 2>&1; then
   UTERMCTL="$(command -v utermctl)"
 else
   for p in "$HOME"/.{claude,codex,cursor}/skills/uterm-run/bin/utermctl; do
-    if [ -x "$p" ]; then UTERMCTL="$p"; break; fi
+    if [ -r "$p" ]; then UTERMCTL="$p"; break; fi
   done
 fi
 test -n "$UTERMCTL" || { echo "utermctl not found"; exit 1; }
+
+# uTerm 是沙盒 app，它写出的每个文件都带 com.apple.quarantine，直接执行会报
+# "operation not permitted"。沙盒里摘不掉（app 自己试过，removexattr 一律 EPERM），
+# 在这里摘得掉，而且摘一次长期有效：
+xattr -d com.apple.quarantine "$UTERMCTL" 2>/dev/null || true
 ```
 
 技能自带的那份（`~/.<tool>/skills/uterm-run/bin/utermctl`）随 uTerm 升级自动更新，
@@ -31,13 +36,20 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 源文件，两者不会漂移。**找不到就直说找不到，不要自己写 socket 客户端、也不要改用
 `ssh`。**
 
+万一 `xattr` 也摘不掉（比如你自己就跑在沙盒里），**不用放弃**：被挡住的只是 exec，
+文件本身照常可读，把所有 `"$UTERMCTL" …` 换成 `python3 "$UTERMCTL" …` 即可，
+行为一模一样（客户端是纯标准库的 Python 3 脚本）。
+
 ## 先探活
 
 ```sh
 "$UTERMCTL" ping
 ```
 
-`ok: true` 才能继续。三种常见失败：
+`ok: true` 才能继续。这一步同时验掉了上面的隔离属性：**报
+`operation not permitted` 就是隔离属性还在**，改用 `python3 "$UTERMCTL" ping`。
+
+三种常见失败：
 
 - `uterm_not_running`：uTerm 没开，或用户没装。**不要**试图自己起 app，也不要绕过它
   直接 `ssh`，直接告诉用户打开 uTerm。
@@ -99,10 +111,20 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 在远端跑，不是给客户端看的。`table` 会逐主机分段打印输出，给人看；要自己解析就用
 `json`。
 
+`--` 之后的 argv 会被 `shlex.join` 拼成**一条命令**，其中每一段都是独立的一个词。
+所以 `-- 'uname -a; id'` 是错的：整串被当成**一个程序名**引起来，远端报
+`sh: uname -a; id: not found`。要跑带 `;`、管道、重定向的整串，用
+`-c '…'`，或者显式 `-- sh -c '…'`。
+
 结果里的字段：`output` 是合并后的 stdout/stderr，`exitCode` 是远端真实退出码
 （拿不到时为 `null`），`durationMs` 是耗时。**单机 `run` 的 `exitCode` 非 0 不代表
 调用失败** —— 调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output`
 去判断。
+
+同理，**`utermctl` 自己的退出码只说明「这次调用有没有送达并执行完」**，不是远端
+命令的退出码。`ok: true` + `exitCode: 127` 是完全正常的一次调用（命令送到了，
+远端说找不到这个程序）。要判断命令成没成，读 `result.exitCode`；要判断调用成没成，
+看顶层 `ok` / `code`。
 
 ## run-many / quick-run 怎么读结果
 

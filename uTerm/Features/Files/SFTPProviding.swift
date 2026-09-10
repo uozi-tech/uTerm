@@ -2,10 +2,19 @@ import Foundation
 
 // MARK: - RemoteStat
 
-/// 远程文件的轻量元信息快照（size + mtime）。
+/// 远程文件的轻量元信息快照（size + mtime + 权限）。
 nonisolated struct RemoteStat: Sendable, Equatable {
     let size: Int64
     let mtime: Date
+    /// 原始 POSIX mode（**含类型位**，与 `RemoteEntry.permissions` 同义）。
+    /// 服务端没给 `SSH_FILEXFER_ATTR_PERMISSIONS` 时为 nil。
+    let permissions: UInt32?
+
+    init(size: Int64, mtime: Date, permissions: UInt32? = nil) {
+        self.size = size
+        self.mtime = mtime
+        self.permissions = permissions
+    }
 }
 
 // MARK: - TransferProgress

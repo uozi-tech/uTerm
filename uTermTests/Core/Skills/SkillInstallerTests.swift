@@ -78,12 +78,117 @@ final class SkillInstallerTests: XCTestCase {
             contentsOf: installer.sourceDirectoryURL.appending(path: "SKILL.md"),
             encoding: .utf8
         )
-        XCTAssertEqual(markdown, SkillDefinition.uTermRun.markdownContent)
+        XCTAssertEqual(
+            markdown,
+            SkillInstaller.materializedText(SkillDefinition.uTermRun.markdownContent))
+        XCTAssertTrue(markdown.hasSuffix("\n"), "物化出的文本文件要以换行结尾")
 
         let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
         let permissions = try FileManager.default
             .attributesOfItem(atPath: client.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(permissions?.int16Value, 0o755)
+    }
+
+    // MARK: - com.apple.quarantine 与物化自检
+
+    private func hasQuarantine(_ url: URL) -> Bool {
+        getxattr(url.path, SkillInstaller.quarantineAttribute, nil, 0, 0, 0) >= 0
+    }
+
+    /// **沙盒宿主写出的每个文件都带 `com.apple.quarantine`，app 自己摘不掉。**
+    ///
+    /// 这条用例把真机故障钉在这里：带着这条属性的脚本直接执行就是
+    /// `operation not permitted`（`~/.claude/skills/uterm-run/bin/utermctl` 与
+    /// `~/.local/bin/utermctl` 都跑不了），而沙盒进程无权解除自己的隔离 ——
+    /// `removexattr` / `setxattr` 都回 `EPERM`，`setResourceValue(nil,
+    /// forKey: .quarantinePropertiesKey)` 报成功但属性纹丝不动。逐条量过。
+    ///
+    /// 出路在技能文档（模型跑在非沙盒进程里，`xattr -d` 摘得掉），
+    /// 由 `SkillDefinitionTests.testRunSkillTellsTheModelHowToClearQuarantine` 守着。
+    func testSandboxCannotClearItsOwnQuarantine() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+
+        try XCTSkipUnless(hasQuarantine(client),
+                          "宿主没开沙盒（写出的文件不带 quarantine），这条不适用")
+
+        // 1. removexattr → EPERM
+        XCTAssertEqual(removexattr(client.path, SkillInstaller.quarantineAttribute, 0), -1)
+        XCTAssertEqual(errno, EPERM)
+        XCTAssertFalse(SkillInstaller.removeQuarantine(at: client),
+                       "摘不掉要如实返回 false，不能谎报成功")
+
+        // 2. Apple 文档的正路：报成功，属性还在
+        try (client as NSURL).setResourceValue(nil, forKey: .quarantinePropertiesKey)
+        XCTAssertTrue(hasQuarantine(client), "setResourceValue(nil) 只是报成功")
+
+        // 3. 属性还在 ⇒ 直接 exec 必然 EPERM
+        XCTAssertTrue(SkillInstaller.hasQuarantine(at: client))
+        let process = Process()
+        process.executableURL = client
+        process.arguments = ["--help"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        XCTAssertThrowsError(try process.run()) { error in
+            XCTAssertEqual((error as NSError).code, Int(EPERM))
+        }
+
+        // 4. 但它不是「可修复的自检项」—— 否则每次打开设置页都白重写一遍。
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty,
+                      "quarantine 不该被当成可修复项：\(installer.sourceIntegrityIssues())")
+        XCTAssertEqual(installer.quarantinedFiles().count, 2, "但要报得出来")
+    }
+
+    /// 本来就没有这条属性时（非沙盒构建）要判成功，不要把 `ENOATTR` 当失败。
+    func testRemoveQuarantineTreatsMissingAttributeAsSuccess() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+        try XCTSkipIf(hasQuarantine(client), "宿主开了沙盒，构造不出「没有该属性」的文件")
+
+        XCTAssertTrue(SkillInstaller.removeQuarantine(at: client))
+        XCTAssertEqual(
+            getxattr(client.path, SkillInstaller.quarantineAttribute, nil, 0, 0, 0), -1)
+        XCTAssertEqual(errno, ENOATTR)
+    }
+
+    /// 可执行位掉了是**能**修的，物化时要当场补回来。
+    func testMaterializeRestoresExecutableBit() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o644))], ofItemAtPath: client.path)
+        XCTAssertTrue(installer.sourceIntegrityIssues().contains { $0.contains("可执行位") })
+
+        try installer.materializeSource()   // 内容一字未变，仍要校正权限
+
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        let mode = try FileManager.default
+            .attributesOfItem(atPath: client.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.int16Value, 0o755)
+    }
+
+    /// 文件被删掉也是可修复项 —— `repairSourceIfNeeded` 补回来。
+    func testRepairSourceIfNeededRestoresMissingFile() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+        try FileManager.default.removeItem(at: client)
+        XCTAssertFalse(installer.sourceIntegrityIssues().isEmpty)
+
+        try installer.repairSourceIfNeeded()
+
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: client.path))
+    }
+
+    /// 没装过技能的用户不该因为打开一次设置页就被凭空造出源目录。
+    func testRepairSourceIfNeededDoesNothingWhenNeverMaterialized() throws {
+        let installer = installer()
+        try installer.repairSourceIfNeeded()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installer.sourceDirectoryURL.path))
     }
 
     func testInstallIsIdempotent() throws {

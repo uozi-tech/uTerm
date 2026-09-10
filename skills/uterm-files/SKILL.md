@@ -21,6 +21,10 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 
 - `ls` 的 `path` 不给时默认 `.`（登录目录）。表格里 `kind` 是 `file` / `dir` /
   `link`，`mode` 是八进制权限。
+- `stat` 回 `size` / `modifiedAt` / `permissions` / `kind`。`permissions` 是**原始
+  POSIX mode（含类型位）**，与 `ls` 的那一列同义；`--format table` 里已经按
+  `& 0o7777` 显示成八进制。`kind` 是 `file` / `directory` / `symlink` / `other`，
+  服务端没回权限位时 `permissions` 与 `kind` 都是 `null`。
 - `cat` 上限 **1 MiB**，超过**不截断**而是直接回 `file_too_large`（远端没有部分读
   的原语）—— 改用 `sftp get`（上限 8 MiB）落盘后本地处理，或者用下面那条 `tail`。
   文件不是 UTF-8 文本时也不会往终端里吐乱码，同样提示你改用 `sftp get`。

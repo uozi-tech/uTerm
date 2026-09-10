@@ -106,19 +106,80 @@ nonisolated struct SkillInstaller: Sendable {
         return exists && isDirectory.boolValue
     }
 
-    /// 建源目录并写/刷新 `SKILL.md`（内容不一致时覆盖）。
+    /// 建源目录并写/刷新 `SKILL.md` 与全部附加文件（内容不一致时覆盖），
+    /// 然后校正可执行位、尽力摘掉 `com.apple.quarantine`，最后自检一遍。
+    ///
+    /// 可执行位 **每次都校正**（哪怕内容一字未变）：旧版本装下的文件正是
+    /// 「内容对、属性错」那一类，只有重新走一遍物化才修得回来。
     func materializeSource() throws {
         try validateSlug()
+        try materializeAll(force: false)
+
+        // 自检：文件在、可执行位对。缺了就强制重写一遍 ——「装上了却跑不了」
+        // 比装不上更难查。（quarantine **不在**这里，它修不掉，见下面的说明；
+        // 把它当成可修复项只会每次打开设置页都白重写一遍。）
+        let issues = sourceIntegrityIssues()
+        guard !issues.isEmpty else { return }
+        AppLogger.warn(
+            "技能 \(definition.slug) 物化后自检未过，重新物化：\(issues.joined(separator: "；"))",
+            category: "skills"
+        )
+        try materializeAll(force: true)
+        let remaining = sourceIntegrityIssues()
+        if !remaining.isEmpty {
+            AppLogger.error(
+                "技能 \(definition.slug) 重新物化后自检仍未过：\(remaining.joined(separator: "；"))",
+                category: "skills"
+            )
+        }
+    }
+
+    private func materializeAll(force: Bool) throws {
         try FileManager.default.createDirectory(
             at: sourceDirectoryURL, withIntermediateDirectories: true)
-        let desired = definition.markdownContent
-        let current = try? String(contentsOf: sourceSkillFileURL, encoding: .utf8)
-        if current != desired {
-            try desired.write(to: sourceSkillFileURL, atomically: true, encoding: .utf8)
-        }
+        try writeMaterialized(
+            definition.markdownContent, to: sourceSkillFileURL,
+            executable: false, force: force)
         for file in definition.supportFiles {
-            try materializeSupportFile(file)
+            try materializeSupportFile(file, force: force)
         }
+    }
+
+    /// 源目录已经物化过、但自检不过（缺可执行位 / 带 quarantine / 文件丢了）就重物化。
+    ///
+    /// 没装过技能的用户不该因为打开一次设置页就被凭空造出
+    /// `<appSupport>/uTerm/Skills/`，所以源目录不存在时直接返回。
+    func repairSourceIfNeeded() throws {
+        guard Self.fileType(at: sourceDirectoryURL) == S_IFDIR else { return }
+        guard !sourceIntegrityIssues().isEmpty else { return }
+        try materializeSource()
+    }
+
+    /// 物化结果里**可以靠重新物化修好**的问题，返回空数组即健康。
+    /// （`com.apple.quarantine` 不算 —— 见 `removeQuarantine(at:)`。）
+    func sourceIntegrityIssues() -> [String] {
+        materializedFiles().compactMap { url, executable in
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else { return "\(url.path)：文件缺失" }
+            guard executable, info.st_mode & S_IXUSR == 0 else { return nil }
+            return "\(url.path)：缺可执行位"
+        }
+    }
+
+    /// 物化出的文件里仍带 `com.apple.quarantine` 的那些。修不掉，只能报告
+    /// （测试与日志用；技能文档教模型自己 `xattr -d`）。
+    func quarantinedFiles() -> [URL] {
+        materializedFiles().map(\.url).filter { Self.hasQuarantine(at: $0) }
+    }
+
+    /// 物化会写出的全部文件及其「该不该可执行」。
+    private func materializedFiles() -> [(url: URL, executable: Bool)] {
+        var files: [(URL, Bool)] = [(sourceSkillFileURL, false)]
+        for file in definition.supportFiles {
+            guard let relativePath = try? validateSupportFilePath(file.relativePath) else { continue }
+            files.append((sourceDirectoryURL.appending(path: relativePath), file.isExecutable))
+        }
+        return files
     }
 
     func status(for target: SkillTarget) -> SkillInstallStatus {
@@ -214,23 +275,44 @@ nonisolated struct SkillInstaller: Sendable {
         }
     }
 
-    private func materializeSupportFile(_ file: SkillDefinition.SupportFile) throws {
+    private func materializeSupportFile(_ file: SkillDefinition.SupportFile, force: Bool) throws {
         let relativePath = try validateSupportFilePath(file.relativePath)
         let url = sourceDirectoryURL.appending(path: relativePath)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let current = try? String(contentsOf: url, encoding: .utf8)
-        if current != file.content {
-            try file.content.write(to: url, atomically: true, encoding: .utf8)
+        try writeMaterialized(
+            file.content, to: url, executable: file.isExecutable, force: force)
+    }
+
+    /// 写内容（相同则不动 mtime）→ 校正可执行位 → 摘 quarantine。
+    /// `force` 时无条件重写，供自检失败后的重物化用。
+    private func writeMaterialized(
+        _ content: String, to url: URL, executable: Bool, force: Bool
+    ) throws {
+        let desired = Self.materializedText(content)
+        let current = force ? nil : try? String(contentsOf: url, encoding: .utf8)
+        if current != desired {
+            try desired.write(to: url, atomically: true, encoding: .utf8)
         }
-        if file.isExecutable {
+        if executable {
             try FileManager.default.setAttributes(
                 [.posixPermissions: NSNumber(value: Int16(0o755))],
                 ofItemAtPath: url.path
             )
         }
+        Self.removeQuarantine(at: url)
+    }
+
+    /// 真正落到磁盘上的文本。
+    ///
+    /// `SkillDefinition` 的 `#"""…"""#` 常量天然**没有末尾换行**，直接写出去就与
+    /// 仓库里的 `skills/*/SKILL.md`、`scripts/utermctl` 逐字节不同（少一个 `\n`），
+    /// `cmp` 时报 EOF 差异，装到用户机器上的也是个「最后一行没结束」的文本文件。
+    /// 补齐这一个字节即可，常量本身不用动。
+    static func materializedText(_ content: String) -> String {
+        content.hasSuffix("\n") ? content : content + "\n"
     }
 
     private func validateSupportFilePath(_ path: String) throws -> String {
@@ -260,6 +342,46 @@ nonisolated struct SkillInstaller: Sendable {
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return nil }
         return info.st_mode & S_IFMT
+    }
+
+    // MARK: - com.apple.quarantine
+
+    /// **沙盒 app 写出的每一个文件都带 `com.apple.quarantine`**（形如
+    /// `0086;…;uTerm;`，`LSQuarantineType = LSQuarantineTypeSandboxed`），
+    /// 带着它的脚本**直接执行必然 `operation not permitted`** ——
+    /// `~/.claude/skills/uterm-run/bin/utermctl` 与 `~/.local/bin/utermctl`
+    /// 都跑不了，只有 `python3 <路径>` 能跑（文件本身可读，被挡的是 exec）。
+    ///
+    /// uTable 写出的同名文件没有这条属性，是因为它**没开沙盒**；uTerm 开了
+    /// （`uTerm.entitlements` 的 `com.apple.security.app-sandbox`，Debug / Release
+    /// 都开），所以这不是环境差异，是必然结果。
+    static let quarantineAttribute = "com.apple.quarantine"
+
+    static func hasQuarantine(at url: URL) -> Bool {
+        getxattr(url.path, quarantineAttribute, nil, 0, 0, 0) >= 0
+    }
+
+    /// 尽力摘掉 `com.apple.quarantine`。**在沙盒里注定失败**，别指望它。
+    ///
+    /// 宿主里逐条量过（`SkillInstallerTests` 有对应用例）：`removexattr` 回
+    /// `EPERM`，`setxattr` 覆盖成 `0000` 标志也回 `EPERM`，
+    /// `URL.setResourceValue(nil, forKey: .quarantinePropertiesKey)`（Apple 文档
+    /// 的正路）**报成功但属性纹丝不动**。沙盒进程无权给自己解除隔离，这是设计如此。
+    ///
+    /// 真正的出路在技能文档里：定位客户端之后 `xattr -d com.apple.quarantine`
+    /// （模型跑在非沙盒进程里，摘得掉，摘一次长期有效），摘不掉就
+    /// `python3 "$UTERMCTL"`。这里仍留一次尝试，是为了「哪天不再沙盒 / 系统放宽」
+    /// 时自动受益；失败只记 debug，不刷日志、也不阻断安装。
+    @discardableResult
+    static func removeQuarantine(at url: URL) -> Bool {
+        if removexattr(url.path, quarantineAttribute, 0) == 0 { return true }
+        let code = errno
+        if code == ENOATTR || code == ENODATA { return true }
+        AppLogger.debug(
+            "无法移除 \(url.path) 的 \(quarantineAttribute)（errno \(code)，沙盒下预期为 EPERM）",
+            category: "skills"
+        )
+        return false
     }
 }
 

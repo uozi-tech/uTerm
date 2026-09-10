@@ -541,17 +541,32 @@ nonisolated public struct ControlRemoteEntry: Codable, Sendable, Equatable {
     }
 }
 
-/// 与 `RemoteStat`（size + mtime）对齐，另附解析后的路径。
+/// 与 `RemoteStat`（size + mtime + 权限）对齐，另附解析后的路径。
 nonisolated public struct ControlRemoteStat: Codable, Sendable, Equatable {
     public var path: String
     public var size: Int64
     /// ISO8601。
     public var modifiedAt: String
+    /// 原始 POSIX mode，**含类型位**（与 `ControlRemoteEntry.permissions` 一致）。
+    /// 服务端没给权限位时为 nil。客户端展示时自己 `& 0o7777`。
+    public var permissions: Int?
+    /// `file` / `directory` / `symlink` / `other`，由 `permissions` 的类型位推出；
+    /// 没有权限位时为 nil。`ls` 靠 `isDirectory` / `isSymlink` 两个布尔表达同一件事，
+    /// `stat` 只有一行，给个字符串更直观。
+    public var kind: String?
 
-    public init(path: String, size: Int64, modifiedAt: String) {
+    public init(
+        path: String,
+        size: Int64,
+        modifiedAt: String,
+        permissions: Int? = nil,
+        kind: String? = nil
+    ) {
         self.path = path
         self.size = size
         self.modifiedAt = modifiedAt
+        self.permissions = permissions
+        self.kind = kind
     }
 }
 
