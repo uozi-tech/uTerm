@@ -242,7 +242,7 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `command_timeout` | 超时；**命令可能还在远端继续跑** |
 | `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
 | `run_failed` | `run-many` / `quick-run`：一台都没成 |
-| `file_not_found` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
+| `file_not_found` / `file_exists` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
 | `handler_timeout` | uTerm 侧 120 秒兜底超时 |

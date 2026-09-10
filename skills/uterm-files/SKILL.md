@@ -45,11 +45,47 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 "$UTERMCTL" sftp put -H prod-web ./deploy.sh /tmp/deploy.sh
 ```
 
-- 单次上限 **8 MiB**，两个方向都是。上传超限客户端在发请求**之前**就拒，下载超限
-  服务端回 `file_too_large`。要传大文件请用户在 uTerm 的文件窗口里拖，那里有断点与
-  进度。
-- `get` 默认**不覆盖**已存在的本地文件（客户端直接报错退出），要覆盖显式加 `--force`。
+- **两个方向都默认不覆盖**：`get` 碰到已存在的本地文件、`put` 碰到已存在的远端路径
+  都直接失败（前者是客户端本地拒绝、退出码 `2`，后者是服务端回 `file_exists`、
+  退出码 `1`）。确认要盖就显式加 `--force`。
 - 上传不会自动建父目录，先 `sftp mkdir`。
+- 单次请求上限 **8 MiB**，但**这不是文件大小的上限** —— 超过一片的文件由客户端自动
+  切片并行传，见下一节。
+
+## 大文件
+
+`get` / `put` 超过分片大小（默认 8 MiB，= 单次请求上限）时，客户端自动切成
+`[offset, offset+length)` 的分片，各开一条连接并行传，传完比对 sha256。**不需要你做
+任何事**，也不用再把大文件劝回 GUI：
+
+```sh
+"$UTERMCTL" sftp put -H prod-web ./release.tar.gz /srv/release.tar.gz
+"$UTERMCTL" sftp get -H prod-web /var/log/big.log ./big.log
+
+# 断了接着传（put 以远端已有大小为起点，get 以本地已有大小为起点）
+"$UTERMCTL" sftp put -H prod-web ./release.tar.gz /srv/release.tar.gz --resume
+```
+
+| 选项 | 作用 |
+|---|---|
+| `--parallel N` | 并行分片数，1–8，默认 4。上限 8 是服务端的并发客户端上限，再大只会排队 |
+| `--chunk-mib N` | 分片大小（MiB，可带小数），默认 8，上限 8 |
+| `--resume` | 断点续传；只在「已有的那部分比源文件小」时可用，否则退出码 `2` |
+| `--no-verify` | 传完不比对 sha256 |
+| `--quiet` | 不刷进度行（结束仍打一行汇总到 stderr） |
+| `--force` | 覆盖已存在的目标 |
+
+- **校验默认开，但只对分片传输做**：单请求传输是一次收发，会出错的是分片拼装；而且
+  校验要在远端跑 `sha256sum`（`shasum -a 256` 兜底），那归「允许执行命令与写入」开关
+  管，不该把小文件的只读下载也拖下水。远端两个工具都没有时 `verified: false` +
+  stderr 一句说明，**不算失败**。
+- sha256 对不上时退出码是 `1`、`code: checksum_mismatch` —— 加 `--resume` 续传，或者
+  去掉 `--resume` 整份重传，**别当成传成功了**。
+- 单片失败自动重试 2 次（0.5 / 1 秒退避）；仍失败整条传输就失败，退出码按响应里的
+  错误码映射。此时远端是**半截文件**，用 `--resume` 接着传。
+- 进度打在 stderr（stdout 留给 JSON）。成功时 `transfer` 里有这一趟的账：
+  `bytes` / `totalBytes` / `chunks` / `parallel` / `seconds` / `mbps`（MiB/s）/
+  `sha256` / `verified` / `verifyNote` / `resumedFrom`。
 
 ## 写与删
 
@@ -65,8 +101,9 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 
 ## 硬约束
 
-- **删除与覆盖先问用户**：`rm` / `rmdir`，以及 `put` 到一个已存在的远端路径、`mv`
-  盖掉已有文件。远端没有回收站，这些操作没有撤销。问之前先 `stat` 或 `ls` 一下，把
+- **删除与覆盖先问用户**：`rm` / `rmdir`，以及 `put --force` 到一个已存在的远端路径、
+  `mv` 盖掉已有文件。（不加 `--force` 的 `put` 会被服务端的 `file_exists` 挡住 ——
+  撞上它就是在提醒你先问。）远端没有回收站，这些操作没有撤销。问之前先 `stat` 或 `ls` 一下，把
   「要删的是这个、多大、什么时候改的」摆给用户看。
 - **改配置文件先备份**：`sftp get` 一份到本地，或在远端 `cp x x.bak`（走
   `uterm-run`），再 `put`。
@@ -80,9 +117,14 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 | code | 含义 |
 |---|---|
 | `file_not_found` | 远端路径不存在 |
-| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB；超限不截断，直接报这个码） |
+| `file_exists` | `put` 的远端路径已存在，且没给 `--force`（退出码 `1`） |
+| `file_too_large` | 超过 8 MiB（`cat` 是 1 MiB；超限不截断，直接报这个码）。`get` / `put` 不会撞它 —— 大文件走分片 |
 | `permission_denied` | 远端权限不够 —— 换路径或让用户提权，别自己去试 `sudo` |
 | `is_directory` | 对目录用了文件动作（或反过来） |
 
-其余错误码见 `uterm-run`。客户端本地的前置拒绝（本地文件不存在、超过上限、目标已存在
-且没给 `--force`）退出码是 `2`，消息在 stderr 上。
+另外 `checksum_mismatch` 是**客户端**判的：分片传完后本地与远端的 sha256 对不上，
+退出码 `1`。
+
+其余错误码见 `uterm-run`。客户端本地的前置拒绝（本地文件不存在、本地目标已存在且没给
+`--force`、`--resume` 无从续起、`--parallel` / `--chunk-mib` 超范围）退出码是 `2`，
+消息在 stderr 上。
