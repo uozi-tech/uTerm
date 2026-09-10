@@ -464,7 +464,14 @@ nonisolated final class ControlServer: @unchecked Sendable {
         // total stays bounded because the body itself is capped below.
         var deadline = makeDeadline()
         var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 8192)
+        // 8 KiB 的收包缓冲对小请求够用，但一条 11 MB 上限的 `sftp-put` 要 ~1400 次
+        // `recv`；64 KiB 把 syscall 数压到 ~1/8，而每条连接只多占 56 KiB 栈外内存
+        // （并发连接数由 `maxActiveClients` 封顶）。
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        // 预留一份「够装下绝大多数请求」的容量，省掉小请求的反复 realloc；真正的大
+        // 请求仍靠 Data 自己的几何扩容长上去，不在这里按 `maxRequestBytes`（~11 MB）
+        // 一把预分配 —— 那会让每条连接都先吃满上限的内存。
+        data.reserveCapacity(256 * 1024)
         while true {
             try waitForIO(
                 fd: fd,

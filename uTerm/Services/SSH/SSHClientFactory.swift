@@ -32,6 +32,30 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
 
 /// uTerm's model/UI adapter around the shared connection engine.
 nonisolated enum SSHClientFactory {
+    /// SSH 子通道（PTY / SFTP / direct-tcpip）的入站窗口大小。
+    ///
+    /// NIOSSH 把每条子通道的入站窗口钉死成 `SSHClientConfiguration.maximumPacketSize`
+    /// （`SSHChannelMultiplexer.createChildChannel` 里 `targetWindowSize:
+    /// Int32(self.maximumPacketSize)`），默认 `SSHPacketParser.defaultMaximumPacketSize`
+    /// = 128 KiB。SFTP 下载走 64 × 32 000 B 的读流水线，128 KiB 的窗口只放得下 4 个
+    /// 在途读请求 —— 流水线深度被窗口而不是被我们的并发度限制住，吞吐直接砍到 1/16。
+    ///
+    /// 取 1 MiB 的理由：满流水线在途约 64 × 32 000 B ≈ 2 MiB，取其一半即可让窗口不再
+    /// 是瓶颈（窗口在消费一半时就会补发 window-adjust，1 MiB 足以覆盖一个 RTT 内的在
+    /// 途量）；再往上只是让慢消费者（例如 UI 还没读走的终端输出）在内存里多攒几倍数据，
+    /// 收益却已经饱和。NIOSSH 对这个值的硬约束是 `>= 32768 && <= (1 << 24)`
+    /// （`SSHPacketParser.init` 的两条 precondition），1 << 20 稳在区间内。
+    ///
+    /// 这个设置是**每条 SSH 连接**级别的，所以同一连接上的终端 PTY 通道与端口转发通道
+    /// 也会拿到 1 MiB 窗口 —— 纯粹是缓冲变大，没有行为变化。跳板机那一跳必须一起设，
+    /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里。
+    ///
+    /// - Note: 目前**还没有接到连接上**：USSHKit（uAppKit 1.4.5）的
+    ///   `USSHKitIntegration.connect` 没有透出 Citadel 的 `protocolOptions`，uTerm 侧
+    ///   够不着。uAppKit 补上参数后，只需把它传给下面 `USSHKitIntegration.connect` 的
+    ///   `protocolOptions:`（uAppKit 内部同时用于直连与跳板机两条路径）。
+    static let channelWindowOptions: Set<SSHProtocolOption> = [.maximumPacketSize(1 << 20)]
+
     static func connect(
         profile: SSHConnection.ProfileSnapshot,
         auth: ResolvedAuth,
@@ -64,6 +88,8 @@ nonisolated enum SSHClientFactory {
         )
 
         do {
+            // TODO(uAppKit): USSHKit 透出 protocolOptions 后，在这里补
+            // `protocolOptions: Self.channelWindowOptions`（见该常量的注释）。
             let shared = try await USSHKitIntegration.connect(
                 endpoint: endpoint,
                 credential: target.credential,

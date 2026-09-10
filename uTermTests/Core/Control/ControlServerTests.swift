@@ -80,6 +80,36 @@ final class ControlServerTests: XCTestCase {
         XCTAssertEqual(payload["id"] as? String, "r1", "请求 id 必须原样回来，否则并发调用无法对号入座")
     }
 
+    /// 大请求必须**完整**读进来：`sftp-put` 把整个文件塞进 `contentBase64`，一条
+    /// 请求可以逼近 `maxRequestBytes`（~11 MB）。读循环的收包缓冲只是个 syscall
+    /// 粒度，任何「按缓冲大小截断 / 只读一次」的退化都会让上传静默丢尾巴而不是报错。
+    func testLargeRequestIsReceivedIntact() async throws {
+        // 2 MiB 正文（'A' 是合法 base64 字符），远超单次 recv 的 64 KiB 缓冲。
+        let contentLength = 2 * 1_048_576
+        let content = String(repeating: "A", count: contentLength)
+        let payload = Data(
+            (#"{"id":"big","action":"sftp-put","host":"h","path":"/tmp/x","contentBase64":""# + content + #""}"#).utf8
+        )
+        XCTAssertLessThan(payload.count, ControlProtocol.maxRequestBytes, "夹具自身不能超过协议上限")
+
+        // I/O 预算随已到字节增长，但基线要给足：CI 上 2 MiB 走 Unix socket 也要几十毫秒。
+        try await startServer(ioTimeout: 15) { request in
+            .success(
+                id: request.id,
+                message: "\(request.contentBase64?.count ?? -1)|\(request.path ?? "")"
+            )
+        }
+
+        let response = try await json(sendRaw(payload))
+        XCTAssertEqual(response["ok"] as? Bool, true)
+        XCTAssertEqual(response["id"] as? String, "big")
+        XCTAssertEqual(
+            response["message"] as? String,
+            "\(contentLength)|/tmp/x",
+            "正文被截断或串位了：服务端看到的 contentBase64 长度与发出的不一致"
+        )
+    }
+
     func testMalformedRequestIsRejected() async throws {
         try await startServer { request in .success(id: request.id, message: "不该走到这里") }
         // 灌垃圾：服务端必须自己答一条错误，而不是挂死或崩掉。
@@ -216,7 +246,7 @@ final class ControlServerTests: XCTestCase {
         let fd = try connectSocket()
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
-                _ = payload.withUnsafeBytes { Darwin.send(fd, $0.baseAddress, payload.count, 0) }
+                Self.sendAllBlocking(fd, payload)
                 shutdown(fd, SHUT_WR)
                 let text = Self.drainBlocking(fd)
                 Darwin.close(fd)
@@ -230,10 +260,28 @@ final class ControlServerTests: XCTestCase {
         let fd = try connectSocket()
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
-                _ = payload.withUnsafeBytes { Darwin.send(fd, $0.baseAddress, payload.count, 0) }
+                Self.sendAllBlocking(fd, payload)
                 let text = Self.drainBlocking(fd)
                 Darwin.close(fd)
                 continuation.resume(returning: text)
+            }
+        }
+    }
+
+    /// 把整个 payload 写完。阻塞 `send` 对 SOCK_STREAM 通常一次写满，但被信号打断
+    /// 后会返回短计数；数 MB 的大请求下这一点不能赌，否则用例会变成间歇超时。
+    /// 返回值 <= 0（对端已关 / EPIPE）时直接停，给并发上限那条用例留出正常出口。
+    private static func sendAllBlocking(_ fd: Int32, _ payload: Data) {
+        payload.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var sent = 0
+            while sent < raw.count {
+                let count = Darwin.send(fd, base + sent, raw.count - sent, 0)
+                if count <= 0 {
+                    if count < 0 && errno == EINTR { continue }
+                    return
+                }
+                sent += count
             }
         }
     }
