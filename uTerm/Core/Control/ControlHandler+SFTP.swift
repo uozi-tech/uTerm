@@ -46,9 +46,9 @@ extension ControlHandler {
             throw failure
         } catch let busy as SFTPChannelsBusyError {
             // 这台主机的 SFTP 通道全忙且等到超时 —— 不是连不上，是排队没排到。
-            // TODO（与 `fix/control-server-busy` 合并后）：换成 `ControlErrorCode.server_busy`。
+            // 回 `server_busy`：客户端对这个码有退避重试。
             throw ControlFailure(
-                code: .operation_failed,
+                code: .server_busy,
                 message: busy.message(host: profile.name)
             )
         } catch {

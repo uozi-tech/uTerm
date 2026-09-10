@@ -549,7 +549,7 @@ final class ControlConnectionPoolTests: XCTestCase {
                 return XCTFail("应是 released，实际是 \(error)")
             }
             XCTAssertNotEqual(error.code, .connect_failed, "别伪装成连不上")
-            XCTAssertEqual(error.code, .operation_failed)
+            XCTAssertEqual(error.code, .server_busy, "语义是「稍后重试」，客户端对这个码有退避")
             XCTAssertTrue(error.message(host: "prod-web").contains("释放"))
         }
         // 那条没人认领的会话要被关掉，不能泄漏。

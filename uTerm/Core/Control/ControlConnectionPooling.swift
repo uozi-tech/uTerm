@@ -106,8 +106,8 @@ extension ControlConnectError {
         case .hostKeyChanged: return .host_key_changed
         case .connectFailed: return .connect_failed
         case .authFailed: return .auth_failed
-        // 没有「稍后重试」的专码，落兜底 —— 但 message 说清是释放不是连不上。
-        case .released: return .operation_failed
+        // 「稍后重试」语义，回 `server_busy` —— 客户端对这个码有退避重试。
+        case .released: return .server_busy
         }
     }
 
