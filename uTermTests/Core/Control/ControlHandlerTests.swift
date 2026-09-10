@@ -309,6 +309,79 @@ final class ControlHandlerTests: XCTestCase {
         XCTAssertTrue(response.message.contains("连接超时"), response.message)
     }
 
+    /// 执行阶段抛错（连接是好的、命令跑挂了）不能冒充 `connect_failed`。
+    ///
+    /// 回归：真机上 `run -c 'exit 3'` 顶层退掉整个 shell，Citadel 对非零退出抛错，
+    /// 这里原来一律映射成 `connect_failed` + `FriendlyError` 洗过的
+    /// 「操作未能完成，请稍后重试」，3 ms 返回 —— 对模型完全指错方向。
+    func testExecPhaseFailureIsOperationFailedWithTheRawError() async {
+        makeProfile(name: "web")
+        struct RemoteExecFailure: Error { let detail = "非零退出：3" }
+        await pool.setExec { _ in throw RemoteExecFailure() }
+
+        let response = await handler.handle(
+            ControlRequest(action: .run, host: "web", command: "exit 3"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.operation_failed.rawValue)
+        XCTAssertFalse(response.ok)
+        XCTAssertTrue(response.message.contains("RemoteExecFailure"),
+                      "message 要给原话，实得：\(response.message)")
+        XCTAssertFalse(response.message.contains("请稍后重试"),
+                       "CLI 的 message 不该被 FriendlyError 洗过")
+        XCTAssertEqual(response.results?.first?.errorCode,
+                       ControlErrorCode.operation_failed.rawValue)
+    }
+
+    /// 执行阶段真的抛出 `ControlConnectError`（复用连接时才暴露的密钥变更之类）
+    /// 仍走连接失败那条路，指纹要带出来。
+    func testExecPhaseConnectErrorStillReportsHostKey() async {
+        makeProfile(name: "web")
+        await pool.setExec { _ in
+            throw ControlConnectError.hostKeyChanged(fingerprint: "SHA256:zzz", algorithm: "")
+        }
+
+        let response = await handler.handle(
+            ControlRequest(action: .run, host: "web", command: "uptime"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.host_key_changed.rawValue)
+        XCTAssertEqual(response.hostKey?.fingerprint, "SHA256:zzz")
+    }
+
+    /// `run-many` 的逐条 `errorCode` 同理 —— 一台执行失败不该报成连不上。
+    func testRunManyMarksExecPhaseFailurePerHost() async {
+        makeProfile(name: "web")
+        makeProfile(name: "db")
+        struct RemoteExecFailure: Error {}
+        await pool.setExec { _ in throw RemoteExecFailure() }
+
+        let response = await handler.handle(
+            ControlRequest(action: .runMany, hosts: ["web", "db"], command: "exit 3"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.run_failed.rawValue)
+        XCTAssertEqual(response.results?.count, 2)
+        for result in response.results ?? [] {
+            XCTAssertEqual(result.errorCode, ControlErrorCode.operation_failed.rawValue)
+            XCTAssertTrue(result.errorMessage?.contains("RemoteExecFailure") == true,
+                          result.errorMessage ?? "")
+        }
+    }
+
+    /// 顶层 `exit N` 现在被子 shell 兜住：哨兵照常带出退出码，`ok: true`。
+    func testTopLevelExitStillReportsExitCodeThroughTheSentinel() async {
+        makeProfile(name: "web")
+        await pool.setExec { command in
+            // 真实 shell 的行为：子 shell 里 exit 3 只退子 shell，哨兵照常打印。
+            XCTAssertTrue(command.hasPrefix("( exit 3\n)"), command)
+            return Self.wire("", exit: 3)
+        }
+
+        let response = await handler.handle(
+            ControlRequest(action: .run, host: "web", command: "exit 3"))
+
+        XCTAssertTrue(response.ok, response.message)
+        XCTAssertEqual(response.result?.exitCode, 3)
+    }
+
     func testRunRequiresACommand() async {
         makeProfile(name: "web")
         let response = await handler.handle(ControlRequest(action: .run, host: "web"))

@@ -113,7 +113,7 @@ def build_parser():
     p = sftp_add("ls", "列目录")
     p.add_argument("path", nargs="?", default=".")
 
-    p = sftp_add("stat", "看一个文件的大小与修改时间")
+    p = sftp_add("stat", "看一个文件的类型、大小、权限与修改时间")
     p.add_argument("path")
 
     p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
@@ -400,7 +400,10 @@ def cell(value):
     if value is None:
         return "-"
     if isinstance(value, bool):
-        return "是" if value else ""
+        # false 必须画成「否」而不是空白：空白与「字段缺失」（"-"）分不开，
+        # hosts 的 sftpOnly / cliConnected、terminals 的 isKeyWindowFocused、
+        # forward list 的 autostart 在表格里本来整列都是空的。
+        return "是" if value else "否"
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
@@ -452,8 +455,11 @@ def rows_of(response):
         return columns, [[cell(result.get(c)) for c in columns]]
     stat = response.get("stat")
     if isinstance(stat, dict):
-        return ["path", "size", "modifiedAt"], [[cell(stat.get(c)) for c in
-                                                 ("path", "size", "modifiedAt")]]
+        # mode 与 ls 一样按 & 0o7777 的八进制显示（原始值含类型位，类型另立 kind 列）。
+        header = ["path", "kind", "size", "mode", "modifiedAt"]
+        row = [cell(stat.get("path")), cell(stat.get("kind")), cell(stat.get("size")),
+               octal(stat.get("permissions")), cell(stat.get("modifiedAt"))]
+        return header, [row]
     return None
 
 

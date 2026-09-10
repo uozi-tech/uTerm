@@ -80,7 +80,7 @@ actor SFTPSession: SFTPProviding {
         let attrs = try await sftp.getAttributes(at: path)
         let size = Self.clampedSize(attrs.size)
         let mtime = attrs.accessModificationTime?.modificationTime ?? Date()
-        return RemoteStat(size: size, mtime: mtime)
+        return RemoteStat(size: size, mtime: mtime, permissions: attrs.permissions)
     }
 
     /// 一次性命令 exec —— 委托给 `ConnectedClient.exec`（在 Sendable 包装上调用，

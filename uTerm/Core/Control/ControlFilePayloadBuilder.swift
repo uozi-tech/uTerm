@@ -27,14 +27,29 @@ nonisolated enum ControlFilePayloadBuilder {
         remotes.map(entry)
     }
 
-    /// `RemoteStat` → 线上形状（附解析后的路径）。
+    /// `RemoteStat` → 线上形状（附解析后的路径）。权限保留含类型位的原始 mode，
+    /// 与 `entry(_:)` 一致；`kind` 由类型位推出。
     static func stat(path: String, _ remote: RemoteStat) -> ControlRemoteStat {
         ControlRemoteStat(
             path: path,
             size: remote.size,
             // `modifiedAt` 非可选；`iso8601` 只在 date 为 nil 时回 nil，这里必有值。
-            modifiedAt: ControlProtocol.iso8601(remote.mtime) ?? ""
+            modifiedAt: ControlProtocol.iso8601(remote.mtime) ?? "",
+            permissions: remote.permissions.map { Int($0) },
+            kind: kind(mode: remote.permissions)
         )
+    }
+
+    /// POSIX mode 的类型位 → `file` / `directory` / `symlink`；socket / fifo /
+    /// 字符设备之类统一 `other`。mode 为 nil 时 nil（宁可不说，也不谎称是普通文件）。
+    static func kind(mode: UInt32?) -> String? {
+        guard let mode else { return nil }
+        switch mode & UInt32(S_IFMT) {
+        case UInt32(S_IFDIR): return "directory"
+        case UInt32(S_IFLNK): return "symlink"
+        case UInt32(S_IFREG): return "file"
+        default: return "other"
+        }
     }
 
     /// 文件载荷。UTF-8 可解码 → `text`，否则 `base64`（二进制原样回给 CLI 落盘）。
@@ -66,15 +81,27 @@ nonisolated enum ControlFilePayloadBuilder {
     /// SFTP 操作失败 → 协议错误码。
     ///
     /// 优先按**强类型**判：`SFTPDownloadLimitExceeded`（有界下载超限）→
-    /// Citadel `SFTPError.errorStatus`（服务端状态码，最可靠）→ POSIX errno →
-    /// 最后才退到大小写无关的文本匹配（覆盖被包成文本的底层错误）。
+    /// 服务端状态码（最可靠）→ POSIX errno → 最后才退到大小写无关的文本匹配
+    /// （覆盖被包成文本的底层错误）。
+    ///
+    /// ⚠️ 服务端状态码有**两种**装法，都要认（真机上命中的是第二种）：
+    /// - `SFTPError.errorStatus(status)`：Citadel 里只有 `setAttributes` 这一条
+    ///   路径显式包过（`SFTPClient.setAttributes`）；
+    /// - **裸的 `SFTPMessage.Status`**：`SFTPClientInboundHandler.channelRead` 对
+    ///   一切非 `ok`/`eof` 的响应直接 `promise.fail(status)` —— `remove` / `rmdir` /
+    ///   `rename` / `mkdir` / `getAttributes` / `open` 全走这条，抛出来的就是
+    ///   `SFTPMessage.Status` 本身，`as? SFTPError` 永远匹配不上。
+    ///   （`SFTPMessage.Status` 只是 `Error`、不是 `LocalizedError`，所以它的
+    ///   `localizedDescription` 经 `any Error` 走的是 NSError 桥接的那句
+    ///   「操作未能完成」，文本兜底也匹配不到 —— `sftp rm` 一个不存在的文件
+    ///   于是回了 `operation_failed`。）
     ///
     /// 契约里没有「目录不为空 / 文件已存在」这类码，一律落到 `operation_failed`
     /// —— 它是协议的兜底码，比借用一个语义不符的码诚实。
     static func errorCode(for error: Error) -> ControlErrorCode {
         if error is SFTPDownloadLimitExceeded { return .file_too_large }
 
-        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp {
+        if let status = sftpStatus(of: error) {
             switch status.errorCode {
             case .noSuchFile: return .file_not_found
             case .permissionDenied: return .permission_denied
@@ -94,6 +121,30 @@ nonisolated enum ControlFilePayloadBuilder {
         }
 
         return errorCode(forText: error.localizedDescription) ?? .operation_failed
+    }
+
+    /// 取出 Citadel 的服务端状态（两种装法都认，见 `errorCode(for:)`）。
+    static func sftpStatus(of error: Error) -> SFTPMessage.Status? {
+        if let status = error as? SFTPMessage.Status { return status }
+        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp { return status }
+        return nil
+    }
+
+    /// 失败的**原话**，给 CLI 的 `message` 用。
+    ///
+    /// CLI 面向模型 / 开发者，`FriendlyError.describe` 那句「操作未能完成，请稍后
+    /// 重试」对排查毫无价值。服务端状态在的话优先给它自带的文案 + `SSH_FX` 码
+    /// （`No such file (SSH_FX 2)`），否则退到 `String(describing:)`。
+    static func errorDetail(for error: Error) -> String {
+        if let status = sftpStatus(of: error) {
+            let text = status.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            let code = "SSH_FX \(status.errorCode.rawValue)"
+            return text.isEmpty ? code : "\(text)（\(code)）"
+        }
+        if let limit = error as? SFTPDownloadLimitExceeded {
+            return "内容超过本次上限（\(limit.observedBytes) > \(limit.maximumBytes) 字节）"
+        }
+        return String(describing: error)
     }
 
     /// 文本兜底匹配。返回 nil = 没有可靠结论（调用方落 `operation_failed`）。

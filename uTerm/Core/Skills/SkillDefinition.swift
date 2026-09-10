@@ -11,11 +11,27 @@ nonisolated struct SkillDefinition: Sendable {
         let relativePath: String
         let content: String
         let isExecutable: Bool
+        /// app 包内 `Contents/Resources/` 下的同名资源。
+        ///
+        /// **可执行文件必须走这条路**：uTerm 开着 App Sandbox，它写出的每一个文件都被
+        /// 打上 `com.apple.quarantine`，直接 exec 必然 `operation not permitted`，而沙盒
+        /// 进程无权解除自己的隔离（见 `SkillInstaller` 的说明）。所以脚本由构建期
+        /// 「Copy utermctl CLI」阶段拷进 app 包、随 app 一起签名/公证，物化时只在源目录
+        /// 里建一条**指向包内文件的符号链接** —— 与 VS Code 的 `code` 命令同一套路。
+        ///
+        /// 为 nil（或包内资源缺失，比如测试宿主）时退回把 `content` 写成真实文件。
+        let bundleResourceName: String?
 
-        init(relativePath: String, content: String, isExecutable: Bool) {
+        init(
+            relativePath: String,
+            content: String,
+            isExecutable: Bool,
+            bundleResourceName: String? = nil
+        ) {
             self.relativePath = relativePath
             self.content = content
             self.isExecutable = isExecutable
+            self.bundleResourceName = bundleResourceName
         }
     }
 
@@ -45,7 +61,8 @@ nonisolated struct SkillDefinition: Sendable {
             SupportFile(
                 relativePath: "bin/utermctl",
                 content: Self.controlClientScript,
-                isExecutable: true
+                isExecutable: true,
+                bundleResourceName: "utermctl"
             )
         ]
     )
@@ -102,20 +119,27 @@ uTerm 是 macOS 上的 SSH 终端。它在本机开了一个 Unix domain socket�
 ## 先定位客户端
 
 ```sh
+UTERMCTL=""
 if command -v utermctl >/dev/null 2>&1; then
   UTERMCTL="$(command -v utermctl)"
 else
   for p in "$HOME"/.{claude,codex,cursor}/skills/uterm-run/bin/utermctl; do
     if [ -x "$p" ]; then UTERMCTL="$p"; break; fi
+    if [ -r "$p" ] && [ -z "$UTERMCTL" ]; then UTERMCTL="$p"; fi
   done
 fi
 test -n "$UTERMCTL" || { echo "utermctl not found"; exit 1; }
 ```
 
-技能自带的那份（`~/.<tool>/skills/uterm-run/bin/utermctl`）随 uTerm 升级自动更新，
-PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才有的符号链接，指向同一个
-源文件，两者不会漂移。**找不到就直说找不到，不要自己写 socket 客户端、也不要改用
-`ssh`。**
+这两条路径都是符号链接，最终指向 `uTerm.app` 包内的脚本（随 app 一起签名），可以直接
+执行。技能自带的那份（`~/.<tool>/skills/uterm-run/bin/utermctl`）随 uTerm 升级自动更新，
+PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才有的，两者不会漂移。
+**找不到就直说找不到，不要自己写 socket 客户端、也不要改用 `ssh`。**
+
+万一执行时报 `operation not permitted`（uTerm 1.12.x 装下的旧链接指向 app 自己写出的
+文件，带着 `com.apple.quarantine`），跑一句
+`xattr -d com.apple.quarantine "$UTERMCTL"`，或者干脆把所有 `"$UTERMCTL" …` 换成
+`python3 "$UTERMCTL" …`（客户端是纯标准库的 Python 3 脚本，行为一模一样）。
 
 ## 先探活
 
@@ -123,7 +147,9 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 "$UTERMCTL" ping
 ```
 
-`ok: true` 才能继续。三种常见失败：
+`ok: true` 才能继续。
+
+三种常见失败：
 
 - `uterm_not_running`：uTerm 没开，或用户没装。**不要**试图自己起 app，也不要绕过它
   直接 `ssh`，直接告诉用户打开 uTerm。
@@ -185,10 +211,20 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 在远端跑，不是给客户端看的。`table` 会逐主机分段打印输出，给人看；要自己解析就用
 `json`。
 
+`--` 之后的 argv 会被 `shlex.join` 拼成**一条命令**，其中每一段都是独立的一个词。
+所以 `-- 'uname -a; id'` 是错的：整串被当成**一个程序名**引起来，远端报
+`sh: uname -a; id: not found`。要跑带 `;`、管道、重定向的整串，用
+`-c '…'`，或者显式 `-- sh -c '…'`。
+
 结果里的字段：`output` 是合并后的 stdout/stderr，`exitCode` 是远端真实退出码
 （拿不到时为 `null`），`durationMs` 是耗时。**单机 `run` 的 `exitCode` 非 0 不代表
 调用失败** —— 调用本身 `ok: true`，是被调的命令自己返回了非 0，照常读 `output`
 去判断。
+
+同理，**`utermctl` 自己的退出码只说明「这次调用有没有送达并执行完」**，不是远端
+命令的退出码。`ok: true` + `exitCode: 127` 是完全正常的一次调用（命令送到了，
+远端说找不到这个程序）。要判断命令成没成，读 `result.exitCode`；要判断调用成没成，
+看顶层 `ok` / `code`。
 
 ## run-many / quick-run 怎么读结果
 
@@ -346,6 +382,10 @@ description: 通过 uTerm 的已保存 SSH 主机读写远程文件（列目录�
 
 - `ls` 的 `path` 不给时默认 `.`（登录目录）。表格里 `kind` 是 `file` / `dir` /
   `link`，`mode` 是八进制权限。
+- `stat` 回 `size` / `modifiedAt` / `permissions` / `kind`。`permissions` 是**原始
+  POSIX mode（含类型位）**，与 `ls` 的那一列同义；`--format table` 里已经按
+  `& 0o7777` 显示成八进制。`kind` 是 `file` / `directory` / `symlink` / `other`，
+  服务端没回权限位时 `permissions` 与 `kind` 都是 `null`。
 - `cat` 上限 **1 MiB**，超过**不截断**而是直接回 `file_too_large`（远端没有部分读
   的原语）—— 改用 `sftp get`（上限 8 MiB）落盘后本地处理，或者用下面那条 `tail`。
   文件不是 UTF-8 文本时也不会往终端里吐乱码，同样提示你改用 `sftp get`。
@@ -729,7 +769,7 @@ def build_parser():
     p = sftp_add("ls", "列目录")
     p.add_argument("path", nargs="?", default=".")
 
-    p = sftp_add("stat", "看一个文件的大小与修改时间")
+    p = sftp_add("stat", "看一个文件的类型、大小、权限与修改时间")
     p.add_argument("path")
 
     p = sftp_add("cat", "打印一个文本文件（上限 1 MiB，超限回 file_too_large，改用 get）")
@@ -1016,7 +1056,10 @@ def cell(value):
     if value is None:
         return "-"
     if isinstance(value, bool):
-        return "是" if value else ""
+        # false 必须画成「否」而不是空白：空白与「字段缺失」（"-"）分不开，
+        # hosts 的 sftpOnly / cliConnected、terminals 的 isKeyWindowFocused、
+        # forward list 的 autostart 在表格里本来整列都是空的。
+        return "是" if value else "否"
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
@@ -1068,8 +1111,11 @@ def rows_of(response):
         return columns, [[cell(result.get(c)) for c in columns]]
     stat = response.get("stat")
     if isinstance(stat, dict):
-        return ["path", "size", "modifiedAt"], [[cell(stat.get(c)) for c in
-                                                 ("path", "size", "modifiedAt")]]
+        # mode 与 ls 一样按 & 0o7777 的八进制显示（原始值含类型位，类型另立 kind 列）。
+        header = ["path", "kind", "size", "mode", "modifiedAt"]
+        row = [cell(stat.get("path")), cell(stat.get("kind")), cell(stat.get("size")),
+               octal(stat.get("permissions")), cell(stat.get("modifiedAt"))]
+        return header, [row]
     return None
 
 

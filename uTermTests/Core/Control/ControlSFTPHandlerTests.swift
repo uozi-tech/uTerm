@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+@testable import Citadel
 @testable import uTerm
 @testable import USSHKit
 
@@ -170,6 +171,35 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(response.stat?.size, 33)
         XCTAssertEqual(response.stat?.modifiedAt,
                        ISO8601DateFormatter().string(from: when))
+    }
+
+    /// `stat` 要带权限位与类型 —— 只有 size + mtime 时，模型看完一次 `stat` 还是
+    /// 不知道这是文件还是目录、能不能写。
+    func testStatCarriesRawModeAndKind() async throws {
+        await sftp.setFile("/etc/hosts", data: Data(count: 3), mtime: Date())
+        await sftp.setStatPermissions("/etc/hosts", 0o100_644)
+
+        let response = await handler.handle(request(.sftpStat, path: "/etc/hosts"))
+
+        XCTAssertTrue(response.ok, response.message)
+        // 原始 mode（含类型位），与 `ls` 的 permissions 同义；客户端自己 & 0o7777。
+        XCTAssertEqual(response.stat?.permissions, 0o100_644)
+        XCTAssertEqual(response.stat?.kind, "file")
+    }
+
+    func testStatOmitsModeWhenServerDidNotSendIt() async throws {
+        await sftp.setFile("/etc/hosts", data: Data(count: 3), mtime: Date())
+        let response = await handler.handle(request(.sftpStat, path: "/etc/hosts"))
+        XCTAssertNil(response.stat?.permissions)
+        XCTAssertNil(response.stat?.kind, "宁可不说，也不谎称是普通文件")
+    }
+
+    func testKindFromModeTypeBits() {
+        XCTAssertEqual(ControlFilePayloadBuilder.kind(mode: 0o100_644), "file")
+        XCTAssertEqual(ControlFilePayloadBuilder.kind(mode: 0o040_755), "directory")
+        XCTAssertEqual(ControlFilePayloadBuilder.kind(mode: 0o120_777), "symlink")
+        XCTAssertEqual(ControlFilePayloadBuilder.kind(mode: 0o010_644), "other")
+        XCTAssertNil(ControlFilePayloadBuilder.kind(mode: nil))
     }
 
     func testCatReturnsTextForUTF8() async throws {
@@ -407,6 +437,63 @@ final class ControlSFTPHandlerTests: XCTestCase {
         ]))
         let response = await handler.handle(request(.sftpLs, path: "/root"))
         XCTAssertEqual(response.code, ControlErrorCode.permission_denied.rawValue)
+    }
+
+    // MARK: - Citadel 真实抛错
+
+    /// Citadel 的 `SFTPClientInboundHandler` 对非 ok/eof 的响应直接
+    /// `promise.fail(status)` —— 抛出来的是**裸的 `SFTPMessage.Status`**，
+    /// 不是 `SFTPError.errorStatus(_:)`。只认后者时，`sftp rm` 一个不存在的文件
+    /// 会落到兜底的 `operation_failed`（真机实测）。
+    func testBareSFTPStatusMapsToFileNotFound() async throws {
+        await sftp.setRemoveError("/tmp/gone", Self.status(.noSuchFile, "No such file"))
+
+        let response = await handler.handle(request(.sftpRm, path: "/tmp/gone"))
+
+        XCTAssertEqual(response.code, ControlErrorCode.file_not_found.rawValue)
+        XCTAssertTrue(response.message.contains("No such file"),
+                      "message 要给服务端原话，实得：\(response.message)")
+        XCTAssertFalse(response.message.contains("请稍后重试"),
+                       "CLI 的 message 不该被 FriendlyError 洗过")
+    }
+
+    func testBareSFTPStatusMapsPermissionDenied() {
+        XCTAssertEqual(
+            ControlFilePayloadBuilder.errorCode(
+                for: Self.status(.permissionDenied, "Permission denied")),
+            .permission_denied)
+    }
+
+    /// `failure` 这类笼统状态仍靠服务端文本兜底（sshd 把 EISDIR 塞在里面）。
+    func testSFTPStatusFailureFallsBackToServerText() {
+        XCTAssertEqual(
+            ControlFilePayloadBuilder.errorCode(for: Self.status(.failure, "Is a directory")),
+            .is_directory)
+        XCTAssertEqual(
+            ControlFilePayloadBuilder.errorCode(for: Self.status(.failure, "Directory not empty")),
+            .operation_failed)
+    }
+
+    /// 包过一层的那条路径（`SFTPClient.setAttributes`）也要照旧认。
+    func testWrappedSFTPErrorStatusStillMaps() {
+        let wrapped = SFTPError.errorStatus(Self.status(.noSuchFile, "No such file"))
+        XCTAssertEqual(ControlFilePayloadBuilder.errorCode(for: wrapped), .file_not_found)
+        XCTAssertTrue(ControlFilePayloadBuilder.errorDetail(for: wrapped).contains("No such file"))
+    }
+
+    func testErrorDetailCarriesServerMessageAndCode() {
+        let detail = ControlFilePayloadBuilder.errorDetail(
+            for: Self.status(.noSuchFile, "No such file"))
+        XCTAssertTrue(detail.contains("No such file"), detail)
+        XCTAssertTrue(detail.contains("SSH_FX 2"), detail)
+    }
+
+    /// `SFTPMessage.Status` 的 memberwise init 是 internal，只有 `@testable import`
+    /// 拿得到 —— 这也是本文件 `@testable import Citadel` 的唯一理由。
+    private static func status(
+        _ code: SFTPStatusCode, _ message: String
+    ) -> SFTPMessage.Status {
+        SFTPMessage.Status(requestId: 1, errorCode: code, message: message, languageTag: "en")
     }
 
     func testErrorCodeMapping() {

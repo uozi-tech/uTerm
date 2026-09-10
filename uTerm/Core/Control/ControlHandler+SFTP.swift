@@ -162,7 +162,7 @@ extension ControlHandler {
             // stat 失败通常就是最终答案（不存在 / 无权限 / 是目录），原样上抛。
             throw ControlFailure(
                 code: ControlFilePayloadBuilder.errorCode(for: error),
-                message: "\(path)：\(FriendlyError.describe(error))"
+                message: "\(path)：\(ControlFilePayloadBuilder.errorDetail(for: error))"
             )
         }
         if let declaredSize, declaredSize > Int64(limit) {
@@ -228,8 +228,10 @@ extension ControlHandler {
 
     // MARK: - 错误文案
 
+    /// CLI 的 message 给**原话**，不给 `FriendlyError` 洗过的「操作未能完成，请稍后
+    /// 重试」—— 那句对界面合适，对模型 / 开发者等于什么都没说。
     private static func sftpMessage(request: ControlRequest, error: Error) -> String {
         let where_ = request.path.map { "\($0)：" } ?? ""
-        return "\(where_)\(FriendlyError.describe(error))"
+        return "\(where_)\(ControlFilePayloadBuilder.errorDetail(for: error))"
     }
 }

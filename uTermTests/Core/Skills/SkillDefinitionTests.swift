@@ -17,33 +17,102 @@ final class SkillDefinitionTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    private func repositoryFile(_ relativePath: String) throws -> String {
+    private func repositoryFileData(_ relativePath: String) throws -> Data {
         let url = repositoryRoot.appending(path: relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("仓库文件不可见（\(relativePath)），跳过同步校验")
         }
-        return try String(contentsOf: url, encoding: .utf8)
-            .trimmingCharacters(in: .newlines)
+        return try Data(contentsOf: url)
     }
 
-    func testMarkdownMatchesRepositoryFiles() throws {
+    /// 真的物化一遍，再拿**磁盘上的字节**跟仓库文件比。
+    ///
+    /// 以前是拿常量 trim 掉末尾换行后比字符串，于是「常量没有末尾换行」这个差异
+    /// 被自己的断言掩盖了：装到用户机器上的 `SKILL.md` / `bin/utermctl` 与仓库里
+    /// 的 `cmp` 一比就报 EOF 差异。逐字节比物化结果才挡得住。
+    private func materialize(_ definition: SkillDefinition) throws -> SkillInstaller {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "uterm-skill-materialize-\(UUID().uuidString)",
+                       directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        // **有意关掉包内来源**：这里比的是「内嵌常量物化出来的字节」，包内那份是
+        // 构建阶段从仓库直接拷的，拿它比等于自己跟自己比，漏掉常量漂移。
+        // 包内那份另有 `testBundledClientMatchesRepositoryFile` 守着。
+        let installer = SkillInstaller(
+            definition: definition,
+            homeDirectoryURL: root.appending(path: "home", directoryHint: .isDirectory),
+            applicationSupportDirectoryURL: root.appending(path: "AppSupport",
+                                                           directoryHint: .isDirectory),
+            bundleResource: { _ in nil }
+        )
+        try installer.materializeSource()
+        return installer
+    }
+
+    func testMaterializedMarkdownIsByteIdenticalToRepositoryFiles() throws {
         for definition in SkillDefinition.catalog {
-            let onDisk = try repositoryFile("skills/\(definition.slug)/SKILL.md")
+            let onDisk = try repositoryFileData("skills/\(definition.slug)/SKILL.md")
+            let installer = try materialize(definition)
+            let written = try Data(
+                contentsOf: installer.sourceDirectoryURL.appending(path: "SKILL.md"))
             XCTAssertEqual(
-                definition.markdownContent,
-                onDisk,
-                "\(definition.slug) 的内嵌文档与 skills/\(definition.slug)/SKILL.md 不一致"
+                written, onDisk,
+                "\(definition.slug) 物化出的 SKILL.md 与 skills/\(definition.slug)/SKILL.md 不逐字节相同"
             )
         }
     }
 
-    func testClientScriptMatchesRepositoryFile() throws {
-        let onDisk = try repositoryFile("scripts/utermctl")
-        XCTAssertEqual(
-            SkillDefinition.controlClientScript,
-            onDisk,
-            "内嵌的 utermctl 与 scripts/utermctl 不一致"
+    func testMaterializedClientScriptIsByteIdenticalToRepositoryFile() throws {
+        let onDisk = try repositoryFileData("scripts/utermctl")
+        let installer = try materialize(.uTermRun)
+        let written = try Data(
+            contentsOf: installer.sourceDirectoryURL.appending(path: "bin/utermctl"))
+        XCTAssertEqual(written, onDisk, "物化出的 utermctl 与 scripts/utermctl 不逐字节相同")
+    }
+
+    /// 构建期的「Copy utermctl CLI」阶段把 `scripts/utermctl` 拷进
+    /// `uTerm.app/Contents/Resources/`。技能安装时链过去的就是它，所以它必须与仓库
+    /// 文件逐字节相同 —— 这条同时守着那个 Run Script 阶段没被误删。
+    func testBundledClientMatchesRepositoryFile() throws {
+        guard let bundled = Bundle.main.url(forResource: "utermctl", withExtension: nil) else {
+            throw XCTSkip("宿主包里没有 utermctl（不是 uTerm.app 宿主），跳过")
+        }
+        XCTAssertEqual(try Data(contentsOf: bundled), try repositoryFileData("scripts/utermctl"))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: bundled.path),
+                      "包内脚本要带可执行位")
+    }
+
+    /// 常量本身可以没有末尾换行（`#"""…"""#` 天然如此），补齐是物化这一步的活。
+    func testMaterializedTextEndsWithExactlyOneNewline() {
+        XCTAssertEqual(SkillInstaller.materializedText("a"), "a\n")
+        XCTAssertEqual(SkillInstaller.materializedText("a\n"), "a\n")
+        XCTAssertEqual(SkillInstaller.materializedText("a\n\n"), "a\n\n")
+    }
+
+    /// 客户端现在是包内脚本（随 app 签名，可以直接执行），所以定位那一节
+    /// **`[ -x ]` 优先**、`[ -r ]` 只作兜底。
+    func testRunSkillPrefersExecutingTheClientDirectly() {
+        let doc = SkillDefinition.uTermRun.markdownContent
+        XCTAssertTrue(doc.contains("[ -x \"$p\" ]"), "定位要先认可执行的那份")
+        XCTAssertTrue(doc.contains("[ -r \"$p\" ]"), "不可执行时还要留个可读兜底")
+        XCTAssertLessThan(
+            doc.range(of: "[ -x \"$p\" ]")?.lowerBound ?? doc.endIndex,
+            doc.range(of: "[ -r \"$p\" ]")?.lowerBound ?? doc.startIndex,
+            "顺序反了：-x 必须在 -r 前面"
         )
+    }
+
+    /// 1.12.x 装下的链接指向 app 自己写出的文件（带 `com.apple.quarantine`，
+    /// 见 `SkillInstallerTests.testAppWrittenClientIsQuarantinedAndCannotBeExecuted`）。
+    /// 那批用户升级前撞上的症状必须还写在文档里，附带两条出路。
+    func testRunSkillStillDocumentsTheLegacyQuarantineEscape() {
+        let doc = SkillDefinition.uTermRun.markdownContent
+        XCTAssertTrue(doc.contains("operation not permitted"),
+                      "要写出症状，模型撞上时才认得出来")
+        XCTAssertTrue(doc.contains("xattr -d com.apple.quarantine"),
+                      "出路一：模型跑在非沙盒进程里，摘得掉")
+        XCTAssertTrue(doc.contains("python3 \"$UTERMCTL\""),
+                      "出路二：脚本可读，用解释器跑")
     }
 
     func testCatalogCoversTheFourSkills() {
@@ -86,6 +155,8 @@ final class SkillDefinitionTests: XCTestCase {
         let file = try XCTUnwrap(carriers.first?.supportFiles.first)
         XCTAssertEqual(file.relativePath, "bin/utermctl")
         XCTAssertTrue(file.isExecutable)
+        // 走包内资源，不由 app 写出 —— 沙盒写出的文件必带 quarantine，exec 必 EPERM。
+        XCTAssertEqual(file.bundleResourceName, "utermctl")
         XCTAssertTrue(file.content.hasPrefix("#!/usr/bin/env python3"))
     }
 

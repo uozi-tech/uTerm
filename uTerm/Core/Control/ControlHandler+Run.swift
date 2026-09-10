@@ -73,6 +73,15 @@ extension ControlHandler {
                 results: [outcome.result]
             )
         }
+        // 执行阶段失败（连接是好的，命令没跑成）：不是 ok，也不该冒充 connect_failed。
+        if let raw = outcome.result.errorCode {
+            return .failure(
+                id: request.id,
+                code: ControlErrorCode(rawValue: raw) ?? .operation_failed,
+                message: outcome.result.errorMessage ?? "在「\(profile.name)」上执行失败",
+                results: [outcome.result]
+            )
+        }
         return .success(
             id: request.id,
             message: "在「\(profile.name)」上执行完成，退出码 \(outcome.result.exitCode.map(String.init) ?? "未知")",
@@ -498,12 +507,30 @@ extension ControlHandler {
                 connectError: nil
             )
         case .failed(let failure):
-            // 命令层的非零退出被哨兵包成 exit 0，走不到这里；这里只可能是传输层出事。
-            let connectError = (failure.underlying as? ControlConnectError)
-                ?? .connectFailed(failure.text)
+            // 建连早在 `pool.executor(for:)` 就做完了（那里失败走上面的 catch），
+            // 所以这里已经是**执行阶段**。把它一律映射成 `connect_failed` 是谎报：
+            // 真机上 `run -c 'exit 3'` 就落在这里（顶层 `exit` 退掉整个 shell、
+            // 哨兵没打印、Citadel 对非零退出抛错），CLI 得到的却是「连接失败：
+            // 操作未能完成，请稍后重试」，3 ms 就返回，完全指错方向。
+            //
+            // 只有真是 `ControlConnectError`（比如复用连接时才暴露的主机密钥变更）
+            // 才走连接失败那条路；其余一律 `operation_failed` + **原话**。
+            if let connectError = failure.underlying as? ControlConnectError {
+                return RunOutcome(
+                    result: failedResult(target, since: start, connectError, name: target.name),
+                    connectError: connectError
+                )
+            }
             return RunOutcome(
-                result: failedResult(target, since: start, connectError, name: target.name),
-                connectError: connectError
+                result: ControlRunResult(
+                    host: target.name,
+                    hostID: target.spec.id.uuidString,
+                    output: "",
+                    durationMs: elapsed,
+                    errorCode: ControlErrorCode.operation_failed.rawValue,
+                    errorMessage: "在「\(target.name)」上执行失败：\(failure.rawText)"
+                ),
+                connectError: nil
             )
         }
     }

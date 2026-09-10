@@ -34,10 +34,16 @@ nonisolated struct BoundedExecFailure: Error, @unchecked Sendable {
     let underlying: any Error
     /// 面向用户的中文描述（构造时算好，避免在别的隔离域再碰原始错误）。
     let text: String
+    /// 面向模型 / 开发者的**原话**（`String(describing:)`）。
+    ///
+    /// `text` 会把不认识的错误洗成「操作未能完成，请稍后重试」——对 UI 合适，对
+    /// CLI 是纯噪声：模型拿不到任何可定位的信息。CLI 那条路径用这一份。
+    let rawText: String
 
     init(_ error: any Error) {
         underlying = error
         text = FriendlyError.describe(error)
+        rawText = String(describing: error)
     }
 }
 

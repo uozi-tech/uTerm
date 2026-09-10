@@ -58,6 +58,13 @@ final class SkillManagerModel {
             () -> (targets: [SkillTarget], statuses: [SkillTarget: SkillInstallStatus]) in
             var targets: [SkillTarget] = []
             var statuses: [SkillTarget: SkillInstallStatus] = [:]
+            // 已经物化过的源目录做一次自检自愈 —— 这也是**老用户的升级路径**：
+            // 1.12.x 在源目录里写出的是 app 自己生成的 `bin/utermctl`，带着
+            // `com.apple.quarantine`，直接执行必然 EPERM；这一步把它换成指向
+            // `uTerm.app/Contents/Resources/utermctl` 的符号链接（app 搬家后
+            // 指向旧路径的链接同样在这里重建）。用户不必重装技能，打开一次本页即可。
+            // 只修已存在的源，没装过技能的用户不会因此被凭空造出一份。
+            for installer in installers { try? installer.repairSourceIfNeeded() }
             for target in SkillTarget.allCases where installers.first?.isToolPresent(target) == true {
                 targets.append(target)
                 try? Self.repairManagedInstallIfNeeded(installers: installers, target: target)

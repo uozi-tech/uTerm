@@ -70,7 +70,8 @@ DEFAULT_PAYLOADS = {
                              "permissions": 33188, "ownerName": "deploy",
                              "groupName": "staff"}]},
     "sftp-stat": {"stat": {"path": "/var/log/app.log", "size": 4096,
-                           "modifiedAt": "2026-09-09T01:00:00Z"}},
+                           "modifiedAt": "2026-09-09T01:00:00Z",
+                           "permissions": 33188, "kind": "file"}},
     "sftp-cat": {"file": {"path": "/etc/hostname", "bytes": 9, "isUTF8": True,
                           "text": "prod-web\n", "truncated": False}},
     "sftp-get": {"file": {"path": "/etc/hostname", "bytes": 9, "isUTF8": True,
@@ -355,6 +356,18 @@ def exercise(server, root, rejecting):
     check("15432" in proc.stdout, "rules 表")
     proc = run_cli(server, ["terminals", "--format", "table"])
     check("workspace" in proc.stdout, "terminals 表")
+    # stat 表：类型单列，mode 与 ls 一样是 & 0o7777 的八进制（33188 → 0644）。
+    proc = run_cli(server, ["sftp", "stat", "-H", "h", "/var/log/app.log",
+                            "--format", "table"])
+    check("kind" in proc.stdout and "file" in proc.stdout, "stat 表有 kind 列")
+    check("0644" in proc.stdout and "33188" not in proc.stdout, "stat 表的 mode 列转八进制")
+    # 布尔 false 画成「否」，不能是空白 —— 空白与「字段缺失」的 "-" 分不开。
+    proc = run_cli(server, ["hosts", "--format", "table"])
+    header, _, row = proc.stdout.splitlines()[:3]
+    columns = header.split()
+    check("sftpOnly" in columns, "hosts 表有 sftpOnly 列")
+    equal(row.split()[columns.index("sftpOnly")], "否", "false 渲染成「否」")
+    equal(row.split()[columns.index("cliConnected")], "是", "true 渲染成「是」")
 
     print("退出码")
     cases = [

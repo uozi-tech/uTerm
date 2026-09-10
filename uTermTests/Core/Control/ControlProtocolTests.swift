@@ -85,7 +85,9 @@ final class ControlProtocolTests: XCTestCase {
             entries: [
                 ControlRemoteEntry(name: "etc", isDirectory: true, isSymlink: false)
             ],
-            stat: ControlRemoteStat(path: "/etc/hosts", size: 220, modifiedAt: "1970-01-01T00:00:00Z"),
+            stat: ControlRemoteStat(
+                path: "/etc/hosts", size: 220, modifiedAt: "1970-01-01T00:00:00Z",
+                permissions: 0o100_644, kind: "file"),
             file: ControlFilePayload(path: "/etc/hosts", bytes: 5, isUTF8: true, text: "hello"),
             rules: [
                 ControlForwardSnapshot(

@@ -7,6 +7,10 @@ final class SkillInstallerTests: XCTestCase {
     private var root: URL!
     private var home: URL!
     private var appSupport: URL!
+    /// 假的 app 包：`<root>/uTerm.app/Contents/Resources/utermctl`。
+    /// 路径形状必须**真的像个 app 包** —— `looksLikeBundledClient` 认的就是末四段。
+    private var appBundle: URL!
+    private var bundledClient: URL!
 
     override func setUpWithError() throws {
         root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -15,24 +19,74 @@ final class SkillInstallerTests: XCTestCase {
         appSupport = root.appending(path: "AppSupport", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        appBundle = root.appending(path: "uTerm.app", directoryHint: .isDirectory)
+        bundledClient = try makeBundledClient(in: appBundle)
     }
 
     override func tearDownWithError() throws {
         if let root { try? FileManager.default.removeItem(at: root) }
     }
 
+    /// 在 `<bundle>/Contents/Resources/` 里摆一份客户端，模拟构建期
+    /// 「Copy utermctl CLI」阶段拷进 app 包的那个文件。
+    @discardableResult
+    private func makeBundledClient(in bundle: URL) throws -> URL {
+        let resources = bundle
+            .appending(path: "Contents", directoryHint: .isDirectory)
+            .appending(path: "Resources", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        let url = resources.appending(path: "utermctl").standardizedFileURL
+        try SkillDefinition.controlClientScript.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))], ofItemAtPath: url.path)
+        return url
+    }
+
+    /// 生产用的来源查找是 `Bundle.main.url(forResource:)` —— 它**自带存在性检查**，
+    /// 资源没了就回 nil（于是安装器退回写内容）。测试里的假来源必须同样表现。
+    private func bundleResource(_ url: URL?) -> SkillInstaller.BundleResourceLocator {
+        { name in
+            guard name == "utermctl", let url,
+                  FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return url
+        }
+    }
+
+    /// 默认从假 app 包里取客户端；`bundled:` 可换成别的位置（模拟 app 搬家）。
     private func installer(
+        _ definition: SkillDefinition = SkillDefinition.uTermRun,
+        bundled: URL? = nil
+    ) -> SkillInstaller {
+        SkillInstaller(
+            definition: definition,
+            homeDirectoryURL: home,
+            applicationSupportDirectoryURL: appSupport,
+            bundleResource: bundleResource(bundled ?? bundledClient)
+        )
+    }
+
+    /// 完全没有包内资源的安装器（退路形态：内容被写成真实文件）。
+    private func fallbackInstaller(
         _ definition: SkillDefinition = SkillDefinition.uTermRun
     ) -> SkillInstaller {
         SkillInstaller(
             definition: definition,
             homeDirectoryURL: home,
-            applicationSupportDirectoryURL: appSupport
+            applicationSupportDirectoryURL: appSupport,
+            bundleResource: { _ in nil }
         )
     }
 
     private func binLinkInstaller() -> BinLinkInstaller {
         BinLinkInstaller(installer: installer())
+    }
+
+    private func clientURL(_ installer: SkillInstaller) -> URL {
+        installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+    }
+
+    private func linkDestination(of url: URL) throws -> String {
+        try FileManager.default.destinationOfSymbolicLink(atPath: url.path)
     }
 
     /// 只建 `<home>/.<tool>` —— `isToolPresent` 认的就是这一层，`skills/` 由安装器自己建。
@@ -78,12 +132,196 @@ final class SkillInstallerTests: XCTestCase {
             contentsOf: installer.sourceDirectoryURL.appending(path: "SKILL.md"),
             encoding: .utf8
         )
-        XCTAssertEqual(markdown, SkillDefinition.uTermRun.markdownContent)
+        XCTAssertEqual(
+            markdown,
+            SkillInstaller.materializedText(SkillDefinition.uTermRun.markdownContent))
+        XCTAssertTrue(markdown.hasSuffix("\n"), "物化出的文本文件要以换行结尾")
 
-        let client = installer.sourceDirectoryURL.appending(path: "bin/utermctl")
+        // 客户端**不写内容**，只链到 app 包内那份（见下面 MARK 那一节的理由）。
+        XCTAssertEqual(try linkDestination(of: clientURL(installer)), bundledClient.path)
+    }
+
+    // MARK: - 可执行文件的来源：app 包内资源，不是 app 写出来的文件
+
+    private func hasQuarantine(_ url: URL) -> Bool {
+        getxattr(url.path, SkillInstaller.quarantineAttribute, nil, 0, 0, 0) >= 0
+    }
+
+    /// 拿得到包内资源就**建链接、不写内容** —— 这是整个方案的核心。
+    func testMaterializeLinksToTheBundledClientInsteadOfWritingIt() throws {
+        let installer = installer()
+        try installer.materializeSource()
+
+        let client = clientURL(installer)
+        XCTAssertEqual(SkillInstaller.fileType(at: client), S_IFLNK, "应该是符号链接")
+        XCTAssertEqual(try linkDestination(of: client), bundledClient.path)
+        // 顺着链接读到的就是包内那份，内容与内嵌常量一致。
+        XCTAssertEqual(
+            try String(contentsOf: client, encoding: .utf8),
+            SkillDefinition.controlClientScript
+        )
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        // SKILL.md 仍然是真实文件（它不需要被执行）。
+        XCTAssertEqual(
+            SkillInstaller.fileType(at: installer.sourceDirectoryURL.appending(path: "SKILL.md")),
+            S_IFREG
+        )
+    }
+
+    /// 拿不到包内资源（测试宿主 / 资源缺失）才退回写内容，并补上可执行位。
+    func testMaterializeFallsBackToWritingTheEmbeddedConstant() throws {
+        let installer = fallbackInstaller()
+        try installer.materializeSource()
+
+        let client = clientURL(installer)
+        XCTAssertEqual(SkillInstaller.fileType(at: client), S_IFREG)
+        XCTAssertEqual(
+            try String(contentsOf: client, encoding: .utf8),
+            SkillInstaller.materializedText(SkillDefinition.controlClientScript)
+        )
         let permissions = try FileManager.default
             .attributesOfItem(atPath: client.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(permissions?.int16Value, 0o755)
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty, "退路形态本身是健康的")
+    }
+
+    /// **为什么可执行文件绝不能由 app 写出。**
+    ///
+    /// uTerm 开着 App Sandbox，它写出的每一个文件都被打上 `com.apple.quarantine`，
+    /// 带着这条属性的脚本直接 exec 必然 `operation not permitted`，而沙盒进程**无权
+    /// 解除自己的隔离**：`removexattr` 回 `EPERM`，`setResourceValue(nil,
+    /// forKey: .quarantinePropertiesKey)`（Apple 文档的正路）报成功但属性纹丝不动。
+    /// 逐条量在这里 —— 退路形态至今仍是这个样子，所以这条事实必须留着。
+    func testAppWrittenClientIsQuarantinedAndCannotBeExecuted() throws {
+        let installer = fallbackInstaller()
+        try installer.materializeSource()
+        let client = clientURL(installer)
+
+        try XCTSkipUnless(hasQuarantine(client),
+                          "宿主没开沙盒（写出的文件不带 quarantine），这条不适用")
+
+        // 1. removexattr → EPERM
+        XCTAssertEqual(removexattr(client.path, SkillInstaller.quarantineAttribute, 0), -1)
+        XCTAssertEqual(errno, EPERM)
+
+        // 2. Apple 文档的正路：报成功，属性还在
+        try (client as NSURL).setResourceValue(nil, forKey: .quarantinePropertiesKey)
+        XCTAssertTrue(hasQuarantine(client), "setResourceValue(nil) 只是报成功")
+        XCTAssertTrue(SkillInstaller.hasQuarantine(at: client))
+
+        // 3. 属性还在 ⇒ 直接 exec 必然 EPERM
+        let process = Process()
+        process.executableURL = client
+        process.arguments = ["--help"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        XCTAssertThrowsError(try process.run()) { error in
+            XCTAssertEqual((error as NSError).code, Int(EPERM))
+        }
+
+        // 4. 但它不是「可修复的自检项」—— 重写一遍照样被打上。
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        XCTAssertEqual(installer.quarantinedFiles().count, 2, "但要报得出来")
+    }
+
+    /// 1.12.x 装下的是**普通文件**（带 quarantine，跑不了）。升级后必须自动换成链接，
+    /// 而且靠 `repairSourceIfNeeded()` 无声完成 —— 用户不必重装技能。
+    func testLegacyWrittenClientIsUpgradedToABundleLink() throws {
+        try makeToolDirectory(.claude)
+        try fallbackInstaller().install(target: .claude)   // 模拟旧版本装过
+        let installer = installer()
+        XCTAssertEqual(SkillInstaller.fileType(at: clientURL(installer)), S_IFREG)
+        XCTAssertTrue(
+            installer.sourceIntegrityIssues().contains { $0.contains("应为指向 app 包内脚本") })
+        XCTAssertEqual(installer.status(for: .claude), .brokenLink, "形态不对要算需修复")
+
+        try installer.repairSourceIfNeeded()
+
+        XCTAssertEqual(try linkDestination(of: clientURL(installer)), bundledClient.path)
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        XCTAssertEqual(installer.status(for: .claude), .installed)
+    }
+
+    /// app 被移走 / 重装到别处：链接还指着旧路径 → 判需修复 → 重建指向新位置。
+    func testStaleLinkIsRebuiltAfterTheAppMoves() throws {
+        try makeToolDirectory(.claude)
+        try installer().install(target: .claude)
+        let oldPath = bundledClient.path
+
+        let movedBundle = root.appending(path: "Applications/uTerm.app", directoryHint: .isDirectory)
+        let moved = try makeBundledClient(in: movedBundle)
+        try FileManager.default.removeItem(at: appBundle)
+        let installer = installer(bundled: moved)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldPath), "旧位置已经没了")
+        XCTAssertTrue(installer.sourceIntegrityIssues().contains { $0.contains("链接指向旧位置") })
+        XCTAssertEqual(installer.status(for: .claude), .brokenLink)
+
+        try installer.install(target: .claude)
+
+        XCTAssertEqual(try linkDestination(of: clientURL(installer)), moved.path)
+        XCTAssertEqual(installer.status(for: .claude), .installed)
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+    }
+
+    /// 包内资源整个没了（不该发生，但别把用户卡死）：退回写内容，链接被换成真实文件。
+    func testDisappearedBundleResourceFallsBackToWritingTheFile() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        XCTAssertEqual(SkillInstaller.fileType(at: clientURL(installer)), S_IFLNK)
+
+        try FileManager.default.removeItem(at: appBundle)
+        // 来源查找带存在性检查（与 Bundle.main.url(forResource:) 一致）→ 回 nil。
+        XCTAssertTrue(
+            installer.sourceIntegrityIssues().contains { $0.contains("应为普通文件") })
+
+        try installer.repairSourceIfNeeded()
+
+        let client = clientURL(installer)
+        XCTAssertEqual(SkillInstaller.fileType(at: client), S_IFREG)
+        XCTAssertEqual(
+            try String(contentsOf: client, encoding: .utf8),
+            SkillInstaller.materializedText(SkillDefinition.controlClientScript)
+        )
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+    }
+
+    /// 可执行位掉了是**能**修的，物化时要当场补回来。
+    func testMaterializeRestoresExecutableBit() throws {
+        let installer = fallbackInstaller()   // 只有退路形态才是我们自己管权限的文件
+        try installer.materializeSource()
+        let client = clientURL(installer)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o644))], ofItemAtPath: client.path)
+        XCTAssertTrue(installer.sourceIntegrityIssues().contains { $0.contains("可执行位") })
+
+        try installer.materializeSource()   // 内容一字未变，仍要校正权限
+
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        let mode = try FileManager.default
+            .attributesOfItem(atPath: client.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.int16Value, 0o755)
+    }
+
+    /// 文件被删掉也是可修复项 —— `repairSourceIfNeeded` 补回来。
+    func testRepairSourceIfNeededRestoresMissingFile() throws {
+        let installer = installer()
+        try installer.materializeSource()
+        let client = clientURL(installer)
+        try FileManager.default.removeItem(at: client)
+        XCTAssertFalse(installer.sourceIntegrityIssues().isEmpty)
+
+        try installer.repairSourceIfNeeded()
+
+        XCTAssertTrue(installer.sourceIntegrityIssues().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: client.path))
+    }
+
+    /// 没装过技能的用户不该因为打开一次设置页就被凭空造出源目录。
+    func testRepairSourceIfNeededDoesNothingWhenNeverMaterialized() throws {
+        let installer = installer()
+        try installer.repairSourceIfNeeded()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installer.sourceDirectoryURL.path))
     }
 
     func testInstallIsIdempotent() throws {
@@ -259,22 +497,68 @@ final class SkillInstallerTests: XCTestCase {
 
     // MARK: - ~/.local/bin/utermctl
 
-    func testBinLinkInstallCreatesSymlinkToTheMaterializedClient() throws {
+    /// `~/.local/bin/utermctl` **直接**链到 app 包内那份（少一跳，`readlink` 一眼看出
+    /// 属于哪个 uTerm），而不是链到技能源目录里那条链接。
+    func testBinLinkPointsStraightAtTheBundledClient() throws {
         let link = binLinkInstaller()
         XCTAssertEqual(link.status(), .notInstalled)
 
         try link.install()
 
         XCTAssertEqual(link.status(), .installed)
-        let destination = try FileManager.default
-            .destinationOfSymbolicLink(atPath: link.linkURL.path)
-        XCTAssertEqual(destination, link.sourceURL.path)
-        // 客户端顺带被物化出来，而且是可执行的。
+        XCTAssertEqual(link.sourceURL.path, bundledClient.path)
+        XCTAssertEqual(try linkDestination(of: link.linkURL), bundledClient.path)
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: link.sourceURL.path))
         XCTAssertEqual(
             link.linkURL.path,
             home.appending(path: ".local/bin/utermctl").standardizedFileURL.path
         )
+    }
+
+    /// 没有包内资源时退回链到物化出的那份，行为与 1.12.x 一致。
+    func testBinLinkFallsBackToTheMaterializedClient() throws {
+        let link = BinLinkInstaller(installer: fallbackInstaller())
+        try link.install()
+        XCTAssertEqual(link.sourceURL.path, link.materializedURL.path)
+        XCTAssertEqual(try linkDestination(of: link.linkURL), link.materializedURL.path)
+        XCTAssertEqual(link.status(), .installed)
+    }
+
+    /// 1.12.x 建的链接指向物化文件。它是我们建的，只是指着旧位置 —— 判需修复（不是
+    /// 冲突，否则设置页里两个按钮都点不动），重装即指向包内脚本。
+    func testLegacyBinLinkIsRepairableNotAConflict() throws {
+        let link = binLinkInstaller()
+        try FileManager.default.createDirectory(
+            at: link.binDirectoryURL, withIntermediateDirectories: true)
+        try link.installer.materializeSource()
+        try FileManager.default.createDirectory(
+            at: link.materializedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: link.linkURL, withDestinationURL: link.materializedURL)
+
+        XCTAssertEqual(link.status(), .brokenLink)
+        XCTAssertTrue(link.status().canInstall)
+
+        try link.install()
+
+        XCTAssertEqual(link.status(), .installed)
+        XCTAssertEqual(try linkDestination(of: link.linkURL), bundledClient.path)
+    }
+
+    /// app 搬家后链接悬空：同样判需修复，重装即指回新位置。
+    func testBinLinkToAMovedAppIsRepairable() throws {
+        try binLinkInstaller().install()
+        let movedBundle = root.appending(path: "Applications/uTerm.app", directoryHint: .isDirectory)
+        let moved = try makeBundledClient(in: movedBundle)
+        try FileManager.default.removeItem(at: appBundle)
+        let link = BinLinkInstaller(installer: installer(bundled: moved))
+
+        XCTAssertEqual(link.status(), .brokenLink)
+
+        try link.install()
+
+        XCTAssertEqual(link.status(), .installed)
+        XCTAssertEqual(try linkDestination(of: link.linkURL), moved.path)
     }
 
     /// 装 bin 链接不需要先装任何技能，也不会往 `~/.<tool>/skills` 里写东西。
@@ -292,17 +576,22 @@ final class SkillInstallerTests: XCTestCase {
         try link.uninstall()
         XCTAssertEqual(link.status(), .notInstalled)
         XCTAssertNoThrow(try link.uninstall())
-        // 源文件留着：技能目录里的链接可能还指着它。
-        XCTAssertTrue(FileManager.default.fileExists(atPath: link.sourceURL.path))
+        // 只删链接，绝不动 app 包里的脚本。
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bundledClient.path))
     }
 
-    func testBinLinkReportsBrokenWhenSourceDisappears() throws {
+    /// 整个 app 包没了（用户把 uTerm.app 删了又装回别处）：先判需修复，
+    /// 重装时退回物化文件并重建链接。
+    func testBinLinkReportsBrokenWhenTheBundleDisappears() throws {
         let link = binLinkInstaller()
         try link.install()
-        try FileManager.default.removeItem(at: link.installer.sourceDirectoryURL)
+        try FileManager.default.removeItem(at: appBundle)
         XCTAssertEqual(link.status(), .brokenLink)
+
         try link.install()
+
         XCTAssertEqual(link.status(), .installed)
+        XCTAssertEqual(try linkDestination(of: link.linkURL), link.materializedURL.path)
     }
 
     func testBinLinkNeverOverwritesARealFile() throws {

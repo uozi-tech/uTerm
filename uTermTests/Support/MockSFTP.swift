@@ -100,13 +100,31 @@ actor MockSFTP: SFTPProviding {
         blobStore[path] = (data, mtime)
     }
 
+    /// `stat` 要回的权限位（原始 POSIX mode，含类型位）。没登记就是 nil，
+    /// 对应「服务端没给 `SSH_FILEXFER_ATTR_PERMISSIONS`」。
+    private var statPermissions: [String: UInt32] = [:]
+
+    func setStatPermissions(_ path: String, _ mode: UInt32) {
+        statPermissions[path] = mode
+    }
+
+    /// 让 `stat` 抛出指定错误（用真实的 Citadel 错误值构造错误映射用例）。
+    var statError: Error?
+
+    func setStatError(_ error: Error?) { statError = error }
+
     func stat(_ path: String) async throws -> RemoteStat {
+        if let statError { throw statError }
         guard let entry = blobStore[path] else {
             throw NSError(domain: "MockSFTP", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "no such file: \(path)"
             ])
         }
-        return RemoteStat(size: Int64(entry.0.count), mtime: entry.1)
+        return RemoteStat(
+            size: Int64(entry.0.count),
+            mtime: entry.1,
+            permissions: statPermissions[path]
+        )
     }
 
     // MARK: - Helpers
@@ -161,6 +179,12 @@ actor MockSFTP: SFTPProviding {
     /// 这些路径的 remove 会抛错（测试中途失败）。
     private var failingRemovePaths: Set<String> = []
 
+    /// 指定路径的 remove 抛出**给定的错误对象**（`failingRemovePaths` 只会抛
+    /// NSError；错误映射用例要拿真实的 Citadel 错误值来试）。
+    private var removeErrors: [String: Error] = [:]
+
+    func setRemoveError(_ path: String, _ error: Error) { removeErrors[path] = error }
+
     func setBlockRemovals(_ v: Bool) { blockRemovals = v }
     func releaseRemovals() { removalsReleased = true }
     func setFailingRemovePaths(_ paths: Set<String>) { failingRemovePaths = paths }
@@ -170,6 +194,7 @@ actor MockSFTP: SFTPProviding {
         while blockRemovals && !removalsReleased {
             try await Task.sleep(nanoseconds: 2_000_000)
         }
+        if let error = removeErrors[path] { throw error }
         if failingRemovePaths.contains(path) {
             throw NSError(domain: "MockSFTP", code: 13,
                           userInfo: [NSLocalizedDescriptionKey: "remove denied: \(path)"])

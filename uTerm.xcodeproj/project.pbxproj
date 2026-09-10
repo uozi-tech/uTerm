@@ -442,6 +442,7 @@
 				85D6BEEC2FBC4E7E00FC90D8 /* Frameworks */,
 				85D6BEED2FBC4E7E00FC90D8 /* Resources */,
 				CFCFCFCF000000000000F0F1 /* Set Build Number */,
+				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */,
 			);
 			buildRules = (
 			);
@@ -662,6 +663,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "buildNumber=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
+		};
+		CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/utermctl",
+			);
+			name = "Copy utermctl CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/utermctl",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nsrc=\"${SRCROOT}/scripts/utermctl\"\ndst=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/utermctl\"\nmkdir -p \"$(dirname \"$dst\")\"\n/bin/cp -f \"$src\" \"$dst\"\n/bin/chmod 755 \"$dst\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

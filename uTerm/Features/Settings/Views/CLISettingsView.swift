@@ -178,7 +178,7 @@ struct CLISettingsView: View {
     }
 
     private var binLinkHint: String {
-        let base = "让你在自己的终端里也能直接敲 utermctl。技能自带的那份不受影响，两者指向同一个文件。"
+        let base = "让你在自己的终端里也能直接敲 utermctl。链接指向 uTerm.app 内的脚本，与技能自带的那份同源；移动 uTerm.app 之后要重新链接。"
         switch skills.binLinkStatus {
         case .installed:
             return base + "（已链接）"
