@@ -642,7 +642,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "buildNumber=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
+			shellScript = "# build = git commit count + Config/BuildNumberOffset (offset exists because a 2026-09-11 history rewrite dropped merge commits below an already-published build; only ever raise it).\ncount=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\noffset=$(cat \"$SRCROOT/Config/BuildNumberOffset\" 2>/dev/null || echo 0)\nbuildNumber=$((count + offset))\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
 		};
 		CFCFCFCF000000000000F0F3 /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -662,7 +662,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "buildNumber=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
+			shellScript = "# build = git commit count + Config/BuildNumberOffset (offset exists because a 2026-09-11 history rewrite dropped merge commits below an already-published build; only ever raise it).\ncount=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\noffset=$(cat \"$SRCROOT/Config/BuildNumberOffset\" 2>/dev/null || echo 0)\nbuildNumber=$((count + offset))\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
 		};
 		CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */ = {
 			isa = PBXShellScriptBuildPhase;

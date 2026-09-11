@@ -129,12 +129,14 @@ VERSION ?= $(shell scripts/bump-version.sh print)
 MOBILE_VERSION_XCCONFIG := Config/VersionMobile.xcconfig
 MOBILE_VERSION ?= $(shell scripts/bump-version.sh --mobile print)
 # Build id; matches the "Set Build Number" Run Script (git commit count).
-BUILD_NUMBER ?= $(shell git rev-list --count HEAD)
+# build 号 = git 提交数 + Config/BuildNumberOffset（与 pbxproj 里两份 Set Build Number Run Script 同一算法；
+# 偏移量的来历见 CLAUDE.md「Build Versioning」，只能调大不能调小）。
+BUILD_NUMBER ?= $(shell echo $$(( $$(git rev-list --count HEAD) + $$(cat Config/BuildNumberOffset 2>/dev/null || echo 0) )))
 APPCAST_DMG_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).dmg
 APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
-.PHONY: help list print-version set-version bump-patch bump-minor bump-major \
+.PHONY: help list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile check-cli check-skills clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
@@ -146,6 +148,7 @@ help:
 	@printf '%s\n' 'uTerm packaging commands:'
 	@printf '%s\n' ''
 	@printf '%s\n' '  make print-version                     Print current MARKETING_VERSION'
+	@printf '%s\n' '  make print-build                       Print build number (git count + Config/BuildNumberOffset)'
 	@printf '%s\n' '  make set-version VERSION=x.y.z         Set the semantic version'
 	@printf '%s\n' '  make bump-patch|bump-minor|bump-major  Increment the semantic version'
 	@printf '%s\n' '  make build                             Build the macOS app in Release mode'
@@ -188,6 +191,9 @@ list:
 
 print-version:
 	@scripts/bump-version.sh print
+
+print-build:
+	@echo $(BUILD_NUMBER)
 
 set-version:
 	@[ "$(origin VERSION)" = "command line" ] || { echo 'Usage: make set-version VERSION=x.y.z' >&2; exit 1; }
@@ -432,7 +438,7 @@ archive-mobile:
 	@have="$$(plutil -extract CFBundleVersion raw -o - "$(MOBILE_ARCHIVE_APP)/Info.plist")"; \
 	want="$(BUILD_NUMBER)"; \
 	if [ "$$have" != "$$want" ]; then \
-		printf '%s\n' "ERROR: CFBundleVersion=$$have but git rev-list --count HEAD=$$want."; \
+		printf '%s\n' "ERROR: CFBundleVersion=$$have but make print-build=$$want."; \
 		printf '%s\n' '  The uTermMobile "Set Build Number" Run Script did not take effect'; \
 		printf '%s\n' '  (check ENABLE_USER_SCRIPT_SANDBOXING=NO on the uTermMobile target), or HEAD moved mid-build.'; \
 		exit 1; \
