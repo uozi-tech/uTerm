@@ -241,7 +241,6 @@ struct GroupDetailView: View {
             }
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .mCardShadow()
         }
         .padding(.top, 22)
     }

@@ -191,7 +191,6 @@ struct HostCard: View {
             .padding(14)
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .mCardShadow()
         }
         .buttonStyle(MPressStyle())
         .contextMenu {

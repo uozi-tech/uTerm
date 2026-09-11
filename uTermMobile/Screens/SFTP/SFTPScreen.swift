@@ -120,7 +120,6 @@ struct SFTPScreen: View {
                                 .padding(14)
                                 .background(M.card)
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                                .mCardShadow()
                             }
                             .buttonStyle(MPressStyle())
                         }

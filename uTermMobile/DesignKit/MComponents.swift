@@ -310,7 +310,6 @@ struct MInsetGroup<Content: View>: View {
             VStack(spacing: 0) { content }
                 .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .mCardShadow()
                 .padding(.horizontal, 16)
             if let footer {
                 Text(footer)

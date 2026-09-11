@@ -188,10 +188,9 @@ struct ConnectingCoverView: View {
                 .font(M.sans(12.5)).foregroundStyle(M.text2)
         }
         .padding(.horizontal, 13).padding(.vertical, 6)
-        // 悬浮卡片形态：白卡 + 四周柔散投影（与下方阶段卡一致；深色下 card 与 fillFaint 同值）。
+        // 卡片形态：白卡靠与 canvas 的填充差区分，不加投影（与下方阶段卡一致；深色下 card 与 fillFaint 同值）。
         .background(M.card)
         .clipShape(Capsule())
-        .mCardShadow()
     }
 
     // MARK: 中部
@@ -245,7 +244,6 @@ struct ConnectingCoverView: View {
         .frame(maxWidth: 320)
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .mCardShadow()
     }
 
     /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。

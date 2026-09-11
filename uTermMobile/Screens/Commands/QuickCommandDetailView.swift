@@ -88,7 +88,6 @@ struct QuickCommandDetailView: View {
                             .padding(11).frame(maxWidth: .infinity, alignment: .leading)
                             .background(M.cmdSurface)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .mCardShadow()
                     }
                 }
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
@@ -99,7 +98,6 @@ struct QuickCommandDetailView: View {
                     .padding(13).frame(maxWidth: .infinity, alignment: .leading)
                     .background(M.cmdSurface)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .mCardShadow()
             }
         }
         .padding(.top, 18)
@@ -124,7 +122,6 @@ struct QuickCommandDetailView: View {
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     .background(M.card)
                     .clipShape(RoundedRectangle(cornerRadius: 11))
-                    .mCardShadow()
                 }
                 if targets.isEmpty {
                     Text("尚未绑定主机").font(M.sans(13)).foregroundStyle(M.text4)
@@ -168,7 +165,6 @@ struct QuickCommandDetailView: View {
         .padding(.horizontal, 13).padding(.vertical, 12)
         .background(cmd.aiAssisted ? M.aiAccent.opacity(0.10) : M.card)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .mCardShadow()
         .padding(.top, 18)
     }
 
@@ -328,7 +324,6 @@ private struct RunLogRow: View {
         }
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 11))
-        .mCardShadow()
     }
 
     // 共享格式化器（`MFormat`）：改前每条执行日志行现建一个 `DateFormatter`。

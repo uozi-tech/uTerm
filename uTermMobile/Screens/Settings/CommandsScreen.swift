@@ -68,7 +68,6 @@ struct CommandCard: View {
             .padding(14)
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .mCardShadow()
     }
 }
 
@@ -223,7 +222,6 @@ struct CommandFormSheet: View {
             }
             .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .mCardShadow()
             .padding(.horizontal, 16)
         }
         .padding(.bottom, 22)
