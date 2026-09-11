@@ -548,22 +548,30 @@ release-mobile:
 	else printf '%s\n' 'No NOTES=<markdown>; skipped the TestFlight "What to Test" step.'; fi
 
 # iOS 的 tag 前缀是 mobile-v，与 macOS 的 v<VERSION> 分开（两套版本号会撞车）。
+# Tags are always annotated (`git tag -a … -m`). A bare `git tag` breaks under the
+# user's global `tag.gpgsign = true`: git then insists on a tag message, aborts
+# with "no tag message?", and the old recipe still printed "Created tag …" and
+# exited 0, so the later `git push origin <tag>` failed with "src refspec … does
+# not match any" (hit on 2026-09-11 releasing uTermMobile 1.1.0). Override the
+# message with TAG_MESSAGE="…"; the default is "release <tag>".
+TAG_MESSAGE ?=
+
 tag-mobile:
-	@v="$(MOBILE_VERSION)"; \
-	if git rev-parse "mobile-v$$v" >/dev/null 2>&1; then \
-		printf '%s\n' "Tag mobile-v$$v already exists, skipping."; \
+	@t="mobile-v$(MOBILE_VERSION)"; m="$(TAG_MESSAGE)"; [ -n "$$m" ] || m="release $$t"; \
+	if git rev-parse "$$t" >/dev/null 2>&1; then \
+		printf '%s\n' "Tag $$t already exists, skipping."; \
 	else \
-		git tag "mobile-v$$v"; \
-		printf '%s\n' "Created tag mobile-v$$v. Push with: git push origin mobile-v$$v"; \
+		git tag -a "$$t" -m "$$m" || exit 1; \
+		printf '%s\n' "Created tag $$t. Push with: git push origin $$t"; \
 	fi
 
 tag:
-	@v="$(VERSION)"; \
-	if git rev-parse "v$$v" >/dev/null 2>&1; then \
-		printf '%s\n' "Tag v$$v already exists, skipping."; \
+	@t="v$(VERSION)"; m="$(TAG_MESSAGE)"; [ -n "$$m" ] || m="release $$t"; \
+	if git rev-parse "$$t" >/dev/null 2>&1; then \
+		printf '%s\n' "Tag $$t already exists, skipping."; \
 	else \
-		git tag "v$$v"; \
-		printf '%s\n' "Created tag v$$v. Push with: git push origin v$$v"; \
+		git tag -a "$$t" -m "$$m" || exit 1; \
+		printf '%s\n' "Created tag $$t. Push with: git push origin $$t"; \
 	fi
 
 # The release artifact is produced by archive + export with AUTOMATIC developer-id
