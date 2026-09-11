@@ -17,7 +17,7 @@ struct MCenterModalContainer<Content: View>: View {
             .background(M.overlayHi)
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(M.borderHi, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 18))
-            .shadow(color: .black.opacity(0.45), radius: 30, x: 0, y: 16)
+            .mCardShadow()
             .padding(22)
     }
 }

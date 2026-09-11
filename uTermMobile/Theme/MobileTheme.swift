@@ -24,7 +24,7 @@ enum M {
     /// 屏幕画布：承载卡片的屏 / 滚动区 / 卡片式抽屉的底。暗夜与 `bg` 同值（视觉零变化）；
     /// 日间浅灰，让白卡浮起。bar（M.overlay）/ 真实终端面别用它。
     static let canvas = UD.dyn(.hex(0x101012), .hex(0xF4F4F5))
-    /// 卡片面：暗夜与 `fillFaint` 同值（视觉零变化）；日间纯白，配 `.udShadow(.sm)` 悬浮于
+    /// 卡片面：暗夜与 `fillFaint` 同值（视觉零变化）；日间纯白，配 `.mCardShadow()` 悬浮于
     /// `canvas` 之上。chip / 键帽 / 次按钮等小控件仍用 fillFaint/fillMed，别用它。
     static let card = UD.dyn(.white(0.045), .hex(0xFFFFFF))
 
@@ -86,6 +86,26 @@ enum M {
     static func sans(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
     }
+}
+
+/// 卡片投影：四周均匀发散（x = 0, y = 0），只靠模糊半径。
+/// 不用 DesignKit 的 `.udShadow(.sm)`：那档向下偏移（y 2），且 macOS 共用、不能为移动端改。
+/// 数值由调参台定稿：radius 6 · 日间 0.06 · 暗夜 0.36。阴影外扩约 2 × radius，
+/// 卡间距小于 12pt 的紧凑列表，相邻卡的阴影会轻微交叠。
+private struct MCardShadow: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        content.shadow(
+            color: .black.opacity(scheme == .dark ? 0.36 : 0.06),
+            radius: 6, x: 0, y: 0
+        )
+    }
+}
+
+extension View {
+    /// 卡片 / 命令框 / 居中弹窗统一投影。
+    func mCardShadow() -> some View { modifier(MCardShadow()) }
 }
 
 /// 把十六进制字符串转 Color（设计稿 seed 数据里的分组色等使用）。

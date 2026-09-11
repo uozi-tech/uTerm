@@ -191,7 +191,7 @@ struct ConnectingCoverView: View {
         // 悬浮卡片形态：白卡 + 四周柔散投影（与下方阶段卡一致；深色下 card 与 fillFaint 同值）。
         .background(M.card)
         .clipShape(Capsule())
-        .udShadow(.sm)
+        .mCardShadow()
     }
 
     // MARK: 中部
@@ -245,7 +245,7 @@ struct ConnectingCoverView: View {
         .frame(maxWidth: 320)
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .udShadow(.sm)
+        .mCardShadow()
     }
 
     /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。

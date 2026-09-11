@@ -135,7 +135,7 @@ struct SettingsScreen: View {
         .padding(16)
         .background(M.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .udShadow(.sm)
+        .mCardShadow()
         .padding(.horizontal, 16)
         .padding(.bottom, 22)
     }

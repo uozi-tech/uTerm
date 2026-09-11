@@ -114,7 +114,7 @@ struct PermissionGrid: View {
                 }
                 .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .udShadow(.sm)
+                .mCardShadow()
                 .padding(.horizontal, 16)
 
                 MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPerm.mode(from: bits)) }
