@@ -64,6 +64,10 @@ MOBILE_UPLOAD_OPTIONS := Config/ExportOptions-ios-upload.plist
 # 发布 archive 钉住 Package.resolved：依赖版本可复现，且远端偶发不可达时不会整条失败。
 # 想让它照常联网解析依赖就传空值：make archive-mobile MOBILE_PACKAGE_ARGS=
 MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
+# macOS archive 同理：默认钉在 Package.resolved 上、不联网刷新依赖镜像。uAppKit ≥ 1.4.6 的清单用 git@github.com: 形式引用
+# swift-nio / swift-log 等，与根工程的 https 形式同名异址，Xcode 的 SwiftPM 在「Updating from …」阶段会互锁挂死（0% CPU、无 git 子进程）。
+# 想照常联网解析依赖就传空值：make release PACKAGE_ARGS=
+PACKAGE_ARGS ?= -disableAutomaticPackageResolution -skipPackageUpdates
 
 # 本次发版的分组发布日志（Markdown）。同一份文案喂三个地方：企微分组通告、
 # TestFlight 的 What to Test、RELEASE_LOG.md 的「本次更新」。约定路径带版本与
@@ -237,6 +241,7 @@ archive:
 		-archivePath "$(ARCHIVE_PATH)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-skipPackagePluginValidation \
+		$(PACKAGE_ARGS) \
 		-allowProvisioningUpdates \
 		CODE_SIGN_STYLE=Automatic \
 		DEVELOPMENT_TEAM=$(TEAM_ID) \
