@@ -48,12 +48,19 @@ struct uTermApp: App {
 
     /// 启用 CloudKit 同步的 SwiftData 容器。`.automatic` 让 SwiftData
     /// 在用户已登录 iCloud 时自动后台同步，未登录时退化为纯本地。
-    let modelContainer: ModelContainer = AppModelContainer.make()
+    let modelContainer: ModelContainer
 
     /// 本机 IPC 服务端。`ControlSettings.observe` 按主开关起停它（起停都幂等）。
     private let controlServer = ControlServer()
 
     init() {
+        // Subscribe before creating the SwiftData container. CloudKit can emit
+        // its setup/import event while the container is being initialized.
+        let sync = CloudKitSyncMonitor()
+        sync.start()
+        _cloudKitSync = State(initialValue: sync)
+        modelContainer = AppModelContainer.make()
+
         // uTerm 自己已有工作区/终端标签，禁用 macOS 把独立窗口再合并成系统 Tab。
         // 必须在任何 Scene 创建 NSWindow 前设置，才能阻止系统按用户偏好自动合并。
         NSWindow.allowsAutomaticWindowTabbing = false

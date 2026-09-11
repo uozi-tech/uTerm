@@ -21,9 +21,16 @@ struct MobileApp: App {
     /// UserDefaults is bundle-local; bridge shared scalar preferences through iCloud KVS.
     @State private var sharedPreferences = SharedPreferencesSync()
 
-    let modelContainer: ModelContainer = MobileModelContainer.make()
+    let modelContainer: ModelContainer
 
     init() {
+        // Subscribe before creating the SwiftData container. CloudKit can emit
+        // its setup/import event while the container is being initialized.
+        let sync = CloudKitSyncMonitor()
+        sync.start()
+        _cloudKitSync = State(initialValue: sync)
+        modelContainer = MobileModelContainer.make()
+
         // 应用锁：读 requireAuthAtLaunch（缺键视作「关」——iOS 默认不锁，由设置开启）。
         // 用 object as? Bool 而非 UserDefaults.bool，避免缺键时 false 与「显式关」混淆。
         let requireAuth = (UserDefaults.standard.object(forKey: "requireAuthAtLaunch") as? Bool) ?? false

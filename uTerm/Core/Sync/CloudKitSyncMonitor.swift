@@ -41,6 +41,7 @@ final class CloudKitSyncMonitor {
     /// 幂等启动：订阅 CloudKit 镜像事件通知。重复调用安全（已订阅则直接返回）。
     func start() {
         guard observer == nil else { return }
+        AppLogger.info("CloudKit sync monitor started", category: "sync")
         observer = NotificationCenter.default.addObserver(
             forName: NSPersistentCloudKitContainer.eventChangedNotification,
             object: nil, queue: .main

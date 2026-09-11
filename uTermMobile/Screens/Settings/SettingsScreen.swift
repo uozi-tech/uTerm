@@ -201,8 +201,7 @@ struct SettingsScreen: View {
 
     // 关于
     private var aboutGroup: some View {
-        MInsetGroup(header: "关于",
-                    footer: "uTerm · 现代化 SSH 终端 / 文件 / AI 助手。iOS 与 macOS 通过 iCloud 同步数据与共享偏好。") {
+        MInsetGroup(header: "关于") {
             MInsetRow(icon: "icloud", label: "同步诊断", sub: syncDiagSub,
                       chevron: true, onTap: { showSyncDiag = true })
             MInsetRow(label: "版本", value: appVersion, last: true)
