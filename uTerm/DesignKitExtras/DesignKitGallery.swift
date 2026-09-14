@@ -101,11 +101,10 @@ struct DesignKitGallery: View {
                 .font(UD.h2)
                 .foregroundStyle(UD.text)
             Spacer()
-            Picker("", selection: $scheme) {
-                Text("深色").tag(ColorScheme.dark)
-                Text("浅色").tag(ColorScheme.light)
-            }
-            .pickerStyle(.segmented)
+            UDSegmented(selection: $scheme, options: [
+                (value: ColorScheme.dark, label: "深色"),
+                (value: ColorScheme.light, label: "浅色"),
+            ])
             .frame(width: 160)
         }
         .padding(.horizontal, 18)

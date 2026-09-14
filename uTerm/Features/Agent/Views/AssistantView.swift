@@ -185,30 +185,27 @@ struct AssistantView: View {
 
     /// 底栏模型胶囊：原 meta 行的 provider 选择器，移到输入框页脚（设计稿 chat8）。
     private var modelPill: some View {
-        Menu {
-            ForEach(model.providers) { p in
-                Button {
-                    activeProviderIDString = p.id.uuidString
-                } label: {
-                    let label = p.model.isEmpty ? p.name : "\(p.name) · \(p.model)"
-                    if p.id == model.activeProvider?.id {
-                        Label(label, systemImage: "checkmark")
-                    } else {
-                        Text(label)
-                    }
-                }
-            }
-            Divider()
-            Button("管理…") { openWindow(id: SettingsWindow.id) }
-        } label: {
+        UDDropdown(anchor: .leading) { _ in
             UDModelPillLabel(modelPillLabel)
+        } content: {
+            UDMenu(width: 240, head: "模型", maxHeight: 320, items: modelPillItems)
         }
-        // .button + plain 渲染完整自定义 label（含蓝点 + 末尾 ▾ + 描边胶囊）；
-        // .borderlessButton 会把自定义 label 压扁成纯文本 + 前置系统箭头。
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    private var modelPillItems: [UDMenuItem] {
+        var items = model.providers.map { provider in
+            let label = provider.model.isEmpty
+                ? provider.name
+                : "\(provider.name) · \(provider.model)"
+            return UDMenuItem(
+                label: label,
+                active: provider.id == model.activeProvider?.id,
+                action: { activeProviderIDString = provider.id.uuidString })
+        }
+        items.append(.divider())
+        items.append(UDMenuItem(label: "管理…", action: { openWindow(id: SettingsWindow.id) }))
+        return items
     }
 
     /// 胶囊文案：优先显示模型名（如 `claude-sonnet`），否则 provider 名；过长则省略。

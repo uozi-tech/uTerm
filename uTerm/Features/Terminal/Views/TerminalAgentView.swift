@@ -59,20 +59,16 @@ struct TerminalAgentView: View {
             Text(host).font(UD.mono(11)).foregroundStyle(UD.text3)
             Spacer(minLength: 8)
 
-            Menu {
-                if sessions.isEmpty {
-                    Text("还没有历史会话")
-                } else {
-                    ForEach(sessions) { s in
-                        Button(s.title.isEmpty ? "新对话" : s.title) { model.load(s) }
-                    }
-                }
-            } label: {
+            UDDropdown(anchor: .trailing) { _ in
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 12)).foregroundStyle(UD.text3)
                     .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            } content: {
+                UDMenu(width: 240, head: "会话历史", maxHeight: 320, items: sessionMenuItems)
             }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .fixedSize()
+            .accessibilityLabel("会话历史")
             .help("会话历史")
 
             Button { model.startNewSession() } label: {
@@ -391,25 +387,39 @@ struct TerminalAgentView: View {
     }
 
     private var modelPill: some View {
-        Menu {
-            ForEach(model.providers) { p in
-                Button {
-                    activeProviderIDString = p.id.uuidString
-                } label: {
-                    let label = p.model.isEmpty ? p.name : "\(p.name) · \(p.model)"
-                    if p.id == model.activeProvider?.id {
-                        Label(label, systemImage: "checkmark")
-                    } else {
-                        Text(label)
-                    }
-                }
-            }
-            Divider()
-            Button("管理…") { onOpenSettings() }
-        } label: {
+        UDDropdown(anchor: .leading) { _ in
             UDModelPillLabel(modelPillLabel)
+        } content: {
+            UDMenu(width: 240, head: "模型", maxHeight: 320, items: modelPillItems)
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .fixedSize()
+    }
+
+    private var sessionMenuItems: [UDMenuItem] {
+        guard !sessions.isEmpty else {
+            return [UDMenuItem(label: "还没有历史会话")]
+        }
+        return sessions.map { session in
+            UDMenuItem(
+                label: session.title.isEmpty ? "新对话" : session.title,
+                active: session.id == model.currentSession?.id,
+                action: { model.load(session) })
+        }
+    }
+
+    private var modelPillItems: [UDMenuItem] {
+        var items = model.providers.map { provider in
+            let label = provider.model.isEmpty
+                ? provider.name
+                : "\(provider.name) · \(provider.model)"
+            return UDMenuItem(
+                label: label,
+                active: provider.id == model.activeProvider?.id,
+                action: { activeProviderIDString = provider.id.uuidString })
+        }
+        items.append(.divider())
+        items.append(UDMenuItem(label: "管理…", action: onOpenSettings))
+        return items
     }
 
     private var modelPillLabel: String {
@@ -448,30 +458,27 @@ struct SafetyDial: View {
     @Binding var safety: AgentSafety
 
     var body: some View {
-        Menu {
-            ForEach(AgentSafety.allCases) { s in
-                Button { safety = s } label: {
-                    if s == safety {
-                        Label(s.label, systemImage: "checkmark")
-                    } else {
-                        Text(s.label)
-                    }
-                }
-            }
-        } label: {
+        UDDropdown(anchor: .leading) { open in
             HStack(spacing: 6) {
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.system(size: 11)).foregroundStyle(UD.accent)
                 Text(safety.label).font(.system(size: 11.5)).foregroundStyle(UD.text2)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold)).foregroundStyle(UD.text4)
+                    .rotationEffect(.degrees(open ? 180 : 0))
             }
             .padding(.leading, 9).padding(.trailing, 8)
             .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
             .contentShape(RoundedRectangle(cornerRadius: 7))
+        } content: {
+            UDMenu(width: 180, items: AgentSafety.allCases.map { mode in
+                UDMenuItem(label: mode.label, active: mode == safety, action: { safety = mode })
+            })
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .fixedSize()
+        .accessibilityLabel("审批模式")
+        .accessibilityValue(safety.label)
         .help(safety.detail)
     }
 }
