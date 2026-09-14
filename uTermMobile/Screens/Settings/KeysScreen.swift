@@ -22,7 +22,7 @@ struct KeysScreen: View {
         return Group {
             if keys.isEmpty {
                 MEmptyState(icon: "key", title: "密钥库为空",
-                            message: "在此生成 SSH 密钥（私钥存钥匙串），或从 macOS 端经 iCloud 同步。",
+                            message: "在此生成 SSH 密钥；私钥只保存在当前设备钥匙串。",
                             actionTitle: "生成密钥", action: { generating = true })
             } else {
                 ScrollView {

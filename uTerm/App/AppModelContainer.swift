@@ -5,7 +5,7 @@ enum AppModelContainer {
     static func make() -> ModelContainer {
         let config = ModelConfiguration(
             "uTerm",
-            cloudKitDatabase: .automatic
+            cloudKitDatabase: .none
         )
         do {
             return try ModelContainer(

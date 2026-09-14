@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>uTerm 使用局域网发现 Mac 并同步设置。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_uterm-sync._tcp</string>
+	</array>
 	<!-- 出口合规声明（App Store Connect / TestFlight 每次上传都会问一遍；
 	     声明在 Info.plist 里 App Store Connect 就不再弹窗，构建也不会卡在「缺少合规信息」）。
 
@@ -19,17 +25,6 @@
 	<false/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。</string>
-	<!-- 只声明真正用到的后台模式。`remote-notification` 是 SwiftData 的 CloudKit 镜像
-	     （NSPersistentCloudKitContainer）接静默推送所必需，见 MobileApp.swift 的
-	     MobileAppDelegate 注释。
-
-	     ⚠️ 不要顺手加 `processing` / `fetch`：全仓没有任何 BGTaskScheduler /
-	     BGProcessingTaskRequest / BGAppRefreshTaskRequest / performFetch 实现，
-	     声明了却不用会被 App Store Connect 以 ITMS-90771 拒收。 -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

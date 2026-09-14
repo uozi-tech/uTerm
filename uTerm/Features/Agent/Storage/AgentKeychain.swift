@@ -1,8 +1,6 @@
 import Foundation
 
-/// 把每个 AIProvider 的 API key 存进 macOS 钥匙串。account 用 provider.id.uuidString，
-/// 委托给 KeychainStore，同样 kSecAttrSynchronizable = true，经 iCloud Keychain
-/// 端到端加密同步。
+/// 把每个 AIProvider 的 API key 存进当前设备钥匙串。API key 不进入局域网快照。
 nonisolated struct AgentKeychain {
     private let store: KeychainStore
 

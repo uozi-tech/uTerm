@@ -14,10 +14,9 @@ struct uTermApp: App {
     @Environment(\.openWindow) private var openWindow
 
     @State private var appUpdater = AppUpdater()
-    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
-    @State private var cloudKitSync = CloudKitSyncMonitor()
-    /// UserDefaults is bundle-local; bridge shared scalar preferences through iCloud KVS.
+    /// 普通偏好保存在本机，并由局域网同步服务按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
+    @State private var lanSync: LANSyncCoordinator
     @State private var forwardingCoordinator = ForwardingCoordinator()
     /// 全局端口转发的「启动自动化」编排器（App 级，注入 Welcome 与全局转发窗口）。
     @State private var globalForwarding = GlobalForwardingModel()
@@ -34,7 +33,7 @@ struct uTermApp: App {
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
-    /// 应用级服务（CloudKit 监听 / 命令行接口 / 开窗入口）只安装一次。
+    /// 应用级服务（局域网同步 / 命令行接口 / 开窗入口）只安装一次。
     /// 挂在每个 Scene 上，谁先出现谁装 —— 见 `AppServicesGate` 的类型文档。
     private let appServicesGate = AppServicesGate()
 
@@ -46,20 +45,21 @@ struct uTermApp: App {
         (AppLanguage(rawValue: appLanguageRaw) ?? .system).locale
     }
 
-    /// 启用 CloudKit 同步的 SwiftData 容器。`.automatic` 让 SwiftData
-    /// 在用户已登录 iCloud 时自动后台同步，未登录时退化为纯本地。
+    /// 本机 SwiftData 容器；跨设备复制由 LANSyncDataStore 负责。
     let modelContainer: ModelContainer
 
     /// 本机 IPC 服务端。`ControlSettings.observe` 按主开关起停它（起停都幂等）。
     private let controlServer = ControlServer()
 
     init() {
-        // Subscribe before creating the SwiftData container. CloudKit can emit
-        // its setup/import event while the container is being initialized.
-        let sync = CloudKitSyncMonitor()
-        sync.start()
-        _cloudKitSync = State(initialValue: sync)
         modelContainer = AppModelContainer.make()
+
+        let preferences = SharedPreferencesSync()
+        _sharedPreferences = State(initialValue: preferences)
+        let lan = LANSyncCoordinator(role: .host, preferences: preferences,
+                                     dataStore: LANSyncDataStore(container: modelContainer))
+        lan.start()
+        _lanSync = State(initialValue: lan)
 
         // uTerm 自己已有工作区/终端标签，禁用 macOS 把独立窗口再合并成系统 Tab。
         // 必须在任何 Scene 创建 NSWindow 前设置，才能阻止系统按用户偏好自动合并。
@@ -82,7 +82,7 @@ struct uTermApp: App {
         // Pull shared scalar preferences before the first scene body is evaluated.
         // This matters for stateful services such as AccentState, which initialize
         // from UserDefaults once rather than observing it continuously.
-        sharedPreferences.start()
+        preferences.start()
     }
 
     /// 应用级服务的唯一启动点。由**任意**第一个出现的窗口触发（`bootstrapsAppServices`），
@@ -94,7 +94,6 @@ struct uTermApp: App {
     @MainActor
     private func bootstrapAppServices() {
         appServicesGate.install {
-            cloudKitSync.start()
             startControlInterface()
             installTerminalWindowOpener()
         }
@@ -358,11 +357,11 @@ struct uTermApp: App {
         Window("设置", id: SettingsWindow.id) {
             SettingsView()
                 .modelContainer(modelContainer)
+                .environment(lanSync)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(appUpdater)
-                .environment(cloudKitSync)
                 .environment(controlSettings)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -389,7 +388,7 @@ struct uTermApp: App {
     }
 }
 
-/// 应用级服务（CloudKit 同步监听、命令行接口、`terminal-open` 的开窗入口）的
+/// 应用级服务（局域网同步、命令行接口、`terminal-open` 的开窗入口）的
 /// **一次性**安装闸门。
 ///
 /// 这三样原本只挂在 Welcome 窗的 `.task` 里，而 Welcome 窗**不一定出现**：

@@ -13,8 +13,8 @@ struct AdvancedSettingsView: View {
     @AppStorage("sshHostKeyPolicy")  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
     @AppStorage("logLevel")          private var logLevelRaw: String = LogLevel.info.rawValue
     @AppStorage("sftpMaxConcurrentTransfers") private var maxConcurrentUploads: Int = 4
-    /// CloudKit 同步实时状态（uTermApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
-    @Environment(CloudKitSyncMonitor.self) private var sync
+    /// Mac 作为局域网同步服务端，移动端通过 Bonjour 发现它。
+    @Environment(LANSyncCoordinator.self) private var lanSync
 
     private var hostKeyPolicyBinding: Binding<SSHHostKeyPolicy> {
         Binding(
@@ -51,17 +51,26 @@ struct AdvancedSettingsView: View {
                 }
             }
 
-            SettingsGroup(title: "诊断") {
-                SettingsRow(label: "iCloud 同步", hint: syncHint) {
+            SettingsGroup(title: "局域网同步") {
+                SettingsRow(label: "服务状态", hint: "Mac 会在本地网络广播 uTerm，移动端可拉取本机数据。") {
                     HStack(spacing: 6) {
-                        Image(systemName: syncIcon)
+                        Image(systemName: lanSyncIcon)
                             .font(.system(size: 12))
-                            .foregroundStyle(syncTint)
-                        Text(syncLabel)
+                            .foregroundStyle(lanSyncTint)
+                        Text(lanSync.status.label)
                             .font(.system(size: 12.5))
                             .foregroundStyle(UD.text2)
                     }
                 }
+                SettingsRow(label: "配对码", hint: "在 iPhone / iPad 的局域网同步中输入此 6 位代码。") {
+                    Text(lanSync.pairingCode)
+                        .font(.system(size: 14, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(UD.text)
+                        .textSelection(.enabled)
+                }
+            }
+
+            SettingsGroup(title: "诊断") {
                 SettingsRow(label: "日志等级",
                             hint: "运行时立即生效；低于此等级的日志不会写入系统日志。") {
                     UDSegmented(selection: logLevelBinding,
@@ -94,43 +103,19 @@ struct AdvancedSettingsView: View {
         NSWorkspace.shared.open(url)
     }
 
-    // ─── iCloud 同步实时状态映射（先过「是否登录 iCloud」门，再叠 monitor.phase）──────
-    private var loggedIntoiCloud: Bool { FileManager.default.ubiquityIdentityToken != nil }
-
-    private var syncLabel: String {
-        guard loggedIntoiCloud else { return "未登录 iCloud" }
-        switch sync.phase {
-        case .setup:     return "连接中…"
-        case .importing: return "下载中…"
-        case .exporting: return "上传中…"
-        case .error:     return "同步出错"
-        case .idle:      return sync.lastSyncedAt != nil ? "已同步" : "等待同步"
+    private var lanSyncIcon: String {
+        switch lanSync.status {
+        case .hosting: return "wifi"
+        case .error: return "exclamationmark.triangle"
+        default: return "wifi.slash"
         }
     }
 
-    private var syncIcon: String {
-        guard loggedIntoiCloud else { return "person.crop.circle.badge.xmark" }
-        switch sync.phase {
-        case .setup:     return "arrow.triangle.2.circlepath"
-        case .importing: return "icloud.and.arrow.down"
-        case .exporting: return "icloud.and.arrow.up"
-        case .error:     return "exclamationmark.icloud"
-        case .idle:      return sync.lastSyncedAt != nil ? "checkmark.icloud" : "icloud"
+    private var lanSyncTint: Color {
+        switch lanSync.status {
+        case .error: return .orange
+        case .hosting, .ready, .syncing: return UD.accent
+        default: return UD.text3
         }
-    }
-
-    private var syncTint: Color {
-        switch sync.phase {
-        case .error:                          return .orange
-        case .setup, .importing, .exporting:  return UD.accent
-        case .idle:                           return UD.text3
-        }
-    }
-
-    private var syncHint: String {
-        if sync.phase == .error, let e = sync.lastError {
-            return "最近一次同步出错：\(e)。完整日志见下方「显示日志」。"
-        }
-        return "主机 / 分组 / 密钥等数据通过 CloudKit，同步偏好通过 iCloud KVS 在设备间共享；后台进行，非即时。完整事件日志见下方「显示日志」。"
     }
 }
