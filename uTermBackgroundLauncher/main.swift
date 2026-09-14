@@ -9,7 +9,8 @@ final class BackgroundLauncherDelegate: NSObject, NSApplicationDelegate {
         configuration.activates = false
         configuration.arguments = ["--background", "--launch-source", "login-item"]
         NSWorkspace.shared.openApplication(at: mainApp, configuration: configuration) { _, _ in
-            NSApp.terminate(nil)
+            // 完成回调不保证在主线程，而 NSApp/terminate 是 MainActor 隔离的。
+            Task { @MainActor in NSApp.terminate(nil) }
         }
     }
 }
