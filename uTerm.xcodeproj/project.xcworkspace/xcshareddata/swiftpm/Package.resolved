@@ -1,5 +1,5 @@
 {
-  "originHash" : "e9ace4b45cc1262fc57b515f65145f223061258969ee2831573ce585d7c79d94",
+  "originHash" : "4f970d38d3cb5cd1f587f57bffdd2e75c11b8c6f6484c5d56adc7f42945f96dc",
   "pins" : [
     {
       "identity" : "bigint",
@@ -207,8 +207,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/uozi-tech/uAppKit.git",
       "state" : {
-        "revision" : "6ba69f350f9a6a62bd641304a4c3499d8627ab41",
-        "version" : "1.4.6"
+        "revision" : "b56e9c0374cef8be90c7885a23abc0e273d1e45c",
+        "version" : "1.4.7"
       }
     }
   ],

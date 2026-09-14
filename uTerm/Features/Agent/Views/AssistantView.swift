@@ -70,7 +70,7 @@ nonisolated struct AgentToolCallPresentation: Equatable, Sendable {
 }
 
 /// Workspace Agent inspector: session navigation, streamed turns, tool approval/results,
-/// contextual follow-ups, queued prompts, and the composer live in one compact surface.
+/// queued prompts and the composer live in one compact surface.
 struct AssistantView: View {
     /// 当前活动服务器的简述，进 system prompt（无则空串）。
     let serverContext: String
@@ -87,6 +87,12 @@ struct AssistantView: View {
     // 会话历史下拉只列最近 `ChatSessionQueries.recentLimit` 条（原来无 fetchLimit，
     // 一开窗就把库里全部会话物化出来）。
     @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
+
+    @AppStorage("agentSafety") private var agentSafetyRaw = AgentSafety.readAuto.rawValue
+    private var safetyBinding: Binding<AgentSafety> {
+        Binding(get: { AgentSafety(rawValue: agentSafetyRaw) ?? .readAuto },
+                set: { agentSafetyRaw = $0.rawValue })
+    }
 
     @State private var showSessions = false
     @State private var followsChatTail = true
@@ -117,7 +123,11 @@ struct AssistantView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { model.attach(context: modelContext) }
+        .onAppear {
+            model.approvalMode = safetyBinding.wrappedValue
+            model.attach(context: modelContext)
+        }
+        .onChange(of: agentSafetyRaw) { _, _ in model.approvalMode = safetyBinding.wrappedValue }
     }
 
     // MARK: - 顶栏
@@ -372,9 +382,6 @@ struct AssistantView: View {
                         } else {
                             earlierMessagesButton
                             ForEach(mountedMessages) { messageRow($0) }
-                            if model.messages.last?.role == .assistant {
-                                followUpsView
-                            }
                         }
                         Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
@@ -400,7 +407,7 @@ struct AssistantView: View {
                             contentHeight: context.geometry.contentSize.height)
                     }
                 }
-                // 尾部签名：把「尾消息 id / 正文长度 / 工具卡状态 / 追问」四路变化
+                // 尾部签名：把「尾消息 id / 正文长度 / 工具卡状态」三路变化
                 // 合成一个 Equatable 值，一个 onChange 顶掉原来的五个。原先每个
                 // onChange 都在 ScrollView 上挂一个 AttributeGraph 节点、各存一份
                 // 旧值（其中 toolCalls 还是数组），而它们的动作完全相同。
@@ -416,11 +423,6 @@ struct AssistantView: View {
                     scheduleScrollToBottom(proxy)
                     if old == .streaming && now != .streaming {
                         AccessibilityNotification.Announcement("回答已完成").post()
-                    }
-                    let wasActive = old == .streaming || old == .running
-                    let isSettled = now == .idle || now == .awaitingApproval
-                    if wasActive, isSettled, model.messages.last?.role == .assistant {
-                        model.refreshFollowUps(serverContext: serverContext)
                     }
                 }
                 .onDisappear {
@@ -454,7 +456,7 @@ struct AssistantView: View {
                 Text("让 Agent 接手下一步")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(UD.text)
-                Text("描述目标即可。Agent 会结合当前服务器上下文分析问题，并在运行命令前等待你的确认。")
+                Text("描述目标即可。Agent 会结合当前服务器上下文分析问题，按所选档位审批命令，敏感操作仍需你确认。")
                     .font(.system(size: 12.5))
                     .lineSpacing(3)
                     .foregroundStyle(UD.text3)
@@ -507,71 +509,6 @@ struct AssistantView: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
-    private var followUpsView: some View {
-        if model.state != .streaming, model.state != .running {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(UD.accent)
-                    Text("下一步")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(UD.text4)
-                    Spacer(minLength: 8)
-                    Button { model.refreshFollowUps(serverContext: serverContext) } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 9.5, weight: .medium))
-                            .foregroundStyle(UD.text3)
-                            .frame(width: 22, height: 22)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(UD.uw03))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.followUpsLoading)
-                    .help("换一批建议")
-                }
-
-                if model.followUpsLoading {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.small)
-                        Text("正在生成建议")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(UD.text3)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 32)
-                } else {
-                    ForEach(model.followUps, id: \.self) { suggestion in
-                        Button { model.input = suggestion } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(UD.accent)
-                                Text(suggestion)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(UD.text2)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10)
-                            .frame(height: 31)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(UD.uw03))
-                            .contentShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onAppear {
-                if (model.state == .idle || model.state == .awaitingApproval),
-                   model.followUps.isEmpty, !model.followUpsLoading {
-                    model.refreshFollowUps(serverContext: serverContext)
-                }
-            }
-        }
     }
 
     private static let bottomAnchorID = "assistant.bottom"
@@ -709,6 +646,9 @@ struct AssistantView: View {
                     onRun: { Task { await model.approveAndRun(id: call.id) } },
                     onSkip: { Task { await model.skip(id: call.id) } }
                 )
+                if let summary = model.approvalSummary(for: call) {
+                    Text(summary).font(.caption).foregroundStyle(UD.text3)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -790,15 +730,23 @@ struct AssistantView: View {
         .accessibilityAction(named: "移除") { model.removeQueued(id: item.id) }
     }
 
+    @ViewBuilder
     private var inputBar: some View {
+        AgentStopControl(model: model)
+            .padding(.horizontal, 10)
         UDComposer(
             text: $model.input,
-            placeholder: "描述目标，Agent 会分析并在使用工具前请求确认…",
+            placeholder: "描述目标，Agent 会按审批档位处理命令…",
             minLines: 2,
             queueing: model.isBusy,
             onSend: sendIfPossible,
             onAttach: attachCurrentContext,
-            modelControl: { modelPill }
+            modelControl: {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { modelPill; SafetyDial(safety: safetyBinding) }
+                    VStack(alignment: .leading, spacing: 6) { modelPill; SafetyDial(safety: safetyBinding) }
+                }
+            }
         )
         .clipShape(RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous))
         .padding(10)
@@ -854,16 +802,14 @@ struct AssistantView: View {
 
 /// A compact execution trace for one Agent tool call. It keeps command approval, progress,
 /// result disclosure, exit status, and copying in the conversation instead of a separate modal.
-/// 「贴底跟随」要监听的四路变化压成一个 Equatable 值：尾消息身份、正文长度、
-/// 尾消息的工具卡、追问。正文用 `utf8.count`（原生 Swift 字符串是 O(1)）而不是
+/// 「贴底跟随」要监听的三路变化压成一个 Equatable 值：尾消息身份、正文长度、
+/// 尾消息的工具卡。正文用 `utf8.count`（原生 Swift 字符串是 O(1)）而不是
 /// 整串——流式期间正文只增不减，长度就是忠实的变化指纹，也省掉每次 body 求值
 /// 都把一份长文本存进 onChange 的旧值里。
 private struct ChatTailSignature: Equatable {
     let lastID: UUID?
     let lastTextLength: Int
     let toolCalls: [ToolCallState]
-    let followUps: [String]
-    let followUpsLoading: Bool
 
     @MainActor
     init(_ model: AssistantModel) {
@@ -871,8 +817,6 @@ private struct ChatTailSignature: Equatable {
         lastID = last?.id
         lastTextLength = last?.text.utf8.count ?? 0
         toolCalls = last?.toolCalls ?? []
-        followUps = model.followUps
-        followUpsLoading = model.followUpsLoading
     }
 }
 

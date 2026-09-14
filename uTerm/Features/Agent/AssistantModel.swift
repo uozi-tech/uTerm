@@ -25,18 +25,60 @@ final class AssistantModel {
     /// 当前处于内联编辑态的用户消息 id（视图驱动；会话切换时清空）。
     var editingMessageID: UUID?
     var input: String = ""
-    private(set) var state: State = .idle
+    private(set) var state: State = .idle {
+        didSet {
+            if state == .awaitingApproval { scheduleAutomaticApproval() }
+            else { cancelAutomaticApproval() }
+        }
+    }
+    var approvalMode: AgentSafety = .confirm {
+        didSet {
+            guard approvalMode != oldValue else { return }
+            cancelAutomaticApproval()
+            scheduleAutomaticApproval()
+        }
+    }
+    private(set) var reviewingToolCallID: String?
+    @ObservationIgnored private var approvalTask: Task<Void, Never>?
+    @ObservationIgnored private var approvalReviewID: UUID?
+    private(set) var turnWasStopped = false
 
-    /// 「猜你想问」追问气泡：每条助手回复落定后按上下文生成（优先 LLM，回退启发式）。
-    /// 运行期纯内存，新消息 / 新会话即清空。
-    private(set) var followUps: [String] = []
-    private(set) var followUpsLoading = false
-    @ObservationIgnored private var followUpTask: Task<Void, Never>?
+    var canStop: Bool {
+        activeStream != nil || activeOperationID != nil || state == .awaitingApproval
+    }
+
+    /// Stops the conversation driver, not an already-dispatched remote process.
+    func stop() {
+        guard canStop else { return }
+        cancelAutomaticApproval()
+        let stream = activeStream
+        stream?.buffer?.flush()
+        stream?.buffer?.cancel()
+        if let stream { persistStream(stream) }
+        // Revoke ownership synchronously before cancellation can resume old tasks.
+        // Keep generation/scope so in-flight command results still reach this session.
+        activeOperationID = nil
+        activeStream = nil
+        stream?.task?.cancel()
+        queuedMessages = []
+        for mi in messages.indices {
+            for ci in messages[mi].toolCalls.indices where messages[mi].toolCalls[ci].status == .pending {
+                messages[mi].toolCalls[ci].status = .skipped
+                messages[mi].toolCalls[ci].output = "用户已停止本轮对话，命令未执行。"
+            }
+            persistToolCalls(messageID: messages[mi].id, sessionID: currentSession?.id)
+        }
+        turnWasStopped = true
+        settleVisibleState()
+    }
 
     /// 命令执行器；nil 时不向模型暴露工具，行为退化为纯文本对话（旧版）。
     /// 由工作区在 SSH 连接建立后注入；断连时置 nil。
     var executor: CommandExecutor? {
-        didSet { commandScope = UUID() }
+        didSet {
+            commandScope = UUID()
+            cancelAutomaticApproval()
+        }
     }
 
     /// 一条远端命令执行尝试结束后的通知。命令可能通过重定向、sed 等任意 shell
@@ -192,6 +234,8 @@ final class AssistantModel {
     /// Invalidate ownership before a new session can submit. Commands already sent to SSH
     /// retain their result handling, but lose permission to continue the conversation.
     private func leaveSession() {
+        cancelAutomaticApproval()
+        turnWasStopped = false
         if let stream = activeStream {
             stream.buffer?.flush()
             persistStream(stream)
@@ -205,7 +249,6 @@ final class AssistantModel {
         editingMessageID = nil
         lastServerContext = ""
         lastTurnContext = nil
-        clearFollowUps()
         state = .idle
     }
 
@@ -293,11 +336,11 @@ final class AssistantModel {
     private func dispatch(prompt: String, serverContext: String) async {
         guard !isDisposed, !Task.isCancelled else { return }
         guard let ctx = resolvedTurnContext() else { return }
+        turnWasStopped = false
         lastTurnContext = ctx
         lastServerContext = serverContext
         let userMessage = ChatMessage(role: .user, text: prompt)
         messages.append(userMessage)
-        clearFollowUps()   // 新用户输入 → 旧追问作废
         let session = ensureSession(firstPrompt: prompt)
         persist(userMessage, in: session)
         await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: session?.id)
@@ -411,6 +454,65 @@ final class AssistantModel {
         publishStream(operation)
     }
 
+    // MARK: - 独立 AI 审批
+
+    func approvalSummary(for call: ToolCallState) -> String? {
+        if reviewingToolCallID == call.id { return "AI 正在审批，仍可手动运行或跳过" }
+        guard let reason = call.approvalReason else { return nil }
+        return (call.approvedByAI == true ? "AI 已批准：" : "需人工确认：") + reason
+    }
+
+    private func cancelAutomaticApproval() {
+        approvalReviewID = nil
+        reviewingToolCallID = nil
+        approvalTask?.cancel()
+        approvalTask = nil
+    }
+
+    private func scheduleAutomaticApproval() {
+        guard !isDisposed, state == .awaitingApproval, approvalMode != .confirm,
+              approvalTask == nil, executor != nil,
+              let message = messages.first(where: { $0.toolCalls.contains { $0.status == .pending } }),
+              let call = message.toolCalls.first(where: { $0.status == .pending }),
+              call.approvalReason == nil else { return }
+        let reviewID = UUID()
+        let expectedGeneration = generation
+        let expectedScope = commandScope
+        let expectedMode = approvalMode
+        let request = AgentToolApproval.Request(
+            id: reviewID.uuidString, toolName: call.name, command: call.command,
+            userIntent: messages.filter { $0.role == .user }.suffix(3).map(\.text).joined(separator: "\n"),
+            context: lastServerContext,
+            mode: approvalMode == .readAuto ? .readOnly : .standard)
+        approvalReviewID = reviewID
+        reviewingToolCallID = call.id
+        approvalTask = Task { [weak self] in
+            guard let self else { return }
+            let context = self.lastTurnContext ?? self.resolvedTurnContext()
+            let reviewClient = context?.client
+            let reviewConfig = context?.config
+            let decision = await AgentToolApproval.evaluate(request) { system, prompt in
+                guard let reviewClient, let reviewConfig else { throw LLMClientError.invalidResponse }
+                return try await reviewToolApproval(client: reviewClient, config: reviewConfig,
+                                                    system: system, prompt: prompt)
+            }
+            guard !Task.isCancelled, !self.isDisposed, self.approvalReviewID == reviewID,
+                  self.generation == expectedGeneration, self.commandScope == expectedScope,
+                  self.approvalMode == expectedMode, self.state == .awaitingApproval,
+                  let (mi, ci) = self.locate(call.id), self.messages[mi].id == message.id,
+                  self.messages[mi].toolCalls[ci] == call else { return }
+            self.messages[mi].toolCalls[ci].approvalReason = decision.reason
+            self.messages[mi].toolCalls[ci].approvedByAI = decision.approved
+            self.persistToolCalls(messageID: message.id, sessionID: self.currentSession?.id)
+            // Release review ownership before execution changes state, so it cannot
+            // cancel its own tool driver. No suspension between recheck and dispatch.
+            self.approvalTask = nil
+            self.approvalReviewID = nil
+            self.reviewingToolCallID = nil
+            if decision.approved { await self.approveAndRun(id: call.id) }
+        }
+    }
+
     // MARK: - 工具调用：批准 / 跳过 / 执行 / 续轮
 
     /// 批准并执行某条工具调用；全部 resolved 后自动续轮。
@@ -461,6 +563,7 @@ final class AssistantModel {
     func skip(id: String) async {
         // 同 approveAndRun：仅「待批准」态放行，挡住流式/执行中期间的重入。
         guard !isDisposed, !Task.isCancelled, state == .awaitingApproval else { return }
+        cancelAutomaticApproval()
         guard let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
         messages[mi].toolCalls[ci].status = .skipped
@@ -557,133 +660,6 @@ final class AssistantModel {
             try? modelContext?.save()
         }
         await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: session?.id)
-    }
-
-    // MARK: - 「猜你想问」动态追问
-
-    /// 刷新追问气泡：取消上一次未完成生成，按当前对话重新生成。仅当最后一条是助手时
-    /// 有意义（否则清空）。「换一批」与「回复落定」均调用此入口。
-    func refreshFollowUps(serverContext: String) {
-        followUpTask?.cancel()
-        guard !isDisposed else { return }
-        let expectedGeneration = generation
-        guard messages.last?.role == .assistant else {
-            followUps = []; followUpsLoading = false; return
-        }
-        followUps = []
-        followUpsLoading = true
-        let snapshot = messages
-        followUpTask = Task { [weak self] in
-            guard let self else { return }
-            let result = await self.generateFollowUps(from: snapshot, serverContext: serverContext)
-            guard !Task.isCancelled, !self.isDisposed, self.generation == expectedGeneration else { return }
-            self.followUps = result
-            self.followUpsLoading = false
-        }
-    }
-
-    /// 清空追问（新消息 / 新会话时调用）。
-    private func clearFollowUps() {
-        followUpTask?.cancel()
-        followUpTask = nil
-        followUps = []
-        followUpsLoading = false
-    }
-
-    /// 生成追问：优先 LLM（复用现有 client，单轮收集文本），失败 / 离线回退启发式。
-    private func generateFollowUps(from msgs: [ChatMessage], serverContext: String) async -> [String] {
-        if let llm = await llmFollowUps(from: msgs, serverContext: serverContext), !llm.isEmpty {
-            return Array(llm.prefix(3))
-        }
-        return Self.heuristicFollowUps(msgs)
-    }
-
-    /// 调一次 LLM 让其产出 3 条追问的 JSON 数组。**不动 `state`**（与正轮解耦）：
-    /// 缺 provider/key 或解析失败均回退 nil → 上层走启发式。
-    private func llmFollowUps(from msgs: [ChatMessage], serverContext: String) async -> [String]? {
-        guard let provider = activeProvider,
-              let key = keyOverride ?? keychain.load(for: provider.id),
-              let baseURL = resolveBaseURL(for: provider) else { return nil }
-        let recent = msgs.suffix(5).map { m -> String in
-            let who = m.role == .user ? "用户" : "Agent"
-            let body = m.text.isEmpty
-                ? (m.toolCalls.first.map { "给出命令：\($0.command)" } ?? "")
-                : m.text
-            return "\(who)：\(body.prefix(200))"
-        }.joined(separator: "\n")
-        var system = "你是 SSH 运维终端 uTerm 的助手。"
-        if !serverContext.isEmpty { system += "\n当前上下文：\(serverContext)" }
-        let user = """
-        基于以下对话，猜测用户接下来最可能想问的 3 条追问。要求：贴合当前运维场景、\
-        每条不超过 12 个汉字、口语化、可直接作为下一句输入。只输出 JSON 字符串数组，不要任何解释。
-
-        对话：
-        \(recent)
-        """
-        var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
-        config.tools = []
-        config.streamIdleTimeout = streamIdleTimeout
-        let client = clientOverride ?? LLMClientFactory.make(for: provider)
-        var acc = ""
-        do {
-            let events = withIdleTimeout(client.stream(
-                messages: [ChatMessage(role: .user, text: user)],
-                system: system, config: config),
-                timeout: config.streamIdleTimeout)
-            for try await event in events {
-                if Task.isCancelled { return nil }
-                if case .text(let delta) = event { acc += delta }
-            }
-        } catch {
-            return nil
-        }
-        return Self.parseJSONArray(acc)
-    }
-
-    /// 从模型输出里抠出第一个 JSON 字符串数组（容忍前后说明 / ``` 包裹）。
-    nonisolated static func parseJSONArray(_ raw: String) -> [String]? {
-        guard let start = raw.firstIndex(of: "["),
-              let end = raw.lastIndex(of: "]"), start < end else { return nil }
-        let slice = String(raw[start...end])
-        guard let data = slice.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return nil }
-        let out = arr.compactMap { $0 as? String }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return out.isEmpty ? nil : out
-    }
-
-    /// 启发式回退：读最近对话的关键词 + 命令卡状态路由到追问池，去重取前 3。
-    /// 镜像原型 `followUpHeuristic`（去掉我们暂无的 plan/diff 卡分支）。
-    nonisolated static func heuristicFollowUps(_ msgs: [ChatMessage]) -> [String] {
-        let recent = Array(msgs.suffix(4))
-        let blob = recent.map { m -> String in
-            m.text.isEmpty
-                ? m.toolCalls.map { ($0.explanation ?? "") + " " + $0.command }.joined(separator: " ")
-                : m.text
-        }.joined(separator: "  ")
-        func has(_ pattern: String) -> Bool {
-            blob.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
-        }
-        var pools: [String] = []
-        let hasPending = recent.contains { $0.toolCalls.contains { $0.status == .pending } }
-        let hasDone = recent.contains { $0.toolCalls.contains { $0.status == .done } }
-        if hasPending { pools += ["先看看会影响什么", "执行后怎么验证"] }
-        if hasDone { pools += ["解释下这段输出", "导出结果到文件"] }
-        if has("磁盘|disk|分区|docker|/var/log|日志|清理") { pools += ["还有哪些大文件", "清理后还剩多少空间", "设置磁盘告警阈值"] }
-        if has("内存|mem|oom") { pools += ["哪个进程最吃内存", "要不要加 swap"] }
-        if has("cpu|负载|load") { pools += ["看看是哪个进程", "近一小时负载曲线"] }
-        if has("nginx|502|upstream|gzip|keepalive|反向代理") { pools += ["看 nginx 错误日志", "压测健康检查", "加上访问限流"] }
-        if has("重启|restart|部署|deploy|回滚|reload") { pools += ["确认服务已起来", "看看启动日志", "回滚到上一版本"] }
-        pools += ["当前服务器健康度", "列出最近的告警", "生成一份巡检报告"]
-
-        var seen = Set<String>()
-        var out: [String] = []
-        for s in pools where !seen.contains(s) {
-            seen.insert(s); out.append(s)
-            if out.count >= 3 { break }
-        }
-        return out
     }
 
     // MARK: - 持久化（modelContext 为 nil 时全部 no-op）

@@ -73,8 +73,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
 
     /// 需要改动开关 `control.allowMutations`：一切「会改远端、写本地信任库或触发副作用」的动作。
     ///
-    /// **`run` 系列在内**：shell 命令无法可靠分类读写（`AgentSafety.readAuto` 至今没实现
-    /// 只读白名单就是这个原因），假的只读开关比没有更糟。
+    /// **`run` 系列在内**：任意 shell 命令不能视作只读；Agent 的保守审批规则
+    /// 不改变 CLI 的写操作授权边界。
     public var requiresMutation: Bool {
         switch self {
         case .trust, .run, .runMany, .quickRun,

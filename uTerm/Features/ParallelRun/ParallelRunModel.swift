@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 import SwiftData
 
@@ -286,7 +287,7 @@ final class ParallelRunModel {
     /// 回喂；按安全档位决定**自动执行**还是**仅建议**。模型停止调用工具并给出结论 JSON 即收束。
     private func runAgent(at index: Int, target: ExecTarget, doctor: ParallelAIDoctor,
                          ranInitial: Bool, initialOutput: String, initialExit: Int?) async {
-        let autoExecute = safety.autoApprovesPending
+        let autoExecute = safety != .confirm
         // 跑过初始命令且失败 → 诊断中；否则（无初始命令）显「执行中」直到 Agent 下发命令。
         states[index].diagnosing = ranInitial && (initialExit != 0)
 
@@ -330,6 +331,22 @@ final class ParallelRunModel {
                 guard !st.command.isEmpty else {
                     st.status = .failed; st.output = "(空命令)"; resolvedCalls.append(st); continue
                 }
+                let request = AgentToolApproval.Request(
+                    id: UUID().uuidString, toolName: st.name, command: st.command,
+                    userIntent: goalText, context: "目标服务器：\(target.name)",
+                    mode: safety == .readAuto ? .readOnly : .standard)
+                let decision = await AgentToolApproval.evaluate(request) { system, prompt in
+                    let config = LLMRequestConfig(model: doctor.model, baseURL: doctor.baseURL, apiKey: doctor.apiKey)
+                    return try await reviewToolApproval(client: doctor.client, config: config,
+                                                        system: system, prompt: prompt)
+                }
+                guard decision.approved, !Task.isCancelled else {
+                    states[index].steps.append("需人工确认：" + stepLabel(st) + "；" + decision.reason)
+                    conclusion = (status: "failed", summary: decision.reason)
+                    stoppedForSafety = true
+                    break
+                }
+                states[index].steps.append("AI 已批准：" + decision.reason)
                 states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
                 let outcome = await Self.execBounded(executor: target.executor, command: st.command)
                 let cmdExit = outcome.result?.exitCode
@@ -352,6 +369,7 @@ final class ParallelRunModel {
                 states[index].steps.append("执行 \(stepLabel(st)) → 退出码 \(exitText(cmdExit))")
                 resolvedCalls.append(st)
             }
+            if stoppedForSafety { break }
             convo.append(ChatMessage(role: .assistant, text: turn.text, toolCalls: resolvedCalls))
         }
 

@@ -13,6 +13,8 @@ nonisolated struct ToolCallState: Equatable, Sendable, Codable, Identifiable {
     var status: Status
     var output: String?
     var exitCode: Int?
+    var approvalReason: String?
+    var approvedByAI: Bool?
 
     init(id: String, name: String, command: String, explanation: String? = nil,
          status: Status = .pending, output: String? = nil, exitCode: Int? = nil) {

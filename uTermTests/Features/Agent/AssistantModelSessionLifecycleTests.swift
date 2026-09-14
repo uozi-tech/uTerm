@@ -29,6 +29,65 @@ final class AssistantModelSessionLifecycleTests: XCTestCase {
         }
     }
 
+    func testStopPreservesPartialReplyAndAllowsNewTurnWithoutDrainingQueue() async throws {
+        let client = SessionLLMClient()
+        let model = try model(client)
+        let send = Task { await model.submit(text: "first", serverContext: "") }
+        try await waitUntil { client.count == 1 }
+        client.yield(0, events: [.text("partial")])
+        try await waitUntil { model.messages.last?.text == "partial" }
+        await model.submit(text: "queued", serverContext: "")
+        model.stop()
+        client.finish(0, events: [.text("late")])
+        await send.value
+        XCTAssertEqual(model.messages.last?.text, "partial")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertFalse(model.canStop)
+        XCTAssertTrue(model.turnWasStopped)
+        let next = Task { await model.submit(text: "new", serverContext: "") }
+        try await waitUntil { client.count == 2 }
+        client.finish(1, events: [.text("new answer")])
+        await next.value
+        XCTAssertEqual(model.messages.last?.text, "new answer")
+        XCTAssertFalse(model.turnWasStopped)
+    }
+
+    func testStopSkipsEveryPendingToolWithoutContinuing() async throws {
+        let client = SessionLLMClient()
+        let model = try model(client)
+        let executor = SessionCommandExecutor()
+        model.executor = executor
+        let send = Task { await model.submit(text: "commands", serverContext: "") }
+        try await waitUntil { client.count == 1 }
+        client.finish(0, events: ["a", "b"].map {
+            .toolCall(LLMToolCall(id: $0, name: "run_command", argumentsJSON: #"{"command":"ls"}"#))
+        })
+        await send.value
+        model.stop()
+        XCTAssertEqual(model.messages.last?.toolCalls.map(\.status), [.skipped, .skipped])
+        XCTAssertEqual(model.state, .idle)
+        await model.approveAndRun(id: "a")
+        XCTAssertEqual(executor.count, 0)
+        XCTAssertEqual(client.count, 1)
+    }
+
+    func testStopDuringCommandKeepsResultButPreventsAutomaticContinuation() async throws {
+        let client = SessionLLMClient()
+        let model = try model(client)
+        let executor = SessionCommandExecutor()
+        let driver = try await beginCommand(model, client, executor)
+        model.stop()
+        XCTAssertEqual(model.state, .running)
+        XCTAssertFalse(model.canStop)
+        executor.finish(.success(CommandResult(output: "actual result", exitCode: 0)))
+        await driver.value
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.output, "actual result")
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.status, .done)
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertEqual(client.count, 1)
+    }
+
     private func beginCommand(_ model: AssistantModel, _ client: SessionLLMClient,
                               _ executor: SessionCommandExecutor) async throws -> Task<Void, Never> {
         model.executor = executor
@@ -296,23 +355,6 @@ final class AssistantModelSessionLifecycleTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
         XCTAssertEqual(refreshes, 0)
         XCTAssertEqual(client.count, 1)
-    }
-
-    func testSessionSwitchCancelsFollowUpGeneration() async throws {
-        let client = SessionLLMClient()
-        let model = try model(client)
-        let send = Task { await model.submit(text: "question", serverContext: "") }
-        try await waitUntil { client.count == 1 }
-        client.finish(0, events: [.text("answer")])
-        await send.value
-        model.refreshFollowUps(serverContext: "")
-        try await waitUntil { client.count == 2 }
-        model.startNewSession()
-        try await waitUntil { client.cancelled.contains(1) }
-        client.finish(1, events: [.text(#"["stale follow-up"]"#)])
-        XCTAssertFalse(model.followUpsLoading)
-        XCTAssertTrue(model.followUps.isEmpty)
-        XCTAssertEqual(model.state, .idle)
     }
 
     func testOrphanedRunningRecordBecomesUnknownWithoutRerunning() async throws {
