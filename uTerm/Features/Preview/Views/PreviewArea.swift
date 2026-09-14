@@ -18,7 +18,7 @@ struct PreviewArea: View {
     let onRequestClose: (UUID) -> Void
 
     /// 标签条高度。沿用改造前预览区的 36pt（与下方终端标签条同高）。
-    private static let stripHeight: CGFloat = 36
+    private static let stripHeight = WorkspacePaneHeaderLayout.contentHeight
 
     var body: some View {
         // 焦点请求与「每个标签所在组的标签顺序」都在**区域这一层**读掉、捕获进闭包。

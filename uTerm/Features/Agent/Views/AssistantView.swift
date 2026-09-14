@@ -16,11 +16,9 @@ enum AssistantInputBarLayout {
     nonisolated static let sendContentAlignment: VerticalAlignment = .center
 }
 
-/// Agent 顶栏几何。高度与文件浏览器路径栏（`FileBrowserContent.header`）、编辑器
-/// tab 栏（`PreviewTabBar`）、终端 tab 栏（`TerminalTabBar`）统一为 36，让工作区
-/// 三栏顶部落在同一条基线上。
+/// 与文件路径栏、UPaneGroupArea 标签栏统一：36pt 内容 + 1pt 分隔线。
 enum AssistantHeaderLayout {
-    nonisolated static let height: CGFloat = 36
+    nonisolated static let height = WorkspacePaneHeaderLayout.totalHeight
     /// 会话历史下拉的顶部内边距：顶栏高 + 2pt 间隙。
     nonisolated static let dropdownTopInset: CGFloat = height + 2
 }
@@ -132,7 +130,7 @@ struct AssistantView: View {
 
     // MARK: - 顶栏
 
-    private var header: some View {
+    var header: some View {
         HStack(spacing: 9) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -179,12 +177,8 @@ struct AssistantView: View {
             .help("新建对话")
         }
         .padding(.horizontal, 10)
-        // 与左侧文件浏览器路径栏 / 编辑器 tab 栏同高（36），三条顶栏在一条水平线上。
-        .frame(height: AssistantHeaderLayout.height)
+        .modifier(WorkspacePaneHeader())
         .background(UD.panel)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
     }
 
     // MARK: - 模型选择胶囊（输入区底栏，Cursor 风格 ● <模型> ▾）

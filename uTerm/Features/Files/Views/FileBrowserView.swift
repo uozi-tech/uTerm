@@ -190,10 +190,7 @@ struct FileBrowserContent: View {
             .accessibilityLabel("上传文件到当前目录")
         }
         .padding(.horizontal, 10)
-        .frame(height: 36)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
+        .modifier(WorkspacePaneHeader())
     }
 
     private var sortPopover: some View {
