@@ -12,17 +12,39 @@ struct CLISettingsView: View {
     @AppStorage("control.linkToLocalBin") private var linkToLocalBin = false
 
     @Environment(ControlSettings.self) private var settings
+    @Environment(BackgroundServiceSettings.self) private var backgroundSettings
     @State private var skills = SkillManagerModel()
     @State private var copied = false
 
     var body: some View {
         SettingsScroll {
             interfaceGroup
+            backgroundGroup
             skillsGroup
         }
         .task {
             await skills.load()
             await skills.reconcileBinLink(enabled: linkToLocalBin)
+        }
+    }
+
+    private var backgroundGroup: some View {
+        SettingsGroup(title: "后台服务") {
+            SettingsRow(label: "登录后在后台启动", hint: "登录 macOS 后启动 uTerm 的本机服务，不弹窗口，也不显示 Dock 图标。") {
+                UDToggle(Binding(
+                    get: { backgroundSettings.launchAtLogin },
+                    set: { backgroundSettings.launchAtLogin = $0 }
+                ))
+            }
+            SettingsRow(label: "允许 CLI 按需启动", hint: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪。") {
+                UDToggle(Binding(
+                    get: { backgroundSettings.allowOnDemandLaunch },
+                    set: { backgroundSettings.allowOnDemandLaunch = $0 }
+                ))
+            }
+            if let error = backgroundSettings.loginItemError {
+                Text(error).font(.system(size: 11.5)).foregroundStyle(UD.danger)
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import AppKit
 
 @main
 struct uTermApp: App {
+    @NSApplicationDelegateAdaptor(UTermLifecycleDelegate.self) private var lifecycleDelegate
     @AppStorage("appearancePreference")
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
@@ -24,9 +25,10 @@ struct uTermApp: App {
     /// 信任弹窗能在任一可见窗口里解决 —— `.hostKeySheet` 同时挂在 Welcome（默认启动模式
     /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
     @State private var launchRelay = HostKeyChallengeRelay()
-    /// 命令行接口（本机 IPC）的两级门禁开关。`observe` 在 `bootstrapAppServices()`
-    /// 里接上 `ControlServer` 的起停（由第一个出现的窗口触发，不绑定某个具体窗口）。
+    /// 命令行接口（本机 IPC）的两级门禁开关。进程 init 即接上 `ControlServer`，
+    /// 因此无窗口后台模式也能提供 run/SFTP/转发。
     @State private var controlSettings = ControlSettings()
+    @State private var backgroundSettings = BackgroundServiceSettings()
     /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
     /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
     @State private var terminalRegistry = TerminalSessionRegistry()
@@ -83,18 +85,34 @@ struct uTermApp: App {
         // This matters for stateful services such as AccentState, which initialize
         // from UserDefaults once rather than observing it continuously.
         preferences.start()
+
+        // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
+        // because `openWindow` is a scene environment action; all headless operations are ready now.
+        if !BackgroundLaunchMode.isRunningInTestHost {
+            startControlInterface()
+            LaunchForwardingBootstrap.start(
+                modelContainer: modelContainer,
+                model: globalForwarding,
+                coordinator: forwardingCoordinator,
+                relay: launchRelay
+            )
+            let server = controlServer
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                server.stop()
+                Task { await ControlConnectionPool.shared.disconnectAll() }
+            }
+        }
     }
 
-    /// 应用级服务的唯一启动点。由**任意**第一个出现的窗口触发（`bootstrapsAppServices`），
-    /// `appServicesGate` 保证整个进程只跑一次。
-    ///
-    /// 不要把这些搬回某一个具体窗口的 `.task` —— Welcome 窗不一定出现（启动行为
-    /// 「上次会话 / 上次主机」会 dismiss 它，状态恢复也可能只恢复工作区窗口），
-    /// 那时命令行接口从没接上，设置里开开关毫无反应。
+    /// 安装必须从 Scene 环境取得的开窗口入口。进程级 IPC、局域网同步与自动转发已经
+    /// 在 init 启动；这里不承载后台服务 readiness。
     @MainActor
     private func bootstrapAppServices() {
         appServicesGate.install {
-            startControlInterface()
             installTerminalWindowOpener()
         }
     }
@@ -106,6 +124,7 @@ struct uTermApp: App {
     private func installTerminalWindowOpener() {
         let open = openWindow
         terminalRegistry.openTerminalWindow = { serverID in
+            UTermLifecycleDelegate.showGUI()
             let windowID = UUID()
             open(value: TerminalWindowID(id: windowID, serverID: serverID))
             return windowID
@@ -151,15 +170,18 @@ struct uTermApp: App {
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
-                // 注入转发协调器 + 全局自启编排器 + 共享 host-key 中转：
-                // 「随 uTerm 启动」的隧道由 Welcome 触发（它是默认常驻窗口）。
-                // 应用级服务另走 `bootstrapsAppServices`，不依赖这个窗口存在。
+                // 注入转发协调器 + 全局自启编排器 + 共享 host-key 中转。
+                // 自动转发由 App init 触发，Welcome 只承接需要用户确认的 host-key sheet。
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
                 .environment(launchRelay)
                 .environment(controlSettings)
+                .environment(backgroundSettings)
                 .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
+                .onReceive(NotificationCenter.default.publisher(for: .showWelcomeWindow)) { _ in
+                    openWindow(id: "welcome")
+                }
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
@@ -167,6 +189,7 @@ struct uTermApp: App {
         // 暗夜配色」的根因。与 workspace / SFTP 窗口一致。
         .windowStyle(.hiddenTitleBar)
         .routesNewWindowToWelcome()
+        .commands { BackgroundLifecycleCommands() }
 
         // 密钥管理 —— 单实例独立窗口（设计稿 keys.jsx）。从 Welcome 工具栏或
         // 新建服务器表单的「打开密钥管理…」用 openWindow(id:"keys") 打开。
@@ -363,6 +386,7 @@ struct uTermApp: App {
                 .appLockGate(lockModel)
                 .environment(appUpdater)
                 .environment(controlSettings)
+                .environment(backgroundSettings)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)

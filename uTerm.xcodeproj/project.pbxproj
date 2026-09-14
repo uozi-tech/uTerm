@@ -12,6 +12,7 @@
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
+		11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC2B686538A588EAD56ECE6E /* Cocoa.framework */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
@@ -28,6 +29,7 @@
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
+		A61DF38274718E88C0968BB9 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29DE64AF6B8DE16B490ADC2 /* main.swift */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
 		AD0CF0F0F0F0F0F0F0F00002 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = AD0CF0F0F0F0F0F0F0F00001 /* Markdown */; };
 		B1C2D3E4F5A6789BCDEF0002 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5A6789BCDEF0001 /* _CryptoExtras */; };
@@ -43,6 +45,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		25FE8A04CCE470F978BD4E34 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 26474F753450F16288097CFA;
+			remoteInfo = uTermBackgroundLauncher;
+		};
 		B0000000000000000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
@@ -61,17 +70,21 @@
 
 /* Begin PBXFileReference section */
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000C /* uTermMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFCFCFCF000000000000F0F0 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = VersionMobile.xcconfig; sourceTree = "<group>"; };
+		DC2B686538A588EAD56ECE6E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		F29DE64AF6B8DE16B490ADC2 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = uTermBackgroundLauncher/main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		10C0DE0000000000000000C0 /* Exceptions for "uTerm" folder in "uTermMobile" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				App/BackgroundServiceLifecycle.swift,
 				App/AppCommands.swift,
 				App/AppEnvironmentModifiers.swift,
 				App/AppModelContainer.swift,
@@ -279,6 +292,8 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		10C0DE0000000000000000B0 /* uTermMobile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = uTermMobile;
 			sourceTree = "<group>";
 		};
@@ -292,11 +307,15 @@
 		};
 		B00000000000000000000002 /* uTermTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = uTermTests;
 			sourceTree = "<group>";
 		};
 		B10000000000000000000002 /* uTermMobileTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = uTermMobileTests;
 			sourceTree = "<group>";
 		};
@@ -315,6 +334,14 @@
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
 				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
 				10C0DE0000000000000000E5 /* Markdown in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		39F9BD8A4712664B4F89D8CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -367,6 +394,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		5AAF76DA7202A367F59523DA /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				DC2B686538A588EAD56ECE6E /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
 		85D6BEE62FBC4E7E00FC90D8 = {
 			isa = PBXGroup;
 			children = (
@@ -376,6 +411,8 @@
 				B00000000000000000000002 /* uTermTests */,
 				B10000000000000000000002 /* uTermMobileTests */,
 				85D6BEF02FBC4E7E00FC90D8 /* Products */,
+				BA95191881030915DA025947 /* Frameworks */,
+				918FC87C7A998A6853AEEDED /* uTermBackgroundLauncher */,
 			);
 			sourceTree = "<group>";
 		};
@@ -386,8 +423,25 @@
 				B0000000000000000000000C /* uTermTests.xctest */,
 				10C0DE0000000000000000A6 /* uTermMobile.app */,
 				B1000000000000000000000C /* uTermMobileTests.xctest */,
+				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		918FC87C7A998A6853AEEDED /* uTermBackgroundLauncher */ = {
+			isa = PBXGroup;
+			children = (
+				F29DE64AF6B8DE16B490ADC2 /* main.swift */,
+			);
+			name = uTermBackgroundLauncher;
+			sourceTree = "<group>";
+		};
+		BA95191881030915DA025947 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				5AAF76DA7202A367F59523DA /* OS X */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		CFCFCFCF000000000000F0F2 /* Config */ = {
@@ -434,6 +488,23 @@
 			productReference = 10C0DE0000000000000000A6 /* uTermMobile.app */;
 			productType = "com.apple.product-type.application";
 		};
+		26474F753450F16288097CFA /* uTermBackgroundLauncher */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 38DAF6DF7E49EC6E3724FA69 /* Build configuration list for PBXNativeTarget "uTermBackgroundLauncher" */;
+			buildPhases = (
+				5E09067B168B0D2AE630D18D /* Sources */,
+				39F9BD8A4712664B4F89D8CD /* Frameworks */,
+				707C96F94F03E9A4A92FC83D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = uTermBackgroundLauncher;
+			productName = uTermBackgroundLauncher;
+			productReference = 1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */;
+			productType = "com.apple.product-type.application";
+		};
 		85D6BEEE2FBC4E7E00FC90D8 /* uTerm */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 85D6BEFA2FBC4E7E00FC90D8 /* Build configuration list for PBXNativeTarget "uTerm" */;
@@ -443,10 +514,12 @@
 				85D6BEED2FBC4E7E00FC90D8 /* Resources */,
 				CFCFCFCF000000000000F0F1 /* Set Build Number */,
 				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */,
+				DBBA0F7D575A176953DE3806 /* Embed Background Login Item */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				75CD47CBD2BFF61B882B9D38 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
@@ -563,12 +636,12 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */,
-				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */,
+				A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "SwiftTerm" */,
 				C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */,
 				SPRK00000000000000000000 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */,
 				B1C2D3E4F5A6789BCDEF0000 /* XCRemoteSwiftPackageReference "swift-crypto" */,
-				CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */,
+				CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "CodeEditTextView" */,
 				AD0CF0F0F0F0F0F0F0F00000 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				TC000000000000000000000 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */,
 				TC000200000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-go" */,
@@ -577,7 +650,7 @@
 				TC000700000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-bash" */,
 				TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */,
 				DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
-				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
+				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -588,12 +661,20 @@
 				10C0DE0000000000000000A1 /* uTermMobile */,
 				B00000000000000000000006 /* uTermTests */,
 				B10000000000000000000006 /* uTermMobileTests */,
+				26474F753450F16288097CFA /* uTermBackgroundLauncher */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		10C0DE0000000000000000A5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		707C96F94F03E9A4A92FC83D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -684,6 +765,25 @@
 			shellPath = /bin/sh;
 			shellScript = "set -e\nsrc=\"${SRCROOT}/scripts/utermctl\"\ndst=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/utermctl\"\nmkdir -p \"$(dirname \"$dst\")\"\n/bin/cp -f \"$src\" \"$dst\"\n/bin/chmod 755 \"$dst\"\n";
 		};
+		DBBA0F7D575A176953DE3806 /* Embed Background Login Item */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Background Login Item";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nsource_app=\"${BUILT_PRODUCTS_DIR}/uTermBackgroundLauncher.app\"\ndestination=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LoginItems/uTermBackgroundLauncher.app\"\n/bin/mkdir -p \"$(dirname \"$destination\")\"\n/usr/bin/ditto \"$source_app\" \"$destination\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -691,6 +791,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5E09067B168B0D2AE630D18D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A61DF38274718E88C0968BB9 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -718,6 +826,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		75CD47CBD2BFF61B882B9D38 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = uTermBackgroundLauncher;
+			target = 26474F753450F16288097CFA /* uTermBackgroundLauncher */;
+			targetProxy = 25FE8A04CCE470F978BD4E34 /* PBXContainerItemProxy */;
+		};
 		B0000000000000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
@@ -1021,6 +1135,32 @@
 			};
 			name = Release;
 		};
+		8BB642B316670BCD01317250 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = uTermBackgroundLauncher;
+				INFOPLIST_KEY_LSUIElement = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.BackgroundLauncher;
+				PRODUCT_NAME = uTermBackgroundLauncher;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
 		B00000000000000000000007 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1119,6 +1259,32 @@
 			};
 			name = Release;
 		};
+		BA003D6C6D052CA91B3C234D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = uTermBackgroundLauncher;
+				INFOPLIST_KEY_LSUIElement = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.BackgroundLauncher;
+				PRODUCT_NAME = uTermBackgroundLauncher;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1127,6 +1293,15 @@
 			buildConfigurations = (
 				10C0DE0000000000000000F1 /* Debug */,
 				10C0DE0000000000000000F2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		38DAF6DF7E49EC6E3724FA69 /* Build configuration list for PBXNativeTarget "uTermBackgroundLauncher" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BA003D6C6D052CA91B3C234D /* Release */,
+				8BB642B316670BCD01317250 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1170,15 +1345,15 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
+		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
 		};
-		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
+		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/SwiftTerm;
 		};
-		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */ = {
+		CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "CodeEditTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/CodeEditTextView;
 		};
@@ -1294,12 +1469,12 @@
 /* Begin XCSwiftPackageProductDependency section */
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterPython;
 		};
 		10C0DE0000000000000000D1 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
+			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
 		};
 		10C0DE0000000000000000D2 /* Citadel */ = {
@@ -1334,7 +1509,7 @@
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterINI;
 		};
 		5541424B0000000000000001 /* UAppKitBridge */ = {
@@ -1374,12 +1549,12 @@
 		};
 		7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterJavaScript;
 		};
 		A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */;
+			package = A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
 		};
 		A50000000000000000000001 /* SwiftASN1 */ = {
@@ -1389,7 +1564,7 @@
 		};
 		A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterYAML;
 		};
 		AD0CF0F0F0F0F0F0F0F00001 /* Markdown */ = {
@@ -1409,12 +1584,12 @@
 		};
 		C9011540443CD85AA784C8A9 /* TreeSitterTOML */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
+			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "tree-sitter-grammars" */;
 			productName = TreeSitterTOML;
 		};
 		CE7EF0F0F0F0F0F0F0F00001 /* CodeEditTextView */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "vendor/CodeEditTextView" */;
+			package = CE7EF0F0F0F0F0F0F0F00000 /* XCLocalSwiftPackageReference "CodeEditTextView" */;
 			productName = CodeEditTextView;
 		};
 		F69B4D721E44A1052DC55327 /* TreeSitterSwift */ = {

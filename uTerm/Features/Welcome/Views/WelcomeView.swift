@@ -18,13 +18,9 @@ struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.modelContext) private var modelContext
-    // 全局端口转发：app 启动时在此触发「随 uTerm 启动」的隧道（见全局端口转发 spec §4.1）。
-    @Environment(ForwardingCoordinator.self) private var forwardingCoordinator
-    @Environment(GlobalForwardingModel.self) private var globalForwarding
     @Environment(HostKeyChallengeRelay.self) private var launchRelay
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query private var groups: [ServerGroup]
-    @Query private var allRules: [ForwardingRule]
 
     @AppStorage("startupBehavior")
     private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
@@ -175,10 +171,6 @@ struct WelcomeView: View {
             // 是最稳定的启动钩。.restore 和 .lastHost 模式下 Welcome 闪一下
             // 后由 dismissWindow 关掉自己。
             guard startupBehaviorGate.claim() else { return }
-            // 先同步触发「随 uTerm 启动」的隧道（fire-and-forget，序列由 globalForwarding 持有），
-            // 再应用启动行为 —— .restore/.lastHost 模式下 applyStartupBehavior 会关掉 Welcome，
-            // 必须赶在关窗之前把序列踢起来。
-            triggerLaunchForwardsIfNeeded()
             await applyStartupBehavior()
         }
         .task {
@@ -369,31 +361,6 @@ struct WelcomeView: View {
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
         items.append(contentsOf: commandPaletteAccentItems())
         return items
-    }
-
-    /// 应用级自启（spec §4.1）：app 起来后跑一次，把标记「随 uTerm 启动」的规则逐条建立。
-    /// 与服务器列表做主机外键 join；孤儿规则（主机已删）被丢弃。一次性 / 空 / 总开关关闭
-    /// 的兜底都在 `GlobalForwardingModel.autoTriggerIfNeeded` 内部处理。
-    @MainActor
-    private func triggerLaunchForwardsIfNeeded() {
-        // **直接从 store 同步取**，不靠 @Query：冷启动时本 `.task` 往往跑在 @Query 回填之前，
-        // `allRules`/`allProfiles` 还是空 —— 一次性触发会被空集合白白消耗，导致「随 uTerm 启动」
-        // 永远不生效（用户报告：能开但重启不自动连）。容器在 app init 就建好、store 已打开，
-        // 直接 fetch 必然拿到已持久化的规则。
-        let context = modelContext
-        let launchRules = ForwardingRuleStore(context: context).allRules().filter(\.launchAtAppStart)
-        let profiles = (try? context.fetch(FetchDescriptor<ServerProfile>(
-            sortBy: [SortDescriptor(\.sortOrder, order: .forward)]))) ?? []
-        // 按主机分组顺序展开（主机 = sortOrder，组内 = 规则 sortOrder），与全局面板自上而下一致；
-        // 孤儿规则（主机已删）天然被丢弃。
-        let items: [GlobalForwardingModel.LaunchItem] = profiles.flatMap { profile in
-            launchRules
-                .filter { $0.serverID == profile.id }
-                .map { GlobalForwardingModel.LaunchItem(rule: $0.snapshot, server: profile) }
-        }
-        globalForwarding.autoTriggerIfNeeded(
-            items: items, coordinator: forwardingCoordinator,
-            relay: launchRelay, container: context.container)
     }
 
     /// 拖入 config 文件或 ~/.ssh 目录 → 拷进容器 staging → 解析 → 经 ImportInbox 打开向导到 review。
