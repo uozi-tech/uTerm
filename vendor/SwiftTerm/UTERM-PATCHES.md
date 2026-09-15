@@ -99,6 +99,12 @@ build tool plugin `SwiftTermBuildInfoPlugin` + 可执行 target
 唯一消费者是 `Terminal.cmdXTVERSION`（`CSI > 0 q` 的应答）。**升级 vendored 副本时，
 记得把该文件里的 `tag` / `commit` 两个常量改成新的上游 tag / commit。**
 
+## 4. Xcode 27 警告清理（与行为无关）
+
+`Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift` 两处 `memcpy(...)` 丢弃返回值，
+Xcode 27 起报未使用结果警告 → 改写成 `_ = memcpy(...)`。纯诊断层面，语义不变；上游若已
+自行处理，重放时跳过即可。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

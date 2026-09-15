@@ -155,6 +155,20 @@ bug 一直不可见；**补丁 #2 把右缘改成参差之后才暴露**：三�
 
 修法：`maxX` / `maxY` 各自独立取最大值。
 
+## 补丁 #4：Xcode 27 新警告清理（与行为无关）
+
+Xcode 27 把几条以前只是提示的诊断升成了警告，本工程按 warning 编译会吵到看不见真问题。
+四处，都只删死代码 / 显式丢弃返回值，**不改任何行为**：
+
+- `TextLine.swift`：`typesetter.typeset(...)` 的返回值 `maxWidth` 声明了却没用 → 去掉绑定。
+- `TextView+Insert.swift`：`var attachments` 从未被改写 → 改 `let`。
+- `TextView+ScrollToVisible.swift`：`let animated = false` 的 feature flag 与其恒不执行的
+  `NSAnimationContext` 分支 → 只留 `scrollView.contentView.scroll(to:)` 那条活路。
+- `TextLayoutManager+Layout.swift`：`relativeMinY` / `relativeMaxY` 只被一段注释掉的
+  `linesStartingAt(...)` 循环使用 → 连同那段注释一起删。
+
+升级重放时如果上游已自行清掉，跳过即可；本补丁没有需要保住的语义。
+
 ## 验证方法（离线、可重跑）
 
 补丁 #1 与 #2 都在热绘制路径上，公式复算容易自欺。用像素级 probe 量**真实落笔**：
@@ -199,5 +213,6 @@ product 依赖改指向本地包。`TextStory` / `swift-collections` 仍由本�
    `TextSelectionManager.swift` 里的 `cachedLineBreakFill` 存储属性）与补丁 #3（搜
    `CGRectArray+BoundingRect.swift` 里的 `$0.maxY < $1.maxY`），
    再按上面两条重做 manifest 裁剪。
-3. 更新本文件顶部的基线 tag / revision。
-4. 用各补丁的验证方法确认横向滚动与 ⌘A 选区右缘仍然正确。
+3. 补丁 #4 只是警告清理，上游若已修掉直接跳过。
+4. 更新本文件顶部的基线 tag / revision。
+5. 用各补丁的验证方法确认横向滚动与 ⌘A 选区右缘仍然正确。
