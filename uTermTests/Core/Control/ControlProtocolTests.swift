@@ -185,7 +185,11 @@ final class ControlProtocolTests: XCTestCase {
             ControlProtocol.socketURL.deletingLastPathComponent().path,
             ControlProtocol.applicationSupportDirectory.path
         )
+        #if DEBUG
+        XCTAssertEqual(ControlProtocol.socketURL.lastPathComponent, "dev.sock")
+        #else
         XCTAssertEqual(ControlProtocol.socketURL.lastPathComponent, "control.sock")
+        #endif
     }
 
     // MARK: 动作表

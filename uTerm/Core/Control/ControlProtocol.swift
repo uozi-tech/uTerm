@@ -855,14 +855,16 @@ nonisolated public enum ControlProtocol {
     /// `run-many` 的有界并发（与 `QuickCommandRunner.maxConcurrent` 对齐）。
     public static let maxParallelHosts = 6
 
-    /// `<Application Support>/uTerm/control.sock`。
-    ///
-    /// macOS 端 Debug 与 Release **都开沙盒**，所以这条路径永远落在容器里
-    /// （`~/Library/Containers/com.uozi.uTerm/Data/Library/Application Support/uTerm/`）。
-    /// 客户端仍保留两候选 + `UTERM_CONTROL_SOCKET` 环境变量覆盖，成本为零。
+    /// Debug and Release may share the same sandbox container. Keep their
+    /// listeners separate; CLI discovery continues to target Release by default.
     public static var socketURL: URL {
-        applicationSupportDirectory
-            .appending(path: "control.sock")
+        #if DEBUG
+        let filename = "dev.sock"
+        #else
+        let filename = "control.sock"
+        #endif
+        return applicationSupportDirectory
+            .appending(path: filename)
             .standardizedFileURL
     }
 
