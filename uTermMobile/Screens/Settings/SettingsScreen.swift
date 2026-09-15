@@ -10,6 +10,9 @@ struct SettingsScreen: View {
     private var appearanceRaw: String = AppearancePreference.system.rawValue
     /// 应用锁开关，与启动时读的键同源（缺键视作关）。
     @AppStorage("requireAuthAtLaunch") private var appLockOn = false
+    /// 会话保留窗口（天）。与 macOS 共用 key，可经 iCloud KVS / 局域网同步。
+    @AppStorage(ChatHistoryStore.retentionDaysKey)
+    private var chatRetentionDays = ChatHistoryStore.defaultRetentionDays
     @State private var lockUnavailable = false
     @State private var showSyncDiag = false
     @Environment(\.mAccent) private var accent
@@ -64,6 +67,7 @@ struct SettingsScreen: View {
                     appearanceGroup
                     terminalGroup
                     securityGroup
+                    historyGroup
                     LANSyncSettingsSection()
                     aboutGroup
                     copyrightFooter
@@ -198,6 +202,42 @@ struct SettingsScreen: View {
             MInsetRow(icon: "forward", label: "端口转发规则", value: "\(counts.forwards)",
                       last: true)
         }
+    }
+
+    // 历史
+    /// 保留窗口用预设菜单而不是数字输入：手机上敲数字既要弹键盘又要校验，
+    /// 而这本来就是个粗粒度选择。0 = 不清理。
+    private static let retentionOptions: [(Int, String)] = [
+        (0, "不清理"), (30, "30 天"), (90, "90 天"), (180, "180 天"), (365, "365 天"),
+    ]
+
+    private var historyGroup: some View {
+        MInsetGroup(header: "历史", footer: chatRetentionFooter) {
+            MInsetRow(icon: "clock", label: "会话保留", last: true,
+                      trailing: AnyView(
+                          Menu {
+                              ForEach(Self.retentionOptions, id: \.0) { option in
+                                  Button(option.1) { chatRetentionDays = option.0 }
+                              }
+                          } label: {
+                              HStack(spacing: 4) {
+                                  Text(chatRetentionLabel)
+                                      .font(M.sans(15)).foregroundStyle(M.text2)
+                                  MIcon(name: "chev-down", size: 11, color: M.text4)
+                              }
+                          }))
+        }
+    }
+
+    private var chatRetentionLabel: String {
+        Self.retentionOptions.first { $0.0 == chatRetentionDays }?.1
+            ?? "\(chatRetentionDays) 天"
+    }
+
+    private var chatRetentionFooter: String {
+        chatRetentionDays > 0
+            ? "超过该天数未更新的 AI 会话会在启动时清理，连同其中的消息。该设置与 Mac 同步。"
+            : "选“不清理”后会话会一直累积，并占用 iCloud 配额。"
     }
 
     // 关于
