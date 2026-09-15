@@ -380,13 +380,14 @@ unsigned tree_sitter_python_external_scanner_serialize(void *payload, char *buff
     size += delimiter_count;
 
     uint32_t iter = 1;
-    for (; iter < scanner->indents.size && size < TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++iter) {
+    for (; iter < scanner->indents.size && size + sizeof(uint16_t) <= TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++iter) {
         uint16_t indent_value = *array_get(&scanner->indents, iter);
         buffer[size++] = (char)(indent_value & 0xFF);
         buffer[size++] = (char)((indent_value >> 8) & 0xFF);
     }
 
-    return size;
+    // The serialization buffer bounds size well below the unsigned return limit.
+    return (unsigned)size;
 }
 
 void tree_sitter_python_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
@@ -401,7 +402,7 @@ void tree_sitter_python_external_scanner_deserialize(void *payload, const char *
 
         scanner->inside_interpolated_string = (bool)buffer[size++];
 
-        size_t delimiter_count = (uint8_t)buffer[size++];
+        uint32_t delimiter_count = (uint8_t)buffer[size++];
         if (delimiter_count > 0) {
             array_reserve(&scanner->delimiters, delimiter_count);
             scanner->delimiters.size = delimiter_count;

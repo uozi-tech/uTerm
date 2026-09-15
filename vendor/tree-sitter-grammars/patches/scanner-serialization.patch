@@ -1,0 +1,51 @@
+diff --git a/vendor/tree-sitter-grammars/python/src/scanner.c b/vendor/tree-sitter-grammars/python/src/scanner.c
+index 1fc77cdb..f961be6d 100644
+--- a/vendor/tree-sitter-grammars/python/src/scanner.c
++++ b/vendor/tree-sitter-grammars/python/src/scanner.c
+@@ -380,13 +380,14 @@ unsigned tree_sitter_python_external_scanner_serialize(void *payload, char *buff
+     size += delimiter_count;
+ 
+     uint32_t iter = 1;
+-    for (; iter < scanner->indents.size && size < TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++iter) {
++    for (; iter < scanner->indents.size && size + sizeof(uint16_t) <= TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++iter) {
+         uint16_t indent_value = *array_get(&scanner->indents, iter);
+         buffer[size++] = (char)(indent_value & 0xFF);
+         buffer[size++] = (char)((indent_value >> 8) & 0xFF);
+     }
+ 
+-    return size;
++    // The serialization buffer bounds size well below the unsigned return limit.
++    return (unsigned)size;
+ }
+ 
+ void tree_sitter_python_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
+@@ -401,7 +402,7 @@ void tree_sitter_python_external_scanner_deserialize(void *payload, const char *
+ 
+         scanner->inside_interpolated_string = (bool)buffer[size++];
+ 
+-        size_t delimiter_count = (uint8_t)buffer[size++];
++        uint32_t delimiter_count = (uint8_t)buffer[size++];
+         if (delimiter_count > 0) {
+             array_reserve(&scanner->delimiters, delimiter_count);
+             scanner->delimiters.size = delimiter_count;
+diff --git a/vendor/tree-sitter-grammars/yaml/src/scanner.c b/vendor/tree-sitter-grammars/yaml/src/scanner.c
+index e13efc58..1aa97e0a 100644
+--- a/vendor/tree-sitter-grammars/yaml/src/scanner.c
++++ b/vendor/tree-sitter-grammars/yaml/src/scanner.c
+@@ -179,13 +179,14 @@ static unsigned serialize(Scanner *scanner, char *buffer) {
+     int16_t *typ_itr = scanner->ind_typ_stk.contents + 1;
+     int16_t *typ_end = scanner->ind_typ_stk.contents + scanner->ind_typ_stk.size;
+     int16_t *len_itr = scanner->ind_len_stk.contents + 1;
+-    for (; typ_itr != typ_end && size < TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++typ_itr, ++len_itr) {
++    for (; typ_itr != typ_end && size + 2 * sizeof(int16_t) <= TREE_SITTER_SERIALIZATION_BUFFER_SIZE; ++typ_itr, ++len_itr) {
+         *(int16_t *)&buffer[size] = *typ_itr;
+         size += sizeof(int16_t);
+         *(int16_t *)&buffer[size] = *len_itr;
+         size += sizeof(int16_t);
+     }
+-    return size;
++    // The serialization buffer bounds size well below the unsigned return limit.
++    return (unsigned)size;
+ }
+ 
+ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {

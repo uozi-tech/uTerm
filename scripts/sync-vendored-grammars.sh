@@ -82,5 +82,12 @@ const TSLanguage *${fn}(void);
 EOF
 done
 
+# Preserve local scanner fixes when refreshing the pinned upstream sources.
+for patch in vendor/tree-sitter-grammars/patches/*.patch; do
+  [ -f "$patch" ] || continue
+  git apply --check "$patch"
+  git apply "$patch"
+done
+
 echo
 echo "Done. 现在跑：cd vendor/tree-sitter-grammars && swift build  ←  验证编译"
