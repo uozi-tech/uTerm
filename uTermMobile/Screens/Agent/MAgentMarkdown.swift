@@ -23,7 +23,7 @@ struct MStreamingMarkdown: View {
     let isStreaming: Bool
 
     @State private var renderedSource = ""
-    @State private var document = Document(parsing: "")
+    @State private var document = Markdown.Document(parsing: "")
     @State private var pendingWork: DispatchWorkItem?
 
     var body: some View {
@@ -55,7 +55,7 @@ struct MStreamingMarkdown: View {
     private func reparse(force: Bool) {
         guard force || text != renderedSource else { return }
         renderedSource = text
-        document = Document(parsing: text)
+        document = Markdown.Document(parsing: text)
     }
 }
 
@@ -64,7 +64,7 @@ struct MStreamingMarkdown: View {
 /// 把已解析的 `Document` 渲染成纵向 block 列表（无内层 ScrollView，滚动由调用方负责）。
 /// 镜像 macOS `MarkdownBlocks`。
 struct MMarkdownBlocks: View {
-    let document: Document
+    let document: Markdown.Document
     var isStreaming: Bool = false
 
     var body: some View {

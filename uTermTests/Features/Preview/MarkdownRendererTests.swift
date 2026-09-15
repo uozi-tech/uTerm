@@ -12,18 +12,18 @@ import Markdown   // swift-markdown
 final class MarkdownRendererTests: XCTestCase {
 
     func test_parseHeadingsAndParagraphs() {
-        let doc = Document(parsing: "# Title\n\nBody text.")
+        let doc = Markdown.Document(parsing: "# Title\n\nBody text.")
         let blocks = Array(doc.blockChildren)
         XCTAssertEqual(blocks.count, 2)
     }
 
     func test_parseUnorderedList_producesAtLeastOneBlock() {
-        let doc = Document(parsing: "- a\n- b\n- c")
+        let doc = Markdown.Document(parsing: "- a\n- b\n- c")
         XCTAssertFalse(Array(doc.blockChildren).isEmpty)
     }
 
     func test_parseFencedCodeBlock_producesAtLeastOneBlock() {
-        let doc = Document(parsing: "```swift\nlet x = 1\n```")
+        let doc = Markdown.Document(parsing: "```swift\nlet x = 1\n```")
         XCTAssertFalse(Array(doc.blockChildren).isEmpty)
     }
 
@@ -33,7 +33,7 @@ final class MarkdownRendererTests: XCTestCase {
         | - | - |
         | 1 | 2 |
         """
-        let doc = Document(parsing: src)
+        let doc = Markdown.Document(parsing: src)
         XCTAssertFalse(Array(doc.blockChildren).isEmpty)
     }
 

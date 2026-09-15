@@ -7,7 +7,7 @@ import Markdown
 /// Markdown 渲染内核：把已解析的 Document 渲染成纵向 block 列表（无内层 ScrollView，
 /// 滚动由调用方负责）。颜色/字号全部来自 `MarkdownStyle`。
 struct MarkdownBlocks: View {
-    let document: Document
+    let document: Markdown.Document
     let style: MarkdownStyle
     var imageLoader: MarkdownImageLoader?
     var isStreaming: Bool = false

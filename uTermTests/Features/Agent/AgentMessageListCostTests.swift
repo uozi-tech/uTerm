@@ -558,7 +558,7 @@ final class AgentMessageListCostTests: XCTestCase {
             var samples: [Double] = []
             for _ in 0..<20 {
                 let start = CFAbsoluteTimeGetCurrent()
-                let doc = Document(parsing: source)
+                let doc = Markdown.Document(parsing: source)
                 _ = Array(doc.blockChildren).count
                 samples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
             }

@@ -187,7 +187,7 @@ final class MarkdownBlockWindowPixelTests: XCTestCase {
 
     func testDefaultLimitRendersEveryBlockPixelForPixel() throws {
         defer { closeAllWindows() }
-        let blocks = Array(Document(parsing: Self.source).blockChildren).count
+        let blocks = Array(Markdown.Document(parsing: Self.source).blockChildren).count
         XCTAssertGreaterThan(blocks, 5, "样张必须有足够多的块，否则闸门是空的")
 
         let unlimited = try render(limit: .max)
