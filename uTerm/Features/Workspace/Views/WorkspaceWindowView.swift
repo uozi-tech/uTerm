@@ -87,6 +87,7 @@ struct WorkspaceWindowView: View {
                 serverName: chromeTitle,
                 session: workspace.focusedTerminalSession(),
                 activeForwardCount: forwarding.activeCount(forServer: server.id),
+                inspectorPresented: workspace.uiState.rightInspectorPresented,
                 onToggleSidebar: {
                     withAnimation(.easeInOut(duration: 0.18)) { workspace.toggleLeftSidebar() }
                 },

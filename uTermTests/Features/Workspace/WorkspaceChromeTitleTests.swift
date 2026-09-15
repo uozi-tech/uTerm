@@ -38,6 +38,25 @@ final class WorkspaceChromeTitleTests: XCTestCase {
         XCTAssertTrue(sftpSource.contains("groupName: server.group"))
     }
 
+    func testAgentTitleBarButtonReflectsInspectorVisibility() throws {
+        let chromeSource = try normalizedSource("uTerm/Features/Workspace/Views/WorkspaceChrome.swift")
+        let workspaceSource = try normalizedSource("uTerm/Features/Workspace/Views/WorkspaceWindowView.swift")
+
+        XCTAssertTrue(workspaceSource.contains(
+            "inspectorPresented: workspace.uiState.rightInspectorPresented"
+        ))
+        XCTAssertTrue(chromeSource.contains(
+            "systemName: inspectorPresented ? \"bubble.left.fill\" : \"bubble.left\""
+        ))
+        XCTAssertTrue(chromeSource.contains("selected: inspectorPresented"))
+        XCTAssertTrue(chromeSource.contains(
+            "selected ? UD.accentTint : (hover ? UD.rowHover : .clear)"
+        ))
+        XCTAssertTrue(chromeSource.contains(
+            "selected ? [.isButton, .isSelected] : .isButton"
+        ))
+    }
+
     private func normalizedSource(_ path: String) throws -> String {
         try source(path).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     }

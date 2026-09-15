@@ -22,6 +22,8 @@ struct WorkspaceTitleBar: View {
     let session: TerminalSession?
     /// 当前服务器活跃隧道数（>0 时在端口转发按钮右上角叠计数徽章）。
     let activeForwardCount: Int
+    /// Agent inspector 是否已展开；用于让标题栏开关呈现选中态。
+    let inspectorPresented: Bool
     let onToggleSidebar: () -> Void
     let onToggleInspector: () -> Void
     /// 打开本服务器的端口转发管理窗口。
@@ -53,8 +55,9 @@ struct WorkspaceTitleBar: View {
                              action: onToggleSidebar)
                 Spacer()
                 // 右侧图标簇：Agent 聊天气泡 + 端口转发 + 设置齿轮（对齐 Cursor 右上）。
-                WSIconButton(systemName: "bubble.left",
-                             help: "显示/隐藏 Agent（⌘⌥2）",
+                WSIconButton(systemName: inspectorPresented ? "bubble.left.fill" : "bubble.left",
+                             help: inspectorPresented ? "隐藏 Agent（⌘⌥2）" : "显示 Agent（⌘⌥2）",
+                             selected: inspectorPresented,
                              action: onToggleInspector)
                 // 端口转发：有活跃隧道时右上角叠计数徽章（ZStack .topTrailing + 小偏移，
                 // 避免徽章溢出 38px 栏；clipping 关掉让徽章可探出按钮命中框外）。
@@ -91,6 +94,7 @@ struct WorkspaceTitleBar: View {
 struct WSIconButton: View {
     let systemName: String
     let help: String
+    var selected = false
     let action: () -> Void
     @State private var hover = false
 
@@ -98,15 +102,19 @@ struct WSIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 13))
-                .foregroundStyle(hover ? UD.text : UD.text3)
+                .foregroundStyle(selected ? UD.accent : (hover ? UD.text : UD.text3))
                 .frame(width: 28, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hover ? UD.rowHover : .clear))
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(selected ? UD.accentTint : (hover ? UD.rowHover : .clear))
+                )
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
         // 纯图标按钮：用 help 文案兜底无障碍标签（去掉「（⌘…）」快捷键后缀更干净）。
         .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
     /// help 文案去掉括号内快捷键提示，作为 VoiceOver 念读的用途标签。
