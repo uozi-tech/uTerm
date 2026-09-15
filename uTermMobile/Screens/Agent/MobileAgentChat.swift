@@ -51,7 +51,6 @@ struct MobileAgentChat: View {
     @AppStorage("agentSafety") private var safetyRaw = AgentSafety.readAuto.rawValue
 
     private var ctx: String { serverContext ?? "" }
-    private var safety: AgentSafety { AgentSafety(rawValue: safetyRaw) ?? .readAuto }
     private var safetyBinding: Binding<AgentSafety> {
         Binding(get: { AgentSafety(rawValue: safetyRaw) ?? .readAuto },
                 set: { safetyRaw = $0.rawValue })
@@ -78,10 +77,6 @@ struct MobileAgentChat: View {
         .onChange(of: activeProviderIDString) { _, value in
             model.activeProviderID = UUID(uuidString: value)
         }
-        // 「自动执行」档位：进入「待确认」即自动批准首个 pending（逐条迭代）；切档 / 切回前台时补批一次。
-        .onChange(of: model.state) { _, _ in autoApproveNextIfNeeded() }
-        .onChange(of: safetyRaw) { _, _ in autoApproveNextIfNeeded() }
-        .onChange(of: isActive) { _, _ in autoApproveNextIfNeeded() }
     }
 
     /// 进入视图时把持久化上下文 / provider 列表 / 活动 provider / SSH 执行器灌进状态机。
@@ -106,7 +101,6 @@ struct MobileAgentChat: View {
         if model.executor == nil {
             model.executor = executorFactory.make(host, context.container)
         }
-        autoApproveNextIfNeeded()
     }
 
     private func selectProvider(_ p: AIProvider) {
@@ -269,7 +263,7 @@ struct MobileAgentChat: View {
                         label: call.explanation ?? "运行命令",
                         command: call.command,
                         status: mStatus(call),
-                        approvalEnabled: model.state == .awaitingApproval && !safety.autoApprovesPending,
+                        approvalEnabled: model.state == .awaitingApproval,
                         onRun: { tasks.add(Task { await model.approveAndRun(id: call.id) }) },
                         onSkip: { tasks.add(Task { await model.skip(id: call.id) }) })
                 }
@@ -304,22 +298,6 @@ struct MobileAgentChat: View {
     }
 
     // MARK: - 自动批准（.auto 档）
-
-    private func firstPendingToolCallID() -> String? {
-        for m in model.messages {
-            if let c = m.toolCalls.first(where: { $0.status == .pending }) { return c.id }
-        }
-        return nil
-    }
-
-    /// 「自动执行」档下批准首个待确认的 pending 工具调用（无则 no-op）。仅在该会话**激活且处于
-    /// Agent 模式**（`isActive`）时放行——后台标签停在审批卡，待用户切回前台再继续。
-    /// `approveAndRun` 自带 `.awaitingApproval` 门禁且 @MainActor 串行，重复调用安全。
-    private func autoApproveNextIfNeeded() {
-        guard isActive, safety.autoApprovesPending, model.state == .awaitingApproval,
-              let id = firstPendingToolCallID() else { return }
-        tasks.add(Task { await model.approveAndRun(id: id) })
-    }
 
     // MARK: - 输入区
 
