@@ -10,6 +10,7 @@ struct LANSyncSettingsSection: View {
             MInsetRow(icon: "wifi", label: "接收状态", sub: lanSync.status.label,
                       value: "前台监听", last: false)
             MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 高级中显示的 6 位代码",
+                      last: true,
                       trailing: AnyView(
                           TextField("6 位配对码", text: $pairingCode)
                               .keyboardType(.numberPad)
@@ -19,7 +20,7 @@ struct LANSyncSettingsSection: View {
                               .frame(width: 110)
                               .onChange(of: pairingCode) { _, value in
                                   lanSync.setPairingCode(value)
-                              }), last: true)
+                              }))
         }
         .alert("收到局域网同步请求", isPresented: pendingOfferPresented) {
             Button("拒绝", role: .cancel) { lanSync.rejectPendingSync() }
