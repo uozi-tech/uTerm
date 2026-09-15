@@ -20,12 +20,21 @@ final class PrivateKeyImporterTests: XCTestCase {
         guard case .rsa = key else { return XCTFail("应为 .rsa（rsa-sha2-512），得 \(key)") }
     }
 
-    /// 带口令的容器仍回退 Citadel：解密要 bcrypt_pbkdf，USSHKit 包外够不着。
+    /// 带口令的容器也走 `.rsa`：USSHKit 自己解容器（bcrypt_pbkdf + aes-ctr），不再回退
+    /// Citadel 的 SHA-1 老路 —— 回退的话在 OpenSSH 8.8+ 服务端上一样连不上。
     func testEncryptedOpenSSHRSAResolvesWithPassphrase() throws {
         let key = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSHEnc,
             passphrase: KeyImportFixtures.passphrase)
-        guard case .legacyOpenSSHRSA = key else { return XCTFail("应为 legacyOpenSSHRSA，得 \(key)") }
+        guard case .rsa = key else { return XCTFail("应为 .rsa（rsa-sha2-512），得 \(key)") }
+    }
+
+    /// 口令错不再被回退路径改写成「私钥结构损坏」。
+    func testEncryptedOpenSSHRSAWrongPassphrase() {
+        XCTAssertThrowsError(try PrivateKeyImporter.resolve(
+            pem: KeyImportFixtures.rsaOpenSSHEnc, passphrase: "wrong")) {
+            XCTAssertEqual($0 as? PrivateKeyImportError, .incorrectPassphrase)
+        }
     }
 
     func testEncryptedOpenSSHRSARequiresPassphrase() {

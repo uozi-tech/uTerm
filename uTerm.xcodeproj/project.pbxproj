@@ -1374,7 +1374,7 @@
 			repositoryURL = "https://github.com/uozi-tech/uAppKit.git";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.4.7;
+				minimumVersion = 1.4.9;
 			};
 		};
 		A50000000000000000000000 /* XCRemoteSwiftPackageReference "swift-asn1" */ = {
@@ -1406,7 +1406,7 @@
 			repositoryURL = "https://github.com/uozi-tech/Citadel.git";
 			requirement = {
 				kind = exactVersion;
-				version = 1.0.1;
+				version = 1.0.2;
 			};
 		};
 		DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
