@@ -4,6 +4,7 @@ import AppKit
 
 /// 设置 · 高级 tab。Spec 04 实现：
 /// - SSH 连接：连接超时 / 主机密钥校验
+/// - 同步：iCloud 状态（保底通道）+ 局域网服务与配对码（同网段快通道）
 /// - 诊断：日志等级 / 显示日志
 ///
 /// 砍掉的设计稿项：keepalive 与 SSH 压缩（Citadel/NIOSSH 不支持）、
@@ -13,8 +14,12 @@ struct AdvancedSettingsView: View {
     @AppStorage("sshHostKeyPolicy")  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
     @AppStorage("logLevel")          private var logLevelRaw: String = LogLevel.info.rawValue
     @AppStorage("sftpMaxConcurrentTransfers") private var maxConcurrentUploads: Int = 4
+    @AppStorage(ChatHistoryStore.retentionDaysKey)
+    private var chatRetentionDays: Int = ChatHistoryStore.defaultRetentionDays
     /// Mac 作为局域网同步服务端，移动端通过 Bonjour 发现它。
     @Environment(LANSyncCoordinator.self) private var lanSync
+    /// CloudKit 同步实时状态（uTermApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
+    @Environment(CloudKitSyncMonitor.self) private var sync
 
     private var hostKeyPolicyBinding: Binding<SSHHostKeyPolicy> {
         Binding(
@@ -51,8 +56,26 @@ struct AdvancedSettingsView: View {
                 }
             }
 
-            SettingsGroup(title: "局域网同步") {
-                SettingsRow(label: "服务状态", hint: "Mac 会在本地网络广播 uTerm，移动端可拉取本机数据。") {
+            SettingsGroup(title: "历史") {
+                SettingsRow(label: "会话保留",
+                            hint: chatRetentionHint) {
+                    SettingsNumberField(value: $chatRetentionDays, width: 80,
+                                        minValue: 0, maxValue: 3_650, suffix: "天")
+                }
+            }
+
+            SettingsGroup(title: "同步") {
+                SettingsRow(label: "iCloud 同步", hint: syncHint) {
+                    HStack(spacing: 6) {
+                        Image(systemName: syncIcon)
+                            .font(.system(size: 12))
+                            .foregroundStyle(syncTint)
+                        Text(syncLabel)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(UD.text2)
+                    }
+                }
+                SettingsRow(label: "局域网服务", hint: "Mac 会在本地网络广播 uTerm，移动端可拉取本机数据。") {
                     HStack(spacing: 6) {
                         Image(systemName: lanSyncIcon)
                             .font(.system(size: 12))
@@ -101,6 +124,52 @@ struct AdvancedSettingsView: View {
     private func openConsole() {
         let url = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
         NSWorkspace.shared.open(url)
+    }
+
+    private var chatRetentionHint: String {
+        chatRetentionDays > 0
+            ? "超过该天数未更新的 AI 会话在启动时清理，连同其中的消息。执行日志另有固定的 30 天窗口。"
+            : "填 0 表示不清理。会话会一直累积，并占用 iCloud 配额。"
+    }
+
+    // ─── iCloud 同步实时状态映射（先过「是否登录 iCloud」门，再叠 monitor.phase）──────
+    private var loggedIntoiCloud: Bool { FileManager.default.ubiquityIdentityToken != nil }
+
+    private var syncHint: String {
+        loggedIntoiCloud
+            ? "已登录 iCloud 时在后台持续同步，跨网络可用；局域网同步是同一 Wi-Fi 下的手动快通道。"
+            : "未登录 iCloud，跨设备同步只能走下面的局域网通道。"
+    }
+
+    private var syncLabel: String {
+        guard loggedIntoiCloud else { return "未登录 iCloud" }
+        switch sync.phase {
+        case .setup:     return "连接中…"
+        case .importing: return "下载中…"
+        case .exporting: return "上传中…"
+        case .error:     return "同步出错"
+        case .idle:      return sync.lastSyncedAt != nil ? "已同步" : "等待同步"
+        }
+    }
+
+    private var syncIcon: String {
+        guard loggedIntoiCloud else { return "person.crop.circle.badge.xmark" }
+        switch sync.phase {
+        case .setup:     return "arrow.triangle.2.circlepath"
+        case .importing: return "icloud.and.arrow.down"
+        case .exporting: return "icloud.and.arrow.up"
+        case .error:     return "exclamationmark.icloud"
+        case .idle:      return sync.lastSyncedAt != nil ? "checkmark.icloud" : "icloud"
+        }
+    }
+
+    private var syncTint: Color {
+        guard loggedIntoiCloud else { return UD.text3 }
+        switch sync.phase {
+        case .error: return .orange
+        case .idle:  return sync.lastSyncedAt != nil ? UD.accent : UD.text3
+        default:     return UD.accent
+        }
     }
 
     private var lanSyncIcon: String {

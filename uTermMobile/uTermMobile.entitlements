@@ -1,5 +1,36 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.uozi.uTerm</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
+	<!-- 与已发布的 macOS 版同处 Production 数据库（否则 Xcode 调试构建默认走 Development，看不到正式数据）。
+	     若你的 macOS 数据来自 Xcode 调试运行（Development），把此值改成 Development。 -->
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>Production</string>
+	<!-- Push Notifications 能力：SwiftData 的 CloudKit 镜像（NSPersistentCloudKitContainer）
+	     靠 CloudKit 静默推送实现「对端一改、本端即拉」。缺此项时同步退化为「仅冷启动 / 进前台时拉一次」，
+	     iOS 退后台又会被系统挂起 → 体感就是同步「不积极」。
+	     ⚠️ 值与签名环境绑定：Xcode 真机调试装机用 development；TestFlight / App Store 分发须改为
+	     production，否则分发构建 entitlement 不匹配会导致推送注册失败。
+	     前提：App ID com.uozi.uTerm 须已在开发者后台开启 Push Notifications 能力，automatic
+	     signing 才能拉到带 aps-environment 的 profile。 -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- 与 macOS 版共用同一钥匙串访问组，读取 iCloud 钥匙串同步过来的密码 / 私钥；
+	     缺此项时 iOS 用默认组（等于自己的 bundle id），既读不到 macOS 存的密钥，
+	     访问同步项还会以 errSecMissingEntitlement(-34018) 失败。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.uozi.uTerm</string>
+	</array>
+</dict>
 </plist>

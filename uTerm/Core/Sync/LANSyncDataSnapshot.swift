@@ -130,6 +130,15 @@ nonisolated struct LANSyncDataSnapshot: Codable, Sendable {
         let orderIndex: Int
     }
 
+    /// 本快照里的记录总数（分片按它计数）。
+    var recordCount: Int {
+        profiles.count + groups.count + knownHosts.count + sshKeys.count + providers.count
+            + forwardingRules.count + quickCommands.count + quickCommandRuns.count
+            + chatSessions.count + chatMessages.count
+    }
+
+    var isEmpty: Bool { recordCount == 0 }
+
     static let empty = LANSyncDataSnapshot(
         profiles: [], groups: [], knownHosts: [], sshKeys: [], providers: [],
         forwardingRules: [], quickCommands: [], quickCommandRuns: [],

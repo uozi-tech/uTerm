@@ -15,6 +15,22 @@
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
 	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.uozi.uTerm</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<!-- 让所有 macOS 构建（含 Xcode 调试）都走 Production CloudKit，和 iOS / 发布版统一，
+	     避免调试构建默认落到 Development 库造成数据分裂。
+	     ⚠️ 代价：调试运行产生的数据也会进 Production。若想恢复「调试走 Development」，删掉此键即可
+	     （发布版用 Developer ID 签名本就默认 Production，不依赖此键）。 -->
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>Production</string>
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
 	<!-- 技能安装：在用户**真实**家目录（非沙盒容器）下的 AI CLI 配置目录里建符号链接。
 	     没有这些例外，`~/.claude/skills` 等位置写不进去（uTable 踩过）。
 	     `/.local/bin/` 供可选的「同时链接到 ~/.local/bin/utermctl」使用。 -->
@@ -24,6 +40,12 @@
 		<string>/.codex/</string>
 		<string>/.cursor/</string>
 		<string>/.local/bin/</string>
+	</array>
+	<!-- 与 iOS 版共用同一钥匙串访问组：凭据以 kSecAttrSynchronizable 存入 iCloud 钥匙串，
+	     两端须落在同一组才能互相读到。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.uozi.uTerm</string>
 	</array>
 </dict>
 </plist>

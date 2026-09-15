@@ -15,7 +15,9 @@ struct uTermApp: App {
     @Environment(\.openWindow) private var openWindow
 
     @State private var appUpdater = AppUpdater()
-    /// 普通偏好保存在本机，并由局域网同步服务按快照传输。
+    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
+    @State private var cloudKitSync = CloudKitSyncMonitor()
+    /// 普通偏好：本机 UserDefaults 为准，经 iCloud KVS 跨设备保底，局域网同步另按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
     @State private var lanSync: LANSyncCoordinator
     @State private var forwardingCoordinator = ForwardingCoordinator()
@@ -35,7 +37,7 @@ struct uTermApp: App {
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
-    /// 应用级服务（局域网同步 / 命令行接口 / 开窗入口）只安装一次。
+    /// 应用级服务（iCloud 同步监听 / 局域网同步 / 命令行接口 / 开窗入口）只安装一次。
     /// 挂在每个 Scene 上，谁先出现谁装 —— 见 `AppServicesGate` 的类型文档。
     private let appServicesGate = AppServicesGate()
 
@@ -47,13 +49,18 @@ struct uTermApp: App {
         (AppLanguage(rawValue: appLanguageRaw) ?? .system).locale
     }
 
-    /// 本机 SwiftData 容器；跨设备复制由 LANSyncDataStore 负责。
+    /// SwiftData 容器。`.automatic` 让已登录 iCloud 的设备后台持续镜像（保底通道）；
+    /// 同网段下 LANSyncDataStore 再做一次手动的最小增量合并（快通道）。
     let modelContainer: ModelContainer
 
     /// 本机 IPC 服务端。`ControlSettings.observe` 按主开关起停它（起停都幂等）。
     private let controlServer = ControlServer()
 
     init() {
+        // 必须在创建 SwiftData 容器之前订阅：CloudKit 可能在容器初始化期间就发出 setup / import 事件。
+        let sync = CloudKitSyncMonitor()
+        sync.start()
+        _cloudKitSync = State(initialValue: sync)
         modelContainer = AppModelContainer.make()
 
         let preferences = SharedPreferencesSync()
@@ -89,6 +96,7 @@ struct uTermApp: App {
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
         if !BackgroundLaunchMode.isRunningInTestHost {
+            StartupMaintenance.run(container: modelContainer)
             startControlInterface()
             LaunchForwardingBootstrap.start(
                 modelContainer: modelContainer,
@@ -385,6 +393,7 @@ struct uTermApp: App {
                 .modifier(LocaleOverride(locale: currentLocale))
                 .appLockGate(lockModel)
                 .environment(appUpdater)
+                .environment(cloudKitSync)
                 .environment(controlSettings)
                 .environment(backgroundSettings)
                 .bootstrapsAppServices(bootstrapAppServices)

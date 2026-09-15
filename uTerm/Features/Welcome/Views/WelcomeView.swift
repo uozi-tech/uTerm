@@ -27,7 +27,6 @@ struct WelcomeView: View {
 
     @State private var filter = ServerFilter()
     @State private var pane: WelcomePane = .hosts
-    @State private var didPruneCommands = false
     @State private var formRoute: FormRoute?
     @State private var selectedProfileID: UUID?
     @State private var draggingProfileID: UUID?
@@ -177,12 +176,6 @@ struct WelcomeView: View {
             guard !didReconcileGroups else { return }
             didReconcileGroups = true
             GroupStore(context: modelContext).reconcile()
-        }
-        .task {
-            // 快捷命令执行日志 30 天滚动清理（功能文档 §7）：启动时跑一次。
-            guard !didPruneCommands else { return }
-            didPruneCommands = true
-            QuickCommandStore(context: modelContext).pruneExpiredRuns()
         }
         // 应用级自启序列用 launchRelay 起隧道；首连未知主机需要信任弹窗。Welcome 在默认
         // 启动模式下常驻可见，是启动期最稳的弹窗宿主（全局转发窗口启动时尚未打开）。

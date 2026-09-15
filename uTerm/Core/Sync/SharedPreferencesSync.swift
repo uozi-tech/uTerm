@@ -1,8 +1,16 @@
 import Foundation
 import Observation
 
-/// Owns the allow-listed scalar preferences stored locally in UserDefaults.
-/// LANSyncCoordinator exports this list; device-local window/session state stays out.
+/// Owns the allow-listed scalar preferences stored locally in UserDefaults, and
+/// replicates them over two channels that share one clock:
+///
+/// - **iCloud KVS（保底）**：`NSUbiquitousKeyValueStore`，后台自动、跨网络。UserDefaults
+///   本身是 bundle 内的，靠它把标量偏好带到同一 iCloud 命名空间。
+/// - **局域网（快通道）**：`LANSyncCoordinator` 导出 `lanSnapshot()` / 合并 `mergeLANSnapshot(_:)`。
+///
+/// 两条通道都按 key 级 last-write-wins 收敛：每个 key 配一个 `modifiedKey(_:)` 时间戳，
+/// 谁的时间戳新谁赢。局域网合并的结果会再推给 KVS，因此快通道的改动最终也落到 iCloud。
+/// 设备本地的安全状态与窗口 / 会话状态刻意不在清单内。
 @MainActor @Observable
 final class SharedPreferencesSync {
     private enum ValueKind {
@@ -52,23 +60,39 @@ final class SharedPreferencesSync {
         Definition(key: "activeProviderID", kind: .string, defaultValue: .string(""), legacyKeys: ["mobileAgentActiveProviderID"]),
         Definition(key: "agentSafety", kind: .string, defaultValue: .string("readAuto"), legacyKeys: ["mobileAgentSafety"]),
         Definition(key: "globalForwarding.launchAtAppStart.enabled", kind: .bool, defaultValue: .bool(true), legacyKeys: []),
+        Definition(key: ChatHistoryStore.retentionDaysKey, kind: .integer,
+                   defaultValue: .integer(ChatHistoryStore.defaultRetentionDays), legacyKeys: []),
     ]
 
     private let defaults: UserDefaults
+    private let store: NSUbiquitousKeyValueStore
     private var defaultsObserver: NSObjectProtocol?
+    private var storeObserver: NSObjectProtocol?
     private var lastValues: [String: Value] = [:]
     private var lastModified: [String: Date] = [:]
     private(set) var isReady = false
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         store: NSUbiquitousKeyValueStore = .default) {
         self.defaults = defaults
+        self.store = store
     }
 
     /// Starts the bridge once for the lifetime of the app.
     func start() {
-        guard defaultsObserver == nil else { return }
+        guard defaultsObserver == nil, storeObserver == nil else { return }
 
         migrateLegacyKeys()
+        storeObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: store,
+            queue: .main
+        ) { [weak self] note in
+            let keys = note.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] ?? []
+            MainActor.assumeIsolated {
+                self?.applyExternalChanges(keys)
+            }
+        }
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: defaults,
@@ -78,6 +102,9 @@ final class SharedPreferencesSync {
                 self?.pushLocalChanges()
             }
         }
+        // Pull first so a new install does not overwrite an existing device's
+        // configuration with its local defaults.
+        store.synchronize()
         reconcileInitialValues()
         isReady = true
     }
@@ -96,23 +123,68 @@ final class SharedPreferencesSync {
 
     private func reconcileInitialValues() {
         for definition in Self.definitions {
+            let localDate = defaults.object(forKey: modifiedKey(definition.key)) as? Date
+            let remote = value(store.object(forKey: definition.key), for: definition)
+            let remoteDate = store.object(forKey: modifiedKey(definition.key)) as? Date
+
             if let local = value(defaults.object(forKey: definition.key), for: definition) {
+                // 本机有值：只有 KVS 那份**更新**才覆盖，否则把本机的推上去。
+                if let remote, remote != local, (remoteDate ?? .distantPast) > (localDate ?? .distantPast) {
+                    defaults.set(remote.object, forKey: definition.key)
+                    lastValues[definition.key] = remote
+                    lastModified[definition.key] = remoteDate ?? Date()
+                    defaults.set(lastModified[definition.key], forKey: modifiedKey(definition.key))
+                    continue
+                }
                 lastValues[definition.key] = local
+                lastModified[definition.key] = localDate ?? Date()
+                publish(local, for: definition.key, at: lastModified[definition.key] ?? Date())
+            } else if let remote {
+                // 本机没值（新装机）：直接采用 iCloud 那份，不要用本地默认值把别的设备冲掉。
+                defaults.set(remote.object, forKey: definition.key)
+                lastValues[definition.key] = remote
+                lastModified[definition.key] = remoteDate ?? Date()
+                defaults.set(lastModified[definition.key], forKey: modifiedKey(definition.key))
             } else {
                 defaults.set(definition.defaultValue.object, forKey: definition.key)
                 lastValues[definition.key] = definition.defaultValue
+                lastModified[definition.key] = localDate ?? Date()
+                publish(definition.defaultValue, for: definition.key,
+                        at: lastModified[definition.key] ?? Date())
             }
-            lastModified[definition.key] = defaults.object(forKey: modifiedKey(definition.key)) as? Date ?? Date()
         }
+        store.synchronize()
     }
 
     private func pushLocalChanges() {
         guard isReady else { return }
+        var changed = false
         for definition in Self.definitions {
             guard let local = value(defaults.object(forKey: definition.key), for: definition),
                   lastValues[definition.key] != local else { continue }
             lastValues[definition.key] = local
             markModified(definition.key)
+            publish(local, for: definition.key, at: lastModified[definition.key] ?? Date())
+            changed = true
+        }
+        if changed { store.synchronize() }
+    }
+
+    /// iCloud KVS 外部变更：按同一套 last-write-wins 落到本机。
+    private func applyExternalChanges(_ changedKeys: [String]) {
+        guard isReady else { return }
+        let changed = Set(changedKeys)
+        for definition in Self.definitions where changed.contains(definition.key) {
+            guard let remote = value(store.object(forKey: definition.key), for: definition) else { continue }
+            let remoteDate = store.object(forKey: modifiedKey(definition.key)) as? Date ?? Date()
+            let localDate = lastModified[definition.key] ?? .distantPast
+            guard remoteDate >= localDate else { continue }
+            lastValues[definition.key] = remote
+            lastModified[definition.key] = remoteDate
+            defaults.set(remoteDate, forKey: modifiedKey(definition.key))
+            if value(defaults.object(forKey: definition.key), for: definition) != remote {
+                defaults.set(remote.object, forKey: definition.key)
+            }
         }
     }
 
@@ -138,9 +210,18 @@ final class SharedPreferencesSync {
             lastValues[definition.key] = incomingValue
             lastModified[definition.key] = item.modifiedAt
             defaults.set(item.modifiedAt, forKey: modifiedKey(definition.key))
+            // 快通道赢下的值同样推给 iCloud，避免两条通道各执一词。
+            publish(incomingValue, for: definition.key, at: item.modifiedAt)
             changed = true
         }
+        if changed { store.synchronize() }
         return changed
+    }
+
+    /// 把一个值连同它的时间戳写进 iCloud KVS（不调 synchronize，由调用方成批触发）。
+    private func publish(_ value: Value, for key: String, at date: Date) {
+        store.set(value.object, forKey: key)
+        store.set(date, forKey: modifiedKey(key))
     }
 
     private func markModified(_ key: String) {

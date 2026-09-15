@@ -14,9 +14,9 @@ extension SSHAuthError: LocalizedError {
         case .missingPassword:
             return "未找到该主机的密码。请在「编辑主机」里重新填写密码后重试。"
         case .missingPrivateKey:
-            return "未找到该主机的私钥。请在当前设备的「编辑主机」里重新选择或导入私钥。"
+            return "未找到该主机的私钥。请确认密钥已通过 iCloud 钥匙串同步到本机，或在「编辑主机」里重新选择 / 导入私钥。"
         case .keychainAccessFailed(let detail):
-            return "钥匙串访问失败：\(detail)。请确认当前设备已解锁，且 App 已获得钥匙串访问权限。"
+            return "钥匙串访问失败：\(detail)。请确认已登录 iCloud 并开启「钥匙串」，且 App 已获得钥匙串访问权限。"
         }
     }
 }

@@ -33,7 +33,8 @@ nonisolated protocol KeychainReading {
     func load(profileID: UUID, kind: SecretKind) throws -> String?
 }
 
-/// 对本机钥匙串的封装。凭据只保存在当前设备，不通过云端或局域网同步。
+/// 对钥匙串的封装。写入条目设 `kSecAttrSynchronizable = true`，因而经 iCloud 钥匙串
+/// 端到端加密同步到用户的其它设备（保底通道）。凭据正文**不进**局域网快照。
 ///
 /// `nonisolated`：纯非 UI 工具类型，仅与 Security 框架交互，无需 MainActor 隔离。
 nonisolated struct KeychainStore: KeychainReading {
@@ -51,12 +52,19 @@ nonisolated struct KeychainStore: KeychainReading {
         "\(profileID.uuidString)/\(kind.rawValue)"
     }
 
-    private func baseQuery(account: String) -> [String: Any] {
+    /// 条目的公共匹配键。
+    ///
+    /// ⚠️ `kSecAttrSynchronizable` **参与匹配**：以 `true` 写入的条目，用 `false` 查询查不到，
+    /// 反之亦然。曾因把该值从 `true` 翻成 `false` 而没有迁移，导致升级后读不到任何已存凭据。
+    /// 因此这里定死规矩：**读取与删除一律用 `kSecAttrSynchronizableAny`**（两种形态都命中），
+    /// 只有 `save` 写入时才挑一个具体值。
+    private func baseQuery(account: String,
+                           synchronizable: Any = kSecAttrSynchronizableAny) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrSynchronizable as String: kCFBooleanFalse!,
+            kSecAttrSynchronizable as String: synchronizable,
         ]
     }
 
@@ -66,8 +74,10 @@ nonisolated struct KeychainStore: KeychainReading {
         guard let data = value.data(using: .utf8) else {
             throw KeychainError.dataEncodingFailed
         }
+        // delete 用 Any 匹配，连同历史上以 synchronizable=false 写入的条目一并清掉，
+        // 于是每次保存都把该 account 收敛成唯一一条可同步条目。
         try delete(account: account)
-        var query = baseQuery(account: account)
+        var query = baseQuery(account: account, synchronizable: kCFBooleanTrue!)
         query[kSecValueData as String] = data
         query[kSecAttrAccessible as String] = Self.accessibility
         let status = SecItemAdd(query as CFDictionary, nil)
