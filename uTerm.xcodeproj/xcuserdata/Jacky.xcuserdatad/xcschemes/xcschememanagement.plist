@@ -9,6 +9,11 @@
 			<key>orderHint</key>
 			<integer>0</integer>
 		</dict>
+		<key>uTermBackgroundLauncher.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>29</integer>
+		</dict>
 		<key>uTermMobile.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
