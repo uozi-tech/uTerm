@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 @testable import uTerm
 
+@MainActor
 final class StatusBarViewTests: XCTestCase {
     func testCPULoadSummaryIncludesLoadCoresAndCPU() {
         XCTAssertEqual(

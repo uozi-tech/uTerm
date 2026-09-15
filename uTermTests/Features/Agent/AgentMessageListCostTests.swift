@@ -598,7 +598,7 @@ private struct PacedLLMClient: LLMClient {
     }
 
     /// 每 8 片凑出一个新的 Markdown 块，让重解析的输入真的越来越长、越来越复杂。
-    private static func chunk(_ i: Int) -> String {
+    nonisolated private static func chunk(_ i: Int) -> String {
         switch i % 8 {
         case 0: return "\n\n### 分析 \(i / 8)\n\n"
         case 1, 2, 3: return "这是第 \(i) 段流式文本，带 `inline code` 与 **强调**。"

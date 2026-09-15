@@ -2,6 +2,7 @@ import XCTest
 @testable import UDesignKit
 @testable import uTerm
 
+@MainActor
 final class UDSplashTests: XCTestCase {
     /// 星点表直接搬运自设计稿 `splash.jsx` 的 `SPLASH_STARS`：26 颗、坐标百分比、
     /// 透明度合法——确定性坐标保证开屏画面稳定可截图。

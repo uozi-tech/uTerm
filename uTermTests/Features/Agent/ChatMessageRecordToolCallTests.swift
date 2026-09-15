@@ -2,6 +2,7 @@ import AgentKit
 import XCTest
 @testable import uTerm
 
+@MainActor
 final class ChatMessageRecordToolCallTests: XCTestCase {
     func testRoundTripToolCalls() {
         let calls = [ToolCallState(id: "c1", name: "run_command", command: "ls",

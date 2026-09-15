@@ -20,20 +20,20 @@ struct uTermApp: App {
     /// 普通偏好：本机 UserDefaults 为准，经 iCloud KVS 跨设备保底，局域网同步另按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
     @State private var lanSync: LANSyncCoordinator
-    @State private var forwardingCoordinator = ForwardingCoordinator()
+    @State private var forwardingCoordinator: ForwardingCoordinator
     /// 全局端口转发的「启动自动化」编排器（App 级，注入 Welcome 与全局转发窗口）。
-    @State private var globalForwarding = GlobalForwardingModel()
+    @State private var globalForwarding: GlobalForwardingModel
     /// 应用级共享的 host-key 中转：启动序列与全局转发窗口共用一个，使首连主机的
     /// 信任弹窗能在任一可见窗口里解决 —— `.hostKeySheet` 同时挂在 Welcome（默认启动模式
     /// 常驻可见，承接启动期弹窗）与全局转发窗口（用户打开后亦可解决 / 重连）。
-    @State private var launchRelay = HostKeyChallengeRelay()
+    @State private var launchRelay: HostKeyChallengeRelay
     /// 命令行接口（本机 IPC）的两级门禁开关。进程 init 即接上 `ControlServer`，
     /// 因此无窗口后台模式也能提供 run/SFTP/转发。
-    @State private var controlSettings = ControlSettings()
+    @State private var controlSettings: ControlSettings
     @State private var backgroundSettings = BackgroundServiceSettings()
     /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
     /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
-    @State private var terminalRegistry = TerminalSessionRegistry()
+    @State private var terminalRegistry: TerminalSessionRegistry
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
@@ -93,11 +93,30 @@ struct uTermApp: App {
         // from UserDefaults once rather than observing it continuously.
         preferences.start()
 
+        // App.init runs before SwiftUI installs State storage. Bootstrap with local
+        // references, then give the same instances to the scenes through State.
+        let controlSettings = ControlSettings()
+        let forwardingCoordinator = ForwardingCoordinator()
+        let terminalRegistry = TerminalSessionRegistry()
+        let globalForwarding = GlobalForwardingModel()
+        let launchRelay = HostKeyChallengeRelay()
+        _controlSettings = State(initialValue: controlSettings)
+        _forwardingCoordinator = State(initialValue: forwardingCoordinator)
+        _terminalRegistry = State(initialValue: terminalRegistry)
+        _globalForwarding = State(initialValue: globalForwarding)
+        _launchRelay = State(initialValue: launchRelay)
+
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
         if !BackgroundLaunchMode.isRunningInTestHost {
             StartupMaintenance.run(container: modelContainer)
-            startControlInterface()
+            Self.startControlInterface(
+                server: controlServer,
+                settings: controlSettings,
+                modelContainer: modelContainer,
+                forwardingCoordinator: forwardingCoordinator,
+                registry: terminalRegistry
+            )
             LaunchForwardingBootstrap.start(
                 modelContainer: modelContainer,
                 model: globalForwarding,
@@ -145,17 +164,22 @@ struct uTermApp: App {
     /// `start()` 返回非 nil 表示**不会自愈**的启动失败（目前只有 socket 路径超过
     /// `sun_path` 上限），写进 `startupError` 让设置页显示出来。
     @MainActor
-    private func startControlInterface() {
-        let server = controlServer
+    private static func startControlInterface(
+        server: ControlServer,
+        settings: ControlSettings,
+        modelContainer: ModelContainer,
+        forwardingCoordinator: ForwardingCoordinator,
+        registry: TerminalSessionRegistry
+    ) {
         let handler = ControlHandler.shared
         handler.attach(ControlHandler.Dependencies(
-            settings: controlSettings,
+            settings: settings,
             modelContainer: modelContainer,
             forwardingCoordinator: forwardingCoordinator,
             pool: ControlConnectionPool.shared,
-            registry: terminalRegistry
+            registry: registry
         ))
-        controlSettings.observe { settings in
+        settings.observe { settings in
             if settings.isEnabled {
                 settings.startupError = server.start()
                 SkillInstaller.repairInstalledSourcesOnce()

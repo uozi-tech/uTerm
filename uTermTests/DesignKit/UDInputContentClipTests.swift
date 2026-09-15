@@ -5,6 +5,7 @@ import XCTest
 
 /// `UDTextField` 把文本裁到内容框，挡住 AppKit text field / field editor 比 SwiftUI
 /// 内容框宽出来的那 2 ~ 4.5pt —— 长密码聚焦滚动时首字会画进内边距、糊到圆角描边上。
+@MainActor
 final class UDInputContentClipTests: XCTestCase {
     private let fieldRect = CGRect(x: 0, y: 0, width: 200, height: 34)
 

@@ -2,6 +2,7 @@ import XCTest
 import AppKit
 @testable import uTerm
 
+@MainActor
 final class ULogoTests: XCTestCase {
     func test_default_size_is_32() {
         let logo = ULogo()

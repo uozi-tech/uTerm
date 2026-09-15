@@ -9,6 +9,7 @@ import Markdown   // swift-markdown
 /// （Table/Link/Image）或 swift-markdown 0.8 中协议层次微妙时会失败；那些是
 /// 上游库的细节，我们的渲染器在 source 文件里用 type-switch 覆盖。
 /// 端到端正确性由后续手动 smoke（spec §7 #5）保证。
+@MainActor
 final class MarkdownRendererTests: XCTestCase {
 
     func test_parseHeadingsAndParagraphs() {
