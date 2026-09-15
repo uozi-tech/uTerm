@@ -90,7 +90,7 @@ final class MarkdownPreviewCostTests: XCTestCase {
 
     private func makeFixture(source: String, blockLimit: Int) throws -> Fixture {
         let parseStart = CFAbsoluteTimeGetCurrent()
-        let parsed = Document(parsing: source)
+        let parsed = Markdown.Document(parsing: source)
         let blocks = Array(parsed.blockChildren).count
         let parseMS = (CFAbsoluteTimeGetCurrent() - parseStart) * 1000
 

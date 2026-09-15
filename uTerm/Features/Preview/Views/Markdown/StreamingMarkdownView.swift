@@ -42,7 +42,7 @@ struct StreamingMarkdownView: View {
 final class StreamingMarkdownRenderer {
     static let reparseDelay: Duration = .milliseconds(100)
 
-    private(set) var document: Document
+    private(set) var document: Markdown.Document
     private(set) var renderedSource: String
 
     @ObservationIgnored private let reparseDelay: Duration
@@ -53,7 +53,7 @@ final class StreamingMarkdownRenderer {
         self.reparseDelay = reparseDelay
         self.latestSource = ""
         self.renderedSource = ""
-        self.document = Document(parsing: "")
+        self.document = Markdown.Document(parsing: "")
     }
 
     func renderImmediately(_ source: String) {
@@ -91,6 +91,6 @@ final class StreamingMarkdownRenderer {
     private func renderLatest() {
         guard latestSource != renderedSource else { return }
         renderedSource = latestSource
-        document = Document(parsing: latestSource)
+        document = Markdown.Document(parsing: latestSource)
     }
 }
