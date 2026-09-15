@@ -9,8 +9,7 @@ struct LANSyncSettingsSection: View {
         MInsetGroup(header: "局域网接收", footer: "手机与 Mac 需连接同一 Wi-Fi。Mac 发起全量加密同步后，需在这里确认才会覆盖本机数据；密码、私钥和 API Key 会随本次加密会话传输。") {
             MInsetRow(icon: "wifi", label: "接收状态", sub: lanSync.status.label,
                       value: "前台监听", last: false)
-            MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 高级中显示的 6 位代码",
-                      last: true,
+            MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 高级中显示的 6 位代码", last: true,
                       trailing: AnyView(
                           TextField("6 位配对码", text: $pairingCode)
                               .keyboardType(.numberPad)

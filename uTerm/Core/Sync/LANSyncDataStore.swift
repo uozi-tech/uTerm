@@ -121,7 +121,9 @@ final class LANSyncDataStore {
         for chunk in split(snapshot, limit: LANSyncConstants.chunkRecordLimit) {
             try encodeFitting(chunk, encoder: encoder, limit: limit, into: &frames)
         }
-        return try frames.map { try JSONDecoder().decode(LANSyncDataSnapshot.self, from: $0) }
+        let decoder = JSONDecoder()
+        LANSyncDateCoding.configure(encoder: encoder, decoder: decoder)
+        return try frames.map { try decoder.decode(LANSyncDataSnapshot.self, from: $0) }
     }
 
     /// 编码一片；超过单帧上限就二分后各自再试，直到装得下或只剩一条记录。

@@ -2,8 +2,14 @@ import Foundation
 @preconcurrency import Network
 import Observation
 
-nonisolated private struct LANSyncClearHello: Codable, Sendable {
-    let hello: LANSyncCryptoSession.Hello
+nonisolated private struct LANSyncClearPacket: Codable, Sendable {
+    let hello: LANSyncCryptoSession.Hello?
+    let error: String?
+
+    init(hello: LANSyncCryptoSession.Hello? = nil, error: String? = nil) {
+        self.hello = hello
+        self.error = error
+    }
 }
 
 @MainActor @Observable
@@ -43,8 +49,12 @@ final class LANSyncCoordinator {
         var nextSendSequence: UInt64 = 0
         var nextReceiveSequence: UInt64 = 0
         var payload: LANSyncFullSnapshot?
+        var dataChunks: [LANSyncDataSnapshot] = []
+        var transferPlaintexts: [Data] = []
         var chunks: [LANSyncTransferChunk] = []
+        var receivedPlaintexts: [Data] = []
         var pendingOffer: LANSyncOffer?
+        var phase = "connected"
 
         init(connection: NWConnection, generation: Int = 0) {
             self.connection = connection
@@ -88,6 +98,7 @@ final class LANSyncCoordinator {
         self.preferences = preferences
         self.dataStore = dataStore
         self.defaults = defaults
+        LANSyncDateCoding.configure(encoder: encoder, decoder: decoder)
         let existingID = defaults.string(forKey: Self.deviceIDKey)
         let id = existingID ?? UUID().uuidString
         if existingID == nil { defaults.set(id, forKey: Self.deviceIDKey) }
@@ -241,14 +252,22 @@ final class LANSyncCoordinator {
             let crypto = LANSyncCryptoSession(deviceID: deviceID, deviceName: deviceName,
                                                pairingCode: pairingCode)
             context.crypto = crypto
-            try sendClear(LANSyncClearHello(hello: crypto.hello), on: context)
+            try sendClear(LANSyncClearPacket(hello: crypto.hello), on: context)
+            context.phase = "waiting for receiver hello"
             readFrame(on: context) { [weak self] data in
                 guard let self else { return }
                 do {
-                    let remote = try self.decoder.decode(LANSyncClearHello.self, from: data).hello
+                    let packet = try self.decoder.decode(LANSyncClearPacket.self, from: data)
+                    if let error = packet.error {
+                        throw LANSyncTransportError.connectionFailed(error)
+                    }
+                    guard let remote = packet.hello else {
+                        throw LANSyncTransportError.invalidMessage
+                    }
                     var initiator = crypto
                     try initiator.establish(with: remote, initiator: true)
                     context.crypto = initiator
+                    context.phase = "sending encrypted offer"
                     try self.sendOffer(on: context)
                 } catch { self.fail(context, error: error) }
             }
@@ -257,40 +276,83 @@ final class LANSyncCoordinator {
 
     private func receiveClearHello(on connection: NWConnection) {
         guard let context = context(for: connection) else { return }
+        context.phase = "waiting for sender hello"
         readFrame(on: context) { [weak self] data in
             guard let self else { return }
             do {
-                let remote = try self.decoder.decode(LANSyncClearHello.self, from: data).hello
-                guard !self.pairingCode.isEmpty else { throw LANSyncTransportError.authenticationFailed }
+                let packet = try self.decoder.decode(LANSyncClearPacket.self, from: data)
+                guard let remote = packet.hello else {
+                    throw LANSyncTransportError.invalidMessage
+                }
+                // The code field is editable while the listener is already running.
+                // Read the persisted value at handshake time so an earlier empty cache
+                // cannot reject a code that is now visible in Settings.
+                let pairingCode = self.currentReceiverPairingCode
+                guard !pairingCode.isEmpty else { throw LANSyncTransportError.authenticationFailed }
                 let base = LANSyncCryptoSession(sessionID: remote.sessionID, deviceID: self.deviceID,
-                                                 deviceName: self.deviceName, pairingCode: self.pairingCode)
+                                                 deviceName: self.deviceName, pairingCode: pairingCode)
                 let responder = try base.respondingSession(to: remote, deviceID: self.deviceID,
                                                             deviceName: self.deviceName,
-                                                            pairingCode: self.pairingCode)
+                                                            pairingCode: pairingCode)
                 context.crypto = responder
-                try self.sendClear(LANSyncClearHello(hello: responder.hello), on: context)
+                try self.sendClear(LANSyncClearPacket(hello: responder.hello), on: context)
+                context.phase = "waiting for encrypted offer"
                 self.receiveOffer(on: context)
-            } catch { self.fail(context, error: error) }
+            } catch {
+                self.sendRejectionAndClose(context, message: "移动端未设置配对码或配对码无效",
+                                            error: error)
+            }
         }
     }
 
     private func sendOffer(on context: ConnectionContext) throws {
         guard let crypto = context.crypto else { throw LANSyncTransportError.handshakeRequired }
         let payload = try dataStore.fullSnapshot(preferences: preferences.lanSnapshot())
-        let chunks = try LANSyncDataStore.fittingSnapshots(payload.data, encoder: encoder)
+        let fittedChunks = try LANSyncDataStore.fittingSnapshots(payload.data, encoder: encoder)
+        let chunks = fittedChunks.isEmpty ? [.empty] : fittedChunks
+        // Hash the exact Codable representation that will cross the wire. This avoids
+        // Date/optional normalization differences between the sender's model snapshot
+        // and the receiver's decoded chunks.
+        let wireData = LANSyncDataSnapshot(
+            profiles: chunks.flatMap { $0.profiles },
+            groups: chunks.flatMap { $0.groups },
+            knownHosts: chunks.flatMap { $0.knownHosts },
+            sshKeys: chunks.flatMap { $0.sshKeys },
+            providers: chunks.flatMap { $0.providers },
+            forwardingRules: chunks.flatMap { $0.forwardingRules },
+            quickCommands: chunks.flatMap { $0.quickCommands },
+            quickCommandRuns: chunks.flatMap { $0.quickCommandRuns },
+            chatSessions: chunks.flatMap { $0.chatSessions },
+            chatMessages: chunks.flatMap { $0.chatMessages })
+        let wirePreferences = payload.preferences.map {
+            LANSyncPreference(key: $0.key, value: $0.value,
+                              modifiedAt: Date(timeIntervalSince1970: $0.modifiedAt.timeIntervalSince1970.rounded()))
+        }
+        let wirePayload = LANSyncFullSnapshot(data: wireData,
+                                              preferences: wirePreferences,
+                                              secrets: payload.secrets)
+        let transferChunks = chunks.enumerated().map { index, snapshot in
+            LANSyncTransferChunk(index: index, total: chunks.count, data: snapshot,
+                                 preferences: index == 0 ? wirePayload.preferences : [],
+                                 secrets: index == 0 ? wirePayload.secrets : [])
+        }
+        let transferPlaintexts = try transferChunks.map { try encoder.encode($0) }
         let offer = LANSyncOffer(
             sessionID: crypto.sessionID, deviceID: deviceID, deviceName: deviceName,
-            recordCount: payload.recordCount, preferenceCount: payload.preferences.count,
-            secretCount: payload.secretCount, chunkCount: max(1, chunks.count),
-            digest: try LANSyncPayloadDigest.digest(payload, encoder: encoder),
+            recordCount: wirePayload.recordCount, preferenceCount: wirePayload.preferences.count,
+            secretCount: wirePayload.secretCount, chunkCount: chunks.count,
+            digest: LANSyncPayloadDigest.digestBytes(transferPlaintexts),
             includesSensitiveData: true)
-        context.payload = payload
+        context.payload = wirePayload
+        context.dataChunks = chunks
+        context.transferPlaintexts = transferPlaintexts
         try sendEncrypted(offer, type: "offer", on: context, crypto: crypto)
         readDecision(on: context)
     }
 
     private func receiveOffer(on context: ConnectionContext) {
-        readEncrypted(on: context, expectedType: "offer") { [weak self] (offer: LANSyncOffer) in
+        context.phase = "waiting for encrypted offer"
+        readEncrypted(on: context, expectedType: "offer") { [weak self] (offer: LANSyncOffer, _) in
             guard let self, offer.sessionID == context.crypto?.sessionID else {
                 self?.fail(context, error: LANSyncTransportError.invalidMessage); return
             }
@@ -298,29 +360,28 @@ final class LANSyncCoordinator {
             self.pendingConnectionID = ObjectIdentifier(context.connection)
             self.pendingOffer = offer
             self.status = .waitingForConfirmation
+            context.phase = "waiting for receiver decision"
         }
     }
 
     private func readDecision(on context: ConnectionContext) {
-        readEncrypted(on: context, expectedType: "decision") { [weak self] (decision: LANSyncDecision) in
+        context.phase = "waiting for receiver decision"
+        readEncrypted(on: context, expectedType: "decision") { [weak self] (decision: LANSyncDecision, _) in
             guard let self else { return }
             guard decision.accepted else { self.fail(context, error: LANSyncTransportError.rejected); return }
             self.status = .syncing
+            context.phase = "sending encrypted chunks"
             do { try self.sendChunks(on: context) } catch { self.fail(context, error: error) }
         }
     }
 
     private func sendChunks(on context: ConnectionContext) throws {
-        guard let payload = context.payload, let crypto = context.crypto else {
+        guard context.payload != nil, let crypto = context.crypto else {
             throw LANSyncTransportError.handshakeRequired
         }
-        let pieces = try LANSyncDataStore.fittingSnapshots(payload.data, encoder: encoder)
-        let snapshots = pieces.isEmpty ? [.empty] : pieces
-        for (index, snapshot) in snapshots.enumerated() {
-            let chunk = LANSyncTransferChunk(index: index, total: snapshots.count, data: snapshot,
-                                              preferences: index == 0 ? payload.preferences : [],
-                                              secrets: index == 0 ? payload.secrets : [])
-            try sendEncrypted(chunk, type: "chunk", on: context, crypto: crypto)
+        let transferPlaintexts = context.transferPlaintexts
+        for plaintext in transferPlaintexts {
+            try sendEncryptedBytes(plaintext, type: "chunk", on: context, crypto: crypto)
         }
         try sendEncrypted(LANSyncTransferResult(succeeded: true, message: "发送完成", digest: nil),
                           type: "finish", on: context, crypto: crypto)
@@ -329,31 +390,36 @@ final class LANSyncCoordinator {
 
     private func receiveChunks(on context: ConnectionContext) {
         context.chunks.removeAll()
+        context.receivedPlaintexts.removeAll()
+        context.phase = "receiving encrypted chunks"
         readNextChunk(on: context)
     }
 
     private func readNextChunk(on context: ConnectionContext) {
-        readEncrypted(on: context, expectedType: "chunk") { [weak self] (chunk: LANSyncTransferChunk) in
+        readEncrypted(on: context, expectedType: "chunk") { [weak self] (chunk: LANSyncTransferChunk, plaintext: Data) in
             guard let self else { return }
             guard chunk.index == context.chunks.count,
                   chunk.total > 0, chunk.total <= LANSyncConstants.maxTotalBytes else {
                 self.fail(context, error: LANSyncTransportError.invalidMessage); return
             }
             context.chunks.append(chunk)
+            context.receivedPlaintexts.append(plaintext)
             if context.chunks.count < chunk.total { self.readNextChunk(on: context) }
             else { self.readSenderFinish(on: context) }
         }
     }
 
     private func readSenderFinish(on context: ConnectionContext) {
-        readEncrypted(on: context, expectedType: "finish") { [weak self] (_: LANSyncTransferResult) in
+        context.phase = "waiting for sender finish"
+        readEncrypted(on: context, expectedType: "finish") { [weak self] (_: LANSyncTransferResult, _) in
             guard let self else { return }
             self.finishReceiverPayload(on: context)
         }
     }
 
     private func readSenderResult(on context: ConnectionContext) {
-        readEncrypted(on: context, expectedType: "result") { [weak self] (result: LANSyncTransferResult) in
+        context.phase = "waiting for receiver result"
+        readEncrypted(on: context, expectedType: "result") { [weak self] (result: LANSyncTransferResult, _) in
             guard let self else { return }
             if result.succeeded {
                 self.status = .ready
@@ -383,10 +449,19 @@ final class LANSyncCoordinator {
                     chatSessions: context.chunks.flatMap { $0.data.chatSessions },
                     chatMessages: context.chunks.flatMap { $0.data.chatMessages }),
                 preferences: first.preferences, secrets: first.secrets)
-            guard let offer = context.pendingOffer,
-                  try LANSyncPayloadDigest.digest(payload, encoder: encoder) == offer.digest else {
+            guard let offer = context.pendingOffer else {
                 throw LANSyncTransportError.invalidMessage
             }
+            let computedDigest = LANSyncPayloadDigest.digestBytes(context.receivedPlaintexts)
+            guard computedDigest == offer.digest else {
+                AppLogger.warn("LAN sync digest mismatch: chunks=\(context.chunks.count), "
+                               + "receivedRecords=\(payload.recordCount), "
+                               + "offerPrefix=\(offer.digest.prefix(8)), computedPrefix=\(computedDigest.prefix(8))",
+                               category: "sync")
+                throw LANSyncTransportError.invalidMessage
+            }
+            AppLogger.info("LAN sync applying verified payload records=\(payload.recordCount) secrets=\(payload.secretCount)",
+                           category: "sync")
             _ = try dataStore.replace(with: payload)
             _ = preferences.replaceFromLAN(payload.preferences)
             guard let crypto = context.crypto else { throw LANSyncTransportError.handshakeRequired }
@@ -428,9 +503,16 @@ final class LANSyncCoordinator {
 
     private func sendEncrypted<T: Encodable>(_ value: T, type: String, on context: ConnectionContext,
                                              crypto: LANSyncCryptoSession) throws {
+        let plaintext = try encoder.encode(value)
+        try sendEncryptedBytes(plaintext, type: type, on: context, crypto: crypto)
+    }
+
+    private func sendEncryptedBytes(_ plaintext: Data, type: String, on context: ConnectionContext,
+                                    crypto: LANSyncCryptoSession) throws {
         let sequence = context.nextSendSequence
         context.nextSendSequence += 1
-        let data = try crypto.encrypted(value, messageType: type, sequence: sequence, encoder: encoder)
+        let data = try crypto.encryptedBytes(plaintext, messageType: type, sequence: sequence)
+        AppLogger.info("LAN sync sending \(type) frame seq=\(sequence) bytes=\(data.count)", category: "sync")
         LANSyncTransport.send(data, on: context.connection) { [weak self, weak context] error in
             guard let self, let context, let error else { return }
             Task { @MainActor in self.fail(context, error: error) }
@@ -439,19 +521,35 @@ final class LANSyncCoordinator {
 
     private func readEncrypted<T: Decodable & Sendable>(
         on context: ConnectionContext, expectedType: String,
-        completion: @escaping @MainActor @Sendable (T) -> Void
+        completion: @escaping @MainActor @Sendable (T, Data) -> Void
     ) {
         readFrame(on: context) { [weak self, weak context] data in
             guard let self, let context, let crypto = context.crypto else { return }
             do {
+                if let clear = try? self.decoder.decode(LANSyncClearPacket.self, from: data),
+                   let error = clear.error {
+                    throw LANSyncTransportError.connectionFailed(error)
+                }
                 let result = try crypto.decryptedBytes(data)
-                guard result.messageType == expectedType,
-                      result.sequence == context.nextReceiveSequence else {
-                    throw LANSyncTransportError.invalidMessage
+                AppLogger.info("LAN sync received \(result.messageType) frame seq=\(result.sequence) bytes=\(result.bytes.count)", category: "sync")
+                guard result.messageType == expectedType else {
+                    throw LANSyncTransportError.connectionFailed(
+                        "收到意外消息 \(result.messageType)，预期 \(expectedType)")
+                }
+                guard result.sequence == context.nextReceiveSequence else {
+                    throw LANSyncTransportError.connectionFailed(
+                        "消息序号错误：收到 \(result.sequence)，预期 \(context.nextReceiveSequence)")
                 }
                 context.nextReceiveSequence += 1
-                completion(try self.decoder.decode(T.self, from: result.bytes))
-            } catch { self.fail(context, error: error) }
+                completion(try self.decoder.decode(T.self, from: result.bytes), result.bytes)
+            } catch {
+                if expectedType == "offer" {
+                    self.sendRejectionAndClose(context, message: "配对码不正确或移动端未设置配对码",
+                                                error: error)
+                    return
+                }
+                self.fail(context, error: error)
+            }
         }
     }
 
@@ -461,6 +559,23 @@ final class LANSyncCoordinator {
             guard let self, let context, self.syncGeneration == generation,
                   self.connections[ObjectIdentifier(context.connection)] != nil else { return }
             self.fail(context, error: LANSyncTransportError.connectionFailed("等待移动端响应超时"))
+        }
+    }
+
+    private var currentReceiverPairingCode: String {
+        String((defaults.string(forKey: Self.mobilePairingCodeKey) ?? "")
+            .filter(\.isNumber).prefix(6))
+    }
+
+    private func sendRejectionAndClose(_ context: ConnectionContext, message: String, error: Error) {
+        do {
+            let data = try encoder.encode(LANSyncClearPacket(error: message))
+            LANSyncTransport.send(data, on: context.connection) { [weak self, weak context] _ in
+                guard let self, let context else { return }
+                Task { @MainActor in self.fail(context, error: error) }
+            }
+        } catch {
+            fail(context, error: error)
         }
     }
 
@@ -482,7 +597,7 @@ final class LANSyncCoordinator {
     }
 
     private func fail(_ context: ConnectionContext, error: Error) {
-        AppLogger.warn("LAN sync failed: \(error.localizedDescription)", category: "sync")
+        AppLogger.warn("LAN sync failed at \(context.phase): \(error.localizedDescription)", category: "sync")
         close(context)
         status = .error(error.localizedDescription)
         lastSyncedAt = nil

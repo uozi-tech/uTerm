@@ -1,6 +1,21 @@
 import CryptoKit
 import Foundation
 
+nonisolated enum LANSyncDateCoding {
+    /// Dates are metadata for sync, not event telemetry. Integer seconds make the
+    /// digest stable across Codable round trips and device architectures.
+    static func configure(encoder: JSONEncoder, decoder: JSONDecoder) {
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSince1970.rounded())
+        }
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            return Date(timeIntervalSince1970: try container.decode(Double.self))
+        }
+    }
+}
+
 nonisolated struct LANSyncSecretRecord: Codable, Sendable {
     let account: String
     let value: String
@@ -46,8 +61,22 @@ nonisolated struct LANSyncTransferResult: Codable, Sendable {
 }
 
 nonisolated enum LANSyncPayloadDigest {
-    static func digest(_ payload: LANSyncFullSnapshot, encoder: JSONEncoder) throws -> String {
-        let bytes = try encoder.encode(payload)
+    static func digestBytes(_ values: [Data]) -> String {
+        var input = Data()
+        for value in values {
+            var length = UInt64(value.count).bigEndian
+            withUnsafeBytes(of: &length) { input.append(contentsOf: $0) }
+            input.append(value)
+        }
+        return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func digestValue<T: Encodable>(_ value: T, encoder: JSONEncoder) throws -> String {
+        let bytes = try encoder.encode(value)
         return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func digest(_ payload: LANSyncFullSnapshot, encoder: JSONEncoder) throws -> String {
+        try digestValue(payload, encoder: encoder)
     }
 }

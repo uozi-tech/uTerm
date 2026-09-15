@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Reads and replaces the Keychain accounts represented by the full LAN snapshot.
 /// Account names are generated only from local model identifiers; arbitrary remote
@@ -39,7 +40,7 @@ final class LANSyncSecretStore {
         -> [LANSyncSecretRecord] {
         let accounts = Self.accounts(profiles: profiles, keys: keys, providers: providers)
         return try accounts.sorted().compactMap { account in
-            guard let value = try keychain.load(account: account) else { return nil }
+            guard let value = try load(account: account) else { return nil }
             return LANSyncSecretRecord(account: account, value: value)
         }
     }
@@ -55,7 +56,7 @@ final class LANSyncSecretStore {
         }
         let incoming = Dictionary(uniqueKeysWithValues: records.map { ($0.account, $0.value) })
         var backup: [String: String?] = [:]
-        for account in allowed { backup[account] = try keychain.load(account: account) }
+        for account in allowed { backup[account] = try load(account: account) }
         do {
             for account in allowed {
                 if let value = incoming[account] {
@@ -64,6 +65,14 @@ final class LANSyncSecretStore {
                     try keychain.delete(account: account)
                 }
             }
+        } catch let KeychainError.unexpectedStatus(status) where status == errSecMissingEntitlement {
+#if DEBUG
+            // Unsigned local builds cannot access an access-group Keychain. Keep the
+            // model/protocol testable while preserving fail-closed behavior in release.
+            return Transaction(keychain: keychain, backup: [:])
+#else
+            throw KeychainError.unexpectedStatus(status)
+#endif
         } catch {
             let transaction = Transaction(keychain: keychain, backup: backup)
             transaction.rollback()
@@ -85,6 +94,18 @@ final class LANSyncSecretStore {
 
     private static func profileAccounts(_ id: UUID) -> [String] {
         SecretKind.allCases.map { "\(id.uuidString)/\($0.rawValue)" }
+    }
+
+    private func load(account: String) throws -> String? {
+        do {
+            return try keychain.load(account: account)
+        } catch let KeychainError.unexpectedStatus(status) where status == errSecMissingEntitlement {
+#if DEBUG
+            return nil
+#else
+            throw KeychainError.unexpectedStatus(status)
+#endif
+        }
     }
 }
 

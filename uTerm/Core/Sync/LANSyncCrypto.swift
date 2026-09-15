@@ -89,14 +89,18 @@ nonisolated struct LANSyncCryptoSession: Sendable {
 
     func encrypted<T: Encodable>(_ value: T, messageType: String,
                                  sequence: UInt64, encoder: JSONEncoder) throws -> Data {
-        guard let sendKey else { throw LANSyncTransportError.handshakeRequired }
         let plaintext = try encoder.encode(value)
+        return try encryptedBytes(plaintext, messageType: messageType, sequence: sequence)
+    }
+
+    func encryptedBytes(_ plaintext: Data, messageType: String, sequence: UInt64) throws -> Data {
+        guard let sendKey else { throw LANSyncTransportError.handshakeRequired }
         let nonce = ChaChaPoly.Nonce()
         let aad = Self.aad(sessionID: sessionID, sequence: sequence, messageType: messageType)
         let sealed = try ChaChaPoly.seal(plaintext, using: sendKey, nonce: nonce, authenticating: aad)
         let envelope = Envelope(sessionID: sessionID, sequence: sequence, messageType: messageType,
                                 nonce: Data(nonce), ciphertext: sealed.ciphertext + sealed.tag)
-        return try encoder.encode(envelope)
+        return try JSONEncoder().encode(envelope)
     }
 
     func decrypted<T: Decodable>(_ data: Data, as type: T.Type,
