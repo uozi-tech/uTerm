@@ -1,60 +1,7 @@
 import AppKit
 import Foundation
-import Observation
-import ServiceManagement
 import SwiftUI
 import SwiftData
-
-/// Process-level settings for keeping the local control service available without a window.
-/// These switches are deliberately independent from the IPC and mutation gates.
-@MainActor
-@Observable
-final class BackgroundServiceSettings {
-    static let loginItemIdentifier = "com.uozi.uTerm.BackgroundLauncher"
-    private enum Keys {
-        static let launchAtLogin = "background.launchAtLogin"
-        static let allowOnDemandLaunch = "background.allowOnDemandLaunch"
-    }
-
-    @ObservationIgnored private let defaults: UserDefaults
-
-    var launchAtLogin: Bool {
-        didSet {
-            guard launchAtLogin != oldValue else { return }
-            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            updateLoginItem()
-        }
-    }
-
-    var allowOnDemandLaunch: Bool {
-        didSet {
-            guard allowOnDemandLaunch != oldValue else { return }
-            defaults.set(allowOnDemandLaunch, forKey: Keys.allowOnDemandLaunch)
-        }
-    }
-
-    var loginItemError: String?
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
-        allowOnDemandLaunch = defaults.object(forKey: Keys.allowOnDemandLaunch) as? Bool ?? false
-    }
-
-    private func updateLoginItem() {
-        let service = SMAppService.loginItem(identifier: Self.loginItemIdentifier)
-        do {
-            if launchAtLogin {
-                try service.register()
-            } else if service.status != .notRegistered {
-                try service.unregister()
-            }
-            loginItemError = nil
-        } catch {
-            loginItemError = error.localizedDescription
-        }
-    }
-}
 
 enum BackgroundLaunchMode {
     enum Presentation: Equatable { case background, foreground }

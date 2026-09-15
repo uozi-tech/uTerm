@@ -23,8 +23,12 @@ struct CLISettingsView: View {
             skillsGroup
         }
         .task {
+            backgroundSettings.refreshLoginItemStatus()
             await skills.load()
             await skills.reconcileBinLink(enabled: linkToLocalBin)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            backgroundSettings.refreshLoginItemStatus()
         }
     }
 
@@ -33,7 +37,7 @@ struct CLISettingsView: View {
             SettingsRow(label: "登录后在后台启动", hint: "登录 macOS 后启动 uTerm 的本机服务，不弹窗口，也不显示 Dock 图标。") {
                 UDToggle(Binding(
                     get: { backgroundSettings.launchAtLogin },
-                    set: { backgroundSettings.launchAtLogin = $0 }
+                    set: { backgroundSettings.setLaunchAtLogin($0) }
                 ))
             }
             SettingsRow(label: "允许 CLI 按需启动", hint: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪。") {
@@ -44,6 +48,12 @@ struct CLISettingsView: View {
             }
             if let error = backgroundSettings.loginItemError {
                 Text(error).font(.system(size: 11.5)).foregroundStyle(UD.danger)
+            } else if backgroundSettings.needsLoginItemApproval {
+                Text("等待系统批准。请前往系统设置 ▸ 通用 ▸ 登录项与扩展，允许 uTerm 后台项目。")
+                    .font(.system(size: 11.5)).foregroundStyle(UD.caution)
+            } else if backgroundSettings.loginItemStatus == .notFound {
+                Text("登录后台启动尚未注册，或系统尚未识别该组件。开启后会再次向系统注册。")
+                    .font(.system(size: 11.5)).foregroundStyle(UD.text3)
             }
         }
     }
