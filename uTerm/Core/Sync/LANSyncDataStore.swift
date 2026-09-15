@@ -4,15 +4,13 @@ import SwiftData
 
 /// 在本地 SwiftData 容器与局域网快照之间转换。
 ///
-/// Mac 是同步权威端，但**应用快照走最小增量**：按主键逐条比对，只写真正变化的字段，
-/// 快照里没有的记录才删除。原先的「清空后整体重建」在开了 CloudKit 镜像之后不能用了 ——
-/// 那等于把每条记录都当成删除 + 新建导出一遍，一次手动局域网同步会被放大成对所有设备的
-/// 全量覆盖。逐字段守卫让未变化的对象根本不被标脏，CloudKit 也就不会为它产生任何导出。
+/// Mac 是 LAN 同步权威端。接收端先收齐完整快照，再按主键逐条覆盖；快照里没有的记录会删除。
+/// 逐字段守卫仍保留，用来减少 CloudKit 镜像在 LAN 导入后的无意义导出。
 ///
 /// 传输侧再叠一层：整份快照按 `LANSyncConstants.chunkRecordLimit` 拆成多帧发送
 /// （见 `chunks(scope:)`），接收端用 `LANSyncMergeSession` 逐片合并、收齐后才统一删除。
 ///
-/// 钥匙串正文不在这里出现，因而跨设备同步后仍需在目标设备单独录入 SSH / Provider 凭据。
+/// 钥匙串正文由 `LANSyncSecretStore` 单独收集并在加密会话中传输，不混入普通模型快照。
 @MainActor
 final class LANSyncDataStore {
     private let container: ModelContainer
@@ -21,8 +19,7 @@ final class LANSyncDataStore {
         self.container = container
     }
 
-    /// 导出快照。`scope` 不含 `.history` 时，会话 / 消息 / 执行留痕直接不取 ——
-    /// 它们是无界的那部分，而 iCloud 已经在同步它们。
+    /// 导出快照。LAN 默认使用 `.all`，调用方不应根据 CloudKit 状态缩减范围。
     func snapshot(scope: LANSyncScope = .all) throws -> LANSyncDataSnapshot {
         let context = container.mainContext
         let wantsHistory = scope.contains(.history)
@@ -82,6 +79,18 @@ final class LANSyncDataStore {
                                                orderIndex: $0.orderIndex) })
     }
 
+    /// 完整 LAN 载荷。LAN 不依赖 CloudKit 的 scope 判定，始终导出全部模型。
+    func fullSnapshot(preferences: [LANSyncPreference]) throws -> LANSyncFullSnapshot {
+        let context = container.mainContext
+        let profiles = try context.fetch(FetchDescriptor<ServerProfile>())
+        let keys = try context.fetch(FetchDescriptor<SSHKey>())
+        let providers = try context.fetch(FetchDescriptor<AIProvider>())
+        let secrets = try LANSyncSecretStore().snapshot(profiles: profiles, keys: keys,
+                                                         providers: providers)
+        return LANSyncFullSnapshot(data: try snapshot(scope: .all), preferences: preferences,
+                                   secrets: secrets)
+    }
+
     /// 导出并按记录数拆片，供长度前缀分帧逐帧发送。
     func chunks(scope: LANSyncScope = .all) throws -> [LANSyncDataSnapshot] {
         Self.split(try snapshot(scope: scope), limit: LANSyncConstants.chunkRecordLimit)
@@ -99,6 +108,20 @@ final class LANSyncDataStore {
             try Self.encodeFitting(chunk, encoder: encoder, limit: limit, into: &frames)
         }
         return frames
+    }
+
+    /// Returns decoded chunks using the same byte-fitting policy as the transport.
+    /// The coordinator adds encryption overhead after this split, so callers pass
+    /// `LANSyncConstants.maxChunkPayloadBytes` rather than the encrypted frame cap.
+    nonisolated static func fittingSnapshots(_ snapshot: LANSyncDataSnapshot,
+                                             encoder: JSONEncoder,
+                                             limit: Int = LANSyncConstants.maxChunkPayloadBytes)
+        throws -> [LANSyncDataSnapshot] {
+        var frames: [Data] = []
+        for chunk in split(snapshot, limit: LANSyncConstants.chunkRecordLimit) {
+            try encodeFitting(chunk, encoder: encoder, limit: limit, into: &frames)
+        }
+        return try frames.map { try JSONDecoder().decode(LANSyncDataSnapshot.self, from: $0) }
     }
 
     /// 编码一片；超过单帧上限就二分后各自再试，直到装得下或只剩一条记录。
@@ -178,6 +201,36 @@ final class LANSyncDataStore {
     /// 开一次分片合并。收到的每一片调 `apply`，全部到齐后调 `finish`。
     func beginMerge(scope: LANSyncScope = .all) throws -> LANSyncMergeSession {
         try LANSyncMergeSession(context: container.mainContext, scope: scope)
+    }
+
+    /// 在所有加密分片收齐后一次性覆盖本地模型与凭据。
+    @discardableResult
+    func replace(with payload: LANSyncFullSnapshot) throws -> LANSyncMergeReport {
+        let context = container.mainContext
+        let oldProfiles = try context.fetch(FetchDescriptor<ServerProfile>())
+        let oldKeys = try context.fetch(FetchDescriptor<SSHKey>())
+        let oldProviders = try context.fetch(FetchDescriptor<AIProvider>())
+        let previousAccounts = LANSyncSecretStore.accounts(profiles: oldProfiles, keys: oldKeys,
+                                                            providers: oldProviders)
+        let incomingAccounts = LANSyncSecretStore.accounts(
+            profileIDs: payload.data.profiles.map(\.id),
+            keyIDs: payload.data.sshKeys.map(\.id),
+            providerIDs: payload.data.providers.map(\.id),
+            profileKeyIDs: payload.data.profiles.compactMap(\.keyID))
+        let session = try beginMerge(scope: .all)
+        let secretStore = LANSyncSecretStore()
+        let secretTransaction = try secretStore.beginReplace(
+            payload.secrets, previousAccounts: previousAccounts, incomingAccounts: incomingAccounts)
+        do {
+            try session.apply(payload.data)
+            let report = try session.finish()
+            secretTransaction.commit()
+            return report
+        } catch {
+            secretTransaction.rollback()
+            session.cancel()
+            throw error
+        }
     }
 }
 

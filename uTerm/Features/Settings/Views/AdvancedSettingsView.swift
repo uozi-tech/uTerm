@@ -4,7 +4,7 @@ import AppKit
 
 /// 设置 · 高级 tab。Spec 04 实现：
 /// - SSH 连接：连接超时 / 主机密钥校验
-/// - 同步：iCloud 状态（保底通道）+ 局域网服务与配对码（同网段快通道）
+/// - 同步：iCloud 状态 + Mac 主动发起的局域网全量加密同步
 /// - 诊断：日志等级 / 显示日志
 ///
 /// 砍掉的设计稿项：keepalive 与 SSH 压缩（Citadel/NIOSSH 不支持）、
@@ -75,7 +75,7 @@ struct AdvancedSettingsView: View {
                             .foregroundStyle(UD.text2)
                     }
                 }
-                SettingsRow(label: "局域网服务", hint: "Mac 会在本地网络广播 uTerm，移动端可拉取本机数据。") {
+                SettingsRow(label: "局域网发送", hint: "Mac 发现移动设备后主动发送全量数据，移动端确认后才会传输。") {
                     HStack(spacing: 6) {
                         Image(systemName: lanSyncIcon)
                             .font(.system(size: 12))
@@ -83,6 +83,13 @@ struct AdvancedSettingsView: View {
                         Text(lanSync.status.label)
                             .font(.system(size: 12.5))
                             .foregroundStyle(UD.text2)
+                    }
+                }
+                if !lanSync.peers.isEmpty {
+                    SettingsRow(label: "移动设备", hint: "选择已发现的 iPhone / iPad，发送前会在移动端再次确认。") {
+                        UDButton(title: "发送同步", style: .secondary, systemImage: "arrow.up.circle") {
+                            lanSync.sendSync()
+                        }
                     }
                 }
                 SettingsRow(label: "配对码", hint: "在 iPhone / iPad 的局域网同步中输入此 6 位代码。") {
@@ -137,7 +144,7 @@ struct AdvancedSettingsView: View {
 
     private var syncHint: String {
         loggedIntoiCloud
-            ? "已登录 iCloud 时在后台持续同步，跨网络可用；局域网同步是同一 Wi-Fi 下的手动快通道。"
+            ? "iCloud 在后台独立同步；局域网同步在同一 Wi-Fi 下由 Mac 主动发起并加密传输。"
             : "未登录 iCloud，跨设备同步只能走下面的局域网通道。"
     }
 
@@ -174,7 +181,9 @@ struct AdvancedSettingsView: View {
 
     private var lanSyncIcon: String {
         switch lanSync.status {
-        case .hosting: return "wifi"
+        case .ready: return "wifi"
+        case .waitingForConfirmation: return "hourglass"
+        case .syncing: return "arrow.up.circle"
         case .error: return "exclamationmark.triangle"
         default: return "wifi.slash"
         }
@@ -183,7 +192,7 @@ struct AdvancedSettingsView: View {
     private var lanSyncTint: Color {
         switch lanSync.status {
         case .error: return .orange
-        case .hosting, .ready, .syncing: return UD.accent
+        case .ready, .waitingForConfirmation, .syncing: return UD.accent
         default: return UD.text3
         }
     }

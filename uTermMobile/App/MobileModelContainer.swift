@@ -8,8 +8,7 @@ import SwiftData
 /// 无可用 iCloud 时（未登录的模拟器、未签名构建、未配 entitlement）`.automatic` 建容失败，
 /// 回退本地存储，避免启动崩溃——签名 + 登录 iCloud 的真机才会真正同步。
 ///
-/// iCloud 是保底通道；同一 Wi-Fi 下还可由 `LANSyncDataStore` 手动拉取 Mac 的快照，
-/// 那条路走的是最小增量合并（只写真正变化的字段），不会整表覆盖。
+    /// iCloud 与 LAN 是两条独立同步通道；LAN 由 Mac 主动推送完整快照并覆盖本地数据。
 enum MobileModelContainer {
     private static let types: [any PersistentModel.Type] = [
         ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,

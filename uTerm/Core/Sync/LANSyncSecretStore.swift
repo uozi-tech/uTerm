@@ -1,0 +1,93 @@
+import Foundation
+
+/// Reads and replaces the Keychain accounts represented by the full LAN snapshot.
+/// Account names are generated only from local model identifiers; arbitrary remote
+/// account names are never accepted during import.
+@MainActor
+final class LANSyncSecretStore {
+    @MainActor
+    final class Transaction {
+        private let keychain: KeychainStore
+        private let backup: [String: String?]
+        private var active = true
+
+        init(keychain: KeychainStore, backup: [String: String?]) {
+            self.keychain = keychain
+            self.backup = backup
+        }
+
+        func commit() { active = false }
+
+        func rollback() {
+            guard active else { return }
+            for (account, value) in backup {
+                if let value { try? keychain.save(value, account: account) }
+                else { try? keychain.delete(account: account) }
+            }
+            active = false
+        }
+
+    }
+
+    private let keychain: KeychainStore
+
+    init(keychain: KeychainStore = KeychainStore()) {
+        self.keychain = keychain
+    }
+
+    func snapshot(profiles: [ServerProfile], keys: [SSHKey], providers: [AIProvider]) throws
+        -> [LANSyncSecretRecord] {
+        let accounts = Self.accounts(profiles: profiles, keys: keys, providers: providers)
+        return try accounts.sorted().compactMap { account in
+            guard let value = try keychain.load(account: account) else { return nil }
+            return LANSyncSecretRecord(account: account, value: value)
+        }
+    }
+
+    func beginReplace(_ records: [LANSyncSecretRecord], previousAccounts: Set<String>,
+                      incomingAccounts: Set<String>) throws -> Transaction {
+        let allowed = previousAccounts.union(incomingAccounts)
+        guard records.allSatisfy({ allowed.contains($0.account) }) else {
+            throw LANSyncTransportError.invalidMessage
+        }
+        guard Set(records.map(\.account)).count == records.count else {
+            throw LANSyncTransportError.invalidMessage
+        }
+        let incoming = Dictionary(uniqueKeysWithValues: records.map { ($0.account, $0.value) })
+        var backup: [String: String?] = [:]
+        for account in allowed { backup[account] = try keychain.load(account: account) }
+        do {
+            for account in allowed {
+                if let value = incoming[account] {
+                    try keychain.save(value, account: account)
+                } else {
+                    try keychain.delete(account: account)
+                }
+            }
+        } catch {
+            let transaction = Transaction(keychain: keychain, backup: backup)
+            transaction.rollback()
+            throw error
+        }
+        return Transaction(keychain: keychain, backup: backup)
+    }
+
+    static func accounts(profiles: [ServerProfile], keys: [SSHKey], providers: [AIProvider]) -> Set<String> {
+        accounts(profileIDs: profiles.map(\.id), keyIDs: keys.map(\.id),
+                 providerIDs: providers.map(\.id), profileKeyIDs: profiles.compactMap(\.keyID))
+    }
+
+    static func accounts(profileIDs: [UUID], keyIDs: [UUID], providerIDs: [UUID],
+                         profileKeyIDs: [UUID] = []) -> Set<String> {
+        Set((profileIDs + profileKeyIDs + keyIDs).flatMap(profileAccounts)
+            + providerIDs.map { $0.uuidString })
+    }
+
+    private static func profileAccounts(_ id: UUID) -> [String] {
+        SecretKind.allCases.map { "\(id.uuidString)/\($0.rawValue)" }
+    }
+}
+
+private extension SecretKind {
+    static var allCases: [SecretKind] { [.password, .passphrase, .privateKey] }
+}

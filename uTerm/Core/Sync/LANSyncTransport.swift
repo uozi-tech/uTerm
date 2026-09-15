@@ -6,6 +6,10 @@ enum LANSyncTransportError: LocalizedError {
     case frameTooLarge(Int)
     case transferTooLarge
     case invalidMessage
+    case protocolMismatch
+    case handshakeRequired
+    case authenticationFailed
+    case rejected
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +21,14 @@ enum LANSyncTransportError: LocalizedError {
             return "局域网同步数据量超出上限，已中止"
         case .invalidMessage:
             return "局域网同步消息格式无效"
+        case .protocolMismatch:
+            return "局域网同步协议版本不兼容"
+        case .handshakeRequired:
+            return "局域网同步安全握手未完成"
+        case .authenticationFailed:
+            return "局域网同步配对码不正确或认证失败"
+        case .rejected:
+            return "移动设备拒绝了本次同步"
         }
     }
 }

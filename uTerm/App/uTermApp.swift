@@ -65,7 +65,7 @@ struct uTermApp: App {
 
         let preferences = SharedPreferencesSync()
         _sharedPreferences = State(initialValue: preferences)
-        let lan = LANSyncCoordinator(role: .host, preferences: preferences,
+        let lan = LANSyncCoordinator(role: .sender, preferences: preferences,
                                      dataStore: LANSyncDataStore(container: modelContainer))
         lan.start()
         _lanSync = State(initialValue: lan)

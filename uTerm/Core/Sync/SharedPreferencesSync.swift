@@ -6,10 +6,9 @@ import Observation
 ///
 /// - **iCloud KVS（保底）**：`NSUbiquitousKeyValueStore`，后台自动、跨网络。UserDefaults
 ///   本身是 bundle 内的，靠它把标量偏好带到同一 iCloud 命名空间。
-/// - **局域网（快通道）**：`LANSyncCoordinator` 导出 `lanSnapshot()` / 合并 `mergeLANSnapshot(_:)`。
+/// - **局域网**：`LANSyncCoordinator` 导出完整偏好并由 Mac 权威覆盖。
 ///
-/// 两条通道都按 key 级 last-write-wins 收敛：每个 key 配一个 `modifiedKey(_:)` 时间戳，
-/// 谁的时间戳新谁赢。局域网合并的结果会再推给 KVS，因此快通道的改动最终也落到 iCloud。
+/// iCloud 继续使用 key 级 last-write-wins；LAN 导入走独立的覆盖入口，不发布到 KVS。
 /// 设备本地的安全状态与窗口 / 会话状态刻意不在清单内。
 @MainActor @Observable
 final class SharedPreferencesSync {
@@ -216,6 +215,28 @@ final class SharedPreferencesSync {
         }
         if changed { store.synchronize() }
         return changed
+    }
+
+    /// LAN 是 Mac 权威的全量覆盖通道，不受本地时间戳和 iCloud KVS 的 LWW 规则影响。
+    /// 这里故意不 publish 到 KVS，让 LAN 与 iCloud 保持独立的传输语义。
+    @discardableResult
+    func replaceFromLAN(_ incoming: [LANSyncPreference]) -> Bool {
+        var changed = false
+        for item in incoming {
+            guard let definition = Self.definitions.first(where: { $0.key == item.key }) else { continue }
+            let incomingValue = Value(item.value)
+            guard value(_defaultsValue(for: definition), for: definition) != incomingValue else { continue }
+            defaults.set(incomingValue.object, forKey: definition.key)
+            defaults.set(item.modifiedAt, forKey: modifiedKey(definition.key))
+            lastValues[definition.key] = incomingValue
+            lastModified[definition.key] = item.modifiedAt
+            changed = true
+        }
+        return changed
+    }
+
+    private func _defaultsValue(for definition: Definition) -> Any? {
+        defaults.object(forKey: definition.key)
     }
 
     /// 把一个值连同它的时间戳写进 iCloud KVS（不调 synchronize，由调用方成批触发）。

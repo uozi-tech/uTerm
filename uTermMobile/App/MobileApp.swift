@@ -33,15 +33,9 @@ struct MobileApp: App {
 
         let preferences = SharedPreferencesSync()
         _sharedPreferences = State(initialValue: preferences)
-        // 容器真以 CloudKit 建成、且这台设备登录了 iCloud，才算「历史有人管」——
-        // 这时局域网只要配置，不必每次手动同步都再搬一遍会话。
         let lan = LANSyncCoordinator(
-            role: .client, preferences: preferences,
-            dataStore: LANSyncDataStore(container: modelContainer),
-            coveredByCloudKit: {
-                MobileModelContainer.usingCloudKit
-                    && FileManager.default.ubiquityIdentityToken != nil
-            })
+            role: .receiver, preferences: preferences,
+            dataStore: LANSyncDataStore(container: modelContainer))
         lan.start()
         _lanSync = State(initialValue: lan)
 
