@@ -12,12 +12,15 @@ final class PrivateKeyImporterTests: XCTestCase {
         guard case .ed25519 = key else { return XCTFail("应为 ed25519，得 \(key)") }
     }
 
-    func testOpenSSHRSAResolves() throws {
+    /// 未加密容器要走 `.rsa`（rsa-sha2-512）。落回 `.legacyOpenSSHRSA` 就是 SHA-1 签名，
+    /// OpenSSH 8.8+ 服务端默认拒收 —— 表现为「ssh 连得上、uTerm 报 allAuthentication…」。
+    func testOpenSSHRSAResolvesToSHA2Path() throws {
         let key = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSH, passphrase: nil)
-        guard case .legacyOpenSSHRSA = key else { return XCTFail("应为 legacyOpenSSHRSA，得 \(key)") }
+        guard case .rsa = key else { return XCTFail("应为 .rsa（rsa-sha2-512），得 \(key)") }
     }
 
+    /// 带口令的容器仍回退 Citadel：解密要 bcrypt_pbkdf，USSHKit 包外够不着。
     func testEncryptedOpenSSHRSAResolvesWithPassphrase() throws {
         let key = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSHEnc,

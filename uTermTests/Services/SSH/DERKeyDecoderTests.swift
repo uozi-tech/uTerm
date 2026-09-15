@@ -60,14 +60,13 @@ final class DERKeyDecoderTests: XCTestCase {
         }
     }
 
-    /// RSA 关键往返：rsaPKCS1 与 rsaPKCS8 是同一密钥的两种 PEM 封装，
-    /// 解析后 RSAKeyComponents.modulus 应相等。
-    /// OpenSSH RSA 走 .legacyOpenSSHRSA，PEM RSA 走 .rsa(RSAKeyComponents)。
+    /// RSA 关键往返：rsaOpenSSH / rsaPKCS1 / rsaPKCS8 是**同一把密钥**的三种封装
+    /// （见 Fixtures/generate.sh），三条路解出的分量必须一致。
     func testRSARoundTripOpenSSHvsPKCS1() throws {
         let fromOpenSSH = try PrivateKeyImporter.resolve(
             pem: KeyImportFixtures.rsaOpenSSH, passphrase: nil)
-        guard case .legacyOpenSSHRSA = fromOpenSSH else {
-            return XCTFail("OpenSSH RSA 应为 .legacyOpenSSHRSA，得 \(fromOpenSSH)")
+        guard case .rsa(let compsOpenSSH) = fromOpenSSH else {
+            return XCTFail("OpenSSH RSA 应为 .rsa（rsa-sha2-512），得 \(fromOpenSSH)")
         }
         let fromPKCS1 = try DERKeyDecoder.decode(
             der: der(of: KeyImportFixtures.rsaPKCS1), label: "RSA PRIVATE KEY")
@@ -81,5 +80,11 @@ final class DERKeyDecoderTests: XCTestCase {
         }
         XCTAssertEqual(compsPKCS1.modulus, compsPKCS8.modulus,
                        "同一密钥的 PKCS#1 与 PKCS#8 模数应相等")
+        XCTAssertEqual(compsOpenSSH.modulus, compsPKCS1.modulus,
+                       "同一密钥的 OpenSSH 容器与 PKCS#1 模数应相等")
+        XCTAssertEqual(compsOpenSSH.privateExponent, compsPKCS1.privateExponent)
+        // p/q 只存在于 OpenSSH 私钥段，读错位（n,e,d,iqmp,p,q）会在这里暴露。
+        XCTAssertEqual(compsOpenSSH.prime1, compsPKCS1.prime1)
+        XCTAssertEqual(compsOpenSSH.prime2, compsPKCS1.prime2)
     }
 }
