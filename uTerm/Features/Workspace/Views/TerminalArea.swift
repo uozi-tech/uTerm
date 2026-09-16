@@ -121,19 +121,36 @@ struct TerminalArea: View {
     }
 
     /// 空组占位。整棵树只剩一个组且它空掉时，这就是终端区的空态。
+    ///
+    /// 空间不够时逐级退化（图标 → 文案），按钮留到最后；`minHeight: 0` 让它肯被压扁，
+    /// 否则组外壳装不下会整体居中溢出、把标签条顶出终端区上沿（同 `EmptyBody`）。
     private var emptyState: some View {
+        ViewThatFits(in: .vertical) {
+            emptyStateStack(showsIcon: true, showsText: true)
+            emptyStateStack(showsIcon: false, showsText: true)
+            emptyStateStack(showsIcon: false, showsText: false)
+            Color.clear.frame(height: 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .clipped()
+        .background(terminalAreaBG)
+    }
+
+    private func emptyStateStack(showsIcon: Bool, showsText: Bool) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(UD.text3)
-            Text("没有打开的终端标签")
-                .font(.callout)
-                .foregroundStyle(UD.text2)
+            if showsIcon {
+                Image(systemName: "terminal")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(UD.text3)
+            }
+            if showsText {
+                Text("没有打开的终端标签")
+                    .font(.callout)
+                    .foregroundStyle(UD.text2)
+            }
             UDButton(title: "新建终端标签", systemImage: "plus") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(terminalAreaBG)
     }
 }

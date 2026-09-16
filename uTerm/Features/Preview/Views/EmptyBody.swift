@@ -30,20 +30,34 @@ struct EmptyBody: View {
             }
         }
         .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // minHeight: 0 —— 只给 maxHeight 的 frame 在提议高度小于内容时会**按内容高度**
+        // 定尺寸。组外壳（`UPaneGroupArea` 的定高 frame）装不下就整体居中溢出，把
+        // 组的标签条顶出预览区上沿。给了下限才肯被压扁，溢出部分顶端对齐后裁掉。
+        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
     }
 
-    @ViewBuilder
+    /// 空间不够时逐级退化：图标 + 文案 → 只剩文案 → 什么都不画。
     private var emptyHint: some View {
+        ViewThatFits(in: .vertical) {
+            hintStack(showsIcon: true)
+            hintStack(showsIcon: false)
+            Color.clear.frame(height: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func hintStack(showsIcon: Bool) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 32, weight: .light))
-                .foregroundStyle(UD.text3)
+            if showsIcon {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundStyle(UD.text3)
+            }
             Text("从左侧选择文件预览")
                 .font(.callout)
                 .foregroundStyle(UD.text2)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
