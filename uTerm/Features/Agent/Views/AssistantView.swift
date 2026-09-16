@@ -16,9 +16,9 @@ enum AssistantInputBarLayout {
     nonisolated static let sendContentAlignment: VerticalAlignment = .center
 }
 
-/// 与文件路径栏、UPaneGroupArea 标签栏统一：36pt 内容 + 1pt 分隔线。
+/// 与文件路径栏、UPaneGroupArea 标签栏统一：36pt，底部 1pt 分隔线画在这 36pt 之内。
 enum AssistantHeaderLayout {
-    nonisolated static let height = WorkspacePaneHeaderLayout.totalHeight
+    nonisolated static let height = WorkspacePaneHeaderLayout.height
     /// 会话历史下拉的顶部内边距：顶栏高 + 2pt 间隙。
     nonisolated static let dropdownTopInset: CGFloat = height + 2
 }

@@ -20,7 +20,7 @@ final class WorkspacePaneHeaderLayoutTests: XCTestCase {
                     fileBrowser.frame(width: columnWidth)
                     UPaneGroupArea(
                         model: panes, dragType: .plainText,
-                        stripHeight: WorkspacePaneHeaderLayout.contentHeight,
+                        stripHeight: WorkspacePaneHeaderLayout.height,
                         showsActiveGroupRing: false,
                         descriptor: { UPaneTabDescriptor(title: $0.payload, icon: .system("doc")) },
                         content: { _, _ in Color.clear },
@@ -51,8 +51,9 @@ final class WorkspacePaneHeaderLayoutTests: XCTestCase {
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
                 let xs = [columnWidth / 2, columnWidth + 240, columnWidth + 480 + columnWidth / 2]
-                // Sample both sides of the seam as well as the line itself. The old overlay
-                // put the side separators at y=35, while UPaneGroupArea drew at y=36.
+                // Sample both sides of the seam as well as the line itself. uAppKit 1.4.10 moved
+                // UPaneGroupArea's separator from below stripHeight (y=36) to inside it (y=35);
+                // the side headers must follow or the seams drift 1pt apart again.
                 let lineRows = try xs.map { x -> [Int] in
                     let samples = try (Int(34 * scale)..<Int(39 * scale)).map { y in
                         let color = try XCTUnwrap(bitmap.colorAt(x: Int(x * scale), y: y)?
@@ -68,7 +69,7 @@ final class WorkspacePaneHeaderLayoutTests: XCTestCase {
                 }
                 XCTAssertEqual(lineRows[0], lineRows[1], "File/preview seam, dark=\(dark)")
                 XCTAssertEqual(lineRows[2], lineRows[1], "Agent/preview seam, dark=\(dark)")
-                XCTAssertEqual(lineRows[1], Array(Int(36 * scale)..<Int(37 * scale)))
+                XCTAssertEqual(lineRows[1], Array(Int(35 * scale)..<Int(36 * scale)))
                 let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
                 let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
                 attachment.name = "pane-headers-\(dark ? "dark" : "light")-\(Int(columnWidth))"
