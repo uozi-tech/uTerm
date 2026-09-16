@@ -95,7 +95,7 @@ final class ControlConnectionPoolTests: XCTestCase {
     private func makeSpec(name: String = "prod-web", id: UUID = UUID()) throws -> HostConnectionSpec {
         let container = try ModelContainer(
             for: ServerProfile.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         )
         return HostConnectionSpec(
             id: id,

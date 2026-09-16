@@ -76,7 +76,7 @@ final class ControlSFTPHandlerTests: XCTestCase {
         try await super.setUp()
         container = try ModelContainer(
             for: ServerProfile.self, KnownHost.self, ForwardingRule.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
 
         profile = ServerProfile()
         profile.name = "prod-web"

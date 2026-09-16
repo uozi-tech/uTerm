@@ -66,7 +66,7 @@ enum ForwardingProbeFixture {
                    profiles: [ServerProfile],
                    rules: [ForwardingRule],
                    traffic: [UUID: TunnelBytes]) {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(
             for: ServerProfile.self, ForwardingRule.self, ServerGroup.self, KnownHost.self,
             configurations: config)

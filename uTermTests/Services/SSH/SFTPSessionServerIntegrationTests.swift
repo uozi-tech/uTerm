@@ -205,7 +205,7 @@ final class SFTPSessionServerIntegrationTests: XCTestCase {
 
         let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
             for: KnownHost.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
         let connected = try await SSHClientFactory.connect(
             profile: SSHConnection.ProfileSnapshot(host: "127.0.0.1", port: port, jumpHost: nil),
             auth: .password(username: "tester", password: "unused"),

@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class LANSyncProtocolTests: XCTestCase {
     private func makeContainer() throws -> ModelContainer {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         return try ModelContainer(
             for: ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
                  ChatSession.self, ChatMessageRecord.self, ServerGroup.self,

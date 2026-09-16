@@ -13,7 +13,7 @@ final class AssistantModelSessionLifecycleTests: XCTestCase {
             name: "Test", kind: .openai, baseURL: "https://example.invalid", model: "original"), apiKey: "test")
         if persisted {
             let container = try ModelContainer(for: ChatSession.self, ChatMessageRecord.self,
-                                               configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                                               configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
             let context = ModelContext(container)
             context.autosaveEnabled = false
             model.attach(context: context)

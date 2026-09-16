@@ -5,7 +5,7 @@ import SwiftData
 @MainActor
 final class AIProviderCRUDTests: XCTestCase {
     private func makeContainer() throws -> ModelContainer {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         return try ModelContainer(for: AIProvider.self, configurations: config)
     }
 

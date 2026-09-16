@@ -100,7 +100,7 @@ final class AgentMessageListCostTests: XCTestCase {
 
     private func makeContainer() throws -> ModelContainer {
         try ModelContainer(for: ChatSession.self, ChatMessageRecord.self,
-                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                           configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
     }
 
     /// 走真实的持久化载入路径（`AssistantModel.load`），不给模型开测试后门。

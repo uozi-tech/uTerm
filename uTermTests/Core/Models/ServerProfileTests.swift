@@ -5,7 +5,7 @@ import SwiftData
 final class ServerProfileTests: XCTestCase {
     /// 内存版 ModelContainer —— 不触碰磁盘 / CloudKit。
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: ServerProfile.self, configurations: config)
         return ModelContext(container)
     }

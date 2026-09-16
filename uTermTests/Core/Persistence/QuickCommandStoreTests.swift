@@ -6,7 +6,7 @@ import SwiftData
 final class QuickCommandStoreTests: XCTestCase {
 
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: QuickCommand.self, QuickCommandRun.self, configurations: config)
         return ModelContext(container)
     }

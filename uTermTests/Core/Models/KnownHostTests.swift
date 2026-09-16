@@ -4,7 +4,7 @@ import SwiftData
 
 final class KnownHostTests: XCTestCase {
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: KnownHost.self, configurations: config)
         return ModelContext(container)
     }

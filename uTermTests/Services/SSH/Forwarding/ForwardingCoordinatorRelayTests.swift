@@ -18,7 +18,7 @@ final class ForwardingCoordinatorRelayTests: XCTestCase {
         try await super.setUp()
         container = try ModelContainer(
             for: ServerProfile.self, KnownHost.self, ForwardingRule.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
         server = ServerProfile()
         server.name = "prod-db"
         server.host = "192.0.2.30"      // TEST-NET-1：本套用例绝不真正连接

@@ -51,7 +51,7 @@ final class RSASHA2IntegrationTests: XCTestCase {
 
         let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
             for: KnownHost.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
 
         let conn = SSHConnection(
             profile: SSHConnection.ProfileSnapshot(profile),

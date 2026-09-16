@@ -83,7 +83,7 @@ final class GlobalForwardingSupportTests: XCTestCase {
     // MARK: - launchAtAppStart 模型往返（与 autostart 互不干扰）
 
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         return ModelContext(try ModelContainer(for: ForwardingRule.self, configurations: config))
     }
 

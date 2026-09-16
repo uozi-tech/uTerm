@@ -41,7 +41,7 @@ final class ControlTerminalHandlerTests: XCTestCase {
     }
 
     private func makeFixture(enabled: Bool = true, mutations: Bool = true) throws -> Fixture {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         // 终端组只碰 `ServerProfile`（判 sftpOnly / 解析主机），不需要整张 app schema
         //（`ChatSession` 那几张在 AgentKit 里，测试 target 里也拿不到）。
         let container = try ModelContainer(

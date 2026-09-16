@@ -54,7 +54,7 @@ final class ControlForwardHandlerTests: XCTestCase {
         try await super.setUp()
         container = try ModelContainer(
             for: ServerProfile.self, KnownHost.self, ForwardingRule.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
 
         server = ServerProfile()
         server.name = "prod-db"

@@ -6,7 +6,7 @@ import SwiftData
 @MainActor
 final class HostKeyVerifierTests: XCTestCase {
     private func makeVerifier() throws -> HostKeyVerifier {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: KnownHost.self, configurations: config)
         return HostKeyVerifier(modelContainer: container)
     }
@@ -62,7 +62,7 @@ final class HostKeyVerifierTests: XCTestCase {
     /// 回归：CloudKit 离线合并可能留下同一 host:port 的多条记录。只要其中有
     /// 一条与当前密钥冲突，就不能因 fetch 顺序碰巧先取到匹配项而静默信任。
     func testConflictingCloudKitDuplicatesFailClosed() async throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: KnownHost.self, configurations: config)
         let context = container.mainContext
 
@@ -92,7 +92,7 @@ final class HostKeyVerifierTests: XCTestCase {
     }
 
     func testTrustCollapsesCloudKitDuplicates() async throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: KnownHost.self, configurations: config)
         let context = container.mainContext
         for (blob, fingerprint) in [(Data([1]), "SHA256:one"),

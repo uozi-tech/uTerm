@@ -6,7 +6,7 @@ import SwiftData
 final class GroupStoreTests: XCTestCase {
 
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: ServerProfile.self, ServerGroup.self, configurations: config)
         return ModelContext(container)
     }

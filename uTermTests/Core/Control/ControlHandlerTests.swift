@@ -78,7 +78,7 @@ final class ControlHandlerTests: XCTestCase {
         try await super.setUp()
         container = try ModelContainer(
             for: ServerProfile.self, KnownHost.self, QuickCommand.self, QuickCommandRun.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         )
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "control-handler-tests-\(UUID().uuidString)"))
         settings = ControlSettings(defaults: defaults)

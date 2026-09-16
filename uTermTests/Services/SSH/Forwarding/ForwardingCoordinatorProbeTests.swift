@@ -14,7 +14,7 @@ final class ForwardingCoordinatorProbeTests: XCTestCase {
         profile.username = "probe"
         let verifier = HostKeyVerifier(modelContainer: try ModelContainer(
             for: KnownHost.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)))
         return ForwardingSession(
             profile: SSHConnection.ProfileSnapshot(profile),
             auth: .password(username: "probe", password: "secret"),

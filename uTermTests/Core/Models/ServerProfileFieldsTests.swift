@@ -35,7 +35,7 @@ final class ServerProfileFieldsTests: XCTestCase {
     /// ModelContainer 能以内存配置加载 ServerProfile schema，
     /// 并完整完成插入 → 保存 → 查询的往返。
     func test_schemaContainerLoads() throws {
-        let config = ModelConfiguration("test-\(UUID())", isStoredInMemoryOnly: true)
+        let config = ModelConfiguration("test-\(UUID())", isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: ServerProfile.self, configurations: config)
         let ctx = ModelContext(container)
 
