@@ -157,7 +157,7 @@ help:
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
-	@printf '%s\n' '  make check-skills                      Run the SKILL.md / utermctl drift tests'
+	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
@@ -301,9 +301,9 @@ check-cli:
 	python3 scripts/utermctl --help >/dev/null
 	python3 scripts/utermctl-selftest.py
 
-# 技能文档 ↔ 内嵌常量的漂移闸。改了 skills/*/SKILL.md 或 scripts/utermctl 而忘了同步
-# SkillDefinition.swift 的常量，用户装到的就还是旧文档 —— 只有这两个测试类挡着。
-# 发版前跑一次（release skill 已接进去）。
+# 技能构建产物闸：app 包内的 Resources/Skills/*/SKILL.md 与两份 utermctl 必须与仓库文件
+# 逐字节一致（构建阶段「Copy utermctl CLI and Skills」没漏、没坏），外加安装 / 自动对齐的
+# 行为测试 —— 只有这两个测试类挡着。发版前跑一次（release skill 已接进去）。
 check-skills: check-cli
 	xcodebuild build-for-testing \
 		-project "$(PROJECT)" \

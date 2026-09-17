@@ -8,7 +8,7 @@ import Observation
 @MainActor
 @Observable
 public final class ControlSettings {
-    private enum Keys {
+    enum Keys {
         static let enabled = "control.enabled"
         static let allowMutations = "control.allowMutations"
     }

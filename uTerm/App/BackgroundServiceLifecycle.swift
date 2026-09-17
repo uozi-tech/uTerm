@@ -24,6 +24,45 @@ enum BackgroundLaunchMode {
 
     static let requestedByCLI = shouldStartHidden(arguments: ProcessInfo.processInfo.arguments)
     static var shouldStartHidden: Bool { requestedByCLI }
+
+    /// `utermctl` 按需唤起时传 `--launch-source cli`（登录项传 `login-item`）。
+    static let cliLaunchSource = "cli"
+
+    static func launchSource(arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: "--launch-source"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+    }
+
+    /// CLI 按需唤起由 app 自己把关，返回拒绝原因；nil 表示放行。
+    ///
+    /// 客户端本来会先读设置再决定唤不唤起，但 macOS 27 起没给完全磁盘访问权限的进程读不了
+    /// 沙盒容器里的偏好 plist（`EPERM`）。读不到时客户端照样请求启动，由这里按用户设置决定
+    /// 去留：「允许 CLI 按需启动」与「启用命令行接口」缺一不可，否则进程立刻退出，客户端靠
+    /// `open -W` 看到它退出后报错。非 CLI 来源（手动打开、登录项）一律放行。
+    static func cliLaunchRefusal(arguments: [String], defaults: UserDefaults) -> String? {
+        guard launchSource(arguments: arguments) == cliLaunchSource else { return nil }
+        guard defaults.object(forKey: BackgroundServiceSettings.Keys.allowOnDemandLaunch) as? Bool == true else {
+            return "设置中没有允许 CLI 按需启动"
+        }
+        guard defaults.object(forKey: ControlSettings.Keys.enabled) as? Bool == true else {
+            return "命令行接口未启用"
+        }
+        return nil
+    }
+}
+
+@main
+enum UTermEntryPoint {
+    static func main() {
+        if let refusal = BackgroundLaunchMode.cliLaunchRefusal(
+            arguments: ProcessInfo.processInfo.arguments, defaults: .standard) {
+            AppLogger.info("拒绝 CLI 按需启动：\(refusal)", category: "control")
+            exit(0)
+        }
+        uTermApp.main()
+    }
 }
 
 @MainActor

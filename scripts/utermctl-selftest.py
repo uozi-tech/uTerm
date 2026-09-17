@@ -480,6 +480,7 @@ def main():
     try:
         exercise(server, root, rejecting)
         exercise_transfers(transfers, root)
+        exercise_on_demand_launch(root)
         print("")
         if FAILURES:
             print("%d 项失败：" % len(FAILURES))
@@ -1263,6 +1264,126 @@ def exercise_transfers(server, root):
                             "--chunk-bytes", str(CHUNK), "--quiet", "--no-verify"])
     check("\r" not in proc.stderr, "--quiet 不刷进度行")
     check("上传完成" in proc.stderr, "--quiet 仍打汇总")
+
+
+def load_client_module():
+    """把 scripts/utermctl（无扩展名）当模块载入，好单测按需启动的决策逻辑。"""
+    import importlib.machinery
+    import importlib.util
+    sys.dont_write_bytecode = True   # 别在 scripts/ 下留 __pycache__
+    loader = importlib.machinery.SourceFileLoader("utermctl_under_test", CLIENT)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class FakeLauncher(object):
+    """替身 `open -W`：exit_code 为 None 表示一直在等（uTerm 在跑），否则立刻以它退出。"""
+
+    def __init__(self, exit_code, stderr=""):
+        self.exit_code = exit_code
+        self.terminated = False
+        self.stderr = __import__("io").StringIO(stderr)
+
+    def poll(self):
+        if self.exit_code is not None:
+            return self.exit_code
+        return -15 if self.terminated else None
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return self.poll()
+
+    def kill(self):
+        self.terminated = True
+
+
+def exercise_on_demand_launch(root):
+    print("")
+    print("按需启动（读不到 uTerm 设置时交给 app 自己把关）")
+    client = load_client_module()
+    prefs = os.path.join(root, "prefs")
+    os.makedirs(prefs)
+
+    def write_plist(name, values):
+        import plistlib
+        path = os.path.join(prefs, name)
+        with open(path, "wb") as stream:
+            plistlib.dump(values, stream)
+        return path
+
+    readable_on = write_plist("on.plist", {client.ON_DEMAND_KEY: True, client.CONTROL_ENABLED_KEY: True})
+    readable_off = write_plist("off.plist", {client.ON_DEMAND_KEY: False, client.CONTROL_ENABLED_KEY: True})
+    missing_key = write_plist("empty.plist", {})
+    unreadable = write_plist("denied.plist", {client.ON_DEMAND_KEY: True})
+    os.chmod(unreadable, 0)
+    denied_really = False
+    try:
+        open(unreadable, "rb").close()
+    except PermissionError:
+        denied_really = True
+
+    client.PREFERENCE_CANDIDATES = [readable_on]
+    equal(client.preference_value(client.ON_DEMAND_KEY), True, "读得到且为开 → True")
+    client.PREFERENCE_CANDIDATES = [missing_key]
+    equal(client.preference_value(client.ON_DEMAND_KEY), False, "读得到但没设过 → False（默认关）")
+    client.PREFERENCE_CANDIDATES = [os.path.join(prefs, "nope.plist")]
+    equal(client.preference_value(client.ON_DEMAND_KEY), False, "文件不存在 → False")
+    if denied_really:
+        client.PREFERENCE_CANDIDATES = [unreadable, os.path.join(prefs, "nope.plist")]
+        equal(client.preference_value(client.ON_DEMAND_KEY), None, "读被拒（EPERM/EACCES）→ None，不当成关")
+    else:
+        print("  skip 以 root 运行，chmod 000 挡不住读")
+
+    launched = []
+
+    def fake_popen(result):
+        def popen(argv, **kwargs):
+            launched.append(argv)
+            return result
+        return popen
+
+    client.time.sleep = lambda seconds: None
+    ready_socket = os.path.join(prefs, "ready.sock")
+    client.socket_paths = lambda: [ready_socket]
+    client.exchange = lambda path, request: {"ok": True}
+
+    # 1. 读得到且关着：本地直接拦下，不起进程。
+    client.PREFERENCE_CANDIDATES = [readable_off]
+    client.subprocess.Popen = fake_popen(FakeLauncher(0))
+    started, message = client.start_background_and_wait()
+    check(not started and "没有允许 CLI 按需启动" in (message or ""), "设置读得到且关着 → 本地拒绝")
+    equal(len(launched), 0, "本地拒绝时不唤起 uTerm")
+
+    if denied_really:
+        client.PREFERENCE_CANDIDATES = [unreadable]
+        # 2. 读不到 → 照样请求启动，带上 --launch-source cli；uTerm 按设置拒绝后立刻退出。
+        client.subprocess.Popen = fake_popen(FakeLauncher(0))
+        started, message = client.start_background_and_wait()
+        check(not started and "拒绝了按需启动" in (message or ""), "读不到设置 + uTerm 退出 → 报「拒绝了按需启动」")
+        check(launched and launched[-1][:2] == ["/usr/bin/open", "-gjW"], "用 open -W 等 uTerm 退出")
+        check(launched and launched[-1][-3:] == ["--background", "--launch-source", "cli"],
+              "唤起参数带 --launch-source cli（app 靠它把关）")
+
+        # 3. 读不到 → uTerm 起来了、接口就绪：成功，并结束等待中的 open。
+        waiting = FakeLauncher(None)
+        client.subprocess.Popen = fake_popen(waiting)
+        open(ready_socket, "w").close()
+        started, message = client.start_background_and_wait()
+        check(started and message is None, "读不到设置 + 接口就绪 → 成功")
+        check(waiting.terminated, "就绪后结束掉等待中的 open -W")
+        os.remove(ready_socket)
+
+        # 4. open 本身失败（找不到 app）：报唤起失败，而不是「拒绝」。
+        client.subprocess.Popen = fake_popen(FakeLauncher(1, "Unable to find application"))
+        started, message = client.start_background_and_wait()
+        check(not started and "无法唤起" in (message or "") and "Unable to find" in (message or ""),
+              "open 失败 → 报无法唤起并带上原因")
+
+    os.chmod(unreadable, 0o600)
 
 
 if __name__ == "__main__":

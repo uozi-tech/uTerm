@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import Synchronization
 
 nonisolated enum SkillInstallError: Error, LocalizedError, Sendable {
     case failed(String)
@@ -12,21 +11,16 @@ nonisolated enum SkillInstallError: Error, LocalizedError, Sendable {
     }
 }
 
-/// `<target>/<slug>` 的安装状态。
+/// `~/.<tool>/skills/<slug>`（或 `~/.local/bin/utermctl`）的安装状态。
 nonisolated enum SkillInstallStatus: Sendable, Equatable {
     /// 目标位置不存在。
     case notInstalled
-    /// 目标是符号链接且解析到我们的源目录，且源存在。
+    /// 符号链接指向**当前 app 包**里的技能，且包内文件在。
     case installed
-    /// 目标是指向我们源目录的符号链接，但源缺失（悬空）。
+    /// uTerm 建的链接，但没指向当前 app 包：旧版本指向沙盒容器、app 搬了家、链到了
+    /// 另一份 uTerm。启动与打开设置页时自动改指（`SkillInstaller.reconcile`），
+    /// 用户不用动手。
     case brokenLink
-    /// 链接指向**另一个 uTerm 实例**的技能源。
-    ///
-    /// 沙盒（Release）与非沙盒（Debug）的 Application Support 是两个不同路径，
-    /// 同一台机器上两个实例各有各的源目录。按字面路径比较会让彼此都判成冲突、
-    /// 两边都既装不了也卸不掉 —— 所以单独认这一类：它确实是 uTerm 装的，
-    /// 只是归另一个实例管，当前实例可以接管（重建链接）或直接卸载。
-    case managedByOtherInstance(path: String)
     /// 目标已被占用：普通文件/真实目录，或符号链接指向与 uTerm 无关的位置。
     case conflict(reason: String)
 
@@ -35,23 +29,21 @@ nonisolated enum SkillInstallStatus: Sendable, Equatable {
         case .notInstalled: return "未安装"
         case .installed: return "已安装"
         case .brokenLink: return "需修复"
-        case .managedByOtherInstance: return "其它实例"
         case .conflict: return "冲突"
         }
     }
 
-    /// `notInstalled` / `brokenLink` / 另一个实例装的，都可以（重新）安装。
     var canInstall: Bool {
         switch self {
-        case .notInstalled, .brokenLink, .managedByOtherInstance: return true
+        case .notInstalled, .brokenLink: return true
         case .installed, .conflict: return false
         }
     }
 
-    /// 确认由 uTerm（不论哪个实例）建的链接都可卸载。
+    /// 确认由 uTerm 建的链接都可卸载。
     var canUninstall: Bool {
         switch self {
-        case .installed, .brokenLink, .managedByOtherInstance: return true
+        case .installed, .brokenLink: return true
         case .notInstalled, .conflict: return false
         }
     }
@@ -62,60 +54,49 @@ nonisolated enum SkillInstallStatus: Sendable, Equatable {
     }
 }
 
-/// 纯 Foundation 的技能安装器：物化源、判定状态、建/删符号链接。
-/// `home` 与 `appSupport` 可注入便于测试；生产用默认值。
+/// 纯 Foundation 的技能安装器：在 `~/.<tool>/skills/<slug>` 建**直接指向 app 包内**
+/// `Contents/Resources/Skills/<slug>` 的符号链接。
+///
+/// 为什么链到包内、而不是链到 app 自己写出的一份：
+/// - **沙盒容器对别家开发者的进程不可读**。macOS 27 起访问别家的 app 数据容器默认拒绝、
+///   不再弹窗；没给完全磁盘访问权限的 AI CLI 顺着链接读容器里的 `SKILL.md` 直接 `EPERM`
+///   （实测：同一个无授权进程读容器文件 `EPERM`，读 `uTerm.app` 包内文件、列包内目录都行）。
+/// - **沙盒 app 写出的文件必带 `com.apple.quarantine`**，可执行文件直接 exec 必 `EPERM`，
+///   而且沙盒进程摘不掉（见 `SkillInstallerTests.testAppWrittenFileIsQuarantinedAndCannotBeExecuted`）。
+///   包内文件随 app 签名、公证，没有这个问题。
+/// - Sparkle 原地替换 app，技能内容自动跟着升级，不需要任何物化/自检。
+///
+/// 代价是链接绑死 app 路径，所以有 `reconcile`：启动时把 uTerm 建过的链接整包改指到
+/// 当前 app 包（**正在运行的那份 uTerm 说了算**）。
+///
+/// `home` 与 `bundleURL` 可注入便于测试；生产用真实家目录与 `Bundle.main`。
 nonisolated struct SkillInstaller: Sendable {
-    /// 按资源名找 app 包内文件；找不到（资源缺失 / 测试宿主）返回 nil。
-    typealias BundleResourceLocator = @Sendable (String) -> URL?
-
     let definition: SkillDefinition
     let homeDirectoryURL: URL
-    let applicationSupportDirectoryURL: URL
-    /// 可执行文件的**来源**。生产用 `Bundle.main`，测试注入临时文件 —— 安装器因此
-    /// 完全不依赖 `Bundle.main`（测试宿主里那是 xctest 的包，里面并没有 utermctl）。
-    let bundleResource: BundleResourceLocator
+    /// 技能所在的 app 包（`…/uTerm.app`）。
+    let bundleURL: URL
 
     init(
         definition: SkillDefinition,
         homeDirectoryURL: URL = SkillTarget.realHomeDirectoryURL,
-        applicationSupportDirectoryURL: URL = ControlProtocol.applicationSupportDirectory,
-        bundleResource: @escaping BundleResourceLocator = SkillInstaller.mainBundleResource
+        bundleURL: URL = Bundle.main.bundleURL
     ) {
         self.definition = definition
         self.homeDirectoryURL = homeDirectoryURL
-        self.applicationSupportDirectoryURL = applicationSupportDirectoryURL
-        self.bundleResource = bundleResource
+        self.bundleURL = bundleURL.standardizedFileURL
     }
 
-    /// 默认来源：`uTerm.app/Contents/Resources/<name>`，由构建期的
-    /// 「Copy utermctl CLI」阶段从 `scripts/utermctl` 拷进来。
-    /// `Bundle.url(forResource:)` 本身就会检查文件存在，缺了自然回 nil → 退回写内容。
-    static let mainBundleResource: BundleResourceLocator = { name in
-        Bundle.main.url(forResource: name, withExtension: nil)?.standardizedFileURL
-    }
-
-    /// 某个附加文件该指向的包内路径；不走包内路线（或资源缺失）时为 nil。
-    func bundledURL(for file: SkillDefinition.SupportFile) -> URL? {
-        file.bundleResourceName.flatMap { bundleResource($0) }
-    }
-
-    /// 按技能内相对路径找包内来源，供 `BinLinkInstaller` 直接链过去。
-    func bundledURL(forRelativePath relativePath: String) -> URL? {
-        definition.supportFiles
-            .first { $0.relativePath == relativePath }
-            .flatMap { bundledURL(for: $0) }
-    }
-
-    /// 技能源目录：`<appSupport>/uTerm/Skills/<slug>/`。
+    /// 链接目标：`<bundle>/Contents/Resources/Skills/<slug>`。
     var sourceDirectoryURL: URL {
-        applicationSupportDirectoryURL
-            .appending(path: "Skills", directoryHint: .isDirectory)
+        Self.skillsDirectoryURL(inBundle: bundleURL)
             .appending(path: definition.slug, directoryHint: .isDirectory)
             .standardizedFileURL
     }
 
-    private var sourceSkillFileURL: URL {
-        sourceDirectoryURL.appending(path: "SKILL.md")
+    static func skillsDirectoryURL(inBundle bundleURL: URL) -> URL {
+        bundleURL
+            .appending(path: "Contents/Resources/Skills", directoryHint: .isDirectory)
+            .standardizedFileURL
     }
 
     func targetLinkURL(for target: SkillTarget) -> URL {
@@ -134,137 +115,26 @@ nonisolated struct SkillInstaller: Sendable {
         return exists && isDirectory.boolValue
     }
 
-    /// 建源目录并刷新 `SKILL.md` 与全部附加文件，然后自检一遍。
-    ///
-    /// 两种物化形态：
-    /// - 声明了 `bundleResourceName` 且拿得到包内文件 → 建**符号链接**指向 app 包内
-    ///   那份（脚本随 app 签名/公证，不带 quarantine，可以直接 exec）；
-    /// - 否则把内嵌常量写成真实文件并校正可执行位（fallback：测试宿主 / 资源缺失）。
-    ///
-    /// 形态**每次都校正**（哪怕内容一字未变）：1.12.x 装下的正是「内容对、形态错」
-    /// 那一类（app 自己写出的普通文件，带着 quarantine，exec 必 EPERM），
-    /// 只有重新走一遍物化才切得到包内链接。
-    func materializeSource() throws {
-        try validateSlug()
-        try materializeAll(force: false)
-
-        // 自检：文件在、形态对（该是链接的指着当前 app、该是文件的有可执行位）。
-        // 不过就强制重物化一遍 ——「装上了却跑不了」比装不上更难查。
-        let issues = sourceIntegrityIssues()
-        guard !issues.isEmpty else { return }
-        AppLogger.warn(
-            "技能 \(definition.slug) 物化后自检未过，重新物化：\(issues.joined(separator: "；"))",
-            category: "skills"
-        )
-        try materializeAll(force: true)
-        let remaining = sourceIntegrityIssues()
-        if !remaining.isEmpty {
-            AppLogger.error(
-                "技能 \(definition.slug) 重新物化后自检仍未过：\(remaining.joined(separator: "；"))",
-                category: "skills"
-            )
+    /// 当前 app 包装不了技能的原因；nil 表示可以装。
+    var unavailableReason: String? {
+        if let reason = Self.transientBundleReason(bundleURL) { return reason }
+        guard Self.fileType(at: sourceDirectoryURL.appending(path: "SKILL.md")) == S_IFREG else {
+            return "uTerm.app 里缺少技能文件（\(definition.slug)），请重新安装 uTerm。"
         }
+        return nil
     }
 
-    private func materializeAll(force: Bool) throws {
-        try FileManager.default.createDirectory(
-            at: sourceDirectoryURL, withIntermediateDirectories: true)
-        for planned in try materializationPlan() {
-            try FileManager.default.createDirectory(
-                at: planned.url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            if let target = planned.linkTarget {
-                try linkMaterialized(planned.url, to: target, force: force)
-            } else {
-                try writeMaterialized(
-                    planned.content, to: planned.url,
-                    executable: planned.isExecutable, force: force)
-            }
-        }
-    }
-
-    /// 源目录已经物化过、但自检不过（形态不对 / 链接指向旧位置 / 文件丢了）就重物化。
-    ///
-    /// 这也是**老用户的升级路径**：1.12.x 在这里写出的是普通文件，升级后自检报
-    /// 「应为符号链接」，于是自动切成指向包内脚本的链接，用户不必重装技能。
-    ///
-    /// 没装过技能的用户不该因为打开一次设置页就被凭空造出
-    /// `<appSupport>/uTerm/Skills/`，所以源目录不存在时直接返回。
-    func repairSourceIfNeeded() throws {
-        guard Self.fileType(at: sourceDirectoryURL) == S_IFDIR else { return }
-        guard !sourceIntegrityIssues().isEmpty else { return }
-        try materializeSource()
-    }
-
-    /// 物化结果里**可以靠重新物化修好**的问题，返回空数组即健康。
-    /// （`com.apple.quarantine` 不算 —— 见文件末尾的说明。）
-    func sourceIntegrityIssues() -> [String] {
-        guard let plan = try? materializationPlan() else { return [] }
-        return plan.compactMap { planned in
-            guard let type = Self.fileType(at: planned.url) else {
-                return "\(planned.url.path)：文件缺失"
-            }
-            guard let target = planned.linkTarget else {
-                // 该是真实文件：旧形态（或曾经链过包内）要换回来。
-                if type == S_IFLNK { return "\(planned.url.path)：应为普通文件却是符号链接" }
-                var info = stat()
-                guard stat(planned.url.path, &info) == 0 else {
-                    return "\(planned.url.path)：文件缺失"
-                }
-                guard planned.isExecutable, info.st_mode & S_IXUSR == 0 else { return nil }
-                return "\(planned.url.path)：缺可执行位"
-            }
-            // 该是指向 app 包内脚本的链接。
-            guard type == S_IFLNK else {
-                return "\(planned.url.path)：应为指向 app 包内脚本的符号链接"
-            }
-            guard let destination = try? FileManager.default
-                .destinationOfSymbolicLink(atPath: planned.url.path) else {
-                return "\(planned.url.path)：无法读取符号链接目标"
-            }
-            // app 被移走 / 重装到别处后，这条链接还指着旧路径 —— 悬空，重建即可。
-            guard destination == target.path else {
-                return "\(planned.url.path)：链接指向旧位置 \(destination)（应为 \(target.path)）"
-            }
-            guard FileManager.default.fileExists(atPath: target.path) else {
-                return "\(planned.url.path)：链接目标不存在（\(target.path)）"
-            }
-            return nil
-        }
-    }
-
-    /// 物化出的文件里仍带 `com.apple.quarantine` 的那些（跟随符号链接，量的是
-    /// **真正会被 exec 的那个文件**）。只用于状态报告与测试：包内脚本随 app 签名，
-    /// 天然没有这条属性；退回写出来的那份必然有，而且摘不掉。
-    func quarantinedFiles() -> [URL] {
-        guard let plan = try? materializationPlan() else { return [] }
-        return plan.map(\.url).filter { Self.hasQuarantine(at: $0) }
-    }
-
-    /// 一份物化产物：要么写 `content`，要么建指向 `linkTarget` 的符号链接。
-    private struct PlannedFile {
-        let url: URL
-        let content: String
-        let isExecutable: Bool
-        let linkTarget: URL?
-    }
-
-    /// 物化会产出的全部文件及其形态。
-    private func materializationPlan() throws -> [PlannedFile] {
-        var files = [PlannedFile(
-            url: sourceSkillFileURL, content: definition.markdownContent,
-            isExecutable: false, linkTarget: nil)]
-        for file in definition.supportFiles {
-            let relativePath = try validateSupportFilePath(file.relativePath)
-            files.append(PlannedFile(
-                url: sourceDirectoryURL.appending(path: relativePath),
-                content: file.content,
-                isExecutable: file.isExecutable,
-                linkTarget: bundledURL(for: file)
-            ))
-        }
-        return files
+    /// app 跑在**会消失的位置**时拒绝建链接，否则链上去很快就悬空：
+    /// - App Translocation：从「下载」里直接双击、没拖进「应用程序」时，系统把 app 挂到
+    ///   一个随机的只读路径上运行；
+    /// - 磁盘映像里直接运行（只读卷，推出即没）。
+    /// 两者都是只读卷，`/AppTranslocation/` 再兜一道。
+    static func transientBundleReason(_ bundleURL: URL) -> String? {
+        let readOnly = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
+            .volumeIsReadOnly == true
+        guard readOnly || bundleURL.path.contains("/AppTranslocation/") else { return nil }
+        return "uTerm 正从临时位置运行（磁盘映像，或下载后没拖进「应用程序」），"
+            + "请先把 uTerm.app 移到「应用程序」文件夹再安装。"
     }
 
     func status(for target: SkillTarget) -> SkillInstallStatus {
@@ -277,35 +147,26 @@ nonisolated struct SkillInstaller: Sendable {
                 ? "已存在同名目录（非 uTerm 创建）"
                 : "已存在同名文件（非 uTerm 创建）")
         }
-        guard let destination = try? FileManager.default
-            .destinationOfSymbolicLink(atPath: link.path) else {
+        guard let resolved = Self.linkDestination(of: link) else {
             return .conflict(reason: "无法读取符号链接目标")
         }
-        let resolved = (destination as NSString).isAbsolutePath
-            ? URL(fileURLWithPath: destination).standardizedFileURL
-            : link.deletingLastPathComponent()
-                .appending(path: destination).standardizedFileURL
-        // 故意按字面路径比较、不做 resolvingSymlinksInPath：链接是用绝对的
-        // sourceDirectoryURL 建的，存的就是这个路径，字面相等即可判定是我们的链接。
-        // 若改成解析符号链接，当 appSupport 本身位于符号链接下（如 /var → /private/var）
-        // 反而可能误判我们自己建的链接。
-        guard resolved.path == sourceDirectoryURL.path else {
-            // 不是这个实例的源，但形如 `…/Application Support/uTerm/Skills/<slug>`
-            // 就是另一个 uTerm 实例（沙盒/非沙盒各一份）装的，可接管、可卸载。
-            if Self.looksLikeManagedSkillSource(resolved, slug: definition.slug) {
-                return .managedByOtherInstance(path: resolved.path)
-            }
-            return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        // 故意按字面路径比较、不做 resolvingSymlinksInPath：链接是用绝对路径建的，
+        // 存的就是这个路径。解析符号链接反而可能在 /var → /private/var 这类前缀上误判。
+        if resolved.path == sourceDirectoryURL.path {
+            return Self.fileType(at: sourceDirectoryURL) == S_IFDIR ? .installed : .brokenLink
         }
-        // 指向我们的源：源存在且形态健康 → installed；否则需修复。
-        // 「形态不健康」含 app 被移走后包内链接悬空、以及 1.12.x 留下的普通文件。
-        guard Self.fileType(at: sourceDirectoryURL) == S_IFDIR else { return .brokenLink }
-        return sourceIntegrityIssues().isEmpty ? .installed : .brokenLink
+        if Self.looksLikeManagedSkillLocation(resolved, slug: definition.slug) {
+            return .brokenLink
+        }
+        return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
     }
 
-    /// 仅在 `notInstalled` / `brokenLink` / 另一实例所装时安装；真冲突抛错，不覆盖用户文件。
+    /// 建（或改指）链接。真冲突抛错，不覆盖用户文件；app 在临时位置或包内缺技能时
+    /// 抛错且**不动**既有链接。
     func install(target: SkillTarget) throws {
-        try materializeSource()
+        if let reason = unavailableReason {
+            throw SkillInstallError.failed("\(target.displayName)：\(reason)")
+        }
         let link = targetLinkURL(for: target)
         switch status(for: target) {
         case .installed:
@@ -313,16 +174,12 @@ nonisolated struct SkillInstaller: Sendable {
         case .conflict(let reason):
             throw SkillInstallError.failed("\(target.displayName)：\(reason)")
         case .brokenLink:
-            // 链接已指向我们的源，物化后即变为有效，无需重建。
-            return
-        case .managedByOtherInstance:
-            // 接管：只删这条我们已确认是 uTerm 建的符号链接，不碰它指向的目录
-            // （那是另一个实例的源，它自己还要用）。
+            // 只删这条已确认是 uTerm 建的符号链接，不碰它指向的东西。
             do {
                 try FileManager.default.removeItem(at: link)
             } catch {
                 throw SkillInstallError.failed(
-                    "\(target.displayName)：无法接管既有链接（\(error.localizedDescription)）"
+                    "\(target.displayName)：无法替换旧链接（\(error.localizedDescription)）"
                 )
             }
         case .notInstalled:
@@ -342,7 +199,7 @@ nonisolated struct SkillInstaller: Sendable {
     /// 仅删除「确认由 uTerm 建的」符号链接；其它情况抛错且不动文件。
     func uninstall(target: SkillTarget) throws {
         switch status(for: target) {
-        case .installed, .brokenLink, .managedByOtherInstance:
+        case .installed, .brokenLink:
             try FileManager.default.removeItem(at: targetLinkURL(for: target))
         case .notInstalled:
             return
@@ -351,90 +208,19 @@ nonisolated struct SkillInstaller: Sendable {
         }
     }
 
-    private func validateSlug() throws {
-        let slug = definition.slug
-        guard !slug.isEmpty,
-              slug != ".", slug != "..",
-              !slug.contains("/"), !slug.contains("\\"),
-              !slug.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-        else {
-            throw SkillInstallError.failed("技能标识无效：\(slug)")
-        }
-    }
-
-    /// 建（或纠正）一条指向 app 包内脚本的符号链接。
-    ///
-    /// 源目录 `<appSupport>/uTerm/Skills/<slug>/` 整个归 uTerm 管，所以这里可以直接
-    /// 替换占位的东西（旧版本写出的普通文件、指向旧 app 路径的陈旧链接）。
-    private func linkMaterialized(_ url: URL, to target: URL, force: Bool) throws {
-        if !force, Self.fileType(at: url) == S_IFLNK,
-           let destination = try? FileManager.default
-               .destinationOfSymbolicLink(atPath: url.path),
-           destination == target.path {
-            return
-        }
-        if Self.fileType(at: url) != nil {
-            try FileManager.default.removeItem(at: url)
-        }
-        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
-    }
-
-    /// 写内容（相同则不动 mtime）→ 校正可执行位。`force` 时无条件重写。
-    ///
-    /// 这是**退路**：拿不到包内资源时才走到（测试宿主 / 资源缺失）。沙盒写出的文件
-    /// 必带 `com.apple.quarantine`，直接 exec 会 EPERM，只能 `python3 <路径>` 跑
-    /// —— 见文件末尾的说明。
-    private func writeMaterialized(
-        _ content: String, to url: URL, executable: Bool, force: Bool
-    ) throws {
-        // 之前可能链着包内脚本（app 卸载 / 资源没了），先摘掉再写，否则内容比对
-        // 读到的是链接目标、会误判成「已是最新」。
-        if Self.fileType(at: url) == S_IFLNK {
-            try FileManager.default.removeItem(at: url)
-        }
-        let desired = Self.materializedText(content)
-        let current = force ? nil : try? String(contentsOf: url, encoding: .utf8)
-        if current != desired {
-            try desired.write(to: url, atomically: true, encoding: .utf8)
-        }
-        if executable {
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o755))],
-                ofItemAtPath: url.path
-            )
-        }
-    }
-
-    /// 真正落到磁盘上的文本。
-    ///
-    /// `SkillDefinition` 的 `#"""…"""#` 常量天然**没有末尾换行**，直接写出去就与
-    /// 仓库里的 `skills/*/SKILL.md`、`scripts/utermctl` 逐字节不同（少一个 `\n`），
-    /// `cmp` 时报 EOF 差异，装到用户机器上的也是个「最后一行没结束」的文本文件。
-    /// 补齐这一个字节即可，常量本身不用动。
-    static func materializedText(_ content: String) -> String {
-        content.hasSuffix("\n") ? content : content + "\n"
-    }
-
-    private func validateSupportFilePath(_ path: String) throws -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              !(trimmed as NSString).isAbsolutePath,
-              !trimmed.split(separator: "/").contains("..")
-        else {
-            throw SkillInstallError.failed("技能附加文件路径无效：\(path)")
-        }
-        return trimmed
-    }
-
-    /// 这个路径看起来是不是某个 uTerm 实例的技能源，即末三段为
-    /// `uTerm/Skills/<slug>`。沙盒实例的源在容器里、非沙盒的在真实
-    /// Application Support 下，两者只有前缀不同。
-    static func looksLikeManagedSkillSource(_ url: URL, slug: String) -> Bool {
+    /// 这个路径是不是 uTerm 建过的技能链接会指向的地方：
+    /// - 当前形态：`<X>.app/Contents/Resources/Skills/<slug>`（app 搬家、另一份 uTerm）；
+    /// - 旧形态：`…/uTerm/Skills/<slug>`（1.12 – 1.16 物化在 Application Support，
+    ///   沙盒版在容器里）。
+    static func looksLikeManagedSkillLocation(_ url: URL, slug: String) -> Bool {
         let parts = url.standardizedFileURL.pathComponents
-        guard parts.count >= 3 else { return false }
-        return parts[parts.count - 1] == slug
-            && parts[parts.count - 2] == "Skills"
-            && parts[parts.count - 3] == "uTerm"
+        guard parts.count >= 3, parts[parts.count - 1] == slug, parts[parts.count - 2] == "Skills"
+        else { return false }
+        if parts[parts.count - 3] == "uTerm" { return true }
+        return parts.count >= 6
+            && parts[parts.count - 3] == "Resources"
+            && parts[parts.count - 4] == "Contents"
+            && parts[parts.count - 5].hasSuffix(".app")
     }
 
     /// 这个路径看起来是不是某个 uTerm 副本**包内**的客户端，即末四段为
@@ -449,37 +235,13 @@ nonisolated struct SkillInstaller: Sendable {
             && parts[parts.count - 4].hasSuffix(".app")
     }
 
-    // MARK: - 启动期自愈
-
-    /// 本进程是否已经跑过一次启动期自愈（`observe` 每次设置变更都会回调）。
-    private static let didRepairOnLaunch = Mutex(false)
-
-    /// 命令行接口一开起来就把**已经装过**的技能源修一遍，每进程一次，后台跑。
-    ///
-    /// 没有这一步，1.12.x 的用户升级后要**打开一次设置页**才会把
-    /// `bin/utermctl` 从「app 写出的文件」换成「指向包内脚本的符号链接」，在那之前
-    /// 技能仍旧 `operation not permitted`。而开着命令行接口正是受影响的那批人。
-    ///
-    /// `repairSourceIfNeeded()` 对没物化过的源直接返回，所以没装过技能的用户不会
-    /// 因此被凭空造出 `<appSupport>/uTerm/Skills/`。
-    static func repairInstalledSourcesOnce() {
-        let shouldRun = didRepairOnLaunch.withLock { done -> Bool in
-            defer { done = true }
-            return !done
-        }
-        guard shouldRun else { return }
-        Task.detached(priority: .utility) {
-            for definition in SkillDefinition.catalog {
-                do {
-                    try SkillInstaller(definition: definition).repairSourceIfNeeded()
-                } catch {
-                    AppLogger.warn(
-                        "启动期修复技能 \(definition.slug) 失败：\(error.localizedDescription)",
-                        category: "skills"
-                    )
-                }
-            }
-        }
+    /// 读符号链接目标并规范成绝对路径（相对目标按链接所在目录解析）。
+    static func linkDestination(of link: URL) -> URL? {
+        guard let destination = try? FileManager.default
+            .destinationOfSymbolicLink(atPath: link.path) else { return nil }
+        return (destination as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: destination).standardizedFileURL
+            : link.deletingLastPathComponent().appending(path: destination).standardizedFileURL
     }
 
     /// `lstat` 的文件类型位（不跟随符号链接）。路径不存在返回 nil。
@@ -489,41 +251,119 @@ nonisolated struct SkillInstaller: Sendable {
         return info.st_mode & S_IFMT
     }
 
-    // MARK: - com.apple.quarantine
+    /// 对每个元素执行操作；保留首个错误并在全部跑完后抛出（整包尽力而为）。
+    static func forEach<T>(_ items: [T], _ operation: (T) throws -> Void) throws {
+        var firstError: Error?
+        for item in items {
+            do { try operation(item) } catch { if firstError == nil { firstError = error } }
+        }
+        if let firstError { throw firstError }
+    }
+}
 
-    /// **沙盒 app 写出的每一个文件都带 `com.apple.quarantine`**（形如
-    /// `0086;…;uTerm;`，`LSQuarantineType = LSQuarantineTypeSandboxed`），带着它的
-    /// 脚本**直接执行必然 `operation not permitted`**，而且**沙盒进程无权给自己解除
-    /// 隔离**：`removexattr` / `setxattr` 一律 `EPERM`，
-    /// `URL.setResourceValue(nil, forKey: .quarantinePropertiesKey)`（Apple 文档的正路）
-    /// 报成功但属性纹丝不动。逐条量过，别再花时间在这上面。
-    ///
-    /// 所以**可执行文件绝不能由 app 写出**：`utermctl` 由构建期的「Copy utermctl CLI」
-    /// 阶段拷进 `uTerm.app/Contents/Resources/`，随 app 一起签名/公证，物化时只建一条
-    /// 指向它的符号链接 —— 和 VS Code 的 `code` 命令一个套路，DMG 装的 app 照样能直接执行。
-    ///
-    /// 这里只留一个**只读**的探针：物化结果的状态报告与测试要能量出这条属性，
-    /// 摘除的尝试已经删掉（在沙盒里注定失败，留着只会给人「也许能修」的错觉）。
-    static let quarantineAttribute = "com.apple.quarantine"
+// MARK: - 自动对齐
 
-    /// 跟随符号链接 —— 量的是真正会被 exec 的那个文件。
-    static func hasQuarantine(at url: URL) -> Bool {
-        getxattr(url.path, quarantineAttribute, nil, 0, 0, 0) >= 0
+nonisolated extension SkillInstaller {
+    /// 把一个工具下 uTerm 建过的技能链接**整包**对齐到当前 app 包：旧链接改指、catalog
+    /// 里新增的技能补上。
+    ///
+    /// - 该工具下一条 uTerm 的链接都没有（没装过、用户卸载了）→ 不动，尊重用户的选择；
+    /// - app 在临时位置（或包内缺技能）→ 不动，免得把能用的链接改指到马上会消失的路径；
+    /// - 真冲突的位置不动，其余照样对齐，跑完抛首个错误。
+    static func reconcile(_ installers: [SkillInstaller], target: SkillTarget) throws {
+        guard let first = installers.first,
+              first.isToolPresent(target),
+              first.unavailableReason == nil
+        else { return }
+        let statuses = installers.map { $0.status(for: target) }
+        guard statuses.contains(where: { $0 == .installed || $0 == .brokenLink }),
+              statuses.contains(where: { $0 != .installed })
+        else { return }
+        try forEach(installers) { try $0.install(target: target) }
+    }
+
+    /// 启动时跑一次（后台）：全部工具的技能链接、以及开关开着的 `~/.local/bin/utermctl`
+    /// 对齐到当前 app 包，然后清掉旧版本物化在容器里的技能副本。
+    ///
+    /// 这是老用户的升级路径：1.12 – 1.16 的链接指向沙盒容器，macOS 27 上别的进程读不到。
+    /// 升级后第一次启动就自动改指，不用打开设置页、也不用重装。
+    ///
+    /// 测试宿主里不调（`BackgroundLaunchMode.isRunningInTestHost`），否则跑一次测试就会
+    /// 把开发机上真实的 `~/.claude/skills` 改指到 DerivedData 里的测试构建。
+    static func reconcileOnLaunch() {
+        Task.detached(priority: .utility) {
+            let installers = SkillDefinition.catalog.map { SkillInstaller(definition: $0) }
+            for target in SkillTarget.allCases {
+                do {
+                    try reconcile(installers, target: target)
+                } catch {
+                    AppLogger.warn(
+                        "启动期对齐 \(target.displayName) 的技能链接失败：\(error.localizedDescription)",
+                        category: "skills"
+                    )
+                }
+            }
+            if UserDefaults.standard.bool(forKey: BinLinkInstaller.enabledDefaultsKey) {
+                let binLink = BinLinkInstaller()
+                if binLink.status().canInstall {
+                    do {
+                        try binLink.install()
+                    } catch {
+                        AppLogger.warn(
+                            "启动期对齐 ~/.local/bin/utermctl 失败：\(error.localizedDescription)",
+                            category: "skills"
+                        )
+                    }
+                }
+            }
+            removeLegacySourceIfUnused(installers: installers)
+        }
+    }
+
+    /// 旧版本物化出的技能副本：`<容器>/Application Support/uTerm/Skills`。
+    static var legacySourceRootURL: URL {
+        ControlProtocol.applicationSupportDirectory
+            .appending(path: "Skills", directoryHint: .isDirectory)
+            .standardizedFileURL
+    }
+
+    /// 没有任何链接再指向旧副本时把它删掉（它在 uTerm 自己的容器里，删得动）。
+    /// 还有链接指着（比如那个位置冲突、没对齐成功）就留着，不把现状弄得更糟。
+    static func removeLegacySourceIfUnused(
+        installers: [SkillInstaller],
+        legacyRoot: URL = legacySourceRootURL
+    ) {
+        guard fileType(at: legacyRoot) == S_IFDIR else { return }
+        let prefix = legacyRoot.path.hasSuffix("/") ? legacyRoot.path : legacyRoot.path + "/"
+        for installer in installers {
+            for target in SkillTarget.allCases {
+                let link = installer.targetLinkURL(for: target)
+                guard fileType(at: link) == S_IFLNK,
+                      let resolved = linkDestination(of: link)
+                else { continue }
+                if resolved.path.hasPrefix(prefix) { return }
+            }
+        }
+        do {
+            try FileManager.default.removeItem(at: legacyRoot)
+        } catch {
+            AppLogger.warn(
+                "删除旧的技能副本失败：\(error.localizedDescription)", category: "skills")
+        }
     }
 }
 
 // MARK: - ~/.local/bin/utermctl（可选）
 
-/// 把技能自带的客户端再往 `~/.local/bin/utermctl` 链一条，让它进用户的 PATH。
+/// 把 app 包内的客户端再往 `~/.local/bin/utermctl` 链一条，让它进用户的 PATH。
 ///
 /// **默认关**（设置页开关，`UserDefaults` 键 `control.linkToLocalBin`）。技能自带的
 /// `~/.<tool>/skills/uterm-run/bin/utermctl` 才是主路径 —— 装了技能就一定能跑，不依赖
 /// 用户的 shell 环境；这条链接只是给「在自己终端里也想直接敲 utermctl」的人省一步。
 ///
-/// 链接目标与技能目录里的那条**同源**（都指向 `uTerm.app/Contents/Resources/utermctl`，
-/// 拿不到包内资源才退回物化出的文件），所以 app 升级时两边同时更新，不存在版本漂移。
-/// 直接链到包内、而不是链到技能源里那条链接，是为了少一跳：`readlink` 一眼能看出
-/// 它属于哪个 uTerm。
+/// 链接目标是 `uTerm.app/Contents/Resources/utermctl`，与技能目录里那份同源（构建期从
+/// 同一个 `scripts/utermctl` 拷进包里），app 升级时两边同时更新。app 搬家后由
+/// `SkillInstaller.reconcileOnLaunch` 自动改指。
 ///
 /// 冲突规则与 `SkillInstaller` 一致：只认自己建的符号链接，同名真实文件（比如用户
 /// 自己编译的同名工具）判 `conflict` 且绝不覆盖。
@@ -531,36 +371,32 @@ nonisolated struct SkillInstaller: Sendable {
 /// 沙盒下要能写到这里，`uTerm.entitlements` 必须有
 /// `temporary-exception.files.home-relative-path.read-write` 的 `/.local/bin/`。
 nonisolated struct BinLinkInstaller: Sendable {
-    /// 客户端所属的那份技能（`uterm-run`）。
-    let installer: SkillInstaller
-    /// 客户端在技能源目录里的相对路径。
-    let relativeExecutablePath: String
+    /// 设置页开关落的 `UserDefaults` 键。
+    static let enabledDefaultsKey = "control.linkToLocalBin"
+    static let executableName = "utermctl"
+
+    let homeDirectoryURL: URL
+    let bundleURL: URL
 
     init(
-        installer: SkillInstaller = SkillInstaller(definition: .uTermRun),
-        relativeExecutablePath: String = "bin/utermctl"
+        homeDirectoryURL: URL = SkillTarget.realHomeDirectoryURL,
+        bundleURL: URL = Bundle.main.bundleURL
     ) {
-        self.installer = installer
-        self.relativeExecutablePath = relativeExecutablePath
+        self.homeDirectoryURL = homeDirectoryURL
+        self.bundleURL = bundleURL.standardizedFileURL
     }
 
-    /// 链接**应该**指向的位置：优先 app 包内的脚本（随 app 签名，可以直接执行），
-    /// 拿不到才退回物化出的那份（带 quarantine，只能 `python3 <路径>` 跑）。
+    /// `<bundle>/Contents/Resources/utermctl`。
     var sourceURL: URL {
-        installer.bundledURL(forRelativePath: relativeExecutablePath) ?? materializedURL
-    }
-
-    /// 退路：`<appSupport>/uTerm/Skills/uterm-run/bin/utermctl`。
-    /// 1.12.x 建的链接指向的就是这里，识别出来才不会被误判成冲突。
-    var materializedURL: URL {
-        installer.sourceDirectoryURL
-            .appending(path: relativeExecutablePath)
+        bundleURL
+            .appending(path: "Contents/Resources", directoryHint: .isDirectory)
+            .appending(path: Self.executableName)
             .standardizedFileURL
     }
 
     /// `<home>/.local/bin`。
     var binDirectoryURL: URL {
-        installer.homeDirectoryURL
+        homeDirectoryURL
             .appending(path: ".local", directoryHint: .isDirectory)
             .appending(path: "bin", directoryHint: .isDirectory)
             .standardizedFileURL
@@ -568,75 +404,65 @@ nonisolated struct BinLinkInstaller: Sendable {
 
     /// `<home>/.local/bin/utermctl`。
     var linkURL: URL {
-        binDirectoryURL.appending(path: executableName)
-    }
-
-    private var executableName: String {
-        String(relativeExecutablePath.split(separator: "/").last ?? "utermctl")
+        binDirectoryURL.appending(path: Self.executableName)
     }
 
     func status() -> SkillInstallStatus {
+        let name = Self.executableName
         guard let type = SkillInstaller.fileType(at: linkURL) else {
             return .notInstalled
         }
         guard type == S_IFLNK else {
             return .conflict(reason: type == S_IFDIR
-                ? "~/.local/bin/\(executableName) 是一个目录"
-                : "~/.local/bin/\(executableName) 已被别的文件占用（非 uTerm 创建）")
+                ? "~/.local/bin/\(name) 是一个目录"
+                : "~/.local/bin/\(name) 已被别的文件占用（非 uTerm 创建）")
         }
-        guard let destination = try? FileManager.default
-            .destinationOfSymbolicLink(atPath: linkURL.path) else {
+        guard let resolved = SkillInstaller.linkDestination(of: linkURL) else {
             return .conflict(reason: "无法读取符号链接目标")
         }
-        // 与 SkillInstaller 一样按字面路径比较，不做 resolvingSymlinksInPath。
-        let resolved = (destination as NSString).isAbsolutePath
-            ? URL(fileURLWithPath: destination).standardizedFileURL
-            : linkURL.deletingLastPathComponent()
-                .appending(path: destination).standardizedFileURL
-        guard resolved.path == sourceURL.path else {
-            // 我们自己建的、只是指向旧位置：1.12.x 链到物化文件，或 app 搬家/重装前
-            // 的包内路径。重装即可指回来，别报成冲突（那样用户点不动任何按钮）。
-            if resolved.path == materializedURL.path
-                || SkillInstaller.looksLikeBundledClient(resolved, executableName: executableName) {
-                return .brokenLink
-            }
-            if looksLikeManagedClient(resolved) {
-                return .managedByOtherInstance(path: resolved.path)
-            }
-            return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
+        if resolved.path == sourceURL.path {
+            return SkillInstaller.fileType(at: sourceURL) == nil ? .brokenLink : .installed
         }
-        return SkillInstaller.fileType(at: sourceURL) == nil ? .brokenLink : .installed
+        // 我们自己建的、只是指向旧位置：app 搬家/另一份 uTerm 的包内脚本，或 1.12 – 1.16
+        // 物化出的 `…/uTerm/Skills/uterm-run/bin/utermctl`。
+        if SkillInstaller.looksLikeBundledClient(resolved, executableName: name)
+            || looksLikeLegacyMaterializedClient(resolved) {
+            return .brokenLink
+        }
+        return .conflict(reason: "符号链接指向其它位置：\(resolved.path)")
     }
 
-    /// 目标形如 `…/uTerm/Skills/<slug>/bin/<executable>` 就是另一个 uTerm 实例
-    /// （沙盒／非沙盒）建的，可接管；否则是与 uTerm 无关的链接，判冲突。
-    private func looksLikeManagedClient(_ url: URL) -> Bool {
+    private func looksLikeLegacyMaterializedClient(_ url: URL) -> Bool {
         let parts = url.standardizedFileURL.pathComponents
         guard parts.count >= 5,
-              parts[parts.count - 1] == executableName,
+              parts[parts.count - 1] == Self.executableName,
               parts[parts.count - 2] == "bin"
         else { return false }
         let skillRoot = url.deletingLastPathComponent().deletingLastPathComponent()
-        return SkillInstaller.looksLikeManagedSkillSource(
-            skillRoot, slug: installer.definition.slug)
+        return SkillInstaller.looksLikeManagedSkillLocation(
+            skillRoot, slug: SkillDefinition.uTermRun.slug)
     }
 
-    /// 物化客户端 → 建 `~/.local/bin` → 建链接。真冲突抛错，绝不覆盖用户的文件。
+    /// 建 `~/.local/bin` → 建（或改指）链接。真冲突抛错，绝不覆盖用户的文件。
     func install() throws {
-        try installer.materializeSource()
+        if let reason = SkillInstaller.transientBundleReason(bundleURL) {
+            throw SkillInstallError.failed(reason)
+        }
+        guard SkillInstaller.fileType(at: sourceURL) != nil else {
+            throw SkillInstallError.failed("uTerm.app 里缺少 \(Self.executableName)，请重新安装 uTerm。")
+        }
         switch status() {
         case .installed:
             return // 幂等
         case .conflict(let reason):
             throw SkillInstallError.failed(reason)
-        case .brokenLink, .managedByOtherInstance:
-            // 两种都已确认是 uTerm 建的**符号链接**（只是指着旧位置或别的实例），
-            // 删掉重建即可 —— 删的是链接本身，不碰它指向的文件。
+        case .brokenLink:
+            // 已确认是 uTerm 建的**符号链接**，删掉重建即可 —— 删的是链接本身。
             do {
                 try FileManager.default.removeItem(at: linkURL)
             } catch {
                 throw SkillInstallError.failed(
-                    "无法接管既有的 ~/.local/bin/\(executableName)（\(error.localizedDescription)）"
+                    "无法替换既有的 ~/.local/bin/\(Self.executableName)（\(error.localizedDescription)）"
                 )
             }
         case .notInstalled:
@@ -656,7 +482,7 @@ nonisolated struct BinLinkInstaller: Sendable {
     /// 只删「确认由 uTerm 建的」符号链接。
     func uninstall() throws {
         switch status() {
-        case .installed, .brokenLink, .managedByOtherInstance:
+        case .installed, .brokenLink:
             try FileManager.default.removeItem(at: linkURL)
         case .notInstalled:
             return

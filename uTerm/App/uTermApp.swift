@@ -2,7 +2,8 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-@main
+/// 入口在 `UTermEntryPoint`：CLI 按需唤起被设置拒绝时要在任何属性初始化（Sparkle、
+/// CloudKit、SwiftData）之前退出。
 struct uTermApp: App {
     @NSApplicationDelegateAdaptor(UTermLifecycleDelegate.self) private var lifecycleDelegate
     @AppStorage("appearancePreference")
@@ -110,6 +111,9 @@ struct uTermApp: App {
         // because `openWindow` is a scene environment action; all headless operations are ready now.
         if !BackgroundLaunchMode.isRunningInTestHost {
             StartupMaintenance.run(container: modelContainer)
+            // 技能链接直接指向 app 包内：升级后首次启动 / app 搬家后把旧链接改指过来，
+            // 与命令行接口开没开无关（技能文档先读得到，接口没开时 utermctl 会照实报错）。
+            SkillInstaller.reconcileOnLaunch()
             Self.startControlInterface(
                 server: controlServer,
                 settings: controlSettings,
@@ -182,7 +186,6 @@ struct uTermApp: App {
         settings.observe { settings in
             if settings.isEnabled {
                 settings.startupError = server.start()
-                SkillInstaller.repairInstalledSourcesOnce()
             } else {
                 server.stop()
                 settings.startupError = nil

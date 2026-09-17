@@ -6,10 +6,10 @@ import UDesignKit
 ///
 /// 两块：本机 IPC 的两个门禁开关（落 `ControlSettings`，`observe` 会顺带起停
 /// `ControlServer`），以及把内置技能装进各 AI CLI 的 `~/.<tool>/skills`
-/// （落 `SkillManagerModel`，符号链接安装）。
+/// （落 `SkillManagerModel`，直接链到 app 包内的符号链接）。
 struct CLISettingsView: View {
     /// 只链客户端到 PATH、不装技能的可选开关。默认关 —— 技能自带的那份才是主路径。
-    @AppStorage("control.linkToLocalBin") private var linkToLocalBin = false
+    @AppStorage(BinLinkInstaller.enabledDefaultsKey) private var linkToLocalBin = false
 
     @Environment(ControlSettings.self) private var settings
     @Environment(BackgroundServiceSettings.self) private var backgroundSettings
@@ -149,9 +149,9 @@ struct CLISettingsView: View {
             }
 
             emptyRow(
-                "安装会在该工具的 skills 目录里建符号链接，内含 "
+                "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
                     + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
-                    + " 四份技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新。"
+                    + " 四份技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
             )
         }
     }
@@ -210,16 +210,14 @@ struct CLISettingsView: View {
     }
 
     private var binLinkHint: String {
-        let base = "让你在自己的终端里也能直接敲 utermctl。链接指向 uTerm.app 内的脚本，与技能自带的那份同源；移动 uTerm.app 之后要重新链接。"
+        let base = "让你在自己的终端里也能直接敲 utermctl。链接指向 uTerm.app 内的脚本，与技能自带的那份同源；移动 uTerm.app 后下次启动会自动改指。"
         switch skills.binLinkStatus {
         case .installed:
             return base + "（已链接）"
         case .conflict(let reason):
             return base + "（\(reason)）"
-        case .managedByOtherInstance:
-            return base + "（当前由另一个 uTerm 实例管理，打开即可接管）"
         case .brokenLink:
-            return base + "（链接失效，重新打开即可修复）"
+            return base + "（链接指向旧位置，关掉再打开开关即可修复）"
         case .notInstalled:
             return base
         }
@@ -229,9 +227,7 @@ struct CLISettingsView: View {
         switch status {
         case .installed: return "技能已安装，可直接在对话里使用"
         case .notInstalled: return "尚未安装"
-        case .brokenLink: return "链接失效或有技能缺失，重装即可修复"
-        case .managedByOtherInstance:
-            return "已由另一个 uTerm 实例（沙盒／非沙盒）安装，点安装即可改由本实例管理"
+        case .brokenLink: return "链接指向旧位置或有技能缺失，点安装即可修复"
         case .conflict: return "目标位置被占用"
         }
     }
@@ -239,7 +235,7 @@ struct CLISettingsView: View {
     private func statusPill(_ status: SkillInstallStatus) -> some View {
         let color: Color = switch status {
         case .installed: UD.accent
-        case .brokenLink, .managedByOtherInstance: UD.caution
+        case .brokenLink: UD.caution
         case .conflict: UD.danger
         case .notInstalled: UD.text4
         }

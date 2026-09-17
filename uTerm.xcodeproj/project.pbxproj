@@ -508,7 +508,7 @@
 				85D6BEEC2FBC4E7E00FC90D8 /* Frameworks */,
 				85D6BEED2FBC4E7E00FC90D8 /* Resources */,
 				CFCFCFCF000000000000F0F1 /* Set Build Number */,
-				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */,
+				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI and Skills */,
 				DBBA0F7D575A176953DE3806 /* Embed Background Login Item */,
 			);
 			buildRules = (
@@ -740,25 +740,24 @@
 			shellPath = /bin/sh;
 			shellScript = "# build = git commit count + Config/BuildNumberOffset (offset exists because a 2026-09-11 history rewrite dropped merge commits below an already-published build; only ever raise it).\ncount=$(git -C \"$SRCROOT\" rev-list --count HEAD 2>/dev/null || echo 1)\noffset=$(cat \"$SRCROOT/Config/BuildNumberOffset\" 2>/dev/null || echo 0)\nbuildNumber=$((count + offset))\nplist=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$plist\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$plist\"\nfi\n";
 		};
-		CFCFCFCF000000000000F0F5 /* Copy utermctl CLI */ = {
+		CFCFCFCF000000000000F0F5 /* Copy utermctl CLI and Skills */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/scripts/utermctl",
 			);
-			name = "Copy utermctl CLI";
+			name = "Copy utermctl CLI and Skills";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/utermctl",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nsrc=\"${SRCROOT}/scripts/utermctl\"\ndst=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/utermctl\"\nmkdir -p \"$(dirname \"$dst\")\"\n/bin/cp -f \"$src\" \"$dst\"\n/bin/chmod 755 \"$dst\"\n";
+			shellScript = "set -e\nres=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n# Copy only when content differs, so incremental builds do not re-sign unchanged resources.\nput() {\n  mkdir -p \"$(dirname \"$2\")\"\n  cmp -s \"$1\" \"$2\" || /bin/cp -f \"$1\" \"$2\"\n  /bin/chmod \"$3\" \"$2\"\n}\n# ~/.local/bin/utermctl links here.\nput \"${SRCROOT}/scripts/utermctl\" \"$res/utermctl\" 755\n# ~/.<tool>/skills/<slug> links straight into Resources/Skills/<slug>: files the sandboxed app writes\n# into its container are unreadable to other apps on macOS 27+, the signed bundle is not.\nfor dir in \"${SRCROOT}\"/skills/*/; do\n  put \"${dir}SKILL.md\" \"$res/Skills/$(basename \"$dir\")/SKILL.md\" 644\ndone\nput \"${SRCROOT}/scripts/utermctl\" \"$res/Skills/uterm-run/bin/utermctl\" 755\n# Drop skills that no longer exist in the repository.\nfor dir in \"$res\"/Skills/*/; do\n  [ -d \"$dir\" ] || continue\n  [ -d \"${SRCROOT}/skills/$(basename \"$dir\")\" ] || rm -rf \"$dir\"\ndone\n";
 		};
 		DBBA0F7D575A176953DE3806 /* Embed Background Login Item */ = {
 			isa = PBXShellScriptBuildPhase;

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """uTerm 本机 IPC 客户端。
 
-单一真值源：本文件的内容同时内嵌在 uTerm/Core/Skills/SkillDefinition.swift 里
-（技能安装时物化到磁盘）。两边必须逐字一致，uTermTests/SkillDefinitionTests 会校验。
+单一真值源：构建期的「Copy utermctl CLI and Skills」阶段把本文件拷进 uTerm.app 的
+Contents/Resources/utermctl 与 Contents/Resources/Skills/uterm-run/bin/utermctl，技能目录与
+~/.local/bin 都直接链到包内。包内两份与本文件逐字节一致，uTermTests/SkillDefinitionTests 会校验。
 
 凭据永远不经过这里：密码 / 私钥 / 口令留在 uTerm 与钥匙串里，客户端只能按名字或
 UUID 指一台**用户已保存**的主机。
@@ -95,16 +96,25 @@ def socket_paths():
 
 
 def preference_value(key):
+    """读 uTerm 的一个布尔设置：True / False；读不到时返回 None（未知）。
+
+    macOS 27 起，没给完全磁盘访问权限的进程读不了 uTerm 沙盒容器里的偏好 plist
+    （EPERM）。这时不能当成「关」—— 交给 uTerm 自己按设置把关（见 start_background_and_wait）。
+    """
+    unreadable = False
     for candidate in PREFERENCE_CANDIDATES:
         path = os.path.expanduser(candidate)
         try:
             with open(path, "rb") as stream:
                 value = plistlib.load(stream).get(key)
-            if value is not None:
-                return bool(value)
+        except PermissionError:
+            unreadable = True
+            continue
         except (OSError, ValueError, plistlib.InvalidFileException):
-            pass
-    return False
+            continue
+        if value is not None:
+            return bool(value)
+    return None if unreadable else False
 
 
 def on_demand_launch_allowed():
@@ -120,38 +130,55 @@ def owning_app_bundle():
     return None
 
 
+def launch_command():
+    target = ["-a", owning_app_bundle()] if owning_app_bundle() else ["-b", BUNDLE_ID]
+    # -W：等 uTerm 进程退出才返回。uTerm 按设置拒绝按需启动时会立刻退出，靠它区分
+    # 「被拒绝」与「还在起」；接口就绪后这个等待进程直接结束掉，不影响 uTerm。
+    return (["/usr/bin/open", "-gjW"] + target
+            + ["--args", "--background", "--launch-source", "cli"])
+
+
 def start_background_and_wait():
-    if not on_demand_launch_allowed():
+    # 读得到设置就先在本地拦下，报得准、也不白起一次进程；读不到（None）照样请求启动，
+    # uTerm 收到 `--launch-source cli` 会自己检查这两项，不满足就立刻退出。
+    if on_demand_launch_allowed() is False:
         return False, "uTerm 未运行，且设置中没有允许 CLI 按需启动。"
-    if not preference_value(CONTROL_ENABLED_KEY):
+    if preference_value(CONTROL_ENABLED_KEY) is False:
         return False, "uTerm 命令行接口未启用；按需启动设置不会绕过接口门禁。"
     try:
-        target = ["-a", owning_app_bundle()] if owning_app_bundle() else ["-b", BUNDLE_ID]
-        completed = subprocess.run(
-            ["/usr/bin/open", "-gj"] + target + ["--args", "--background"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        launcher = subprocess.Popen(
+            launch_command(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except OSError as error:
         return False, "无法唤起 uTerm 后台实例：%s" % error
-    if completed.returncode != 0:
-        return False, "无法唤起 uTerm 后台实例：%s" % completed.stderr.strip()
 
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        for path in socket_paths():
-            if not os.path.exists(path):
-                continue
-            try:
-                probe = exchange(path, {"id": str(uuid.uuid4()), "action": "ping"})
-                if probe.get("ok"):
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            for path in socket_paths():
+                if not os.path.exists(path):
+                    continue
+                try:
+                    exchange(path, {"id": str(uuid.uuid4()), "action": "ping"})
+                    # 能回话就算就绪；门禁类错误留给真正的业务请求去报。
                     return True, None
-                # The app is ready enough to answer. Preserve its gate/error response.
-                return True, None
-            except (ConnectionRefusedError, OSError):
-                pass
-        time.sleep(0.1)
-    return False, "已请求后台启动 uTerm，但接口在 10 秒内没有就绪。"
+                except (ConnectionRefusedError, OSError):
+                    pass
+            code = launcher.poll()
+            if code is not None:
+                if code != 0:
+                    return False, "无法唤起 uTerm 后台实例：%s" % launcher.stderr.read().strip()
+                return False, ("uTerm 拒绝了按需启动：需要在 uTerm 设置 ▸ 命令行与技能 里同时打开"
+                               "「允许 CLI 按需启动」和「启用命令行接口」。")
+            time.sleep(0.1)
+        return False, ("已请求后台启动 uTerm，但接口在 10 秒内没有就绪。若 uTerm 本来就在运行，"
+                       "确认设置 ▸ 命令行与技能 里已打开「启用命令行接口」。")
+    finally:
+        if launcher.poll() is None:
+            launcher.terminate()
+            try:
+                launcher.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                launcher.kill()
 
 
 def build_parser():
@@ -396,7 +423,7 @@ def send_request(request):
             }
     # Only launch before the business request has been delivered. Once exchange() accepted
     # bytes, an unknown result is returned as-is and is never replayed automatically.
-    if not found_socket or (stale and on_demand_launch_allowed()):
+    if not found_socket or (stale and on_demand_launch_allowed() is not False):
         started, launch_error = start_background_and_wait()
         if started:
             for path in paths:
