@@ -39,6 +39,7 @@
 		<string>/.claude/</string>
 		<string>/.codex/</string>
 		<string>/.cursor/</string>
+		<string>/.codebuddy/</string>
 		<string>/.local/bin/</string>
 	</array>
 	<!-- 与 iOS 版共用同一钥匙串访问组：凭据以 kSecAttrSynchronizable 存入 iCloud 钥匙串，

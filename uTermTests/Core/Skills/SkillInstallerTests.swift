@@ -116,6 +116,24 @@ final class SkillInstallerTests: XCTestCase {
         XCTAssertFalse(installer.isToolPresent(.codex))
     }
 
+    func testCodeBuddyTargetUsesItsOwnSkillsDirectory() throws {
+        let installer = installer()
+        XCTAssertFalse(installer.isToolPresent(.codebuddy))
+        try makeToolDirectory(.codebuddy)
+        XCTAssertTrue(installer.isToolPresent(.codebuddy))
+
+        try installer.install(target: .codebuddy)
+
+        let link = installer.targetLinkURL(for: .codebuddy)
+        XCTAssertEqual(
+            link.path,
+            home.appending(path: ".codebuddy/skills/uterm-run").standardizedFileURL.path
+        )
+        XCTAssertEqual(installer.status(for: .codebuddy), .installed)
+        XCTAssertEqual(try linkDestination(of: link), installer.sourceDirectoryURL.path)
+        XCTAssertEqual(installer.status(for: .claude), .notInstalled, "只装进 CodeBuddy，不波及别的工具")
+    }
+
     func testInstallCreatesSymlinkAndMaterializesSource() throws {
         let installer = installer()
         try makeToolDirectory(.claude)

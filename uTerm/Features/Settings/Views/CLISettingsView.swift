@@ -130,7 +130,7 @@ struct CLISettingsView: View {
             if !skills.didLoad {
                 emptyRow("正在检测本机的 AI 命令行工具…")
             } else if skills.availableTargets.isEmpty {
-                emptyRow("没有检测到 Claude、Codex 或 Cursor 的命令行配置目录（~/.claude、~/.codex、~/.cursor）。装好其中之一后回到这里即可安装技能。")
+                emptyRow("没有检测到 Claude、Codex、Cursor 或 CodeBuddy 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy）。装好其中之一后回到这里即可安装技能。")
             } else {
                 ForEach(skills.availableTargets, id: \.self) { target in
                     targetRow(target)

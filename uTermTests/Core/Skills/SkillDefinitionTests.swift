@@ -160,6 +160,40 @@ final class SkillDefinitionTests: XCTestCase {
         XCTAssertTrue(file.content.hasPrefix("#!/usr/bin/env python3"))
     }
 
+    /// 加一个 AI 工具（`SkillTarget` 新 case）时有两处编译器管不到，漏了只在真机上才露馅：
+    /// - 沙盒 entitlements 的 home-relative 例外 —— 没有它 Release 版在 `~/.<tool>/` 下建不了链接；
+    /// - `uterm-run` 定位客户端的 `"$HOME"/.{…}` 循环 —— 没有它模型在该工具里找不到 utermctl
+    ///   （除非用户恰好开了 `~/.local/bin` 链接）。
+    func testEveryTargetIsCoveredByEntitlementsAndClientLookup() throws {
+        let data = try repositoryFileData("uTerm/uTerm.entitlements")
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let allowed = try Set(XCTUnwrap(
+            plist["com.apple.security.temporary-exception.files.home-relative-path.read-write"]
+                as? [String]))
+
+        let doc = SkillDefinition.uTermRun.markdownContent
+        let prefix = "\"$HOME\"/.{"
+        let suffix = "}/skills/uterm-run/bin/utermctl"
+        let start = try XCTUnwrap(doc.range(of: prefix), "uterm-run 里找不到定位客户端的目录循环")
+        let end = try XCTUnwrap(doc.range(of: suffix, range: start.upperBound..<doc.endIndex))
+        let lookup = Set(doc[start.upperBound..<end.lowerBound].split(separator: ",").map(String.init))
+
+        for target in SkillTarget.allCases {
+            // 目录名从 `configDirectoryURL` 取，与安装器实际写入的位置同源。
+            let directory = target.configDirectoryURL(homeDirectoryURL: URL(fileURLWithPath: "/"))
+                .lastPathComponent
+            XCTAssertTrue(
+                allowed.contains("/\(directory)/"),
+                "uTerm.entitlements 缺 /\(directory)/，沙盒版装不进 \(target.displayName)"
+            )
+            XCTAssertTrue(
+                lookup.contains(String(directory.dropFirst())),
+                "uterm-run 的定位循环缺 \(directory)，\(target.displayName) 里找不到 utermctl"
+            )
+        }
+    }
+
     /// 另外三份不带 bin，所以它们的文档必须告诉模型去 `uterm-run` 里找客户端。
     func testOtherSkillsPointAtTheRunSkill() {
         for definition in SkillDefinition.catalog where definition.supportFiles.isEmpty {

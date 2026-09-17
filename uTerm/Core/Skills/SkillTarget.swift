@@ -6,12 +6,14 @@ nonisolated enum SkillTarget: String, CaseIterable, Sendable {
     case claude
     case codex
     case cursor
+    case codebuddy
 
     var displayName: String {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
         case .cursor: return "Cursor"
+        case .codebuddy: return "CodeBuddy"
         }
     }
 
@@ -21,6 +23,7 @@ nonisolated enum SkillTarget: String, CaseIterable, Sendable {
         case .claude: return "sparkle"
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .cursor: return "cursorarrow.rays"
+        case .codebuddy: return "curlybraces.square"
         }
     }
 
