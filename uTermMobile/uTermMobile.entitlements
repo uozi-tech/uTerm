@@ -13,7 +13,9 @@
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>$(TeamIdentifierPrefix)com.uozi.uTerm</string>
 	<!-- 与已发布的 macOS 版同处 Production 数据库（否则 Xcode 调试构建默认走 Development，看不到正式数据）。
-	     若你的 macOS 数据来自 Xcode 调试运行（Development），把此值改成 Development。 -->
+	     若你的 macOS 数据来自 Xcode 调试运行（Development），把此值改成 Development。
+	     ⚠️ 与 macOS 端同样的连带后果：没有任何构建连 Development ⇒ 新 `@Model` 字段不会被自动推上
+	     CloudKit。发版前用 `make check-cloudkit-schema` 兜底，理由见 uTerm/uTerm.entitlements 的长注释。 -->
 	<key>com.apple.developer.icloud-container-environment</key>
 	<string>Production</string>
 	<!-- Push Notifications 能力：SwiftData 的 CloudKit 镜像（NSPersistentCloudKitContainer）

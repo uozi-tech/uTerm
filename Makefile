@@ -138,7 +138,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
 .PHONY: help list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
-	build archive export-app test test-mobile check-cli check-skills clean dmg dmg-background sign-release-app install verify \
+	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
 	testflight-notes-mobile release-mobile \
@@ -158,6 +158,7 @@ help:
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
 	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
+	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
@@ -324,6 +325,28 @@ check-skills: check-cli
 
 clean:
 	rm -rf "$(BUILD_DIR)"
+
+# 比对 SwiftData @Model 与已部署的 CloudKit schema（发版前必跑，见 scripts/check-cloudkit-schema.py 头注释）。
+# 需要 CloudKit Management Token：xcrun cktool save-token --type management
+#
+# ChatSession / ChatMessageRecord 这两个 @Model 已搬进 uAppKit 的 AgentKit，不在本仓库源码树里。
+# 脚本只扫给它的根，漏掉这一个根 = 容器注册的 10 个类型里有 2 个不设防（而且恰恰是历史上漂得最多的
+# 两个），所以这里把 SPM checkout 一并喂进去；找不到 checkout 就**报错退出**，不做「少扫两个类型也算过」
+# 的降级——硬门宁可吵也不要假绿。
+CLOUDKIT_AGENTKIT_ROOT ?= $(firstword $(wildcard \
+	$(BUILD_DIR)/DerivedData/SourcePackages/checkouts/uAppKit/Sources/AgentKit \
+	$(HOME)/Library/Developer/Xcode/DerivedData/uTerm-*/SourcePackages/checkouts/uAppKit/Sources/AgentKit))
+
+check-cloudkit-schema:
+	@if [ -z "$(CLOUDKIT_AGENTKIT_ROOT)" ]; then \
+		echo "error: 找不到 uAppKit 的 AgentKit 源码（ChatSession / ChatMessageRecord 在那里）。"; \
+		echo "       先构建一次让 SwiftPM 拉下 checkout，或显式传："; \
+		echo "       make check-cloudkit-schema CLOUDKIT_AGENTKIT_ROOT=/path/to/uAppKit/Sources/AgentKit"; \
+		exit 2; \
+	fi
+	python3 scripts/check-cloudkit-schema.py --team-id "$(TEAM_ID)" \
+		--source-root uTerm --source-root uTermMobile \
+		--source-root "$(CLOUDKIT_AGENTKIT_ROOT)"
 
 dmg-background:
 	mkdir -p "$(BUILD_DIR)"

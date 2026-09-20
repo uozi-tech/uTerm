@@ -26,7 +26,23 @@
 	<!-- 让所有 macOS 构建（含 Xcode 调试）都走 Production CloudKit，和 iOS / 发布版统一，
 	     避免调试构建默认落到 Development 库造成数据分裂。
 	     ⚠️ 代价：调试运行产生的数据也会进 Production。若想恢复「调试走 Development」，删掉此键即可
-	     （发布版用 Developer ID 签名本就默认 Production，不依赖此键）。 -->
+	     （发布版用 Developer ID 签名本就默认 Production，不依赖此键）。
+
+	     ⚠️⚠️ 这个键有一个不显眼的连带后果：`NSPersistentCloudKitContainer` 的**自动 schema 初始化
+	     只对 Development 环境生效**。既然本工程没有任何一个构建连 Development，新加的 `@Model`
+	     属性就不会被任何一次运行推上 CloudKit——两个环境都没有该字段，同步静默失败（2026-08-30
+	     发 1.10.1 时一次性发现累积漏了 7 个字段，其中两个已在线上坏了好几个版本）。
+
+	     不要为了「让 Debug 自动维护 schema」把这里改成 Development 或给 Debug 单独一份
+	     entitlements：Debug 与 Release 的 PRODUCT_BUNDLE_IDENTIFIER 相同（com.uozi.uTerm），
+	     两者共用同一个沙盒容器里的**同一份本地 store**。同一个 store 在两个 CloudKit 环境之间
+	     来回切，会反复重置镜像元数据并整库重传，比「字段漂移」更难收拾。
+
+	     替代的补偿手段（不需要任何 Development 签名的构建）：
+	       make check-cloudkit-schema      # scripts/check-cloudkit-schema.py，发版流程第 1 步的硬门
+	     它从源码解析 @Model 算出期望字段，跟 `cktool export-schema` 的线上 schema 逐字段比对；
+	     漂了就用它 `--emit-schema` 生成 DDL → `cktool import-schema --environment development`
+	     → CloudKit Console 部署到 Production。详见该脚本头注释与 CLAUDE.md「CloudKit schema」。 -->
 	<key>com.apple.developer.icloud-container-environment</key>
 	<string>Production</string>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
