@@ -51,7 +51,7 @@ struct HostDetailPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            UDHostDot(pulse: true)
+            PulseDot(pulse: true)
             Text(profile.name)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(UD.text)

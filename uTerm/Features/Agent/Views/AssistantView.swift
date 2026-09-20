@@ -1061,21 +1061,14 @@ private struct AgentToolCallCard: View {
 }
 
 /// 流式输出时的闪烁光标。
+///
+/// 闪烁走 CA（见 `CAMotion.swift`），不用 SwiftUI `.repeatForever` —— 后者会让
+/// **整个窗口**在每次流式回答的全程满帧重绘，代价跟视图树大小成正比。
+/// Reduce Motion 下常显不闪，由 `BlinkingBar` 内部处理。
 private struct StreamingCaret: View {
-    @State private var on = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(UD.accent)
-            .frame(width: 4, height: 12)
-            // Reduce Motion：停掉闪烁，光标常显（瞬时态）。
-            .opacity(reduceMotion ? 1 : (on ? 1 : 0.15))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
-                    on = false
-                }
-            }
+        BlinkingBar(color: UD.accent, width: 4, height: 12,
+                    cornerRadius: 1, minOpacity: 0.15, duration: 0.55)
     }
 }
 

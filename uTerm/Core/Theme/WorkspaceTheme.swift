@@ -60,22 +60,51 @@ struct WorkspaceWindowAppearance: NSViewRepresentable {
     }
 }
 
-/// 设计稿 workspace 标题栏里的连接状态胶囊。app-bound 适配器：把
-/// `TerminalSession.ConnectionState` 映射到 DesignKit `UDStatusBadge`（含呼吸光晕）。
+/// 设计稿 workspace 标题栏里的连接状态胶囊：圆点（连接中 / 已连接时呼吸）+ 文案，
+/// 外裹语义色 14% 胶囊底（`idle` 用中性 `uw03`）。
+///
+/// 曾经直接用 DesignKit 的 `UDStatusBadge`，但它的呼吸光晕是 SwiftUI
+/// `.repeatForever`——会把整个窗口钉在每帧重绘上（详见 `PulseDot` 的注释：实测空载
+/// 30%+ CPU）。这里按同一套视觉参数就地复刻，光晕换成 CA 驱动的 `PulseDot`。
+/// 色调与文案继续走 `ConnectionStatusDisplay`（已有单测），与 `UDStatusBadge`
+/// 的映射逐项等价。
 struct WSStatusPill: View {
     let state: TerminalSession.ConnectionState
 
     var body: some View {
-        UDStatusBadge(state: badgeState)
+        let display = ConnectionStatusDisplay(state: state)
+        return HStack(spacing: UD.Space.xs) {
+            PulseDot(
+                color: display.tint.color,
+                coreSize: 7,
+                haloSize: 9,
+                // 原 UDStatusBadge 是两层 opacity 相乘：0.2 × 0.2。
+                peakOpacity: 0.04,
+                pulse: pulses
+            )
+            Text(display.label)
+                .font(UD.caption)
+                .foregroundStyle(isIdle ? UD.text2 : display.tint.color)
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 8)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(isIdle ? UD.uw03 : display.tint.color.opacity(0.14)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("连接状态")
+        .accessibilityValue(display.label)
     }
 
-    private var badgeState: UDStatusBadge.State {
+    /// 只有「已连接 / 连接中」呼吸，与 `UDStatusBadge.State.pulse` 一致。
+    private var pulses: Bool {
         switch state {
-        case .idle:         return .idle
-        case .connecting:   return .connecting
-        case .connected:    return .connected
-        case .disconnected: return .disconnected
-        case .failed:       return .failed
+        case .connected, .connecting:       return true
+        case .idle, .disconnected, .failed: return false
         }
+    }
+
+    private var isIdle: Bool {
+        if case .idle = state { return true }
+        return false
     }
 }

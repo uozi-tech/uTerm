@@ -273,10 +273,12 @@ struct SFTPTitleBar: View {
 
 /// 标题栏连接状态胶囊：圆点（连接时脉冲）+ 文案，外裹细描边 capsule。映射
 /// `FileBrowserModel.State`。
+///
+/// 脉冲走 CA 驱动的 `PulseDot`，不再用 SwiftUI `.repeatForever` —— 后者会把整个窗口
+/// 钉在每帧重绘上（详见 `PulseDot` 的注释）。同时省掉了原来的 `@State pulse` +
+/// `onAppear` / `onChange` 启动仪式：`pulse:` 直接由 `state` 推导，连上就动、断开就停。
 struct SFTPStatusPill: View {
     let state: FileBrowserModel.State
-    @State private var pulse = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var info: (text: String, color: Color) {
         switch state {
@@ -286,17 +288,25 @@ struct SFTPStatusPill: View {
         }
     }
 
+    private var isBrowsing: Bool {
+        if case .browsing = state { return true }
+        return false
+    }
+
     var body: some View {
         let i = info
         return HStack(spacing: 6) {
-            ZStack {
-                if case .browsing = state, !reduceMotion {
-                    Circle().fill(i.color).frame(width: 9, height: 9)
-                        .opacity(pulse ? 0.0 : 0.35)
-                        .scaleEffect(pulse ? 1.8 : 1)
-                }
-                Circle().fill(i.color).frame(width: 7, height: 7)
-            }
+            PulseDot(
+                color: i.color,
+                coreSize: 7,
+                haloSize: 9,
+                // 雷达式：单向扩散到 1.8× 后瞬回，不往复（与原实现一致）。
+                scale: 1...1.8,
+                peakOpacity: 0.35,
+                duration: 1.4,
+                autoreverses: false,
+                pulse: isBrowsing
+            )
             Text(i.text)
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text2)
@@ -306,16 +316,5 @@ struct SFTPStatusPill: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("连接状态")
         .accessibilityValue(i.text)
-        // 进入 .browsing 才启动脉冲 —— 首帧通常是 .idle/.connecting，故 onAppear 与
-        // onChange 都要试一次（否则连上后圆点静止不动）。
-        .onAppear { startPulseIfBrowsing() }
-        .onChange(of: state) { _, _ in startPulseIfBrowsing() }
-    }
-
-    private func startPulseIfBrowsing() {
-        guard case .browsing = state, !pulse, !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) {
-            pulse = true
-        }
     }
 }

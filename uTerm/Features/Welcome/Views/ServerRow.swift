@@ -52,7 +52,7 @@ struct ServerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            UDHostDot(color: groupColor ?? UD.accent, pulse: isSelected)
+            PulseDot(color: groupColor ?? UD.accent, pulse: isSelected)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {

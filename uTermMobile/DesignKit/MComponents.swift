@@ -239,32 +239,33 @@ struct MCheck: View {
 
 // MARK: - 状态点 SDot / Dot
 
+/// 状态点（可选呼吸光晕）。
+///
+/// 光晕走 CA 驱动的 `PulseDot`（见 `uTerm/Shared/Views/CAMotion.swift`），不再用
+/// SwiftUI `.repeatForever` —— 后者会把整屏钉在每帧重绘上，代价跟视图树大小成正比
+/// 而不是跟这个 9pt 小圆点成正比（macOS 侧实测同样的写法让 app 空载吃 30%+ CPU）。
+///
+/// 顺带解决了原实现的一个行为 bug：旧版靠 `@State anim` + `onAppear` / `onChange`
+/// 点火，而这个视图**建出来的时候往往还不该呼吸**（并行执行先 `.pending` 后
+/// `.running`，终端标签先 `.idle` 后 `.connecting`），点火时机很容易错过。现在
+/// `pulse:` 直接透传，状态一到就动、一走就停，没有中间状态。
 struct MDot: View {
     var color: Color
     var pulse: Bool = false
     var size: CGFloat = 9
-    @State private var anim = false
+
     var body: some View {
-        ZStack {
-            if pulse {
-                Circle().fill(color).opacity(anim ? 0.0 : 0.3)
-                    .scaleEffect(anim ? 1.9 : 0.9)
-                    .frame(width: size, height: size)
-                    .animation(.easeOut(duration: 2.0).repeatForever(autoreverses: false), value: anim)
-            }
-            Circle().fill(color).frame(width: size, height: size)
-        }
-        .frame(width: size, height: size)
-        // 改前只有 `onAppear { if pulse { anim = true } }` —— 这一行**建出来的时候
-        // 往往还不该呼吸**（并行执行是先排队 `.pending` 后 `.running`，终端标签是
-        // 先 `.idle` 后 `.connecting`），等它真的开始跑，置位那一刻早就过去了，
-        // 圈永远不动。这是行为 bug，不是性能。
-        //
-        // 反向也补上：`pulse` 转回 false 时把 `anim` 归零，下一轮才重新起跳；
-        // 而 `if pulse` 本来就会把带 `repeatForever` 的那一层整个撤掉 ——
-        // 所以任何时刻只有**真正在跑的行**挂着无限动画，n 台并行也就 n 个。
-        .onAppear { anim = pulse }
-        .onChange(of: pulse) { _, on in anim = on }
+        PulseDot(
+            color: color,
+            coreSize: size,
+            haloSize: size,
+            // 与原实现逐参数等价：0.9 → 1.9 扩散、0.3 → 0 淡出、2s、单向不往复。
+            scale: 0.9...1.9,
+            peakOpacity: 0.3,
+            duration: 2.0,
+            autoreverses: false,
+            pulse: pulse
+        )
     }
 }
 

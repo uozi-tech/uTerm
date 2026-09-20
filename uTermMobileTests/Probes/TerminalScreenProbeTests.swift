@@ -403,9 +403,8 @@ final class TerminalScreenProbeTests: XCTestCase {
 
     /// 8 片标签，两档：全部 `.connected`（不呼吸）vs 全部 `.connecting`（呼吸）。
     ///
-    /// `MDot` 里带 `repeatForever` 的那一层包在 `if pulse` 内，所以「有几个圈在动」
-    /// = 「有几个会话在连」。这一条量的是两档的心跳 / 单帧差，并钉住结构判据：
-    /// 连接中档不应该把渲染循环拖垮。
+    /// `MDot` 的呼吸层包在 `if pulse` 内，所以「有几个圈在动」=「有几个会话在连」。
+    /// 这一条量的是两档的心跳 / 单帧差，并钉住结构判据：连接中档不应该把渲染循环拖垮。
     func testTabBarDotsPulseOnlyWhileConnecting() async throws {
         defer { MobileProbeWindow.closeAll() }
         let c = try container()
@@ -463,8 +462,21 @@ final class TerminalScreenProbeTests: XCTestCase {
             print(String(format: "[term-dots-table] %@ | %d | %d | %.2f | %.3f | %.3f",
                          r.0, r.2, r.3, r.1.displayRatio, r.1.p50, r.1.cpuSeconds))
         }
-        // 视图数两档必须一致：`if pulse` 那一层是 SwiftUI 图层，不该多出 `UIView`。
-        XCTAssertEqual(readings[0].3, readings[1].3,
-                       "呼吸档多出了 UIView —— MDot 的实现变了，判据要重写")
+        // 视图数判据。`MDot` 的光晕已从 SwiftUI `.repeatForever` 换成 CA 驱动的
+        // `PulseDot`（见 `uTerm/Shared/Views/CAMotion.swift`）—— 代价是每个呼吸圈
+        // 落成真实平台视图，收益是不再让整屏每帧重绘。所以这里钉的不再是「两档
+        // 视图数相等」，而是「多出来的视图数**正好正比于呼吸圈数**」：只有在连的
+        // 会话才付这份钱，静止的标签片一个都不多。
+        //
+        // `viewsPerPulse` 是实测值（2026-09-20，iPhone 17 Pro / iOS 26.5：静止档
+        // 4 个视图、8 个呼吸圈档 28 个）。它取决于 SwiftUI 给 `UIViewRepresentable`
+        // 套几层包装，换系统版本可能变 —— 变了就照着下面打印的表重新定标，
+        // 但「正比于呼吸圈数」这条不该变。
+        let viewsPerPulse = 3
+        let extraViews = readings[1].3 - readings[0].3
+        XCTAssertEqual(extraViews, viewsPerPulse * n,
+                       "呼吸档多出的视图数应为 \(viewsPerPulse) × \(n)，实测 \(extraViews)"
+                       + " —— 要么 PulseDot 的包装层数变了（照 [term-dots-table] 重新定标），"
+                       + " 要么静止档也在建光晕视图（那是真 bug）")
     }
 }

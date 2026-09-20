@@ -310,8 +310,6 @@ private struct ConnRing: View {
     let mode: Mode
 
     @Environment(\.mAccent) private var accent
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var spin = false
 
     private var tint: Color {
         switch mode {
@@ -326,12 +324,10 @@ private struct ConnRing: View {
             Circle().stroke(M.border, lineWidth: 2.5).frame(width: 88, height: 88)
             switch mode {
             case .connecting:
-                Circle().trim(from: 0, to: 0.25)
-                    .stroke(accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .frame(width: 88, height: 88)
-                    .rotationEffect(.degrees(spin ? 360 : 0))
-                    .animation(reduceMotion ? nil : .linear(duration: 1.1).repeatForever(autoreverses: false),
-                               value: spin)
+                // 转圈走 CA（见 `uTerm/Shared/Views/CAMotion.swift`），不用 SwiftUI
+                // `.repeatForever`：后者在整个连接期间把这一屏钉在满帧重绘上。
+                // Reduce Motion 下弧静置不转，由 `SpinningArc` 内部处理。
+                SpinningArc(color: accent, size: 88, lineWidth: 3, trim: 0.25, duration: 1.1)
             case .success, .failed:
                 Circle()
                     .stroke(tint, style: StrokeStyle(lineWidth: 3, lineCap: .round))
@@ -340,7 +336,6 @@ private struct ConnRing: View {
             innerTile
         }
         .frame(width: 100, height: 100)
-        .onAppear { spin = true }
     }
 
     private var innerTile: some View {
