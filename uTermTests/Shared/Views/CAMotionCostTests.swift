@@ -122,20 +122,38 @@ final class CAMotionCostTests: XCTestCase {
     func testPulseDotCostsNoMainThreadCPU() async throws {
         defer { unmountAll() }
         var cpu: [Arm: Double] = [:]
-        // 预热：第一次挂载要吃字体加载、首次建树这些一次性成本。不丢掉的话，跑在最前面的
-        // 那一档基线被抬高，实测静态档 0.144s 而 CA 档只有 0.048s —— 基线脏了，
-        // 「CA 不比静态贵」这条断言就名存实亡。
-        _ = await cpuSeconds(.still, seconds: 0.4)
-        unmountAll()
-        // 正序 + 反序各跑一遍求和，摊掉「先跑的那档占便宜」这类顺序效应。
-        for arm in [Arm.still, .ca, .swiftUIForever, .swiftUIForever, .ca, .still] {
-            cpu[arm, default: 0] += await cpuSeconds(arm)
+        // 预热：每档第一次挂载都有各自的一次性成本（CA 那档还要建平台视图、装
+        // CAAnimation）。只热一档不够 —— 热过 `.still` 之后它自己仍量出 0.125s。
+        for arm in [Arm.still, .ca, .swiftUIForever] {
+            _ = await cpuSeconds(arm, seconds: 0.3)
             unmountAll()
+        }
+        // 轮转，让每档在「第一个 / 中间 / 最后一个」三种位置上各跑一次：最前面那档吃
+        // 冷启动，紧跟在 `.repeatForever` 后面那档吃上一档的余波，位置确实有偏差。
+        //
+        // ⚠️ 但轮转**并没有**让 `still` 与 `ca` 对齐（轮转后仍是 0.062 vs 0.032）。
+        // 所以别再花力气调这个：这两档都贴在**量测地板**上 —— 那点开销主要来自测量
+        // 循环自身的 MainActor 往返，不是渲染 —— 地板上两个数的比值就是噪声放大，
+        // 换什么顺序都不会稳。具体为什么 `still` 反而略高没有定论（猜测与 SwiftUI
+        // 把内容拍平进一张大绘制层、而有平台视图时会分层有关，未验证）。
+        //
+        // 这条探针要抓的是「有人把 CA 换回 SwiftUI 常驻动画」，那个信号是 5–12×，
+        // 在噪声之上一个数量级，判据依然可靠。
+        for pass in [[Arm.still, .ca, .swiftUIForever],
+                     [Arm.ca, .swiftUIForever, .still],
+                     [Arm.swiftUIForever, .still, .ca]] {
+            for arm in pass {
+                cpu[arm, default: 0] += await cpuSeconds(arm, seconds: 0.8)
+                unmountAll()
+            }
         }
         for arm in [Arm.still, .ca, .swiftUIForever] {
             print(String(format: "[ca-motion] %-24@ 主线程 CPU %.3fs   相对静态 %.1f×",
                          arm.rawValue as NSString, cpu[arm]!, cpu[arm]! / cpu[.still]!))
         }
+        // 注意：`static` 与 `ca` 两档都贴在量测地板上（这点开销主要来自测量循环自身的
+        // MainActor 往返，不是渲染），两者之间的比值是噪声放大，别当结论读。
+        // 有意义的是它俩与 `repeatForever` 的量级差。
 
         let still = cpu[.still]!, ca = cpu[.ca]!, legacy = cpu[.swiftUIForever]!
 
@@ -152,10 +170,39 @@ final class CAMotionCostTests: XCTestCase {
 
     // MARK: - 源码闸门
 
-    /// 全仓（mac + iOS）不得再出现 `.repeatForever(`。
+    /// 把注释剥掉，只留代码。
     ///
-    /// 搜带括号的形态而不是裸名：注释里要提这个名字解释「为什么不能用它」，搜裸名会被
-    /// 自己的说明文字绊倒。代码形态一定带括号（即便用默认参数也要写 `()`）。
+    /// 源码闸门扫的是**代码**，但源文件的注释里必须能提这个 API 的名字来解释
+    /// 「为什么不能用它」。本闸门第一版搜带括号的 `repeatForever(` 以为能躲开注释 ——
+    /// uTable 上同一条思路换到 `symbolEffect(` 就当场红了（注释里写的就是
+    /// `` `.symbolEffect(.pulse)` ``，括号照样在）。所以正解是先剥注释，
+    /// 然后搜裸名 —— 这样 `.repeatForever` 这种不带括号的写法也逃不掉，反而更严。
+    ///
+    /// 不处理字符串字面量里的 `//`（真出现了也只会多剥一点，方向是把闸门变严）。
+    static func strippingComments(_ source: String) -> String {
+        var out = ""
+        var inBlock = false, inLine = false
+        var i = source.startIndex
+        while i < source.endIndex {
+            let rest = source[i...]
+            if inLine {
+                if source[i] == "\n" { inLine = false; out.append("\n") }
+                i = source.index(after: i); continue
+            }
+            if inBlock {
+                if rest.hasPrefix("*/") { inBlock = false; i = source.index(i, offsetBy: 2) }
+                else { i = source.index(after: i) }
+                continue
+            }
+            if rest.hasPrefix("//") { inLine = true; i = source.index(i, offsetBy: 2); continue }
+            if rest.hasPrefix("/*") { inBlock = true; i = source.index(i, offsetBy: 2); continue }
+            out.append(source[i])
+            i = source.index(after: i)
+        }
+        return out
+    }
+
+    /// 全仓（mac + iOS）的**代码**里不得再出现 `repeatForever`。
     func testNoForeverAnimationsInAppSources() throws {
         var offenders: [String] = []
         var scanned = 0
@@ -164,9 +211,9 @@ final class CAMotionCostTests: XCTestCase {
             let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
             while let url = files?.nextObject() as? URL {
                 guard url.pathExtension == "swift",
-                      let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                      let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 scanned += 1
-                if text.contains("repeatForever(") {
+                if Self.strippingComments(raw).contains("repeatForever") {
                     offenders.append(url.path.replacingOccurrences(
                         of: Self.repoRoot.path + "/", with: ""))
                 }
