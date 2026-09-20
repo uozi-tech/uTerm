@@ -169,6 +169,43 @@ Xcode 27 把几条以前只是提示的诊断升成了警告，本工程按 warn
 
 升级重放时如果上游已自行清掉，跳过即可；本补丁没有需要保住的语义。
 
+## 已知上游 bug（未打补丁，app 侧绕过）：失焦再聚焦后 caret 不回来
+
+文件：`TextSelectionManager.swift` 的 `removeCursors()` 与
+`TextView/TextView+FirstResponder.swift` 的 `becomeFirstResponder()`。
+
+两处合起来才是完整病因：
+
+1. `resignFirstResponder()` → `removeCursors()` 只做
+   `textSelection.view?.removeFromSuperview()`，**不把 `textSelection.view` 置 nil**。
+   重新聚焦后 `repositionCursorSelection` 的守卫
+   `view == nil || doesViewNeedReposition` 两边都不成立（view 还指着那个已脱离父视图的
+   旧 CursorView，光标没动过所以 origin/height 完全相等）→ 直接 return false。
+2. 就算把 view 置了 nil 也不够：`becomeFirstResponder()` 只 `resetTimer()` +
+   `needsDisplay = true`，**从不调 `updateSelectionViews()`**，而 `needsDisplay` 不置
+   `needsLayout`，所以在下一次滚动 / resize 触发 `layout()` 之前没人重建 CursorView。
+   另外 `removeCursors()` 里的 `stopTimer()` 已经把 `CursorTimer` 的注册表清空，
+   复用旧 view 也不会再闪。
+
+探针实测（600pt 视口、12pt SF Mono、`useSystemCursor = false`）：
+
+| 变体 | 重新聚焦后 |
+|---|---|
+| 上游原样 | 无 CursorView；强制 `layout()`、`updateSelectionViews(force:)` 都救不回来 |
+| 仅 `removeCursors()` 置 nil | 仍无 CursorView，要等到下一次 `layout()` 才出现 |
+| 置 nil + `becomeFirstResponder()` 调 `updateSelectionViews()` | caret 立刻回来并闪烁 |
+
+**uTerm 没有为此打补丁**，改在 app 侧绕过：`CodeEditorView.EditorTextView`
+（`TextView` 子类）在 `becomeFirstResponder()` 之后调
+`CodeEditorController.restoreCaretsIfNeeded()`，检测到「是第一响应者但一个 CursorView
+子视图都没有」时，把选中范围用 public 的 `setSelectedRanges` 原样重设一遍 ——
+TextSelection 对象因此重建（`view == nil`），走到创建分支。范围没变所以不会发
+`selectionChangedNotification`。同一份探针里 A/B 实测该绕法在 `makeFirstResponder`
+与真实 key window 转移（⌘Tab）两条路径上都成立。
+
+升级上游时：若上游已修（`removeCursors` 置 nil **且** 聚焦时会重建 cursor view），
+可以把 app 侧那段绕过删掉；没修就原样保留，本副本不需要改动。
+
 ## 验证方法（离线、可重跑）
 
 补丁 #1 与 #2 都在热绘制路径上，公式复算容易自欺。用像素级 probe 量**真实落笔**：

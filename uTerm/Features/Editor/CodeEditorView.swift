@@ -48,6 +48,23 @@ private final class EditorTextView: TextView {
         super.viewWillDraw()
         onWillDraw?()
     }
+
+    /// 只为拿到「重新获得第一响应者」这个时机。
+    ///
+    /// 上游 CodeEditTextView 0.12.1 的 `resignFirstResponder()` 会 `removeCursors()` 拆掉
+    /// caret，但 `becomeFirstResponder()` 里没有任何重建动作 —— 它只 `resetTimer()` +
+    /// `needsDisplay = true`，而 `removeCursors()` 已经把 CursorView 从闪烁计时器的注册表里
+    /// 清空了。于是失焦再聚焦后 caret 永远不回来（详见 CodeEditorController.restoreCaretsIfNeeded）。
+    ///
+    /// `becomeKeyWindow` / `resignKeyWindow`（⌘Tab 切走再切回）在上游也是直接调
+    /// `becomeFirstResponder()`，一并覆盖。
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            (delegate as? CodeEditorController)?.restoreCaretsIfNeeded()
+        }
+        return didBecome
+    }
 }
 
 // MARK: - NSViewRepresentable

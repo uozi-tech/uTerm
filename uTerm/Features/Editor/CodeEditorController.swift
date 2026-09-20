@@ -281,6 +281,41 @@ extension CodeEditorController: TextViewDelegate {
         }
     }
 
+    /// 重新聚焦后把 caret 补回来（由 `EditorTextView.becomeFirstResponder()` 调）。
+    ///
+    /// 上游 0.12.1 的 bug：`TextSelectionManager.removeCursors()`（失焦时走）只做
+    /// `textSelection.view?.removeFromSuperview()`，**不把 `textSelection.view` 置 nil**。
+    /// 重新聚焦后 `repositionCursorSelection` 的守卫是
+    /// `view == nil || doesViewNeedReposition` —— view 还指着那个已经脱离父视图的旧
+    /// CursorView，光标又没动过（origin/height 完全相等），守卫直接 return false，
+    /// CursorView 再也没被 addSubview 回去。**屏幕上就此没有 caret**。
+    ///
+    /// 而且光把 view 置 nil 也不够：`becomeFirstResponder()` 压根不调
+    /// `updateSelectionViews()`，`needsDisplay = true` 不置 `needsLayout`，
+    /// 所以在下一次滚动 / resize 触发 layout 之前没人会重建（探针实测）。
+    ///
+    /// 走 public 的 `setSelectedRanges` 绕开这两层：它重建 TextSelection 对象
+    /// （新对象 `view == nil`）→ `updateSelectionViews` 走创建分支 → 新 CursorView
+    /// 被 addSubview 并重新注册进闪烁计时器（`removeCursors` 里的 `stopTimer()` 把
+    /// 注册表清空过，复用旧 view 也不会再闪）。范围一字未改，`setSelectedRanges`
+    /// 因此不会发 selectionChangedNotification，观察者不受打扰 —— 也正因如此，
+    /// caret 高度归一化要在这里显式补一次。
+    func restoreCaretsIfNeeded() {
+        guard let textView else { return }
+        let selections = textView.selectionManager.textSelections
+        // 只有空选区（纯光标）才有 caret；有选中内容时本来就不该画。
+        guard selections.contains(where: { $0.range.isEmpty }) else { return }
+        guard !hasCaretView(in: textView) else { return }
+        textView.selectionManager.setSelectedRanges(selections.map(\.range))
+        normalizeEditorCursors()
+    }
+
+    private func hasCaretView(in textView: TextView) -> Bool {
+        // NSTextInsertionIndicator 是 useSystemCursor = true 时上游用的系统 caret
+        // （uTerm 恒为 false，一并认掉以免将来翻开关时这里静默失效）。
+        textView.subviews.contains { $0 is CursorView || $0 is NSTextInsertionIndicator }
+    }
+
     /// 由 `EditorTextView.viewWillDraw` 每轮绘制前调用，另外选中变化 / 滚动 / 视口
     /// resize 时也各调一次（那几处顺带把 gutter、底色带一起刷了）。幂等：frame 已经
     /// 是目标值就不写，不会自己触发新一轮绘制。
