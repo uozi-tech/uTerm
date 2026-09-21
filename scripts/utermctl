@@ -142,7 +142,8 @@ def start_background_and_wait():
     # 读得到设置就先在本地拦下，报得准、也不白起一次进程；读不到（None）照样请求启动，
     # uTerm 收到 `--launch-source cli` 会自己检查这两项，不满足就立刻退出。
     if on_demand_launch_allowed() is False:
-        return False, "uTerm 未运行，且设置中没有允许 CLI 按需启动。"
+        return False, ("uTerm 未运行，且设置中没有允许 CLI 按需启动。用户在 uTerm 设置 ▸ 命令行与技能 里"
+                       "打开「允许 CLI 按需启动」之后，utermctl 会自己在后台把它起起来。")
     if preference_value(CONTROL_ENABLED_KEY) is False:
         return False, "uTerm 命令行接口未启用；按需启动设置不会绕过接口门禁。"
     try:
@@ -423,7 +424,8 @@ def send_request(request):
             }
     # Only launch before the business request has been delivered. Once exchange() accepted
     # bytes, an unknown result is returned as-is and is never replayed automatically.
-    if not found_socket or (stale and on_demand_launch_allowed() is not False):
+    launch_error = None
+    if not found_socket or stale:
         started, launch_error = start_background_and_wait()
         if started:
             for path in paths:
@@ -442,7 +444,9 @@ def send_request(request):
             "code": CODE_SOCKET_STALE,
             "message": ("socket 文件还在但没有进程在监听（" + "、".join(stale) + "）。"
                         "uTerm 多半正在重启或刚被强制退出 —— 等它起来后重试一次；"
-                        "若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。"),
+                        "若 uTerm 确实没在运行，这个文件会在下次启动时自动清掉。"
+                        # 残留 socket 时也试过按需启动：没起来的原因别吞掉，否则调用方只会干等。
+                        + (" 按需启动没成功：" + launch_error if launch_error else "")),
         }
     return {
         "id": request.get("id"),

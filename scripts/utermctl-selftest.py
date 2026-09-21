@@ -1358,6 +1358,20 @@ def exercise_on_demand_launch(root):
     check(not started and "没有允许 CLI 按需启动" in (message or ""), "设置读得到且关着 → 本地拒绝")
     equal(len(launched), 0, "本地拒绝时不唤起 uTerm")
 
+    # 残留 socket + 按需启动关着：错误码不变，但消息要带上「为什么没自己起」，
+    # 否则 Agent 只看到「等它起来」，不知道有个开关能让客户端自己起。
+    def refuse(path, request):
+        raise ConnectionRefusedError()
+    dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    dead.bind(ready_socket)
+    dead.close()
+    client.exchange = refuse
+    response = client.send_request({"id": "stale", "action": "ping"})
+    equal(response["code"], client.CODE_SOCKET_STALE, "残留 socket + 按需启动关着 → 仍是 uterm_socket_stale")
+    check("允许 CLI 按需启动" in response["message"], "残留 socket 的消息带上按需启动没成功的原因")
+    os.unlink(ready_socket)
+    client.exchange = lambda path, request: {"ok": True}
+
     if denied_really:
         client.PREFERENCE_CANDIDATES = [unreadable]
         # 2. 读不到 → 照样请求启动，带上 --launch-source cli；uTerm 按设置拒绝后立刻退出。

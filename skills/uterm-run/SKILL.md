@@ -1,6 +1,6 @@
 ---
 name: uterm-run
-description: 通过正在运行的 uTerm 使用用户已保存的 SSH 主机执行命令（列主机、单机 run、多机并行 run-many、跑快捷命令、按指纹信任主机密钥）。当需要在远程服务器上执行 shell 命令、查看服务状态或排查线上问题，而手头没有主机地址、密码或私钥时使用。
+description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机执行命令（列主机、单机 run、多机并行 run-many、跑快捷命令、按指纹信任主机密钥）。当需要在远程服务器上执行 shell 命令、查看服务状态或排查线上问题，而手头没有主机地址、密码或私钥时使用。
 ---
 
 # 用 uTerm 执行远程命令
@@ -46,12 +46,23 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 
 `ok: true` 才能继续。
 
+**uTerm 没在运行不是停手的理由：客户端会自己把它起起来。** 找不到 socket（或 socket
+残留）时，`utermctl` 先静默启动一个无窗口的后台实例、等接口就绪，再发你的请求 —— 你
+什么都不用做，直接发命令即可，不必先让用户去打开 uTerm。前提是用户在 **uTerm 设置 ▸
+命令行与技能** 里打开了「允许 CLI 按需启动」（默认关闭）。后台实例里 `run`、SFTP、端口
+转发照常可用，只有 `terminal-read/send` 需要已经开着的终端窗口。
+
 三种常见失败：
 
-- `uterm_not_running`：uTerm 没开，或用户没装。**不要**试图自己起 app，也不要绕过它
-  直接 `ssh`，直接告诉用户打开 uTerm。
+- `uterm_not_running`：客户端试过按需启动、没起来，**原因写在 `message` 里**，照着说：
+  - 「没有允许 CLI 按需启动」/「拒绝了按需启动」：告诉用户两条路任选 —— 手动打开
+    uTerm；或者去 **设置 ▸ 命令行与技能** 打开「允许 CLI 按需启动」，以后 uTerm 没开
+    也能直接用。这个开关是用户的显式授权：**不要**自己 `open -a uTerm`、改 `defaults`
+    去绕，也不要绕过 uTerm 直接 `ssh`。
+  - 「无法唤起」：多半没装，或 app 不在 `/Applications`。
 - `uterm_socket_stale`：socket 文件还在但没人监听 —— uTerm 刚被强制退出或正在重启。
-  **等几秒重试一次**，别当成「没装」去绕路。
+  `message` 末尾带「按需启动没成功：…」就按上一条处理；没带就**等几秒重试一次**，别
+  当成「没装」去绕路。
 - `control_disabled`：uTerm 在跑但命令行接口是关的。让用户去 **uTerm 设置 ▸ 命令行与
   技能**，打开「启用命令行接口」。这个开关默认关闭，是用户的显式授权，不能绕。
 
@@ -227,8 +238,8 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 
 | code | 含义 |
 |---|---|
-| `uterm_not_running` | 找不到 socket —— uTerm 没开 |
-| `uterm_socket_stale` | socket 残留、无人监听 —— uTerm 正在重启，稍后重试 |
+| `uterm_not_running` | 找不到 socket，且按需启动没成功（原因在 `message`：开关没开 / 没装） |
+| `uterm_socket_stale` | socket 残留、无人监听 —— `message` 带「按需启动没成功」就照它说的办，否则稍后重试 |
 | `control_disabled` | 主开关没打开（设置 ▸ 命令行与技能） |
 | `mutations_disabled` | 第二个开关没打开：不允许执行命令与写入 |
 | `host_not_found` | 没有这个名字/UUID 的主机 |
