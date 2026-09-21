@@ -58,7 +58,10 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
             "uTerm/Features/Welcome/Views/ServerRow.swift"
         ), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("UDHostDot(color: groupColor ?? UD.accent"))
+        // 状态点在 a72371e4 从 UDHostDot（SwiftUI repeatForever）换成了 CA 驱动的 PulseDot，
+        // 这里钉的是「点的颜色取分组色、没有分组才退回强调色」，与点用哪个实现无关。
+        XCTAssertTrue(source.contains("PulseDot(color: groupColor ?? UD.accent"),
+                      "服务器行的状态点必须取分组色，没有分组才退回强调色")
         XCTAssertTrue(source.contains("UDGroupChip(groupLabel, tint: groupColor)"))
         XCTAssertFalse(source.contains("UDGroupChip(groupLabel)"))
     }
