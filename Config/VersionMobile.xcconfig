@@ -3,4 +3,4 @@
 // uTermMobile 与 uTermMobileTests 的 **target 级** baseConfigurationReference 引用本文件，
 // 叠在 project 级的 Config/Version.xcconfig 之上，覆盖掉 macOS 那份 MARKETING_VERSION。
 // iOS 与 macOS 的版本号各自独立递增（两个商店互不相干），不要合回一份。
-MARKETING_VERSION = 1.2.3
+MARKETING_VERSION = 1.2.4
