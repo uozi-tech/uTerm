@@ -33,8 +33,10 @@ final class ControlServerTests: XCTestCase {
     /// 起服务端并等 socket 真正出现（accept 循环在自己的队列上异步铺开）。
     private func startServer(
         maxActiveClients: Int = 8,
+        maxTransferClients: Int = 4,
         ioTimeout: TimeInterval = 5,
-        handlerTimeout: TimeInterval = 10,
+        handlerIdleTimeout: TimeInterval = 10,
+        heartbeatInterval: TimeInterval = 10,
         _ handler: @escaping @MainActor @Sendable (ControlRequest) async -> ControlResponse
     ) async throws {
         try XCTSkipUnless(
@@ -44,9 +46,11 @@ final class ControlServerTests: XCTestCase {
         let server = ControlServer(
             socketURL: socketURL,
             maxActiveClients: maxActiveClients,
+            maxTransferClients: maxTransferClients,
             ioTimeout: ioTimeout,
             // 出问题时秒级失败，而不是让每条用例各等两分钟的生产默认值。
-            handlerTimeout: handlerTimeout,
+            handlerIdleTimeout: handlerIdleTimeout,
+            heartbeatInterval: heartbeatInterval,
             requestHandler: handler
         )
         self.server = server
@@ -80,23 +84,22 @@ final class ControlServerTests: XCTestCase {
         XCTAssertEqual(payload["id"] as? String, "r1", "请求 id 必须原样回来，否则并发调用无法对号入座")
     }
 
-    /// 大请求必须**完整**读进来：`sftp-put` 把整个文件塞进 `contentBase64`，一条
-    /// 请求可以逼近 `maxRequestBytes`（~11 MB）。读循环的收包缓冲只是个 syscall
-    /// 粒度，任何「按缓冲大小截断 / 只读一次」的退化都会让上传静默丢尾巴而不是报错。
+    /// 大请求必须**完整**读进来（`terminal-send` 的长文本、续传的长区间表）。读循环的
+    /// 收包缓冲只是个 syscall 粒度，任何「按缓冲大小截断 / 只读一次」的退化都会静默丢尾巴。
     func testLargeRequestIsReceivedIntact() async throws {
-        // 2 MiB 正文（'A' 是合法 base64 字符），远超单次 recv 的 64 KiB 缓冲。
-        let contentLength = 2 * 1_048_576
+        // 900 KB 正文（`terminal-send` 的文本），远超单次 recv 的 64 KiB 缓冲，又在 1 MiB 上限内。
+        let contentLength = 900_000
         let content = String(repeating: "A", count: contentLength)
         let payload = Data(
-            (#"{"id":"big","action":"sftp-put","host":"h","path":"/tmp/x","contentBase64":""# + content + #""}"#).utf8
+            (#"{"id":"big","action":"terminal-send","terminal":"t","path":"/tmp/x","text":""# + content + #""}"#).utf8
         )
         XCTAssertLessThan(payload.count, ControlProtocol.maxRequestBytes, "夹具自身不能超过协议上限")
 
-        // I/O 预算随已到字节增长，但基线要给足：CI 上 2 MiB 走 Unix socket 也要几十毫秒。
+        // I/O 预算随已到字节增长，但基线要给足：CI 上走 Unix socket 也要几十毫秒。
         try await startServer(ioTimeout: 15) { request in
             .success(
                 id: request.id,
-                message: "\(request.contentBase64?.count ?? -1)|\(request.path ?? "")"
+                message: "\(request.text?.count ?? -1)|\(request.path ?? "")"
             )
         }
 
@@ -106,8 +109,57 @@ final class ControlServerTests: XCTestCase {
         XCTAssertEqual(
             response["message"] as? String,
             "\(contentLength)|/tmp/x",
-            "正文被截断或串位了：服务端看到的 contentBase64 长度与发出的不一致"
+            "正文被截断或串位了：服务端看到的 text 长度与发出的不一致"
         )
+    }
+
+    /// `SCM_RIGHTS` 随请求交来的 fd 要到得了 handler（经 `ControlRequestContext`），
+    /// 而且是同一个文件：handler 往里写，客户端这边读得到。
+    func testPassedFileDescriptorReachesTheHandler() async throws {
+        try await startServer { request in
+            guard let fd = ControlRequestContext.current?.takeFileDescriptor() else {
+                return .failure(id: request.id, code: .invalid_request, message: "没收到 fd")
+            }
+            defer { Darwin.close(fd) }
+            let written = Data("来自 handler".utf8).withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
+            return .success(id: request.id, message: "wrote \(written)")
+        }
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "fd-\(UUID().uuidString.prefix(6))")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let local = open(file.path, O_RDWR)
+        defer { Darwin.close(local) }
+
+        let payload = try await json(sendRaw(request("sftp-get", id: "fd"), passing: local))
+        XCTAssertEqual(payload["ok"] as? Bool, true, "\(payload)")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "来自 handler")
+    }
+
+    /// 进度行在响应之前、一行一个 JSON；收尾时攒着的最后几段也要带出来（续传账不能缺尾巴）。
+    func testProgressLinesPrecedeTheResponseAndNothingIsLost() async throws {
+        try await startServer(handlerIdleTimeout: 5) { request in
+            let context = ControlRequestContext.current
+            context?.setTotal(300)
+            for index in 0..<3 {
+                context?.recordSegment(ControlByteRange(offset: Int64(index) * 100, length: 100))
+                try? await Task.sleep(for: .milliseconds(index == 2 ? 0 : 700))
+            }
+            return .success(id: request.id, message: "done")
+        }
+        let text = try await sendRaw(request("sftp-get", id: "p"))
+        let lines = text.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let objects = try lines.map { line in
+            do { return try json(line) } catch {
+                XCTFail("读不懂的一行：\(line.debugDescription)；全文：\(text.debugDescription)")
+                throw error
+            }
+        }
+        let events = objects.filter { $0["event"] as? String == "progress" }
+        XCTAssertGreaterThanOrEqual(events.count, 2, "处理 1.4 秒，0.5 秒一行，至少两行进度")
+        let offsets = events.flatMap { ($0["done"] as? [[String: Any]] ?? []).compactMap { $0["offset"] as? Int } }
+        XCTAssertEqual(offsets.sorted(), [0, 100, 200], "三段一段不落、不重复")
+        XCTAssertEqual(objects.last?["message"] as? String, "done", "最后一行是响应")
+        XCTAssertEqual(events.last?["totalBytes"] as? Int, 300)
     }
 
     func testMalformedRequestIsRejected() async throws {
@@ -132,7 +184,7 @@ final class ControlServerTests: XCTestCase {
     /// handler 超时后**晚到**的响应必须被 token 丢弃：不能第二次关同一个 fd
     /// （fd 号会被下一条连接复用，双关就是把别人的连接关掉）。
     func testHandlerTimeoutAndLateResponseDoesNotDisruptLaterClients() async throws {
-        try await startServer(handlerTimeout: 0.3) { request in
+        try await startServer(handlerIdleTimeout: 0.3) { request in
             if request.action == .hosts {
                 try? await Task.sleep(for: .seconds(1.2))
                 return .success(id: request.id, message: "太晚了")
@@ -150,6 +202,62 @@ final class ControlServerTests: XCTestCase {
         XCTAssertEqual(after["ok"] as? Bool, true)
         XCTAssertEqual(after["message"] as? String, "pong")
         XCTAssertEqual(after["id"] as? String, "after")
+    }
+
+    /// handler 超时是**静默**预算而不是总时长：一直在 `IOActivity.touch()` 的 handler
+    /// 跑得比预算久也不该被掐（慢链路上的大分片传输、长时间刷输出的命令）。
+    func testHandlerThatKeepsReportingProgressOutlivesTheIdleBudget() async throws {
+        try await startServer(handlerIdleTimeout: 0.3) { request in
+            for _ in 0..<10 {
+                try? await Task.sleep(for: .milliseconds(100))
+                IOActivity.touch()
+            }
+            return .success(id: request.id, message: "做完了")
+        }
+        let payload = try await json(sendRaw(request("hosts")))
+        XCTAssertEqual(payload["ok"] as? Bool, true, "持续有进展的 handler 被当成卡死掐掉了")
+        XCTAssertEqual(payload["message"] as? String, "做完了")
+    }
+
+    /// 处理期间的心跳是前导 `\n`：客户端靠它按静默设 socket 超时，JSON 解析照常。
+    func testHeartbeatsPrecedeTheResponseAndKeepItParseable() async throws {
+        try await startServer(handlerIdleTimeout: 5, heartbeatInterval: 0.05) { request in
+            try? await Task.sleep(for: .milliseconds(400))
+            return .success(id: request.id, message: "pong")
+        }
+        let text = try await sendRaw(request("ping"))
+        XCTAssertTrue(text.hasPrefix("\n"), "处理 400 ms、心跳 50 ms，响应前应当有心跳")
+        let payload = try json(text)
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["message"] as? String, "pong")
+    }
+
+    /// 传输与短请求的槽位分开：传输占满自己的份额后，新的传输拿 `server_busy`，
+    /// 但 `ping` 这类短请求照样进得来 —— 并行下载不该把 `run` 挤掉。
+    func testTransfersCannotStarveShortRequests() async throws {
+        try await startServer(maxActiveClients: 4, maxTransferClients: 1) { request in
+            if request.action == .sftpGet {
+                try? await Task.sleep(for: .seconds(1))
+                return .success(id: request.id, message: "传完了")
+            }
+            return .success(id: request.id, message: "pong")
+        }
+        // 第一片占住唯一的传输槽位：发完请求就先不读，最后再收它的响应。
+        let first = try connectSocket()
+        Self.sendAllBlocking(first, Data(#"{"id":"t1","action":"sftp-get","host":"h","path":"/a"}"#.utf8))
+        Darwin.shutdown(first, SHUT_WR)
+        try await Task.sleep(for: .milliseconds(300))
+
+        let second = try await json(sendRaw(Data(#"{"id":"t2","action":"sftp-get","host":"h","path":"/b"}"#.utf8)))
+        XCTAssertEqual(second["code"] as? String, "server_busy", "传输槽位满了，第二片应当被拒")
+        XCTAssertEqual(second["id"] as? String, "t2")
+
+        let ping = try await json(sendRaw(request("ping", id: "p")))
+        XCTAssertEqual(ping["ok"] as? Bool, true, "传输占满不该挤掉短请求")
+
+        let done = try await json(drain(first))
+        Darwin.close(first)
+        XCTAssertEqual(done["message"] as? String, "传完了")
     }
 
     /// 并发上限：占满槽位后，新连接**先收到 `server_busy` 再**被关掉（不排队、不吃
@@ -204,7 +312,7 @@ final class ControlServerTests: XCTestCase {
         try await startServer { request in .success(id: request.id, message: "first") }
         let intruder = ControlServer(
             socketURL: socketURL,
-            handlerTimeout: 10,
+            handlerIdleTimeout: 10,
             requestHandler: { request in .success(id: request.id, message: "intruder") }
         )
         intruder.start()
@@ -256,11 +364,15 @@ final class ControlServerTests: XCTestCase {
         return fd
     }
 
-    private func sendRaw(_ payload: Data) async throws -> String {
+    private func sendRaw(_ payload: Data, passing passed: Int32? = nil) async throws -> String {
         let fd = try connectSocket()
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
-                Self.sendAllBlocking(fd, payload)
+                if let passed {
+                    Self.sendPassingDescriptor(fd, payload, passed)
+                } else {
+                    Self.sendAllBlocking(fd, payload)
+                }
                 shutdown(fd, SHUT_WR)
                 let text = Self.drainBlocking(fd)
                 Darwin.close(fd)
@@ -285,6 +397,34 @@ final class ControlServerTests: XCTestCase {
     /// 把整个 payload 写完。阻塞 `send` 对 SOCK_STREAM 通常一次写满，但被信号打断
     /// 后会返回短计数；数 MB 的大请求下这一点不能赌，否则用例会变成间歇超时。
     /// 返回值 <= 0（对端已关 / EPIPE）时直接停，给并发上限那条用例留出正常出口。
+    /// 用 `sendmsg` + `SCM_RIGHTS` 把 `passed` 挂在整段请求上发出去（与 utermctl 同形）。
+    private static func sendPassingDescriptor(_ fd: Int32, _ payload: Data, _ passed: Int32) {
+        var control = [UInt8](repeating: 0, count: MemoryLayout<cmsghdr>.size + MemoryLayout<Int32>.size)
+        control.withUnsafeMutableBytes { raw in
+            var header = cmsghdr(
+                cmsg_len: socklen_t(raw.count), cmsg_level: SOL_SOCKET, cmsg_type: SCM_RIGHTS)
+            withUnsafeBytes(of: &header) { raw.copyMemory(from: $0) }
+            var descriptor = passed
+            withUnsafeBytes(of: &descriptor) {
+                UnsafeMutableRawBufferPointer(rebasing: raw[MemoryLayout<cmsghdr>.size...]).copyMemory(from: $0)
+            }
+        }
+        var bytes = [UInt8](payload)
+        bytes.withUnsafeMutableBytes { body in
+            control.withUnsafeMutableBytes { controlBytes in
+                var vector = iovec(iov_base: body.baseAddress, iov_len: body.count)
+                withUnsafeMutablePointer(to: &vector) { vectorPointer in
+                    var message = msghdr()
+                    message.msg_iov = vectorPointer
+                    message.msg_iovlen = 1
+                    message.msg_control = controlBytes.baseAddress
+                    message.msg_controllen = socklen_t(controlBytes.count)
+                    _ = sendmsg(fd, &message, 0)
+                }
+            }
+        }
+    }
+
     private static func sendAllBlocking(_ fd: Int32, _ payload: Data) {
         payload.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }

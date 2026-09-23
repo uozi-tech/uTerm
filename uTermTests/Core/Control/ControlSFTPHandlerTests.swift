@@ -118,11 +118,10 @@ final class ControlSFTPHandlerTests: XCTestCase {
         path: String? = nil,
         newPath: String? = nil,
         mode: String? = nil,
-        contentBase64: String? = nil,
         maxBytes: Int? = nil,
-        offset: Int64? = nil,
-        length: Int? = nil,
         force: Bool? = nil,
+        ranges: [ControlByteRange]? = nil,
+        parallel: Int? = nil,
         host: String? = "prod-web"
     ) -> ControlRequest {
         ControlRequest(
@@ -133,10 +132,35 @@ final class ControlSFTPHandlerTests: XCTestCase {
             path: path,
             newPath: newPath,
             mode: mode,
-            contentBase64: contentBase64,
-            offset: offset,
-            length: length,
-            force: force)
+            force: force,
+            ranges: ranges,
+            parallel: parallel)
+    }
+
+    /// 本地临时文件（写好内容）+ 打开的 fd。传输测试把它当成客户端交来的那个 fd。
+    private func localFile(_ contents: Data) throws -> (url: URL, fd: Int32) {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "sftp-handler-\(UUID().uuidString.prefix(8))")
+        try contents.write(to: url)
+        let fd = open(url.path, O_RDWR)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return (url, fd)
+    }
+
+    /// 像 `ControlServer` 那样把 fd 挂进请求上下文再调 handler。fd 的所有权交给 handler
+    /// （它负责关）；返回响应与上下文（好查进度账）。
+    private func transfer(_ request: ControlRequest, fd: Int32?) async -> (ControlResponse, ControlRequestContext) {
+        let context = ControlRequestContext(fileDescriptors: fd.map { [$0] } ?? [])
+        let response = await ControlRequestContext.$current.withValue(context) {
+            await handler.handle(request)
+        }
+        context.closeUntaken()
+        return (response, context)
+    }
+
+    private static func randomData(_ count: Int) -> Data {
+        Data((0..<count).map { _ in UInt8.random(in: 0...255) })
     }
 
     // MARK: - 正常路径（十个动作）
@@ -270,62 +294,100 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertFalse(unknown.truncated, "拿不到 stat 时宁可少报也不谎报")
     }
 
-    func testGetRejectsOversizedFileBeforeDownloading() async throws {
-        await sftp.setFile("/tmp/huge",
-                           data: Data(repeating: 0, count: ControlProtocol.maxFileBytes + 1),
-                           mtime: Date())
+    // MARK: - get / put：客户端交 fd，引擎并行读写
 
-        let response = await handler.handle(request(.sftpGet, path: "/tmp/huge"))
+    func testGetWritesTheWholeRemoteFileIntoThePassedFD() async throws {
+        let remote = Self.randomData(150_000)
+        await sftp.setFile("/srv/app.tar", data: remote, mtime: Date())
+        let local = try localFile(Data())
 
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.file_too_large.rawValue)
-        let bounded = await sftp.boundedDownloads
-        XCTAssertTrue(bounded.isEmpty, "先 stat 再决定：不该先把 8 MiB 拉进内存")
-    }
-
-    func testGetReturnsPayloadWithinLimit() async throws {
-        await sftp.setFile("/tmp/ok", data: Data("payload".utf8), mtime: Date())
-
-        let response = await handler.handle(request(.sftpGet, path: "/tmp/ok"))
+        let (response, context) = await transfer(request(.sftpGet, path: "/srv/app.tar", parallel: 3), fd: local.fd)
 
         XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.text, "payload")
-        let bounded = await sftp.boundedDownloads
-        XCTAssertEqual(bounded.first?.maximumBytes, ControlProtocol.maxFileBytes)
+        XCTAssertEqual(try Data(contentsOf: local.url), remote, "引擎经 fd 写出来的内容逐字节相同")
+        XCTAssertEqual(response.transfer?.bytes, 150_000)
+        XCTAssertEqual(response.transfer?.totalBytes, 150_000)
+        XCTAssertEqual(response.transfer?.channels, 3)
+        XCTAssertNil(response.file, "文件字节不再走响应")
+        let progress = try XCTUnwrap(context.drainProgress())
+        let event = try JSONDecoder().decode(ControlProgressEvent.self, from: progress)
+        XCTAssertEqual(event.totalBytes, 150_000)
+        XCTAssertEqual(event.done.reduce(0) { $0 + $1.length }, 150_000, "进度账覆盖整个文件")
     }
 
-    func testPutDecodesBase64AndWritesAtOffsetZero() async throws {
-        let content = Data("hello world".utf8)
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt",
-                    contentBase64: content.base64EncodedString()))
+    /// 续传：只补给定的区间，别处一个字节都不动。
+    func testGetWithRangesFillsOnlyThoseRanges() async throws {
+        let remote = Self.randomData(100_000)
+        await sftp.setFile("/srv/a.bin", data: remote, mtime: Date())
+        let local = try localFile(Data(count: 100_000))
+
+        let (response, _) = await transfer(
+            request(.sftpGet, path: "/srv/a.bin",
+                    ranges: [ControlByteRange(offset: 40_000, length: 20_000)]),
+            fd: local.fd)
 
         XCTAssertTrue(response.ok, response.message)
-        let writes = await sftp.rangeWrites
-        XCTAssertEqual(writes.count, 1)
-        XCTAssertEqual(writes.first?.path, "/tmp/out.txt")
-        XCTAssertEqual(writes.first?.offset, 0)
-        XCTAssertEqual(writes.first?.bytes, content.count)
-        XCTAssertEqual(writes.first?.mode, .create, "缺省档是 create —— 不覆盖既有文件")
-        // 响应里回报本次写入的字节数（客户端据此累加进度）。
-        XCTAssertEqual(response.file?.path, "/tmp/out.txt")
-        XCTAssertEqual(response.file?.bytes, content.count)
-        XCTAssertNil(response.file?.text)
-        XCTAssertNil(response.file?.base64)
-        XCTAssertEqual(response.file?.truncated, false)
-        let stored = try await sftp.read("/tmp/out.txt")
+        XCTAssertEqual(response.transfer?.bytes, 20_000, "只算补的那段")
+        let written = try Data(contentsOf: local.url)
+        XCTAssertEqual(written.subdata(in: 40_000..<60_000), remote.subdata(in: 40_000..<60_000))
+        XCTAssertEqual(written.subdata(in: 0..<40_000), Data(count: 40_000), "区间外不许动")
+        let reads = await sftp.rangeReads
+        XCTAssertTrue(reads.allSatisfy { $0.offset >= 40_000 && $0.offset < 60_000 }, "只读了那段")
+    }
+
+    func testGetRejectsARangeBeyondTheFile() async throws {
+        await sftp.setFile("/srv/a.bin", data: Data(count: 10), mtime: Date())
+        let local = try localFile(Data())
+        let (response, _) = await transfer(
+            request(.sftpGet, path: "/srv/a.bin", ranges: [ControlByteRange(offset: 5, length: 10)]),
+            fd: local.fd)
+        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
+    }
+
+    func testTransferWithoutAPassedFDIsInvalidRequest() async throws {
+        await sftp.setFile("/srv/a.bin", data: Data(count: 10), mtime: Date())
+        let (get, _) = await transfer(request(.sftpGet, path: "/srv/a.bin"), fd: nil)
+        XCTAssertEqual(get.code, ControlErrorCode.invalid_request.rawValue)
+        XCTAssertTrue(get.message.contains("SCM_RIGHTS"), get.message)
+        let (put, _) = await transfer(request(.sftpPut, path: "/srv/b.bin"), fd: nil)
+        XCTAssertEqual(put.code, ControlErrorCode.invalid_request.rawValue)
+    }
+
+    func testParallelOutOfRangeIsInvalidRequest() async throws {
+        let local = try localFile(Data())
+        let (response, _) = await transfer(
+            request(.sftpGet, path: "/srv/a.bin", parallel: ControlProtocol.maxTransferChannels + 1),
+            fd: local.fd)
+        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
+    }
+
+    func testGetMissingRemoteFileMapsToFileNotFound() async throws {
+        let local = try localFile(Data())
+        let (response, _) = await transfer(request(.sftpGet, path: "/nope"), fd: local.fd)
+        XCTAssertEqual(response.code, ControlErrorCode.file_not_found.rawValue)
+    }
+
+    func testPutReadsThePassedFDIntoTheRemoteFile() async throws {
+        let content = Self.randomData(70_000)
+        let local = try localFile(content)
+
+        let (response, _) = await transfer(request(.sftpPut, path: "/tmp/out.bin"), fd: local.fd)
+
+        XCTAssertTrue(response.ok, response.message)
+        let stored = try await sftp.read("/tmp/out.bin")
         XCTAssertEqual(stored, content)
+        XCTAssertEqual(response.transfer?.bytes, 70_000)
+        let writes = await sftp.rangeWrites
+        XCTAssertEqual(writes.first?.mode, .create, "缺省档是 create —— 不覆盖既有文件")
+        XCTAssertTrue(writes.dropFirst().allSatisfy { $0.mode == .write }, "之后一律不截断地并行写")
     }
 
-    // MARK: - put：offset / mode / force
-
-    /// 默认 `create` 撞上已存在的文件 → `file_exists`，文件内容一个字节都不许动。
+    /// 默认撞上已存在的文件 → `file_exists`，内容一个字节都不许动。
     func testPutRefusesToOverwriteByDefault() async throws {
         await sftp.setFile("/tmp/out.txt", data: Data("old".utf8), mtime: Date())
+        let local = try localFile(Data("new".utf8))
 
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt",
-                    contentBase64: Data("new".utf8).base64EncodedString()))
+        let (response, _) = await transfer(request(.sftpPut, path: "/tmp/out.txt"), fd: local.fd)
 
         XCTAssertFalse(response.ok)
         XCTAssertEqual(response.code, ControlErrorCode.file_exists.rawValue)
@@ -333,58 +395,36 @@ final class ControlSFTPHandlerTests: XCTestCase {
         XCTAssertEqual(stored, Data("old".utf8), "被拒的 put 不能改动既有内容")
     }
 
-    /// 没给 mode 时 `force: true` 等价 `mode: overwrite`（与 get 的 --force 对称）。
-    func testPutForceIsEquivalentToOverwrite() async throws {
+    /// `force` 覆盖：要截断，不能留下旧尾巴。
+    func testPutForceOverwritesAndTruncates() async throws {
         await sftp.setFile("/tmp/out.txt", data: Data("old-and-long".utf8), mtime: Date())
+        let local = try localFile(Data("new".utf8))
 
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt",
-                    contentBase64: Data("new".utf8).base64EncodedString(),
-                    force: true))
+        let (response, _) = await transfer(request(.sftpPut, path: "/tmp/out.txt", force: true), fd: local.fd)
 
         XCTAssertTrue(response.ok, response.message)
-        let writes = await sftp.rangeWrites
-        XCTAssertEqual(writes.first?.mode, .overwrite)
         let stored = try await sftp.read("/tmp/out.txt")
-        XCTAssertEqual(stored, Data("new".utf8), "overwrite 要截断，不能留下旧尾巴")
+        XCTAssertEqual(stored, Data("new".utf8))
     }
 
-    /// 显式 `mode` 压过 `force`。
-    func testPutExplicitModeWinsOverForce() async throws {
-        await sftp.setFile("/tmp/out.txt", data: Data("0123456789".utf8), mtime: Date())
+    /// 续传上传：只写给定区间，不做 create / overwrite（远端已有内容保留）。
+    func testPutWithRangesWritesOnlyThoseRanges() async throws {
+        let content = Self.randomData(50_000)
+        var partial = content
+        partial.replaceSubrange(10_000..<30_000, with: Data(count: 20_000))
+        await sftp.setFile("/tmp/out.bin", data: partial, mtime: Date())
+        let local = try localFile(content)
 
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt", mode: "write",
-                    contentBase64: Data("AB".utf8).base64EncodedString(),
-                    offset: 4, force: true))
+        let (response, _) = await transfer(
+            request(.sftpPut, path: "/tmp/out.bin",
+                    ranges: [ControlByteRange(offset: 10_000, length: 20_000)]),
+            fd: local.fd)
 
         XCTAssertTrue(response.ok, response.message)
+        let stored = try await sftp.read("/tmp/out.bin")
+        XCTAssertEqual(stored, content, "补完之后整份一致")
         let writes = await sftp.rangeWrites
-        XCTAssertEqual(writes.first?.mode, .write)
-        XCTAssertEqual(writes.first?.offset, 4)
-        let stored = try await sftp.read("/tmp/out.txt")
-        XCTAssertEqual(stored, Data("0123AB6789".utf8), "write 档不截断，只覆盖那一段")
-    }
-
-    /// 分片并行上传的真实形状：先 overwrite 落第 0 片，其余用 write 按 offset 补齐。
-    func testPutChunksAssembleTheWholeFile() async throws {
-        let chunkSize = 8
-        let whole = Data((0..<40).map { UInt8($0) })
-        var responses: [ControlResponse] = []
-        for index in stride(from: 0, to: whole.count, by: chunkSize) {
-            let slice = whole.subdata(in: index..<min(index + chunkSize, whole.count))
-            responses.append(await handler.handle(
-                request(.sftpPut, path: "/tmp/big.bin",
-                        mode: index == 0 ? "overwrite" : "write",
-                        contentBase64: slice.base64EncodedString(),
-                        offset: Int64(index))))
-        }
-        XCTAssertTrue(responses.allSatisfy(\.ok), responses.map(\.message).joined(separator: " | "))
-        XCTAssertEqual(responses.map { $0.file?.bytes }, [8, 8, 8, 8, 8])
-        let stored = try await sftp.read("/tmp/big.bin")
-        XCTAssertEqual(stored, whole)
-        let writes = await sftp.rangeWrites
-        XCTAssertEqual(writes.map(\.offset), [0, 8, 16, 24, 32])
+        XCTAssertTrue(writes.allSatisfy { $0.mode == .write }, "续传不能截断远端已有内容")
     }
 
     /// **写阶段**失败（磁盘满 / 配额）不能被误报成 `file_exists`。
@@ -396,10 +436,9 @@ final class ControlSFTPHandlerTests: XCTestCase {
         await sftp.setWriteStageError(NSError(
             domain: NSPOSIXErrorDomain, code: 28,
             userInfo: [NSLocalizedDescriptionKey: "No space left on device"]))
+        let local = try localFile(Data("payload".utf8))
 
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.bin",
-                    contentBase64: Data("payload".utf8).base64EncodedString()))
+        let (response, _) = await transfer(request(.sftpPut, path: "/tmp/out.bin"), fd: local.fd)
 
         XCTAssertFalse(response.ok)
         XCTAssertEqual(response.code, ControlErrorCode.operation_failed.rawValue,
@@ -414,157 +453,26 @@ final class ControlSFTPHandlerTests: XCTestCase {
         await sftp.setOpenStageError(NSError(
             domain: "sshd", code: 4,
             userInfo: [NSLocalizedDescriptionKey: "Failure"]))
+        let local = try localFile(Data("payload".utf8))
 
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.bin",
-                    contentBase64: Data("payload".utf8).base64EncodedString()))
+        let (response, _) = await transfer(request(.sftpPut, path: "/tmp/out.bin"), fd: local.fd)
 
         XCTAssertFalse(response.ok)
         XCTAssertEqual(response.code, ControlErrorCode.file_exists.rawValue)
     }
 
-    func testPutRejectsNegativeOffset() async throws {
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt",
-                    contentBase64: Data("x".utf8).base64EncodedString(),
-                    offset: -1))
+    /// 传输借了几条会话就还几条（成功、失败都一样）。
+    func testTransferReturnsEveryBorrowedSession() async throws {
+        await sftp.setFile("/srv/a.bin", data: Self.randomData(80_000), mtime: Date())
+        let good = try localFile(Data())
+        _ = await transfer(request(.sftpGet, path: "/srv/a.bin", parallel: 4), fd: good.fd)
+        let bad = try localFile(Data())
+        _ = await transfer(request(.sftpGet, path: "/nope"), fd: bad.fd)
 
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
-        let writes = await sftp.rangeWrites
-        XCTAssertTrue(writes.isEmpty)
-    }
-
-    func testPutRejectsUnknownMode() async throws {
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt", mode: "append",
-                    contentBase64: Data("x".utf8).base64EncodedString()))
-
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
-        XCTAssertTrue(response.message.contains("append"))
-    }
-
-    // MARK: - get：offset / length
-
-    func testGetWithOffsetAndLengthReturnsOnlyThatRange() async throws {
-        await sftp.setFile("/tmp/big.bin", data: Data("0123456789".utf8), mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/big.bin", offset: 3, length: 4))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.bytes, 4)
-        XCTAssertEqual(response.file?.text, "3456")
-        XCTAssertEqual(response.file?.truncated, false)
-        let reads = await sftp.rangeReads
-        XCTAssertEqual(reads.count, 1)
-        XCTAssertEqual(reads.first?.offset, 3)
-        XCTAssertEqual(reads.first?.length, 4)
-    }
-
-    /// 只给 offset：从那里读到单次上限（到 EOF 自然会短）。
-    func testGetWithOnlyOffsetReadsToTheEnd() async throws {
-        await sftp.setFile("/tmp/big.bin", data: Data("0123456789".utf8), mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/big.bin", offset: 7))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.text, "789")
-        XCTAssertEqual(response.file?.bytes, 3)
-        let reads = await sftp.rangeReads
-        XCTAssertEqual(reads.first?.length, ControlProtocol.maxFileBytes)
-    }
-
-    /// 区间读到 EOF 只是「短」，不是 `truncated`（那个字段是给整文件 get 用的）。
-    func testGetRangeBeyondEOFIsShortNotTruncated() async throws {
-        await sftp.setFile("/tmp/big.bin", data: Data("0123456789".utf8), mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/big.bin", offset: 8, length: 100))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.bytes, 2)
-        XCTAssertEqual(response.file?.truncated, false)
-    }
-
-    /// 区间 get **不**做整文件的上限检查 —— 大文件正是靠一段段取回来的。
-    func testGetRangeSkipsTheWholeFileSizeGate() async throws {
-        let huge = Data(repeating: 0x41, count: ControlProtocol.maxFileBytes + 1_000)
-        await sftp.setFile("/tmp/huge.bin", data: huge, mtime: Date())
-
-        let whole = await handler.handle(request(.sftpGet, path: "/tmp/huge.bin"))
-        XCTAssertFalse(whole.ok, "不带区间的整文件 get 仍要在上限处拒绝")
-        XCTAssertEqual(whole.code, ControlErrorCode.file_too_large.rawValue)
-
-        let ranged = await handler.handle(
-            request(.sftpGet, path: "/tmp/huge.bin",
-                    offset: Int64(ControlProtocol.maxFileBytes), length: 1_000))
-        XCTAssertTrue(ranged.ok, ranged.message)
-        XCTAssertEqual(ranged.file?.bytes, 1_000)
-    }
-
-    /// 只给 `offset` 的区间读 = 「从这里到文件尾」，被 8 MiB 单次上限截断时
-    /// 必须 `truncated: true` 并给出下一段的 offset。
-    ///
-    /// 旧实现这里恒 false：50 MiB 的文件只回了头 8 MiB，客户端却以为已经取完 ——
-    /// 分片下载会静默丢掉 42 MiB。
-    func testGetWithOnlyOffsetFlagsTruncationAtTheSingleRequestCap() async throws {
-        let huge = Data(repeating: 0x41, count: 50 * 1_048_576)
-        await sftp.setFile("/tmp/huge.bin", data: huge, mtime: Date())
-
-        let response = await handler.handle(request(.sftpGet, path: "/tmp/huge.bin", offset: 0))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.bytes, ControlProtocol.maxFileBytes)
-        XCTAssertEqual(response.file?.truncated, true, "只回了 8 MiB 就说没被削，等于让客户端丢数据")
-        XCTAssertTrue(response.message.contains("offset \(ControlProtocol.maxFileBytes)"),
-                      "要告诉调用方下一段从哪儿接：\(response.message)")
-    }
-
-    /// 给了 `length` 且整段都在文件里：拿满 = 完整，`truncated: false`。
-    func testGetRangeFullyInsideTheFileIsNotTruncated() async throws {
-        let body = Data(repeating: 0x42, count: 4_096)
-        await sftp.setFile("/tmp/mid.bin", data: body, mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/mid.bin", offset: 1_000, length: 500))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.bytes, 500)
-        XCTAssertEqual(response.file?.truncated, false, "要多少给多少就不是截断")
-    }
-
-    /// 给了 `length` 但越过 EOF：短返回，仍然 **不是** 截断（文件就这么大）。
-    func testGetRangeCrossingEOFIsShortButNotTruncated() async throws {
-        await sftp.setFile("/tmp/small.bin", data: Data("0123456789".utf8), mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/small.bin", offset: 6, length: 1_000))
-
-        XCTAssertTrue(response.ok, response.message)
-        XCTAssertEqual(response.file?.bytes, 4)
-        XCTAssertEqual(response.file?.truncated, false)
-    }
-
-    func testGetRejectsOversizedLength() async throws {
-        await sftp.setFile("/tmp/big.bin", data: Data("x".utf8), mtime: Date())
-
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/big.bin",
-                    offset: 0, length: ControlProtocol.maxFileBytes + 1))
-
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.file_too_large.rawValue)
-    }
-
-    func testGetRejectsNonPositiveLength() async throws {
-        await sftp.setFile("/tmp/big.bin", data: Data("x".utf8), mtime: Date())
-        let response = await handler.handle(
-            request(.sftpGet, path: "/tmp/big.bin", offset: 0, length: 0))
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
+        let borrowed = await pool.borrowed
+        let returned = await pool.returned
+        XCTAssertGreaterThan(borrowed, 1)
+        XCTAssertEqual(returned, borrowed, "有借无还 = 池里的通道名额被烧掉")
     }
 
     /// 借出的 SFTP 会话必须归还，否则池里每主机 4 个名额会被一次次动作烧光。
@@ -578,27 +486,6 @@ final class ControlSFTPHandlerTests: XCTestCase {
         let returned = await pool.returned
         XCTAssertEqual(borrowed, 3)
         XCTAssertEqual(returned, borrowed, "有借无还 = 池里的通道名额被烧掉")
-    }
-
-    func testPutRejectsInvalidBase64() async throws {
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.txt", contentBase64: "这不是 base64!!"))
-
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
-        let uploads = await sftp.uploads
-        XCTAssertTrue(uploads.isEmpty)
-    }
-
-    func testPutRejectsOversizedContent() async throws {
-        let big = Data(repeating: 0x41, count: ControlProtocol.maxFileBytes + 1)
-        let response = await handler.handle(
-            request(.sftpPut, path: "/tmp/out.bin", contentBase64: big.base64EncodedString()))
-
-        XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.code, ControlErrorCode.file_too_large.rawValue)
-        let uploads = await sftp.uploads
-        XCTAssertTrue(uploads.isEmpty)
     }
 
     func testMkdirRmRmdirMv() async throws {
@@ -690,8 +577,7 @@ final class ControlSFTPHandlerTests: XCTestCase {
         for action in [ControlAction.sftpPut, .sftpMkdir, .sftpRm,
                        .sftpRmdir, .sftpMv, .sftpChmod] {
             let response = await handler.handle(
-                request(action, path: "/tmp/x", newPath: "/tmp/y", mode: "644",
-                        contentBase64: Data("x".utf8).base64EncodedString()))
+                request(action, path: "/tmp/x", newPath: "/tmp/y", mode: "644"))
             XCTAssertEqual(response.code, ControlErrorCode.mutations_disabled.rawValue,
                            "\(action.rawValue) 应被改动开关挡住")
         }

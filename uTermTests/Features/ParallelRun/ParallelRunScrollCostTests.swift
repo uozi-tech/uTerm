@@ -244,7 +244,7 @@ final class ParallelRunScrollCostTests: XCTestCase {
             let delta = want - appended
             let start = CFAbsoluteTimeGetCurrent()
             if roundRobin {
-                // 更贴近真实：`execBounded` 每台各自跑完才一次性灌输出，
+                // 更贴近真实：`execSupervised` 每台各自跑完才一次性灌输出，
                 // 同一帧里通常只有一台在变。
                 feed.append(count: delta * hosts, tick: beats, only: beats % max(1, hosts))
             } else {

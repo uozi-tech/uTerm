@@ -17,7 +17,7 @@ import Foundation
 /// - **exec 的冷启动只建一次**：建连期间以 `Task` 占位，同时到来的第二个请求
 ///   `await` 同一个 Task。没有这层占位时，两条并发的 `run` 会各建一条连接，
 ///   后者覆盖前者入表，前者永远关不掉 —— fd 泄漏，而且远端多一条看不见的 SSH 会话。
-/// - **SFTP 是每主机最多 `maxSFTPChannelsPerHost`（4）条的小池子**，借还制
+/// - **SFTP 是每主机最多 `maxSFTPChannelsPerHost`（8）条的小池子**，借还制
 ///   （`borrowSFTP` / `returnSFTP`，或协议扩展里的 `withSFTP(for:_:)`）。
 ///   分片并行传输要的就是多条通道各跑各的；到上限的借用者排队等归还。
 ///   与 exec 不同，SFTP **不**共享冷启动 —— 那会把并行退化回单通道。
@@ -51,9 +51,14 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     /// 每台主机最多几条并行的 SFTP 会话（各自一条独立的 SSH 连接）。
     ///
-    /// 4 条足够吃满 `ControlServer.maxActiveClients = 8` 下的分片并行传输，
-    /// 又不至于让一台主机上并发的 sshd 会话数失控。超过上限的借用请求排队等归还。
-    static let maxSFTPChannelsPerHost = 4
+    /// 上限卡的是 sshd 的 `MaxStartups`（默认 `10:30:100`）：同一时刻**还没认证完**的
+    /// 连接超过 10 条，sshd 就开始随机丢新连接。8 条 SFTP + 1 条 exec 一起冷启动也不到 10。
+    /// 每条会话是单独一条 SSH 连接，所以 `MaxSessions`（单连接内的通道数）管不到这里。
+    /// 一次传输默认 8 路（`ControlProtocol.defaultTransferChannels`），16 条让同一台主机
+    /// 能同时跑两个满速传输；再多就是 8 路以上的实测负收益区。建连由
+    /// `maxConcurrentHandshakes` 分批，不会一口气撞 `MaxStartups`。
+    /// 超过上限的借用请求排队等归还。
+    static let maxSFTPChannelsPerHost = 16
 
     /// 一台主机的 SFTP 小池子。会话本身是 actor（引用类型），用 `ObjectIdentifier` 认人。
     private nonisolated struct SFTPChannels: Sendable {
@@ -71,6 +76,9 @@ actor ControlConnectionPool: ControlConnectionPooling {
         var exec: (any ControlExecChannel)?
         var sftp = SFTPChannels()
         var lastUsedAt: Date
+        /// 正在流式跑的命令数。`run` 能跑到 `--max-duration`（默认 1 小时），远超
+        /// 10 分钟的空闲回收 —— 不数着的话清扫会把连接从正在跑的命令底下关掉。
+        var execInFlight = 0
 
         var isEmpty: Bool { exec == nil && sftp.isEmpty }
     }
@@ -108,9 +116,9 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     /// 借一条 SFTP 会话最多等多久。
     ///
-    /// 必须**短于** `ControlServer` 的 handler 超时（120 s），否则等待方永远等不到
-    /// 自己的答案：请求先被服务端按 `handler_timeout` 掐掉，客户端只看到一个不说明
-    /// 原因的超时，而排队者还占着 `maxActiveClients` 的名额。
+    /// 必须**短于** `ControlServer` 的静默预算（120 s；排队期间没有进展可报），否则等待方
+    /// 永远等不到自己的答案：请求先被服务端按 `handler_timeout` 掐掉，客户端只看到一个
+    /// 不说明原因的超时，而排队者还占着一个传输槽位。
     static let sftpWaitTimeout: Duration = .seconds(90)
 
     private let connector: Connector
@@ -129,6 +137,15 @@ actor ControlConnectionPool: ControlConnectionPooling {
     /// 最近一次建连被拒的主机密钥质询，按 hostID。`trust` 只认这里的指纹。
     private var challenges: [UUID: HostKeyChallenge] = [:]
     private var sweeper: Task<Void, Never>?
+    /// 每主机正在握手的 SFTP 连接数，与排队等握手名额的借用者。
+    private var handshaking: [UUID: Int] = [:]
+    private var handshakeWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+
+    /// 同一主机同时握手的 SFTP 连接上限。sshd 的 `MaxStartups`（默认 `10:30:100`）数的是
+    /// **还没认证完**的连接：一次性并发建十几条，超过 10 条的会被随机丢掉（实测 32 通道
+    /// 并发冷启动时吞吐反而掉一半，就是一部分工作者没建起连接）。握手排队、认证完的连接
+    /// 不再计入，所以限制握手并发而不是连接总数。
+    static let maxConcurrentHandshakes = 4
 
     init(
         connector: Connector = .live,
@@ -153,11 +170,25 @@ actor ControlConnectionPool: ControlConnectionPooling {
     ) async throws -> SSHCommandExecutor {
         let channel = try await execChannel(for: host)
         let hostID = host.id
-        return SSHCommandExecutor(maxLines: maxLines, maxBytes: maxBytes) { [weak self] command in
-            // 跑命令期间**不**占着本 actor：touch 立刻返回，exec 在通道自己的隔离域里跑。
-            await self?.touch(hostID)
-            return try await channel.exec(command)
-        }
+        return SSHCommandExecutor(
+            maxLines: maxLines,
+            maxBytes: maxBytes,
+            exec: { [weak self] command in
+                // 跑命令期间**不**占着本 actor：touch 立刻返回，exec 在通道自己的隔离域里跑。
+                await self?.touch(hostID)
+                return try await channel.exec(command)
+            },
+            execStream: { [weak self] command, onOutput in
+                await self?.beginExec(hostID)
+                do {
+                    try await channel.execStreaming(command, onOutput: onOutput)
+                    await self?.endExec(hostID)
+                } catch {
+                    await self?.endExec(hostID)
+                    throw error
+                }
+            }
+        )
     }
 
     /// 借一条这台主机的 SFTP 会话：
@@ -231,14 +262,49 @@ actor ControlConnectionPool: ControlConnectionPooling {
         resumeOneSFTPWaiter(hostID)
     }
 
+    private func acquireHandshake(_ hostID: UUID) async {
+        if handshaking[hostID, default: 0] < Self.maxConcurrentHandshakes {
+            handshaking[hostID, default: 0] += 1
+            return
+        }
+        // 名额由 `releaseHandshake` 直接转交给排队者，计数不变。
+        await withCheckedContinuation { handshakeWaiters[hostID, default: []].append($0) }
+    }
+
+    private func releaseHandshake(_ hostID: UUID) {
+        if var queue = handshakeWaiters[hostID], !queue.isEmpty {
+            let next = queue.removeFirst()
+            handshakeWaiters[hostID] = queue.isEmpty ? nil : queue
+            next.resume()
+            return
+        }
+        let count = handshaking[hostID, default: 1] - 1
+        handshaking[hostID] = count > 0 ? count : nil
+    }
+
+    func discardSFTP(_ session: any SFTPProviding, for hostID: UUID) async {
+        let key = ObjectIdentifier(session)
+        if var entry = entries[hostID] {
+            entry.sftp.busy[key] = nil
+            entry.sftp.idle.removeAll { ObjectIdentifier($0) == key }
+            entries[hostID] = entry.isEmpty ? nil : entry
+        }
+        closeDetached(sftp: session)
+        // 名额空出来了：等着的借用者会新建一条，而不是拿到这条死会话。
+        resumeOneSFTPWaiter(hostID)
+    }
+
     /// 真正建一条新的 SFTP 会话。调用前已经把 `pending` 加过 1（占住名额）。
     private func makeSFTPChannel(for host: HostConnectionSpec) async throws -> any SFTPProviding {
         let make = connector.makeSFTP
+        await acquireHandshake(host.id)
         let task = Task.detached { try await make(host) }
         let session: any SFTPProviding
         do {
             session = try await task.value
+            releaseHandshake(host.id)
         } catch {
+            releaseHandshake(host.id)
             releaseSFTPPending(host.id)
             throw record(error, for: host)
         }
@@ -480,8 +546,9 @@ actor ControlConnectionPool: ControlConnectionPooling {
         let deadline = now().addingTimeInterval(-idleInterval.seconds)
         var expired: [Entry] = []
         for (id, entry) in entries where entry.lastUsedAt <= deadline {
-            // 有会话正借在外面（长传输）或正在建 → 这台主机还在用，别回收。
-            guard entry.sftp.busy.isEmpty, entry.sftp.pending == 0 else { continue }
+            // 有会话正借在外面（长传输）或正在建、或有命令正在跑 → 这台主机还在用，别回收。
+            guard entry.sftp.busy.isEmpty, entry.sftp.pending == 0, entry.execInFlight == 0
+            else { continue }
             expired.append(entry)
             entries.removeValue(forKey: id)
         }
@@ -498,6 +565,19 @@ actor ControlConnectionPool: ControlConnectionPooling {
 
     private func touch(_ hostID: UUID) {
         entries[hostID]?.lastUsedAt = now()
+    }
+
+    private func beginExec(_ hostID: UUID) {
+        entries[hostID]?.execInFlight += 1
+        touch(hostID)
+    }
+
+    /// 结束时也 touch：空闲从命令**跑完**算起，而不是从它开始算。
+    private func endExec(_ hostID: UUID) {
+        if let count = entries[hostID]?.execInFlight, count > 0 {
+            entries[hostID]?.execInFlight = count - 1
+        }
+        touch(hostID)
     }
 
     private func close(_ entry: Entry) async {
@@ -533,48 +613,55 @@ actor ControlConnectionPool: ControlConnectionPooling {
 extension ControlConnectionPool.Connector {
 
     /// 真实 SSH：`SSHClientFactory.connect` + 非交互的 host-key 审批。
-    nonisolated static let live = ControlConnectionPool.Connector(
-        makeExec: { spec in
-            let sink = HostKeyChallengeSink()
-            let reusable = ReusableSSHConnection(
-                connect: ControlConnectionPool.liveConnect(spec, sink: sink),
-                hostKeyChallenges: sink
-            )
-            do {
-                // 急切握手：`:` 是 shell 的 no-op，只为把建连（含主机密钥审批）做掉，
-                // 好让失败在这里就带着指纹上抛。连接随后被复用，不会白建。
-                _ = try await reusable.exec(":")
-            } catch {
-                await reusable.close()
-                throw ControlConnectionPool.mapConnectError(error, sink: sink)
+    nonisolated static let live = live(transferWindowBytes: ParallelTransfer.Tuning.standard.windowBytes)
+
+    /// 生产建连。SFTP 会话只给大文件传输用，窗口单独设（`transferWindowBytes`）；exec 与
+    /// 信任握手沿用终端那套 1 MiB。
+    nonisolated static func live(transferWindowBytes: Int) -> ControlConnectionPool.Connector {
+        ControlConnectionPool.Connector(
+            makeExec: { spec in
+                let sink = HostKeyChallengeSink()
+                let reusable = ReusableSSHConnection(
+                    connect: ControlConnectionPool.liveConnect(spec, sink: sink),
+                    hostKeyChallenges: sink
+                )
+                do {
+                    // 急切握手：`:` 是 shell 的 no-op，只为把建连（含主机密钥审批）做掉，
+                    // 好让失败在这里就带着指纹上抛。连接随后被复用，不会白建。
+                    _ = try await reusable.exec(":")
+                } catch {
+                    await reusable.close()
+                    throw ControlConnectionPool.mapConnectError(error, sink: sink)
+                }
+                return reusable
+            },
+            makeSFTP: { spec in
+                let sink = HostKeyChallengeSink()
+                do {
+                    let connected = try await ControlConnectionPool.liveConnect(
+                        spec, sink: sink, windowBytes: transferWindowBytes)()
+                    return try await SFTPSession(connected: connected)
+                } catch {
+                    throw ControlConnectionPool.mapConnectError(error, sink: sink)
+                }
+            },
+            trustHostKey: { spec, fingerprint in
+                let sink = HostKeyChallengeSink()
+                do {
+                    let connected = try await ControlConnectionPool.liveConnect(
+                        spec,
+                        sink: sink,
+                        pinnedFingerprint: fingerprint
+                    )()
+                    // 握手成功即说明服务器出示的指纹与钉住的一致，`HostKeyVerifier` 已经
+                    // 沿 TOFU 路径写好 `KnownHost`。这条连接只为信任而建，随手关掉。
+                    await connected.close()
+                } catch {
+                    throw ControlConnectionPool.mapConnectError(error, sink: sink)
+                }
             }
-            return reusable
-        },
-        makeSFTP: { spec in
-            let sink = HostKeyChallengeSink()
-            do {
-                let connected = try await ControlConnectionPool.liveConnect(spec, sink: sink)()
-                return try await SFTPSession(connected: connected)
-            } catch {
-                throw ControlConnectionPool.mapConnectError(error, sink: sink)
-            }
-        },
-        trustHostKey: { spec, fingerprint in
-            let sink = HostKeyChallengeSink()
-            do {
-                let connected = try await ControlConnectionPool.liveConnect(
-                    spec,
-                    sink: sink,
-                    pinnedFingerprint: fingerprint
-                )()
-                // 握手成功即说明服务器出示的指纹与钉住的一致，`HostKeyVerifier` 已经
-                // 沿 TOFU 路径写好 `KnownHost`。这条连接只为信任而建，随手关掉。
-                await connected.close()
-            } catch {
-                throw ControlConnectionPool.mapConnectError(error, sink: sink)
-            }
-        }
-    )
+        )
+    }
 }
 
 extension ControlConnectionPool {
@@ -588,8 +675,10 @@ extension ControlConnectionPool {
     nonisolated static func liveConnect(
         _ spec: HostConnectionSpec,
         sink: HostKeyChallengeSink,
-        pinnedFingerprint: String? = nil
+        pinnedFingerprint: String? = nil,
+        windowBytes: Int = 1 << 20
     ) -> @Sendable () async throws -> ConnectedClient {
+        let options = SSHClientFactory.windowOptions(bytes: windowBytes)
         let snapshot = spec.profile
         let auth = spec.auth
         let jumpAuth = spec.jumpAuth
@@ -614,7 +703,8 @@ extension ControlConnectionPool {
                         return false
                     }
                     return true
-                }
+                },
+                protocolOptions: options
             )
         }
     }

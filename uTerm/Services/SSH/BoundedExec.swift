@@ -54,8 +54,8 @@ nonisolated struct BoundedExecFailure: Error, @unchecked Sendable {
 /// 唯一可行的形态是「非结构化 Task + 一次性闸门」：超时先返回、把还在跑的 Task 放手，
 /// 结果晚到时由闸门丢弃。**超时返回后命令可能还在远端跑**，调用方与技能文档都要写明。
 ///
-/// 三处共用：`QuickCommandRunner`（快捷命令并行执行）、`ParallelRunModel`（并行执行窗口）、
-/// `ControlHandler+Run`（CLI 的 `run` / `run-many` / `quick-run`）。
+/// 远端命令本身的超时已改由 `SupervisedExec` 按静默判定（CLI、快捷命令、并行执行窗口都走它）；
+/// 这里只剩「一次性、有明确上限」的辅助调用在用，比如看门狗超时后发的那条 kill。
 nonisolated enum BoundedExec {
 
     /// 跑 `body`，超过 `timeout` 即**放弃等待**并返回 `.timedOut`；晚到的结果被闸门丢弃

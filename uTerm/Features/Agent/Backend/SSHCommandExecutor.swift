@@ -8,13 +8,20 @@ nonisolated struct SSHCommandExecutor: CommandExecutor {
     /// 输出被裁剪时追加在末尾的标记。别在别处重复这串字面量 —— 截断与否读
     /// `CommandResult.truncated`。
     static let truncationMarker = "… [输出已截断]"
+    /// 流式执行的首行标记：`__UTERM_PID__:<会话 shell 的 pid>`。见 `wrapAnnouncingPID`。
+    static let pidMarker = "__UTERM_PID__"
     let maxLines: Int
     let maxBytes: Int
     private let exec: @Sendable (String) async throws -> String
+    /// 流式 exec：每到一块输出就回调一次，命令结束（EOF）才返回。nil = 底层只会整段
+    /// 返回（测试替身、Agent），`runStreaming` 退回 `exec` 并在结束时一次性交付。
+    private let execStream: (@Sendable (String, @escaping @Sendable (Data) -> Void) async throws -> Void)?
 
     init(maxLines: Int = 200, maxBytes: Int = 16_000,
-         exec: @escaping @Sendable (String) async throws -> String) {
-        self.maxLines = maxLines; self.maxBytes = maxBytes; self.exec = exec
+         exec: @escaping @Sendable (String) async throws -> String,
+         execStream: (@Sendable (String, @escaping @Sendable (Data) -> Void) async throws -> Void)? = nil) {
+        self.maxLines = maxLines; self.maxBytes = maxBytes
+        self.exec = exec; self.execStream = execStream
     }
 
     func run(_ command: String) async throws -> CommandResult {
@@ -30,6 +37,31 @@ nonisolated struct SSHCommandExecutor: CommandExecutor {
         let wrapped = "( \(command)\n) 2>&1; printf '\\n\(Self.sentinel):%d\\n' \"$?\""
         let raw = try await exec(wrapped)
         return Self.parse(raw, maxLines: maxLines, maxBytes: maxBytes)
+    }
+
+    /// 与 `run` 同一套包装，外加**第一行**打印会话 shell 的 pid。
+    ///
+    /// sshd 给每个 exec 会话 `setsid()`，所以这个 pid 也是整个进程组的组号：看门狗
+    /// 判定超时后另开一条 exec 跑 `kill -- -<pid>`，就能把命令连同它 fork 出来的子进程
+    /// 一起收掉。光关 channel 做不到 —— 没有 PTY 的会话里，一个不往 stdout 写的进程
+    /// （恰恰是会被判「静默」的那种）永远收不到 SIGPIPE。
+    static func wrapAnnouncingPID(_ command: String) -> String {
+        "printf '\(pidMarker):%d\\n' \"$$\"\n( \(command)\n) 2>&1; printf '\\n\(sentinel):%d\\n' \"$?\""
+    }
+
+    /// 流式跑一条已包装好的命令（通常是 `wrapAnnouncingPID` 的产物），原样把字节交给
+    /// `onOutput`。解析与裁剪交给调用方（`SupervisedExec`）—— 它要边收边判静默。
+    func runStreaming(_ wrapped: String, onOutput: @escaping @Sendable (Data) -> Void) async throws {
+        if let execStream {
+            try await execStream(wrapped, onOutput)
+        } else {
+            onOutput(Data(try await exec(wrapped).utf8))
+        }
+    }
+
+    /// 不包装、整段返回地跑一条命令（杀进程组这类辅助命令用）。
+    func runRaw(_ command: String) async throws -> String {
+        try await exec(command)
     }
 
     nonisolated static func parse(_ raw: String, maxLines: Int, maxBytes: Int) -> CommandResult {

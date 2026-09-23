@@ -22,6 +22,25 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         try await shared.exec(command)
     }
 
+    /// 流式 exec：stdout / stderr 每到一块就交给 `onOutput`，命令结束（EOF）才返回。
+    ///
+    /// 与 `exec` 的两处不同，都是 CLI 的静默看门狗要的：
+    /// - 能**边跑边**看到输出，于是能按「多久没动静」而不是「跑了多久」判超时；
+    /// - 没有 `exec` 那道 64 000 字节的总量闸（超了整条抛 `commandOutputTooLarge`，
+    ///   输出多一点的命令直接失败），留多少由调用方自己裁。
+    func execStreaming(
+        _ command: String,
+        onOutput: @Sendable (Data) -> Void
+    ) async throws {
+        let stream = try await target.executeCommandStream(command)
+        for try await chunk in stream {
+            switch chunk {
+            case .stdout(let buffer), .stderr(let buffer):
+                onOutput(Data(buffer.readableBytesView))
+            }
+        }
+    }
+
     func openDirectTCPIP(
         host: String,
         port: Int
@@ -50,9 +69,13 @@ nonisolated enum SSHClientFactory {
     /// 也会拿到 1 MiB 窗口 —— 纯粹是缓冲变大，没有行为变化。跳板机那一跳必须一起设，
     /// 否则内层会话的全部流量还是挤在外层 direct-tcpip 通道的 128 KiB 窗口里；
     /// `USSHKitIntegration.connect`（uAppKit ≥ 1.4.6）内部对直连与跳板机两跳一并应用。
-    static let channelWindowOptions: Set<SSHProtocolOption> = [
-        .maximumPacketSize(clampedMaximumPacketSize(1 << 20))
-    ]
+    static let channelWindowOptions: Set<SSHProtocolOption> = windowOptions(bytes: 1 << 20)
+
+    /// 指定窗口大小的协议选项（越界夹回 `maximumPacketSizeRange`）。大文件传输的专用连接
+    /// 用更大的窗口（见 `ParallelTransfer`），终端 / 转发连接仍用上面的 1 MiB。
+    static func windowOptions(bytes: Int) -> Set<SSHProtocolOption> {
+        [.maximumPacketSize(clampedMaximumPacketSize(bytes))]
+    }
 
     /// NIOSSH 允许的最大包长区间。
     ///
@@ -71,7 +94,8 @@ nonisolated enum SSHClientFactory {
         auth: ResolvedAuth,
         jumpHostAuth: ResolvedAuth?,
         hostKeyVerifier: HostKeyVerifier,
-        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
+        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
+        protocolOptions: Set<SSHProtocolOption> = SSHClientFactory.channelWindowOptions
     ) async throws -> ConnectedClient {
         let target = packageAuth(auth)
         let jumpHost: USSHKit.SSHJumpHost?
@@ -105,7 +129,7 @@ nonisolated enum SSHClientFactory {
                 hostKeyPolicy: packageHostKeyPolicy(),
                 connectTimeout: .seconds(connectTimeoutSeconds()),
                 approver: packageApprover(hostKeyApprover),
-                protocolOptions: Self.channelWindowOptions
+                protocolOptions: protocolOptions
             )
             return ConnectedClient(shared: shared)
         } catch let error as USSHKit.SSHConnectionError {

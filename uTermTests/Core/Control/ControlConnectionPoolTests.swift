@@ -19,6 +19,19 @@ final class ControlConnectionPoolTests: XCTestCase {
         func exec(_ command: String) async throws -> String { "ran:\(command)" }
         func close() { closed = true }
         func isClosed() -> Bool { closed }
+
+        /// 流式 exec 停在半路，直到 `releaseStreaming()`：模拟一条长时间在跑的命令。
+        private var streamingWaiters: [CheckedContinuation<Void, Never>] = []
+        func execStreaming(_ command: String, onOutput: @escaping @Sendable (Data) -> Void) async throws {
+            onOutput(Data("ran:\(command)".utf8))
+            await withCheckedContinuation { streamingWaiters.append($0) }
+        }
+        func streamingCount() -> Int { streamingWaiters.count }
+        func releaseStreaming() {
+            let waiters = streamingWaiters
+            streamingWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
     }
 
     /// 建连次数 + 产出的通道，供断言「懒建」与「复用」。
@@ -396,6 +409,37 @@ final class ControlConnectionPoolTests: XCTestCase {
         held = await pool.heldHostIDs()
         XCTAssertTrue(held.isEmpty, "全部归还且空闲超时后应被回收")
         try await waitUntil("空闲会话被关闭") { await sftpFactory.closedCount() == 1 }
+    }
+
+    /// `run` 能跑到 `--max-duration`（默认 1 小时），比 10 分钟的空闲回收长得多：
+    /// 有命令在跑的主机不能被清扫关掉连接；命令跑完后空闲从那一刻起算。
+    func testHostWithACommandInFlightIsNotReclaimed() async throws {
+        let factory = Factory()
+        let clock = Clock()
+        let pool = makePool(factory: factory, clock: clock, idleInterval: .seconds(600))
+        let spec = try makeSpec()
+
+        let executor = try await pool.executor(for: spec)
+        let running = Task { try await executor.runStreaming("sleep 3600") { _ in } }
+        try await waitUntil("命令开始跑") {
+            await factory.made.first?.streamingCount() == 1
+        }
+
+        clock.advance(601)
+        _ = await pool.sweepIdle()
+        var held = await pool.heldHostIDs()
+        XCTAssertEqual(held, [spec.id], "有命令在跑就不该回收这台主机的连接")
+
+        await factory.made.first?.releaseStreaming()
+        try await running.value
+        _ = await pool.sweepIdle()
+        held = await pool.heldHostIDs()
+        XCTAssertEqual(held, [spec.id], "空闲应从命令跑完才开始算")
+
+        clock.advance(601)
+        _ = await pool.sweepIdle()
+        held = await pool.heldHostIDs()
+        XCTAssertTrue(held.isEmpty, "跑完并空闲超时后应被回收")
     }
 
     /// 建连失败要把占住的名额还回去，否则这台主机的 SFTP 通道会被慢慢烧光。

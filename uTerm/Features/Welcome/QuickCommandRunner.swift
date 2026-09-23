@@ -12,9 +12,9 @@ final class QuickCommandRunner {
 
     /// 并发上限：绑定多台时同时在飞的 SSH 连接数（避免 N 台一齐建连耗尽 fd / 抢占 NIO）。
     nonisolated static let maxConcurrent = 6
-    /// 单台命令执行超时：超过即标记失败收尾，避免挂死命令（如 `tail -f`）永久占连接、
-    /// 让整个 run 永远完不成、UI 卡在「运行中…」。
-    nonisolated static let perServerTimeout: Duration = .seconds(120)
+    // 单台超时交给 `SupervisedExec.runInteractive`：连续 `interactiveIdle` 没输出、或跑满
+    // `interactiveMaxDuration` 才判超时并终止远端进程组。一直在刷输出的长命令不再被误杀，
+    // 挂死的命令（如 `tail -f`）也不会让整个 run 永远完不成、UI 卡在「运行中…」。
 
     /// 单台服务器的运行态。
     enum ServerPhase: Equatable {
@@ -122,16 +122,15 @@ final class QuickCommandRunner {
                                         ok: ok)
     }
 
-    /// 执行命令，超过 `perServerTimeout` 即**放弃等待**（返回 nil → 记失败），让本次 run 能收尾、
-    /// UI 不被挂死命令永久卡在「运行中…」。
+    /// 在看门狗下执行命令：静默超时 / 总时长超限都返回 nil（记失败），让本次 run 能收尾。
     ///
-    /// 关键：`BoundedExec` 用**非结构化** `Task` 跑 exec —— Citadel 的 exec 流不可取消，结构化
-    /// 任务组会在作用域退出时强制 await 子任务，会被挂死命令永久阻塞。超时后任 op 在后台跑到
-    /// 自然结束（那条 SSH 连接届时才释放，无法即时回收，已知限制），但本函数立即返回，不阻塞收尾。
+    /// `SupervisedExec` 内部用**非结构化** `Task` 跑 exec —— Citadel 的 exec 流不可取消，结构化
+    /// 任务组会在作用域退出时强制 await 子任务，会被挂死命令永久阻塞。超时时它会先终止远端
+    /// 进程组，exec 随之收到 EOF，那条 SSH 连接也就跟着释放。
     private nonisolated static func runBounded(executor: SSHCommandExecutor, shell: String) async -> CommandResult? {
-        await BoundedExec.run(timeout: perServerTimeout) {
-            try await executor.run(shell)
+        if case .completed(let result) = await SupervisedExec.runInteractive(shell, on: executor) {
+            return result
         }
-        .value   // 失败与超时都当成「这台没跑成」，与旧的 `try?` 行为一致。
+        return nil   // 失败与超时都当成「这台没跑成」，与旧的 `try?` 行为一致。
     }
 }

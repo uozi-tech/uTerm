@@ -12,14 +12,14 @@ import SwiftData
 ///   末尾产出跨台汇总。
 ///
 /// 并发与超时范式对齐 `QuickCommandRunner`：建连输入在 `@MainActor` 解析成 `Sendable` 值带进逐台
-/// 任务；exec 用**非结构化** `Task` + 一次性闸门做超时（Citadel exec 流不可取消）。
+/// 任务；exec 走 `SupervisedExec` 看门狗（按静默判卡死、总时长兜底，超时终止远端进程组）。
 @MainActor
 @Observable
 final class ParallelRunModel {
 
-    /// 单台单条命令执行超时：超过即记失败收尾，避免挂死命令永久卡「执行中」。
-    /// 取 300s——`apt upgrade` 升级上百个包等运维操作合理地需要数分钟，120s 会误判超时。
-    nonisolated static let perServerTimeout: Duration = .seconds(300)
+    // 单台单条命令的超时交给 `SupervisedExec.runInteractive`：连续 `interactiveIdle` 没输出、
+    // 或跑满 `interactiveMaxDuration` 才判超时。`apt upgrade` 这种刷着输出跑好几分钟的运维
+    // 操作不再被一刀切误判；挂死命令也不会永久卡「执行中」。
     /// 自愈 Agent 每台最多步数（每步 = 一轮 LLM + 其工具调用），有界防失控。
     nonisolated static let maxAgentSteps = 6
 
@@ -219,8 +219,14 @@ final class ParallelRunModel {
         if !command.isEmpty {
             states[index].lines = [ParallelTermLine(kind: .cmd, text: command)]
             let start = Date()
-            let outcome = await Self.execBounded(executor: target.executor, command: command)
+            let outcome = await Self.execSupervised(executor: target.executor, command: command)
             states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
+            if let stalled = outcome.stalled {
+                // 命令跑起来了、只是卡住（或超总时长）被终止：不是连不上，单独收尾。同样不跑
+                // AI 自愈——进程组刚被杀，远端状态不明，交人工复核比让模型接着动手稳妥。
+                markStalled(at: index, stalled: stalled, message: outcome.stallMessage ?? "")
+                return
+            }
             guard let result = outcome.result else {
                 // 连接层失败：命令根本没跑起来。识别原因（指纹未信任 / 连接错误 / 超时），
                 // 给确定性结论、暴露指纹，**不**跑 AI 自愈（连不上，自愈无意义且会让模型瞎猜）。
@@ -241,7 +247,7 @@ final class ParallelRunModel {
             // AI 意图（无等效命令）：跑 Agent 前先做一次连通性预检（`true`），尽早暴露
             // 「指纹未信任 / 连不上」，否则 Agent 会对着连不上的机器空跑、并瞎猜结论。
             let start = Date()
-            let probe = await Self.execBounded(executor: target.executor, command: "true")
+            let probe = await Self.execSupervised(executor: target.executor, command: "true")
             if probe.result == nil {
                 states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
                 markUnreachable(at: index, target: target, outcome: probe)
@@ -348,17 +354,26 @@ final class ParallelRunModel {
                 }
                 states[index].steps.append("AI 已批准：" + decision.reason)
                 states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
-                let outcome = await Self.execBounded(executor: target.executor, command: st.command)
+                let outcome = await Self.execSupervised(executor: target.executor, command: st.command)
                 let cmdExit = outcome.result?.exitCode
                 if let r = outcome.result {
                     states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
                     st.output = r.output
+                } else if let stalled = outcome.stalled {
+                    // 超时：判定前的输出 + 原因一起回喂模型（卡在哪一步通常就在最后几行），
+                    // 也显示在原始输出里。
+                    let reason = "执行超时：" + (outcome.stallMessage ?? "")
+                    if !stalled.partial.output.isEmpty {
+                        states[index].lines.append(contentsOf: Self.outputLines(from: stalled.partial, failed: false))
+                    }
+                    states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
+                    st.output = stalled.partial.output.isEmpty
+                        ? reason
+                        : stalled.partial.output + "\n" + reason
                 } else {
                     // 真实失败原因回喂模型 + 显示在原始输出里（不再笼统「连接或执行失败」），
-                    // 让模型据「超时 / 连接失败」做对的决定，也方便用户判断。
-                    let reason = outcome.timedOut
-                        ? "执行超时（超过 \(Self.timeoutSeconds) 秒）"
-                        : "连接失败：\(Self.connectionReason(outcome.errorText))"
+                    // 让模型据「连接失败」做对的决定，也方便用户判断。
+                    let reason = "连接失败：\(Self.connectionReason(outcome.errorText))"
                     states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
                     st.output = reason
                 }
@@ -417,17 +432,29 @@ final class ParallelRunModel {
             states[index].summary = challenge.kind == .mismatch
                 ? "无法连接：该主机的密钥与已信任的不一致（可能是服务器重装，也可能存在中间人风险）。请核对指纹，确认无误后「信任并重试」。"
                 : "无法连接：尚未信任该主机的指纹。请核对指纹，确认无误后点「信任并重试」。"
-        } else if outcome.timedOut {
-            let reason = "连接 / 执行超时（超过 \(Self.timeoutSeconds) 秒）"
-            states[index].failure = .connection(reason)
-            states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
-            states[index].summary = "\(reason)，未能确认结果。"
+        } else if let stalled = outcome.stalled {
+            // 连通性预检（`true`）都卡住：多半是连接半死不活。
+            markStalled(at: index, stalled: stalled, message: outcome.stallMessage ?? "")
         } else {
             let reason = Self.connectionReason(outcome.errorText ?? target.setupErrorText)
             states[index].failure = .connection(reason)
             states[index].lines.append(ParallelTermLine(kind: .err, text: "连接失败：\(reason)"))
             states[index].summary = "无法连接到该服务器：\(reason)。命令未执行。"
         }
+    }
+
+    /// 命令跑起来了但被看门狗判超时（静默太久 / 超总时长）并终止：把判定前的输出和原因摆出来。
+    private func markStalled(at index: Int, stalled: SupervisedExec.Stalled, message: String) {
+        states[index].status = .failed
+        states[index].tone = .failed
+        states[index].exitCode = nil
+        if !stalled.partial.output.isEmpty {
+            states[index].lines.append(contentsOf: Self.outputLines(from: stalled.partial, failed: false))
+        }
+        states[index].lines.append(ParallelTermLine(kind: .err, text: "执行超时：" + message))
+        states[index].summary = "执行超时：" + message + (stalled.kill == .signalled
+            ? "远端状态可能停在半截，请人工复核。"
+            : "")
     }
 
     /// 一台收尾：全部台都落定（`tone != .running`）才终局（AI 汇总 → 落库）。
@@ -529,11 +556,11 @@ final class ParallelRunModel {
         你可以用 run_command 工具逐条执行 shell 命令；每条命令我会把真实的标准输出/错误与退出码回给你。
         请像人一样按需多步操作：例如更新代码后若需要重启服务就再执行重启，改完配置后做一次校验或健康检查。
         命令要保守、最小必要，避免破坏性操作（不要 rm -rf、不要动与目标无关的服务）。
-        每条命令执行上限约 \(Self.timeoutSeconds) 秒，超时会被中止并标记「执行超时」——但远端进程通常仍在后台继续（例如 apt 升级会自己跑完）。所以：
+        每条命令若连续约 \(Self.idleSeconds) 秒没有任何输出，会被判定卡住并**终止**（连同它启动的子进程），总时长上限约 \(Self.maxDurationSeconds) 秒。一直有输出的命令跑多久都行，所以长操作尽量带进度或 -v 输出；本身长时间不出声的命令（大文件校验、导出 / 打包到文件）要让它吐进度，或拆小。所以：
         - **重启必须是该台的最后一步**：发出 reboot / shutdown / `systemctl reboot` 等会让 SSH 连接立即断开，之后任何命令（包括 `sleep`、`uname -r`）都会因连接断开而直接报错。所以把其它操作都做完后再重启，且**发出重启就立刻给结论**（status=ok，summary 说明「已触发重启，内核 / 更新将在重启后生效」）——绝不要在重启后再 `sleep` 等待、也不要尝试重连验证（重连窗口远短于服务器重启时间，必然失败）。
         - 绝不要用无限等待循环（如 `while …; do sleep N; done`、`tail -f`、死等某进程或锁释放）——这会把本台一直拖到超时，看起来像卡死。
-        - 遇到 dpkg/apt 锁被占用（"Could not get lock /var/lib/dpkg/…"）：多半是上一条超时但仍在后台跑的 apt 持锁。先用 `ps aux | grep apt` 看持锁进程；**不要无限等**，最多有界等一次（如 `sleep 30` 后重试一次），仍不行就直接给 failed 结论，说明「上次升级仍在后台进行 / 锁被其他进程占用，建议稍后复核」。
-        - 长操作尽量用非交互、可中断方式；若被超时中止导致 dpkg 半完成，用 `dpkg --configure -a` 收尾。
+        - 遇到 dpkg/apt 锁被占用（"Could not get lock /var/lib/dpkg/…"）：多半是别的进程（自动更新 unattended-upgrades 等）持锁。先用 `ps aux | grep apt` 看持锁进程；**不要无限等**，最多有界等一次（如 `sleep 30` 后重试一次），仍不行就直接给 failed 结论，说明「锁被其他进程占用，建议稍后复核」。
+        - 长操作尽量用非交互方式；若某条被超时终止导致 dpkg 半完成，用 `dpkg --configure -a` 收尾。
         当目标达成、或确认无法自动修复时，停止调用工具，并只输出一个 JSON 作为结论：
         {"status":"ok|failed","summary":"不超过2句中文白话结论"}
         其中 ok=目标已达成（无论是一开始就正常，还是你执行/修复后达成并验证）；failed=无法达成（说明原因与人工建议）。
@@ -563,8 +590,9 @@ final class ParallelRunModel {
 
     private func exitText(_ code: Int?) -> String { code.map(String.init) ?? "未知" }
 
-    /// 单台超时秒数（取自 `perServerTimeout`），用于失败文案。
-    nonisolated static var timeoutSeconds: Int { Int(perServerTimeout.components.seconds) }
+    /// 静默超时 / 总时长上限的秒数（取自 `SupervisedExec.interactive*`），用于提示词。
+    nonisolated static var idleSeconds: Int { Int(SupervisedExec.interactiveIdle.components.seconds) }
+    nonisolated static var maxDurationSeconds: Int { Int(SupervisedExec.interactiveMaxDuration.components.seconds) }
 
     /// 把连接错误信息整理成一句可读原因（去空白；空则给兜底）。
     private nonisolated static func connectionReason(_ text: String?) -> String {
@@ -608,18 +636,25 @@ final class ParallelRunModel {
         let result: CommandResult?
         /// 执行器抛出的错误描述（连接 / 认证失败）；超时与「无执行器」时为 nil。
         let errorText: String?
-        let timedOut: Bool
+        /// 超时（静默太久 / 超总时长）：判定前的输出与是否已终止远端进程组。
+        var stalled: SupervisedExec.Stalled?
+        /// `stalled` 的一句话原因（含阈值秒数）。
+        var stallMessage: String?
+
+        var timedOut: Bool { stalled != nil }
     }
 
-    /// 执行命令并归类结果；超过 `perServerTimeout` 即放弃等待（记超时）。`BoundedExec` 用
-    /// 非结构化 `Task` + 一次性闸门——Citadel exec 流不可取消，结构化任务组会被挂死命令
-    /// 永久阻塞（详见 `BoundedExec`）。
-    private nonisolated static func execBounded(executor: SSHCommandExecutor?, command: String) async -> ExecOutcome {
-        guard let executor else { return ExecOutcome(result: nil, errorText: nil, timedOut: false) }
-        switch await BoundedExec.run(timeout: perServerTimeout, { try await executor.run(command) }) {
-        case .completed(let r): return ExecOutcome(result: r, errorText: nil, timedOut: false)
-        case .failed(let f):    return ExecOutcome(result: nil, errorText: f.text, timedOut: false)
-        case .timedOut:         return ExecOutcome(result: nil, errorText: nil, timedOut: true)
+    /// 在 `SupervisedExec` 看门狗下执行并归类结果。看门狗内部用非结构化 `Task` 跑 exec
+    /// （Citadel exec 流不可取消，结构化任务组会被挂死命令永久阻塞），超时先终止远端进程组。
+    private nonisolated static func execSupervised(executor: SSHCommandExecutor?, command: String) async -> ExecOutcome {
+        guard let executor else { return ExecOutcome(result: nil, errorText: nil) }
+        switch await SupervisedExec.runInteractive(command, on: executor) {
+        case .completed(let r): return ExecOutcome(result: r, errorText: nil)
+        case .failed(let f):    return ExecOutcome(result: nil, errorText: f.text)
+        case .stalled(let stalled):
+            return ExecOutcome(
+                result: nil, errorText: nil, stalled: stalled,
+                stallMessage: stalled.message(limits: SupervisedExec.interactiveLimits(for: executor)))
         }
     }
 }

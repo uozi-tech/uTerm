@@ -68,6 +68,29 @@ actor ReusableSSHConnection {
         }
     }
 
+    /// `exec` 的流式版（CLI `run` 用）。重连重试只在**一个字节都还没收到**时做：
+    /// 收到过输出说明命令已经在远端跑起来了，再发一遍等于把它跑两次。
+    func execStreaming(
+        _ command: String,
+        onOutput: @escaping @Sendable (Data) -> Void
+    ) async throws {
+        let delivered = DeliveryFlag()
+        let forward: @Sendable (Data) -> Void = { data in
+            delivered.mark()
+            onOutput(data)
+        }
+        let c = try await ensureConnected()
+        do {
+            try await c.execStreaming(command, onOutput: forward)
+        } catch {
+            guard !closed, !delivered.isSet, SSHTransportFailure.isTransportFailure(error) else {
+                throw error
+            }
+            await dropClient()
+            try await ensureConnected().execStreaming(command, onOutput: forward)
+        }
+    }
+
     func close() async {
         closed = true
         await dropClient()
@@ -103,6 +126,23 @@ actor ReusableSSHConnection {
     private func dropClient() async {
         if let client { await client.close() }
         client = nil
+    }
+}
+
+/// 「收到过输出没有」的标记。输出回调在 NIO / 流消费者那边同步调用，进不了
+/// `ReusableSSHConnection` 的 actor，只能用带锁的小盒子。
+private nonisolated final class DeliveryFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var set = false
+
+    func mark() {
+        lock.lock(); defer { lock.unlock() }
+        set = true
+    }
+
+    var isSet: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return set
     }
 }
 
@@ -171,21 +211,37 @@ enum WorkspaceCommandExecutorFactory {
 
         if reuseConnection {
             let reusable = ReusableSSHConnection(connect: connect, hostKeyChallenges: sink)
-            let executor = SSHCommandExecutor { try await reusable.exec($0) }
+            let executor = SSHCommandExecutor(
+                exec: { try await reusable.exec($0) },
+                execStream: { try await reusable.execStreaming($0, onOutput: $1) }
+            )
             return (executor, sink, reusable)
         } else {
-            // 旧行为：每条命令独立连接、跑完即关。
-            let executor = SSHCommandExecutor { wrappedCommand in
-                let connected = try await connect()
-                do {
-                    let out = try await connected.exec(wrappedCommand)
-                    await connected.close()
-                    return out
-                } catch {
-                    await connected.close()
-                    throw error
+            // 旧行为：每条命令独立连接、跑完即关。流式那条（快捷命令的静默看门狗用）同理；
+            // 看门狗判定卡住后发的 kill 走 `exec`，另开一条连接，不依赖这条还活着。
+            let executor = SSHCommandExecutor(
+                exec: { wrappedCommand in
+                    let connected = try await connect()
+                    do {
+                        let out = try await connected.exec(wrappedCommand)
+                        await connected.close()
+                        return out
+                    } catch {
+                        await connected.close()
+                        throw error
+                    }
+                },
+                execStream: { wrappedCommand, onOutput in
+                    let connected = try await connect()
+                    do {
+                        try await connected.execStreaming(wrappedCommand, onOutput: onOutput)
+                        await connected.close()
+                    } catch {
+                        await connected.close()
+                        throw error
+                    }
                 }
-            }
+            )
             return (executor, sink, nil)
         }
     }

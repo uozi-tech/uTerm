@@ -123,7 +123,7 @@ struct ParallelShellPane: View {
                 }
             }
             // 终端跟随：输出增量追加时滚到底（自愈多步会持续追加命令输出）。
-            // 大块输出常一次性追加（execBounded 整条命令跑完才回 → 多行同时进 lines）：同步
+            // 大块输出常一次性追加（execSupervised 整条命令跑完才回 → 多行同时进 lines）：同步
             // scrollTo 会滚到「旧底部」（新行还没布局），结果停在最新输出上方。用
             // 合并到下一批布局之后再滚，避免大输出时反复重入 LazyVStack 布局。
             .onChange(of: state.lines.count) { _, _ in

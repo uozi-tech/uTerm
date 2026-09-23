@@ -152,10 +152,10 @@ extension ControlConnectError {
 
 /// 一台主机的 SFTP 通道全忙，排队等到超时。
 ///
-/// 借不到通道**不是**建连失败：链路好好的，只是这台主机的 4 个名额都被别的传输占着。
-/// 有上限地等（默认 90 s，短于 `ControlServer` 的 120 s handler 超时）而不是无限等 ——
+/// 借不到通道**不是**建连失败：链路好好的，只是这台主机的名额都被别的传输占着。
+/// 有上限地等（默认 90 s，短于 `ControlServer` 的 120 s 静默预算）而不是无限等 ——
 /// 无限等的后果是请求挂到服务端超时，客户端拿到 `handler_timeout`，既看不出原因也
-/// 占着 `maxActiveClients` 的名额，一条卡死的传输能把整个 CLI 拖垮。
+/// 一直占着一个传输槽位。
 ///
 /// TODO（协议侧 `server_busy` 落地后）：handler 把它映射成 `ControlErrorCode.server_busy`；
 /// 现在先落 `operation_failed` + 明确 message。
@@ -175,7 +175,16 @@ nonisolated struct SFTPChannelsBusyError: Error, Sendable, Equatable {
 /// 测试注入假的 —— 池本身不认识 SSH，只管持有 / 复用 / 到点关闭。
 nonisolated protocol ControlExecChannel: Sendable {
     func exec(_ command: String) async throws -> String
+    /// 流式 exec：每到一块输出回调一次，命令结束才返回（`run` 的静默看门狗靠它）。
+    func execStreaming(_ command: String, onOutput: @escaping @Sendable (Data) -> Void) async throws
     func close() async
+}
+
+extension ControlExecChannel {
+    /// 只会整段返回的通道（测试替身）：跑完一次性交付。
+    func execStreaming(_ command: String, onOutput: @escaping @Sendable (Data) -> Void) async throws {
+        onOutput(Data(try await exec(command).utf8))
+    }
 }
 
 extension ReusableSSHConnection: ControlExecChannel {}
@@ -206,6 +215,9 @@ protocol ControlConnectionPooling: Actor {
     func borrowSFTP(for host: HostConnectionSpec) async throws -> any SFTPProviding
     /// 归还一条借出的 SFTP 会话。重复归还、或归还一条已被释放的会话都是安全的。
     func returnSFTP(_ session: any SFTPProviding, for hostID: UUID) async
+    /// 借出的会话用坏了（传输中途出错）：关掉并让出名额，**不**放回空闲队列 —— 放回去
+    /// 下一个借用者拿到的还是一条死会话。
+    func discardSFTP(_ session: any SFTPProviding, for hostID: UUID) async
     /// 松开对某主机的 exec / SFTP 持有。
     func disconnect(hostID: UUID) async
     /// 释放全部持有（主开关关闭 / app 退出）。
@@ -251,6 +263,11 @@ extension ControlConnectionPooling {
             await returnSFTP(session, for: host.id)
             throw error
         }
+    }
+
+    /// 缺省（测试替身）：当成普通归还。
+    func discardSFTP(_ session: any SFTPProviding, for hostID: UUID) async {
+        await returnSFTP(session, for: hostID)
     }
 
     func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {

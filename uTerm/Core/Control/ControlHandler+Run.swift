@@ -6,9 +6,9 @@ import SwiftData
 /// 全组共同的硬约束：
 /// - `run*` 与 `quick-run` 是 mutation（shell 无法可靠分类读写），门禁已在
 ///   `ControlHandler.handle` 统一判过，这里只判主机级 `sftpOnly`。
-/// - Citadel 的 exec **不可取消**：超时必须走 `BoundedExec` 的「非结构化 Task +
-///   一次性闸门」放手模式，否则 `tail -f` 会挂死整个任务组。超时返回后**命令可能
-///   还在远端跑**，文案与技能文档都要写明。
+/// - 超时按**静默**判（`SupervisedExec`）：连续 `timeoutSeconds` 秒没有输出、或跑满
+///   `maxDurationSeconds`，就对远端进程组 TERM → KILL。拿不到进程组号时退回「放手
+///   不等」，此时**命令可能还在远端跑**，文案要写明（看 `killed`）。
 /// - 未知 / 变更的主机密钥一律拒绝并回 fingerprint，绝不自动 TOFU。
 extension ControlHandler {
 
@@ -67,9 +67,9 @@ extension ControlHandler {
             return .failure(
                 id: request.id,
                 code: .command_timeout,
-                message: "命令在 \(limits.timeoutSeconds) 秒内没有结束，已放弃等待。"
-                    + "**命令可能仍在远端运行**（Citadel 的 exec 不可取消，uTerm 只是不再等它）。"
-                    + "需要长跑的命令请用 nohup / systemd-run 之类丢到后台，再用 `run` 查状态。",
+                message: (outcome.result.errorMessage ?? "命令超时")
+                    + "需要长跑、又长时间没有输出的命令，请用 setsid / systemd-run 丢到后台"
+                    + "（nohup … & 仍在同一进程组，超时会被一起终止），再用 `run` 查状态。",
                 results: [outcome.result]
             )
         }
@@ -424,11 +424,21 @@ extension ControlHandler {
 
     /// 一次执行的输出裁剪与超时。都按请求给定，各自封顶。
     nonisolated struct RunLimits: Sendable {
+        /// 静默超时：连续这么多秒没有输出就判定卡住。
         let timeoutSeconds: Int
+        /// 总时长上限（兜底）。
+        let maxDurationSeconds: Int
         let maxLines: Int
         let maxBytes: Int
 
-        var timeout: Duration { .seconds(timeoutSeconds) }
+        var supervised: SupervisedExec.Limits {
+            SupervisedExec.Limits(
+                idle: .seconds(timeoutSeconds),
+                maxDuration: .seconds(maxDurationSeconds),
+                maxLines: maxLines,
+                maxBytes: maxBytes
+            )
+        }
     }
 
     nonisolated struct RunOutcome: Sendable {
@@ -439,16 +449,18 @@ extension ControlHandler {
 
     nonisolated static func limits(_ request: ControlRequest) -> RunLimits {
         let timeout = request.timeoutSeconds ?? ControlProtocol.defaultRunTimeoutSeconds
+        let duration = request.maxDurationSeconds ?? ControlProtocol.defaultRunMaxDurationSeconds
         let lines = request.maxLines ?? ControlProtocol.defaultMaxLines
         let bytes = request.maxBytes ?? ControlProtocol.defaultMaxBytes
         return RunLimits(
             timeoutSeconds: min(max(1, timeout), ControlProtocol.maxRunTimeoutSeconds),
+            maxDurationSeconds: min(max(1, duration), ControlProtocol.maxRunMaxDurationSeconds),
             maxLines: min(max(1, lines), 100_000),
             maxBytes: min(max(1, bytes), ControlProtocol.maxOutputBytes)
         )
     }
 
-    /// 单台执行：取（必要时建）执行器 → `BoundedExec` 有界等待 → 归类。
+    /// 单台执行：取（必要时建）执行器 → `SupervisedExec` 看门 → 归类。
     /// **不抛错**：连接层失败也写进 `ControlRunResult.errorCode`，让 `run-many`
     /// 单台失败不影响其它台。
     nonisolated static func execute(
@@ -474,9 +486,7 @@ extension ControlHandler {
             )
         }
 
-        let outcome = await BoundedExec.run(timeout: limits.timeout) {
-            try await executor.run(command)
-        }
+        let outcome = await SupervisedExec.run(command, on: executor, limits: limits.supervised)
         let elapsed = Int(Date().timeIntervalSince(start) * 1000)
 
         switch outcome {
@@ -492,17 +502,20 @@ extension ControlHandler {
                 ),
                 connectError: nil
             )
-        case .timedOut:
+        case .stalled(let stalled):
             return RunOutcome(
                 result: ControlRunResult(
                     host: target.name,
                     hostID: target.spec.id.uuidString,
-                    output: "",
+                    // 判定前收到的输出照样带回：卡在哪一步，往往就写在最后几行里。
+                    output: stalled.partial.output,
+                    truncated: stalled.partial.truncated,
                     durationMs: elapsed,
                     timedOut: true,
+                    timeoutReason: stalled.reason.rawValue,
+                    killed: stalled.kill == .signalled,
                     errorCode: ControlErrorCode.command_timeout.rawValue,
-                    errorMessage: "命令在 \(limits.timeoutSeconds) 秒内没有结束，已放弃等待；"
-                        + "**命令可能仍在远端运行**。"
+                    errorMessage: timeoutMessage(stalled, limits: limits)
                 ),
                 connectError: nil
             )
@@ -533,6 +546,10 @@ extension ControlHandler {
                 connectError: nil
             )
         }
+    }
+
+    nonisolated static func timeoutMessage(_ stalled: SupervisedExec.Stalled, limits: RunLimits) -> String {
+        stalled.message(limits: limits.supervised)
     }
 
     /// 有界并发跑一批（滑动窗口，上限 `ControlProtocol.maxParallelHosts`），

@@ -52,7 +52,10 @@ struct PServerState: Identifiable {
 @MainActor
 @Observable
 final class ParallelRunController {
-    nonisolated static let perServerTimeout: Duration = .seconds(300)
+    /// 单条命令的超时由会话里的 `SupervisedExec` 看门狗管（按静默判、总时长兜底，超时终止
+    /// 远端进程组，抛 `ParallelExecutionStalled`）。这个计时器只是再外一层的兜底：会话自己
+    /// 挂死（假会话、将来别的实现）时也保证泳道能收尾。比看门狗的总时长上限宽，正常到不了。
+    nonisolated static let backstopTimeout: Duration = SupervisedExec.interactiveMaxDuration + .seconds(60)
     nonisolated static let maxAgentSteps = 6
 
     let commandName: String
@@ -219,6 +222,12 @@ final class ParallelRunController {
                 session: target.session, command: command,
                 onLines: lineSink(at: index, generation: generation, counter: streamed))
             states[index].durationMs = Int(Date().timeIntervalSince(start) * 1000)
+            if let stall = outcome.stall {
+                // 命令跑起来了、只是卡住（或超总时长）被终止：不是连不上，单独收尾。同样不跑
+                // AI 自愈——进程组刚被杀，远端状态不明，交人工复核比让模型接着动手稳妥。
+                markStalled(at: index, stall: stall, streamed: streamed.count > 0)
+                return
+            }
             guard let result = outcome.result else {
                 markUnreachable(at: index, target: target, outcome: outcome)
                 return
@@ -311,9 +320,18 @@ final class ParallelRunController {
                         states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
                     }
                     st.output = r.output
+                } else if let stall = outcome.stall {
+                    // 超时：判定前的输出 + 原因一起回喂模型（卡在哪一步通常就在最后几行）。
+                    let partial = stall.stalled.partial.output
+                    let reason = "执行超时：" + stall.message
+                    if streamed.count == 0, !partial.isEmpty {
+                        states[index].lines.append(contentsOf: Self.outputLines(from: stall.stalled.partial, failed: false))
+                    }
+                    states[index].lines.append(PLine(kind: .err, text: reason))
+                    st.output = partial.isEmpty ? reason : partial + "\n" + reason
                 } else {
                     let reason = outcome.timedOut
-                        ? "执行超时（超过 \(Self.timeoutSeconds) 秒）"
+                        ? "执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）"
                         : "连接失败：\(Self.connectionReason(outcome.errorText))"
                     states[index].lines.append(PLine(kind: .err, text: reason))
                     st.output = reason
@@ -364,8 +382,11 @@ final class ParallelRunController {
             states[index].summary = mismatch
                 ? "无法连接：该主机的密钥与已信任的不一致（可能是服务器重装，也可能存在中间人风险）。请核对指纹，确认无误后「信任并重试」。"
                 : "无法连接：尚未信任该主机的指纹。请核对指纹，确认无误后点「信任并重试」。"
+        } else if let stall = outcome.stall {
+            // 连通性预检（`true`）都卡住：多半是连接半死不活。
+            markStalled(at: index, stall: stall, streamed: false)
         } else if outcome.timedOut {
-            let reason = "连接 / 执行超时（超过 \(Self.timeoutSeconds) 秒）"
+            let reason = "连接 / 执行超时（超过 \(Self.backstopSeconds) 秒仍无结果）"
             states[index].failure = .connection(reason)
             states[index].lines.append(PLine(kind: .err, text: reason))
             states[index].summary = "\(reason)，未能确认结果。"
@@ -375,6 +396,19 @@ final class ParallelRunController {
             states[index].lines.append(PLine(kind: .err, text: "连接失败：\(reason)"))
             states[index].summary = "无法连接到该服务器：\(reason)。命令未执行。"
         }
+    }
+
+    /// 命令跑起来了但被看门狗判超时并终止：把判定前的输出和原因摆出来。
+    private func markStalled(at index: Int, stall: ParallelExecutionStalled, streamed: Bool) {
+        states[index].status = .failed
+        states[index].tone = .failed
+        states[index].exitCode = nil
+        if !streamed, !stall.stalled.partial.output.isEmpty {
+            states[index].lines.append(contentsOf: Self.outputLines(from: stall.stalled.partial, failed: false))
+        }
+        states[index].lines.append(PLine(kind: .err, text: "执行超时：" + stall.message))
+        states[index].summary = "执行超时：" + stall.message
+            + (stall.stalled.kill == .signalled ? "远端状态可能停在半截，请人工复核。" : "")
     }
 
     private func finishServer() {
@@ -455,10 +489,10 @@ final class ParallelRunController {
         你可以用 run_command 工具逐条执行 shell 命令；每条命令我会把真实的标准输出/错误与退出码回给你。
         请像人一样按需多步操作：例如更新代码后若需要重启服务就再执行重启，改完配置后做一次校验或健康检查。
         命令要保守、最小必要，避免破坏性操作（不要 rm -rf、不要动与目标无关的服务）。
-        每条命令执行上限约 \(Self.timeoutSeconds) 秒，超时会被中止——但远端进程通常仍在后台继续。所以：
+        每条命令若连续约 \(Self.idleSeconds) 秒没有任何输出，会被判定卡住并**终止**（连同它启动的子进程），总时长上限约 \(Self.maxDurationSeconds) 秒。一直有输出的命令跑多久都行，所以长操作尽量带进度或 -v 输出；本身长时间不出声的命令要让它吐进度，或拆小。所以：
         - **重启必须是最后一步**：发出 reboot 等会让 SSH 立即断开，之后任何命令都会报错。把其它操作做完后再重启，且发出重启就立刻给结论（status=ok）——不要在重启后再等待或重连验证。
         - 绝不要用无限等待循环（while…sleep、tail -f、死等锁释放）——会把本台一直拖到超时。
-        - dpkg/apt 锁被占用时最多有界等一次，仍不行就给 failed 结论说明建议稍后复核。
+        - dpkg/apt 锁被占用时最多有界等一次，仍不行就给 failed 结论说明建议稍后复核；若某条被超时终止导致 dpkg 半完成，用 `dpkg --configure -a` 收尾。
         当目标达成、或确认无法自动修复时，停止调用工具，只输出一个 JSON 作为结论：
         {"status":"ok|failed","summary":"不超过2句中文白话结论"}
         其中 ok=目标已达成，failed=无法达成（说明原因与人工建议）。只判成功或失败。
@@ -478,7 +512,9 @@ final class ParallelRunController {
         }
     }
     private func exitText(_ code: Int?) -> String { code.map(String.init) ?? "未知" }
-    nonisolated static var timeoutSeconds: Int { Int(perServerTimeout.components.seconds) }
+    nonisolated static var idleSeconds: Int { Int(SupervisedExec.interactiveIdle.components.seconds) }
+    nonisolated static var maxDurationSeconds: Int { Int(SupervisedExec.interactiveMaxDuration.components.seconds) }
+    nonisolated static var backstopSeconds: Int { Int(backstopTimeout.components.seconds) }
     private nonisolated static func connectionReason(_ text: String?) -> String {
         let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? "无法建立连接" : t
@@ -506,9 +542,17 @@ final class ParallelRunController {
     nonisolated struct ExecOutcome: Sendable {
         let result: CommandResult?
         let errorText: String?
+        /// 外层兜底计时器到点（会话自己挂死）。
         let timedOut: Bool
+        /// 会话里的看门狗判超时（静默太久 / 超总时长 / 取消）。
+        var stall: ParallelExecutionStalled?
     }
-    private enum GateOutcome: Sendable { case completed(CommandResult?); case failed(String); case timedOut }
+    private enum GateOutcome: Sendable {
+        case completed(CommandResult?)
+        case failed(String)
+        case stalled(ParallelExecutionStalled)
+        case timedOut
+    }
 
     /// 会话建不起来（`setupErrorText != nil`）等价于抽协议前的 `executor == nil`：
     /// 不执行、`errorText` 留空，交 `markUnreachable` 用 `setupErrorText` 兜底。
@@ -522,10 +566,11 @@ final class ParallelRunController {
         let gate = OneShotGate()
         let work = Task<Void, Never> {
             do { await gate.deliver(.completed(try await session.run(command, onLines: onLines))) }
+            catch let stall as ParallelExecutionStalled { await gate.deliver(.stalled(stall)) }
             catch { await gate.deliver(.failed(error.localizedDescription)) }
         }
         let timer = Task<Void, Never> {
-            try? await Task.sleep(for: perServerTimeout)
+            try? await Task.sleep(for: backstopTimeout)
             await gate.deliver(.timedOut)
         }
         // 取消传到会话（生产从不取消这一层，行为不变；`cancel()` 与探针拆窗靠它真的停下来）。
@@ -538,6 +583,7 @@ final class ParallelRunController {
         switch outcome {
         case .completed(let r): return ExecOutcome(result: r, errorText: nil, timedOut: false)
         case .failed(let msg):  return ExecOutcome(result: nil, errorText: msg, timedOut: false)
+        case .stalled(let s):   return ExecOutcome(result: nil, errorText: nil, timedOut: false, stall: s)
         case .timedOut:         return ExecOutcome(result: nil, errorText: nil, timedOut: true)
         }
     }

@@ -29,6 +29,41 @@ nonisolated final class ControlServer: @unchecked Sendable {
         let generation: UInt64
         var phase: ClientPhase
         var handlerTimer: DispatchSourceTimer?
+        /// 上一次往这条连接写东西（心跳 / 进度行）的时刻（uptime ns）。只在 `.handling`
+        /// 阶段有意义。
+        var lastHeartbeat: UInt64 = 0
+        /// 处理期间还没写出去的字节（进度行写了一半）。收尾时先把它写完再写响应，
+        /// 行才不会被响应截断。
+        var pendingOutbound = Data()
+        /// handler 的任务：客户端断开（写心跳 / 进度撞 EPIPE）或 `stop()` 时取消它 ——
+        /// 没人要结果的传输不该继续占着带宽和 SFTP 通道。
+        var handlerTask: Task<Void, Never>?
+        /// 占的是传输槽位（`sftp-get` / `sftp-put`），见 `maxTransferClients`。
+        var isTransfer = false
+    }
+
+    private enum Admission {
+        case started
+        /// 连接已经不是这一代的了（stop / 重启），不回响应直接收尾。
+        case stale
+        /// 传输槽位满了：回 `server_busy`，客户端退避重试。
+        case transferBusy
+    }
+
+    /// handler 最近一次「有进展」的时刻。handler 通过 `IOActivity.touch()` 打点
+    /// （SFTP 每个回包、`run` 看门狗的每一拍），监督定时器据此判静默。
+    private final class ProgressClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last = DispatchTime.now().uptimeNanoseconds
+
+        func touch() {
+            let now = DispatchTime.now().uptimeNanoseconds
+            lock.withLock { last = now }
+        }
+
+        func idleNanoseconds(now: UInt64) -> UInt64 {
+            lock.withLock { now > last ? now - last : 0 }
+        }
     }
 
     static let shared = ControlServer()
@@ -48,9 +83,20 @@ nonisolated final class ControlServer: @unchecked Sendable {
         attributes: .concurrent
     )
     private let stateLock = NSLock()
+    /// 同时持有的连接总数（含还在读请求的）。超了在 accept 时就回 `server_busy`。
     private let maxActiveClients: Int
+    /// 其中传输请求最多占多少。**剩下的永远留给 `run` / `ping` / `sftp-ls` 这类短请求**：
+    /// 并行分片传输一次就要好几条连接，与短请求共用一个池子的话，两三个下载就能把
+    /// `run` 挤成 `server_busy`。传输槽位的上限也是内存上限：一片在途约 30 MB
+    /// （8 MiB 原文 + base64 + JSON 编码的拷贝）。
+    private let maxTransferClients: Int
     private let ioTimeoutNanoseconds: UInt64
-    private let handlerTimeoutNanoseconds: UInt64
+    private let handlerIdleTimeoutNanoseconds: UInt64
+    private let heartbeatIntervalNanoseconds: UInt64
+    /// 监督定时器的拍子：进度间隔、心跳间隔、静默预算 1/4 三者取小。
+    private let supervisionTickNanoseconds: UInt64
+    /// 传输进度行最快多久发一行。
+    private static let progressInterval: TimeInterval = 0.5
     private let requestHandler: RequestHandler
     private let acceptConnection: AcceptConnection
     private var listenFD: Int32 = -1
@@ -61,11 +107,17 @@ nonisolated final class ControlServer: @unchecked Sendable {
 
     init(
         socketURL: URL = ControlProtocol.socketURL,
-        maxActiveClients: Int = 8,
+        maxActiveClients: Int = ControlProtocol.maxControlClients + ControlProtocol.maxTransferClients,
+        maxTransferClients: Int = ControlProtocol.maxTransferClients,
         ioTimeout: TimeInterval = 5,
-        // A schema sweep or a slow query legitimately takes a while; the deadline
-        // only exists so a wedged handler cannot pin the FD forever.
-        handlerTimeout: TimeInterval = 120,
+        // 静默预算，不是总时长：handler 只要还在 `IOActivity.touch()`（SFTP 回包、
+        // `run` 看门狗）就一直续期；连续这么久没有任何进展才判它卡死、回
+        // `handler_timeout` 放掉 FD。`run` 的超时由它自己的看门狗管，不靠这里。
+        handlerIdleTimeout: TimeInterval = 120,
+        // 处理期间每隔这么久往连接里写一个 `\n`：客户端据此区分「还在干活」与
+        // 「uTerm 卡死」，自己的 socket 超时就能按静默设，而不必猜最长命令要跑多久。
+        // JSON 解析会跳过前导空白，所以心跳不影响读响应。
+        heartbeatInterval: TimeInterval = 10,
         requestHandler: @escaping RequestHandler = { request in
             await ControlHandler.shared.handle(request)
         },
@@ -75,8 +127,14 @@ nonisolated final class ControlServer: @unchecked Sendable {
     ) {
         self.socketURL = socketURL
         self.maxActiveClients = max(1, maxActiveClients)
+        self.maxTransferClients = max(1, min(maxTransferClients, self.maxActiveClients))
         self.ioTimeoutNanoseconds = UInt64(max(0.05, ioTimeout) * 1_000_000_000)
-        self.handlerTimeoutNanoseconds = UInt64(max(0.05, handlerTimeout) * 1_000_000_000)
+        let idle = max(0.05, handlerIdleTimeout)
+        let heartbeat = max(0.01, heartbeatInterval)
+        self.handlerIdleTimeoutNanoseconds = UInt64(idle * 1_000_000_000)
+        self.heartbeatIntervalNanoseconds = UInt64(heartbeat * 1_000_000_000)
+        self.supervisionTickNanoseconds = UInt64(
+            max(0.01, min(Self.progressInterval, heartbeat, idle / 4)) * 1_000_000_000)
         self.requestHandler = requestHandler
         self.acceptConnection = acceptConnection
     }
@@ -120,6 +178,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
 
     func stop() {
         var handlerTimers: [DispatchSourceTimer] = []
+        var handlerTasks: [Task<Void, Never>] = []
         stateLock.lock()
         running = false
         generation &+= 1
@@ -137,6 +196,9 @@ nonisolated final class ControlServer: @unchecked Sendable {
                 if let handlerTimer = client.handlerTimer {
                     handlerTimers.append(handlerTimer)
                 }
+                if let handlerTask = client.handlerTask {
+                    handlerTasks.append(handlerTask)
+                }
                 activeClients.removeValue(forKey: clientFD)
                 Darwin.close(clientFD)
             }
@@ -153,6 +215,10 @@ nonisolated final class ControlServer: @unchecked Sendable {
         stateLock.unlock()
         for handlerTimer in handlerTimers {
             handlerTimer.cancel()
+        }
+        // 主开关关了 / app 退出：没人会收到结果了，别让传输继续占着 SFTP 通道。
+        for handlerTask in handlerTasks {
+            handlerTask.cancel()
         }
     }
 
@@ -356,7 +422,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         let response = ControlResponse.failure(
             id: nil,
             code: .server_busy,
-            message: "uTerm 命令行接口并发已满（上限 \(maxActiveClients)），稍后重试"
+            message: "uTerm 命令行接口并发已满（上限 \(maxActiveClients) 条连接），稍后重试"
         )
         clientQueue.async { [self] in
             writeResponse(response, to: clientFD)
@@ -389,9 +455,16 @@ nonisolated final class ControlServer: @unchecked Sendable {
         generation runGeneration: UInt64
     ) {
         let request: ControlRequest
+        let context: ControlRequestContext
         do {
-            let data = try readRequest(from: clientFD)
-            request = try ControlProtocol.decodeRequest(data)
+            let (data, passed) = try readRequest(from: clientFD)
+            context = ControlRequestContext(fileDescriptors: passed)
+            do {
+                request = try ControlProtocol.decodeRequest(data)
+            } catch {
+                context.closeUntaken()
+                throw error
+            }
         } catch let error as ControlSocketError {
             writeAndFinish(
                 response: .failure(id: nil, code: error.code, message: error.localizedDescription),
@@ -411,30 +484,44 @@ nonisolated final class ControlServer: @unchecked Sendable {
         // stop() may have shut this reading connection down while decode was in
         // progress. Do not launch a new action for a stale generation; the reader
         // still owns the final close in that case.
+        let progress = ProgressClock()
         let handlerTimer = DispatchSource.makeTimerSource(queue: clientQueue)
-        let handlerDeadline = DispatchTime(
-            uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds &+ handlerTimeoutNanoseconds
-        )
-        handlerTimer.schedule(deadline: handlerDeadline)
+        let tick = DispatchTimeInterval.nanoseconds(Int(clamping: supervisionTickNanoseconds))
+        handlerTimer.schedule(deadline: .now() + tick, repeating: tick)
         handlerTimer.setEventHandler { [weak self, requestID = request.id] in
-            self?.writeAndFinish(
+            self?.superviseHandler(
+                clientFD: clientFD,
+                token: token,
+                requestID: requestID,
+                progress: progress,
+                context: context
+            )
+        }
+
+        switch beginHandling(
+            clientFD: clientFD,
+            token: token,
+            generation: runGeneration,
+            handlerTimer: handlerTimer,
+            isTransfer: ControlProtocol.isTransfer(request.action)
+        ) {
+        case .started:
+            break
+        case .stale:
+            context.closeUntaken()
+            finishWithoutResponse(clientFD: clientFD, token: token)
+            return
+        case .transferBusy:
+            context.closeUntaken()
+            writeAndFinish(
                 response: .failure(
-                    id: requestID,
-                    code: "handler_timeout",
-                    message: "IPC operation did not complete before the handler deadline"
+                    id: request.id,
+                    code: .server_busy,
+                    message: "uTerm 的传输并发已满（上限 \(maxTransferClients) 个），稍后重试"
                 ),
                 clientFD: clientFD,
                 token: token
             )
-        }
-
-        guard beginHandling(
-            clientFD: clientFD,
-            token: token,
-            generation: runGeneration,
-            handlerTimer: handlerTimer
-        ) else {
-            finishWithoutResponse(clientFD: clientFD, token: token)
             return
         }
 
@@ -442,20 +529,37 @@ nonisolated final class ControlServer: @unchecked Sendable {
         // and after it stays on clientQueue. A timeout does not cancel work that
         // may already be changing database state; it only releases the IPC
         // response/FD. The connection token discards the late response.
-        Task { @MainActor [self] in
-            let response = await requestHandler(request)
+        let task = Task { @MainActor [self] in
+            let response = await ControlRequestContext.$current.withValue(context) {
+                await IOActivity.$pulse.withValue({ progress.touch() }) {
+                    await requestHandler(request)
+                }
+            }
+            // handler 真正返回了才关没被取走的 fd（超时回了 `handler_timeout` 也不关：
+            // 仍在跑的传输还在用它）。
+            context.closeUntaken()
             clientQueue.async { [self] in
-                writeAndFinish(response: response, clientFD: clientFD, token: token)
+                writeAndFinish(response: response, clientFD: clientFD, token: token, context: context)
             }
         }
+        attach(task, clientFD: clientFD, token: token)
+    }
+
+    private func attach(_ task: Task<Void, Never>, clientFD: Int32, token: UInt64) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard var client = activeClients[clientFD], client.token == token else { return }
+        client.handlerTask = task
+        activeClients[clientFD] = client
     }
 
     private func beginHandling(
         clientFD: Int32,
         token: UInt64,
         generation runGeneration: UInt64,
-        handlerTimer: DispatchSourceTimer
-    ) -> Bool {
+        handlerTimer: DispatchSourceTimer,
+        isTransfer: Bool
+    ) -> Admission {
         stateLock.lock()
         guard running,
               generation == runGeneration,
@@ -469,77 +573,212 @@ nonisolated final class ControlServer: @unchecked Sendable {
             // the connection became stale before the timer was installed.
             handlerTimer.resume()
             handlerTimer.cancel()
-            return false
+            return .stale
         }
+        // 传输槽位按「已经在处理 / 在回响应的传输」计：还在读请求的不算（读完才知道是什么）。
+        if isTransfer,
+           activeClients.values.filter(\.isTransfer).count >= maxTransferClients {
+            stateLock.unlock()
+            handlerTimer.resume()
+            handlerTimer.cancel()
+            return .transferBusy
+        }
+        client.isTransfer = isTransfer
         client.phase = .handling
         client.handlerTimer = handlerTimer
+        client.lastHeartbeat = DispatchTime.now().uptimeNanoseconds
         activeClients[clientFD] = client
         // Resume while holding stateLock so stop() can never observe and cancel
         // a still-suspended source.
         handlerTimer.resume()
         stateLock.unlock()
-        return true
+        return .started
     }
 
-    private func readRequest(from fd: Int32) throws -> Data {
+    /// 监督定时器的每一拍：静默超预算 → `handler_timeout`；否则到点写心跳。
+    private func superviseHandler(
+        clientFD: Int32,
+        token: UInt64,
+        requestID: String?,
+        progress: ProgressClock,
+        context: ControlRequestContext
+    ) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let idle = progress.idleNanoseconds(now: now)
+        guard idle < handlerIdleTimeoutNanoseconds else {
+            writeAndFinish(
+                response: .failure(
+                    id: requestID,
+                    code: "handler_timeout",
+                    message: "IPC operation made no progress for \(idle / 1_000_000_000) s"
+                ),
+                clientFD: clientFD,
+                token: token,
+                context: context
+            )
+            return
+        }
+        flushOutbound(clientFD: clientFD, token: token, now: now, context: context)
+    }
+
+    /// 处理期间往连接里写东西：先把上一拍没写完的续上；空了就取一行新进度；没有进度且
+    /// 到了心跳间隔就写一个 `\n`。
+    ///
+    /// **整个写在 `stateLock` 里做**：`.handling` 阶段没有别的 socket 属主，而
+    /// `claimCompletion`（转去写响应）与 `stop()`（直接 close 处理中的 FD）都要先拿
+    /// 这把锁 —— 持锁写就保证这些字节既不会插进响应中间，也不会写到一个刚被关掉、
+    /// 号码又被复用的 FD 上。`MSG_DONTWAIT`，不阻塞：缓冲区满（客户端没在读）就只写
+    /// 进去一部分，剩下的留在 `pendingOutbound` 下一拍再写。撞上 EPIPE（客户端走了，
+    /// 已设 SO_NOSIGPIPE）就取消 handler。
+    private func flushOutbound(clientFD: Int32, token: UInt64, now: UInt64, context: ControlRequestContext) {
+        var abandoned: Task<Void, Never>?
+        stateLock.lock()
+        guard var client = activeClients[clientFD],
+              client.token == token,
+              case .handling = client.phase
+        else {
+            stateLock.unlock()
+            return
+        }
+        if client.pendingOutbound.isEmpty {
+            if let line = context.drainProgress() {
+                client.pendingOutbound = line
+            } else if now &- client.lastHeartbeat >= heartbeatIntervalNanoseconds {
+                client.pendingOutbound = Data([UInt8(ascii: "\n")])
+            }
+        }
+        if !client.pendingOutbound.isEmpty {
+            let sent = client.pendingOutbound.withUnsafeBytes {
+                Darwin.send(clientFD, $0.baseAddress, $0.count, MSG_DONTWAIT)
+            }
+            if sent > 0 {
+                client.pendingOutbound = client.pendingOutbound.dropFirst(sent)
+                client.lastHeartbeat = now
+            } else if sent < 0, errno == EPIPE || errno == ECONNRESET {
+                abandoned = client.handlerTask
+                client.handlerTask = nil
+            }
+        }
+        activeClients[clientFD] = client
+        stateLock.unlock()
+        abandoned?.cancel()
+    }
+
+    /// 读一条请求，连同 `SCM_RIGHTS` 随附的 fd 一起收（`sftp-get` / `sftp-put` 把本地文件
+    /// 交过来）。失败时已收到的 fd 在这里关掉。
+    private func readRequest(from fd: Int32) throws -> (Data, [Int32]) {
         // The read budget grows with what has already arrived, mirroring the
-        // write path: `maxRequestBytes` is sized for an 8 MiB base64 `sftp-put`,
-        // and a fixed 5 s budget would cut those off on a loaded machine. The
-        // total stays bounded because the body itself is capped below.
+        // write path. The total stays bounded because the body itself is capped below.
         var deadline = makeDeadline()
         var data = Data()
-        // 8 KiB 的收包缓冲对小请求够用，但一条 11 MB 上限的 `sftp-put` 要 ~1400 次
-        // `recv`；64 KiB 把 syscall 数压到 ~1/8，而每条连接只多占 56 KiB 栈外内存
-        // （并发连接数由 `maxActiveClients` 封顶）。
+        var passed: [Int32] = []
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        // 预留一份「够装下绝大多数请求」的容量，省掉小请求的反复 realloc；真正的大
-        // 请求仍靠 Data 自己的几何扩容长上去，不在这里按 `maxRequestBytes`（~11 MB）
-        // 一把预分配 —— 那会让每条连接都先吃满上限的内存。
-        data.reserveCapacity(256 * 1024)
-        while true {
-            try waitForIO(
-                fd: fd,
-                events: Int16(POLLIN),
-                deadline: deadline,
-                timeoutError: .requestTimedOut
-            )
-            let count = Darwin.recv(fd, &buffer, buffer.count, MSG_DONTWAIT)
-            if count == 0 { break }
-            if count < 0 {
-                if errno == EINTR { continue }
-                if errno == EAGAIN || errno == EWOULDBLOCK { continue }
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        // 装得下 `maxPassedFDs` 个 fd 的控制缓冲（cmsghdr 12 字节 + 每个 fd 4 字节，4 对齐）。
+        var control = [UInt8](repeating: 0, count: 12 + 4 * Self.maxPassedFDs)
+        do {
+            while true {
+                try waitForIO(
+                    fd: fd,
+                    events: Int16(POLLIN),
+                    deadline: deadline,
+                    timeoutError: .requestTimedOut
+                )
+                var flags: Int32 = 0
+                var controlLength = 0
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    control.withUnsafeMutableBytes { controlBytes in
+                        var vector = iovec(iov_base: bytes.baseAddress, iov_len: bytes.count)
+                        return withUnsafeMutablePointer(to: &vector) { vectorPointer in
+                            var message = msghdr()
+                            message.msg_iov = vectorPointer
+                            message.msg_iovlen = 1
+                            message.msg_control = controlBytes.baseAddress
+                            message.msg_controllen = socklen_t(controlBytes.count)
+                            let received = Darwin.recvmsg(fd, &message, MSG_DONTWAIT)
+                            flags = message.msg_flags
+                            controlLength = Int(message.msg_controllen)
+                            return received
+                        }
+                    }
+                }
+                if controlLength > 0 {
+                    passed += control.withUnsafeBytes {
+                        Self.receivedFileDescriptors(UnsafeRawBufferPointer(rebasing: $0.prefix(controlLength)))
+                    }
+                }
+                if flags & MSG_CTRUNC != 0 { throw ControlSocketError.tooManyDescriptors }
+                if passed.count > Self.maxPassedFDs { throw ControlSocketError.tooManyDescriptors }
+                if count == 0 { break }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    if errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                data.append(contentsOf: buffer[0..<count])
+                if data.count > ControlProtocol.maxRequestBytes {
+                    throw ControlSocketError.requestTooLarge
+                }
+                deadline = max(deadline, makeDeadline(bytes: data.count))
             }
-            data.append(buffer, count: count)
-            if data.count > ControlProtocol.maxRequestBytes {
-                throw ControlSocketError.requestTooLarge
-            }
-            deadline = max(deadline, makeDeadline(bytes: data.count))
+            guard !data.isEmpty else { throw ControlSocketError.emptyRequest }
+            return (data, passed)
+        } catch {
+            for descriptor in passed { Darwin.close(descriptor) }
+            throw error
         }
-        guard !data.isEmpty else { throw ControlSocketError.emptyRequest }
-        return data
+    }
+
+    /// 一条请求最多随附几个 fd（现在只用得到 1 个：本地文件）。
+    private static let maxPassedFDs = 2
+
+    /// 从 `recvmsg` 的控制缓冲里抠出 `SCM_RIGHTS` 的 fd。Darwin 的 `cmsghdr` 是 12 字节，
+    /// `CMSG_DATA` 紧跟其后（4 字节对齐）。收到的 fd 一律设 `FD_CLOEXEC`。
+    private static func receivedFileDescriptors(_ control: UnsafeRawBufferPointer) -> [Int32] {
+        let headerSize = MemoryLayout<cmsghdr>.size
+        var result: [Int32] = []
+        var offset = 0
+        while offset + headerSize <= control.count {
+            let header = control.loadUnaligned(fromByteOffset: offset, as: cmsghdr.self)
+            let length = Int(header.cmsg_len)
+            guard length >= headerSize, offset + length <= control.count else { break }
+            if header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_RIGHTS {
+                let count = (length - headerSize) / MemoryLayout<Int32>.size
+                for index in 0..<count {
+                    let descriptor = control.loadUnaligned(
+                        fromByteOffset: offset + headerSize + index * MemoryLayout<Int32>.size,
+                        as: Int32.self)
+                    _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+                    result.append(descriptor)
+                }
+            }
+            offset += (length + 3) & ~3
+        }
+        return result
     }
 
     private func writeAndFinish(
         response: ControlResponse,
         clientFD: Int32,
-        token: UInt64
+        token: UInt64,
+        context: ControlRequestContext? = nil
     ) {
         // Handler completion, handler timeout, protocol error, and stop can all
         // race. Exactly one path may claim send/close ownership for this token.
-        guard claimCompletion(clientFD: clientFD, token: token) else { return }
+        guard var prefix = claimCompletion(clientFD: clientFD, token: token) else { return }
         defer { finish(clientFD: clientFD, token: token) }
-        writeResponse(response, to: clientFD)
+        // 先把写了一半的进度行写完，再补上最后一批已完成段 —— 客户端的续传账不能缺最后几段。
+        if let tail = context?.drainProgress() { prefix.append(tail) }
+        writeResponse(response, to: clientFD, prefix: prefix)
     }
 
     /// 只负责把一条响应编码后写到 fd 上：不碰 `activeClients`、不关 fd。归属与关闭
     /// 由调用方决定（`writeAndFinish` 靠 token 认领，`rejectAsBusy` 独占未登记的 fd）。
-    private func writeResponse(_ response: ControlResponse, to clientFD: Int32) {
-        let data: Data
+    private func writeResponse(_ response: ControlResponse, to clientFD: Int32, prefix: Data = Data()) {
+        var data = prefix
         do {
-            data = try ControlProtocol.encode(response)
+            data.append(try ControlProtocol.encode(response))
         } catch {
-            data = Data("{\"ok\":false,\"code\":\"encode_failed\",\"message\":\"failed to encode response\"}\n".utf8)
+            data.append(Data("{\"ok\":false,\"code\":\"encode_failed\",\"message\":\"failed to encode response\"}\n".utf8))
         }
 
         // A large result set can take longer than one I/O deadline to drain into
@@ -577,31 +816,36 @@ nonisolated final class ControlServer: @unchecked Sendable {
         }
     }
 
-    private func claimCompletion(clientFD: Int32, token: UInt64) -> Bool {
+    /// 认领这条连接的收尾权。认领到返回处理期间还没写出去的字节（可能为空），没认领到
+    /// 返回 nil。
+    private func claimCompletion(clientFD: Int32, token: UInt64) -> Data? {
         var handlerTimer: DispatchSourceTimer?
         stateLock.lock()
         guard var client = activeClients[clientFD], client.token == token else {
             stateLock.unlock()
-            return false
+            return nil
         }
         guard case .completing = client.phase else {
             handlerTimer = client.handlerTimer
             client.handlerTimer = nil
             client.phase = .completing
+            let pending = client.pendingOutbound
+            client.pendingOutbound = Data()
+            client.handlerTask = nil
             activeClients[clientFD] = client
             stateLock.unlock()
             handlerTimer?.cancel()
-            return true
+            return pending
         }
         stateLock.unlock()
-        return false
+        return nil
     }
 
     /// Used only by the current socket worker after stop invalidated its
     /// generation. Claiming first preserves the same single-close invariant as
     /// response paths without attempting a write to the shutdown peer.
     private func finishWithoutResponse(clientFD: Int32, token: UInt64) {
-        guard claimCompletion(clientFD: clientFD, token: token) else { return }
+        guard claimCompletion(clientFD: clientFD, token: token) != nil else { return }
         finish(clientFD: clientFD, token: token)
     }
 
@@ -686,6 +930,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         case requestTooLarge
         case requestTimedOut
         case responseTimedOut
+        case tooManyDescriptors
 
         var code: String {
             switch self {
@@ -695,6 +940,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
             case .requestTooLarge: return "request_too_large"
             case .requestTimedOut: return "request_timeout"
             case .responseTimedOut: return "response_timeout"
+            case .tooManyDescriptors: return "invalid_request"
             }
         }
 
@@ -712,6 +958,8 @@ nonisolated final class ControlServer: @unchecked Sendable {
                 return "IPC request did not complete before the I/O deadline"
             case .responseTimedOut:
                 return "IPC response could not be written before the I/O deadline"
+            case .tooManyDescriptors:
+                return "IPC request carried more file descriptors than allowed"
             }
         }
     }

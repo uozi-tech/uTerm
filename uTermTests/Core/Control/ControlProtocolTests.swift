@@ -21,10 +21,9 @@ final class ControlProtocolTests: XCTestCase {
             path: "/etc/hosts",
             newPath: "/etc/hosts.bak",
             mode: "644",
-            contentBase64: "aGVsbG8=",
-            offset: 8_388_608,
-            length: 65_536,
             force: true,
+            ranges: [ControlByteRange(offset: 8_388_608, length: 65_536)],
+            parallel: 12,
             rule: "tunnel-1",
             terminal: "AB12",
             lines: 40,
@@ -38,15 +37,28 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(decoded, request)
     }
 
-    /// 分片传输的三个字段：客户端只发这几个键时也要能解出来（缺省全是 nil）。
-    func testRequestDecodesTransferRangeFields() throws {
-        let data = Data(#"{"action":"sftp-put","path":"/tmp/x","offset":33554432,"mode":"write"}"#.utf8)
+    /// 续传的区间表与并行数：线上形状就是 utermctl 发的那样（缺省都是 nil）。
+    func testRequestDecodesTransferFields() throws {
+        let data = Data(#"{"action":"sftp-get","path":"/tmp/x","parallel":4,"ranges":[{"offset":33554432,"length":1024}]}"#.utf8)
         let decoded = try ControlProtocol.decodeRequest(data)
-        XCTAssertEqual(decoded.action, .sftpPut)
-        XCTAssertEqual(decoded.offset, 33_554_432)
-        XCTAssertEqual(decoded.mode, "write")
-        XCTAssertNil(decoded.length)
+        XCTAssertEqual(decoded.action, .sftpGet)
+        XCTAssertEqual(decoded.parallel, 4)
+        XCTAssertEqual(decoded.ranges, [ControlByteRange(offset: 33_554_432, length: 1024)])
         XCTAssertNil(decoded.force)
+    }
+
+    /// 进度行的线上形状：客户端认 `event == "progress"`，续传账靠 `done`。
+    func testProgressEventWireShape() throws {
+        let event = ControlProgressEvent(bytes: 10, totalBytes: 100,
+                                         done: [ControlByteRange(offset: 0, length: 10)])
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any])
+        XCTAssertEqual(object["event"] as? String, "progress")
+        XCTAssertEqual(object["bytes"] as? Int, 10)
+        XCTAssertEqual(object["totalBytes"] as? Int, 100)
+        let done = try XCTUnwrap(object["done"] as? [[String: Any]])
+        XCTAssertEqual(done.first?["offset"] as? Int, 0)
+        XCTAssertEqual(done.first?["length"] as? Int, 10)
     }
 
     /// `sftp-put` 的三档写入模式与 `SFTPWriteMode` 的 rawValue 逐字一致 ——
@@ -260,20 +272,21 @@ final class ControlProtocolTests: XCTestCase {
 
     // MARK: 上限常量
 
-    /// `sftp-put` 的内容走 base64（膨胀 4/3），整条请求还得装得下 JSON 外壳。
-    /// 请求上限小于这个数时，大文件上传会在**发送途中**被服务端拒掉、连接被关，
-    /// 客户端只看得到 BrokenPipe —— 这条断言就是那次事故的闸。
-    func testRequestLimitFitsABase64EncodedMaximumFile() {
-        XCTAssertGreaterThanOrEqual(
-            ControlProtocol.maxRequestBytes,
-            ControlProtocol.maxFileBytes * 4 / 3,
-            "请求上限装不下 base64 后的 maxFileBytes，8 MiB 的 sftp-put 会在半路被拒"
-        )
-        XCTAssertGreaterThan(
-            ControlProtocol.maxRequestBytes,
-            ControlProtocol.maxFileBytes * 4 / 3,
-            "还要给 JSON 外壳（action / path / id / 转义）留富余"
-        )
+    /// 文件内容不再走请求体，但续传的区间表可能很长（碎片化的失败）：请求上限要装得下
+    /// 上万个区间，否则 `--resume` 会在发送途中被拒。
+    func testRequestLimitFitsALongResumeRangeList() throws {
+        let ranges = (0..<10_000).map { ControlByteRange(offset: Int64($0) * 16_000_000, length: 8_388_608) }
+        let request = ControlRequest(action: .sftpGet, host: "h", path: "/x", ranges: ranges)
+        XCTAssertLessThan(try JSONEncoder().encode(request).count, ControlProtocol.maxRequestBytes)
+    }
+
+    /// 并行通道数：默认在封顶以内，封顶不超过每主机池子。
+    func testTransferChannelLimitsAreConsistent() {
+        XCTAssertLessThanOrEqual(ControlProtocol.defaultTransferChannels, ControlProtocol.maxTransferChannels)
+        XCTAssertLessThanOrEqual(ControlProtocol.maxTransferChannels, ControlConnectionPool.maxSFTPChannelsPerHost)
+        XCTAssertTrue(ControlProtocol.isTransfer(.sftpGet))
+        XCTAssertTrue(ControlProtocol.isTransfer(.sftpPut))
+        XCTAssertFalse(ControlProtocol.isTransfer(.sftpCat))
     }
 
     /// 错误码总表：新增码必须列进来（客户端按 rawValue 做退出码映射）。
@@ -285,7 +298,7 @@ final class ControlProtocolTests: XCTestCase {
     func testLimitsAreOrdered() {
         XCTAssertLessThan(ControlProtocol.defaultRunTimeoutSeconds, ControlProtocol.maxRunTimeoutSeconds)
         XCTAssertLessThan(ControlProtocol.defaultMaxBytes, ControlProtocol.maxOutputBytes)
-        XCTAssertLessThanOrEqual(ControlProtocol.maxCatBytes, ControlProtocol.maxFileBytes)
+        XCTAssertLessThanOrEqual(ControlProtocol.maxCatBytes, ControlProtocol.maxRequestBytes)
         XCTAssertGreaterThan(ControlProtocol.maxParallelHosts, 0)
         XCTAssertGreaterThan(ControlProtocol.defaultScreenLines, 0)
     }

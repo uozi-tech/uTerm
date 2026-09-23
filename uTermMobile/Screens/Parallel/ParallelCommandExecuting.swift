@@ -24,6 +24,8 @@ protocol ParallelCommandExecuting {
 ///
 /// - **可失败**：`run` 抛错 = 执行 / 连接失败，错误文本进 `ExecOutcome.errorText`；
 ///   建会话就失败的（认证材料解析不出来）走 `setupErrorText`。
+/// - **可超时**：真实会话在 `SupervisedExec` 看门狗下跑，连续太久没输出 / 超总时长就终止
+///   远端进程组并抛 `ParallelExecutionStalled`，控制器按「执行超时」收尾（不是连不上）。
 /// - **可取消**：`run` 应当尊重 `Task.isCancelled`（真实实现靠 NIO 的取消传播，
 ///   假实现靠 `Task.sleep` 抛 `CancellationError`）。
 /// - **按节拍回吐行**：`onLines` 在命令**仍在执行**时把已产出的行回吐给调用方。
@@ -79,11 +81,11 @@ nonisolated struct SSHParallelSession: ParallelExecutionSession {
     let connection: ReusableSSHConnection?
     let setupErrorText: String?
 
-    /// 真实 SSH 只有命令结束才拿得到完整输出，所以**不吐中间行**，`onLines` 原样忽略。
+    /// 真实 SSH 在看门狗下跑、结束时一次交付，所以**不吐中间行**，`onLines` 原样忽略。
     func run(_ command: String,
              onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
         guard let executor else { throw ParallelExecutionUnavailable() }
-        return try await executor.run(command)
+        return try await executor.runSupervised(command)
     }
 
     func takeHostKeyChallenge() -> HostKeyChallenge? { hostKeyChallenges?.take() }
@@ -94,6 +96,29 @@ nonisolated struct SSHParallelSession: ParallelExecutionSession {
 /// 会话不可用（`setupErrorText != nil` 时控制器不会走到 `run`，此错误只作兜底）。
 struct ParallelExecutionUnavailable: Error {}
 
+/// 看门狗判定超时（静默太久 / 超总时长 / 被取消）。带着判定前的输出与一句话原因。
+nonisolated struct ParallelExecutionStalled: Error, Sendable {
+    let stalled: SupervisedExec.Stalled
+    let message: String
+}
+
+extension SSHCommandExecutor {
+    /// 在 `SupervisedExec` 看门狗下跑：正常结束返回结果；执行失败抛原错误（控制器取
+    /// `localizedDescription` 当原因）；超时抛 `ParallelExecutionStalled`。
+    nonisolated func runSupervised(_ command: String) async throws -> CommandResult {
+        switch await SupervisedExec.runInteractive(command, on: self) {
+        case .completed(let result):
+            return result
+        case .failed(let failure):
+            throw failure.underlying
+        case .stalled(let stalled):
+            throw ParallelExecutionStalled(
+                stalled: stalled,
+                message: stalled.message(limits: SupervisedExec.interactiveLimits(for: self)))
+        }
+    }
+}
+
 /// 裸执行器也能当会话使：无 host-key sink、无复用连接。
 /// 让「真实 `SSHCommandExecutor` 遵循本协议」这件事成立，测试与将来的一次性连接路径可直接用。
 extension SSHCommandExecutor: ParallelExecutionSession {
@@ -101,7 +126,7 @@ extension SSHCommandExecutor: ParallelExecutionSession {
 
     func run(_ command: String,
              onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
-        try await run(command)
+        try await runSupervised(command)
     }
 
     func takeHostKeyChallenge() -> HostKeyChallenge? { nil }

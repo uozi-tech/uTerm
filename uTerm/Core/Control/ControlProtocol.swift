@@ -146,27 +146,24 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var command: String?
     /// 命令 argv（客户端 `--` 之后原样传来，服务端按需 join）。
     public var args: [String]?
+    /// `run*` 的**静默**超时：连续这么多秒没有任何输出才判定卡住并终止。
     public var timeoutSeconds: Int?
+    /// `run*` 的总时长上限（兜底，防 `tail -f` 这类永不静默的命令一直占着名额）。
+    public var maxDurationSeconds: Int?
     public var maxLines: Int?
     public var maxBytes: Int?
     public var path: String?
     /// `sftp-mv` 的目标路径。
     public var newPath: String?
-    /// 两用字段，按 action 解释：
-    /// - `sftp-chmod`：八进制权限（如 `"644"`）；
-    /// - `sftp-put`：写入模式 `create`（默认，已存在 → `file_exists`）/ `overwrite`
-    ///   （截断）/ `write`（不截断，写到 `offset`，分片并行传输用这档）。
+    /// `sftp-chmod` 的八进制权限（如 `"644"`）。
     public var mode: String?
-    /// `sftp-put` 的文件内容（base64）。
-    public var contentBase64: String?
-    /// 区间传输的起始字节。`sftp-put` 缺省 0；`sftp-get` 给了它（或 `length`）
-    /// 就只回该区间。负数是 `invalid_request`。
-    public var offset: Int64?
-    /// `sftp-get` 的区间长度（字节），上限 `maxFileBytes`。
-    public var length: Int?
-    /// `sftp-put`：没有显式 `mode` 时，`true` 等价 `mode: "overwrite"`
-    /// （与 `get` 的 `--force` 对称）。有 `mode` 时以 `mode` 为准。
+    /// `sftp-put`：`true` = 覆盖已存在的远端文件；缺省遇到已存在就回 `file_exists`。
     public var force: Bool?
+    /// `sftp-get` / `sftp-put` 只传这些区间（续传）。缺省整份。
+    public var ranges: [ControlByteRange]?
+    /// `sftp-get` / `sftp-put` 这次用几条 SFTP 通道，1…`maxTransferChannels`，缺省
+    /// `defaultTransferChannels`。
+    public var parallel: Int?
     /// 转发规则 id / name。
     public var rule: String?
     /// 终端会话 id 或其唯一前缀。
@@ -188,15 +185,15 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         command: String? = nil,
         args: [String]? = nil,
         timeoutSeconds: Int? = nil,
+        maxDurationSeconds: Int? = nil,
         maxLines: Int? = nil,
         maxBytes: Int? = nil,
         path: String? = nil,
         newPath: String? = nil,
         mode: String? = nil,
-        contentBase64: String? = nil,
-        offset: Int64? = nil,
-        length: Int? = nil,
         force: Bool? = nil,
+        ranges: [ControlByteRange]? = nil,
+        parallel: Int? = nil,
         rule: String? = nil,
         terminal: String? = nil,
         lines: Int? = nil,
@@ -212,15 +209,15 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         self.command = command
         self.args = args
         self.timeoutSeconds = timeoutSeconds
+        self.maxDurationSeconds = maxDurationSeconds
         self.maxLines = maxLines
         self.maxBytes = maxBytes
         self.path = path
         self.newPath = newPath
         self.mode = mode
-        self.contentBase64 = contentBase64
-        self.offset = offset
-        self.length = length
         self.force = force
+        self.ranges = ranges
+        self.parallel = parallel
         self.rule = rule
         self.terminal = terminal
         self.lines = lines
@@ -248,6 +245,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
     public var entries: [ControlRemoteEntry]?
     public var stat: ControlRemoteStat?
     public var file: ControlFilePayload?
+    public var transfer: ControlTransferResult?
     public var rules: [ControlForwardSnapshot]?
     public var terminals: [ControlTerminalSnapshot]?
     public var screen: ControlScreenSnapshot?
@@ -266,6 +264,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         entries: [ControlRemoteEntry]? = nil,
         stat: ControlRemoteStat? = nil,
         file: ControlFilePayload? = nil,
+        transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
         screen: ControlScreenSnapshot? = nil
@@ -283,6 +282,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         self.entries = entries
         self.stat = stat
         self.file = file
+        self.transfer = transfer
         self.rules = rules
         self.terminals = terminals
         self.screen = screen
@@ -301,6 +301,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         entries: [ControlRemoteEntry]? = nil,
         stat: ControlRemoteStat? = nil,
         file: ControlFilePayload? = nil,
+        transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
         screen: ControlScreenSnapshot? = nil
@@ -319,6 +320,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
             entries: entries,
             stat: stat,
             file: file,
+            transfer: transfer,
             rules: rules,
             terminals: terminals,
             screen: screen
@@ -458,8 +460,14 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
     /// 输出被 `maxLines` / `maxBytes` 削过。
     public var truncated: Bool
     public var durationMs: Int
-    /// 超时。**语句本身可能还在远端跑**（Citadel exec 不可取消）。
+    /// 超时（静默超时或总时长上限，见 `timeoutReason`）。
     public var timedOut: Bool
+    /// 超时的原因：`idle`（连续 `timeoutSeconds` 秒没有输出）/ `max_duration`
+    /// （跑满 `maxDurationSeconds`）。没超时为 nil。
+    public var timeoutReason: String?
+    /// 超时后是否已对远端进程组发出终止信号。false = 没能终止，**命令可能还在远端跑**。
+    /// 没超时为 nil。
+    public var killed: Bool?
     /// 该主机单独失败时的错误码（`run-many` 里其它台照跑）。
     public var errorCode: String?
     public var errorMessage: String?
@@ -475,6 +483,8 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
         truncated: Bool = false,
         durationMs: Int = 0,
         timedOut: Bool = false,
+        timeoutReason: String? = nil,
+        killed: Bool? = nil,
         errorCode: String? = nil,
         errorMessage: String? = nil,
         hostKey: ControlHostKeyInfo? = nil
@@ -486,6 +496,8 @@ nonisolated public struct ControlRunResult: Codable, Sendable, Equatable {
         self.truncated = truncated
         self.durationMs = durationMs
         self.timedOut = timedOut
+        self.timeoutReason = timeoutReason
+        self.killed = killed
         self.errorCode = errorCode
         self.errorMessage = errorMessage
         self.hostKey = hostKey
@@ -786,9 +798,11 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     case file_too_large
     case permission_denied
     case is_directory
-    /// `sftp-put` 的 `mode: create`（默认）撞上已存在的路径。加 `--force`
-    /// （`mode: overwrite`）才覆盖。
+    /// `sftp-put` 撞上已存在的路径。加 `--force` 才覆盖。
     case file_exists
+    /// `sftp-get` / `sftp-put` 读写客户端交过来的本地 fd 失败（磁盘满、文件被改短……）。
+    case local_write_failed
+    case local_read_failed
 
     // 转发
     case rule_not_found
@@ -817,13 +831,9 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
 // MARK: - 常量与编解码
 
 nonisolated public enum ControlProtocol {
-    /// 一条请求的字节上限。
-    ///
-    /// **必须从 `maxFileBytes` 推导**：`sftp-put` 把文件塞进 `contentBase64`，base64
-    /// 膨胀 4/3，再加上 JSON 字段与路径的开销。写死 1 MiB 时，超过 ~768 KiB 的上传会在
-    /// **发送途中**被服务端拒掉并关连接，客户端只看得到 BrokenPipe，报成毫无线索的
-    /// `socket_error`。64 KiB 的富余留给 JSON 外壳（action / path / id / 转义）。
-    public static let maxRequestBytes = maxFileBytes * 4 / 3 + 64 * 1024
+    /// 一条请求的字节上限。文件内容不再走请求体（`sftp-put` 传的是 fd），最大的请求是
+    /// `terminal-send` 的文本与续传的区间表，1 MiB 绰绰有余。
+    public static let maxRequestBytes = 1_048_576
 
     /// `sockaddr_un.sun_path` 的字节上限（含结尾 NUL）。
     ///
@@ -833,9 +843,12 @@ nonisolated public enum ControlProtocol {
     /// 超限则不 bind、把原因写进 `ControlSettings.startupError`。
     public static let maxSunPathLength = 104
 
-    /// `run` 的默认 / 封顶超时（秒）。
+    /// `run` 的静默超时（秒）：默认 / 封顶。连续这么久没有任何输出才判定卡住。
     public static let defaultRunTimeoutSeconds = 60
-    public static let maxRunTimeoutSeconds = 300
+    public static let maxRunTimeoutSeconds = 1800
+    /// `run` 的总时长上限（秒）：默认 / 封顶。只是兜底，主判据是静默超时。
+    public static let defaultRunMaxDurationSeconds = 3600
+    public static let maxRunMaxDurationSeconds = 6 * 3600
 
     /// `SSHCommandExecutor` 的输出裁剪默认值。
     public static let defaultMaxLines = 200
@@ -843,8 +856,13 @@ nonisolated public enum ControlProtocol {
     /// `--max-bytes` 的硬顶。
     public static let maxOutputBytes = 1_048_576
 
-    /// `sftp-get` / `sftp-put` 单次上限（8 MiB）。
-    public static let maxFileBytes = 8 * 1_048_576
+    /// `sftp-get` / `sftp-put` 一次传输用几条 SFTP 通道：默认 / 封顶。
+    ///
+    /// 实测（Docker sshd，50 ms RTT，窗口 16 MiB）：4 路 182 / 8 路 279 / 16 路 287 /
+    /// 32 路 182 / 64 路 105 MiB/s —— 8–16 路是顶，再多每条连接的加解密与拥塞窗口争抢
+    /// 只会拖慢。所以默认 8，封顶 16，不做成可以开到上百路。
+    public static let defaultTransferChannels = 8
+    public static let maxTransferChannels = 16
     /// `sftp-cat` 上限（1 MiB）。
     public static let maxCatBytes = 1_048_576
 
@@ -854,6 +872,18 @@ nonisolated public enum ControlProtocol {
 
     /// `run-many` 的有界并发（与 `QuickCommandRunner.maxConcurrent` 对齐）。
     public static let maxParallelHosts = 6
+
+    /// `ControlServer` 的两份连接槽位。传输（`isTransfer`）最多占 `maxTransferClients`；
+    /// 其余请求永远有 `maxControlClients` 个留着，并行下载再多也挤不掉 `run` / `ping`。
+    public static let maxControlClients = 8
+    /// 一个槽位就是一整个并行传输（内部自己开 `defaultTransferChannels` 路），8 个足够；
+    /// 最坏情况每个传输在途约 8 × 16 MiB（窗口）的缓冲，内存要有顶。
+    public static let maxTransferClients = 8
+
+    /// 占传输槽位的动作。
+    public static func isTransfer(_ action: ControlAction) -> Bool {
+        action == .sftpGet || action == .sftpPut
+    }
 
     /// Debug and Release may share the same sandbox container. Keep their
     /// listeners separate; CLI discovery continues to target Release by default.
@@ -875,10 +905,14 @@ nonisolated public enum ControlProtocol {
             .standardizedFileURL
     }
 
+    /// 响应编成**一行** JSON（末尾 `\n`）。连接上是「进度行…、最终响应」的逐行流，客户端
+    /// 按行切 —— pretty-print 的多行响应会被切碎、一行都解析不了。
     public static func encode(_ response: ControlResponse) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(response)
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(response)
+        data.append(UInt8(ascii: "\n"))
+        return data
     }
 
     public static func decodeRequest(_ data: Data) throws -> ControlRequest {
@@ -898,4 +932,49 @@ nonisolated public enum ControlProtocol {
         guard let date else { return nil }
         return iso8601Formatter.string(from: date)
     }
+}
+
+// MARK: - 大文件传输
+
+/// 文件里的一段 `[offset, offset + length)`：续传区间与进度事件里的「已完成段」。
+nonisolated public struct ControlByteRange: Codable, Sendable, Equatable {
+    public var offset: Int64
+    public var length: Int64
+
+    public var end: Int64 { offset + length }
+
+    public init(offset: Int64, length: Int64) {
+        self.offset = offset
+        self.length = length
+    }
+}
+
+/// `sftp-get` / `sftp-put` 的成功结果。文件字节本身走客户端交来的 fd，不在响应里。
+nonisolated public struct ControlTransferResult: Codable, Sendable, Equatable {
+    public var path: String
+    /// 这次实际搬的字节数（续传时只算补的那些区间）。
+    public var bytes: Int64
+    /// 文件总大小。
+    public var totalBytes: Int64
+    public var seconds: Double
+    /// 用了几条 SFTP 通道。
+    public var channels: Int
+
+    public init(path: String, bytes: Int64, totalBytes: Int64, seconds: Double, channels: Int) {
+        self.path = path
+        self.bytes = bytes
+        self.totalBytes = totalBytes
+        self.seconds = seconds
+        self.channels = channels
+    }
+}
+
+/// 传输进行中服务端往连接里写的进度行（一行一个 JSON，与最终响应同一条连接）：
+/// `{"event":"progress","bytes":…,"totalBytes":…,"done":[{"offset":…,"length":…}]}`。
+/// `done` 是**自上一行以来**新落盘 / 新写到远端的段，客户端据此记续传账。
+nonisolated public struct ControlProgressEvent: Codable, Sendable, Equatable {
+    public var event = "progress"
+    public var bytes: Int64
+    public var totalBytes: Int64?
+    public var done: [ControlByteRange]
 }

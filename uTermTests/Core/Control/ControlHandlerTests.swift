@@ -373,7 +373,8 @@ final class ControlHandlerTests: XCTestCase {
         makeProfile(name: "web")
         await pool.setExec { command in
             // 真实 shell 的行为：子 shell 里 exit 3 只退子 shell，哨兵照常打印。
-            XCTAssertTrue(command.hasPrefix("( exit 3\n)"), command)
+            // 首行先报会话 shell 的 pid（超时时靠它杀进程组），其后才是子 shell。
+            XCTAssertTrue(command.hasPrefix("printf '__UTERM_PID__:%d\\n' \"$$\"\n( exit 3\n)"), command)
             return Self.wire("", exit: 3)
         }
 

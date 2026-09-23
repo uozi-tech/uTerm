@@ -34,6 +34,11 @@ nonisolated struct CitadelPipelineFile: SFTPPipelineFile, @unchecked Sendable {
     func readChunk(from offset: UInt64, length: UInt32) async throws -> ByteBuffer {
         try await file.read(from: offset, length: length)
     }
+
+    /// 关文件。调用方保证此时已没有在途的读写（见类型注释）。
+    func close() async {
+        try? await file.close()
+    }
 }
 
 nonisolated enum SFTPPipelineError: Error, Sendable, Equatable {
@@ -114,7 +119,11 @@ nonisolated enum SFTPPipeline {
                     throw SFTPPipelineError.sliceOutOfRange
                 }
                 let offset = base + UInt64(start)
-                group.addTask { try await file.writeChunk(slice, at: offset) }
+                group.addTask {
+                    try await file.writeChunk(slice, at: offset)
+                    // 每个 ack 都是一次进展：CLI 的静默看门狗靠它区分「慢」和「卡死」。
+                    IOActivity.touch()
+                }
                 running += 1
                 start = end
             }
@@ -212,6 +221,7 @@ nonisolated enum SFTPPipeline {
             try Task.checkCancellation()
             var piece = try await file.readChunk(
                 from: base + UInt64(done), length: UInt32(length - done))
+            IOActivity.touch()
             let count = piece.readableBytes
             if count == 0 { break }
             // 服务端多给（协议不允许，但别让它撑爆调用方的算术）：只收要的那部分。

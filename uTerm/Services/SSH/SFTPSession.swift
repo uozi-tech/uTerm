@@ -145,6 +145,26 @@ actor SFTPSession: SFTPProviding {
         }
     }
 
+    func openTransferHandle(_ path: String, writeMode: SFTPWriteMode?) async throws -> SFTPTransferHandle {
+        let flags: SFTPOpenFileFlags
+        switch writeMode {
+        case nil: flags = .read
+        // SSH_FXF_EXCL：路径已存在时服务端直接拒绝，绝不截断既有文件。
+        case .create: flags = [.write, .create, .forceCreate]
+        case .overwrite: flags = [.write, .create, .truncate]
+        // 不截断：并行写 / 续传都落在这档。
+        case .write: flags = [.write, .create]
+        }
+        let file: SFTPFile
+        do {
+            file = try await sftp.openFile(filePath: path, flags: flags)
+        } catch where writeMode != nil {
+            throw SFTPWriteStageError(stage: .open, underlying: error)
+        }
+        let pipelined = CitadelPipelineFile(file)
+        return SFTPTransferHandle(file: pipelined, close: { await pipelined.close() })
+    }
+
     func stat(_ path: String) async throws -> RemoteStat {
         let attrs = try await sftp.getAttributes(at: path)
         let size = Self.clampedSize(attrs.size)

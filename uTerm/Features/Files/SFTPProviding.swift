@@ -1,4 +1,5 @@
 import Foundation
+import NIOCore
 
 // MARK: - RemoteStat
 
@@ -126,6 +127,10 @@ protocol SFTPProviding: Actor {
     /// 获取远程文件元信息（size + mtime）。文件不存在时抛错。
     func stat(_ path: String) async throws -> RemoteStat
 
+    /// 为整段传输打开远端文件：**只打开一次**，返回的句柄可以被流水线并发读写不同区间
+    /// （`ParallelTransfer` 用）。`writeMode` 为 nil 是只读；用完必须 `close()`。
+    func openTransferHandle(_ path: String, writeMode: SFTPWriteMode?) async throws -> SFTPTransferHandle
+
     /// 在连接上跑一条一次性命令（非交互 exec channel），返回合并后的输出。
     /// 供遥测复用 SFTP 的 SSH 连接，不碰交互 PTY。compound 命令（`;` / 管道 /
     /// 重定向）由 sshd 交给登录 shell 执行，故可直接传整串。
@@ -225,5 +230,38 @@ extension SFTPProviding {
         let end = min(start + length, all.count)
         guard start < end else { return Data() }
         return all.subdata(in: start..<end)
+    }
+}
+
+// MARK: - 整段传输句柄
+
+/// 一个已打开的远端文件，供 `ParallelTransfer` 在上面并发跑读 / 写流水线。
+nonisolated struct SFTPTransferHandle: Sendable {
+    let file: any SFTPPipelineFile
+    let close: @Sendable () async -> Void
+}
+
+extension SFTPProviding {
+    /// 缺省实现（测试替身用）：每个读写请求都落回 `readRange` / `writeRange`，打开语义在
+    /// 这里用一次零长写表达。真实会话（`SFTPSession`）覆盖它，真的只开一次文件。
+    func openTransferHandle(_ path: String, writeMode: SFTPWriteMode?) async throws -> SFTPTransferHandle {
+        if let writeMode, writeMode != .write {
+            try await writeRange(path, offset: 0, data: Data(), mode: writeMode)
+        }
+        return SFTPTransferHandle(file: RangeBackedPipelineFile(session: self, path: path), close: {})
+    }
+}
+
+/// 用 `readRange` / `writeRange` 拼出来的流水线文件（缺省传输句柄的底座）。
+private nonisolated struct RangeBackedPipelineFile: SFTPPipelineFile {
+    let session: any SFTPProviding
+    let path: String
+
+    func writeChunk(_ data: ByteBuffer, at offset: UInt64) async throws {
+        try await session.writeRange(path, offset: offset, data: Data(data.readableBytesView), mode: .write)
+    }
+
+    func readChunk(from offset: UInt64, length: UInt32) async throws -> ByteBuffer {
+        ByteBuffer(bytes: try await session.readRange(path, offset: offset, length: Int(length)))
     }
 }

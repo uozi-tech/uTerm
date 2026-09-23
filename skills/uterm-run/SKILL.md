@@ -158,10 +158,24 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 
 ## 超时与截断
 
-- 默认超时 60 秒，`--timeout` 可调，**封顶 300 秒**。
-- 超时返回 `command_timeout`（或结果里 `timedOut: true`）。**语句本身很可能还在远端
-  继续跑** —— 底层 SSH 执行不可取消。所以超时后不要盲目重跑有副作用的命令
-  （部署、迁移、`apt install`），先用一条只读命令确认上一次到底跑到哪了。
+- 超时按**静默**算，不按总时长算：`--timeout`（默认 60 秒，封顶 1800）是「连续多少秒
+  **没有任何输出**就判定卡住」。一直在刷输出的长命令（`apt upgrade`、`docker build`、
+  带进度的编译）跑多久都行。
+- 另有**总时长上限** `--max-duration`（默认 3600 秒，封顶 21600）兜底，防 `tail -f` 这类
+  永远有输出的命令一直占着连接。
+- 本身就长时间不输出的命令要把 `--timeout` 放宽：`sha256sum` 大文件、`pg_dump > 文件`、
+  `sleep`、`make -s`、`tar czf` 这些在跑完之前一个字节都不吐，默认 60 秒就会被当成卡死。
+  也可以让它自己吐进度（`pv`、`rsync --info=progress2`、`-v`）。
+- 超时返回 `command_timeout`，结果里 `timedOut: true`，`timeoutReason` 是 `idle`（静默）
+  或 `max_duration`（总时长）；判定前已经收到的输出照样在 `output` 里，卡在哪一步通常就
+  写在最后几行。
+- 超时后 uTerm 会**终止远端整个进程组**（TERM，5 秒后 KILL），此时 `killed: true`。
+  `killed: false` 表示没能终止（拿不到进程号 / 终止命令本身失败）—— **命令可能还在远端
+  继续跑**。两种情况都不要盲目重跑有副作用的命令（部署、迁移、`apt install`）：被杀的
+  也可能停在半截，先用一条只读命令确认到底跑到哪了。
+- 进程组连带意味着：命令里用 `nohup … &` 放到后台的进程，超时时会一起被杀。真要让它在
+  `run` 返回后继续跑，用 `setsid`（`setsid nohup cmd > log 2>&1 < /dev/null &`）或
+  `systemd-run` 脱离进程组，再用 `run` 查状态。以 `sudo` 起的子进程属于 root，终止不了。
 - 输出默认最多 200 行 / 16000 字节，`--max-lines` / `--max-bytes` 可放宽，
   字节数封顶 1 MiB。被削过时 `truncated: true`。要看大量输出，正确做法是在远端就
   过滤（`grep` / `tail -n` / `awk`），而不是把上限调到最大再本地筛。
@@ -250,15 +264,16 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `host_key_changed` | 主机密钥变了 —— 命令行不给覆盖，回 uTerm 界面处理 |
 | `connect_failed` | 建连失败（消息是 SSH 原话，可能是网络或跳板机） |
 | `auth_failed` | 认证失败 —— 用户存的凭据不对，只能他自己改 |
-| `command_timeout` | 超时；**命令可能还在远端继续跑** |
+| `command_timeout` | 静默超时或撞上总时长上限（看 `timeoutReason`）；`killed: false` 时**命令可能还在远端继续跑** |
 | `run_partial_failure` | `run-many` / `quick-run`：有成有败，逐台看 `results` |
 | `run_failed` | `run-many` / `quick-run`：一台都没成 |
 | `file_not_found` / `file_exists` / `file_too_large` / `permission_denied` / `is_directory` | 文件面，见 `uterm-files` |
-| `server_busy` | 服务端的连接槽位满了（一共 8 个）—— 退避重试过仍不行就等一会儿，或把 `--parallel` 调小 |
+| `server_busy` | uTerm 的连接槽位满了。短请求（`run` / `ping` 等）有 8 个专用槽位、传输另有 8 个，互不挤占；撞上多半是同时跑了太多 utermctl —— 客户端已退避重试过，仍不行就等一会儿 |
 | `local_read_failed` / `local_write_failed` | 客户端自己的本地文件 I/O 失败（只出现在 `sftp get` / `put`），见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
-| `handler_timeout` | uTerm 侧 120 秒兜底超时 |
+| `handler_timeout` | uTerm 侧的请求连续 120 秒**没有任何进展**（传输没有回包、命令看门狗也停了）才会出现，多半是网络断了或 uTerm 卡住 |
+| `client_timeout` | 客户端连续 60 秒没收到 uTerm 任何字节（处理中每 10 秒一次的心跳也没有）—— uTerm 本身卡住了；请求可能已部分执行 |
 | `invalid_request` | 缺字段 / 字段冲突 |
 | `not_implemented` | 这个动作在当前 uTerm 版本里还没实现 |
 

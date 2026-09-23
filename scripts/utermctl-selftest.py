@@ -6,6 +6,7 @@
 
     python3 scripts/utermctl-selftest.py        # 也是 `make check-cli`
 """
+import array
 import base64
 import hashlib
 import json
@@ -133,6 +134,10 @@ class FakeServer(object):
         self.path = path
         self.requests = []
         self.override = None
+        # 下一次响应前先写几个 `\n` 心跳（与 ControlServer 处理期间的心跳同形）。
+        self.heartbeats = 0
+        # 下一次响应前先干等这么多秒、一个字节都不写（模拟 uTerm 卡死）。
+        self.stall = 0
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
         self.sock.listen(8)
@@ -151,6 +156,13 @@ class FakeServer(object):
                     continue
                 request = json.loads(body.decode("utf-8"))
                 self.requests.append(request)
+                heartbeats, self.heartbeats = self.heartbeats, 0
+                stall, self.stall = self.stall, 0
+                for _ in range(heartbeats):
+                    conn.sendall(b"\n")
+                    time.sleep(0.05)
+                if stall:
+                    time.sleep(stall)
                 conn.sendall(json.dumps(self._respond(request)).encode("utf-8"))
             except OSError:
                 pass
@@ -221,41 +233,35 @@ DROP = object()     # `_respond` 的哨兵：不回响应，直接关连接
 
 
 class TransferServer(object):
-    """分片传输用的假服务端。与 `FakeServer` 的两点不同：
+    """新传输协议（fd 随请求交过来）的假服务端。
 
-    1. **每条连接一个线程** —— 串行 accept 的话「并行度」根本量不出来（恒为 1）。
-    2. 维护一份内存文件表，按 `offset` / `mode` 真的拼装内容，于是「分片覆盖完整、
-       不重叠、拼回去逐字节相同」是能断言的，而不是只看请求字段。
+    与 `FakeServer` 的不同：
+    1. **每条连接一个线程**，好让并发传输互不阻塞；
+    2. 用 `recvmsg` 收 `SCM_RIGHTS` 的 fd，按 `SEGMENT` 一段段真的读写那个 fd，维护一份
+       内存文件表 —— 于是「内容逐字节相同」「续传只补缺的区间」都能断言；
+    3. 每写完一段就回一行 `{"event":"progress",…}`，与真服务端同形。
 
-    每次处理故意 sleep 一小会儿，好让并发窗口张开；峰值并发记在 `max_active`。
+    故障注入：
+    - `fail_after`：这次传输搬满这么多字节后回 `fail_code`（一次性，测自动续传）；
+    - `fail_always`：非 None 时所有传输先搬 `fail_after` 字节再回这个 code（测失败留账）；
+    - `busy_once`：下一次传输先回 `server_busy`（测退避）；
+    - `sha_override`：None=真算；"missing"=远端没工具；其余=假的十六进制。
     """
 
-    def __init__(self, path, delay=0.03):
+    SEGMENT = 64 * 1024
+
+    def __init__(self, path):
         self.path = path
-        self.delay = delay
         self.files = {}          # 远端路径 → bytearray
-        self.requests = []       # 收到的原始请求（断言字段在不在）
-        self.puts = []           # [(path, offset, mode, bytes)]
-        self.gets = []           # [(path, offset, bytes)]
-        self.runs = []           # 收到的 run 命令
-        self.attempts = {}       # sftp-put 的 offset → 到达次数（看重试）
-        self.fail_once = set()   # 这些 offset 的第一次 put 注入失败
-        self.fail_offsets = set()  # 这些 offset 的 put 一律失败（测「取消其余分片」）
-        self.fail_always = None  # 非 None 时所有 put 都回这个 code
-        # 响应丢失的注入：`drop_once` 的 offset **先写进去再把连接关掉不回响应**
-        # （= 服务端做成了但客户端不知道），`drop_always` 是收下就关、什么也不做
-        # （= 服务端槽位满时的表现，客户端看到 `empty_response`）。
-        self.drop_once = set()
-        self.drop_always = False
-        self.get_attempts = {}     # sftp-get 的 offset → 到达次数
-        self.get_fail_offsets = set()   # 这些 offset 的 get 一律失败
-        self.get_empty_once = set()     # 这些 offset 的第一次 get 回空载荷
-        self.get_empty_always = set()   # 这些 offset 的 get 一律回空载荷
-        self.get_half_once = set()      # 这些 offset 的第一次 get 只给一半
+        self.requests = []       # 收到的原始请求
+        self.fds_seen = []       # 每条传输请求收到的 fd 个数
+        self.runs = []
         self.lock = threading.Lock()
-        self.active = 0
-        self.max_active = 0
-        self.sha_override = None  # None=真算；"missing"=远端没工具；其余=假的十六进制
+        self.fail_after = None
+        self.fail_code = "connect_failed"
+        self.fail_always = None
+        self.busy_once = False
+        self.sha_override = None
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
         self.sock.listen(32)
@@ -266,22 +272,16 @@ class TransferServer(object):
         with self.lock:
             self.files.clear()
             del self.requests[:]
-            del self.puts[:]
-            del self.gets[:]
+            del self.fds_seen[:]
             del self.runs[:]
-            self.attempts.clear()
-            self.fail_once = set()
-            self.fail_offsets = set()
+            self.fail_after = None
+            self.fail_code = "connect_failed"
             self.fail_always = None
-            self.drop_once = set()
-            self.drop_always = False
-            self.get_attempts.clear()
-            self.get_fail_offsets = set()
-            self.get_empty_once = set()
-            self.get_empty_always = set()
-            self.get_half_once = set()
-            self.max_active = 0
+            self.busy_once = False
             self.sha_override = None
+
+    def transfers(self, action):
+        return [r for r in self.requests if r.get("action") == action]
 
     def _serve(self):
         while True:
@@ -292,29 +292,34 @@ class TransferServer(object):
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     def _handle(self, conn):
+        fds = []
         try:
-            body = recv_request(conn)
+            body, fds = recv_request_with_fds(conn)
             if not body:
                 return
             request = json.loads(body.decode("utf-8"))
             with self.lock:
                 self.requests.append(request)
-                self.active += 1
-                self.max_active = max(self.max_active, self.active)
-            try:
-                time.sleep(self.delay)
-                response = self._respond(request)
-            finally:
+            action = request.get("action")
+            if action in ("sftp-get", "sftp-put"):
                 with self.lock:
-                    self.active -= 1
-            # DROP = 收下请求但**不写响应**直接关连接：`ControlServer` 在
-            # `maxActiveClients` 满时就是这么干的，客户端看到的是 `empty_response`。
-            if response is DROP:
-                return
-            conn.sendall(json.dumps(response).encode("utf-8"))
+                    self.fds_seen.append(len(fds))
+                response = self._transfer(conn, request, fds)
+            elif action == "sftp-stat":
+                response = self._stat(request)
+            elif action == "run":
+                response = self._run(request)
+            else:
+                response = self._fail(request, "invalid_request", "未知动作 " + str(action))
+            conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
         except OSError:
             pass
         finally:
+            for fd in fds:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             conn.close()
 
     @staticmethod
@@ -327,18 +332,6 @@ class TransferServer(object):
         response.update(payload)
         return response
 
-    def _respond(self, request):
-        action = request.get("action")
-        if action == "sftp-stat":
-            return self._stat(request)
-        if action == "sftp-put":
-            return self._put(request)
-        if action == "sftp-get":
-            return self._get(request)
-        if action == "run":
-            return self._run(request)
-        return self._fail(request, "invalid_request", "未知动作 " + str(action))
-
     def _stat(self, request):
         path = request.get("path")
         with self.lock:
@@ -349,78 +342,64 @@ class TransferServer(object):
                                        "permissions": 33188,
                                        "modifiedAt": "2026-09-10T00:00:00Z"})
 
-    def _put(self, request):
+    def _transfer(self, conn, request, fds):
+        if not fds:
+            return self._fail(request, "invalid_request", "没有随请求交来 fd")
+        fd = fds[0]
         path = request.get("path")
-        mode = request.get("mode") or "create"
-        offset = int(request.get("offset") or 0)
-        data = base64.b64decode(request.get("contentBase64") or "")
-        if len(data) > 8 * 1024 * 1024:
-            return self._fail(request, "request_too_large", "分片超过单请求上限")
+        is_get = request.get("action") == "sftp-get"
         with self.lock:
-            self.attempts[offset] = self.attempts.get(offset, 0) + 1
-            if self.drop_always:
-                return DROP                      # 收下就关，什么也没做
+            if self.busy_once:
+                self.busy_once = False
+                return self._fail(request, "server_busy", "注入的忙")
+            budget = self.fail_after
+            fail_code = self.fail_code
             if self.fail_always is not None:
-                return self._fail(request, self.fail_always, "注入的失败")
-            if offset in self.fail_offsets:
-                return self._fail(request, "operation_failed", "注入的持续失败")
-            if offset in self.fail_once:
-                self.fail_once.discard(offset)
-                return self._fail(request, "operation_failed", "注入的一次性失败")
-            existing = self.files.get(path)
-            if mode == "create":
-                if existing is not None:
-                    return self._fail(request, "file_exists", "远端已存在 " + str(path))
-                body = self.files.setdefault(path, bytearray())
-            elif mode == "overwrite":
-                body = bytearray()
-                self.files[path] = body
-            elif mode == "write":
-                body = self.files.setdefault(path, bytearray())
+                budget, fail_code = (self.fail_after or 0), self.fail_always
             else:
-                return self._fail(request, "invalid_request", "未知 mode " + str(mode))
-            if len(body) < offset:
-                body.extend(b"\x00" * (offset - len(body)))
-            body[offset:offset + len(data)] = data
-            self.puts.append((path, offset, mode, len(data)))
-            if offset in self.drop_once:
-                # 写成了，响应却丢了 —— 客户端不知道该不该重发 create。
-                self.drop_once.discard(offset)
-                return DROP
-        return self._ok(request, file={"path": path, "bytes": len(data),
-                                       "isUTF8": False, "truncated": False})
-
-    def _get(self, request):
-        path = request.get("path")
-        with self.lock:
-            body = self.files.get(path)
-            if body is None:
-                return self._fail(request, "file_not_found", "没有 " + str(path))
-            offset, length = request.get("offset"), request.get("length")
-            if offset is None and length is None:
-                if len(body) > 8 * 1024 * 1024:
-                    return self._fail(request, "file_too_large", "整取超过 8 MiB")
-                start, data = 0, bytes(body)
+                self.fail_after = None
+            if is_get:
+                source = self.files.get(path)
+                if source is None:
+                    return self._fail(request, "file_not_found", "没有 " + str(path))
+                source = bytes(source)
+                size = len(source)
             else:
-                start = int(offset or 0)
-                self.get_attempts[start] = self.get_attempts.get(start, 0) + 1
-                if start in self.get_fail_offsets:
-                    return self._fail(request, "operation_failed", "注入的 get 失败")
-                data = bytes(body[start:start + int(length or 0)])
-                # 空载荷 = 「远端到 EOF 了」的样子。客户端**不能**把它当 EOF：区间是按
-                # stat 的大小切的，这里少给只能是出岔子了，该片要重试。
-                if start in self.get_empty_always:
-                    data = b""
-                elif start in self.get_empty_once:
-                    self.get_empty_once.discard(start)
-                    data = b""
-                elif start in self.get_half_once:
-                    self.get_half_once.discard(start)
-                    data = data[: max(1, len(data) // 2)]
-            self.gets.append((path, start, len(data)))
-        return self._ok(request, file={
-            "path": path, "bytes": len(data), "isUTF8": False, "truncated": False,
-            "base64": base64.b64encode(data).decode("ascii")})
+                size = os.fstat(fd).st_size
+                ranges = request.get("ranges")
+                if ranges is None:
+                    if path in self.files and not request.get("force"):
+                        return self._fail(request, "file_exists", "远端已存在 " + str(path))
+                    self.files[path] = bytearray(size)
+                target = self.files.setdefault(path, bytearray(size))
+                if len(target) < size:
+                    target.extend(b"\x00" * (size - len(target)))
+        if is_get:
+            os.ftruncate(fd, size)
+        wanted = request.get("ranges")
+        wanted = ([(0, size)] if wanted is None
+                  else [(int(r["offset"]), int(r["length"])) for r in wanted])
+        moved = 0
+        for offset, length in wanted:
+            cursor = offset
+            while cursor < offset + length:
+                if budget is not None and moved >= budget:
+                    return self._fail(request, fail_code, "注入的中途失败")
+                step = min(self.SEGMENT, offset + length - cursor)
+                if is_get:
+                    os.pwrite(fd, source[cursor:cursor + step], cursor)
+                else:
+                    data = os.pread(fd, step, cursor)
+                    with self.lock:
+                        self.files[path][cursor:cursor + step] = data
+                moved += step
+                event = {"event": "progress", "bytes": moved, "totalBytes": size,
+                         "done": [{"offset": cursor, "length": step}]}
+                conn.sendall(json.dumps(event).encode("utf-8") + b"\n")
+                cursor += step
+        return self._ok(request, transfer={"path": path, "bytes": moved, "totalBytes": size,
+                                           "seconds": 0.01,
+                                           "channels": request.get("parallel") or 8})
 
     def _run(self, request):
         command = request.get("command") or ""
@@ -449,9 +428,32 @@ class TransferServer(object):
             pass
 
 
-def run_cli(server, argv, expect_exit=0, socket_path=None, label=None, sleep_trace=None):
+def recv_request_with_fds(conn, deadline=30.0):
+    """同 `recv_request`，但用 `recvmsg` 一并收 `SCM_RIGHTS` 的 fd。"""
+    conn.settimeout(0.5)
+    limit = time.time() + deadline
+    chunks = []
+    fds = []
+    while time.time() < limit:
+        try:
+            data, ancillary, _, _ = conn.recvmsg(65536, socket.CMSG_SPACE(4 * 4))
+        except socket.timeout:
+            continue
+        for level, kind, payload in ancillary:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                fds.extend(array.array("i", payload[: len(payload) - len(payload) % 4]))
+        if not data:
+            break
+        chunks.append(data)
+    return b"".join(chunks), fds
+
+
+def run_cli(server, argv, expect_exit=0, socket_path=None, label=None, sleep_trace=None,
+            idle_timeout=None):
     env = dict(os.environ)
     env["UTERM_CONTROL_SOCKET"] = socket_path if socket_path else server.path
+    if idle_timeout is not None:
+        env["UTERMCTL_IDLE_TIMEOUT"] = str(idle_timeout)
     if sleep_trace:
         # 客户端只往里记退避秒数、不真的睡 —— 好断言重试次数与退避序列。
         env["UTERMCTL_SLEEP_TRACE"] = sleep_trace
@@ -531,6 +533,21 @@ def exercise(server, root, rejecting):
     equal(last(server)["maxLines"], 50, "maxLines")
     equal(last(server)["maxBytes"], 9000, "maxBytes")
 
+    run_cli(server, ["run", "-H", "prod-web", "-c", "make", "--max-duration", "7200"])
+    equal(last(server)["maxDurationSeconds"], 7200, "maxDurationSeconds")
+    check("timeoutSeconds" not in last(server), "没给 --timeout 就不带，用服务端默认")
+
+    print("心跳与静默超时")
+    # 心跳的每一个 `\n` 都会重置客户端的 socket 超时：累计时长超过 idle 预算也不该断。
+    server.heartbeats = 12
+    proc = run_cli(server, ["ping"], idle_timeout=0.3, label="12 次心跳（共 0.6 s）后回响应")
+    equal(json.loads(proc.stdout)["ok"], True, "带前导心跳的响应照常解析")
+    # 一个字节都不写，超过 idle 预算 → client_timeout，退出码归「超时」一档。
+    server.stall = 1.0
+    proc = run_cli(server, ["ping"], expect_exit=6, idle_timeout=0.3, label="uTerm 静默")
+    equal(json.loads(proc.stdout)["code"], "client_timeout", "静默超时的错误码")
+    time.sleep(1.0)  # 等假服务端把那条迟到的响应写完，别串到下一条用例
+
     run_cli(server, ["run-many", "-H", "a", "-H", "b", "--", "uptime"])
     equal(last(server)["hosts"], ["a", "b"], "run-many 用 hosts 数组")
     check("host" not in last(server), "run-many 不带单数 host")
@@ -553,33 +570,20 @@ def exercise(server, root, rejecting):
     equal(last(server)["action"], "sftp-cat", "sftp-cat")
     check("prod-web" in proc.stdout, "cat 直接打印文本")
 
+    # get / put 的传输语义（交 fd、进度、续传、校验）在 exercise_transfers 里对着会读写
+    # fd 的假服务端测；这里只看动作名映射与本地前置检查。
     target = os.path.join(root, "hostname.txt")
     run_cli(server, ["sftp", "get", "-H", "prod-web", "/etc/hostname", target])
     equal(last(server)["action"], "sftp-get", "sftp-get")
-    check(open(target, "rb").read() == b"prod-web\n", "get 在客户端落盘")
     run_cli(server, ["sftp", "get", "-H", "prod-web", "/etc/hostname", target],
             expect_exit=2, label="get 已存在不覆盖")
-    run_cli(server, ["sftp", "get", "-H", "prod-web", "/etc/hostname", target, "--force"],
-            label="get --force 覆盖")
 
     source = os.path.join(root, "upload.txt")
     open(source, "wb").write(b"hello")
     run_cli(server, ["sftp", "put", "-H", "prod-web", source, "/tmp/hello"])
-    equal(last(server)["contentBase64"], base64.b64encode(b"hello").decode(),
-          "put 在客户端读文件成 base64")
+    equal(last(server)["action"], "sftp-put", "sftp-put")
     equal(last(server)["path"], "/tmp/hello", "put 的 path 是远端路径")
-
-    # 超过单请求上限的文件不再本地拒绝，而是自动切成多片（详见「分片传输」一节）。
-    big = os.path.join(root, "big.bin")
-    with open(big, "wb") as handle:
-        handle.write(b"\0" * (8 * 1024 * 1024 + 1))
-    run_cli(server, ["sftp", "put", "-H", "prod-web", big, "/tmp/big", "--no-verify"],
-            label="put 超 8 MiB 自动分片")
-    slices = [r for r in server.requests if r.get("action") == "sftp-put"][-2:]
-    equal([r.get("mode") for r in slices], ["create", "write"],
-          "超限 put 切成两片：首片 create，其余 write")
-    equal([r.get("offset") for r in slices], [0, 8 * 1024 * 1024],
-          "两片的 offset 首尾相接")
+    check("contentBase64" not in last(server), "put 不再把文件内容塞进请求")
 
     run_cli(server, ["sftp", "mkdir", "-H", "prod-web", "/tmp/d"])
     equal(last(server)["action"], "sftp-mkdir", "sftp-mkdir")
@@ -656,7 +660,7 @@ def exercise(server, root, rejecting):
         ("terminal_ambiguous", 4), ("file_not_found", 4),
         ("connect_failed", 5), ("auth_failed", 5), ("host_key_unknown", 5),
         ("host_key_changed", 5), ("forward_failed", 5),
-        ("command_timeout", 6), ("handler_timeout", 6),
+        ("command_timeout", 6), ("handler_timeout", 6), ("client_timeout", 6),
         ("operation_failed", 1), ("not_implemented", 1), ("invalid_request", 1),
     ]
     for code, expected in cases:
@@ -726,10 +730,6 @@ def exercise(server, root, rejecting):
 
 
 
-# 自测用的小分片：真实缺省是 8 MiB，照那个跑一趟要搬几十 MB，没必要。
-CHUNK = 256 * 1024
-
-
 def make_local(root, name, size):
     path = os.path.join(root, name)
     with open(path, "wb") as handle:
@@ -742,22 +742,11 @@ def read_bytes(path):
         return handle.read()
 
 
-def covers(slices, start, total, label):
-    """[(offset, length)] 必须严丝合缝地铺满 [start, total)：不空洞、不重叠。"""
-    cursor = start
-    for offset, length in sorted(slices):
-        if offset != cursor:
-            check(False, "%s（在 %d 处断了，实得 offset %d）" % (label, cursor, offset))
-            return
-        cursor += length
-    equal(cursor, total, label)
-
-
 def transfer_of(proc):
     return json.loads(proc.stdout)["transfer"]
 
 
-# 与客户端里的常量一一对应（分片状态 sidecar / get 的半成品）。
+# 与客户端里的常量一一对应（续传状态 sidecar / get 的半成品）。
 SIDECAR_SUFFIX = ".utermctl-transfer.json"
 PART_SUFFIX = ".part"
 
@@ -770,11 +759,12 @@ def part_of(local):
     return local + PART_SUFFIX
 
 
-def wipe(local):
+def wipe(*locals_):
     """清掉一次失败传输留下的状态，好让下一段从干净的地方开始。"""
-    for path in (sidecar_of(local), sidecar_of(local) + ".tmp", part_of(local)):
-        if os.path.exists(path):
-            os.unlink(path)
+    for local in locals_:
+        for path in (local, sidecar_of(local), sidecar_of(local) + ".tmp", part_of(local)):
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 def load_json(path):
@@ -789,481 +779,176 @@ def read_lines(path):
         return [line.strip() for line in handle if line.strip()]
 
 
-def slices_of(total, chunk):
-    return [(off, min(chunk, total - off)) for off in range(0, total, chunk)]
-
-
-def hole_filled(payload, done, chunk):
-    """按「只有 done 里的片写进去了」造一份带空洞的远端内容 —— 失败后的真实样子。"""
-    body = bytearray(len(payload))
-    for off, length in slices_of(len(payload), chunk):
-        if off in done:
-            body[off:off + length] = payload[off:off + length]
-    return bytes(body)
-
-
 def exercise_transfers(server, root):
-    print("分片传输：小文件仍是单请求")
+    one_mib = 1024 * 1024
+    print("传输：put 交 fd，不带文件内容")
+    small = make_local(root, "t-small.bin", one_mib + 123)
+    payload = read_bytes(small)
     server.reset()
-    small = make_local(root, "t-small.bin", 4096)
     proc = run_cli(server, ["sftp", "put", "-H", "h", small, "/r/small"])
-    equal([item[2] for item in server.puts], ["create"], "小文件单请求，mode=create")
-    equal([item[1] for item in server.puts], [0], "小文件 offset=0")
-    check(bytes(server.files["/r/small"]) == read_bytes(small), "小文件内容一致")
-    equal(transfer_of(proc)["chunks"], 1, "transfer.chunks=1")
-    equal(transfer_of(proc)["verified"], False, "单请求默认不校验")
-    equal(server.runs, [], "单请求不发 run 去算 sha256")
-    check(not os.path.exists(sidecar_of(small)), "单请求传输不留分片状态文件")
-
-    proc = run_cli(server, ["sftp", "put", "-H", "h", small, "/r/small"],
-                   expect_exit=1, label="put 到已存在的远端路径 → file_exists")
-    equal(server.requests[-1].get("mode"), "create", "没有 --force 时仍然发 create")
-    check("单请求传输，没有分片状态可续" in proc.stderr, "单请求失败不谎称能 --resume")
-    equal(transfer_of(proc)["resumable"], False, "单请求失败 resumable=false")
-    run_cli(server, ["sftp", "put", "-H", "h", small, "/r/small", "--force"],
-            label="put --force")
-    equal(server.requests[-1].get("mode"), "overwrite", "--force → mode=overwrite")
-
-    print("分片传输：大文件 put")
-    server.reset()
-    big = make_local(root, "t-big.bin", 8 * CHUNK + 777)
-    payload = read_bytes(big)
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big",
-                            "--chunk-bytes", str(CHUNK)])
-    modes = [item[2] for item in server.puts]
-    equal(modes[0], "create", "首片是 create（没有 --force 时不覆盖）")
-    equal(set(modes[1:]), {"write"}, "其余片一律 write")
-    covers([(item[1], item[3]) for item in server.puts], 0, len(payload),
-           "分片覆盖完整、不重叠")
-    check(bytes(server.files["/r/big"]) == payload, "服务端拼回的内容逐字节相同")
+    put = server.transfers("sftp-put")[0]
+    equal(server.fds_seen, [1], "随请求交了 1 个 fd")
+    check("contentBase64" not in put and "offset" not in put, "请求体里没有文件内容与分片字段")
+    equal(put.get("parallel"), 8, "默认并行 8")
+    check("ranges" not in put, "整份上传不带 ranges")
+    check(bytes(server.files["/r/small"]) == payload, "服务端经 fd 读到的内容逐字节相同")
     stats = transfer_of(proc)
-    equal(stats["chunks"], 9, "9 片")
-    equal(stats["bytes"], 8 * CHUNK + 777, "transfer.bytes = 文件大小")
-    equal(stats["parallel"], 4, "默认并行 4")
-    equal(stats["verified"], True, "分片传输默认校验且一致")
-    check(0 < server.max_active <= 4, "峰值并发 %d 不超过 --parallel 4" % server.max_active)
-    check(server.max_active >= 2, "确实并行了（峰值并发 %d ≥ 2）" % server.max_active)
-    check(not os.path.exists(sidecar_of(big)), "成功后分片状态文件删掉了")
+    equal(stats["bytes"], len(payload), "transfer.bytes = 文件大小")
+    equal(stats["parallel"], 8, "transfer.parallel")
+    equal(stats["verified"], False, "小于 8 MiB 默认不校验")
+    equal(server.runs, [], "小文件不发 run")
+    check(not os.path.exists(sidecar_of(small)), "成功后续传状态文件删掉了")
 
+    run_cli(server, ["sftp", "put", "-H", "h", small, "/r/small"], expect_exit=1,
+            label="远端已存在 → file_exists")
+    run_cli(server, ["sftp", "put", "-H", "h", small, "/r/small", "--force", "--parallel", "3"],
+            label="--force 覆盖")
+    last_put = server.transfers("sftp-put")[-1]
+    equal(last_put.get("force"), True, "--force 透传")
+    equal(last_put.get("parallel"), 3, "--parallel 透传")
+
+    print("传输：大文件 put 校验 sha256")
+    big = make_local(root, "t-big.bin", 9 * one_mib)
     server.reset()
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--chunk-bytes",
-                     str(CHUNK), "--parallel", "1", "--no-verify"],
-            label="put --parallel 1")
-    equal(server.max_active, 1, "--parallel 1 时全程串行")
-    equal(server.runs, [], "--no-verify 不发 run")
-
-    server.reset()
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--chunk-bytes",
-                     str(CHUNK), "--parallel", "6", "--no-verify"],
-            label="put --parallel 6（上限）")
-    check(0 < server.max_active <= 6, "峰值并发 %d ≤ 6" % server.max_active)
-
-    print("分片传输：重试")
-    server.reset()
-    server.fail_once = set([CHUNK, 3 * CHUNK])
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--chunk-bytes",
-                     str(CHUNK), "--no-verify"], label="分片失败后重试成功")
-    equal(server.attempts[CHUNK], 2, "失败的那片重发了一次")
-    check(bytes(server.files["/r/big"]) == payload, "重试后内容仍然完整")
-
-    # 首片之后的某一片一直失败：其余在途的片要被取消掉，而不是让 `future.result()`
-    # 在取消过的 future 上抛 CancelledError。
-    server.reset()
-    wipe(big)
-    server.fail_offsets = set([5 * CHUNK])
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--chunk-bytes",
-                            str(CHUNK)], expect_exit=1,
-                   label="非首片一直失败 → 取消其余分片")
-    equal(server.attempts[5 * CHUNK], 3, "失败的那片试满 3 次")
-    equal(json.loads(proc.stdout)["code"], "operation_failed", "取消路径也保留服务端的 code")
-    check(json.loads(proc.stdout)["transfer"]["bytes"] > 0, "失败响应里带已传的账")
-
-    print("分片传输：失败后的恢复语义（sidecar）")
-    # 上一段那次失败留下的正是「带空洞的稀疏文件」—— 按大小续传会跳过空洞，所以
-    # 状态得记在 sidecar 里。
-    stats = json.loads(proc.stdout)["transfer"]
-    equal(stats["incomplete"], True, "失败的 transfer 标了 incomplete")
-    equal(stats["resumable"], True, "失败的 transfer 标了 resumable")
-    equal(stats["statePath"], sidecar_of(big), "transfer.statePath 指向 sidecar")
-    check("--resume" in proc.stderr and "不完整" in proc.stderr,
-          "stderr 说清「文件不完整、--resume 可续」")
-    state = load_json(sidecar_of(big))
-    equal(state["version"], 1, "sidecar version")
-    equal(state["direction"], "put", "sidecar direction")
-    equal(state["remotePath"], "/r/big", "sidecar remotePath")
-    equal(state["chunkBytes"], CHUNK, "sidecar chunkBytes")
-    equal(state["totalBytes"], len(payload), "sidecar totalBytes")
-    equal(state["identity"]["size"], len(payload), "sidecar identity 记了本地大小")
-    check(0 in state["done"], "首片记进了 done")
-    check(5 * CHUNK not in state["done"], "失败的那片没记进 done")
-    check(len(bytes(server.files["/r/big"])) >= 5 * CHUNK,
-          "远端确实是带空洞的稀疏文件（长度 %d）" % len(server.files["/r/big"]))
-
-    missing = sorted(set(off for off, _ in slices_of(len(payload), CHUNK))
-                     - set(state["done"]))
-    server.reset()
-    server.files["/r/big"] = bytearray(hole_filled(payload, state["done"], CHUNK))
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--resume"],
-                   label="--resume 只补没成的片")
-    equal(sorted(item[1] for item in server.puts), missing,
-          "只重传了没完成的片（%d 片）" % len(missing))
-    equal(set(item[2] for item in server.puts), {"write"},
-          "补片一律 write（首片早就成了）")
-    check(bytes(server.files["/r/big"]) == payload, "补完之后远端内容逐字节相同")
-    equal(transfer_of(proc)["verified"], True, "补完之后 sha256 校验通过")
-    equal(transfer_of(proc)["resumedFrom"], len(payload) - sum(
-        length for off, length in slices_of(len(payload), CHUNK) if off in missing),
-        "resumedFrom = 之前已经传成的字节数")
-    check(not os.path.exists(sidecar_of(big)), "补完之后 sidecar 删掉了")
-
-    # sidecar 记的分片大小说了算：`--resume` 不给 --chunk-bytes 也不会切错。
-    server.reset()
-    wipe(big)
-    server.fail_offsets = set([2 * CHUNK])
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big2", "--chunk-bytes",
-                     str(CHUNK), "--no-verify"], expect_exit=1,
-            label="再造一次半截传输")
-    equal(load_json(sidecar_of(big))["chunkBytes"], CHUNK, "sidecar 记着 256 KiB 的分片")
-    server.fail_offsets = set()
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big2", "--resume",
-                            "--no-verify"], label="--resume 用 sidecar 里的分片大小")
-    check(all(item[3] <= CHUNK for item in server.puts if item[0] == "/r/big2"),
-          "补片仍按 sidecar 的 256 KiB 切，没退回默认 8 MiB")
-    check(bytes(server.files["/r/big2"]) == payload, "补完内容一致")
-
-    # 身份对不上（本地文件变了）：宁可拒绝，也不能拼出一个悄悄错掉的文件。
-    server.reset()
-    wipe(big)
-    server.fail_offsets = set([3 * CHUNK])
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big3", "--chunk-bytes",
-                     str(CHUNK), "--no-verify"], expect_exit=1, label="再造一次半截传输")
-    changed = read_bytes(big) + b"tail"
-    with open(big, "wb") as handle:
-        handle.write(changed)
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big3", "--resume"],
-                   expect_exit=2, label="本地文件变了 → --resume 拒绝")
-    check("已经变了" in proc.stderr, "拒绝理由说的是身份对不上")
-    with open(big, "wb") as handle:                 # 复原
-        handle.write(payload)
-    wipe(big)
-
-    # sidecar 记的是另一个远端路径 → 也拒绝（一个本地路径同时只跟踪一趟传输）。
-    server.reset()
-    server.fail_offsets = set([3 * CHUNK])
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/bigA", "--chunk-bytes",
-                     str(CHUNK), "--no-verify"], expect_exit=1, label="再造一次半截传输")
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/bigB", "--resume"],
-                   expect_exit=2, label="sidecar 记的是别的远端路径 → 拒绝")
-    check("不是一回事" in proc.stderr, "拒绝理由说的是路径对不上")
-    wipe(big)
-
-    print("分片传输：没有 sidecar 时的续传")
-    server.reset()
-    server.files["/r/resume"] = bytearray(payload[: 3 * CHUNK])
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/resume", "--resume",
-                            "--chunk-bytes", str(CHUNK)], expect_exit=2,
-                   label="没有 sidecar 又是并行 → 拒绝按大小续传")
-    check("稀疏文件" in proc.stderr and "--parallel 1" in proc.stderr,
-          "拒绝理由讲清了空洞与顺序模式")
-
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/resume", "--resume",
-                            "--parallel", "1", "--chunk-bytes", str(CHUNK)],
-                   label="--parallel 1 才按远端大小续传")
-    equal(server.puts[0][1], 3 * CHUNK, "resume 从远端已有的大小起")
-    equal(set(item[2] for item in server.puts), {"write"}, "续传全部用 write，不截断")
-    covers([(item[1], item[3]) for item in server.puts], 3 * CHUNK, len(payload),
-           "续传的分片铺满剩下那段")
-    check(bytes(server.files["/r/resume"]) == payload, "续传后内容完整")
-    equal(transfer_of(proc)["resumedFrom"], 3 * CHUNK, "transfer.resumedFrom")
-    wipe(big)
-
-    server.reset()
-    server.files["/r/full"] = bytearray(payload)
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/full", "--resume",
-                     "--parallel", "1"],
-            expect_exit=2, label="远端不比本地小 → --resume 无从续起")
-
-    server.reset()
-    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/absent", "--resume",
-                     "--parallel", "1", "--chunk-bytes", str(CHUNK), "--no-verify"],
-            label="--resume 但远端还没有这个文件")
-    equal(server.puts[0][2], "create", "远端不存在时 --resume 退化成从头传")
-    wipe(big)
-
-    print("分片传输：首片 create 的重试幂等")
-    server.reset()
-    server.drop_once = set([0])          # 首片写成了，响应丢了
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/idem",
-                            "--chunk-bytes", str(CHUNK)],
-                   label="首片响应丢失 → 先 stat 再改 write 重发")
-    equal(server.attempts[0], 2, "首片一共发了 2 次")
-    equal([item[2] for item in server.puts if item[1] == 0], ["create", "write"],
-          "第二次改成 write，不再撞 file_exists")
-    check(any(r.get("action") == "sftp-stat" for r in server.requests),
-          "重发之前先 stat 了一次")
-    check(bytes(server.files["/r/idem"]) == payload, "最终远端内容正确")
-    equal(transfer_of(proc)["verified"], True, "重发后校验仍通过")
-
-    server.reset()
-    server.files["/r/theirs"] = bytearray(payload + payload)   # 别人的、更大的文件
-    server.drop_always = True
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/theirs",
-                            "--chunk-bytes", str(CHUNK)], expect_exit=1,
-                   label="响应丢失但远端本来就有更大的文件 → file_exists")
-    equal(json.loads(proc.stdout)["code"], "file_exists", "不是我们写的就报 file_exists")
-    equal(server.attempts[0], 1, "认出是别人的文件后不再重发")
-    check("--force" in json.loads(proc.stdout)["message"], "提示要覆盖得加 --force")
-
-    print("分片传输：退避与重试次数")
-    trace = os.path.join(root, "sleep.trace")
-    for label, setup, code in (
-            ("server_busy", lambda: setattr(server, "fail_always", "server_busy"),
-             "server_busy"),
-            ("empty_response", lambda: setattr(server, "drop_always", True),
-             "empty_response")):
-        server.reset()
-        if os.path.exists(trace):
-            os.unlink(trace)
-        setup()
-        proc = run_cli(server, ["sftp", "put", "-H", "h", small, "/r/busy"],
-                       expect_exit=2, sleep_trace=trace,
-                       label="%s → 更耐心地重试" % label)
-        equal(json.loads(proc.stdout)["code"], code, "%s 保留原码" % label)
-        equal(server.attempts[0], 6, "%s 一共试 6 次（1 + 5 次重试）" % label)
-        equal(read_lines(trace), ["0.500", "1.000", "2.000", "4.000", "4.000"],
-              "%s 的退避序列是 0.5/1/2/4/4 秒" % label)
-
-    server.reset()
-    if os.path.exists(trace):
-        os.unlink(trace)
-    server.fail_always = "operation_failed"
-    proc = run_cli(server, ["sftp", "put", "-H", "h", small, "/r/plain"],
-                   expect_exit=1, sleep_trace=trace, label="一般可重试码仍是 2 次")
-    equal(server.attempts[0], 3, "可重试的码总共试 3 次（1 + 2 次重试）")
-    equal(read_lines(trace), ["0.500", "1.000"], "一般码的退避序列是 0.5/1 秒")
-    equal(json.loads(proc.stdout)["code"], "operation_failed", "失败保留服务端的 code")
-
-    server.reset()
-    server.fail_always = "file_exists"
-    run_cli(server, ["sftp", "put", "-H", "h", small, "/r/x"],
-            expect_exit=1, label="file_exists → 退出码 1")
-    equal(server.attempts[0], 1, "file_exists 是终局，不重试")
-
-    server.reset()
-    server.fail_always = "host_not_found"
-    run_cli(server, ["sftp", "put", "-H", "h", small, "/r/x"],
-            expect_exit=4, label="host_not_found → 退出码 4")
-    equal(server.attempts[0], 1, "*_not_found 也不重试")
-
-    print("分片传输：get")
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    target = os.path.join(root, "t-down.bin")
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", target,
-                            "--chunk-bytes", str(CHUNK)])
-    check(read_bytes(target) == payload, "并行下载拼回的本地文件逐字节相同")
-    covers([(item[1], item[2]) for item in server.gets], 0, len(payload),
-           "get 的区间覆盖完整、不重叠")
-    check(all(r.get("length") is not None for r in server.requests
-              if r.get("action") == "sftp-get"), "分片 get 都带 length")
-    stats = transfer_of(proc)
-    equal(stats["verified"], True, "get 分片后也校验 sha256")
-    equal(stats["bytes"], len(payload) - stats["resumedFrom"],
-          "received == size - resumedFrom")
-    check(0 < server.max_active <= 4, "get 峰值并发 %d ≤ 4" % server.max_active)
-    check(not os.path.exists(part_of(target)), "成功后 .part 已经改名成目标")
-    check(not os.path.exists(sidecar_of(target)), "成功后 sidecar 删掉了")
-    os.unlink(target)
-
-    server.reset()
-    server.files["/r/tiny"] = bytearray(b"prod-web\n")
-    tiny = os.path.join(root, "t-tiny.txt")
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/tiny", tiny])
-    equal(read_bytes(tiny), b"prod-web\n", "小文件 get 照旧落盘")
-    gets = [r for r in server.requests if r.get("action") == "sftp-get"]
-    equal(len(gets), 1, "小文件 get 只发一条请求")
-    check("offset" not in gets[0] and "length" not in gets[0],
-          "小文件 get 不带 offset / length（请求形状与旧版一致）")
-
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/tiny", tiny],
-            expect_exit=2, label="本地已存在且没给 --force")
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/tiny", tiny, "--force"],
-            label="get --force 覆盖")
-
-    print("分片传输：get 失败后不留满尺寸的假象")
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    broken = os.path.join(root, "t-broken.bin")
-    server.get_fail_offsets = set([3 * CHUNK])
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", broken,
-                            "--chunk-bytes", str(CHUNK)], expect_exit=1,
-                   label="get 中间片一直失败")
-    check(not os.path.exists(broken), "失败时目标名根本没生成")
-    check(os.path.exists(part_of(broken)), "半成品留在 .part 里")
-    stats = json.loads(proc.stdout)["transfer"]
-    equal(stats["partPath"], part_of(broken), "transfer.partPath 指向半成品")
-    equal(stats["incomplete"], True, "get 失败标了 incomplete")
-    equal(stats["resumable"], True, "get 失败标了 resumable")
-    check("不完整" in proc.stderr and "--resume" in proc.stderr,
-          "stderr 说清「不完整、--resume 可续」")
-    state = load_json(sidecar_of(broken))
-    equal(state["direction"], "get", "sidecar direction=get")
-    check(3 * CHUNK not in state["done"], "失败的那片没记进 done")
-
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", broken, "--resume"],
-                   label="get --resume 只补没取到的片")
-    equal(sorted(item[1] for item in server.gets),
-          sorted(set(off for off, _ in slices_of(len(payload), CHUNK))
-                 - set(state["done"])),
-          "只重取了没完成的片")
-    check(read_bytes(broken) == payload, "补完之后目标文件逐字节相同")
-    check(not os.path.exists(part_of(broken)), "补完之后 .part 已经改名成目标")
-    check(not os.path.exists(sidecar_of(broken)), "补完之后 sidecar 删掉了")
-    os.unlink(broken)
-
-    print("分片传输：短载荷不是 EOF")
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    server.get_empty_once = set([2 * CHUNK])
-    server.get_half_once = set([CHUNK])
-    short = os.path.join(root, "t-short.bin")
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/down", short,
-                     "--chunk-bytes", str(CHUNK)],
-            label="非末片收到空载荷 → 重试而不是当 EOF")
-    check(server.get_attempts[2 * CHUNK] >= 2, "空载荷的那片重试了")
-    check(read_bytes(short) == payload, "重试后本地文件仍然逐字节相同（没被当成 EOF 截断）")
-    os.unlink(short)
-
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    server.get_empty_always = set([2 * CHUNK])
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", short,
-                            "--chunk-bytes", str(CHUNK)], expect_exit=1,
-                   label="非末片一直空载荷 → 该片失败")
-    equal(json.loads(proc.stdout)["code"], "remote_short_read",
-          "空载荷报 remote_short_read，不是悄悄成功")
-    equal(server.get_attempts[2 * CHUNK], 3, "空载荷的那片试满 3 次")
-    check(not os.path.exists(short), "失败时目标名没生成")
-    wipe(short)
-
-    print("分片传输：get 没有 sidecar 时的续传")
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    partial = os.path.join(root, "t-partial.bin")
-    with open(partial, "wb") as handle:
-        handle.write(payload[: 2 * CHUNK])
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", partial, "--resume",
-                            "--chunk-bytes", str(CHUNK)], expect_exit=2,
-                   label="没有 sidecar 又是并行 → 拒绝按大小续传")
-    check("稀疏文件" in proc.stderr, "拒绝理由讲清了空洞")
-
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", partial, "--resume",
-                            "--parallel", "1", "--chunk-bytes", str(CHUNK)],
-                   label="--parallel 1 才按本地大小续传")
-    equal(min(item[1] for item in server.gets), 2 * CHUNK, "get --resume 从本地已有大小起")
-    check(read_bytes(partial) == payload, "续传后的本地文件完整")
-    equal(transfer_of(proc)["resumedFrom"], 2 * CHUNK, "get 的 resumedFrom")
-    check(not os.path.exists(part_of(partial)), "旧版留在目标名上的半截文件也收尾了")
-
-    server.reset()
-    server.files["/r/down"] = bytearray(payload[: 1024])
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/down", partial, "--resume",
-                     "--parallel", "1"],
-            expect_exit=2, label="本地比远端还大 → 无从续起")
-    os.unlink(partial)
-
-    print("分片传输：本地 I/O 出错也是结构化失败")
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    blocked = os.path.join(root, "t-blocked.bin")
-    os.mkdir(part_of(blocked))               # 半成品的位置被一个目录占着
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", blocked,
-                            "--chunk-bytes", str(CHUNK)], expect_exit=2,
-                   label="get 的 .part 位置是个目录")
-    equal(json.loads(proc.stdout)["code"], "local_write_failed", "报 local_write_failed")
-    check("Traceback" not in proc.stderr, "没有 traceback 漏到 stderr")
-    os.rmdir(part_of(blocked))
-
-    server.reset()
-    unreadable = make_local(root, "t-unreadable.bin", 4 * CHUNK)
-    os.chmod(unreadable, 0)
-    proc = run_cli(server, ["sftp", "put", "-H", "h", unreadable, "/r/unreadable",
-                            "--chunk-bytes", str(CHUNK)], expect_exit=2,
-                   label="put 读不了本地文件")
-    equal(json.loads(proc.stdout)["code"], "local_read_failed", "报 local_read_failed")
-    check("Traceback" not in proc.stderr, "没有 traceback 漏到 stderr")
-    os.chmod(unreadable, 0o644)
-
-    print("分片传输：校验")
-    server.reset()
-    quoted = "/r/有空格 的路径"
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, quoted,
-                            "--chunk-bytes", str(CHUNK)])
-    equal(len(server.runs), 1, "校验只发一条 run")
-    command = server.runs[0]
-    check("sha256sum -- " in command and "shasum -a 256 -- " in command,
-          "远端命令是 sha256sum 兜底 shasum")
-    check(shlex.quote(quoted) in command, "远端路径经过 shlex.quote")
-    equal(transfer_of(proc)["sha256"], hashlib.sha256(payload).hexdigest(),
-          "transfer.sha256 是本地算的")
-
-    server.reset()
-    server.sha_override = "missing"
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/nohash",
-                            "--chunk-bytes", str(CHUNK)],
-                   label="远端没有 sha256sum / shasum")
-    equal(transfer_of(proc)["verified"], False, "没工具就 verified=false")
-    check("跳过校验" in (transfer_of(proc)["verifyNote"] or ""), "verifyNote 说明原因")
-    check("跳过校验" in proc.stderr, "stderr 上提示了跳过校验")
-
-    server.reset()
-    server.sha_override = "0" * 64
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/bad",
-                            "--chunk-bytes", str(CHUNK)],
-                   expect_exit=1, label="sha256 不一致 → 退出码 1")
-    equal(json.loads(proc.stdout)["code"], "checksum_mismatch", "code=checksum_mismatch")
-    check("整份重传" in json.loads(proc.stdout)["message"], "提示整份重传")
-    check(not os.path.exists(sidecar_of(big)),
-          "内容对不上时 sidecar 也删掉（补片补不回内容）")
-
-    server.reset()
-    server.files["/r/down"] = bytearray(payload)
-    server.sha_override = "0" * 64
-    mismatch = os.path.join(root, "t-mismatch.bin")
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/down", mismatch,
-                            "--chunk-bytes", str(CHUNK)],
-                   expect_exit=1, label="get 校验不过 → 不占用目标名")
-    check(not os.path.exists(mismatch), "校验不过时目标名不生成")
-    check(os.path.exists(part_of(mismatch)), "内容留在 .part 里给人看")
-    os.unlink(part_of(mismatch))
-
-    print("分片传输：参数校验与输出")
-    server.reset()
-    for bad in (["--parallel", "0"], ["--parallel", "7"], ["--chunk-mib", "9"],
-                ["--chunk-bytes", "0"], ["--force", "--resume"]):
-        run_cli(server, ["sftp", "put", "-H", "h", small, "/r/x"] + bad,
-                expect_exit=2, label="参数校验 " + " ".join(bad))
-    run_cli(server, ["sftp", "get", "-H", "h", "/r/x", os.path.join(root, "z"),
-                     "--parallel", "7"], expect_exit=2, label="get 也校验 --parallel")
-    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/x", os.path.join(root, "z"),
-                            "--force", "--resume"], expect_exit=2,
-                   label="get 也拦 --force --resume")
-    check("--force" in proc.stderr and "--resume" in proc.stderr,
-          "argparse 说清了这两个选项互斥")
-
-    server.reset()
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/table",
-                            "--chunk-bytes", str(CHUNK), "--format", "table"])
-    check("chunks" in proc.stdout and "verified" in proc.stdout, "table 是两列字段表")
+    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/big", "--quiet"])
+    check(bytes(server.files["/r/big"]) == read_bytes(big), "大文件逐字节相同")
+    equal(transfer_of(proc)["verified"], True, "≥ 8 MiB 默认校验且一致")
+    equal(len(server.runs), 1, "校验发了一条 run")
     check("上传完成" in proc.stderr, "非 tty 时结束仍打一行汇总到 stderr")
 
+    print("传输：get")
     server.reset()
-    proc = run_cli(server, ["sftp", "put", "-H", "h", big, "/r/quiet",
-                            "--chunk-bytes", str(CHUNK), "--quiet", "--no-verify"])
-    check("\r" not in proc.stderr, "--quiet 不刷进度行")
-    check("上传完成" in proc.stderr, "--quiet 仍打汇总")
+    server.files["/r/g"] = bytearray(os.urandom(3 * one_mib + 7))
+    target = os.path.join(root, "g.bin")
+    wipe(target)
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target])
+    equal(server.fds_seen, [1], "get 也交 fd")
+    check(read_bytes(target) == bytes(server.files["/r/g"]), "下载内容逐字节相同")
+    check(not os.path.exists(part_of(target)), "成功后 .part 改名成目标")
+    check(not os.path.exists(sidecar_of(target)), "成功后续传状态文件删掉了")
+    equal(transfer_of(proc)["bytes"], 3 * one_mib + 7, "transfer.bytes")
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target], expect_exit=2,
+            label="本地已存在且没给 --force → 本地拒绝")
+
+    print("传输：中途断了自动续上，只补缺的区间")
+    server.reset()
+    server.files["/r/g"] = bytearray(os.urandom(2 * one_mib))
+    server.fail_after = one_mib
+    wipe(target)
+    trace = os.path.join(root, "sleep-trace")
+    if os.path.exists(trace):
+        os.unlink(trace)
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target], sleep_trace=trace,
+                   label="get 中途失败后自动续传")
+    gets = server.transfers("sftp-get")
+    equal(len(gets), 2, "一次失败 + 一次续传")
+    check("ranges" not in gets[0], "第一次整份")
+    equal(gets[1].get("ranges"), [{"offset": one_mib, "length": one_mib}],
+          "续传只请求缺的那一半")
+    check(read_bytes(target) == bytes(server.files["/r/g"]), "续传拼回来的内容逐字节相同")
+    equal(read_lines(trace), ["0.500"], "一次普通重试退避 0.5 秒")
+
+    server.reset()
+    server.files["/r/up"] = bytearray()
+    del server.files["/r/up"]
+    server.fail_after = one_mib
+    run_cli(server, ["sftp", "put", "-H", "h", big, "/r/up", "--quiet"], sleep_trace=trace,
+            label="put 中途失败后自动续传")
+    puts = server.transfers("sftp-put")
+    equal(len(puts), 2, "put 也是一次失败 + 一次续传")
+    check("ranges" in puts[1] and "force" not in puts[1],
+          "续传只补区间、不再带覆盖语义")
+    check(bytes(server.files["/r/up"]) == read_bytes(big), "put 续传后内容逐字节相同")
+
+    print("传输：一直失败 → 留下续传状态，--resume 接着传")
+    server.reset()
+    server.files["/r/g"] = bytearray(os.urandom(2 * one_mib))
+    server.fail_after = one_mib // 2
+    server.fail_always = "connect_failed"
+    wipe(target)
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target], expect_exit=5,
+                   sleep_trace=trace, label="get 一直失败")
+    stats = transfer_of(proc)
+    equal(stats["incomplete"], True, "失败时标记 incomplete")
+    equal(stats["resumable"], True, "失败时可以 --resume")
+    check(os.path.exists(part_of(target)) and not os.path.exists(target),
+          "半成品在 .part，目标名没生成")
+    saved = load_json(sidecar_of(target))
+    equal(saved["version"], 2, "sidecar v2")
+    # 首次 + 2 次自动续传，每次都在失败前多搬 512 KiB：记账是累计的。
+    equal(saved["done"], [[0, 3 * one_mib // 2]], "续传状态记下了每次尝试累计完成的区间")
+    server.fail_always = None
+    server.fail_after = None
+    del server.requests[:]
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target, "--resume"], label="--resume")
+    equal(server.transfers("sftp-get")[0].get("ranges"),
+          [{"offset": 3 * one_mib // 2, "length": one_mib // 2}],
+          "--resume 只请求没完成的区间")
+    check(read_bytes(target) == bytes(server.files["/r/g"]), "续传后内容逐字节相同")
+    check(not os.path.exists(sidecar_of(target)), "续传成功后状态文件删掉了")
+
+    print("传输：续传前核对身份")
+    server.reset()
+    server.files["/r/g"] = bytearray(os.urandom(one_mib))
+    server.fail_after = 1
+    server.fail_always = "connect_failed"
+    wipe(target)
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target], expect_exit=5,
+            sleep_trace=trace, label="先失败一次留下状态")
+    server.fail_always = None
+    server.files["/r/g"] = bytearray(os.urandom(one_mib + 1))
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target, "--resume"],
+                   expect_exit=2, label="远端变了 → 拒绝续传")
+    check("已经变了" in proc.stderr, "说清楚远端变了")
+    wipe(target)
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target, "--resume"], expect_exit=2,
+            label="没有续传状态 → 拒绝 --resume")
+
+    print("传输：服务端忙 → 退避重试")
+    server.reset()
+    server.files["/r/g"] = bytearray(os.urandom(one_mib))
+    server.busy_once = True
+    if os.path.exists(trace):
+        os.unlink(trace)
+    wipe(target)
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/g", target], sleep_trace=trace,
+            label="server_busy 后重试成功")
+    equal(read_lines(trace), ["0.500"], "server_busy 退避 0.5 秒后重试")
+    check("ranges" not in server.transfers("sftp-get")[1],
+          "还没完成任何区间时，重试仍整份请求（覆盖语义不丢）")
+
+    print("传输：校验")
+    server.reset()
+    server.files["/r/big"] = bytearray(os.urandom(9 * one_mib))
+    server.sha_override = "0" * 64
+    wipe(target)
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/big", target, "--quiet"],
+                   expect_exit=1, label="sha256 不一致")
+    equal(json.loads(proc.stdout)["code"], "checksum_mismatch", "code: checksum_mismatch")
+    check(os.path.exists(part_of(target)) and not os.path.exists(target),
+          "校验失败不占用目标名")
+    server.sha_override = "missing"
+    wipe(target)
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/big", target, "--quiet"],
+                   label="远端没有哈希工具")
+    check("跳过校验" in (transfer_of(proc)["verifyNote"] or ""), "没工具只是跳过校验")
+    wipe(target)
+    server.sha_override = None
+    del server.runs[:]
+    run_cli(server, ["sftp", "get", "-H", "h", "/r/big", target, "--no-verify", "--quiet"],
+            label="--no-verify")
+    equal(server.runs, [], "--no-verify 不发 run")
+
+    print("传输：参数校验与输出")
+    for bad in (["--parallel", "0"], ["--parallel", "17"], ["--force", "--resume"]):
+        run_cli(server, ["sftp", "put", "-H", "h", small, "/r/x"] + bad, expect_exit=2,
+                label="put " + " ".join(bad))
+    wipe(target)
+    server.files["/r/t"] = bytearray(b"abc")
+    proc = run_cli(server, ["sftp", "get", "-H", "h", "/r/t", target, "--format", "table"])
+    check("parallel" in proc.stdout and "chunks" not in proc.stdout,
+          "table 是字段表，没有旧的 chunks 列")
+    wipe(target)
 
 
 def load_client_module():
@@ -1349,7 +1034,7 @@ def exercise_on_demand_launch(root):
     client.time.sleep = lambda seconds: None
     ready_socket = os.path.join(prefs, "ready.sock")
     client.socket_paths = lambda: [ready_socket]
-    client.exchange = lambda path, request: {"ok": True}
+    client.exchange = lambda path, request, *rest: {"ok": True}
 
     # 1. 读得到且关着：本地直接拦下，不起进程。
     client.PREFERENCE_CANDIDATES = [readable_off]
@@ -1360,7 +1045,7 @@ def exercise_on_demand_launch(root):
 
     # 残留 socket + 按需启动关着：错误码不变，但消息要带上「为什么没自己起」，
     # 否则 Agent 只看到「等它起来」，不知道有个开关能让客户端自己起。
-    def refuse(path, request):
+    def refuse(path, request, *rest):
         raise ConnectionRefusedError()
     dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     dead.bind(ready_socket)
@@ -1370,7 +1055,7 @@ def exercise_on_demand_launch(root):
     equal(response["code"], client.CODE_SOCKET_STALE, "残留 socket + 按需启动关着 → 仍是 uterm_socket_stale")
     check("允许 CLI 按需启动" in response["message"], "残留 socket 的消息带上按需启动没成功的原因")
     os.unlink(ready_socket)
-    client.exchange = lambda path, request: {"ok": True}
+    client.exchange = lambda path, request, *rest: {"ok": True}
 
     if denied_really:
         client.PREFERENCE_CANDIDATES = [unreadable]
