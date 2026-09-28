@@ -270,7 +270,7 @@ struct WorkspaceWindowView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: { confirm in
-                Text(byteSize(confirm.size))
+                Text(UFormat.bytes(confirm.size))
             }
         // 「打不开」的两个 alert（类型不支持 / 太大）。抽成独立 ViewModifier ——
         // 两串内联 .alert 会把本就庞大的 body 推过类型检查上限。
@@ -373,10 +373,6 @@ struct WorkspaceWindowView: View {
         }
     }
 
-    private func byteSize(_ n: Int64) -> String {
-        formattedFileSize(n)
-    }
-
     @MainActor
     private func handleSave(id: UUID) async {
         let result = await workspace.filePreviewModel.save(id)
@@ -449,10 +445,6 @@ private struct BlockedFile: Identifiable {
     let reason: Reason
 }
 
-private func formattedFileSize(_ n: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
-}
-
 /// 「打不开」的两个 alert。**两个**而不是一个带分支标题的：`.alert` 的标题位置
 /// 只有写成字面量才会被抽进 `Localizable.xcstrings`，用变量（哪怕类型是
 /// `LocalizedStringKey`）这两句标题就从本地化里整个消失。
@@ -477,7 +469,7 @@ private struct BlockedFileAlerts: ViewModifier {
                 actions(for: file)
             } message: { file in
                 if case .tooLarge(let size) = file.reason {
-                    Text("该文件 \(formattedFileSize(size))，超过 50 MB 上限。建议用外部编辑器。")
+                    Text("该文件 \(UFormat.bytes(size))，超过 50 MB 上限。建议用外部编辑器。")
                 }
             }
     }

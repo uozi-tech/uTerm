@@ -132,15 +132,13 @@ final class MobileRenderLintTests: XCTestCase {
 
     /// `DateFormatter()` / `RelativeDateTimeFormatter()` /
     /// `ByteCountFormatter.string(fromByteCount:` 都是几十微秒级的构造开销，
-    /// 摊到逐行调用就是掉帧。共享实例在 `MFormat`（iOS）/ `WelcomeFormat`（macOS）。
-    ///
-    /// `MFormat.swift` 自己当然要建——按文件名跳过。
+    /// 摊到逐行调用就是掉帧。数字 / 时间统一走 `UFormat`（uAppKit）与
+    /// `UTermFormat`（`uTerm/Shared/Formatting`），两者都是纯函数、不建 formatter。
     func testReportFormattersBuiltInline() throws {
         let needles = ["DateFormatter()", "RelativeDateTimeFormatter()",
                        "ByteCountFormatter()", "ByteCountFormatter.string("]
         var hits: [String] = []
-        for file in try GestureChainLintTests.mobileFiles()
-        where file.lastPathComponent != "MFormat.swift" {
+        for file in try GestureChainLintTests.mobileFiles() {
             let source = try String(contentsOf: file, encoding: .utf8)
             for (i, line) in source.components(separatedBy: "\n").enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)

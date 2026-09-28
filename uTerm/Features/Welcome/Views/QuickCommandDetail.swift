@@ -153,7 +153,8 @@ struct QuickCommandDetail: View {
         case .running:
             Text("运行中…").font(.system(size: 10.5)).foregroundStyle(UD.text4)
         case .done(let ok, let code, let ms):
-            Text(ok ? "退出码 \(code ?? 0) · \(ms)ms" : (code == nil ? "连接失败" : "退出码 \(code!) · \(ms)ms"))
+            let duration = UFormat.duration(milliseconds: Double(ms))
+            Text(ok ? "退出码 \(code ?? 0) · \(duration)" : (code == nil ? "连接失败" : "退出码 \(code!) · \(duration)"))
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(ok ? UD.text4 : UD.danger)
         }
@@ -260,7 +261,7 @@ struct QuickCommandDetail: View {
                             GridItem(.flexible(), alignment: .leading)],
                   alignment: .leading, spacing: 14) {
             metaCell("执行方式", serverCount > 1 ? "并行 · \(serverCount) 台" : "单台")
-            metaCell("上次运行", WelcomeFormat.relative(command.lastRunAt))
+            metaCell("上次运行", UTermFormat.relative(command.lastRunAt))
             metaCell("运行次数", "\(command.runCount)", mono: true)
             metaCell("AI 介入", command.aiAssisted ? "已开启" : "关闭",
                      valueColor: command.aiAssisted ? UD.aiAccent : UD.text)

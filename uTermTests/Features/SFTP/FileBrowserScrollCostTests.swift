@@ -640,7 +640,7 @@ private struct ProbeAttributionList: View {
                 .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if let size = entry.size, !entry.isDirectory {
-                Text(SFTPFormat.bytes(Int64(size)))
+                Text(UFormat.bytes(Int64(clamping: size)))
                     .font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
@@ -660,11 +660,11 @@ private struct ProbeAttributionList: View {
             Text(entry.ownerDisplayText).font(UD.mono(12)).foregroundStyle(UD.text2)
                 .lineLimit(1).frame(width: 112, alignment: .leading)
             permissionChip(entry).frame(width: 72, alignment: .leading)
-            Text(entry.modifiedAt.map { SFTPFormat.date($0) } ?? "--")
+            Text(entry.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder)
                 .font(UD.mono(12)).foregroundStyle(UD.text3)
                 .lineLimit(1).frame(width: 156, alignment: .leading)
             Text(entry.isDirectory || entry.size == nil
-                 ? "--" : SFTPFormat.bytes(Int64(entry.size!)))
+                 ? UFormat.placeholder : UFormat.bytes(Int64(clamping: entry.size!)))
                 .font(UD.mono(12)).foregroundStyle(UD.text2)
                 .lineLimit(1).frame(width: 84, alignment: .trailing)
         }

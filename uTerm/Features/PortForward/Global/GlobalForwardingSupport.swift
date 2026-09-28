@@ -136,21 +136,3 @@ nonisolated struct GFTrafficStat: Sendable, Equatable {
     let downRate: UInt64  // 下行 B/s（上一秒）
     static let zero = GFTrafficStat(up: 0, down: 0, upRate: 0, downRate: 0)
 }
-
-/// 人类可读字节（二进制 1024 进制，确定性、可单测；不用 locale 相关的 ByteCountFormatter）。
-nonisolated func gfFormatBytes(_ n: UInt64) -> String {
-    if n < 1024 { return "\(n) B" }
-    let units = ["KB", "MB", "GB", "TB", "PB", "EB"]
-    var v = Double(n) / 1024
-    var i = 0
-    while v >= 1024 && i < units.count - 1 { v /= 1024; i += 1 }
-    // 边界进位修正：选档用未四舍的 v，但显示是 %.1f；当 v 落在 [1023.95, 1024) 时 %.1f 会进位成
-    // 「1024.0 KB」—— 再提一档显示成「1.0 MB」。`(v*10).rounded() >= 10240` 即 v 四舍到 1 位后 ≥1024。
-    if i < units.count - 1, (v * 10).rounded() >= 10240 { v /= 1024; i += 1 }
-    return String(format: "%.1f %@", v, units[i])
-}
-
-/// 速率：`<字节>/s`。
-nonisolated func gfFormatRate(_ bytesPerSec: UInt64) -> String {
-    "\(gfFormatBytes(bytesPerSec))/s"
-}

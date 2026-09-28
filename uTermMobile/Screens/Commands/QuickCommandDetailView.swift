@@ -246,7 +246,7 @@ struct QuickCommandDetailView: View {
         .background(M.aiAccent.opacity(0.15))
         .clipShape(Capsule())
     }
-    private var lastRunText: String { MFormat.relative(cmd.lastRunAt) }
+    private var lastRunText: String { UTermFormat.relative(cmd.lastRunAt) }
     private func delete() {
         context.delete(cmd)
         try? context.save()
@@ -294,7 +294,7 @@ private struct RunLogRow: View {
                             MDot(color: r.ok ? M.success : M.danger, size: 6)
                             Text(r.serverName).font(M.sans(12.5, weight: .medium)).foregroundStyle(M.text).lineLimit(1)
                             Spacer(minLength: 6)
-                            Text("退出码 \(r.exitCode.map(String.init) ?? "—") · \(r.durationMs)ms")
+                            Text("退出码 \(r.exitCode.map(String.init) ?? UFormat.placeholder) · \(UFormat.duration(milliseconds: Double(r.durationMs)))")
                                 .font(M.mono(11.5)).foregroundStyle(r.ok ? M.text4 : M.danger)
                         }
                     }
@@ -326,7 +326,6 @@ private struct RunLogRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 
-    // 共享格式化器（`MFormat`）：改前每条执行日志行现建一个 `DateFormatter`。
-    private var timeText: String { MFormat.stamp(run.startedAt) }
-    private var secText: String { String(format: "%.1fs", Double(run.durationMs) / 1000) }
+    private var timeText: String { UTermFormat.logTimestamp(run.startedAt) }
+    private var secText: String { UFormat.duration(milliseconds: Double(run.durationMs)) }
 }

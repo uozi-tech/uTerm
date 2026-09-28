@@ -159,9 +159,7 @@ private struct UpdateStatusPanel: View {
 
     private var statusLine: String {
         if let date = appUpdater.lastUpdateCheckDate {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .full
-            return "上次检查：\(formatter.localizedString(for: date, relativeTo: Date()))"
+            return "上次检查：\(UFormat.relative(date))"
         } else {
             return "从未检查更新"
         }

@@ -100,7 +100,7 @@ private struct PreviewUnavailableBody: View {
                 .frame(maxWidth: 520)
 
             if let byteSize = buffer.byteSize, byteSize > 0 {
-                Text(ByteCountFormatter.string(fromByteCount: byteSize, countStyle: .file))
+                Text(UFormat.bytes(byteSize))
                     .font(UD.mono(10.5))
                     .foregroundStyle(UD.text4)
             }

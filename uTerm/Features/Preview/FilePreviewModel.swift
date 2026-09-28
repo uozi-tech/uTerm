@@ -1,4 +1,5 @@
 import UPaneGroups
+import UDesignKit
 import SwiftUI
 import AppKit
 
@@ -123,9 +124,8 @@ final class FilePreviewModel {
             case .unsupportedMarkdownImageSource(let source):
                 return "为保护本机网络，Markdown 只预览同一 SFTP 主机上的图片：\(source)"
             case .markdownImageTooLarge(let bytes):
-                let cap = Double(MarkdownImageCache.perImageByteCap) / (1024 * 1024)
-                let actual = Double(bytes) / (1024 * 1024)
-                return String(format: "图片超过 %.0f MB（实际约 %.1f MB），已跳过预览", cap, actual)
+                let cap = UFormat.bytes(MarkdownImageCache.perImageByteCap)
+                return "图片超过 \(cap)（实际约 \(UFormat.bytes(bytes))），已跳过预览"
             }
         }
     }

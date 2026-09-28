@@ -92,7 +92,7 @@ struct QuickCommandLogEntry: View {
             HStack(spacing: 9) {
                 Circle().fill(statusColor).frame(width: 7, height: 7)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(QuickCommandFormat.logTimestamp(run.startedAt))
+                    Text(UTermFormat.logTimestamp(run.startedAt))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(UD.text)
                     Text(summary)
@@ -113,7 +113,7 @@ struct QuickCommandLogEntry: View {
             // `_FocusRingView` + 一个 `KeyViewProxy`），AX 语义手工补回。
             .onTapGesture { toggle() }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(QuickCommandFormat.logTimestamp(run.startedAt))，\(summary)")
+            .accessibilityLabel("\(UTermFormat.logTimestamp(run.startedAt))，\(summary)")
             .accessibilityValue(open ? "已展开" : "已折叠")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { toggle() }
@@ -142,7 +142,7 @@ struct QuickCommandLogEntry: View {
         let ok = results.count - failCount
         var parts = ["\(results.count) 台", "成功 \(ok)"]
         if failCount > 0 { parts.append("失败 \(failCount)") }
-        parts.append(QuickCommandFormat.durationSeconds(run.durationMs))
+        parts.append(UFormat.duration(milliseconds: Double(run.durationMs)))
         return parts.joined(separator: " · ")
     }
 
@@ -173,8 +173,9 @@ struct QuickCommandLogEntry: View {
     }
 
     private func resultDetail(_ result: QuickCommandServerResult) -> String {
-        guard let code = result.exitCode else { return "连接失败 · \(result.durationMs)ms" }
-        return "退出码 \(code) · \(result.durationMs)ms"
+        let duration = UFormat.duration(milliseconds: Double(result.durationMs))
+        guard let code = result.exitCode else { return "连接失败 · \(duration)" }
+        return "退出码 \(code) · \(duration)"
     }
 
     private func aiRecordBlock(_ ai: QuickCommandAIRecord) -> some View {
@@ -210,31 +211,5 @@ struct QuickCommandLogEntry: View {
         .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.aiAccent.opacity(0.10)))
-    }
-}
-
-/// 执行日志的时间 / 耗时格式化。
-nonisolated enum QuickCommandFormat {
-    // 缓存格式化器（每条日志行都会调 logTimestamp，逐行新建 DateFormatter 很浪费）。
-    // 仅 MainActor 的日志视图调用，故 @MainActor 静态存储，避开 DateFormatter 非 Sendable。
-    @MainActor private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "HH:mm"; return f
-    }()
-    @MainActor private static let monthDayFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.setLocalizedDateFormatFromTemplate("Md"); return f
-    }()
-
-    /// 友好时间戳：今天 HH:mm / 昨天 HH:mm / M月d日 HH:mm（按当前 locale）。
-    @MainActor static func logTimestamp(_ date: Date) -> String {
-        let cal = Calendar.current
-        let time = timeFormatter.string(from: date)
-        if cal.isDateInToday(date) { return "今天 \(time)" }
-        if cal.isDateInYesterday(date) { return "昨天 \(time)" }
-        return "\(monthDayFormatter.string(from: date)) \(time)"
-    }
-
-    /// 毫秒 → "X.Xs"。
-    static func durationSeconds(_ ms: Int) -> String {
-        String(format: "%.1fs", Double(ms) / 1000)
     }
 }

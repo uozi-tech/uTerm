@@ -448,7 +448,7 @@ private struct ProbeRowDragModifier: ViewModifier {
 /// 三处后来被改掉的形态在这里原样保留：
 /// 1. 整行包在一个 plain `Button` 里；
 /// 2. 名称与端点各挂一个**常驻** `.help`；
-/// 3. 每行现建一个 `RelativeDateTimeFormatter`（`WelcomeFormat.relative` 旧实现）。
+/// 3. 每行现建一个 `RelativeDateTimeFormatter`（欢迎页相对时间的旧实现）。
 private struct LegacyServerRow: View {
     let profile: ServerProfile
     let query: String
@@ -511,7 +511,7 @@ private struct LegacyServerRow: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// `WelcomeFormat.relative` 的改前实现：每次调用现建一个格式化器。
+    /// 欢迎页相对时间的改前实现：每次调用现建一个格式化器。
     private static func legacyRelative(_ date: Date?) -> String {
         guard let date else { return "从未" }
         let formatter = RelativeDateTimeFormatter()

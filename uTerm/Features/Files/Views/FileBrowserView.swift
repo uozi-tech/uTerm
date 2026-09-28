@@ -474,7 +474,7 @@ struct FileBrowserContent: View {
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if let size = entry.size, !entry.isDirectory {
-                Text(byteText(size)).font(UD.mono(11)).foregroundStyle(UD.text3)
+                Text(UFormat.bytes(Int64(clamping: size))).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .padding(.horizontal, 10)
@@ -516,7 +516,7 @@ struct FileBrowserContent: View {
     private func entryAccessibilityValue(_ entry: RemoteEntry, kind: BrowserFileKind) -> String {
         var parts: [String] = [kind.label]
         if !entry.isDirectory, let size = entry.size {
-            parts.append(byteText(size))
+            parts.append(UFormat.bytes(Int64(clamping: size)))
         }
         return parts.joined(separator: "，")
     }
@@ -673,16 +673,6 @@ struct FileBrowserContent: View {
             name: .openRemoteFile,
             object: nil,
             userInfo: userInfo)
-    }
-
-    private static let byteFormatter: ByteCountFormatter = {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        return f
-    }()
-
-    private func byteText(_ bytes: UInt64) -> String {
-        Self.byteFormatter.string(fromByteCount: Int64(bytes))
     }
 
     private func downloadFile(_ entry: RemoteEntry) {

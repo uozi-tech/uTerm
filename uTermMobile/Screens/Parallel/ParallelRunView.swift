@@ -1,3 +1,4 @@
+import UDesignKit
 import SwiftUI
 import SwiftData
 import Combine
@@ -184,7 +185,7 @@ struct ParallelRunView: View {
                     if c.failedCount > 0 {
                         Text("\(c.failedCount) 失败").font(M.mono(12)).foregroundStyle(M.danger)
                     }
-                    Text(String(format: "%.1fs", elapsed)).font(M.mono(12)).foregroundStyle(M.text4)
+                    Text(UFormat.duration(seconds: max(0, elapsed))).font(M.mono(12)).foregroundStyle(M.text4)
                 }
             }
         }

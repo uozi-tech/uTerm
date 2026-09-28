@@ -93,9 +93,12 @@ struct StatusBarView: View {
         if let cores {
             parts.append("\(cores) 核")
         }
-        parts.append("CPU \(String(format: "%.0f%%", cpuPercent))")
+        parts.append("CPU \(Self.percent(cpuPercent))")
         return parts.joined(separator: " · ")
     }
+
+    /// 遥测百分比是 0…100 刻度，`UFormat.percent` 吃 0…1。
+    static func percent(_ value: Double) -> String { UFormat.percent(value / 100) }
 
     private func cpuLoadItem(load: String?, cpu: Double, cores: Int?) -> some View {
         Button { cpuPopover.toggle() } label: {
@@ -105,7 +108,7 @@ struct StatusBarView: View {
                                  label: load, iconSize: 11)
                 }
                 UDFooterItem(systemImage: "cpu", color: UD.mCPU,
-                             label: String(format: "%.0f%%", cpu), iconSize: 11)
+                             label: Self.percent(cpu), iconSize: 11)
             }
         }
         .buttonStyle(.plain)
@@ -123,15 +126,15 @@ struct StatusBarView: View {
     private func memItem(_ text: String, pct: Double) -> some View {
         Button { memPopover.toggle() } label: {
             UDFooterItem(systemImage: "memorychip", color: UD.mMem,
-                         label: "\(text) · \(String(format: "%.0f%%", pct))", iconSize: 11)
+                         label: "\(text) · \(Self.percent(pct))", iconSize: 11)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("内存 \(text) · \(String(format: "%.0f%%", pct))"))
+        .accessibilityLabel(Text("内存 \(text) · \(Self.percent(pct))"))
         .help("查看内存负载历史")
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {
             SparklinePopover(
                 title: "内存负载",
-                summary: "\(text) · \(String(format: "%.0f%%", pct))",
+                summary: "\(text) · \(Self.percent(pct))",
                 color: UD.mMem,
                 history: workspace.telemetryModel.memHistory)
         }
@@ -139,7 +142,7 @@ struct StatusBarView: View {
 
     private func diskLabel(_ text: String, pct: Double?) -> String {
         guard let pct else { return text }
-        return "\(text) · \(String(format: "%.0f%%", pct))"
+        return "\(text) · \(Self.percent(pct))"
     }
 
     private var endpointText: String? {
@@ -166,7 +169,7 @@ private struct SparklinePopover: View {
             }
             sparkline.frame(width: 280, height: 80)
             HStack {
-                Text("-2 min"); Spacer(); Text("现在")
+                Text("2 分钟前"); Spacer(); Text("现在")
             }
             .font(UD.mono(9)).foregroundStyle(UD.text4)
         }

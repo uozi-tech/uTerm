@@ -355,7 +355,7 @@ private struct GroupRowView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityLabel("\(name)，\(count) 台主机\(builtin ? "，系统内置" : "")")
+        .accessibilityLabel("\(name)，\(UFormat.count(count)) 台主机\(builtin ? "，系统内置" : "")")
         // `onTapGesture` 不像 `Button` 那样自带 AX 默认动作：只标 `.isButton`
         // 的话 VoiceOver / 全键盘控制按下去是空转。显式补一条默认动作。
         .accessibilityAction { onSelect() }
@@ -465,7 +465,7 @@ private struct GroupDetailView: View {
             groupGlyph(color: group.color)
             VStack(alignment: .leading, spacing: 4) {
                 titleEditor
-                Text("\(members.count) 台主机")
+                Text("\(UFormat.count(members.count)) 台主机")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text3)
             }
@@ -708,7 +708,7 @@ private struct UngroupedDetailView: View {
                         Text("未分组")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(UD.text)
-                        Text("\(members.count) 台主机\(Text("  ·  系统内置，不可删除").foregroundStyle(UD.text4))")
+                        Text("\(UFormat.count(members.count)) 台主机\(Text("  ·  系统内置，不可删除").foregroundStyle(UD.text4))")
                             .font(.system(size: 12))
                             .foregroundStyle(UD.text3)
                     }

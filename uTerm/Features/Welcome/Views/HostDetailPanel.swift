@@ -142,7 +142,7 @@ struct HostDetailPanel: View {
             } else {
                 metaCell("认证", authLabel)
             }
-            metaCell("上次连接", WelcomeFormat.relative(profile.lastConnectedAt))
+            metaCell("上次连接", UTermFormat.relative(profile.lastConnectedAt))
             metaCell("跳板机", jumpLabel)
         }
     }

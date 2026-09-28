@@ -232,18 +232,20 @@ final class WelcomeServerListContractTests: XCTestCase {
         XCTAssertTrue(source.contains(".help(whenHovering: hover, profile.displayEndpoint)"))
     }
 
-    /// 相对时间格式化器必须是共享实例：`ServerRow` 逐行调用它。
-    func testWelcomeRelativeFormatterIsShared() {
+    /// 相对时间是纯函数：`ServerRow` 逐行调用它，不能现建任何 formatter。
+    func testWelcomeRelativeTimeIsPureFunction() {
         let now = Date()
-        let a = WelcomeFormat.relative(now.addingTimeInterval(-7200))
-        let b = WelcomeFormat.relative(now.addingTimeInterval(-7200))
-        XCTAssertEqual(a, b, "共享格式化器的输出必须稳定")
-        XCTAssertEqual(WelcomeFormat.relative(nil), "从未")
+        let a = UTermFormat.relative(now.addingTimeInterval(-7200), now: now)
+        let b = UTermFormat.relative(now.addingTimeInterval(-7200), now: now)
+        XCTAssertEqual(a, b, "相对时间输出必须稳定")
+        XCTAssertEqual(a, "2 小时前")
+        XCTAssertEqual(UTermFormat.relative(nil), "从未")
+        XCTAssertEqual(UTermFormat.relative(nil, fallback: "从未连接"), "从未连接")
 
         let source = try? String(contentsOf: Self.repoRoot.appendingPathComponent(
-            "uTerm/Features/Welcome/Views/WelcomeComponents.swift"), encoding: .utf8)
+            "uTerm/Shared/Formatting/UTermFormat.swift"), encoding: .utf8)
         XCTAssertNotNil(source)
-        XCTAssertFalse(source?.contains("let formatter = RelativeDateTimeFormatter()") ?? true,
+        XCTAssertFalse(source?.contains("RelativeDateTimeFormatter()") ?? true,
                        "别在 relative(_:) 里现建格式化器 —— 它是逐行调用的")
     }
 

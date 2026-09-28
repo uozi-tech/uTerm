@@ -202,8 +202,8 @@ struct ParallelShellPane: View {
     }
 
     private var durationText: String {
-        guard let ms = state.durationMs else { return "—" }
-        return String(format: "%.1fs", Double(ms) / 1000)
+        guard let ms = state.durationMs else { return UFormat.placeholder }
+        return UFormat.duration(milliseconds: Double(ms))
     }
 }
 

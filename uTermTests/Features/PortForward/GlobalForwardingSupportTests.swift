@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import UDesignKit
 @testable import uTerm
 
 /// 全局端口转发的纯逻辑单测：分组 / 过程态映射 / 汇总计数 + `launchAtAppStart` 模型往返。
@@ -61,23 +62,25 @@ final class GlobalForwardingSupportTests: XCTestCase {
                                     upCount: 0, failCount: 0))
     }
 
-    // MARK: - gfFormatBytes / gfFormatRate（流量格式化，二进制 1024 进制）
+    // MARK: - 流量格式化（隧道行走 UFormat.bytes，1024 进制；速率 = bytes + "/s"）
 
     func testFormatBytes() {
-        XCTAssertEqual(gfFormatBytes(0), "0 B")
-        XCTAssertEqual(gfFormatBytes(512), "512 B")
-        XCTAssertEqual(gfFormatBytes(1023), "1023 B")
-        XCTAssertEqual(gfFormatBytes(1024), "1.0 KB")
-        XCTAssertEqual(gfFormatBytes(1536), "1.5 KB")
-        XCTAssertEqual(gfFormatBytes(1024 * 1024), "1.0 MB")
-        XCTAssertEqual(gfFormatBytes(3 * 1024 * 1024 * 1024), "3.0 GB")
-        // 边界进位：1048527 = 1023.999… KB，%.1f 会进位 → 应提档成「1.0 MB」而非「1024.0 KB」。
-        XCTAssertEqual(gfFormatBytes(1_048_527), "1.0 MB")
+        XCTAssertEqual(UFormat.bytes(0), "0 B")
+        XCTAssertEqual(UFormat.bytes(512), "512 B")
+        XCTAssertEqual(UFormat.bytes(1023), "1023 B")
+        XCTAssertEqual(UFormat.bytes(1024), "1.00 KB")
+        XCTAssertEqual(UFormat.bytes(1536), "1.50 KB")
+        XCTAssertEqual(UFormat.bytes(1024 * 1024), "1.00 MB")
+        XCTAssertEqual(UFormat.bytes(Int64(clamping: UInt64(3) * 1024 * 1024 * 1024)), "3.00 GB")
+        // 边界进位：1048527 = 1023.95 KB，先舍入再选档 → 「1.00 MB」而非「1024 KB」。
+        XCTAssertEqual(UFormat.bytes(1_048_527), "1.00 MB")
+        // 累计字节是 UInt64，超出 Int64 的按上限钳制而不是崩溃。
+        XCTAssertEqual(UFormat.bytes(Int64(clamping: UInt64.max)), UFormat.bytes(Int64.max))
     }
 
     func testFormatRate() {
-        XCTAssertEqual(gfFormatRate(0), "0 B/s")
-        XCTAssertEqual(gfFormatRate(2048), "2.0 KB/s")
+        XCTAssertEqual(UFormat.bytes(Int64(clamping: UInt64(0))) + "/s", "0 B/s")
+        XCTAssertEqual(UFormat.bytes(Int64(clamping: UInt64(2048))) + "/s", "2.00 KB/s")
     }
 
     // MARK: - launchAtAppStart 模型往返（与 autostart 互不干扰）

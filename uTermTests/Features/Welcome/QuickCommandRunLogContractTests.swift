@@ -151,7 +151,7 @@ final class QuickCommandRunLogContractTests: XCTestCase {
             let ok = run.results.count - fails
             var expected = ["\(run.results.count) 台", "成功 \(ok)"]
             if fails > 0 { expected.append("失败 \(fails)") }
-            expected.append(QuickCommandFormat.durationSeconds(run.durationMs))
+            expected.append(UFormat.duration(milliseconds: Double(run.durationMs)))
             let overview = expected.joined(separator: " · ")
             XCTAssertTrue(labels.contains { $0.contains(overview) },
                           "AX 树里必须念得出概览「\(overview)」")

@@ -27,8 +27,8 @@ struct SFTPStatusBar: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("已连接")
             .accessibilityValue(path)
-            Text("\(folderCount) 个文件夹 · \(fileCount) 个文件"
-                + (selectedCount > 0 ? " · 已选择 \(selectedCount) 项" : ""))
+            Text("\(UFormat.count(folderCount)) 个文件夹 · \(UFormat.count(fileCount)) 个文件"
+                + (selectedCount > 0 ? " · 已选择 \(UFormat.count(selectedCount)) 项" : ""))
                 .font(.system(size: 11)).foregroundStyle(UD.text4).lineLimit(1)
             Spacer(minLength: 12)
             SFTPTransfersDock(transfers: transfers,

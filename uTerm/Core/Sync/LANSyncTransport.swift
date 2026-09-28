@@ -1,4 +1,5 @@
 import Foundation
+import UDesignKit
 @preconcurrency import Network
 
 enum LANSyncTransportError: LocalizedError {
@@ -16,7 +17,7 @@ enum LANSyncTransportError: LocalizedError {
         case .connectionFailed(let message):
             return "局域网连接失败：\(message)"
         case .frameTooLarge(let bytes):
-            return "局域网同步收到超大数据帧（\(bytes / 1024) KB），已中止"
+            return "局域网同步收到超大数据帧（\(UFormat.bytes(bytes))），已中止"
         case .transferTooLarge:
             return "局域网同步数据量超出上限，已中止"
         case .invalidMessage:

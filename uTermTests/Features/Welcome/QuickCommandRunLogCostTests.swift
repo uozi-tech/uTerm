@@ -416,7 +416,7 @@ private struct LegacyQuickCommandLogEntry: View {
                 HStack(spacing: 9) {
                     Circle().fill(statusColor).frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(QuickCommandFormat.logTimestamp(run.startedAt))
+                        Text(UTermFormat.logTimestamp(run.startedAt))
                             .font(.system(size: 12, weight: .medium)).foregroundStyle(UD.text)
                         Text(overview).font(.system(size: 10.5)).foregroundStyle(UD.text4)
                     }
@@ -447,7 +447,7 @@ private struct LegacyQuickCommandLogEntry: View {
         let ok = results.count - failCount
         var parts = ["\(results.count) 台", "成功 \(ok)"]
         if failCount > 0 { parts.append("失败 \(failCount)") }
-        parts.append(QuickCommandFormat.durationSeconds(run.durationMs))
+        parts.append(UFormat.duration(milliseconds: Double(run.durationMs)))
         return parts.joined(separator: " · ")
     }
 

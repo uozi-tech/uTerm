@@ -35,7 +35,7 @@ struct GroupsScreen: View {
                                 }.buttonStyle(MRowStyle())
                             }
                         }
-                        Text("\(groups.count) 个分组 · \(total) 主机")
+                        Text("\(groups.count) 个分组 · \(UFormat.count(total)) 台主机")
                             .font(M.sans(12)).foregroundStyle(M.text4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 22).padding(.top, 2)
@@ -172,7 +172,7 @@ struct GroupDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 13))
             VStack(alignment: .leading, spacing: 3) {
                 Text(group.name).font(M.sans(19, weight: .bold)).tracking(-0.3).foregroundStyle(M.text)
-                Text("\(members.count) 台主机").font(M.sans(13)).foregroundStyle(M.text3)
+                Text("\(UFormat.count(members.count)) 台主机").font(M.sans(13)).foregroundStyle(M.text3)
             }
             Spacer()
             Button { pendingDelete = true } label: {

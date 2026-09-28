@@ -76,7 +76,7 @@ struct EmptyBody: View {
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
-            Text(relative(entry.lastOpenedAt))
+            Text(UFormat.relative(entry.lastOpenedAt))
                 .font(.caption)
                 .foregroundStyle(UD.text3)
         }
@@ -100,18 +100,5 @@ struct EmptyBody: View {
         if kindTag == "markdown" { return "doc.richtext" }
         if kindTag == "image" { return "photo" }
         return "doc"
-    }
-
-    // 提到 static let：之前每次 row 渲染都分配新 formatter（list 里 N 次
-    // 分配 = N 次 locale 查询）。NSFormatter 子类在主线程使用线程安全。
-    // 不再写死 zh_CN —— 跟随 Locale.current（用户系统语言）。
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let fmt = RelativeDateTimeFormatter()
-        fmt.unitsStyle = .short
-        return fmt
-    }()
-
-    private func relative(_ date: Date) -> String {
-        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }

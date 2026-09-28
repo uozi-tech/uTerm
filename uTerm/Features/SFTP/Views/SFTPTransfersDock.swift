@@ -99,23 +99,24 @@ struct SFTPTransfersDock: View {
 
     // 单文件：内联进度 + 取消
     @ViewBuilder private func singleChip(_ s: FileBrowserModel.TransferItem) -> some View {
-        let pct = s.bytesTotal > 0 ? Int(Double(s.bytesDone) / Double(s.bytesTotal) * 100) : 0
+        let fraction = UTermFormat.progressFraction(done: s.bytesDone, total: s.bytesTotal)
+        let pctText = UTermFormat.progress(fraction)
         let queued = s.status == .queued
         Button { open.toggle() } label: {
             HStack(spacing: 8) {
                 arrow(s.direction)
                 Text(s.fileName).font(UD.mono(11)).foregroundStyle(UD.text2)
                     .lineLimit(1).truncationMode(.middle).frame(maxWidth: 168, alignment: .leading)
-                UDLinearBar(progress: queued ? 0 : Double(pct) / 100, height: 5).frame(width: 96)
-                Text(queued ? "排队" : "\(pct)%").font(UD.mono(11)).foregroundStyle(UD.text3)
+                UDLinearBar(progress: queued ? 0 : fraction, height: 5).frame(width: 96)
+                Text(queued ? "排队" : pctText).font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 32, alignment: .trailing)
-                Text(SFTPFormat.transferSpeed(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text3)
+                Text(UTermFormat.transferRate(s.speedBytesPerSec)).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(s.direction == .up ? "上传" : "下载") \(s.fileName)")
-        .accessibilityValue(queued ? "排队中" : "\(pct)%")
+        .accessibilityValue(queued ? "排队中" : pctText)
         DockCancelButton(title: "取消传输 \(s.fileName)") { onCancel(s.id) }
     }
 
@@ -129,7 +130,7 @@ struct SFTPTransfersDock: View {
                 Text("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
                     .foregroundStyle(UD.text2)
                 UDLinearBar(progress: aggPct, height: 5).frame(width: 72)
-                Text("\(Int(aggPct * 100))%").font(UD.mono(11)).foregroundStyle(UD.text3)
+                Text(UTermFormat.progress(aggPct)).font(UD.mono(11)).foregroundStyle(UD.text3)
                     .frame(width: 32, alignment: .trailing)
                 chevron
             }
@@ -139,7 +140,7 @@ struct SFTPTransfersDock: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
-        .accessibilityValue("\(Int(aggPct * 100))%")
+        .accessibilityValue(UTermFormat.progress(aggPct))
         .accessibilityHint("展开传输列表")
     }
 
@@ -280,7 +281,7 @@ struct SFTPTransfersPanel: View {
             if aggSpeed > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.up").font(.system(size: 10)).foregroundStyle(UD.accent)
-                    Text(SFTPFormat.transferSpeed(aggSpeed)).font(UD.mono(11)).foregroundStyle(UD.text3)
+                    Text(UTermFormat.transferRate(aggSpeed)).font(UD.mono(11)).foregroundStyle(UD.text3)
                 }
             }
         }
@@ -310,22 +311,23 @@ struct SFTPTransferRow: View {
     let onRetry: () -> Void
     @State private var hover = false
 
-    private var pct: Int { item.bytesTotal > 0 ? Int(Double(item.bytesDone) / Double(item.bytesTotal) * 100) : 0 }
+    private var fraction: Double { UTermFormat.progressFraction(done: item.bytesDone, total: item.bytesTotal) }
     private var kind: BrowserFileKind { BrowserFileKind.from(name: item.fileName, isDirectory: false) }
 
     private var subtitle: (String, Color) {
         switch item.status {
         case .active:
             let bytesText = item.bytesTotal > 0
-                ? "\(SFTPFormat.bytes(item.bytesDone)) / \(SFTPFormat.bytes(item.bytesTotal))"
-                : SFTPFormat.bytes(item.bytesDone)
-            let speedText = SFTPFormat.transferSpeed(item.speedBytesPerSec)
-            let etaText = SFTPFormat.eta(item.bytesTotal - item.bytesDone, speed: item.speedBytesPerSec)
+                ? "\(UFormat.bytes(item.bytesDone)) / \(UFormat.bytes(item.bytesTotal))"
+                : UFormat.bytes(item.bytesDone)
+            let speedText = UTermFormat.transferRate(item.speedBytesPerSec)
+            let etaText = UTermFormat.eta(remainingBytes: item.bytesTotal - item.bytesDone,
+                                          bytesPerSecond: item.speedBytesPerSec)
             return ("\(bytesText) · \(speedText) · \(etaText)", UD.text4)
         case .queued:
-            return ("排队中 · \(SFTPFormat.bytes(item.bytesTotal))", UD.text4)
+            return ("排队中 · \(UFormat.bytes(item.bytesTotal))", UD.text4)
         case .done:
-            return ("已完成 · \(SFTPFormat.bytes(item.bytesTotal))", UD.text4)
+            return ("已完成 · \(UFormat.bytes(item.bytesTotal))", UD.text4)
         case .failed:
             return (item.direction == .up ? "上传失败 · 点击重试" : "下载失败", UD.danger.opacity(0.8))
         }
@@ -340,11 +342,11 @@ struct SFTPTransferRow: View {
                         .foregroundStyle(item.status == .done ? UD.text2 : UD.text)
                         .lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading)
                     if item.status == .active {
-                        Text("\(pct)%").font(UD.mono(11)).foregroundStyle(UD.accent)
+                        Text(UTermFormat.progress(fraction)).font(UD.mono(11)).foregroundStyle(UD.accent)
                     }
                 }
                 if item.status == .active || item.status == .queued {
-                    UDLinearBar(progress: item.status == .active ? Double(pct) / 100 : 0,
+                    UDLinearBar(progress: item.status == .active ? fraction : 0,
                                 color: item.status == .queued ? UD.text4 : UD.accent, height: 4)
                 }
                 Text(subtitle.0).font(UD.mono(10.5)).foregroundStyle(subtitle.1)
@@ -357,7 +359,7 @@ struct SFTPTransferRow: View {
         .onHover { hover = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.direction == .up ? "上传" : "下载") \(item.fileName)")
-        .accessibilityValue(item.status == .active ? "\(pct)%，\(subtitle.0)" : subtitle.0)
+        .accessibilityValue(item.status == .active ? "\(UTermFormat.progress(fraction))，\(subtitle.0)" : subtitle.0)
     }
 
     @ViewBuilder private var control: some View {

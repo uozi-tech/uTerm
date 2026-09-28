@@ -36,7 +36,7 @@ enum ServerGroupBadgeTint {
 /// 2'. **别把 `.onHover` 加回来**。它同样是按行数收费的：SwiftUI 内部那张 hover
 ///    区域表按 `.onHover` 个数变长，鼠标位置或几何一变就要过一遍。悬停走
 ///    `ServerList` 那一个整表跟踪层（`.rowHover(_:id:)`）。
-/// 3. **别在行体里现建 `Formatter`**。`WelcomeFormat` 里有共享实例。
+/// 3. **别在行体里现建 `Formatter`**。相对时间走 `UTermFormat.relative`（纯函数，不经 formatter）。
 struct ServerRow: View {
     let profile: ServerProfile
     let query: String
@@ -78,7 +78,7 @@ struct ServerRow: View {
 
             Spacer(minLength: 6)
 
-            Text(WelcomeFormat.relative(profile.lastConnectedAt))
+            Text(UTermFormat.relative(profile.lastConnectedAt))
                 .font(.system(size: 11))
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)

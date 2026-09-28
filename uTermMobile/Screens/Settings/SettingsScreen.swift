@@ -308,7 +308,7 @@ private struct MSyncDiagSheet: View {
                     } else {
                         ForEach(sync.recentEvents.reversed()) { e in
                             HStack(alignment: .top, spacing: 10) {
-                                Text(MFormat.clock(e.date))
+                                Text(UFormat.time(e.date))
                                     .font(M.mono(11)).foregroundStyle(M.text4)
                                     .frame(width: 62, alignment: .leading)
                                 Text(e.text).font(M.mono(12)).foregroundStyle(M.text2)
@@ -330,7 +330,6 @@ private struct MSyncDiagSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    // 共享格式化器（`MFormat`）：改前每条事件行都现建一个 `DateFormatter`。
 }
 
 /// 强调色选择（5 色，写 AccentState，全局即时重染）。

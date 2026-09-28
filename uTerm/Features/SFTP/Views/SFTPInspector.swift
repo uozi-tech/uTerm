@@ -47,11 +47,11 @@ struct SFTPInspector: View {
         let kind = BrowserFileKind.from(name: item.name, isDirectory: item.isDirectory, isSymlink: item.isSymlink)
         let fullPath = currentPath == "/" ? "/\(item.name)" : "\(currentPath)/\(item.name)"
         let sizeText = item.isDirectory ? "文件夹"
-            : (item.size.map { SFTPFormat.bytes(Int64($0)) } ?? "--")
+            : (item.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder)
         let rows: [(String, String, Bool)] = [
             ("种类", kind.label, false),
             ("大小", sizeText, false),
-            ("修改时间", item.modifiedAt.map { SFTPFormat.date($0) } ?? "--", false),
+            ("修改时间", item.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder, false),
             ("权限", posixPermissionString(item.permissions), true),
             ("所有者", item.ownerDisplayText, false),
         ]

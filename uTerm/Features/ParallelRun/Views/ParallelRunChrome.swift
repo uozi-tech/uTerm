@@ -201,7 +201,7 @@ struct ParallelBroadcastBar: View {
             if failedCount > 0 { statDot(color: UD.danger, text: "\(failedCount) 失败") }
             TimelineView(.periodic(from: startedAt, by: 0.1)) { ctx in
                 let end = finishedAt ?? ctx.date
-                Text(String(format: "%.1fs", max(0, end.timeIntervalSince(startedAt))))
+                Text(UFormat.duration(seconds: max(0, end.timeIntervalSince(startedAt))))
                     .foregroundStyle(UD.text4)
             }
         }
@@ -241,7 +241,7 @@ struct ParallelStatusBar: View {
             Text(allDone ? "已完成" : "执行中").foregroundStyle(UD.text3)
             Text("UTF-8").foregroundStyle(UD.text3)
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                Text(Self.clock(ctx.date)).foregroundStyle(UD.text4)
+                Text(UFormat.time(ctx.date)).foregroundStyle(UD.text4)
             }
         }
         .font(.system(size: 11, design: .monospaced))
@@ -250,11 +250,6 @@ struct ParallelStatusBar: View {
         .frame(maxWidth: .infinity)
         .background(UD.panel)
         .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
-    }
-
-    private static func clock(_ d: Date) -> String {
-        let c = Calendar.current.dateComponents([.hour, .minute, .second], from: d)
-        return String(format: "%02d:%02d:%02d", c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
     }
 }
 

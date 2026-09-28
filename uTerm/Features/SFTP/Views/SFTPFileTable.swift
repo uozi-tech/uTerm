@@ -3,37 +3,6 @@ import UDesignKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// SFTP 视图共享的格式化器（日期 `yyyy-MM-dd HH:mm:ss`，en_US_POSIX 定格式 + 本地时区，
-/// 秒来自 SFTP mtime 真实精度；字节 file 风格）。三处视图（文件表 / 检视器 / 状态栏）
-/// 共用，避免重复实例化。
-enum SFTPFormat {
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
-    private static let byteFormatter: ByteCountFormatter = {
-        let f = ByteCountFormatter(); f.countStyle = .file; return f
-    }()
-    static func date(_ d: Date) -> String { dateFormatter.string(from: d) }
-    static func bytes(_ n: Int64) -> String { byteFormatter.string(fromByteCount: n) }
-
-    /// 传输速率（B/s → "x.x MB/s"；0 → "--"）。
-    static func transferSpeed(_ bytesPerSec: Double) -> String {
-        bytesPerSec > 0 ? bytes(Int64(bytesPerSec)) + "/s" : "--"
-    }
-    /// 剩余时间（剩余字节 / 速率）。
-    static func eta(_ remaining: Int64, speed: Double) -> String {
-        guard speed > 0, remaining > 0 else { return remaining <= 0 ? "即将完成" : "—" }
-        let s = Double(remaining) / speed
-        if s < 1 { return "即将完成" }
-        if s < 60 { return "剩余 \(Int(s.rounded())) 秒" }
-        let m = Int(s) / 60
-        return "剩余 \(m) 分 \(Int(s) % 60) 秒"
-    }
-}
-
 struct SFTPFileTableColumnWidths: Equatable {
     static let horizontalPadding: CGFloat = 16
     static let iconWidth: CGFloat = 30
@@ -356,12 +325,12 @@ struct SFTPFileTable: View {
                 .frame(width: widths.owner, alignment: .leading)
             // 权限：八进制 chip（hover 出完整 drwxr-xr-x）。
             permChip(e).frame(width: widths.permissions, alignment: .leading)
-            Text(e.modifiedAt.map { SFTPFormat.date($0) } ?? "--")
+            Text(e.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder)
                 .font(UD.mono(12)).foregroundStyle(UD.text3)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(width: widths.modified, alignment: .leading)
             Text(e.isDirectory || e.size == nil
-                 ? "--" : SFTPFormat.bytes(Int64(e.size!)))
+                 ? UFormat.placeholder : UFormat.bytes(Int64(clamping: e.size!)))
                 .font(UD.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? UD.text2 : UD.text4)
                 .lineLimit(1)
                 .frame(width: widths.size, alignment: .trailing)
@@ -396,9 +365,9 @@ struct SFTPFileTable: View {
         if e.isDirectory {
             // 文件夹无大小
         } else if let size = e.size {
-            parts.append(SFTPFormat.bytes(Int64(size)))
+            parts.append(UFormat.bytes(Int64(clamping: size)))
         }
-        if let m = e.modifiedAt { parts.append(SFTPFormat.date(m)) }
+        if let m = e.modifiedAt { parts.append(UFormat.dateTime(m)) }
         return parts.joined(separator: "，")
     }
 

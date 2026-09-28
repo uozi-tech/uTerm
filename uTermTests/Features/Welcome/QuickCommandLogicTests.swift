@@ -1,4 +1,5 @@
 import XCTest
+import UDesignKit
 @testable import uTerm
 
 /// 快捷命令的纯逻辑（分组 / 三态 / 摘要 / 运行文案 / 格式化）单测。
@@ -110,11 +111,28 @@ final class QuickCommandLogicTests: XCTestCase {
 
     // MARK: 格式化
 
-    func testDurationSecondsOneDecimal() {
-        XCTAssertEqual(QuickCommandFormat.durationSeconds(1240), "1.2s")
-        XCTAssertEqual(QuickCommandFormat.durationSeconds(600), "0.6s")
-        XCTAssertEqual(QuickCommandFormat.durationSeconds(0), "0.0s")
-        XCTAssertEqual(QuickCommandFormat.durationSeconds(5200), "5.2s")
+    /// 执行日志的耗时走 `UFormat.duration`：三位有效数字、先舍入再选档。
+    func testRunDurationUsesUFormat() {
+        XCTAssertEqual(UFormat.duration(milliseconds: 1240), "1.24 s")
+        XCTAssertEqual(UFormat.duration(milliseconds: 600), "600 ms")
+        XCTAssertEqual(UFormat.duration(milliseconds: 5200), "5.20 s")
+        XCTAssertEqual(UFormat.duration(milliseconds: 59_996), "1m 00s")
+        XCTAssertEqual(UFormat.duration(milliseconds: 125_300), "2m 05s")
+    }
+
+    /// 日志时间戳：今天 / 昨天 / 同年 MM-dd / 跨年带年份；公历 + 24 小时制，与 locale 无关。
+    func testLogTimestamp() {
+        let tz = TimeZone(identifier: "Asia/Shanghai")!
+        var g = Calendar(identifier: .gregorian)
+        g.timeZone = tz
+        func date(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+            g.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+        }
+        let now = date(2026, 9, 28, 10, 0)
+        XCTAssertEqual(UTermFormat.logTimestamp(date(2026, 9, 28, 9, 5), now: now, timeZone: tz), "今天 09:05")
+        XCTAssertEqual(UTermFormat.logTimestamp(date(2026, 9, 27, 23, 59), now: now, timeZone: tz), "昨天 23:59")
+        XCTAssertEqual(UTermFormat.logTimestamp(date(2026, 3, 1, 13, 5), now: now, timeZone: tz), "03-01 13:05")
+        XCTAssertEqual(UTermFormat.logTimestamp(date(2025, 12, 31, 13, 5), now: now, timeZone: tz), "2025-12-31 13:05")
     }
 
     // MARK: 值类型 Codable

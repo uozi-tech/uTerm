@@ -141,7 +141,7 @@ struct FileInfoView: View {
                               value: entry.isDirectory ? "文件夹" : (entry.isSymlink ? "符号链接" : "文件"))
                     if !entry.isDirectory, let s = entry.size {
                         MInsetRow(label: "大小",
-                                  value: MFormat.bytes(Int64(s)))
+                                  value: UFormat.bytes(Int64(clamping: s)))
                     }
                     if let p = entry.permissions {
                         MInsetRow(label: "权限", value: String(format: "%o", p & 0o777), valueMono: true)
@@ -189,7 +189,7 @@ struct FileActionSheet: View {
 
     private var isFolder: Bool { entry.isDirectory }
     private var subtitle: String {
-        let kind = isFolder ? "文件夹" : (entry.size.map { MFormat.bytes(Int64($0)) } ?? "文件")
+        let kind = isFolder ? "文件夹" : (entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? "文件")
         let perm = entry.permissions.map { String(format: "%o", $0 & 0o777) } ?? "—"
         return "\(kind) · \(perm)"
     }

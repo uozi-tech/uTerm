@@ -1,4 +1,5 @@
 import SwiftUI
+import UDesignKit
 
 /// 工作区底部状态栏的远程遥测。周期性在 SFTP 连接上跑一条合并命令
 /// （`TelemetryParser.command`），解析 `/proc` 等并格式化成展示串 + CPU/内存
@@ -81,7 +82,7 @@ final class TelemetryModel {
         d.reachable = true
         d.platform = raw.prettyName ?? raw.osName
         d.cores = raw.cores
-        if let up = raw.uptimeSeconds { d.uptime = Self.formatUptime(up) }
+        if let up = raw.uptimeSeconds { d.uptime = UTermFormat.uptime(seconds: up) }
         if let l = raw.load1 { d.load = String(format: "%.2f", l) }
 
         // CPU%：相邻两次 /proc/stat 差分；首拍只建基线。
@@ -96,17 +97,19 @@ final class TelemetryModel {
         // 内存：used = total − available。
         if let total = raw.memTotalKB, let avail = raw.memAvailableKB, total > 0 {
             let used = total > avail ? total - avail : 0
-            d.memUsedText = Self.formatKB(used)
+            d.memUsedText = Self.bytes(kb: used)
             let pct = Double(used) / Double(total) * 100
             d.memPercent = pct
             pushHistory(&memHistory, pct)
         }
 
         // 磁盘。
-        if let used = raw.diskUsedKB { d.diskUsedText = Self.formatKB(used) }
+        if let used = raw.diskUsedKB { d.diskUsedText = Self.bytes(kb: used) }
         d.diskPercent = raw.diskPercent.map(Double.init)
 
-        if let epoch = raw.epoch { d.timestamp = Self.formatTime(epoch) }
+        if let epoch = raw.epoch {
+            d.timestamp = UFormat.dateTime(Date(timeIntervalSince1970: TimeInterval(epoch)))
+        }
 
         display = d
     }
@@ -118,32 +121,9 @@ final class TelemetryModel {
 
     // MARK: - 格式化
 
-    static func formatUptime(_ seconds: Double) -> String {
-        let s = Int(seconds)
-        let d = s / 86_400, h = (s % 86_400) / 3_600, m = (s % 3_600) / 60
-        if d > 0 { return "\(d)d \(h)h" }
-        if h > 0 { return "\(h)h \(m)m" }
-        return "\(m)m"
+    /// `/proc/meminfo`、`df -k` 给的是 KiB。
+    private static func bytes(kb: UInt64) -> String {
+        let (b, overflow) = kb.multipliedReportingOverflow(by: 1024)
+        return UFormat.bytes(overflow ? Int64.max : Int64(clamping: b))
     }
-
-    static func formatKB(_ kb: UInt64) -> String {
-        Self.byteFormatter.string(fromByteCount: Int64(clamping: kb) &* 1024)
-    }
-
-    static func formatTime(_ epoch: Int) -> String {
-        Self.timeFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
-    }
-
-    private static let byteFormatter: ByteCountFormatter = {
-        let f = ByteCountFormatter()
-        f.countStyle = .binary
-        f.allowedUnits = [.useGB, .useMB]
-        return f
-    }()
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
 }

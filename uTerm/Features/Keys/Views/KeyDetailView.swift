@@ -66,7 +66,7 @@ struct KeyDetailView: View {
         case .ecdsaP384: "ecdsa p384 · 384 bit"
         case .ecdsaP521: "ecdsa p521 · 521 bit"
         }
-        return "\(algo) · 创建于 \(Self.dateFmt.string(from: key.createdAt))"
+        return "\(algo) · 创建于 \(UFormat.dateTime(key.createdAt))"
     }
 
     private func startRename() { draftName = key.name; renaming = true }
@@ -118,7 +118,7 @@ struct KeyDetailView: View {
         HStack(spacing: 1) {
             metaCell("注释", key.comment.isEmpty ? "—" : key.comment, mono: true)
             metaCell("口令", key.hasPassphrase ? "已设置" : "未设置")
-            metaCell("上次使用", key.lastUsedAt.map { Self.relFmt.localizedString(for: $0, relativeTo: Date()) } ?? "从未")
+            metaCell("上次使用", UTermFormat.relative(key.lastUsedAt))
         }
         .background(UD.border)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -176,14 +176,6 @@ struct KeyDetailView: View {
         Text(t.uppercased()).font(.system(size: 10.5, weight: .medium)).tracking(0.6).foregroundStyle(UD.text4)
             .accessibilityAddTraits(.isHeader)
     }
-
-    private static let dateFmt: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
-    private static let relFmt = RelativeDateTimeFormatter()
 }
 
 // MARK: - 复制按钮

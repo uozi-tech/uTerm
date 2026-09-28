@@ -166,14 +166,14 @@ struct GlobalForwardRow: View {
         Group {
             if rule.kind != .remote, active, let t = traffic {
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("↑ \(gfFormatRate(t.upRate))")
-                    Text("↓ \(gfFormatRate(t.downRate))")
+                    Text("↑ " + UFormat.bytes(Int64(clamping: t.upRate)) + "/s")
+                    Text("↓ " + UFormat.bytes(Int64(clamping: t.downRate)) + "/s")
                 }
                 .font(UD.mono(10))
                 .foregroundStyle(UD.text3)
                 .lineLimit(1)
                 .help(whenHovering: hover,
-                      "累计  ↑ \(gfFormatBytes(t.up)) · ↓ \(gfFormatBytes(t.down))")
+                      "累计  ↑ \(UFormat.bytes(Int64(clamping: t.up))) · ↓ \(UFormat.bytes(Int64(clamping: t.down)))")
             }
         }
         .frame(width: 104, alignment: .trailing)

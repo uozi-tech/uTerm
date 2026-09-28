@@ -1,6 +1,7 @@
 import CoreData
 import Foundation
 import Observation
+import UDesignKit
 
 /// CloudKit 同步可观测器（macOS + iOS 共用）。
 ///
@@ -87,7 +88,7 @@ final class CloudKitSyncMonitor {
             AppLogger.info("CloudKit \(kind) started", category: "sync")
             return
         }
-        let durText = String(format: "%.1fs", durSeconds)
+        let durText = UFormat.duration(seconds: durSeconds)
         if succeeded {
             phase = .idle
             lastSyncedAt = endDate
@@ -113,9 +114,7 @@ final class CloudKitSyncMonitor {
 
     /// 复制用：把最近事件拼成纯文本（时间 + 文本，旧→新）。
     func exportText() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        let lines = recentEvents.map { "\(f.string(from: $0.date))  \($0.text)" }
+        let lines = recentEvents.map { "\(UFormat.time($0.date))  \($0.text)" }
         return lines.isEmpty ? "（暂无同步事件）" : lines.joined(separator: "\n")
     }
 }

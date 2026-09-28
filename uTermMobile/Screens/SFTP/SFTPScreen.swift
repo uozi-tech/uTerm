@@ -181,7 +181,7 @@ struct SFTPScreen: View {
 
     private var footerBar: some View {
         HStack(spacing: 10) {
-            Text("\(controller.entries.count) 项").font(M.mono(12.5)).foregroundStyle(M.text3)
+            Text("\(UFormat.count(controller.entries.count)) 项").font(M.mono(12.5)).foregroundStyle(M.text3)
             Spacer()
             Text("长按文件查看操作").font(M.sans(11.5)).foregroundStyle(M.text4)
             MBtn(title: "上传", icon: "upload", kind: .tinted, height: 36) { showImporter = true }
@@ -305,7 +305,7 @@ struct SFTPScreen: View {
     private var statusText: String {
         switch controller.state {
         case .idle, .connecting: return "连接中…"
-        case .connected: return "\(controller.entries.count) 项"
+        case .connected: return "\(UFormat.count(controller.entries.count)) 项"
         case .failed: return "连接失败"
         }
     }
@@ -347,8 +347,7 @@ struct SFTPRow: View {
     private var subtitle: String {
         let perms = permString()
         if entry.isDirectory { return "文件夹 · \(perms)" }
-        // 共享 `ByteCountFormatter`：那个**类方法**每调一次就在内部现建一个 formatter。
-        let size = entry.size.map { MFormat.bytes(Int64($0)) } ?? "—"
+        let size = entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder
         return "\(size) · \(perms)"
     }
 

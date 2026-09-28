@@ -19,10 +19,10 @@ struct SFTPDeletionBar: View {
     private var detail: String {
         switch progress.phase {
         case .counting:
-            return "已找到 \(progress.count) 项"
+            return "已找到 \(UFormat.count(progress.count)) 项"
         case .deleting:
             let total = progress.total ?? progress.count
-            return "\(progress.count) / \(total)"
+            return "\(UFormat.count(progress.count)) / \(UFormat.count(total))"
         }
     }
 

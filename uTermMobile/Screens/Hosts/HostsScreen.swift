@@ -151,7 +151,7 @@ struct HostCard: View {
         return Date().timeIntervalSince(last) < 3600 ? M.success : M.caution
     }
     /// 共享格式化器。**别改回「每行现建一个」**——这是逐行调用的。
-    private var lastText: String { MFormat.relative(host.lastConnectedAt, fallback: "从未连接") }
+    private var lastText: String { UTermFormat.relative(host.lastConnectedAt, fallback: "从未连接") }
 
     var body: some View {
         Button(action: onOpen) {

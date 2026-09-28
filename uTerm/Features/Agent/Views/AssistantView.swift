@@ -292,7 +292,7 @@ struct AssistantView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(relativeTime(s.updatedAt))
+                    Text(UFormat.relative(s.updatedAt))
                         .font(.system(size: 10))
                         .foregroundStyle(UD.text3)
                 }
@@ -323,23 +323,6 @@ struct AssistantView: View {
         if s.id == model.currentSession?.id { model.startNewSession() }
         modelContext.delete(s)
         try? modelContext.save()
-    }
-
-    private func relativeTime(_ date: Date) -> String {
-        let now = Date()
-        let cal = Calendar.current
-        if now.timeIntervalSince(date) < 60 { return "刚刚" }
-        if cal.isDateInToday(date) {
-            let f = DateFormatter(); f.dateFormat = "HH:mm"
-            return "今天 \(f.string(from: date))"
-        }
-        if cal.isDateInYesterday(date) { return "昨天" }
-        let days = cal.dateComponents([.day],
-                                      from: cal.startOfDay(for: date),
-                                      to: cal.startOfDay(for: now)).day ?? 0
-        if days < 7 { return "\(days) 天前" }
-        let f = DateFormatter(); f.dateFormat = "M/d"
-        return f.string(from: date)
     }
 
     // MARK: - 空状态
