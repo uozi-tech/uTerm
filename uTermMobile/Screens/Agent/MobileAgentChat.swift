@@ -77,6 +77,9 @@ struct MobileAgentChat: View {
         .onChange(of: activeProviderIDString) { _, value in
             model.activeProviderID = UUID(uuidString: value)
         }
+        // 信任档位灌进状态机（与桌面 AssistantView / TerminalAgentView 同一写法）。
+        // 此前移动端从未赋值，approvalMode 恒为 .confirm，拨盘选什么都不生效。
+        .onChange(of: safetyRaw) { _, _ in model.approvalMode = safetyBinding.wrappedValue }
     }
 
     /// 进入视图时把持久化上下文 / provider 列表 / 活动 provider / SSH 执行器灌进状态机。
@@ -85,6 +88,7 @@ struct MobileAgentChat: View {
     /// （经 CloudKit 与 macOS 共享同一历史库）。`attach` 幂等（仅首次生效），会话由首次发送
     /// 惰性创建——空 Agent 标签不会污染历史。
     private func configureModel() {
+        model.approvalMode = safetyBinding.wrappedValue
         model.attach(context: context)
         model.providers = providers
         // 活动 provider：优先用持久化选择，失效（已删除 / 首次）则回退排序首个。
