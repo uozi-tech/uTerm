@@ -44,30 +44,24 @@ nonisolated enum UTermFormat {
     // MARK: - 时长
 
     /// 运行时长（uptime）：「47d 16h」/「3h 05m」/「12m」。按 `uptime` 惯例向下取整，
-    /// 不像 `UFormat.duration` 那样带秒——状态栏 3 秒一拍，秒位只会来回跳。
+    /// 不带秒——状态栏 3 秒一拍，秒位只会来回跳。一小时起交给 `UFormat.duration`，
+    /// 先截到整分（满一天截到整点）再传，保住向下取整。
     static func uptime(seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return UFormat.placeholder }
-        let s = Int(seconds)
-        let d = s / 86_400, h = (s % 86_400) / 3_600, m = (s % 3_600) / 60
-        if d > 0 { return "\(d)d \(h)h" }
-        if h > 0 { return "\(h)h " + (m < 10 ? "0\(m)" : "\(m)") + "m" }
-        return "\(m)m"
+        let s = Int64(min(seconds, 1e15))
+        if s < 3600 { return "\(s / 60)m" }
+        return UFormat.duration(wholeSeconds: s < 86_400 ? s - s % 60 : s - s % 3600)
     }
 
-    /// 传输剩余时间：「剩余 42 秒」/「剩余 2 分 05 秒」/「剩余 1 小时 02 分」。
-    /// 先把总秒数舍入再拆分，不会出现「剩余 60 秒」。
+    /// 传输剩余时间：「剩余 42 s」/「剩余 2m 06s」/「剩余 1h 02m」，与其他耗时同一套
+    /// `UFormat` 写法。先把总秒数舍入再选档，不会出现「剩余 60 秒」。
     static func eta(remainingBytes: Int64, bytesPerSecond: Double) -> String {
         if remainingBytes <= 0 { return "即将完成" }
         guard bytesPerSecond > 0, bytesPerSecond.isFinite else { return UFormat.placeholder }
         let seconds = Double(remainingBytes) / bytesPerSecond
         if seconds < 1 { return "即将完成" }
         guard seconds < 1e9 else { return UFormat.placeholder }
-        let total = Int(seconds.rounded(.toNearestOrAwayFromZero))
-        func pad(_ n: Int) -> String { n < 10 ? "0\(n)" : "\(n)" }
-        if total < 60 { return "剩余 \(total) 秒" }
-        if total < 3600 { return "剩余 \(total / 60) 分 \(pad(total % 60)) 秒" }
-        let minutes = Int((seconds / 60).rounded(.toNearestOrAwayFromZero))
-        return "剩余 \(minutes / 60) 小时 \(pad(minutes % 60)) 分"
+        return "剩余 " + UFormat.duration(wholeSeconds: Int64(seconds.rounded(.toNearestOrAwayFromZero)))
     }
 
     /// 传输速率「1.20 MB/s」；速率还没测出来（≤0）时给占位「—」。

@@ -16,10 +16,10 @@ final class UTermFormatTests: XCTestCase {
 
     func testETARoundsBeforeSplitting() {
         // 59.6 秒：旧实现先判 <60 再舍入 → 「剩余 60 秒」。
-        XCTAssertEqual(UTermFormat.eta(remainingBytes: 596, bytesPerSecond: 10), "剩余 1 分 00 秒")
-        XCTAssertEqual(UTermFormat.eta(remainingBytes: 420, bytesPerSecond: 10), "剩余 42 秒")
-        XCTAssertEqual(UTermFormat.eta(remainingBytes: 1255, bytesPerSecond: 10), "剩余 2 分 06 秒")
-        XCTAssertEqual(UTermFormat.eta(remainingBytes: 37_200, bytesPerSecond: 10), "剩余 1 小时 02 分")
+        XCTAssertEqual(UTermFormat.eta(remainingBytes: 596, bytesPerSecond: 10), "剩余 1m 00s")
+        XCTAssertEqual(UTermFormat.eta(remainingBytes: 420, bytesPerSecond: 10), "剩余 42 s")
+        XCTAssertEqual(UTermFormat.eta(remainingBytes: 1255, bytesPerSecond: 10), "剩余 2m 06s")
+        XCTAssertEqual(UTermFormat.eta(remainingBytes: 37_200, bytesPerSecond: 10), "剩余 1h 02m")
         XCTAssertEqual(UTermFormat.eta(remainingBytes: 5, bytesPerSecond: 10), "即将完成")
         XCTAssertEqual(UTermFormat.eta(remainingBytes: 0, bytesPerSecond: 0), "即将完成")
         XCTAssertEqual(UTermFormat.eta(remainingBytes: 100, bytesPerSecond: 0), UFormat.placeholder)
