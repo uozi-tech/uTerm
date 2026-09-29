@@ -156,6 +156,40 @@ enum ProbeWindow {
         return blindsRealMouse(window)
     }
 
+    /// 让合成光标「本来就停在这里」：给窗口里每个 enter/exit 追踪区的属主补发一次
+    /// `mouseEntered` + `mouseMoved`（位置 = 谎报的光标点）。
+    ///
+    /// **为什么要补**：谎报 `mouseLocationOutsideOfEventStream` 只管得到「视图几何变了、
+    /// 重算 enter/exit」那条路（滚动时每行经过光标都亮，这条一直好使）。**视图刚上屏、
+    /// 光标已经在里面**的那次初始判定不问这个值 —— macOS 27.0.1 实测：挂窗后静置
+    /// 500ms 一次 enter 都没有；补 `window.sendEvent(mouseMoved)`、`updateTrackingAreas()`、
+    /// 挪窗口原点都不触发；只有 clip view 滚 1pt 或本函数这样直接交给追踪区属主才亮，
+    /// 而且亮的是同一行。真光标下 AppKit 知道光标在哪，会自己发这一次 enter ——
+    /// 这里补的就是它。测试宿主由 xcodebuild 拉起、激活不了（`NSApp.isActive` 恒 false），
+    /// 但 SwiftUI 的追踪区带 `.activeAlways`，与激活无关。
+    ///
+    /// 只对带合成光标的窗口生效（`fakedMouseLocation` 为 nil 时什么都不做）。
+    /// 调用前先 `layoutSubtreeIfNeeded()`，让追踪区装好。
+    static func deliverRestingCursor(_ window: Unconstrained) {
+        guard let location = window.fakedMouseLocation, let root = window.contentView else { return }
+        func views(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(views) }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        for area in views(root).flatMap(\.trackingAreas) where area.options.contains(.mouseEnteredAndExited) {
+            guard let owner = area.owner as? NSResponder,
+                  let entered = NSEvent.enterExitEvent(with: .mouseEntered, location: location,
+                                                       modifierFlags: [], timestamp: timestamp,
+                                                       windowNumber: window.windowNumber, context: nil,
+                                                       eventNumber: 0, trackingNumber: 0, userData: nil),
+                  let moved = NSEvent.mouseEvent(with: .mouseMoved, location: location,
+                                                 modifierFlags: [], timestamp: timestamp,
+                                                 windowNumber: window.windowNumber, context: nil,
+                                                 eventNumber: 0, clickCount: 0, pressure: 0)
+            else { continue }
+            owner.mouseEntered(with: entered)
+            owner.mouseMoved(with: moved)
+        }
+    }
+
     /// 内容区正中的一点（窗口坐标系）。`.transparentOnScreen(cursorAt:)` 的常用实参。
     static func contentCenter(of size: NSSize) -> NSPoint {
         NSPoint(x: size.width / 2, y: size.height / 2)

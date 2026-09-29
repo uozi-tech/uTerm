@@ -139,6 +139,8 @@ final class ScrollHoverProbeRig {
         if let cursor {
             XCTAssertEqual(unconstrained.mouseLocationOutsideOfEventStream, cursor,
                            "带光标那一档必须真的把合成光标按在指定点上")
+            // 谎报的光标管不到「上屏时光标已在里面」那次初始判定，补发一次（见该函数）。
+            ProbeWindow.deliverRestingCursor(unconstrained)
         }
         return Fixture(window: unconstrained, host: host, scroll: scroll,
                        document: document, mountMS: mountMS)
