@@ -26,6 +26,9 @@ final class CommandPaletteModel {
     private(set) var dynamicItems: [CommandPaletteItem] = []
     private(set) var isSearching = false
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    /// 本轮查询里用户是否用 ↑/↓ 挪过选中。挪过则异步结果并入时按 id 锚住选中项，
+    /// 没挪过则保持「第一项默认选中」。
+    @ObservationIgnored private var selectionMovedByUser = false
     /// 防抖时长；测试可置 0 以确定性等待。
     var searchDebounceNanos: UInt64 = 200_000_000
 
@@ -53,10 +56,23 @@ final class CommandPaletteModel {
         results = grouped.flatMap(\.items)
     }
 
+    /// 候选集在**查询不变**时变化（异步搜索结果并入）用这个：结果插在选中项前面会让
+    /// 同一个下标指向另一项，回车就执行错。用户挪过选中则按 id 锚回原项，否则留在首项。
+    private func rebuildKeepingSelection() {
+        let anchorID = selectionMovedByUser ? selectedItemID : nil
+        rebuild()
+        if let anchorID, let index = results.firstIndex(where: { $0.id == anchorID }) {
+            selectedIndex = index
+        } else if !results.indices.contains(selectedIndex) {
+            selectedIndex = 0
+        }
+    }
+
     func open(items: [CommandPaletteItem]) {
         allItems = items
         query = ""
         selectedIndex = 0
+        selectionMovedByUser = false
         isPresented = true
         dynamicItems = []
         isSearching = false
@@ -77,8 +93,14 @@ final class CommandPaletteModel {
     }
 
     func setQuery(_ q: String) {
+        // 同值写入必须是 no-op：macOS 的 TextField 按回车提交时会把**同一个**字符串
+        // 再写回绑定一次，且先于 onSubmit。若照常重置 selectedIndex，↓ 选中的项在
+        // 回车那一刻被换回第一项——执行的就成了第一项（例：输入 `~/` 选中目录回车，
+        // 却打开了「导入 ~/.ssh/config」）。同时避免重启搜索把已并入的结果清掉。
+        guard q != query else { return }
         query = q
         selectedIndex = 0            // 复刻设计稿 useEffect([query])
+        selectionMovedByUser = false
         rebuild()
         searchTask?.cancel()
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,7 +121,7 @@ final class CommandPaletteModel {
             let items = await provider(trimmed)
             guard !Task.isCancelled else { return }
             self.dynamicItems = items
-            self.rebuild()
+            self.rebuildKeepingSelection()
             self.isSearching = false
         }
     }
@@ -111,6 +133,7 @@ final class CommandPaletteModel {
         let count = results.count
         guard count > 0 else { selectedIndex = 0; return }
         selectedIndex = min(max(selectedIndex + delta, 0), count - 1)
+        selectionMovedByUser = true
     }
 
     func executeSelected() {

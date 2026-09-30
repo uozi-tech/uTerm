@@ -162,6 +162,24 @@ final class CommandPaletteTests: XCTestCase {
         XCTAssertEqual(m.selectedIndex, 0)
     }
 
+    /// macOS TextField 回车提交时会把同一字符串再写回绑定（先于 onSubmit）：
+    /// 不能因此把 ↓ 选中的项重置回第一项。
+    func testSetQuerySameValueKeepsSelectionForSubmit() {
+        var fired: [String] = []
+        let m = model(with: [
+            item("cmd", .command, title: "导入 ~/.ssh/config", run: { fired.append("cmd") }),
+            item("dir", .file, title: "root", detail: "~/root", run: { fired.append("dir") }),
+        ])
+        m.setQuery("~/")
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selectedItemID, "dir")
+
+        m.setQuery("~/")                       // 提交时的同值回写
+        m.executeSelected()
+
+        XCTAssertEqual(fired, ["dir"])
+    }
+
     func testFirstResultIsSelectedWhenQueryProducesResults() {
         let m = model(with: sample())
         XCTAssertNil(m.selectedItemID)
@@ -280,6 +298,32 @@ final class CommandPaletteTests: XCTestCase {
         await m.waitForSearch()
         XCTAssertEqual(queriesRun, ["bb"])
         XCTAssertTrue(m.results.contains { $0.id == "file:/x/bb" })
+    }
+
+    func testSearchResultsArrivingKeepMovedSelectionOnSameItem() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 20_000_000
+        m.searchProvider = { [self] _ in [item("host:new", .host, title: "ab-host")] }
+        m.open(items: [
+            item("c1", .command, title: "ab-cmd"),
+            item("c2", .command, title: "ab-cmd-2"),
+        ])
+        m.setQuery("ab")
+        m.moveSelection(by: 1)                 // 结果到达前选中 c2
+        XCTAssertEqual(m.selectedItemID, "c2")
+        await m.waitForSearch()                // host 组排在命令组前面
+        XCTAssertEqual(m.results.map(\.id), ["host:new", "c1", "c2"])
+        XCTAssertEqual(m.selectedItemID, "c2")
+    }
+
+    func testSearchResultsArrivingKeepFirstSelectedWhenUserDidNotMove() async {
+        let m = CommandPaletteModel()
+        m.searchDebounceNanos = 0
+        m.searchProvider = { [self] _ in [item("host:new", .host, title: "ab-host")] }
+        m.open(items: [item("c1", .command, title: "ab-cmd")])
+        m.setQuery("ab")
+        await m.waitForSearch()
+        XCTAssertEqual(m.selectedItemID, "host:new")
     }
 
     func testCloseClearsDynamicState() async {
