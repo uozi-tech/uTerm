@@ -41,6 +41,60 @@ extension AgentCommandExecuting {
 /// 哨兵解析出真实退出码；`exec` 闭包沿 `Task` 取消传播；建连 / 传输失败直接抛）。
 extension SSHCommandExecutor: AgentCommandExecuting {}
 
+/// Agent 对话里 `run_command` 实际走的执行器：把 `SSHCommandExecutor` 放到
+/// `SupervisedExec` 看门狗底下跑。**不由各入口注入** —— `AssistantModel` 在发命令的那
+/// 一刻自己套（`AssistantModel.supervised`），工作区 / 终端窗口 / iOS 三处入口照旧只给
+/// 裸的 `SSHCommandExecutor`，哪一处都漏不掉。
+///
+/// 裸的 `SSHCommandExecutor.run` 没有任何超时 —— Citadel 的 exec 等不到 EOF 就永远不
+/// 返回。远端磁盘 I/O 卡死时一条 `ps aux` 就能把工具卡片永久钉在「执行中」，而
+/// `AssistantModel` 的状态由卡片推出来：停止对话之后仍是 `.running`，这个会话里之后发的
+/// 每条消息都只会进待发队列。CLI / 快捷命令 / 并行窗口早就走看门狗了，对话这条路是漏的。
+///
+/// 超时折成**抛错**而不是带说明的成功结果：卡片要落在 `.failed`（红），而
+/// `AssistantModel.completeCommand` 把 `localizedDescription` 原样写进卡片输出、回喂模型。
+nonisolated struct SupervisedAgentCommandExecutor: AgentCommandExecuting {
+    private let base: SSHCommandExecutor
+    private let limits: SupervisedExec.Limits
+    /// 看门狗的检查间隔；nil 用 `SupervisedExec` 的缺省。测试调小。
+    private let tick: Duration?
+
+    init(_ base: SSHCommandExecutor,
+         idle: Duration = SupervisedExec.agentIdle,
+         maxDuration: Duration = SupervisedExec.interactiveMaxDuration,
+         tick: Duration? = nil) {
+        self.base = base
+        self.limits = SupervisedExec.Limits(idle: idle, maxDuration: maxDuration,
+                                            maxLines: base.maxLines, maxBytes: base.maxBytes)
+        self.tick = tick
+    }
+
+    func run(_ command: String) async throws -> CommandResult {
+        switch await SupervisedExec.run(command, on: base, limits: limits, tick: tick) {
+        case .completed(let result):
+            return result
+        case .failed(let failure):
+            // 建连 / 传输失败：原样上抛，卡片文案与接看门狗之前一致。
+            throw failure.underlying
+        case .stalled(let stalled):
+            throw AgentCommandStalled(partialOutput: stalled.partial.output,
+                                      reason: stalled.message(limits: limits))
+        }
+    }
+}
+
+/// 看门狗判定卡住（或跑满总时长）并终止了命令。文案 = 判定前已收到的输出 + 一行原因：
+/// 卡在哪一步通常就在最后几行，模型要看得到。
+nonisolated struct AgentCommandStalled: LocalizedError, Equatable {
+    let partialOutput: String
+    let reason: String
+
+    var errorDescription: String? {
+        let note = "[执行超时：\(reason)]"
+        return partialOutput.isEmpty ? note : partialOutput + "\n" + note
+    }
+}
+
 /// 造 Agent 工具执行器的**工厂注入口**。
 ///
 /// 生产走 `.live`，逐字等价于改前 `MobileAgentChat` 里那两行

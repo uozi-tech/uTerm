@@ -87,6 +87,9 @@ nonisolated struct OpenAIClient: LLMClient {
                         for event in parser.parse(line: line) {
                             continuation.yield(event)
                         }
+                        if let message = parser.streamError {
+                            throw LLMClientError.streamError(message)
+                        }
                     }
                     // EOF 兜底：有的兼容端点以 finish_reason "stop"/"length" 收尾且不发
                     // [DONE]，累积的工具调用永不会在循环内 flush。这里无脑再 flush 一次；
@@ -94,6 +97,9 @@ nonisolated struct OpenAIClient: LLMClient {
                     for event in parser.flush() {
                         continuation.yield(event)
                     }
+                    // EOF 不等于说完了：先看流是怎么收的尾。
+                    if parser.endedEarly { throw LLMClientError.incompleteStream }
+                    if parser.finishReason == "length" { throw LLMClientError.outputLimitReached }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

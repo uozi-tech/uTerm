@@ -82,6 +82,70 @@ final class AnthropicClientTests: XCTestCase {
         XCTAssertEqual(out, "Hi there")
     }
 
+    // MARK: - 流怎么收的尾：话说一半就停必须报出来，不能装成正常结束
+
+    private func streamError(for sse: String) async -> LLMClientError? {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = AnthropicClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "x", baseURL: URL(string: "https://api.anthropic.com")!, apiKey: "k")
+        do {
+            for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {}
+            return nil
+        } catch {
+            return error as? LLMClientError
+        }
+    }
+
+    /// 连接在 `message_stop` 之前断开（中转网关掐流最常见的样子）：不能当成说完了。
+    func testEOFBeforeMessageStopIsIncomplete() async {
+        let error = await streamError(for: """
+        data: {"type":"message_start","message":{}}
+
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"而你的 ZFS 池 nvme（"}}
+
+        """)
+        XCTAssertEqual(error, .incompleteStream)
+    }
+
+    func testMidStreamErrorEventIsSurfaced() async {
+        let error = await streamError(for: """
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
+
+        event: error
+        data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+        """)
+        XCTAssertEqual(error, .streamError("overloaded_error：Overloaded"))
+    }
+
+    func testMaxTokensStopReasonIsSurfaced() async {
+        let error = await streamError(for: """
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
+
+        data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}
+
+        data: {"type":"message_stop"}
+
+        """)
+        XCTAssertEqual(error, .outputLimitReached)
+    }
+
+    /// 个别中转不转发 `message_stop`：有 `stop_reason` 也算正常收尾。
+    func testStopReasonAloneCountsAsComplete() async {
+        let error = await streamError(for: """
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
+
+        data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+        """)
+        XCTAssertNil(error)
+    }
+
     func testHttpErrorMapped() async {
         StubURLProtocol.install { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 401,

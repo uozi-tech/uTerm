@@ -227,6 +227,13 @@ struct ProviderEditView: View {
                 testResult = (false, "服务器返回了无法解析的响应")
             case .streamIdleTimeout:
                 testResult = (false, "响应流长时间没有新输出")
+            case .streamError(let detail):
+                testResult = (false, "服务端中途报错：\(detail.prefix(120))")
+            case .incompleteStream:
+                testResult = (false, "连接在回复说完之前断开")
+            case .outputLimitReached:
+                // 能撞到输出上限说明链路与 model id 都是通的。
+                testResult = (true, "连接 OK")
             }
         } catch {
             testResult = (false, "请求失败：\(FriendlyError.describe(error))")

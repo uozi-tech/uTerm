@@ -18,7 +18,10 @@ nonisolated struct ToolSpec: Sendable, Equatable {
     static let runCommand = ToolSpec(
         name: "run_command",
         description: "在用户当前已连接的服务器上执行一条 shell 命令并返回其标准输出/错误输出。"
-            + "命令会先经用户确认再执行。用于排查与运维任务。",
+            + "命令会先经用户确认再执行。用于排查与运维任务。"
+            + "命令在非交互环境里执行（没有终端，也没有人能输入），不要执行需要交互的命令；连续 "
+            + "\(Int(SupervisedExec.agentIdle.components.seconds)) 秒没有任何输出会被判定卡住并终止，"
+            + "耗时又不出声的任务请放到后台或让它定期输出进度。",
         parameters: [
             ToolParameter(name: "command", type: "string",
                           description: "要执行的完整 shell 命令。", required: true),

@@ -44,7 +44,12 @@ final class AssistantModel {
     private(set) var turnWasStopped = false
 
     var canStop: Bool {
-        activeStream != nil || activeOperationID != nil || state == .awaitingApproval
+        // 必须先读 `state`：`activeStream` / `activeOperationID` 不参与观察，`||` 又会短路 ——
+        // 流式期间读到 `activeStream != nil` 就返回的话，视图对 `state` 没有任何依赖，
+        // 回复结束时不会重绘，「停止对话」按钮就残留在屏上且点了没反应。这两个字段的每次
+        // 变化都伴随 `state` 或 `turnWasStopped` 的写入，所以挂上 `state` 就够了。
+        let state = self.state
+        return activeStream != nil || activeOperationID != nil || state == .awaitingApproval
     }
 
     /// Stops the conversation driver, not an already-dispatched remote process.
@@ -521,7 +526,7 @@ final class AssistantModel {
         // 已渲染出 pending 卡片，但状态机仍在飞行；此时点击会重入并并发起第二轮
         // streamAssistantTurn，打乱消息顺序与状态。门禁 state 即可挡住。
         guard !isDisposed, !Task.isCancelled, state == .awaitingApproval else { return }
-        guard let exec = executor,
+        guard let exec = executor.map(Self.supervised),
               let (mi, ci) = locate(id) else { return }
         guard messages[mi].toolCalls[ci].status == .pending else { return }
         guard let context = lastTurnContext ?? resolvedTurnContext() else { return }
@@ -557,6 +562,13 @@ final class AssistantModel {
         }
         activeOperationID = nil
         await continueIfResolved(messageID: operation.messageID, context: context, serverContext: serverContext)
+    }
+
+    /// 真 SSH 执行器一律放到静默看门狗底下跑；测试替身与已经套过的原样返回。
+    /// 在这里套而不是让各入口注入：入口有三处（工作区 / 终端窗口 / iOS），漏一处就是
+    /// 一张永远停在「执行中」的卡片。
+    nonisolated static func supervised(_ executor: CommandExecutor) -> CommandExecutor {
+        (executor as? SSHCommandExecutor).map { SupervisedAgentCommandExecutor($0) } ?? executor
     }
 
     /// 跳过某条工具调用；全部 resolved 后自动续轮。
@@ -798,6 +810,12 @@ final class AssistantModel {
             return "服务器返回了无法解析的响应。"
         case .streamIdleTimeout:
             return "响应流长时间没有新输出，已停止等待；请重试。"
+        case .streamError(let detail):
+            return "服务端中途报错，回复不完整：\(detail)"
+        case .incompleteStream:
+            return "连接在回复说完之前断开，上面的内容不完整；可发送「继续」让它接着说。"
+        case .outputLimitReached:
+            return "回复达到单次输出上限被截断；可发送「继续」让它接着说。"
         }
     }
 

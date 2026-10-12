@@ -1,5 +1,6 @@
 import AgentKit
 import Foundation
+import os
 import SwiftData
 import XCTest
 @testable import uTerm
@@ -51,6 +52,51 @@ final class AssistantModelSessionLifecycleTests: XCTestCase {
         await next.value
         XCTAssertEqual(model.messages.last?.text, "new answer")
         XCTAssertFalse(model.turnWasStopped)
+    }
+
+    /// 「停止对话」按钮按 `canStop` 显隐。流式期间它为真靠的是不参与观察的 `activeStream`，
+    /// 所以回复结束这一下必须能通过观察到达视图 —— 否则按钮残留在屏上，点了又被
+    /// `guard canStop` 挡掉，看上去就是「停止没反应」。
+    func testCanStopFlipIsObservableWhenReplyEnds() async throws {
+        let client = SessionLLMClient()
+        let model = try model(client)
+        let send = Task { await model.submit(text: "first", serverContext: "") }
+        try await waitUntil { client.count == 1 }
+        XCTAssertTrue(model.canStop)
+        let notified = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking { _ = model.canStop } onChange: { notified.withLock { $0 = true } }
+        client.finish(0, events: [.text("answer")])
+        await send.value
+        XCTAssertFalse(model.canStop)
+        XCTAssertTrue(notified.withLock { $0 }, "回复结束后视图收不到 canStop 的变化")
+    }
+
+    /// 命令卡死：看门狗到点把它判成失败，会话从 `.running` 里出来、照常续轮。
+    /// 没有看门狗时这张卡片永远停在「执行中」，之后的消息只会进待发队列。
+    func testHungCommandIsFailedByWatchdogAndConversationContinues() async throws {
+        let client = SessionLLMClient()
+        let model = try model(client)
+        let hung = SSHCommandExecutor(
+            exec: { _ in "" },
+            execStream: { _, onOutput in
+                onOutput(Data("\(SSHCommandExecutor.pidMarker):4242\npartial line\n".utf8))
+                try await Task.sleep(for: .seconds(3600))
+            })
+        model.executor = SupervisedAgentCommandExecutor(hung, idle: .milliseconds(80), tick: .milliseconds(10))
+        let send = Task { await model.submit(text: "why is load high", serverContext: "") }
+        try await waitUntil { client.count == 1 }
+        client.finish(0, events: [.toolCall(LLMToolCall(
+            id: "call", name: "run_command", argumentsJSON: #"{"command":"ps aux"}"#))])
+        await send.value
+        let run = Task { await model.approveAndRun(id: "call") }
+        try await waitUntil { client.count == 2 }
+        let call = try XCTUnwrap(model.messages.first { !$0.toolCalls.isEmpty }?.toolCalls.first)
+        XCTAssertEqual(call.status, .failed)
+        XCTAssertTrue(call.output?.hasPrefix("partial line") == true, call.output ?? "nil")
+        XCTAssertTrue(call.output?.contains("执行超时") == true, call.output ?? "nil")
+        client.finish(1, events: [.text("ps 卡住了")])
+        await run.value
+        XCTAssertEqual(model.state, .idle)
     }
 
     func testStopSkipsEveryPendingToolWithoutContinuing() async throws {

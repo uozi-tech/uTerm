@@ -174,6 +174,56 @@ final class OpenAIClientTests: XCTestCase {
                                                argumentsJSON: "{}")])
     }
 
+    // MARK: - 流怎么收的尾：话说一半就停必须报出来，不能装成正常结束
+
+    private func streamError(for sse: String) async -> LLMClientError? {
+        StubURLProtocol.install { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil,
+                                        headerFields: ["content-type": "text/event-stream"])!
+            return (resp, sse.data(using: .utf8)!)
+        }
+        let client = OpenAIClient(session: makeStubbedSession())
+        let config = LLMRequestConfig(model: "gpt-5",
+                                        baseURL: URL(string: "https://api.openai.com")!, apiKey: "k")
+        do {
+            for try await _ in client.stream(messages: [ChatMessage(role: .user, text: "hi")],
+                                              system: "", config: config) {}
+            return nil
+        } catch {
+            return error as? LLMClientError
+        }
+    }
+
+    func testEOFWithoutDoneOrFinishReasonIsIncomplete() async {
+        let error = await streamError(for: """
+        data: {"choices":[{"delta":{"content":"Hi"}}]}
+
+        """)
+        XCTAssertEqual(error, .incompleteStream)
+    }
+
+    func testFinishReasonLengthIsSurfaced() async {
+        let error = await streamError(for: """
+        data: {"choices":[{"delta":{"content":"Hi"}}]}
+
+        data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+
+        data: [DONE]
+
+        """)
+        XCTAssertEqual(error, .outputLimitReached)
+    }
+
+    func testMidStreamErrorFrameIsSurfaced() async {
+        let error = await streamError(for: """
+        data: {"choices":[{"delta":{"content":"Hi"}}]}
+
+        data: {"error":{"message":"upstream timeout","type":"server_error"}}
+
+        """)
+        XCTAssertEqual(error, .streamError("upstream timeout"))
+    }
+
     func testHttpErrorMapped() async {
         StubURLProtocol.install { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 401,

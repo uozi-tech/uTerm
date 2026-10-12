@@ -4,7 +4,9 @@ import Foundation
 /// 调用 Anthropic Claude Messages API（流式 SSE）。
 /// baseURL 应为 root（如 https://api.anthropic.com），本 client append "/v1/messages"。
 nonisolated struct AnthropicClient: LLMClient {
-    static let maxTokens = 2048
+    /// 单次回复的输出上限。原先是 2048：一份带几段代码块的排查结论就能撞线，
+    /// 而且撞线后没有任何提示（见 `LLMClientError.outputLimitReached`）。
+    static let maxTokens = 8192
     private let session: URLSession
 
     init(session: URLSession = .shared) {
@@ -78,7 +80,13 @@ nonisolated struct AnthropicClient: LLMClient {
                         for event in parser.parse(line: line) {
                             continuation.yield(event)
                         }
+                        if let message = parser.streamError {
+                            throw LLMClientError.streamError(message)
+                        }
                     }
+                    // EOF 不等于说完了：先看流是怎么收的尾。
+                    if parser.endedEarly { throw LLMClientError.incompleteStream }
+                    if parser.stopReason == "max_tokens" { throw LLMClientError.outputLimitReached }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

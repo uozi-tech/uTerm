@@ -15,7 +15,8 @@ import Foundation
 ///
 /// 调用方：CLI 的 `run*`（`ControlHandler+Run`，按请求给阈值）、macOS 欢迎页快捷命令
 /// （`QuickCommandRunner`）与并行执行窗口（`ParallelRunModel`）、iOS 并行执行
-/// （`SSHParallelSession`）—— GUI 没有逐次参数，用 `interactiveIdle` / `interactiveMaxDuration`。
+/// （`SSHParallelSession`）—— GUI 没有逐次参数，用 `interactiveIdle` / `interactiveMaxDuration`；
+/// Agent 对话的 `run_command`（`SupervisedAgentCommandExecutor`）用 `agentIdle`。
 ///
 /// 调用方的任务被取消（iOS 拆窗）也按「停」处理：后台发出进程组终止，立刻返回 `.cancelled`。
 ///
@@ -89,6 +90,11 @@ nonisolated enum SupervisedExec {
     static let interactiveIdle: Duration = .seconds(300)
     /// GUI 的总时长上限（兜底，同 CLI 默认）。
     static let interactiveMaxDuration: Duration = .seconds(3600)
+
+    /// Agent **对话**里 `run_command` 的静默预算。比快捷命令的 300 秒紧：这里的命令是模型
+    /// 现写的排查 / 运维语句，用户盯着卡片等结果，卡住了要尽快把控制权还回来；又比 CLI 的
+    /// 60 秒松，给 `du -sh /`、`find /` 这类本身不出声的命令留余地。一直有输出的命令不受影响。
+    static let agentIdle: Duration = .seconds(120)
 
     /// GUI 入口：阈值取 `interactive*`，输出裁剪沿用执行器自己的 `maxLines` / `maxBytes`。
     static func runInteractive(_ command: String, on executor: SSHCommandExecutor) async -> Outcome {
