@@ -3,23 +3,19 @@ import UDesignKit
 @testable import uTerm
 
 final class AssistantInputBarLayoutTests: XCTestCase {
-    func testAttachButtonUsesClickableHitTarget() {
-        XCTAssertGreaterThanOrEqual(AssistantInputBarLayout.attachHitSize, 28)
-        XCTAssertGreaterThanOrEqual(AssistantInputBarLayout.attachIconSize, 11)
+    /// 窄面板里模型名要给审批档位与主操作钮让位：收缩档必须明显比完整档窄。
+    func testModelLabelShrinksInCompactTier() {
+        XCTAssertLessThan(AgentComposerLayout.modelLabelCompactWidth,
+                          AgentComposerLayout.modelLabelMaxWidth / 2)
     }
 
-    func testSendButtonUsesFixedCenteredHeight() {
-        XCTAssertGreaterThanOrEqual(AssistantInputBarLayout.sendButtonHeight, 24)
-        XCTAssertLessThanOrEqual(AssistantInputBarLayout.keycapHeight,
-                                 AssistantInputBarLayout.sendButtonHeight)
-        XCTAssertEqual(AssistantInputBarLayout.sendContentAlignment, .center)
+    /// 菜单按「从保守到放权」排，且三档一个不少。
+    func testSafetyMenuListsEveryModeByAutonomy() {
+        XCTAssertEqual(AgentSafety.byAutonomy, [.confirm, .readAuto, .auto])
+        XCTAssertEqual(Set(AgentSafety.byAutonomy), Set(AgentSafety.allCases))
+        XCTAssertEqual(Set(AgentSafety.allCases.map(\.symbolName)).count, AgentSafety.allCases.count)
     }
 
-    func testComposerUsesEqualEdgePadding() {
-        XCTAssertEqual(UDComposerLayout.contentPadding, UD.Space.lg)
-    }
-
-    // `testComposerRoutesReturnKeyToSendAction` 已迁往 uAppKit 的 UDesignKitTests：
-    // 它守的是 UDComposer 的源文本，而 UDesignKit 已收编进共享包、按 tag 取用，
-    // 从 uTerm 按相对路径去兄弟目录找源码既找不到、也重新引入了刚拆掉的耦合。
+    // 卡片、发送 ⇄ 停止、回车 / esc 的守卫住在 uAppKit 的 `UDAgentComposerTests`：
+    // 组件本体在共享包里，守卫跟着源码走。
 }

@@ -5,17 +5,6 @@ import UDesignKit
 import SwiftUI
 import SwiftData
 
-enum AssistantInputBarLayout {
-    /// 底栏图标钮（附加 / 发送）点击区，对齐设计稿 28×28。
-    nonisolated static let attachHitSize: CGFloat = 28
-    nonisolated static let attachIconSize: CGFloat = 12
-    nonisolated static let attachCornerRadius: CGFloat = 7
-    /// 发送钮与附加钮同尺寸（28²），保持底栏对称。
-    nonisolated static let sendButtonHeight: CGFloat = 28
-    nonisolated static let keycapHeight: CGFloat = 20
-    nonisolated static let sendContentAlignment: VerticalAlignment = .center
-}
-
 /// 与文件路径栏、UPaneGroupArea 标签栏统一：36pt，底部 1pt 分隔线画在这 36pt 之内。
 enum AssistantHeaderLayout {
     nonisolated static let height = WorkspacePaneHeaderLayout.height
@@ -179,44 +168,6 @@ struct AssistantView: View {
         .padding(.horizontal, 10)
         .modifier(WorkspacePaneHeader())
         .background(UD.panel)
-    }
-
-    // MARK: - 模型选择胶囊（输入区底栏，Cursor 风格 ● <模型> ▾）
-
-    /// 底栏模型胶囊：原 meta 行的 provider 选择器，移到输入框页脚（设计稿 chat8）。
-    private var modelPill: some View {
-        UDDropdown(anchor: .leading) { _ in
-            UDModelPillLabel(modelPillLabel)
-        } content: {
-            UDMenu(width: 240, head: "模型", maxHeight: 320, items: modelPillItems)
-        }
-        .fixedSize()
-    }
-
-    private var modelPillItems: [UDMenuItem] {
-        var items = model.providers.map { provider in
-            let label = provider.model.isEmpty
-                ? provider.name
-                : "\(provider.name) · \(provider.model)"
-            return UDMenuItem(
-                label: label,
-                active: provider.id == model.activeProvider?.id,
-                action: { activeProviderIDString = provider.id.uuidString })
-        }
-        items.append(.divider())
-        items.append(UDMenuItem(label: "管理…", action: { openWindow(id: SettingsWindow.id) }))
-        return items
-    }
-
-    /// 胶囊文案：优先显示模型名（如 `claude-sonnet`），否则 provider 名；过长则省略。
-    private var modelPillLabel: String {
-        let raw: String
-        if let p = model.activeProvider {
-            raw = p.model.isEmpty ? p.name : p.model
-        } else {
-            raw = "未选择"
-        }
-        return raw.count > 22 ? String(raw.prefix(21)) + "…" : raw
     }
 
     // MARK: - 会话历史下拉
@@ -704,26 +655,17 @@ struct AssistantView: View {
         .accessibilityAction(named: "移除") { model.removeQueued(id: item.id) }
     }
 
-    @ViewBuilder
     private var inputBar: some View {
-        AgentStopControl(model: model)
-            .padding(.horizontal, 10)
-        UDComposer(
-            text: $model.input,
-            placeholder: "描述目标，Agent 会按审批档位处理命令…",
+        AgentComposer(
+            model: model,
+            placeholder: "描述目标，交给 Agent 处理…",
             minLines: 2,
-            queueing: model.isBusy,
+            safety: safetyBinding,
+            activeProviderIDString: $activeProviderIDString,
             onSend: sendIfPossible,
             onAttach: attachCurrentContext,
-            modelControl: {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 6) { modelPill; SafetyDial(safety: safetyBinding) }
-                    VStack(alignment: .leading, spacing: 6) { modelPill; SafetyDial(safety: safetyBinding) }
-                }
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: UD.Radius.lg, style: .continuous))
-        .padding(10)
+            onOpenSettings: { openWindow(id: SettingsWindow.id) })
+            .padding(10)
     }
 
     private func sendIfPossible() {

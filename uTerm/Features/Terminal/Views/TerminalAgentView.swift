@@ -7,8 +7,8 @@ import SwiftData
 ///
 /// 布局：上下文条（主机 · 历史 · 新对话）→ 居中对话区（max 760；空状态居中、命令卡
 /// 整宽 = 真实 `run_command` 工具调用）→ 输入区
-/// （安全档位拨盘 + 模型胶囊 + 发送）。
-/// 复用 `AssistantModel`（真实流式 + 工具审批）与 DesignKit `UDToolCall` / `UDComposer`。
+/// （`AgentComposer`：模型 + 审批档位 + 发送 / 停止）。
+/// 复用 `AssistantModel`（真实流式 + 工具审批）与 DesignKit `UDToolCall`。
 struct TerminalAgentView: View {
     @Bindable var model: AssistantModel
     let host: String
@@ -326,23 +326,16 @@ struct TerminalAgentView: View {
 
     // MARK: - 输入区
 
-    @ViewBuilder
     private var composer: some View {
-        AgentStopControl(model: model)
-            .padding(.horizontal, 24)
-        UDComposer(
-            text: $model.input,
+        AgentComposer(
+            model: model,
             placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
             minLines: 3,
-            queueing: model.isBusy,
+            safety: $safety,
+            activeProviderIDString: $activeProviderIDString,
             onSend: sendInput,
-            onAttach: attachContext
-        ) {
-            HStack(spacing: 6) {
-                SafetyDial(safety: $safety)
-                modelPill
-            }
-        }
+            onAttach: attachContext,
+            onOpenSettings: onOpenSettings)
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24).padding(.top, 10).padding(.bottom, 14)
@@ -386,15 +379,6 @@ struct TerminalAgentView: View {
             .accessibilityHidden(true)
     }
 
-    private var modelPill: some View {
-        UDDropdown(anchor: .leading) { _ in
-            UDModelPillLabel(modelPillLabel)
-        } content: {
-            UDMenu(width: 240, head: "模型", maxHeight: 320, items: modelPillItems)
-        }
-        .fixedSize()
-    }
-
     private var sessionMenuItems: [UDMenuItem] {
         guard !sessions.isEmpty else {
             return [UDMenuItem(label: "还没有历史会话")]
@@ -405,26 +389,6 @@ struct TerminalAgentView: View {
                 active: session.id == model.currentSession?.id,
                 action: { model.load(session) })
         }
-    }
-
-    private var modelPillItems: [UDMenuItem] {
-        var items = model.providers.map { provider in
-            let label = provider.model.isEmpty
-                ? provider.name
-                : "\(provider.name) · \(provider.model)"
-            return UDMenuItem(
-                label: label,
-                active: provider.id == model.activeProvider?.id,
-                action: { activeProviderIDString = provider.id.uuidString })
-        }
-        items.append(.divider())
-        items.append(UDMenuItem(label: "管理…", action: onOpenSettings))
-        return items
-    }
-
-    private var modelPillLabel: String {
-        let raw = model.activeProvider.map { $0.model.isEmpty ? $0.name : $0.model } ?? "未选择"
-        return raw.count > 22 ? String(raw.prefix(21)) + "…" : raw
     }
 
     // MARK: - 0 provider 空状态
@@ -449,36 +413,4 @@ struct TerminalAgentView: View {
         .init(tag: "配置", items: ["给 upstream 加上 keepalive", "把 SSH 端口改成 2222", "开启 gzip 压缩"]),
         .init(tag: "部署", items: ["拉取最新代码并重启服务", "回滚到上一个版本", "查看 systemd 服务状态"]),
     ]
-}
-
-// MARK: - 安全档位拨盘
-
-/// 输入区左下角的「自然语言 → 执行」信任拨盘（设计稿 terminal-agent.jsx 的安全档位）。
-struct SafetyDial: View {
-    @Binding var safety: AgentSafety
-
-    var body: some View {
-        UDDropdown(anchor: .leading) { open in
-            HStack(spacing: 6) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: 11)).foregroundStyle(UD.accent)
-                Text(safety.label).font(.system(size: 11.5)).foregroundStyle(UD.text2)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(UD.text4)
-                    .rotationEffect(.degrees(open ? 180 : 0))
-            }
-            .padding(.leading, 9).padding(.trailing, 8)
-            .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-            .contentShape(RoundedRectangle(cornerRadius: 7))
-        } content: {
-            UDMenu(width: 180, items: AgentSafety.allCases.map { mode in
-                UDMenuItem(label: mode.label, active: mode == safety, action: { safety = mode })
-            })
-        }
-        .fixedSize()
-        .accessibilityLabel("审批模式")
-        .accessibilityValue(safety.label)
-        .help(safety.detail)
-    }
 }

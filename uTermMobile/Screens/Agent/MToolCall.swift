@@ -133,7 +133,7 @@ struct MToolCall: View {
 
 // MARK: - 安全档位拨盘
 
-/// 「自然语言 → 真实执行」信任拨盘（移动端）。镜像 macOS `SafetyDial`。
+/// 「自然语言 → 真实执行」信任拨盘（移动端）。镜像 macOS `AgentComposer` 里的审批档位。
 struct MSafetyDial: View {
     @Binding var safety: AgentSafety
 
