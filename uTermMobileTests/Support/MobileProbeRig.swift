@@ -254,6 +254,32 @@ final class MobileProbeRig {
         }
     }
 
+    /// 从头到尾扫一遍整篇文档，返回扫完之后的 `contentSize.height`。
+    ///
+    /// `LazyVStack` 的文档高 = 建过的行的实测高 + 没建过的行的**估高**。估高取决于这一轮
+    /// 碰巧建过哪些行：iOS 27 上同一份 200 条消息、只往返扫过前三屏时，两次读数能差 14%
+    /// （148k 对 173k，而真实高度是 28 万上下）。要拿文档高当「两边挂的是不是同一批内容」
+    /// 的判据，就得先把估高换成实测高 —— 扫完之后同一份内容的读数只差 0.2%。
+    ///
+    /// 只给**规模有限**的 fixture 用：每步都逼一次布局，一千条量级要好几秒。
+    @discardableResult
+    func settleContentHeight() -> CGFloat {
+        guard let scroll = scrollView else { return 0 }
+        let stride = Swift.max(1, scroll.bounds.height * 0.8)
+        var y: CGFloat = 0
+        var steps = 0
+        // 上界每步重读：扫的过程中估高在被实测高替换，文档会一路变长。
+        while y < scroll.contentSize.height - scroll.bounds.height, steps < 5_000 {
+            scrollTo(y)
+            layout()
+            y += stride
+            steps += 1
+        }
+        scrollTo(scroll.contentSize.height)
+        layout()
+        return scroll.contentSize.height
+    }
+
     /// 以小于一屏的间距扫过 `[0, amplitude]`，把懒建的行全部实例化。
     ///
     /// 不扫的话第一遍往返会把「首次建行」的账算进滚动成本，规模越大越夸张。

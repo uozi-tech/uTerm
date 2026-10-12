@@ -88,9 +88,44 @@ extension UIView {
     }
 
     /// 子树里的 `UIView` 总数（含自己）。结构判据用，`LazyVStack` 是否真懒看它。
+    ///
+    /// **不数滚动边缘效果**（见 `isScrollEdgeEffectChrome`）：那是系统按「窗口看不看得见」
+    /// 自己挂的，不是被测视图建的。数进去的话同一份 fixture 在 `alpha = 0` 的窗口里是 6、
+    /// 在可见窗口里是 10，「三档给出同一棵树」这条自证就没法成立。
+    /// `classHistogram()` 照旧全数 —— 排查时要看得见它们。
     func recursiveViewCount() -> Int {
         var n = 0
-        func walk(_ view: UIView) { n += 1; for sub in view.subviews { walk(sub) } }
+        func walk(_ view: UIView) {
+            guard !view.isScrollEdgeEffectChrome else { return }
+            n += 1
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(self)
+        return n
+    }
+
+    /// iOS 27 的滚动边缘效果（内容滚到顶 / 底栏下面时那道渐隐模糊）：`UIScrollView` 的直接
+    /// 子视图 `_UITouchPassthroughView`，里面各装一个 `BackdropView` / `ScrollEdgeEffectView`。
+    ///
+    /// 实测（2026-10-12，iOS 27.0 模拟器）：**只有可见窗口才挂** —— `.offScreen` /
+    /// `.visibleOnScreen`（`alpha = 1`）各多 4 个视图，`.transparentOnScreen`（`alpha = 0`）
+    /// 一个没有；iOS 26.5 上三档都没有。类名是私有的，所以按「滚动视图的直接子视图 + 子视图
+    /// 类名」两条一起认，免得误伤别处的 `_UITouchPassthroughView`。
+    var isScrollEdgeEffectChrome: Bool {
+        guard superview is UIScrollView, !subviews.isEmpty else { return false }
+        return subviews.allSatisfy { sub in
+            let name = String(describing: type(of: sub))
+            return name.contains("ScrollEdgeEffect") || name.contains("Backdrop")
+        }
+    }
+
+    /// 子树里滚动边缘效果占了多少个 `UIView`（记账用，不进闸门）。
+    func scrollEdgeEffectViewCount() -> Int {
+        var n = 0
+        func count(_ view: UIView) { n += 1; for sub in view.subviews { count(sub) } }
+        func walk(_ view: UIView) {
+            if view.isScrollEdgeEffectChrome { count(view) } else { for sub in view.subviews { walk(sub) } }
+        }
         walk(self)
         return n
     }

@@ -49,6 +49,10 @@ final class ProbeRigSelfTests: XCTestCase {
             let shot = await rig.snapshot(hitSamples: 30)
             rig.report(scroll, shot, beat)
             attachProbePNG(shot.png, name: "ab-\(placement.short)")
+            // 记账：系统给这一档的滚动视图挂了多少滚动边缘效果（iOS 27 起只挂给可见窗口；
+            // `views` 不数它们，见 `UIView.recursiveViewCount`）。
+            print("[ab-\(placement.short)-chrome] scroll-edge-effect views="
+                  + "\(rig.hostView?.scrollEdgeEffectViewCount() ?? -1)")
             byPlacement[placement] = (beat, scroll, shot)
             await rig.close()
         }

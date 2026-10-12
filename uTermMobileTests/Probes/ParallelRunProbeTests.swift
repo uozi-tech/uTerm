@@ -28,7 +28,9 @@ import XCTest
 ///
 /// 绝对毫秒只打印（README「每把尺怎么读」）。硬断言只有：可滚动余量 > 0、
 /// `travelled` 够、心跳没被追加占死、`UIView` 数不随台数涨、展开后内容真的变高、
-/// 完成态两帧像素一致（= ticker / 脉冲真的停了）。
+/// 完成态两帧像素一致（= ticker / 脉冲真的停了）。唯一的**相对计时**闸门是
+/// 「跨格一跳不随每格行数涨」，它只比同一轮里的两档，写法见
+/// `testCrossPaneJumpDoesNotScaleWithLinesPerPane`。
 @MainActor
 final class ParallelRunProbeTests: XCTestCase {
 
@@ -65,6 +67,9 @@ final class ParallelRunProbeTests: XCTestCase {
         /// 两万多 pt —— 那套读数**永远跨不过一格**，跨格这一跳得单量。
         var jumpP50 = 0.0
         var jumpMax = 0.0
+        /// 逐跳原始读数（先一格格往下、再一格格回来）。跨档比较时要合并几轮取中位数，
+        /// 单轮七八个样本的中位数自己就能差出一倍。
+        var jumps: [Double] = []
         var hitP50 = 0.0
         var ink = 0.0
         var histogram = ""
@@ -191,13 +196,17 @@ final class ParallelRunProbeTests: XCTestCase {
         rig.scrollTo(0)
         rig.layout()
         try await Task.sleep(for: .milliseconds(200))
-        for k in 1...min(8, hosts - 1) {
+        // 先往下一格格翻，再原路翻回来：样本翻倍，且回程落的是已经建过一次的格子，
+        // 两种跳都量到。
+        let reach = min(8, hosts - 1)
+        for k in Array(1...reach) + Array((0..<reach).reversed()) {
             let start = CFAbsoluteTimeGetCurrent()
             rig.scrollTo(CGFloat(paneHeight * Double(k)))
             rig.layout()
             jumps.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
             try await Task.sleep(for: .milliseconds(120))
         }
+        r.jumps = jumps
         r.jumpP50 = ProbeMetrics.percentile(jumps, 0.5)
         r.jumpMax = jumps.max() ?? 0
         print("[\(label)-jumps] " + jumps.map { String(format: "%.1f", $0) }.joined(separator: " "))
@@ -213,6 +222,44 @@ final class ParallelRunProbeTests: XCTestCase {
         controller.cancel()
         await rig.close()
         return r
+    }
+
+    /// **翻到下一台的一跳不随「每格多少行」涨** —— 内层那叠输出行必须是懒建的。
+    ///
+    /// 内层非懒的话，落进新的一格要把整格的行都建出来，成本正比于每格行数
+    /// （改懒栈前实测 600 行 161.4ms、1200 行 316.2ms，约 0.26ms/行）；懒栈只建视野内
+    /// 那几十行，与每格多少行无关。
+    ///
+    /// 这条原先挂在主用例里，拿「6 台 × 600 行」对「24 台 × 1200 行」的单轮中位数比，
+    /// 闸门 1.6。iOS 27 上它成了假红，原因有两个，都与内层懒不懒无关：
+    ///
+    /// - 两档**同时差着台数**。台数固定成 8 之后，每格 300 / 1200 / 2400 行的一跳都落在
+    ///   20–45ms，看不出随行数涨；外层那叠格子多了才是变贵的来源。
+    /// - **单轮中位数自己就飘一倍**。同一档连跑两轮是 44.8 对 20.5ms（各 7 个样本），
+    ///   原判据在基线提交上的比值是 0.91–3.22。
+    ///
+    /// 所以改成：台数固定 8，只差每格行数，而且差 8 倍（300 对 2400）而不是 2 倍；
+    /// 轻重两档按 轻-重-重-轻 各跑两轮抵掉先后顺序，每档合并 28 个样本取中位数。
+    /// 懒的时候比值在 1 上下（四轮实测 0.70 / 1.23 / 1.67 / 1.34）；把内层临时换回 `VStack`
+    /// 反向自证，比值是 20.18（35.8 → 723.0ms）。闸门放在 3，两边都留了余量。
+    func testCrossPaneJumpDoesNotScaleWithLinesPerPane() async throws {
+        defer { MobileProbeWindow.closeAll() }
+
+        var light: [Double] = []
+        var heavy: [Double] = []
+        for (round, lines) in [300, 2400, 2400, 300].enumerated() {
+            let reading = try await measureShell(hosts: 8, lines: lines, seconds: 4,
+                                                 label: "par-jump-8x\(lines)-\(round)")
+            XCTAssertGreaterThan(reading.totalLines, 8 * lines / 2, "8 台 × \(lines) 行没流够，这一档没在量")
+            XCTAssertFalse(reading.jumps.isEmpty, "一跳都没量到")
+            if lines == 300 { light += reading.jumps } else { heavy += reading.jumps }
+        }
+        let lightP50 = ProbeMetrics.percentile(light, 0.5)
+        let heavyP50 = ProbeMetrics.percentile(heavy, 0.5)
+        print(String(format: "[par-jump] 8 台，每格行数 300→2400，跨格一跳 p50 %.1f→%.1fms（比值 %.2f，各 %d 个样本）",
+                     lightP50, heavyP50, heavyP50 / max(0.001, lightP50), light.count))
+        XCTAssertLessThan(heavyP50, lightP50 * 3,
+                          "跨格跳转成本随每格行数线性涨 = 某一格的行不再是懒建的")
     }
 
     /// 主用例：真实档 + 极端档各量一次。
@@ -245,14 +292,10 @@ final class ParallelRunProbeTests: XCTestCase {
         XCTAssertLessThan(extreme.views, real.views + 24,
                           "视图数随台数线性涨 = 每台在建真控件，得按 B/C 处方改")
 
-        // ⑤ **翻到下一台的一跳不随「每格多少行」涨**（同轮相对比，不看绝对毫秒）。
-        //    极端档每格 1200 行、真实档 600 行：内层非懒的话这一跳要把整格建出来，
-        //    比值 ≈ 2（改懒栈前实测 161.4 → 316.2ms，比值 1.96）；懒栈只建视野内那几十行，
-        //    比值 ≈ 1（实测 1.15 / 1.20）。这条红了就是内层又变回非懒了。
-        XCTAssertLessThan(extreme.jumpP50, real.jumpP50 * 1.6,
-                          "跨格跳转成本随每格行数线性涨 = 某一格的行不再是懒建的")
-        print(String(format: "[par-shell-jump] 每格行数 600→1200，跨格一跳 p50 %.1f→%.1fms（比值 %.2f）",
-                     real.jumpP50, extreme.jumpP50, extreme.jumpP50 / max(0.001, real.jumpP50)))
+        // ⑤ 跨格一跳这里只记账，判据在 `testCrossPaneJumpDoesNotScaleWithLinesPerPane`：
+        //    这两档同时差着台数（6 对 24）和每格行数，比值说明不了内层懒不懒。
+        print(String(format: "[par-shell-jump] 6 台×600 行 / 24 台×1200 行，跨格一跳 p50 %.1f / %.1fms",
+                     real.jumpP50, extreme.jumpP50))
 
         // ⑥ **贴底跟随**：移动端这一屏整个没有跟随（无 `ScrollViewReader` / 无
         //    `defaultScrollAnchor`，见 `shellBody`），所以 gap 只会随内容一起长。

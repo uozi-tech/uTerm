@@ -113,6 +113,8 @@ final class AgentChatProbeTests: XCTestCase {
         ]
         var readings: [String: (mount: Double, p50: Double, p95: Double, over: Double,
                                 views: Int, hit: Double, content: CGFloat)] = [:]
+        /// 真实档两臂把整篇扫过一遍之后的文档高（估高已换成实测高）。
+        var settled: [String: CGFloat] = [:]
 
         for (count, limits) in plan {
             for limit in limits {
@@ -138,6 +140,10 @@ final class AgentChatProbeTests: XCTestCase {
 
                 readings[key] = (rig.mountMS, scroll.p50, scroll.p95, scroll.overStrictPct,
                                  shot.views, shot.hitP50, scroll.contentHeight)
+                // 放在所有计时读数之后：整篇扫一遍会把每一行都建出来，先扫就量不到懒建了。
+                if count == Self.realisticMessages {
+                    settled[key] = rig.settleContentHeight()
+                }
                 rows.append(String(format: "| %@ | %.1fms | %.3fms | %.3fms | %.1f%% | %d | %.0fµs | %.0f |",
                                    key, rig.mountMS, scroll.p50, scroll.p95, scroll.overStrictPct,
                                    shot.views, shot.hitP50, scroll.contentHeight))
@@ -167,17 +173,23 @@ final class AgentChatProbeTests: XCTestCase {
         }
         // 真实档 200 条正好等于默认上限，两臂**挂的是同一批消息**（自证）。
         //
-        // 判据是「文档高度在同一量级」而不是「逐点相等」：`LazyVStack` 的
-        // contentSize 里含未实例化行的**估高**，实际数值取决于这一轮扫过哪些行，
-        // 两臂差 1% 量级是常态（实测 472982 vs 478892 = 1.25%）。
-        // 闸门放在 5% —— 真要是有一臂被裁了，差的是 5 倍不是 5%。
-        if let a = readings["\(Self.realisticMessages)-legacy"],
-           let b = readings["\(Self.realisticMessages)-window\(Self.windowedLimit)"] {
-            let delta = abs(a.content - b.content) / Swift.max(a.content, b.content)
-            print(String(format: "[agent-history] 200 条两臂文档高 %.0f vs %.0f（差 %.2f%%）",
-                         a.content, b.content, delta * 100))
+        // 比的是**整篇扫过一遍之后**的文档高，不是往返扫掠时顺手读到的那个：后者含没建过
+        // 的行的估高，取决于这一轮碰巧扫过哪些行。iOS 26.5 上两臂只差 1% 量级，原来的
+        // 5% 闸门够用；iOS 27 的估高粗得多，同样两臂差到 14%（148k 对 173k，真实高度
+        // 28 万上下），闸门成了假红。连挂载那一刻的估高两臂都差近一倍（38910 对 20925，
+        // 每轮一模一样），所以也不能图省事改读挂载时的值。扫完之后两臂实测差 0.17%–1.45%
+        // （五轮：282898 / 278336 对 282417）。闸门仍是 5% —— 真要是有一臂被裁了，
+        // 差的是成倍，不是百分之几。代价是这条用例多跑四十秒上下（两臂各把 200 条建一遍）。
+        if let a = settled["\(Self.realisticMessages)-legacy"],
+           let b = settled["\(Self.realisticMessages)-window\(Self.windowedLimit)"] {
+            let delta = abs(a - b) / Swift.max(a, b)
+            print(String(format: "[agent-history] 200 条两臂文档高（整篇扫过后）%.0f vs %.0f（差 %.2f%%）",
+                         a, b, delta * 100))
+            XCTAssertGreaterThan(Swift.min(a, b), 0, "没读到收敛后的文档高 —— 这条自证没在量")
             XCTAssertLessThan(delta, 0.05,
                               "200 条 == 默认上限，两臂应当挂同样多的消息")
+        } else {
+            XCTFail("真实档两臂缺收敛后的文档高，这条自证没在量")
         }
     }
 

@@ -11,7 +11,8 @@ DESTINATION ?= platform=macOS
 # 换机器：make test-mobile MOBILE_DESTINATION='platform=iOS Simulator,name=iPad Pro 11-inch (M5)'
 # 这台机器上没有 iOS 模拟器运行时的话先跑一次 `xcodebuild -downloadPlatform iOS`（8.5GB）。
 MOBILE_SCHEME ?= uTermMobile
-MOBILE_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
+# 默认取 Xcode 27 自带的那台；探针读数按 iOS 27 校准过（uTermMobileTests/README.md「iOS 27 复量」）。
+MOBILE_DESTINATION ?= platform=iOS Simulator,name=iPhone 18 Pro
 
 BUILD_DIR := build
 DERIVED_DATA := $(BUILD_DIR)/DerivedData
@@ -294,6 +295,7 @@ test-mobile:
 		-configuration "$(TEST_CONFIGURATION)" \
 		-destination "$(MOBILE_DESTINATION)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
+		$(MOBILE_PACKAGE_ARGS) \
 		test
 
 # 命令行客户端的离线自测：起一个假的 Unix socket 服务端，把每个子命令跑一遍
