@@ -52,6 +52,13 @@ RESULT = {
     "exitCode": 0, "truncated": False, "durationMs": 137, "timedOut": False,
 }
 
+SESSION = {"id": "1A2B3C4D-0000-0000-0000-000000000000", "host": "prod-web",
+           "hostID": "11111111-1111-1111-1111-111111111111", "command": None,
+           "term": "xterm-256color", "cols": 160, "rows": 48,
+           "startedAt": "2026-10-21T01:00:00Z", "running": True, "truncated": False,
+           "droppedBytes": 0, "awaitingInput": True, "passwordPrompt": False,
+           "quietSeconds": 1.0, "promptLine": "$"}
+
 DEFAULT_PAYLOADS = {
     "ping": {"app": {"name": "uTerm", "version": "1.0.1", "build": "330",
                      "socket": "/tmp/x.sock", "controlEnabled": True,
@@ -98,6 +105,13 @@ DEFAULT_PAYLOADS = {
     "terminal-read": {"screen": {"terminal": "7A2B", "lines": ["$ uptime", "up 12 days"],
                                  "truncated": False}},
     "terminal-send": {}, "terminal-open": {"terminals": []},
+    "sessions": {"sessions": [SESSION]},
+    "session-start": {"session": dict(SESSION, output="Last login: …\n$ ")},
+    "session-send": {"session": dict(SESSION, output="[sudo] password for deploy: ",
+                                     passwordPrompt=True,
+                                     promptLine="[sudo] password for deploy:")},
+    "session-read": {"session": dict(SESSION, output="done\n")},
+    "session-close": {"session": dict(SESSION, running=False, endReason="closed")},
     "disconnect": {},
 }
 
@@ -556,6 +570,56 @@ def exercise(server, root, rejecting):
     run_cli(server, ["quick-run", "磁盘水位", "-H", "prod-web"])
     equal(last(server)["name"], "磁盘水位", "quick-run 带 name")
     equal(last(server)["hosts"], ["prod-web"], "quick-run 覆盖目标")
+
+    print("交互会话")
+    run_cli(server, ["session", "start", "-H", "prod-web"])
+    equal(last(server)["action"], "session-start", "session start action")
+    check("command" not in last(server), "session start 不给命令 = 登录 shell")
+    run_cli(server, ["session", "start", "-H", "prod-web", "--cols", "120", "--rows", "40",
+                     "--wait", "2.5", "--wait-for", "\\$ $", "--", "sudo", "apt", "upgrade"])
+    equal(last(server)["command"], "sudo apt upgrade", "session start 带 -- 之后的命令")
+    equal(last(server)["cols"], 120, "session start 带 cols")
+    equal(last(server)["rows"], 40, "session start 带 rows")
+    equal(last(server)["waitSeconds"], 2.5, "session start 带 waitSeconds")
+    equal(last(server)["waitFor"], "\\$ $", "session start 带 waitFor")
+
+    run_cli(server, ["session", "send", "-s", "1A2B", "y", "--enter"])
+    equal(last(server)["action"], "session-send", "session send action")
+    equal(last(server)["session"], "1A2B", "session send 带会话 id")
+    equal(last(server)["text"], "y", "session send 带文本")
+    equal(last(server)["enter"], True, "session send 带 enter")
+    run_cli(server, ["session", "send", "-s", "1A2B", "-k", "ctrl-c", "-k", "up"])
+    equal(last(server)["keys"], ["ctrl-c", "up"], "session send 的按键按顺序成数组")
+    check("text" not in last(server), "只发按键时不带 text")
+    run_cli(server, ["session", "send", "-s", "1A2B", "--secret", "--prompt", "mac-01 的 sudo 密码"])
+    equal(last(server)["secret"], True, "session send --secret")
+    equal(last(server)["prompt"], "mac-01 的 sudo 密码", "session send --prompt")
+
+    run_cli(server, ["session", "read", "-s", "1A2B", "--screen", "--wait", "0"])
+    equal(last(server)["action"], "session-read", "session read action")
+    equal(last(server)["screen"], True, "session read --screen")
+    equal(last(server)["waitSeconds"], 0.0, "--wait 0 照样发出去（不当成没给）")
+    proc = run_cli(server, ["session", "read", "-s", "1A2B", "--format", "table"])
+    check("done" in proc.stdout and "1A2B3C4D" in proc.stdout,
+          "session 的人类可读输出：新输出 + 状态行")
+    run_cli(server, ["session", "close", "-s", "1A2B"])
+    equal(last(server)["action"], "session-close", "session close action")
+    proc = run_cli(server, ["sessions", "--format", "table"])
+    check("prod-web" in proc.stdout, "sessions 表格")
+
+    server.override = {"ok": False, "code": "secret_cancelled", "message": "用户取消了输入",
+                       "session": SESSION}
+    run_cli(server, ["session", "send", "-s", "1A2B", "--secret"], expect_exit=3,
+            label="用户取消输入 → 3")
+    server.override = {"ok": False, "code": "session_not_found", "message": "没有这个会话"}
+    run_cli(server, ["session", "read", "-s", "dead"], expect_exit=4, label="会话找不到 → 4")
+
+    # 子进程的 stdin / stdout 都不是 TTY：run -t 在本地就拒绝，一个字节都不发。
+    before = len(server.requests)
+    proc = run_cli(server, ["run", "-t", "-H", "prod-web", "--", "top"], expect_exit=2,
+                   label="run -t 没有终端 → 本地拒绝")
+    check("session start" in proc.stderr, "run -t 被拒时指路到 session start")
+    equal(len(server.requests), before, "run -t 没有终端时不发请求")
 
     print("SFTP")
     run_cli(server, ["sftp", "ls", "-H", "prod-web", "/var/log", "--format", "table"])

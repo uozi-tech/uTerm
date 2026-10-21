@@ -253,8 +253,11 @@ final class ControlProtocolTests: XCTestCase {
             .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
             .forwardStart, .forwardStop,
             .terminalSend, .terminalOpen,
+            .sessionStart, .sessionSend,
         ]
-        let execCapable: Set<ControlAction> = [.run, .runMany, .quickRun, .terminalSend, .terminalOpen]
+        let execCapable: Set<ControlAction> = [
+            .run, .runMany, .quickRun, .terminalSend, .terminalOpen, .sessionStart,
+        ]
 
         for action in ControlAction.allCases {
             XCTAssertEqual(
@@ -287,6 +290,44 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(ControlProtocol.isTransfer(.sftpGet))
         XCTAssertTrue(ControlProtocol.isTransfer(.sftpPut))
         XCTAssertFalse(ControlProtocol.isTransfer(.sftpCat))
+    }
+
+    /// 交互会话的请求字段与响应快照在线上的形状（客户端按这些键名读写）。
+    func testSessionFieldsRoundTrip() throws {
+        let request = ControlRequest(
+            action: .sessionSend, text: "y", enter: true, tty: true, term: "xterm", cols: 120, rows: 40,
+            session: "1A2B", keys: ["ctrl-c"], secret: true, prompt: "为什么", waitSeconds: 2.5,
+            waitFor: "\\$ $", screen: true)
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(request), encoding: .utf8))
+        for key in ["\"tty\"", "\"term\"", "\"cols\"", "\"rows\"", "\"session\"", "\"keys\"",
+                    "\"secret\"", "\"prompt\"", "\"waitSeconds\"", "\"waitFor\"", "\"screen\""] {
+            XCTAssertTrue(json.contains(key), key)
+        }
+        XCTAssertEqual(try JSONDecoder().decode(ControlRequest.self, from: Data(json.utf8)), request)
+
+        let snapshot = ControlSessionSnapshot(
+            id: "1A2B", host: "web", hostID: "h", term: "xterm", cols: 80, rows: 24,
+            startedAt: "2026-10-21T00:00:00Z", running: true, output: "ok\n",
+            promptLine: "Password:", awaitingInput: true, passwordPrompt: true)
+        let response = ControlResponse.success(id: "1", message: "m", session: snapshot, sessions: [snapshot])
+        let decoded = try JSONDecoder().decode(ControlResponse.self, from: ControlProtocol.encode(response))
+        XCTAssertEqual(decoded, response)
+    }
+
+    /// `run -t` 一挂几个小时，占长连接槽位（与传输共用），不挤短请求。
+    func testInteractiveRunOccupiesALongLivedSlot() {
+        XCTAssertTrue(ControlProtocol.occupiesLongLivedSlot(ControlRequest(action: .run, tty: true)))
+        XCTAssertFalse(ControlProtocol.occupiesLongLivedSlot(ControlRequest(action: .run)))
+        XCTAssertFalse(ControlProtocol.occupiesLongLivedSlot(ControlRequest(action: .sessionRead)))
+        XCTAssertTrue(ControlProtocol.occupiesLongLivedSlot(ControlRequest(action: .sftpGet)))
+    }
+
+    func testSessionErrorCodesArePartOfTheContract() {
+        for code in ["session_not_found", "session_ambiguous", "session_limit", "session_ended", "secret_cancelled"] {
+            XCTAssertNotNil(ControlErrorCode(rawValue: code), code)
+        }
+        XCTAssertLessThanOrEqual(ControlProtocol.maxSessionsPerHost, ControlProtocol.maxSessions)
+        XCTAssertLessThan(ControlProtocol.defaultSessionWaitSeconds, ControlProtocol.maxSessionWaitSeconds)
     }
 
     /// 错误码总表：新增码必须列进来（客户端按 rawValue 做退出码映射）。

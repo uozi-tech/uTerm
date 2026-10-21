@@ -61,6 +61,19 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     case terminalSend = "terminal-send"
     case terminalOpen = "terminal-open"
 
+    // MARK: 交互会话（命令行自己的后台 PTY）
+
+    /// 列出命令行开着的交互会话。
+    case sessions = "sessions"
+    /// 在一台主机上开一个后台 PTY 会话（不给命令就是登录 shell）。
+    case sessionStart = "session-start"
+    /// 往会话里写文本 / 按键；`secret` 时由 uTerm 弹安全输入框，让用户自己输。
+    case sessionSend = "session-send"
+    /// 读会话自上次以来的新输出（可等到某段文字出现）。
+    case sessionRead = "session-read"
+    /// 关会话（远端进程随 PTY 挂断收到 SIGHUP）。
+    case sessionClose = "session-close"
+
     // MARK: 收尾
 
     /// 松开 CLI 连接池对某主机的 exec / SFTP 持有。
@@ -80,12 +93,15 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         case .trust, .run, .runMany, .quickRun,
              .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
              .forwardStart, .forwardStop,
-             .terminalSend, .terminalOpen:
+             .terminalSend, .terminalOpen,
+             .sessionStart, .sessionSend:
             return true
+        // `session-close` 只会让命令行自己开的会话停下来，开关关了也得能收拾残局。
         case .ping, .hosts, .hostKey, .quickCommands,
              .sftpLs, .sftpStat, .sftpCat, .sftpGet,
              .forwardList,
              .terminals, .terminalRead,
+             .sessions, .sessionRead, .sessionClose,
              .disconnect:
             return false
         }
@@ -95,7 +111,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     /// 这是用户在主机档案上做的定性，CLI 不绕。
     public var requiresExecCapableHost: Bool {
         switch self {
-        case .run, .runMany, .quickRun, .terminalSend, .terminalOpen:
+        // `session-send` 不在内：会话开起来时主机已经判过（`session-start`）。
+        case .run, .runMany, .quickRun, .terminalSend, .terminalOpen, .sessionStart:
             return true
         default:
             return false
@@ -116,6 +133,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
             return .forward
         case .terminals, .terminalRead, .terminalSend, .terminalOpen:
             return .terminal
+        case .sessions, .sessionStart, .sessionSend, .sessionRead, .sessionClose:
+            return .session
         case .ping, .disconnect:
             return .misc
         }
@@ -129,6 +148,7 @@ nonisolated public enum ControlActionGroup: String, Codable, Sendable, CaseItera
     case sftp
     case forward
     case terminal
+    case session
     case misc
 }
 
@@ -176,6 +196,27 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var fingerprint: String?
     /// 备用名字字段（快捷命令 / 转发规则按名字指定时的显式入口）。
     public var name: String?
+    /// `run`：开 PTY、把客户端交来的 stdin / stdout（`SCM_RIGHTS`）直通远端，人在终端里
+    /// 实时交互（`utermctl run -t`）。
+    public var tty: Bool?
+    /// PTY 的终端类型 / 列 / 行（`run -t`、`session-start`）。
+    public var term: String?
+    public var cols: Int?
+    public var rows: Int?
+    /// 交互会话 id 或其唯一前缀。
+    public var session: String?
+    /// `session-send`：按顺序追加的按键名（`enter` / `tab` / `ctrl-c` / `up` …）。
+    public var keys: [String]?
+    /// `session-send`：不带文本，由 uTerm 弹安全输入框让用户输（密码），输入直接写进 PTY。
+    public var secret: Bool?
+    /// `session-send --secret` 时给用户看的说明（为什么要输、输的是什么）。
+    public var prompt: String?
+    /// `session-*`：最多等多少秒（等输出静下来 / 等 `waitFor` 出现 / 等进程退出）。
+    public var waitSeconds: Double?
+    /// `session-*`：等到新输出里出现这段正则才返回。
+    public var waitFor: String?
+    /// `session-read`：额外回传虚拟终端当前画面（TUI 程序看这个）。
+    public var screen: Bool?
 
     public init(
         id: String? = nil,
@@ -200,7 +241,18 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         text: String? = nil,
         enter: Bool? = nil,
         fingerprint: String? = nil,
-        name: String? = nil
+        name: String? = nil,
+        tty: Bool? = nil,
+        term: String? = nil,
+        cols: Int? = nil,
+        rows: Int? = nil,
+        session: String? = nil,
+        keys: [String]? = nil,
+        secret: Bool? = nil,
+        prompt: String? = nil,
+        waitSeconds: Double? = nil,
+        waitFor: String? = nil,
+        screen: Bool? = nil
     ) {
         self.id = id
         self.action = action
@@ -225,6 +277,17 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         self.enter = enter
         self.fingerprint = fingerprint
         self.name = name
+        self.tty = tty
+        self.term = term
+        self.cols = cols
+        self.rows = rows
+        self.session = session
+        self.keys = keys
+        self.secret = secret
+        self.prompt = prompt
+        self.waitSeconds = waitSeconds
+        self.waitFor = waitFor
+        self.screen = screen
     }
 }
 
@@ -249,6 +312,10 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
     public var rules: [ControlForwardSnapshot]?
     public var terminals: [ControlTerminalSnapshot]?
     public var screen: ControlScreenSnapshot?
+    /// `session-start` / `session-send` / `session-read` / `session-close`。
+    public var session: ControlSessionSnapshot?
+    /// `sessions`。
+    public var sessions: [ControlSessionSnapshot]?
 
     public init(
         id: String? = nil,
@@ -267,7 +334,9 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
-        screen: ControlScreenSnapshot? = nil
+        screen: ControlScreenSnapshot? = nil,
+        session: ControlSessionSnapshot? = nil,
+        sessions: [ControlSessionSnapshot]? = nil
     ) {
         self.id = id
         self.ok = ok
@@ -286,6 +355,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         self.rules = rules
         self.terminals = terminals
         self.screen = screen
+        self.session = session
+        self.sessions = sessions
     }
 
     public static func success(
@@ -304,7 +375,9 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
-        screen: ControlScreenSnapshot? = nil
+        screen: ControlScreenSnapshot? = nil,
+        session: ControlSessionSnapshot? = nil,
+        sessions: [ControlSessionSnapshot]? = nil
     ) -> ControlResponse {
         ControlResponse(
             id: id,
@@ -323,7 +396,9 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
             transfer: transfer,
             rules: rules,
             terminals: terminals,
-            screen: screen
+            screen: screen,
+            session: session,
+            sessions: sessions
         )
     }
 
@@ -336,7 +411,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         hostKey: ControlHostKeyInfo? = nil,
         results: [ControlRunResult]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
-        rules: [ControlForwardSnapshot]? = nil
+        rules: [ControlForwardSnapshot]? = nil,
+        session: ControlSessionSnapshot? = nil
     ) -> ControlResponse {
         ControlResponse(
             id: id,
@@ -348,7 +424,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
             hostKey: hostKey,
             results: results,
             rules: rules,
-            terminals: terminals
+            terminals: terminals,
+            session: session
         )
     }
 
@@ -731,6 +808,95 @@ nonisolated public struct ControlScreenSnapshot: Codable, Sendable, Equatable {
     }
 }
 
+/// 命令行的一个交互会话（后台 PTY，不在任何窗口里）。
+///
+/// `output` 是**自上次读取以来**的新输出，已去掉终端控制序列、按 `\r` 覆盖收成纯文本；
+/// 读过就不会再给第二次（是流，不是快照）。TUI 程序的画面看 `screen`。
+nonisolated public struct ControlSessionSnapshot: Codable, Sendable, Equatable {
+    public var id: String
+    public var host: String
+    public var hostID: String
+    /// 开会话时给的命令；nil = 登录 shell。
+    public var command: String?
+    public var term: String
+    public var cols: Int
+    public var rows: Int
+    /// ISO8601。
+    public var startedAt: String
+    public var running: Bool
+    /// 进程退出后才有。被信号杀掉时 sshd 不报退出码，也会是 0。
+    public var exitCode: Int?
+    /// 结束原因：`exited` / `closed`（被 `session-close` 或开关关闭）/ `failed`（连接断了）/
+    /// `idle_timeout`（太久没人读写，自动回收）/ `max_duration`。还在跑为 nil。
+    public var endReason: String?
+    public var endMessage: String?
+    /// 新输出（只在 start / send / read 的响应里）。
+    public var output: String?
+    /// 这次的新输出超过上限，只给了最后那部分。
+    public var truncated: Bool
+    /// 两次读取之间输出太多、会话的缓冲装不下而被挤掉的字节数（从开始累计）。
+    public var droppedBytes: Int
+    /// 虚拟终端当前画面（去尾部空行），只在要求时给。
+    public var screen: [String]?
+    /// 光标所在行的文字（通常就是提示符：`Password:`、`$ `、`[Y/n]`）。
+    public var promptLine: String?
+    /// 进程还活着、输出已经静下来、且最后一行没换行 —— 多半在等输入。
+    public var awaitingInput: Bool
+    /// `promptLine` 像密码提示（`password` / `passphrase` / `密码` / `口令` 结尾带冒号）。
+    /// 是的话用 `session send --secret` 让用户自己输，**不要**自己编密码。
+    public var passwordPrompt: Bool
+    /// 给了 `waitFor` 时：是否等到了。没给为 nil。
+    public var matched: Bool?
+    /// 距离上一次有输出过了几秒。
+    public var quietSeconds: Double
+
+    public init(
+        id: String,
+        host: String,
+        hostID: String,
+        command: String? = nil,
+        term: String,
+        cols: Int,
+        rows: Int,
+        startedAt: String,
+        running: Bool,
+        exitCode: Int? = nil,
+        endReason: String? = nil,
+        endMessage: String? = nil,
+        output: String? = nil,
+        truncated: Bool = false,
+        droppedBytes: Int = 0,
+        screen: [String]? = nil,
+        promptLine: String? = nil,
+        awaitingInput: Bool = false,
+        passwordPrompt: Bool = false,
+        matched: Bool? = nil,
+        quietSeconds: Double = 0
+    ) {
+        self.id = id
+        self.host = host
+        self.hostID = hostID
+        self.command = command
+        self.term = term
+        self.cols = cols
+        self.rows = rows
+        self.startedAt = startedAt
+        self.running = running
+        self.exitCode = exitCode
+        self.endReason = endReason
+        self.endMessage = endMessage
+        self.output = output
+        self.truncated = truncated
+        self.droppedBytes = droppedBytes
+        self.screen = screen
+        self.promptLine = promptLine
+        self.awaitingInput = awaitingInput
+        self.passwordPrompt = passwordPrompt
+        self.matched = matched
+        self.quietSeconds = quietSeconds
+    }
+}
+
 /// 一条快捷命令。
 nonisolated public struct ControlQuickCommandSnapshot: Codable, Sendable, Equatable {
     public var id: String
@@ -815,6 +981,16 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     case terminal_ambiguous
     case terminal_disconnected
 
+    // 交互会话
+    case session_not_found
+    case session_ambiguous
+    /// 命令行开着的会话已到上限（总数或单台主机），先 `session-close` 掉不用的。
+    case session_limit
+    /// 会话已经结束，写不进去了（响应里带结束原因与最后的输出）。
+    case session_ended
+    /// `session-send --secret`：用户在 uTerm 的安全输入框里点了取消 / 超时没输。
+    case secret_cancelled
+
     // 服务端兜底
     case handler_timeout
     /// 并发客户端超过 `ControlServer.maxActiveClients`，连接在读请求前就被拒。
@@ -870,6 +1046,29 @@ nonisolated public enum ControlProtocol {
     public static let defaultScreenLines = 80
     public static let maxScreenBytes = 16_000
 
+    /// 命令行交互会话的上限：总数 / 每台主机。每台的上限卡的是 sshd 的 `MaxSessions`
+    /// （默认 10，数的是**一条连接上的通道**）：会话与 `run` 的 exec 共用那条复用连接。
+    public static let maxSessions = 16
+    public static let maxSessionsPerHost = 4
+    /// 交互会话的默认 PTY 尺寸。宽一点，少让程序按 80 列折行。
+    public static let defaultSessionCols = 160
+    public static let defaultSessionRows = 48
+    /// `session-*` 的等待：默认 / 封顶（秒）。
+    public static let defaultSessionWaitSeconds = 10.0
+    public static let maxSessionWaitSeconds = 600.0
+    /// 输出静下来多久算「这一波输出完了」（秒）。
+    public static let sessionSettleSeconds = 0.8
+    /// 一次响应里 `output` 的字节上限（超了只给最后这么多）。
+    public static let maxSessionOutputBytes = 64_000
+    /// 太久没有任何 `session-*` 调用碰过就自动关（秒）。
+    public static let sessionIdleSeconds: TimeInterval = 30 * 60
+    /// 会话总时长上限（秒）。
+    public static let sessionMaxSeconds: TimeInterval = 6 * 3600
+    /// 进程结束后会话还留多久，好让调用方读到最后的输出与退出码（秒）。
+    public static let endedSessionRetentionSeconds: TimeInterval = 10 * 60
+    /// `session-send --secret` 的输入框最多等用户多久（秒）。
+    public static let secretPromptSeconds: TimeInterval = 300
+
     /// `run-many` 的有界并发（与 `QuickCommandRunner.maxConcurrent` 对齐）。
     public static let maxParallelHosts = 6
 
@@ -883,6 +1082,12 @@ nonisolated public enum ControlProtocol {
     /// 占传输槽位的动作。
     public static func isTransfer(_ action: ControlAction) -> Bool {
         action == .sftpGet || action == .sftpPut
+    }
+
+    /// 这条请求占「长连接」槽位（与传输共用 `maxTransferClients`）：传输，以及
+    /// `run -t` —— 人在终端里交互，一条连接可能挂几个小时，不能占着短请求的名额。
+    public static func occupiesLongLivedSlot(_ request: ControlRequest) -> Bool {
+        isTransfer(request.action) || (request.action == .run && request.tty == true)
     }
 
     /// Debug and Release may share the same sandbox container. Keep their

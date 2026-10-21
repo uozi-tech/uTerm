@@ -91,6 +91,26 @@ actor ReusableSSHConnection {
         }
     }
 
+    /// 在复用连接上开一条 PTY 通道（命令行的交互会话）。与 `exec` 同一条重连规则：连接
+    /// 已经死了（开通道撞上传输层失败）就丢掉、重连一次再开。通道开起来之前远端什么都
+    /// 没跑，重开是安全的。
+    func openPTY(
+        _ spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle {
+        let c = try await ensureConnected()
+        do {
+            return try await RemotePTYChannel.open(
+                on: c, spec: spec, onOutput: onOutput, onEnd: onEnd)
+        } catch {
+            guard !closed, SSHTransportFailure.isTransportFailure(error) else { throw error }
+            await dropClient()
+            return try await RemotePTYChannel.open(
+                on: ensureConnected(), spec: spec, onOutput: onOutput, onEnd: onEnd)
+        }
+    }
+
     func close() async {
         closed = true
         await dropClient()

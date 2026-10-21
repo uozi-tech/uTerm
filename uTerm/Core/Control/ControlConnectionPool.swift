@@ -191,6 +191,28 @@ actor ControlConnectionPool: ControlConnectionPooling {
         )
     }
 
+    func openPTY(
+        for host: HostConnectionSpec,
+        spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle {
+        let channel = try await execChannel(for: host)
+        let hostID = host.id
+        // 与流式 exec 同一套计数：交互会话能开几个小时，不数着的话 10 分钟的空闲清扫会把
+        // 连接从它底下关掉。
+        beginExec(hostID)
+        do {
+            return try await channel.openPTY(spec, onOutput: onOutput) { [weak self] ending in
+                onEnd(ending)
+                Task { await self?.endExec(hostID) }
+            }
+        } catch {
+            endExec(hostID)
+            throw error
+        }
+    }
+
     /// 借一条这台主机的 SFTP 会话：
     /// 有空闲 → 直接拿；没空闲且没到 `maxSFTPChannels` → 新建一条；到上限 → 排队等归还
     /// （最多 `sftpWaitTimeout`，等不到抛 `SFTPChannelsBusyError`）。

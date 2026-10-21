@@ -213,7 +213,7 @@ final class SkillDefinitionTests: XCTestCase {
         let documented = [
             "ping", "hosts", "host-key", "trust", "run", "run-many",
             "quick-commands", "quick-run", "sftp", "forward", "terminals",
-            "terminal", "disconnect",
+            "terminal", "sessions", "session", "disconnect",
         ]
         for name in documented {
             XCTAssertTrue(

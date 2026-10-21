@@ -19,15 +19,15 @@ import NIOSSH
 /// Citadel 的 `withPTY` 不返回句柄 —— 它在闭包返回时就关闭通道。所以会话期间
 /// 必须把闭包"挂起"。做法：在一个独立 `Task`（`sessionTask`）里调用 `withPTY`，
 /// 闭包内：
-///   1. 把 `TTYStdinWriter` 写入 `SessionState`（线程安全盒子），并启动单一 drain 任务，
+///   1. 把 `TTYStdinWriter` 写入 `PTYStdinState`（线程安全盒子），并启动单一 drain 任务，
 ///      使 `write`/`resize` 生效；
 ///   2. 用 `TaskGroup` 跑两个子任务：一个泵出站输出，一个 `await` close 信号；
 ///   3. `group.next()` 在任一子任务结束时返回 —— 远端 shell 退出（输出泵结束）
 ///      或本地 `close()`（close 信号 resume）都会让闭包退出，从而关闭通道。
-/// `SessionState` 用 `Mutex` 保护，因此可以安全地从 `withPTY` 的非隔离闭包里访问。
+/// `PTYStdinState` 用 `Mutex` 保护，因此可以安全地从 `withPTY` 的非隔离闭包里访问。
 ///
 /// ## stdin 字节顺序保证（C1）
-/// 所有 stdin 写入与 resize 都进入 `SessionState` 的单一有序 FIFO 队列，由唯一一个
+/// 所有 stdin 写入与 resize 都进入 `PTYStdinState` 的单一有序 FIFO 队列，由唯一一个
 /// drain 任务串行消费 —— 每个操作 `await` 完成后才处理下一个。writer 就绪前积压的
 /// 操作与就绪后的新操作进同一队列，因此从"调用 write/resize"到"writer.write"
 /// 只有一条有序路径，绝不会乱序。
@@ -108,7 +108,7 @@ actor SSHConnection: TerminalBackend {
     // MARK: - 运行时状态
 
     /// 跨 actor / withPTY 闭包共享的会话状态盒子（自带 `Mutex`，`Sendable`）。
-    private let state = SessionState()
+    private let state = PTYStdinState()
     /// 会话任务。它在内部以强引用本地副本持有目标 / 跳板机 `SSHClient`，
     /// 并独占负责其 teardown（先关目标、再关跳板机）—— 因此 actor 本身
     /// 不再单独存储 `SSHClient`：那会让非 `Sendable` 的 `SSHClient` 既被
@@ -369,9 +369,10 @@ actor SSHConnection: TerminalBackend {
     }
 }
 
-// MARK: - SessionState
+// MARK: - PTYStdinState
 
 /// 跨 actor 与 `withPTY` 非隔离闭包共享的会话状态。自带 `Mutex`，是 `Sendable`。
+/// 命令行的交互会话（`RemotePTYChannel`）复用同一套有序 stdin 与 close 信号。
 ///
 /// 这是一个 **`nonisolated`** 的跨 actor 锁盒 —— 绝不能被推断为 `@MainActor`：
 /// 它要同时被 `SSHConnection`（actor 隔离域）与 `withPTY` 的非隔离闭包、NIO 上下文
@@ -381,14 +382,14 @@ actor SSHConnection: TerminalBackend {
 ///
 /// 全部可变字段收进 `Storage`，由 `Mutex<Storage>` 守护。每个临界区是一个同步、
 /// 非逃逸的 `withLock` 闭包 —— 语义与原 `NSLock.lock()/unlock()` 区段完全一致，
-/// 且临界区内不跨 `await`。`Mutex` 使 `SessionState` 天然 `Sendable`，无需 `@unchecked`。
+/// 且临界区内不跨 `await`。`Mutex` 使 `PTYStdinState` 天然 `Sendable`，无需 `@unchecked`。
 ///
 /// ## stdin 有序性（C1）
 /// 所有 `Op` 进同一个 FIFO `pendingOps`。writer 发布前入队的 Op 留在队列里，writer
 /// 发布后 `attach` 启动唯一一个 drain 任务，从队头开始逐个 `await` 应用到 writer。
 /// `enqueue` 用 `opSignal` 这个 `AsyncStream` 唤醒 drain 任务。因此从"调用
 /// write/resize"到"writer.write/changeSize"只有一条有序路径，不会乱序、不会并发。
-private nonisolated final class SessionState: Sendable {
+nonisolated final class PTYStdinState: Sendable {
 
     /// stdin 操作：写入字节或改窗口尺寸。FIFO 顺序应用。
     enum Op {

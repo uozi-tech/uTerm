@@ -227,7 +227,10 @@ def build_parser():
         p.add_argument("argv", nargs="*", help="-- 之后的命令与参数（原样拼成一条命令）")
         return p
 
-    with_command(add("run", "在一台主机上跑一条命令", host=True))
+    p = with_command(add("run", "在一台主机上跑一条命令", host=True))
+    p.add_argument("--tty", "-t", action="store_true",
+                   help="开 PTY 并把本终端直通过去，像 ssh -t 一样实时交互（只能在真正的终端里用；"
+                        "不给命令就是登录 shell）")
     with_command(add("run-many", "在多台主机上并行跑同一条命令", hosts=True))
 
     add("quick-commands", "列出快捷命令")
@@ -306,6 +309,45 @@ def build_parser():
     p = terminal_sub.add_parser("open", parents=[shared], help="给一台主机开一个新终端窗口")
     p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
 
+    # --- 交互会话（给没有终端的调用方：一问一答地驱动交互程序） ---
+    add("sessions", "列出命令行开着的交互会话")
+    session = sub.add_parser("session", parents=[shared],
+                             help="后台 PTY 交互会话：开 / 发输入 / 读输出 / 关")
+    session_sub = session.add_subparsers(dest="session_action", required=True)
+
+    def waiting(p):
+        p.add_argument("--wait", type=float,
+                       help="最多等几秒：等输出静下来、等 --wait-for 出现或进程退出；默认 10，封顶 600")
+        p.add_argument("--wait-for", help="等新输出里出现这段正则才返回（多行模式）")
+        p.add_argument("--screen", action="store_true", help="附带虚拟终端当前画面（TUI 程序看这个）")
+        return p
+
+    p = waiting(session_sub.add_parser("start", parents=[shared],
+                                       help="在一台主机上开会话（不给命令就是登录 shell）"))
+    p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+    p.add_argument("--command", "-c", help="整串 shell 命令（与 -- 之后的 argv 二选一）")
+    p.add_argument("--term", help="终端类型，默认 xterm-256color")
+    p.add_argument("--cols", type=int, help="列数，默认 160")
+    p.add_argument("--rows", type=int, help="行数，默认 48")
+    p.add_argument("argv", nargs="*", help="-- 之后的命令与参数")
+
+    p = waiting(session_sub.add_parser("send", parents=[shared], help="往会话里写文本 / 按键 / 让用户输密码"))
+    p.add_argument("--session", "-s", required=True, help="会话 id 或其唯一前缀")
+    p.add_argument("text", nargs="?", help="要写入的文本（原样，不自动回车）")
+    p.add_argument("--enter", action="store_true", help="末尾追加回车")
+    p.add_argument("--key", "-k", dest="keys", action="append",
+                   help="追加按键，可重复：enter tab esc backspace up down left right ctrl-c ctrl-d …")
+    p.add_argument("--secret", action="store_true",
+                   help="不带文本：uTerm 弹安全输入框让用户自己输（密码），内容直接写进 PTY 并回车")
+    p.add_argument("--prompt", help="--secret 时给用户看的说明：为什么要输、输的是什么")
+
+    p = waiting(session_sub.add_parser("read", parents=[shared], help="读会话自上次以来的新输出"))
+    p.add_argument("--session", "-s", required=True, help="会话 id 或其唯一前缀")
+
+    p = session_sub.add_parser("close", parents=[shared], help="关会话（远端进程收到 SIGHUP）")
+    p.add_argument("--session", "-s", required=True, help="会话 id 或其唯一前缀")
+    p.add_argument("--screen", action="store_true", help="附带关闭前的最后画面")
+
     p = add("disconnect", "松开命令行连接池对主机的持有")
     p.add_argument("--host", "-H", help="不给就释放全部")
 
@@ -333,14 +375,14 @@ def transfer_options(p, force_help):
 
 def resolved_action(args):
     """把 `sftp ls` / `forward list` / `terminal read` 拼成协议里的 kebab action。"""
-    for group in ("sftp", "forward", "terminal"):
+    for group in ("sftp", "forward", "terminal", "session"):
         leaf = getattr(args, group + "_action", None)
         if args.action == group and leaf:
             return "%s-%s" % (group, leaf)
     return args.action
 
 
-def command_string(args):
+def command_string(args, optional=False):
     inline = getattr(args, "command", None)
     argv = list(getattr(args, "argv", []))
     # `--` 是命令的一部分，**不能过滤**：`run -H h -- grep -- --include f` 里那个
@@ -356,6 +398,8 @@ def command_string(args):
         return inline
     if argv:
         return shlex.join(argv)
+    if optional:
+        return None
     fail("缺少命令：用 -c \"…\" 或在 -- 之后写命令")
 
 
@@ -370,7 +414,14 @@ def make_request(args):
         request["host"] = host
 
     if action in ("run", "run-many"):
-        request["command"] = command_string(args)
+        # `run -t` 与 `session start` 不给命令 = 登录 shell。
+        command = command_string(args, optional=getattr(args, "tty", False))
+        if command is not None:
+            request["command"] = command
+    if action == "session-start":
+        command = command_string(args, optional=True)
+        if command is not None:
+            request["command"] = command
     if action == "quick-run":
         # 协议里 `name` 是按名字指定的显式入口，`command` 也接受「快捷命令的名字 / id」。
         # 两个都填，服务端读哪个都对。
@@ -390,13 +441,22 @@ def make_request(args):
         ("terminal", "terminal"),
         ("text", "text"),
         ("fingerprint", "fingerprint"),
+        ("session", "session"),
+        ("term", "term"),
+        ("cols", "cols"),
+        ("rows", "rows"),
+        ("wait", "waitSeconds"),
+        ("wait_for", "waitFor"),
+        ("prompt", "prompt"),
+        ("keys", "keys"),
     ):
         value = getattr(args, field, None)
         if value is not None and value != "":
             request[key] = value
 
-    if getattr(args, "enter", False):
-        request["enter"] = True
+    for flag in ("enter", "secret", "screen"):
+        if getattr(args, flag, False):
+            request[flag] = True
 
     return request
 
@@ -407,8 +467,9 @@ def fail(message):
 
 
 def send_request(request, fd=None, on_progress=None):
-    """发一条请求。`fd` 给了就随请求经 `SCM_RIGHTS` 交给 uTerm（`sftp-get` / `sftp-put`
-    的本地文件）；`on_progress` 收传输期间的进度行。"""
+    """发一条请求。`fd`（一个 fd，或一组）给了就随请求经 `SCM_RIGHTS` 交给 uTerm
+    （`sftp-get` / `sftp-put` 的本地文件、`run -t` 的 stdin / stdout / 尺寸管道）；
+    `on_progress` 收传输期间的进度行。"""
     paths = socket_paths()
     stale = []
     found_socket = False
@@ -546,8 +607,9 @@ def _exchange(sock, path, request, fd=None, on_progress=None):
                 sock.sendall(payload)
             else:
                 # fd 挂在第一段数据上（SCM_RIGHTS）；没发完的部分照常补。
+                fds = list(fd) if isinstance(fd, (list, tuple)) else [fd]
                 sent = sock.sendmsg(
-                    [payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+                    [payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds))])
                 if sent < len(payload):
                     sock.sendall(payload[sent:])
             sock.shutdown(socket.SHUT_WR)
@@ -583,7 +645,8 @@ def exit_code_for(response):
                 "server_busy", "local_read_failed", "local_write_failed",
                 "local_failure"):
         return EXIT_LOCAL
-    if code in ("control_disabled", "mutations_disabled", "host_sftp_only"):
+    # `secret_cancelled`：用户在 uTerm 的输入框里拒绝了 —— 与开关一样是用户的决定。
+    if code in ("control_disabled", "mutations_disabled", "host_sftp_only", "secret_cancelled"):
         return EXIT_GATED
     if code.endswith("_not_found") or code.endswith("_ambiguous"):
         return EXIT_NOT_FOUND
@@ -1250,6 +1313,8 @@ TABLES = [
     ("quickCommands", ["name", "command", "serverNames", "lastRunAt", "id"]),
     ("results", ["host", "exitCode", "timedOut", "truncated", "durationMs",
                  "errorCode", "errorMessage"]),
+    ("sessions", ["id", "host", "command", "running", "exitCode", "endReason",
+                  "awaitingInput", "passwordPrompt", "promptLine", "quietSeconds"]),
 ]
 
 
@@ -1341,11 +1406,88 @@ def run_output(response):
     return "\n".join(blocks)
 
 
+def session_output(response):
+    """session start / send / read / close 的人类可读输出：新输出原样，末尾一行状态。"""
+    item = response.get("session") or {}
+    parts = []
+    body = item.get("output")
+    if body:
+        parts.append(body.rstrip("\n"))
+    if item.get("truncated"):
+        parts.append("-- 新输出太多，只给了最后一部分")
+    screen = item.get("screen")
+    if isinstance(screen, list):
+        parts.append("── 画面 ──")
+        parts.extend(screen)
+    state = "运行中" if item.get("running") else "已结束（%s%s）" % (
+        item.get("endReason") or "?",
+        "，exit=%s" % item["exitCode"] if item.get("exitCode") is not None else "")
+    head = "-- [%s · %s · %s]" % (str(item.get("id", "?"))[:8], item.get("host", "?"), state)
+    if item.get("passwordPrompt"):
+        head += " 在等密码"
+    elif item.get("awaitingInput"):
+        head += " 在等输入"
+    if item.get("promptLine"):
+        head += "：%s" % item["promptLine"]
+    parts.append(head)
+    if response.get("message"):
+        parts.append("-- " + response["message"])
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# run -t：把本终端直通到远端 PTY
+#
+# 终端切 raw 模式（Ctrl-C 之类成了普通字节，由远端 PTY 处理），stdin / stdout 与一条窗口
+# 尺寸管道的读端经 SCM_RIGHTS 交给 uTerm，由它双向泵字节；这边只等最后那一行结果。
+# SIGWINCH 时往管道写一行 `resize <列> <行>`。本进程一退出管道写端就关，uTerm 读到 EOF
+# 就知道人走了、关掉远端 PTY。
+# ---------------------------------------------------------------------------
+
+def do_tty_run(args):
+    if not (os.isatty(0) and os.isatty(1)):
+        fail("run -t 只能在真正的终端里用（stdin 与 stdout 都得是 TTY）。"
+             "没有终端的调用方（比如 Agent 的 Bash 工具）请改用 `utermctl session start`。")
+    import signal
+    import termios
+    import tty
+
+    request = make_request(args)
+    request["tty"] = True
+    size = os.get_terminal_size(1)
+    request["cols"], request["rows"] = size.columns, size.lines
+    request["term"] = os.environ.get("TERM") or "xterm-256color"
+
+    read_end, write_end = os.pipe()
+    saved = termios.tcgetattr(0)
+
+    def on_winch(_signum, _frame):
+        try:
+            current = os.get_terminal_size(1)
+            os.write(write_end, b"resize %d %d\n" % (current.columns, current.lines))
+        except OSError:
+            pass
+
+    previous = signal.signal(signal.SIGWINCH, on_winch)
+    try:
+        tty.setraw(0)
+        response = send_request(request, fd=[0, 1, read_end])
+    finally:
+        termios.tcsetattr(0, termios.TCSADRAIN, saved)
+        signal.signal(signal.SIGWINCH, previous)
+        os.close(read_end)
+        os.close(write_end)
+    return response
+
+
 # 这两个码的响应带着完整的 results，人类可读格式照常逐主机渲染。
 RUN_BATCH_CODES = ("run_failed", "run_partial_failure")
 
 
 def render(response, fmt, args):
+    if (not response.get("ok") and fmt != "json"
+            and isinstance(response.get("session"), dict)):
+        return session_output(response)
     if not response.get("ok"):
         # run-many / quick-run 失败时 results 才是有用的东西（逐台的 errorCode），
         # 一股脑打 JSON 等于把表格吞了。json 格式仍然原样输出。
@@ -1378,6 +1520,9 @@ def render(response, fmt, args):
     if action in ("run", "run-many", "quick-run"):
         return run_output(response)
 
+    if isinstance(response.get("session"), dict):
+        return session_output(response)
+
     table = rows_of(response)
     if table is None:
         return as_json(response)
@@ -1404,6 +1549,14 @@ def main():
             response = {"id": None, "ok": False, "code": "local_failure",
                         "message": "%s: %s" % (type(raised).__name__, raised)}
         print(render_transfer(response, fmt))
+        return exit_code_for(response)
+    if action == "run" and getattr(args, "tty", False):
+        # 像 ssh -t：成功时什么都不打（屏幕上已经是远端的输出），退出码就是远端的退出码。
+        response = do_tty_run(args)
+        if response.get("ok"):
+            code = (response.get("result") or {}).get("exitCode")
+            return code if isinstance(code, int) and 0 <= code < 256 else EXIT_OK
+        print(render(response, fmt, args))
         return exit_code_for(response)
     response = send_request(make_request(args))
     print(render(response, fmt, args))

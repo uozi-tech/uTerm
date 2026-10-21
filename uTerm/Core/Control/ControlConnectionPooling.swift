@@ -177,6 +177,12 @@ nonisolated protocol ControlExecChannel: Sendable {
     func exec(_ command: String) async throws -> String
     /// 流式 exec：每到一块输出回调一次，命令结束才返回（`run` 的静默看门狗靠它）。
     func execStreaming(_ command: String, onOutput: @escaping @Sendable (Data) -> Void) async throws
+    /// 在同一条连接上开一条 PTY 通道（交互会话 / `run -t`）。
+    func openPTY(
+        _ spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle
     func close() async
 }
 
@@ -184,6 +190,15 @@ extension ControlExecChannel {
     /// 只会整段返回的通道（测试替身）：跑完一次性交付。
     func execStreaming(_ command: String, onOutput: @escaping @Sendable (Data) -> Void) async throws {
         onOutput(Data(try await exec(command).utf8))
+    }
+
+    /// 不支持 PTY 的通道（测试替身）。
+    func openPTY(
+        _ spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle {
+        throw ControlFailure.notImplemented("这条执行通道上的 PTY")
     }
 }
 
@@ -241,6 +256,15 @@ protocol ControlConnectionPooling: Actor {
     /// `fingerprint` 逐字相同才批准并写 `KnownHost`（走 `HostKeyVerifier` 的 TOFU 路径）。
     /// 指纹不符抛 `ControlConnectError.hostKeyChanged` —— 绝不盲信。
     func trustHostKey(host: HostConnectionSpec, fingerprint: String) async throws
+
+    /// 在该主机的（复用）exec 连接上开一条 PTY 通道。通道开着期间这台主机算「在用」，
+    /// 空闲回收不会把连接从它底下关掉。建连失败抛 `ControlConnectError`（同 `executor`）。
+    func openPTY(
+        for host: HostConnectionSpec,
+        spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle
 }
 
 extension ControlConnectionPooling {
@@ -268,6 +292,16 @@ extension ControlConnectionPooling {
     /// 缺省（测试替身）：当成普通归还。
     func discardSFTP(_ session: any SFTPProviding, for hostID: UUID) async {
         await returnSFTP(session, for: hostID)
+    }
+
+    /// 缺省（测试替身）：不支持 PTY。
+    func openPTY(
+        for host: HostConnectionSpec,
+        spec: PTYSpec,
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onEnd: @escaping @Sendable (PTYEnding) -> Void
+    ) async throws -> any PTYHandle {
+        throw ControlFailure.notImplemented("测试连接池上的 PTY")
     }
 
     func executor(for host: HostConnectionSpec) async throws -> SSHCommandExecutor {
