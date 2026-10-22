@@ -39,9 +39,6 @@ extension ControlHandler {
         _ request: ControlRequest,
         _ deps: Dependencies
     ) async throws -> ControlResponse {
-        if request.tty == true {
-            return try await interactiveRunResponse(request, deps)
-        }
         let profile = try resolveHost(request.host ?? "")
         try requireExecCapable(profile, action: .run)
         let command = try Self.commandText(request)

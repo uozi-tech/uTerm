@@ -134,7 +134,6 @@ struct uTermApp: App {
                 queue: .main
             ) { _ in
                 server.stop()
-                MainActor.assumeIsolated { ControlPTYSessions.shared.closeAll() }
                 Task { await ControlConnectionPool.shared.disconnectAll() }
             }
         }
@@ -192,7 +191,6 @@ struct uTermApp: App {
                 settings.startupError = nil
                 // 关掉主开关必须连 CLI 自己持有的连接一起松开：`ControlConnectionPool`
                 // 与窗口无关，没有这一步的话 socket 关了、SSH 连接却还挂着。
-                ControlPTYSessions.shared.closeAll(message: "命令行接口已关闭")
                 Task { await ControlConnectionPool.shared.disconnectAll() }
             }
         }

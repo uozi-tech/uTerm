@@ -42,10 +42,6 @@ final class ControlHandler {
         let forwardingCoordinator: ForwardingCoordinator
         let pool: any ControlConnectionPooling
         let registry: TerminalSessionRegistry
-        /// 命令行自己的交互会话（`session-*`）。
-        var sessions: ControlPTYSessions = .shared
-        /// `session-send --secret` 的安全输入框。
-        var secretPrompt: any ControlSecretPrompting = ControlSecretPanel.shared
     }
 
     /// `ControlServer` 默认 requestHandler 指向的实例。app 起来后调 `attach(_:)` 注入依赖；
@@ -63,18 +59,14 @@ final class ControlHandler {
         modelContainer: ModelContainer,
         forwardingCoordinator: ForwardingCoordinator,
         pool: any ControlConnectionPooling,
-        registry: TerminalSessionRegistry,
-        sessions: ControlPTYSessions = ControlPTYSessions(),
-        secretPrompt: (any ControlSecretPrompting)? = nil
+        registry: TerminalSessionRegistry
     ) {
         dependencies = Dependencies(
             settings: settings,
             modelContainer: modelContainer,
             forwardingCoordinator: forwardingCoordinator,
             pool: pool,
-            registry: registry,
-            sessions: sessions,
-            secretPrompt: secretPrompt ?? ControlSecretPanel.shared
+            registry: registry
         )
     }
 
@@ -136,8 +128,6 @@ final class ControlHandler {
                 return try await handleForward(request, deps)
             case .terminal:
                 return try await handleTerminal(request, deps)
-            case .session:
-                return try await handleSession(request, deps)
             case .misc:
                 return try await handleMisc(request, deps)
             }

@@ -1,6 +1,6 @@
 ---
 name: uterm-run
-description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机执行命令（列主机、单机 run、多机并行 run-many、跑快捷命令、按指纹信任主机密钥），也能一问一答地驱动交互式命令（sudo 要密码、[Y/n] 确认、安装向导、REPL —— 密码由用户在 uTerm 弹出的安全输入框里自己输）。当需要在远程服务器上执行 shell 命令、查看服务状态或排查线上问题，而手头没有主机地址、密码或私钥时使用。
+description: 通过 uTerm（没开时客户端会按需在后台启动它）使用用户已保存的 SSH 主机执行命令（列主机、单机 run、多机并行 run-many、跑快捷命令、按指纹信任主机密钥）。当需要在远程服务器上执行 shell 命令、查看服务状态或排查线上问题，而手头没有主机地址、密码或私钥时使用。
 ---
 
 # 用 uTerm 执行远程命令
@@ -75,7 +75,7 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 | 开关 | 管什么 | 关着时的错误码 |
 |---|---|---|
 | 启用命令行接口 | 除 `ping` 外的一切 | `control_disabled` |
-| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发启停 / 终端注入 / 交互会话的 `session start` 与 `session send` | `mutations_disabled` |
+| 允许执行命令与写入 | `run` / `run-many` / `quick-run` / `trust` / SFTP 写 / 转发启停 / 终端注入 | `mutations_disabled` |
 
 `run` **有意**归在第二个开关下：shell 命令无法可靠地分成读和写（`cat` 能读密钥、
 `awk` 能写文件），假的「只读模式」比没有更糟。所以哪怕只是想看看磁盘水位，也需要
@@ -179,131 +179,9 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 - 输出默认最多 200 行 / 16000 字节，`--max-lines` / `--max-bytes` 可放宽，
   字节数封顶 1 MiB。被削过时 `truncated: true`。要看大量输出，正确做法是在远端就
   过滤（`grep` / `tail -n` / `awk`），而不是把上限调到最大再本地筛。
-- **`run` 没有 stdin**：要输入的命令（`sudo` 要密码、`apt` 问 `[Y/n]`、`read`、安装向导、
-  `mysql` / `python` 这类 REPL）在 `run` 里只会干等到静默超时。这类命令改用下面的
-  **交互会话**（`session`）。
-- **不要用 `run` 跑长驻命令**：`tail -f`、`watch` 永远不结束，只会把请求耗到总时长上限。
-  要盯一段时间的输出，用交互会话开着它、隔一会儿 `session read` 一次，看够了 `session close`。
-
-## 交互命令：sudo 密码、确认提示、安装向导
-
-`run` 一次性跑完、没有 stdin，碰上要输入的命令只能卡到超时。**交互会话**在主机上开一条
-后台 PTY（真终端），你写一点、读一点，像 expect 一样往下推：
-
-| 动作 | 干什么 |
-|---|---|
-| `session start -H <主机> [-- 命令]` | 开会话。给命令就在 PTY 里跑它（结束即会话结束，带退出码）；不给就是登录 shell |
-| `session send -s <id> …` | 写文本 / 按键；`--secret` 让**用户**输密码 |
-| `session read -s <id>` | 读自上次以来的新输出 |
-| `session close -s <id>` | 关掉（远端进程随 PTY 挂断收到 SIGHUP） |
-| `sessions` | 列出开着的会话 |
-
-**先想能不能不交互**：`apt-get -y`、`DEBIAN_FRONTEND=noninteractive`、`yes |`、`--yes` /
-`--force` 之类的开关能用就用，`run` 有退出码、有完整输出，比会话省事。`sudo -n …` 在需要
-密码时立刻失败而不是卡住，可以先用它探一下要不要密码。真绕不开才开会话。
-
-### 典型流程
-
-```sh
-# 1. 开会话跑命令。默认最多等 10 秒，输出静下来就返回
-"$UTERMCTL" session start -H mac-01 -- sudo /usr/local/libexec/telemetry-vphone/root-entry version
-#    → session.id = "1A2B3C4D-…"，session.output = "[sudo] password for alice: "
-#      session.passwordPrompt = true
-
-# 2. 远端在要密码：让用户自己输（uTerm 弹安全输入框，内容直接写进 PTY 并回车）
-"$UTERMCTL" session send -s 1A2B3C4D --secret --prompt "mac-01 的 sudo 密码：更新 telemetry-vphone 到 1.3.0"
-
-# 3. 等结果：--wait 放宽，--wait-for 等某段文字出现（正则）
-"$UTERMCTL" session read -s 1A2B3C4D --wait 120 --wait-for '^1\.3\.0$'
-#    → session.running = false，session.exitCode = 0
-
-# 4. 跑完的会话会自己结束；登录 shell 或中途放弃的，用完关掉
-"$UTERMCTL" session close -s 1A2B3C4D
-```
-
-`-s` 收完整 id 或唯一前缀（`1A2B3C4D` 就够）。几台机器各开一个会话，可以交替推进。
-
-### 读响应
-
-响应里的 `session` 对象：
-
-- `output`：**自上次以来的新输出**，已去掉颜色和光标控制、按 `\r` 覆盖收成纯文本（进度条只留
-  最后一帧）。是流不是快照 —— 读过就不会再给第二次，自己记住要的东西。一次超过 64 KB 只给
-  最后一段（`truncated: true`）；两次读取之间输出超过 1 MiB，最早的被挤掉（`droppedBytes`）。
-- `running` / `exitCode` / `endReason`：`endReason` 是 `exited`（进程自己结束）、`closed`、
-  `failed`（连接断了）、`idle_timeout`、`max_duration`。会话结束后照样能读到最后的输出，
-  10 分钟后从列表里删掉。
-- `promptLine`：光标所在那一行，通常就是提示符（`[sudo] password for alice:`、`[Y/n]`、`$`）。
-- `awaitingInput: true`：输出静下来了、光标停在一行中间 —— 多半在等输入，看 `promptLine`。
-- `passwordPrompt: true`：`promptLine` 像密码提示。**此时只能用 `--secret`。**
-- `matched`：给了 `--wait-for` 时等没等到。
-- `screen`（加 `--screen` 才有）：虚拟终端此刻的画面。`top`、`htop`、带对话框的安装向导
-  这类全屏程序靠重绘屏幕说话，`output` 里是碎片，看 `screen`。
-
-`message` 会写下一步该怎么做（要密码时会直接告诉你用 `--secret`）。
-
-### 发输入
-
-```sh
-"$UTERMCTL" session send -s 1A2B y --enter          # 文本原样写入，--enter 才回车
-"$UTERMCTL" session send -s 1A2B -k down -k enter   # 按键，可重复，按顺序
-"$UTERMCTL" session send -s 1A2B -k ctrl-c          # 中断当前这一步
-"$UTERMCTL" session send -s 1A2B --enter -- -y      # 以 - 开头的文本放在 -- 后面（选项写在 -- 前）
-```
-
-按键名：`enter` `tab` `esc` `backspace` `space` `delete` `up` `down` `left` `right` `home` `end`
-`pageup` `pagedown`、`ctrl-a` … `ctrl-z`（`ctrl-d` 结束输入）。
-
-`send` 之后同样会等：默认最多 10 秒，等**这次输入引出的**输出静下来（0.8 秒没新输出）就返回；
-`--wait 0` 发完立刻返回，`--wait-for` 等某段文字，封顶 600 秒。命令跑得久就多 `read` 几次，
-每次 `--wait` 给到几十秒，别空转。
-
-### 密码：只能用户自己输
-
-`--secret` 不带文本：uTerm 在用户屏幕上弹一个安全输入框，写明是哪台主机、远端此刻的提示行
-（取自真实输出，不是你写的）和你给的 `--prompt` 说明。用户输完，内容直接写进 PTY 并回车，
-**响应里没有，之后的输出 / 画面里万一出现也会被打码**。
-
-硬约束：
-
-- 看到 `passwordPrompt: true`（或提示行明显在要密码 / 口令 / PIN）一律 `--secret`。**绝不**让
-  用户把密码发到对话里，**绝不**把密码写进 `send` 的文本或命令行（`echo pw | sudo -S`），
-  也不要自己猜。
-- `--prompt` 写清楚为什么要输、输的是什么（「mac-01 的 sudo 密码：更新 telemetry-vphone」）。
-  用户看不懂就会点取消。
-- 用户点了取消或 5 分钟没输：`secret_cancelled`（退出码 3）。这是用户的决定，**不要**马上
-  再弹一次；问用户要不要继续，或者 `-k ctrl-c` 中断这一步、`session close` 收尾。
-- 密码输错时远端会再问一次（`Sorry, try again.`），照样 `--secret`；连续失败就停下来问用户。
-- 弹窗会出现在用户屏幕上，所以 `--secret` 之前先在对话里说一句「要在 mac-01 上输 sudo 密码，
-  uTerm 会弹窗」。
-
-### 登录 shell 会话
-
-`session start -H host` 不给命令就是登录 shell（带 motd 和提示符），适合多步操作：`su` 之后
-连着跑几条、进 `mysql` / `psql` / `python` REPL、`ssh` 到内网另一台再操作。每条命令用
-`send … --enter` 发，`--wait-for` 等提示符回来。用完必须 `session close`。
-
-### 约束与回收
-
-- 会话**不在任何窗口里，用户看不见**。要让用户看着跑，用 `uterm-terminal` 开窗口。
-- 上限：总共 16 个、每台主机 4 个（`session_limit`）。用完就关，别攒着。
-- 30 分钟没有任何 `session` 调用碰过的自动关闭（`idle_timeout`），单个会话最长 6 小时。
-- `session close` / 自动回收都会让远端进程收到 SIGHUP；`sudo` 起的 root 进程同样收得到。
-  不想被一起带走的长任务，在会话里用 `setsid nohup … &` 或 `systemd-run` 丢出去。
-- `sftpOnly` 的主机开不了会话；`disconnect -H` 会关掉那台的全部会话。
-- 破坏性命令照样**先问用户**，会话不改变这条规矩。
-
-### 给人用的 `run -t`
-
-用户自己在终端里想交互地跑一条命令（看着进度、自己输密码、开 `top` / `vim`），可以给他这一条：
-
-```sh
-utermctl run -t -H mac-01 -- sudo ./bootstrap.zsh --only-root-entry
-utermctl run -t -H mac-01        # 不给命令 = 登录 shell，像 ssh 一样
-```
-
-它把本终端直通到远端 PTY（Ctrl-C、窗口缩放都照常），退出码就是远端的退出码。**你自己不能
-用它**：没有终端时客户端直接拒绝（退出码 2），提示改用 `session`。
+- **不要跑长驻命令**：`tail -f`、`top`、`watch`、交互式 shell、`vim` 一问一答的 IPC
+  承载不了，只会把这条请求耗到超时。要实时看输出，请用户自己开终端窗口，或用
+  `uterm-terminal` 的读屏轮询。
 
 ## 主机密钥
 
@@ -394,16 +272,12 @@ uTerm **绝不自动 TOFU**。第一次连一台没信任过的主机，`run` �
 | `local_read_failed` / `local_write_failed` | 客户端自己的本地文件 I/O 失败（只出现在 `sftp get` / `put`），见 `uterm-files` |
 | `rule_not_found` / `rule_ambiguous` / `port_in_use` / `forward_failed` | 转发面，见 `uterm-forward` |
 | `terminal_not_found` / `terminal_ambiguous` / `terminal_disconnected` | 终端面，见 `uterm-terminal` |
-| `session_not_found` / `session_ambiguous` | 交互会话没有这个 id / 前缀有歧义（结束 10 分钟后会被清掉）—— `sessions` 重新看 |
-| `session_limit` | 交互会话开满了（总共 16、每台 4），先 `session close` 不用的 |
-| `session_ended` | 会话已经结束，写不进去了；响应里带最后的输出与 `endReason` |
-| `secret_cancelled` | 用户在安全输入框里点了取消 / 没输 —— 不要马上重弹，问用户 |
 | `handler_timeout` | uTerm 侧的请求连续 120 秒**没有任何进展**（传输没有回包、命令看门狗也停了）才会出现，多半是网络断了或 uTerm 卡住 |
 | `client_timeout` | 客户端连续 60 秒没收到 uTerm 任何字节（处理中每 10 秒一次的心跳也没有）—— uTerm 本身卡住了；请求可能已部分执行 |
 | `invalid_request` | 缺字段 / 字段冲突 |
 | `not_implemented` | 这个动作在当前 uTerm 版本里还没实现 |
 
 客户端的退出码：`0` 成功，`2` 连不上 uTerm（含服务端槽位满的 `server_busy`）、客户端
-自己的前置检查没过或本地文件 I/O 失败，`3` 门禁（含用户取消输入的 `secret_cancelled`），
+自己的前置检查没过或本地文件 I/O 失败，`3` 门禁，
 `4` 找不到 / 有歧义，`5` 建连 / 认证 / 主机密钥 / 转发失败（含 `run_failed` 的全军覆没），
 `6` 超时，`7` 多主机部分失败（`run_partial_failure`），`1` 其它。

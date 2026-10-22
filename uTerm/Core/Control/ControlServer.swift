@@ -38,7 +38,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         /// handler 的任务：客户端断开（写心跳 / 进度撞 EPIPE）或 `stop()` 时取消它 ——
         /// 没人要结果的传输不该继续占着带宽和 SFTP 通道。
         var handlerTask: Task<Void, Never>?
-        /// 占的是传输槽位（`sftp-get` / `sftp-put` / `run -t`），见 `maxTransferClients`。
+        /// 占的是传输槽位（`sftp-get` / `sftp-put`），见 `maxTransferClients`。
         var isTransfer = false
     }
 
@@ -503,7 +503,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
             token: token,
             generation: runGeneration,
             handlerTimer: handlerTimer,
-            isTransfer: ControlProtocol.occupiesLongLivedSlot(request)
+            isTransfer: ControlProtocol.isTransfer(request.action)
         ) {
         case .started:
             break
@@ -517,7 +517,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
                 response: .failure(
                     id: request.id,
                     code: .server_busy,
-                    message: "uTerm 的传输 / 交互并发已满（上限 \(maxTransferClients) 个），稍后重试"
+                    message: "uTerm 的传输并发已满（上限 \(maxTransferClients) 个），稍后重试"
                 ),
                 clientFD: clientFD,
                 token: token
@@ -728,9 +728,8 @@ nonisolated final class ControlServer: @unchecked Sendable {
         }
     }
 
-    /// 一条请求最多随附几个 fd：传输 1 个（本地文件），`run -t` 3 个（stdin / stdout /
-    /// 窗口尺寸通知管道）。
-    private static let maxPassedFDs = 3
+    /// 一条请求最多随附几个 fd（现在只用得到 1 个：本地文件）。
+    private static let maxPassedFDs = 2
 
     /// 从 `recvmsg` 的控制缓冲里抠出 `SCM_RIGHTS` 的 fd。Darwin 的 `cmsghdr` 是 12 字节，
     /// `CMSG_DATA` 紧跟其后（4 字节对齐）。收到的 fd 一律设 `FD_CLOEXEC`。

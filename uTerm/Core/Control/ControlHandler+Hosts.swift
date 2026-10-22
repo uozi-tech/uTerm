@@ -168,12 +168,10 @@ extension ControlHandler {
         _ deps: Dependencies
     ) async throws -> ControlResponse {
         guard let needle = Self.trimmed(request.host) else {
-            deps.sessions.closeAll(message: "`disconnect` 释放了全部连接")
             await deps.pool.disconnectAll()
-            return .success(id: request.id, message: "已释放 CLI 持有的全部主机连接（含交互会话）")
+            return .success(id: request.id, message: "已释放 CLI 持有的全部主机连接")
         }
         let profile = try resolveHost(needle)
-        deps.sessions.close(hostID: profile.id, message: "`disconnect` 释放了这台主机的连接")
         await deps.pool.disconnect(hostID: profile.id)
         return .success(id: request.id, message: "已释放对主机「\(profile.name)」的连接")
     }
