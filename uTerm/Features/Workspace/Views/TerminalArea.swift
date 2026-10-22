@@ -54,9 +54,6 @@ struct TerminalArea: View {
                          profile: profilesByID[tab.payload.serverProfileID],
                          profileCount: profileCount,
                          background: background,
-                         onDownloadFile: { buffer, localURL in
-                             try await workspace.filePreviewModel.download(buffer, to: localURL)
-                         },
                          onLoadMarkdownImage: { source, buffer in
                              try await workspace.filePreviewModel.loadMarkdownImage(
                                  source: source, referencedBy: buffer)

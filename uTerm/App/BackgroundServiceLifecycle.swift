@@ -104,6 +104,11 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         NSApp.windows.forEach { $0.orderOut(nil) }
     }
 
+    /// 退出前检查「打开」出去、还没传回服务器的文件（`ExternalEditCloseGuard`）。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        ExternalEditCloseGuard.shouldTerminate(sender)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         precondition(BackgroundLaunchMode.reopenPresentation == .foreground)
         Self.showGUI()

@@ -29,8 +29,9 @@ struct SFTPWindowView: View {
     /// 实际激活标签 id（activeTabID 未显式设过时回退到首个标签）。
     private var effectiveActiveID: UUID? { activeTabID ?? tabs.first?.id }
     /// 激活标签的 model —— 供标题栏状态胶囊读取当前连接状态。
-    private var activeModel: FileBrowserModel? {
-        (tabs.first { $0.id == effectiveActiveID } ?? tabs.first)?.model
+    private var activeModel: FileBrowserModel? { activeTab?.model }
+    private var activeTab: SFTPBrowserTab? {
+        tabs.first { $0.id == effectiveActiveID } ?? tabs.first
     }
 
     var body: some View {
@@ -64,7 +65,7 @@ struct SFTPWindowView: View {
         VStack(spacing: 0) {
             SFTPTitleBar(server: server, serverTitle: chromeTitle,
                          state: activeModel?.state ?? .idle,
-                         onDisconnect: { disposeAll(); dismiss() })
+                         onDisconnect: { closeWindow() })
             SFTPTabBar(
                 tabs: tabs, activeID: effectiveActiveID, serverHost: server.host,
                 onSelect: { activeTabID = $0 },
@@ -85,6 +86,8 @@ struct SFTPWindowView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
+        // 「打开」的 toast / 同步芯片跟着活动标签；关窗时检查所有标签没上传的改动。
+        .modifier(OptionalExternalOpenBinding(tab: activeTab, allTabs: tabs))
         .background(WorkspaceWindowChrome(serverName: ServerChromeTitle.sftpWindowTitle(
             serverName: server.name,
             groupName: server.group)))
@@ -116,8 +119,16 @@ struct SFTPWindowView: View {
     /// 关闭标签：释放其 model，激活相邻标签。关闭最后一个标签 = 关窗（不留空窗口）。
     private func closeTab(_ id: UUID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if tabs.count <= 1 { disposeAll(); dismiss(); return }
+        if tabs.count <= 1 { closeWindow(); return }
+        ExternalEditCloseGuard.confirmThenClose([tabs[idx].externalOpen]) {
+            removeTab(id)
+        }
+    }
+
+    private func removeTab(_ id: UUID) {
+        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
         let wasActive = (effectiveActiveID == id)
+        tabs[idx].externalOpen.dispose()
         tabs[idx].model.dispose()
         tabs.remove(at: idx)
         if wasActive {
@@ -125,8 +136,20 @@ struct SFTPWindowView: View {
         }
     }
 
+    /// 标题栏「断开并关闭窗口」/ 关最后一个标签：不走 `windowShouldClose`，自己先问一遍
+    /// 没上传的外部编辑改动。
+    private func closeWindow() {
+        ExternalEditCloseGuard.confirmThenClose(tabs.map(\.externalOpen)) {
+            disposeAll()
+            dismiss()
+        }
+    }
+
     private func disposeAll() {
-        for tab in tabs { tab.model.dispose() }
+        for tab in tabs {
+            tab.externalOpen.dispose()
+            tab.model.dispose()
+        }
     }
 }
 
@@ -135,7 +158,34 @@ struct SFTPWindowView: View {
 /// 一个 SFTP 标签：持有该标签独立的 `FileBrowserModel`（引用类型，跨重渲染存活）。
 struct SFTPBrowserTab: Identifiable {
     let id = UUID()
-    let model = FileBrowserModel()
+    let model: FileBrowserModel
+    /// 本标签的「打开」（下载到本地交外部应用、保存自动回传；数据库交 uTable）。
+    let externalOpen: ExternalOpenCoordinator
+
+    init() {
+        let model = FileBrowserModel()
+        self.model = model
+        self.externalOpen = ExternalOpenCoordinator(
+            provider: { [weak model] in model?.sftpProvider },
+            host: { [weak model] in model?.connectedHost })
+    }
+}
+
+/// 活动标签还没定下来（理论上不会，标签至少一个）时不挂。
+private struct OptionalExternalOpenBinding: ViewModifier {
+    let tab: SFTPBrowserTab?
+    let allTabs: [SFTPBrowserTab]
+
+    func body(content: Content) -> some View {
+        if let tab {
+            content.modifier(ExternalOpenWindowBinding(
+                coordinator: tab.externalOpen,
+                fileBrowserModel: tab.model,
+                allCoordinators: { allTabs.map(\.externalOpen) }))
+        } else {
+            content
+        }
+    }
 }
 
 /// 单个标签的浏览器容器：挂 host-key sheet + 按 tab.id 自启连接。所有标签同时挂载，
@@ -147,7 +197,8 @@ private struct SFTPBrowserContainer: View {
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        SFTPBrowserView(model: tab.model, server: server, openWorkspace: openWorkspace)
+        SFTPBrowserView(model: tab.model, externalOpen: tab.externalOpen,
+                        server: server, openWorkspace: openWorkspace)
             .hostKeySheet(tab.model.hostKeyRelay)
             .task(id: tab.id) {
                 await tab.model.connect(profile: server, modelContainer: modelContext.container)

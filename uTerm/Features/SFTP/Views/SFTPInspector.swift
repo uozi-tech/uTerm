@@ -1,11 +1,12 @@
 import UDesignKit
 import SwiftUI
 
-/// 右侧检视器（300px）：空态 / 选中态（大图标 + 属性表 + 远程路径 + 下载/重命名/删除）。
+/// 右侧检视器（300px）：空态 / 选中态（大图标 + 属性表 + 远程路径 + 打开/下载…/重命名/删除）。
 /// WS 暗色调色板，对齐设计稿 `pages/sftp.jsx` 的 `Inspector`。
 struct SFTPInspector: View {
     let item: RemoteEntry?
     let currentPath: String
+    let onOpen: (RemoteEntry) -> Void
     let onDownload: (RemoteEntry) -> Void
     let onOpenFolder: (RemoteEntry) -> Void
     let onOpenWorkspace: () -> Void
@@ -116,6 +117,13 @@ struct SFTPInspector: View {
             Rectangle().fill(UD.border).frame(height: 1)
             VStack(spacing: 8) {
                 primaryButton(item)
+                if !item.isDirectory {
+                    SFTPSecondaryButton(label: RemoteFileAction.download.title,
+                                        systemImage: RemoteFileAction.download.systemImage) {
+                        onDownload(item)
+                    }
+                    .help(RemoteFileAction.download.help)
+                }
                 SFTPSecondaryButton(label: "在工作区打开", systemImage: "terminal") { onOpenWorkspace() }
                 SFTPSecondaryButton(label: "权限设置…", systemImage: "lock") { onPermissions(item) }
                 HStack(spacing: 8) {
@@ -129,12 +137,12 @@ struct SFTPInspector: View {
 
     private func primaryButton(_ item: RemoteEntry) -> some View {
         Button {
-            if item.isDirectory { onOpenFolder(item) } else { onDownload(item) }
+            if item.isDirectory { onOpenFolder(item) } else { onOpen(item) }
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: item.isDirectory ? "arrow.right" : "arrow.down")
+                Image(systemName: item.isDirectory ? "arrow.right" : RemoteFileAction.open.systemImage)
                     .font(.system(size: 12, weight: .medium))
-                Text(item.isDirectory ? "进入" : "下载")
+                Text(item.isDirectory ? String(localized: "进入") : RemoteFileAction.open.title)
                     .font(.system(size: 13, weight: .medium))
             }
             .foregroundStyle(.white)

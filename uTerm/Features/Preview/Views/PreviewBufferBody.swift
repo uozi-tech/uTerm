@@ -11,7 +11,6 @@ struct PreviewBufferBody: View {
     let buffer: FileBuffer
     /// 编辑器焦点请求（透传给 CodeBody → CodeEditorView 消费）。
     var focusRequest: EditorFocusRequest? = nil
-    var onDownload: ((FileBuffer, URL) async throws -> Void)?
     let onLoadMarkdownImage: MarkdownBufferImageLoader
 
     var body: some View {
@@ -23,8 +22,7 @@ struct PreviewBufferBody: View {
                 PreviewUnavailableBody(
                     buffer: buffer,
                     title: "无法预览此文件",
-                    message: message,
-                    onDownload: onDownload)
+                    message: message)
             case .loaded, .saving:
                 previewContent
             }
@@ -68,14 +66,12 @@ private struct PreviewLoadingBody: View {
     }
 }
 
+/// 不能预览的文件：只剩「打开 / 打开方式 ▸ / 下载…」（叫法见 `RemoteFileAction`），
+/// 经 `.remoteFileCommand` 交给所在窗口执行——下载进状态栏的传输 Dock，与右键下载同一条队列。
 private struct PreviewUnavailableBody: View {
     let buffer: FileBuffer
     let title: String
     let message: String
-    let onDownload: ((FileBuffer, URL) async throws -> Void)?
-
-    @State private var isDownloading = false
-    @State private var downloadError: String?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -105,42 +101,29 @@ private struct PreviewUnavailableBody: View {
                     .foregroundStyle(UD.text4)
             }
 
-            UDButton(title: isDownloading ? "下载中…" : "下载…",
-                     style: .secondary,
-                     systemImage: "arrow.down.circle") {
-                Task { await download() }
+            HStack(spacing: 8) {
+                UDButton(title: RemoteFileAction.open.title, style: .primary,
+                         systemImage: RemoteFileAction.open.systemImage) {
+                    RemoteFileCommand.open(path: buffer.remotePath, route: .preferred).post()
+                }
+                .help(RemoteFileAction.open.help)
+                OpenWithMenuButton(path: buffer.remotePath) { route in
+                    RemoteFileCommand.open(path: buffer.remotePath, route: route).post()
+                }
+                .help(RemoteFileAction.openWith.help)
+                UDButton(title: RemoteFileAction.download.title, style: .secondary,
+                         systemImage: RemoteFileAction.download.systemImage) {
+                    RemoteFileCommand.download(path: buffer.remotePath, size: buffer.byteSize).post()
+                }
+                .help(RemoteFileAction.download.help)
             }
-            .disabled(onDownload == nil || isDownloading)
 
-            if let downloadError {
-                Text(downloadError)
-                    .font(UD.caption)
-                    .foregroundStyle(UD.danger)
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: 460)
-            }
+            Text(OpenWithChoices.openTargetDescription(forPath: buffer.remotePath))
+                .font(UD.caption)
+                .foregroundStyle(UD.text4)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: EditorTheme.background))
-    }
-
-    @MainActor
-    private func download() async {
-        guard let onDownload else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = buffer.displayName
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        isDownloading = true
-        downloadError = nil
-        defer { isDownloading = false }
-
-        do {
-            try await onDownload(buffer, url)
-        } catch {
-            downloadError = "下载失败：\(FriendlyError.describe(error))"
-        }
     }
 }

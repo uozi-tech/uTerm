@@ -195,8 +195,6 @@ final class ClickSelectActivateTests: XCTestCase {
                           onDropRemoteItemsToParent: { _ in false },
                           query: "",
                           rowActions: SFTPRowActions(currentPath: "/tmp",
-                                                     fileActionLabel: "打开",
-                                                     fileActionIcon: "eye",
                                                      onActivate: { _ in },
                                                      onDownload: { _ in },
                                                      onRename: { _ in },

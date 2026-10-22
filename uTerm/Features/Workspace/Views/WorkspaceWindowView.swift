@@ -274,9 +274,18 @@ struct WorkspaceWindowView: View {
             }
         // 「打不开」的两个 alert（类型不支持 / 太大）。抽成独立 ViewModifier ——
         // 两串内联 .alert 会把本就庞大的 body 推过类型检查上限。
-        .modifier(BlockedFileAlerts(blocked: $blockedFile) { path in
-            Task { await downloadAndOpenExternally(path) }
-        })
+        .modifier(BlockedFileAlerts(
+            blocked: $blockedFile,
+            open: { path in Task { await workspace.externalOpen.open(remotePath: path) } },
+            download: { path, size in
+                RemoteFileDownload.saveAs(remotePath: path, size: size,
+                                          using: workspace.fileBrowserModel)
+            }))
+        // 「打开 / 下载…」命令接收 + toast 浮层 + 关窗前检查没上传的外部编辑改动。
+        .modifier(ExternalOpenWindowBinding(
+            coordinator: workspace.externalOpen,
+            fileBrowserModel: workspace.fileBrowserModel,
+            allCoordinators: { [workspace.externalOpen] }))
         .modifier(AssistantBindingModifier(
             assistant: workspace.assistantModel,
             providers: providers,
@@ -404,29 +413,10 @@ struct WorkspaceWindowView: View {
         }
     }
 
-    @MainActor
-    private func downloadAndOpenExternally(_ path: String) async {
-        guard let sftp = workspace.fileBrowserModel.sftpProvider else { return }
-        let basename = (path as NSString).lastPathComponent
-        do {
-            // 流式落盘。走这条路的正是被类型/大小挡下来的文件（几百 MB 的压缩包、
-            // 镜像、视频），先读成 Data 会把整个文件搬进内存。
-            let dest = try ExternalFileStager.prepareDestination(suggestedName: basename)
-            try await sftp.download(remotePath: path, toLocalURL: dest, onProgress: nil)
-            try ExternalFileStager.restrictPermissions(at: dest)
-            NSWorkspace.shared.open(dest)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "下载失败"
-            alert.informativeText = "\(error)"
-            alert.runModal()
-        }
-    }
-
 }
 
 /// 被挡在编辑器之外的文件：要么类型本就不该进编辑器，要么太大。
-/// 两种都只剩「外部打开 / 取消」两条路。
+/// 两种都不能「预览」，只剩「打开 / 下载… / 取消」（叫法见 `RemoteFileAction`）。
 private struct BlockedFile: Identifiable {
     enum Kind { case unsupportedType, tooLarge }
     enum Reason: Equatable {
@@ -450,7 +440,8 @@ private struct BlockedFile: Identifiable {
 /// `LocalizedStringKey`）这两句标题就从本地化里整个消失。
 private struct BlockedFileAlerts: ViewModifier {
     @Binding var blocked: BlockedFile?
-    let openExternally: (String) -> Void
+    let open: (String) -> Void
+    let download: (String, Int64?) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -460,7 +451,7 @@ private struct BlockedFileAlerts: ViewModifier {
                 actions(for: file)
             } message: { file in
                 if case .unsupportedType(let ext) = file.reason {
-                    Text(".\(ext) 文件不是文本，无法在编辑器里打开。可以下载到本地用外部应用打开。")
+                    Text(".\(ext) 文件不是文本，无法预览。可以用本机应用打开（保存后自动上传回服务器），或下载一份到本地。")
                 }
             }
             .alert("文件太大",
@@ -469,14 +460,23 @@ private struct BlockedFileAlerts: ViewModifier {
                 actions(for: file)
             } message: { file in
                 if case .tooLarge(let size) = file.reason {
-                    Text("该文件 \(UFormat.bytes(size))，超过 50 MB 上限。建议用外部编辑器。")
+                    Text("该文件 \(UFormat.bytes(size))，超过 50 MB 预览上限。可以用本机应用打开（保存后自动上传回服务器），或下载一份到本地。")
                 }
             }
     }
 
     @ViewBuilder
     private func actions(for file: BlockedFile) -> some View {
-        Button("外部打开") { openExternally(file.path) }
+        // 「打开」对数据库文件会交给 uTable（ExternalOpenCoordinator 核文件头，本机没有能用的
+        // uTable 时退回下载到本地打开）。
+        Button("打开") { open(file.path) }
+        Button("下载…") {
+            if case .tooLarge(let size) = file.reason {
+                download(file.path, size)
+            } else {
+                download(file.path, nil)
+            }
+        }
         Button("取消", role: .cancel) {}
     }
 

@@ -43,6 +43,8 @@ struct StatusBarView: View {
                 onCancelAll: { workspace.fileBrowserModel.cancelAllActiveTransfers() },
                 onClearFinished: { workspace.fileBrowserModel.clearFinishedTransfers() },
                 onRetry: { workspace.fileBrowserModel.retryTransfer($0) })
+            // 「打开」出去、保存后自动回传的文件（有才显示）。
+            ExternalSyncChip(coordinator: workspace.externalOpen)
 
             Spacer(minLength: 8)
 

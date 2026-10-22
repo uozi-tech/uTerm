@@ -12,6 +12,8 @@ struct SFTPStatusBar: View {
     let onCancelAll: () -> Void
     let onClearFinished: () -> Void
     let onRetry: (UUID) -> Void
+    /// 「打开」出去、保存后自动回传的文件（有才显示；测试夹具不传）。
+    var externalOpen: ExternalOpenCoordinator? = nil
 
     private var folderCount: Int { entries.filter(\.isDirectory).count }
     private var fileCount: Int { entries.count - folderCount }
@@ -31,6 +33,9 @@ struct SFTPStatusBar: View {
                 + (selectedCount > 0 ? " · 已选择 \(UFormat.count(selectedCount)) 项" : ""))
                 .font(.system(size: 11)).foregroundStyle(UD.text4).lineLimit(1)
             Spacer(minLength: 12)
+            if let externalOpen {
+                ExternalSyncChip(coordinator: externalOpen)
+            }
             SFTPTransfersDock(transfers: transfers,
                               onCancel: onCancel, onCancelAll: onCancelAll,
                               onClearFinished: onClearFinished, onRetry: onRetry)

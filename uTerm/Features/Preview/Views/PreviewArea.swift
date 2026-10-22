@@ -116,9 +116,6 @@ private struct PreviewPaneBody: View {
         PreviewBufferBody(
             buffer: buffer,
             focusRequest: isActive ? focusRequest : nil,
-            onDownload: { buffer, localURL in
-                try await model.download(buffer, to: localURL)
-            },
             onLoadMarkdownImage: { source, buffer in
                 try await model.loadMarkdownImage(source: source, referencedBy: buffer)
             })

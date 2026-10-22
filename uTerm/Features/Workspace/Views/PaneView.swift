@@ -27,8 +27,6 @@ struct PaneView: View {
     let profileCount: Int
     /// 终端配色方案的背景色，由区域层算好传下来。
     let background: Color
-    /// 文件窗格里的不可预览提示下载入口。来源于 Workspace 共享的 FilePreviewModel。
-    var onDownloadFile: ((FileBuffer, URL) async throws -> Void)? = nil
     /// 文件窗格里的 Markdown 图片加载入口。来源于 Workspace 共享的 FilePreviewModel。
     let onLoadMarkdownImage: MarkdownBufferImageLoader
 
@@ -53,7 +51,6 @@ struct PaneView: View {
     private var content: some View {
         if let buffer = pane.fileBuffer {
             PreviewBufferBody(buffer: buffer,
-                              onDownload: onDownloadFile,
                               onLoadMarkdownImage: onLoadMarkdownImage)
         } else {
             switch pane.session.connectionState {

@@ -637,7 +637,7 @@ final class FilePreviewModel {
             guard let img = NSImage(data: data) else {
                 buf.imageData = nil
                 buf.imageSize = .zero
-                buf.state = .failed("图片无法解码，不支持预览。请下载到本地后使用外部应用打开。")
+                buf.state = .failed("图片无法解码，不支持预览。可以用外部应用打开，保存后会自动上传回服务器。")
                 return false
             }
             buf.imageData = data
@@ -645,7 +645,7 @@ final class FilePreviewModel {
         case .code, .markdown, .plainText:
             guard let text = previewableText(from: data) else {
                 buf.text = ""
-                buf.state = .failed("检测到二进制内容，不支持预览。请下载到本地后使用外部应用打开。")
+                buf.state = .failed("检测到二进制内容，不支持预览。可以用外部应用打开，保存后会自动上传回服务器。")
                 return false
             }
             buf.text = text

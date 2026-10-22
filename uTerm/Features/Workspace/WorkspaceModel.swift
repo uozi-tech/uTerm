@@ -66,6 +66,9 @@ final class WorkspaceModel {
     /// /proc 等，不碰终端 PTY。
     let telemetryModel: TelemetryModel
 
+    /// 远端文件「在本机打开」：数据库交给 uTable，其余下载后交外部应用并监听回传。
+    let externalOpen: ExternalOpenCoordinator
+
     /// 当前 workspace 内正在拖拽的源。用于 drop 时同步分发，避免依赖
     /// `NSItemProvider.loadDataRepresentation` 的异步回调决定 UI 是否更新。
     private(set) var dragSource: WorkspaceDragSource?
@@ -112,6 +115,9 @@ final class WorkspaceModel {
         // 遥测复用 SFTP 的连接（同 FilePreviewModel 的延迟取法）。
         self.telemetryModel = TelemetryModel(
             provider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider })
+        self.externalOpen = ExternalOpenCoordinator(
+            provider: { [weak fileBrowserModel] in fileBrowserModel?.sftpProvider },
+            host: { [weak fileBrowserModel] in fileBrowserModel?.connectedHost })
 
         // Agent 的 run_command 可以通过任意 shell 语法改动远端文件。命令结算后先
         // 刷新左侧目录（也负责断线重连），再重读已打开的安全 buffer。
@@ -250,6 +256,7 @@ final class WorkspaceModel {
         if let registrar = sessionRegistrar {
             registrar.registry.forgetWindow(registrar.windowID)
         }
+        externalOpen.dispose()
         fileBrowserModel.dispose()
         filePreviewModel.dispose()
         telemetryModel.stop()

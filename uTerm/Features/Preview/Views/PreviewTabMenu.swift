@@ -72,6 +72,23 @@ struct PreviewTabContextMenu: View {
 
         Divider()
 
+        // 与文件右键同一套叫法（`RemoteFileAction`）；标签本身就是「预览」，这里不再重复。
+        Button {
+            RemoteFileCommand.open(path: buffer.remotePath, route: .preferred).post()
+        } label: {
+            Label(RemoteFileAction.open.title, systemImage: RemoteFileAction.open.systemImage)
+        }
+        OpenWithMenu(path: buffer.remotePath) { route in
+            RemoteFileCommand.open(path: buffer.remotePath, route: route).post()
+        }
+        Button {
+            RemoteFileCommand.download(path: buffer.remotePath, size: buffer.byteSize).post()
+        } label: {
+            Label(RemoteFileAction.download.title, systemImage: RemoteFileAction.download.systemImage)
+        }
+
+        Divider()
+
         Button { Self.copy(buffer.displayName) } label: {
             Label("拷贝文件名", systemImage: "doc.on.clipboard")
         }

@@ -127,9 +127,9 @@ struct FileBrowserContent: View {
     private var sidebarActions: SFTPRowActions {
         SFTPRowActions(
             currentPath: model.currentPath,
-            fileActionLabel: "预览",
-            fileActionIcon: "eye",
             onActivate: activate,
+            onPreview: activate,
+            onOpen: { openExternally($0, route: $1) },
             onDownload: { downloadFile($0) },
             onRename: { renameTarget = $0; renameText = $0.name },
             onPermissions: { permissionTarget = $0 },
@@ -673,6 +673,25 @@ struct FileBrowserContent: View {
             name: .openRemoteFile,
             object: nil,
             userInfo: userInfo)
+    }
+
+    /// 右键「打开 / 打开方式 ▸」：交给工作区窗口的 `ExternalOpenCoordinator`（数据库 →
+    /// uTable，其余下载后交外部应用并监听回传）。链接先解析到真实目标。
+    private func openExternally(_ entry: RemoteEntry, route: ExternalOpenCoordinator.Route) {
+        guard !entry.isDirectory else { return }
+        if entry.isSymlink {
+            Task {
+                if let target = await model.resolveSymlinkForOpen(entry) {
+                    postOpenExternally(path: target.path, route: route)
+                }
+            }
+            return
+        }
+        postOpenExternally(path: FileBrowserModel.join(model.currentPath, entry.name), route: route)
+    }
+
+    private func postOpenExternally(path: String, route: ExternalOpenCoordinator.Route) {
+        RemoteFileCommand.open(path: path, route: route).post()
     }
 
     private func downloadFile(_ entry: RemoteEntry) {

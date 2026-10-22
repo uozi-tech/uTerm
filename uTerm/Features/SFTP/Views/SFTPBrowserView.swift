@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 /// 视图层持有：导航历史栈、当前选中、过滤词、各类 sheet 状态。WS 暗色调色板。
 struct SFTPBrowserView: View {
     let model: FileBrowserModel
+    /// 本标签的「打开」执行者（下载到本地交外部应用、保存自动回传；数据库交 uTable）。
+    /// nil（只挂浏览器本体的测试夹具）时不提供「打开」类动作，双击文件退回「下载…」。
+    var externalOpen: ExternalOpenCoordinator? = nil
     let server: ServerProfile
     let openWorkspace: () -> Void
 
@@ -85,7 +88,8 @@ struct SFTPBrowserView: View {
                               onCancel: { model.cancelTransfer($0) },
                               onCancelAll: { model.cancelAllActiveTransfers() },
                               onClearFinished: { model.clearFinishedTransfers() },
-                              onRetry: { model.retryTransfer($0) })
+                              onRetry: { model.retryTransfer($0) },
+                              externalOpen: externalOpen)
             }
         }
         .background(UD.bg)
@@ -163,15 +167,15 @@ struct SFTPBrowserView: View {
         }
     }
 
-    /// 文件表 / 检视器右键菜单共用的行为集合（独立窗口版：主操作 = 下载、含「在工作区
-    /// 打开」「显示简介」）。
+    /// 文件表 / 检视器右键菜单共用的行为集合（独立窗口版：没有编辑器所以没有「预览」，
+    /// 双击文件 = 打开；含「在工作区打开」「显示简介」）。
     private var rowActions: SFTPRowActions {
         SFTPRowActions(
             currentPath: model.currentPath,
-            fileActionLabel: "下载",
-            fileActionIcon: "arrow.down.circle",
             onActivate: activate,
             onOpenWorkspace: openWorkspace,
+            onOpen: externalOpen == nil ? nil : { openFile($0, route: $1) },
+            onDownload: { downloadFile($0) },
             onShowInfo: { selectedID = $0.id },
             onRename: { renameTarget = $0; renameText = $0.name },
             onPermissions: { permissionTarget = $0 },
@@ -251,6 +255,7 @@ struct SFTPBrowserView: View {
                 ColumnResizer(width: $inspectorWidth, range: 248...460, sign: -1)
                 SFTPInspector(
                     item: selected, currentPath: model.currentPath,
+                    onOpen: { e in openFile(e, route: .preferred) },
                     onDownload: { e in downloadFile(e) },
                     onOpenFolder: { e in activate(e) },
                     onOpenWorkspace: openWorkspace,
@@ -292,19 +297,29 @@ struct SFTPBrowserView: View {
         else { model.sortKey = key; model.sortAscending = true }
     }
 
+    /// 双击 / 回车：目录进入，文件「打开」（与 Finder 一致；要另存一份走「下载…」）。
     private func activate(_ entry: RemoteEntry) {
         if entry.isDirectory {
             Task { await model.navigate(into: entry) }
-        } else if entry.isSymlink {
-            // 解析链接：目标是目录则 model 已进入；是文件则按普通文件下载（下载走
-            // 链接路径，服务器自动跟随到目标）。
-            Task {
-                if await model.resolveSymlinkForOpen(entry) != nil {
-                    downloadFile(entry)
-                }
-            }
-        } else {
+        } else if externalOpen == nil {
             downloadFile(entry)
+        } else {
+            openFile(entry, route: .preferred)
+        }
+    }
+
+    /// 「打开 / 打开方式 ▸」。链接先解析：目标是目录则 model 已进入；是文件就打开真实路径。
+    private func openFile(_ entry: RemoteEntry, route: ExternalOpenCoordinator.Route) {
+        guard !entry.isDirectory else { return }
+        Task {
+            let path: String
+            if entry.isSymlink {
+                guard let target = await model.resolveSymlinkForOpen(entry) else { return }
+                path = target.path
+            } else {
+                path = FileBrowserModel.join(model.currentPath, entry.name)
+            }
+            await externalOpen?.open(remotePath: path, route: route)
         }
     }
 
