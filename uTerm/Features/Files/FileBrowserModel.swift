@@ -270,6 +270,12 @@ final class FileBrowserModel {
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
     var sftpProvider: (any SFTPProviding)? { provider }
+    /// 当前连接的主机（外部打开 / 交给 uTable 用）。尚未 connect 时为 nil。
+    var connectedHost: ExternalOpenHost? {
+        guard let profile = lastConnectionRequest?.profile else { return nil }
+        return ExternalOpenHost(id: profile.id, name: profile.name,
+                                usesJumpHost: profile.jumpHost != nil)
+    }
     var snapshotCurrentPath: String? {
         state == .browsing || restoredInitialPath != nil ? currentPath : nil
     }
@@ -860,6 +866,19 @@ final class FileBrowserModel {
             remotePath: Self.join(currentPath, entry.name),
             fileName: entry.name,
             size: Self.int64Size(entry.size),
+            to: localURL)
+    }
+
+    /// 按远端绝对路径下载（预览区 / 提示框的「下载…」用——手里只有路径，没有 `RemoteEntry`）。
+    /// 与右键下载同一条传输队列，进度在状态栏传输 Dock 里。
+    func downloadWithProgress(remotePath: String, size: Int64?, to localURL: URL) async -> Bool {
+        guard provider != nil else { return false }
+        var knownSize = size ?? 0
+        if size == nil, let stat = try? await provider?.stat(remotePath) { knownSize = stat.size }
+        return await downloadWithProgress(
+            remotePath: remotePath,
+            fileName: (remotePath as NSString).lastPathComponent,
+            size: knownSize,
             to: localURL)
     }
 

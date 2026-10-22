@@ -15,6 +15,9 @@ extension Notification.Name {
     static let newTerminalTab = Notification.Name("uterm.newTerminalTab")
     /// 左 sidebar 文件 tap：在 PreviewArea 打开。userInfo: path / size / mtime。
     static let openRemoteFile = Notification.Name("uterm.openRemoteFile")
+    /// 远端文件的「打开 / 打开方式 ▸ / 下载…」（侧栏右键、预览区、预览标签右键发出）。
+    /// userInfo[`RemoteFileCommand.userInfoKey`] = `RemoteFileCommand`。
+    static let remoteFileCommand = Notification.Name("uterm.remoteFileCommand")
     /// ⌘S：保存 preview buffer。可选 userInfo `SavePreviewBufferKey.bufferID`
     /// 指定要保存的具体 buffer（编辑器聚焦时由本地 keyDown 监听器带入，精确到正在编辑的
     /// buffer）；缺省时回落到窗口的 activeBufferID（菜单项点击 / 非编辑器聚焦）。
