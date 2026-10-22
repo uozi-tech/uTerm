@@ -265,9 +265,10 @@ nonisolated struct SkillInstaller: Sendable {
 
 nonisolated extension SkillInstaller {
     /// 把一个工具下 uTerm 建过的技能链接**整包**对齐到当前 app 包：旧链接改指、catalog
-    /// 里新增的技能补上。
+    /// 里新增的技能补上、已并入别处的旧技能（`SkillDefinition.retiredSlugs`）摘掉。
     ///
     /// - 该工具下一条 uTerm 的链接都没有（没装过、用户卸载了）→ 不动，尊重用户的选择；
+    ///   只有旧技能的链接也算装过 —— 这正是从四份技能升级上来的老用户；
     /// - app 在临时位置（或包内缺技能）→ 不动，免得把能用的链接改指到马上会消失的路径；
     /// - 真冲突的位置不动，其余照样对齐，跑完抛首个错误。
     static func reconcile(_ installers: [SkillInstaller], target: SkillTarget) throws {
@@ -275,11 +276,40 @@ nonisolated extension SkillInstaller {
               first.isToolPresent(target),
               first.unavailableReason == nil
         else { return }
+        let retired = retiredLinks(homeDirectoryURL: first.homeDirectoryURL, target: target)
         let statuses = installers.map { $0.status(for: target) }
-        guard statuses.contains(where: { $0 == .installed || $0 == .brokenLink }),
-              statuses.contains(where: { $0 != .installed })
+        guard !retired.isEmpty || statuses.contains(where: { $0 == .installed || $0 == .brokenLink })
         else { return }
-        try forEach(installers) { try $0.install(target: target) }
+        let installed = Result { try forEach(installers) { try $0.install(target: target) } }
+        try removeRetiredLinks(homeDirectoryURL: first.homeDirectoryURL, target: target)
+        try installed.get()
+    }
+
+    /// 该工具下 uTerm 建过的旧技能链接（`SkillDefinition.retiredSlugs`）。只认指向技能目录
+    /// 形态（包内或旧副本）的符号链接，用户自己的同名文件/目录/别处的链接不算。
+    static func retiredLinks(homeDirectoryURL: URL, target: SkillTarget) -> [URL] {
+        let directory = target.skillsDirectoryURL(homeDirectoryURL: homeDirectoryURL)
+        return SkillDefinition.retiredSlugs.compactMap { slug in
+            let link = directory.appending(path: slug)
+            guard fileType(at: link) == S_IFLNK,
+                  let resolved = linkDestination(of: link),
+                  looksLikeManagedSkillLocation(resolved, slug: slug)
+            else { return nil }
+            return link
+        }
+    }
+
+    /// 摘掉 `retiredLinks`。删的是链接本身，不碰它指向的东西。
+    static func removeRetiredLinks(homeDirectoryURL: URL, target: SkillTarget) throws {
+        try forEach(retiredLinks(homeDirectoryURL: homeDirectoryURL, target: target)) { link in
+            do {
+                try FileManager.default.removeItem(at: link)
+            } catch {
+                throw SkillInstallError.failed(
+                    "\(target.displayName)：无法删除旧技能链接 \(link.lastPathComponent)（\(error.localizedDescription)）"
+                )
+            }
+        }
     }
 
     /// 启动时跑一次（后台）：全部工具的技能链接、以及开关开着的 `~/.local/bin/utermctl`
@@ -335,9 +365,12 @@ nonisolated extension SkillInstaller {
     ) {
         guard fileType(at: legacyRoot) == S_IFDIR else { return }
         let prefix = legacyRoot.path.hasSuffix("/") ? legacyRoot.path : legacyRoot.path + "/"
-        for installer in installers {
+        // 旧技能的链接也可能还指着旧副本（这一处没对齐成功），同样要留着。
+        let slugs = installers.map(\.definition.slug) + SkillDefinition.retiredSlugs
+        let home = installers.first?.homeDirectoryURL ?? SkillTarget.realHomeDirectoryURL
+        for slug in slugs {
             for target in SkillTarget.allCases {
-                let link = installer.targetLinkURL(for: target)
+                let link = target.skillsDirectoryURL(homeDirectoryURL: home).appending(path: slug)
                 guard fileType(at: link) == S_IFLNK,
                       let resolved = linkDestination(of: link)
                 else { continue }
@@ -358,7 +391,7 @@ nonisolated extension SkillInstaller {
 /// 把 app 包内的客户端再往 `~/.local/bin/utermctl` 链一条，让它进用户的 PATH。
 ///
 /// **默认关**（设置页开关，`UserDefaults` 键 `control.linkToLocalBin`）。技能自带的
-/// `~/.<tool>/skills/uterm-run/bin/utermctl` 才是主路径 —— 装了技能就一定能跑，不依赖
+/// `~/.<tool>/skills/uterm/bin/utermctl` 才是主路径 —— 装了技能就一定能跑，不依赖
 /// 用户的 shell 环境；这条链接只是给「在自己终端里也想直接敲 utermctl」的人省一步。
 ///
 /// 链接目标是 `uTerm.app/Contents/Resources/utermctl`，与技能目录里那份同源（构建期从
@@ -440,7 +473,7 @@ nonisolated struct BinLinkInstaller: Sendable {
         else { return false }
         let skillRoot = url.deletingLastPathComponent().deletingLastPathComponent()
         return SkillInstaller.looksLikeManagedSkillLocation(
-            skillRoot, slug: SkillDefinition.uTermRun.slug)
+            skillRoot, slug: SkillDefinition.legacyClientSlug)
     }
 
     /// 建 `~/.local/bin` → 建（或改指）链接。真冲突抛错，绝不覆盖用户的文件。

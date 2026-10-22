@@ -1,12 +1,7 @@
----
-name: uterm-forward
-description: 通过 uTerm 启停用户已保存的 SSH 端口转发规则（本地 -L / 远程 -R / 动态 SOCKS），并查看它们的运行状态与流量。当需要打通到远程数据库、内网服务的隧道，或排查隧道没起来的原因时使用。
----
-
-# 用 uTerm 启停端口转发
+# 启停端口转发（`forward …`）
 
 客户端怎么定位、探活怎么做、主机怎么指定、主机密钥怎么处理、错误码总表都在
-`uterm-run`，这里不重复。
+`SKILL.md`，这里不重复。
 
 **规则只能由用户在 uTerm 界面里创建、修改、删除。** 命令行只能列出来、启动、停止 ——
 监听哪个端口、通到哪台机器的哪个端口，是用户的定性，不是你的。需要一条不存在的规则
@@ -38,29 +33,36 @@ description: 通过 uTerm 启停用户已保存的 SSH 端口转发规则（本�
 两个都归「允许执行命令与写入」开关管（关着时 `mutations_disabled`）。
 
 - 规则名同样按「精确 → 忽略大小写 → 唯一前缀」解析，多条命中是 `rule_ambiguous`，
-  改用 `id`。
-- `start` 是幂等的：已经 `active` 再 start 不会出问题。
-- **start 之后不要立刻宣布成功**：回一次 `forward list` 看 `status` 变成 `active`，
-  再去连本地端口。
+  `message` 里列着每条的 UUID，改用 UUID。
+- `start` **会等到规则起来**（最多一个 SSH 建连超时，默认 30 秒）再回：`ok: true` 就是
+  已经 `active`，`rules[0]` 里是它的状态与监听地址，可以直接去连本地端口。只有回
+  `forward_failed` 且 `message` 说「秒内未完成启动（仍在连接中）」时，才隔几秒
+  `forward list` 再看一眼。
+- `start` 是幂等的：已经 `active` 或 `starting` 再 start 都回 `ok`。`stop` 一条本来就
+  没在跑的规则也回 `ok`。
 - 用完主动 `stop` 掉你自己起的规则，尤其是 `remote`（-R）—— 它在服务器上占着端口。
   `autostart` 的规则不要动，那是用户要一直开着的。
 
 ## 端口冲突
 
-`port_in_use` 表示本机（`local` / `dynamic`）或远端（`remote`）那个监听端口已经被占了。
-常见原因是同一条规则已经在跑，或者用户手上另有一个 `ssh -L`。处理顺序：
+`port_in_use` 有两个来源：另一条正在跑的 uTerm 规则占着同一个端口（各种规则都会），
+或者本机别的进程占着 `local` / `dynamic` 规则要监听的端口（比如用户手上另有一个
+`ssh -L`）。**`remote`（-R）规则在服务器上的端口被占时不是这个码**：服务器拒绝监听，
+回的是 `forward_failed`，`message` 里带服务端原话（常见还有 sshd 没开 `GatewayPorts`）。
+处理顺序：
 
 1. 先 `forward list` 看这条规则是不是已经 `active` —— 是的话什么都不用做。
-2. `local` / `dynamic` 规则占的是**本机**端口，而 `uterm-run` 的 `run` 跑的是**远端**
-   命令，查不到本机的占用者。让用户自己 `lsof -i :<port>` 看，别拿 `run` 去打别的
-   主机充数。`remote` 规则占的是服务器端口，那个可以 `run -H <该主机> -- ss -ltnp` 查。
+2. `local` / `dynamic` 规则占的是**本机**端口，而 `run` 跑的是**远端**命令，查不到
+   本机的占用者。让用户自己 `lsof -i :<port>` 看，别拿 `run` 去打别的主机充数。
+   `remote` 规则占的是服务器端口，那个可以 `run -H <该主机> -- ss -ltnp` 查。
 3. 真要换端口，得用户去界面里改规则。
 
 ## 主机密钥
 
-`forward start` 会真的建 SSH 连接，所以未知 / 变更的主机密钥同样会拦下它，返回
-`host_key_unknown` / `host_key_changed`。处理流程与 `uterm-run` 的「主机密钥」一节
-完全一样：拿 fingerprint 给用户确认，再 `trust`，然后重试。
+`forward start` 要建新的 SSH 连接时，未知 / 变更的主机密钥同样会拦下它，返回
+`host_key_unknown` / `host_key_changed`。处理流程与 `SKILL.md` 的「主机密钥」一节
+完全一样：拿 fingerprint 给用户确认，再 `trust`，然后重试。（这台主机已经有转发连接在
+用时会复用它，不再重新校验。）
 
 ## 硬约束
 
@@ -74,8 +76,8 @@ description: 通过 uTerm 启停用户已保存的 SSH 端口转发规则（本�
 | code | 含义 |
 |---|---|
 | `rule_not_found` | 没有这个名字/UUID 的规则 |
-| `rule_ambiguous` | 名字匹配到多条，改用响应里的 `id` |
-| `port_in_use` | 监听端口被占 |
-| `forward_failed` | 隧道建立失败（消息里是原话，常见是远端拒绝 -R 或目标不可达） |
+| `rule_ambiguous` | 名字匹配到多条，改用 `message` 里列出的 UUID |
+| `port_in_use` | 监听端口被另一条规则或本机别的进程占了（退出码 `1`） |
+| `forward_failed` | 隧道没建起来（消息里是原话：远端拒绝 -R、目标不可达、认证失败、启动超时） |
 
-其余错误码见 `uterm-run`。
+其余错误码见 `SKILL.md`。

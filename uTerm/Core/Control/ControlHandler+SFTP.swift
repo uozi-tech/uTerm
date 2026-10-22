@@ -201,7 +201,7 @@ extension ControlHandler {
             throw ControlFailure(
                 code: .invalid_request,
                 message: "\(request.action.rawValue) 需要随请求用 SCM_RIGHTS 交来本地文件的 fd"
-                    + "（utermctl 会自动做；自己写客户端见 uterm-files 技能文档）"
+                    + "（utermctl 会自动做；自己写客户端见 uterm 技能的 references/files.md）"
             )
         }
         defer { Darwin.close(fd) }

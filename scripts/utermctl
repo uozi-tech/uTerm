@@ -2,7 +2,7 @@
 """uTerm 本机 IPC 客户端。
 
 单一真值源：构建期的「Copy utermctl CLI and Skills」阶段把本文件拷进 uTerm.app 的
-Contents/Resources/utermctl 与 Contents/Resources/Skills/uterm-run/bin/utermctl，技能目录与
+Contents/Resources/utermctl 与 Contents/Resources/Skills/uterm/bin/utermctl，技能目录与
 ~/.local/bin 都直接链到包内。包内两份与本文件逐字节一致，uTermTests/SkillDefinitionTests 会校验。
 
 凭据永远不经过这里：密码 / 私钥 / 口令留在 uTerm 与钥匙串里，客户端只能按名字或

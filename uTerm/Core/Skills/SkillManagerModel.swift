@@ -105,15 +105,27 @@ final class SkillManagerModel {
     func install(_ target: SkillTarget) async {
         let installers = self.installers
         await mutate(target) {
-            try SkillInstaller.forEach(installers) { try $0.install(target: target) }
+            let installed = Result { try SkillInstaller.forEach(installers) { try $0.install(target: target) } }
+            try Self.removeRetiredLinks(installers: installers, target: target)
+            try installed.get()
         }
     }
 
     func uninstall(_ target: SkillTarget) async {
         let installers = self.installers
         await mutate(target) {
-            try SkillInstaller.forEach(installers) { try $0.uninstall(target: target) }
+            let removed = Result { try SkillInstaller.forEach(installers) { try $0.uninstall(target: target) } }
+            try Self.removeRetiredLinks(installers: installers, target: target)
+            try removed.get()
         }
+    }
+
+    /// 装/卸都顺手摘掉已并入 `uterm` 的旧技能链接，免得新旧两套同时触发或留下悬空链接。
+    private nonisolated static func removeRetiredLinks(
+        installers: [SkillInstaller], target: SkillTarget
+    ) throws {
+        guard let home = installers.first?.homeDirectoryURL else { return }
+        try SkillInstaller.removeRetiredLinks(homeDirectoryURL: home, target: target)
     }
 
     /// 执行单个 target 的整包安装/卸载：同一 target 不并发；只在结束时写 `lastError`

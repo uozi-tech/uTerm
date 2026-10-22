@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import uTerm
 
-/// 技能的真值源是仓库文件（`skills/<slug>/SKILL.md`、`scripts/utermctl`），构建期的
+/// 技能的真值源是仓库文件（`skills/<slug>/` 下的 `SKILL.md` 与 `references/*.md`、`scripts/utermctl`），构建期的
 /// 「Copy utermctl CLI and Skills」阶段把它们拷进 `uTerm.app/Contents/Resources/`，
 /// 安装器只建指向包内的链接。
 ///
@@ -57,17 +57,41 @@ final class SkillDefinitionTests: XCTestCase {
         XCTAssertEqual(slugs.sorted(), SkillDefinition.catalog.map(\.slug).sorted())
     }
 
-    /// 包内每份 `SKILL.md` 与仓库文件逐字节相同 —— 链接装到用户机器上读到的就是它。
+    /// 技能目录下全部文档（相对路径）。
+    private func repositoryDocuments(_ definition: SkillDefinition) throws -> [String] {
+        let directory = repositoryRoot.appending(path: "skills/\(definition.slug)", directoryHint: .isDirectory)
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
+        let prefix = directory.standardizedFileURL.path + "/"
+        return enumerator.compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "md" }
+            .map { String($0.standardizedFileURL.path.dropFirst(prefix.count)) }
+            .sorted()
+    }
+
+    /// 包内每份文档（`SKILL.md` 与 `references/*.md`）与仓库文件逐字节相同 —— 链接装到
+    /// 用户机器上读到的就是它。构建阶段按目录递归拷，漏拷 references 时这里会红。
     func testBundledSkillsAreByteIdenticalToRepositoryFiles() throws {
         let bundle = try hostBundleURL()
         for definition in SkillDefinition.catalog {
             let installer = SkillInstaller(definition: definition, bundleURL: bundle)
-            let bundled = installer.sourceDirectoryURL.appending(path: "SKILL.md")
-            XCTAssertEqual(
-                try Data(contentsOf: bundled),
-                try repositoryFileData("skills/\(definition.slug)/SKILL.md"),
-                "包内 \(definition.slug)/SKILL.md 与仓库文件不逐字节相同"
-            )
+            let documents = try repositoryDocuments(definition)
+            XCTAssertTrue(documents.contains("SKILL.md"))
+            for document in documents {
+                XCTAssertEqual(
+                    try Data(contentsOf: installer.sourceDirectoryURL.appending(path: document)),
+                    try repositoryFileData("skills/\(definition.slug)/\(document)"),
+                    "包内 \(definition.slug)/\(document) 与仓库文件不逐字节相同"
+                )
+            }
+        }
+    }
+
+    /// 并掉的旧技能不能再出现在包里 —— 构建阶段要把增量构建残留的旧目录删掉。
+    func testRetiredSkillsAreGoneFromTheBundle() throws {
+        let skills = SkillInstaller.skillsDirectoryURL(inBundle: try hostBundleURL())
+        for slug in SkillDefinition.retiredSlugs {
+            XCTAssertNil(SkillInstaller.fileType(at: skills.appending(path: slug)), "包里还残留 \(slug)")
         }
     }
 
@@ -77,7 +101,7 @@ final class SkillDefinitionTests: XCTestCase {
         let bundle = try hostBundleURL()
         let expected = try repositoryFileData("scripts/utermctl")
         let clients = [
-            SkillInstaller(definition: .uTermRun, bundleURL: bundle)
+            SkillInstaller(definition: .uTerm, bundleURL: bundle)
                 .sourceDirectoryURL.appending(path: "bin/utermctl"),
             BinLinkInstaller(bundleURL: bundle).sourceURL,
         ]
@@ -88,26 +112,12 @@ final class SkillDefinitionTests: XCTestCase {
         }
     }
 
-    /// 只有 `uterm-run` 带客户端；另外三份靠它定位。
-    func testOnlyRunSkillShipsTheClient() throws {
-        let bundle = try hostBundleURL()
-        for definition in SkillDefinition.catalog {
-            let client = SkillInstaller(definition: definition, bundleURL: bundle)
-                .sourceDirectoryURL.appending(path: "bin/utermctl")
-            XCTAssertEqual(
-                FileManager.default.fileExists(atPath: client.path),
-                definition.slug == SkillDefinition.uTermRun.slug,
-                "\(definition.slug) 的 bin/utermctl 存在性不对"
-            )
-        }
-    }
-
     // MARK: - 文档不变量
 
     /// 客户端是包内脚本（随 app 签名，可以直接执行），所以定位那一节
     /// **`[ -x ]` 优先**、`[ -r ]` 只作兜底。
     func testRunSkillPrefersExecutingTheClientDirectly() throws {
-        let doc = try skillDocument(.uTermRun)
+        let doc = try skillDocument(.uTerm)
         XCTAssertTrue(doc.contains("[ -x \"$p\" ]"), "定位要先认可执行的那份")
         XCTAssertTrue(doc.contains("[ -r \"$p\" ]"), "不可执行时还要留个可读兜底")
         XCTAssertLessThan(
@@ -121,7 +131,7 @@ final class SkillDefinitionTests: XCTestCase {
     /// 见 `SkillInstallerTests.testAppWrittenFileIsQuarantinedAndCannotBeExecuted`）。
     /// 那批用户升级前撞上的症状必须还写在文档里，附带两条出路。
     func testRunSkillStillDocumentsTheLegacyQuarantineEscape() throws {
-        let doc = try skillDocument(.uTermRun)
+        let doc = try skillDocument(.uTerm)
         XCTAssertTrue(doc.contains("operation not permitted"),
                       "要写出症状，模型撞上时才认得出来")
         XCTAssertTrue(doc.contains("xattr -d com.apple.quarantine"),
@@ -130,16 +140,10 @@ final class SkillDefinitionTests: XCTestCase {
                       "出路二：脚本可读，用解释器跑")
     }
 
-    func testCatalogCoversTheFourSkills() {
-        XCTAssertEqual(
-            SkillDefinition.catalog.map(\.slug),
-            ["uterm-run", "uterm-files", "uterm-forward", "uterm-terminal"]
-        )
-    }
-
     func testSlugsAreUnique() {
         let slugs = SkillDefinition.catalog.map(\.slug)
         XCTAssertEqual(Set(slugs).count, slugs.count)
+        XCTAssertTrue(Set(slugs).isDisjoint(with: SkillDefinition.retiredSlugs), "并掉的旧 slug 不能复用")
     }
 
     func testFrontmatterIsWellFormed() throws {
@@ -164,7 +168,7 @@ final class SkillDefinitionTests: XCTestCase {
 
     /// 加一个 AI 工具（`SkillTarget` 新 case）时有两处编译器管不到，漏了只在真机上才露馅：
     /// - 沙盒 entitlements 的 home-relative 例外 —— 没有它 Release 版在 `~/.<tool>/` 下建不了链接；
-    /// - `uterm-run` 定位客户端的 `"$HOME"/.{…}` 循环 —— 没有它模型在该工具里找不到 utermctl
+    /// - `SKILL.md` 定位客户端的 `"$HOME"/.{…}` 循环 —— 没有它模型在该工具里找不到 utermctl
     ///   （除非用户恰好开了 `~/.local/bin` 链接）。
     func testEveryTargetIsCoveredByEntitlementsAndClientLookup() throws {
         let data = try repositoryFileData("uTerm/uTerm.entitlements")
@@ -174,10 +178,10 @@ final class SkillDefinitionTests: XCTestCase {
             plist["com.apple.security.temporary-exception.files.home-relative-path.read-write"]
                 as? [String]))
 
-        let doc = try skillDocument(.uTermRun)
+        let doc = try skillDocument(.uTerm)
         let prefix = "\"$HOME\"/.{"
-        let suffix = "}/skills/uterm-run/bin/utermctl"
-        let start = try XCTUnwrap(doc.range(of: prefix), "uterm-run 里找不到定位客户端的目录循环")
+        let suffix = "}/skills/uterm/bin/utermctl"
+        let start = try XCTUnwrap(doc.range(of: prefix), "SKILL.md 里找不到定位客户端的目录循环")
         let end = try XCTUnwrap(doc.range(of: suffix, range: start.upperBound..<doc.endIndex))
         let lookup = Set(doc[start.upperBound..<end.lowerBound].split(separator: ",").map(String.init))
 
@@ -191,18 +195,30 @@ final class SkillDefinitionTests: XCTestCase {
             )
             XCTAssertTrue(
                 lookup.contains(String(directory.dropFirst())),
-                "uterm-run 的定位循环缺 \(directory)，\(target.displayName) 里找不到 utermctl"
+                "SKILL.md 的定位循环缺 \(directory)，\(target.displayName) 里找不到 utermctl"
             )
         }
     }
 
-    /// 另外三份不带 bin，所以它们的文档必须告诉模型去 `uterm-run` 里找客户端。
-    func testOtherSkillsPointAtTheRunSkill() throws {
-        for definition in SkillDefinition.catalog where definition.slug != SkillDefinition.uTermRun.slug {
-            XCTAssertTrue(
-                try skillDocument(definition).contains("uterm-run"),
-                "\(definition.slug) 没有引用 uterm-run（模型将无从定位客户端）"
-            )
+    /// `SKILL.md` 引用的每份 reference 都在，每份 reference 也都被 `SKILL.md` 直接引用
+    /// （只从 `SKILL.md` 链一层：模型顺着二级引用读文件时常只读开头）。
+    func testReferencesAreLinkedOneLevelFromSkillDocument() throws {
+        for definition in SkillDefinition.catalog {
+            let doc = try skillDocument(definition)
+            let documents = try repositoryDocuments(definition)
+            let references = documents.filter { $0.hasPrefix("references/") }
+            for reference in references {
+                XCTAssertTrue(doc.contains("](\(reference))"), "SKILL.md 没有链到 \(reference)")
+                let body = try XCTUnwrap(String(
+                    data: repositoryFileData("skills/\(definition.slug)/\(reference)"), encoding: .utf8))
+                XCTAssertFalse(body.contains("](references/"), "\(reference) 又链了别的 reference")
+            }
+            let linked = doc.ranges(of: "](references/").map { start in
+                String(doc[start.upperBound...].prefix { $0 != ")" })
+            }
+            for name in linked {
+                XCTAssertTrue(references.contains("references/\(name)"), "SKILL.md 链到了不存在的 references/\(name)")
+            }
         }
     }
 

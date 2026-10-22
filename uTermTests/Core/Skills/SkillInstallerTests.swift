@@ -7,7 +7,7 @@ final class SkillInstallerTests: XCTestCase {
     private var root: URL!
     private var home: URL!
     /// 假的 app 包：`<root>/Applications/uTerm.app`，按构建阶段的产物摆好
-    /// `Contents/Resources/Skills/<slug>/SKILL.md`、`Skills/uterm-run/bin/utermctl` 与
+    /// `Contents/Resources/Skills/<slug>/SKILL.md`、`Skills/uterm/bin/utermctl` 与
     /// `Contents/Resources/utermctl`。路径形状必须**真的像个 app 包** ——
     /// `looksLikeManagedSkillLocation` / `looksLikeBundledClient` 认的就是这几段。
     private var appBundle: URL!
@@ -38,7 +38,7 @@ final class SkillInstallerTests: XCTestCase {
                     .write(to: directory.appending(path: "SKILL.md"), atomically: true, encoding: .utf8)
             }
             clients.append(SkillInstaller.skillsDirectoryURL(inBundle: bundle)
-                .appending(path: "uterm-run/bin/utermctl"))
+                .appending(path: "uterm/bin/utermctl"))
         }
         for client in clients {
             try FileManager.default.createDirectory(
@@ -51,7 +51,7 @@ final class SkillInstallerTests: XCTestCase {
     }
 
     private func installer(
-        _ definition: SkillDefinition = SkillDefinition.uTermRun,
+        _ definition: SkillDefinition = SkillDefinition.uTerm,
         bundle: URL? = nil
     ) -> SkillInstaller {
         SkillInstaller(definition: definition, homeDirectoryURL: home, bundleURL: bundle ?? appBundle)
@@ -125,7 +125,7 @@ final class SkillInstallerTests: XCTestCase {
         let link = installer.targetLinkURL(for: .codebuddy)
         XCTAssertEqual(
             link.path,
-            home.appending(path: ".codebuddy/skills/uterm-run").standardizedFileURL.path
+            home.appending(path: ".codebuddy/skills/uterm").standardizedFileURL.path
         )
         XCTAssertEqual(installer.status(for: .codebuddy), .installed)
         XCTAssertEqual(try linkDestination(of: link), installer.sourceDirectoryURL.path)
@@ -147,7 +147,7 @@ final class SkillInstallerTests: XCTestCase {
         let link = installer.targetLinkURL(for: .claude)
         XCTAssertEqual(
             try linkDestination(of: link),
-            appBundle.appending(path: "Contents/Resources/Skills/uterm-run").path
+            appBundle.appending(path: "Contents/Resources/Skills/uterm").path
         )
         // 顺着链接读到的就是包里那份，客户端顺着链接也能直接执行。
         XCTAssertEqual(
@@ -228,7 +228,7 @@ final class SkillInstallerTests: XCTestCase {
         )
         // 只换链接，旧副本由启动期清理统一处理。
         XCTAssertEqual(
-            try String(contentsOf: legacyRoot.appending(path: "uterm-run/SKILL.md"), encoding: .utf8),
+            try String(contentsOf: legacyRoot.appending(path: "uterm/SKILL.md"), encoding: .utf8),
             "旧副本"
         )
     }
@@ -294,24 +294,128 @@ final class SkillInstallerTests: XCTestCase {
         XCTAssertNil(SkillInstaller.fileType(at: SkillTarget.codex.configDirectoryURL(homeDirectoryURL: home)))
     }
 
-    /// 某一处是用户自己的目录：那一处不动、报错，其余照样对齐。
-    func testReconcileFixesTheRestAroundAConflict() throws {
+    /// 新技能的位置被用户自己的目录占着：那一处不动、报错，旧技能的链接照样摘掉
+    /// （新包里已没有它们，留着也只会悬空）。
+    func testReconcileReportsAConflictButStillRetiresOldLinks() throws {
         try makeToolDirectory(.claude)
-        let all = installers()
-        for one in all where one.definition.slug != SkillDefinition.uTermFiles.slug {
-            try linkToLegacyCopy(one, target: .claude)
-        }
-        let userDirectory = installer(.uTermFiles).targetLinkURL(for: .claude)
+        try linkRetired("uterm-run", target: .claude, into: appBundle)
+        let userDirectory = installer().targetLinkURL(for: .claude)
         try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true)
         let marker = userDirectory.appending(path: "user.md")
         try "别动我".write(to: marker, atomically: true, encoding: .utf8)
 
-        XCTAssertThrowsError(try SkillInstaller.reconcile(all, target: .claude))
+        XCTAssertThrowsError(try SkillInstaller.reconcile(installers(), target: .claude))
 
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "别动我")
-        for one in all where one.definition.slug != SkillDefinition.uTermFiles.slug {
-            XCTAssertEqual(one.status(for: .claude), .installed)
+        XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL("uterm-run", target: .claude)))
+    }
+
+    // MARK: - 四份旧技能并入 uterm
+
+    /// 旧技能的位置：`~/.<tool>/skills/<旧 slug>`。
+    private func retiredLinkURL(_ slug: String, target: SkillTarget) -> URL {
+        target.skillsDirectoryURL(homeDirectoryURL: home).appending(path: slug)
+    }
+
+    /// 模拟旧版本装下的旧技能链接：指向 `root`（某个 app 包，或旧副本根）下的 `Skills/<slug>`。
+    /// 新包里没有这些目录，链接是悬空的 —— 正是用户升级后的样子。
+    private func linkRetired(_ slug: String, target: SkillTarget, into root: URL) throws {
+        let skills = root.pathExtension == "app" ? SkillInstaller.skillsDirectoryURL(inBundle: root) : root
+        try makeSkillsDirectory(target)
+        try FileManager.default.createSymbolicLink(
+            at: retiredLinkURL(slug, target: target),
+            withDestinationURL: skills.appending(path: slug, directoryHint: .isDirectory))
+    }
+
+    /// 升级路径：只装过四份旧技能的工具，对齐后换成一份 `uterm`，旧链接全部摘掉。
+    func testReconcileReplacesRetiredSkillsWithTheMergedOne() throws {
+        try makeToolDirectory(.claude)
+        for slug in SkillDefinition.retiredSlugs {
+            try linkRetired(slug, target: .claude, into: appBundle)
         }
+
+        try SkillInstaller.reconcile(installers(), target: .claude)
+
+        XCTAssertEqual(installer().status(for: .claude), .installed)
+        for slug in SkillDefinition.retiredSlugs {
+            XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL(slug, target: .claude)), "\(slug) 没摘掉")
+        }
+    }
+
+    /// 已经装好 `uterm`、又残留旧链接（比如被别的 uTerm 副本补回来）：也照样摘。
+    func testReconcileRetiresOldLinksEvenWhenTheMergedSkillIsInstalled() throws {
+        try makeToolDirectory(.claude)
+        try installer().install(target: .claude)
+        try linkRetired("uterm-forward", target: .claude, into: appBundle)
+
+        try SkillInstaller.reconcile(installers(), target: .claude)
+
+        XCTAssertEqual(installer().status(for: .claude), .installed)
+        XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL("uterm-forward", target: .claude)))
+    }
+
+    /// 旧技能名下是用户自己的东西（真实目录、指向别处的链接）：不认、不动；
+    /// 只有这些时也不算「装过 uTerm」，不凭空装上新技能。
+    func testUserOwnedThingsUnderRetiredNamesAreLeftAlone() throws {
+        try makeToolDirectory(.claude)
+        try makeSkillsDirectory(.claude)
+        let userDirectory = retiredLinkURL("uterm-files", target: .claude)
+        try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true)
+        let elsewhere = root.appending(path: "somewhere-else", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: retiredLinkURL("uterm-terminal", target: .claude), withDestinationURL: elsewhere)
+
+        try SkillInstaller.reconcile(installers(), target: .claude)
+
+        XCTAssertEqual(installer().status(for: .claude), .notInstalled)
+        XCTAssertEqual(SkillInstaller.fileType(at: userDirectory), S_IFDIR)
+        XCTAssertEqual(SkillInstaller.fileType(at: retiredLinkURL("uterm-terminal", target: .claude)), S_IFLNK)
+
+        try linkRetired("uterm-run", target: .claude, into: appBundle)
+        try SkillInstaller.reconcile(installers(), target: .claude)
+
+        XCTAssertEqual(installer().status(for: .claude), .installed)
+        XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL("uterm-run", target: .claude)))
+        XCTAssertEqual(SkillInstaller.fileType(at: userDirectory), S_IFDIR)
+        XCTAssertEqual(SkillInstaller.fileType(at: retiredLinkURL("uterm-terminal", target: .claude)), S_IFLNK)
+    }
+
+    /// 旧技能链接还指着旧副本时，旧副本留着；摘掉后才删。
+    func testLegacyCopyIsKeptWhileARetiredLinkPointsAtIt() throws {
+        try makeToolDirectory(.claude)
+        try FileManager.default.createDirectory(
+            at: legacyRoot.appending(path: "uterm-run", directoryHint: .isDirectory),
+            withIntermediateDirectories: true)
+        try linkRetired("uterm-run", target: .claude, into: legacyRoot)
+
+        SkillInstaller.removeLegacySourceIfUnused(installers: installers(), legacyRoot: legacyRoot)
+        XCTAssertNotNil(SkillInstaller.fileType(at: legacyRoot), "还有旧技能链接指着，不能删")
+
+        try SkillInstaller.reconcile(installers(), target: .claude)
+        SkillInstaller.removeLegacySourceIfUnused(installers: installers(), legacyRoot: legacyRoot)
+
+        XCTAssertNil(SkillInstaller.fileType(at: legacyRoot))
+        XCTAssertEqual(installer().status(for: .claude), .installed)
+    }
+
+    /// 设置页的装/卸按钮也顺手摘旧链接。
+    @MainActor
+    func testModelInstallAndUninstallRetireOldLinks() async throws {
+        try makeToolDirectory(.claude)
+        try linkRetired("uterm-files", target: .claude, into: appBundle)
+        let model = SkillManagerModel(installers: installers(), binLink: binLinkInstaller())
+
+        await model.install(.claude)
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(installer().status(for: .claude), .installed)
+        XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL("uterm-files", target: .claude)))
+
+        try linkRetired("uterm-terminal", target: .claude, into: appBundle)
+        await model.uninstall(.claude)
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(installer().status(for: .claude), .notInstalled)
+        XCTAssertNil(SkillInstaller.fileType(at: retiredLinkURL("uterm-terminal", target: .claude)))
     }
 
     /// 打开设置页即自动对齐，用户不需要点任何按钮。
@@ -402,7 +506,7 @@ final class SkillInstallerTests: XCTestCase {
         try installer.uninstall(target: .claude)
 
         XCTAssertEqual(installer.status(for: .claude), .notInstalled)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyRoot.appending(path: "uterm-run").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyRoot.appending(path: "uterm").path))
     }
 
     func testAggregateStatusAcrossCatalog() throws {
@@ -413,14 +517,7 @@ final class SkillInstallerTests: XCTestCase {
             .notInstalled
         )
 
-        try installers[0].install(target: .claude)
-        // 装了一半 → 需修复（启动 / 打开设置页时自动补齐）。
-        XCTAssertEqual(
-            SkillManagerModel.aggregateStatus(installers: installers, target: .claude),
-            .brokenLink
-        )
-
-        for one in installers.dropFirst() { try one.install(target: .claude) }
+        for one in installers { try one.install(target: .claude) }
         XCTAssertEqual(
             SkillManagerModel.aggregateStatus(installers: installers, target: .claude),
             .installed

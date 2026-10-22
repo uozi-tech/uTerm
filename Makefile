@@ -304,7 +304,7 @@ check-cli:
 	python3 scripts/utermctl --help >/dev/null
 	python3 scripts/utermctl-selftest.py
 
-# 技能构建产物闸：app 包内的 Resources/Skills/*/SKILL.md 与两份 utermctl 必须与仓库文件
+# 技能构建产物闸：app 包内 Resources/Skills/ 下的文档（SKILL.md 与 references）与两份 utermctl 必须与仓库文件
 # 逐字节一致（构建阶段「Copy utermctl CLI and Skills」没漏、没坏），外加安装 / 自动对齐的
 # 行为测试 —— 只有这两个测试类挡着。发版前跑一次（release skill 已接进去）。
 check-skills: check-cli

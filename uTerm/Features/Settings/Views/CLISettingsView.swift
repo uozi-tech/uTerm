@@ -151,7 +151,7 @@ struct CLISettingsView: View {
             emptyRow(
                 "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
                     + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
-                    + " 四份技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
+                    + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
             )
         }
     }
