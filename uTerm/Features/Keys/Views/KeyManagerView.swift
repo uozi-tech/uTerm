@@ -16,8 +16,8 @@ struct KeyManagerView: View {
 
     @State private var selectedID: UUID?
     @State private var generating = false
+    @State private var importing = false
     @State private var pendingDelete: SSHKey?
-    @State private var importErrorText: String?
 
     private let keyStore = KeyStore()
 
@@ -40,14 +40,6 @@ struct KeyManagerView: View {
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "密钥管理"))
         .overlay { deleteConfirmOverlay }
-        .alert("导入失败", isPresented: Binding(
-            get: { importErrorText != nil },
-            set: { if !$0 { importErrorText = nil } })
-        ) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(importErrorText ?? "")
-        }
         .onAppear { if selectedID == nil { selectedID = keys.first?.id } }
     }
 
@@ -61,7 +53,7 @@ struct KeyManagerView: View {
                     title: "导入",
                     style: .secondary,
                     systemImage: "square.and.arrow.down",
-                    action: importKey
+                    action: startImporting
                 )
             }
             .padding(10)
@@ -80,14 +72,14 @@ struct KeyManagerView: View {
                             let n = counts[key.id] ?? 0
                             KeyRow(key: key, hostCount: n, selected: key.id == selectedID)
                                 .contentShape(Rectangle())
-                                .onTapGesture { selectedID = key.id; generating = false }
+                                .onTapGesture { select(key) }
                                 .accessibilityElement(children: .combine)
                                 .accessibilityAddTraits(.isButton)
                                 .accessibilityAddTraits(key.id == selectedID ? .isSelected : [])
                                 .accessibilityLabel("\(key.name)，\(key.typeLabel)，\(n) 台主机")
                                 // `onTapGesture` 不带 AX 默认动作，只标 `.isButton`
                                 // 的话读屏 / 全键盘控制按下去是空转。显式补上。
-                                .accessibilityAction { selectedID = key.id; generating = false }
+                                .accessibilityAction { select(key) }
                         }
                     }
                     .padding(.vertical, 6)
@@ -109,7 +101,7 @@ struct KeyManagerView: View {
     private var emptyList: some View {
         VStack(spacing: 6) {
             Text("还没有密钥").font(.system(size: 12)).foregroundStyle(UD.text4)
-            Text("点击「生成」创建第一把密钥").font(.system(size: 11)).foregroundStyle(UD.text4)
+            Text("点击「生成」或「导入」添加第一把密钥").font(.system(size: 11)).foregroundStyle(UD.text4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20).padding(.horizontal, 12)
@@ -131,6 +123,16 @@ struct KeyManagerView: View {
                     try? modelContext.save()
                     selectedID = created.id
                     generating = false
+                })
+        } else if importing {
+            KeyImportView(
+                existingKeys: keys,
+                onCancel: { importing = false },
+                onCreate: { created in
+                    modelContext.insert(created)
+                    try? modelContext.save()
+                    selectedID = created.id
+                    importing = false
                 })
         } else if let key = selected {
             KeyDetailView(
@@ -186,7 +188,20 @@ struct KeyManagerView: View {
 
     private func startGenerating() {
         generating = true
+        importing = false
         selectedID = nil
+    }
+
+    private func startImporting() {
+        importing = true
+        generating = false
+        selectedID = nil
+    }
+
+    private func select(_ key: SSHKey) {
+        selectedID = key.id
+        generating = false
+        importing = false
     }
 
     private func deleteKey(_ key: SSHKey) {
@@ -197,84 +212,6 @@ struct KeyManagerView: View {
         modelContext.delete(key)
         try? modelContext.save()
         selectedID = keys.first(where: { $0.id != key.id })?.id
-    }
-
-    /// 选文件 → 校验（必要时索口令）→ 落库。
-    private func importKey() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "选择 SSH 私钥文件"
-        guard panel.runModal() == .OK else { return }
-        guard let url = panel.url else { return }
-
-        let text: String
-        do {
-            text = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            importErrorText = KeyImportErrorMessage.message(
-                for: NSError(domain: "uTerm.keys", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "无法读取私钥文件",
-                    NSLocalizedFailureReasonErrorKey: "读取 \(url.lastPathComponent) 时失败：\(FriendlyError.describe(error))",
-                    NSLocalizedRecoverySuggestionErrorKey: "请确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
-                ]),
-                fallback: "无法读取私钥文件"
-            )
-            return
-        }
-
-        let filename = url.deletingPathExtension().lastPathComponent
-        do {
-            try finishImport(text: text, passphrase: nil, defaultName: filename)
-        } catch PrivateKeyImportError.encryptedKeyNeedsPassphrase,
-                PrivateKeyImportError.incorrectPassphrase {
-            promptPassphraseAndImport(text: text, defaultName: filename)
-        } catch {
-            importErrorText = KeyImportErrorMessage.message(for: error, fallback: "无法识别该私钥")
-        }
-    }
-
-    private func promptPassphraseAndImport(text: String, defaultName: String) {
-        let alert = NSAlert()
-        alert.messageText = "私钥已加密"
-        alert.informativeText = "请输入此私钥的口令以导入。"
-        alert.addButton(withTitle: "导入")
-        alert.addButton(withTitle: "取消")
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        alert.accessoryView = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try finishImport(text: text, passphrase: field.stringValue, defaultName: defaultName)
-        } catch {
-            importErrorText = KeyImportErrorMessage.message(for: error, fallback: "口令错误或私钥无法解析")
-        }
-    }
-
-    private func finishImport(text: String, passphrase: String?, defaultName: String) throws {
-        let parsed = try SSHPrivateKeyParser.parse(pem: text, passphrase: passphrase)
-        let material: KeyImportInspector.Material
-        do {
-            material = try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")
-        } catch {
-            throw NSError(domain: "uTerm.keys", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "无法加入密钥库",
-                NSLocalizedFailureReasonErrorKey: "私钥解析成功，但无法生成密钥库所需的公钥或指纹元数据。",
-                NSLocalizedRecoverySuggestionErrorKey: "请确认密钥算法为 RSA、Ed25519 或 ECDSA；如果仍失败，可用 ssh-keygen -y -f <key> 检查该私钥。",
-            ])
-        }
-        let key = SSHKey()
-        key.name = defaultName.isEmpty ? "imported-key" : defaultName
-        key.type = material.type
-        key.bits = material.bits
-        key.fingerprint = material.fingerprint
-        key.publicKey = material.publicKey
-        key.hasPassphrase = (passphrase?.isEmpty == false)
-        try keyStore.save(keyID: key.id, privateKey: text, passphrase: passphrase)
-        modelContext.insert(key)
-        try? modelContext.save()
-        selectedID = key.id
-        generating = false
     }
 }
 

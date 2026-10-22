@@ -152,6 +152,7 @@
 				Features/Keys/Views/KeyDeleteConfirm.swift,
 				Features/Keys/Views/KeyDetailView.swift,
 				Features/Keys/Views/KeyGeneratorView.swift,
+				Features/Keys/Views/KeyImportView.swift,
 				Features/Keys/Views/KeyManagerView.swift,
 				Features/ParallelRun/ParallelAIDoctor.swift,
 				Features/ParallelRun/ParallelRunModel.swift,
