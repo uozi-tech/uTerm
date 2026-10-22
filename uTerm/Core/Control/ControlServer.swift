@@ -38,7 +38,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
         /// handler 的任务：客户端断开（写心跳 / 进度撞 EPIPE）或 `stop()` 时取消它 ——
         /// 没人要结果的传输不该继续占着带宽和 SFTP 通道。
         var handlerTask: Task<Void, Never>?
-        /// 占的是传输槽位（`sftp-get` / `sftp-put`），见 `maxTransferClients`。
+        /// 占的是长连接槽位（`sftp-get` / `sftp-put` / `terminal-wait`），见 `maxTransferClients`。
         var isTransfer = false
     }
 
@@ -503,7 +503,7 @@ nonisolated final class ControlServer: @unchecked Sendable {
             token: token,
             generation: runGeneration,
             handlerTimer: handlerTimer,
-            isTransfer: ControlProtocol.isTransfer(request.action)
+            isTransfer: ControlProtocol.occupiesLongLivedSlot(request.action)
         ) {
         case .started:
             break

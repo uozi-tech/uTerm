@@ -303,8 +303,16 @@ def build_parser():
     p.add_argument("text", help="要写入 PTY 的文本")
     p.add_argument("--enter", action="store_true", help="末尾追加回车")
 
-    p = terminal_sub.add_parser("open", parents=[shared], help="给一台主机开一个新终端窗口")
+    p = terminal_sub.add_parser("open", parents=[shared],
+                                help="给一台主机开一个新终端窗口；给了命令就在窗口里跑它（用户可在窗口里交互）")
     p.add_argument("--host", "-H", required=True, help="主机名或 UUID")
+    p.add_argument("--command", "-c", help="连上后在窗口里跑的整串命令（与 -- 之后的 argv 二选一）")
+    p.add_argument("argv", nargs="*", help="-- 之后的命令与参数")
+
+    p = terminal_sub.add_parser("wait", parents=[shared],
+                                help="等 terminal open -- <命令> 跑的那条命令结束，拿退出码与输出")
+    p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
+    p.add_argument("--wait", type=float, help="最多等几秒，默认 90，封顶 1800；没跑完回 state=running")
 
     p = add("disconnect", "松开命令行连接池对主机的持有")
     p.add_argument("--host", "-H", help="不给就释放全部")
@@ -340,7 +348,7 @@ def resolved_action(args):
     return args.action
 
 
-def command_string(args):
+def command_string(args, optional=False):
     inline = getattr(args, "command", None)
     argv = list(getattr(args, "argv", []))
     # `--` 是命令的一部分，**不能过滤**：`run -H h -- grep -- --include f` 里那个
@@ -356,6 +364,8 @@ def command_string(args):
         return inline
     if argv:
         return shlex.join(argv)
+    if optional:
+        return None
     fail("缺少命令：用 -c \"…\" 或在 -- 之后写命令")
 
 
@@ -371,6 +381,10 @@ def make_request(args):
 
     if action in ("run", "run-many"):
         request["command"] = command_string(args)
+    if action == "terminal-open":
+        command = command_string(args, optional=True)
+        if command is not None:
+            request["command"] = command
     if action == "quick-run":
         # 协议里 `name` 是按名字指定的显式入口，`command` 也接受「快捷命令的名字 / id」。
         # 两个都填，服务端读哪个都对。
@@ -390,6 +404,7 @@ def make_request(args):
         ("terminal", "terminal"),
         ("text", "text"),
         ("fingerprint", "fingerprint"),
+        ("wait", "waitSeconds"),
     ):
         value = getattr(args, field, None)
         if value is not None and value != "":
@@ -1341,6 +1356,23 @@ def run_output(response):
     return "\n".join(blocks)
 
 
+def terminal_run_output(response):
+    """terminal open -- <命令> / terminal wait 的人类可读输出：命令的输出，末尾一行状态。"""
+    run = response.get("run") or {}
+    parts = []
+    if run.get("output"):
+        parts.append(run["output"])
+    if run.get("truncated"):
+        parts.append("-- 输出太长，只给了最后一段")
+    state = run.get("state", "?")
+    if run.get("exitCode") is not None:
+        state += "  exit=%s" % run["exitCode"]
+    parts.append("-- [%s] %s" % (str(run.get("terminal", "?"))[:8], state))
+    if response.get("message"):
+        parts.append("-- " + response["message"])
+    return "\n".join(parts)
+
+
 # 这两个码的响应带着完整的 results，人类可读格式照常逐主机渲染。
 RUN_BATCH_CODES = ("run_failed", "run_partial_failure")
 
@@ -1367,6 +1399,10 @@ def render(response, fmt, args):
             return body
         return ("-- %s 不是 UTF-8 文本（%s 字节）：用 `sftp get` 下载后本地处理"
                 % (payload.get("path", "?"), payload.get("bytes", "?")))
+
+    run = response.get("run")
+    if isinstance(run, dict):
+        return terminal_run_output(response)
 
     screen = response.get("screen")
     if isinstance(screen, dict):

@@ -60,6 +60,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     case terminalRead = "terminal-read"
     case terminalSend = "terminal-send"
     case terminalOpen = "terminal-open"
+    /// 等 `terminal-open -- <命令>` 在窗口里跑的那条命令结束，回退出码与输出。
+    case terminalWait = "terminal-wait"
 
     // MARK: 收尾
 
@@ -85,7 +87,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         case .ping, .hosts, .hostKey, .quickCommands,
              .sftpLs, .sftpStat, .sftpCat, .sftpGet,
              .forwardList,
-             .terminals, .terminalRead,
+             .terminals, .terminalRead, .terminalWait,
              .disconnect:
             return false
         }
@@ -114,7 +116,7 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
             return .sftp
         case .forwardList, .forwardStart, .forwardStop:
             return .forward
-        case .terminals, .terminalRead, .terminalSend, .terminalOpen:
+        case .terminals, .terminalRead, .terminalSend, .terminalOpen, .terminalWait:
             return .terminal
         case .ping, .disconnect:
             return .misc
@@ -176,6 +178,8 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
     public var fingerprint: String?
     /// 备用名字字段（快捷命令 / 转发规则按名字指定时的显式入口）。
     public var name: String?
+    /// `terminal-wait` 最多等多少秒。
+    public var waitSeconds: Double?
 
     public init(
         id: String? = nil,
@@ -200,7 +204,8 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         text: String? = nil,
         enter: Bool? = nil,
         fingerprint: String? = nil,
-        name: String? = nil
+        name: String? = nil,
+        waitSeconds: Double? = nil
     ) {
         self.id = id
         self.action = action
@@ -225,6 +230,7 @@ nonisolated public struct ControlRequest: Codable, Sendable, Equatable {
         self.enter = enter
         self.fingerprint = fingerprint
         self.name = name
+        self.waitSeconds = waitSeconds
     }
 }
 
@@ -249,6 +255,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
     public var rules: [ControlForwardSnapshot]?
     public var terminals: [ControlTerminalSnapshot]?
     public var screen: ControlScreenSnapshot?
+    /// `terminal-open -- <命令>` / `terminal-wait`：窗口里那条命令的状态。
+    public var run: ControlTerminalRun?
 
     public init(
         id: String? = nil,
@@ -267,7 +275,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
-        screen: ControlScreenSnapshot? = nil
+        screen: ControlScreenSnapshot? = nil,
+        run: ControlTerminalRun? = nil
     ) {
         self.id = id
         self.ok = ok
@@ -286,6 +295,7 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         self.rules = rules
         self.terminals = terminals
         self.screen = screen
+        self.run = run
     }
 
     public static func success(
@@ -304,7 +314,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         transfer: ControlTransferResult? = nil,
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
-        screen: ControlScreenSnapshot? = nil
+        screen: ControlScreenSnapshot? = nil,
+        run: ControlTerminalRun? = nil
     ) -> ControlResponse {
         ControlResponse(
             id: id,
@@ -323,7 +334,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
             transfer: transfer,
             rules: rules,
             terminals: terminals,
-            screen: screen
+            screen: screen,
+            run: run
         )
     }
 
@@ -731,6 +743,47 @@ nonisolated public struct ControlScreenSnapshot: Codable, Sendable, Equatable {
     }
 }
 
+/// `terminal-open -- <命令>` 在窗口里跑的那条命令。用户在窗口里交互（输密码、回答提示），
+/// 调用方用 `terminal-wait` 等它结束。
+nonisolated public struct ControlTerminalRun: Codable, Sendable, Equatable {
+    public var terminal: String
+    public var command: String
+    /// `pending`（还没连上 / 还没开始）/ `running` / `finished` / `disconnected`（没跑完会话就断了）。
+    public var state: String
+    /// `finished` 时才有。
+    public var exitCode: Int?
+    /// 命令开始以来窗口里的输出（软折行已拼回）；还没开始为 nil。
+    public var output: String?
+    /// 输出超过上限只给了最后一段，或开头已滚出回滚缓冲。
+    public var truncated: Bool
+    /// ISO8601。
+    public var requestedAt: String
+    public var startedAt: String?
+    public var finishedAt: String?
+
+    public init(
+        terminal: String,
+        command: String,
+        state: String,
+        exitCode: Int? = nil,
+        output: String? = nil,
+        truncated: Bool = false,
+        requestedAt: String,
+        startedAt: String? = nil,
+        finishedAt: String? = nil
+    ) {
+        self.terminal = terminal
+        self.command = command
+        self.state = state
+        self.exitCode = exitCode
+        self.output = output
+        self.truncated = truncated
+        self.requestedAt = requestedAt
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+}
+
 /// 一条快捷命令。
 nonisolated public struct ControlQuickCommandSnapshot: Codable, Sendable, Equatable {
     public var id: String
@@ -866,6 +919,12 @@ nonisolated public enum ControlProtocol {
     /// `sftp-cat` 上限（1 MiB）。
     public static let maxCatBytes = 1_048_576
 
+    /// `terminal-wait`：默认 / 封顶等待秒数，与输出字节上限。默认值卡在常见 Agent 工具调用
+    /// 超时（2 分钟）以内，没跑完就回 `running`，调用方再等一次。
+    public static let defaultTerminalWaitSeconds = 90.0
+    public static let maxTerminalWaitSeconds = 1800.0
+    public static let maxTerminalRunOutputBytes = 64_000
+
     /// `terminal-read` 默认行数与字节封顶。
     public static let defaultScreenLines = 80
     public static let maxScreenBytes = 16_000
@@ -883,6 +942,12 @@ nonisolated public enum ControlProtocol {
     /// 占传输槽位的动作。
     public static func isTransfer(_ action: ControlAction) -> Bool {
         action == .sftpGet || action == .sftpPut
+    }
+
+    /// 这条请求占「长连接」槽位（与传输共用 `maxTransferClients`）：传输，以及
+    /// `terminal-wait` —— 一等就是几分钟，不能占着 `run` / `ping` 的名额。
+    public static func occupiesLongLivedSlot(_ action: ControlAction) -> Bool {
+        isTransfer(action) || action == .terminalWait
     }
 
     /// Debug and Release may share the same sandbox container. Keep their

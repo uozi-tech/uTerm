@@ -98,6 +98,10 @@ DEFAULT_PAYLOADS = {
     "terminal-read": {"screen": {"terminal": "7A2B", "lines": ["$ uptime", "up 12 days"],
                                  "truncated": False}},
     "terminal-send": {}, "terminal-open": {"terminals": []},
+    "terminal-wait": {"run": {"terminal": "7A2B0000-0000-0000-0000-000000000000",
+                              "command": "sudo whoami", "state": "finished", "exitCode": 0,
+                              "output": "[sudo] password for deploy:\nroot", "truncated": False,
+                              "requestedAt": "2026-10-22T01:00:00Z"}},
     "disconnect": {},
 }
 
@@ -556,6 +560,21 @@ def exercise(server, root, rejecting):
     run_cli(server, ["quick-run", "磁盘水位", "-H", "prod-web"])
     equal(last(server)["name"], "磁盘水位", "quick-run 带 name")
     equal(last(server)["hosts"], ["prod-web"], "quick-run 覆盖目标")
+
+    print("终端窗口里跑命令")
+    run_cli(server, ["terminal", "open", "-H", "mac-01"])
+    equal(last(server)["action"], "terminal-open", "terminal open action")
+    check("command" not in last(server), "terminal open 不给命令 = 只开窗口")
+    run_cli(server, ["terminal", "open", "-H", "mac-01", "--", "sudo", "./bootstrap.zsh", "--only-root-entry"])
+    equal(last(server)["command"], "sudo ./bootstrap.zsh --only-root-entry", "terminal open 带 -- 之后的命令")
+    run_cli(server, ["terminal", "open", "-H", "mac-01", "-c", "cd ~/x && sudo make install"])
+    equal(last(server)["command"], "cd ~/x && sudo make install", "terminal open -c")
+    run_cli(server, ["terminal", "wait", "-t", "7A2B", "--wait", "0"])
+    equal(last(server)["action"], "terminal-wait", "terminal wait action")
+    equal(last(server)["terminal"], "7A2B", "terminal wait 带会话 id")
+    equal(last(server)["waitSeconds"], 0.0, "--wait 0 照样发出去")
+    proc = run_cli(server, ["terminal", "wait", "-t", "7A2B", "--format", "table"])
+    check("root" in proc.stdout and "exit=0" in proc.stdout, "terminal wait 的人类可读输出：输出 + 状态行")
 
     print("SFTP")
     run_cli(server, ["sftp", "ls", "-H", "prod-web", "/var/log", "--format", "table"])

@@ -179,6 +179,11 @@ PATH 里那份是用户在设置里开了「同时链接到 ~/.local/bin」才�
 - 输出默认最多 200 行 / 16000 字节，`--max-lines` / `--max-bytes` 可放宽，
   字节数封顶 1 MiB。被削过时 `truncated: true`。要看大量输出，正确做法是在远端就
   过滤（`grep` / `tail -n` / `awk`），而不是把上限调到最大再本地筛。
+- **`run` 没有 stdin**：要输入的命令（`sudo` 要密码、`apt` 问 `[Y/n]`、安装向导、`read`）在
+  `run` 里只会干等到静默超时。能加非交互开关就加（`-y`、`DEBIAN_FRONTEND=noninteractive`、
+  `sudo -n` 在要密码时立刻失败）；绕不开就用 `uterm-terminal` 的
+  `terminal open -H <主机> -- <命令>`：命令在新窗口里跑，用户在窗口里输密码、回答提示，
+  你用 `terminal wait` 等退出码和输出。**不要**让用户把密码发到对话里。
 - **不要跑长驻命令**：`tail -f`、`top`、`watch`、交互式 shell、`vim` 一问一答的 IPC
   承载不了，只会把这条请求耗到超时。要实时看输出，请用户自己开终端窗口，或用
   `uterm-terminal` 的读屏轮询。

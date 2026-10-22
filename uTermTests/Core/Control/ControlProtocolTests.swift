@@ -289,6 +289,22 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertFalse(ControlProtocol.isTransfer(.sftpCat))
     }
 
+    /// `terminal-wait` 一等就是几分钟，占长连接槽位，不挤 `run` / `ping`。
+    func testTerminalWaitOccupiesALongLivedSlot() throws {
+        XCTAssertTrue(ControlProtocol.occupiesLongLivedSlot(.terminalWait))
+        XCTAssertTrue(ControlProtocol.occupiesLongLivedSlot(.sftpGet))
+        XCTAssertFalse(ControlProtocol.occupiesLongLivedSlot(.terminalRead))
+        XCTAssertFalse(ControlAction.terminalWait.requiresMutation)
+
+        let run = ControlTerminalRun(
+            terminal: "t", command: "uptime", state: "finished", exitCode: 0, output: "up",
+            requestedAt: "2026-10-22T00:00:00Z")
+        let response = ControlResponse.success(id: "1", message: "m", run: run)
+        XCTAssertEqual(try JSONDecoder().decode(ControlResponse.self, from: ControlProtocol.encode(response)), response)
+        let request = ControlRequest(action: .terminalWait, terminal: "t", waitSeconds: 1.5)
+        XCTAssertEqual(try JSONDecoder().decode(ControlRequest.self, from: JSONEncoder().encode(request)), request)
+    }
+
     /// 错误码总表：新增码必须列进来（客户端按 rawValue 做退出码映射）。
     func testFileExistsIsPartOfTheErrorContract() {
         XCTAssertTrue(ControlErrorCode.allCases.contains(.file_exists))

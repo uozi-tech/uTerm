@@ -1,7 +1,10 @@
 import Foundation
 import SwiftData
 
-/// 终端组：`terminals` / `terminal-read` / `terminal-send` / `terminal-open`。
+/// 终端组：`terminals` / `terminal-read` / `terminal-send` / `terminal-open` / `terminal-wait`。
+///
+/// `terminal-open -- <命令>` + `terminal-wait` 是「要人交互的命令」的正路：命令在用户看得见
+/// 的窗口里跑，用户自己输密码、回答提示，调用方只等退出码和输出（`TerminalSession+TrackedRun`）。
 ///
 /// 硬约束（技能文档必须原样转述给模型）：
 /// - **读屏是快照不是流**：两次 `terminal-read` 之间的输出会丢。要拿命令结果请用 `run`。
@@ -85,6 +88,7 @@ extension ControlHandler {
             }
             let profile = try resolveHost(needle)
             try requireExecCapable(profile, action: .terminalOpen)
+            let command = try Self.windowCommand(request)
             guard let open = deps.registry.openTerminalWindow else {
                 throw ControlFailure(
                     code: .app_not_ready,
@@ -101,10 +105,37 @@ extension ControlHandler {
             // 出现这个窗口的会话再回 id，等不到就如实说明（窗口确实已经开了）。
             if let entry = await deps.registry.waitForSession(
                 inWindow: windowID, timeout: .seconds(terminalOpenWaitSeconds)) {
+                guard let command else {
+                    return .success(
+                        id: request.id,
+                        message: "已为「\(profile.name)」打开终端窗口",
+                        terminals: [deps.registry.snapshot(of: entry)]
+                    )
+                }
+                guard let session = deps.registry.session(for: entry.id) else {
+                    throw ControlFailure(
+                        code: .terminal_disconnected,
+                        message: "窗口开了，但会话「\(entry.title)」随即不在了，命令没有执行"
+                    )
+                }
+                session.startTrackedRun(command)
                 return .success(
                     id: request.id,
-                    message: "已为「\(profile.name)」打开终端窗口",
-                    terminals: [deps.registry.snapshot(of: entry)]
+                    message: "已为「\(profile.name)」打开终端窗口，命令会在连上后自动执行。"
+                        + "需要输入（sudo 密码、确认提示）的话请用户在这个窗口里操作；"
+                        + "用 `terminal wait -t \(entry.id.uuidString.prefix(8))` 等它结束、拿退出码和输出。",
+                    terminals: [deps.registry.snapshot(of: entry)],
+                    run: session.trackedRunSnapshot(
+                        terminalID: entry.id, maxBytes: ControlProtocol.maxTerminalRunOutputBytes)
+                )
+            }
+            if command != nil {
+                return .failure(
+                    id: request.id,
+                    code: .operation_failed,
+                    message: "已为「\(profile.name)」打开终端窗口 \(windowID.uuidString)，"
+                        + "但 \(terminalOpenWaitSeconds) 秒内还没有会话注册上来（可能卡在首连或主机密钥确认），"
+                        + "**命令没有执行**。等窗口连上后用 terminals 找到会话，再请用户在窗口里跑，或重新 terminal open。"
                 )
             }
             return .success(
@@ -115,11 +146,72 @@ extension ControlHandler {
                 terminals: []
             )
 
+        case .terminalWait:
+            let entry = try resolveTerminal(request, deps)
+            guard let session = deps.registry.session(for: entry.id) else {
+                throw ControlFailure(
+                    code: .terminal_disconnected,
+                    message: "会话「\(entry.title)」已经不在了（窗口关了？）"
+                )
+            }
+            guard session.trackedRun != nil else {
+                throw ControlFailure(
+                    code: .invalid_request,
+                    message: "会话「\(entry.title)」里没有用 `terminal open -H <主机> -- <命令>` 跑过命令，"
+                        + "没有可等的结果。看屏幕用 terminal read。"
+                )
+            }
+            let seconds = min(
+                max(0, request.waitSeconds ?? ControlProtocol.defaultTerminalWaitSeconds),
+                ControlProtocol.maxTerminalWaitSeconds)
+            let deadline = ContinuousClock.now + .milliseconds(Int(seconds * 1000))
+            while !Task.isCancelled, ContinuousClock.now < deadline,
+                  let run = session.trackedRunSnapshot(terminalID: entry.id, maxBytes: 0),
+                  run.state == "pending" || run.state == "running" {
+                IOActivity.touch()
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            let run = session.trackedRunSnapshot(
+                terminalID: entry.id, maxBytes: ControlProtocol.maxTerminalRunOutputBytes)
+            return .success(
+                id: request.id,
+                message: Self.waitMessage(run, entry: entry),
+                terminals: [deps.registry.snapshot(of: entry)],
+                run: run
+            )
+
         default:
             throw ControlFailure(
                 code: .invalid_request,
                 message: "动作 \(request.action.rawValue) 不属于终端组"
             )
+        }
+    }
+
+    /// `terminal-open` 要在窗口里跑的命令（`-c` 或 `--` 之后）；都没给是 nil（只开窗口）。
+    private static func windowCommand(_ request: ControlRequest) throws(ControlFailure) -> String? {
+        let hasArgs = !(request.args ?? []).isEmpty
+        let inline = request.command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard hasArgs || !inline.isEmpty else { return nil }
+        let command = try commandText(request)
+        if let problem = TerminalTrackedRun.validate(command) {
+            throw ControlFailure(code: .invalid_request, message: problem)
+        }
+        return command
+    }
+
+    private static func waitMessage(_ run: ControlTerminalRun?, entry: TerminalSessionEntry) -> String {
+        let id = entry.id.uuidString.prefix(8)
+        switch run?.state {
+        case "finished":
+            return "命令已结束，退出码 \(run?.exitCode.map(String.init) ?? "未知")"
+        case "disconnected":
+            return "命令没跑完会话就断了（远端退出或网络断开），没有退出码"
+        case "pending":
+            return "窗口还没连上 / 命令还没开始（可能在等首连或主机密钥确认）。再 `terminal wait -t \(id)`"
+        default:
+            return "命令还在跑（可能在等用户在窗口里输入）。再 `terminal wait -t \(id)` 继续等，"
+                + "或 `terminal read -t \(id)` 看看屏幕上停在哪"
         }
     }
 

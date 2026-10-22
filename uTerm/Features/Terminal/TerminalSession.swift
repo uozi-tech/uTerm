@@ -55,6 +55,10 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
 
     @ObservationIgnored private var exitObserverTask: Task<Void, Never>?
 
+    /// 命令行 `terminal open -- cmd` 在这条会话里跑的那条命令（见 `TerminalSession+TrackedRun`）。
+    /// 一条会话同一时刻只跟踪一条；新的覆盖旧的。
+    @ObservationIgnored var trackedRun: TerminalTrackedRun?
+
     override init() {
         // Give SwiftTerm a non-trivial initial frame so its first `setFrameSize`
         // pass computes a meaningful `cellDimension` + initial cols/rows. With
@@ -70,6 +74,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
         terminalView.menu = Self.makeContextMenu(for: terminalView)
+        installTrackedRunMarkers()
     }
 
     /// Right-click context menu for the live terminal. SwiftTerm's
@@ -143,6 +148,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         startFeedLoop()
         startOutputFlushLoop()
         observeExit(of: backend, generation: myGen)
+        injectPendingTrackedRun()
     }
 
     private func observeExit(of backend: any TerminalBackend, generation: Int) {
@@ -396,7 +402,7 @@ extension TerminalSession {
     ///
     /// 为什么不能只用可见屏（`getTopVisibleRow() + rows`）：用户往上滚过之后，
     /// 可见屏的底部不再是缓冲区末行，那样会读到「用户正在看的地方」而不是「最近的输出」。
-    private func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
+    func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
         let top = terminal.buffer.totalLinesTrimmed
         guard terminal.getScrollInvariantLine(row: top) != nil else { return top }
         let capacity = max(terminal.buffer.getCorrectBufferLength(terminal.rows), 1)

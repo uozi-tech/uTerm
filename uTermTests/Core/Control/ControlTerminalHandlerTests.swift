@@ -412,4 +412,118 @@ final class ControlTerminalHandlerTests: XCTestCase {
             action: .terminalOpen, host: "查无此机"))
         XCTAssertEqual(response.code, ControlErrorCode.host_not_found.rawValue)
     }
+
+    // MARK: terminal-open -- <命令> / terminal-wait
+
+    /// 开窗口时注册一条真连上的会话，返回 (handler 要的 profile 名, 会话, 后端)。
+    private func openWithLiveSession(
+        _ fixture: Fixture
+    ) async -> (session: TerminalSession, backend: MockBackend, entryID: UUID) {
+        let profile = insertProfile(fixture, name: "mac-01")
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await session.connect(using: backend)
+        let entryID = UUID()
+        let registry = fixture.registry
+        registry.openTerminalWindow = { serverID in
+            let windowID = UUID()
+            registry.register(TerminalSessionEntry(
+                id: entryID, serverID: serverID, serverName: profile.name,
+                windowID: windowID, windowKind: TerminalWindowKind.terminal,
+                title: profile.name, connectedAt: Date()), session: session)
+            return windowID
+        }
+        return (session, backend, entryID)
+    }
+
+    /// 后端收到的那一行里抠出标记 id（`…;S;<id>\007'`）。
+    private func markerID(_ backend: MockBackend) async throws -> String {
+        let written = await backend.writtenData.map { String(decoding: $0, as: UTF8.self) }.joined()
+        let range = try XCTUnwrap(written.range(of: "6973;S;"))
+        return String(written[range.upperBound...].prefix(8))
+    }
+
+    func testTerminalOpenRunsTheCommandAndWaitReturnsExitCodeAndOutput() async throws {
+        let fixture = try makeFixture()
+        let live = await openWithLiveSession(fixture)
+
+        let opened = await fixture.handler.handle(ControlRequest(
+            action: .terminalOpen, host: "mac-01", args: ["sudo", "./bootstrap.zsh", "--only-root-entry"]))
+        XCTAssertTrue(opened.ok, opened.message)
+        XCTAssertEqual(opened.run?.command, "sudo ./bootstrap.zsh --only-root-entry")
+        XCTAssertEqual(opened.run?.state, "pending")
+
+        try await Task.sleep(for: .milliseconds(100))
+        let written = await live.backend.writtenData.map { String(decoding: $0, as: UTF8.self) }.joined()
+        XCTAssertTrue(written.contains("; (sudo ./bootstrap.zsh --only-root-entry); "), "命令原样打进窗口（包在子 shell 里），用户看得懂")
+        XCTAssertTrue(written.hasSuffix("\"$?\"\r"), "末尾回车执行，并带出退出码")
+        let id = try await markerID(live.backend)
+
+        // 远端：回显这一行 → 开始标记 → 要密码（用户在窗口里输，没有回显）→ 输出 → 结束标记。
+        feed(live.session, "% \(written.dropLast())\r\n\u{1B}]6973;S;\(id)\u{07}"
+            + "[sudo] password for uozi:\r\nupdated to 1.3.0\r\n\u{1B}]6973;D;\(id);3\u{07}% ")
+
+        let waited = await fixture.handler.handle(ControlRequest(
+            action: .terminalWait, terminal: live.entryID.uuidString, waitSeconds: 2))
+        XCTAssertTrue(waited.ok, waited.message)
+        XCTAssertEqual(waited.run?.state, "finished")
+        XCTAssertEqual(waited.run?.exitCode, 3)
+        XCTAssertEqual(waited.run?.output, "[sudo] password for uozi:\nupdated to 1.3.0")
+        XCTAssertNotNil(waited.run?.finishedAt)
+    }
+
+    func testTerminalWaitReturnsRunningWithPartialOutputWhenTimeIsUp() async throws {
+        let fixture = try makeFixture()
+        let live = await openWithLiveSession(fixture)
+        _ = await fixture.handler.handle(ControlRequest(action: .terminalOpen, host: "mac-01", command: "apt upgrade"))
+        try await Task.sleep(for: .milliseconds(100))
+        let id = try await markerID(live.backend)
+        feed(live.session, "\r\n\u{1B}]6973;S;\(id)\u{07}Reading package lists...\r\nDo you want to continue? [Y/n] ")
+
+        let waited = await fixture.handler.handle(ControlRequest(
+            action: .terminalWait, terminal: live.entryID.uuidString, waitSeconds: 0.3))
+        XCTAssertTrue(waited.ok, waited.message)
+        XCTAssertEqual(waited.run?.state, "running")
+        XCTAssertNil(waited.run?.exitCode)
+        XCTAssertEqual(waited.run?.output, "Reading package lists...\nDo you want to continue? [Y/n]")
+    }
+
+    /// 标记 id 对不上（之前那条命令的残留、用户自己 printf 的）一律不认。
+    func testForeignMarkersAreIgnored() async throws {
+        let fixture = try makeFixture()
+        let live = await openWithLiveSession(fixture)
+        _ = await fixture.handler.handle(ControlRequest(action: .terminalOpen, host: "mac-01", command: "true"))
+        try await Task.sleep(for: .milliseconds(100))
+        feed(live.session, "\u{1B}]6973;S;deadbeef\u{07}\u{1B}]6973;D;deadbeef;0\u{07}")
+        let waited = await fixture.handler.handle(ControlRequest(
+            action: .terminalWait, terminal: live.entryID.uuidString, waitSeconds: 0))
+        XCTAssertEqual(waited.run?.state, "pending")
+    }
+
+    func testTerminalOpenRejectsMultilineCommands() async throws {
+        let fixture = try makeFixture()
+        _ = await openWithLiveSession(fixture)
+        let response = await fixture.handler.handle(ControlRequest(
+            action: .terminalOpen, host: "mac-01", command: "echo a\necho b"))
+        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
+    }
+
+    func testTerminalWaitNeedsATrackedRun() async throws {
+        let fixture = try makeFixture()
+        let attached = await attachSession(fixture)
+        let response = await fixture.handler.handle(ControlRequest(
+            action: .terminalWait, terminal: attached.entry.id.uuidString, waitSeconds: 0))
+        XCTAssertEqual(response.code, ControlErrorCode.invalid_request.rawValue)
+    }
+
+    /// 只读：改动开关关着也能等结果（开窗口跑命令那一步才要改动开关）。
+    func testTerminalWaitWorksWithMutationsDisabled() async throws {
+        let fixture = try makeFixture()
+        let live = await openWithLiveSession(fixture)
+        _ = await fixture.handler.handle(ControlRequest(action: .terminalOpen, host: "mac-01", command: "uptime"))
+        fixture.settings.allowMutations = false
+        let response = await fixture.handler.handle(ControlRequest(
+            action: .terminalWait, terminal: live.entryID.uuidString, waitSeconds: 0))
+        XCTAssertTrue(response.ok, response.message)
+    }
 }

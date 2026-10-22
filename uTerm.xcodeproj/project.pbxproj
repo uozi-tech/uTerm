@@ -221,6 +221,7 @@
 				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
+				"Features/Terminal/TerminalSession+TrackedRun.swift",
 				Features/Terminal/TerminalSettings.swift,
 				Features/Terminal/TerminalTheme.swift,
 				Features/Terminal/TerminalWindowID.swift,
