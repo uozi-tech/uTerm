@@ -306,7 +306,10 @@ struct AssistantView: View {
                             conversationEmptyState
                         } else {
                             earlierMessagesButton
-                            ForEach(mountedMessages) { messageRow($0) }
+                            // 行边界截断对齐参考线的递归查询（见 `AlignmentBarrier`）。
+                            ForEach(mountedMessages) { message in
+                                AlignmentBarrier { messageRow(message) }
+                            }
                         }
                         // 底部留白由锚点自己承担：`scrollTo(_, anchor: .bottom)` 对齐的是锚点
                         // 底边，锚点下面再垫 padding 就永远差这一截滚不到底。
@@ -534,35 +537,38 @@ struct AssistantView: View {
         let isStreamingTail = message.id == model.messages.last?.id
             && model.state == .streaming
         VStack(alignment: .leading, spacing: 10) {
-            // MarkdownBlocks 的根是多层 VStack。对它请求 firstTextBaseline 会递归遍历
-            // 整棵 Markdown 布局树；长流式回复会在 AttributeGraph 中形成极深的
-            // explicitAlignment/sizeThatFits 热点。顶部对齐不需要递归基线测量。
             // 空文本的已结算消息可能只承载工具卡；不要把它误画成仍在等待的“…”。
             // 真正的流式空消息显示「思考中」流光，收到正文后再挂载 Markdown。
+            //
+            // 正文不放进 HStack（「头像｜正文」「正文｜光标」）：HStack 回答任何排版问题前都要
+            // 按伸缩优先级把弹性子视图在几种宽度下各量一遍，正文是整棵 Markdown，每量一次
+            // 就重排一遍文字，流式时尾消息每批都来一轮。头像改成左缩进 + 叠层，光标叠在
+            // 正文末尾外侧。实测挂满 1000 条时流式主线程心跳 610 → 943/1500。
             if !message.text.isEmpty || isStreamingTail {
-                HStack(alignment: .top, spacing: 9) {
-                    agentAvatar
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Agent")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(UD.text3)
-                        if message.text.isEmpty {
-                            AgentThinkingIndicator()
-                        } else {
-                            HStack(alignment: .top, spacing: 2) {
-                                StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
-                                    .textSelection(.enabled)
-                                if isStreamingTail {
-                                    StreamingCaret()
-                                        .padding(.top, 3)
-                                        .accessibilityHidden(true)
-                                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Agent")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(UD.text3)
+                    if message.text.isEmpty {
+                        AgentThinkingIndicator()
+                    } else {
+                        AlignmentBarrier {
+                            StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
+                                .textSelection(.enabled)
+                        }
+                        .overlay(alignment: .bottomTrailing) {
+                            if isStreamingTail {
+                                StreamingCaret()
+                                    .alignmentGuide(.trailing) { $0[.leading] - 3 }
+                                    .padding(.bottom, 2)
+                                    .accessibilityHidden(true)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 33)
+                .overlay(alignment: .topLeading) { agentAvatar }
             }
 
             ForEach(message.toolCalls) { call in

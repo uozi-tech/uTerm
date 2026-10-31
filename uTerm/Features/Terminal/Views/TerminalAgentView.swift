@@ -100,7 +100,10 @@ struct TerminalAgentView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         earlierMessagesButton
-                        ForEach(mountedMessages) { messageRow($0) }
+                        // 行边界截断对齐参考线的递归查询（见 `AlignmentBarrier`）。
+                        ForEach(mountedMessages) { message in
+                            AlignmentBarrier { messageRow(message) }
+                        }
                         // 底部留白由锚点承担（同 `AssistantView`）：锚点下面再垫 padding，
                         // `scrollTo(_, anchor: .bottom)` 就永远差这一截滚不到底。
                         Color.clear.frame(height: 20).id(Self.bottomAnchorID)

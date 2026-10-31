@@ -28,7 +28,18 @@ enum GrammarRegistry {
         let highlightsQueryText: String
     }
 
+    /// 每门语言只建一次：`makeEntry` 要从 bundle 读 .scm、编译查询、再拿样例解析校验，
+    /// 聊天代码块每次求 body 都会来问（Agent 流式时曾占主线程 5%）。未注册的语言记成 nil。
+    private static var entries: [String: Entry?] = [:]
+
     static func entry(for language: String) -> Entry? {
+        if let cached = entries[language] { return cached }
+        let made = makeEntry(for: language)
+        entries[language] = made
+        return made
+    }
+
+    private static func makeEntry(for language: String) -> Entry? {
         switch language {
         case "swift":
             let grammar = Language(language: tree_sitter_swift())

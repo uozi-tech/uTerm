@@ -94,7 +94,7 @@ final class AgentMessageWindowTests: XCTestCase {
 
         XCTAssertTrue(assistant.contains("StreamingMarkdownView(text: message.text, "
                                          + "isStreaming: isStreamingTail)\n"
-                                         + "                                    .textSelection(.enabled)"),
+                                         + "                                .textSelection(.enabled)"),
                       "助手消息的 Markdown 必须仍可选中")
         XCTAssertTrue(assistant.contains("Button(action: onRun)"), "工具卡的「运行」必须仍是按钮")
         XCTAssertTrue(assistant.contains("Button(action: onSkip)"), "工具卡的「跳过」必须仍是按钮")
