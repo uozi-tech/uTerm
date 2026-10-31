@@ -464,7 +464,11 @@ final class AssistantModel {
     func approvalSummary(for call: ToolCallState) -> String? {
         if reviewingToolCallID == call.id { return "AI 正在审批，仍可手动运行或跳过" }
         guard let reason = call.approvalReason else { return nil }
-        return (call.approvedByAI == true ? "AI 已批准：" : "需人工确认：") + reason
+        switch call.approvedByAI {
+        case true?: return "AI 已批准：" + reason
+        case false?: return "需人工确认：" + reason
+        case nil: return reason   // 规则直接放行的只读命令，没有经过 AI
+        }
     }
 
     private func cancelAutomaticApproval() {
@@ -489,14 +493,16 @@ final class AssistantModel {
             userIntent: messages.filter { $0.role == .user }.suffix(3).map(\.text).joined(separator: "\n"),
             context: lastServerContext,
             mode: approvalMode == .readAuto ? .readOnly : .standard)
+        // 只读命令由规则直接放行：不请 AI，也就不挂「AI 正在审批」。
+        let readOnly = AgentToolApproval.isReadOnly(request)
         approvalReviewID = reviewID
-        reviewingToolCallID = call.id
+        reviewingToolCallID = readOnly ? nil : call.id
         approvalTask = Task { [weak self] in
             guard let self else { return }
             let context = self.lastTurnContext ?? self.resolvedTurnContext()
             let reviewClient = context?.client
             let reviewConfig = context?.config
-            let decision = await AgentToolApproval.evaluate(request) { system, prompt in
+            let decision = readOnly ? nil : await AgentToolApproval.evaluate(request) { system, prompt in
                 guard let reviewClient, let reviewConfig else { throw LLMClientError.invalidResponse }
                 return try await reviewToolApproval(client: reviewClient, config: reviewConfig,
                                                     system: system, prompt: prompt)
@@ -506,15 +512,15 @@ final class AssistantModel {
                   self.approvalMode == expectedMode, self.state == .awaitingApproval,
                   let (mi, ci) = self.locate(call.id), self.messages[mi].id == message.id,
                   self.messages[mi].toolCalls[ci] == call else { return }
-            self.messages[mi].toolCalls[ci].approvalReason = decision.reason
-            self.messages[mi].toolCalls[ci].approvedByAI = decision.approved
+            self.messages[mi].toolCalls[ci].approvalReason = decision?.reason ?? AgentToolApproval.readOnlyReason
+            self.messages[mi].toolCalls[ci].approvedByAI = decision?.approved
             self.persistToolCalls(messageID: message.id, sessionID: self.currentSession?.id)
             // Release review ownership before execution changes state, so it cannot
             // cancel its own tool driver. No suspension between recheck and dispatch.
             self.approvalTask = nil
             self.approvalReviewID = nil
             self.reviewingToolCallID = nil
-            if decision.approved { await self.approveAndRun(id: call.id) }
+            if decision?.approved ?? true { await self.approveAndRun(id: call.id) }
         }
     }
 

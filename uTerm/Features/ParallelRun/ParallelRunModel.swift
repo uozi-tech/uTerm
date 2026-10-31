@@ -352,7 +352,8 @@ final class ParallelRunModel {
                     stoppedForSafety = true
                     break
                 }
-                states[index].steps.append("AI 已批准：" + decision.reason)
+                states[index].steps.append(AgentToolApproval.isReadOnly(request)
+                                           ? decision.reason : "AI 已批准：" + decision.reason)
                 states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
                 let outcome = await Self.execSupervised(executor: target.executor, command: st.command)
                 let cmdExit = outcome.result?.exitCode

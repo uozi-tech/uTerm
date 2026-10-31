@@ -443,22 +443,43 @@ final class AgentMessageListCostTests: XCTestCase {
 
     /// 挂载成本跟谁走：同一份 1000 条会话，只改挂载上限。
     /// 文档高度随上限单调增长 ⇒ 账在「挂了多少条」上，渲染窗口就是有效的旋钮。
+    ///
+    /// 高度要量「每行都布局过一次」之后的值：刚挂载时 LazyVStack 只实际排了贴底那几行，
+    /// 其余行的高度是按这几行估出来的，估值随底部恰好是哪几行（工具行高矮）大幅摆动
+    /// （贴底估值曾比真实高度低 4–17 倍），不反映挂了多少条。∞ 档滚一遍要上百秒，
+    /// 只参与 mount 耗时打印，不参与高度比较。
     func testMountCostTracksWindowLimit() async throws {
         defer { closeAllWindows() }
         var mounts: [(Int, Double, CGFloat, Int)] = []
         for limit in [25, 50, 200, Int.max] {
             let fixture = try makeFixture(messages: 1000, windowLimit: limit)
             let views = viewCount(in: fixture.host)
-            mounts.append((limit, fixture.mountMS, fixture.document.frame.height, views))
-            print(String(format: "[agent-mount-sweep] limit=%@ mount=%.1fms doc-h=%.0f views=%d",
+            let estimated = fixture.document.frame.height
+            let settled = limit == Int.max ? estimated : settledDocumentHeight(fixture)
+            mounts.append((limit, fixture.mountMS, settled, views))
+            print(String(format: "[agent-mount-sweep] limit=%@ mount=%.1fms doc-h=%.0f (estimated %.0f) views=%d",
                          limit == Int.max ? "∞" : String(limit),
-                         fixture.mountMS, fixture.document.frame.height, views))
+                         fixture.mountMS, settled, estimated, views))
             await closeWindows()
         }
+        mounts.removeLast()
         for i in 1..<mounts.count {
             XCTAssertGreaterThan(mounts[i].2, mounts[i - 1].2,
                                  "上限 \(mounts[i].0) 的文档高度必须高于上限 \(mounts[i - 1].0)")
         }
+    }
+
+    /// 从顶到底按视口高度滚一遍，让 LazyVStack 每行都实际布局一次，返回此时的文档高度。
+    private func settledDocumentHeight(_ fixture: Fixture) -> CGFloat {
+        let clip = fixture.scroll.contentView
+        var y: CGFloat = 0
+        while y < fixture.document.frame.height {
+            clip.scroll(to: NSPoint(x: 0, y: y))
+            fixture.scroll.reflectScrolledClipView(clip)
+            fixture.host.layoutSubtreeIfNeeded()
+            y += max(clip.bounds.height, 1)
+        }
+        return fixture.document.frame.height
     }
 
     /// 流式期间：极端档 1000 条打底，用 20 chunk/s 的假 SSE 追加 12 秒，

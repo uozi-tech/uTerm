@@ -14,6 +14,7 @@ nonisolated struct ToolCallState: Equatable, Sendable, Codable, Identifiable {
     var output: String?
     var exitCode: Int?
     var approvalReason: String?
+    /// nil 且有 `approvalReason`：只读命令由规则放行，没经过 AI。
     var approvedByAI: Bool?
 
     init(id: String, name: String, command: String, explanation: String? = nil,

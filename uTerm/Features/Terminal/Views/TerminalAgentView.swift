@@ -233,7 +233,12 @@ struct TerminalAgentView: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } else if !isStreamingTail(m) && m.toolCalls.isEmpty {
+                } else if isStreamingTail(m) {
+                    HStack(alignment: .center, spacing: 10) {
+                        agentAvatar
+                        AgentThinkingIndicator(fontSize: 13)
+                    }
+                } else if m.toolCalls.isEmpty {
                     HStack(alignment: .top, spacing: 10) {
                         agentAvatar
                         Text("…").font(.system(size: 13)).foregroundStyle(UD.text3)

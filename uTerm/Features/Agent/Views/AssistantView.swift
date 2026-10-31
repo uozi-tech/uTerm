@@ -538,36 +538,28 @@ struct AssistantView: View {
             // 整棵 Markdown 布局树；长流式回复会在 AttributeGraph 中形成极深的
             // explicitAlignment/sizeThatFits 热点。顶部对齐不需要递归基线测量。
             // 空文本的已结算消息可能只承载工具卡；不要把它误画成仍在等待的“…”。
-            // 真正的流式空消息只显示闪烁光标，收到正文后再挂载 Markdown。
+            // 真正的流式空消息显示「思考中」流光，收到正文后再挂载 Markdown。
             if !message.text.isEmpty || isStreamingTail {
                 HStack(alignment: .top, spacing: 9) {
                     agentAvatar
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            Text("Agent")
-                                .font(.system(size: 10.5, weight: .semibold))
-                                .foregroundStyle(UD.text3)
-                            if isStreamingTail {
-                                Text("正在处理")
-                                    .font(.system(size: 9.5, weight: .medium))
-                                    .foregroundStyle(UD.accent)
-                                    .padding(.horizontal, 6)
-                                    .frame(height: 18)
-                                    .background(Capsule().fill(UD.accentTint))
-                            }
-                        }
-                        HStack(alignment: .top, spacing: 2) {
-                            if !message.text.isEmpty {
+                        Text("Agent")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(UD.text3)
+                        if message.text.isEmpty {
+                            AgentThinkingIndicator()
+                        } else {
+                            HStack(alignment: .top, spacing: 2) {
                                 StreamingMarkdownView(text: message.text, isStreaming: isStreamingTail)
                                     .textSelection(.enabled)
+                                if isStreamingTail {
+                                    StreamingCaret()
+                                        .padding(.top, 3)
+                                        .accessibilityHidden(true)
+                                }
                             }
-                            if isStreamingTail {
-                                StreamingCaret()
-                                    .padding(.top, 3)
-                                    .accessibilityHidden(true)
-                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -577,12 +569,10 @@ struct AssistantView: View {
                 AgentToolCallCard(
                     call: call,
                     approvalEnabled: model.state == .awaitingApproval,
+                    isReviewing: model.reviewingToolCallID == call.id,
                     onRun: { Task { await model.approveAndRun(id: call.id) } },
                     onSkip: { Task { await model.skip(id: call.id) } }
                 )
-                if let summary = model.approvalSummary(for: call) {
-                    Text(summary).font(.caption).foregroundStyle(UD.text3)
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -674,6 +664,8 @@ struct AssistantView: View {
 private struct AgentToolCallCard: View {
     let call: ToolCallState
     let approvalEnabled: Bool
+    /// AI 审批进行中（仍可手动运行或跳过）。
+    let isReviewing: Bool
     let onRun: () -> Void
     let onSkip: () -> Void
 
@@ -710,23 +702,28 @@ private struct AgentToolCallCard: View {
         return !output.isEmpty
     }
 
+    /// 执行中 / 已完成 / 已跳过收成一行；只有要人处理的（待确认、执行失败）用完整卡片。
+    private var isCompact: Bool {
+        call.status == .running || call.status == .done || call.status == .skipped
+    }
+
+    /// 待确认、失败用状态描边（设计语言 v2 白名单）；其余是中性细线。
+    private var cardStroke: Color {
+        switch call.status {
+        case .pending: return UD.warning.opacity(0.45)
+        case .failed: return UD.danger.opacity(0.4)
+        default: return UD.border
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            commandRow
-            if hasResult {
-                resultDisclosure
-            }
-            if presentation.isApprovalVisible || presentation.isProgressVisible {
-                actionFooter
+        Group {
+            if isCompact {
+                compactRow
+            } else {
+                fullCard
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(UD.card))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(UD.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onAppear {
             if call.status == .failed { isResultExpanded = true }
         }
@@ -734,6 +731,128 @@ private struct AgentToolCallCard: View {
             if status == .failed { isResultExpanded = true }
         }
     }
+
+    private var fullCard: some View {
+        VStack(spacing: 0) {
+            header
+            commandRow
+            if hasResult {
+                resultDisclosure
+            }
+            if presentation.isApprovalVisible {
+                actionFooter
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(UD.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(cardStroke, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    // MARK: 紧凑行
+
+    /// 怎么放行的：规则放行的只读命令、AI 代批。人工点的运行不标。
+    private var autoApprovalTag: String? {
+        guard call.approvalReason != nil else { return nil }
+        switch call.approvedByAI {
+        case nil: return "只读 · 自动"
+        case true?: return "AI 已批准"
+        case false?: return nil
+        }
+    }
+
+    private var compactRow: some View {
+        VStack(spacing: 0) {
+            // 没有输出时点了什么也不做；不用 `.disabled`，它会把整行文字压灰。
+            Button {
+                guard hasResult else { return }
+                withAnimation(.easeInOut(duration: 0.16)) { isResultExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    compactGlyph
+                        .frame(width: 14, height: 14)
+                    Text(call.command.isEmpty ? displayTitle : call.command)
+                        .font(UD.mono(11))
+                        .foregroundStyle(call.status == .skipped ? UD.text4 : UD.text2)
+                        .strikethrough(call.status == .skipped, color: UD.text4)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let tag = autoApprovalTag {
+                        Text(tag)
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(UD.text4)
+                            .fixedSize()
+                    }
+                    if let exitCode = call.exitCode, exitCode != 0 {
+                        Text("exit \(exitCode)")
+                            .font(UD.mono(9.5))
+                            .foregroundStyle(UD.danger)
+                            .fixedSize()
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(UD.text4)
+                        .rotationEffect(.degrees(isResultExpanded ? 180 : 0))
+                        .opacity(hasResult ? 1 : 0)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("复制命令", action: copyCommand)
+                    .disabled(call.command.isEmpty)
+            }
+            .accessibilityLabel(compactAccessibilityLabel)
+
+            if isResultExpanded, let output = call.output {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let explanation = call.explanation, !explanation.isEmpty {
+                        Text(explanation)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(UD.text3)
+                    }
+                    outputText(output)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(UD.termBg)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.uw03))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var compactGlyph: some View {
+        switch call.status {
+        case .running:
+            SpinningArc(color: UD.accent, size: 11, lineWidth: 1.5, trim: 0.3, duration: 0.9)
+        case .skipped:
+            Image(systemName: "forward.end.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(UD.text4)
+        default:
+            let failed = (call.exitCode ?? 0) != 0
+            Image(systemName: failed ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(failed ? UD.danger : UD.success)
+        }
+    }
+
+    private var compactAccessibilityLabel: String {
+        var parts = [presentation.title, call.command]
+        if let tag = autoApprovalTag { parts.append(tag) }
+        return parts.joined(separator: "，")
+    }
+
+    // MARK: 完整卡片
 
     private var header: some View {
         HStack(spacing: 9) {
@@ -840,14 +959,7 @@ private struct AgentToolCallCard: View {
             .buttonStyle(.plain)
 
             if isResultExpanded, let output = call.output {
-                ScrollView {
-                    Text(output)
-                        .font(UD.mono(10.5))
-                        .foregroundStyle(call.status == .failed ? UD.danger : UD.text3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 140)
+                outputText(output)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 9)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -855,31 +967,55 @@ private struct AgentToolCallCard: View {
         }
     }
 
-    @ViewBuilder
+    private func outputText(_ output: String) -> some View {
+        ScrollView {
+            Text(output)
+                .font(UD.mono(10.5))
+                .foregroundStyle(call.status == .failed ? UD.danger : UD.text3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .frame(maxHeight: 140)
+    }
+
+    /// 待确认时底栏左侧那句话：AI 审批中 / 为什么要人确认 / 默认提示。
+    private var approvalNote: (text: String, isWarning: Bool) {
+        if isReviewing { return ("AI 正在审批，也可以直接运行或跳过", false) }
+        if !approvalEnabled { return ("正在准备操作", false) }
+        if call.approvedByAI == false, let reason = call.approvalReason { return (reason, true) }
+        return ("需要你的确认", false)
+    }
+
+    /// 待确认卡片的底栏：上一行说明（为什么要你确认 / AI 审批中），下一行运行 / 跳过。
     private var actionFooter: some View {
-        if presentation.isProgressVisible {
-            HStack(spacing: 7) {
-                ProgressView().controlSize(.small)
-                Text("命令正在远端执行")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if isReviewing {
+                    SpinningArc(color: UD.accent, size: 9, lineWidth: 1.5, trim: 0.3, duration: 0.9)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                } else {
+                    Image(systemName: approvalNote.isWarning ? "exclamationmark.shield.fill" : "hand.raised.fill")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(approvalNote.isWarning ? UD.warning : UD.text4)
+                }
+                Text(approvalNote.text)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(UD.text3)
-                Spacer(minLength: 0)
+                    .foregroundStyle(approvalNote.isWarning ? UD.text2 : UD.text3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
-        } else {
             HStack(spacing: 7) {
+                // 设计语言 v2 主按钮：accent 14% 底 + accent 字。
                 Button(action: onRun) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill").font(.system(size: 8))
                         Text("运行").font(.system(size: 11, weight: .semibold))
-                        Text("⌘↵").font(UD.mono(9.5)).foregroundStyle(UD.text3)
+                        Text("⌘↵").font(UD.mono(9.5)).opacity(0.7)
                     }
-                    .foregroundStyle(approvalEnabled ? UD.text : UD.text4)
+                    .foregroundStyle(approvalEnabled ? UD.accent : UD.text4)
                     .padding(.horizontal, 10)
                     .frame(height: 27)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(UD.accentTint))
+                    .background(RoundedRectangle(cornerRadius: 7)
+                        .fill(approvalEnabled ? UD.accentTint : UD.accentTintDisabled))
                     .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
@@ -896,16 +1032,12 @@ private struct AgentToolCallCard: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!approvalEnabled)
-
-                Spacer(minLength: 0)
-                Text(approvalEnabled ? "需要你的确认" : "正在准备操作")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(UD.text4)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 43)
-            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     private func copyCommand() {
@@ -917,6 +1049,33 @@ private struct AgentToolCallCard: View {
             try? await Task.sleep(for: .seconds(1.2))
             isCommandCopied = false
         }
+    }
+}
+
+/// 等首个 token 时的占位：「思考中」上扫过一道流光，旁边是已等的秒数。
+/// 流光走 CA（`ShimmerSweep`）；秒数每秒才刷一次，不会让整窗满帧重绘。
+struct AgentThinkingIndicator: View {
+    var fontSize: CGFloat = 12.5
+    @State private var startedAt = Date()
+
+    var body: some View {
+        HStack(spacing: 6) {
+            label
+                .foregroundStyle(UD.text3)
+                .overlay { ShimmerSweep(color: UD.text).mask { label } }
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                let seconds = Int(context.date.timeIntervalSince(startedAt))
+                Text(seconds > 0 ? "\(seconds)s" : "")
+                    .font(.system(size: fontSize - 1.5).monospacedDigit())
+                    .foregroundStyle(UD.text4)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent 正在思考")
+    }
+
+    private var label: some View {
+        Text("思考中").font(.system(size: fontSize, weight: .medium))
     }
 }
 

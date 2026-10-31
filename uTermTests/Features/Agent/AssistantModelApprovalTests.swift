@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class AssistantModelApprovalTests: XCTestCase {
-    private func setup(_ command: String = "df -h", mode: AgentSafety = .auto,
+    private func setup(_ command: String = "mkdir -p /tmp/report", mode: AgentSafety = .auto,
                        response: ApprovalTestClient.Response = .approve,
                        additionalCommand: String? = nil) -> (AssistantModel, ApprovalTestClient, MockCommandExecutor) {
         let client = ApprovalTestClient(command: command, response: response, additionalCommand: additionalCommand)
@@ -41,10 +41,35 @@ final class AssistantModelApprovalTests: XCTestCase {
         let (model, client, executor) = setup()
         await model.send(serverContext: "test server")
         try await waitUntil { model.state == .idle }
-        XCTAssertEqual(executor.ran, ["df -h"])
+        XCTAssertEqual(executor.ran, ["mkdir -p /tmp/report"])
         XCTAssertEqual(client.captured.reviews, 1)
         XCTAssertEqual(client.captured.reviewConfig?.tools.isEmpty, true)
         XCTAssertEqual(model.messages.first { !$0.toolCalls.isEmpty }?.toolCalls.first?.approvedByAI, true)
+    }
+
+    /// 只读命令两个自动档位都由规则直接放行：不请 AI，不挂「AI 正在审批」，跑完接着下一轮。
+    func testReadOnlyCommandRunsWithoutAIReview() async throws {
+        for mode in [AgentSafety.readAuto, .auto] {
+            let (model, client, executor) = setup("ps aux | grep nginx", mode: mode)
+            await model.send(serverContext: "")
+            try await waitUntil { model.state == .idle }
+            XCTAssertEqual(executor.ran, ["ps aux | grep nginx"])
+            XCTAssertEqual(client.captured.reviews, 0)
+            let call = try XCTUnwrap(model.messages.first { !$0.toolCalls.isEmpty }?.toolCalls.first)
+            XCTAssertNil(call.approvedByAI)
+            XCTAssertEqual(model.approvalSummary(for: call), AgentToolApproval.readOnlyReason)
+        }
+    }
+
+    /// 「只读自动」下非只读命令不请 AI，直接停下等人。
+    func testReadAutoSendsWritesToHumanWithoutReview() async throws {
+        let (model, client, executor) = setup(mode: .readAuto)
+        await model.send(serverContext: "")
+        try await waitUntil { model.messages.last?.toolCalls.first?.approvalReason != nil }
+        XCTAssertEqual(model.state, .awaitingApproval)
+        XCTAssertEqual(client.captured.reviews, 0)
+        XCTAssertTrue(executor.ran.isEmpty)
+        XCTAssertEqual(model.messages.last?.toolCalls.first?.approvedByAI, false)
     }
 
     func testSensitiveCommandStaysPendingWithoutAIRequest() async throws {
@@ -59,8 +84,9 @@ final class AssistantModelApprovalTests: XCTestCase {
         XCTAssertEqual(executor.ran, ["rm -rf /tmp/example"])
     }
 
+    /// 「每步确认」连只读命令也要问。
     func testConfirmModeDoesNotReviewOrExecute() async {
-        let (model, client, executor) = setup(mode: .confirm)
+        let (model, client, executor) = setup("df -h", mode: .confirm)
         await model.send(serverContext: "")
         XCTAssertEqual(model.state, .awaitingApproval)
         XCTAssertEqual(client.captured.reviews, 0)
@@ -71,7 +97,7 @@ final class AssistantModelApprovalTests: XCTestCase {
         let (model, client, executor) = setup(additionalCommand: "systemctl restart nginx")
         await model.send(serverContext: "")
         try await waitUntil { model.messages.last?.toolCalls.last?.approvalReason != nil }
-        XCTAssertEqual(executor.ran, ["df -h"])
+        XCTAssertEqual(executor.ran, ["mkdir -p /tmp/report"])
         XCTAssertEqual(client.captured.reviews, 1)
         XCTAssertEqual(model.messages.last?.toolCalls.last?.status, .pending)
         XCTAssertEqual(model.state, .awaitingApproval)
@@ -120,7 +146,7 @@ final class AssistantModelApprovalTests: XCTestCase {
         await model.approveAndRun(id: "c1")
         client.finishReview()
         for _ in 0..<30 { await Task.yield() }
-        XCTAssertEqual(executor.ran, ["df -h"])
+        XCTAssertEqual(executor.ran, ["mkdir -p /tmp/report"])
         XCTAssertEqual(model.state, .idle)
     }
 

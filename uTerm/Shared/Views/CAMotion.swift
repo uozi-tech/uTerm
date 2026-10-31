@@ -29,10 +29,11 @@ import UIKit
 // 主线程每帧 **0 开销**；合成的也只是一个小 layer，而不是重传整窗 backing store；
 // 窗口不可见时系统根本不合成它。
 //
-// 三个图元覆盖了全仓所有常驻动画：
-//   `PulseDot`    呼吸状态点（圆点 + 光晕）
-//   `BlinkingBar` 闪烁光标（流式输出尾随）
-//   `SpinningArc` 旋转弧（连接中转圈）
+// 四个图元覆盖了全仓所有常驻动画：
+//   `PulseDot`     呼吸状态点（圆点 + 光晕）
+//   `BlinkingBar`  闪烁光标（流式输出尾随）
+//   `SpinningArc`  旋转弧（连接中转圈）
+//   `ShimmerSweep` 流光（Agent「思考中」文字）
 
 // MARK: - 图元 1：呼吸状态点
 
@@ -404,6 +405,152 @@ extension CAMotionShape: UIViewRepresentable {
     func updateUIView(_ view: CAMotionView, context: Context) {
         view.configure(content: content, motion: motion,
                        color: resolvedColor(context.environment))
+    }
+}
+#endif
+
+// MARK: - 图元 4：流光
+
+/// 一道从左扫到右的高光带，扫完停顿 `pause` 再来。用 `.mask` 裁成文字形状，就是
+/// 「思考中」那种流光文字。渐变的 `locations` 由 CA 插值，主线程每帧零开销。
+///
+/// Reduce Motion 时不画（底下的文字本身照常显示）。
+struct ShimmerSweep: View {
+    var color: Color
+    var duration: TimeInterval = 1.4
+    var pause: TimeInterval = 0.5
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if !reduceMotion {
+            ShimmerLayer(color: color, duration: duration, pause: pause)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+final class ShimmerView: CAMotionBaseView {
+    private static let animationKey = "uterm.shimmer"
+
+    private let gradient = CAGradientLayer()
+    private var color: CGColor?
+    private var timing: (duration: TimeInterval, pause: TimeInterval)?
+
+    override init(frame frameRect: CGRect) {
+        super.init(frame: frameRect)
+        #if canImport(AppKit)
+        wantsLayer = true
+        #else
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        #endif
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        // 静止时整条在可见区外（左边），动画被摘掉也不会留下一块亮斑。
+        gradient.locations = [-0.6, -0.3, 0]
+        platformLayer.addSublayer(gradient)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("ShimmerView 不从 nib 加载") }
+
+    private var platformLayer: CALayer {
+        #if canImport(AppKit)
+        return layer!
+        #else
+        return layer
+        #endif
+    }
+
+    #if canImport(AppKit)
+    override func layout() {
+        super.layout()
+        syncFrame()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { restartAnimation() }
+    }
+    #else
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        syncFrame()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { restartAnimation() }
+    }
+    #endif
+
+    func configure(color: CGColor, duration: TimeInterval, pause: TimeInterval) {
+        if self.color != color {
+            self.color = color
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            gradient.colors = [color.copy(alpha: 0) ?? color, color, color.copy(alpha: 0) ?? color]
+            CATransaction.commit()
+        }
+        if timing == nil || timing! != (duration, pause) {
+            timing = (duration, pause)
+            restartAnimation()
+        }
+    }
+
+    private func syncFrame() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
+    }
+
+    private func restartAnimation() {
+        gradient.removeAnimation(forKey: Self.animationKey)
+        guard let timing else { return }
+        let sweep = CABasicAnimation(keyPath: "locations")
+        sweep.fromValue = [-0.6, -0.3, 0]
+        sweep.toValue = [1, 1.3, 1.6]
+        sweep.duration = timing.duration
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        // 停顿靠「组比扫一遍长」实现：扫完后停在可见区外，等组的剩余时长。
+        let group = CAAnimationGroup()
+        group.animations = [sweep]
+        group.duration = timing.duration + timing.pause
+        group.repeatCount = .infinity
+        group.isRemovedOnCompletion = false
+        gradient.add(group, forKey: Self.animationKey)
+    }
+}
+
+private struct ShimmerLayer {
+    let color: Color
+    let duration: TimeInterval
+    let pause: TimeInterval
+
+    func resolvedColor(_ environment: EnvironmentValues) -> CGColor {
+        let c = color.resolve(in: environment)
+        return CGColor(srgbRed: CGFloat(c.red), green: CGFloat(c.green),
+                       blue: CGFloat(c.blue), alpha: CGFloat(c.opacity))
+    }
+}
+
+#if canImport(AppKit)
+extension ShimmerLayer: NSViewRepresentable {
+    func makeNSView(context: Context) -> ShimmerView { ShimmerView(frame: .zero) }
+
+    func updateNSView(_ view: ShimmerView, context: Context) {
+        view.configure(color: resolvedColor(context.environment), duration: duration, pause: pause)
+    }
+}
+#elseif canImport(UIKit)
+extension ShimmerLayer: UIViewRepresentable {
+    func makeUIView(context: Context) -> ShimmerView { ShimmerView(frame: .zero) }
+
+    func updateUIView(_ view: ShimmerView, context: Context) {
+        view.configure(color: resolvedColor(context.environment), duration: duration, pause: pause)
     }
 }
 #endif
