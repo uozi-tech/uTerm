@@ -409,7 +409,7 @@ final class AssistantModel {
         // Otherwise a newly submitted turn could overtake this driver's task resumption.
         state = Task.isCancelled ? .idle : operation.finalState
         if Task.isCancelled { return }
-        if state == .idle { await flushNextQueued() }
+        if !isBusy { await flushNextQueued() }
     }
 
     private func publishStream(_ operation: StreamOperation) {
@@ -630,10 +630,11 @@ final class AssistantModel {
         removeQueued(id: id)
     }
 
-    /// 弹出队首消息派发为新一轮（逐条依次）。仅在结算回 idle 时调用。
+    /// 弹出队首消息派发为新一轮（逐条依次）。仅在一轮结算回 idle / failed 时调用：
+    /// 失败也要接着派发，否则排队消息卡在条带里，下一条手动发送还会插到它们前面。
     /// 经 dispatch→streamAssistantTurn→flushNextQueued 递归，深度 = 队列长度（有界）。
     private func flushNextQueued() async {
-        guard !isDisposed, !Task.isCancelled, state == .idle, !queuedMessages.isEmpty else { return }
+        guard !isDisposed, !Task.isCancelled, !isBusy, !queuedMessages.isEmpty else { return }
         let next = queuedMessages.removeFirst()
         await dispatch(prompt: next.text, serverContext: lastServerContext)
     }

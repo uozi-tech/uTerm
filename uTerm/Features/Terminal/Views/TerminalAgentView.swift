@@ -6,8 +6,8 @@ import SwiftData
 /// 终端窗口的「纯 Agent 模式」：用自然语言驱动运维。对齐设计稿 `pages/terminal-agent.jsx`。
 ///
 /// 布局：上下文条（主机 · 历史 · 新对话）→ 居中对话区（max 760；空状态居中、命令卡
-/// 整宽 = 真实 `run_command` 工具调用）→ 输入区
-/// （`AgentComposer`：模型 + 审批档位 + 发送 / 停止）。
+/// 整宽 = 真实 `run_command` 工具调用）→ 输入区（`AgentQueueStrip` 待发队列 +
+/// `AgentComposer`：模型 + 审批档位 + 发送 / 停止）。
 /// 复用 `AssistantModel`（真实流式 + 工具审批）与 DesignKit `UDToolCall`。
 struct TerminalAgentView: View {
     @Bindable var model: AssistantModel
@@ -101,16 +101,16 @@ struct TerminalAgentView: View {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         earlierMessagesButton
                         ForEach(mountedMessages) { messageRow($0) }
-                        Color.clear.frame(height: 1).id(Self.bottomAnchorID)
+                        // 底部留白由锚点承担（同 `AssistantView`）：锚点下面再垫 padding，
+                        // `scrollTo(_, anchor: .bottom)` 就永远差这一截滚不到底。
+                        Color.clear.frame(height: 20).id(Self.bottomAnchorID)
                     }
                     .frame(maxWidth: 760, alignment: .leading)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
+                    .padding(.top, 20)
                 }
                 .frame(maxHeight: .infinity)
-                // 默认贴底；新消息 / 流式增量 / 工具状态变化都滚到底（工具卡输出
-                // 增长不改 message.text，故还要听 messages.count 与 state）。
                 .defaultScrollAnchor(.bottom)
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
@@ -124,11 +124,21 @@ struct TerminalAgentView: View {
                             contentHeight: context.geometry.contentSize.height)
                     }
                 }
-                .onChange(of: model.messages.count) { _, _ in scheduleScrollToBottom(proxy) }
+                // 贴底跟随听布局、不听消息模型（理由见 `AgentScrollPolicy.needsRepin`）：
+                // 新消息、流式 Markdown 重排、工具卡输出、排队条带挤矮视口都只体现为
+                // 「可滚高度变大」。
+                .onScrollGeometryChange(for: AgentScrollPolicy.TailGeometry.self) { geometry in
+                    AgentScrollPolicy.TailGeometry(
+                        contentHeight: geometry.contentSize.height,
+                        containerHeight: geometry.containerSize.height,
+                        visibleMaxY: geometry.visibleRect.maxY)
+                } action: { old, new in
+                    if AgentScrollPolicy.needsRepin(from: old, to: new) {
+                        scheduleScrollToBottom(proxy)
+                    }
+                }
                 // 换会话时把渲染窗口收回默认值。
                 .onChange(of: model.messages.first?.id) { _, _ in expandedWindowLimit = nil }
-                .onChange(of: model.messages.last?.text) { _, _ in scheduleScrollToBottom(proxy) }
-                .onChange(of: model.state) { _, _ in scheduleScrollToBottom(proxy) }
                 .onDisappear {
                     pendingTailScroll?.cancel()
                     pendingTailScroll = nil
@@ -327,15 +337,19 @@ struct TerminalAgentView: View {
     // MARK: - 输入区
 
     private var composer: some View {
-        AgentComposer(
-            model: model,
-            placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
-            minLines: 3,
-            safety: $safety,
-            activeProviderIDString: $activeProviderIDString,
-            onSend: sendInput,
-            onAttach: attachContext,
-            onOpenSettings: onOpenSettings)
+        VStack(spacing: 0) {
+            AgentQueueStrip(model: model,
+                            insets: EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+            AgentComposer(
+                model: model,
+                placeholder: "用自然语言描述你想做的事…  例如：把 nginx 日志限制到 100M",
+                minLines: 3,
+                safety: $safety,
+                activeProviderIDString: $activeProviderIDString,
+                onSend: sendInput,
+                onAttach: attachContext,
+                onOpenSettings: onOpenSettings)
+        }
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24).padding(.top, 10).padding(.bottom, 14)

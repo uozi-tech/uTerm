@@ -354,6 +354,19 @@ final class AssistantModelTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
     }
 
+    func testQueuedMessageStillDispatchesAfterFailedTurn() async {
+        // 首轮失败（模型空回）也是一次结算：排队消息不能卡在条带里等下一次手动发送。
+        let client = MockLLMClient(scripts: [[], [.text("rB")]])
+        let model = AssistantModel(client: client, provider: makeProvider(), apiKey: "sk-test")
+        model.enqueue("B")
+        model.input = "start"
+        await model.send(serverContext: "")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(client.captured.callCount, 2)
+        XCTAssertEqual(model.messages.map(\.text), ["start", "[错误：模型未返回任何内容]", "B", "rB"])
+        XCTAssertEqual(model.state, .idle)
+    }
+
     // MARK: - 编辑 + 分叉重生
 
     func testEditAndResendForksFromEditedMessage() async {

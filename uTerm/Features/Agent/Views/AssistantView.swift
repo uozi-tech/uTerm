@@ -308,12 +308,14 @@ struct AssistantView: View {
                             earlierMessagesButton
                             ForEach(mountedMessages) { messageRow($0) }
                         }
-                        Color.clear.frame(height: 1).id(Self.bottomAnchorID)
+                        // 底部留白由锚点自己承担：`scrollTo(_, anchor: .bottom)` 对齐的是锚点
+                        // 底边，锚点下面再垫 padding 就永远差这一截滚不到底。
+                        Color.clear.frame(height: 10).id(Self.bottomAnchorID)
                     }
                     // 滚动期间关掉气泡 hover（悬停铅笔 + tooltip）。
                     // 见 `UAppKitBridge/ScrollHoverGate.swift`。
                     .scrollHoverGate()
-                    .padding(EdgeInsets(top: 16, leading: 14, bottom: 10, trailing: 14))
+                    .padding(EdgeInsets(top: 16, leading: 14, bottom: 0, trailing: 14))
                 }
                 .defaultScrollAnchor(.bottom)
                 // `.bottom` 同时会把短于视口的聊天内容贴到容器底部，形成顶部大块
@@ -332,12 +334,19 @@ struct AssistantView: View {
                             contentHeight: context.geometry.contentSize.height)
                     }
                 }
-                // 尾部签名：把「尾消息 id / 正文长度 / 工具卡状态」三路变化
-                // 合成一个 Equatable 值，一个 onChange 顶掉原来的五个。原先每个
-                // onChange 都在 ScrollView 上挂一个 AttributeGraph 节点、各存一份
-                // 旧值（其中 toolCalls 还是数组），而它们的动作完全相同。
-                .onChange(of: ChatTailSignature(model)) { _, _ in
-                    scheduleScrollToBottom(proxy)
+                // 贴底跟随听布局、不听消息模型：新消息、流式 Markdown 重排、工具卡展开、
+                // 排队条带把视口挤矮，最终都只体现为「可滚高度变大」（见
+                // `AgentScrollPolicy.needsRepin`）。只比一个 CGFloat + Bool，开销比原先的
+                // 尾部签名（尾消息 id / 正文长度 / 工具卡数组）还小。
+                .onScrollGeometryChange(for: AgentScrollPolicy.TailGeometry.self) { geometry in
+                    AgentScrollPolicy.TailGeometry(
+                        contentHeight: geometry.contentSize.height,
+                        containerHeight: geometry.containerSize.height,
+                        visibleMaxY: geometry.visibleRect.maxY)
+                } action: { old, new in
+                    if AgentScrollPolicy.needsRepin(from: old, to: new) {
+                        scheduleScrollToBottom(proxy)
+                    }
                 }
                 // 换会话（含「新对话」）时把渲染窗口收回默认值，
                 // 否则上一段会话点开的「显示更早」会带进下一段。
@@ -345,7 +354,6 @@ struct AssistantView: View {
                     expandedWindowLimit = nil
                 }
                 .onChange(of: model.state) { old, now in
-                    scheduleScrollToBottom(proxy)
                     if old == .streaming && now != .streaming {
                         AccessibilityNotification.Announcement("回答已完成").post()
                     }
@@ -355,7 +363,8 @@ struct AssistantView: View {
                     pendingTailScroll = nil
                 }
             }
-            queueStrip
+            AgentQueueStrip(model: model,
+                            insets: EdgeInsets(top: 6, leading: 10, bottom: 0, trailing: 10))
             inputBar
         }
     }
@@ -599,62 +608,6 @@ struct AssistantView: View {
 
     // MARK: - 输入区
 
-    /// 待发队列条带：聊天区与输入框之间，列出尚未发出的排队消息（Agent 忙碌时累积）。
-    @ViewBuilder
-    private var queueStrip: some View {
-        if !model.queuedMessages.isEmpty {
-            VStack(spacing: 4) {
-                ForEach(model.queuedMessages) { queuedRow($0) }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-        }
-    }
-
-    private func queuedRow(_ item: QueuedMessage) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "clock")
-                .font(.system(size: 10))
-                .foregroundStyle(UD.text4)
-            Text(item.text)
-                .font(.system(size: 12))
-                .foregroundStyle(UD.text3)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button { model.loadQueuedForEditing(id: item.id) } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 10)).foregroundStyle(UD.text4)
-                    .frame(width: 20, height: 20).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).accessibilityLabel("编辑").help("编辑")
-            Button { model.removeQueued(id: item.id) } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10)).foregroundStyle(UD.text4)
-                    .frame(width: 20, height: 20).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).accessibilityLabel("移除").help("移除")
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(UD.fillSoft))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(UD.border, style: StrokeStyle(lineWidth: 1, dash: [3]))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { model.loadQueuedForEditing(id: item.id) }
-        // 整行可点（= 载入编辑），但 `onTapGesture` 对 AX 完全不可见：
-        // 合成一个元素，显式给 label / isButton / 默认动作，并把两个图标钮的
-        // 语义保留成命名动作，读屏与全键盘控制才按得动。
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("排队消息：\(item.text)")
-        .accessibilityHint("点按载入到输入框编辑")
-        .accessibilityAction { model.loadQueuedForEditing(id: item.id) }
-        .accessibilityAction(named: "编辑") { model.loadQueuedForEditing(id: item.id) }
-        .accessibilityAction(named: "移除") { model.removeQueued(id: item.id) }
-    }
-
     private var inputBar: some View {
         AgentComposer(
             model: model,
@@ -718,24 +671,6 @@ struct AssistantView: View {
 
 /// A compact execution trace for one Agent tool call. It keeps command approval, progress,
 /// result disclosure, exit status, and copying in the conversation instead of a separate modal.
-/// 「贴底跟随」要监听的三路变化压成一个 Equatable 值：尾消息身份、正文长度、
-/// 尾消息的工具卡。正文用 `utf8.count`（原生 Swift 字符串是 O(1)）而不是
-/// 整串——流式期间正文只增不减，长度就是忠实的变化指纹，也省掉每次 body 求值
-/// 都把一份长文本存进 onChange 的旧值里。
-private struct ChatTailSignature: Equatable {
-    let lastID: UUID?
-    let lastTextLength: Int
-    let toolCalls: [ToolCallState]
-
-    @MainActor
-    init(_ model: AssistantModel) {
-        let last = model.messages.last
-        lastID = last?.id
-        lastTextLength = last?.text.utf8.count ?? 0
-        toolCalls = last?.toolCalls ?? []
-    }
-}
-
 private struct AgentToolCallCard: View {
     let call: ToolCallState
     let approvalEnabled: Bool

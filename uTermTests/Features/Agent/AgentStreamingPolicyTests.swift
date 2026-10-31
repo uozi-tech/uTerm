@@ -74,6 +74,47 @@ final class AgentStreamingPolicyTests: XCTestCase {
             visibleMaxY: 1_000, contentHeight: .infinity))
     }
 
+    private typealias Tail = AgentScrollPolicy.TailGeometry
+
+    func testTailGeometryMeasuresContentBeyondViewport() {
+        let pinned = Tail(contentHeight: 1_000, containerHeight: 600, visibleMaxY: 1_000)
+        XCTAssertEqual(pinned.scrollableHeight, 400)
+        XCTAssertTrue(pinned.isNearBottom)
+        let short = Tail(contentHeight: 300, containerHeight: 600, visibleMaxY: 600)
+        XCTAssertEqual(short.scrollableHeight, 0)
+        XCTAssertEqual(Tail(contentHeight: .nan, containerHeight: 600, visibleMaxY: 600).scrollableHeight, 0)
+    }
+
+    func testRepinWhenPinnedContentGrows() {
+        // Markdown 重排把内容撑高 120pt：视口还停在旧底边。
+        let before = Tail(contentHeight: 1_000, containerHeight: 600, visibleMaxY: 1_000)
+        let after = Tail(contentHeight: 1_120, containerHeight: 600, visibleMaxY: 1_000)
+        XCTAssertTrue(AgentScrollPolicy.needsRepin(from: before, to: after))
+    }
+
+    func testRepinWhenQueueStripShrinksViewport() {
+        // 排队条带出现把视口挤矮 40pt：内容一点没变，底边照样被挤出去。
+        let before = Tail(contentHeight: 1_000, containerHeight: 600, visibleMaxY: 1_000)
+        let after = Tail(contentHeight: 1_000, containerHeight: 560, visibleMaxY: 960)
+        XCTAssertTrue(AgentScrollPolicy.needsRepin(from: before, to: after))
+    }
+
+    func testNoRepinWhenViewportWasAwayFromBottom() {
+        // 拖滚动条停在中段（没有手势相位，followsTail 仍是 true）：懒栈重估行高
+        // 把内容撑高也不能拽回底部。
+        let before = Tail(contentHeight: 3_000, containerHeight: 600, visibleMaxY: 1_400)
+        let after = Tail(contentHeight: 3_400, containerHeight: 600, visibleMaxY: 1_400)
+        XCTAssertFalse(AgentScrollPolicy.needsRepin(from: before, to: after))
+    }
+
+    func testNoRepinWhenScrollableHeightHoldsOrShrinks() {
+        let pinned = Tail(contentHeight: 1_000, containerHeight: 600, visibleMaxY: 1_000)
+        XCTAssertFalse(AgentScrollPolicy.needsRepin(
+            from: pinned, to: Tail(contentHeight: 1_000.3, containerHeight: 600, visibleMaxY: 1_000)))
+        XCTAssertFalse(AgentScrollPolicy.needsRepin(
+            from: pinned, to: Tail(contentHeight: 900, containerHeight: 600, visibleMaxY: 900)))
+    }
+
     func testWorkspaceAssistantAlignsShortConversationToTop() throws {
         let source = try String(contentsOf: repoRoot.appendingPathComponent(
             "uTerm/Features/Agent/Views/AssistantView.swift"),
