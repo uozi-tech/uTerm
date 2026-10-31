@@ -1037,7 +1037,10 @@ private struct AgentToolCallCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
+        // 紧跟命令行时由命令行的底线分隔，再画一条就成了双线；只有隔着输出区才补顶线。
+        .overlay(alignment: .top) {
+            if hasResult { Rectangle().fill(UD.border).frame(height: 1) }
+        }
     }
 
     private func copyCommand() {
