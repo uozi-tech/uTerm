@@ -56,7 +56,7 @@ nonisolated struct ParallelDoctor: Sendable {
         return (status, summary)
     }
 
-    /// 从当前 AIProvider 构造 doctor（无 provider / 无 key → nil，退回模板叙述）。
+    /// 从当前 AIProvider 构造 doctor（无 provider / 无 key / 无模型 → nil，退回模板叙述）。
     @MainActor
     static func make(provider: AIProvider?) -> ParallelDoctor? {
         guard let provider else { return nil }
@@ -64,9 +64,9 @@ nonisolated struct ParallelDoctor: Sendable {
         guard !key.isEmpty else { return nil }
         guard case .success(let baseURL) = ProviderEndpointPolicy.resolve(
             configuredBaseURL: provider.baseURL, kind: provider.kind) else { return nil }
-        let model = provider.model.isEmpty
-            ? (ProviderPreset.models(for: provider.kind).first ?? "") : provider.model
+        // 没选模型就没法发请求（不再有预置模型兜底）。
+        guard !provider.model.isEmpty else { return nil }
         return ParallelDoctor(client: LLMClientFactory.make(for: provider),
-                              model: model, baseURL: baseURL, apiKey: key)
+                              model: provider.model, baseURL: baseURL, apiKey: key)
     }
 }

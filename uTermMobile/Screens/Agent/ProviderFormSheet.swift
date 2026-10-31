@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// 新建 AI Provider（写 `AIProvider` + 钥匙串 API Key）。
+/// 模型只能从 provider 实时返回的列表里选（`ProviderModelList`），不预置、不手填。
 struct ProviderFormSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -11,6 +12,14 @@ struct ProviderFormSheet: View {
     @State private var baseURL = ""
     @State private var model = ""
     @State private var apiKey = ""
+    @State private var models = ProviderModelList()
+
+    /// 停止输入 Base URL / API Key 多久后再去拉模型列表。
+    private static let typingDebounce: Duration = .milliseconds(600)
+
+    private var modelsRequest: ProviderModelList.Request {
+        .init(kind: kind, baseURL: baseURL, apiKey: apiKey.trimmingCharacters(in: .whitespaces))
+    }
 
     private var baseURLError: String? {
         ProviderEndpointPolicy.validationMessage(configuredBaseURL: baseURL, kind: kind)
@@ -19,6 +28,7 @@ struct ProviderFormSheet: View {
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty &&
         !apiKey.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !model.isEmpty &&
         baseURLError == nil
     }
 
@@ -35,8 +45,7 @@ struct ProviderFormSheet: View {
 
                     MInsetGroup(header: "基本") {
                         formRow("名称", "如 Claude / DeepSeek", $name, autocap: .sentences, last: false)
-                        formRow("Base URL", ProviderPreset.defaultBaseURL(for: kind), $baseURL, last: false)
-                        formRow("模型", ProviderPreset.models(for: kind).first ?? "", $model, last: true)
+                        formRow("Base URL", ProviderPreset.defaultBaseURL(for: kind), $baseURL, last: true)
                     }
                     if let baseURLError {
                         Text(baseURLError)
@@ -52,15 +61,21 @@ struct ProviderFormSheet: View {
                             .font(M.sans(12)).foregroundStyle(M.text4).padding(.horizontal, 20)
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        MSectionCap(text: "可选模型").padding(.horizontal, 20)
-                        FlowChips(items: ProviderPreset.models(for: kind)) { model = $0 }
-                            .padding(.horizontal, 16)
-                    }
+                    modelSection
                 }
                 .padding(.vertical, 12)
             }
             .background(M.canvas)
+            .onAppear { models.load(modelsRequest) }
+            .onChange(of: kind) { models.load(modelsRequest) }
+            .onChange(of: baseURL) { models.load(modelsRequest, debounce: Self.typingDebounce) }
+            .onChange(of: apiKey) { models.load(modelsRequest, debounce: Self.typingDebounce) }
+            // 列表到了而还没选：取第一个；已有选择不动。
+            .onChange(of: models.phase) { _, phase in
+                if model.isEmpty, case .loaded(let ids) = phase, let first = ids.first {
+                    model = first
+                }
+            }
             .navigationTitle("添加 Provider")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -69,6 +84,60 @@ struct ProviderFormSheet: View {
                     Button("保存") { save() }.disabled(!valid).fontWeight(.semibold)
                 }
             }
+        }
+    }
+
+    /// 模型：下拉来自 provider 的 `/v1/models`；状态行给加载中 / 失败（可重试）/ 空列表。
+    private var modelSection: some View {
+        let choices = ProviderModelChoices(phase: models.phase, saved: model)
+        return MInsetGroup(header: "模型") {
+            HStack(spacing: 10) {
+                Text("模型").font(M.sans(15)).foregroundStyle(M.text)
+                Spacer(minLength: 8)
+                if choices.models.isEmpty {
+                    Text(models.isLoading ? "获取中…" : "—")
+                        .font(M.mono(13)).foregroundStyle(M.text4)
+                } else {
+                    Picker("模型", selection: $model) {
+                        ForEach(choices.models, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+                Button { models.load(modelsRequest) } label: {
+                    if models.isLoading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.clockwise").foregroundStyle(M.accent)
+                    }
+                }
+                .disabled(models.isLoading || models.phase == .idle)
+                .accessibilityLabel("刷新模型列表")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            if let status = modelStatus {
+                MRowDivider()
+                Text(status.text)
+                    .font(M.sans(12)).foregroundStyle(status.color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+            }
+        }
+    }
+
+    /// 加载中 / 失败 / 空列表时在模型行下多一行说明；失败与空列表靠行尾刷新钮重试。
+    private var modelStatus: (text: String, color: Color)? {
+        switch models.phase {
+        case .idle:
+            return ("填好 Base URL 与 API Key 后自动获取可用模型。", M.text4)
+        case .loading:
+            return ("正在获取模型列表…", M.text4)
+        case .failed(let reason):
+            return (reason, M.danger)
+        case .loaded(let ids) where ids.isEmpty:
+            return ("服务器没有返回任何模型。", M.warning)
+        case .loaded:
+            return nil
         }
     }
 
@@ -99,25 +168,5 @@ struct ProviderFormSheet: View {
         try? context.save()
         try? AgentKeychain().save(apiKey.trimmingCharacters(in: .whitespaces), for: provider.id)
         dismiss()
-    }
-}
-
-/// 简单自动换行的可点选模型 chip 组。
-struct FlowChips: View {
-    let items: [String]
-    var onTap: (String) -> Void
-    var body: some View {
-        let cols = [GridItem(.adaptive(minimum: 90), spacing: 8)]
-        LazyVGrid(columns: cols, alignment: .leading, spacing: 8) {
-            ForEach(items, id: \.self) { item in
-                Button { onTap(item) } label: {
-                    Text(item).font(M.mono(12)).foregroundStyle(M.text2)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(M.fillFaint)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(MPressStyle())
-            }
-        }
     }
 }

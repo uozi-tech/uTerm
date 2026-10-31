@@ -15,35 +15,18 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifi
     }
 }
 
-/// 各 kind 的预置常量。baseURL 是 root（scheme+host，不含路径段），
+/// 各 kind 的预置 baseURL。baseURL 是 root（scheme+host，不含路径段），
 /// client 各自 append 全路径。OpenAI-兼容端点（DeepSeek/Groq/Ollama/OpenRouter）
 /// 按同样规则填写，如 `https://api.deepseek.com`、`http://localhost:11434`。
+/// 不预置模型：可选模型一律从 provider 的 `/v1/models` 实时拉（`ProviderModelCatalog`）。
 nonisolated enum ProviderPreset {
     static let anthropicBaseURL = "https://api.anthropic.com"
     static let openAIBaseURL = "https://api.openai.com"
-
-    static let anthropicModels: [String] = [
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ]
-    static let openAIModels: [String] = [
-        "gpt-5",
-        "gpt-4o",
-        "gpt-4o-mini",
-    ]
 
     static func defaultBaseURL(for kind: ProviderKind) -> String {
         switch kind {
         case .anthropic: return anthropicBaseURL
         case .openai:    return openAIBaseURL
-        }
-    }
-
-    static func models(for kind: ProviderKind) -> [String] {
-        switch kind {
-        case .anthropic: return anthropicModels
-        case .openai:    return openAIModels
         }
     }
 }

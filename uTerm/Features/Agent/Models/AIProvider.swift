@@ -12,7 +12,7 @@ final class AIProvider {
     var name: String = ""             // 用户起的名，UI 显示
     var kindRaw: String = ProviderKind.openai.rawValue
     var baseURL: String = ""          // root URL（不含路径段）；空时 client fallback 到 kind 预置
-    var model: String = ""            // model id；自由文本，UI 端有预置下拉
+    var model: String = ""            // model id；设置里从 provider 实时模型列表选
     var sortOrder: Int = 0            // 列表排序
     var createdAt: Date = Date()
 

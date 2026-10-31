@@ -112,7 +112,7 @@ struct ProvidersSettingsView: View {
             name: "新 Provider",
             kind: .anthropic,
             baseURL: ProviderPreset.anthropicBaseURL,
-            model: ProviderPreset.anthropicModels.first ?? "",
+            model: "",   // 由编辑页从 provider 实时模型列表里选
             sortOrder: nextSort)
         modelContext.insert(p)
         try? modelContext.save()
