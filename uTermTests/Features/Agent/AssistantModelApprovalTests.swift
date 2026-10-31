@@ -94,7 +94,7 @@ final class AssistantModelApprovalTests: XCTestCase {
     }
 
     func testBatchStopsAtSensitiveCommandAfterApprovingSafeCommand() async throws {
-        let (model, client, executor) = setup(additionalCommand: "systemctl restart nginx")
+        let (model, client, executor) = setup(additionalCommand: "rm -rf /var/www")
         await model.send(serverContext: "")
         try await waitUntil { model.messages.last?.toolCalls.last?.approvalReason != nil }
         XCTAssertEqual(executor.ran, ["mkdir -p /tmp/report"])
