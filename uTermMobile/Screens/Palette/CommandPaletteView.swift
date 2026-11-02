@@ -92,8 +92,12 @@ struct CommandPaletteView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(M.surface, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    MToolbarCloseButton(action: close)
+                // 搜索激活时搜索栏自带「取消」（点它即关面板），这里收起，免得 iPhone Duo 侧边列
+                // 与搜索栏各一个 ×。只在搜索未激活（打开动画那一下、或激活失败）时兜底。
+                if !searching {
+                    ToolbarItem(placement: .topBarLeading) {
+                        MToolbarCloseButton(action: close)
+                    }
                 }
             }
             // 系统搜索栏（导航栏下方的抽屉位，常显）：宽控件，iPhone Duo 上留在原位；
