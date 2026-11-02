@@ -17,7 +17,7 @@ struct PreviewArea: View {
     /// 请求关闭某标签（含脏文件确认，由上层提供）。参数是**标签** id，不是 buffer id。
     let onRequestClose: (UUID) -> Void
 
-    /// 标签条高度。沿用改造前预览区的 36pt（与下方终端标签条同高）。
+    /// 标签条高度 40：与左侧文件树头、右侧 Agent 头、下方终端标签条同高（分区方案 v3.2）。
     private static let stripHeight = WorkspacePaneHeaderLayout.height
 
     var body: some View {
@@ -35,9 +35,9 @@ struct PreviewArea: View {
                 // buffer id 变成了标签 id，解析走 `buffer(forDragPayloadID:)`。
                 dragType: .utermFileBufferID,
                 stripHeight: Self.stripHeight,
-                // 不画活动组焦点框：焦点已经由标签条表达（全工作区唯一的 accent 顶条），
-                // 再套一圈蓝框是同一件事说两遍。与 uTable 及终端区保持一致。
-                showsActiveGroupRing: false,
+                // 卡片风格的标签胶囊没有 accent 顶条，「焦点在哪一组」改由凹槽的 1.5pt
+                // accent 外框表达（只在分屏、多于一组时画）。
+                showsActiveGroupRing: true,
                 descriptor: Self.descriptor(for:),
                 content: { tab, _ in
                     PreviewPaneBody(model: model, buffer: tab.payload,
@@ -54,12 +54,12 @@ struct PreviewArea: View {
                         onKeepOpen: { model.keepTab(tab.id) },
                         onRequestClose: onRequestClose)
                 })
+            // 分区方案 v3：预览区坐在主内容卡上 —— 标签胶囊条 + 卡内凹槽（编辑器 / Markdown /
+            // 图片自带 EditorTheme.background = 凹槽底）+ 状态条，三者都透出卡面色。
+            .uPaneGroupStyle(.card)
+            .uPaneGroupWells()
             PreviewStatusRow(model: model)
         }
-        // 预览区底色对齐设计稿 = UD.bg（暗色 #000000）：空态 / 最近打开 / 图片棋盘
-        // 边距等非编辑器区域都落在这层基底上。真实代码编辑器（CodeEditTextView）
-        // 自带 EditorTheme.background 的 NSView 覆在其上，并在暗色下同样解析到 #000000。
-        .background(UD.bg)
     }
 
     /// `[标签 id: 它所在组的标签顺序]`。右键菜单的「关闭其他 / 关闭右侧」按**本组**

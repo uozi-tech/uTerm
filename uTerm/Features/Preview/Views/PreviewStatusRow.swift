@@ -35,12 +35,9 @@ struct PreviewStatusRow: View {
         .font(UD.mono(10.5))
         .foregroundStyle(UD.text3)
         .padding(.horizontal, 12)
-        .frame(height: 22)
+        // 分区方案 v3：状态条在卡面上、紧贴凹槽下方 —— 不铺底色、不画上分隔线，24 高。
+        .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(UD.bg)
-        .overlay(alignment: .top) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
     }
 
     private func label(for kind: FileKind) -> String {

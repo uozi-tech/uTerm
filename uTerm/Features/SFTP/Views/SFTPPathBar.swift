@@ -59,8 +59,8 @@ struct SFTPPathBar: View {
             actionsMenu
         }
         .padding(.horizontal, 12)
-        .frame(height: 50)
-        .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
+        // 分区方案 v3：路径栏并入内容卡顶部（48 高），无底线 —— 下方表头线就是分界。
+        .frame(height: 48)
     }
 
     // MARK: 后退 / 前进

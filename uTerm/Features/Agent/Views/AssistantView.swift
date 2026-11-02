@@ -5,7 +5,7 @@ import UDesignKit
 import SwiftUI
 import SwiftData
 
-/// 与文件路径栏、UPaneGroupArea 标签栏统一：36pt，底部 1pt 分隔线画在这 36pt 之内。
+/// 与文件树头、UPaneGroupArea 标签条统一：40pt，无底部分隔线（分区方案 v3.2）。
 enum AssistantHeaderLayout {
     nonisolated static let height = WorkspacePaneHeaderLayout.height
     /// 会话历史下拉的顶部内边距：顶栏高 + 2pt 间隙。

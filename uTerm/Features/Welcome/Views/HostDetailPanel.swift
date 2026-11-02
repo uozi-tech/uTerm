@@ -36,15 +36,14 @@ struct HostDetailPanel: View {
             Spacer(minLength: 16)
             actionButtons
         }
-        .padding(EdgeInsets(top: 24, leading: 22, bottom: 18, trailing: 22))
+        .padding(EdgeInsets(top: 22, leading: 20, bottom: 16, trailing: 20))
         .frame(width: 320)
         .frame(maxHeight: .infinity)
-        .background(Color.primary.opacity(0.015))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(UD.border)
-                .frame(width: 1)
-        }
+        // 分区方案 v3 第 7 条：卡内抬升块 —— `UD.panelHi`、圆角 8、四周距卡边 6pt，
+        // 靠底色差与左侧列表分开，替代原来的左分隔线。
+        .background(RoundedRectangle(cornerRadius: UD.Layout.wellRadius, style: .continuous)
+            .fill(UD.panelHi))
+        .padding(UD.Layout.wellGap)
     }
 
     // MARK: header

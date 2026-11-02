@@ -9,13 +9,13 @@ struct AgentSidebar: View {
     @Binding var activeProviderIDString: String
 
     var body: some View {
-        // 铺 UD.bg 实色 —— 与 SFTPSidebar 对称，主动切断 NavigationSplitView 的
-        // Liquid Glass inspector 材质（去玻璃改造）；随全局主题自适应深 / 浅。
+        // 分区方案 v3.2 第 6 条：Agent 栏并进主内容卡成为右栏，与中栏同为卡面色
+        // （`UD.panel`），之间只隔一条 1pt 竖线；不再有自己的圆角 / 轮廓。
         AssistantView(serverContext: serverContext,
                        serverName: serverName,
                        model: model,
                        activeProviderIDString: $activeProviderIDString)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(UD.bg)
+            .background(UD.panel)
     }
 }

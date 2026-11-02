@@ -43,6 +43,5 @@ struct SFTPStatusBar: View {
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .frame(height: 28)
-        .background(UD.panel)
     }
 }

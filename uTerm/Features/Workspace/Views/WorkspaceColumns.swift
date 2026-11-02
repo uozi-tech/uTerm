@@ -6,6 +6,10 @@ import AppKit
 /// `[文件 sidebar | 可拖分隔 | 中央 | 可拖分隔 | Agent inspector]`。
 /// sidebar / inspector 可折叠（带动画）；列宽由 binding 持久化。
 ///
+/// 分区方案 v3.2：三栏同在**一张主内容卡**里（调用方套 `.udCard()`），同为卡面色，
+/// 栏间各一条 1pt 竖线（`ColumnResizer`，兼拖拽命中区）；收起的栏连同它的线一起消失，
+/// 卡缘直接闭合。
+///
 /// 列宽几何约束（沿用旧 NavigationSplitView 的不等式，保证 center ≥ 480）：
 ///   sidebar.max(320) + inspector.max(420) + center.min(480) = 1220 ≤ windowMin(1280)。
 struct WorkspaceColumns<Sidebar: View, Center: View, Inspector: View>: View {
@@ -59,26 +63,47 @@ struct WorkspaceColumns<Sidebar: View, Center: View, Inspector: View>: View {
     }
 }
 
-/// 列间可拖分隔条：1px UD.border 实线 + 10px 透明命中区；全局坐标拖动调列宽
-/// （`sign` = +1 左 sidebar 往右拖变宽 / −1 右 inspector 往右拖变窄），clamp 到 range。
+/// 列间可拖分隔条（分区方案 v3.2 第 4 条）：卡内 1pt `UD.border` 竖线（两侧同为卡面色），
+/// 线上骑一条 7pt 透明命中区（线两侧各 3pt），悬停 / 拖动时线转 accent。全局坐标拖动调
+/// 列宽（`sign` = +1 左 sidebar 往右拖变宽 / −1 右 inspector 往右拖变窄），clamp 到 range。
+///
+/// `appearance: .gap` 用于两侧靠底色差分开的场合（SFTP 表格 | 检视器抬升块）：占一条 6pt
+/// 卡面间隙、不画线，悬停浮出 2×24 的 `text4` 把手、拖动时转 accent（设计稿 `EdgeResizer`）。
 struct ColumnResizer: View {
     @Binding var width: Double
     let range: ClosedRange<Double>
     let sign: Double
+    var appearance: SplitterHandle.Appearance = .line
 
     @State private var startWidth: Double?
+    @State private var hovering = false
+
+    @ViewBuilder
+    private var indicator: some View {
+        let hot = hovering || startWidth != nil
+        switch appearance {
+        case .line:
+            PaneDividerLine(axis: .vertical, hot: hot)
+        case .gap:
+            Capsule()
+                .fill(startWidth != nil ? UD.accent : UD.text4)
+                .frame(width: 2, height: 24)
+                .opacity(hot ? 1 : 0)
+                .frame(width: UD.Layout.wellGap)
+                .frame(maxHeight: .infinity)
+                .allowsHitTesting(false)
+        }
+    }
 
     var body: some View {
-        Rectangle()
-            .fill(UD.border)
-            .frame(width: 1)
-            .frame(maxHeight: .infinity)
+        indicator
             .overlay(
                 Rectangle()
                     .fill(Color.white.opacity(0.001))   // α>0 才接收鼠标
-                    .frame(width: 10)
+                    .frame(width: appearance == .line ? UD.Layout.dividerHitWidth : UD.Layout.wellGap)
                     .contentShape(Rectangle())
                     .onHover { inside in
+                        hovering = inside
                         (inside ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
                     }
                     .gesture(
@@ -96,5 +121,23 @@ struct ColumnResizer: View {
                     .accessibilityLabel(Text("调整列宽"))
                     .accessibilityAddTraits(.allowsDirectInteraction)
             )
+    }
+}
+
+/// 卡内 1pt 分隔线本体（`UDPaneDivider` 加悬停态）：静息 `UD.border`，`hot` 时转 accent
+/// （设计稿 `WsLineDivider`：`${accent}aa`）。只画线、不接收鼠标 —— 命中区由调用方叠。
+struct PaneDividerLine: View {
+    enum Axis { case vertical, horizontal }
+    let axis: Axis
+    let hot: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(hot ? UD.accent.opacity(0.67) : UD.border)
+            .frame(width: axis == .vertical ? 1 : nil,
+                   height: axis == .horizontal ? 1 : nil)
+            .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+                   maxHeight: axis == .vertical ? .infinity : nil)
+            .allowsHitTesting(false)
     }
 }

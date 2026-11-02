@@ -7,10 +7,21 @@ import AppKit
 /// binding live during the drag so panes (and the SwiftTerm views inside them)
 /// reflow in real time — Metal-backed terminals + the readLoop coalescing in
 /// `ProcessManager` make this cheap enough to stay smooth.
+///
+/// 两种外观（分区方案 v3）：
+/// - `.line`：卡内两块同底色区域之间的 1pt `UD.border` 线（如工作区的预览 | 终端），命中区
+///   7pt 骑在线上，悬停 / 拖动时线转 accent；
+/// - `.gap`：两个凹槽之间的 6pt 卡面间隙（终端分屏窗格），静息态什么都不画，悬停浮出
+///   2×24 的 `text4` 把手，拖动时把手转 accent（设计稿 `pane-split.jsx`）。
 struct SplitterHandle: View {
     enum Orientation {
         case horizontal      // line is horizontal → drags vertically
         case vertical        // line is vertical → drags horizontally
+    }
+
+    enum Appearance {
+        case line
+        case gap
     }
 
     let orientation: Orientation
@@ -18,27 +29,27 @@ struct SplitterHandle: View {
     let totalLength: CGFloat
     var minFraction: Double = 0.15
     var maxFraction: Double = 0.85
+    var appearance: Appearance = .gap
 
     @State private var dragStartFraction: Double?
+    @State private var hovering = false
+
+    /// 命中区厚度：`.line` 7pt（线两侧各 3pt），`.gap` 就是 6pt 间隙本身。
+    private var hitThickness: CGFloat {
+        appearance == .line ? UD.Layout.dividerHitWidth : UD.Layout.wellGap
+    }
 
     var body: some View {
         Rectangle()
             .fill(AppTheme.Palette.hitTestFill)
-            .overlay(
-                // 设计稿 SplitGap：静息态画 1px UD.border 实线分隔，拖动时提亮为 accent。
-                Rectangle()
-                    .fill(dragStartFraction != nil ? UD.accent.opacity(0.6) : UD.border)
-                    .frame(
-                        width: orientation == .vertical ? 1 : nil,
-                        height: orientation == .horizontal ? 1 : nil
-                    )
-            )
+            .overlay { indicator }
             .frame(
-                width: orientation == .vertical ? 6 : nil,
-                height: orientation == .horizontal ? 6 : nil
+                width: orientation == .vertical ? hitThickness : nil,
+                height: orientation == .horizontal ? hitThickness : nil
             )
             .contentShape(Rectangle())
             .onHover { inside in
+                hovering = inside
                 if inside {
                     (orientation == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
                 } else {
@@ -68,6 +79,22 @@ struct SplitterHandle: View {
             )
             .accessibilityLabel(Text(orientation == .vertical ? "调整左右窗格宽度" : "调整上下窗格高度"))
             .accessibilityAddTraits(.allowsDirectInteraction)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        let dragging = dragStartFraction != nil
+        switch appearance {
+        case .line:
+            PaneDividerLine(axis: orientation == .vertical ? .vertical : .horizontal,
+                            hot: dragging || hovering)
+        case .gap:
+            Capsule()
+                .fill(dragging ? UD.accent : UD.text4)
+                .frame(width: orientation == .vertical ? 2 : 24,
+                       height: orientation == .vertical ? 24 : 2)
+                .opacity(dragging || hovering ? 1 : 0)
+        }
     }
 }
 

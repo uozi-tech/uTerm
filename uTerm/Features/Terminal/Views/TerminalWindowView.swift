@@ -70,26 +70,30 @@ struct TerminalWindowView: View {
                 },
                 onDisconnect: { dismiss() })
 
-            // 内容区两态切换；分隔线 + 状态栏两态共用，提到 switch 外避免重复。
-            switch mode {
-            case .terminal:
-                TerminalArea(workspace: workspace, server: server)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .agent:
-                TerminalAgentView(
-                    model: workspace.assistantModel,
-                    host: server.displayEndpoint,
-                    serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
-                    safety: safetyBinding,
-                    activeProviderIDString: $activeProviderIDString,
-                    onOpenSettings: { openWindow(id: SettingsWindow.id) })
+            // 内容区两态切换，同一张内容卡（分区方案 v3：距窗口左右 8pt，标签胶囊条 +
+            // 终端凹槽 / Agent 对话都在卡里）；状态栏两态共用、坐在画布上，提到 switch 外。
+            Group {
+                switch mode {
+                case .terminal:
+                    TerminalArea(workspace: workspace, server: server)
+                case .agent:
+                    TerminalAgentView(
+                        model: workspace.assistantModel,
+                        host: server.displayEndpoint,
+                        serverContext: "服务器：\(server.name)（\(server.displayEndpoint)）",
+                        safety: safetyBinding,
+                        activeProviderIDString: $activeProviderIDString,
+                        onOpenSettings: { openWindow(id: SettingsWindow.id) })
+                }
             }
-            Rectangle().fill(UD.border).frame(height: 1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .udCard()
+            .padding(.horizontal, UD.Layout.cardInset)
             StatusBarView(workspace: workspace)
         }
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.bg)
-        .background(WorkspaceWindowChrome(serverName: chromeTitle))
+        .background(UD.pageBg)
+        .background(WorkspaceWindowChrome(serverName: chromeTitle, background: WS.canvasNSColor))
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
         })
@@ -187,7 +191,7 @@ struct TerminalWindowView: View {
 // MARK: - 标题栏
 
 /// 终端窗口自绘标题栏：左让位红绿灯 + 「终端 ⇄ Agent」分段开关；居中主机 · 已连接；
-/// 右端口转发 · 断开。38px 扁平条 + 底 1px 描边（与工作区 / SFTP 窗口同构）。
+/// 右端口转发 · 断开。38px，分区方案 v3：画在窗口画布上，无底色、无分隔线。
 struct TerminalWindowTitleBar: View {
     let host: String
     let session: TerminalSession?
@@ -233,10 +237,7 @@ struct TerminalWindowTitleBar: View {
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)
-        .background(WindowDragHandle())
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
+        .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 }
 

@@ -76,8 +76,8 @@ struct QuickCommandList: View {
                 .controlSize(.small)
             }
             .padding(.horizontal, 16)
+            // 分区方案 v3：列表头并入卡顶，无底线。
             .frame(height: 44)
-            .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
 
             ScrollView {
                 LazyVStack(spacing: 0) {

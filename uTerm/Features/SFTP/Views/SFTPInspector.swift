@@ -106,15 +106,15 @@ struct SFTPInspector: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 11).padding(.vertical, 9)
-                            // 代码块底用 panelHi（随主题）——日间浅底深字、夜间深底浅字。
-                            .background(RoundedRectangle(cornerRadius: 7).fill(UD.panelHi))
+                            // 代码块底用终端底 termBg（随主题）：检视器本身已是 panelHi 抬升块，
+                            // 再用 panelHi 就和底色混成一片（设计稿 --u-term-bg）。
+                            .background(RoundedRectangle(cornerRadius: 7).fill(UD.termBg))
                     }
                 }
                 .padding(.horizontal, 22).padding(.bottom, 18)
             }
 
-            // 操作区
-            Rectangle().fill(UD.border).frame(height: 1)
+            // 操作区（v3：抬升块内不再用分隔线隔开）
             VStack(spacing: 8) {
                 primaryButton(item)
                 if !item.isDirectory {

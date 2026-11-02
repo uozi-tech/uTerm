@@ -76,9 +76,9 @@ struct StatusBarView: View {
         }
         .font(UD.mono(10.5))
         .lineLimit(1)
-        .padding(.horizontal, 8)
-        .frame(height: 22)
-        .background(UD.panel)
+        // 分区方案 v3：状态栏直接画在窗口画布上 —— 不铺底色、不画上分隔线，26 高。
+        .padding(.horizontal, 10)
+        .frame(height: 26)
     }
 
     // MARK: - 指标单元

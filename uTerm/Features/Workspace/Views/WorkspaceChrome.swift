@@ -15,8 +15,8 @@ enum ServerChromeTitle {
 }
 
 /// 自绘工作区标题栏（替代系统 toolbar）——彻底脱离系统 Liquid Glass。
-/// 38px 扁平 UD.panel 条 + 底部 1px 描边：左侧让位窗口红绿灯后放「文件」开关，
-/// 居中服务器名 + 连接状态胶囊，右侧 Agent 开关。
+/// 38px 高，分区方案 v3：直接画在窗口画布（`UD.pageBg`）上，无底色、无分隔线。
+/// 左侧让位窗口红绿灯后放「文件」开关，居中服务器名 + 连接状态胶囊，右侧 Agent 开关。
 struct WorkspaceTitleBar: View {
     let serverName: String
     let session: TerminalSession?
@@ -80,13 +80,10 @@ struct WorkspaceTitleBar: View {
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)
-        // WindowDragHandle 既画 UD.panel 实色底，又充当窗口拖动手柄：标题栏空白处
+        // WindowDragHandle 既画画布色实底，又充当窗口拖动手柄：标题栏空白处
         // 按下拖动 = 移动窗口（取代整窗 isMovableByWindowBackground）。其上的按钮 /
         // 红绿灯是更靠前的控件，点击/拖拽会被它们自身消费，不会落到手柄。
-        .background(WindowDragHandle())
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
+        .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 }
 
@@ -138,16 +135,23 @@ struct WSIconButton: View {
 /// 截走 mouseDown，`DragView` 收不到 —— 表现为「双击标题栏文字不缩放、按住文字拖不动窗口」
 /// （2026-09-09 在 1.10.3 实测：双击空白处缩放正常，双击服务器名 / 状态胶囊无反应）。
 struct WindowDragHandle: NSViewRepresentable {
+    /// 手柄实色底。旧分区窗口用 `UD.panel`（默认）；分区方案 v3 的窗口（标题栏在画布上）
+    /// 传 `WS.canvasNSColor`。
+    var fill: NSColor = WS.panelNSColor
+
     func makeNSView(context: Context) -> NSView {
         let view = DragView()
+        view.fill = fill
         view.wantsLayer = true
-        view.layer?.backgroundColor = WS.panelNSColor.cgColor
+        view.layer?.backgroundColor = fill.cgColor
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     final class DragView: NSView {
+        var fill: NSColor = WS.panelNSColor
+
         override func mouseDown(with event: NSEvent) {
             guard let window else { return }
             // 双击标题栏遵循系统「双击标题栏时」偏好（最小化 / 缩放 / 不操作）。
@@ -165,7 +169,7 @@ struct WindowDragHandle: NSViewRepresentable {
         override func viewDidChangeEffectiveAppearance() {
             super.viewDidChangeEffectiveAppearance()
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                layer?.backgroundColor = WS.panelNSColor.cgColor
+                layer?.backgroundColor = fill.cgColor
             }
         }
     }
@@ -178,17 +182,22 @@ struct WindowDragHandle: NSViewRepresentable {
 /// `NSVisualEffectView` 去玻璃遍历做兜底。
 struct WorkspaceWindowChrome: NSViewRepresentable {
     let serverName: String
+    /// 窗口钉色。旧分区窗口 = `UD.bg`（默认）；分区方案 v3 的窗口传 `WS.canvasNSColor`，
+    /// 与 SwiftUI 根视图的 `UD.pageBg` 同值。
+    var background: NSColor = WS.bgNSColor
 
     func makeNSView(context: Context) -> NSView { ChromeView() }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let view = nsView as? ChromeView else { return }
         view.serverName = serverName
+        view.background = background
         view.apply()
     }
 
     final class ChromeView: NSView {
         var serverName = ""
+        var background: NSColor = WS.bgNSColor
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -209,7 +218,7 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
             window.tabbingMode = .disallowed
             window.appearance = nil   // 跟随 NSApp.appearance（AppAppearanceSync 驱动）
             window.isOpaque = true
-            window.backgroundColor = WS.bgNSColor
+            window.backgroundColor = background
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)

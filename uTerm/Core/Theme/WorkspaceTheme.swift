@@ -22,6 +22,14 @@ enum WS {
             ? NSColor(srgbRed: 20/255, green: 20/255, blue: 20/255, alpha: 1)
             : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
+    /// `UD.pageBg` 的 NSColor 版（深 #000000 / 浅 #F5F5F5）—— 分区方案 v3 的**窗口画布**：
+    /// 标题栏 / 状态栏 / 导航侧栏直接画在它上面，内容卡浮在其上。给已改成「画布 + 内容卡」
+    /// 的窗口（工作区 / 纯终端 / SFTP / 欢迎）做窗口钉色与标题栏拖动手柄底色。
+    nonisolated static let canvasNSColor = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+            : NSColor(srgbRed: 245/255, green: 245/255, blue: 245/255, alpha: 1)
+    }
 }
 
 /// 把宿主 `NSWindow` 去玻璃 + 不透明底色，但**不改标题栏样式**，外观跟随全局设置

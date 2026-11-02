@@ -38,13 +38,12 @@ struct TerminalArea: View {
             // 拖拽类型必须由 app 传：`UTType(exportedAs:)` 要在自家 Info.plist 的
             // `UTExportedTypeDeclarations` 里登记，包替 app 声明不了。
             dragType: .utermTabID,
-            // 36pt：与旧终端标签条、上方预览区状态条对齐。
-            stripHeight: 36,
+            // 40pt：与工作区主卡里文件树头 / 预览标签条 / Agent 头同高（分区方案 v3.2）。
+            stripHeight: WorkspacePaneHeaderLayout.height,
             showsSplitButton: true,
-            // 不画活动组焦点框：焦点已经由标签条表达 —— 全工作区只有一条 accent 顶条，
-            // 就在当前标签上。再套一圈蓝框是同一件事说两遍，而且框住整格比一条顶条抢眼
-            // 得多。uTable 一直是这样，两边就此一致。
-            showsActiveGroupRing: false,
+            // 卡片风格的标签胶囊没有 accent 顶条，分屏时「聚焦窗格」靠凹槽的 1.5pt accent
+            // 外框表达（设计稿：聚焦窗格保留 accent 外框；单组时不画）。
+            showsActiveGroupRing: true,
             // 旧 pane header 的分屏按钮按窗格长宽比自动选方向（`autoSplitDirection`）。
             splitButtonDirection: .automatic,
             splitButtonIcon: .system("rectangle.split.2x1"),
@@ -72,7 +71,11 @@ struct TerminalArea: View {
             onForeignDrop: { providers, groupID, zone in
                 workspace.dropForeignPayload(providers, ontoGroup: groupID, zone: zone)
             })
-        .background(background)
+        // 分区方案 v3：终端区坐在内容卡上 —— 标签胶囊条透出卡面；每个组的终端是卡内凹槽
+        // （外缘内缩 6pt、圆角 8，底色 = 终端配色背景，由 PaneView 自己铺），组与组之间
+        // 6pt 卡面间隙。区域本身不再铺终端底色。
+        .uPaneGroupStyle(.card)
+        .uPaneGroupWells()
         // 区域空掉 / 分屏按钮开在空组上时，新会话连本窗口绑定的这台服务器。
         .task(id: server.id) { workspace.bindDefaultServer(id: server.id, title: server.name) }
     }
@@ -107,12 +110,13 @@ struct TerminalArea: View {
             workspace.openServer(profileID: server.id, title: server.name, in: groupID)
         } label: {
             // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
+            // 26×26：与卡片风格标签条上的分屏按钮同尺寸。
             Image(systemName: "plus")
-                .frame(width: 28, height: 36)
+                .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .iconButtonHover()
+        .iconButtonHover(cornerRadius: 6)
         .help("新建终端标签（⌘T）")
         .accessibilityLabel(Text("新建终端标签"))
     }

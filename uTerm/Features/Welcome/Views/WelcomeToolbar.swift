@@ -5,7 +5,8 @@ import AppKit
 
 /// Welcome 顶部 toolbar：左搜索框（设计稿 boxed 输入 + ⌘K 芯片）+ 右「密钥」/「新建」按钮。
 ///
-/// 几何严格对齐设计稿 `Toolbar`：高 52、左右内边距 12、子项间距 10、底部 1px 边框。
+/// 几何对齐设计稿 `Toolbar`（分区方案 v3）：高 48、左 12 / 右 8 内边距、子项间距 10；
+/// 坐在窗口画布上，无底色、无底部分隔线。
 /// 搜索框直接复用 DesignKit 的 `UDSearchField`（带描边底框与 ⌘K 提示），不再裸放
 /// 放大镜 + 纯文本输入。
 struct WelcomeToolbar: View {
@@ -21,12 +22,9 @@ struct WelcomeToolbar: View {
             }
             UDButton(title: "新建", style: .primary, systemImage: "plus", action: onNewServer)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 52)
-        .background(UD.bg)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 48)
     }
 }
 

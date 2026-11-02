@@ -73,6 +73,8 @@ struct SFTPWindowView: View {
                 onNew: newTab)
             // 全部标签同时挂载、按激活态显隐 —— 各浏览器保留自己的导航 / 选中 / 检视器宽度
             // @State；切换标签不重建 model（对齐设计稿「全部挂载 + 显隐」实现）。
+            // 分区方案 v3：浏览器整体是一张内容卡（距窗口左右 / 下 8pt），标签条在画布上。
+            // 同一时刻只露一个标签，卡外框套在 ZStack 上一份即可。
             ZStack {
                 ForEach(tabs) { tab in
                     SFTPBrowserContainer(
@@ -83,14 +85,18 @@ struct SFTPWindowView: View {
                         .zIndex(tab.id == effectiveActiveID ? 1 : 0)
                 }
             }
+            .udCard()
+            .padding(.horizontal, UD.Layout.cardInset)
+            .padding(.bottom, UD.Layout.cardInset)
         }
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.bg)
+        .background(UD.pageBg)
         // 「打开」的 toast / 同步芯片跟着活动标签；关窗时检查所有标签没上传的改动。
         .modifier(OptionalExternalOpenBinding(tab: activeTab, allTabs: tabs))
-        .background(WorkspaceWindowChrome(serverName: ServerChromeTitle.sftpWindowTitle(
-            serverName: server.name,
-            groupName: server.group)))
+        .background(WorkspaceWindowChrome(
+            serverName: ServerChromeTitle.sftpWindowTitle(serverName: server.name,
+                                                         groupName: server.group),
+            background: WS.canvasNSColor))
     }
 
     private func placeholder(_ title: String, systemImage: String) -> some View {
@@ -208,9 +214,10 @@ private struct SFTPBrowserContainer: View {
 
 // MARK: - 标签栏
 
-/// SFTP 多标签栏（高 36，与终端窗口同款 DesignKit tab）：文件夹图标 + 当前目录名 +
-/// 关闭按钮 + 末尾「+」。激活标签底色 = 浏览器正文 `UD.bg`，与下方内容无缝相连；
-/// **无左 padding**（首个激活标签贴窗口左缘，避免 L 形缺口 —— 原型踩过的坑）。
+/// SFTP 多标签栏（高 36）：文件夹图标 + 当前目录名 + 关闭按钮 + 末尾「+」。
+/// 分区方案 v3：标签条坐在窗口画布上（与标题栏同层），激活标签是**浮起的卡色胶囊**
+/// （`UD.panel` + 卡片细轮廓，28 高、圆角 7），与下方的浏览器内容卡同色；未激活 text3，
+/// 悬停 `panelHover`。去掉底线与 accent 顶条。
 /// 标签名取该 model 当前目录 basename（根目录回退主机名），随导航实时更新。
 struct SFTPTabBar: View {
     let tabs: [SFTPBrowserTab]
@@ -223,17 +230,13 @@ struct SFTPTabBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                        UDPreviewTab(
+                HStack(spacing: 2) {
+                    ForEach(tabs) { tab in
+                        SFTPCanvasTab(
                             name: title(for: tab),
                             active: tab.id == activeID,
-                            first: index == 0,
-                            systemImage: "folder",
-                            activeBackground: UD.bg,
                             onSelect: { onSelect(tab.id) },
                             onClose: { onClose(tab.id) })
-                            .frame(maxHeight: .infinity)
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(Text(title(for: tab)))
                             .accessibilityAddTraits(
@@ -241,24 +244,23 @@ struct SFTPTabBar: View {
                     }
                     Button(action: onNew) {
                         Image(systemName: "plus")
-                            .frame(width: 24, height: 24)
+                            .frame(width: 26, height: 26)
                     }
                     .buttonStyle(.plain)
-                    .iconButtonHover()
+                    .iconButtonHover(cornerRadius: 6)
                     .help("新建 SFTP 标签")
                     .accessibilityLabel(Text("新建 SFTP 标签"))
                     .padding(.leading, 4)
                 }
-                .frame(maxHeight: .infinity)
+                // 胶囊比卡片轮廓 / 投影多出 1–2pt，留出来别被 ScrollView 裁掉。
+                .padding(.vertical, 2)
+                .padding(.horizontal, 8)
                 .accessibilityElement(children: .contain)
             }
-            .frame(maxHeight: .infinity)
         }
+        // 36 高、底部多留 4pt（设计稿 padding 0 8 4）：胶囊与下方内容卡之间有呼吸。
+        .padding(.bottom, 4)
         .frame(height: 36)
-        .background(UD.panel)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
     }
 
     /// 标签名 = 当前目录 basename；根目录 "/" 回退主机名以便区分各标签。
@@ -268,11 +270,73 @@ struct SFTPTabBar: View {
     }
 }
 
+/// SFTP 标签条上的一枚标签（坐在画布上）。激活 = `.udCard()` 同款的卡色胶囊（卡面 +
+/// 1pt 细轮廓 + 日间轻投影），表示「它就是下面那张卡」；未激活透明、悬停 `panelHover`。
+///
+/// 选中用 `.onTapGesture` 而不是外层 `Button`：macOS 上 `Button` 套 `Button` 时外层吞掉
+/// 内层关闭按钮的点击（同 `UDPreviewTab` 的处理）。
+private struct SFTPCanvasTab: View {
+    let name: String
+    let active: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    @State private var hovered = false
+    @State private var closeHovered = false
+    @Environment(\.colorScheme) private var scheme
+
+    /// 与 `.udCard()` 的卡片细轮廓同值（暗夜白 6% / 日间黑 6%）。
+    private static let cardRing = UD.dyn(.white(0.06), .black(0.06))
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        HStack(spacing: 8) {
+            Image(systemName: "folder")
+                .font(.system(size: 11))
+                .foregroundStyle(active ? UD.accent : UD.text4)
+            Text(name)
+                .font(UD.mono(12))
+                .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
+                .lineLimit(1)
+                .frame(maxWidth: 180, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(closeHovered ? UD.text
+                                     : (active || hovered ? UD.text3 : Color.clear))
+                    .frame(width: 20, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 5)
+                        .fill(closeHovered ? UD.panelHover : Color.clear))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { closeHovered = $0 }
+            .help("关闭标签")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .frame(height: 28)
+        .background {
+            if active {
+                shape.fill(UD.panel)
+                    .overlay(shape.strokeBorder(Self.cardRing, lineWidth: 1))
+                    .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.04), radius: 1, x: 0, y: 1)
+            } else if hovered {
+                shape.fill(UD.panelHover)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { hovered = $0 }
+    }
+}
+
 // MARK: - 标题栏
 
 /// 自绘 SFTP 标题栏（替代系统 toolbar）——对齐设计稿：左侧让位窗口红绿灯，居中
-/// 文件夹图标 + `SFTP` + `user@host`(mono) + 连接状态胶囊，右侧断开按钮。40px 扁平
-/// UD.panel 条 + 底部 1px 描边。彻底脱离系统 Liquid Glass。
+/// 文件夹图标 + `SFTP` + `user@host`(mono) + 连接状态胶囊，右侧断开按钮。38px，
+/// 分区方案 v3：画在窗口画布上，无底色、无分隔线。彻底脱离系统 Liquid Glass。
 struct SFTPTitleBar: View {
     let server: ServerProfile
     let serverTitle: String
@@ -313,12 +377,9 @@ struct SFTPTitleBar: View {
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)
-        // WindowDragHandle 既画 UD.panel 实色底，又充当窗口拖动手柄（窗口 chrome 已关
+        // WindowDragHandle 既画画布色实底，又充当窗口拖动手柄（窗口 chrome 已关
         // isMovableByWindowBackground）。其上的按钮 / 红绿灯更靠前，点击不落到手柄。
-        .background(WindowDragHandle())
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
+        .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 }
 

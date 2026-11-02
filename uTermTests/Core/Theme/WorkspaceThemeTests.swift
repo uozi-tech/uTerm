@@ -25,4 +25,11 @@ final class WorkspaceThemeTests: XCTestCase {
         XCTAssertTrue(near(srgb(WS.panelNSColor, .darkAqua), 20/255, 20/255, 20/255), "dark = #141414")
         XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
     }
+
+    /// 分区方案 v3 的窗口画布 = `UD.pageBg`：AppKit 钉色必须与 SwiftUI 画布同值，
+    /// 否则窗口缩放瞬间 / 标题栏拖动手柄露出一条色差。
+    func test_canvasNSColor_matches_pageBg() {
+        XCTAssertTrue(near(srgb(WS.canvasNSColor, .darkAqua), 0, 0, 0), "dark = #000000")
+        XCTAssertTrue(near(srgb(WS.canvasNSColor, .aqua), 245/255, 245/255, 245/255), "light = #F5F5F5")
+    }
 }

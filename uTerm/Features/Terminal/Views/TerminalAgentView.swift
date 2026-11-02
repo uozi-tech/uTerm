@@ -42,7 +42,7 @@ struct TerminalAgentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(UD.bg)
+        // 分区方案 v3：Agent 模式整块坐在终端窗口的内容卡里，透出卡面色，不自铺底色。
         .onAppear {
             model.approvalMode = safety
             model.attach(context: modelContext)
@@ -79,9 +79,8 @@ struct TerminalAgentView: View {
             .buttonStyle(.plain).help("新对话").accessibilityLabel("新对话")
         }
         .padding(.horizontal, 12)
-        .frame(height: 36)
-        .background(UD.panel)
-        .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
+        // v3：上下文条并入卡片顶部（40 高，与终端模式的标签条同高），无底色、无底线。
+        .frame(height: 40)
     }
 
     // MARK: - 对话区
@@ -361,8 +360,6 @@ struct TerminalAgentView: View {
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24).padding(.top, 10).padding(.bottom, 14)
-        .background(UD.bg)
-        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     private func attachContext() {

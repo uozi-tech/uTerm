@@ -2,10 +2,10 @@ import UDesignKit
 import SwiftUI
 
 /// 工作区中央列：上预览 / 下终端。原生 VSplitView 的分隔条无法染色、在暗色下
-/// 渲染成刺眼黑线，故改为自绘：上下两半 spacing 0 紧贴（预览区底部状态条与终端
-/// tab 条之间只剩一条 1px UD.border 线），可拖的 `SplitterHandle` 以 overlay +
-/// `.position` 浮在接缝上、骑跨边界各 3px —— 不占布局高度，所以不会在状态条下方
-/// 撑出一段「死空」把状态文字顶高（接缝两侧均为 UD.bg，死空无处藏身）。
+/// 渲染成刺眼黑线，故改为自绘：上下两半 spacing 0 紧贴，同在主内容卡里、同为卡面色，
+/// 接缝是一条 1pt `UD.border` 横线（分区方案 v3.2 第 3 条）。可拖的 `SplitterHandle`
+/// （`.line` 外观）以 overlay + `.position` 浮在接缝上、7pt 命中区骑跨边界 —— 不占布局
+/// 高度，所以不会在状态条下方撑出一段「死空」把状态文字顶高；悬停时线转 accent。
 /// fraction 直接回写 WorkspaceUIState.previewTerminalRatio 持久化（拖完即存）。
 struct WorkspaceCenter: View {
     let workspace: WorkspaceModel
@@ -35,19 +35,19 @@ struct WorkspaceCenter: View {
                 TerminalArea(workspace: workspace, server: server)
                     .frame(maxHeight: .infinity)
             }
-            // 拖动条浮在接缝上：center 落在 y=topHeight，6px 高骑跨边界（上 3px 压在
-            // 非交互的状态条底缘、下 3px 压在 tab 条顶缘），仅 1px 线可见。
+            // 拖动条浮在接缝上：center 落在 y=topHeight，7pt 高骑跨边界（上 3pt 压在
+            // 非交互的状态条底缘、下 3pt 压在 tab 条顶缘），仅 1pt 线可见。
             .overlay(alignment: .topLeading) {
                 SplitterHandle(orientation: .horizontal,
                                fraction: fractionBinding,
                                totalLength: total,
                                minFraction: bounds.lowerBound,
-                               maxFraction: bounds.upperBound)
+                               maxFraction: bounds.upperBound,
+                               appearance: .line)
                     .frame(width: geo.size.width)
                     .position(x: geo.size.width / 2, y: topHeight)
             }
         }
-        .background(UD.bg)
     }
 }
 
@@ -58,9 +58,9 @@ struct WorkspaceCenter: View {
 /// 里面的 VStack 装不下就整体居中溢出 —— 标签条被顶出窗口顶部、空态压到状态条
 /// 下面。终端区拖到底、没有终端标签时同理。
 nonisolated enum WorkspaceCenterLayout {
-    /// 预览区：标签条 36 + 状态条 22 + 至少一行「最近打开」标题的正文。
+    /// 预览区：标签条 40 + 状态条 24 + 至少一行「最近打开」标题的正文。
     static let minPreviewHeight: CGFloat = 140
-    /// 终端区：标签条 36 + 几行终端 / 空态的「新建终端标签」按钮。
+    /// 终端区：标签条 40 + 几行终端 / 空态的「新建终端标签」按钮 + 凹槽底边 6。
     static let minTerminalHeight: CGFloat = 140
 
     /// 预览区实际高度：存档比例换算后夹进两半的最小高度之间。

@@ -249,7 +249,7 @@ struct WelcomeSidebar: View {
                         .accessibilityLabel("管理分组")
                         .help("管理分组")
                     }
-                    .padding(.top, showViewSection ? 14 : 0)
+                    .padding(.top, showViewSection ? Self.sectionGap : 0)
                     if let allRow = groupBuiltIns.first(where: { $0.section == .allHosts }) {
                         navRow(allRow.section, icon: allRow.icon, title: allRow.title,
                                counts: counts, entries: navEntries)
@@ -284,7 +284,7 @@ struct WelcomeSidebar: View {
                 // 动作分组：快捷命令库入口（功能文档 §1 入口；闪电图标 + 数量徽标，始终可见）。
                 UDSidebarSectionHeader("动作")
                     .accessibilityAddTraits(.isHeader)
-                    .padding(.top, (showViewSection || showGroupSection) ? 14 : 0)
+                    .padding(.top, (showViewSection || showGroupSection) ? Self.sectionGap : 0)
                 UDSidebarRow(
                     systemImage: "bolt.fill",
                     label: "快捷命令",
@@ -295,20 +295,22 @@ struct WelcomeSidebar: View {
                 )
                 .padding(.horizontal, 8)
             }
-            .padding(.vertical, 14)
+            // 设计稿 Sidebar：padding 6 0 14 —— 顶部紧贴工具栏，分组靠 16pt 间距 + 小标题。
+            .padding(.top, 6)
+            .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(UD.bg)
+        // 分区方案 v3：侧栏是导航，直接坐在窗口画布上 —— 不铺底色、不画右边线。
         // 侧栏快捷键：⌘1…⌘9 直达第 N 项、⌥↑/⌥↓ 顺序切换。隐藏的零尺寸按钮承载 key
         // equivalent（与命令面板 escHotkey 同款），故输入框聚焦时也能触发、不会被吃成文本。
         .background(
             WelcomeSidebarShortcuts(entries: navEntries, current: currentTarget, onSelect: select)
                 .disabled(paletteActive)
         )
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(UD.border).frame(width: 1)
-        }
     }
+
+    /// 侧栏分组之间的间距（设计稿 `SidebarSection` marginBottom 16）。
+    private static let sectionGap: CGFloat = 16
 
     /// 当前侧栏选中的目标（用于 ⌥↑↓ 计算相邻项）。
     private var currentTarget: WelcomeNavTarget {

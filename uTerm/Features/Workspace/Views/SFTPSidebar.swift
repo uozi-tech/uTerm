@@ -10,11 +10,11 @@ struct SFTPSidebar: View {
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        // 铺 UD.bg 实色 —— 主动切断 NavigationSplitView 的 Liquid Glass sidebar
-        // 材质（去玻璃改造）；随全局主题自适应深 / 浅。
+        // 分区方案 v3.2：文件树是内容列表，并进主内容卡、与右侧预览 / 终端同为卡面色
+        // （`UD.panel`），中间只隔一条 1pt 竖线 —— 不再自铺底色。
         FileBrowserContent(model: model)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(UD.bg)
+            .background(UD.panel)
             .task(id: server.id) {
                 await model.connect(profile: server, modelContainer: modelContext.container)
             }

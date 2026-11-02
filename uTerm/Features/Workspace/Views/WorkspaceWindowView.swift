@@ -102,7 +102,10 @@ struct WorkspaceWindowView: View {
             // 自绘三栏（替代 NavigationSplitView + .inspector）：列宽 / 折叠态进
             // uiState 持久化。center 显式 minWidth(480) + 列宽 clamp 保证
             // sidebar.max(320) + inspector.max(420) + 480 = 1220 ≤ windowMin(1280)，
-            // 永不 overflow 裁切。
+            // 永不 overflow 裁切（卡片左右各 8pt 外边距 + 两条 1pt 栏线也在余量内）。
+            //
+            // 分区方案 v3.2：三栏同在**一张主内容卡**里（文件树 | 预览 + 终端 | Agent），
+            // 卡距窗口左右 8pt；标题栏、状态栏画在画布上。
             WorkspaceColumns(
                 sidebarVisible: workspace.uiState.leftSidebarVisible,
                 inspectorVisible: workspace.uiState.rightInspectorPresented,
@@ -125,10 +128,11 @@ struct WorkspaceWindowView: View {
                     serverName: server.name,
                     activeProviderIDString: $activeProviderIDString)
             }
+            .udCard()
+            .padding(.horizontal, UD.Layout.cardInset)
 
             // status bar 作为兄弟节点（非 safeAreaInset）—— SwiftTerm NSView 会渲染到
-            // inset 区域下面挡住末行（issue 反馈）。
-            Rectangle().fill(UD.border).frame(height: 1)
+            // inset 区域下面挡住末行（issue 反馈）。v3：坐在画布上，无分隔线。
             StatusBarView(workspace: workspace)
         }
         // 让内容延伸到标题栏区域之下（配合 WorkspaceWindowChrome 的
@@ -136,11 +140,12 @@ struct WorkspaceWindowView: View {
         // 顶到系统标题栏下方，形成「红绿灯一条 + 自绘标题栏一条」的双栏割裂。
         // 忽略顶部安全区后，自绘 38px 标题栏占住标题栏区，红绿灯叠在其左侧留白上。
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.bg)
-        // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明 WS 底 + 深色外观 +
+        // 分区方案 v3：窗口画布（最底层），内容卡浮在其上。
+        .background(UD.pageBg)
+        // 自绘窗口 chrome：透明标题栏 + full-size content + 不透明画布底 + 深色外观 +
         // 标题栏（WindowDragHandle）可拖移窗口。无系统 toolbar / NavigationSplitView ⇒
         // 不可能再有系统玻璃。
-        .background(WorkspaceWindowChrome(serverName: chromeTitle))
+        .background(WorkspaceWindowChrome(serverName: chromeTitle, background: WS.canvasNSColor))
         // ⌘W：仅工作区窗口接管，按焦点先关内容、最后关窗口（见 handleCloseShortcut）。
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)

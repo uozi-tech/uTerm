@@ -79,8 +79,8 @@ struct SFTPBrowserView: View {
             }
             content
             // 状态栏只在已连接浏览时显示 —— 连接中 / 失败时不该亮绿点报「已连接」。
+            // 分区方案 v3：状态栏在内容卡底部、与卡同色，不再画上分隔线。
             if case .browsing = model.state {
-                hairline
                 SFTPStatusBar(path: model.currentPath,
                               entries: model.sortedEntries,
                               selectedCount: selected == nil ? 0 : 1,
@@ -92,7 +92,8 @@ struct SFTPBrowserView: View {
                               externalOpen: externalOpen)
             }
         }
-        .background(UD.bg)
+        // 浏览器整体是一张内容卡（卡外框由 SFTPWindowView 套），这里铺卡面色。
+        .background(UD.panel)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: uploadDroppedFiles)
         .overlay { dropOverlay }
         .onChange(of: model.currentPath) { _, newPath in
@@ -183,8 +184,6 @@ struct SFTPBrowserView: View {
         )
     }
 
-    private var hairline: some View { Rectangle().fill(UD.border).frame(height: 1) }
-
     @ViewBuilder
     private var dropOverlay: some View {
         if isDropTargeted {
@@ -251,8 +250,10 @@ struct SFTPBrowserView: View {
                 )
                 .frame(maxWidth: .infinity)
                 // 可拖拽分隔条（复用工作区 inspector 同款 ColumnResizer）：右侧检视器，
-                // 往右拖变窄（sign −1），宽度 clamp 248–460。
-                ColumnResizer(width: $inspectorWidth, range: 248...460, sign: -1)
+                // 往右拖变窄（sign −1），宽度 clamp 248–460。检视器是卡内抬升块、靠底色差
+                // 与表格分开，所以分隔条取 `.gap`：6pt 卡面间隙、不画线，悬停浮出把手。
+                ColumnResizer(width: $inspectorWidth, range: 248...460, sign: -1,
+                              appearance: .gap)
                 SFTPInspector(
                     item: selected, currentPath: model.currentPath,
                     onOpen: { e in openFile(e, route: .preferred) },
@@ -264,6 +265,12 @@ struct SFTPBrowserView: View {
                     onDelete: { e in deleteTarget = e }
                 )
                 .frame(width: inspectorWidth)
+                // 分区方案 v3 第 7 条：卡内抬升块 —— `UD.panelHi`、圆角 8、与卡右 / 下边
+                // 留 6pt（左侧就是上面那条 6pt 间隙），替代原来的左分隔线。
+                .background(RoundedRectangle(cornerRadius: UD.Layout.wellRadius, style: .continuous)
+                    .fill(UD.panelHi))
+                .padding(.trailing, UD.Layout.wellGap)
+                .padding(.bottom, UD.Layout.wellGap)
             }
         }
     }

@@ -2,20 +2,15 @@ import SwiftUI
 import UDesignKit
 
 enum WorkspacePaneHeaderLayout {
-    // Full header height with the bottom separator included. This is also the value passed
-    // as UPaneGroupArea's stripHeight: since uAppKit 1.4.10 it overlays its separator inside
-    // stripHeight, so the side headers do the same to keep all three seams on one baseline.
-    nonisolated static let height: CGFloat = 36
-    nonisolated static let separatorHeight: CGFloat = 1
+    // 分区方案 v3.2：工作区主内容卡里各栏的头（文件树头 / 预览与终端的标签条 / Agent 头）
+    // 同高 40、横向对齐，且都**不画底部分隔线** —— 头与下方内容同在卡面上，靠位置分区。
+    // 这个值同时作为 UPaneGroupArea 的 stripHeight 传入。
+    nonisolated static let height: CGFloat = 40
 }
 
 struct WorkspacePaneHeader: ViewModifier {
     func body(content: Content) -> some View {
         content
             .frame(height: WorkspacePaneHeaderLayout.height)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(UD.border)
-                    .frame(height: WorkspacePaneHeaderLayout.separatorHeight)
-            }
     }
 }
