@@ -1,75 +1,91 @@
 import SwiftUI
 
-/// 大标题首页骨架（设计稿 `BigHeader` + 滚动体）。底部为标签栏预留安全间距。
-/// 滚动体最小高度撑满可视区，使空状态等 `maxHeight: .infinity` 内容可垂直居中。
-/// 标题头悬浮于滚动体之上，内容从其下滚过：iOS 26 用 `safeAreaBar`，由系统液态玻璃
-/// scroll edge effect 渐进虚化标题头 + 状态栏区域（自定义背景会与其冲突，不要加）；
-/// iOS 26 以下无液态玻璃，回退 `safeAreaInset` + 毛玻璃材质、背景上延盖住状态栏。
+/// 大标题首页骨架：**系统导航栏**（大标题 + 副标题 + 右侧工具栏按钮）+ 滚动体。
+///
+/// 改前是自绘页头（标题 + 圆钮）挂在 `safeAreaBar` 里。iPhone Duo 上它有两处不对（实机反馈）：
+/// - 系统会把**标准**导航栏 / 工具栏按钮挪到侧边状态栏下方那一列（Apple「Prepare your app for
+///   iPhone Duo」），自绘页头不会，按钮仍挤在顶上、侧边那列空着；
+/// - Duo 的状态栏在侧边、顶部没有安全区，自绘页头的 scroll edge effect 没有落点，滚上去的内容
+///   与标题直接叠在一起、不虚化。
+/// 用系统导航栏后，按钮位置、顶边虚化、大标题随滚动收起都由系统按设备形态处理。
+///
+/// 页面本身没有包在 `NavigationStack` 里时（主机 / 终端 / 文件三个标签的首页）由本视图补一层；
+/// 已在自己的栈里、要下钻的页面（命令、设置）传 `embedsNavigationStack: false`。
 struct MScreen<Header: View, Content: View>: View {
     var title: String
     var sub: String? = nil
+    /// 内容的最大宽度（水平居中）。列表页取易读宽度；卡片网格页传 `M.gridContentWidth`。
+    var maxContentWidth: CGFloat = M.readableWidth
+    var embedsNavigationStack: Bool = true
     @ViewBuilder var actions: Header
     @ViewBuilder var content: Content
     /// 系统 TabView 已为内容预留底部安全区，这里只补少量呼吸留白。
     var bottomInset: CGFloat = 12
-    @State private var headerHeight: CGFloat = 0
 
     var body: some View {
-        GeometryReader { proxy in
-            let scroll = ScrollView {
-                content
-                    .padding(.bottom, bottomInset)
-                    .frame(maxWidth: .infinity,
-                           minHeight: max(0, proxy.size.height - headerHeight),
-                           alignment: .top)
-            }
-            .scrollIndicators(.hidden)
-
-            if #available(iOS 26.0, *) {
-                scroll
-                    .scrollEdgeEffectStyle(.soft, for: .top)
-                    .safeAreaBar(edge: .top, spacing: 0) { headerBar }
-            } else {
-                scroll
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        headerBar.background {
-                            Rectangle().fill(.ultraThinMaterial)
-                                .ignoresSafeArea(edges: .top)
-                        }
-                    }
-            }
+        if embedsNavigationStack {
+            NavigationStack { page }
+        } else {
+            page
         }
-        .frame(maxWidth: M.readableWidth)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(M.canvas)
     }
 
-    private var headerBar: some View {
-        // 按钮与「标题 + 副标题」整块垂直居中（按钮命中区已撑到 44pt，按末行基线对齐会把圆钮
-        // 压到副标题那一行、比标题低出一截）。
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(M.sans(30, weight: .bold)).tracking(-0.6)
-                    .foregroundStyle(M.text)
-                if let sub {
-                    Text(sub).font(M.mono(13)).foregroundStyle(M.text3)
-                }
+    private var page: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                content
+                    .padding(.bottom, bottomInset)
+                    .frame(maxWidth: maxContentWidth)
+                    // 最小高度撑满可视区，使空状态等 `maxHeight: .infinity` 内容可垂直居中。
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .top)
             }
-            Spacer()
-            // MRoundBtn 视觉 36pt、命中区 44pt：命中区自带 4pt 外沿，间距相应收为 0（视觉仍 8pt）。
-            HStack(spacing: 0) { actions }
-                .padding(.trailing, -4)
+            .scrollIndicators(.hidden)
         }
-        .padding(.horizontal, 20)
-        .mTopClearance()
-        .padding(.bottom, 12)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+        .background(M.canvas)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.large)
+        .modifier(MNavigationSubtitle(text: sub))
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                actions.environment(\.mToolbarItem, true)
+            }
+        }
     }
 }
 
 extension MScreen where Header == EmptyView {
-    init(title: String, sub: String? = nil, bottomInset: CGFloat = 12, @ViewBuilder content: () -> Content) {
-        self.init(title: title, sub: sub, actions: { EmptyView() }, content: content, bottomInset: bottomInset)
+    init(title: String, sub: String? = nil, maxContentWidth: CGFloat = M.readableWidth,
+         embedsNavigationStack: Bool = true, bottomInset: CGFloat = 12,
+         @ViewBuilder content: () -> Content) {
+        self.init(title: title, sub: sub, maxContentWidth: maxContentWidth,
+                  embedsNavigationStack: embedsNavigationStack,
+                  actions: { EmptyView() }, content: content, bottomInset: bottomInset)
+    }
+}
+
+/// 导航栏副标题（iOS 26 起系统原生；更早的系统不显示）。
+private struct MNavigationSubtitle: ViewModifier {
+    var text: String?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), let text {
+            content.navigationSubtitle(text)
+        } else {
+            content
+        }
+    }
+}
+
+private struct MToolbarItemKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 视图是否作为系统工具栏按钮呈现（`MScreen` 的 `actions` 里为 true）。
+    /// `MRoundBtn` 据此改用系统工具栏按钮的外观，不再自画圆底。
+    var mToolbarItem: Bool {
+        get { self[MToolbarItemKey.self] }
+        set { self[MToolbarItemKey.self] = newValue }
     }
 }
 

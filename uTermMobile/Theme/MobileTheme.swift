@@ -96,6 +96,10 @@ enum M {
 
     /// 宽屏（横屏 / iPad）内容易读最大宽度——超出则内容列居中、两侧留白，避免横屏铺满拉伸。
     static let readableWidth: CGFloat = 680
+    /// 卡片网格页（主机列表）的内容最大宽度：宽屏放得下 3 列 `cardMinColumnWidth` 卡片。
+    static let gridContentWidth: CGFloat = 1080
+    /// 卡片网格的最小列宽：iPhone Duo 展开（669pt）恰好两列，iPad 竖 / 横屏三列。
+    nonisolated static let cardMinColumnWidth: CGFloat = 300
 
     // 等宽字体：用系统等宽（避免打包 JetBrains Mono 字体资源）。
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

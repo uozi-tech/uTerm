@@ -60,7 +60,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         NavigationStack {
-            MScreen(title: "设置") {
+            MScreen(title: "设置", embedsNavigationStack: false) {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup
@@ -73,7 +73,6 @@ struct SettingsScreen: View {
                     copyrightFooter
                 }
             }
-            .navigationBarHidden(true)
             .onAppear(perform: refreshCounts)
             .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
                 refreshCounts()
@@ -177,7 +176,7 @@ struct SettingsScreen: View {
     private var terminalGroup: some View {
         MInsetGroup(header: "终端") {
             MInsetRow(label: "字体", value: "系统等宽", valueMono: true)
-            // 移动端终端字号随可用宽度自适应（9–16pt，见 TerminalSessionBody.adaptiveFontSize），
+            // 移动端终端字号随可用宽度自适应（9–13pt，见 TerminalSessionBody.adaptiveFontSize），
             // 不是固定 13pt——iPhone Duo 外屏 / 分屏更小、展开 / iPad 更大。
             MInsetRow(label: "字号", value: "随宽度自适应")
             MInsetRow(label: "光标", value: "稳定块", last: true)

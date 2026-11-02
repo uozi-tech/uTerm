@@ -72,7 +72,34 @@ struct MRoundBtn: View {
     var action: () -> Void
     @Environment(\.mAccent) private var accent
 
+    @Environment(\.mToolbarItem) private var inToolbar
+
     var body: some View {
+        if inToolbar {
+            toolbarButton
+        } else {
+            roundButton
+        }
+    }
+
+    /// 在系统工具栏里：交给系统画按钮（iOS 26 液态玻璃；iPhone Duo 上随工具栏挪到侧边列）。
+    /// 主操作（`filled`）用醒目样式。
+    @ViewBuilder private var toolbarButton: some View {
+        let button = Button(action: action) {
+            Image(systemName: MGlyph.symbol(icon))
+        }
+        if filled {
+            if #available(iOS 26.0, *) {
+                button.buttonStyle(.glassProminent).tint(accent)
+            } else {
+                button.buttonStyle(.borderedProminent).tint(accent)
+            }
+        } else {
+            button
+        }
+    }
+
+    private var roundButton: some View {
         Button(action: action) {
             MIcon(name: icon, size: filled ? 18 : 16,
                   color: filled ? .white : M.text2,
@@ -539,6 +566,33 @@ nonisolated func mCardSpacing(for width: CGFloat) -> CGFloat {
     guard width > 0 else { return 20 }
     let clamped = min(max(width * 0.05, 14), 24)
     return (clamped / 2).rounded() * 2
+}
+
+/// 卡片网格：窄屏一列（与 `MCardList` 一致），宽屏（iPhone Duo 展开、iPad、横屏）按可用宽度
+/// 排 2–3 列。每列至少 `minColumnWidth`，最多 `maxColumns` 列；列间距与行间距同 `mCardSpacing`。
+nonisolated func mCardColumns(for width: CGFloat, minColumnWidth: CGFloat = M.cardMinColumnWidth,
+                              maxColumns: Int = 3) -> Int {
+    guard width > 0 else { return 1 }
+    let spacing = mCardSpacing(for: width)
+    let fit = Int((width + spacing) / (minColumnWidth + spacing))
+    return min(max(fit, 1), maxColumns)
+}
+
+struct MCardGrid<Content: View>: View {
+    var maxColumns: Int = 3
+    @ViewBuilder var content: Content
+
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        let spacing = mCardSpacing(for: width)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
+                            count: mCardColumns(for: width, maxColumns: maxColumns))
+        LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
+            content
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
 }
 
 /// 自量宽度、按 `mCardSpacing` 弹性设置间距的竖向卡片列表容器。

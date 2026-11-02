@@ -228,15 +228,12 @@ struct TerminalScreen: View {
     private var picker: some View {
         MScreen(title: "终端", actions: {
             if !tabs.isEmpty {
+                // 系统工具栏按钮（MScreen 的 actions）：底由系统画，这里不再自画胶囊。
                 Button { showPicker = false } label: {
-                    HStack(spacing: 5) {
-                        MIcon(name: "term", size: 14, color: accent)
-                        Text("会话 \(tabs.count)").font(M.sans(13, weight: .medium)).foregroundStyle(accent)
-                    }
-                    .padding(.horizontal, 11).frame(height: 32)
-                    .background(accent.opacity(0.12)).clipShape(Capsule())
+                    Label("会话 \(tabs.count)", systemImage: MGlyph.symbol("term"))
+                        .labelStyle(.titleAndIcon)
                 }
-                .buttonStyle(MPressStyle())
+                .tint(accent)
             }
         }) {
             VStack(spacing: 10) {
@@ -483,13 +480,20 @@ struct TerminalSessionBody: View {
     /// 终端文本区与四周的间距（pt）。
     static let terminalInset = (horizontal: CGFloat(8), vertical: CGFloat(4))
 
-    /// 终端字号随可用宽度自适应：以 iPhone 14/15 竖屏逻辑宽度 390pt 为参考点对应 11pt 基准，
-    /// 按比例缩放并夹在可读区间 [9, 16]——窄屏（SE）字更小以容纳更多列，宽屏（Pro Max /
-    /// iPad / 分屏）字更大。
-    private func adaptiveFontSize(width: CGFloat) -> CGFloat {
+    /// 终端字号随可用宽度自适应。以 iPhone 14/15 竖屏逻辑宽度 390pt 为参考点，对应 11pt 基准：
+    /// - 比它窄（SE、iPhone Duo 分屏 ≈ 330pt）：按比例缩小，最小 9pt，换出更多列；
+    /// - 比它宽（Duo、横屏、iPad）：字只缓慢变大（每宽 250pt 约 +1pt），最大 13pt，多出来的宽度
+    ///   都换成列数。原先按宽度等比放大到 16pt，Duo 展开 669pt 直接顶到 16pt，字大、列数反而
+    ///   和窄屏差不多（实机反馈「Duo 上字号这么大」）。
+    nonisolated static func adaptiveFontSize(width: CGFloat) -> CGFloat {
         guard width > 0 else { return 11 }
         let reference: CGFloat = 390, base: CGFloat = 11
-        return min(max(base * width / reference, 9), 16)
+        if width <= reference { return max(base * width / reference, 9) }
+        return min(base + (width - reference) / 250, 13)
+    }
+
+    private func adaptiveFontSize(width: CGFloat) -> CGFloat {
+        Self.adaptiveFontSize(width: width)
     }
 
     private func failedView(_ msg: String) -> some View {

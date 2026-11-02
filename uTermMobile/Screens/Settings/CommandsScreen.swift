@@ -13,7 +13,8 @@ struct CommandsScreen: View {
         NavigationStack {
             // 与「主机 / 终端 / 文件 / 设置」四个标签同一套大标题页头（MScreen）：此前这里是系统
             // 内联导航栏 + 「快捷命令」小标题，五个标签里唯独它换了一种页头。
-            MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令", actions: {
+            MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令",
+                    embedsNavigationStack: false, actions: {
                 MRoundBtn(icon: "plus", filled: true) { creating = true }
                     .accessibilityLabel(Text("新建命令"))
             }) {
@@ -33,7 +34,6 @@ struct CommandsScreen: View {
                     .padding(.top, 4)
                 }
             }
-            .navigationBarHidden(true)
             .sheet(isPresented: $creating) { CommandFormSheet(cmd: nil) }
         }
     }

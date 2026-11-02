@@ -36,7 +36,8 @@ struct HostsScreen: View {
         let sections = ServerGrouping.grouped(hosts)
         let recent = ServerGrouping.recent(hosts)
 
-        return MScreen(title: "主机", sub: "\(hosts.count) 台服务器", actions: {
+        return MScreen(title: "主机", sub: "\(hosts.count) 台服务器",
+                       maxContentWidth: M.gridContentWidth, actions: {
             MRoundBtn(icon: "search") { store.showPalette = true }
             MRoundBtn(icon: "plus", filled: true) { creating = true }
         }) {
@@ -54,20 +55,26 @@ struct HostsScreen: View {
                                 message: "添加一台服务器即可开始连接终端、浏览文件或运行命令。",
                                 actionTitle: "添加服务器", action: { creating = true })
                 } else if filter == .recent {
+                    // 宽屏（iPhone Duo 展开 / iPad / 横屏）一行排 2–3 张卡（MCardGrid 按宽度定列数），
+                    // 窄屏仍是一列。分组标题在网格外，独占一行。
                     MCardList(alignment: .leading) {
                         sectionLabel("最近连接 · \(recent.count)")
                         if recent.isEmpty {
                             Text("还没有连接记录").font(M.sans(13)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 24)
                         }
-                        ForEach(recent) { host in card(host, groupColors: groupColors) }
+                        MCardGrid {
+                            ForEach(recent) { host in card(host, groupColors: groupColors) }
+                        }
                     }
                     .padding(.horizontal, 16)
                 } else {
                     MCardList(alignment: .leading) {
                         ForEach(sections, id: \.name) { sec in
                             sectionLabel("\(sec.name) · \(sec.hosts.count)")
-                            ForEach(sec.hosts) { host in card(host, groupColors: groupColors) }
+                            MCardGrid {
+                                ForEach(sec.hosts) { host in card(host, groupColors: groupColors) }
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
