@@ -99,8 +99,6 @@ private struct MobileTabShell: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
-        // 常规宽度（iPad / iPhone Duo 展开）首启默认侧栏，与改前 NavigationSplitView 的观感一致。
-        .defaultAdaptableTabBarPlacement(.sidebar)
         // 侧栏头：品牌名 + 命令面板入口（改前挂在 NavigationSplitView 侧栏的工具栏上）。
         .tabViewSidebarHeader {
             HStack(spacing: 8) {
