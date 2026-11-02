@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 一条聊天消息。
@@ -10,6 +11,8 @@ nonisolated struct ChatMessage: Equatable, Sendable, Identifiable {
     var text: String
     /// 助手消息携带的工具调用（用户/纯文本消息默认为空）。
     var toolCalls: [ToolCallState]
+    /// Anthropic 回复里的 thinking 块，只为同一轮工具循环里原样回传（不展示、不落库）。
+    var thinking: [LLMThinkingBlock] = []
 
     init(id: UUID = UUID(), role: Role, text: String, toolCalls: [ToolCallState] = []) {
         self.id = id

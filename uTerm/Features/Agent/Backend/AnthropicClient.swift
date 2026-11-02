@@ -13,11 +13,18 @@ nonisolated struct AnthropicClient: LLMClient {
         self.session = session
     }
 
-    static func buildMessages(conversation: [ChatMessage]) -> [[String: Any]] {
+    /// - Parameter replayThinking: 开着思考时为 true —— 最后一条用户消息之后（即本轮工具
+    ///   循环里）的 assistant 消息把 thinking 块原样放回最前。更早的轮次不回传：从历史前端
+    ///   整段移除是 API 允许的形状，而且出站压缩会改写旧轮次，回传反而会被判签名不符。
+    static func buildMessages(conversation: [ChatMessage], replayThinking: Bool = false) -> [[String: Any]] {
         var msgs: [[String: Any]] = []
-        for m in conversation {
+        let turnStart = replayThinking
+            ? (conversation.lastIndex(where: { $0.role == .user }) ?? -1) + 1
+            : conversation.count
+        for (offset, m) in conversation.enumerated() {
+            let thinking = offset >= turnStart ? m.thinking.map(\.anthropicJSON) : []
             if m.role == .assistant, !m.toolCalls.isEmpty {
-                var content: [[String: Any]] = []
+                var content: [[String: Any]] = thinking
                 if !m.text.isEmpty { content.append(["type": "text", "text": m.text]) }
                 for c in m.toolCalls {
                     content.append(["type": "tool_use", "id": c.id, "name": c.name,
@@ -29,6 +36,10 @@ nonisolated struct AnthropicClient: LLMClient {
                      "content": OpenAIClient.resultContent(for: c)]
                 }
                 msgs.append(["role": "user", "content": results])
+            } else if m.role == .assistant, !thinking.isEmpty {
+                var content = thinking
+                if !m.text.isEmpty { content.append(["type": "text", "text": m.text]) }
+                msgs.append(["role": "assistant", "content": content])
             } else {
                 msgs.append(["role": m.role.rawValue, "content": m.text])
             }
@@ -54,13 +65,17 @@ nonisolated struct AnthropicClient: LLMClient {
                     request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     request.setValue("application/json", forHTTPHeaderField: "content-type")
+                    let reasoning = config.reasoning?.anthropicBody(baseMaxTokens: Self.maxTokens)
                     var body: [String: Any] = [
                         "model": config.model,
-                        "max_tokens": Self.maxTokens,
+                        "max_tokens": reasoning?.maxTokens ?? Self.maxTokens,
                         "system": system,
                         "stream": true,
-                        "messages": Self.buildMessages(conversation: messages),
+                        "messages": Self.buildMessages(
+                            conversation: messages,
+                            replayThinking: config.reasoning?.replaysThinking ?? false),
                     ]
+                    body.merge(reasoning?.fields ?? [:]) { _, new in new }
                     if !config.tools.isEmpty {
                         body["tools"] = config.tools.map { $0.anthropicJSON() }
                     }

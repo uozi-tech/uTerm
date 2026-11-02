@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// AI provider 类型。决定 LLMClientFactory 派哪个 client。
@@ -11,6 +12,14 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifi
         switch self {
         case .anthropic: return "Anthropic"
         case .openai:    return "OpenAI / 兼容"
+        }
+    }
+
+    /// 判定思考参数用的协议（AgentKit 共享）。
+    var wireProtocol: AgentWireProtocol {
+        switch self {
+        case .anthropic: return .anthropic
+        case .openai:    return .openAICompatible
         }
     }
 }

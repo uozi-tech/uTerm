@@ -287,6 +287,9 @@ final class AssistantModel {
     /// 测试注入。非 nil 时绕过 keychain。
     private let keyOverride: String?
 
+    /// 用户为各模型挑的思考深度；nil = 一律不带思考参数（单测构造走这条，不读本机偏好）。
+    @ObservationIgnored var reasoningPreferences: AgentReasoningPreferences? = .shared
+
     /// 生产构造。
     init(keychain: AgentKeychain = AgentKeychain()) {
         self.keychain = keychain
@@ -302,6 +305,7 @@ final class AssistantModel {
         self.keyOverride = apiKey
         self.providers = [provider]
         self.activeProviderID = provider.id
+        self.reasoningPreferences = nil
     }
 
     /// 是否忙碌：流式 / 工具执行 / 待批准。忙碌时提交即入队。
@@ -356,6 +360,9 @@ final class AssistantModel {
         guard let provider = activeProvider else {
             state = .failed("尚未配置 AI provider"); return nil
         }
+        guard !provider.model.isEmpty else {
+            state = .failed("还没有选择模型：在输入区左下角的模型菜单里选一个"); return nil
+        }
         guard let key = keyOverride ?? keychain.load(for: provider.id) else {
             state = .failed("当前 provider 缺少 API Key"); return nil
         }
@@ -365,6 +372,8 @@ final class AssistantModel {
         var config = LLMRequestConfig(model: provider.model, baseURL: baseURL, apiKey: key)
         config.tools = executor != nil ? [.runCommand] : []
         config.streamIdleTimeout = streamIdleTimeout
+        config.reasoning = reasoningPreferences?.request(
+            providerID: provider.id, protocol: provider.kind.wireProtocol, model: provider.model)
         return TurnContext(config: config, kind: provider.kind,
                            client: clientOverride ?? LLMClientFactory.make(for: provider))
     }
@@ -434,6 +443,8 @@ final class AssistantModel {
                     operation.buffer?.flush()
                     operation.message.toolCalls.append(ToolCallState(from: call))
                     publishStream(operation)
+                case .thinking(let block):
+                    operation.message.thinking.append(block)
                 }
             }
             guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }

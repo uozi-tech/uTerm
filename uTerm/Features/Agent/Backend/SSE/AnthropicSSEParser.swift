@@ -3,13 +3,15 @@ import Foundation
 
 /// 解析 Anthropic Claude Messages SSE。逐行喂入，产出 `[LLMEvent]`。
 /// 文本块 `text_delta` → `.text`；`tool_use` 块的 `input_json_delta` 按 index 累积，
-/// `content_block_stop` 时 flush 成 `.toolCall`。
+/// `content_block_stop` 时 flush 成 `.toolCall`。thinking / redacted_thinking 块同样按 index
+/// 收齐（`LLMThinkingBlockAccumulator`），收尾时产出 `.thinking` 供续轮原样回传。
 ///
 /// 另记三样「流是怎么结束的」，供 client 在 EOF 时判定回复是否完整 —— 不记的话，
 /// 流内报错 / 连接被掐 / 撞输出上限全都长得像「正常说完了」，用户只看到话说一半就停。
 nonisolated struct AnthropicSSEParser {
     private struct Tool { var id = ""; var name = ""; var args = "" }
     private var tools: [Int: Tool] = [:]   // 仅 tool_use 块进表
+    private var thinking = LLMThinkingBlockAccumulator()
 
     /// `message_delta.delta.stop_reason`（`end_turn` / `tool_use` / `max_tokens` …）。
     private(set) var stopReason: String?
@@ -37,14 +39,17 @@ nonisolated struct AnthropicSSEParser {
 
         switch type {
         case "content_block_start":
-            if let block = obj["content_block"] as? [String: Any],
-               block["type"] as? String == "tool_use" {
+            guard let block = obj["content_block"] as? [String: Any] else { return [] }
+            if block["type"] as? String == "tool_use" {
                 tools[index] = Tool(id: block["id"] as? String ?? "",
                                     name: block["name"] as? String ?? "", args: "")
+            } else {
+                thinking.start(index: index, block: block)
             }
             return []
         case "content_block_delta":
             guard let delta = obj["delta"] as? [String: Any] else { return [] }
+            if thinking.delta(index: index, delta: delta) { return [] }
             if delta["type"] as? String == "text_delta", let t = delta["text"] as? String {
                 return [.text(t)]
             }
@@ -54,6 +59,7 @@ nonisolated struct AnthropicSSEParser {
             }
             return []
         case "content_block_stop":
+            if let block = thinking.stop(index: index) { return [.thinking(block)] }
             guard let t = tools.removeValue(forKey: index) else { return [] }
             return [.toolCall(LLMToolCall(id: t.id, name: t.name, argumentsJSON: t.args))]
         case "message_delta":

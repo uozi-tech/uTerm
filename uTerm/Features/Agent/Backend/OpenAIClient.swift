@@ -71,6 +71,7 @@ nonisolated struct OpenAIClient: LLMClient {
                     if !config.tools.isEmpty {
                         body["tools"] = config.tools.map { $0.openAIJSON() }
                     }
+                    body.merge(config.reasoning?.openAIBody ?? [:]) { _, new in new }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                     let (bytes, response) = try await session.bytes(for: request)

@@ -26,6 +26,8 @@ nonisolated struct ParallelDoctor: Sendable {
                 switch event {
                 case .text(let delta): text += delta
                 case .toolCall(let call): calls.append(call)
+                // 这里不开思考参数，不会有 thinking 块；即便有也无须回传。
+                case .thinking: break
                 }
             }
         } catch {
