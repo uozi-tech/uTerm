@@ -300,7 +300,7 @@ struct WelcomeSidebar: View {
             .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 分区方案 v3：侧栏是导航，直接坐在窗口画布上 —— 不铺底色、不画右边线。
+        // 侧栏不铺底色（与整窗同为卡面色），右侧竖线由 WelcomeView 画。
         // 侧栏快捷键：⌘1…⌘9 直达第 N 项、⌥↑/⌥↓ 顺序切换。隐藏的零尺寸按钮承载 key
         // equivalent（与命令面板 escHotkey 同款），故输入框聚焦时也能触发、不会被吃成文本。
         .background(

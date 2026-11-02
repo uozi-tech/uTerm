@@ -87,7 +87,13 @@ struct ServerRow: View {
         }
         .padding(ServerRowLayout.contentPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(rowBackground)
+        // 选中 / 悬停底是内缩的圆角块（与侧栏选中态同形），不再铺满整行成一条灰带。
+        .background(
+            RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
+                .fill(rowBackground)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+        )
         .contentShape(Rectangle())
         // **本行不装 `.onHover`**：SwiftUI 内部那张 hover 区域表按 `.onHover` 个数
         // 变长，鼠标位置或几何一变就要过一遍 —— 按行数收费。悬停改由 `ServerList`
@@ -116,9 +122,10 @@ struct ServerRow: View {
 
     /// 选中 > hover > 透明。用 `Color.primary` 透明叠底，浅色下变深、深色下变浅，
     /// 与设计稿的 white-alpha 叠底等效且自适应外观设置。
+    /// 选中 = 当前强调色 14% 淡底（与侧栏选中态一致；原先是黑 6% 灰带，整页灰太多）。
     private var rowBackground: Color {
-        if isSelected { return Color.primary.opacity(0.06) }
-        if hover { return Color.primary.opacity(0.028) }
+        if isSelected { return UD.accentTint }
+        if hover { return UD.panelHover }
         return .clear
     }
 }

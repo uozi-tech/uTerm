@@ -111,9 +111,11 @@ struct WelcomeView: View {
         VStack(spacing: 0) {
             WelcomeTitleBar()
             WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
+                .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
             HStack(spacing: 0) {
-                // 分区方案 v3：侧栏是导航、坐在画布上（无底色、无右线）；主机列表 + 详情
-                // 是一张内容卡，距窗口右 / 下 8pt（左侧由侧栏占位）。
+                // 欢迎窗口整窗一块卡面色（不用「灰画布 + 白卡」：标题栏、工具栏、侧栏全坐在
+                // 灰画布上时整窗一半是灰的，用户要求去灰）。区块只用同底色的 1pt 线分：
+                // 工具栏下一条横线，侧栏 | 主机列表 | 详情两条竖线。
                 WelcomeSidebar(profiles: displayProfiles,
                                filter: $filter,
                                pane: $pane,
@@ -121,20 +123,18 @@ struct WelcomeView: View {
                                paletteActive: palette.isPresented,
                                onDropProfileToGroup: moveProfileToGroup)
                     .frame(width: 224)
+                    .overlay(alignment: .trailing) { Rectangle().fill(UD.border).frame(width: 1) }
                 bodyContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .udCard()
-                    .padding(.trailing, UD.Layout.cardInset)
-                    .padding(.bottom, UD.Layout.cardInset)
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        // 自绘扁平窗口 chrome（透明系统标题栏 + full-size content + 不透明画布底）。
+        // 自绘扁平窗口 chrome（透明系统标题栏 + full-size content + 不透明卡面底）。
         // .ignoresSafeArea(.top) 把自绘标题栏顶进系统标题栏区，否则 macOS 仍在上面画
         // 系统暗夜标题栏盖住自绘 header。与 SFTPWindowView 结构一致。
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.pageBg)
-        .background(WorkspaceWindowChrome(serverName: "uTerm", background: WS.canvasNSColor))
+        .background(UD.panel)
+        .background(WorkspaceWindowChrome(serverName: "uTerm", background: WS.panelNSColor))
         // 主机列表键盘导航：↑↓ 移动选中、⌘↑↓ 首末、⌘E 编辑、⌘⌫ 删除。装在窗口级本地
         // 监听里（无需先点中列表）；sheet / 命令面板打开时自动让位（见 handleListKey）。
         .background(WelcomeKeyboardMonitor(handle: handleListKey).frame(width: 0, height: 0))
@@ -590,7 +590,7 @@ private struct NewGroupPromptSheet: View {
 }
 
 /// Welcome 窗口自绘扁平标题栏（对齐设计稿 `u-window.jsx` 的 `TitleBar`）：左侧让位
-/// 窗口红绿灯（~68pt），随后 "uTerm" 标识。分区方案 v3：画在窗口画布上，无底色、无分隔线。
+/// 窗口红绿灯（~68pt），随后 "uTerm" 标识。与整窗同为卡面色，无分隔线。
 /// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿底色 UD.bg 之上。
 /// `WindowDragHandle` 既画实色底又充当窗口拖动手柄（红绿灯更靠前、点击不落到手柄）。
 struct WelcomeTitleBar: View {
@@ -615,6 +615,6 @@ struct WelcomeTitleBar: View {
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)
-        .background(WindowDragHandle(fill: WS.canvasNSColor))
+        .background(WindowDragHandle(fill: WS.panelNSColor))
     }
 }
