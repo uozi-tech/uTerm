@@ -60,10 +60,32 @@ struct EmptyBody: View {
         }
     }
 
-    @ViewBuilder
     private func recentRow(_ entry: RecentFileEntry) -> some View {
+        RecentFileRow(entry: entry, icon: icon(for: entry.kindTag)) {
+            Task { await model.reopen(entry) }
+        }
+    }
+
+    private func icon(for kindTag: String) -> String {
+        if kindTag.hasPrefix("code:") { return "doc.text" }
+        if kindTag == "markdown" { return "doc.richtext" }
+        if kindTag == "image" { return "photo" }
+        return "doc"
+    }
+}
+
+/// 「最近打开」的一行。悬停时铺一层中性灰圆角底（`UD.panelHover`）表示可点。
+/// 最近文件条数有上限，每行一个 `.onHover` 的开销可以忽略。
+private struct RecentFileRow: View {
+    let entry: RecentFileEntry
+    let icon: String
+    let onOpen: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon(for: entry.kindTag))
+            Image(systemName: icon)
                 .frame(width: 16)
                 .foregroundStyle(UD.text3)
             VStack(alignment: .leading, spacing: 1) {
@@ -83,22 +105,12 @@ struct EmptyBody: View {
         .padding(.horizontal, 8).padding(.vertical, 6)
         .contentShape(Rectangle())
         .background(
-            RoundedRectangle(cornerRadius: 4).fill(Color.clear)
+            RoundedRectangle(cornerRadius: UD.Radius.sm, style: .continuous)
+                .fill(hovering ? UD.panelHover : Color.clear)
         )
-        .onTapGesture {
-            Task { await model.reopen(entry) }
-        }
-        .onHover { _ in
-            // SwiftUI 无 hover 持久背景；如果想要 hover 高亮，包成 stateful 子 view
-        }
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-    }
-
-    private func icon(for kindTag: String) -> String {
-        if kindTag.hasPrefix("code:") { return "doc.text" }
-        if kindTag == "markdown" { return "doc.richtext" }
-        if kindTag == "image" { return "photo" }
-        return "doc"
     }
 }
