@@ -332,9 +332,12 @@ struct SessionTabBar: View {
             Button(action: onBack) {
                 MIcon(name: "back", size: 19, color: accent, weight: .semibold)
                     .frame(width: 34, height: 34)
-                    .background(M.fillFaint).clipShape(Circle())
+                    .background(M.button).clipShape(Circle())
+                    .frame(width: M.minTarget, height: M.minTarget)   // 命中区 44pt
+                    .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
+            .accessibilityLabel(Text("返回主机列表"))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 7) {
@@ -342,10 +345,13 @@ struct SessionTabBar: View {
                     Button(action: onNew) {
                         MIcon(name: "plus", size: 14, color: M.text2, weight: .semibold)
                             .frame(width: 30, height: 30)
-                            .background(M.fillFaint)
+                            .background(M.button)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.vertical, 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(MPressStyle())
+                    .accessibilityLabel(Text("新建终端会话"))
                 }
             }
 
@@ -355,14 +361,19 @@ struct SessionTabBar: View {
                     .frame(width: 34, height: 34)
                     .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
                     .clipShape(Circle())
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text(agentOn ? "返回终端" : "切换到 Agent"))
             .accessibilityAddTraits(agentOn ? [.isButton, .isSelected] : .isButton)
         }
-        .padding(.horizontal, 12).frame(height: 48)
-        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
-        .background(M.overlay)
+        // 两端按钮命中区 44pt、视觉 34pt：外沿各自带 5pt，水平内边距相应收到 7（视觉仍距边 12）。
+        .padding(.horizontal, 7).frame(height: 48)
+        // 状态栏不在顶边时（iPhone Duo / 横屏）补足顶边净空，别让返回钮贴着屏幕顶。
+        .mTopClearance(0)
+        // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区——不再叠 overlay 底色。
+        .background(M.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -374,13 +385,15 @@ struct SessionTabBar: View {
                 .font(M.mono(12.5, weight: on ? .semibold : .regular))
                 .foregroundStyle(on ? accent : M.text3).lineLimit(1)
             Button { onClose(tab.id) } label: {
-                MIcon(name: "x", size: 11, color: on ? accent : M.text4, weight: .semibold)
-                    .padding(3).contentShape(Rectangle())
+                MIcon(name: "x", size: 11, color: on ? accent : M.text3, weight: .semibold)
+                    .frame(width: 26, height: 30)   // 关闭命中区占满胶囊高度，不再只有 17pt
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(Text("关闭会话"))
         }
-        .padding(.leading, 11).padding(.trailing, 6).frame(height: 30)
-        .background(on ? accent.opacity(0.14) : M.fillFaint)
+        .padding(.leading, 11).padding(.trailing, 2).frame(height: 30)
+        .background(on ? accent.opacity(0.14) : M.button)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .onTapGesture { onSelect(tab.id) }
@@ -424,7 +437,8 @@ struct TerminalSessionBody: View {
                 .allowsHitTesting(tab.mode == .terminal)
                 .offset(x: tab.mode == .terminal ? 0 : -100_000)
         }
-        .background(tab.mode == .terminal ? terminalBg : M.canvas)
+        // 终端与 Agent 两态同一个工作面（终端底色 == M.surface），切换时底色不跳。
+        .background(tab.mode == .terminal ? terminalBg : M.surface)
         // 非活动 / Agent 模式的会话把终端 feed 节拍降下来（字节照常进缓冲，不丢）。
         // 所有会话常驻挂载，不降频的话切走的终端仍在按 60Hz 解析 + 重绘。
         .onAppear { syncForeground() }
@@ -453,12 +467,21 @@ struct TerminalSessionBody: View {
                                       isActive: tab.mode == .terminal,
                                       autoFocus: store.connecting == nil)
                     }
+                    // 终端页边距（对齐 macOS `TerminalContainerView` 的 8pt 左右边）：字符不再贴着屏幕
+                    // 边 / 圆角；上下各留 4pt，与上面标签条、下面键盘条的 hairline 拉开一行气口。
+                    // 外层不 ignoresSafeArea，横屏刘海 / iPhone Duo 侧边灵动岛仍由安全区让开，
+                    // 底色（同 M.surface）则铺满安全区。
+                    .padding(.horizontal, Self.terminalInset.horizontal)
+                    .padding(.vertical, Self.terminalInset.vertical)
                     .background(terminalBg)
                     TerminalKeyBar(controller: tab.controller)
                 }
             }
         }
     }
+
+    /// 终端文本区与四周的间距（pt）。
+    static let terminalInset = (horizontal: CGFloat(8), vertical: CGFloat(4))
 
     /// 终端字号随可用宽度自适应：以 iPhone 14/15 竖屏逻辑宽度 390pt 为参考点对应 11pt 基准，
     /// 按比例缩放并夹在可读区间 [9, 16]——窄屏（SE）字更小以容纳更多列，宽屏（Pro Max /
@@ -493,7 +516,7 @@ struct TerminalSessionBody: View {
             .padding(.top, 56).padding(.horizontal, 28).padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(M.bg)
+        .background(M.surface)
     }
 }
 
@@ -564,8 +587,8 @@ struct TerminalKeyBar: View {
             }
             compactRow
         }
-        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
-        .background(M.overlay)
+        // 与终端同一个工作面，只用顶边 hairline 分区（「线或底色差，二选一」）。
+        .background(M.surface)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
         .animation(.easeOut(duration: 0.18), value: expanded)
     }
@@ -644,7 +667,7 @@ struct TerminalKeyBar: View {
             .lineLimit(1)
             .padding(.horizontal, expand ? 4 : 12)
             .frame(maxWidth: expand ? .infinity : nil, minHeight: 34, maxHeight: 34)
-            .background(active ? accent.opacity(0.14) : M.panelHi)
+            .background(active ? accent.opacity(0.14) : M.button)
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
