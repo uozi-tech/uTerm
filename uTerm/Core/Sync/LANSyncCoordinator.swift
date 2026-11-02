@@ -1,6 +1,11 @@
 import Foundation
 @preconcurrency import Network
 import Observation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(SystemConfiguration)
+import SystemConfiguration
+#endif
 
 nonisolated private struct LANSyncClearPacket: Codable, Sendable {
     let hello: LANSyncCryptoSession.Hello?
@@ -103,7 +108,7 @@ final class LANSyncCoordinator {
         let id = existingID ?? UUID().uuidString
         if existingID == nil { defaults.set(id, forKey: Self.deviceIDKey) }
         deviceID = id
-        deviceName = ProcessInfo.processInfo.hostName
+        deviceName = Self.localDeviceName()
 
         switch role {
         case .sender:
@@ -113,6 +118,23 @@ final class LANSyncCoordinator {
         case .receiver:
             pairingCode = defaults.string(forKey: Self.mobilePairingCodeKey) ?? ""
         }
+    }
+
+    /// 本机给对端看的名字（Bonjour 服务名、确认弹窗里的「设备」）。只作展示，不参与密钥派生。
+    ///
+    /// **别用 `ProcessInfo.processInfo.hostName`**：它要走网络解析本机名，在 iOS 上会触发「查找
+    /// 本地网络上的设备」授权并**同步阻塞**调用线程直到用户作答。本类在 `MobileApp.init()` 的
+    /// 主线程上创建，首次安装启动时主线程就卡在授权弹窗上，20 s 后被系统启动看门狗杀掉
+    /// （`process-launch watchdog transgression`，栈底正是这一行）。macOS 上它同样会做反向解析，
+    /// DNS 不通时也能卡上好几秒。
+    private static func localDeviceName() -> String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #elseif canImport(SystemConfiguration)
+        return (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
+        #else
+        return "uTerm"
+        #endif
     }
 
     func start() {
