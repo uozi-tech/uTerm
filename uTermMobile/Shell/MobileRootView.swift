@@ -137,8 +137,13 @@ private struct WorkspaceLayer: View {
         let visible = store.showWorkspace
         WorkspaceScreen()
             .background(M.surface.ignoresSafeArea())
+            // 收起时要整层（连同伸进安全区的底色）都移出屏幕：proxy.size 不含安全区，只移
+            // size.width 的话，`.background(…ignoresSafeArea())` 伸进右侧安全区的那一截还留在
+            // 屏上。iPhone Duo 的标签栏 / 工具栏按钮恰好在右侧安全区那一列，于是被这截底色整列
+            // 盖住、看上去侧边导航栏没了（实机反馈）。
             .visualEffect { content, proxy in
-                content.offset(x: visible ? 0 : proxy.size.width)
+                let insets = proxy.safeAreaInsets
+                return content.offset(x: visible ? 0 : proxy.size.width + insets.leading + insets.trailing)
             }
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
