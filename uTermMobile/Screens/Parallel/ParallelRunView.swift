@@ -58,12 +58,33 @@ struct ParallelRunView: View {
         _controller = State(initialValue: controller)
     }
 
+    /// 全屏覆盖层自带一层 `NavigationStack`，页头用**系统导航栏**：左关闭、右重新运行，
+    /// 命令名 + 「并行 · N 台」作导航标题 / 副标题。改前是自绘页头（+ `mTopClearance` 手补顶边），
+    /// iPhone Duo 上按钮不会随系统挪到侧边状态栏下方那一列。
     var body: some View {
-        Group {
-            if let c = controller {
-                content(c)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(M.surface)
+        NavigationStack {
+            Group {
+                if let c = controller {
+                    content(c)
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(M.surface)
+                }
+            }
+            .navigationTitle(controller?.commandName ?? request.name)
+            .mNavigationSubtitle(controller.map(subtitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(M.surface, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    MToolbarCloseButton(action: onClose)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { controller?.rerun() } label: {
+                        Image(systemName: MGlyph.symbol("rerun"))
+                    }
+                    .disabled(controller?.allDone != true)
+                    .accessibilityLabel(Text("重新运行"))
+                }
             }
         }
         .onAppear { if controller == nil { setup() } }
@@ -93,7 +114,6 @@ struct ParallelRunView: View {
     private func content(_ c: ParallelRunController) -> some View {
         @Bindable var c = c
         return VStack(spacing: 0) {
-            nav(c)
             modeToggle(c)
             broadcastBar(c)
             if c.mode == .ai {
@@ -103,40 +123,15 @@ struct ParallelRunView: View {
             }
             statusBar(c)
         }
-        // 整屏一个工作面：页头 / 模式切换 / 广播条 / 输出 / 状态栏同底色，区块之间只用 hairline
+        // 整屏一个工作面：导航栏 / 模式切换 / 广播条 / 输出 / 状态栏同底色，区块之间只用 hairline
         // （「线或底色差，二选一」）。
+        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
         .background(M.surface)
     }
 
-    private func nav(_ c: ParallelRunController) -> some View {
-        HStack(spacing: 10) {
-            Button(action: onClose) {
-                MIcon(name: "x", size: 17, color: M.text2).frame(width: 36, height: 36)
-                    .background(M.button).clipShape(Circle())
-                    .frame(width: M.minTarget, height: M.minTarget)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel(Text("关闭"))
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    if c.aiAssisted { MIcon(name: "spark", size: 13, color: M.aiAccent) }
-                    Text(c.commandName).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
-                }
-                parBadge(ai: c.mode == .ai, n: c.total)
-            }
-            Spacer()
-            Button { c.rerun() } label: {
-                MIcon(name: "rerun", size: 17, color: c.allDone ? M.text2 : M.text4)
-                    .frame(width: 36, height: 36).background(M.button)
-                    .clipShape(Circle())
-                    .frame(width: M.minTarget, height: M.minTarget)
-                    .contentShape(Rectangle())
-            }
-            .disabled(!c.allDone)
-            .accessibilityLabel(Text("重新运行"))
-        }
-        .padding(.horizontal, 10).mTopClearance().padding(.bottom, 7)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+    /// 导航栏副标题（原页头里的「并行 · N 台」徽标）。AI 介入时前缀「AI」。
+    private func subtitle(_ c: ParallelRunController) -> String {
+        c.mode == .ai ? "AI · \(c.total) 台" : "并行 · \(c.total) 台"
     }
 
     private func modeToggle(_ c: ParallelRunController) -> some View {
@@ -269,17 +264,6 @@ struct ParallelRunView: View {
             .frame(width: 30, height: 30)
             .background(M.aiAccent.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 9))
-    }
-
-    private func parBadge(ai: Bool, n: Int) -> some View {
-        let c: Color = ai ? M.aiAccent : M.success
-        return HStack(spacing: 5) {
-            MIcon(name: "parallel", size: 11, color: c)
-            Text(ai ? "AI · \(n) 台" : "并行 · \(n) 台").font(M.sans(11.5, weight: .medium)).foregroundStyle(c)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(c.opacity(0.14))
-        .clipShape(Capsule())
     }
 }
 
