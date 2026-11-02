@@ -24,9 +24,9 @@ final class PaneGhostCardTests: XCTestCase {
         XCTAssertGreaterThan(Double(srgb.redComponent), 0.5, "浅色背景不应是深色背景")
     }
 
-    /// 深色下取工作区基底 #000000（VS Code Dark 终端底对齐 `UD.bg`）。
+    /// 深色下取卡面色 #141414（VS Code Dark 终端底对齐 `UD.panel`）。
     func test_darkMode_uses_dark_background() {
         let bg = PaneGhostCard.terminalBackgroundColor(dark: true)
-        assertRGB(bg, 0x00, 0x00, 0x00)
+        assertRGB(bg, 0x14, 0x14, 0x14)
     }
 }

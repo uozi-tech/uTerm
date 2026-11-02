@@ -68,7 +68,9 @@ struct TerminalColorScheme {
 
     static let vscodeDark = TerminalColorScheme(
         displayName: "VS Code Dark",
-        backgroundColor: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1),
+        // 暗夜终端底 = 卡面色 #141414（UD.panel）：终端坐在工作区内容卡的凹槽里，纯黑会成一块
+        // 黑洞、四角还露出卡面色的圆角帽（实机反馈「终端背景不用纯黑」）。与日间「白终端 = 白卡」同理。
+        backgroundColor: NSColor(srgbRed: 0x14/255, green: 0x14/255, blue: 0x14/255, alpha: 1),
         foregroundColor: NSColor(srgbRed: 0xD4/255, green: 0xD4/255, blue: 0xD4/255, alpha: 1),
         accentColor: NSColor(srgbRed: 0x56/255, green: 0x9C/255, blue: 0xD6/255, alpha: 1),
         cursorColor: NSColor(srgbRed: 0xAE/255, green: 0xAF/255, blue: 0xAD/255, alpha: 1),

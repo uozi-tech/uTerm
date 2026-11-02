@@ -15,13 +15,13 @@ final class TerminalColorSchemeResolveTests: XCTestCase {
         XCTAssertLessThan(luminance(dark.backgroundColor), 0.4, "深色底应暗")
     }
 
-    /// VS Code Dark 终端底 = 终端凹槽底 `UD.termBg` 暗夜值 #000000（分区方案 v3 配色：
-    /// 原先对齐旧工作区侧栏的 #101012，随本轮配色改成 #000 后同步）。
+    /// VS Code Dark 终端底 = 工作区内容卡的卡面色 #141414（`UD.panel` 暗夜值）：终端坐在卡内
+    /// 凹槽里，与卡同色才不会成一块黑洞（曾为 #000，实机反馈「不用纯黑」后改）。
     func test_resolve_dark_background_matches_workspace_sidebar_background() {
         let n = TerminalColorScheme.resolve(dark: true).backgroundColor.usingColorSpace(.sRGB)!
-        XCTAssertEqual(Double(n.redComponent), 0, accuracy: 0.01)
-        XCTAssertEqual(Double(n.greenComponent), 0, accuracy: 0.01)
-        XCTAssertEqual(Double(n.blueComponent), 0, accuracy: 0.01)
+        XCTAssertEqual(Double(n.redComponent), 0x14 / 255, accuracy: 0.01)
+        XCTAssertEqual(Double(n.greenComponent), 0x14 / 255, accuracy: 0.01)
+        XCTAssertEqual(Double(n.blueComponent), 0x14 / 255, accuracy: 0.01)
     }
 
     func test_resolve_light_returns_light_variant() {
