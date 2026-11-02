@@ -199,8 +199,12 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
         var serverName = ""
         var background: NSColor = WS.bgNSColor
 
+        /// 当前窗口上的通知观察者（换窗口时摘掉重挂）。
+        private var windowObservers: [NSObjectProtocol] = []
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            observeTitlebarRelayout()
             apply()
             // 透明标题栏 / full-size content 有时首帧后才完全生效，补一刀。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -232,6 +236,30 @@ struct WorkspaceWindowChrome: NSViewRepresentable {
             var root: NSView? = window.contentView
             while let parent = root?.superview { root = parent }
             if let root { Self.deglass(root) }
+        }
+
+        /// AppKit 在窗口变成 / 失去 key、改尺寸、进出全屏、换屏时会重新布局标准按钮，把红绿灯
+        /// 复位到系统默认的 ~32px 居中，比 38px 自绘栏里的图标高约 3pt（实测截图差 6.5px@2x，
+        /// user 反馈「红绿灯往下一点，与 icon 一致」）。只在 apply() 时居中一次挡不住这些复位，
+        /// 所以在这些时机都再排一次居中（幂等，异步到 AppKit 那轮布局之后）。
+        private func observeTitlebarRelayout() {
+            windowObservers.forEach(NotificationCenter.default.removeObserver)
+            windowObservers.removeAll()
+            guard let window else { return }
+            let names: [Notification.Name] = [
+                NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+                NSWindow.didExitFullScreenNotification, NSWindow.didEnterFullScreenNotification,
+                NSWindow.didChangeScreenNotification, NSWindow.didChangeBackingPropertiesNotification,
+            ]
+            windowObservers = names.map { name in
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
+                    MainActor.assumeIsolated {
+                        guard let window else { return }
+                        Self.scheduleTrafficLightCentering(in: window)
+                    }
+                }
+            }
         }
 
         /// 自绘标题栏统一高度——所有自绘标题栏（workspace / SFTP / welcome / keys / settings）

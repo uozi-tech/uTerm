@@ -175,7 +175,8 @@ struct CLISettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            statusPill(status)
+            // 已安装不再挂「已安装」徽标：右侧已经有「卸载」，状态一目了然（user 要求去掉）。
+            if case .installed = status {} else { statusPill(status) }
             if status.canInstall {
                 UDButton(title: "安装", style: .primary, isLoading: busy) {
                     Task { await skills.install(target) }

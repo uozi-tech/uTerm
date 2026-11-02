@@ -49,12 +49,8 @@ struct HostDetailPanel: View {
     private var header: some View {
         HStack(spacing: 10) {
             PulseDot(pulse: true)
-            Text(profile.name)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(UD.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .help(profile.name)
+            // 主机名点击即复制（与端点行同一套「已复制」反馈）。
+            NameCopyButton(name: profile.name) { copy(profile.name, field: "name") }
             Spacer(minLength: 6)
             if profile.sftpOnly {
                 SftpOnlyBadge()
@@ -327,6 +323,35 @@ private struct EndpointCopyChip: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help("点击复制：\(text)")
+    }
+}
+
+/// 详情头的主机名：点击复制。悬停叠中性灰底（悬停一律用灰，不用强调色）。
+private struct NameCopyButton: View {
+    let name: String
+    let onCopy: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: onCopy) {
+            Text(name)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(UD.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hover ? UD.panelHover : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -4)
+        .onHover { hover = $0 }
+        .help("点击复制：\(name)")
     }
 }
 

@@ -55,27 +55,46 @@ struct SFTPBrowserView: View {
         entryFilter.entry(id: selectedID, in: model.sortedEntries, query: query)
     }
 
+    /// 路径栏。浏览态拆成两段各坐一栏（见 `SFTPPathBar.Part`），其余状态整条。
+    private func pathBar(_ part: SFTPPathBar.Part) -> some View {
+        SFTPPathBar(
+            path: model.currentPath,
+            canBack: canBack, canFwd: canFwd,
+            onBack: goBack, onFwd: goFwd,
+            onCrumb: { navigate(to: $0) },
+            query: $query,
+            onUpload: uploadFile,
+            onNewFolder: { newFolderText = ""; newFolderPresented = true },
+            onRefresh: { Task { await model.refresh() } },
+            showHidden: model.showHidden,
+            onToggleHidden: { model.showHidden.toggle() },
+            onOpenInTerminal: openWorkspace,
+            onOpenWorkspace: openWorkspace,
+            sortKey: model.sortKey,
+            onSetSort: { setSort($0) },
+            part: part
+        )
+    }
+
+    private var isBrowsing: Bool {
+        if case .browsing = model.state { return true }
+        return false
+    }
+
+    /// 删目录期间的进度条（枚举不定态 → 逐项确定态 + 取消），与工作区侧栏共用。
+    @ViewBuilder
+    private var deletionBar: some View {
+        if let deletion = model.deletion {
+            SFTPDeletionBar(progress: deletion) { model.cancelDeletion() }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            SFTPPathBar(
-                path: model.currentPath,
-                canBack: canBack, canFwd: canFwd,
-                onBack: goBack, onFwd: goFwd,
-                onCrumb: { navigate(to: $0) },
-                query: $query,
-                onUpload: uploadFile,
-                onNewFolder: { newFolderText = ""; newFolderPresented = true },
-                onRefresh: { Task { await model.refresh() } },
-                showHidden: model.showHidden,
-                onToggleHidden: { model.showHidden.toggle() },
-                onOpenInTerminal: openWorkspace,
-                onOpenWorkspace: openWorkspace,
-                sortKey: model.sortKey,
-                onSetSort: { setSort($0) }
-            )
-            // 删目录期间的进度条（枚举不定态 → 逐项确定态 + 取消），与工作区侧栏共用。
-            if let deletion = model.deletion {
-                SFTPDeletionBar(progress: deletion) { model.cancelDeletion() }
+            // 浏览态的路径栏在 content 里按栏拆开；其余状态没有检视器，整条放在顶上。
+            if !isBrowsing {
+                pathBar(.full)
+                deletionBar
             }
             content
             // 状态栏只在已连接浏览时显示 —— 连接中 / 失败时不该亮绿点报「已连接」。
@@ -229,40 +248,49 @@ struct SFTPBrowserView: View {
                 UDButton(title: "重新连接") { Task { await model.refresh() } }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
         case .browsing:
+            // 一张卡左右两栏：文件栏（路径栏前段 + 表格）| 1pt 竖线 | 检视器栏（路径栏后段 +
+            // 详情），竖线从卡顶通到卡底，与工作区三栏同一做法。
             HStack(spacing: 0) {
-                SFTPFileTable(
-                    entries: visible,
-                    showParent: model.currentPath != "/",
-                    selectedID: $selectedID,
-                    sortKey: model.sortKey, sortAscending: model.sortAscending,
-                    onToggleSort: { setSort($0) },
-                    onActivate: activate,
-                    onUp: { Task { await model.navigateUp() } },
-                    onDragProvider: { model.remoteDragProvider(for: $0) },
-                    onDropRemoteItems: { providers, entry in
-                        moveRemoteItems(providers, into: entry)
-                    },
-                    onDropRemoteItemsToParent: moveRemoteItemsToParent,
-                    query: query,
-                    rowActions: rowActions,
-                    onNewFolder: { newFolderText = ""; newFolderPresented = true },
-                    onNewFile: { newFileText = ""; newFilePresented = true }
-                )
+                VStack(spacing: 0) {
+                    pathBar(.leading)
+                    deletionBar
+                    SFTPFileTable(
+                        entries: visible,
+                        showParent: model.currentPath != "/",
+                        selectedID: $selectedID,
+                        sortKey: model.sortKey, sortAscending: model.sortAscending,
+                        onToggleSort: { setSort($0) },
+                        onActivate: activate,
+                        onUp: { Task { await model.navigateUp() } },
+                        onDragProvider: { model.remoteDragProvider(for: $0) },
+                        onDropRemoteItems: { providers, entry in
+                            moveRemoteItems(providers, into: entry)
+                        },
+                        onDropRemoteItemsToParent: moveRemoteItemsToParent,
+                        query: query,
+                        rowActions: rowActions,
+                        onNewFolder: { newFolderText = ""; newFolderPresented = true },
+                        onNewFile: { newFileText = ""; newFilePresented = true }
+                    )
+                }
                 .frame(maxWidth: .infinity)
                 // 可拖拽分隔条（复用工作区 inspector 同款 ColumnResizer）：右侧检视器，
                 // 往右拖变窄（sign −1），宽度 clamp 248–460。检视器与表格同为卡面色，
                 // 分隔条就是那条 1pt 竖线（7pt 命中区骑在线上，悬停转 accent）。
                 ColumnResizer(width: $inspectorWidth, range: 248...460, sign: -1)
-                SFTPInspector(
-                    item: selected, currentPath: model.currentPath,
-                    onOpen: { e in openFile(e, route: .preferred) },
-                    onDownload: { e in downloadFile(e) },
-                    onOpenFolder: { e in activate(e) },
-                    onOpenWorkspace: openWorkspace,
-                    onPermissions: { e in permissionTarget = e },
-                    onRename: { e in renameTarget = e; renameText = e.name },
-                    onDelete: { e in deleteTarget = e }
-                )
+                VStack(spacing: 0) {
+                    pathBar(.trailing)
+                    SFTPInspector(
+                        item: selected, currentPath: model.currentPath,
+                        onOpen: { e in openFile(e, route: .preferred) },
+                        onDownload: { e in downloadFile(e) },
+                        onOpenFolder: { e in activate(e) },
+                        onOpenWorkspace: openWorkspace,
+                        onPermissions: { e in permissionTarget = e },
+                        onRename: { e in renameTarget = e; renameText = e.name },
+                        onDelete: { e in deleteTarget = e }
+                    )
+                }
                 .frame(width: inspectorWidth)
             }
         }

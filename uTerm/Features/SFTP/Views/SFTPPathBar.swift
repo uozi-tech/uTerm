@@ -9,9 +9,16 @@ enum SFTPPathBarLayout {
     }
 }
 
-/// 路径栏（50px）：后退/前进 + 可点击面包屑 + 过滤框 + 上传/新建/刷新 + 操作菜单。
-/// WS 暗色调色板，对齐设计稿 `pages/sftp.jsx` 的 `SftpPathBar`。
+/// 路径栏（48px）：后退/前进 + 可点击面包屑 + 过滤框 + 上传/新建/刷新 + 在工作区打开 + 操作菜单。
+/// 对齐设计稿 `pages/sftp.jsx` 的 `SftpPathBar`。
+///
+/// 浏览态下拆成两段分别坐在两栏顶上：`.leading`（导航、面包屑、过滤、上传 / 新建 / 刷新）
+/// 在文件表那栏，`.trailing`（在工作区打开、操作）在检视器那栏，栏间竖线从卡顶通到卡底。
+/// 原先整条横跨两栏，上传 / 新建两枚按钮正好骑在下方竖线两侧、不归属任何一栏（实机反馈）。
+/// 连接中 / 失败等没有检视器的状态用 `.full`。
 struct SFTPPathBar: View {
+    enum Part { case full, leading, trailing }
+
     let path: String
     let canBack: Bool
     let canFwd: Bool
@@ -29,6 +36,7 @@ struct SFTPPathBar: View {
     let onOpenWorkspace: () -> Void
     let sortKey: FileBrowserModel.SortKey
     let onSetSort: (FileBrowserModel.SortKey) -> Void
+    var part: Part = .full
 
     private var crumbs: [(name: String, full: String)] {
         let comps = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -40,23 +48,29 @@ struct SFTPPathBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 2) {
-                navArrow("chevron.left", enabled: canBack, label: "后退", action: onBack)
-                navArrow("chevron.right", enabled: canFwd, label: "前进", action: onFwd)
+            if part != .trailing {
+                HStack(spacing: 2) {
+                    navArrow("chevron.left", enabled: canBack, label: "后退", action: onBack)
+                    navArrow("chevron.right", enabled: canFwd, label: "前进", action: onFwd)
+                }
+
+                breadcrumbs
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                filterField
+
+                SFTPToolButton(systemName: "square.and.arrow.up", help: "上传文件", action: onUpload)
+                SFTPToolButton(systemName: "folder.badge.plus", help: "新建文件夹", action: onNewFolder)
+                SFTPToolButton(systemName: "arrow.clockwise", help: "刷新", action: onRefresh)
+            } else {
+                Spacer(minLength: 0)
             }
 
-            breadcrumbs
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if part != .leading {
+                SFTPOpenWorkspaceButton(action: onOpenWorkspace)
 
-            filterField
-
-            SFTPToolButton(systemName: "square.and.arrow.up", help: "上传文件", action: onUpload)
-            SFTPToolButton(systemName: "folder.badge.plus", help: "新建文件夹", action: onNewFolder)
-            SFTPToolButton(systemName: "arrow.clockwise", help: "刷新", action: onRefresh)
-
-            SFTPOpenWorkspaceButton(action: onOpenWorkspace)
-
-            actionsMenu
+                actionsMenu
+            }
         }
         .padding(.horizontal, 12)
         // 分区方案 v3：路径栏并入内容卡顶部（48 高），无底线 —— 下方表头线就是分界。

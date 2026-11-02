@@ -128,16 +128,28 @@ struct ColumnResizer: View {
 /// （设计稿 `WsLineDivider`：`${accent}aa`）。只画线、不接收鼠标 —— 命中区由调用方叠。
 struct PaneDividerLine: View {
     enum Axis { case vertical, horizontal }
+    /// 悬停 / 拖动时线的粗细。
+    static let hotThickness: CGFloat = 3
     let axis: Axis
     let hot: Bool
 
     var body: some View {
         Rectangle()
-            .fill(hot ? UD.accent.opacity(0.67) : UD.border)
+            .fill(UD.border)
             .frame(width: axis == .vertical ? 1 : nil,
                    height: axis == .horizontal ? 1 : nil)
             .frame(maxWidth: axis == .horizontal ? .infinity : nil,
                    maxHeight: axis == .vertical ? .infinity : nil)
+            // 悬停 / 拖动时加粗到 3pt 并转 accent（1pt 太细、不像能拖，实机反馈）。只画在
+            // overlay 里，布局仍按 1pt 算，两侧的栏不会跟着挤动。
+            .overlay {
+                if hot {
+                    Rectangle()
+                        .fill(UD.accent)
+                        .frame(width: axis == .vertical ? Self.hotThickness : nil,
+                               height: axis == .horizontal ? Self.hotThickness : nil)
+                }
+            }
             .allowsHitTesting(false)
     }
 }
