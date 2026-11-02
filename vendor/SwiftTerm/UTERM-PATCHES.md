@@ -5,11 +5,11 @@
 
 更新方式：拉取上游新 revision 覆盖 `Sources/SwiftTerm`（保留本文件与裁剪版
 `Package.swift`），然后逐条重放下列补丁。**不要直接整目录覆盖**——`Sources/SwiftTerm`
-里混着本地新增文件（`Apple/MinimumContrast.swift`、`SwiftTermBuildInfo.swift`），
+里混着本地新增文件（`Apple/MinimumContrast.swift`、`SwiftTermBuildInfo.swift`、`TerminalSnapshot.swift`），
 整目录覆盖会把它们冲掉。
 
 校验手法：把上游对应 revision 的 tarball 解到临时目录，`diff -rq` 比对
-`Sources/SwiftTerm`，输出应当**恰好**是下面三条补丁涉及的文件，多一个少一个都要查。
+`Sources/SwiftTerm`，输出应当**恰好**是下面各条补丁涉及的文件，多一个少一个都要查。
 
 ## 1. 渲染期最低对比度（minimum contrast ratio）
 
@@ -135,6 +135,34 @@ Xcode 27 起报未使用结果警告 → 改写成 `_ = memcpy(...)`。纯诊断
 uTerm 侧无需改动。复现与验证配方：模拟器开软键盘（Simulator「Toggle Software Keyboard」），
 `xcrun simctl io <udid> recordVideo` 录下键盘弹起过程逐帧看；修复前键盘上升的几帧文字明显
 被拉高，修复后逐帧字形不变。上游若已自行设了非缩放的 contentMode，重放时跳过即可。
+
+## 6. 终端状态快照（远控镜像接入用）
+
+远控时另一台设备接入一条正在跑的会话：Mac 端发一份快照，之后只转发原始字节。快照要让接收端
+与源终端**逐格**一致，并且之后的字节在两边产生同样的结果——光标、各种模式、制表位、字符集、
+鼠标编码、备用屏之下的主屏、滚动历史都得带上。这些状态大多是 internal，有三个还是 `private`，
+包外做不了，所以放进模块里。
+
+涉及文件：
+
+- `Sources/SwiftTerm/TerminalSnapshot.swift`（**新增**，纯本地文件，上游无对应物）
+  - `Terminal.isAtSnapshotBoundary`：解析器在 ground 且没有跨 `feed` 暂存的半个 UTF-8 字符。
+    只有这时拍的快照能接上后续字节（实测切在半个汉字处，300 个切点里 112 个续播出错）。
+  - `Terminal.snapshotSequence(scrollbackLimit:)`：把状态重放成 VT 字节流（以 RIS 开头）。
+    文件里每一条特殊处理都对应一个实测失败过的切点，简化前先读注释。
+  - `Terminal.snapshotFingerprint(historyLines:)` + `TerminalSnapshotFingerprint`：快照必须
+    复原的全部状态，测试的对照基准。
+  - 已知不复原：Kitty 键盘协议的模式栈深度（只复原当前生效的标志位）、DECSC 保存的字符集。
+- `Sources/SwiftTerm/Terminal.swift`：四处去掉 `private`，均带 `// uTerm patch:` 注释，
+  不改任何逻辑——
+  - `var mouseProtocol`（鼠标上报编码 1005/1006/1015/1016；丢了的话手机点 htop/vim 发的是旧格式）
+  - `var gCharsets`（G0–G3 字符集；丢了的话 `lqqk` 不会画成 `┌──┐`）
+  - `var readingBuffer` 及其类型 `struct ReadingBuffer`（看暂存的半个 UTF-8 字符）
+
+uTerm 侧：`uTermTests/Features/Terminal/TerminalSnapshotTests.swift`，语料在
+`uTermTests/Support/Fixtures/TerminalCorpus/`（`record.py` 可重录）。**升级上游后必须跑这组测试**：
+上游改了任何渲染相关的内部状态（新模式、新的格子属性），指纹比对会第一个红。新增的状态要同时加进
+`snapshotSequence` 与 `snapshotFingerprint`。
 
 ## 升级记录
 

@@ -488,7 +488,8 @@ open class Terminal {
     public private(set) var alternateScrollMode: Bool = true
     
     private var charset: [UInt8:String]? = nil
-    private var gCharsets: [[UInt8:String]?] = [CharSets.defaultCharset, nil, nil, nil]
+    // uTerm patch: internal (was private) so TerminalSnapshot.swift can restore it. See UTERM-PATCHES.md.
+    var gCharsets: [[UInt8:String]?] = [CharSets.defaultCharset, nil, nil, nil]
     var gcharset: Int = 0
     var reverseWraparound: Bool = false
     weak var tdel: TerminalDelegate?
@@ -586,7 +587,8 @@ open class Terminal {
     }
     
     // The protocol encoding for the terminal
-    private var mouseProtocol: MouseProtocolEncoding = .x10
+    // uTerm patch: internal (was private) so TerminalSnapshot.swift can restore it. See UTERM-PATCHES.md.
+    var mouseProtocol: MouseProtocolEncoding = .x10
 
     // This is used to track if we are setting the colors, to prevent a
     // recursive invocation (nativeForegroundColor sets the terminal
@@ -1214,7 +1216,8 @@ open class Terminal {
     // Additionally, the terminal parser needs to reset the parser state on demand, and
     // that is surfaced via reset
     //
-    private struct ReadingBuffer {
+    // uTerm patch: internal (was private), the type of `readingBuffer` below. See UTERM-PATCHES.md.
+    struct ReadingBuffer {
         var putbackBuffer: [UInt8] = []
         var rest:ArraySlice<UInt8> = [][...]
         var idx = 0
@@ -1279,7 +1282,8 @@ open class Terminal {
         }
     }
     
-    private var readingBuffer = ReadingBuffer ()
+    // uTerm patch: internal (was private) so TerminalSnapshot.swift can see a held-over partial UTF-8 character. See UTERM-PATCHES.md.
+    var readingBuffer = ReadingBuffer ()
     
     func printStateReset ()
     {

@@ -1,0 +1,328 @@
+[?1049h[30;1H[?1h=[33ma6ee8409[m [32mstyle(mobile): 终端 / 文件 / 命令选择页也按宽度排 2–3 列；卡片间距收窄到 10–12pt[m[m
+[m
+ uTermMobile/DesignKit/MComponents.swift            | 32 [32m++++++++++++++++[m[31m------[m[m
+ uTermMobile/Screens/Hosts/HostsScreen.swift        |  3 [32m+[m[31m-[m[m
+ uTermMobile/Screens/SFTP/SFTPScreen.swift          |  4 [32m+[m[31m--[m[m
+ uTermMobile/Screens/Settings/CommandsScreen.swift  |  8 [32m++++[m[31m--[m[m
+ uTermMobile/Screens/Terminal/TerminalScreen.swift  |  4 [32m+[m[31m--[m[m
+ uTermMobile/Theme/MobileTheme.swift                |  2 [32m+[m[31m-[m[m
+ .../Layout/MobileAdaptiveLayoutTests.swift         |  7 [32m+++++[m[m
+ 7 files changed, 43 insertions(+), 17 deletions(-)[m
+[33m7afc125f[m [32mfix(sync): 首次安装启动卡死被看门狗杀掉——本机名不再用 ProcessInfo.hostName[m[m
+[m
+ uTerm/Core/Sync/LANSyncCoordinator.swift | 24 [32m+++++++++++++++++++++++[m[31m-[m[m
+ 1 file changed, 23 insertions(+), 1 deletion(-)[m
+[33m24a9d21e[m [32mfeat(mobile): 首页改用系统导航栏、主机卡片宽屏多列、终端字号不再在宽屏放大[m[m
+[m
+ uTermMobile/DesignKit/MComponents.swift            |  54 [32m++++++++++[m[m
+ uTermMobile/DesignKit/MScaffold.swift              | 112 [32m++++++++++++[m[31m---------[m[m
+ uTermMobile/Screens/Hosts/HostsScreen.swift        |  13 [32m++[m[31m-[m[m
+ uTermMobile/Screens/Settings/CommandsScreen.swift  |   4 [32m+[m[31m-[m[m
+ uTermMobile/Screens/Settings/SettingsScreen.swift  |   5 [32m+[m[31m-[m[m
+ uTermMobile/Screens/Terminal/TerminalScreen.swift  |  28 [32m+++[m[31m---[m[m
+ uTermMobile/Theme/MobileTheme.swift                |   4 [32m+[m[m
+ .../Layout/MobileAdaptiveLayoutTests.swift         |  50 [32m+++++++++[m[m
+ 8 files changed, 202 insertions(+), 68 deletions(-)[m
+[33m613fed8b[m [32mfix(mobile): 配对码改为点按弹窗输入，不再行内常驻数字键盘[m[m
+[m
+ .../Screens/Settings/LANSyncSettingsSection.swift  | 32 [32m++++++++++++++[m[31m--------[m[m
+ 1 file changed, 21 insertions(+), 11 deletions(-)[m
+[7m/var/folders/kk/62n7rtrs1792s4grxs29qwz80000gn/T/tmphqd9fo3i/gitlog.txt[27m[K[K[33md5f931a6[m [32mfix(mobile): 常规宽度改用系统默认的顶部标签条，不再首启强制侧栏[m[m
+[m
+ uTermMobile/Shell/MobileRootView.swift | 2 [31m--[m[m
+ 1 file changed, 2 deletions(-)[m
+[33mdd1b8a4a[m [32mtest(mobile): 样式画廊——按设备形态 × 日夜批量截图（按需）[m[m
+[m
+ uTermMobileTests/Probes/StyleGalleryTests.swift | 281 [32m++++++++++++++++++++++++[m[m
+ uTermMobileTests/README.md                      |   1 [32m+[m[m
+ 2 files changed, 282 insertions(+)[m
+[33m26417027[m [32mrefactor(mobile): 外壳改为 sidebarAdaptable TabView，iPhone Duo 开合不再重建各屏[m[m
+[m
+ uTermMobile/Shell/MobileRootView.swift | 86 [32m++++++++++++[m[31m----------------------[m[m
+ 1 file changed, 31 insertions(+), 55 deletions(-)[m
+[33m19eed2e9[m [32mstyle(mobile): 主机 / 命令 / 设置列表页细节[m[m
+[m
+ uTermMobile/Screens/Hosts/HostsScreen.swift       | 14 [32m+++++++[m[31m---[m[m
+ uTermMobile/Screens/Settings/CommandsScreen.swift | 33 [32m++++++++++[m[31m-------------[m[m
+ uTermMobile/Screens/Settings/SettingsScreen.swift | 20 [32m++++++++++[m[31m----[m[m
+ 3 files changed, 39 insertions(+), 28 deletions(-)[m
+[33m120e3476[m [32mstyle(mobile): 文件浏览 / 并行执行 / 命令面板 / Agent 整屏单面分区[m[m
+[m
+ uTermMobile/Screens/Agent/MAgentMarkdown.swift     |  2 [32m+[m[31m-[m[m
+ uTermMobile/Screens/Agent/MToolCall.swift          |  4 [32m+[m[31m--[m[m
+ uTermMobile/Screens/Agent/MobileAgentChat.swift    | 20 [32m+++++++++[m[31m-----[m[m
+ .../Screens/Commands/QuickCommandDetailView.swift  | 16 [32m+++++++[m[31m----[m[m
+ uTermMobile/Screens/Connect/MConnectingCover.swift |  5 [32m++[m[31m--[m[m
+ .../Screens/Palette/CommandPaletteView.swift       | 12 [32m++++[m[31m----[m[m
+ uTermMobile/Screens/Parallel/ParallelRunView.swift | 32 [32m++++++++++++[m[31m----------[m[m
+ uTermMobile/Screens/SFTP/FileActionSheet.swift     | 14 [32m++++++[m[31m----[m[m
+:[K[K uTermMobile/Screens/SFTP/SFTPScreen.swift          | 29 [32m++++++++++++++[m[31m------[m[m
+ 9 files changed, 84 insertions(+), 50 deletions(-)[m
+[33m3a332681[m [32mstyle(mobile): 终端页边距与工作面统一[m[m
+[m
+ uTermMobile/Screens/Terminal/TerminalScreen.swift | 51 [32m++++++++++++++++[m[31m-------[m[m
+ 1 file changed, 37 insertions(+), 14 deletions(-)[m
+[33m7d2e104d[m [32mstyle(mobile): 设计令牌对齐 Ant 预设，补顶边净空与 44pt 命中区[m[m
+[m
+ uTermMobile/DesignKit/MComponents.swift            | 27 [32m++++++++[m[31m-----[m[m
+ uTermMobile/DesignKit/MScaffold.swift              | 33 [32m++++++++++++++[m[31m--[m[m
+ uTermMobile/Screens/Terminal/MTerminalColors.swift |  6 [32m++[m[31m-[m[m
+ uTermMobile/Theme/MobileTheme.swift                | 44 [32m+++++++++++++++[m[31m-------[m[m
+ 4 files changed, 82 insertions(+), 28 deletions(-)[m
+[33mba10079a[m [32mfix(vendor): iOS 终端视图不再在键盘动画中拉伸文字[m[m
+[m
+ .../Sources/SwiftTerm/iOS/iOSTerminalView.swift     | 10 [32m+++++++++[m[31m-[m[m
+ vendor/SwiftTerm/UTERM-PATCHES.md                   | 21 [32m+++++++++++++++++++++[m[m
+ 2 files changed, 30 insertions(+), 1 deletion(-)[m
+[33m66ae3039[m [32mfix(mobile): 连接中页在场时压住终端键盘，失败态不再挂着收不掉的键盘[m[m
+[m
+ uTermMobile/Screens/Connect/MConnectingCover.swift | 34 [32m++++++++++++++++++++++[m[m
+ 1 file changed, 34 insertions(+)[m
+[33m6ce7ff74[m [32mchore(vendor): 清掉 SwiftTerm 在 iOS 构建里的 19 条编译警告[m[m
+[m
+ .../SwiftTerm/Apple/AppleTerminalView.swift        |  2 [32m+[m[31m-[m[m
+ .../Sources/SwiftTerm/iOS/iOSTerminalView.swift    | 31 [32m++++++++++[m[31m------------[m[m
+ .../Sources/SwiftTerm/iOS/iOSTextInput.swift       |  2 [32m+[m[31m-[m[m
+ vendor/SwiftTerm/UTERM-PATCHES.md                  | 10 [32m+++++++[m[m
+ 4 files changed, 26 insertions(+), 19 deletions(-)[m
+:[K[K[33m9635874c[m [32mperf(ssh): 终端与 SFTP 侧栏同主机共用一条 SSH 连接；建连分段计时[m[m
+[m
+ uTerm/Features/Files/FileBrowserModel.swift        |  53 [32m++[m[31m--[m[m
+ uTerm/Features/Workspace/PaneModel.swift           |  11 [32m+[m[m
+ uTerm/Services/SSH/ConnectTimeline.swift           | 167 [32m+++++++++++[m[m
+ uTerm/Services/SSH/SFTPSession.swift               |   3 [32m+[m[31m-[m[m
+ uTerm/Services/SSH/SSHClientFactory.swift          |  96 [32m++++++[m[31m-[m[m
+ uTerm/Services/SSH/SSHConnection.swift             |  40 [32m++[m[31m-[m[m
+ uTerm/Services/SSH/SharedConnectionPool.swift      | 214 [32m++++++++++++++[m[m
+ .../Services/SSH/SharedConnectionPoolTests.swift   | 316 [32m+++++++++++++++++++++[m[m
+ 8 files changed, 863 insertions(+), 37 deletions(-)[m
+[33m5060cf58[m [32mfix(terminal): 终端顶边内边距 6 → 0，标签胶囊上下间距对称[m[m
+[m
+ uTerm/Features/Terminal/TerminalHostView.swift | 5 [32m++++[m[31m-[m[m
+ 1 file changed, 4 insertions(+), 1 deletion(-)[m
+[33m08f3b111[m [32mstyle(theme): 暗夜终端与预览编辑器底色从纯黑改为卡面色 #141414[m[m
+[m
+ uTerm/Features/Editor/EditorTheme.swift                        |  5 [32m+++[m[31m--[m[m
+ uTerm/Features/Terminal/TerminalColorScheme.swift              |  4 [32m+++[m[31m-[m[m
+ uTermTests/Features/Editor/EditorThemeTests.swift              |  2 [32m+[m[31m-[m[m
+ .../Features/Terminal/TerminalColorSchemeResolveTests.swift    | 10 [32m+++++[m[31m-----[m[m
+ uTermTests/Features/Workspace/PaneGhostCardTests.swift         |  4 [32m++[m[31m--[m[m
+ 5 files changed, 14 insertions(+), 11 deletions(-)[m
+[33mfa381811[m [32mfix(welcome): 侧栏「管理分组」按钮加悬停效果[m[m
+[m
+ uTerm/Features/Welcome/Views/WelcomeSidebar.swift | 8 [32m++++++[m[31m--[m[m
+ 1 file changed, 6 insertions(+), 2 deletions(-)[m
+[33m309374ea[m [32mfix(sftp): 「在终端中打开」打开纯终端窗口；去掉检视器重复的「在工作区打开」[m[m
+[m
+:[K[K[HM 4 files changed, 26 insertions(+), 19 deletions(-)[m
+[HM vendor/SwiftTerm/UTERM-PATCHES.md                  | 10 [32m+++++++[m[m
+[HM .../Sources/SwiftTerm/iOS/iOSTextInput.swift       |  2 [32m+[m[31m-[m[m
+[HM .../Sources/SwiftTerm/iOS/iOSTerminalView.swift    | 31 [32m++++++++++[m[31m------------[m[m
+[HM .../SwiftTerm/Apple/AppleTerminalView.swift        |  2 [32m+[m[31m-[m[m
+[HM[m
+[HM[33m6ce7ff74[m [32mchore(vendor): 清掉 SwiftTerm 在 iOS 构建里的 19 条编译警告[m[m
+[HM 1 file changed, 34 insertions(+)[m
+[HM uTermMobile/Screens/Connect/MConnectingCover.swift | 34 [32m++++++++++++++++++++++[m[m
+[HM[m
+[HM[33m66ae3039[m [32mfix(mobile): 连接中页在场时压住终端键盘，失败态不再挂着收不掉的键盘[m[m
+[HM 2 files changed, 30 insertions(+), 1 deletion(-)[m
+[HM vendor/SwiftTerm/UTERM-PATCHES.md                   | 21 [32m+++++++++++++++++++++[m[m
+[HM .../Sources/SwiftTerm/iOS/iOSTerminalView.swift     | 10 [32m+++++++++[m[31m-[m[m
+[HM[m
+[HM[33mba10079a[m [32mfix(vendor): iOS 终端视图不再在键盘动画中拉伸文字[m[m
+[HM 4 files changed, 82 insertions(+), 28 deletions(-)[m
+[HM uTermMobile/Theme/MobileTheme.swift                | 44 [32m+++++++++++++++[m[31m-------[m[m
+[HM uTermMobile/Screens/Terminal/MTerminalColors.swift |  6 [32m++[m[31m-[m[m
+[HM uTermMobile/DesignKit/MScaffold.swift              | 33 [32m++++++++++++++[m[31m--[m[m
+[HM uTermMobile/DesignKit/MComponents.swift            | 27 [32m++++++++[m[31m-----[m[m
+[HM[m
+[HM[33m7d2e104d[m [32mstyle(mobile): 设计令牌对齐 Ant 预设，补顶边净空与 44pt 命中区[m[m
+[HM 1 file changed, 37 insertions(+), 14 deletions(-)[m
+[HM uTermMobile/Screens/Terminal/TerminalScreen.swift | 51 [32m++++++++++++++++[m[31m-------[m[m
+[HM[m
+[HM[33m3a332681[m [32mstyle(mobile): 终端页边距与工作面统一[m[m
+[HM 9 files changed, 84 insertions(+), 50 deletions(-)[m
+[HM uTermMobile/Screens/SFTP/SFTPScreen.swift          | 29 [32m++++++++++++++[m[31m------[m[m
+[30;1H[K:[K[K[HM uTermMobile/Screens/SFTP/FileActionSheet.swift     | 14 [32m++++++[m[31m----[m[m
+[HM uTermMobile/Screens/Parallel/ParallelRunView.swift | 32 [32m++++++++++++[m[31m----------[m[m
+[HM .../Screens/Palette/CommandPaletteView.swift       | 12 [32m++++[m[31m----[m[m
+[HM uTermMobile/Screens/Connect/MConnectingCover.swift |  5 [32m++[m[31m--[m[m
+[HM .../Screens/Commands/QuickCommandDetailView.swift  | 16 [32m+++++++[m[31m----[m[m
+[HM uTermMobile/Screens/Agent/MobileAgentChat.swift    | 20 [32m+++++++++[m[31m-----[m[m
+[HM uTermMobile/Screens/Agent/MToolCall.swift          |  4 [32m+[m[31m--[m[m
+[HM uTermMobile/Screens/Agent/MAgentMarkdown.swift     |  2 [32m+[m[31m-[m[m
+[HM[m
+[HM[33m120e3476[m [32mstyle(mobile): 文件浏览 / 并行执行 / 命令面板 / Agent 整屏单面分区[m[m
+[HM 3 files changed, 39 insertions(+), 28 deletions(-)[m
+[HM uTermMobile/Screens/Settings/SettingsScreen.swift | 20 [32m++++++++++[m[31m----[m[m
+[HM uTermMobile/Screens/Settings/CommandsScreen.swift | 33 [32m++++++++++[m[31m-------------[m[m
+[HM uTermMobile/Screens/Hosts/HostsScreen.swift       | 14 [32m+++++++[m[31m---[m[m
+[HM[m
+[HM[33m19eed2e9[m [32mstyle(mobile): 主机 / 命令 / 设置列表页细节[m[m
+[HM 1 file changed, 31 insertions(+), 55 deletions(-)[m
+[HM uTermMobile/Shell/MobileRootView.swift | 86 [32m++++++++++++[m[31m----------------------[m[m
+[HM[m
+[HM[33m26417027[m [32mrefactor(mobile): 外壳改为 sidebarAdaptable TabView，iPhone Duo 开合不再重建各屏[m[m
+[HM 2 files changed, 282 insertions(+)[m
+[HM uTermMobileTests/README.md                      |   1 [32m+[m[m
+[HM uTermMobileTests/Probes/StyleGalleryTests.swift | 281 [32m++++++++++++++++++++++++[m[m
+[HM[m
+[HM[33mdd1b8a4a[m [32mtest(mobile): 样式画廊——按设备形态 × 日夜批量截图（按需）[m[m
+[HM 1 file changed, 2 deletions(-)[m
+[HM uTermMobile/Shell/MobileRootView.swift | 2 [31m--[m[m
+[HM[m
+[HM[33md5f931a6[m [32mfix(mobile): 常规宽度改用系统默认的顶部标签条，不再首启强制侧栏[m[m
+[30;1H[K:[K[K [KESCESC[K[[[KBB[K:[K[K [KESCESC[K[[[KBB[K:[K[K [KESCESC[K[[[KBB[K:[K[K [KESCESC[K[[[KBB[K:[K[K [KESCESC[K[[[KBB[K:[K[K [KESCESC[K[[[KAA[K:[K[K [KESCESC[K[[[KAA[K:[K[K [KESCESC[K[[[KAA[K:[K[K/[KTT[Kee[Krr[Kmm[Kii[Knn[Kaa[Kll[K[1;1H[K[33md5f931a6[m [32mfix(mobile): 常规宽度改用系统默认的顶部标签条，不再首启强制侧栏[m[m
+[2;1H[K[m
+[3;1H[K uTermMobile/Shell/MobileRootView.swift | 2 [31m--[m[m
+[4;1H[K 1 file changed, 2 deletions(-)[m
+[5;1H[K[33mdd1b8a4a[m [32mtest(mobile): 样式画廊——按设备形态 × 日夜批量截图（按需）[m[m
+[6;1H[K[m
+[7;1H[K uTermMobileTests/Probes/StyleGalleryTests.swift | 281 [32m++++++++++++++++++++++++[m[m
+[8;1H[K uTermMobileTests/README.md                      |   1 [32m+[m[m
+[9;1H[K 2 files changed, 282 insertions(+)[m
+[10;1H[K[33m26417027[m [32mrefactor(mobile): 外壳改为 sidebarAdaptable TabView，iPhone Duo 开合不再重建各屏[m[m
+[11;1H[K[m
+[12;1H[K uTermMobile/Shell/MobileRootView.swift | 86 [32m++++++++++++[m[31m----------------------[m[m
+[13;1H[K 1 file changed, 31 insertions(+), 55 deletions(-)[m
+[14;1H[K[33m19eed2e9[m [32mstyle(mobile): 主机 / 命令 / 设置列表页细节[m[m
+[15;1H[K[m
+[16;1H[K uTermMobile/Screens/Hosts/HostsScreen.swift       | 14 [32m+++++++[m[31m---[m[m
+[17;1H[K uTermMobile/Screens/Settings/CommandsScreen.swift | 33 [32m++++++++++[m[31m-------------[m[m
+[18;1H[K uTermMobile/Screens/Settings/SettingsScreen.swift | 20 [32m++++++++++[m[31m----[m[m
+[19;1H[K 3 files changed, 39 insertions(+), 28 deletions(-)[m
+[20;1H[K[33m120e3476[m [32mstyle(mobile): 文件浏览 / 并行执行 / 命令面板 / Agent 整屏单面分区[m[m
+[21;1H[K[m
+[22;1H[K uTermMobile/Screens/Agent/MAgentMarkdown.swift     |  2 [32m+[m[31m-[m[m
+[23;1H[K uTermMobile/Screens/Agent/MToolCall.swift          |  4 [32m+[m[31m--[m[m
+[24;1H[K uTermMobile/Screens/Agent/MobileAgentChat.swift    | 20 [32m+++++++++[m[31m-----[m[m
+[25;1H[K .../Screens/Commands/QuickCommandDetailView.swift  | 16 [32m+++++++[m[31m----[m[m
+[26;1H[K uTermMobile/Screens/Connect/MConnectingCover.swift |  5 [32m++[m[31m--[m[m
+[27;1H[K .../Screens/Palette/CommandPaletteView.swift       | 12 [32m++++[m[31m----[m[m
+[28;1H[K uTermMobile/Screens/Parallel/ParallelRunView.swift | 32 [32m++++++++++++[m[31m----------[m[m
+[29;1H[K uTermMobile/Screens/SFTP/FileActionSheet.swift     | 14 [32m++++++[m[31m----[m[m
+[30;1H[1;1H[K[33md5f931a6[m [32mfix(mobile): 常规宽度改用系统默认的顶部标签条，不再首启强制侧栏[m[m
+[2;1H[K[m
+[3;1H[K uTermMobile/Shell/MobileRootView.swift | 2 [31m--[m[m
+[4;1H[K 1 file changed, 2 deletions(-)[m
+[5;1H[K[33mdd1b8a4a[m [32mtest(mobile): 样式画廊——按设备形态 × 日夜批量截图（按需）[m[m
+[6;1H[K[m
+[7;1H[K uTermMobileTests/Probes/StyleGalleryTests.swift | 281 [32m++++++++++++++++++++++++[m[m
+[8;1H[K uTermMobileTests/README.md                      |   1 [32m+[m[m
+[9;1H[K 2 files changed, 282 insertions(+)[m
+[10;1H[K[33m26417027[m [32mrefactor(mobile): 外壳改为 sidebarAdaptable TabView，iPhone Duo 开合不再重建各屏[m[m
+[11;1H[K[m
+[12;1H[K uTermMobile/Shell/MobileRootView.swift | 86 [32m++++++++++++[m[31m----------------------[m[m
+[13;1H[K 1 file changed, 31 insertions(+), 55 deletions(-)[m
+[14;1H[K[33m19eed2e9[m [32mstyle(mobile): 主机 / 命令 / 设置列表页细节[m[m
+[15;1H[K[m
+[16;1H[K uTermMobile/Screens/Hosts/HostsScreen.swift       | 14 [32m+++++++[m[31m---[m[m
+[17;1H[K uTermMobile/Screens/Settings/CommandsScreen.swift | 33 [32m++++++++++[m[31m-------------[m[m
+[18;1H[K uTermMobile/Screens/Settings/SettingsScreen.swift | 20 [32m++++++++++[m[31m----[m[m
+[19;1H[K 3 files changed, 39 insertions(+), 28 deletions(-)[m
+[20;1H[K[33m120e3476[m [32mstyle(mobile): 文件浏览 / 并行执行 / 命令面板 / Agent 整屏单面分区[m[m
+[21;1H[K[m
+[22;1H[K uTermMobile/Screens/Agent/MAgentMarkdown.swift     |  2 [32m+[m[31m-[m[m
+[23;1H[K uTermMobile/Screens/Agent/MToolCall.swift          |  4 [32m+[m[31m--[m[m
+[24;1H[K uTermMobile/Screens/Agent/MobileAgentChat.swift    | 20 [32m+++++++++[m[31m-----[m[m
+[25;1H[K .../Screens/Commands/QuickCommandDetailView.swift  | 16 [32m+++++++[m[31m----[m[m
+[26;1H[K uTermMobile/Screens/Connect/MConnectingCover.swift |  5 [32m++[m[31m--[m[m
+[27;1H[K .../Screens/Palette/CommandPaletteView.swift       | 12 [32m++++[m[31m----[m[m
+[28;1H[K uTermMobile/Screens/Parallel/ParallelRunView.swift | 32 [32m++++++++++++[m[31m----------[m[m
+[29;1H[K uTermMobile/Screens/SFTP/FileActionSheet.swift     | 14 [32m++++++[m[31m----[m[m
+[30;1H...skipping...
+ uTermMobile/Screens/[7mTerminal[27m/[7mTerminal[27mScreen.swift | 51 [32m++++++++++++++++[m[31m-------[m[m
+ 1 file changed, 37 insertions(+), 14 deletions(-)[m
+[33m7d2e104d[m [32mstyle(mobile): 设计令牌对齐 Ant 预设，补顶边净空与 44pt 命中区[m[m
+[m
+ uTermMobile/DesignKit/MComponents.swift            | 27 [32m++++++++[m[31m-----[m[m
+ uTermMobile/DesignKit/MScaffold.swift              | 33 [32m++++++++++++++[m[31m--[m[m
+ uTermMobile/Screens/[7mTerminal[27m/M[7mTerminal[27mColors.swift |  6 [32m++[m[31m-[m[m
+ uTermMobile/Theme/MobileTheme.swift                | 44 [32m+++++++++++++++[m[31m-------[m[m
+ 4 files changed, 82 insertions(+), 28 deletions(-)[m
+[33mba10079a[m [32mfix(vendor): iOS 终端视图不再在键盘动画中拉伸文字[m[m
+[m
+ .../Sources/SwiftTerm/iOS/iOS[7mTerminal[27mView.swift     | 10 [32m+++++++++[m[31m-[m[m
+ vendor/SwiftTerm/UTERM-PATCHES.md                   | 21 [32m+++++++++++++++++++++[m[m
+ 2 files changed, 30 insertions(+), 1 deletion(-)[m
+[33m66ae3039[m [32mfix(mobile): 连接中页在场时压住终端键盘，失败态不再挂着收不掉的键盘[m[m
+[m
+ uTermMobile/Screens/Connect/MConnectingCover.swift | 34 [32m++++++++++++++++++++++[m[m
+ 1 file changed, 34 insertions(+)[m
+[33m6ce7ff74[m [32mchore(vendor): 清掉 SwiftTerm 在 iOS 构建里的 19 条编译警告[m[m
+[m
+ .../SwiftTerm/Apple/Apple[7mTerminal[27mView.swift        |  2 [32m+[m[31m-[m[m
+ .../Sources/SwiftTerm/iOS/iOS[7mTerminal[27mView.swift    | 31 [32m++++++++++[m[31m------------[m[m
+ .../Sources/SwiftTerm/iOS/iOSTextInput.swift       |  2 [32m+[m[31m-[m[m
+ vendor/SwiftTerm/UTERM-PATCHES.md                  | 10 [32m+++++++[m[m
+ 4 files changed, 26 insertions(+), 19 deletions(-)[m
+[33m9635874c[m [32mperf(ssh): 终端与 SFTP 侧栏同主机共用一条 SSH 连接；建连分段计时[m[m
+[m
+ uTerm/Features/Files/FileBrowserModel.swift        |  53 [32m++[m[31m--[m[m
+ uTerm/Features/Workspace/PaneModel.swift           |  11 [32m+[m[m
+:[K[K/[K uTerm/Services/SSH/ConnectTimeline.swift           | 167 [32m+++++++++++[m[m
+ uTerm/Services/SSH/SFTPSession.swift               |   3 [32m+[m[31m-[m[m
+ uTerm/Services/SSH/SSHClientFactory.swift          |  96 [32m++++++[m[31m-[m[m
+ uTerm/Services/SSH/SSHConnection.swift             |  40 [32m++[m[31m-[m[m
+ uTerm/Services/SSH/SharedConnectionPool.swift      | 214 [32m++++++++++++++[m[m
+ .../Services/SSH/SharedConnectionPoolTests.swift   | 316 [32m+++++++++++++++++++++[m[m
+:[K[K...skipping...
+[m
+ Makefile                                           |  4 [32m+[m[31m-[m[m
+ uTermMobileTests/Probes/AgentChatProbeTests.swift  | 30 [32m+++++++[m[31m----[m[m
+ .../Probes/ParallelRunProbeTests.swift             | 63 [32m++++++++++++++++++[m[31m----[m[m
+ uTermMobileTests/Probes/ProbeRigSelfTests.swift    |  4 [32m++[m[m
+ uTermMobileTests/README.md                         | 49 [32m+++++++++++++++[m[31m--[m[m
+ uTermMobileTests/Support/MobileProbeRig.swift      | 26 [32m+++++++++[m[m
+ uTermMobileTests/Support/MobileProbeWindow.swift   |  6 [32m+++[m[m
+ uTermMobileTests/Support/ProbeMetrics.swift        | 37 [32m++++++++++++[m[31m-[m[m
+ 8 files changed, 195 insertions(+), 24 deletions(-)[m
+[33m6165c79b[m [32mchore(release): 发布 uTermMobile 1.2.6 (build 467)[m[m
+[m
+ Config/VersionMobile.xcconfig |  2 [32m+[m[31m-[m[m
+ RELEASE_LOG.md                | 24 [32m++++++++++++++++++++++++[m[m
+ 2 files changed, 25 insertions(+), 1 deletion(-)[m
+[33m098eb2b2[m [32mchore(release): 发布 uTerm 1.17.3 (build 466)[m[m
+[m
+ Config/Version.xcconfig |  2 [32m+[m[31m-[m[m
+ RELEASE_LOG.md          | 22 [32m++++++++++++++++++++++[m[m
+ 2 files changed, 23 insertions(+), 1 deletion(-)[m
+[33m7226c5af[m [32mfeat(agent): 输入区改用共享的 UDAgentComposer，发送与停止合一[m[m
+[m
+ .../xcshareddata/swiftpm/Package.resolved          |   4 [32m+[m[31m-[m[m
+ uTerm/Features/Agent/Views/AgentComposer.swift     | 166 [32m+++++++++++++++++++++[m[m
+ uTerm/Features/Agent/Views/AssistantView.swift     |  72 [32m+[m[31m--------[m[m
+ .../[7mTerminal[27m/Views/[7mTerminal[27mAgentView.swift         |  84 [32m+[m[31m----------[m[m
+ uTermMobile/Screens/Agent/MToolCall.swift          |   2 [32m+[m[31m-[m[m
+ .../Agent/AssistantInputBarLayoutTests.swift       |  26 [32m++[m[31m--[m[m
+ 6 files changed, 195 insertions(+), 159 deletions(-)[m
+[7m(END)[27m[K[K[H[2J[HM 1 file changed, 21 insertions(+), 11 deletions(-)[m
+[HM .../Screens/Settings/LANSyncSettingsSection.swift  | 32 [32m++++++++++++++[m[31m--------[m[m
+[HM[m
+[HM[33m613fed8b[m [32mfix(mobile): 配对码改为点按弹窗输入，不再行内常驻数字键盘[m[m
+[HM 8 files changed, 202 insertions(+), 68 deletions(-)[m
+[HM .../Layout/MobileAdaptiveLayoutTests.swift         |  50 [32m+++++++++[m[m
+[HM uTermMobile/Theme/MobileTheme.swift                |   4 [32m+[m[m
+[HM uTermMobile/Screens/[7mTerminal[27m/[7mTerminal[27mScreen.swift  |  28 [32m+++[m[31m---[m[m
+[HM uTermMobile/Screens/Settings/SettingsScreen.swift  |   5 [32m+[m[31m-[m[m
+[HM uTermMobile/Screens/Settings/CommandsScreen.swift  |   4 [32m+[m[31m-[m[m
+[HM uTermMobile/Screens/Hosts/HostsScreen.swift        |  13 [32m++[m[31m-[m[m
+[HM uTermMobile/DesignKit/MScaffold.swift              | 112 [32m++++++++++++[m[31m---------[m[m
+[HM uTermMobile/DesignKit/MComponents.swift            |  54 [32m++++++++++[m[m
+[HM[m
+[HM[33m24a9d21e[m [32mfeat(mobile): 首页改用系统导航栏、主机卡片宽屏多列、终端字号不再在宽屏放大[m[m
+[HM 1 file changed, 23 insertions(+), 1 deletion(-)[m
+[HM uTerm/Core/Sync/LANSyncCoordinator.swift | 24 [32m+++++++++++++++++++++++[m[31m-[m[m
+[HM[m
+[HM[33m7afc125f[m [32mfix(sync): 首次安装启动卡死被看门狗杀掉——本机名不再用 ProcessInfo.hostName[m[m
+[HM 7 files changed, 43 insertions(+), 17 deletions(-)[m
+[HM .../Layout/MobileAdaptiveLayoutTests.swift         |  7 [32m+++++[m[m
+[HM uTermMobile/Theme/MobileTheme.swift                |  2 [32m+[m[31m-[m[m
+[HM uTermMobile/Screens/[7mTerminal[27m/[7mTerminal[27mScreen.swift  |  4 [32m+[m[31m--[m[m
+[HM uTermMobile/Screens/Settings/CommandsScreen.swift  |  8 [32m++++[m[31m--[m[m
+[HM uTermMobile/Screens/SFTP/SFTPScreen.swift          |  4 [32m+[m[31m--[m[m
+[HM uTermMobile/Screens/Hosts/HostsScreen.swift        |  3 [32m+[m[31m-[m[m
+[HM uTermMobile/DesignKit/MComponents.swift            | 32 [32m++++++++++++++++[m[31m------[m[m
+[HM[m
+[HM[33ma6ee8409[m [32mstyle(mobile): 终端 / 文件 / 命令选择页也按宽度排 2–3 列；卡片间距收窄到 10–12pt[m[m
+[30;1H[K:[K[K[?1l>[?1049l
