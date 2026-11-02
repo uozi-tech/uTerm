@@ -110,7 +110,7 @@ struct HostsScreen: View {
     }
 
     private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased()).font(M.sans(12, weight: .semibold)).tracking(0.6).foregroundStyle(M.text4)
+        Text(text.uppercased()).font(M.sans(12, weight: .semibold)).tracking(0.6).foregroundStyle(M.text3)
             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
     }
 
@@ -176,16 +176,22 @@ struct HostCard: View {
                         Divider()
                         Button(role: .destructive) { onDelete() } label: { Label("删除", systemImage: "trash") }
                     } label: {
-                        MIcon(name: "ellipsis", size: 18, color: M.text3).frame(width: 34, height: 34)
+                        MIcon(name: "ellipsis", size: 18, color: M.text3)
+                            .frame(width: M.minTarget, height: M.minTarget)
+                            .contentShape(Rectangle())
                     }
+                    .padding(.vertical, -5).padding(.trailing, -6)   // 命中区 44pt，不撑高卡片头
+                    .accessibilityLabel(Text("更多操作"))
                 }
 
                 HStack(spacing: 6) {
                     MGroupChip(host.group?.isEmpty == false ? host.group! : "未分组", tint: groupColor)
                     MChip(text: host.authMethod == .privateKey ? "SSH 密钥" : "密码", icon: "key", tone: .accent)
                     if host.sftpOnly { MChip(text: "仅 SFTP", icon: "folder") }
-                    Spacer()
-                    Text(lastText).font(M.sans(11.5)).foregroundStyle(M.text4)
+                    Spacer(minLength: 6)
+                    // 窄屏（iPhone Duo 分屏 ≈ 330pt）让位给 chip：时间单行截断，chip 不折行。
+                    Text(lastText).font(M.sans(11.5)).foregroundStyle(M.text3)
+                        .lineLimit(1).layoutPriority(-1)
                 }
             }
             .padding(14)

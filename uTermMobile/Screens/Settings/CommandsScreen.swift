@@ -11,34 +11,29 @@ struct CommandsScreen: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            // 与「主机 / 终端 / 文件 / 设置」四个标签同一套大标题页头（MScreen）：此前这里是系统
+            // 内联导航栏 + 「快捷命令」小标题，五个标签里唯独它换了一种页头。
+            MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令", actions: {
+                MRoundBtn(icon: "plus", filled: true) { creating = true }
+                    .accessibilityLabel(Text("新建命令"))
+            }) {
                 if commands.isEmpty {
                     MEmptyState(icon: "bolt", title: "还没有快捷命令",
                                 message: "把常用运维命令存成可复用条目，绑定主机一键执行。",
                                 actionTitle: "新建命令", action: { creating = true })
                 } else {
-                    ScrollView {
-                        MCardList {
-                            ForEach(commands) { cmd in
-                                NavigationLink { QuickCommandDetailView(cmd: cmd) } label: {
-                                    CommandCard(cmd: cmd)
-                                }.buttonStyle(MPressStyle())
-                            }
-                            .padding(.horizontal, 16)
+                    MCardList {
+                        ForEach(commands) { cmd in
+                            NavigationLink { QuickCommandDetailView(cmd: cmd) } label: {
+                                CommandCard(cmd: cmd)
+                            }.buttonStyle(MPressStyle())
                         }
-                        .padding(.top, 12)
-                        .mReadableColumn()
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
                 }
             }
-            .background(M.canvas)
-            .navigationTitle("快捷命令")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { creating = true } label: { MIcon(name: "plus", size: 18, color: accent) }
-                }
-            }
+            .navigationBarHidden(true)
             .sheet(isPresented: $creating) { CommandFormSheet(cmd: nil) }
         }
     }

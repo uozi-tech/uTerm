@@ -177,7 +177,9 @@ struct SettingsScreen: View {
     private var terminalGroup: some View {
         MInsetGroup(header: "终端") {
             MInsetRow(label: "字体", value: "系统等宽", valueMono: true)
-            MInsetRow(label: "字号", value: "13 pt")
+            // 移动端终端字号随可用宽度自适应（9–16pt，见 TerminalSessionBody.adaptiveFontSize），
+            // 不是固定 13pt——iPhone Duo 外屏 / 分屏更小、展开 / iPad 更大。
+            MInsetRow(label: "字号", value: "随宽度自适应")
             MInsetRow(label: "光标", value: "稳定块", last: true)
         }
     }
@@ -337,22 +339,30 @@ struct AccentPickerRow: View {
     @State private var selected: AccentColor = AccentState.shared.selected
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 4) {
             ForEach(AccentColor.allCases) { color in
                 let c = color.base(dark: true).color()
+                let on = selected == color
                 Circle().fill(c)
                     .frame(width: 30, height: 30)
-                    .overlay(Circle().stroke(.white, lineWidth: selected == color ? 2.5 : 0))
-                    .overlay(Circle().stroke(M.border, lineWidth: 1))
-                    .scaleEffect(selected == color ? 1.08 : 1)
+                    // 选中环：外圈一道正文色描边，中间隔开 3pt 卡片底。旧版是贴边白环，
+                    // 日间白卡上完全看不出选中了哪一个。
+                    .padding(3)
+                    .overlay(Circle().strokeBorder(on ? M.text : .clear, lineWidth: 2))
+                    .frame(width: M.minTarget, height: M.minTarget)   // 命中区 44pt
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.spring(duration: 0.25)) {
                             selected = color
                             AccentState.shared.selected = color
                         }
                     }
+                    .accessibilityElement()
+                    .accessibilityLabel(Text(color.label))
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
             }
             Spacer()
         }
+        .padding(.leading, -7)   // 让第一个色块的视觉左缘与上方「强调色」文字对齐
     }
 }
