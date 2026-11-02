@@ -240,12 +240,16 @@ struct WelcomeSidebar: View {
                             .accessibilityAddTraits(.isHeader)
                         Spacer()
                         Button { openWindow(id: "groups") } label: {
+                            // 图标色交给 iconButtonHover（静息 text2、悬停 text + 灰底），这里不设。
                             Image(systemName: "slider.horizontal.3")
                                 .font(.system(size: 11))
-                                .foregroundStyle(UD.text4)
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(.trailing, 14)
+                        .iconButtonHover(cornerRadius: 5)
+                        // 20pt 命中框比图标宽约 4pt：外边距相应减 4，图标位置不变。
+                        .padding(.trailing, 10)
                         .accessibilityLabel("管理分组")
                         .help("管理分组")
                     }
