@@ -1,0 +1,281 @@
+import SwiftUI
+import SwiftData
+import UIKit
+import XCTest
+@testable import uTermMobile
+
+/// 样式画廊：把每个页面按「设备形态 × 日 / 夜」挂起来截图，供人眼核对样式与 iPhone Duo 适配。
+///
+/// 这不是闸门：只在设置了环境变量 `UTERM_STYLE_SHOTS_DIR` 时才跑（`xcodebuild test` 里写成
+/// `TEST_RUNNER_UTERM_STYLE_SHOTS_DIR=/path`），否则整条 `XCTSkip`，不拖慢 `make test-mobile`。
+///
+/// ## 设备形态
+///
+/// iPhone Duo（iPhone19,4，iOS 27.1 起）是一台横向对折的折叠屏：
+/// - **外屏（合起）**：1398×2034 px @3x = **466×678pt**，灵动岛与状态栏在**侧边**，
+///   只有远离铰链一侧是大圆角（59 / 8）；
+/// - **内屏（展开）**：2007×2853 px @3x = **669×951pt**，宽度落进常规（regular）水平尺寸类；
+/// - **内屏分屏**：iOS 27 把 iPad 的 Split View 搬了过来，两个 app 并排时每边约 **330pt**，
+///   比 iPhone SE（375pt）还窄，必须按紧凑尺寸类排。
+///
+/// 探针窗口关掉了安全区（见 `MobileProbeWindow.make`），所以这里只核对内容排版与配色；
+/// 侧边灵动岛 / 圆角等安全区行为以模拟器整机截图为准。
+@MainActor
+final class StyleGalleryTests: XCTestCase {
+
+    private struct Device {
+        let name: String
+        let size: CGSize
+        let hSize: UserInterfaceSizeClass
+    }
+
+    private static let devices: [Device] = [
+        Device(name: "duo-folded", size: CGSize(width: 466, height: 678), hSize: .compact),
+        Device(name: "duo-unfolded", size: CGSize(width: 669, height: 951), hSize: .regular),
+        Device(name: "duo-split", size: CGSize(width: 330, height: 951), hSize: .compact),
+        Device(name: "iphone", size: CGSize(width: 402, height: 874), hSize: .compact),
+        Device(name: "ipad", size: CGSize(width: 820, height: 1180), hSize: .regular),
+    ]
+
+    private var outputDir: URL!
+
+    override func setUpWithError() throws {
+        guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
+            throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR：样式画廊只按需跑")
+        }
+        outputDir = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+    }
+
+    // MARK: - 挂载与截图
+
+    /// 挂一屏、等它排完版、按日 / 夜各截一张。返回成功写出的张数。
+    @discardableResult
+    private func shoot<V: View>(_ name: String, on device: Device,
+                                settle: Duration = .milliseconds(350),
+                                _ view: () -> V) async throws -> Int {
+        var written = 0
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let root = view()
+                .environment(\.horizontalSizeClass, device.hSize)
+                .environment(\.mAccent, M.accent)
+                .tint(M.accent)
+                .frame(width: device.size.width, height: device.size.height)
+            let (window, host) = MobileProbeWindow.make(size: device.size, rootView: root)
+            window.overrideUserInterfaceStyle = style
+            host.view.backgroundColor = style == .dark ? .black : .white
+            host.view.layoutIfNeeded()
+            CATransaction.flush()
+            try await Task.sleep(for: settle)
+            host.view.layoutIfNeeded()
+            CATransaction.flush()
+
+            let renderer = UIGraphicsImageRenderer(bounds: host.view.bounds)
+            let png = renderer.pngData { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            }
+            let file = outputDir.appendingPathComponent(
+                "\(name)-\(device.name)-\(style == .dark ? "dark" : "light").png")
+            try png.write(to: file)
+            written += 1
+            MobileProbeWindow.close(window)
+        }
+        XCTAssertEqual(written, 2, "\(name) @ \(device.name)")
+        return written
+    }
+
+    private func store(tab: MTab) -> MobileStore {
+        let s = MobileStore()
+        s.tab = tab
+        return s
+    }
+
+    private func lanSync(_ c: ModelContainer) -> LANSyncCoordinator {
+        LANSyncCoordinator(role: .receiver, preferences: SharedPreferencesSync(),
+                           dataStore: LANSyncDataStore(container: c))
+    }
+
+    // MARK: - 列表类屏（@Query 驱动）
+
+    func testListScreens() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let sync = CloudKitSyncMonitor()
+        let lan = lanSync(c)
+        let relay = HostKeyChallengeRelay()
+
+        for device in Self.devices {
+            try await shoot("hosts", on: device) {
+                HostsScreen().environment(store(tab: .hosts)).modelContainer(c)
+            }
+            try await shoot("terminal-picker", on: device) {
+                TerminalScreen()
+                    .environment(store(tab: .terminal))
+                    .environment(relay)
+                    .environment(TerminalSessions())
+                    .modelContainer(c)
+            }
+            try await shoot("sftp-picker", on: device) {
+                SFTPScreen()
+                    .environment(store(tab: .sftp))
+                    .environment(relay)
+                    .environment(MobileSFTPSession())
+                    .modelContainer(c)
+            }
+            try await shoot("commands", on: device) {
+                CommandsScreen().environment(store(tab: .commands)).modelContainer(c)
+            }
+            try await shoot("settings", on: device) {
+                SettingsScreen()
+                    .environment(store(tab: .settings))
+                    .environment(sync)
+                    .environment(lan)
+                    .modelContainer(c)
+            }
+            try await shoot("keys", on: device) {
+                NavigationStack { KeysScreen() }.modelContainer(c)
+            }
+            try await shoot("groups", on: device) {
+                NavigationStack { GroupsScreen() }.modelContainer(c)
+            }
+            try await shoot("fingerprints", on: device) {
+                NavigationStack { FingerprintsView() }.modelContainer(c)
+            }
+            try await shoot("palette", on: device) {
+                CommandPaletteView().environment(store(tab: .hosts)).modelContainer(c)
+            }
+        }
+    }
+
+    // MARK: - 抽屉 / 表单
+
+    func testSheets() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let cmd = try XCTUnwrap(try c.mainContext.fetch(FetchDescriptor<QuickCommand>()).first)
+
+        for device in Self.devices {
+            try await shoot("host-sheet", on: device) {
+                HostSheet(host: host, onConnect: {}, onSFTP: {}, onEdit: {}).modelContainer(c)
+            }
+            try await shoot("host-form", on: device) {
+                HostFormSheet(host: host).modelContainer(c)
+            }
+            try await shoot("command-detail", on: device) {
+                NavigationStack { QuickCommandDetailView(cmd: cmd) }
+                    .environment(store(tab: .commands))
+                    .modelContainer(c)
+            }
+            try await shoot("connecting", on: device) {
+                ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
+                                    onFinish: {}, onCancel: {}, onRetry: {})
+                    .environment(store(tab: .hosts))
+                    .environment(HostKeyChallengeRelay())
+                    .modelContainer(c)
+            }
+        }
+    }
+
+    // MARK: - 终端会话（假传输，真 SwiftTerm）
+
+    func testTerminalSession() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let hosts = Array(try c.mainContext.fetch(
+            FetchDescriptor<ServerProfile>(sortBy: [SortDescriptor(\.sortOrder)])).filter { !$0.sftpOnly }.prefix(3))
+        let relay = HostKeyChallengeRelay()
+
+        for device in Self.devices {
+            let (sessions, _) = MobileFakeTerminal.sessions(
+                count: 2, hosts: hosts, script: .interactive(seconds: 2), container: c, relay: relay)
+            for tab in sessions.tabs { await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+            try await shoot("terminal-session", on: device, settle: .milliseconds(900)) {
+                TerminalScreen()
+                    .environment(store(tab: .terminal))
+                    .environment(relay)
+                    .environment(sessions)
+                    .modelContainer(c)
+            }
+            for tab in sessions.tabs { tab.controller.close() }
+        }
+    }
+
+    // MARK: - SFTP 浏览（假会话）
+
+    func testSFTPBrowser() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+
+        for device in Self.devices {
+            let provider = MobileFakeSFTPProvider(entries: 40, subdirectories: 6, childCount: 10, depth: 2)
+            let session = await MobileFakeSFTP.session(host: host, provider: provider)
+            let s = store(tab: .sftp)
+            s.sftpTarget = host.persistentModelID
+            try await shoot("sftp-browser", on: device) {
+                SFTPScreen()
+                    .environment(s)
+                    .environment(HostKeyChallengeRelay())
+                    .environment(session)
+                    .modelContainer(c)
+            }
+        }
+    }
+
+    // MARK: - Agent 会话 / 并行执行
+
+    func testAgentAndParallel() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.emptyContainer()
+        let context = c.mainContext
+        context.autosaveEnabled = false
+        let provider = MobileFakeAgent.provider()
+        context.insert(provider)
+        let host = ServerProfile()
+        host.name = "probe-node-01"
+        host.host = "10.0.0.11"
+        host.username = "root"
+        context.insert(host)
+        try context.save()
+
+        let pc = try MobileFixtures.modelContainer(seed: .smoke)
+        let profiles = Array(try pc.mainContext.fetch(
+            FetchDescriptor<ServerProfile>(sortBy: [SortDescriptor(\.sortOrder)])).prefix(6))
+
+        for device in Self.devices {
+            let model = AssistantModel(client: MobilePacedLLMClient(chunks: []),
+                                       provider: provider, apiKey: "sk-probe")
+            model.attach(context: context)
+            MobileFakeAgent.replayHistory(into: model, context: context, messages: 4)
+            try await shoot("agent", on: device) {
+                MobileAgentChat(model: model, host: host, tasks: MAgentTaskBag(),
+                                serverContext: "probe-node-01（root@10.0.0.11:22）")
+                    .environment(\.agentCommandExecutorFactory, .none)
+                    .modelContainer(c)
+            }
+            model.dispose()
+
+            let config = MobileFakeParallelRun.Config.streaming(
+                hosts: profiles.count, lines: 30, seconds: 0.3, failing: 1, unreachable: 1)
+            let fake = MobileFakeParallelRun(config: config, targets: profiles)
+            let commandID = UUID()
+            let controller = ParallelRunController(
+                commandID: commandID, commandName: "重启并抓日志",
+                command: config.command, intent: "", aiAssisted: false,
+                targets: profiles, doctor: nil,
+                store: QuickCommandStore(context: pc.mainContext),
+                container: pc, executor: fake)
+            let request = ParallelRunRequest(commandID: commandID, name: "重启并抓日志",
+                                             command: config.command, intent: "",
+                                             aiAssisted: false, serverIDs: profiles.map(\.id))
+            controller.start()
+            try await shoot("parallel", on: device, settle: .milliseconds(900)) {
+                ParallelRunView(request: request, controller: controller, onClose: {})
+                    .environment(store(tab: .commands))
+                    .modelContainer(pc)
+            }
+            controller.cancel()
+        }
+    }
+}
