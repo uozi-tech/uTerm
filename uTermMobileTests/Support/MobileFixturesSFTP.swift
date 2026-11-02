@@ -682,8 +682,8 @@ actor MobileFakeSFTPProvider: SFTPProviding {
 
 // MARK: - 挂载器
 
-/// 把假会话挂进 `MobileSFTPController` / `MobileSFTPSession`，
-/// 让 `SFTPScreen` 无需任何真实连接就能渲染浏览态。
+/// 把假会话挂进 `MobileSFTPController` / `FileTab`，
+/// 让工作区里的文件标签无需任何真实连接就能渲染浏览态。
 ///
 /// 与上一版的区别：不再手写 `state` / `path` / `entries`，一律走产品自己的
 /// `MobileSFTPController(testProvider:startPath:)` + `load(_:)`。
@@ -703,18 +703,17 @@ enum MobileFakeSFTP {
         return controller
     }
 
-    /// 造一个可以直接塞进 `SFTPScreen` 环境的会话。
+    /// 造一个只含一个文件标签的工作区，可以直接塞进 `WorkspaceScreen` 的环境。
     ///
-    /// `activeTarget` 预设为 `host` 的 `PersistentIdentifier`，这一步**是必须的**：
-    /// `SFTPScreen.consumeSFTPTarget` 只在 `activeTarget != store.sftpTarget` 时才
-    /// 调 `controller.start(...)`；预设成相等，屏幕挂载时就整条跳过真实建连。
-    static func session(host: ServerProfile,
-                        provider: MobileFakeSFTPProvider,
-                        path: String? = nil) async -> MobileSFTPSession {
-        let session = MobileSFTPSession()
-        session.controller = await controller(provider: provider, path: path)
-        session.activeTarget = host.persistentModelID
-        return session
+    /// 控制器走 `MobileSFTPController(testProvider:startPath:)` 注入，`started` 已置真：
+    /// 屏幕挂载时不会也不能发起真实建连（工作区只在消费 `store.openTarget` 时才 `start`）。
+    static func workspace(host: ServerProfile,
+                          provider: MobileFakeSFTPProvider,
+                          path: String? = nil) async -> (MobileWorkspace, FileTab) {
+        let tab = FileTab(host: host, controller: await controller(provider: provider, path: path))
+        let workspace = MobileWorkspace()
+        workspace.open(.files(tab))
+        return (workspace, tab)
     }
 
     /// 换目录：走产品的 `load(_:)`（可 await，读数确定）。

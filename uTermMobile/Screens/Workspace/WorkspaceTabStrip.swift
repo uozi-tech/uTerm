@@ -1,0 +1,229 @@
+import SwiftUI
+
+/// 标签的三种活动态（对齐 macOS `UPaneTabActivity`）。
+enum MTabActivity {
+    /// 聚焦格的前台标签——全工作区只有一个。
+    case active
+    /// 另一格的前台标签（分屏时也在屏上，但键盘不归它）。
+    case frontUnfocused
+    /// 后台标签。
+    case inactive
+}
+
+/// 一个分屏格的标签条：返回 · 多态标签（终端 / 文件）· 新建 · Agent 开关 · 分屏开关。
+///
+/// 活动态配色照 macOS 工作区 `.card` 标签（uAppKit `UPaneTabChip.cardChip`）：
+/// - 前台标签（含另一格的前台）填中性的 `panelHi` 胶囊，**不染 accent 底**；后台标签透明；
+/// - 只有活动标签的图标走 accent，标题正文强度；另一格前台标题降到 `text2`，后台 `text3`；
+/// - 「焦点在哪一格」不靠标签条表达，由格外圈的 1.5pt accent 焦点框表达（见 `WorkspaceScreen`）。
+/// 一屏之内 accent 只出现在一个图标和一圈焦点框上，不会两三处 accent 抢着说「我是当前」。
+struct WorkspaceTabStrip: View {
+    let tabs: [MWorkTab]
+    let activeID: UUID?
+    /// 本格是否为聚焦格。
+    var paneFocused: Bool = true
+    /// 返回主机列表按钮只放在第一格（两格都放就是两个一样的返回）。
+    var showsBack: Bool = true
+    /// 分屏开关：nil = 不显示；false = 「分屏」；true = 「取消分屏」。只放在最后一格。
+    var splitState: Bool? = nil
+    /// 标签能否挪到另一格（关掉时长按菜单里不出现「移到另一侧」）。
+    var canMoveTabs: Bool = true
+    var onSelect: (UUID) -> Void
+    var onClose: (UUID) -> Void
+    var onNew: (MConnectKind) -> Void
+    var onBack: () -> Void
+    /// 切换当前终端标签的「终端 ⇄ Agent」模式。
+    var onAgent: () -> Void
+    var onToggleSplit: () -> Void = {}
+    var onMoveToOtherPane: (UUID) -> Void = { _ in }
+
+    @Environment(\.mAccent) private var accent
+
+    private var frontTerminal: TermTab? { tabs.first { $0.id == activeID }?.terminal }
+    private var agentOn: Bool { frontTerminal?.mode == .agent }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if showsBack {
+                stripButton(icon: "back", color: accent, label: "返回主机列表", action: onBack)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(tabs) { tab in
+                            WorkspaceTabChip(tab: tab, activity: activity(tab), canMove: canMoveTabs,
+                                             onSelect: { onSelect(tab.id) },
+                                             onClose: { onClose(tab.id) },
+                                             onMove: { onMoveToOtherPane(tab.id) })
+                                .id(tab.id)
+                        }
+                        newMenu
+                    }
+                    .padding(.leading, showsBack ? 0 : 8)
+                }
+                .onChange(of: activeID) { _, id in
+                    guard let id else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id) }
+                }
+            }
+
+            if frontTerminal != nil { agentButton }
+            if let split = splitState {
+                // 开关语义：分屏中用实心图标表示「开着」，再点一下取消。
+                stripButton(systemImage: split ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
+                            color: M.text2, label: split ? "取消分屏" : "分屏", action: onToggleSplit)
+            }
+        }
+        // 两端按钮命中区 44pt、视觉 34pt：外沿各自带 5pt，水平内边距相应收到 3（视觉仍距边 ~8）。
+        .padding(.horizontal, 3).frame(height: 48)
+        // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区。
+        .background(M.surface)
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+    }
+
+    private func activity(_ tab: MWorkTab) -> MTabActivity {
+        guard tab.id == activeID else { return .inactive }
+        return paneFocused ? .active : .frontUnfocused
+    }
+
+    private var newMenu: some View {
+        Menu {
+            Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
+            Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
+        } label: {
+            MIcon(name: "plus", size: 14, color: M.text2, weight: .semibold)
+                .frame(width: 30, height: 30)
+                .padding(.vertical, 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("新建会话"))
+    }
+
+    private var agentButton: some View {
+        Button(action: onAgent) {
+            MIcon(name: agentOn ? "term" : "spark", size: 17,
+                  color: agentOn ? .white : M.aiAccent, weight: .semibold)
+                .frame(width: 34, height: 34)
+                .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
+                .clipShape(Circle())
+                .frame(width: M.minTarget, height: M.minTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel(Text(agentOn ? "返回终端" : "切换到 Agent"))
+        .accessibilityAddTraits(agentOn ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func stripButton(icon: String? = nil, systemImage: String? = nil, color: Color,
+                             label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(color)
+                } else if let icon {
+                    MIcon(name: icon, size: 19, color: color, weight: .semibold)
+                }
+            }
+            .frame(width: 34, height: 34)
+            .background(M.button).clipShape(Circle())
+            .frame(width: M.minTarget, height: M.minTarget)   // 命中区 44pt
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel(Text(label))
+    }
+}
+
+/// 标签条上的一枚标签：状态点 · 类型图标 · 标题 · 关闭。
+struct WorkspaceTabChip: View {
+    let tab: MWorkTab
+    let activity: MTabActivity
+    var canMove: Bool = true
+    var onSelect: () -> Void
+    var onClose: () -> Void
+    var onMove: () -> Void = {}
+    @Environment(\.mAccent) private var accent
+    @State private var hovering = false
+
+    private var isFront: Bool { activity != .inactive }
+
+    private var iconColor: Color {
+        switch activity {
+        case .active: return accent
+        case .frontUnfocused: return M.text2
+        case .inactive: return M.text3
+        }
+    }
+
+    private var titleColor: Color {
+        switch activity {
+        case .active: return M.text
+        case .frontUnfocused: return M.text2
+        case .inactive: return hovering ? M.text2 : M.text3
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            MDot(color: stateDot.color, pulse: stateDot.pulse, size: 6)
+            MIcon(name: tab.kind == .terminal ? "term" : "folder", size: 12, color: iconColor,
+                  weight: activity == .active ? .semibold : .regular)
+            Text(tab.title)
+                .font(M.mono(12.5))
+                .foregroundStyle(titleColor)
+                .lineLimit(1)
+                // 长标题（shell 设的 OSC 标题常带整条路径）截断，别一枚标签占掉整条。
+                .frame(maxWidth: 168, alignment: .leading)
+            // 后台标签不放关闭钮（触屏没有悬停，放了就是一排 ×）：点一下切到前台再关，
+            // 或长按用菜单关。带指针的 iPad 悬停时照 macOS 露出来。
+            if isFront || hovering {
+                Button(action: onClose) {
+                    MIcon(name: "x", size: 10, color: M.text3, weight: .semibold)
+                        .frame(width: 26, height: 30)   // 关闭命中区占满胶囊高度
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("关闭会话"))
+            }
+        }
+        .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
+        .padding(.vertical, 7)   // 命中区 44pt
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { hovering = $0 }
+        .contextMenu {
+            if canMove {
+                Button(action: onMove) {
+                    Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
+                }
+            }
+            Button(role: .destructive, action: onClose) { Label("关闭", systemImage: "xmark") }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(activity == .active ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// 连接状态点：终端看 SSH 会话，文件浏览看 SFTP 会话。
+    private var stateDot: (color: Color, pulse: Bool) {
+        switch tab {
+        case .terminal(let t):
+            switch t.controller.state {
+            case .connected: return (M.success, false)
+            case .connecting: return (M.warning, true)
+            case .failed: return (M.danger, false)
+            case .closed, .idle: return (M.text4, false)
+            }
+        case .files(let f):
+            switch f.controller.state {
+            case .connected: return (M.success, false)
+            case .connecting, .idle: return (M.warning, true)
+            case .failed: return (M.danger, false)
+            }
+        }
+    }
+}

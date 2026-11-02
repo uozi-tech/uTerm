@@ -14,18 +14,21 @@ struct MobileRootView: View {
     @State private var store = MobileStore()
     /// host-key 信任挑战桥：终端 / SFTP 控制器共用一份，根视图据此弹出信任弹层。
     @State private var hostKeyRelay = HostKeyChallengeRelay()
-    /// 终端会话集合在根视图持有（高于 compact/regular 外壳切换），横屏切 size class 时不丢会话。
-    @State private var terminalSessions = TerminalSessions()
-    /// SFTP 会话同理在根视图持有，横屏切 size class 时不丢会话 / 不退回根目录。
-    @State private var sftpSession = MobileSFTPSession()
+    /// 会话工作区（终端 + 文件浏览标签、分屏）在根视图持有（高于标签栏 ⇄ 侧栏外壳），
+    /// 横屏切 size class 时不丢会话 / 不退回根目录。
+    @State private var workspace = MobileWorkspace()
 
     var body: some View {
         @Bindable var store = store
-        MobileTabShell()
+        ZStack {
+            MobileTabShell()
+            // 会话工作区：终端 / 文件标签与分屏，全屏盖住标签栏。常驻挂载（收起时移到屏外），
+            // 这样会话、滚动位置与各格的视图状态都不随收起丢失；连接请求也随时有人消费。
+            WorkspaceLayer()
+        }
         .environment(store)
         .environment(hostKeyRelay)
-        .environment(terminalSessions)
-        .environment(sftpSession)
+        .environment(workspace)
         .environment(\.mAccent, M.accent)
         .tint(M.accent)
         // ⌘K 硬件快捷键（iPad 外接键盘）：唤起命令面板。
@@ -118,10 +121,27 @@ private struct MobileTabShell: View {
     @ViewBuilder private func tabContent(_ tab: MTab) -> some View {
         switch tab {
         case .hosts:    HostsScreen()
-        case .terminal: TerminalScreen()
-        case .sftp:     SFTPScreen()
         case .commands: CommandsScreen()
         case .settings: SettingsScreen()
         }
+    }
+}
+
+// MARK: - 工作区层
+
+/// 收起时整层平移到屏幕右侧之外、不可点、读屏跳过；展开时从右侧推入（与下钻同向）。
+private struct WorkspaceLayer: View {
+    @Environment(MobileStore.self) private var store
+
+    var body: some View {
+        let visible = store.showWorkspace
+        WorkspaceScreen()
+            .background(M.surface.ignoresSafeArea())
+            .visualEffect { content, proxy in
+                content.offset(x: visible ? 0 : proxy.size.width)
+            }
+            .allowsHitTesting(visible)
+            .accessibilityHidden(!visible)
+            .animation(.easeInOut(duration: 0.28), value: visible)
     }
 }

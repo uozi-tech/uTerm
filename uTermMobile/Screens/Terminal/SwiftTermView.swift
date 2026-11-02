@@ -14,6 +14,9 @@ struct SwiftTermView: UIViewRepresentable {
     /// 是否允许会话出现即自动弹键盘。连接中页期间传 false——否则键盘会盖住中转页、
     /// 并因软键盘安全区收缩把中转页内容顶上去（动画错乱）。中转页撤下后由终端屏重新聚焦。
     var autoFocus: Bool = true
+    /// 用户点了终端（分屏时据此切聚焦格）。SwiftUI 手势拿不到 UIKit 视图上的触摸，
+    /// 所以挂一个不吞触摸的 UITapGestureRecognizer。
+    var onInteract: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
@@ -25,6 +28,16 @@ struct SwiftTermView: UIViewRepresentable {
             frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
         // 把（可能是新建的）coordinator 接上：复用旧视图时旧 coordinator 已随旧表示层销毁。
         view.terminalDelegate = context.coordinator
+        context.coordinator.onInteract = onInteract
+        // 复用旧视图时先摘掉上一个表示层留下的识别器（它的 target 是已销毁的旧 coordinator）。
+        view.gestureRecognizers?
+            .filter { $0.name == Coordinator.interactGestureName }
+            .forEach(view.removeGestureRecognizer)
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.interacted))
+        tap.name = Coordinator.interactGestureName
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        view.addGestureRecognizer(tap)
         // 终端强制英文 ASCII 键盘：避免跟随系统语言弹出中文等候选栏（命令输入应纯 ASCII）。
         // 联想 / 自动更正 / 智能标点已由 SwiftTerm 默认关闭（autocorrection 等均为 .no）。
         // 注：Agent（AI 模式）走独立的 SwiftUI 输入框，不受此限制。
@@ -45,6 +58,7 @@ struct SwiftTermView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SwiftTerm.TerminalView, context: Context) {
+        context.coordinator.onInteract = onInteract
         // 外观切换（日 / 夜）时实时重应用配色。
         apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: uiView)
         // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时实时换字（换字会触发
@@ -69,9 +83,15 @@ struct SwiftTermView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(controller: controller) }
 
-    final class Coordinator: NSObject, TerminalViewDelegate {
+    final class Coordinator: NSObject, TerminalViewDelegate, UIGestureRecognizerDelegate {
+        static let interactGestureName = "uterm.interact"
         let controller: MobileTerminalController
+        var onInteract: (() -> Void)?
         init(controller: MobileTerminalController) { self.controller = controller }
+
+        @objc func interacted() { onInteract?() }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
         func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
             controller.write(Data(data))

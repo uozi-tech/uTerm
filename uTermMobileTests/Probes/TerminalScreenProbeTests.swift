@@ -4,7 +4,7 @@ import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// 终端屏（`TerminalScreen` / `TerminalSessionBody` / `SessionTabBar` / `TerminalKeyBar`）的评估探针。
+/// 终端屏（`WorkspaceScreen` / `TerminalSessionBody` / `WorkspaceTabStrip` / `TerminalKeyBar`）的评估探针。
 ///
 /// ## 规模从哪来
 ///
@@ -50,10 +50,10 @@ final class TerminalScreenProbeTests: XCTestCase {
             .modelContainer(container)
     }
 
-    /// 整屏：`TerminalScreen` 吃一个已经填好会话的 `TerminalSessions`。
-    private func screen(_ sessions: TerminalSessions, container: ModelContainer,
+    /// 整屏：`WorkspaceScreen` 吃一个已经填好终端标签的 `MobileWorkspace`。
+    private func screen(_ sessions: MobileWorkspace, container: ModelContainer,
                         store: MobileStore, relay: HostKeyChallengeRelay) -> some View {
-        TerminalScreen()
+        WorkspaceScreen()
             .environment(store)
             .environment(relay)
             .environment(sessions)
@@ -77,6 +77,7 @@ final class TerminalScreenProbeTests: XCTestCase {
         defer { MobileProbeWindow.closeAll() }
         let c = try container()
         let store = MobileStore()
+        store.showWorkspace = true   // 工作区展开：活动标签才算在屏上
         let relay = HostKeyChallengeRelay()
         let host = try XCTUnwrap(hosts(c, 1).first)
 
@@ -117,7 +118,7 @@ final class TerminalScreenProbeTests: XCTestCase {
 
     /// 1 / 4 / 8 个会话同时挂载：`UIView` 数、挂载耗时、切 tab 耗时。
     ///
-    /// `TerminalScreen.sessionContainer` 是 `ZStack { ForEach(tabs) { TerminalSessionBody } }` ——
+    /// `WorkspaceScreen` 每一格是 `ZStack { ForEach(tabs) { TerminalSessionBody } }` ——
     /// 每片 = 一个 SwiftTerm `TerminalView` + 一个完整 `MobileAgentChat` + 一条键盘条，
     /// **全部常驻**（非活动片只是 `opacity(0)` + 移出屏外）。这一条就是量它的账。
     func testResidentSessionsScaling() async throws {
@@ -128,13 +129,14 @@ final class TerminalScreenProbeTests: XCTestCase {
         for n in [1, 4, 8] {
             let c = try container()
             let store = MobileStore()
+            store.showWorkspace = true   // 工作区展开：活动标签才算在屏上
             let relay = HostKeyChallengeRelay()
             // 每个会话一台不同的主机：`openTab` 的去重逻辑不参与（我们直接塞 tabs），
             // 但主机名长短不同才让标签片的排版成本进账。
             let hs = hosts(c, n)
             let (sessions, _) = MobileFakeTerminal.sessions(
                 count: n, hosts: hs, script: .idle, container: c, relay: relay)
-            for tab in sessions.tabs {
+            for tab in sessions.terminalTabs {
                 _ = await MobileFakeTerminal.waitUntilConnected(tab.controller)
             }
 
@@ -151,7 +153,7 @@ final class TerminalScreenProbeTests: XCTestCase {
                 for round in 0..<(ids.count * 3) {
                     let target = ids[round % ids.count]
                     let t0 = CFAbsoluteTimeGetCurrent()
-                    sessions.activeID = target
+                    sessions.activate(target)
                     rig.layout()
                     switches.append((CFAbsoluteTimeGetCurrent() - t0) * 1000)
                     try await Task.sleep(for: .milliseconds(16))
@@ -203,21 +205,22 @@ final class TerminalScreenProbeTests: XCTestCase {
         defer { MobileProbeWindow.closeAll() }
         let c = try container()
         let store = MobileStore()
+        store.showWorkspace = true   // 工作区展开：活动标签才算在屏上
         let relay = HostKeyChallengeRelay()
         let n = 4
         let script = MobileFakeTerminalScript(linesPerSecond: 2000, seconds: 12)
         let (sessions, handles) = MobileFakeTerminal.sessions(
             count: n, hosts: hosts(c, n), script: script, container: c, relay: relay)
-        for tab in sessions.tabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+        for tab in sessions.terminalTabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
 
         let label = "term-inactive-4x2000"
         let rig = MobileProbeRig(label: label)
         rig.mount(screen(sessions, container: c, store: store, relay: relay))
         rig.layout()
 
-        let before = MobileTerminalConsumption.read(sessions.tabs)
+        let before = MobileTerminalConsumption.read(sessions.terminalTabs)
         let reading = try await MobileTerminalLoad.measure(rig, seconds: 8)
-        let after = MobileTerminalConsumption.read(sessions.tabs)
+        let after = MobileTerminalConsumption.read(sessions.terminalTabs)
 
         let shot = await rig.snapshot()
         rig.report(nil, shot, nil)
@@ -229,7 +232,7 @@ final class TerminalScreenProbeTests: XCTestCase {
             advances.append(adv)
             let emitted = await handles[i].latest!.ledger.linesEmitted
             print(String(format: "[%@-tab%d] active=%@ emitted=%d consumed-advance=%d",
-                         label, i, sessions.tabs[i].id == sessions.activeID ? "yes" : "NO",
+                         label, i, sessions.isActive(sessions.tabs[i].id) ? "yes" : "NO",
                          emitted, adv))
         }
         let activeAdvance = advances[0]
@@ -251,20 +254,21 @@ final class TerminalScreenProbeTests: XCTestCase {
         func run(_ label: String, flooding: Int) async throws -> MobileTerminalLoad.Reading {
             let c = try container()
             let store = MobileStore()
+            store.showWorkspace = true   // 工作区展开：活动标签才算在屏上
             let relay = HostKeyChallengeRelay()
             let n = 4
             let hs = hosts(c, n)
-            let sessions = TerminalSessions()
+            let sessions = MobileWorkspace()
             for i in 0..<n {
                 let script = i < flooding
                     ? MobileFakeTerminalScript(linesPerSecond: 2000, seconds: 12)
                     : MobileFakeTerminalScript.idle
                 let (tab, _) = MobileFakeTerminal.tab(host: hs[i % hs.count], script)
                 tab.controller.start(profile: hs[i % hs.count], container: c, relay: relay)
-                sessions.tabs.append(tab)
+                sessions.open(.terminal(tab))
             }
-            sessions.activeID = sessions.tabs.first?.id
-            for tab in sessions.tabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+            if let first = sessions.tabs.first { sessions.activate(first.id) }
+            for tab in sessions.terminalTabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
 
             let rig = MobileProbeRig(label: label)
             rig.mount(screen(sessions, container: c, store: store, relay: relay))
@@ -307,12 +311,13 @@ final class TerminalScreenProbeTests: XCTestCase {
             -> (MobileTerminalLoad.Reading, Int, [Int]) {
             let c = try container()
             let store = MobileStore()
+            store.showWorkspace = true   // 工作区展开：活动标签才算在屏上
             let relay = HostKeyChallengeRelay()
             let n = 4
             let script = MobileFakeTerminalScript(linesPerSecond: 2000, seconds: 14)
             let (sessions, handles) = MobileFakeTerminal.sessions(
                 count: n, hosts: hosts(c, n), script: script, container: c, relay: relay)
-            for tab in sessions.tabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+            for tab in sessions.terminalTabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
 
             let rig = MobileProbeRig(label: label)
             rig.mount(screen(sessions, container: c, store: store, relay: relay))
@@ -320,12 +325,12 @@ final class TerminalScreenProbeTests: XCTestCase {
             if forceAllForeground {
                 // 视图只在 onAppear / isActive / mode 变化时同步，这里之后不再动它们，
                 // 所以按回去的值在整个量测窗口里都成立。
-                for tab in sessions.tabs { tab.controller.isForeground = true }
+                for tab in sessions.terminalTabs { tab.controller.isForeground = true }
             }
-            let live = sessions.tabs.filter(\.controller.isForeground).count
-            let before = MobileTerminalConsumption.read(sessions.tabs)
+            let live = sessions.terminalTabs.filter(\.controller.isForeground).count
+            let before = MobileTerminalConsumption.read(sessions.terminalTabs)
             let reading = try await MobileTerminalLoad.measure(rig, seconds: 8)
-            let after = MobileTerminalConsumption.read(sessions.tabs)
+            let after = MobileTerminalConsumption.read(sessions.terminalTabs)
             let advances = (0..<n).map { after[$0].advanced - before[$0].advanced }
             var emitted: [Int] = []
             for h in handles { emitted.append(await h.latest!.ledger.linesEmitted) }
@@ -412,8 +417,8 @@ final class TerminalScreenProbeTests: XCTestCase {
         let n = 8
         let hs = hosts(c, n)
 
-        func bar(connecting: Bool) async throws -> (MobileProbeRig, TerminalSessions) {
-            let sessions = TerminalSessions()
+        func bar(connecting: Bool) async throws -> (MobileProbeRig, MobileWorkspace) {
+            let sessions = MobileWorkspace()
             for i in 0..<n {
                 // 连接中档：`connectLatency` 60 秒 —— 整个量测窗口都停在 `.connecting`。
                 let script = connecting
@@ -422,17 +427,17 @@ final class TerminalScreenProbeTests: XCTestCase {
                     : MobileFakeTerminalScript.idle
                 let (tab, _) = MobileFakeTerminal.tab(host: hs[i % hs.count], script)
                 tab.controller.start(profile: hs[i % hs.count], container: c, relay: relay)
-                sessions.tabs.append(tab)
+                sessions.open(.terminal(tab))
             }
-            sessions.activeID = sessions.tabs.first?.id
+            if let first = sessions.tabs.first { sessions.activate(first.id) }
             if !connecting {
-                for tab in sessions.tabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+                for tab in sessions.terminalTabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
             }
             let label = connecting ? "term-dots-connecting-8" : "term-dots-connected-8"
             let rig = MobileProbeRig(label: label, size: CGSize(width: 390, height: 120))
-            rig.mount(SessionTabBar(tabs: sessions.tabs, activeID: sessions.activeID,
-                                    onSelect: { _ in }, onClose: { _ in },
-                                    onNew: {}, onBack: {}, onAgent: {})
+            rig.mount(WorkspaceTabStrip(tabs: sessions.tabs, activeID: sessions.focusedPane.activeID,
+                                        onSelect: { _ in }, onClose: { _ in },
+                                        onNew: { _ in }, onBack: {}, onAgent: {})
                 .environment(\.mAccent, M.accent))
             return (rig, sessions)
         }
@@ -440,7 +445,7 @@ final class TerminalScreenProbeTests: XCTestCase {
         var readings: [(String, MobileTerminalLoad.Reading, Int, Int)] = []
         for connecting in [false, true] {
             let (rig, sessions) = try await bar(connecting: connecting)
-            let pulsing = sessions.tabs.filter { $0.controller.state == .connecting }.count
+            let pulsing = sessions.terminalTabs.filter { $0.controller.state == .connecting }.count
             let label = connecting ? "term-dots-connecting-8" : "term-dots-connected-8"
             let reading = try await MobileTerminalLoad.measure(rig, seconds: 4)
             let shot = await rig.snapshot()
@@ -452,7 +457,7 @@ final class TerminalScreenProbeTests: XCTestCase {
             // 结构判据：呼吸圈的数量 == 处于 `.connecting` 的会话数（不是标签片数）。
             XCTAssertEqual(pulsing, connecting ? n : 0,
                            "\(label)：处于 connecting 的会话数不对")
-            for tab in sessions.tabs { tab.controller.close() }
+            for tab in sessions.terminalTabs { tab.controller.close() }
             await rig.close()
             MobileProbeWindow.closeAll()
         }

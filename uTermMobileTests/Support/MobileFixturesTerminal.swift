@@ -368,7 +368,8 @@ enum MobileFakeTerminal {
         return (TermTab(host: host, transportFactory: handles.factory), handles)
     }
 
-    /// 造 `count` 个已建连的会话标签，塞进一个 `TerminalSessions`（`TerminalScreen` 直接吃它）。
+    /// 造 `count` 个已建连的终端标签，放进一个 `MobileWorkspace`（`WorkspaceScreen` 直接吃它），
+    /// 第一个是活动标签。
     ///
     /// `hosts` 少于 `count` 时循环取——探针只关心会话数，不关心主机是不是同一台。
     /// 返回的 handles 与 tabs 一一对应（同序）。
@@ -377,18 +378,18 @@ enum MobileFakeTerminal {
                          script: MobileFakeTerminalScript,
                          container: ModelContainer,
                          relay: HostKeyChallengeRelay)
-        -> (TerminalSessions, [MobileFakeTerminalHandles]) {
+        -> (MobileWorkspace, [MobileFakeTerminalHandles]) {
         precondition(!hosts.isEmpty, "至少一台主机")
-        let sessions = TerminalSessions()
+        let sessions = MobileWorkspace()
         var handles: [MobileFakeTerminalHandles] = []
         for i in 0..<count {
             let host = hosts[i % hosts.count]
             let (tab, h) = tab(host: host, script)
             tab.controller.start(profile: host, container: container, relay: relay)
-            sessions.tabs.append(tab)
+            sessions.open(.terminal(tab))
             handles.append(h)
         }
-        sessions.activeID = sessions.tabs.first?.id
+        if let first = sessions.tabs.first { sessions.activate(first.id) }
         return (sessions, handles)
     }
 

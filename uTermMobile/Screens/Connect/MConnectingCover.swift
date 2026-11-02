@@ -6,7 +6,7 @@ import class SwiftTerm.TerminalView
 import UIKit
 
 /// 连接目标：终端会话 / SFTP 文件浏览（设计稿 `m-connect` 的 `kind`）。
-enum MConnectKind: Equatable { case terminal, sftp }
+enum MConnectKind: Hashable { case terminal, sftp }
 
 /// 连接中页据以推进的统一阶段：连接中 / 已连接 / 失败（带错误文案）。
 /// 由目标屏绑定的真实控制器状态映射而来（事件驱动，见 `MConnectRequest.phase`）。
@@ -30,8 +30,10 @@ final class MConnectRequest: Identifiable {
     /// 绑定的运行时控制器（目标屏回填）；连接中页观察其 `state` 推进。
     var terminal: MobileTerminalController?
     var sftp: MobileSFTPController?
-    /// 终端会话 tab id：取消 / 重试时定位要拆掉的会话视图状态。
-    var terminalTabID: UUID?
+    /// 工作区会话标签 id：取消时定位要移除的标签。
+    var tabID: UUID?
+    /// 发起时工作区是否已展开（工作区里「+」新建）：取消后回到工作区，而不是收回主机列表。
+    var originInWorkspace = false
     /// 强制新开会话（终端「+」新建：即便已有同主机会话也再开一个）。
     var allowDuplicate = false
     /// 连接尝试代次：重试时自增，驱动连接中页重跑阶段动画。

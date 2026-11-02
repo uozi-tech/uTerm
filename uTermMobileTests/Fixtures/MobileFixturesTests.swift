@@ -274,24 +274,23 @@ final class MobileFixturesTests: XCTestCase {
         XCTAssertGreaterThan(ms, 40)
     }
 
-    /// `SFTPScreen` 能用假会话挂起 500 / 20000 两档 —— 且**不发起任何真实连接**。
-    func testSFTPScreenMountsFakeSession() async throws {
+    /// 会话屏的文件标签能用假会话挂起 500 / 20000 两档 —— 且**不发起任何真实连接**。
+    func testFilesTabMountsFakeSession() async throws {
         for count in [500, 20_000] {
             let container = try MobileFixtures.modelContainer(seed: .smoke)
             let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
             let provider = MobileFakeSFTPProvider(entries: count)
-            let session = await MobileFakeSFTP.session(host: host, provider: provider)
+            let (workspace, tab) = await MobileFakeSFTP.workspace(host: host, provider: provider)
             defer { closeAllWindows() }   // 每档一拆窗（playbook：拆窗才不背上一档的账）
 
             let store = MobileStore()
-            store.sftpTarget = host.persistentModelID
-            store.tab = .sftp
+            store.showWorkspace = true
 
             let root = AnyView(
-                SFTPScreen()
+                WorkspaceScreen()
                     .environment(store)
                     .environment(HostKeyChallengeRelay())
-                    .environment(session)
+                    .environment(workspace)
                     .modelContainer(container))
             let start = CFAbsoluteTimeGetCurrent()
             let (_, hostVC) = MobileProbeWindow.make(
@@ -301,15 +300,15 @@ final class MobileFixturesTests: XCTestCase {
             let mountMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
 
             // 关键断言：屏幕挂载没有把控制器换掉、也没有触发 start()。
-            // `activeTarget` 预设成与 `store.sftpTarget` 相等，`consumeSFTPTarget` 整条跳过。
-            XCTAssertEqual(session.activeTarget, host.persistentModelID)
-            XCTAssertEqual(session.controller.state, .connected)
-            XCTAssertEqual(session.controller.entries.count, count)
+            // 工作区只在消费 `store.openTarget` 时建连，这里没写它：标签仍是注入的那一个。
+            XCTAssertEqual(workspace.tabs.map(\.id), [tab.id])
+            XCTAssertEqual(tab.controller.state, .connected)
+            XCTAssertEqual(tab.controller.entries.count, count)
             let scroll = try XCTUnwrap(hostVC.view.firstScrollView(),
                                        "浏览态必须有 UIScrollView（列表真的挂上了）")
             // 行高 56pt（`SFTPRow`），内容高度必须随条数线性涨 —— 结构判据。
             XCTAssertEqual(scroll.contentSize.height, CGFloat(count) * 56, accuracy: 1)
-            print("[fixtures] SFTPScreen 挂 \(count) 条：挂载 \(String(format: "%.1f", mountMS))ms "
+            print("[fixtures] 文件标签挂 \(count) 条：挂载 \(String(format: "%.1f", mountMS))ms "
                   + "contentHeight=\(Int(scroll.contentSize.height)) "
                   + "views=\(hostVC.view.recursiveViewCount())")
         }

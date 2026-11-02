@@ -90,6 +90,13 @@ final class StyleGalleryTests: XCTestCase {
         return s
     }
 
+    /// 工作区展开（盖住标签栏）的 store。
+    private func workspaceStore() -> MobileStore {
+        let s = MobileStore()
+        s.showWorkspace = true
+        return s
+    }
+
     private func lanSync(_ c: ModelContainer) -> LANSyncCoordinator {
         LANSyncCoordinator(role: .receiver, preferences: SharedPreferencesSync(),
                            dataStore: LANSyncDataStore(container: c))
@@ -102,24 +109,18 @@ final class StyleGalleryTests: XCTestCase {
         let c = try MobileFixtures.modelContainer(seed: .smoke)
         let sync = CloudKitSyncMonitor()
         let lan = lanSync(c)
-        let relay = HostKeyChallengeRelay()
 
         for device in Self.devices {
             try await shoot("hosts", on: device) {
                 HostsScreen().environment(store(tab: .hosts)).modelContainer(c)
             }
-            try await shoot("terminal-picker", on: device) {
-                TerminalScreen()
-                    .environment(store(tab: .terminal))
-                    .environment(relay)
-                    .environment(TerminalSessions())
-                    .modelContainer(c)
-            }
-            try await shoot("sftp-picker", on: device) {
-                SFTPScreen()
-                    .environment(store(tab: .sftp))
-                    .environment(relay)
-                    .environment(MobileSFTPSession())
+            // 工作区收起、仍有会话开着：主机页右上角露出「会话 N」回去的入口。
+            try await shoot("hosts-with-sessions", on: device) {
+                let workspace = MobileWorkspace()
+                if let host = MobileFixtures.firstServer(in: c) { workspace.open(.files(FileTab(host: host))) }
+                return HostsScreen()
+                    .environment(store(tab: .hosts))
+                    .environment(workspace)
                     .modelContainer(c)
             }
             try await shoot("commands", on: device) {
@@ -189,15 +190,15 @@ final class StyleGalleryTests: XCTestCase {
         for device in Self.devices {
             let (sessions, _) = MobileFakeTerminal.sessions(
                 count: 2, hosts: hosts, script: .interactive(seconds: 2), container: c, relay: relay)
-            for tab in sessions.tabs { await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+            for tab in sessions.terminalTabs { await MobileFakeTerminal.waitUntilConnected(tab.controller) }
             try await shoot("terminal-session", on: device, settle: .milliseconds(900)) {
-                TerminalScreen()
-                    .environment(store(tab: .terminal))
+                WorkspaceScreen()
+                    .environment(workspaceStore())
                     .environment(relay)
                     .environment(sessions)
                     .modelContainer(c)
             }
-            for tab in sessions.tabs { tab.controller.close() }
+            for tab in sessions.terminalTabs { tab.controller.close() }
         }
     }
 
@@ -210,16 +211,43 @@ final class StyleGalleryTests: XCTestCase {
 
         for device in Self.devices {
             let provider = MobileFakeSFTPProvider(entries: 40, subdirectories: 6, childCount: 10, depth: 2)
-            let session = await MobileFakeSFTP.session(host: host, provider: provider)
-            let s = store(tab: .sftp)
-            s.sftpTarget = host.persistentModelID
+            let (workspace, _) = await MobileFakeSFTP.workspace(host: host, provider: provider)
             try await shoot("sftp-browser", on: device) {
-                SFTPScreen()
-                    .environment(s)
+                WorkspaceScreen()
+                    .environment(workspaceStore())
                     .environment(HostKeyChallengeRelay())
-                    .environment(session)
+                    .environment(workspace)
                     .modelContainer(c)
             }
+        }
+    }
+
+    // MARK: - 分屏：终端 + 文件（多态标签）
+
+    /// 左格两个终端标签、右格一个文件标签，聚焦右格：看焦点框、前台胶囊与活动图标的配色。
+    func testSplitWorkspace() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let hosts = Array(try c.mainContext.fetch(
+            FetchDescriptor<ServerProfile>(sortBy: [SortDescriptor(\.sortOrder)])).filter { !$0.sftpOnly }.prefix(3))
+        let relay = HostKeyChallengeRelay()
+
+        for device in Self.devices {
+            let (workspace, _) = MobileFakeTerminal.sessions(
+                count: 2, hosts: hosts, script: .interactive(seconds: 2), container: c, relay: relay)
+            for tab in workspace.terminalTabs { await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+            let provider = MobileFakeSFTPProvider(entries: 40, subdirectories: 6, childCount: 10, depth: 2)
+            let files = FileTab(host: hosts[0], controller: await MobileFakeSFTP.controller(provider: provider))
+            workspace.open(.files(files))
+            workspace.moveToOtherPane(files.id)
+            try await shoot("workspace-split", on: device, settle: .milliseconds(900)) {
+                WorkspaceScreen()
+                    .environment(workspaceStore())
+                    .environment(relay)
+                    .environment(workspace)
+                    .modelContainer(c)
+            }
+            for tab in workspace.terminalTabs { tab.controller.close() }
         }
     }
 

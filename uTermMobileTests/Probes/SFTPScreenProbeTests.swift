@@ -54,13 +54,13 @@ final class SFTPScreenProbeTests: XCTestCase {
         /// 容器要活到用例结束：`@Query` 靠它，提前释放会把主机列表抽走。
         let container: ModelContainer
         let store: MobileStore
-        let session: MobileSFTPSession
+        let workspace: MobileWorkspace
     }
 
-    /// 把 `SFTPScreen` 用假会话挂起来（不发起任何真实连接）。
+    /// 把会话屏（`WorkspaceScreen`）用一个假会话文件标签挂起来（不发起任何真实连接）。
     ///
-    /// `MobileFakeSFTP.session` 会把 `activeTarget` 预设成 `store.sftpTarget`，
-    /// `SFTPScreen.consumeSFTPTarget` 因此整条跳过 `controller.start(...)`。
+    /// 工作区只在消费 `store.openTarget` 时建连；这里不写它，控制器又是注入的测试控制器，
+    /// 所以整条不会碰到 `controller.start(...)`。
     private func mountScreen(label: String, entries count: Int,
                              subdirectories: Int = 0, childCount: Int = 0,
                              depth: Int = 1) async throws -> Mounted {
@@ -69,20 +69,19 @@ final class SFTPScreenProbeTests: XCTestCase {
         let provider = MobileFakeSFTPProvider(entries: count,
                                               subdirectories: subdirectories,
                                               childCount: childCount, depth: depth)
-        let session = await MobileFakeSFTP.session(host: host, provider: provider)
+        let (workspace, tab) = await MobileFakeSFTP.workspace(host: host, provider: provider)
         let store = MobileStore()
-        store.sftpTarget = host.persistentModelID
-        store.tab = .sftp
+        store.showWorkspace = true
 
         let rig = MobileProbeRig(label: label)
         rig.mount(
-            SFTPScreen()
+            WorkspaceScreen()
                 .environment(store)
                 .environment(HostKeyChallengeRelay())
-                .environment(session)
+                .environment(workspace)
                 .modelContainer(container))
-        return Mounted(rig: rig, controller: session.controller, provider: provider,
-                       container: container, store: store, session: session)
+        return Mounted(rig: rig, controller: tab.controller, provider: provider,
+                       container: container, store: store, workspace: workspace)
     }
 
     /// 等到「模型改完 **且** 列表真的重排完」，返回端到端毫秒。

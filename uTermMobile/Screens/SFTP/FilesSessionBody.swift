@@ -7,37 +7,13 @@ import UniformTypeIdentifiers
 /// 分享面板用的可识别本地文件项。
 private struct ShareFileItem: Identifiable { let id = UUID(); let url: URL }
 
-/// SFTP 会话状态：把 `controller` / `activeTarget` 从 `SFTPScreen` 的 `@State` 上移到此处，由根视图
-/// `MobileRootView` 持有并注入。这样 iPhone Plus/Max 横屏切换 size class（compact ⇄ regular）
-/// 导致外壳在 `MobileTabShell` / `MobileSplitShell` 间切换、`SFTPScreen` 被重建时，SFTP 会话
-///（及其当前浏览路径）仍存活，不会被连带销毁而「横屏丢失会话、回到根目录」。
-/// 名字带 `Mobile` 前缀避开 Citadel 的 `SFTPSession`（控制器内部复用的真实远程会话）类型撞名。
-@MainActor
-@Observable
-final class MobileSFTPSession {
-    var controller = MobileSFTPController()
-    var activeTarget: PersistentIdentifier?
-}
+/// 一个文件浏览会话标签的主体：路径条 + 远程文件列表 + 底栏，长按文件出操作单。
+/// 由工作区的分屏格挂载；同一时刻可以有多个（不同主机，或同主机不同目录）。
+struct FilesSessionBody: View {
+    let tab: FileTab
+    var onClose: () -> Void
 
-/// 文件标签：未选主机时给出主机列表；选定后用真实 SFTP 会话浏览远程文件树。
-struct SFTPScreen: View {
-    @Environment(MobileStore.self) private var store
-    @Environment(HostKeyChallengeRelay.self) private var relay
-    @Environment(MobileSFTPSession.self) private var session
-    @Environment(\.modelContext) private var context
-    @Environment(\.mAccent) private var accent
-    @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
-
-    // 会话状态存活在 `session`（根视图持有），跨外壳切换不丢；这里以计算属性透出，
-    // 沿用原有 `controller` / `activeTarget` 读写点，改动最小。
-    private var controller: MobileSFTPController {
-        get { session.controller }
-        nonmutating set { session.controller = newValue }
-    }
-    private var activeTarget: PersistentIdentifier? {
-        get { session.activeTarget }
-        nonmutating set { session.activeTarget = newValue }
-    }
+    private var controller: MobileSFTPController { tab.controller }
     @State private var pendingDelete: RemoteEntry?
     @State private var actionEntry: RemoteEntry?
     @State private var renameEntry: RemoteEntry?
@@ -45,102 +21,15 @@ struct SFTPScreen: View {
     @State private var shareItem: ShareFileItem?
     @State private var showImporter = false
 
-    private var targetHost: ServerProfile? {
-        guard let id = store.sftpTarget else { return nil }
-        return hosts.first { $0.persistentModelID == id }
-    }
-
     var body: some View {
-        ZStack {
-            if let host = targetHost {
-                browser(host)
-                    .transition(.mDrill)
-            } else {
-                picker
-                    .transition(.mFade)
-            }
-        }
-        .animation(.mSwap, value: store.sftpTarget)
-        // 目标主机变化（含切换主机）驱动会话生命周期——状态驱动，不依赖视图 onAppear 重触发。
-        .onChange(of: store.sftpTarget) { _, t in consumeSFTPTarget(t) }
-        .onAppear { consumeSFTPTarget(store.sftpTarget) }
-        // 同主机再次发起浏览（sftpTarget 不变）：onChange(sftpTarget) 不触发，靠请求代次回填控制器。
-        .onChange(of: store.connecting?.id) { _, _ in consumeSFTPTarget(store.sftpTarget) }
-        // 连接中页取消 / 重试：关闭并复位当前 SFTP 会话（控制器已由 store 关闭）。
-        .onChange(of: store.sftpTeardownPending) { _, pending in
-            guard pending else { return }
-            activeTarget = nil
-            controller = MobileSFTPController()
-            store.sftpTeardownPending = false
-        }
-    }
-
-    /// 消费 SFTP 目标主机（镜像终端 `consumeTarget`，状态驱动）：切换主机时换新控制器并连接；
-    /// 同主机已在浏览则只把控制器回填给连接中页（多半已连，连接中页据此立即收尾）。
-    private func consumeSFTPTarget(_ t: PersistentIdentifier?) {
-        guard let t, let host = hosts.first(where: { $0.persistentModelID == t }) else { return }
-        if activeTarget != t {
-            if activeTarget != nil { controller.close(); controller = MobileSFTPController() }
-            activeTarget = t
-            controller.start(profile: host, container: context.container, relay: relay)
-        }
-        // 回填给连接中页（若此次浏览由其发起）。
-        if let req = store.connecting, req.kind == .sftp, req.sftp == nil,
-           req.host.persistentModelID == t {
-            req.sftp = controller
-        }
-    }
-
-    private var picker: some View {
-        MScreen(title: "文件", maxContentWidth: M.gridContentWidth) {
-            VStack(spacing: 10) {
-                if hosts.isEmpty {
-                    MEmptyState(icon: "folder", title: "没有主机",
-                                message: "添加一台服务器即可浏览远程文件。")
-                } else {
-                    Text("选择一台主机浏览文件")
-                        .font(M.sans(13)).foregroundStyle(M.text3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20).padding(.top, 4)
-                    MCardGrid {
-                        ForEach(hosts) { host in
-                            Button { store.openSFTP(host) } label: {
-                                HStack(spacing: 12) {
-                                    MIcon(name: "folder", size: 18, color: M.folder2)
-                                        .frame(width: 38, height: 38)
-                                        .background(M.folder2.opacity(0.12))
-                                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(host.name).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text)
-                                        Text(host.displayEndpoint).font(M.mono(12)).foregroundStyle(M.text3)
-                                    }
-                                    Spacer()
-                                    MIcon(name: "chev", size: 14, color: M.text4, weight: .semibold)
-                                }
-                                .padding(14)
-                                .background(M.card)
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                            }
-                            .buttonStyle(MPressStyle())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-        }
-    }
-
-    private func browser(_ host: ServerProfile) -> some View {
         VStack(spacing: 0) {
-            header(host)
             pathBar
             content
                 .animation(.mSwap, value: controller.state)
             if case .connected = controller.state { footerBar }
         }
-        // 整屏一个工作面：页头 / 路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
+        // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
         .background(M.surface)
-        .toolbar(.hidden, for: .tabBar)   // 浏览期全屏：底部让给上传 / 操作条
         .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible) {
@@ -193,33 +82,22 @@ struct SFTPScreen: View {
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
-    private func header(_ host: ServerProfile) -> some View {
-        HStack(spacing: 4) {
-            Button { closeSession() } label: {
-                MIcon(name: "back", size: 20, color: accent, weight: .semibold)
-                    .frame(width: M.minTarget, height: M.minTarget)   // 原先只有图标本身 ~20pt 可点
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel(Text("关闭文件浏览"))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(host.name).font(M.sans(15, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
-                Text(statusText).font(M.mono(11)).foregroundStyle(M.text3).lineLimit(1)
-            }
-            Spacer()
-            Button { controller.refresh() } label: {
-                MIcon(name: "refresh", size: 16, color: M.text2).frame(width: 34, height: 34)
-                    .background(M.button).clipShape(Circle())
-                    .frame(width: M.minTarget, height: M.minTarget)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel(Text("刷新"))
-        }
-        // 两端按钮自带 44pt 命中区外沿，水平内边距收到 4（视觉仍距边 ~16）。
-        .padding(.horizontal, 4).mTopClearance().padding(.bottom, 4)
-    }
-
     // 路径面包屑（设计稿 SftpBody 顶部 `/ › home › user`），可点段跳转。
     private var pathBar: some View {
+        HStack(spacing: 0) {
+            breadcrumbs
+            Button { controller.refresh() } label: {
+                MIcon(name: "refresh", size: 15, color: M.text2)
+                    .frame(width: M.minTarget, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MPressStyle())
+            .accessibilityLabel(Text("刷新"))
+        }
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+    }
+
+    private var breadcrumbs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 let segs = pathSegments(controller.path)
@@ -238,7 +116,6 @@ struct SFTPScreen: View {
             }
             .padding(.horizontal, 14)
         }
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func pathSegments(_ path: String) -> [(label: String, full: String)] {
@@ -270,7 +147,8 @@ struct SFTPScreen: View {
             VStack(spacing: 12) { ProgressView(); Text("连接中…").font(M.sans(13)).foregroundStyle(M.text3) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let m):
-            MEmptyState(icon: "warn", title: "连接失败", message: m)
+            MEmptyState(icon: "warn", title: "连接失败", message: m,
+                        actionTitle: "关闭", action: onClose)
         case .connected:
             if controller.entries.isEmpty && !controller.loading {
                 MEmptyState(icon: "folder", title: "空目录", message: "此文件夹没有内容。")
@@ -313,20 +191,6 @@ struct SFTPScreen: View {
         }
     }
 
-    private var statusText: String {
-        switch controller.state {
-        case .idle, .connecting: return "连接中…"
-        case .connected: return "\(UFormat.count(controller.entries.count)) 项"
-        case .failed: return "连接失败"
-        }
-    }
-
-    private func closeSession() {
-        controller.close()
-        store.sftpTarget = nil
-        activeTarget = nil
-        controller = MobileSFTPController()
-    }
 }
 
 /// 文件行（设计稿 `FileRow2`）：双色文件夹 / 白纸折角文档 + 角标，扁平行 + 底分隔线。

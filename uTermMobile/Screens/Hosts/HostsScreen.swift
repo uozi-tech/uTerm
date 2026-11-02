@@ -9,6 +9,8 @@ private enum HostFilter: String, CaseIterable { case all, recent, group }
 struct HostsScreen: View {
     @Environment(\.modelContext) private var context
     @Environment(MobileStore.self) private var store
+    /// 可选：只为露出「会话 N」入口。单独挂主机页的探针 / 画廊不注入它。
+    @Environment(MobileWorkspace.self) private var workspace: MobileWorkspace?
     @Environment(\.mAccent) private var accent
 
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
@@ -38,6 +40,15 @@ struct HostsScreen: View {
 
         return MScreen(title: "主机", sub: "\(hosts.count) 台服务器",
                        maxContentWidth: M.gridContentWidth, actions: {
+            // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
+            if let workspace, !workspace.isEmpty {
+                Button { store.showWorkspace = true } label: {
+                    Label("会话 \(workspace.tabs.count)", systemImage: MGlyph.symbol("term"))
+                        .labelStyle(.titleAndIcon)
+                }
+                .tint(accent)
+                .accessibilityLabel(Text("回到 \(workspace.tabs.count) 个会话"))
+            }
             MRoundBtn(icon: "search") { store.showPalette = true }
             MRoundBtn(icon: "plus", filled: true) { creating = true }
         }) {

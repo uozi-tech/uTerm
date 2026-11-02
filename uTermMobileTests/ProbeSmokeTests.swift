@@ -64,7 +64,7 @@ final class ProbeSmokeTests: XCTestCase {
     func testHostSymbolsAreVisible() throws {
         // `MTab` 是 uTermMobile/Shell/MobileStore.swift 里的产品类型（主标签枚举）。
         // 挑它是因为它没有任何 SwiftData / CloudKit 依赖，构造它不会连带唤起容器。
-        XCTAssertEqual(MTab.allCases.count, 5, "主标签共 5 个：主机/终端/文件/命令/设置")
+        XCTAssertEqual(MTab.allCases.count, 3, "主标签共 3 个：主机/命令/设置（终端与文件从主机进入，不占标签）")
         XCTAssertEqual(MTab.hosts.label, "主机")
         XCTAssertEqual(MTab(rawValue: "settings"), .settings)
         print("[probe-smoke-host] MTab.allCases = \(MTab.allCases.map(\.rawValue))")

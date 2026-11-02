@@ -2,15 +2,14 @@ import SwiftUI
 import SwiftData
 import Observation
 
-/// 主标签（对齐设计稿 `shared.jsx` 的 `TABS`）。
+/// 主标签（对齐设计稿 `shared.jsx` 的 `TABS`）。终端与文件浏览不占标签：从「主机」进入，
+/// 在盖住标签栏的全屏工作区里打开（多态标签 + 分屏，见 `MobileWorkspace` / `WorkspaceScreen`）。
 enum MTab: String, CaseIterable, Identifiable {
-    case hosts, terminal, sftp, commands, settings
+    case hosts, commands, settings
     var id: String { rawValue }
     var label: String {
         switch self {
         case .hosts: return "主机"
-        case .terminal: return "终端"
-        case .sftp: return "文件"
         case .commands: return "命令"
         case .settings: return "设置"
         }
@@ -18,12 +17,17 @@ enum MTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .hosts: return "grid"
-        case .terminal: return "term"
-        case .sftp: return "folder"
         case .commands: return "bolt"
         case .settings: return "gear"
         }
     }
+}
+
+/// 一次「在工作区打开主机」的请求。`token` 让同一台主机的连续请求也能被 `onChange` 看到。
+struct MOpenTarget: Equatable {
+    let hostID: PersistentIdentifier
+    let kind: MConnectKind
+    let token = UUID()
 }
 
 /// 全局 UI 状态（Pinia 等价物）。导航、当前标签、活动会话目标。
@@ -33,10 +37,11 @@ enum MTab: String, CaseIterable, Identifiable {
 final class MobileStore {
     var tab: MTab = .hosts
 
-    /// 终端 tab 当前要连接 / 展示的主机 id。从主机列表「连接」跳转时写入。
-    var terminalTarget: PersistentIdentifier?
-    /// 文件 tab 当前浏览的主机 id。
-    var sftpTarget: PersistentIdentifier?
+    /// 会话工作区是否盖在标签之上。返回主机列表时只是收起，会话不断。
+    var showWorkspace = false
+
+    /// 待工作区消费的打开请求（终端或文件浏览）。从主机列表 / 命令面板「连接」时写入。
+    var openTarget: MOpenTarget?
 
     /// iPad regular 布局下侧栏选中的主机（详情面板）。
     var inspectedHost: PersistentIdentifier?
@@ -55,10 +60,8 @@ final class MobileStore {
     /// 受保护连接请求：非空时根视图在所有标签之上呈现全屏「连接中」中转页。
     /// 在选定主机与会话/文件浏览打开之间插入一个稳定等待态，防止误触 / 快速返回打断半开连接。
     var connecting: MConnectRequest?
-    /// 取消 / 重试时要求终端屏丢弃指定会话 tab 的视图状态（控制器已由 store 关闭）。
-    var terminalTeardownID: UUID?
-    /// 取消 / 重试时要求文件屏关闭并复位当前 SFTP 会话。
-    var sftpTeardownPending = false
+    /// 取消时要求工作区移除指定会话标签（控制器已由 store 关闭）。
+    var teardownTabID: UUID?
 
     func runCommand(_ cmd: QuickCommand) {
         parallelRun = ParallelRunRequest(commandID: cmd.id, name: cmd.name, command: cmd.command,
@@ -73,15 +76,10 @@ final class MobileStore {
         let resolved: MConnectKind = (kind == .terminal && host.sftpOnly) ? .sftp : kind
         let req = MConnectRequest(host: host, kind: resolved, origin: tab)
         req.allowDuplicate = allowDuplicate
+        req.originInWorkspace = showWorkspace
         connecting = req
-        switch resolved {
-        case .terminal:
-            terminalTarget = host.persistentModelID
-            tab = .terminal
-        case .sftp:
-            sftpTarget = host.persistentModelID
-            tab = .sftp
-        }
+        openTarget = MOpenTarget(hostID: host.persistentModelID, kind: resolved)
+        showWorkspace = true
     }
 
     func openTerminal(_ host: ServerProfile) { requestConnect(host, kind: .terminal) }
@@ -93,16 +91,11 @@ final class MobileStore {
     /// 长按取消 / 失败返回：关闭刚建立的会话并回到来源页。
     func cancelConnect() {
         guard let req = connecting else { return }
-        switch req.kind {
-        case .terminal:
-            req.terminal?.close()
-            terminalTeardownID = req.terminalTabID
-            terminalTarget = nil
-        case .sftp:
-            req.sftp?.close()
-            sftpTeardownPending = true
-            sftpTarget = nil
-        }
+        req.terminal?.close()
+        req.sftp?.close()
+        teardownTabID = req.tabID
+        openTarget = nil
+        showWorkspace = req.originInWorkspace
         tab = req.origin
         connecting = nil
     }
