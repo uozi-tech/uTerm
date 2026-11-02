@@ -11,6 +11,8 @@ struct SFTPBrowserView: View {
     var externalOpen: ExternalOpenCoordinator? = nil
     let server: ServerProfile
     let openWorkspace: () -> Void
+    /// 「操作 › 在终端中打开」：打开该服务器的纯终端窗口（不是工作区）。
+    var openTerminal: () -> Void = {}
 
     @State private var history: [String] = []
     @State private var hIdx = 0
@@ -68,7 +70,7 @@ struct SFTPBrowserView: View {
             onRefresh: { Task { await model.refresh() } },
             showHidden: model.showHidden,
             onToggleHidden: { model.showHidden.toggle() },
-            onOpenInTerminal: openWorkspace,
+            onOpenInTerminal: openTerminal,
             onOpenWorkspace: openWorkspace,
             sortKey: model.sortKey,
             onSetSort: { setSort($0) },
@@ -285,7 +287,6 @@ struct SFTPBrowserView: View {
                         onOpen: { e in openFile(e, route: .preferred) },
                         onDownload: { e in downloadFile(e) },
                         onOpenFolder: { e in activate(e) },
-                        onOpenWorkspace: openWorkspace,
                         onPermissions: { e in permissionTarget = e },
                         onRename: { e in renameTarget = e; renameText = e.name },
                         onDelete: { e in deleteTarget = e }

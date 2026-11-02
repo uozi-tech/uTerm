@@ -82,7 +82,8 @@ struct SFTPWindowView: View {
                 ForEach(tabs) { tab in
                     SFTPBrowserContainer(
                         tab: tab, server: server,
-                        openWorkspace: { openWorkspace(for: server) })
+                        openWorkspace: { openWorkspace(for: server) },
+                        openTerminal: { openTerminal(for: server) })
                         .opacity(tab.id == effectiveActiveID ? 1 : 0)
                         .allowsHitTesting(tab.id == effectiveActiveID)
                         .zIndex(tab.id == effectiveActiveID ? 1 : 0)
@@ -113,6 +114,11 @@ struct SFTPWindowView: View {
 
     private func openWorkspace(for server: ServerProfile) {
         openWindow(value: WorkspaceWindowID(serverID: server.id))
+    }
+
+    /// 纯终端窗口（只有终端 ⇄ Agent，无 SFTP 侧栏 / 预览）；每次新开一个，同一服务器可开多个。
+    private func openTerminal(for server: ServerProfile) {
+        openWindow(value: TerminalWindowID(id: UUID(), serverID: server.id))
     }
 
     // MARK: - 标签管理
@@ -203,11 +209,13 @@ private struct SFTPBrowserContainer: View {
     let tab: SFTPBrowserTab
     let server: ServerProfile
     let openWorkspace: () -> Void
+    let openTerminal: () -> Void
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         SFTPBrowserView(model: tab.model, externalOpen: tab.externalOpen,
-                        server: server, openWorkspace: openWorkspace)
+                        server: server, openWorkspace: openWorkspace,
+                        openTerminal: openTerminal)
             .hostKeySheet(tab.model.hostKeyRelay)
             .task(id: tab.id) {
                 await tab.model.connect(profile: server, modelContainer: modelContext.container)

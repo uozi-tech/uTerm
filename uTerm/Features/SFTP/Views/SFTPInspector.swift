@@ -9,7 +9,6 @@ struct SFTPInspector: View {
     let onOpen: (RemoteEntry) -> Void
     let onDownload: (RemoteEntry) -> Void
     let onOpenFolder: (RemoteEntry) -> Void
-    let onOpenWorkspace: () -> Void
     let onPermissions: (RemoteEntry) -> Void
     let onRename: (RemoteEntry) -> Void
     let onDelete: (RemoteEntry) -> Void
@@ -124,7 +123,6 @@ struct SFTPInspector: View {
                     }
                     .help(RemoteFileAction.download.help)
                 }
-                SFTPSecondaryButton(label: "在工作区打开", systemImage: "terminal") { onOpenWorkspace() }
                 SFTPSecondaryButton(label: "权限设置…", systemImage: "lock") { onPermissions(item) }
                 HStack(spacing: 8) {
                     SFTPSecondaryButton(label: "重命名") { onRename(item) }
