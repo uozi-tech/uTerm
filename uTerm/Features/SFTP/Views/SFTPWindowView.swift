@@ -37,6 +37,9 @@ struct SFTPWindowView: View {
     var body: some View {
         content
             .frame(minWidth: 900, minHeight: 560)
+            // 不要开屏自动聚焦路径栏的搜索框：连接中窗口里只有这一个文本框，macOS 会在窗口
+            // 成为 key 时把焦点自动交给它（实机反馈「连接中搜索框自动 focus」）。
+            .disablesInitialAutoFocus()
             .onDisappear { disposeAll() }
     }
 
