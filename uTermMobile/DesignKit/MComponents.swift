@@ -53,7 +53,7 @@ struct MBtn: View {
         case .danger: return M.danger
         case .tinted: return accent.opacity(0.14)
         case .dangerTint: return .clear
-        case .secondary: return M.fillFaint
+        case .secondary: return M.button
         }
     }
     // v2「填充即边界」：tinted/secondary 靠填充成形，不再描边；dangerTint 属危险态描边，保留。
@@ -78,8 +78,11 @@ struct MRoundBtn: View {
                   color: filled ? .white : M.text2,
                   weight: filled ? .semibold : .medium)
                 .frame(width: 36, height: 36)
-                .background(filled ? accent : M.fillFaint)
+                .background(filled ? accent : M.button)
                 .clipShape(Circle())
+                // 视觉 36pt，命中区补到 44pt（HIG）。
+                .frame(width: M.minTarget, height: M.minTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(MPressStyle())
     }
@@ -281,8 +284,10 @@ struct MChip: View {
     var body: some View {
         HStack(spacing: 4) {
             if let icon { MIcon(name: icon, size: 10, color: fg) }
-            Text(text).font(M.sans(11, weight: .medium))
+            Text(text).font(M.sans(11, weight: .medium)).lineLimit(1)
         }
+        // 窄屏（iPhone Duo 分屏 ≈ 330pt）下宁可让同行的次要信息让位，也不把 chip 折成两行。
+        .fixedSize()
         .foregroundStyle(fg)
         .padding(.horizontal, 8).padding(.vertical, 2.5)
         // 中性 chip 用 fillSoft：常嵌在 fillFaint 卡片里，深一档才成形
@@ -302,10 +307,11 @@ struct MInsetGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let header {
+                // 区段标题与脚注是信息层（text3），不是装饰层（text4 只给分隔线 / 行号 / 禁用态）。
                 Text(header.uppercased())
                     .font(M.sans(12, weight: .semibold))
                     .tracking(0.4)
-                    .foregroundStyle(M.text4)
+                    .foregroundStyle(M.text3)
                     .padding(.horizontal, 20).padding(.bottom, 7)
             }
             VStack(spacing: 0) { content }
@@ -315,7 +321,7 @@ struct MInsetGroup<Content: View>: View {
             if let footer {
                 Text(footer)
                     .font(M.sans(12))
-                    .foregroundStyle(M.text4)
+                    .foregroundStyle(M.text3)
                     .lineSpacing(3)
                     .padding(.horizontal, 20).padding(.top, 7)
             }
@@ -392,8 +398,8 @@ struct MInsetRow: View {
 struct MRowStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(configuration.isPressed ? M.rowSelected : .clear)
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            // 按压态中性灰（对齐 macOS panelHover）；强调色淡底只留给「选中」。
+            .background(configuration.isPressed ? M.pressed : .clear)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .sensoryFeedback(trigger: configuration.isPressed) { _, pressed in
                 pressed ? .impact(weight: .light, intensity: 0.5) : nil
@@ -407,7 +413,7 @@ struct MSectionCap: View {
     var text: String
     var body: some View {
         Text(text.uppercased()).font(M.sans(11, weight: .semibold))
-            .tracking(0.5).foregroundStyle(M.text4)
+            .tracking(0.5).foregroundStyle(M.text3)
     }
 }
 
@@ -478,10 +484,11 @@ struct MSegmented<T: Hashable>: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selection = item.value } }
+                    .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(2)
-        .background(M.fillFaint)
+        .background(M.inputBg)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
@@ -505,7 +512,7 @@ struct MSearchField: View {
             }
         }
         .padding(.horizontal, 12).frame(height: 38)
-        .background(M.fillFaint)
+        .background(M.inputBg)
         .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }

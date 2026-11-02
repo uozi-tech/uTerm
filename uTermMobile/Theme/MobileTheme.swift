@@ -13,27 +13,33 @@ enum M {
     static var panelHi: Color { UD.panelHi }
     static var overlay: Color { UD.overlay }
     static var overlayHi: Color { UD.overlayHi }
-    /// 真实 SwiftTerm 终端用的底色（`UD.terminal`）——**日夜都深**。命令块 / Shell 网格别用它。
-    // 老 DesignKit 的 `UD.terminal` 未随迁进 UDesignKit（macOS 端已不再使用），
-    // 按原 token 定义本地化：日夜都深。
-    static var terminalBg: Color { UD.dyn(.hex(0x000000), .hex(0x0B0B0D)) }
+    /// 工作面：终端 / Agent / 文件浏览 / 命令面板 / 并行执行这类**整屏单面**的底色——
+    /// 暗夜 #141414（`UD.panel`，Ant container）/ 日间 #FFFFFF。屏内的标签条、键盘条、路径条、
+    /// 底栏都铺同一个面，区块之间只靠 1pt `divider` 分开（「线或底色差，二选一」，对齐 macOS
+    /// v3.3 分区规则）；不要再给条子单独上 `overlay` / `panel` 色。
+    static let surface = UD.panel
+    /// 真实 SwiftTerm 终端的底色 = `surface`：暗夜 #141414 / 日间 #FFFFFF，与
+    /// `MTerminalColors` 两套配色的 background 逐值一致（macOS 08f3b111 同改：纯黑终端在卡面里
+    /// 成一块黑洞）。命令块 / Shell 网格用 `cmdSurface`。
+    static let terminalBg = UD.panel
     /// 命令块 / Shell 网格的「终端面」底色——**随主题翻**：暗夜 #000000 / 日间 #FFFFFF（对齐 macOS
-    /// `ParTermSurface`）。不要用 `terminalBg`（日夜都深，是真实终端用的）：否则日间得到黑底命令块，
-    /// 其上的 text/text2/text3 深字读不出。翻面后文字直接用 M.text/text2/text3 即两档都可读。
+    /// `ParTermSurface`）。翻面后文字直接用 M.text/text2/text3 即两档都可读。
     static let cmdSurface = UD.dyn(.hex(0x000000), .hex(0xFFFFFF))
     /// 屏幕画布：承载卡片的屏 / 滚动区 / 卡片式抽屉的底。暗夜与 `bg` 同值（视觉零变化）；
-    /// 日间浅灰，让白卡浮起。bar（M.overlay）/ 真实终端面别用它。
+    /// 日间浅灰，让白卡浮起。整屏工作面（终端 / 文件浏览……）用 `surface`，别用它。
     static let canvas = UD.dyn(.hex(0x000000), .hex(0xF5F5F5))
-    /// 卡片面：暗夜与 `fillFaint` 同值（视觉零变化）；日间纯白，靠与 `canvas` 的填充差区分，
-    /// 不加投影。chip / 键帽 / 次按钮等小控件仍用 fillFaint/fillMed，别用它。
-    static let card = UD.dyn(.white(0.045), .hex(0xFFFFFF))
+    /// 卡片面（Ant container）：暗夜 #141414 / 日间纯白，靠与 `canvas`（#000 / #F5F5F5）的
+    /// 填充差区分，不加投影、不描边。旧值暗夜白 4.5%（≈#0B0B0B）在纯黑画布上几乎看不出卡片边界。
+    /// chip / 键帽 / 次按钮等小控件仍用 fillFaint / `button`，别用它。
+    static let card = UD.card
 
     // 描边
     static var border: Color { UD.border }
     static var borderHi: Color { UD.borderHi }
-    /// 分割线专用 hairline（比 `border` 浅一档）：行分隔 / 区块分区用它；
-    /// 控件描边（stroke / 容器边框）仍用 `border`。
-    static let divider = UD.dyn(.white(0.05), .black(0.06))
+    /// 区块分区 hairline（工作面上标签条 / 键盘条 / 路径条与内容之间）。取 `UD.border`
+    /// （白 12% / 黑 9%）：两侧同底色时全靠这条线分区，旧值白 5% 压在 #141414 上看不见。
+    /// 列表行分隔用系统 `Divider`（`MRowDivider`）。
+    static let divider = UD.border
 
     // 文本
     static var text: Color { UD.text }
@@ -57,6 +63,11 @@ enum M {
     static var rowSelected: Color { UD.rowSelected }
     static var fillFaint: Color { UD.fillFaint }
     static var fillMed: Color { UD.fillMed }
+    /// 次按钮 / 键帽底（Ant button2：暗夜白 8% / 日间黑 4%），在 `surface` 与 `card` 上都成形。
+    static let button = UD.button2
+    /// 按压 / 悬停的中性灰（`UD.panelHover`：白 8% / 黑 4%）。按压态一律中性，不染强调色；
+    /// 选中态才用强调色淡底（`rowSelected`）。
+    static let pressed = UD.panelHover
 
     // 弹层遮罩（暗夜黑 35% / 日间透明）
     static var backdrop: Color { UD.dyn(.black(0.35), .black(0)) }
@@ -75,6 +86,13 @@ enum M {
     static let topBreath: CGFloat = 8
     /// 底部 home indicator 区已由 safe area 处理，这里仅给 tab/工具条额外留白。
     static let bottomBreath: CGFloat = 6
+
+    /// 顶边最小净空：状态栏不在顶边时（横屏 iPhone 隐藏状态栏、iPhone Duo 外屏 / 内屏把
+    /// 状态栏与灵动岛挪到侧边），安全区顶边 ≈ 0，页头只剩 `topBreath` 会贴着屏幕顶。
+    /// 见 `mTopClearance()`。
+    static let minTopClearance: CGFloat = 16
+    /// 最小可点区域（HIG 44×44pt）。视觉尺寸可以更小，命中区不行。
+    static let minTarget: CGFloat = 44
 
     /// 宽屏（横屏 / iPad）内容易读最大宽度——超出则内容列居中、两侧留白，避免横屏铺满拉伸。
     static let readableWidth: CGFloat = 680

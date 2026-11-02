@@ -4,7 +4,9 @@ import UIKit
 
 /// iOS 终端配色（对齐 macOS `TerminalColorScheme`：VS Code Dark / Light）。
 /// 背景 / 前景 / 光标 / 选区 + 16 色 ANSI 表，按 app 外观取深 / 浅。
-/// 日间终端为白底（设计稿 `--u-term-bg:#ffffff`），暗夜为 #000000（对齐 `UD.bg`）。
+/// 日间终端为白底（设计稿 `--u-term-bg:#ffffff`），暗夜为卡面色 #141414（`UD.panel`，即
+/// `M.terminalBg` / `M.surface`）：终端与上下的标签条、键盘条铺同一个面，只靠 hairline 分区；
+/// 纯黑 #000 会让终端在条子之间成一块黑洞（与 macOS 08f3b111 同改）。
 nonisolated struct MTerminalColors: @unchecked Sendable {
     let background: UIColor
     let foreground: UIColor
@@ -38,7 +40,7 @@ nonisolated struct MTerminalColors: @unchecked Sendable {
     nonisolated static let vscodeDark: MTerminalColors = {
         let n = [a(0, 0, 0), a(0xF1, 0x4C, 0x4C), a(0x73, 0xC9, 0x91), a(0xE2, 0xC0, 0x8D),
                  a(0x5C, 0xC8, 0xFF), a(0xC5, 0x86, 0xC0), a(0x56, 0xB6, 0xC2), a(0xCC, 0xCC, 0xCC)]
-        return MTerminalColors(background: ui(0x00, 0x00, 0x00), foreground: ui(0xD4, 0xD4, 0xD4),
+        return MTerminalColors(background: ui(0x14, 0x14, 0x14), foreground: ui(0xD4, 0xD4, 0xD4),
                                cursor: ui(0xAE, 0xAF, 0xAD), selection: ui(0x26, 0x4F, 0x78),
                                ansi: n + n.map(bright))
     }()
