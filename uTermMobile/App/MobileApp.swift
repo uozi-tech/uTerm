@@ -95,6 +95,8 @@ private struct MobileLaunchRoot: View {
         }
         // 应用锁挂在整栈最外层：上锁时遮罩盖住开屏与主界面，系统验证弹窗浮于其上。
         .mobileAppLockGate(lock)
+        // 量状态栏 / 屏幕圆角的实际位置，下发给整棵树（含应用锁、全屏覆盖层）。见 MChromeGeometry。
+        .mMeasuresChrome()
     }
 }
 

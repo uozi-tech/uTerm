@@ -106,6 +106,8 @@ private struct MobileLockCover: View {
                 }
             }
             .padding(40)
+            // Duo 状态栏在右侧一列时按整块屏幕居中。
+            .mCentersOnScreen()
         }
     }
 

@@ -9,6 +9,7 @@ import SwiftData
 /// 连接流程不变：主机列表 / 命令面板 / 「+」都走 `store.requestConnect`，连接中页盖在上面，
 /// 这里消费 `store.openTarget` 建会话、开标签，并把控制器回填给连接中页观察。
 struct WorkspaceScreen: View {
+    @Environment(\.mChrome) private var chrome
     @Environment(MobileStore.self) private var store
     @Environment(HostKeyChallengeRelay.self) private var relay
     @Environment(MobileWorkspace.self) private var workspace
@@ -31,6 +32,22 @@ struct WorkspaceScreen: View {
             if !(workspace.isEmpty && !workspace.isSplit) { panesView }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
+        // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
+        .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
+        // Duo 折叠 / 展开横屏：状态栏在右侧一列的顶部，下面空着——Agent / 分屏开关放到那里。
+        .overlay(alignment: .topTrailing) {
+            if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
+                WorkspaceSideControls(
+                    agentOn: focusedFrontTerminal.map { $0.mode == .agent },
+                    isSplit: workspace.isSplit,
+                    onAgent: { toggleAgent(in: workspace.focusedPane) },
+                    onToggleSplit: toggleSplit)
+                    .frame(width: column.width)
+                    .padding(.top, column.statusBottom)
+                    .offset(x: column.width)
+            }
+        }
         .onChange(of: store.openTarget) { _, t in consume(t) }
         .onAppear { consume(store.openTarget) }
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
@@ -230,6 +247,10 @@ struct WorkspaceScreen: View {
 
     // MARK: - 一格
 
+    private var focusedFrontTerminal: TermTab? {
+        workspace.tab(workspace.focusedPane.activeID)?.terminal
+    }
+
     private func paneView(_ pane: MPane, showsBack: Bool, splitState: Bool?) -> some View {
         let paneTabs = workspace.tabs(in: pane)
         let focused = pane.id == workspace.focusedPaneID
@@ -246,7 +267,8 @@ struct WorkspaceScreen: View {
                 onToggleSplit: toggleSplit,
                 onMoveToOtherPane: { id in
                     withAnimation(.easeInOut(duration: 0.22)) { workspace.moveToOtherPane(id) }
-                })
+                },
+                showsTrailingControls: chrome.statusColumn == nil)
             ZStack {
                 ForEach(paneTabs) { tab in
                     let front = tab.id == pane.activeID

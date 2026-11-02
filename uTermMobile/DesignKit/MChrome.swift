@@ -1,0 +1,141 @@
+import SwiftUI
+
+/// 系统 UI 在屏幕上**实际**占的位置。
+///
+/// iPhone Duo 的状态栏只占屏幕一角（竖屏：右上角一小块；横屏：右侧一列的顶部），但安全区是整条矩形：
+/// 竖屏时整个顶边都算进安全区，横屏时整列右边都算进安全区。只按安全区布局，状态栏旁边那一截
+/// 横条、那一列状态栏下面的空间就都浪费了，居中的页面也是按「去掉那一列」的宽度居中、看起来偏左。
+/// iOS 27.1 起系统用「遮挡」类保留区（`ReservedRegion.Kind.occlusion`）报告状态栏真正占的矩形，
+/// 用「容器边距」（`ContentMarginGuide.container`）报告屏幕圆角处该留的边距——这里在根视图量一次，
+/// 经环境值下发，需要贴着状态栏 / 屏幕角布局的视图据此计算。
+nonisolated struct MChromeGeometry: Equatable, Sendable {
+    /// 根视图（安全区内）在全局坐标里的矩形。
+    var root: CGRect = .zero
+    var safeAreaInsets = EdgeInsets()
+    /// 状态栏实际占的矩形（全局坐标，含系统给的交互边距）。不在顶边或系统不报告时为 nil。
+    var statusBar: CGRect?
+    /// 容器边距（屏幕圆角等）。iOS 27.1 以下为 0。
+    var containerMargins = EdgeInsets()
+
+    /// 整块屏幕（全局坐标）。
+    var screen: CGRect {
+        CGRect(x: root.minX - safeAreaInsets.leading, y: root.minY - safeAreaInsets.top,
+               width: root.width + safeAreaInsets.leading + safeAreaInsets.trailing,
+               height: root.height + safeAreaInsets.top + safeAreaInsets.bottom)
+    }
+
+    static func measure(_ proxy: GeometryProxy) -> MChromeGeometry {
+        var geometry = MChromeGeometry(root: proxy.frame(in: .global), safeAreaInsets: proxy.safeAreaInsets)
+        if #available(iOS 27.1, *) {
+            let origin = geometry.root.origin
+            let screenTop = geometry.screen.minY
+            geometry.statusBar = proxy.reservedRegions(kind: .occlusion)
+                .filter(\.isActive)
+                .map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) }
+                .first { $0.minY <= screenTop + 1 }
+            geometry.containerMargins = proxy.contentMargins(for: .container)
+        }
+        return geometry
+    }
+}
+
+extension MChromeGeometry {
+    /// 状态栏在右侧一列的顶部（Duo 折叠、Duo 展开横屏）：该列宽度（= 右侧安全区），以及状态栏
+    /// 底边距根视图顶边的距离——这一列在它下面是空的、可以用。
+    var statusColumn: (width: CGFloat, statusBottom: CGFloat)? {
+        guard let bar = statusBar, safeAreaInsets.trailing > 0,
+              abs(bar.maxX - screen.maxX) < 1, bar.minY <= screen.minY + 1 else { return nil }
+        return (safeAreaInsets.trailing, bar.maxY - root.minY)
+    }
+
+    /// 状态栏在顶部一行的右端（Duo 展开竖屏）：整条顶边都算安全区，但状态栏只占右边一块，
+    /// 左边那一截可以放自己的东西。返回该行高度（= 顶部安全区）。
+    var statusRowHeight: CGFloat? {
+        guard let bar = statusBar, safeAreaInsets.top > 0, safeAreaInsets.trailing == 0,
+              bar.minY <= screen.minY + 1, bar.minX > screen.midX else { return nil }
+        return safeAreaInsets.top
+    }
+}
+
+private struct MChromeGeometryKey: EnvironmentKey {
+    static let defaultValue = MChromeGeometry()
+}
+
+extension EnvironmentValues {
+    /// 根视图量到的系统 UI 几何（见 `MChromeGeometry`）。
+    var mChrome: MChromeGeometry {
+        get { self[MChromeGeometryKey.self] }
+        set { self[MChromeGeometryKey.self] = newValue }
+    }
+}
+
+/// 在根视图上量 `MChromeGeometry` 并下发给子树。
+private struct MChromeMeasurer: ViewModifier {
+    @State private var geometry = MChromeGeometry()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.mChrome, geometry)
+            .background {
+                Color.clear
+                    .onGeometryChange(for: MChromeGeometry.self) { MChromeGeometry.measure($0) } action: {
+                        geometry = $0
+                    }
+            }
+    }
+}
+
+/// 让一条贴顶的自绘标签条 / 工具条用上状态栏旁边的空间，同时不压到状态栏、不挤进屏幕圆角：
+/// - 状态栏在顶行（Duo 展开竖屏）且本条贴着屏幕顶：条高撑到状态行高度，与状态栏同一行；
+/// - 与状态栏矩形上下有重叠：右侧让出与状态栏重叠的那一截；
+/// - 贴着屏幕左上角（Duo 折叠 / 横屏没有顶部安全区）：左侧补系统给的容器边距，避开圆角。
+/// 本条自己量全局位置（外框不受这里加的内边距影响，不会来回抖）。
+private struct MStatusBarAvoidance: ViewModifier {
+    var minHeight: CGFloat
+    @Environment(\.mChrome) private var chrome
+    @State private var frame: CGRect = .zero
+
+    func body(content: Content) -> some View {
+        let screen = chrome.screen
+        let atTop = frame.height > 0 && frame.minY <= screen.minY + 1
+        let atLeading = frame.width > 0 && frame.minX <= screen.minX + 1
+        var trailing: CGFloat = 0
+        if let bar = chrome.statusBar, frame.minY < bar.maxY, frame.maxX > bar.minX {
+            trailing = frame.maxX - bar.minX + 8
+        }
+        let leading = atTop && atLeading ? chrome.containerMargins.leading : 0
+        let height = atTop ? max(minHeight, chrome.statusRowHeight ?? 0) : minHeight
+        return content
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
+            .frame(height: height)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+    }
+}
+
+/// 全屏居中的过场页（连接中、应用锁）：状态栏在右侧一列时（Duo），横向按整块屏幕居中，而不是
+/// 按「去掉那一列」的宽度居中（那样在屏幕上看是偏左的）。其它设备不变。
+private struct MScreenCentering: ViewModifier {
+    @Environment(\.mChrome) private var chrome
+
+    func body(content: Content) -> some View {
+        if chrome.statusColumn != nil {
+            content.ignoresSafeArea(.container, edges: .horizontal)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// 根视图调用一次：量系统 UI 几何并经 `\.mChrome` 下发。
+    func mMeasuresChrome() -> some View { modifier(MChromeMeasurer()) }
+
+    /// 见 `MStatusBarAvoidance`。`minHeight` 是本条平时的高度。
+    func mAvoidsStatusBar(minHeight: CGFloat) -> some View {
+        modifier(MStatusBarAvoidance(minHeight: minHeight))
+    }
+
+    /// 见 `MScreenCentering`。
+    func mCentersOnScreen() -> some View { modifier(MScreenCentering()) }
+}

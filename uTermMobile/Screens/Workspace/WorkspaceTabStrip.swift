@@ -36,6 +36,9 @@ struct WorkspaceTabStrip: View {
     var onAgent: () -> Void
     var onToggleSplit: () -> Void = {}
     var onMoveToOtherPane: (UUID) -> Void = { _ in }
+    /// Agent / 分屏两个开关是否放在条尾。状态栏在右侧一列时（Duo），它们改放到那一列状态栏
+    /// 下面（WorkspaceSideControls），条上只留返回与标签。
+    var showsTrailingControls: Bool = true
 
     @Environment(\.mAccent) private var accent
 
@@ -68,15 +71,17 @@ struct WorkspaceTabStrip: View {
                 }
             }
 
-            if frontTerminal != nil { agentButton }
-            if let split = splitState {
+            if showsTrailingControls, frontTerminal != nil { agentButton }
+            if showsTrailingControls, let split = splitState {
                 // 开关语义：分屏中用实心图标表示「开着」，再点一下取消。
                 stripButton(systemImage: split ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
                             color: M.text2, label: split ? "取消分屏" : "分屏", action: onToggleSplit)
             }
         }
         // 两端按钮命中区 44pt、视觉 34pt：外沿各自带 5pt，水平内边距相应收到 3（视觉仍距边 ~8）。
-        .padding(.horizontal, 3).frame(height: 48)
+        .padding(.horizontal, 3)
+        // Duo：竖屏时这一条上移进状态栏那一行（让出状态栏），横屏 / 折叠时左上角避开圆角。
+        .mAvoidsStatusBar(minHeight: 48)
         // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区。
         .background(M.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
@@ -101,22 +106,24 @@ struct WorkspaceTabStrip: View {
     }
 
     private var agentButton: some View {
-        Button(action: onAgent) {
-            MIcon(name: agentOn ? "term" : "spark", size: 17,
-                  color: agentOn ? .white : M.aiAccent, weight: .semibold)
-                .frame(width: 34, height: 34)
-                .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
-                .clipShape(Circle())
-                .frame(width: M.minTarget, height: M.minTarget)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(MPressStyle())
-        .accessibilityLabel(Text(agentOn ? "返回终端" : "切换到 Agent"))
-        .accessibilityAddTraits(agentOn ? [.isButton, .isSelected] : .isButton)
+        WorkspaceAgentButton(agentOn: agentOn, action: onAgent)
     }
 
     private func stripButton(icon: String? = nil, systemImage: String? = nil, color: Color,
                              label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        WorkspaceRoundButton(icon: icon, systemImage: systemImage, color: color, label: label, action: action)
+    }
+}
+
+/// 标签条两端的圆形按钮（视觉 34pt、命中区 44pt）。标签条与 Duo 侧列共用。
+struct WorkspaceRoundButton: View {
+    var icon: String? = nil
+    var systemImage: String? = nil
+    var color: Color
+    var label: LocalizedStringKey
+    var action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             Group {
                 if let systemImage {
@@ -133,6 +140,46 @@ struct WorkspaceTabStrip: View {
         }
         .buttonStyle(MPressStyle())
         .accessibilityLabel(Text(label))
+    }
+}
+
+/// 「终端 ⇄ Agent」开关。
+struct WorkspaceAgentButton: View {
+    var agentOn: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            MIcon(name: agentOn ? "term" : "spark", size: 17,
+                  color: agentOn ? .white : M.aiAccent, weight: .semibold)
+                .frame(width: 34, height: 34)
+                .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
+                .clipShape(Circle())
+                .frame(width: M.minTarget, height: M.minTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MPressStyle())
+        .accessibilityLabel(Text(agentOn ? "返回终端" : "切换到 Agent"))
+        .accessibilityAddTraits(agentOn ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Duo 状态栏在右侧一列时，Agent / 分屏两个开关竖排在那一列状态栏下面（Apple 对 Duo 的建议：
+/// 按钮放侧边、内容让出整块左侧），而不是挤在标签条尾、让那一列空着。作用于聚焦格。
+struct WorkspaceSideControls: View {
+    /// 聚焦格的前台标签是终端时才有 Agent 开关。
+    var agentOn: Bool?
+    var isSplit: Bool
+    var onAgent: () -> Void
+    var onToggleSplit: () -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let agentOn { WorkspaceAgentButton(agentOn: agentOn, action: onAgent) }
+            WorkspaceRoundButton(systemImage: isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
+                                 color: M.text2, label: isSplit ? "取消分屏" : "分屏", action: onToggleSplit)
+        }
+        .padding(.top, 8)
     }
 }
 

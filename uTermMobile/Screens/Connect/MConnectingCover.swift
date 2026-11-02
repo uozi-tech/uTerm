@@ -139,6 +139,8 @@ struct ConnectingCoverView: View {
             .mTopClearance()
             // 中转页对软键盘免疫：底层会话即便弹出键盘也不会顶起本页布局（防动画错乱）。
             .ignoresSafeArea(.keyboard, edges: .bottom)
+            // Duo 状态栏在右侧一列时按整块屏幕居中，而不是按去掉那一列的宽度（看起来偏左）。
+            .mCentersOnScreen()
         }
         .contentShape(Rectangle())   // 不透明全屏：吸收所有落到下层导航的误触
         // 出现即收起任何残留键盘（来源页 / 上一个终端会话的键盘），避免盖在中转页上。
