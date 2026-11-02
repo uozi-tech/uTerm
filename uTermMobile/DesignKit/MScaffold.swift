@@ -21,6 +21,7 @@ struct MScreen<Header: View, Content: View>: View {
     @ViewBuilder var content: Content
     /// 系统 TabView 已为内容预留底部安全区，这里只补少量呼吸留白。
     var bottomInset: CGFloat = 12
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         if embedsNavigationStack {
@@ -43,7 +44,7 @@ struct MScreen<Header: View, Content: View>: View {
         }
         .background(M.canvas)
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.large)
+        .modifier(MTitleDisplayMode(regularWidth: horizontalSizeClass == .regular))
         .modifier(MNavigationSubtitle(text: sub))
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -60,6 +61,21 @@ extension MScreen where Header == EmptyView {
         self.init(title: title, sub: sub, maxContentWidth: maxContentWidth,
                   embedsNavigationStack: embedsNavigationStack,
                   actions: { EmptyView() }, content: content, bottomInset: bottomInset)
+    }
+}
+
+/// 标题显示方式。常规宽度（iPhone Duo 展开、iPad）用 iOS 26 的 `.inlineLarge`：大标题与工具栏
+/// 按钮、状态栏同在顶行，不再在按钮行下面单占一行（实机反馈：Duo 展开时标题应与状态栏同行）。
+/// 紧凑宽度（iPhone、Duo 折叠）保留标准大标题——滚动时收起成小标题，是那里的惯例。
+private struct MTitleDisplayMode: ViewModifier {
+    var regularWidth: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.toolbarTitleDisplayMode(regularWidth ? .inlineLarge : .large)
+        } else {
+            content.navigationBarTitleDisplayMode(.large)
+        }
     }
 }
 
