@@ -226,7 +226,7 @@ struct TerminalScreen: View {
     // MARK: - 主机选择
 
     private var picker: some View {
-        MScreen(title: "终端", actions: {
+        MScreen(title: "终端", maxContentWidth: M.gridContentWidth, actions: {
             if !tabs.isEmpty {
                 // 系统工具栏按钮（MScreen 的 actions）：底由系统画，这里不再自画胶囊。
                 Button { showPicker = false } label: {
@@ -245,7 +245,7 @@ struct TerminalScreen: View {
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20).padding(.top, 4)
-                    MCardList {
+                    MCardGrid {
                         ForEach(connectable) { host in
                             // 走连接中页（与主机详情 / 命令面板一致）；showPicker 先关，连接完成后露出会话。
                             hostRow(host) { showPicker = false; store.openTerminal(host) }

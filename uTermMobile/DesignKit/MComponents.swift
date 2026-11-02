@@ -559,13 +559,14 @@ extension EnvironmentValues {
 
 // MARK: - 卡片列表（弹性间距）
 
-/// 卡片列表间距：随容器宽度弹性缩放（业界断点惯例的连续化）。
-/// 比率 5%、clamp 14–24、2pt 网格取整：iPhone SE(375) ≈ 18、6.1"(393) ≈ 20、
-/// 6.9"(430) ≈ 22、iPad 阅读列宽 ≥ 480 封顶 24。未量到宽度前缺省 20。
+/// 卡片之间的间距：窄屏（< 600pt：iPhone、Duo 折叠）10pt，宽屏（Duo 展开、iPad）12pt。
+///
+/// 原先按宽度 5% 弹性取 14–24pt，卡片本身已有 14pt 内边距 + 填充底色，再隔 20pt 上下显得松散、
+/// 一屏装不下几张（实机反馈「缩窄卡片间距」）。卡片网格的常见做法是 8–12pt 的槽宽：既能
+/// 分清卡片，又让同组卡片读成一组；组与组之间靠分组标题上方更大的留白（见各屏 sectionLabel）
+/// 区分，而不是加大卡片间距。未量到宽度前按窄屏处理。
 nonisolated func mCardSpacing(for width: CGFloat) -> CGFloat {
-    guard width > 0 else { return 20 }
-    let clamped = min(max(width * 0.05, 14), 24)
-    return (clamped / 2).rounded() * 2
+    width >= 600 ? 12 : 10
 }
 
 /// 卡片网格：窄屏一列（与 `MCardList` 一致），宽屏（iPhone Duo 展开、iPad、横屏）按可用宽度
@@ -586,16 +587,31 @@ struct MCardGrid<Content: View>: View {
 
     var body: some View {
         let spacing = mCardSpacing(for: width)
+        let count = mCardColumns(for: width, maxColumns: maxColumns)
         let columns = Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
-                            count: mCardColumns(for: width, maxColumns: maxColumns))
+                            count: count)
         LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
             content
         }
+        // LazyVGrid 不会把格子拉到整行同高：行数可变的卡片据此在多列时预留满行数。
+        .environment(\.mCardGridColumns, count)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
-/// 自量宽度、按 `mCardSpacing` 弹性设置间距的竖向卡片列表容器。
+private struct MCardGridColumnsKey: EnvironmentKey {
+    static let defaultValue = 1
+}
+
+extension EnvironmentValues {
+    /// 卡片所在 `MCardGrid` 当前的列数（不在网格里为 1）。
+    var mCardGridColumns: Int {
+        get { self[MCardGridColumnsKey.self] }
+        set { self[MCardGridColumnsKey.self] = newValue }
+    }
+}
+
+/// 自量宽度、按 `mCardSpacing` 设置间距的竖向卡片列表容器。
 /// 主机 / 终端 / 文件 / 命令四个 tab 的卡片列表共用，替代写死的 spacing。
 struct MCardList<Content: View>: View {
     var alignment: HorizontalAlignment = .center

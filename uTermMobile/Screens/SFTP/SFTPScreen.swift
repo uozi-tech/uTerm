@@ -92,7 +92,7 @@ struct SFTPScreen: View {
     }
 
     private var picker: some View {
-        MScreen(title: "文件") {
+        MScreen(title: "文件", maxContentWidth: M.gridContentWidth) {
             VStack(spacing: 10) {
                 if hosts.isEmpty {
                     MEmptyState(icon: "folder", title: "没有主机",
@@ -102,7 +102,7 @@ struct SFTPScreen: View {
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20).padding(.top, 4)
-                    MCardList {
+                    MCardGrid {
                         ForEach(hosts) { host in
                             Button { store.openSFTP(host) } label: {
                                 HStack(spacing: 12) {

@@ -118,7 +118,8 @@ struct HostsScreen: View {
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased()).font(M.sans(12, weight: .semibold)).tracking(0.6).foregroundStyle(M.text3)
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+            // 组与组之间的留白（14 + 列表间距）大于卡片之间的 10–12pt，分组读得出来。
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 14)
     }
 
     private func card(_ host: ServerProfile, groupColors: [String: Color]) -> some View {

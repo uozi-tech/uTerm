@@ -42,6 +42,13 @@ final class MobileAdaptiveLayoutTests: XCTestCase {
         XCTAssertEqual(mCardColumns(for: 1080 - 32), 3, "网格页封顶宽度仍三列")
     }
 
+    func testCardSpacingIsTightAndStepsUpOnWideScreens() {
+        XCTAssertEqual(mCardSpacing(for: 0), 10, "未量到宽度按窄屏")
+        XCTAssertEqual(mCardSpacing(for: 358), 10)
+        XCTAssertEqual(mCardSpacing(for: 637), 12)
+        XCTAssertEqual(mCardSpacing(for: 1048), 12)
+    }
+
     func testCardColumnsNeverExceedMaxOrDropBelowOne() {
         XCTAssertEqual(mCardColumns(for: 0), 1)
         XCTAssertEqual(mCardColumns(for: 5000), 3)

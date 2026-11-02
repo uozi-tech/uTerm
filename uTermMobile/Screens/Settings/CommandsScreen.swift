@@ -14,7 +14,7 @@ struct CommandsScreen: View {
             // 与「主机 / 终端 / 文件 / 设置」四个标签同一套大标题页头（MScreen）：此前这里是系统
             // 内联导航栏 + 「快捷命令」小标题，五个标签里唯独它换了一种页头。
             MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令",
-                    embedsNavigationStack: false, actions: {
+                    maxContentWidth: M.gridContentWidth, embedsNavigationStack: false, actions: {
                 MRoundBtn(icon: "plus", filled: true) { creating = true }
                     .accessibilityLabel(Text("新建命令"))
             }) {
@@ -23,7 +23,7 @@ struct CommandsScreen: View {
                                 message: "把常用运维命令存成可复用条目，绑定主机一键执行。",
                                 actionTitle: "新建命令", action: { creating = true })
                 } else {
-                    MCardList {
+                    MCardGrid {
                         ForEach(commands) { cmd in
                             NavigationLink { QuickCommandDetailView(cmd: cmd) } label: {
                                 CommandCard(cmd: cmd)
@@ -42,6 +42,7 @@ struct CommandsScreen: View {
 struct CommandCard: View {
     let cmd: QuickCommand
     @Environment(\.mAccent) private var accent
+    @Environment(\.mCardGridColumns) private var gridColumns
 
     var body: some View {
             VStack(alignment: .leading, spacing: 9) {
@@ -53,7 +54,8 @@ struct CommandCard: View {
                 }
                 Text(cmd.aiAssisted && !cmd.intent.isEmpty ? cmd.intent : cmd.command)
                     .font(M.mono(12.5)).foregroundStyle(M.text3)
-                    .lineLimit(2).multilineTextAlignment(.leading)
+                    // 多列时预留两行，同一行的卡片才一样高；单列时按实际行数收起。
+                    .lineLimit(2, reservesSpace: gridColumns > 1).multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
                     MChip(text: "\(cmd.serverIDs.count) 台主机", icon: "server")
                     if cmd.runCount > 0 { MChip(text: "运行 \(cmd.runCount) 次") }
