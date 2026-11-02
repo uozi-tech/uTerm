@@ -147,7 +147,7 @@ private struct MMDBlockView: View {
                 }
             }
             .padding(.vertical, 4).padding(.horizontal, 6)
-            .background(M.panelHi)
+            // 表头只加粗，不再垫底色：与首行之间已有 hairline。
 
             ForEach(Array(tbl.body.rows.enumerated()), id: \.offset) { _, row in
                 HStack {

@@ -133,7 +133,8 @@ struct ConnectingCoverView: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 30)
             }
-            .padding(.top, 8)
+            // 状态栏不在顶边时（iPhone Duo / 横屏）顶部 chip 别贴着屏幕顶。
+            .mTopClearance()
             // 中转页对软键盘免疫：底层会话即便弹出键盘也不会顶起本页布局（防动画错乱）。
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
@@ -197,7 +198,7 @@ struct ConnectingCoverView: View {
                 .font(M.sans(12.5)).foregroundStyle(M.text2)
         }
         .padding(.horizontal, 13).padding(.vertical, 6)
-        // 卡片形态：白卡靠与 canvas 的填充差区分，不加投影（与下方阶段卡一致；深色下 card 与 fillFaint 同值）。
+        // 卡片形态：白卡靠与 canvas 的填充差区分，不加投影（与下方阶段卡一致）。
         .background(M.card)
         .clipShape(Capsule())
     }

@@ -17,16 +17,19 @@ struct MSheetNavHeader: View {
             } label: {
                 MIcon(name: "back", size: 16, color: accent, weight: .semibold)
                     .frame(width: 34, height: 34)
-                    .background(M.fillFaint)
+                    .background(M.button)
                     .clipShape(Circle())
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())
             .accessibilityLabel("返回")
             Text(title).font(M.sans(16, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14).padding(.top, M.topBreath).padding(.bottom, 10)
-        .background(M.bg)   // pinned 头部需不透明底，避免内容滚动时透出
+        .padding(.leading, 9).padding(.trailing, 14).padding(.top, M.topBreath).padding(.bottom, 5)
+        // pinned 头部需不透明底，避免内容滚动时透出；与下方内容同为 canvas，只靠底边 hairline 分区。
+        .background(M.canvas)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
@@ -96,7 +99,8 @@ struct PermissionGrid: View {
                             Text(c.0).font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.text3).frame(width: 64)
                         }
                     }
-                    .padding(.vertical, 9).background(UD.fillSoft)   // 容器已是卡片面，表头再深一档区分
+                    // 表头与行同在卡片面上，只靠底边 hairline 分区（不再叠一层更深的底色）。
+                    .padding(.vertical, 9)
                     .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
                     ForEach(Array(classes.enumerated()), id: \.element.0) { ci, cls in
@@ -231,7 +235,7 @@ struct FileActionSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name).font(M.sans(16, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
-                Text(subtitle).font(M.mono(12.5)).foregroundStyle(M.text4).lineLimit(1)
+                Text(subtitle).font(M.mono(12.5)).foregroundStyle(M.text3).lineLimit(1)
             }
             Spacer(minLength: 0)
         }

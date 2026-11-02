@@ -198,18 +198,24 @@ struct QuickCommandDetailView: View {
             }
             Button { editing = true } label: {
                 MIcon(name: "edit", size: 18, color: M.text2).frame(width: 48, height: 48)
-                    .background(M.fillFaint)
+                    .background(M.button)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
-            }.buttonStyle(MPressStyle())
+            }
+            .buttonStyle(MPressStyle())
+            .accessibilityLabel(Text("编辑命令"))
             Button { pendingDelete = true } label: {
                 MIcon(name: "trash", size: 18, color: M.text3).frame(width: 48, height: 48)
-                    .background(M.fillFaint)
+                    .background(M.button)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
-            }.buttonStyle(MPressStyle())
+            }
+            .buttonStyle(MPressStyle())
+            .accessibilityLabel(Text("删除命令"))
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+        // 宽屏与上方内容同列宽，主按钮不横跨整屏。
+        .mReadableColumn()
+        // 底栏与画布靠底色差分区，不再叠 hairline（「线或底色差，二选一」）。
         .background(M.panel)
-        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     // MARK: 元件

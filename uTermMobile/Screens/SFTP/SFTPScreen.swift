@@ -138,7 +138,8 @@ struct SFTPScreen: View {
                 .animation(.mSwap, value: controller.state)
             if case .connected = controller.state { footerBar }
         }
-        .background(M.bg)
+        // 整屏一个工作面：页头 / 路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
+        .background(M.surface)
         .toolbar(.hidden, for: .tabBar)   // 浏览期全屏：底部让给上传 / 操作条
         .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
@@ -188,14 +189,18 @@ struct SFTPScreen: View {
                 .fixedSize()
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
-        .background(M.overlay)
+        .background(M.surface)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     private func header(_ host: ServerProfile) -> some View {
-        HStack(spacing: 10) {
-            Button { closeSession() } label: { MIcon(name: "back", size: 20, color: accent, weight: .semibold) }
+        HStack(spacing: 4) {
+            Button { closeSession() } label: {
+                MIcon(name: "back", size: 20, color: accent, weight: .semibold)
+                    .frame(width: M.minTarget, height: M.minTarget)   // 原先只有图标本身 ~20pt 可点
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(Text("关闭文件浏览"))
             VStack(alignment: .leading, spacing: 1) {
                 Text(host.name).font(M.sans(15, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
                 Text(statusText).font(M.mono(11)).foregroundStyle(M.text3).lineLimit(1)
@@ -203,10 +208,14 @@ struct SFTPScreen: View {
             Spacer()
             Button { controller.refresh() } label: {
                 MIcon(name: "refresh", size: 16, color: M.text2).frame(width: 34, height: 34)
-                    .background(M.fillFaint).clipShape(Circle())
+                    .background(M.button).clipShape(Circle())
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel(Text("刷新"))
         }
-        .padding(.horizontal, 14).padding(.top, M.topBreath).padding(.bottom, 10)
+        // 两端按钮自带 44pt 命中区外沿，水平内边距收到 4（视觉仍距边 ~16）。
+        .padding(.horizontal, 4).mTopClearance().padding(.bottom, 4)
     }
 
     // 路径面包屑（设计稿 SftpBody 顶部 `/ › home › user`），可点段跳转。
@@ -218,15 +227,17 @@ struct SFTPScreen: View {
                     Button { Task { await controller.load(seg.full) } } label: {
                         Text(seg.label).font(M.mono(12.5))
                             .foregroundStyle(i == segs.count - 1 ? M.text : M.text3)
+                            // 面包屑段的命中区撑到整条高（原先只有字形 ~15pt 高）。
+                            .padding(.vertical, 10).padding(.horizontal, 2)
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                     if i < segs.count - 1 {
                         Text("›").font(M.mono(12.5)).foregroundStyle(M.text4)
                     }
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 8)
+            .padding(.horizontal, 14)
         }
-        .background(M.panel)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 

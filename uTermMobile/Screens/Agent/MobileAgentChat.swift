@@ -70,7 +70,8 @@ struct MobileAgentChat: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             }
         }
-        .background(M.canvas)
+        // 与终端同一个工作面（Agent 与终端在同一条会话标签栏下切换，底色不跳）。
+        .background(M.surface)
         .sheet(isPresented: $addingProvider) { ProviderFormSheet() }
         .onAppear { configureModel() }
         .onChange(of: providers) { _, list in model.providers = list }
@@ -145,12 +146,14 @@ struct MobileAgentChat: View {
                     Button { addingProvider = true } label: { Label("添加 Provider", systemImage: "plus") }
                 }
             } label: {
-                MIcon(name: "ellipsis", size: 16, color: M.text2).frame(width: 32, height: 32)
+                MIcon(name: "ellipsis", size: 16, color: M.text2)
+                    .frame(width: M.minTarget, height: 36)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel(Text("会话与 Provider"))
         }
-        .padding(.horizontal, 16).padding(.vertical, 7)
-        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
-        .background(M.overlay)
+        .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 2)
+        // 同一工作面上只用底边 hairline 分区，不再叠 overlay 底色。
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -179,6 +182,8 @@ struct MobileAgentChat: View {
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 12)
+                // 宽屏（iPad / iPhone Duo 展开）消息收在易读列宽里，避免一行拉到七八十个汉字。
+                .mReadableColumn()
             }
             .scrollIndicators(.hidden)
             .defaultScrollAnchor(.bottom)
@@ -339,8 +344,9 @@ struct MobileAgentChat: View {
             }
         }
         .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 10)
-        // v2 禁半透明材质浮层：实体 overlay 面 + 发丝分隔（贴边 bar 不带投影）
-        .background(M.overlay)
+        .mReadableColumn()
+        // 不透明底（消息从它下面滚过）；与工作面同色，只靠顶边 hairline 分区。
+        .background(M.surface)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 

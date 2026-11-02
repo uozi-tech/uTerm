@@ -84,7 +84,8 @@ struct CommandPaletteView: View {
                 }
             }
         }
-        .background(M.bg)
+        // 整屏一个工作面：搜索头与结果同底色，只靠 hairline 分区。
+        .background(M.surface)
         .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { focused = true } }
     }
 
@@ -102,7 +103,8 @@ struct CommandPaletteView: View {
                 .font(M.sans(15, weight: .medium)).foregroundStyle(accent)
         }
         .padding(.horizontal, 16).frame(height: 52)
-        .background(M.overlayHi)
+        .mTopClearance(0)
+        .mReadableColumn()
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -117,7 +119,7 @@ struct CommandPaletteView: View {
 
     private func cap(_ text: String) -> some View {
         Text(text.uppercased()).font(M.sans(11, weight: .semibold)).tracking(0.6)
-            .foregroundStyle(M.text4)
+            .foregroundStyle(M.text3)
             .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 5)
     }
 
@@ -128,12 +130,12 @@ struct CommandPaletteView: View {
             HStack(spacing: 12) {
                 MIcon(name: icon, size: 16, color: tinted ? accent : M.text2)
                     .frame(width: 32, height: 32)
-                    .background(tinted ? accent.opacity(0.14) : M.fillFaint)
+                    .background(tinted ? accent.opacity(0.14) : M.button)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 2) {
                     highlight(title).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)
                     Text(detail).font(mono ? M.mono(12.5) : M.sans(12.5))
-                        .foregroundStyle(M.text4).lineLimit(1)
+                        .foregroundStyle(M.text3).lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 if !hint.isEmpty { Text(hint).font(M.sans(12)).foregroundStyle(M.text3) }

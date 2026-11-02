@@ -76,7 +76,7 @@ struct MToolCall: View {
         .font(M.mono(12))
         .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(M.panelHi)
+        // 卡片内不再垫一块更亮的底：与头部之间已有 hairline（「线或底色差，二选一」）。
     }
 
     private func outputRow(_ output: String) -> some View {
@@ -115,7 +115,7 @@ struct MToolCall: View {
             Button(action: onSkip) {
                 Text("跳过").font(M.sans(12.5)).foregroundStyle(approvalsDisabled ? M.text4 : M.text3)
                     .padding(.horizontal, 14).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(M.fillFaint))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(M.button))
                     .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())

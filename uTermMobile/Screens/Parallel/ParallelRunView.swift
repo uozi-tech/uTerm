@@ -63,7 +63,7 @@ struct ParallelRunView: View {
             if let c = controller {
                 content(c)
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(M.bg)
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(M.surface)
             }
         }
         .onAppear { if controller == nil { setup() } }
@@ -103,15 +103,20 @@ struct ParallelRunView: View {
             }
             statusBar(c)
         }
-        .background(M.bg)
+        // 整屏一个工作面：页头 / 模式切换 / 广播条 / 输出 / 状态栏同底色，区块之间只用 hairline
+        // （「线或底色差，二选一」）。
+        .background(M.surface)
     }
 
     private func nav(_ c: ParallelRunController) -> some View {
         HStack(spacing: 10) {
             Button(action: onClose) {
                 MIcon(name: "x", size: 17, color: M.text2).frame(width: 36, height: 36)
-                    .background(M.fillFaint).clipShape(Circle())
+                    .background(M.button).clipShape(Circle())
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel(Text("关闭"))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     if c.aiAssisted { MIcon(name: "spark", size: 13, color: M.aiAccent) }
@@ -122,12 +127,15 @@ struct ParallelRunView: View {
             Spacer()
             Button { c.rerun() } label: {
                 MIcon(name: "rerun", size: 17, color: c.allDone ? M.text2 : M.text4)
-                    .frame(width: 36, height: 36).background(M.fillFaint)
+                    .frame(width: 36, height: 36).background(M.button)
                     .clipShape(Circle())
-            }.disabled(!c.allDone)
+                    .frame(width: M.minTarget, height: M.minTarget)
+                    .contentShape(Rectangle())
+            }
+            .disabled(!c.allDone)
+            .accessibilityLabel(Text("重新运行"))
         }
-        .padding(.horizontal, 14).padding(.top, M.topBreath).padding(.bottom, 11)
-        .background(M.panel)
+        .padding(.horizontal, 10).mTopClearance().padding(.bottom, 7)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -150,10 +158,9 @@ struct ParallelRunView: View {
                 }.buttonStyle(MPressStyle())
             }
         }
-        .padding(3).background(M.fillFaint)
+        .padding(3).background(M.inputBg)
         .clipShape(RoundedRectangle(cornerRadius: 11))
         .padding(.horizontal, 16).padding(.top, 10)
-        .background(M.panel)
     }
 
     private func broadcastBar(_ c: ParallelRunController) -> some View {
@@ -190,7 +197,6 @@ struct ParallelRunView: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(M.panel)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -204,7 +210,6 @@ struct ParallelRunView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(M.cmdSurface)
     }
 
     private func aiBody(_ c: ParallelRunController) -> some View {
@@ -239,9 +244,10 @@ struct ParallelRunView: View {
                 }
             }
             .padding(18)
+            // 宽屏（iPad / iPhone Duo 展开）把 AI 叙述收在易读列宽里，别铺满整行。
+            .mReadableColumn()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(M.bg)
     }
 
     private func statusBar(_ c: ParallelRunController) -> some View {
@@ -255,7 +261,6 @@ struct ParallelRunView: View {
             Text(c.allDone ? "已完成" : "执行中").foregroundStyle(M.text3)
         }
         .font(M.mono(11)).frame(height: 30).padding(.horizontal, 14)
-        .background(M.panel)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -311,7 +316,6 @@ struct ParShellPane: View {
                 }
             }
             .padding(.horizontal, 12).frame(height: 34)
-            .background(M.panel)
             .overlay(alignment: .top) { Rectangle().fill(tint).frame(height: 2) }
             .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
 
