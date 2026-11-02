@@ -45,7 +45,7 @@ struct MScreen<Header: View, Content: View>: View {
         .background(M.canvas)
         .navigationTitle(title)
         .modifier(MTitleDisplayMode(regularWidth: horizontalSizeClass == .regular))
-        .modifier(MNavigationSubtitle(text: sub))
+        .mNavigationSubtitle(sub)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 actions.environment(\.mToolbarItem, true)
@@ -88,6 +88,32 @@ private struct MNavigationSubtitle: ViewModifier {
             content.navigationSubtitle(text)
         } else {
             content
+        }
+    }
+}
+
+extension View {
+    /// 导航栏副标题：iOS 26 起交给系统 `.navigationSubtitle`，更早的系统不显示。
+    func mNavigationSubtitle(_ text: String?) -> some View {
+        modifier(MNavigationSubtitle(text: text))
+    }
+}
+
+/// 全屏覆盖层导航栏左上角的「关闭」：iOS 26 用系统的关闭角色（液态玻璃 ×，随工具栏挪到
+/// iPhone Duo 的侧边列），更早的系统画一个同样语义的 × 按钮。
+struct MToolbarCloseButton: View {
+    var label: String = "关闭"
+    var action: () -> Void
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Button(role: .close, action: action)
+                .accessibilityLabel(Text(label))
+        } else {
+            Button(action: action) {
+                Image(systemName: MGlyph.symbol("x"))
+            }
+            .accessibilityLabel(Text(label))
         }
     }
 }
