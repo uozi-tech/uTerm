@@ -2,6 +2,8 @@ import UDesignKit
 import SwiftUI
 import SwiftData
 import Observation
+import class SwiftTerm.TerminalView
+import UIKit
 
 /// 连接目标：终端会话 / SFTP 文件浏览（设计稿 `m-connect` 的 `kind`）。
 enum MConnectKind: Equatable { case terminal, sftp }
@@ -140,6 +142,13 @@ struct ConnectingCoverView: View {
         .onAppear {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                             to: nil, from: nil, for: nil)
+        }
+        // 中转页在场期间，下层终端只要又拿到第一响应者（UIKit 回切标签时恢复响应者等），
+        // 键盘就会盖在中转页上，而本页没有任何输入框、用户也收不掉它（实机：失败态键盘
+        // 一直挂着）。键盘一要弹就收：只收终端的，不碰盖在本页之上的表单 / 弹窗输入框。
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillShowNotification)) { _ in
+            CoverKeyboardGuard.resignTerminalKeyboard()
         }
         // 阶段计时推进；keyed by attempt → 重试时重跑并复位。
         .task(id: request.attempt) { stageProgress = 0; await pace() }
@@ -401,4 +410,29 @@ private struct ConnStageRow: View {
         case .failed: return M.danger
         }
     }
+}
+
+
+// MARK: - 中转页期间压住终端键盘
+
+/// 找出当前第一响应者；若是终端视图就让它退位。
+private enum CoverKeyboardGuard {
+    private static weak var found: UIResponder?
+
+    static func resignTerminalKeyboard() {
+        found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.mCaptureFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        if let terminal = found as? SwiftTerm.TerminalView {
+            _ = terminal.resignFirstResponder()
+        }
+        found = nil
+    }
+
+    fileprivate static func capture(_ responder: UIResponder) { found = responder }
+}
+
+private extension UIResponder {
+    /// `sendAction(to: nil)` 沿响应链派给第一响应者，借它取到「当前是谁」。
+    @objc func mCaptureFirstResponder() { CoverKeyboardGuard.capture(self) }
 }
