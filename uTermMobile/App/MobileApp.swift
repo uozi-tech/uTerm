@@ -36,7 +36,9 @@ struct MobileApp: App {
         let lan = LANSyncCoordinator(
             role: .receiver, preferences: preferences,
             dataStore: LANSyncDataStore(container: modelContainer))
-        lan.start()
+        // 局域网监听要「本地网络」授权；没用过局域网同步的人不该一启动就被弹窗问。只有看到过
+        // 设置 › 局域网接收（或早就配过配对码）的才在启动时开始监听，见 LANSyncActivation。
+        if LANSyncActivation.isActivated { lan.start() }
         _lanSync = State(initialValue: lan)
 
         // 应用锁：读 requireAuthAtLaunch（缺键视作「关」——iOS 默认不锁，由设置开启）。
