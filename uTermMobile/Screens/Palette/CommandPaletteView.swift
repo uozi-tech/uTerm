@@ -13,7 +13,9 @@ struct CommandPaletteView: View {
     @Query(sort: [SortDescriptor(\ServerGroup.sortOrder)]) private var groups: [ServerGroup]
 
     @State private var q = ""
-    @FocusState private var focused: Bool
+    /// 系统搜索栏是否处于激活态（激活 = 聚焦 + 弹键盘）。打开面板时置 true 自动聚焦；
+    /// 用户点搜索栏的「取消」退出激活 = 关面板（与改前自绘头的「取消」一致）。
+    @State private var searching = false
     /// 派生结果的记忆盒（见 `PaletteMemo`）。`@State` 里放引用类型：改它的
     /// 字段不会触发 SwiftUI 失效，正是缓存要的语义。
     @State private var memo = PaletteMemo()
@@ -32,82 +34,83 @@ struct CommandPaletteView: View {
         let r = memo.results(query: query, hosts: hosts, commands: commands,
                              keys: keys, groups: groups)
 
-        return VStack(spacing: 0) {
-            header(results: r)
-            if r.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        if r.showNewHost {
-                            cap("动作")
-                            row(icon: "plus", title: "新建主机…", detail: "创建一台新服务器", tinted: true) {
-                                close(); store.tab = .hosts; store.requestNewServer = true
+        return NavigationStack {
+            VStack(spacing: 0) {
+                if r.isEmpty {
+                    emptyState
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            if r.showNewHost {
+                                cap("动作")
+                                row(icon: "plus", title: "新建主机…", detail: "创建一台新服务器", tinted: true) {
+                                    close(); store.tab = .hosts; store.requestNewServer = true
+                                }
                             }
-                        }
-                        if !r.hosts.isEmpty {
-                            cap("主机")
-                            ForEach(r.hosts) { h in
-                                row(icon: "server", title: h.name, detail: h.displayEndpoint,
-                                    hint: "连接", tinted: true, mono: true) { connect(h) }
+                            if !r.hosts.isEmpty {
+                                cap("主机")
+                                ForEach(r.hosts) { h in
+                                    row(icon: "server", title: h.name, detail: h.displayEndpoint,
+                                        hint: "连接", tinted: true, mono: true) { connect(h) }
+                                }
                             }
-                        }
-                        if !r.commands.isEmpty {
-                            cap("命令")
-                            ForEach(r.commands) { c in
-                                row(icon: c.aiAssisted ? "spark" : "bolt",
-                                    title: c.name,
-                                    detail: c.aiAssisted && !c.intent.isEmpty ? c.intent : c.command) {
-                                    close(); store.tab = .commands
+                            if !r.commands.isEmpty {
+                                cap("命令")
+                                ForEach(r.commands) { c in
+                                    row(icon: c.aiAssisted ? "spark" : "bolt",
+                                        title: c.name,
+                                        detail: c.aiAssisted && !c.intent.isEmpty ? c.intent : c.command) {
+                                        close(); store.tab = .commands
+                                    }
+                                }
+                            }
+                            if !r.keys.isEmpty {
+                                cap("密钥")
+                                ForEach(r.keys) { k in
+                                    row(icon: "key", title: k.name, detail: k.typeLabel, mono: true) {
+                                        close(); store.tab = .settings
+                                    }
+                                }
+                            }
+                            if !r.groups.isEmpty {
+                                cap("分组")
+                                ForEach(r.groups) { g in
+                                    row(icon: "tag", title: g.name, detail: "\(g.members) 台主机") {
+                                        close(); store.tab = .settings
+                                    }
                                 }
                             }
                         }
-                        if !r.keys.isEmpty {
-                            cap("密钥")
-                            ForEach(r.keys) { k in
-                                row(icon: "key", title: k.name, detail: k.typeLabel, mono: true) {
-                                    close(); store.tab = .settings
-                                }
-                            }
-                        }
-                        if !r.groups.isEmpty {
-                            cap("分组")
-                            ForEach(r.groups) { g in
-                                row(icon: "tag", title: g.name, detail: "\(g.members) 台主机") {
-                                    close(); store.tab = .settings
-                                }
-                            }
-                        }
+                        .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 24)
+                        .mReadableColumn()
                     }
-                    .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 24)
-                    .mReadableColumn()
                 }
             }
+            // 整屏一个工作面：导航栏 / 搜索栏与结果同底色。
+            .background(M.surface)
+            .navigationTitle("命令面板")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(M.surface, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    MToolbarCloseButton(action: close)
+                }
+            }
+            // 系统搜索栏（导航栏下方的抽屉位，常显）：宽控件，iPhone Duo 上留在原位；
+            // 关闭钮是标准工具栏项，随系统挪到侧边列。
+            .searchable(text: $q, isPresented: $searching,
+                        placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: Text("搜索主机、命令、密钥、分组…"))
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .onSubmit(of: .search) { if let h = r.hosts.first { connect(h) } }
+            // 退出搜索（点搜索栏「取消」）即关面板。只认「激活 → 未激活」这一跳，首帧的 false 不算。
+            .onChange(of: searching) { was, now in if was && !now { close() } }
         }
-        // 整屏一个工作面：搜索头与结果同底色，只靠 hairline 分区。
-        .background(M.surface)
-        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { focused = true } }
+        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searching = true } }
     }
 
     // MARK: pieces
-    private func header(results: PaletteResults) -> some View {
-        HStack(spacing: 10) {
-            MIcon(name: "search", size: 18, color: M.text3)
-            TextField("搜索主机、命令、密钥、分组…", text: $q)
-                .focused($focused)
-                .font(M.sans(17)).foregroundStyle(M.text)
-                .autocorrectionDisabled().textInputAutocapitalization(.never)
-                .submitLabel(.search)
-                .onSubmit { if let h = results.hosts.first { connect(h) } }
-            Button("取消") { close() }
-                .font(M.sans(15, weight: .medium)).foregroundStyle(accent)
-        }
-        .padding(.horizontal, 16).frame(height: 52)
-        .mTopClearance(0)
-        .mReadableColumn()
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
-    }
-
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("没有匹配「\(q)」的结果").font(M.sans(15)).foregroundStyle(M.text3)
