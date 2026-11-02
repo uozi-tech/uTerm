@@ -37,7 +37,7 @@ final class EditorThemeTests: XCTestCase {
 
     /// 背景：暗色跟工作区/侧栏基底一致，浅色保留 VS Code Light #FFFFFF。
     func test_editor_background_resolves_dark_and_light() {
-        XCTAssertTrue(near(sRGB(EditorTheme.background, .darkAqua), 16/255, 16/255, 18/255), "深 #101012")
+        XCTAssertTrue(near(sRGB(EditorTheme.background, .darkAqua), 0, 0, 0), "深 #000000")
         XCTAssertTrue(near(sRGB(EditorTheme.background, .aqua), 1, 1, 1), "浅 #FFFFFF")
     }
 

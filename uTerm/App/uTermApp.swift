@@ -220,7 +220,7 @@ struct uTermApp: App {
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。
-        // 否则系统暗夜标题栏（更浅的灰）盖在设计稿 #101012 之上 —— 即「chrome 还是系统默认
+        // 否则系统暗夜标题栏（更浅的灰）盖在设计稿底色 UD.bg 之上 —— 即「chrome 还是系统默认
         // 暗夜配色」的根因。与 workspace / SFTP 窗口一致。
         .windowStyle(.hiddenTitleBar)
         .routesNewWindowToWelcome()

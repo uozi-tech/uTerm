@@ -24,8 +24,8 @@ nonisolated enum EditorTheme {
     }
 
     // MARK: 内容表面（深 = Workspace bg / 浅 VS Code Light）
-    /// 编辑器内容背景。Dark #101012（对齐工作区侧栏）/ Light #FFFFFF。
-    static let background = dyn(0x101012, 0xFFFFFF)
+    /// 编辑器内容背景。Dark #000000（对齐 `UD.bg`）/ Light #FFFFFF。
+    static let background = dyn(0x000000, 0xFFFFFF)
     /// 编辑器默认（未高亮）文字色。Dark #CCCCCC / Light #3B3B3B。
     static let foreground = dyn(0xCCCCCC, 0x3B3B3B)
 

@@ -33,7 +33,7 @@ struct KeyManagerView: View {
             }
         }
         .frame(minWidth: 820, minHeight: 560)
-        // 自绘扁平 chrome：透明系统标题栏 + full-size content + 不透明 #101012 底，
+        // 自绘扁平 chrome：透明系统标题栏 + full-size content + 不透明 UD.bg 底，
         // 让位红绿灯由 KeysTitleBar 顶部预留。取代 WorkspaceWindowAppearance（保留系统
         // 暗夜标题栏）——后者正是「chrome 还是系统默认暗夜配色」的来源。
         .ignoresSafeArea(.container, edges: .top)
@@ -267,7 +267,7 @@ private struct KeyAvatar: View {
 
 /// 密钥管理窗口自绘扁平标题栏（对齐工作区 / SFTP 的自绘 chrome）：左侧让位窗口红绿灯
 /// （~68pt），居中钥匙图标 + "密钥管理"。40px 扁平 UD.panel 条 + 底部 1px 描边。
-/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿 #101012 之上。
+/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿底色 UD.bg 之上。
 private struct KeysTitleBar: View {
     var body: some View {
         ZStack {

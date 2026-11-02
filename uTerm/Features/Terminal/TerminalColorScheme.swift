@@ -68,7 +68,7 @@ struct TerminalColorScheme {
 
     static let vscodeDark = TerminalColorScheme(
         displayName: "VS Code Dark",
-        backgroundColor: NSColor(srgbRed: 0x10/255, green: 0x10/255, blue: 0x12/255, alpha: 1),
+        backgroundColor: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1),
         foregroundColor: NSColor(srgbRed: 0xD4/255, green: 0xD4/255, blue: 0xD4/255, alpha: 1),
         accentColor: NSColor(srgbRed: 0x56/255, green: 0x9C/255, blue: 0xD6/255, alpha: 1),
         cursorColor: NSColor(srgbRed: 0xAE/255, green: 0xAF/255, blue: 0xAD/255, alpha: 1),

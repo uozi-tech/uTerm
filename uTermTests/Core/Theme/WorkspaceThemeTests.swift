@@ -17,12 +17,12 @@ final class WorkspaceThemeTests: XCTestCase {
     }
 
     func test_bgNSColor_resolves_dark_and_light() {
-        XCTAssertTrue(near(srgb(WS.bgNSColor, .darkAqua), 16/255, 16/255, 18/255), "dark = #101012")
+        XCTAssertTrue(near(srgb(WS.bgNSColor, .darkAqua), 0, 0, 0), "dark = #000000")
         XCTAssertTrue(near(srgb(WS.bgNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
     }
 
     func test_panelNSColor_resolves_dark_and_light() {
-        XCTAssertTrue(near(srgb(WS.panelNSColor, .darkAqua), 23/255, 23/255, 26/255), "dark = #17171A")
+        XCTAssertTrue(near(srgb(WS.panelNSColor, .darkAqua), 20/255, 20/255, 20/255), "dark = #141414")
         XCTAssertTrue(near(srgb(WS.panelNSColor, .aqua), 1, 1, 1), "light = #FFFFFF")
     }
 }

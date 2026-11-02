@@ -9,17 +9,17 @@ import AppKit
 ///
 /// 标 `nonisolated` 让常量能在任意上下文读取；`NSColor` 常量跨线程安全。
 enum WS {
-    /// `UD.bg` 的 NSColor 版（深 #101012 / 浅 #FFFFFF）—— 窗口不透明底色 / AppKit 去玻璃用。
+    /// `UD.bg` 的 NSColor 版（深 #000000 / 浅 #FFFFFF）—— 窗口不透明底色 / AppKit 去玻璃用。
     nonisolated static let bgNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 16/255, green: 16/255, blue: 18/255, alpha: 1)
+            ? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
             : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
-    /// `UD.panel` 的 NSColor 版（深 #17171A / 浅 #FFFFFF）—— 标题栏拖动手柄实色底。
+    /// `UD.panel` 的 NSColor 版（深 #141414 / 浅 #FFFFFF）—— 标题栏拖动手柄实色底。
     /// 日间与 `bgNSColor` 同值（全部统一纯白 = UDInput 的白）：标题栏 chrome 与窗口底无缝。
     nonisolated static let panelNSColor = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 23/255, green: 23/255, blue: 26/255, alpha: 1)
+            ? NSColor(srgbRed: 20/255, green: 20/255, blue: 20/255, alpha: 1)
             : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
 }

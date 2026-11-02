@@ -44,10 +44,10 @@ struct SettingsView: View {
         // 露出窗口默认（浅色）底，短内容的「通用」tab 上显成「底部 footer」。铺满后
         // 该条由 UD.bg 覆盖消失。窗口初始尺寸由 Scene 的 .defaultSize 决定。
         .frame(minWidth: 720, minHeight: 480)
-        // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #101012）。其余主窗
+        // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #000000）。其余主窗
         // （工作区 / SFTP / 表单 / 密钥）皆已 .background(UD.bg)，设置窗补齐对齐。
         // 自绘扁平 chrome：透明系统标题栏 + full-size content，红绿灯让位由 SettingsTitleBar
-        // 预留。取代原「系统原生标题栏」——后者暗夜下是更浅的系统灰，与设计稿 #101012 不符。
+        // 预留。取代原「系统原生标题栏」——后者暗夜下是更浅的系统灰，与设计稿底色 UD.bg 不符。
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "设置"))

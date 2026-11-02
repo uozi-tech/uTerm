@@ -123,7 +123,7 @@ struct WelcomeView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        // 自绘扁平窗口 chrome（透明系统标题栏 + full-size content + 不透明 #101012 底）。
+        // 自绘扁平窗口 chrome（透明系统标题栏 + full-size content + 不透明 UD.bg 底）。
         // .ignoresSafeArea(.top) 把自绘标题栏顶进系统标题栏区，否则 macOS 仍在上面画
         // 系统暗夜标题栏盖住自绘 header。与 SFTPWindowView 结构一致。
         .ignoresSafeArea(.container, edges: .top)
@@ -585,7 +585,7 @@ private struct NewGroupPromptSheet: View {
 
 /// Welcome 窗口自绘扁平标题栏（对齐设计稿 `u-window.jsx` 的 `TitleBar`）：左侧让位
 /// 窗口红绿灯（~68pt），随后 "uTerm" 标识，36px 扁平 UD.panel 条 + 底部 1px 描边。
-/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿 #101012 之上。
+/// 替代 macOS 系统标题栏 —— 后者在暗夜下是更浅的系统灰，盖在设计稿底色 UD.bg 之上。
 /// `WindowDragHandle` 既画实色底又充当窗口拖动手柄（红绿灯更靠前、点击不落到手柄）。
 struct WelcomeTitleBar: View {
     @Environment(\.openWindow) private var openWindow

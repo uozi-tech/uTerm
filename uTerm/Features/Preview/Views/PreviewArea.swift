@@ -56,9 +56,9 @@ struct PreviewArea: View {
                 })
             PreviewStatusRow(model: model)
         }
-        // 预览区底色对齐设计稿 = UD.bg（暗色 #101012）：空态 / 最近打开 / 图片棋盘
+        // 预览区底色对齐设计稿 = UD.bg（暗色 #000000）：空态 / 最近打开 / 图片棋盘
         // 边距等非编辑器区域都落在这层基底上。真实代码编辑器（CodeEditTextView）
-        // 自带 EditorTheme.background 的 NSView 覆在其上，并在暗色下同样解析到 #101012。
+        // 自带 EditorTheme.background 的 NSView 覆在其上，并在暗色下同样解析到 #000000。
         .background(UD.bg)
     }
 

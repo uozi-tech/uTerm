@@ -4,12 +4,12 @@ import SwiftUI
 /// 并行执行窗口的 chrome：自绘标题栏、广播条、状态栏，及共享小件。
 /// AI 紫 = `UD.aiAccent`；Shell 蓝/绿走 `UD.accent` / `UD.success`。
 
-/// 命令块 / Shell 网格的「终端面」底色 —— 对齐设计稿 `--u-term-bg`：**暗夜 #08080a / 日间 #ffffff**
+/// 命令块 / Shell 网格的「终端面」底色 —— 对齐设计稿 `--u-term-bg`：**暗夜 #000000 / 日间 #ffffff**
 ///（`u-window.jsx` DARK/LIGHT 两档）。**不能**用 `UD.terminal`（它日 / 夜都深，是真实 SwiftTerm
 /// 终端用的）——否则日间得到一条「黑底」命令块，与白色日间主题格格不入、且字读不出（用户实测）。
 /// 面随主题翻后，其上文字直接用 `UD.text`/`text3`/`text4`（深底亮字 / 白底深字）即两档都可读。
 enum ParTermSurface {
-    static let bg = UD.dyn(.hex(0x08080A), .hex(0xFFFFFF))
+    static let bg = UD.dyn(.hex(0x000000), .hex(0xFFFFFF))
 }
 
 // MARK: - 标题栏

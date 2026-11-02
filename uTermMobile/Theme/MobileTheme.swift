@@ -16,14 +16,14 @@ enum M {
     /// 真实 SwiftTerm 终端用的底色（`UD.terminal`）——**日夜都深**。命令块 / Shell 网格别用它。
     // 老 DesignKit 的 `UD.terminal` 未随迁进 UDesignKit（macOS 端已不再使用），
     // 按原 token 定义本地化：日夜都深。
-    static var terminalBg: Color { UD.dyn(.hex(0x08080A), .hex(0x0B0B0D)) }
-    /// 命令块 / Shell 网格的「终端面」底色——**随主题翻**：暗夜 #08080A / 日间 #FFFFFF（对齐 macOS
+    static var terminalBg: Color { UD.dyn(.hex(0x000000), .hex(0x0B0B0D)) }
+    /// 命令块 / Shell 网格的「终端面」底色——**随主题翻**：暗夜 #000000 / 日间 #FFFFFF（对齐 macOS
     /// `ParTermSurface`）。不要用 `terminalBg`（日夜都深，是真实终端用的）：否则日间得到黑底命令块，
     /// 其上的 text/text2/text3 深字读不出。翻面后文字直接用 M.text/text2/text3 即两档都可读。
-    static let cmdSurface = UD.dyn(.hex(0x08080A), .hex(0xFFFFFF))
+    static let cmdSurface = UD.dyn(.hex(0x000000), .hex(0xFFFFFF))
     /// 屏幕画布：承载卡片的屏 / 滚动区 / 卡片式抽屉的底。暗夜与 `bg` 同值（视觉零变化）；
     /// 日间浅灰，让白卡浮起。bar（M.overlay）/ 真实终端面别用它。
-    static let canvas = UD.dyn(.hex(0x101012), .hex(0xF4F4F5))
+    static let canvas = UD.dyn(.hex(0x000000), .hex(0xF5F5F5))
     /// 卡片面：暗夜与 `fillFaint` 同值（视觉零变化）；日间纯白，靠与 `canvas` 的填充差区分，
     /// 不加投影。chip / 键帽 / 次按钮等小控件仍用 fillFaint/fillMed，别用它。
     static let card = UD.dyn(.white(0.045), .hex(0xFFFFFF))

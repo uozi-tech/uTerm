@@ -12,27 +12,29 @@ final class AccentColorTests: XCTestCase {
     }
 
     func testBaseHexPerColor() {
-        XCTAssertEqual(AccentColor.blue.base(dark: true),   UD.ColorSpec.hex(0x0A84FF))
+        XCTAssertEqual(AccentColor.blue.base(dark: true),   UD.ColorSpec.hex(0x1668DC))
         XCTAssertEqual(AccentColor.purple.base(dark: true), UD.ColorSpec.hex(0xBF5AF2))
         XCTAssertEqual(AccentColor.green.base(dark: true),  UD.ColorSpec.hex(0x30D158))
         XCTAssertEqual(AccentColor.orange.base(dark: true), UD.ColorSpec.hex(0xFF9F0A))
         XCTAssertEqual(AccentColor.red.base(dark: true),    UD.ColorSpec.hex(0xFF5A5A))
-        XCTAssertEqual(AccentColor.blue.base(dark: false),  UD.ColorSpec.hex(0x007AFF))
+        XCTAssertEqual(AccentColor.blue.base(dark: false),  UD.ColorSpec.hex(0x1677FF))
         XCTAssertEqual(AccentColor.orange.base(dark: false), UD.ColorSpec.hex(0xFF8A00))
     }
 
-    func testBlueSpecsMatchLegacyConstants() {
-        XCTAssertEqual(AccentColor.blue.accentSpec(dark: true),   UD.ColorSpec.hex(0x0A84FF))
-        XCTAssertEqual(AccentColor.blue.accentSpec(dark: false),  UD.ColorSpec.hex(0x007AFF))
-        XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x4DA3FF))
-        XCTAssertEqual(AccentColor.blue.inkSpec(dark: false),     UD.ColorSpec.hex(0x0067E0))
-        // softSpec 是 uTable canonical 值（深 10% / 浅 13%）。uTerm 自有 DesignKit 时期的
-        // v2「深浅同档 14%」已随 UDesignKit 共享包收编作废；14% 那一档现在叫 `UD.accentTint`
-        // （选中 / 主操作底），与 accentSoft 是两个 token。
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x0A84FF, 0.10))
-        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x007AFF, 0.13))
-        XCTAssertEqual(AccentColor.blue.pressedSpec(dark: true),  UD.ColorSpec.hex(0x96ACCD))
-        XCTAssertEqual(AccentColor.blue.pressedSpec(dark: false), UD.ColorSpec.hex(0x5A7099))
+    func testBlueSpecsMatchPalettePrimary() {
+        // 组件库调色板（Ant Design 预设）主色 base · hover · pressed，逐级变亮。
+        XCTAssertEqual(AccentColor.blue.accentSpec(dark: true),   UD.ColorSpec.hex(0x1668DC))
+        XCTAssertEqual(AccentColor.blue.accentSpec(dark: false),  UD.ColorSpec.hex(0x1677FF))
+        XCTAssertEqual(AccentColor.blue.hoverSpec(dark: true),    UD.ColorSpec.hex(0x3C89E8))
+        XCTAssertEqual(AccentColor.blue.hoverSpec(dark: false),   UD.ColorSpec.hex(0x4096FF))
+        XCTAssertEqual(AccentColor.blue.pressedSpec(dark: true),  UD.ColorSpec.hex(0x65A9F3))
+        XCTAssertEqual(AccentColor.blue.pressedSpec(dark: false), UD.ColorSpec.hex(0x69B1FF))
+        // 日间文字即主色；暗夜深底上取 hover 档提亮。
+        XCTAssertEqual(AccentColor.blue.inkSpec(dark: true),      UD.ColorSpec.hex(0x3C89E8))
+        XCTAssertEqual(AccentColor.blue.inkSpec(dark: false),     UD.ColorSpec.hex(0x1677FF))
+        // softSpec（深 10% / 浅 12%）。14% 那一档叫 `UD.accentTint`（选中 / 主操作底），是另一个 token。
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: true),     UD.ColorSpec.hex(0x1668DC, 0.10))
+        XCTAssertEqual(AccentColor.blue.softSpec(dark: false),    UD.ColorSpec.hex(0x1677FF, 0.12))
     }
 
     func testSoftIsBaseWithAlpha() {
@@ -42,7 +44,7 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(rgb(s).1, base.g, accuracy: 0.0001)
         XCTAssertEqual(rgb(s).2, base.b, accuracy: 0.0001)
         XCTAssertEqual(s.a, 0.10, accuracy: 0.0001)
-        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.13, accuracy: 0.0001)
+        XCTAssertEqual(AccentColor.purple.softSpec(dark: false).a, 0.12, accuracy: 0.0001)
     }
 
     func testInkBrightensInDarkDeepensInLight() {
@@ -63,11 +65,14 @@ final class AccentColorTests: XCTestCase {
         XCTAssertEqual(ink.b, min(base.b * 1.22, 1.0), accuracy: 0.0001)
     }
 
-    func testPressedMovesTowardGray() {
+    func testHoverAndPressedMoveTowardWhite() {
+        // 调色板约定 base → hover → pressed 逐级变亮（pressed 最亮）。
         let base = AccentColor.red.base(dark: true)
+        let hover = AccentColor.red.hoverSpec(dark: true)
         let pressed = AccentColor.red.pressedSpec(dark: true)
-        XCTAssertLessThan(abs(pressed.r - 0.5), abs(base.r - 0.5) + 0.0001)
-        XCTAssertLessThan(abs(pressed.g - 0.5), abs(base.g - 0.5) + 0.0001)
+        XCTAssertGreaterThan(hover.g, base.g)
+        XCTAssertGreaterThan(pressed.g, hover.g)
+        XCTAssertEqual(pressed.b, base.b * 0.64 + 0.36, accuracy: 0.0001)
     }
 
     @MainActor

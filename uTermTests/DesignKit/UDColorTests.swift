@@ -35,19 +35,19 @@ final class UDColorTests: XCTestCase {
     // MARK: - 语义状态：暗夜鲜艳（原样）/ 日间低饱和
 
     func test_semantic_dark_stays_vivid_iOS() {
-        assertHex(UD.success, .darkAqua, 0x30D158, "success dark = #30D158")
-        assertHex(UD.warning, .darkAqua, 0xFFD60A, "warning dark = #FFD60A")
-        assertHex(UD.caution, .darkAqua, 0xFF9F0A, "caution dark = #FF9F0A")
-        assertHex(UD.danger,  .darkAqua, 0xFF5A5A, "danger dark = #FF5A5A")
-        assertHex(UD.info,    .darkAqua, 0x64D2FF, "info dark = #64D2FF")
+        assertHex(UD.success, .darkAqua, 0x49AA19, "success dark = #49AA19")
+        assertHex(UD.warning, .darkAqua, 0xD89614, "warning dark = #D89614")
+        assertHex(UD.caution, .darkAqua, 0xD87A16, "caution dark = #D87A16（与 warning 区分）")
+        assertHex(UD.danger,  .darkAqua, 0xDC4446, "danger dark = #DC4446")
+        assertHex(UD.info,    .darkAqua, 0x1668DC, "info dark = primary #1668DC")
     }
 
     func test_semantic_light_is_low_saturation_youthful() {
-        assertHex(UD.success, .aqua, 0x4EB67C, "success light = soft sage")
-        assertHex(UD.warning, .aqua, 0xDCB05B, "warning light = soft amber")
-        assertHex(UD.caution, .aqua, 0xE08E52, "caution light = soft terracotta")
-        assertHex(UD.danger,  .aqua, 0xD8625E, "danger light = soft rose")
-        assertHex(UD.info,    .aqua, 0x4D9DD6, "info light = soft blue")
+        assertHex(UD.success, .aqua, 0x52C41A, "success light = #52C41A")
+        assertHex(UD.warning, .aqua, 0xFAAD14, "warning light = #FAAD14")
+        assertHex(UD.caution, .aqua, 0xFA8C16, "caution light = #FA8C16（与 warning 区分）")
+        assertHex(UD.danger,  .aqua, 0xFF4D4F, "danger light = #FF4D4F")
+        assertHex(UD.info,    .aqua, 0x1677FF, "info light = primary #1677FF")
     }
 
     // MARK: - 文件夹 / 图标：暗夜原样 / 日间 Finder 风格鲜亮蓝 + 柔青
@@ -87,19 +87,19 @@ final class UDColorTests: XCTestCase {
     func test_surfaces_light_are_pure_white_and_neutral_gray() {
         assertHex(UD.bg,      .aqua, 0xFFFFFF, "bg light = 纯白 #FFFFFF")
         assertHex(UD.panel,   .aqua, 0xFFFFFF, "panel light = 纯白 #FFFFFF")
-        assertHex(UD.panelHi, .aqua, 0xF2F2F3, "panelHi light = 次面板纯灰 #F2F2F3（仅 active / 代码底）")
-        assertHex(UD.pageBg,  .aqua, 0xF4F4F5, "pageBg light = 画布 #F4F4F5")
-        assertHex(UD.text,    .aqua, 0x171718, "text light = 纯灰主文字 #171718（去蓝调）")
+        assertHex(UD.panelHi, .aqua, 0xF0F0F0, "panelHi light = #F0F0F0")
+        assertHex(UD.pageBg,  .aqua, 0xF5F5F5, "pageBg light = 画布 #F5F5F5")
+        assertHex(UD.text,    .aqua, 0x1F1F1F, "text light = #1F1F1F")
     }
 
     func test_neutrals_light_use_neutral_black() {
-        assertHex(UD.panelHover,  .aqua, 0x000000, alpha: 0.05,  "panelHover = 纯黑@5%")
-        assertHex(UD.border,      .aqua, 0x000000, alpha: 0.09,  "border = 纯黑@9%")
-        assertHex(UD.borderHi,    .aqua, 0x000000, alpha: 0.13,  "borderHi = 纯黑@13%")
-        // 文本 ramp 真值 = v2 定稿 黑 60/46/32%（暗色侧仍保留 Ink Floor a11y 提档）。
-        assertHex(UD.text2,       .aqua, 0x000000, alpha: 0.60,  "text2 = 纯黑@60%（正文层）")
-        assertHex(UD.text3,       .aqua, 0x000000, alpha: 0.46,  "text3 = 纯黑@46%（次要信息层）")
-        assertHex(UD.text4,       .aqua, 0x000000, alpha: 0.32,  "text4 = 纯黑@32%（仅装饰 / 结构层）")
+        assertHex(UD.panelHover,  .aqua, 0x000000, alpha: 0.04, "panelHover = 纯黑@4%（半透明，叠在任何面上都可见）")
+        assertHex(UD.border,      .aqua, 0xF0F0F0, "border = #F0F0F0")
+        assertHex(UD.borderHi,    .aqua, 0xD9D9D9, "borderHi = #D9D9D9")
+        // 文本 ramp 真值 = 组件库调色板（Ant Design 预设）日间实色四阶。
+        assertHex(UD.text2,       .aqua, 0x595959, "text2 = #595959（正文层）")
+        assertHex(UD.text3,       .aqua, 0x8C8C8C, "text3 = #8C8C8C（次要信息层）")
+        assertHex(UD.text4,       .aqua, 0xBFBFBF, "text4 = #BFBFBF（仅装饰 / 结构层）")
         assertHex(UD.rowHover,    .aqua, 0x000000, alpha: 0.04,  "rowHover = 纯黑@4%")
     }
 
@@ -109,8 +109,8 @@ final class UDColorTests: XCTestCase {
     /// 改为 uTable canonical 的 v2 规则——导航类选中态（列表行 / pill / ⌘K 行 / 底部导航）
     /// = accent 14% 填充（与 `UD.accentTint` 同档），无 accent 描边。固定蓝，不随强调色切换。
     func test_row_selected_is_blue_accent_tint() {
-        assertHex(UD.rowSelected, .aqua,     0x007AFF, alpha: 0.14, "rowSelected light = 蓝 accent@14%")
-        assertHex(UD.rowSelected, .darkAqua, 0x0A84FF, alpha: 0.14, "rowSelected dark = 蓝 accent@14%")
+        assertHex(UD.rowSelected, .aqua,     0x1677FF, alpha: 0.12, "rowSelected light = 蓝 accent@12%")
+        assertHex(UD.rowSelected, .darkAqua, 0x1668DC, alpha: 0.14, "rowSelected dark = 蓝 accent@14%")
     }
 
     // MARK: - 输入底：v2 淡灰无描边（深=白 6% / 浅=黑 5%）
