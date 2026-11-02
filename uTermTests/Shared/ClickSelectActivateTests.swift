@@ -219,7 +219,7 @@ final class ClickSelectActivateTests: XCTestCase {
                                               recorder: recorder),
                              size: NSSize(width: 1200, height: 780))
 
-        // `..` 行 46 + 条目行 52：第 3 个条目的中线。
+        // `..` 行 + 条目行（取 SFTPFileTable 的常量）：第 3 个条目的中线。
         let y = SFTPFileTable.parentRowHeight + SFTPFileTable.rowHeight * 2.5
         let ms = try mouseDown(host, layerY: y, clickCount: 1)
         print(String(format: "[click-latency] sftp-file-table mousedown->selected %.3fms", ms))

@@ -441,7 +441,7 @@ final class SFTPFileTableScrollCostTests: XCTestCase {
         let fixture = try rig.mount(browser(model), size: Self.windowSize)
         try await Task.sleep(for: .milliseconds(200))
 
-        let click = await rig.click(fixture, rowHeight: 52)
+        let click = await rig.click(fixture, rowHeight: SFTPFileTable.rowHeight)
         print(String(format: "[sftp-table-click] rows=%d latency=%.2fms repaint=%.2fms pixel-delta=%.4f",
                      rows, click.latencyMS, click.repaintMS, click.meanChannelDelta))
         XCTAssertGreaterThan(click.meanChannelDelta, 0.001,

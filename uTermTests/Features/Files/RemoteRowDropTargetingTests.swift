@@ -128,8 +128,8 @@ final class RemoteRowDropTargetingTests: XCTestCase {
     /// 两个列表里「行高常量」与「行真正的 `.frame(height:)`」必须同源 ——
     /// 落点换算全靠它，改了一处忘了另一处，拖入就会错行。
     func testRowHeightConstantsMatchTheRenderedRows() {
-        XCTAssertEqual(SFTPFileTable.rowHeight, 52)
-        XCTAssertEqual(SFTPFileTable.parentRowHeight, 46)
+        XCTAssertEqual(SFTPFileTable.rowHeight, 36)
+        XCTAssertEqual(SFTPFileTable.parentRowHeight, 32)
         XCTAssertEqual(FileBrowserContent.rowHeight, 30)
     }
 }

@@ -106,8 +106,9 @@ struct SFTPFileTable: View {
     /// 两种行的固定高度。**整表一个拖放目标**靠它把落点换算成行号
     /// （见 `RemoteRowDropTargeting`），所以这里的常量与下面
     /// `parentRow` / `row` 的 `.frame(height:)` 必须同源 —— 改一处就得改两处。
-    static let parentRowHeight: CGFloat = 46
-    static let rowHeight: CGFloat = 52
+    /// 原为 46 / 52，一屏装不下多少文件；收窄到 32 / 36（实机反馈「行高收窄一点」）。
+    static let parentRowHeight: CGFloat = 32
+    static let rowHeight: CGFloat = 36
 
     var body: some View {
         GeometryReader { proxy in
