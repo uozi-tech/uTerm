@@ -70,7 +70,10 @@ struct TerminalHostView: NSViewRepresentable {
 }
 
 final class TerminalContainerView: NSView {
-    private static let terminalInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+    /// 顶边 0：终端凹槽紧贴在 40pt 标签条下方，条里 26pt 胶囊上下已各留 7pt。默认配色的
+    /// 终端底与卡面同色（凹槽看不出边），再加 6pt 内边距就成了「胶囊上 7、下 14」的不对称
+    /// 间距（实机反馈）。左右与底边保留，避开凹槽圆角。
+    private static let terminalInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
 
     var forwardsScrollToParent: Bool {
         didSet {
