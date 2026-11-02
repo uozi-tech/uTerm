@@ -14,10 +14,13 @@ enum MTabActivity {
 ///
 /// 活动态配色照 macOS 工作区 `.card` 标签（uAppKit `UPaneTabChip.cardChip`）：
 /// - 前台标签（含另一格的前台）填中性的 `panelHi` 胶囊，**不染 accent 底**；后台标签透明；
-/// - 只有活动标签的图标走 accent，标题正文强度；另一格前台标题降到 `text2`，后台 `text3`；
-/// - 「焦点在哪一格」不靠标签条表达，由格外圈的 1.5pt accent 焦点框表达（见 `WorkspaceScreen`）。
-/// 一屏之内 accent 只出现在一个图标和一圈焦点框上，不会两三处 accent 抢着说「我是当前」。
+/// - 只有活动标签的图标走 accent，标题正文强度；另一格前台标题降到 `text2`，后台 `text3`。
+/// 分屏时「焦点在哪一格」也只靠这一枚 accent 图标与标题强度区分，格外不画焦点框——
+/// 两格贴边并排时一圈 accent 框太抢，读起来像选中态而不是焦点。
+/// 一屏之内 accent 只出现在一个图标上，不会两三处 accent 抢着说「我是当前」。
 struct WorkspaceTabStrip: View {
+    /// 标签条高度（不含顶边净空）。
+    static let height: CGFloat = 48
     let tabs: [MWorkTab]
     let activeID: UUID?
     /// 本格是否为聚焦格。
@@ -39,6 +42,8 @@ struct WorkspaceTabStrip: View {
     /// Agent / 分屏两个开关是否放在条尾。状态栏在右侧一列时（Duo），它们改放到那一列状态栏
     /// 下面（WorkspaceSideControls），条上只留返回与标签。
     var showsTrailingControls: Bool = true
+    /// 开始拖某个标签（拖到工作区边上分屏 / 拖进另一格）。
+    var onDragTab: (UUID) -> Void = { _ in }
 
     @Environment(\.mAccent) private var accent
 
@@ -58,7 +63,8 @@ struct WorkspaceTabStrip: View {
                             WorkspaceTabChip(tab: tab, activity: activity(tab), canMove: canMoveTabs,
                                              onSelect: { onSelect(tab.id) },
                                              onClose: { onClose(tab.id) },
-                                             onMove: { onMoveToOtherPane(tab.id) })
+                                             onMove: { onMoveToOtherPane(tab.id) },
+                                             onDragStart: { onDragTab(tab.id) })
                                 .id(tab.id)
                         }
                         newMenu
@@ -81,7 +87,7 @@ struct WorkspaceTabStrip: View {
         // 两端按钮命中区 44pt、视觉 34pt：外沿各自带 5pt，水平内边距相应收到 3（视觉仍距边 ~8）。
         .padding(.horizontal, 3)
         // Duo：竖屏时这一条上移进状态栏那一行（让出状态栏），横屏 / 折叠时左上角避开圆角。
-        .mAvoidsStatusBar(minHeight: 48)
+        .mAvoidsStatusBar(minHeight: Self.height)
         // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区。
         .background(M.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
@@ -191,6 +197,7 @@ struct WorkspaceTabChip: View {
     var onSelect: () -> Void
     var onClose: () -> Void
     var onMove: () -> Void = {}
+    var onDragStart: () -> Void = {}
     @Environment(\.mAccent) private var accent
     @State private var hovering = false
 
@@ -243,6 +250,11 @@ struct WorkspaceTabChip: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { hovering = $0 }
+        // 长按拎起即可拖：拖到工作区边上分屏、拖进另一格并入；原地松手就是长按菜单。
+        .onDrag {
+            onDragStart()
+            return WorkspaceTabDrag.itemProvider(tabID: tab.id)
+        }
         .contextMenu {
             if canMove {
                 Button(action: onMove) {

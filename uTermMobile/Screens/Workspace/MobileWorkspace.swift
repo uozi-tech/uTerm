@@ -83,6 +83,16 @@ final class MobileWorkspace {
     private(set) var focusedPaneID: UUID
     /// 第一格占分屏方向的比例（拖动分隔条改它）。
     var splitFraction: CGFloat = 0.5
+    /// 用户拖标签到边上选定的分屏方向（`.horizontal` 左右 / `.vertical` 上下）；nil = 按宽度自动。
+    /// 这是**偏好**而不是结果：转屏后放不下时 `effectiveAxis` 临时改用另一个方向，
+    /// 偏好本身不动，转回来就恢复原样（见 `effectiveAxis(preferred:size:)`）。
+    private(set) var splitAxis: Axis?
+
+    /// 左右并排至少要这么宽（每格约 280pt，放得下一屏可用的终端）。
+    nonisolated static let sideBySideMinWidth: CGFloat = 560
+    /// 上下叠放至少要这么高（每格扣掉标签条与键盘条后仍有终端可看）。
+    /// 只在宽度允许并排时才拿它否决叠放，所以竖屏弹出键盘压矮了高度也不会翻成左右。
+    nonisolated static let stackedMinHeight: CGFloat = 480
 
     init() {
         let pane = MPane()
@@ -121,6 +131,28 @@ final class MobileWorkspace {
     /// 同主机、同类型的已有标签（外部「连接」请求默认复用它而不是再开一个）。
     func existing(host: PersistentIdentifier, kind: MConnectKind) -> MWorkTab? {
         tabs.first { $0.kind == kind && $0.host.persistentModelID == host }
+    }
+
+    // MARK: - 布局
+
+    /// 分屏实际用的方向：偏好放得下就用偏好，放不下换另一个；没偏好时宽够就左右并排。
+    /// 两格的先后（左 / 上是第一格）与比例在两个方向间原样对应，转屏来回不会打乱。
+    nonisolated static func effectiveAxis(preferred: Axis?, size: CGSize) -> Axis {
+        let sideBySide = size.width >= sideBySideMinWidth
+        let stacked = size.height >= stackedMinHeight || !sideBySide
+        switch preferred {
+        case .horizontal?: return sideBySide ? .horizontal : .vertical
+        case .vertical?: return stacked ? .vertical : .horizontal
+        case nil: return sideBySide ? .horizontal : .vertical
+        }
+    }
+
+    /// 这块尺寸下能当投放区的边：放不下的方向不给（否则松手后的样子和高亮对不上）。
+    nonisolated static func dockableEdges(size: CGSize) -> [Edge] {
+        var edges: [Edge] = []
+        if effectiveAxis(preferred: .horizontal, size: size) == .horizontal { edges += [.leading, .trailing] }
+        if effectiveAxis(preferred: .vertical, size: size) == .vertical { edges += [.top, .bottom] }
+        return edges
     }
 
     // MARK: - 操作
@@ -179,6 +211,7 @@ final class MobileWorkspace {
     /// 取消分屏：所有标签并回第一格，聚焦格的前台标签仍在前台。
     func unsplit() {
         guard isSplit else { return }
+        splitAxis = nil
         let keepActive = focusedPane.activeID ?? panes[0].activeID
         var merged = panes[0]
         for pane in panes.dropFirst() { merged.tabIDs.append(contentsOf: pane.tabIDs) }
@@ -197,6 +230,44 @@ final class MobileWorkspace {
         if panes[source].tabIDs.isEmpty { removePane(at: source) }
     }
 
+    /// 拖到另一格中间：并进那一格。原格空了就收起。
+    func move(_ tabID: UUID, toPane paneID: UUID) {
+        guard let source = paneIndex(containing: tabID),
+              let target = panes.firstIndex(where: { $0.id == paneID }),
+              source != target else { return }
+        move(tabID, from: source, to: target)
+        focusedPaneID = panes[target].id
+        if panes[source].tabIDs.isEmpty { removePane(at: source) }
+    }
+
+    /// 能不能把标签拖到边上：要么它所在格还有别的标签（拆出新格），要么已经分屏（换位）。
+    func canDock(_ tabID: UUID) -> Bool {
+        guard let i = paneIndex(containing: tabID) else { return false }
+        return panes[i].tabIDs.count > 1 || isSplit
+    }
+
+    /// 拖到工作区某条边上松手：让这个标签所在的格停到那一边。
+    /// - 它所在格还有别的标签：没分屏就拆出新格放它；已分屏（两格封顶）就并进另一格。
+    /// - 它独占一格（只能是已分屏）：整格换到那一边，即「左右 ⇄ 上下」「左 ⇄ 右」自由换位。
+    /// 方向记成偏好（`splitAxis`），转屏时由 `effectiveAxis` 兜底。
+    func dock(_ tabID: UUID, to edge: Edge) {
+        guard let source = paneIndex(containing: tabID), canDock(tabID) else { return }
+        var target = source
+        if panes[source].tabIDs.count > 1 {
+            if !isSplit { panes.append(MPane()) }
+            target = source == 0 ? 1 : 0
+            move(tabID, from: source, to: target)
+        }
+        let wantsFirst = edge == .leading || edge == .top
+        if (target == 0) != wantsFirst {
+            panes.swapAt(0, 1)
+            splitFraction = 1 - splitFraction
+            target = 1 - target
+        }
+        splitAxis = edge == .leading || edge == .trailing ? .horizontal : .vertical
+        focusedPaneID = panes[target].id
+    }
+
     private func move(_ tabID: UUID, from source: Int, to target: Int) {
         guard let pos = panes[source].tabIDs.firstIndex(of: tabID) else { return }
         panes[source].tabIDs.remove(at: pos)
@@ -211,6 +282,7 @@ final class MobileWorkspace {
     private func removePane(at index: Int) {
         let removedID = panes[index].id
         panes.remove(at: index)
+        if !isSplit { splitAxis = nil }
         if focusedPaneID == removedID { focusedPaneID = panes[0].id }
     }
 }

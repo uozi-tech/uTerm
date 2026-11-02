@@ -224,7 +224,7 @@ final class StyleGalleryTests: XCTestCase {
 
     // MARK: - 分屏：终端 + 文件（多态标签）
 
-    /// 左格两个终端标签、右格一个文件标签，聚焦右格：看焦点框、前台胶囊与活动图标的配色。
+    /// 左格两个终端标签、右格一个文件标签，聚焦右格：看前台胶囊与活动图标的配色（不画焦点框）。
     func testSplitWorkspace() async throws {
         defer { MobileProbeWindow.closeAll() }
         let c = try MobileFixtures.modelContainer(seed: .smoke)
@@ -241,6 +241,15 @@ final class StyleGalleryTests: XCTestCase {
             workspace.open(.files(files))
             workspace.moveToOtherPane(files.id)
             try await shoot("workspace-split", on: device, settle: .milliseconds(900)) {
+                WorkspaceScreen()
+                    .environment(workspaceStore())
+                    .environment(relay)
+                    .environment(workspace)
+                    .modelContainer(c)
+            }
+            // 拖到底边选了「上下」：宽屏照办，窄屏本来就是上下。
+            workspace.dock(files.id, to: .bottom)
+            try await shoot("workspace-docked-bottom", on: device, settle: .milliseconds(600)) {
                 WorkspaceScreen()
                     .environment(workspaceStore())
                     .environment(relay)

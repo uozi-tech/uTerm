@@ -20,11 +20,12 @@ struct WorkspaceScreen: View {
     /// 新建会话抽屉要开的类型（「+」菜单选的）。
     @State private var newKind: MConnectKind?
     @State private var dragging = false
+    /// 正被拖着的标签（拖拽开始时由标签条报上来）。投放端直接读它，不去异步解包载荷。
+    @State private var draggingTabID: UUID?
+    /// 拖拽悬停处松手的结果，驱动投放高亮。
+    @State private var dropTarget: MDropTarget?
 
     private var visible: Bool { store.showWorkspace }
-
-    /// 宽度够两格各放下一屏可用的终端（约 80 列 9pt 字）时左右并排，否则上下叠放。
-    static let sideBySideMinWidth: CGFloat = 560
 
     var body: some View {
         ZStack {
@@ -183,35 +184,56 @@ struct WorkspaceScreen: View {
 
     private var panesView: some View {
         GeometryReader { geo in
-            let horizontal = geo.size.width >= Self.sideBySideMinWidth
-            let length = horizontal ? geo.size.width : geo.size.height
+            let layout = WorkspaceSplitGeometry(size: geo.size, paneCount: workspace.panes.count,
+                                                preferredAxis: workspace.splitAxis,
+                                                fraction: workspace.splitFraction)
+            let horizontal = layout.axis == .horizontal
             let split = workspace.isSplit
-            let firstLength = split ? (length * workspace.splitFraction).rounded() : length
             ZStack(alignment: .topLeading) {
                 ForEach(Array(workspace.panes.enumerated()), id: \.element.id) { index, pane in
-                    let start = index == 0 ? 0 : firstLength + 1
-                    let extent = index == 0 ? firstLength : length - firstLength - 1
+                    let rect = layout.rects[min(index, layout.rects.count - 1)]
                     paneView(pane, showsBack: index == 0,
                              splitState: index == workspace.panes.count - 1 ? split : nil)
-                        .frame(width: horizontal ? extent : geo.size.width,
-                               height: horizontal ? geo.size.height : extent)
-                        .overlay {
-                            // 焦点框（对齐 macOS `PaneFocusRing`）：只在分屏时画，只画聚焦格。
-                            if split && pane.id == workspace.focusedPaneID {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .strokeBorder(accent, lineWidth: 1.5)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .offset(x: horizontal ? start : 0, y: horizontal ? 0 : start)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
                 }
                 if split {
-                    divider(horizontal: horizontal, length: length, crossLength: horizontal ? geo.size.height : geo.size.width)
-                        .offset(x: horizontal ? firstLength - Self.dividerHitWidth / 2 : 0,
-                                y: horizontal ? 0 : firstLength - Self.dividerHitWidth / 2)
+                    divider(horizontal: horizontal, length: layout.length,
+                            crossLength: horizontal ? geo.size.height : geo.size.width)
+                        .offset(x: horizontal ? layout.firstLength - Self.dividerHitWidth / 2 : 0,
+                                y: horizontal ? 0 : layout.firstLength - Self.dividerHitWidth / 2)
+                }
+                if let dropTarget {
+                    let rect = layout.highlightRect(for: dropTarget, panes: workspace.panes)
+                    WorkspaceDropHighlight(target: dropTarget)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: 0.12), value: dropTarget)
             .coordinateSpace(.named("workspace-split"))
+            .onDrop(of: [.utermTabID], delegate: WorkspaceDropDelegate(
+                resolve: { point in
+                    guard let id = draggingTabID else { return nil }
+                    // 标签条贴顶时会撑到状态行高度（Duo 竖屏，见 mAvoidsStatusBar），按较高的算。
+                    let strip = max(WorkspaceTabStrip.height, chrome.statusRowHeight ?? 0)
+                    return layout.target(at: point, tabID: id, in: workspace, stripHeight: strip)
+                },
+                onHover: { target in
+                    if dropTarget != target { dropTarget = target }
+                },
+                onDrop: { target in
+                    guard let id = draggingTabID else { return }
+                    draggingTabID = nil
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        switch target {
+                        case .edge(let edge): workspace.dock(id, to: edge)
+                        case .pane(let paneID): workspace.move(id, toPane: paneID)
+                        }
+                    }
+                }))
         }
         .background(M.surface)
     }
@@ -268,7 +290,8 @@ struct WorkspaceScreen: View {
                 onMoveToOtherPane: { id in
                     withAnimation(.easeInOut(duration: 0.22)) { workspace.moveToOtherPane(id) }
                 },
-                showsTrailingControls: chrome.statusColumn == nil)
+                showsTrailingControls: chrome.statusColumn == nil,
+                onDragTab: { draggingTabID = $0 })
             ZStack {
                 ForEach(paneTabs) { tab in
                     let front = tab.id == pane.activeID

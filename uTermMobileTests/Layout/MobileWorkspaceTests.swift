@@ -127,4 +127,125 @@ final class MobileWorkspaceTests: XCTestCase {
         XCTAssertEqual(ws.existing(host: host.persistentModelID, kind: .terminal)?.id, term.id)
         XCTAssertNil(ws.existing(host: host.persistentModelID, kind: .sftp), "同主机的文件标签是另一种")
     }
+
+    // MARK: - 拖到边上分屏
+
+    func testDockFromSinglePaneSplitsTowardEdge() {
+        let ws = MobileWorkspace()
+        let a = termTab(), b = filesTab()
+        ws.open(a); ws.open(b)
+        ws.dock(b.id, to: .top)
+        XCTAssertTrue(ws.isSplit)
+        XCTAssertEqual(ws.splitAxis, .vertical)
+        XCTAssertEqual(ws.panes[0].tabIDs, [b.id], "停到顶上 = 第一格")
+        XCTAssertEqual(ws.panes[1].tabIDs, [a.id])
+        XCTAssertEqual(ws.activeTab?.id, b.id)
+    }
+
+    func testDockLoneTabReordersAndReorientsPanes() {
+        let ws = MobileWorkspace()
+        let a = termTab(), b = filesTab()
+        ws.open(a); ws.open(b)
+        ws.dock(b.id, to: .trailing)             // a | b
+        ws.splitFraction = 0.3
+        ws.dock(b.id, to: .leading)              // b | a，比例跟着换边
+        XCTAssertEqual(ws.panes.map(\.tabIDs), [[b.id], [a.id]])
+        XCTAssertEqual(ws.splitFraction, 0.7, accuracy: 0.0001)
+        ws.dock(a.id, to: .bottom)               // b 上 a 下
+        XCTAssertEqual(ws.splitAxis, .vertical)
+        XCTAssertEqual(ws.panes.map(\.tabIDs), [[b.id], [a.id]])
+    }
+
+    func testDockFromCrowdedPaneWhenSplitJoinsOtherPane() {
+        let ws = MobileWorkspace()
+        let a = termTab(), b = termTab(), c = filesTab()
+        [a, b, c].forEach { ws.open($0) }
+        ws.dock(c.id, to: .trailing)             // [a b] | [c]
+        ws.dock(a.id, to: .leading)              // a 进另一格，那一格换到左边
+        XCTAssertEqual(ws.panes.map(\.tabIDs), [[c.id, a.id], [b.id]])
+        XCTAssertEqual(ws.activeTab?.id, a.id)
+    }
+
+    func testCannotDockOnlyTab() {
+        let ws = MobileWorkspace()
+        let a = termTab()
+        ws.open(a)
+        XCTAssertFalse(ws.canDock(a.id))
+        ws.dock(a.id, to: .leading)
+        XCTAssertFalse(ws.isSplit)
+    }
+
+    func testCollapsingSplitForgetsAxis() {
+        let ws = MobileWorkspace()
+        let a = termTab(), b = filesTab()
+        ws.open(a); ws.open(b)
+        ws.dock(b.id, to: .bottom)
+        ws.close(b.id)
+        XCTAssertNil(ws.splitAxis)
+    }
+
+    // MARK: - 转屏
+
+    private let iPhonePortrait = CGSize(width: 402, height: 874)
+    private let iPhoneLandscape = CGSize(width: 874, height: 402)
+    private let iPhoneKeyboardUp = CGSize(width: 402, height: 520)
+    private let iPadPortrait = CGSize(width: 820, height: 1180)
+
+    func testPreferenceSurvivesRotationRoundTrip() {
+        // 竖屏选了上下 → 转横屏放不下上下，临时左右 → 转回竖屏恢复上下。
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .vertical, size: iPhonePortrait), .vertical)
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .vertical, size: iPhoneLandscape), .horizontal)
+        // 横屏选了左右 → 竖屏太窄，临时上下。
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .horizontal, size: iPhoneLandscape), .horizontal)
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .horizontal, size: iPhonePortrait), .vertical)
+        // 宽高都够的 iPad 两种偏好都照办。
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .vertical, size: iPadPortrait), .vertical)
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .horizontal, size: iPadPortrait), .horizontal)
+    }
+
+    func testKeyboardDoesNotFlipStackedLayout() {
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: .vertical, size: iPhoneKeyboardUp), .vertical)
+        XCTAssertEqual(MobileWorkspace.effectiveAxis(preferred: nil, size: iPhoneKeyboardUp), .vertical)
+    }
+
+    func testDockableEdgesFollowWhatFits() {
+        XCTAssertEqual(Set(MobileWorkspace.dockableEdges(size: iPhonePortrait)), [.top, .bottom])
+        XCTAssertEqual(Set(MobileWorkspace.dockableEdges(size: iPhoneLandscape)), [.leading, .trailing])
+        XCTAssertEqual(Set(MobileWorkspace.dockableEdges(size: iPadPortrait)), [.leading, .trailing, .top, .bottom])
+    }
+
+    func testSplitGeometryKeepsPaneOrderAcrossAxes() {
+        let wide = WorkspaceSplitGeometry(size: iPhoneLandscape, paneCount: 2, preferredAxis: .horizontal, fraction: 0.4)
+        let tall = WorkspaceSplitGeometry(size: iPhonePortrait, paneCount: 2, preferredAxis: .horizontal, fraction: 0.4)
+        XCTAssertEqual(wide.axis, .horizontal)
+        XCTAssertEqual(tall.axis, .vertical)
+        XCTAssertLessThan(wide.rects[0].minX, wide.rects[1].minX, "第一格在左")
+        XCTAssertLessThan(tall.rects[0].minY, tall.rects[1].minY, "转竖屏后第一格在上")
+        XCTAssertEqual(tall.rects[0].height, (874 * 0.4).rounded(), accuracy: 0.5)
+    }
+
+    // MARK: - 投放区
+
+    func testDropTargets() {
+        let ws = MobileWorkspace()
+        let a = termTab(), b = filesTab()
+        ws.open(a); ws.open(b)
+        let size = iPadPortrait
+        let one = WorkspaceSplitGeometry(size: size, paneCount: 1, preferredAxis: nil, fraction: 0.5)
+        let strip: CGFloat = 64
+        XCTAssertEqual(one.target(at: CGPoint(x: 20, y: 600), tabID: b.id, in: ws, stripHeight: strip), .edge(.leading))
+        XCTAssertEqual(one.target(at: CGPoint(x: 410, y: 1170), tabID: b.id, in: ws, stripHeight: strip), .edge(.bottom))
+        XCTAssertNil(one.target(at: CGPoint(x: 410, y: 30), tabID: b.id, in: ws, stripHeight: strip),
+                     "刚在标签条上拎起时不算顶边")
+        XCTAssertNil(one.target(at: CGPoint(x: 410, y: 600), tabID: b.id, in: ws, stripHeight: strip),
+                     "中间落回自己那一格：什么也不变")
+
+        ws.dock(b.id, to: .trailing)             // a | b
+        let two = WorkspaceSplitGeometry(size: size, paneCount: 2, preferredAxis: ws.splitAxis, fraction: 0.5)
+        XCTAssertEqual(two.target(at: CGPoint(x: 200, y: 600), tabID: b.id, in: ws, stripHeight: strip),
+                       .pane(ws.panes[0].id), "拖进另一格中间 = 并入")
+        XCTAssertNil(two.target(at: CGPoint(x: 810, y: 600), tabID: b.id, in: ws, stripHeight: strip),
+                     "已经独占右边，拖到右边没有变化")
+        XCTAssertEqual(two.target(at: CGPoint(x: 10, y: 600), tabID: b.id, in: ws, stripHeight: strip), .edge(.leading))
+    }
 }
