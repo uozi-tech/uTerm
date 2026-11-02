@@ -41,9 +41,9 @@ struct TerminalArea: View {
             // 40pt：与工作区主卡里文件树头 / 预览标签条 / Agent 头同高（分区方案 v3.2）。
             stripHeight: WorkspacePaneHeaderLayout.height,
             showsSplitButton: true,
-            // 卡片风格的标签胶囊没有 accent 顶条，分屏时「聚焦窗格」靠凹槽的 1.5pt accent
-            // 外框表达（设计稿：聚焦窗格保留 accent 外框；单组时不画）。
-            showsActiveGroupRing: true,
+            // 分屏时不给聚焦窗格画 accent 外框（用户要求去掉）：焦点只靠前台标签的
+            // panelHi 胶囊与终端光标表达，凹槽之间的淡轮廓仍在（UPaneGroupWells）。
+            showsActiveGroupRing: false,
             // 旧 pane header 的分屏按钮按窗格长宽比自动选方向（`autoSplitDirection`）。
             splitButtonDirection: .automatic,
             splitButtonIcon: .system("rectangle.split.2x1"),

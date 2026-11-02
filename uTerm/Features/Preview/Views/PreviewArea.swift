@@ -35,9 +35,8 @@ struct PreviewArea: View {
                 // buffer id 变成了标签 id，解析走 `buffer(forDragPayloadID:)`。
                 dragType: .utermFileBufferID,
                 stripHeight: Self.stripHeight,
-                // 卡片风格的标签胶囊没有 accent 顶条，「焦点在哪一组」改由凹槽的 1.5pt
-                // accent 外框表达（只在分屏、多于一组时画）。
-                showsActiveGroupRing: true,
+                // 分屏时不画聚焦组的 accent 外框（与终端区一致，用户要求去掉）。
+                showsActiveGroupRing: false,
                 descriptor: Self.descriptor(for:),
                 content: { tab, _ in
                     PreviewPaneBody(model: model, buffer: tab.payload,
@@ -56,7 +55,8 @@ struct PreviewArea: View {
                 })
             // 分区方案 v3：预览区坐在主内容卡上 —— 标签胶囊条 + 卡内凹槽（编辑器 / Markdown /
             // 图片自带 EditorTheme.background = 凹槽底）+ 状态条，三者都透出卡面色。
-            .uPaneGroupStyle(.card)
+            // 标签条底部画 1pt 线，与文件树头、Agent 头的底线连成一条（WorkspacePaneHeader）。
+            .uPaneGroupStyle(.cardDivided)
             .uPaneGroupWells()
             PreviewStatusRow(model: model)
         }

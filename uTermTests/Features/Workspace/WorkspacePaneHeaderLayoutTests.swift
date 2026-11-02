@@ -8,13 +8,12 @@ import XCTest
 
 /// 工作区主卡里三栏的头（文件树头 / 预览·终端标签条 / Agent 头）。
 ///
-/// 改前（v2）钉的是「三条 1pt 底部分隔线落在同一条基线 y=35」。分区方案 v3.2 把三栏并进
-/// 同一张内容卡、同为卡面色，栏头**不再画底部分隔线**（头与正文靠位置分区），而且三者同高
-/// 40、横向对齐。于是这里改钉新契约：高度 40，且头与正文之间一条横线都没有 —— 采样列从
-/// 头一路扫到正文，颜色必须是同一个卡面色。
+/// 分区方案 v3.3：三栏并进同一张内容卡、同为卡面色，栏头同高 40，底部各画一条 1pt
+/// `UD.border`。v3.2 曾去掉这条线，用户实测反馈「缺分割线」后加回。这里钉的契约：高度 40，
+/// 三栏「头 → 正文」竖向采样都有一条横线，且三条落在同一像素行上（连成一条）。
 @MainActor
 final class WorkspacePaneHeaderLayoutTests: XCTestCase {
-    func testPaneHeadersShareCardHeightWithoutSeparators() throws {
+    func testPaneHeadersShareCardHeightAndOneContinuousSeparator() throws {
         XCTAssertEqual(WorkspacePaneHeaderLayout.height, 40)
         XCTAssertEqual(AssistantHeaderLayout.height, WorkspacePaneHeaderLayout.height)
 
@@ -30,12 +29,12 @@ final class WorkspacePaneHeaderLayoutTests: XCTestCase {
                     UPaneGroupArea(
                         model: panes, dragType: .plainText,
                         stripHeight: WorkspacePaneHeaderLayout.height,
-                        showsActiveGroupRing: true,
+                        showsActiveGroupRing: false,
                         descriptor: { UPaneTabDescriptor(title: $0.payload, icon: .system("doc")) },
                         content: { _, _ in Color.clear },
                         emptyGroup: { _ in Color.clear },
                         onRequestClose: { _ in })
-                        .uPaneGroupStyle(.card)
+                        .uPaneGroupStyle(.cardDivided)
                         .uPaneGroupWells()
                         .frame(width: 480)
                     VStack(spacing: 0) {
@@ -64,15 +63,22 @@ final class WorkspacePaneHeaderLayoutTests: XCTestCase {
                 // 文件树头的路径文字 / Agent 头的按钮都在列中段之外：取靠右的空白处采样，
                 // 只看「头 → 正文」这一段竖向有没有横线。
                 let xs = [columnWidth / 2, columnWidth + 240, columnWidth + 480 + columnWidth / 2]
+                var lineRows: [Int] = []
                 for x in xs {
-                    let reds = try (Int(30 * scale)..<Int(48 * scale)).map { y in
+                    let rows = Array(Int(30 * scale)..<Int(44 * scale))
+                    let reds = try rows.map { y in
                         try XCTUnwrap(bitmap.colorAt(x: Int(x * scale), y: y)?
                             .usingColorSpace(.deviceRGB)).redComponent
                     }
                     let spread = try XCTUnwrap(reds.max()) - XCTUnwrap(reds.min())
-                    XCTAssertLessThan(spread, 0.01,
-                                      "x=\(x) dark=\(dark)：头与正文之间不该再有分隔线")
+                    XCTAssertGreaterThan(spread, 0.02,
+                                         "x=\(x) dark=\(dark)：头与正文之间应有一条分隔线")
+                    // 线的颜色离卡面最远：日间比卡面暗、暗夜比卡面亮。
+                    let target = dark ? try XCTUnwrap(reds.max()) : try XCTUnwrap(reds.min())
+                    lineRows.append(rows[try XCTUnwrap(reds.firstIndex(of: target))])
                 }
+                XCTAssertEqual(Set(lineRows).count, 1,
+                               "dark=\(dark)：三栏的头部底线应落在同一像素行，实际 \(lineRows)")
                 let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
                 let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
                 attachment.name = "pane-headers-\(dark ? "dark" : "light")-\(Int(columnWidth))"

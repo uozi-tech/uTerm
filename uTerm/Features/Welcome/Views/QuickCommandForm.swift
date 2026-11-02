@@ -65,6 +65,7 @@ struct QuickCommandForm: View {
             }
             .padding(.horizontal, 18)
             .frame(height: 44)
+            .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -108,14 +109,13 @@ struct QuickCommandForm: View {
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
+            .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
         }
         .frame(width: 360)
         .frame(maxHeight: .infinity)
-        // 分区方案 v3 第 7 条：卡内抬升块（`UD.panelHi`、圆角 8、四周距卡边 6pt），
-        // 靠底色差与左侧列表分开，替代原来的左分隔线。
-        .background(RoundedRectangle(cornerRadius: UD.Layout.wellRadius, style: .continuous)
-            .fill(UD.panelHi))
-        .padding(UD.Layout.wellGap)
+        // 分区方案 v3.3：与左侧列表同为卡面色，靠 1pt 竖线分开（分隔线两侧同底色）。
+        // 曾做成 panelHi 抬升块 + 6pt 间隙，「白卡里套灰卡」，用户要求返工。
+        .overlay(alignment: .leading) { Rectangle().fill(UD.border).frame(width: 1) }
     }
 
     // MARK: 关联服务器多选

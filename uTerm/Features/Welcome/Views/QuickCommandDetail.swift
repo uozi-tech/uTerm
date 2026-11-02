@@ -66,11 +66,9 @@ struct QuickCommandDetail: View {
         }
         .frame(width: 360)
         .frame(maxHeight: .infinity)
-        // 分区方案 v3 第 7 条：卡内抬升块（`UD.panelHi`、圆角 8、四周距卡边 6pt），
-        // 靠底色差与左侧列表分开，替代原来的左分隔线。
-        .background(RoundedRectangle(cornerRadius: UD.Layout.wellRadius, style: .continuous)
-            .fill(UD.panelHi))
-        .padding(UD.Layout.wellGap)
+        // 分区方案 v3.3：与左侧列表同为卡面色，靠 1pt 竖线分开（分隔线两侧同底色）。
+        // 曾做成 panelHi 抬升块 + 6pt 间隙，「白卡里套灰卡」，用户要求返工。
+        .overlay(alignment: .leading) { Rectangle().fill(UD.border).frame(width: 1) }
     }
 
     // MARK: 标题区
@@ -241,8 +239,7 @@ struct QuickCommandDetail: View {
             .textSelection(.enabled)
             .padding(EdgeInsets(top: 12, leading: 13, bottom: 12, trailing: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 命令块底 = 终端底（设计稿 --u-term-bg）：外层详情已是 panelHi 抬升块。
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.termBg))
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.panelHi))
 
             Button(action: copy) {
                 Text(copied ? "已复制" : "复制")
@@ -330,6 +327,7 @@ struct QuickCommandDetail: View {
             squareButton(systemImage: "trash", help: "删除", danger: true, action: onDelete)
         }
         .padding(EdgeInsets(top: 12, leading: 18, bottom: 16, trailing: 18))
+        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     private func squareButton(systemImage: String, help: String, danger: Bool = false,
