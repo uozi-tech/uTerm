@@ -61,6 +61,15 @@ final class PaneModel: Identifiable {
         defer { isConnecting = false }
 
         await session.close()
+        let timeline = ConnectTimeline(kind: "terminal", target: profile.timingTarget)
+        await ConnectTimeline.$current.withValue(timeline) {
+            await connect(profile: profile, modelContainer: modelContainer, timeline: timeline)
+        }
+    }
+
+    private func connect(profile: ServerProfile,
+                         modelContainer: ModelContainer,
+                         timeline: ConnectTimeline) async {
         let keychain = KeychainStore()
         do {
             let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
@@ -68,6 +77,7 @@ final class PaneModel: Identifiable {
             if let jump = profile.jumpHost {
                 jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
             }
+            timeline.mark("keychain")
             let verifier = HostKeyVerifier(modelContainer: modelContainer)
             let approver = hostKeyRelay.makeApprover()
             let connection = SSHConnection(
@@ -90,6 +100,7 @@ final class PaneModel: Identifiable {
                                     session: session)
             }
         } catch {
+            timeline.finish("failed")
             session.markFailed("\(error)")
         }
     }

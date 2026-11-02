@@ -315,25 +315,32 @@ final class FileBrowserModel {
                 state = .idle
             }
         }
-        do {
-            let session = try await sftpConnector(
-                lastConnectionRequest.profile,
-                lastConnectionRequest.modelContainer,
-                hostKeyRelay)
-            provider = session
-            if let initialPath {
-                currentPath = initialPath
-            } else if let restoredInitialPath {
-                currentPath = restoredInitialPath
-                self.restoredInitialPath = nil
-            } else {
-                currentPath = (try? await session.realPath(".")) ?? "/"
+        let timeline = ConnectTimeline(kind: "sftp",
+                                       target: lastConnectionRequest.profile.timingTarget)
+        await ConnectTimeline.$current.withValue(timeline) {
+            do {
+                let session = try await sftpConnector(
+                    lastConnectionRequest.profile,
+                    lastConnectionRequest.modelContainer,
+                    hostKeyRelay)
+                provider = session
+                if let initialPath {
+                    currentPath = initialPath
+                } else if let restoredInitialPath {
+                    currentPath = restoredInitialPath
+                    self.restoredInitialPath = nil
+                } else {
+                    currentPath = (try? await session.realPath(".")) ?? "/"
+                    timeline.mark("realPath")
+                }
+                await refresh(reconnectOnTransportFailure: false,
+                              waitForOwnerNames: waitForOwnerNames)
+                timeline.finish(state == .browsing ? "ok" : "list failed")
+            } catch {
+                timeline.finish("failed")
+                provider = nil
+                state = .failed("\(error)")
             }
-            await refresh(reconnectOnTransportFailure: false,
-                          waitForOwnerNames: waitForOwnerNames)
-        } catch {
-            provider = nil
-            state = .failed("\(error)")
         }
     }
 
@@ -348,13 +355,16 @@ final class FileBrowserModel {
         if let jump = profile.jumpHost {
             jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
         }
+        ConnectTimeline.current?.mark("keychain")
         let verifier = HostKeyVerifier(modelContainer: modelContainer)
         let approver = hostKeyRelay.makeApprover()
-        let connected = try await SSHClientFactory.connect(
+        let connected = try await SSHClientFactory.connectShared(
             profile: SSHConnection.ProfileSnapshot(profile),
             auth: auth, jumpHostAuth: jumpAuth,
             hostKeyVerifier: verifier, hostKeyApprover: approver)
-        return try await SFTPSession(connected: connected)
+        let session = try await SFTPSession(connected: connected)
+        ConnectTimeline.current?.mark("sftpInit")
+        return session
     }
 
     func restoreCurrentPath(_ path: String) {
@@ -392,6 +402,8 @@ final class FileBrowserModel {
             state = .browsing
             didEverBrowse = true
             transientError = nil
+            // 列表此刻已上屏；属主名补全在后面单独计。
+            ConnectTimeline.current?.mark("list(\(listed.count))")
             if waitForOwnerNames {
                 let enriched = await resolveOwnerNames(
                     for: listed,
@@ -401,6 +413,7 @@ final class FileBrowserModel {
                     enriched,
                     generation: generation,
                     directoryPath: directoryPath)
+                ConnectTimeline.current?.mark("ownerNames")
             } else {
                 ownerEnrichmentTask = Task { [weak self, provider] in
                     guard let self else { return }

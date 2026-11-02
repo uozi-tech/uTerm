@@ -183,15 +183,15 @@ actor SSHConnection: TerminalBackend {
         guard !isClosed else { throw SSHConnectionError.alreadyClosed }
         didConnect = true
 
-        // 目标客户端 + 跳板机连接（若有）由 `SSHClientFactory` 建立，打包成
-        // `Sendable` 的 `ConnectedClient`。它作为区域隔离的局部值持有，不写回
-        // `self` —— 非 `Sendable` 的 `SSHClient` 若同时被 actor 持有又被下面
-        // 并发的 `sessionTask` 捕获，会触发 Swift 6 数据竞争诊断。这个强本地
-        // 副本由 `sessionTask` 捕获，独占负责客户端 teardown（`connected.close()`
-        // 先关目标、再关跳板机），使清理不依赖 actor 存活（I1）。
+        // 目标客户端 + 跳板机连接（若有）由 `SSHClientFactory.connectShared` 给出：
+        // 同一主机的终端 / SFTP 侧栏共用一条 SSH 连接，这里拿到的是其上的一份租约。
+        // 它作为区域隔离的局部值持有，不写回 `self` —— 非 `Sendable` 的 `SSHClient`
+        // 若同时被 actor 持有又被下面并发的 `sessionTask` 捕获，会触发 Swift 6 数据
+        // 竞争诊断。这个强本地副本由 `sessionTask` 捕获，独占负责归还租约
+        // （`connected.close()`；最后一个归还者断开传输），使清理不依赖 actor 存活（I1）。
         let connected: ConnectedClient
         do {
-            connected = try await SSHClientFactory.connect(
+            connected = try await SSHClientFactory.connectShared(
                 profile: profile,
                 auth: auth,
                 jumpHostAuth: jumpHostAuth,
@@ -200,6 +200,7 @@ actor SSHConnection: TerminalBackend {
         } catch {
             // I4：连接/认证/跳板机失败 —— 结束流、置 isClosed，让消费者干净终止。
             // 工厂在 `jump` 失败时已就地关闭跳板机连接；此处只做 actor 状态收尾。
+            ConnectTimeline.current?.finish("failed")
             finishStreams()
             isClosed = true
             throw error
@@ -213,8 +214,7 @@ actor SSHConnection: TerminalBackend {
         // 信号：withPTY 闭包退出 → sessionTask 收尾 → exitStream 产元素 →
         // TerminalSession 翻到 .disconnected。不等 inbound 流自己察觉。
         // 正常 close() 路径会再触发一次 —— signalClose 幂等，无害。
-        connected.target.onDisconnect { state.signalClose() }
-        connected.bastion?.onDisconnect { state.signalClose() }
+        await connected.onDisconnect { state.signalClose() }
         // M1：输出泵直接捕获 Sendable 的 outputContinuation，逐块 yield，
         // 不再每块都 hop 回 actor。
         let outputContinuation = self.outputContinuation
@@ -232,14 +232,24 @@ actor SSHConnection: TerminalBackend {
             )
             do {
                 try await targetClient.withPTY(request, environment: Self.ptyEnvironment) { inbound, outbound in
+                    // 通道已开、pty-req / env / shell 已发出（不等回复）。
+                    ConnectTimeline.current?.mark("channel")
                     // 1. 发布 stdin writer 并启动单一有序 drain 任务，使 write()/resize() 生效。
                     state.attach(writer: outbound)
                     // 2. 并发：泵出站输出 + 等待 close 信号。
                     await withTaskGroup(of: Void.self) { group in
                         group.addTask {
+                            // 首字节 = shell 回复 + 远端 shell 启动到第一次输出（如 prompt）。
+                            // 只看第一块，之后置 nil，热路径上不再碰 timeline。
+                            var pendingTimeline = ConnectTimeline.current
                             do {
                                 for try await chunk in inbound {
                                     if Task.isCancelled { break }
+                                    if let timeline = pendingTimeline {
+                                        timeline.mark("firstOutput")
+                                        timeline.finish()
+                                        pendingTimeline = nil
+                                    }
                                     switch chunk {
                                     case .stdout(let buffer), .stderr(let buffer):
                                         outputContinuation.yield(Data(buffer.readableBytesView))
@@ -260,12 +270,13 @@ actor SSHConnection: TerminalBackend {
             } catch {
                 // withPTY 建立失败或闭包抛错 —— 进入收尾。
             }
+            // 没等到首字节就结束（开通道失败 / shell 立即退出）；已 finish 过则无操作。
+            ConnectTimeline.current?.finish("ended before output")
             // drain 任务停止并 await 其完成，确保不再有 writer.write 在飞行中。
             await state.shutdownDrain()
-            // 客户端 teardown 用强引用的本地副本（`connected`）完成，不经过 `self` ——
-            // 即便 actor 已被消费者丢弃（deinit 后 `self == nil`），底层
-            // SSHClient 传输仍会被关闭，杜绝泄漏（I1）。`connected.close()`
-            // 先关目标、再关跳板机。
+            // 归还租约用强引用的本地副本（`connected`）完成，不经过 `self` ——
+            // 即便 actor 已被消费者丢弃（deinit 后 `self == nil`），租约也会归还，
+            // 最后一个使用方离开时传输照样断开，杜绝泄漏（I1）。
             await connected.close()
             // 触碰 actor 状态的收尾（exitStream 产元素、结束流、置 isClosed）
             // 仍走 `self?.` —— 若 `self` 已不在，deinit 已结束流。
@@ -341,7 +352,8 @@ actor SSHConnection: TerminalBackend {
             if first != true {
                 // 判死：先把底层通道关掉。这同时解除可能挂死的探测子任务
                 // （exec 拿到「通道已关」错误后返回），TaskGroup 才能收尾。
-                await connected.close()
+                // 连接若与 SFTP / 其他 tab 共享，它们也会收到断开、各自重连。
+                await connected.closeTransport()
             }
             group.cancelAll()
             return first == true

@@ -4,18 +4,38 @@ import NIOCore
 @_spi(uTermIntegration) import USSHKit
 
 /// App-local compatibility view over USSHKit's SPI connection handle.
+///
+/// 来自 `SSHClientFactory.connectShared` 的实例是共享连接上的一份租约（`lease` 非 nil）：
+/// `close()` 只归还租约，同一连接上的其他使用方不受影响；要判死整条连接用 `closeTransport()`。
 nonisolated struct ConnectedClient: @unchecked Sendable {
     let shared: USSHKit.ConnectedClient
+    let lease: PooledLease?
 
-    init(shared: USSHKit.ConnectedClient) {
+    init(shared: USSHKit.ConnectedClient, lease: PooledLease? = nil) {
         self.shared = shared
+        self.lease = lease
     }
 
     var target: SSHClient { shared.target }
     var bastion: SSHClient? { shared.bastion }
 
+    /// 用完了：独占连接直接断开；共享连接只归还租约，最后一个归还者才断开。
     func close() async {
-        await shared.close()
+        if let lease {
+            await SharedSSHConnections.pool.release(lease)
+        } else {
+            await shared.close()
+        }
+    }
+
+    /// 传输断开（含别的共享者判死后断开）时回调。共享连接走池子分发 ——
+    /// Citadel 的 `onDisconnect` 只存一个回调，直接挂会顶掉别人的。
+    func onDisconnect(_ handler: @escaping @Sendable () -> Void) async {
+        if let lease {
+            await SharedSSHConnections.pool.onClosed(lease, handler)
+        } else {
+            onTransportClosed(handler)
+        }
     }
 
     func exec(_ command: String) async throws -> String {
@@ -46,6 +66,23 @@ nonisolated struct ConnectedClient: @unchecked Sendable {
         port: Int
     ) async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
         try await shared.openDirectTCPIP(host: host, port: port)
+    }
+}
+
+nonisolated extension ConnectedClient: PooledConnection {
+    var isAlive: Bool {
+        target.isConnected && (bastion?.isConnected ?? true)
+    }
+
+    func onTransportClosed(_ handler: @escaping @Sendable () -> Void) {
+        target.onDisconnect(perform: handler)
+        bastion?.onDisconnect(perform: handler)
+    }
+
+    /// 不管有几个共享者，直接断开底层传输。看门狗判死时用：连接死了对谁都是死的，
+    /// 断开后池子会通知这条连接上的所有使用方，各自走重连。
+    func closeTransport() async {
+        await shared.close()
     }
 }
 
@@ -121,7 +158,13 @@ nonisolated enum SSHClientFactory {
             jumpHost: jumpHost
         )
 
+        let timeline = ConnectTimeline.current
+        if let timeline, ConnectProbe.isEnabled {
+            await probe(profile: profile, auth: auth, timeline: timeline)
+        }
+
         do {
+            defer { timeline?.mark("handshake") }
             let shared = try await USSHKitIntegration.connect(
                 endpoint: endpoint,
                 credential: target.credential,
@@ -156,6 +199,55 @@ nonisolated enum SSHClientFactory {
             }
             throw SSHConnection.SSHConnectionError.connectFailed(message)
         }
+    }
+
+    /// 终端与 SFTP 侧栏用：同一目标（含跳板机与认证材料）复用已有连接，见
+    /// `SharedConnectionPool`。返回的是一份租约，`close()` 只归还租约。
+    ///
+    /// 同时到来的建连只握一次手，用的是第一个建连者的主机密钥审批回调；后来者直接复用
+    /// 已经校验过主机密钥的连接。子通道窗口固定用 `channelWindowOptions` —— 要更大窗口的
+    /// 大文件传输走 `connect` 自己开专用连接。
+    static func connectShared(
+        profile: SSHConnection.ProfileSnapshot,
+        auth: ResolvedAuth,
+        jumpHostAuth: ResolvedAuth?,
+        hostKeyVerifier: HostKeyVerifier,
+        hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool
+    ) async throws -> ConnectedClient {
+        let key = SharedSSHKey(profile: profile, auth: auth, jumpHostAuth: jumpHostAuth)
+        let acquired = try await SharedSSHConnections.pool.acquire(key) {
+            try await connect(
+                profile: profile,
+                auth: auth,
+                jumpHostAuth: jumpHostAuth,
+                hostKeyVerifier: hostKeyVerifier,
+                hostKeyApprover: hostKeyApprover)
+        }
+        if acquired.origin != .created {
+            ConnectTimeline.current?.mark("handshake(\(acquired.origin.rawValue))")
+        }
+        return ConnectedClient(shared: acquired.connection.shared, lease: acquired.lease)
+    }
+
+    /// `sshTimingProbe` 打开时，在真正握手前单独量第一跳的 DNS、裸 TCP 握手与私钥解析，
+    /// 记进 timeline 的 notes；这段耗时不计入建连总时长。私钥解析会在握手里再做一遍，
+    /// 这里量的就是握手内那一份本机开销。
+    private static func probe(
+        profile: SSHConnection.ProfileSnapshot,
+        auth: ResolvedAuth,
+        timeline: ConnectTimeline
+    ) async {
+        let firstHop = profile.jumpHost.map { ($0.host, $0.port) } ?? (profile.host, profile.port)
+        timeline.note(await ConnectProbe.resolve(host: firstHop.0, port: firstHop.1))
+        let tcp = await ConnectProbe.tcpConnect(host: firstHop.0, port: firstHop.1)
+        timeline.note("tcp=\(tcp.map(ConnectTimeline.milliseconds) ?? "failed")")
+        let clock = ContinuousClock()
+        let keyImport = clock.measure { _ = try? makeAuthMethod(from: auth) }
+        timeline.note("keyImport=\(ConnectTimeline.milliseconds(keyImport))")
+        if profile.jumpHost != nil {
+            timeline.note("viaJump")
+        }
+        timeline.exclude()
     }
 
     /// Kept as a narrow compatibility entry point for callers/tests that need

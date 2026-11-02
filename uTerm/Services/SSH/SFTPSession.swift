@@ -491,7 +491,8 @@ actor SFTPSession: SFTPProviding {
             if first != true {
                 // 判死：关掉底层通道。这同时解除可能挂死的探测子任务
                 // （REALPATH 拿到「通道已关」错误后返回），TaskGroup 才能收尾。
-                await connected.close()
+                // 共享连接上的终端也会收到断开、各自重连。
+                await connected.closeTransport()
             }
             group.cancelAll()
             return first == true
