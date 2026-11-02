@@ -105,6 +105,16 @@ build tool plugin `SwiftTermBuildInfoPlugin` + 可执行 target
 Xcode 27 起报未使用结果警告 → 改写成 `_ = memcpy(...)`。纯诊断层面，语义不变；上游若已
 自行处理，重放时跳过即可。
 
+2026-11-02 追加一批同类清理（iOS 构建在 Xcode 里报 19 条）：
+
+- `Apple/AppleTerminalView.swift`：`cellDimension` 是非可选 `CGSize`，`cellDimension != nil`
+  恒真 → 从 `guard` 里删掉。
+- `iOS/iOSTerminalView.swift`：`terminalAccessory?.controlModifier ?? controlModifier ?? false`
+  三处去掉多余的 `?? false`（`controlModifier` 本身是 `Bool`）；无障碍那几个函数里从不改的
+  `var` 改 `let`，删掉没用到的 `lineWidth` / `text` 局部量；`showContextMenu` 的 `items`
+  改 `let`。
+- `iOS/iOSTextInput.swift`：日志里插值可选的 `_markedTextRange` 改成 `String(describing:)`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）
