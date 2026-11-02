@@ -1,10 +1,16 @@
 import SwiftUI
 import SwiftData
 
-/// 自适应外壳：iPhone（compact）底部标签栏 + 各标签独立导航栈；
-/// iPad（regular）侧栏 + 详情的 `NavigationSplitView`。
+/// 自适应外壳：**一棵**系统 `TabView`（`.sidebarAdaptable`）。紧凑宽度（iPhone、iPhone Duo
+/// 外屏 / 内屏分屏）是标签栏；常规宽度（iPad、iPhone Duo 展开）默认是侧栏，可收成顶部标签条。
+///
+/// 改前是按 `horizontalSizeClass` 在 `TabView` 与 `NavigationSplitView` 两套外壳间二选一：
+/// size class 一翻（Plus/Max 横屏、iPhone Duo 开合），整棵标签内容树换了身份、全部重建，
+/// 各屏的 `@State`（筛选、滚动位置、正在填的表单抽屉、确认框……）随之丢失。终端 / SFTP 会话
+/// 为此上移到了本视图，但其它屏没有。iPhone Duo 一天要开合很多次，这类丢失会被放大，
+/// 所以改成同一棵 `TabView` 让系统自己在标签栏 ⇄ 侧栏之间变形，内容视图身份不变。
+/// 会话状态仍留在根视图持有（不依赖外壳是否重建，属于兜底）。
 struct MobileRootView: View {
-    @Environment(\.horizontalSizeClass) private var hSize
     @State private var store = MobileStore()
     /// host-key 信任挑战桥：终端 / SFTP 控制器共用一份，根视图据此弹出信任弹层。
     @State private var hostKeyRelay = HostKeyChallengeRelay()
@@ -15,13 +21,7 @@ struct MobileRootView: View {
 
     var body: some View {
         @Bindable var store = store
-        Group {
-            if hSize == .regular {
-                MobileSplitShell()
-            } else {
-                MobileTabShell()
-            }
-        }
+        MobileTabShell()
         .environment(store)
         .environment(hostKeyRelay)
         .environment(terminalSessions)
@@ -84,7 +84,7 @@ struct MobileRootView: View {
     }
 }
 
-// MARK: - iPhone：底部标签栏（系统原生 TabView）
+// MARK: - 外壳：标签栏 ⇄ 侧栏自适应（系统原生 TabView）
 
 private struct MobileTabShell: View {
     @Environment(MobileStore.self) private var store
@@ -93,9 +93,26 @@ private struct MobileTabShell: View {
         @Bindable var store = store
         TabView(selection: $store.tab) {
             ForEach(MTab.allCases) { tab in
-                tabContent(tab)
-                    .tabItem { Label(tab.label, systemImage: MGlyph.symbol(tab.icon)) }
-                    .tag(tab)
+                Tab(tab.label, systemImage: MGlyph.symbol(tab.icon), value: tab) {
+                    tabContent(tab)
+                }
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        // 常规宽度（iPad / iPhone Duo 展开）首启默认侧栏，与改前 NavigationSplitView 的观感一致。
+        .defaultAdaptableTabBarPlacement(.sidebar)
+        // 侧栏头：品牌名 + 命令面板入口（改前挂在 NavigationSplitView 侧栏的工具栏上）。
+        .tabViewSidebarHeader {
+            HStack(spacing: 8) {
+                Text("uTerm").font(M.sans(22, weight: .bold)).foregroundStyle(M.text)
+                Spacer(minLength: 0)
+                Button { store.showPalette = true } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: M.minTarget, height: M.minTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(Text("命令面板"))
             }
         }
     }
@@ -107,47 +124,6 @@ private struct MobileTabShell: View {
         case .sftp:     SFTPScreen()
         case .commands: CommandsScreen()
         case .settings: SettingsScreen()
-        }
-    }
-}
-
-// MARK: - iPad：侧栏 + 详情
-
-private struct MobileSplitShell: View {
-    @Environment(MobileStore.self) private var store
-
-    var body: some View {
-        @Bindable var store = store
-        let selection = Binding<MTab?>(
-            get: { store.tab },
-            set: { if let v = $0 { store.tab = v } })
-        NavigationSplitView {
-            List(selection: selection) {
-                Section {
-                    ForEach(MTab.allCases) { tab in
-                        Label { Text(tab.label).font(M.sans(15, weight: .medium)) }
-                        icon: { MIcon(name: tab.icon, size: 18, color: M.text2) }
-                            .tag(tab)
-                    }
-                }
-            }
-            .navigationTitle("uTerm")
-            .listStyle(.sidebar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { store.showPalette = true } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                }
-            }
-        } detail: {
-            switch store.tab {
-            case .hosts:    HostsScreen()
-            case .terminal: TerminalScreen()
-            case .sftp:     SFTPScreen()
-            case .commands: CommandsScreen()
-            case .settings: SettingsScreen()
-            }
         }
     }
 }
