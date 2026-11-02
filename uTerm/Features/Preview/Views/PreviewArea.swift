@@ -53,11 +53,11 @@ struct PreviewArea: View {
                         onKeepOpen: { model.keepTab(tab.id) },
                         onRequestClose: onRequestClose)
                 })
-            // 分区方案 v3：预览区坐在主内容卡上 —— 标签胶囊条 + 卡内凹槽（编辑器 / Markdown /
-            // 图片自带 EditorTheme.background = 凹槽底）+ 状态条，三者都透出卡面色。
-            // 标签条底部画 1pt 线，与文件树头、Agent 头的底线连成一条（WorkspacePaneHeader）。
+            // 分区方案 v3.4：预览区坐在主内容卡上 —— 标签胶囊条 + 铺满的正文 + 状态条。
+            // 正文不做卡内凹槽（不内缩、无圆角：当前行高亮两端被削圆、与卡边隔开一截，
+            // 实机反馈「不需要圆角」）；上靠标签条底线（与文件树头、Agent 头连成一条，
+            // 见 WorkspacePaneHeader）、下靠状态条顶线分开。
             .uPaneGroupStyle(.cardDivided)
-            .uPaneGroupWells()
             PreviewStatusRow(model: model)
         }
     }

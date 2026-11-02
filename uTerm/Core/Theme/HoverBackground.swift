@@ -68,11 +68,12 @@ extension View {
 }
 
 /// 小尺寸图标按钮（toolbar / 路径栏 / tab 栏 +）的 hover 反馈：静止时图标走
-/// `textSecondary`，hover 时图标提亮到 `textPrimary` 并叠一层 `bgSelected` 圆角底。
+/// `UD.text2`，hover 时图标提亮到 `UD.text` 并叠一层 `UD.panelHover` 圆角底。
 ///
 /// 比单用 `hoverBackground` 明显 —— 半透明 Liquid Glass sidebar 上仅靠实色背景
 /// 切换几乎看不出（hover 用的 bgRaised 压在同色调玻璃上对比极小）。这里两手抓：
-/// 背景升一档到对比更大的 `bgSelected`，再叠图标提亮这个可靠的第二信号。
+/// 背景叠一层中性灰，再叠图标提亮这个可靠的第二信号。悬停一律用中性灰：曾用
+/// `UD.rowSelected`，它收编进 UDesignKit 后变成了强调色淡底，悬停成了「选中蓝」。
 ///
 /// 注意：用此修饰器的按钮，其图标 **不要** 自己再设 `.foregroundStyle`——否则子级
 /// 显式色会盖掉这里随 hover 切换的色，图标就不会提亮。
@@ -87,7 +88,7 @@ private struct IconButtonHover: ViewModifier {
                                         : UD.text2)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(isHovering ? UD.rowSelected : .clear)
+                    .fill(isHovering ? UD.panelHover : .clear)
             )
             .hoverGated { isHovering = $0 }
     }

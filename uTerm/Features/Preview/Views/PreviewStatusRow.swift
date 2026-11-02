@@ -35,9 +35,11 @@ struct PreviewStatusRow: View {
         .font(UD.mono(10.5))
         .foregroundStyle(UD.text3)
         .padding(.horizontal, 12)
-        // 分区方案 v3：状态条在卡面上、紧贴凹槽下方 —— 不铺底色、不画上分隔线，24 高。
+        // 状态条在卡面上、紧贴正文下方，24 高、不铺底色；顶部 1pt 线与正文分开（两侧同为
+        // 卡面色）。日间编辑器底与卡同为白，不画这条线时正文直接流进状态条（实机反馈）。
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .top) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     private func label(for kind: FileKind) -> String {
