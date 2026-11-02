@@ -380,7 +380,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     {
         showsHorizontalScrollIndicator = true
         indicatorStyle = .white
-        
+        // uTerm patch #5: never scale the backing store. With UIView's default
+        // `.scaleToFill`, an *animated* bounds change (keyboard avoidance,
+        // rotation, split resize) stretches the freshly drawn bitmap — already
+        // rendered for the final size by layoutSubviews → draw(_:) — across the
+        // in-flight presentation bounds, so the glyphs visibly stretch until the
+        // animation ends. Pin the bitmap to the top-left instead: any strip the
+        // animation exposes shows `layer.backgroundColor` (the terminal bg).
+        contentMode = .topLeft
+
         setupKeyboardButtonColors()
         setupDisplayUpdates ();
         setupOptions ()

@@ -115,6 +115,27 @@ Xcode 27 起报未使用结果警告 → 改写成 `_ = memcpy(...)`。纯诊断
   改 `let`。
 - `iOS/iOSTextInput.swift`：日志里插值可选的 `_markedTextRange` 改成 `String(describing:)`。
 
+## 5. iOS 终端视图不拉伸位图（contentMode = .topLeft）
+
+现象（uTermMobile）：连上会话、键盘弹起的那一段动画里，终端文字被纵向拉伸（行距变大、
+光标与文字错位），随键盘升到位才缩回正常——看起来像「连接后内容被拉伸，直到键盘展开才恢复」。
+
+根因：上游 iOS `TerminalView` 走 `draw(_:)`（未开 Metal），沿用 UIView 默认的
+`contentMode = .scaleToFill`。键盘避让是**带动画**的 frame 变化：`layoutSubviews` 先按
+**终值**尺寸重绘位图，presentation 层的 bounds 却还在从旧（更高）尺寸往新尺寸插值，
+`.scaleToFill` 就把这张矮位图拉伸铺满更高的动画中 bounds。旋转、分屏改宽同理。
+
+涉及文件：
+
+- `Sources/SwiftTerm/iOS/iOSTerminalView.swift`
+  - `setup()` 里加 `contentMode = .topLeft`：位图钉在左上角、不缩放，动画期露出的条带
+    显示 `layer.backgroundColor`（即终端底色，视图本就 `isOpaque = false`）。
+    Metal 路径不受影响（绘制在 `MTKView` 子视图里，自有 autoresizing）。
+
+uTerm 侧无需改动。复现与验证配方：模拟器开软键盘（Simulator「Toggle Software Keyboard」），
+`xcrun simctl io <udid> recordVideo` 录下键盘弹起过程逐帧看；修复前键盘上升的几帧文字明显
+被拉高，修复后逐帧字形不变。上游若已自行设了非缩放的 contentMode，重放时跳过即可。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）
