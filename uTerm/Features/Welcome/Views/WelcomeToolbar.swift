@@ -24,7 +24,10 @@ struct WelcomeToolbar: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
-        .frame(height: 48)
+        // 紧贴 38pt 标题栏：32pt 控件只在下方留 8pt 到分隔线。原先 48 高上下各 8，
+        // 与同为卡面色的标题栏叠在一起显得间隔过大（实机反馈）。
+        .padding(.bottom, 8)
+        .frame(height: 40)
     }
 }
 
