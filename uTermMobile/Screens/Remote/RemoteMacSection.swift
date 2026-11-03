@@ -223,19 +223,8 @@ struct RemoteMacSheet: View {
 
     /// 会话对应的主机：Mac 本机 shell 没有主机记录，用一个代表这台 Mac 的临时主机（见 `localShellHost`）。
     private func host(for serverID: UUID) -> ServerProfile? {
-        if serverID == RemoteConstants.localShellServerID { return localShellHost() }
+        if serverID == RemoteConstants.localShellServerID { return client.localShellHost() }
         return hosts.first { $0.id == serverID }
-    }
-
-    /// 标签要一个 `ServerProfile`（标题、连接中页的名字）；本机 shell 不对应任何主机，造一个**不入库**的
-    /// 临时对象代表这台 Mac。远控标签的传输不读它的连接参数，入库与否只影响「最近连接」这类记账，
-    /// 那些地方已按 `modelContext == nil` 跳过。
-    private func localShellHost() -> ServerProfile {
-        let host = ServerProfile()
-        host.id = RemoteConstants.localShellServerID
-        host.name = client.macName
-        host.host = "本机"
-        return host
     }
 
     private func openLocalShell() async {
@@ -243,9 +232,88 @@ struct RemoteMacSheet: View {
         defer { openingShell = false }
         do {
             let sessionID = try await client.openLocalShell()
-            openRemoteTerminal(host: localShellHost(), sessionID: sessionID)
+            openRemoteTerminal(host: client.localShellHost(), sessionID: sessionID)
         } catch {
             shellError = error.localizedDescription
+        }
+    }
+}
+
+extension RemoteMacClient {
+    /// 标签要一个 `ServerProfile`（标题、连接中页的名字）；本机 shell 不对应任何主机，造一个**不入库**的
+    /// 临时对象代表这台 Mac。远控标签的传输不读它的连接参数，入库与否只影响「最近连接」这类记账，
+    /// 那些地方已按 `modelContext == nil` 跳过。
+    func localShellHost() -> ServerProfile {
+        let host = ServerProfile()
+        host.id = RemoteConstants.localShellServerID
+        host.name = macName
+        host.host = "本机"
+        return host
+    }
+}
+
+/// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
+struct MacTerminalRows: View {
+    let directory: RemoteMacDirectory
+    let onOpen: (ServerProfile, MRemoteSource) -> Void
+
+    @Environment(\.mAccent) private var accent
+    @State private var openingMac: String?
+    @State private var shellError: String?
+
+    var body: some View {
+        ForEach(directory.pairedMacs) { mac in
+            row(mac)
+        }
+        .onAppear {
+            if directory.isActivated { directory.startBrowsing() }
+        }
+        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+                                                   set: { if !$0 { shellError = nil } })) {
+            Button("好", role: .cancel) { shellError = nil }
+        } message: {
+            Text(shellError ?? "")
+        }
+    }
+
+    private func row(_ mac: RemoteMacDirectory.Mac) -> some View {
+        Button { open(mac) } label: {
+            HStack(spacing: 12) {
+                MIcon(name: "mac", size: 18, color: accent)
+                    .frame(width: 38, height: 38)
+                    .background(accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mac.name).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text)
+                    Text(openingMac == mac.id ? "正在打开…" : "Mac 本机的 shell")
+                        .font(M.sans(12)).foregroundStyle(M.text3)
+                }
+                Spacer()
+                if openingMac == mac.id {
+                    ProgressView()
+                } else {
+                    MIcon(name: "run", size: 14, color: accent, weight: .semibold)
+                }
+            }
+            .padding(14)
+            .background(M.card)
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
+        }
+        .buttonStyle(MPressStyle())
+        .disabled(openingMac != nil)
+    }
+
+    private func open(_ mac: RemoteMacDirectory.Mac) {
+        let client = directory.client(for: mac)
+        openingMac = mac.id
+        Task {
+            defer { openingMac = nil }
+            do {
+                let sessionID = try await client.openLocalShell()
+                onOpen(client.localShellHost(), MRemoteSource(client: client, sessionID: sessionID))
+            } catch {
+                shellError = error.localizedDescription
+            }
         }
     }
 }

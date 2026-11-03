@@ -108,6 +108,9 @@ final class RemoteMacDirectory {
         pairedNames.contains(mac.name)
     }
 
+    /// 配对过、此刻在局域网里能找到的 Mac。新建终端抽屉只列它们：没配对的要先走配对流程（主机页「我的 Mac」）。
+    var pairedMacs: [Mac] { macs.filter(isPaired) }
+
     /// 配对 / 忘记之后刷新列表上的标记（Mac 面板关闭时调用）。
     func refreshPaired() {
         pairedNames = Set(identity.trustedPeers().map(\.name))

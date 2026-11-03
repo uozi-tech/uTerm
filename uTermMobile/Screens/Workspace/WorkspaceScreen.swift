@@ -13,6 +13,7 @@ struct WorkspaceScreen: View {
     @Environment(MobileStore.self) private var store
     @Environment(HostKeyChallengeRelay.self) private var relay
     @Environment(MobileWorkspace.self) private var workspace
+    @Environment(RemoteMacDirectory.self) private var remoteMacs: RemoteMacDirectory?
     @Environment(\.modelContext) private var context
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
@@ -456,12 +457,27 @@ struct WorkspaceScreen: View {
 
     private func newTabSheet(_ kind: MConnectKind) -> some View {
         let candidates = kind == .terminal ? hosts.filter { !$0.sftpOnly } : hosts
+        // Mac 的本机终端只有终端能开；文件浏览没有对应的远控通道。
+        let macs = kind == .terminal ? remoteMacs : nil
         return NavigationStack {
             ScrollView {
                 MCardList {
+                    if let macs {
+                        MacTerminalRows(directory: macs) { host, source in
+                            awaitingConnect = true
+                            newKind = nil
+                            // 同主机行：等抽屉收起再盖连接中页。
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                store.openRemoteTerminal(host, source: source)
+                                awaitingConnect = false
+                            }
+                        }
+                    }
                     if candidates.isEmpty {
-                        Text("没有可连接的主机").font(M.sans(14)).foregroundStyle(M.text3)
-                            .frame(maxWidth: .infinity).padding(.top, 40)
+                        if macs?.pairedMacs.isEmpty ?? true {
+                            Text("没有可连接的主机").font(M.sans(14)).foregroundStyle(M.text3)
+                                .frame(maxWidth: .infinity).padding(.top, 40)
+                        }
                     } else {
                         ForEach(candidates) { host in
                             // 新建会话也走连接中页（强制新开一个，即便已有同主机同类型的标签）。
