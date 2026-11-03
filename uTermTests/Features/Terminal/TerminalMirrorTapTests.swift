@@ -128,6 +128,19 @@ final class TerminalMirrorTapTests: XCTestCase {
         session.dispose()
     }
 
+    /// 钉住的终端比窗格矮：贴左上角；比窗格高：贴底边（裁掉顶上的旧行，提示符那一行留在屏上）。
+    func test_pinned_terminal_keeps_its_bottom_visible_when_taller_than_the_pane() {
+        let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
+        let pane = NSRect(x: 0, y: 0, width: 800, height: 500)
+
+        let short = TerminalContainerView.pinnedFrame(NSSize(width: 400, height: 300), in: pane, insets: insets)
+        XCTAssertEqual(short, NSRect(x: 8, y: 200, width: 400, height: 300), "放得下：顶边贴着窗格顶")
+
+        let tall = TerminalContainerView.pinnedFrame(NSSize(width: 400, height: 700), in: pane, insets: insets)
+        XCTAssertEqual(tall.minY, 6, "放不下：底边贴着窗格底（留出下边距）")
+        XCTAssertEqual(tall.size, NSSize(width: 400, height: 700), "不缩放，行列数不变")
+    }
+
     func test_tap_without_subscribers_is_inert() async throws {
         let (session, backend) = await connectedSession()
         XCTAssertFalse(session.mirrorTap.hasSubscribers)

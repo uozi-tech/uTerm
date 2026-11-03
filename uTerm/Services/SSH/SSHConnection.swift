@@ -31,7 +31,7 @@ import NIOSSH
 /// drain 任务串行消费 —— 每个操作 `await` 完成后才处理下一个。writer 就绪前积压的
 /// 操作与就绪后的新操作进同一队列，因此从"调用 write/resize"到"writer.write"
 /// 只有一条有序路径，绝不会乱序。
-actor SSHConnection: TerminalBackend {
+actor SSHConnection: TerminalImageReceiving {
 
     enum SSHConnectionError: Error, LocalizedError {
         case notConnected
@@ -339,6 +339,32 @@ actor SSHConnection: TerminalBackend {
     ///   级联：inbound 结束 → withPTY 返回 → exitStream → UI 置「连接已断开」。
     func verifyConnectionAlive() async -> Bool {
         await verifyConnectionAlive(timeout: .seconds(10))
+    }
+
+    /// 把图片传成远端 `/tmp` 下的一个文件，返回路径（由调用方粘进终端）。
+    ///
+    /// SFTP 开在这条终端连接上（另开一个通道），不另建连接，也不重新认证。
+    func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
+        guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
+        let path = image.temporaryRemotePath()
+        let sftp = try await connected.target.openSFTP()
+        do {
+            let file = try await sftp.openFile(filePath: path, flags: [.write, .create, .truncate])
+            do {
+                var buffer = ByteBuffer()
+                buffer.writeBytes(image.data)
+                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0)
+                try await file.close()
+            } catch {
+                try? await file.close()
+                throw error
+            }
+        } catch {
+            try? await sftp.close()
+            throw error
+        }
+        try? await sftp.close()
+        return .file(path: path)
     }
 
     func verifyConnectionAlive(timeout: Duration) async -> Bool {

@@ -117,6 +117,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
+    @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
 
     /// - Parameters:
@@ -250,6 +251,8 @@ final class RemoteMacClient: Identifiable {
         desktopWaiters.removeAll()
         for (_, waiter) in localShellWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         localShellWaiters.removeAll()
+        for (_, waiter) in imageWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        imageWaiters.removeAll()
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
     }
 
@@ -313,6 +316,10 @@ final class RemoteMacClient: Identifiable {
             } else {
                 waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 没能打开本机终端"))
             }
+        case .terminalImageResult:
+            guard let result = try? RemoteJSON.decode(RemoteTerminalImageResult.self, from: message.payload),
+                  let waiter = imageWaiters.removeValue(forKey: result.requestID) else { return }
+            waiter.resume(returning: result)
         default:
             break
         }
@@ -353,6 +360,28 @@ final class RemoteMacClient: Identifiable {
     func closeSessionOnMac(_ sessionID: UUID) {
         guard state == .connected, let link, supportsCloseSession else { return }
         link.send(RemoteMessage(.closeSession, payload: RemoteJSON.encode(RemoteCloseSessionRequest(sessionID: sessionID))))
+    }
+
+    /// 远控终端里能不能贴图片（老 Mac 收到 `terminalImage` 会断开整条连接）。
+    var supportsTerminalImage: Bool { macFeatures.contains(RemoteFeature.terminalImage) }
+
+    /// 把一张图片交给接入的终端，等 Mac 处理完：本机 shell 放进 Mac 剪贴板并按了 Ctrl+V（`.clipboard`），
+    /// SSH 会话传成了服务器上的文件（`.file`，路径由调用方粘进终端）。
+    func sendTerminalImage(_ image: TerminalImage, over attachment: RemoteAttachment) async throws -> TerminalImageDelivery {
+        guard supportsTerminalImage else {
+            throw TerminalImageError.unsupported("这台 Mac 上的 uTerm 版本太旧，不能往终端里贴图片。请把 Mac 上的 uTerm 更新到最新版")
+        }
+        guard image.data.count <= RemoteTerminalImageRequest.maxImageBytes else {
+            throw TerminalImageError.unsupported("图片太大了")
+        }
+        let request = RemoteTerminalImageRequest(requestID: UUID(), image: image)
+        let result = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<RemoteTerminalImageResult, Error>) in
+            imageWaiters[request.requestID] = continuation
+            attachment.link.send(RemoteMessage(.terminalImage, channel: attachment.channel, payload: request.encoded()))
+        }
+        if let error = result.error { throw TerminalImageError.unsupported(error) }
+        return result.path.map { .file(path: $0) } ?? .clipboard
     }
 
     /// 请 Mac 开一个本机 shell（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常 `attach`。

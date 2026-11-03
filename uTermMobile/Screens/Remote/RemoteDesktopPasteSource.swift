@@ -1,6 +1,6 @@
 import UIKit
 
-/// 远程桌面「粘贴到 Mac」的内容来源：手机剪贴板里的图片 / 文字，或相册里选的一张图。
+/// 远程桌面「粘贴到 Mac」与终端「贴图片」的内容来源：手机剪贴板里的图片 / 文字，或相册里选的一张图。
 ///
 /// 一条粘贴消息要放进一帧（`RemoteDesktopPaste.maxContentBytes`），所以图片在手机上先压好：
 /// PNG / JPEG 原样能装下就原样发（截图里的字保持锐利）；装不下或是 HEIC 等格式（不少 Mac app
@@ -8,12 +8,14 @@ import UIKit
 nonisolated enum RemoteDesktopPasteSource {
     enum Failure: LocalizedError {
         case empty
+        case noImage
         case unreadableImage
         case textTooLong
 
         var errorDescription: String? {
             switch self {
             case .empty: return "剪贴板里没有图片或文字"
+            case .noImage: return "剪贴板里没有图片"
             case .unreadableImage: return "这张图片读不出来"
             case .textTooLong: return "文字太长，一次最多粘贴约 3.8 MB"
             }
@@ -36,6 +38,21 @@ nonisolated enum RemoteDesktopPasteSource {
             return .text(text)
         }
         throw Failure.empty
+    }
+
+    /// 终端贴图：只要剪贴板里的图片。
+    @MainActor
+    static func clipboardImage() async throws -> TerminalImage {
+        guard UIPasteboard.general.hasImages, let image = try await clipboard().terminalImage else {
+            throw Failure.noImage
+        }
+        return image
+    }
+
+    /// 终端贴图：相册里选的一张。
+    static func terminalImage(data: Data) async throws -> TerminalImage {
+        guard let image = try await image(data: data).terminalImage else { throw Failure.unreadableImage }
+        return image
     }
 
     /// 一张图片的原始数据（相册 / 剪贴板）。
@@ -73,6 +90,17 @@ private extension UIImage {
         format.scale = scale
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+}
+
+extension RemoteDesktopPaste {
+    /// 图片内容换成终端贴图用的形状；文字为 nil。
+    nonisolated var terminalImage: TerminalImage? {
+        switch self {
+        case .png(let data): return TerminalImage(format: .png, data: data)
+        case .jpeg(let data): return TerminalImage(format: .jpeg, data: data)
+        case .text: return nil
         }
     }
 }

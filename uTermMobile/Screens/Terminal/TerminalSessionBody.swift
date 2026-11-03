@@ -1,4 +1,5 @@
 import UDesignKit
+import PhotosUI
 import SwiftUI
 import SwiftData
 import Observation
@@ -176,6 +177,8 @@ struct TerminalKeyBar: View {
     @Environment(\.mAccent) private var accent
     /// 是否展开多行面板（默认收起为单行；最左 ∧/∨ 切换）。
     @State private var expanded: Bool
+    @State private var pickingPhoto = false
+    @State private var pickedPhoto: PhotosPickerItem?
 
     /// `expanded` 的初值。生产侧一律省略（收起），探针用它把展开档也挂起来量——
     /// `@State` 建出来之后外部改不了，不给初值就没法对照「收起 → 展开」的挂载账。
@@ -239,7 +242,54 @@ struct TerminalKeyBar: View {
         // 与终端同一个工作面，只用顶边 hairline 分区（「线或底色差，二选一」）。
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
+        // 贴图的进度 / 结果浮在键盘条上方，不挤终端的行数。
+        .overlay(alignment: .top) { imageNote.alignmentGuide(.top) { $0[.bottom] + 8 } }
         .animation(.easeOut(duration: 0.18), value: expanded)
+        .animation(.easeOut(duration: 0.15), value: controller.imageNote)
+        .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            pickedPhoto = nil
+            controller.sendImage {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw RemoteDesktopPasteSource.Failure.unreadableImage
+                }
+                return try await RemoteDesktopPasteSource.terminalImage(data: data)
+            }
+        }
+    }
+
+    @ViewBuilder private var imageNote: some View {
+        if let note = controller.imageNote {
+            Text(note)
+                .font(M.sans(12, weight: .medium))
+                .foregroundStyle(M.text)
+                .lineLimit(2)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(M.button)
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
+                .padding(.horizontal, 10)
+                .transition(.opacity)
+        }
+    }
+
+    /// 贴图片：剪贴板里的图，或相册里选一张。直连服务器传成 `/tmp` 下的文件并粘上路径；
+    /// Mac 本机终端放进 Mac 剪贴板再按 Ctrl+V（Claude Code 等从剪贴板读图）。
+    private var imageMenu: some View {
+        Menu {
+            Button {
+                controller.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
+            } label: { Label("粘贴剪贴板里的图片", systemImage: "doc.on.clipboard") }
+            Button { pickingPhoto = true } label: { Label("从相册选择…", systemImage: "photo.on.rectangle") }
+        } label: {
+            Image(systemName: "photo")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(M.text)
+                .frame(width: 40, height: 34)
+                .background(M.button)
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
+        }
+        .accessibilityLabel("贴图片")
     }
 
     // MARK: 紧凑行（始终可见）
@@ -261,6 +311,7 @@ struct TerminalKeyBar: View {
                 keyCap("alt", active: controller.altArmed)
             }
             .buttonStyle(MPressStyle())
+            if controller.acceptsImages { imageMenu }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {

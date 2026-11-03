@@ -26,7 +26,7 @@ nonisolated enum RemoteConstants {
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
     static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
-                                          RemoteFeature.closeSession]
+                                          RemoteFeature.closeSession, RemoteFeature.terminalImage]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，不去自己的主机列表里找。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -41,6 +41,8 @@ nonisolated enum RemoteFeature {
     static let localShell = "local-shell"
     /// 手机关标签时能连 Mac 上的终端一起关：认得 `closeSession`。
     static let closeSession = "close-session"
+    /// 能把手机的图片交给远控终端里的程序：认得 `terminalImage`。
+    static let terminalImage = "terminal-image"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -67,6 +69,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 关掉 Mac 上的一条会话（它所在的标签连同连接 / shell）（通道 0）。负载 = `RemoteCloseSessionRequest`
         ///（JSON）。手机关远控标签时选了「同时关闭 Mac 上的终端」才发；只发给 `features` 带 `close-session` 的 Mac。
         case closeSession = 8
+        /// 把一张图片交给接入的终端（终端通道）。负载 = `RemoteTerminalImageRequest`（二进制）。Mac 按会话的类型
+        /// 处理：本机 shell 放进剪贴板并按 Ctrl+V，SSH 会话传成服务器 `/tmp` 下的文件；回 `.terminalImageResult`。
+        /// 只发给 `features` 带 `terminal-image` 的 Mac。
+        case terminalImage = 9
         /// 开始看桌面（通道 0）。负载 = `RemoteDesktopStartRequest`（JSON）。只发给 `features` 带
         /// `desktop` 的 Mac。
         case desktopStart = 10
@@ -101,6 +107,8 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopCursor = 27
         /// 本机 shell 开好了（或没开成）。负载 = `RemoteOpenLocalShellResult`（JSON）。
         case localShellOpened = 28
+        /// 图片交好了（或没成）（通道 0）。负载 = `RemoteTerminalImageResult`（JSON）。
+        case terminalImageResult = 29
         /// 配对状态（只在通道 0）。负载 = `RemotePairingState` 的 rawValue（1 字节）。
         case pairing = 30
     }
@@ -240,6 +248,54 @@ nonisolated struct RemoteAttachRequest: Codable, Equatable, Sendable {
 
 nonisolated struct RemoteCloseSessionRequest: Codable, Equatable, Sendable {
     var sessionID: UUID
+}
+
+/// 手机 → Mac：`[16 字节请求 id][u8 格式][图片字节]`。整条要放进一帧，图片超了由手机先压。
+nonisolated struct RemoteTerminalImageRequest: Equatable, Sendable {
+    static let maxImageBytes = RemoteDesktopPaste.maxContentBytes
+
+    var requestID: UUID
+    var image: TerminalImage
+
+    func encoded() -> Data {
+        var writer = RemoteByteWriter(capacity: 17 + image.data.count)
+        withUnsafeBytes(of: requestID.uuid) { writer.bytes(Data($0)) }
+        writer.u8(image.format.rawValue)
+        writer.bytes(image.data)
+        return writer.data
+    }
+
+    init(requestID: UUID, image: TerminalImage) {
+        self.requestID = requestID
+        self.image = image
+    }
+
+    init(decoding payload: Data) throws {
+        guard payload.count > 17 else { throw RemoteProtocolError.malformedMessage }
+        let bytes = [UInt8](payload.prefix(16))
+        requestID = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+        guard let format = TerminalImage.Format(rawValue: payload[payload.startIndex + 16]) else {
+            throw RemoteProtocolError.malformedMessage
+        }
+        let data = Data(payload.dropFirst(17))
+        guard data.count <= Self.maxImageBytes else { throw RemoteProtocolError.malformedMessage }
+        image = TerminalImage(format: format, data: data)
+    }
+}
+
+nonisolated struct RemoteTerminalImageResult: Codable, Equatable, Sendable {
+    var requestID: UUID
+    /// 传成了文件时的路径（手机把它粘进终端）；放进剪贴板时 nil。
+    var path: String?
+    /// 失败原因（给人看的），成功时 nil。
+    var error: String?
+
+    init(requestID: UUID, path: String? = nil, error: String? = nil) {
+        self.requestID = requestID
+        self.path = path
+        self.error = error
+    }
 }
 
 nonisolated struct RemoteOpenLocalShellRequest: Codable, Equatable, Sendable {

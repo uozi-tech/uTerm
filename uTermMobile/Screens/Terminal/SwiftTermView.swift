@@ -9,6 +9,82 @@ final class MTerminalView: SwiftTerm.TerminalView {
     weak var controller: MobileTerminalController?
 
     override var canBecomeFirstResponder: Bool { controller?.canTakeKeyboard ?? false }
+
+    // MARK: 输入法：默认英文，用户切了就记住
+
+    /// 用户在这个终端里切到的输入法；nil = 还没切过，用英文。每个标签各记各的。
+    private var chosenInputMode: UITextInputMode?
+    private var observesInputMode = false
+
+    /// 系统在终端成为第一响应者时按它挑键盘。命令行默认要英文；用户用地球键切走（中文写提交说明、
+    /// 跟 Claude Code 说话）之后，回到这个终端还是用户选的那个。
+    override var textInputMode: UITextInputMode? {
+        chosenInputMode ?? Self.englishInputMode ?? super.textInputMode
+    }
+
+    private static var englishInputMode: UITextInputMode? {
+        UITextInputMode.activeInputModes.first { $0.primaryLanguage?.hasPrefix("en") == true }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became, !observesInputMode {
+            observesInputMode = true
+            NotificationCenter.default.addObserver(self, selector: #selector(inputModeDidChange),
+                                                   name: UITextInputMode.currentInputModeDidChangeNotification,
+                                                   object: nil)
+        }
+        return became
+    }
+
+    @objc private func inputModeDidChange() {
+        // 只记自己是第一响应者时的切换：别的标签抢到键盘时系统把键盘换成英文，那不是用户在这里选的。
+        guard isFirstResponder, let mode = super.textInputMode else { return }
+        chosenInputMode = mode
+    }
+
+    // MARK: 组字：光标处显示正在拼的字（SwiftTerm 补丁 #8 的钩子）
+
+    private lazy var markedLabel: UILabel = {
+        let label = UILabel()
+        label.isUserInteractionEnabled = false
+        label.isHidden = true
+        addSubview(label)
+        return label
+    }()
+
+    override func textInputDidChange() {
+        let marked = markedTextRange.flatMap { text(in: $0) } ?? ""
+        guard !marked.isEmpty, let caret = textInputCaretFrame else {
+            markedLabel.isHidden = true
+            return
+        }
+        markedLabel.attributedText = NSAttributedString(string: marked, attributes: [
+            .font: font,
+            .foregroundColor: nativeForegroundColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ])
+        markedLabel.backgroundColor = nativeBackgroundColor
+        markedLabel.sizeToFit()
+        var frame = markedLabel.frame
+        frame.size.height = max(frame.height, caret.height)
+        // 靠右放不下就往左挪，别画出屏。
+        frame.origin = CGPoint(x: max(0, min(caret.minX, bounds.width - frame.width)), y: caret.minY)
+        markedLabel.frame = frame
+        markedLabel.isHidden = false
+        bringSubviewToFront(markedLabel)
+    }
+
+    // MARK: 粘贴：剪贴板里只有图片时当贴图
+
+    override func paste(_ sender: Any?) {
+        let board = UIPasteboard.general
+        if !board.hasStrings, board.hasImages, let controller, controller.acceptsImages {
+            controller.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
+            return
+        }
+        super.paste(sender)
+    }
 }
 
 /// 把 SwiftTerm 的 iOS `TerminalView` 桥接进 SwiftUI。Coordinator 实现
@@ -52,10 +128,10 @@ struct SwiftTermView: UIViewRepresentable {
         tap.cancelsTouchesInView = false
         tap.delegate = context.coordinator
         view.addGestureRecognizer(tap)
-        // 终端强制英文 ASCII 键盘：避免跟随系统语言弹出中文等候选栏（命令输入应纯 ASCII）。
-        // 联想 / 自动更正 / 智能标点已由 SwiftTerm 默认关闭（autocorrection 等均为 .no）。
-        // 注：Agent（AI 模式）走独立的 SwiftUI 输入框，不受此限制。
-        view.keyboardType = .asciiCapable
+        // 普通键盘：用户能用地球键切到中文等输入法（`.asciiCapable` 只能在 ASCII 键盘间切）。
+        // 「默认英文」由 `MTerminalView.textInputMode` 负责。联想 / 自动更正 / 智能标点已由
+        // SwiftTerm 默认关闭（autocorrection 等均为 .no）。
+        view.keyboardType = .default
         // 去掉 SwiftTerm 自带的键盘附加栏（esc/ctrl/tab/F1/方向键……），它和我们自绘的
         // `TerminalKeyBar` 重复堆两层。置 nil 后键盘上方只留 `TerminalKeyBar` 一层。
         view.inputAccessoryView = nil

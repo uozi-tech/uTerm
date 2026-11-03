@@ -70,7 +70,9 @@ uTerm 侧入口：`TerminalTheme.applyColorScheme` 统一设
     `public var keyboardType: UIKeyboardType = .default`（默认不变，保持上游语义）。
 
 uTerm 侧入口：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `makeUIView`
-设 `view.keyboardType = .asciiCapable`。联想 / 自动更正 / 智能标点上游已默认关闭
+设 `view.keyboardType`。2026-11 起改回 `.default`：`.asciiCapable` 让地球键只能在 ASCII
+键盘之间切，用户切不到中文输入法；「默认英文」改由 `MTerminalView` 覆盖 `textInputMode`
+实现（见补丁 #8）。属性保持可写，不影响这条补丁本身。联想 / 自动更正 / 智能标点上游已默认关闭
 （`autocorrectionType` 等均为 `.no`）。Agent（AI 模式）走独立 SwiftUI 输入框，不受影响。
 
 ## 3. 手写 SwiftTermBuildInfo，替掉上游的 build tool plugin
@@ -188,6 +190,23 @@ VT420 的列操作即使没开左右边距模式（DECLRMM）也会读它——`
 
 uTerm 侧：`uTermTests/Features/Terminal/SwiftTermResizeMarginTests.swift`（撤掉补丁时 DECIC 用例必红）。
 上游若修了 `resize` 里的边距逻辑，或修了 DECIC 的优先级失误，重放前先跑这个测试再决定是否保留。
+
+## 8. iOS 输入法组字可见 + 候选框跟着光标
+
+上游 iOS 视图实现了 `UITextInput` 的 marked text（中文 / 日文输入法的组字），但**不画**它：
+拼音打到一半终端上什么也看不见；`caretRect(for:)` / `firstRect(for:)` 又恒返回整个 `bounds`，
+候选框与浮动光标落在视图左上角。
+
+涉及文件：
+
+- `Sources/SwiftTerm/iOS/iOSTerminalView.swift`：新增 `public var textInputCaretFrame: CGRect?`（光标格子，
+  光标没显示时 nil；上游已有的 `caretFrame` 在没光标时给 `.zero`，不好判断）与 `open func textInputDidChange()`（空实现的钩子）。
+- `Sources/SwiftTerm/iOS/iOSTextInput.swift`：`endTextInputEdit()` 末尾调 `textInputDidChange()`；
+  `caretRect` / `firstRect` 返回 `textInputCaretFrame ?? bounds`。
+
+uTerm 侧：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalView` 覆盖
+`textInputDidChange()`，在光标处叠一个标签显示组字中的文字；同一个类覆盖 `textInputMode`
+让键盘默认英文、用户切走后记住所选。上游若开始自己画 marked text，删掉这条补丁和 uTerm 侧的叠层。
 
 ## 升级记录
 

@@ -112,4 +112,36 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         a.close()
         XCTAssertFalse(views[0].isFirstResponder)
     }
+
+    /// 输入法：默认要英文键盘；拼音组字时光标处能看到正在拼的字，上屏后叠层收起、字发给终端。
+    func testDefaultsToEnglishAndShowsMarkedTextAtTheCursor() async throws {
+        let (c, h, relay) = try host()
+        let (a, _) = MobileFakeTerminal.controller(.idle)
+        let views = mount([a])
+        let view = views[0]
+        a.ownsKeyboard = true
+        a.start(profile: h, container: c, relay: relay)
+        let connected = await MobileFakeTerminal.waitUntilConnected(a)
+        XCTAssertTrue(connected)
+        a.focusKeyboard()
+
+        if UITextInputMode.activeInputModes.contains(where: { $0.primaryLanguage?.hasPrefix("en") == true }) {
+            XCTAssertEqual(view.textInputMode?.primaryLanguage?.hasPrefix("en"), true)
+        }
+
+        view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0))
+        let overlay = view.subviews.compactMap { $0 as? UILabel }.first { $0.text == "ni" }
+        let label = try XCTUnwrap(overlay, "组字中的文字应当显示在终端上")
+        XCTAssertFalse(label.isHidden)
+        if let caret = view.textInputCaretFrame {
+            XCTAssertEqual(label.frame.minY, caret.minY, accuracy: 0.5, "叠层贴着光标那一行")
+            XCTAssertEqual(view.caretRect(for: view.beginningOfDocument), caret, "候选框跟着光标，而不是整个视图")
+        }
+
+        view.setMarkedText("你", selectedRange: NSRange(location: 1, length: 0))
+        XCTAssertEqual(label.text, "你")
+        view.unmarkText()
+        XCTAssertTrue(label.isHidden, "上屏后叠层收起")
+        a.close()
+    }
 }

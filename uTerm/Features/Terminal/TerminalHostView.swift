@@ -137,11 +137,10 @@ final class TerminalContainerView: NSView {
         super.layout()
         guard let terminalView else { return }
         let insets = Self.terminalInsets
-        // 远控接管尺寸：终端按对端的行列数钉住，贴左上角；放不下的部分裁掉，不缩放。
+        // 远控接管尺寸：终端按对端的行列数钉住，不缩放，放不下的部分裁掉。
         if let pinned = (terminalView as? CopyableTerminalView)?.pinnedFrameSize {
             layer?.masksToBounds = true
-            terminalView.frame = NSRect(x: insets.left, y: bounds.height - insets.top - pinned.height,
-                                        width: pinned.width, height: pinned.height)
+            terminalView.frame = Self.pinnedFrame(pinned, in: bounds, insets: insets)
             return
         }
         layer?.masksToBounds = false
@@ -151,6 +150,14 @@ final class TerminalContainerView: NSView {
             width: max(0, bounds.width - insets.left - insets.right),
             height: max(0, bounds.height - insets.top - insets.bottom)
         )
+    }
+
+    /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时贴底边，裁掉的是最上面的旧行——
+    /// 提示符、光标和最新输出都在底部（手机竖屏的行数常比 Mac 窗格多，贴顶会把正在打字的那一行裁掉）。
+    static func pinnedFrame(_ pinned: NSSize, in bounds: NSRect, insets: NSEdgeInsets) -> NSRect {
+        let available = bounds.height - insets.top - insets.bottom
+        let y = pinned.height <= available ? bounds.height - insets.top - pinned.height : insets.bottom
+        return NSRect(x: insets.left, y: y, width: pinned.width, height: pinned.height)
     }
 
     override func mouseDown(with event: NSEvent) {

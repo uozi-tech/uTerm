@@ -138,6 +138,9 @@ final class RemoteHostConnection {
             let closed = server.registry.requestClose(sessionID: request.sessionID)
             AppLogger.info("远控：\(self.peerName) 关闭 Mac 上的会话 \(request.sessionID.uuidString.prefix(8))：\(closed ? "已关闭" : "没找到")",
                            category: RemoteLog.category)
+        case .terminalImage:
+            guard let request = try? RemoteTerminalImageRequest(decoding: message.payload) else { return }
+            deliverImage(request, channel: message.channel)
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             startDesktop(request)
@@ -147,7 +150,7 @@ final class RemoteHostConnection {
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
-             .localShellOpened:
+             .localShellOpened, .terminalImageResult:
             break
         }
     }
@@ -181,6 +184,29 @@ final class RemoteHostConnection {
         let device = peerName
         AppLogger.info("远控接入：\(device) → 会话 \(request.sessionID.uuidString.prefix(8))，\(request.cols)×\(request.rows)",
                        category: RemoteLog.category)
+    }
+
+    /// 手机送来一张图片，交给这个通道上的会话的后端（本机 shell 走剪贴板 + Ctrl+V，SSH 传成服务器上的文件），
+    /// 把结果回过去。路径由手机粘进终端：粘贴要看终端开没开 bracketed paste，手机端的终端知道。
+    private func deliverImage(_ request: RemoteTerminalImageRequest, channel: UInt32) {
+        let device = peerName
+        let backend = attachments[channel]?.session?.backend as? any TerminalImageReceiving
+        Task { [weak self] in
+            var reply = RemoteTerminalImageResult(requestID: request.requestID)
+            if let backend {
+                do {
+                    if case .file(let path) = try await backend.deliverImage(request.image) { reply.path = path }
+                } catch {
+                    reply.error = "图片没传过去：\(error.localizedDescription)"
+                }
+            } else {
+                reply.error = "这个终端不能接收图片"
+            }
+            AppLogger.info("远控：\(device) 贴图 \(request.image.data.count) 字节 → \(reply.error ?? reply.path ?? "剪贴板")",
+                           category: RemoteLog.category)
+            guard let self, !self.isClosed else { return }
+            self.link.send(RemoteMessage(.terminalImageResult, payload: RemoteJSON.encode(reply)))
+        }
     }
 
     /// 手机要一个本机 shell：交给 `localShellOpener`（开窗口、等会话登记），把会话 id 或失败原因回过去。

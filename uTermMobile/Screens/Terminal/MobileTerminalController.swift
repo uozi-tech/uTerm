@@ -266,6 +266,7 @@ final class MobileTerminalController {
     /// 接上一条刚造好的传输：输出泵、退出监听、有序的输入通道。
     private func install(_ conn: any TerminalBackend) {
         connection = conn
+        acceptsImages = conn is any TerminalImageReceiving
         let outStream = conn.outputStream
         let exitStream = conn.exitStream
         resetOutputPipeline()
@@ -303,6 +304,59 @@ final class MobileTerminalController {
 
     func write(_ data: Data) {
         inputContinuation?.yield(.data(data))
+    }
+
+    // MARK: - 图片
+
+    /// 后端能不能收图片：直连 SSH 传成服务器上的文件；远控 Mac 终端交给 Mac（本机 shell 走剪贴板 +
+    /// Ctrl+V，SSH 会话由 Mac 传文件）。测试的假传输不能。
+    private(set) var acceptsImages = false
+    /// 贴图的进度 / 结果（键盘条上方的提示），几秒后自己消失。
+    private(set) var imageNote: String?
+    @ObservationIgnored private var imageNoteTask: Task<Void, Never>?
+
+    /// 读一张图（剪贴板 / 相册）交给终端里的程序。传成文件时把路径粘进终端，后面带一个空格。
+    func sendImage(_ load: @escaping @MainActor () async throws -> TerminalImage) {
+        guard let receiver = connection as? any TerminalImageReceiving, state == .connected else { return }
+        showImageNote("正在发送图片…", sticky: true)
+        Task { [weak self] in
+            do {
+                let image = try await load()
+                let delivery = try await receiver.deliverImage(image)
+                guard let self else { return }
+                switch delivery {
+                case .clipboard:
+                    self.showImageNote("图片已放进 Mac 剪贴板，并按了 Ctrl+V")
+                case .file(let path):
+                    self.paste(path + " ")
+                    self.showImageNote("图片已传到 \(path)")
+                }
+            } catch {
+                self?.showImageNote(error.localizedDescription)
+            }
+        }
+    }
+
+    /// 像系统粘贴一样送一段文字：终端开了 bracketed paste 就包上起止标记（程序据此认出是粘贴，
+    /// 例如 Claude Code 把粘进来的图片路径当附件）。
+    func paste(_ text: String) {
+        let bracketed = terminalView?.getTerminal().bracketedPasteMode ?? false
+        var data = Data()
+        if bracketed { data.append(contentsOf: Array("\u{1b}[200~".utf8)) }
+        data.append(Data(text.utf8))
+        if bracketed { data.append(contentsOf: Array("\u{1b}[201~".utf8)) }
+        write(data)
+    }
+
+    private func showImageNote(_ note: String, sticky: Bool = false) {
+        imageNoteTask?.cancel()
+        imageNote = note
+        guard !sticky else { return }
+        imageNoteTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.imageNote = nil
+        }
     }
 
     func sendText(_ text: String) {

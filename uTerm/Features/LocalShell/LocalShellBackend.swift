@@ -7,7 +7,7 @@ import Foundation
 /// 读：fd 设成非阻塞，读源在自己的队列上把能读的一次读完再交给 `outputStream`。读到 0 或出错（shell 退出后
 /// 从端全部关闭，主端读返回 EIO）就是会话结束，`exitStream` 产出一个元素。
 /// 写：键盘字节很少，偶尔粘贴一大段；写满内核缓冲（EAGAIN）就 poll 等可写再继续，不丢字节。
-actor LocalShellBackend: TerminalBackend {
+actor LocalShellBackend: TerminalImageReceiving {
     nonisolated let outputStream: AsyncStream<Data>
     nonisolated let exitStream: AsyncStream<Void>
     private let outputContinuation: AsyncStream<Data>.Continuation
@@ -87,6 +87,15 @@ actor LocalShellBackend: TerminalBackend {
                 }
             }
         }
+    }
+
+    /// 本机 shell 里的程序就在这台 Mac 上：图片放进系统剪贴板，再替用户按一下 Ctrl+V
+    ///（Claude Code 等 CLI 在 Ctrl+V 时从剪贴板读图；不认得的程序最多收到一个 ^V）。
+    func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
+        guard handle != nil, !closed else { throw TerminalImageError.notConnected }
+        RemotePasteboard.write(image)
+        await write(Data([0x16]))
+        return .clipboard
     }
 
     func resize(cols: UInt16, rows: UInt16) async {

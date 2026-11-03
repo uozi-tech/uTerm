@@ -125,6 +125,8 @@ extension TerminalView: UITextInput {
     func endTextInputEdit() {
         inputDelegate?.textDidChange(self)
         inputDelegate?.selectionDidChange(self)
+        // uTerm 补丁 #8：组字（marked text）每变一次都通知子类，好在光标处画出正在拼的字。
+        textInputDidChange()
         uitiLog("endTextInputEdit \(textInputStateDescription())")
     }
 
@@ -360,12 +362,14 @@ extension TerminalView: UITextInput {
         return result
     }
             
+    // uTerm 补丁 #8：上游返回整个 bounds，输入法的候选框 / 浮动光标因此落在视图左上角。
+    // 改成终端光标所在的格子。
     public func firstRect(for range: UITextRange) -> CGRect {
-        return bounds
+        return textInputCaretFrame ?? bounds
     }
     
     public func caretRect(for position: UITextPosition) -> CGRect {
-        return bounds
+        return textInputCaretFrame ?? bounds
     }
     
     public func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {

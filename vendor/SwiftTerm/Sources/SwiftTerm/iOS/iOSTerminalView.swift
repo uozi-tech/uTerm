@@ -3052,6 +3052,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
     
+    /// uTerm 补丁 #8：终端光标的格子（本视图坐标）；光标没显示时 nil。
+    public var textInputCaretFrame: CGRect? {
+        guard let caretView, caretView.superview != nil else { return nil }
+        return caretView.frame
+    }
+
+    /// uTerm 补丁 #8：输入状态（组字中的文字、选区）变了。子类覆盖它来显示正在拼的字——
+    /// 上游不画 marked text，中文 / 日文输入法拼音时终端上什么也看不见。
+    /// 组字中的文字用 `markedTextRange` + `text(in:)` 取。
+    open func textInputDidChange() {}
+
     open func showCursor(source: Terminal) {
         guard let caretView else { return }
         if caretView.superview == nil {

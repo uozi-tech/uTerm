@@ -8,7 +8,7 @@ import Foundation
 ///   每次变化 Mac 都会调整 PTY 并重发一份快照。
 /// - 断线：在后端内部按退避重连并重新接入，快照到了屏幕自然对齐。控制器看到的是一条不断的流；
 ///   只有 Mac 明确结束了这个终端（关闭、被别的设备接管）才当作会话结束。
-actor RemoteTerminalBackend: TerminalBackend {
+actor RemoteTerminalBackend: TerminalImageReceiving {
     nonisolated let outputStream: AsyncStream<Data>
     nonisolated let exitStream: AsyncStream<Void>
     private let outputContinuation: AsyncStream<Data>.Continuation
@@ -52,6 +52,12 @@ actor RemoteTerminalBackend: TerminalBackend {
     func write(_ data: Data) {
         guard let attachment else { return }
         attachment.link.send(RemoteMessage(.input, channel: attachment.channel, payload: data))
+    }
+
+    /// 交给 Mac 处理（它知道这个终端是本机 shell 还是 SSH）。
+    func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
+        guard let attachment else { throw TerminalImageError.notConnected }
+        return try await client.sendTerminalImage(image, over: attachment)
     }
 
     func resize(cols: UInt16, rows: UInt16) {
