@@ -73,6 +73,39 @@ final class AgentComposerSupportTests: XCTestCase {
                      "已删除的 provider 选不中")
     }
 
+    func testDefaultModelSkipsNonChatModels() {
+        XCTAssertNil(AgentModelMenu.defaultModel(from: []))
+        XCTAssertEqual(AgentModelMenu.defaultModel(from: ["claude-opus-4-7", "claude-haiku-4-5"]), "claude-opus-4-7")
+        XCTAssertEqual(AgentModelMenu.defaultModel(from: [
+            "text-embedding-3-large", "tts-1", "whisper-1", "dall-e-3", "omni-moderation-latest", "gpt-5",
+        ]), "gpt-5")
+        XCTAssertEqual(AgentModelMenu.defaultModel(from: ["bge-reranker", "nomic-embed-text"]), "bge-reranker",
+                       "都不像能对话的就退回第一个")
+    }
+
+    func testFillMissingModelsOnlyTouchesUnselectedProvidersWithAList() async throws {
+        let suite = "AgentComposerSupportTests-fill-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let catalog = AgentModelCatalog(defaults: defaults, describe: { _ in "boom" })
+        let fresh = AIProvider(name: "fresh", kind: .openai, baseURL: "", model: "")
+        let chosen = AIProvider(name: "chosen", kind: .openai, baseURL: "", model: "gpt-4o")
+        let failing = AIProvider(name: "failing", kind: .openai, baseURL: "", model: "")
+        catalog.refresh([
+            .init(providerID: fresh.id, endpoint: "f") { ["text-embedding-3-small", "gpt-5"] },
+            .init(providerID: chosen.id, endpoint: "c") { ["gpt-5"] },
+            .init(providerID: failing.id, endpoint: "x") { throw URLError(.timedOut) },
+        ])
+        await catalog.waitUntilSettled()
+
+        let filled = AgentModelDirectory.fillMissingModels([fresh, chosen, failing], in: catalog)
+
+        XCTAssertEqual(filled, 1)
+        XCTAssertEqual(fresh.model, "gpt-5", "新服务列表一到就选上能对话的那个")
+        XCTAssertEqual(chosen.model, "gpt-4o", "已经选过的不动，哪怕不在列表里")
+        XCTAssertEqual(failing.model, "", "没拉到列表的不猜")
+    }
+
     // MARK: - 思考深度
 
     func testEffortChoiceFollowsModelSupportAndWritesPreference() throws {

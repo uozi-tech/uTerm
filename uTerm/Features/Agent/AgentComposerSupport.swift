@@ -78,6 +78,21 @@ enum AgentModelMenu {
         }
     }
 
+    /// 替还没选模型的服务挑一个：列表里第一个能对话的模型，都不像就退回第一个。
+    /// OpenAI 兼容端点的 `/v1/models` 常把 embedding / 语音 / 图像模型排在前面，
+    /// 直接取第一个会选到发不了对话请求的模型。
+    nonisolated static func defaultModel(from models: [String]) -> String? {
+        models.first { id in
+            let lower = id.lowercased()
+            return !nonChatMarkers.contains { lower.contains($0) }
+        } ?? models.first
+    }
+
+    nonisolated private static let nonChatMarkers = [
+        "embed", "tts", "whisper", "transcribe", "dall-e", "image", "audio",
+        "moderation", "rerank", "realtime", "search",
+    ]
+
     /// 「默认」+ 该模型支持的档位。
     static func effortOptions(_ support: AgentReasoningSupport) -> [AgentEffortOption] {
         [AgentEffortOption(value: nil, label: "默认")]

@@ -14,6 +14,21 @@ enum AgentModelDirectory {
         catalog.refresh(providers.map { source(for: $0, keychain: keychain) }, force: force)
     }
 
+    /// 还没选模型、而列表已经拉到的 provider：替它选上默认模型（`AgentModelMenu.defaultModel`）。
+    /// 新建的服务、从另一台设备同步过来还没选过模型的服务，都不必再去模型菜单里手选一次。
+    /// 返回选了几个。
+    @discardableResult
+    static func fillMissingModels(_ providers: [AIProvider], in catalog: AgentModelCatalog = catalog) -> Int {
+        var filled = 0
+        for provider in providers where provider.model.isEmpty {
+            guard let pick = AgentModelMenu.defaultModel(from: catalog.entry(for: provider.id)?.models ?? [])
+            else { continue }
+            provider.model = pick
+            filled += 1
+        }
+        return filled
+    }
+
     /// 只强制重拉这一个 provider（设置页换了 key / 测通了连接）。
     static func refreshOne(_ provider: AIProvider) {
         catalog.refresh([source(for: provider)], force: true)

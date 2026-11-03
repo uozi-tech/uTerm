@@ -137,9 +137,15 @@ struct MobileAgentChat: View {
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
+    /// 两枚图标装进同一个 17pt 方框、按图形边界居中。按字号排的话 SF Symbol 走文字基线，
+    /// `square.and.pencil` 的笔尖伸出右上角、字形框跟 `clock.arrow.circlepath` 不一样，
+    /// 两枚就一高一低。
     private func barIcon(_ symbol: String) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 15))
+            .resizable()
+            .scaledToFit()
+            .fontWeight(.regular)
+            .frame(width: 17, height: 17)
             .foregroundStyle(M.text2)
             .frame(width: M.minTarget, height: M.minTarget)
             .contentShape(Rectangle())
