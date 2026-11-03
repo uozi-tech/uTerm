@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
 
@@ -5,13 +6,17 @@ import Foundation
 ///
 /// 收到的消息从连接队列按先后顺序跳回主线程处理（`DispatchQueue.main` 是先进先出的，按键顺序
 /// 不会乱）。输出则反过来：镜像订阅者有新字节时，在连接队列上直接取、合并、加密、发送，
-/// 不经过主线程。
+/// 不经过主线程。桌面流的确认、输入、关键帧请求也不经主线程，在连接队列上直接交给发送端
+///（见 `RemoteDesktopRoute`）；只有开流 / 停流这种低频控制回主线程。
 @MainActor
 final class RemoteHostConnection {
     let id = UUID()
     private let link: RemoteLink
     private unowned let server: RemoteHostServer
     private let pump: RemoteOutputPump
+    private let desktopRoute: RemoteDesktopRoute
+    /// 当前的桌面流（同一连接最多一路）。
+    private var desktop: (channel: UInt32, streamer: RemoteDesktopStreamer)?
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -32,12 +37,15 @@ final class RemoteHostConnection {
         self.link = link
         self.server = server
         self.pump = RemoteOutputPump(link: link)
+        self.desktopRoute = RemoteDesktopRoute(queue: link.queue)
     }
 
     func start() {
         let pump = self.pump
+        let desktopRoute = self.desktopRoute
         link.setHandlers(
             onMessage: { [weak self] message in
+                if desktopRoute.handle(message) { return }
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.handle(message) } }
             },
             onClose: { [weak self] _ in
@@ -60,7 +68,8 @@ final class RemoteHostConnection {
             let ephemeral = Curve25519.KeyAgreement.PrivateKey()
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: server.localID,
                                     deviceName: server.localName, ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                    staticKey: staticKey.publicKey.rawRepresentation)
+                                    staticKey: staticKey.publicKey.rawRepresentation,
+                                    features: server.localFeatures.isEmpty ? nil : server.localFeatures)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral)
             let peer = established.peer
@@ -121,7 +130,15 @@ final class RemoteHostConnection {
             detach(channel: message.channel, notify: false)
         case .ping:
             link.send(RemoteMessage(.pong))
-        case .sessions, .attached, .output, .closed, .pong, .pairing:
+        case .desktopStart:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
+            startDesktop(request)
+        case .desktopStop:
+            stopDesktop(channel: message.channel, notify: false)
+        case .desktopAck, .desktopInput, .desktopKeyframe:
+            // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
+            break
+        case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor:
             break
         }
     }
@@ -193,7 +210,104 @@ final class RemoteHostConnection {
         for channel in Array(attachments.keys) {
             detach(channel: channel, notify: false)
         }
+        if let desktop {
+            stopDesktop(channel: desktop.channel, notify: false)
+        }
         server.connectionClosed(self)
+    }
+}
+
+// MARK: - 桌面
+
+extension RemoteHostConnection {
+    var desktopStats: RemoteDesktopStreamerStats? { desktop?.streamer.stats }
+
+    /// 开桌面流：查开关与授权 → 定视频尺寸 → 建发送端并开始采集 → 在连接队列上先回「开流成功」再推第一帧。
+    /// 被拒（没开开关、没屏幕录制授权、采集起不来）时回一条带 `failure` 的 `desktopStarted`，连接不断。
+    fileprivate func startDesktop(_ request: RemoteDesktopStartRequest) {
+        let channel = nextChannel
+        nextChannel &+= 1
+        let environment = server.desktopEnvironment
+        func reject(_ failure: RemoteDesktopInfo.Failure, _ message: String) {
+            link.send(RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(
+                RemoteDesktopInfo(requestID: request.requestID, failure: failure, message: message))))
+        }
+        guard environment.isEnabled() else {
+            return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 高级 › 远程控制 › 允许远程桌面")
+        }
+        guard environment.screenCaptureAuthorized() else {
+            return reject(.screenPermission,
+                          "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 高级 › 远程控制 里授权，并按提示重启 uTerm")
+        }
+        guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
+            return reject(.captureFailed, "找不到 Mac 的显示器")
+        }
+        let size = RemoteDesktopGeometry.streamSize(
+            displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
+            maxWidth: request.maxWidth, maxHeight: request.maxHeight)
+        let canControl = environment.canPostEvents()
+        if let current = desktop {
+            stopDesktop(channel: current.channel, notify: false)
+        }
+        let device = peerName
+        let streamer = RemoteDesktopStreamer(
+            link: link, channel: channel, codec: request.codec, width: size.width, height: size.height, display: display,
+            source: environment.makeSource(display, size.width, size.height),
+            injector: canControl ? environment.makeInjector(display) : nil,
+            cursorLocation: environment.cursorLocation,
+            onFirstInput: { [weak self] in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.server.desktopInputStarted(connection: self, channel: channel)
+                    }
+                }
+            },
+            onSourceStopped: { [weak self] error in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        AppLogger.info("远程桌面采集停止：\(error?.localizedDescription ?? "无错误")", category: RemoteLog.category)
+                        self?.stopDesktop(channel: channel, notify: true, reason: "Mac 上的屏幕采集已停止")
+                    }
+                }
+            })
+        desktop = (channel, streamer)
+        desktopRoute.set(streamer)
+        server.claimDesktop(connection: self, channel: channel, canControl: canControl)
+        let info = RemoteDesktopInfo(
+            requestID: request.requestID, displayID: display.id,
+            displayWidth: display.bounds.width, displayHeight: display.bounds.height,
+            streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
+            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 高级 › 远程控制 里授权后重启 uTerm 即可控制")
+        AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
+                       category: RemoteLog.category)
+        Task {
+            do {
+                try await streamer.start()
+            } catch {
+                guard desktop?.channel == channel else { return }
+                stopDesktop(channel: channel, notify: false)
+                reject(.captureFailed, "Mac 上的屏幕采集没能启动：\(error.localizedDescription)")
+                return
+            }
+            guard desktop?.channel == channel, !isClosed else {
+                streamer.stop()
+                return
+            }
+            streamer.activate(started: RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(info)))
+        }
+    }
+
+    /// 结束桌面流。`notify` = 告诉手机（Mac 上断开、被别的设备接管、采集停了）。
+    func stopDesktop(channel: UInt32, notify: Bool, reason: String = "") {
+        guard let current = desktop, current.channel == channel else { return }
+        desktop = nil
+        desktopRoute.set(nil)
+        current.streamer.stop()
+        server.releaseDesktop(connection: self, channel: channel)
+        if notify {
+            link.send(RemoteMessage(.closed, channel: channel, payload: Data(reason.utf8)))
+        }
     }
 }
 

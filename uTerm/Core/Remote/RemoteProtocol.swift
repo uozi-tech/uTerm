@@ -22,6 +22,15 @@ nonisolated enum RemoteConstants {
     static let pairingTimeout: Duration = .seconds(120)
     /// 快照里带多少行历史。
     static let snapshotScrollback = 1000
+    /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
+    /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
+    /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
+    static let localFeatures: [String] = [RemoteFeature.desktop]
+}
+
+nonisolated enum RemoteFeature {
+    /// 远程桌面（P2）：认得 `desktop*` 消息。
+    static let desktop = "desktop"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -41,6 +50,17 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case resize = 4
         case detach = 5
         case ping = 6
+        /// 开始看桌面（通道 0）。负载 = `RemoteDesktopStartRequest`（JSON）。只发给 `features` 带
+        /// `desktop` 的 Mac。
+        case desktopStart = 10
+        /// 结束桌面流（桌面通道）。
+        case desktopStop = 11
+        /// 鼠标 / 键盘输入（桌面通道）。负载 = `RemoteDesktopInput`（二进制）。
+        case desktopInput = 12
+        /// 一帧解码完毕的确认（桌面通道）。负载 = `RemoteDesktopAck`。Mac 靠它做端到端背压与码率控制。
+        case desktopAck = 13
+        /// 请求关键帧（桌面通道）：解码出错、重连、回到前台时。
+        case desktopKeyframe = 14
 
         // Mac → 手机
         /// 会话列表。负载 = `[RemoteSessionInfo]`（JSON）。
@@ -52,6 +72,13 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 该通道的会话结束（远端退出、窗格关闭、被别的设备接管）。负载 = UTF-8 原因。
         case closed = 23
         case pong = 24
+        /// 桌面流开始（或被拒）。通道 = 分配给这条桌面流的通道。负载 = `RemoteDesktopInfo`（JSON）。
+        /// 桌面流结束复用 `.closed`。
+        case desktopStarted = 25
+        /// 一帧视频。负载 = `RemoteDesktopFrame`（二进制）。
+        case desktopFrame = 26
+        /// Mac 上的光标位置（归一化）。负载 = `RemoteDesktopCursor`。
+        case desktopCursor = 27
         /// 配对状态（只在通道 0）。负载 = `RemotePairingState` 的 rawValue（1 字节）。
         case pairing = 30
     }
@@ -205,6 +232,12 @@ nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     var ephemeralKey: Data
     /// 设备的长期公钥（X25519 原始 32 字节）。
     var staticKey: Data
+    /// 可选能力（见 `RemoteFeature`）。P1 的版本不带这个键，解出来是 nil。
+    var features: [String]? = nil
+
+    func supports(_ feature: String) -> Bool {
+        features?.contains(feature) ?? false
+    }
 }
 
 /// 长度前缀分帧：`[u32 大端长度][帧内容]`。

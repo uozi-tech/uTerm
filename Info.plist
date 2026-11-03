@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uTerm 使用局域网在 Mac 与移动设备之间同步设置，并让配对过的手机远程控制这台 Mac 上的终端。</string>
+	<string>uTerm 使用局域网在 Mac 与移动设备之间同步设置，并让配对过的手机远程控制这台 Mac 上的终端和屏幕。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_uterm-sync._tcp</string>

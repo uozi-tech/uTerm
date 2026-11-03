@@ -55,6 +55,12 @@ struct MobileRootView: View {
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
         }
+        // 远程桌面：看 / 控制 Mac 的屏幕，全屏覆盖（横竖屏都可用）。
+        .fullScreenCover(item: $store.remoteDesktop) { req in
+            RemoteDesktopScreen(client: req.client) { store.remoteDesktop = nil }
+                .environment(\.mAccent, M.accent)
+                .tint(M.accent)
+        }
         // 连接中页：选定主机后、会话/文件浏览打开前的全屏中转页（防误触打断半开连接）。
         // 用 overlay（非 fullScreenCover）以便下面的主机密钥信任弹层仍能叠在其上。
         .overlay {

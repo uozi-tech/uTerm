@@ -40,6 +40,7 @@ struct uTermApp: App {
     @State private var remoteServer: RemoteHostServer
     /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
     private let remotePairingPrompt: RemotePairingPrompt?
+    private let remoteDesktopIndicator: RemoteDesktopIndicator?
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
@@ -112,10 +113,12 @@ struct uTermApp: App {
         _globalForwarding = State(initialValue: globalForwarding)
         _launchRelay = State(initialValue: launchRelay)
         let remoteSettings = RemoteControlSettings()
-        let remoteServer = RemoteHostServer(registry: terminalRegistry)
+        let remoteServer = RemoteHostServer(registry: terminalRegistry,
+                                            desktopEnvironment: .live(settings: remoteSettings))
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)
+        remoteDesktopIndicator = BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteDesktopIndicator(server: remoteServer)
 
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
@@ -139,6 +142,7 @@ struct uTermApp: App {
             )
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
+                if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
             }
             let server = controlServer
             NotificationCenter.default.addObserver(

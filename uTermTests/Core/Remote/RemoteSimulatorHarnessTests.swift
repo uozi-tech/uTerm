@@ -7,6 +7,8 @@ import XCTest
 /// `xcodebuild test-without-building` 传入时写成 `TEST_RUNNER_UTERM_HARNESS_SERVER_ID=…`。
 /// 在本机广播一个真实的远控服务，会话由假后端驱动、回显键盘输入，收到配对请求自动允许，
 /// 最多持续 3 分钟。模拟器里的 uTermMobile 在主机页「我的 Mac」里就能发现并接入它。
+/// 另设 `UTERM_HARNESS_DESKTOP=1` 时同时提供远程桌面：画面是合成的色块 + 细线（每秒换一张），
+/// 手机发来的输入打印在日志里（不注入真实系统）。
 @MainActor
 final class RemoteSimulatorHarnessTests: XCTestCase {
 
@@ -23,11 +25,15 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: UUID(), serverID: serverID, serverName: "联调主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh · 联调",
                                                connectedAt: Date()), session: session)
+        let desktop = environment["UTERM_HARNESS_DESKTOP"] == "1"
+        let fakeMac = FakeDesktopMac()
+        fakeMac.detail = true
         let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
                                       localName: "uTerm 联调 Mac", localID: UUID(),
                                       // 默认不广播：Debug 测试宿主通常没有「本地网络」权限（Bonjour 注册报 NoAuth）。
                                       // 模拟器用 `-RemoteDebugEndpoint 127.0.0.1:<端口>` 直连，端口见日志。
-                                      advertises: environment["UTERM_HARNESS_ADVERTISE"] == "1")
+                                      advertises: environment["UTERM_HARNESS_ADVERTISE"] == "1",
+                                      desktopEnvironment: desktop ? fakeMac.environment() : .disabled)
         server.start()
         defer { server.stop(); session.dispose() }
 
@@ -37,7 +43,20 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
         let deadline = Date().addingTimeInterval(seconds)
         var echoed = 0
         var lastStatus = ""
+        var reportedInputs = 0
+        var runningSource: SyntheticFrameSource?
         while Date() < deadline {
+            if desktop {
+                if let source = fakeMac.latestSource, source !== runningSource, source.isStarted {
+                    runningSource = source
+                    source.prepareCycle(count: 6)
+                    source.run(fps: 1)
+                    print("[联调] 桌面流开始：\(source.width)×\(source.height)")
+                }
+                let inputs = fakeMac.injector.all
+                for input in inputs.dropFirst(reportedInputs) { print("[联调] 桌面输入：\(input)") }
+                reportedInputs = inputs.count
+            }
             let status = "\(server.status) port=\(server.port.map(String.init) ?? "-") devices=\(server.connectedDevices)"
             if status != lastStatus {
                 print("[联调] 服务状态：\(status)")

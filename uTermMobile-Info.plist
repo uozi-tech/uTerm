@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uTerm 使用局域网发现 Mac，用于同步设置和远程控制 Mac 上的终端。</string>
+	<string>uTerm 使用局域网发现 Mac，用于同步设置，以及远程控制 Mac 上的终端和屏幕。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_uterm-sync._tcp</string>

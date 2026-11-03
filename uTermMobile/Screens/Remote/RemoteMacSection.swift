@@ -5,6 +5,7 @@ import SwiftUI
 struct RemoteMacSection: View {
     /// 可选：样式画廊、探针等直接渲染主机页的地方不注入它，那时整块不显示。
     @Environment(RemoteMacDirectory.self) private var injected: RemoteMacDirectory?
+    @Environment(MobileStore.self) private var store: MobileStore?
     @State private var selected: RemoteMacDirectory.Mac?
 
     var body: some View {
@@ -35,6 +36,14 @@ struct RemoteMacSection: View {
         }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
+            #if DEBUG
+            // 调试：启动参数 `-RemoteDebugOpenDesktop YES`（配合 `-RemoteDebugEndpoint`）直接打开第一台 Mac 的屏幕，
+            // 模拟器联调远程桌面时不用手点。
+            if UserDefaults.standard.bool(forKey: "RemoteDebugOpenDesktop"), let mac = directory.macs.first,
+               let store, store.remoteDesktop == nil {
+                store.remoteDesktop = MRemoteDesktopRequest(client: directory.client(for: mac))
+            }
+            #endif
         }
         .sheet(item: $selected, onDismiss: { directory.refreshPaired() }) { mac in
             RemoteMacSheet(client: directory.client(for: mac))
@@ -127,6 +136,16 @@ struct RemoteMacSheet: View {
     }
 
     @ViewBuilder private var sessions: some View {
+        MInsetGroup(header: "屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
+            if client.supportsDesktop {
+                MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
+                          chevron: true, last: true) {
+                    openDesktop()
+                }
+            } else {
+                MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "请更新 Mac 上的 uTerm", last: true)
+            }
+        }
         MInsetGroup(header: "Mac 上的终端",
                     footer: "接入后终端按这部手机的尺寸运行，Mac 上那个窗格会标出「正在接管」，断开后恢复。") {
             if client.sessions.isEmpty {
@@ -152,6 +171,15 @@ struct RemoteMacSheet: View {
         var parts = [session.serverName]
         if let controller = session.controlledBy { parts.append("\(controller) 正在接管") }
         return parts.joined(separator: " · ")
+    }
+
+    private func openDesktop() {
+        dismiss()
+        let client = self.client
+        // 同终端：等面板收起再盖全屏，避免两个转场叠在一起。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            store.remoteDesktop = MRemoteDesktopRequest(client: client)
+        }
     }
 
     private func open(_ session: RemoteSessionInfo) {

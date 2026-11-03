@@ -1,10 +1,11 @@
 import SwiftUI
 import UDesignKit
 
-/// 设置 · 高级 · 远程控制：开关、监听状态、已信任的设备（可撤销）。
+/// 设置 · 高级 · 远程控制：开关、监听状态、远程桌面（开关 + 两项系统授权）、已信任的设备（可撤销）。
 struct RemoteControlSettingsGroup: View {
     @Environment(RemoteControlSettings.self) private var settings
     @Environment(RemoteHostServer.self) private var server
+    @State private var permissions = RemoteDesktopPermissionState()
 
     var body: some View {
         SettingsGroup(title: "远程控制") {
@@ -23,6 +24,9 @@ struct RemoteControlSettingsGroup: View {
                     }
                 }
             }
+            if settings.isEnabled {
+                desktopRows
+            }
             if server.trustedPeers.isEmpty {
                 SettingsRow(label: "已配对的设备", hint: "还没有。在手机上打开 uTerm，主机页的「我的 Mac」里选这台 Mac 即可发起配对。") {
                     EmptyView()
@@ -36,6 +40,63 @@ struct RemoteControlSettingsGroup: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - 远程桌面
+
+    @ViewBuilder private var desktopRows: some View {
+        SettingsRow(label: "允许远程桌面",
+                    hint: "打开后，配对过的设备可以查看这台 Mac 的屏幕；有「辅助功能」授权时还能操作鼠标和键盘。有设备在看时，屏幕顶部会一直显示提示，可随时断开。") {
+            UDToggle(Binding(get: { settings.isDesktopEnabled }, set: { settings.isDesktopEnabled = $0 }))
+        }
+        if settings.isDesktopEnabled {
+            SettingsRow(label: "屏幕录制", hint: "看屏幕必需。macOS 会定期请你重新确认。") {
+                permissionControl(granted: permissions.screenCapture,
+                                  request: permissions.requestScreenCapture,
+                                  openSettings: RemoteDesktopPermissions.openScreenCaptureSettings)
+            }
+            SettingsRow(label: "控制鼠标和键盘（辅助功能）", hint: "没有这项授权时，手机只能查看，不能操作。") {
+                permissionControl(granted: permissions.postEvents,
+                                  request: permissions.requestPostEvents,
+                                  openSettings: RemoteDesktopPermissions.openAccessibilitySettings)
+            }
+            if !permissions.screenCapture || !permissions.postEvents {
+                SettingsRow(label: "授权后需重启 uTerm",
+                            hint: "在系统设置里打开开关后，macOS 要等 uTerm 重新启动才让授权生效。") {
+                    UDButton(title: "重新启动", style: permissions.requestedThisRun ? .primary : .secondary) {
+                        RemoteDesktopPermissions.relaunch()
+                    }
+                }
+            }
+            if let viewer = server.desktopViewer {
+                SettingsRow(label: viewer.isControlling ? "\(viewer.deviceName) 正在控制" : "\(viewer.deviceName) 正在查看",
+                            hint: viewer.canControl ? nil : "只能查看（没有辅助功能授权）") {
+                    UDButton(title: "断开", style: .danger) {
+                        server.endDesktop(reason: "已在 Mac 上断开")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func permissionControl(granted: Bool, request: @escaping () -> Void,
+                                   openSettings: @escaping () -> Void) -> some View {
+        if granted {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(UD.success)
+                Text("已授权").font(.system(size: 12.5)).foregroundStyle(UD.text)
+            }
+        } else {
+            HStack(spacing: 8) {
+                UDButton(title: "打开系统设置", style: .secondary, action: openSettings)
+                UDButton(title: "授权", style: .primary, action: request)
+            }
+            // 从系统设置切回来时刷新一次（在本进程里通常仍是未授权，要重启才生效，见 RemoteDesktopPermissions）。
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                permissions.refresh()
             }
         }
     }

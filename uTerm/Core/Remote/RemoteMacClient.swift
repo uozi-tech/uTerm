@@ -9,11 +9,16 @@ nonisolated final class RemoteChannelSink: @unchecked Sendable {
     /// `sessionEnded` = Mac 明确结束了这个终端（关闭 / 断开 / 被别的设备接管）；
     /// false = 只是连接断了，可以重连再接入。
     let onClosed: @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void
+    /// 桌面通道的视频帧与光标（`desktopFrame` / `desktopCursor`）原样交给它，连同它来自的那条连接
+    ///（接收端要在同一条连接上回确认，而这时开流的调用可能还没返回）。终端通道不用。
+    let onMessage: (@Sendable (RemoteMessage, RemoteLink) -> Void)?
 
     init(onOutput: @escaping @Sendable (Data) -> Void,
-         onClosed: @escaping @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void) {
+         onClosed: @escaping @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void,
+         onMessage: (@Sendable (RemoteMessage, RemoteLink) -> Void)? = nil) {
         self.onOutput = onOutput
         self.onClosed = onClosed
+        self.onMessage = onMessage
     }
 }
 
@@ -95,6 +100,11 @@ final class RemoteMacClient: Identifiable {
     private(set) var sessions: [RemoteSessionInfo] = []
     /// 握手后才知道的 Mac 设备 ID（「忘记这台 Mac」要用）。
     private(set) var macDeviceID: UUID?
+    /// 这台 Mac 报的可选能力（握手后才有；老版本 Mac 为空）。
+    private(set) var macFeatures: [String] = []
+
+    /// Mac 认不认桌面消息。老版本 Mac 收到桌面消息会当作未知消息断开整条连接，所以发之前必须先看这个。
+    var supportsDesktop: Bool { macFeatures.contains(RemoteFeature.desktop) }
 
     @ObservationIgnored private var endpoint: NWEndpoint
     @ObservationIgnored private let identity: RemoteIdentityStore
@@ -103,6 +113,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     @ObservationIgnored private var outcomeWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
+    @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
 
     /// - Parameters:
@@ -136,7 +147,10 @@ final class RemoteMacClient: Identifiable {
         self.link = link
         let table = self.table
         link.setHandlers(
-            onMessage: { [weak self] message in Self.route(message, table: table, client: self) },
+            onMessage: { [weak self, weak link] message in
+                guard let link else { return }
+                Self.route(message, link: link, table: table, client: self)
+            },
             onClose: { [weak self] error in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.linkClosed(link, error: error) } }
             }
@@ -147,7 +161,8 @@ final class RemoteMacClient: Identifiable {
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: RemoteLocalDevice.id(),
                                     deviceName: LANSyncCoordinator.localDeviceName(),
                                     ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                    staticKey: staticKey.publicKey.rawRepresentation)
+                                    staticKey: staticKey.publicKey.rawRepresentation,
+                                    features: RemoteConstants.localFeatures)
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral)
             // 配对过的 Mac 换了长期密钥：可能是冒充，也可能是重装过 uTerm。宁可拒绝，让用户手动忘记重配。
@@ -156,6 +171,7 @@ final class RemoteMacClient: Identifiable {
             }
             peer = established.peer
             macDeviceID = established.peer.deviceID
+            macFeatures = established.peer.features ?? []
             // 等 Mac 告诉我们配对结果（已信任 / 等审批 / 同意 / 拒绝）。核对码先备着，等审批时显示。
             pendingCode = established.verificationCode
             await withCheckedContinuation { continuation in
@@ -227,17 +243,27 @@ final class RemoteMacClient: Identifiable {
         resumeOutcome()
         for (_, waiter) in attachWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         attachWaiters.removeAll()
+        for (_, waiter) in desktopWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        desktopWaiters.removeAll()
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
     }
 
     // MARK: - 收消息
 
     /// 在连接队列上分发：终端字节直接交给通道的接收方；控制消息跳回主线程。
-    private nonisolated static func route(_ message: RemoteMessage, table: RemoteChannelTable,
+    private nonisolated static func route(_ message: RemoteMessage, link: RemoteLink, table: RemoteChannelTable,
                                           client: RemoteMacClient?) {
         switch message.kind {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
+        case .desktopFrame, .desktopCursor:
+            table.sink(message.channel)?.onMessage?(message, link)
+        case .desktopStarted:
+            // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。
+            if let info = try? RemoteJSON.decode(RemoteDesktopInfo.self, from: message.payload), info.failure == nil {
+                table.bind(sessionID: info.requestID, channel: message.channel)
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
         case .closed:
             table.remove(message.channel)?.onClosed(String(decoding: message.payload, as: UTF8.self), true)
         case .attached:
@@ -269,6 +295,11 @@ final class RemoteMacClient: Identifiable {
             } else {
                 waiter.resume(returning: message.channel)
             }
+        case .desktopStarted:
+            guard let info = try? RemoteJSON.decode(RemoteDesktopInfo.self, from: message.payload),
+                  let waiter = desktopWaiters.removeValue(forKey: info.requestID) else { return }
+            if info.failure != nil { table.cancel(sessionID: info.requestID) }
+            waiter.resume(returning: (message.channel, info))
         default:
             break
         }
@@ -296,5 +327,47 @@ final class RemoteMacClient: Identifiable {
     func detach(_ attachment: RemoteAttachment) {
         attachment.link.send(RemoteMessage(.detach, channel: attachment.channel))
         _ = table.remove(attachment.channel)
+    }
+}
+
+// MARK: - 桌面
+
+extension RemoteMacClient {
+    /// 开一条桌面流。返回 Mac 的回复：`info.failure != nil` 表示被拒（没开开关、没授权……），
+    /// 此时没有通道可用。成功后视频帧与光标经 `sink.onMessage` 在连接队列上流入（第一帧是关键帧）。
+    ///
+    /// 调用前应已确认 `supportsDesktop`；这里再挡一次，老 Mac 收到桌面消息会断开整条连接。
+    func startDesktop(_ request: RemoteDesktopStartRequest,
+                      sink: RemoteChannelSink) async throws -> (attachment: RemoteAttachment, info: RemoteDesktopInfo) {
+        await connect()
+        guard state == .connected, let link else {
+            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
+            throw RemoteProtocolError.closed
+        }
+        guard supportsDesktop else { throw RemoteDesktopError.macTooOld }
+        table.expect(sessionID: request.requestID, sink: sink)
+        let (channel, info) = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>) in
+            desktopWaiters.removeValue(forKey: request.requestID)?.resume(throwing: RemoteProtocolError.closed)
+            desktopWaiters[request.requestID] = continuation
+            link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(request)))
+        }
+        return (RemoteAttachment(link: link, channel: channel), info)
+    }
+
+    func stopDesktop(_ attachment: RemoteAttachment) {
+        attachment.link.send(RemoteMessage(.desktopStop, channel: attachment.channel))
+        _ = table.remove(attachment.channel)
+    }
+}
+
+nonisolated enum RemoteDesktopError: LocalizedError, Equatable {
+    /// Mac 上的 uTerm 是 P1 的版本，不认桌面消息。
+    case macTooOld
+
+    var errorDescription: String? {
+        switch self {
+        case .macTooOld: return "这台 Mac 上的 uTerm 版本太旧，不支持远程桌面。请把 Mac 上的 uTerm 更新到最新版"
+        }
     }
 }

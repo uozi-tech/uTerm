@@ -32,6 +32,12 @@ struct MOpenTarget: Equatable {
     let token = UUID()
 }
 
+/// 一次「看 Mac 屏幕」的请求（远程桌面，全屏覆盖呈现）。
+struct MRemoteDesktopRequest: Identifiable {
+    let id = UUID()
+    let client: RemoteMacClient
+}
+
 /// 全局 UI 状态（Pinia 等价物）。导航、当前标签、活动会话目标。
 /// `@Observable` —— SwiftUI 自动追踪读取依赖。
 @MainActor
@@ -56,6 +62,9 @@ final class MobileStore {
 
     /// 并行执行请求（命令详情「运行」发起）。根视图以全屏覆盖呈现（设计稿 `ParallelRun`）。
     var parallelRun: ParallelRunRequest?
+
+    /// 远程桌面（Mac 面板「屏幕」发起）。根视图以全屏覆盖呈现。
+    var remoteDesktop: MRemoteDesktopRequest?
 
     // MARK: - 连接中页（设计稿 m-connect `ConnectingCover`）
 

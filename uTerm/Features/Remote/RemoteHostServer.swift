@@ -41,10 +41,26 @@ final class RemoteHostServer {
     /// 监听端口（测试用：不广播时客户端直接连这个端口）。
     private(set) var port: UInt16?
 
+    /// 正在看（或控制）这台 Mac 屏幕的设备。同一时刻只有一路桌面流，后来的设备接管。
+    struct DesktopViewer: Equatable {
+        let connection: UUID
+        let channel: UInt32
+        let deviceName: String
+        let canControl: Bool
+        /// 收到过输入：从「查看」升级成「控制」（Mac 上的指示据此改字）。
+        var isControlling = false
+    }
+
+    private(set) var desktopViewer: DesktopViewer?
+    /// 远程桌面依赖的外部能力（采集、注入、授权、开关）。测试里换成合成的。
+    @ObservationIgnored var desktopEnvironment: RemoteDesktopEnvironment
+
     @ObservationIgnored let registry: TerminalSessionRegistry
     @ObservationIgnored let identity: RemoteIdentityStore
     @ObservationIgnored let localName: String
     @ObservationIgnored let localID: UUID
+    /// 握手时报给手机的可选能力。测试里传空数组，模拟 P1 版本的 Mac。
+    @ObservationIgnored let localFeatures: [String]
     @ObservationIgnored private let advertises: Bool
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
@@ -52,13 +68,18 @@ final class RemoteHostServer {
     /// 会话 → 正在接管它的连接与通道。
     @ObservationIgnored private var controllers: [UUID: (connection: UUID, channel: UInt32)] = [:]
     @ObservationIgnored private var activity: NSObjectProtocol?
+    @ObservationIgnored private var activityOptions: ProcessInfo.ActivityOptions = []
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(),
          localName: String = LANSyncCoordinator.localDeviceName(),
          localID: UUID = RemoteLocalDevice.id(),
-         advertises: Bool = true) {
+         advertises: Bool = true,
+         localFeatures: [String] = RemoteConstants.localFeatures,
+         desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
+        self.localFeatures = localFeatures
         self.registry = registry
+        self.desktopEnvironment = desktopEnvironment
         self.identity = identity
         self.localName = localName
         self.localID = localID
@@ -220,15 +241,68 @@ final class RemoteHostServer {
     }
 
     private func controllersChanged() {
-        // 有设备在接管终端时别让 Mac 闲置睡眠，不然手机那头会突然断掉。
-        if controllers.isEmpty, let activity {
+        updateActivity()
+        for connection in connections.values { connection.sendSessions() }
+    }
+
+    /// 有设备在接管终端时别让 Mac 闲置睡眠，不然手机那头会突然断掉；有人在看屏幕时连显示器也不让熄
+    ///（熄屏后 ScreenCaptureKit 不出帧，手机上就是一张冻住的画面）。
+    private func updateActivity() {
+        var options: ProcessInfo.ActivityOptions = []
+        if !controllers.isEmpty { options.insert(.idleSystemSleepDisabled) }
+        if desktopViewer != nil { options.formUnion([.idleSystemSleepDisabled, .idleDisplaySleepDisabled]) }
+        guard options != activityOptions else { return }
+        if let activity {
             ProcessInfo.processInfo.endActivity(activity)
             self.activity = nil
-        } else if !controllers.isEmpty, activity == nil {
-            activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled],
-                                                             reason: "手机正在远程控制终端")
         }
-        for connection in connections.values { connection.sendSessions() }
+        activityOptions = options
+        if !options.isEmpty {
+            activity = ProcessInfo.processInfo.beginActivity(
+                options: options, reason: desktopViewer != nil ? "手机正在远程查看屏幕" : "手机正在远程控制终端")
+        }
+    }
+
+    // MARK: - 桌面
+
+    /// 某个连接开了桌面流：之前在看的另一台设备收到「已被接管」并结束它的桌面流。
+    func claimDesktop(connection: RemoteHostConnection, channel: UInt32, canControl: Bool) {
+        if let previous = desktopViewer,
+           previous.connection != connection.id || previous.channel != channel,
+           let holder = connections[previous.connection] {
+            holder.stopDesktop(channel: previous.channel, notify: true, reason: "已被 \(connection.peerName) 接管")
+        }
+        desktopViewer = DesktopViewer(connection: connection.id, channel: channel, deviceName: connection.peerName,
+                                      canControl: canControl)
+        updateActivity()
+    }
+
+    func releaseDesktop(connection: RemoteHostConnection, channel: UInt32) {
+        guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel else { return }
+        desktopViewer = nil
+        updateActivity()
+    }
+
+    func desktopInputStarted(connection: RemoteHostConnection, channel: UInt32) {
+        guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel,
+              !viewer.isControlling else { return }
+        desktopViewer?.isControlling = true
+    }
+
+    /// 在 Mac 上结束桌面流（指示条上的「断开」、关掉开关）。
+    func endDesktop(reason: String) {
+        guard let viewer = desktopViewer, let holder = connections[viewer.connection] else {
+            desktopViewer = nil
+            updateActivity()
+            return
+        }
+        holder.stopDesktop(channel: viewer.channel, notify: true, reason: reason)
+    }
+
+    /// 当前桌面流的发送端读数（探针用）。
+    var desktopStats: RemoteDesktopStreamerStats? {
+        guard let viewer = desktopViewer else { return nil }
+        return connections[viewer.connection]?.desktopStats
     }
 
     private func observeRegistry() {
