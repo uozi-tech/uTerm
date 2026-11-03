@@ -16,6 +16,11 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     var statusBar: CGRect?
     /// 容器边距（屏幕圆角等）。iOS 27.1 以下为 0。
     var containerMargins = EdgeInsets()
+    #if DEBUG
+    /// 系统报告的全部遮挡区（未过滤、含非活动），只给布局诊断浮层看。
+    var rawOcclusion: [RawRegion] = []
+    struct RawRegion: Equatable, Sendable { var frame: CGRect; var active: Bool }
+    #endif
 
     /// 整块屏幕（全局坐标）。
     var screen: CGRect {
@@ -44,6 +49,10 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
                     return isRow || isColumn
                 }
             geometry.containerMargins = proxy.contentMargins(for: .container)
+            #if DEBUG
+            geometry.rawOcclusion = proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
+                .map { RawRegion(frame: $0.frame.offsetBy(dx: origin.x, dy: origin.y), active: $0.isActive) }
+            #endif
         }
         return geometry
     }

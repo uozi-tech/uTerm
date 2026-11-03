@@ -70,6 +70,9 @@ struct SettingsScreen: View {
                     historyGroup
                     LANSyncSettingsSection()
                     aboutGroup
+                    #if DEBUG
+                    debugGroup
+                    #endif
                     copyrightFooter
                 }
             }
@@ -242,6 +245,18 @@ struct SettingsScreen: View {
     }
 
     // 关于
+    #if DEBUG
+    @AppStorage(MLayoutDiagnostics.key) private var layoutDiagnostics = false
+
+    /// 仅 Debug 构建：布局诊断浮层开关（见 MLayoutDiagnostics）。
+    private var debugGroup: some View {
+        MInsetGroup(header: "调试", footer: "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。") {
+            MInsetRow(label: "布局诊断", last: true,
+                      trailing: AnyView(MSwitch(on: $layoutDiagnostics)))
+        }
+    }
+    #endif
+
     private var aboutGroup: some View {
         MInsetGroup(header: "关于") {
             MInsetRow(icon: "icloud", label: "同步诊断", sub: syncDiagSub,

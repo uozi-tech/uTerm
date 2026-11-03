@@ -25,6 +25,9 @@ struct MobileRootView: View {
             // 会话工作区：终端 / 文件标签与分屏，全屏盖住标签栏。常驻挂载（收起时移到屏外），
             // 这样会话、滚动位置与各格的视图状态都不随收起丢失；连接请求也随时有人消费。
             WorkspaceLayer()
+            #if DEBUG
+            MLayoutDiagnosticsOverlay()
+            #endif
         }
         .environment(store)
         .environment(hostKeyRelay)
