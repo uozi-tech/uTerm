@@ -16,7 +16,11 @@ import UniformTypeIdentifiers
 /// `UPaneGroups`）。
 struct TerminalArea: View {
     let workspace: WorkspaceModel
+    /// 新建标签 / 空态按钮默认连的主机。工作区窗口是它绑定的那台；终端窗口是活动标签那台。
     let server: ServerProfile
+    /// 标签条的「＋」是否能挑**别的**主机开新标签。终端窗口的标签可连不同主机；工作区窗口
+    /// 的 SFTP 侧栏 / 预览 / Agent 都绑在一台服务器上，保持只开同一台。
+    var allowsOtherHosts = false
 
     @Environment(\.colorScheme) private var appColorScheme
     @Query private var profiles: [ServerProfile]
@@ -105,20 +109,57 @@ struct TerminalArea: View {
 
     /// 标签条右侧的「＋新建终端」。⌘T 走 `uTermApp` 的 CommandGroup 单独注册
     /// （按在终端焦点区时也能触发），这里只是 UI 入口。
+    ///
+    /// `allowsOtherHosts` 时是带主操作的菜单：点一下照旧开同一台，按住（或点旁边的
+    /// 下拉）列出全部主机，挑哪台就在这个组里开哪台。
+    @ViewBuilder
     private func newTabButton(_ groupID: UUID) -> some View {
-        Button {
-            workspace.openServer(profileID: server.id, title: server.name, in: groupID)
-        } label: {
-            // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
-            // 26×26：与卡片风格标签条上的分屏按钮同尺寸。
-            Image(systemName: "plus")
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
+        if allowsOtherHosts {
+            Menu {
+                Section("在新标签中打开") {
+                    ForEach(hostChoices) { profile in
+                        Button(profile.name) {
+                            workspace.openServer(profileID: profile.id, title: profile.name, in: groupID)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+            } primaryAction: {
+                workspace.openServer(profileID: server.id, title: server.name, in: groupID)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .iconButtonHover(cornerRadius: 6)
+            .help("新建终端标签（⌘T）· 按住选择其他主机")
+            .accessibilityLabel(Text("新建终端标签"))
+        } else {
+            Button {
+                workspace.openServer(profileID: server.id, title: server.name, in: groupID)
+            } label: {
+                // 图标色不在这里设——交给 iconButtonHover 随 hover 切换。
+                // 26×26：与卡片风格标签条上的分屏按钮同尺寸。
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .iconButtonHover(cornerRadius: 6)
+            .help("新建终端标签（⌘T）")
+            .accessibilityLabel(Text("新建终端标签"))
         }
-        .buttonStyle(.plain)
-        .iconButtonHover(cornerRadius: 6)
-        .help("新建终端标签（⌘T）")
-        .accessibilityLabel(Text("新建终端标签"))
+    }
+
+    /// 「＋」菜单里能开终端的主机：去掉「仅 SFTP」，置顶在前，其余按名称。
+    private var hostChoices: [ServerProfile] {
+        profiles
+            .filter { !$0.sftpOnly }
+            .sorted { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
     }
 
     /// 空组占位。整棵树只剩一个组且它空掉时，这就是终端区的空态。

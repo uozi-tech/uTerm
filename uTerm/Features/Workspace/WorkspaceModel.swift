@@ -346,6 +346,12 @@ final class WorkspaceModel {
         terminalGroups.activeTab.flatMap { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
     }
 
+    /// 当前前台**终端**标签连的服务器（文件窗格不算，返回 nil）。终端窗口的标签可连不同
+    /// 主机，标题栏 / 端口转发 / Agent 按它跟随活动标签。
+    var focusedTerminalServerID: UUID? {
+        terminalGroups.activeTab.flatMap { $0.payload.fileBuffer == nil ? $0.payload.serverProfileID : nil }
+    }
+
     /// 把当前活动的终端标签同步给注册表（喂 `isKeyWindowFocused`）。
     /// 文件窗格不是终端会话，视作「本窗口没有终端在前台」。
     func syncFocusedTerminalSession() {

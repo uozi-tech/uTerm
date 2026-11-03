@@ -8,7 +8,9 @@ import AppKit
 /// 终端窗口内容区两态：纯终端窗格 ⇄ Agent 自然语言。
 enum TerminalWindowContentMode: Hashable { case terminal, agent }
 
-/// 一个独立「纯终端」窗口：绑定单台服务器（由 `TerminalWindowID` 指定）。
+/// 一个独立「纯终端」窗口。**不绑定单台服务器**：每个标签各连各的主机，「在终端中打开」
+/// 把主机作为新标签送进最近活跃的终端窗口（`TerminalWindowRouter`），不再一台主机一个窗口。
+/// 标题栏 / 端口转发 / Agent 都跟随**活动标签**的那台主机。
 ///
 /// 结构自上而下：标题栏（终端 ⇄ Agent 开关 / 主机 · 已连接 / 端口转发 · 断开）→
 /// 终端模式：会话标签栏 + 可拖拽分屏窗格树 + 状态栏；Agent 模式：自然语言交互层 +
@@ -27,6 +29,8 @@ struct TerminalWindowView: View {
     @State private var mode: TerminalWindowContentMode = .terminal
     @State private var didOpen = false
     @State private var palette = CommandPaletteModel()
+    /// 最近一次活动终端标签连的主机。标签全关掉（或前台不是终端）时标题栏 / ⌘T 回落到它。
+    @State private var lastServerID: UUID?
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.controlActiveState) private var controlActiveState
@@ -34,9 +38,14 @@ struct TerminalWindowView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(ForwardingCoordinator.self) private var forwarding
 
-    private var server: ServerProfile? {
-        guard let id = windowID?.serverID else { return nil }
-        return profiles.first { $0.id == id }
+    /// 标题栏 / 端口转发 / Agent / ⌘T 当前作用的主机：活动终端标签那台 → 最近一次活动的那台 →
+    /// 窗口首个标签那台 → 任意一台能开终端的主机（前几台都被删了也别让整窗变成空态）。
+    private var currentServer: ServerProfile? {
+        let candidates = [workspace.focusedTerminalServerID, lastServerID, windowID?.serverID]
+        for case let id? in candidates {
+            if let profile = profiles.first(where: { $0.id == id }) { return profile }
+        }
+        return profiles.first { !$0.sftpOnly }
     }
 
     private var safetyBinding: Binding<AgentSafety> {
@@ -46,8 +55,8 @@ struct TerminalWindowView: View {
 
     var body: some View {
         Group {
-            if windowID != nil, let server {
-                terminalBody(server: server)
+            if let windowID, let server = currentServer {
+                terminalBody(server: server, windowID: windowID)
             } else {
                 ContentUnavailableView(windowID == nil ? "正在恢复…" : "服务器已删除",
                                        systemImage: windowID == nil ? "clock" : "server.rack")
@@ -57,7 +66,7 @@ struct TerminalWindowView: View {
     }
 
     @ViewBuilder
-    private func terminalBody(server: ServerProfile) -> some View {
+    private func terminalBody(server: ServerProfile, windowID: TerminalWindowID) -> some View {
         let chromeTitle = ServerChromeTitle.serverTitle(serverName: server.name, groupName: server.group)
         VStack(spacing: 0) {
             TerminalWindowTitleBar(
@@ -75,7 +84,7 @@ struct TerminalWindowView: View {
             Group {
                 switch mode {
                 case .terminal:
-                    TerminalArea(workspace: workspace, server: server)
+                    TerminalArea(workspace: workspace, server: server, allowsOtherHosts: true)
                 case .agent:
                     TerminalAgentView(
                         model: workspace.assistantModel,
@@ -101,14 +110,24 @@ struct TerminalWindowView: View {
         // 把本窗口的终端会话接进跨窗口注册表（CLI 的 terminals / read / send）。
         .modifier(TerminalRegistryBinding(
             workspace: workspace,
-            windowID: windowID?.id ?? server.id,
+            windowID: windowID.id,
             windowKind: TerminalWindowKind.terminal))
+        // 登记成「在终端中打开」的落点：别处打开主机时作为新标签送进来。
+        .background(TerminalWindowRouterBinding(windowID: windowID.id) { serverID in
+            openTab(serverID: serverID)
+        })
+        .onChange(of: controlActiveState, initial: true) { _, state in
+            if state == .key { TerminalWindowRouter.shared.markActive(windowID: windowID.id) }
+        }
+        .onChange(of: workspace.focusedTerminalServerID) { _, id in
+            if let id { lastServerID = id }
+        }
         .task {
-            // 仅首次：开一个默认终端标签。窗格连接由 PaneView 自身的 .task 走
-            // 共享 modelContainer 自动建立（与工作区窗口同路径）。
+            // 仅首次：开窗口时带来的那台主机作为第一个标签。窗格连接由 PaneView 自身的
+            // .task 走共享 modelContainer 自动建立（与工作区窗口同路径）。
             guard !didOpen else { return }
             didOpen = true
-            workspace.openServer(profileID: server.id, title: server.name)
+            openTab(serverID: windowID.serverID)
         }
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 退化为纯文本对话。
@@ -136,6 +155,13 @@ struct TerminalWindowView: View {
             assistant: workspace.assistantModel,
             providers: providers,
             activeProviderIDString: activeProviderIDString))
+    }
+
+    /// 在活动组里开一个连 `serverID` 的新标签并切回终端模式。主机已被删除则忽略。
+    private func openTab(serverID: UUID) {
+        guard let profile = profiles.first(where: { $0.id == serverID }) else { return }
+        workspace.openServer(profileID: profile.id, title: profile.name)
+        mode = .terminal
     }
 
     /// ⌘W：终端模式按「关活动标签 → 最后一个标签关窗口」；Agent 模式关窗口。
@@ -184,7 +210,73 @@ struct TerminalWindowView: View {
                                title: "切换到 Agent 模式", detail: "用自然语言操作", hint: "", group: nil) {
                 mode = .agent
             },
-        ]
+        ] + hostCommandItems()
+    }
+
+    /// 命令面板里的主机：选中即在本窗口开一个连它的新标签。
+    @MainActor
+    private func hostCommandItems() -> [CommandPaletteItem] {
+        profiles
+            .filter { !$0.sftpOnly }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map { profile in
+                let id = profile.id
+                return CommandPaletteItem(
+                    id: "host.\(id.uuidString)", kind: .host,
+                    title: profile.name.isEmpty ? profile.host : profile.name,
+                    detail: profile.displayEndpoint,
+                    hint: "新标签", group: profile.group) {
+                        openTab(serverID: id)
+                    }
+            }
+    }
+}
+
+// MARK: - 路由登记
+
+/// 把终端窗口登记进 `TerminalWindowRouter`：视图挂上窗口时登记（带上 `NSWindow`，
+/// 好在送标签时把它带到前台），离开窗口时注销。
+private struct TerminalWindowRouterBinding: NSViewRepresentable {
+    let windowID: UUID
+    let openTab: @MainActor (UUID) -> Void
+
+    func makeNSView(context: Context) -> ProbeView {
+        ProbeView(windowID: windowID, openTab: openTab)
+    }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.openTab = openTab
+        nsView.registerIfNeeded()
+    }
+
+    final class ProbeView: NSView {
+        let windowID: UUID
+        var openTab: @MainActor (UUID) -> Void
+
+        init(windowID: UUID, openTab: @escaping @MainActor (UUID) -> Void) {
+            self.windowID = windowID
+            self.openTab = openTab
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                TerminalWindowRouter.shared.unregister(windowID: windowID)
+            } else {
+                registerIfNeeded()
+            }
+        }
+
+        /// 闭包每次 update 都可能换新（捕获的视图值变了），所以每次都重登一遍；
+        /// 路由按 id 覆盖，不会重复。
+        func registerIfNeeded() {
+            guard let window else { return }
+            TerminalWindowRouter.shared.register(windowID: windowID, window: window) { [weak self] serverID in
+                self?.openTab(serverID)
+            }
+        }
     }
 }
 

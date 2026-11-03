@@ -116,8 +116,10 @@ struct SFTPWindowView: View {
         openWindow(value: WorkspaceWindowID(serverID: server.id))
     }
 
-    /// 纯终端窗口（只有终端 ⇄ Agent，无 SFTP 侧栏 / 预览）；每次新开一个，同一服务器可开多个。
+    /// 终端窗口（只有终端 ⇄ Agent，无 SFTP 侧栏 / 预览）：有终端窗口就作为新标签送进去，
+    /// 没有才新开一个。
     private func openTerminal(for server: ServerProfile) {
+        if TerminalWindowRouter.shared.openInExistingWindow(serverID: server.id) { return }
         openWindow(value: TerminalWindowID(id: UUID(), serverID: server.id))
     }
 

@@ -39,7 +39,7 @@ struct ServerList: View {
 
     enum ContextAction: Equatable {
         case connect
-        case openTerminalWindow
+        case openWorkspace
         case openSFTP
         case togglePin
         case edit
@@ -214,11 +214,12 @@ struct ServerList: View {
         // keyboardShortcut 让菜单项右侧显示键位提示（↩ / ⌘↩ / ⌘E / ⌘⌫），与列表全局
         // 快捷键一致。菜单内容惰性构建，不会注册成常驻 key equivalent；⌘E/⌘⌫ 又被
         // WelcomeView 的本地监听抢先消费，故不存在重复触发。
-        // 「仅 SFTP」主机禁用终端会话，隐藏「连接」，仅保留 SFTP 浏览入口。
+        // 「仅 SFTP」主机禁用终端会话，隐藏终端 / 工作区入口，仅保留 SFTP 浏览。
+        // 「在终端中打开」= 作为新标签送进已有的终端窗口；完整工作区留作次级入口。
         if !profile.sftpOnly {
-            Button("连接") { onContextAction(.connect, profile) }
+            Button("在终端中打开") { onContextAction(.connect, profile) }
                 .keyboardShortcut(.return, modifiers: [])
-            Button("在终端窗口打开") { onContextAction(.openTerminalWindow, profile) }
+            Button("在工作区打开") { onContextAction(.openWorkspace, profile) }
         }
         // 普通主机 SFTP = ⌘↩；「仅 SFTP」主机 SFTP 是主操作 = ↩（对齐 HostDetailPanel）。
         Button("在 SFTP 中打开") { onContextAction(.openSFTP, profile) }

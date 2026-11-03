@@ -235,6 +235,7 @@
 				Features/Terminal/TerminalSettings.swift,
 				Features/Terminal/TerminalTheme.swift,
 				Features/Terminal/TerminalWindowID.swift,
+				Features/Terminal/TerminalWindowRouter.swift,
 				Features/Terminal/Views/TerminalAgentView.swift,
 				Features/Terminal/Views/TerminalWindowView.swift,
 				Features/Tweaks/MockServerFactory.swift,
