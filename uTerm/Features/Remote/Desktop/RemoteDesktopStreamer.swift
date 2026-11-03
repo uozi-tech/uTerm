@@ -23,6 +23,8 @@ nonisolated protocol RemoteDesktopFrameSource: AnyObject, Sendable {
 /// 输入落点：生产是 `CGEvent` 注入，测试是记录器。在连接队列上调用。
 nonisolated protocol RemoteDesktopInputSink: AnyObject, Sendable {
     func inject(_ input: RemoteDesktopInput)
+    /// 把手机发来的图片 / 文字放进 Mac 的剪贴板，再替用户按一下 ⌘V。
+    func paste(_ content: RemoteDesktopPaste)
 }
 
 /// 采集到的一帧，在来源队列、连接队列、编码器之间传递。
@@ -154,6 +156,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                 sawInput = true
                 onFirstInput()
             }
+        case .desktopPaste:
+            guard let content = try? RemoteDesktopPaste(decoding: message.payload), let injector else { return }
+            injector.paste(content)
         case .desktopKeyframe:
             forceKeyframe = true
             // 屏幕静止时不会有新帧来触发编码：把最后一帧重编成关键帧。
@@ -427,7 +432,7 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
     /// 在连接队列上调用。返回 true = 这是桌面流的消息，已处理（或已按通道不符丢弃）。
     func handle(_ message: RemoteMessage) -> Bool {
         switch message.kind {
-        case .desktopAck, .desktopInput, .desktopKeyframe:
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste:
             if let streamer, streamer.channel == message.channel { streamer.handle(message) }
             return true
         default:

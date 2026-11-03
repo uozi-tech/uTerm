@@ -22,6 +22,8 @@ nonisolated enum RemoteKeyMap {
         static let right: UInt16 = 0x7C
         static let down: UInt16 = 0x7D
         static let up: UInt16 = 0x7E
+        /// 粘贴（⌘V）用。
+        static let v: UInt16 = 0x09
         /// F1–F12。
         static let function: [UInt16] = [0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F]
     }

@@ -164,6 +164,15 @@ final class RemoteDesktopSession {
         attachment.link.send(RemoteMessage(.desktopInput, channel: attachment.channel, payload: input.encoded()))
     }
 
+    /// 能不能把手机上的图片 / 文字粘贴过去：有控制权，且 Mac 认得粘贴消息。
+    var canPaste: Bool { canControl && client.supportsDesktopPaste }
+
+    /// 把一张图片或一段文字粘贴进 Mac 当前的前台 app（Mac 写剪贴板后按 ⌘V）。
+    func paste(_ content: RemoteDesktopPaste) {
+        guard let attachment, canPaste else { return }
+        attachment.link.send(RemoteMessage(.desktopPaste, channel: attachment.channel, payload: content.encoded()))
+    }
+
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
     func requestKeyframe() {
         receiver.requestKeyframe(force: true)

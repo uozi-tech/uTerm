@@ -240,7 +240,9 @@ nonisolated enum RemoteDesktopGeometry {
 ///
 /// `zoom == 1` 是「适配屏幕」（整块显示器完整放进视图，留黑边）。`center` 是可见区域中心在显示器上的
 /// 归一化坐标。放大后拖不出显示器边界；某个方向内容比视图小时那个方向居中。
+/// 允许缩到适配以下（`minZoom`）：边缘落在圆角 / 开孔附近时，缩小一点才看得全、点得着。
 nonisolated struct RemoteDesktopViewport: Equatable {
+    static let minZoom: CGFloat = 0.5
     static let maxZoom: CGFloat = 8
 
     /// 显示器的点尺寸（只用纵横比与相对大小）。
@@ -286,7 +288,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     mutating func zoom(by factor: CGFloat, anchor: CGPoint) {
         guard factor.isFinite, factor > 0 else { return }
         let fixed = normalized(viewPoint: anchor)
-        zoom = min(Self.maxZoom, max(1, zoom * factor))
+        zoom = min(Self.maxZoom, max(Self.minZoom, zoom * factor))
         // 缩放后让 fixed 仍落在 anchor 下面。
         let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
         guard size.width > 0, size.height > 0 else { return }
@@ -296,7 +298,7 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     }
 
     mutating func setZoom(_ value: CGFloat) {
-        zoom = min(Self.maxZoom, max(1, value))
+        zoom = min(Self.maxZoom, max(Self.minZoom, value))
         clamp()
     }
 

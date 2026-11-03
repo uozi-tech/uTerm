@@ -90,6 +90,9 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
         self.keys = keys
         super.init(frame: .zero)
         backgroundColor = .black
+        // 放大后的画面不能盖到顶栏 / 键盘条上：由视图自己裁。SwiftUI 的 `.clipped()` 按安全区里的
+        // 布局框裁，会把左右忽略安全区后多出来的那条也裁掉。
+        clipsToBounds = true
         isMultipleTouchEnabled = true
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = UIColor.black.cgColor

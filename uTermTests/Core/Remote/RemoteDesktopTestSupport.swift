@@ -210,12 +210,18 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
 final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
     private let lock = NSLock()
     private var inputs: [RemoteDesktopInput] = []
+    private var pastes: [RemoteDesktopPaste] = []
 
     func inject(_ input: RemoteDesktopInput) {
         lock.lock(); inputs.append(input); lock.unlock()
     }
 
+    func paste(_ content: RemoteDesktopPaste) {
+        lock.lock(); pastes.append(content); lock.unlock()
+    }
+
     var all: [RemoteDesktopInput] { lock.lock(); defer { lock.unlock() }; return inputs }
+    var allPastes: [RemoteDesktopPaste] { lock.lock(); defer { lock.unlock() }; return pastes }
 }
 
 /// 一个可变的「Mac 环境」：开关与授权可在用例里随时改。

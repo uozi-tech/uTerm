@@ -98,11 +98,27 @@ final class RemoteDesktopProtocolTests: XCTestCase {
         XCTAssertEqual(RemoteMessage.Kind.desktopInput.rawValue, 12)
         XCTAssertEqual(RemoteMessage.Kind.desktopAck.rawValue, 13)
         XCTAssertEqual(RemoteMessage.Kind.desktopKeyframe.rawValue, 14)
+        XCTAssertEqual(RemoteMessage.Kind.desktopPaste.rawValue, 15)
         XCTAssertEqual(RemoteMessage.Kind.desktopStarted.rawValue, 25)
         XCTAssertEqual(RemoteMessage.Kind.desktopFrame.rawValue, 26)
         XCTAssertEqual(RemoteMessage.Kind.desktopCursor.rawValue, 27)
         XCTAssertEqual(RemoteVideoCodec(wireValue: RemoteVideoCodec.hevc.wireValue), .hevc)
         XCTAssertEqual(RemoteVideoCodec(wireValue: RemoteVideoCodec.h264.wireValue), .h264)
+    }
+
+    func test_paste_round_trips_and_rejects_empty_or_oversized() throws {
+        let image = Data(repeating: 0xAB, count: 300_000)
+        for content in [RemoteDesktopPaste.text("你好 hello"), .png(image), .jpeg(image)] {
+            XCTAssertEqual(try RemoteDesktopPaste(decoding: content.encoded()), content)
+        }
+        XCTAssertThrowsError(try RemoteDesktopPaste(decoding: Data([1])), "空文字")
+        XCTAssertThrowsError(try RemoteDesktopPaste(decoding: Data([9, 1, 2])), "未知类型")
+        let huge = RemoteDesktopPaste.png(Data(count: RemoteDesktopPaste.maxContentBytes + 1)).encoded()
+        XCTAssertThrowsError(try RemoteDesktopPaste(decoding: huge), "超过一帧能装的上限")
+        // 上限之内的整条消息（加密前）放得进一帧。
+        let largest = RemoteMessage(.desktopPaste, channel: 1,
+                                    payload: RemoteDesktopPaste.png(Data(count: RemoteDesktopPaste.maxContentBytes)).encoded())
+        XCTAssertLessThan(largest.encoded().count + 16, RemoteConstants.maxFrameBytes)
     }
 
     /// 能力字段不升协议版本：P1 的握手消息（没有 features）照样解得开，新消息给 P1 解也不出错。

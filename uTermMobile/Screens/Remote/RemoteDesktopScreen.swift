@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -14,28 +15,44 @@ struct RemoteDesktopScreen: View {
     @State private var keyboardVisible = false
     @State private var fitToken = 0
     @State private var showStats = false
+    @State private var pickingPhoto = false
+    @State private var pickedPhoto: PhotosPickerItem?
+    /// 粘贴的结果提示（「已粘贴到 Mac」/ 失败原因），几秒后自己消失。
+    @State private var pasteNote: String?
+    @State private var pasteNoteTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
     @Environment(\.mAccent) private var accent
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                Color.black.ignoresSafeArea()
-                if let session {
-                    RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
-                                        displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) })
-                        .ignoresSafeArea()
-                    overlay(session)
-                }
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
+            // 顶栏、画面、键盘条自上而下排在安全区里：顶栏不进摄像头开孔 / 圆角，「适配屏幕」把整块
+            // Mac 屏幕放在顶栏之下的可见区；软键盘弹起时安全区底边抬到键盘上方，画面跟着缩到键盘之上，
+            // 不被挡住。只有黑底铺满整屏。
+            VStack(spacing: 0) {
                 topBar
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+                ZStack {
+                    if let session {
+                        RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
+                                            displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) })
+                        overlay(session)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 左右不让安全区：有的机型（Duo 外屏竖握）把一侧摄像头算成整条安全区，画面让出去
+                // 就白白少两成宽度。开孔压住画面一角可以接受；顶栏与键盘条仍在安全区里。
+                .ignoresSafeArea(.container, edges: .horizontal)
+                .overlay(alignment: .top) { pasteToast }
                 if keyboardVisible, let session, session.canControl {
                     RemoteDesktopKeyBar(keys: keys) { session.send($0) }
                 }
+            }
+            .background(Color.black.ignoresSafeArea())
+            .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
+            .onChange(of: pickedPhoto) { _, item in
+                guard let item else { return }
+                pickedPhoto = nil
+                Task { await pastePhoto(item) }
             }
             .task {
                 guard session == nil else { return }
@@ -84,6 +101,19 @@ struct RemoteDesktopScreen: View {
             }
             .onTapGesture { showStats.toggle() }
             Spacer(minLength: 8)
+            if session?.canPaste == true {
+                Menu {
+                    Button { Task { await pasteClipboard() } } label: {
+                        Label("粘贴剪贴板内容", systemImage: "doc.on.clipboard")
+                    }
+                    Button { pickingPhoto = true } label: {
+                        Label("从相册选择图片…", systemImage: "photo")
+                    }
+                } label: {
+                    barIcon("doc.on.clipboard")
+                }
+                .accessibilityLabel("粘贴到 Mac")
+            }
             barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
                 .accessibilityLabel("适配屏幕")
             if session?.canControl == true {
@@ -95,7 +125,6 @@ struct RemoteDesktopScreen: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(.black.opacity(0.55))
     }
 
     private var statusLine: String {
@@ -116,15 +145,70 @@ struct RemoteDesktopScreen: View {
     }
 
     private func barButton(_ symbol: String, active: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(active ? accent : .white)
-                .frame(width: 36, height: 32)
-                .background(Color.white.opacity(active ? 0.18 : 0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+        Button(action: action) { barIcon(symbol, active: active) }
+            .buttonStyle(MPressStyle())
+    }
+
+    private func barIcon(_ symbol: String, active: Bool = false) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(active ? accent : .white)
+            .frame(width: 36, height: 32)
+            .background(Color.white.opacity(active ? 0.18 : 0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - 粘贴到 Mac
+
+    private func pasteClipboard() async {
+        do {
+            send(try await RemoteDesktopPasteSource.clipboard())
+        } catch {
+            showPasteNote(error.localizedDescription)
         }
-        .buttonStyle(MPressStyle())
+    }
+
+    private func pastePhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw RemoteDesktopPasteSource.Failure.unreadableImage
+            }
+            send(try await RemoteDesktopPasteSource.image(data: data))
+        } catch {
+            showPasteNote(error.localizedDescription)
+        }
+    }
+
+    private func send(_ content: RemoteDesktopPaste) {
+        guard let session, session.canPaste else { return }
+        session.paste(content)
+        switch content {
+        case .text: showPasteNote("已把文字粘贴到 Mac")
+        case .png, .jpeg: showPasteNote("已把图片粘贴到 Mac")
+        }
+    }
+
+    private func showPasteNote(_ note: String) {
+        pasteNoteTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { pasteNote = note }
+        pasteNoteTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) { pasteNote = nil }
+        }
+    }
+
+    @ViewBuilder private var pasteToast: some View {
+        if let pasteNote {
+            Text(pasteNote)
+                .font(M.sans(13, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().fill(.black.opacity(0.75)))
+                .padding(.top, 10)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
     }
 
     // MARK: - 状态遮罩

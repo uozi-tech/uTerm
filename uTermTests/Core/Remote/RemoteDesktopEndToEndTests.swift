@@ -142,6 +142,13 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         let injected = await waitUntil { mac.injector.all.count == inputs.count }
         XCTAssertTrue(injected)
         XCTAssertEqual(mac.injector.all, inputs)
+        // 粘贴：图片与文字原样到达 Mac 的落点（生产里写剪贴板再按 ⌘V）。
+        XCTAssertTrue(session.canPaste)
+        let pastes: [RemoteDesktopPaste] = [.png(Data(repeating: 7, count: 200_000)), .text("剪贴板里的字")]
+        for content in pastes { session.paste(content) }
+        let pasted = await waitUntil { mac.injector.allPastes.count == pastes.count }
+        XCTAssertTrue(pasted)
+        XCTAssertEqual(mac.injector.allPastes, pastes)
         let controlling = await waitUntil { server.desktopViewer?.isControlling == true }
         XCTAssertTrue(controlling, "收到输入后 Mac 上的指示改成「正在控制」")
 
@@ -289,6 +296,8 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         let shown = await waitUntil { !screen.frames.isEmpty }
         XCTAssertTrue(shown, "只能看也照样出画面")
         session.send(.move(x: 0.5, y: 0.5))
+        XCTAssertFalse(session.canPaste, "只能看时不给粘贴")
+        session.paste(.text("x"))
         session.stop()
         // 越过手机端的门禁直接发输入：Mac 没建注入器，同样落空。
         let (link, _, channel) = try await rawPhone(server)
@@ -296,8 +305,10 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertEqual(server.desktopViewer?.canControl, false)
         link.send(RemoteMessage(.desktopInput, channel: channel, payload: RemoteDesktopInput.move(x: 0, y: 0).encoded()))
         link.send(RemoteMessage(.desktopInput, channel: channel &+ 100, payload: RemoteDesktopInput.text("x").encoded()))
+        link.send(RemoteMessage(.desktopPaste, channel: channel, payload: RemoteDesktopPaste.text("x").encoded()))
         try? await Task.sleep(for: .milliseconds(150))
         XCTAssertTrue(mac.injector.all.isEmpty)
+        XCTAssertTrue(mac.injector.allPastes.isEmpty, "只能看时越过门禁硬发粘贴，Mac 也不写剪贴板")
     }
 
     func test_second_device_takes_over_the_desktop() async throws {

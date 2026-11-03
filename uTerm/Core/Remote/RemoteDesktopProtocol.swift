@@ -329,6 +329,55 @@ nonisolated enum RemoteDesktopInput: Equatable, Sendable {
     }
 }
 
+/// 手机 → Mac：把手机上的一张图片或一段文字粘贴进 Mac 当前的前台 app（`desktopPaste`）。
+/// Mac 写进系统剪贴板后替用户按一下 ⌘V，所以只在手机有控制权时生效。`[u8 类型][内容]`。
+///
+/// 整条消息要放进一帧（`RemoteConstants.maxFrameBytes` 4 MiB），内容上限留出余量；
+/// 图片超了由手机端先压（见 `RemoteDesktopPasteSource`），不在协议里分片。
+nonisolated enum RemoteDesktopPaste: Equatable, Sendable {
+    static let maxContentBytes = 3_800_000
+
+    case text(String)
+    case png(Data)
+    case jpeg(Data)
+
+    private enum Tag: UInt8 {
+        case text = 1, png = 2, jpeg = 3
+    }
+
+    func encoded() -> Data {
+        var writer = RemoteByteWriter(capacity: 1)
+        switch self {
+        case .text(let text):
+            writer.u8(Tag.text.rawValue)
+            writer.bytes(Data(text.utf8))
+        case .png(let data):
+            writer.u8(Tag.png.rawValue)
+            writer.bytes(data)
+        case .jpeg(let data):
+            writer.u8(Tag.jpeg.rawValue)
+            writer.bytes(data)
+        }
+        return writer.data
+    }
+
+    init(decoding payload: Data) throws {
+        var reader = RemoteByteReader(payload)
+        guard let tag = Tag(rawValue: try reader.u8()) else { throw RemoteProtocolError.malformedMessage }
+        let content = reader.rest()
+        guard !content.isEmpty, content.count <= Self.maxContentBytes else { throw RemoteProtocolError.malformedMessage }
+        switch tag {
+        case .text:
+            guard let text = String(data: content, encoding: .utf8) else { throw RemoteProtocolError.malformedMessage }
+            self = .text(text)
+        case .png:
+            self = .png(content)
+        case .jpeg:
+            self = .jpeg(content)
+        }
+    }
+}
+
 // MARK: - 字节读写
 
 /// 大端定长字段的拼装。

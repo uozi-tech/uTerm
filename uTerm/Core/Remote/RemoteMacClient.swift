@@ -105,6 +105,8 @@ final class RemoteMacClient: Identifiable {
 
     /// Mac 认不认桌面消息。老版本 Mac 收到桌面消息会当作未知消息断开整条连接，所以发之前必须先看这个。
     var supportsDesktop: Bool { macFeatures.contains(RemoteFeature.desktop) }
+    /// 远程桌面里能不能粘贴手机的图片 / 文字（老 Mac 收到 `desktopPaste` 会断开整条连接）。
+    var supportsDesktopPaste: Bool { macFeatures.contains(RemoteFeature.desktopPaste) }
 
     @ObservationIgnored private var endpoint: NWEndpoint
     @ObservationIgnored private let identity: RemoteIdentityStore

@@ -25,12 +25,14 @@ nonisolated enum RemoteConstants {
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
-    static let localFeatures: [String] = [RemoteFeature.desktop]
+    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste]
 }
 
 nonisolated enum RemoteFeature {
     /// 远程桌面（P2）：认得 `desktop*` 消息。
     static let desktop = "desktop"
+    /// 远程桌面里粘贴手机的图片 / 文字：认得 `desktopPaste`。
+    static let desktopPaste = "desktop-paste"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -61,6 +63,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopAck = 13
         /// 请求关键帧（桌面通道）：解码出错、重连、回到前台时。
         case desktopKeyframe = 14
+        /// 把手机上的图片 / 文字粘贴到 Mac（桌面通道）。负载 = `RemoteDesktopPaste`（二进制）。
+        /// 只发给 `features` 带 `desktop-paste` 的 Mac。
+        case desktopPaste = 15
 
         // Mac → 手机
         /// 会话列表。负载 = `[RemoteSessionInfo]`（JSON）。

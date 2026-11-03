@@ -202,8 +202,12 @@ final class RemoteDesktopFlowTests: XCTestCase {
         viewport.zoom(by: 100, anchor: anchor)
         XCTAssertEqual(viewport.zoom, RemoteDesktopViewport.maxZoom)
         viewport.zoom(by: 0.0001, anchor: anchor)
-        XCTAssertEqual(viewport.zoom, 1)
+        XCTAssertEqual(viewport.zoom, RemoteDesktopViewport.minZoom)
+        // 缩到适配以下：两个方向都比视图小，居中。
         XCTAssertEqual(viewport.center, CGPoint(x: 0.5, y: 0.5))
+        XCTAssertEqual(viewport.contentFrame.midX, viewport.viewSize.width / 2, accuracy: 1e-6)
+        XCTAssertEqual(viewport.contentFrame.midY, viewport.viewSize.height / 2, accuracy: 1e-6)
+        XCTAssertLessThan(viewport.contentFrame.width, viewport.viewSize.width)
     }
 
     func test_viewport_follows_pointer_when_zoomed() {

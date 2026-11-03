@@ -135,7 +135,7 @@ final class RemoteHostConnection {
             startDesktop(request)
         case .desktopStop:
             stopDesktop(channel: message.channel, notify: false)
-        case .desktopAck, .desktopInput, .desktopKeyframe:
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor:

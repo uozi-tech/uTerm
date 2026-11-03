@@ -1,5 +1,7 @@
+import AppKit
 import CoreGraphics
 import Foundation
+import UniformTypeIdentifiers
 
 /// 把手机的输入合成成 `CGEvent` 投进系统（调研 §3.6 / §3.7）。
 ///
@@ -54,6 +56,24 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
             post(event)
         case .text(let text):
             typeText(text)
+        }
+    }
+
+    /// 写剪贴板再按 ⌘V。图片按原始格式放（PNG / JPEG 各自的 UTI），收图的 app 自己挑能读的；
+    /// 不转 TIFF——几 MB 的截图转一次要上百毫秒，而这里是连接队列。
+    func paste(_ content: RemoteDesktopPaste) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        switch content {
+        case .text(let text):
+            pasteboard.setString(text, forType: .string)
+        case .png(let data):
+            pasteboard.setData(data, forType: .png)
+        case .jpeg(let data):
+            pasteboard.setData(data, forType: NSPasteboard.PasteboardType(UTType.jpeg.identifier))
+        }
+        for down in [true, false] {
+            inject(.key(code: RemoteKeyMap.Key.v, down: down, modifiers: .command))
         }
     }
 
