@@ -50,6 +50,7 @@ struct MobileApp: App {
         // Pull shared scalar preferences before the first scene body is evaluated.
         preferences.start()
         StartupMaintenance.run(container: modelContainer)
+        LaunchTiming.initFinished()
     }
 
     private var appearance: AppearancePreference {
@@ -97,6 +98,8 @@ private struct MobileLaunchRoot: View {
         .mobileAppLockGate(lock)
         // 量状态栏 / 屏幕圆角的实际位置，下发给整棵树（含应用锁、全屏覆盖层）。见 MChromeGeometry。
         .mMeasuresChrome()
+        // 挂在最外层：开了应用锁时首屏是锁屏，同样算数，不把验证耗时混进启动时间。
+        .onAppear { LaunchTiming.firstScreenAppeared() }
     }
 }
 
