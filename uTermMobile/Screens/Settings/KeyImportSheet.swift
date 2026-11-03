@@ -85,7 +85,7 @@ struct KeyImportSheet: View {
                          disabled: !canImport, action: runImport)
                         .padding(.top, 4)
                 }
-                .padding(20)
+                .padding(.horizontal, MSheetMetrics.screenInset).padding(.vertical, 20)
                 .mReadableColumn()
             }
             .scrollDismissesKeyboard(.interactively)

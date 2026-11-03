@@ -39,11 +39,13 @@ struct MAgentComposer: View {
         .sheet(isPresented: $pickingModel) {
             MModelPickerSheet(model: model, activeProviderIDString: $activeProviderIDString,
                               onManageProviders: onManageProviders)
+                .mSheetContentMargins(.form)
         }
     }
 
     private var card: some View {
-        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        // 与右下角 34pt 圆形发送钮同心：钮距卡片右 / 下边各 8pt。
+        let shape = RoundedRectangle(cornerRadius: MRadius.concentric(34 / 2, inset: 8), style: .continuous)
         return VStack(alignment: .leading, spacing: 2) {
             TextField(model.composerPlaceholder(placeholder), text: $model.input, axis: .vertical)
                 .font(M.sans(16)).foregroundStyle(M.text)

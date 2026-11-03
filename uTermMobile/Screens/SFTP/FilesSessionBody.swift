@@ -78,6 +78,7 @@ struct FilesSessionBody: View {
                     actionEntry = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pendingDelete = target }
                 })
+            .mSheetContentMargins()
         }
         .sheet(item: $shareItem) { item in ShareSheet(items: [item.url]) }
         .alert("重命名", isPresented: Binding(get: { renameEntry != nil }, set: { if !$0 { renameEntry = nil } })) {

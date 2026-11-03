@@ -58,9 +58,9 @@ struct MCodeField: View {
             .font(M.mono(24, weight: .semibold))
             .foregroundStyle(M.text)
             .frame(width: 44, height: 54)
-            .background(M.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(M.card, in: RoundedRectangle(cornerRadius: MRadius.lg, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: MRadius.lg, style: .continuous)
                     .strokeBorder(isCurrent ? accent : M.divider, lineWidth: isCurrent ? 2 : 1)
             }
             .animation(.easeOut(duration: 0.12), value: isCurrent)

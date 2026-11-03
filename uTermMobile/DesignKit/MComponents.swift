@@ -31,8 +31,8 @@ struct MBtn: View {
             .padding(.horizontal, 18)
             .foregroundStyle(fg)
             .background(bg)
-            .overlay(RoundedRectangle(cornerRadius: 13).stroke(stroke, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 13))
+            .overlay(RoundedRectangle(cornerRadius: MRadius.lg).stroke(stroke, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
             .opacity(disabled ? 0.45 : 1)
         }
         .buttonStyle(MPressStyle())
@@ -166,8 +166,8 @@ struct MInput: View {
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
         .background(M.inputBg)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: MRadius.lg).stroke(focused ? accent : .clear, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
     }
 
     /// 掩码 ⇄ 明文。`SecureField` 与 `TextField` 是两个不同的 UIKit 视图，换一个必然丢焦点
@@ -217,14 +217,16 @@ struct MTextArea: View {
                 .font(M.mono(14))
                 .foregroundStyle(M.text)
                 .scrollContentBackground(.hidden)
+                // 弹窗根上的 `mSheetContentMargins` 会一路传进来；文本框内边距自己管，不吃那份
+                .contentMargins(.horizontal, 0, for: .scrollContent)
                 .padding(.horizontal, 9).padding(.vertical, 5)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
         }
         .frame(minHeight: minHeight, alignment: .topLeading)
         .background(M.inputBg)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: MRadius.lg).stroke(focused ? accent : .clear, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
     }
 }
 
@@ -319,7 +321,7 @@ struct MChip: View {
         .padding(.horizontal, 8).padding(.vertical, 2.5)
         // 中性 chip 用 fillSoft：常嵌在 fillFaint 卡片里，深一档才成形
         .background(tone == .accent ? accent.opacity(0.12) : UD.fillSoft)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.xs))
     }
     private var fg: Color { tone == .accent ? accent : M.text3 }
 }
@@ -347,7 +349,7 @@ struct MInsetGroup<Content: View>: View {
                 if lazy { LazyVStack(spacing: 0) { content } } else { VStack(spacing: 0) { content } }
             }
                 .background(M.card)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                 .padding(.horizontal, 16)
             if let footer {
                 Text(footer)
@@ -392,7 +394,8 @@ struct MInsetRow: View {
                 MIcon(name: icon, size: 16, color: c)
                     .frame(width: 30, height: 30)
                     .background(c.opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    // 与 `MInsetGroup` 卡片同心：50pt 行高里 30pt 图标上下各距卡片边 10pt
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.list, inset: 10)))
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(M.sans(15, weight: .medium))
@@ -485,14 +488,15 @@ struct MCopyField: View {
                     .foregroundStyle(done ? M.success : M.text3)
                     .padding(.horizontal, 10).frame(height: 26)
                     .background(M.panel)
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(M.border, lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: MRadius.xs).stroke(M.border, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.xs))
             }
             .buttonStyle(MPressStyle())
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(M.fillFaint)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        // 与「复制」钮同心（钮距上下边 10pt）
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.xs, inset: 10)))
     }
 }
 
@@ -512,7 +516,7 @@ struct MSegmented<T: Hashable>: View {
                     .foregroundStyle(active ? accent : M.text2)
                     .frame(maxWidth: .infinity).frame(height: 30)
                     .background(active ? accent.opacity(0.14) : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
                     .contentShape(Rectangle())
                     .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selection = item.value } }
                     .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
@@ -520,7 +524,7 @@ struct MSegmented<T: Hashable>: View {
         }
         .padding(2)
         .background(M.inputBg)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 2)))
     }
 }
 
@@ -544,8 +548,8 @@ struct MSearchField: View {
         }
         .padding(.horizontal, 12).frame(height: 38)
         .background(M.inputBg)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? accent : .clear, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: MRadius.md).stroke(focused ? accent : .clear, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
     }
 }
 

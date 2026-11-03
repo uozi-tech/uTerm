@@ -68,10 +68,10 @@ struct KeysScreen: View {
                 .accessibilityLabel("添加密钥")
             }
         }
-        .sheet(isPresented: $generating) { KeyGenSheet() }
-        .sheet(isPresented: $importing) { KeyImportSheet() }
+        .sheet(isPresented: $generating) { KeyGenSheet().mSheetContentMargins() }
+        .sheet(isPresented: $importing) { KeyImportSheet().mSheetContentMargins() }
         .sheet(item: $detail) { key in
-            KeyDetailSheet(key: key).presentationDragIndicator(.visible)
+            KeyDetailSheet(key: key).presentationDragIndicator(.visible).mSheetContentMargins()
         }
     }
 
@@ -95,6 +95,8 @@ struct KeyDetailSheet: View {
     @State private var pendingDelete = false
 
     private var usedBy: [ServerProfile] { hosts.filter { $0.keyID == key.id } }
+    /// 危险区卡片：`MBtn` 的 `lg` 圆角 + 卡片内边距 14pt。
+    private let dangerRadius = MRadius.concentric(MRadius.lg, inset: 14)
 
     var body: some View {
         NavigationStack {
@@ -122,7 +124,7 @@ struct KeyDetailSheet: View {
                         if usedBy.isEmpty {
                             Text("暂未被任何主机使用").font(M.sans(12.5)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 16)
-                                .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                                .overlay(RoundedRectangle(cornerRadius: MRadius.list).stroke(M.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
                                 .padding(.horizontal, 16)
                         } else {
                             FlowChipsView(items: usedBy.map(\.name)).padding(.horizontal, 16)
@@ -138,8 +140,9 @@ struct KeyDetailSheet: View {
                     }
                     .padding(14).frame(maxWidth: .infinity, alignment: .leading)
                     .background(M.danger.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(M.danger.opacity(0.22), lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    // 与左下角「删除密钥」钮同心：钮距卡片边 14pt
+                    .overlay(RoundedRectangle(cornerRadius: dangerRadius).stroke(M.danger.opacity(0.22), lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: dangerRadius))
                     .padding(.horizontal, 16)
                 }
                 .padding(.vertical, 12)

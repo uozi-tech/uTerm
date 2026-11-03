@@ -69,7 +69,7 @@ struct HostSheet: View {
             }
             .frame(maxWidth: .infinity).frame(height: 56)
             .background(M.fillFaint)
-            .clipShape(RoundedRectangle(cornerRadius: 13))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
         }.buttonStyle(MPressStyle())
     }
 }

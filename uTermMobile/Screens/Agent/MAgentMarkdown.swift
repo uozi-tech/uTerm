@@ -190,7 +190,7 @@ private struct MMDBlockView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).stroke(M.border, lineWidth: 0.5))
+        .background(RoundedRectangle(cornerRadius: MRadius.xs).stroke(M.border, lineWidth: 0.5))
     }
 }
 
@@ -258,7 +258,7 @@ struct MChatCodeBlock: View {
     @State private var copied = false
 
     private var trimmed: String { code.trimmingCharacters(in: .newlines) }
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 10, style: .continuous) }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: MRadius.md, style: .continuous) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

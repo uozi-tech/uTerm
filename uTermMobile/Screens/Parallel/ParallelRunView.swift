@@ -148,13 +148,13 @@ struct ParallelRunView: View {
                     }
                     .frame(maxWidth: .infinity).frame(height: 32)
                     .background(on ? c2 : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
                     .contentShape(Rectangle())   // 整段可点（含透明区），不必点到文字
                 }.buttonStyle(MPressStyle())
             }
         }
         .padding(3).background(M.inputBg)
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 3)))
         .padding(.horizontal, 16).padding(.top, 10)
     }
 
@@ -170,8 +170,8 @@ struct ParallelRunView: View {
             }
             .padding(.horizontal, 11).padding(.vertical, 9)
             .background(M.cmdSurface)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(M.border, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: MRadius.md).stroke(M.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
 
             HStack(spacing: 12) {
                 GeometryReader { geo in
@@ -228,7 +228,7 @@ struct ParallelRunView: View {
                         }
                         .padding(13)
                         .background(M.aiAccent.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 13))
+                        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                     }
                 }
                 if !c.allDone {
@@ -263,7 +263,7 @@ struct ParallelRunView: View {
         MIcon(name: "spark", size: 15, color: M.aiAccent)
             .frame(width: 30, height: 30)
             .background(M.aiAccent.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
     }
 }
 
@@ -406,7 +406,8 @@ struct ParAILane: View {
                             }
                             .padding(.horizontal, 9).frame(height: 28)
                             .background(M.fillMed)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            // 收起时它是卡片左下角的元素，与卡片同心（距边 11pt）
+                            .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.list, inset: 11)))
                         }.buttonStyle(MPressStyle()).padding(.top, 9)
                         if open {
                             VStack(alignment: .leading, spacing: 7) {
@@ -428,7 +429,7 @@ struct ParAILane: View {
         }
         .background(state.tone == .failed ? M.danger.opacity(0.05) : M.fillFaint)
         // 失败态保留红描边（状态边）；常态卡片按 v2 只靠灰填充成形
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(state.tone == .failed ? M.danger.opacity(0.25) : .clear, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: MRadius.list).stroke(state.tone == .failed ? M.danger.opacity(0.25) : .clear, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
 }

@@ -305,6 +305,6 @@ struct TerminalKeyBar: View {
             .padding(.horizontal, expand ? 4 : 12)
             .frame(maxWidth: expand ? .infinity : nil, minHeight: 34, maxHeight: 34)
             .background(active ? accent.opacity(0.14) : M.button)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
     }
 }

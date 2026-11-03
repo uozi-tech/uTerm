@@ -56,7 +56,7 @@ struct KeyGenSheet: View {
                     }
                     .padding(.top, 4)
                 }
-                .padding(20)
+                .padding(.horizontal, MSheetMetrics.screenInset).padding(.vertical, 20)
                 .mReadableColumn()
             }
             .background(M.bg)

@@ -126,9 +126,9 @@ struct WorkspaceDropHighlight: View {
     var body: some View {
         switch target {
         case .pane:
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: MRadius.sm)
                 .strokeBorder(accent, lineWidth: 2)
-                .background(RoundedRectangle(cornerRadius: 8).fill(accent.opacity(0.06)))
+                .background(RoundedRectangle(cornerRadius: MRadius.sm).fill(accent.opacity(0.06)))
         case .edge(let edge):
             Rectangle().fill(accent.opacity(0.10))
                 .overlay(alignment: alignment(edge)) {

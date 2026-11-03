@@ -27,7 +27,10 @@ struct MSheetNavHeader: View {
             Text(title).font(M.sans(16, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.leading, 9).padding(.trailing, 14).padding(.top, M.topBreath).padding(.bottom, 5)
+        // 头部钉在滚动区外，按弹窗边距排：返回钮的 34pt 圆在 44pt 命中区里居中，命中区让出 5pt，
+        // 圆的左缘正好落在 `contentInset`。
+        .padding(.leading, MSheetMetrics.contentInset - (M.minTarget - 34) / 2)
+        .padding(.trailing, MSheetMetrics.contentInset).padding(.top, M.topBreath).padding(.bottom, 5)
         // pinned 头部需不透明底，避免内容滚动时透出；与下方内容同为 canvas，只靠底边 hairline 分区。
         .background(M.canvas)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
@@ -117,7 +120,7 @@ struct PermissionGrid: View {
                     }
                 }
                 .background(M.card)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                 .padding(.horizontal, 16)
 
                 MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPerm.mode(from: bits)) }
@@ -218,7 +221,7 @@ struct FileActionSheet: View {
                     Rectangle().fill(M.divider).frame(height: 1).padding(.vertical, 8)
                     actionRow("trash", "删除", danger: true, action: onDelete)
                 }
-                .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 30)
+                .padding(.horizontal, MSheetMetrics.screenInset).padding(.top, 18).padding(.bottom, 30)
             }
             .scrollBounceBehavior(.basedOnSize)
             .background(M.canvas)
@@ -232,7 +235,7 @@ struct FileActionSheet: View {
         HStack(spacing: 12) {
             MIcon(name: isFolder ? "folder" : "file", size: 18, color: accent)
                 .frame(width: 38, height: 38).background(accent.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name).font(M.sans(16, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
                 Text(subtitle).font(M.mono(12.5)).foregroundStyle(M.text3).lineLimit(1)
@@ -259,6 +262,6 @@ struct FileActionSheet: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 13)
         .contentShape(Rectangle())
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
     }
 }

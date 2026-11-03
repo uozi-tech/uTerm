@@ -32,7 +32,10 @@ struct MToolCall: View {
         }
     }
     private var statusColor: Color { isDone ? M.success : M.accent }
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
+    /// 与底部「运行 / 跳过」钮同心：钮距卡片底边 8pt。
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 8), style: .continuous)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -105,7 +108,7 @@ struct MToolCall: View {
                     }
                 }
                 .padding(.horizontal, 14).frame(height: 34)
-                .background(RoundedRectangle(cornerRadius: 8)
+                .background(RoundedRectangle(cornerRadius: MRadius.sm)
                     .fill(M.accent.opacity(approvalsDisabled ? 0.08 : 0.14)))
                 .contentShape(Rectangle())
             }
@@ -115,7 +118,7 @@ struct MToolCall: View {
             Button(action: onSkip) {
                 Text("跳过").font(M.sans(12.5)).foregroundStyle(approvalsDisabled ? M.text4 : M.text3)
                     .padding(.horizontal, 14).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(M.button))
+                    .background(RoundedRectangle(cornerRadius: MRadius.sm).fill(M.button))
                     .contentShape(Rectangle())
             }
             .buttonStyle(MPressStyle())

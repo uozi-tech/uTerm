@@ -84,9 +84,9 @@ struct MobileAgentChat: View {
         .onAppear(perform: configureExecutor)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sheet(isPresented: $addingProvider) {
-            NewProviderSheet { activeProviderIDString = $0.id.uuidString }
+            NewProviderSheet { activeProviderIDString = $0.id.uuidString }.mSheetContentMargins(.form)
         }
-        .sheet(isPresented: $managingProviders) { ProvidersScreen(showsDone: true) }
+        .sheet(isPresented: $managingProviders) { ProvidersScreen(showsDone: true).mSheetContentMargins(.form) }
     }
 
     /// 执行器一次性构造（host 固定不变）：缺失则状态机不暴露工具，退化为纯文本对话。
@@ -172,7 +172,7 @@ struct MobileAgentChat: View {
                                 .font(M.sans(13)).foregroundStyle(M.danger)
                                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(M.danger.opacity(0.08),
-                                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                            in: RoundedRectangle(cornerRadius: MRadius.lg, style: .continuous))
                         }
                         // 底部留白由锚点承担：锚点下面再垫 padding，贴底就永远差这一截。
                         Color.clear.frame(height: 8).id(Self.bottomAnchor)
@@ -245,7 +245,7 @@ struct MobileAgentChat: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 20)).foregroundStyle(accent)
                     .frame(width: 40, height: 40)
-                    .background(accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(accent.opacity(0.14), in: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous))
                 Text("用自然语言操作 \(host.name)")
                     .font(M.sans(18, weight: .semibold)).foregroundStyle(M.text)
                 Text("描述你想做的事，Agent 会翻译成命令，按审批档位征求确认后在远端执行。")
@@ -466,8 +466,8 @@ private struct MAgentQueueStrip: View {
             .accessibilityLabel("移除")
         }
         .padding(.leading, 12)
-        .background(M.fillFaint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .background(M.fillFaint, in: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
             .strokeBorder(M.border, style: StrokeStyle(lineWidth: 1, dash: [3])))
         .contentShape(Rectangle())
         .onTapGesture { model.loadQueuedForEditing(id: item.id) }

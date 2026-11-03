@@ -25,7 +25,7 @@ struct MLayoutDiagnosticsOverlay: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.white)
                     .padding(6)
-                    .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6))
+                    .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: MRadius.xs))
                     .padding(.leading, 8)
                     .padding(.bottom, 120)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)

@@ -111,9 +111,10 @@ struct HostsScreen: View {
                 }
             }
             .presentationDragIndicator(.visible)
+            .mSheetContentMargins()
         }
         .sheet(item: $editing) { host in
-            HostFormSheet(host: host).presentationDragIndicator(.visible)
+            HostFormSheet(host: host).presentationDragIndicator(.visible).mSheetContentMargins()
         }
         .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
@@ -224,7 +225,7 @@ struct HostCard: View {
             }
             .padding(14)
             .background(M.card)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
         .contextMenu {
@@ -240,6 +241,6 @@ struct HostCard: View {
             .font(M.mono(16, weight: .semibold)).foregroundStyle(accent)
             .frame(width: 38, height: 38)
             .background(accent.opacity(0.14))
-            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
     }
 }

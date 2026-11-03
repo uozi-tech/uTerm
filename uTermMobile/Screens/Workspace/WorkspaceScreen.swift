@@ -83,7 +83,7 @@ struct WorkspaceScreen: View {
             syncKeyboard()
             if workspace.isEmpty { store.showWorkspace = false }
         }
-        .sheet(item: $newKind) { kind in newTabSheet(kind) }
+        .sheet(item: $newKind) { kind in newTabSheet(kind).mSheetContentMargins() }
     }
 
     // MARK: - 打开 / 关闭
@@ -433,7 +433,7 @@ struct WorkspaceScreen: View {
                 MIcon(name: kind == .terminal ? "server" : "folder", size: 18, color: tint)
                     .frame(width: 38, height: 38)
                     .background(tint.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(host.name).font(M.sans(15.5, weight: .semibold)).foregroundStyle(M.text)
                     Text(host.displayEndpoint).font(M.mono(12)).foregroundStyle(M.text3)
@@ -444,7 +444,7 @@ struct WorkspaceScreen: View {
             }
             .padding(14)
             .background(M.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
     }

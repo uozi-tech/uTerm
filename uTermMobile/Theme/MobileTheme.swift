@@ -110,6 +110,44 @@ enum M {
     }
 }
 
+/// 圆角刻度。新写圆角一律从这里取，不要再手写数字。规则有三条：
+///
+/// 1. **叶子元素按高度取档**（图标块、按钮、输入框、chip……）：`xs`…`lg`，大致是高度的 1/4。
+/// 2. **容器与贴角的内元素同心**：外圆角 = 内圆角 + 二者间距（`concentric`），或反过来
+///    内圆角 = 外圆角 − 间距（`inner`）。不同心时内角看着比外角「更圆」，角落那一圈间距
+///    会一头宽一头窄——分组卡片里的行图标、弹窗底部的按钮、分段控件的选中块都属于这种。
+///    间距大于外圆角时内元素已不在角的弧线范围里，按第 1 条取档即可。
+/// 3. **曲率一律连续**（squircle）：SwiftUI 的 `RoundedRectangle` 默认就是 `.continuous`，
+///    别写 `.circular`，也别用已废弃的 `.cornerRadius(_:)` 修饰符。
+///
+/// 屏幕 / 系统抽屉那一级的同心交给系统（`ConcentricRectangle`，见 `MBottomPanel`）。
+nonisolated enum MRadius {
+    /// ≤ 24pt：chip、标签、复选框、角标。
+    static let xs: CGFloat = 6
+    /// 26–34pt：行图标块、小按钮、分段控件的选中块、终端标签。
+    static let sm: CGFloat = 8
+    /// 36–42pt：头像、表头图标块、搜索框。
+    static let md: CGFloat = 10
+    /// 44–56pt：主按钮 `MBtn`、输入框、大图标块。
+    static let lg: CGFloat = 12
+
+    /// 分组列表卡片（`MInsetGroup` 及同形的成员 / 关联主机 / 权限列表）：
+    /// 行图标 `sm` + 行内边距 10pt（50pt 行高里 30pt 图标上下各留 10）。
+    static let list = concentric(sm, inset: 10)
+    /// 选择页卡片网格（主机 / 终端 / 文件 / 命令）：38pt 头像 `md` + 卡片内边距 14pt。
+    static let card = concentric(md, inset: 14)
+    /// 居中弹窗（`MCenterModalContainer`）：底部按钮 `lg` + 底边距 16pt。
+    static let dialog = concentric(lg, inset: 16)
+
+    /// 外圆角 = 内圆角 + 间距。
+    static func concentric(_ inner: CGFloat, inset: CGFloat) -> CGFloat { inner + inset }
+
+    /// 内圆角 = 外圆角 − 间距，下限 `minimum`（间距接近外圆角时不至于变成直角）。
+    static func inner(of outer: CGFloat, inset: CGFloat, minimum: CGFloat = 4) -> CGFloat {
+        max(outer - inset, minimum)
+    }
+}
+
 /// 把十六进制字符串转 Color（设计稿 seed 数据里的分组色等使用）。
 extension Color {
     init(hexString: String) {

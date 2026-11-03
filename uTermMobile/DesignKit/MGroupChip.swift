@@ -44,6 +44,6 @@ struct MGroupChip: View {
             .font(M.sans(11, weight: .medium))
             .foregroundStyle(tint ?? M.text3)
             .padding(.vertical, 2).padding(.horizontal, 8)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
+            .background(RoundedRectangle(cornerRadius: MRadius.xs, style: .continuous).fill(fill))
     }
 }

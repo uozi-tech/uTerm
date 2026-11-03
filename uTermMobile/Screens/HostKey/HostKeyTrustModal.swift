@@ -25,7 +25,8 @@ struct HostKeyTrustModal: View {
             MIcon(name: unknown ? "shield" : "warn", size: 19, color: tint)
                 .frame(width: 38, height: 38)
                 .background(tint.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 11))
+                // 与弹窗外框同心：图标块距顶边 16pt
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.dialog, inset: 16)))
             VStack(alignment: .leading, spacing: 5) {
                 Text(unknown ? "首次连接到此主机" : "主机密钥已变化")
                     .font(M.sans(16, weight: .semibold))
@@ -58,8 +59,8 @@ struct HostKeyTrustModal: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(11)
             .background(M.danger.opacity(0.08))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(M.danger.opacity(0.25), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: MRadius.md).stroke(M.danger.opacity(0.25), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
             .padding(.horizontal, 18).padding(.top, 14)
     }
 
@@ -70,7 +71,8 @@ struct HostKeyTrustModal: View {
                  icon: unknown ? "shield" : nil,
                  kind: unknown ? .primary : .danger, full: true, height: 46, action: onTrust)
         }
-        .padding(.horizontal, 16).padding(.vertical, 14).padding(.top, 16)
+        // 底边距 16pt：`MBtn` 的 `lg` 圆角 + 16 = `MRadius.dialog`，按钮与弹窗外框同心
+        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 16)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
@@ -86,8 +88,8 @@ struct HostKeyTrustModal: View {
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(M.fillFaint)
             // danger 为状态描边（密钥不匹配警示），保留；常态不描边
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(danger ? M.danger.opacity(0.5) : .clear, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: MRadius.md).stroke(danger ? M.danger.opacity(0.5) : .clear, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
         }
     }
 }

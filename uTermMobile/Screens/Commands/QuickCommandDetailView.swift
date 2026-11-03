@@ -51,7 +51,7 @@ struct QuickCommandDetailView: View {
         .background(M.canvas)
         .navigationTitle(cmd.name)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $editing) { CommandFormSheet(cmd: cmd) }
+        .sheet(isPresented: $editing) { CommandFormSheet(cmd: cmd).mSheetContentMargins() }
         .confirmationDialog("删除命令「\(cmd.name)」？", isPresented: $pendingDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) { delete() }
             Button("取消", role: .cancel) {}
@@ -87,17 +87,18 @@ struct QuickCommandDetailView: View {
                         Text("$ \(cmd.command)").font(M.mono(13)).foregroundStyle(M.text2)
                             .padding(11).frame(maxWidth: .infinity, alignment: .leading)
                             .background(M.cmdSurface)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            // 卡片底部的嵌套块，与卡片同心（距边 13pt）
+                            .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.list, inset: 13)))
                     }
                 }
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
                 .background(M.aiAccent.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
             } else {
                 Text("$ \(cmd.command)").font(M.mono(13.5)).foregroundStyle(M.text)
                     .padding(13).frame(maxWidth: .infinity, alignment: .leading)
                     .background(M.cmdSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
             }
         }
         .padding(.top, 18)
@@ -121,7 +122,7 @@ struct QuickCommandDetailView: View {
                     }
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     .background(M.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
                 }
                 if targets.isEmpty {
                     Text("尚未绑定主机").font(M.sans(13)).foregroundStyle(M.text4)
@@ -164,7 +165,7 @@ struct QuickCommandDetailView: View {
         }
         .padding(.horizontal, 13).padding(.vertical, 12)
         .background(cmd.aiAssisted ? M.aiAccent.opacity(0.10) : M.card)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
         .padding(.top, 18)
     }
 
@@ -183,7 +184,7 @@ struct QuickCommandDetailView: View {
                 Text("暂无执行记录\n运行后将在此保留近 30 天")
                     .font(M.sans(12.5)).foregroundStyle(M.text4).multilineTextAlignment(.center).lineSpacing(3)
                     .frame(maxWidth: .infinity).padding(.vertical, 18)
-                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                    .overlay(RoundedRectangle(cornerRadius: MRadius.list).stroke(M.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
             } else {
                 // 30 天内的记录可能上千条，每条首次渲染还要解一次 JSON：按需构建。
                 LazyVStack(spacing: 8) { ForEach(runs) { run in RunLogRow(run: run) } }
@@ -200,14 +201,14 @@ struct QuickCommandDetailView: View {
             Button { editing = true } label: {
                 MIcon(name: "edit", size: 18, color: M.text2).frame(width: 48, height: 48)
                     .background(M.button)
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
             }
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text("编辑命令"))
             Button { pendingDelete = true } label: {
                 MIcon(name: "trash", size: 18, color: M.text3).frame(width: 48, height: 48)
                     .background(M.button)
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
             }
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text("删除命令"))
@@ -322,7 +323,8 @@ private struct RunLogRow: View {
                         }
                         .padding(11).frame(maxWidth: .infinity, alignment: .leading)
                         .background(M.aiAccent.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        // 展开区底部的嵌套块，与记录卡片同心（距底边 10pt）
+                        .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.list, inset: 10)))
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
@@ -330,7 +332,7 @@ private struct RunLogRow: View {
             }
         }
         .background(M.card)
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
 
     private var timeText: String { UTermFormat.logTimestamp(run.startedAt) }

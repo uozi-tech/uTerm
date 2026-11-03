@@ -252,7 +252,7 @@ struct WorkspaceTabChip: View {
         }
         .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: pillHeight)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous)
                 .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
         .padding(.vertical, (44 - pillHeight) / 2)   // 命中区 44pt
         .contentShape(Rectangle())

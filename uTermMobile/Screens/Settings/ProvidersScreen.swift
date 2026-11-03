@@ -47,7 +47,7 @@ struct ProvidersScreen: View {
                     .accessibilityLabel("添加模型服务")
             }
         }
-        .sheet(isPresented: $adding) { NewProviderSheet() }
+        .sheet(isPresented: $adding) { NewProviderSheet().mSheetContentMargins(.form) }
         .onAppear { AgentModelDirectory.refresh(providers) }
     }
 
@@ -86,7 +86,7 @@ private struct ProviderListRow: View {
                 .font(M.mono(14, weight: .semibold))
                 .foregroundStyle(accent)
                 .frame(width: 32, height: 32)
-                .background(RoundedRectangle(cornerRadius: 8).fill(accent.opacity(0.14)))
+                .background(RoundedRectangle(cornerRadius: MRadius.sm).fill(accent.opacity(0.14)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(provider.name.isEmpty ? provider.kind.displayName : provider.name)
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text).lineLimit(1)

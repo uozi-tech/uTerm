@@ -34,7 +34,7 @@ struct CommandsScreen: View {
                     .padding(.top, 4)
                 }
             }
-            .sheet(isPresented: $creating) { CommandFormSheet(cmd: nil) }
+            .sheet(isPresented: $creating) { CommandFormSheet(cmd: nil).mSheetContentMargins() }
         }
     }
 }
@@ -64,7 +64,7 @@ struct CommandCard: View {
             }
             .padding(14)
             .background(M.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
     }
 }
 
@@ -194,7 +194,7 @@ struct CommandFormSheet: View {
                             .font(M.sans(12, weight: .medium)).foregroundStyle(M.text2)
                             .padding(.horizontal, 10).frame(height: 26)
                             .background(M.fillFaint)
-                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous))
                     }.buttonStyle(MPressStyle())
                 }
             }
@@ -218,7 +218,7 @@ struct CommandFormSheet: View {
                 }
             }
             .background(M.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
             .padding(.horizontal, 16)
         }
         .padding(.bottom, 22)
@@ -302,7 +302,7 @@ struct CommandFormSheet: View {
 private struct MCheckbox: View {
     let checked: Bool
     var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
+        RoundedRectangle(cornerRadius: MRadius.xs, style: .continuous)
             .fill(checked ? M.accent : M.fillMed)
             .overlay { if checked { MIcon(name: "check", size: 10, color: .white, weight: .bold) } }
             .frame(width: 19, height: 19)
@@ -315,7 +315,7 @@ private struct MGroupCheck: View {
     let partial: Bool
     private var active: Bool { on || partial }
     var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
+        RoundedRectangle(cornerRadius: MRadius.xs, style: .continuous)
             .fill(active ? M.accent : M.fillMed)
             .overlay {
                 if on {

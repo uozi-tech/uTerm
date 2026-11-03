@@ -53,7 +53,7 @@ struct GroupsScreen: View {
                 Button { creating = true } label: { MIcon(name: "plus", size: 18, color: M.accent) }
             }
         }
-        .sheet(isPresented: $creating) { GroupFormSheet(group: nil) }
+        .sheet(isPresented: $creating) { GroupFormSheet(group: nil).mSheetContentMargins() }
     }
 }
 
@@ -190,7 +190,7 @@ struct GroupDetailView: View {
             Circle().fill(group.color).frame(width: 18, height: 18)
                 .frame(width: 46, height: 46)
                 .background(group.color.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 13))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
             VStack(alignment: .leading, spacing: 3) {
                 Text(group.name).font(M.sans(19, weight: .bold)).tracking(-0.3).foregroundStyle(M.text)
                 Text("\(UFormat.count(members.count)) 台主机").font(M.sans(13)).foregroundStyle(M.text3)
@@ -199,7 +199,7 @@ struct GroupDetailView: View {
             Button { pendingDelete = true } label: {
                 MIcon(name: "trash", size: 17, color: M.text3).frame(width: 38, height: 38)
                     .background(M.fillFaint)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
             }.buttonStyle(MPressStyle())
         }
     }
@@ -226,9 +226,11 @@ struct GroupDetailView: View {
                         Color(.sRGB, red: r, green: g, blue: b)
                             .frame(width: 32, height: 32)
                             .overlay { if on { MIcon(name: "check", size: 15, color: .white, weight: .bold) } }
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(M.canvas, lineWidth: on ? 2 : 0))
-                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color(.sRGB, red: r, green: g, blue: b), lineWidth: on ? 2 : 0).padding(-2))
+                            .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
+                            .overlay(RoundedRectangle(cornerRadius: MRadius.sm).stroke(M.canvas, lineWidth: on ? 2 : 0))
+                            // 选中环外扩 2pt，圆角跟着加 2 才与色块同心
+                            .overlay(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 2))
+                                .stroke(Color(.sRGB, red: r, green: g, blue: b), lineWidth: on ? 2 : 0).padding(-2))
                     }.buttonStyle(MPressStyle())
                 }
             }
@@ -246,7 +248,7 @@ struct GroupDetailView: View {
                     segBtn(1, "添加 \(candidates.count)")
                 }
                 .padding(3).background(M.fillFaint)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.xs, inset: 3)))
             }
             let list = tab == 0 ? members : candidates
             VStack(spacing: 0) {
@@ -261,7 +263,7 @@ struct GroupDetailView: View {
                 }
             }
             .background(M.card)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
         }
         .padding(.top, 22)
     }
@@ -272,7 +274,7 @@ struct GroupDetailView: View {
                 .foregroundStyle(tab == i ? accent : M.text3)
                 .padding(.horizontal, 11).padding(.vertical, 5)
                 .background(tab == i ? accent.opacity(0.14) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.xs))
                 .contentShape(Rectangle())   // 整段可点，不必点到文字
         }.buttonStyle(MPressStyle())
     }
@@ -281,7 +283,8 @@ struct GroupDetailView: View {
         HStack(spacing: 11) {
             Text(initials(h.name)).font(M.mono(11.5)).foregroundStyle(M.text3)
                 .frame(width: 26, height: 26).background(M.fillMed)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+                // 与列表卡片同心：头像距行上下边 11pt
+                .clipShape(RoundedRectangle(cornerRadius: MRadius.inner(of: MRadius.list, inset: 11)))
             Text(h.name).font(M.mono(14)).foregroundStyle(M.text).lineLimit(1)
             Spacer(minLength: 6)
             Button {
@@ -292,7 +295,7 @@ struct GroupDetailView: View {
                     .foregroundStyle(tab == 0 ? M.text2 : accent)
                     .padding(.horizontal, 12).frame(height: 30)
                     .background(tab == 0 ? M.fillMed : accent.opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
             }.buttonStyle(MPressStyle())
         }
         .padding(.horizontal, 13).padding(.vertical, 11)

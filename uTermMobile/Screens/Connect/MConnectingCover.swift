@@ -304,7 +304,7 @@ struct ConnectingCoverView: View {
         .padding(.horizontal, 16).padding(.vertical, 6)
         .frame(maxWidth: 320)
         .background(M.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
 
     /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。
@@ -400,7 +400,7 @@ private struct ConnRing: View {
     }
 
     private var innerTile: some View {
-        RoundedRectangle(cornerRadius: 16)
+        RoundedRectangle(cornerRadius: MRadius.lg)
             .fill(tint.opacity(0.14))
             .frame(width: 56, height: 56)
             .overlay {

@@ -92,7 +92,7 @@ struct SettingsScreen: View {
                 Text("请先在系统「设置」里启用 Face ID / 触控 ID 或设置锁屏密码，再开启应用锁。")
             }
             .sheet(isPresented: $showSyncDiag) {
-                MSyncDiagSheet(sync: sync)
+                MSyncDiagSheet(sync: sync).mSheetContentMargins()
             }
         }
     }
@@ -147,7 +147,7 @@ struct SettingsScreen: View {
         }
         .padding(16)
         .background(M.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         .padding(.horizontal, 16)
         .padding(.bottom, 22)
     }
@@ -329,7 +329,8 @@ private struct MSyncDiagSheet: View {
                 Button("完成") { dismiss() }
                     .font(M.sans(15)).foregroundStyle(M.accent)
             }
-            .padding(.horizontal, 16).padding(.vertical, 14)
+            // 头部与底部按钮不在滚动内容里，`mSheetContentMargins` 管不到，直接按弹窗边距排
+            .padding(.horizontal, MSheetMetrics.contentInset).padding(.top, 18).padding(.bottom, 14)
             Rectangle().fill(M.divider).frame(height: 1)
 
             ScrollView {
@@ -358,7 +359,7 @@ private struct MSyncDiagSheet: View {
             MBtn(title: "复制日志", kind: .secondary, full: true, height: 48) {
                 UIPasteboard.general.string = sync.exportText()
             }
-            .padding(16)
+            .padding(.horizontal, MSheetMetrics.contentInset).padding(.vertical, 16)
         }
         .presentationBackground(M.panel)
         .presentationDetents([.medium, .large])

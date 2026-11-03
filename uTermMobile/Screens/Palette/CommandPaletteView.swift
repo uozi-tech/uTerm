@@ -138,7 +138,7 @@ struct CommandPaletteView: View {
                 MIcon(name: icon, size: 16, color: tinted ? accent : M.text2)
                     .frame(width: 32, height: 32)
                     .background(tinted ? accent.opacity(0.14) : M.button)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
                 VStack(alignment: .leading, spacing: 2) {
                     highlight(title).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)
                     Text(detail).font(mono ? M.mono(12.5) : M.sans(12.5))
@@ -152,7 +152,8 @@ struct CommandPaletteView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(MRowStyle())
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        // 按压高亮与行内图标块同心：图标块距行上下边 9pt
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 9)))
     }
 
     /// 标题里匹配子串高亮（设计稿 `Hi`）。
