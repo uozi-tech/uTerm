@@ -50,12 +50,18 @@ struct HostSheet: View {
             ("上次连接", lastText, false),
             ("分组", host.group ?? "未分组", false),
         ]
-        return LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
-                         spacing: 16) {
-            ForEach(items, id: \.0) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.0.uppercased()).font(M.sans(11)).tracking(0.4).foregroundStyle(M.text4)
-                    Text(item.1).font(item.2 ? M.mono(15) : M.sans(15)).foregroundStyle(M.text)
+        // 用 Grid 而不是 LazyVGrid：懒加载容器的格子不跟父视图的滑入转场走，面板还在往上滑时
+        // 这几格文字就先停在了终点（实机反馈「弹窗还没弹完字体就出来了」）。只有四格，不需要懒加载。
+        return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 16) {
+            ForEach(0..<2, id: \.self) { row in
+                GridRow {
+                    ForEach(items[(row * 2)..<(row * 2 + 2)], id: \.0) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.0.uppercased()).font(M.sans(11)).tracking(0.4).foregroundStyle(M.text4)
+                            Text(item.1).font(item.2 ? M.mono(15) : M.sans(15)).foregroundStyle(M.text)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
