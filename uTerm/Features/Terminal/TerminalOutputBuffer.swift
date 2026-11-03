@@ -80,13 +80,6 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         return output
     }
 
-    /// 当前积压的字节数（含尚未丢弃的旧代次块，作为节流参考已足够）。
-    var pendingBytes: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return bufferedBytes
-    }
-
     func clear() {
         lock.lock()
         chunks.removeAll(keepingCapacity: true)
