@@ -15,6 +15,8 @@ struct KeyGenSheet: View {
     @State private var comment = ""
     @State private var busy = false
     @State private var error: String?
+    /// 在途的生成任务：抽屉被取消 / 下滑关掉时取消它，生成完也不再落库。
+    @State private var generation: Task<Void, Never>?
 
     private var valid: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -62,6 +64,9 @@ struct KeyGenSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
+        // RSA-4096 要生成一到三秒，期间可以下滑或点「取消」：改前任务照样跑完、照样落库，
+        // 结果是「取消了却多了一把钥匙」。
+        .onDisappear { generation?.cancel() }
     }
 
     private func generate() {
@@ -69,7 +74,7 @@ struct KeyGenSheet: View {
         let nm = name.trimmingCharacters(in: .whitespaces)
         let cm = comment.trimmingCharacters(in: .whitespaces)
         let kind = self.kind, bits = self.bits
-        Task {
+        generation = Task {
             do {
                 let gen = try await Task.detached(priority: .userInitiated) { () throws -> SSHKeyGenerator.GeneratedKey in
                     switch kind {
@@ -77,6 +82,7 @@ struct KeyGenSheet: View {
                     default:   return SSHKeyGenerator.generateEd25519(comment: cm)
                     }
                 }.value
+                guard !Task.isCancelled else { return }
                 let key = SSHKey()
                 key.name = nm
                 key.type = kind
@@ -85,8 +91,10 @@ struct KeyGenSheet: View {
                 key.fingerprint = gen.fingerprint
                 key.publicKey = gen.publicKey
                 key.hasPassphrase = false
-                context.insert(key)
+                // 先写钥匙串、成功了才插入模型：反过来的话钥匙串写失败时，已插入的空私钥
+                // 记录会被下一次任意 save 一并落盘。
                 try KeyStore().save(keyID: key.id, privateKey: gen.privateKeyText, passphrase: nil)
+                context.insert(key)
                 try? context.save()
                 busy = false
                 dismiss()

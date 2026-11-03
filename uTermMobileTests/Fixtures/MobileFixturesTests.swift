@@ -248,6 +248,31 @@ final class MobileFixturesTests: XCTestCase {
         }
     }
 
+    /// 先点的目录后返回：慢的那次结果不能把列表和路径改回去（目录加载的代次守卫）。
+    /// 改前谁最后返回就停在谁那里——界面显示的目录和用户最后点的不一致，
+    /// 随后的删除 / 改名会拼出错的路径。
+    func testStaleDirectoryListingDoesNotOverwriteNewerOne() async throws {
+        let provider = MobileFakeSFTPProvider(entries: 40, subdirectories: 2,
+                                              childCount: 7, depth: 2)
+        let controller = await MobileFakeSFTP.controller(provider: provider)
+        let dirs = controller.entries.filter(\.isDirectory)
+        XCTAssertGreaterThanOrEqual(dirs.count, 2)
+        let slow = dirs[0], fast = dirs[1]
+        await provider.slowDown("/\(slow.name)", by: .milliseconds(600))
+
+        controller.open(slow)
+        controller.open(fast)
+        try await MobileFakeSFTP.settle("快的那个目录先到") { controller.path == "/\(fast.name)" }
+        let fastEntries = controller.entries.map(\.name)
+        XCTAssertFalse(fastEntries.isEmpty)
+
+        // 等慢的那次也返回，再确认它被丢弃了。
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(controller.path, "/\(fast.name)", "晚到的旧列表把路径改回去了")
+        XCTAssertEqual(controller.entries.map(\.name), fastEntries, "晚到的旧列表覆盖了当前目录")
+        XCTAssertFalse(controller.loading)
+    }
+
     /// 目录进出走产品的 `open` / `goUp`（发射后不管的 `Task`），不再靠夹具回填。
     func testControllerOpenAndGoUpUseProductPath() async throws {
         let provider = MobileFakeSFTPProvider(entries: 120, subdirectories: 4,

@@ -7,6 +7,16 @@ import UniformTypeIdentifiers
 /// 分享面板用的可识别本地文件项。
 private struct ShareFileItem: Identifiable { let id = UUID(); let url: URL }
 
+/// 长按那一刻的条目与它所在的目录。操作单从弹出到确认（改名框 / 删除确认）之间隔着
+/// 动画和延时，这期间当前目录可能已经换了；拼路径必须用这里记下的目录，
+/// 否则会删 / 改到新目录下的同名文件。
+private struct EntryTarget: Identifiable {
+    let entry: RemoteEntry
+    let directory: String
+    var id: String { fullPath }
+    var fullPath: String { directory == "/" ? "/\(entry.name)" : "\(directory)/\(entry.name)" }
+}
+
 /// 一个文件浏览会话标签的主体：路径条 + 远程文件列表 + 底栏，长按文件出操作单。
 /// 由工作区的分屏格挂载；同一时刻可以有多个（不同主机，或同主机不同目录）。
 struct FilesSessionBody: View {
@@ -14,9 +24,9 @@ struct FilesSessionBody: View {
     var onClose: () -> Void
 
     private var controller: MobileSFTPController { tab.controller }
-    @State private var pendingDelete: RemoteEntry?
-    @State private var actionEntry: RemoteEntry?
-    @State private var renameEntry: RemoteEntry?
+    @State private var pendingDelete: EntryTarget?
+    @State private var actionEntry: EntryTarget?
+    @State private var renameEntry: EntryTarget?
     @State private var renameText = ""
     @State private var shareItem: ShareFileItem?
     @State private var showImporter = false
@@ -30,39 +40,53 @@ struct FilesSessionBody: View {
         }
         // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
-        .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
+        .confirmationDialog("删除「\(pendingDelete?.entry.name ?? "")」？",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible) {
-            Button("删除", role: .destructive) { if let e = pendingDelete { controller.delete(e); pendingDelete = nil } }
+            Button("删除", role: .destructive) {
+                if let t = pendingDelete { controller.delete(t.entry, in: t.directory); pendingDelete = nil }
+            }
             Button("取消", role: .cancel) { pendingDelete = nil }
         }
         // 长按文件 → 操作单（设计稿 FileActionSheet）。
-        .sheet(item: $actionEntry) { entry in
+        .sheet(item: $actionEntry) { target in
             FileActionSheet(
-                entry: entry, fullPath: controller.fullPath(entry),
-                onEnter: { actionEntry = nil; controller.open(entry) },
-                onCopyPath: { UIPasteboard.general.string = controller.fullPath(entry); actionEntry = nil },
+                entry: target.entry, fullPath: target.fullPath,
+                onEnter: {
+                    actionEntry = nil
+                    Task { await controller.load(target.fullPath) }
+                },
+                onCopyPath: { UIPasteboard.general.string = target.fullPath; actionEntry = nil },
                 onRename: {
                     actionEntry = nil
-                    let e = entry
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { renameText = e.name; renameEntry = e }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        renameText = target.entry.name; renameEntry = target
+                    }
                 },
                 onDownload: {
-                    let e = entry; actionEntry = nil
-                    Task { if let url = await controller.download(e) { shareItem = ShareFileItem(url: url) } }
+                    actionEntry = nil
+                    Task {
+                        let url = await controller.download(target.entry, in: target.directory)
+                        // 下载期间标签被关掉了：不再凭空弹出分享面板。
+                        if let url, controller.isOpen { shareItem = ShareFileItem(url: url) }
+                    }
                 },
-                onChmod: { mode in controller.chmod(entry, mode: mode); actionEntry = nil },
+                onChmod: { mode in
+                    controller.chmod(target.entry, mode: mode, in: target.directory); actionEntry = nil
+                },
                 onDelete: {
                     actionEntry = nil
-                    let e = entry
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pendingDelete = e }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pendingDelete = target }
                 })
         }
         .sheet(item: $shareItem) { item in ShareSheet(items: [item.url]) }
         .alert("重命名", isPresented: Binding(get: { renameEntry != nil }, set: { if !$0 { renameEntry = nil } })) {
             TextField("名称", text: $renameText)
             Button("取消", role: .cancel) { renameEntry = nil }
-            Button("重命名") { if let e = renameEntry { controller.rename(e, to: renameText) }; renameEntry = nil }
+            Button("重命名") {
+                if let t = renameEntry { controller.rename(t.entry, to: renameText, in: t.directory) }
+                renameEntry = nil
+            }
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { controller.upload(from: url) }
@@ -177,11 +201,11 @@ struct FilesSessionBody: View {
                                     // 不双触发时这里读到的又恒是 nil，是个惰性守卫。
                                     guard actionEntry == nil else { return }
                                     if entry.isDirectory || entry.isSymlink { controller.open(entry) }
-                                    else { actionEntry = entry }
+                                    else { actionEntry = EntryTarget(entry: entry, directory: controller.path) }
                                 }
                                 .onLongPressGesture(minimumDuration: 0.45) {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    actionEntry = entry
+                                    actionEntry = EntryTarget(entry: entry, directory: controller.path)
                                 }
                         }
                     }

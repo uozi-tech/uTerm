@@ -62,12 +62,37 @@ struct LANSyncSettingsSection: View {
         } message: {
             Text("输入 Mac 设置 › 高级中显示的 6 位代码")
         }
-        .alert("收到局域网同步请求", isPresented: pendingOfferPresented) {
-            Button("拒绝", role: .cancel) { lanSync.rejectPendingSync() }
-            Button("确认并覆盖") { lanSync.confirmPendingSync() }
-        } message: {
-            Text(pendingOfferMessage)
-        }
+        // 同步请求的确认弹窗挂在根视图（`mobileLANSyncHost()`），不在这里：
+        // 用户不在设置页时也要看得到，否则 Mac 60 秒后超时，再进设置看到的是过期请求。
+    }
+}
+
+extension View {
+    /// 局域网接收的全局入口：同步请求确认弹窗 + 回前台时重启监听。挂在根视图上。
+    func mobileLANSyncHost() -> some View { modifier(MobileLANSyncHost()) }
+}
+
+private struct MobileLANSyncHost: ViewModifier {
+    @Environment(LANSyncCoordinator.self) private var lanSync
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
+            .alert("收到局域网同步请求", isPresented: pendingOfferPresented) {
+                Button("拒绝", role: .cancel) { lanSync.rejectPendingSync() }
+                Button("确认并覆盖", role: .destructive) { lanSync.confirmPendingSync() }
+            } message: {
+                Text(pendingOfferMessage)
+            }
+            // 退到后台后系统会让监听失效（状态转为出错 / 停止）。改前只有用户滚到设置里那一块
+            // 才会重启，期间 Mac 怎么发都找不到这台手机。已启用过的回前台就重新监听。
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, LANSyncActivation.isActivated else { return }
+                switch lanSync.status {
+                case .stopped, .error: lanSync.start()
+                default: break
+                }
+            }
     }
 
     private var pendingOfferPresented: Binding<Bool> {
@@ -78,6 +103,6 @@ struct LANSyncSettingsSection: View {
 
     private var pendingOfferMessage: String {
         guard let offer = lanSync.pendingOffer else { return "" }
-        return "设备：\(offer.deviceName)\n配置与历史记录：\(offer.recordCount) 条\n偏好设置：\(offer.preferenceCount) 项\n敏感凭据：\(offer.secretCount) 项\n确认后将用 Mac 数据覆盖本机。"
+        return "设备：\(offer.deviceName)\n配置与历史记录：\(offer.recordCount) 条\n偏好设置：\(offer.preferenceCount) 项\n敏感凭据：\(offer.secretCount) 项\n\n确认后本机数据将与这台 Mac 完全一致：本机有、Mac 上没有的主机、密钥、命令与会话记录会被删除，并经 iCloud 同步到你的其他设备。"
     }
 }

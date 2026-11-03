@@ -69,6 +69,20 @@ struct WorkspaceScreen: View {
             if workspace.isEmpty { store.showWorkspace = false }
             store.teardownTabID = nil
         }
+        // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
+        // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
+        .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
+            let orphaned = Set(workspace.tabs.map { $0.host.persistentModelID }).subtracting(live)
+            guard !orphaned.isEmpty else { return }
+            for host in orphaned {
+                let closed = workspace.closeSessions(ofHost: host)
+                if let req = store.connecting, let tabID = req.tabID, closed.contains(tabID) {
+                    store.connecting = nil
+                }
+            }
+            syncKeyboard()
+            if workspace.isEmpty { store.showWorkspace = false }
+        }
         .sheet(item: $newKind) { kind in newTabSheet(kind) }
     }
 
@@ -121,10 +135,11 @@ struct WorkspaceScreen: View {
 
     private func closeTab(_ id: UUID) {
         guard let removed = workspace.close(id) else { return }
-        switch removed {
-        case .terminal(let t): t.controller.close()
-        case .files(let f): f.controller.close()
-        }
+        removed.shutdown()
+        // 分屏时连接中页只盖这一格，标签条仍可点：用户直接关掉正在建连的标签时，
+        // 那张连接中页随标签消失、再没人调 onFinish。不在这里撤掉请求的话，
+        // `requestConnect` 会吞掉之后所有连接、`keyboardOwner` 恒为 nil（谁都打不了字）。
+        if let req = store.connecting, req.tabID == id { store.connecting = nil }
         dispose(removed)
         // 关掉最后一个会话就没有可看的了：收回主机列表。
         if workspace.isEmpty { store.showWorkspace = false }
@@ -319,7 +334,8 @@ struct WorkspaceScreen: View {
 
     /// 正在为这个标签建连、且连接中页只盖这个标签（分屏时在工作区里新开的）时，返回该请求。
     private func paneCover(for tab: MWorkTab) -> MConnectRequest? {
-        guard let req = store.connecting, req.tabID == tab.id, req.showsInPane(workspace) else { return nil }
+        guard let req = store.connecting, req.tabID == tab.id,
+              req.showsInPane(workspace, workspaceVisible: store.showWorkspace) else { return nil }
         return req
     }
 

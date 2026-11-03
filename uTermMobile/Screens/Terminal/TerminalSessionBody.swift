@@ -16,6 +16,8 @@ enum MTerminalMode: Hashable { case terminal, agent }
 final class TermTab: Identifiable {
     let id = UUID()
     let host: ServerProfile
+    /// 开标签时的主机名（见 `FileTab.hostName`）。
+    let hostName: String
     let controller: MobileTerminalController
     let agent = AssistantModel()
     /// Agent 在途驱动 Task 集：会话关闭时取消，停掉在途 LLM 流 / 工具循环（见 `MAgentTaskBag`）。
@@ -26,6 +28,7 @@ final class TermTab: Identifiable {
     /// 探针注入假传输，从而在不发起任何真实连接的前提下把整屏挂起来。
     init(host: ServerProfile, transportFactory: MobileTerminalTransportFactory = .live) {
         self.host = host
+        self.hostName = host.name
         self.controller = MobileTerminalController(transportFactory: transportFactory)
     }
 }

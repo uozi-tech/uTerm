@@ -206,9 +206,31 @@ final class LANSyncDataStore {
     }
 
     /// 在所有加密分片收齐后一次性覆盖本地模型与凭据。
+    ///
+    /// 整段跑在后台 `ModelContext` 上（`LANSyncReplaceWorker`）：10 张表各全表 fetch 一次、
+    /// 逐条 upsert、最后 save，再加上每个凭据账号一次钥匙串读写——放在主线程上时，用户点了
+    /// 「确认并覆盖」后整个界面冻结一到数秒。后台上下文还有一个好处：失败回滚只回滚它自己，
+    /// 不会顺带丢掉主上下文里别处还没保存的改动。`@Query` 与主上下文经持久化存储自动合并。
     @discardableResult
+    func replace(with payload: LANSyncFullSnapshot) async throws -> LANSyncMergeReport {
+        try await Self.replaceInBackground(container: container, payload: payload)
+    }
+
+    /// worker 必须在非主线程上构造：在主线程上构造的 `@ModelActor` 会把它的上下文
+    /// 绑在主队列上，等于没挪走。
+    @concurrent nonisolated private static func replaceInBackground(
+        container: ModelContainer, payload: LANSyncFullSnapshot
+    ) async throws -> LANSyncMergeReport {
+        let worker = LANSyncReplaceWorker(modelContainer: container)
+        return try await worker.replace(with: payload)
+    }
+}
+
+/// `LANSyncDataStore.replace(with:)` 的后台执行体。
+@ModelActor
+actor LANSyncReplaceWorker {
     func replace(with payload: LANSyncFullSnapshot) throws -> LANSyncMergeReport {
-        let context = container.mainContext
+        let context = modelContext
         let oldProfiles = try context.fetch(FetchDescriptor<ServerProfile>())
         let oldKeys = try context.fetch(FetchDescriptor<SSHKey>())
         let oldProviders = try context.fetch(FetchDescriptor<AIProvider>())
@@ -219,7 +241,7 @@ final class LANSyncDataStore {
             keyIDs: payload.data.sshKeys.map(\.id),
             providerIDs: payload.data.providers.map(\.id),
             profileKeyIDs: payload.data.profiles.compactMap(\.keyID))
-        let session = try beginMerge(scope: .all)
+        let session = try LANSyncMergeSession(context: context, scope: .all)
         let secretStore = LANSyncSecretStore()
         let secretTransaction = try secretStore.beginReplace(
             payload.secrets, previousAccounts: previousAccounts, incomingAccounts: incomingAccounts)
@@ -242,8 +264,7 @@ final class LANSyncDataStore {
 /// 分不清是「对端删了」还是「在下一片里」。所以 `apply` 只做 upsert 并记下见过的主键，
 /// `finish` 才按 `scope` 统一删除。`scope` 也限定了删除的权威范围：只收到 config 的
 /// 设备不会去动本地会话，否则会把 iCloud 同步下来的历史当成「对端没有」抹掉。
-@MainActor
-final class LANSyncMergeSession {
+nonisolated final class LANSyncMergeSession {
     private let context: ModelContext
     private let scope: LANSyncScope
     private var report = LANSyncMergeReport()
@@ -274,19 +295,29 @@ final class LANSyncMergeSession {
     private var pendingJumpHosts: [(profile: UUID, jumpHost: UUID?)] = []
     private var pendingMessageSessions: [(message: UUID, session: UUID?)] = []
 
+    /// 同一主键的多余副本（按 scope 分组）。模型为了 CloudKit 不能加 `.unique`：
+    /// LAN 先插入一条、CloudKit 随后又导入同 id 的另一条，就成了两份。索引只能留一份，
+    /// 另一份既不更新也不会被 prune 遍历到——不在 `finish` 里删掉，它就永远留在列表里。
+    private var configDuplicates: [any PersistentModel] = []
+    private var historyDuplicates: [any PersistentModel] = []
+
     init(context: ModelContext, scope: LANSyncScope) throws {
         self.context = context
         self.scope = scope
-        groupsByName = try Self.index(ServerGroup.self, in: context, key: \.name)
-        knownHostsByID = try Self.index(KnownHost.self, in: context, key: \.id)
-        keysByID = try Self.index(SSHKey.self, in: context, key: \.id)
-        providersByID = try Self.index(AIProvider.self, in: context, key: \.id)
-        profilesByID = try Self.index(ServerProfile.self, in: context, key: \.id)
-        rulesByID = try Self.index(ForwardingRule.self, in: context, key: \.id)
-        commandsByID = try Self.index(QuickCommand.self, in: context, key: \.id)
-        runsByID = try Self.index(QuickCommandRun.self, in: context, key: \.id)
-        sessionsByID = try Self.index(ChatSession.self, in: context, key: \.id)
-        messagesByID = try Self.index(ChatMessageRecord.self, in: context, key: \.id)
+        var config: [any PersistentModel] = []
+        var history: [any PersistentModel] = []
+        groupsByName = try Self.index(ServerGroup.self, in: context, key: \.name, duplicates: &config)
+        knownHostsByID = try Self.index(KnownHost.self, in: context, key: \.id, duplicates: &config)
+        keysByID = try Self.index(SSHKey.self, in: context, key: \.id, duplicates: &config)
+        providersByID = try Self.index(AIProvider.self, in: context, key: \.id, duplicates: &config)
+        profilesByID = try Self.index(ServerProfile.self, in: context, key: \.id, duplicates: &config)
+        rulesByID = try Self.index(ForwardingRule.self, in: context, key: \.id, duplicates: &config)
+        commandsByID = try Self.index(QuickCommand.self, in: context, key: \.id, duplicates: &config)
+        runsByID = try Self.index(QuickCommandRun.self, in: context, key: \.id, duplicates: &history)
+        sessionsByID = try Self.index(ChatSession.self, in: context, key: \.id, duplicates: &history)
+        messagesByID = try Self.index(ChatMessageRecord.self, in: context, key: \.id, duplicates: &history)
+        configDuplicates = config
+        historyDuplicates = history
     }
 
     /// 灌入一片：按主键 upsert，逐字段只写差异。
@@ -477,6 +508,8 @@ final class LANSyncMergeSession {
         }
 
         if scope.contains(.config) {
+            for model in configDuplicates { context.delete(model) }
+            report.deleted += configDuplicates.count
             report.deleted += prune(rulesByID, keeping: seenRules)
             report.deleted += prune(commandsByID, keeping: seenCommands)
             report.deleted += prune(profilesByID, keeping: seenProfiles)
@@ -486,6 +519,8 @@ final class LANSyncMergeSession {
             report.deleted += prune(groupsByName, keeping: seenGroups)
         }
         if scope.contains(.history) {
+            for model in historyDuplicates { context.delete(model) }
+            report.deleted += historyDuplicates.count
             report.deleted += prune(messagesByID, keeping: seenMessages)
             report.deleted += prune(sessionsByID, keeping: seenSessions)
             report.deleted += prune(runsByID, keeping: seenRuns)
@@ -533,13 +568,15 @@ final class LANSyncMergeSession {
         return true
     }
 
-    /// 按主键把某类型的现有记录索引成字典。
+    /// 按主键把某类型的现有记录索引成字典；同主键的第二份起记进 `duplicates`。
     private static func index<M: PersistentModel, K: Hashable>(
-        _ type: M.Type, in context: ModelContext, key: KeyPath<M, K>
+        _ type: M.Type, in context: ModelContext, key: KeyPath<M, K>,
+        duplicates: inout [any PersistentModel]
     ) throws -> [K: M] {
         var result: [K: M] = [:]
         for model in try context.fetch(FetchDescriptor<M>()) {
-            result[model[keyPath: key]] = model
+            let id = model[keyPath: key]
+            if result[id] == nil { result[id] = model } else { duplicates.append(model) }
         }
         return result
     }
@@ -559,7 +596,7 @@ final class LANSyncMergeSession {
 
 /// 局域网合并需要「按 id 现造一条空记录」。参与同步的模型都满足这两条约束：
 /// 无参构造 + 可写的 `UUID` 主键。（`ServerGroup` 以 `name` 作主键，不在此列。）
-protocol LANSyncMergeable: PersistentModel {
+nonisolated protocol LANSyncMergeable: PersistentModel {
     init()
     var id: UUID { get set }
 }
@@ -575,7 +612,7 @@ extension ChatSession: LANSyncMergeable {}
 extension ChatMessageRecord: LANSyncMergeable {}
 
 /// 一次局域网合并真正触及的记录数。`isEmpty` 为真表示两端已一致，未产生任何写入。
-struct LANSyncMergeReport: Sendable, Equatable {
+nonisolated struct LANSyncMergeReport: Sendable, Equatable {
     var inserted = 0
     var updated = 0
     var deleted = 0

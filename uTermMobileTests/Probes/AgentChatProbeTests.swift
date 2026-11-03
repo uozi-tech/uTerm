@@ -25,6 +25,29 @@ import XCTest
 @MainActor
 final class AgentChatProbeTests: XCTestCase {
 
+    // MARK: - 审批档位
+
+    /// 屏幕现在会把拨盘档位（`@AppStorage("agentSafety")`，默认 `.readAuto`）灌进
+    /// `approvalMode`（见 `AgentSessionModifier`；此前移动端漏了这一步，恒为 `.confirm`）。
+    /// 工具执行的用例要走「停在待批准 → 手动批准」那条路，而夹具里的 `journalctl | tail`
+    /// 是只读命令，`.readAuto` 下会被直接放行——所以这里钉成 `.confirm`，跑完还原。
+    private nonisolated(unsafe) static var savedSafety: Any?
+
+    nonisolated override func setUp() {
+        super.setUp()
+        Self.savedSafety = UserDefaults.standard.object(forKey: "agentSafety")
+        UserDefaults.standard.set(AgentSafety.confirm.rawValue, forKey: "agentSafety")
+    }
+
+    nonisolated override func tearDown() {
+        if let saved = Self.savedSafety {
+            UserDefaults.standard.set(saved, forKey: "agentSafety")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "agentSafety")
+        }
+        super.tearDown()
+    }
+
     // MARK: - 档位
 
     /// 真实档 200 条 / 极端档 1000 条 —— 与桌面 `AgentMessageListCostTests` 同规模，

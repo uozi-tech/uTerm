@@ -65,6 +65,7 @@ struct GroupFormSheet: View {
 
     @State private var name = ""
     @State private var colorHex = ServerGroup.palette[4]
+    @State private var duplicateName = false
 
     var body: some View {
         NavigationStack {
@@ -108,16 +109,30 @@ struct GroupFormSheet: View {
             }
         }
         .onAppear { if let group { name = group.name; colorHex = group.colorHex } }
+        .alert("已有同名分组", isPresented: $duplicateName) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("分组按名称归并：同名的两个分组在同步时会被合成一个。请换一个名称。")
+        }
     }
 
     private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
         if let group {
-            group.name = name.trimmingCharacters(in: .whitespaces)
+            // 走 GroupStore：查重名，并把成员主机的 `group` 一起改过去。
+            guard GroupStore(context: context).rename(group, to: trimmed) else {
+                duplicateName = true
+                return
+            }
             group.colorHex = colorHex
         } else {
-            let next = (try? context.fetch(FetchDescriptor<ServerGroup>()))?.map(\.sortOrder).max() ?? -1
-            context.insert(ServerGroup(name: name.trimmingCharacters(in: .whitespaces),
-                                       colorHex: colorHex, sortOrder: next + 1))
+            let existing = (try? context.fetch(FetchDescriptor<ServerGroup>())) ?? []
+            guard !existing.contains(where: { $0.name == trimmed }) else {
+                duplicateName = true
+                return
+            }
+            let next = existing.map(\.sortOrder).max() ?? -1
+            context.insert(ServerGroup(name: trimmed, colorHex: colorHex, sortOrder: next + 1))
         }
         try? context.save()
         dismiss()
@@ -135,6 +150,7 @@ struct GroupDetailView: View {
     @State private var name = ""
     @State private var tab = 0   // 0=成员 1=添加
     @State private var pendingDelete = false
+    @State private var duplicateName = false
 
     private var members: [ServerProfile] { hosts.filter { $0.group == group.name } }
     private var candidates: [ServerProfile] { hosts.filter { ($0.group ?? "") != group.name } }
@@ -162,6 +178,11 @@ struct GroupDetailView: View {
             Button("删除", role: .destructive) { delete() }
             Button("取消", role: .cancel) {}
         } message: { Text("里面的 \(members.count) 台主机会移到「未分组」。") }
+        .alert("已有同名分组", isPresented: $duplicateName) {
+            Button("好", role: .cancel) { name = group.name }
+        } message: {
+            Text("分组按名称归并：同名的两个分组在同步时会被合成一个。请换一个名称。")
+        }
     }
 
     private var header: some View {
@@ -284,10 +305,8 @@ struct GroupDetailView: View {
     private func rename() {
         let new = name.trimmingCharacters(in: .whitespaces)
         guard !new.isEmpty, new != group.name else { return }
-        let old = group.name
-        for h in hosts where h.group == old { h.group = new }
-        group.name = new
-        try? context.save()
+        // 改前不查重名：两个同名分组在局域网合并时按名字归并，多出来的那份永远删不掉。
+        if !GroupStore(context: context).rename(group, to: new) { duplicateName = true }
     }
     private func delete() {
         for h in members { h.group = nil }

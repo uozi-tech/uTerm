@@ -54,6 +54,11 @@ final class MobileTerminalController {
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
     @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var exitTask: Task<Void, Never>?
+    @ObservationIgnored private var connectTask: Task<Void, Never>?
+    /// 建连代次：close() / restart() 递增，在途建连落地时对不上就丢弃结果。
+    @ObservationIgnored private var connectGeneration = 0
+    @ObservationIgnored private var inputContinuation: AsyncStream<TerminalInput>.Continuation?
+    @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
     /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
     ///
@@ -62,10 +67,9 @@ final class MobileTerminalController {
     /// 照样重绘**。探针实测：4 个会话各 2000 行/秒时，只有一个在吐 vs 四个都在吐，
     /// 主线程单帧 p50 0.06ms → 3.94ms、超 8.33ms 帧 0% → 16.6%（`term-ab-*`）。
     ///
-    /// 修法是**降频不丢字节**：后台会话把 feed 节拍从 16ms 降到 250ms，单次 drain 上限
-    /// 相应放大，字节照常进有界缓冲一个不少（回滚缓冲、`cat` 的完整输出都不受影响），
-    /// 只是不再每 16ms 逼 SwiftTerm 解析 + 重绘一次。切回前台立刻重启泵，把那一段
-    /// 等待截断——否则切过去最多要干等 250ms 才看到积压。
+    /// 修法是**降频**：后台会话把 feed 节拍从 16ms 降到 64ms，单次 drain 相应放大，
+    /// 不再每 16ms 逼 SwiftTerm 解析 + 重绘一次。切回前台立刻重启泵，把那一段
+    /// 等待截断。
     var isForeground = true {
         didSet {
             guard isForeground != oldValue, isForeground, outputFlushTask != nil else { return }
@@ -74,13 +78,29 @@ final class MobileTerminalController {
     }
 
     private var outputGeneration = 0
-    private let outputFlushActiveMs = 16
-    /// 后台会话的 feed 节拍（≈4Hz）。
-    private let outputFlushBackgroundMs = 250
-    private let maxBytesPerOutputFlush = 32 * 1024
-    /// 后台节拍慢 16 倍，单次上限就得放大同样的量级，否则吞吐被压到 128KB/s，
-    /// 洪水档会把 4MB 环形缓冲挤爆丢字节 —— 那就不是「降频」而是「丢数据」了。
-    private let maxBytesPerBackgroundFlush = 512 * 1024
+
+    /// 每拍喂给 SwiftTerm 的字节预算，随积压量放大。
+    ///
+    /// 固定预算时吞吐有硬上限（前台 32KB/16ms ≈ 2MB/s）：局域网里 `cat` 大文件超过它，
+    /// 4MB 缓冲两秒就满，`TerminalOutputBuffer` 只能整块丢掉最旧的字节——会截断转义
+    /// 序列，颜色 / 光标状态随之错乱。积压越多单拍喂得越多，丢字节只剩极端洪水一种情况；
+    /// 平时（积压很小）仍是小块，单拍主线程开销不变。
+    ///
+    /// 后台旧方案是 250ms 一次喂 512KB，前台标签每 250ms 卡一下；现在拆成 64ms 一拍、
+    /// 基础 128KB，吞吐不降，单次 feed 的主线程停顿小四倍。
+    struct FlushPacing {
+        let intervalMs: Int
+        let baseBytes: Int
+        let maxBytes: Int
+
+        static let foreground = FlushPacing(intervalMs: 16, baseBytes: 32 * 1024, maxBytes: 256 * 1024)
+        static let background = FlushPacing(intervalMs: 64, baseBytes: 128 * 1024, maxBytes: 512 * 1024)
+
+        /// 积压的四分之一，夹在 [base, max] 之间：积压 1MB 时前台一拍 256KB。
+        func budget(backlog: Int) -> Int {
+            min(maxBytes, max(baseBytes, backlog / 4))
+        }
+    }
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
@@ -184,21 +204,62 @@ final class MobileTerminalController {
         title = profile.name
         state = .connecting
         lastProfile = profile; lastContainer = container; lastRelay = relay
+        connectGeneration &+= 1
+        let attempt = connectGeneration
+        let pid = profile.persistentModelID
+        let request = MobileTerminalTransportRequest(profile: profile, container: container, relay: relay)
 
-        let conn: any TerminalBackend
-        do {
-            conn = try transportFactory.make(
-                MobileTerminalTransportRequest(profile: profile, container: container, relay: relay))
-        } catch {
+        let factory = transportFactory
+        // 全程弱引用：握手最长要等到登录超时，不能让一个已关掉的标签被这段等待拖住。
+        connectTask = Task { [weak self] in
+            let made: Result<any TerminalBackend, any Error>
+            do { made = .success(try await factory.make(request)) } catch { made = .failure(error) }
+            guard let conn = self?.adopt(made, attempt: attempt) else { return }
+            let outcome: (any Error)?
+            do { try await conn.connect(); outcome = nil } catch { outcome = error }
+            self?.finishConnect(outcome, attempt: attempt, pid: pid, container: container)
+        }
+    }
+
+    /// 工厂结果落地。解析钥匙串期间被 close() / restart() 了（代次对不上）就丢掉——
+    /// 这条传输还没连，随引用释放即可。
+    private func adopt(_ made: Result<any TerminalBackend, any Error>, attempt: Int) -> (any TerminalBackend)? {
+        guard connectGeneration == attempt else { return nil }
+        switch made {
+        case .success(let conn):
+            install(conn)
+            return conn
+        case .failure(let error):
             // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
             state = .failed("认证材料解析失败：\(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// 握手结果落地。握手期间被关闭 / 被重连取代时不能把 `.closed` 翻回 `.connected`。
+    private func finishConnect(_ error: (any Error)?, attempt: Int,
+                               pid: PersistentIdentifier, container: ModelContainer) {
+        guard connectGeneration == attempt else { return }
+        if let error {
+            state = .failed(error.localizedDescription)
             return
         }
-        connection = conn
+        state = .connected
+        hadConnected = true
+        // 回前台 / 换网络 / 每 30s 探一次活：后台挂久了的半死 TCP 不会自己报错，
+        // 标签一直显示「已连接」、输入只进内核缓冲。判死后走 exitStream → `.closed`。
+        ConnectionWatchdog.shared.register(self)
+        if let profile = container.mainContext.model(for: pid) as? ServerProfile {
+            profile.lastConnectedAt = Date()
+            try? container.mainContext.save()
+        }
+    }
 
+    /// 接上一条刚造好的传输：输出泵、退出监听、有序的输入通道。
+    private func install(_ conn: any TerminalBackend) {
+        connection = conn
         let outStream = conn.outputStream
         let exitStream = conn.exitStream
-        let pid = profile.persistentModelID
         resetOutputPipeline()
         let generation = outputGeneration
         let buffer = outputBuffer
@@ -213,33 +274,27 @@ final class MobileTerminalController {
         startOutputFlushLoop(generation: generation)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
-                await MainActor.run {
-                    if case .failed = self?.state { } else { self?.state = .closed }
-                }
+                if case .failed = self?.state { } else { self?.state = .closed }
                 break
             }
         }
 
-        Task { [weak self] in
-            do {
-                try await conn.connect()
-                await MainActor.run {
-                    self?.state = .connected
-                    self?.hadConnected = true
-                    if let profile = container.mainContext.model(for: pid) as? ServerProfile {
-                        profile.lastConnectedAt = Date()
-                        try? container.mainContext.save()
-                    }
+        // 击键 / 尺寸变化走同一条 FIFO：每次各起一个 Task 时，两个 Task 谁先进
+        // 后端 actor 没有语言层面的保证，快速连打可能乱序。
+        let (inputs, continuation) = AsyncStream.makeStream(of: TerminalInput.self)
+        inputContinuation = continuation
+        inputTask = Task {
+            for await input in inputs {
+                switch input {
+                case .data(let data): await conn.write(data)
+                case .resize(let cols, let rows): await conn.resize(cols: cols, rows: rows)
                 }
-            } catch {
-                await MainActor.run { self?.state = .failed(error.localizedDescription) }
             }
         }
     }
 
     func write(_ data: Data) {
-        guard let connection else { return }
-        Task { await connection.write(data) }
+        inputContinuation?.yield(.data(data))
     }
 
     func sendText(_ text: String) {
@@ -247,16 +302,11 @@ final class MobileTerminalController {
     }
 
     func resize(cols: UInt16, rows: UInt16) {
-        guard let connection else { return }
-        Task { await connection.resize(cols: cols, rows: rows) }
+        inputContinuation?.yield(.resize(cols: cols, rows: rows))
     }
 
     func close() {
-        resetOutputPipeline()
-        exitTask?.cancel()
-        let conn = connection
-        Task { await conn?.close() }
-        connection = nil
+        teardownConnection()
         state = .closed
     }
 
@@ -265,14 +315,25 @@ final class MobileTerminalController {
     func restart() {
         guard case .failed = state,
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
-        resetOutputPipeline()
-        exitTask?.cancel()
-        let old = connection
-        Task { await old?.close() }
-        connection = nil
+        teardownConnection()
         started = false
         state = .idle
         start(profile: profile, container: container, relay: relay)
+    }
+
+    /// 作废在途建连（代次 +1，晚到的结果一律丢弃），拆掉输出泵、输入通道与传输。
+    private func teardownConnection() {
+        connectGeneration &+= 1
+        connectTask?.cancel()
+        connectTask = nil
+        resetOutputPipeline()
+        exitTask?.cancel()
+        inputContinuation?.finish()
+        inputContinuation = nil
+        inputTask = nil
+        let conn = connection
+        Task { await conn?.close() }
+        connection = nil
     }
 
     private func resetOutputPipeline() {
@@ -292,21 +353,19 @@ final class MobileTerminalController {
                 guard let self, self.outputGeneration == generation else { return }
                 guard let terminalView = self.terminalView else {
                     // attach 通常早于 start；若视图尚未挂上，保留 buffer 并低频重试。
-                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                    try? await Task.sleep(for: .milliseconds(FlushPacing.foreground.intervalMs))
                     continue
                 }
 
-                let foreground = self.isForeground
+                let pacing: FlushPacing = self.isForeground ? .foreground : .background
                 let chunk = buffer.drain(
-                    maxBytes: foreground ? self.maxBytesPerOutputFlush
-                                         : self.maxBytesPerBackgroundFlush,
+                    maxBytes: pacing.budget(backlog: buffer.pendingBytes),
                     generation: generation)
                 if chunk.isEmpty {
                     await buffer.waitForData()
                 } else {
                     terminalView.feed(byteArray: ArraySlice([UInt8](chunk)))
-                    try? await Task.sleep(for: .milliseconds(
-                        foreground ? self.outputFlushActiveMs : self.outputFlushBackgroundMs))
+                    try? await Task.sleep(for: .milliseconds(pacing.intervalMs))
                 }
             }
         }
@@ -315,7 +374,21 @@ final class MobileTerminalController {
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
-        outputTask?.cancel(); outputFlushTask?.cancel(); exitTask?.cancel()
+        outputTask?.cancel(); outputFlushTask?.cancel(); exitTask?.cancel(); connectTask?.cancel()
+        inputContinuation?.finish()
         outputBuffer.clear()
+    }
+}
+
+/// 发往后端的输入，按产生顺序排队。
+private enum TerminalInput: Sendable {
+    case data(Data)
+    case resize(cols: UInt16, rows: UInt16)
+}
+
+extension MobileTerminalController: ConnectionHealthProbing {
+    func probeConnectionHealth() async {
+        guard state == .connected, let connection else { return }
+        _ = await connection.verifyConnectionAlive()
     }
 }

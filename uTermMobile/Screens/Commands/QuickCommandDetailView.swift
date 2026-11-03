@@ -185,7 +185,8 @@ struct QuickCommandDetailView: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 18)
                     .overlay(RoundedRectangle(cornerRadius: 11).stroke(M.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
             } else {
-                VStack(spacing: 8) { ForEach(runs) { run in RunLogRow(run: run) } }
+                // 30 天内的记录可能上千条，每条首次渲染还要解一次 JSON：按需构建。
+                LazyVStack(spacing: 8) { ForEach(runs) { run in RunLogRow(run: run) } }
             }
         }
         .padding(.top, 22)

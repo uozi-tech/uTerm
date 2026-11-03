@@ -32,6 +32,7 @@ struct MobileRootView: View {
         .environment(store)
         .environment(hostKeyRelay)
         .environment(workspace)
+        .mobileLANSyncHost()
         .environment(\.mAccent, M.accent)
         .tint(M.accent)
         // ⌘K 硬件快捷键（iPad 外接键盘）：唤起命令面板。
@@ -59,7 +60,7 @@ struct MobileRootView: View {
         .overlay {
             // 分屏时在工作区里新开的标签：连接中页只盖那个标签（WorkspaceScreen 自己画），
             // 另一格照常可用。其余（从主机列表进来、没分屏）照旧盖满整屏。
-            if let req = store.connecting, !req.showsInPane(workspace) {
+            if let req = store.connecting, !req.showsInPane(workspace, workspaceVisible: store.showWorkspace) {
                 ConnectingCoverView(
                     request: req,
                     onFinish: { store.finishConnect() },

@@ -22,7 +22,12 @@ nonisolated struct ParallelDoctor: Sendable {
         var text = ""
         var calls: [LLMToolCall] = []
         do {
-            for try await event in client.stream(messages: messages, system: system, config: config) {
+            // 套静默超时（与 `AssistantModel` 同一个）：provider 保持连接、只发 keep-alive 时
+            // 这一轮永远不返回，泳道停在「诊断中」、整次运行不收尾也不记日志。
+            let events = withIdleTimeout(
+                client.stream(messages: messages, system: system, config: config),
+                timeout: config.streamIdleTimeout)
+            for try await event in events {
                 switch event {
                 case .text(let delta): text += delta
                 case .toolCall(let call): calls.append(call)

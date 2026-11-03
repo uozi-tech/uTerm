@@ -17,7 +17,9 @@ protocol ParallelCommandExecuting {
     /// 为一台主机开一条执行会话。真实实现在这里解析认证材料、准备复用连接；
     /// 解析失败不抛错，而是把错误文本放进会话的 `setupErrorText`（与抽协议前
     /// `ExecTarget.setupErrorText` 的语义一致）。
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) -> ParallelExecutionSession
+    ///
+    /// `async`：真实实现要读钥匙串，放在主线程之外做。同步实现（探针的假执行器）照样满足。
+    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession
 }
 
 /// 一台主机上的一次执行会话（同台内多条命令串行复用同一条连接）。
@@ -57,10 +59,14 @@ nonisolated protocol ParallelExecutionSession: Sendable {
 struct SSHParallelExecutor: ParallelCommandExecuting {
     let container: ModelContainer
 
-    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) -> ParallelExecutionSession {
+    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+        let snapshot = SSHConnection.ProfileSnapshot(profile)
+        let lookup = SSHAuthResolver.Lookup(profile)
+        let jump = profile.jumpHost.map { SSHAuthResolver.Lookup($0) }
         do {
-            let made = try WorkspaceCommandExecutorFactory.make(
-                server: profile, container: container,
+            let auth = try await Self.resolve(lookup, jump: jump)
+            let made = WorkspaceCommandExecutorFactory.make(
+                snapshot: snapshot, auth: auth.target, jumpAuth: auth.jump, container: container,
                 trustNewKeys: trustNewKeys, reuseConnection: true)
             return SSHParallelSession(executor: made.executor,
                                       hostKeyChallenges: made.hostKeyChallenges,
@@ -71,6 +77,15 @@ struct SSHParallelExecutor: ParallelCommandExecuting {
                                       connection: nil,
                                       setupErrorText: error.localizedDescription)
         }
+    }
+
+    /// 读钥匙串。跳板机解析失败与目标一样整台判失败（与 `WorkspaceCommandExecutorFactory.make` 同义）。
+    @concurrent nonisolated private static func resolve(
+        _ target: SSHAuthResolver.Lookup, jump: SSHAuthResolver.Lookup?
+    ) async throws -> (target: ResolvedAuth, jump: ResolvedAuth?) {
+        let keychain = KeychainStore()
+        return (try SSHAuthResolver.resolve(target, keychain: keychain),
+                try jump.map { try SSHAuthResolver.resolve($0, keychain: keychain) })
     }
 }
 

@@ -144,6 +144,14 @@ struct HostsScreen: View {
     }
 
     private func delete(_ host: ServerProfile) {
+        // 先收掉这台主机开着的会话：标签强持着 `ServerProfile`，删掉以后再读它的属性会崩。
+        if let workspace {
+            let closed = workspace.closeSessions(ofHost: host.persistentModelID)
+            if let req = store.connecting, let tabID = req.tabID, closed.contains(tabID) {
+                store.connecting = nil
+            }
+            if workspace.isEmpty { store.showWorkspace = false }
+        }
         let keychain = KeychainStore()
         try? keychain.delete(profileID: host.id, kind: .password)
         try? keychain.delete(profileID: host.id, kind: .passphrase)

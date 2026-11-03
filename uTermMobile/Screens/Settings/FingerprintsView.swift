@@ -15,11 +15,13 @@ struct FingerprintsView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         MInsetGroup(header: "已知主机 · \(hosts.count)",
-                                    footer: "首次连接或主机密钥变化时，uTerm 会要求你确认指纹后才信任。") {
-                            ForEach(Array(hosts.enumerated()), id: \.element.id) { idx, h in
+                                    footer: "首次连接或主机密钥变化时，uTerm 会要求你确认指纹后才信任。",
+                                    lazy: true) {
+                            let lastID = hosts.last?.id
+                            ForEach(hosts) { h in
                                 MInsetRow(icon: "shield", label: h.host,
                                           sub: "\(h.fingerprint) · \(keyTypeLabel(h.keyTypeRaw))",
-                                          last: idx == hosts.count - 1,
+                                          last: h.id == lastID,
                                           trailing: AnyView(
                                             Text(addedText(h.firstTrustedAt))
                                                 .font(M.mono(12)).foregroundStyle(M.text4)))

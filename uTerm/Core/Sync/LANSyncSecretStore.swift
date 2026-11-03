@@ -4,10 +4,8 @@ import Security
 /// Reads and replaces the Keychain accounts represented by the full LAN snapshot.
 /// Account names are generated only from local model identifiers; arbitrary remote
 /// account names are never accepted during import.
-@MainActor
-final class LANSyncSecretStore {
-    @MainActor
-    final class Transaction {
+nonisolated final class LANSyncSecretStore {
+    nonisolated final class Transaction {
         private let keychain: KeychainStore
         private let backup: [String: String?]
         private var active = true
@@ -59,9 +57,12 @@ final class LANSyncSecretStore {
         for account in allowed { backup[account] = try load(account: account) }
         do {
             for account in allowed {
+                let current = backup[account] ?? nil
+                // 只动真的变了的条目：`save` 是 delete + add，且每次都会经 iCloud 钥匙串
+                // 广播一次；一百台主机就是几百次 IPC，绝大多数值其实没变。
                 if let value = incoming[account] {
-                    try keychain.save(value, account: account)
-                } else {
+                    if value != current { try keychain.save(value, account: account) }
+                } else if current != nil {
                     try keychain.delete(account: account)
                 }
             }
@@ -109,6 +110,6 @@ final class LANSyncSecretStore {
     }
 }
 
-private extension SecretKind {
+nonisolated private extension SecretKind {
     static var allCases: [SecretKind] { [.password, .passphrase, .privateKey] }
 }

@@ -205,6 +205,14 @@ actor SSHConnection: TerminalBackend {
             isClosed = true
             throw error
         }
+        // 握手期间被 close() 了（用户在连接中页点了返回 / 关了标签）：close() 那时
+        // sessionTask 还是 nil、什么也没收。这里不再开 PTY，把刚拿到的租约还掉。
+        guard !isClosed else {
+            ConnectTimeline.current?.finish("cancelled")
+            await connected.close()
+            finishStreams()
+            throw SSHConnectionError.alreadyClosed
+        }
         let targetClient = connected.target
         let cols = Int(pendingCols)
         let rows = Int(pendingRows)

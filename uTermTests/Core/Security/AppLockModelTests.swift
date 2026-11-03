@@ -129,4 +129,58 @@ final class AppLockModelTests: XCTestCase {
         XCTAssertEqual(model.state, .unlocked)
         XCTAssertEqual(fake.callCount, 2)
     }
+
+    // MARK: - relock 与在途验证交错（iOS 退后台时系统会取消正在弹的验证）
+
+    /// relock 之后才落地的验证结果一律作废：晚到的 `.success` 不能解锁，
+    /// 晚到的 `.canceled` 也不能把状态写成 `.failed`（否则回前台的自动验证只认 `.locked`，不再弹）。
+    func testOutcomeArrivingAfterRelockIsIgnored() async {
+        for late in [AuthOutcome.success, .canceled] {
+            let gate = GatedBiometricAuthenticator()
+            let model = AppLockModel(authenticator: gate, requireAuthAtLaunch: true)
+            let auth = Task { await model.authenticate() }
+            await gate.waitUntilAsked()
+            XCTAssertEqual(model.state, .authenticating)
+
+            model.relock()
+            gate.release(late)
+            await auth.value
+
+            XCTAssertEqual(model.state, .locked, "relock 后晚到的 \(late) 改了状态")
+            // 回前台的首验仍能触发。
+            gate.nextOutcome = .success
+            await model.startInitialAuthIfNeeded()
+            XCTAssertEqual(model.state, .unlocked)
+        }
+    }
+}
+
+/// 验证请求挂起，直到测试手动放行；用来编排「验证还在弹、App 已经退到后台」。
+@MainActor
+final class GatedBiometricAuthenticator: BiometricAuthenticator {
+    private var pending: CheckedContinuation<AuthOutcome, Never>?
+    private var askedWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 放行之后的请求直接返回这个结果。
+    var nextOutcome: AuthOutcome?
+
+    func availability() -> BiometryAvailability { .biometrics }
+
+    func authenticate(policy: LAPolicy, reason: String) async -> AuthOutcome {
+        if let nextOutcome { return nextOutcome }
+        return await withCheckedContinuation { cont in
+            pending = cont
+            askedWaiters.forEach { $0.resume() }
+            askedWaiters.removeAll()
+        }
+    }
+
+    func waitUntilAsked() async {
+        guard pending == nil else { return }
+        await withCheckedContinuation { askedWaiters.append($0) }
+    }
+
+    func release(_ outcome: AuthOutcome) {
+        pending?.resume(returning: outcome)
+        pending = nil
+    }
 }

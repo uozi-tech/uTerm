@@ -56,7 +56,7 @@ struct SwiftTermView: UIViewRepresentable {
         // `TerminalKeyBar` 重复堆两层。置 nil 后键盘上方只留 `TerminalKeyBar` 一层。
         view.inputAccessoryView = nil
         view.minimumContrastRatio = MTerminalColors.minimumContrastRatio
-        apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: view)
+        applyColorsIfNeeded(to: view, coordinator: context.coordinator)
         if isFresh {
             // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁），仅新建时设一次。
             view.feed(text: "\u{1B}[2 q")
@@ -70,15 +70,23 @@ struct SwiftTermView: UIViewRepresentable {
 
     func updateUIView(_ uiView: SwiftTerm.TerminalView, context: Context) {
         context.coordinator.onInteract = onInteract
-        // 外观切换（日 / 夜）时实时重应用配色。
-        apply(MTerminalColors.resolve(dark: colorScheme == .dark), to: uiView)
-        // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时实时换字（换字会触发
-        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。阈值过滤避免无意义重排。
-        if abs(uiView.font.pointSize - fontSize) > 0.1 {
-            uiView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        }
+        // 外观切换（日 / 夜）时重应用配色。只在日夜真的变了才装：父视图每次重算都会
+        // 调到这里（拖分隔条 / 拖标签时每帧一次），而装一次配色会清掉 SwiftTerm 的属性
+        // 与颜色缓存并整屏重绘——所有挂着的终端（含看不见的标签）都会跟着每帧重绘。
+        applyColorsIfNeeded(to: uiView, coordinator: context.coordinator)
+        // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时换字（换字会触发
+        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。宽度连续变化时（拖分隔条）
+        // 等它停下再换，否则几乎每帧都要重排一次、给远端发一次 SIGWINCH。
+        context.coordinator.scheduleFontSize(fontSize, on: uiView)
         // Agent 模式（isActive=false）：主动收键盘，否则终端键盘盖住 Agent 输入框。
         if !isActive, uiView.isFirstResponder { _ = uiView.resignFirstResponder() }
+    }
+
+    private func applyColorsIfNeeded(to view: SwiftTerm.TerminalView, coordinator: Coordinator) {
+        let dark = colorScheme == .dark
+        guard coordinator.appliedDark != dark else { return }
+        coordinator.appliedDark = dark
+        apply(MTerminalColors.resolve(dark: dark), to: view)
     }
 
     /// 把一套配色装进 SwiftTerm 视图：ANSI 表 + 前景 / 背景 / 光标 / 选区。
@@ -98,7 +106,21 @@ struct SwiftTermView: UIViewRepresentable {
         static let interactGestureName = "uterm.interact"
         let controller: MobileTerminalController
         var onInteract: (() -> Void)?
+        /// 上次装进视图的是不是暗色配色；nil = 还没装过。
+        var appliedDark: Bool?
+        private var fontTask: Task<Void, Never>?
         init(controller: MobileTerminalController) { self.controller = controller }
+
+        /// 宽度停稳 120ms 后再换字号；期间的新值覆盖旧值。
+        func scheduleFontSize(_ size: CGFloat, on view: SwiftTerm.TerminalView) {
+            fontTask?.cancel()
+            guard abs(view.font.pointSize - size) > 0.1 else { return }
+            fontTask = Task { [weak view] in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled, let view, abs(view.font.pointSize - size) > 0.1 else { return }
+                view.font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            }
+        }
 
         @objc func interacted() { onInteract?() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

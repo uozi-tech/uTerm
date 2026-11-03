@@ -125,10 +125,18 @@ final class ParallelRunController {
         startedAt = Date()
         finishedAt = nil
         synthesis = ""
-        let execTargets = targets.map { makeExecTarget(profile: $0, trustNewKeys: false) }
-        laneTasks = execTargets.enumerated().map { index, target in
-            Task { await self.runServer(at: index, target: target) }
-        }
+        let gen = generation
+        // 先按顺序把各台的会话开好（认证材料要读钥匙串，不在主线程上），再一起起泳道。
+        laneTasks = [Task {
+            var execTargets: [ExecTarget] = []
+            for profile in targets {
+                execTargets.append(await makeExecTarget(profile: profile, trustNewKeys: false))
+            }
+            guard !Task.isCancelled, gen == generation else { return }
+            laneTasks += execTargets.enumerated().map { index, target in
+                Task { await self.runServer(at: index, target: target) }
+            }
+        }]
     }
 
     /// 停掉所有在跑的泳道（取消传到会话的 `run`）。**生产当前不调用** —— 关闭覆盖态后
@@ -149,13 +157,17 @@ final class ParallelRunController {
         guard let index = states.firstIndex(where: { $0.id == serverID }),
               states[index].hostKeyUntrusted,
               let profile = targets.first(where: { $0.id == serverID }) else { return }
+        // 首轮已经收尾、落过日志，补跑这一台才不再记第二条；首轮还在跑（别的台还没完）时
+        // 点的，照常在最终收尾时记一次——改前一律置 false，整次运行就从日志里消失了。
+        if finishedAt != nil { recordOnFinalize = false }
         resetLane(index)
         finishedAt = nil
         generation += 1
-        recordOnFinalize = false
         running = true
-        let target = makeExecTarget(profile: profile, trustNewKeys: true)
-        laneTasks.append(Task { await self.runServer(at: index, target: target) })
+        laneTasks.append(Task {
+            let target = await makeExecTarget(profile: profile, trustNewKeys: true)
+            await self.runServer(at: index, target: target)
+        })
     }
 
     private func resetLane(_ i: Int) {
@@ -170,10 +182,11 @@ final class ParallelRunController {
         states[i].failure = nil
     }
 
-    private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) -> ExecTarget {
-        ExecTarget(id: profile.id, name: profile.name,
-                   endpoint: "\(profile.username)@\(profile.host):\(profile.port)",
-                   session: executor.makeSession(for: profile, trustNewKeys: trustNewKeys))
+    private func makeExecTarget(profile: ServerProfile, trustNewKeys: Bool) async -> ExecTarget {
+        let session = await executor.makeSession(for: profile, trustNewKeys: trustNewKeys)
+        return ExecTarget(id: profile.id, name: profile.name,
+                          endpoint: "\(profile.username)@\(profile.host):\(profile.port)",
+                          session: session)
     }
 
     /// 把「按节拍回吐的行」接回泳道。回调可能在任意线程发生，所以经由主 actor 落地；

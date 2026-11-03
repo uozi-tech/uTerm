@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import LocalAuthentication
 
 /// iOS 应用锁：开启「Face ID / 触控 ID 解锁」后，冷启动与「从后台回到前台」都要先验证身份。
@@ -46,21 +47,38 @@ extension View {
 private struct MobileAppLockGate: ViewModifier {
     let model: AppLockModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("requireAuthAtLaunch") private var requireAuth = false
+    @State private var lockWindow = MobileLockWindow()
 
     func body(content: Content) -> some View {
+        // 内容**留在视图树里**，只是藏起来、不收触摸：改前上锁时把整棵内容树卸掉，
+        // 根视图持有的会话工作区随之销毁——开着应用锁时，切去别的 App 再回来所有终端 /
+        // 文件标签全没了；那条路径也不经过 close()，SSH 连接与 host-key 等待都悬在半空。
+        //
+        // 安全边界不靠卸载：锁屏画在独立的高层窗口里（`MobileLockWindow`），盖住本窗口的
+        // 一切，包括已弹出的抽屉 / 全屏覆盖；内容同时置透明、去掉触摸与无障碍（SwiftTerm 的
+        // UIView 不守 ZStack 顺序，只靠叠一层盖不住它），窗口建好之前的那一帧也看不到底下。
         ZStack {
-            if model.isUnlocked {
-                content
-                    .transition(.opacity)
-            } else {
-                // 不仅盖住内容，还要让内容离开视图树：否则锁定期间终端/Agent 的
-                // task 仍可继续运行，应用锁只剩视觉效果。
+            content
+                .opacity(model.isUnlocked ? 1 : 0)
+                .allowsHitTesting(model.isUnlocked)
+                .accessibilityHidden(!model.isUnlocked)
+            // 树内也留一份锁屏：独立窗口万一没建起来（冷启动场景还没连上），这里兜底。
+            if !model.isUnlocked {
                 MobileLockCover(model: model)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.22), value: model.isUnlocked)
+        .onChange(of: model.isUnlocked, initial: true) { _, unlocked in
+            if unlocked {
+                lockWindow.hide()
+            } else {
+                lockWindow.show(model: model, colorScheme: colorScheme)
+            }
+        }
+        .onChange(of: colorScheme) { _, scheme in lockWindow.update(colorScheme: scheme) }
         // 冷启动首验：didStart guard 让它与下面的 .active 分支去重，只跑一次。
         .task { await model.startInitialAuthIfNeeded() }
         .onChange(of: scenePhase) { _, phase in
@@ -81,13 +99,55 @@ private struct MobileAppLockGate: ViewModifier {
     }
 }
 
+/// 锁屏所在的独立窗口：层级高于 App 主窗口及其上的所有弹出物（系统验证弹窗仍在它之上）。
+@MainActor
+final class MobileLockWindow {
+    private var windows: [UIWindow] = []
+
+    func show(model: AppLockModel, colorScheme: ColorScheme) {
+        // 收起键盘：键盘窗口层级比我们高，不收会悬在锁屏上。
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        guard windows.isEmpty else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes {
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = .alert + 1
+            window.rootViewController = UIHostingController(rootView: MobileLockCover(model: model)
+                .environment(\.mAccent, M.accent)
+                .tint(M.accent))
+            window.rootViewController?.view.backgroundColor = .clear
+            window.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+            window.isHidden = false
+            windows.append(window)
+        }
+    }
+
+    func update(colorScheme: ColorScheme) {
+        for window in windows { window.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light }
+    }
+
+    func hide() {
+        let closing = windows
+        windows = []
+        guard !closing.isEmpty else { return }
+        UIView.animate(withDuration: 0.22, animations: {
+            for window in closing { window.alpha = 0 }
+        }, completion: { _ in
+            for window in closing { window.isHidden = true }
+        })
+    }
+}
+
 /// 锁屏遮罩：铺满、不透明背景盖住底下的主机列表 / 终端；ULogo + 生物识别图标 +
 /// 状态文案 +「解锁」按钮（取消 / 失败后重触发）。系统验证弹窗浮在它之上。
-private struct MobileLockCover: View {
+struct MobileLockCover: View {
     let model: AppLockModel
 
+    /// 生物识别类型在进程内不会变；每次重算 body 都 `canEvaluatePolicy` 一次是同步 IPC。
+    private let biometry = MobileBiometry.describe()
+
     var body: some View {
-        let biometry = MobileBiometry.describe()
         ZStack {
             M.bg.ignoresSafeArea()
             VStack(spacing: 20) {

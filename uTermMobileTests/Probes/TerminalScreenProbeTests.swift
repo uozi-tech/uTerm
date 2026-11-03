@@ -300,7 +300,7 @@ final class TerminalScreenProbeTests: XCTestCase {
     /// - 档「全前台」= 改法之前的行为：把每片的 `isForeground` 强行按回 `true`，
     ///   于是四个终端都按 16ms 节拍 feed + 重绘。
     /// - 档「按活动态」= 改法之后：`TerminalSessionBody` 把非活动 / Agent 模式的片
-    ///   降到 250ms 节拍（字节照常进有界缓冲，一个不丢）。
+    ///   降到 64ms 节拍（`MobileTerminalController.FlushPacing.background`）。
     ///
     /// 两档在同一轮里跑，只差这一个开关。判定看主线程单帧与超预算比例；
     /// 同时钉住「降频不等于丢字节」——两档吐出的行数同阶。

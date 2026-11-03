@@ -9,11 +9,14 @@ import Observation
 final class FileTab: Identifiable {
     let id = UUID()
     let host: ServerProfile
+    /// 开标签时的主机名：主机被删（本机 / 同步）后、标签关掉前的那一次渲染用它兜底。
+    let hostName: String
     let controller: MobileSFTPController
 
     /// `controller` 默认新建（未建连）；测试注入已经「连上并列好目录」的假会话控制器。
     init(host: ServerProfile, controller: MobileSFTPController = MobileSFTPController()) {
         self.host = host
+        self.hostName = host.name
         self.controller = controller
     }
 }
@@ -52,8 +55,27 @@ enum MWorkTab: Identifiable {
     /// 标签标题：终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
     var title: String {
         switch self {
-        case .terminal(let t): return t.controller.title.isEmpty ? t.host.name : t.controller.title
-        case .files(let f): return f.host.name
+        case .terminal(let t): return t.controller.title.isEmpty ? hostName : t.controller.title
+        case .files: return hostName
+        }
+    }
+
+    /// 主机名；主机已被删除（等着被 `closeSessions(ofHost:)` 收掉）时用开标签时的快照，
+    /// 不去读已删除模型的属性。
+    var hostName: String {
+        let snapshot: String
+        switch self {
+        case .terminal(let t): snapshot = t.hostName
+        case .files(let f): snapshot = f.hostName
+        }
+        return host.isDeleted || host.modelContext == nil ? snapshot : host.name
+    }
+
+    /// 断开这个标签的连接（终端 / SFTP）。
+    func shutdown() {
+        switch self {
+        case .terminal(let t): t.controller.close()
+        case .files(let f): f.controller.close()
         }
     }
 }
@@ -193,6 +215,20 @@ final class MobileWorkspace {
         }
         if panes[i].tabIDs.isEmpty && isSplit { removePane(at: i) }
         return removed
+    }
+
+    /// 移除某台主机的全部标签并断开连接，返回被移除的标签 id。
+    ///
+    /// 主机被删时调用（本机删除前，或 LAN / CloudKit 同步删掉以后）：标签强持着
+    /// `ServerProfile`，主机没了以后再读 `host.name` 之类会撞上已删除的模型。
+    @discardableResult
+    func closeSessions(ofHost host: PersistentIdentifier) -> [UUID] {
+        let doomed = tabs.filter { $0.host.persistentModelID == host }
+        for tab in doomed {
+            close(tab.id)
+            tab.shutdown()
+        }
+        return doomed.map(\.id)
     }
 
     /// 拆出第二格并聚焦它。当前格有两个以上标签时把前台标签移过去（常见的「拖到右边」）；

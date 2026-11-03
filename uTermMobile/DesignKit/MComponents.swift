@@ -329,6 +329,8 @@ struct MChip: View {
 struct MInsetGroup<Content: View>: View {
     var header: String? = nil
     var footer: String? = nil
+    /// 行数可能上千（如已知主机指纹）时置 true：行按需构建，而不是一打开就全部建出来。
+    var lazy = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -341,7 +343,9 @@ struct MInsetGroup<Content: View>: View {
                     .foregroundStyle(M.text3)
                     .padding(.horizontal, 20).padding(.bottom, 7)
             }
-            VStack(spacing: 0) { content }
+            Group {
+                if lazy { LazyVStack(spacing: 0) { content } } else { VStack(spacing: 0) { content } }
+            }
                 .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .padding(.horizontal, 16)

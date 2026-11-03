@@ -435,6 +435,8 @@ actor MobileFakeSFTPProvider: SFTPProviding {
     let latency: Duration
 
     private var counts: [Operation: Int] = [:]
+    /// 只对某些路径额外加的时延：编排「先发的请求后返回」（乱序竞态）。
+    private var slowPaths: [String: Duration] = [:]
     private var injected: [Operation: (paths: Set<String>?, message: String)] = [:]
     private(set) var didClose = false
     /// `exec` 的可控返回值。
@@ -463,6 +465,11 @@ actor MobileFakeSFTPProvider: SFTPProviding {
     /// 老名字，保留给既有用例。
     var listCallCount: Int { callCount(.list) }
     func resetCounts() { counts = [:] }
+
+    /// 访问 `path` 的往返额外慢 `extra`（叠在 `latency` 之上）。
+    func slowDown(_ path: String, by extra: Duration) {
+        slowPaths[MobileFakeSFTPTree.normalize(path)] = extra
+    }
 
     /// 让某个操作抛错。`path == nil` = 所有路径都抛。
     func inject(_ op: Operation, at path: String? = nil,
@@ -496,8 +503,9 @@ actor MobileFakeSFTPProvider: SFTPProviding {
     private func hop(_ op: Operation, _ path: String) async throws {
         counts[op, default: 0] += 1
         if latency != .zero { try? await Task.sleep(for: latency) }
-        guard let rule = injected[op] else { return }
         let p = MobileFakeSFTPTree.normalize(path)
+        if let extra = slowPaths[p] { try? await Task.sleep(for: extra) }
+        guard let rule = injected[op] else { return }
         if rule.paths == nil || rule.paths?.contains(p) == true {
             throw MobileFakeSFTPError.injected(operation: op.rawValue, path: p,
                                                message: rule.message)

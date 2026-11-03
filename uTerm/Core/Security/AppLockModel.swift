@@ -25,6 +25,10 @@ final class AppLockModel {
     private let authenticator: BiometricAuthenticator
     private let reason: String
     private var didStartInitialAuth = false
+    /// 验证代次：`relock()` 与每次 `authenticate()` 都递增，晚到的验证结果对不上就丢弃。
+    /// 否则退到后台时系统取消验证的 `.canceled` 会在 relock 之后落地、把状态写成 `.failed`，
+    /// 回前台的自动验证（只认 `.locked`）就不再弹；更糟的是一次晚到的 `.success` 会直接解锁。
+    private var authGeneration = 0
 
     init(authenticator: BiometricAuthenticator,
          requireAuthAtLaunch: Bool,
@@ -48,35 +52,40 @@ final class AppLockModel {
     /// iOS：从后台回前台时重新上锁（macOS 仅冷启动，用不到）。把状态拨回 `.locked`
     /// 并重置首验 guard，让下一次 `startInitialAuthIfNeeded()` 能再触发一次系统验证。
     func relock() {
+        authGeneration &+= 1
         state = .locked
         didStartInitialAuth = false
     }
 
     /// 触发一次验证（锁屏「解锁」按钮也调它重试）。
     func authenticate() async {
+        authGeneration &+= 1
+        let generation = authGeneration
         state = .authenticating
         switch authenticator.availability() {
         case .biometrics:
             let outcome = await authenticator.authenticate(
                 policy: .deviceOwnerAuthenticationWithBiometrics, reason: reason)
+            guard generation == authGeneration else { return }
             switch outcome {
             case .success:
                 state = .unlocked
             case .biometryLockout:
-                await authenticateWithPassword()   // 指纹被锁 → 退回登录密码
+                await authenticateWithPassword(generation: generation)   // 指纹被锁 → 退回登录密码
             case .canceled:
                 state = .failed("验证已取消")
             case .failed, .unavailable:
                 state = .failed("验证失败，请重试")
             }
         case .passwordOnly:
-            await authenticateWithPassword()
+            await authenticateWithPassword(generation: generation)
         }
     }
 
-    private func authenticateWithPassword() async {
+    private func authenticateWithPassword(generation: Int) async {
         let outcome = await authenticator.authenticate(
             policy: .deviceOwnerAuthentication, reason: reason)
+        guard generation == authGeneration else { return }
         switch outcome {
         case .success:
             state = .unlocked

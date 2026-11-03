@@ -2,6 +2,7 @@ import UDesignKit
 import SwiftUI
 import SwiftData
 import UIKit
+import Combine
 
 /// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作 / 外观 / 终端 / 安全 / 关于。
 /// 保持五标签结构不变——设计稿「更多」分区在此承载（命令面板 / 密钥 / 分组 / 指纹）。
@@ -80,7 +81,9 @@ struct SettingsScreen: View {
                 }
             }
             .onAppear(perform: refreshCounts)
-            .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            // 局域网覆盖在后台上下文里保存，`didSave` 会在那条线程上发出；回主线程再刷新。
+            .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
+                .receive(on: DispatchQueue.main)) { _ in
                 refreshCounts()
             }
             .alert("无法开启应用锁", isPresented: $lockUnavailable) {

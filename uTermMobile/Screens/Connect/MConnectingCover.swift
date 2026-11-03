@@ -40,8 +40,10 @@ final class MConnectRequest: Identifiable {
     var attempt = 0
 
     /// 连接中页是否只盖工作区里那个标签：分屏状态下、从工作区里发起（「+」/ 空格）的才是。
-    func showsInPane(_ workspace: MobileWorkspace) -> Bool {
-        originInWorkspace && workspace.isSplit
+    /// 工作区收起时（建连途中点了「返回」）改回整屏：否则格内那张连接中页随工作区藏到屏外，
+    /// 主机列表上点什么都被 `requestConnect` 静默吞掉，用户却看不到为什么。
+    func showsInPane(_ workspace: MobileWorkspace, workspaceVisible: Bool) -> Bool {
+        originInWorkspace && workspace.isSplit && workspaceVisible
     }
 
     init(host: ServerProfile, kind: MConnectKind, origin: MTab) {

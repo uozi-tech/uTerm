@@ -34,26 +34,29 @@ struct MobileTerminalTransportRequest {
 ///
 /// 抛错的语义与改动前一致：只有「认证材料解析失败」这一种，控制器把它包成
 /// `.failed("认证材料解析失败：…")`。
+///
+/// `async`：生产实现要读钥匙串（每次 3~5 次 `SecItemCopyMatching`，有跳板机再翻倍），
+/// 这段 IPC 放在并发线程池里做，不和连接中页的入场动画抢主线程。
 @MainActor
 struct MobileTerminalTransportFactory {
-    let make: @MainActor (MobileTerminalTransportRequest) throws -> any TerminalBackend
+    let make: @MainActor (MobileTerminalTransportRequest) async throws -> any TerminalBackend
 
-    init(make: @escaping @MainActor (MobileTerminalTransportRequest) throws -> any TerminalBackend) {
+    init(make: @escaping @MainActor (MobileTerminalTransportRequest) async throws -> any TerminalBackend) {
         self.make = make
     }
 
-    /// 生产实现：真 SSH。整段逐行搬自 `MobileTerminalController.start(profile:container:relay:)`。
-    static let live = MobileTerminalTransportFactory { request in
+    /// 生产实现：真 SSH。
+    static let live = MobileTerminalTransportFactory(make: makeLive)
+
+    /// `@Model` 的字段在主线程拍成快照，钥匙串读取离开主线程。
+    private static func makeLive(_ request: MobileTerminalTransportRequest) async throws -> any TerminalBackend {
         let snapshot = SSHConnection.ProfileSnapshot(request.profile)
-        let keychain = KeychainStore()
-        let auth = try SSHAuthResolver.resolve(profile: request.profile, keychain: keychain)
-        var jumpAuth: ResolvedAuth?
-        if let jump = request.profile.jumpHost {
-            jumpAuth = try? SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-        }
+        let resolved = try await SSHAuthResolver.resolveOffMain(
+            SSHAuthResolver.Lookup(request.profile),
+            jump: request.profile.jumpHost.map { SSHAuthResolver.Lookup($0) })
         let verifier = HostKeyVerifier(modelContainer: request.container)
         // 首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
-        return SSHConnection(profile: snapshot, auth: auth, jumpHostAuth: jumpAuth,
+        return SSHConnection(profile: snapshot, auth: resolved.auth, jumpHostAuth: resolved.jump,
                              hostKeyVerifier: verifier,
                              hostKeyApprover: request.relay.makeApprover())
     }

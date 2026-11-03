@@ -22,7 +22,31 @@ struct HostFormSheet: View {
     @State private var selectedKey: UUID?
     @State private var group = ""
     @State private var sftpOnly = false
+    /// 打开表单时读到的值。保存时只写用户真改过的字段：表单开着期间 CloudKit / 局域网
+    /// 同步可能改了这台主机的分组、密钥等，整份写回会悄悄把它们改回旧值。
+    @State private var original: Draft?
     @FocusState private var passwordFocused: Bool
+
+    /// 表单里可编辑的全部字段（已规范化：去首尾空白、端口转成数字）。
+    private struct Draft: Equatable {
+        var name, host, username, group, password: String
+        var port: Int
+        var auth: AuthMethod
+        var keyID: UUID?
+        var sftpOnly: Bool
+    }
+
+    private var draft: Draft {
+        Draft(name: name.trimmingCharacters(in: .whitespaces),
+              host: hostAddr.trimmingCharacters(in: .whitespaces),
+              username: username.trimmingCharacters(in: .whitespaces),
+              group: group.trimmingCharacters(in: .whitespaces),
+              password: password,
+              port: Int(port) ?? 22,
+              auth: auth,
+              keyID: auth == .privateKey ? selectedKey : nil,
+              sftpOnly: sftpOnly)
+    }
 
     private var isEdit: Bool { host != nil }
     private var valid: Bool {
@@ -158,19 +182,27 @@ struct HostFormSheet: View {
         username = host.username; auth = host.authMethod
         selectedKey = host.keyID; group = host.group ?? ""; sftpOnly = host.sftpOnly
         password = (try? KeychainStore().load(profileID: host.id, kind: .password)) ?? ""
+        original = draft
     }
 
     private func save() {
+        // 表单开着期间这台主机被同步删掉了：不往已删除的模型上写。
+        if let host, host.isDeleted || host.modelContext == nil {
+            dismiss()
+            return
+        }
         let profile = host ?? ServerProfile()
-        profile.name = name.trimmingCharacters(in: .whitespaces)
-        profile.host = hostAddr.trimmingCharacters(in: .whitespaces)
-        profile.port = Int(port) ?? 22
-        profile.username = username.trimmingCharacters(in: .whitespaces)
-        profile.authMethod = auth
-        profile.keyID = auth == .privateKey ? selectedKey : nil
-        let g = group.trimmingCharacters(in: .whitespaces)
-        profile.group = g.isEmpty ? nil : g
-        profile.sftpOnly = sftpOnly
+        let new = draft
+        // 新建时没有基准，所有字段都算「改过」。
+        let old = host == nil ? nil : original
+        if new.name != old?.name { profile.name = new.name }
+        if new.host != old?.host { profile.host = new.host }
+        if new.port != old?.port { profile.port = new.port }
+        if new.username != old?.username { profile.username = new.username }
+        if new.auth != old?.auth { profile.authMethod = new.auth }
+        if new.keyID != old?.keyID || new.auth != old?.auth { profile.keyID = new.keyID }
+        if new.group != old?.group { profile.group = new.group.isEmpty ? nil : new.group }
+        if new.sftpOnly != old?.sftpOnly { profile.sftpOnly = new.sftpOnly }
 
         if host == nil {
             profile.sortOrder = ServerProfileStore(context: context).nextSortOrder()
@@ -178,8 +210,9 @@ struct HostFormSheet: View {
         }
         try? context.save()
 
-        if auth == .password, !password.isEmpty {
-            try? KeychainStore().save(password, profileID: profile.id, kind: .password)
+        // 钥匙串 save 是 delete + add 并会经 iCloud 钥匙串广播，没改就不写。
+        if new.auth == .password, !new.password.isEmpty, new.password != old?.password {
+            try? KeychainStore().save(new.password, profileID: profile.id, kind: .password)
         }
         if host == nil { onSaved?(profile) }
         dismiss()

@@ -191,7 +191,21 @@ enum WorkspaceCommandExecutorFactory {
         if let jump = server.jumpHost {
             jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
         }
-        let resolvedJumpAuth = jumpAuth
+        return make(snapshot: snapshot, auth: auth, jumpAuth: jumpAuth, container: container,
+                    trustNewKeys: trustNewKeys, reuseConnection: reuseConnection)
+    }
+
+    /// 认证材料已解析好的版本：调用方可以先在别的线程读完钥匙串（几台到几十台主机时，
+    /// 每台 3~5 次 `SecItemCopyMatching` 加起来不该压在主线程上），再到这里组装。
+    @MainActor
+    static func make(
+        snapshot: SSHConnection.ProfileSnapshot,
+        auth: ResolvedAuth,
+        jumpAuth resolvedJumpAuth: ResolvedAuth?,
+        container: ModelContainer,
+        trustNewKeys: Bool = false,
+        reuseConnection: Bool = false
+    ) -> (executor: SSHCommandExecutor, hostKeyChallenges: HostKeyChallengeSink, connection: ReusableSSHConnection?) {
         let sink = HostKeyChallengeSink()
 
         // 2) 建连闭包 @Sendable，仅捕获上面的 Sendable 值（sink 经 @unchecked Sendable）；

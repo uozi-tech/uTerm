@@ -20,12 +20,12 @@ final class MobileFixturesTerminalTests: XCTestCase {
     // MARK: 注入口
 
     /// 默认工厂就是真 SSH —— 生产路径没被改掉。
-    func testLiveFactoryStillBuildsSSHConnection() throws {
+    func testLiveFactoryStillBuildsSSHConnection() async throws {
         let (c, h, relay) = try host()
         // `SSHAuthResolver` 在没有 keychain 材料时可能抛 —— 两种结果都算通过，
         // 关键是**没有走到假传输**：要么造出 `SSHConnection`，要么抛认证错。
         do {
-            let backend = try MobileTerminalTransportFactory.live.make(
+            let backend = try await MobileTerminalTransportFactory.live.make(
                 MobileTerminalTransportRequest(profile: h, container: c, relay: relay))
             XCTAssertTrue(backend is SSHConnection,
                           "默认工厂造出来的不是 SSHConnection：\(type(of: backend))")
@@ -196,6 +196,11 @@ final class MobileFixturesTerminalTests: XCTestCase {
         let controller = MobileTerminalController(
             transportFactory: MobileTerminalTransportFactory { _ in throw Boom() })
         controller.start(profile: h, container: c, relay: relay)
+        // 工厂是 async（钥匙串读取离开主线程），失败态在下一跳落地。
+        _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
+            if case .failed = controller.state { return true }
+            return false
+        }
         guard case .failed(let message) = controller.state else {
             return XCTFail("应当是 .failed，实际 \(controller.state)")
         }

@@ -23,7 +23,7 @@ extension SSHAuthError: LocalizedError {
 
 /// 解析后的认证材料 —— 纯数据，不含 Citadel 类型，便于单测。
 /// `SSHConnection` 据此构造实际的 Citadel `SSHAuthenticationMethod`。
-nonisolated enum ResolvedAuth: Equatable {
+nonisolated enum ResolvedAuth: Equatable, Sendable {
     case password(username: String, password: String)
     case privateKey(username: String, pem: String, passphrase: String?)
 }
@@ -32,8 +32,33 @@ nonisolated enum ResolvedAuth: Equatable {
 ///
 /// `nonisolated`：纯函数式工具，无 UI 状态，无需 MainActor 隔离。
 nonisolated enum SSHAuthResolver {
+    /// 解析认证用到的 `ServerProfile` 字段快照。`@Model` 不是 `Sendable`，
+    /// 拍成值以后钥匙串读取才能离开主线程（见 `resolveOffMain`）。
+    struct Lookup: Sendable {
+        let id: UUID
+        let keyID: UUID?
+        let authMethod: AuthMethod
+        let username: String
+
+        init(_ profile: ServerProfile) {
+            id = profile.id
+            keyID = profile.keyID
+            authMethod = profile.authMethod
+            username = profile.username
+        }
+    }
+
     static func resolve(
         profile: ServerProfile,
+        password: String?,
+        privateKey: String?,
+        passphrase: String?
+    ) throws -> ResolvedAuth {
+        try resolve(Lookup(profile), password: password, privateKey: privateKey, passphrase: passphrase)
+    }
+
+    static func resolve(
+        _ profile: Lookup,
         password: String?,
         privateKey: String?,
         passphrase: String?
@@ -66,6 +91,13 @@ nonisolated enum SSHAuthResolver {
         profile: ServerProfile,
         keychain: some KeychainReading
     ) throws -> ResolvedAuth {
+        try resolve(Lookup(profile), keychain: keychain)
+    }
+
+    nonisolated static func resolve(
+        _ profile: Lookup,
+        keychain: some KeychainReading
+    ) throws -> ResolvedAuth {
         let privateKey: String?
         let passphrase: String?
         // keyID 指向密钥库条目：仅在该私钥**存在**时走密钥库；**取不到（条目不存在）**
@@ -81,10 +113,23 @@ nonisolated enum SSHAuthResolver {
             passphrase = try load(keychain, profileID: profile.id, kind: .passphrase)
         }
         return try resolve(
-            profile: profile,
+            profile,
             password: try load(keychain, profileID: profile.id, kind: .password),
             privateKey: privateKey,
             passphrase: passphrase)
+    }
+
+    /// 主线程调用方用：字段快照在主线程拍好，钥匙串那 3~5 次（有跳板机再翻倍）
+    /// `SecItemCopyMatching` IPC 放到并发线程池里做，不和连接中页的入场动画抢主线程。
+    /// 跳板机解析失败按「没有跳板机认证」处理，与各调用点原来的 `try?` 同义。
+    @concurrent static func resolveOffMain(
+        _ profile: Lookup,
+        jump: Lookup?
+    ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
+        let keychain = KeychainStore()
+        let auth = try resolve(profile, keychain: keychain)
+        let jumpAuth = jump.flatMap { try? resolve($0, keychain: keychain) }
+        return (auth, jumpAuth)
     }
 
     /// 读取一条钥匙串密钥：条目不存在返回 `nil`（沿用 `KeychainStore.load` 的语义），
