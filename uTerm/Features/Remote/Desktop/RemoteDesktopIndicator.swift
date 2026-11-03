@@ -107,7 +107,6 @@ private struct RemoteDesktopIndicatorView: View {
         .padding(.trailing, 8)
         .padding(.vertical, 6)
         .background(Capsule().fill(UD.panel))
-        .overlay(Capsule().strokeBorder(UD.border, lineWidth: 1))
         .fixedSize()
         .help(viewer.canControl ? "手机可以移动鼠标、点按与打字。点「断开」立即结束" : "手机只能查看，不能操作。点「断开」立即结束")
     }
