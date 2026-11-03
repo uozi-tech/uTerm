@@ -123,6 +123,74 @@ struct WSIconButton: View {
     }
 }
 
+/// 画布上的标签（分区方案 v3，SFTP 标签条与本机终端窗口共用）。激活 = `.udCard()` 同款的卡色胶囊
+///（卡面 + 1pt 细轮廓 + 日间轻投影），表示「它就是下面那张卡」，所以底色传下面那张卡的颜色；未激活透明，
+/// 悬停 `panelHover`；关闭按钮只在激活 / 悬停时出现。
+///
+/// 选中用 `.onTapGesture` 而不是外层 `Button`：macOS 上 `Button` 套 `Button` 时外层吞掉
+/// 内层关闭按钮的点击（同 `UDPreviewTab` 的处理）。
+struct WSCanvasTab<Leading: View>: View {
+    let name: String
+    let active: Bool
+    /// 激活胶囊的底色 = 下面内容卡的颜色（SFTP 是 `UD.panel`，终端是终端底色）。
+    var activeFill: Color = UD.panel
+    var closeHelp = "关闭标签"
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    @ViewBuilder let leading: (_ active: Bool) -> Leading
+
+    @State private var hovered = false
+    @State private var closeHovered = false
+    @Environment(\.colorScheme) private var scheme
+
+    /// 与 `.udCard()` 的卡片细轮廓同值（暗夜白 6% / 日间黑 6%）。
+    private static var cardRing: Color { UD.dyn(.white(0.06), .black(0.06)) }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        HStack(spacing: 8) {
+            leading(active)
+            Text(name)
+                .font(UD.mono(12))
+                .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
+                .lineLimit(1)
+                .frame(maxWidth: 180, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(closeHovered ? UD.text
+                                     : (active || hovered ? UD.text3 : Color.clear))
+                    .frame(width: 20, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 5)
+                        .fill(closeHovered ? UD.panelHover : Color.clear))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { closeHovered = $0 }
+            .help(closeHelp)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .frame(height: 28)
+        .background {
+            if active {
+                shape.fill(activeFill)
+                    .overlay(shape.strokeBorder(Self.cardRing, lineWidth: 1))
+                    .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.04), radius: 1, x: 0, y: 1)
+            } else if hovered {
+                shape.fill(UD.panelHover)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { hovered = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(name))
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
 /// 让自绘标题栏的空白处充当**窗口拖动手柄**：仅在本 NSView 命中区按下并拖动才移动
 /// 窗口。取代窗口级 `isMovableByWindowBackground`——后者把整窗背景都变成拖动区，连
 /// `WorkspaceColumns` 的列分隔条、`SplitterHandle` 的终端分屏手柄都被 AppKit 抢成

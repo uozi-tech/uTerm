@@ -259,12 +259,15 @@ struct LocalShellWindowView: View {
         HStack(spacing: 6) {
             SwiftUI.Color.clear.frame(width: 68)   // 让位窗口红绿灯
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     ForEach(model.panes) { pane in
                         tab(pane)
                     }
                     WSIconButton(systemName: "plus", help: "新开本机终端") { model.addTab() }
+                        .padding(.leading, 4)
                 }
+                // 胶囊比卡片轮廓 / 投影多出 1–2pt，留出来别被 ScrollView 裁掉。
+                .padding(.vertical, 2)
             }
             Spacer(minLength: 8)
             WSIconButton(systemName: "power", help: "结束全部 shell 并关闭窗口") { dismiss() }
@@ -275,34 +278,19 @@ struct LocalShellWindowView: View {
         .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 
+    /// 标签样式与 SFTP 标签条同一套（`WSCanvasTab`）：激活胶囊用终端底色，就是下面那张终端卡。
     private func tab(_ pane: LocalShellPane) -> some View {
-        let isActive = pane.id == model.active?.id
-        return HStack(spacing: 6) {
+        WSCanvasTab(name: model.title(for: pane), active: pane.id == model.active?.id,
+                    activeFill: terminalBackground, closeHelp: "关闭这个 shell",
+                    onSelect: { model.activate(pane.id) }, onClose: { model.close(pane.id) }) { _ in
             Circle()
-                .fill(pane.session.connectionState == .connected ? UD.success : UD.text3)
+                .fill(pane.session.connectionState == .connected ? UD.success : UD.text4)
                 .frame(width: 6, height: 6)
-            Text(model.title(for: pane))
-                .font(UD.mono(12))
-                .foregroundStyle(isActive ? UD.text : UD.text3)
-                .lineLimit(1)
             if pane.session.remoteController != nil {
                 Image(systemName: "iphone").font(.system(size: 10)).foregroundStyle(UD.accent)
                     .help("正在被手机接管")
             }
-            Button { model.close(pane.id) } label: {
-                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(UD.text3)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("关闭这个 shell")
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
-        .frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 7).fill(isActive ? UD.accentSoft : SwiftUI.Color.clear))
-        .contentShape(Rectangle())
-        .onTapGesture { model.activate(pane.id) }
     }
 
     // MARK: - 内容

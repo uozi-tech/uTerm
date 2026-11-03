@@ -245,15 +245,16 @@ struct SFTPTabBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(tabs) { tab in
-                        SFTPCanvasTab(
+                        WSCanvasTab(
                             name: title(for: tab),
                             active: tab.id == activeID,
                             onSelect: { onSelect(tab.id) },
-                            onClose: { onClose(tab.id) })
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel(Text(title(for: tab)))
-                            .accessibilityAddTraits(
-                                tab.id == activeID ? [.isButton, .isSelected] : .isButton)
+                            onClose: { onClose(tab.id) }
+                        ) { active in
+                            Image(systemName: "folder")
+                                .font(.system(size: 11))
+                                .foregroundStyle(active ? UD.accent : UD.text4)
+                        }
                     }
                     Button(action: onNew) {
                         Image(systemName: "plus")
@@ -280,68 +281,6 @@ struct SFTPTabBar: View {
     private func title(for tab: SFTPBrowserTab) -> String {
         let last = tab.model.currentPath.split(separator: "/").last
         return last.map(String.init) ?? serverHost
-    }
-}
-
-/// SFTP 标签条上的一枚标签（坐在画布上）。激活 = `.udCard()` 同款的卡色胶囊（卡面 +
-/// 1pt 细轮廓 + 日间轻投影），表示「它就是下面那张卡」；未激活透明、悬停 `panelHover`。
-///
-/// 选中用 `.onTapGesture` 而不是外层 `Button`：macOS 上 `Button` 套 `Button` 时外层吞掉
-/// 内层关闭按钮的点击（同 `UDPreviewTab` 的处理）。
-private struct SFTPCanvasTab: View {
-    let name: String
-    let active: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
-
-    @State private var hovered = false
-    @State private var closeHovered = false
-    @Environment(\.colorScheme) private var scheme
-
-    /// 与 `.udCard()` 的卡片细轮廓同值（暗夜白 6% / 日间黑 6%）。
-    private static let cardRing = UD.dyn(.white(0.06), .black(0.06))
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
-        HStack(spacing: 8) {
-            Image(systemName: "folder")
-                .font(.system(size: 11))
-                .foregroundStyle(active ? UD.accent : UD.text4)
-            Text(name)
-                .font(UD.mono(12))
-                .foregroundStyle(active ? UD.text : (hovered ? UD.text2 : UD.text3))
-                .lineLimit(1)
-                .frame(maxWidth: 180, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(closeHovered ? UD.text
-                                     : (active || hovered ? UD.text3 : Color.clear))
-                    .frame(width: 20, height: 20)
-                    .background(RoundedRectangle(cornerRadius: 5)
-                        .fill(closeHovered ? UD.panelHover : Color.clear))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { closeHovered = $0 }
-            .help("关闭标签")
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
-        .frame(height: 28)
-        .background {
-            if active {
-                shape.fill(UD.panel)
-                    .overlay(shape.strokeBorder(Self.cardRing, lineWidth: 1))
-                    .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.04), radius: 1, x: 0, y: 1)
-            } else if hovered {
-                shape.fill(UD.panelHover)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { hovered = $0 }
     }
 }
 
