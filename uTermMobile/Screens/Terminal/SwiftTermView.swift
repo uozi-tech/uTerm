@@ -36,6 +36,10 @@ struct SwiftTermView: UIViewRepresentable {
         let view = controller.terminalView ?? MTerminalView(
             frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
         (view as? MTerminalView)?.controller = controller
+        // 位置与尺寸已由 SwiftUI 排好，终端（UIScrollView）不能再按安全区自己加一层内边距：
+        // Duo 真机分屏时右格挨着状态栏，系统给它报了上 / 左安全区，内容被整体顶到右下、
+        // 右边一截出屏（实机反馈；模拟器的状态栏区域与真机不同，复现不了）。
+        view.contentInsetAdjustmentBehavior = .never
         // 把（可能是新建的）coordinator 接上：复用旧视图时旧 coordinator 已随旧表示层销毁。
         view.terminalDelegate = context.coordinator
         context.coordinator.onInteract = onInteract
