@@ -90,6 +90,10 @@ final class TerminalSessionRegistry {
     ///   `terminal-open` 拿到窗口 id 后用 `waitForSession(inWindow:)` 等会话注册上来。
     var openTerminalWindow: (@MainActor (UUID) -> UUID?)?
 
+    /// 开一个本机终端窗口（`LocalShellWindowID`），返回窗口 id。注入方式与 `openTerminalWindow` 相同；
+    /// 手机远控的「新建本机终端」用它，会话同样要等它自己登记上来。
+    var openLocalShellWindow: (@MainActor () -> UUID?)?
+
     /// 会话本体的弱引用槽（读屏 / 注入要拿到它）。
     @ObservationIgnored private var sessions: [UUID: WeakSessionBox] = [:]
     /// 每个窗口的 key / 活动标签状态，`isKeyWindowFocused` 由此算出。

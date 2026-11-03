@@ -62,6 +62,8 @@ struct RemoteMacSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
     @State private var missingHost: RemoteSessionInfo?
+    @State private var openingShell = false
+    @State private var shellError: String?
 
     var body: some View {
         NavigationStack {
@@ -89,6 +91,12 @@ struct RemoteMacSheet: View {
             Button("好", role: .cancel) { missingHost = nil }
         } message: {
             Text("「\(missingHost?.serverName ?? "")」在 Mac 上有，但这部手机上还没有。等 iCloud 或局域网同步完成后再试。")
+        }
+        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+                                                   set: { if !$0 { shellError = nil } })) {
+            Button("好", role: .cancel) { shellError = nil }
+        } message: {
+            Text(shellError ?? "")
         }
     }
 
@@ -136,6 +144,20 @@ struct RemoteMacSheet: View {
     }
 
     @ViewBuilder private var sessions: some View {
+        MInsetGroup(header: "这台 Mac",
+                    footer: client.supportsLocalShell
+                        ? "在 Mac 上打开你的登录 shell，Mac 上也会弹出对应的终端窗口，断开后留在 Mac 上可以接着用。"
+                        : "Mac 上的 uTerm 版本太旧，不能新建终端。请先把 Mac 上的 uTerm 更新到最新版。") {
+            if client.supportsLocalShell {
+                MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
+                          sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
+                    guard !openingShell else { return }
+                    Task { await openLocalShell() }
+                }
+            } else {
+                MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
+            }
+        }
         MInsetGroup(header: "屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
             if client.supportsDesktop {
                 MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
@@ -183,15 +205,47 @@ struct RemoteMacSheet: View {
     }
 
     private func open(_ session: RemoteSessionInfo) {
-        guard let host = hosts.first(where: { $0.id == session.serverID }) else {
+        guard let host = host(for: session.serverID) else {
             missingHost = session
             return
         }
+        openRemoteTerminal(host: host, sessionID: session.id)
+    }
+
+    private func openRemoteTerminal(host: ServerProfile, sessionID: UUID) {
         dismiss()
-        let source = MRemoteSource(client: client, sessionID: session.id)
+        let source = MRemoteSource(client: client, sessionID: sessionID)
         // 等面板收起再开，避免连接中页与收起动画叠在一起。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             store.openRemoteTerminal(host, source: source)
+        }
+    }
+
+    /// 会话对应的主机：Mac 本机 shell 没有主机记录，用一个代表这台 Mac 的临时主机（见 `localShellHost`）。
+    private func host(for serverID: UUID) -> ServerProfile? {
+        if serverID == RemoteConstants.localShellServerID { return localShellHost() }
+        return hosts.first { $0.id == serverID }
+    }
+
+    /// 标签要一个 `ServerProfile`（标题、连接中页的名字）；本机 shell 不对应任何主机，造一个**不入库**的
+    /// 临时对象代表这台 Mac。远控标签的传输不读它的连接参数，入库与否只影响「最近连接」这类记账，
+    /// 那些地方已按 `modelContext == nil` 跳过。
+    private func localShellHost() -> ServerProfile {
+        let host = ServerProfile()
+        host.id = RemoteConstants.localShellServerID
+        host.name = client.macName
+        host.host = "本机"
+        return host
+    }
+
+    private func openLocalShell() async {
+        openingShell = true
+        defer { openingShell = false }
+        do {
+            let sessionID = try await client.openLocalShell()
+            openRemoteTerminal(host: localShellHost(), sessionID: sessionID)
+        } catch {
+            shellError = error.localizedDescription
         }
     }
 }

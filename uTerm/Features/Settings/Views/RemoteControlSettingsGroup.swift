@@ -1,7 +1,8 @@
 import SwiftUI
 import UDesignKit
 
-/// 设置 · 高级 · 远程控制：开关、监听状态、远程桌面（开关 + 两项系统授权）、已信任的设备（可撤销）。
+/// 设置 · 高级 · 远程控制：开关、监听状态、本机终端（开关 + 后台辅助程序状态）、远程桌面（开关 + 两项系统授权）、
+/// 已信任的设备（可撤销）。
 struct RemoteControlSettingsGroup: View {
     @Environment(RemoteControlSettings.self) private var settings
     @Environment(RemoteHostServer.self) private var server
@@ -25,6 +26,7 @@ struct RemoteControlSettingsGroup: View {
                 }
             }
             if settings.isEnabled {
+                localShellRows
                 desktopRows
             }
             if server.trustedPeers.isEmpty {
@@ -41,6 +43,43 @@ struct RemoteControlSettingsGroup: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - 本机终端
+
+    @ViewBuilder private var localShellRows: some View {
+        let shell = LocalShellService.shared
+        SettingsRow(label: "允许打开本机终端",
+                    hint: "打开后，配对过的设备可以在这台 Mac 上新开一个终端（你的登录 shell），这台 Mac 上也会弹出对应的窗口。终端由 uTerm 的后台辅助程序启动，第一次打开时 macOS 会提示「已添加后台项目」。") {
+            UDToggle(Binding(get: { settings.isLocalShellEnabled }, set: { settings.isLocalShellEnabled = $0 }))
+        }
+        if settings.isLocalShellEnabled {
+            SettingsRow(label: "后台辅助程序", hint: shell.lastError ?? localShellHint(shell.status)) {
+                switch shell.status {
+                case .enabled:
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(UD.success)
+                        Text("已启用").font(.system(size: 12.5)).foregroundStyle(UD.text)
+                    }
+                case .requiresApproval:
+                    UDButton(title: "打开登录项设置", style: .primary) { shell.openLoginItemsSettings() }
+                case .notRegistered, .notFound:
+                    UDButton(title: "重新注册", style: .secondary) { shell.register() }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                shell.refresh()
+            }
+        }
+    }
+
+    private func localShellHint(_ status: LocalShellService.Status) -> String? {
+        switch status {
+        case .enabled: return nil
+        case .requiresApproval: return "需要在 系统设置 › 通用 › 登录项与扩展 里打开 uTerm 的后台项目"
+        case .notFound: return "这份 uTerm 里缺少辅助程序，请重新安装"
+        case .notRegistered: return "还没注册"
         }
     }
 

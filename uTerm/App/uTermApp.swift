@@ -140,9 +140,16 @@ struct uTermApp: App {
                 coordinator: forwardingCoordinator,
                 relay: launchRelay
             )
+            remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
+                // 本机终端的辅助进程随开关注册 / 移除：注册时系统会发「已添加后台项目」通知。
+                if settings.isLocalShellEnabled {
+                    LocalShellService.shared.register()
+                } else {
+                    LocalShellService.shared.unregister()
+                }
             }
             let server = controlServer
             NotificationCenter.default.addObserver(
@@ -176,6 +183,12 @@ struct uTermApp: App {
             UTermLifecycleDelegate.showGUI()
             let windowID = UUID()
             open(value: TerminalWindowID(id: windowID, serverID: serverID))
+            return windowID
+        }
+        terminalRegistry.openLocalShellWindow = {
+            UTermLifecycleDelegate.showGUI()
+            let windowID = UUID()
+            open(value: LocalShellWindowID(id: windowID))
             return windowID
         }
     }
@@ -374,6 +387,19 @@ struct uTermApp: App {
         .windowStyle(.hiddenTitleBar)
         // 默认尺寸足够容纳 Agent 空状态（分组示例）不出现滚动；用户可自由缩放。
         .defaultSize(width: 1000, height: 720)
+        .routesNewWindowToWelcome()
+
+        // 本机终端窗口 —— 一个窗口一个登录 shell（由不带沙盒的辅助进程起），手机远控「新建终端」开的就是它。
+        WindowGroup(for: LocalShellWindowID.self) { $shellID in
+            LocalShellWindowView(windowID: shellID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+                .environment(terminalRegistry)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 860, height: 560)
         .routesNewWindowToWelcome()
 
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。

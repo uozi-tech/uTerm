@@ -77,7 +77,8 @@ struct WorkspaceTabStrip: View {
                 }
             }
 
-            if showsTrailingControls, frontTerminal != nil { agentButton }
+            // 远控标签（经 Mac 接入的终端、Mac 本机 shell）没有 Agent：Agent 要直连那台主机执行命令。
+            if showsTrailingControls, let frontTerminal, frontTerminal.remote == nil { agentButton }
             if showsTrailingControls, let split = splitState {
                 // 开关语义：分屏中用实心图标表示「开着」，再点一下取消。
                 stripButton(systemImage: split ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",

@@ -43,7 +43,8 @@ struct WorkspaceScreen: View {
         .overlay(alignment: .topTrailing) {
             if let column = chrome.statusColumn, !(workspace.isEmpty && !workspace.isSplit) {
                 WorkspaceSideControls(
-                    agentOn: focusedFrontTerminal.map { $0.mode == .agent },
+                    // 远控标签没有 Agent（同标签条，见 WorkspaceTabStrip）。
+                    agentOn: focusedFrontTerminal.flatMap { $0.remote == nil ? $0.mode == .agent : nil },
                     isSplit: workspace.isSplit,
                     onAgent: { toggleAgent(in: workspace.focusedPane) },
                     onToggleSplit: toggleSplit)
@@ -72,7 +73,9 @@ struct WorkspaceScreen: View {
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
-            let orphaned = Set(workspace.tabs.map { $0.host.persistentModelID }).subtracting(live)
+            // 只看库里的主机：Mac 本机 shell 的标签挂的是不入库的临时主机，本来就不在列表里，不是被删了。
+            let orphaned = Set(workspace.tabs.filter { $0.host.modelContext != nil }.map { $0.host.persistentModelID })
+                .subtracting(live)
             guard !orphaned.isEmpty else { return }
             for host in orphaned {
                 let closed = workspace.closeSessions(ofHost: host)
@@ -93,7 +96,11 @@ struct WorkspaceScreen: View {
     private func consume(_ target: MOpenTarget?) {
         guard let target else { return }
         store.openTarget = nil
-        guard let host = hosts.first(where: { $0.persistentModelID == target.hostID }),
+        // 远控标签的主机可能不在库里（Mac 本机 shell 用的是不入库的临时主机，见 `RemoteMacSheet`），
+        // 那时用连接中页请求自带的那个对象。
+        let unmanagedRemoteHost = target.remote == nil ? nil
+            : store.connecting.map(\.host).flatMap { $0.persistentModelID == target.hostID ? $0 : nil }
+        guard let host = hosts.first(where: { $0.persistentModelID == target.hostID }) ?? unmanagedRemoteHost,
               !(target.kind == .terminal && host.sftpOnly) else {
             // 找不到主机 / 仅 SFTP 却要终端：撤下正在等待绑定的连接中页，避免空转卡死。
             if let req = store.connecting, req.tabID == nil, req.host.persistentModelID == target.hostID {

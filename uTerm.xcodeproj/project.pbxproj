@@ -66,6 +66,13 @@
 			remoteGlobalIDString = 10C0DE0000000000000000A1;
 			remoteInfo = uTermMobile;
 		};
+		5348454C4C0000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5348454C4C00000000000004;
+			remoteInfo = uTermShellAgent;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +85,7 @@
 		CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = VersionMobile.xcconfig; sourceTree = "<group>"; };
 		DC2B686538A588EAD56ECE6E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		F29DE64AF6B8DE16B490ADC2 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = uTermBackgroundLauncher/main.swift; sourceTree = "<group>"; };
+		5348454C4C00000000000003 /* uTermShellAgent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = uTermShellAgent; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -203,6 +211,9 @@
 				Features/Preview/Views/PreviewBufferBody.swift,
 				Features/Preview/Views/PreviewStatusRow.swift,
 				Features/Preview/Views/PreviewTabMenu.swift,
+				Features/LocalShell/LocalShellBackend.swift,
+				Features/LocalShell/LocalShellService.swift,
+				Features/LocalShell/LocalShellWindow.swift,
 				Features/Remote/Desktop/RemoteDesktopEnvironment.swift,
 				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
 				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
@@ -213,6 +224,7 @@
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteHostConnection.swift,
 				Features/Remote/RemoteHostServer.swift,
+				Features/Remote/RemoteLocalShellOpener.swift,
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Settings/Views/AboutSettingsView.swift,
 				Features/Settings/Views/AdvancedSettingsView.swift,
@@ -314,6 +326,14 @@
 			);
 			target = 10C0DE0000000000000000A1 /* uTermMobile */;
 		};
+		5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				main.swift,
+				ShellAgentServer.swift,
+			);
+			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -338,6 +358,14 @@
 		B10000000000000000000002 /* uTermMobileTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = uTermMobileTests;
+			sourceTree = "<group>";
+		};
+		5348454C4C00000000000001 /* uTermShellAgent */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5348454C4C00000000000002 /* Exceptions for "uTermShellAgent" folder in "uTerm" target */,
+			);
+			path = uTermShellAgent;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -412,6 +440,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5348454C4C00000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -434,6 +469,7 @@
 				85D6BEF02FBC4E7E00FC90D8 /* Products */,
 				BA95191881030915DA025947 /* Frameworks */,
 				918FC87C7A998A6853AEEDED /* uTermBackgroundLauncher */,
+				5348454C4C00000000000001 /* uTermShellAgent */,
 			);
 			sourceTree = "<group>";
 		};
@@ -445,6 +481,7 @@
 				10C0DE0000000000000000A6 /* uTermMobile.app */,
 				B1000000000000000000000C /* uTermMobileTests.xctest */,
 				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
+				5348454C4C00000000000003 /* uTermShellAgent */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -536,14 +573,17 @@
 				CFCFCFCF000000000000F0F1 /* Set Build Number */,
 				CFCFCFCF000000000000F0F5 /* Copy utermctl CLI and Skills */,
 				DBBA0F7D575A176953DE3806 /* Embed Background Login Item */,
+				5348454C4C0000000000000C /* Embed Shell Agent */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				75CD47CBD2BFF61B882B9D38 /* PBXTargetDependency */,
+				5348454C4C0000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
+				5348454C4C00000000000001 /* uTermShellAgent */,
 			);
 			name = uTerm;
 			packageProductDependencies = (
@@ -619,6 +659,25 @@
 			productReference = B1000000000000000000000C /* uTermMobileTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		5348454C4C00000000000004 /* uTermShellAgent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5348454C4C00000000000005 /* Build configuration list for PBXNativeTarget "uTermShellAgent" */;
+			buildPhases = (
+				5348454C4C00000000000006 /* Sources */,
+				5348454C4C00000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5348454C4C00000000000001 /* uTermShellAgent */,
+			);
+			name = uTermShellAgent;
+			productName = uTermShellAgent;
+			productReference = 5348454C4C00000000000003 /* uTermShellAgent */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -683,6 +742,7 @@
 				B00000000000000000000006 /* uTermTests */,
 				B10000000000000000000006 /* uTermMobileTests */,
 				26474F753450F16288097CFA /* uTermBackgroundLauncher */,
+				5348454C4C00000000000004 /* uTermShellAgent */,
 			);
 		};
 /* End PBXProject section */
@@ -804,6 +864,25 @@
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nsource_app=\"${BUILT_PRODUCTS_DIR}/uTermBackgroundLauncher.app\"\ndestination=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LoginItems/uTermBackgroundLauncher.app\"\n/bin/mkdir -p \"$(dirname \"$destination\")\"\n/usr/bin/ditto \"$source_app\" \"$destination\"\n";
 		};
+		5348454C4C0000000000000C /* Embed Shell Agent */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Shell Agent";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nmacos=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/MacOS\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$macos\" \"$agents\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent\" \"$macos/uTermShellAgent\"\n/usr/bin/ditto \"${SRCROOT}/Config/com.uozi.uTerm.ShellAgent.plist\" \"$agents/com.uozi.uTerm.ShellAgent.plist\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -843,6 +922,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5348454C4C00000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -861,6 +947,12 @@
 			isa = PBXTargetDependency;
 			target = 10C0DE0000000000000000A1 /* uTermMobile */;
 			targetProxy = B1000000000000000000000A /* PBXContainerItemProxy */;
+		};
+		5348454C4C0000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = uTermShellAgent;
+			target = 5348454C4C00000000000004 /* uTermShellAgent */;
+			targetProxy = 5348454C4C0000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1313,6 +1405,42 @@
 			};
 			name = Release;
 		};
+		5348454C4C00000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
+				PRODUCT_NAME = uTermShellAgent;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		5348454C4C00000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
+				PRODUCT_NAME = uTermShellAgent;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1366,6 +1494,15 @@
 			buildConfigurations = (
 				B10000000000000000000007 /* Debug */,
 				B10000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5348454C4C00000000000005 /* Build configuration list for PBXNativeTarget "uTermShellAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5348454C4C00000000000008 /* Debug */,
+				5348454C4C00000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

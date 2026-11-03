@@ -116,6 +116,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var outcomeWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
+    @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
 
     /// - Parameters:
@@ -247,6 +248,8 @@ final class RemoteMacClient: Identifiable {
         attachWaiters.removeAll()
         for (_, waiter) in desktopWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         desktopWaiters.removeAll()
+        for (_, waiter) in localShellWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        localShellWaiters.removeAll()
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
     }
 
@@ -302,6 +305,14 @@ final class RemoteMacClient: Identifiable {
                   let waiter = desktopWaiters.removeValue(forKey: info.requestID) else { return }
             if info.failure != nil { table.cancel(sessionID: info.requestID) }
             waiter.resume(returning: (message.channel, info))
+        case .localShellOpened:
+            guard let result = try? RemoteJSON.decode(RemoteOpenLocalShellResult.self, from: message.payload),
+                  let waiter = localShellWaiters.removeValue(forKey: result.requestID) else { return }
+            if let sessionID = result.sessionID {
+                waiter.resume(returning: sessionID)
+            } else {
+                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 没能打开本机终端"))
+            }
         default:
             break
         }
@@ -329,6 +340,27 @@ final class RemoteMacClient: Identifiable {
     func detach(_ attachment: RemoteAttachment) {
         attachment.link.send(RemoteMessage(.detach, channel: attachment.channel))
         _ = table.remove(attachment.channel)
+    }
+
+    /// 这台 Mac 能不能开本机终端（老 Mac 收到 `openLocalShell` 会断开整条连接）。
+    var supportsLocalShell: Bool { macFeatures.contains(RemoteFeature.localShell) }
+
+    /// 请 Mac 开一个本机 shell（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常 `attach`。
+    /// Mac 上没开「允许打开本机终端」、辅助程序没授权等情况抛 `RemoteAttachError.rejected`，带给人看的原因。
+    func openLocalShell() async throws -> UUID {
+        await connect()
+        guard state == .connected, let link else {
+            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
+            throw RemoteProtocolError.closed
+        }
+        guard supportsLocalShell else {
+            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。请把 Mac 上的 uTerm 更新到最新版")
+        }
+        let requestID = UUID()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
+            localShellWaiters[requestID] = continuation
+            link.send(RemoteMessage(.openLocalShell, payload: RemoteJSON.encode(RemoteOpenLocalShellRequest(requestID: requestID))))
+        }
     }
 }
 

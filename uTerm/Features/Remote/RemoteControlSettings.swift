@@ -11,6 +11,7 @@ final class RemoteControlSettings {
     enum Keys {
         static let enabled = "remote.enabled"
         static let desktopEnabled = "remote.desktopEnabled"
+        static let localShellEnabled = "remote.localShellEnabled"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -34,10 +35,21 @@ final class RemoteControlSettings {
         }
     }
 
+    /// 「允许手机打开本机终端」：手机能在这台 Mac 上开一个登录 shell（默认关）。那是这个用户账户的全部
+    /// 权限，比接管已经开着的终端更大，也单独开一次。
+    var isLocalShellEnabled: Bool {
+        didSet {
+            guard isLocalShellEnabled != oldValue else { return }
+            defaults.set(isLocalShellEnabled, forKey: Keys.localShellEnabled)
+            onChange?(self)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false
+        isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
     }
 
     /// 开关变化时回调（起停 `RemoteHostServer`）。设置后立即回调一次，与持久化状态对齐。

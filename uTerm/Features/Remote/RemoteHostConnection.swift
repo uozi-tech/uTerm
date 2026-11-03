@@ -130,6 +130,9 @@ final class RemoteHostConnection {
             detach(channel: message.channel, notify: false)
         case .ping:
             link.send(RemoteMessage(.pong))
+        case .openLocalShell:
+            guard let request = try? RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: message.payload) else { return }
+            openLocalShell(request)
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             startDesktop(request)
@@ -138,7 +141,8 @@ final class RemoteHostConnection {
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
-        case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor:
+        case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
+             .localShellOpened:
             break
         }
     }
@@ -172,6 +176,27 @@ final class RemoteHostConnection {
         let device = peerName
         AppLogger.info("远控接入：\(device) → 会话 \(request.sessionID.uuidString.prefix(8))，\(request.cols)×\(request.rows)",
                        category: RemoteLog.category)
+    }
+
+    /// 手机要一个本机 shell：交给 `localShellOpener`（开窗口、等会话登记），把会话 id 或失败原因回过去。
+    /// 等的这几秒里连接照常收发；手机拿到 id 后自己发 `.attach`。
+    private func openLocalShell(_ request: RemoteOpenLocalShellRequest) {
+        let device = peerName
+        AppLogger.info("远控：\(device) 请求新建本机终端", category: RemoteLog.category)
+        Task { [weak self] in
+            guard let opener = self?.server.localShellOpener else { return }
+            let result = await opener.open()
+            guard let self, !self.isClosed else { return }
+            let reply: RemoteOpenLocalShellResult
+            switch result {
+            case .success(let sessionID):
+                reply = RemoteOpenLocalShellResult(requestID: request.requestID, sessionID: sessionID, error: nil)
+            case .failure(let failure):
+                AppLogger.info("远控：本机终端没开成：\(failure.message)", category: RemoteLog.category)
+                reply = RemoteOpenLocalShellResult(requestID: request.requestID, sessionID: nil, error: failure.message)
+            }
+            self.link.send(RemoteMessage(.localShellOpened, payload: RemoteJSON.encode(reply)))
+        }
     }
 
     private func sendAttachResult(_ channel: UInt32, _ sessionID: UUID, error: String?) {

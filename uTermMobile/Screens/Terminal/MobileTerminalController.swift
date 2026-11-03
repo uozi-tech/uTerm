@@ -213,7 +213,8 @@ final class MobileTerminalController {
         lastProfile = profile; lastContainer = container; lastRelay = relay
         connectGeneration &+= 1
         let attempt = connectGeneration
-        let pid = profile.persistentModelID
+        // 不在库里的主机（Mac 本机 shell 的临时主机）不记「最近连接」：拿临时 id 去库里取会取到故障对象。
+        let pid: PersistentIdentifier? = profile.modelContext == nil ? nil : profile.persistentModelID
         let request = MobileTerminalTransportRequest(profile: profile, container: container, relay: relay)
 
         let factory = transportFactory
@@ -245,7 +246,7 @@ final class MobileTerminalController {
 
     /// 握手结果落地。握手期间被关闭 / 被重连取代时不能把 `.closed` 翻回 `.connected`。
     private func finishConnect(_ error: (any Error)?, attempt: Int,
-                               pid: PersistentIdentifier, container: ModelContainer) {
+                               pid: PersistentIdentifier?, container: ModelContainer) {
         guard connectGeneration == attempt else { return }
         if let error {
             state = .failed(error.localizedDescription)
@@ -256,7 +257,7 @@ final class MobileTerminalController {
         // 回前台 / 换网络 / 每 30s 探一次活：后台挂久了的半死 TCP 不会自己报错，
         // 标签一直显示「已连接」、输入只进内核缓冲。判死后走 exitStream → `.closed`。
         ConnectionWatchdog.shared.register(self)
-        if let profile = container.mainContext.model(for: pid) as? ServerProfile {
+        if let pid, let profile = container.mainContext.model(for: pid) as? ServerProfile {
             profile.lastConnectedAt = Date()
             try? container.mainContext.save()
         }

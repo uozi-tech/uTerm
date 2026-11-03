@@ -25,7 +25,10 @@ nonisolated enum RemoteConstants {
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
-    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste]
+    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell]
+    /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
+    /// 自己」，不去自己的主机列表里找。
+    static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
 }
 
 nonisolated enum RemoteFeature {
@@ -33,6 +36,8 @@ nonisolated enum RemoteFeature {
     static let desktop = "desktop"
     /// 远程桌面里粘贴手机的图片 / 文字：认得 `desktopPaste`。
     static let desktopPaste = "desktop-paste"
+    /// 能在 Mac 上开一个本机 shell：认得 `openLocalShell`。
+    static let localShell = "local-shell"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -52,6 +57,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case resize = 4
         case detach = 5
         case ping = 6
+        /// 在 Mac 上开一个本机 shell（通道 0）。负载 = `RemoteOpenLocalShellRequest`（JSON）。Mac 开出终端窗口、
+        /// 会话登记好之后回 `.localShellOpened`，手机再按会话 id 走正常的 `.attach`。只发给 `features` 带
+        /// `local-shell` 的 Mac。
+        case openLocalShell = 7
         /// 开始看桌面（通道 0）。负载 = `RemoteDesktopStartRequest`（JSON）。只发给 `features` 带
         /// `desktop` 的 Mac。
         case desktopStart = 10
@@ -84,6 +93,8 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopFrame = 26
         /// Mac 上的光标位置（归一化）。负载 = `RemoteDesktopCursor`。
         case desktopCursor = 27
+        /// 本机 shell 开好了（或没开成）。负载 = `RemoteOpenLocalShellResult`（JSON）。
+        case localShellOpened = 28
         /// 配对状态（只在通道 0）。负载 = `RemotePairingState` 的 rawValue（1 字节）。
         case pairing = 30
     }
@@ -219,6 +230,19 @@ nonisolated struct RemoteAttachRequest: Codable, Equatable, Sendable {
     /// 手机终端此刻的行列数：Mac 先按它调整尺寸再拍快照，接入的第一帧就是对的。
     var cols: UInt16
     var rows: UInt16
+}
+
+nonisolated struct RemoteOpenLocalShellRequest: Codable, Equatable, Sendable {
+    /// 回复里原样带回，手机据此认出是哪一次请求。
+    var requestID: UUID
+}
+
+nonisolated struct RemoteOpenLocalShellResult: Codable, Equatable, Sendable {
+    var requestID: UUID
+    /// 开好的会话（之后按它 `.attach`）；失败时 nil。
+    var sessionID: UUID?
+    /// 失败原因（给人看的），成功时 nil。
+    var error: String?
 }
 
 nonisolated struct RemoteAttachResult: Codable, Equatable, Sendable {
