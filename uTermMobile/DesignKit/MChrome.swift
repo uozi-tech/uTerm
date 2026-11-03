@@ -29,22 +29,32 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
         if #available(iOS 27.1, *) {
             let origin = geometry.root.origin
             let screenTop = geometry.screen.minY
+            let screen = geometry.screen
+            let insets = geometry.safeAreaInsets
             geometry.statusBar = proxy.reservedRegions(kind: .occlusion)
                 .filter(\.isActive)
                 .map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) }
-                .first { $0.minY <= screenTop + 1 }
+                .first { bar in
+                    // 只认与安全区对得上的状态栏矩形。转屏途中系统会先报几次过期 / 转置的矩形
+                    // （实测竖屏先后报过 (0,0,82×144)、(585,0,84×124)，稳定后才是 (525,0,144×82)），
+                    // 按那些布局要么让错位置、要么整个模式不生效（实机：竖屏标签条没进状态行）。
+                    guard bar.minY <= screenTop + 1, abs(bar.maxX - screen.maxX) < 1 else { return false }
+                    let isRow = insets.top > 0 && abs(bar.height - insets.top) <= 2 && bar.width < screen.width / 2
+                    let isColumn = insets.trailing > 0 && abs(bar.width - insets.trailing) <= 2
+                    return isRow || isColumn
+                }
             geometry.containerMargins = proxy.contentMargins(for: .container)
         }
         return geometry
     }
 }
 
-extension MChromeGeometry {
+nonisolated extension MChromeGeometry {
     /// 状态栏在右侧一列的顶部（Duo 折叠、Duo 展开横屏）：该列宽度（= 右侧安全区），以及状态栏
     /// 底边距根视图顶边的距离——这一列在它下面是空的、可以用。
     var statusColumn: (width: CGFloat, statusBottom: CGFloat)? {
         guard let bar = statusBar, safeAreaInsets.trailing > 0,
-              abs(bar.maxX - screen.maxX) < 1, bar.minY <= screen.minY + 1 else { return nil }
+              abs(bar.width - safeAreaInsets.trailing) <= 2 else { return nil }
         return (safeAreaInsets.trailing, bar.maxY - root.minY)
     }
 
@@ -52,7 +62,7 @@ extension MChromeGeometry {
     /// 左边那一截可以放自己的东西。返回该行高度（= 顶部安全区）。
     var statusRowHeight: CGFloat? {
         guard let bar = statusBar, safeAreaInsets.top > 0, safeAreaInsets.trailing == 0,
-              bar.minY <= screen.minY + 1, bar.minX > screen.midX else { return nil }
+              abs(bar.height - safeAreaInsets.top) <= 2, bar.minX > screen.midX else { return nil }
         return safeAreaInsets.top
     }
 }
@@ -72,14 +82,29 @@ extension EnvironmentValues {
 /// 在根视图上量 `MChromeGeometry` 并下发给子树。
 private struct MChromeMeasurer: ViewModifier {
     @State private var geometry = MChromeGeometry()
+    /// 换 id 即重建量尺视图、再量一次（见下方补测）。
+    @State private var pass = 0
+    @State private var followUp: Task<Void, Never>?
 
     func body(content: Content) -> some View {
         content
             .environment(\.mChrome, geometry)
             .background {
                 Color.clear
-                    .onGeometryChange(for: MChromeGeometry.self) { MChromeGeometry.measure($0) } action: {
-                        geometry = $0
+                    .id(pass)
+                    .onGeometryChange(for: MChromeGeometry.self) { MChromeGeometry.measure($0) } action: { measured in
+                        guard measured != geometry else { return }
+                        geometry = measured
+                        // 转屏 / 开合后系统的保留区要过一会儿才稳定，而稳定那一下不一定再触发布局：
+                        // 几何一变就在 0.4 s、1.2 s 各补量一次，直到量到的值不再变化。
+                        followUp?.cancel()
+                        followUp = Task { @MainActor in
+                            for delay in [400, 800] {
+                                try? await Task.sleep(for: .milliseconds(delay))
+                                if Task.isCancelled { return }
+                                pass &+= 1
+                            }
+                        }
                     }
             }
     }
@@ -139,3 +164,12 @@ extension View {
     /// 见 `MScreenCentering`。
     func mCentersOnScreen() -> some View { modifier(MScreenCentering()) }
 }
+
+extension Edge.Set {
+    /// 工作区会话正文（终端 / 文件 / Agent）的底色往哪些安全区延伸：左右与底边照常铺满
+    /// （横屏刘海、Duo 侧列、Home 条那一截与正文同色），**顶边不延伸**。Duo 竖屏时工作区伸进
+    /// 顶部安全区、标签条坐在状态栏那一行，正文的上沿恰好贴着安全区边界——颜色背景默认四边都
+    /// 延伸，正文底色会往上铺满 82pt、盖住排在它前面的标签条（实机：左格标签条整条不见）。
+    static let mSessionBody: Edge.Set = [.horizontal, .bottom]
+}
+

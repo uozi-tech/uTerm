@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import uTermMobile
 
@@ -53,5 +54,50 @@ final class MobileAdaptiveLayoutTests: XCTestCase {
         XCTAssertEqual(mCardColumns(for: 0), 1)
         XCTAssertEqual(mCardColumns(for: 5000), 3)
         XCTAssertEqual(mCardColumns(for: 5000, maxColumns: 2), 2)
+    }
+}
+
+/// iPhone Duo 状态栏几何（数值取自 vphone sbdisplay-duo 实测，iOS 27.1）。
+final class MChromeGeometryTests: XCTestCase {
+    /// 展开竖屏：669×951，顶部安全区 82。
+    private func portrait(status: CGRect?) -> MChromeGeometry {
+        MChromeGeometry(root: CGRect(x: 0, y: 82, width: 669, height: 835),
+                        safeAreaInsets: EdgeInsets(top: 82, leading: 0, bottom: 34, trailing: 0),
+                        statusBar: status)
+    }
+
+    /// 展开横屏：951×669，右侧安全区 84。
+    private func landscape(status: CGRect?) -> MChromeGeometry {
+        MChromeGeometry(root: CGRect(x: 0, y: 0, width: 867, height: 635),
+                        safeAreaInsets: EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84),
+                        statusBar: status)
+    }
+
+    func testPortraitStatusRowUsesTopInset() {
+        let g = portrait(status: CGRect(x: 525, y: 0, width: 144, height: 82))
+        XCTAssertEqual(g.statusRowHeight, 82)
+        XCTAssertNil(g.statusColumn)
+    }
+
+    func testPortraitRejectsStaleRectsSeenMidRotation() {
+        // 转屏途中报过的两个过期矩形：转置的左上角块、横屏那种竖条。
+        XCTAssertNil(portrait(status: CGRect(x: 0, y: 0, width: 82, height: 144)).statusRowHeight)
+        XCTAssertNil(portrait(status: CGRect(x: 585, y: 0, width: 84, height: 124)).statusRowHeight)
+    }
+
+    func testLandscapeStatusColumnBelowStatusBar() {
+        let g = landscape(status: CGRect(x: 867, y: 0, width: 84, height: 124))
+        XCTAssertEqual(g.statusColumn?.width, 84)
+        XCTAssertEqual(g.statusColumn?.statusBottom, 124)
+        XCTAssertNil(g.statusRowHeight)
+    }
+
+    func testLandscapeRejectsPortraitShapedRect() {
+        XCTAssertNil(landscape(status: CGRect(x: 807, y: 0, width: 144, height: 82)).statusColumn)
+    }
+
+    func testNoStatusRegionKeepsDefaultLayout() {
+        XCTAssertNil(portrait(status: nil).statusRowHeight)
+        XCTAssertNil(landscape(status: nil).statusColumn)
     }
 }

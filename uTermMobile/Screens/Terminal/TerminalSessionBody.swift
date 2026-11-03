@@ -64,7 +64,7 @@ struct TerminalSessionBody: View {
                 .offset(x: tab.mode == .terminal ? 0 : -100_000)
         }
         // 终端与 Agent 两态同一个工作面（终端底色 == M.surface），切换时底色不跳。
-        .background(tab.mode == .terminal ? terminalBg : M.surface)
+        .background(tab.mode == .terminal ? terminalBg : M.surface, ignoresSafeAreaEdges: .mSessionBody)
         // 非活动 / Agent 模式的会话把终端 feed 节拍降下来（字节照常进缓冲，不丢）。
         // 所有会话常驻挂载，不降频的话切走的终端仍在按 60Hz 解析 + 重绘。
         .onAppear { syncForeground() }
@@ -100,7 +100,7 @@ struct TerminalSessionBody: View {
                     // 底色（同 M.surface）则铺满安全区。
                     .padding(.horizontal, Self.terminalInset.horizontal)
                     .padding(.vertical, Self.terminalInset.vertical)
-                    .background(terminalBg)
+                    .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
                     TerminalKeyBar(controller: tab.controller)
                 }
             }
@@ -150,7 +150,7 @@ struct TerminalSessionBody: View {
             .padding(.top, 56).padding(.horizontal, 28).padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
     }
 }
 
@@ -222,7 +222,7 @@ struct TerminalKeyBar: View {
             compactRow
         }
         // 与终端同一个工作面，只用顶边 hairline 分区（「线或底色差，二选一」）。
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
         .animation(.easeOut(duration: 0.18), value: expanded)
     }

@@ -71,7 +71,7 @@ struct MobileAgentChat: View {
             }
         }
         // 与终端同一个工作面（Agent 与终端在同一条会话标签栏下切换，底色不跳）。
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .sheet(isPresented: $addingProvider) { ProviderFormSheet() }
         .onAppear { configureModel() }
         .onChange(of: providers) { _, list in model.providers = list }
@@ -346,7 +346,7 @@ struct MobileAgentChat: View {
         .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 10)
         .mReadableColumn()
         // 不透明底（消息从它下面滚过）；与工作面同色，只靠顶边 hairline 分区。
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 

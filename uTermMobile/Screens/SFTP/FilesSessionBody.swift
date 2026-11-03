@@ -29,7 +29,7 @@ struct FilesSessionBody: View {
             if case .connected = controller.state { footerBar }
         }
         // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible) {
@@ -78,7 +78,7 @@ struct FilesSessionBody: View {
                 .fixedSize()
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(M.surface)
+        .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 

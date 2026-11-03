@@ -45,6 +45,11 @@ struct HostSheet: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
+        // 理想高度 = 内容高度：常规宽度（iPhone Duo 展开、iPad）下系统把抽屉显示成表单弹窗、
+        // 不认 `.height` detent，弹窗被撑到接近整屏、内容只占顶上一小块（实机反馈）。按内容
+        // 贴合纵向尺寸（fitted），那里就是一张刚好包住内容的弹窗；紧凑宽度仍是底部抽屉，走 detent。
+        .frame(idealHeight: contentHeight)
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .presentationDetents([.height(contentHeight)])
         .presentationDragIndicator(.visible)
         // 不透明抽屉底色：默认材质是半透明的，底部 home indicator 区会透出标签栏，显得有道「间隔」。
