@@ -50,6 +50,13 @@ struct MLayoutDiagnosticsOverlay: View {
             lines.append("term\(i) frame \(r(frame))")
             lines.append("  inset \(u(view.contentInset)) adj \(u(view.adjustedContentInset))")
             lines.append("  safe \(u(view.safeAreaInsets)) offset (\(Int(view.contentOffset.x)),\(Int(view.contentOffset.y)))")
+            // 模型层与正在显示的（presentation）层位置：两者不同 = 位移动画没收尾，画面停在半路。
+            let shown = view.layer.presentation()?.frame ?? view.layer.frame
+            lines.append("  layer \(r(view.layer.frame)) shown \(r(shown)) anim \(view.layer.animationKeys()?.count ?? 0)")
+            if let host = view.superview {
+                let hostFrame = host.window.map { host.convert(host.bounds, to: $0) } ?? .zero
+                lines.append("  host \(r(hostFrame)) shown \(r(host.layer.presentation()?.frame ?? host.layer.frame))")
+            }
         }
         return lines.joined(separator: "\n")
     }
