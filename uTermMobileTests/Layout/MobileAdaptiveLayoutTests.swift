@@ -96,6 +96,16 @@ final class MChromeGeometryTests: XCTestCase {
         XCTAssertNil(landscape(status: CGRect(x: 807, y: 0, width: 144, height: 82)).statusColumn)
     }
 
+    func testPortraitStatusRowFromTopBarRegionWithoutOcclusion() {
+        // 真机：状态栏不报遮挡保留区，只有系统的顶部横条区域（上沿在状态行里）。
+        var g = portrait(status: nil)
+        g.topBar = CGRect(x: 16, y: 10, width: 500, height: 48)
+        XCTAssertEqual(g.statusRowHeight, 82)
+        // 横条区域在安全区之下（普通 iPhone / iPad）：不进状态行。
+        g.topBar = CGRect(x: 16, y: 82, width: 637, height: 48)
+        XCTAssertNil(g.statusRowHeight)
+    }
+
     func testNoStatusRegionKeepsDefaultLayout() {
         XCTAssertNil(portrait(status: nil).statusRowHeight)
         XCTAssertNil(landscape(status: nil).statusColumn)
