@@ -98,14 +98,16 @@ struct WorkspaceTabStrip: View {
         return paneFocused ? .active : .frontUnfocused
     }
 
+    @Environment(\.mInStatusRow) private var inStatusRow
+
     private var newMenu: some View {
         Menu {
             Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
             Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
         } label: {
-            MIcon(name: "plus", size: 14, color: M.text2, weight: .semibold)
-                .frame(width: 30, height: 30)
-                .padding(.vertical, 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
+            MIcon(name: "plus", size: inStatusRow ? 16 : 14, color: M.text2, weight: .semibold)
+                .frame(width: inStatusRow ? 36 : 30, height: inStatusRow ? 36 : 30)
+                .padding(.vertical, inStatusRow ? 4 : 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
                 .contentShape(Rectangle())
         }
         .accessibilityLabel(Text("新建会话"))
@@ -128,6 +130,8 @@ struct WorkspaceRoundButton: View {
     var color: Color
     var label: LocalizedStringKey
     var action: () -> Void
+    /// Duo 状态行里（行更高）放大到 38pt，与放大的标签同高。
+    @Environment(\.mInStatusRow) private var inStatusRow
 
     var body: some View {
         Button(action: action) {
@@ -139,7 +143,7 @@ struct WorkspaceRoundButton: View {
                     MIcon(name: icon, size: 19, color: color, weight: .semibold)
                 }
             }
-            .frame(width: 34, height: 34)
+            .frame(width: inStatusRow ? 38 : 34, height: inStatusRow ? 38 : 34)
             .background(M.button).clipShape(Circle())
             .frame(width: M.minTarget, height: M.minTarget)   // 命中区 44pt
             .contentShape(Rectangle())
@@ -153,12 +157,13 @@ struct WorkspaceRoundButton: View {
 struct WorkspaceAgentButton: View {
     var agentOn: Bool
     var action: () -> Void
+    @Environment(\.mInStatusRow) private var inStatusRow
 
     var body: some View {
         Button(action: action) {
             MIcon(name: agentOn ? "term" : "spark", size: 17,
                   color: agentOn ? .white : M.aiAccent, weight: .semibold)
-                .frame(width: 34, height: 34)
+                .frame(width: inStatusRow ? 38 : 34, height: inStatusRow ? 38 : 34)
                 .background(agentOn ? M.aiAccent : M.aiAccent.opacity(0.15))
                 .clipShape(Circle())
                 .frame(width: M.minTarget, height: M.minTarget)
@@ -199,9 +204,12 @@ struct WorkspaceTabChip: View {
     var onMove: () -> Void = {}
     var onDragStart: () -> Void = {}
     @Environment(\.mAccent) private var accent
+    /// Duo 状态行里胶囊加高到 36pt（行高 82，30pt 的胶囊显得太扁，实机反馈）。
+    @Environment(\.mInStatusRow) private var inStatusRow
     @State private var hovering = false
 
     private var isFront: Bool { activity != .inactive }
+    private var pillHeight: CGFloat { inStatusRow ? 36 : 30 }
 
     private var iconColor: Color {
         switch activity {
@@ -235,18 +243,18 @@ struct WorkspaceTabChip: View {
             if isFront || hovering {
                 Button(action: onClose) {
                     MIcon(name: "x", size: 10, color: M.text3, weight: .semibold)
-                        .frame(width: 26, height: 30)   // 关闭命中区占满胶囊高度
+                        .frame(width: 26, height: pillHeight)   // 关闭命中区占满胶囊高度
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("关闭会话"))
             }
         }
-        .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: 30)
+        .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: pillHeight)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
-        .padding(.vertical, 7)   // 命中区 44pt
+        .padding(.vertical, (44 - pillHeight) / 2)   // 命中区 44pt
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { hovering = $0 }

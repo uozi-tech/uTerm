@@ -21,6 +21,10 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     /// iOS 27.1）。真机 Duo 不把状态栏报成遮挡保留区（实测只有一块无关的非活动区），状态栏
     /// 旁边那截能不能放东西、能放多宽，只有这个接口说得准。iOS 27.1 以下为 nil。
     var topBar: CGRect?
+    /// 横向角落适配的安全区（`UIView.LayoutRegion.safeArea(cornerAdaptation: .horizontal)`，全局坐标）：
+    /// 把屏幕角上的系统元素（Duo 竖屏右上角的状态栏）当「角」，在横向让开它、纵向不再整条让出顶边。
+    /// 它伸进顶部安全区时，右沿就是状态栏左侧能用到的位置。iOS 26 以下为 nil。
+    var cornerSafeArea: CGRect?
 
     /// 探测顶部横条区域时用的横条高度 = 工作区标签条高度。
     static let topBarExtent: CGFloat = 48
@@ -106,7 +110,7 @@ extension EnvironmentValues {
 /// 在根视图上量 `MChromeGeometry` 并下发给子树。
 private struct MChromeMeasurer: ViewModifier {
     @State private var geometry = MChromeGeometry()
-    @State private var topBar: CGRect?
+    @State private var probe = MChromeProbeResult()
     /// 换 id 即重建量尺视图、再量一次（见下方补测）。
     @State private var pass = 0
     @State private var followUp: Task<Void, Never>?
@@ -115,7 +119,7 @@ private struct MChromeMeasurer: ViewModifier {
         content
             .environment(\.mChrome, merged)
             .background {
-                MTopBarProbe { if topBar != $0 { topBar = $0 } }
+                MTopBarProbe { if probe != $0 { probe = $0 } }
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
             }
@@ -143,15 +147,21 @@ private struct MChromeMeasurer: ViewModifier {
 extension MChromeMeasurer {
     private var merged: MChromeGeometry {
         var g = geometry
-        g.topBar = topBar
+        g.topBar = probe.topBar
+        g.cornerSafeArea = probe.cornerSafeArea
         return g
     }
 }
 
 /// 全屏的 UIKit 探针：向系统要「贴顶横条」的布局区域（`UIView.LayoutRegion.bar`），换算成
 /// 窗口坐标报上去。布局、安全区一变就重算。SwiftUI 没有对应接口，只能借一层 UIView。
+nonisolated struct MChromeProbeResult: Equatable, Sendable {
+    var topBar: CGRect?
+    var cornerSafeArea: CGRect?
+}
+
 private struct MTopBarProbe: UIViewRepresentable {
-    var onChange: (CGRect?) -> Void
+    var onChange: (MChromeProbeResult) -> Void
 
     func makeUIView(context: Context) -> ProbeView {
         let view = ProbeView()
@@ -164,8 +174,8 @@ private struct MTopBarProbe: UIViewRepresentable {
     func updateUIView(_ view: ProbeView, context: Context) { view.onChange = onChange }
 
     final class ProbeView: UIView {
-        var onChange: ((CGRect?) -> Void)?
-        private var last: CGRect??
+        var onChange: ((MChromeProbeResult) -> Void)?
+        private var last: MChromeProbeResult?
 
         override func layoutSubviews() {
             super.layoutSubviews()
@@ -179,15 +189,19 @@ private struct MTopBarProbe: UIViewRepresentable {
 
         private func report() {
             guard let window else { return }
-            var rect: CGRect?
+            var result = MChromeProbeResult()
+            if #available(iOS 26.0, *) {
+                let insets = edgeInsets(for: .safeArea(cornerAdaptation: .horizontal))
+                result.cornerSafeArea = convert(bounds.inset(by: insets), to: window)
+            }
             if #available(iOS 27.1, *) {
                 let insets = edgeInsets(for: .bar(onEdge: UIRectEdge.top, extent: MChromeGeometry.topBarExtent))
-                rect = convert(bounds.inset(by: insets), to: window)
+                result.topBar = convert(bounds.inset(by: insets), to: window)
             }
-            guard last != .some(rect) else { return }
-            last = .some(rect)
+            guard last != result else { return }
+            last = result
             // 布局过程中改 SwiftUI 状态会被警告 / 丢弃：挪到下一轮主循环。
-            DispatchQueue.main.async { [weak self] in self?.onChange?(rect) }
+            DispatchQueue.main.async { [weak self] in self?.onChange?(result) }
         }
     }
 }
@@ -198,6 +212,8 @@ private struct MTopBarProbe: UIViewRepresentable {
 /// - 贴着屏幕左上角（Duo 折叠 / 横屏没有顶部安全区）：左侧补系统给的容器边距，避开圆角。
 /// 本条自己量全局位置（外框不受这里加的内边距影响，不会来回抖）。
 private struct MStatusBarAvoidance: ViewModifier {
+    /// 状态行里状态栏底板（时间 / 电池 / 灵动岛）从右沿算起占的宽度 + 8pt 间隙。见 body 里的保底让位。
+    static let statusPlatterReserve: CGFloat = 136
     var minHeight: CGFloat
     @Environment(\.mChrome) private var chrome
     @State private var frame: CGRect = .zero
@@ -209,20 +225,50 @@ private struct MStatusBarAvoidance: ViewModifier {
         var trailing: CGFloat = 0
         var leading: CGFloat = atTop && atLeading ? chrome.containerMargins.leading : 0
         if let bar = chrome.topBar, atTop {
-            // 系统划的横条区域避开了灵动岛与圆角（真机上也避开状态栏）：本条超出它的左右两截都让出来。
+            // 系统划的横条区域避开了灵动岛与圆角：本条超出它的左右两截都让出来。
             if atLeading { leading = max(0, bar.minX - frame.minX) }
             trailing = max(0, frame.maxX - bar.maxX)
+        }
+        // 横条区域不一定避开状态栏（真机竖屏实测：标签条尾部的按钮钻到了状态栏底板下面）。
+        // 横向角落适配的安全区伸进状态行时，它的右沿就是状态栏左边：按它再让一次。
+        let inRow = atTop && chrome.statusRowHeight != nil
+        if inRow, let corner = chrome.cornerSafeArea, corner.minY < screen.minY + chrome.safeAreaInsets.top - 1 {
+            trailing = max(trailing, frame.maxX - corner.maxX)
+        }
+        // 三路都没让出状态栏（真机竖屏：遮挡保留区不报状态栏；横条区域与角落安全区都横跨整宽）时，
+        // 按真机实测的状态栏底板宽度保底让位：底板约占 545–650pt（屏宽 669），右沿留 136pt。
+        if inRow, chrome.statusBar == nil, frame.maxX > screen.maxX - Self.statusPlatterReserve {
+            trailing = max(trailing, frame.maxX - (screen.maxX - Self.statusPlatterReserve))
         }
         // vphone 上横条区域不避开状态栏、遮挡保留区却报了状态栏矩形；两路取较大的让位。
         if let bar = chrome.statusBar, frame.minY < bar.maxY, frame.maxX > bar.minX {
             trailing = max(trailing, frame.maxX - bar.minX + 8)
         }
-        let height = atTop ? max(minHeight, chrome.statusRowHeight ?? 0) : minHeight
+        let rowHeight = inRow ? (chrome.statusRowHeight ?? minHeight) : minHeight
+        let height = max(minHeight, rowHeight)
+        // 状态行里：内容（高 minHeight）的中线对齐状态栏图标的中线。图标在 82pt 行里偏下，
+        // 中线约在行高 0.56 处（vphone 与真机实测都在 45pt 上下），而不是几何正中 41pt。
+        let topPad = inRow ? max(0, min(height - minHeight, (rowHeight * 0.56 - minHeight / 2).rounded())) : 0
         return content
+            .environment(\.mInStatusRow, inRow)
+            .frame(height: minHeight)
             .padding(.leading, leading)
             .padding(.trailing, trailing)
-            .frame(height: height)
+            .padding(.top, topPad)
+            .frame(height: height, alignment: .top)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+    }
+}
+
+private struct MInStatusRowKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 本条是否坐在 Duo 竖屏的状态栏那一行（行更高，标签与按钮相应放大，见 WorkspaceTabStrip）。
+    var mInStatusRow: Bool {
+        get { self[MInStatusRowKey.self] }
+        set { self[MInStatusRowKey.self] = newValue }
     }
 }
 
