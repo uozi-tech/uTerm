@@ -27,6 +27,8 @@ struct WorkspaceScreen: View {
     /// 新建抽屉里已选了主机、连接中页还没盖上来的那一小段（抽屉收起后 0.3s 才发起连接）。
     /// 期间 UIKit 会把抽屉弹出前的第一响应者（旧标签的终端）恢复回来，必须算作「没人拥有键盘」。
     @State private var awaitingConnect = false
+    /// 等用户选「只在手机上关闭 / 同时关闭 Mac 上的终端」的远控标签。
+    @State private var pendingRemoteClose: UUID?
 
     private var visible: Bool { store.showWorkspace }
 
@@ -36,6 +38,20 @@ struct WorkspaceScreen: View {
             if !(workspace.isEmpty && !workspace.isSplit) { panesView }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .confirmationDialog("关闭这个标签？",
+                            isPresented: Binding(get: { pendingRemoteClose != nil },
+                                                 set: { if !$0 { pendingRemoteClose = nil } }),
+                            titleVisibility: .visible) {
+            Button("只在手机上关闭") {
+                if let id = pendingRemoteClose { closeRemoteTab(id, alsoOnMac: false) }
+            }
+            Button("同时关闭 Mac 上的终端", role: .destructive) {
+                if let id = pendingRemoteClose { closeRemoteTab(id, alsoOnMac: true) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这是「\(pendingRemoteCloseMacName)」上的终端。只在手机上关闭时，它在 Mac 上照常运行，之后还能再接入。")
+        }
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
         .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
@@ -152,6 +168,30 @@ struct WorkspaceScreen: View {
         case .terminal(let t): req.terminal = t.controller
         case .files(let f): req.sftp = f.controller
         }
+    }
+
+    /// 用户要关一个标签。远控标签（接入的是 Mac 上的终端）还连着时先问：只关手机上的，还是连 Mac 上的一起关；
+    /// 已经断开 / Mac 不支持远程关闭时直接关。
+    private func requestClose(_ id: UUID) {
+        if let term = workspace.tabs.first(where: { $0.id == id })?.terminal, let remote = term.remote,
+           remote.client.supportsCloseSession, term.controller.state == .connected {
+            pendingRemoteClose = id
+        } else {
+            closeTab(id)
+        }
+    }
+
+    private func closeRemoteTab(_ id: UUID, alsoOnMac: Bool) {
+        if alsoOnMac, let remote = workspace.tabs.first(where: { $0.id == id })?.terminal?.remote {
+            remote.client.closeSessionOnMac(remote.sessionID)
+        }
+        closeTab(id)
+    }
+
+    private var pendingRemoteCloseMacName: String {
+        guard let id = pendingRemoteClose,
+              let remote = workspace.tabs.first(where: { $0.id == id })?.terminal?.remote else { return "Mac" }
+        return remote.macName
     }
 
     private func closeTab(_ id: UUID) {
@@ -326,7 +366,7 @@ struct WorkspaceScreen: View {
                 paneFocused: focused || !workspace.isSplit,
                 showsBack: showsBack, splitState: splitState,
                 onSelect: { workspace.activate($0) },
-                onClose: closeTab,
+                onClose: requestClose,
                 onNew: { requestNew($0, in: pane) },
                 onBack: { store.showWorkspace = false },
                 onAgent: { toggleAgent(in: pane) },
@@ -388,7 +428,7 @@ struct WorkspaceScreen: View {
             // 收起时所有终端都不在屏上：降刷新节拍，Agent 也不自动执行。
             TerminalSessionBody(tab: term, isActive: front && visible, isFocused: focused,
                                 onInteract: { workspace.activate(term.id) },
-                                onClose: { closeTab(term.id) })
+                                onClose: { requestClose(term.id) })
         case .files(let files):
             FilesSessionBody(tab: files, onClose: { closeTab(files.id) })
         }

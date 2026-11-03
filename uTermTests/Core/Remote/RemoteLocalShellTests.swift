@@ -120,10 +120,55 @@ final class RemoteLocalShellTests: XCTestCase {
         XCTAssertEqual(client.state, .connected)
     }
 
+    func test_phone_closes_the_session_on_mac_through_the_window_closer() async throws {
+        let registry = TerminalSessionRegistry()
+        let windowID = UUID(), sessionID = UUID()
+        registry.register(TerminalSessionEntry(id: sessionID, serverID: RemoteConstants.localShellServerID,
+                                               serverName: LocalShellIdentity.serverName, windowID: windowID,
+                                               windowKind: TerminalWindowKind.terminal, title: "zsh", connectedAt: Date()))
+        var closed: [UUID] = []
+        registry.setCloser(forWindow: windowID) { id in
+            closed.append(id)
+            registry.unregister(id: id)
+            return true
+        }
+        let (server, client) = try await pairedClient(registry: registry, opener: .unavailable)
+        defer { server.stop() }
+        XCTAssertTrue(client.supportsCloseSession)
+
+        client.closeSessionOnMac(UUID())   // 没有这条会话：Mac 上什么也不关，连接照常。
+        client.closeSessionOnMac(sessionID)
+        let done = await waitUntil { closed == [sessionID] }
+        XCTAssertTrue(done, "Mac 上的关闭入口没被调到：\(closed)")
+        let gone = await waitUntil { !client.sessions.contains { $0.id == sessionID } }
+        XCTAssertTrue(gone, "关闭后会话列表应推来新的一份")
+        XCTAssertEqual(client.state, .connected)
+
+        // 窗口没了（forgetWindow）就不再有入口。
+        registry.forgetWindow(windowID)
+        XCTAssertFalse(registry.requestClose(sessionID: sessionID))
+    }
+
+    func test_old_mac_without_close_session_feature_gets_nothing_sent() async throws {
+        let registry = TerminalSessionRegistry()
+        let (server, client) = try await pairedClient(registry: registry, features: [RemoteFeature.desktop],
+                                                      opener: .unavailable)
+        defer { server.stop() }
+        XCTAssertFalse(client.supportsCloseSession)
+        client.closeSessionOnMac(UUID())   // 老 Mac 收到未知消息会断开整条连接，所以手机端根本不发。
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(client.state, .connected)
+    }
+
     func test_message_kinds_and_payloads_keep_their_wire_shape() throws {
         // 线上编号一旦发布就不能改：老版本按编号认消息。
         XCTAssertEqual(RemoteMessage.Kind.openLocalShell.rawValue, 7)
         XCTAssertEqual(RemoteMessage.Kind.localShellOpened.rawValue, 28)
+        XCTAssertEqual(RemoteMessage.Kind.closeSession.rawValue, 8)
+        XCTAssertEqual(RemoteFeature.closeSession, "close-session")
+        XCTAssertTrue(RemoteConstants.localFeatures.contains(RemoteFeature.closeSession))
+        let close = RemoteCloseSessionRequest(sessionID: UUID())
+        XCTAssertEqual(try RemoteJSON.decode(RemoteCloseSessionRequest.self, from: RemoteJSON.encode(close)), close)
         XCTAssertEqual(RemoteFeature.localShell, "local-shell")
         XCTAssertTrue(RemoteConstants.localFeatures.contains(RemoteFeature.localShell))
         XCTAssertEqual(RemoteConstants.localShellServerID.uuidString, "00000000-0000-0000-0000-00000000C0DE")

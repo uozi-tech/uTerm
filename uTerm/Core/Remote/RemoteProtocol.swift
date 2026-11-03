@@ -25,7 +25,8 @@ nonisolated enum RemoteConstants {
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
-    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell]
+    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
+                                          RemoteFeature.closeSession]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，不去自己的主机列表里找。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -38,6 +39,8 @@ nonisolated enum RemoteFeature {
     static let desktopPaste = "desktop-paste"
     /// 能在 Mac 上开一个本机 shell：认得 `openLocalShell`。
     static let localShell = "local-shell"
+    /// 手机关标签时能连 Mac 上的终端一起关：认得 `closeSession`。
+    static let closeSession = "close-session"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -61,6 +64,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 会话登记好之后回 `.localShellOpened`，手机再按会话 id 走正常的 `.attach`。只发给 `features` 带
         /// `local-shell` 的 Mac。
         case openLocalShell = 7
+        /// 关掉 Mac 上的一条会话（它所在的标签连同连接 / shell）（通道 0）。负载 = `RemoteCloseSessionRequest`
+        ///（JSON）。手机关远控标签时选了「同时关闭 Mac 上的终端」才发；只发给 `features` 带 `close-session` 的 Mac。
+        case closeSession = 8
         /// 开始看桌面（通道 0）。负载 = `RemoteDesktopStartRequest`（JSON）。只发给 `features` 带
         /// `desktop` 的 Mac。
         case desktopStart = 10
@@ -230,6 +236,10 @@ nonisolated struct RemoteAttachRequest: Codable, Equatable, Sendable {
     /// 手机终端此刻的行列数：Mac 先按它调整尺寸再拍快照，接入的第一帧就是对的。
     var cols: UInt16
     var rows: UInt16
+}
+
+nonisolated struct RemoteCloseSessionRequest: Codable, Equatable, Sendable {
+    var sessionID: UUID
 }
 
 nonisolated struct RemoteOpenLocalShellRequest: Codable, Equatable, Sendable {

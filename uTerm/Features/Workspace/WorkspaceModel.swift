@@ -316,7 +316,19 @@ final class WorkspaceModel {
             customTitle: { [weak self] paneID in self?.tabCustomTitle(paneID: paneID) })
         sessionRegistrar = registrar
         for tab in terminalGroups.allTabs { tab.payload.adopt(registrar: registrar) }
+        // 手机远控关标签时「同时关闭 Mac 上的终端」走这里。
+        registry.setCloser(forWindow: windowID) { [weak self] paneID in
+            self?.closeTerminal(paneID: paneID) ?? false
+        }
         syncTerminalTitles()
+    }
+
+    /// 关掉某个终端窗格所在的标签（`onTabRemoved` 会 dispose 它、断开连接）。返回 false = 没有这个窗格。
+    @discardableResult
+    func closeTerminal(paneID: UUID) -> Bool {
+        guard terminalGroups.allTabs.contains(where: { $0.payload.id == paneID }) else { return false }
+        terminalGroups.closeTabs { $0.payload.id == paneID }
+        return true
     }
 
     /// 某个窗格所在标签的自定义名（`UPaneTab.customTitle`），没有则 nil。

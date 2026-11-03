@@ -179,11 +179,14 @@ struct uTermApp: App {
             open(value: TerminalWindowID(id: windowID, serverID: serverID))
             return windowID
         }
-        terminalRegistry.openLocalShellWindow = {
+        // 本机终端：有本机终端窗口就加一个标签进去，没有才开窗口；返回预先定好的会话 id。
+        terminalRegistry.openLocalShell = {
             UTermLifecycleDelegate.showGUI()
-            let windowID = UUID()
-            open(value: LocalShellWindowID(id: windowID))
-            return windowID
+            let paneID = UUID()
+            if !LocalShellWindowRouter.shared.openTabInExistingWindow(paneID: paneID) {
+                open(value: LocalShellWindowID(id: UUID(), firstPaneID: paneID))
+            }
+            return paneID
         }
     }
 

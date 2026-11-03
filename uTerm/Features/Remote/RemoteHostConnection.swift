@@ -133,6 +133,11 @@ final class RemoteHostConnection {
         case .openLocalShell:
             guard let request = try? RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: message.payload) else { return }
             openLocalShell(request)
+        case .closeSession:
+            guard let request = try? RemoteJSON.decode(RemoteCloseSessionRequest.self, from: message.payload) else { return }
+            let closed = server.registry.requestClose(sessionID: request.sessionID)
+            AppLogger.info("远控：\(self.peerName) 关闭 Mac 上的会话 \(request.sessionID.uuidString.prefix(8))：\(closed ? "已关闭" : "没找到")",
+                           category: RemoteLog.category)
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
             startDesktop(request)

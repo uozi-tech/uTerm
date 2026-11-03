@@ -90,14 +90,18 @@ final class TerminalSessionRegistry {
     ///   `terminal-open` 拿到窗口 id 后用 `waitForSession(inWindow:)` 等会话注册上来。
     var openTerminalWindow: (@MainActor (UUID) -> UUID?)?
 
-    /// 开一个本机终端窗口（`LocalShellWindowID`），返回窗口 id。注入方式与 `openTerminalWindow` 相同；
-    /// 手机远控的「新建本机终端」用它，会话同样要等它自己登记上来。
-    var openLocalShellWindow: (@MainActor () -> UUID?)?
+    /// 开一个本机终端：有本机终端窗口就加一个标签进去，没有才开窗口。返回**会话** id（预先定好的），
+    /// 调用方用 `waitForSession(id:)` 等它登记——窗口里可能已经有别的会话，不能按窗口等。
+    /// 注入方式与 `openTerminalWindow` 相同；手机远控的「新建本机终端」用它。
+    var openLocalShell: (@MainActor () -> UUID?)?
 
     /// 会话本体的弱引用槽（读屏 / 注入要拿到它）。
     @ObservationIgnored private var sessions: [UUID: WeakSessionBox] = [:]
     /// 每个窗口的 key / 活动标签状态，`isKeyWindowFocused` 由此算出。
     @ObservationIgnored private var windows: [UUID: WindowState] = [:]
+    /// 每个窗口「按会话 id 关掉它的标签」的入口（手机远控关标签时可以连 Mac 上的一起关）。
+    /// 返回 false = 这个窗口里没有这条会话。
+    @ObservationIgnored private var closers: [UUID: @MainActor (UUID) -> Bool] = [:]
 
     private final class WeakSessionBox {
         weak var value: TerminalSession?
@@ -136,6 +140,19 @@ final class TerminalSessionRegistry {
         entries.removeAll { $0.id == id }
     }
 
+    /// 窗口登记（或用 nil 撤掉）「按会话 id 关标签」的入口。
+    func setCloser(forWindow windowID: UUID, _ closer: (@MainActor (UUID) -> Bool)?) {
+        closers[windowID] = closer
+    }
+
+    /// 关掉某条会话所在的标签（连同它的连接 / shell）。返回 false = 找不到会话或它的窗口没登记入口。
+    @discardableResult
+    func requestClose(sessionID: UUID) -> Bool {
+        guard let entry = entries.first(where: { $0.id == sessionID }),
+              let closer = closers[entry.windowID] else { return false }
+        return closer(sessionID)
+    }
+
     /// 标题变化（重命名标签 / 换服务器）时更新。会话不存在则 no-op。
     func update(id: UUID, title: String) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
@@ -164,6 +181,7 @@ final class TerminalSessionRegistry {
     /// 窗口关闭时丢掉它的状态（会话本身由 `PaneModel.dispose` 各自注销）。
     func forgetWindow(_ windowID: UUID) {
         windows.removeValue(forKey: windowID)
+        closers.removeValue(forKey: windowID)
     }
 
     /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，
@@ -239,6 +257,20 @@ final class TerminalSessionRegistry {
             code: .terminal_ambiguous,
             message: "「\(needle)」匹配到多条会话：\(candidates)。请用完整 id。"
         )
+    }
+
+    /// 等某条会话注册上来（本机终端用：会话 id 预先定好）。
+    func waitForSession(
+        id: UUID,
+        timeout: Duration,
+        pollInterval: Duration = .milliseconds(100)
+    ) async -> TerminalSessionEntry? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while true {
+            if let hit = entries.first(where: { $0.id == id }) { return hit }
+            guard ContinuousClock.now < deadline else { return nil }
+            do { try await Task.sleep(for: pollInterval) } catch { return nil }
+        }
     }
 
     /// 等某个窗口里的会话注册上来（`terminal-open` 用）。

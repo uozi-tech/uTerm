@@ -345,6 +345,16 @@ final class RemoteMacClient: Identifiable {
     /// 这台 Mac 能不能开本机终端（老 Mac 收到 `openLocalShell` 会断开整条连接）。
     var supportsLocalShell: Bool { macFeatures.contains(RemoteFeature.localShell) }
 
+    /// 关远控标签时能不能连 Mac 上的终端一起关（老 Mac 收到 `closeSession` 会断开整条连接）。
+    var supportsCloseSession: Bool { macFeatures.contains(RemoteFeature.closeSession) }
+
+    /// 请 Mac 关掉它上面的一条会话（所在标签连同连接 / shell）。只发不等：手机这边随后照常关自己的标签，
+    /// Mac 关掉以后会话列表会推来新的一份。没连着或 Mac 不支持时什么也不做。
+    func closeSessionOnMac(_ sessionID: UUID) {
+        guard state == .connected, let link, supportsCloseSession else { return }
+        link.send(RemoteMessage(.closeSession, payload: RemoteJSON.encode(RemoteCloseSessionRequest(sessionID: sessionID))))
+    }
+
     /// 请 Mac 开一个本机 shell（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常 `attach`。
     /// Mac 上没开「允许打开本机终端」、辅助程序没授权等情况抛 `RemoteAttachError.rejected`，带给人看的原因。
     func openLocalShell() async throws -> UUID {
