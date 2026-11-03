@@ -42,28 +42,66 @@ struct LANSyncSettingsSection: View {
             MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 高级中显示的 6 位代码",
                       value: pairingCode.isEmpty ? "未设置" : pairingCode, valueMono: !pairingCode.isEmpty,
                       chevron: true, last: true,
-                      onTap: { draftCode = pairingCode; editingCode = true })
+                      onTap: { draftCode = ""; editingCode = true })
         }
         // 设置页是非 lazy 的 VStack，onAppear 在一进设置就触发；要的是「滚到这个区块」时才请求授权。
         .onScrollVisibilityChange(threshold: 0.5) { visible in
             if visible { LANSyncActivation.activate(lanSync) }
         }
-        .alert("配对码", isPresented: $editingCode) {
-            TextField("6 位配对码", text: $draftCode)
-                .keyboardType(.numberPad)
-                .font(M.mono(14))
-            Button("取消", role: .cancel) {}
-            Button("保存") {
-                // 与 LANSyncCoordinator.setPairingCode 同一规范化：只留数字、最多 6 位。
-                let code = String(draftCode.filter(\.isNumber).prefix(6))
-                pairingCode = code
-                lanSync.setPairingCode(code)
-            }
-        } message: {
-            Text("输入 Mac 设置 › 高级中显示的 6 位代码")
+        .sheet(isPresented: $editingCode) {
+            PairingCodeSheet(code: $draftCode, hasSavedCode: !pairingCode.isEmpty,
+                             onSave: save, onClear: { save("") })
         }
         // 同步请求的确认弹窗挂在根视图（`mobileLANSyncHost()`），不在这里：
         // 用户不在设置页时也要看得到，否则 Mac 60 秒后超时，再进设置看到的是过期请求。
+    }
+}
+
+extension LANSyncSettingsSection {
+    private func save(_ code: String) {
+        // 与 LANSyncCoordinator.setPairingCode 同一规范化：只留数字、最多 6 位。
+        let normalized = MCodeField.normalize(code, length: 6)
+        pairingCode = normalized
+        lanSync.setPairingCode(normalized)
+        editingCode = false
+    }
+}
+
+/// 配对码输入弹窗：6 个输入位（MCodeField），填满即保存并收起。
+private struct PairingCodeSheet: View {
+    @Binding var code: String
+    var hasSavedCode: Bool
+    var onSave: (String) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("输入配对码").font(M.sans(18, weight: .semibold)).foregroundStyle(M.text)
+                Text("在 Mac 的 设置 › 高级 中查看 6 位配对码")
+                    .font(M.sans(13)).foregroundStyle(M.text3)
+                    .multilineTextAlignment(.center)
+            }
+            MCodeField(code: $code, length: 6) { full in
+                // 让最后一位显示出来再收起。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { onSave(full) }
+            }
+            HStack(spacing: 10) {
+                if hasSavedCode {
+                    MBtn(title: "清除配对码", kind: .dangerTint, full: true, height: 44, action: onClear)
+                }
+                MBtn(title: "取消", kind: .secondary, full: true, height: 44) { dismiss() }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 20)
+        .frame(maxWidth: 420)
+        .presentationDetents([.height(hasSavedCode ? 300 : 290)])
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
+        .presentationDragIndicator(.visible)
+        .presentationBackground(M.canvas)
     }
 }
 

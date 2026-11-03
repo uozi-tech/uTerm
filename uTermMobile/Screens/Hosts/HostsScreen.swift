@@ -93,7 +93,8 @@ struct HostsScreen: View {
             }
             .animation(.mSwap, value: filter)
         }
-        .sheet(item: $inspecting) { host in
+        // 主机详情用自绘底部面板（MBottomPanel），不用 .sheet + 测量 detent（真机上「有时候很高」）。
+        .mBottomPanel(item: $inspecting) { host in
             HostSheet(host: host,
                       groupColor: MGroupTint.color(for: host.group, colors: groupColors),
                       onConnect: { inspecting = nil; store.openTerminal(host) },

@@ -111,3 +111,15 @@ final class MChromeGeometryTests: XCTestCase {
         XCTAssertNil(landscape(status: nil).statusColumn)
     }
 }
+
+/// 定长数字码输入的规范化（配对码弹窗）。
+final class MCodeFieldTests: XCTestCase {
+    func testKeepsOnlyAsciiDigitsUpToLength() {
+        XCTAssertEqual(MCodeField.normalize("123456", length: 6), "123456")
+        XCTAssertEqual(MCodeField.normalize("1234567", length: 6), "123456", "超出的位截掉")
+        XCTAssertEqual(MCodeField.normalize("123 456", length: 6), "123456", "粘贴带空格")
+        XCTAssertEqual(MCodeField.normalize("配对码:12-34-56", length: 6), "123456", "粘贴带别的字符")
+        XCTAssertEqual(MCodeField.normalize("١٢٣", length: 6), "", "非 ASCII 数字不收")
+        XCTAssertEqual(MCodeField.normalize("", length: 6), "")
+    }
+}
