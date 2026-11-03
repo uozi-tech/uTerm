@@ -39,10 +39,6 @@ final class LocalShellPane {
     func start() async {
         guard session.connectionState != .connected, session.connectionState != .connecting else { return }
         await session.close()
-        if let problem = LocalShellService.shared.readinessProblem() {
-            session.markFailed(problem)
-            return
-        }
         let terminal = session.terminalView.getTerminal()
         let backend = LocalShellBackend(client: LocalShellService.shared.client,
                                         columns: terminal.cols, rows: terminal.rows)
@@ -157,14 +153,13 @@ struct LocalShellWindowView: View {
                     }
                 }
         case .failed(let message):
-            stateView(systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message,
-                      showsLoginItems: LocalShellService.shared.status == .requiresApproval)
+            stateView(systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
         case .disconnected:
-            stateView(systemImage: "checkmark.circle", title: "shell 已退出", detail: "", showsLoginItems: false)
+            stateView(systemImage: "checkmark.circle", title: "shell 已退出", detail: "")
         }
     }
 
-    private func stateView(systemImage: String, title: String, detail: String, showsLoginItems: Bool) -> some View {
+    private func stateView(systemImage: String, title: String, detail: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: systemImage).font(.largeTitle).foregroundStyle(UD.text3)
             Text(title).font(.headline).foregroundStyle(UD.text)
@@ -173,12 +168,7 @@ struct LocalShellWindowView: View {
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .frame(maxWidth: 420)
             }
-            HStack(spacing: 10) {
-                if showsLoginItems {
-                    UDButton(title: "打开登录项设置") { LocalShellService.shared.openLoginItemsSettings() }
-                }
-                UDButton(title: "重新启动") { Task { await pane.start() } }
-            }
+            UDButton(title: "重新启动") { Task { await pane.start() } }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

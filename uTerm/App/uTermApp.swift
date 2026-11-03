@@ -35,7 +35,7 @@ struct uTermApp: App {
     /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
     /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
     @State private var terminalRegistry: TerminalSessionRegistry
-    /// 远控：配对过的手机接入本机已打开的终端。开关在 设置 › 高级 › 远程控制，默认关闭。
+    /// 远控：配对过的手机接入本机已打开的终端。开关在 设置 › 远程控制，默认关闭。
     @State private var remoteSettings: RemoteControlSettings
     @State private var remoteServer: RemoteHostServer
     /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
@@ -144,12 +144,6 @@ struct uTermApp: App {
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
-                // 本机终端的辅助进程随开关注册 / 移除：注册时系统会发「已添加后台项目」通知。
-                if settings.isLocalShellEnabled {
-                    LocalShellService.shared.register()
-                } else {
-                    LocalShellService.shared.unregister()
-                }
             }
             let server = controlServer
             NotificationCenter.default.addObserver(

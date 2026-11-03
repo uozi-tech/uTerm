@@ -23,7 +23,7 @@ struct RemoteMacSection: View {
                 }
             } else if directory.macs.isEmpty {
                 MInsetRow(icon: "mac", label: "正在查找 Mac…",
-                          sub: "在 Mac 的 uTerm 里打开 设置 › 高级 › 远程控制", last: true)
+                          sub: "在 Mac 的 uTerm 里打开 设置 › 远程控制", last: true)
             } else {
                 ForEach(directory.macs) { mac in
                     MInsetRow(icon: "mac", label: mac.name,

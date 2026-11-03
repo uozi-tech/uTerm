@@ -100,8 +100,6 @@ struct AdvancedSettingsView: View {
                 }
             }
 
-            RemoteControlSettingsGroup()
-
             SettingsGroup(title: "诊断") {
                 SettingsRow(label: "日志等级",
                             hint: "运行时立即生效；低于此等级的日志不会写入系统日志。") {

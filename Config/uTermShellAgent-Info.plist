@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  本机 shell 辅助程序（uTermShellAgent.xpc）的 Info.plist 补充项，其余键由 GENERATE_INFOPLIST_FILE 生成。
+  它是 uTerm 内嵌的 XPC 服务（Contents/XPCServices/），主程序连接时由系统按需拉起、主程序退出时一起结束；
+  不带沙盒——这正是它存在的理由。沙盒主程序不能用 SMAppService 注册不带沙盒的 LaunchAgent
+  （macOS 14.2 起后台任务管理直接拒绝，报 Operation not permitted），内嵌 XPC 服务没有这条限制
+  （Sparkle 的安装器服务同理）。
+-->
+<plist version="1.0">
+<dict>
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+	</dict>
+</dict>
+</plist>

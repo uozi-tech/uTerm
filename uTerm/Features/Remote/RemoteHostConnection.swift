@@ -258,11 +258,11 @@ extension RemoteHostConnection {
                 RemoteDesktopInfo(requestID: request.requestID, failure: failure, message: message))))
         }
         guard environment.isEnabled() else {
-            return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 高级 › 远程控制 › 允许远程桌面")
+            return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许远程桌面")
         }
         guard environment.screenCaptureAuthorized() else {
             return reject(.screenPermission,
-                          "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 高级 › 远程控制 里授权，并按提示重启 uTerm")
+                          "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 远程控制 里授权，并按提示重启 uTerm")
         }
         guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
             return reject(.captureFailed, "找不到 Mac 的显示器")
@@ -303,7 +303,7 @@ extension RemoteHostConnection {
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
-            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 高级 › 远程控制 里授权后重启 uTerm 即可控制")
+            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 远程控制 里授权后重启 uTerm 即可控制")
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
         Task {

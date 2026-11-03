@@ -85,7 +85,7 @@
 		CFCFCFCF000000000000F0F4 /* VersionMobile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = VersionMobile.xcconfig; sourceTree = "<group>"; };
 		DC2B686538A588EAD56ECE6E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		F29DE64AF6B8DE16B490ADC2 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = uTermBackgroundLauncher/main.swift; sourceTree = "<group>"; };
-		5348454C4C00000000000003 /* uTermShellAgent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = uTermShellAgent; sourceTree = BUILT_PRODUCTS_DIR; };
+		5348454C4C00000000000003 /* uTermShellAgent.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = uTermShellAgent.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -233,7 +233,7 @@
 				Features/Settings/Views/GeneralSettingsView.swift,
 				Features/Settings/Views/ProviderEditView.swift,
 				Features/Settings/Views/ProvidersSettingsView.swift,
-				Features/Settings/Views/RemoteControlSettingsGroup.swift,
+				Features/Settings/Views/RemoteControlSettingsView.swift,
 				Features/Settings/Views/SettingsPrimitives.swift,
 				Features/Settings/Views/SettingsView.swift,
 				Features/Settings/Views/TerminalPreview.swift,
@@ -481,7 +481,7 @@
 				10C0DE0000000000000000A6 /* uTermMobile.app */,
 				B1000000000000000000000C /* uTermMobileTests.xctest */,
 				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
-				5348454C4C00000000000003 /* uTermShellAgent */,
+				5348454C4C00000000000003 /* uTermShellAgent.xpc */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -675,8 +675,8 @@
 			);
 			name = uTermShellAgent;
 			productName = uTermShellAgent;
-			productReference = 5348454C4C00000000000003 /* uTermShellAgent */;
-			productType = "com.apple.product-type.tool";
+			productReference = 5348454C4C00000000000003 /* uTermShellAgent.xpc */;
+			productType = "com.apple.product-type.xpc-service";
 		};
 /* End PBXNativeTarget section */
 
@@ -881,7 +881,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nmacos=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/MacOS\"\nagents=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents\"\n/bin/mkdir -p \"$macos\" \"$agents\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent\" \"$macos/uTermShellAgent\"\n/usr/bin/ditto \"${SRCROOT}/Config/com.uozi.uTerm.ShellAgent.plist\" \"$agents/com.uozi.uTerm.ShellAgent.plist\"\n";
+			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1409,10 +1409,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/uTermShellAgent-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
 				PRODUCT_NAME = uTermShellAgent;
@@ -1427,10 +1427,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = ABCDE12345;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/uTermShellAgent-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.ShellAgent;
 				PRODUCT_NAME = uTermShellAgent;

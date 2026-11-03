@@ -1,9 +1,9 @@
 import Foundation
 
-// uTerm 的本机 shell 辅助进程：由 launchd 按 `Contents/Library/LaunchAgents/com.uozi.uTerm.ShellAgent.plist`
-// 的 `MachServices` 按需拉起（主程序经 `SMAppService.agent` 注册），不带沙盒。见 `ShellAgentServer`。
-let server = ShellAgentServer()
-let listener = NSXPCListener(machServiceName: LocalShellAgent.machServiceName)
+// uTerm 的本机 shell 辅助程序：uTerm 内嵌的 XPC 服务（Contents/XPCServices/uTermShellAgent.xpc），
+// 主程序连接时由系统按需拉起，不带沙盒。见 `ShellAgentServer`。
+// 生命周期归系统管（主程序退出时一起结束），所以不自己做空闲退出。
+let server = ShellAgentServer(exitsWhenIdle: false)
+let listener = NSXPCListener.service()
 listener.delegate = server
 listener.resume()
-dispatchMain()

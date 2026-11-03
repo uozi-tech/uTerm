@@ -482,8 +482,8 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
 
 /// 隐藏的文字输入：弹软键盘、收字。外接键盘的物理按键也在这里翻成 Mac 键码。
 ///
-/// 软键盘的字按 Unicode 整段注入（中文等输入法上屏后的结果也一样），不受 Mac 当前键盘布局影响；
-/// 修饰键条上膛时，下一个字符改按 US 布局发成「修饰 + 键」（⌘C、⌃A……）。
+/// 软键盘的字按 US 布局发成按键，交给 Mac 当前的输入法（中文等在 Mac 上组字）；键位表里没有的字符
+/// 才按 Unicode 注入。修饰键条上膛时，下一个字符带上修饰（⌘C、⌃A……）。
 @MainActor
 final class RemoteKeyInputView: UIView, UIKeyInput {
     var keys: RemoteDesktopKeyState?
@@ -499,7 +499,9 @@ final class RemoteKeyInputView: UIView, UIKeyInput {
     var smartQuotesType: UITextSmartQuotesType = .no
     var smartDashesType: UITextSmartDashesType = .no
     var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
-    var keyboardType: UIKeyboardType = .default
+    /// 英文键盘：字母要按键码发过去交给 Mac 的输入法组字（见 `insertText`）。手机自己的拼音输入法在这里
+    /// 用不上——这个视图只有 `UIKeyInput`，没有组字中的 marked text。
+    var keyboardType: UIKeyboardType = .asciiCapable
     var returnKeyType: UIReturnKeyType = .default
 
     var hasText: Bool { true }
@@ -510,18 +512,30 @@ final class RemoteKeyInputView: UIView, UIKeyInput {
         return resigned
     }
 
+    /// 软键盘打出的字：US 键位上有的字符（字母、数字、符号、空格）逐个发成**按键**，交给 Mac 当前的输入法——
+    /// 开着拼音时就在 Mac 上组字、出候选，用空格 / 数字键选字。键位表里没有的字符（emoji 等）才按 Unicode
+    /// 直接注入。上膛的修饰键只作用于第一个字符（⌘C、⌃A……）。
     func insertText(_ text: String) {
-        let modifiers = keys?.consume() ?? []
-        if text == "\n" {
-            tap(RemoteKeyMap.Key.returnKey, modifiers: modifiers)
-            return
+        var modifiers = keys?.consume() ?? []
+        var unmapped = ""
+        func flushUnmapped() {
+            guard !unmapped.isEmpty else { return }
+            send?(.text(unmapped))
+            unmapped = ""
         }
-        if !modifiers.subtracting(.shift).isEmpty, text.count == 1, let character = text.first,
-           let mapped = RemoteKeyMap.keyCode(for: character) {
-            tap(mapped.code, modifiers: mapped.shift ? modifiers.union(.shift) : modifiers)
-            return
+        for character in text {
+            if character == "\n" {
+                flushUnmapped()
+                tap(RemoteKeyMap.Key.returnKey, modifiers: modifiers)
+            } else if let mapped = RemoteKeyMap.keyCode(for: character) {
+                flushUnmapped()
+                tap(mapped.code, modifiers: mapped.shift ? modifiers.union(.shift) : modifiers)
+            } else {
+                unmapped.append(character)
+            }
+            modifiers = []
         }
-        send?(.text(text))
+        flushUnmapped()
     }
 
     func deleteBackward() {

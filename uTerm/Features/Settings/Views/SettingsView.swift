@@ -32,6 +32,7 @@ struct SettingsView: View {
                 case .general:   GeneralSettingsView()
                 case .providers: ProvidersSettingsView()
                 case .terminal:  TerminalSettingsView()
+                case .remote:    RemoteControlSettingsView()
                 case .advanced:  AdvancedSettingsView()
                 case .cli:       CLISettingsView()
                 case .about:     AboutSettingsView()
@@ -81,7 +82,7 @@ private struct SettingsTitleBar: View {
 
 /// 设置 tab 标识。`label` / `symbol` 对应设计稿 `settings.jsx` 的 tab 条。
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, providers, terminal, advanced, cli, about
+    case general, providers, terminal, remote, advanced, cli, about
 
     var id: String { rawValue }
 
@@ -90,6 +91,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general:   return "通用"
         case .providers: return "AI 服务商"
         case .terminal:  return "终端"
+        case .remote:    return "远程控制"
         case .advanced:  return "高级"
         case .cli:       return "命令行与技能"
         case .about:     return "关于"
@@ -101,6 +103,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general:   return "gearshape"
         case .providers: return "sparkles"
         case .terminal:  return "terminal"
+        case .remote:    return "iphone.radiowaves.left.and.right"
         case .advanced:  return "slider.horizontal.3"
         case .cli:       return "terminal"
         case .about:     return "info.circle"

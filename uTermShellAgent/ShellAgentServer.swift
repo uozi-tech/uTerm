@@ -2,11 +2,11 @@ import Darwin
 import Foundation
 import os
 
-/// 辅助进程本体：收连接（只认 uTerm 主程序）、起登录 shell、调尺寸、结束与收尸。
+/// 辅助程序本体：收连接（只认 uTerm 主程序）、起登录 shell、调尺寸、结束与收尸。
 ///
 /// 所有状态只在 `queue` 上读写。每个 shell 记着是哪条连接开的：主程序那条连接断了（退出、崩溃），
-/// 它开的 shell 一并结束，不留没人管的登录会话。没有连接也没有 shell 一段时间后自己退出，
-/// 下次主程序来连时 launchd 按 `MachServices` 再拉起来。
+/// 它开的 shell 一并结束，不留没人管的登录会话。作为内嵌 XPC 服务时生命周期归系统管
+///（`exitsWhenIdle: false`）；`exitsWhenIdle` 只给独立运行的形态用。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     static let version = "1"
     private static let idleExitSeconds = 60

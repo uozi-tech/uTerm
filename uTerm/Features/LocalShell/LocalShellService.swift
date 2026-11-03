@@ -1,85 +1,35 @@
 import Foundation
 import Observation
-import ServiceManagement
 
-/// 本机 shell 的入口：注册辅助进程（`SMAppService.agent`）、看它的状态，以及经 XPC 起 / 调 / 结束 shell。
+/// 本机 shell 的入口：到辅助程序的 XPC 客户端，以及设置页用的健康检查。
 ///
-/// 主程序是沙盒 app，shell 由不带沙盒的 `uTermShellAgent` 起（见 `LocalShellAgent`）。辅助进程第一次注册时
-/// 系统会发「已添加后台项目」通知；有的系统设置下要用户在 系统设置 › 通用 › 登录项与扩展 里打开它才能运行
-///（状态 `.requiresApproval`）。
+/// 主程序是沙盒 app，shell 由不带沙盒的内嵌 XPC 服务 `uTermShellAgent.xpc` 起（见 `LocalShellAgent`）。
+/// 内嵌 XPC 服务由系统在第一次连接时拉起，不需要注册后台项目，也不需要用户授权。
 @MainActor
 @Observable
 final class LocalShellService {
-    enum Status: Equatable {
-        case notRegistered
-        case enabled
-        case requiresApproval
-        /// 包里找不到 launchd 配置（构建漏嵌，或从不完整的包里跑）。
-        case notFound
+    enum HelperState: Equatable {
+        case unknown
+        case checking
+        /// 能连上，带辅助程序版本号。
+        case ok(String)
+        case failed(String)
     }
 
     static let shared = LocalShellService()
 
-    private(set) var status: Status = .notRegistered
-    var lastError: String?
-
-    @ObservationIgnored private let service = SMAppService.agent(plistName: LocalShellAgent.plistName)
+    private(set) var helperState: HelperState = .unknown
     @ObservationIgnored let client = LocalShellAgentClient()
 
-    private init() {
-        refresh()
-    }
+    private init() {}
 
-    func refresh() {
-        status = switch service.status {
-        case .enabled: .enabled
-        case .requiresApproval: .requiresApproval
-        case .notFound: .notFound
-        case .notRegistered: .notRegistered
-        @unknown default: .notFound
-        }
-    }
-
-    /// 注册（幂等）。已注册时什么也不做。
-    func register() {
-        lastError = nil
-        refresh()
-        guard status == .notRegistered || status == .notFound else { return }
+    /// 连一下辅助程序（会把它拉起来），设置页据此显示「正常」或失败原因。
+    func checkHelper() async {
+        helperState = .checking
         do {
-            try service.register()
+            helperState = .ok(try await client.ping())
         } catch {
-            lastError = "无法注册本机终端的后台项目：\(error.localizedDescription)"
-        }
-        refresh()
-    }
-
-    func unregister() {
-        lastError = nil
-        client.invalidate()
-        guard status != .notRegistered else { return }
-        do {
-            try service.unregister()
-        } catch {
-            lastError = "无法移除本机终端的后台项目：\(error.localizedDescription)"
-        }
-        refresh()
-    }
-
-    func openLoginItemsSettings() {
-        SMAppService.openSystemSettingsLoginItems()
-    }
-
-    /// 开 shell 之前的检查：没注册就注册；仍不可用时给出用户能照着做的说明。
-    func readinessProblem() -> String? {
-        register()
-        switch status {
-        case .enabled: return nil
-        case .requiresApproval:
-            return "需要在 Mac 的 系统设置 › 通用 › 登录项与扩展 里打开 uTerm 的后台项目，本机终端才能启动"
-        case .notFound:
-            return "这份 uTerm 里缺少本机终端的辅助程序，请重新安装 uTerm"
-        case .notRegistered:
-            return lastError ?? "本机终端的后台项目没能注册"
+            helperState = .failed(error.localizedDescription)
         }
     }
 }
@@ -102,7 +52,7 @@ nonisolated enum LocalShellError: LocalizedError {
     }
 }
 
-/// 到辅助进程的 XPC 连接。任意线程可调；连接断了下次调用时重建（launchd 会按需把辅助进程拉起来）。
+/// 到辅助程序的 XPC 连接。任意线程可调；连接断了下次调用时重建（系统会按需把辅助程序拉起来）。
 nonisolated final class LocalShellAgentClient: @unchecked Sendable {
     private let lock = NSLock()
     private var connection: NSXPCConnection?
@@ -111,7 +61,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if connection == nil {
-            let made = NSXPCConnection(machServiceName: LocalShellAgent.machServiceName, options: [])
+            let made = NSXPCConnection(serviceName: LocalShellAgent.serviceName)
             made.remoteObjectInterface = NSXPCInterface(with: LocalShellAgentProtocol.self)
             let madeID = ObjectIdentifier(made)
             let dropped: @Sendable () -> Void = { [weak self] in self?.dropConnection(madeID) }
