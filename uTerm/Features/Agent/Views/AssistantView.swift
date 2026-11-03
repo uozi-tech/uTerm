@@ -110,11 +110,7 @@ struct AssistantView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            model.approvalMode = safetyBinding.wrappedValue
-            model.attach(context: modelContext)
-        }
-        .onChange(of: agentSafetyRaw) { _, _ in model.approvalMode = safetyBinding.wrappedValue }
+        .agentSession(model, safety: safetyBinding.wrappedValue)
     }
 
     // MARK: - 顶栏
@@ -593,15 +589,6 @@ struct AssistantView: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(UD.accentTint))
     }
 
-    private func firstPendingToolCallID() -> String? {
-        for message in model.messages {
-            if let call = message.toolCalls.first(where: { $0.status == .pending }) {
-                return call.id
-            }
-        }
-        return nil
-    }
-
     // MARK: - 输入区
 
     private var inputBar: some View {
@@ -619,16 +606,14 @@ struct AssistantView: View {
 
     private func sendIfPossible() {
         // 同步清空输入再异步发送，避免回车后「先全选再发」的一帧闪烁（与终端 Agent 一致）。
-        let text = model.input
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        model.input = ""
+        guard let text = model.takeDraft() else { return }
         Task { await model.submit(text: text, serverContext: serverContext) }
     }
 
     /// 工作区 Agent 与终端 Agent 共用同一条 ⌘↵ 语义：待确认时优先运行命令，
     /// 否则发送当前输入。
     private func handleCommandReturn() {
-        if model.state == .awaitingApproval, let id = firstPendingToolCallID() {
+        if model.state == .awaitingApproval, let id = model.firstPendingToolCallID {
             Task { await model.approveAndRun(id: id) }
         } else {
             sendIfPossible()

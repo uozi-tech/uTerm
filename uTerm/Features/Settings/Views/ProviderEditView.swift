@@ -29,16 +29,12 @@ struct ProviderEditView: View {
 
     /// Base URL 必填；远程端点须 HTTPS，loopback 开发服务可用 HTTP。
     private var baseURLError: String? {
-        let trimmed = provider.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Base URL 不能为空" }
-        return ProviderEndpointPolicy.validationMessage(
-            configuredBaseURL: trimmed, kind: provider.kind)
+        ProviderManagement.baseURLError(provider.baseURL, kind: provider.kind)
     }
 
     /// 名称必填；空时返回错误文案。
     private var nameError: String? {
-        provider.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "名称不能为空" : nil
+        ProviderManagement.nameError(provider.name)
     }
 
     /// 待保存的 API Key 草稿（去空白）。
@@ -139,7 +135,7 @@ struct ProviderEditView: View {
         if let err = keySaveError {
             statusLabel(err, ok: false)
         }
-        if keychain.load(for: provider.id) != nil {
+        if ProviderManagement.hasKey(provider, keychain: keychain) {
             Text("已有 Key")
                 .font(UD.caption)
                 .foregroundStyle(UD.text3)
@@ -161,53 +157,25 @@ struct ProviderEditView: View {
     private var kindBinding: Binding<ProviderKind> {
         Binding(
             get: { provider.kind },
-            set: { newKind in
-                let oldDefault = ProviderPreset.defaultBaseURL(for: provider.kind)
-                if provider.baseURL == oldDefault {
-                    provider.baseURL = ProviderPreset.defaultBaseURL(for: newKind)
-                }
-                provider.kindRaw = newKind.rawValue
-            })
+            set: { ProviderManagement.setKind($0, on: provider) })
     }
 
-    /// 测试连接 = 拉一次 `/v1/models`：认证、Base URL、网络一次验完，顺带告诉用户有几个
-    /// 模型可选。用钥匙串里的 key 测通时同步刷新输入区的模型目录。
+    /// 测试连接 = 拉一次 `/v1/models`（`ProviderManagement.testConnection`）；
+    /// 用未保存的 keyDraft（若有）覆盖钥匙串中的 key——便于先试再保存。
     private func testConnection() async {
         testInFlight = true
         defer { testInFlight = false }
-        // 用未保存的 keyDraft（若有）覆盖 keychain 中的 key——便于先试再保存。
-        let usesSavedKey = keyDraftTrimmed.isEmpty
-        let key = usesSavedKey ? (keychain.load(for: provider.id) ?? "") : keyDraftTrimmed
-        guard !key.isEmpty else {
-            testResult = (false, "请先填或保存 API Key")
-            return
-        }
-        guard case .success(let baseURL) = ProviderEndpointPolicy.resolve(
-            configuredBaseURL: provider.baseURL, kind: provider.kind) else {
-            testResult = (false, baseURLError ?? "Base URL 非法或不安全")
-            return
-        }
-        do {
-            let ids = try await ProviderModelCatalog.fetchModels(
-                kind: provider.kind, baseURL: baseURL, apiKey: key)
-            testResult = (true, ids.isEmpty ? "连接 OK，但该端点没有列出任何模型"
-                                            : "连接 OK · \(ids.count) 个可用模型")
-            if usesSavedKey { AgentModelDirectory.refreshOne(provider) }
-        } catch {
-            testResult = (false, AgentModelDirectory.describe(error))
-        }
+        let result = await ProviderManagement.testConnection(provider, keyDraft: keyDraft, keychain: keychain)
+        testResult = (result.ok, result.message)
     }
 
     private func saveKey() {
-        let k = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !k.isEmpty else { return }
+        guard !keyDraftTrimmed.isEmpty else { return }
         do {
-            try keychain.save(k, for: provider.id)
+            try ProviderManagement.saveKey(keyDraftTrimmed, for: provider, keychain: keychain)
             keyDraft = ""
             keySaveError = nil
             keySaved = true
-            // 换了 key，旧列表（可能是认证失败）作废，立刻用新 key 重拉。
-            AgentModelDirectory.refreshOne(provider)
         } catch {
             keySaveError = "保存到钥匙串失败：\(error)"
             keySaved = false

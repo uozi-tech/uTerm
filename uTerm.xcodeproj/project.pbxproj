@@ -267,7 +267,6 @@
 				Features/Workspace/SFTPWindowID.swift,
 				Features/Workspace/TabDragItem.swift,
 				Features/Workspace/TerminalSessionRegistry.swift,
-				Features/Workspace/Views/AssistantBindingModifier.swift,
 				Features/Workspace/Views/PaneDragGhostLayer.swift,
 				Features/Workspace/Views/PaneDropDelegate.swift,
 				Features/Workspace/Views/PaneDropZone.swift,

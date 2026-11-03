@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 import SwiftData
 import UIKit
@@ -350,6 +351,62 @@ final class StyleGalleryTests: XCTestCase {
                     .modelContainer(pc)
             }
             controller.cancel()
+        }
+    }
+
+    // MARK: - Agent 输入区 / 模型服务
+
+    /// Agent 空对话（输入区带思考深度）、模型选择、设置 › 模型服务的列表 / 编辑 / 新建。
+    func testAgentComposerAndProviders() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let c = try MobileFixtures.emptyContainer()
+        let context = c.mainContext
+        context.autosaveEnabled = false
+        let claude = AIProvider(name: "Claude", kind: .anthropic, baseURL: ProviderPreset.anthropicBaseURL,
+                                model: "claude-opus-4-7", sortOrder: 0)
+        let deepseek = AIProvider(name: "DeepSeek", kind: .openai, baseURL: "https://api.deepseek.com",
+                                  model: "", sortOrder: 1)
+        context.insert(claude)
+        context.insert(deepseek)
+        let host = ServerProfile()
+        host.name = "probe-node-01"
+        host.host = "10.0.0.11"
+        host.username = "root"
+        context.insert(host)
+        try context.save()
+
+        let suite = "StyleGallery-reasoning-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        for device in Self.devices where device.name == "iphone" || device.name == "duo-split" {
+            let model = AssistantModel(client: MobilePacedLLMClient(chunks: []),
+                                       provider: claude, apiKey: "sk-probe")
+            model.reasoningPreferences = AgentReasoningPreferences(defaults: defaults)
+            model.attach(context: context)
+            try await shoot("agent-empty", on: device) {
+                MobileAgentChat(model: model, host: host, tasks: MAgentTaskBag(),
+                                serverContext: "probe-node-01（root@10.0.0.11:22）")
+                    .environment(\.agentCommandExecutorFactory, .none)
+                    .modelContainer(c)
+            }
+            model.providers = [claude, deepseek]
+            try await shoot("agent-model-picker", on: device) {
+                MModelPickerSheet(model: model, activeProviderIDString: .constant(""),
+                                  onManageProviders: {})
+                    .modelContainer(c)
+            }
+            model.dispose()
+
+            try await shoot("providers", on: device) {
+                NavigationStack { ProvidersScreen() }.modelContainer(c)
+            }
+            try await shoot("provider-edit", on: device) {
+                NavigationStack { ProviderEditScreen(provider: deepseek) }.modelContainer(c)
+            }
+            try await shoot("provider-new", on: device) {
+                NewProviderSheet().modelContainer(c)
+            }
         }
     }
 }

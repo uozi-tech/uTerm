@@ -19,11 +19,11 @@ import SwiftData
 /// ## 已知局限
 ///
 /// - **工具执行**：`MobileFakeCommandExecutor`（本文件末尾）＋产品侧的
-///   `\.agentCommandExecutorFactory` 环境注入口。改前 `MobileAgentChat.configureModel()`
+///   `\.agentCommandExecutorFactory` 环境注入口。改前 `MobileAgentChat` 构造执行器的那两行
 ///   直接 `WorkspaceCommandExecutorFactory.make(server:container:)` 现造真执行器，
 ///   「批准 → 执行 → 输出回填 → 完成态」这条链在测试里走不通；现在
 ///   `.environment(\.agentCommandExecutorFactory, .stub(fake))` 就能整条跑通。
-///   （直接写 `model.executor` 那条老路仍然有效 —— `configureModel()` 只在
+///   （直接写 `model.executor` 那条老路仍然有效 —— `configureExecutor()` 只在
 ///   `executor == nil` 时才覆盖 —— 但注入口是更接近真实的那条：走屏幕自己的构造路径。）
 /// - `StreamingTextBuffer` 以 50ms 为节拍向 `messages` 发布，所以 20 chunk/s
 ///   （50ms 一块）之下「已投递块数」与「已上屏文本」最多差一块。自证测试按

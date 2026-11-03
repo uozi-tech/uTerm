@@ -26,23 +26,14 @@ struct AgentComposer: View {
     let onAttach: () -> Void
     let onOpenSettings: () -> Void
 
-    private var hasText: Bool {
-        !model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var status: String? {
-        guard model.turnWasStopped else { return nil }
-        return model.state == .running ? "已停止后续步骤，已下发命令仍在运行" : "已停止"
-    }
-
     var body: some View {
         UDAgentComposer(
             text: $model.input,
-            placeholder: model.isBusy ? "Agent 正在处理，输入会排队发送…" : placeholder,
+            placeholder: model.composerPlaceholder(placeholder),
             minLines: minLines,
-            status: status,
+            status: model.composerStatus,
             // 忙碌时照样能发 —— 进待发队列，Agent 空闲后依次处理。
-            canSend: hasText,
+            canSend: model.hasDraft,
             canStop: model.canStop,
             sendHelp: model.isBusy ? "排队发送，Agent 空闲后依次处理（↩）" : "发送（↩）",
             stopHelp: "停止生成和审批，取消待执行命令；已下发命令继续回收结果（esc）",
@@ -94,40 +85,27 @@ struct AgentComposer: View {
     private var catalog: AgentModelCatalog { AgentModelDirectory.catalog }
 
     private func select(_ item: UDModelPickerItem) {
-        guard let provider = model.providers.first(where: { $0.id.uuidString == item.groupID }) else { return }
-        provider.model = item.title
-        activeProviderIDString = provider.id.uuidString
+        guard let providerID = UUID(uuidString: item.groupID),
+              let id = model.selectModel(AgentModelItem(providerID: providerID, model: item.title, detail: nil))
+        else { return }
+        activeProviderIDString = id.uuidString
     }
 
-    private var modelLabel: String {
-        guard let provider = model.activeProvider else { return "选择模型" }
-        return provider.model.isEmpty ? "选择模型" : provider.model
-    }
+    private var modelLabel: String { AgentModelMenu.label(model.activeProvider) }
 
-    private var modelHelp: String {
-        guard let provider = model.activeProvider else { return "还没有配置模型服务" }
-        return provider.model.isEmpty ? "\(provider.name)：还没有选择模型" : "\(provider.name) · \(provider.model)"
-    }
+    private var modelHelp: String { AgentModelMenu.help(model.activeProvider) }
 
     // MARK: - 思考深度
 
-    /// 当前模型支持思考深度时才出现（按 provider 协议与模型家族判定，见 `AgentReasoningSupport`）。
+    /// 当前模型支持思考深度时才出现（按 provider 协议与模型家族判定，见 `AgentEffortChoice`）。
     @ViewBuilder
     private func effortSelector(compact: Bool) -> some View {
-        if let provider = model.activeProvider, !provider.model.isEmpty,
-           let support = AgentReasoningSupport.resolve(protocol: provider.kind.wireProtocol,
-                                                       modelID: provider.model) {
-            let preferences = AgentReasoningPreferences.shared
-            let current = preferences.effort(providerID: provider.id, model: provider.model)
+        if let choice = model.effortChoice {
             UDComposerEffortMenu(
-                options: AgentComposerModelMenu.effortOptions(support),
-                // 存着的档位这个模型不支持（换过模型族）就当默认显示，请求里也不会带。
-                selection: current.flatMap { support.levels.contains($0) ? $0.rawValue : nil },
+                options: choice.options.map { UDEffortOption(value: $0.value, label: $0.label) },
+                selection: choice.selection,
                 compact: compact,
-                onSelect: { value in
-                    preferences.setEffort(value.flatMap(AgentReasoningEffort.init(rawValue:)),
-                                          providerID: provider.id, model: provider.model)
-                })
+                onSelect: choice.select)
         }
     }
 
@@ -161,62 +139,41 @@ struct AgentComposer: View {
 
 // MARK: - 模型下拉的数据
 
-/// 输入区模型下拉的分组与选项（纯函数，单测守它）。
+/// 共享的 `AgentModelMenu` 换成 DesignKit 下拉的类型（单测守它）。
 enum AgentComposerModelMenu {
     /// 下拉项 id：`provider id|模型 id`。
     static func itemID(_ provider: AIProvider?) -> String? {
-        guard let provider, !provider.model.isEmpty else { return nil }
-        return "\(provider.id.uuidString)|\(provider.model)"
+        AgentModelMenu.itemID(provider)
     }
 
-    /// 每个 provider 一组，按 provider 的排序；组内是拉到的模型，当前选中但不在列表里的
-    /// 那个排在最前并标注。
     @MainActor
     static func groups(providers: [AIProvider], catalog: AgentModelCatalog) -> [UDModelPickerGroup] {
-        providers.sorted { $0.sortOrder < $1.sortOrder }.map { provider in
-            let entry = catalog.entry(for: provider.id)
-            let fetched = Set(entry?.models ?? [])
-            let groupID = provider.id.uuidString
-            let items = catalog.models(for: provider.id, including: provider.model).map { id in
-                UDModelPickerItem(id: "\(groupID)|\(id)", groupID: groupID, title: id,
-                                  detail: entry?.fetchedAt != nil && !fetched.contains(id) ? "不在列表中" : nil)
-            }
+        AgentModelMenu.groups(providers: providers, catalog: catalog).map { group in
             let status: UDModelPickerGroup.Status
-            if entry?.isLoading == true {
-                status = .loading
-            } else if let error = entry?.error {
-                status = .failed(error)
-            } else if entry == nil {
-                status = .loading
-            } else {
-                status = .ready
+            switch group.status {
+            case .loading: status = .loading
+            case .failed(let message): status = .failed(message)
+            case .ready: status = .ready
             }
-            return UDModelPickerGroup(id: groupID, title: provider.name.isEmpty ? provider.kind.displayName
-                                                                                : provider.name,
-                                      items: items, status: status)
+            return UDModelPickerGroup(
+                id: group.id, title: group.title,
+                items: group.items.map {
+                    UDModelPickerItem(id: $0.id, groupID: group.id, title: $0.model, detail: $0.detail)
+                },
+                status: status)
         }
     }
 
     /// 「默认」+ 该模型支持的档位。
     static func effortOptions(_ support: AgentReasoningSupport) -> [UDEffortOption] {
-        [UDEffortOption(value: nil, label: "默认")]
-            + support.levels.map { UDEffortOption(value: $0.rawValue, label: $0.label) }
+        AgentModelMenu.effortOptions(support).map { UDEffortOption(value: $0.value, label: $0.label) }
     }
 }
 
 // MARK: - 审批档位的图标与颜色
 
 extension AgentSafety {
-    /// 自主程度越高图标越「满」：每步确认是空盾，只读自动半盾，AI 代批带闪电。
-    nonisolated var symbolName: String {
-        switch self {
-        case .confirm:  return "shield"
-        case .readAuto: return "shield.lefthalf.filled"
-        case .auto:     return "bolt.shield.fill"
-        }
-    }
-
-    /// 最保守的一档不抢眼；放权越多颜色越醒目。
+    /// 最保守的一档不抢眼；放权越多颜色越醒目。图标与排列顺序在共享的 `AgentComposerSupport`。
     @MainActor var tint: Color {
         switch self {
         case .confirm:  return UD.text3
@@ -224,8 +181,5 @@ extension AgentSafety {
         case .auto:     return UD.warning
         }
     }
-
-    /// 菜单里从保守到放权排列（`allCases` 的声明顺序是历史遗留的 readAuto 在前）。
-    nonisolated static let byAutonomy: [AgentSafety] = [.confirm, .readAuto, .auto]
 }
 #endif

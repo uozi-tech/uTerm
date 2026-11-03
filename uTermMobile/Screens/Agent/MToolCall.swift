@@ -130,33 +130,3 @@ struct MToolCall: View {
         .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
-
-// MARK: - 安全档位拨盘
-
-/// 「自然语言 → 真实执行」信任拨盘（移动端）。镜像 macOS `AgentComposer` 里的审批档位。
-struct MSafetyDial: View {
-    @Binding var safety: AgentSafety
-
-    var body: some View {
-        Menu {
-            ForEach(AgentSafety.allCases) { s in
-                Button { safety = s } label: {
-                    if s == safety {
-                        Label(s.label, systemImage: "checkmark")
-                    } else {
-                        Text(s.label)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                MIcon(name: "shield", size: 12, color: M.accent)
-                Text(safety.label).font(M.sans(11.5)).foregroundStyle(M.text2)
-                MIcon(name: "chev-down", size: 8, color: M.text4)
-            }
-            .padding(.leading, 10).padding(.trailing, 9).frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 8).fill(M.fillFaint))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-    }
-}

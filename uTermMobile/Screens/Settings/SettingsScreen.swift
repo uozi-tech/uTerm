@@ -40,6 +40,7 @@ struct SettingsScreen: View {
         var groups = 0
         var knownHosts = 0
         var forwards = 0
+        var providers = 0
     }
 
     private func refreshCounts() {
@@ -50,7 +51,8 @@ struct SettingsScreen: View {
                                 keys: count(SSHKey.self),
                                 groups: count(ServerGroup.self),
                                 knownHosts: count(KnownHost.self),
-                                forwards: count(ForwardingRule.self))
+                                forwards: count(ForwardingRule.self),
+                                providers: count(AIProvider.self))
     }
 
     private var appearance: Binding<AppearancePreference> {
@@ -64,6 +66,7 @@ struct SettingsScreen: View {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup
+                    agentGroup
                     appearanceGroup
                     terminalGroup
                     securityGroup
@@ -151,6 +154,18 @@ struct SettingsScreen: View {
         MInsetGroup(header: "动作") {
             MInsetRow(icon: "cmd", label: "命令面板", sub: "搜索主机、命令、文件",
                       chevron: true, last: true, onTap: { store.showPalette = true })
+        }
+    }
+
+    // AI：模型服务（对齐 macOS 设置的「模型服务」页）
+    private var agentGroup: some View {
+        MInsetGroup(header: "AI", footer: "Agent 用到的模型服务。服务列表经 iCloud 与 Mac 同步，API Key 经 iCloud 钥匙串同步。") {
+            NavigationLink { ProvidersScreen() } label: {
+                MInsetRow(icon: "spark", label: "模型服务",
+                          sub: counts.providers == 0 ? "尚未配置" : nil,
+                          value: counts.providers == 0 ? nil : "\(counts.providers)",
+                          chevron: true, last: true)
+            }.buttonStyle(MRowStyle())
         }
     }
 

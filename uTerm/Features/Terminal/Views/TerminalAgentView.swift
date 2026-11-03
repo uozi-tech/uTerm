@@ -20,7 +20,6 @@ struct TerminalAgentView: View {
     /// 同一处方：`docs/scroll-perf-findings.md`「Agent 消息流」。
     var messageWindowLimit: Int = AgentMessageWindow.defaultLimit
 
-    @Environment(\.modelContext) private var modelContext
     // 同 `AssistantView`：会话历史只取最近 `ChatSessionQueries.recentLimit` 条。
     @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
     @State private var followsConversationTail = true
@@ -43,11 +42,7 @@ struct TerminalAgentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 分区方案 v3：Agent 模式整块坐在终端窗口的内容卡里，透出卡面色，不自铺底色。
-        .onAppear {
-            model.approvalMode = safety
-            model.attach(context: modelContext)
-        }
-        .onChange(of: safety) { _, value in model.approvalMode = value }
+        .agentSession(model, safety: safety)
     }
 
     // MARK: - 上下文条
@@ -284,13 +279,6 @@ struct TerminalAgentView: View {
         }
     }
 
-    private func firstPendingToolCallID() -> String? {
-        for m in model.messages {
-            if let c = m.toolCalls.first(where: { $0.status == .pending }) { return c.id }
-        }
-        return nil
-    }
-
     // MARK: - 空状态（按诊断 / 配置 / 部署分组的示例，居中）
 
     private var emptyState: some View {
@@ -311,7 +299,7 @@ struct TerminalAgentView: View {
             }
 
             VStack(spacing: 14) {
-                ForEach(Self.emptyGroups, id: \.tag) { group in
+                ForEach(AgentPromptExamples.groups, id: \.tag) { group in
                     VStack(spacing: 8) {
                         // 分组标题居中
                         Text(group.tag)
@@ -363,25 +351,18 @@ struct TerminalAgentView: View {
     }
 
     private func attachContext() {
-        let snippet = "上下文：\n\(serverContext)"
-        if model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            model.input = snippet
-        } else {
-            model.input += "\n\n\(snippet)"
-        }
+        model.appendContext(serverContext)
     }
 
     /// 发送当前输入：**同步**清空输入再异步发送 —— 避免回车后「先全选再发」的闪烁。
     private func sendInput() {
-        let text = model.input
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        model.input = ""
+        guard let text = model.takeDraft() else { return }
         Task { await model.submit(text: text, serverContext: serverContext) }
     }
 
     /// ⌘↵：有待确认命令则运行首个 pending；否则发送当前输入。
     private func handleCommandReturn() {
-        if model.state == .awaitingApproval, let id = firstPendingToolCallID() {
+        if model.state == .awaitingApproval, let id = model.firstPendingToolCallID {
             Task { await model.approveAndRun(id: id) }
         } else {
             sendInput()
@@ -423,13 +404,4 @@ struct TerminalAgentView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    // MARK: - 示例数据（建议 / 空状态分组）
-
-    private struct EmptyGroup { let tag: String; let items: [String] }
-    private static let emptyGroups: [EmptyGroup] = [
-        .init(tag: "诊断", items: ["根分区是什么占满的", "最近的 5xx 集中在什么时间", "CPU 突然飙高是哪个进程"]),
-        .init(tag: "配置", items: ["给 upstream 加上 keepalive", "把 SSH 端口改成 2222", "开启 gzip 压缩"]),
-        .init(tag: "部署", items: ["拉取最新代码并重启服务", "回滚到上一个版本", "查看 systemd 服务状态"]),
-    ]
 }

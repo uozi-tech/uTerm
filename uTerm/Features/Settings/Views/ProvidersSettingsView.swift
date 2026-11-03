@@ -107,24 +107,13 @@ struct ProvidersSettingsView: View {
     // MARK: - 动作
 
     private func addProvider() {
-        let nextSort = (providers.map(\.sortOrder).max() ?? -1) + 1
-        let p = AIProvider(
-            name: "新 Provider",
-            kind: .anthropic,
-            baseURL: ProviderPreset.anthropicBaseURL,
-            model: "",   // 由编辑页从 provider 实时模型列表里选
-            sortOrder: nextSort)
-        modelContext.insert(p)
-        try? modelContext.save()
-        selectedID = p.id
+        selectedID = ProviderManagement.add(in: modelContext).id
     }
 
     private func deleteSelected() {
         guard let id = selectedID,
               let p = providers.first(where: { $0.id == id }) else { return }
-        try? AgentKeychain().delete(for: p.id)
-        modelContext.delete(p)
-        try? modelContext.save()
+        ProviderManagement.delete(p, in: modelContext)
         selectedID = providers.first?.id
     }
 }
