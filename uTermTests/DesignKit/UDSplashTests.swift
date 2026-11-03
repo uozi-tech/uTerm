@@ -20,9 +20,9 @@ final class UDSplashTests: XCTestCase {
     /// 「星空之上」（v2 定稿，唯一保留方向）的尺寸档对齐设计稿：
     /// compact（iPhone）/ big（iPad）。
     func test_size_ladder_matches_design() {
-        XCTAssertEqual(UDSplashNebula(big: false).logoSize, 104)
-        XCTAssertEqual(UDSplashNebula(big: false).wordSize, 46)
-        XCTAssertEqual(UDSplashNebula(big: true).logoSize, 132)
-        XCTAssertEqual(UDSplashNebula(big: true).wordSize, 58)
+        XCTAssertEqual(UDSplash(big: false).logoSize, 104)
+        XCTAssertEqual(UDSplash(big: false).wordSize, 46)
+        XCTAssertEqual(UDSplash(big: true).logoSize, 132)
+        XCTAssertEqual(UDSplash(big: true).wordSize, 58)
     }
 }
