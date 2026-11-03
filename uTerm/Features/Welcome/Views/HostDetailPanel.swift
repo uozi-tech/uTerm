@@ -7,8 +7,8 @@ import AppKit
 ///
 /// 这一栏正是设计稿要「填补右侧大量空白」的主角：默认选中第一台主机即可让它常驻。
 /// 头部圆点 + 名称 + 分组 → 等宽 `user@host:port` → 2×2 元信息栅格 → 底部两枚动作
-/// 按钮并排：左主操作「在终端中打开」（accent + ↵ 柔光，作为新标签进已有终端窗口）+
-/// 右次操作「SFTP 浏览文件」（软底 + ⌘↵）。原先单一「连接」按钮按设计稿拆成这两条独立动作。
+/// 按钮：主操作「在工作区打开」（accent + ↵ 柔光）独占一行；其下并排两枚次操作——
+/// 左「在终端中打开」（⌥↵，作为新标签进已有终端窗口）、右「SFTP 浏览文件」（⌘↵）。
 ///
 /// 栅格映射到真实 `ServerProfile` 字段：端口 / 认证 / 上次连接 / 跳板机。设计稿原
 /// 型里的「会话数」无对应真实数据，替换为同样真实且有用的「跳板机」。
@@ -19,6 +19,7 @@ import AppKit
 struct HostDetailPanel: View {
     let profile: ServerProfile
     let onConnect: () -> Void
+    let onOpenTerminal: () -> Void
     let onBrowseSFTP: () -> Void
 
     /// 刚复制过的字段（用于「已复制」瞬时反馈，非 nil 即显示）。
@@ -159,7 +160,8 @@ struct HostDetailPanel: View {
 
     // MARK: actions
 
-    /// 底部动作区。普通主机：左「在终端中打开」（↵）+ 右「SFTP 浏览文件」（⌘↵）并排等宽。
+    /// 底部动作区。普通主机：主操作「在工作区打开」（↵）一行，其下并排「在终端中打开」（⌥↵）
+    /// 与「SFTP 浏览文件」（⌘↵）。
     /// 「仅 SFTP」主机：主操作升为「SFTP 浏览文件」（↵），终端入口降级为带锁的禁用提示。
     @ViewBuilder
     private var actionButtons: some View {
@@ -169,9 +171,12 @@ struct HostDetailPanel: View {
                 terminalDisabledPill
             }
         } else {
-            HStack(spacing: 8) {
-                openTerminalButton
-                browseSFTPButton
+            VStack(spacing: 9) {
+                openWorkspaceButton
+                HStack(spacing: 8) {
+                    openTerminalButton
+                    browseSFTPButton
+                }
             }
         }
     }
@@ -231,13 +236,12 @@ struct HostDetailPanel: View {
         )
     }
 
-    /// 主操作：accent 实心 + 内嵌 ↵ 键帽 + 柔光，回车在终端中打开。
-    private var openTerminalButton: some View {
+    /// 主操作：accent 实心 + 内嵌 ↵ 键帽 + 柔光，回车直达工作区。
+    private var openWorkspaceButton: some View {
         Button(action: onConnect) {
-            HStack(spacing: 8) {
-                Text("在终端中打开")
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
+            HStack(spacing: 10) {
+                Text("在工作区打开")
+                    .font(.system(size: 13.5, weight: .medium))
                 Text("↵")
                     .font(.system(size: 10.5, design: .monospaced))
                     .padding(.horizontal, 6)
@@ -260,6 +264,27 @@ struct HostDetailPanel: View {
         .keyboardShortcut(.return, modifiers: [])
     }
 
+    /// 次操作：软底 + ⌥↵ 键帽；⌥+回车在终端中打开。
+    private var openTerminalButton: some View {
+        Button(action: onOpenTerminal) {
+            HStack(spacing: 8) {
+                Text("在终端中打开")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .lineLimit(1)
+                KbdChip(text: "⌥↵")
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(UD.fillSoft)
+            )
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.return, modifiers: .option)
+    }
+
     /// 次操作：软底 + ⌘↵ 键帽，复用通用 `KbdChip`；⌘+回车进 SFTP 浏览。
     private var browseSFTPButton: some View {
         Button(action: onBrowseSFTP) {
@@ -271,7 +296,7 @@ struct HostDetailPanel: View {
                 KbdChip(text: "⌘↵")
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 40)
+            .frame(height: 38)
             .background(
                 RoundedRectangle(cornerRadius: 9)
                     .fill(UD.fillSoft)

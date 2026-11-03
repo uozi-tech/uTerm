@@ -241,25 +241,21 @@ struct WelcomeView: View {
         case .restore:
             dismissWindow(id: "welcome")
         case .lastHost:
-            // 与主操作一致：普通主机在终端中打开，「仅 SFTP」主机进 SFTP 浏览。
-            if let profile = fetchLastHost() {
-                if profile.sftpOnly {
-                    openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
-                } else {
-                    openWindow(value: TerminalWindowID(id: UUID(), serverID: profile.id))
-                }
+            if let id = fetchLastHostWindowID() {
+                openWindow(value: id)
             }
             dismissWindow(id: "welcome")
         }
     }
 
-    private func fetchLastHost() -> ServerProfile? {
+    private func fetchLastHostWindowID() -> WorkspaceWindowID? {
         var descriptor = FetchDescriptor<ServerProfile>(
             predicate: #Predicate { $0.lastConnectedAt != nil },
             sortBy: [SortDescriptor(\.lastConnectedAt, order: .reverse)]
         )
         descriptor.fetchLimit = 1
-        return try? modelContext.fetch(descriptor).first
+        guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
+        return WorkspaceWindowID(serverID: profile.id)
     }
 
     // MARK: 键盘导航
@@ -327,7 +323,7 @@ struct WelcomeView: View {
 
     // MARK: actions
 
-    /// Welcome 窗口的命令项：主机（连接=在终端中打开）/ 新建主机 / 设置深链。
+    /// Welcome 窗口的命令项：主机（连接=开工作区窗）/ 新建主机 / 设置深链。
     @MainActor
     private func welcomeCommandItems() -> [CommandPaletteItem] {
         var items: [CommandPaletteItem] = []
@@ -431,17 +427,8 @@ struct WelcomeView: View {
         // Mock / 空态下的行为对应假数据，拦截以免弹出无法解析的工作区窗口或误写真库。
         if TweaksModel.shared.welcomeSource != .real { return }
         #endif
-        // 「仅 SFTP」主机禁用终端会话：任何「连接 / 在终端中打开」入口统一重定向到 SFTP 浏览。
+        // 「仅 SFTP」主机禁用终端会话：任何「连接 / 在工作区打开」入口统一重定向到 SFTP 浏览。
         if profile.sftpOnly { openSFTP(profile); return }
-        profile.lastConnectedAt = Date()
-        try? modelContext.save()
-        // 有终端窗口就作为新标签送进最近活跃的那个，没有才新开 —— 不再一台主机一个窗口。
-        if TerminalWindowRouter.shared.openInExistingWindow(serverID: profile.id) { return }
-        openWindow(value: TerminalWindowID(id: UUID(), serverID: profile.id))
-    }
-
-    /// 完整工作区窗口（SFTP 侧栏 + 预览 + Agent 都绑在这台主机上），右键菜单的次级入口。
-    private func openWorkspace(_ profile: ServerProfile) {
         profile.lastConnectedAt = Date()
         try? modelContext.save()
         openWindow(value: WorkspaceWindowID(serverID: profile.id))
@@ -454,6 +441,15 @@ struct WelcomeView: View {
         openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
     }
 
+    /// 在终端中打开（「终端 ⇄ Agent」两态的终端窗口）：有终端窗口就作为新标签送进最近
+    /// 活跃的那个，没有才新开 —— 不再一台主机一个窗口。
+    private func openTerminalWindow(_ profile: ServerProfile) {
+        profile.lastConnectedAt = Date()
+        try? modelContext.save()
+        if TerminalWindowRouter.shared.openInExistingWindow(serverID: profile.id) { return }
+        openWindow(value: TerminalWindowID(id: UUID(), serverID: profile.id))
+    }
+
     private func handleContextAction(_ action: ServerList.ContextAction,
                                       _ profile: ServerProfile) {
         #if DEBUG
@@ -462,8 +458,8 @@ struct WelcomeView: View {
         switch action {
         case .connect:
             openServer(profile)
-        case .openWorkspace:
-            openWorkspace(profile)
+        case .openTerminalWindow:
+            openTerminalWindow(profile)
         case .openSFTP:
             openSFTP(profile)
         case .togglePin:
