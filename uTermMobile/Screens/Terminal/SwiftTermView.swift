@@ -2,6 +2,15 @@ import SwiftUI
 import SwiftTerm
 import UIKit
 
+/// 只在自己的会话允许时才肯当第一响应者的终端视图。
+/// 光在我们自己的聚焦调用里设卡不够：UIKit 收起抽屉 / 弹层时会把之前的第一响应者自动恢复回来，
+/// 不经过任何我们的代码——第一个标签已连上、第二个标签正在建连时，键盘就是这样冒出来的。
+final class MTerminalView: SwiftTerm.TerminalView {
+    weak var controller: MobileTerminalController?
+
+    override var canBecomeFirstResponder: Bool { controller?.canTakeKeyboard ?? false }
+}
+
 /// 把 SwiftTerm 的 iOS `TerminalView` 桥接进 SwiftUI。Coordinator 实现
 /// `TerminalViewDelegate`，把键盘输入与尺寸变化转给 `MobileTerminalController`。
 /// 配色随 app 外观（日 / 夜）自动取 VS Code Light / Dark（对齐 macOS `TerminalColorScheme`）。
@@ -24,8 +33,9 @@ struct SwiftTermView: UIViewRepresentable {
         // TerminalScreen 连带重建——复用同一视图可保活 SwiftTerm 的屏幕缓冲与回滚，
         // 既不空白也不断连。仅首次创建新视图。
         let isFresh = controller.terminalView == nil
-        let view = controller.terminalView ?? SwiftTerm.TerminalView(
+        let view = controller.terminalView ?? MTerminalView(
             frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
+        (view as? MTerminalView)?.controller = controller
         // 把（可能是新建的）coordinator 接上：复用旧视图时旧 coordinator 已随旧表示层销毁。
         view.terminalDelegate = context.coordinator
         context.coordinator.onInteract = onInteract

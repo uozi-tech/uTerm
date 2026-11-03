@@ -16,10 +16,16 @@ final class MobileTerminalController {
     var state: State = .idle {
         // 离开「已连接」（失败 / 断开 / 重连中）就收起键盘：没有 shell 可打字，
         // 失败态的终端视图还会被失败页替换掉，留着键盘只会盖住失败页。
-        didSet { if state != .connected { resignKeyboard() } }
+        didSet { if !canTakeKeyboard { resignKeyboard() } }
     }
-    /// 键盘只给真正进了终端的会话：建连中 / 失败 / 已断开一律不弹。
-    var canTakeKeyboard: Bool { state == .connected }
+    /// 本会话是不是此刻唯一该拿键盘的那个（聚焦格的前台标签、终端模式、上面没有连接中页 /
+    /// 新建抽屉）。由工作区统一裁决、逐会话下发——每个标签只看自己的这一位。
+    var ownsKeyboard = false {
+        didSet { if !canTakeKeyboard { resignKeyboard() } }
+    }
+    /// 键盘只给真正进了终端、且轮到自己的会话：建连中 / 失败 / 已断开 / 不是键盘归属者一律不弹。
+    /// 终端视图的 `canBecomeFirstResponder` 也读它，UIKit 自己恢复第一响应者（抽屉收起时）同样被拦。
+    var canTakeKeyboard: Bool { state == .connected && ownsKeyboard }
     var title: String = ""
     /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。

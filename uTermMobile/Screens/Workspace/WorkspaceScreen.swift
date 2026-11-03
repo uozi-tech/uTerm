@@ -24,6 +24,9 @@ struct WorkspaceScreen: View {
     @State private var draggingTabID: UUID?
     /// 拖拽悬停处松手的结果，驱动投放高亮。
     @State private var dropTarget: MDropTarget?
+    /// 新建抽屉里已选了主机、连接中页还没盖上来的那一小段（抽屉收起后 0.3s 才发起连接）。
+    /// 期间 UIKit 会把抽屉弹出前的第一响应者（旧标签的终端）恢复回来，必须算作「没人拥有键盘」。
+    @State private var awaitingConnect = false
 
     private var visible: Bool { store.showWorkspace }
 
@@ -54,13 +57,11 @@ struct WorkspaceScreen: View {
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
         .onChange(of: workspace.focusedPaneID) { _, _ in syncKeyboard() }
         // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上；展开时重新聚焦。
-        .onChange(of: store.showWorkspace) { _, shown in
-            if shown { syncKeyboard() } else { resignAll() }
-        }
-        // 连接中页撤下（连接完成）后再弹键盘——建连期刻意不弹（见 SwiftTermView.autoFocus）。
-        .onChange(of: store.connecting?.id) { _, id in
-            if id == nil { syncKeyboard() }
-        }
+        .onChange(of: store.showWorkspace) { _, _ in syncKeyboard() }
+        // 连接中页盖上即收回所有键盘归属；撤下（连接完成）后再弹——建连期刻意不弹。
+        .onChange(of: store.connecting?.id) { _, _ in syncKeyboard() }
+        .onChange(of: newKind) { _, _ in syncKeyboard() }
+        .onChange(of: awaitingConnect) { _, _ in syncKeyboard() }
         // 连接中页取消：移除对应会话标签（控制器已由 store 关闭）。
         .onChange(of: store.teardownTabID) { _, id in
             guard let id else { return }
@@ -161,25 +162,30 @@ struct WorkspaceScreen: View {
 
     // MARK: - 键盘
 
-    /// 键盘只归活动标签：终端模式的终端接管第一响应者；文件浏览 / Agent 没有终端去接管，
-    /// 主动全局收起旧键盘，否则击键会落到另一格或已切走的终端里。
+    /// 此刻该拿键盘的终端标签：聚焦格的前台标签、终端模式，且上面没有连接中页 / 新建抽屉。
+    /// 连接中页期间一个都没有——键盘窗口恒在最上，会盖住中转页的取消按钮。
+    private var keyboardOwner: TermTab? {
+        guard store.connecting == nil, store.showWorkspace, newKind == nil, !awaitingConnect,
+              let term = workspace.activeTab?.terminal, term.mode == .terminal else { return nil }
+        return term
+    }
+
+    /// 键盘只归一个标签：先把归属逐会话下发（立即生效，丢了归属的终端当场收键盘、
+    /// 也拒绝 UIKit 的自动恢复），再在布局落定后让归属者聚焦——它没连上时 `focusKeyboard`
+    /// 什么也不做。没有归属者（文件浏览 / Agent / 连接中）就全局收起，否则击键会落到另一格。
     private func syncKeyboard() {
+        let owner = keyboardOwner
+        for term in workspace.terminalTabs { term.controller.ownsKeyboard = term === owner }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            // 连接中页期间不要弹键盘——键盘窗口恒在最上，会盖住中转页的取消按钮。
+            // 连接中页 / 收起态不做全局收起：上面可能叠着要输入的弹层；终端已按归属各自收了。
             guard store.connecting == nil, store.showWorkspace else { return }
-            // 只有确认进了终端（已连接）才弹；连接失败 / 断开的标签与文件浏览一样收起。
-            if let term = workspace.activeTab?.terminal, term.mode == .terminal,
-               term.controller.canTakeKeyboard {
-                term.controller.focusKeyboard()
+            if let owner = keyboardOwner {
+                owner.controller.focusKeyboard()
             } else {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                 to: nil, from: nil, for: nil)
             }
         }
-    }
-
-    private func resignAll() {
-        for term in workspace.terminalTabs { term.controller.resignKeyboard() }
     }
 
     // MARK: - 分屏
@@ -356,9 +362,11 @@ struct WorkspaceScreen: View {
                         ForEach(candidates) { host in
                             // 新建会话也走连接中页（强制新开一个，即便已有同主机同类型的标签）。
                             hostRow(host, kind: kind) {
+                                awaitingConnect = true
                                 newKind = nil
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                                     store.requestConnect(host, kind: kind, allowDuplicate: true)
+                                    awaitingConnect = false
                                 }
                             }
                         }
