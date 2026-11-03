@@ -20,6 +20,8 @@ struct RemoteDesktopScreen: View {
     /// 粘贴的结果提示（「已粘贴到 Mac」/ 失败原因），几秒后自己消失。
     @State private var pasteNote: String?
     @State private var pasteNoteTask: Task<Void, Never>?
+    /// 顶栏左右要让出的距离（按屏幕圆角算，见 `ScreenCornerInsetsReader`）。
+    @State private var barInsets = EdgeInsets(top: 14, leading: 24, bottom: 0, trailing: 24)
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
     @Environment(\.mAccent) private var accent
@@ -39,15 +41,17 @@ struct RemoteDesktopScreen: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 左右不让安全区：有的机型（Duo 外屏竖握）把一侧摄像头算成整条安全区，画面让出去
-                // 就白白少两成宽度。开孔压住画面一角可以接受；顶栏与键盘条仍在安全区里。
-                .ignoresSafeArea(.container, edges: .horizontal)
                 .overlay(alignment: .top) { pasteToast }
                 if keyboardVisible, let session, session.canControl {
                     RemoteDesktopKeyBar(keys: keys) { session.send($0) }
                 }
             }
+            // 整列铺满屏幕，顶栏的边距按离屏幕边缘的绝对距离给（`barInsets`），不与安全区混算。
+            // 画面左右也就铺满：有的机型（Duo 外屏竖握）把一侧摄像头算成整条安全区，让出去就白白少两成宽度，
+            // 开孔压住画面一角可以接受。只忽略容器安全区，软键盘弹起时整列照样缩到键盘上方。
+            .ignoresSafeArea(.container)
             .background(Color.black.ignoresSafeArea())
+            .background(ScreenCornerInsetsReader(insets: $barInsets).ignoresSafeArea())
             .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
@@ -63,6 +67,8 @@ struct RemoteDesktopScreen: View {
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        // 这一屏永远是黑底：配色一律按深色解析。跟随系统时浅色模式下的次要按钮是深灰字，落在黑底上看不见。
+        .environment(\.colorScheme, .dark)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
@@ -123,8 +129,12 @@ struct RemoteDesktopScreen: View {
                 .accessibilityLabel(keyboardVisible ? "收起键盘" : "键盘")
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        // 上、左、右都是离屏幕边缘的绝对距离（整列已铺满屏幕），按安全区与屏幕圆角取大，
+        // 见 `ScreenCornerInsetsReader`：全屏隐藏状态栏时有的机型安全区接近 0，两端按钮正落在圆角弧线里。
+        .padding(.top, barInsets.top)
+        .padding(.bottom, 6)
+        .padding(.leading, barInsets.leading)
+        .padding(.trailing, barInsets.trailing)
     }
 
     private var statusLine: String {
@@ -276,6 +286,70 @@ struct RemoteDesktopScreen: View {
                     .padding(.top, 4)
             }
             .padding(24)
+        }
+    }
+}
+
+/// 读出贴着屏幕顶边的栏要让出多少，才不被屏幕圆角切掉（都是离屏幕边缘的绝对距离）。
+///
+/// 全屏隐藏状态栏时，有的机型顶边与两侧的安全区都是 0（Duo 内屏实测：上 0、左右 0），两端按钮
+/// 正落在圆角弧线里。iOS 26 起系统按这块屏幕的圆角给两组安全区：`cornerAdaptation: .horizontal`
+///（同机左右各 16）与 `.vertical`（顶 16）。贴顶又贴边的按钮两组都要满足。
+/// 更早的系统没有这两个接口，用固定的 `cornerClearanceSide` / `cornerClearanceTop`：
+/// (R − 24)² + (R − 14)² ≤ R² 对 R ≤ 62pt（现有 iPhone 的上限）都成立。
+/// 安全区本来就更大（刘海屏竖握、横握的灵动岛那侧）时取安全区。
+/// 铺满全屏、不接触摸，只在布局 / 安全区变化时回报。
+private struct ScreenCornerInsetsReader: UIViewRepresentable {
+    static let cornerClearanceSide: CGFloat = 24
+    static let cornerClearanceTop: CGFloat = 14
+
+    @Binding var insets: EdgeInsets
+
+    func makeUIView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.isUserInteractionEnabled = false
+        probe.onChange = { insets = $0 }
+        return probe
+    }
+
+    func updateUIView(_ uiView: Probe, context: Context) {}
+
+    final class Probe: UIView {
+        var onChange: ((EdgeInsets) -> Void)?
+        private var reported: EdgeInsets?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            report()
+        }
+
+        override func safeAreaInsetsDidChange() {
+            super.safeAreaInsetsDidChange()
+            report()
+        }
+
+        private func report() {
+            let safe = safeAreaInsets
+            let value: EdgeInsets
+            if #available(iOS 26.0, *) {
+                // 系统按这块屏幕的圆角给的两组安全区：内容离两侧 h、或离顶 v 就避开了圆角。
+                // 栏的两端按钮既贴顶又贴边，所以顶取 v、两侧取 h 再加按钮自身的圆角（8pt）。
+                let h = edgeInsets(for: .safeArea(cornerAdaptation: .horizontal))
+                let v = edgeInsets(for: .safeArea(cornerAdaptation: .vertical))
+                let buttonCorner: CGFloat = 8
+                value = EdgeInsets(top: max(safe.top, v.top),
+                                   leading: max(safe.left, h.left + buttonCorner),
+                                   bottom: 0,
+                                   trailing: max(safe.right, h.right + buttonCorner))
+            } else {
+                let side = ScreenCornerInsetsReader.cornerClearanceSide
+                value = EdgeInsets(top: max(safe.top, ScreenCornerInsetsReader.cornerClearanceTop),
+                                   leading: max(safe.left, side), bottom: 0, trailing: max(safe.right, side))
+            }
+            guard value != reported else { return }
+            reported = value
+            // 布局回调里不直接改 SwiftUI 状态。
+            DispatchQueue.main.async { [weak self] in self?.onChange?(value) }
         }
     }
 }

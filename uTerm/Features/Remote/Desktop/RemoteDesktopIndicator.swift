@@ -67,7 +67,9 @@ final class RemoteDesktopIndicator {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // 不用窗口阴影：系统给透明无边框窗口画阴影时会沿内容形状描一圈亮边（看起来就是描边）。
+        // 阴影由 SwiftUI 自己画，见 `RemoteDesktopIndicatorView`。
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
@@ -106,8 +108,12 @@ private struct RemoteDesktopIndicatorView: View {
         .padding(.leading, 8)
         .padding(.trailing, 8)
         .padding(.vertical, 6)
-        .background(Capsule().fill(UD.panel))
+        .background(Capsule().fill(UD.panel).shadow(color: .black.opacity(0.18), radius: 10, y: 3))
         .fixedSize()
+        // 给阴影留出地方：面板按内容大小定，不留的话阴影在窗口边上被截断。
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 16)
         .help(viewer.canControl ? "手机可以移动鼠标、点按与打字。点「断开」立即结束" : "手机只能查看，不能操作。点「断开」立即结束")
     }
 }
