@@ -9,6 +9,7 @@ struct HostSheet: View {
     var onEdit: () -> Void
     @Environment(\.mAccent) private var accent
     @State private var contentHeight: CGFloat = 380
+    private static let maxContentHeight: CGFloat = 560
 
     private var statusColor: Color {
         guard let last = host.lastConnectedAt else { return M.text4 }
@@ -42,7 +43,14 @@ struct HostSheet: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            // 只认宽度已经定下来时量到的高度，且封顶：弹窗出现的第一轮布局里宽度可能还很窄，
+            // 文字折行把内容量得极高，detent 跟着被设成接近整屏；之后量回正常高度，系统不一定
+            // 把已经展开的抽屉收回去——这就是「有时候」弹窗很高（实机反馈，无固定复现条件）。
+            // 本抽屉结构固定，正常高度在 400pt 上下。
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                guard size.width >= 200 else { return }
+                contentHeight = min(size.height, Self.maxContentHeight)
+            }
         }
         .scrollBounceBehavior(.basedOnSize)
         // 理想高度 = 内容高度：常规宽度（iPhone Duo 展开、iPad）下系统把抽屉显示成表单弹窗、
