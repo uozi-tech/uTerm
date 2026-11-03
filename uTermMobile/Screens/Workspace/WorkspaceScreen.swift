@@ -303,7 +303,7 @@ struct WorkspaceScreen: View {
             ZStack {
                 ForEach(paneTabs) { tab in
                     let front = tab.id == pane.activeID
-                    tabBody(tab, front: front, focused: front && focused)
+                    coveredTabBody(tab, front: front, focused: front && focused)
                         .opacity(front ? 1 : 0)
                         .allowsHitTesting(front)
                 }
@@ -315,6 +315,33 @@ struct WorkspaceScreen: View {
         .contentShape(Rectangle())
         // 点到格里任何地方都把焦点给它（终端的 UIKit 视图另由 onInteract 报告）。
         .simultaneousGesture(TapGesture().onEnded { workspace.focus(pane: pane.id) })
+    }
+
+    /// 正在为这个标签建连、且连接中页只盖这个标签（分屏时在工作区里新开的）时，返回该请求。
+    private func paneCover(for tab: MWorkTab) -> MConnectRequest? {
+        guard let req = store.connecting, req.tabID == tab.id, req.showsInPane(workspace) else { return nil }
+        return req
+    }
+
+    /// 标签主体；建连中（格内连接中页）时主体移到屏外、连接中页顶上。
+    /// 不能把连接中页叠在终端上面：SwiftTerm 的 UIView 会无视 ZStack 顺序盖住上面的 SwiftUI
+    ///（见 TerminalSessionBody 的 Agent 层）。主体仍挂着，建连期 shell 首屏的字节照收。
+    @ViewBuilder
+    private func coveredTabBody(_ tab: MWorkTab, front: Bool, focused: Bool) -> some View {
+        let cover = paneCover(for: tab)
+        ZStack {
+            tabBody(tab, front: front, focused: focused && cover == nil)
+                .offset(x: cover == nil ? 0 : -100_000)
+            if let cover {
+                ConnectingCoverView(request: cover,
+                                    onFinish: { store.finishConnect() },
+                                    onCancel: { store.cancelConnect() },
+                                    onRetry: { store.retryConnect() },
+                                    fillsScreen: false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.22), value: cover?.id)
     }
 
     @ViewBuilder

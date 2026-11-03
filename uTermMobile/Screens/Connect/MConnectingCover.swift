@@ -39,6 +39,11 @@ final class MConnectRequest: Identifiable {
     /// 连接尝试代次：重试时自增，驱动连接中页重跑阶段动画。
     var attempt = 0
 
+    /// 连接中页是否只盖工作区里那个标签：分屏状态下、从工作区里发起（「+」/ 空格）的才是。
+    func showsInPane(_ workspace: MobileWorkspace) -> Bool {
+        originInWorkspace && workspace.isSplit
+    }
+
     init(host: ServerProfile, kind: MConnectKind, origin: MTab) {
         self.host = host
         self.kind = kind
@@ -90,8 +95,15 @@ struct ConnectingCoverView: View {
     var onCancel: () -> Void
     /// 失败后重试：同一控制器重连。
     var onRetry: () -> Void
+    /// 盖满整屏（从主机列表进来）还是只盖一个分屏格里的标签区（分屏时在工作区里新开标签）。
+    /// 格内不碰状态栏 / 屏幕居中那套，按格裁切；格太矮时收起阶段卡片。
+    var fillsScreen = true
 
     @Environment(\.mAccent) private var accent
+    @Environment(\.mChrome) private var chrome
+    @State private var height: CGFloat = 0
+    /// 格内且高度不够完整排版（进度环 + 阶段卡 + 底部区约 560pt）：只留进度环、名字与状态。
+    private var compact: Bool { !fillsScreen && height > 0 && height < 560 }
     /// 阶段计时推进（仅在连接中、且最多到「认证」一项激活——绝不在 `.connected` 前把认证/会话标完成）。
     @State private var stageProgress = 0
     /// 已连接即闩锁（提交成功）：避免「连上即被服务器立刻断开」把状态翻回连接中导致卡死；
@@ -121,27 +133,50 @@ struct ConnectingCoverView: View {
         return .connecting
     }
 
+    /// 顶部 chip 放进状态栏那一行时的行高（Duo 展开竖屏：状态栏只占顶行右端）。
+    /// chip 水平居中，右缘碰到状态栏（或系统给的顶部横条区域右界）就不进，照旧排在安全区下面。
+    private var chipStatusRow: CGFloat? {
+        guard fillsScreen, let row = chrome.statusRowHeight else { return nil }
+        let limit = chrome.topBar?.maxX ?? chrome.statusBar?.minX ?? .infinity
+        return chrome.screen.midX + Self.chipHalfWidth + 8 <= limit ? row : nil
+    }
+
+    /// chip 半宽的保守估计（「SFTP 文件」/「终端会话」两种文案，实测约 110pt 宽）。
+    private static let chipHalfWidth: CGFloat = 64
+
     var body: some View {
+        let statusRow = chipStatusRow
         ZStack {
             M.canvas.ignoresSafeArea()
             VStack(spacing: 0) {
-                topChip
+                if let statusRow {
+                    // 与状态栏同一行、行内竖直居中（对齐时间 / 电量的中线）。
+                    topChip.frame(height: statusRow)
+                } else if !fillsScreen {
+                    // 格内：上面就是标签条，不需要顶边净空。
+                    topChip.padding(.top, compact ? 10 : 16)
+                } else {
+                    // 状态栏不在顶边时（iPhone Duo 折叠 / 横屏）chip 别贴着屏幕顶。
+                    topChip.mTopClearance()
+                }
                 Spacer(minLength: 8)
                 centerStack
                 Spacer(minLength: 8)
                 // 底部区固定高度：连接 / 成功 / 失败三态高度一致，切换时中部进度环不位移。
                 bottomArea
-                    .frame(maxWidth: .infinity, minHeight: 112, alignment: .bottom)
+                    .frame(maxWidth: .infinity, minHeight: compact ? 0 : 112, alignment: .bottom)
                     .padding(.horizontal, 24)
-                    .padding(.bottom, 30)
+                    .padding(.bottom, compact ? 14 : 30)
             }
-            // 状态栏不在顶边时（iPhone Duo / 横屏）顶部 chip 别贴着屏幕顶。
-            .mTopClearance()
+            // Duo 展开竖屏：整条顶行都算安全区，chip 伸进去与状态栏同行（见 chipStatusRow）。
+            .ignoresSafeArea(.container, edges: statusRow != nil ? .top : [])
             // 中转页对软键盘免疫：底层会话即便弹出键盘也不会顶起本页布局（防动画错乱）。
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // Duo 状态栏在右侧一列时按整块屏幕居中，而不是按去掉那一列的宽度（看起来偏左）。
-            .mCentersOnScreen()
+            .modifier(CoverScreenCentering(enabled: fillsScreen))
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        .clipped()
         .contentShape(Rectangle())   // 不透明全屏：吸收所有落到下层导航的误触
         // 出现即收起任何残留键盘（来源页 / 上一个终端会话的键盘），避免盖在中转页上。
         .onAppear {
@@ -218,7 +253,7 @@ struct ConnectingCoverView: View {
                 .padding(.top, 22)
             endpointLine.padding(.top, 6)
             statusLine.padding(.top, 6)
-            stageCard.padding(.top, 26)
+            if !compact { stageCard.padding(.top, 26) }
         }
         .padding(.horizontal, 30)
     }
@@ -440,4 +475,13 @@ private enum CoverKeyboardGuard {
 private extension UIResponder {
     /// `sendAction(to: nil)` 沿响应链派给第一响应者，借它取到「当前是谁」。
     @objc func mCaptureFirstResponder() { CoverKeyboardGuard.capture(self) }
+}
+
+/// 整屏时才按整块屏幕居中（`mCentersOnScreen`）；格内按格居中。
+private struct CoverScreenCentering: ViewModifier {
+    var enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled { content.mCentersOnScreen() } else { content }
+    }
 }

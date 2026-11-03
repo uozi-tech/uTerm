@@ -176,6 +176,26 @@ final class StyleGalleryTests: XCTestCase {
                     .modelContainer(c)
             }
         }
+
+        // Duo 展开竖屏：状态栏只占顶行右端，chip 应进那一行。探针窗口没有安全区，这里把
+        // 根视图量到的几何按真机读数伪造出来（顶部安全区 41pt、系统顶部横条区到状态栏左侧为止），
+        // 顶行用一条示意状态栏标出位置，看 chip 是否与它同行。
+        let unfolded = try XCTUnwrap(Self.devices.first { $0.name == "duo-unfolded" })
+        var duo = MChromeGeometry(root: CGRect(x: 0, y: 41, width: 669, height: 910),
+                                  safeAreaInsets: EdgeInsets(top: 41, leading: 0, bottom: 0, trailing: 0))
+        duo.topBar = CGRect(x: 0, y: 0, width: 520, height: 48)
+        try await shoot("connecting-duo-status-row", on: unfolded) {
+            ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
+                                onFinish: {}, onCancel: {}, onRetry: {})
+                .environment(store(tab: .hosts))
+                .environment(HostKeyChallengeRelay())
+                .environment(\.mChrome, duo)
+                .overlay(alignment: .topTrailing) {
+                    Text("11:57  ▮▮▮").font(.system(size: 15, weight: .semibold))
+                        .frame(width: 149, height: 41).background(Color.red.opacity(0.15))
+                }
+                .modelContainer(c)
+        }
     }
 
     // MARK: - 终端会话（假传输，真 SwiftTerm）
@@ -252,6 +272,23 @@ final class StyleGalleryTests: XCTestCase {
             try await shoot("workspace-docked-bottom", on: device, settle: .milliseconds(600)) {
                 WorkspaceScreen()
                     .environment(workspaceStore())
+                    .environment(relay)
+                    .environment(workspace)
+                    .modelContainer(c)
+            }
+            // 分屏时在工作区里新开标签：连接中页只盖那个标签（这里是右格新开的文件标签），左格照常。
+            workspace.dock(files.id, to: .trailing)
+            let pending = FileTab(host: hosts[0])
+            workspace.open(.files(pending))
+            let connectingStore = workspaceStore()
+            let req = MConnectRequest(host: hosts[0], kind: .sftp, origin: .hosts)
+            req.originInWorkspace = true
+            req.tabID = pending.id
+            req.sftp = pending.controller
+            connectingStore.connecting = req
+            try await shoot("workspace-split-connecting", on: device, settle: .milliseconds(600)) {
+                WorkspaceScreen()
+                    .environment(connectingStore)
                     .environment(relay)
                     .environment(workspace)
                     .modelContainer(c)

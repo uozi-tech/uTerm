@@ -57,7 +57,9 @@ struct MobileRootView: View {
         // 连接中页：选定主机后、会话/文件浏览打开前的全屏中转页（防误触打断半开连接）。
         // 用 overlay（非 fullScreenCover）以便下面的主机密钥信任弹层仍能叠在其上。
         .overlay {
-            if let req = store.connecting {
+            // 分屏时在工作区里新开的标签：连接中页只盖那个标签（WorkspaceScreen 自己画），
+            // 另一格照常可用。其余（从主机列表进来、没分屏）照旧盖满整屏。
+            if let req = store.connecting, !req.showsInPane(workspace) {
                 ConnectingCoverView(
                     request: req,
                     onFinish: { store.finishConnect() },
@@ -135,19 +137,30 @@ private struct MobileTabShell: View {
 /// 收起时整层平移到屏幕右侧之外、不可点、读屏跳过；展开时从右侧推入（与下钻同向）。
 private struct WorkspaceLayer: View {
     @Environment(MobileStore.self) private var store
+    @Environment(\.mChrome) private var chrome
 
     var body: some View {
         let visible = store.showWorkspace
+        let screen = chrome.screen
+        let leadingInset = chrome.safeAreaInsets.leading
         WorkspaceScreen()
             .background(M.surface.ignoresSafeArea())
-            // 收起时要整层（连同伸进安全区的底色）都移出屏幕：proxy.size 不含安全区，只移
-            // size.width 的话，`.background(…ignoresSafeArea())` 伸进右侧安全区的那一截还留在
-            // 屏上。iPhone Duo 的标签栏 / 工具栏按钮恰好在右侧安全区那一列，于是被这截底色整列
-            // 盖住、看上去侧边导航栏没了（实机反馈）。
+            // 收起时整层（连同伸进安全区的底色）移到屏幕右缘之外。按根视图量到的整屏矩形算，
+            // 不按 visualEffect 里的安全区算：iPhone Duo 横屏 / 折叠时状态栏那一列在右侧安全区，
+            // 而这里拿到的安全区不含它，只移 `宽 + 安全区` 会让工作区最左那一截（返回钮、
+            // 第一个标签）留在那一列里（实机：有标签时返回主机列表，右侧多出半条标签条）。
             .visualEffect { content, proxy in
+                guard !visible else { return content.offset(x: 0) }
                 let insets = proxy.safeAreaInsets
-                return content.offset(x: visible ? 0 : proxy.size.width + insets.leading + insets.trailing)
+                let byInsets = proxy.size.width + insets.leading + insets.trailing
+                let byScreen = screen.width > 0
+                    ? screen.maxX - proxy.frame(in: .global).minX + leadingInset
+                    : 0
+                return content.offset(x: max(byInsets, byScreen))
             }
+            // 兜底：收起后整层透明。滑出与淡出同步，看上去仍是推出；任何没跟着平移走的部分
+            // （例如宿主 UIKit 视图）也不会留在屏上。
+            .opacity(visible ? 1 : 0)
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
             .animation(.easeInOut(duration: 0.28), value: visible)
