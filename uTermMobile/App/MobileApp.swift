@@ -71,7 +71,7 @@ struct MobileApp: App {
 }
 
 /// 启动外壳：先盖一层「星空之上」开屏（`SplashView`），短暂停留后淡出露出主界面。
-/// 开屏始终暗色（自带固定品牌色），不受 `appearancePreference` 影响。
+/// 开屏分昼 / 夜两版，跟系统外观走（与系统启动屏同档），不受 `appearancePreference` 影响。
 private struct MobileLaunchRoot: View {
     let appearance: AppearancePreference
     let lock: AppLockModel

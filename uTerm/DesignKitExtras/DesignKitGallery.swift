@@ -335,12 +335,15 @@ struct DesignKitGallery: View {
 
     // MARK: 品牌 · Brand
     private var brandSection: some View {
-        Section(title: "品牌 · Brand", subtitle: "文字标识 / 开屏「星空之上」（splash.jsx · v2 定稿）") {
+        Section(title: "品牌 · Brand", subtitle: "文字标识 / 开屏「星空之上 · 昼夜」（splash.jsx）") {
             Group(label: "文字标识 Wordmark") {
                 BrandChip { UDWordmark(size: 46) }
             }
-            Group(label: "开屏 Splash · 星空之上（定稿，其余方向已废弃）") {
-                SplashCard(label: "星空之上") { UDSplashNebula() }
+            Group(label: "开屏 Splash · 星空之上 · 昼夜（随外观切换）") {
+                HStack(alignment: .top, spacing: 18) {
+                    SplashCard(label: "夜") { UDSplash().environment(\.colorScheme, .dark) }
+                    SplashCard(label: "昼") { UDSplash().environment(\.colorScheme, .light) }
+                }
             }
         }
     }
