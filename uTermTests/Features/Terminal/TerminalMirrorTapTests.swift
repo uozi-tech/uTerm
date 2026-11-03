@@ -1,0 +1,141 @@
+import XCTest
+import SwiftTerm
+@testable import uTerm
+
+/// 远控镜像（`TerminalMirrorTap`）：Mac 端会话被假后端驱动，订阅者的字节喂给一台「手机端」终端，
+/// 两边的状态指纹（vendor 补丁 #6）必须最终一致。
+@MainActor
+final class TerminalMirrorTapTests: XCTestCase {
+
+    private final class SilentDelegate: TerminalDelegate {
+        func send(source: Terminal, data: ArraySlice<UInt8>) {}
+    }
+
+    private let phoneDelegate = SilentDelegate()
+
+    private func corpus(_ name: String) throws -> [UInt8] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "terminal-corpus-\(name)", withExtension: "bin"))
+        return [UInt8](try Data(contentsOf: url))
+    }
+
+    private func connectedSession() async -> (TerminalSession, MockBackend) {
+        let session = TerminalSession()
+        let backend = MockBackend()
+        await session.connect(using: backend)
+        return (session, backend)
+    }
+
+    private func phoneTerminal(matching mac: Terminal) -> Terminal {
+        Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: mac.cols, rows: mac.rows, scrollback: 2000))
+    }
+
+    /// 反复取走积压喂给手机端，直到两边一致或超时。返回最后一次的差异（空 = 一致）。
+    private func drainUntilConsistent(_ subscriber: TerminalMirrorTap.Subscriber, mac: Terminal, phone: Terminal,
+                                      timeout: TimeInterval = 3) async -> [String: String] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var diff: [String: String] = ["未比对": ""]
+        while Date() < deadline {
+            while let bytes = subscriber.take(maxBytes: RemoteConstants.maxOutputChunkBytes) {
+                phone.feed(byteArray: [UInt8](bytes))
+            }
+            diff = mac.snapshotFingerprint(historyLines: RemoteConstants.snapshotScrollback)
+                .differences(from: phone.snapshotFingerprint(historyLines: RemoteConstants.snapshotScrollback))
+            if diff.isEmpty && subscriber.pendingBytes == 0 { return [:] }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return diff
+    }
+
+    private func emit(_ bytes: [UInt8], to backend: MockBackend, chunk: Int = 433) async {
+        var offset = 0
+        while offset < bytes.count {
+            let end = min(bytes.count, offset + chunk)
+            await backend.emitOutput(Data(bytes[offset..<end]))
+            offset = end
+        }
+    }
+
+    func test_attach_mid_session_then_stream_stays_identical() async throws {
+        let (session, backend) = await connectedSession()
+        let mac = session.terminalView.getTerminal()
+        let data = try corpus("mixed")
+        // 先跑一半再接入：接入时拿到的是快照。
+        await emit(Array(data[0..<(data.count / 2)]), to: backend)
+        try? await Task.sleep(for: .milliseconds(200))
+
+        let phone = phoneTerminal(matching: mac)
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        await emit(Array(data[(data.count / 2)...]), to: backend)
+        let diff = await drainUntilConsistent(subscriber, mac: mac, phone: phone)
+        XCTAssertEqual(diff, [:])
+        session.mirrorTap.unsubscribe(id: subscriber.id)
+        session.dispose()
+    }
+
+    /// 订阅者一直不取（对端太慢）：积压超限后丢弃并改发快照，最终仍一致。
+    func test_overflow_drops_backlog_and_resyncs_with_snapshot() async throws {
+        let (session, backend) = await connectedSession()
+        let mac = session.terminalView.getTerminal()
+        let phone = phoneTerminal(matching: mac)
+        let subscriber = session.mirrorTap.subscribe(id: UUID(), limit: 4 * 1024) {}
+        await emit(try corpus("shell") + corpus("vim"), to: backend, chunk: 2048)
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertLessThanOrEqual(subscriber.pendingBytes, 4 * 1024 + 70 * 1024, "积压被上限截住（快照本身可能超过上限）")
+        let diff = await drainUntilConsistent(subscriber, mac: mac, phone: phone)
+        XCTAssertEqual(diff, [:])
+        session.dispose()
+    }
+
+    /// 清屏不走输出流：镜像端要靠重发快照对齐。
+    func test_clear_output_resyncs() async throws {
+        let (session, backend) = await connectedSession()
+        let mac = session.terminalView.getTerminal()
+        let phone = phoneTerminal(matching: mac)
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        await emit(try corpus("shell"), to: backend)
+        _ = await drainUntilConsistent(subscriber, mac: mac, phone: phone)
+        session.clearOutput()
+        let diff = await drainUntilConsistent(subscriber, mac: mac, phone: phone)
+        XCTAssertEqual(diff, [:])
+        session.dispose()
+    }
+
+    /// 接管尺寸：Mac 终端钉成对端行列数，PTY 跟着调整，镜像端收到新尺寸下的快照。
+    func test_pin_remote_grid_resizes_terminal_backend_and_mirror() async throws {
+        let (session, backend) = await connectedSession()
+        let mac = session.terminalView.getTerminal()
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        await emit(try corpus("shell"), to: backend)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        session.pinRemoteGrid(cols: 57, rows: 23, controller: "测试 iPhone")
+        XCTAssertEqual(mac.cols, 57)
+        XCTAssertEqual(mac.rows, 23)
+        XCTAssertEqual(session.remoteController, "测试 iPhone")
+        try? await Task.sleep(for: .milliseconds(200))
+        let lastResize = await backend.resizes.last
+        XCTAssertEqual(lastResize?.cols, 57)
+        XCTAssertEqual(lastResize?.rows, 23)
+
+        let phone = Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: 57, rows: 23, scrollback: 2000))
+        await emit(try corpus("vim"), to: backend)
+        let diff = await drainUntilConsistent(subscriber, mac: mac, phone: phone)
+        XCTAssertEqual(diff, [:])
+
+        session.unpinRemoteGrid()
+        XCTAssertNil(session.remoteController)
+        XCTAssertNil((session.terminalView as? CopyableTerminalView)?.pinnedFrameSize)
+        session.dispose()
+    }
+
+    func test_tap_without_subscribers_is_inert() async throws {
+        let (session, backend) = await connectedSession()
+        XCTAssertFalse(session.mirrorTap.hasSubscribers)
+        await emit(try corpus("htop"), to: backend)
+        try? await Task.sleep(for: .milliseconds(100))
+        let subscriber = session.mirrorTap.subscribe(id: UUID()) {}
+        session.mirrorTap.unsubscribe(id: subscriber.id)
+        XCTAssertFalse(session.mirrorTap.hasSubscribers)
+        session.dispose()
+    }
+}

@@ -137,6 +137,14 @@ final class TerminalContainerView: NSView {
         super.layout()
         guard let terminalView else { return }
         let insets = Self.terminalInsets
+        // 远控接管尺寸：终端按对端的行列数钉住，贴左上角；放不下的部分裁掉，不缩放。
+        if let pinned = (terminalView as? CopyableTerminalView)?.pinnedFrameSize {
+            layer?.masksToBounds = true
+            terminalView.frame = NSRect(x: insets.left, y: bounds.height - insets.top - pinned.height,
+                                        width: pinned.width, height: pinned.height)
+            return
+        }
+        layer?.masksToBounds = false
         terminalView.frame = NSRect(
             x: insets.left,
             y: insets.bottom,

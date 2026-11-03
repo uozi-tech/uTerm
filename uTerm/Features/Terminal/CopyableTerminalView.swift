@@ -18,6 +18,10 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// @AppStorage("terminalCopyOnSelect") 同步更新。
     var copyOnSelect: Bool = false
 
+    /// 远控接管尺寸时钉住的视图尺寸（恰好是对端行列数 × 字符格）。非 nil 时
+    /// `TerminalContainerView` 按它摆放而不是铺满容器，见 `TerminalSession.pinRemoteGrid`。
+    var pinnedFrameSize: NSSize?
+
     // MARK: 选中状态跟踪
 
     /// mouseDown 的窗口坐标 - mouseUp 时用于确认本次 mouse 序列确实始于当前 view。

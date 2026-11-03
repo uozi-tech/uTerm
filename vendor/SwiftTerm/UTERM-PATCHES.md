@@ -153,6 +153,14 @@ uTerm 侧无需改动。复现与验证配方：模拟器开软键盘（Simulato
   - `Terminal.snapshotFingerprint(historyLines:)` + `TerminalSnapshotFingerprint`：快照必须
     复原的全部状态，测试的对照基准。
   - 已知不复原：Kitty 键盘协议的模式栈深度（只复原当前生效的标志位）、DECSC 保存的字符集。
+  - **续行的第一格必须真的打印出来**：上一行写满后光标处于「待折行」，只有打印字符才会折行，CUF
+    不会。所以开头是空格子、或者整行全空的续行（zsh 的 PROMPT_SP 填充在变窄重排后就会切出这种行）
+    也至少写一个空格，否则这一行丢失、下面整体上移。远控时手机每次转屏 / 弹键盘都会走「重排后重发快照」。
+  - DECSC 保存的光标在改尺寸后可能越界（上游调整 `savedY` 时不设下限，会变成负数），而 DECRC 恢复时
+    会夹回合法范围：快照与指纹都按夹过之后的值处理。
+  - 两块缓冲区的制表位**无条件**写一遍（不活跃的备用屏用 `?1047h … ?1047l` 进去写，回来再 `ESC [H`
+    归位，因为 1047 不保存光标）。原因：接收端自己就可能带着残缺的制表位——**直接按超过 80 列创建
+    的终端，备用屏制表位只设到第 72 列**，RIS 也修不好。手机端恰好就是「按自身宽度直接创建」的一方。
 - `Sources/SwiftTerm/Terminal.swift`：四处去掉 `private`，均带 `// uTerm patch:` 注释，
   不改任何逻辑——
   - `var mouseProtocol`（鼠标上报编码 1005/1006/1015/1016；丢了的话手机点 htop/vim 发的是旧格式）
@@ -163,6 +171,23 @@ uTerm 侧：`uTermTests/Features/Terminal/TerminalSnapshotTests.swift`，语料�
 `uTermTests/Support/Fixtures/TerminalCorpus/`（`record.py` 可重录）。**升级上游后必须跑这组测试**：
 上游改了任何渲染相关的内部状态（新模式、新的格子属性），指纹比对会第一个红。新增的状态要同时加进
 `snapshotSequence` 与 `snapshotFingerprint`。
+
+## 7. 终端放宽时，铺满整行的右边距跟着放宽
+
+上游 `Buffer.resize` 只在变窄时把 `marginRight` 收进来，放宽时不动，于是它停在旧宽度上。
+Mac 端的终端都是先按 80 列创建、再按窗口放宽的，所以两块缓冲区的右边距都停在第 79 列。
+VT420 的列操作即使没开左右边距模式（DECLRMM）也会读它——`csiCloseBrace` 里 DECIC 的判断
+`marginMode && x < left || x > right` 因 `&&` / `||` 优先级失误，变成「x 超过右边距就直接返回」；
+`columnScroll` 也一样——于是在旧宽度以右，插入 / 删除列静默失效。远控快照会比对两块缓冲区的边距，
+这里不一致也会让镜像端与 Mac 端分叉。
+
+涉及文件：
+
+- `Sources/SwiftTerm/Buffer.swift`：`resize(newCols:newRows:)` 开头加三行——右边距原本等于
+  `cols - 1`（铺满）且在放宽时，跟到 `newCols - 1`。自定义的边距保持不动。
+
+uTerm 侧：`uTermTests/Features/Terminal/SwiftTermResizeMarginTests.swift`（撤掉补丁时 DECIC 用例必红）。
+上游若修了 `resize` 里的边距逻辑，或修了 DECIC 的优先级失误，重放前先跑这个测试再决定是否保留。
 
 ## 升级记录
 

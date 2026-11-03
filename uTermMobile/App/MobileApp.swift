@@ -21,6 +21,9 @@ struct MobileApp: App {
     /// 普通偏好：本机 UserDefaults 为准，经 iCloud KVS 跨设备保底，局域网同步另按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
     @State private var lanSync: LANSyncCoordinator
+    /// 远控：局域网里开着远控的 Mac 及其连接。不会自己开始浏览（要「本地网络」授权），
+    /// 等用户在主机页点「控制我的 Mac 上的终端」。
+    @State private var remoteMacs = RemoteMacDirectory()
 
     let modelContainer: ModelContainer
 
@@ -61,6 +64,7 @@ struct MobileApp: App {
         WindowGroup {
             MobileLaunchRoot(appearance: appearance, lock: lock)
                 .environment(lanSync)
+                .environment(remoteMacs)
                 .environment(cloudKitSync)
                 .task {
                     sharedPreferences.start()

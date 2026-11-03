@@ -59,6 +59,15 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 一条会话同一时刻只跟踪一条；新的覆盖旧的。
     @ObservationIgnored var trackedRun: TerminalTrackedRun?
 
+    /// 远控镜像：把这条会话的字节流转给接入的设备（见 `TerminalMirrorTap`）。
+    @ObservationIgnored let mirrorTap: TerminalMirrorTap
+
+    /// 正在接管这条会话尺寸的远端设备名；nil = 没有。窗格据此显示「正在被接管」的指示条。
+    var remoteController: String?
+
+    /// 在 Mac 上断开远端接管（窗格指示条上的「断开」）。由远控连接在接入时装上。
+    @ObservationIgnored var remoteDisconnect: (@MainActor () -> Void)?
+
     override init() {
         // Give SwiftTerm a non-trivial initial frame so its first `setFrameSize`
         // pass computes a meaningful `cellDimension` + initial cols/rows. With
@@ -69,7 +78,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // pane until users scroll to brand-new output. 1280×800 ≈ a typical
         // pane size; SwiftUI overrides this on mount anyway, we only need a
         // sane initial so cellDimension is valid when the first frame arrives.
-        self.terminalView = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        self.terminalView = view
+        self.mirrorTap = TerminalMirrorTap { [unowned view] in view.getTerminal() }
         super.init()
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
@@ -192,6 +203,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         outputBuffer.clear()
         let bytes = Array("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8)
         terminalView.feed(byteArray: ArraySlice(bytes))
+        // 这几个字节不走输出流，镜像那边改发一份快照对齐。
+        mirrorTap.invalidateAll()
     }
 
     func detach() {
@@ -315,6 +328,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
 
         let bytes = ArraySlice([UInt8](chunk))
         terminalView.feed(byteArray: bytes)
+        // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
+        mirrorTap.didFeed(bytes)
         return true
     }
 

@@ -3,10 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uTerm 使用局域网发现 Mac 并同步设置。</string>
+	<string>uTerm 使用局域网发现 Mac，用于同步设置和远程控制 Mac 上的终端。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_uterm-sync._tcp</string>
+		<string>_uterm-remote._tcp</string>
 	</array>
 	<!-- 出口合规声明（App Store Connect / TestFlight 每次上传都会问一遍；
 	     声明在 Info.plist 里 App Store Connect 就不再弹窗，构建也不会卡在「缺少合规信息」）。

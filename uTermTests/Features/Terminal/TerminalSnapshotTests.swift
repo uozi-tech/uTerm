@@ -131,6 +131,42 @@ final class TerminalSnapshotTests: XCTestCase {
         XCTAssertEqual(a.snapshotFingerprint().differences(from: b.snapshotFingerprint()), [:])
     }
 
+    /// 先按 80 列创建再改宽（Mac 端终端就是这样：初始 80 列，随窗口改尺寸）：备用屏的制表位
+    /// 停在旧宽度，而且此刻它不是当前缓冲区。接收端是直接按新宽度创建的，快照必须把它也复原，
+    /// 否则之后进入 vim 等全屏程序时 `\t` 的落点不同。
+    func test_inactive_alternate_buffer_tab_stops_after_resize() throws {
+        let a = Terminal(delegate: delegate, options: TerminalOptions(cols: 80, rows: 24, scrollback: 2000))
+        a.resize(cols: 130, rows: 40)
+        a.feed(byteArray: try corpus("shell"))
+        XCTAssertTrue(a.isAtSnapshotBoundary)
+        let b = Terminal(delegate: delegate, options: TerminalOptions(cols: 130, rows: 40, scrollback: 2000))
+        b.feed(byteArray: a.snapshotSequence())
+        XCTAssertEqual(a.snapshotFingerprint().differences(from: b.snapshotFingerprint()), [:])
+
+        let enterAltAndTab = Array("\u{1b}[?1049h\tA\t\t\tB\t\t\t\t\t\t\t\t\t\t\t\tC".utf8)
+        a.feed(byteArray: enterAltAndTab)
+        b.feed(byteArray: enterAltAndTab)
+        XCTAssertEqual(a.snapshotFingerprint().differences(from: b.snapshotFingerprint()), [:])
+    }
+
+    /// 先改尺寸（重排）再拍快照。远控时手机每次转屏、弹键盘都会走到这里：Mac 按新尺寸重排后
+    /// 立即重发快照。变窄时重排会切出整行空白的续行（zsh 的 PROMPT_SP 填充），快照必须把它
+    /// 也「折」出来，否则少一行、下面整体上移。
+    func test_snapshot_after_reflow_to_other_sizes() throws {
+        for name in ["shell", "mixed", "vim"] {
+            let data = try corpus(name)
+            for (cols, rows) in [(50, 18), (40, 30), (90, 25), (120, 40), (30, 10)] {
+                let a = Terminal(delegate: delegate, options: TerminalOptions(cols: 64, rows: 20, scrollback: 2000))
+                a.feed(byteArray: data)
+                a.resize(cols: cols, rows: rows)
+                let b = Terminal(delegate: delegate, options: TerminalOptions(cols: cols, rows: rows, scrollback: 2000))
+                b.feed(byteArray: a.snapshotSequence())
+                XCTAssertEqual(a.snapshotFingerprint().differences(from: b.snapshotFingerprint()), [:],
+                               "\(name) 64×20 → \(cols)×\(rows)")
+            }
+        }
+    }
+
     /// 1000 行彩色历史：快照只带最近 1000 行，接收端的历史与 A 的最后 1000 行逐行一致。
     func test_large_history_round_trips() throws {
         let shell = try corpus("shell")

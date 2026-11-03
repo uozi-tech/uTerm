@@ -130,7 +130,7 @@ final class LANSyncCoordinator {
     /// 主线程上创建，首次安装启动时主线程就卡在授权弹窗上，20 s 后被系统启动看门狗杀掉
     /// （`process-launch watchdog transgression`，栈底正是这一行）。macOS 上它同样会做反向解析，
     /// DNS 不通时也能卡上好几秒。
-    private static func localDeviceName() -> String {
+    static func localDeviceName() -> String {
         #if canImport(UIKit)
         return UIDevice.current.name
         #elseif canImport(SystemConfiguration)

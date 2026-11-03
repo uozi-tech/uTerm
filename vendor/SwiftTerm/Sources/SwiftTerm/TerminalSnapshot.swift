@@ -43,6 +43,16 @@ extension Terminal {
             out.raw("\u{1b}[?1049h\u{1b}[H")
             writeLines(altBuffer, includeScrollback: false, scrollbackLimit: 0, &out)
         } else {
+            // The inactive alternate buffer keeps its own tab stops, and RIS
+            // does not reset them: a terminal created wider than 80 columns
+            // starts with alternate-buffer stops only up to column 72. The
+            // receiver may be such a terminal, so always set them explicitly,
+            // visiting the buffer with 1047 (no cursor save, cleared on exit).
+            // 1047 does not save the cursor: home it again on the way back,
+            // or the first line starts where the last tab stop was set.
+            out.raw("\u{1b}[?1047h")
+            writeTabStops(altBuffer, &out)
+            out.raw("\u{1b}[?1047l\u{1b}[H")
             writeLines(normalBuffer, includeScrollback: true, scrollbackLimit: scrollbackLimit, &out)
         }
         restoreState(&out)
@@ -75,11 +85,18 @@ extension Terminal {
                 out.raw("\r\n")
             }
             let nextWrapped = i + 1 < last && lines[i + 1].isWrapped
-            writeCells(line, nextWrapped: nextWrapped, &out)
+            writeCells(line, nextWrapped: nextWrapped, continuesPrevious: i > first && line.isWrapped, &out)
         }
     }
 
-    private func writeCells(_ line: BufferLine, nextWrapped: Bool, _ out: inout SnapshotWriter) {
+    /// - Parameter continuesPrevious: this line is the wrapped continuation of
+    ///   the one just written, so the cursor sits in the pending-wrap state and
+    ///   only a printed character makes the wrap happen. Cursor movement (CUF)
+    ///   does not, so a continuation that starts blank, or is blank altogether
+    ///   (zsh's PROMPT_SP filler after a narrowing reflow), must still print
+    ///   its first cell, or the line is lost and everything below shifts up.
+    private func writeCells(_ line: BufferLine, nextWrapped: Bool, continuesPrevious: Bool,
+                            _ out: inout SnapshotWriter) {
         // An orphan is the right half of a wide character whose left half got
         // overwritten: width 0, not preceded by a wide cell. The renderer paints
         // it on its own (inverted default background), so it has to be
@@ -88,7 +105,7 @@ extension Terminal {
             c > 0 && c < line.count && line[c].width == 0 && line[c].code == 0
                 && line[c - 1].width != 2 && !(c == cols - 1 && nextWrapped)
         }
-        let end = nextWrapped ? cols : contentEnd(line)
+        let end = nextWrapped ? cols : max(contentEnd(line), continuesPrevious ? 1 : 0)
         var col = 0
         while col < end {
             let cell = line[col]
@@ -116,6 +133,12 @@ extension Terminal {
                 out.raw("\u{1b}[\(col + width)G\u{4E2D}\u{1b}[\(col + 1)G")
                 out.writeCell(cell, self)
                 col += width
+                continue
+            }
+            if col == 0 && continuesPrevious && cell.code == 0 && cell.attribute == CharData.defaultAttr {
+                out.setAttr(CharData.defaultAttr)
+                out.raw(" ")
+                col += 1
                 continue
             }
             if cell.code == 0 && cell.attribute == CharData.defaultAttr {
@@ -156,14 +179,11 @@ extension Terminal {
     }
 
     /// Tab stops belong to each buffer; leaving an alternate-screen app
-    /// switches back to the normal buffer's set.
+    /// switches back to the normal buffer's set. Written unconditionally: the
+    /// receiver's own stops are not necessarily the defaults (see above).
     private func writeTabStops(_ b: Buffer, _ out: inout SnapshotWriter) {
-        let width = options.tabStopWidth
-        let stops = b.tabStops
-        let isDefault = stops.count == cols && stops.indices.allSatisfy { stops[$0] == ($0 % width == 0) }
-        guard !isDefault else { return }
         out.raw("\u{1b}[3g")
-        for (index, isStop) in stops.enumerated() where isStop && index < cols {
+        for (index, isStop) in b.tabStops.enumerated() where isStop && index < cols {
             out.cup(0, index)
             out.raw("\u{1b}H")
         }
@@ -189,8 +209,9 @@ extension Terminal {
                 out.raw("\u{1b}[?69l")
             }
         }
-        if b.savedX != 0 || b.savedY != 0 || b.savedAttr != CharData.defaultAttr {
-            out.cup(b.savedY, b.savedX)
+        let savedX = min(max(0, b.savedX), cols - 1), savedY = min(max(0, b.savedY), rows - 1)
+        if savedX != 0 || savedY != 0 || b.savedAttr != CharData.defaultAttr {
+            out.cup(savedY, savedX)
             out.setAttr(b.savedAttr, force: true)
             out.raw("\u{1b}7")
         }
@@ -274,7 +295,11 @@ extension Terminal {
         categories["cursor"] = ["\(b.x),\(b.y)"]
         categories["pen"] = [Self.attributeKey(currentAttribute)]
         categories["margins"] = ["\(b.scrollTop)-\(b.scrollBottom)", "\(b.marginLeft)-\(b.marginRight)"]
-        categories["savedCursor"] = ["\(b.savedX),\(b.savedY),\(Self.attributeKey(b.savedAttr))"]
+        // As DECRC sees it: the saved position can go out of range after a
+        // resize (upstream adjusts savedY without a lower bound), and DECRC
+        // clamps it, so the clamped value is what can be observed.
+        let savedX = min(max(0, b.savedX), cols - 1), savedY = min(max(0, b.savedY), rows - 1)
+        categories["savedCursor"] = ["\(savedX),\(savedY),\(Self.attributeKey(b.savedAttr))"]
         categories["modes"] = [
             "alternate=\(isCurrentBufferAlternate)", "applicationCursor=\(applicationCursor)",
             "bracketedPaste=\(bracketedPasteMode)", "mouseMode=\(mouseMode)", "mouseProtocol=\(mouseProtocol)",
@@ -284,7 +309,7 @@ extension Terminal {
             "sendFocus=\(sendFocus)", "origin=\(originMode)", "marginMode=\(marginMode)",
             "title=\(terminalTitle)", "synchronizedOutput=\(synchronizedOutputActive)",
         ]
-        categories["tabStops"] = [Self.tabStopsKey(normalBuffer), Self.tabStopsKey(altBuffer)]
+        categories["tabStops"] = [tabStopsKey(normalBuffer), tabStopsKey(altBuffer)]
         categories["charsets"] = gCharsets.map { set in String(describing: set?.sorted { $0.key < $1.key }) } + ["level=\(gLevel)"]
         if isCurrentBufferAlternate {
             categories["normalScreen"] = screenRows(normalBuffer)
@@ -314,8 +339,10 @@ extension Terminal {
         "\(a.fg)/\(a.bg)/\(a.style.rawValue)/\(a.underlineStyle.rawValue)/\(String(describing: a.underlineColor))"
     }
 
-    private static func tabStopsKey(_ b: Buffer) -> String {
-        "\(b.tabStops.count):" + b.tabStops.indices.filter { b.tabStops[$0] }.map(String.init).joined(separator: ",")
+    /// Only where the stops are within the visible width; the backing array's
+    /// length is an implementation detail that does not change where a tab lands.
+    private func tabStopsKey(_ b: Buffer) -> String {
+        b.tabStops.indices.filter { $0 < cols && b.tabStops[$0] }.map(String.init).joined(separator: ",")
     }
 }
 

@@ -24,6 +24,8 @@ extension TerminalSession {
         let cols = UInt16(clamping: newCols)
         let rows = UInt16(clamping: newRows)
         latestReportedResize = (cols, rows)
+        // 终端刚按新尺寸重排过：镜像端改发一份新尺寸下的快照，不去追字节级的时序。
+        mirrorTap.invalidateAll()
 
         // Fast path: SwiftTerm sometimes fires sizeChanged for the same value
         // during a layout pass; no SIGWINCH needed.

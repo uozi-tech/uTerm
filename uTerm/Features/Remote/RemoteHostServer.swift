@@ -1,0 +1,248 @@
+import Foundation
+@preconcurrency import Network
+import Observation
+
+/// Mac 端远控服务：让配对过的手机接入这台 Mac 上已打开的终端。
+///
+/// `RemoteControlSettings` 打开时监听（Bonjour `_uterm-remote._tcp`），关闭时连广播一起撤掉。
+/// 每台连上来的设备一个 `RemoteHostConnection`。同一个终端同一时刻只给一台设备接管尺寸：
+/// 后来的设备接入时，前一台收到「已被接管」并断开该终端。
+@MainActor
+@Observable
+final class RemoteHostServer {
+    enum Status: Equatable {
+        case stopped
+        case listening
+        case failed(String)
+
+        var label: String {
+            switch self {
+            case .stopped: return "未开启"
+            case .listening: return "等待设备连接"
+            case .failed(let message): return "出错：\(message)"
+            }
+        }
+    }
+
+    /// 等 Mac 上的人点「允许」的配对请求。
+    struct PairingRequest: Identifiable, Equatable {
+        let id: UUID
+        let deviceName: String
+        /// 6 位核对码，应与手机上显示的相同。
+        let code: String
+    }
+
+    private(set) var status: Status = .stopped
+    /// 已通过认证、正连着的设备名。
+    private(set) var connectedDevices: [String] = []
+    private(set) var trustedPeers: [RemotePeer] = []
+    /// 排队中的配对请求；审批面板只显示第一个。
+    private(set) var pairingRequests: [PairingRequest] = []
+    /// 监听端口（测试用：不广播时客户端直接连这个端口）。
+    private(set) var port: UInt16?
+
+    @ObservationIgnored let registry: TerminalSessionRegistry
+    @ObservationIgnored let identity: RemoteIdentityStore
+    @ObservationIgnored let localName: String
+    @ObservationIgnored let localID: UUID
+    @ObservationIgnored private let advertises: Bool
+    @ObservationIgnored private var listener: NWListener?
+    @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
+    @ObservationIgnored private var pairingWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    /// 会话 → 正在接管它的连接与通道。
+    @ObservationIgnored private var controllers: [UUID: (connection: UUID, channel: UInt32)] = [:]
+    @ObservationIgnored private var activity: NSObjectProtocol?
+
+    init(registry: TerminalSessionRegistry,
+         identity: RemoteIdentityStore = RemoteIdentityStore(),
+         localName: String = LANSyncCoordinator.localDeviceName(),
+         localID: UUID = RemoteLocalDevice.id(),
+         advertises: Bool = true) {
+        self.registry = registry
+        self.identity = identity
+        self.localName = localName
+        self.localID = localID
+        self.advertises = advertises
+        self.trustedPeers = identity.trustedPeers()
+    }
+
+    // MARK: - 起停
+
+    func start() {
+        guard listener == nil else { return }
+        do {
+            // 先把本机长期密钥备好：钥匙串出错时在设置页里直接显示，而不是等到第一台设备连上来。
+            _ = try identity.localIdentity()
+            let listener = try NWListener(using: RemoteLink.parameters(), on: .any)
+            if advertises {
+                listener.service = NWListener.Service(name: localName, type: RemoteConstants.serviceType)
+            }
+            listener.stateUpdateHandler = { [weak self] state in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.listenerStateChanged(state) } }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.accept(connection) } }
+            }
+            listener.start(queue: DispatchQueue(label: "com.uozi.uTerm.remote.listener"))
+            self.listener = listener
+            observeRegistry()
+        } catch {
+            status = .failed(error.localizedDescription)
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+        port = nil
+        for connection in connections.values { connection.close() }
+        for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
+        status = .stopped
+    }
+
+    private func listenerStateChanged(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            status = .listening
+            port = listener?.port?.rawValue
+        case .failed(let error):
+            status = .failed(Self.describe(error))
+            listener?.cancel()
+            listener = nil
+        case .cancelled:
+            if status == .listening { status = .stopped }
+        default:
+            break
+        }
+    }
+
+    /// 把监听失败翻成用户能照着做的话。最常见的是 macOS 拒绝了「本地网络」权限：
+    /// Bonjour 广播注册报 NoAuth（-65555），手机就发现不了这台 Mac。
+    private static func describe(_ error: NWError) -> String {
+        if case .dns(let code) = error, code == DNSServiceErrorType(kDNSServiceErr_NoAuth) {
+            return "macOS 没有允许 uTerm 使用本地网络。请在 系统设置 › 隐私与安全性 › 本地网络 里打开 uTerm，再重新打开这个开关"
+        }
+        return error.localizedDescription
+    }
+
+    private func accept(_ connection: NWConnection) {
+        guard listener != nil else {
+            connection.cancel()
+            return
+        }
+        let host = RemoteHostConnection(link: RemoteLink(connection: connection), server: self)
+        connections[host.id] = host
+        host.start()
+    }
+
+    // MARK: - 连接回调
+
+    func connectionAuthorized(_ connection: RemoteHostConnection) {
+        refreshConnectedDevices()
+    }
+
+    func connectionClosed(_ connection: RemoteHostConnection) {
+        connections.removeValue(forKey: connection.id)
+        resolvePairing(connection.id, approved: false)
+        refreshConnectedDevices()
+    }
+
+    private func refreshConnectedDevices() {
+        connectedDevices = connections.values.filter(\.isAuthorized).map(\.peerName).sorted()
+    }
+
+    // MARK: - 配对
+
+    /// 把配对请求交给 Mac 上的人决定。超时按拒绝处理。
+    func requestApproval(connectionID: UUID, deviceName: String, code: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            pairingWaiters[connectionID] = continuation
+            pairingRequests.append(PairingRequest(id: connectionID, deviceName: deviceName, code: code))
+            Task { [weak self] in
+                try? await Task.sleep(for: RemoteConstants.pairingTimeout)
+                self?.resolvePairing(connectionID, approved: false)
+            }
+        }
+    }
+
+    func approvePairing(_ id: UUID) { resolvePairing(id, approved: true) }
+    func rejectPairing(_ id: UUID) { resolvePairing(id, approved: false) }
+
+    private func resolvePairing(_ id: UUID, approved: Bool) {
+        pairingRequests.removeAll { $0.id == id }
+        pairingWaiters.removeValue(forKey: id)?.resume(returning: approved)
+    }
+
+    func trust(_ peer: RemotePeer) throws {
+        try identity.trust(peer)
+        trustedPeers = identity.trustedPeers()
+    }
+
+    /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。
+    func revoke(_ peerID: UUID) {
+        try? identity.revoke(id: peerID)
+        trustedPeers = identity.trustedPeers()
+        for connection in connections.values where connection.peerID == peerID {
+            connection.close()
+        }
+    }
+
+    // MARK: - 会话与接管
+
+    func sessionInfos() -> [RemoteSessionInfo] {
+        registry.entries.map { entry in
+            RemoteSessionInfo(id: entry.id, serverID: entry.serverID, serverName: entry.serverName, title: entry.title,
+                              windowKind: entry.windowKind, connectedAt: entry.connectedAt,
+                              controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName })
+        }
+    }
+
+    /// 某个连接接管一个会话。之前接管它的另一个连接收到「已被接管」并断开该终端。
+    func claim(sessionID: UUID, connection: RemoteHostConnection, channel: UInt32) {
+        if let previous = controllers[sessionID],
+           previous.connection != connection.id || previous.channel != channel,
+           let holder = connections[previous.connection] {
+            holder.detach(channel: previous.channel, notify: true, reason: "已被 \(connection.peerName) 接管")
+        }
+        controllers[sessionID] = (connection.id, channel)
+        controllersChanged()
+    }
+
+    func isController(sessionID: UUID, connection: RemoteHostConnection, channel: UInt32) -> Bool {
+        guard let current = controllers[sessionID] else { return false }
+        return current.connection == connection.id && current.channel == channel
+    }
+
+    func release(sessionID: UUID, connection: RemoteHostConnection, channel: UInt32) {
+        guard isController(sessionID: sessionID, connection: connection, channel: channel) else { return }
+        controllers.removeValue(forKey: sessionID)
+        controllersChanged()
+    }
+
+    private func controllersChanged() {
+        // 有设备在接管终端时别让 Mac 闲置睡眠，不然手机那头会突然断掉。
+        if controllers.isEmpty, let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        } else if !controllers.isEmpty, activity == nil {
+            activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled],
+                                                             reason: "手机正在远程控制终端")
+        }
+        for connection in connections.values { connection.sendSessions() }
+    }
+
+    private func observeRegistry() {
+        withObservationTracking {
+            _ = registry.entries
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.listener != nil else { return }
+                    let alive = Set(self.registry.entries.map(\.id))
+                    for connection in self.connections.values { connection.sessionsChanged(alive: alive) }
+                    self.observeRegistry()
+                }
+            }
+        }
+    }
+}

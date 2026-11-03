@@ -101,6 +101,20 @@ struct WorkspaceScreen: View {
             }
             return
         }
+        if let remote = target.remote {
+            // 远控：已经接入了 Mac 上这个终端就切过去，否则新开一个远控标签。
+            if let existing = workspace.existing(remote: remote) {
+                workspace.activate(existing.id)
+                bindConnecting(existing)
+                return
+            }
+            let term = TermTab(host: host, remote: remote)
+            term.controller.start(profile: host, container: context.container, relay: relay)
+            let tab = MWorkTab.terminal(term)
+            workspace.open(tab)
+            bindConnecting(tab)
+            return
+        }
         if !(store.connecting?.allowDuplicate ?? false),
            let existing = workspace.existing(host: target.hostID, kind: target.kind) {
             workspace.activate(existing.id)

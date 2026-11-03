@@ -1,0 +1,122 @@
+import Foundation
+
+/// 远控终端后端：接入 Mac 上一个正在运行的终端，接进现有的 `MobileTerminalController`
+///（与 SSH 同一个 `TerminalBackend` 抽象，终端视图与键盘条零改动）。
+///
+/// - 输出：第一帧是 Mac 发来的快照（以 RIS 开头），之后是原始字节，原样喂给 SwiftTerm。
+/// - 输入 / 尺寸：直接交给连接发出去，不经过主线程。手机的行列数就是终端的行列数（接管尺寸），
+///   每次变化 Mac 都会调整 PTY 并重发一份快照。
+/// - 断线：在后端内部按退避重连并重新接入，快照到了屏幕自然对齐。控制器看到的是一条不断的流；
+///   只有 Mac 明确结束了这个终端（关闭、被别的设备接管）才当作会话结束。
+actor RemoteTerminalBackend: TerminalBackend {
+    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let exitStream: AsyncStream<Void>
+    private let outputContinuation: AsyncStream<Data>.Continuation
+    private let exitContinuation: AsyncStream<Void>.Continuation
+
+    private let client: RemoteMacClient
+    private let sessionID: UUID
+    private var size = RemoteGridSize(cols: 80, rows: 24)
+    private var attachment: RemoteAttachment?
+    private var isClosed = false
+    private var reconnectTask: Task<Void, Never>?
+
+    init(client: RemoteMacClient, sessionID: UUID) {
+        self.client = client
+        self.sessionID = sessionID
+        (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
+        (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
+    }
+
+    func connect() async throws {
+        try await attach()
+    }
+
+    private func attach() async throws {
+        let output = outputContinuation
+        let sink = RemoteChannelSink(
+            onOutput: { output.yield($0) },
+            onClosed: { [weak self] reason, ended in
+                Task { await self?.channelClosed(reason: reason, sessionEnded: ended) }
+            }
+        )
+        let requested = size
+        let attached = try await client.attach(sessionID: sessionID, size: requested, sink: sink)
+        attachment = attached
+        // 接入请求在路上时视图可能刚布局完、报来了真实尺寸（那时还没有通道，发不出去）：补发一次。
+        if size != requested {
+            attached.link.send(RemoteMessage(.resize, channel: attached.channel, payload: size.encoded()))
+        }
+    }
+
+    func write(_ data: Data) {
+        guard let attachment else { return }
+        attachment.link.send(RemoteMessage(.input, channel: attachment.channel, payload: data))
+    }
+
+    func resize(cols: UInt16, rows: UInt16) {
+        guard cols > 0, rows > 0 else { return }
+        let next = RemoteGridSize(cols: cols, rows: rows)
+        guard next != size || attachment == nil else { return }
+        size = next
+        guard let attachment else { return }
+        attachment.link.send(RemoteMessage(.resize, channel: attachment.channel, payload: next.encoded()))
+    }
+
+    func close() async {
+        guard !isClosed else { return }
+        isClosed = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        if let attachment {
+            await client.detach(attachment)
+        }
+        attachment = nil
+        outputContinuation.finish()
+        exitContinuation.finish()
+    }
+
+    func verifyConnectionAlive() async -> Bool {
+        attachment != nil || reconnectTask != nil
+    }
+
+    private func channelClosed(reason: String, sessionEnded: Bool) {
+        attachment = nil
+        guard !isClosed else { return }
+        if sessionEnded {
+            end(reason)
+            return
+        }
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task { [weak self] in await self?.reconnectLoop() }
+    }
+
+    /// 连接断了（Wi-Fi 切换、App 被挂起、Mac 睡眠唤醒）：退避重连，接上后 Mac 会先发一份快照。
+    /// App 在后台时任务本来就被挂起，回到前台自然继续，不需要另外接生命周期事件。
+    private func reconnectLoop() async {
+        var delay: Duration = .milliseconds(500)
+        while !Task.isCancelled && !isClosed {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, !isClosed else { break }
+            do {
+                try await attach()
+                break
+            } catch RemoteAttachError.rejected(let message) {
+                end(message)
+                break
+            } catch {
+                delay = min(delay * 2, .seconds(5))
+            }
+        }
+        reconnectTask = nil
+    }
+
+    private func end(_ reason: String) {
+        isClosed = true
+        let note = "\r\n\u{1b}[2m[\(reason.isEmpty ? "远程会话已结束" : reason)]\u{1b}[0m\r\n"
+        outputContinuation.yield(Data(note.utf8))
+        exitContinuation.yield(())
+        exitContinuation.finish()
+        outputContinuation.finish()
+    }
+}

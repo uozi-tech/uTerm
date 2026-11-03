@@ -151,8 +151,14 @@ final class MobileWorkspace {
     func isActive(_ tabID: UUID) -> Bool { focusedPane.activeID == tabID }
 
     /// 同主机、同类型的已有标签（外部「连接」请求默认复用它而不是再开一个）。
+    /// 同主机同类型的已有标签（只看直连的；远控标签接的是 Mac 上的终端，另算）。
     func existing(host: PersistentIdentifier, kind: MConnectKind) -> MWorkTab? {
-        tabs.first { $0.kind == kind && $0.host.persistentModelID == host }
+        tabs.first { $0.kind == kind && $0.host.persistentModelID == host && $0.terminal?.remote == nil }
+    }
+
+    /// 已经接入了 Mac 上这个终端的远控标签。
+    func existing(remote: MRemoteSource) -> MWorkTab? {
+        tabs.first { $0.terminal?.remote == remote }
     }
 
     // MARK: - 布局

@@ -19,6 +19,8 @@ final class TermTab: Identifiable {
     /// 开标签时的主机名（见 `FileTab.hostName`）。
     let hostName: String
     let controller: MobileTerminalController
+    /// 远控标签：接入的是某台 Mac 上正在运行的终端，而不是手机直连这台主机。
+    let remote: MRemoteSource?
     let agent = AssistantModel()
     /// Agent 在途驱动 Task 集：会话关闭时取消，停掉在途 LLM 流 / 工具循环（见 `MAgentTaskBag`）。
     let agentTasks = MAgentTaskBag()
@@ -29,7 +31,17 @@ final class TermTab: Identifiable {
     init(host: ServerProfile, transportFactory: MobileTerminalTransportFactory = .live) {
         self.host = host
         self.hostName = host.name
+        self.remote = nil
         self.controller = MobileTerminalController(transportFactory: transportFactory)
+    }
+
+    /// 远控标签：经 Mac 接入它上面的终端。
+    init(host: ServerProfile, remote: MRemoteSource) {
+        self.host = host
+        self.hostName = host.name
+        self.remote = remote
+        self.controller = MobileTerminalController(
+            transportFactory: .remote(client: remote.client, sessionID: remote.sessionID))
     }
 }
 

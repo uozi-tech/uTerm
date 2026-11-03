@@ -35,6 +35,11 @@ struct uTermApp: App {
     /// 跨窗口终端会话注册表 —— CLI 的 `terminals` / `terminal-read` / `terminal-send`
     /// 的枚举面（P3 才真正登记，先注入让接线一次到位）。
     @State private var terminalRegistry: TerminalSessionRegistry
+    /// 远控：配对过的手机接入本机已打开的终端。开关在 设置 › 高级 › 远程控制，默认关闭。
+    @State private var remoteSettings: RemoteControlSettings
+    @State private var remoteServer: RemoteHostServer
+    /// 配对审批面板。独立 NSPanel，无窗口的后台模式下也能弹。
+    private let remotePairingPrompt: RemotePairingPrompt?
     @State private var lockModel: AppLockModel
     /// 启动行为每个 app 进程只消费一次；显式重开 Welcome 时不再重复恢复会话。
     private let startupBehaviorGate = StartupBehaviorGate()
@@ -106,6 +111,11 @@ struct uTermApp: App {
         _terminalRegistry = State(initialValue: terminalRegistry)
         _globalForwarding = State(initialValue: globalForwarding)
         _launchRelay = State(initialValue: launchRelay)
+        let remoteSettings = RemoteControlSettings()
+        let remoteServer = RemoteHostServer(registry: terminalRegistry)
+        _remoteSettings = State(initialValue: remoteSettings)
+        _remoteServer = State(initialValue: remoteServer)
+        remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)
 
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
@@ -127,6 +137,9 @@ struct uTermApp: App {
                 coordinator: forwardingCoordinator,
                 relay: launchRelay
             )
+            remoteSettings.observe { settings in
+                if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
+            }
             let server = controlServer
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification,
@@ -134,6 +147,7 @@ struct uTermApp: App {
                 queue: .main
             ) { _ in
                 server.stop()
+                MainActor.assumeIsolated { remoteServer.stop() }
                 Task { await ControlConnectionPool.shared.disconnectAll() }
             }
         }
@@ -423,6 +437,8 @@ struct uTermApp: App {
                 .environment(cloudKitSync)
                 .environment(controlSettings)
                 .environment(backgroundSettings)
+                .environment(remoteSettings)
+                .environment(remoteServer)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)

@@ -1,0 +1,300 @@
+import CryptoKit
+import Foundation
+@preconcurrency import Network
+import Observation
+
+/// 接入一个终端后，接收它的输出与关闭事件。回调在连接队列上直接触发，不经主线程。
+nonisolated final class RemoteChannelSink: @unchecked Sendable {
+    let onOutput: @Sendable (Data) -> Void
+    /// `sessionEnded` = Mac 明确结束了这个终端（关闭 / 断开 / 被别的设备接管）；
+    /// false = 只是连接断了，可以重连再接入。
+    let onClosed: @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void
+
+    init(onOutput: @escaping @Sendable (Data) -> Void,
+         onClosed: @escaping @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void) {
+        self.onOutput = onOutput
+        self.onClosed = onClosed
+    }
+}
+
+/// 一次接入：往哪条连接、哪个通道发输入与尺寸。
+nonisolated struct RemoteAttachment: Sendable {
+    let link: RemoteLink
+    let channel: UInt32
+}
+
+nonisolated enum RemoteAttachError: LocalizedError {
+    /// Mac 拒绝接入（终端已关闭等），重试也没用。
+    case rejected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .rejected(let message): return message
+        }
+    }
+}
+
+/// 通道表：连接队列上查（转发输出），主线程上增删。
+///
+/// 接入时先按会话 ID 登记接收方；收到 `attached` 的那一刻就在连接队列上把通道号绑上去。
+/// 数据流里 `attached` 总在快照之前，在队列上同步绑定才不会丢掉第一帧。
+nonisolated final class RemoteChannelTable: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [UUID: RemoteChannelSink] = [:]
+    private var sinks: [UInt32: RemoteChannelSink] = [:]
+
+    func expect(sessionID: UUID, sink: RemoteChannelSink) {
+        lock.lock(); pending[sessionID] = sink; lock.unlock()
+    }
+
+    func bind(sessionID: UUID, channel: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        if let sink = pending.removeValue(forKey: sessionID) { sinks[channel] = sink }
+    }
+
+    func cancel(sessionID: UUID) {
+        lock.lock(); pending.removeValue(forKey: sessionID); lock.unlock()
+    }
+
+    func sink(_ channel: UInt32) -> RemoteChannelSink? {
+        lock.lock(); defer { lock.unlock() }
+        return sinks[channel]
+    }
+
+    func remove(_ channel: UInt32) -> RemoteChannelSink? {
+        lock.lock(); defer { lock.unlock() }
+        return sinks.removeValue(forKey: channel)
+    }
+
+    func removeAll() -> [RemoteChannelSink] {
+        lock.lock(); defer { lock.unlock() }
+        let all = Array(sinks.values)
+        sinks.removeAll()
+        pending.removeAll()
+        return all
+    }
+}
+
+/// 手机这一侧与一台 Mac 的远控连接：握手、配对、会话列表、接入。同一台 Mac 的所有远控标签
+/// 共用这一条连接（多路复用），断了由各个 `RemoteTerminalBackend` 发起重连。
+@MainActor
+@Observable
+final class RemoteMacClient: Identifiable {
+    enum State: Equatable {
+        case idle
+        case connecting
+        /// 首次配对：等 Mac 上的人点「允许」。附带 6 位核对码，应与 Mac 上显示的一致。
+        case awaitingApproval(String)
+        case connected
+        case failed(String)
+    }
+
+    nonisolated var id: String { macName }
+    nonisolated let macName: String
+    private(set) var state: State = .idle
+    private(set) var sessions: [RemoteSessionInfo] = []
+    /// 握手后才知道的 Mac 设备 ID（「忘记这台 Mac」要用）。
+    private(set) var macDeviceID: UUID?
+
+    @ObservationIgnored private var endpoint: NWEndpoint
+    @ObservationIgnored private let identity: RemoteIdentityStore
+    @ObservationIgnored private let table = RemoteChannelTable()
+    @ObservationIgnored private var link: RemoteLink?
+    @ObservationIgnored private var connectTask: Task<Void, Never>?
+    @ObservationIgnored private var outcomeWaiter: CheckedContinuation<Void, Never>?
+    @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
+    @ObservationIgnored private var peer: RemoteHello?
+
+    /// - Parameters:
+    ///   - macName: 显示用（Bonjour 服务名，即 Mac 的电脑名）。
+    ///   - endpoint: Bonjour 发现的服务端点；测试里直接给 127.0.0.1 的端口。
+    init(macName: String, endpoint: NWEndpoint, identity: RemoteIdentityStore) {
+        self.macName = macName
+        self.endpoint = endpoint
+        self.identity = identity
+    }
+
+    func updateEndpoint(_ endpoint: NWEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    // MARK: - 连接与配对
+
+    /// 确保已连上并通过配对。首次配对时会一直等到 Mac 上的人作出决定（或超时）。
+    func connect() async {
+        if state == .connected { return }
+        if connectTask == nil {
+            connectTask = Task { await runConnect() }
+        }
+        await connectTask?.value
+    }
+
+    private func runConnect() async {
+        defer { connectTask = nil }
+        state = .connecting
+        let link = RemoteLink(connection: NWConnection(to: endpoint, using: RemoteLink.parameters()))
+        self.link = link
+        let table = self.table
+        link.setHandlers(
+            onMessage: { [weak self] message in Self.route(message, table: table, client: self) },
+            onClose: { [weak self] error in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.linkClosed(link, error: error) } }
+            }
+        )
+        do {
+            let staticKey = try identity.localIdentity()
+            let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+            let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: RemoteLocalDevice.id(),
+                                    deviceName: LANSyncCoordinator.localDeviceName(),
+                                    ephemeralKey: ephemeral.publicKey.rawRepresentation,
+                                    staticKey: staticKey.publicKey.rawRepresentation)
+            let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
+                                                       ephemeralKey: ephemeral)
+            // 配对过的 Mac 换了长期密钥：可能是冒充，也可能是重装过 uTerm。宁可拒绝，让用户手动忘记重配。
+            if let known = identity.peer(id: established.peer.deviceID), known.publicKey != established.peer.staticKey {
+                throw RemoteProtocolError.peerIdentityChanged
+            }
+            peer = established.peer
+            macDeviceID = established.peer.deviceID
+            // 等 Mac 告诉我们配对结果（已信任 / 等审批 / 同意 / 拒绝）。核对码先备着，等审批时显示。
+            pendingCode = established.verificationCode
+            await withCheckedContinuation { continuation in
+                if state == .connected || isFailed {
+                    continuation.resume()
+                } else {
+                    outcomeWaiter = continuation
+                }
+            }
+            if state == .connected {
+                link.send(RemoteMessage(.subscribeSessions))
+            }
+        } catch {
+            state = .failed(error.localizedDescription)
+            link.close(error)
+            if self.link === link { self.link = nil }
+        }
+    }
+
+    @ObservationIgnored private var pendingCode = ""
+
+    private var isFailed: Bool {
+        if case .failed = state { return true }
+        return false
+    }
+
+    private func handlePairing(_ pairing: RemotePairingState) {
+        switch pairing {
+        case .trusted, .approved:
+            if let peer {
+                // 第一次见到这台 Mac（或手机这边忘过）：记住它的长期公钥，之后每次握手都核对。
+                try? identity.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName,
+                                               publicKey: peer.staticKey, pairedAt: Date()))
+            }
+            state = .connected
+            resumeOutcome()
+        case .awaitingApproval:
+            state = .awaitingApproval(pendingCode)
+        case .rejected:
+            state = .failed(RemoteProtocolError.pairingRejected.localizedDescription)
+            resumeOutcome()
+        }
+    }
+
+    private func resumeOutcome() {
+        outcomeWaiter?.resume()
+        outcomeWaiter = nil
+    }
+
+    func disconnect() {
+        link?.close()
+    }
+
+    /// 忘记这台 Mac：下次连接重新配对。
+    func forget() {
+        if let macDeviceID { try? identity.revoke(id: macDeviceID) }
+        disconnect()
+    }
+
+    private func linkClosed(_ closedLink: RemoteLink, error: Error?) {
+        guard closedLink === link else { return }
+        link = nil
+        sessions = []
+        if state == .connected || state == .connecting {
+            state = error.map { .failed($0.localizedDescription) } ?? .idle
+        } else if case .awaitingApproval = state {
+            state = .failed(error?.localizedDescription ?? "Mac 没有确认配对")
+        }
+        resumeOutcome()
+        for (_, waiter) in attachWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
+        attachWaiters.removeAll()
+        for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
+    }
+
+    // MARK: - 收消息
+
+    /// 在连接队列上分发：终端字节直接交给通道的接收方；控制消息跳回主线程。
+    private nonisolated static func route(_ message: RemoteMessage, table: RemoteChannelTable,
+                                          client: RemoteMacClient?) {
+        switch message.kind {
+        case .output:
+            table.sink(message.channel)?.onOutput(message.payload)
+        case .closed:
+            table.remove(message.channel)?.onClosed(String(decoding: message.payload, as: UTF8.self), true)
+        case .attached:
+            if let result = try? RemoteJSON.decode(RemoteAttachResult.self, from: message.payload), result.error == nil {
+                table.bind(sessionID: result.sessionID, channel: message.channel)
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
+        default:
+            DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
+        }
+    }
+
+    private func handleControl(_ message: RemoteMessage) {
+        switch message.kind {
+        case .pairing:
+            if let raw = message.payload.first, let pairing = RemotePairingState(rawValue: raw) {
+                handlePairing(pairing)
+            }
+        case .sessions:
+            if let list = try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload) {
+                sessions = list
+            }
+        case .attached:
+            guard let result = try? RemoteJSON.decode(RemoteAttachResult.self, from: message.payload),
+                  let waiter = attachWaiters.removeValue(forKey: result.sessionID) else { return }
+            if let error = result.error {
+                table.cancel(sessionID: result.sessionID)
+                waiter.resume(throwing: RemoteAttachError.rejected(error))
+            } else {
+                waiter.resume(returning: message.channel)
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - 接入
+
+    /// 接入 Mac 上的一个终端。返回后输出开始经 `sink` 流入（第一帧是快照）。
+    func attach(sessionID: UUID, size: RemoteGridSize, sink: RemoteChannelSink) async throws -> RemoteAttachment {
+        await connect()
+        guard state == .connected, let link else {
+            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
+            throw RemoteProtocolError.closed
+        }
+        table.expect(sessionID: sessionID, sink: sink)
+        let channel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt32, Error>) in
+            attachWaiters.removeValue(forKey: sessionID)?.resume(throwing: RemoteProtocolError.closed)
+            attachWaiters[sessionID] = continuation
+            link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(
+                RemoteAttachRequest(sessionID: sessionID, cols: size.cols, rows: size.rows))))
+        }
+        return RemoteAttachment(link: link, channel: channel)
+    }
+
+    func detach(_ attachment: RemoteAttachment) {
+        attachment.link.send(RemoteMessage(.detach, channel: attachment.channel))
+        _ = table.remove(attachment.channel)
+    }
+}

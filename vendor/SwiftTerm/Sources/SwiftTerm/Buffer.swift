@@ -774,6 +774,15 @@ public final class Buffer {
     
     public func resize (newCols : Int, newRows : Int)
     {
+        // uTerm patch (UTERM-PATCHES.md #7): a right margin spanning the full
+        // width grows with it. Upstream only clamps it when shrinking, so after
+        // widening it stays at the old edge. The VT420 column operations
+        // consult it even without DECLRMM (DECIC through an `&&`/`||`
+        // precedence slip in `csiCloseBrace`, and `columnScroll`), so past the
+        // old width they silently do nothing. Custom margins are kept.
+        if marginRight == cols - 1 && newCols > cols {
+            marginRight = newCols - 1
+        }
         if marginRight > newCols - 1 {
             marginRight = newCols - 1
         }

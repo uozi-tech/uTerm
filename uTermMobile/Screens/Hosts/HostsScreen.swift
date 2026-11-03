@@ -61,6 +61,8 @@ struct HostsScreen: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
 
+                RemoteMacSection()
+
                 if hosts.isEmpty {
                     MEmptyState(icon: "server", title: "还没有主机",
                                 message: "添加一台服务器即可开始连接终端、浏览文件或运行命令。",

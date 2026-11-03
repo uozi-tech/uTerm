@@ -38,6 +38,8 @@ final class MConnectRequest: Identifiable {
     var allowDuplicate = false
     /// 连接尝试代次：重试时自增，驱动连接中页重跑阶段动画。
     var attempt = 0
+    /// 远控：经 Mac 接入它上面的终端。连接中页据此换掉 SSH 专属的文案。
+    var remote: MRemoteSource?
 
     /// 连接中页是否只盖工作区里那个标签：分屏状态下、从工作区里发起（「+」/ 空格）的才是。
     /// 工作区收起时（建连途中点了「返回」）改回整屏：否则格内那张连接中页随工作区藏到屏外，
@@ -245,7 +247,7 @@ struct ConnectingCoverView: View {
     private var topChip: some View {
         HStack(spacing: 7) {
             MIcon(name: isSftp ? "folder-tag" : "term", size: 14, color: accent)
-            Text(isSftp ? "SFTP 文件" : "终端会话")
+            Text(isSftp ? "SFTP 文件" : (request.remote != nil ? "Mac 上的终端" : "终端会话"))
                 .font(M.sans(12.5)).foregroundStyle(M.text2)
         }
         .padding(.horizontal, 13).padding(.vertical, 6)
@@ -272,11 +274,17 @@ struct ConnectingCoverView: View {
 
     private var initial: String { String(host.name.prefix(1)).uppercased() }
 
-    private var endpointLine: some View {
-        (Text("\(host.username)@\(host.host)").foregroundColor(M.text3)
-            + Text(":\(String(host.port))").foregroundColor(M.text4))
-            .font(M.mono(13))
-            .lineLimit(1)
+    @ViewBuilder private var endpointLine: some View {
+        if let remote = request.remote {
+            Text("经 \(remote.macName) 接入").foregroundStyle(M.text3)
+                .font(M.sans(13))
+                .lineLimit(1)
+        } else {
+            (Text("\(host.username)@\(host.host)").foregroundColor(M.text3)
+                + Text(":\(String(host.port))").foregroundColor(M.text4))
+                .font(M.mono(13))
+                .lineLimit(1)
+        }
     }
 
     @ViewBuilder private var statusLine: some View {
@@ -286,7 +294,7 @@ struct ConnectingCoverView: View {
             } else if failureMessage != nil {
                 Text("连接失败").foregroundStyle(M.danger)
             } else {
-                Text("正在建立安全连接…").foregroundStyle(M.text4)
+                Text(request.remote != nil ? "正在接入 Mac 上的终端…" : "正在建立安全连接…").foregroundStyle(M.text4)
             }
         }
         .font(M.sans(12.5))
@@ -309,6 +317,14 @@ struct ConnectingCoverView: View {
 
     /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。
     private var stages: [(label: String, detail: String)] {
+        if let remote = request.remote {
+            return [
+                ("连接 Mac", remote.macName),
+                ("建立加密通道", "x25519 · chacha20"),
+                ("验证设备", "已配对的长期密钥"),
+                ("接入终端", "按本机尺寸 · 画面同步"),
+            ]
+        }
         let authDetail = host.authMethod == .privateKey ? "publickey · ed25519" : "密码"
         let last: (String, String) = isSftp
             ? ("打开 SFTP 子系统", "sftp v3")

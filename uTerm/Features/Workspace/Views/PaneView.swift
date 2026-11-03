@@ -65,6 +65,14 @@ struct PaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .connected:
                 TerminalHostView(terminalView: pane.session.terminalView)
+                    .overlay(alignment: .topTrailing) {
+                        if let controller = pane.session.remoteController {
+                            RemoteControlBadge(deviceName: controller) {
+                                pane.session.remoteDisconnect?()
+                            }
+                            .padding(8)
+                        }
+                    }
             case .failed(let message):
                 stateView(systemImage: "exclamationmark.triangle",
                           title: "连接失败", detail: message, action: "重试")

@@ -27,6 +27,8 @@ enum MTab: String, CaseIterable, Identifiable {
 struct MOpenTarget: Equatable {
     let hostID: PersistentIdentifier
     let kind: MConnectKind
+    /// 非 nil：经 Mac 接入它上面的终端，而不是直连主机。
+    var remote: MRemoteSource? = nil
     let token = UUID()
 }
 
@@ -83,6 +85,17 @@ final class MobileStore {
     }
 
     func openTerminal(_ host: ServerProfile) { requestConnect(host, kind: .terminal) }
+
+    /// 接入 Mac 上一个正在运行的终端（远控）。`host` 是本机同步过来的同一台主机，只用来显示与归类。
+    func openRemoteTerminal(_ host: ServerProfile, source: MRemoteSource) {
+        guard connecting == nil else { return }
+        let req = MConnectRequest(host: host, kind: .terminal, origin: tab)
+        req.remote = source
+        req.originInWorkspace = showWorkspace
+        connecting = req
+        openTarget = MOpenTarget(hostID: host.persistentModelID, kind: .terminal, remote: source)
+        showWorkspace = true
+    }
     func openSFTP(_ host: ServerProfile) { requestConnect(host, kind: .sftp) }
 
     /// 连接中页跑完（已连接）：撤下中转页，露出目标会话。
