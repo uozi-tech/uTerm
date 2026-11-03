@@ -135,11 +135,19 @@ struct ConnectingCoverView: View {
 
     /// 顶部 chip 放进状态栏那一行时的行高（Duo 展开竖屏：状态栏只占顶行右端）。
     /// chip 水平居中，右缘碰到状态栏（或系统给的顶部横条区域右界）就不进，照旧排在安全区下面。
+    ///
+    /// `statusRowHeight` 在普通 iPhone 上也会报（系统的顶部横条区域横跨灵动岛），标签条靠
+    /// 自己让位没事，居中的 chip 却正好落在灵动岛后面（模拟器 iPhone 18 Pro 实测）。所以只认
+    /// 宽屏（≥ 600pt，Duo 展开 669）且状态行够高（放得下 chip）的情形：iPhone 顶行正中是灵动岛 /
+    /// 刘海，iPad 的状态行只有 24pt。
     private var chipStatusRow: CGFloat? {
-        guard fillsScreen, let row = chrome.statusRowHeight else { return nil }
+        guard fillsScreen, let row = chrome.statusRowHeight,
+              chrome.screen.width >= Self.statusRowMinScreenWidth, row >= 40 else { return nil }
         let limit = chrome.topBar?.maxX ?? chrome.statusBar?.minX ?? .infinity
         return chrome.screen.midX + Self.chipHalfWidth + 8 <= limit ? row : nil
     }
+
+    private static let statusRowMinScreenWidth: CGFloat = 600
 
     /// chip 半宽的保守估计（「SFTP 文件」/「终端会话」两种文案，实测约 110pt 宽）。
     private static let chipHalfWidth: CGFloat = 64
@@ -176,7 +184,9 @@ struct ConnectingCoverView: View {
             .modifier(CoverScreenCentering(enabled: fillsScreen))
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-        .clipped()
+        // 只在格内裁切（底色别溢出那一格）。整屏时不能裁：底色要铺进状态栏 / Home 条 /
+        // Duo 侧边那一列等安全区，一裁就露出底下的界面、看上去没盖满整屏。
+        .modifier(CoverPaneClip(enabled: !fillsScreen))
         .contentShape(Rectangle())   // 不透明全屏：吸收所有落到下层导航的误触
         // 出现即收起任何残留键盘（来源页 / 上一个终端会话的键盘），避免盖在中转页上。
         .onAppear {
@@ -475,6 +485,15 @@ private enum CoverKeyboardGuard {
 private extension UIResponder {
     /// `sendAction(to: nil)` 沿响应链派给第一响应者，借它取到「当前是谁」。
     @objc func mCaptureFirstResponder() { CoverKeyboardGuard.capture(self) }
+}
+
+/// 格内连接中页按格裁切；整屏不裁（见 body 里的说明）。
+private struct CoverPaneClip: ViewModifier {
+    var enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled { content.clipped() } else { content }
+    }
 }
 
 /// 整屏时才按整块屏幕居中（`mCentersOnScreen`）；格内按格居中。
