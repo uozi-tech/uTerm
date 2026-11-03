@@ -174,7 +174,7 @@ struct GroupDetailView: View {
         .navigationTitle(group.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { name = group.name }
-        .confirmationDialog("删除分组「\(group.name)」？", isPresented: $pendingDelete, titleVisibility: .visible) {
+        .alert("删除分组「\(group.name)」？", isPresented: $pendingDelete) {
             Button("删除", role: .destructive) { delete() }
             Button("取消", role: .cancel) {}
         } message: { Text("里面的 \(members.count) 台主机会移到「未分组」。") }

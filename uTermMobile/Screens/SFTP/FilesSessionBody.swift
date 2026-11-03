@@ -40,9 +40,8 @@ struct FilesSessionBody: View {
         }
         // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
         .background(M.surface, ignoresSafeAreaEdges: .mSessionBody)
-        .confirmationDialog("删除「\(pendingDelete?.entry.name ?? "")」？",
-                            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-                            titleVisibility: .visible) {
+        .alert("删除「\(pendingDelete?.entry.name ?? "")」？",
+               isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("删除", role: .destructive) {
                 if let t = pendingDelete { controller.delete(t.entry, in: t.directory); pendingDelete = nil }
             }

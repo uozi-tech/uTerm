@@ -154,7 +154,7 @@ struct KeyDetailSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
-            .confirmationDialog("删除密钥「\(key.name)」？", isPresented: $pendingDelete, titleVisibility: .visible) {
+            .alert("删除密钥「\(key.name)」？", isPresented: $pendingDelete) {
                 Button("删除", role: .destructive) { delete() }
                 Button("取消", role: .cancel) {}
             } message: { Text("此操作不可恢复。") }

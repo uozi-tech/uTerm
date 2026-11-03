@@ -59,6 +59,13 @@ struct ProvidersScreen: View {
                         ProviderListRow(provider: provider)
                     }
                     .listRowBackground(M.card)
+                    // 左滑按钮只放图标；系统 .onDelete 的左滑带「删除」文字，它只留给编辑模式的减号。
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            ProviderManagement.delete(provider, in: context)
+                        } label: { Image(systemName: "trash") }
+                            .accessibilityLabel("删除")
+                    }
                 }
                 .onDelete { offsets in
                     for index in offsets { ProviderManagement.delete(providers[index], in: context) }
@@ -156,11 +163,12 @@ struct ProviderEditScreen: View {
         .navigationTitle(provider.name.isEmpty ? "模型服务" : provider.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { hasKey = ProviderManagement.hasKey(provider) }
-        .confirmationDialog("删除「\(provider.name)」？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+        .alert("删除「\(provider.name)」？", isPresented: $confirmingDelete) {
             Button("删除", role: .destructive) {
                 ProviderManagement.delete(provider, in: context)
                 dismiss()
             }
+            Button("取消", role: .cancel) {}
         } message: {
             Text("钥匙串里的 API Key 一并删除，经 iCloud 同步的设备上也会删除。")
         }

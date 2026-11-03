@@ -52,7 +52,7 @@ struct QuickCommandDetailView: View {
         .navigationTitle(cmd.name)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $editing) { CommandFormSheet(cmd: cmd).mSheetContentMargins() }
-        .confirmationDialog("删除命令「\(cmd.name)」？", isPresented: $pendingDelete, titleVisibility: .visible) {
+        .alert("删除命令「\(cmd.name)」？", isPresented: $pendingDelete) {
             Button("删除", role: .destructive) { delete() }
             Button("取消", role: .cancel) {}
         } message: { Text("此操作不可恢复。") }

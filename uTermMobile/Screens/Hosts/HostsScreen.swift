@@ -118,9 +118,8 @@ struct HostsScreen: View {
         .sheet(item: $editing) { host in
             HostFormSheet(host: host).presentationDragIndicator(.visible).mSheetContentMargins()
         }
-        .confirmationDialog("删除「\(pendingDelete?.name ?? "")」？",
-                            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-                            titleVisibility: .visible) {
+        .alert("删除「\(pendingDelete?.name ?? "")」？",
+               isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("删除主机", role: .destructive) { if let h = pendingDelete { delete(h) } }
             Button("取消", role: .cancel) {}
         } message: {
