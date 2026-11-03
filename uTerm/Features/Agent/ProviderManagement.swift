@@ -56,6 +56,23 @@ enum ProviderManagement {
         try? context.save()
     }
 
+    // MARK: - 列表文案
+
+    /// 服务列表行名称下面那行：类型 · 地址（如「Anthropic · api.anthropic.com」）。
+    /// 不显示模型——模型在 Agent 输入区的模型菜单里切换，这里没有设它的地方。
+    nonisolated static func summary(kind: ProviderKind, baseURL: String) -> String {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configured = trimmed.isEmpty ? ProviderPreset.defaultBaseURL(for: kind) : trimmed
+        let address = URLComponents(string: configured).flatMap { components in
+            components.host.map { host in components.port.map { "\(host):\($0)" } ?? host }
+        } ?? configured
+        return "\(kind.displayName) · \(address)"
+    }
+
+    static func summary(_ provider: AIProvider) -> String {
+        summary(kind: provider.kind, baseURL: provider.baseURL)
+    }
+
     // MARK: - 校验
 
     /// 名称必填。

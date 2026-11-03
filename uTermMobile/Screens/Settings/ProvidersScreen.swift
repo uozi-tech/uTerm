@@ -74,7 +74,7 @@ struct ProvidersScreen: View {
     }
 }
 
-/// 列表行：首字母头像 + 名称 + 当前模型（未选时提示）+ 缺 Key 时的警示。
+/// 列表行：首字母头像 + 名称 + 类型 · 地址 + 缺 Key 时的警示。不显示模型（见 `ProviderManagement.summary`）。
 private struct ProviderListRow: View {
     let provider: AIProvider
     @Environment(\.mAccent) private var accent
@@ -90,9 +90,8 @@ private struct ProviderListRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(provider.name.isEmpty ? provider.kind.displayName : provider.name)
                     .font(M.sans(15, weight: .medium)).foregroundStyle(M.text).lineLimit(1)
-                Text(provider.model.isEmpty ? "\(provider.kind.displayName) · 未选择模型"
-                                            : provider.model)
-                    .font(M.mono(12)).foregroundStyle(M.text3).lineLimit(1)
+                Text(ProviderManagement.summary(provider))
+                    .font(M.sans(13)).foregroundStyle(M.text3).lineLimit(1)
             }
             Spacer(minLength: 8)
             if !hasKey {

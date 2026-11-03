@@ -66,6 +66,18 @@ final class ProviderManagementTests: XCTestCase {
                         "远程端点须 HTTPS")
     }
 
+    func testSummaryShowsKindAndAddressNotModel() {
+        XCTAssertEqual(ProviderManagement.summary(kind: .anthropic, baseURL: ""), "Anthropic · api.anthropic.com",
+                       "没填 Base URL 时显示该类型的预置地址")
+        XCTAssertEqual(ProviderManagement.summary(kind: .openai, baseURL: " https://api.deepseek.com "),
+                       "OpenAI / 兼容 · api.deepseek.com")
+        XCTAssertEqual(ProviderManagement.summary(kind: .openai, baseURL: "http://localhost:11434"),
+                       "OpenAI / 兼容 · localhost:11434")
+        let provider = AIProvider(name: "p", kind: .anthropic, baseURL: ProviderPreset.anthropicBaseURL,
+                                  model: "claude-opus-4-7")
+        XCTAssertFalse(ProviderManagement.summary(provider).contains("claude"), "列表不显示模型")
+    }
+
     func testSwitchingKindOnlyReplacesPresetBaseURL() {
         let provider = AIProvider(name: "p", kind: .anthropic, baseURL: ProviderPreset.anthropicBaseURL, model: "")
         ProviderManagement.setKind(.openai, on: provider)

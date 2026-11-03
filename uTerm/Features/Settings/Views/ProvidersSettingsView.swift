@@ -53,7 +53,7 @@ struct ProvidersSettingsView: View {
                             .onTapGesture { selectedID = p.id }
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(p.name)
-                            .accessibilityValue(p.model.isEmpty ? "未设置模型" : p.model)
+                            .accessibilityValue(ProviderManagement.summary(p))
                             .accessibilityAddTraits(p.id == selectedID ? [.isButton, .isSelected] : .isButton)
                             // `onTapGesture` 不带 AX 默认动作，只标 `.isButton`
                             // 的话读屏 / 全键盘控制按下去是空转。显式补上。
@@ -119,7 +119,7 @@ struct ProvidersSettingsView: View {
 }
 
 /// 设计稿 settings.jsx 列表行：22×22 accent 头像 tile（首字母）+ 名称（12.5pt medium）
-/// + 模型（11pt mono、UD.text3、省略号）。选中 = UD.rowSelected 底，hover = UD.rowHover。
+/// + 类型 · 地址（11pt、UD.text3、省略号；不显示模型，见 `ProviderManagement.summary`）。选中 = UD.rowSelected 底，hover = UD.rowHover。
 private struct ProviderRow: View {
     let provider: AIProvider
     let selected: Bool
@@ -138,8 +138,8 @@ private struct ProviderRow: View {
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
-                Text(provider.model.isEmpty ? "未设置模型" : provider.model)
-                    .font(.system(size: 11, design: .monospaced))
+                Text(ProviderManagement.summary(provider))
+                    .font(.system(size: 11))
                     .foregroundStyle(UD.text3)
                     .lineLimit(1)
                     .truncationMode(.tail)
