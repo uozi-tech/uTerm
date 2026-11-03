@@ -167,7 +167,9 @@ struct WorkspaceScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             // 连接中页期间不要弹键盘——键盘窗口恒在最上，会盖住中转页的取消按钮。
             guard store.connecting == nil, store.showWorkspace else { return }
-            if let term = workspace.activeTab?.terminal, term.mode == .terminal {
+            // 只有确认进了终端（已连接）才弹；连接失败 / 断开的标签与文件浏览一样收起。
+            if let term = workspace.activeTab?.terminal, term.mode == .terminal,
+               term.controller.canTakeKeyboard {
                 term.controller.focusKeyboard()
             } else {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),

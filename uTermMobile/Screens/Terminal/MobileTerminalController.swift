@@ -13,7 +13,13 @@ final class MobileTerminalController {
         case idle, connecting, connected, failed(String), closed
     }
 
-    var state: State = .idle
+    var state: State = .idle {
+        // 离开「已连接」（失败 / 断开 / 重连中）就收起键盘：没有 shell 可打字，
+        // 失败态的终端视图还会被失败页替换掉，留着键盘只会盖住失败页。
+        didSet { if state != .connected { resignKeyboard() } }
+    }
+    /// 键盘只给真正进了终端的会话：建连中 / 失败 / 已断开一律不弹。
+    var canTakeKeyboard: Bool { state == .connected }
     var title: String = ""
     /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
@@ -158,8 +164,9 @@ final class MobileTerminalController {
         _ = terminalView?.resignFirstResponder()
     }
 
-    /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。
+    /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上时不弹。
     func focusKeyboard() {
+        guard canTakeKeyboard else { return }
         _ = terminalView?.becomeFirstResponder()
     }
 

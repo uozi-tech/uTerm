@@ -52,8 +52,9 @@ struct SwiftTermView: UIViewRepresentable {
             view.feed(text: "\u{1B}[2 q")
         }
         controller.attach(view)
-        // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态、且非连接中页期间）。
-        if isActive, autoFocus { DispatchQueue.main.async { _ = view.becomeFirstResponder() } }
+        // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、且已连上——
+        // 失败重试成功后失败页换回本视图时走这里）。
+        if isActive, autoFocus { DispatchQueue.main.async { controller.focusKeyboard() } }
         return view
     }
 
