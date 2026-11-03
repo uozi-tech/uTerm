@@ -13,6 +13,10 @@
 	<dict>
 		<key>ServiceType</key>
 		<string>Application</string>
+		<!-- 默认每个 XPC 服务进新的安全会话，从这里起的 shell 读钥匙串报 errSecInteractionNotAllowed（退出码 36），
+		     claude、gh 这类把凭据存钥匙串的命令因此显示未登录。加入主程序的会话，才和系统终端一样。 -->
+		<key>JoinExistingSession</key>
+		<true/>
 	</dict>
 </dict>
 </plist>
