@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import SwiftTerm
 @testable import uTerm
 
@@ -139,6 +140,35 @@ final class TerminalMirrorTapTests: XCTestCase {
         let tall = TerminalContainerView.pinnedFrame(NSSize(width: 400, height: 700), in: pane, insets: insets)
         XCTAssertEqual(tall.minY, 6, "放不下：底边贴着窗格底（留出下边距）")
         XCTAssertEqual(tall.size, NSSize(width: 400, height: 700), "不缩放，行列数不变")
+    }
+
+    /// 接管状态条占窗格自己的高度：终端容器让到它下面，两者不重叠；断开后容器铺回整个窗格。
+    func test_remote_control_banner_sits_above_the_terminal_instead_of_covering_it() async throws {
+        let (session, _) = await connectedSession()
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500))
+        defer { window.orderOut(nil) }
+        let host = NSHostingView(rootView: RemoteControlledTerminal(session: session))
+        host.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        window.contentView = host
+
+        func settledContainerHeight() async throws -> CGFloat {
+            try? await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            return try XCTUnwrap(session.terminalView.superview).frame.height
+        }
+
+        let bare = try await settledContainerHeight()
+        XCTAssertEqual(bare, 500, accuracy: 0.5, "没人接管时没有状态条")
+
+        session.pinRemoteGrid(cols: 57, rows: 23, controller: "测试 iPhone")
+        let taken = try await settledContainerHeight()
+        XCTAssertEqual(taken, 472, accuracy: 0.5, "状态条高 28pt，终端容器让到它下面")
+        XCTAssertEqual(session.terminalView.getTerminal().rows, 23, "状态条不影响钉住的行列数")
+
+        session.unpinRemoteGrid()
+        let released = try await settledContainerHeight()
+        XCTAssertEqual(released, 500, accuracy: 0.5, "断开后铺回整个窗格")
+        session.dispose()
     }
 
     func test_tap_without_subscribers_is_inert() async throws {

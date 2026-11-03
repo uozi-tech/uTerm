@@ -312,13 +312,7 @@ struct LocalShellWindowView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .connected:
-            TerminalHostView(terminalView: pane.session.terminalView)
-                .overlay(alignment: .topTrailing) {
-                    if let controller = pane.session.remoteController {
-                        RemoteControlBadge(deviceName: controller) { pane.session.remoteDisconnect?() }
-                            .padding(8)
-                    }
-                }
+            RemoteControlledTerminal(session: pane.session)
         case .failed(let message):
             stateView(pane, systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
         case .disconnected:
