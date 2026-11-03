@@ -27,6 +27,7 @@ enum MGlyph {
         case "copy":       return "doc.on.doc"
         case "download":   return "arrow.down.to.line"
         case "upload":     return "arrow.up.to.line"
+        case "import":     return "square.and.arrow.down"
         case "edit":       return "pencil"
         case "term":       return "terminal"
         case "server":     return "server.rack"

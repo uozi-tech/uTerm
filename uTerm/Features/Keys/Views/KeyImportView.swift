@@ -2,14 +2,13 @@ import UDesignKit
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
-import USSHKit
 
 /// 导入密钥面板（与 `KeyGeneratorView` 同处右详情区）。私钥正文可以直接粘贴，
 /// 也可以「从文件读取…」或把文件拖进编辑框——三条路最后都落到同一个编辑框里，
 /// 用户导入前能看到、能改。加密私钥会露出口令框。
 ///
-/// 解析在后台线程跑（带口令的 OpenSSH 容器要跑 bcrypt_pbkdf，可达数百毫秒），
-/// 成功后私钥写钥匙串，经 `onCreate` 交回未插入的 `SSHKey` 由窗口落库。
+/// 解析、查重、写钥匙串都在两端共用的 `KeyImport` 里，成功后经 `onCreate` 交回
+/// 未插入的 `SSHKey` 由窗口落库。
 struct KeyImportView: View {
     /// 已有密钥，用来拦重复导入（按指纹）。
     let existingKeys: [SSHKey]
@@ -24,8 +23,6 @@ struct KeyImportView: View {
     @State private var importing = false
     @State private var errorText: String?
     @State private var dropTargeted = false
-
-    private let keyStore = KeyStore()
 
     private var normalizedText: String { KeyPasteText.normalize(keyText) }
 
@@ -157,14 +154,7 @@ struct KeyImportView: View {
                 name = url.deletingPathExtension().lastPathComponent
             }
         } catch {
-            errorText = KeyImportErrorMessage.message(
-                for: NSError(domain: "uTerm.keys", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "无法读取私钥文件",
-                    NSLocalizedFailureReasonErrorKey: "读取 \(url.lastPathComponent) 时失败：\(FriendlyError.describe(error))",
-                    NSLocalizedRecoverySuggestionErrorKey: "请确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
-                ]),
-                fallback: "无法读取私钥文件"
-            )
+            errorText = KeyImport.fileReadMessage(fileName: url.lastPathComponent, error: error)
         }
     }
 
@@ -173,62 +163,20 @@ struct KeyImportView: View {
     private func runImport() {
         let text = normalizedText
         guard !text.isEmpty else { return }
-        if KeyPasteText.isPublicKeyLine(text) {
-            errorText = "这是公钥（.pub），不是私钥。请粘贴 -----BEGIN … PRIVATE KEY----- 开头的私钥内容。"
-            return
-        }
-        let pass: String? = passphrase.isEmpty ? nil : passphrase
         importing = true
         errorText = nil
 
         Task {
-            do {
-                let material = try await Task.detached(priority: .userInitiated) {
-                    try Self.inspect(text: text, passphrase: pass)
-                }.value
-                importing = false
-                if let dup = existingKeys.first(where: { $0.fingerprint == material.fingerprint }) {
-                    errorText = "密钥库里已有这把密钥：「\(dup.name)」。"
-                    return
-                }
-                let key = SSHKey()
-                let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                key.name = trimmedName.isEmpty ? "imported-key" : trimmedName
-                key.type = material.type
-                key.bits = material.bits
-                key.fingerprint = material.fingerprint
-                key.publicKey = material.publicKey
-                key.hasPassphrase = pass != nil
-                try keyStore.save(keyID: key.id, privateKey: text, passphrase: pass)
+            let result = await KeyImport.run(
+                normalizedText: text, name: name, passphrase: passphrase, existingKeys: existingKeys)
+            importing = false
+            switch result {
+            case .success(let key):
                 onCreate(key)
-            } catch PrivateKeyImportError.encryptedKeyNeedsPassphrase {
-                importing = false
-                passphraseRequested = true
-                errorText = "此私钥已加密，请填写口令后再导入。"
-            } catch PrivateKeyImportError.incorrectPassphrase where pass == nil {
-                importing = false
-                passphraseRequested = true
-                errorText = "此私钥已加密，请填写口令后再导入。"
-            } catch {
-                importing = false
-                errorText = KeyImportErrorMessage.message(
-                    for: error,
-                    fallback: pass == nil ? "无法识别该私钥" : "口令错误或私钥无法解析")
+            case .failure(let failure):
+                if case .needsPassphrase = failure { passphraseRequested = true }
+                errorText = failure.message
             }
-        }
-    }
-
-    /// 解析 + 生成公钥 / 指纹元数据。后台线程调用。
-    private nonisolated static func inspect(text: String, passphrase: String?) throws -> KeyImportInspector.Material {
-        let parsed = try SSHPrivateKeyParser.parse(pem: text, passphrase: passphrase)
-        do {
-            return try KeyImportInspector.inspect(rawText: text, parsed: parsed, comment: "")
-        } catch {
-            throw NSError(domain: "uTerm.keys", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "无法加入密钥库",
-                NSLocalizedFailureReasonErrorKey: "私钥解析成功，但无法生成密钥库所需的公钥或指纹元数据。",
-                NSLocalizedRecoverySuggestionErrorKey: "请确认密钥算法为 RSA、Ed25519 或 ECDSA；如果仍失败，可用 ssh-keygen -y -f <key> 检查该私钥。",
-            ])
         }
     }
 }

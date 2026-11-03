@@ -1,7 +1,8 @@
 import SwiftUI
 import SwiftData
 
-/// SSH 密钥库（真实 `SSHKey`）。生成（纯 Swift）/ 展示 / 复制公钥 / 删除；详情含使用主机与危险区。
+/// SSH 密钥库（真实 `SSHKey`）。生成（纯 Swift）/ 导入已有私钥 / 展示 / 复制公钥 / 删除；
+/// 详情含使用主机与危险区。添加入口两处（顶栏 + 菜单、列表上方按钮组）都同时给「生成」「导入」。
 struct KeysScreen: View {
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\SSHKey.createdAt, order: .reverse)]) private var keys: [SSHKey]
@@ -14,6 +15,7 @@ struct KeysScreen: View {
     @Query private var hosts: [ServerProfile]
     @State private var detail: SSHKey?
     @State private var generating = false
+    @State private var importing = false
 
     var body: some View {
         // 一趟建「keyID → 台数」，行体只查表。
@@ -22,13 +24,18 @@ struct KeysScreen: View {
         return Group {
             if keys.isEmpty {
                 MEmptyState(icon: "key", title: "密钥库为空",
-                            message: "在此生成 SSH 密钥；私钥只保存在当前设备钥匙串。",
-                            actionTitle: "生成密钥", action: { generating = true })
+                            message: "生成新的 SSH 密钥，或导入已有私钥；私钥只保存在当前设备钥匙串。",
+                            actionTitle: "生成密钥", action: { generating = true },
+                            secondaryTitle: "导入密钥", secondaryIcon: "import",
+                            secondaryAction: { importing = true })
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        MBtn(title: "生成密钥", icon: "plus", kind: .tinted, full: true, height: 44) { generating = true }
-                            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+                        HStack(spacing: 10) {
+                            MBtn(title: "生成密钥", icon: "plus", kind: .tinted, full: true, height: 44) { generating = true }
+                            MBtn(title: "导入密钥", icon: "import", kind: .secondary, full: true, height: 44) { importing = true }
+                        }
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
                         MInsetGroup {
                             ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                 MInsetRow(icon: "key", iconColor: M.warning, label: key.name,
@@ -52,10 +59,17 @@ struct KeysScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { generating = true } label: { MIcon(name: "plus", size: 18, color: accent) }
+                Menu {
+                    Button { generating = true } label: { Label("生成新密钥", systemImage: "plus") }
+                    Button { importing = true } label: { Label("导入私钥", systemImage: "square.and.arrow.down") }
+                } label: {
+                    MIcon(name: "plus", size: 18, color: accent)
+                }
+                .accessibilityLabel("添加密钥")
             }
         }
         .sheet(isPresented: $generating) { KeyGenSheet() }
+        .sheet(isPresented: $importing) { KeyImportSheet() }
         .sheet(item: $detail) { key in
             KeyDetailSheet(key: key).presentationDragIndicator(.visible)
         }

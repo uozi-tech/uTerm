@@ -168,6 +168,10 @@ struct MEmptyState: View {
     var message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
+    /// 并排的第二个动作（如「生成密钥」旁的「导入密钥」），样式次一级。
+    var secondaryTitle: String? = nil
+    var secondaryIcon: String = "plus"
+    var secondaryAction: (() -> Void)? = nil
     @Environment(\.mAccent) private var accent
 
     var body: some View {
@@ -186,6 +190,10 @@ struct MEmptyState: View {
                     MBtn(title: actionTitle, icon: "plus", kind: .tinted, action: action)
                         .fixedSize()
                         .padding(.top, 4)
+                }
+                if let secondaryTitle, let secondaryAction {
+                    MBtn(title: secondaryTitle, icon: secondaryIcon, kind: .secondary, action: secondaryAction)
+                        .fixedSize()
                 }
             }
             Spacer(minLength: 24)
