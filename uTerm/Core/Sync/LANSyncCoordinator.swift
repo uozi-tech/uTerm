@@ -197,16 +197,17 @@ final class LANSyncCoordinator {
         guard role == .receiver, let id = pendingConnectionID,
               let context = connections[id], let crypto = context.crypto else { return }
         do {
-            try sendEncrypted(LANSyncDecision(accepted: accepted), type: "decision",
-                              on: context, crypto: crypto)
             pendingOffer = nil
             pendingConnectionID = nil
             if accepted {
+                try sendEncrypted(LANSyncDecision(accepted: true), type: "decision",
+                                  on: context, crypto: crypto)
                 status = .syncing
                 receiveChunks(on: context)
             } else {
+                try sendEncryptedThenClose(LANSyncDecision(accepted: false), type: "decision",
+                                           on: context, crypto: crypto)
                 status = .hosting
-                close(context)
             }
         } catch { fail(context, error: error) }
     }
@@ -389,9 +390,10 @@ final class LANSyncCoordinator {
             // 已有一个请求在等确认 / 正在同步：拒掉后来的。改前直接覆盖 `pendingConnectionID`，
             // 前一个连接的 context 永远留在 `connections` 里，用户确认的也成了后来那个。
             if (self.pendingConnectionID.map { $0 != id } ?? false) || self.status == .syncing {
-                if let crypto = context.crypto {
-                    try? self.sendEncrypted(LANSyncDecision(accepted: false), type: "decision",
-                                            on: context, crypto: crypto)
+                if let crypto = context.crypto,
+                   (try? self.sendEncryptedThenClose(LANSyncDecision(accepted: false), type: "decision",
+                                                     on: context, crypto: crypto)) != nil {
+                    return
                 }
                 self.close(context)
                 return
@@ -524,10 +526,9 @@ final class LANSyncCoordinator {
                 self.lastSyncedAt = Date()
                 guard self.connections[ObjectIdentifier(context.connection)] != nil,
                       let crypto = context.crypto else { return }
-                try self.sendEncrypted(LANSyncTransferResult(succeeded: true, message: "同步完成",
-                                                             digest: offer.digest), type: "result",
-                                       on: context, crypto: crypto)
-                self.close(context)
+                try self.sendEncryptedThenClose(LANSyncTransferResult(succeeded: true, message: "同步完成",
+                                                                      digest: offer.digest), type: "result",
+                                                on: context, crypto: crypto)
             } catch {
                 let result = LANSyncTransferResult(succeeded: false, message: error.localizedDescription, digest: nil)
                 if let crypto = context.crypto {
@@ -596,6 +597,28 @@ final class LANSyncCoordinator {
                                              crypto: LANSyncCryptoSession) throws {
         let plaintext = try encoder.encode(value)
         try sendEncryptedBytes(plaintext, type: type, on: context, crypto: crypto)
+    }
+
+    /// 发出最后一帧，等它真的写出去再关连接。
+    ///
+    /// `close()` 紧跟在 `send` 之后时，帧可能还没写出去连接就拆了：对端读到 EOF，
+    /// 只能报「消息格式无效」——数据其实已经合并成功，发送端却显示同步失败。
+    /// 合并改成异步之后这个窗口在机器忙时能稳定撞上（全量测试里复现过）。
+    private func sendEncryptedThenClose<T: Encodable>(_ value: T, type: String, on context: ConnectionContext,
+                                                      crypto: LANSyncCryptoSession) throws {
+        let plaintext = try encoder.encode(value)
+        let sequence = context.nextSendSequence
+        context.nextSendSequence += 1
+        let data = try crypto.encryptedBytes(plaintext, messageType: type, sequence: sequence)
+        AppLogger.info("LAN sync sending final \(type) frame seq=\(sequence) bytes=\(data.count)", category: "sync")
+        // 等待写出期间不再算「在读帧」，看门狗不会误判；连接留在表里直到关掉。
+        context.awaitingFrameSince = nil
+        LANSyncTransport.send(data, on: context.connection) { [weak self, weak context] _ in
+            Task { @MainActor in
+                guard let self, let context else { return }
+                self.close(context)
+            }
+        }
     }
 
     private func sendEncryptedBytes(_ plaintext: Data, type: String, on context: ConnectionContext,
