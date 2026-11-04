@@ -305,7 +305,11 @@ extension TerminalView {
             // so zooming the font in and back out would drift the column count.
             let newCols = Int(getEffectiveWidth(size: frame.size) / cellDimension.width)
             let newRows = Int(frame.height / cellDimension.height)
-            resize(cols: newCols, rows: newRows)
+            // uTerm patch #14: not `resize(cols:rows:)`, which also soft-resets the
+            // terminal. The running program does not know the font changed and will
+            // not set its modes, colors and scroll region again.
+            terminal.resize(cols: newCols, rows: newRows)
+            sizeChanged(source: terminal)
         }
         updateCaretView()
         

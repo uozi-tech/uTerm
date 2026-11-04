@@ -284,6 +284,18 @@ uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalCaret
 
 uTerm 侧入口：`uTerm/Features/Terminal/TerminalFlushPacing.swift` 的 `feedPaced`。
 
+## 14. 换字号不重置终端状态
+
+上游 `resetFont()` 调公开的 `resize(cols:rows:)`，而它最后会执行 `softReset()`：方向键模式、隐藏的光标、
+自动折行、插入模式、原点模式、滚动区域、当前颜色、字符集和语义提示符标记全部被清掉。程序不知道字号变了，
+不会重新设置，vim 里的方向键就此发错序列。uTermMobile 转屏时字号随宽度变，每次都中招；Mac 改字号、改行距同理。
+
+涉及文件：`Apple/AppleTerminalView.swift` 的 `resetFont()`，改成只调 `terminal.resize` 和 `sizeChanged`。
+公开的 `resize(cols:rows:)` 保持上游语义，uTerm 没有调用它。
+
+uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalFontChangeTests.swift` 和
+`MTerminalContainerViewTests.testRotationKeepsProgramModes`。上游若已修，跳过。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

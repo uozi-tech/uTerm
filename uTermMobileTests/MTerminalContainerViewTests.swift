@@ -200,4 +200,26 @@ final class MTerminalContainerViewTests: XCTestCase {
 
         XCTAssertEqual(view.frame.size, mounted)
     }
+
+    // MARK: 换字号不重置终端状态
+
+    /// 转屏时字号和宽度一起变：vim 里的方向键模式、隐藏的光标、当前颜色都不能丢（SwiftTerm 补丁 #14）。
+    func testRotationKeepsProgramModes() async {
+        let (view, container) = await hosted()
+        let terminal = view.getTerminal()
+        view.feed(text: "\u{1b}[?1049h\u{1b}[?1h\u{1b}[?25l\u{1b}[?7l\u{1b}[4h\u{1b}[31m")
+        let before = terminal.snapshotFingerprint(historyLines: 0)
+        let cols = terminal.cols
+
+        lay(container, CGSize(width: 800, height: 380))
+        container.setFontSize(13)
+        await settle()
+
+        XCTAssertEqual(view.font.pointSize, 13, accuracy: 0.01, "前提：这次转屏换了字号")
+        XCTAssertNotEqual(terminal.cols, cols)
+        let changed = terminal.snapshotFingerprint(historyLines: 0).differences(from: before)
+        XCTAssertNil(changed["modes"], "\(changed)")
+        XCTAssertNil(changed["pen"], "\(changed)")
+        XCTAssertTrue(terminal.applicationCursor)
+    }
 }
