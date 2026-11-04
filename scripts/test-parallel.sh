@@ -69,6 +69,18 @@ if [ -z "$failed" ]; then
     exit 0
 fi
 
+# 并行刚结束时克隆模拟器还在退出，负载很高，性能探针这时串行也会红。等负载回落再复核，
+# 别的进程一直占着机器时也不无限等：超时后照跑，并说明结果可能受负载影响。
+quiet_deadline=$((SECONDS + 300))
+until [ "$(sysctl -n vm.loadavg | awk '{print int($2)}')" -lt 8 ]; do
+    if [ "$SECONDS" -ge "$quiet_deadline" ]; then
+        printf 'warning: machine still busy (load %s); recheck may fail on performance probes\n' \
+            "$(sysctl -n vm.loadavg)" >&2
+        break
+    fi
+    sleep 10
+done
+
 only_testing=()
 while IFS= read -r test_id; do
     only_testing+=("-only-testing:$test_id")
