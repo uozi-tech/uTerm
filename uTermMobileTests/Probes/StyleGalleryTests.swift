@@ -185,6 +185,7 @@ final class StyleGalleryTests: XCTestCase {
         var duo = MChromeGeometry(root: CGRect(x: 0, y: 41, width: 669, height: 910),
                                   safeAreaInsets: EdgeInsets(top: 41, leading: 0, bottom: 0, trailing: 0))
         duo.topBar = CGRect(x: 0, y: 0, width: 520, height: 48)
+        duo.isUnfoldedPhone = true
         try await shoot("connecting-duo-status-row", on: unfolded) {
             ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                 onFinish: {}, onCancel: {}, onRetry: {})

@@ -99,11 +99,40 @@ final class MChromeGeometryTests: XCTestCase {
     func testPortraitStatusRowFromTopBarRegionWithoutOcclusion() {
         // 真机：状态栏不报遮挡保留区，只有系统的顶部横条区域（上沿在状态行里）。
         var g = portrait(status: nil)
+        g.isUnfoldedPhone = true
         g.topBar = CGRect(x: 16, y: 10, width: 500, height: 48)
         XCTAssertEqual(g.statusRowHeight, 82)
         // 横条区域在安全区之下（普通 iPhone / iPad）：不进状态行。
         g.topBar = CGRect(x: 16, y: 82, width: 637, height: 48)
         XCTAssertNil(g.statusRowHeight)
+    }
+
+    /// 普通 iPhone 与 iPad 的状态栏占着顶行，即使顶部横条区域的上沿高于安全区也不能进（模拟器实测值）。
+    func testTopBarRegionDoesNotMakeStatusRowOnOtherDevices() {
+        let devices: [(name: String, width: CGFloat, height: CGFloat, top: CGFloat, bottom: CGFloat, bar: CGRect)] = [
+            ("iPhone 18 Pro", 402, 874, 62, 34, CGRect(x: 18, y: 10, width: 366, height: 48)),
+            ("iPhone 17e", 390, 844, 47, 34, CGRect(x: 14, y: 10, width: 362, height: 48)),
+            ("iPad Air 13", 1024, 1366, 32, 20, CGRect(x: 5, y: 10, width: 1013, height: 48)),
+        ]
+        for device in devices {
+            var g = MChromeGeometry(root: CGRect(x: 0, y: device.top, width: device.width,
+                                                 height: device.height - device.top - device.bottom),
+                                    safeAreaInsets: EdgeInsets(top: device.top, leading: 0, bottom: device.bottom, trailing: 0))
+            g.topBar = device.bar
+            XCTAssertNil(g.statusRowHeight, device.name)
+        }
+    }
+
+    func testUnfoldedPhoneIsDecidedByTheWholeScreen() {
+        func unfolded(_ idiom: UIUserInterfaceIdiom, _ w: CGFloat, _ h: CGFloat) -> Bool {
+            MChromeGeometry.isUnfoldedPhone(idiom: idiom, screenSize: CGSize(width: w, height: h))
+        }
+        XCTAssertTrue(unfolded(.phone, 669, 951), "Duo 展开竖屏")
+        XCTAssertTrue(unfolded(.phone, 951, 669), "Duo 展开横屏")
+        XCTAssertFalse(unfolded(.phone, 466, 678), "Duo 折叠")
+        XCTAssertFalse(unfolded(.phone, 440, 956), "最大的普通 iPhone")
+        XCTAssertFalse(unfolded(.phone, 956, 440), "普通 iPhone 横屏")
+        XCTAssertFalse(unfolded(.pad, 744, 1133), "最小的 iPad")
     }
 
     func testNoStatusRegionKeepsDefaultLayout() {
