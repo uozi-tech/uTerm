@@ -77,15 +77,8 @@ final class TerminalAttentionCenter: NSObject {
         guard let registry, let sessionID = registry.sessionID(of: session),
               rateLimiter.allows(sessionID, at: Date()) else { return }
 
-        let content = UNMutableNotificationContent()
-        content.title = attention.title
-        content.subtitle = registry.entries.first { $0.id == sessionID }?.title ?? ""
-        content.body = attention.body
-        content.sound = .default
-        content.userInfo = [Self.sessionIDKey: sessionID.uuidString]
-        let request = UNNotificationRequest(identifier: Self.identifier(for: sessionID),
-                                            content: content,
-                                            trigger: nil)
+        let subtitle = registry.entries.first { $0.id == sessionID }?.title ?? ""
+        let request = Self.makeRequest(attention, sessionID: sessionID, subtitle: subtitle)
         Task {
             // 第一次发通知时才问授权；之后再调用不会重复弹窗。被拒绝就只剩标签状态。
             let center = UNUserNotificationCenter.current()
@@ -101,8 +94,25 @@ final class TerminalAttentionCenter: NSObject {
             .removeDeliveredNotifications(withIdentifiers: [Self.identifier(for: sessionID)])
     }
 
-    private func reveal(sessionID: UUID) {
+    /// 用户点了通知：回到发出它的会话。
+    func handleNotificationClick(userInfo: [AnyHashable: Any]) {
+        let text = userInfo[Self.sessionIDKey] as? String
+        guard let sessionID = text.flatMap(UUID.init(uuidString:)) else { return }
         registry?.requestReveal(sessionID: sessionID)
+    }
+
+    static func makeRequest(_ attention: TerminalAttention,
+                            sessionID: UUID,
+                            subtitle: String) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = attention.title
+        content.subtitle = subtitle
+        content.body = attention.body
+        content.sound = .default
+        content.userInfo = [sessionIDKey: sessionID.uuidString]
+        return UNNotificationRequest(identifier: identifier(for: sessionID),
+                                     content: content,
+                                     trigger: nil)
     }
 
     /// 同一条会话共用一个 identifier：新通知替换旧的，通知中心里不会堆一串。
@@ -127,8 +137,8 @@ extension TerminalAttentionCenter: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let text = response.notification.request.content.userInfo[Self.sessionIDKey] as? String
-        if let sessionID = text.flatMap(UUID.init(uuidString:)) {
-            Task { @MainActor in self.reveal(sessionID: sessionID) }
+        Task { @MainActor in
+            self.handleNotificationClick(userInfo: text.map { [Self.sessionIDKey: $0] } ?? [:])
         }
         completionHandler()
     }

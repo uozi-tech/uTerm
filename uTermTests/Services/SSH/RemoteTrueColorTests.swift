@@ -269,8 +269,9 @@ final class RemoteTrueColorTests: XCTestCase {
 
     // MARK: 真 sshd
 
-    /// 设 `UTERM_TRUECOLOR_SSH_PORT` 后对 Docker 里的 sshd 跑（要求 `AcceptEnv LANG LC_*`，
-    /// 用户名 / 密码取 `UTERM_TRUECOLOR_SSH_USER` / `UTERM_TRUECOLOR_SSH_PASSWORD`）。
+    /// 设 `UTERM_TRUECOLOR_SSH_PORT` 后对真 sshd 跑（要求 `AcceptEnv LANG LC_*`，
+    /// 用户名取 `UTERM_TRUECOLOR_SSH_USER`，认证取 base64 编码的私钥
+    /// `UTERM_TRUECOLOR_SSH_KEY_B64` 或密码 `UTERM_TRUECOLOR_SSH_PASSWORD`）。
     @MainActor
     func testRealServerEnablesTrueColorForNewShells() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -278,15 +279,20 @@ final class RemoteTrueColorTests: XCTestCase {
             throw XCTSkip("没设 UTERM_TRUECOLOR_SSH_PORT")
         }
         let user = env["UTERM_TRUECOLOR_SSH_USER"] ?? "dev"
-        let password = env["UTERM_TRUECOLOR_SSH_PASSWORD"] ?? "x"
-        let first = try await openConnection(port: port, user: user, password: password)
+        let auth: ResolvedAuth
+        if let key = env["UTERM_TRUECOLOR_SSH_KEY_B64"].flatMap({ Data(base64Encoded: $0) }) {
+            auth = .privateKey(username: user, pem: String(decoding: key, as: UTF8.self), passphrase: nil)
+        } else {
+            auth = .password(username: user, password: env["UTERM_TRUECOLOR_SSH_PASSWORD"] ?? "x")
+        }
+        let first = try await openConnection(port: port, user: user, auth: auth)
         let status = try await first.trueColorStatus()
         guard case .canEnable(let rcFile) = status else { return XCTFail("应当可启用：\(status)") }
         let enabledFile = try await first.enableTrueColor()
         XCTAssertEqual(enabledFile, rcFile)
         await first.close()
 
-        let second = try await openConnection(port: port, user: user, password: password)
+        let second = try await openConnection(port: port, user: user, auth: auth)
         let collected = Task { () -> String in
             var output = Data()
             for await chunk in second.outputStream {
@@ -304,18 +310,17 @@ final class RemoteTrueColorTests: XCTestCase {
     }
 
     @MainActor
-    private func openConnection(port: Int, user: String, password: String) async throws -> SSHConnection {
+    private func openConnection(port: Int, user: String, auth: ResolvedAuth) async throws -> SSHConnection {
         let profile = ServerProfile()
         profile.host = "127.0.0.1"
         profile.port = port
         profile.username = user
-        profile.authMethod = .password
         let container = try ModelContainer(
             for: KnownHost.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none))
         let connection = SSHConnection(
             profile: SSHConnection.ProfileSnapshot(profile),
-            auth: .password(username: user, password: password),
+            auth: auth,
             jumpHostAuth: nil,
             hostKeyVerifier: HostKeyVerifier(modelContainer: container),
             hostKeyApprover: { _ in true })

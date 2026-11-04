@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import UserNotifications
 import XCTest
 @testable import uTerm
 
@@ -224,6 +225,44 @@ final class TerminalProgramStatusTests: XCTestCase {
 
         registry.forgetWindow(windowID)
         XCTAssertFalse(registry.requestReveal(sessionID: sessionID))
+    }
+
+    // MARK: 通知中心
+
+    func testRequestCarriesSessionAndTabTitle() {
+        let id = UUID()
+        let attention = TerminalAttention(title: "Claude Code", body: "approve Bash")
+
+        let request = TerminalAttentionCenter.makeRequest(attention, sessionID: id, subtitle: "web-1")
+
+        XCTAssertEqual(request.content.title, "Claude Code")
+        XCTAssertEqual(request.content.subtitle, "web-1")
+        XCTAssertEqual(request.content.body, "approve Bash")
+        // 同一会话共用 identifier：新通知替换旧的。
+        XCTAssertEqual(request.identifier,
+                       TerminalAttentionCenter.makeRequest(attention, sessionID: id, subtitle: "").identifier)
+    }
+
+    func testClickingNotificationRevealsItsSession() {
+        let registry = TerminalSessionRegistry()
+        let center = TerminalAttentionCenter()
+        center.start(registry: registry)
+        let windowID = UUID()
+        let sessionID = UUID()
+        registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "web-1",
+                                               windowID: windowID, windowKind: TerminalWindowKind.terminal,
+                                               title: "web-1"),
+                          session: session)
+        var revealed: [UUID] = []
+        registry.setRevealer(forWindow: windowID) { revealed.append($0); return true }
+        let request = TerminalAttentionCenter.makeRequest(TerminalAttention(title: "t", body: "b"),
+                                                          sessionID: sessionID,
+                                                          subtitle: "")
+
+        center.handleNotificationClick(userInfo: request.content.userInfo)
+        center.handleNotificationClick(userInfo: [:])
+
+        XCTAssertEqual(revealed, [sessionID])
     }
 
     func testWorkspaceRevealActivatesTab() {
