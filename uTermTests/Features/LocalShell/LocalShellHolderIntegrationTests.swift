@@ -416,11 +416,18 @@ final class LocalShellRestorerTests: XCTestCase {
     }
 
     private func terminate(_ id: UUID) async {
-        guard let handle = try? await client.connectSession(namespace: Self.namespace, id: id) else { return }
-        let connection = HolderConnection(handle)
-        connection.start()
-        connection.send(HolderFrame(.terminate))
-        connection.flushAndClose(timeout: 1)
+        await HolderProbe.terminate(id, client: client, namespace: Self.namespace)
+    }
+
+    /// 机器忙时 shell 启动就要一秒多，不能靠固定等待。
+    private func waitUntilShellExited(_ id: UUID) async {
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            let reply = await HolderProbe.hello(id, client: client, namespace: Self.namespace)
+            if reply?.exitStatus != nil { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("shell 没有退出")
     }
 
     func test_restore_groups_sessions_back_into_their_windows_in_order() async throws {
@@ -429,7 +436,7 @@ final class LocalShellRestorerTests: XCTestCase {
         let first = try await leaveSession(windowID: window, ordinal: 1)
         let orphan = try await leaveSession(windowID: nil, ordinal: 1)
         let exited = try await leaveSession(windowID: UUID(), ordinal: 1, exitFirst: true)
-        try await Task.sleep(for: .milliseconds(700))
+        await waitUntilShellExited(exited)
 
         let restorer = LocalShellRestorer(client: client, namespace: Self.namespace, gateTimeout: .milliseconds(50),
                                           reopenDelay: .milliseconds(10))
