@@ -36,14 +36,11 @@ extension TerminalSession {
             return
         }
 
-        // Coalesce: keep only the latest pending size and schedule a flush
-        // ~80ms after the last sizeChanged. Cancels the previous flush task
-        // on each call so a continuous splitter drag only produces ONE
-        // SIGWINCH at the end (plus the spurious-same-size dedup above).
+        // 尺寸已由 TerminalContainerView 等停稳才提交，这里不再按时间防抖：缓冲区已经重排，
+        // 程序越早知道越好。只合并同一轮主线程里的连续变化（`pinRemoteGrid` 会连设几次尺寸）。
         pendingResize = (cols, rows)
         resizeFlushTask?.cancel()
-        resizeFlushTask = Task { [weak self, resizeDebounceMs] in
-            try? await Task.sleep(for: .milliseconds(resizeDebounceMs))
+        resizeFlushTask = Task { [weak self] in
             if Task.isCancelled { return }
             await self?.flushPendingResize()
         }

@@ -74,6 +74,11 @@ final class TerminalContainerView: NSView {
     /// 终端底与卡面同色（凹槽看不出边），再加 6pt 内边距就成了「胶囊上 7、下 14」的不对称
     /// 间距（实机反馈）。左右与底边保留，避开凹槽圆角。
     private static let terminalInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
+    /// 尺寸停止变化多久后才提交给终端。连续拖动期间不断顺延。
+    static let settleDelay: Duration = .milliseconds(80)
+    /// 查看方式：`log stream --level debug --predicate 'subsystem == "com.uozi.uTerm" AND category == "terminal-resize"'`
+    /// （还要把设置里的日志级别调到 debug）。
+    private static let logCategory = "terminal-resize"
 
     var forwardsScrollToParent: Bool {
         didSet {
@@ -85,6 +90,9 @@ final class TerminalContainerView: NSView {
     /// monitor. Safe: the monitor is only mutated from the MainActor while the
     /// view is alive, and `deinit` has exclusive access once it runs.
     private nonisolated(unsafe) var scrollForwardingMonitor: Any?
+    /// 正在等待停稳的目标尺寸；nil = 没有在等。
+    private var heldSize: NSSize?
+    private var settleTask: Task<Void, Never>?
 
     init(terminalView: SwiftTerm.TerminalView,
          forwardsScrollToParent: Bool = false) {
@@ -111,6 +119,7 @@ final class TerminalContainerView: NSView {
 
     func attach(_ terminalView: SwiftTerm.TerminalView) {
         guard self.terminalView !== terminalView else { return }
+        cancelHold()
         self.terminalView?.removeFromSuperview()
         terminalView.removeFromSuperview()
         terminalView.autoresizingMask = []
@@ -130,26 +139,67 @@ final class TerminalContainerView: NSView {
             terminalView?.removeFromSuperview()
         }
         terminalView = nil
+        cancelHold()
         removeScrollForwardingMonitor()
     }
 
     override func layout() {
         super.layout()
-        guard let terminalView else { return }
+        syncTerminalFrame(settled: false)
+    }
+
+    /// 把终端视图的尺寸对齐到容器。尺寸一变 SwiftTerm 就立刻重排缓冲区，而程序要等 SIGWINCH 才知道，
+    /// 这段时间差里它会照旧按旧尺寸增量绘制；尺寸变过去又变回来时 PTY 尺寸没变、连 SIGWINCH 都没有，
+    /// 屏幕就一直错位。所以尺寸停稳才提交：重排和 SIGWINCH 同时发生，中途的尺寸不碰缓冲区。
+    private func syncTerminalFrame(settled: Bool) {
+        // SwiftUI 可能晚于新容器才拆掉旧容器；已被接走的终端不归这里摆放。
+        guard let terminalView, terminalView.superview === self else { return }
         let insets = Self.terminalInsets
+        let copyable = terminalView as? CopyableTerminalView
         // 远控接管尺寸：终端按对端的行列数钉住，不缩放，放不下的部分裁掉。
-        if let pinned = (terminalView as? CopyableTerminalView)?.pinnedFrameSize {
+        if let pinned = copyable?.pinnedFrameSize {
+            cancelHold()
             layer?.masksToBounds = true
             terminalView.frame = Self.pinnedFrame(pinned, in: bounds, insets: insets)
             return
         }
-        layer?.masksToBounds = false
-        terminalView.frame = NSRect(
-            x: insets.left,
-            y: insets.bottom,
-            width: max(0, bounds.width - insets.left - insets.right),
-            height: max(0, bounds.height - insets.top - insets.bottom)
-        )
+        let width = bounds.width - insets.left - insets.right
+        let height = bounds.height - insets.top - insets.bottom
+        // 窗格被收起时没有可用空间：保持原有行列数，等它再露出来。
+        guard width > 0, height > 0 else {
+            cancelHold()
+            return
+        }
+        let target = NSRect(x: insets.left, y: insets.bottom, width: width, height: height)
+        let isFirstMount = copyable?.hasHostedLayout == false
+        if settled || isFirstMount || terminalView.frame.size == target.size {
+            if let heldSize, heldSize != target.size {
+                AppLogger.debug("cancelled \(heldSize) -> \(target.size)", category: Self.logCategory)
+            }
+            cancelHold()
+            copyable?.hasHostedLayout = true
+            layer?.masksToBounds = false
+            terminalView.frame = target
+            return
+        }
+        // 等待期间保持旧尺寸，贴左上角摆放，放不下的部分裁掉。
+        layer?.masksToBounds = true
+        terminalView.setFrameOrigin(Self.pinnedFrame(terminalView.frame.size, in: bounds, insets: insets).origin)
+        guard heldSize != target.size else { return }
+        AppLogger.debug("holding \(terminalView.frame.size) -> \(target.size)", category: Self.logCategory)
+        heldSize = target.size
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.settleDelay)
+            guard !Task.isCancelled else { return }
+            self?.syncTerminalFrame(settled: true)
+        }
+    }
+
+    private func cancelHold() {
+        settleTask?.cancel()
+        settleTask = nil
+        heldSize = nil
     }
 
     /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时贴底边，裁掉的是最上面的旧行——

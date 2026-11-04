@@ -9,7 +9,7 @@ extension TerminalSession {
     ///
     /// 做法是把终端视图的尺寸钉成「行列数 × 字符格」：SwiftTerm 只在视图尺寸变化时重算行列数，
     /// 钉住之后用户拖窗口只改变外层容器，终端尺寸不受影响。视图尺寸一变，现有链路照常运转：
-    /// `sizeChanged` → 80 ms 防抖 → `backend.resize`（SIGWINCH）；镜像端则收到新尺寸下的快照。
+    /// `sizeChanged` → `backend.resize`（SIGWINCH）；镜像端则收到新尺寸下的快照。
     ///
     /// 字符格宽包外拿不到（`cellDimension` 与滚动条预留宽度都是 internal），所以先按估算设一次，
     /// 再看 SwiftTerm 实际算出的列数，差几列补几列。设尺寸会同步触发重算，两三步就收敛。

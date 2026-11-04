@@ -21,18 +21,14 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     private let outputFlushActiveMs: Int = 16
     private let maxBytesPerOutputFlush = 32 * 1024
 
-    // Resize forwarding state. SplitterHandle now updates `fraction` live during
-    // drag, which makes SwiftTerm fire `sizeChanged` every layout pass. Without
-    // a time debounce we'd SIGWINCH the remote 60+ times per second of
-    // drag → TUI children (vim/htop) full-repaint each tick and flood the main
-    // thread with their output. Coalesce to a single resize ~80ms after the
-    // last `sizeChanged`. `lastForwardedResize` is kept as the fast-path
-    // dedupe for "same dimensions" reports (no debounce needed in that case).
+    // Resize forwarding state. `TerminalContainerView` commits a new size only
+    // once the pane has stopped changing, so a splitter drag produces one
+    // `sizeChanged`, forwarded to the backend right away.
+    // `lastForwardedResize` dedupes "same dimensions" reports.
     @ObservationIgnored var latestReportedResize: (cols: UInt16, rows: UInt16)?
     @ObservationIgnored var lastForwardedResize: (cols: UInt16, rows: UInt16)?
     @ObservationIgnored var pendingResize: (cols: UInt16, rows: UInt16)?
     @ObservationIgnored var resizeFlushTask: Task<Void, Never>?
-    let resizeDebounceMs: Int = 80
 
     /// 终端连接状态。`connect(using:)` 推进；远端结束置 `disconnected`。
     enum ConnectionState: Equatable {

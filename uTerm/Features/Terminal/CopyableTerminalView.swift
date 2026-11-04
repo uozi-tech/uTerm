@@ -22,6 +22,10 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// `TerminalContainerView` 按它摆放而不是铺满容器，见 `TerminalSession.pinRemoteGrid`。
     var pinnedFrameSize: NSSize?
 
+    /// 是否已按真实窗格排布过。首次排布立即生效（替换创建时的占位尺寸，此时还没有程序在画），
+    /// 之后的尺寸变化都要等停稳，见 `TerminalContainerView.syncTerminalFrame`。
+    var hasHostedLayout = false
+
     // MARK: 选中状态跟踪
 
     /// mouseDown 的窗口坐标 - mouseUp 时用于确认本次 mouse 序列确实始于当前 view。
