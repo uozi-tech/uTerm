@@ -8,6 +8,7 @@ struct RemoteControlSettingsView: View {
     @Environment(RemoteControlSettings.self) private var settings
     @Environment(RemoteHostServer.self) private var server
     @State private var permissions = RemoteDesktopPermissionState()
+    @Environment(\.openWindow) private var openWindow
     private let shell = LocalShellService.shared
 
     var body: some View {
@@ -103,6 +104,11 @@ struct RemoteControlSettingsView: View {
                                       openSettings: RemoteDesktopPermissions.openAccessibilitySettings)
                 }
                 if !permissions.screenCapture || !permissions.postEvents {
+                    SettingsRow(label: "不清楚怎么开？", hint: "授权引导里逐项说明每个权限的用途和打开方法。") {
+                        UDButton(title: "打开授权引导", style: .secondary) {
+                            openWindow(id: PermissionGuideWindow.id)
+                        }
+                    }
                     SettingsRow(label: "授权后需重启 uTerm",
                                 hint: "在系统设置里打开开关后，macOS 要等 uTerm 重新启动才让授权生效。") {
                         UDButton(title: "重新启动", style: permissions.requestedThisRun ? .primary : .secondary) {

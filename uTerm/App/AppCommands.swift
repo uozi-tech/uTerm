@@ -36,6 +36,7 @@ struct AppInfoCommands: Commands {
         CommandGroup(replacing: .appInfo) {
             AboutMenuButton()
             CheckForUpdatesMenuButton(appUpdater: appUpdater)
+            PermissionGuideMenuButton()
         }
     }
 }
@@ -55,6 +56,14 @@ private struct SettingsMenuButton: View {
     var body: some View {
         Button("设置…") { openWindow(id: SettingsWindow.id) }
             .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
+private struct PermissionGuideMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("授权引导…") { openWindow(id: PermissionGuideWindow.id) }
     }
 }
 

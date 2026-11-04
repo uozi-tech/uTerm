@@ -174,7 +174,21 @@ struct uTermApp: App {
     private func bootstrapAppServices() {
         appServicesGate.install {
             installTerminalWindowOpener()
+            presentPermissionGuideIfNeeded()
         }
+    }
+
+    /// 第一次启动（或引导加了新项之后的第一次启动）自动打开授权引导，只弹一次。
+    @MainActor
+    private func presentPermissionGuideIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard PermissionGuideWindow.shouldPresentAtLaunch(
+            presentedRevision: defaults.integer(forKey: PermissionGuideWindow.presentedRevisionKey),
+            startsHidden: BackgroundLaunchMode.shouldStartHidden,
+            isTestHost: BackgroundLaunchMode.isRunningInTestHost
+        ) else { return }
+        defaults.set(PermissionGuideWindow.revision, forKey: PermissionGuideWindow.presentedRevisionKey)
+        openWindow(id: PermissionGuideWindow.id)
     }
 
     /// `terminal-open` 的开窗口入口：`TerminalWindowID` 只能在 Scene 环境里开，
@@ -522,6 +536,19 @@ struct uTermApp: App {
             AppInfoCommands(appUpdater: appUpdater)
             SettingsWindowCommands()
         }
+
+        // 授权引导 —— 系统权限集中在一处说明与授权。第一次启动自动弹一次，之后从「uTerm › 授权引导…」打开。
+        Window("授权引导", id: PermissionGuideWindow.id) {
+            PermissionGuideView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
 
         #if DEBUG
         // 仅 DEBUG：Tweaks 调试窗口 + 顶部「Debug」菜单（⌃⌘T 打开）。

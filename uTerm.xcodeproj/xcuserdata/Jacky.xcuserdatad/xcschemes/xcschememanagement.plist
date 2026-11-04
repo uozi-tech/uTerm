@@ -12,7 +12,7 @@
 		<key>uTermBackgroundLauncher.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>26</integer>
+			<integer>28</integer>
 		</dict>
 		<key>uTermMobile.xcscheme_^#shared#^_</key>
 		<dict>
@@ -20,6 +20,16 @@
 			<integer>1</integer>
 		</dict>
 		<key>uTermShellAgent.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>29</integer>
+		</dict>
+		<key>uterm-holder.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>26</integer>
+		</dict>
+		<key>uterm-ssh.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
 			<integer>27</integer>
