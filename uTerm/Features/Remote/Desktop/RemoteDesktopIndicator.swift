@@ -54,7 +54,9 @@ final class RemoteDesktopIndicator {
         panel.setContentSize(size)
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.maxY - size.height - 8))
+            // 胶囊离菜单栏 8 点；面板上沿多出来的是阴影留白，可以伸进菜单栏那一条。
+            let top = RemoteDesktopIndicatorView.shadowInsets.top
+            panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.maxY - size.height + top - 8))
         }
         panel.orderFrontRegardless()
         self.panel = panel
@@ -82,9 +84,17 @@ final class RemoteDesktopIndicator {
     }
 }
 
-private struct RemoteDesktopIndicatorView: View {
+struct RemoteDesktopIndicatorView: View {
     let viewer: RemoteHostServer.DesktopViewer
     let onDisconnect: () -> Void
+
+    static let shadowRadius: CGFloat = 12
+    static let shadowOffset: CGFloat = 4
+    /// 阴影要在面板里淡完：面板按内容大小定，四周不留够，阴影会在窗口边上被截成一个矩形。
+    /// 留 2.5 倍半径、再按偏移往下挪，最外一圈的不透明度才降到 1/255 以下（2 倍时还剩约 3/255，看得出来）。
+    static let shadowSpread = shadowRadius * 2.5
+    static let shadowInsets = EdgeInsets(top: shadowSpread - shadowOffset, leading: shadowSpread,
+                                         bottom: shadowSpread + shadowOffset, trailing: shadowSpread)
 
     var body: some View {
         HStack(spacing: 10) {
@@ -108,12 +118,10 @@ private struct RemoteDesktopIndicatorView: View {
         .padding(.leading, 8)
         .padding(.trailing, 8)
         .padding(.vertical, 6)
-        .background(Capsule().fill(UD.panel).shadow(color: .black.opacity(0.18), radius: 10, y: 3))
+        .background(Capsule().fill(UD.panel)
+            .shadow(color: .black.opacity(0.16), radius: Self.shadowRadius, y: Self.shadowOffset))
         .fixedSize()
-        // 给阴影留出地方：面板按内容大小定，不留的话阴影在窗口边上被截断。
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 16)
+        .padding(Self.shadowInsets)
         .help(viewer.canControl ? "手机可以移动鼠标、点按与打字。点「断开」立即结束" : "手机只能查看，不能操作。点「断开」立即结束")
     }
 }
