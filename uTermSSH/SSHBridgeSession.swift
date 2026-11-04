@@ -11,7 +11,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     private static let channelWindowBytes = 1 << 20
     private static let probeTimeout = Duration.seconds(10)
     private static let maxOutputBacklogBytes = 16 * 1024 * 1024
-    private static let localNetworkRetryDelays: [Duration] = [.milliseconds(500), .milliseconds(1500)]
+    private static let localNetworkRetryDelays: [Duration] = [.milliseconds(500), .milliseconds(1500), .seconds(3), .seconds(5), .seconds(5)]
 
     private let control: SSHBridgeControl
     private var signalSources: [DispatchSourceSignal] = []
@@ -63,8 +63,8 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         }
     }
 
-    /// 系统按可执行文件的 UUID 放行局域网访问。App 新装或更新后第一次访问时规则还没到位，会先拒绝（报 EHOSTUNREACH），
-    /// 几百毫秒后才放行，所以苹果要求自己重试（TN3179）。真连不上的主机只多等两秒。
+    /// 系统先拒绝局域网访问（报 EHOSTUNREACH），再去确认权限：App 更新后第一次访问要等放行规则到位（几百毫秒），
+    /// 用户第一次看到权限框要等他点允许（几秒）。苹果要求自己重试（TN3179）。真的没有路由时，要多等 15 秒才报错。
     private func connectRetryingLocalNetworkDenial(_ request: SSHBridgeConnectRequest) async throws -> ConnectedClient {
         for delay in Self.localNetworkRetryDelays {
             do {
