@@ -139,7 +139,20 @@ nonisolated enum HolderProbe {
         guard let handle = try? await client.connectSession(namespace: namespace, id: id) else { return nil }
         let connection = HolderConnection(handle)
         defer { connection.close() }
-        return await withCheckedContinuation { continuation in
+        return await exchangeHello(connection)
+    }
+
+    /// 等到 hello 回复才发结束请求。holder 校验对端身份要连接还在：发完就关的话，它还没 accept 就会拒掉连接，请求跟着丢了。
+    static func terminate(_ id: UUID, client: LocalShellAgentClient, namespace: String) async {
+        guard let handle = try? await client.connectSession(namespace: namespace, id: id) else { return }
+        let connection = HolderConnection(handle)
+        _ = await exchangeHello(connection)
+        connection.send(HolderFrame(.terminate))
+        connection.close()
+    }
+
+    private static func exchangeHello(_ connection: HolderConnection) async -> HolderHelloReply? {
+        await withCheckedContinuation { continuation in
             let once = HolderHelloOnce(continuation)
             connection.onFrame = { frame in
                 if frame.kind == .helloReply { once.finish(HolderHelloReply(decoding: frame.payload)) }
@@ -149,14 +162,6 @@ nonisolated enum HolderProbe {
             connection.send(HolderFrame(.hello))
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) { once.finish(nil) }
         }
-    }
-
-    static func terminate(_ id: UUID, client: LocalShellAgentClient, namespace: String) async {
-        guard let handle = try? await client.connectSession(namespace: namespace, id: id) else { return }
-        let connection = HolderConnection(handle)
-        connection.start()
-        connection.send(HolderFrame(.terminate))
-        connection.close()
     }
 }
 
