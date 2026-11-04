@@ -409,6 +409,9 @@ struct uTermApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 860, height: 560)
+        // 不用系统的窗口恢复：会话的真值在 holder 里，由 `LocalShellRestorer` 接回。系统恢复的窗口里值可能是空的，
+        // 还原出来是没有标签的空窗口，每崩溃一次多一个；已关闭的会话也会被它按旧 id 新开一个 shell。
+        .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。

@@ -284,7 +284,12 @@ struct LocalShellWindowView: View {
         })
         .frame(minWidth: 560, minHeight: 360)
         .task {
-            guard let windowID else { return }
+            // 这是系统恢复的窗口（值要过几十毫秒才到，我们请求打开的窗口第一次就有值）。关掉：会话由
+            // `LocalShellRestorer` 接回。要在这里就决定，等值到了再关的话，已经接上的会话会随窗口一起结束。
+            guard let windowID else {
+                dismiss()
+                return
+            }
             // 凭条与关闭入口都存进别处（model 自己 / 注册表），只弱引用 model，免得互相持有。
             let windowModel = model
             model.attach(TerminalSessionRegistrar(

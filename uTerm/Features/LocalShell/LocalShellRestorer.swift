@@ -17,6 +17,7 @@ final class LocalShellRestorer {
     private let namespace: String
     /// 手机等接回完成的上限。超过之后按现状回答，比一直不回好。
     private let gateTimeout: Duration
+    private let reopenDelay: Duration
     private var openWindow: (@MainActor (UUID, UUID) -> Void)?
     private var didStart = false
     private var isDone = false
@@ -24,7 +25,8 @@ final class LocalShellRestorer {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(client: LocalShellAgentClient = LocalShellService.shared.client, namespace: String = LocalShellNamespace.current,
-         gateTimeout: Duration = .seconds(15)) {
+         gateTimeout: Duration = .seconds(15), reopenDelay: Duration = .milliseconds(500)) {
+        self.reopenDelay = reopenDelay
         self.client = client
         self.namespace = namespace
         self.gateTimeout = gateTimeout
@@ -84,10 +86,22 @@ final class LocalShellRestorer {
                 openWindow?(windowID, first.id)
             }
         }
+        await reopenUnclaimedWindows()
         await waitForPanes(byWindow.values.flatMap { $0 }.map(\.id))
         isDone = true
         for waiter in waiters { waiter.resume() }
         waiters = []
+    }
+
+    /// `open(value:)` 遇到同值的窗口只是带到前台。系统恢复的旧窗口正在关闭时会抢走这次打开，标签就没人领了，
+    /// 等它关完再开一次。
+    private func reopenUnclaimedWindows() async {
+        for _ in 0..<3 where !pending.isEmpty {
+            try? await Task.sleep(for: reopenDelay)
+            for (windowID, panes) in pending {
+                if let first = panes.first { openWindow?(windowID, first.id) }
+            }
+        }
     }
 
     /// 等接回的会话都走完回放。之后它们才进注册表，手机才看得到。

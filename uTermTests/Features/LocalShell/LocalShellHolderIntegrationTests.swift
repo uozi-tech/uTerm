@@ -333,10 +333,16 @@ final class LocalShellRestorerTests: XCTestCase {
         let exited = try await leaveSession(windowID: UUID(), ordinal: 1, exitFirst: true)
         try await Task.sleep(for: .milliseconds(700))
 
-        let restorer = LocalShellRestorer(client: client, namespace: Self.namespace, gateTimeout: .milliseconds(50))
+        let restorer = LocalShellRestorer(client: client, namespace: Self.namespace, gateTimeout: .milliseconds(50),
+                                          reopenDelay: .milliseconds(10))
         var opened: [UUID: UUID] = [:]
-        restorer.install { windowID, firstPane in opened[windowID] = firstPane }
+        var openCount: [UUID: Int] = [:]
+        restorer.install { windowID, firstPane in
+            opened[windowID] = firstPane
+            openCount[windowID, default: 0] += 1
+        }
         await restorer.restore()
+        XCTAssertGreaterThan(openCount[window] ?? 0, 1, "标签没被领走时要再开一次：第一次可能被正在关闭的旧窗口抢走")
 
         XCTAssertEqual(opened[window], first, "按序号，第一个标签开窗口")
         XCTAssertTrue(opened.values.contains(orphan), "没有归属的会话单独开窗口，不丢")
