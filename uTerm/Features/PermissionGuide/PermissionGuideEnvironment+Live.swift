@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Network
 import ServiceManagement
 import UserNotifications
@@ -16,12 +17,15 @@ extension PermissionGuideEnvironment {
         requestNotifications: {
             _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
         },
-        screenCaptureGranted: { RemoteDesktopPermissions.screenCaptureGranted },
+        screenCaptureGranted: { await Task.detached { CGPreflightScreenCaptureAccess() }.value },
         requestScreenCapture: { RemoteDesktopPermissions.requestScreenCapture() },
-        postEventsGranted: { RemoteDesktopPermissions.postEventsGranted },
+        postEventsGranted: { await Task.detached { CGPreflightPostEventAccess() }.value },
         requestPostEvents: { RemoteDesktopPermissions.requestPostEvents() },
         loginItemNeedsApproval: {
-            SMAppService.loginItem(identifier: BackgroundServiceSettings.loginItemIdentifier).status == .requiresApproval
+            let identifier = BackgroundServiceSettings.loginItemIdentifier
+            return await Task.detached {
+                SMAppService.loginItem(identifier: identifier).status == .requiresApproval
+            }.value
         },
         observeLocalNetwork: { update in
             let probe = LocalNetworkPermissionProbe(update: update)

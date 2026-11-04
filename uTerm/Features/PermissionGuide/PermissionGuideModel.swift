@@ -37,14 +37,17 @@ enum PermissionStatus: Equatable {
 }
 
 /// 引导窗口依赖的系统能力。生产用 `live`，测试换成假的。
+///
+/// 几项查询都是 async：屏幕录制 / 辅助功能的 preflight 各要同步等 tccd 15–40 ms，
+/// `live` 把它们放到后台线程并行跑，窗口打开和切回前台时主线程不卡。
 struct PermissionGuideEnvironment {
     var notificationStatus: @MainActor () async -> PermissionStatus
     var requestNotifications: @MainActor () async -> Void
-    var screenCaptureGranted: @MainActor () -> Bool
+    var screenCaptureGranted: @MainActor () async -> Bool
     var requestScreenCapture: @MainActor () -> Void
-    var postEventsGranted: @MainActor () -> Bool
+    var postEventsGranted: @MainActor () async -> Bool
     var requestPostEvents: @MainActor () -> Void
-    var loginItemNeedsApproval: @MainActor () -> Bool
+    var loginItemNeedsApproval: @MainActor () async -> Bool
     /// 开始观察本地网络授权，返回停止观察的闭包。
     var observeLocalNetwork: @MainActor (_ update: @escaping @MainActor (PermissionStatus) -> Void) -> @MainActor () -> Void
     var openSettings: @MainActor (PermissionKind) -> Void
@@ -59,6 +62,8 @@ final class PermissionGuideModel {
 
     @ObservationIgnored private let environment: PermissionGuideEnvironment
     @ObservationIgnored private var stopObservingLocalNetwork: (@MainActor () -> Void)?
+    /// 切回前台和点按钮都会触发刷新，可能叠在一起；只认最后一次发起的结果。
+    @ObservationIgnored private var refreshGeneration = 0
 
     init(environment: PermissionGuideEnvironment) {
         self.environment = environment
@@ -84,7 +89,7 @@ final class PermissionGuideModel {
     func start() {
         if stopObservingLocalNetwork == nil {
             stopObservingLocalNetwork = environment.observeLocalNetwork { [weak self] status in
-                self?.statuses[.localNetwork] = status
+                self?.set(.localNetwork, status)
             }
         }
         Task { await refresh() }
@@ -97,10 +102,18 @@ final class PermissionGuideModel {
 
     /// 本地网络由观察者实时推送，这里不碰。
     func refresh() async {
-        statuses[.screenCapture] = relaunchAware(.screenCapture, granted: environment.screenCaptureGranted())
-        statuses[.accessibility] = relaunchAware(.accessibility, granted: environment.postEventsGranted())
-        statuses[.loginItem] = environment.loginItemNeedsApproval() ? .notGranted : .granted
-        statuses[.notifications] = await environment.notificationStatus()
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        async let screenCapture = environment.screenCaptureGranted()
+        async let postEvents = environment.postEventsGranted()
+        async let loginItemNeedsApproval = environment.loginItemNeedsApproval()
+        async let notifications = environment.notificationStatus()
+        let results = await (screenCapture, postEvents, loginItemNeedsApproval, notifications)
+        guard generation == refreshGeneration else { return }
+        set(.screenCapture, relaunchAware(.screenCapture, granted: results.0))
+        set(.accessibility, relaunchAware(.accessibility, granted: results.1))
+        set(.loginItem, results.2 ? .notGranted : .granted)
+        set(.notifications, results.3)
     }
 
     func request(_ kind: PermissionKind) async {
@@ -125,6 +138,12 @@ final class PermissionGuideModel {
 
     func relaunch() {
         environment.relaunch()
+    }
+
+    /// 值没变就不写：`@Observable` 对同值赋值也会通知，整个窗口会白白重算一遍。
+    private func set(_ kind: PermissionKind, _ status: PermissionStatus) {
+        guard statuses[kind] != status else { return }
+        statuses[kind] = status
     }
 
     private func relaunchAware(_ kind: PermissionKind, granted: Bool) -> PermissionStatus {

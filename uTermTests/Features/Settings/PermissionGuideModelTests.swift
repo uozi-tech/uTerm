@@ -36,6 +36,11 @@ final class PermissionGuideModelTests: XCTestCase {
         }
     }
 
+    /// `onChange` 是 @Sendable，捕获不了局部 var。用例里只在主线程读写。
+    private final class Flag: @unchecked Sendable {
+        var isSet = false
+    }
+
     func testRefreshMapsSystemState() async {
         let system = FakeSystem()
         system.notification = .notGranted
@@ -48,6 +53,25 @@ final class PermissionGuideModelTests: XCTestCase {
         XCTAssertEqual(model.status(of: .screenCapture), .granted)
         XCTAssertEqual(model.status(of: .accessibility), .notGranted)
         XCTAssertEqual(model.status(of: .localNetwork), .checking, "本地网络只由观察者推送")
+    }
+
+    func testUnchangedRefreshDoesNotInvalidateObservers() async {
+        let system = FakeSystem()
+        let model = PermissionGuideModel(environment: system.environment)
+        await model.refresh()
+
+        let invalidated = Flag()
+        withObservationTracking {
+            _ = model.statuses
+        } onChange: {
+            invalidated.isSet = true
+        }
+        await model.refresh()
+        XCTAssertFalse(invalidated.isSet, "状态没变时不该让窗口重算")
+
+        system.postEvents = true
+        await model.refresh()
+        XCTAssertTrue(invalidated.isSet)
     }
 
     func testRequestingNotificationsUpdatesStatus() async {

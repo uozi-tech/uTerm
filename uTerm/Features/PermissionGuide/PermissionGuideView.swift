@@ -11,25 +11,25 @@ struct PermissionGuideView: View {
     var body: some View {
         VStack(spacing: 0) {
             PermissionGuideTitleBar()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header
-                    section(title: "常用", hint: nil, kinds: [.notifications, .localNetwork])
-                    section(title: "远程控制", hint: "只有让手机查看或操作这台 Mac 时才需要。",
-                            kinds: [.screenCapture, .accessibility])
-                    if model.needsRelaunch {
-                        relaunchBanner
-                    }
-                    if model.visibleKinds.contains(.loginItem) {
-                        section(title: "后台运行", hint: nil, kinds: [.loginItem])
-                    }
+            // 最多五项，内容本身就放得下，不套 ScrollView；窗口高度跟着内容走（Scene 上是 .contentSize）。
+            VStack(alignment: .leading, spacing: 24) {
+                header
+                section(title: "常用", hint: nil, kinds: [.notifications, .localNetwork])
+                section(title: "远程控制", hint: "只有让手机查看或操作这台 Mac 时才需要。",
+                        kinds: [.screenCapture, .accessibility])
+                if model.needsRelaunch {
+                    relaunchBanner
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
+                if model.visibleKinds.contains(.loginItem) {
+                    section(title: "后台运行", hint: nil, kinds: [.loginItem])
+                }
             }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
             footer
         }
-        .frame(width: 580, height: 640)
+        .frame(width: 580)
+        .fixedSize(horizontal: false, vertical: true)
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "授权引导"))
@@ -175,12 +175,9 @@ private struct PermissionStatusChip: View {
     let status: PermissionStatus
 
     var body: some View {
+        // 检测中也只画静态圆点：本地网络在断网时会一直停在检测中，转圈会让整窗每帧重绘。
         HStack(spacing: 4) {
-            if status == .checking {
-                ProgressView().controlSize(.mini)
-            } else {
-                Circle().fill(tint).frame(width: 6, height: 6)
-            }
+            Circle().fill(tint).frame(width: 6, height: 6)
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(status == .granted ? UD.success : UD.text2)
