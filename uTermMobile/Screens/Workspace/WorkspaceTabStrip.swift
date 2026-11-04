@@ -196,7 +196,7 @@ struct WorkspaceSideControls: View {
     }
 }
 
-/// 标签条上的一枚标签：状态点 · 类型图标 · 标题 · 关闭。
+/// 标签条上的一枚标签：状态点 · 标题 · 关闭。终端是常态，不放图标；文件浏览标题同样是主机名，靠文件夹图标区分。
 struct WorkspaceTabChip: View {
     let tab: MWorkTab
     let activity: MTabActivity
@@ -232,8 +232,10 @@ struct WorkspaceTabChip: View {
     var body: some View {
         HStack(spacing: 6) {
             MDot(color: stateDot.color, pulse: stateDot.pulse, size: 6)
-            MIcon(name: tab.kind == .terminal ? "term" : "folder", size: 12, color: iconColor,
-                  weight: activity == .active ? .semibold : .regular)
+            if tab.kind == .sftp {
+                MIcon(name: "folder", size: 12, color: iconColor,
+                      weight: activity == .active ? .semibold : .regular)
+            }
             Text(tab.title)
                 .font(M.mono(12.5))
                 .foregroundStyle(titleColor)
