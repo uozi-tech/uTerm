@@ -108,37 +108,57 @@ final class RemoteDesktopFlowTests: XCTestCase {
         var rate = RemoteRateController(config: config, initialBitrate: 1_000_000, now: 0)
         rate.congestion(now: 0)
         XCTAssertEqual(rate.frameRate, 30)
-        XCTAssertFalse(rate.tick(now: 1_900 * ms), "不到 2 s 不升")
-        XCTAssertTrue(rate.tick(now: 2_000 * ms))
+        XCTAssertFalse(rate.tick(now: 900 * ms), "不到 1 s 不升")
+        XCTAssertTrue(rate.tick(now: 1_000 * ms))
         XCTAssertEqual(rate.frameRate, 60)
         XCTAssertEqual(rate.bitrate, 1_000_000)
-        XCTAssertFalse(rate.tick(now: 3_000 * ms), "两次上调也要隔开")
-        XCTAssertTrue(rate.tick(now: 4_000 * ms))
-        XCTAssertEqual(rate.bitrate, 1_150_000)
-        var now = 4_000 * ms
+        XCTAssertFalse(rate.tick(now: 1_500 * ms), "两次上调也要隔开")
+        XCTAssertTrue(rate.tick(now: 2_000 * ms))
+        XCTAssertEqual(rate.bitrate, 1_250_000)
+        var now = 2_000 * ms
         for _ in 0..<20 {
-            now += 2_000 * ms
+            now += 1_000 * ms
             rate.tick(now: now)
         }
         XCTAssertEqual(rate.bitrate, config.maxBitrate, "不超过上限")
     }
 
-    func test_rate_controller_treats_high_latency_as_congestion() {
+    func test_rate_controller_treats_sustained_high_latency_as_congestion() {
         var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
         XCTAssertFalse(rate.observe(latencyNanos: 80 * ms, now: 100 * ms))
-        XCTAssertTrue(rate.observe(latencyNanos: 121 * ms, now: 200 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 121 * ms, now: 200 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 121 * ms, now: 216 * ms))
+        XCTAssertTrue(rate.observe(latencyNanos: 121 * ms, now: 232 * ms), "连着 3 帧慢才算拥塞")
         XCTAssertEqual(rate.bitrate, 7_000_000)
-        // 拥塞之后要重新稳定满 2 s 才升。
-        XCTAssertFalse(rate.observe(latencyNanos: 10 * ms, now: 2_100 * ms))
-        XCTAssertTrue(rate.observe(latencyNanos: 10 * ms, now: 2_200 * ms))
+        // 拥塞之后要重新稳定满 1 s 才升。
+        XCTAssertFalse(rate.observe(latencyNanos: 10 * ms, now: 1_200 * ms))
+        XCTAssertTrue(rate.observe(latencyNanos: 10 * ms, now: 1_240 * ms))
+    }
+
+    func test_rate_controller_ignores_isolated_slow_acks() {
+        // Wi-Fi 偶尔一帧慢：不是带宽不够，不该砍码率。
+        var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
+                                        initialBitrate: 10_000_000, now: 0)
+        var now: UInt64 = 0
+        for _ in 0..<10 {
+            now += 16 * ms
+            XCTAssertFalse(rate.observe(latencyNanos: 200 * ms, now: now))
+            now += 16 * ms
+            XCTAssertFalse(rate.observe(latencyNanos: 200 * ms, now: now))
+            now += 16 * ms
+            rate.observe(latencyNanos: 10 * ms, now: now)
+        }
+        XCTAssertEqual(rate.bitrate, 10_000_000, "慢帧被快帧打断就不累计")
     }
 
     func test_initial_bitrate_scales_with_pixels() {
-        XCTAssertEqual(RemoteRateController.initialBitrate(width: 1920, height: 1080), 1920 * 1080 * 9 / 2)
+        XCTAssertEqual(RemoteRateController.initialBitrate(width: 1920, height: 1080), 1920 * 1080 * 12)
+        XCTAssertEqual(RemoteRateController.initialBitrate(width: 2144, height: 1206), 2144 * 1206 * 12,
+                       "约 31 Mbps：低延迟编码器在桌面上用得到的量，起步就给")
         XCTAssertEqual(RemoteRateController.initialBitrate(width: 64, height: 64), 1_000_000, "下限")
         let config = RemoteRateController.config(width: 2464, height: 1600)
-        XCTAssertEqual(config.maxBitrate, 2464 * 1600 * 12)
+        XCTAssertEqual(config.maxBitrate, 2464 * 1600 * 24)
     }
 
     // MARK: - 几何

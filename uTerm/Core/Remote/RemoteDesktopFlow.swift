@@ -112,18 +112,23 @@ nonisolated struct RemoteDesktopPacer<Frame> {
 
 /// 码率 / 帧率控制。
 ///
-/// - 拥塞（编码前丢帧、或「采集 → 手机解码完」超过 `latencyThreshold`）：码率 ×0.7，两次下调至少隔
-///   `decreaseSpacing`（一次拥塞往往连着报好几帧，不隔开会一口气砍到底）。码率已到下限还拥塞，帧率减半到 30。
-/// - 连续 `stableInterval` 没有拥塞：先把帧率恢复到 60，再码率 ×1.15，直到上限。
+/// - 拥塞（编码前丢帧、或「采集 → 手机解码完」连续 `slowAcksForCongestion` 次超过 `latencyThreshold`）：
+///   码率 ×0.7，两次下调至少隔 `decreaseSpacing`（一次拥塞往往连着报好几帧，不隔开会一口气砍到底）。
+///   码率已到下限还拥塞，帧率减半到 30。单独一次慢往返多半是 Wi-Fi 抖动，不是带宽不够，不降。
+/// - 连续 `stableInterval` 没有拥塞：先把帧率恢复到 60，再码率 ×1.25，直到上限。
+///
+/// 码率按局域网定（调研 §14）：低延迟 HEVC 在 2144×1206 的桌面上给多少都只用到 24–29 Mbps
+///（约每像素 12 bit/s），从 10 Mbps 起步要白白糊几秒，起步就给到这个量。
 nonisolated struct RemoteRateController: Equatable {
     struct Config: Equatable {
         var minBitrate: Int
         var maxBitrate: Int
         var decreaseFactor = 0.7
-        var increaseFactor = 1.15
+        var increaseFactor = 1.25
         var decreaseSpacing: UInt64 = 500_000_000
-        var stableInterval: UInt64 = 2_000_000_000
+        var stableInterval: UInt64 = 1_000_000_000
         var latencyThreshold: UInt64 = 120_000_000
+        var slowAcksForCongestion = 3
         var fullFrameRate = 60
         var reducedFrameRate = 30
     }
@@ -134,17 +139,18 @@ nonisolated struct RemoteRateController: Equatable {
     private var lastDecrease: UInt64?
     private var lastCongestion: UInt64
     private var lastIncrease: UInt64
+    private var slowAcks = 0
 
-    /// 起始码率按像素算：每像素约 4.5 bit/s（1080p ≈ 9.3 Mbps，低延迟模式下静态桌面足够清楚，
-    /// 滚动时由拥塞控制往下压）。上限每像素 12 bit/s，下限 1 Mbps。
+    /// 起始码率按像素算：每像素 12 bit/s（2144×1206 ≈ 31 Mbps，低延迟编码器在桌面内容上用得到的量），
+    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），下限 1 Mbps。
     static func config(width: Int, height: Int) -> Config {
         let pixels = max(1, width * height)
-        return Config(minBitrate: 1_000_000, maxBitrate: max(2_000_000, pixels * 12))
+        return Config(minBitrate: 1_000_000, maxBitrate: max(2_000_000, pixels * 24))
     }
 
     static func initialBitrate(width: Int, height: Int) -> Int {
         let config = config(width: width, height: height)
-        return min(config.maxBitrate, max(config.minBitrate, width * height * 9 / 2))
+        return min(config.maxBitrate, max(config.minBitrate, width * height * 12))
     }
 
     init(config: Config, initialBitrate: Int, now: UInt64) {
@@ -177,10 +183,16 @@ nonisolated struct RemoteRateController: Equatable {
         return false
     }
 
-    /// 一帧的「采集 → 手机解码完」耗时。超过阈值算拥塞。
+    /// 一帧的「采集 → 手机解码完」耗时。连续 `slowAcksForCongestion` 帧超过阈值才算拥塞。
     @discardableResult
     mutating func observe(latencyNanos: UInt64, now: UInt64) -> Bool {
-        guard latencyNanos > config.latencyThreshold else { return tick(now: now) }
+        guard latencyNanos > config.latencyThreshold else {
+            slowAcks = 0
+            return tick(now: now)
+        }
+        slowAcks += 1
+        guard slowAcks >= config.slowAcksForCongestion else { return false }
+        slowAcks = 0
         return congestion(now: now)
     }
 

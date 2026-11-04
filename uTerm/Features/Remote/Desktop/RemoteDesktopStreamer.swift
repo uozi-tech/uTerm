@@ -42,8 +42,9 @@ nonisolated struct RemoteCapturedFrame: @unchecked Sendable {
 nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 画面静止多久之后精修一次。
     static let refineDelayNanos: UInt64 = 300_000_000
-    /// 码率低于这个值时不精修。实测（1856×1206 HEVC，见调研 §9）：1 Mbps 下精修帧约 330 KB，
-    /// 码控为还这笔账会连丢约 0.5 s 的帧——用户此时一动，第一下就卡半秒；链路本身也要近 3 s 才送完。
+    /// 主流里精修（老手机）时，码率低于这个值不精修。实测（1856×1206 HEVC，见调研 §9）：1 Mbps 下精修帧约
+    /// 330 KB，码控为还这笔账会连丢约 0.5 s 的帧——用户此时一动，第一下就卡半秒。
+    /// 旁路精修不经主流码控、没有这笔账，只在拥塞控制已压到下限（链路真的很差）时才不发。
     static let refineMinBitrate = 4_000_000
     /// 光标位置的轮询间隔（只在变化时发）。
     static let cursorIntervalNanos: UInt64 = 16_000_000
@@ -274,7 +275,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
-        guard isLive, !refined, rate.bitrate >= Self.refineMinBitrate, let lastFrame, pacer.pending == nil,
+        let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
+        guard isLive, !refined, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
               pacer.inflight.isEmpty,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }

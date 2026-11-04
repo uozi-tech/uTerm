@@ -169,13 +169,14 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertTrue(cursor, "\(String(describing: screen.lastCursor))")
 
         // 6. 静止 300 ms 后精修一次（只一次）：新手机走旁路——另一个会话编的关键帧，画面就是当前这张。
-        //    例外：码率被拥塞控制压到 `refineMinBitrate` 以下时按设计不精修（链路吃紧时再塞一大帧，下一下
-        //    动作就卡）。机器忙到「采集 → 手机解码完」超过拥塞阈值时测试里也会这样，那就核对「没精修」。
+        //    例外：拥塞控制已把码率压到下限时按设计不发旁路精修（链路真的很差）。机器忙到「采集 → 手机解码完」
+        //    连续超过拥塞阈值时测试里也会这样，那就核对「没精修」。
         let refined = await waitUntil(2) { screen.frames.dropFirst(stillFrom).contains(where: \.refine) }
         try? await Task.sleep(for: .milliseconds(600))
         let refines = screen.frames.dropFirst(stillFrom).filter(\.refine)
         let bitrates = server.desktopStats?.snapshot().bitrateHistory ?? []
-        if let bitrate = bitrates.last, bitrate < RemoteDesktopStreamer.refineMinBitrate {
+        let floor = RemoteRateController.config(width: 1856, height: 1206).minBitrate
+        if let bitrate = bitrates.last, bitrate <= floor {
             XCTAssertTrue(refines.isEmpty, "码率已降到 \(bitrate)（\(bitrates)），不该精修")
         } else {
             XCTAssertTrue(refined, "画面静止后应有一帧精修（码率变化 \(bitrates)）")
