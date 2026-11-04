@@ -16,10 +16,6 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
     private var feedGeneration: Int = 0
-    /// 输出活跃时的批合并节流。flush 后睡眠这么久再回头检查 buffer，让
-    /// SwiftTerm 一次处理一批字节而不是逐字节渲染。≈60fps 上限。
-    private let outputFlushActiveMs: Int = 16
-    private let maxBytesPerOutputFlush = 32 * 1024
 
     // Resize forwarding state. `TerminalContainerView` commits a new size only
     // once the pane has stopped changing, so a splitter drag produces one
@@ -264,14 +260,18 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         let myGen = feedGeneration
         let buffer = outputBuffer
         outputFlushTask = Task { [weak self] in
+            let pacing = TerminalFlushPacing.desktop
+            var budget = pacing.baseBytes
             while !Task.isCancelled {
                 guard let self else { return }
                 guard self.feedGeneration == myGen else { return }
 
-                let didFeed = self.flushPendingOutput(generation: myGen)
-                if didFeed {
+                if let flush = self.flushPendingOutput(generation: myGen, maxBytes: budget) {
+                    budget = pacing.nextBudget(after: budget,
+                                               elapsedMs: flush.elapsedMs,
+                                               filled: flush.bytes >= budget)
                     // 活跃路径：让短时间内陆续到达的字节合批一次性 feed。
-                    try? await Task.sleep(for: .milliseconds(self.outputFlushActiveMs))
+                    try? await Task.sleep(for: .milliseconds(pacing.intervalMs))
                 } else {
                     // 空闲路径：挂起到下一次 append（或 clear 唤醒，让被取消的
                     // generation 通过下一轮顶部的 guard 退出）。这条路径取代了
@@ -300,9 +300,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 拟合出来：**每次调用的固定开销只有 0.21 µs，按字节的解析是 23.3 ms/MB**
     /// （随内容在 9–27 ms/MB 之间浮动）。也就是说线上那 433 B 的包里，固定开销
     /// 只占 feed 总耗时的 2.6%；把 flush 从 433 B 攒到 32 KB 就只能省这 2.6%，
-    /// 连 64 B → 256 KB 的极端全跨度也只有 13%。批量化在这里没有收益可拿，
-    /// 而调大 `maxBytesPerOutputFlush` / `outputFlushActiveMs` 会实打实地推高
-    /// echo 延迟。
+    /// 连 64 B → 256 KB 的极端全跨度也只有 13%。批量化在这里省不到 CPU。预算放大
+    /// （`TerminalFlushPacing`）要解决的是积压时的吞吐，不是省 CPU；没有积压时每拍
+    /// 只有几百字节，预算多大都一样，也就不影响 echo 延迟。
     ///
     /// 绝对量级也不值得动：6 个后台标签合计 142 KB/s 的输出，在 Release 下
     /// ≈ 3.3 ms/s 主线程时间（0.3% 单核）。`uAppKit/docs/pane-groups-design.md`
@@ -318,16 +318,20 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 喂完同一份语料后，主屏/alt 屏全文、逐格字符与属性、scrollback、光标位置
     /// 全部逐字相同（实测比对过指纹）。所以将来真要改批量策略，正确性这一侧
     /// 是安全的，不安全的只有上面那条「延迟到可见时再补」。
-    private func flushPendingOutput(generation: Int) -> Bool {
-        guard feedGeneration == generation else { return false }
-        let chunk = outputBuffer.drain(maxBytes: maxBytesPerOutputFlush, generation: generation)
-        guard !chunk.isEmpty else { return false }
+    ///
+    /// 返回 nil 表示没有可喂的字节。
+    private func flushPendingOutput(generation: Int, maxBytes: Int) -> (bytes: Int, elapsedMs: Double)? {
+        guard feedGeneration == generation else { return nil }
+        let chunk = outputBuffer.drain(maxBytes: maxBytes, generation: generation)
+        guard !chunk.isEmpty else { return nil }
 
         let bytes = ArraySlice([UInt8](chunk))
+        let start = CFAbsoluteTimeGetCurrent()
         terminalView.feed(byteArray: bytes)
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
         // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
         mirrorTap.didFeed(bytes)
-        return true
+        return (bytes.count, elapsedMs)
     }
 
 }

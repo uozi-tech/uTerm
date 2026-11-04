@@ -80,35 +80,7 @@ final class MobileTerminalController {
 
     private var outputGeneration = 0
 
-    /// 每拍喂给 SwiftTerm 的字节预算：按这一拍实际花了多少主线程时间自适应（AIMD）。
-    ///
-    /// 固定 32KB/16ms 时前台吞吐硬顶在 ≈2MB/s：局域网里 `cat` 大文件超过它，4MB 缓冲
-    /// 两秒就满，`TerminalOutputBuffer` 只能整块丢掉最旧的字节——会截断转义序列，
-    /// 颜色 / 光标状态随之错乱。但也不能只看积压放大：机器忙、SwiftTerm 解析跟不上时
-    /// 积压一直高，每拍都喂满，主线程被终端独占（探针 `term-bg` 实测整段 8s 只剩 17 拍）。
-    /// 所以按耗时调：这一拍超过 `targetMs` 就减半，远低于目标且积压没喂完就翻倍，夹在
-    /// [base, max] 之间。下限就是改前的固定值，最差情况等于改前；解析跟得上时才放大吞吐。
-    ///
-    /// 后台旧方案是 250ms 一次喂 512KB（前台标签每 250ms 卡一下）；现在 64ms 一拍、
-    /// 最多 128KB，吞吐上限与旧方案相同（2MB/s），单次 feed 的停顿小四倍。
-    struct FlushPacing: Equatable {
-        let intervalMs: Int
-        let baseBytes: Int
-        let maxBytes: Int
-        let targetMs: Double
-
-        static let foreground = FlushPacing(intervalMs: 16, baseBytes: 32 * 1024,
-                                            maxBytes: 256 * 1024, targetMs: 4)
-        static let background = FlushPacing(intervalMs: 64, baseBytes: 32 * 1024,
-                                            maxBytes: 128 * 1024, targetMs: 4)
-
-        /// 下一拍的预算。`filled`：这一拍喂满了预算（说明还有积压）。
-        func nextBudget(after budget: Int, elapsedMs: Double, filled: Bool) -> Int {
-            if elapsedMs > targetMs { return max(baseBytes, budget / 2) }
-            if filled, elapsedMs < targetMs / 2 { return min(maxBytes, budget * 2) }
-            return min(maxBytes, max(baseBytes, budget))
-        }
-    }
+    typealias FlushPacing = TerminalFlushPacing
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
