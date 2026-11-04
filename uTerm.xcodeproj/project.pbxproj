@@ -194,6 +194,7 @@
 				Features/LocalShell/HolderConnection.swift,
 				Features/LocalShell/LocalShellBackend.swift,
 				Features/Terminal/TerminalQuitPolicy.swift,
+				Features/LocalShell/LocalShellNetworkPolicy.swift,
 				Features/LocalShell/LocalShellRestorer.swift,
 				Features/LocalShell/LocalShellService.swift,
 				Features/LocalShell/LocalShellWindow.swift,

@@ -13,7 +13,7 @@ struct NewWelcomeWindowCommands: Commands {
             .keyboardShortcut("n", modifiers: .command)
 
             Button("新建本机终端") {
-                openWindow.newLocalShell()
+                openWindow.newLocalShellAskingFirst()
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }

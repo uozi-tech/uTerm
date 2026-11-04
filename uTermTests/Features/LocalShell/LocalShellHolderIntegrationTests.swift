@@ -80,7 +80,16 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         XCTAssertEqual(Self.responsiblePID(for: holder), holder)
     }
 
-    /// 本机 shell 的 holder 责任进程还是 App：shell 访问 ~/Documents 这类授权要记在 uTerm 名下。
+    /// 用户选了保住局域网连接：本机 shell 的 holder 也自己当责任进程。
+    func test_shell_holder_owns_responsibility_when_user_chose_to_keep_lan_connections() async throws {
+        let id = makeSession()
+        let handle = try await client.openSession(namespace: Self.namespace, id: id, columns: 80, rows: 24,
+                                                  ownsResponsibility: true)
+        let holder = try Self.peerPID(of: handle)
+        XCTAssertEqual(Self.responsiblePID(for: holder), holder)
+    }
+
+    /// 默认：本机 shell 的 holder 责任进程还是 App，shell 访问 ~/Documents 这类授权记在 uTerm 名下。
     func test_shell_holder_stays_under_the_app_for_responsibility() async throws {
         let id = makeSession()
         let handle = try await client.openSession(namespace: Self.namespace, id: id, columns: 80, rows: 24)
@@ -284,6 +293,53 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
 }
 
 /// 不起真进程，验证回放的逐格还原和屏蔽。
+@MainActor
+final class LocalShellNetworkPolicyTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private let suite = "LocalShellNetworkPolicyTests"
+
+    override func setUp() async throws {
+        try await super.setUp()
+        defaults = UserDefaults(suiteName: suite)
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suite)
+        try await super.tearDown()
+    }
+
+    func test_without_an_answer_connections_are_not_kept() {
+        XCTAssertFalse(LocalShellNetworkPolicy.keepsLANConnections(in: defaults))
+    }
+
+    func test_asks_once_and_remembers_the_answer() {
+        var asked = 0
+        LocalShellNetworkPolicy.askIfNeeded(in: defaults) {
+            asked += 1
+            return true
+        }
+        XCTAssertTrue(LocalShellNetworkPolicy.keepsLANConnections(in: defaults))
+        LocalShellNetworkPolicy.askIfNeeded(in: defaults) {
+            asked += 1
+            return false
+        }
+        XCTAssertEqual(asked, 1)
+        XCTAssertTrue(LocalShellNetworkPolicy.keepsLANConnections(in: defaults))
+    }
+
+    func test_answering_no_also_counts_as_answered() {
+        var asked = 0
+        for _ in 0..<2 {
+            LocalShellNetworkPolicy.askIfNeeded(in: defaults) {
+                asked += 1
+                return false
+            }
+        }
+        XCTAssertEqual(asked, 1)
+    }
+}
+
 @MainActor
 final class TerminalHeldReplayTests: XCTestCase {
     private actor MockHeldBackend: HeldTerminalBackend {

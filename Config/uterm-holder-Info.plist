@@ -5,8 +5,18 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.uozi.uTerm.holder</string>
 	<key>CFBundleName</key>
-	<string>uTerm SSH</string>
+	<string>uTerm 终端</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>uTerm 用它连接你局域网里的 SSH 主机，这样 uTerm 重启时终端也不会断。</string>
+	<string>uTerm 的终端要连接你局域网里的机器，这样 uTerm 重启时连接也不会断。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>你在 uTerm 的本机终端里运行的程序要访问文稿文件夹。</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>你在 uTerm 的本机终端里运行的程序要访问桌面文件夹。</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>你在 uTerm 的本机终端里运行的程序要访问下载文件夹。</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>你在 uTerm 的本机终端里运行的程序要访问可移除宗卷上的文件。</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>你在 uTerm 的本机终端里运行的程序要访问网络宗卷上的文件。</string>
 </dict>
 </plist>

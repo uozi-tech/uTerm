@@ -112,7 +112,7 @@ struct WelcomeView: View {
             WelcomeTitleBar()
             WelcomeToolbar(
                 query: $filter.query,
-                onNewLocalShell: { openWindow.newLocalShell() },
+                onNewLocalShell: { openWindow.newLocalShellAskingFirst() },
                 onNewServer: { formRoute = .new })
                 .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
             HStack(spacing: 0) {
@@ -348,7 +348,7 @@ struct WelcomeView: View {
         items.append(CommandPaletteItem(
             id: "cmd.newLocalShell", kind: .command,
             title: "新建本机终端", detail: "在这台 Mac 上开一个 shell", hint: "⇧⌘N", group: nil) {
-                openWindow.newLocalShell()
+                openWindow.newLocalShellAskingFirst()
             })
         items.append(CommandPaletteItem(
             id: "cmd.manageGroups", kind: .command,

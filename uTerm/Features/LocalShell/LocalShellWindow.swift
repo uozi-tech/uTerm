@@ -60,7 +60,8 @@ final class LocalShellPane: Identifiable {
         await session.close()
         let terminal = session.terminalView.getTerminal()
         let backend = LocalShellBackend(client: LocalShellService.shared.client, sessionID: id,
-                                        columns: terminal.cols, rows: terminal.rows)
+                                        columns: terminal.cols, rows: terminal.rows,
+                                        ownsResponsibility: LocalShellNetworkPolicy.keepsLANConnections())
         await session.connect(using: backend)
         if let windowID = registrar?.windowID, session.backend === backend,
            let attributes = try? JSONEncoder().encode(LocalShellSessionAttributes(windowID: windowID, ordinal: ordinal)) {
@@ -265,7 +266,15 @@ final class LocalShellWindowRouter {
 }
 
 extension OpenWindowAction {
-    /// 所有「新建本机终端」入口（欢迎页、菜单、Dock、手机远控）都走这里。
+    /// 用户自己新开本机终端（欢迎页、菜单、Dock）：第一次先问局域网连接要不要保住，这只能在 shell 起来之前定。
+    @MainActor
+    @discardableResult
+    func newLocalShellAskingFirst() -> UUID {
+        LocalShellNetworkPolicy.askIfNeeded()
+        return newLocalShell()
+    }
+
+    /// 手机、命令行发起的直接走这里：Mac 前可能没有人，不能弹框挡住。
     @MainActor
     @discardableResult
     func newLocalShell() -> UUID {

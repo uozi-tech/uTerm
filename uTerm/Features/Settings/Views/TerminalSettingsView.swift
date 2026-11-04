@@ -30,6 +30,7 @@ struct TerminalSettingsView: View {
     }
 
     @AppStorage(TerminalQuitPolicy.behaviorKey) private var quitBehavior = TerminalQuitPolicy.Behavior.ask.rawValue
+    @AppStorage(LocalShellNetworkPolicy.key) private var keepsLANConnections = false
 
     var body: some View {
         SettingsScroll {
@@ -60,6 +61,10 @@ struct TerminalSettingsView: View {
                         (value: TerminalQuitPolicy.Behavior.keep.rawValue, label: String(localized: "保留")),
                         (value: TerminalQuitPolicy.Behavior.end.rawValue, label: String(localized: "全部结束")),
                     ])
+                }
+                SettingsRow(label: "重启时保住本机终端的局域网连接",
+                            hint: "比如在本机终端里 ssh 到局域网的机器。打开后系统会就访问文稿、局域网等再问一次授权，记在「uTerm 终端」名下。只影响之后新开的终端；SSH 标签不受这项影响，总是保住。") {
+                    UDToggle($keepsLANConnections)
                 }
             }
         }

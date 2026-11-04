@@ -6,7 +6,7 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "3"
+    static let version = "4"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
     /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
@@ -33,7 +33,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         reply(Self.version)
     }
 
-    func openSession(namespace: String, id: String, columns: Int, rows: Int,
+    func openSession(namespace: String, id: String, columns: Int, rows: Int, ownsResponsibility: Bool,
                      reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
         queue.async {
             do {
@@ -46,7 +46,8 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 let shell = Self.loginShell()
                 let pid = try self.spawnHolder(
                     directory: directory, name: name, columns: columns, rows: rows, executable: shell,
-                    argv0: "-" + (shell as NSString).lastPathComponent, environment: Self.environment(shell: shell), controlFD: nil)
+                    argv0: "-" + (shell as NSString).lastPathComponent, environment: Self.environment(shell: shell), controlFD: nil,
+                    ownsResponsibility: ownsResponsibility)
                 reply(try self.waitForHolder(pid: pid, directory: directory, name: name), nil)
             } catch {
                 self.log.error("起会话失败：\(error.localizedDescription, privacy: .public)")
@@ -232,9 +233,9 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
 
     /// 让新进程自己当责任进程（Terminal、iTerm、lldb 都这么起子进程）。
     ///
-    /// 本地网络权限按责任进程放行。默认责任进程是 App：App 一死，系统立刻丢弃 `uterm-ssh` 这条局域网连接上的包，
+    /// 本地网络权限按责任进程放行。默认责任进程是 App：App 一死，系统立刻丢弃这个进程树上局域网连接的包，
     /// App 重开也恢复不了，写一次就 EHOSTUNREACH。holder 自己当责任进程后，权限归它（Info.plist 内嵌在二进制里），
-    /// 跟 App 活不活无关。SPI 没有头文件，SDK 也不保证有符号，所以按名字找；找不到就退回默认行为。
+    /// 跟 App 活不活无关。文稿等隐私授权也跟着归它，所以本机 shell 要用户选，SSH 用不到这些授权，总是这样起。SPI 没有头文件，SDK 也不保证有符号，所以按名字找；找不到就退回默认行为。
     private static func disclaimResponsibility(_ attributes: inout posix_spawnattr_t?) {
         typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
         let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)

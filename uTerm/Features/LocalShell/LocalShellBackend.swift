@@ -13,9 +13,11 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     private let sessionID: UUID
     private let initialColumns: Int
     private let initialRows: Int
+    private let ownsResponsibility: Bool
 
     init(client: LocalShellAgentClient, namespace: String = LocalShellNamespace.current, sessionID: UUID = UUID(),
-         columns: Int, rows: Int) {
+         columns: Int, rows: Int, ownsResponsibility: Bool = false) {
+        self.ownsResponsibility = ownsResponsibility
         self.client = client
         self.namespace = namespace
         self.sessionID = sessionID
@@ -39,7 +41,8 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     }
 
     private func open() async throws -> FileHandle {
-        try await client.openSession(namespace: namespace, id: sessionID, columns: initialColumns, rows: initialRows)
+        try await client.openSession(namespace: namespace, id: sessionID, columns: initialColumns, rows: initialRows,
+                                     ownsResponsibility: ownsResponsibility)
     }
 
     func takeReplay() async -> HolderReplay? {

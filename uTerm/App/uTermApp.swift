@@ -224,7 +224,7 @@ struct uTermApp: App {
             recentServers: { DockMenuController.recentServers(in: context) },
             onNewLocalShell: {
                 NSApp.activate(ignoringOtherApps: true)
-                open.newLocalShell()
+                open.newLocalShellAskingFirst()
             },
             onOpenServer: { serverID in
                 let descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == serverID })

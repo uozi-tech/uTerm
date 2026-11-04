@@ -95,14 +95,16 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
     }
 
     /// 连上会话 `id`；还没有就新起一个 shell。
-    func openSession(namespace: String, id: UUID, columns: Int, rows: Int) async throws -> FileHandle {
+    func openSession(namespace: String, id: UUID, columns: Int, rows: Int,
+                     ownsResponsibility: Bool = false) async throws -> FileHandle {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
                 once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
                 return
             }
-            agent.openSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows) { handle, error in
+            agent.openSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows,
+                              ownsResponsibility: ownsResponsibility) { handle, error in
                 once.finish(handle, error: error)
             }
         }
