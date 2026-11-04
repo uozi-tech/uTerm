@@ -28,7 +28,7 @@ nonisolated enum RemoteConstants {
     static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
-    /// 自己」，不去自己的主机列表里找。
+    /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
 }
 
@@ -206,7 +206,7 @@ nonisolated enum RemotePairingState: UInt8, Sendable {
 /// Mac 上一条可接入的终端会话（手机端会话列表的一行）。
 nonisolated struct RemoteSessionInfo: Codable, Equatable, Sendable, Identifiable {
     var id: UUID
-    /// 对应的 `ServerProfile.id`。手机按它在本机找同一台主机来开标签（主机经 iCloud / 局域网同步过来）。
+    /// 对应的 `ServerProfile.id`；Mac 本机 shell 是 `localShellServerID`。手机不要求这台主机已同步过来。
     var serverID: UUID
     var serverName: String
     var title: String

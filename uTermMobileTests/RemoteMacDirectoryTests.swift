@@ -33,13 +33,53 @@ final class RemoteMacDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.pairedMacs.map(\.name), [Self.macName])
     }
 
-    func testLocalShellHostIsNotPersistedAndNamedAfterTheMac() throws {
+    func testTabHostForLocalShellIsNotPersistedAndNamedAfterTheMac() throws {
         let directory = try directory(pairedWith: [Self.macName])
         let client = directory.client(for: try XCTUnwrap(directory.pairedMacs.first))
-        let host = client.localShellHost()
+        let host = client.tabHost(for: UUID())
         XCTAssertEqual(host.id, RemoteConstants.localShellServerID)
         XCTAssertEqual(host.name, Self.macName)
         XCTAssertNil(host.modelContext)
+    }
+
+    /// 工作区真的消费接管请求：全部终端开成标签、连接中页跟前台那个，取消时一个不留。
+    func testWorkspaceOpensEveryTerminalAndCancelClosesThemAll() async throws {
+        let directory = try directory(pairedWith: [Self.macName])
+        let client = directory.client(for: try XCTUnwrap(directory.pairedMacs.first))
+        let store = MobileStore()
+        let workspace = MobileWorkspace()
+        let (window, _) = MobileProbeWindow.make(
+            size: CGSize(width: 390, height: 844),
+            rootView: AnyView(WorkspaceScreen()
+                .environment(store)
+                .environment(HostKeyChallengeRelay())
+                .environment(workspace)
+                .modelContainer(try MobileFixtures.emptyContainer())))
+        defer { window.isHidden = true }
+
+        let ids = [UUID(), UUID(), UUID()]
+        store.takeOver(client, focus: ids[1])
+        store.remoteTakeover = MRemoteTakeover(client: client, sessionIDs: ids, focus: ids[1])
+        let request = try XCTUnwrap(store.connecting)
+        try await waitUntil { workspace.tabs.count == 3 }
+
+        XCTAssertEqual(workspace.activeTab?.terminal?.remote?.sessionID, ids[1])
+        XCTAssertEqual(request.tabID, workspace.activeTab?.id)
+        XCTAssertTrue(request.terminal === workspace.activeTab?.terminal?.controller)
+        XCTAssertEqual(request.companionTabIDs.count, 2)
+
+        store.cancelConnect()
+        try await waitUntil { workspace.isEmpty }
+        XCTAssertFalse(store.showWorkspace)
+        XCTAssertTrue(store.teardownTabIDs.isEmpty)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(3)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("等待超时") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     /// 配对过的 Mac 要真的画成一行（抽屉是纯 SwiftUI，这里只验行存在、有名字）。

@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import uTermMobile
 
@@ -11,6 +12,174 @@ final class MobileWorkspaceTests: XCTestCase {
     }
 
     private func filesTab() -> MWorkTab { .files(FileTab(host: ServerProfile())) }
+
+    private func macClient() -> RemoteMacClient {
+        RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
+                        identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+    }
+
+    // MARK: - 接管 Mac
+
+    func testTakeOverOpensEveryTerminalAndFrontsTheFocusedOne() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let ids = [UUID(), UUID(), UUID()]
+
+        let changes = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: ids, focus: ids[1]))
+        let opened = changes.opened
+
+        XCTAssertEqual(opened.compactMap(\.remote?.sessionID), ids, "Mac 上的每个终端一个标签，顺序不变")
+        XCTAssertTrue(changes.removed.isEmpty)
+        XCTAssertEqual(ws.panes[0].tabIDs, opened.map(\.id))
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, ids[1])
+        XCTAssertEqual(ws.remoteTabIDs(of: client), Set(opened.map(\.id)))
+        XCTAssertTrue(ws.remoteTabIDs(of: macClient()).isEmpty, "别的 Mac 的标签不算")
+    }
+
+    func testTakeOverAgainKeepsLiveTabsAndReplacesEndedOnes() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let live = UUID(), ended = UUID(), added = UUID()
+        let first = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [live, ended], focus: live)).opened
+        first[1].controller.close()
+
+        let second = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [live, ended, added], focus: added))
+
+        XCTAssertEqual(second.opened.compactMap(\.remote?.sessionID), [ended, added], "活着的不重开")
+        XCTAssertEqual(second.removed.map(\.id), [first[1].id], "接入已结束的换成新标签")
+        XCTAssertEqual(ws.tabs.count, 3)
+        XCTAssertNotNil(ws.tab(first[0].id), "活着的还是原来那个标签")
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, added)
+    }
+
+    func testFollowOpensNewTerminalsInBackground() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let first = UUID(), second = UUID(), added = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [first, second], focus: first))
+
+        let changes = ws.follow(client, sessionIDs: [first, second, added])
+
+        XCTAssertEqual(changes.opened.compactMap(\.remote?.sessionID), [added])
+        XCTAssertEqual(ws.tabs.count, 3)
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, first, "新终端不抢前台")
+        XCTAssertTrue(ws.follow(client, sessionIDs: [first, second, added]).opened.isEmpty, "同一份列表不重复开")
+    }
+
+    func testFollowDoesNotReopenTabClosedOnThePhone() throws {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let kept = UUID(), closed = UUID()
+        let opened = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [kept, closed], focus: kept)).opened
+        ws.close(try XCTUnwrap(opened.last).id)
+
+        XCTAssertTrue(ws.follow(client, sessionIDs: [kept, closed]).opened.isEmpty)
+        XCTAssertEqual(ws.tabs.count, 1)
+    }
+
+    func testFollowClosesTabOfTerminalClosedOnTheMac() throws {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let kept = UUID(), closed = UUID()
+        let opened = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [kept, closed], focus: closed)).opened
+        _ = ws.follow(client, sessionIDs: [kept, closed])
+
+        let changes = ws.follow(client, sessionIDs: [kept])
+
+        XCTAssertEqual(changes.removed.map(\.id), [try XCTUnwrap(opened.last).id])
+        XCTAssertTrue(changes.opened.isEmpty)
+        XCTAssertEqual(ws.terminalTabs.compactMap(\.remote?.sessionID), [kept])
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, kept, "前台被关时落到相邻标签")
+    }
+
+    /// 刚在 Mac 上开的本机 shell 可能排在列表更新之前：列表里还没有它不等于它关了。
+    func testFollowKeepsTabOfTerminalNotYetListed() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let listed = UUID(), justOpened = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [listed, justOpened], focus: justOpened))
+
+        XCTAssertTrue(ws.follow(client, sessionIDs: [listed]).removed.isEmpty, "还没进过列表，不关")
+        XCTAssertTrue(ws.follow(client, sessionIDs: [listed, justOpened]).opened.isEmpty, "进列表也不重复开")
+        XCTAssertEqual(ws.tabs.count, 2)
+
+        XCTAssertEqual(ws.follow(client, sessionIDs: [listed]).removed.count, 1, "进过列表又没了才算关了")
+        XCTAssertEqual(ws.tabs.count, 1)
+    }
+
+    func testFollowOpensTerminalThatCameBackAfterLeavingTheList() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let kept = UUID(), flaky = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [kept, flaky], focus: kept))
+        _ = ws.follow(client, sessionIDs: [kept, flaky])
+        _ = ws.follow(client, sessionIDs: [kept])
+
+        let changes = ws.follow(client, sessionIDs: [kept, flaky])
+
+        XCTAssertEqual(changes.opened.compactMap(\.remote?.sessionID), [flaky])
+        XCTAssertEqual(ws.tabs.count, 2)
+    }
+
+    func testFollowContinuesAfterTheMacClosesEveryTerminal() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let only = UUID(), later = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [only], focus: only))
+        _ = ws.follow(client, sessionIDs: [only])
+
+        XCTAssertEqual(ws.follow(client, sessionIDs: []).removed.count, 1)
+        XCTAssertTrue(ws.isEmpty)
+        XCTAssertEqual(ws.followedClients.count, 1, "Mac 上全关了还在接管")
+
+        let changes = ws.follow(client, sessionIDs: [later])
+
+        XCTAssertEqual(changes.opened.compactMap(\.remote?.sessionID), [later])
+        XCTAssertEqual(ws.activeTab?.terminal?.remote?.sessionID, later, "那一格没有前台标签，新标签就是前台")
+    }
+
+    func testStopFollowingEndsTheTakeover() {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let only = UUID()
+        _ = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [only], focus: only))
+
+        ws.stopFollowing(client)
+
+        XCTAssertTrue(ws.followedClients.isEmpty)
+        XCTAssertTrue(ws.follow(client, sessionIDs: [only, UUID()]).opened.isEmpty, "断开之后不再跟进")
+        XCTAssertEqual(ws.tabs.count, 1, "标签由调用方关")
+    }
+
+    func testStoreTakeOverIncludesFocusMissingFromTheList() throws {
+        let store = MobileStore()
+        let focus = UUID()
+
+        store.takeOver(macClient(), focus: focus)
+
+        let takeover = try XCTUnwrap(store.remoteTakeover)
+        XCTAssertEqual(takeover.sessionIDs, [focus], "刚开的本机 shell 可能还没出现在列表里")
+        XCTAssertEqual(takeover.focus, focus)
+        XCTAssertEqual(store.connecting?.remote?.sessionID, focus)
+        XCTAssertTrue(store.showWorkspace)
+    }
+
+    func testCancellingTakeoverTearsDownEveryTabItOpened() throws {
+        let store = MobileStore()
+        store.takeOver(macClient(), focus: UUID())
+        let req = try XCTUnwrap(store.connecting)
+        let front = UUID(), other = UUID()
+        req.tabID = front
+        req.companionTabIDs = [other]
+
+        store.cancelConnect()
+
+        XCTAssertEqual(store.teardownTabIDs, [front, other])
+        XCTAssertNil(store.connecting)
+        XCTAssertNil(store.remoteTakeover)
+    }
+
+    // MARK: - 标签与分屏
 
     func testOpenAppendsToFocusedPaneAndActivates() {
         let ws = MobileWorkspace()

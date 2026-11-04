@@ -27,8 +27,6 @@ enum MTab: String, CaseIterable, Identifiable {
 struct MOpenTarget: Equatable {
     let hostID: PersistentIdentifier
     let kind: MConnectKind
-    /// 非 nil：经 Mac 接入它上面的终端，而不是直连主机。
-    var remote: MRemoteSource? = nil
     let token = UUID()
 }
 
@@ -51,6 +49,9 @@ final class MobileStore {
     /// 待工作区消费的打开请求（终端或文件浏览）。从主机列表 / 命令面板「连接」时写入。
     var openTarget: MOpenTarget?
 
+    /// 待工作区消费的接管请求（Mac 面板、新建终端抽屉发起）。
+    var remoteTakeover: MRemoteTakeover?
+
     /// iPad regular 布局下侧栏选中的主机（详情面板）。
     var inspectedHost: PersistentIdentifier?
 
@@ -71,8 +72,8 @@ final class MobileStore {
     /// 受保护连接请求：非空时根视图在所有标签之上呈现全屏「连接中」中转页。
     /// 在选定主机与会话/文件浏览打开之间插入一个稳定等待态，防止误触 / 快速返回打断半开连接。
     var connecting: MConnectRequest?
-    /// 取消时要求工作区移除指定会话标签（控制器已由 store 关闭）。
-    var teardownTabID: UUID?
+    /// 要求工作区关掉并移除这些会话标签（取消连接、断开整台 Mac 时写入）。
+    var teardownTabIDs: Set<UUID> = []
 
     func runCommand(_ cmd: QuickCommand) {
         parallelRun = ParallelRunRequest(commandID: cmd.id, name: cmd.name, command: cmd.command,
@@ -95,14 +96,17 @@ final class MobileStore {
 
     func openTerminal(_ host: ServerProfile) { requestConnect(host, kind: .terminal) }
 
-    /// 接入 Mac 上一个正在运行的终端（远控）。`host` 是本机同步过来的同一台主机，只用来显示与归类。
-    func openRemoteTerminal(_ host: ServerProfile, source: MRemoteSource) {
+    /// 接管一台 Mac：它上面的全部终端各开一个标签，`focus` 放到前台。`focus` 可以是列表还没推到的
+    /// 新终端（刚在 Mac 上开的本机 shell）。
+    func takeOver(_ client: RemoteMacClient, focus: UUID) {
         guard connecting == nil else { return }
-        let req = MConnectRequest(host: host, kind: .terminal, origin: tab)
-        req.remote = source
+        var sessionIDs = client.sessions.map(\.id)
+        if !sessionIDs.contains(focus) { sessionIDs.append(focus) }
+        let req = MConnectRequest(host: client.tabHost(for: focus), kind: .terminal, origin: tab)
+        req.remote = MRemoteSource(client: client, sessionID: focus)
         req.originInWorkspace = showWorkspace
         connecting = req
-        openTarget = MOpenTarget(hostID: host.persistentModelID, kind: .terminal, remote: source)
+        remoteTakeover = MRemoteTakeover(client: client, sessionIDs: sessionIDs, focus: focus)
         showWorkspace = true
     }
     func openSFTP(_ host: ServerProfile) { requestConnect(host, kind: .sftp) }
@@ -115,8 +119,9 @@ final class MobileStore {
         guard let req = connecting else { return }
         req.terminal?.close()
         req.sftp?.close()
-        teardownTabID = req.tabID
+        teardownTabIDs = Set(req.companionTabIDs + [req.tabID].compactMap { $0 })
         openTarget = nil
+        remoteTakeover = nil
         showWorkspace = req.originInWorkspace
         tab = req.origin
         connecting = nil

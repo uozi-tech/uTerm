@@ -9,6 +9,8 @@ import XCTest
 /// 最多持续 3 分钟。模拟器里的 uTermMobile 在主机页「我的 Mac」里就能发现并接入它。
 /// 另设 `UTERM_HARNESS_DESKTOP=1` 时同时提供远程桌面：画面是合成的色块 + 细线（每秒换一张），
 /// 手机发来的输入打印在日志里（不注入真实系统）。
+/// 另设 `UTERM_HARNESS_FOLLOW=1` 时，按 `runFollowScript` 开关终端，给手机验证自动跟进
+///（手机侧用例：`RemoteFollowRealMacTests`）。
 @MainActor
 final class RemoteSimulatorHarnessTests: XCTestCase {
 
@@ -22,7 +24,8 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
         let session = TerminalSession()
         let backend = MockBackend()
         await session.connect(using: backend)
-        registry.register(TerminalSessionEntry(id: UUID(), serverID: serverID, serverName: "联调主机",
+        let firstID = UUID()
+        registry.register(TerminalSessionEntry(id: firstID, serverID: serverID, serverName: "联调主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh · 联调",
                                                connectedAt: Date()), session: session)
         let desktop = environment["UTERM_HARNESS_DESKTOP"] == "1"
@@ -45,6 +48,14 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
         var lastStatus = ""
         var reportedInputs = 0
         var runningSource: SyntheticFrameSource?
+        var followSessions: [TerminalSession] = []
+        defer { followSessions.forEach { $0.dispose() } }
+        let followScript = environment["UTERM_HARNESS_FOLLOW"] != "1" ? nil : Task { @MainActor in
+            await Self.runFollowScript(registry: registry, serverID: serverID, firstID: firstID, first: session) {
+                followSessions.append($0)
+            }
+        }
+        defer { followScript?.cancel() }
         while Date() < deadline {
             if desktop {
                 if let source = fakeMac.latestSource, source !== runningSource, source.isStarted {
@@ -83,5 +94,38 @@ final class RemoteSimulatorHarnessTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(20))
         }
         print("[联调] 结束；被接管过：\(session.remoteController ?? "否")，已信任设备：\(server.trustedPeers.map(\.name))")
+    }
+
+    /// 被接管后：新开一个终端 → 关掉它 → 把终端全关 → 隔一会儿再开一个。
+    private static func runFollowScript(registry: TerminalSessionRegistry, serverID: UUID, firstID: UUID,
+                                        first: TerminalSession, retain: (TerminalSession) -> Void) async {
+        func open(_ title: String) async -> (id: UUID, session: TerminalSession) {
+            let session = TerminalSession()
+            await session.connect(using: MockBackend())
+            let id = UUID()
+            registry.register(TerminalSessionEntry(id: id, serverID: serverID, serverName: "联调主机",
+                                                   windowKind: TerminalWindowKind.workspace, title: title,
+                                                   connectedAt: Date()), session: session)
+            retain(session)
+            print("[联调] 开了终端：\(title)")
+            return (id, session)
+        }
+        func waitUntilControlled(_ session: TerminalSession) async {
+            while session.remoteController == nil, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        await waitUntilControlled(first)
+        try? await Task.sleep(for: .seconds(1))
+        let added = await open("zsh · 新开")
+        await waitUntilControlled(added.session)
+        try? await Task.sleep(for: .seconds(2))
+        registry.unregister(id: added.id)
+        print("[联调] 关了新开的终端")
+        try? await Task.sleep(for: .seconds(2))
+        registry.unregister(id: firstID)
+        print("[联调] 终端全关了")
+        try? await Task.sleep(for: .seconds(6))
+        _ = await open("zsh · 又开")
     }
 }

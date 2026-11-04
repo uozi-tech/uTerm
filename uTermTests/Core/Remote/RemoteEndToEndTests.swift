@@ -116,4 +116,109 @@ final class RemoteEndToEndTests: XCTestCase {
         let exited: Void? = await exitIterator.next()
         XCTAssertNotNil(exited, "会话结束应让后端退出")
     }
+
+    /// 接管整台 Mac：同一条连接上同时接入全部终端，每个都钉成手机的尺寸，画面互不串台。
+    func test_phone_attaches_every_terminal_at_once_over_one_connection() async throws {
+        let registry = TerminalSessionRegistry()
+        var sessions: [(id: UUID, session: TerminalSession, backend: MockBackend)] = []
+        for index in 0..<4 {
+            let session = TerminalSession()
+            let backend = MockBackend()
+            await session.connect(using: backend)
+            let id = UUID()
+            registry.register(TerminalSessionEntry(id: id, serverID: UUID(), serverName: "主机\(index)",
+                                                   windowKind: TerminalWindowKind.workspace, title: "zsh\(index)",
+                                                   connectedAt: Date()), session: session)
+            sessions.append((id, session, backend))
+        }
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false)
+        server.start()
+        defer {
+            server.stop()
+            for entry in sessions { entry.session.dispose() }
+        }
+        _ = await waitUntil { server.port != nil }
+        let port = try XCTUnwrap(server.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !server.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+        let listed = await waitUntil { client.sessions.count == sessions.count }
+        XCTAssertTrue(listed)
+        XCTAssertEqual(client.listedSessionIDs?.count, sessions.count)
+
+        // 同时发起接入，和工作区一次开出全部标签一样。
+        let backends = sessions.map { RemoteTerminalBackend(client: client, sessionID: $0.id) }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for backend in backends {
+                group.addTask {
+                    await backend.resize(cols: 64, rows: 20)
+                    try await backend.connect()
+                }
+            }
+            try await group.waitForAll()
+        }
+        var phones: [Terminal] = []
+        var pumps: [Task<Void, Never>] = []
+        for backend in backends {
+            let phone = Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: 64, rows: 20, scrollback: 200))
+            phones.append(phone)
+            pumps.append(Task { @MainActor in
+                for await chunk in backend.outputStream { phone.feed(byteArray: [UInt8](chunk)) }
+            })
+        }
+        defer { pumps.forEach { $0.cancel() } }
+
+        for entry in sessions {
+            let mac = entry.session.terminalView.getTerminal()
+            XCTAssertEqual(mac.cols, 64)
+            XCTAssertEqual(mac.rows, 20)
+            XCTAssertNotNil(entry.session.remoteController, "每个终端都被接管")
+        }
+        for (index, entry) in sessions.enumerated() {
+            await entry.backend.emitOutput(Data("这是第 \(index) 个终端\r\n".utf8))
+        }
+        for (index, entry) in sessions.enumerated() {
+            let mac = entry.session.terminalView.getTerminal()
+            let mirrored = await waitUntil { self.same(mac, phones[index]) }
+            XCTAssertTrue(mirrored, "第 \(index) 个终端画面不一致")
+        }
+        for backend in backends { await backend.close() }
+        let released = await waitUntil { sessions.allSatisfy { $0.session.remoteController == nil } }
+        XCTAssertTrue(released, "全部断开后 Mac 上的终端都恢复")
+
+        // 断开后列表是「不知道」，不是「Mac 上没有终端」：手机据此判断终端有没有被关。
+        client.disconnect()
+        let forgotten = await waitUntil { client.listedSessionIDs == nil }
+        XCTAssertTrue(forgotten)
+        XCTAssertTrue(client.canAutoReconnect, "只是断线，可以自动连回去")
+    }
+
+    func test_refused_pairing_is_not_retried_automatically() async throws {
+        let server = RemoteHostServer(registry: TerminalSessionRegistry(),
+                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false)
+        server.start()
+        defer { server.stop() }
+        _ = await waitUntil { server.port != nil }
+        let port = try XCTUnwrap(server.port)
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !server.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        XCTAssertFalse(client.canAutoReconnect, "等审批时不重连")
+
+        server.rejectPairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+
+        XCTAssertTrue(client.pairingRefused)
+        XCTAssertFalse(client.canAutoReconnect, "被拒之后再连只会再弹一次审批")
+    }
 }

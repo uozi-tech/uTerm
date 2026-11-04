@@ -89,6 +89,21 @@ struct MPane: Identifiable, Equatable {
     init(id: UUID = UUID()) { self.id = id }
 }
 
+/// 接管 Mac 后要交给工作区屏的变化：`opened` 待建连，`removed` 已摘下、待清理。
+struct RemoteTabChanges {
+    var opened: [TermTab] = []
+    var removed: [MWorkTab] = []
+}
+
+private struct RemoteFollow {
+    let client: RemoteMacClient
+    /// 上次收到的终端列表。
+    var listed: Set<UUID> = []
+    /// 接管时已开标签、但还没在列表里出现过的终端。刚在 Mac 上开的本机 shell 可能排在列表更新之前，
+    /// 不能因为列表里没有就当它关了。
+    var awaitingListing: Set<UUID>
+}
+
 /// 移动端工作区：全部会话标签（终端 / 文件）+ 至多两个分屏格 + 聚焦格。
 ///
 /// 由根视图 `MobileRootView` 持有并注入（高于标签栏 ⇄ 侧栏外壳），size class 翻转、
@@ -102,6 +117,8 @@ final class MobileWorkspace {
 
     private(set) var tabs: [MWorkTab] = []
     private(set) var panes: [MPane]
+    /// 接管中的 Mac，以及它的终端列表对账状态。
+    private var follows: [RemoteFollow] = []
     private(set) var focusedPaneID: UUID
     /// 第一格占分屏方向的比例（拖动分隔条改它）。
     var splitFraction: CGFloat = 0.5
@@ -161,6 +178,78 @@ final class MobileWorkspace {
         tabs.first { $0.terminal?.remote == remote }
     }
 
+    /// 接着这台 Mac 上终端的全部标签。
+    func remoteTabIDs(of client: RemoteMacClient) -> Set<UUID> {
+        Set(terminalTabs.filter { $0.remote?.client === client }.map(\.id))
+    }
+
+    /// 接管一台 Mac：每个终端一个标签，开在聚焦格末尾，`focus` 放到前台。之后它新开的终端由 `follow` 接上。
+    /// 这里只摆标签：`opened` 由调用方建连，`removed` 由调用方清理。
+    func takeOver(_ takeover: MRemoteTakeover) -> RemoteTabChanges {
+        follows.removeAll { $0.client === takeover.client }
+        follows.append(RemoteFollow(client: takeover.client, awaitingListing: Set(takeover.sessionIDs)))
+        let changes = openRemoteTabs(takeover.client, sessionIDs: takeover.sessionIDs, activate: true)
+        if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
+            activate(front.id)
+        }
+        return changes
+    }
+
+    /// 接管中的 Mac。Mac 上的终端全关了也算，之后新开的还要接上；手动断开才结束（`stopFollowing`）。
+    var followedClients: [RemoteMacClient] { follows.map(\.client) }
+
+    func stopFollowing(_ client: RemoteMacClient) {
+        follows.removeAll { $0.client === client }
+    }
+
+    /// Mac 的终端列表更新了，手机上的标签跟着它走：
+    /// - 没见过的终端在后台开标签，不抢前台。在手机上关掉的不算新的，不会再开回来。
+    /// - 列表里出现过、现在没了的终端（在 Mac 上关了、Mac 上的连接断了）关掉标签。之后回来的算新的。
+    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]) -> RemoteTabChanges {
+        guard let index = follows.firstIndex(where: { $0.client === client }) else {
+            return RemoteTabChanges()
+        }
+        let current = Set(sessionIDs)
+        let gone = follows[index].listed.subtracting(current)
+        let fresh = sessionIDs.filter {
+            !follows[index].listed.contains($0) && !follows[index].awaitingListing.contains($0)
+        }
+        follows[index].listed = current
+        follows[index].awaitingListing.subtract(current)
+
+        var changes = RemoteTabChanges()
+        for sessionID in gone {
+            guard let tab = existing(remote: MRemoteSource(client: client, sessionID: sessionID)) else { continue }
+            close(tab.id)
+            changes.removed.append(tab)
+        }
+        let added = openRemoteTabs(client, sessionIDs: fresh, activate: false)
+        changes.opened = added.opened
+        changes.removed += added.removed
+        return changes
+    }
+
+    /// 还接着的标签不动；接入已结束的（被别的设备接管、在 Mac 上断开）换成新标签，不然就是一张死画面。
+    private func openRemoteTabs(_ client: RemoteMacClient, sessionIDs: [UUID], activate: Bool) -> RemoteTabChanges {
+        var changes = RemoteTabChanges()
+        for sessionID in sessionIDs {
+            let source = MRemoteSource(client: client, sessionID: sessionID)
+            if let current = existing(remote: source) {
+                switch current.terminal?.controller.state {
+                case .closed, .failed:
+                    close(current.id)
+                    changes.removed.append(current)
+                default:
+                    continue
+                }
+            }
+            let term = TermTab(host: client.tabHost(for: sessionID), remote: source)
+            open(.terminal(term), activate: activate)
+            changes.opened.append(term)
+        }
+        return changes
+    }
+
     // MARK: - 布局
 
     /// 分屏实际用的方向：偏好放得下就用偏好，放不下换另一个；没偏好时宽够就左右并排。
@@ -185,11 +274,13 @@ final class MobileWorkspace {
 
     // MARK: - 操作
 
-    /// 把新标签放进 `paneID`（缺省聚焦格）末尾，设为前台并聚焦该格。
-    func open(_ tab: MWorkTab, in paneID: UUID? = nil) {
+    /// 把新标签放进 `paneID`（缺省聚焦格）末尾，设为前台并聚焦该格。`activate` 为 false 时留在后台，
+    /// 除非那一格还没有前台标签。
+    func open(_ tab: MWorkTab, in paneID: UUID? = nil, activate: Bool = true) {
         tabs.append(tab)
         let i = panes.firstIndex { $0.id == (paneID ?? focusedPaneID) } ?? 0
         panes[i].tabIDs.append(tab.id)
+        guard activate || panes[i].activeID == nil else { return }
         panes[i].activeID = tab.id
         focusedPaneID = panes[i].id
     }

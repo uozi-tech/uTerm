@@ -1,4 +1,3 @@
-import SwiftData
 import SwiftUI
 
 /// 主机页的「我的 Mac」：同一局域网里开着远控的 Mac。点一台进入 `RemoteMacSheet`。
@@ -59,9 +58,8 @@ struct RemoteMacSection: View {
 struct RemoteMacSheet: View {
     let client: RemoteMacClient
     @Environment(MobileStore.self) private var store
+    @Environment(MobileWorkspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var hosts: [ServerProfile]
-    @State private var missingHost: RemoteSessionInfo?
     @State private var openingShell = false
     @State private var shellError: String?
     @State private var pendingClose: RemoteSessionInfo?
@@ -82,12 +80,6 @@ struct RemoteMacSheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(M.canvas)
         .task { await client.connect() }
-        .alert("这台主机还没同步到本机", isPresented: Binding(get: { missingHost != nil },
-                                                        set: { if !$0 { missingHost = nil } })) {
-            Button("好", role: .cancel) { missingHost = nil }
-        } message: {
-            Text("「\(missingHost?.serverName ?? "")」在 Mac 上有，但这部手机上还没有。等 iCloud 或局域网同步完成后再试。")
-        }
         .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
@@ -184,7 +176,7 @@ struct RemoteMacSheet: View {
                 }
             }
             section("Mac 上的终端",
-                    footer: "接入后终端按这部手机的尺寸运行，Mac 上那个窗格会标出「正在接管」，断开后恢复。") {
+                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签，之后 Mac 上新开或关掉终端，手机上的标签也跟着变，直到断开全部。接管期间它们按这部手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
                 if client.sessions.isEmpty {
                     MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
                 } else {
@@ -192,15 +184,25 @@ struct RemoteMacSheet: View {
                         // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
                         MInsetRow(icon: "term", label: session.title, sub: subtitle(session),
                                   chevron: true, last: true) {
-                            open(session)
+                            takeOver(focus: session.id)
                         }
                         .swipeActions(edge: .leading, allowsFullSwipe: false) { closeAction(session) }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) { closeAction(session) }
                     }
                 }
+                if workspace.followedClients.contains(where: { $0 === client }) {
+                    let taken = workspace.remoteTabIDs(of: client)
+                    MInsetRow(icon: "x", label: "断开全部终端",
+                              sub: taken.isEmpty ? "不再自动接入这台 Mac 新开的终端"
+                                  : "关掉手机上的 \(taken.count) 个标签，Mac 上的终端继续运行",
+                              last: true) {
+                        endTakeover()
+                    }
+                }
             }
             section(nil, footer: nil) {
                 MInsetRow(icon: "x", label: "忘记这台 Mac", danger: true, last: true) {
+                    endTakeover()
                     client.forget()
                     dismiss()
                 }
@@ -247,27 +249,18 @@ struct RemoteMacSheet: View {
         }
     }
 
-    private func open(_ session: RemoteSessionInfo) {
-        guard let host = host(for: session.serverID) else {
-            missingHost = session
-            return
-        }
-        openRemoteTerminal(host: host, sessionID: session.id)
+    private func endTakeover() {
+        workspace.stopFollowing(client)
+        store.teardownTabIDs = workspace.remoteTabIDs(of: client)
     }
 
-    private func openRemoteTerminal(host: ServerProfile, sessionID: UUID) {
+    private func takeOver(focus: UUID) {
         dismiss()
-        let source = MRemoteSource(client: client, sessionID: sessionID)
+        let client = self.client
         // 等面板收起再开，避免连接中页与收起动画叠在一起。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            store.openRemoteTerminal(host, source: source)
+            store.takeOver(client, focus: focus)
         }
-    }
-
-    /// 会话对应的主机：Mac 本机 shell 没有主机记录，用一个代表这台 Mac 的临时主机（见 `localShellHost`）。
-    private func host(for serverID: UUID) -> ServerProfile? {
-        if serverID == RemoteConstants.localShellServerID { return client.localShellHost() }
-        return hosts.first { $0.id == serverID }
     }
 
     private func openLocalShell() async {
@@ -275,7 +268,7 @@ struct RemoteMacSheet: View {
         defer { openingShell = false }
         do {
             let sessionID = try await client.openLocalShell()
-            openRemoteTerminal(host: client.localShellHost(), sessionID: sessionID)
+            takeOver(focus: sessionID)
         } catch {
             shellError = error.localizedDescription
         }
@@ -283,14 +276,21 @@ struct RemoteMacSheet: View {
 }
 
 extension RemoteMacClient {
-    /// 标签要一个 `ServerProfile`（标题、连接中页的名字）；本机 shell 不对应任何主机，造一个**不入库**的
-    /// 临时对象代表这台 Mac。远控标签的传输不读它的连接参数，入库与否只影响「最近连接」这类记账，
-    /// 那些地方已按 `modelContext == nil` 跳过。
-    func localShellHost() -> ServerProfile {
+    /// 远控标签的 `ServerProfile`（标题、连接中页的名字）：**不入库**的临时对象，只描述 Mac 上那个终端。
+    /// 传输不读它的连接参数，所以不要求这台服务器已同步到手机；Mac 本机 shell 没有服务器，用这台 Mac 代表。
+    /// 「最近连接」这类记账已按 `modelContext == nil` 跳过。
+    func tabHost(for sessionID: UUID) -> ServerProfile {
         let host = ServerProfile()
-        host.id = RemoteConstants.localShellServerID
-        host.name = macName
-        host.host = "本机"
+        if let session = sessions.first(where: { $0.id == sessionID }),
+           session.serverID != RemoteConstants.localShellServerID {
+            host.id = session.serverID
+            host.name = session.title
+            host.host = session.serverName
+        } else {
+            host.id = RemoteConstants.localShellServerID
+            host.name = macName
+            host.host = "本机"
+        }
         return host
     }
 }
@@ -298,7 +298,7 @@ extension RemoteMacClient {
 /// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
 struct MacTerminalRows: View {
     let directory: RemoteMacDirectory
-    let onOpen: (ServerProfile, MRemoteSource) -> Void
+    let onOpen: (RemoteMacClient, UUID) -> Void
 
     @Environment(\.mAccent) private var accent
     @State private var openingMac: String?
@@ -352,8 +352,7 @@ struct MacTerminalRows: View {
         Task {
             defer { openingMac = nil }
             do {
-                let sessionID = try await client.openLocalShell()
-                onOpen(client.localShellHost(), MRemoteSource(client: client, sessionID: sessionID))
+                onOpen(client, try await client.openLocalShell())
             } catch {
                 shellError = error.localizedDescription
             }

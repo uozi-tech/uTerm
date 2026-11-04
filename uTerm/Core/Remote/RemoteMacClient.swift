@@ -98,6 +98,11 @@ final class RemoteMacClient: Identifiable {
     nonisolated let macName: String
     private(set) var state: State = .idle
     private(set) var sessions: [RemoteSessionInfo] = []
+    /// 这条连接上最新收到的终端列表；还没收到（刚连上、断开了）时为 nil。那时 `sessions` 也是空的，
+    /// 但不代表 Mac 上没有终端。
+    private(set) var listedSessionIDs: [UUID]?
+    /// Mac 上的人拒绝了配对（或没有确认）。再连只会再弹一次审批，自动重连到此为止。
+    private(set) var pairingRefused = false
     /// 握手后才知道的 Mac 设备 ID（「忘记这台 Mac」要用）。
     private(set) var macDeviceID: UUID?
     /// 这台 Mac 报的可选能力（握手后才有；老版本 Mac 为空）。
@@ -131,6 +136,15 @@ final class RemoteMacClient: Identifiable {
 
     func updateEndpoint(_ endpoint: NWEndpoint) {
         self.endpoint = endpoint
+    }
+
+    /// 连接断了、可以不打扰任何人地自动连回去。
+    var canAutoReconnect: Bool {
+        switch state {
+        case .idle: return true
+        case .failed: return !pairingRefused
+        case .connecting, .awaitingApproval, .connected: return false
+        }
     }
 
     // MARK: - 连接与配对
@@ -210,11 +224,13 @@ final class RemoteMacClient: Identifiable {
                 try? identity.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName,
                                                publicKey: peer.staticKey, pairedAt: Date()))
             }
+            pairingRefused = false
             state = .connected
             resumeOutcome()
         case .awaitingApproval:
             state = .awaitingApproval(pendingCode)
         case .rejected:
+            pairingRefused = true
             state = .failed(RemoteProtocolError.pairingRejected.localizedDescription)
             resumeOutcome()
         }
@@ -239,9 +255,11 @@ final class RemoteMacClient: Identifiable {
         guard closedLink === link else { return }
         link = nil
         sessions = []
+        listedSessionIDs = nil
         if state == .connected || state == .connecting {
             state = error.map { .failed($0.localizedDescription) } ?? .idle
         } else if case .awaitingApproval = state {
+            pairingRefused = true
             state = .failed(error?.localizedDescription ?? "Mac 没有确认配对")
         }
         resumeOutcome()
@@ -293,6 +311,7 @@ final class RemoteMacClient: Identifiable {
         case .sessions:
             if let list = try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload) {
                 sessions = list
+                listedSessionIDs = list.map(\.id)
             }
         case .attached:
             guard let result = try? RemoteJSON.decode(RemoteAttachResult.self, from: message.payload),

@@ -32,6 +32,8 @@ final class MConnectRequest: Identifiable {
     var sftp: MobileSFTPController?
     /// 工作区会话标签 id：取消时定位要移除的标签。
     var tabID: UUID?
+    /// 接管 Mac 时跟 `tabID` 一起新开的其余标签：取消时一并关掉，不留没人看的接管。
+    var companionTabIDs: [UUID] = []
     /// 发起时工作区是否已展开（工作区里「+」新建）：取消后回到工作区，而不是收回主机列表。
     var originInWorkspace = false
     /// 强制新开会话（终端「+」新建：即便已有同主机会话也再开一个）。

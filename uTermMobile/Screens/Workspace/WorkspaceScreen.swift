@@ -71,7 +71,13 @@ struct WorkspaceScreen: View {
             }
         }
         .onChange(of: store.openTarget) { _, t in consume(t) }
-        .onAppear { consume(store.openTarget) }
+        .onChange(of: store.remoteTakeover) { _, t in consume(t) }
+        .onChange(of: followedSessionIDs) { _, _ in followRemoteSessions() }
+        .task(id: workspace.followedClients.map(ObjectIdentifier.init)) { await keepFollowedMacsConnected() }
+        .onAppear {
+            consume(store.openTarget)
+            consume(store.remoteTakeover)
+        }
         .onChange(of: workspace.activeTab?.id) { _, _ in syncKeyboard() }
         .onChange(of: workspace.focusedPaneID) { _, _ in syncKeyboard() }
         // 收起回主机列表（会话不断）时收起键盘，否则键盘会残留在标签页之上；展开时重新聚焦。
@@ -80,17 +86,22 @@ struct WorkspaceScreen: View {
         .onChange(of: store.connecting?.id) { _, _ in syncKeyboard() }
         .onChange(of: newKind) { _, _ in syncKeyboard() }
         .onChange(of: awaitingConnect) { _, _ in syncKeyboard() }
-        // 连接中页取消：移除对应会话标签（控制器已由 store 关闭）。
-        .onChange(of: store.teardownTabID) { _, id in
-            guard let id else { return }
-            if let removed = workspace.close(id) { dispose(removed) }
+        // 连接中页取消、断开整台 Mac：关掉并移除这些标签。
+        .onChange(of: store.teardownTabIDs) { _, ids in
+            guard !ids.isEmpty else { return }
+            for id in ids {
+                guard let removed = workspace.close(id) else { continue }
+                removed.shutdown()
+                dispose(removed)
+                stopFollowingIfLastTab(removed)
+            }
             if workspace.isEmpty { store.showWorkspace = false }
-            store.teardownTabID = nil
+            store.teardownTabIDs = []
         }
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
-            // 只看库里的主机：Mac 本机 shell 的标签挂的是不入库的临时主机，本来就不在列表里，不是被删了。
+            // 只看库里的主机：远控标签挂的是不入库的临时主机，本来就不在列表里，不是被删了。
             let orphaned = Set(workspace.tabs.filter { $0.host.modelContext != nil }.map { $0.host.persistentModelID })
                 .subtracting(live)
             guard !orphaned.isEmpty else { return }
@@ -113,30 +124,12 @@ struct WorkspaceScreen: View {
     private func consume(_ target: MOpenTarget?) {
         guard let target else { return }
         store.openTarget = nil
-        // 远控标签的主机可能不在库里（Mac 本机 shell 用的是不入库的临时主机，见 `RemoteMacSheet`），
-        // 那时用连接中页请求自带的那个对象。
-        let unmanagedRemoteHost = target.remote == nil ? nil
-            : store.connecting.map(\.host).flatMap { $0.persistentModelID == target.hostID ? $0 : nil }
-        guard let host = hosts.first(where: { $0.persistentModelID == target.hostID }) ?? unmanagedRemoteHost,
+        guard let host = hosts.first(where: { $0.persistentModelID == target.hostID }),
               !(target.kind == .terminal && host.sftpOnly) else {
             // 找不到主机 / 仅 SFTP 却要终端：撤下正在等待绑定的连接中页，避免空转卡死。
             if let req = store.connecting, req.tabID == nil, req.host.persistentModelID == target.hostID {
                 store.cancelConnect()
             }
-            return
-        }
-        if let remote = target.remote {
-            // 远控：已经接入了 Mac 上这个终端就切过去，否则新开一个远控标签。
-            if let existing = workspace.existing(remote: remote) {
-                workspace.activate(existing.id)
-                bindConnecting(existing)
-                return
-            }
-            let term = TermTab(host: host, remote: remote)
-            term.controller.start(profile: host, container: context.container, relay: relay)
-            let tab = MWorkTab.terminal(term)
-            workspace.open(tab)
-            bindConnecting(tab)
             return
         }
         if !(store.connecting?.allowDuplicate ?? false),
@@ -158,6 +151,60 @@ struct WorkspaceScreen: View {
         }
         workspace.open(tab)
         bindConnecting(tab)
+    }
+
+    /// 接管 Mac：把它上面的全部终端开成标签并建连，连接中页跟踪放到前台的那个。
+    private func consume(_ takeover: MRemoteTakeover?) {
+        guard let takeover else { return }
+        store.remoteTakeover = nil
+        let changes = workspace.takeOver(takeover)
+        apply(changes)
+        guard let req = store.connecting else { return }
+        let focus = MRemoteSource(client: takeover.client, sessionID: takeover.focus)
+        let front = workspace.existing(remote: focus)
+        req.tabID = front?.id
+        req.terminal = front?.terminal?.controller
+        req.companionTabIDs = changes.opened.map(\.id).filter { $0 != front?.id }
+    }
+
+    /// 接管中的 Mac 的终端列表。nil = 这条连接上还没收到，不能当成「终端都没了」。
+    private var followedSessionIDs: [[UUID]?] {
+        workspace.followedClients.map(\.listedSessionIDs)
+    }
+
+    /// Mac 上开关了终端：手机上的标签跟着开关。
+    private func followRemoteSessions() {
+        for client in workspace.followedClients {
+            guard let sessionIDs = client.listedSessionIDs else { continue }
+            apply(workspace.follow(client, sessionIDs: sessionIDs))
+        }
+    }
+
+    /// 终端全关时没有标签，也就没有后端负责重连：由这里连回去，才收得到之后新开的终端。
+    private func keepFollowedMacsConnected() async {
+        guard !workspace.followedClients.isEmpty else { return }
+        while !Task.isCancelled {
+            for client in workspace.followedClients where client.canAutoReconnect {
+                await client.connect()
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
+    /// 用户亲手关掉这台 Mac 的最后一个标签，等于断开全部，不再跟进。Mac 那边关光的不走这里。
+    private func stopFollowingIfLastTab(_ tab: MWorkTab) {
+        guard let client = tab.terminal?.remote?.client,
+              workspace.remoteTabIDs(of: client).isEmpty else { return }
+        workspace.stopFollowing(client)
+    }
+
+    private func apply(_ changes: RemoteTabChanges) {
+        changes.removed.forEach(finishClosing)
+        for term in changes.opened {
+            term.controller.start(profile: term.host, container: context.container, relay: relay)
+        }
+        // 最后一个会话没了就没有可看的了：收回主机列表。
+        if workspace.isEmpty { store.showWorkspace = false }
     }
 
     /// 若此次开标签由连接中页发起，把控制器回填给请求，供连接中页观察真实状态并推进阶段。
@@ -197,14 +244,20 @@ struct WorkspaceScreen: View {
 
     private func closeTab(_ id: UUID) {
         guard let removed = workspace.close(id) else { return }
-        removed.shutdown()
+        finishClosing(removed)
+        stopFollowingIfLastTab(removed)
+        // 关掉最后一个会话就没有可看的了：收回主机列表。
+        if workspace.isEmpty { store.showWorkspace = false }
+    }
+
+    /// 标签已从工作区摘下：断连接，撤掉跟它绑定的连接中页，清理视图侧。
+    private func finishClosing(_ tab: MWorkTab) {
+        tab.shutdown()
         // 分屏时连接中页只盖这一格，标签条仍可点：用户直接关掉正在建连的标签时，
         // 那张连接中页随标签消失、再没人调 onFinish。不在这里撤掉请求的话，
         // `requestConnect` 会吞掉之后所有连接、`keyboardOwner` 恒为 nil（谁都打不了字）。
-        if let req = store.connecting, req.tabID == id { store.connecting = nil }
-        dispose(removed)
-        // 关掉最后一个会话就没有可看的了：收回主机列表。
-        if workspace.isEmpty { store.showWorkspace = false }
+        if let req = store.connecting, req.tabID == tab.id { store.connecting = nil }
+        dispose(tab)
     }
 
     /// 关闭后的视图侧清理（连接已关）：收键盘、停 Agent 在途任务。
@@ -488,12 +541,12 @@ struct WorkspaceScreen: View {
             ScrollView {
                 MCardList {
                     if let macs {
-                        MacTerminalRows(directory: macs) { host, source in
+                        MacTerminalRows(directory: macs) { client, sessionID in
                             awaitingConnect = true
                             newKind = nil
                             // 同主机行：等抽屉收起再盖连接中页。
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                store.openRemoteTerminal(host, source: source)
+                                store.takeOver(client, focus: sessionID)
                                 awaitingConnect = false
                             }
                         }
