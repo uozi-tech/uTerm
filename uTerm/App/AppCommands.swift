@@ -11,6 +11,11 @@ struct NewWelcomeWindowCommands: Commands {
                 openWindow(id: "welcome")
             }
             .keyboardShortcut("n", modifiers: .command)
+
+            Button("新建本机终端") {
+                openWindow.newLocalShell()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
         }
     }
 }

@@ -96,4 +96,35 @@ final class LocalShellWindowModelTests: XCTestCase {
         XCTAssertEqual(title(third), "\(name) 3", "关别的标签也不改名")
         XCTAssertEqual(title(model.addTab()), "\(name) 2", "空出来的序号复用")
     }
+
+    // MARK: - 新建本机终端的路由
+
+    func test_new_shell_opens_a_window_when_no_local_shell_window_exists() {
+        var opened: [LocalShellWindowID] = []
+
+        let paneID = LocalShellWindowRouter.shared.openShell { opened.append($0) }
+
+        XCTAssertEqual(opened.map(\.firstPaneID), [paneID], "新窗口的第一个标签要用返回的会话 id")
+    }
+
+    func test_new_shell_joins_the_most_recently_active_window_instead_of_opening_another() {
+        let router = LocalShellWindowRouter.shared
+        let older = makeModel()
+        let newer = makeModel()
+        let olderWindow = UUID()
+        let newerWindow = UUID()
+        router.register(windowID: olderWindow, window: nil, model: older)
+        router.register(windowID: newerWindow, window: nil, model: newer)
+        defer {
+            router.unregister(windowID: olderWindow)
+            router.unregister(windowID: newerWindow)
+        }
+        router.markActive(windowID: olderWindow)
+
+        let paneID = router.openShell { _ in XCTFail("已有本机终端窗口时不该再开窗口") }
+
+        XCTAssertEqual(older.active?.id, paneID)
+        XCTAssertTrue(newer.panes.isEmpty)
+        XCTAssertEqual(started, [paneID])
+    }
 }

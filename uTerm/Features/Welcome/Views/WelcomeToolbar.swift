@@ -3,7 +3,7 @@ import UDesignKit
 import SwiftUI
 import AppKit
 
-/// Welcome 顶部 toolbar：左搜索框（设计稿 boxed 输入 + ⌘K 芯片）+ 右「密钥」/「新建」按钮。
+/// Welcome 顶部 toolbar：左搜索框（设计稿 boxed 输入 + ⌘K 芯片）+ 右「密钥」/「本机终端」/「新建」按钮。
 ///
 /// 几何对齐设计稿 `Toolbar`（分区方案 v3）：高 48、左 12 / 右 8 内边距、子项间距 10；
 /// 坐在窗口画布上，无底色、无底部分隔线。
@@ -12,6 +12,7 @@ import AppKit
 struct WelcomeToolbar: View {
     @Environment(\.openWindow) private var openWindow
     @Binding var query: String
+    let onNewLocalShell: () -> Void
     let onNewServer: () -> Void
 
     var body: some View {
@@ -20,6 +21,8 @@ struct WelcomeToolbar: View {
             UDButton(title: "密钥", style: .secondary, systemImage: "key") {
                 openWindow(id: "keys")
             }
+            UDButton(title: "本机终端", style: .secondary, systemImage: "terminal", action: onNewLocalShell)
+                .help("新建本机终端（⇧⌘N）")
             UDButton(title: "新建", style: .primary, systemImage: "plus", action: onNewServer)
         }
         .padding(.leading, 12)

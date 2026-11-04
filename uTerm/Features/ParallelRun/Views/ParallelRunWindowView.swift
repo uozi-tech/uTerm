@@ -45,7 +45,7 @@ struct ParallelRunWindowView: View {
     }
 
     private var chromeTitle: String {
-        "并行执行 — \(command?.name ?? "")"
+        ServerChromeTitle.parallelRunWindowTitle(commandName: command?.name)
     }
 
     @ViewBuilder

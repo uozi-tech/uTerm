@@ -10,7 +10,57 @@ enum ServerChromeTitle {
     }
 
     nonisolated static func sftpWindowTitle(serverName: String, groupName: String?) -> String {
-        "SFTP — \(serverTitle(serverName: serverName, groupName: groupName))"
+        windowTitle(serverTitle(serverName: serverName, groupName: groupName), kind: "SFTP")
+    }
+
+    nonisolated static func terminalWindowTitle(serverName: String, groupName: String?) -> String {
+        windowTitle(serverTitle(serverName: serverName, groupName: groupName), kind: "终端")
+    }
+
+    nonisolated static func portForwardWindowTitle(serverName: String, groupName: String?) -> String {
+        windowTitle(serverTitle(serverName: serverName, groupName: groupName), kind: "端口转发")
+    }
+
+    nonisolated static func parallelRunWindowTitle(commandName: String?) -> String {
+        windowTitle(commandName ?? "", kind: "并行执行")
+    }
+
+    nonisolated static func localShellWindowTitle(tabTitle: String?) -> String {
+        windowTitle(tabTitle ?? "", kind: "本机终端")
+    }
+
+    /// Dock 菜单、「窗口」菜单和调度中心列出的窗口标题：内容在前、窗口类型在后，
+    /// 同一台服务器开多个窗口时也分得清。没有内容时只显示类型。
+    private nonisolated static func windowTitle(_ subject: String, kind: String) -> String {
+        subject.isEmpty ? kind : "\(subject) — \(kind)"
+    }
+}
+
+/// 只写窗口标题，给会随内容变化的标题用。不走 `WorkspaceWindowChrome`：它每次更新都要
+/// 重排红绿灯、遍历视图树去玻璃，跟不上 shell 标题的变化频率。
+struct WindowTitleBinding: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> NSView { TitleView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? TitleView else { return }
+        view.title = title
+        view.apply()
+    }
+
+    final class TitleView: NSView {
+        var title = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        func apply() {
+            guard let window, !title.isEmpty, window.title != title else { return }
+            window.title = title
+        }
     }
 }
 
@@ -233,7 +283,6 @@ struct WindowDragHandle: NSViewRepresentable {
 
     final class DragView: NSView {
         var fill: NSColor = WS.panelNSColor
-
         override func mouseDown(with event: NSEvent) {
             guard let window else { return }
             // 双击标题栏遵循系统「双击标题栏时」偏好（最小化 / 缩放 / 不操作）。
@@ -263,6 +312,7 @@ struct WindowDragHandle: NSViewRepresentable {
 /// 已无系统 toolbar / NavigationSplitView，理论上不存在系统材质；仍保留一次
 /// `NSVisualEffectView` 去玻璃遍历做兜底。
 struct WorkspaceWindowChrome: NSViewRepresentable {
+    /// 写进 `NSWindow.title`；传空串表示标题另有来源（见 `WindowTitleBinding`）。
     let serverName: String
     /// 窗口钉色。旧分区窗口 = `UD.bg`（默认）；分区方案 v3 的窗口传 `WS.canvasNSColor`，
     /// 与 SwiftUI 根视图的 `UD.pageBg` 同值。

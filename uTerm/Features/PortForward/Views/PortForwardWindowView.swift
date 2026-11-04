@@ -69,7 +69,9 @@ struct PortForwardWindowView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
         .background(WorkspaceWindowChrome(
-            serverName: "端口转发 — \(server.name.isEmpty ? server.host : server.name)"))
+            serverName: ServerChromeTitle.portForwardWindowTitle(
+                serverName: server.name.isEmpty ? server.host : server.name,
+                groupName: server.group)))
         .hostKeySheet(hostKeyRelay)
         .task(id: windowID) {
             // v1 autostart 触发点（spec §6）：打开窗口即建立专用连接并拉起所有

@@ -93,6 +93,13 @@ enum LaunchForwardingBootstrap {
 
 @MainActor
 final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
+    /// 开窗入口要从 Scene 环境取，由 `uTermApp` 装好后注入；此前 Dock 菜单没有自定义项。
+    var dockMenu: DockMenuController?
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        dockMenu?.makeMenu()
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         if BackgroundLaunchMode.shouldStartHidden {
             NSApp.setActivationPolicy(.accessory)

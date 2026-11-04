@@ -18,7 +18,7 @@ final class WelcomeWindowLayoutTests: XCTestCase {
     /// 第一次打开、还没有主机时走空态，这是每个新用户看到的第一屏。
     func testEmptyStateFitsMinimumWindow() {
         let chrome = height(of: WelcomeTitleBar())
-            + height(of: WelcomeToolbar(query: .constant(""), onNewServer: {}))
+            + height(of: WelcomeToolbar(query: .constant(""), onNewLocalShell: {}, onNewServer: {}))
         let empty = height(of: EmptyServersState(onNewServer: {}))
 
         XCTAssertLessThanOrEqual(chrome + empty, minimumWindowHeight,
