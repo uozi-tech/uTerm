@@ -332,6 +332,21 @@ nonisolated struct RemoteDesktopViewport: Equatable {
         clamp()
     }
 
+    /// 把归一化点收进可见区，留的边距和 `ensureVisible` 一样，之后移动光标画面才不会跳。
+    /// 显示器的边已经露出来的那一侧不留边距：光标本来就能走到那里。
+    func keepingVisible(_ point: CGPoint, margin: CGFloat) -> CGPoint {
+        let frame = contentFrame
+        func axis(_ value: CGFloat, origin: CGFloat, length: CGFloat, view: CGFloat) -> CGFloat {
+            guard length > view else { return value }
+            let inset = min(margin, view / 2)
+            let low = origin < 0 ? (inset - origin) / length : 0
+            let high = origin + length > view ? (view - inset - origin) / length : 1
+            return min(high, max(low, value))
+        }
+        return CGPoint(x: axis(point.x, origin: frame.minX, length: frame.width, view: viewSize.width),
+                       y: axis(point.y, origin: frame.minY, length: frame.height, view: viewSize.height))
+    }
+
     /// 内容比视图大的方向不让拖出边界，比视图小的方向居中。
     mutating func clamp() {
         let size = CGSize(width: contentSize.width * scale, height: contentSize.height * scale)
@@ -361,9 +376,23 @@ nonisolated enum RemoteTrackpad {
         return CGPoint(x: min(1, max(0, pointer.x + dx)), y: min(1, max(0, pointer.y + dy)))
     }
 
-    /// 加速曲线：≤150 点/秒 不加速，之后线性增长，最大 2.5 倍。
+    /// 指针增益：≤40 点/秒 减到一半（精确点中小目标），到 150 点/秒 回到 1，之后线性增长，最大 2.5 倍。
     static func acceleration(speed: CGFloat) -> CGFloat {
         let v = max(0, speed.isFinite ? speed : 0)
-        return min(2.5, 1 + max(0, v - 150) / 800)
+        if v < 150 { return 0.5 + 0.5 * max(0, v - 40) / 110 }
+        return min(2.5, 1 + (v - 150) / 800)
+    }
+
+    /// 拖拽时手指停在视图边缘：光标继续朝这条边走的速度（视图点/秒），越贴边越快。不在边缘时为零。
+    static func edgeVelocity(at location: CGPoint, in viewSize: CGSize, zone: CGFloat = 32,
+                             maxSpeed: CGFloat = 400) -> CGSize {
+        func axis(_ value: CGFloat, length: CGFloat) -> CGFloat {
+            guard length > zone * 2 else { return 0 }
+            if value < zone { return -maxSpeed * (zone - value) / zone }
+            if value > length - zone { return maxSpeed * (value - (length - zone)) / zone }
+            return 0
+        }
+        return CGSize(width: axis(location.x, length: viewSize.width),
+                      height: axis(location.y, length: viewSize.height))
     }
 }

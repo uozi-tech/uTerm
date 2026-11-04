@@ -57,10 +57,9 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
 /// - 光标：Mac 不画光标（采集时 `showsCursor = false`），手机本地画。触控板模式下光标完全由本地预测，
 ///   手指一动光标就动，不等 Mac 回画面；手指离开一会儿后才采用 Mac 报回的位置（Mac 上有人动了鼠标）。
 /// - 指针移动按屏幕刷新合并：一帧只发最新位置。
-/// - 手势：单指移动指针、单击点按（连点自己数 clickCount）、双指单击右键、双指拖动滚动（松手带惯性）、
-///   长按后拖拽（按住左键）、捏合缩放（捏合时双指拖动改为平移画面）。
+/// - 手势：触摸直接交给 `RemoteTrackpadGesture` 判定，这里只执行结果（判定规则见那边的注释）。
 @MainActor
-final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
+final class RemoteDesktopCanvasView: UIView {
     private let session: RemoteDesktopSession
     private let keys: RemoteDesktopKeyState
     private let displayLayer = AVSampleBufferDisplayLayer()
@@ -69,16 +68,21 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
     var fitToken = 0
     var onKeyboardDismissed: (() -> Void)?
 
+    /// 放大后光标离画面边缘至少留这么多（视图点）。
+    private static let pointerMargin: CGFloat = 48
+
     private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero)
     /// 指针（显示器归一化坐标）。
     private var pointer = CGPoint(x: 0.5, y: 0.5)
     private var lastSentPointer: CGPoint?
     private var lastLocalInput: CFTimeInterval = 0
     private var displayLink: CADisplayLink?
+    private var gesture = RemoteTrackpadGesture()
     private var dragging = false
-    private var dragAnchor: CGPoint = .zero
+    private var dragLocation: CGPoint?
+    /// 拖拽离开过边缘区才开始自动走：从边缘起手的拖拽不该一按下光标就自己跑。
+    private var dragEdgeArmed = false
     private var lastClick: (time: CFTimeInterval, point: CGPoint, count: UInt8)?
-    private var pinching = false
     private var scrolling = false
     private var momentum: CGPoint = .zero
     private var momentumActive = false
@@ -110,7 +114,6 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
-        installGestures()
         attachReceiver()
     }
 
@@ -118,6 +121,8 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func teardown() {
+        apply(gesture.cancel())
+        stopMomentum()
         displayLink?.invalidate()
         displayLink = nil
         session.receiver.setHandlers(onImage: nil, onCursor: nil)
@@ -221,12 +226,15 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
     }
 
     fileprivate func tick(_ link: CADisplayLink) {
-        if momentumActive { stepMomentum(duration: link.targetTimestamp - link.timestamp) }
+        apply(gesture.tick(at: link.timestamp))
+        let duration = link.targetTimestamp - link.timestamp
+        if momentumActive { stepMomentum(duration: duration) }
+        let edgeMoving = stepDragEdge(duration: duration)
         if lastSentPointer != pointer, session.canControl {
             lastSentPointer = pointer
             session.send(.move(x: Float(pointer.x), y: Float(pointer.y)))
         }
-        if !momentumActive && lastSentPointer == pointer { link.isPaused = true }
+        if !momentumActive && !edgeMoving && !gesture.needsTick && lastSentPointer == pointer { link.isPaused = true }
     }
 
     /// `CADisplayLink` 强持有 target：用一个弱引用的中转，画布才能正常释放。
@@ -251,78 +259,103 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - 手势
 
-    private func installGestures() {
-        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        longPress.minimumPressDuration = 0.35
-        longPress.allowableMovement = 10
-        addGestureRecognizer(longPress)
-
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        pan.require(toFail: longPress)
-        addGestureRecognizer(pan)
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        addGestureRecognizer(tap)
-
-        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap(_:)))
-        twoFingerTap.numberOfTouchesRequired = 2
-        addGestureRecognizer(twoFingerTap)
-
-        let scroll = UIPanGestureRecognizer(target: self, action: #selector(handleScroll(_:)))
-        scroll.minimumNumberOfTouches = 2
-        scroll.maximumNumberOfTouches = 2
-        scroll.delegate = self
-        addGestureRecognizer(scroll)
-
-        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
-        pinch.delegate = self
-        addGestureRecognizer(pinch)
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // 手指一碰到就停住惯性，和 Mac 触控板一样；这一下不算点击。
+        if momentumActive {
+            stopMomentum()
+            gesture.suppressNextTap()
+        }
+        feedTouches(event, at: touches.first?.timestamp)
+        wake()
     }
 
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        // 双指拖动（滚动）与捏合同时识别：捏合幅度够大才切成缩放 / 平移。
-        (gestureRecognizer is UIPinchGestureRecognizer && other is UIPanGestureRecognizer)
-            || (gestureRecognizer is UIPanGestureRecognizer && other is UIPinchGestureRecognizer)
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        feedTouches(event, at: touches.first?.timestamp)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        feedTouches(event, at: touches.first?.timestamp)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        noteLocalInput()
+        apply(gesture.cancel())
+    }
+
+    private func feedTouches(_ event: UIEvent?, at timestamp: TimeInterval?) {
+        noteLocalInput()
+        let active = (event?.touches(for: self) ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
+        let touches = active.map {
+            RemoteTrackpadTouch(id: Int(bitPattern: ObjectIdentifier($0)), location: $0.location(in: self))
+        }
+        apply(gesture.update(touches, at: timestamp ?? CACurrentMediaTime()))
+    }
+
+    private func apply(_ actions: [RemoteTrackpadAction]) {
+        for action in actions {
+            apply(action)
+        }
+    }
+
+    private func apply(_ action: RemoteTrackpadAction) {
+        switch action {
+        case .movePointer(let delta, let speed):
+            moveOrPan(by: delta, speed: speed)
+        case .click(let button):
+            click(button)
+        case .dragBegan:
+            beginDrag()
+        case .dragMoved(let delta, let speed, let location):
+            dragLocation = location
+            moveOrPan(by: delta, speed: speed)
+        case .dragEnded:
+            endDrag()
+        case .scrollBegan:
+            beginScroll()
+        case .scrollMoved(let delta):
+            moveScroll(by: delta)
+        case .scrollEnded(let velocity):
+            finishScroll(velocity: velocity)
+        case .zoomed(let factor, let anchor):
+            viewport.zoom(by: factor, anchor: anchor)
+            keepPointerInView()
+            layoutContent()
+        case .panned(let delta):
+            viewport.pan(by: delta)
+            keepPointerInView()
+            layoutContent()
+        }
     }
 
     private func noteLocalInput() {
         lastLocalInput = CACurrentMediaTime()
-        momentumActive = false
     }
 
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        noteLocalInput()
-        let delta = gesture.translation(in: self)
-        gesture.setTranslation(.zero, in: self)
+    private func moveOrPan(by delta: CGSize, speed: CGFloat) {
         guard session.canControl else {
             // 只能看：单指拖动用来平移放大后的画面（指针跟着 Mac 报回的位置走）。
-            viewport.pan(by: CGSize(width: delta.x, height: delta.y))
+            viewport.pan(by: delta)
             layoutContent()
             return
         }
-        let velocity = gesture.velocity(in: self)
-        movePointer(by: CGSize(width: delta.x, height: delta.y), speed: hypot(velocity.x, velocity.y))
+        movePointer(by: delta, speed: speed)
+    }
+
+    /// 捏合把光标留在了画面外时，让它跟着留在画面边上：否则下一次移动或点击都发生在看不见的地方，
+    /// 画面还会被拽回光标那边，刚放大的位置就没了。
+    private func keepPointerInView() {
+        guard session.canControl, macCursorVisible else { return }
+        pointer = viewport.keepingVisible(pointer, margin: Self.pointerMargin)
+        if lastSentPointer != pointer { wake() }
     }
 
     private func movePointer(by delta: CGSize, speed: CGFloat) {
         guard delta != .zero else { return }
         pointer = RemoteTrackpad.advance(pointer, by: delta, speed: speed, viewport: viewport)
-        viewport.ensureVisible(pointer, margin: 48)
+        viewport.ensureVisible(pointer, margin: Self.pointerMargin)
         macCursorVisible = true
         layoutContent()
         wake()
-    }
-
-    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        noteLocalInput()
-        click(.left)
-    }
-
-    @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
-        noteLocalInput()
-        click(.right)
     }
 
     /// 点一下 = 按下 + 抬起。连点（0.35 s 内、位置几乎不动）自己数 clickCount，Mac 才认得出双击 / 三击，
@@ -344,73 +377,66 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.5)
     }
 
-    /// 长按：按住左键，之后手指移动就是拖拽（选文字、拖窗口），抬手松开。
-    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-        noteLocalInput()
-        let location = gesture.location(in: self)
-        switch gesture.state {
-        case .began:
-            guard session.canControl else { return }
-            flushPointer()
-            dragging = true
-            dragAnchor = location
-            session.send(.button(.left, down: true, clickCount: 1, x: Float(pointer.x), y: Float(pointer.y),
-                                 modifiers: keys.modifiers))
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        case .changed:
-            guard dragging else { return }
-            let delta = CGSize(width: location.x - dragAnchor.x, height: location.y - dragAnchor.y)
-            dragAnchor = location
-            movePointer(by: delta, speed: 0)
-        case .ended, .cancelled, .failed:
-            guard dragging else { return }
-            dragging = false
-            flushPointer()
-            session.send(.button(.left, down: false, clickCount: 1, x: Float(pointer.x), y: Float(pointer.y),
-                                 modifiers: keys.consume()))
-        default:
-            break
+    /// 按住左键，之后手指移动就是拖拽（选文字、拖窗口），抬手松开。
+    private func beginDrag() {
+        guard session.canControl else { return }
+        flushPointer()
+        dragging = true
+        dragLocation = nil
+        dragEdgeArmed = false
+        session.send(.button(.left, down: true, clickCount: 1, x: Float(pointer.x), y: Float(pointer.y),
+                             modifiers: keys.modifiers))
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    private func endDrag() {
+        guard dragging else { return }
+        dragging = false
+        dragLocation = nil
+        flushPointer()
+        session.send(.button(.left, down: false, clickCount: 1, x: Float(pointer.x), y: Float(pointer.y),
+                             modifiers: keys.consume()))
+    }
+
+    /// 手指停在边缘时光标继续走，放大后才能拖到屏幕外的位置。返回这一帧有没有在走。
+    private func stepDragEdge(duration: CFTimeInterval) -> Bool {
+        guard dragging, let dragLocation else { return false }
+        let velocity = RemoteTrackpad.edgeVelocity(at: dragLocation, in: bounds.size)
+        if velocity == .zero {
+            dragEdgeArmed = true
+            return false
         }
+        guard dragEdgeArmed else { return false }
+        let dt = CGFloat(max(1.0 / 240, min(1.0 / 30, duration)))
+        // 150 点/秒是增益为 1 的速度：自动走的距离不再被慢速减半或加速放大。
+        movePointer(by: CGSize(width: velocity.width * dt, height: velocity.height * dt), speed: 150)
+        return true
     }
 
     /// 双指拖动 = 触控板双指滚动（自然方向）：手指移动多少视图点，Mac 上的内容就走多少对应的点。
-    @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
-        noteLocalInput()
-        let delta = gesture.translation(in: self)
-        gesture.setTranslation(.zero, in: self)
-        if pinching {
-            // 捏合中：双指拖动平移画面，而不是滚动 Mac。
-            viewport.pan(by: CGSize(width: delta.x, height: delta.y))
-            layoutContent()
-            if scrolling { endScroll(phase: .ended) }
-            return
-        }
+    private func beginScroll() {
         guard session.canControl else { return }
+        scrolling = true
+        flushPointer()
+        session.send(.scroll(dx: 0, dy: 0, phase: .began))
+    }
+
+    private func moveScroll(by delta: CGSize) {
+        guard scrolling else { return }
         let scale = max(0.01, viewport.scale)
-        switch gesture.state {
-        case .began:
-            scrolling = true
-            flushPointer()
-            session.send(.scroll(dx: 0, dy: 0, phase: .began))
-            fallthrough
-        case .changed:
-            guard scrolling else { return }
-            session.send(.scroll(dx: Float(delta.x / scale), dy: Float(delta.y / scale), phase: .changed))
-        case .ended:
-            guard scrolling else { return }
-            endScroll(phase: .ended)
-            let velocity = gesture.velocity(in: self)
-            let speed = CGPoint(x: velocity.x / scale, y: velocity.y / scale)
-            if hypot(speed.x, speed.y) > 120 {
-                momentum = speed
-                momentumActive = true
-                session.send(.scroll(dx: 0, dy: 0, phase: .momentumBegan))
-                wake()
-            }
-        case .cancelled, .failed:
-            if scrolling { endScroll(phase: .ended) }
-        default:
-            break
+        session.send(.scroll(dx: Float(delta.width / scale), dy: Float(delta.height / scale), phase: .changed))
+    }
+
+    private func finishScroll(velocity: CGPoint) {
+        guard scrolling else { return }
+        endScroll(phase: .ended)
+        let scale = max(0.01, viewport.scale)
+        let speed = CGPoint(x: velocity.x / scale, y: velocity.y / scale)
+        if hypot(speed.x, speed.y) > 120 {
+            momentum = speed
+            momentumActive = true
+            session.send(.scroll(dx: 0, dy: 0, phase: .momentumBegan))
+            wake()
         }
     }
 
@@ -419,32 +445,23 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
         session.send(.scroll(dx: 0, dy: 0, phase: phase))
     }
 
+    /// 所有结束惯性的路径都走这里：Mac 上的 app 要收到结束信号，滚动状态才会复位。
+    private func stopMomentum() {
+        guard momentumActive else { return }
+        momentumActive = false
+        session.send(.scroll(dx: 0, dy: 0, phase: .momentumEnded))
+    }
+
     /// 惯性：速度按每秒衰减到约 5%（接近 macOS 触控板的手感），低于阈值结束。
     private func stepMomentum(duration: CFTimeInterval) {
         let dt = CGFloat(max(1.0 / 240, min(1.0 / 30, duration)))
         let decay = pow(0.05, dt)
         momentum = CGPoint(x: momentum.x * decay, y: momentum.y * decay)
         if hypot(momentum.x, momentum.y) < 20 {
-            momentumActive = false
-            session.send(.scroll(dx: 0, dy: 0, phase: .momentumEnded))
+            stopMomentum()
             return
         }
         session.send(.scroll(dx: Float(momentum.x * dt), dy: Float(momentum.y * dt), phase: .momentum))
-    }
-
-    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            pinching = false
-        case .changed:
-            if !pinching, abs(gesture.scale - 1) > 0.08 { pinching = true }
-            guard pinching else { return }
-            viewport.zoom(by: gesture.scale, anchor: gesture.location(in: self))
-            gesture.scale = 1
-            layoutContent()
-        default:
-            pinching = false
-        }
     }
 
     /// 点击 / 拖拽前先把最新的指针位置发出去（不等下一帧合并），保证点在手指看到的位置上。
@@ -456,6 +473,7 @@ final class RemoteDesktopCanvasView: UIView, UIGestureRecognizerDelegate {
 
     private func send(_ input: RemoteDesktopInput) {
         noteLocalInput()
+        stopMomentum()
         session.send(input)
     }
 

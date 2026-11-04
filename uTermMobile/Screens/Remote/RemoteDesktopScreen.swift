@@ -67,6 +67,8 @@ struct RemoteDesktopScreen: View {
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        // 画布从屏幕边缘起手的操作优先：系统手势要再滑一次才触发。
+        .defersSystemGestures(on: .all)
         // 这一屏永远是黑底：配色一律按深色解析。跟随系统时浅色模式下的次要按钮是深灰字，落在黑底上看不见。
         .environment(\.colorScheme, .dark)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }

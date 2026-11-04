@@ -25,6 +25,8 @@ nonisolated protocol RemoteDesktopInputSink: AnyObject, Sendable {
     func inject(_ input: RemoteDesktopInput)
     /// 把手机发来的图片 / 文字放进 Mac 的剪贴板，再替用户按一下 ⌘V。
     func paste(_ content: RemoteDesktopPaste)
+    /// 松开还按着的鼠标键。停流时调用：手机断开后发不来抬起事件。
+    func releaseButtons()
 }
 
 /// 采集到的一帧，在来源队列、连接队列、编码器之间传递。
@@ -130,6 +132,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         link.queue.async {
             self.isStopped = true
             self.isLive = false
+            self.injector?.releaseButtons()
             self.cursorTimer?.cancel()
             self.cursorTimer = nil
             self.encoder = nil

@@ -211,6 +211,7 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
     private let lock = NSLock()
     private var inputs: [RemoteDesktopInput] = []
     private var pastes: [RemoteDesktopPaste] = []
+    private var releases = 0
 
     func inject(_ input: RemoteDesktopInput) {
         lock.lock(); inputs.append(input); lock.unlock()
@@ -220,6 +221,11 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
         lock.lock(); pastes.append(content); lock.unlock()
     }
 
+    func releaseButtons() {
+        lock.lock(); releases += 1; lock.unlock()
+    }
+
+    var releaseCount: Int { lock.lock(); defer { lock.unlock() }; return releases }
     var all: [RemoteDesktopInput] { lock.lock(); defer { lock.unlock() }; return inputs }
     var allPastes: [RemoteDesktopPaste] { lock.lock(); defer { lock.unlock() }; return pastes }
 }

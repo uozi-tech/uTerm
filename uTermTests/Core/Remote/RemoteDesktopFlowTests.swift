@@ -1,4 +1,5 @@
 import CoreGraphics
+import AppKit
 import XCTest
 @testable import uTerm
 
@@ -223,14 +224,49 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertEqual(viewport.center, center)
     }
 
+    /// 在角落放大后光标落到画面外：要把光标留在画面里，下一次移动才不会把画面拽回光标那边。
+    func test_pointer_kept_in_view_after_zoom_so_the_next_move_does_not_yank_the_viewport() {
+        var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 1600, height: 1000),
+                                             viewSize: CGSize(width: 800, height: 500))
+        viewport.zoom(by: 4, anchor: CGPoint(x: 780, y: 480))
+        let center = CGPoint(x: 0.5, y: 0.5)
+        let hidden = viewport.viewPoint(normalized: center)
+        XCTAssertLessThan(hidden.x, 0, "前提：放大后光标在画面外")
+
+        let kept = viewport.keepingVisible(center, margin: 48)
+        let shown = viewport.viewPoint(normalized: kept)
+        XCTAssertEqual(shown.x, 48, accuracy: 0.001)
+        XCTAssertEqual(shown.y, 48, accuracy: 0.001)
+
+        let before = viewport
+        viewport.ensureVisible(kept, margin: 48)
+        XCTAssertEqual(viewport, before, "留在画面里之后，移动光标不会让画面跳走")
+    }
+
+    func test_pointer_kept_in_view_stays_put_when_it_is_already_reachable() {
+        var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 1600, height: 1000),
+                                             viewSize: CGSize(width: 800, height: 500))
+        // 适配时整块显示器都在画面里：贴着显示器边的光标不该被往里推。
+        let corner = CGPoint(x: 0.001, y: 0.999)
+        XCTAssertEqual(viewport.keepingVisible(corner, margin: 48), corner)
+
+        // 放大后停在显示器左上角：那两条边是显示器真实的边，光标可以贴着。
+        viewport.zoom(by: 4, anchor: .zero)
+        let topLeft = CGPoint(x: 0.001, y: 0.001)
+        XCTAssertEqual(viewport.keepingVisible(topLeft, margin: 48), topLeft)
+        let before = viewport
+        viewport.ensureVisible(topLeft, margin: 48)
+        XCTAssertEqual(viewport, before)
+    }
+
     func test_trackpad_moves_finer_when_zoomed_accelerates_and_clamps() {
         var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 1000, height: 500), viewSize: CGSize(width: 500, height: 250))
         let start = CGPoint(x: 0.5, y: 0.5)
-        let slow = RemoteTrackpad.advance(start, by: CGSize(width: 10, height: 0), speed: 50, viewport: viewport)
+        let slow = RemoteTrackpad.advance(start, by: CGSize(width: 10, height: 0), speed: 150, viewport: viewport)
         // 适配比例 0.5：10 视图点 = 20 显示器点 = 0.02。
         XCTAssertEqual(slow.x, 0.52, accuracy: 1e-9)
         viewport.setZoom(4)
-        let zoomed = RemoteTrackpad.advance(start, by: CGSize(width: 10, height: 0), speed: 50, viewport: viewport)
+        let zoomed = RemoteTrackpad.advance(start, by: CGSize(width: 10, height: 0), speed: 150, viewport: viewport)
         XCTAssertEqual(zoomed.x, 0.505, accuracy: 1e-9, "放大 4 倍后同样的手指位移只走 1/4")
         let fast = RemoteTrackpad.advance(start, by: CGSize(width: 10, height: 0), speed: 2000, viewport: viewport)
         XCTAssertGreaterThan(fast.x - 0.5, zoomed.x - 0.5, "快甩加速")
@@ -238,6 +274,47 @@ final class RemoteDesktopFlowTests: XCTestCase {
         let clamped = RemoteTrackpad.advance(CGPoint(x: 0.99, y: 0.01), by: CGSize(width: 900, height: -900), speed: 0,
                                              viewport: viewport)
         XCTAssertEqual(clamped, CGPoint(x: 1, y: 0))
+    }
+
+    func test_trackpad_slows_down_for_precision_and_keeps_gain_continuous() {
+        XCTAssertEqual(RemoteTrackpad.acceleration(speed: 0), 0.5)
+        XCTAssertEqual(RemoteTrackpad.acceleration(speed: 40), 0.5)
+        XCTAssertEqual(RemoteTrackpad.acceleration(speed: 95), 0.75, accuracy: 1e-9)
+        XCTAssertEqual(RemoteTrackpad.acceleration(speed: 150), 1)
+        XCTAssertGreaterThan(RemoteTrackpad.acceleration(speed: 151), 1)
+    }
+
+    func test_edge_velocity_points_to_the_nearest_edge_and_grows_toward_it() {
+        let size = CGSize(width: 400, height: 800)
+        XCTAssertEqual(RemoteTrackpad.edgeVelocity(at: CGPoint(x: 200, y: 400), in: size), .zero)
+        let left = RemoteTrackpad.edgeVelocity(at: CGPoint(x: 16, y: 400), in: size)
+        XCTAssertEqual(left, CGSize(width: -200, height: 0))
+        let corner = RemoteTrackpad.edgeVelocity(at: CGPoint(x: 400, y: 800), in: size)
+        XCTAssertEqual(corner, CGSize(width: 400, height: 400))
+    }
+
+    /// 只造事件读回来，不投递：app 看到的阶段必须和手机发的一致。
+    func test_injected_scroll_phases_read_back_as_sent() throws {
+        let cases: [(RemoteScrollPhase, NSEvent.Phase, NSEvent.Phase)] = [
+            (.began, .began, []),
+            (.changed, .changed, []),
+            (.ended, .ended, []),
+            (.momentumBegan, [], .began),
+            (.momentum, [], .changed),
+            (.momentumEnded, [], .ended),
+        ]
+        for (phase, expectedPhase, expectedMomentum) in cases {
+            let (scrollPhase, momentumPhase) = RemoteEventInjector.phases(phase)
+            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                              wheel1: 5, wheel2: 0, wheel3: 0))
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: scrollPhase)
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentumPhase)
+            let read = try XCTUnwrap(NSEvent(cgEvent: event))
+            XCTAssertEqual(read.phase, expectedPhase, "\(phase)")
+            XCTAssertEqual(read.momentumPhase, expectedMomentum, "\(phase)")
+            XCTAssertEqual(read.scrollingDeltaY, 5, "像素位移不缩放")
+        }
     }
 
     // MARK: - 键码

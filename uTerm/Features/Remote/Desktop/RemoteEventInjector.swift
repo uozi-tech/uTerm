@@ -58,6 +58,14 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         }
     }
 
+    func releaseButtons() {
+        for button in pressed.compactMap(RemoteMouseButton.init(rawValue:)) {
+            let (type, cgButton) = Self.buttonEvent(button, down: false)
+            post(CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location, mouseButton: cgButton))
+        }
+        pressed = []
+    }
+
     /// 写剪贴板再按 ⌘V。图片按原始格式放（PNG / JPEG 各自的 UTI），收图的 app 自己挑能读的；
     /// 不转 TIFF——几 MB 的截图转一次要上百毫秒，而这里是连接队列。
     func paste(_ content: RemoteDesktopPaste) {
@@ -121,14 +129,15 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         return flags
     }
 
-    /// 手势阶段 → (`scrollPhase`, `momentumPhase`)。前者取 `NSEvent.Phase` 的位值（began 1 / changed 4 /
-    /// ended 8），后者取 `CGMomentumScrollPhase`（begin 1 / continue 2 / end 3）。
+    /// 手势阶段 → (`scrollPhase`, `momentumPhase`)。前者取 `CGScrollPhase`（began 1 / changed 2 / ended 4），
+    /// 它和 `NSEvent.Phase` 的位值不同：写 4 时 app 读到的是 ended。后者取 `CGMomentumScrollPhase`
+    /// （begin 1 / continue 2 / end 3）。
     static func phases(_ phase: RemoteScrollPhase) -> (Int64, Int64) {
         switch phase {
         case .none: return (0, 0)
         case .began: return (1, 0)
-        case .changed: return (4, 0)
-        case .ended: return (8, 0)
+        case .changed: return (2, 0)
+        case .ended: return (4, 0)
         case .momentumBegan: return (0, 1)
         case .momentum: return (0, 2)
         case .momentumEnded: return (0, 3)

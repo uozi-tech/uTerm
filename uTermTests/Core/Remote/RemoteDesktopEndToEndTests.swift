@@ -265,6 +265,23 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
 
     // MARK: - 兼容与门禁
 
+    func test_stopping_the_stream_releases_buttons_on_the_mac() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, _) = makeSession(client)
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        session.send(.button(.left, down: true, clickCount: 1, x: 0.5, y: 0.5, modifiers: []))
+        let pressed = await waitUntil { mac.injector.all.count == 1 }
+        XCTAssertTrue(pressed)
+        XCTAssertEqual(mac.injector.releaseCount, 0)
+
+        session.stop()
+
+        let released = await waitUntil { mac.injector.releaseCount == 1 }
+        XCTAssertTrue(released, "手机走了发不来抬起事件，Mac 要自己松开")
+    }
+
     func test_old_mac_without_desktop_feature_is_reported_without_breaking_the_connection() async throws {
         let (server, mac, client) = try await makeRig(features: [])
         defer { server.stop() }
