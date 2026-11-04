@@ -157,8 +157,13 @@ private struct MChromeMeasurer: ViewModifier {
 }
 
 extension MChromeMeasurer {
-    private var merged: MChromeGeometry {
-        var g = geometry
+    private var merged: MChromeGeometry { geometry.merging(probe) }
+}
+
+extension MChromeGeometry {
+    /// 叠上 UIKit 探针量到的、SwiftUI 量不到的那几项。
+    func merging(_ probe: MChromeProbeResult) -> MChromeGeometry {
+        var g = self
         g.topBar = probe.topBar
         g.cornerSafeArea = probe.cornerSafeArea
         g.isUnfoldedPhone = probe.isUnfoldedPhone

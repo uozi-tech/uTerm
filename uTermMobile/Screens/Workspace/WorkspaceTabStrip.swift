@@ -23,6 +23,49 @@ struct MTabClosePrompt: Equatable {
     let kind: Kind
 }
 
+/// 关标签前的裁决。文件浏览直接关；远控标签还连着时先问：只关手机上的，还是连 Mac 上的一起关；
+/// 已经断开 / Mac 不支持远程关闭时直接关（只断手机这一头，Mac 上的程序不受影响）；
+/// 其余终端标签前台还有程序在跑时先确认。
+@MainActor
+@Observable
+final class MTabCloseFlow {
+    /// 等用户拿主意的确认。
+    var pending: MTabClosePrompt?
+    /// 正在探测前台的标签。探测要走一趟网络，连点关闭按钮不重复发起。
+    private var probing: Set<UUID> = []
+
+    nonisolated static func asksBeforeClosingRemote(macSupportsClosing: Bool, connected: Bool) -> Bool {
+        macSupportsClosing && connected
+    }
+
+    func request(_ tab: MWorkTab, close: @escaping (UUID) -> Void) {
+        let id = tab.id
+        guard let term = tab.terminal else {
+            close(id)
+            return
+        }
+        if let remote = term.remote {
+            if Self.asksBeforeClosingRemote(macSupportsClosing: remote.client.supportsCloseSession,
+                                            connected: term.controller.state == .connected) {
+                pending = MTabClosePrompt(tabID: id, kind: .remote(macName: remote.macName))
+            } else {
+                close(id)
+            }
+            return
+        }
+        guard probing.insert(id).inserted else { return }
+        Task {
+            let activity = await term.controller.foregroundActivity()
+            probing.remove(id)
+            if let prompt = activity.closePrompt {
+                pending = MTabClosePrompt(tabID: id, kind: .busy(prompt))
+            } else {
+                close(id)
+            }
+        }
+    }
+}
+
 /// 一个分屏格的标签条：返回 · 多态标签（终端 / 文件）· 新建 · Agent 开关 · 分屏开关。
 ///
 /// 活动态配色照 macOS 工作区 `.card` 标签（uAppKit `UPaneTabChip.cardChip`）：

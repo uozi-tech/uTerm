@@ -250,8 +250,7 @@ struct RemoteMacSheet: View {
     }
 
     private func endTakeover() {
-        workspace.stopFollowing(client)
-        store.teardownTabIDs = workspace.remoteTabIDs(of: client)
+        store.teardownTabIDs = workspace.endTakeover(of: client)
     }
 
     private func takeOver(focus: UUID) {

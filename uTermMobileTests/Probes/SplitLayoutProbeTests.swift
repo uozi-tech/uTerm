@@ -110,7 +110,7 @@ final class SplitLayoutProbeTests: XCTestCase {
         for tab in work.terminalTabs { tab.controller.close() }
     }
 
-    /// 快捷键整排都能横向滚动，包括 ctrl / alt，一格窄到放不下时也够得到每个键。
+    /// 快捷键整排都能横向滚动，包括 ctrl / alt，一格窄到放不下时也够得到每个键（收起键盘按钮除外）。
     func testKeyBarScrollsAsOneRow() async throws {
         defer { MobileProbeWindow.closeAll() }
         let (controller, _) = MobileFakeTerminal.controller(.idle)
@@ -121,8 +121,9 @@ final class SplitLayoutProbeTests: XCTestCase {
         let scroll = try XCTUnwrap(Self.firstScrollView(in: win))
         let frame = scroll.convert(scroll.bounds, to: win)
         XCTAssertEqual(frame.minX, 0, accuracy: 0.5, "左边不能有固定不动的键")
-        XCTAssertEqual(frame.width, width, accuracy: 0.5)
-        XCTAssertGreaterThan(scroll.contentSize.width, width)
+        // 右边只固定收起键盘按钮（741b31e4）：要先滚过一整排键才够得到的话，就收不了键盘了。
+        XCTAssertLessThanOrEqual(width - frame.maxX, 60, "右边只留键盘按钮")
+        XCTAssertGreaterThan(scroll.contentSize.width, frame.width)
     }
 
     // MARK: 横向滚动条不进侧边安全区
@@ -251,11 +252,14 @@ final class SplitLayoutProbeTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(200))
             let contentEnd = scroll.convert(CGPoint(x: scroll.contentSize.width, y: 0), to: win).x
             XCTAssertEqual(contentEnd, clipFrame.maxX, accuracy: 0.5, "滚到底时最后一项要露全", line: line)
+            let lastItem = win.hitTest(CGPoint(x: contentEnd - 10, y: midY), with: nil)
+            XCTAssertTrue(lastItem?.isDescendant(of: scroll) ?? false, "滚到底时最后一项要点得到", line: line)
         }
     }
 
     private static func firstHorizontalScrollView(in view: UIView) -> UIScrollView? {
-        if let scroll = view as? UIScrollView, scroll.bounds.height < 60 { return scroll }
+        // 不按高度认：贴底的滚动条会伸进底部安全区，iPhone 上有 82pt 高。
+        if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 0.5 { return scroll }
         for child in view.subviews {
             if let found = firstHorizontalScrollView(in: child) { return found }
         }

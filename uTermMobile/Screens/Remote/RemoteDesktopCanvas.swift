@@ -344,9 +344,16 @@ final class RemoteDesktopCanvasView: UIView {
     /// 捏合把光标留在了画面外时，让它跟着留在画面边上：否则下一次移动或点击都发生在看不见的地方，
     /// 画面还会被拽回光标那边，刚放大的位置就没了。
     private func keepPointerInView() {
-        guard session.canControl, macCursorVisible else { return }
-        pointer = viewport.keepingVisible(pointer, margin: Self.pointerMargin)
-        if lastSentPointer != pointer { wake() }
+        pointer = Self.pointerKeptInView(pointer, viewport: viewport, canControl: session.canControl,
+                                         cursorVisible: macCursorVisible)
+        if session.canControl, macCursorVisible, lastSentPointer != pointer { wake() }
+    }
+
+    /// 只能看、或光标在别的显示器上时不动它：那时指针跟着 Mac 报回的位置走。
+    static func pointerKeptInView(_ pointer: CGPoint, viewport: RemoteDesktopViewport,
+                                  canControl: Bool, cursorVisible: Bool) -> CGPoint {
+        guard canControl, cursorVisible else { return pointer }
+        return viewport.keepingVisible(pointer, margin: pointerMargin)
     }
 
     private func movePointer(by delta: CGSize, speed: CGFloat) {

@@ -143,11 +143,13 @@ struct ConnectingCoverView: View {
     /// chip 水平居中，右缘碰到状态栏（或系统给的顶部横条区域右界）就不进，照旧排在安全区下面。
     ///
     /// Duo 内屏分屏（窗口约 330pt）放不下居中的 chip，只认窗口够宽（≥ 600pt，展开整屏 669）的情形。
-    private var chipStatusRow: CGFloat? {
+    private var chipStatusRow: CGFloat? { Self.chipStatusRow(chrome: chrome, fillsScreen: fillsScreen) }
+
+    static func chipStatusRow(chrome: MChromeGeometry, fillsScreen: Bool) -> CGFloat? {
         guard fillsScreen, let row = chrome.statusRowHeight,
-              chrome.screen.width >= Self.statusRowMinScreenWidth else { return nil }
+              chrome.screen.width >= statusRowMinScreenWidth else { return nil }
         let limit = chrome.topBar?.maxX ?? chrome.statusBar?.minX ?? .infinity
-        return chrome.screen.midX + Self.chipHalfWidth + 8 <= limit ? row : nil
+        return chrome.screen.midX + chipHalfWidth + 8 <= limit ? row : nil
     }
 
     private static let statusRowMinScreenWidth: CGFloat = 600

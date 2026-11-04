@@ -202,11 +202,25 @@ final class MobileWorkspace {
         follows.removeAll { $0.client === client }
     }
 
+    /// 用户手动断开整台 Mac：不再跟进，返回这台 Mac 的全部标签，由工作区屏关掉并清理。
+    func endTakeover(of client: RemoteMacClient) -> Set<UUID> {
+        stopFollowing(client)
+        return remoteTabIDs(of: client)
+    }
+
+    /// 用户亲手关掉这台 Mac 的最后一个标签，等于断开全部，不再跟进。Mac 那边关光的不走这里。
+    /// `tab` 是刚从工作区摘下的标签。
+    func stopFollowingIfLastTab(_ tab: MWorkTab) {
+        guard let client = tab.terminal?.remote?.client, remoteTabIDs(of: client).isEmpty else { return }
+        stopFollowing(client)
+    }
+
     /// Mac 的终端列表更新了，手机上的标签跟着它走：
     /// - 没见过的终端在后台开标签，不抢前台。在手机上关掉的不算新的，不会再开回来。
     /// - 列表里出现过、现在没了的终端（在 Mac 上关了、Mac 上的连接断了）关掉标签。之后回来的算新的。
-    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]) -> RemoteTabChanges {
-        guard let index = follows.firstIndex(where: { $0.client === client }) else {
+    /// - `sessionIDs` 为 nil = 这条连接上还没收到列表（刚连上、断开了），不能当成「终端都没了」，什么也不动。
+    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?) -> RemoteTabChanges {
+        guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
         let current = Set(sessionIDs)

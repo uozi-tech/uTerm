@@ -28,10 +28,8 @@ struct WorkspaceScreen: View {
     /// 新建抽屉里已选了主机、连接中页还没盖上来的那一小段（抽屉收起后 0.3s 才发起连接）。
     /// 期间 UIKit 会把抽屉弹出前的第一响应者（旧标签的终端）恢复回来，必须算作「没人拥有键盘」。
     @State private var awaitingConnect = false
-    /// 等用户拿主意的关闭确认（弹窗挂在对应标签上，见 `WorkspaceTabChip`）。
-    @State private var pendingClose: MTabClosePrompt?
-    /// 正在探测前台的标签。探测要走一趟网络，连点关闭按钮不重复发起。
-    @State private var probingClose: Set<UUID> = []
+    /// 关标签前的确认流程（弹窗挂在对应标签上，见 `WorkspaceTabChip`）。
+    @State private var closeFlow = MTabCloseFlow()
 
     private var visible: Bool { store.showWorkspace }
 
@@ -81,7 +79,7 @@ struct WorkspaceScreen: View {
                 guard let removed = workspace.close(id) else { continue }
                 removed.shutdown()
                 dispose(removed)
-                stopFollowingIfLastTab(removed)
+                workspace.stopFollowingIfLastTab(removed)
             }
             if workspace.isEmpty { store.showWorkspace = false }
             store.teardownTabIDs = []
@@ -163,8 +161,7 @@ struct WorkspaceScreen: View {
     /// Mac 上开关了终端：手机上的标签跟着开关。
     private func followRemoteSessions() {
         for client in workspace.followedClients {
-            guard let sessionIDs = client.listedSessionIDs else { continue }
-            apply(workspace.follow(client, sessionIDs: sessionIDs))
+            apply(workspace.follow(client, sessionIDs: client.listedSessionIDs))
         }
     }
 
@@ -177,13 +174,6 @@ struct WorkspaceScreen: View {
             }
             try? await Task.sleep(for: .seconds(3))
         }
-    }
-
-    /// 用户亲手关掉这台 Mac 的最后一个标签，等于断开全部，不再跟进。Mac 那边关光的不走这里。
-    private func stopFollowingIfLastTab(_ tab: MWorkTab) {
-        guard let client = tab.terminal?.remote?.client,
-              workspace.remoteTabIDs(of: client).isEmpty else { return }
-        workspace.stopFollowing(client)
     }
 
     private func apply(_ changes: RemoteTabChanges) {
@@ -206,32 +196,10 @@ struct WorkspaceScreen: View {
         }
     }
 
-    /// 用户要关一个标签。远控标签（接入的是 Mac 上的终端）还连着时先问：只关手机上的，还是连 Mac 上的一起关；
-    /// 已经断开 / Mac 不支持远程关闭时直接关（只断手机这一头，Mac 上的程序不受影响）。
-    /// 其余终端标签前台还有程序在跑时先确认。
+    /// 用户要关一个标签：要不要先问由 `MTabCloseFlow` 裁决。
     private func requestClose(_ id: UUID) {
-        guard let term = workspace.tabs.first(where: { $0.id == id })?.terminal else {
-            closeTab(id)
-            return
-        }
-        if let remote = term.remote {
-            if remote.client.supportsCloseSession, term.controller.state == .connected {
-                pendingClose = MTabClosePrompt(tabID: id, kind: .remote(macName: remote.macName))
-            } else {
-                closeTab(id)
-            }
-            return
-        }
-        guard probingClose.insert(id).inserted else { return }
-        Task {
-            let activity = await term.controller.foregroundActivity()
-            probingClose.remove(id)
-            if let prompt = activity.closePrompt {
-                pendingClose = MTabClosePrompt(tabID: id, kind: .busy(prompt))
-            } else {
-                closeTab(id)
-            }
-        }
+        guard let tab = workspace.tab(id) else { return }
+        closeFlow.request(tab, close: closeTab)
     }
 
     private func confirmClose(_ id: UUID, alsoOnMac: Bool) {
@@ -244,7 +212,7 @@ struct WorkspaceScreen: View {
     private func closeTab(_ id: UUID) {
         guard let removed = workspace.close(id) else { return }
         finishClosing(removed)
-        stopFollowingIfLastTab(removed)
+        workspace.stopFollowingIfLastTab(removed)
         // 关掉最后一个会话就没有可看的了：收回主机列表。
         if workspace.isEmpty { store.showWorkspace = false }
     }
@@ -432,7 +400,7 @@ struct WorkspaceScreen: View {
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
                 showsTrailingControls: chrome.statusColumn == nil,
                 onDragTab: { draggingTabID = $0 },
-                closePrompt: $pendingClose,
+                closePrompt: Binding(get: { closeFlow.pending }, set: { closeFlow.pending = $0 }),
                 onConfirmClose: confirmClose)
             // 标签主体不在这里，见 `tabBodies`；这里只留位置。
             Group {
