@@ -128,6 +128,25 @@ final class MobileFixturesTerminalTests: XCTestCase {
         controller.close()
     }
 
+    /// 一连串尺寸变化只把最后一个告诉远端：每发一次远端就收一个 SIGWINCH，全屏程序整屏重绘一遍。
+    func testResizeBurstReachesTransportOnce() async throws {
+        let (c, h, relay) = try host()
+        let (controller, handles) = MobileFakeTerminal.controller(.idle)
+        controller.start(profile: h, container: c, relay: relay)
+        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        for cols in stride(from: UInt16(98), through: 55, by: -4) {
+            controller.resize(cols: cols, rows: 70)
+        }
+        controller.resize(cols: 55, rows: 81)
+        _ = await MobileFakeTerminal.waitUntil(timeout: .seconds(1)) { false }
+        let ledger = await handles.latest!.ledger
+        XCTAssertEqual(ledger.resizeCount, 1)
+        XCTAssertEqual(ledger.lastCols, 55)
+        XCTAssertEqual(ledger.lastRows, 81)
+        controller.close()
+    }
+
     /// `resize` 走到传输。
     func testResizeReachesTransport() async throws {
         let (c, h, relay) = try host()

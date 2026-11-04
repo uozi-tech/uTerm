@@ -2,6 +2,11 @@ import SwiftUI
 import SwiftTerm
 import UIKit
 
+extension EnvironmentValues {
+    /// 正在连续改宽度（拖分隔条）：字号先不跟，松手再换。字号随宽度连续变化，跟着换等于每帧重排一次。
+    @Entry var mTerminalHoldsFontSize = false
+}
+
 /// 只在自己的会话允许时才肯当第一响应者的终端视图。
 /// 光在我们自己的聚焦调用里设卡不够：UIKit 收起抽屉 / 弹层时会把之前的第一响应者自动恢复回来，
 /// 不经过任何我们的代码——第一个标签已连上、第二个标签正在建连时，键盘就是这样冒出来的。
@@ -103,6 +108,7 @@ struct SwiftTermView: UIViewRepresentable {
     /// 所以挂一个不吞触摸的 UITapGestureRecognizer。
     var onInteract: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.mTerminalHoldsFontSize) private var holdsFontSize
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
         // 复用控制器已持有的终端视图：横屏翻 size class 会令外壳在 Tab/Split 间切换、
@@ -155,9 +161,11 @@ struct SwiftTermView: UIViewRepresentable {
         // 与颜色缓存并整屏重绘——所有挂着的终端（含看不见的标签）都会跟着每帧重绘。
         applyColorsIfNeeded(to: uiView, coordinator: context.coordinator)
         // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时换字（换字会触发
-        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。宽度连续变化时（拖分隔条）
-        // 等它停下再换，否则几乎每帧都要重排一次、给远端发一次 SIGWINCH。
-        context.coordinator.scheduleFontSize(fontSize, on: uiView)
+        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。和新宽度在同一帧生效，不留一帧
+        // 旧字号；拖分隔条时等松手再换，否则几乎每帧都要重排一次。
+        if !holdsFontSize, abs(uiView.font.pointSize - fontSize) > 0.1 {
+            uiView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
         // Agent 模式（isActive=false）：主动收键盘，否则终端键盘盖住 Agent 输入框。
         if !isActive, uiView.isFirstResponder { _ = uiView.resignFirstResponder() }
     }
@@ -188,19 +196,7 @@ struct SwiftTermView: UIViewRepresentable {
         var onInteract: (() -> Void)?
         /// 上次装进视图的是不是暗色配色；nil = 还没装过。
         var appliedDark: Bool?
-        private var fontTask: Task<Void, Never>?
         init(controller: MobileTerminalController) { self.controller = controller }
-
-        /// 宽度停稳 120ms 后再换字号；期间的新值覆盖旧值。
-        func scheduleFontSize(_ size: CGFloat, on view: SwiftTerm.TerminalView) {
-            fontTask?.cancel()
-            guard abs(view.font.pointSize - size) > 0.1 else { return }
-            fontTask = Task { [weak view] in
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled, let view, abs(view.font.pointSize - size) > 0.1 else { return }
-                view.font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-            }
-        }
 
         @objc func interacted() { onInteract?() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

@@ -58,6 +58,7 @@ final class MobileTerminalController {
     /// 建连代次：close() / restart() 递增，在途建连落地时对不上就丢弃结果。
     @ObservationIgnored private var connectGeneration = 0
     @ObservationIgnored private var inputContinuation: AsyncStream<TerminalInput>.Continuation?
+    @ObservationIgnored private var resizeTask: Task<Void, Never>?
     @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
     /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
@@ -363,8 +364,15 @@ final class MobileTerminalController {
         write(Data(text.utf8))
     }
 
+    /// 尺寸停稳后才告诉远端，只发最后一个。一次布局变化常常连着改几次网格（换字号 + 改宽度、
+    /// 拖分隔条、键盘升降），每发一次远端就收一个 SIGWINCH、全屏程序就整屏重绘一遍。
     func resize(cols: UInt16, rows: UInt16) {
-        inputContinuation?.yield(.resize(cols: cols, rows: rows))
+        resizeTask?.cancel()
+        resizeTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            self?.inputContinuation?.yield(.resize(cols: cols, rows: rows))
+        }
     }
 
     func close() {
@@ -390,6 +398,7 @@ final class MobileTerminalController {
         connectTask = nil
         resetOutputPipeline()
         exitTask?.cancel()
+        resizeTask?.cancel()
         inputContinuation?.finish()
         inputContinuation = nil
         inputTask = nil

@@ -208,6 +208,15 @@ uTerm 侧：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalVie
 `textInputDidChange()`，在光标处叠一个标签显示组字中的文字；同一个类覆盖 `textInputMode`
 让键盘默认英文、用户切走后记住所选。上游若开始自己画 marked text，删掉这条补丁和 uTerm 侧的叠层。
 
+## 9. iOS 换字号后重绘整个可见区
+
+上游 `resetFont()` 在 iOS 上调 `setNeedsDisplay(frame)`，但这个矩形是 bounds 坐标系。终端是
+`UIScrollView`，一有回滚历史 `bounds.origin.y` 就大于 0，`frame` 落在可见区之外：换字号而尺寸与滚动位置
+都没变时不重绘，屏上留着旧字号、旧位置的字（uTermMobile 拖完分屏分隔条松手时换字号就是这条路）。
+
+涉及文件：`Sources/SwiftTerm/Apple/AppleTerminalView.swift` 的 `resetFont()`，iOS 分支改成
+`setNeedsDisplay(bounds)`。uTerm 侧无需改动。上游若已修，跳过。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

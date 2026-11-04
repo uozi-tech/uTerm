@@ -221,10 +221,10 @@ struct WorkspaceScreen: View {
         newKind = kind
     }
 
+    /// 改分屏布局不带动画：动画期间终端的宽度逐帧变化，每一帧都是一次重排 + 一次 PTY resize，
+    /// 一次点击实测让网格变了 11 次（98 列一路到 55 列），全屏程序跟着反复重绘，整屏闪烁。
     private func toggleSplit() {
-        withAnimation(.easeInOut(duration: 0.22)) {
-            if workspace.isSplit { workspace.unsplit() } else { workspace.split() }
-        }
+        if workspace.isSplit { workspace.unsplit() } else { workspace.split() }
     }
 
     /// 切换当前终端标签的「终端 ⇄ Agent」模式（对齐 macOS 终端窗口的分段开关）。
@@ -312,14 +312,13 @@ struct WorkspaceScreen: View {
                 onDrop: { target in
                     guard let id = draggingTabID else { return }
                     draggingTabID = nil
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        switch target {
-                        case .edge(let edge): workspace.dock(id, to: edge)
-                        case .pane(let paneID): workspace.move(id, toPane: paneID)
-                        }
+                    switch target {
+                    case .edge(let edge): workspace.dock(id, to: edge)
+                    case .pane(let paneID): workspace.move(id, toPane: paneID)
                     }
                 }))
         }
+        .environment(\.mTerminalHoldsFontSize, dragging)
         .background(M.surface)
     }
 
@@ -372,9 +371,7 @@ struct WorkspaceScreen: View {
                 onBack: { store.showWorkspace = false },
                 onAgent: { toggleAgent(in: pane) },
                 onToggleSplit: toggleSplit,
-                onMoveToOtherPane: { id in
-                    withAnimation(.easeInOut(duration: 0.22)) { workspace.moveToOtherPane(id) }
-                },
+                onMoveToOtherPane: { workspace.moveToOtherPane($0) },
                 showsTrailingControls: chrome.statusColumn == nil,
                 onDragTab: { draggingTabID = $0 })
             ZStack {

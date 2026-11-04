@@ -312,7 +312,9 @@ extension TerminalView {
         #if os(macOS)
         needsDisplay = true
         #else
-        setNeedsDisplay(frame)
+        // uTerm patch #9: dirty rect is in bounds coordinates; `frame` misses the
+        // visible area as soon as the scroll view has scrollback (bounds.origin.y > 0).
+        setNeedsDisplay(bounds)
         #endif
     }
     
