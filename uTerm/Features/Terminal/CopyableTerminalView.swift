@@ -30,6 +30,9 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// 之后的尺寸变化都要等停稳，见 `TerminalContainerView.syncTerminalFrame`。
     var hasHostedLayout = false
 
+    /// 已经装进来的配色和光标，见 `TerminalTheme.apply`。
+    var appliedLook: TerminalTheme.Look?
+
     // MARK: 焦点
 
     /// 键盘焦点回到这个终端，或它所在的窗口重新成为 key。

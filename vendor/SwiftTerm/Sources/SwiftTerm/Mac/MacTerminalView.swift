@@ -308,6 +308,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
 
+    /// uTerm patch #13: how long `queuePendingDisplay` waits before the next
+    /// redraw. The host raises it while a large repaint is draining, so the
+    /// frames in between are skipped. See UTERM-PATCHES.md.
+    public var displayThrottleNanoseconds: UInt64 = TerminalView.defaultDisplayThrottleNanoseconds
+
+    /// 60 fps, upstream's fixed delay.
+    public static let defaultDisplayThrottleNanoseconds: UInt64 = 16_670_000
+
     /// Minimum WCAG contrast ratio (1...21) enforced between a cell's
     /// foreground and background at render time, mirroring VS Code's
     /// `terminal.integrated.minimumContrastRatio`. 1 disables the clamp

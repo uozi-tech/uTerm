@@ -24,4 +24,57 @@ final class TerminalFlushPacingTests: XCTestCase {
         XCTAssertEqual(pacing.nextBudget(after: pacing.baseBytes, elapsedMs: 50, filled: true), pacing.baseBytes)
         XCTAssertEqual(pacing.nextBudget(after: pacing.maxBytes, elapsedMs: 0.1, filled: true), pacing.maxBytes)
     }
+
+    // MARK: 积压追赶
+
+    private func feed(_ pacer: inout TerminalFlushPacer, elapsedMs: Double = 1, backlogged: Bool, atMs: Double) -> Int {
+        pacer.didFeed(bytes: pacer.budget, elapsedMs: elapsedMs, backlogged: backlogged, nowMs: atMs)
+    }
+
+    /// 小流量喂的时候也常有新字节到达，那不是积压。
+    func testTrickleIsNotBacklog() {
+        let pacer = TerminalFlushPacer(pacing: pacing)
+        XCTAssertFalse(pacer.isBacklogged(fed: pacer.budget / 4, hasMore: true))
+        XCTAssertFalse(pacer.isBacklogged(fed: pacer.budget, hasMore: false))
+        XCTAssertTrue(pacer.isBacklogged(fed: pacer.budget, hasMore: true))
+    }
+
+    func testBacklogUsesShortDelayAndIdleUsesInterval() {
+        var pacer = TerminalFlushPacer(pacing: pacing)
+        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 0), pacing.catchUpDelayMs)
+        XCTAssertEqual(feed(&pacer, backlogged: false, atMs: 5), pacing.intervalMs)
+    }
+
+    /// 一直刷屏时不能一直占着主线程。
+    func testLongBacklogFallsBackToInterval() {
+        var pacer = TerminalFlushPacer(pacing: pacing)
+        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 1_000), pacing.catchUpDelayMs)
+        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 1_000 + pacing.catchUpWindowMs), pacing.intervalMs)
+    }
+
+    func testNewBacklogRestartsCatchUpWindow() {
+        var pacer = TerminalFlushPacer(pacing: pacing)
+        _ = feed(&pacer, backlogged: true, atMs: 0)
+        _ = feed(&pacer, backlogged: false, atMs: 10)
+        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 10_000), pacing.catchUpDelayMs)
+    }
+
+    /// 解析跟不上说明机器忙，这时不追赶。
+    func testSlowFeedDoesNotCatchUp() {
+        var pacer = TerminalFlushPacer(pacing: pacing)
+        XCTAssertEqual(feed(&pacer, elapsedMs: pacing.targetMs + 1, backlogged: true, atMs: 0), pacing.intervalMs)
+    }
+
+    func testBackgroundNeverCatchesUp() {
+        var pacer = TerminalFlushPacer(pacing: .background)
+        XCTAssertEqual(feed(&pacer, backlogged: true, atMs: 0), TerminalFlushPacing.background.intervalMs)
+    }
+
+    func testSwitchingPacingResetsBudget() {
+        var pacer = TerminalFlushPacer(pacing: .desktop)
+        _ = feed(&pacer, backlogged: true, atMs: 0)
+        XCTAssertGreaterThan(pacer.budget, TerminalFlushPacing.desktop.baseBytes)
+        pacer.use(.background)
+        XCTAssertEqual(pacer.budget, TerminalFlushPacing.background.baseBytes)
+    }
 }

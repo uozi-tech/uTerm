@@ -249,7 +249,7 @@ final class MTerminalContainerAdoptionTests: XCTestCase {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
         let (tab, handles) = MobileFakeTerminal.tab(host: host, .idle)
-        let body = TerminalSessionBody(tab: tab, onClose: {}).environment(MobileStore()).modelContainer(container)
+        let body = TerminalSessionBody(tab: tab, isActive: true, onClose: {}).environment(MobileStore()).modelContainer(container)
         let (window, hosting) = MobileProbeWindow.make(size: CGSize(width: 390, height: 800), placement: .visibleOnScreen,
                                                        isolateHost: true, rootView: body)
         hosting.safeAreaRegions = .all

@@ -268,6 +268,22 @@ iOS 未改：`caretView` 的 frame 是滚动内容坐标，旧位置会随内容
 
 uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalCaretViewportTests.swift`。
 
+## 13. 绘制节流可调
+
+上游 `queuePendingDisplay` 固定按 60 fps 排下一次绘制。程序改尺寸后重发整段内容时，一次绘制要 10～18ms，
+大部分都画在马上要被覆盖的中间状态上（4MB 语料、185×56：解析约 130ms，绘制 295～518ms）。
+
+涉及文件：
+
+- `Mac/MacTerminalView.swift` / `iOS/iOSTerminalView.swift`：新增 `displayThrottleNanoseconds`，默认等于上游的 16.67ms。
+- `Apple/AppleTerminalView.swift`：`queuePendingDisplay` 改读它；新增 `flushPendingDisplay()`，追上积压时立刻画最后一帧。
+- `iOS/iOSTerminalView.swift`：`layoutSubviews` 里滚动位置变了就重绘这一条，在已有待执行的绘制时改为交给那一次。
+  上游在 iOS 上每个滚动的拍子画两遍（20 次 feed 画 40 次），节流也拦不住这条路。
+
+键盘回显走 `displayImmediately`，不受节流影响。
+
+uTerm 侧入口：`uTerm/Features/Terminal/TerminalFlushPacing.swift` 的 `feedPaced`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

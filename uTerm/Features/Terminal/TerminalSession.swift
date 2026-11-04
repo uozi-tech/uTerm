@@ -285,6 +285,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         exitObserverTask = nil
         heldCheckpoints?.cancel()
         heldCheckpoints = nil
+        // 换了一条连接，上一个程序设的光标不该留下来：下次 SwiftUI 更新时重装。
+        (terminalView as? CopyableTerminalView)?.appliedLook = nil
     }
 
     private func startFeedLoop() {
@@ -310,18 +312,15 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         let myGen = feedGeneration
         let buffer = outputBuffer
         outputFlushTask = Task { [weak self] in
-            var budget = self?.flushPacing.baseBytes ?? TerminalFlushPacing.desktop.baseBytes
+            var pacer = TerminalFlushPacer(pacing: self?.flushPacing ?? .desktop)
             while !Task.isCancelled {
                 guard let self else { return }
                 guard self.feedGeneration == myGen else { return }
-                let pacing = self.flushPacing
+                pacer.use(self.flushPacing)
 
-                if let flush = self.flushPendingOutput(generation: myGen, maxBytes: budget) {
-                    budget = pacing.nextBudget(after: budget,
-                                               elapsedMs: flush.elapsedMs,
-                                               filled: flush.bytes >= budget)
+                if let delayMs = self.flushPendingOutput(generation: myGen, pacer: &pacer) {
                     // 活跃路径：让短时间内陆续到达的字节合批一次性 feed。
-                    try? await Task.sleep(for: .milliseconds(pacing.intervalMs))
+                    try? await Task.sleep(for: .milliseconds(delayMs))
                 } else {
                     // 空闲路径：挂起到下一次 append（或 clear 唤醒，让被取消的
                     // generation 通过下一轮顶部的 guard 退出）。这条路径取代了
@@ -369,20 +368,22 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 全部逐字相同（实测比对过指纹）。所以将来真要改批量策略，正确性这一侧
     /// 是安全的，不安全的只有上面那条「延迟到可见时再补」。
     ///
-    /// 返回 nil 表示没有可喂的字节。
-    private func flushPendingOutput(generation: Int, maxBytes: Int) -> (bytes: Int, elapsedMs: Double)? {
+    /// 返回下一拍前要等的毫秒数；nil 表示没有可喂的字节。
+    private func flushPendingOutput(generation: Int, pacer: inout TerminalFlushPacer) -> Int? {
         guard feedGeneration == generation else { return nil }
-        let chunk = outputBuffer.drain(maxBytes: maxBytes, generation: generation)
+        let chunk = outputBuffer.drain(maxBytes: pacer.budget, generation: generation)
         guard !chunk.isEmpty else { return nil }
 
         let bytes = ArraySlice([UInt8](chunk))
+        let backlogged = pacer.isBacklogged(fed: bytes.count, hasMore: outputBuffer.hasBufferedBytes)
         let start = CFAbsoluteTimeGetCurrent()
-        terminalView.feed(byteArray: bytes)
-        let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        terminalView.feedPaced(bytes, backlogged: backlogged)
+        let end = CFAbsoluteTimeGetCurrent()
         // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
         mirrorTap.didFeed(bytes)
         heldCheckpoints?.noteFed(bytes.count)
-        return (bytes.count, elapsedMs)
+        return pacer.didFeed(bytes: bytes.count, elapsedMs: (end - start) * 1000,
+                             backlogged: backlogged, nowMs: end * 1000)
     }
 
 }

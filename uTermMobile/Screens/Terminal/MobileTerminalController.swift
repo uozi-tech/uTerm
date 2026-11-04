@@ -462,8 +462,7 @@ final class MobileTerminalController {
         outputFlushTask?.cancel()
         let buffer = outputBuffer
         outputFlushTask = Task { [weak self] in
-            var pacing = FlushPacing.foreground
-            var budget = pacing.baseBytes
+            var pacer = TerminalFlushPacer(pacing: .foreground)
             while !Task.isCancelled {
                 guard let self, self.outputGeneration == generation else { return }
                 guard let terminalView = self.terminalView else {
@@ -472,18 +471,18 @@ final class MobileTerminalController {
                     continue
                 }
 
-                let current: FlushPacing = self.isForeground ? .foreground : .background
-                if current != pacing { pacing = current; budget = pacing.baseBytes }
-                let chunk = buffer.drain(maxBytes: budget, generation: generation)
+                pacer.use(self.isForeground ? .foreground : .background)
+                let chunk = buffer.drain(maxBytes: pacer.budget, generation: generation)
                 if chunk.isEmpty {
                     await buffer.waitForData()
                 } else {
+                    let backlogged = pacer.isBacklogged(fed: chunk.count, hasMore: buffer.hasBufferedBytes)
                     let t0 = CFAbsoluteTimeGetCurrent()
-                    terminalView.feed(byteArray: ArraySlice([UInt8](chunk)))
-                    budget = pacing.nextBudget(after: budget,
-                                               elapsedMs: (CFAbsoluteTimeGetCurrent() - t0) * 1000,
-                                               filled: chunk.count >= budget)
-                    try? await Task.sleep(for: .milliseconds(pacing.intervalMs))
+                    terminalView.feedPaced(ArraySlice([UInt8](chunk)), backlogged: backlogged)
+                    let t1 = CFAbsoluteTimeGetCurrent()
+                    let delayMs = pacer.didFeed(bytes: chunk.count, elapsedMs: (t1 - t0) * 1000,
+                                                backlogged: backlogged, nowMs: t1 * 1000)
+                    try? await Task.sleep(for: .milliseconds(delayMs))
                 }
             }
         }

@@ -2534,14 +2534,21 @@ extension TerminalView {
         }
         // throttle
         if !pendingDisplay {
-            let fps60 = 16670000
-            // let fps30 = 16670000*2
-            let fpsDelay = fps60
+            // uTerm patch #13: was a fixed 16.67ms.
             pendingDisplay = true
             DispatchQueue.main.asyncAfter(
-                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay)),
+                deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + displayThrottleNanoseconds),
                 execute: updateDisplay)
         } else {
+        }
+    }
+
+    /// uTerm patch #13: paints a redraw that is waiting on the throttle right
+    /// away. The timer still fires later and finds nothing left to do.
+    public func flushPendingDisplay ()
+    {
+        if pendingDisplay {
+            updateDisplay()
         }
     }
 

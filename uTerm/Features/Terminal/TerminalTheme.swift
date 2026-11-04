@@ -33,13 +33,30 @@ enum TerminalTheme {
     /// 读 view.nativeBackgroundColor 作为 caretTextColor，需要 scheme
     /// 已生效。
     static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings, dark: Bool) {
-        let scheme = settings.colorScheme(dark: dark)
         applyFont(to: view, font: TerminalSettings.textFont())
         applyLineSpacing(to: view, lineSpacing: CGFloat(TerminalSettings.lineHeight))
-        applyColorScheme(to: view, scheme: scheme, dark: dark)
-        applyCursor(to: view, scheme: scheme, shape: settings.cursorShape, blink: settings.cursorBlink)
+        applyLook(to: view, settings: settings, dark: dark)
         applyScrollback(to: view, scrollback: settings.scrollback)
         applyRoundedCorners(to: view)
+    }
+
+    /// 配色和光标由这几项决定。
+    struct Look: Equatable {
+        let dark: Bool
+        let cursorShape: TerminalCursorShape
+        let cursorBlink: Bool
+    }
+
+    /// 只在变了才装配色和光标：这里每次 SwiftUI 更新都会走到，而装一次配色要清掉属性缓存并整屏重绘，
+    /// 光标形状还会盖掉程序自己设的（vim 插入模式的竖线）。
+    private static func applyLook(to view: SwiftTerm.TerminalView, settings: TerminalSettings, dark: Bool) {
+        let look = Look(dark: dark, cursorShape: settings.cursorShape, cursorBlink: settings.cursorBlink)
+        let copyable = view as? CopyableTerminalView
+        if let copyable, copyable.appliedLook == look { return }
+        copyable?.appliedLook = look
+        let scheme = settings.colorScheme(dark: dark)
+        applyColorScheme(to: view, scheme: scheme, dark: dark)
+        applyCursor(to: view, scheme: scheme, shape: settings.cursorShape, blink: settings.cursorBlink)
     }
 
     /// 字体 + 字号同时设定。

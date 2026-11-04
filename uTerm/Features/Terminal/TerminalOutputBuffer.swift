@@ -84,6 +84,13 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         return output
     }
 
+    /// 还有没有字节没喂。
+    var hasBufferedBytes: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return bufferedBytes > 0
+    }
+
     func clear() {
         lock.lock()
         for chunk in chunks[head...] { noteDroppedLocked(chunk.data.count, generation: chunk.generation) }

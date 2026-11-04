@@ -18,6 +18,24 @@ final class MTerminalView: SwiftTerm.TerminalView {
 
     override var canBecomeFirstResponder: Bool { controller?.canTakeKeyboard ?? false }
 
+    // MARK: 不在屏上不画
+
+    /// 隐藏标签的 `opacity(0)` 拦不住绘制（实测 alpha 0 和 `isHidden` 都照画）：后台标签里程序还在输出时，
+    /// 每一帧都在主线程上画一张没人看的图。字节照常解析，露出来时补画一次。
+    var suppressesDrawing = false {
+        didSet {
+            if oldValue, !suppressesDrawing { super.setNeedsDisplay(bounds) }
+        }
+    }
+
+    override func setNeedsDisplay() {
+        if !suppressesDrawing { super.setNeedsDisplay() }
+    }
+
+    override func setNeedsDisplay(_ rect: CGRect) {
+        if !suppressesDrawing { super.setNeedsDisplay(rect) }
+    }
+
     // MARK: 输入法：默认英文，用户切了就记住
 
     /// 用户在这个终端里切到的输入法；nil = 还没切过，用英文。每个标签各记各的。
@@ -114,6 +132,8 @@ struct SwiftTermView: UIViewRepresentable {
     /// 是否允许会话出现即自动弹键盘。连接中页期间传 false——否则键盘会盖住中转页、
     /// 并因软键盘安全区收缩把中转页内容顶上去（动画错乱）。中转页撤下后由终端屏重新聚焦。
     var autoFocus: Bool = true
+    /// 这片终端在不在屏上（所在格的前台标签、终端模式）。不在屏上时不跟尺寸，见 `MTerminalContainerView`。
+    var isOnScreen: Bool = true
     /// 用户点了终端（分屏时据此切聚焦格）。SwiftUI 手势拿不到 UIKit 视图上的触摸，
     /// 所以挂一个不吞触摸的 UITapGestureRecognizer。
     var onInteract: (() -> Void)? = nil
@@ -161,7 +181,9 @@ struct SwiftTermView: UIViewRepresentable {
         // 键盘默认展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、已连上、用户没收起——
         // 失败重试成功后失败页换回本视图时走这里）。
         if isActive, autoFocus { DispatchQueue.main.async { controller.focusKeyboard() } }
-        return MTerminalContainerView(terminalView: view, fontSize: fontSize)
+        let container = MTerminalContainerView(terminalView: view, fontSize: fontSize)
+        container.isOnScreen = isOnScreen
+        return container
     }
 
     func updateUIView(_ container: MTerminalContainerView, context: Context) {
@@ -171,6 +193,7 @@ struct SwiftTermView: UIViewRepresentable {
         // 调到这里（拖分隔条 / 拖标签时每帧一次），而装一次配色会清掉 SwiftTerm 的属性
         // 与颜色缓存并整屏重绘——所有挂着的终端（含看不见的标签）都会跟着每帧重绘。
         applyColorsIfNeeded(to: uiView, coordinator: context.coordinator)
+        container.isOnScreen = isOnScreen
         // 字号随屏幕 / 视图宽度自适应：旋转、分屏时和新宽度一起提交，缓冲区只重排一次。
         // 拖分隔条时等松手再换，否则停顿一下就要重排一次。
         if !holdsFontSize { container.setFontSize(fontSize) }

@@ -28,4 +28,35 @@ final class TerminalThemeTests: XCTestCase {
         XCTAssertEqual(Double(n.greenComponent), 16/255, accuracy: 0.01)
         XCTAssertEqual(Double(n.blueComponent), 18/255, accuracy: 0.01)
     }
+
+    /// 每次 SwiftUI 更新都会 apply：设置没变就不能盖掉程序自己设的光标形状。
+    func testRepeatedApplyKeepsProgramCursorStyle() {
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
+
+        view.feed(text: "\u{1B}[6 q")
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
+
+        XCTAssertEqual(view.getTerminal().options.cursorStyle, .steadyBar)
+    }
+
+    func testRepeatedApplyKeepsProgramColors() {
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
+        view.nativeBackgroundColor = .systemPink
+
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
+
+        XCTAssertEqual(view.nativeBackgroundColor, .systemPink)
+    }
+
+    func testAppearanceChangeReappliesColors() {
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        TerminalTheme.apply(to: view, settings: .read(), dark: true)
+        let darkBackground = view.nativeBackgroundColor
+
+        TerminalTheme.apply(to: view, settings: .read(), dark: false)
+
+        XCTAssertNotEqual(view.nativeBackgroundColor, darkBackground)
+    }
 }

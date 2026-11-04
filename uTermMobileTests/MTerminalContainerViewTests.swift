@@ -134,4 +134,70 @@ final class MTerminalContainerViewTests: XCTestCase {
 
         XCTAssertEqual(grid(view), before)
     }
+
+    // MARK: 隐藏标签
+
+    /// 转屏时隐藏标签不重排，里面的程序也收不到通知。
+    func testHiddenContainerDoesNotFollowSize() async {
+        let (view, container) = await hosted()
+        let before = grid(view)
+        container.isOnScreen = false
+
+        lay(container, CGSize(width: 200, height: 300))
+        await settle()
+
+        XCTAssertEqual(grid(view), before)
+        XCTAssertEqual(recorder.sizes, [])
+    }
+
+    /// 转到屏上的那一拍就提交，不用再等 80ms。
+    func testShowingContainerCommitsOnNextLayout() async {
+        let (view, container) = await hosted()
+        let before = grid(view)
+        container.isOnScreen = false
+        lay(container, CGSize(width: 200, height: 300))
+
+        container.isOnScreen = true
+        container.layoutIfNeeded()
+
+        XCTAssertNotEqual(grid(view), before)
+        XCTAssertEqual(recorder.sizes, [grid(view)])
+    }
+
+    func testHidingCancelsPendingCommit() async {
+        let (view, container) = await hosted()
+        let before = grid(view)
+
+        lay(container, CGSize(width: 200, height: 300))
+        container.isOnScreen = false
+        await settle()
+
+        XCTAssertEqual(grid(view), before)
+        XCTAssertEqual(recorder.sizes, [])
+    }
+
+    /// 字号也要一起等：隐藏期间宽度变了，露出来时才一次换好。
+    func testHiddenContainerHoldsFontSizeUntilShown() async {
+        let (view, container) = await hosted()
+        container.isOnScreen = false
+
+        container.setFontSize(9)
+        await settle()
+        XCTAssertEqual(view.font.pointSize, 11, accuracy: 0.01)
+
+        container.isOnScreen = true
+        container.layoutIfNeeded()
+        XCTAssertEqual(view.font.pointSize, 9, accuracy: 0.01)
+    }
+
+    /// 后台新开的标签也要拿到真实尺寸，否则 shell 按占位尺寸启动。
+    func testFirstLayoutCommitsEvenWhenHidden() {
+        let view = makeTerminal()
+        let container = MTerminalContainerView(terminalView: view, fontSize: 11)
+        container.isOnScreen = false
+
+        lay(container, mounted)
+
+        XCTAssertEqual(view.frame.size, mounted)
+    }
 }

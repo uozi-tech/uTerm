@@ -110,6 +110,7 @@ struct TerminalSessionBody: View {
                                       fontSize: adaptiveFontSize(width: geo.size.width),
                                       isActive: tab.mode == .terminal,
                                       autoFocus: store.connecting == nil && isFocused,
+                                      isOnScreen: isActive && tab.mode == .terminal,
                                       onInteract: onInteract)
                     }
                     // 终端页边距（对齐 macOS `TerminalContainerView` 的 8pt 左右边）：字符不再贴着屏幕

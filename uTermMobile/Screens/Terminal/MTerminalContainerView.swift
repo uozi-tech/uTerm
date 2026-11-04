@@ -14,6 +14,22 @@ final class MTerminalContainerView: UIView {
     private var fontSize: CGFloat
     private var held: Layout?
     private var settleTask: Task<Void, Never>?
+    private var commitsOnNextLayout = false
+
+    /// 这个终端在不在屏上。不在屏上时不跟尺寸，转屏才不会让每个隐藏标签都重排一次、再让里面的程序
+    /// 重发一遍内容。切回来时立刻提交（和 Mac 一样：隐藏的终端露出来才改尺寸）。
+    var isOnScreen = true {
+        didSet {
+            guard isOnScreen != oldValue else { return }
+            (terminalView as? MTerminalView)?.suppressesDrawing = !isOnScreen
+            if isOnScreen {
+                commitsOnNextLayout = true
+                setNeedsLayout()
+            } else {
+                cancelHold()
+            }
+        }
+    }
 
     private struct Layout: Equatable {
         let size: CGSize
@@ -37,7 +53,9 @@ final class MTerminalContainerView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        syncTerminal(settled: false)
+        let settled = commitsOnNextLayout
+        commitsOnNextLayout = false
+        syncTerminal(settled: settled)
     }
 
     func setFontSize(_ size: CGFloat) {
@@ -66,6 +84,10 @@ final class MTerminalContainerView: UIView {
         let target = Layout(size: bounds.size, fontSize: fontSize)
         let fontChanged = abs(terminalView.font.pointSize - fontSize) > 0.1
         let isFirstMount = (terminalView as? MTerminalView)?.hasHostedLayout == false
+        if !isOnScreen, !isFirstMount {
+            cancelHold()
+            return
+        }
         if settled || isFirstMount || (!fontChanged && terminalView.frame.size == bounds.size) {
             cancelHold()
             (terminalView as? MTerminalView)?.hasHostedLayout = true

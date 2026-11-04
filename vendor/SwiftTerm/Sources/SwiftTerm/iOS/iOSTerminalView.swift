@@ -257,6 +257,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
 
+    /// uTerm patch #13: how long `queuePendingDisplay` waits before the next
+    /// redraw. The host raises it while a large repaint is draining, so the
+    /// frames in between are skipped. See UTERM-PATCHES.md.
+    public var displayThrottleNanoseconds: UInt64 = TerminalView.defaultDisplayThrottleNanoseconds
+
+    /// 60 fps, upstream's fixed delay.
+    public static let defaultDisplayThrottleNanoseconds: UInt64 = 16_670_000
+
     /// Minimum WCAG contrast ratio (1...21) enforced between a cell's
     /// foreground and background at render time, mirroring VS Code's
     /// `terminal.integrated.minimumContrastRatio`. 1 disables the clamp
@@ -1819,17 +1827,25 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             metalView.frame = bounds
             requestMetalDisplay()
         } else {
-	    if sizeChanged || originChanged {
-                setNeedsDisplay(bounds)
-	    }
+            redrawAfterLayout(sizeChanged: sizeChanged, originChanged: originChanged)
         }
 #else
-        if sizeChanged || originChanged {
-            setNeedsDisplay(bounds)
-	}
+        redrawAfterLayout(sizeChanged: sizeChanged, originChanged: originChanged)
 #endif
 
         lastLayoutBounds = currentBounds
+    }
+
+    /// uTerm patch #13: output that scrolls moves `contentOffset`, and upstream
+    /// redrew for that on top of the redraw already queued for the same output —
+    /// two full draws per tick, and the throttle never applied. Let the queued one
+    /// paint it; `updateFullScreen` makes sure it finds something to do.
+    private func redrawAfterLayout(sizeChanged: Bool, originChanged: Bool) {
+        if !sizeChanged, originChanged, pendingDisplay {
+            terminal.updateFullScreen()
+        } else if sizeChanged || originChanged {
+            setNeedsDisplay(bounds)
+        }
     }
 
     open override var contentOffset: CGPoint {
