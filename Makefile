@@ -69,6 +69,8 @@ MOBILE_PACKAGE_ARGS ?= -onlyUsePackageVersionsFromResolvedFile
 # swift-nio / swift-log 等，与根工程的 https 形式同名异址，Xcode 的 SwiftPM 在「Updating from …」阶段会互锁挂死（0% CPU、无 git 子进程）。
 # 想照常联网解析依赖就传空值：make release PACKAGE_ARGS=
 PACKAGE_ARGS ?= -disableAutomaticPackageResolution -skipPackageUpdates
+TEST_WORKERS ?= 6
+MOBILE_TEST_WORKERS ?= 3
 
 # 本次发版的分组发布日志（Markdown）。同一份文案喂三个地方：企微分组通告、
 # TestFlight 的 What to Test、RELEASE_LOG.md 的「本次更新」。约定路径带版本与
@@ -137,7 +139,7 @@ APPCAST_DMG_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).dmg
 APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
-.PHONY: help list print-version print-build set-version bump-patch bump-minor bump-major \
+.PHONY: help test-fast test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
@@ -157,6 +159,8 @@ help:
 	@printf '%s\n' '  make export-app                        Export a Developer ID-signed app from the archive'
 	@printf '%s\n' '  make test                              Run tests with xcodebuild'
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
+	@printf '%s\n' '  make test-fast                         Run tests in parallel, recheck failures serially'
+	@printf '%s\n' '  make test-mobile-fast                  Same for uTermMobileTests'
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
 	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
 	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
@@ -284,6 +288,23 @@ test:
 		-destination "$(DESTINATION)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		test
+
+# 并行全量，失败用例再串行复核一遍，见 scripts/test-parallel.sh。
+test-fast:
+	scripts/test-parallel.sh "$(SCHEME)" "$(DESTINATION)" "$(TEST_WORKERS)" \
+		-project "$(PROJECT)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		$(PACKAGE_ARGS)
+
+test-mobile-fast:
+	scripts/test-parallel.sh "$(MOBILE_SCHEME)" "$(MOBILE_DESTINATION)" "$(MOBILE_TEST_WORKERS)" \
+		-project "$(PROJECT)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		$(MOBILE_PACKAGE_ARGS)
 
 # iOS/iPadOS：宿主是 uTermMobile.app，跑在模拟器上。测试 bundle 靠 TEST_HOST 取符号，
 # Frameworks 阶段是空的（见 uTermMobileTests/README.md）。
