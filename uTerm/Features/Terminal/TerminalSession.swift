@@ -35,7 +35,10 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         didSet {
             guard connectionState != oldValue else { return }
             // 标题说的是那条连接上正在跑的程序，连接没了就不再成立。
-            if connectionState != .connected { shellTitle = nil }
+            if connectionState != .connected {
+                shellTitle = nil
+                resetProgramStatus()
+            }
             onConnectionStateChange?(connectionState)
         }
     }
@@ -44,6 +47,13 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 程序可能高频刷新它（Claude Code 的转圈动画），所以标签要在单枚标签自己的 body 里读，
     /// 别让整条标签条或整个窗口挂在它上面。
     private(set) var shellTitle: String?
+
+    /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil。
+    /// 和 `shellTitle` 一样，要在单枚标签自己的 body 里读。
+    var programStatus: ProgramStatusRecord?
+    @ObservationIgnored var programStatusBoard = ProgramStatusBoard()
+    /// 程序需要用户注意时调用。默认发系统通知，单测里换掉。
+    @ObservationIgnored var attentionSink: (@MainActor (TerminalAttention) -> Void)?
 
     /// 连接状态变化的接线钩子。`PaneModel` 用它把「远端退出 / 重连成功」同步给
     /// 跨窗口注册表 —— 否则断开的会话仍被 `terminals` 列成活的，
@@ -86,6 +96,12 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         terminalView.terminalDelegate = self
         terminalView.menu = Self.makeContextMenu(for: terminalView)
         installTrackedRunMarkers()
+        installProgramStatusHandlers()
+        view.onFocusGained = { [weak self] in self?.acknowledgeProgramStatus() }
+        attentionSink = { [weak self] attention in
+            guard let self else { return }
+            TerminalAttentionCenter.shared.post(attention, from: self)
+        }
     }
 
     func receiveShellTitle(_ title: String) {

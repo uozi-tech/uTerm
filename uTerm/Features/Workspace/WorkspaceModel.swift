@@ -319,6 +319,10 @@ final class WorkspaceModel {
         registry.setCloser(forWindow: windowID) { [weak self] paneID in
             self?.closeTerminal(paneID: paneID) ?? false
         }
+        // 点系统通知回到标签走这里。
+        registry.setRevealer(forWindow: windowID) { [weak self] paneID in
+            self?.revealTerminal(paneID: paneID) ?? false
+        }
         syncTerminalTitles()
     }
 
@@ -327,6 +331,18 @@ final class WorkspaceModel {
     func closeTerminal(paneID: UUID) -> Bool {
         guard terminalGroups.allTabs.contains(where: { $0.payload.id == paneID }) else { return false }
         terminalGroups.closeTabs { $0.payload.id == paneID }
+        return true
+    }
+
+    /// 把某个终端窗格的标签切到前台并带出窗口。返回 false = 没有这个窗格。
+    /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
+    @discardableResult
+    func revealTerminal(paneID: UUID) -> Bool {
+        guard let tab = terminalGroups.allTabs.first(where: { $0.payload.id == paneID }),
+              let at = terminalGroups.locateTab(tab.id) else { return false }
+        let window = terminalGroups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        terminalGroups.activateTab(groupID: at.groupID, index: at.index)
+        window?.bringToFront()
         return true
     }
 

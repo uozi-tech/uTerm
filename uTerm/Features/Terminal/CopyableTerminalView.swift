@@ -14,6 +14,7 @@ import Carbon.HIToolbox
 /// （active=false）时也触发，会清空用户剪贴板。基于 mouse 事件序列
 /// 更可靠且与用户的"选中即复制"语义一致。
 /// 3. 把 ⌃↩ 留给终端程序，不让系统拿去弹上下文菜单。
+/// 4. 通知会话「用户回到这个终端了」。
 final class CopyableTerminalView: SwiftTerm.TerminalView {
 
     /// 是否在选中后自动把内容写入剪贴板。由 TerminalHostView 据
@@ -27,6 +28,36 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// 是否已按真实窗格排布过。首次排布立即生效（替换创建时的占位尺寸，此时还没有程序在画），
     /// 之后的尺寸变化都要等停稳，见 `TerminalContainerView.syncTerminalFrame`。
     var hasHostedLayout = false
+
+    // MARK: 焦点
+
+    /// 键盘焦点回到这个终端，或它所在的窗口重新成为 key。
+    var onFocusGained: (@MainActor () -> Void)?
+
+    /// `nonisolated(unsafe)`：理由同 `scrollActivityMonitor`。
+    private nonisolated(unsafe) var windowKeyObserver: NSObjectProtocol?
+
+    override var hasFocus: Bool {
+        get { super.hasFocus }
+        set {
+            super.hasFocus = newValue
+            if newValue { onFocusGained?() }
+        }
+    }
+
+    private func updateWindowKeyObserver() {
+        if let windowKeyObserver { NotificationCenter.default.removeObserver(windowKeyObserver) }
+        windowKeyObserver = window.map { window in
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.window?.firstResponder === self else { return }
+                    self.onFocusGained?()
+                }
+            }
+        }
+    }
 
     // MARK: 选中状态跟踪
 
@@ -136,10 +167,12 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
         super.viewDidMoveToWindow()
         installManagedScrollerIfNeeded()
         updateScrollActivityMonitor()
+        updateWindowKeyObserver()
     }
 
     deinit {
         removeScrollActivityMonitor()
+        if let windowKeyObserver { NotificationCenter.default.removeObserver(windowKeyObserver) }
     }
 
     private func installManagedScrollerIfNeeded() {

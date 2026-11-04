@@ -238,6 +238,18 @@ uTerm 侧：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalVie
 
 uTerm 侧入口：`TerminalSession.init` 设 `true`；iOS 未开启。
 
+## 11. 注册 OSC 处理器后还能调回内置处理
+
+`registerOscHandler` 注册的处理器优先于内置分发。uTerm 要在 OSC 133 上多做一件事（新提示符出现
+时清掉上一个程序的状态），要接管 OSC 9 里 SwiftTerm 不处理的纯文本通知，都得先调回内置逻辑，否则
+语义提示符和 `9;4` 进度条就失效了。
+
+涉及文件：
+
+- `Terminal.swift`：`oscSemanticPrompt`、`oscProgressReport` 由 internal 改 `public`，行为不变。
+
+uTerm 侧入口：`TerminalSession+ProgramStatus.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

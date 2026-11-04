@@ -2472,7 +2472,7 @@ open class Terminal {
 
     // OSC 133 — semantic prompts. Unknown actions, and options with unknown
     // or malformed values, are ignored entirely.
-    func oscSemanticPrompt(_ data: ArraySlice<UInt8>) {
+    public func oscSemanticPrompt(_ data: ArraySlice<UInt8>) {
         guard !isCurrentBufferAlternate,
               let text = String(bytes: data, encoding: .utf8),
               !text.isEmpty else { return }
@@ -2742,7 +2742,7 @@ open class Terminal {
     }
 
     @discardableResult
-    func oscProgressReport(_ data: ArraySlice<UInt8>) -> Bool {
+    public func oscProgressReport(_ data: ArraySlice<UInt8>) -> Bool {
         guard let report = parseProgressReport(data) else {
             return false
         }

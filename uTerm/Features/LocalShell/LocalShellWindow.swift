@@ -141,6 +141,17 @@ final class LocalShellWindowModel {
         }
     }
 
+    /// 把一个标签切到前台并带出窗口。返回 false = 没有这个标签。
+    /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
+    @discardableResult
+    func reveal(_ id: UUID) -> Bool {
+        guard let at = groups.locateTab(id) else { return false }
+        let window = groups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        groups.activateTab(groupID: at.groupID, index: at.index)
+        window?.bringToFront()
+        return true
+    }
+
     func splitActiveGroup(direction: SplitDirection) {
         guard let groupID = groups.activeGroupID ?? groups.root.firstLeafID else { return }
         groups.splitGroup(groupID, direction: direction)
@@ -269,6 +280,10 @@ struct LocalShellWindowView: View {
             registry.setCloser(forWindow: windowID.id) { [weak windowModel] paneID in
                 windowModel?.close(paneID) ?? false
             }
+            // 点系统通知回到标签走这里。
+            registry.setRevealer(forWindow: windowID.id) { [weak windowModel] paneID in
+                windowModel?.reveal(paneID) ?? false
+            }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID()) }
         }
@@ -345,11 +360,12 @@ struct LocalShellTerminalArea: View {
         let session = pane.session
         let controlled = session.remoteController != nil
         let shellTitle = session.shellTitle
+        let status = session.programStatus
         return UPaneTabDescriptor(
             title: shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle,
-            icon: .system(controlled ? "iphone" : "terminal"),
-            leadingDot: session.connectionState == .connected ? UD.success : UD.text4,
-            help: controlled ? "正在被手机接管" : shellTitle ?? pane.defaultTitle)
+            icon: .system(controlled ? "iphone" : status?.tabIcon ?? "terminal"),
+            leadingDot: status?.tabDot ?? (session.connectionState == .connected ? UD.success : UD.text4),
+            help: controlled ? "正在被手机接管" : status?.tabHelp ?? shellTitle ?? pane.defaultTitle)
     }
 
     private func newTabButton(_ groupID: UUID) -> some View {

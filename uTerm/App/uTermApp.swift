@@ -105,6 +105,7 @@ struct uTermApp: App {
         let controlSettings = ControlSettings()
         let forwardingCoordinator = ForwardingCoordinator()
         let terminalRegistry = TerminalSessionRegistry()
+        TerminalAttentionCenter.shared.start(registry: terminalRegistry)
         let globalForwarding = GlobalForwardingModel()
         let launchRelay = HostKeyChallengeRelay()
         _controlSettings = State(initialValue: controlSettings)

@@ -52,11 +52,7 @@ final class TerminalWindowRouter {
     func openInExistingWindow(serverID: UUID) -> Bool {
         guard let id = activationOrder.last, let entry = entries[id] else { return false }
         entry.openTab(serverID)
-        if let window = entry.window {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        entry.window?.bringToFront()
         return true
     }
 }

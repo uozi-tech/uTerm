@@ -105,10 +105,12 @@ struct TerminalArea: View {
         let shellTitle = pane.session.shellTitle
         let display = ConnectionStatusDisplay(state: pane.session.connectionState)
         let context = "\(name) · \(display.label)"
+        let status = pane.session.programStatus
+        let baseHelp = shellTitle.map { "\($0)\n\(context)" } ?? context
         return UPaneTabDescriptor(title: shellTitle.map(clippedTabTitle) ?? name,
-                                  icon: .system("terminal"),
-                                  leadingDot: display.tint.color,
-                                  help: shellTitle.map { "\($0)\n\(context)" } ?? context)
+                                  icon: .system(status?.tabIcon ?? "terminal"),
+                                  leadingDot: status?.tabDot ?? display.tint.color,
+                                  help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
     }
 
     /// 标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。
