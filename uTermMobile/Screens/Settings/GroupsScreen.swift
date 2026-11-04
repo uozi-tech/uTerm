@@ -126,13 +126,12 @@ struct GroupFormSheet: View {
             }
             group.colorHex = colorHex
         } else {
-            let existing = (try? context.fetch(FetchDescriptor<ServerGroup>())) ?? []
-            guard !existing.contains(where: { $0.name == trimmed }) else {
+            let sameName = FetchDescriptor<ServerGroup>(predicate: #Predicate { $0.name == trimmed })
+            guard ((try? context.fetchCount(sameName)) ?? 0) == 0 else {
                 duplicateName = true
                 return
             }
-            let next = existing.map(\.sortOrder).max() ?? -1
-            context.insert(ServerGroup(name: trimmed, colorHex: colorHex, sortOrder: next + 1))
+            GroupStore(context: context).ensure(name: trimmed).colorHex = colorHex
         }
         try? context.save()
         dismiss()
