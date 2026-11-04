@@ -112,9 +112,9 @@ final class AccentColorTests: XCTestCase {
 
     @MainActor
     func testAccentPaletteItems() {
-        defer { AccentState.shared.selected = .blue }
-        AccentState.shared.selected = .green
-        let items = commandPaletteAccentItems()
+        let state = isolatedAccentState()
+        state.selected = .green
+        let items = commandPaletteAccentItems(state: state)
         XCTAssertEqual(items.count, 5)
         XCTAssertTrue(items.allSatisfy { $0.kind == .setting })
         XCTAssertEqual(Set(items.map(\.id)).count, 5)
@@ -132,12 +132,20 @@ final class AccentColorTests: XCTestCase {
 
     @MainActor
     func testAccentPaletteItemRunSwitchesAccent() throws {
-        defer { AccentState.shared.selected = .blue }
-        AccentState.shared.selected = .blue
-        let items = commandPaletteAccentItems()
+        let state = isolatedAccentState()
+        let items = commandPaletteAccentItems(state: state)
         // XCTUnwrap：id 若再漂移，这里直接失败，而不是静默不 run 后断言「还是蓝」。
         let red = try XCTUnwrap(items.first { $0.id == "setting.accent.red" })
         red.run()
-        XCTAssertEqual(AccentState.shared.selected, .red)
+        XCTAssertEqual(state.selected, .red)
+    }
+
+    /// `AccentState.shared` 读写的是宿主 App 的真实设置，测试不能碰。
+    @MainActor
+    private func isolatedAccentState() -> AccentState {
+        let name = "AccentColorTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return AccentState(defaults: defaults)
     }
 }

@@ -38,6 +38,24 @@ final class TestModelConfigurationLintTests: XCTestCase {
             """)
     }
 
+    /// 测试宿主和正式版共用一份设置：写 `AccentState.shared` 等于改用户选的强调色，
+    /// 用例收尾设回蓝色，用户下次启动就发现颜色变了。
+    func testNoTestWritesSharedAccentState() throws {
+        var offenders: [String] = []
+        for file in try Self.testSwiftFiles() {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for match in source.matches(of: /AccentState\.shared\.selected\s*=[^=]/) {
+                let line = source[..<match.range.lowerBound].filter { $0 == "\n" }.count + 1
+                offenders.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertTrue(offenders.isEmpty, """
+            测试写了 AccentState.shared（\(offenders.count) 处）：
+            \(offenders.joined(separator: "\n"))
+            改用 `AccentState(defaults:)` 配私有 UserDefaults 套件。
+            """)
+    }
+
     // MARK: - 扫描
 
     /// 找出 `name` 的每次调用，按括号深度截出参数文本（支持跨行）。

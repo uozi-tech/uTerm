@@ -161,17 +161,17 @@ func commandPaletteSettingsItems(openSettings: @escaping () -> Void) -> [Command
 
 /// uTerm-only command-palette bridge for the shared package's accent state.
 @MainActor
-func commandPaletteAccentItems() -> [CommandPaletteItem] {
+func commandPaletteAccentItems(state: AccentState = .shared) -> [CommandPaletteItem] {
     AccentColor.allCases.map { color in
         CommandPaletteItem(
             id: "setting.accent.\(color.rawValue)",
             kind: .setting,
             title: "强调色 · \(color.label)",
             detail: "切换全局界面强调色",
-            hint: AccentState.shared.selected == color ? "当前" : "↵",
+            hint: state.selected == color ? "当前" : "↵",
             group: nil
         ) {
-            AccentState.shared.selected = color
+            state.selected = color
         }
     }
 }
