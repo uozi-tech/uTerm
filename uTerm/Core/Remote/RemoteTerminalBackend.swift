@@ -11,6 +11,9 @@ import Foundation
 actor RemoteTerminalBackend: TerminalImageReceiving {
     nonisolated let outputStream: AsyncStream<Data>
     nonisolated let exitStream: AsyncStream<Void>
+    /// 断线重连的进度：true = 断了正在重连（这期间的输入发不出去），false = 接回了。界面据此提示。
+    nonisolated let reconnecting: AsyncStream<Bool>
+    private let reconnectingContinuation: AsyncStream<Bool>.Continuation
     private let outputContinuation: AsyncStream<Data>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
@@ -26,6 +29,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         self.sessionID = sessionID
         (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
         (exitStream, exitContinuation) = AsyncStream<Void>.makeStream()
+        (reconnecting, reconnectingContinuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
     func connect() async throws {
@@ -43,6 +47,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         let requested = size
         let attached = try await client.attach(sessionID: sessionID, size: requested, sink: sink)
         attachment = attached
+        reconnectingContinuation.yield(false)
         // 接入请求在路上时视图可能刚布局完、报来了真实尺寸（那时还没有通道，发不出去）：补发一次。
         if size != requested {
             attached.link.send(RemoteMessage(.resize, channel: attached.channel, payload: size.encoded()))
@@ -72,6 +77,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     func close() async {
         guard !isClosed else { return }
         isClosed = true
+        reconnectingContinuation.finish()
         reconnectTask?.cancel()
         reconnectTask = nil
         if let attachment {
@@ -93,6 +99,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
             end(reason)
             return
         }
+        reconnectingContinuation.yield(true)
         guard reconnectTask == nil else { return }
         reconnectTask = Task { [weak self] in await self?.reconnectLoop() }
     }
@@ -102,7 +109,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     private func reconnectLoop() async {
         var delay: Duration = .milliseconds(500)
         while !Task.isCancelled && !isClosed {
-            try? await Task.sleep(for: delay)
+            if await client.retryGate.wait(delay) { delay = .milliseconds(500) }
             guard !Task.isCancelled, !isClosed else { break }
             do {
                 try await attach()
@@ -119,6 +126,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
 
     private func end(_ reason: String) {
         isClosed = true
+        reconnectingContinuation.finish()
         let note = "\r\n\u{1b}[2m[\(reason.isEmpty ? "远程会话已结束" : reason)]\u{1b}[0m\r\n"
         outputContinuation.yield(Data(note.utf8))
         exitContinuation.yield(())

@@ -48,6 +48,9 @@ final class MobileTerminalController {
     /// 后端按协议持有（`TerminalBackend`，桌面 `TerminalSession` 用的同一个抽象）：
     /// 生产是 `SSHConnection`，测试注入假传输。控制器本身不知道底下是谁。
     @ObservationIgnored private var connection: (any TerminalBackend)?
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    /// 远控标签与 Mac 的连接断了，正在重连。这期间按键发不出去，界面要明说。
+    private(set) var isReconnecting = false
     /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
     @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
     @ObservationIgnored private var outputTask: Task<Void, Never>?
@@ -98,6 +101,11 @@ final class MobileTerminalController {
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
+        // 远控快照带这么多行历史，接收端要装得下（SwiftTerm 默认只有 500 行）。
+        let terminal = view.getTerminal()
+        if (terminal.options.scrollback) < RemoteConstants.snapshotScrollback {
+            terminal.changeScrollback(RemoteConstants.snapshotScrollback)
+        }
         installModifierResetObserversIfNeeded()
     }
 
@@ -239,6 +247,14 @@ final class MobileTerminalController {
     /// 接上一条刚造好的传输：输出泵、退出监听、有序的输入通道。
     private func install(_ conn: any TerminalBackend) {
         connection = conn
+        isReconnecting = false
+        reconnectTask?.cancel()
+        reconnectTask = (conn as? RemoteTerminalBackend).map { remote in
+            Task { [weak self] in
+                for await reconnecting in remote.reconnecting { self?.isReconnecting = reconnecting }
+                self?.isReconnecting = false
+            }
+        }
         acceptsImages = conn is any TerminalImageReceiving
         let outStream = conn.outputStream
         let exitStream = conn.exitStream
@@ -370,6 +386,9 @@ final class MobileTerminalController {
         connectTask = nil
         resetOutputPipeline()
         exitTask?.cancel()
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        isReconnecting = false
         resizeTask?.cancel()
         inputContinuation?.finish()
         inputContinuation = nil

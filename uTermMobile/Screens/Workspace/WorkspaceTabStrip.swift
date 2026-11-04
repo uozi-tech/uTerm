@@ -282,7 +282,7 @@ struct WorkspaceTabChip: View {
         switch tab {
         case .terminal(let t):
             switch t.controller.state {
-            case .connected: return (M.success, false)
+            case .connected: return t.controller.isReconnecting ? (M.warning, true) : (M.success, false)
             case .connecting: return (M.warning, true)
             case .failed: return (M.danger, false)
             case .closed, .idle: return (M.text4, false)

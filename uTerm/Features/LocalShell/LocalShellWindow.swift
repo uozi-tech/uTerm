@@ -59,8 +59,10 @@ final class LocalShellPane: Identifiable {
 
     func dispose() {
         registrar?.unregister(paneID: id)
+        // `session.dispose()` 会清掉 backend，之后 `session.close()` 就关不到它了，要先留一份。
+        let backend = session.backend
         session.dispose()
-        Task { await session.close() }
+        Task { await backend?.close() }
     }
 
     private func syncRegistration(_ state: TerminalSession.ConnectionState) {

@@ -26,13 +26,31 @@ nonisolated enum RemoteConstants {
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
     static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
-                                          RemoteFeature.closeSession, RemoteFeature.terminalImage]
+                                          RemoteFeature.closeSession, RemoteFeature.terminalImage,
+                                          RemoteFeature.heartbeat]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
 }
 
+/// 链路存活判定的时限。TCP keepalive 只能证明这一段网络通，而且空闲时要约 30 秒才报错，这期间手机上就是一张
+/// 冻住的画面。所以手机在链路安静时主动 ping，Mac 也会断开长时间无声的手机。
+nonisolated struct RemoteHeartbeat: Sendable {
+    /// 手机：两个方向任一方向安静这么久就发 ping。
+    var pingInterval: TimeInterval = 5
+    /// 手机：这么久没收到任何字节，判定链路已死。
+    var replyLimit: TimeInterval = 20
+    /// 手机：网络变化或回到前台后探测一次，这么久没回音判定链路已死。
+    var probeReplyLimit: TimeInterval = 5
+    /// Mac：声明支持心跳的手机这么久无声就断开。
+    var peerSilenceLimit: TimeInterval = 30
+
+    static let standard = RemoteHeartbeat()
+}
+
 nonisolated enum RemoteFeature {
+    /// 手机会定时 ping：Mac 可以放心断开长时间无声的手机。不声明这一项的老手机在空闲时不发任何东西，不能断。
+    static let heartbeat = "heartbeat"
     /// 远程桌面（P2）：认得 `desktop*` 消息。
     static let desktop = "desktop"
     /// 远程桌面里粘贴手机的图片 / 文字：认得 `desktopPaste`。
@@ -170,6 +188,16 @@ nonisolated enum RemoteProtocolError: LocalizedError, Equatable {
         case .pairingRejected: return "Mac 拒绝了配对请求"
         case .timeout: return "远控连接超时"
         case .closed: return "远控连接已断开"
+        }
+    }
+
+    /// 重试也没用的错误（配对被拒、身份变了、协议版本不兼容）。其余都按网络问题对待，可以重试。
+    var isPermanent: Bool {
+        switch self {
+        case .versionMismatch, .peerIdentityChanged, .notPaired, .pairingRejected:
+            return true
+        case .malformedMessage, .unknownMessage, .frameTooLarge, .handshakeFailed, .decryptionFailed, .timeout, .closed:
+            return false
         }
     }
 }

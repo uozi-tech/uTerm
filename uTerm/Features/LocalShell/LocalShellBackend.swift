@@ -113,8 +113,9 @@ actor LocalShellBackend: TerminalImageReceiving {
     private func ended() {
         guard !closed else { return }
         closed = true
-        finish()
+        // 先 yield 再 finish：finish 之后 yield 是空操作，会话结束就没人知道了。
         exitContinuation.yield()
+        finish()
     }
 
     private func finish() {

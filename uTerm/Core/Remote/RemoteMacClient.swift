@@ -31,10 +31,12 @@ nonisolated struct RemoteAttachment: Sendable {
 nonisolated enum RemoteAttachError: LocalizedError {
     /// Mac 拒绝接入（终端已关闭等），重试也没用。
     case rejected(String)
+    /// 连不上 Mac（睡着了、Wi-Fi 断了、uTerm 正在重启），过一会儿可能就好了。
+    case unreachable(String)
 
     var errorDescription: String? {
         switch self {
-        case .rejected(let message): return message
+        case .rejected(let message), .unreachable(let message): return message
         }
     }
 }
@@ -124,14 +126,35 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
+    @ObservationIgnored private let heartbeat: RemoteHeartbeat
+    /// 各个标签与桌面流的退避等待都挂在这里，网络恢复、回到前台时一起叫醒。
+    nonisolated let retryGate = RemoteRetryGate()
 
     /// - Parameters:
     ///   - macName: 显示用（Bonjour 服务名，即 Mac 的电脑名）。
     ///   - endpoint: Bonjour 发现的服务端点；测试里直接给 127.0.0.1 的端口。
-    init(macName: String, endpoint: NWEndpoint, identity: RemoteIdentityStore) {
+    init(macName: String, endpoint: NWEndpoint, identity: RemoteIdentityStore, heartbeat: RemoteHeartbeat = .standard) {
         self.macName = macName
         self.endpoint = endpoint
         self.identity = identity
+        self.heartbeat = heartbeat
+    }
+
+    /// 网络变了。没网：现在的连接肯定不行了，马上断开。有网：现在的连接可能已经走不通（换了 Wi-Fi），
+    /// 问一声；正在退避等待重连的，马上再试一次。
+    func networkChanged(isSatisfied: Bool) {
+        guard isSatisfied else {
+            link?.close(RemoteProtocolError.closed)
+            return
+        }
+        link?.probe(replyLimit: heartbeat.probeReplyLimit)
+        retryGate.kick()
+    }
+
+    /// App 回到前台：挂起期间连接可能已经死了，问一声；正在退避等待重连的，马上再试一次。
+    func returnedToForeground() {
+        link?.probe(replyLimit: heartbeat.probeReplyLimit)
+        retryGate.kick()
     }
 
     func updateEndpoint(_ endpoint: NWEndpoint) {
@@ -142,7 +165,7 @@ final class RemoteMacClient: Identifiable {
     var canAutoReconnect: Bool {
         switch state {
         case .idle: return true
-        case .failed: return !pairingRefused
+        case .failed: return !pairingRefused && !failureIsPermanent
         case .connecting, .awaitingApproval, .connected: return false
         }
     }
@@ -203,6 +226,7 @@ final class RemoteMacClient: Identifiable {
                 link.send(RemoteMessage(.subscribeSessions))
             }
         } catch {
+            failureIsPermanent = (error as? RemoteProtocolError)?.isPermanent ?? false
             state = .failed(error.localizedDescription)
             link.close(error)
             if self.link === link { self.link = nil }
@@ -210,6 +234,14 @@ final class RemoteMacClient: Identifiable {
     }
 
     @ObservationIgnored private var pendingCode = ""
+    /// `state == .failed` 时这次失败是否重试也没用。false = 网络问题，调用方可以退避重试。
+    @ObservationIgnored private var failureIsPermanent = false
+
+    /// 连接没成功时该抛给调用方的错误。
+    private var connectionFailure: Error {
+        guard case .failed(let message) = state else { return RemoteProtocolError.closed }
+        return failureIsPermanent ? RemoteAttachError.rejected(message) : RemoteAttachError.unreachable(message)
+    }
 
     private var isFailed: Bool {
         if case .failed = state { return true }
@@ -226,11 +258,13 @@ final class RemoteMacClient: Identifiable {
             }
             pairingRefused = false
             state = .connected
+            link?.startHeartbeat(heartbeat)
             resumeOutcome()
         case .awaitingApproval:
             state = .awaitingApproval(pendingCode)
         case .rejected:
             pairingRefused = true
+            failureIsPermanent = true
             state = .failed(RemoteProtocolError.pairingRejected.localizedDescription)
             resumeOutcome()
         }
@@ -257,9 +291,11 @@ final class RemoteMacClient: Identifiable {
         sessions = []
         listedSessionIDs = nil
         if state == .connected || state == .connecting {
+            failureIsPermanent = false
             state = error.map { .failed($0.localizedDescription) } ?? .idle
         } else if case .awaitingApproval = state {
             pairingRefused = true
+            failureIsPermanent = true
             state = .failed(error?.localizedDescription ?? "Mac 没有确认配对")
         }
         resumeOutcome()
@@ -350,8 +386,7 @@ final class RemoteMacClient: Identifiable {
     func attach(sessionID: UUID, size: RemoteGridSize, sink: RemoteChannelSink) async throws -> RemoteAttachment {
         await connect()
         guard state == .connected, let link else {
-            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
-            throw RemoteProtocolError.closed
+            throw connectionFailure
         }
         table.expect(sessionID: sessionID, sink: sink)
         let channel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt32, Error>) in
@@ -404,12 +439,12 @@ final class RemoteMacClient: Identifiable {
     }
 
     /// 请 Mac 开一个本机 shell（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常 `attach`。
-    /// Mac 上没开「允许打开本机终端」、辅助程序没授权等情况抛 `RemoteAttachError.rejected`，带给人看的原因。
+    /// Mac 上没开「允许打开本机终端」、辅助程序没授权等情况抛 `RemoteAttachError.rejected`，带给人看的原因；
+    /// 连不上 Mac 抛 `.unreachable`。
     func openLocalShell() async throws -> UUID {
         await connect()
         guard state == .connected, let link else {
-            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
-            throw RemoteProtocolError.closed
+            throw connectionFailure
         }
         guard supportsLocalShell else {
             throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。请把 Mac 上的 uTerm 更新到最新版")
@@ -433,8 +468,7 @@ extension RemoteMacClient {
                       sink: RemoteChannelSink) async throws -> (attachment: RemoteAttachment, info: RemoteDesktopInfo) {
         await connect()
         guard state == .connected, let link else {
-            if case .failed(let message) = state { throw RemoteAttachError.rejected(message) }
-            throw RemoteProtocolError.closed
+            throw connectionFailure
         }
         guard supportsDesktop else { throw RemoteDesktopError.macTooOld }
         table.expect(sessionID: request.requestID, sink: sink)

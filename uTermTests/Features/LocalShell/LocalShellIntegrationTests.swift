@@ -7,6 +7,15 @@ import XCTest
 @MainActor
 final class LocalShellIntegrationTests: XCTestCase {
 
+    /// 进程是否还在（僵尸不算）。不能用 `kill(pid, 0)`：测试宿主在沙盒里，对沙盒外的 shell 恒返回 EPERM。
+    private static func isAlive(_ pid: Int32) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        return info.kp_proc.p_stat != SZOMB
+    }
+
     func test_sandboxed_host_opens_unsandboxed_login_shell_through_embedded_xpc_service() async throws {
         let client = LocalShellAgentClient()
         defer { client.invalidate() }
@@ -45,7 +54,48 @@ final class LocalShellIntegrationTests: XCTestCase {
         guard let pid = await backend.pid else { return XCTFail("没有进程号") }
         await backend.close()
         let deadline = Date().addingTimeInterval(5)
-        while kill(pid, 0) == 0, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
-        XCTAssertNotEqual(kill(pid, 0), 0, "结束后 shell 进程还在")
+        while Self.isAlive(pid), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(Self.isAlive(pid), "结束后 shell 进程还在")
+    }
+
+    /// shell 自己退出（用户敲 exit）：后端要报告会话结束，否则界面和手机上画面一直冻着。
+    func test_natural_shell_exit_is_reported_on_exit_stream() async throws {
+        let client = LocalShellAgentClient()
+        defer { client.invalidate() }
+        let backend = LocalShellBackend(client: client, columns: 80, rows: 24)
+        try await backend.connect()
+        let drain = Task { for await _ in backend.outputStream {} }
+        defer { drain.cancel() }
+        let exited = Task { () -> Bool in
+            for await _ in backend.exitStream { return true }
+            return false
+        }
+        await backend.write(Data("exit\n".utf8))
+        let reported = await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask { await exited.value }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(15))
+                exited.cancel()
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        XCTAssertTrue(reported, "shell 退出后 exitStream 应产出一个元素")
+    }
+
+    /// 关本机标签要真的结束 shell，不能等到 uTerm 退出才收尸。
+    func test_disposing_pane_terminates_its_shell() async throws {
+        let pane = LocalShellPane()
+        await pane.start()
+        guard let backend = pane.session.backend as? LocalShellBackend, let pid = await backend.pid else {
+            return XCTFail("shell 没起来：\(pane.session.connectionState)")
+        }
+        XCTAssertTrue(Self.isAlive(pid))
+        pane.dispose()
+        let deadline = Date().addingTimeInterval(8)
+        while Self.isAlive(pid), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(Self.isAlive(pid), "关标签后 shell 进程还在")
     }
 }

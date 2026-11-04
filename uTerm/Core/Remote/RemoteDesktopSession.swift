@@ -137,7 +137,7 @@ final class RemoteDesktopSession {
     private func reconnectLoop() async {
         var delay: Duration = .milliseconds(300)
         while !Task.isCancelled && !isStopped {
-            try? await Task.sleep(for: delay)
+            if await client.retryGate.wait(delay) { delay = .milliseconds(300) }
             guard !Task.isCancelled, !isStopped else { break }
             do {
                 try await open()

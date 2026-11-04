@@ -63,6 +63,8 @@ final class RemoteHostServer {
     @ObservationIgnored let localID: UUID
     /// 握手时报给手机的可选能力。测试里传空数组，模拟 P1 版本的 Mac。
     @ObservationIgnored let localFeatures: [String]
+    /// 声明支持心跳的手机这么久无声就断开。
+    @ObservationIgnored let peerSilenceLimit: TimeInterval
     @ObservationIgnored private let advertises: Bool
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
@@ -71,6 +73,9 @@ final class RemoteHostServer {
     @ObservationIgnored private var controllers: [UUID: (connection: UUID, channel: UInt32)] = [:]
     @ObservationIgnored private var activity: NSObjectProtocol?
     @ObservationIgnored private var activityOptions: ProcessInfo.ActivityOptions = []
+    @ObservationIgnored private var lastRemoteInput: Date?
+    @ObservationIgnored private var lastRemoteOutput: Date?
+    @ObservationIgnored private var activityRecheck: Task<Void, Never>?
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(),
@@ -78,8 +83,10 @@ final class RemoteHostServer {
          localID: UUID = RemoteLocalDevice.id(),
          advertises: Bool = true,
          localFeatures: [String] = RemoteConstants.localFeatures,
+         peerSilenceLimit: TimeInterval = RemoteHeartbeat.standard.peerSilenceLimit,
          desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
         self.localFeatures = localFeatures
+        self.peerSilenceLimit = peerSilenceLimit
         self.registry = registry
         self.desktopEnvironment = desktopEnvironment
         self.identity = identity
@@ -228,6 +235,7 @@ final class RemoteHostServer {
             holder.detach(channel: previous.channel, notify: true, reason: "已被 \(connection.peerName) 接管")
         }
         controllers[sessionID] = (connection.id, channel)
+        lastRemoteInput = Date()
         controllersChanged()
     }
 
@@ -247,11 +255,28 @@ final class RemoteHostServer {
         for connection in connections.values { connection.sendSessions() }
     }
 
-    /// 有设备在接管终端时别让 Mac 闲置睡眠，不然手机那头会突然断掉；有人在看屏幕时连显示器也不让熄
-    ///（熄屏后 ScreenCaptureKit 不出帧，手机上就是一张冻住的画面）。
+    /// 手机发来了输入，或刚接入一个终端。
+    func noteRemoteInput() {
+        lastRemoteInput = Date()
+        updateActivity()
+    }
+
+    /// 手机正在收输出。可能很频繁，所以调用方应当节流。
+    func noteRemoteOutput() {
+        lastRemoteOutput = Date()
+        updateActivity()
+    }
+
+    /// 有人在用终端时别让 Mac 闲置睡眠，不然手机那头会突然断掉（规则见 `RemoteSleepPolicy`）；有人在看屏幕时
+    /// 连显示器也不让熄（熄屏后 ScreenCaptureKit 不出帧，手机上就是一张冻住的画面）。
     private func updateActivity() {
         var options: ProcessInfo.ActivityOptions = []
-        if !controllers.isEmpty { options.insert(.idleSystemSleepDisabled) }
+        let now = Date()
+        if !controllers.isEmpty,
+           RemoteSleepPolicy.holdsAwake(now: now, lastInput: lastRemoteInput, lastOutput: lastRemoteOutput) {
+            options.insert(.idleSystemSleepDisabled)
+            scheduleActivityRecheck(now: now)
+        }
         if desktopViewer != nil { options.formUnion([.idleSystemSleepDisabled, .idleDisplaySleepDisabled]) }
         guard options != activityOptions else { return }
         if let activity {
@@ -262,6 +287,19 @@ final class RemoteHostServer {
         if !options.isEmpty {
             activity = ProcessInfo.processInfo.beginActivity(
                 options: options, reason: desktopViewer != nil ? "手机正在远程查看屏幕" : "手机正在远程控制终端")
+        }
+    }
+
+    /// 不用了不会有人来通知，到点自己重算一次。
+    private func scheduleActivityRecheck(now: Date) {
+        guard activityRecheck == nil else { return }
+        let expiry = RemoteSleepPolicy.expiry(lastInput: lastRemoteInput, lastOutput: lastRemoteOutput)
+        let delay = max(1, (expiry ?? now).timeIntervalSince(now))
+        activityRecheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.activityRecheck = nil
+            self.updateActivity()
         }
     }
 

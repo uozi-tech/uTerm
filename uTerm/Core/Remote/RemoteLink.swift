@@ -31,6 +31,11 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// 已交给网络栈、还没发完的字节数（只在 `queue` 上读）。
     private(set) var inflightBytes = 0
 
+    // 存活判定（只在 `queue` 上读写）。
+    private var lastReceived = DispatchTime.now()
+    private var lastSent = DispatchTime.now()
+    private var livenessTimer: DispatchSourceTimer?
+
     /// 终端流量很小又讲究回显延迟：关 Nagle（`noDelay`），开 keepalive 及早发现对端消失。
     static func parameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()
@@ -190,6 +195,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             return
         }
         let count = framed.count
+        lastSent = .now()
         inflightBytes += count
         connection.send(content: framed, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
@@ -211,7 +217,10 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     private func receiveNext() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 512 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, !self.isClosed else { return }
-            if let data { self.frames.append(data) }
+            if let data {
+                self.lastReceived = .now()
+                self.frames.append(data)
+            }
             self.processFrames()
             if let error {
                 self.fail(error)
@@ -251,6 +260,74 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         }
     }
 
+    // MARK: - 存活判定
+
+    /// 手机这一端：链路安静时发 ping，太久没收到任何字节就判死。握手和配对都结束后才开始（等 Mac 上的人点
+    /// 「允许」期间 Mac 不回 ping）。
+    func startHeartbeat(_ heartbeat: RemoteHeartbeat) {
+        startLivenessTimer(every: heartbeat.pingInterval / 3) { link, quiet, silent, wasSuspended in
+            if wasSuspended {
+                // App 刚从挂起回来：这段时间收不到东西不算链路死了。重新计时，并马上问一声。
+                link.lastReceived = .now()
+                link.sendOnQueue(RemoteMessage(.ping))
+                return
+            }
+            if quiet > heartbeat.replyLimit {
+                link.fail(RemoteProtocolError.timeout)
+            } else if quiet > heartbeat.pingInterval || silent > heartbeat.pingInterval {
+                link.sendOnQueue(RemoteMessage(.ping))
+            }
+        }
+    }
+
+    /// Mac 这一端：只判死，不主动发。
+    func startSilenceWatch(limit: TimeInterval) {
+        startLivenessTimer(every: limit / 3) { link, quiet, _, _ in
+            if quiet > limit { link.fail(RemoteProtocolError.timeout) }
+        }
+    }
+
+    /// 网络刚变化或刚回到前台：发一个 ping，`replyLimit` 秒内收到任何字节都算活着，否则判死。
+    func probe(replyLimit: TimeInterval) {
+        queue.async { [self] in
+            guard !self.isClosed else { return }
+            let asked = DispatchTime.now()
+            self.sendOnQueue(RemoteMessage(.ping))
+            self.queue.asyncAfter(deadline: asked + replyLimit) { [weak self] in
+                guard let self, !self.isClosed, self.lastReceived < asked else { return }
+                self.fail(RemoteProtocolError.timeout)
+            }
+        }
+    }
+
+    private func startLivenessTimer(
+        every interval: TimeInterval,
+        _ tick: @escaping @Sendable (_ link: RemoteLink, _ quiet: TimeInterval, _ silent: TimeInterval,
+                                     _ wasSuspended: Bool) -> Void
+    ) {
+        queue.async { [self] in
+            guard !self.isClosed, self.livenessTimer == nil else { return }
+            self.lastReceived = .now()
+            self.lastSent = .now()
+            var lastTick = DispatchTime.now()
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + interval, repeating: interval)
+            timer.setEventHandler { [weak self] in
+                guard let self, !self.isClosed else { return }
+                let now = DispatchTime.now()
+                let seconds: (DispatchTime) -> TimeInterval = {
+                    TimeInterval(now.uptimeNanoseconds &- $0.uptimeNanoseconds) / 1_000_000_000
+                }
+                // 定时器隔了好几拍才来：进程被挂起过，不是对端没声音。
+                let wasSuspended = seconds(lastTick) > interval * 3
+                lastTick = now
+                tick(self, seconds(self.lastReceived), seconds(self.lastSent), wasSuspended)
+            }
+            self.livenessTimer = timer
+            timer.resume()
+        }
+    }
+
     // MARK: - 关闭
 
     /// 主动关闭。`error` 为 nil 表示正常断开。还没发出去的数据会被丢弃。
@@ -278,6 +355,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         guard !isClosed else { return }
         isClosed = true
         closeError = error
+        livenessTimer?.cancel()
+        livenessTimer = nil
         readyWaiter?.resume(throwing: error ?? RemoteProtocolError.closed)
         readyWaiter = nil
         helloWaiter?.resume(throwing: error ?? RemoteProtocolError.closed)

@@ -21,6 +21,8 @@ final class RemoteHostConnection {
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
     private(set) var peerID: UUID?
+    /// 手机声明了会定时 ping（老手机空闲时不发任何东西，不能按无声断开）。
+    private var peerSendsHeartbeat = false
     private(set) var isAuthorized = false
     private var subscribedToSessions = false
     private var isClosed = false
@@ -38,6 +40,9 @@ final class RemoteHostConnection {
         self.server = server
         self.pump = RemoteOutputPump(link: link)
         self.desktopRoute = RemoteDesktopRoute(queue: link.queue)
+        self.pump.onOutputSent = { [weak server] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { server?.noteRemoteOutput() } }
+        }
     }
 
     func start() {
@@ -75,6 +80,7 @@ final class RemoteHostConnection {
             let peer = established.peer
             peerName = peer.deviceName
             peerID = peer.deviceID
+            peerSendsHeartbeat = peer.features?.contains(RemoteFeature.heartbeat) ?? false
             if let trusted = server.identity.peer(id: peer.deviceID), trusted.publicKey == peer.staticKey {
                 authorize(.trusted)
                 return
@@ -101,6 +107,7 @@ final class RemoteHostConnection {
     private func authorize(_ state: RemotePairingState) {
         isAuthorized = true
         sendPairing(state)
+        if peerSendsHeartbeat { link.startSilenceWatch(limit: server.peerSilenceLimit) }
         server.connectionAuthorized(self)
     }
 
@@ -122,6 +129,7 @@ final class RemoteHostConnection {
             attach(request)
         case .input:
             attachments[message.channel]?.session?.writeRemoteInput(message.payload)
+            server.noteRemoteInput()
         case .resize:
             guard let attachment = attachments[message.channel],
                   let size = try? RemoteGridSize(decoding: message.payload) else { return }
@@ -372,6 +380,10 @@ extension RemoteHostConnection {
 /// 每次最多取 `maxOutputChunkBytes`，各通道轮流取；网络栈里在途的字节超过上限就停手，
 /// 等 `onWritable` 再继续。停手期间积压留在订阅者那里，超过它的上限就会被换成快照。
 nonisolated final class RemoteOutputPump: @unchecked Sendable {
+    /// 发出了输出（连接队列上，最多 30 秒一次，防睡眠策略用）。在 `RemoteHostConnection.init` 里设一次，之后只读。
+    var onOutputSent: (@Sendable () -> Void)?
+    /// 只在 `link.queue` 上读写。
+    private var lastOutputNote: DispatchTime?
     private let link: RemoteLink
     /// 只在 `link.queue` 上读写。
     private var subscribers: [(channel: UInt32, subscriber: TerminalMirrorTap.Subscriber)] = []
@@ -399,11 +411,19 @@ nonisolated final class RemoteOutputPump: @unchecked Sendable {
         link.queue.async { self.drainOnQueue() }
     }
 
+    private func noteOutputSent() {
+        let now = DispatchTime.now()
+        if let lastOutputNote, now < lastOutputNote + 30 { return }
+        lastOutputNote = now
+        onOutputSent?()
+    }
+
     func drainOnQueue() {
         dispatchPrecondition(condition: .onQueue(link.queue))
         guard !subscribers.isEmpty else { return }
         while link.canSendMore {
             var sentAny = false
+            defer { if sentAny { noteOutputSent() } }
             for offset in 0..<subscribers.count {
                 let index = (cursor + offset) % subscribers.count
                 let (channel, subscriber) = subscribers[index]

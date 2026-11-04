@@ -117,6 +117,9 @@ struct TerminalSessionBody: View {
                     .padding(.horizontal, Self.terminalInset.horizontal)
                     .padding(.vertical, Self.terminalInset.vertical)
                     .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
+                    .overlay(alignment: .top) {
+                        if tab.controller.isReconnecting { MTerminalReconnectBanner() }
+                    }
                     TerminalKeyBar(controller: tab.controller)
                 }
             }

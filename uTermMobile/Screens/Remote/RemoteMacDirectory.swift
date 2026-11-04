@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import Network
 import Observation
+import UIKit
 
 /// 局域网里开着远控的 Mac（Bonjour `_uterm-remote._tcp`），以及每台 Mac 的远控客户端。
 ///
@@ -27,12 +28,48 @@ final class RemoteMacDirectory {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var browser: NWBrowser?
     @ObservationIgnored private var clients: [String: RemoteMacClient] = [:]
+    @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
+    @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
 
     init(identity: RemoteIdentityStore = RemoteIdentityStore(), defaults: UserDefaults = .standard) {
         self.identity = identity
         self.defaults = defaults
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
         refreshPaired()
+        observeLifecycle()
+    }
+
+    /// 切到别的 App 回个消息：申请一段后台时间，短暂离开连接不断，回来也不用重发快照。
+    /// 到期后 iOS 挂起 App，连接随之断开，回前台再重连。
+    private func observeLifecycle() {
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.didEnterBackground() }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.willEnterForeground() }
+            },
+        ]
+    }
+
+    private func didEnterBackground() {
+        guard backgroundTask == .invalid, clients.values.contains(where: { $0.state == .connected }) else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Remote terminals") { [weak self] in
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
+        }
+    }
+
+    private func willEnterForeground() {
+        endBackgroundTask()
+        for client in clients.values { client.returnedToForeground() }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
     }
 
     /// 用户主动点了「连接我的 Mac」：记住，之后自动浏览。
@@ -97,6 +134,11 @@ final class RemoteMacDirectory {
         }
         let client = RemoteMacClient(macName: mac.name, endpoint: mac.endpoint, identity: identity)
         clients[mac.id] = client
+        if networkWatcher == nil {
+            networkWatcher = RemoteNetworkWatcher { [weak self] isSatisfied in
+                for client in self?.clients.values ?? [:].values { client.networkChanged(isSatisfied: isSatisfied) }
+            }
+        }
         return client
     }
 
