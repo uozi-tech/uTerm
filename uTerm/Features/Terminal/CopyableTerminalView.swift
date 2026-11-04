@@ -1,5 +1,6 @@
 import SwiftTerm
 import AppKit
+import Carbon.HIToolbox
 
 /// SwiftTerm.TerminalView 的 uTerm 子类。
 ///
@@ -12,6 +13,7 @@ import AppKit
 /// 不在 selectionChanged(source:) 里 copy：那个回调在 selection 清空
 /// （active=false）时也触发，会清空用户剪贴板。基于 mouse 事件序列
 /// 更可靠且与用户的"选中即复制"语义一致。
+/// 3. 把 ⌃↩ 留给终端程序，不让系统拿去弹上下文菜单。
 final class CopyableTerminalView: SwiftTerm.TerminalView {
 
     /// 是否在选中后自动把内容写入剪贴板。由 TerminalHostView 据
@@ -72,6 +74,33 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
             // 写 NSPasteboard.general（包含 clearContents）。
             super.copy(self)
         }
+    }
+
+    // MARK: ⌃↩ 交给终端
+
+    /// macOS 15 起系统默认把 ⌃↩ 绑成「显示上下文菜单」（系统设置 › 键盘 › 键盘快捷键 ›
+    /// 键盘），按键走 key equivalent，到不了 `keyDown`，于是弹出的是终端的右键菜单。
+    /// 这里先截下来。key equivalent 会发给窗口里的每个视图，分屏时只有焦点终端能接。
+    ///
+    /// 传统键盘模式不能转给 `keyDown`：它对 ⌃+回车算不出控制字符，什么都不发。这里按
+    /// 其他终端的做法发回车。程序开了 kitty 键盘协议时，`keyDown` 能编出带修饰键的序列。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self, Self.isControlReturn(event) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if getTerminal().keyboardEnhancementFlags.isEmpty {
+            selectNone()
+            send(data: EscapeSequences.cmdRet[...])
+        } else {
+            keyDown(with: event)
+        }
+        return true
+    }
+
+    private static func isControlReturn(_ event: NSEvent) -> Bool {
+        let isReturnKey = event.keyCode == kVK_Return || event.keyCode == kVK_ANSI_KeypadEnter
+        let flags = event.modifierFlags
+        return isReturnKey && flags.contains(.control) && !flags.contains(.command)
     }
 
     // MARK: 滚动条仅在滚动时浮现（native overlay 手感）

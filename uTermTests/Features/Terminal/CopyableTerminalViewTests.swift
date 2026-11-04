@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import Carbon.HIToolbox
 import SwiftTerm
 @testable import uTerm
 
@@ -58,4 +60,104 @@ final class CopyableTerminalViewTests: XCTestCase {
         XCTAssertEqual(scroller.alphaValue, 0,
                        "失去可滚历史时 scroller 仍应保持隐藏")
     }
+
+    // MARK: ⌃↩
+
+    func testControlReturnSendsCarriageReturnInsteadOfOpeningContextMenu() {
+        let harness = FocusedTerminal()
+
+        XCTAssertTrue(harness.view.performKeyEquivalent(with: returnKey(flags: .control)))
+
+        XCTAssertEqual(harness.sent, [13])
+    }
+
+    func testControlShiftReturnAndControlKeypadEnterAlsoStayInTerminal() {
+        let harness = FocusedTerminal()
+
+        XCTAssertTrue(harness.view.performKeyEquivalent(with: returnKey(flags: [.control, .shift])))
+        XCTAssertTrue(harness.view.performKeyEquivalent(
+            with: returnKey(flags: .control, keyCode: UInt16(kVK_ANSI_KeypadEnter))))
+
+        XCTAssertEqual(harness.sent, [13, 13])
+    }
+
+    func testControlReturnUsesModifiedSequenceUnderKittyKeyboardProtocol() {
+        let harness = FocusedTerminal()
+        harness.view.feed(text: "\u{1b}[>1u")
+
+        XCTAssertTrue(harness.view.performKeyEquivalent(with: returnKey(flags: .control)))
+
+        XCTAssertEqual(harness.sent, Array("\u{1b}[13;5u".utf8))
+    }
+
+    /// key equivalent 会发给窗口里的每个视图，分屏时不能让两个终端都收到回车。
+    func testControlReturnIgnoredWhenTerminalIsNotFirstResponder() {
+        let harness = FocusedTerminal()
+        harness.window.makeFirstResponder(nil)
+
+        XCTAssertFalse(harness.view.performKeyEquivalent(with: returnKey(flags: .control)))
+
+        XCTAssertEqual(harness.sent, [])
+    }
+
+    func testOtherReturnCombinationsStayOutOfKeyEquivalentPath() {
+        let harness = FocusedTerminal()
+
+        XCTAssertFalse(harness.view.performKeyEquivalent(with: returnKey(flags: [])))
+        XCTAssertFalse(harness.view.performKeyEquivalent(with: returnKey(flags: .command)))
+        XCTAssertFalse(harness.view.performKeyEquivalent(with: returnKey(flags: [.command, .control])))
+
+        XCTAssertEqual(harness.sent, [])
+    }
+
+    private func returnKey(
+        flags: NSEvent.ModifierFlags,
+        keyCode: UInt16 = UInt16(kVK_Return)
+    ) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: flags,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: keyCode)!
+    }
+}
+
+/// 挂在窗口里、已拿到焦点的终端，并记录它发给后端的字节。
+@MainActor
+private final class FocusedTerminal: @preconcurrency TerminalViewDelegate {
+    let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: true)
+    private(set) var sent: [UInt8] = []
+
+    init() {
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(view)
+        view.terminalDelegate = self
+        window.makeFirstResponder(view)
+    }
+
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        sent += data
+    }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
+    func setTerminalTitle(source: TerminalView, title: String) {}
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func scrolled(source: TerminalView, position: Double) {}
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
+    func bell(source: TerminalView) {}
+    func clipboardCopy(source: TerminalView, content: Data) {}
+    func clipboardRead(source: TerminalView) -> Data? { nil }
+    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }
