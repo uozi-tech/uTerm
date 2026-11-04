@@ -25,6 +25,8 @@ nonisolated enum HolderFrameKind: UInt8, Sendable {
     case terminate = 7
     /// 给前台进程组发 SIGWINCH。尺寸没变时 `TIOCSWINSZ` 不会发，TUI 不知道要重画。
     case redraw = 8
+    /// 让子进程确认连接还活着（发 SIGUSR1）。只有 `uterm-ssh` 会话才处理，本机 shell 收到这个信号会被杀。
+    case probe = 9
     // holder → App
     case helloReply = 101
     case replayCheckpoint = 102

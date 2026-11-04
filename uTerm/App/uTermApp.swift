@@ -141,7 +141,10 @@ struct uTermApp: App {
                 relay: launchRelay
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
-            remoteServer.sessionRestoration = { await LocalShellRestorer.shared.finished() }
+            remoteServer.sessionRestoration = {
+                await LocalShellRestorer.shared.finished()
+                await SSHSessionRestorer.shared.finished()
+            }
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
@@ -155,7 +158,7 @@ struct uTermApp: App {
                 server.stop()
                 MainActor.assumeIsolated {
                     remoteServer.stop()
-                    LocalShellQuitPolicy.shared.applicationWillTerminate()
+                    TerminalQuitPolicy.shared.applicationWillTerminate()
                 }
                 Task { await ControlConnectionPool.shared.disconnectAll() }
             }
@@ -197,8 +200,23 @@ struct uTermApp: App {
             UTermLifecycleDelegate.showGUI()
             open(value: LocalShellWindowID(id: windowID, firstPaneID: firstPaneID))
         }
+        let container = modelContainer
+        SSHSessionRestorer.shared.install(
+            knownServerIDs: {
+                let profiles = (try? container.mainContext.fetch(FetchDescriptor<ServerProfile>())) ?? []
+                return Set(profiles.map(\.id))
+            },
+            openWindow: { kind, windowID, serverID in
+                UTermLifecycleDelegate.showGUI()
+                if kind == TerminalWindowKind.workspace {
+                    open(value: WorkspaceWindowID(id: windowID, serverID: serverID))
+                } else {
+                    open(value: TerminalWindowID(id: windowID, serverID: serverID))
+                }
+            })
         if !BackgroundLaunchMode.shouldStartHidden {
             LocalShellRestorer.shared.restoreIfNeeded()
+            SSHSessionRestorer.shared.restoreIfNeeded()
         }
     }
 

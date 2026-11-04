@@ -223,7 +223,7 @@ final class WorkspaceModel {
         terminalGroups.restore(snapshot.terminalGroupsForRestore) { tabSnap in
             guard knownServerIDs.isEmpty || knownServerIDs.contains(tabSnap.serverProfileID)
             else { return nil }
-            return TerminalTab(payload: self.makePane(serverProfileID: tabSnap.serverProfileID,
+            return TerminalTab(payload: self.makePane(id: tabSnap.sessionID, serverProfileID: tabSnap.serverProfileID,
                                                       tabTitle: tabSnap.title))
         }
 
@@ -375,8 +375,10 @@ final class WorkspaceModel {
     /// 新建窗格的唯一入口：建出来立刻打上登记凭条。
     /// 组树的三个钩子（clone / 新组 / restore）与所有 `openXxx` 都必须走它，
     /// 否则那条会话对 CLI 永远不可见。
-    private func makePane(serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil) -> PaneModel {
-        let pane = PaneModel(serverProfileID: serverProfileID, fileBuffer: fileBuffer, tabTitle: tabTitle)
+    private func makePane(id: UUID? = nil, serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil,
+                          sessionOrder: Double? = nil) -> PaneModel {
+        let pane = PaneModel(id: id ?? UUID(), serverProfileID: serverProfileID, fileBuffer: fileBuffer, tabTitle: tabTitle,
+                             sessionOrder: sessionOrder ?? Date().timeIntervalSince1970)
         stamp(pane)
         return pane
     }
@@ -504,6 +506,18 @@ final class WorkspaceModel {
         return true
     }
 
+    /// 把上次留下的 SSH 会话放回来（窗格 id 就是会话 id，连接时接回）。已经在标签树里的（快照恢复的）跳过。
+    func adoptHeldSessions(_ sessions: [SSHSessionRestorer.Session]) {
+        let existing = Set(terminalGroups.allTabs.map(\.payload.id))
+        for session in sessions where !existing.contains(session.id) {
+            terminalGroups.openTab({
+                TerminalTab(payload: self.makePane(id: session.id, serverProfileID: session.serverID, tabTitle: session.title,
+                                                   sessionOrder: session.order))
+            }, in: nil)
+        }
+        syncTerminalTitles()
+    }
+
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {
@@ -536,7 +550,7 @@ final class WorkspaceModel {
         let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
             guard tab.payload.fileBuffer == nil else { return nil }
             return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
-                                       title: tab.payload.tabTitle ?? "终端")
+                                       title: tab.payload.tabTitle ?? "终端", sessionID: tab.payload.id)
         }
 
         var activeIdx: Int?

@@ -1,12 +1,12 @@
 import AppKit
 
-/// 退出 App 时本机终端怎么办。默认都是留着：重启、崩溃、Xcode Stop、Sparkle 更新都不该打断里面跑的东西。
+/// 退出 App 时终端（本机 shell 和 SSH）怎么办。默认都是留着：重启、崩溃、Xcode Stop、Sparkle 更新都不该打断里面跑的东西。
 /// 只有用户按 ⌘Q 时才问一声。
 @MainActor
-final class LocalShellQuitPolicy {
-    static let shared = LocalShellQuitPolicy()
+final class TerminalQuitPolicy {
+    static let shared = TerminalQuitPolicy()
     /// 设置页也读写这个键。
-    static let behaviorKey = "localShellQuitBehavior"
+    static let behaviorKey = "terminalQuitBehavior"
 
     enum Behavior: String, CaseIterable {
         case ask, keep, end
@@ -19,13 +19,13 @@ final class LocalShellQuitPolicy {
 
     private init() {}
 
-    private var livePanes: [LocalShellPane] {
-        LocalShellWindowRouter.shared.allPanes.filter { $0.session.connectionState == .connected }
+    private var liveCount: Int {
+        HeldTerminalSessions.all.filter { $0.connectionState == .connected }.count
     }
 
     /// `applicationShouldTerminate` 用。返回 false = 用户取消了退出。
     func confirmQuit() -> Bool {
-        switch decide(liveCount: livePanes.count) {
+        switch decide(liveCount: liveCount) {
         case .keep: endsSessionsOnQuit = false
         case .end: endsSessionsOnQuit = true
         case .cancel: return false
@@ -53,7 +53,7 @@ final class LocalShellQuitPolicy {
 
     private func ask(liveCount: Int) -> Decision {
         let alert = NSAlert()
-        alert.messageText = String(localized: "还有 \(liveCount) 个本机终端在运行")
+        alert.messageText = String(localized: "还有 \(liveCount) 个终端在运行")
         alert.informativeText = String(localized: "保留的话，里面的程序继续运行，下次打开 uTerm 时自动接回。")
         alert.addButton(withTitle: String(localized: "保留并退出"))
         alert.addButton(withTitle: String(localized: "全部结束并退出"))
@@ -84,8 +84,8 @@ final class LocalShellQuitPolicy {
     /// 进程马上结束。存最后一次检查点，要结束的告诉 holder 结束。
     func applicationWillTerminate() {
         isQuitting = true
-        for pane in LocalShellWindowRouter.shared.allPanes {
-            pane.finishForQuit(endingSession: endsSessionsOnQuit)
+        for session in HeldTerminalSessions.all {
+            session.finishHeldForQuit(endingSession: endsSessionsOnQuit)
         }
     }
 }

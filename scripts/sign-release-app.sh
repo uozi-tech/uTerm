@@ -32,6 +32,7 @@ if [ -d "$sparkle_framework" ]; then
 fi
 
 sign_path "$app_path/Contents/Helpers/uterm-holder"
+sign_path "$app_path/Contents/Helpers/uterm-ssh"
 sign_path "$app_path/Contents/XPCServices/uTermShellAgent.xpc"
 sign_path "$app_path"
 codesign --verify --deep --strict --verbose=2 "$app_path"

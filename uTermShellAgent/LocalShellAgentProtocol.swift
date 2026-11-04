@@ -28,6 +28,10 @@ nonisolated enum LocalShellAgent {
     /// `namespace` 隔开互不相干的 uTerm（正式版一份，每个 Debug 构建路径一份）。
     func openSession(namespace: String, id: String, columns: Int, rows: Int,
                      reply: @escaping @Sendable (FileHandle?, String?) -> Void)
+    /// SSH 会话版的 `openSession`：`id` 已有会话就只回（到 holder 的连接，nil，nil）；否则起一个跑 `uterm-ssh` 的 holder，
+    /// 回（到 holder 的连接，控制通道，nil）。App 经控制通道把连接参数交给 `uterm-ssh`，见 `SSHBridgeMessage`。
+    func openSSHSession(namespace: String, id: String, columns: Int, rows: Int,
+                        reply: @escaping @Sendable (FileHandle?, FileHandle?, String?) -> Void)
     /// 只连已有的会话，没有就报错。
     func connectSession(namespace: String, id: String, reply: @escaping @Sendable (FileHandle?, String?) -> Void)
     /// 列出活着的会话 id。连不上的（holder 已经不在）顺手清掉 socket 文件。

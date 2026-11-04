@@ -67,6 +67,6 @@ final class AppUpdater {
 
 nonisolated private final class AppUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
-        MainActor.assumeIsolated { LocalShellQuitPolicy.shared.isRelaunchingForUpdate = true }
+        MainActor.assumeIsolated { TerminalQuitPolicy.shared.isRelaunchingForUpdate = true }
     }
 }

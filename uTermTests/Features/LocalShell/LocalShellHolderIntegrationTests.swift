@@ -64,6 +64,37 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         return (session, held)
     }
 
+    /// 探活信号的默认处置是杀进程。本机 shell 收到探活帧不能有事。
+    func test_probe_frame_is_ignored_for_local_shell() async throws {
+        let id = makeSession()
+        let (session, held) = try await connected(id)
+        let heldPID = await held.pid
+        let pid = try XCTUnwrap(heldPID)
+        held.holderLink.send(HolderFrame(.probe))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(Self.isAlive(pid))
+        XCTAssertEqual(session.connectionState, .connected)
+        await session.close()
+    }
+
+    /// 关掉之后同一个 id 马上再开，要得到新的 shell，不能接上正在退出的那个，也不能被它退出时删掉 socket。
+    func test_reopen_right_after_close_gets_a_new_shell_with_working_socket() async throws {
+        let id = makeSession()
+        let (first, firstBackend) = try await connected(id)
+        let firstPID = await firstBackend.pid
+        XCTAssertNotNil(firstPID)
+        await first.close()
+        let (second, secondBackend) = try await connected(id)
+        let secondPID = await secondBackend.pid
+        XCTAssertNotNil(secondPID)
+        XCTAssertNotEqual(firstPID, secondPID)
+        // 旧 holder 退出（SIGHUP 后最多几秒）之后，新会话还要能被连上。
+        try await Task.sleep(for: .seconds(4))
+        let listed = try await client.listSessions(namespace: Self.namespace)
+        XCTAssertTrue(listed.contains(id))
+        await second.close()
+    }
+
     /// 断开之后 shell 继续跑，新连接拿到同一个 shell，之前的画面和断开期间的输出都在。
     func test_reattach_keeps_shell_and_restores_screen_including_output_while_away() async throws {
         let id = makeSession()

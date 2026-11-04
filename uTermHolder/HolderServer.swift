@@ -25,6 +25,8 @@ final class HolderServer: @unchecked Sendable {
     private let socketName: String
     private let executable: String
     private let argv: [String]
+    /// `uterm-ssh` 会话：XPC 服务放在这个 fd 上的控制通道要留给子进程。本机 shell 没有。
+    private let childControlFD: Int32?
     private var cols: UInt16
     private var rows: UInt16
     private let createdAt = UInt64(Date().timeIntervalSince1970)
@@ -46,14 +48,17 @@ final class HolderServer: @unchecked Sendable {
     private var clients: [ObjectIdentifier: HolderClient] = [:]
     private var attached: HolderClient?
     private var processSource: DispatchSourceProcess?
+    private var isSocketRemoved = false
 
-    init(directory: String, socketName: String, cols: UInt16, rows: UInt16, executable: String, argv: [String]) {
+    init(directory: String, socketName: String, cols: UInt16, rows: UInt16, executable: String, argv: [String],
+         childControlFD: Int32? = nil) {
         self.directory = directory
         self.socketName = socketName
         self.cols = cols
         self.rows = rows
         self.executable = executable
         self.argv = argv
+        self.childControlFD = childControlFD
     }
 
     func start() {
@@ -183,6 +188,9 @@ final class HolderServer: @unchecked Sendable {
             guard client === attached, !isMasterClosed else { return }
             let group = tcgetpgrp(master)
             if group > 0 { kill(-group, SIGWINCH) }
+        case .probe:
+            guard childControlFD != nil, exitStatus == nil else { return }
+            kill(shellPID, SIGUSR1)
         case .helloReply, .replayCheckpoint, .output, .replayEnd, .exited, .replaced:
             break
         }
@@ -241,6 +249,7 @@ final class HolderServer: @unchecked Sendable {
         let cExecutable = strdup(executable)
         let cHome = strdup(NSHomeDirectory())
         let maxDescriptor = min(getdtablesize(), 4096)
+        let keptDescriptor = childControlFD ?? -1
         var fd: Int32 = -1
         let pid = forkpty(&fd, nil, nil, &size)
         guard pid >= 0 else { fail("forkpty") }
@@ -254,7 +263,7 @@ final class HolderServer: @unchecked Sendable {
             signal(SIGHUP, SIG_DFL)
             var descriptor: Int32 = 3
             while descriptor < maxDescriptor {
-                close(descriptor)
+                if descriptor != keptDescriptor { close(descriptor) }
                 descriptor += 1
             }
             _ = chdir(cHome)
@@ -263,6 +272,8 @@ final class HolderServer: @unchecked Sendable {
         }
         master = fd
         shellPID = pid
+        // 这一头留给子进程。这边还开着的话，子进程退出后 App 等不到控制通道断开。
+        if let childControlFD { close(childControlFD) }
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
@@ -386,6 +397,8 @@ final class HolderServer: @unchecked Sendable {
     private func terminate() {
         isTerminating = true
         guard exitStatus == nil else { quit() }
+        // 正在退出的会话不再接客。同一个 id 马上再开（关窗口后立刻重新打开）要得到新的会话，而不是接上一个将死的。
+        removeSocket()
         kill(-shellPID, SIGHUP)
         kill(shellPID, SIGHUP)
         DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(Self.killGraceSeconds)) { [weak self] in
@@ -430,10 +443,17 @@ final class HolderServer: @unchecked Sendable {
         }
     }
 
-    /// 工作目录一直是 socket 目录（`start()` 切进来的），相对路径就是自己的 socket。
     private func quit() -> Never {
-        unlink(socketName)
+        removeSocket()
         exit(0)
+    }
+
+    /// 工作目录一直是 socket 目录（`start()` 切进来的），相对路径就是自己的 socket。只删一次：
+    /// 删掉之后这个名字可能已经属于新的 holder。
+    private func removeSocket() {
+        guard !isSocketRemoved else { return }
+        isSocketRemoved = true
+        unlink(socketName)
     }
 }
 

@@ -6,9 +6,11 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "2"
+    static let version = "3"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
+    /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
+    private static let childControlFD: Int32 = 3
 
     private let queue = DispatchQueue(label: "com.uozi.uTerm.ShellAgent")
     private let log = Logger(subsystem: "com.uozi.uTerm", category: "shell-agent")
@@ -41,23 +43,57 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                     reply(existing, nil)
                     return
                 }
-                let pid = try self.spawnHolder(directory: directory, name: name, columns: columns, rows: rows)
-                let deadline = Date().addingTimeInterval(Self.spawnWaitSeconds)
-                while Date() < deadline {
-                    if let connected = self.connect(directory: directory, name: name) {
-                        reply(connected, nil)
-                        return
-                    }
-                    guard kill(pid, 0) == 0 else { throw AgentError("holder 启动后立刻退出了，详情见 \(directory)/holder.log") }
-                    usleep(5_000)
-                }
-                kill(pid, SIGKILL)
-                throw AgentError("等 holder 就绪超时")
+                let shell = Self.loginShell()
+                let pid = try self.spawnHolder(
+                    directory: directory, name: name, columns: columns, rows: rows, executable: shell,
+                    argv0: "-" + (shell as NSString).lastPathComponent, environment: Self.environment(shell: shell), controlFD: nil)
+                reply(try self.waitForHolder(pid: pid, directory: directory, name: name), nil)
             } catch {
                 self.log.error("起会话失败：\(error.localizedDescription, privacy: .public)")
                 reply(nil, error.localizedDescription)
             }
         }
+    }
+
+    func openSSHSession(namespace: String, id: String, columns: Int, rows: Int,
+                        reply: @escaping @Sendable (FileHandle?, FileHandle?, String?) -> Void) {
+        queue.async {
+            do {
+                let directory = try self.directory(namespace: namespace)
+                let name = try Self.socketName(id: id)
+                if let existing = self.connect(directory: directory, name: name) {
+                    reply(existing, nil, nil)
+                    return
+                }
+                var pair: [Int32] = [-1, -1]
+                guard socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 else { throw AgentError("建控制通道失败") }
+                _ = fcntl(pair[0], F_SETFD, FD_CLOEXEC)
+                _ = fcntl(pair[1], F_SETFD, FD_CLOEXEC)
+                // 这一头 XPC 编码回复时会 dup 一份。另一头传给 holder 之后这边就不留了。
+                let appEnd = FileHandle(fileDescriptor: pair[0], closeOnDealloc: true)
+                defer { close(pair[1]) }
+                let pid = try self.spawnHolder(
+                    directory: directory, name: name, columns: columns, rows: rows, executable: try self.helper("uterm-ssh"),
+                    argv0: "uterm-ssh", environment: Self.environment(shell: Self.loginShell()) + ["UTERM_SSH_CONTROL_FD=\(Self.childControlFD)"],
+                    controlFD: pair[1])
+                reply(try self.waitForHolder(pid: pid, directory: directory, name: name), appEnd, nil)
+            } catch {
+                self.log.error("起 SSH 会话失败：\(error.localizedDescription, privacy: .public)")
+                reply(nil, nil, error.localizedDescription)
+            }
+        }
+    }
+
+    /// 等 holder 开始监听（它先监听再起子进程，连得上就说明子进程已经起来了）。
+    private func waitForHolder(pid: pid_t, directory: String, name: String) throws -> FileHandle {
+        let deadline = Date().addingTimeInterval(Self.spawnWaitSeconds)
+        while Date() < deadline {
+            if let connected = connect(directory: directory, name: name) { return connected }
+            guard kill(pid, 0) == 0 else { throw AgentError("holder 启动后立刻退出了，详情见 \(directory)/holder.log") }
+            usleep(5_000)
+        }
+        kill(pid, SIGKILL)
+        throw AgentError("等 holder 就绪超时")
     }
 
     func connectSession(namespace: String, id: String, reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
@@ -144,15 +180,18 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
 
     // MARK: - 拉起 holder
 
-    private func spawnHolder(directory: String, name: String, columns: Int, rows: Int) throws -> pid_t {
-        // .../uTerm.app/Contents/XPCServices/uTermShellAgent.xpc → .../uTerm.app/Contents/Helpers/uterm-holder
-        let holder = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Helpers/uterm-holder").path
-        guard FileManager.default.isExecutableFile(atPath: holder) else { throw AgentError("找不到 \(holder)") }
-        let shell = Self.loginShell()
-        let argv0 = "-" + (shell as NSString).lastPathComponent
-        let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), shell, argv0]
-        let environment = Self.environment(shell: shell)
+    /// .../uTerm.app/Contents/XPCServices/uTermShellAgent.xpc → .../uTerm.app/Contents/Helpers/<name>
+    private func helper(_ name: String) throws -> String {
+        let path = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Helpers/\(name)").path
+        guard FileManager.default.isExecutableFile(atPath: path) else { throw AgentError("找不到 \(path)") }
+        return path
+    }
+
+    private func spawnHolder(directory: String, name: String, columns: Int, rows: Int, executable: String, argv0: String,
+                             environment: [String], controlFD: Int32?) throws -> pid_t {
+        let holder = try helper("uterm-holder")
+        let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), executable, argv0]
 
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
@@ -175,6 +214,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_addopen(&actions, 1, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         posix_spawn_file_actions_addopen(&actions, 2, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+        if let controlFD { posix_spawn_file_actions_adddup2(&actions, controlFD, Self.childControlFD) }
 
         let cArguments = arguments.map { strdup($0) } + [nil]
         let cEnvironment = environment.map { strdup($0) } + [nil]
@@ -185,7 +225,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         var pid: pid_t = 0
         let result = posix_spawn(&pid, holder, &actions, &attributes, cArguments, cEnvironment)
         guard result == 0 else { throw AgentError("起 holder 失败：\(String(cString: strerror(result)))") }
-        log.info("起 holder \(name, privacy: .public) pid=\(pid) shell=\(shell, privacy: .public) \(columns)×\(rows)")
+        log.info("起 holder \(name, privacy: .public) pid=\(pid) \(executable, privacy: .public) \(columns)×\(rows)")
         return pid
     }
 

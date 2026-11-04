@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		555445524D53534800000011 /* USSHKit in Frameworks */ = {isa = PBXBuildFile; productRef = 555445524D5353480000000E /* USSHKit */; };
+		555445524D53534800000012 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 555445524D5353480000000F /* Citadel */; };
 		10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D1 /* SwiftTerm */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
@@ -59,6 +61,13 @@
 			remoteGlobalIDString = 484F4C444552000000000004;
 			remoteInfo = "uterm-holder";
 		};
+		555445524D5353480000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 555445524D53534800000006;
+			remoteInfo = "uterm-ssh";
+		};
 		5348454C4C0000000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
@@ -86,6 +95,7 @@
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		484F4C444552000000000003 /* uterm-holder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-holder"; sourceTree = BUILT_PRODUCTS_DIR; };
+		555445524D53534800000005 /* uterm-ssh */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-ssh"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5348454C4C00000000000003 /* uTermShellAgent.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = uTermShellAgent.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -179,9 +189,10 @@
 				Features/Keys/Views/KeyGeneratorView.swift,
 				Features/Keys/Views/KeyImportView.swift,
 				Features/Keys/Views/KeyManagerView.swift,
+				Features/LocalShell/HeldSessionCore.swift,
 				Features/LocalShell/HolderConnection.swift,
 				Features/LocalShell/LocalShellBackend.swift,
-				Features/LocalShell/LocalShellQuitPolicy.swift,
+				Features/Terminal/TerminalQuitPolicy.swift,
 				Features/LocalShell/LocalShellRestorer.swift,
 				Features/LocalShell/LocalShellService.swift,
 				Features/LocalShell/LocalShellWindow.swift,
@@ -267,6 +278,8 @@
 				Features/Terminal/TerminalMirrorTap.swift,
 				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
+				Features/Terminal/HeldSSHBackend.swift,
+				Features/Terminal/SSHSessionRestorer.swift,
 				"Features/Terminal/TerminalSession+HeldSession.swift",
 				"Features/Terminal/TerminalSession+RemoteGrid.swift",
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
@@ -355,6 +368,32 @@
 			);
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
 		};
+		555445524D53534800000002 /* Exceptions for "uTermSSH" folder in "uTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				main.swift,
+				SSHBridgeSession.swift,
+			);
+			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
+		};
+		555445524D53534800000003 /* Exceptions for "uTermSSH" folder in "uTermMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				main.swift,
+				SSHBridgeSession.swift,
+				SSHBridgeWire.swift,
+			);
+			target = 10C0DE0000000000000000A1 /* uTermMobile */;
+		};
+		555445524D53534800000004 /* Exceptions for "uTermHolder" folder in "uterm-ssh" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				HolderOutputLog.swift,
+				HolderServer.swift,
+				main.swift,
+			);
+			target = 555445524D53534800000006 /* uterm-ssh */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -363,10 +402,20 @@
 			path = uTermMobile;
 			sourceTree = "<group>";
 		};
+		555445524D53534800000001 /* uTermSSH */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				555445524D53534800000002 /* Exceptions for "uTermSSH" folder in "uTerm" target */,
+				555445524D53534800000003 /* Exceptions for "uTermSSH" folder in "uTermMobile" target */,
+			);
+			path = uTermSSH;
+			sourceTree = "<group>";
+		};
 		484F4C444552000000000001 /* uTermHolder */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				484F4C444552000000000002 /* Exceptions for "uTermHolder" folder in "uTerm" target */,
+				555445524D53534800000004 /* Exceptions for "uTermHolder" folder in "uterm-ssh" target */,
 			);
 			path = uTermHolder;
 			sourceTree = "<group>";
@@ -427,6 +476,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		555445524D53534800000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				555445524D53534800000011 /* USSHKit in Frameworks */,
+				555445524D53534800000012 /* Citadel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -507,6 +565,7 @@
 				918FC87C7A998A6853AEEDED /* uTermBackgroundLauncher */,
 				5348454C4C00000000000001 /* uTermShellAgent */,
 				484F4C444552000000000001 /* uTermHolder */,
+				555445524D53534800000001 /* uTermSSH */,
 			);
 			sourceTree = "<group>";
 		};
@@ -520,6 +579,7 @@
 				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
 				5348454C4C00000000000003 /* uTermShellAgent.xpc */,
 				484F4C444552000000000003 /* uterm-holder */,
+				555445524D53534800000005 /* uterm-ssh */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -566,6 +626,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				555445524D53534800000001 /* uTermSSH */,
 				10C0DE0000000000000000B0 /* uTermMobile */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
@@ -600,6 +661,30 @@
 			productName = uTermBackgroundLauncher;
 			productReference = 1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */;
 			productType = "com.apple.product-type.application";
+		};
+		555445524D53534800000006 /* uterm-ssh */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 555445524D53534800000007 /* Build configuration list for PBXNativeTarget "uterm-ssh" */;
+			buildPhases = (
+				555445524D53534800000008 /* Sources */,
+				555445524D53534800000009 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				555445524D53534800000001 /* uTermSSH */,
+				484F4C444552000000000001 /* uTermHolder */,
+			);
+			name = "uterm-ssh";
+			packageProductDependencies = (
+				555445524D5353480000000E /* USSHKit */,
+				555445524D5353480000000F /* Citadel */,
+			);
+			productName = "uterm-ssh";
+			productReference = 555445524D53534800000005 /* uterm-ssh */;
+			productType = "com.apple.product-type.tool";
 		};
 		484F4C444552000000000004 /* uterm-holder */ = {
 			isa = PBXNativeTarget;
@@ -657,10 +742,12 @@
 				75CD47CBD2BFF61B882B9D38 /* PBXTargetDependency */,
 				5348454C4C0000000000000B /* PBXTargetDependency */,
 				484F4C44455200000000000B /* PBXTargetDependency */,
+				555445524D5353480000000D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5348454C4C00000000000001 /* uTermShellAgent */,
 				484F4C444552000000000001 /* uTermHolder */,
+				555445524D53534800000001 /* uTermSSH */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
 			name = uTerm;
@@ -803,6 +890,7 @@
 				26474F753450F16288097CFA /* uTermBackgroundLauncher */,
 				5348454C4C00000000000004 /* uTermShellAgent */,
 				484F4C444552000000000004 /* uterm-holder */,
+				555445524D53534800000006 /* uterm-ssh */,
 			);
 		};
 /* End PBXProject section */
@@ -863,7 +951,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n/bin/rm -f \"$helpers/uterm-holder\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder\" \"$helpers/uterm-holder\"\n";
+			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n/bin/rm -f \"$helpers/uterm-holder\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder\" \"$helpers/uterm-holder\"\n/bin/rm -f \"$helpers/uterm-ssh\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-ssh\" \"$helpers/uterm-ssh\"\n";
 		};
 		CFCFCFCF000000000000F0F1 /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -960,6 +1048,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		555445524D53534800000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5348454C4C00000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1004,6 +1099,12 @@
 			name = "uterm-holder";
 			target = 484F4C444552000000000004 /* uterm-holder */;
 			targetProxy = 484F4C44455200000000000A /* PBXContainerItemProxy */;
+		};
+		555445524D5353480000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "uterm-ssh";
+			target = 555445524D53534800000006 /* uterm-ssh */;
+			targetProxy = 555445524D5353480000000C /* PBXContainerItemProxy */;
 		};
 		5348454C4C0000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1133,6 +1234,38 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.Holder;
 				PRODUCT_NAME = "uterm-holder";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		555445524D5353480000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
+				PRODUCT_NAME = "uterm-ssh";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		555445524D5353480000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.SSH;
+				PRODUCT_NAME = "uterm-ssh";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -1576,6 +1709,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		555445524D53534800000007 /* Build configuration list for PBXNativeTarget "uterm-ssh" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				555445524D5353480000000A /* Debug */,
+				555445524D5353480000000B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5348454C4C00000000000005 /* Build configuration list for PBXNativeTarget "uTermShellAgent" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1910,6 +2052,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
 			productName = TreeSitterMarkdown;
+		};
+		555445524D5353480000000E /* USSHKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
+			productName = USSHKit;
+		};
+		555445524D5353480000000F /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C17ADE1C0000000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

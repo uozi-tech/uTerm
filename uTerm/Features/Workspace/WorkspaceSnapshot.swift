@@ -73,10 +73,12 @@ nonisolated struct TabSnapshot: Codable, Equatable, Sendable {
 }
 
 /// 终端组树里一个标签的快照 —— 组件 `UPaneGroupsSnapshot` 的泛型载荷。
-/// 只记「连哪台服务器 + 标题」：会话本身不进盘，恢复后重连。
+/// 记「连哪台服务器 + 标题」和会话 id。会话本身在 `uterm-holder` 里，还活着就接回，不在了就按这个 id 重新连。
 nonisolated struct TerminalTabSnapshot: Codable, Equatable, Sendable {
     var serverProfileID: UUID
     var title: String
+    /// 旧快照没有这个键。
+    var sessionID: UUID?
 }
 
 /// 终端区的组树快照：一棵组树 + 每组的标签列表 + 每组 `activeIndex` + 活动组。

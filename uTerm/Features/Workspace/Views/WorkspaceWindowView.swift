@@ -168,6 +168,7 @@ struct WorkspaceWindowView: View {
             // 能复现最近一次状态。
             guard !didRestore else { return }
             didRestore = true
+            let heldSessions = await SSHSessionRestorer.shared.claim(windowID: windowID.id)
             if restoreTerminalSession, let snapshot = WorkspaceStore(windowID: windowID).load() {
                 // 白名单 = 当前真实存在的服务器。指向已删除（或历史上被写坏成随机
                 // UUID）的叶子在恢复时就被剪掉，不会变成一个卡在
@@ -175,6 +176,8 @@ struct WorkspaceWindowView: View {
                 workspace.restore(from: snapshot,
                                   knownServerIDs: Set(profiles.map(\.id)))
             }
+            // 还活着的 SSH 会话不跟「恢复布局」这个开关走：里面的程序还在跑，不能丢。
+            workspace.adoptHeldSessions(heldSessions)
             // 兜底：快照为空 / 关了自动恢复 / 叶子全被剪掉 —— 都必须留下一个
             // 连本窗口服务器的可用终端。
             if workspace.terminalGroups.isEmpty {

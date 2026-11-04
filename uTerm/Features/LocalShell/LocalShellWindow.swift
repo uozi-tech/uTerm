@@ -68,30 +68,12 @@ final class LocalShellPane: Identifiable {
         }
     }
 
-    /// 关标签 / 关窗口：结束 shell。退出 App 时不走这里的结束（见 `LocalShellQuitPolicy`）：只断开，shell 留着下次接回。
+    /// 关标签 / 关窗口：结束 shell。退出 App 时只断开，shell 留着下次接回（见 `TerminalQuitPolicy`）。
     func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
         registrar?.unregister(paneID: id)
-        // `session.dispose()` 会清掉 backend，之后 `session.close()` 就关不到它了，要先留一份。
-        let backend = session.backend
-        // 退出流程里异步任务不一定来得及跑，要同步把话说完。
-        if LocalShellQuitPolicy.shared.isQuitting {
-            finishForQuit(endingSession: LocalShellQuitPolicy.shared.endsSessionsOnQuit)
-            session.dispose()
-            if let held = backend as? any HeldTerminalBackend { Task { await held.detach() } }
-        } else {
-            session.dispose()
-            Task { await backend?.close() }
-        }
-    }
-
-    /// 退出流程的最后一步（`willTerminate`）：之后进程就没了，不能再指望异步任务。
-    func finishForQuit(endingSession: Bool) {
-        guard let held = session.backend as? any HeldTerminalBackend else { return }
-        session.saveHeldCheckpointNow()
-        if endingSession { held.holderLink.send(HolderFrame(.terminate)) }
-        held.holderLink.flushAndClose(timeout: 0.5)
+        session.closeForDisposal()
     }
 
     private func syncRegistration(_ state: TerminalSession.ConnectionState) {

@@ -126,41 +126,11 @@ final class LocalShellRestorer {
     /// 只问 hello，不接入。shell 已经退出的（App 不在时用户的命令结束了）顺手结束掉，不开窗口：
     /// 恢复出一个只写着「已退出」的标签没有用。
     private nonisolated static func inspect(_ id: UUID, client: LocalShellAgentClient, namespace: String) async -> Inspection {
-        guard let handle = try? await client.connectSession(namespace: namespace, id: id) else { return .gone }
-        let connection = HolderConnection(handle)
-        let reply: HolderHelloReply? = await withCheckedContinuation { continuation in
-            let once = HelloOnce(continuation)
-            connection.onFrame = { frame in
-                if frame.kind == .helloReply { once.finish(HolderHelloReply(decoding: frame.payload)) }
-            }
-            connection.onClosed = { once.finish(nil) }
-            connection.start()
-            connection.send(HolderFrame(.hello))
-            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { once.finish(nil) }
-        }
-        defer { connection.close() }
-        guard let reply else { return .gone }
+        guard let reply = await HolderProbe.hello(id, client: client, namespace: namespace) else { return .gone }
         if reply.exitStatus != nil {
-            connection.send(HolderFrame(.terminate))
+            await HolderProbe.terminate(id, client: client, namespace: namespace)
             return .gone
         }
         return .live(try? JSONDecoder().decode(LocalShellSessionAttributes.self, from: Data(reply.attributes)))
-    }
-}
-
-nonisolated private final class HelloOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<HolderHelloReply?, Never>?
-
-    init(_ continuation: CheckedContinuation<HolderHelloReply?, Never>) {
-        self.continuation = continuation
-    }
-
-    func finish(_ reply: HolderHelloReply?) {
-        lock.lock()
-        let taken = continuation
-        continuation = nil
-        lock.unlock()
-        taken?.resume(returning: reply)
     }
 }

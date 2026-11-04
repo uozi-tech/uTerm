@@ -343,28 +343,9 @@ actor SSHConnection: TerminalImageReceiving {
 
     /// 把图片传成远端 `/tmp` 下的一个文件，返回路径（由调用方粘进终端）。
     ///
-    /// SFTP 开在这条终端连接上（另开一个通道），不另建连接，也不重新认证。
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
-        let path = image.temporaryRemotePath()
-        let sftp = try await connected.target.openSFTP()
-        do {
-            let file = try await sftp.openFile(filePath: path, flags: [.write, .create, .truncate])
-            do {
-                var buffer = ByteBuffer()
-                buffer.writeBytes(image.data)
-                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0)
-                try await file.close()
-            } catch {
-                try? await file.close()
-                throw error
-            }
-        } catch {
-            try? await sftp.close()
-            throw error
-        }
-        try? await sftp.close()
-        return .file(path: path)
+        return try await connected.uploadTerminalImage(image)
     }
 
     func verifyConnectionAlive(timeout: Duration) async -> Bool {
@@ -412,6 +393,31 @@ actor SSHConnection: TerminalImageReceiving {
         exitContinuation.yield(())
         exitContinuation.finish()
         outputContinuation.finish()
+    }
+}
+
+nonisolated extension ConnectedClient {
+    /// 把图片传成这台机器 `/tmp` 下的一个文件。SFTP 开在这条连接上（另开一个通道），不另建连接，也不重新认证。
+    func uploadTerminalImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
+        let path = image.temporaryRemotePath()
+        let sftp = try await target.openSFTP()
+        do {
+            let file = try await sftp.openFile(filePath: path, flags: [.write, .create, .truncate])
+            do {
+                var buffer = ByteBuffer()
+                buffer.writeBytes(image.data)
+                try await SFTPPipeline.write(CitadelPipelineFile(file), data: buffer, at: 0)
+                try await file.close()
+            } catch {
+                try? await file.close()
+                throw error
+            }
+        } catch {
+            try? await sftp.close()
+            throw error
+        }
+        try? await sftp.close()
+        return .file(path: path)
     }
 }
 

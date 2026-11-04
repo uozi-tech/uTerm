@@ -29,6 +29,8 @@ struct TerminalSettingsView: View {
         )
     }
 
+    @AppStorage(TerminalQuitPolicy.behaviorKey) private var quitBehavior = TerminalQuitPolicy.Behavior.ask.rawValue
+
     var body: some View {
         SettingsScroll {
             SettingsGroup(title: "预览") {
@@ -50,6 +52,14 @@ struct TerminalSettingsView: View {
                 }
                 SettingsRow(label: "选中即复制") {
                     UDToggle($copyOnSelect)
+                }
+                SettingsRow(label: "退出 uTerm 时",
+                            hint: "选择保留时，本机和 SSH 终端里的程序继续运行，下次打开 uTerm 时自动接回。崩溃和应用更新一律保留。") {
+                    UDSegmented(selection: $quitBehavior, options: [
+                        (value: TerminalQuitPolicy.Behavior.ask.rawValue, label: String(localized: "询问")),
+                        (value: TerminalQuitPolicy.Behavior.keep.rawValue, label: String(localized: "保留")),
+                        (value: TerminalQuitPolicy.Behavior.end.rawValue, label: String(localized: "全部结束")),
+                    ])
                 }
             }
         }

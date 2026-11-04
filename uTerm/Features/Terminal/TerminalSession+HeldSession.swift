@@ -13,6 +13,7 @@ extension TerminalSession {
 
     /// 接回完成返回 true；返回 false 说明回放途中这条会话已经被换掉，调用方别再往下走。
     func restoreHeldScreen(from backend: any HeldTerminalBackend, generation: Int) async -> Bool {
+        HeldTerminalSessions.add(self)
         guard let replay = await backend.takeReplay() else { return true }
         guard feedGeneration == generation else { return false }
 
@@ -65,6 +66,46 @@ extension TerminalSession {
     func saveHeldCheckpointNow() {
         heldCheckpoints?.captureNow()
     }
+
+    /// 窗格被关掉时调（代替 `dispose()` + `close()`）：平时结束会话；退出 App 途中只断开，会话留着下次接回。
+    func closeForDisposal() {
+        // `dispose()` 会清掉 backend，之后 `close()` 就关不到它了，要先留一份。
+        let backend = backend
+        // 退出流程里异步任务不一定来得及跑，要同步把话说完。
+        if TerminalQuitPolicy.shared.isQuitting, let held = backend as? any HeldTerminalBackend {
+            finishHeldForQuit(endingSession: TerminalQuitPolicy.shared.endsSessionsOnQuit)
+            dispose()
+            Task { await held.detach() }
+        } else {
+            dispose()
+            Task { await backend?.close() }
+        }
+    }
+
+    /// 退出流程的最后一步（`willTerminate`）：之后进程就没了，不能再指望异步任务。
+    func finishHeldForQuit(endingSession: Bool) {
+        guard let held = backend as? any HeldTerminalBackend else { return }
+        saveHeldCheckpointNow()
+        if endingSession { held.holderLink.send(HolderFrame(.terminate)) }
+        held.holderLink.flushAndClose(timeout: 0.5)
+    }
+}
+
+/// 所有连着 holder 的终端会话，退出询问和退出收尾要枚举它们。弱引用：会话的生命周期归窗口。
+@MainActor
+enum HeldTerminalSessions {
+    private struct Entry {
+        weak var session: TerminalSession?
+    }
+
+    private static var entries: [Entry] = []
+
+    static func add(_ session: TerminalSession) {
+        entries.removeAll { $0.session == nil || $0.session === session }
+        entries.append(Entry(session: session))
+    }
+
+    static var all: [TerminalSession] { entries.compactMap(\.session) }
 }
 
 /// 什么时候存检查点：有输出时最多 5 秒一次，累计 4 MiB 也存；尺寸变了很快存一次（之后的字节是按新尺寸产生的）。

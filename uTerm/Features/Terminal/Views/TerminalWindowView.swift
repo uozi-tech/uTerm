@@ -123,11 +123,16 @@ struct TerminalWindowView: View {
             if let id { lastServerID = id }
         }
         .task {
-            // 仅首次：开窗口时带来的那台主机作为第一个标签。窗格连接由 PaneView 自身的
-            // .task 走共享 modelContainer 自动建立（与工作区窗口同路径）。
+            // 仅首次：上次留下的会话放回来；没有就把开窗口时带来的那台主机作为第一个标签。
+            // 窗格连接由 PaneView 自身的 .task 走共享 modelContainer 自动建立（与工作区窗口同路径）。
             guard !didOpen else { return }
             didOpen = true
-            openTab(serverID: windowID.serverID)
+            let heldSessions = await SSHSessionRestorer.shared.claim(windowID: windowID.id)
+            if heldSessions.isEmpty {
+                openTab(serverID: windowID.serverID)
+            } else {
+                workspace.adoptHeldSessions(heldSessions)
+            }
         }
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。
         // 失败（缺密码 / 私钥等）→ try? 吞掉、executor 留 nil → Agent 退化为纯文本对话。

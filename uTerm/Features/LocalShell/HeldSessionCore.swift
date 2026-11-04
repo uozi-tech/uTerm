@@ -1,0 +1,213 @@
+import Foundation
+
+/// 连着一个 `uterm-holder` 的会话：attach、收发帧、收尾。本机 shell 和 SSH 两种后端共用。
+///
+/// `close()` 结束会话，`detach()` 只断开。退出原因分得开：holder 明说子进程退出了（`exited`）、
+/// 被别的客户端接走（`replaced`）、连接断了（holder 没了）。这三种对终端来说都是这条会话到头了。
+actor HeldSessionCore {
+    nonisolated let outputStream: AsyncStream<Data>
+    nonisolated let exitStream: AsyncStream<Void>
+    nonisolated let holderLink = HolderLink()
+    private let outputContinuation: AsyncStream<Data>.Continuation
+    private let exitContinuation: AsyncStream<Void>.Continuation
+
+    private var connection: HolderConnection?
+    private var replay: HolderReplay?
+    private var childPID: Int32?
+    private enum Teardown { case terminate, detach }
+    /// 连接途中就被要求收尾时记在这，连上之后补做。
+    private var teardown: Teardown?
+    private var isFinished = false
+
+    init() {
+        (outputStream, outputContinuation) = AsyncStream.makeStream(of: Data.self)
+        (exitStream, exitContinuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    /// 子进程的进程号（已结束 / 未启动时 nil）。
+    var pid: Int32? { childPID }
+    var isConnected: Bool { connection != nil && !isFinished }
+    var finished: Bool { isFinished }
+
+    /// 接入 holder。返回 false = 接入途中已经被要求收尾，这条连接已经处理掉了。
+    @discardableResult
+    func attach(_ handle: FileHandle) async throws -> Bool {
+        let (connection, replay) = try await openAttachment(handle)
+        if let teardown {
+            if teardown == .terminate { connection.send(HolderFrame(.terminate)) }
+            connection.close()
+            return false
+        }
+        self.connection = connection
+        self.replay = replay
+        childPID = replay.hello.shellPID
+        holderLink.install(connection)
+        return true
+    }
+
+    private func openAttachment(_ handle: FileHandle) async throws -> (HolderConnection, HolderReplay) {
+        let connection = HolderConnection(handle)
+        let receiver = HolderSessionReceiver(output: outputContinuation) { [weak self] in
+            Task { await self?.ended() }
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver.onReplayFinished = { result in
+                continuation.resume(with: result.map { (connection, $0) })
+            }
+            connection.onFrame = { receiver.receive($0) }
+            connection.onClosed = { receiver.connectionClosed() }
+            connection.start()
+            connection.send(HolderFrame(.hello))
+            connection.send(HolderFrame(.attach))
+            // holder 卡死不能把窗口一直挂在「正在启动」。超过之后连接关掉，走上面的失败路径。
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [weak connection, weak receiver] in
+                guard receiver?.isReplayPending == true else { return }
+                connection?.close()
+            }
+        }
+    }
+
+    func takeReplay() -> HolderReplay? {
+        defer { replay = nil }
+        return replay
+    }
+
+    /// 这次接入看到的 hello（`takeReplay` 之前有效）。
+    var attachedHello: HolderHelloReply? { replay?.hello }
+
+    func write(_ data: Data) {
+        guard !isFinished else { return }
+        connection?.send(HolderFrame(.input, payload: Array(data)))
+    }
+
+    func resize(cols: UInt16, rows: UInt16) {
+        guard !isFinished else { return }
+        var writer = HolderByteWriter()
+        writer.u16(cols)
+        writer.u16(rows)
+        connection?.send(HolderFrame(.resize, payload: writer.bytes))
+    }
+
+    func setAttributes(_ attributes: Data) {
+        connection?.send(HolderFrame(.setAttributes, payload: Array(attributes)))
+    }
+
+    func send(_ frame: HolderFrame) {
+        connection?.send(frame)
+    }
+
+    func close() {
+        guard !isFinished else { return }
+        teardown = .terminate
+        connection?.send(HolderFrame(.terminate))
+        shutDown()
+    }
+
+    func detach() {
+        guard !isFinished else { return }
+        teardown = .detach
+        shutDown()
+    }
+
+    private func shutDown() {
+        isFinished = true
+        holderLink.install(nil)
+        connection?.close()
+        connection = nil
+        childPID = nil
+        outputContinuation.finish()
+        exitContinuation.finish()
+    }
+
+    private func ended() {
+        guard !isFinished else { return }
+        // 先 yield 再 finish：finish 之后 yield 是空操作，会话结束就没人知道了。
+        exitContinuation.yield()
+        shutDown()
+    }
+}
+
+nonisolated enum HolderSessionFailure: LocalizedError {
+    case disconnected
+    case badReply
+
+    var errorDescription: String? {
+        switch self {
+        case .disconnected: return "终端的辅助进程断开了连接"
+        case .badReply: return "终端的辅助进程回了看不懂的内容"
+        }
+    }
+}
+
+/// 收 holder 的帧：先攒回放，`replayEnd` 之后转成输出流。只在连接的队列上用。
+nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
+    private let output: AsyncStream<Data>.Continuation
+    private let onEnded: @Sendable () -> Void
+    var onReplayFinished: (@Sendable (Result<HolderReplay, Error>) -> Void)?
+
+    private var hello: HolderHelloReply?
+    private var checkpoint: HolderCheckpoint?
+    private var collected: [UInt8] = []
+    private var isLive = false
+
+    /// 其它线程只用它判断要不要放弃，读到旧值也只是晚一拍。
+    private let pendingLock = NSLock()
+    private var pending = true
+    var isReplayPending: Bool {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return pending
+    }
+
+    init(output: AsyncStream<Data>.Continuation, onEnded: @escaping @Sendable () -> Void) {
+        self.output = output
+        self.onEnded = onEnded
+    }
+
+    func receive(_ frame: HolderFrame) {
+        // 不认识的帧忽略：旧 App 可能连着新 holder。
+        guard let kind = frame.kind else { return }
+        switch kind {
+        case .helloReply:
+            hello = HolderHelloReply(decoding: frame.payload)
+        case .replayCheckpoint:
+            checkpoint = HolderCheckpoint(decoding: frame.payload)
+        case .output:
+            if isLive {
+                output.yield(Data(frame.payload))
+            } else {
+                collected.append(contentsOf: frame.payload)
+            }
+        case .replayEnd:
+            var reader = HolderByteReader(frame.payload)
+            guard let hello, let checkpoint, let end = reader.u64() else {
+                finishReplay(.failure(HolderSessionFailure.badReply))
+                return
+            }
+            isLive = true
+            finishReplay(.success(HolderReplay(hello: hello, checkpoint: checkpoint, output: collected, endOffset: end)))
+            collected = []
+        case .exited, .replaced:
+            onEnded()
+        case .hello, .attach, .input, .resize, .checkpoint, .setAttributes, .terminate, .redraw, .probe:
+            break
+        }
+    }
+
+    func connectionClosed() {
+        if isReplayPending {
+            finishReplay(.failure(HolderSessionFailure.disconnected))
+        } else {
+            onEnded()
+        }
+    }
+
+    private func finishReplay(_ result: Result<HolderReplay, Error>) {
+        pendingLock.lock()
+        pending = false
+        pendingLock.unlock()
+        let finished = onReplayFinished
+        onReplayFinished = nil
+        finished?(result)
+    }
+}

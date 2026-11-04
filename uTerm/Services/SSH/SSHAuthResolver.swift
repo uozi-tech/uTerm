@@ -132,6 +132,17 @@ nonisolated enum SSHAuthResolver {
         return (auth, jumpAuth)
     }
 
+    /// 新建连接用：跟 `resolveOffMain` 的区别是跳板机的凭据缺了要报错，不能悄悄当作没有。
+    @concurrent static func resolveForConnect(
+        _ profile: Lookup,
+        jump: Lookup?
+    ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
+        let keychain = KeychainStore()
+        let auth = try resolve(profile, keychain: keychain)
+        let jumpAuth = try jump.map { try resolve($0, keychain: keychain) }
+        return (auth, jumpAuth)
+    }
+
     /// 读取一条钥匙串密钥：条目不存在返回 `nil`（沿用 `KeychainStore.load` 的语义），
     /// 其余任何错误（钥匙串被锁等）包成 `SSHAuthError.keychainAccessFailed` 上抛。
     private nonisolated static func load(

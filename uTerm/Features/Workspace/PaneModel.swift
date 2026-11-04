@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import SwiftTerm
 
 /// 一个终端窗格：绑定一台服务器，持有 SwiftTerm 会话。
 @MainActor
@@ -15,6 +16,8 @@ final class PaneModel: Identifiable {
     /// 终端连接的 host-key 审批桥接。
     let hostKeyRelay = HostKeyChallengeRelay()
     private var isConnecting = false
+    /// 标签的先后，存进 holder：重启后纯终端窗口按它排标签。
+    @ObservationIgnored private let sessionOrder: Double
 
     /// 跨窗口会话注册的凭条（CLI 的 `terminals` / `terminal-read` / `terminal-send`）。
     /// 由 `WorkspaceModel.attachSessionRegistry` 在窗口视图注入注册表后 stamp；
@@ -26,8 +29,10 @@ final class PaneModel: Identifiable {
     /// 供「先连上、后注入注册表」的窗口补登记（`adopt(registrar:)`）。
     @ObservationIgnored private(set) var connectedServerName: String?
 
-    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil) {
+    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil,
+         sessionOrder: Double = Date().timeIntervalSince1970) {
         self.id = id
+        self.sessionOrder = sessionOrder
         self.serverProfileID = serverProfileID
         self.fileBuffer = fileBuffer
         self.tabTitle = tabTitle
@@ -74,26 +79,22 @@ final class PaneModel: Identifiable {
     private func connect(profile: ServerProfile,
                          modelContainer: ModelContainer,
                          timeline: ConnectTimeline) async {
-        let keychain = KeychainStore()
+        // 名字先记下来：`session.connect` 里状态一翻到 `.connected`，
+        // `onConnectionStateChange` 就会立刻回调 `syncRegistration`，
+        // 那时必须已经有 `connectedServerName` 可用。
+        connectedServerName = profile.name
+        defer { SSHSessionRestorer.shared.settled(id) }
         do {
-            let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
-            var jumpAuth: ResolvedAuth?
-            if let jump = profile.jumpHost {
-                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
+            let backend: any TerminalBackend
+            // 辅助程序出了问题也不能连不上服务器：退回到 App 进程内的连接，只是活不过重启。
+            if (try? await LocalShellService.shared.client.ping()) != nil {
+                backend = makeHeldBackend(profile: profile, modelContainer: modelContainer)
+            } else {
+                AppLogger.error("终端辅助程序不可用，这条 SSH 连接留在 App 进程内", category: "ssh")
+                backend = try makeInProcessBackend(profile: profile, modelContainer: modelContainer)
             }
-            timeline.mark("keychain")
-            let verifier = HostKeyVerifier(modelContainer: modelContainer)
-            let approver = hostKeyRelay.makeApprover()
-            let connection = SSHConnection(
-                profile: SSHConnection.ProfileSnapshot(profile),
-                auth: auth, jumpHostAuth: jumpAuth,
-                hostKeyVerifier: verifier,
-                hostKeyApprover: approver)
-            // 名字先记下来：`session.connect` 里状态一翻到 `.connected`，
-            // `onConnectionStateChange` 就会立刻回调 `syncRegistration`，
-            // 那时必须已经有 `connectedServerName` 可用。
-            connectedServerName = profile.name
-            await session.connect(using: connection)
+            timeline.mark("backend")
+            await session.connect(using: backend)
             // 连上了才登记 —— `terminals` 列的是「能读能写的活会话」，
             // 连接中 / 已失败的窗格对 CLI 没有意义。钩子通常已经登记过了，
             // 这一次是幂等兜底（同 id 重复登记 = 原地更新）。
@@ -109,11 +110,50 @@ final class PaneModel: Identifiable {
         }
     }
 
+    private func makeHeldBackend(profile: ServerProfile, modelContainer: ModelContainer) -> HeldSSHBackend {
+        let lookup = SSHAuthResolver.Lookup(profile)
+        let jumpLookup = profile.jumpHost.map(SSHAuthResolver.Lookup.init)
+        let terminal = session.terminalView.getTerminal()
+        return HeldSSHBackend(
+            client: LocalShellService.shared.client, sessionID: id, columns: terminal.cols, rows: terminal.rows,
+            target: HeldSSHBackend.Target(
+                profile: SSHConnection.ProfileSnapshot(profile),
+                resolveAuth: { try await SSHAuthResolver.resolveForConnect(lookup, jump: jumpLookup) },
+                hostKeyVerifier: HostKeyVerifier(modelContainer: modelContainer),
+                hostKeyApprover: hostKeyRelay.makeApprover()),
+            attributes: sessionAttributes(title: profile.name))
+    }
+
+    private func makeInProcessBackend(profile: ServerProfile, modelContainer: ModelContainer) throws -> SSHConnection {
+        let keychain = KeychainStore()
+        let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
+        var jumpAuth: ResolvedAuth?
+        if let jump = profile.jumpHost {
+            jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
+        }
+        return SSHConnection(
+            profile: SSHConnection.ProfileSnapshot(profile),
+            auth: auth, jumpHostAuth: jumpAuth,
+            hostKeyVerifier: HostKeyVerifier(modelContainer: modelContainer),
+            hostKeyApprover: hostKeyRelay.makeApprover())
+    }
+
+    /// 重启后据此把标签放回原来的窗口。窗口还没把凭条发下来时是 nil，`adopt(registrar:)` 时补。
+    private func sessionAttributes(title: String?) -> Data? {
+        guard let registrar else { return nil }
+        return try? JSONEncoder().encode(SSHSessionAttributes(
+            windowID: registrar.windowID, windowKind: registrar.windowKind, serverID: serverProfileID,
+            title: tabTitle ?? title ?? "", order: sessionOrder))
+    }
+
     /// 窗口把注册表凭条补发下来时调用（窗口视图的 `.task` 可能晚于窗格建连）。
     /// 已经连上的窗格立刻补登记，未连上的等 `connect` 走正常路径。
     func adopt(registrar: TerminalSessionRegistrar) {
         guard fileBuffer == nil else { return }
         self.registrar = registrar
+        if let backend = session.backend as? HeldSSHBackend, let attributes = sessionAttributes(title: connectedServerName) {
+            Task { await backend.setAttributes(attributes) }
+        }
         guard session.connectionState == .connected, let name = connectedServerName else { return }
         registrar.register(paneID: id,
                            serverID: serverProfileID,
@@ -131,8 +171,7 @@ final class PaneModel: Identifiable {
     func dispose() {
         guard fileBuffer == nil else { return }
         registrar?.unregister(paneID: id)
-        session.dispose()
-        Task { await session.close() }
+        session.closeForDisposal()
         hostKeyRelay.resolve(false)
     }
 }

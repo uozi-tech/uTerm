@@ -41,8 +41,8 @@ nonisolated enum LocalShellError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .agentUnavailable(let reason): return "连不上本机终端的辅助程序：\(reason)"
-        case .openFailed(let reason): return "本机终端没能启动：\(reason)"
+        case .agentUnavailable(let reason): return "连不上终端的辅助程序：\(reason)"
+        case .openFailed(let reason): return "终端没能启动：\(reason)"
         }
     }
 }
@@ -108,6 +108,25 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
+    /// 连上 SSH 会话 `id`；还没有就新起一个 `uterm-ssh`，这时 `control` 非 nil，连接参数要从它交过去。
+    func openSSHSession(namespace: String, id: UUID, columns: Int, rows: Int) async throws -> (holder: FileHandle, control: FileHandle?) {
+        let box: LocalShellHandlePair = try await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                return
+            }
+            agent.openSSHSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows) { holder, control, error in
+                if let holder {
+                    once.resume(returning: LocalShellHandlePair(holder: holder, control: control))
+                } else {
+                    once.resume(throwing: LocalShellError.openFailed(error ?? "未知原因"))
+                }
+            }
+        }
+        return (box.holder, box.control)
+    }
+
     /// 只连已有的会话。
     func connectSession(namespace: String, id: UUID) async throws -> FileHandle {
         try await withCheckedThrowingContinuation { continuation in
@@ -134,6 +153,11 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
             }
         }
     }
+}
+
+nonisolated private struct LocalShellHandlePair: @unchecked Sendable {
+    let holder: FileHandle
+    let control: FileHandle?
 }
 
 /// XPC 的回复与错误回调可能都来（连接断在回复途中），continuation 只能 resume 一次。

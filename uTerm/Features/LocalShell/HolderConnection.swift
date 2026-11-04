@@ -194,7 +194,7 @@ nonisolated struct HolderReplay: Sendable {
 protocol HeldTerminalBackend: TerminalBackend {
     nonisolated var holderLink: HolderLink { get }
     /// 取走接回时的回放（只给一次）。
-    func takeReplay() -> HolderReplay?
+    func takeReplay() async -> HolderReplay?
     /// 断开连接但不结束 shell：App 退出、被替换时用。
     func detach() async
 }
