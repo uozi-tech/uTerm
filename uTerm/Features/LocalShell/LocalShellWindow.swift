@@ -439,7 +439,7 @@ struct LocalShellTerminalArea: View {
         let status = session.programStatus
         return UPaneTabDescriptor(
             title: shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle,
-            icon: .system(controlled ? "iphone" : status?.tabIcon ?? "terminal"),
+            icon: controlled ? .system("iphone") : .none,
             leadingDot: status?.tabDot ?? (session.connectionState == .connected ? UD.success : UD.text4),
             help: controlled ? "正在被手机接管" : status?.tabHelp ?? shellTitle ?? pane.defaultTitle)
     }

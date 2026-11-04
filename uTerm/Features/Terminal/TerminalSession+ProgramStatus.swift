@@ -137,17 +137,6 @@ extension ProgramStatusRecord {
         return message.map { "\(headline)\n\($0)" } ?? headline
     }
 
-    /// 图标和圆点一起变：只靠颜色，色觉障碍用户分不清。
-    var tabIcon: String {
-        switch state {
-        case .blocked: "exclamationmark.circle"
-        case .working: "ellipsis.circle"
-        case .done: "checkmark.circle"
-        case .error: "xmark.octagon"
-        case .idle: "terminal"
-        }
-    }
-
     @MainActor var tabDot: SwiftUI.Color {
         switch state {
         case .blocked: UD.warning

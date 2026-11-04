@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import UDesignKit
 import UserNotifications
 import XCTest
 @testable import uTerm
@@ -196,12 +197,13 @@ final class TerminalProgramStatusTests: XCTestCase {
     func testTabShowsProgramStatus() {
         let pane = PaneModel(serverProfileID: UUID(), tabTitle: "web-1")
         let tab = TerminalTab(payload: pane)
-        XCTAssertEqual(TerminalArea.descriptor(for: tab, profiles: [:]).icon, .system("terminal"))
+        XCTAssertEqual(TerminalArea.descriptor(for: tab, profiles: [:]).icon, .none)
 
         pane.session.terminalView.feed(text: "\u{1b}]7501;state=blocked:app=claude-code:kind=question\u{1b}\\")
 
         let descriptor = TerminalArea.descriptor(for: tab, profiles: [:])
-        XCTAssertEqual(descriptor.icon, .system("exclamationmark.circle"))
+        XCTAssertEqual(descriptor.icon, .none, "程序状态也只由圆点表达")
+        XCTAssertEqual(descriptor.leadingDot, UD.warning)
         XCTAssertEqual(descriptor.help?.hasPrefix("Claude Code · 等待回答"), true)
     }
 

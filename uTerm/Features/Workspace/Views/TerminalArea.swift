@@ -91,6 +91,8 @@ struct TerminalArea: View {
     /// `tab.focusedPane?.session`，一个标签里四个窗格连四台机器时点只反映聚焦那个；
     /// 现在每枚 chip 用**它自己**那条会话。
     ///
+    /// 终端标签不放图标：终端是常态，图标只是噪音。连接和程序状态都由这一个圆点说，文字在悬停提示里。
+    ///
     /// 标题读 `session.shellTitle`，同样只让这一枚失效。不能走 `UPaneTab.customTitle`：
     /// 那是组树里的状态，写一次整个区域都跟着失效，而程序可能每秒改很多次标题。
     static func descriptor(for tab: TerminalTab,
@@ -108,7 +110,6 @@ struct TerminalArea: View {
         let status = pane.session.programStatus
         let baseHelp = shellTitle.map { "\($0)\n\(context)" } ?? context
         return UPaneTabDescriptor(title: shellTitle.map(clippedTabTitle) ?? name,
-                                  icon: .system(status?.tabIcon ?? "terminal"),
                                   leadingDot: status?.tabDot ?? display.tint.color,
                                   help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
     }

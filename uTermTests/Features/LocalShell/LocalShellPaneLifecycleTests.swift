@@ -251,6 +251,7 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
 
         var descriptor = LocalShellTerminalArea.descriptor(for: pane)
         XCTAssertEqual(descriptor.title, pane.defaultTitle)
+        XCTAssertEqual(descriptor.icon, .none)
         XCTAssertEqual(descriptor.help, pane.defaultTitle)
 
         pane.session.terminalView.feed(text: "\u{1b}]0;vim main.swift\u{07}")
@@ -287,6 +288,7 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
         let descriptor = LocalShellTerminalArea.descriptor(for: pane)
         XCTAssertEqual(descriptor.title, "vim")
         XCTAssertEqual(descriptor.help, "正在被手机接管")
+        XCTAssertEqual(descriptor.icon, .system("iphone"))
     }
 
     // MARK: - 路由
