@@ -252,6 +252,8 @@ final class FileBrowserModel {
         let raw = UserDefaults.standard.object(forKey: "sftpMaxConcurrentTransfers") as? Int ?? 4
         return min(64, max(1, raw))
     }
+    /// 测试用的固定上限：测试宿主的 `UserDefaults.standard` 就是正式版的设置，不能写。
+    private let fixedConcurrencyLimit: Int?
     private static let transferSpeedSampleInterval: TimeInterval = 0.10
 
     private var restoredInitialPath: String?
@@ -281,10 +283,12 @@ final class FileBrowserModel {
     }
 
     init(sftpConnector: @escaping SFTPConnector = FileBrowserModel.makeLiveSFTPProvider) {
+        self.fixedConcurrencyLimit = nil
         self.sftpConnector = sftpConnector
     }
 
-    init(testProvider: any SFTPProviding, startPath: String) {
+    init(testProvider: any SFTPProviding, startPath: String, maxConcurrentTransfers: Int = 4) {
+        self.fixedConcurrencyLimit = maxConcurrentTransfers
         self.sftpConnector = { _, _, _ in testProvider }
         self.provider = testProvider
         self.currentPath = startPath
@@ -812,7 +816,7 @@ final class FileBrowserModel {
 
     /// 调度：上传和下载共用一个槽位池，避免多个下载绕过用户设置并放大内存/网络压力。
     private func pumpQueue() {
-        let limit = Self.maxConcurrentTransfers
+        let limit = fixedConcurrencyLimit ?? Self.maxConcurrentTransfers
         var active = transfers.filter { $0.status == .active }.count
         for idx in transfers.indices where active < limit {
             guard transfers[idx].status == .queued else { continue }

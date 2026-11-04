@@ -56,6 +56,31 @@ final class TestModelConfigurationLintTests: XCTestCase {
             """)
     }
 
+    /// macOS 测试宿主用的就是正式版的设置。写跨设备同步的键等于改掉用户的选择，
+    /// 正式版下次读到的就是测试留下的值。
+    func testNoMacTestWritesSyncedPreference() throws {
+        let sync = try String(
+            contentsOf: Self.repoRoot.appendingPathComponent("uTerm/Core/Sync/SharedPreferencesSync.swift"),
+            encoding: .utf8)
+        let keys = sync.matches(of: /Definition\(key: "([^"]+)"/).map { String($0.output.1) }
+        XCTAssertGreaterThan(keys.count, 10, "夹具失效：应该能从同步清单读到十几个键")
+
+        var offenders: [String] = []
+        for file in try Self.testSwiftFiles() where file.path.contains("/uTermTests/") {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for match in source.matches(of: /UserDefaults\.standard\.(?:set|removeObject)\([^"\n]*"([^"\n]+)"/)
+            where keys.contains(String(match.output.1)) {
+                let line = source[..<match.range.lowerBound].filter { $0 == "\n" }.count + 1
+                offenders.append("\(file.lastPathComponent):\(line) \(match.output.1)")
+            }
+        }
+        XCTAssertTrue(offenders.isEmpty, """
+            测试写了跨设备同步的设置（\(offenders.count) 处）：
+            \(offenders.joined(separator: "\n"))
+            把值作为参数注入，或改用私有 UserDefaults 套件。
+            """)
+    }
+
     // MARK: - 扫描
 
     /// 找出 `name` 的每次调用，按括号深度截出参数文本（支持跨行）。

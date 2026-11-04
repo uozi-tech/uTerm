@@ -612,12 +612,10 @@ final class FileBrowserModelTests: XCTestCase {
     }
 
     func testUploadAndDownloadShareConcurrencyLimit() async throws {
-        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
-        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
         let mock = MockSFTP(tree: ["/home/user": dir([("remote.bin", false)])])
         try await mock.write("/home/user/remote.bin", data: Data("remote".utf8))
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 1)
         await model.refresh()
         model.enqueueUpload(fileName: "upload.bin", data: Data("upload".utf8))
         await waitUntil { model.transfers.first?.status == .active }
@@ -640,11 +638,9 @@ final class FileBrowserModelTests: XCTestCase {
     }
 
     func testEnqueueUploadsRespectsConcurrencyLimit() async throws {
-        UserDefaults.standard.set(2, forKey: "sftpMaxConcurrentTransfers")
-        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 2)
         let (tmp, urls) = try tempFiles(["a.txt", "b.txt", "c.txt", "d.txt"])
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -664,11 +660,9 @@ final class FileBrowserModelTests: XCTestCase {
     }
 
     func testCancelQueuedRemovesImmediately() async throws {
-        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
-        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 1)
         let (tmp, urls) = try tempFiles(["a.txt", "b.txt"])
         defer { try? FileManager.default.removeItem(at: tmp) }
         model.enqueueUploads(urls)
@@ -800,14 +794,12 @@ final class FileBrowserModelTests: XCTestCase {
 
     /// 入队上传后切换目录，传输完成时应落到入队时的目录、而非切换后的当前目录。
     func testEnqueuedUploadLandsInDirectoryCapturedAtEnqueueTime() async throws {
-        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
-        defer { UserDefaults.standard.removeObject(forKey: "sftpMaxConcurrentTransfers") }
         let mock = MockSFTP(tree: [
             "/home/user": dir([("sub", true)]),
             "/home/user/sub": dir([]),
         ])
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 1)
         await model.refresh()
 
         let (tmp, urls) = try tempFiles(["a.txt"])
@@ -982,10 +974,9 @@ final class FileBrowserModelTests: XCTestCase {
     /// 结构变更（取消 / 清除已完成 / 重试）之后，缓存必须仍然指向正确的行 ——
     /// 指错了就会把进度写到别人身上，是最难查的一类串行错。
     func testProgressStillLandsOnTheRightRowAfterRemovals() async {
-        UserDefaults.standard.set(6, forKey: "sftpMaxConcurrentTransfers")
         let mock = MockSFTP(tree: ["/home/user": dir([])])
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 6)
         for i in 0..<6 {
             model.enqueueUpload(fileName: "f\(i).bin", data: Data(count: 4096))
         }
@@ -1016,9 +1007,8 @@ final class FileBrowserModelTests: XCTestCase {
 
     /// 「清除已完成」之后，仍在跑的那条的进度还得写对地方。
     func testProgressStillLandsOnTheRightRowAfterClearingFinished() async {
-        UserDefaults.standard.set(1, forKey: "sftpMaxConcurrentTransfers")
         let mock = MockSFTP(tree: ["/home/user": dir([])])
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user", maxConcurrentTransfers: 1)
         // 先让三条真的跑完（.done 留在数组里）。
         for i in 0..<3 {
             model.enqueueUpload(fileName: "done\(i).bin", data: Data(count: 128))

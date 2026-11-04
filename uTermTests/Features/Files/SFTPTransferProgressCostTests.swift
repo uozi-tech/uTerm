@@ -41,10 +41,10 @@ final class SFTPTransferProgressCostTests: XCTestCase {
     /// 造一个挂起中的传输队列：`MockSFTP.blockTransfers` 让传输永远不完成，
     /// 于是前 `maxConcurrentTransfers` 条停在 `.active`，其余停在 `.queued`。
     private func makeBusyModel(concurrency: Int, queued: Int) async -> FileBrowserModel {
-        UserDefaults.standard.set(concurrency, forKey: "sftpMaxConcurrentTransfers")
         let mock = MockSFTP(tree: ["/home/user": []])
         await mock.setBlockTransfers(true)
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user",
+                                     maxConcurrentTransfers: concurrency)
         for i in 0..<queued {
             model.enqueueUpload(fileName: String(format: "payload-%04d.bin", i),
                                 data: Data(count: 4096))
@@ -62,9 +62,9 @@ final class SFTPTransferProgressCostTests: XCTestCase {
     /// 这才是 `applyProgress` 的**真实最坏序**：新起的传输永远排在一堆已完成的后面，
     /// `transfers.firstIndex(where:)` 每次都要先扫过那一堆。
     private func makeAgedQueue(finished: Int, active: Int) async -> FileBrowserModel {
-        UserDefaults.standard.set(active, forKey: "sftpMaxConcurrentTransfers")
         let mock = MockSFTP(tree: ["/home/user": []])
-        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user")
+        let model = FileBrowserModel(testProvider: mock, startPath: "/home/user",
+                                     maxConcurrentTransfers: active)
         for i in 0..<finished {
             model.enqueueUpload(fileName: String(format: "old-%04d.bin", i),
                                 data: Data(count: 256))
