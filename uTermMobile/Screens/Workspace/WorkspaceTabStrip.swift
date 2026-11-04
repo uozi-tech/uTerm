@@ -10,6 +10,19 @@ enum MTabActivity {
     case inactive
 }
 
+/// 关标签前要用户拿主意的一次确认。
+struct MTabClosePrompt: Equatable {
+    enum Kind: Equatable {
+        /// 远控标签：只关手机上的，还是连 Mac 上的一起关。
+        case remote(macName: String)
+        /// 前台还有程序在跑。
+        case busy(TerminalClosePrompt)
+    }
+
+    let tabID: UUID
+    let kind: Kind
+}
+
 /// 一个分屏格的标签条：返回 · 多态标签（终端 / 文件）· 新建 · Agent 开关 · 分屏开关。
 ///
 /// 活动态配色照 macOS 工作区 `.card` 标签（uAppKit `UPaneTabChip.cardChip`）：
@@ -44,6 +57,9 @@ struct WorkspaceTabStrip: View {
     var showsTrailingControls: Bool = true
     /// 开始拖某个标签（拖到工作区边上分屏 / 拖进另一格）。
     var onDragTab: (UUID) -> Void = { _ in }
+    /// 等用户确认的关闭。归属标签自己弹，所以宽屏下的 popover 指向那枚标签。
+    var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
+    var onConfirmClose: (UUID, _ alsoOnMac: Bool) -> Void = { _, _ in }
 
     @Environment(\.mAccent) private var accent
 
@@ -64,7 +80,9 @@ struct WorkspaceTabStrip: View {
                                              onSelect: { onSelect(tab.id) },
                                              onClose: { onClose(tab.id) },
                                              onMove: { onMoveToOtherPane(tab.id) },
-                                             onDragStart: { onDragTab(tab.id) })
+                                             onDragStart: { onDragTab(tab.id) },
+                                             closePrompt: closePrompt,
+                                             onConfirmClose: { onConfirmClose(tab.id, $0) })
                                 .id(tab.id)
                         }
                         newMenu
@@ -196,7 +214,7 @@ struct WorkspaceSideControls: View {
     }
 }
 
-/// 标签条上的一枚标签：状态点 · 类型图标 · 标题 · 关闭。
+/// 标签条上的一枚标签：状态点 · 标题 · 关闭。终端是常态，不放图标；文件浏览标题同样是主机名，靠文件夹图标区分。
 struct WorkspaceTabChip: View {
     let tab: MWorkTab
     let activity: MTabActivity
@@ -205,6 +223,8 @@ struct WorkspaceTabChip: View {
     var onClose: () -> Void
     var onMove: () -> Void = {}
     var onDragStart: () -> Void = {}
+    var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
+    var onConfirmClose: (_ alsoOnMac: Bool) -> Void = { _ in }
     @Environment(\.mAccent) private var accent
     /// Duo 状态行里胶囊加高到 36pt（行高 82，30pt 的胶囊显得太扁，实机反馈）。
     @Environment(\.mInStatusRow) private var inStatusRow
@@ -232,8 +252,10 @@ struct WorkspaceTabChip: View {
     var body: some View {
         HStack(spacing: 6) {
             MDot(color: stateDot.color, pulse: stateDot.pulse, size: 6)
-            MIcon(name: tab.kind == .terminal ? "term" : "folder", size: 12, color: iconColor,
-                  weight: activity == .active ? .semibold : .regular)
+            if tab.kind == .sftp {
+                MIcon(name: "folder", size: 12, color: iconColor,
+                      weight: activity == .active ? .semibold : .regular)
+            }
             Text(tab.title)
                 .font(M.mono(12.5))
                 .foregroundStyle(titleColor)
@@ -256,6 +278,8 @@ struct WorkspaceTabChip: View {
         .background(
             RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous)
                 .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
+        // 挂在胶囊上而不是下面撑到 44pt 的命中区上：popover 的箭头要贴着看得见的标签。
+        .modifier(TabCloseDialog(tabID: tab.id, prompt: closePrompt, onConfirm: onConfirmClose))
         .padding(.vertical, (44 - pillHeight) / 2)   // 命中区 44pt
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
@@ -292,6 +316,44 @@ struct WorkspaceTabChip: View {
             case .connected: return (M.success, false)
             case .connecting, .idle: return (M.warning, true)
             case .failed: return (M.danger, false)
+            }
+        }
+    }
+}
+
+/// 关标签前的确认。窄屏是底部操作表，宽屏是从这枚标签弹出的 popover（系统不显示「取消」，点外面即取消）。
+private struct TabCloseDialog: ViewModifier {
+    let tabID: UUID
+    @Binding var prompt: MTabClosePrompt?
+    let onConfirm: (_ alsoOnMac: Bool) -> Void
+
+    /// 收起动画期间 `prompt` 已清空，标题仍要有字。
+    private var title: Text {
+        if case .busy(let busy)? = prompt?.kind { return Text(busy.title) }
+        return Text("关闭这个标签？")
+    }
+
+    func body(content: Content) -> some View {
+        let isPresented = Binding(get: { prompt?.tabID == tabID },
+                                  set: { if !$0 { prompt = nil } })
+        content.confirmationDialog(title,
+                                   isPresented: isPresented,
+                                   titleVisibility: .visible,
+                                   presenting: prompt) { prompt in
+            switch prompt.kind {
+            case .remote:
+                Button("只在手机上关闭") { onConfirm(false) }
+                Button("同时关闭 Mac 上的终端", role: .destructive) { onConfirm(true) }
+            case .busy:
+                Button("关闭标签", role: .destructive) { onConfirm(false) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { prompt in
+            switch prompt.kind {
+            case .remote(let macName):
+                Text("这是「\(macName)」上的终端。只在手机上关闭时，它在 Mac 上照常运行，之后还能再接入。")
+            case .busy(let busy):
+                Text(busy.message)
             }
         }
     }

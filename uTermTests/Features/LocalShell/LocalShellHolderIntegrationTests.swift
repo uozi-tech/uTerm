@@ -59,6 +59,19 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
     }
 
     /// 探活信号的默认处置是杀进程。本机 shell 收到探活帧不能有事。
+    func test_foreground_activity_reports_idle_and_running() async throws {
+        let id = makeSession()
+        let (session, held) = try await connected(id)
+        try await Task.sleep(for: .seconds(1))
+        let atPrompt = await held.foregroundActivity()
+        XCTAssertEqual(atPrompt, .idle)
+        try await session.injectInput("sleep 30", appendEnter: true)
+        try await Task.sleep(for: .seconds(1))
+        let running = await held.foregroundActivity()
+        XCTAssertEqual(running, .running("sleep"))
+        await session.close()
+    }
+
     /// 本地网络权限跟着责任进程走。SSH 的 holder 必须自己当责任进程，否则 App 一死局域网连接就断流。
     func test_ssh_holder_is_its_own_responsible_process() async throws {
         let id = makeSession()
@@ -343,6 +356,23 @@ final class TerminalHeldReplayTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(100))
         let afterReplay = await backend.written
         XCTAssertFalse(afterReplay.isEmpty, "回放结束后的查询要回答")
+        session.dispose()
+    }
+
+    /// 回放是重启前的事：不能回答查询、不能再发一遍通知。
+    func test_replay_of_program_status_sends_no_notifications_or_replies() async {
+        let sequences = "\u{1b}]7501;state=blocked;kind=permission;app=claude-code\u{1b}\\"
+            + "\u{1b}]7501;?\u{1b}\\"
+            + "\u{1b}]777;notify;title;body\u{07}\u{1b}]9;done\u{07}"
+        let session = TerminalSession()
+        let backend = MockHeldBackend(replay: replay(blob: [], cols: 80, rows: 24, output: Array(sequences.utf8)))
+        var attentions = 0
+        session.attentionSink = { _ in attentions += 1 }
+        await session.connect(using: backend)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(attentions, 0, "回放不发通知")
+        let written = await backend.written
+        XCTAssertEqual(written, [], "回放不回答查询")
         session.dispose()
     }
 

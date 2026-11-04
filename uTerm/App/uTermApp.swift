@@ -64,6 +64,8 @@ struct uTermApp: App {
     private let controlServer = ControlServer()
 
     init() {
+        WindowMoveBehavior.disableScreenLayoutAdjustment()
+
         // 必须在创建 SwiftData 容器之前订阅：CloudKit 可能在容器初始化期间就发出 setup / import 事件。
         let sync = CloudKitSyncMonitor()
         sync.start()
@@ -105,6 +107,7 @@ struct uTermApp: App {
         let controlSettings = ControlSettings()
         let forwardingCoordinator = ForwardingCoordinator()
         let terminalRegistry = TerminalSessionRegistry()
+        TerminalAttentionCenter.shared.start(registry: terminalRegistry)
         let globalForwarding = GlobalForwardingModel()
         let launchRelay = HostKeyChallengeRelay()
         _controlSettings = State(initialValue: controlSettings)

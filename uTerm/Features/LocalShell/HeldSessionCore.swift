@@ -18,6 +18,8 @@ actor HeldSessionCore {
     /// 连接途中就被要求收尾时记在这，连上之后补做。
     private var teardown: Teardown?
     private var isFinished = false
+    private var nextExecID = 1
+    private var pendingExecs: [Int: CheckedContinuation<String, Error>] = [:]
 
     init() {
         (outputStream, outputContinuation) = AsyncStream.makeStream(of: Data.self)
@@ -49,6 +51,8 @@ actor HeldSessionCore {
         let connection = HolderConnection(handle)
         let receiver = HolderSessionReceiver(output: outputContinuation) { [weak self] in
             Task { await self?.ended() }
+        } onChildReply: { [weak self] payload in
+            Task { await self?.receiveChildReply(payload) }
         }
         return try await withCheckedThrowingContinuation { continuation in
             receiver.onReplayFinished = { result in
@@ -96,6 +100,33 @@ actor HeldSessionCore {
         connection?.send(frame)
     }
 
+    /// 在 `uterm-ssh` 手上那条连接上跑一条命令，返回 stdout。
+    /// 没回音（对面是还不认识这个帧的旧 holder、命令挂住）就超时。
+    func execOnChild(_ command: String, timeout: Duration) async throws -> String {
+        guard !isFinished, let connection else { throw HeldExecFailure.unavailable }
+        let id = nextExecID
+        nextExecID += 1
+        let payload = try JSONEncoder().encode(SSHBridgeMessage.exec(id: id, command: command))
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingExecs[id] = continuation
+            connection.send(HolderFrame(.childRequest, payload: Array(payload)))
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                await self?.finishExec(id, .failure(HeldExecFailure.timedOut))
+            }
+        }
+    }
+
+    private func finishExec(_ id: Int, _ result: Result<String, Error>) {
+        pendingExecs.removeValue(forKey: id)?.resume(with: result)
+    }
+
+    private func receiveChildReply(_ payload: [UInt8]) {
+        guard case .execResult(let id, let output)? = try? JSONDecoder().decode(SSHBridgeMessage.self, from: Data(payload))
+        else { return }
+        finishExec(id, output.map { .success($0) } ?? .failure(HeldExecFailure.commandFailed))
+    }
+
     func close() {
         guard !isFinished else { return }
         teardown = .terminate
@@ -111,6 +142,8 @@ actor HeldSessionCore {
 
     private func shutDown() {
         isFinished = true
+        for continuation in pendingExecs.values { continuation.resume(throwing: HeldExecFailure.unavailable) }
+        pendingExecs = [:]
         holderLink.install(nil)
         connection?.close()
         connection = nil
@@ -125,6 +158,12 @@ actor HeldSessionCore {
         exitContinuation.yield()
         shutDown()
     }
+}
+
+nonisolated enum HeldExecFailure: Error {
+    case unavailable
+    case timedOut
+    case commandFailed
 }
 
 nonisolated enum HolderSessionFailure: LocalizedError {
@@ -143,6 +182,7 @@ nonisolated enum HolderSessionFailure: LocalizedError {
 nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
     private let output: AsyncStream<Data>.Continuation
     private let onEnded: @Sendable () -> Void
+    private let onChildReply: @Sendable ([UInt8]) -> Void
     var onReplayFinished: (@Sendable (Result<HolderReplay, Error>) -> Void)?
 
     private var hello: HolderHelloReply?
@@ -159,9 +199,11 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
         return pending
     }
 
-    init(output: AsyncStream<Data>.Continuation, onEnded: @escaping @Sendable () -> Void) {
+    init(output: AsyncStream<Data>.Continuation, onEnded: @escaping @Sendable () -> Void,
+         onChildReply: @escaping @Sendable ([UInt8]) -> Void) {
         self.output = output
         self.onEnded = onEnded
+        self.onChildReply = onChildReply
     }
 
     func receive(_ frame: HolderFrame) {
@@ -189,7 +231,9 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
             collected = []
         case .exited, .replaced:
             onEnded()
-        case .hello, .attach, .input, .resize, .checkpoint, .setAttributes, .terminate, .redraw, .probe:
+        case .childReply:
+            onChildReply(frame.payload)
+        case .hello, .attach, .input, .resize, .checkpoint, .setAttributes, .terminate, .redraw, .probe, .childRequest:
             break
         }
     }

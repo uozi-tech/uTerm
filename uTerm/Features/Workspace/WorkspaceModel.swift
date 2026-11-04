@@ -319,6 +319,10 @@ final class WorkspaceModel {
         registry.setCloser(forWindow: windowID) { [weak self] paneID in
             self?.closeTerminal(paneID: paneID) ?? false
         }
+        // 点系统通知回到标签走这里。
+        registry.setRevealer(forWindow: windowID) { [weak self] paneID in
+            self?.revealTerminal(paneID: paneID) ?? false
+        }
         syncTerminalTitles()
     }
 
@@ -327,6 +331,18 @@ final class WorkspaceModel {
     func closeTerminal(paneID: UUID) -> Bool {
         guard terminalGroups.allTabs.contains(where: { $0.payload.id == paneID }) else { return false }
         terminalGroups.closeTabs { $0.payload.id == paneID }
+        return true
+    }
+
+    /// 把某个终端窗格的标签切到前台并带出窗口。返回 false = 没有这个窗格。
+    /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
+    @discardableResult
+    func revealTerminal(paneID: UUID) -> Bool {
+        guard let tab = terminalGroups.allTabs.first(where: { $0.payload.id == paneID }),
+              let at = terminalGroups.locateTab(tab.id) else { return false }
+        let window = terminalGroups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        terminalGroups.activateTab(groupID: at.groupID, index: at.index)
+        window?.bringToFront()
         return true
     }
 
@@ -415,6 +431,26 @@ final class WorkspaceModel {
     @discardableResult
     func closeActiveTerminalTab() -> Bool {
         terminalGroups.closeActiveTab()
+    }
+
+    /// 用户要关一个终端标签：前台还有程序在跑时先确认。程序化的关闭（手机远控、CLI）走
+    /// `closeTerminal(paneID:)`，那边已经由发起方确认过。
+    func requestCloseTerminalTab(_ tabID: UUID) {
+        guard let tab = terminalGroups.allTabs.first(where: { $0.id == tabID }) else { return }
+        TerminalCloseGuard.requestClose(tab.payload.session) { [weak self] in
+            // 确认期间标签可能被拖到别的组、或已经被关掉，到这时再定位。
+            guard let self, let at = terminalGroups.locateTab(tabID) else { return }
+            terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+        }
+    }
+
+    /// ⌘W / 命令面板。活动组是空的时没有会话要问，直接收掉空组。
+    func requestCloseActiveTerminalTab() {
+        if let tab = terminalGroups.activeTab {
+            requestCloseTerminalTab(tab.id)
+        } else {
+            _ = closeActiveTerminalTab()
+        }
     }
 
     /// 记录一次 workspace 内拖拽源。`.onDrag` 没有结束回调，因此与 pane

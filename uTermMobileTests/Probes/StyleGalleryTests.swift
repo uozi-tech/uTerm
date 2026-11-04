@@ -185,6 +185,7 @@ final class StyleGalleryTests: XCTestCase {
         var duo = MChromeGeometry(root: CGRect(x: 0, y: 41, width: 669, height: 910),
                                   safeAreaInsets: EdgeInsets(top: 41, leading: 0, bottom: 0, trailing: 0))
         duo.topBar = CGRect(x: 0, y: 0, width: 520, height: 48)
+        duo.isUnfoldedPhone = true
         try await shoot("connecting-duo-status-row", on: unfolded) {
             ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                 onFinish: {}, onCancel: {}, onRetry: {})
@@ -220,6 +221,23 @@ final class StyleGalleryTests: XCTestCase {
                     .modelContainer(c)
             }
             for tab in sessions.terminalTabs { tab.controller.close() }
+        }
+    }
+
+    /// 快捷条的两个面板。
+    func testTerminalKeyBarPanels() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        for device in Self.devices {
+            for (name, panel) in [("prompts", TerminalKeyBar.Panel.prompts), ("keys", .keys)] {
+                let (controller, _) = MobileFakeTerminal.controller(.idle)
+                try await shoot("keybar-\(name)", on: device) {
+                    VStack(spacing: 0) {
+                        Color.clear
+                        TerminalKeyBar(controller: controller, panel: panel)
+                    }
+                    .background(M.surface)
+                }
+            }
         }
     }
 

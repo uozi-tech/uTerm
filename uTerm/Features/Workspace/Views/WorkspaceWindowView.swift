@@ -290,6 +290,9 @@ struct WorkspaceWindowView: View {
                 RemoteFileDownload.saveAs(remotePath: path, size: size,
                                           using: workspace.fileBrowserModel)
             }))
+        .background(TerminalWindowCloseGuardInstaller(sessions: {
+            workspace.terminalGroups.allTabs.map(\.payload.session)
+        }))
         // 「打开 / 下载…」命令接收 + toast 浮层 + 关窗前检查没上传的外部编辑改动。
         .modifier(ExternalOpenWindowBinding(
             coordinator: workspace.externalOpen,
@@ -385,7 +388,7 @@ struct WorkspaceWindowView: View {
         case .closeTerminalActiveTab:
             // 关活动组的前台标签；组因此空掉就塌缩，最后一个组留着显示空态
             // （工作区窗口不会因为终端区空掉而关闭）。
-            _ = workspace.closeActiveTerminalTab()
+            workspace.requestCloseActiveTerminalTab()
         case .closeWindow:
             window.performClose(nil)
         }

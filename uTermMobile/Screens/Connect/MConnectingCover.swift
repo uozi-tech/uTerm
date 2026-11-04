@@ -142,13 +142,10 @@ struct ConnectingCoverView: View {
     /// 顶部 chip 放进状态栏那一行时的行高（Duo 展开竖屏：状态栏只占顶行右端）。
     /// chip 水平居中，右缘碰到状态栏（或系统给的顶部横条区域右界）就不进，照旧排在安全区下面。
     ///
-    /// `statusRowHeight` 在普通 iPhone 上也会报（系统的顶部横条区域横跨灵动岛），标签条靠
-    /// 自己让位没事，居中的 chip 却正好落在灵动岛后面（模拟器 iPhone 18 Pro 实测）。所以只认
-    /// 宽屏（≥ 600pt，Duo 展开 669）且状态行够高（放得下 chip）的情形：iPhone 顶行正中是灵动岛 /
-    /// 刘海，iPad 的状态行只有 24pt。
+    /// Duo 内屏分屏（窗口约 330pt）放不下居中的 chip，只认窗口够宽（≥ 600pt，展开整屏 669）的情形。
     private var chipStatusRow: CGFloat? {
         guard fillsScreen, let row = chrome.statusRowHeight,
-              chrome.screen.width >= Self.statusRowMinScreenWidth, row >= 40 else { return nil }
+              chrome.screen.width >= Self.statusRowMinScreenWidth else { return nil }
         let limit = chrome.topBar?.maxX ?? chrome.statusBar?.minX ?? .infinity
         return chrome.screen.midX + Self.chipHalfWidth + 8 <= limit ? row : nil
     }

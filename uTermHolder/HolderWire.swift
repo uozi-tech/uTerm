@@ -8,6 +8,8 @@ import Darwin
 /// 帧：`[u32 小端：kind + payload 的长度][u8 kind][payload]`。整数一律小端。
 nonisolated enum HolderProtocol {
     static let version: UInt32 = 1
+    /// 子进程里和 holder 通信的 fd（只有 `uterm-ssh` 会话有）。
+    static let childRelayFD: Int32 = 4
     /// 单帧上限。最大的帧是检查点（默认 3000 行约 200 KB，上限 20000 行）。超过视为对端出错，断开。
     static let maxFrameBytes = 64 * 1024 * 1024
     /// 回放时每帧输出的字节数。
@@ -27,6 +29,8 @@ nonisolated enum HolderFrameKind: UInt8, Sendable {
     case redraw = 8
     /// 让子进程确认连接还活着（发 SIGUSR1）。只有 `uterm-ssh` 会话才处理，本机 shell 收到这个信号会被杀。
     case probe = 9
+    /// 原样转给子进程（`uterm-ssh`）。holder 不看内容，本机 shell 没有这条路，收到就忽略。
+    case childRequest = 10
     // holder → App
     case helloReply = 101
     case replayCheckpoint = 102
@@ -35,6 +39,8 @@ nonisolated enum HolderFrameKind: UInt8, Sendable {
     case exited = 105
     /// 另一个客户端接入了这个会话，这条连接到此为止。
     case replaced = 106
+    /// 子进程回的消息，原样转给当前客户端。
+    case childReply = 107
 }
 
 nonisolated struct HolderFrame: Equatable, Sendable {

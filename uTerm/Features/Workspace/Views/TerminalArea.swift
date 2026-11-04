@@ -64,10 +64,9 @@ struct TerminalArea: View {
             },
             emptyGroup: { _ in emptyState },
             onRequestClose: { tab in
-                // 组件只发「请求关闭」，真关由 app 做。终端标签没有脏文件确认这类
-                // 前置流程，定位到就直接关；会话的释放走模型的 `onTabRemoved`。
-                guard let at = workspace.terminalGroups.locateTab(tab.id) else { return }
-                workspace.terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+                // 组件只发「请求关闭」，真关由 app 做：前台还有程序在跑时先确认。
+                // 会话的释放走模型的 `onTabRemoved`。
+                workspace.requestCloseTerminalTab(tab.id)
             },
             stripAccessory: { groupID in newTabButton(groupID) },
             // 预览标签拖进终端组 —— 组件不认识的载荷转给 app。
@@ -106,10 +105,12 @@ struct TerminalArea: View {
         let shellTitle = pane.session.shellTitle
         let display = ConnectionStatusDisplay(state: pane.session.connectionState)
         let context = "\(name) · \(display.label)"
+        let status = pane.session.programStatus
+        let baseHelp = shellTitle.map { "\($0)\n\(context)" } ?? context
         return UPaneTabDescriptor(title: shellTitle.map(clippedTabTitle) ?? name,
-                                  icon: .system("terminal"),
-                                  leadingDot: display.tint.color,
-                                  help: shellTitle.map { "\($0)\n\(context)" } ?? context)
+                                  icon: .system(status?.tabIcon ?? "terminal"),
+                                  leadingDot: status?.tabDot ?? display.tint.color,
+                                  help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
     }
 
     /// 标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。

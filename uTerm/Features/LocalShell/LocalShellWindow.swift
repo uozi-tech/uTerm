@@ -146,6 +146,25 @@ final class LocalShellWindowModel {
         return true
     }
 
+    /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
+    func requestClose(_ id: UUID) {
+        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        TerminalCloseGuard.requestClose(pane.session) { [weak self] in
+            self?.close(id)
+        }
+    }
+
+    /// 把一个标签切到前台并带出窗口。返回 false = 没有这个标签。
+    /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
+    @discardableResult
+    func reveal(_ id: UUID) -> Bool {
+        guard let at = groups.locateTab(id) else { return false }
+        let window = groups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        groups.activateTab(groupID: at.groupID, index: at.index)
+        window?.bringToFront()
+        return true
+    }
+
     func splitActiveGroup(direction: SplitDirection) {
         guard let groupID = groups.activeGroupID ?? groups.root.firstLeafID else { return }
         groups.splitGroup(groupID, direction: direction)
@@ -258,12 +277,17 @@ struct LocalShellWindowView: View {
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
         .background(WorkspaceCloseShortcutInstaller { window in
             // 只剩一个标签时 ⌘W 关窗口，否则只关活动标签（同 SSH 终端窗口）。
-            if model.panes.count > 1 {
-                model.groups.closeActiveTab()
-            } else {
+            guard model.panes.count > 1 else {
                 window.performClose(nil)
+                return
+            }
+            if let active = model.active {
+                model.requestClose(active.id)
+            } else {
+                model.groups.closeActiveTab()   // 活动组是空的：收掉空组。
             }
         })
+        .background(TerminalWindowCloseGuardInstaller(sessions: { model.panes.map(\.session) }))
         .frame(minWidth: 560, minHeight: 360)
         .task {
             // 这是系统恢复的窗口（值要过几十毫秒才到，我们请求打开的窗口第一次就有值）。关掉：会话由
@@ -282,6 +306,10 @@ struct LocalShellWindowView: View {
             // 手机远控「同时关闭 Mac 上的终端」走这里。
             registry.setCloser(forWindow: windowID.id) { [weak windowModel] paneID in
                 windowModel?.close(paneID) ?? false
+            }
+            // 点系统通知回到标签走这里。
+            registry.setRevealer(forWindow: windowID.id) { [weak windowModel] paneID in
+                windowModel?.reveal(paneID) ?? false
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
@@ -349,7 +377,7 @@ struct LocalShellTerminalArea: View {
                 LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
             },
             emptyGroup: { _ in background },
-            onRequestClose: { tab in model.close(tab.id) },
+            onRequestClose: { tab in model.requestClose(tab.id) },
             stripAccessory: { groupID in newTabButton(groupID) })
             .uPaneGroupStyle(.card)
             .uPaneGroupWells()
@@ -360,11 +388,12 @@ struct LocalShellTerminalArea: View {
         let session = pane.session
         let controlled = session.remoteController != nil
         let shellTitle = session.shellTitle
+        let status = session.programStatus
         return UPaneTabDescriptor(
             title: shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle,
-            icon: .system(controlled ? "iphone" : "terminal"),
-            leadingDot: session.connectionState == .connected ? UD.success : UD.text4,
-            help: controlled ? "正在被手机接管" : shellTitle ?? pane.defaultTitle)
+            icon: .system(controlled ? "iphone" : status?.tabIcon ?? "terminal"),
+            leadingDot: status?.tabDot ?? (session.connectionState == .connected ? UD.success : UD.text4),
+            help: controlled ? "正在被手机接管" : status?.tabHelp ?? shellTitle ?? pane.defaultTitle)
     }
 
     private func newTabButton(_ groupID: UUID) -> some View {

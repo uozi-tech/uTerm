@@ -18,6 +18,9 @@ nonisolated enum SSHBridgeMessage: Codable, Sendable {
     case approveHostKey(id: Int, SSHBridgeChallenge)
     case connected
     case failed(SSHBridgeFailure)
+    // 连上之后经 holder 转发（`childRequest` / `childReply`）。App 重启后也还能用，不碰凭据、不握手。
+    case exec(id: Int, command: String)
+    case execResult(id: Int, output: String?)
 }
 
 nonisolated enum SSHBridgeCredential: Codable, Sendable {
@@ -32,6 +35,11 @@ nonisolated struct SSHBridgeJumpHost: Codable, Sendable {
     var credential: SSHBridgeCredential
 }
 
+nonisolated struct SSHBridgeEnvironmentVariable: Codable, Sendable {
+    var name: String
+    var value: String
+}
+
 nonisolated struct SSHBridgeConnectRequest: Codable, Sendable {
     var host: String
     var port: Int
@@ -41,6 +49,8 @@ nonisolated struct SSHBridgeConnectRequest: Codable, Sendable {
     /// `USSHKit.SSHHostKeyPolicy` 的 rawValue。
     var hostKeyPolicy: String
     var connectTimeoutSeconds: Int
+    /// 交互 shell 和经 `exec` 跑的命令都带这些环境变量。
+    var environment: [SSHBridgeEnvironmentVariable]
 }
 
 nonisolated struct SSHBridgeHostKey: Codable, Sendable {
@@ -80,7 +90,7 @@ nonisolated extension HolderFrame {
     }
 
     var bridgeMessage: SSHBridgeMessage? {
-        guard kindRaw == SSHBridgeMessage.controlKind else { return nil }
+        guard kindRaw == SSHBridgeMessage.controlKind || kindRaw == HolderFrameKind.childRequest.rawValue else { return nil }
         return try? JSONDecoder().decode(SSHBridgeMessage.self, from: Data(payload))
     }
 }

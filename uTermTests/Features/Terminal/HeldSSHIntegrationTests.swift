@@ -287,6 +287,47 @@ final class HeldSSHIntegrationTests: XCTestCase {
         await session.close()
     }
 
+    /// 关标签前的前台探测走 `uterm-ssh` 手上的连接，接回之后也能用，不碰凭据。
+    func test_foreground_activity_reports_idle_and_running_also_after_reattach() async throws {
+        let id = makeSession()
+        let counters = Counters()
+        let first = TerminalSession()
+        let firstBackend = backend(id, counters: counters)
+        await first.connect(using: firstBackend)
+        XCTAssertEqual(first.connectionState, .connected)
+        try await Task.sleep(for: .seconds(1))
+        let atPrompt = await firstBackend.foregroundActivity()
+        XCTAssertEqual(atPrompt, .idle)
+
+        try await first.injectInput("sleep 30", appendEnter: true)
+        try await Task.sleep(for: .seconds(1))
+        let running = await firstBackend.foregroundActivity()
+        XCTAssertEqual(running, .running("sleep"))
+
+        await firstBackend.detach()
+        first.dispose()
+        let second = TerminalSession()
+        let secondBackend = backend(id, counters: counters)
+        await second.connect(using: secondBackend)
+        let afterReattach = await secondBackend.foregroundActivity()
+        XCTAssertEqual(afterReattach, .running("sleep"))
+        XCTAssertEqual(counters.auth, 1, "探测不碰凭据")
+        await second.close()
+    }
+
+    /// 探测命令带的环境变量和交互 shell 相同。sshd 配 `AcceptEnv LC_*` 时能看到 `LC_TERMINAL`。
+    func test_exec_on_held_connection_sends_terminal_environment() async throws {
+        let id = makeSession()
+        let session = TerminalSession()
+        let held = backend(id)
+        await session.connect(using: held)
+        XCTAssertEqual(session.connectionState, .connected)
+        let status = try await held.trueColorStatus()
+        XCTAssertNotEqual(status, .active, "测试服务器没配 COLORTERM")
+        XCTAssertEqual(held.trueColorHostKey, "\(Self.host):\(Self.port)")
+        await session.close()
+    }
+
     func test_restorer_hands_sessions_to_their_window_in_order_and_ends_orphans() async throws {
         let window = UUID()
         let server = UUID()

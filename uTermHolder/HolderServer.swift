@@ -49,6 +49,8 @@ final class HolderServer: @unchecked Sendable {
     private var attached: HolderClient?
     private var processSource: DispatchSourceProcess?
     private var isSocketRemoved = false
+    /// 到 `uterm-ssh` 的转发通道。持有连接的是它，App 要在这条连接上跑命令得经这里。
+    private var childRelay: HolderClient?
 
     init(directory: String, socketName: String, cols: UInt16, rows: UInt16, executable: String, argv: [String],
          childControlFD: Int32? = nil) {
@@ -191,7 +193,10 @@ final class HolderServer: @unchecked Sendable {
         case .probe:
             guard childControlFD != nil, exitStatus == nil else { return }
             kill(shellPID, SIGUSR1)
-        case .helloReply, .replayCheckpoint, .output, .replayEnd, .exited, .replaced:
+        case .childRequest:
+            guard client === attached else { return }
+            childRelay?.send(frame)
+        case .helloReply, .replayCheckpoint, .output, .replayEnd, .exited, .replaced, .childReply:
             break
         }
     }
@@ -250,6 +255,13 @@ final class HolderServer: @unchecked Sendable {
         let cHome = strdup(NSHomeDirectory())
         let maxDescriptor = min(getdtablesize(), 4096)
         let keptDescriptor = childControlFD ?? -1
+        var relay: [Int32] = [-1, -1]
+        if childControlFD != nil {
+            guard socketpair(AF_UNIX, SOCK_STREAM, 0, &relay) == 0 else { fail("socketpair") }
+            _ = fcntl(relay[0], F_SETFD, FD_CLOEXEC)
+        }
+        let relayChildEnd = relay[1]
+        let relayFD = HolderProtocol.childRelayFD
         var fd: Int32 = -1
         let pid = forkpty(&fd, nil, nil, &size)
         guard pid >= 0 else { fail("forkpty") }
@@ -261,9 +273,10 @@ final class HolderServer: @unchecked Sendable {
             sigprocmask(SIG_SETMASK, &empty, nil)
             signal(SIGPIPE, SIG_DFL)
             signal(SIGHUP, SIG_DFL)
+            if relayChildEnd >= 0 { dup2(relayChildEnd, relayFD) }
             var descriptor: Int32 = 3
             while descriptor < maxDescriptor {
-                if descriptor != keptDescriptor { close(descriptor) }
+                if descriptor != keptDescriptor, relayChildEnd < 0 || descriptor != relayFD { close(descriptor) }
                 descriptor += 1
             }
             _ = chdir(cHome)
@@ -274,6 +287,10 @@ final class HolderServer: @unchecked Sendable {
         shellPID = pid
         // 这一头留给子进程。这边还开着的话，子进程退出后 App 等不到控制通道断开。
         if let childControlFD { close(childControlFD) }
+        if relayChildEnd >= 0 {
+            close(relayChildEnd)
+            startChildRelay(relay[0])
+        }
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
@@ -282,6 +299,19 @@ final class HolderServer: @unchecked Sendable {
         processSource = source
         // 进程源注册之前就退出了的话，它不会再报。
         pollForExit(remainingAttempts: 1)
+    }
+
+    private func startChildRelay(_ fd: Int32) {
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        let relay = HolderClient(fd: fd)
+        relay.onFrame = { [weak self] frame in
+            self?.attached?.send(HolderFrame(.childReply, payload: frame.payload))
+        }
+        relay.onClosed = { [weak self] in self?.childRelay = nil }
+        childRelay = relay
+        relay.start()
     }
 
     private func startMasterIO() {

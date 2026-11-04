@@ -25,9 +25,18 @@ nonisolated struct MChromeGeometry: Equatable, Sendable {
     /// 把屏幕角上的系统元素（Duo 竖屏右上角的状态栏）当「角」，在横向让开它、纵向不再整条让出顶边。
     /// 它伸进顶部安全区时，右沿就是状态栏左侧能用到的位置。iOS 26 以下为 nil。
     var cornerSafeArea: CGRect?
+    /// 这台设备是展开的 iPhone Duo（见 `isUnfoldedPhone(idiom:screenSize:)`）。
+    var isUnfoldedPhone = false
 
     /// 探测顶部横条区域时用的横条高度 = 工作区标签条高度。
     static let topBarExtent: CGFloat = 48
+    /// 手机屏幕短边达到这个宽度才算展开的折叠屏：普通 iPhone 最宽约 440pt，Duo 折叠 466pt、展开 669pt。
+    static let unfoldedPhoneMinShortSide: CGFloat = 600
+
+    /// 看整块屏幕而不是窗口：Duo 内屏分屏时窗口只有约 330pt 宽，状态栏仍只占屏幕一角。
+    static func isUnfoldedPhone(idiom: UIUserInterfaceIdiom, screenSize: CGSize) -> Bool {
+        idiom == .phone && min(screenSize.width, screenSize.height) >= unfoldedPhoneMinShortSide
+    }
     #if DEBUG
     /// 系统报告的全部遮挡区（未过滤、含非活动），只给布局诊断浮层看。
     var rawOcclusion: [RawRegion] = []
@@ -82,11 +91,14 @@ nonisolated extension MChromeGeometry {
     /// 状态栏在顶部一行的右端（Duo 展开竖屏）：整条顶边都算安全区，但状态栏只占右边一块，
     /// 左边那一截可以放自己的东西。返回该行高度（= 顶部安全区）。
     ///
-    /// 首选系统的顶部横条区域：它的上沿高于顶部安全区，就说明横条可以和状态栏同行（真机走这条）。
+    /// 顶部横条区域的上沿在哪台设备上都高于顶部安全区（模拟器实测上沿都是 10：iPhone 18 Pro 安全区 62、
+    /// iPhone 17e 47、iPad 32），它本身分不出「顶行有空位」。普通 iPhone 顶行正中是灵动岛 / 刘海，iPad
+    /// 的状态栏横跨整行，只有展开的 Duo 状态栏才缩在一角，所以先按设备判断。
     /// 退路是遮挡保留区里的状态栏矩形（vphone 报告、真机不报）。
     var statusRowHeight: CGFloat? {
         guard safeAreaInsets.top > 0, safeAreaInsets.trailing == 0 else { return nil }
         if let topBar {
+            guard isUnfoldedPhone else { return nil }
             return topBar.minY < screen.minY + safeAreaInsets.top - 1 ? safeAreaInsets.top : nil
         }
         guard let bar = statusBar,
@@ -149,6 +161,7 @@ extension MChromeMeasurer {
         var g = geometry
         g.topBar = probe.topBar
         g.cornerSafeArea = probe.cornerSafeArea
+        g.isUnfoldedPhone = probe.isUnfoldedPhone
         return g
     }
 }
@@ -158,6 +171,7 @@ extension MChromeMeasurer {
 nonisolated struct MChromeProbeResult: Equatable, Sendable {
     var topBar: CGRect?
     var cornerSafeArea: CGRect?
+    var isUnfoldedPhone = false
 }
 
 private struct MTopBarProbe: UIViewRepresentable {
@@ -190,6 +204,8 @@ private struct MTopBarProbe: UIViewRepresentable {
         private func report() {
             guard let window else { return }
             var result = MChromeProbeResult()
+            result.isUnfoldedPhone = MChromeGeometry.isUnfoldedPhone(idiom: traitCollection.userInterfaceIdiom,
+                                                                     screenSize: window.screen.bounds.size)
             if #available(iOS 26.0, *) {
                 let insets = edgeInsets(for: .safeArea(cornerAdaptation: .horizontal))
                 result.cornerSafeArea = convert(bounds.inset(by: insets), to: window)

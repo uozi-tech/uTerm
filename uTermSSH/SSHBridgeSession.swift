@@ -11,10 +11,12 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     private static let channelWindowBytes = 1 << 20
     private static let probeTimeout = Duration.seconds(10)
     private static let maxOutputBacklogBytes = 16 * 1024 * 1024
+    private static let maxExecOutputBytes = 8 * 1024 * 1024
     private static let localNetworkRetryDelays: [Duration] = [.milliseconds(500), .milliseconds(1500), .seconds(3), .seconds(5), .seconds(5)]
 
     private let control: SSHBridgeControl
     private var signalSources: [DispatchSourceSignal] = []
+    private var relay: SSHBridgeControl?
 
     init(controlFD: Int32) {
         control = SSHBridgeControl(fd: controlFD)
@@ -48,13 +50,16 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
             wantReply: true, term: "xterm-256color",
             terminalCharacterWidth: Int(size.ws_col), terminalRowHeight: Int(size.ws_row),
             terminalPixelWidth: 0, terminalPixelHeight: 0, terminalModes: SSHTerminalModes([:]))
-        let environment = [SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: "LANG", value: "en_US.UTF-8")]
+        let environment = request.environment.map {
+            SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
+        }
         do {
             try await client.target.withPTY(pty, environment: environment) { inbound, outbound in
                 await control.send(.connected)
                 control.close()
                 let input = startInputPump(outbound)
                 installSignalHandlers(client: client, input: input)
+                startRelay(client: client, environment: environment)
                 await pumpOutput(inbound)
             }
         } catch {
@@ -191,6 +196,36 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
             Task { await Self.probe(client) }
         }
         signalSources = [resize, probe]
+    }
+
+    /// App 经 holder 发来的命令，在这条连接上另开 exec 通道跑（前台进程探测、真彩）。
+    /// Citadel 的 exec 不响应取消，超时由 App 那边判，这边跑完就回，没人等了也无妨。
+    private func startRelay(client: ConnectedClient, environment: [SSHChannelRequestEvent.EnvironmentRequest]) {
+        let relay = SSHBridgeControl(fd: HolderProtocol.childRelayFD)
+        relay.onExec = { id, command in
+            Task {
+                let output = await Self.runCollecting(command, client: client, environment: environment)
+                await relay.send(.execResult(id: id, output: output))
+            }
+        }
+        relay.start()
+        self.relay = relay
+    }
+
+    /// 只收 stdout：登录 shell 的 rc 打到 stderr 的东西会干扰解析。出错、输出超限都返回 nil。
+    private static func runCollecting(_ command: String, client: ConnectedClient,
+                                      environment: [SSHChannelRequestEvent.EnvironmentRequest]) async -> String? {
+        do {
+            var output = Data()
+            for try await chunk in try await client.target.executeCommandStream(command, environment: environment) {
+                guard case .stdout(let buffer) = chunk else { continue }
+                output.append(contentsOf: buffer.readableBytesView)
+                if output.count > maxExecOutputBytes { return nil }
+            }
+            return String(decoding: output, as: UTF8.self)
+        } catch {
+            return nil
+        }
     }
 
     private static func signalSource(_ number: Int32, handler: @escaping @Sendable () -> Void) -> DispatchSourceSignal {
@@ -372,6 +407,8 @@ nonisolated final class SSHBridgeControl: @unchecked Sendable {
     private var waitingForConnect: CheckedContinuation<SSHBridgeMessage?, Never>?
     private var bufferedConnect: SSHBridgeMessage?
     private var isClosed = false
+    /// 只有转发通道用。`start()` 之前设好。
+    var onExec: (@Sendable (Int, String) -> Void)?
 
     struct Disconnected: Error {}
 
@@ -411,6 +448,8 @@ nonisolated final class SSHBridgeControl: @unchecked Sendable {
             }
         case .verifyResult(let id, _), .rememberResult(let id), .approval(let id, _):
             pending.removeValue(forKey: id)?.resume(returning: message)
+        case .exec(let id, let command):
+            onExec?(id, command)
         default:
             break
         }

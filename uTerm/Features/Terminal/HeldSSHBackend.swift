@@ -7,7 +7,7 @@ import Foundation
 /// 再替它回答主机密钥的问题（信任记录和弹层都在 App 这边）。
 ///
 /// SFTP、端口转发、CLI 都走 App 自己的连接，这里只管终端。贴图同理（见 `deliverImage`）。
-actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving {
+actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueColorConfiguring {
     /// 连接一台服务器需要的东西。`resolveAuth` 只在真的要新建连接时才调。
     struct Target: Sendable {
         let profile: SSHConnection.ProfileSnapshot
@@ -15,6 +15,9 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving {
         let hostKeyVerifier: HostKeyVerifier
         let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
     }
+
+    private static let foregroundTimeout = Duration.milliseconds(1500)
+    private static let setupCommandTimeout = Duration.seconds(10)
 
     private let core = HeldSessionCore()
     nonisolated var outputStream: AsyncStream<Data> { core.outputStream }
@@ -114,7 +117,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving {
         return SSHBridgeConnectRequest(
             host: target.profile.host, port: target.profile.port, username: material.username, credential: material.credential,
             jumpHost: jumpHost, hostKeyPolicy: SSHClientFactory.packageHostKeyPolicy().rawValue,
-            connectTimeoutSeconds: Int(SSHClientFactory.connectTimeoutSeconds()))
+            connectTimeoutSeconds: Int(SSHClientFactory.connectTimeoutSeconds()),
+            environment: RemoteTrueColor.terminalEnvironment.map { SSHBridgeEnvironmentVariable(name: $0.name, value: $0.value) })
     }
 
     private static func material(_ auth: ResolvedAuth) -> (username: String, credential: SSHBridgeCredential) {
@@ -148,6 +152,43 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving {
         await core.send(HolderFrame(.probe))
         return true
     }
+
+    /// 每个标签各一条连接，这条连接上只有它自己的 shell，不用认 pty。关标签的路上等着它，所以限时。
+    func foregroundActivity() async -> TerminalActivity {
+        guard let output = try? await core.execOnChild(RemoteProcessTable.command, timeout: Self.foregroundTimeout),
+              let table = RemoteProcessTable(output: output),
+              table.shells.count == 1 else { return .unknown }
+        return table.activity(of: table.shells[0])
+    }
+
+    nonisolated var trueColorHostKey: String { "\(target.profile.host):\(target.profile.port)" }
+
+    func trueColorStatus() async throws -> RemoteTrueColor.Status {
+        RemoteTrueColor.parseProbe(try await runSetupCommand(RemoteTrueColor.probeCommand))
+    }
+
+    func enableTrueColor() async throws -> String {
+        let output = try await runSetupCommand(RemoteTrueColor.enableCommand)
+        guard let file = RemoteTrueColor.parseEnabledFile(output) else {
+            throw RemoteTrueColorError.unexpectedOutput
+        }
+        return file
+    }
+
+    /// 登录 shell 的 rc 可能卡住，所以限时。
+    private func runSetupCommand(_ command: String) async throws -> String {
+        do {
+            return try await core.execOnChild(command, timeout: Self.setupCommandTimeout)
+        } catch HeldExecFailure.unavailable {
+            throw RemoteTrueColorError.notConnected
+        } catch HeldExecFailure.timedOut {
+            throw RemoteTrueColorError.timedOut
+        } catch {
+            throw RemoteTrueColorError.unexpectedOutput
+        }
+    }
+
+    nonisolated var programsCanReadMacClipboard: Bool { false }
 
     /// 把图片传成远端 `/tmp` 下的文件。连接在 `uterm-ssh` 里，开不了 SFTP，所以这里走 App 自己的共享连接。
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
@@ -242,7 +283,7 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
             finish(.connected)
         case .failed(let failure):
             finish(.failed(failure))
-        case .connect, .verifyResult, .rememberResult, .approval:
+        case .connect, .verifyResult, .rememberResult, .approval, .exec, .execResult:
             break
         }
     }

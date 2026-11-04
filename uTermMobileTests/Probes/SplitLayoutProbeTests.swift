@@ -164,6 +164,38 @@ final class SplitLayoutProbeTests: XCTestCase {
             .environment(\.mAccent, M.accent))
     }
 
+    /// 状态栏占着顶行的设备（灵动岛 / 刘海 iPhone、iPad）：工作区不伸进顶部安全区，标签条排在状态栏下面。
+    /// 用真窗口、真安全区走一遍 `MChromeMeasurer`，所以结果取决于跑测试的模拟器。
+    func testTabStripStaysBelowStatusBarOnNonFoldables() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let screen = try XCTUnwrap(MobileProbeWindow.activeScene()?.screen.bounds.size)
+        try XCTSkipIf(MChromeGeometry.isUnfoldedPhone(idiom: UIDevice.current.userInterfaceIdiom, screenSize: screen),
+                      "展开的 Duo 就是要让标签条进状态行")
+
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let h = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let relay = HostKeyChallengeRelay()
+        let store = MobileStore()
+        store.showWorkspace = true
+        let (work, _) = MobileFakeTerminal.sessions(
+            count: 1, hosts: [h],
+            script: MobileFakeTerminalScript(linesPerSecond: 200, seconds: 1, corpus: .ansiColor),
+            container: c, relay: relay)
+        for tab in work.terminalTabs { _ = await MobileFakeTerminal.waitUntilConnected(tab.controller) }
+        let root = WorkspaceScreen().environment(store).environment(relay).environment(work)
+            .environment(\.mAccent, M.accent).modelContainer(c).mMeasuresChrome()
+        let (win, host) = MobileProbeWindow.make(placement: .visibleOnScreen, isolateHost: true, rootView: root)
+        host.safeAreaRegions = .all
+        try await Task.sleep(for: .seconds(3))
+
+        let term = try XCTUnwrap(work.terminalTabs.first?.controller.terminalView)
+        let top = host.view.safeAreaInsets.top
+        XCTAssertGreaterThan(top, 0, "这台模拟器竖屏要有顶部安全区")
+        let termTop = term.convert(term.bounds, to: win).minY
+        let expected = top + WorkspaceTabStrip.height + TerminalSessionBody.terminalInset.vertical
+        XCTAssertEqual(termTop, expected, accuracy: 1, "标签条（48pt）要完整排在状态栏下面，且不被撑高")
+    }
+
     private enum SafeAreaSide { case left, right }
 
     private func assertScrollRowStaysInSafeArea<Root: View>(side: SafeAreaSide, root: Root,

@@ -20,11 +20,15 @@ protocol TerminalBackend: Actor {
     /// 判死的实现应自行强制关闭底层通道，让 `exitStream` 走既有收尾级联；
     /// 调用方不需要根据返回值做状态翻转。
     func verifyConnectionAlive() async -> Bool
+    /// 终端前台此刻有没有 shell 以外的程序在跑。关标签前问它，决定要不要二次确认。
+    func foregroundActivity() async -> TerminalActivity
 }
 
 extension TerminalBackend {
     /// 默认恒真 —— 非网络后端（测试 mock）没有「静默断死」的概念。
     func verifyConnectionAlive() async -> Bool { true }
+    /// 默认判断不了：关闭前宁可多问一句。
+    func foregroundActivity() async -> TerminalActivity { .unknown }
 }
 
 /// 要交给终端里正在跑的程序的一张图片（手机相册 / 剪贴板来的）。
@@ -49,6 +53,8 @@ nonisolated enum TerminalImageDelivery: Equatable, Sendable {
 
 /// 能把图片交给终端里程序的后端。SSH 传成远端文件，Mac 本机 shell 走剪贴板，远控转交给 Mac。
 protocol TerminalImageReceiving: TerminalBackend {
+    /// 终端里的程序跑在这台 Mac 上，自己就能读剪贴板。
+    nonisolated var programsCanReadMacClipboard: Bool { get }
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery
 }
 

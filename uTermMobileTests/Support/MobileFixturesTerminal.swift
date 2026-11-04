@@ -218,6 +218,11 @@ actor MobileFakeTerminalTransport: TerminalBackend {
         lastResize = (cols, rows)
     }
 
+    /// 关标签前探测的答案。
+    private(set) var foregroundActivityResult: TerminalActivity = .unknown
+    func setForegroundActivity(_ activity: TerminalActivity) { foregroundActivityResult = activity }
+    func foregroundActivity() async -> TerminalActivity { foregroundActivityResult }
+
     func close() async {
         guard !closed else { closeCount += 1; return }
         closed = true

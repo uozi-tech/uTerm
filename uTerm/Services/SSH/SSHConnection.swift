@@ -31,7 +31,7 @@ import NIOSSH
 /// drain 任务串行消费 —— 每个操作 `await` 完成后才处理下一个。writer 就绪前积压的
 /// 操作与就绪后的新操作进同一队列，因此从"调用 write/resize"到"writer.write"
 /// 只有一条有序路径，绝不会乱序。
-actor SSHConnection: TerminalImageReceiving {
+actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
 
     enum SSHConnectionError: Error, LocalizedError {
         case notConnected
@@ -120,6 +120,8 @@ actor SSHConnection: TerminalImageReceiving {
     /// 既有连接上开一次性 exec channel。teardown 仍由 `sessionTask` 的强本地
     /// 副本独占负责 —— 此引用只用于探测与探测判死后的强制关闭（幂等）。
     private var connectedClient: ConnectedClient?
+    /// 认出来的本会话 pty（`pts/3`）。一个通道的 pty 终身不变，认一次就够。
+    private var identifiedTTY: String?
 
     /// `connect` 前 `resize` 被调用时记下，用作 PTY 初始尺寸。
     /// connect 之后的 resize 走有序发送路径（C1/M2），不再读这两个字段。
@@ -144,9 +146,9 @@ actor SSHConnection: TerminalImageReceiving {
     /// `wantReply: false` 是必须的：Citadel 对每个 env 请求 `try await`
     /// `triggerUserOutboundEvent`，服务端没配 `AcceptEnv` 而拒绝时，带 reply
     /// 的请求会把错误抛出去、整条连接建不起来。不要 reply 就退化成"收不到就忽略"。
-    nonisolated private static let ptyEnvironment: [SSHChannelRequestEvent.EnvironmentRequest] = [
-        .init(wantReply: false, name: "LANG", value: "en_US.UTF-8")
-    ]
+    nonisolated private static let ptyEnvironment = RemoteTrueColor.terminalEnvironment.map {
+        SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: $0.name, value: $0.value)
+    }
 
     /// 构造器只接受 `Sendable` 的 `ProfileSnapshot` —— 调用方须在自身隔离域内
     /// 先把非 `Sendable` 的 `@Model` `ServerProfile` 摘成快照（`ProfileSnapshot(_:)`），
@@ -260,7 +262,9 @@ actor SSHConnection: TerminalImageReceiving {
                                     }
                                     switch chunk {
                                     case .stdout(let buffer), .stderr(let buffer):
-                                        outputContinuation.yield(Data(buffer.readableBytesView))
+                                        let data = Data(buffer.readableBytesView)
+                                        state.scanForTTYMarker(data)
+                                        outputContinuation.yield(data)
                                     }
                                 }
                             } catch {
@@ -343,6 +347,47 @@ actor SSHConnection: TerminalImageReceiving {
 
     /// 把图片传成远端 `/tmp` 下的一个文件，返回路径（由调用方粘进终端）。
     ///
+    /// SFTP 开在这条终端连接上（另开一个通道），不另建连接，也不重新认证。
+    nonisolated var programsCanReadMacClipboard: Bool { false }
+
+    nonisolated var trueColorHostKey: String { "\(profile.host):\(profile.port)" }
+
+    func trueColorStatus() async throws -> RemoteTrueColor.Status {
+        RemoteTrueColor.parseProbe(try await runSetupCommand(RemoteTrueColor.probeCommand))
+    }
+
+    func enableTrueColor() async throws -> String {
+        let output = try await runSetupCommand(RemoteTrueColor.enableCommand)
+        guard let file = RemoteTrueColor.parseEnabledFile(output) else {
+            throw RemoteTrueColorError.unexpectedOutput
+        }
+        return file
+    }
+
+    /// 跑一条短命令并取输出，带上和交互 shell 相同的环境变量，这样才能看出服务器放行了哪些。
+    /// 登录 shell 的 rc 可能卡住，所以限时；超时后连接不受影响。
+    private func runSetupCommand(_ command: String) async throws -> String {
+        guard !isClosed, let connected = connectedClient else { throw RemoteTrueColorError.notConnected }
+        let client = connected.target
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                var output = Data()
+                let stream = try await client.executeCommandStream(command, environment: Self.ptyEnvironment)
+                for try await chunk in stream {
+                    if case .stdout(let buffer) = chunk { output.append(contentsOf: buffer.readableBytesView) }
+                }
+                return String(decoding: output, as: UTF8.self)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw RemoteTrueColorError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let output = try await group.next() else { throw RemoteTrueColorError.timedOut }
+            return output
+        }
+    }
+
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
         return try await connected.uploadTerminalImage(image)
@@ -375,6 +420,69 @@ actor SSHConnection: TerminalImageReceiving {
         }
     }
 
+    // MARK: - 前台进程探测
+
+    func foregroundActivity() async -> TerminalActivity {
+        await foregroundActivity(timeout: .milliseconds(1500))
+    }
+
+    /// 在这条连接上另开 exec 通道读进程表。关标签的路上等着它，所以限时。
+    ///
+    /// Citadel 的 exec 不响应取消，不能用 TaskGroup 等（超时了也会跟着挂住），超时后让它自己跑完。
+    func foregroundActivity(timeout: Duration) async -> TerminalActivity {
+        guard !isClosed, let connected = connectedClient else { return .unknown }
+        let (results, continuation) = AsyncStream.makeStream(of: TerminalActivity.self)
+        let probe = Task { continuation.yield(await self.probeForeground(on: connected)) }
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            continuation.yield(.unknown)
+        }
+        defer {
+            probe.cancel()
+            timer.cancel()
+            continuation.finish()
+        }
+        for await result in results { return result }
+        return .unknown
+    }
+
+    private func probeForeground(on connected: ConnectedClient) async -> TerminalActivity {
+        guard let output = try? await Self.runCollecting(RemoteProcessTable.command, on: connected),
+              let table = RemoteProcessTable(output: output) else { return .unknown }
+        let shells = table.shells
+        if shells.count == 1 { return table.activity(of: shells[0]) }
+        guard let tty = await resolveTTY(among: shells.compactMap(\.tty), on: connected),
+              let shell = shells.first(where: { $0.tty == tty }) else { return .unknown }
+        return table.activity(of: shell)
+    }
+
+    /// 连接上不止一个 shell 时认出自己的 pty，做法见 `TTYMarkerScanner`。
+    private func resolveTTY(among ttys: [String], on connected: ConnectedClient) async -> String? {
+        if let identifiedTTY, ttys.contains(identifiedTTY) { return identifiedTTY }
+        guard let command = TTYMarkerScanner.command(forTTYs: ttys) else { return nil }
+        state.startTTYScan()
+        defer { state.stopTTYScan() }
+        _ = try? await connected.exec(command)
+        // 标记走的是 shell 通道，和 exec 的结束没有先后保证。
+        for _ in 0..<20 {
+            if let tty = state.scannedTTY {
+                identifiedTTY = tty
+                return tty
+            }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return nil
+    }
+
+    /// `exec` 的输出上限是 64 000 字节，进程多的机器上 `ps -A` 会超。
+    private static func runCollecting(_ command: String, on connected: ConnectedClient) async throws -> String {
+        let collected = Mutex(Data())
+        try await connected.execStreaming(command) { chunk in
+            collected.withLock { $0.append(chunk) }
+        }
+        return collected.withLock { String(decoding: $0, as: UTF8.self) }
+    }
+
     // MARK: - 私有
 
     /// 会话 Task 自然结束（远端 shell 退出，或 withPTY 异常）时调用。
@@ -402,7 +510,12 @@ nonisolated extension ConnectedClient {
         let path = image.temporaryRemotePath()
         let sftp = try await target.openSFTP()
         do {
-            let file = try await sftp.openFile(filePath: path, flags: [.write, .create, .truncate])
+            // /tmp 在共享服务器上大家都能读，截图只给自己看。
+            var attributes = SFTPFileAttributes()
+            attributes.permissions = 0o600
+            let file = try await sftp.openFile(filePath: path,
+                                               flags: [.write, .create, .truncate],
+                                               attributes: attributes)
             do {
                 var buffer = ByteBuffer()
                 buffer.writeBytes(image.data)
@@ -461,6 +574,9 @@ private nonisolated final class SessionState: Sendable {
         /// close 信号的等待方。
         var closeContinuation: CheckedContinuation<Void, Never>?
         var closeSignalled = false
+        /// 正在认 pty 时才有值（见 `TTYMarkerScanner`）。平时输出路径上只多一次判空。
+        var ttyScanner: TTYMarkerScanner?
+        var scannedTTY: String?
     }
 
     private let mutex = Mutex(Storage())
@@ -561,6 +677,30 @@ private nonisolated final class SessionState: Sendable {
         // 结束信号流，让 drainLoop 的 `for await` 退出。
         opSignalContinuation.finish()
         await task?.value
+    }
+
+    // MARK: 认 pty（见 `TTYMarkerScanner`）
+
+    func startTTYScan() {
+        mutex.withLock { storage in
+            storage.ttyScanner = TTYMarkerScanner()
+            storage.scannedTTY = nil
+        }
+    }
+
+    func stopTTYScan() {
+        mutex.withLock { $0.ttyScanner = nil }
+    }
+
+    var scannedTTY: String? { mutex.withLock { $0.scannedTTY } }
+
+    /// 输出泵每一块都过一遍，所以没在认 pty 时必须立刻返回。
+    func scanForTTYMarker(_ chunk: Data) {
+        mutex.withLock { storage in
+            guard storage.ttyScanner != nil, let tty = storage.ttyScanner?.feed(chunk) else { return }
+            storage.scannedTTY = tty
+            storage.ttyScanner = nil
+        }
     }
 
     // MARK: close 信号

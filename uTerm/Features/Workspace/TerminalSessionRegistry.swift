@@ -103,6 +103,9 @@ final class TerminalSessionRegistry {
     /// 返回 false = 这个窗口里没有这条会话。
     @ObservationIgnored private var closers: [UUID: @MainActor (UUID) -> Bool] = [:]
 
+    /// 每个窗口「把这条会话的标签切到前台并带出窗口」的入口（点系统通知时用）。
+    @ObservationIgnored private var revealers: [UUID: @MainActor (UUID) -> Bool] = [:]
+
     private final class WeakSessionBox {
         weak var value: TerminalSession?
         /// 登记时到底给没给会话本体。给了却读出 nil = 会话已被释放（幻影行，要清）；
@@ -160,6 +163,23 @@ final class TerminalSessionRegistry {
         entries[index].title = title
     }
 
+    func setRevealer(forWindow windowID: UUID, _ revealer: (@MainActor (UUID) -> Bool)?) {
+        revealers[windowID] = revealer
+    }
+
+    /// 回到某条会话所在的标签。返回 false = 找不到会话或它的窗口没登记入口。
+    @discardableResult
+    func requestReveal(sessionID: UUID) -> Bool {
+        guard let entry = entries.first(where: { $0.id == sessionID }),
+              let revealer = revealers[entry.windowID] else { return false }
+        return revealer(sessionID)
+    }
+
+    /// 这个会话对象登记时用的 id；没登记过则 nil。
+    func sessionID(of session: TerminalSession) -> UUID? {
+        sessions.first { $0.value.value === session }?.key
+    }
+
     // MARK: - 窗口状态（喂 isKeyWindowFocused）
 
     /// 窗口成为 / 不再是 key window。窗口视图用 `\.controlActiveState` 驱动。
@@ -182,6 +202,7 @@ final class TerminalSessionRegistry {
     func forgetWindow(_ windowID: UUID) {
         windows.removeValue(forKey: windowID)
         closers.removeValue(forKey: windowID)
+        revealers.removeValue(forKey: windowID)
     }
 
     /// 某条会话此刻是不是「key window 的前台终端标签」。**读取时现算**，

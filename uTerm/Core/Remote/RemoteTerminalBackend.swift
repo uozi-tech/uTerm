@@ -60,6 +60,9 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     }
 
     /// 交给 Mac 处理（它知道这个终端是本机 shell 还是 SSH）。
+    /// 手机上的程序读不到 Mac 剪贴板；这个后端只在手机端用，本来也不走 Mac 的粘贴判断。
+    nonisolated var programsCanReadMacClipboard: Bool { false }
+
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard let attachment else { throw TerminalImageError.notConnected }
         return try await client.sendTerminalImage(image, over: attachment)

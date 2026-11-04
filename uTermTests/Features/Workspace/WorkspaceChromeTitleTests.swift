@@ -2,6 +2,13 @@ import XCTest
 @testable import uTerm
 
 final class WorkspaceChromeTitleTests: XCTestCase {
+    func testWindowMoveDoesNotAdjustFrameForScreenLayout() {
+        WindowMoveBehavior.disableScreenLayoutAdjustment()
+
+        let value = UserDefaults.standard.object(forKey: "NSScreenLayoutAdjustOnWindowMove") as? Bool
+        XCTAssertEqual(value, false)
+    }
+
     func testServerChromeTitleAppendsGroupName() {
         XCTAssertEqual(
             ServerChromeTitle.serverTitle(serverName: "demo-server", groupName: "prod"),
