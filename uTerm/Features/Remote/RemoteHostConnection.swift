@@ -27,6 +27,8 @@ final class RemoteHostConnection {
     private var subscribedToSessions = false
     private var isClosed = false
     private var nextChannel: UInt32 = 1
+    /// 每次开流 +1，授权查询回来时用它认出自己是不是最后一次请求（见 `startDesktop`）。
+    private var desktopStartGeneration: UInt32 = 0
     private var attachments: [UInt32: Attachment] = [:]
 
     private struct Attachment {
@@ -153,7 +155,7 @@ final class RemoteHostConnection {
             deliverImage(request, channel: message.channel)
         case .desktopStart:
             guard let request = try? RemoteJSON.decode(RemoteDesktopStartRequest.self, from: message.payload) else { return }
-            startDesktop(request)
+            Task { await startDesktop(request) }
         case .desktopStop:
             stopDesktop(channel: message.channel, notify: false)
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste:
@@ -304,9 +306,14 @@ extension RemoteHostConnection {
 
     /// 开桌面流：查开关与授权 → 定视频尺寸 → 建发送端并开始采集 → 在连接队列上先回「开流成功」再推第一帧。
     /// 被拒（没开开关、没屏幕录制授权、采集起不来）时回一条带 `failure` 的 `desktopStarted`，连接不断。
-    fileprivate func startDesktop(_ request: RemoteDesktopStartRequest) {
+    ///
+    /// 授权查询要等 tccd（见 `RemoteDesktopPermissions`），在主线程外跑；等的这几十毫秒里可能又来了一次开流
+    /// 或连接断了，所以回来后只有最后一次请求、且连接还在才继续。
+    fileprivate func startDesktop(_ request: RemoteDesktopStartRequest) async {
         let channel = nextChannel
         nextChannel &+= 1
+        desktopStartGeneration &+= 1
+        let generation = desktopStartGeneration
         let environment = server.desktopEnvironment
         func reject(_ failure: RemoteDesktopInfo.Failure, _ message: String) {
             link.send(RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(
@@ -315,7 +322,11 @@ extension RemoteHostConnection {
         guard environment.isEnabled() else {
             return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许远程桌面")
         }
-        guard environment.screenCaptureAuthorized() else {
+        async let screenAuthorized = environment.screenCaptureAuthorized()
+        async let postEventsAuthorized = environment.canPostEvents()
+        let (canCapture, canControl) = await (screenAuthorized, postEventsAuthorized)
+        guard generation == desktopStartGeneration, !isClosed else { return }
+        guard canCapture else {
             return reject(.screenPermission,
                           "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 远程控制 里授权，并按提示重启 uTerm")
         }
@@ -325,7 +336,6 @@ extension RemoteHostConnection {
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
             maxWidth: request.maxWidth, maxHeight: request.maxHeight)
-        let canControl = environment.canPostEvents()
         if let current = desktop {
             stopDesktop(channel: current.channel, notify: false)
         }

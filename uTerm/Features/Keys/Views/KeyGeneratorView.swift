@@ -12,7 +12,8 @@ struct KeyGeneratorView: View {
     @State private var name = ""
     @State private var type: SSHKeyKind = .ed25519
     @State private var rsaBits = 4096
-    @State private var comment = NSUserName() + "@" + (Host.current().localizedName ?? "mac")
+    // 不用 `Host.current()`：它要做本机名解析，DNS 不通时会卡住主线程；而 `@State` 初值每次重建视图都会再算一遍。
+    @State private var comment = NSUserName() + "@" + LANSyncCoordinator.localDeviceName()
     @State private var generating = false
     @State private var errorText: String?
     @State private var nameTouched = false

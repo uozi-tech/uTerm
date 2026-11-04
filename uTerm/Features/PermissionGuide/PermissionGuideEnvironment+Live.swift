@@ -1,5 +1,4 @@
 import AppKit
-import CoreGraphics
 import Network
 import ServiceManagement
 import UserNotifications
@@ -17,9 +16,9 @@ extension PermissionGuideEnvironment {
         requestNotifications: {
             _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
         },
-        screenCaptureGranted: { await Task.detached { CGPreflightScreenCaptureAccess() }.value },
+        screenCaptureGranted: { await RemoteDesktopPermissions.screenCaptureGranted() },
         requestScreenCapture: { RemoteDesktopPermissions.requestScreenCapture() },
-        postEventsGranted: { await Task.detached { CGPreflightPostEventAccess() }.value },
+        postEventsGranted: { await RemoteDesktopPermissions.postEventsGranted() },
         requestPostEvents: { RemoteDesktopPermissions.requestPostEvents() },
         loginItemNeedsApproval: {
             let identifier = BackgroundServiceSettings.loginItemIdentifier

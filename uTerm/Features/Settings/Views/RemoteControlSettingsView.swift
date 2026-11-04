@@ -103,7 +103,7 @@ struct RemoteControlSettingsView: View {
                                       request: permissions.requestPostEvents,
                                       openSettings: RemoteDesktopPermissions.openAccessibilitySettings)
                 }
-                if !permissions.screenCapture || !permissions.postEvents {
+                if permissions.isLoaded, !permissions.screenCapture || !permissions.postEvents {
                     SettingsRow(label: "不清楚怎么开？", hint: "授权引导里逐项说明每个权限的用途和打开方法。") {
                         UDButton(title: "打开授权引导", style: .secondary) {
                             openWindow(id: PermissionGuideWindow.id)
@@ -126,12 +126,23 @@ struct RemoteControlSettingsView: View {
                 }
             }
         }
+        // 授权查询要等 tccd，只在这一处、在后台查（见 RemoteDesktopPermissionState）。
+        .task(id: settings.isDesktopEnabled) {
+            if settings.isDesktopEnabled { await permissions.refresh() }
+        }
+        // 从系统设置切回来时刷新一次（在本进程里通常仍是未授权，要重启才生效，见 RemoteDesktopPermissions）。
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard settings.isDesktopEnabled else { return }
+            Task { await permissions.refresh() }
+        }
     }
 
     @ViewBuilder
     private func permissionControl(granted: Bool, request: @escaping () -> Void,
                                    openSettings: @escaping () -> Void) -> some View {
-        if granted {
+        if !permissions.isLoaded {
+            EmptyView()
+        } else if granted {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(UD.success)
                 Text("已授权").font(.system(size: 12.5)).foregroundStyle(UD.text)
@@ -140,10 +151,6 @@ struct RemoteControlSettingsView: View {
             HStack(spacing: 8) {
                 UDButton(title: "打开系统设置", style: .secondary, action: openSettings)
                 UDButton(title: "授权", style: .primary, action: request)
-            }
-            // 从系统设置切回来时刷新一次（在本进程里通常仍是未授权，要重启才生效，见 RemoteDesktopPermissions）。
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                permissions.refresh()
             }
         }
     }
