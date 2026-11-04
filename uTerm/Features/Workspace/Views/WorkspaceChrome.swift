@@ -191,6 +191,20 @@ struct WSCanvasTab<Leading: View>: View {
     }
 }
 
+/// 关掉 AppKit 的「窗口移动时按屏幕布局调整位置」。
+///
+/// 这个配置默认开启：窗口换屏时，AppKit 经 `-[NSWindow _setFrameAfterMove:]` →
+/// `_adjustWindowFrame:forMoveFromScreen:toScreen:` 把窗口挪到它在目标屏记住的位置。
+/// 用户正在拖动时也一样，而系统拖动按增量继续，光标与窗口的相对位置就一直错开，严重时
+/// 光标落到窗口外。AppKit 首次用到时才读取并缓存，所以要在创建任何窗口之前调用。
+enum WindowMoveBehavior {
+    nonisolated static let screenLayoutAdjustKey = "NSScreenLayoutAdjustOnWindowMove"
+
+    nonisolated static func disableScreenLayoutAdjustment() {
+        UserDefaults.standard.register(defaults: [screenLayoutAdjustKey: false])
+    }
+}
+
 /// 让自绘标题栏的空白处充当**窗口拖动手柄**：仅在本 NSView 命中区按下并拖动才移动
 /// 窗口。取代窗口级 `isMovableByWindowBackground`——后者把整窗背景都变成拖动区，连
 /// `WorkspaceColumns` 的列分隔条、`SplitterHandle` 的终端分屏手柄都被 AppKit 抢成
