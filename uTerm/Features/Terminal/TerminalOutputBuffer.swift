@@ -13,6 +13,9 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
     private var chunks: [Chunk] = []
     private var head = 0
     private var bufferedBytes = 0
+    /// 最新一代累计没喂给终端就丢掉的字节。持有 PTY 的后端要据此算出终端看到了输出流的哪个位置。
+    private var droppedGeneration = Int.min
+    private var droppedCount: UInt64 = 0
     /// Tasks 在 `waitForData()` 中暂停的延续。`append()` / `clear()` 都会清空
     /// 此列表并 resume 所有等待者 —— 这让 flush loop 在空闲时挂起 0 CPU、
     /// 一字节到达即恢复，取代旧的 100ms 轮询。
@@ -32,6 +35,7 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
             let keepStart = data.index(data.endIndex, offsetBy: -capacityBytes)
             let kept = data[keepStart..<data.endIndex]
             chunk = Chunk(generation: generation, data: Data(kept))
+            noteDroppedLocked(data.count - capacityBytes, generation: generation)
         } else {
             chunk = Chunk(generation: generation, data: data)
         }
@@ -82,6 +86,7 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
 
     func clear() {
         lock.lock()
+        for chunk in chunks[head...] { noteDroppedLocked(chunk.data.count, generation: chunk.generation) }
         chunks.removeAll(keepingCapacity: true)
         head = 0
         bufferedBytes = 0
@@ -89,6 +94,21 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
         let toWake = takeWaitersLocked()
         lock.unlock()
         resume(toWake)
+    }
+
+    func droppedBytes(generation: Int) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return droppedGeneration == generation ? droppedCount : 0
+    }
+
+    private func noteDroppedLocked(_ count: Int, generation: Int) {
+        guard generation >= droppedGeneration else { return }
+        if generation > droppedGeneration {
+            droppedGeneration = generation
+            droppedCount = 0
+        }
+        droppedCount += UInt64(count)
     }
 
     /// 异步挂起直到 buffer 中有数据。调用时已有缓冲字节则立即返回，
@@ -121,6 +141,7 @@ nonisolated final class TerminalOutputBuffer: @unchecked Sendable {
     private func dropOverflowLocked() {
         while bufferedBytes > capacityBytes, head < chunks.count {
             let chunk = chunks[head]
+            noteDroppedLocked(chunk.data.count, generation: chunk.generation)
             bufferedBytes -= chunk.data.count
             head += 1
         }

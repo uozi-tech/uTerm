@@ -14,6 +14,8 @@ extension TerminalSession {
         // keystroke ordering therefore relies on `SSHConnection`'s internal
         // ordered write FIFO, which serializes writes regardless of the order
         // these Tasks reach the actor. Do not assume Task creation order here.
+        // 回放的是历史输出，里面的查询当年已经回答过了。
+        guard !isReplayingHeldOutput else { return }
         let bytes = Data(data)
         Task { [weak self] in
             await self?.backend?.write(bytes)
@@ -26,6 +28,7 @@ extension TerminalSession {
         latestReportedResize = (cols, rows)
         // 终端刚按新尺寸重排过：镜像端改发一份新尺寸下的快照，不去追字节级的时序。
         mirrorTap.invalidateAll()
+        heldCheckpoints?.noteScreenChanged()
 
         // Fast path: SwiftTerm sometimes fires sizeChanged for the same value
         // during a layout pass; no SIGWINCH needed.
@@ -72,7 +75,7 @@ extension TerminalSession {
     func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) { }
 
     func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
-        guard let string = String(data: content, encoding: .utf8) else { return }
+        guard !isReplayingHeldOutput, let string = String(data: content, encoding: .utf8) else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(string, forType: .string)

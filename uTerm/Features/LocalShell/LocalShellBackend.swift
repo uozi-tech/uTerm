@@ -1,29 +1,37 @@
 import Darwin
 import Foundation
 
-/// 本机 shell 的终端后端：shell 由辅助进程起（见 `LocalShellService`），伪终端主端的 fd 交过来以后，
-/// 读写都在这里直接对 fd 做，不再经过辅助进程；只有调尺寸、结束走 XPC。
+/// 本机 shell 的终端后端。shell 和伪终端都在 `uterm-holder` 里，App 退出、崩溃都不影响；这里只是连上去收发帧。
+/// 连接由 XPC 服务建好交过来（见 `LocalShellAgentClient`）。
 ///
-/// 读：fd 设成非阻塞，读源在自己的队列上把能读的一次读完再交给 `outputStream`。读到 0 或出错（shell 退出后
-/// 从端全部关闭，主端读返回 EIO）就是会话结束，`exitStream` 产出一个元素。
-/// 写：键盘字节很少，偶尔粘贴一大段；写满内核缓冲（EAGAIN）就 poll 等可写再继续，不丢字节。
-actor LocalShellBackend: TerminalImageReceiving {
+/// `close()` 结束 shell，`detach()` 只断开。退出原因分得开：holder 明说 shell 退出了（`exited`）、
+/// 被别的客户端接走（`replaced`）、连接断了（holder 没了）。这三种对终端来说都是这条会话到头了。
+actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     nonisolated let outputStream: AsyncStream<Data>
     nonisolated let exitStream: AsyncStream<Void>
+    nonisolated let holderLink = HolderLink()
     private let outputContinuation: AsyncStream<Data>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
     private let client: LocalShellAgentClient
+    private let namespace: String
+    private let sessionID: UUID
     private let initialColumns: Int
     private let initialRows: Int
-    private let readQueue = DispatchQueue(label: "com.uozi.uTerm.LocalShell.read")
 
-    private var handle: LocalShellHandle?
-    private var readSource: DispatchSourceRead?
-    private var closed = false
+    private var connection: HolderConnection?
+    private var replay: HolderReplay?
+    private var shellPID: Int32?
+    private enum Teardown { case terminate, detach }
+    /// 连接途中就被要求收尾时记在这，连上之后补做。
+    private var teardown: Teardown?
+    private var isFinished = false
 
-    init(client: LocalShellAgentClient, columns: Int, rows: Int) {
+    init(client: LocalShellAgentClient, namespace: String = LocalShellNamespace.current, sessionID: UUID = UUID(),
+         columns: Int, rows: Int) {
         self.client = client
+        self.namespace = namespace
+        self.sessionID = sessionID
         initialColumns = max(1, columns)
         initialRows = max(1, rows)
         (outputStream, outputContinuation) = AsyncStream.makeStream(of: Data.self)
@@ -31,98 +39,196 @@ actor LocalShellBackend: TerminalImageReceiving {
     }
 
     /// 本机 shell 的进程号（已结束 / 未启动时 nil）。
-    var pid: Int32? { handle?.pid }
+    var pid: Int32? { shellPID }
 
     func connect() async throws {
-        let opened = try await client.openShell(columns: initialColumns, rows: initialRows)
-        guard !closed else {
-            client.terminate(pid: opened.pid)
+        let connection: HolderConnection
+        let replay: HolderReplay
+        do {
+            (connection, replay) = try await openAndAttach()
+        } catch let error as HolderSessionFailure {
+            // 上一个 holder 正在退出时可能连上它又立刻断开（重新启动已退出的 shell）。socket 文件这时已经没了，再来一次就是新的。
+            guard case .disconnected = error else { throw error }
+            (connection, replay) = try await openAndAttach()
+        }
+        if let teardown {
+            if teardown == .terminate { connection.send(HolderFrame(.terminate)) }
+            connection.close()
             return
         }
-        handle = opened
-        let fd = opened.master.fileDescriptor
-        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
+        self.connection = connection
+        self.replay = replay
+        shellPID = replay.hello.shellPID
+        holderLink.install(connection)
+    }
+
+    private func openAndAttach() async throws -> (HolderConnection, HolderReplay) {
+        let handle = try await client.openSession(namespace: namespace, id: sessionID, columns: initialColumns, rows: initialRows)
+        let connection = HolderConnection(handle)
         let output = outputContinuation
-        source.setEventHandler { [weak self] in
-            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-            var chunk = Data()
-            while true {
-                let count = read(fd, &buffer, buffer.count)
-                if count > 0 {
-                    chunk.append(buffer, count: count)
-                    if chunk.count >= 256 * 1024 { break }
-                    continue
-                }
-                if count < 0, errno == EAGAIN || errno == EINTR { break }
-                // 0 = 对端关闭；其余错误（EIO：shell 已退出、从端全关）同样是会话结束。
-                if !chunk.isEmpty { output.yield(chunk) }
-                Task { await self?.ended() }
-                return
-            }
-            if !chunk.isEmpty { output.yield(chunk) }
+        let session = HolderSessionReceiver(output: output) { [weak self] in
+            Task { await self?.ended() }
         }
-        // fd 由读源的取消回调关：取消与正在跑的读在同一条队列上串行，关之后不会再有人读它。
-        let master = opened.master
-        source.setCancelHandler { try? master.close() }
-        readSource = source
-        source.resume()
+        return try await withCheckedThrowingContinuation { continuation in
+            session.onReplayFinished = { result in
+                continuation.resume(with: result.map { (connection, $0) })
+            }
+            connection.onFrame = { session.receive($0) }
+            connection.onClosed = { session.connectionClosed() }
+            connection.start()
+            connection.send(HolderFrame(.hello))
+            connection.send(HolderFrame(.attach))
+            // holder 卡死不能把窗口一直挂在「正在启动」。超过之后连接关掉，走上面的失败路径。
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [weak connection, weak session] in
+                guard session?.isReplayPending == true else { return }
+                connection?.close()
+            }
+        }
+    }
+
+    func takeReplay() -> HolderReplay? {
+        defer { replay = nil }
+        return replay
     }
 
     func write(_ data: Data) async {
-        guard let fd = handle?.master.fileDescriptor, !closed else { return }
-        data.withUnsafeBytes { raw in
-            guard var pointer = raw.baseAddress else { return }
-            var remaining = raw.count
-            while remaining > 0 {
-                let written = Darwin.write(fd, pointer, remaining)
-                if written > 0 {
-                    pointer += written
-                    remaining -= written
-                } else if written < 0, errno == EAGAIN || errno == EINTR {
-                    var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                    _ = poll(&poller, 1, 1000)
-                } else {
-                    return
-                }
-            }
-        }
+        guard !isFinished else { return }
+        connection?.send(HolderFrame(.input, payload: Array(data)))
     }
 
     /// 本机 shell 里的程序就在这台 Mac 上：图片放进系统剪贴板，再替用户按一下 Ctrl+V
     ///（Claude Code 等 CLI 在 Ctrl+V 时从剪贴板读图；不认得的程序最多收到一个 ^V）。
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
-        guard handle != nil, !closed else { throw TerminalImageError.notConnected }
+        guard connection != nil, !isFinished else { throw TerminalImageError.notConnected }
         RemotePasteboard.write(image)
         await write(Data([0x16]))
         return .clipboard
     }
 
     func resize(cols: UInt16, rows: UInt16) async {
-        guard let pid = handle?.pid, !closed else { return }
-        client.resize(pid: pid, columns: Int(cols), rows: Int(rows))
+        guard !isFinished else { return }
+        var writer = HolderByteWriter()
+        writer.u16(cols)
+        writer.u16(rows)
+        connection?.send(HolderFrame(.resize, payload: writer.bytes))
+    }
+
+    func setAttributes(_ attributes: Data) {
+        connection?.send(HolderFrame(.setAttributes, payload: Array(attributes)))
     }
 
     func close() async {
-        guard !closed else { return }
-        closed = true
-        if let pid = handle?.pid { client.terminate(pid: pid) }
-        finish()
+        guard !isFinished else { return }
+        teardown = .terminate
+        connection?.send(HolderFrame(.terminate))
+        shutDown()
+    }
+
+    func detach() async {
+        guard !isFinished else { return }
+        teardown = .detach
+        shutDown()
+    }
+
+    private func shutDown() {
+        isFinished = true
+        holderLink.install(nil)
+        connection?.close()
+        connection = nil
+        shellPID = nil
+        outputContinuation.finish()
+        exitContinuation.finish()
     }
 
     private func ended() {
-        guard !closed else { return }
-        closed = true
+        guard !isFinished else { return }
         // 先 yield 再 finish：finish 之后 yield 是空操作，会话结束就没人知道了。
         exitContinuation.yield()
-        finish()
+        shutDown()
+    }
+}
+
+nonisolated enum HolderSessionFailure: LocalizedError {
+    case disconnected
+    case badReply
+
+    var errorDescription: String? {
+        switch self {
+        case .disconnected: return "本机终端的辅助进程断开了连接"
+        case .badReply: return "本机终端的辅助进程回了看不懂的内容"
+        }
+    }
+}
+
+/// 收 holder 的帧：先攒回放，`replayEnd` 之后转成输出流。只在连接的队列上用。
+nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
+    private let output: AsyncStream<Data>.Continuation
+    private let onEnded: @Sendable () -> Void
+    var onReplayFinished: (@Sendable (Result<HolderReplay, Error>) -> Void)?
+
+    private var hello: HolderHelloReply?
+    private var checkpoint: HolderCheckpoint?
+    private var collected: [UInt8] = []
+    private var isLive = false
+
+    /// 其它线程只用它判断要不要放弃，读到旧值也只是晚一拍。
+    private let pendingLock = NSLock()
+    private var pending = true
+    var isReplayPending: Bool {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return pending
     }
 
-    private func finish() {
-        readSource?.cancel()
-        readSource = nil
-        handle = nil
-        outputContinuation.finish()
-        exitContinuation.finish()
+    init(output: AsyncStream<Data>.Continuation, onEnded: @escaping @Sendable () -> Void) {
+        self.output = output
+        self.onEnded = onEnded
+    }
+
+    func receive(_ frame: HolderFrame) {
+        // 不认识的帧忽略：旧 App 可能连着新 holder。
+        guard let kind = frame.kind else { return }
+        switch kind {
+        case .helloReply:
+            hello = HolderHelloReply(decoding: frame.payload)
+        case .replayCheckpoint:
+            checkpoint = HolderCheckpoint(decoding: frame.payload)
+        case .output:
+            if isLive {
+                output.yield(Data(frame.payload))
+            } else {
+                collected.append(contentsOf: frame.payload)
+            }
+        case .replayEnd:
+            var reader = HolderByteReader(frame.payload)
+            guard let hello, let checkpoint, let end = reader.u64() else {
+                finishReplay(.failure(HolderSessionFailure.badReply))
+                return
+            }
+            isLive = true
+            finishReplay(.success(HolderReplay(hello: hello, checkpoint: checkpoint, output: collected, endOffset: end)))
+            collected = []
+        case .exited, .replaced:
+            onEnded()
+        case .hello, .attach, .input, .resize, .checkpoint, .setAttributes, .terminate, .redraw:
+            break
+        }
+    }
+
+    func connectionClosed() {
+        if isReplayPending {
+            finishReplay(.failure(HolderSessionFailure.disconnected))
+        } else {
+            onEnded()
+        }
+    }
+
+    private func finishReplay(_ result: Result<HolderReplay, Error>) {
+        pendingLock.lock()
+        pending = false
+        pendingLock.unlock()
+        let finished = onReplayFinished
+        onReplayFinished = nil
+        finished?(result)
     }
 }

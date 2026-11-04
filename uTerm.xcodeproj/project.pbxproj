@@ -52,6 +52,13 @@
 			remoteGlobalIDString = 26474F753450F16288097CFA;
 			remoteInfo = uTermBackgroundLauncher;
 		};
+		484F4C44455200000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 484F4C444552000000000004;
+			remoteInfo = "uterm-holder";
+		};
 		5348454C4C0000000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 85D6BEE72FBC4E7E00FC90D8 /* Project object */;
@@ -78,6 +85,7 @@
 /* Begin PBXFileReference section */
 		10C0DE0000000000000000A6 /* uTermMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTermBackgroundLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		484F4C444552000000000003 /* uterm-holder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "uterm-holder"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5348454C4C00000000000003 /* uTermShellAgent.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = uTermShellAgent.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = uTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0000000000000000000000C /* uTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = uTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -171,7 +179,10 @@
 				Features/Keys/Views/KeyGeneratorView.swift,
 				Features/Keys/Views/KeyImportView.swift,
 				Features/Keys/Views/KeyManagerView.swift,
+				Features/LocalShell/HolderConnection.swift,
 				Features/LocalShell/LocalShellBackend.swift,
+				Features/LocalShell/LocalShellQuitPolicy.swift,
+				Features/LocalShell/LocalShellRestorer.swift,
 				Features/LocalShell/LocalShellService.swift,
 				Features/LocalShell/LocalShellWindow.swift,
 				Features/ParallelRun/ParallelAIDoctor.swift,
@@ -256,6 +267,7 @@
 				Features/Terminal/TerminalMirrorTap.swift,
 				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
+				"Features/Terminal/TerminalSession+HeldSession.swift",
 				"Features/Terminal/TerminalSession+RemoteGrid.swift",
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",
 				"Features/Terminal/TerminalSession+TrackedRun.swift",
@@ -335,12 +347,28 @@
 			);
 			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
 		};
+		484F4C444552000000000002 /* Exceptions for "uTermHolder" folder in "uTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				HolderServer.swift,
+				main.swift,
+			);
+			target = 85D6BEEE2FBC4E7E00FC90D8 /* uTerm */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		10C0DE0000000000000000B0 /* uTermMobile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = uTermMobile;
+			sourceTree = "<group>";
+		};
+		484F4C444552000000000001 /* uTermHolder */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				484F4C444552000000000002 /* Exceptions for "uTermHolder" folder in "uTerm" target */,
+			);
+			path = uTermHolder;
 			sourceTree = "<group>";
 		};
 		5348454C4C00000000000001 /* uTermShellAgent */ = {
@@ -392,6 +420,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		484F4C444552000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -471,6 +506,7 @@
 				BA95191881030915DA025947 /* Frameworks */,
 				918FC87C7A998A6853AEEDED /* uTermBackgroundLauncher */,
 				5348454C4C00000000000001 /* uTermShellAgent */,
+				484F4C444552000000000001 /* uTermHolder */,
 			);
 			sourceTree = "<group>";
 		};
@@ -483,6 +519,7 @@
 				B1000000000000000000000C /* uTermMobileTests.xctest */,
 				1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */,
 				5348454C4C00000000000003 /* uTermShellAgent.xpc */,
+				484F4C444552000000000003 /* uterm-holder */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -564,6 +601,25 @@
 			productReference = 1B6856B33393060C6700FEE5 /* uTermBackgroundLauncher.app */;
 			productType = "com.apple.product-type.application";
 		};
+		484F4C444552000000000004 /* uterm-holder */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 484F4C444552000000000005 /* Build configuration list for PBXNativeTarget "uterm-holder" */;
+			buildPhases = (
+				484F4C444552000000000006 /* Sources */,
+				484F4C444552000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				484F4C444552000000000001 /* uTermHolder */,
+			);
+			name = "uterm-holder";
+			productName = "uterm-holder";
+			productReference = 484F4C444552000000000003 /* uterm-holder */;
+			productType = "com.apple.product-type.tool";
+		};
 		5348454C4C00000000000004 /* uTermShellAgent */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5348454C4C00000000000005 /* Build configuration list for PBXNativeTarget "uTermShellAgent" */;
@@ -600,9 +656,11 @@
 			dependencies = (
 				75CD47CBD2BFF61B882B9D38 /* PBXTargetDependency */,
 				5348454C4C0000000000000B /* PBXTargetDependency */,
+				484F4C44455200000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5348454C4C00000000000001 /* uTermShellAgent */,
+				484F4C444552000000000001 /* uTermHolder */,
 				85D6BEF12FBC4E7E00FC90D8 /* uTerm */,
 			);
 			name = uTerm;
@@ -744,6 +802,7 @@
 				B10000000000000000000006 /* uTermMobileTests */,
 				26474F753450F16288097CFA /* uTermBackgroundLauncher */,
 				5348454C4C00000000000004 /* uTermShellAgent */,
+				484F4C444552000000000004 /* uterm-holder */,
 			);
 		};
 /* End PBXProject section */
@@ -804,7 +863,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\n";
+			shellScript = "set -eu\nservices=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/XPCServices\"\n/bin/mkdir -p \"$services\"\n/bin/rm -rf \"$services/uTermShellAgent.xpc\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uTermShellAgent.xpc\" \"$services/uTermShellAgent.xpc\"\nhelpers=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\n/bin/mkdir -p \"$helpers\"\n# 先删后拷：运行中的 holder 还映射着旧文件，不能原地覆盖。\n/bin/rm -f \"$helpers/uterm-holder\"\n/usr/bin/ditto \"${BUILT_PRODUCTS_DIR}/uterm-holder\" \"$helpers/uterm-holder\"\n";
 		};
 		CFCFCFCF000000000000F0F1 /* Set Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -894,6 +953,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		484F4C444552000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5348454C4C00000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -933,6 +999,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		484F4C44455200000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "uterm-holder";
+			target = 484F4C444552000000000004 /* uterm-holder */;
+			targetProxy = 484F4C44455200000000000A /* PBXContainerItemProxy */;
+		};
 		5348454C4C0000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = uTermShellAgent;
@@ -1033,6 +1105,38 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		484F4C444552000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.Holder;
+				PRODUCT_NAME = "uterm-holder";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		484F4C444552000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ABCDE12345;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.Holder;
+				PRODUCT_NAME = "uterm-holder";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -1459,6 +1563,15 @@
 			buildConfigurations = (
 				BA003D6C6D052CA91B3C234D /* Release */,
 				8BB642B316670BCD01317250 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		484F4C444552000000000005 /* Build configuration list for PBXNativeTarget "uterm-holder" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				484F4C444552000000000008 /* Debug */,
+				484F4C444552000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -22,7 +22,7 @@ final class LocalShellIntegrationTests: XCTestCase {
         let version = try await client.ping()
         XCTAssertFalse(version.isEmpty)
 
-        let backend = LocalShellBackend(client: client, columns: 80, rows: 24)
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", columns: 80, rows: 24)
         try await backend.connect()
         var output = ""
         let pump = Task { @MainActor in
@@ -62,7 +62,7 @@ final class LocalShellIntegrationTests: XCTestCase {
     func test_natural_shell_exit_is_reported_on_exit_stream() async throws {
         let client = LocalShellAgentClient()
         defer { client.invalidate() }
-        let backend = LocalShellBackend(client: client, columns: 80, rows: 24)
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", columns: 80, rows: 24)
         try await backend.connect()
         let drain = Task { for await _ in backend.outputStream {} }
         defer { drain.cancel() }

@@ -401,6 +401,13 @@ verify-distribution-signing:
 	test -d "$(EXPORT_APP)"
 	python3 scripts/verify-background-launcher.py "$(EXPORT_APP)" "uTermBackgroundLauncher"
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
+	@holder="$(EXPORT_APP)/Contents/Helpers/uterm-holder"; \
+	holder_info=$$(codesign -dv --verbose=4 "$$holder" 2>&1) || { printf '%s\n' "ERROR: $$holder is missing or unsigned."; exit 1; }; \
+	if ! printf '%s\n' "$$holder_info" | grep -q 'Authority=Developer ID Application' \
+		|| ! printf '%s\n' "$$holder_info" | grep -q 'flags=.*runtime'; then \
+		printf '%s\n' 'ERROR: uterm-holder is not signed with Developer ID + hardened runtime (notarization would reject it).'; \
+		exit 1; \
+	fi
 	@sign_info=$$(codesign -dv --verbose=4 "$(EXPORT_APP)" 2>&1); \
 	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Developer ID Application'; then \
 		printf '%s\n' 'ERROR: Exported app is not signed with a Developer ID Application certificate.'; \

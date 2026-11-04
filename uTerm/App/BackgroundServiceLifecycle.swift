@@ -104,9 +104,13 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         NSApp.windows.forEach { $0.orderOut(nil) }
     }
 
-    /// 退出前检查「打开」出去、还没传回服务器的文件（`ExternalEditCloseGuard`）。
+    /// 退出前依次问：运行中的本机终端怎么办（`LocalShellQuitPolicy`）；「打开」出去、还没传回服务器的文件
+    ///（`ExternalEditCloseGuard`）。任何一步取消都不退出。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        ExternalEditCloseGuard.shouldTerminate(sender)
+        guard LocalShellQuitPolicy.shared.confirmQuit() else { return .terminateCancel }
+        let reply = ExternalEditCloseGuard.shouldTerminate(sender)
+        if reply == .terminateCancel { LocalShellQuitPolicy.shared.quitCancelled() }
+        return reply
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -116,6 +120,7 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func showGUI() {
+        LocalShellRestorer.shared.restoreIfNeeded()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         let windows = NSApp.windows.filter { !($0 is NSPanel) }

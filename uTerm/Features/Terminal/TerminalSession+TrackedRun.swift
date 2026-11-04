@@ -66,7 +66,10 @@ extension TerminalSession {
     /// MainActor 上喂给 SwiftTerm。
     func installTrackedRunMarkers() {
         terminalView.getTerminal().registerOscHandler(code: TerminalTrackedRun.oscCode) { [weak self] data in
-            MainActor.assumeIsolated { self?.handleTrackedRunMarker(data) }
+            MainActor.assumeIsolated {
+                guard self?.isReplayingHeldOutput == false else { return }
+                self?.handleTrackedRunMarker(data)
+            }
         }
     }
 

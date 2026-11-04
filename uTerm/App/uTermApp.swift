@@ -141,6 +141,7 @@ struct uTermApp: App {
                 relay: launchRelay
             )
             remoteServer.localShellOpener = .live(settings: remoteSettings, registry: terminalRegistry)
+            remoteServer.sessionRestoration = { await LocalShellRestorer.shared.finished() }
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
@@ -152,7 +153,10 @@ struct uTermApp: App {
                 queue: .main
             ) { _ in
                 server.stop()
-                MainActor.assumeIsolated { remoteServer.stop() }
+                MainActor.assumeIsolated {
+                    remoteServer.stop()
+                    LocalShellQuitPolicy.shared.applicationWillTerminate()
+                }
                 Task { await ControlConnectionPool.shared.disconnectAll() }
             }
         }
@@ -187,6 +191,14 @@ struct uTermApp: App {
                 open(value: LocalShellWindowID(id: UUID(), firstPaneID: paneID))
             }
             return paneID
+        }
+        // 上次退出时留下的本机终端接回来。`open` 只能在 Scene 环境里拿到，所以在这里装；后台隐藏启动时等 GUI 打开。
+        LocalShellRestorer.shared.install { windowID, firstPaneID in
+            UTermLifecycleDelegate.showGUI()
+            open(value: LocalShellWindowID(id: windowID, firstPaneID: firstPaneID))
+        }
+        if !BackgroundLaunchMode.shouldStartHidden {
+            LocalShellRestorer.shared.restoreIfNeeded()
         }
     }
 

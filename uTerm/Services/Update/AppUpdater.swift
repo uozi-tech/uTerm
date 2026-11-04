@@ -17,13 +17,14 @@ import Sparkle
 @Observable
 final class AppUpdater {
     private let controller: SPUStandardUpdaterController
+    private let updaterDelegate = AppUpdaterDelegate()
 
     init() {
         // startingUpdater: true → Sparkle init 后立即启动 auto-check timer
-        // delegate 都 nil → 用 Sparkle 默认行为，避免本 spec 范围蔓延
+        // delegate 只用来知道「要重启装更新了」：这时退出不用问用户本机终端怎么办。
         self.controller = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )
     }
@@ -61,5 +62,11 @@ final class AppUpdater {
         let short = info?["CFBundleShortVersionString"] as? String ?? ""
         let build = info?["CFBundleVersion"] as? String ?? ""
         return "v\(short) (\(build))"
+    }
+}
+
+nonisolated private final class AppUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        MainActor.assumeIsolated { LocalShellQuitPolicy.shared.isRelaunchingForUpdate = true }
     }
 }

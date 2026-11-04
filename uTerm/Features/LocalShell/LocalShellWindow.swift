@@ -13,6 +13,12 @@ nonisolated struct LocalShellWindowID: Codable, Hashable, Sendable, Identifiable
     var firstPaneID: UUID?
 }
 
+/// 存在 holder 里的会话归属：App 重启后据此把标签放回原来的窗口。holder 只当它是不透明的数据。
+nonisolated struct LocalShellSessionAttributes: Codable, Equatable, Sendable {
+    var windowID: UUID
+    var ordinal: Int
+}
+
 /// 本机 shell 在会话注册表里的身份。不对应任何 `ServerProfile`：`serverID` 用固定的哨兵值，
 /// 手机据此认出「这是 Mac 本机」，不去自己的主机列表里找。
 nonisolated enum LocalShellIdentity {
@@ -31,6 +37,7 @@ final class LocalShellPane: Identifiable {
     /// 窗口里的序号。开标签时定下、不随位置变：标签可以拖来拖去，名字不该跟着改。
     let ordinal: Int
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
+    @ObservationIgnored private(set) var isDisposed = false
 
     /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
     var defaultTitle: String { ordinal > 1 ? "\(shellName) \(ordinal)" : shellName }
@@ -52,17 +59,39 @@ final class LocalShellPane: Identifiable {
         guard session.connectionState != .connected, session.connectionState != .connecting else { return }
         await session.close()
         let terminal = session.terminalView.getTerminal()
-        let backend = LocalShellBackend(client: LocalShellService.shared.client,
+        let backend = LocalShellBackend(client: LocalShellService.shared.client, sessionID: id,
                                         columns: terminal.cols, rows: terminal.rows)
         await session.connect(using: backend)
+        if let windowID = registrar?.windowID, session.backend === backend,
+           let attributes = try? JSONEncoder().encode(LocalShellSessionAttributes(windowID: windowID, ordinal: ordinal)) {
+            await backend.setAttributes(attributes)
+        }
     }
 
+    /// 关标签 / 关窗口：结束 shell。退出 App 时不走这里的结束（见 `LocalShellQuitPolicy`）：只断开，shell 留着下次接回。
     func dispose() {
+        guard !isDisposed else { return }
+        isDisposed = true
         registrar?.unregister(paneID: id)
         // `session.dispose()` 会清掉 backend，之后 `session.close()` 就关不到它了，要先留一份。
         let backend = session.backend
-        session.dispose()
-        Task { await backend?.close() }
+        // 退出流程里异步任务不一定来得及跑，要同步把话说完。
+        if LocalShellQuitPolicy.shared.isQuitting {
+            finishForQuit(endingSession: LocalShellQuitPolicy.shared.endsSessionsOnQuit)
+            session.dispose()
+            if let held = backend as? any HeldTerminalBackend { Task { await held.detach() } }
+        } else {
+            session.dispose()
+            Task { await backend?.close() }
+        }
+    }
+
+    /// 退出流程的最后一步（`willTerminate`）：之后进程就没了，不能再指望异步任务。
+    func finishForQuit(endingSession: Bool) {
+        guard let held = session.backend as? any HeldTerminalBackend else { return }
+        session.saveHeldCheckpointNow()
+        if endingSession { held.holderLink.send(HolderFrame(.terminate)) }
+        held.holderLink.flushAndClose(timeout: 0.5)
     }
 
     private func syncRegistration(_ state: TerminalSession.ConnectionState) {
@@ -121,8 +150,8 @@ final class LocalShellWindowModel {
 
     /// 在 `groupID`（默认活动组）新开一个标签并切过去，返回它的会话 id（可以预先指定）。
     @discardableResult
-    func addTab(id: UUID = UUID(), in groupID: UUID? = nil) -> UUID {
-        let tab = makeTab(id: id)
+    func addTab(id: UUID = UUID(), ordinal: Int? = nil, in groupID: UUID? = nil) -> UUID {
+        let tab = makeTab(id: id, ordinal: ordinal)
         groups.openTab({ tab }, in: groupID)
         return id
     }
@@ -150,8 +179,8 @@ final class LocalShellWindowModel {
         registrar.registry.setFocusedSession(active?.id, inWindow: registrar.windowID)
     }
 
-    private func makeTab(id: UUID = UUID()) -> UPaneTab<LocalShellPane> {
-        let pane = LocalShellPane(id: id, ordinal: nextOrdinal())
+    private func makeTab(id: UUID = UUID(), ordinal: Int? = nil) -> UPaneTab<LocalShellPane> {
+        let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal())
         if let registrar { pane.attach(registrar) }
         startShell(pane)
         return UPaneTab(id: id, payload: pane)
@@ -190,6 +219,15 @@ final class LocalShellWindowRouter {
     func unregister(windowID: UUID) {
         entries[windowID] = nil
         activationOrder.removeAll { $0 == windowID }
+    }
+
+    func model(forWindow windowID: UUID) -> LocalShellWindowModel? {
+        entries[windowID]?.model
+    }
+
+    /// 所有本机终端窗口里的会话，退出流程用。
+    var allPanes: [LocalShellPane] {
+        entries.values.flatMap { $0.model?.panes ?? [] }
     }
 
     func markActive(windowID: UUID) {
@@ -259,6 +297,7 @@ struct LocalShellWindowView: View {
                 windowModel?.close(paneID) ?? false
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
+            LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
             if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID()) }
         }
         .onChange(of: controlActiveState) { _, state in

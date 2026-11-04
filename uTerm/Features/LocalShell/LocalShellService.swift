@@ -1,9 +1,10 @@
+import CryptoKit
 import Foundation
 import Observation
 
 /// 本机 shell 的入口：到辅助程序的 XPC 客户端，以及设置页用的健康检查。
 ///
-/// 主程序是沙盒 app，shell 由不带沙盒的内嵌 XPC 服务 `uTermShellAgent.xpc` 起（见 `LocalShellAgent`）。
+/// 主程序是沙盒 app，shell 由不带沙盒的内嵌 XPC 服务 `uTermShellAgent.xpc` 拉起（见 `LocalShellAgent`）。
 /// 内嵌 XPC 服务由系统在第一次连接时拉起，不需要注册后台项目，也不需要用户授权。
 @MainActor
 @Observable
@@ -32,12 +33,6 @@ final class LocalShellService {
             helperState = .failed(error.localizedDescription)
         }
     }
-}
-
-/// 一个 shell：伪终端主端（主程序直接读写）与进程号（调尺寸、结束时交给辅助进程）。
-nonisolated struct LocalShellHandle: @unchecked Sendable {
-    let master: FileHandle
-    let pid: Int32
 }
 
 nonisolated enum LocalShellError: LocalizedError {
@@ -99,29 +94,45 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
-    func openShell(columns: Int, rows: Int) async throws -> LocalShellHandle {
+    /// 连上会话 `id`；还没有就新起一个 shell。
+    func openSession(namespace: String, id: UUID, columns: Int, rows: Int) async throws -> FileHandle {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
             guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
                 once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
                 return
             }
-            agent.openShell(columns: columns, rows: rows) { handle, pid, error in
-                if let handle, pid > 0 {
-                    once.resume(returning: LocalShellHandle(master: handle, pid: pid))
-                } else {
-                    once.resume(throwing: LocalShellError.openFailed(error ?? "未知原因"))
-                }
+            agent.openSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows) { handle, error in
+                once.finish(handle, error: error)
             }
         }
     }
 
-    func resize(pid: Int32, columns: Int, rows: Int) {
-        proxy(onError: { _ in })?.resize(pid: pid, columns: columns, rows: rows)
+    /// 只连已有的会话。
+    func connectSession(namespace: String, id: UUID) async throws -> FileHandle {
+        try await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                return
+            }
+            agent.connectSession(namespace: namespace, id: id.uuidString) { handle, error in
+                once.finish(handle, error: error)
+            }
+        }
     }
 
-    func terminate(pid: Int32) {
-        proxy(onError: { _ in })?.terminate(pid: pid)
+    func listSessions(namespace: String) async throws -> [UUID] {
+        try await withCheckedThrowingContinuation { continuation in
+            let once = LocalShellOnce(continuation)
+            guard let agent = proxy(onError: { once.resume(throwing: LocalShellError.agentUnavailable($0.localizedDescription)) }) else {
+                once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
+                return
+            }
+            agent.listSessions(namespace: namespace) { ids in
+                once.resume(returning: ids.compactMap(UUID.init(uuidString:)))
+            }
+        }
     }
 }
 
@@ -148,5 +159,28 @@ nonisolated private final class LocalShellOnce<T: Sendable>: @unchecked Sendable
         let taken = continuation
         continuation = nil
         return taken
+    }
+}
+
+nonisolated private extension LocalShellOnce where T == FileHandle {
+    func finish(_ handle: FileHandle?, error: String?) {
+        if let handle {
+            resume(returning: handle)
+        } else {
+            resume(throwing: LocalShellError.openFailed(error ?? "未知原因"))
+        }
+    }
+}
+
+/// 一组会话的 socket 目录名。正式版一份；Debug 构建按 App 路径各一份：重编同一个工作树能接回，
+/// 不同 worktree、调试版和日常用的正式版都互不相通。
+nonisolated enum LocalShellNamespace {
+    static var current: String {
+        #if DEBUG
+        let digest = SHA256.hash(data: Data(Bundle.main.bundlePath.utf8))
+        return "debug-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        #else
+        return "release"
+        #endif
     }
 }

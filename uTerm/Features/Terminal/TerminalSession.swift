@@ -13,9 +13,13 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     let terminalView: SwiftTerm.TerminalView
     private(set) var backend: (any TerminalBackend)?
     private var feedTask: Task<Void, Never>?
-    @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
+    @ObservationIgnored let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
-    private var feedGeneration: Int = 0
+    private(set) var feedGeneration: Int = 0
+    /// 正在回放接回的历史输出：屏蔽终端应答和副作用（见 `TerminalSession+HeldSession`）。
+    @ObservationIgnored var isReplayingHeldOutput = false
+    /// 持有 PTY 的后端才有。
+    @ObservationIgnored var heldCheckpoints: TerminalHeldCheckpoints?
 
     // Resize forwarding state. `TerminalContainerView` commits a new size only
     // once the pane has stopped changing, so a splitter drag produces one
@@ -156,6 +160,11 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // `===` identity guard rejects the case where a newer connect bound a
         // different backend at the same generation boundary.
         guard feedGeneration == myGen, self.backend === backend else { return }
+        // 在翻成「已连接」之前恢复画面：手机一接入拿到的快照就是完整的。
+        if let held = backend as? any HeldTerminalBackend {
+            guard await restoreHeldScreen(from: held, generation: myGen),
+                  feedGeneration == myGen, self.backend === backend else { return }
+        }
         connectionState = .connected
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
         // 「已连接」徽标静默挂着。弱引用注册，幂等。
@@ -212,6 +221,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         terminalView.feed(byteArray: ArraySlice(bytes))
         // 这几个字节不走输出流，镜像那边改发一份快照对齐。
         mirrorTap.invalidateAll()
+        heldCheckpoints?.noteScreenChanged()
     }
 
     func detach() {
@@ -249,6 +259,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         lastForwardedResize = nil
         exitObserverTask?.cancel()
         exitObserverTask = nil
+        heldCheckpoints?.cancel()
+        heldCheckpoints = nil
     }
 
     private func startFeedLoop() {
@@ -345,6 +357,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
         // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
         mirrorTap.didFeed(bytes)
+        heldCheckpoints?.noteFed(bytes.count)
         return (bytes.count, elapsedMs)
     }
 

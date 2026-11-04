@@ -56,6 +56,8 @@ final class RemoteHostServer {
     @ObservationIgnored var desktopEnvironment: RemoteDesktopEnvironment
     /// 手机要的「新建本机终端」：开窗口、等会话登记好，回会话 id。测试里换成假的。
     @ObservationIgnored var localShellOpener: RemoteLocalShellOpener = .unavailable
+    /// 手机看会话列表、接入之前要等它：Mac 刚重启时本机终端还没接回来。
+    @ObservationIgnored var sessionRestoration: (@MainActor () async -> Void)?
 
     @ObservationIgnored let registry: TerminalSessionRegistry
     @ObservationIgnored let identity: RemoteIdentityStore

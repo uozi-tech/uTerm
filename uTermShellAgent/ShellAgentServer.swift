@@ -2,168 +2,192 @@ import Darwin
 import Foundation
 import os
 
-/// 辅助程序本体：收连接（只认 uTerm 主程序）、起登录 shell、调尺寸、结束与收尸。
+/// 辅助程序本体：收连接（只认 uTerm 主程序）、拉起 holder、替主程序连 holder 的 socket。
 ///
-/// 所有状态只在 `queue` 上读写。每个 shell 记着是哪条连接开的：主程序那条连接断了（退出、崩溃），
-/// 它开的 shell 一并结束，不留没人管的登录会话。作为内嵌 XPC 服务时生命周期归系统管
-///（`exitsWhenIdle: false`）；`exitsWhenIdle` 只给独立运行的形态用。
-nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
-    static let version = "1"
-    private static let idleExitSeconds = 60
-    private static let killGraceSeconds = 3
+/// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
+nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
+    static let version = "2"
+    /// 等 holder 开始监听的上限。正常几毫秒。
+    private static let spawnWaitSeconds = 5.0
 
     private let queue = DispatchQueue(label: "com.uozi.uTerm.ShellAgent")
     private let log = Logger(subsystem: "com.uozi.uTerm", category: "shell-agent")
 
-    // 以下只在 queue 上。
-    private var shells: [pid_t: Shell] = [:]
-    private var owners: Set<ObjectIdentifier> = []
-    private var idleTimer: DispatchSourceTimer?
-
-    private final class Shell {
-        let pid: pid_t
-        /// 辅助进程自己留的那份主端：调尺寸用。给主程序的是 dup 出去的另一份。
-        let master: Int32
-        let owner: ObjectIdentifier
-        var exitSource: DispatchSourceProcess?
-
-        init(pid: pid_t, master: Int32, owner: ObjectIdentifier) {
-            self.pid = pid
-            self.master = master
-            self.owner = owner
-        }
-    }
-
-    /// 来连的进程要满足的签名条件。nil 只给进程内的匿名监听器用（探针）：那时双方是同一个进程。
-    private let clientRequirement: String?
-    private let exitsWhenIdle: Bool
-
-    init(clientRequirement: String? = LocalShellAgent.clientRequirement, exitsWhenIdle: Bool = true) {
-        self.clientRequirement = clientRequirement
-        self.exitsWhenIdle = exitsWhenIdle
+    override init() {
         super.init()
-        queue.async { self.scheduleIdleExitIfNeeded() }
+        // holder 退出时不留僵尸（XPC 服务还活着的时候它是 holder 的父进程）。
+        signal(SIGCHLD, SIG_IGN)
     }
-
-    // MARK: - 连接
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        if let clientRequirement { connection.setCodeSigningRequirement(clientRequirement) }
+        connection.setCodeSigningRequirement(LocalShellAgent.clientRequirement)
         connection.exportedInterface = NSXPCInterface(with: LocalShellAgentProtocol.self)
-        let owner = ObjectIdentifier(connection)
-        connection.exportedObject = ShellAgentSession(server: self, owner: owner)
-        let ended: @Sendable () -> Void = { [weak self] in self?.connectionEnded(owner) }
-        connection.invalidationHandler = ended
-        connection.interruptionHandler = ended
-        queue.async {
-            self.owners.insert(owner)
-            self.idleTimer?.cancel()
-            self.idleTimer = nil
-        }
+        connection.exportedObject = self
         connection.resume()
         return true
     }
 
-    private func connectionEnded(_ owner: ObjectIdentifier) {
+    func ping(reply: @escaping @Sendable (String) -> Void) {
+        reply(Self.version)
+    }
+
+    func openSession(namespace: String, id: String, columns: Int, rows: Int,
+                     reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
         queue.async {
-            // 中断与失效可能各来一次，只处理第一次。
-            guard self.owners.remove(owner) != nil else { return }
-            for shell in self.shells.values where shell.owner == owner {
-                self.hangUp(shell)
+            do {
+                let directory = try self.directory(namespace: namespace)
+                let name = try Self.socketName(id: id)
+                if let existing = self.connect(directory: directory, name: name) {
+                    reply(existing, nil)
+                    return
+                }
+                let pid = try self.spawnHolder(directory: directory, name: name, columns: columns, rows: rows)
+                let deadline = Date().addingTimeInterval(Self.spawnWaitSeconds)
+                while Date() < deadline {
+                    if let connected = self.connect(directory: directory, name: name) {
+                        reply(connected, nil)
+                        return
+                    }
+                    guard kill(pid, 0) == 0 else { throw AgentError("holder 启动后立刻退出了，详情见 \(directory)/holder.log") }
+                    usleep(5_000)
+                }
+                kill(pid, SIGKILL)
+                throw AgentError("等 holder 就绪超时")
+            } catch {
+                self.log.error("起会话失败：\(error.localizedDescription, privacy: .public)")
+                reply(nil, error.localizedDescription)
             }
-            self.scheduleIdleExitIfNeeded()
         }
     }
 
-    // MARK: - shell
-
-    func openShell(columns: Int, rows: Int, owner: ObjectIdentifier) -> (FileHandle?, Int32, String?) {
-        queue.sync {
-            var size = winsize(ws_row: UInt16(clamping: max(1, rows)), ws_col: UInt16(clamping: max(1, columns)),
-                               ws_xpixel: 0, ws_ypixel: 0)
-            let shellPath = Self.loginShell()
-            let argv0 = "-" + (shellPath as NSString).lastPathComponent
-            let home = NSHomeDirectory()
-            guard let (pid, master) = Self.forkPTY(executable: shellPath, args: [argv0], env: Self.environment(shell: shellPath),
-                                                   directory: home, size: &size) else {
-                let reason = String(cString: strerror(errno))
-                log.error("起 shell 失败：\(reason, privacy: .public)")
-                return (nil, 0, "无法创建伪终端：\(reason)")
-            }
-            _ = fcntl(master, F_SETFD, FD_CLOEXEC)
-            let handed = dup(master)
-            guard handed >= 0 else {
-                kill(-pid, SIGKILL)
-                close(master)
-                return (nil, 0, "无法复制伪终端：\(String(cString: strerror(errno)))")
-            }
-            _ = fcntl(handed, F_SETFD, FD_CLOEXEC)
-            let shell = Shell(pid: pid, master: master, owner: owner)
-            let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: queue)
-            source.setEventHandler { [weak self] in self?.reap(pid) }
-            shell.exitSource = source
-            source.resume()
-            shells[pid] = shell
-            idleTimer?.cancel()
-            idleTimer = nil
-            log.info("起 shell \(shellPath, privacy: .public) pid=\(pid) \(columns)×\(rows)")
-            // XPC 编码这条回复时会 dup 一份，回复发出后 FileHandle 释放、关掉辅助进程这份。
-            return (FileHandle(fileDescriptor: handed, closeOnDealloc: true), pid, nil)
-        }
-    }
-
-    func resize(pid: Int32, columns: Int, rows: Int, owner: ObjectIdentifier) {
+    func connectSession(namespace: String, id: String, reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
         queue.async {
-            guard let shell = self.shells[pid], shell.owner == owner else { return }
-            var size = winsize(ws_row: UInt16(clamping: max(1, rows)), ws_col: UInt16(clamping: max(1, columns)),
-                               ws_xpixel: 0, ws_ypixel: 0)
-            _ = ioctl(shell.master, TIOCSWINSZ, &size)
+            do {
+                let directory = try self.directory(namespace: namespace)
+                let name = try Self.socketName(id: id)
+                guard let connected = self.connect(directory: directory, name: name) else {
+                    throw AgentError("这个终端已经不在了")
+                }
+                reply(connected, nil)
+            } catch {
+                reply(nil, error.localizedDescription)
+            }
         }
     }
 
-    func terminate(pid: Int32, owner: ObjectIdentifier) {
+    func listSessions(namespace: String, reply: @escaping @Sendable ([String]) -> Void) {
         queue.async {
-            guard let shell = self.shells[pid], shell.owner == owner else { return }
-            self.hangUp(shell)
+            guard let directory = try? self.directory(namespace: namespace),
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
+                reply([])
+                return
+            }
+            var live: [String] = []
+            for name in names where name.hasSuffix(".sock") {
+                if let connection = self.connect(directory: directory, name: name) {
+                    try? connection.close()
+                    live.append(String(name.dropLast(".sock".count)))
+                } else {
+                    unlink("\(directory)/\(name)")
+                }
+            }
+            reply(live)
         }
     }
 
-    /// SIGHUP 整个进程组（shell 是会话首进程，进程组号 = pid），宽限几秒还在就 SIGKILL。
-    private func hangUp(_ shell: Shell) {
-        kill(-shell.pid, SIGHUP)
-        kill(shell.pid, SIGHUP)
-        let pid = shell.pid
-        queue.asyncAfter(deadline: .now() + .seconds(Self.killGraceSeconds)) {
-            guard self.shells[pid] != nil else { return }
-            kill(-pid, SIGKILL)
-            kill(pid, SIGKILL)
+    // MARK: - 路径
+
+    private static func socketName(id: String) throws -> String {
+        // id 来自主程序，但要拼路径，只认 UUID。
+        guard UUID(uuidString: id) != nil else { throw AgentError("会话 id 无效") }
+        return id.lowercased() + ".sock"
+    }
+
+    private func directory(namespace: String) throws -> String {
+        guard !namespace.isEmpty, namespace.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else {
+            throw AgentError("命名空间无效")
         }
+        let path = NSHomeDirectory() + "/Library/Application Support/uTerm/sessions/" + namespace
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        return path
     }
 
-    private func reap(_ pid: pid_t) {
-        var status: Int32 = 0
-        _ = waitpid(pid, &status, WNOHANG)
-        guard let shell = shells.removeValue(forKey: pid) else { return }
-        shell.exitSource?.cancel()
-        close(shell.master)
-        log.info("shell 结束 pid=\(pid)")
-        scheduleIdleExitIfNeeded()
-    }
+    // MARK: - 连接
 
-    private func scheduleIdleExitIfNeeded() {
-        guard exitsWhenIdle, owners.isEmpty, shells.isEmpty, idleTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .seconds(Self.idleExitSeconds))
-        timer.setEventHandler { [weak self] in
-            guard let self, self.owners.isEmpty, self.shells.isEmpty else { return }
-            self.log.info("空闲退出")
-            exit(0)
+    /// 切进目录用相对路径连：完整路径可能超过 `sun_path` 上限（用户名长的时候）。
+    /// 工作目录是进程全局的，所以只在 `queue` 上调；别处都用绝对路径。
+    private func connect(directory: String, name: String) -> FileHandle? {
+        guard chdir(directory) == 0 else { return nil }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(name.utf8) + [0]
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+            close(fd)
+            return nil
         }
-        idleTimer = timer
-        timer.resume()
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        let length = socklen_t(MemoryLayout.offset(of: \sockaddr_un.sun_path)! + bytes.count)
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, length) }
+        }
+        guard result == 0 else {
+            close(fd)
+            return nil
+        }
+        // XPC 编码回复时会 dup 一份，回复发出后这个 FileHandle 释放、关掉这边这份。
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 
-    // MARK: - 进程
+    // MARK: - 拉起 holder
+
+    private func spawnHolder(directory: String, name: String, columns: Int, rows: Int) throws -> pid_t {
+        // .../uTerm.app/Contents/XPCServices/uTermShellAgent.xpc → .../uTerm.app/Contents/Helpers/uterm-holder
+        let holder = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Helpers/uterm-holder").path
+        guard FileManager.default.isExecutableFile(atPath: holder) else { throw AgentError("找不到 \(holder)") }
+        let shell = Self.loginShell()
+        let argv0 = "-" + (shell as NSString).lastPathComponent
+        let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), shell, argv0]
+        let environment = Self.environment(shell: shell)
+
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        // 新会话：脱离 XPC 服务的进程组，服务退出时 launchd 清进程组不会清到它。
+        // 只把下面明确打开的 fd 带过去，别把 XPC 服务的东西漏给会活很久的进程。
+        // 信号掩码和处置也要清：这个线程可能屏蔽着信号，带过去 holder 连 SIGTERM 都收不到。
+        var noSignals = sigset_t()
+        sigemptyset(&noSignals)
+        var allSignals = sigset_t()
+        sigfillset(&allSignals)
+        posix_spawnattr_setsigmask(&attributes, &noSignals)
+        posix_spawnattr_setsigdefault(&attributes, &allSignals)
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT
+            | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        let logPath = "\(directory)/holder.log"
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 1, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+        posix_spawn_file_actions_addopen(&actions, 2, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+
+        let cArguments = arguments.map { strdup($0) } + [nil]
+        let cEnvironment = environment.map { strdup($0) } + [nil]
+        defer {
+            cArguments.forEach { free($0) }
+            cEnvironment.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let result = posix_spawn(&pid, holder, &actions, &attributes, cArguments, cEnvironment)
+        guard result == 0 else { throw AgentError("起 holder 失败：\(String(cString: strerror(result)))") }
+        log.info("起 holder \(name, privacy: .public) pid=\(pid) shell=\(shell, privacy: .public) \(columns)×\(rows)")
+        return pid
+    }
 
     /// 用户的登录 shell（目录服务里的 `UserShell`），取不到就用 zsh。
     static func loginShell() -> String {
@@ -194,56 +218,10 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, @unch
               let region = locale.region?.identifier else { return "en_US.UTF-8" }
         return "\(language)_\(region).UTF-8"
     }
-
-    /// `forkpty` + `execve`。参数在 fork 之前全部备好：子进程里只调 async-signal-safe 的函数。
-    static func forkPTY(executable: String, args: [String], env: [String], directory: String,
-                        size: inout winsize) -> (pid_t, Int32)? {
-        let cArgs = args.map { strdup($0) } + [nil]
-        let cEnv = env.map { strdup($0) } + [nil]
-        let cExecutable = strdup(executable)
-        let cDirectory = strdup(directory)
-        defer {
-            cArgs.forEach { free($0) }
-            cEnv.forEach { free($0) }
-            free(cExecutable)
-            free(cDirectory)
-        }
-        var master: Int32 = -1
-        let pid = forkpty(&master, nil, nil, &size)
-        if pid < 0 { return nil }
-        if pid == 0 {
-            _ = chdir(cDirectory)
-            _ = execve(cExecutable, cArgs, cEnv)
-            _exit(127)
-        }
-        return (pid, master)
-    }
 }
 
-/// 每条连接导出的对象：把调用连同「是哪条连接」交给服务端，服务端据此只允许连接动自己开的 shell。
-nonisolated final class ShellAgentSession: NSObject, LocalShellAgentProtocol, @unchecked Sendable {
-    private let server: ShellAgentServer
-    private let owner: ObjectIdentifier
-
-    init(server: ShellAgentServer, owner: ObjectIdentifier) {
-        self.server = server
-        self.owner = owner
-    }
-
-    func ping(reply: @escaping @Sendable (String) -> Void) {
-        reply(ShellAgentServer.version)
-    }
-
-    func openShell(columns: Int, rows: Int, reply: @escaping @Sendable (FileHandle?, Int32, String?) -> Void) {
-        let (handle, pid, error) = server.openShell(columns: columns, rows: rows, owner: owner)
-        reply(handle, pid, error)
-    }
-
-    func resize(pid: Int32, columns: Int, rows: Int) {
-        server.resize(pid: pid, columns: columns, rows: rows, owner: owner)
-    }
-
-    func terminate(pid: Int32) {
-        server.terminate(pid: pid, owner: owner)
-    }
+nonisolated private struct AgentError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }

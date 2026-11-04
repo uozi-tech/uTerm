@@ -9,6 +9,7 @@ struct RemoteControlSettingsView: View {
     @Environment(RemoteHostServer.self) private var server
     @State private var permissions = RemoteDesktopPermissionState()
     private let shell = LocalShellService.shared
+    @AppStorage(LocalShellQuitPolicy.behaviorKey) private var quitBehavior = LocalShellQuitPolicy.Behavior.ask.rawValue
 
     var body: some View {
         SettingsScroll {
@@ -53,6 +54,14 @@ struct RemoteControlSettingsView: View {
                     }
                 }
                 .task { if shell.helperState == .unknown { await shell.checkHelper() } }
+            }
+            SettingsRow(label: "退出 uTerm 时",
+                        hint: "选择保留时，本机终端里的程序继续运行，下次打开 uTerm 时自动接回。崩溃和应用更新一律保留。") {
+                UDSegmented(selection: $quitBehavior, options: [
+                    (value: LocalShellQuitPolicy.Behavior.ask.rawValue, label: String(localized: "询问")),
+                    (value: LocalShellQuitPolicy.Behavior.keep.rawValue, label: String(localized: "保留")),
+                    (value: LocalShellQuitPolicy.Behavior.end.rawValue, label: String(localized: "全部结束")),
+                ])
             }
         }
     }

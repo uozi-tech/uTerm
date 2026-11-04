@@ -122,11 +122,13 @@ final class RemoteHostConnection {
         guard isAuthorized, !isClosed else { return }
         switch message.kind {
         case .subscribeSessions:
-            subscribedToSessions = true
-            sendSessions()
+            afterSessionRestoration { [weak self] in
+                self?.subscribedToSessions = true
+                self?.sendSessions()
+            }
         case .attach:
             guard let request = try? RemoteJSON.decode(RemoteAttachRequest.self, from: message.payload) else { return }
-            attach(request)
+            afterSessionRestoration { [weak self] in self?.attach(request) }
         case .input:
             attachments[message.channel]?.session?.writeRemoteInput(message.payload)
             server.noteRemoteInput()
@@ -160,6 +162,20 @@ final class RemoteHostConnection {
         case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
              .localShellOpened, .terminalImageResult:
             break
+        }
+    }
+
+    /// Mac 刚重启、本机终端还没接回来时，手机不能看到一份缺了它们的列表（它会把「消失了」的标签关掉），
+    /// 接入也不能回「已关闭」。等接回完再说；没有要接回的就是立刻执行。
+    private func afterSessionRestoration(_ action: @escaping @MainActor () -> Void) {
+        guard let restoration = server.sessionRestoration else {
+            action()
+            return
+        }
+        Task { [weak self] in
+            await restoration()
+            guard let self, !self.isClosed else { return }
+            action()
         }
     }
 
