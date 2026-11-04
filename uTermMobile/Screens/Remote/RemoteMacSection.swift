@@ -64,15 +64,11 @@ struct RemoteMacSheet: View {
     @State private var missingHost: RemoteSessionInfo?
     @State private var openingShell = false
     @State private var shellError: String?
+    @State private var pendingClose: RemoteSessionInfo?
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    content
-                }
-                .padding(.vertical, 16)
-            }
+            content
             .background(M.canvas)
             .navigationTitle(client.macName)
             .navigationBarTitleDisplayMode(.inline)
@@ -98,23 +94,40 @@ struct RemoteMacSheet: View {
         } message: {
             Text(shellError ?? "")
         }
+        .alert("关闭「\(pendingClose?.title ?? "")」？",
+               isPresented: Binding(get: { pendingClose != nil }, set: { if !$0 { pendingClose = nil } }),
+               presenting: pendingClose) { session in
+            Button("关闭", role: .destructive) { client.closeSessionOnMac(session.id) }
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("这个终端会在「\(client.macName)」上关闭，里面正在运行的程序也会结束。")
+        }
     }
 
     @ViewBuilder private var content: some View {
         switch client.state {
         case .idle, .connecting:
-            statusRow(icon: "refresh", text: "正在连接 \(client.macName)…")
+            scrolling { statusRow(icon: "refresh", text: "正在连接 \(client.macName)…") }
         case .awaitingApproval(let code):
-            pairing(code)
+            scrolling { pairing(code) }
         case .failed(let message):
-            MInsetGroup {
-                MInsetRow(icon: "warn", iconColor: M.danger, label: "连接失败", sub: message, last: false)
-                MInsetRow(icon: "refresh", label: "重试", chevron: true, last: true) {
-                    Task { await client.connect() }
+            scrolling {
+                MInsetGroup {
+                    MInsetRow(icon: "warn", iconColor: M.danger, label: "连接失败", sub: message, last: false)
+                    MInsetRow(icon: "refresh", label: "重试", chevron: true, last: true) {
+                        Task { await client.connect() }
+                    }
                 }
             }
         case .connected:
             sessions
+        }
+    }
+
+    private func scrolling(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) { content() }
+                .padding(.vertical, 16)
         }
     }
 
@@ -143,49 +156,79 @@ struct RemoteMacSheet: View {
         .padding(.vertical, 24)
     }
 
-    @ViewBuilder private var sessions: some View {
-        MInsetGroup(header: "这台 Mac",
+    // List 而不是 MInsetGroup：swipeActions 只在 List 里生效。
+    private var sessions: some View {
+        List {
+            section("这台 Mac",
                     footer: client.supportsLocalShell
                         ? "在 Mac 上打开你的登录 shell，Mac 上也会弹出对应的终端窗口，断开后留在 Mac 上可以接着用。"
                         : "Mac 上的 uTerm 版本太旧，不能新建终端。请先把 Mac 上的 uTerm 更新到最新版。") {
-            if client.supportsLocalShell {
-                MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
-                          sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
-                    guard !openingShell else { return }
-                    Task { await openLocalShell() }
+                if client.supportsLocalShell {
+                    MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
+                              sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
+                        guard !openingShell else { return }
+                        Task { await openLocalShell() }
+                    }
+                } else {
+                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
                 }
-            } else {
-                MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
             }
-        }
-        MInsetGroup(header: "屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
-            if client.supportsDesktop {
-                MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
-                          chevron: true, last: true) {
-                    openDesktop()
+            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
+                if client.supportsDesktop {
+                    MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
+                              chevron: true, last: true) {
+                        openDesktop()
+                    }
+                } else {
+                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "请更新 Mac 上的 uTerm", last: true)
                 }
-            } else {
-                MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "请更新 Mac 上的 uTerm", last: true)
             }
-        }
-        MInsetGroup(header: "Mac 上的终端",
+            section("Mac 上的终端",
                     footer: "接入后终端按这部手机的尺寸运行，Mac 上那个窗格会标出「正在接管」，断开后恢复。") {
-            if client.sessions.isEmpty {
-                MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
-            } else {
-                ForEach(client.sessions) { session in
-                    MInsetRow(icon: "term", label: session.title, sub: subtitle(session),
-                              chevron: true, last: session.id == client.sessions.last?.id) {
-                        open(session)
+                if client.sessions.isEmpty {
+                    MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
+                } else {
+                    ForEach(client.sessions) { session in
+                        // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
+                        MInsetRow(icon: "term", label: session.title, sub: subtitle(session),
+                                  chevron: true, last: true) {
+                            open(session)
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) { closeAction(session) }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) { closeAction(session) }
                     }
                 }
             }
-        }
-        MInsetGroup {
-            MInsetRow(icon: "x", label: "忘记这台 Mac", danger: true, last: true) {
-                client.forget()
-                dismiss()
+            section(nil, footer: nil) {
+                MInsetRow(icon: "x", label: "忘记这台 Mac", danger: true, last: true) {
+                    client.forget()
+                    dismiss()
+                }
             }
+        }
+        .scrollContentBackground(.hidden)
+        .animation(.default, value: client.sessions.map(\.id))
+    }
+
+    private func section(_ header: String?, footer: String?, @ViewBuilder rows: () -> some View) -> some View {
+        Section {
+            rows()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(M.card)
+        } header: {
+            if let header { Text(header) }
+        } footer: {
+            if let footer { Text(footer) }
+        }
+    }
+
+    /// 老 Mac 不认 `closeSession`（收到会断开整条连接），那时不给这个动作。
+    /// 不用 role: .destructive：那会在确认之前就把行乐观地划走。
+    @ViewBuilder private func closeAction(_ session: RemoteSessionInfo) -> some View {
+        if client.supportsCloseSession {
+            Button { pendingClose = session } label: { Image(systemName: "trash") }
+                .tint(M.danger)
+                .accessibilityLabel("删除")
         }
     }
 
