@@ -350,6 +350,14 @@ open class Terminal {
         selections.append (WeakSelection (value: selection))
     }
 
+    /// uTerm 补丁 #10：选区指向的原文已不存在（清屏、清 scrollback、切换屏幕缓冲区）。
+    func selectionsInvalidate ()
+    {
+        for entry in selections {
+            entry.value?.selectNone ()
+        }
+    }
+
     /// Notifies attached selections that `lines` rows were shifted up in place
     /// within the absolute row range `top...bottom`.
     func selectionsAdjustForInPlaceScroll (top: Int, bottom: Int, lines: Int)
@@ -893,6 +901,7 @@ open class Terminal {
         if buffer === normalBuffer {
             return
         }
+        selectionsInvalidate ()
         semanticNoteAlternateScreenSwitch()
         normalBuffer.x = altBuffer.x
         normalBuffer.y = altBuffer.y
@@ -912,6 +921,7 @@ open class Terminal {
         if buffer === altBuffer {
             return
         }
+        selectionsInvalidate ()
         semanticNoteAlternateScreenSwitch()
         altBuffer.x = normalBuffer.x
         altBuffer.y = normalBuffer.y
@@ -3328,9 +3338,11 @@ open class Terminal {
             }
             clearAllKittyImages()
             updateRange (0)
+            selectionsInvalidate ()
         case 3:
             // Clear scrollback (everything not in viewport)
             let scrollBackSize = buffer.lines.count - rows
+            selectionsInvalidate ()
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
                 buffer.linesTop = 0

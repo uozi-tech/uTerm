@@ -75,6 +75,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // pane size; SwiftUI overrides this on mount anyway, we only need a
         // sane initial so cellDimension is valid when the first frame arrives.
         let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        view.preservesSelectionDuringOutput = true
         self.terminalView = view
         self.mirrorTap = TerminalMirrorTap { [unowned view] in view.getTerminal() }
         super.init()

@@ -148,6 +148,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      */
     public var allowMouseReporting: Bool = true
 
+    /// uTerm 补丁 #10：输出到达时保留用户选区。默认 false，保持上游语义（有输出就清选区）。
+    public var preservesSelectionDuringOutput: Bool = false
+
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
     public var linkReporting: LinkReporting = .implicit
@@ -1595,7 +1598,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     
     open func linefeed(source: Terminal) {
         // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        if clearsSelectionOnOutput {
             selection.selectNone()
             disableSelectionPanGesture()
         }

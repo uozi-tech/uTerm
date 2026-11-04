@@ -217,6 +217,27 @@ uTerm 侧：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalVie
 涉及文件：`Sources/SwiftTerm/Apple/AppleTerminalView.swift` 的 `resetFont()`，iOS 分支改成
 `setNeedsDisplay(bounds)`。uTerm 侧无需改动。上游若已修，跳过。
 
+## 10. 输出到达时保留选区
+
+上游只要 `allowMouseReporting` 为真（默认值，鼠标程序要靠它），`feedPrepare` 与 `linefeed`
+就清选区：**任意一字节输出都会清**，连不换行的 spinner 帧也算。拖选途中选区被清，下一个
+`mouseDragged` 又从当前位置重新起头，于是 Claude Code 这类持续刷新的程序运行时几乎选不中，
+停下来才恢复。
+
+涉及文件：
+
+- `Mac/MacTerminalView.swift` / `iOS/iOSTerminalView.swift`：新增
+  `public var preservesSelectionDuringOutput: Bool = false`（默认保持上游语义），`linefeed`
+  改看 `clearsSelectionOnOutput`。
+- `Apple/AppleTerminalView.swift`：新增 `clearsSelectionOnOutput`，`feedPrepare` 改看它。
+- `Terminal.swift`：新增 `selectionsInvalidate()`，在 ED 2、ED 3、切换屏幕缓冲区时清选区。这三种
+  情况下原文已经没了，ED 3 还会让绝对行号错位（`trimStart` 不通知选区）。scrollback 回收不用管，
+  上游已经用 `adjustForInPlaceScroll` 平移选区。
+
+选区内的文字被程序就地改写时高亮不动，复制到的是改写后的内容，这是有意的取舍。
+
+uTerm 侧入口：`TerminalSession.init` 设 `true`；iOS 未开启。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

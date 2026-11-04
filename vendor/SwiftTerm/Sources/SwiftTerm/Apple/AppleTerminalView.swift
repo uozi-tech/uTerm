@@ -2743,11 +2743,16 @@ extension TerminalView {
         scrollTo (row: newPosition)
     }
       
+    /// uTerm 补丁 #10：上游只有关掉鼠标上报才保留选区；现在也可以单独要求保留。
+    var clearsSelectionOnOutput: Bool {
+        allowMouseReporting && !preservesSelectionDuringOutput
+    }
+
     func feedPrepare()
     {
         search.invalidate()
         // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        if clearsSelectionOnOutput {
             selection.active = false
         }
         startDisplayUpdates()
