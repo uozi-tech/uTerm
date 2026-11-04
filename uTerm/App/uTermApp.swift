@@ -100,7 +100,7 @@ struct uTermApp: App {
         // Pull shared scalar preferences before the first scene body is evaluated.
         // This matters for stateful services such as AccentState, which initialize
         // from UserDefaults once rather than observing it continuously.
-        preferences.start()
+        preferences.startForAppLaunch()
 
         // App.init runs before SwiftUI installs State storage. Bootstrap with local
         // references, then give the same instances to the scenes through State.

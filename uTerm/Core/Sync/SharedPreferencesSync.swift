@@ -77,6 +77,13 @@ final class SharedPreferencesSync {
         self.store = store
     }
 
+    /// App 启动入口。测试宿主共用正式版的设置和 iCloud 命名空间，在里面启动的话，
+    /// 测试改一个设置就会被推给用户的所有设备。
+    func startForAppLaunch() {
+        guard !TestHostEnvironment.isActive else { return }
+        start()
+    }
+
     /// Starts the bridge once for the lifetime of the app.
     func start() {
         guard defaultsObserver == nil, storeObserver == nil else { return }
@@ -136,6 +143,8 @@ final class SharedPreferencesSync {
                     continue
                 }
                 lastValues[definition.key] = local
+                // 没时间戳又等于默认值：是以前种下的默认值，不是用户的选择，不该盖掉别的设备。
+                if localDate == nil, local == definition.defaultValue { continue }
                 lastModified[definition.key] = localDate ?? Date()
                 publish(local, for: definition.key, at: lastModified[definition.key] ?? Date())
             } else if let remote {
@@ -145,11 +154,9 @@ final class SharedPreferencesSync {
                 lastModified[definition.key] = remoteDate ?? Date()
                 defaults.set(lastModified[definition.key], forKey: modifiedKey(definition.key))
             } else {
+                // iCloud 可能只是还没下载完。默认值只落本机、不带时间戳，等它到了直接让路。
                 defaults.set(definition.defaultValue.object, forKey: definition.key)
                 lastValues[definition.key] = definition.defaultValue
-                lastModified[definition.key] = localDate ?? Date()
-                publish(definition.defaultValue, for: definition.key,
-                        at: lastModified[definition.key] ?? Date())
             }
         }
         store.synchronize()

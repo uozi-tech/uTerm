@@ -51,7 +51,7 @@ struct MobileApp: App {
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))
         // Pull shared scalar preferences before the first scene body is evaluated.
-        preferences.start()
+        preferences.startForAppLaunch()
         StartupMaintenance.run(container: modelContainer)
         LaunchTiming.initFinished()
     }
@@ -67,7 +67,7 @@ struct MobileApp: App {
                 .environment(remoteMacs)
                 .environment(cloudKitSync)
                 .task {
-                    sharedPreferences.start()
+                    sharedPreferences.startForAppLaunch()
                 }
         }
         .modelContainer(modelContainer)

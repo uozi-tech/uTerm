@@ -10,8 +10,8 @@ import XCTest
 /// 拨盘选「只读自动」/「AI 审批」都不生效（桌面 `AssistantView` /
 /// `TerminalAgentView` 一直是接上的）。
 ///
-/// 用私有 `UserDefaults` 套件经 `.defaultAppStorage` 注入：测试宿主会起
-/// `SharedPreferencesSync`，直接改 `.standard` 的 `agentSafety` 可能被推进 iCloud KVS。
+/// 用私有 `UserDefaults` 套件经 `.defaultAppStorage` 注入：`.standard` 是宿主 App 的真实设置，
+/// 测试不该改它。
 ///
 /// 隔离：整类 `@MainActor`，不覆写 `tearDown()`，用例开头 `defer` 拆窗（README「隔离」）。
 @MainActor

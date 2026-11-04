@@ -15,12 +15,7 @@ enum BackgroundLaunchMode {
     }
 
     static let reopenPresentation: Presentation = .foreground
-    static var isRunningInTestHost: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-    }
+    static var isRunningInTestHost: Bool { TestHostEnvironment.isActive }
 
     static let requestedByCLI = shouldStartHidden(arguments: ProcessInfo.processInfo.arguments)
     static var shouldStartHidden: Bool { requestedByCLI }
