@@ -32,6 +32,10 @@ import XCTest
 /// 5. `AssistantView` 的排队消息卡与用户消息气泡（这两处改前**连 label 都没有**）。
 @MainActor
 final class TapGestureRowAccessibilityTests: XCTestCase {
+    override func setUp() async throws {
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
 
     // MARK: - 夹具
 

@@ -14,6 +14,27 @@ nonisolated enum TerminalActivity: Equatable, Sendable {
         self == .unknown && alternateScreen ? .running(nil) : self
     }
 
+    /// 先到先得：`probe` 没在 `timeout` 内回来就算判断不了。不能等它响应取消——Citadel 的 exec
+    /// 不响应取消，卡住的通道会一直挂着，而用户正等着关标签。
+    static func probed(
+        timeout: Duration,
+        probe: @escaping @Sendable () async -> TerminalActivity
+    ) async -> TerminalActivity {
+        let (results, continuation) = AsyncStream.makeStream(of: TerminalActivity.self)
+        let probing = Task { continuation.yield(await probe()) }
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            continuation.yield(.unknown)
+        }
+        defer {
+            probing.cancel()
+            timer.cancel()
+            continuation.finish()
+        }
+        for await result in results { return result }
+        return .unknown
+    }
+
     /// 二次确认的文案。nil = 不用确认，直接关。
     var closePrompt: TerminalClosePrompt? {
         switch self {

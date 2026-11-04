@@ -14,6 +14,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     private(set) var backend: (any TerminalBackend)?
     private var feedTask: Task<Void, Never>?
     @ObservationIgnored let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
+    /// 单测换掉它，预算的走向才不取决于这台机器解析得多快。
+    @ObservationIgnored var flushPacing = TerminalFlushPacing.desktop
     @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
     private(set) var feedGeneration: Int = 0
     /// 正在回放接回的历史输出：屏蔽终端应答和副作用（见 `TerminalSession+HeldSession`）。
@@ -308,11 +310,11 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         let myGen = feedGeneration
         let buffer = outputBuffer
         outputFlushTask = Task { [weak self] in
-            let pacing = TerminalFlushPacing.desktop
-            var budget = pacing.baseBytes
+            var budget = self?.flushPacing.baseBytes ?? TerminalFlushPacing.desktop.baseBytes
             while !Task.isCancelled {
                 guard let self else { return }
                 guard self.feedGeneration == myGen else { return }
+                let pacing = self.flushPacing
 
                 if let flush = self.flushPendingOutput(generation: myGen, maxBytes: budget) {
                     budget = pacing.nextBudget(after: budget,

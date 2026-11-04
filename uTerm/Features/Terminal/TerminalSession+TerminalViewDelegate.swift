@@ -76,7 +76,7 @@ extension TerminalSession {
 
     func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
         guard !isReplayingHeldOutput, let string = String(data: content, encoding: .utf8) else { return }
-        let pasteboard = NSPasteboard.general
+        let pasteboard = (source as? CopyableTerminalView)?.pasteboard ?? .general
         pasteboard.clearContents()
         pasteboard.setString(string, forType: .string)
     }

@@ -81,13 +81,21 @@ final class DockMenuController: NSObject {
 @MainActor
 enum ServerWindowOpener {
     static func connect(_ profile: ServerProfile, context: ModelContext, openWindow: OpenWindowAction) {
+        connect(profile, context: context,
+                openSFTP: { openWindow(value: $0) },
+                openWorkspace: { openWindow(value: $0) })
+    }
+
+    /// `OpenWindowAction` 只有 SwiftUI 环境能给，单测走这个。
+    static func connect(_ profile: ServerProfile, context: ModelContext,
+                        openSFTP: (SFTPWindowID) -> Void, openWorkspace: (WorkspaceWindowID) -> Void) {
         profile.lastConnectedAt = Date()
         try? context.save()
         // 「仅 SFTP」主机禁用终端会话：任何连接入口都改开 SFTP 浏览。
         if profile.sftpOnly {
-            openWindow(value: SFTPWindowID(id: UUID(), serverID: profile.id))
+            openSFTP(SFTPWindowID(id: UUID(), serverID: profile.id))
         } else {
-            openWindow(value: WorkspaceWindowID(serverID: profile.id))
+            openWorkspace(WorkspaceWindowID(serverID: profile.id))
         }
     }
 }

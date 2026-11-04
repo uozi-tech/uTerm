@@ -20,6 +20,10 @@ import XCTest
 /// 见 `ClickSelectActivateTests`。这里保留的是 AX 那条路的契约。
 @MainActor
 final class WelcomeServerListContractTests: XCTestCase {
+    override func setUp() async throws {
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
 
     private var windows: [NSWindow] = []
 

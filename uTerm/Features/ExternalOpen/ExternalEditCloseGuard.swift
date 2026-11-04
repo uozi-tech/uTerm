@@ -123,6 +123,13 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
     nonisolated(unsafe) private weak var original: NSWindowDelegate?
     var coordinators: () -> [ExternalOpenCoordinator] = { [] }
     var terminalSessions: () -> [TerminalSession] = { [] }
+    /// 问未上传的文件、立刻上传。默认弹 `runModal`，单测里换掉，否则会挂住。
+    var askAboutUnsyncedFiles: ([ExternalOpenCoordinator]) -> ExternalEditCloseGuard.Decision = {
+        ExternalEditCloseGuard.ask($0, quitting: false)
+    }
+    var uploadUnsyncedFiles: ([ExternalOpenCoordinator]) async -> Bool = {
+        await ExternalEditCloseGuard.flush($0)
+    }
     private var terminalCheck = TerminalCheck.notStarted
 
     init(original: NSWindowDelegate?) {
@@ -149,13 +156,13 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard terminalsAllowClosing(sender) else { return false }
         let coordinators = coordinators()
-        switch ExternalEditCloseGuard.ask(coordinators, quitting: false) {
+        switch askAboutUnsyncedFiles(coordinators) {
         case .cancel:
             return false
         case .uploadThenProceed:
             Task { @MainActor in
                 // 传完后再走一遍 performClose：那时已没有待上传改动，直接放行。
-                if await ExternalEditCloseGuard.flush(coordinators) {
+                if await uploadUnsyncedFiles(coordinators) {
                     terminalCheck = .approved   // 终端刚问过，别再问一遍。
                     sender.performClose(nil)
                 }

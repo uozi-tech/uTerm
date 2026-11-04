@@ -11,6 +11,10 @@ import XCTest
 /// 理由与 `WelcomeServerListContractTests` 相同（SwiftUI 手势只认真实光标）。
 @MainActor
 final class QuickCommandRunLogContractTests: XCTestCase {
+    override func setUp() async throws {
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
 
     private var windows: [NSWindow] = []
 

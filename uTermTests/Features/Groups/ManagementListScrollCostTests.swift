@@ -304,6 +304,7 @@ final class ManagementListScrollCostTests: XCTestCase {
     /// 契约：成员行的「移出 / + 加入」从 `Button` 换成命中区 + 手势之后，
     /// **AX 仍然是一个可按下的按钮**，按下去真的会改分组。
     func testGroupMemberRowRemainsAccessibleButton() async throws {
+        AccessibilityTreeForTests.enable(for: self)
         defer { closeAllWindows() }
         let container = try makeContainer()
         seedHosts(container, groups: 3, hosts: 12, keys: 2)
@@ -327,7 +328,7 @@ final class ManagementListScrollCostTests: XCTestCase {
             .filter { !($0.group ?? "").isEmpty }.count
         XCTAssertGreaterThan(before, 0, "夹具里必须有已分组的主机")
 
-        let pressed = axPress(buttons[0])
+        let pressed = axPress(try XCTUnwrap(buttons.first))
         XCTAssertTrue(pressed, "AX 必须能按下「移出」")
         try await Task.sleep(for: .milliseconds(400))
 

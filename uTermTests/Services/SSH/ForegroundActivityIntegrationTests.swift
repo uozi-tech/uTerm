@@ -26,7 +26,7 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
 
     /// 同一条连接上的多个 shell 各答各的：这是共用连接下最容易答错的地方。
     func testEachShellOnASharedConnectionAnswersForItself() async throws {
-        let port = try XCTUnwrap(try port(named: "UTERM_TEST_FOREGROUND_SSH_PORT"))
+        let port = try self.port(named: "UTERM_TEST_FOREGROUND_SSH_PORT")
         let idle = try await connect(port: port)
         let busy = try await connect(port: port)
         let alsoIdle = try await connect(port: port)
@@ -65,7 +65,7 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
 
     /// 探测不能往用户的屏幕上写东西。
     func testProbeLeavesNoVisibleOutput() async throws {
-        let port = try XCTUnwrap(try port(named: "UTERM_TEST_FOREGROUND_SSH_PORT"))
+        let port = try self.port(named: "UTERM_TEST_FOREGROUND_SSH_PORT")
         let first = try await connect(port: port)
         let second = try await connect(port: port)
         let collected = Task { () -> Data in
@@ -85,7 +85,7 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
 
     /// 没有可用 `ps` 的主机（alpine 自带 busybox）答不上来，不能误报空闲。
     func testHostWithoutUsablePSIsUnknown() async throws {
-        let port = try XCTUnwrap(try port(named: "UTERM_TEST_FOREGROUND_BUSYBOX_SSH_PORT"))
+        let port = try self.port(named: "UTERM_TEST_FOREGROUND_BUSYBOX_SSH_PORT")
         let connection = try await connect(port: port)
         try await Task.sleep(for: .seconds(1))
         let activity = await connection.foregroundActivity(timeout: .seconds(5))
@@ -93,7 +93,7 @@ final class ForegroundActivityIntegrationTests: XCTestCase {
         await connection.close()
     }
 
-    private func port(named name: String) throws -> Int? {
+    private func port(named name: String) throws -> Int {
         guard let value = environment(name), let port = Int(value) else {
             throw XCTSkip("设置 \(name) 后运行此集成测试")
         }

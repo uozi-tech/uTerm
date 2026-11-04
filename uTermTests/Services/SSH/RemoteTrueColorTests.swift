@@ -238,7 +238,12 @@ final class RemoteTrueColorTests: XCTestCase {
     @MainActor
     func testDismissIsRememberedPerHost() async throws {
         let host = "dismiss-\(UUID().uuidString):22"
-        defer { UserDefaults.standard.removeObject(forKey: "trueColorOfferDismissedHosts") }
+        // 测试宿主与正式版共用容器：只摘掉自己加的那台，别抹掉用户记下的主机。
+        defer {
+            let key = "trueColorOfferDismissedHosts"
+            let kept = UserDefaults.standard.stringArray(forKey: key)?.filter { $0 != host } ?? []
+            UserDefaults.standard.set(kept, forKey: key)
+        }
         let first = TerminalSession()
         let firstBackend = ColorBackend(status: .canEnable(rcFile: "/h/.zshenv"), hostKey: host)
         await first.connect(using: firstBackend)

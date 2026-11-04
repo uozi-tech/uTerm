@@ -4,14 +4,12 @@ import UniformTypeIdentifiers
 /// 手机送来的内容写进 Mac 的系统剪贴板（远程桌面粘贴、本机终端贴图共用）。
 /// `NSPasteboard` 可在任意线程用：桌面粘贴在连接队列上调，贴图在后端 actor 上调。
 nonisolated enum RemotePasteboard {
-    static func write(text: String) {
-        let pasteboard = NSPasteboard.general
+    static func write(text: String, to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
 
-    static func write(_ image: TerminalImage) {
-        let pasteboard = NSPasteboard.general
+    static func write(_ image: TerminalImage, to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         switch image.format {
         case .png:

@@ -18,6 +18,10 @@ import XCTest
 /// 容差带判定由 `AgentScrollPolicy` 的单测守。
 @MainActor
 final class AgentChatTailFollowTests: XCTestCase {
+    override func setUp() async throws {
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
 
     private var windows: [NSWindow] = []
 

@@ -155,6 +155,19 @@ final class LocalShellWindowModel {
         }
     }
 
+    /// ⌘W：只剩一个标签时关窗口，否则只关活动标签（同 SSH 终端窗口）。
+    func handleCloseShortcut(closeWindow: () -> Void) {
+        guard panes.count > 1 else {
+            closeWindow()
+            return
+        }
+        if let active {
+            requestClose(active.id)
+        } else {
+            groups.closeActiveTab()   // 活动组是空的：收掉空组。
+        }
+    }
+
     /// 把一个标签切到前台并带出窗口。返回 false = 没有这个标签。
     /// 窗口要在切标签前取：目标标签的视图这时可能还没挂上去，组里正显示的那些才在窗口里。
     @discardableResult
@@ -320,16 +333,7 @@ struct LocalShellWindowView: View {
         .background(LocalShellWindowTitleBinding(model: model))
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
         .background(WorkspaceCloseShortcutInstaller { window in
-            // 只剩一个标签时 ⌘W 关窗口，否则只关活动标签（同 SSH 终端窗口）。
-            guard model.panes.count > 1 else {
-                window.performClose(nil)
-                return
-            }
-            if let active = model.active {
-                model.requestClose(active.id)
-            } else {
-                model.groups.closeActiveTab()   // 活动组是空的：收掉空组。
-            }
+            model.handleCloseShortcut { window.performClose(nil) }
         })
         .background(TerminalWindowCloseGuardInstaller(sessions: { model.panes.map(\.session) }))
         .frame(minWidth: 560, minHeight: 360)
@@ -428,7 +432,7 @@ struct LocalShellTerminalArea: View {
     }
 
     /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
-    private static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
+    static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
         let session = pane.session
         let controlled = session.remoteController != nil
         let shellTitle = session.shellTitle

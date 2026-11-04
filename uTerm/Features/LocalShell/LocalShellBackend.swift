@@ -14,13 +14,16 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     private let initialColumns: Int
     private let initialRows: Int
     private let ownsResponsibility: Bool
+    private let writeImageToPasteboard: @Sendable (TerminalImage) -> Void
 
     init(client: LocalShellAgentClient, namespace: String = LocalShellNamespace.current, sessionID: UUID = UUID(),
-         columns: Int, rows: Int, ownsResponsibility: Bool = false) {
+         columns: Int, rows: Int, ownsResponsibility: Bool = false,
+         writeImageToPasteboard: @escaping @Sendable (TerminalImage) -> Void = { RemotePasteboard.write($0) }) {
         self.ownsResponsibility = ownsResponsibility
         self.client = client
         self.namespace = namespace
         self.sessionID = sessionID
+        self.writeImageToPasteboard = writeImageToPasteboard
         initialColumns = max(1, columns)
         initialRows = max(1, rows)
     }
@@ -59,7 +62,7 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
 
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard await core.isConnected else { throw TerminalImageError.notConnected }
-        RemotePasteboard.write(image)
+        writeImageToPasteboard(image)
         await write(Data([0x16]))
         return .clipboard
     }

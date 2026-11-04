@@ -18,6 +18,10 @@ import XCTest
 /// 绝不打开 —— 打开会走 `coordinator.start` 去真连 10.x 的假主机。
 @MainActor
 final class ForwardingListContractTests: XCTestCase {
+    override func setUp() async throws {
+        AccessibilityTreeForTests.enable(for: self)
+    }
+
 
     private var windows: [NSWindow] = []
 

@@ -431,19 +431,9 @@ actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
     /// Citadel 的 exec 不响应取消，不能用 TaskGroup 等（超时了也会跟着挂住），超时后让它自己跑完。
     func foregroundActivity(timeout: Duration) async -> TerminalActivity {
         guard !isClosed, let connected = connectedClient else { return .unknown }
-        let (results, continuation) = AsyncStream.makeStream(of: TerminalActivity.self)
-        let probe = Task { continuation.yield(await self.probeForeground(on: connected)) }
-        let timer = Task {
-            try? await Task.sleep(for: timeout)
-            continuation.yield(.unknown)
+        return await TerminalActivity.probed(timeout: timeout) {
+            await self.probeForeground(on: connected)
         }
-        defer {
-            probe.cancel()
-            timer.cancel()
-            continuation.finish()
-        }
-        for await result in results { return result }
-        return .unknown
     }
 
     private func probeForeground(on connected: ConnectedClient) async -> TerminalActivity {
