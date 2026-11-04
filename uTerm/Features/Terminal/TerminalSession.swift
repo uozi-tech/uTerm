@@ -38,6 +38,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             if connectionState != .connected {
                 shellTitle = nil
                 resetProgramStatus()
+                resetTrueColorOffer()
             }
             onConnectionStateChange?(connectionState)
         }
@@ -52,6 +53,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 和 `shellTitle` 一样，要在单枚标签自己的 body 里读。
     var programStatus: ProgramStatusRecord?
     @ObservationIgnored var programStatusBoard = ProgramStatusBoard()
+    /// 窗格上的真彩提示，见 `TerminalSession+TrueColor`。
+    var trueColorOffer: TrueColorOffer?
+    @ObservationIgnored var trueColorChecked = false
     /// 程序需要用户注意时调用。默认发系统通知，单测里换掉。
     @ObservationIgnored var attentionSink: (@MainActor (TerminalAttention) -> Void)?
 

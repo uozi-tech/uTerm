@@ -20,6 +20,11 @@ struct RemoteControlledTerminal: View {
             }
             TerminalHostView(terminalView: session.terminalView,
                              isActive: activePaneGate?.isActive ?? true)
+                .overlay(alignment: .topTrailing) {
+                    if let offer = session.trueColorOffer {
+                        TrueColorOfferBanner(session: session, offer: offer)
+                    }
+                }
         }
     }
 }

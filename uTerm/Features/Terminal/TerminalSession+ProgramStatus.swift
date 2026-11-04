@@ -55,6 +55,7 @@ extension TerminalSession {
         case .clear(let id):
             programStatusBoard.clear(id: id)
         case .report(let id, let record):
+            checkTrueColorIfNeeded()
             let needsAttention = programStatusBoard.apply(id: id, record: record)
             if isLooking {
                 programStatusBoard.acknowledgeResults()

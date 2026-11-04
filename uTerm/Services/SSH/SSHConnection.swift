@@ -31,7 +31,7 @@ import NIOSSH
 /// drain 任务串行消费 —— 每个操作 `await` 完成后才处理下一个。writer 就绪前积压的
 /// 操作与就绪后的新操作进同一队列，因此从"调用 write/resize"到"writer.write"
 /// 只有一条有序路径，绝不会乱序。
-actor SSHConnection: TerminalImageReceiving {
+actor SSHConnection: TerminalImageReceiving, TerminalTrueColorConfiguring {
 
     enum SSHConnectionError: Error, LocalizedError {
         case notConnected
@@ -147,7 +147,10 @@ actor SSHConnection: TerminalImageReceiving {
     /// `triggerUserOutboundEvent`，服务端没配 `AcceptEnv` 而拒绝时，带 reply
     /// 的请求会把错误抛出去、整条连接建不起来。不要 reply 就退化成"收不到就忽略"。
     nonisolated private static let ptyEnvironment: [SSHChannelRequestEvent.EnvironmentRequest] = [
-        .init(wantReply: false, name: "LANG", value: "en_US.UTF-8")
+        .init(wantReply: false, name: "LANG", value: "en_US.UTF-8"),
+        // 真彩，见 `RemoteTrueColor`。
+        .init(wantReply: false, name: "COLORTERM", value: RemoteTrueColor.colorTerm),
+        .init(wantReply: false, name: "LC_TERMINAL", value: RemoteTrueColor.terminalName)
     ]
 
     /// 构造器只接受 `Sendable` 的 `ProfileSnapshot` —— 调用方须在自身隔离域内
@@ -349,6 +352,44 @@ actor SSHConnection: TerminalImageReceiving {
     ///
     /// SFTP 开在这条终端连接上（另开一个通道），不另建连接，也不重新认证。
     nonisolated var programsCanReadMacClipboard: Bool { false }
+
+    nonisolated var trueColorHostKey: String { "\(profile.host):\(profile.port)" }
+
+    func trueColorStatus() async throws -> RemoteTrueColor.Status {
+        RemoteTrueColor.parseProbe(try await runSetupCommand(RemoteTrueColor.probeCommand))
+    }
+
+    func enableTrueColor() async throws -> String {
+        let output = try await runSetupCommand(RemoteTrueColor.enableCommand)
+        guard let file = RemoteTrueColor.parseEnabledFile(output) else {
+            throw RemoteTrueColorError.unexpectedOutput
+        }
+        return file
+    }
+
+    /// 跑一条短命令并取输出，带上和交互 shell 相同的环境变量，这样才能看出服务器放行了哪些。
+    /// 登录 shell 的 rc 可能卡住，所以限时；超时后连接不受影响。
+    private func runSetupCommand(_ command: String) async throws -> String {
+        guard !isClosed, let connected = connectedClient else { throw RemoteTrueColorError.notConnected }
+        let client = connected.target
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                var output = Data()
+                let stream = try await client.executeCommandStream(command, environment: Self.ptyEnvironment)
+                for try await chunk in stream {
+                    if case .stdout(let buffer) = chunk { output.append(contentsOf: buffer.readableBytesView) }
+                }
+                return String(decoding: output, as: UTF8.self)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw RemoteTrueColorError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let output = try await group.next() else { throw RemoteTrueColorError.timedOut }
+            return output
+        }
+    }
 
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
