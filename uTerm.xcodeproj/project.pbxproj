@@ -244,6 +244,7 @@
 				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
 				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
 				Features/Remote/Desktop/RemoteEventInjector.swift,
+				Features/Remote/Desktop/RemoteFrameScaler.swift,
 				Features/Remote/Desktop/RemoteVideoEncoder.swift,
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
 				Features/Remote/RemoteControlBanner.swift,

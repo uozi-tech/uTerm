@@ -229,6 +229,20 @@ nonisolated enum RemoteDesktopGeometry {
                 even(displayPixels.height * scale, limit: displayPixels.height))
     }
 
+    /// 采集尺寸：显示器原生像素按整数倍缩小、且两边都不小于视频尺寸的那一档。
+    ///
+    /// ScreenCaptureKit 自己缩放的质量与双线性相当，非整数倍缩小时细字发软、滚动时闪烁；整数倍（2 倍 =
+    /// 每 2×2 取平均）是干净的。剩下的那一截由 `RemoteFrameScaler` 用 Lanczos 缩（调研 §14.5）。
+    /// 5120×2880 → 视频 2144×1206：采 2560×1440；3024×1964 → 1856×1206：不足 2 倍，采原生。
+    static func captureSize(displayPixels: CGSize, stream: (width: Int, height: Int)) -> (width: Int, height: Int) {
+        guard stream.width > 0, stream.height > 0, displayPixels.width > 0, displayPixels.height > 0 else { return stream }
+        let ratio = min(displayPixels.width / CGFloat(stream.width), displayPixels.height / CGFloat(stream.height))
+        let divisor = max(1, Int(ratio.rounded(.down)))
+        let width = max(stream.width, Int(displayPixels.width) / divisor)
+        let height = max(stream.height, Int(displayPixels.height) / divisor)
+        return (width & ~1, height & ~1)
+    }
+
     /// 归一化坐标 → Mac 全局坐标（左上角原点、单位是点，`CGEvent` 用的那套）。夹在显示器内：
     /// 指针贴到最右 / 最下时停在最后一个点上，不会跑到旁边那块屏去。
     static func globalPoint(x: Float, y: Float, displayBounds: CGRect) -> CGPoint {
