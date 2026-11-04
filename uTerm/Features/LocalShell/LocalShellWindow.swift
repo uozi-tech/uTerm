@@ -2,8 +2,10 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 import UDesignKit
+import UPaneGroups
+import UPaneTree
 
-/// 本机终端窗口的身份。一个窗口多个标签，每个标签一个 shell；手机远控「新建终端」优先把标签加进
+/// 本机终端窗口的身份。一个窗口一棵分屏树，每个标签一个 shell；手机远控「新建终端」优先把标签加进
 /// 最近活跃的本机终端窗口（见 `LocalShellWindowRouter`），没有才开新窗口。
 nonisolated struct LocalShellWindowID: Codable, Hashable, Sendable, Identifiable {
     let id: UUID
@@ -26,10 +28,16 @@ final class LocalShellPane: Identifiable {
     let session = TerminalSession()
     /// 登录 shell 的名字（zsh / bash …），标题用。
     let shellName = (LocalShellPane.userShell() as NSString).lastPathComponent
+    /// 窗口里的序号。开标签时定下、不随位置变：标签可以拖来拖去，名字不该跟着改。
+    let ordinal: Int
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
 
-    init(id: UUID = UUID()) {
+    /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
+    var defaultTitle: String { ordinal > 1 ? "\(shellName) \(ordinal)" : shellName }
+
+    init(id: UUID = UUID(), ordinal: Int = 1) {
         self.id = id
+        self.ordinal = ordinal
         session.onConnectionStateChange = { [weak self] state in
             self?.syncRegistration(state)
         }
@@ -75,15 +83,33 @@ final class LocalShellPane: Identifiable {
     }
 }
 
-/// 一个本机终端窗口的标签：每个标签一个 `LocalShellPane`。
+/// 一个本机终端窗口的布局：VSCode 编辑组模型，与 SSH 终端窗口同一套（`UPaneGroupsModel`）。
+/// 标签 id 就是 `LocalShellPane.id`，也就是注册表里的会话 id。
 @MainActor
 @Observable
 final class LocalShellWindowModel {
-    private(set) var panes: [LocalShellPane] = []
-    private(set) var activeID: UUID?
+    let groups = UPaneGroupsModel<LocalShellPane>(policy: UPaneGroupsPolicy(
+        splitButtonMaxGroups: nil,
+        collapsesEmptyGroups: true,
+        allowsLastGroupEmpty: true,
+        releasesHiddenEditorFocusOnTabSwitch: true,
+        keepAlive: TerminalPaneAreaTuning.keepAlive))
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
+    private let startShell: @MainActor (LocalShellPane) -> Void
 
-    var active: LocalShellPane? { panes.first { $0.id == activeID } ?? panes.last }
+    var panes: [LocalShellPane] { groups.allTabs.map(\.payload) }
+    var active: LocalShellPane? { groups.activeTab?.payload }
+
+    init(startShell: @escaping @MainActor (LocalShellPane) -> Void = { pane in
+        Task { await pane.start() }
+    }) {
+        self.startShell = startShell
+        groups.onTabRemoved = { removed, _ in removed.payload.dispose() }
+        // 组内唯一的标签拖到本组边缘 → 组件要一份克隆才分得出屏。shell 没法克隆，新开一个。
+        groups.cloneTab = { [weak self] _ in self?.makeTab() }
+        // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
+        groups.makeTabForNewGroup = { [weak self] in self?.makeTab() }
+    }
 
     func attach(_ registrar: TerminalSessionRegistrar) {
         self.registrar = registrar
@@ -91,55 +117,48 @@ final class LocalShellWindowModel {
         syncFocus()
     }
 
-    /// 新开一个标签并切过去，返回它的会话 id（可以预先指定）。
+    /// 在 `groupID`（默认活动组）新开一个标签并切过去，返回它的会话 id（可以预先指定）。
     @discardableResult
-    func addTab(id: UUID = UUID()) -> UUID {
-        let pane = LocalShellPane(id: id)
-        if let registrar { pane.attach(registrar) }
-        panes.append(pane)
-        activeID = id
-        syncFocus()
-        Task { await pane.start() }
+    func addTab(id: UUID = UUID(), in groupID: UUID? = nil) -> UUID {
+        let tab = makeTab(id: id)
+        groups.openTab({ tab }, in: groupID)
         return id
-    }
-
-    func activate(_ id: UUID) {
-        guard panes.contains(where: { $0.id == id }) else { return }
-        activeID = id
-        syncFocus()
     }
 
     /// 关掉一个标签（连同它的 shell）。返回 false = 没有这个标签。
     @discardableResult
     func close(_ id: UUID) -> Bool {
-        guard let index = panes.firstIndex(where: { $0.id == id }) else { return false }
-        let pane = panes.remove(at: index)
-        pane.dispose()
-        if activeID == id {
-            activeID = panes.isEmpty ? nil : panes[min(index, panes.count - 1)].id
-        }
-        syncFocus()
+        guard let at = groups.locateTab(id) else { return false }
+        groups.closeTab(groupID: at.groupID, index: at.index)
         return true
+    }
+
+    func splitActiveGroup(direction: SplitDirection) {
+        guard let groupID = groups.activeGroupID ?? groups.root.firstLeafID else { return }
+        groups.splitGroup(groupID, direction: direction)
     }
 
     func disposeAll() {
         for pane in panes { pane.dispose() }
-        panes.removeAll()
-        activeID = nil
+        groups.reset()
     }
 
-    /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
-    func title(for pane: LocalShellPane) -> String {
-        let same = panes.filter { $0.shellName == pane.shellName }
-        guard same.count > 1, let index = same.firstIndex(where: { $0.id == pane.id }), index > 0 else {
-            return pane.shellName
-        }
-        return "\(pane.shellName) \(index + 1)"
-    }
-
-    private func syncFocus() {
+    func syncFocus() {
         guard let registrar else { return }
         registrar.registry.setFocusedSession(active?.id, inWindow: registrar.windowID)
+    }
+
+    private func makeTab(id: UUID = UUID()) -> UPaneTab<LocalShellPane> {
+        let pane = LocalShellPane(id: id, ordinal: nextOrdinal())
+        if let registrar { pane.attach(registrar) }
+        startShell(pane)
+        return UPaneTab(id: id, payload: pane)
+    }
+
+    /// 最小的没人用的序号。
+    private func nextOrdinal() -> Int {
+        let used = Set(panes.map(\.ordinal))
+        return (1...).first { !used.contains($0) } ?? 1
     }
 }
 
@@ -194,52 +213,19 @@ final class LocalShellWindowRouter {
     }
 }
 
-/// 本机终端的一枚标签。样式与 SFTP 标签条同一套（`WSCanvasTab`）：激活胶囊用终端底色，就是下面那张终端卡。
-/// 单独成视图：`shellTitle` 可能高频变化，只让这一枚标签跟着重算，不牵动整个窗口。
-private struct LocalShellTab: View {
-    let pane: LocalShellPane
-    /// shell 没设标题时显示的名字。
-    let fallbackTitle: String
-    let active: Bool
-    let activeFill: SwiftUI.Color
-    let onSelect: () -> Void
-    let onClose: () -> Void
-
-    var body: some View {
-        WSCanvasTab(name: pane.session.shellTitle ?? fallbackTitle, active: active,
-                    activeFill: activeFill, closeHelp: "关闭这个 shell",
-                    onSelect: onSelect, onClose: onClose) { _ in
-            Circle()
-                .fill(pane.session.connectionState == .connected ? UD.success : UD.text4)
-                .frame(width: 6, height: 6)
-            if pane.session.remoteController != nil {
-                Image(systemName: "iphone").font(.system(size: 10)).foregroundStyle(UD.accent)
-                    .help("正在被手机接管")
-            }
-        }
-        .help(pane.session.shellTitle ?? fallbackTitle)
-    }
-}
-
 struct LocalShellWindowView: View {
     let windowID: LocalShellWindowID?
 
     @State private var model = LocalShellWindowModel()
     @Environment(TerminalSessionRegistry.self) private var registry
     @Environment(\.controlActiveState) private var controlActiveState
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
-
-    private var terminalBackground: SwiftUI.Color {
-        SwiftUI.Color(nsColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             titleBar
-            content
+            LocalShellTerminalArea(model: model)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(terminalBackground)
                 .udCard()
                 .padding(.horizontal, UD.Layout.cardInset)
                 .padding(.bottom, UD.Layout.cardInset)
@@ -248,6 +234,14 @@ struct LocalShellWindowView: View {
         .background(UD.pageBg)
         .background(WorkspaceWindowChrome(serverName: "本机终端", background: WS.canvasNSColor))
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
+        .background(WorkspaceCloseShortcutInstaller { window in
+            // 只剩一个标签时 ⌘W 关窗口，否则只关活动标签（同 SSH 终端窗口）。
+            if model.panes.count > 1 {
+                model.groups.closeActiveTab()
+            } else {
+                window.performClose(nil)
+            }
+        })
         .frame(minWidth: 560, minHeight: 360)
         .task {
             guard let windowID else { return }
@@ -256,7 +250,7 @@ struct LocalShellWindowView: View {
             model.attach(TerminalSessionRegistrar(
                 registry: registry, windowID: windowID.id, windowKind: TerminalWindowKind.terminal,
                 customTitle: { [weak windowModel] paneID in
-                    windowModel?.panes.first { $0.id == paneID }.map { windowModel?.title(for: $0) ?? $0.shellName }
+                    windowModel?.groups.tab(paneID)?.payload.defaultTitle
                 }))
             // 手机远控「同时关闭 Mac 上的终端」走这里。
             registry.setCloser(forWindow: windowID.id) { [weak windowModel] paneID in
@@ -271,8 +265,19 @@ struct LocalShellWindowView: View {
             if state == .key { LocalShellWindowRouter.shared.markActive(windowID: windowID.id) }
         }
         // 最后一个标签关掉（Mac 上点 ×，或手机远控连 Mac 上的一起关）就关窗口。
-        .onChange(of: model.panes.isEmpty) { _, empty in
+        .onChange(of: model.groups.isEmpty) { _, empty in
             if empty { dismiss() }
+        }
+        .onChange(of: model.active?.id) { _, _ in model.syncFocus() }
+        // 全局 CommandGroup 的通知广播到所有窗口，只让前台窗口响应。
+        .onReceive(NotificationCenter.default.publisher(for: .newTerminalTab)) { _ in
+            if controlActiveState == .key { model.addTab() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneHorizontal)) { _ in
+            if controlActiveState == .key { model.splitActiveGroup(direction: .horizontal) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .splitFocusedPaneVertical)) { _ in
+            if controlActiveState == .key { model.splitActiveGroup(direction: .vertical) }
         }
         .onDisappear {
             model.disposeAll()
@@ -280,48 +285,88 @@ struct LocalShellWindowView: View {
         }
     }
 
-    // MARK: - 标题栏（标签条）
+    // MARK: - 标题栏
 
     private var titleBar: some View {
-        HStack(spacing: 6) {
-            SwiftUI.Color.clear.frame(width: 68)   // 让位窗口红绿灯
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(model.panes) { pane in
-                        tab(pane)
-                    }
-                    WSIconButton(systemName: "plus", help: "新开本机终端") { model.addTab() }
-                        .padding(.leading, 4)
-                }
-                // 胶囊比卡片轮廓 / 投影多出 1–2pt，留出来别被 ScrollView 裁掉。
-                .padding(.vertical, 2)
-            }
-            Spacer(minLength: 8)
-            WSIconButton(systemName: "power", help: "结束全部 shell 并关闭窗口") { dismiss() }
+        Text("本机终端")
+            .font(UD.mono(13))
+            .foregroundStyle(UD.text3)
+            // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动。
+            .allowsHitTesting(false)
+            .frame(height: 38)
+            .frame(maxWidth: .infinity)
+            .background(WindowDragHandle(fill: WS.canvasNSColor))
+    }
+}
+
+/// 本机终端窗口的终端区。拖放分屏、分隔条、按下即激活都在组件里，参数与 SSH 终端窗口的 `TerminalArea` 一致。
+struct LocalShellTerminalArea: View {
+    let model: LocalShellWindowModel
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let background = SwiftUI.Color(
+            nsColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
+        UPaneGroupArea(
+            model: model.groups,
+            dragType: .utermTabID,
+            stripHeight: WorkspacePaneHeaderLayout.height,
+            showsSplitButton: true,
+            showsActiveGroupRing: false,
+            splitButtonDirection: .automatic,
+            splitButtonIcon: .system("rectangle.split.2x1"),
+            descriptor: { tab in Self.descriptor(for: tab.payload) },
+            content: { tab, _ in
+                LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
+            },
+            emptyGroup: { _ in background },
+            onRequestClose: { tab in model.close(tab.id) },
+            stripAccessory: { groupID in newTabButton(groupID) })
+            .uPaneGroupStyle(.card)
+            .uPaneGroupWells()
+    }
+
+    /// 在每个 chip 自己的 body 里求值：`shellTitle` 可能高频变化，只让这一枚标签跟着重算。
+    private static func descriptor(for pane: LocalShellPane) -> UPaneTabDescriptor {
+        let session = pane.session
+        let controlled = session.remoteController != nil
+        let shellTitle = session.shellTitle
+        return UPaneTabDescriptor(
+            title: shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle,
+            icon: .system(controlled ? "iphone" : "terminal"),
+            leadingDot: session.connectionState == .connected ? UD.success : UD.text4,
+            help: controlled ? "正在被手机接管" : shellTitle ?? pane.defaultTitle)
+    }
+
+    private func newTabButton(_ groupID: UUID) -> some View {
+        Button {
+            model.addTab(in: groupID)
+        } label: {
+            Image(systemName: "plus")
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
         }
-        .padding(.horizontal, 8)
-        .frame(height: 38)
-        .frame(maxWidth: .infinity)
-        .background(WindowDragHandle(fill: WS.canvasNSColor))
+        .buttonStyle(.plain)
+        .iconButtonHover(cornerRadius: 6)
+        .help("新开本机终端（⌘T）")
+        .accessibilityLabel(Text("新开本机终端"))
     }
+}
 
-    private func tab(_ pane: LocalShellPane) -> some View {
-        LocalShellTab(pane: pane, fallbackTitle: model.title(for: pane), active: pane.id == model.active?.id,
-                      activeFill: terminalBackground,
-                      onSelect: { model.activate(pane.id) }, onClose: { model.close(pane.id) })
+/// 一个标签的面板内容。单独成视图：连接状态只让它自己重算。
+private struct LocalShellPaneView: View {
+    let pane: LocalShellPane
+    let background: SwiftUI.Color
+    let onClose: () -> Void
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(background)
     }
-
-    // MARK: - 内容
 
     @ViewBuilder private var content: some View {
-        if let pane = model.active {
-            paneContent(pane).id(pane.id)
-        } else {
-            SwiftUI.Color.clear
-        }
-    }
-
-    @ViewBuilder private func paneContent(_ pane: LocalShellPane) -> some View {
         switch pane.session.connectionState {
         case .idle, .connecting:
             VStack(spacing: 10) {
@@ -332,13 +377,13 @@ struct LocalShellWindowView: View {
         case .connected:
             RemoteControlledTerminal(session: pane.session)
         case .failed(let message):
-            stateView(pane, systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
+            stateView(systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
         case .disconnected:
-            stateView(pane, systemImage: "checkmark.circle", title: "shell 已退出", detail: "")
+            stateView(systemImage: "checkmark.circle", title: "shell 已退出", detail: "")
         }
     }
 
-    private func stateView(_ pane: LocalShellPane, systemImage: String, title: String, detail: String) -> some View {
+    private func stateView(systemImage: String, title: String, detail: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: systemImage).font(.largeTitle).foregroundStyle(UD.text3)
             Text(title).font(.headline).foregroundStyle(UD.text)
@@ -349,7 +394,7 @@ struct LocalShellWindowView: View {
             }
             HStack(spacing: 10) {
                 UDButton(title: "重新启动") { Task { await pane.start() } }
-                UDButton(title: "关闭标签", style: .secondary) { model.close(pane.id) }
+                UDButton(title: "关闭标签", style: .secondary, action: onClose)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
