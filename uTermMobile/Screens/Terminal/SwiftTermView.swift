@@ -12,6 +12,9 @@ extension EnvironmentValues {
 /// 不经过任何我们的代码——第一个标签已连上、第二个标签正在建连时，键盘就是这样冒出来的。
 final class MTerminalView: SwiftTerm.TerminalView {
     weak var controller: MobileTerminalController?
+    /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，
+    /// 见 `MTerminalContainerView`。
+    var hasHostedLayout = false
 
     override var canBecomeFirstResponder: Bool { controller?.canTakeKeyboard ?? false }
 
@@ -117,7 +120,7 @@ struct SwiftTermView: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.mTerminalHoldsFontSize) private var holdsFontSize
 
-    func makeUIView(context: Context) -> SwiftTerm.TerminalView {
+    func makeUIView(context: Context) -> MTerminalContainerView {
         // 复用控制器已持有的终端视图：横屏翻 size class 会令外壳在 Tab/Split 间切换、
         // TerminalScreen 连带重建——复用同一视图可保活 SwiftTerm 的屏幕缓冲与回滚，
         // 既不空白也不断连。仅首次创建新视图。
@@ -158,23 +161,25 @@ struct SwiftTermView: UIViewRepresentable {
         // 键盘默认展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、已连上、用户没收起——
         // 失败重试成功后失败页换回本视图时走这里）。
         if isActive, autoFocus { DispatchQueue.main.async { controller.focusKeyboard() } }
-        return view
+        return MTerminalContainerView(terminalView: view, fontSize: fontSize)
     }
 
-    func updateUIView(_ uiView: SwiftTerm.TerminalView, context: Context) {
+    func updateUIView(_ container: MTerminalContainerView, context: Context) {
+        let uiView = container.terminalView
         context.coordinator.onInteract = onInteract
         // 外观切换（日 / 夜）时重应用配色。只在日夜真的变了才装：父视图每次重算都会
         // 调到这里（拖分隔条 / 拖标签时每帧一次），而装一次配色会清掉 SwiftTerm 的属性
         // 与颜色缓存并整屏重绘——所有挂着的终端（含看不见的标签）都会跟着每帧重绘。
         applyColorsIfNeeded(to: uiView, coordinator: context.coordinator)
-        // 字号随屏幕 / 视图宽度自适应：旋转、分屏、尺寸变化时换字（换字会触发
-        // SwiftTerm 重排并回调 sizeChanged → resize PTY）。和新宽度在同一帧生效，不留一帧
-        // 旧字号；拖分隔条时等松手再换，否则几乎每帧都要重排一次。
-        if !holdsFontSize, abs(uiView.font.pointSize - fontSize) > 0.1 {
-            uiView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        }
+        // 字号随屏幕 / 视图宽度自适应：旋转、分屏时和新宽度一起提交，缓冲区只重排一次。
+        // 拖分隔条时等松手再换，否则停顿一下就要重排一次。
+        if !holdsFontSize { container.setFontSize(fontSize) }
         // Agent 模式（isActive=false）：主动收键盘，否则终端键盘盖住 Agent 输入框。
         if !isActive, uiView.isFirstResponder { _ = uiView.resignFirstResponder() }
+    }
+
+    static func dismantleUIView(_ container: MTerminalContainerView, coordinator: Coordinator) {
+        container.cancelHold()
     }
 
     private func applyColorsIfNeeded(to view: SwiftTerm.TerminalView, coordinator: Coordinator) {

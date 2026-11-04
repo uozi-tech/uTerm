@@ -63,6 +63,8 @@ final class MobileTerminalController {
     @ObservationIgnored private var connectGeneration = 0
     @ObservationIgnored private var inputContinuation: AsyncStream<TerminalInput>.Continuation?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
+    /// 终端当前的行列数。新传输接上时补发：首次排布和重连时，尺寸可能早于输入通道就绪。
+    @ObservationIgnored private var latestSize: (cols: UInt16, rows: UInt16)?
     @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
     /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
@@ -287,6 +289,9 @@ final class MobileTerminalController {
         // 后端 actor 没有语言层面的保证，快速连打可能乱序。
         let (inputs, continuation) = AsyncStream.makeStream(of: TerminalInput.self)
         inputContinuation = continuation
+        if let latestSize {
+            continuation.yield(.resize(cols: latestSize.cols, rows: latestSize.rows))
+        }
         inputTask = Task {
             for await input in inputs {
                 switch input {
@@ -375,12 +380,12 @@ final class MobileTerminalController {
     }
     private static let promptSubmitDelay = Duration.milliseconds(120)
 
-    /// 尺寸停稳后才告诉远端，只发最后一个。一次布局变化常常连着改几次网格（换字号 + 改宽度、
-    /// 拖分隔条、键盘升降），每发一次远端就收一个 SIGWINCH、全屏程序就整屏重绘一遍。
+    /// 把新尺寸告诉远端。尺寸已由 `MTerminalContainerView` 等停稳才提交，这里不再按时间防抖：
+    /// 缓冲区已经重排，程序越早知道越好。只合并同一轮主线程里的连续变化。
     func resize(cols: UInt16, rows: UInt16) {
+        latestSize = (cols, rows)
         resizeTask?.cancel()
         resizeTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
             self?.inputContinuation?.yield(.resize(cols: cols, rows: rows))
         }
