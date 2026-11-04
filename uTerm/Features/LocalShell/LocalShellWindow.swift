@@ -237,6 +237,16 @@ final class LocalShellWindowRouter {
         activationOrder.append(windowID)
     }
 
+    /// 新开一个本机 shell：有本机终端窗口就加一个标签进去，没有才开窗口。返回预先定好的会话 id。
+    @discardableResult
+    func openShell(openWindow: (LocalShellWindowID) -> Void) -> UUID {
+        let paneID = UUID()
+        if !openTabInExistingWindow(paneID: paneID) {
+            openWindow(LocalShellWindowID(id: UUID(), firstPaneID: paneID))
+        }
+        return paneID
+    }
+
     /// 在最近活跃的本机终端窗口里开一个标签（会话 id = `paneID`）并带到前台。
     /// 返回 false = 当前没有本机终端窗口，调用方应开新窗口。
     func openTabInExistingWindow(paneID: UUID) -> Bool {
@@ -251,6 +261,30 @@ final class LocalShellWindowRouter {
             return true
         }
         return false
+    }
+}
+
+extension OpenWindowAction {
+    /// 所有「新建本机终端」入口（欢迎页、菜单、Dock、手机远控）都走这里。
+    @MainActor
+    @discardableResult
+    func newLocalShell() -> UUID {
+        LocalShellWindowRouter.shared.openShell { self(value: $0) }
+    }
+}
+
+/// 窗口标题跟着活动标签走，多个本机终端窗口在 Dock 菜单里才分得清。单独成视图：`shellTitle`
+/// 可能高频变化，只让这里跟着重算，不牵动整个窗口的 body。
+struct LocalShellWindowTitleBinding: View {
+    let model: LocalShellWindowModel
+
+    var body: some View {
+        WindowTitleBinding(title: ServerChromeTitle.localShellWindowTitle(tabTitle: activeTabTitle))
+    }
+
+    private var activeTabTitle: String? {
+        guard let pane = model.active else { return nil }
+        return pane.session.shellTitle.map(TerminalArea.clippedTabTitle) ?? pane.defaultTitle
     }
 }
 
@@ -273,7 +307,8 @@ struct LocalShellWindowView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.pageBg)
-        .background(WorkspaceWindowChrome(serverName: "本机终端", background: WS.canvasNSColor))
+        .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
+        .background(LocalShellWindowTitleBinding(model: model))
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
         .background(WorkspaceCloseShortcutInstaller { window in
             // 只剩一个标签时 ⌘W 关窗口，否则只关活动标签（同 SSH 终端窗口）。

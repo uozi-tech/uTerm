@@ -128,6 +128,21 @@ final class MobileFixturesTerminalTests: XCTestCase {
         controller.close()
     }
 
+    /// 尺寸早于传输就绪（首次排布、重连）：接上后要补发，否则 PTY 一直停在默认大小。
+    func testSizeReportedBeforeConnectReachesTransport() async throws {
+        let (c, h, relay) = try host()
+        let (controller, handles) = MobileFakeTerminal.controller(.idle)
+        controller.resize(cols: 57, rows: 23)
+        controller.start(profile: h, container: c, relay: relay)
+        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        _ = await MobileFakeTerminal.waitUntil(timeout: .milliseconds(300)) { false }
+        let ledger = await handles.latest!.ledger
+        XCTAssertEqual(ledger.lastCols, 57)
+        XCTAssertEqual(ledger.lastRows, 23)
+        controller.close()
+    }
+
     /// 一连串尺寸变化只把最后一个告诉远端：每发一次远端就收一个 SIGWINCH，全屏程序整屏重绘一遍。
     func testResizeBurstReachesTransportOnce() async throws {
         let (c, h, relay) = try host()

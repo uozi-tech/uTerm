@@ -35,7 +35,6 @@ struct TerminalWindowView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismiss) private var dismiss
     @Environment(ForwardingCoordinator.self) private var forwarding
 
     /// 标题栏 / 端口转发 / Agent / ⌘T 当前作用的主机：活动终端标签那台 → 最近一次活动的那台 →
@@ -67,7 +66,6 @@ struct TerminalWindowView: View {
 
     @ViewBuilder
     private func terminalBody(server: ServerProfile, windowID: TerminalWindowID) -> some View {
-        let chromeTitle = ServerChromeTitle.serverTitle(serverName: server.name, groupName: server.group)
         VStack(spacing: 0) {
             TerminalWindowTitleBar(
                 host: server.displayEndpoint,
@@ -76,8 +74,7 @@ struct TerminalWindowView: View {
                 activeForwardCount: forwarding.activeCount(forServer: server.id),
                 onOpenForwarding: {
                     openWindow(value: PortForwardWindowID(id: UUID(), serverID: server.id))
-                },
-                onDisconnect: { dismiss() })
+                })
 
             // 内容区两态切换，同一张内容卡（分区方案 v3：距窗口左右 8pt，标签胶囊条 +
             // 终端凹槽 / Agent 对话都在卡里）；状态栏两态共用、坐在画布上，提到 switch 外。
@@ -102,7 +99,10 @@ struct TerminalWindowView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(UD.pageBg)
-        .background(WorkspaceWindowChrome(serverName: chromeTitle, background: WS.canvasNSColor))
+        .background(WorkspaceWindowChrome(
+            serverName: ServerChromeTitle.terminalWindowTitle(serverName: server.name,
+                                                              groupName: server.group),
+            background: WS.canvasNSColor))
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
         })
@@ -295,14 +295,13 @@ private struct TerminalWindowRouterBinding: NSViewRepresentable {
 // MARK: - 标题栏
 
 /// 终端窗口自绘标题栏：左让位红绿灯 + 「终端 ⇄ Agent」分段开关；居中主机 · 已连接；
-/// 右端口转发 · 断开。38px，分区方案 v3：画在窗口画布上，无底色、无分隔线。
+/// 右端口转发。38px，分区方案 v3：画在窗口画布上，无底色、无分隔线。
 struct TerminalWindowTitleBar: View {
     let host: String
     let session: TerminalSession?
     @Binding var mode: TerminalWindowContentMode
     let activeForwardCount: Int
     let onOpenForwarding: () -> Void
-    let onDisconnect: () -> Void
 
     var body: some View {
         ZStack {
@@ -335,7 +334,6 @@ struct TerminalWindowTitleBar: View {
                             .allowsHitTesting(false)
                     }
                 }
-                WSIconButton(systemName: "power", help: "断开并关闭窗口", action: onDisconnect)
             }
             .padding(.horizontal, 8)
         }

@@ -189,14 +189,9 @@ struct uTermApp: App {
             open(value: TerminalWindowID(id: windowID, serverID: serverID))
             return windowID
         }
-        // 本机终端：有本机终端窗口就加一个标签进去，没有才开窗口；返回预先定好的会话 id。
         terminalRegistry.openLocalShell = {
             UTermLifecycleDelegate.showGUI()
-            let paneID = UUID()
-            if !LocalShellWindowRouter.shared.openTabInExistingWindow(paneID: paneID) {
-                open(value: LocalShellWindowID(id: UUID(), firstPaneID: paneID))
-            }
-            return paneID
+            return open.newLocalShell()
         }
         // 上次退出时留下的本机终端接回来。`open` 只能在 Scene 环境里拿到，所以在这里装；后台隐藏启动时等 GUI 打开。
         LocalShellRestorer.shared.install { windowID, firstPaneID in
@@ -221,6 +216,22 @@ struct uTermApp: App {
             LocalShellRestorer.shared.restoreIfNeeded()
             SSHSessionRestorer.shared.restoreIfNeeded()
         }
+        let context = modelContainer.mainContext
+        let lock = lockModel
+        // 不走 showGUI：它在没有窗口时会多开一个欢迎窗口。
+        lifecycleDelegate.dockMenu = DockMenuController(
+            isLocked: { !lock.isUnlocked },
+            recentServers: { DockMenuController.recentServers(in: context) },
+            onNewLocalShell: {
+                NSApp.activate(ignoringOtherApps: true)
+                open.newLocalShell()
+            },
+            onOpenServer: { serverID in
+                let descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.id == serverID })
+                guard let profile = try? context.fetch(descriptor).first else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                ServerWindowOpener.connect(profile, context: context, openWindow: open)
+            })
     }
 
     /// 把命令行接口的开关接到服务端起停上。

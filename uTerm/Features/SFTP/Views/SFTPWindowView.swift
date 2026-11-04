@@ -67,8 +67,7 @@ struct SFTPWindowView: View {
         let chromeTitle = ServerChromeTitle.serverTitle(serverName: server.name, groupName: server.group)
         VStack(spacing: 0) {
             SFTPTitleBar(server: server, serverTitle: chromeTitle,
-                         state: activeModel?.state ?? .idle,
-                         onDisconnect: { closeWindow() })
+                         state: activeModel?.state ?? .idle)
             SFTPTabBar(
                 tabs: tabs, activeID: effectiveActiveID, serverHost: server.host,
                 onSelect: { activeTabID = $0 },
@@ -153,7 +152,7 @@ struct SFTPWindowView: View {
         }
     }
 
-    /// 标题栏「断开并关闭窗口」/ 关最后一个标签：不走 `windowShouldClose`，自己先问一遍
+    /// 关最后一个标签：不走 `windowShouldClose`，自己先问一遍
     /// 没上传的外部编辑改动。
     private func closeWindow() {
         ExternalEditCloseGuard.confirmThenClose(tabs.map(\.externalOpen)) {
@@ -287,13 +286,12 @@ struct SFTPTabBar: View {
 // MARK: - 标题栏
 
 /// 自绘 SFTP 标题栏（替代系统 toolbar）——对齐设计稿：左侧让位窗口红绿灯，居中
-/// 文件夹图标 + `SFTP` + `user@host`(mono) + 连接状态胶囊，右侧断开按钮。38px，
+/// 文件夹图标 + `SFTP` + `user@host`(mono) + 连接状态胶囊。38px，
 /// 分区方案 v3：画在窗口画布上，无底色、无分隔线。彻底脱离系统 Liquid Glass。
 struct SFTPTitleBar: View {
     let server: ServerProfile
     let serverTitle: String
     let state: FileBrowserModel.State
-    let onDisconnect: () -> Void
 
     var body: some View {
         ZStack {
@@ -317,15 +315,6 @@ struct SFTPTitleBar: View {
             }
             // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动（见 WindowDragHandle）。
             .allowsHitTesting(false)
-
-            // 两侧：左让位红绿灯（~68px），右断开按钮。
-            HStack(spacing: 2) {
-                Color.clear.frame(width: 68)
-                Spacer()
-                WSIconButton(systemName: "power", help: "断开并关闭窗口",
-                             action: onDisconnect)
-            }
-            .padding(.horizontal, 8)
         }
         .frame(height: 38)
         .frame(maxWidth: .infinity)

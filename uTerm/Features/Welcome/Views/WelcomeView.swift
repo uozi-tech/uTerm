@@ -110,7 +110,10 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             WelcomeTitleBar()
-            WelcomeToolbar(query: $filter.query, onNewServer: { formRoute = .new })
+            WelcomeToolbar(
+                query: $filter.query,
+                onNewLocalShell: { openWindow.newLocalShell() },
+                onNewServer: { formRoute = .new })
                 .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
             HStack(spacing: 0) {
                 // 欢迎窗口整窗一块卡面色（不用「灰画布 + 白卡」：标题栏、工具栏、侧栏全坐在
@@ -323,7 +326,7 @@ struct WelcomeView: View {
 
     // MARK: actions
 
-    /// Welcome 窗口的命令项：主机（连接=开工作区窗）/ 新建主机 / 设置深链。
+    /// Welcome 窗口的命令项：主机（连接=开工作区窗）/ 新建主机 / 新建本机终端 / 设置深链。
     @MainActor
     private func welcomeCommandItems() -> [CommandPaletteItem] {
         var items: [CommandPaletteItem] = []
@@ -341,6 +344,11 @@ struct WelcomeView: View {
             id: "cmd.newHost", kind: .command,
             title: "新建主机…", detail: "创建一台新服务器", hint: "⌘N", group: nil) {
                 formRoute = .new
+            })
+        items.append(CommandPaletteItem(
+            id: "cmd.newLocalShell", kind: .command,
+            title: "新建本机终端", detail: "在这台 Mac 上开一个 shell", hint: "⇧⌘N", group: nil) {
+                openWindow.newLocalShell()
             })
         items.append(CommandPaletteItem(
             id: "cmd.manageGroups", kind: .command,
@@ -427,11 +435,7 @@ struct WelcomeView: View {
         // Mock / 空态下的行为对应假数据，拦截以免弹出无法解析的工作区窗口或误写真库。
         if TweaksModel.shared.welcomeSource != .real { return }
         #endif
-        // 「仅 SFTP」主机禁用终端会话：任何「连接 / 在工作区打开」入口统一重定向到 SFTP 浏览。
-        if profile.sftpOnly { openSFTP(profile); return }
-        profile.lastConnectedAt = Date()
-        try? modelContext.save()
-        openWindow(value: WorkspaceWindowID(serverID: profile.id))
+        ServerWindowOpener.connect(profile, context: modelContext, openWindow: openWindow)
     }
 
     /// 打开 SFTP 文件浏览窗口。`.openSFTP` 动作与「仅 SFTP」主机的连接重定向共用此入口。
