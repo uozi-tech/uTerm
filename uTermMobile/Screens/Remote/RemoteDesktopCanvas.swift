@@ -32,7 +32,8 @@ struct RemoteDesktopCanvas: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RemoteDesktopCanvasView {
         let view = RemoteDesktopCanvasView(session: session, keys: keys)
-        view.onKeyboardDismissed = { keyboardVisible = false }
+        // 键盘可能在 SwiftUI 更新期间被收走（拆视图时 UIKit 卸第一响应者），不能当场写状态。
+        view.onKeyboardDismissed = { DispatchQueue.main.async { keyboardVisible = false } }
         return view
     }
 
@@ -173,6 +174,7 @@ final class RemoteDesktopCanvasView: UIView {
         viewport.viewSize = bounds.size
         viewport.clamp()
         layoutContent()
+        keyInput.frame = CGRect(x: 0, y: max(0, bounds.height - 48), width: bounds.width, height: min(48, bounds.height))
     }
 
     func updateContentSize(_ size: CGSize?) {
@@ -490,7 +492,7 @@ final class RemoteDesktopCanvasView: UIView {
         if visible, !keyInput.isFirstResponder {
             keyInput.becomeFirstResponder()
         } else if !visible, keyInput.isFirstResponder {
-            _ = keyInput.resignFirstResponder()
+            keyInput.dismissKeyboard()
             becomeFirstResponder()
         }
     }
@@ -502,110 +504,5 @@ final class RemoteDesktopCanvasView: UIView {
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if !keyInput.handle(presses, down: false) { super.pressesEnded(presses, with: event) }
-    }
-}
-
-/// 隐藏的文字输入：弹软键盘、收字。外接键盘的物理按键也在这里翻成 Mac 键码。
-///
-/// 软键盘的字按 US 布局发成按键，交给 Mac 当前的输入法（中文等在 Mac 上组字）；键位表里没有的字符
-/// 才按 Unicode 注入。修饰键条上膛时，下一个字符带上修饰（⌘C、⌃A……）。
-@MainActor
-final class RemoteKeyInputView: UIView, UIKeyInput {
-    var keys: RemoteDesktopKeyState?
-    var send: ((RemoteDesktopInput) -> Void)?
-    var onResign: (() -> Void)?
-
-    override var canBecomeFirstResponder: Bool { true }
-
-    // 远程桌面里自动更正、自动大写、智能标点都只会帮倒忙。
-    var autocorrectionType: UITextAutocorrectionType = .no
-    var autocapitalizationType: UITextAutocapitalizationType = .none
-    var spellCheckingType: UITextSpellCheckingType = .no
-    var smartQuotesType: UITextSmartQuotesType = .no
-    var smartDashesType: UITextSmartDashesType = .no
-    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
-    /// 英文键盘：字母要按键码发过去交给 Mac 的输入法组字（见 `insertText`）。手机自己的拼音输入法在这里
-    /// 用不上——这个视图只有 `UIKeyInput`，没有组字中的 marked text。
-    var keyboardType: UIKeyboardType = .asciiCapable
-    var returnKeyType: UIReturnKeyType = .default
-
-    var hasText: Bool { true }
-
-    override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned { onResign?() }
-        return resigned
-    }
-
-    /// 软键盘打出的字：US 键位上有的字符（字母、数字、符号、空格）逐个发成**按键**，交给 Mac 当前的输入法——
-    /// 开着拼音时就在 Mac 上组字、出候选，用空格 / 数字键选字。键位表里没有的字符（emoji 等）才按 Unicode
-    /// 直接注入。上膛的修饰键只作用于第一个字符（⌘C、⌃A……）。
-    func insertText(_ text: String) {
-        var modifiers = keys?.consume() ?? []
-        var unmapped = ""
-        func flushUnmapped() {
-            guard !unmapped.isEmpty else { return }
-            send?(.text(unmapped))
-            unmapped = ""
-        }
-        for character in text {
-            if character == "\n" {
-                flushUnmapped()
-                tap(RemoteKeyMap.Key.returnKey, modifiers: modifiers)
-            } else if let mapped = RemoteKeyMap.keyCode(for: character) {
-                flushUnmapped()
-                tap(mapped.code, modifiers: mapped.shift ? modifiers.union(.shift) : modifiers)
-            } else {
-                unmapped.append(character)
-            }
-            modifiers = []
-        }
-        flushUnmapped()
-    }
-
-    func deleteBackward() {
-        tap(RemoteKeyMap.Key.delete, modifiers: keys?.consume() ?? [])
-    }
-
-    func tap(_ code: UInt16, modifiers: RemoteKeyModifiers) {
-        send?(.key(code: code, down: true, modifiers: modifiers))
-        send?(.key(code: code, down: false, modifiers: modifiers))
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !handle(presses, down: true) { super.pressesBegan(presses, with: event) }
-    }
-
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !handle(presses, down: false) { super.pressesEnded(presses, with: event) }
-    }
-
-    /// 外接键盘：HID 键位 → Mac 键码，修饰取按键自带的状态并上键盘条上膛的。返回 false = 不认识，交还系统。
-    func handle(_ presses: Set<UIPress>, down: Bool) -> Bool {
-        var handled = false
-        for press in presses {
-            guard let key = press.key else { continue }
-            // 修饰键本身不单独发：修饰状态随每个按键一起带过去。
-            if (0xE0...0xE7).contains(key.keyCode.rawValue) {
-                handled = true
-                continue
-            }
-            guard let code = RemoteKeyMap.keyCode(hidUsage: key.keyCode.rawValue) else { continue }
-            var modifiers = Self.modifiers(key.modifierFlags)
-            if down { modifiers.formUnion(keys?.consume() ?? []) }
-            send?(.key(code: code, down: down, modifiers: modifiers))
-            handled = true
-        }
-        return handled
-    }
-
-    static func modifiers(_ flags: UIKeyModifierFlags) -> RemoteKeyModifiers {
-        var result: RemoteKeyModifiers = []
-        if flags.contains(.shift) { result.insert(.shift) }
-        if flags.contains(.control) { result.insert(.control) }
-        if flags.contains(.alternate) { result.insert(.option) }
-        if flags.contains(.command) { result.insert(.command) }
-        if flags.contains(.alphaShift) { result.insert(.capsLock) }
-        return result
     }
 }

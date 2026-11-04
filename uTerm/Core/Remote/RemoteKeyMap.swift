@@ -4,8 +4,8 @@ import Foundation
 ///
 /// 两条来路：
 /// - iPad 外接键盘：`UIKey.keyCode` 是 HID usage（键盘页 0x07），按物理位置映射，与键盘布局无关。
-/// - 软键盘 + 修饰键条上膛（⌘C、⌃A……）：拿到的只是字符，按 **US 布局**反查是哪个键、要不要 Shift。
-///   不带修饰的普通文字不走这里，直接按 Unicode 注入（见 `RemoteDesktopInput.text`）。
+/// - 软键盘：拿到的只是字符，按 **US 布局**反查是哪个键、要不要 Shift。手机是英文键盘，或修饰键条
+///   上膛（⌘C、⌃A……）时走这里；手机切到别的语言时，上屏的字按 Unicode 注入（见 `RemoteDesktopInput.text`）。
 nonisolated enum RemoteKeyMap {
     enum Key {
         static let returnKey: UInt16 = 0x24

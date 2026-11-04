@@ -1,0 +1,431 @@
+import UIKit
+
+/// 手机键盘打出来的东西怎么发给 Mac。
+///
+/// - 手机是英文键盘：字母、数字、符号发成**按键**，由 Mac 当前的输入法处理（Mac 开着拼音就在 Mac 上出候选）。
+/// - 手机切到别的语言：在手机上组字、选词，上屏结果按 **Unicode** 注入。这种事件不经过 Mac 的输入法，
+///   Mac 开着拼音也不会被截走（搜狗、微信输入法实测，含 `hello`、`123` 这样的纯 ASCII），Mac 上那个
+///   远程看不清的候选框也就不会出现。
+nonisolated enum RemoteKeyboardRouting {
+    /// 这个键盘语言的字要不要发成按键。拿不到语言时按英文算，与之前的行为一致。
+    static func usesKeyPresses(language: String?) -> Bool {
+        language?.hasPrefix("en") ?? true
+    }
+
+    /// 打开键盘时用哪种语言：上次切到的（还在系统键盘列表里的话），否则英文。
+    static func preferredLanguage(saved: String?, available: [String]) -> String? {
+        if let saved, available.contains(saved) { return saved }
+        return available.first { $0.hasPrefix("en") }
+    }
+
+    /// 切到这些键盘不算选了输入语言，不记住。
+    static func isRememberable(language: String) -> Bool {
+        language != "emoji" && language != "dictation"
+    }
+
+    /// 一段文字对应的输入。上膛的修饰键只作用于第一个字符（⌘C、⌃A……），这个字符一律发成按键。
+    /// 换行和单独一个空格也发按键：它们是回车确认、空格预览这样的操作，不是要打出来的字。
+    static func inputs(for text: String, armed: RemoteKeyModifiers, asKeys: Bool) -> [RemoteDesktopInput] {
+        var result: [RemoteDesktopInput] = []
+        var pending = ""
+        var modifiers = armed
+
+        func flush() {
+            guard !pending.isEmpty else { return }
+            result.append(.text(pending))
+            pending = ""
+        }
+        func tap(_ code: UInt16, _ modifiers: RemoteKeyModifiers) {
+            flush()
+            result.append(.key(code: code, down: true, modifiers: modifiers))
+            result.append(.key(code: code, down: false, modifiers: modifiers))
+        }
+
+        for character in text {
+            let pressesKey = asKeys || !modifiers.isEmpty || character == "\t" || text == " "
+            if character.isNewline {
+                tap(RemoteKeyMap.Key.returnKey, modifiers)
+            } else if pressesKey, let mapped = RemoteKeyMap.keyCode(for: character) {
+                tap(mapped.code, mapped.shift ? modifiers.union(.shift) : modifiers)
+            } else {
+                pending.append(character)
+            }
+            modifiers = []
+        }
+        flush()
+        return result
+    }
+
+    /// 外接键盘的这一键要不要留给手机的输入法。组字中全部留给它（方向键选词、回车上屏）；
+    /// 没在组字时，手机选了别的语言才留，且只留能打出字的键。带 ⌘⌃⌥ 或键盘条上膛的是快捷键，发给 Mac。
+    static func leavesToSystem(hidUsage: Int, flags: UIKeyModifierFlags, armed: Bool, composing: Bool,
+                               asKeys: Bool) -> Bool {
+        if composing { return true }
+        if asKeys || armed || !flags.isDisjoint(with: [.command, .control, .alternate]) { return false }
+        return (0x04...0x27).contains(hidUsage) || (0x2C...0x38).contains(hidUsage)
+    }
+}
+
+/// 隐藏的文字输入：弹软键盘、收字、组字。外接键盘的物理按键也在这里翻成 Mac 键码。
+///
+/// 发法见 `RemoteKeyboardRouting`。文档内容只有正在组的字：已上屏的字都在 Mac 上，手机这边不留。
+/// 视图铺在画布底边显示组字内容，不接触摸，候选框（iPad 的浮动候选）也贴着它。
+@MainActor
+final class RemoteKeyInputView: UIView, UITextInput {
+    static let languageKey = "remote.desktop.keyboardLanguage"
+
+    var keys: RemoteDesktopKeyState?
+    var send: ((RemoteDesktopInput) -> Void)?
+    /// 用户或系统收起了键盘。外面自己调 `dismissKeyboard()` 时不回调。
+    var onResign: (() -> Void)?
+    /// 只给测试用：模拟器里切不了真实键盘。
+    var languageOverride: String?
+
+    private var composition: String?
+    private var selection = NSRange(location: 0, length: 0)
+    private var dismissing = false
+    private var observesInputMode = false
+    /// 按下时留给系统的外接键盘按键，抬起也要交给系统，否则系统那边这个键一直按着。
+    private var keysLeftToSystem: Set<Int> = []
+    private let compositionLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        compositionLabel.isHidden = true
+        compositionLabel.textAlignment = .center
+        compositionLabel.backgroundColor = UIColor.black.withAlphaComponent(0.8)
+        compositionLabel.layer.cornerRadius = 8
+        compositionLabel.layer.masksToBounds = true
+        addSubview(compositionLabel)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
+
+    // 远程桌面里自动更正、自动大写、智能标点都只会帮倒忙。
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    /// 普通键盘：地球键能切到中文等（`.asciiCapable` 只能在 ASCII 键盘间切）。默认语言见 `textInputMode`。
+    var keyboardType: UIKeyboardType = .default
+    var returnKeyType: UIReturnKeyType = .default
+
+    // MARK: - 键盘语言：默认英文，切过就记住
+
+    override var textInputMode: UITextInputMode? {
+        let modes = UITextInputMode.activeInputModes
+        let language = RemoteKeyboardRouting.preferredLanguage(
+            saved: UserDefaults.standard.string(forKey: Self.languageKey),
+            available: modes.compactMap(\.primaryLanguage))
+        return modes.first { $0.primaryLanguage == language } ?? super.textInputMode
+    }
+
+    private var sendsKeyPresses: Bool {
+        RemoteKeyboardRouting.usesKeyPresses(language: languageOverride ?? super.textInputMode?.primaryLanguage)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became, !observesInputMode {
+            observesInputMode = true
+            NotificationCenter.default.addObserver(self, selector: #selector(inputModeDidChange),
+                                                   name: UITextInputMode.currentInputModeDidChangeNotification,
+                                                   object: nil)
+        }
+        return became
+    }
+
+    @objc private func inputModeDidChange() {
+        // 只记自己是第一响应者时的切换：别处抢到键盘时系统换的语言，不是用户在这里选的。
+        guard isFirstResponder, let language = super.textInputMode?.primaryLanguage,
+              RemoteKeyboardRouting.isRememberable(language: language) else { return }
+        UserDefaults.standard.set(language, forKey: Self.languageKey)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        guard resigned else { return false }
+        if composition != nil { clearComposition() }
+        if !dismissing { onResign?() }
+        return true
+    }
+
+    /// 由外面的键盘按钮收起：外面已经知道了，不再回调。这条路在 SwiftUI 更新视图期间走，
+    /// 回调里写状态就是「Modifying state during view update」。
+    func dismissKeyboard() {
+        dismissing = true
+        defer { dismissing = false }
+        _ = resignFirstResponder()
+    }
+
+    // MARK: - 收字
+
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        if composition != nil {
+            // 输入法上屏，替换掉正在组的字。修饰键留给下一次按键。
+            setComposition(nil, selectedRange: NSRange(location: 0, length: 0))
+            deliver(text, armed: [], asKeys: false)
+        } else {
+            deliver(text, armed: keys?.consume() ?? [], asKeys: sendsKeyPresses)
+        }
+    }
+
+    func deleteBackward() {
+        if var composing = composition {
+            composing.removeLast()
+            let length = composing.utf16.count
+            setComposition(composing.isEmpty ? nil : composing, selectedRange: NSRange(location: length, length: 0))
+        } else {
+            tap(RemoteKeyMap.Key.delete, modifiers: keys?.consume() ?? [])
+        }
+    }
+
+    func tap(_ code: UInt16, modifiers: RemoteKeyModifiers) {
+        send?(.key(code: code, down: true, modifiers: modifiers))
+        send?(.key(code: code, down: false, modifiers: modifiers))
+    }
+
+    private func deliver(_ text: String, armed: RemoteKeyModifiers, asKeys: Bool) {
+        for input in RemoteKeyboardRouting.inputs(for: text, armed: armed, asKeys: asKeys) { send?(input) }
+    }
+
+    // MARK: - 组字
+
+    private(set) var markedTextRange: UITextRange?
+    var markedTextStyle: [NSAttributedString.Key: Any]?
+
+    func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        // 中文键盘上按键条上膛的 ⌘ + C：这一键是快捷键，不是开始拼字。
+        if composition == nil, let keys, !keys.modifiers.isEmpty,
+           let first = markedText?.first, RemoteKeyMap.keyCode(for: first) != nil {
+            deliver(String(first), armed: keys.consume(), asKeys: true)
+            clearComposition()
+            return
+        }
+        setComposition(markedText?.isEmpty == false ? markedText : nil, selectedRange: selectedRange)
+    }
+
+    /// 输入法要求把正在组的字原样定下来（比如拼音键盘上按回车上屏字母）。
+    func unmarkText() {
+        guard let text = composition else { return }
+        setComposition(nil, selectedRange: NSRange(location: 0, length: 0))
+        deliver(text, armed: [], asKeys: false)
+    }
+
+    private func setComposition(_ text: String?, selectedRange: NSRange) {
+        composition = text
+        let length = text?.utf16.count ?? 0
+        let location = min(max(selectedRange.location, 0), length)
+        selection = NSRange(location: location, length: min(max(selectedRange.length, 0), length - location))
+        markedTextRange = text == nil ? nil : RemoteTextRange(0, length)
+        updateCompositionLabel()
+    }
+
+    /// 由我们这边丢弃组字：要告诉输入系统，它才会清掉自己的候选。
+    private func clearComposition() {
+        inputDelegate?.selectionWillChange(self)
+        inputDelegate?.textWillChange(self)
+        setComposition(nil, selectedRange: NSRange(location: 0, length: 0))
+        inputDelegate?.textDidChange(self)
+        inputDelegate?.selectionDidChange(self)
+    }
+
+    private func updateCompositionLabel() {
+        guard let composition else {
+            compositionLabel.isHidden = true
+            return
+        }
+        compositionLabel.attributedText = NSAttributedString(string: composition, attributes: [
+            .font: UIFont.systemFont(ofSize: 17, weight: .medium),
+            .foregroundColor: UIColor.white,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ])
+        compositionLabel.isHidden = false
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !compositionLabel.isHidden else { return }
+        let size = compositionLabel.sizeThatFits(bounds.size)
+        let width = min(size.width + 24, bounds.width - 16)
+        compositionLabel.frame = CGRect(x: (bounds.width - width) / 2, y: bounds.height - 40, width: width, height: 32)
+    }
+
+    // MARK: - UITextInput：文档就是正在组的字
+
+    private var documentLength: Int { composition?.utf16.count ?? 0 }
+
+    var selectedTextRange: UITextRange? {
+        get { RemoteTextRange(selection.location, selection.location + selection.length) }
+        set {
+            guard let range = newValue as? RemoteTextRange else { return }
+            let start = min(range.lower, documentLength)
+            selection = NSRange(location: start, length: min(range.upper, documentLength) - start)
+        }
+    }
+
+    weak var inputDelegate: UITextInputDelegate?
+    lazy var tokenizer: UITextInputTokenizer = UITextInputStringTokenizer(textInput: self)
+    var beginningOfDocument: UITextPosition { RemoteTextPosition(0) }
+    var endOfDocument: UITextPosition { RemoteTextPosition(documentLength) }
+
+    func text(in range: UITextRange) -> String? {
+        guard let range = range as? RemoteTextRange, let composition else { return "" }
+        let units = Array(composition.utf16)
+        let lower = min(range.lower, units.count), upper = min(range.upper, units.count)
+        return String(decoding: units[lower..<max(lower, upper)], as: UTF16.self)
+    }
+
+    func replace(_ range: UITextRange, withText text: String) { insertText(text) }
+
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+        guard let from = fromPosition as? RemoteTextPosition, let to = toPosition as? RemoteTextPosition else { return nil }
+        return RemoteTextRange(min(from.offset, to.offset), max(from.offset, to.offset))
+    }
+
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+        guard let position = position as? RemoteTextPosition else { return nil }
+        let target = position.offset + offset
+        return (0...documentLength).contains(target) ? RemoteTextPosition(target) : nil
+    }
+
+    func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? {
+        switch direction {
+        case .right, .down: return self.position(from: position, offset: offset)
+        case .left, .up: return self.position(from: position, offset: -offset)
+        @unknown default: return nil
+        }
+    }
+
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+        let lhs = (position as? RemoteTextPosition)?.offset ?? 0, rhs = (other as? RemoteTextPosition)?.offset ?? 0
+        return lhs == rhs ? .orderedSame : (lhs < rhs ? .orderedAscending : .orderedDescending)
+    }
+
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int {
+        ((toPosition as? RemoteTextPosition)?.offset ?? 0) - ((from as? RemoteTextPosition)?.offset ?? 0)
+    }
+
+    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+        switch direction {
+        case .left, .up: return range.start
+        case .right, .down: return range.end
+        @unknown default: return nil
+        }
+    }
+
+    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+        guard let offset = (position as? RemoteTextPosition)?.offset else { return nil }
+        switch direction {
+        case .left, .up: return RemoteTextRange(0, offset)
+        case .right, .down: return RemoteTextRange(offset, documentLength)
+        @unknown default: return nil
+        }
+    }
+
+    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection)
+        -> NSWritingDirection { .natural }
+
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+
+    /// 候选框贴着显示组字的那条。
+    private var anchorRect: CGRect {
+        CGRect(x: bounds.midX, y: max(0, bounds.height - 40), width: 1, height: 32)
+    }
+
+    func firstRect(for range: UITextRange) -> CGRect { anchorRect }
+    func caretRect(for position: UITextPosition) -> CGRect { anchorRect }
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
+    func closestPosition(to point: CGPoint) -> UITextPosition? { endOfDocument }
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { range.end }
+    func characterRange(at point: CGPoint) -> UITextRange? { nil }
+
+    // MARK: - 外接键盘
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let armed = !(keys?.modifiers.isEmpty ?? true)
+        let forSystem = presses.filter { press in
+            guard let key = press.key else { return false }
+            return RemoteKeyboardRouting.leavesToSystem(hidUsage: key.keyCode.rawValue, flags: key.modifierFlags, armed: armed,
+                                                        composing: composition != nil, asKeys: sendsKeyPresses)
+        }
+        keysLeftToSystem.formUnion(forSystem.compactMap { $0.key?.keyCode.rawValue })
+        if !forSystem.isEmpty { super.pressesBegan(forSystem, with: event) }
+        let own = presses.subtracting(forSystem)
+        if !own.isEmpty, !handle(own, down: true) { super.pressesBegan(own, with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let forSystem = takeKeysLeftToSystem(from: presses)
+        if !forSystem.isEmpty { super.pressesEnded(forSystem, with: event) }
+        let own = presses.subtracting(forSystem)
+        if !own.isEmpty, !handle(own, down: false) { super.pressesEnded(own, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        _ = takeKeysLeftToSystem(from: presses)
+        super.pressesCancelled(presses, with: event)
+    }
+
+    private func takeKeysLeftToSystem(from presses: Set<UIPress>) -> Set<UIPress> {
+        let matching = presses.filter { $0.key.map { keysLeftToSystem.contains($0.keyCode.rawValue) } ?? false }
+        keysLeftToSystem.subtract(matching.compactMap { $0.key?.keyCode.rawValue })
+        return matching
+    }
+
+    /// 外接键盘：HID 键位 → Mac 键码，修饰取按键自带的状态并上键盘条上膛的。返回 false = 不认识，交还系统。
+    func handle(_ presses: Set<UIPress>, down: Bool) -> Bool {
+        var handled = false
+        for press in presses {
+            guard let key = press.key else { continue }
+            // 修饰键本身不单独发：修饰状态随每个按键一起带过去。
+            if (0xE0...0xE7).contains(key.keyCode.rawValue) {
+                handled = true
+                continue
+            }
+            guard let code = RemoteKeyMap.keyCode(hidUsage: key.keyCode.rawValue) else { continue }
+            var modifiers = Self.modifiers(key.modifierFlags)
+            if down { modifiers.formUnion(keys?.consume() ?? []) }
+            send?(.key(code: code, down: down, modifiers: modifiers))
+            handled = true
+        }
+        return handled
+    }
+
+    static func modifiers(_ flags: UIKeyModifierFlags) -> RemoteKeyModifiers {
+        var result: RemoteKeyModifiers = []
+        if flags.contains(.shift) { result.insert(.shift) }
+        if flags.contains(.control) { result.insert(.control) }
+        if flags.contains(.alternate) { result.insert(.option) }
+        if flags.contains(.command) { result.insert(.command) }
+        if flags.contains(.alphaShift) { result.insert(.capsLock) }
+        return result
+    }
+}
+
+private final class RemoteTextPosition: UITextPosition {
+    let offset: Int
+    init(_ offset: Int) { self.offset = offset }
+}
+
+private final class RemoteTextRange: UITextRange {
+    let lower: Int
+    let upper: Int
+    init(_ lower: Int, _ upper: Int) {
+        self.lower = lower
+        self.upper = upper
+    }
+    override var start: UITextPosition { RemoteTextPosition(lower) }
+    override var end: UITextPosition { RemoteTextPosition(upper) }
+    override var isEmpty: Bool { lower == upper }
+}
