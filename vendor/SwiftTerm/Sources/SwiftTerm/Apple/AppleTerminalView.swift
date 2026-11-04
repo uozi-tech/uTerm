@@ -2461,6 +2461,12 @@ extension TerminalView {
         }
     }
     
+    /// 光标所在行是否还在可视区内。用户往上翻到看不见它时为 false。
+    var caretRowIsInViewport: Bool {
+        let buffer = terminal.displayBuffer
+        return buffer.yBase + buffer.y < buffer.yDisp + buffer.rows
+    }
+
     func updateCursorPosition()
     {
         guard let caretView else { return }
@@ -2469,7 +2475,7 @@ extension TerminalView {
         let buffer = terminal.displayBuffer
         let vy = buffer.yBase + buffer.y
         
-        if vy >= buffer.yDisp + buffer.rows {
+        if !caretRowIsInViewport {
             caretView.removeFromSuperview()
             return
         } else if terminal.cursorHidden == false && caretView.superview != self {

@@ -3138,7 +3138,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             queueMetalDisplay()
             return
         }
-        if caretView.superview == nil {
+        if caretView.superview == nil && caretRowIsInViewport {
             addSubview(caretView)
         }
     }

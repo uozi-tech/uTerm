@@ -250,6 +250,24 @@ uTerm 侧入口：`TerminalSession.init` 设 `true`；iOS 未开启。
 
 uTerm 侧入口：`TerminalSession+ProgramStatus.swift`。
 
+## 12. 往上翻时，程序重绘不把光标画回屏幕
+
+光标所在行滚出可视区时，`updateCursorPosition` 会移除 `caretView` 并提前返回，它的 frame 停在
+最后一次可见的位置。上游 macOS 的 `showCursor(source:)` 不看可视区，收到 `?25h` 就 `addSubview`，
+下一次 `updateDisplay` 才再移除。Claude Code 每帧都发 `?25l` … `?25h`，所以翻到输入框看不见时，
+光标会在输入框原来的位置（窗口左下角）反复闪现。
+
+涉及文件：
+
+- `Apple/AppleTerminalView.swift`：新增 `caretRowIsInViewport`，`updateCursorPosition` 改用它，
+  判定不变。
+- `Mac/MacTerminalView.swift`：`showCursor(source:)` 只在光标行可见时才加回 `caretView`。翻回底部时
+  由 `updateCursorPosition` 加回并更新位置。
+
+iOS 未改：`caretView` 的 frame 是滚动内容坐标，旧位置会随内容滚出屏幕。
+
+uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalCaretViewportTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）
