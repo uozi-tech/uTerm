@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.uozi.uTerm.holder</string>
+	<key>CFBundleName</key>
+	<string>uTerm SSH</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>uTerm 用它连接你局域网里的 SSH 主机，这样 uTerm 重启时终端也不会断。</string>
+</dict>
+</plist>

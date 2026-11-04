@@ -14,13 +14,7 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
 
     override func tearDown() async throws {
         // 用例中途失败也别把 shell 留在机器上。
-        for id in sessionIDs {
-            guard let handle = try? await client.connectSession(namespace: Self.namespace, id: id) else { continue }
-            let connection = HolderConnection(handle)
-            connection.start()
-            connection.send(HolderFrame(.terminate))
-            connection.flushAndClose(timeout: 1)
-        }
+        for id in sessionIDs { await HolderProbe.terminate(id, client: client, namespace: Self.namespace) }
         client.invalidate()
         try await super.tearDown()
     }
@@ -65,6 +59,49 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
     }
 
     /// 探活信号的默认处置是杀进程。本机 shell 收到探活帧不能有事。
+    /// 本地网络权限跟着责任进程走。SSH 的 holder 必须自己当责任进程，否则 App 一死局域网连接就断流。
+    func test_ssh_holder_is_its_own_responsible_process() async throws {
+        let id = makeSession()
+        let opened = try await client.openSSHSession(namespace: Self.namespace, id: id, columns: 80, rows: 24)
+        let holder = try Self.peerPID(of: opened.holder)
+        XCTAssertEqual(Self.responsiblePID(for: holder), holder)
+    }
+
+    /// 本机 shell 的 holder 责任进程还是 App：shell 访问 ~/Documents 这类授权要记在 uTerm 名下。
+    func test_shell_holder_stays_under_the_app_for_responsibility() async throws {
+        let id = makeSession()
+        let handle = try await client.openSession(namespace: Self.namespace, id: id, columns: 80, rows: 24)
+        let holder = try Self.peerPID(of: handle)
+        XCTAssertEqual(Self.responsiblePID(for: holder), getpid())
+    }
+
+    /// holder 刚起来还没顾上 accept 时，发完就关的连接会被它当成身份不明拒掉，结束请求就丢了。
+    func test_terminate_right_after_open_is_not_lost() async throws {
+        let id = makeSession()
+        let handle = try await client.openSession(namespace: Self.namespace, id: id, columns: 80, rows: 24)
+        let holder = try Self.peerPID(of: handle)
+        await HolderProbe.terminate(id, client: client, namespace: Self.namespace)
+        let ended = await wait(timeout: 5) { !Self.isAlive(holder) }
+        XCTAssertTrue(ended)
+    }
+
+    private static func peerPID(of handle: FileHandle) throws -> pid_t {
+        var pid: pid_t = 0
+        var size = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(handle.fileDescriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return pid
+    }
+
+    private static func responsiblePID(for pid: pid_t) -> pid_t? {
+        typealias Lookup = @convention(c) (pid_t) -> pid_t
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid") else {
+            return nil
+        }
+        return unsafeBitCast(symbol, to: Lookup.self)(pid)
+    }
+
     func test_probe_frame_is_ignored_for_local_shell() async throws {
         let id = makeSession()
         let (session, held) = try await connected(id)

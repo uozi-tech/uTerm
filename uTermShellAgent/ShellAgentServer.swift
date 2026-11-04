@@ -75,7 +75,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 let pid = try self.spawnHolder(
                     directory: directory, name: name, columns: columns, rows: rows, executable: try self.helper("uterm-ssh"),
                     argv0: "uterm-ssh", environment: Self.environment(shell: Self.loginShell()) + ["UTERM_SSH_CONTROL_FD=\(Self.childControlFD)"],
-                    controlFD: pair[1])
+                    controlFD: pair[1], ownsResponsibility: true)
                 reply(try self.waitForHolder(pid: pid, directory: directory, name: name), appEnd, nil)
             } catch {
                 self.log.error("起 SSH 会话失败：\(error.localizedDescription, privacy: .public)")
@@ -189,7 +189,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
     }
 
     private func spawnHolder(directory: String, name: String, columns: Int, rows: Int, executable: String, argv0: String,
-                             environment: [String], controlFD: Int32?) throws -> pid_t {
+                             environment: [String], controlFD: Int32?, ownsResponsibility: Bool = false) throws -> pid_t {
         let holder = try helper("uterm-holder")
         let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), executable, argv0]
 
@@ -207,6 +207,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         posix_spawnattr_setsigdefault(&attributes, &allSignals)
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT
             | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+        if ownsResponsibility { Self.disclaimResponsibility(&attributes) }
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
@@ -227,6 +228,18 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         guard result == 0 else { throw AgentError("起 holder 失败：\(String(cString: strerror(result)))") }
         log.info("起 holder \(name, privacy: .public) pid=\(pid) \(executable, privacy: .public) \(columns)×\(rows)")
         return pid
+    }
+
+    /// 让新进程自己当责任进程（Terminal、iTerm、lldb 都这么起子进程）。
+    ///
+    /// 本地网络权限按责任进程放行。默认责任进程是 App：App 一死，系统立刻丢弃 `uterm-ssh` 这条局域网连接上的包，
+    /// App 重开也恢复不了，写一次就 EHOSTUNREACH。holder 自己当责任进程后，权限归它（Info.plist 内嵌在二进制里），
+    /// 跟 App 活不活无关。SPI 没有头文件，SDK 也不保证有符号，所以按名字找；找不到就退回默认行为。
+    private static func disclaimResponsibility(_ attributes: inout posix_spawnattr_t?) {
+        typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+        let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let symbol = dlsym(defaultHandle, "responsibility_spawnattrs_setdisclaim") else { return }
+        _ = unsafeBitCast(symbol, to: Disclaim.self)(&attributes, 1)
     }
 
     /// 用户的登录 shell（目录服务里的 `UserShell`），取不到就用 zsh。

@@ -410,6 +410,10 @@ verify-distribution-signing:
 			exit 1; \
 		fi; \
 	done
+	@if ! otool -X -s __TEXT __info_plist "$(EXPORT_APP)/Contents/Helpers/uterm-holder" | grep -q .; then \
+		printf '%s\n' 'ERROR: uterm-holder has no embedded Info.plist (local network access to SSH hosts would be denied).'; \
+		exit 1; \
+	fi
 	@sign_info=$$(codesign -dv --verbose=4 "$(EXPORT_APP)" 2>&1); \
 	if ! printf '%s\n' "$$sign_info" | grep -q 'Authority=Developer ID Application'; then \
 		printf '%s\n' 'ERROR: Exported app is not signed with a Developer ID Application certificate.'; \
