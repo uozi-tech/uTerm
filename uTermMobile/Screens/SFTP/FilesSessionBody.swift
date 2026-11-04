@@ -140,6 +140,7 @@ struct FilesSessionBody: View {
             }
             .padding(.horizontal, 14)
         }
+        .mKeepsScrollContentInSafeArea()
     }
 
     private func pathSegments(_ path: String) -> [(label: String, full: String)] {

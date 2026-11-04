@@ -71,6 +71,7 @@ struct WorkspaceTabStrip: View {
                     }
                     .padding(.leading, showsBack ? 0 : 8)
                 }
+                .mKeepsScrollContentInSafeArea()
                 .onChange(of: activeID) { _, id in
                     guard let id else { return }
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id) }

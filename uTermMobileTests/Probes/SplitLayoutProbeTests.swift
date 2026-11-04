@@ -125,6 +125,120 @@ final class SplitLayoutProbeTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentSize.width, width)
     }
 
+    // MARK: 横向滚动条不进侧边安全区
+    //
+    // Duo 横屏时状态栏那一列是右侧安全区，内容滚进去看得见、点不到：既不能画进去，也不能在那里命中。
+    // 滚到头时最后一项要正好露在安全区以内。
+
+    func testKeyBarStaysOutOfSideSafeArea() async throws {
+        let (controller, _) = MobileFakeTerminal.controller(.idle)
+        try await assertScrollRowStaysInSafeArea(side: .right, root: VStack(spacing: 0) {
+            Color.clear
+            TerminalKeyBar(controller: controller)
+        })
+    }
+
+    func testTabStripStaysOutOfSideSafeArea() async throws {
+        let c = try MobileFixtures.modelContainer(seed: .smoke)
+        let h = try XCTUnwrap(MobileFixtures.firstServer(in: c))
+        let (work, _) = MobileFakeTerminal.sessions(
+            count: 6, hosts: [h],
+            script: MobileFakeTerminalScript(linesPerSecond: 200, seconds: 1, corpus: .ansiColor),
+            container: c, relay: HostKeyChallengeRelay())
+        defer { for tab in work.terminalTabs { tab.controller.close() } }
+        // 状态栏在右侧一列时，条尾的开关挪到那一列，标签的滚动区直接贴着安全区。
+        try await assertScrollRowStaysInSafeArea(side: .right, root: VStack(spacing: 0) {
+            WorkspaceTabStrip(tabs: work.tabs, activeID: work.focusedPane.activeID,
+                              onSelect: { _ in }, onClose: { _ in }, onNew: { _ in }, onBack: {}, onAgent: {},
+                              showsTrailingControls: false)
+            Color.clear
+        }.environment(\.mAccent, M.accent))
+    }
+
+    /// 路径条右边是刷新按钮，碰不到右侧安全区；滚动区贴着的是左侧。
+    func testPathBarStaysOutOfSideSafeArea() async throws {
+        let deep = "/" + (0..<8).map { "directory-with-a-long-name-\($0)" }.joined(separator: "/")
+        let provider = MobileFakeSFTPProvider(tree: MobileFakeSFTPTree(directories: [deep: []], home: deep))
+        let tab = FileTab(host: ServerProfile(), controller: await MobileFakeSFTP.controller(provider: provider, path: deep))
+        try await assertScrollRowStaysInSafeArea(side: .left, root: FilesSessionBody(tab: tab, onClose: {})
+            .environment(\.mAccent, M.accent))
+    }
+
+    private enum SafeAreaSide { case left, right }
+
+    private func assertScrollRowStaysInSafeArea<Root: View>(side: SafeAreaSide, root: Root,
+                                                            line: UInt = #line) async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let (win, host) = MobileProbeWindow.make(size: CGSize(width: 500, height: 300), placement: .visibleOnScreen,
+                                                 isolateHost: true, rootView: root)
+        // 夹具默认让 SwiftUI 无视安全区，这里要的正是安全区。
+        let column: CGFloat = 84
+        host.safeAreaRegions = .all
+        switch side {
+        case .left: host.additionalSafeAreaInsets.left = column
+        case .right: host.additionalSafeAreaInsets.right = column
+        }
+        try await Task.sleep(for: .milliseconds(600))
+
+        let scroll = try XCTUnwrap(Self.firstHorizontalScrollView(in: win), line: line)
+        XCTAssertGreaterThan(scroll.contentSize.width, win.bounds.width - column, "内容要长到需要滚动", line: line)
+        let safe = host.view.convert(host.view.safeAreaLayoutGuide.layoutFrame, to: win)
+        let midY = scroll.convert(scroll.bounds, to: win).midY
+        let clip = try XCTUnwrap(Self.clippingAncestor(of: scroll, narrowerThan: win.bounds.width, in: win), line: line)
+        let clipFrame = clip.convert(clip.bounds, to: win)
+
+        let columnPoints: [CGFloat]
+        let inside: CGFloat
+        switch side {
+        case .left:
+            XCTAssertGreaterThanOrEqual(clipFrame.minX, safe.minX - 0.5, "画面要裁在安全区以内", line: line)
+            columnPoints = [5, safe.minX - 40, safe.minX - 10]
+            inside = clipFrame.minX + 20
+        case .right:
+            XCTAssertLessThanOrEqual(clipFrame.maxX, safe.maxX + 0.5, "画面要裁在安全区以内", line: line)
+            columnPoints = [safe.maxX + 10, safe.maxX + 40, win.bounds.maxX - 5]
+            inside = clipFrame.maxX - 20
+        }
+        for x in columnPoints {
+            let hit = win.hitTest(CGPoint(x: x, y: midY), with: nil)
+            XCTAssertFalse(hit?.isDescendant(of: scroll) ?? false, "x=\(x) 在侧边安全区，不该命中滚动内容", line: line)
+        }
+        let insideHit = win.hitTest(CGPoint(x: inside, y: midY), with: nil)
+        XCTAssertTrue(insideHit?.isDescendant(of: scroll) ?? false, "安全区以内要照常命中", line: line)
+
+        // 滚到贴着安全区的那一头：那一头的内容边缘正好停在裁剪边界上，不缺内容。
+        switch side {
+        case .left:
+            scroll.setContentOffset(CGPoint(x: -scroll.adjustedContentInset.left, y: 0), animated: false)
+            try await Task.sleep(for: .milliseconds(200))
+            let start = scroll.convert(CGPoint.zero, to: win).x
+            XCTAssertEqual(start, clipFrame.minX, accuracy: 0.5, "滚到头时第一项要露全", line: line)
+        case .right:
+            let end = scroll.contentSize.width + scroll.adjustedContentInset.right - scroll.bounds.width
+            scroll.setContentOffset(CGPoint(x: end, y: 0), animated: false)
+            try await Task.sleep(for: .milliseconds(200))
+            let contentEnd = scroll.convert(CGPoint(x: scroll.contentSize.width, y: 0), to: win).x
+            XCTAssertEqual(contentEnd, clipFrame.maxX, accuracy: 0.5, "滚到底时最后一项要露全", line: line)
+        }
+    }
+
+    private static func firstHorizontalScrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView, scroll.bounds.height < 60 { return scroll }
+        for child in view.subviews {
+            if let found = firstHorizontalScrollView(in: child) { return found }
+        }
+        return nil
+    }
+
+    private static func clippingAncestor(of view: UIView, narrowerThan width: CGFloat, in win: UIWindow) -> UIView? {
+        var current = view.superview
+        while let candidate = current, candidate !== win {
+            if candidate.clipsToBounds, candidate.bounds.width < width - 0.5 { return candidate }
+            current = candidate.superview
+        }
+        return nil
+    }
+
     private static func firstScrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView { return scroll }
         for child in view.subviews {

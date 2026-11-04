@@ -297,6 +297,15 @@ extension View {
 
     /// 见 `MScreenCentering`。
     func mCentersOnScreen() -> some View { modifier(MScreenCentering()) }
+
+    /// 挂在横向 ScrollView 上：内容不进侧边安全区。
+    ///
+    /// ScrollView 默认把内容画进安全区。Duo 横屏时右侧安全区是状态栏那一列，内容滚进去看得见、
+    /// 却点不到（实机反馈）。画面和命中区都收到安全区边界：`clipped` 只裁画面，不限制命中。
+    /// 滚到底时最后一项正好停在边界上，不会缺内容。
+    func mKeepsScrollContentInSafeArea() -> some View {
+        clipped().contentShape(Rectangle())
+    }
 }
 
 extension Edge.Set {

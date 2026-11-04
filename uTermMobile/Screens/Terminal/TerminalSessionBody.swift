@@ -321,6 +321,7 @@ struct TerminalKeyBar: View {
             }
             .padding(.horizontal, 10)
         }
+        .mKeepsScrollContentInSafeArea()
         .padding(.vertical, 7)
     }
 
