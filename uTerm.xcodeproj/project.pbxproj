@@ -258,6 +258,7 @@
 				Features/Terminal/TerminalMirrorTap.swift,
 				Features/Terminal/TerminalScreenReader.swift,
 				Features/Terminal/TerminalSession.swift,
+				"Features/Terminal/TerminalSession+ImagePaste.swift",
 				"Features/Terminal/TerminalSession+ProgramStatus.swift",
 				"Features/Terminal/TerminalSession+RemoteGrid.swift",
 				"Features/Terminal/TerminalSession+TerminalViewDelegate.swift",

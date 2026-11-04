@@ -98,6 +98,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         installTrackedRunMarkers()
         installProgramStatusHandlers()
         view.onFocusGained = { [weak self] in self?.acknowledgeProgramStatus() }
+        view.onPasteImage = { [weak self] in self?.pasteImage($0) ?? false }
+        view.onControlVImage = { [weak self] in self?.handleControlVImage($0) ?? false }
         attentionSink = { [weak self] attention in
             guard let self else { return }
             TerminalAttentionCenter.shared.post(attention, from: self)

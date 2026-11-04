@@ -91,6 +91,8 @@ actor LocalShellBackend: TerminalImageReceiving {
 
     /// 本机 shell 里的程序就在这台 Mac 上：图片放进系统剪贴板，再替用户按一下 Ctrl+V
     ///（Claude Code 等 CLI 在 Ctrl+V 时从剪贴板读图；不认得的程序最多收到一个 ^V）。
+    nonisolated var programsCanReadMacClipboard: Bool { true }
+
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard handle != nil, !closed else { throw TerminalImageError.notConnected }
         RemotePasteboard.write(image)

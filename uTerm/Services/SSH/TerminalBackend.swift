@@ -53,6 +53,8 @@ nonisolated enum TerminalImageDelivery: Equatable, Sendable {
 
 /// 能把图片交给终端里程序的后端。SSH 传成远端文件，Mac 本机 shell 走剪贴板，远控转交给 Mac。
 protocol TerminalImageReceiving: TerminalBackend {
+    /// 终端里的程序跑在这台 Mac 上，自己就能读剪贴板。
+    nonisolated var programsCanReadMacClipboard: Bool { get }
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery
 }
 

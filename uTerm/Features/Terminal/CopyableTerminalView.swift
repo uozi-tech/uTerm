@@ -15,6 +15,7 @@ import Carbon.HIToolbox
 /// 更可靠且与用户的"选中即复制"语义一致。
 /// 3. 把 ⌃↩ 留给终端程序，不让系统拿去弹上下文菜单。
 /// 4. 通知会话「用户回到这个终端了」。
+/// 5. 把只有图片的剪贴板交给会话（⌘V / 有 Agent 时的 ⌃V）。
 final class CopyableTerminalView: SwiftTerm.TerminalView {
 
     /// 是否在选中后自动把内容写入剪贴板。由 TerminalHostView 据
@@ -107,6 +108,25 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
         }
     }
 
+    // MARK: 贴图
+
+    /// 只有图片的剪贴板被 ⌘V 粘贴时调用。返回 true = 已接管。
+    var onPasteImage: (@MainActor (TerminalImage) -> Bool)?
+    /// 只有图片的剪贴板遇到 ⌃V 时调用。返回 true = 已接管，按键不再发给程序。
+    var onControlVImage: (@MainActor (TerminalImage) -> Bool)?
+    /// 测试用：换掉系统剪贴板。
+    var pasteboard: NSPasteboard = .general
+
+    override func paste(_ sender: Any) {
+        if let image = TerminalImage.fromPasteboard(pasteboard), onPasteImage?(image) == true { return }
+        super.paste(sender)
+    }
+
+    private static func isControlV(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
+        return modifiers == .control && event.keyCode == kVK_ANSI_V
+    }
+
     // MARK: ⌃↩ 交给终端
 
     /// macOS 15 起系统默认把 ⌃↩ 绑成「显示上下文菜单」（系统设置 › 键盘 › 键盘快捷键 ›
@@ -116,6 +136,10 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// 传统键盘模式不能转给 `keyDown`：它对 ⌃+回车算不出控制字符，什么都不发。这里按
     /// 其他终端的做法发回车。程序开了 kitty 键盘协议时，`keyDown` 能编出带修饰键的序列。
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, Self.isControlV(event),
+           let image = TerminalImage.fromPasteboard(pasteboard), onControlVImage?(image) == true {
+            return true
+        }
         guard window?.firstResponder === self, Self.isControlReturn(event) else {
             return super.performKeyEquivalent(with: event)
         }

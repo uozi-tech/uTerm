@@ -348,12 +348,19 @@ actor SSHConnection: TerminalImageReceiving {
     /// 把图片传成远端 `/tmp` 下的一个文件，返回路径（由调用方粘进终端）。
     ///
     /// SFTP 开在这条终端连接上（另开一个通道），不另建连接，也不重新认证。
+    nonisolated var programsCanReadMacClipboard: Bool { false }
+
     func deliverImage(_ image: TerminalImage) async throws -> TerminalImageDelivery {
         guard !isClosed, let connected = connectedClient else { throw TerminalImageError.notConnected }
         let path = image.temporaryRemotePath()
         let sftp = try await connected.target.openSFTP()
         do {
-            let file = try await sftp.openFile(filePath: path, flags: [.write, .create, .truncate])
+            // /tmp 在共享服务器上大家都能读，截图只给自己看。
+            var attributes = SFTPFileAttributes()
+            attributes.permissions = 0o600
+            let file = try await sftp.openFile(filePath: path,
+                                               flags: [.write, .create, .truncate],
+                                               attributes: attributes)
             do {
                 var buffer = ByteBuffer()
                 buffer.writeBytes(image.data)
