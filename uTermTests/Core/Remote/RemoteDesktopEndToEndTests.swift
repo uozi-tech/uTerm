@@ -15,8 +15,10 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
     private final class Screen: @unchecked Sendable {
         struct Shown {
             let sequence: UInt32
+            /// 主流的关键帧（旁路精修帧虽然也是关键帧，不算在这里）。
             let keyframe: Bool
             let refine: Bool
+            let sidecar: Bool
             let blocks: [Double]
             let width: Int
             let height: Int
@@ -26,7 +28,9 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         private var cursors: [RemoteDesktopCursor] = []
 
         func add(_ image: CVPixelBuffer, _ frame: RemoteDesktopFrame) {
-            let item = Shown(sequence: frame.sequence, keyframe: frame.isKeyframe, refine: frame.flags.contains(.refine),
+            let sidecar = frame.flags.contains(.sidecar)
+            let item = Shown(sequence: frame.sequence, keyframe: frame.isKeyframe && !sidecar,
+                             refine: frame.flags.contains(.refine), sidecar: sidecar,
                              blocks: RemoteDesktopFixture.blockLuma(image),
                              width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))
             lock.lock(); shown.append(item); lock.unlock()
@@ -126,6 +130,10 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
             XCTAssertTrue(arrived, "帧 \(seed) 没到")
         }
         XCTAssertEqual(screen.frames.filter(\.keyframe).count, 1, "追上时不强制关键帧：只有开流那一帧")
+        // 这之后画面不再变：最后这张第一次显示出来起，是同一段静止（前面几步之间若隔了 300 ms 以上，
+        // 各自也会精修）。按显示的那一帧定起点，不按此刻的帧数：机器忙时精修可能早于这一行就到了。
+        let stillSeed = try XCTUnwrap(source.emitted.last)
+        let stillFrom = try XCTUnwrap(screen.frames.firstIndex { !$0.refine && matches($0, seed: stillSeed) }) + 1
 
         // 4. 输入在 Mac 的连接队列上直接交给注入器，顺序与取值不变。
         let inputs: [RemoteDesktopInput] = [
@@ -160,11 +168,21 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         }
         XCTAssertTrue(cursor, "\(String(describing: screen.lastCursor))")
 
-        // 6. 静止 300 ms 后精修一次（只一次）。
-        let refined = await waitUntil(2) { screen.frames.contains(where: \.refine) }
-        XCTAssertTrue(refined, "画面静止后应有一帧精修")
+        // 6. 静止 300 ms 后精修一次（只一次）：新手机走旁路——另一个会话编的关键帧，画面就是当前这张。
+        //    例外：码率被拥塞控制压到 `refineMinBitrate` 以下时按设计不精修（链路吃紧时再塞一大帧，下一下
+        //    动作就卡）。机器忙到「采集 → 手机解码完」超过拥塞阈值时测试里也会这样，那就核对「没精修」。
+        let refined = await waitUntil(2) { screen.frames.dropFirst(stillFrom).contains(where: \.refine) }
         try? await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(screen.frames.filter(\.refine).count, 1, "同一段静止只精修一次")
+        let refines = screen.frames.dropFirst(stillFrom).filter(\.refine)
+        let bitrates = server.desktopStats?.snapshot().bitrateHistory ?? []
+        if let bitrate = bitrates.last, bitrate < RemoteDesktopStreamer.refineMinBitrate {
+            XCTAssertTrue(refines.isEmpty, "码率已降到 \(bitrate)（\(bitrates)），不该精修")
+        } else {
+            XCTAssertTrue(refined, "画面静止后应有一帧精修（码率变化 \(bitrates)）")
+            XCTAssertEqual(refines.count, 1, "同一段静止只精修一次")
+            XCTAssertTrue(refines.allSatisfy(\.sidecar), "声明了 sidecarRefine 的手机收到的是旁路精修帧")
+            XCTAssertTrue(refines.allSatisfy { matches($0, seed: stillSeed) }, "精修的是当前画面")
+        }
 
         // 7. 手机要关键帧（回前台 / 解码出错）：静止画面也会补一个关键帧。
         session.requestKeyframe()
@@ -193,6 +211,36 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         let stopped = await waitUntil { mac.sources[1].stopped }
         XCTAssertTrue(stopped)
         XCTAssertEqual(client.state, .connected, "结束桌面流不断开整条连接")
+    }
+
+    // MARK: - 老手机
+
+    func test_phone_without_sidecar_support_gets_refine_inside_the_main_stream() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        client.disconnect()
+        // 原始链路的开流请求不带 `sidecarRefine`，就是升级前的手机：旁路帧它不会分开解，不能发给它。
+        let (link, inbox, channel) = try await rawPhone(server)
+        defer { link.close() }
+        XCTAssertNotNil(mac.latestSource)
+        var acknowledged = 0
+        let refined = await waitUntil(3) {
+            let frames = (try? inbox.of(.desktopFrame).map { try RemoteDesktopFrame(decoding: $0.payload) }) ?? []
+            for frame in frames.dropFirst(acknowledged) {
+                link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
+                    sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 1000).encoded()))
+            }
+            acknowledged = frames.count
+            return frames.contains { $0.flags.contains(.refine) }
+        }
+        XCTAssertTrue(refined, "静止后应有一帧精修")
+        let frames = try inbox.of(.desktopFrame).map { try RemoteDesktopFrame(decoding: $0.payload) }
+        XCTAssertFalse(frames.contains { $0.flags.contains(.sidecar) }, "老手机不收旁路帧")
+        let refine = try XCTUnwrap(frames.first { $0.flags.contains(.refine) })
+        XCTAssertFalse(refine.isKeyframe, "老手机的精修仍是主流里的 P 帧")
+        // 整条流用同一个解码器从头解到精修帧，解得出来（参考链没断）。
+        let decoder = RemoteVideoDecoder()
+        for frame in frames { _ = try decoder.decode(frame) }
     }
 
     // MARK: - 背压（真实服务端 + 不回确认的原始客户端）

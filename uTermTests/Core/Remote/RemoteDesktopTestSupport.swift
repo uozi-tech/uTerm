@@ -253,7 +253,7 @@ final class FakeDesktopMac {
             screenCaptureAuthorized: { [weak self] in self?.screenAuthorized ?? false },
             canPostEvents: { [weak self] in self?.canControl ?? false },
             display: { [weak self] _ in self?.display },
-            makeSource: { [weak self] _, width, height in
+            makeSource: { [weak self] _, width, height, _ in
                 let source = SyntheticFrameSource(width: width, height: height, detail: self?.detail ?? false)
                 self?.sources.append(source)
                 return source

@@ -6,7 +6,7 @@ import ScreenCaptureKit
 
 /// ScreenCaptureKit 采集一块显示器（调研 §3.2）。
 ///
-/// - 输出 4:2:0（`420v`）IOSurface，直接交给编码器，零拷贝；GPU 在采集阶段缩放到目标尺寸。
+/// - 输出 4:2:0（`420v`，或 10-bit 的 `x420`）IOSurface，直接交给编码器，零拷贝；GPU 在采集阶段缩放到目标尺寸。
 /// - 屏幕静止时 SCK 只出 `idle` 状态的帧，这里不交出去 → 不编码不发送，空闲带宽≈0。
 /// - `showsCursor = false`：光标位置单独发，手机本地画（光标移动不触发编码）。
 /// - 只在有人看的时候存在：桌面流结束即 `stopCapture`，不在后台空转。
@@ -16,16 +16,18 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
     private let width: Int
     private let height: Int
     private let frameRate: Int
+    private let tenBit: Bool
     private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.capture", qos: .userInteractive)
     private let lock = NSLock()
     private var stream: SCStream?
     private var onFrame: (@Sendable (CVPixelBuffer, UInt64) -> Void)?
     private var onStop: (@Sendable (Error?) -> Void)?
 
-    init(display: RemoteDesktopDisplay, width: Int, height: Int, frameRate: Int = 60) {
+    init(display: RemoteDesktopDisplay, width: Int, height: Int, tenBit: Bool, frameRate: Int = 60) {
         self.display = display
         self.width = width
         self.height = height
+        self.tenBit = tenBit
         self.frameRate = frameRate
     }
 
@@ -39,7 +41,8 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         let configuration = SCStreamConfiguration()
         configuration.width = width
         configuration.height = height
-        configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        configuration.pixelFormat = tenBit ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         configuration.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         // 色域要显式给：不设时 SCK 跟着显示器自己的色域出码值（内建屏、Studio Display 都是 P3 级，
         // 外接 sRGB 屏又是 sRGB），而帧上的标注恒为 709，不随 `colorSpaceName` 变（调研 §14.3）。

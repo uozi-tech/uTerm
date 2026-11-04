@@ -340,9 +340,12 @@ extension RemoteHostConnection {
             stopDesktop(channel: current.channel, notify: false)
         }
         let device = peerName
+        // 新手机（能解旁路精修帧）+ HEVC：10-bit 主流 + 旁路精修。老手机照旧，免得它把旁路帧当主流解。
+        let sidecar = request.codec == .hevc && request.sidecarRefine == true
         let streamer = RemoteDesktopStreamer(
             link: link, channel: channel, codec: request.codec, width: size.width, height: size.height, display: display,
-            source: environment.makeSource(display, size.width, size.height),
+            sidecarRefine: sidecar,
+            source: environment.makeSource(display, size.width, size.height, sidecar),
             injector: canControl ? environment.makeInjector(display) : nil,
             cursorLocation: environment.cursorLocation,
             onFirstInput: { [weak self] in

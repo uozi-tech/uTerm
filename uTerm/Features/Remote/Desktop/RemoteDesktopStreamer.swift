@@ -54,6 +54,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     let width: Int
     let height: Int
     let display: RemoteDesktopDisplay
+    /// 10-bit 主流 + 旁路精修（手机声明能解旁路帧、且是 HEVC 时）。否则 8-bit 主流、主流里精修。
+    let sidecarRefine: Bool
     let stats = RemoteDesktopStreamerStats()
 
     private let source: any RemoteDesktopFrameSource
@@ -64,6 +66,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     // 以下只在 link.queue 上。
     private var encoder: RemoteVideoEncoder?
+    /// 旁路精修的编码器（`sidecarRefine` 时才有）。
+    private var stillEncoder: RemoteVideoEncoder?
     private var pacer = RemoteDesktopPacer<RemoteCapturedFrame>()
     private var rate: RemoteRateController
     private var isLive = false
@@ -78,7 +82,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var lastCursor: RemoteDesktopCursor?
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
-         display: RemoteDesktopDisplay, source: any RemoteDesktopFrameSource,
+         display: RemoteDesktopDisplay, sidecarRefine: Bool = false, source: any RemoteDesktopFrameSource,
          injector: (any RemoteDesktopInputSink)?, cursorLocation: (@Sendable () -> CGPoint?)?,
          onFirstInput: @escaping @Sendable () -> Void, onSourceStopped: @escaping @Sendable (Error?) -> Void) {
         self.link = link
@@ -87,6 +91,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.width = width
         self.height = height
         self.display = display
+        self.sidecarRefine = sidecarRefine
         self.source = source
         self.injector = injector
         self.cursorLocation = cursorLocation
@@ -98,9 +103,16 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 建编码器、开采集。采集出的帧在 `activate` 之前只留最新一张，不编码不发送。
     func start() async throws {
         let encoder = try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: rate.bitrate,
-                                             frameRate: rate.frameRate)
+                                             frameRate: rate.frameRate, tenBit: sidecarRefine)
+        let stillEncoder = sidecarRefine
+            ? try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 0, frameRate: rate.frameRate,
+                                     tenBit: true, purpose: .still)
+            : nil
         // 异步挂上即可：`activate` 排在它后面，之前采到的帧只留着不编。
-        link.queue.async { self.encoder = encoder }
+        link.queue.async {
+            self.encoder = encoder
+            self.stillEncoder = stillEncoder
+        }
         stats.setBitrate(rate.bitrate)
         try await source.start(
             onFrame: { [weak self] image, nanos in
@@ -124,7 +136,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.link.sendOnQueue(started)
             self.isLive = true
             self.startCursorTimer()
-            if let frame = self.lastFrame { self.offer(frame) }
+            if let frame = self.lastFrame {
+                self.offer(frame)
+                // 开流时屏幕往往是静止的：这张之后可能再没有新帧来触发精修，自己约一次。
+                self.scheduleRefineCheck()
+            }
         }
     }
 
@@ -136,6 +152,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.cursorTimer?.cancel()
             self.cursorTimer = nil
             self.encoder = nil
+            self.stillEncoder = nil
             self.lastFrame = nil
             _ = self.pacer.takePending()
         }
@@ -262,7 +279,36 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
         refined = true
-        encode(sequence, frame, refine: true)
+        if sidecarRefine {
+            encodeStill(sequence, frame)
+        } else {
+            encode(sequence, frame, refine: true)
+        }
+    }
+
+    /// 旁路精修：另一个会话把这张静止画面编成高画质关键帧。编好时画面若已经变了（手机上已是更新的
+    /// 主流画面），就不发：发了会把旧画面盖回去。
+    private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame) {
+        guard let stillEncoder else {
+            pacer.abandon(sequence)
+            return
+        }
+        let submitted = DispatchTime.now().uptimeNanoseconds
+        stillEncoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: true, refine: false) { [weak self] result in
+            guard let self else { return }
+            let encodeNanos = DispatchTime.now().uptimeNanoseconds &- submitted
+            self.link.queue.async {
+                guard !self.isStopped else { return }
+                guard case .success(let encoded) = result, encoded.isKeyframe,
+                      self.lastFrame?.captureNanos == frame.captureNanos else {
+                    self.pacer.abandon(sequence)
+                    self.pump()
+                    return
+                }
+                self.send(encoded, sequence: sequence, captureNanos: frame.captureNanos,
+                          flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos)
+            }
+        }
     }
 
     // MARK: - 编码与发送
@@ -276,8 +322,6 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         forceKeyframe = false
         let submitted = DispatchTime.now().uptimeNanoseconds
         let captureNanos = frame.captureNanos
-        let codec = self.codec
-        let width = UInt16(clamping: self.width), height = UInt16(clamping: self.height)
         encoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: keyframe, refine: refine) { [weak self] result in
             guard let self else { return }
             let encodeNanos = DispatchTime.now().uptimeNanoseconds &- submitted
@@ -306,24 +350,32 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     var flags: RemoteDesktopFrame.Flags = []
                     if encoded.isKeyframe { flags.insert(.keyframe) }
                     if refine { flags.insert(.refine) }
-                    let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence,
-                                                     captureNanos: captureNanos, width: width, height: height,
-                                                     parameterSets: encoded.parameterSets, data: encoded.data).encoded()
-                    // 单帧超过分帧上限（几乎不可能：码率上限下一帧远小于 4 MB）：不发，降码率、下一帧重来。
-                    guard payload.count + RemoteMessage.headerSize + 64 <= RemoteConstants.maxFrameBytes else {
-                        self.pacer.abandon(sequence)
-                        self.forceKeyframe = true
-                        if self.rate.congestion(now: DispatchTime.now().uptimeNanoseconds) { self.applyRate() }
-                        self.pump()
-                        return
-                    }
-                    self.pacer.encoded(sequence, bytes: payload.count)
-                    self.link.sendOnQueue(RemoteMessage(.desktopFrame, channel: self.channel, payload: payload))
-                    self.stats.recordFrame(bytes: payload.count, encodeNanos: encodeNanos, keyframe: encoded.isKeyframe,
-                                           refine: refine)
+                    self.send(encoded, sequence: sequence, captureNanos: captureNanos, flags: flags,
+                              encodeNanos: encodeNanos)
                 }
             }
         }
+    }
+
+    /// 编好的一帧发出去，计入在途。在连接队列上调用。
+    private func send(_ encoded: RemoteEncodedFrame, sequence: UInt32, captureNanos: UInt64,
+                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64) {
+        let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence, captureNanos: captureNanos,
+                                         width: UInt16(clamping: width), height: UInt16(clamping: height),
+                                         parameterSets: encoded.parameterSets, data: encoded.data).encoded()
+        // 单帧超过分帧上限（几乎不可能：码率上限下一帧远小于 4 MB）：不发，降码率、下一帧重来。
+        guard payload.count + RemoteMessage.headerSize + 64 <= RemoteConstants.maxFrameBytes else {
+            pacer.abandon(sequence)
+            if !flags.contains(.sidecar) { forceKeyframe = true }
+            if rate.congestion(now: DispatchTime.now().uptimeNanoseconds) { applyRate() }
+            pump()
+            return
+        }
+        pacer.encoded(sequence, bytes: payload.count)
+        link.sendOnQueue(RemoteMessage(.desktopFrame, channel: channel, payload: payload))
+        stats.recordFrame(bytes: payload.count, encodeNanos: encodeNanos,
+                          keyframe: flags.contains(.keyframe) && !flags.contains(.sidecar),
+                          refine: flags.contains(.refine))
     }
 
     /// 码控丢掉的画面：一帧时间后若还没有更新的画面，再送一次。

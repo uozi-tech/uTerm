@@ -1,4 +1,6 @@
+import CoreMedia
 import CoreVideo
+import VideoToolbox
 import XCTest
 @testable import uTerm
 
@@ -118,6 +120,92 @@ final class RemoteVideoCodecTests: XCTestCase {
             XCTAssertEqual(CVPixelBufferGetWidth(image), width)
             XCTAssertEqual(CVPixelBufferGetHeight(image), height)
         }
+    }
+
+    func test_ten_bit_stream_is_main10_low_latency_and_round_trips() throws {
+        let width = 1856, height = 1206
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 10_000_000,
+                                             frameRate: 60, tenBit: true)
+        XCTAssertTrue(encoder.isLowLatency, "10-bit 也要走低延迟码控")
+        let decoder = RemoteVideoDecoder()
+        for seed in 1...3 {
+            // 和生产一样喂 10-bit（采集直接出 `x420`）：喂 8-bit 时 VideoToolbox 会悄悄编成 Main。
+            let source = try Self.tenBit(RemoteDesktopFixture.makeFrame(width: width, height: height, seed: seed))
+            let encoded = try encode(encoder, source, nanos: UInt64(seed) * 16_000_000, keyframe: seed == 1)
+            if seed == 1 {
+                let format = try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: encoded.parameterSets)
+                XCTAssertEqual(Self.hevcProfile(format), 2, "hvcC 的 profile 应为 Main10")
+            }
+            let image = try decoder.decode(try wire(encoded, codec: .hevc, sequence: UInt32(seed), width: width, height: height))
+            let decoded = RemoteDesktopFixture.blockLuma(image)
+            for block in 0..<16 {
+                XCTAssertEqual(decoded[block], Double(RemoteDesktopFixture.lumaValue(block: block, seed: seed)), accuracy: 6)
+            }
+        }
+    }
+
+    /// 旁路精修：另一个会话、每次都是关键帧，用另一个解码器解；比同一张画面在主流里清楚得多，
+    /// 而且主流的解码器不受影响，接着往下解。
+    func test_still_encoder_makes_sharper_independent_keyframes() throws {
+        let width = 1856, height = 1206
+        let stream = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 4_000_000,
+                                            frameRate: 60, tenBit: true)
+        let still = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 0, frameRate: 60,
+                                           tenBit: true, purpose: .still)
+        XCTAssertFalse(still.isLowLatency)
+        let streamDecoder = RemoteVideoDecoder(), stillDecoder = RemoteVideoDecoder()
+        let first = RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1, detail: true)
+        let firstTenBit = try Self.tenBit(first)
+        let streamed = try streamDecoder.decode(try wire(try encode(stream, firstTenBit, nanos: 1, keyframe: true),
+                                                         codec: .hevc, sequence: 1, width: width, height: height))
+
+        var sharpened: [CVPixelBuffer] = []
+        for index in 0..<2 {
+            let encoded = try encode(still, firstTenBit, nanos: UInt64(index + 1) * 16_000_000, keyframe: true)
+            XCTAssertTrue(encoded.isKeyframe, "旁路精修帧每次都是关键帧，不依赖手机上的任何一帧")
+            sharpened.append(try stillDecoder.decode(
+                try wire(encoded, codec: .hevc, sequence: UInt32(10 + index), width: width, height: height, refine: true)))
+        }
+        let streamPSNR = RemoteDesktopFixture.lumaPSNR(first, streamed)
+        let stillPSNR = RemoteDesktopFixture.lumaPSNR(first, sharpened[0])
+        print(String(format: "[桌面探针] 旁路精修 1856×1206：主流 4 Mbps %.2f dB → 旁路 %.2f dB", streamPSNR, stillPSNR))
+        XCTAssertGreaterThan(stillPSNR, streamPSNR + 2)
+
+        // 主流接着来一帧 P 帧：它的参考是主流自己的上一帧，旁路帧没进过这个解码器，照样解得对。
+        // 4 Mbps 下码控要为开头那个关键帧还账，会先丢几帧：同一画面隔一帧再送，和发送端一样。
+        let second = try Self.tenBit(RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 2))
+        var next: RemoteEncodedFrame?
+        for attempt in 0..<200 where next == nil {
+            next = try? encode(stream, second, nanos: UInt64(attempt + 2) * 16_000_000)
+        }
+        let delta = try XCTUnwrap(next)
+        XCTAssertFalse(delta.isKeyframe)
+        let image = try streamDecoder.decode(try wire(delta, codec: .hevc, sequence: 2, width: width, height: height))
+        let decoded = RemoteDesktopFixture.blockLuma(image)
+        for block in 0..<16 {
+            XCTAssertEqual(decoded[block], Double(RemoteDesktopFixture.lumaValue(block: block, seed: 2)), accuracy: 6)
+        }
+    }
+
+    /// 8-bit 合成画面转成采集给的 10-bit 4:2:0（`x420`）。
+    private static func tenBit(_ image: CVPixelBuffer) throws -> CVPixelBuffer {
+        var output: CVPixelBuffer?
+        CVPixelBufferCreate(nil, CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image),
+                            kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary, &output)
+        var session: VTPixelTransferSession?
+        VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &session)
+        let converted = try XCTUnwrap(output)
+        XCTAssertEqual(VTPixelTransferSessionTransferImage(try XCTUnwrap(session), from: image, to: converted), noErr)
+        return converted
+    }
+
+    /// hvcC 第 2 字节的低 5 位是 general_profile_idc（1 = Main，2 = Main10）。
+    private static func hevcProfile(_ format: CMFormatDescription) -> Int? {
+        let extensions = CMFormatDescriptionGetExtensions(format) as? [String: Any]
+        let atoms = extensions?[kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms as String] as? [String: Any]
+        guard let hvcC = atoms?["hvcC"] as? Data, hvcC.count > 1 else { return nil }
+        return Int(hvcC[hvcC.startIndex + 1] & 0x1f)
     }
 
     /// 静止精修：低码率下编出来的画面糊，同一画面以精修方式再编一次（P 帧，临时压低 QP 上限）应明显更清楚。

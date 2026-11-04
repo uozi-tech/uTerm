@@ -14,7 +14,8 @@ struct RemoteDesktopEnvironment {
     var canPostEvents: @MainActor () async -> Bool
     /// 要看的显示器（nil = 主显示器）。
     var display: @MainActor (_ requested: UInt32?) -> RemoteDesktopDisplay?
-    var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int) -> any RemoteDesktopFrameSource
+    var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
+        -> any RemoteDesktopFrameSource
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
     /// Mac 光标的全局坐标（在连接队列上轮询）。
     var cursorLocation: (@Sendable () -> CGPoint?)?
@@ -22,7 +23,7 @@ struct RemoteDesktopEnvironment {
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
         isEnabled: { false }, screenCaptureAuthorized: { false }, canPostEvents: { false }, display: { _ in nil },
-        makeSource: { _, _, _ in fatalError("远程桌面未启用") }, makeInjector: { _ in fatalError("远程桌面未启用") },
+        makeSource: { _, _, _, _ in fatalError("远程桌面未启用") }, makeInjector: { _ in fatalError("远程桌面未启用") },
         cursorLocation: nil)
 
     static func live(settings: RemoteControlSettings) -> RemoteDesktopEnvironment {
@@ -31,7 +32,9 @@ struct RemoteDesktopEnvironment {
             screenCaptureAuthorized: { await RemoteDesktopPermissions.screenCaptureGranted() },
             canPostEvents: { await RemoteDesktopPermissions.postEventsGranted() },
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
-            makeSource: { display, width, height in ScreenCaptureFrameSource(display: display, width: width, height: height) },
+            makeSource: { display, width, height, tenBit in
+                ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
+            },
             makeInjector: { display in RemoteEventInjector(display: display) },
             cursorLocation: { CGEvent(source: nil)?.location })
     }

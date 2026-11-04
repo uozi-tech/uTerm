@@ -104,7 +104,8 @@ final class RemoteDesktopSession {
             },
             onMessage: { message, link in receiver.receive(message, from: link, generation: current) }
         )
-        let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec)
+        let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
+                                                sidecarRefine: true)
         let (attached, info) = try await client.startDesktop(request, sink: sink)
         guard current == generation, !isStopped else {
             if info.failure == nil { client.stopDesktop(attached) }
@@ -239,6 +240,7 @@ nonisolated final class RemoteDesktopReceiverStats: @unchecked Sendable {
 ///
 /// 每收到一帧都回确认（解码失败、等关键帧跳过的也回），Mac 的在途计数靠它释放。
 /// 解码失败时向 Mac 要关键帧（限频），在关键帧到来之前的 P 帧直接跳过，不往屏幕上送花屏。
+/// 旁路精修帧（`.sidecar`）走另一个解码器：它不在主流的参考链里，解坏了也只是少一次精修，不要关键帧。
 nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     /// 两次关键帧请求的最短间隔：解码错一次通常连着错到下一个关键帧，不必每帧都要。
     static let keyframeRequestSpacing: UInt64 = 500_000_000
@@ -246,6 +248,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     let stats = RemoteDesktopReceiverStats()
     private let decodeQueue = DispatchQueue(label: "com.uozi.uTerm.remote.desktop.decode", qos: .userInteractive)
     private let decoder: RemoteVideoDecoder
+    private let stillDecoder: RemoteVideoDecoder
     private let lock = NSLock()
     private var link: RemoteLink?
     private var channel: UInt32 = 0
@@ -256,6 +259,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
 
     init(outputPixelFormat: OSType) {
         decoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
+        stillDecoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
     }
 
     /// 渲染回调在解码队列上调用（`AVSampleBufferDisplayLayer` 可以在任意线程 enqueue）。
@@ -272,7 +276,10 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         self.generation = generation
         link = nil
         lock.unlock()
-        decodeQueue.async { self.decoder.invalidate() }
+        decodeQueue.async {
+            self.decoder.invalidate()
+            self.stillDecoder.invalidate()
+        }
     }
 
     func attach(link: RemoteLink, channel: UInt32, generation: Int) {
@@ -320,23 +327,21 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         let handler = onImage
         lock.unlock()
         guard current, let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        let sidecar = frame.flags.contains(.sidecar)
         let start = DispatchTime.now().uptimeNanoseconds
-        var image: CVPixelBuffer?
-        do {
-            image = try decoder.decode(frame)
-        } catch {
-            image = nil
-        }
+        let image = try? (sidecar ? stillDecoder : decoder).decode(frame)
         let elapsed = DispatchTime.now().uptimeNanoseconds - start
         // 先确认再渲染：确认决定 Mac 什么时候编下一帧，越早发出去链路越满。
+        // 旁路帧解坏了不报失败：Mac 收到失败会给主流补关键帧，而主流没出问题。
         let ack = RemoteDesktopAck(sequence: frame.sequence, captureNanos: frame.captureNanos,
-                                   decodeMicros: UInt32(min(UInt64(UInt32.max), elapsed / 1000)), failed: image == nil)
+                                   decodeMicros: UInt32(min(UInt64(UInt32.max), elapsed / 1000)),
+                                   failed: image == nil && !sidecar)
         // 确认发回帧来的那条连接。
         link.send(RemoteMessage(.desktopAck, channel: channel, payload: ack.encoded()))
         stats.record(bytes: payload.count, decodeNanos: elapsed, failed: image == nil)
         if let image {
             handler?(image, frame)
-        } else {
+        } else if !sidecar {
             requestKeyframe(force: false)
         }
     }

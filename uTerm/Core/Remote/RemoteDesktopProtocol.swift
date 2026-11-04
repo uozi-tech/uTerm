@@ -44,6 +44,9 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var codec: RemoteVideoCodec
     /// nil = 主显示器。多显示器切换留的口子，本期 Mac 只认主显示器。
     var displayID: UInt32? = nil
+    /// 手机能另开一个解码器解旁路精修帧（`RemoteDesktopFrame.Flags.sidecar`）。HEVC 时 Mac 据此改用
+    /// 10-bit 主流 + 旁路精修；nil / false（老手机）时照旧 8-bit + 主流里精修。老 Mac 不认这个键，照旧发。
+    var sidecarRefine: Bool? = nil
 }
 
 /// Mac → 手机：开流结果（`desktopStarted`，通道 = 这条桌面流的通道）。
@@ -86,6 +89,10 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         static let keyframe = Flags(rawValue: 1 << 0)
         /// 静止精修帧：画面没变，只是用更低的 QP 把同一画面重编一次。
         static let refine = Flags(rawValue: 1 << 1)
+        /// 旁路精修帧（与 `refine`、`keyframe` 同时出现）：另一个编码会话编的高画质关键帧，不进主流的
+        /// 参考链。手机用另一个解码器解、显示到下一帧主流画面为止；主流接着从自己的上一帧往下解。
+        /// 只发给开流时声明了 `sidecarRefine` 的手机。
+        static let sidecar = Flags(rawValue: 1 << 2)
     }
 
     var flags: Flags

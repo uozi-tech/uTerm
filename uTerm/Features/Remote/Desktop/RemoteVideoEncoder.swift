@@ -26,8 +26,21 @@ nonisolated enum RemoteVideoEncoderError: Error, Equatable {
 /// - `RealTime`、不重排（没有 B 帧，编一帧出一帧）、无限 GOP（低延迟模式本身就是），关键帧只按需强制。
 /// - 码率由 `RemoteRateController` 动态改；静止精修时临时压低 `MaxAllowedFrameQP`（只有低延迟模式认这个键）。
 ///
+/// 旁路精修（`Purpose.still`）是另一个会话：普通码控、按画质（`stillQuality`）而不是码率编单帧关键帧。
+/// 它不进主流的参考链，主流的码控也就不用为这一大帧还账（主流里精修时，之后 30 帧会被码控丢掉一半）。
+///
 /// 线程：`encode` 可在任意一条串行队列上调；完成回调在 VideoToolbox 自己的线程上。
 nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
+    enum Purpose {
+        /// 主流：低延迟码控，按码率。
+        case stream
+        /// 旁路精修：普通码控，按画质，每帧都是关键帧。
+        case still
+    }
+
+    /// 旁路精修的画质。调研 §14 实测（2144×1206 真实桌面，10-bit）：0.75 → 234 KB、41.5 dB；
+    /// 0.85 再大 60% 只多 0.5 dB。主流 10 Mbps 静止时是 36 dB。
+    static let stillQuality = 0.75
     /// 精修帧的 QP 上限：越低越清楚、越大。28 在 1080p 桌面上一帧约百来 KB，肉眼看不出块效应。
     static let refineMaxQP = 28
     /// 平时不限 QP（H.264 / HEVC 的上限都是 51）。
@@ -42,23 +55,29 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     private let lock = NSLock()
     private var refineFramesInFlight = 0
 
-    init(codec: RemoteVideoCodec, width: Int, height: Int, bitrate: Int, frameRate: Int) throws {
+    /// - Parameter tenBit: HEVC Main10。低延迟模式认它，编码耗时不变，同码率画质高 1.4–2.6 dB（调研 §14）。
+    ///   H.264 没有 10-bit 硬编，忽略。
+    init(codec: RemoteVideoCodec, width: Int, height: Int, bitrate: Int, frameRate: Int, tenBit: Bool = false,
+         purpose: Purpose = .stream) throws {
         self.codec = codec
         self.width = width
         self.height = height
         var created: VTCompressionSession?
-        var lowLatency = true
-        var status = Self.create(codec: codec, width: width, height: height, lowLatency: true, session: &created)
-        if status != noErr {
+        var lowLatency = purpose == .stream
+        var status = Self.create(codec: codec, width: width, height: height, lowLatency: lowLatency, session: &created)
+        if status != noErr, lowLatency {
             lowLatency = false
             status = Self.create(codec: codec, width: width, height: height, lowLatency: false, session: &created)
         }
         guard status == noErr, let created else { throw RemoteVideoEncoderError.create(status) }
         session = created
         isLowLatency = lowLatency
-        set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
+        set(kVTCompressionPropertyKey_RealTime, (purpose == .stream ? kCFBooleanTrue : kCFBooleanFalse)!)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, frameRate as CFNumber)
+        if tenBit, codec == .hevc {
+            set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main10_AutoLevel)
+        }
         // 采集出的是 Display P3 码值（sRGB 曲线），按 709 矩阵转 YUV（见 `ScreenCaptureFrameSource`）。
         // 在码流里如实标出来，手机才按 P3 显示；标成 709 原色时饱和度约低 17%（调研 §14.3）。
         // 这几个值 VideoToolbox 会写进 VUI，解码输出原样带回。
@@ -69,7 +88,10 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
             // 普通模式下才需要自己关掉周期关键帧；低延迟模式本身是无限 GOP。
             set(kVTCompressionPropertyKey_MaxKeyFrameInterval, Int32.max as CFNumber)
         }
-        setBitrate(bitrate)
+        switch purpose {
+        case .stream: setBitrate(bitrate)
+        case .still: set(kVTCompressionPropertyKey_Quality, Self.stillQuality as CFNumber)
+        }
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
 
