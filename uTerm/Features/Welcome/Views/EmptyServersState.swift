@@ -14,13 +14,6 @@ struct EmptyServersState: View {
     var body: some View {
         ZStack {
             WelcomeDotGrid()
-            Circle()
-                .fill(RadialGradient(
-                    colors: [UD.accent.opacity(0.10), .clear],
-                    center: .center, startRadius: 0, endRadius: 230))
-                .frame(width: 460, height: 460)
-                .blur(radius: 20)
-                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 ULogo(size: 84)
@@ -33,8 +26,20 @@ struct EmptyServersState: View {
 
                 importHint.padding(.top, 18)
             }
+            // 放 background 里不参与布局：直接放进 ZStack 时，460 高的光晕会把空态撑得比窗口还高，
+            // 整个窗口的内容上下溢出，标题栏被顶出窗口上沿。
+            .background {
+                Circle()
+                    .fill(RadialGradient(
+                        colors: [UD.accent.opacity(0.10), .clear],
+                        center: .center, startRadius: 0, endRadius: 230))
+                    .frame(width: 460, height: 460)
+                    .blur(radius: 20)
+                    .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .background(UD.panel)
     }
 
