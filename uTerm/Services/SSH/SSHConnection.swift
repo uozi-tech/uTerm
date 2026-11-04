@@ -120,6 +120,8 @@ actor SSHConnection: TerminalImageReceiving {
     /// 既有连接上开一次性 exec channel。teardown 仍由 `sessionTask` 的强本地
     /// 副本独占负责 —— 此引用只用于探测与探测判死后的强制关闭（幂等）。
     private var connectedClient: ConnectedClient?
+    /// 认出来的本会话 pty（`pts/3`）。一个通道的 pty 终身不变，认一次就够。
+    private var identifiedTTY: String?
 
     /// `connect` 前 `resize` 被调用时记下，用作 PTY 初始尺寸。
     /// connect 之后的 resize 走有序发送路径（C1/M2），不再读这两个字段。
@@ -260,7 +262,9 @@ actor SSHConnection: TerminalImageReceiving {
                                     }
                                     switch chunk {
                                     case .stdout(let buffer), .stderr(let buffer):
-                                        outputContinuation.yield(Data(buffer.readableBytesView))
+                                        let data = Data(buffer.readableBytesView)
+                                        state.scanForTTYMarker(data)
+                                        outputContinuation.yield(data)
                                     }
                                 }
                             } catch {
@@ -394,6 +398,69 @@ actor SSHConnection: TerminalImageReceiving {
         }
     }
 
+    // MARK: - 前台进程探测
+
+    func foregroundActivity() async -> TerminalActivity {
+        await foregroundActivity(timeout: .milliseconds(1500))
+    }
+
+    /// 在这条连接上另开 exec 通道读进程表。关标签的路上等着它，所以限时。
+    ///
+    /// Citadel 的 exec 不响应取消，不能用 TaskGroup 等（超时了也会跟着挂住），超时后让它自己跑完。
+    func foregroundActivity(timeout: Duration) async -> TerminalActivity {
+        guard !isClosed, let connected = connectedClient else { return .unknown }
+        let (results, continuation) = AsyncStream.makeStream(of: TerminalActivity.self)
+        let probe = Task { continuation.yield(await self.probeForeground(on: connected)) }
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            continuation.yield(.unknown)
+        }
+        defer {
+            probe.cancel()
+            timer.cancel()
+            continuation.finish()
+        }
+        for await result in results { return result }
+        return .unknown
+    }
+
+    private func probeForeground(on connected: ConnectedClient) async -> TerminalActivity {
+        guard let output = try? await Self.runCollecting(RemoteProcessTable.command, on: connected),
+              let table = RemoteProcessTable(output: output) else { return .unknown }
+        let shells = table.shells
+        if shells.count == 1 { return table.activity(of: shells[0]) }
+        guard let tty = await resolveTTY(among: shells.compactMap(\.tty), on: connected),
+              let shell = shells.first(where: { $0.tty == tty }) else { return .unknown }
+        return table.activity(of: shell)
+    }
+
+    /// 连接上不止一个 shell 时认出自己的 pty，做法见 `TTYMarkerScanner`。
+    private func resolveTTY(among ttys: [String], on connected: ConnectedClient) async -> String? {
+        if let identifiedTTY, ttys.contains(identifiedTTY) { return identifiedTTY }
+        guard let command = TTYMarkerScanner.command(forTTYs: ttys) else { return nil }
+        state.startTTYScan()
+        defer { state.stopTTYScan() }
+        _ = try? await connected.exec(command)
+        // 标记走的是 shell 通道，和 exec 的结束没有先后保证。
+        for _ in 0..<20 {
+            if let tty = state.scannedTTY {
+                identifiedTTY = tty
+                return tty
+            }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return nil
+    }
+
+    /// `exec` 的输出上限是 64 000 字节，进程多的机器上 `ps -A` 会超。
+    private static func runCollecting(_ command: String, on connected: ConnectedClient) async throws -> String {
+        let collected = Mutex(Data())
+        try await connected.execStreaming(command) { chunk in
+            collected.withLock { $0.append(chunk) }
+        }
+        return collected.withLock { String(decoding: $0, as: UTF8.self) }
+    }
+
     // MARK: - 私有
 
     /// 会话 Task 自然结束（远端 shell 退出，或 withPTY 异常）时调用。
@@ -455,6 +522,9 @@ private nonisolated final class SessionState: Sendable {
         /// close 信号的等待方。
         var closeContinuation: CheckedContinuation<Void, Never>?
         var closeSignalled = false
+        /// 正在认 pty 时才有值（见 `TTYMarkerScanner`）。平时输出路径上只多一次判空。
+        var ttyScanner: TTYMarkerScanner?
+        var scannedTTY: String?
     }
 
     private let mutex = Mutex(Storage())
@@ -555,6 +625,30 @@ private nonisolated final class SessionState: Sendable {
         // 结束信号流，让 drainLoop 的 `for await` 退出。
         opSignalContinuation.finish()
         await task?.value
+    }
+
+    // MARK: 认 pty（见 `TTYMarkerScanner`）
+
+    func startTTYScan() {
+        mutex.withLock { storage in
+            storage.ttyScanner = TTYMarkerScanner()
+            storage.scannedTTY = nil
+        }
+    }
+
+    func stopTTYScan() {
+        mutex.withLock { $0.ttyScanner = nil }
+    }
+
+    var scannedTTY: String? { mutex.withLock { $0.scannedTTY } }
+
+    /// 输出泵每一块都过一遍，所以没在认 pty 时必须立刻返回。
+    func scanForTTYMarker(_ chunk: Data) {
+        mutex.withLock { storage in
+            guard storage.ttyScanner != nil, let tty = storage.ttyScanner?.feed(chunk) else { return }
+            storage.scannedTTY = tty
+            storage.ttyScanner = nil
+        }
     }
 
     // MARK: close 信号

@@ -415,6 +415,26 @@ final class WorkspaceModel {
         terminalGroups.closeActiveTab()
     }
 
+    /// 用户要关一个终端标签：前台还有程序在跑时先确认。程序化的关闭（手机远控、CLI）走
+    /// `closeTerminal(paneID:)`，那边已经由发起方确认过。
+    func requestCloseTerminalTab(_ tabID: UUID) {
+        guard let tab = terminalGroups.allTabs.first(where: { $0.id == tabID }) else { return }
+        TerminalCloseGuard.requestClose(tab.payload.session) { [weak self] in
+            // 确认期间标签可能被拖到别的组、或已经被关掉，到这时再定位。
+            guard let self, let at = terminalGroups.locateTab(tabID) else { return }
+            terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+        }
+    }
+
+    /// ⌘W / 命令面板。活动组是空的时没有会话要问，直接收掉空组。
+    func requestCloseActiveTerminalTab() {
+        if let tab = terminalGroups.activeTab {
+            requestCloseTerminalTab(tab.id)
+        } else {
+            _ = closeActiveTerminalTab()
+        }
+    }
+
     /// 记录一次 workspace 内拖拽源。`.onDrag` 没有结束回调，因此与 pane
     /// drag state 一样轮询鼠标释放兜底清理。
     func beginDrag(_ source: WorkspaceDragSource) {

@@ -250,6 +250,7 @@
 				Features/SFTP/Views/SFTPTransfersDock.swift,
 				Features/SFTP/Views/SFTPWindowView.swift,
 				Features/Terminal/CopyableTerminalView.swift,
+				Features/Terminal/TerminalCloseGuard.swift,
 				Features/Terminal/TerminalColorScheme.swift,
 				Features/Terminal/TerminalCursorShape.swift,
 				Features/Terminal/TerminalHostView.swift,

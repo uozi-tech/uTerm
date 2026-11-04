@@ -56,7 +56,7 @@ enum WorkspaceCommandPaletteFactory {
         items.append(CommandPaletteItem(
             id: "cmd.closeTab", kind: .command,
             title: "关闭当前终端标签", detail: "", hint: "⌘W", group: nil) {
-                _ = workspace.closeActiveTerminalTab()
+                workspace.requestCloseActiveTerminalTab()
             })
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,

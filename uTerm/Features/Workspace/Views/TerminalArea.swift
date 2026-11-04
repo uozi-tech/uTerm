@@ -64,10 +64,9 @@ struct TerminalArea: View {
             },
             emptyGroup: { _ in emptyState },
             onRequestClose: { tab in
-                // 组件只发「请求关闭」，真关由 app 做。终端标签没有脏文件确认这类
-                // 前置流程，定位到就直接关；会话的释放走模型的 `onTabRemoved`。
-                guard let at = workspace.terminalGroups.locateTab(tab.id) else { return }
-                workspace.terminalGroups.closeTab(groupID: at.groupID, index: at.index)
+                // 组件只发「请求关闭」，真关由 app 做：前台还有程序在跑时先确认。
+                // 会话的释放走模型的 `onTabRemoved`。
+                workspace.requestCloseTerminalTab(tab.id)
             },
             stripAccessory: { groupID in newTabButton(groupID) },
             // 预览标签拖进终端组 —— 组件不认识的载荷转给 app。

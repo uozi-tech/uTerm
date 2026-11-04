@@ -103,6 +103,18 @@ actor LocalShellBackend: TerminalImageReceiving {
         client.resize(pid: pid, columns: Int(cols), rows: Int(rows))
     }
 
+    /// 伪终端主端能直接问内核前台进程组是谁，不用猜。
+    func foregroundActivity() async -> TerminalActivity {
+        guard let handle, !closed else { return .unknown }
+        let foreground = tcgetpgrp(handle.master.fileDescriptor)
+        guard foreground > 0 else { return .unknown }
+        // shell 是会话首进程，进程组号 = pid。
+        if foreground == handle.pid { return .idle }
+        var name = [CChar](repeating: 0, count: 256)
+        let length = proc_name(foreground, &name, UInt32(name.count))
+        return .running(length > 0 ? String(cString: name) : nil)
+    }
+
     func close() async {
         guard !closed else { return }
         closed = true

@@ -53,6 +53,12 @@ actor MockBackend: TerminalBackend {
     func emitExit() { exitContinuation.yield(()); exitContinuation.finish() }
     func setConnectError(_ error: Error) { connectError = error }
 
+    // MARK: - 前台探测（关标签确认路径）
+
+    var foregroundActivityResult: TerminalActivity = .unknown
+    func setForegroundActivity(_ activity: TerminalActivity) { foregroundActivityResult = activity }
+    func foregroundActivity() async -> TerminalActivity { foregroundActivityResult }
+
     // MARK: - 存活探测（ConnectionWatchdog 路径）
 
     /// 探测返回值（默认 true=活）。判死时模拟真实后端的行为：强制收尾并

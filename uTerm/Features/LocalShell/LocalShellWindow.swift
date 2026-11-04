@@ -133,6 +133,14 @@ final class LocalShellWindowModel {
         return true
     }
 
+    /// 用户要关一个标签：前台还有程序在跑时先确认。手机远控关闭走 `close(_:)`，手机上已经确认过。
+    func requestClose(_ id: UUID) {
+        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        TerminalCloseGuard.requestClose(pane.session) { [weak self] in
+            self?.close(id)
+        }
+    }
+
     func splitActiveGroup(direction: SplitDirection) {
         guard let groupID = groups.activeGroupID ?? groups.root.firstLeafID else { return }
         groups.splitGroup(groupID, direction: direction)
@@ -236,12 +244,17 @@ struct LocalShellWindowView: View {
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
         .background(WorkspaceCloseShortcutInstaller { window in
             // 只剩一个标签时 ⌘W 关窗口，否则只关活动标签（同 SSH 终端窗口）。
-            if model.panes.count > 1 {
-                model.groups.closeActiveTab()
-            } else {
+            guard model.panes.count > 1 else {
                 window.performClose(nil)
+                return
+            }
+            if let active = model.active {
+                model.requestClose(active.id)
+            } else {
+                model.groups.closeActiveTab()   // 活动组是空的：收掉空组。
             }
         })
+        .background(TerminalWindowCloseGuardInstaller(sessions: { model.panes.map(\.session) }))
         .frame(minWidth: 560, minHeight: 360)
         .task {
             guard let windowID else { return }
@@ -321,7 +334,7 @@ struct LocalShellTerminalArea: View {
                 LocalShellPaneView(pane: tab.payload, background: background) { model.close(tab.id) }
             },
             emptyGroup: { _ in background },
-            onRequestClose: { tab in model.close(tab.id) },
+            onRequestClose: { tab in model.requestClose(tab.id) },
             stripAccessory: { groupID in newTabButton(groupID) })
             .uPaneGroupStyle(.card)
             .uPaneGroupWells()

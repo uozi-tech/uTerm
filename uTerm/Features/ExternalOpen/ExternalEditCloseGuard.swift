@@ -105,29 +105,36 @@ struct ExternalEditCloseGuardInstaller: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard let window, proxy == nil || window.delegate !== proxy else { return }
+            guard let window else { return }
             // SwiftUI 可能在我们之后重设 delegate；每次挂到窗口都确认一遍。
-            if let existing = window.delegate as? WindowCloseProxy {
-                proxy = existing
-                existing.coordinators = coordinators
-                return
-            }
-            let proxy = WindowCloseProxy(original: window.delegate, coordinators: coordinators)
+            let proxy = WindowCloseProxy.installed(on: window)
+            proxy.coordinators = coordinators
             self.proxy = proxy
-            window.delegate = proxy
         }
     }
 }
 
+/// 关窗前的检查都挂在这一个代理上。窗口的 delegate 是弱引用，由各个 installer 视图持有它。
 final class WindowCloseProxy: NSObject, NSWindowDelegate {
+    private enum TerminalCheck { case notStarted, probing, approved }
+
     /// AppKit 在主线程上转发消息，但 `responds(to:)` / `forwardingTarget(for:)` 声明为
     /// nonisolated，读它们要绕过隔离检查。只在 init 写一次。
     nonisolated(unsafe) private weak var original: NSWindowDelegate?
-    var coordinators: () -> [ExternalOpenCoordinator]
+    var coordinators: () -> [ExternalOpenCoordinator] = { [] }
+    var terminalSessions: () -> [TerminalSession] = { [] }
+    private var terminalCheck = TerminalCheck.notStarted
 
-    init(original: NSWindowDelegate?, coordinators: @escaping () -> [ExternalOpenCoordinator]) {
+    init(original: NSWindowDelegate?) {
         self.original = original
-        self.coordinators = coordinators
+    }
+
+    /// 窗口上已有代理就复用，否则包一层。
+    static func installed(on window: NSWindow) -> WindowCloseProxy {
+        if let existing = window.delegate as? WindowCloseProxy { return existing }
+        let proxy = WindowCloseProxy(original: window.delegate)
+        window.delegate = proxy
+        return proxy
     }
 
     nonisolated override func responds(to aSelector: Selector!) -> Bool {
@@ -140,6 +147,7 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard terminalsAllowClosing(sender) else { return false }
         let coordinators = coordinators()
         switch ExternalEditCloseGuard.ask(coordinators, quitting: false) {
         case .cancel:
@@ -147,11 +155,36 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
         case .uploadThenProceed:
             Task { @MainActor in
                 // 传完后再走一遍 performClose：那时已没有待上传改动，直接放行。
-                if await ExternalEditCloseGuard.flush(coordinators) { sender.performClose(nil) }
+                if await ExternalEditCloseGuard.flush(coordinators) {
+                    terminalCheck = .approved   // 终端刚问过，别再问一遍。
+                    sender.performClose(nil)
+                }
             }
             return false
         case .proceed:
             return original?.windowShouldClose?(sender) ?? true
+        }
+    }
+
+    /// 探测要走网络、确认框是 sheet，都不能卡在这个同步回调里：先拒绝这次关闭，用户同意后重走
+    /// `performClose`。放在未上传检查之前，否则重走时那边会再问一遍。
+    private func terminalsAllowClosing(_ window: NSWindow) -> Bool {
+        switch terminalCheck {
+        case .approved:
+            terminalCheck = .notStarted
+            return true
+        case .probing:
+            return false
+        case .notStarted:
+            let sessions = terminalSessions()
+            guard !sessions.isEmpty else { return true }
+            terminalCheck = .probing
+            Task { @MainActor in
+                let approved = await TerminalCloseGuard.confirmClosingWindow(window, sessions: sessions)
+                terminalCheck = approved ? .approved : .notStarted
+                if approved { window.performClose(nil) }
+            }
+            return false
         }
     }
 }

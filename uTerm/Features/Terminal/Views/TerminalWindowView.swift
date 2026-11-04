@@ -106,6 +106,9 @@ struct TerminalWindowView: View {
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
         })
+        .background(TerminalWindowCloseGuardInstaller(sessions: {
+            workspace.terminalGroups.allTabs.map(\.payload.session)
+        }))
         .commandPalette(model: palette) { terminalCommandItems(server: server) }
         // 把本窗口的终端会话接进跨窗口注册表（CLI 的 terminals / read / send）。
         .modifier(TerminalRegistryBinding(
@@ -178,8 +181,11 @@ struct TerminalWindowView: View {
             window.performClose(nil)
             return
         }
-        if workspace.closeActiveTerminalTab() { return }
-        window.performClose(nil)
+        if let tab = groups.activeTab {
+            workspace.requestCloseTerminalTab(tab.id)
+        } else if !workspace.closeActiveTerminalTab() {
+            window.performClose(nil)
+        }
     }
 
     /// ⌘K 命令面板：终端布局相关命令（对齐设计稿 terminal.jsx 的命令面板）。
@@ -199,7 +205,7 @@ struct TerminalWindowView: View {
             },
             CommandPaletteItem(id: "term.closePane", kind: .command,
                                title: "关闭当前终端标签", detail: single ? "仅一个分组" : "", hint: "⌘W", group: nil) {
-                _ = workspace.closeActiveTerminalTab()
+                workspace.requestCloseActiveTerminalTab()
             },
             CommandPaletteItem(id: "term.newTab", kind: .command,
                                title: "新建终端标签", detail: "", hint: "⌘T", group: nil) {
