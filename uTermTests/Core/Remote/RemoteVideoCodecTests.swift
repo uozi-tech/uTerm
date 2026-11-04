@@ -71,6 +71,23 @@ final class RemoteVideoCodecTests: XCTestCase {
         }
     }
 
+    func test_decoded_frames_carry_display_p3_color_tags() throws {
+        // 采集出的是 Display P3 码值：手机拿到的画面若标成 709 原色，显示时饱和度约低 17%（调研 §14.3）。
+        // 显示层按解码输出上的标注做色彩管理，所以核对的是解码端看到的标注，而不是编码器的设置。
+        let width = 640, height = 384
+        for codec in RemoteVideoCodec.allCases {
+            let encoder = try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 2_000_000, frameRate: 60)
+            let encoded = try encode(encoder, RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1),
+                                     nanos: 1, keyframe: true)
+            let image = try RemoteVideoDecoder().decode(
+                wire(encoded, codec: codec, sequence: 1, width: width, height: height))
+            let primaries = CVBufferCopyAttachment(image, kCVImageBufferColorPrimariesKey, nil) as? String
+            let transfer = CVBufferCopyAttachment(image, kCVImageBufferTransferFunctionKey, nil) as? String
+            XCTAssertEqual(primaries, kCVImageBufferColorPrimaries_P3_D65 as String, "\(codec)")
+            XCTAssertEqual(transfer, kCVImageBufferTransferFunction_sRGB as String, "\(codec)")
+        }
+    }
+
     func test_decoder_refuses_delta_frames_until_keyframe() throws {
         let width = 640, height = 384
         let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 2_000_000, frameRate: 60)

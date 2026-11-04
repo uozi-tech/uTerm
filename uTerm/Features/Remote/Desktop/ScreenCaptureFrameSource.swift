@@ -41,6 +41,10 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         configuration.height = height
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         configuration.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
+        // 色域要显式给：不设时 SCK 跟着显示器自己的色域出码值（内建屏、Studio Display 都是 P3 级，
+        // 外接 sRGB 屏又是 sRGB），而帧上的标注恒为 709，不随 `colorSpaceName` 变（调研 §14.3）。
+        // 固定 Display P3，编码器才能标得对（见 `RemoteVideoEncoder`）。
+        configuration.colorSpaceName = CGColorSpace.displayP3
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(frameRate))
         // 编码器里最多压着 2 帧、发送端再留 1 帧最新的、静止精修还要拿着最后 1 帧：留足余量，
         // 否则表面池被占满时 SCK 会停住不出帧。

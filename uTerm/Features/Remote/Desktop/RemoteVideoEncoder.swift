@@ -59,9 +59,11 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, frameRate as CFNumber)
-        // 桌面内容按 BT.709 采集（见 `ScreenCaptureFrameSource`），在码流里标清楚，解码端颜色才对。
-        set(kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
-        set(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2)
+        // 采集出的是 Display P3 码值（sRGB 曲线），按 709 矩阵转 YUV（见 `ScreenCaptureFrameSource`）。
+        // 在码流里如实标出来，手机才按 P3 显示；标成 709 原色时饱和度约低 17%（调研 §14.3）。
+        // 这几个值 VideoToolbox 会写进 VUI，解码输出原样带回。
+        set(kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_P3_D65)
+        set(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB)
         set(kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
         if !lowLatency {
             // 普通模式下才需要自己关掉周期关键帧；低延迟模式本身是无限 GOP。

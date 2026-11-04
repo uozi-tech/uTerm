@@ -24,6 +24,10 @@
 	     拿不准时以法务/合规意见为准，不要以本注释为最终依据。 -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- iPhone 上不加这个键，Core Animation（含 CADisplayLink 的 120 请求）封顶 60 Hz，
+	     ProMotion 机型看远程桌面也只有 60 帧。iPad 不需要它。 -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。</string>
 	<!-- 只声明真正用到的后台模式。`remote-notification` 是 SwiftData 的 CloudKit 镜像
