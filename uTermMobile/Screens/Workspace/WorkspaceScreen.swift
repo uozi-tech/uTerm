@@ -28,10 +28,8 @@ struct WorkspaceScreen: View {
     /// 新建抽屉里已选了主机、连接中页还没盖上来的那一小段（抽屉收起后 0.3s 才发起连接）。
     /// 期间 UIKit 会把抽屉弹出前的第一响应者（旧标签的终端）恢复回来，必须算作「没人拥有键盘」。
     @State private var awaitingConnect = false
-    /// 等用户选「只在手机上关闭 / 同时关闭 Mac 上的终端」的远控标签。
-    @State private var pendingRemoteClose: UUID?
-    /// 前台还有程序在跑、等用户确认的标签。
-    @State private var pendingBusyClose: PendingBusyClose?
+    /// 等用户拿主意的关闭确认（弹窗挂在对应标签上，见 `WorkspaceTabChip`）。
+    @State private var pendingClose: MTabClosePrompt?
     /// 正在探测前台的标签。探测要走一趟网络，连点关闭按钮不重复发起。
     @State private var probingClose: Set<UUID> = []
 
@@ -43,21 +41,6 @@ struct WorkspaceScreen: View {
             if !(workspace.isEmpty && !workspace.isSplit) { panesView }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .confirmationDialog("关闭这个标签？",
-                            isPresented: Binding(get: { pendingRemoteClose != nil },
-                                                 set: { if !$0 { pendingRemoteClose = nil } }),
-                            titleVisibility: .visible) {
-            Button("只在手机上关闭") {
-                if let id = pendingRemoteClose { closeRemoteTab(id, alsoOnMac: false) }
-            }
-            Button("同时关闭 Mac 上的终端", role: .destructive) {
-                if let id = pendingRemoteClose { closeRemoteTab(id, alsoOnMac: true) }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这是「\(pendingRemoteCloseMacName)」上的终端。只在手机上关闭时，它在 Mac 上照常运行，之后还能再接入。")
-        }
-        .modifier(BusyCloseDialog(pending: $pendingBusyClose, onConfirm: closeTab))
         // Duo 展开竖屏：状态栏只占顶行右端，整条顶行却都是安全区——工作区伸进顶行，
         // 贴顶的标签条与状态栏同一行（标签条自己让出状态栏，见 mAvoidsStatusBar）。
         .ignoresSafeArea(.container, edges: chrome.statusRowHeight != nil ? .top : [])
@@ -233,7 +216,7 @@ struct WorkspaceScreen: View {
         }
         if let remote = term.remote {
             if remote.client.supportsCloseSession, term.controller.state == .connected {
-                pendingRemoteClose = id
+                pendingClose = MTabClosePrompt(tabID: id, kind: .remote(macName: remote.macName))
             } else {
                 closeTab(id)
             }
@@ -244,24 +227,18 @@ struct WorkspaceScreen: View {
             let activity = await term.controller.foregroundActivity()
             probingClose.remove(id)
             if let prompt = activity.closePrompt {
-                pendingBusyClose = PendingBusyClose(id: id, prompt: prompt)
+                pendingClose = MTabClosePrompt(tabID: id, kind: .busy(prompt))
             } else {
                 closeTab(id)
             }
         }
     }
 
-    private func closeRemoteTab(_ id: UUID, alsoOnMac: Bool) {
+    private func confirmClose(_ id: UUID, alsoOnMac: Bool) {
         if alsoOnMac, let remote = workspace.tabs.first(where: { $0.id == id })?.terminal?.remote {
             remote.client.closeSessionOnMac(remote.sessionID)
         }
         closeTab(id)
-    }
-
-    private var pendingRemoteCloseMacName: String {
-        guard let id = pendingRemoteClose,
-              let remote = workspace.tabs.first(where: { $0.id == id })?.terminal?.remote else { return "Mac" }
-        return remote.macName
     }
 
     private func closeTab(_ id: UUID) {
@@ -454,7 +431,9 @@ struct WorkspaceScreen: View {
                 onToggleSplit: toggleSplit,
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
                 showsTrailingControls: chrome.statusColumn == nil,
-                onDragTab: { draggingTabID = $0 })
+                onDragTab: { draggingTabID = $0 },
+                closePrompt: $pendingClose,
+                onConfirmClose: confirmClose)
             // 标签主体不在这里，见 `tabBodies`；这里只留位置。
             Group {
                 if paneTabs.isEmpty { emptyPane(pane) } else { Color.clear }
@@ -636,30 +615,5 @@ private struct WorkspacePaneBodySlots: PreferenceKey {
     static let defaultValue: [UUID: Anchor<CGRect>] = [:]
     static func reduce(value: inout [UUID: Anchor<CGRect>], nextValue: () -> [UUID: Anchor<CGRect>]) {
         value.merge(nextValue()) { $1 }
-    }
-}
-
-/// 等用户确认的关闭：哪个标签，以及要给用户看的话。
-private struct PendingBusyClose {
-    let id: UUID
-    let prompt: TerminalClosePrompt
-}
-
-/// 关闭还有程序在跑的标签前的确认。单独成修饰器：`WorkspaceScreen.body` 已经接近类型检查上限。
-private struct BusyCloseDialog: ViewModifier {
-    @Binding var pending: PendingBusyClose?
-    let onConfirm: (UUID) -> Void
-
-    func body(content: Content) -> some View {
-        let isPresented = Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
-        content.confirmationDialog(pending?.prompt.title ?? "",
-                                   isPresented: isPresented,
-                                   titleVisibility: .visible,
-                                   presenting: pending) { pending in
-            Button("关闭标签", role: .destructive) { onConfirm(pending.id) }
-            Button("取消", role: .cancel) {}
-        } message: { pending in
-            Text(pending.prompt.message)
-        }
     }
 }
