@@ -518,6 +518,16 @@ final class WorkspaceModel {
         syncTerminalTitles()
     }
 
+    /// 窗格平时要等显示出来才连接，后台标签就一直不连。接回不一样：不握手，几乎没有成本，而且没接回之前
+    /// 手机和 CLI 看不到这条会话，退出时「全部结束」也关不到它。所以恢复时不等显示，立刻接回。
+    func reattachHeldSessions(_ sessions: [SSHSessionRestorer.Session], profiles: [ServerProfile], modelContainer: ModelContainer) {
+        for session in sessions {
+            guard let pane = terminalGroups.allTabs.first(where: { $0.payload.id == session.id })?.payload,
+                  let profile = profiles.first(where: { $0.id == session.serverID }) else { continue }
+            Task { await pane.connect(profile: profile, modelContainer: modelContainer) }
+        }
+    }
+
     // MARK: 快照
 
     func snapshot() -> WorkspaceSnapshot {

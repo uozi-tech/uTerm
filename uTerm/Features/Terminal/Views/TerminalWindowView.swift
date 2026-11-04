@@ -132,6 +132,7 @@ struct TerminalWindowView: View {
                 openTab(serverID: windowID.serverID)
             } else {
                 workspace.adoptHeldSessions(heldSessions)
+                workspace.reattachHeldSessions(heldSessions, profiles: profiles, modelContainer: modelContext.container)
             }
         }
         // Agent run_command 真实执行器：每台服务器解析一次认证材料并注入。

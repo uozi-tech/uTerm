@@ -321,6 +321,41 @@ final class HeldSSHIntegrationTests: XCTestCase {
         XCTAssertTrue(unattributedGone)
     }
 
+    /// 后台标签的窗格没有视图，不会自己连接。恢复时要立刻接回，否则手机、CLI 和退出收尾都看不到它。
+    func test_restored_background_tabs_reattach_without_being_shown() async throws {
+        let namespace = SSHSessionNamespace.current
+        let id = UUID()
+        let first = TerminalSession()
+        let held = HeldSSHBackend(
+            client: client, namespace: namespace, sessionID: id, columns: 100, rows: 30,
+            target: HeldSSHBackend.Target(
+                profile: SSHConnection.ProfileSnapshot(host: Self.host, port: Self.port, jumpHost: nil),
+                resolveAuth: { (.password(username: "root", password: "s6-test-pass"), nil) },
+                hostKeyVerifier: HostKeyVerifier(modelContainer: container),
+                hostKeyApprover: { _ in true }),
+            attributes: nil)
+        await first.connect(using: held)
+        XCTAssertEqual(first.connectionState, .connected)
+        await held.detach()
+        first.dispose()
+
+        let profile = ServerProfile()
+        profile.host = Self.host
+        profile.port = Self.port
+        profile.username = "root"
+        let model = WorkspaceModel()
+        let session = SSHSessionRestorer.Session(id: id, serverID: profile.id, title: "t", order: 1)
+        // 后面再开一个标签盖住它，这个就是后台标签。
+        model.adoptHeldSessions([session])
+        model.openServer(profileID: UUID(), title: "front")
+        model.reattachHeldSessions([session], profiles: [profile], modelContainer: container)
+        let pane = try XCTUnwrap(model.terminalGroups.allTabs.first { $0.payload.id == id }?.payload)
+        let reattached = await wait { pane.session.connectionState == .connected }
+        XCTAssertTrue(reattached, "\(pane.session.connectionState)")
+        await pane.session.close()
+        model.dispose()
+    }
+
     /// macOS 的本地网络权限可能拦 `uterm-ssh`（它不是 App 本身）。要手动跑：
     /// `TEST_RUNNER_UTERM_LAN_SSH_HOST=<局域网 IP>`。走到主机密钥这一步就拒绝，不发凭据，能碰任何开着 22 的设备。
     func test_lan_host_is_reachable_from_helper() async throws {
