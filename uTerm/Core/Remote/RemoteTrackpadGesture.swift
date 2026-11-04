@@ -26,9 +26,6 @@ nonisolated enum RemoteTrackpadAction: Equatable {
 /// 一次触摸只有一个意图，判定后锁定到抬手，不会中途改变：
 /// - 单指：移动超过 `moveThreshold` 走光标；不动地按住 `holdDuration` 开始拖拽；不动就抬起是单击。
 /// - 单击后 `tapDragWindow` 内再次按下：移动或按住 `tapHoldDuration` 开始拖拽（轻点拖移），很快抬起仍是连点。
-/// - 滑动之间换手指的那一下不是点击：上一次滑完抬手后 `regripWindow` 内又落下、没动就抬起，既不点击，
-///   也不开启轻点拖移。真机实测这种碰触离上一次抬手 63–121 ms，有意的点击要先看清光标，远比这慢；
-///   接在一次真点击后面的仍算连点（双击不受影响）。
 /// - 双指：不动就抬起是右键；动了就看每根手指的方向选定滚动或捏合（规则见 `twoFingerIntent`）。
 /// - 三指及以上：不产生动作，全部抬起后才接受新手势。
 nonisolated struct RemoteTrackpadGesture {
@@ -36,7 +33,6 @@ nonisolated struct RemoteTrackpadGesture {
     static let holdDuration: TimeInterval = 0.45
     static let tapDragWindow: TimeInterval = 0.22
     static let tapHoldDuration: TimeInterval = 0.2
-    static let regripWindow: TimeInterval = 0.16
     static let twoFingerTapDuration: TimeInterval = 0.35
     static let intentThreshold: CGFloat = 6
     /// 走不到这个距离的手指算还没起步：落指时接触点本身会晃几个点。
@@ -47,7 +43,7 @@ nonisolated struct RemoteTrackpadGesture {
 
     private enum Phase {
         case idle
-        case pendingOne(id: Int, start: CGPoint, startTime: TimeInterval, afterTap: Bool, regrip: Bool)
+        case pendingOne(id: Int, start: CGPoint, startTime: TimeInterval, afterTap: Bool)
         case pointer(id: Int)
         case drag(id: Int)
         case pendingTwo(first: RemoteTrackpadTouch, second: RemoteTrackpadTouch, startTime: TimeInterval, moved: Bool)
@@ -68,8 +64,6 @@ nonisolated struct RemoteTrackpadGesture {
     private var tracked = CGPoint.zero
     private var samples: [(time: TimeInterval, point: CGPoint)] = []
     private var lastTapEnd: TimeInterval?
-    /// 上一次全部手指抬起的时刻，以及那一下是不是记成了点击。
-    private var lastRelease: (time: TimeInterval, clicked: Bool)?
     private var suppressesTap = false
 
     /// 还在等按住时长到点：调用方要持续调 `tick`。
@@ -85,18 +79,14 @@ nonisolated struct RemoteTrackpadGesture {
 
     /// 触摸有变化时调用，`touches` 是此刻仍在屏幕上的全部手指。
     mutating func update(_ touches: [RemoteTrackpadTouch], at time: TimeInterval) -> [RemoteTrackpadAction] {
-        let wasIdle = if case .idle = phase { true } else { false }
         let actions = advance(touches, at: time)
-        if case .idle = phase {
-            suppressesTap = false
-            if !wasIdle { lastRelease = (time, actions.contains { if case .click = $0 { true } else { false } }) }
-        }
+        if case .idle = phase { suppressesTap = false }
         return actions
     }
 
     /// 时间推进：判定按住。
     mutating func tick(at time: TimeInterval) -> [RemoteTrackpadAction] {
-        guard case .pendingOne(let id, let start, let startTime, let afterTap, _) = phase else { return [] }
+        guard case .pendingOne(let id, let start, let startTime, let afterTap) = phase else { return [] }
         guard time - startTime >= (afterTap ? Self.tapHoldDuration : Self.holdDuration) else { return [] }
         phase = .drag(id: id)
         tracked = start
@@ -109,7 +99,6 @@ nonisolated struct RemoteTrackpadGesture {
         phase = .idle
         suppressesTap = false
         samples = []
-        lastRelease = nil
         return actions
     }
 
@@ -117,9 +106,8 @@ nonisolated struct RemoteTrackpadGesture {
         switch phase {
         case .idle:
             return begin(touches, at: time)
-        case .pendingOne(let id, let start, let startTime, let afterTap, let regrip):
-            return advancePendingOne(touches, id: id, start: start, startTime: startTime, afterTap: afterTap,
-                                     regrip: regrip, at: time)
+        case .pendingOne(let id, let start, let startTime, let afterTap):
+            return advancePendingOne(touches, id: id, start: start, startTime: startTime, afterTap: afterTap, at: time)
         case .pointer(let id):
             return advancePointer(touches, id: id, at: time)
         case .drag(let id):
@@ -145,8 +133,7 @@ nonisolated struct RemoteTrackpadGesture {
         case 1:
             let touch = touches[0]
             let afterTap = lastTapEnd.map { time - $0 <= Self.tapDragWindow } ?? false
-            let regrip = lastRelease.map { !$0.clicked && time - $0.time < Self.regripWindow } ?? false
-            phase = .pendingOne(id: touch.id, start: touch.location, startTime: time, afterTap: afterTap, regrip: regrip)
+            phase = .pendingOne(id: touch.id, start: touch.location, startTime: time, afterTap: afterTap)
             resetSamples(touch.location, at: time)
         case 2:
             beginTwo(touches, at: time)
@@ -161,11 +148,11 @@ nonisolated struct RemoteTrackpadGesture {
     }
 
     private mutating func advancePendingOne(_ touches: [RemoteTrackpadTouch], id: Int, start: CGPoint,
-                                            startTime: TimeInterval, afterTap: Bool, regrip: Bool,
+                                            startTime: TimeInterval, afterTap: Bool,
                                             at time: TimeInterval) -> [RemoteTrackpadAction] {
         if touches.isEmpty {
             phase = .idle
-            if suppressesTap || regrip { return [] }
+            if suppressesTap { return [] }
             lastTapEnd = time
             return [.click(.left)]
         }

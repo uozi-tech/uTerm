@@ -62,48 +62,6 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         XCTAssertEqual(gesture.update([], at: 0.9), [])
     }
 
-    // MARK: - 滑动之间换手指
-
-    /// 移动光标的一次滑动，`end` 时刻抬手。
-    private func swipe(id: Int, from start: TimeInterval, end: TimeInterval) {
-        _ = gesture.update([touch(id, 100)], at: start)
-        _ = gesture.update([touch(id, 130)], at: start + 0.05)
-        XCTAssertEqual(gesture.update([], at: end), [])
-    }
-
-    func test_brief_touch_right_after_a_swipe_neither_clicks_nor_arms_tap_drag() {
-        // 真机日志里的样子：滑完抬手 70 ms 后碰一下（50 ms、没动），再 50 ms 后接着滑。
-        swipe(id: 1, from: 0, end: 0.3)
-        _ = gesture.update([touch(2, 100)], at: 0.37)
-        XCTAssertEqual(gesture.update([], at: 0.42), [], "换手指的碰触不点击")
-        _ = gesture.update([touch(3, 100)], at: 0.47)
-        let actions = gesture.update([touch(3, 110)], at: 0.5)
-        guard case .movePointer? = actions.first else { return XCTFail("接着滑是移动光标，不是拖拽: \(actions)") }
-        XCTAssertEqual(gesture.tick(at: 1), [])
-    }
-
-    func test_repeated_brief_touches_after_a_swipe_stay_silent() {
-        swipe(id: 1, from: 0, end: 0.3)
-        _ = gesture.update([touch(2, 100)], at: 0.38)
-        XCTAssertEqual(gesture.update([], at: 0.42), [])
-        _ = gesture.update([touch(3, 100)], at: 0.5)
-        XCTAssertEqual(gesture.update([], at: 0.54), [], "接在没算数的碰触后面，也不算连点")
-    }
-
-    func test_tap_a_moment_after_a_swipe_still_clicks() {
-        swipe(id: 1, from: 0, end: 0.3)
-        _ = gesture.update([touch(2, 100)], at: 0.31 + RemoteTrackpadGesture.regripWindow)
-        XCTAssertEqual(gesture.update([], at: 0.55), [.click(.left)])
-    }
-
-    func test_double_tap_after_a_swipe_counts_both_taps() {
-        swipe(id: 1, from: 0, end: 0.3)
-        _ = gesture.update([touch(2, 100)], at: 0.6)
-        XCTAssertEqual(gesture.update([], at: 0.65), [.click(.left)])
-        _ = gesture.update([touch(3, 100)], at: 0.72)
-        XCTAssertEqual(gesture.update([], at: 0.77), [.click(.left)], "紧跟在真点击后面的是双击，不是换手指")
-    }
-
     // MARK: - 轻点拖移
 
     func test_tap_then_move_within_window_drags() {

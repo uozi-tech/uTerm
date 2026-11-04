@@ -30,8 +30,8 @@ struct PermissionGuideView: View {
         }
         .frame(width: 580)
         .fixedSize(horizontal: false, vertical: true)
-        .ignoresSafeArea(.container, edges: .top)
         .background(UD.bg)
+        .contentSizedUnderTitleBar()
         .background(WorkspaceWindowChrome(serverName: "授权引导"))
         .onAppear { model.start() }
         .onDisappear { model.stop() }
@@ -112,9 +112,6 @@ struct PermissionGuideView: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 56)
-        .overlay(alignment: .top) {
-            Rectangle().fill(UD.border).frame(height: 1)
-        }
     }
 }
 
@@ -204,6 +201,27 @@ private struct PermissionStatusChip: View {
         case .notGranted: return UD.warning
         case .needsRelaunch: return UD.caution
         }
+    }
+}
+
+extension View {
+    /// 自绘标题栏、窗口高度随内容（`.windowResizability(.contentSize)`）时代替 `.ignoresSafeArea(.container, edges: .top)`。
+    ///
+    /// 窗口按「内容 + 顶部安全区」定高，内容却顶进了安全区，底下就会空出一条安全区高的白边（实测 32pt）。
+    /// 把这段高度从底部扣回来，窗口正好等于内容。
+    func contentSizedUnderTitleBar() -> some View {
+        modifier(ContentSizedUnderTitleBar())
+    }
+}
+
+private struct ContentSizedUnderTitleBar: ViewModifier {
+    @State private var topInset: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, -topInset)
+            .ignoresSafeArea(.container, edges: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
     }
 }
 
