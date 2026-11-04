@@ -1,6 +1,27 @@
 import XCTest
 import SwiftTerm
+import SwiftUI
+import UPaneGroups
 @testable import uTerm
+
+@MainActor
+@Observable
+private final class FocusTestTabs {
+    var active: TerminalSession
+    init(active: TerminalSession) { self.active = active }
+}
+
+private struct FocusTestHost: View {
+    let tabs: FocusTestTabs
+    let gate: ActivePaneGate
+
+    var body: some View {
+        RemoteControlledTerminal(session: tabs.active)
+            .id(ObjectIdentifier(tabs.active))
+            .environment(\.activePaneGate, gate)
+            .frame(width: 400, height: 300)
+    }
+}
 
 @MainActor
 final class TerminalContainerViewTests: XCTestCase {
@@ -39,6 +60,90 @@ final class TerminalContainerViewTests: XCTestCase {
         container.detachTerminal()
 
         XCTAssertNil(terminalView.superview)
+    }
+
+    // MARK: - 活动面板取得键盘焦点
+
+    private func focusWindow() -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    private func mount(_ terminal: CopyableTerminalView, in window: NSWindow,
+                       active: Bool) -> TerminalContainerView {
+        let container = TerminalContainerView(terminalView: terminal)
+        container.isActive = active
+        window.contentView?.addSubview(container)
+        return container
+    }
+
+    /// 切标签：新标签的终端挂上来就接收键盘，旧标签的终端交出焦点。
+    func testActiveTerminalTakesFocusFromPreviousTerminalOnMount() async {
+        let window = focusWindow()
+        let previous = CopyableTerminalView(frame: .zero)
+        _ = mount(previous, in: window, active: true)
+        await Task.yield()
+        XCTAssertTrue(window.firstResponder === previous)
+
+        let next = CopyableTerminalView(frame: .zero)
+        _ = mount(next, in: window, active: true)
+        await Task.yield()
+
+        XCTAssertTrue(window.firstResponder === next)
+    }
+
+    /// 分屏：后台组的终端挂载不拿焦点，变成活动组时才拿。
+    func testInactiveTerminalTakesFocusOnlyWhenBecomingActive() async {
+        let window = focusWindow()
+        let terminal = CopyableTerminalView(frame: .zero)
+        let container = mount(terminal, in: window, active: false)
+        await Task.yield()
+        XCTAssertFalse(window.firstResponder === terminal)
+
+        container.isActive = true
+        await Task.yield()
+
+        XCTAssertTrue(window.firstResponder === terminal)
+    }
+
+    /// 连接晚完成才挂载的终端不能打断用户正在输入的内容。
+    func testMountingTerminalDoesNotStealFocusFromTextInput() async {
+        let window = focusWindow()
+        let input = NSTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        window.contentView?.addSubview(input)
+        XCTAssertTrue(window.makeFirstResponder(input))
+
+        _ = mount(CopyableTerminalView(frame: .zero), in: window, active: true)
+        await Task.yield()
+
+        XCTAssertTrue(window.firstResponder === input)
+    }
+
+    /// 走真实的 SwiftUI 挂载路径：本机终端窗口按 `.id` 换标签，工作区按活动门切活动组。
+    func testSwiftUITabSwitchAndGateFlipMoveFocus() async throws {
+        let first = TerminalSession()
+        let second = TerminalSession()
+        let tabs = FocusTestTabs(active: first)
+        let gate = ActivePaneGate(isActive: true)
+        let window = focusWindow()
+        window.contentView = NSHostingView(rootView: FocusTestHost(tabs: tabs, gate: gate))
+
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(window.firstResponder === first.terminalView)
+
+        tabs.active = second
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(window.firstResponder === second.terminalView)
+
+        gate.isActive = false
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(window.makeFirstResponder(nil))
+
+        gate.isActive = true
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(window.firstResponder === second.terminalView)
     }
 
     // MARK: - 尺寸停稳才提交

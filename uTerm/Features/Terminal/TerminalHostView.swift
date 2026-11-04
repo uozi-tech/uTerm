@@ -14,6 +14,8 @@ import SwiftTerm
 struct TerminalHostView: NSViewRepresentable {
     let terminalView: SwiftTerm.TerminalView
     var forwardsScrollToParent = false
+    /// 这个终端是不是当前该接收键盘输入的那一个，见 `TerminalContainerView.isActive`。
+    var isActive = true
 
     @AppStorage("terminalCursorShape")  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
     @AppStorage("terminalCursorBlink")  private var cursorBlink: Bool = false
@@ -43,6 +45,7 @@ struct TerminalHostView: NSViewRepresentable {
             forwardsScrollToParent: forwardsScrollToParent
         )
         container.identifier = .utermTerminalRegion   // ⌘W 焦点判定标记
+        container.isActive = isActive
         container.layer?.backgroundColor = currentSettings.colorScheme(dark: dark).backgroundColor.cgColor
         return container
     }
@@ -52,6 +55,7 @@ struct TerminalHostView: NSViewRepresentable {
         nsView.forwardsScrollToParent = forwardsScrollToParent
         (terminalView as? CopyableTerminalView)?.copyOnSelect = copyOnSelect
         nsView.attach(terminalView)
+        nsView.isActive = isActive
         nsView.layer?.backgroundColor = currentSettings.colorScheme(dark: dark).backgroundColor.cgColor
         TerminalTheme.apply(to: terminalView, settings: currentSettings, dark: dark)
     }
@@ -93,6 +97,12 @@ final class TerminalContainerView: NSView {
     /// 正在等待停稳的目标尺寸；nil = 没有在等。
     private var heldSize: NSSize?
     private var settleTask: Task<Void, Never>?
+    /// 成为活动面板时把键盘焦点交给终端：切标签会重新挂载终端视图，焦点不会自己跟过来。
+    var isActive = false {
+        didSet {
+            if isActive, !oldValue { requestTerminalFocus() }
+        }
+    }
 
     init(terminalView: SwiftTerm.TerminalView,
          forwardsScrollToParent: Bool = false) {
@@ -126,6 +136,7 @@ final class TerminalContainerView: NSView {
         self.terminalView = terminalView
         addSubview(terminalView)
         needsLayout = true
+        requestTerminalFocus()
     }
 
     func detachTerminal() {
@@ -146,6 +157,30 @@ final class TerminalContainerView: NSView {
     override func layout() {
         super.layout()
         syncTerminalFrame(settled: false)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        requestTerminalFocus()
+    }
+
+    /// 等当前这轮 SwiftUI 更新结束再改焦点：焦点变化可能反过来触发 SwiftUI 的状态更新。
+    private func requestTerminalFocus() {
+        guard isActive, window != nil else { return }
+        Task { [weak self] in self?.takeTerminalFocus() }
+    }
+
+    private func takeTerminalFocus() {
+        guard isActive, let window, let terminalView, terminalView.superview === self,
+              Self.canTakeFocus(from: window.firstResponder) else { return }
+        window.makeFirstResponder(terminalView)
+    }
+
+    /// 连接可能晚于用户的操作才完成，这时终端才挂载，不能打断正在输入的 Agent 框、编辑器或正在
+    /// 浏览的文件列表。其它终端除外：切标签时旧终端可能还没卸载，它的焦点就是要交过来的。
+    static func canTakeFocus(from responder: NSResponder?) -> Bool {
+        if responder is SwiftTerm.TerminalView { return true }
+        return !(responder is NSTextInputClient || responder is NSTableView)
     }
 
     /// 把终端视图的尺寸对齐到容器。尺寸一变 SwiftTerm 就立刻重排缓冲区，而程序要等 SIGWINCH 才知道，

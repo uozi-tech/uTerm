@@ -1,5 +1,6 @@
 import SwiftUI
 import UDesignKit
+import UPaneGroups
 
 /// 终端窗格的内容：有设备接管时，窗格顶上多一条接管状态条。
 ///
@@ -7,6 +8,8 @@ import UDesignKit
 /// 能显示多少就显示多少，浮层只会再挡掉一块本来就可能显示不全的内容。
 struct RemoteControlledTerminal: View {
     let session: TerminalSession
+    /// 分屏时只有活动组的前台标签算活动。没有这个门的宿主只挂活动标签，挂着就是活动。
+    @Environment(\.activePaneGate) private var activePaneGate
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,7 +18,8 @@ struct RemoteControlledTerminal: View {
                     session.remoteDisconnect?()
                 }
             }
-            TerminalHostView(terminalView: session.terminalView)
+            TerminalHostView(terminalView: session.terminalView,
+                             isActive: activePaneGate?.isActive ?? true)
         }
     }
 }
