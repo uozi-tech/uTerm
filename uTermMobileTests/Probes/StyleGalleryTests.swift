@@ -224,6 +224,23 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
+    /// 快捷条的两个面板。
+    func testTerminalKeyBarPanels() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        for device in Self.devices {
+            for (name, panel) in [("prompts", TerminalKeyBar.Panel.prompts), ("keys", .keys)] {
+                let (controller, _) = MobileFakeTerminal.controller(.idle)
+                try await shoot("keybar-\(name)", on: device) {
+                    VStack(spacing: 0) {
+                        Color.clear
+                        TerminalKeyBar(controller: controller, panel: panel)
+                    }
+                    .background(M.surface)
+                }
+            }
+        }
+    }
+
     // MARK: - SFTP 浏览（假会话）
 
     func testSFTPBrowser() async throws {

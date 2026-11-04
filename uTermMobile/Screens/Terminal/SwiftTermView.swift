@@ -33,6 +33,7 @@ final class MTerminalView: SwiftTerm.TerminalView {
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
+        if became { controller?.keyboardFocusChanged(true) }
         if became, !observesInputMode {
             observesInputMode = true
             NotificationCenter.default.addObserver(self, selector: #selector(inputModeDidChange),
@@ -40,6 +41,12 @@ final class MTerminalView: SwiftTerm.TerminalView {
                                                    object: nil)
         }
         return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { controller?.keyboardFocusChanged(false) }
+        return resigned
     }
 
     @objc private func inputModeDidChange() {
@@ -148,7 +155,7 @@ struct SwiftTermView: UIViewRepresentable {
             view.feed(text: "\u{1B}[2 q")
         }
         controller.attach(view)
-        // 键盘始终展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、且已连上——
+        // 键盘默认展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、已连上、用户没收起——
         // 失败重试成功后失败页换回本视图时走这里）。
         if isActive, autoFocus { DispatchQueue.main.async { controller.focusKeyboard() } }
         return view

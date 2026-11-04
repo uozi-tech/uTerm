@@ -26,6 +26,10 @@ final class MobileTerminalController {
     /// 键盘只给真正进了终端、且轮到自己的会话：建连中 / 失败 / 已断开 / 不是键盘归属者一律不弹。
     /// 终端视图的 `canBecomeFirstResponder` 也读它，UIKit 自己恢复第一响应者（抽屉收起时）同样被拦。
     var canTakeKeyboard: Bool { state == .connected && ownsKeyboard }
+    /// 键盘此刻在这个会话上（终端是第一响应者）。键盘条的收起 / 弹出按钮按它显示。
+    private(set) var keyboardShown = false
+    /// 用户亲手收起了键盘：切标签、关抽屉、转屏都不再自动弹回，直到用户点按钮或点终端。
+    @ObservationIgnored private var keyboardCollapsed = false
     var title: String = ""
     /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
@@ -170,10 +174,28 @@ final class MobileTerminalController {
         _ = terminalView?.resignFirstResponder()
     }
 
-    /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上时不弹。
+    /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上、或用户收起了键盘时不弹。
     func focusKeyboard() {
-        guard canTakeKeyboard else { return }
+        guard canTakeKeyboard, !keyboardCollapsed else { return }
         _ = terminalView?.becomeFirstResponder()
+    }
+
+    /// 用户点了「收起键盘」。
+    func collapseKeyboard() {
+        keyboardCollapsed = true
+        resignKeyboard()
+    }
+
+    /// 用户点了「弹出键盘」。分屏时这一格可能还没拿到归属，工作区把焦点切过来后会再聚焦一次。
+    func showKeyboard() {
+        keyboardCollapsed = false
+        focusKeyboard()
+    }
+
+    /// 终端视图报告第一响应者变化。点终端（SwiftTerm 自己聚焦）也走这里，等于用户要回了键盘。
+    func keyboardFocusChanged(_ focused: Bool) {
+        keyboardShown = focused
+        if focused { keyboardCollapsed = false }
     }
 
     /// 用一台主机建连并开 PTY。重复调用无副作用（已建连过则忽略）。
@@ -335,6 +357,23 @@ final class MobileTerminalController {
     func sendText(_ text: String) {
         write(Data(text.utf8))
     }
+
+    /// 把提示词交给终端里的程序，不提交。程序开了括号粘贴就按粘贴发，一次到达不会被拆开解读。
+    func insertPrompt(_ text: String) {
+        let bracketed = terminalView?.getTerminal().bracketedPasteMode ?? false
+        sendText(bracketed ? "\u{1b}[200~\(text)\u{1b}[201~" : text)
+    }
+
+    /// 发送提示词并提交。回车必须隔一下单独发：Codex 把和文字同一包到达的回车当粘贴里的换行，
+    /// 文字留在输入框不提交（实测 Codex 0.166.0）。
+    func submitPrompt(_ text: String) {
+        insertPrompt(text)
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.promptSubmitDelay)
+            self?.sendText("\r")
+        }
+    }
+    private static let promptSubmitDelay = Duration.milliseconds(120)
 
     /// 尺寸停稳后才告诉远端，只发最后一个。一次布局变化常常连着改几次网格（换字号 + 改宽度、
     /// 拖分隔条、键盘升降），每发一次远端就收一个 SIGWINCH、全屏程序就整屏重绘一遍。

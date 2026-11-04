@@ -371,7 +371,7 @@ final class TerminalScreenProbeTests: XCTestCase {
 
     // MARK: - 尺四：键盘面板展开的挂载账
 
-    /// `TerminalKeyBar` 收起 vs 展开。展开面板是 4 个 `LazyVGrid` 共 57 个键帽，
+    /// `TerminalKeyBar` 收起 vs 展开。按键面板是 4 个 `LazyVGrid` 共 59 个键帽，
     /// 每个键帽一个 `Button` —— 密集网格里 `Button` 是已知的主因（uTable playbook §三）。
     func testKeyboardPanelMountCost() async throws {
         defer { MobileProbeWindow.closeAll() }
@@ -384,7 +384,7 @@ final class TerminalScreenProbeTests: XCTestCase {
             let mount = rig.mount(
                 VStack {
                     Spacer()
-                    TerminalKeyBar(controller: controller, expanded: expanded)
+                    TerminalKeyBar(controller: controller, panel: expanded ? .keys : nil)
                 }
                 .environment(\.mAccent, M.accent))
             let shot = await rig.snapshot()
