@@ -64,7 +64,9 @@ extension TerminalSession {
         await backend?.resize(cols: pending.cols, rows: pending.rows)
     }
 
-    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) { }
+    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {
+        receiveShellTitle(title)
+    }
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) { }
     func scrolled(source: SwiftTerm.TerminalView, position: Double) { }
     func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) { }

@@ -141,17 +141,16 @@ final class WorkspaceModel {
                 self?.stamp(pane)
                 return TerminalTab(payload: pane)
             }
-            let pane = PaneModel(serverProfileID: tab.payload.serverProfileID)
+            let pane = PaneModel(serverProfileID: tab.payload.serverProfileID, tabTitle: tab.payload.tabTitle)
             self?.stamp(pane)
-            return TerminalTab(payload: pane, customTitle: tab.customTitle)
+            return TerminalTab(payload: pane)
         }
         // 分屏按钮 / ⌘D 开的新组里放一条新会话 —— **保留旧的克隆语义**
         // （uTable 那边是有意开空组，理由是克隆大表的数据网格；终端没有这个问题，
         // 空的终端组只能显示一个「新建终端」按钮，白白多一次点击）。
         terminalGroups.makeTabForNewGroup = { [weak self] in
             guard let self, let seed = self.splitSeedServer() else { return nil }
-            return TerminalTab(payload: self.makePane(serverProfileID: seed.id),
-                               customTitle: seed.title)
+            return TerminalTab(payload: self.makePane(serverProfileID: seed.id, tabTitle: seed.title))
         }
     }
 
@@ -160,7 +159,7 @@ final class WorkspaceModel {
     /// 回落到本窗口绑定的服务器。
     private func splitSeedServer() -> (id: UUID, title: String)? {
         if let tab = terminalGroups.activeTab, tab.payload.fileBuffer == nil {
-            return (tab.payload.serverProfileID, tab.customTitle ?? defaultServerTitle)
+            return (tab.payload.serverProfileID, tab.payload.tabTitle ?? defaultServerTitle)
         }
         guard let id = defaultServerProfileID else { return nil }
         return (id, defaultServerTitle)
@@ -224,8 +223,8 @@ final class WorkspaceModel {
         terminalGroups.restore(snapshot.terminalGroupsForRestore) { tabSnap in
             guard knownServerIDs.isEmpty || knownServerIDs.contains(tabSnap.serverProfileID)
             else { return nil }
-            return TerminalTab(payload: self.makePane(serverProfileID: tabSnap.serverProfileID),
-                               customTitle: tabSnap.title)
+            return TerminalTab(payload: self.makePane(serverProfileID: tabSnap.serverProfileID,
+                                                      tabTitle: tabSnap.title))
         }
 
         if let ui = snapshot.uiState {
@@ -313,7 +312,7 @@ final class WorkspaceModel {
     ) {
         let registrar = TerminalSessionRegistrar(
             registry: registry, windowID: windowID, windowKind: windowKind,
-            customTitle: { [weak self] paneID in self?.tabCustomTitle(paneID: paneID) })
+            customTitle: { [weak self] paneID in self?.tabTitle(paneID: paneID) })
         sessionRegistrar = registrar
         for tab in terminalGroups.allTabs { tab.payload.adopt(registrar: registrar) }
         // 手机远控关标签时「同时关闭 Mac 上的终端」走这里。
@@ -331,22 +330,23 @@ final class WorkspaceModel {
         return true
     }
 
-    /// 某个窗格所在标签的自定义名（`UPaneTab.customTitle`），没有则 nil。
+    /// 某个窗格所在标签打开时定下的名字（`PaneModel.tabTitle`），没有则 nil。
     /// `TerminalSessionRegistrar` 的 title 钩子就查它。
-    func tabCustomTitle(paneID: UUID) -> String? {
-        terminalGroups.allTabs.first { $0.payload.id == paneID }?.customTitle
+    func tabTitle(paneID: UUID) -> String? {
+        terminalGroups.allTabs.first { $0.payload.id == paneID }?.payload.tabTitle
     }
 
-    /// 把每条终端标签**当前**的标题推给注册表（`title` = 标签自定义名，没有就服务器名）。
+    /// 把每条终端标签**当前**的名字推给注册表（`title` = `PaneModel.tabTitle`，没有就服务器名）。
+    /// shell 设的标题不进注册表：它可能每秒变很多次，而注册表每变一次都要推给接入的手机。
     ///
-    /// 登记发生在窗格连上的那一刻，而标签的自定义名可能在那之后才定下来
+    /// 登记发生在窗格连上的那一刻，而标签的名字可能在那之后才定下来
     ///（窗口视图的 `.task` 晚于窗格建连、标签在组树里被换、恢复出来的标题）——
     /// 所以注入注册表、开新标签、切前台标签这三处都补一次同步。
     /// 注册表里没有的窗格自动 no-op。
     func syncTerminalTitles() {
         guard let registrar = sessionRegistrar else { return }
         for tab in terminalGroups.allTabs where tab.payload.fileBuffer == nil {
-            guard let title = tab.customTitle ?? tab.payload.connectedServerName else { continue }
+            guard let title = tab.payload.tabTitle ?? tab.payload.connectedServerName else { continue }
             registrar.registry.update(id: tab.payload.id, title: title)
         }
     }
@@ -375,8 +375,8 @@ final class WorkspaceModel {
     /// 新建窗格的唯一入口：建出来立刻打上登记凭条。
     /// 组树的三个钩子（clone / 新组 / restore）与所有 `openXxx` 都必须走它，
     /// 否则那条会话对 CLI 永远不可见。
-    private func makePane(serverProfileID: UUID, fileBuffer: FileBuffer? = nil) -> PaneModel {
-        let pane = PaneModel(serverProfileID: serverProfileID, fileBuffer: fileBuffer)
+    private func makePane(serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil) -> PaneModel {
+        let pane = PaneModel(serverProfileID: serverProfileID, fileBuffer: fileBuffer, tabTitle: tabTitle)
         stamp(pane)
         return pane
     }
@@ -394,7 +394,7 @@ final class WorkspaceModel {
     @discardableResult
     func openServer(profileID: UUID, title: String, in groupID: UUID? = nil) -> UUID {
         let id = terminalGroups.openTab({
-            TerminalTab(payload: self.makePane(serverProfileID: profileID), customTitle: title)
+            TerminalTab(payload: self.makePane(serverProfileID: profileID, tabTitle: title))
         }, in: groupID)
         syncTerminalTitles()
         return id
@@ -536,7 +536,7 @@ final class WorkspaceModel {
         let groups = terminalGroups.snapshot { tab -> TerminalTabSnapshot? in
             guard tab.payload.fileBuffer == nil else { return nil }
             return TerminalTabSnapshot(serverProfileID: tab.payload.serverProfileID,
-                                       title: tab.customTitle ?? "终端")
+                                       title: tab.payload.tabTitle ?? "终端")
         }
 
         var activeIdx: Int?
@@ -548,7 +548,7 @@ final class WorkspaceModel {
                 activeIdx = tabSnaps.count
             }
             tabSnaps.append(TabSnapshot(
-                title: tab.customTitle ?? "终端",
+                title: tab.payload.tabTitle ?? "终端",
                 layout: .leaf(serverProfileID: tab.payload.serverProfileID)))
         }
         let (openFiles, activeFileIndex) = filePreviewModel.openFileSnapshots()

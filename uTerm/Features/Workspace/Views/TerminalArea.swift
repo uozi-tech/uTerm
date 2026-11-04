@@ -91,20 +91,31 @@ struct TerminalArea: View {
     /// 连接状态点的语义比旧版更准：旧 `TerminalTabBar` 取的是
     /// `tab.focusedPane?.session`，一个标签里四个窗格连四台机器时点只反映聚焦那个；
     /// 现在每枚 chip 用**它自己**那条会话。
-    private static func descriptor(for tab: TerminalTab,
-                                   profiles: [UUID: ServerProfile]) -> UPaneTabDescriptor {
+    ///
+    /// 标题读 `session.shellTitle`，同样只让这一枚失效。不能走 `UPaneTab.customTitle`：
+    /// 那是组树里的状态，写一次整个区域都跟着失效，而程序可能每秒改很多次标题。
+    static func descriptor(for tab: TerminalTab,
+                           profiles: [UUID: ServerProfile]) -> UPaneTabDescriptor {
         let pane = tab.payload
         if let buffer = pane.fileBuffer {
             return UPaneTabDescriptor(title: buffer.displayName,
                                       icon: .system("doc.text"),
                                       isDirty: buffer.isDirty)
         }
-        let name = profiles[pane.serverProfileID]?.name ?? "终端"
+        let name = pane.tabTitle ?? profiles[pane.serverProfileID]?.name ?? "终端"
+        let shellTitle = pane.session.shellTitle
         let display = ConnectionStatusDisplay(state: pane.session.connectionState)
-        return UPaneTabDescriptor(title: name,
+        let context = "\(name) · \(display.label)"
+        return UPaneTabDescriptor(title: shellTitle.map(clippedTabTitle) ?? name,
                                   icon: .system("terminal"),
                                   leadingDot: display.tint.color,
-                                  help: "\(name) · \(display.label)")
+                                  help: shellTitle.map { "\($0)\n\(context)" } ?? context)
+    }
+
+    /// 标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。
+    static func clippedTabTitle(_ title: String) -> String {
+        let limit = 28
+        return title.count > limit ? "\(title.prefix(limit - 1))…" : title
     }
 
     /// 标签条右侧的「＋新建终端」。⌘T 走 `uTermApp` 的 CommandGroup 单独注册

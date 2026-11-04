@@ -34,9 +34,16 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     private(set) var connectionState: ConnectionState = .idle {
         didSet {
             guard connectionState != oldValue else { return }
+            // 标题说的是那条连接上正在跑的程序，连接没了就不再成立。
+            if connectionState != .connected { shellTitle = nil }
             onConnectionStateChange?(connectionState)
         }
     }
+
+    /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil。
+    /// 程序可能高频刷新它（Claude Code 的转圈动画），所以标签要在单枚标签自己的 body 里读，
+    /// 别让整条标签条或整个窗口挂在它上面。
+    private(set) var shellTitle: String?
 
     /// 连接状态变化的接线钩子。`PaneModel` 用它把「远端退出 / 重连成功」同步给
     /// 跨窗口注册表 —— 否则断开的会话仍被 `terminals` 列成活的，
@@ -79,6 +86,13 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         terminalView.terminalDelegate = self
         terminalView.menu = Self.makeContextMenu(for: terminalView)
         installTrackedRunMarkers()
+    }
+
+    func receiveShellTitle(_ title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = trimmed.isEmpty ? nil : trimmed
+        guard next != shellTitle else { return }
+        shellTitle = next
     }
 
     /// Right-click context menu for the live terminal. SwiftTerm's

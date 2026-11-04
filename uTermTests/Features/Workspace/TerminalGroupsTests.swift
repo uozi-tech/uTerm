@@ -118,7 +118,7 @@ final class TerminalGroupsTests: XCTestCase {
         bound.splitActiveGroup(direction: .horizontal)
         XCTAssertEqual(bound.terminalGroups.allTabs.count, 1)
         XCTAssertEqual(bound.terminalGroups.activeTab?.payload.serverProfileID, server)
-        XCTAssertEqual(bound.terminalGroups.activeTab?.customTitle, "prod")
+        XCTAssertEqual(bound.terminalGroups.activeTab?.payload.tabTitle, "prod")
     }
 
     // MARK: ⌘W

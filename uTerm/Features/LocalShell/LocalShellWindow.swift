@@ -128,7 +128,7 @@ final class LocalShellWindowModel {
         activeID = nil
     }
 
-    /// 同名 shell 多开时标题带序号（zsh、zsh 2……），手机列表里分得清。
+    /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
     func title(for pane: LocalShellPane) -> String {
         let same = panes.filter { $0.shellName == pane.shellName }
         guard same.count > 1, let index = same.firstIndex(where: { $0.id == pane.id }), index > 0 else {
@@ -191,6 +191,33 @@ final class LocalShellWindowRouter {
             return true
         }
         return false
+    }
+}
+
+/// 本机终端的一枚标签。样式与 SFTP 标签条同一套（`WSCanvasTab`）：激活胶囊用终端底色，就是下面那张终端卡。
+/// 单独成视图：`shellTitle` 可能高频变化，只让这一枚标签跟着重算，不牵动整个窗口。
+private struct LocalShellTab: View {
+    let pane: LocalShellPane
+    /// shell 没设标题时显示的名字。
+    let fallbackTitle: String
+    let active: Bool
+    let activeFill: SwiftUI.Color
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        WSCanvasTab(name: pane.session.shellTitle ?? fallbackTitle, active: active,
+                    activeFill: activeFill, closeHelp: "关闭这个 shell",
+                    onSelect: onSelect, onClose: onClose) { _ in
+            Circle()
+                .fill(pane.session.connectionState == .connected ? UD.success : UD.text4)
+                .frame(width: 6, height: 6)
+            if pane.session.remoteController != nil {
+                Image(systemName: "iphone").font(.system(size: 10)).foregroundStyle(UD.accent)
+                    .help("正在被手机接管")
+            }
+        }
+        .help(pane.session.shellTitle ?? fallbackTitle)
     }
 }
 
@@ -278,19 +305,10 @@ struct LocalShellWindowView: View {
         .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 
-    /// 标签样式与 SFTP 标签条同一套（`WSCanvasTab`）：激活胶囊用终端底色，就是下面那张终端卡。
     private func tab(_ pane: LocalShellPane) -> some View {
-        WSCanvasTab(name: model.title(for: pane), active: pane.id == model.active?.id,
-                    activeFill: terminalBackground, closeHelp: "关闭这个 shell",
-                    onSelect: { model.activate(pane.id) }, onClose: { model.close(pane.id) }) { _ in
-            Circle()
-                .fill(pane.session.connectionState == .connected ? UD.success : UD.text4)
-                .frame(width: 6, height: 6)
-            if pane.session.remoteController != nil {
-                Image(systemName: "iphone").font(.system(size: 10)).foregroundStyle(UD.accent)
-                    .help("正在被手机接管")
-            }
-        }
+        LocalShellTab(pane: pane, fallbackTitle: model.title(for: pane), active: pane.id == model.active?.id,
+                      activeFill: terminalBackground,
+                      onSelect: { model.activate(pane.id) }, onClose: { model.close(pane.id) })
     }
 
     // MARK: - 内容

@@ -8,6 +8,9 @@ final class PaneModel: Identifiable {
     let id: UUID
     let serverProfileID: UUID
     let fileBuffer: FileBuffer?
+    /// 打开时定下的标签名（服务器名），随工作区快照存盘。标签上优先显示 shell 设的标题
+    /// （`session.shellTitle`），它只是没有 shell 标题时的回落。
+    let tabTitle: String?
     let session = TerminalSession()
     /// 终端连接的 host-key 审批桥接。
     let hostKeyRelay = HostKeyChallengeRelay()
@@ -23,10 +26,11 @@ final class PaneModel: Identifiable {
     /// 供「先连上、后注入注册表」的窗口补登记（`adopt(registrar:)`）。
     @ObservationIgnored private(set) var connectedServerName: String?
 
-    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil) {
+    init(id: UUID = UUID(), serverProfileID: UUID, fileBuffer: FileBuffer? = nil, tabTitle: String? = nil) {
         self.id = id
         self.serverProfileID = serverProfileID
         self.fileBuffer = fileBuffer
+        self.tabTitle = tabTitle
         // 连接状态是注册表里「这条会话还活着吗」的唯一真值：远端退出（`exitStream`
         // 把状态翻到 `.disconnected`）之后必须注销，否则 `terminals` 一直列着它，
         // `terminal-read` 一直回同一张冻结的画面、`terminal-send` 往死连接里写。

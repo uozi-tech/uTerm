@@ -25,7 +25,7 @@ nonisolated struct TerminalSessionEntry: Identifiable, Sendable, Equatable {
     let windowID: UUID
     /// `workspace` / `terminal` —— 会话所在窗口的种类。
     let windowKind: String
-    /// 标签自定义名（`UPaneTab.customTitle`）优先，没有才是服务器名。
+    /// 标签打开时定下的名字（`PaneModel.tabTitle`）优先，没有才是服务器名。
     var title: String
     let connectedAt: Date?
 
@@ -303,11 +303,11 @@ struct TerminalSessionRegistrar {
     let registry: TerminalSessionRegistry
     let windowID: UUID
     let windowKind: String
-    /// `paneID` → 该窗格所在标签的自定义名（`UPaneTab.customTitle`）。
+    /// `paneID` → 该窗格所在标签的名字（`PaneModel.tabTitle`）。
     ///
     /// 窗格自己不知道自己挂在哪条标签上（`PaneModel` 只有 `serverProfileID`），
     /// 标签树又只有 `WorkspaceModel` 拿得到，所以由它在 `attachSessionRegistry`
-    /// 里注入这个查询钩子。返回 nil（没自定义名 / 窗格还没进树 / 单测）时
+    /// 里注入这个查询钩子。返回 nil（没有名字 / 窗格还没进树 / 单测）时
     /// `title` 回落到服务器名。
     var customTitle: (@MainActor (UUID) -> String?)?
 

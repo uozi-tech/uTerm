@@ -26,7 +26,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
             switch node {
             case .leaf(let paneID):
                 let group = model.groups[paneID]
-                return .group(titles: group?.tabs.map { $0.customTitle ?? "" } ?? [],
+                return .group(titles: group?.tabs.map { $0.payload.tabTitle ?? "" } ?? [],
                               active: group?.activeIndex ?? -1)
             case .split(let s):
                 return .split(s.direction, s.fraction, walk(s.first), walk(s.second))
@@ -97,7 +97,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
         ws.terminalGroups.setFraction(0.73, splitID: splits[1])
 
         let before = shape(of: ws.terminalGroups)
-        let activeTitleBefore = ws.terminalGroups.activeTab?.customTitle
+        let activeTitleBefore = ws.terminalGroups.activeTab?.payload.tabTitle
         let activeServerBefore = ws.terminalGroups.activeTab?.payload.serverProfileID
 
         let snap = ws.snapshot()
@@ -111,7 +111,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
         XCTAssertEqual(restored.terminalGroups.allTabs.count, 6)
         XCTAssertEqual(restored.terminalGroups.allTabs.map(\.payload.serverProfileID),
                        ws.terminalGroups.allTabs.map(\.payload.serverProfileID))
-        XCTAssertEqual(restored.terminalGroups.activeTab?.customTitle, activeTitleBefore)
+        XCTAssertEqual(restored.terminalGroups.activeTab?.payload.tabTitle, activeTitleBefore)
         XCTAssertEqual(restored.terminalGroups.activeTab?.payload.serverProfileID,
                        activeServerBefore)
     }
@@ -192,7 +192,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
         XCTAssertEqual(ws.terminalGroups.groupCount, 4, "活动标签的四宫格必须保住")
         XCTAssertEqual(ws.terminalGroups.allTabs.count, 5, "会话一条不丢")
         XCTAssertEqual(shape(of: ws.terminalGroups), shape(of: snap.terminalGroupsForRestore))
-        XCTAssertEqual(ws.terminalGroups.activeTab?.customTitle, "四宫格")
+        XCTAssertEqual(ws.terminalGroups.activeTab?.payload.tabTitle, "四宫格")
         XCTAssertEqual(ws.terminalGroups.activeTab?.payload.serverProfileID, q.0)
         XCTAssertEqual(ws.terminalGroups.allTabs.map(\.payload.serverProfileID),
                        [q.0, lone, q.1, q.2, q.3])
@@ -228,7 +228,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
                 return XCTFail("降级写的 layout 必须是单叶")
             }
         }
-        XCTAssertEqual(snap.tabs.map(\.title), ws.terminalGroups.allTabs.map { $0.customTitle ?? "" })
+        XCTAssertEqual(snap.tabs.map(\.title), ws.terminalGroups.allTabs.map { $0.payload.tabTitle ?? "" })
     }
 
     /// `activeTabIndex` 缺失 / 越界 / 为负时取第 0 个标签的形状，不能崩也不能空。
@@ -298,7 +298,7 @@ final class TerminalGroupsPersistenceTests: XCTestCase {
         ws.restore(from: snap, knownServerIDs: [live])
         XCTAssertEqual(ws.terminalGroups.allTabs.map(\.payload.serverProfileID), [live])
         XCTAssertEqual(ws.terminalGroups.groupCount, 1)
-        XCTAssertEqual(ws.terminalGroups.activeTab?.customTitle, "活的")
+        XCTAssertEqual(ws.terminalGroups.activeTab?.payload.tabTitle, "活的")
         XCTAssertEqual(ws.terminalGroups.activeGroupID, ws.terminalGroups.groupIDs.first,
                        "活动组指向被剪掉的组时回落到树的第一个叶子")
     }

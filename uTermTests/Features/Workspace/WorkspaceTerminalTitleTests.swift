@@ -5,7 +5,8 @@ import XCTest
 ///
 /// 从前 `title` 恒等于服务器名，`TerminalSessionRegistry.update(id:title:)` 一个
 /// 生产调用方都没有 —— 技能文档却写着 title 是「当前目录与提示符信息」，纯属虚构。
-/// 现在 title = 标签自定义名（`UPaneTab.customTitle`），没有才回落服务器名。
+/// 现在 title = 标签打开时定下的名字（`PaneModel.tabTitle`），没有才回落服务器名。
+/// shell 设的标题（`TerminalSession.shellTitle`）只上标签，不进注册表。
 @MainActor
 final class WorkspaceTerminalTitleTests: XCTestCase {
 
@@ -18,8 +19,8 @@ final class WorkspaceTerminalTitleTests: XCTestCase {
         return workspace
     }
 
-    /// 登记时就取标签的自定义名。
-    func testRegistrationUsesTabCustomTitle() {
+    /// 登记时就取标签的名字。
+    func testRegistrationUsesTabTitle() {
         let registry = TerminalSessionRegistry()
         let workspace = makeWorkspace(registry)
         let tabID = workspace.openServer(profileID: UUID(), title: "生产 web")
@@ -39,7 +40,7 @@ final class WorkspaceTerminalTitleTests: XCTestCase {
     func testSyncTerminalTitlesPushesTitleChangeAfterRegistration() {
         let registry = TerminalSessionRegistry()
         let workspace = makeWorkspace(registry)
-        let pane = PaneModel(serverProfileID: UUID())
+        let pane = PaneModel(serverProfileID: UUID(), tabTitle: "生产 web")
         pane.registrar = workspace.sessionRegistrar
 
         workspace.sessionRegistrar?.register(
@@ -48,7 +49,7 @@ final class WorkspaceTerminalTitleTests: XCTestCase {
         XCTAssertEqual(registry.snapshots().first?.title, "prod-1")
 
         workspace.terminalGroups.openTab({
-            TerminalTab(payload: pane, customTitle: "生产 web")
+            TerminalTab(payload: pane)
         })
         workspace.syncTerminalTitles()
 
@@ -59,22 +60,20 @@ final class WorkspaceTerminalTitleTests: XCTestCase {
     func testSyncFocusedTerminalSessionAlsoSyncsTitles() {
         let registry = TerminalSessionRegistry()
         let workspace = makeWorkspace(registry)
-        let pane = PaneModel(serverProfileID: UUID())
+        let pane = PaneModel(serverProfileID: UUID(), tabTitle: "生产 web")
         pane.registrar = workspace.sessionRegistrar
         workspace.sessionRegistrar?.register(
             paneID: pane.id, serverID: pane.serverProfileID,
             serverName: "prod-1", session: pane.session)
-        workspace.terminalGroups.openTab({
-            TerminalTab(payload: pane, customTitle: "生产 web")
-        })
+        workspace.terminalGroups.openTab({ TerminalTab(payload: pane) })
 
         workspace.syncFocusedTerminalSession()
 
         XCTAssertEqual(registry.snapshots().first?.title, "生产 web")
     }
 
-    /// 没有自定义名时回落服务器名，不会被同步成空。
-    func testTabWithoutCustomTitleKeepsServerName() {
+    /// 没有标签名时回落服务器名，不会被同步成空。
+    func testTabWithoutTitleKeepsServerName() {
         let registry = TerminalSessionRegistry()
         let workspace = makeWorkspace(registry)
         let pane = PaneModel(serverProfileID: UUID())

@@ -242,10 +242,10 @@ final class WorkspaceModelTests: XCTestCase {
         let restored = WorkspaceModel(snapshot: ws.snapshot())
         XCTAssertEqual(restored.terminalGroups.allTabs.count, 3)
         XCTAssertEqual(restored.terminalGroups.groupCount, 2, "分屏形状必须还原")
-        XCTAssertEqual(restored.terminalGroups.allTabs.map(\.customTitle), ["a", "a", "b"])
+        XCTAssertEqual(restored.terminalGroups.allTabs.map(\.payload.tabTitle), ["a", "a", "b"])
         XCTAssertEqual(restored.terminalGroups.allTabs.map(\.payload.serverProfileID),
                        [s1, s1, s2])
-        XCTAssertEqual(restored.terminalGroups.activeTab?.customTitle, "b")
+        XCTAssertEqual(restored.terminalGroups.activeTab?.payload.tabTitle, "b")
         // 第一个组一个标签，第二个组两个（分屏克隆的 + 后开的 b）。
         let groupTabCounts = restored.terminalGroups.groupIDs.map {
             restored.terminalGroups.groups[$0]?.tabs.count ?? 0
@@ -422,7 +422,7 @@ final class WorkspaceModelTests: XCTestCase {
             activeTabIndex: 0, uiState: nil)
         ws.restore(from: snap)
         XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
-        XCTAssertEqual(ws.terminalGroups.allTabs[0].customTitle, "restored")
+        XCTAssertEqual(ws.terminalGroups.allTabs[0].payload.tabTitle, "restored")
     }
 
     func testConvenienceInitFromSnapshotGoesThroughRestore() {
@@ -523,6 +523,6 @@ final class WorkspaceModelTests: XCTestCase {
         ws.restore(from: snap, knownServerIDs: [live])
         XCTAssertEqual(ws.terminalGroups.allTabs.count, 1)
         XCTAssertEqual(ws.terminalGroups.activeTab?.id, ws.terminalGroups.allTabs[0].id)
-        XCTAssertEqual(ws.terminalGroups.activeTab?.customTitle, "好的")
+        XCTAssertEqual(ws.terminalGroups.activeTab?.payload.tabTitle, "好的")
     }
 }
