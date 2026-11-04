@@ -62,23 +62,34 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         XCTAssertEqual(gesture.update([], at: 0.9), [])
     }
 
-    // MARK: - 轻点拖移
+    // MARK: - 点击之后
 
-    func test_tap_then_move_within_window_drags() {
+    func test_moving_right_after_a_tap_moves_the_pointer_instead_of_dragging() {
+        // 真机日志：点一下、0.04–0.1 s 后接着滑。以前这会按住左键拖拽，把标题栏下的窗口拖走。
         _ = gesture.update([touch(1, 100)], at: 0)
-        XCTAssertEqual(gesture.update([], at: 0.08), [.click(.left)])
-        _ = gesture.update([touch(2, 100)], at: 0.2)
-        let actions = gesture.update([touch(2, 110)], at: 0.25)
-        XCTAssertEqual(actions.first, .dragBegan)
-        guard actions.count == 2, case .dragMoved = actions[1] else { return XCTFail("\(actions)") }
+        XCTAssertEqual(gesture.update([], at: 0.05), [.click(.left)])
+        _ = gesture.update([touch(2, 100)], at: 0.09)
+        guard case .movePointer? = gesture.update([touch(2, 110)], at: 0.12).first else {
+            return XCTFail("点完接着滑是移动光标")
+        }
+        XCTAssertEqual(gesture.update([], at: 0.3), [])
     }
 
-    func test_tap_then_short_hold_drags_sooner_than_plain_hold() {
+    func test_holding_after_a_tap_drags_only_after_the_normal_hold() {
         _ = gesture.update([touch(1, 100)], at: 0)
-        _ = gesture.update([], at: 0.08)
-        _ = gesture.update([touch(2, 100)], at: 0.2)
-        XCTAssertEqual(gesture.tick(at: 0.39), [])
-        XCTAssertEqual(gesture.tick(at: 0.4), [.dragBegan])
+        _ = gesture.update([], at: 0.05)
+        _ = gesture.update([touch(2, 100)], at: 0.1)
+        XCTAssertEqual(gesture.tick(at: 0.1 + RemoteTrackpadGesture.holdDuration - 0.01), [])
+        XCTAssertEqual(gesture.tick(at: 0.1 + RemoteTrackpadGesture.holdDuration + 0.01), [.dragBegan])
+    }
+
+    func test_quick_tap_right_after_a_swipe_clicks() {
+        // 滑到目标上马上点：第一下就要点到。
+        _ = gesture.update([touch(1, 100)], at: 0)
+        _ = gesture.update([touch(1, 130)], at: 0.05)
+        XCTAssertEqual(gesture.update([], at: 0.3), [])
+        _ = gesture.update([touch(2, 130)], at: 0.37)
+        XCTAssertEqual(gesture.update([], at: 0.42), [.click(.left)])
     }
 
     func test_two_quick_taps_stay_two_clicks() {
@@ -86,15 +97,6 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         XCTAssertEqual(gesture.update([], at: 0.08), [.click(.left)])
         _ = gesture.update([touch(2, 100)], at: 0.2)
         XCTAssertEqual(gesture.update([], at: 0.28), [.click(.left)])
-    }
-
-    func test_touch_after_window_moves_pointer_instead_of_dragging() {
-        _ = gesture.update([touch(1, 100)], at: 0)
-        _ = gesture.update([], at: 0.08)
-        _ = gesture.update([touch(2, 100)], at: 0.31)
-        guard case .movePointer? = gesture.update([touch(2, 110)], at: 0.35).first else {
-            return XCTFail("过了窗口应是普通移动")
-        }
     }
 
     // MARK: - 双指
