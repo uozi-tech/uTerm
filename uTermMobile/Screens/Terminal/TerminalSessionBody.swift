@@ -295,35 +295,33 @@ struct TerminalKeyBar: View {
     // MARK: 紧凑行（始终可见）
 
     private var compactRow: some View {
-        HStack(spacing: 6) {
-            // 展开 / 收起多行面板。
-            Button { expanded.toggle() } label: {
-                keyCap(expanded ? "∨" : "∧", active: expanded)
-            }
-            .buttonStyle(MPressStyle())
-            // Ctrl 粘滞修饰：点亮后下一个软键盘字符按住 Ctrl 发送（Ctrl+L/R/U……）；点其它快捷键取消。
-            Button { controller.toggleControl() } label: {
-                keyCap("ctrl", active: controller.controlArmed)
-            }
-            .buttonStyle(MPressStyle())
-            // Alt/Meta 粘滞修饰：点亮后下一个软键盘字符前发 ESC（Alt+f/b/d/. ……）。
-            Button { controller.toggleAlt() } label: {
-                keyCap("alt", active: controller.altArmed)
-            }
-            .buttonStyle(MPressStyle())
-            if controller.acceptsImages { imageMenu }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(quickKeys) { key in
-                        Button { tap(key) } label: { keyCap(key.label, active: false) }
-                            .buttonStyle(MPressStyle())
-                    }
+        // 整排一起滚：分屏后一格很窄，固定在左边的键会占掉大半宽度。
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                // 展开 / 收起多行面板。
+                Button { expanded.toggle() } label: {
+                    keyCap(expanded ? "∨" : "∧", active: expanded)
                 }
-                .padding(.trailing, 10)
+                .buttonStyle(MPressStyle())
+                // Ctrl 粘滞修饰：点亮后下一个软键盘字符按住 Ctrl 发送（Ctrl+L/R/U……）；点其它快捷键取消。
+                Button { controller.toggleControl() } label: {
+                    keyCap("ctrl", active: controller.controlArmed)
+                }
+                .buttonStyle(MPressStyle())
+                // Alt/Meta 粘滞修饰：点亮后下一个软键盘字符前发 ESC（Alt+f/b/d/. ……）。
+                Button { controller.toggleAlt() } label: {
+                    keyCap("alt", active: controller.altArmed)
+                }
+                .buttonStyle(MPressStyle())
+                if controller.acceptsImages { imageMenu }
+                ForEach(quickKeys) { key in
+                    Button { tap(key) } label: { keyCap(key.label, active: false) }
+                        .buttonStyle(MPressStyle())
+                }
             }
+            .padding(.horizontal, 10)
         }
-        .padding(.leading, 10).padding(.vertical, 7)
+        .padding(.vertical, 7)
     }
 
     // MARK: 展开面板（多行网格，纵向可滚）

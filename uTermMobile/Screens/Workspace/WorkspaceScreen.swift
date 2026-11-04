@@ -275,12 +275,18 @@ struct WorkspaceScreen: View {
             let horizontal = layout.axis == .horizontal
             let split = workspace.isSplit
             ZStack(alignment: .topLeading) {
-                ForEach(Array(workspace.panes.enumerated()), id: \.element.id) { index, pane in
-                    let rect = layout.rects[min(index, layout.rects.count - 1)]
-                    paneView(pane, showsBack: index == 0,
-                             splitState: index == workspace.panes.count - 1 ? split : nil)
-                        .frame(width: rect.width, height: rect.height)
-                        .offset(x: rect.minX, y: rect.minY)
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(workspace.panes.enumerated()), id: \.element.id) { index, pane in
+                        let rect = layout.rects[min(index, layout.rects.count - 1)]
+                        paneView(pane, showsBack: index == 0,
+                                 splitState: index == workspace.panes.count - 1 ? split : nil)
+                            .frame(width: rect.width, height: rect.height)
+                            .offset(x: rect.minX, y: rect.minY)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .overlayPreferenceValue(WorkspacePaneBodySlots.self) { slots in
+                    tabBodies(in: slots)
                 }
                 if split {
                     divider(horizontal: horizontal, length: layout.length,
@@ -374,21 +380,43 @@ struct WorkspaceScreen: View {
                 onMoveToOtherPane: { workspace.moveToOtherPane($0) },
                 showsTrailingControls: chrome.statusColumn == nil,
                 onDragTab: { draggingTabID = $0 })
-            ZStack {
-                ForEach(paneTabs) { tab in
-                    let front = tab.id == pane.activeID
-                    coveredTabBody(tab, front: front, focused: front && focused)
-                        .opacity(front ? 1 : 0)
-                        .allowsHitTesting(front)
-                }
-                if paneTabs.isEmpty { emptyPane(pane) }
+            // 标签主体不在这里，见 `tabBodies`；这里只留位置。
+            Group {
+                if paneTabs.isEmpty { emptyPane(pane) } else { Color.clear }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .anchorPreference(key: WorkspacePaneBodySlots.self, value: .bounds) { [pane.id: $0] }
         }
         .background(M.surface)
         .contentShape(Rectangle())
         // 点到格里任何地方都把焦点给它（终端的 UIKit 视图另由 onInteract 报告）。
         .simultaneousGesture(TapGesture().onEnded { workspace.focus(pane: pane.id) })
+    }
+
+    /// 所有标签主体都挂在同一个 `ForEach` 下，只按所在格摆位置。标签换格时视图身份不变：
+    /// 按格分开挂的话换格等于新建，SwiftUI 之后再也不更新新终端的 frame（布局算得对，
+    /// UIKit 宿主却停在换格那一刻的尺寸），转屏、拖分隔条后终端就盖到别的格上。
+    private func tabBodies(in slots: [UUID: Anchor<CGRect>]) -> some View {
+        GeometryReader { proxy in
+            ForEach(workspace.tabs) { tab in
+                let pane = workspace.paneIndex(containing: tab.id).map { workspace.panes[$0] }
+                let slot = pane.flatMap { slots[$0.id] }.map { proxy[$0] } ?? .zero
+                let front = pane?.activeID == tab.id
+                coveredTabBody(tab, front: front, focused: front && pane?.id == workspace.focusedPaneID)
+                    .frame(width: slot.width, height: slot.height)
+                    .contentShape(Rectangle())
+                    // 点到格里任何地方都把焦点给它（终端的 UIKit 视图另由 onInteract 报告）。
+                    .simultaneousGesture(TapGesture().onEnded {
+                        if let pane { workspace.focus(pane: pane.id) }
+                    })
+                    .opacity(front ? 1 : 0)
+                    .allowsHitTesting(front)
+                    // 用真实布局位置而不是 offset：正文底色要按实际位置判断是否贴着安全区。
+                    .padding(.leading, slot.minX)
+                    .padding(.top, slot.minY)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
     }
 
     /// 正在为这个标签建连、且连接中页只盖这个标签（分屏时在工作区里新开的）时，返回该请求。
@@ -526,4 +554,12 @@ struct WorkspaceScreen: View {
 
 extension MConnectKind: Identifiable {
     var id: Self { self }
+}
+
+/// 每一格里标签主体该占的区域（标签条高度随状态栏变化，只有格自己知道）。
+private struct WorkspacePaneBodySlots: PreferenceKey {
+    static let defaultValue: [UUID: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [UUID: Anchor<CGRect>], nextValue: () -> [UUID: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
 }
