@@ -8,7 +8,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @AppStorage("startupBehavior") private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
     @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
-    @AppStorage("requireAuthAtLaunch") private var requireAuthAtLaunch = true
+    @AppStorage(AppLockPreference.key) private var requireAuthAtLaunch = AppLockPreference.defaultValue
     @AppStorage("appearancePreference") private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
     @AppStorage("appLanguage") private var appLanguageRaw: String = AppLanguage.system.rawValue
 

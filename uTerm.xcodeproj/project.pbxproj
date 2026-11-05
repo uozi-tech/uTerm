@@ -308,7 +308,6 @@
 				Features/Welcome/QuickCommandInbox.swift,
 				Features/Welcome/QuickCommandRunner.swift,
 				Features/Welcome/Views/EmptyServersState.swift,
-				Features/Welcome/Views/HostAvatar.swift,
 				Features/Welcome/Views/HostDetailPanel.swift,
 				Features/Welcome/Views/QuickCommandComponents.swift,
 				Features/Welcome/Views/QuickCommandDetail.swift,

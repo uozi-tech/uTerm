@@ -64,7 +64,7 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
                       "服务器行的头像色块必须取分组色")
         XCTAssertTrue(source.contains("reachability: HostReachabilityMonitor.shared.entry(for: profile)"),
                       "头像角标必须是服务器在线状态")
-        XCTAssertTrue(source.contains("await HostReachabilityMonitor.shared.watch(key)"),
+        XCTAssertTrue(source.contains(".watchesReachability(of: profile)"),
                       "行可见期间要登记在线探测")
         XCTAssertTrue(source.contains("UDGroupChip(groupLabel, tint: groupColor)"))
         XCTAssertFalse(source.contains("UDGroupChip(groupLabel)"))
@@ -79,9 +79,9 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
         ), encoding: .utf8)
 
         XCTAssertTrue(welcomeSource.contains("@Query private var groups: [ServerGroup]"))
-        XCTAssertTrue(welcomeSource.contains("groupColorHexes: groupColorHexes"))
-        XCTAssertTrue(listSource.contains("let groupColorHexes: [String: String]"))
-        XCTAssertTrue(listSource.contains("groupColor: ServerGroupBadgeTint.color(for: profile.group"))
+        XCTAssertTrue(welcomeSource.contains("groupColors: ServerGroupTint.colors(for: groups)"))
+        XCTAssertTrue(listSource.contains("let groupColors: [String: Color]"))
+        XCTAssertTrue(listSource.contains("groupColor: ServerGroupTint.color(for: profile.group, colors: groupColors)"))
     }
 
     func testWelcomeContextMenuOmitsCopySSHConnectionAction() throws {

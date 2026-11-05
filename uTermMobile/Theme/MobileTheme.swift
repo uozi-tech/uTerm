@@ -24,10 +24,10 @@ enum M {
     static let terminalBg = UD.panel
     /// 命令块 / Shell 网格的「终端面」底色——**随主题翻**：暗夜 #000000 / 日间 #FFFFFF（对齐 macOS
     /// `ParTermSurface`）。翻面后文字直接用 M.text/text2/text3 即两档都可读。
-    static let cmdSurface = UD.dyn(.hex(0x000000), .hex(0xFFFFFF))
+    static let cmdSurface = UD.bg
     /// 屏幕画布：承载卡片的屏 / 滚动区 / 卡片式抽屉的底。暗夜与 `bg` 同值（视觉零变化）；
     /// 日间浅灰，让白卡浮起。整屏工作面（终端 / 文件浏览……）用 `surface`，别用它。
-    static let canvas = UD.dyn(.hex(0x000000), .hex(0xF5F5F5))
+    static let canvas = UD.pageBg
     /// 卡片面（Ant container）：暗夜 #141414 / 日间纯白，靠与 `canvas`（#000 / #F5F5F5）的
     /// 填充差区分，不加投影、不描边。旧值暗夜白 4.5%（≈#0B0B0B）在纯黑画布上几乎看不出卡片边界。
     /// chip / 键帽 / 次按钮等小控件仍用 fillFaint / `button`，别用它。
@@ -148,7 +148,8 @@ nonisolated enum MRadius {
     }
 }
 
-/// 把十六进制字符串转 Color（设计稿 seed 数据里的分组色等使用）。
+/// 把十六进制字符串转 Color。仅剩 `MFileIcon` 在用；新代码用共享的 `Color(hex:)`
+/// （`uTerm/Core/Theme/Color+Hex.swift`）。
 extension Color {
     init(hexString: String) {
         var s = hexString.trimmingCharacters(in: .whitespacesAndNewlines)

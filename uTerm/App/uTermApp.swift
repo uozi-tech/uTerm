@@ -90,10 +90,9 @@ struct uTermApp: App {
         // 写 NSApp.appearance，避免首帧用错外观闪一下。live 切换由 AppAppearanceSync 负责。
         let raw = UserDefaults.standard.string(forKey: "appearancePreference") ?? ""
         NSApplication.shared.appearance = (AppearancePreference(rawValue: raw) ?? .system).nsAppearance
-        // 启动应用锁：读 requireAuthAtLaunch（键不存在视作 true，与 @AppStorage 默认对齐——
-        // 同 appearancePreference，UserDefaults.bool 在缺键时返回 false 会误成「关」，故用 object as? Bool）。
+        // 启动应用锁：读 requireAuthAtLaunch（mac 缺键视作开，与 @AppStorage 默认对齐，见 `AppLockPreference`）。
         // 锁屏遮罩与首次验证由各 Scene 上的 .appLockGate(lockModel) 驱动。
-        let requireAuth = (UserDefaults.standard.object(forKey: "requireAuthAtLaunch") as? Bool) ?? true
+        let requireAuth = AppLockPreference.isEnabled()
         _lockModel = State(initialValue: AppLockModel(
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))

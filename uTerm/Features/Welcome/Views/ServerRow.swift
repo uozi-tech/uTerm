@@ -8,15 +8,6 @@ enum ServerRowLayout {
     nonisolated static let contentPadding: CGFloat = UD.Space.xl
 }
 
-enum ServerGroupBadgeTint {
-    nonisolated static func color(for groupName: String?, in groupColorHexes: [String: String]) -> Color? {
-        guard let groupName, !groupName.isEmpty,
-              let colorHex = groupColorHexes[groupName] else { return nil }
-        let rgb = groupHexRGB(colorHex)
-        return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
-    }
-}
-
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
 /// 等边内距：主机头像（分组色色块 + 首字母，角标 = 在线状态，见 `HostAvatar`）+
@@ -98,11 +89,7 @@ struct ServerRow: View {
         // 停更、停下补算一次。
         .rowHover(rowHover, id: profile.id) { hover = $0 }
         // 在线角标：只在行可见期间登记探测，滚出屏幕 task 取消即注销（见 `HostReachabilityMonitor`）。
-        // 跳板机主机 key 为 nil，不探。
-        .task(id: HostEndpointKey(profile)) {
-            guard let key = HostEndpointKey(profile) else { return }
-            await HostReachabilityMonitor.shared.watch(key)
-        }
+        .watchesReachability(of: profile)
         // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
         // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
         // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`

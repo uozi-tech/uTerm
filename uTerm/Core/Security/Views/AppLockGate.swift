@@ -58,12 +58,5 @@ private struct LockCoverView: View {
         }
     }
 
-    private var message: String {
-        switch model.state {
-        case .unlocked:                 return ""
-        case .authenticating:           return "正在验证身份…"
-        case .locked:                   return "uTerm 已锁定"
-        case .failed(let msg):          return msg
-        }
-    }
+    private var message: String { model.state.message }
 }

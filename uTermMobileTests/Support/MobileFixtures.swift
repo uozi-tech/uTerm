@@ -193,12 +193,8 @@ enum MobileFixtures {
         return try ModelContainer(for: schema, configurations: config)
     }
 
-    /// 与宿主 `MobileModelContainer.types` 一字不差的注册表。
-    static let modelTypes: [any PersistentModel.Type] = [
-        ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
-        ChatSession.self, ChatMessageRecord.self, ServerGroup.self,
-        ForwardingRule.self, QuickCommand.self, QuickCommandRun.self,
-    ]
+    /// 与宿主同一份注册表（`ModelRegistry.types`）。
+    static var modelTypes: [any PersistentModel.Type] { ModelRegistry.types }
 
     /// 往容器的 `mainContext` 播种（`@Query` 读的就是它），并 `save()`。
     @MainActor

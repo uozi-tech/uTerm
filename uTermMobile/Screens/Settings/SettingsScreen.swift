@@ -10,7 +10,7 @@ struct SettingsScreen: View {
     @AppStorage("appearancePreference")
     private var appearanceRaw: String = AppearancePreference.system.rawValue
     /// 应用锁开关，与启动时读的键同源（缺键视作关）。
-    @AppStorage("requireAuthAtLaunch") private var appLockOn = false
+    @AppStorage(AppLockPreference.key) private var appLockOn = AppLockPreference.defaultValue
     /// 会话保留窗口（天）。与 macOS 共用 key，可经 iCloud KVS / 局域网同步。
     @AppStorage(ChatHistoryStore.retentionDaysKey)
     private var chatRetentionDays = ChatHistoryStore.defaultRetentionDays
@@ -108,7 +108,7 @@ struct SettingsScreen: View {
             set: { wantOn in
                 guard wantOn else { appLockOn = false; return }
                 Task {
-                    let outcome = await MobileBiometry.confirmEnable()
+                    let outcome = await AppLockModel.confirmEnable()
                     if case .success = outcome {
                         appLockOn = true
                     } else {
@@ -140,7 +140,7 @@ struct SettingsScreen: View {
             ULogo(size: 48)
             VStack(alignment: .leading, spacing: 2) {
                 Text("uTerm").font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
-                Text("\(counts.hosts) 台主机 · \(counts.keys) 个密钥 · \(liveSyncStatus)")
+                Text("\(counts.hosts) 台主机 · \(counts.keys) 个密钥 · \(syncStatus.label)")
                     .font(M.mono(12.5)).foregroundStyle(M.text3)
             }
             Spacer()
@@ -287,30 +287,17 @@ struct SettingsScreen: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
 
-    /// 如实的同步状态：本地存储（CloudKit 未建成）/ 未登录 iCloud / iCloud 同步。
-    private var syncStatus: String {
-        guard MobileModelContainer.usingCloudKit else { return "本地存储" }
-        return FileManager.default.ubiquityIdentityToken != nil ? "iCloud 同步" : "未登录 iCloud"
+    /// 如实的同步状态（两端共用 `CloudKitSyncStatus`）：本地存储（CloudKit 未建成）/
+    /// 未登录 iCloud / 叠上 monitor.phase 的进行态 / 已同步 · 等待同步。
+    private var syncStatus: CloudKitSyncStatus {
+        sync.status(loggedIn: FileManager.default.ubiquityIdentityToken != nil,
+                    usingCloudKit: MobileModelContainer.usingCloudKit)
     }
 
-    /// 在 `syncStatus`（本地 / 未登录 / iCloud）基础上叠 monitor.phase 的进行态。
-    private var liveSyncStatus: String {
-        guard MobileModelContainer.usingCloudKit,
-              FileManager.default.ubiquityIdentityToken != nil else { return syncStatus }
-        switch sync.phase {
-        case .setup:     return "连接中…"
-        case .importing: return "下载中…"
-        case .exporting: return "上传中…"
-        case .error:     return "同步出错"
-        case .idle:      return "iCloud 同步"
-        }
-    }
-
-    /// 「同步诊断」行副标题：登录后显示最近事件数，否则提示基础状态。
+    /// 「同步诊断」行副标题：登录后显示最近错误或入口说明，否则提示基础状态。
     private var syncDiagSub: String {
-        guard MobileModelContainer.usingCloudKit,
-              FileManager.default.ubiquityIdentityToken != nil
-        else { return syncStatus }
+        let status = syncStatus
+        guard status.isCloudActive else { return status.label }
         return sync.lastError ?? "查看最近同步事件 · 复制日志"
     }
 }

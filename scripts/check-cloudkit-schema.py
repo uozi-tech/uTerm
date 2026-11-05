@@ -42,12 +42,17 @@ DEFAULT_CONTAINER_ID = "iCloud.com.uozi.uTerm"
 # 扫描根（相对仓库根）。vendor/ 下的第三方副本不参与。
 DEFAULT_SOURCE_ROOTS = ["uTerm", "uTermMobile", "Packages"]
 
-# 注册表：容器实际注册了哪些模型。两处必须与源码里发现的 @Model 全集一致，
-# 漏注册的模型不会进 schema，也就不会同步。
-REGISTRATION_FILES = [
+# 注册表：容器实际注册了哪些模型。两端（与测试夹具）共用 `ModelRegistry.types` 这一份，
+# 它必须与源码里发现的 @Model 全集一致——漏注册的模型不会进 schema，也就不会同步。
+REGISTRY_FILE = "uTerm/Core/Persistence/ModelRegistry.swift"
+# 建容器的地方：必须引用 `ModelRegistry.types`，否则注册表核对核的就不是容器真正用的那份。
+REGISTRY_CONSUMERS = [
     "uTerm/App/AppModelContainer.swift",
     "uTermMobile/App/MobileModelContainer.swift",
 ]
+REGISTRY_TYPES_RE = re.compile(
+    r"static\s+let\s+types\s*:\s*\[\s*any\s+PersistentModel\.Type\s*\]\s*=\s*\[(.*?)\]",
+    re.DOTALL)
 
 STRING_IDX = "STRING QUERYABLE SEARCHABLE SORTABLE"
 INT_IDX = "INT64 QUERYABLE SORTABLE"
@@ -335,17 +340,40 @@ def export_schema(team_id: str, container_id: str, environment: str) -> str:
 # ---------------------------------------------------------------- 注册表核对
 
 
-def parse_registrations(repo_root: Path) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
-    for rel in REGISTRATION_FILES:
+def parse_registrations(repo_root: Path) -> set[str]:
+    """解析 `ModelRegistry.types` 的字面量，返回注册的模型名。
+
+    找不到文件 / 找不到数组 / 解析出 0 个类型都抛 ModelError（退出码 2）——**不**静默跳过：
+    跳过就等于注册表核对整个失效，漏注册的模型照样能「通过」。
+    """
+    path = repo_root / REGISTRY_FILE
+    if not path.exists():
+        raise ModelError(f"找不到注册表 {REGISTRY_FILE}——挪了位置就同步改脚本里的 REGISTRY_FILE")
+    text = strip_line_comments(path.read_text(encoding="utf-8", errors="replace"))
+    m = REGISTRY_TYPES_RE.search(text)
+    if not m:
+        raise ModelError(f"{REGISTRY_FILE} 里没找到 `static let types: [any PersistentModel.Type] = [...]`")
+    names = set(re.findall(r"(\w+)\.self", m.group(1)))
+    if not names:
+        raise ModelError(f"{REGISTRY_FILE} 的 types 里一个模型都没解析出来")
+    return names
+
+
+def check_registry_consumers(repo_root: Path) -> list[str]:
+    """建容器的文件必须引用 `ModelRegistry.types`；文件不存在同样报错（不静默跳过）。"""
+    problems: list[str] = []
+    for rel in REGISTRY_CONSUMERS:
         path = repo_root / rel
         if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        names = set(re.findall(r"(\w+)\.self", text))
-        names.discard("PersistentModel")
-        result[rel] = names
-    return result
+            raise ModelError(f"找不到建容器的文件 {rel}——挪了位置就同步改脚本里的 REGISTRY_CONSUMERS")
+        text = strip_line_comments(path.read_text(encoding="utf-8", errors="replace"))
+        if "ModelRegistry.types" not in text:
+            problems.append(f"{rel} 没有用 ModelRegistry.types 建容器（注册表核对核不到它真正注册的模型）")
+    return problems
+
+
+def strip_line_comments(text: str) -> str:
+    return re.sub(r"//[^\n]*", "", text)
 
 
 # ---------------------------------------------------------------- emit
@@ -418,6 +446,8 @@ def main(argv: list[str]) -> int:
         if not models:
             raise ModelError(f"在 {roots} 下没有找到任何 @Model 类——扫描根是不是配错了？")
         expected = {f"CD_{m.name}": expected_fields(m, model_names) for m in models}
+        registered = None if args.skip_registration_check else parse_registrations(repo_root)
+        consumer_problems = [] if args.skip_registration_check else check_registry_consumers(repo_root)
         base_ddl = (Path(args.schema_file).read_text(encoding="utf-8") if args.schema_file
                     else export_schema(args.team_id, args.container_id, args.environment))
     except ModelError as exc:
@@ -429,12 +459,12 @@ def main(argv: list[str]) -> int:
     warnings: list[str] = []
 
     # 1) 注册表核对
-    if not args.skip_registration_check:
-        for rel, registered in parse_registrations(repo_root).items():
-            unregistered = sorted(model_names - registered)
-            if unregistered:
-                problems.append(f"{rel} 没有注册这些 @Model：{', '.join(unregistered)}"
-                                "（未注册的模型不进 schema，也就不会同步）")
+    if registered is not None:
+        unregistered = sorted(model_names - registered)
+        if unregistered:
+            problems.append(f"{REGISTRY_FILE} 没有注册这些 @Model：{', '.join(unregistered)}"
+                            "（未注册的模型不进 schema，也就不会同步）")
+        problems.extend(consumer_problems)
 
     # 2) 字段比对
     missing_fields: dict[str, dict[str, str]] = {}

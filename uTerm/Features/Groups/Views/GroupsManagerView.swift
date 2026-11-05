@@ -124,7 +124,7 @@ struct GroupsManagerView: View {
                     if ungroupedCount > 0 {
                         GroupRowView(
                             name: "未分组",
-                            color: groupPaletteColor("#9aa7b5"),
+                            color: ServerGroupTint.color(hex: "#9aa7b5"),
                             count: ungroupedCount,
                             pinned: false,
                             builtin: true,
@@ -519,7 +519,7 @@ private struct GroupDetailView: View {
 
     private func colorSwatch(_ hex: String) -> some View {
         let active = group.colorHex == hex
-        let c = groupPaletteColor(hex)
+        let c = ServerGroupTint.color(hex: hex)
         return Button { onSetColor(hex) } label: {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(c)
@@ -700,7 +700,7 @@ private struct UngroupedDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(alignment: .top, spacing: 14) {
-                    groupGlyph(color: groupPaletteColor("#9aa7b5"))
+                    groupGlyph(color: ServerGroupTint.color(hex: "#9aa7b5"))
                     VStack(alignment: .leading, spacing: 4) {
                         Text("未分组")
                             .font(.system(size: 16, weight: .medium))
@@ -839,11 +839,6 @@ private func groupGlyph(color: Color) -> some View {
         )
 }
 
-/// 调色板 hex → SwiftUI 颜色。
-private func groupPaletteColor(_ hex: String) -> Color {
-    let (r, g, b) = groupHexRGB(hex)
-    return Color(.sRGB, red: r, green: g, blue: b)
-}
 
 func serverProfileMemberDisplayName(_ profile: ServerProfile) -> String {
     let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)

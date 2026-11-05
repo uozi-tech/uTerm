@@ -161,7 +161,7 @@ struct CommandFormSheet: View {
         var out = HostSelection()
         out.selectable = hosts.filter { !$0.sftpOnly }
         out.sections = ServerGrouping.grouped(out.selectable)
-        out.groupColors = MGroupTint.colors(for: groups)
+        out.groupColors = ServerGroupTint.colors(for: groups)
         for sec in out.sections {
             var picked = 0
             for h in sec.hosts where serverIDs.contains(h.id) { picked += 1 }
@@ -229,8 +229,8 @@ struct CommandFormSheet: View {
         // 三态由上面那一趟数出来的 `picked` 直接推，不再逐组重扫成员。
         let all = !gHosts.isEmpty && picked == gHosts.count
         let some = picked > 0
-        let tint = MGroupTint.color(for: name == ServerGrouping.ungroupedLabel ? nil : name,
-                                    colors: groupColors)
+        let tint = ServerGroupTint.color(for: name == ServerGrouping.ungroupedLabel ? nil : name,
+                                         colors: groupColors)
         return Button { toggleGroup(gHosts, all: all) } label: {
             HStack(spacing: 10) {
                 MGroupCheck(on: all, partial: some && !all)

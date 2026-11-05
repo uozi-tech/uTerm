@@ -1,4 +1,3 @@
-import AgentKit
 import SwiftData
 
 enum AppModelContainer {
@@ -10,11 +9,8 @@ enum AppModelContainer {
             cloudKitDatabase: .automatic
         )
         do {
-            return try ModelContainer(
-                for: ServerProfile.self, KnownHost.self, AIProvider.self, SSHKey.self,
-                     ChatSession.self, ChatMessageRecord.self, ServerGroup.self,
-                     ForwardingRule.self, QuickCommand.self, QuickCommandRun.self,
-                configurations: config)
+            // 注册表见 `ModelRegistry`（两端同一份）。
+            return try ModelContainer(for: Schema(ModelRegistry.types), configurations: config)
         } catch {
             fatalError("无法创建 ModelContainer: \(error)")
         }

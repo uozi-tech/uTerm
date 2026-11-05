@@ -123,7 +123,7 @@ final class ClickSelectActivateTests: XCTestCase {
                            if action == .connect { recorder.opened.append(profile.name) }
                        },
                        existingGroups: [],
-                       groupColorHexes: [:])
+                       groupColors: [:])
         }
     }
 

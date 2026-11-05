@@ -303,7 +303,7 @@ final class ServerListSelectionScrollProbeTests: XCTestCase {
             driver: driver,
             profiles: profiles,
             existingGroups: WelcomeServerListCostTests.groupNames(groups),
-            groupColorHexes: WelcomeServerListCostTests.groupColorHexes(groups),
+            groupColors: WelcomeServerListCostTests.groupColors(groups),
             scrollsSelectionIntoView: scrollsIntoView)
         let host = NSHostingView(rootView: AnyView(
             harness.frame(width: Self.size.width, height: Self.size.height)))
@@ -701,7 +701,7 @@ private struct ServerListSelectionHarness: View {
     @ObservedObject var driver: SelectionDriver
     let profiles: [ServerProfile]
     let existingGroups: [String]
-    let groupColorHexes: [String: String]
+    let groupColors: [String: Color]
     var scrollsSelectionIntoView = true
 
     @State private var dragging: UUID?
@@ -719,7 +719,7 @@ private struct ServerListSelectionHarness: View {
                    onOpen: { _ in },
                    onContextAction: { _, _ in },
                    existingGroups: existingGroups,
-                   groupColorHexes: groupColorHexes,
+                   groupColors: groupColors,
                    scrollsSelectionIntoView: scrollsSelectionIntoView)
     }
 }
