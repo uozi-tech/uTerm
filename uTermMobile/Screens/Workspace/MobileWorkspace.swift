@@ -57,7 +57,7 @@ enum MWorkTab: Identifiable {
         switch self {
         case .terminal(let t):
             if let title = t.remote?.macTabTitle { return title }
-            return t.controller.title.isEmpty ? hostName : t.controller.title
+            return t.controller.shellTitle ?? hostName
         case .files: return hostName
         }
     }

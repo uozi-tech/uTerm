@@ -117,8 +117,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     }
 
     func receiveShellTitle(_ title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let next = trimmed.isEmpty ? nil : trimmed
+        let next = TerminalTitle.normalize(title)
         guard next != shellTitle else { return }
         shellTitle = next
     }

@@ -197,6 +197,28 @@ final class MobileFixturesTerminalTests: XCTestCase {
         controller.close()
     }
 
+    /// OSC 0 / 2 标题：程序清空标题、或连接断开后都清掉，标签回到主机名（对齐 mac `TerminalSession`）。
+    func testShellTitleClearsOnEmptyTitleAndOnDrop() async throws {
+        let (c, h, relay) = try host()
+        let (controller, handles) = MobileFakeTerminal.controller(
+            MobileFakeTerminalScript(linesPerSecond: 60, seconds: 30))
+        controller.start(profile: h, container: c, relay: relay)
+        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        controller.receiveShellTitle("  vim a.txt \n")
+        XCTAssertEqual(controller.shellTitle, "vim a.txt")
+        controller.receiveShellTitle(" ")
+        XCTAssertNil(controller.shellTitle, "程序清空标题时应当清掉")
+        controller.receiveShellTitle("htop")
+        await handles.latest!.simulateDrop()
+        let dropped = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
+            controller.state == .closed
+        }
+        XCTAssertTrue(dropped)
+        XCTAssertNil(controller.shellTitle, "断开后不该还挂着旧标题")
+        controller.close()
+    }
+
     /// 重连：第一条传输 `connect()` 抛错 → `.failed` → `restart()` → 第二条连上。
     /// 走的是产品自己的重试路径（连接中页「重试」按钮），不是夹具自己造的。
     func testFailThenRestartReconnects() async throws {

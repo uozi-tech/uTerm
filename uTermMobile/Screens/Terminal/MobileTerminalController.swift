@@ -16,7 +16,11 @@ final class MobileTerminalController {
     var state: State = .idle {
         // 离开「已连接」（失败 / 断开 / 重连中）就收起键盘：没有 shell 可打字，
         // 失败态的终端视图还会被失败页替换掉，留着键盘只会盖住失败页。
-        didSet { if !canTakeKeyboard { resignKeyboard() } }
+        didSet {
+            if !canTakeKeyboard { resignKeyboard() }
+            // 标题说的是那条连接上正在跑的程序，连接没了就不再成立（同 mac `TerminalSession`）。
+            if state != .connected { shellTitle = nil }
+        }
     }
     /// 本会话是不是此刻唯一该拿键盘的那个（聚焦格的前台标签、终端模式、上面没有连接中页 /
     /// 新建抽屉）。由工作区统一裁决、逐会话下发——每个标签只看自己的这一位。
@@ -30,7 +34,8 @@ final class MobileTerminalController {
     private(set) var keyboardShown = false
     /// 用户亲手收起了键盘：切标签、关抽屉、转屏都不再自动弹回，直到用户点按钮或点终端。
     @ObservationIgnored private var keyboardCollapsed = false
-    var title: String = ""
+    /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
+    var shellTitle: String?
     /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
@@ -213,7 +218,6 @@ final class MobileTerminalController {
     func start(profile: ServerProfile, container: ModelContainer, relay: HostKeyChallengeRelay) {
         guard !started else { return }
         started = true
-        title = profile.name
         state = .connecting
         lastProfile = profile; lastContainer = container; lastRelay = relay
         connectGeneration &+= 1
@@ -372,6 +376,13 @@ final class MobileTerminalController {
             guard !Task.isCancelled else { return }
             self?.imageNote = nil
         }
+    }
+
+    /// 收 OSC 0 / 2 标题：规整后为空就清掉（程序清空标题时标签回到主机名）。
+    func receiveShellTitle(_ title: String) {
+        let next = TerminalTitle.normalize(title)
+        guard next != shellTitle else { return }
+        shellTitle = next
     }
 
     func sendText(_ text: String) {

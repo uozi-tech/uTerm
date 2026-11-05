@@ -242,7 +242,7 @@ struct SwiftTermView: UIViewRepresentable {
             controller.resize(cols: UInt16(clamping: newCols), rows: UInt16(clamping: newRows))
         }
         func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {
-            if !title.isEmpty { controller.title = title }
+            controller.receiveShellTitle(title)
         }
         func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
         func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
