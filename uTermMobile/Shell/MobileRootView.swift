@@ -48,9 +48,14 @@ struct MobileRootView: View {
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
         }
-        // 并行执行：命令详情「运行」触发，全屏覆盖呈现真实多台广播。
-        .fullScreenCover(item: $store.parallelRun) { req in
-            ParallelRunView(request: req) { store.parallelRun = nil }
+        // 并行执行：命令详情「运行」触发，全屏覆盖呈现真实多台广播。会话由 store 持有，
+        // 关掉全屏页也继续跑；再次打开拿回同一个控制器（不会重跑）。
+        .fullScreenCover(item: $store.presentedParallel) { session in
+            ParallelRunView(request: session.request,
+                            controller: session.controller,
+                            onControllerReady: { session.controller = $0 },
+                            onRerun: { store.parallelRerun(session) },
+                            onClose: { store.closeParallel(session) })
                 .environment(store)
                 .environment(\.mAccent, M.accent)
                 .tint(M.accent)
@@ -114,6 +119,8 @@ private struct MobileTabShell: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        // 后台运行中的并行执行：标签栏上方一条（iOS 26.1 起用系统的底部附件，与「音乐」正在播放同款）。
+        .modifier(ParallelRunAccessoryHost())
         // 侧栏头：品牌名 + 命令面板入口（改前挂在 NavigationSplitView 侧栏的工具栏上）。
         .tabViewSidebarHeader {
             HStack(spacing: 8) {

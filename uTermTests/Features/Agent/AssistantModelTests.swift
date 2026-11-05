@@ -154,6 +154,21 @@ final class AssistantModelTests: XCTestCase {
         XCTAssertEqual(model.activeProvider?.id, b.id)
     }
 
+    /// Agent 与并行执行共用的选择口径：存着的 id 优先，失效 / 没存退回 sortOrder 最小，空列表为 nil。
+    func testAIProviderActivePrefersStoredIDThenLowestSortOrder() {
+        let a = AIProvider(name: "A", kind: .anthropic, baseURL: "", model: "", sortOrder: 5)
+        let b = AIProvider(name: "B", kind: .openai, baseURL: "", model: "", sortOrder: 1)
+        XCTAssertEqual(AIProvider.active(in: [a, b], id: a.id)?.id, a.id)
+        XCTAssertEqual(AIProvider.active(in: [a, b], id: UUID())?.id, b.id)
+        XCTAssertEqual(AIProvider.active(in: [a, b], id: nil)?.id, b.id)
+        XCTAssertNil(AIProvider.active(in: [], id: a.id))
+    }
+
+    /// 没配任何模型服务时并行执行不造模型后端（退回模板叙述）。
+    func testParallelDoctorNilWithoutProviders() {
+        XCTAssertNil(ParallelAIDoctor.make(providers: [], activeProviderID: nil))
+    }
+
     // MARK: - 会话历史
 
     func testDeriveTitleTrimsAndTruncates() {

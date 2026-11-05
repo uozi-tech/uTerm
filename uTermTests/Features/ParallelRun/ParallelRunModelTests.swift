@@ -1,0 +1,173 @@
+import AgentKit
+import SwiftData
+import XCTest
+@testable import uTerm
+
+/// 两端共用的 `ParallelRunModel`（macOS 参数：`.safety` 审批 + macOS 终端描述），
+/// 经执行器缝注入假会话，不连真机器。
+@MainActor
+final class ParallelRunModelTests: XCTestCase {
+
+    // MARK: - 「信任并重试」不吞日志
+
+    /// 首轮还没收尾（别的台还在跑）时对某台点「信任并重试」，整次运行照常在最终收尾时记一条日志。
+    /// 改前 macOS 一律关掉落库，这次运行就从执行日志里消失了。
+    func testTrustAndRetryBeforeFirstRoundFinishesStillRecordsRun() async throws {
+        let (store, container) = try makeStore()
+        let cmd = store.create(name: "uptime", serverIDs: [], command: "uptime", aiAssisted: false)
+        let a = host("a"), b = host("b")
+        let gate = FakeGate()
+        let challenge = HostKeyChallenge(host: "a.example", port: 22, kind: .unknown,
+                                         newFingerprint: "SHA256:test", oldFingerprint: nil)
+        let executor = FakeExecutor { profile, trustNewKeys in
+            if profile == a.id {
+                return trustNewKeys ? FakeSession() : FakeSession(hostKey: challenge)
+            }
+            return FakeSession(gate: gate)
+        }
+        let model = makeModel(commandID: cmd.id, command: "uptime", intent: "", aiAssisted: false,
+                              targets: [a, b], doctor: nil, store: store, container: container,
+                              executor: executor)
+        model.start()
+        try await waitUntil { model.states[0].hostKeyUntrusted }
+        XCTAssertFalse(model.allDone, "b 还在跑")
+
+        model.trustAndRetry(serverID: a.id)
+        try await waitUntil { model.states[0].tone == .ok }
+        await gate.open()
+        try await waitUntil { model.allDone }
+
+        let runs = store.runs(for: cmd.id)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.results.map(\.ok), [true, true])
+    }
+
+    // MARK: - 纯意图命令的退出码
+
+    /// 没有等效命令的 AI 命令：日志里的退出码取 Agent 最后一条真实命令的（改前 macOS 恒为「—」）。
+    func testIntentOnlyAICommandRecordsLastAgentExitCode() async throws {
+        let (store, container) = try makeStore()
+        let cmd = store.create(name: "看系统版本", serverIDs: [], command: "",
+                               intent: "看一下系统版本", aiAssisted: true)
+        let llm = MockLLMClient(scripts: [
+            [Self.call("cat /etc/os-release")],
+            [.text(#"{"status":"ok","summary":"Ubuntu 24.04。"}"#)],
+        ])
+        var doctor = ParallelAIDoctor(client: llm, model: "test",
+                                      baseURL: URL(string: "https://example.invalid")!, apiKey: "k")
+        doctor.retryDelay = { _ in .zero }
+        let executor = FakeExecutor { _, _ in
+            FakeSession(result: CommandResult(output: "NAME=Ubuntu", exitCode: 0))
+        }
+        let model = makeModel(commandID: cmd.id, command: "", intent: cmd.intent, aiAssisted: true,
+                              targets: [host("a")], doctor: doctor, store: store, container: container,
+                              executor: executor)
+        model.start()
+        try await waitUntil { !store.runs(for: cmd.id).isEmpty }
+
+        let result = try XCTUnwrap(store.runs(for: cmd.id).first?.results.first)
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
+    // MARK: - 装配
+
+    private func makeStore() throws -> (QuickCommandStore, ModelContainer) {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        let container = try ModelContainer(for: QuickCommand.self, QuickCommandRun.self,
+                                           configurations: config)
+        return (QuickCommandStore(context: container.mainContext), container)
+    }
+
+    private func host(_ name: String) -> ServerProfile {
+        let p = ServerProfile()
+        p.name = name; p.host = "\(name).example"; p.username = "root"; p.port = 22
+        return p
+    }
+
+    private func makeModel(commandID: UUID, command: String, intent: String, aiAssisted: Bool,
+                           targets: [ServerProfile], doctor: ParallelAIDoctor?,
+                           store: QuickCommandStore, container: ModelContainer,
+                           executor: FakeExecutor) -> ParallelRunModel {
+        ParallelRunModel(commandID: commandID, commandName: "测试", command: command, intent: intent,
+                         aiAssisted: aiAssisted, targets: targets, doctor: doctor,
+                         approval: .safety(.readAuto), hostLabel: "macOS 原生 SSH 终端",
+                         store: store, container: container, executor: executor)
+    }
+
+    private func waitUntil(timeout: Duration = .seconds(4),
+                           _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("等待超时") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func call(_ command: String) -> LLMEvent {
+        let args = (try? JSONSerialization.data(withJSONObject: ["command": command]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return .toolCall(LLMToolCall(id: UUID().uuidString, name: "run_command", argumentsJSON: args))
+    }
+}
+
+// MARK: - 假执行器
+
+private struct FakeExecutor: ParallelCommandExecuting {
+    let make: @MainActor (UUID, Bool) -> FakeSession
+
+    init(_ make: @escaping @MainActor (UUID, Bool) -> FakeSession) { self.make = make }
+
+    func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
+        make(profile.id, trustNewKeys)
+    }
+}
+
+/// 一台的假会话：可以拿着 host-key 质询拒连、可以卡在闸门上等放行，其余照脚本返回结果。
+private nonisolated final class FakeSession: ParallelExecutionSession, @unchecked Sendable {
+    private let lock = NSLock()
+    private var challenge: HostKeyChallenge?
+    private let gate: FakeGate?
+    private let result: CommandResult
+
+    init(hostKey: HostKeyChallenge? = nil, gate: FakeGate? = nil,
+         result: CommandResult = CommandResult(output: "ok", exitCode: 0)) {
+        self.challenge = hostKey
+        self.gate = gate
+        self.result = result
+    }
+
+    var setupErrorText: String? { nil }
+
+    func run(_ command: String,
+             onLines: @escaping @Sendable ([ParallelTermLine]) -> Void) async throws -> CommandResult {
+        if lock.withLock({ challenge != nil }) { throw URLError(.secureConnectionFailed) }
+        if let gate { await gate.wait() }
+        return result
+    }
+
+    func takeHostKeyChallenge() -> HostKeyChallenge? {
+        lock.withLock {
+            defer { challenge = nil }
+            return challenge
+        }
+    }
+
+    func close() async {}
+}
+
+private actor FakeGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+}

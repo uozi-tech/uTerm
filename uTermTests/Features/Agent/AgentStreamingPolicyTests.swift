@@ -58,6 +58,56 @@ final class AgentStreamingPolicyTests: XCTestCase {
         XCTAssertEqual(renderer.renderedSource, "ABC")
     }
 
+    /// iOS 打开的两个选项：按长度放大的节流间隔（8KB 一档、最多 5 倍），落定后走缓存。
+    func testMarkdownRendererScaledDelayAndSettledCache() async throws {
+        let base = Duration.milliseconds(100)
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 0), .milliseconds(100))
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 8_192), .milliseconds(200))
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 1_000_000), .milliseconds(500))
+
+        let cache = MarkdownDocumentCache(capacity: 2)
+        let renderer = StreamingMarkdownRenderer(reparseDelay: .milliseconds(20),
+                                                 scalesDelayWithLength: true, settledCache: cache)
+        renderer.renderImmediately("A", isStreaming: true)
+        renderer.update("AB", isStreaming: true)
+        renderer.update("ABC", isStreaming: true)
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(renderer.renderedSource, "ABC", "节流窗口到点解析的是最新文本")
+
+        renderer.update("**done**", isStreaming: false)
+        XCTAssertEqual(renderer.renderedSource, "**done**")
+        XCTAssertEqual(renderer.document.format(), cache.document(for: "**done**").format())
+    }
+
+    // MARK: - 贴底滚动合并器
+
+    func testTailScrollCoalescerFiresOncePerWindow() async throws {
+        let coalescer = TailScrollCoalescer(delay: 0.02)
+        var fired = 0
+        coalescer.schedule { fired += 1 }
+        coalescer.schedule { fired += 100 }   // 窗口里已有一次：合并掉
+        XCTAssertTrue(coalescer.isPending)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(fired, 1)
+        XCTAssertFalse(coalescer.isPending)
+        coalescer.schedule { fired += 1 }     // 窗口过了，下一次照常排
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(fired, 2)
+    }
+
+    func testTailScrollCoalescerRestartDebouncesAndCancelDrops() async throws {
+        let coalescer = TailScrollCoalescer(delay: 0.03)
+        var log: [String] = []
+        coalescer.restart { log.append("first") }
+        coalescer.restart { log.append("second") }   // 重新计时，只留最后一次
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(log, ["second"])
+        coalescer.schedule { log.append("dropped") }
+        coalescer.cancel()
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(log, ["second"])
+    }
+
     func testNearBottomPolicyAllowsShortContentAndToleranceBand() {
         XCTAssertTrue(AgentScrollPolicy.isNearBottom(
             visibleMaxY: 400, contentHeight: 300))

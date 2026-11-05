@@ -83,7 +83,7 @@ struct AssistantView: View {
 
     @State private var showSessions = false
     @State private var followsChatTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
     @State private var expandedWindowLimit: Int?
 
@@ -233,7 +233,7 @@ struct AssistantView: View {
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(s.title.isEmpty ? "新对话" : s.title)
+                    Text(s.displayTitle)
                         .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? UD.text : UD.text2)
                         .lineLimit(1)
@@ -324,8 +324,7 @@ struct AssistantView: View {
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
                         followsChatTail = false
-                        pendingTailScroll?.cancel()
-                        pendingTailScroll = nil
+                        tailScroll.cancel()
                     }
                     if phase == .idle {
                         followsChatTail = AgentScrollPolicy.isNearBottom(
@@ -358,8 +357,7 @@ struct AssistantView: View {
                     }
                 }
                 .onDisappear {
-                    pendingTailScroll?.cancel()
-                    pendingTailScroll = nil
+                    tailScroll.cancel()
                 }
             }
             AgentQueueStrip(model: model,
@@ -447,17 +445,8 @@ struct AssistantView: View {
     private static let bottomAnchorID = "assistant.bottom"
 
     private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
-        guard followsChatTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-            }
-        }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AgentScrollPolicy.coalescingDelay,
-            execute: work)
+        guard followsChatTail else { return }
+        tailScroll.schedule { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
     }
 
     // MARK: - 渲染窗口
@@ -530,8 +519,7 @@ struct AssistantView: View {
 
     @ViewBuilder
     private func assistantMessageRow(_ message: ChatMessage) -> some View {
-        let isStreamingTail = message.id == model.messages.last?.id
-            && model.state == .streaming
+        let isStreamingTail = model.isStreamingTail(message)
         VStack(alignment: .leading, spacing: 10) {
             // 空文本的已结算消息可能只承载工具卡；不要把它误画成仍在等待的“…”。
             // 真正的流式空消息显示「思考中」流光，收到正文后再挂载 Markdown。
@@ -613,7 +601,7 @@ struct AssistantView: View {
     /// 工作区 Agent 与终端 Agent 共用同一条 ⌘↵ 语义：待确认时优先运行命令，
     /// 否则发送当前输入。
     private func handleCommandReturn() {
-        if model.state == .awaitingApproval, let id = model.firstPendingToolCallID {
+        if let id = model.commandReturnTarget {
             Task { await model.approveAndRun(id: id) }
         } else {
             sendIfPossible()

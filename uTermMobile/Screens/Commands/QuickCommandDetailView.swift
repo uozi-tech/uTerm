@@ -28,9 +28,8 @@ struct QuickCommandDetailView: View {
     private var targets: [ServerProfile] { cmd.serverIDs.compactMap { id in hosts.first { $0.id == id } } }
     private var n: Int { cmd.serverIDs.count }
     private var tint: Color { cmd.aiAssisted ? M.aiAccent : accent }
-    private var runLabel: String {
-        n > 1 ? "并行运行 · \(n) 台" : (cmd.aiAssisted ? "运行 · AI 介入" : "运行命令")
-    }
+    private var runLabel: String { QuickCommandLogic.runLabel(serverCount: n, ai: cmd.aiAssisted) }
+    private var commandStore: QuickCommandStore { QuickCommandStore(context: context) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,7 +80,7 @@ struct QuickCommandDetailView: View {
                         MIcon(name: "spark", size: 13, color: M.aiAccent)
                         Text("AI 指令 · 自然语言").font(M.sans(11.5, weight: .semibold)).foregroundStyle(M.aiAccent)
                     }
-                    Text(cmd.intent.isEmpty ? "执行「\(cmd.name)」并由 AI 自动诊断续接。" : cmd.intent)
+                    Text(QuickCommandLogic.aiIntentText(name: cmd.name, intent: cmd.intent))
                         .font(M.sans(14.5)).foregroundStyle(M.text).lineSpacing(3)
                     if !cmd.command.isEmpty {
                         Text("$ \(cmd.command)").font(M.mono(13)).foregroundStyle(M.text2)
@@ -115,8 +114,8 @@ struct QuickCommandDetailView: View {
                     HStack(spacing: 10) {
                         MDot(color: M.success, size: 7)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(h.name).font(M.sans(14, weight: .medium)).foregroundStyle(M.text)
-                            Text("\(h.username)@\(h.host):\(String(h.port))").font(M.mono(12)).foregroundStyle(M.text4).lineLimit(1)
+                            Text(QuickCommandTargets.displayName(h)).font(M.sans(14, weight: .medium)).foregroundStyle(M.text)
+                            Text(QuickCommandTargets.endpoint(h)).font(M.mono(12)).foregroundStyle(M.text4).lineLimit(1)
                         }
                         Spacer(minLength: 0)
                     }
@@ -161,7 +160,7 @@ struct QuickCommandDetailView: View {
                 Text("运行后把命令与输出交给 AI 诊断、续接下一步").font(M.sans(12)).foregroundStyle(M.text3)
             }
             Spacer(minLength: 6)
-            MSwitch(on: Binding(get: { cmd.aiAssisted }, set: { cmd.aiAssisted = $0; try? context.save() }))
+            MSwitch(on: Binding(get: { cmd.aiAssisted }, set: { commandStore.setAIAssisted(cmd, $0) }))
         }
         .padding(.horizontal, 13).padding(.vertical, 12)
         .background(cmd.aiAssisted ? M.aiAccent.opacity(0.10) : M.card)
@@ -196,7 +195,7 @@ struct QuickCommandDetailView: View {
     private var actionBar: some View {
         HStack(spacing: 10) {
             MBtn(title: runLabel, icon: cmd.aiAssisted ? "spark" : "run", kind: .primary, full: true, height: 48, tint: tint) {
-                store.runCommand(cmd)
+                store.runCommand(cmd, hosts: hosts)
             }
             Button { editing = true } label: {
                 MIcon(name: "edit", size: 18, color: M.text2).frame(width: 48, height: 48)
@@ -230,7 +229,7 @@ struct QuickCommandDetailView: View {
     private var serversBadge: some View {
         Group {
             if n <= 1 {
-                Text(targets.first?.name ?? "\(n) 台").font(M.sans(12)).foregroundStyle(M.text3)
+                Text(targets.first.map(QuickCommandTargets.displayName) ?? "\(n) 台").font(M.sans(12)).foregroundStyle(M.text3)
                     .padding(.horizontal, 9).padding(.vertical, 3)
                     .background(M.fillFaint)
                     .clipShape(Capsule())
@@ -255,9 +254,9 @@ struct QuickCommandDetailView: View {
         .clipShape(Capsule())
     }
     private var lastRunText: String { UTermFormat.relative(cmd.lastRunAt) }
+    /// 连带删掉这条命令的全部执行日志（与 macOS 同一个入口）。
     private func delete() {
-        context.delete(cmd)
-        try? context.save()
+        commandStore.delete(cmd)
         dismiss()
     }
 }

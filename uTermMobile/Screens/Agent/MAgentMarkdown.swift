@@ -17,75 +17,29 @@ import Markdown
 // MARK: - 流式渲染包装
 
 /// 流式 Markdown：流式中按长度降频重解析；落定后立即最终解析。
-/// 镜像 macOS `StreamingMarkdownView`。
+/// 节流器与 macOS `StreamingMarkdownView` 共用 `StreamingMarkdownRenderer`，这里打开两个 iOS 选项：
+///  - 节流间隔随文本长度放大（几十 KB 的长回复按固定 100ms 整段重解析会占掉主线程一大块）；
+///  - 落定消息的解析结果按全文缓存（懒栈回收后再出现会重新 `onAppear`，命中缓存就不用重解析）。
 ///
-/// 两处与 macOS 不同：
-///  - 节流间隔随文本长度放大。每次重解析都是整段全文，几十 KB 的长回复按固定 100ms
-///    解析会占掉主线程的一大块；长度翻几倍、间隔跟着翻，单位时间里的解析量大致恒定。
-///  - 落定消息的解析结果按全文缓存。外层 `LazyVStack` 回收后再出现会重新 `onAppear`，
-///    往上翻长历史时每条都要在主线程重解析一遍；命中缓存就不用。
+/// 节流窗口里解析的是 renderer 存着的最新文本：改前定时任务捕获的是排队时的旧 View 值，
+/// 流式中一直落后一个窗口。
 struct MStreamingMarkdown: View {
     let text: String
     let isStreaming: Bool
 
-    @State private var renderedSource = ""
-    @State private var document = Markdown.Document(parsing: "")
-    @State private var pendingWork: DispatchWorkItem?
+    @State private var renderer = StreamingMarkdownRenderer(scalesDelayWithLength: true,
+                                                            settledCache: .shared)
 
     var body: some View {
-        MMarkdownBlocks(document: document, isStreaming: isStreaming)
-            .onAppear { reparse(force: true) }
-            .onChange(of: text) { _, _ in scheduleReparse() }
+        MMarkdownBlocks(document: renderer.document, isStreaming: isStreaming)
+            .onAppear { renderer.renderImmediately(text, isStreaming: isStreaming) }
+            .onChange(of: text) { _, newText in
+                renderer.update(newText, isStreaming: isStreaming)
+            }
             .onChange(of: isStreaming) { _, streaming in
-                if !streaming {
-                    pendingWork?.cancel(); pendingWork = nil
-                    reparse(force: true)   // 落定：取消在途节流，立即最终解析
-                }
+                renderer.update(text, isStreaming: streaming)
             }
-            .onDisappear { pendingWork?.cancel(); pendingWork = nil }
-    }
-
-    private func scheduleReparse() {
-        guard isStreaming else { reparse(force: true); return }
-        guard pendingWork == nil else { return }   // 节流窗口内已排队
-        let interval = MMarkdownParseCache.streamingInterval(forLength: text.utf8.count)
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingWork = nil
-                reparse(force: false)
-            }
-        }
-        pendingWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
-    }
-
-    private func reparse(force: Bool) {
-        guard force || text != renderedSource else { return }
-        renderedSource = text
-        // 流式中的中间态不进缓存（每一版都只用一次）。
-        document = isStreaming ? Markdown.Document(parsing: text) : MMarkdownParseCache.document(for: text)
-    }
-}
-
-/// 落定消息的解析结果缓存（只在主线程用）。
-@MainActor
-enum MMarkdownParseCache {
-    private static var documents: [String: Markdown.Document] = [:]
-    private static var order: [String] = []
-    private static let capacity = 64
-
-    static func document(for text: String) -> Markdown.Document {
-        if let hit = documents[text] { return hit }
-        let parsed = Markdown.Document(parsing: text)
-        documents[text] = parsed
-        order.append(text)
-        if order.count > capacity { documents.removeValue(forKey: order.removeFirst()) }
-        return parsed
-    }
-
-    /// 8KB 以内 100ms；之后每多 8KB 加 100ms，最长 500ms。
-    static func streamingInterval(forLength bytes: Int) -> Double {
-        min(0.5, 0.1 * Double(1 + bytes / 8192))
+            .onDisappear { renderer.cancel() }
     }
 }
 

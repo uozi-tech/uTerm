@@ -90,8 +90,9 @@ final class ParallelRunLogicTests: XCTestCase {
         XCTAssertTrue(shellSource.contains("LazyVStack(alignment: .leading, spacing: 1)"))
         XCTAssertTrue(shellSource.contains(".onScrollPhaseChange"))
         XCTAssertTrue(agentSource.contains(".onScrollPhaseChange"))
-        XCTAssertTrue(shellSource.contains("AgentScrollPolicy.coalescingDelay"))
-        XCTAssertTrue(agentSource.contains("AgentScrollPolicy.coalescingDelay"))
+        // 贴底合并走共享的 `TailScrollCoalescer`（窗口 = `AgentScrollPolicy.coalescingDelay`）。
+        XCTAssertTrue(shellSource.contains("TailScrollCoalescer()"))
+        XCTAssertTrue(agentSource.contains("TailScrollCoalescer()"))
         XCTAssertFalse(shellSource.contains("withAnimation(.easeOut(duration: 0.18))"))
         XCTAssertFalse(agentSource.contains("withAnimation(.easeOut(duration: 0.2))"))
     }

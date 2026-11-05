@@ -37,3 +37,19 @@ nonisolated struct ToolCallState: Equatable, Sendable, Codable, Identifiable {
                   explanation: explanation, status: .pending)
     }
 }
+
+extension ToolCallState {
+    /// 命令卡的三态：待确认 / 执行中 / 已结束（完成、失败、跳过都画成结束，展示输出）。
+    /// 两端的命令卡组件（`UDToolCall` / `MToolCall`）各有自己的状态类型，都从这里映射。
+    nonisolated enum Phase: Equatable, Sendable {
+        case pending, running, done
+    }
+
+    nonisolated var phase: Phase {
+        switch status {
+        case .pending: return .pending
+        case .running: return .running
+        case .done, .failed, .skipped: return .done
+        }
+    }
+}

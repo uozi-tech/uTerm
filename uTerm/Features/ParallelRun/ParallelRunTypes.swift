@@ -1,5 +1,7 @@
 import Foundation
 
+// macOS 并行执行窗口与 iOS 并行执行页共用的状态类型（这个文件两个 target 都编）。
+
 /// 并行执行窗口的视图模式（标题栏 Shell | AI 分段切换）。
 nonisolated enum ParallelViewMode: String, Hashable, Sendable, CaseIterable {
     case shell
@@ -49,6 +51,17 @@ nonisolated struct ParallelTermLine: Identifiable, Sendable, Equatable {
     }
 }
 
+/// AI 泳道里的一步（模型下发的一条命令）。`ParallelServerState.steps` 是落日志用的纯文本，
+/// 这个是给界面画「命令 + 结果」用的结构化版本，两者一一对应。iOS 画它，macOS 只画文字步骤。
+nonisolated struct ParallelAgentStep: Identifiable, Sendable {
+    nonisolated enum State: Sendable { case running, ok, failed, timedOut }
+    let id = UUID()
+    let command: String
+    let explanation: String?
+    var state: State = .running
+    var exitCode: Int?
+}
+
 /// 单台服务器在并行执行窗口里的统一状态——Shell 与 AI 两视图共用同一次真实执行，
 /// 各取所需字段渲染（不重复跑命令）。`@MainActor` 模型持有并增量更新。
 @MainActor
@@ -70,9 +83,18 @@ struct ParallelServerState: Identifiable {
     var diagnosing: Bool = false
     var summary: String = ""
     var steps: [String] = []
+    /// 结构化的 Agent 步骤（iOS 泳道画；macOS 不画）。
+    var agentSteps: [ParallelAgentStep] = []
+    /// 运行中这一刻在做什么（「正在分析结果…」「AI 服务繁忙，重试中…」）；落定后为 nil。
+    var activity: String?
 
     /// 连接层失败原因（命令未能执行）。`hostKeyUntrusted` 触发泳道 / 窗格内联「信任并重试」。
     var failure: ParallelLaneFailure?
+
+    var hostKeyUntrusted: Bool {
+        if case .hostKeyUntrusted = failure { return true }
+        return false
+    }
 
     /// AI 泳道右侧状态徽标文案。
     var laneStatusText: String {

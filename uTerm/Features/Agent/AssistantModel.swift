@@ -145,8 +145,7 @@ final class AssistantModel {
 
     /// 顶栏展示的会话标题。
     var sessionTitle: String {
-        if let t = currentSession?.title, !t.isEmpty { return t }
-        return "新对话"
+        currentSession?.displayTitle ?? "新对话"
     }
 
     /// 全部已配置的 provider（外部灌入，按 sortOrder）。
@@ -156,11 +155,7 @@ final class AssistantModel {
 
     /// 当前活动 provider；providers 空则 nil。
     var activeProvider: AIProvider? {
-        if let id = activeProviderID,
-           let p = providers.first(where: { $0.id == id }) {
-            return p
-        }
-        return providers.min(by: { $0.sortOrder < $1.sortOrder })
+        AIProvider.active(in: providers, id: activeProviderID)
     }
     var hasUsableProvider: Bool { activeProvider != nil }
 

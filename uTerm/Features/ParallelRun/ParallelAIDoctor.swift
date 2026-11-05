@@ -91,4 +91,11 @@ nonisolated struct ParallelAIDoctor: Sendable {
         return ParallelAIDoctor(client: LLMClientFactory.make(for: provider),
                                 model: provider.model, baseURL: baseURL, apiKey: key)
     }
+
+    /// 按 Agent 里选中的模型服务造（`AIProvider.active` 同一口径）；会读一次钥匙串，
+    /// 只在命令开了 AI 介入时才调。
+    @MainActor
+    static func make(providers: [AIProvider], activeProviderID: UUID?) -> ParallelAIDoctor? {
+        make(provider: AIProvider.active(in: providers, id: activeProviderID))
+    }
 }

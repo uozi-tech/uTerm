@@ -59,6 +59,14 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<!-- 并行执行切到别的 App 后继续跑：iOS 26 的 BGContinuedProcessingTask（用户点「运行」时
+	     在前台提交，系统在锁屏 / 灵动岛显示进度）。见 Screens/Parallel/ParallelRunSessions.swift
+	     的 ParallelBackgroundKeeper。每次提交用一个新后缀，所以这里登记通配符。
+	     这类任务不需要 UIBackgroundModes 里的 processing。 -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.uozi.uTerm.parallel.*</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

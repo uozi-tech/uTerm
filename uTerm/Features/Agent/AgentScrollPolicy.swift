@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Agent 对话滚动的共享策略。流式文本与 Markdown 排版都按批次刷新，自动贴底也必须
 /// 合并，否则每个 SSE 碎片都会启动一次 SwiftUI LazyVStack 布局事务。
@@ -41,5 +42,49 @@ nonisolated enum AgentScrollPolicy {
     /// 懒栈在新位置重估行高也会改可滚高度，不加这条就会把人拽回底部。
     static func needsRepin(from old: TailGeometry, to new: TailGeometry) -> Bool {
         old.isNearBottom && new.scrollableHeight > old.scrollableHeight + 0.5
+    }
+}
+
+/// 贴底滚动的合并器：一个合并窗口里只发一次滚动，与流式 Markdown 的重解析节奏对齐，
+/// 避免逐 token / 逐批输出各起一次 LazyVStack 布局事务。Agent 对话（两端）、并行执行的
+/// AI 汇报与 Shell 输出都用它。视图用 `@State` 持有（引用类型，跨 body 重算保持同一个）。
+@MainActor
+final class TailScrollCoalescer {
+    private let delay: Double
+    private var pending: DispatchWorkItem?
+
+    init(delay: Double = AgentScrollPolicy.coalescingDelay) {
+        self.delay = delay
+    }
+
+    /// 窗口里已有一次排着就不再排（合并）；否则 `delay` 之后执行 `action`。
+    /// `action` 执行时读到的是那一刻的视图状态，窗口里新来的内容也滚得到。
+    func schedule(_ action: @escaping @MainActor () -> Void) {
+        guard pending == nil else { return }
+        arm(action)
+    }
+
+    /// 取消在排的那次，从现在重新计时（去抖：一阵输出停下来之后只发一次）。
+    func restart(_ action: @escaping @MainActor () -> Void) {
+        cancel()
+        arm(action)
+    }
+
+    func cancel() {
+        pending?.cancel()
+        pending = nil
+    }
+
+    var isPending: Bool { pending != nil }
+
+    private func arm(_ action: @escaping @MainActor () -> Void) {
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.pending = nil
+                action()
+            }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 }
