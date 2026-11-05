@@ -1,10 +1,15 @@
+import CryptoKit
 import Foundation
 @preconcurrency import Network
 import Observation
 
 /// Mac 端远控服务：让配对过的手机接入这台 Mac 上已打开的终端。
 ///
-/// `RemoteControlSettings` 打开时监听（Bonjour `_uterm-remote._tcp`），关闭时连广播一起撤掉。
+/// `RemoteControlSettings` 打开时监听（Bonjour `_uterm-remote._tcp`，TXT 带本机设备 ID），关闭时连广播一起撤掉。
+///
+/// 谁能直接接入：本机信任过的设备，或同一 Apple ID 名册里的设备（`RemoteCloudRoster`），或带着本机正在出示的
+/// 扫码邀请凭据来的设备（`pairingInvitation`）。都不是的，才退回到在 Mac 上核对 6 位码、点「允许」——
+/// 名册还没同步过来、或老版本的手机，走的是这一条。
 /// 每台连上来的设备一个 `RemoteHostConnection`。同一个终端同一时刻只给一台设备接管尺寸：
 /// 后来的设备接入时，前一台收到「已被接管」并断开该终端。
 @MainActor
@@ -38,6 +43,8 @@ final class RemoteHostServer {
     private(set) var trustedPeers: [RemotePeer] = []
     /// 排队中的配对请求；审批面板只显示第一个。
     private(set) var pairingRequests: [PairingRequest] = []
+    /// 正在出示的扫码配对邀请。一次性：有设备用它配上、过期、或关掉配对面板都作废。
+    private(set) var pairingInvitation: RemotePairingInvitation?
     /// 监听端口（测试用：不广播时客户端直接连这个端口）。
     private(set) var port: UInt16?
 
@@ -61,6 +68,9 @@ final class RemoteHostServer {
 
     @ObservationIgnored let registry: TerminalSessionRegistry
     @ObservationIgnored let identity: RemoteIdentityStore
+    /// 同一 Apple ID 的名册。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
+    @ObservationIgnored let roster: RemoteCloudRoster?
+    @ObservationIgnored private var invitationExpiry: Task<Void, Never>?
     @ObservationIgnored let localName: String
     @ObservationIgnored let localID: UUID
     /// 握手时报给手机的可选能力。测试里传空数组，模拟 P1 版本的 Mac。
@@ -82,6 +92,7 @@ final class RemoteHostServer {
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(),
+         roster: RemoteCloudRoster? = nil,
          localName: String = LANSyncCoordinator.localDeviceName(),
          localID: UUID = RemoteLocalDevice.id(),
          advertises: Bool = true,
@@ -93,6 +104,7 @@ final class RemoteHostServer {
         self.registry = registry
         self.desktopEnvironment = desktopEnvironment
         self.identity = identity
+        self.roster = roster
         self.localName = localName
         self.localID = localID
         self.advertises = advertises
@@ -105,11 +117,15 @@ final class RemoteHostServer {
         guard listener == nil else { return }
         do {
             // 先把本机长期密钥备好：钥匙串出错时在设置页里直接显示，而不是等到第一台设备连上来。
-            _ = try identity.localIdentity()
+            let key = try identity.localIdentity().publicKey.rawRepresentation
             let listener = try NWListener(using: RemoteLink.parameters(), on: .any)
             if advertises {
-                listener.service = NWListener.Service(name: localName, type: RemoteConstants.serviceType)
+                let txt = NWTXTRecord([RemoteConstants.deviceIDKey: localID.uuidString])
+                listener.service = NWListener.Service(name: localName, type: RemoteConstants.serviceType, txtRecord: txt)
             }
+            // 同一 Apple ID 的手机凭名册直接认出这台 Mac；关掉远控时撤下。
+            roster?.publish(RemoteRosterEntry(id: localID, name: localName, publicKey: key, platform: .mac,
+                                              updatedAt: Date()))
             listener.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.listenerStateChanged(state) } }
             }
@@ -131,6 +147,8 @@ final class RemoteHostServer {
         port = nil
         for connection in connections.values { connection.close() }
         for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
+        cancelPairingInvitation()
+        roster?.withdraw(id: localID)
         status = .stopped
     }
 
@@ -197,6 +215,36 @@ final class RemoteHostServer {
                 self?.resolvePairing(connectionID, approved: false)
             }
         }
+    }
+
+    /// 出示一张新的扫码邀请（旧的作废），`RemoteConstants.invitationLifetime` 后自动作废。
+    @discardableResult
+    func makePairingInvitation() throws -> RemotePairingInvitation {
+        let key = try identity.localIdentity().publicKey.rawRepresentation
+        let invitation = RemotePairingInvitation(macID: localID, macName: localName, macKey: key,
+                                                 token: RemotePairingInvitation.newToken())
+        pairingInvitation = invitation
+        invitationExpiry?.cancel()
+        invitationExpiry = Task { [weak self] in
+            guard (try? await Task.sleep(for: RemoteConstants.invitationLifetime)) != nil else { return }
+            if self?.pairingInvitation == invitation { self?.cancelPairingInvitation() }
+        }
+        return invitation
+    }
+
+    func cancelPairingInvitation() {
+        invitationExpiry?.cancel()
+        invitationExpiry = nil
+        pairingInvitation = nil
+    }
+
+    /// 手机带来的扫码凭据对得上正在出示的邀请：用掉它（一次性）并返回 true。
+    func redeemPairingProof(_ proof: Data, phoneKey: Data) -> Bool {
+        guard let invitation = pairingInvitation,
+              RemotePairingInvitation.verify(proof, token: invitation.token, phoneKey: phoneKey,
+                                             macKey: invitation.macKey) else { return false }
+        cancelPairingInvitation()
+        return true
     }
 
     func approvePairing(_ id: UUID) { resolvePairing(id, approved: true) }

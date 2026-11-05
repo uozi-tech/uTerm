@@ -1,11 +1,15 @@
 import SwiftUI
 
-/// 主机页的「我的 Mac」：同一局域网里开着远控的 Mac。点一台进入 `RemoteMacSheet`。
+/// 主机页的「我的 Mac」：配对过的 Mac（同一 Apple ID 自动出现，其他的扫码配对），在线的点进 `RemoteMacSheet`。
+/// 局域网里别人的 Mac 不出现在这里。
 struct RemoteMacSection: View {
     /// 可选：样式画廊、探针等直接渲染主机页的地方不注入它，那时整块不显示。
     @Environment(RemoteMacDirectory.self) private var injected: RemoteMacDirectory?
     @Environment(MobileStore.self) private var store: MobileStore?
     @State private var selected: RemoteMacDirectory.Mac?
+    @State private var scanning = false
+    /// 刚扫码配上、此刻还不在线的 Mac：它一上线就自动打开。
+    @State private var awaitingMac: String?
 
     var body: some View {
         if let directory = injected {
@@ -17,20 +21,20 @@ struct RemoteMacSection: View {
         MInsetGroup(header: "我的 Mac", footer: footer(directory)) {
             if !directory.isActivated {
                 MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端",
-                          sub: "同一 Wi-Fi 下使用", chevron: true, last: true) {
+                          sub: "同一 Wi-Fi 下使用", chevron: true) {
                     directory.activate()
                 }
             } else if directory.macs.isEmpty {
-                MInsetRow(icon: "mac", label: "正在查找 Mac…",
-                          sub: "在 Mac 的 uTerm 里打开 设置 › 远程控制", last: true)
+                MInsetRow(icon: "mac", label: "还没有配对的 Mac",
+                          sub: "同一 Apple ID 的 Mac 打开 设置 › 远程控制 后会自动出现")
             } else {
                 ForEach(directory.macs) { mac in
-                    MInsetRow(icon: "mac", label: mac.name,
-                              value: directory.isPaired(mac) ? "已配对" : "未配对",
-                              chevron: true, last: mac.id == directory.macs.last?.id) {
-                        selected = mac
-                    }
+                    macRow(mac)
                 }
+            }
+            MInsetRow(icon: "qr", label: "扫码配对 Mac", sub: "其他 Apple ID 的 Mac：在它的 设置 › 远程控制 里显示二维码",
+                      chevron: true, last: true) {
+                scanning = true
             }
         }
         .onAppear {
@@ -45,18 +49,48 @@ struct RemoteMacSection: View {
             #endif
         }
         .sheet(item: $selected, onDismiss: { directory.refreshPaired() }) { mac in
-            RemoteMacSheet(client: directory.client(for: mac))
+            RemoteMacSheet(client: directory.client(for: mac)) { directory.forget(mac) }
+        }
+        .sheet(isPresented: $scanning) {
+            RemotePairingScanner { invitation in
+                scanning = false
+                guard let mac = try? directory.pair(with: invitation) else { return }
+                if mac.isOnline { selected = mac } else { awaitingMac = mac.id }
+            }
+        }
+        .onChange(of: directory.macs) { _, macs in
+            guard let awaitingMac, let mac = macs.first(where: { $0.id == awaitingMac }), mac.isOnline else { return }
+            self.awaitingMac = nil
+            selected = mac
+        }
+    }
+
+    private func macRow(_ mac: RemoteMacDirectory.Mac) -> some View {
+        MInsetRow(icon: "mac", iconColor: mac.isOnline ? nil : M.text3, label: mac.name,
+                  sub: source(mac), value: mac.isOnline ? nil : "不在线", chevron: mac.isOnline,
+                  onTap: mac.isOnline ? { selected = mac } : nil)
+    }
+
+    private func source(_ mac: RemoteMacDirectory.Mac) -> String? {
+        switch mac.source {
+        case .iCloud: return "同一 Apple ID"
+        case .paired: return "扫码配对"
+        case .debug: return nil
         }
     }
 
     private func footer(_ directory: RemoteMacDirectory) -> String? {
-        directory.isActivated ? nil : "首次使用会请求「本地网络」权限，用于发现局域网里的 Mac。"
+        directory.isActivated
+            ? "只显示配对过的 Mac。同一 Apple ID 的设备要打开 iCloud 钥匙串才能自动配对。"
+            : "首次使用会请求「本地网络」权限，用于连接局域网里你的 Mac。"
     }
 }
 
 /// 一台 Mac：首次连接走配对（两端核对 6 位码，在 Mac 上点「允许」），之后列出 Mac 上的终端。
 struct RemoteMacSheet: View {
     let client: RemoteMacClient
+    /// 「忘记这台 Mac」：由目录做（拉黑、丢掉客户端）。没给时只让客户端自己撤销信任。
+    var onForget: (() -> Void)? = nil
     @Environment(MobileStore.self) private var store
     @Environment(MobileWorkspace.self) private var workspace
     @Environment(\.dismiss) private var dismiss
@@ -207,7 +241,7 @@ struct RemoteMacSheet: View {
             section(nil, footer: nil) {
                 MInsetRow(icon: "x", label: "忘记这台 Mac", danger: true, last: true) {
                     endTakeover()
-                    client.forget()
+                    if let onForget { onForget() } else { client.forget() }
                     dismiss()
                 }
             }

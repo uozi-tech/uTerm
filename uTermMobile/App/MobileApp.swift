@@ -21,9 +21,9 @@ struct MobileApp: App {
     /// 普通偏好：本机 UserDefaults 为准，经 iCloud KVS 跨设备保底，局域网同步另按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
     @State private var lanSync: LANSyncCoordinator
-    /// 远控：局域网里开着远控的 Mac 及其连接。不会自己开始浏览（要「本地网络」授权），
-    /// 等用户在主机页点「控制我的 Mac 上的终端」。
-    @State private var remoteMacs = RemoteMacDirectory()
+    /// 远控：配对过的 Mac 及其连接。不会自己开始浏览（要「本地网络」授权），
+    /// 等用户在主机页点「控制我的 Mac 上的终端」。测试宿主不碰真实的 iCloud 名册。
+    @State private var remoteMacs = RemoteMacDirectory(roster: TestHostEnvironment.isActive ? nil : RemoteCloudRoster())
 
     let modelContainer: ModelContainer
 

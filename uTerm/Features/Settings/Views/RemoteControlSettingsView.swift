@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UDesignKit
 
@@ -15,7 +16,7 @@ struct RemoteControlSettingsView: View {
         SettingsScroll {
             SettingsGroup(title: "远程控制") {
                 SettingsRow(label: "允许手机远程控制",
-                            hint: "打开后，同一局域网里配对过的 iPhone / iPad 可以接入这台 Mac 上已打开的终端，接入期间终端按手机的尺寸运行。第一次连接要在这台 Mac 上核对并允许。") {
+                            hint: "打开后，同一局域网里配对过的 iPhone / iPad 可以接入这台 Mac 上已打开的终端，接入期间终端按手机的尺寸运行。登录同一 Apple ID（并打开 iCloud 钥匙串）的设备自动配对，其他设备扫码配对。") {
                     UDToggle(Binding(get: { settings.isEnabled }, set: { settings.isEnabled = $0 }))
                 }
                 if settings.isEnabled {
@@ -159,8 +160,25 @@ struct RemoteControlSettingsView: View {
 
     private var pairedDevicesGroup: some View {
         SettingsGroup(title: "已配对的设备") {
+            if settings.isEnabled {
+                SettingsRow(label: "扫码配对",
+                            hint: server.pairingInvitation == nil
+                                ? "不同 Apple ID 的 iPhone / iPad 用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码。"
+                                : "二维码 10 分钟内有效，只能用一次。") {
+                    if server.pairingInvitation == nil {
+                        UDButton(title: "显示二维码", style: .secondary) { _ = try? server.makePairingInvitation() }
+                    } else {
+                        UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                    }
+                }
+                if let invitation = server.pairingInvitation {
+                    PairingQRCode(text: invitation.url.absoluteString)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+            }
             if server.trustedPeers.isEmpty {
-                SettingsRow(label: "还没有", hint: "在手机上打开 uTerm，主机页的「我的 Mac」里选这台 Mac 即可发起配对。") {
+                SettingsRow(label: "还没有", hint: "同一 Apple ID 的手机打开 uTerm 主机页「我的 Mac」就会自动配对；其他手机扫上面的二维码。") {
                     EmptyView()
                 }
             } else {
@@ -170,6 +188,7 @@ struct RemoteControlSettingsView: View {
                         UDButton(title: "撤销", style: .secondary) {
                             server.revoke(peer.id)
                         }
+                        .help("撤销后这台设备要重新扫码才能连接，同一 Apple ID 也不会再自动配对")
                     }
                 }
             }
@@ -196,5 +215,34 @@ struct RemoteControlSettingsView: View {
         case .stopped: return UD.text2
         case .failed: return UD.danger
         }
+    }
+}
+
+/// 扫码配对的二维码：深色模块落在白底上（扫码要求），四周留出静区。
+private struct PairingQRCode: View {
+    let text: String
+
+    var body: some View {
+        if let image = Self.render(text) {
+            Image(nsImage: image)
+                .interpolation(.none)
+                .resizable()
+                .frame(width: 196, height: 196)
+                .padding(14)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("扫码配对的二维码")
+        }
+    }
+
+    private static func render(_ text: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        let rep = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
     }
 }

@@ -6,6 +6,8 @@ import Foundation
 /// macOS 沙盒里的广播也会被拒。
 nonisolated enum RemoteConstants {
     static let serviceType = "_uterm-remote._tcp"
+    /// Bonjour TXT 记录里放 Mac 设备 ID 的键：手机按它认 Mac，不按电脑名。
+    static let deviceIDKey = "id"
     /// 握手里双方都要带；不一致直接拒绝，不做降级。
     static let protocolVersion = 1
     /// 单帧上限。一帧最大的内容是快照（1000 行彩色历史约 65 KB）与一次合并的输出（≤256 KB），
@@ -20,6 +22,8 @@ nonisolated enum RemoteConstants {
     static let handshakeTimeout: Duration = .seconds(10)
     /// 配对时等 Mac 上的人点「允许」的时长。
     static let pairingTimeout: Duration = .seconds(120)
+    /// 扫码配对邀请的有效期。
+    static let invitationLifetime: Duration = .seconds(600)
     /// Mac 把标签名的变化推给手机的最短间隔。
     static let tabTitlePushInterval: Duration = .seconds(1)
     /// 快照里带多少行历史。
@@ -392,6 +396,9 @@ nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     var staticKey: Data
     /// 可选能力（见 `RemoteFeature`）。P1 的版本不带这个键，解出来是 nil。
     var features: [String]? = nil
+    /// 手机扫码配对后第一次连接时带上的凭据（见 `RemotePairingInvitation.proof`）。握手消息整段进密钥推导，
+    /// 中途改不了。
+    var pairingProof: Data? = nil
 
     func supports(_ feature: String) -> Bool {
         features?.contains(feature) ?? false

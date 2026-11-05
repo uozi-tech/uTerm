@@ -24,6 +24,7 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
 
     private static let identityAccount = "identity"
     private static let peersAccount = "trustedPeers"
+    private static let blockedAccount = "blockedPeers"
 
     init(storage: any RemoteSecretStorage = RemoteKeychainStorage()) {
         self.storage = storage
@@ -55,20 +56,47 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         trustedPeers().first { $0.id == id }
     }
 
-    /// 记住（或更新）一个对端。同一 `id` 只保留一条。
+    /// 记住（或更新）一个对端。同一 `id` 只保留一条；之前拉黑过的，一并解除。
     func trust(_ peer: RemotePeer) throws {
         lock.lock()
         defer { lock.unlock() }
         var peers = loadPeers().filter { $0.id != peer.id }
         peers.append(peer)
         try storage.save(try JSONEncoder().encode(peers), account: Self.peersAccount)
+        let blocked = loadBlocked()
+        if blocked.contains(peer.id) { try saveBlocked(blocked.subtracting([peer.id])) }
     }
 
+    /// 撤销信任并拉黑：同一 Apple ID 的名册里还有它，也不再自动信任，直到重新扫码配对（`trust`）。
     func revoke(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
         let peers = loadPeers().filter { $0.id != id }
         try storage.save(try JSONEncoder().encode(peers), account: Self.peersAccount)
+        try saveBlocked(loadBlocked().union([id]))
+    }
+
+    func isBlocked(_ id: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadBlocked().contains(id)
+    }
+
+    /// 这个对端可以直接放行：本机信任过它，或者同一 Apple ID 的名册替它担保（且没被本机拉黑）。
+    /// 两种都要设备 ID 与公钥同时对得上。
+    func recognizes(id: UUID, publicKey: Data, roster: RemoteCloudRoster?) -> Bool {
+        if peer(id: id)?.publicKey == publicKey { return true }
+        guard let roster, !isBlocked(id) else { return false }
+        return roster.vouches(for: id, publicKey: publicKey)
+    }
+
+    private func loadBlocked() -> Set<UUID> {
+        guard let data = try? storage.load(Self.blockedAccount) else { return [] }
+        return (try? JSONDecoder().decode(Set<UUID>.self, from: data)) ?? []
+    }
+
+    private func saveBlocked(_ ids: Set<UUID>) throws {
+        try storage.save(try JSONEncoder().encode(ids), account: Self.blockedAccount)
     }
 
     private func loadPeers() -> [RemotePeer] {

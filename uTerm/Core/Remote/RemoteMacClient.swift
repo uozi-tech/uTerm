@@ -117,6 +117,11 @@ final class RemoteMacClient: Identifiable {
 
     @ObservationIgnored private var endpoint: NWEndpoint
     @ObservationIgnored private let identity: RemoteIdentityStore
+    /// 要连的是哪台 Mac（设备 ID + 长期公钥，来自名册或扫码）。握手出来对不上就拒绝。nil = 调试直连等
+    /// 事先不知道身份的情况，按「认识就核对、不认识就等 Mac 审批」处理。
+    @ObservationIgnored private let expectedPeer: RemotePeer?
+    /// 扫码拿到的一次性令牌：下一次握手带上凭据，Mac 核对通过就直接信任这台手机。配上后清掉。
+    @ObservationIgnored var pairingToken: Data?
     @ObservationIgnored private let table = RemoteChannelTable()
     @ObservationIgnored private var link: RemoteLink?
     @ObservationIgnored private var connectTask: Task<Void, Never>?
@@ -134,10 +139,12 @@ final class RemoteMacClient: Identifiable {
     /// - Parameters:
     ///   - macName: 显示用（Bonjour 服务名，即 Mac 的电脑名）。
     ///   - endpoint: Bonjour 发现的服务端点；测试里直接给 127.0.0.1 的端口。
-    init(macName: String, endpoint: NWEndpoint, identity: RemoteIdentityStore, heartbeat: RemoteHeartbeat = .standard) {
+    init(macName: String, endpoint: NWEndpoint, identity: RemoteIdentityStore, expectedPeer: RemotePeer? = nil,
+         heartbeat: RemoteHeartbeat = .standard) {
         self.macName = macName
         self.endpoint = endpoint
         self.identity = identity
+        self.expectedPeer = expectedPeer
         self.heartbeat = heartbeat
     }
 
@@ -200,15 +207,27 @@ final class RemoteMacClient: Identifiable {
         do {
             let staticKey = try identity.localIdentity()
             let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+            let phoneKey = staticKey.publicKey.rawRepresentation
+            var proof: Data?
+            if let pairingToken, let expectedPeer {
+                proof = RemotePairingInvitation.proof(token: pairingToken, phoneKey: phoneKey, macKey: expectedPeer.publicKey)
+            }
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: RemoteLocalDevice.id(),
                                     deviceName: LANSyncCoordinator.localDeviceName(),
                                     ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                    staticKey: staticKey.publicKey.rawRepresentation,
-                                    features: RemoteConstants.localFeatures)
+                                    staticKey: phoneKey,
+                                    features: RemoteConstants.localFeatures, pairingProof: proof)
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral)
+            // 连上的不是要找的那台（同一地址上换了台机器，或有人冒充）：不往下走。
+            if let expectedPeer, expectedPeer.id != established.peer.deviceID
+                || expectedPeer.publicKey != established.peer.staticKey {
+                throw RemoteProtocolError.peerIdentityChanged
+            }
             // 配对过的 Mac 换了长期密钥：可能是冒充，也可能是重装过 uTerm。宁可拒绝，让用户手动忘记重配。
-            if let known = identity.peer(id: established.peer.deviceID), known.publicKey != established.peer.staticKey {
+            // 给了 `expectedPeer` 时以它为准（上面已经核对过）：名册里的新公钥替换本机记的旧公钥。
+            if expectedPeer == nil, let known = identity.peer(id: established.peer.deviceID),
+               known.publicKey != established.peer.staticKey {
                 throw RemoteProtocolError.peerIdentityChanged
             }
             peer = established.peer
@@ -250,6 +269,8 @@ final class RemoteMacClient: Identifiable {
     }
 
     private func handlePairing(_ pairing: RemotePairingState) {
+        // 这边已经判了失败（比如连上的不是要找的那台 Mac）：Mac 在那之前发出的配对结果还在路上，不能把状态改回去。
+        guard !isFailed else { return }
         switch pairing {
         case .trusted, .approved:
             if let peer {
@@ -257,6 +278,7 @@ final class RemoteMacClient: Identifiable {
                 try? identity.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName,
                                                publicKey: peer.staticKey, pairedAt: Date()))
             }
+            pairingToken = nil
             pairingRefused = false
             state = .connected
             link?.startHeartbeat(heartbeat)

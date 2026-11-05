@@ -83,8 +83,19 @@ final class RemoteHostConnection {
             peerName = peer.deviceName
             peerID = peer.deviceID
             peerSendsHeartbeat = peer.features?.contains(RemoteFeature.heartbeat) ?? false
-            if let trusted = server.identity.peer(id: peer.deviceID), trusted.publicKey == peer.staticKey {
+            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
+                // 名册担保的设备第一次来：记进本机信任，设置里就能看到它、也能撤销。
+                if server.identity.peer(id: peer.deviceID) == nil {
+                    try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
+                                                pairedAt: Date()))
+                }
                 authorize(.trusted)
+                return
+            }
+            if let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
+                try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
+                                            pairedAt: Date()))
+                authorize(.approved)
                 return
             }
             // 没见过的设备，或同一台设备换了长期密钥（重装过）：都要 Mac 上的人确认。
