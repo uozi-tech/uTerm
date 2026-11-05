@@ -99,14 +99,6 @@ struct WelcomeView: View {
         }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    private var groupColorHexes: [String: String] {
-        var result: [String: String] = [:]
-        for group in groups {
-            result[group.name] = group.colorHex
-        }
-        return result
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             WelcomeTitleBar()
@@ -226,7 +218,7 @@ struct WelcomeView: View {
                        onOpen: { openServer($0) },
                        onContextAction: handleContextAction,
                        existingGroups: existingGroups,
-                       groupColorHexes: groupColorHexes,
+                       groupColors: ServerGroupTint.colors(for: groups),
                        rowDragEnabled: canDragVisibleProfiles,
                        reorderEnabled: canReorderVisibleProfiles,
                        onMove: moveVisibleProfile)

@@ -82,8 +82,7 @@ struct GroupFormSheet: View {
                         let cols = [GridItem](repeating: GridItem(.flexible()), count: 5)
                         LazyVGrid(columns: cols, spacing: 16) {
                             ForEach(ServerGroup.palette, id: \.self) { hex in
-                                let (r, g, b) = groupHexRGB(hex)
-                                Circle().fill(Color(.sRGB, red: r, green: g, blue: b))
+                                Circle().fill(ServerGroupTint.color(hex: hex))
                                     .frame(width: 36, height: 36)
                                     .overlay(Circle().stroke(.white, lineWidth: colorHex == hex ? 3 : 0))
                                     .overlay(Circle().stroke(M.border, lineWidth: 1))
@@ -219,17 +218,17 @@ struct GroupDetailView: View {
             MSectionCap(text: "颜色")
             FlexWrap(spacing: 12, lineSpacing: 12) {
                 ForEach(ServerGroup.palette, id: \.self) { hex in
-                    let (r, g, b) = groupHexRGB(hex)
+                    let swatch = ServerGroupTint.color(hex: hex)
                     let on = hex == group.colorHex
                     Button { group.colorHex = hex; try? context.save() } label: {
-                        Color(.sRGB, red: r, green: g, blue: b)
+                        swatch
                             .frame(width: 32, height: 32)
                             .overlay { if on { MIcon(name: "check", size: 15, color: .white, weight: .bold) } }
                             .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
                             .overlay(RoundedRectangle(cornerRadius: MRadius.sm).stroke(M.canvas, lineWidth: on ? 2 : 0))
                             // 选中环外扩 2pt，圆角跟着加 2 才与色块同心
                             .overlay(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 2))
-                                .stroke(Color(.sRGB, red: r, green: g, blue: b), lineWidth: on ? 2 : 0).padding(-2))
+                                .stroke(swatch, lineWidth: on ? 2 : 0).padding(-2))
                     }.buttonStyle(MPressStyle())
                 }
             }

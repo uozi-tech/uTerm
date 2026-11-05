@@ -79,9 +79,9 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
         ), encoding: .utf8)
 
         XCTAssertTrue(welcomeSource.contains("@Query private var groups: [ServerGroup]"))
-        XCTAssertTrue(welcomeSource.contains("groupColorHexes: groupColorHexes"))
-        XCTAssertTrue(listSource.contains("let groupColorHexes: [String: String]"))
-        XCTAssertTrue(listSource.contains("groupColor: ServerGroupBadgeTint.color(for: profile.group"))
+        XCTAssertTrue(welcomeSource.contains("groupColors: ServerGroupTint.colors(for: groups)"))
+        XCTAssertTrue(listSource.contains("let groupColors: [String: Color]"))
+        XCTAssertTrue(listSource.contains("groupColor: ServerGroupTint.color(for: profile.group, colors: groupColors)"))
     }
 
     func testWelcomeContextMenuOmitsCopySSHConnectionAction() throws {

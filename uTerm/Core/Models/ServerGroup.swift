@@ -27,10 +27,7 @@ final class ServerGroup {
     ]
 
     /// 由 `colorHex` 解析的 SwiftUI 颜色（侧栏彩点用）。
-    var color: Color {
-        let (r, g, b) = groupHexRGB(colorHex)
-        return Color(.sRGB, red: r, green: g, blue: b)
-    }
+    var color: Color { ServerGroupTint.color(hex: colorHex) }
 }
 
 /// 解析 "#RRGGBB" / "RRGGBB" → (r,g,b) ∈ 0...1；非法输入回退中性灰 #9aa7b5。

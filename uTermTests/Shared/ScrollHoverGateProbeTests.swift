@@ -455,7 +455,7 @@ private struct ProbeServerListHost: View {
                    onOpen: { _ in },
                    onContextAction: { _, _ in },
                    existingGroups: WelcomeServerListCostTests.groupNames(groups),
-                   groupColorHexes: WelcomeServerListCostTests.groupColorHexes(groups))
+                   groupColors: WelcomeServerListCostTests.groupColors(groups))
     }
 }
 

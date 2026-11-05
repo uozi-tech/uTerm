@@ -23,7 +23,8 @@ struct ServerList: View {
     let onOpen: (ServerProfile) -> Void
     let onContextAction: (ContextAction, ServerProfile) -> Void
     let existingGroups: [String]
-    let groupColorHexes: [String: String]
+    /// 组名 → 组色，由上层用 `ServerGroupTint.colors(for:)` 一趟解析好；行体只查表。
+    let groupColors: [String: Color]
     var rowDragEnabled = true
     var reorderEnabled = false
     /// 选中变化时把目标行滚进可视区。默认开（产品行为），关掉是**探针的归因臂**：
@@ -63,8 +64,7 @@ struct ServerList: View {
             listColumn
             if let selected = selectedProfile {
                 HostDetailPanel(profile: selected,
-                                groupColor: ServerGroupBadgeTint.color(for: selected.group,
-                                                                       in: groupColorHexes),
+                                groupColor: ServerGroupTint.color(for: selected.group, colors: groupColors),
                                 onConnect: { onOpen(selected) },
                                 onOpenTerminal: { onContextAction(.openTerminalWindow, selected) },
                                 onBrowseSFTP: { onContextAction(.openSFTP, selected) })
@@ -90,8 +90,7 @@ struct ServerList: View {
                             ServerRow(profile: profile,
                                       query: query,
                                       isSelected: selectedID == profile.id,
-                                      groupColor: ServerGroupBadgeTint.color(for: profile.group,
-                                                                             in: groupColorHexes),
+                                      groupColor: ServerGroupTint.color(for: profile.group, colors: groupColors),
                                       onTap: { selectedID = profile.id },
                                       onDoubleTap: {
                                           selectedID = profile.id

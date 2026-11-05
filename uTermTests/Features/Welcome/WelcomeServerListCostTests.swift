@@ -103,10 +103,10 @@ final class WelcomeServerListCostTests: XCTestCase {
         (0..<groups).map { "group-\($0)" }
     }
 
-    static func groupColorHexes(_ groups: Int) -> [String: String] {
-        var result: [String: String] = [:]
+    static func groupColors(_ groups: Int) -> [String: Color] {
+        var result: [String: Color] = [:]
         let palette = ["#4F8EF7", "#F7A24F", "#4FF7A2", "#F74F8E", "#A24FF7", "#F7F04F"]
-        for i in 0..<groups { result["group-\(i)"] = palette[i % palette.count] }
+        for i in 0..<groups { result["group-\(i)"] = ServerGroupTint.color(hex: palette[i % palette.count]) }
         return result
     }
 
@@ -125,7 +125,7 @@ final class WelcomeServerListCostTests: XCTestCase {
         let harness = ServerListProbeHarness(arm: arm,
                                              profiles: profiles,
                                              existingGroups: Self.groupNames(groups),
-                                             groupColorHexes: Self.groupColorHexes(groups))
+                                             groupColors: Self.groupColors(groups))
         let root = AnyView(harness.frame(width: size.width, height: size.height))
         let host = NSHostingView(rootView: root)
         host.frame = NSRect(origin: .zero, size: size)
@@ -360,7 +360,7 @@ private struct ServerListProbeHarness: View {
     let arm: WelcomeServerListCostTests.Arm
     let profiles: [ServerProfile]
     let existingGroups: [String]
-    let groupColorHexes: [String: String]
+    let groupColors: [String: Color]
 
     @State private var selectedID: UUID?
     @State private var draggingProfileID: UUID?
@@ -389,8 +389,7 @@ private struct ServerListProbeHarness: View {
             LegacyServerRow(profile: profile,
                             query: "",
                             isSelected: selectedID == profile.id,
-                            groupColor: ServerGroupBadgeTint.color(for: profile.group,
-                                                                  in: groupColorHexes),
+                            groupColor: ServerGroupTint.color(for: profile.group, colors: groupColors),
                             gatesHelp: arm == .helpGated,
                             onTap: { selectedID = profile.id },
                             onDoubleTap: { selectedID = profile.id })
@@ -398,8 +397,7 @@ private struct ServerListProbeHarness: View {
             ServerRow(profile: profile,
                       query: "",
                       isSelected: selectedID == profile.id,
-                      groupColor: ServerGroupBadgeTint.color(for: profile.group,
-                                                             in: groupColorHexes),
+                      groupColor: ServerGroupTint.color(for: profile.group, colors: groupColors),
                       onTap: { selectedID = profile.id },
                       onDoubleTap: { selectedID = profile.id })
         }

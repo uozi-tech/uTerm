@@ -8,15 +8,6 @@ enum ServerRowLayout {
     nonisolated static let contentPadding: CGFloat = UD.Space.xl
 }
 
-enum ServerGroupBadgeTint {
-    nonisolated static func color(for groupName: String?, in groupColorHexes: [String: String]) -> Color? {
-        guard let groupName, !groupName.isEmpty,
-              let colorHex = groupColorHexes[groupName] else { return nil }
-        let rgb = groupHexRGB(colorHex)
-        return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
-    }
-}
-
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
 /// 等边内距：主机头像（分组色色块 + 首字母，角标 = 在线状态，见 `HostAvatar`）+

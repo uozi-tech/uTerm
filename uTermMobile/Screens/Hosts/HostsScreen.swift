@@ -37,7 +37,7 @@ struct HostsScreen: View {
         // O(1) 签名，而「改了某台主机的分组名」恰恰不改条数 —— 编辑表单一关
         // 分组就会停在旧值。派生量本来每次 body 也只需要一趟，跨 body 缓存
         // 换不来什么，却要拿正确性去赌。
-        let groupColors = MGroupTint.colors(for: groups)
+        let groupColors = ServerGroupTint.colors(for: groups)
         let sections = ServerGrouping.grouped(hosts)
         let recent = ServerGrouping.recent(hosts)
         let lazy = hosts.count > Self.eagerHostLimit
@@ -102,7 +102,7 @@ struct HostsScreen: View {
         // 主机详情用自绘底部面板（MBottomPanel），不用 .sheet + 测量 detent（真机上「有时候很高」）。
         .mBottomPanel(item: $inspecting) { host in
             HostSheet(host: host,
-                      groupColor: MGroupTint.color(for: host.group, colors: groupColors),
+                      groupColor: ServerGroupTint.color(for: host.group, colors: groupColors),
                       onConnect: { inspecting = nil; store.openTerminal(host) },
                       onSFTP: { inspecting = nil; store.openSFTP(host) },
                       onEdit: { inspecting = nil; let h = host
@@ -142,7 +142,7 @@ struct HostsScreen: View {
 
     private func card(_ host: ServerProfile, groupColors: [String: Color]) -> some View {
         HostCard(host: host,
-                 groupColor: MGroupTint.color(for: host.group, colors: groupColors),
+                 groupColor: ServerGroupTint.color(for: host.group, colors: groupColors),
                  onOpen: { inspecting = host },
                  onConnect: { store.openTerminal(host) },
                  onSFTP: { store.openSFTP(host) },
