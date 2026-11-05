@@ -67,10 +67,10 @@ struct AdvancedSettingsView: View {
             SettingsGroup(title: "同步") {
                 SettingsRow(label: "iCloud 同步", hint: syncHint) {
                     HStack(spacing: 6) {
-                        Image(systemName: syncIcon)
+                        Image(systemName: syncStatus.symbol)
                             .font(.system(size: 12))
                             .foregroundStyle(syncTint)
-                        Text(syncLabel)
+                        Text(syncStatus.label)
                             .font(.system(size: 12.5))
                             .foregroundStyle(UD.text2)
                     }
@@ -148,34 +148,14 @@ struct AdvancedSettingsView: View {
             : "未登录 iCloud，跨设备同步只能走下面的局域网通道。"
     }
 
-    private var syncLabel: String {
-        guard loggedIntoiCloud else { return "未登录 iCloud" }
-        switch sync.phase {
-        case .setup:     return "连接中…"
-        case .importing: return "下载中…"
-        case .exporting: return "上传中…"
-        case .error:     return "同步出错"
-        case .idle:      return sync.lastSyncedAt != nil ? "已同步" : "等待同步"
-        }
-    }
-
-    private var syncIcon: String {
-        guard loggedIntoiCloud else { return "person.crop.circle.badge.xmark" }
-        switch sync.phase {
-        case .setup:     return "arrow.triangle.2.circlepath"
-        case .importing: return "icloud.and.arrow.down"
-        case .exporting: return "icloud.and.arrow.up"
-        case .error:     return "exclamationmark.icloud"
-        case .idle:      return sync.lastSyncedAt != nil ? "checkmark.icloud" : "icloud"
-        }
-    }
+    /// 文案与图标两端共用（`CloudKitSyncStatus`）；mac 不做本地回退，容器恒为 CloudKit。
+    private var syncStatus: CloudKitSyncStatus { sync.status(loggedIn: loggedIntoiCloud) }
 
     private var syncTint: Color {
-        guard loggedIntoiCloud else { return UD.text3 }
-        switch sync.phase {
-        case .error: return .orange
-        case .idle:  return sync.lastSyncedAt != nil ? UD.accent : UD.text3
-        default:     return UD.accent
+        switch syncStatus {
+        case .localOnly, .signedOut, .waiting: return UD.text3
+        case .failed:                          return .orange
+        case .connecting, .downloading, .uploading, .synced: return UD.accent
         }
     }
 
