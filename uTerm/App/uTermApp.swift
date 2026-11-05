@@ -290,6 +290,7 @@ struct uTermApp: App {
             WelcomeView(startupBehaviorGate: startupBehaviorGate)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 // 注入转发协调器 + 全局自启编排器 + 共享 host-key 中转。
                 // 自动转发由 App init 触发，Welcome 只承接需要用户确认的 host-key sheet。
@@ -318,6 +319,7 @@ struct uTermApp: App {
             KeyManagerView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -330,6 +332,7 @@ struct uTermApp: App {
             GroupsManagerView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -341,6 +344,7 @@ struct uTermApp: App {
             SSHConfigImportView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -353,6 +357,7 @@ struct uTermApp: App {
             WorkspaceWindowView(windowID: windowID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
@@ -416,6 +421,7 @@ struct uTermApp: App {
             SFTPWindowView(windowID: sftpID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -432,6 +438,7 @@ struct uTermApp: App {
             TerminalWindowView(windowID: termID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
@@ -449,6 +456,7 @@ struct uTermApp: App {
             LocalShellWindowView(windowID: shellID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
@@ -465,6 +473,7 @@ struct uTermApp: App {
             PortForwardWindowView(windowID: pfID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
                 .environment(controlSettings)
@@ -482,6 +491,7 @@ struct uTermApp: App {
             GlobalForwardingWindowView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(forwardingCoordinator)
                 .environment(globalForwarding)
@@ -501,6 +511,7 @@ struct uTermApp: App {
             ParallelRunWindowView(windowID: parallelID)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -520,6 +531,7 @@ struct uTermApp: App {
                 .environment(lanSync)
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .environment(appUpdater)
                 .environment(cloudKitSync)
@@ -542,6 +554,7 @@ struct uTermApp: App {
             PermissionGuideView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
                 .appLockGate(lockModel)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
@@ -557,6 +570,7 @@ struct uTermApp: App {
             TweaksWindow()
                 .modifier(AppAppearanceSync(preference: currentAppearance))
                 .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
         }
         .windowStyle(.hiddenTitleBar)
         .routesNewWindowToWelcome()
