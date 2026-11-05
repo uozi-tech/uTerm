@@ -132,7 +132,7 @@ struct KeyDetailSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("删除此密钥").font(M.sans(14, weight: .semibold)).foregroundStyle(Color(hexString: "#fca5a5"))
+                        Text("删除此密钥").font(M.sans(14, weight: .semibold)).foregroundStyle(Color(hex: 0xFCA5A5))
                         Text("密钥将从钥匙串移除，使用此密钥的 \(usedBy.count) 台主机将无法连接。")
                             .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
                         MBtn(title: "删除密钥", icon: "trash", kind: .dangerTint, height: 42) { pendingDelete = true }
