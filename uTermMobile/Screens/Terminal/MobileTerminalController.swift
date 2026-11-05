@@ -9,9 +9,8 @@ import Observation
 @MainActor
 @Observable
 final class MobileTerminalController {
-    enum State: Equatable {
-        case idle, connecting, connected, failed(String), closed
-    }
+    /// 与 mac `TerminalSession.ConnectionState` 同一个枚举。
+    typealias State = TerminalConnectionState
 
     var state: State = .idle {
         // 离开「已连接」（失败 / 断开 / 重连中）就收起键盘：没有 shell 可打字，
@@ -36,7 +35,7 @@ final class MobileTerminalController {
     @ObservationIgnored private var keyboardCollapsed = false
     /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
     var shellTitle: String?
-    /// 曾经连上过：用于把随后的 `.closed` 归为「成功收尾」而非「仍在连接」，
+    /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
     /// Ctrl 粘滞修饰是否已「上膛」：键盘条上点 ctrl 后亮起，下一个软键盘字符按住 Ctrl 发送
@@ -253,7 +252,7 @@ final class MobileTerminalController {
         }
     }
 
-    /// 握手结果落地。握手期间被关闭 / 被重连取代时不能把 `.closed` 翻回 `.connected`。
+    /// 握手结果落地。握手期间被关闭 / 被重连取代时不能把 `.disconnected` 翻回 `.connected`。
     private func finishConnect(_ error: (any Error)?, attempt: Int,
                                pid: PersistentIdentifier?, container: ModelContainer) {
         guard connectGeneration == attempt else { return }
@@ -264,7 +263,7 @@ final class MobileTerminalController {
         state = .connected
         hadConnected = true
         // 回前台 / 换网络 / 每 30s 探一次活：后台挂久了的半死 TCP 不会自己报错，
-        // 标签一直显示「已连接」、输入只进内核缓冲。判死后走 exitStream → `.closed`。
+        // 标签一直显示「已连接」、输入只进内核缓冲。判死后走 exitStream → `.disconnected`。
         ConnectionWatchdog.shared.register(self)
         if let pid, let profile = container.mainContext.model(for: pid) as? ServerProfile {
             profile.lastConnectedAt = Date()
@@ -300,7 +299,7 @@ final class MobileTerminalController {
         startOutputFlushLoop(generation: generation)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
-                if case .failed = self?.state { } else { self?.state = .closed }
+                if case .failed = self?.state { } else { self?.state = .disconnected }
                 break
             }
         }
@@ -418,7 +417,7 @@ final class MobileTerminalController {
 
     func close() {
         teardownConnection()
-        state = .closed
+        state = .disconnected
     }
 
     /// 关标签前问：前台还有没有程序在跑。没连上就没有程序可中断。
@@ -514,7 +513,6 @@ private enum TerminalInput: Sendable {
 
 extension MobileTerminalController: ConnectionHealthProbing {
     func probeConnectionHealth() async {
-        guard state == .connected, let connection else { return }
-        _ = await connection.verifyConnectionAlive()
+        await state.probeHealth(of: connection)
     }
 }

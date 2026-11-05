@@ -181,7 +181,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
 
     // MARK: 断线 / 重连
 
-    /// 断线：传输往 `exitStream` 送一个元素 → 控制器翻 `.closed`。
+    /// 断线：传输往 `exitStream` 送一个元素 → 控制器翻 `.disconnected`。
     func testSimulatedDropClosesSession() async throws {
         let (c, h, relay) = try host()
         let (controller, handles) = MobileFakeTerminal.controller(
@@ -191,9 +191,9 @@ final class MobileFixturesTerminalTests: XCTestCase {
         XCTAssertTrue(probeOK4)
         await handles.latest!.simulateDrop()
         let probeOK5 = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
-            controller.state == .closed
+            controller.state == .disconnected
         }
-        XCTAssertTrue(probeOK5, "断线后应当翻 .closed，实际 \(controller.state)")
+        XCTAssertTrue(probeOK5, "断线后应当翻 .disconnected，实际 \(controller.state)")
         controller.close()
     }
 
@@ -212,7 +212,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
         controller.receiveShellTitle("htop")
         await handles.latest!.simulateDrop()
         let dropped = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
-            controller.state == .closed
+            controller.state == .disconnected
         }
         XCTAssertTrue(dropped)
         XCTAssertNil(controller.shellTitle, "断开后不该还挂着旧标题")

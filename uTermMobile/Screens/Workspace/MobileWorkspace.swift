@@ -252,7 +252,7 @@ final class MobileWorkspace {
             let source = MRemoteSource(client: client, sessionID: sessionID)
             if let current = existing(remote: source) {
                 switch current.terminal?.controller.state {
-                case .closed, .failed:
+                case .disconnected, .failed:
                     close(current.id)
                     changes.removed.append(current)
                 default:

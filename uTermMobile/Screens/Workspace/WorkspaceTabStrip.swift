@@ -351,7 +351,7 @@ struct WorkspaceTabChip: View {
             case .connected: return t.controller.isReconnecting ? (M.warning, true) : (M.success, false)
             case .connecting: return (M.warning, true)
             case .failed: return (M.danger, false)
-            case .closed, .idle: return (M.text4, false)
+            case .disconnected, .idle: return (M.text4, false)
             }
         case .files(let f):
             switch f.controller.state {
