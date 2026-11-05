@@ -218,7 +218,7 @@ final class MobileTerminalKeyboardTests: XCTestCase {
     /// 面板只给占屏的系统键盘让位：外接键盘的快捷栏、收起动画的终点都不算。
     func testOnlyAScreenCoveringKeyboardCountsAsUp() {
         func covers(minY: CGFloat, height: CGFloat) -> Bool {
-            TerminalKeyBar.keyboardCoversScreen(frame: CGRect(x: 0, y: minY, width: 402, height: height),
+            MKeyBarKeyboard.coversScreen(frame: CGRect(x: 0, y: minY, width: 402, height: height),
                                                 screenHeight: 874)
         }
         XCTAssertTrue(covers(minY: 874 - 336, height: 336), "系统键盘")

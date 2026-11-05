@@ -12,6 +12,8 @@ struct RemoteDesktopScreen: View {
 
     @State private var session: RemoteDesktopSession?
     @State private var keys = RemoteDesktopKeyState()
+    /// 键盘条开着（顶栏的键盘按钮）。软键盘另算：键盘条上可以收起 / 弹出，面板开着时也收起。
+    @State private var keyBarShown = false
     @State private var keyboardVisible = false
     @State private var fitToken = 0
     @State private var showStats = false
@@ -42,14 +44,15 @@ struct RemoteDesktopScreen: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .top) { pasteToast }
-                if keyboardVisible, let session, session.canControl {
-                    RemoteDesktopKeyBar(keys: keys) { session.send($0) }
+                if keyBarShown, let session, session.canControl {
+                    RemoteDesktopKeyBar(keys: keys, keyboardShown: $keyboardVisible) { session.send($0) }
                 }
             }
             // 整列铺满屏幕，顶栏的边距按离屏幕边缘的绝对距离给（`barInsets`），不与安全区混算。
             // 画面左右也就铺满：有的机型（Duo 外屏竖握）把一侧摄像头算成整条安全区，让出去就白白少两成宽度，
             // 开孔压住画面一角可以接受。只忽略容器安全区，软键盘弹起时整列照样缩到键盘上方。
-            .ignoresSafeArea(.container)
+            // 键盘条开着时底边不忽略：键盘收起后键盘条要让开 Home 条（它自己的底色照样铺到屏幕底边）。
+            .ignoresSafeArea(.container, edges: keyBarShown ? [.top, .horizontal] : .all)
             .background(Color.black.ignoresSafeArea())
             .background(ScreenCornerInsetsReader(insets: $barInsets).ignoresSafeArea())
             .photosPicker(isPresented: $pickingPhoto, selection: $pickedPhoto, matching: .images)
@@ -125,10 +128,11 @@ struct RemoteDesktopScreen: View {
             barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
                 .accessibilityLabel("适配屏幕")
             if session?.canControl == true {
-                barButton(keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard", active: keyboardVisible) {
-                    keyboardVisible.toggle()
+                barButton(keyBarShown ? "keyboard.chevron.compact.down" : "keyboard", active: keyBarShown) {
+                    keyBarShown.toggle()
+                    keyboardVisible = keyBarShown
                 }
-                .accessibilityLabel(keyboardVisible ? "收起键盘" : "键盘")
+                .accessibilityLabel(keyBarShown ? "收起键盘" : "键盘")
             }
         }
         // 上、左、右都是离屏幕边缘的绝对距离（整列已铺满屏幕），按安全区与屏幕圆角取大，
@@ -353,99 +357,5 @@ private struct ScreenCornerInsetsReader: UIViewRepresentable {
             // 布局回调里不直接改 SwiftUI 状态。
             DispatchQueue.main.async { [weak self] in self?.onChange?(value) }
         }
-    }
-}
-
-/// 远程桌面的键盘条：粘滞修饰（⌃⌥⇧⌘）+ 常用特殊键，展开后有导航键与 F1–F12。
-/// 与终端的增强键盘条同一套外观；区别是这里发的是 Mac 键码，不是终端转义序列。
-struct RemoteDesktopKeyBar: View {
-    let keys: RemoteDesktopKeyState
-    let send: (RemoteDesktopInput) -> Void
-    @Environment(\.mAccent) private var accent
-    @State private var expanded = false
-
-    private struct Key: Identifiable {
-        let label: String
-        let code: UInt16
-        var id: String { label }
-    }
-
-    private let modifierKeys: [(String, RemoteKeyModifiers)] = [
-        ("⌃", .control), ("⌥", .option), ("⇧", .shift), ("⌘", .command),
-    ]
-    private let quickKeys: [Key] = [
-        .init(label: "esc", code: RemoteKeyMap.Key.escape), .init(label: "tab", code: RemoteKeyMap.Key.tab),
-        .init(label: "←", code: RemoteKeyMap.Key.left), .init(label: "↑", code: RemoteKeyMap.Key.up),
-        .init(label: "↓", code: RemoteKeyMap.Key.down), .init(label: "→", code: RemoteKeyMap.Key.right),
-        .init(label: "⌫", code: RemoteKeyMap.Key.delete), .init(label: "⌦", code: RemoteKeyMap.Key.forwardDelete),
-        .init(label: "↩", code: RemoteKeyMap.Key.returnKey), .init(label: "space", code: RemoteKeyMap.Key.space),
-    ]
-    private let navKeys: [Key] = [
-        .init(label: "home", code: RemoteKeyMap.Key.home), .init(label: "end", code: RemoteKeyMap.Key.end),
-        .init(label: "pgUp", code: RemoteKeyMap.Key.pageUp), .init(label: "pgDn", code: RemoteKeyMap.Key.pageDown),
-    ]
-    private var functionKeys: [Key] {
-        RemoteKeyMap.Key.function.enumerated().map { Key(label: "F\($0.offset + 1)", code: $0.element) }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if expanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    grid(navKeys)
-                    grid(functionKeys)
-                }
-                .padding(10)
-                Rectangle().fill(M.divider).frame(height: 1)
-            }
-            HStack(spacing: 6) {
-                Button { expanded.toggle() } label: { cap(expanded ? "∨" : "∧", active: expanded) }
-                    .buttonStyle(MPressStyle())
-                ForEach(modifierKeys, id: \.0) { label, modifier in
-                    Button { keys.toggle(modifier) } label: { cap(label, active: keys.modifiers.contains(modifier)) }
-                        .buttonStyle(MPressStyle())
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(quickKeys) { key in
-                            Button { tap(key) } label: { cap(key.label, active: false) }
-                                .buttonStyle(MPressStyle())
-                        }
-                    }
-                    .padding(.trailing, 10)
-                }
-            }
-            .padding(.leading, 10).padding(.vertical, 7)
-        }
-        .background(M.surface)
-        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
-        .animation(.easeOut(duration: 0.18), value: expanded)
-    }
-
-    private func grid(_ keys: [Key]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 46), spacing: 6)], spacing: 6) {
-            ForEach(keys) { key in
-                Button { tap(key) } label: { cap(key.label, active: false, expand: true) }
-                    .buttonStyle(MPressStyle())
-            }
-        }
-    }
-
-    /// 按一下特殊键：带上上膛的修饰（然后熄灭），按下再抬起。
-    private func tap(_ key: Key) {
-        let modifiers = keys.consume()
-        send(.key(code: key.code, down: true, modifiers: modifiers))
-        send(.key(code: key.code, down: false, modifiers: modifiers))
-    }
-
-    private func cap(_ text: String, active: Bool, expand: Bool = false) -> some View {
-        Text(text)
-            .font(M.mono(13, weight: .medium))
-            .foregroundStyle(active ? accent : M.text)
-            .lineLimit(1)
-            .padding(.horizontal, expand ? 4 : 12)
-            .frame(maxWidth: expand ? .infinity : nil, minHeight: 34, maxHeight: 34)
-            .background(active ? accent.opacity(0.14) : M.button)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

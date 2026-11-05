@@ -241,6 +241,23 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
+    /// 远程桌面的键盘条：与终端同一个外壳，黑底深色。
+    func testRemoteDesktopKeyBarPanels() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        for device in Self.devices {
+            for (name, panel) in [("row", nil), ("prompts", RemoteDesktopKeyBar.Panel.prompts), ("keys", .keys)] {
+                try await shoot("remote-keybar-\(name)", on: device) {
+                    VStack(spacing: 0) {
+                        Color.black
+                        RemoteDesktopKeyBar(keys: RemoteDesktopKeyState(), keyboardShown: .constant(false),
+                                            panel: panel) { _ in }
+                    }
+                    .environment(\.colorScheme, .dark)
+                }
+            }
+        }
+    }
+
     // MARK: - SFTP 浏览（假会话）
 
     func testSFTPBrowser() async throws {
