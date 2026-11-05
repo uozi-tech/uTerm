@@ -20,6 +20,31 @@ final class MobileWorkspaceTests: XCTestCase {
 
     // MARK: - 接管 Mac
 
+    /// 远控标签跟 Mac 上那枚标签同名；老版本 Mac 不发这个名字时照旧用终端流里的标题。
+    func testRemoteTabTitleFollowsTheMacTab() throws {
+        let ws = MobileWorkspace()
+        let client = macClient()
+        let id = UUID()
+        let opened = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [id], focus: id)).opened
+        let term = try XCTUnwrap(opened.first)
+        let tab = MWorkTab.terminal(term)
+        term.controller.title = "终端流里的标题"
+        XCTAssertEqual(tab.title, "终端流里的标题")
+
+        var info = RemoteSessionInfo(id: id, serverID: RemoteConstants.localShellServerID, serverName: "本机",
+                                     title: "zsh 2", windowKind: "terminal")
+        client.receiveSessions([info])
+        XCTAssertEqual(tab.title, "终端流里的标题", "老版本 Mac 只有注册表里的名字，不拿它盖掉")
+
+        info.tabTitle = "vim main.swift"
+        client.receiveSessions([info])
+        XCTAssertEqual(tab.title, "vim main.swift")
+
+        info.tabTitle = "zsh 2"
+        client.receiveSessions([info])
+        XCTAssertEqual(tab.title, "zsh 2", "Mac 上程序清掉标题后，手机也回到原名")
+    }
+
     func testTakeOverOpensEveryTerminalAndFrontsTheFocusedOne() {
         let ws = MobileWorkspace()
         let client = macClient()

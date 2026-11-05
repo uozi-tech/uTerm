@@ -52,10 +52,12 @@ enum MWorkTab: Identifiable {
         return nil
     }
 
-    /// 标签标题：终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
+    /// 标签标题：远控终端跟 Mac 上那枚标签同名，其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
     var title: String {
         switch self {
-        case .terminal(let t): return t.controller.title.isEmpty ? hostName : t.controller.title
+        case .terminal(let t):
+            if let title = t.remote?.macTabTitle { return title }
+            return t.controller.title.isEmpty ? hostName : t.controller.title
         case .files: return hostName
         }
     }

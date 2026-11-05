@@ -20,6 +20,8 @@ nonisolated enum RemoteConstants {
     static let handshakeTimeout: Duration = .seconds(10)
     /// 配对时等 Mac 上的人点「允许」的时长。
     static let pairingTimeout: Duration = .seconds(120)
+    /// Mac 把标签名的变化推给手机的最短间隔。
+    static let tabTitlePushInterval: Duration = .seconds(1)
     /// 快照里带多少行历史。
     static let snapshotScrollback = 1000
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
@@ -237,12 +239,17 @@ nonisolated struct RemoteSessionInfo: Codable, Equatable, Sendable, Identifiable
     /// 对应的 `ServerProfile.id`；Mac 本机 shell 是 `localShellServerID`。手机不要求这台主机已同步过来。
     var serverID: UUID
     var serverName: String
+    /// 标签打开时定下的稳定名字（`zsh 2`、服务器名）。
     var title: String
     /// `workspace` / `terminal`，同 `TerminalWindowKind`。
     var windowKind: String
     var connectedAt: Date?
     /// 当前被哪台设备接管（设备名），没有则为 nil。
     var controlledBy: String?
+    /// Mac 标签上此刻显示的名字，跟着程序设的标题变。老版本 Mac 不发这个键。
+    var tabTitle: String? = nil
+
+    var displayTitle: String { tabTitle ?? title }
 }
 
 nonisolated struct RemoteGridSize: Equatable, Sendable {

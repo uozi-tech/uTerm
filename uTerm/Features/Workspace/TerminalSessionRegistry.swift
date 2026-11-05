@@ -175,6 +175,13 @@ final class TerminalSessionRegistry {
         return revealer(sessionID)
     }
 
+    /// 标签上显示的名字：程序设的标题优先，没有才是 `entry.title`（`zsh 2`、服务器名）。给系统通知和
+    /// 手机用。程序设的标题可能每秒变很多次，所以不写进 `entries`，CLI 读到的 `title` 也保持稳定。
+    func displayTitle(of entry: TerminalSessionEntry) -> String {
+        let shellTitle = TerminalAttention.cleaned(sessions[entry.id]?.value?.shellTitle ?? "")
+        return shellTitle.isEmpty ? entry.title : shellTitle
+    }
+
     /// 这个会话对象登记时用的 id；没登记过则 nil。
     func sessionID(of session: TerminalSession) -> UUID? {
         sessions.first { $0.value.value === session }?.key

@@ -34,7 +34,7 @@ nonisolated struct TerminalAttention: Equatable, Sendable {
     }
 
     /// 内容来自远端程序：去掉控制字符，防止换行等伪造通知的版式。
-    private static func cleaned(_ text: String) -> String {
+    static func cleaned(_ text: String) -> String {
         let scalars = text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
         return String(String.UnicodeScalarView(scalars)).prefix(maxTextLength).trimmingCharacters(in: .whitespaces)
     }
@@ -77,14 +77,20 @@ final class TerminalAttentionCenter: NSObject {
         guard let registry, let sessionID = registry.sessionID(of: session),
               rateLimiter.allows(sessionID, at: Date()) else { return }
 
-        let subtitle = registry.entries.first { $0.id == sessionID }?.title ?? ""
-        let request = Self.makeRequest(attention, sessionID: sessionID, subtitle: subtitle)
+        let request = Self.makeRequest(attention, sessionID: sessionID, subtitle: subtitle(for: session))
         Task {
             // 第一次发通知时才问授权；之后再调用不会重复弹窗。被拒绝就只剩标签状态。
             let center = UNUserNotificationCenter.current()
             guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
             try? await center.add(request)
         }
+    }
+
+    /// 通知上的名字要和标签对得上。标签窄才截短，通知放得下全文。
+    func subtitle(for session: TerminalSession) -> String {
+        guard let registry, let sessionID = registry.sessionID(of: session),
+              let entry = registry.entries.first(where: { $0.id == sessionID }) else { return "" }
+        return registry.displayTitle(of: entry)
     }
 
     /// 用户已经回到这条会话，通知中心里它的旧通知没有意义了。

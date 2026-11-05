@@ -7,6 +7,11 @@ struct MRemoteSource: Equatable {
 
     var macName: String { client.macName }
 
+    /// Mac 上这枚标签此刻显示的名字。老版本 Mac 或断线时为 nil。
+    var macTabTitle: String? {
+        client.sessions.first { $0.id == sessionID }?.tabTitle
+    }
+
     static func == (lhs: MRemoteSource, rhs: MRemoteSource) -> Bool {
         lhs.client === rhs.client && lhs.sessionID == rhs.sessionID
     }

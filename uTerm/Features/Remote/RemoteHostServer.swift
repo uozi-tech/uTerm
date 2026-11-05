@@ -78,6 +78,7 @@ final class RemoteHostServer {
     @ObservationIgnored private var lastRemoteInput: Date?
     @ObservationIgnored private var lastRemoteOutput: Date?
     @ObservationIgnored private var activityRecheck: Task<Void, Never>?
+    @ObservationIgnored private var tabTitlePush: Task<Void, Never>?
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(),
@@ -118,6 +119,7 @@ final class RemoteHostServer {
             listener.start(queue: DispatchQueue(label: "com.uozi.uTerm.remote.listener"))
             self.listener = listener
             observeRegistry()
+            observeTabTitles()
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -225,7 +227,8 @@ final class RemoteHostServer {
         registry.entries.map { entry in
             RemoteSessionInfo(id: entry.id, serverID: entry.serverID, serverName: entry.serverName, title: entry.title,
                               windowKind: entry.windowKind, connectedAt: entry.connectedAt,
-                              controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName })
+                              controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName },
+                              tabTitle: registry.displayTitle(of: entry))
         }
     }
 
@@ -359,6 +362,30 @@ final class RemoteHostServer {
                     self.observeRegistry()
                 }
             }
+        }
+    }
+
+    /// 程序可能每秒改很多次标题（Claude Code 的转圈动画），所以标签名不走 `observeRegistry` 那条即时通道，
+    /// 第一次变化后等一个间隔，把这段时间的变化合成一次推送。
+    private func observeTabTitles() {
+        withObservationTracking {
+            for entry in registry.entries { _ = registry.displayTitle(of: entry) }
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.scheduleTabTitlePush() }
+            }
+        }
+    }
+
+    private func scheduleTabTitlePush() {
+        guard listener != nil, tabTitlePush == nil else { return }
+        tabTitlePush = Task { [weak self] in
+            try? await Task.sleep(for: RemoteConstants.tabTitlePushInterval)
+            guard let self else { return }
+            self.tabTitlePush = nil
+            guard self.listener != nil else { return }
+            for connection in self.connections.values { connection.sendSessions() }
+            self.observeTabTitles()
         }
     }
 }

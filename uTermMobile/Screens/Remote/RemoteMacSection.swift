@@ -86,7 +86,7 @@ struct RemoteMacSheet: View {
         } message: {
             Text(shellError ?? "")
         }
-        .alert("关闭「\(pendingClose?.title ?? "")」？",
+        .alert("关闭「\(pendingClose?.displayTitle ?? "")」？",
                isPresented: Binding(get: { pendingClose != nil }, set: { if !$0 { pendingClose = nil } }),
                presenting: pendingClose) { session in
             Button("关闭", role: .destructive) { client.closeSessionOnMac(session.id) }
@@ -182,7 +182,7 @@ struct RemoteMacSheet: View {
                 } else {
                     ForEach(client.sessions) { session in
                         // 分隔线交给 List（`last: true` 关掉行自带的），滑动时才会跟着行走。
-                        MInsetRow(icon: "term", label: session.title, sub: subtitle(session),
+                        MInsetRow(icon: "term", label: session.displayTitle, sub: subtitle(session),
                                   chevron: true, last: true) {
                             takeOver(focus: session.id)
                         }

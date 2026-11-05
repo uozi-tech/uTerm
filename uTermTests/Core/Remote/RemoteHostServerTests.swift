@@ -1,4 +1,5 @@
 import CryptoKit
+import Observation
 import XCTest
 import SwiftTerm
 @preconcurrency import Network
@@ -88,6 +89,41 @@ final class RemoteHostServerTests: XCTestCase {
 
     private func pairingStates(_ inbox: Inbox) -> [RemotePairingState] {
         inbox.of(.pairing).compactMap { $0.payload.first.flatMap(RemotePairingState.init(rawValue:)) }
+    }
+
+    /// 手机看到的是 Mac 标签上的名字；程序连续改标题时合并推送，`title` 保持稳定。
+    func test_session_list_follows_tab_title_and_merges_rapid_changes() async throws {
+        let (server, session, _, sessionID, port) = try await makeServer()
+        defer { server.stop(); session.dispose() }
+        let phone = Phone()
+        let (link, inbox, _) = try await connect(phone, port: port)
+        let pending = await waitUntil { !server.pairingRequests.isEmpty }
+        XCTAssertTrue(pending)
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        let approved = await waitUntil { self.pairingStates(inbox).contains(.approved) }
+        XCTAssertTrue(approved)
+        link.send(RemoteMessage(.subscribeSessions))
+
+        func latest() throws -> RemoteSessionInfo? {
+            guard let message = inbox.of(.sessions).last else { return nil }
+            return try RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload).first { $0.id == sessionID }
+        }
+        let listed = await waitUntil { (try? latest())??.tabTitle == "zsh" }
+        XCTAssertTrue(listed)
+        let before = inbox.of(.sessions).count
+
+        for frame in 0..<50 {
+            session.terminalView.feed(text: "\u{1b}]0;frame \(frame)\u{07}")
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let followed = await waitUntil { (try? latest())??.tabTitle == "frame 49" }
+        XCTAssertTrue(followed)
+        XCTAssertEqual(try latest()?.title, "zsh")
+        XCTAssertLessThanOrEqual(inbox.of(.sessions).count - before, 3, "50 次改标题不能变成 50 条推送")
+
+        session.terminalView.feed(text: "\u{1b}]0;\u{07}")
+        let restored = await waitUntil { (try? latest())??.tabTitle == "zsh" }
+        XCTAssertTrue(restored, "程序清掉标题后回到原名")
     }
 
     func test_pair_attach_stream_input_detach_and_trust_lifecycle() async throws {
@@ -228,5 +264,36 @@ final class RemoteHostServerTests: XCTestCase {
         print(String(format: "[远控回环探针] 接入到首帧 %.1f ms；按键→后端 p50 %.2f / p95 %.2f ms；输出→手机 p50 %.2f / p95 %.2f ms（Debug，含测试轮询粒度 2 ms）",
                      attachMs, p(inputMs, 0.5), p(inputMs, 0.95), p(outputMs, 0.5), p(outputMs, 0.95)))
         link.close()
+    }
+
+    /// 只有标签名变时，列表要更新，但不能惊动按 id 跟随的工作区。
+    func test_client_keeps_listed_ids_quiet_when_only_titles_change() {
+        let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
+                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+        var info = RemoteSessionInfo(id: UUID(), serverID: UUID(), serverName: "本机", title: "zsh 2",
+                                     windowKind: TerminalWindowKind.terminal, tabTitle: "zsh 2")
+        client.receiveSessions([info])
+
+        final class Flag: @unchecked Sendable { var fired = false }
+        let idsChanged = Flag()
+        withObservationTracking { _ = client.listedSessionIDs } onChange: { idsChanged.fired = true }
+
+        info.tabTitle = "vim"
+        client.receiveSessions([info])
+        XCTAssertEqual(client.sessions.first?.displayTitle, "vim")
+        XCTAssertFalse(idsChanged.fired)
+
+        client.receiveSessions([])
+        XCTAssertTrue(idsChanged.fired)
+    }
+
+    /// 老版本 Mac 的列表没有 `tabTitle`：手机回到 `title`。
+    func test_session_info_from_old_mac_falls_back_to_title() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","serverID":"\(UUID().uuidString)","serverName":"本机","title":"zsh 2","windowKind":"terminal"}
+        """
+        let info = try JSONDecoder().decode(RemoteSessionInfo.self, from: Data(json.utf8))
+        XCTAssertNil(info.tabTitle)
+        XCTAssertEqual(info.displayTitle, "zsh 2")
     }
 }

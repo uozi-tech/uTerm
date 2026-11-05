@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 注册表里的 title 给 CLI 和手机列表用，必须是稳定的名字；shell 设的标题只上标签。
+/// 注册表里的 title 必须是稳定的名字；shell 设的标题要经 `displayTitle(of:)` 现读，不进 `entries`。
 @MainActor
 final class RegistryTitleIsolationTests: XCTestCase {
 

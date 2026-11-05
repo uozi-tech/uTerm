@@ -338,6 +338,13 @@ final class RemoteMacClient: Identifiable {
         }
     }
 
+    /// 标签名变化时列表每秒都可能来一次。id 没变就不写 `listedSessionIDs`，不让跟随逻辑白跑。
+    func receiveSessions(_ list: [RemoteSessionInfo]) {
+        if sessions != list { sessions = list }
+        let ids = list.map(\.id)
+        if listedSessionIDs != ids { listedSessionIDs = ids }
+    }
+
     private func handleControl(_ message: RemoteMessage) {
         switch message.kind {
         case .pairing:
@@ -346,8 +353,7 @@ final class RemoteMacClient: Identifiable {
             }
         case .sessions:
             if let list = try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload) {
-                sessions = list
-                listedSessionIDs = list.map(\.id)
+                receiveSessions(list)
             }
         case .attached:
             guard let result = try? RemoteJSON.decode(RemoteAttachResult.self, from: message.payload),

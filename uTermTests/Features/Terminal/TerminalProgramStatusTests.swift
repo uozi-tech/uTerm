@@ -245,6 +245,28 @@ final class TerminalProgramStatusTests: XCTestCase {
                        TerminalAttentionCenter.makeRequest(attention, sessionID: id, subtitle: "").identifier)
     }
 
+    /// 通知上的名字跟标签一致：程序设了标题就用它，不用打开时定下的 `zsh 2`。
+    func testSubtitleFollowsShellTitleLikeTheTab() {
+        let registry = TerminalSessionRegistry()
+        let center = TerminalAttentionCenter()
+        center.start(registry: registry)
+        registry.register(TerminalSessionEntry(id: UUID(), serverID: UUID(), serverName: "本机",
+                                               windowID: UUID(), windowKind: TerminalWindowKind.terminal,
+                                               title: "zsh 2"),
+                          session: session)
+        XCTAssertEqual(center.subtitle(for: session), "zsh 2")
+
+        let long = "alice@web-1: /var/www/releases/2026/current/public/assets"
+        session.terminalView.feed(text: "\u{1b}]0;\(long)\u{07}")
+        XCTAssertEqual(center.subtitle(for: session), long, "标签才截短，通知放全文")
+
+        session.receiveShellTitle("第一行\n伪造的第二行")
+        XCTAssertEqual(center.subtitle(for: session), "第一行伪造的第二行")
+
+        session.terminalView.feed(text: "\u{1b}]0;   \u{07}")
+        XCTAssertEqual(center.subtitle(for: session), "zsh 2", "程序清掉标题后回到原名")
+    }
+
     func testClickingNotificationRevealsItsSession() {
         let registry = TerminalSessionRegistry()
         let center = TerminalAttentionCenter()
