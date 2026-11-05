@@ -76,15 +76,7 @@ struct KeysScreen: View {
     }
 
     /// keyID → 使用它的主机数，一趟过。
-    private var keyUsage: [UUID: Int] {
-        var out: [UUID: Int] = [:]
-        out.reserveCapacity(keys.count)
-        for h in hosts {
-            guard let id = h.keyID else { continue }
-            out[id, default: 0] += 1
-        }
-        return out
-    }
+    private var keyUsage: [UUID: Int] { SSHKeyLibrary.usageCounts(hosts) }
 }
 
 struct KeyDetailSheet: View {
@@ -94,7 +86,7 @@ struct KeyDetailSheet: View {
     @Query private var hosts: [ServerProfile]
     @State private var pendingDelete = false
 
-    private var usedBy: [ServerProfile] { hosts.filter { $0.keyID == key.id } }
+    private var usedBy: [ServerProfile] { SSHKeyLibrary.users(of: key, in: hosts) }
     /// 危险区卡片：`MBtn` 的 `lg` 圆角 + 卡片内边距 14pt。
     private let dangerRadius = MRadius.concentric(MRadius.lg, inset: 14)
 
@@ -162,9 +154,8 @@ struct KeyDetailSheet: View {
     }
 
     private func delete() {
-        KeyStore().delete(keyID: key.id)
-        context.delete(key)
-        try? context.save()
+        // 连带把引用它的主机 keyID 置空（改前漏了：主机仍指着一把已不存在的密钥）。
+        SSHKeyLibrary(context: context).delete(key)
         dismiss()
     }
 }
