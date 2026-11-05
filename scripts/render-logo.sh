@@ -1,11 +1,18 @@
 #!/usr/bin/env zsh
-# Render Resources/Logo/ULogoMark.svg into the asset catalog:
-#   - uTerm/Assets.xcassets/ULogoMark.imageset   (in-app logo, 256 / 512)
-#   - uTerm/Assets.xcassets/AppIcon.appiconset   (macOS app icon, 16…1024)
-# Each size is rendered straight from the vector for maximum sharpness.
-# NOTE: quit Xcode before running — Xcode caches the open asset catalog and can
-#       overwrite the regenerated Contents.json with its stale in-memory state.
-# Requires: rsvg-convert (brew install librsvg)
+# Regenerate the PNGs derived from the two logo masters:
+#   - Resources/Logo/ULogoMark.svg → ULogoMark.imageset (in-app logo, 256 / 512)
+#   - AppIcon.appiconset/icon_512@2x.png → every smaller macOS app icon size
+#
+# The app icon master is the committed 1024 PNG, not the SVG: the shipped icon
+# artwork was redrawn without updating the SVG, so rendering from it would bring
+# back the old artwork. To change the icon, replace icon_512@2x.png and rerun.
+#
+# Small sizes must be plain downscales of the master. macOS checks each size of
+# an icon separately and shows any it rejects shrunken on a gray plate, which
+# hand-sharpened 16 and 64 px PNGs triggered (in System Settings lists, say).
+#
+# This script leaves both Contents.json files and icon_ios_1024.png alone.
+# Requires: rsvg-convert (brew install librsvg), sips (ships with macOS)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,119 +21,30 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
   exit 1
 fi
 
-SRC="Resources/Logo/ULogoMark.svg"
-render() { rsvg-convert --width "$1" --height "$1" "$SRC" -o "$2"; }
-
 # --- in-app logo imageset -------------------------------------------------
+SRC="Resources/Logo/ULogoMark.svg"
 IMG="uTerm/Assets.xcassets/ULogoMark.imageset"
-mkdir -p "$IMG"
-render 256 "$IMG/ULogoMark.png"
-render 512 "$IMG/ULogoMark@2x.png"
-
-cat > "$IMG/Contents.json" <<'JSON'
-{
-  "images" : [
-    {
-      "filename" : "ULogoMark.png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "filename" : "ULogoMark@2x.png",
-      "idiom" : "universal",
-      "scale" : "2x"
-    }
-  ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
-}
-JSON
+rsvg-convert --width 256 --height 256 "$SRC" -o "$IMG/ULogoMark.png"
+rsvg-convert --width 512 --height 512 "$SRC" -o "$IMG/ULogoMark@2x.png"
 echo "✅ imageset → $IMG"
 
 # --- macOS app icon -------------------------------------------------------
 ICON="uTerm/Assets.xcassets/AppIcon.appiconset"
-mkdir -p "$ICON"
-render 16   "$ICON/icon_16.png"
-render 32   "$ICON/icon_16@2x.png"
-render 32   "$ICON/icon_32.png"
-render 64   "$ICON/icon_32@2x.png"
-render 128  "$ICON/icon_128.png"
-render 256  "$ICON/icon_128@2x.png"
-render 256  "$ICON/icon_256.png"
-render 512  "$ICON/icon_256@2x.png"
-render 512  "$ICON/icon_512.png"
-render 1024 "$ICON/icon_512@2x.png"
+MASTER="$ICON/icon_512@2x.png"
+master_width=$(sips -g pixelWidth "$MASTER" | awk '/pixelWidth/ { print $2 }')
+if [[ "$master_width" != 1024 ]]; then
+  echo "❌ $MASTER must be 1024 px wide, got $master_width"
+  exit 1
+fi
 
-cat > "$ICON/Contents.json" <<'JSON'
-{
-  "images" : [
-    {
-      "filename" : "icon_16.png",
-      "idiom" : "mac",
-      "scale" : "1x",
-      "size" : "16x16"
-    },
-    {
-      "filename" : "icon_16@2x.png",
-      "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "16x16"
-    },
-    {
-      "filename" : "icon_32.png",
-      "idiom" : "mac",
-      "scale" : "1x",
-      "size" : "32x32"
-    },
-    {
-      "filename" : "icon_32@2x.png",
-      "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "32x32"
-    },
-    {
-      "filename" : "icon_128.png",
-      "idiom" : "mac",
-      "scale" : "1x",
-      "size" : "128x128"
-    },
-    {
-      "filename" : "icon_128@2x.png",
-      "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "128x128"
-    },
-    {
-      "filename" : "icon_256.png",
-      "idiom" : "mac",
-      "scale" : "1x",
-      "size" : "256x256"
-    },
-    {
-      "filename" : "icon_256@2x.png",
-      "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "256x256"
-    },
-    {
-      "filename" : "icon_512.png",
-      "idiom" : "mac",
-      "scale" : "1x",
-      "size" : "512x512"
-    },
-    {
-      "filename" : "icon_512@2x.png",
-      "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "512x512"
-    }
-  ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
-}
-JSON
+downscale() { sips -z "$1" "$1" "$MASTER" --out "$ICON/$2" >/dev/null; }
+downscale 16  icon_16.png
+downscale 32  icon_16@2x.png
+downscale 32  icon_32.png
+downscale 64  icon_32@2x.png
+downscale 128 icon_128.png
+downscale 256 icon_128@2x.png
+downscale 256 icon_256.png
+downscale 512 icon_256@2x.png
+downscale 512 icon_512.png
 echo "✅ app icon → $ICON"
