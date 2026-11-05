@@ -38,13 +38,7 @@ struct SFTPPathBar: View {
     let onSetSort: (FileBrowserModel.SortKey) -> Void
     var part: Part = .full
 
-    private var crumbs: [(name: String, full: String)] {
-        let comps = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        var acc = ""
-        var out: [(String, String)] = [("/", "/")]
-        for c in comps { acc += "/" + c; out.append((c, acc)) }
-        return out
-    }
+    private var crumbs: [(name: String, full: String)] { RemotePath.breadcrumbs(path) }
 
     var body: some View {
         HStack(spacing: 10) {

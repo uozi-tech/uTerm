@@ -14,7 +14,7 @@ private struct EntryTarget: Identifiable {
     let entry: RemoteEntry
     let directory: String
     var id: String { fullPath }
-    var fullPath: String { directory == "/" ? "/\(entry.name)" : "\(directory)/\(entry.name)" }
+    var fullPath: String { RemotePath.join(directory, entry.name) }
 }
 
 /// 一个文件浏览会话标签的主体：路径条 + 远程文件列表 + 底栏，长按文件出操作单。
@@ -124,10 +124,10 @@ struct FilesSessionBody: View {
     private var breadcrumbs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                let segs = pathSegments(controller.path)
+                let segs = RemotePath.breadcrumbs(controller.path)
                 ForEach(Array(segs.enumerated()), id: \.offset) { i, seg in
                     Button { Task { await controller.load(seg.full) } } label: {
-                        Text(seg.label).font(M.mono(12.5))
+                        Text(seg.name).font(M.mono(12.5))
                             .foregroundStyle(i == segs.count - 1 ? M.text : M.text3)
                             // 面包屑段的命中区撑到整条高（原先只有字形 ~15pt 高）。
                             .padding(.vertical, 10).padding(.horizontal, 2)
@@ -141,16 +141,6 @@ struct FilesSessionBody: View {
             .padding(.horizontal, 14)
         }
         .mKeepsScrollContentInSafeArea()
-    }
-
-    private func pathSegments(_ path: String) -> [(label: String, full: String)] {
-        var result: [(label: String, full: String)] = [(label: "/", full: "/")]
-        var cur = ""
-        for comp in path.split(separator: "/") {
-            cur += "/\(comp)"
-            result.append((label: String(comp), full: cur))
-        }
-        return result
     }
 
     /// 上一级（`..`）行，对齐设计稿带返回箭头的双色文件夹图标。

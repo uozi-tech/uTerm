@@ -45,7 +45,7 @@ struct SFTPInspector: View {
 
     private func detail(_ item: RemoteEntry) -> some View {
         let kind = BrowserFileKind.from(name: item.name, isDirectory: item.isDirectory, isSymlink: item.isSymlink)
-        let fullPath = currentPath == "/" ? "/\(item.name)" : "\(currentPath)/\(item.name)"
+        let fullPath = RemotePath.join(currentPath, item.name)
         let sizeText = item.isDirectory ? "文件夹"
             : (item.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder)
         let rows: [(String, String, Bool)] = [

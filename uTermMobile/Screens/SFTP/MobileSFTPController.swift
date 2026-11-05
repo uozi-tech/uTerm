@@ -144,14 +144,14 @@ final class MobileSFTPController {
 
     func open(_ entry: RemoteEntry) {
         guard entry.isDirectory || entry.isSymlink else { return }
-        let next = joined(path, entry.name)
+        let next = RemotePath.join(path, entry.name)
         Task { await load(next) }
     }
 
     func goUp() {
         guard path != "/" else { return }
-        let parent = (path as NSString).deletingLastPathComponent
-        Task { await load(parent.isEmpty ? "/" : parent) }
+        let parent = RemotePath.parent(of: path)
+        Task { await load(parent) }
     }
 
     func refresh() { Task { await reload() } }
@@ -161,7 +161,7 @@ final class MobileSFTPController {
     /// 不传则取当前目录。
     func delete(_ entry: RemoteEntry, in directory: String? = nil) {
         guard let session else { return }
-        let full = joined(directory ?? path, entry.name)
+        let full = RemotePath.join(directory ?? path, entry.name)
         Task { [weak self] in
             do {
                 if entry.isDirectory { try await session.removeDirectory(full) }
@@ -199,12 +199,12 @@ final class MobileSFTPController {
     // MARK: - 文件操作（设计稿 FileActionSheet / PermissionSheet）
 
     /// 当前目录下某条目的完整远程路径。
-    func fullPath(_ entry: RemoteEntry) -> String { joined(path, entry.name) }
+    func fullPath(_ entry: RemoteEntry) -> String { RemotePath.join(path, entry.name) }
 
     /// 改权限（真实 chmod，经 Citadel setAttributes，仅 9 位 POSIX 位）。
     func chmod(_ entry: RemoteEntry, mode: UInt32, in directory: String? = nil) {
         guard let session else { return }
-        let full = joined(directory ?? path, entry.name)
+        let full = RemotePath.join(directory ?? path, entry.name)
         Task { [weak self] in
             do {
                 try await session.setPermissions(path: full, mode: mode & 0o777)
@@ -221,8 +221,8 @@ final class MobileSFTPController {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed != entry.name else { return }
         let dir = directory ?? path
-        let from = joined(dir, entry.name)
-        let to = joined(dir, trimmed)
+        let from = RemotePath.join(dir, entry.name)
+        let to = RemotePath.join(dir, trimmed)
         Task { [weak self] in
             do {
                 try await session.rename(from, to: to)
@@ -239,7 +239,7 @@ final class MobileSFTPController {
     /// 字节经 `SFTPSession` 的固定缓冲流式落盘，不在内存里攒整个文件、也不在主线程写盘。
     func download(_ entry: RemoteEntry, in directory: String? = nil) async -> URL? {
         guard let session else { return nil }
-        let full = joined(directory ?? path, entry.name)
+        let full = RemotePath.join(directory ?? path, entry.name)
         let folder = downloadRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let url = folder.appendingPathComponent(entry.name)
         do {
@@ -256,7 +256,7 @@ final class MobileSFTPController {
     /// 从本地文件流式上传到当前目录（不先把整个文件读进内存）。
     func upload(from url: URL) {
         guard let session else { return }
-        let dest = joined(path, url.lastPathComponent)
+        let dest = RemotePath.join(path, url.lastPathComponent)
         Task { [weak self] in
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -271,10 +271,6 @@ final class MobileSFTPController {
 
     /// 会话是否还开着（标签关掉后，晚到的下载不应再弹分享面板）。
     var isOpen: Bool { session != nil }
-
-    private func joined(_ base: String, _ name: String) -> String {
-        base == "/" ? "/\(name)" : "\(base)/\(name)"
-    }
 }
 
 extension MobileSFTPController: ConnectionHealthProbing {

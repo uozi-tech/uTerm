@@ -1088,21 +1088,17 @@ final class FileBrowserModel {
         lastConnectionRequest = nil
     }
 
-    static func join(_ base: String, _ name: String) -> String {
-        base == "/" ? "/\(name)" : "\(base)/\(name)"
+    /// 转发到共享的 `RemotePath`（既有调用面保留）。
+    nonisolated static func join(_ base: String, _ name: String) -> String {
+        RemotePath.join(base, name)
     }
 
-    static func parent(of path: String) -> String {
-        guard path != "/" else { return "/" }
-        var comps = path.split(separator: "/", omittingEmptySubsequences: true)
-        comps.removeLast()
-        return comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+    nonisolated static func parent(of path: String) -> String {
+        RemotePath.parent(of: path)
     }
 
-    /// 把路径包成单引号串供 shell（exec channel）安全使用：单引号内一切原样，
-    /// 内嵌单引号用 `'\''` 收尾再续。供 `chmod -R` 等命令拼接，杜绝路径注入 / 空格问题。
-    static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    nonisolated static func shellQuote(_ s: String) -> String {
+        RemotePath.shellQuote(s)
     }
 
     private struct OwnerStatRow {
@@ -1194,12 +1190,7 @@ final class FileBrowserModel {
     }
 
     private static func normalizedRemotePath(_ path: String) -> String {
-        guard !path.isEmpty else { return "/" }
-        var value = path.hasPrefix("/") ? path : "/" + path
-        while value.count > 1, value.hasSuffix("/") {
-            value.removeLast()
-        }
-        return value
+        RemotePath.normalized(path)
     }
 
     private static func int64Size(_ size: UInt64?) -> Int64 {
