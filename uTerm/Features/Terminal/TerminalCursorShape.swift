@@ -2,7 +2,7 @@ import Foundation
 
 /// 终端光标形状。UserDefaults key: `terminalCursorShape`。默认 `.block`。
 /// 与 `terminalCursorBlink: Bool` 共同决定 DECSCUSR 参数。
-enum TerminalCursorShape: String, CaseIterable, Identifiable {
+nonisolated enum TerminalCursorShape: String, CaseIterable, Identifiable, Sendable {
     case block
     case underline
     case bar

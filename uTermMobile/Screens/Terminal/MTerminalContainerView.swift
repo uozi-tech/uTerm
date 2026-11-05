@@ -7,13 +7,13 @@ import UIKit
 /// 它照旧按旧尺寸增量绘制。尺寸变过去又变回来时 PTY 尺寸没变，连 SIGWINCH 都没有，屏幕就一直错位。
 /// 停稳才提交之后，重排和 SIGWINCH 同时发生，键盘升降、切分屏途中的尺寸都不碰缓冲区。
 final class MTerminalContainerView: UIView {
-    /// 尺寸或字号停止变化多久后才提交给终端。连续变化期间不断顺延。
-    static let settleDelay: Duration = .milliseconds(80)
+    /// 尺寸或字号停止变化多久后才提交给终端。连续变化期间不断顺延（判定在共享的 `TerminalResizeSettler`）。
+    static let settleDelay: Duration = TerminalResizeSettler.settleDelay
 
     let terminalView: SwiftTerm.TerminalView
     private var fontSize: CGFloat
-    private var held: Layout?
-    private var settleTask: Task<Void, Never>?
+    /// 「停稳再提交」的判定与顺延计时（与 mac `TerminalContainerView` 共用）。
+    private let settler = TerminalResizeSettler()
     private var commitsOnNextLayout = false
 
     /// 这个终端在不在屏上。不在屏上时不跟尺寸，转屏才不会让每个隐藏标签都重排一次、再让里面的程序
@@ -29,11 +29,6 @@ final class MTerminalContainerView: UIView {
                 cancelHold()
             }
         }
-    }
-
-    private struct Layout: Equatable {
-        let size: CGSize
-        let fontSize: CGFloat
     }
 
     init(terminalView: SwiftTerm.TerminalView, fontSize: CGFloat) {
@@ -65,9 +60,7 @@ final class MTerminalContainerView: UIView {
     }
 
     func cancelHold() {
-        settleTask?.cancel()
-        settleTask = nil
-        held = nil
+        settler.cancel()
     }
 
     private func syncTerminal(settled: Bool) {
@@ -81,28 +74,26 @@ final class MTerminalContainerView: UIView {
             cancelHold()
             return
         }
-        let target = Layout(size: bounds.size, fontSize: fontSize)
         let fontChanged = abs(terminalView.font.pointSize - fontSize) > 0.1
         let isFirstMount = (terminalView as? MTerminalView)?.hasHostedLayout == false
-        if !isOnScreen, !isFirstMount {
-            cancelHold()
+        // 不在屏上不跟尺寸（首挂除外：总得先按真实尺寸排一次版）。
+        let tracks = isOnScreen || isFirstMount
+        let decision = settler.decide(
+            target: tracks ? TerminalResizeSettler.Target(size: bounds.size, fontSize: fontSize) : nil,
+            current: TerminalResizeSettler.Target(size: terminalView.frame.size,
+                                                  fontSize: terminalView.font.pointSize),
+            isFirstMount: isFirstMount,
+            settled: settled,
+            onSettled: { [weak self] in self?.syncTerminal(settled: true) })
+        switch decision {
+        case .cancel:
             return
-        }
-        if settled || isFirstMount || (!fontChanged && terminalView.frame.size == bounds.size) {
-            cancelHold()
+        case .commit:
             (terminalView as? MTerminalView)?.hasHostedLayout = true
             commit(fontChanged: fontChanged)
-            return
-        }
-        // 等待期间保持旧尺寸：比容器矮时贴顶，比容器高时贴底（键盘升起时提示符和光标留在屏上）。
-        terminalView.frame.origin = CGPoint(x: 0, y: min(0, bounds.height - terminalView.frame.height))
-        guard held != target else { return }
-        held = target
-        settleTask?.cancel()
-        settleTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.settleDelay)
-            guard !Task.isCancelled else { return }
-            self?.syncTerminal(settled: true)
+        case .hold:
+            // 等待期间保持旧尺寸：比容器矮时贴顶，比容器高时贴底（键盘升起时提示符和光标留在屏上）。
+            terminalView.frame.origin = CGPoint(x: 0, y: min(0, bounds.height - terminalView.frame.height))
         }
     }
 

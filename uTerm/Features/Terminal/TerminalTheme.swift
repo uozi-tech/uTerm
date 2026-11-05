@@ -14,8 +14,9 @@ enum TerminalTheme {
     }
 
     /// Mouse-drag selection colors mirror the editor so terminal and editor
-    /// panes read as one text surface.
-    static let normalSelectionColor = EditorTheme.selectionBackground(dark: true)
+    /// panes read as one text surface. 值取终端真正装进视图的 `TerminalColorScheme.selectionColor`，
+    /// `EditorThemeTests` 核对它与 `EditorTheme.selectionBg` 一致。
+    static let normalSelectionColor = TerminalColorScheme.vscodeDark.selectionColor
 
     /// Bright amber overlay used while a search overlay is open so the active
     /// match is unmistakable against any cell background. Mirrors VS Code's
@@ -23,15 +24,11 @@ enum TerminalTheme {
     static let searchMatchColor = NSColor(srgbRed: 0xF1 / 255, green: 0xB5 / 255, blue: 0x3C / 255, alpha: 0.6)
 
     /// 浅色终端的选区底色。与编辑器同用 VS Code Light+ 选区蓝。
-    static let lightSelectionColor = EditorTheme.selectionBackground(dark: false)
+    static let lightSelectionColor = TerminalColorScheme.vscodeLight.selectionColor
 
     // MARK: spec 03 — settings-driven API
 
     /// Spec 03 主 entry：接收完整 settings 一次性 apply。
-    ///
-    /// 调用顺序保证 scheme 先于 cursor —— applyCursor 在 block 形态时
-    /// 读 view.nativeBackgroundColor 作为 caretTextColor，需要 scheme
-    /// 已生效。
     static func apply(to view: SwiftTerm.TerminalView, settings: TerminalSettings, dark: Bool) {
         applyFont(to: view, font: TerminalSettings.textFont())
         applyLineSpacing(to: view, lineSpacing: CGFloat(TerminalSettings.lineHeight))
@@ -55,8 +52,10 @@ enum TerminalTheme {
         if let copyable, copyable.appliedLook == look { return }
         copyable?.appliedLook = look
         let scheme = settings.colorScheme(dark: dark)
-        applyColorScheme(to: view, scheme: scheme, dark: dark)
-        applyCursor(to: view, scheme: scheme, shape: settings.cursorShape, blink: settings.cursorBlink)
+        // 配色先于光标：块光标读 view.nativeBackgroundColor 作 caretTextColor。
+        TerminalAppearance.applyColors(to: view, scheme: scheme)
+        TerminalAppearance.applyCursor(to: view, scheme: scheme,
+                                       shape: settings.cursorShape, blink: settings.cursorBlink)
     }
 
     /// 字体 + 字号同时设定。
@@ -71,32 +70,6 @@ enum TerminalTheme {
         if view.lineSpacing != lineSpacing {
             view.lineSpacing = lineSpacing
         }
-    }
-
-    /// 应用 scheme：bg / fg / installColors / 保留 selection color。
-    static func applyColorScheme(to view: SwiftTerm.TerminalView, scheme: TerminalColorScheme, dark: Bool) {
-        view.nativeBackgroundColor = scheme.backgroundColor
-        view.nativeForegroundColor = scheme.foregroundColor
-        view.installColors(scheme.ansiColors)
-        // 选区底色随外观切：深色深蓝 / 浅色浅蓝，保证选中文字在两种底上都可读
-        view.selectedTextBackgroundColor = dark ? normalSelectionColor : lightSelectionColor
-        // 渲染期最低对比度：服务器端按深色背景硬编码的 256 色 / 真彩色
-        // （powerline prompt 等）不走 ANSI 16 色表，只能在渲染时钳制
-        view.minimumContrastRatio = TerminalColorScheme.minimumContrastRatio
-    }
-
-    /// 光标形状 + 闪烁。注意：caller 必须先 applyColorScheme，因为
-    /// block 形态读 view.nativeBackgroundColor 作 caretTextColor。
-    static func applyCursor(to view: SwiftTerm.TerminalView,
-                             scheme: TerminalColorScheme,
-                             shape: TerminalCursorShape,
-                             blink: Bool) {
-        view.caretColor = scheme.cursorColor
-        view.caretTextColor = (shape == .block) ? view.nativeBackgroundColor : nil
-        view.feed(text: "\u{1B}[\(shape.decscusrParameter(blink: blink)) q")
-        // 程序发 `CSI 0 q` 或 `reset` 时回到这里。`applyLook` 只在设置变了才走到，不能指望它再装一次。
-        let terminal = view.getTerminal()
-        terminal.defaultCursorStyle = terminal.options.cursorStyle
     }
 
     /// 圆角设置抽离出来：原 `apply(to:fontSize:scrollback:)` 内联了

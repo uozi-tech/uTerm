@@ -28,7 +28,7 @@ final class MobileWorkspaceTests: XCTestCase {
         let opened = ws.takeOver(MRemoteTakeover(client: client, sessionIDs: [id], focus: id)).opened
         let term = try XCTUnwrap(opened.first)
         let tab = MWorkTab.terminal(term)
-        term.controller.title = "终端流里的标题"
+        term.controller.shellTitle = "终端流里的标题"
         XCTAssertEqual(tab.title, "终端流里的标题")
 
         var info = RemoteSessionInfo(id: id, serverID: RemoteConstants.localShellServerID, serverName: "本机",

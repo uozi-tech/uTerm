@@ -62,10 +62,10 @@ final class MConnectRequest: Identifiable {
             switch t.state {
             case .connected: return .connected
             case .failed(let m): return .failed(m)
-            // 连上后立刻断开（服务器关闭 / 网络抖动）：Observation 可能把 .connected 与 .closed
-            // 合并到同一 tick，使连接中页观测不到 .connected。若曾连上过，把 .closed 也判为成功
+            // 连上后立刻断开（服务器关闭 / 网络抖动）：Observation 可能把 .connected 与 .disconnected
+            // 合并到同一 tick，使连接中页观测不到 .connected。若曾连上过，把 .disconnected 也判为成功
             // 收尾（露出会话，由会话自身展示断开态），避免中转页卡死。
-            case .closed: return t.hadConnected ? .connected : .connecting
+            case .disconnected: return t.hadConnected ? .connected : .connecting
             case .idle, .connecting: return .connecting
             }
         }

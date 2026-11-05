@@ -49,7 +49,7 @@ struct MobileFakeTerminalScript: Sendable {
     var writeLatency: Duration
     /// 是否把 `write` 的字节原样回吐到输出流（真 shell 的本地回显等价物）。
     var echoesInput: Bool
-    /// 脚本吐完之后是否产出 `exitStream` 元素（= 远端 shell 退出 → 控制器翻 `.closed`）。
+    /// 脚本吐完之后是否产出 `exitStream` 元素（= 远端 shell 退出 → 控制器翻 `.disconnected`）。
     var exitsWhenScriptEnds: Bool
     /// `connect()` 直接抛这个错（模拟建连失败，走控制器的 `.failed` 分支）。
     var connectFailure: String?
@@ -236,7 +236,7 @@ actor MobileFakeTerminalTransport: TerminalBackend {
     // MARK: 测试驱动
 
     /// 模拟断线：停掉输出泵，往 `exitStream` 送一个元素。
-    /// 控制器据此把 `state` 翻成 `.closed`（与远端 shell 退出走同一条收尾级联）。
+    /// 控制器据此把 `state` 翻成 `.disconnected`（与远端 shell 退出走同一条收尾级联）。
     func simulateDrop() {
         pumpTask?.cancel()
         pumpTask = nil

@@ -31,8 +31,8 @@ struct MTabClosePrompt: Equatable {
 final class MTabCloseFlow {
     /// 等用户拿主意的确认。
     var pending: MTabClosePrompt?
-    /// 正在探测前台的标签。探测要走一趟网络，连点关闭按钮不重复发起。
-    private var probing: Set<UUID> = []
+    /// 探测前台的标签。探测要走一趟网络，连点关闭按钮不重复发起。
+    @ObservationIgnored private let probe = TerminalCloseProbe()
 
     nonisolated static func asksBeforeClosingRemote(macSupportsClosing: Bool, connected: Bool) -> Bool {
         macSupportsClosing && connected
@@ -53,14 +53,13 @@ final class MTabCloseFlow {
             }
             return
         }
-        guard probing.insert(id).inserted else { return }
         Task {
-            let activity = await term.controller.foregroundActivity()
-            probing.remove(id)
-            if let prompt = activity.closePrompt {
-                pending = MTabClosePrompt(tabID: id, kind: .busy(prompt))
-            } else {
-                close(id)
+            await probe.probe(id, activity: term.controller.foregroundActivity) { prompt in
+                if let prompt {
+                    pending = MTabClosePrompt(tabID: id, kind: .busy(prompt))
+                } else {
+                    close(id)
+                }
             }
         }
     }
@@ -352,7 +351,7 @@ struct WorkspaceTabChip: View {
             case .connected: return t.controller.isReconnecting ? (M.warning, true) : (M.success, false)
             case .connecting: return (M.warning, true)
             case .failed: return (M.danger, false)
-            case .closed, .idle: return (M.text4, false)
+            case .disconnected, .idle: return (M.text4, false)
             }
         case .files(let f):
             switch f.controller.state {

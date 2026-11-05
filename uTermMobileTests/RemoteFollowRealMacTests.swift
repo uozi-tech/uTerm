@@ -47,7 +47,7 @@ final class RemoteFollowRealMacTests: XCTestCase {
         try await waitUntil { workspace.terminalTabs.count == 1 }
         XCTAssertNil(workspace.tab(added.id), "Mac 上关掉的终端，手机标签跟着关")
         XCTAssertEqual(workspace.activeTab?.id, front)
-        XCTAssertEqual(added.controller.state, .closed)
+        XCTAssertEqual(added.controller.state, .disconnected)
 
         // Mac 上终端全关：回到主机列表，接管还在。这时断线也要连回去，否则收不到之后新开的终端。
         try await waitUntil { workspace.isEmpty }

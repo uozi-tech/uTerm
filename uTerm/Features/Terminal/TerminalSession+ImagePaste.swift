@@ -54,8 +54,7 @@ extension TerminalSession {
     private func deliver(_ image: TerminalImage, to receiver: any TerminalImageReceiving) {
         Task { [weak self] in
             do {
-                let delivery = try await receiver.deliverImage(image)
-                if case .file(let path) = delivery { self?.pasteText(path + " ") }
+                try await TerminalPaste.deliver(image: image, to: receiver) { self?.pasteText($0) }
             } catch {
                 // 用户正等着图片出现，失败必须看得见；不走「是否在看」的判断。
                 self?.attentionSink?(TerminalAttention(title: String(localized: "图片没传过去"),
@@ -66,10 +65,7 @@ extension TerminalSession {
 
     /// 像系统粘贴一样送文字。Agent 靠括号粘贴标记认出这是粘贴，才把图片路径当附件。
     private func pasteText(_ text: String) {
-        var bytes = Array(text.utf8)
-        if terminalView.getTerminal().bracketedPasteMode {
-            bytes = Array("\u{1b}[200~".utf8) + bytes + Array("\u{1b}[201~".utf8)
-        }
-        send(source: terminalView, data: bytes[...])
+        let data = TerminalPaste.wrap(text, bracketed: terminalView.getTerminal().bracketedPasteMode)
+        send(source: terminalView, data: Array(data)[...])
     }
 }

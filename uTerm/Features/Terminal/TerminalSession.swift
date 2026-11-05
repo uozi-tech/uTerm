@@ -33,10 +33,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     @ObservationIgnored var resizeFlushTask: Task<Void, Never>?
 
     /// 终端连接状态。`connect(using:)` 推进；远端结束置 `disconnected`。
-    enum ConnectionState: Equatable {
-        case idle, connecting, connected, disconnected
-        case failed(String)
-    }
+    typealias ConnectionState = TerminalConnectionState
     private(set) var connectionState: ConnectionState = .idle {
         didSet {
             guard connectionState != oldValue else { return }
@@ -117,8 +114,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     }
 
     func receiveShellTitle(_ title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let next = trimmed.isEmpty ? nil : trimmed
+        let next = TerminalTitle.normalize(title)
         guard next != shellTitle else { return }
         shellTitle = next
     }
@@ -517,7 +513,6 @@ extension TerminalSession: ConnectionHealthProbing {
     /// 探测；后端判死时会自行强制关闭通道，`exitStream` 级联把状态翻到
     /// `.disconnected`（窗格盖上「连接已断开 / 重新连接」），这里不写任何状态。
     func probeConnectionHealth() async {
-        guard connectionState == .connected, let backend else { return }
-        _ = await backend.verifyConnectionAlive()
+        await connectionState.probeHealth(of: backend)
     }
 }

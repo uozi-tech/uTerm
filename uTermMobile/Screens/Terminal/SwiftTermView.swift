@@ -173,11 +173,13 @@ struct SwiftTermView: UIViewRepresentable {
         view.inputAccessoryView = nil
         // 收起键盘后用户还在看这个终端，光标不该变成表示失焦的空心框。分屏的当前格由焦点框标出。
         view.caretViewTracksFocus = false
-        view.minimumContrastRatio = MTerminalColors.minimumContrastRatio
         applyColorsIfNeeded(to: view, coordinator: context.coordinator)
         if isFresh {
-            // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁），仅新建时设一次。
-            view.feed(text: "\u{1B}[2 q")
+            // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁），仅新建时设一次——再设会盖掉
+            // 程序自己设的光标（vim 插入模式的竖线）。同时记成终端默认样式：程序发 `CSI 0 q` / reset
+            // 时回到这里，而不是 SwiftTerm 自带的闪烁块。
+            TerminalAppearance.applyCursor(to: view, scheme: MTerminalColors.resolve(dark: colorScheme == .dark),
+                                           shape: .block, blink: false)
         }
         controller.attach(view)
         // 键盘默认展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、已连上、用户没收起——
@@ -211,18 +213,12 @@ struct SwiftTermView: UIViewRepresentable {
         let dark = colorScheme == .dark
         guard coordinator.appliedDark != dark else { return }
         coordinator.appliedDark = dark
-        apply(MTerminalColors.resolve(dark: dark), to: view)
-    }
-
-    /// 把一套配色装进 SwiftTerm 视图：ANSI 表 + 前景 / 背景 / 光标 / 选区。
-    private func apply(_ s: MTerminalColors, to view: SwiftTerm.TerminalView) {
-        view.installColors(s.ansi)
-        view.nativeForegroundColor = s.foreground
-        view.nativeBackgroundColor = s.background
-        view.backgroundColor = s.background
-        view.caretColor = s.cursor
-        view.caretTextColor = s.background   // 块光标下的字符用底色，保证可读
-        view.selectedTextBackgroundColor = s.selection
+        let scheme = MTerminalColors.resolve(dark: dark)
+        TerminalAppearance.applyColors(to: view, scheme: scheme)
+        // 光标颜色随配色切，形状不动（iOS 固定块光标，见 makeUIView）。
+        TerminalAppearance.applyCaretColors(to: view, scheme: scheme, shape: .block)
+        // iOS 独有：UIScrollView 自己的底色（滚出内容区、橡皮筋回弹时露出来）也随终端底色。
+        view.backgroundColor = scheme.backgroundColor
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(controller: controller) }
@@ -246,7 +242,7 @@ struct SwiftTermView: UIViewRepresentable {
             controller.resize(cols: UInt16(clamping: newCols), rows: UInt16(clamping: newRows))
         }
         func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {
-            if !title.isEmpty { controller.title = title }
+            controller.receiveShellTitle(title)
         }
         func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
         func scrolled(source: SwiftTerm.TerminalView, position: Double) {}

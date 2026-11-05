@@ -57,7 +57,7 @@ enum MWorkTab: Identifiable {
         switch self {
         case .terminal(let t):
             if let title = t.remote?.macTabTitle { return title }
-            return t.controller.title.isEmpty ? hostName : t.controller.title
+            return t.controller.shellTitle ?? hostName
         case .files: return hostName
         }
     }
@@ -252,7 +252,7 @@ final class MobileWorkspace {
             let source = MRemoteSource(client: client, sessionID: sessionID)
             if let current = existing(remote: source) {
                 switch current.terminal?.controller.state {
-                case .closed, .failed:
+                case .disconnected, .failed:
                     close(current.id)
                     changes.removed.append(current)
                 default:

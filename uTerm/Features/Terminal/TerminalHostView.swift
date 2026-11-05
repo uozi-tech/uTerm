@@ -78,8 +78,8 @@ final class TerminalContainerView: NSView {
     /// 终端底与卡面同色（凹槽看不出边），再加 6pt 内边距就成了「胶囊上 7、下 14」的不对称
     /// 间距（实机反馈）。左右与底边保留，避开凹槽圆角。
     private static let terminalInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
-    /// 尺寸停止变化多久后才提交给终端。连续拖动期间不断顺延。
-    static let settleDelay: Duration = .milliseconds(80)
+    /// 尺寸停止变化多久后才提交给终端。连续拖动期间不断顺延（判定在共享的 `TerminalResizeSettler`）。
+    static let settleDelay: Duration = TerminalResizeSettler.settleDelay
     /// 查看方式：`log stream --level debug --predicate 'subsystem == "com.uozi.uTerm" AND category == "terminal-resize"'`
     /// （还要把设置里的日志级别调到 debug）。
     private static let logCategory = "terminal-resize"
@@ -94,9 +94,8 @@ final class TerminalContainerView: NSView {
     /// monitor. Safe: the monitor is only mutated from the MainActor while the
     /// view is alive, and `deinit` has exclusive access once it runs.
     private nonisolated(unsafe) var scrollForwardingMonitor: Any?
-    /// 正在等待停稳的目标尺寸；nil = 没有在等。
-    private var heldSize: NSSize?
-    private var settleTask: Task<Void, Never>?
+    /// 「停稳再提交」的判定与顺延计时（与 iOS `MTerminalContainerView` 共用）。
+    private let settler = TerminalResizeSettler()
     /// 成为活动面板时把键盘焦点交给终端：切标签会重新挂载终端视图，焦点不会自己跟过来。
     var isActive = false {
         didSet {
@@ -206,35 +205,35 @@ final class TerminalContainerView: NSView {
             return
         }
         let target = NSRect(x: insets.left, y: insets.bottom, width: width, height: height)
-        let isFirstMount = copyable?.hasHostedLayout == false
-        if settled || isFirstMount || terminalView.frame.size == target.size {
-            if let heldSize, heldSize != target.size {
-                AppLogger.debug("cancelled \(heldSize) -> \(target.size)", category: Self.logCategory)
+        let heldBefore = settler.held
+        let decision = settler.decide(
+            target: TerminalResizeSettler.Target(size: target.size),
+            current: TerminalResizeSettler.Target(size: terminalView.frame.size),
+            isFirstMount: copyable?.hasHostedLayout == false,
+            settled: settled,
+            onSettled: { [weak self] in self?.syncTerminalFrame(settled: true) })
+        switch decision {
+        case .cancel:
+            return  // 只在没有目标时出现，上面已经处理过
+        case .commit:
+            if let heldBefore, heldBefore.size != target.size {
+                AppLogger.debug("cancelled \(heldBefore.size) -> \(target.size)", category: Self.logCategory)
             }
-            cancelHold()
             copyable?.hasHostedLayout = true
             layer?.masksToBounds = false
             terminalView.frame = target
-            return
-        }
-        // 等待期间保持旧尺寸，贴左上角摆放，放不下的部分裁掉。
-        layer?.masksToBounds = true
-        terminalView.setFrameOrigin(Self.pinnedFrame(terminalView.frame.size, in: bounds, insets: insets).origin)
-        guard heldSize != target.size else { return }
-        AppLogger.debug("holding \(terminalView.frame.size) -> \(target.size)", category: Self.logCategory)
-        heldSize = target.size
-        settleTask?.cancel()
-        settleTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.settleDelay)
-            guard !Task.isCancelled else { return }
-            self?.syncTerminalFrame(settled: true)
+        case .hold(let started):
+            // 等待期间保持旧尺寸，贴左上角摆放，放不下的部分裁掉。
+            layer?.masksToBounds = true
+            terminalView.setFrameOrigin(Self.pinnedFrame(terminalView.frame.size, in: bounds, insets: insets).origin)
+            if started {
+                AppLogger.debug("holding \(terminalView.frame.size) -> \(target.size)", category: Self.logCategory)
+            }
         }
     }
 
     private func cancelHold() {
-        settleTask?.cancel()
-        settleTask = nil
-        heldSize = nil
+        settler.cancel()
     }
 
     /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时贴底边，裁掉的是最上面的旧行——
