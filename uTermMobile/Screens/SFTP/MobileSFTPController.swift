@@ -26,7 +26,8 @@ final class MobileSFTPController {
     /// 建连代次：`close()` / `restart()` 递增，在途建连落地时对不上就关掉刚建的会话。
     @ObservationIgnored private var connectGeneration = 0
     @ObservationIgnored private var connectTask: Task<Void, Never>?
-    /// 本控制器下载落盘的目录（每次下载一个独立子目录，关标签时整个删掉）。
+    /// 本控制器下载落盘的根目录（每次下载由 `ExternalFileStager` 在其下建一个独立的
+    /// 0700 子目录，关标签时整个删掉）。
     @ObservationIgnored private let downloadRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("sftp-downloads", isDirectory: true)
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -235,19 +236,25 @@ final class MobileSFTPController {
 
     /// 流式下载到临时文件，返回本地 URL（供系统分享面板使用）。
     ///
-    /// 每次下载一个独立子目录：两个标签同时下同名文件（如 `nginx.conf`）时互不覆盖。
+    /// 落盘路径与 macOS「外部打开」同一套（`ExternalFileStager`）：每次下载一个独立的
+    /// 0700 随机目录、文件名清洗、落盘后收紧到 0600。两个标签同时下同名文件
+    /// （如 `nginx.conf`）时互不覆盖，远端给的怪名字（含 `/`、控制字符）也落不到别处。
     /// 字节经 `SFTPSession` 的固定缓冲流式落盘，不在内存里攒整个文件、也不在主线程写盘。
     func download(_ entry: RemoteEntry, in directory: String? = nil) async -> URL? {
         guard let session else { return nil }
         let full = RemotePath.join(directory ?? path, entry.name)
-        let folder = downloadRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let url = folder.appendingPathComponent(entry.name)
+        var destination: URL?
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = try ExternalFileStager.prepareDestination(
+                suggestedName: entry.name, rootDirectory: downloadRoot)
+            destination = url
             try await session.download(remotePath: full, toLocalURL: url, onProgress: nil)
+            try ExternalFileStager.restrictPermissions(at: url)
             return url
         } catch {
-            try? FileManager.default.removeItem(at: folder)
+            if let destination {
+                try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
+            }
             if self.session != nil { state = .failed(error.localizedDescription) }
             return nil
         }

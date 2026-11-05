@@ -1206,12 +1206,16 @@ final class FileBrowserModel {
         return .data
     }
 
+    /// 拖出到 Finder 的文件承诺落盘路径：独立 0700 随机目录 + 清洗过的文件名
+    /// （`ExternalFileStager`，与外部打开 / iOS 下载同一套）。
+    ///
+    /// 不在落盘后收紧到 0600：这份文件会被系统交给拖放目标（桌面 / Finder 窗口），
+    /// 用户拿到的就是它，权限应保持 SFTP 下载的默认值。
     private static func promisedDownloadURL(fileName: String) throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("uterm-drag-downloads", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return root.appendingPathComponent(fileName, isDirectory: false)
+        try ExternalFileStager.prepareDestination(
+            suggestedName: fileName,
+            rootDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("uterm-drag-downloads", isDirectory: true))
     }
 
     private func closeCurrentProvider() {
