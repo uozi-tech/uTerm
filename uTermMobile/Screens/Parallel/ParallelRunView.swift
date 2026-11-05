@@ -125,7 +125,7 @@ struct ParallelRunView: View {
     }
 
     private func setup() {
-        let targets = request.serverIDs.compactMap { id in allHosts.first { $0.id == id } }
+        let targets = QuickCommandTargets.runnable(request.serverIDs, in: allHosts)
         let c = makeController(ParallelRunSetup(request: request, targets: targets,
                                                 providers: providers, context: context))
         controller = c

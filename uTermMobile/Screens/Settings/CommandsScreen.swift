@@ -128,9 +128,14 @@ struct CommandFormSheet: View {
         .onAppear(perform: load)
     }
 
+    /// 与 macOS 表单同一套校验：名称非空、至少一台主机，AI 命令有意图或命令其一即可。
     private var valid: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !(ai ? intent : command).trimmingCharacters(in: .whitespaces).isEmpty
+        QuickCommandLogic.isSaveable(name: name, hasServers: !orderedSelection.isEmpty,
+                                     command: command, intent: intent, ai: ai)
+    }
+    /// 按可选主机顺序收口（剔除已删除 / 仅 SFTP），对齐 macOS `orderedSelection`。
+    private var orderedSelection: [UUID] {
+        hosts.filter { !$0.sftpOnly && serverIDs.contains($0.id) }.map(\.id)
     }
     private func toggle(_ id: UUID) {
         if serverIDs.contains(id) { serverIDs.remove(id) } else { serverIDs.insert(id) }
@@ -282,16 +287,14 @@ struct CommandFormSheet: View {
         serverIDs = Set(cmd.serverIDs).intersection(selectableIDs)
     }
     private func save() {
-        let c = cmd ?? QuickCommand()
-        c.name = name.trimmingCharacters(in: .whitespaces)
-        c.command = command; c.intent = intent; c.aiAssisted = ai
-        // 按可选主机顺序收口（剔除已删除 / 仅 SFTP），对齐 macOS `orderedSelection`。
-        c.serverIDs = hosts.filter { !$0.sftpOnly && serverIDs.contains($0.id) }.map(\.id)
-        if cmd == nil {
-            c.sortOrder = ((try? context.fetch(FetchDescriptor<QuickCommand>()))?.map(\.sortOrder).max() ?? -1) + 1
-            context.insert(c)
+        let store = QuickCommandStore(context: context)
+        if let cmd {
+            store.update(cmd, name: name, serverIDs: orderedSelection, command: command,
+                         intent: intent, aiAssisted: ai)
+        } else {
+            store.create(name: name, serverIDs: orderedSelection, command: command,
+                         intent: intent, aiAssisted: ai)
         }
-        try? context.save()
         dismiss()
     }
 }

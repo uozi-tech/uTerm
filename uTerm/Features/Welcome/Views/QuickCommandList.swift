@@ -180,9 +180,7 @@ struct QuickCommandList: View {
     /// 运行：多台 → 独立并行执行窗口（广播）；单台 + AI → 工作区 Agent；单台 → 真实执行。
     /// 三路均剔除「仅 SFTP」主机 —— 它们禁命令执行，不能作为目标。
     private func run(_ cmd: QuickCommand) {
-        let targets = cmd.serverIDs
-            .compactMap { id in hosts.first { $0.id == id } }
-            .filter { !$0.sftpOnly }
+        let targets = QuickCommandTargets.runnable(cmd.serverIDs, in: hosts)
         guard !targets.isEmpty else { return }
 
         // 多台 → 独立并行执行窗口（广播 + 逐台结果 / AI 自愈）。运行计数与日志由该窗口

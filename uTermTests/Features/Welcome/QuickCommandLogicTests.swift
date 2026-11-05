@@ -162,4 +162,30 @@ final class QuickCommandLogicTests: XCTestCase {
         let back = try JSONDecoder().decode(QuickCommandAIRecord.self, from: data)
         XCTAssertEqual(back, ai)
     }
+
+    // MARK: runnable（两端运行入口共用的目标筛选）
+
+    @MainActor
+    private func profile(_ name: String, sftpOnly: Bool = false) -> ServerProfile {
+        let p = ServerProfile()
+        p.name = name; p.host = "\(name).example"; p.username = "u"; p.port = 22
+        p.sftpOnly = sftpOnly
+        return p
+    }
+
+    @MainActor
+    func testRunnableKeepsServerIDOrderAndDropsDuplicates() {
+        let a = profile("a"), b = profile("b"), c = profile("c")
+        let picked = QuickCommandTargets.runnable([c.id, a.id, c.id, b.id], in: [a, b, c])
+        XCTAssertEqual(picked.map(\.name), ["c", "a", "b"])
+    }
+
+    @MainActor
+    func testRunnableSkipsSFTPOnlyAndDeletedHosts() {
+        let a = profile("a"), files = profile("files", sftpOnly: true)
+        let picked = QuickCommandTargets.runnable([files.id, UUID(), a.id], in: [a, files])
+        XCTAssertEqual(picked.map(\.name), ["a"])
+        XCTAssertTrue(QuickCommandTargets.runnable([files.id], in: [files]).isEmpty)
+        XCTAssertTrue(QuickCommandTargets.runnable([], in: [a]).isEmpty)
+    }
 }

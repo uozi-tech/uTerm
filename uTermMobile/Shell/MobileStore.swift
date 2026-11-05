@@ -81,10 +81,13 @@ final class MobileStore {
     /// 要求工作区关掉并移除这些会话标签（取消连接、断开整台 Mac 时写入）。
     var teardownTabIDs: Set<UUID> = []
 
-    func runCommand(_ cmd: QuickCommand) {
+    /// 只把真正能下发的主机交给并行执行（剔除已删除 / 仅 SFTP、去重），一台都没有就不开。
+    func runCommand(_ cmd: QuickCommand, hosts: [ServerProfile]) {
+        let targets = QuickCommandTargets.runnable(cmd.serverIDs, in: hosts)
+        guard !targets.isEmpty else { return }
         let session = ParallelRunSession(request: ParallelRunRequest(
             commandID: cmd.id, name: cmd.name, command: cmd.command,
-            intent: cmd.intent, aiAssisted: cmd.aiAssisted, serverIDs: cmd.serverIDs))
+            intent: cmd.intent, aiAssisted: cmd.aiAssisted, serverIDs: targets.map(\.id)))
         parallelSessions.append(session)
         presentedParallel = session
         ParallelBackgroundKeeper.requestProvisionalNotifications()
