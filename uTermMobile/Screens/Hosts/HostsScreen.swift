@@ -226,7 +226,7 @@ struct HostCard: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
-        .mWatchesReachability(of: host)
+        .watchesReachability(of: host)
         .mContextMenu {
             Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
             Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
@@ -235,10 +235,10 @@ struct HostCard: View {
         }
     }
 
-    /// 分组色色块 + 首字母，角标 = 在线状态（见 `MHostAvatar`）。
+    /// 分组色色块 + 首字母，角标 = 在线状态（见 `HostAvatar`）。
     private var avatar: some View {
-        MHostAvatar(monogram: host.monogram,
-                    tint: groupColor,
-                    reachability: HostReachabilityMonitor.shared.entry(for: host))
+        HostAvatar(monogram: host.monogram,
+                   tint: groupColor,
+                   reachability: HostReachabilityMonitor.shared.entry(for: host))
     }
 }

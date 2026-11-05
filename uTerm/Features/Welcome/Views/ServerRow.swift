@@ -89,11 +89,7 @@ struct ServerRow: View {
         // 停更、停下补算一次。
         .rowHover(rowHover, id: profile.id) { hover = $0 }
         // 在线角标：只在行可见期间登记探测，滚出屏幕 task 取消即注销（见 `HostReachabilityMonitor`）。
-        // 跳板机主机 key 为 nil，不探。
-        .task(id: HostEndpointKey(profile)) {
-            guard let key = HostEndpointKey(profile) else { return }
-            await HostReachabilityMonitor.shared.watch(key)
-        }
+        .watchesReachability(of: profile)
         // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
         // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
         // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`
