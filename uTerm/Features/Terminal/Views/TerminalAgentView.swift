@@ -23,7 +23,7 @@ struct TerminalAgentView: View {
     // 同 `AssistantView`：会话历史只取最近 `ChatSessionQueries.recentLimit` 条。
     @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
     @State private var followsConversationTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
     @State private var expandedWindowLimit: Int?
 
@@ -112,8 +112,7 @@ struct TerminalAgentView: View {
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
                         followsConversationTail = false
-                        pendingTailScroll?.cancel()
-                        pendingTailScroll = nil
+                        tailScroll.cancel()
                     }
                     if phase == .idle {
                         followsConversationTail = AgentScrollPolicy.isNearBottom(
@@ -137,8 +136,7 @@ struct TerminalAgentView: View {
                 // 换会话时把渲染窗口收回默认值。
                 .onChange(of: model.messages.first?.id) { _, _ in expandedWindowLimit = nil }
                 .onDisappear {
-                    pendingTailScroll?.cancel()
-                    pendingTailScroll = nil
+                    tailScroll.cancel()
                 }
             }
         }
@@ -191,19 +189,10 @@ struct TerminalAgentView: View {
     private static let bottomAnchorID = "ta.bottom"
 
     private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
-        guard followsConversationTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                // 滚到对话末尾的贴底锚点；合并到最多每 100ms 一次，与 Markdown
-                // 重排节奏一致，避免逐 token 重入 LazyVStack 布局。
-                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-            }
-        }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AgentScrollPolicy.coalescingDelay,
-            execute: work)
+        guard followsConversationTail else { return }
+        // 滚到对话末尾的贴底锚点；合并到最多每 100ms 一次，与 Markdown
+        // 重排节奏一致，避免逐 token 重入 LazyVStack 布局。
+        tailScroll.schedule { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
     }
 
     @ViewBuilder

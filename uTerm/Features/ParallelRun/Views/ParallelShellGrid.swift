@@ -39,9 +39,9 @@ struct ParallelShellPane: View {
     var onTrustAndRetry: (UUID) -> Void = { _ in }
 
     @State private var followsTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
     /// 输出停下来之后补发「真·底部」的那一发（把运行光标 / 指纹卡带进视野）。
-    @State private var pendingSettleScroll: DispatchWorkItem?
+    @State private var settleScroll = TailScrollCoalescer(delay: ParallelShellPane.settleDelay)
     /// 最后一行的 id —— 热路径贴底就贴它（在 `LazyVStack` 里面，跳过去便宜）。
     @State private var tailLineID: UUID?
 
@@ -165,40 +165,21 @@ struct ParallelShellPane: View {
     /// 所以锚点必须是 `ForEach` 里的真行。
     private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
         guard followsTail else { return }
-        if pendingTailScroll == nil {
-            let work = DispatchWorkItem {
-                MainActor.assumeIsolated {
-                    pendingTailScroll = nil
-                    // 读的是 @State 的当前值（不是排队时的快照），合并窗口里又进了
-                    // 几行也贴得到真正的最后一行。
-                    if let id = tailLineID {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    } else {
-                        proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-                    }
-                }
-            }
-            pendingTailScroll = work
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + AgentScrollPolicy.coalescingDelay,
-                execute: work)
-        }
-        pendingSettleScroll?.cancel()
-        let settle = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingSettleScroll = nil
+        tailScroll.schedule {
+            // 读的是 @State 的当前值（不是排队时的快照），合并窗口里又进了
+            // 几行也贴得到真正的最后一行。
+            if let id = tailLineID {
+                proxy.scrollTo(id, anchor: .bottom)
+            } else {
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
         }
-        pendingSettleScroll = settle
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: settle)
+        settleScroll.restart { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
     }
 
     private func cancelPendingTailScroll() {
-        pendingTailScroll?.cancel()
-        pendingTailScroll = nil
-        pendingSettleScroll?.cancel()
-        pendingSettleScroll = nil
+        tailScroll.cancel()
+        settleScroll.cancel()
     }
 
     private var durationText: String {

@@ -58,6 +58,35 @@ final class AgentStreamingPolicyTests: XCTestCase {
         XCTAssertEqual(renderer.renderedSource, "ABC")
     }
 
+    // MARK: - 贴底滚动合并器
+
+    func testTailScrollCoalescerFiresOncePerWindow() async throws {
+        let coalescer = TailScrollCoalescer(delay: 0.02)
+        var fired = 0
+        coalescer.schedule { fired += 1 }
+        coalescer.schedule { fired += 100 }   // 窗口里已有一次：合并掉
+        XCTAssertTrue(coalescer.isPending)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(fired, 1)
+        XCTAssertFalse(coalescer.isPending)
+        coalescer.schedule { fired += 1 }     // 窗口过了，下一次照常排
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(fired, 2)
+    }
+
+    func testTailScrollCoalescerRestartDebouncesAndCancelDrops() async throws {
+        let coalescer = TailScrollCoalescer(delay: 0.03)
+        var log: [String] = []
+        coalescer.restart { log.append("first") }
+        coalescer.restart { log.append("second") }   // 重新计时，只留最后一次
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(log, ["second"])
+        coalescer.schedule { log.append("dropped") }
+        coalescer.cancel()
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(log, ["second"])
+    }
+
     func testNearBottomPolicyAllowsShortContentAndToleranceBand() {
         XCTAssertTrue(AgentScrollPolicy.isNearBottom(
             visibleMaxY: 400, contentHeight: 300))

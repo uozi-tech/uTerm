@@ -676,6 +676,8 @@ struct ParShellPane: View {
     /// 默认 false = 窄屏列表，格高随输出（与改前一致）。
     var fillsCell = false
     var onTrust: () -> Void
+    /// 格内贴底的合并器：一阵输出只滚一次，不再每来一批新行就起一个 Task 推一拍。
+    @State private var tailScroll = TailScrollCoalescer()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -776,8 +778,8 @@ struct ParShellPane: View {
     private static let bottomID = "par-shell-bottom"
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        // 推迟一拍：同步滚会落在新行布局之前的旧底部。
-        Task { @MainActor in proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+        // 推迟到合并窗口末：同步滚会落在新行布局之前的旧底部；合并后一阵输出只滚一次。
+        tailScroll.schedule { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
     }
 
     private func lineColor(_ kind: PLine.Kind) -> Color {

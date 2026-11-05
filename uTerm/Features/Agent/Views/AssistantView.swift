@@ -83,7 +83,7 @@ struct AssistantView: View {
 
     @State private var showSessions = false
     @State private var followsChatTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
     @State private var expandedWindowLimit: Int?
 
@@ -324,8 +324,7 @@ struct AssistantView: View {
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
                         followsChatTail = false
-                        pendingTailScroll?.cancel()
-                        pendingTailScroll = nil
+                        tailScroll.cancel()
                     }
                     if phase == .idle {
                         followsChatTail = AgentScrollPolicy.isNearBottom(
@@ -358,8 +357,7 @@ struct AssistantView: View {
                     }
                 }
                 .onDisappear {
-                    pendingTailScroll?.cancel()
-                    pendingTailScroll = nil
+                    tailScroll.cancel()
                 }
             }
             AgentQueueStrip(model: model,
@@ -447,17 +445,8 @@ struct AssistantView: View {
     private static let bottomAnchorID = "assistant.bottom"
 
     private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
-        guard followsChatTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-            }
-        }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AgentScrollPolicy.coalescingDelay,
-            execute: work)
+        guard followsChatTail else { return }
+        tailScroll.schedule { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
     }
 
     // MARK: - 渲染窗口

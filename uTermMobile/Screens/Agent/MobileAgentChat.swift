@@ -46,7 +46,7 @@ struct MobileAgentChat: View {
     /// 用户点开「显示更早」后放大的上限；`nil` 表示仍用 `messageWindowLimit`。
     @State private var expandedWindowLimit: Int?
     @State private var followsTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
     @State private var sendCount = 0
     /// 活动 provider 的持久化选择（与 macOS 共用 key，可经 iCloud KVS 同步）。
     @AppStorage("activeProviderID") private var activeProviderIDString = ""
@@ -187,8 +187,7 @@ struct MobileAgentChat: View {
                 .onScrollPhaseChange { _, phase, context in
                     if phase == .tracking || phase == .interacting {
                         followsTail = false
-                        pendingTailScroll?.cancel()
-                        pendingTailScroll = nil
+                        tailScroll.cancel()
                     }
                     if phase == .idle {
                         followsTail = AgentScrollPolicy.isNearBottom(
@@ -215,8 +214,7 @@ struct MobileAgentChat: View {
                 // 换会话（首条消息换身份）时把「显示更早」放开的窗口收回默认值。
                 .onChange(of: model.messages.first?.id) { _, _ in expandedWindowLimit = nil }
                 .onDisappear {
-                    pendingTailScroll?.cancel()
-                    pendingTailScroll = nil
+                    tailScroll.cancel()
                 }
             }
         }
@@ -225,16 +223,9 @@ struct MobileAgentChat: View {
     private static let bottomAnchor = "magent.bottom"
 
     private func scheduleScrollToBottom(_ proxy: ScrollViewProxy) {
-        guard followsTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                // 合并到最多每 100ms 一次，与 Markdown 重排节奏一致，避免逐 token 重入布局。
-                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-            }
-        }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + AgentScrollPolicy.coalescingDelay, execute: work)
+        guard followsTail else { return }
+        // 合并到最多每 100ms 一次，与 Markdown 重排节奏一致，避免逐 token 重入布局。
+        tailScroll.schedule { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
     }
 
     // MARK: - 空状态（按诊断 / 配置 / 部署分组的示例）

@@ -13,7 +13,7 @@ struct ParallelAgentView: View {
     let onTrustAndRetry: (UUID) -> Void
 
     @State private var followsTail = true
-    @State private var pendingTailScroll: DispatchWorkItem?
+    @State private var tailScroll = TailScrollCoalescer()
 
     private var total: Int { states.count }
     private var resolvedAll: Bool { states.allSatisfy { $0.tone != .running } }
@@ -87,22 +87,12 @@ struct ParallelAgentView: View {
     }
 
     private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
-        guard followsTail, pendingTailScroll == nil else { return }
-        let work = DispatchWorkItem {
-            MainActor.assumeIsolated {
-                pendingTailScroll = nil
-                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-            }
-        }
-        pendingTailScroll = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AgentScrollPolicy.coalescingDelay,
-            execute: work)
+        guard followsTail else { return }
+        tailScroll.schedule { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
     }
 
     private func cancelPendingTailScroll() {
-        pendingTailScroll?.cancel()
-        pendingTailScroll = nil
+        tailScroll.cancel()
     }
 
     /// 「N 台」加粗强调，其余继承正文。用 AttributedString 避免 Text `+`（macOS 26 弃用）。
