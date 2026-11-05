@@ -1,13 +1,22 @@
 import Foundation
-import AppKit
 import SwiftTerm
+#if canImport(AppKit)
+import AppKit
+/// 终端配色用的平台颜色类型：macOS `NSColor` / iOS `UIColor`（SwiftTerm 两端的 `TerminalView` 各收各的）。
+typealias TerminalPlatformColor = NSColor
+#else
+import UIKit
+typealias TerminalPlatformColor = UIColor
+#endif
 
 /// 一套完整的终端配色：背景 / 前景 / accent + 16 色 ANSI 表。
 /// bright 8-15 由 normal 0-7 经 lighten 公式生成。
 ///
 /// 配色不再可自定义：终端固定用 VS Code 家族的前景 / ANSI 色，按 app 外观自动取
 /// 深 / 浅变体（`resolve(dark:)`）。深色背景对齐工作区基底。
-struct TerminalColorScheme {
+///
+/// macOS 与 iOS 共用这一份表（iOS 的 `MTerminalColors` 只是转发壳）；装进视图走 `TerminalAppearance`。
+nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 渲染期最低 WCAG 对比度（VS Code `minimumContrastRatio` 同思路）。远端
     /// prompt / TUI（p10k 等）常按深色背景硬编码 256 色 / 真彩色，不经过下面的
     /// 16 色 ANSI 表——浅色背景下唯一可靠的解法是渲染时钳制前景色（vendored
@@ -19,11 +28,14 @@ struct TerminalColorScheme {
     static let minimumContrastRatio: CGFloat = 3.0
 
     let displayName: String
-    let backgroundColor: NSColor
-    let foregroundColor: NSColor
-    let accentColor: NSColor
+    let backgroundColor: TerminalPlatformColor
+    let foregroundColor: TerminalPlatformColor
+    let accentColor: TerminalPlatformColor
     /// 光标块填充色（深色方案沿用 VS Code #AEAFAD；浅色方案用深色 caret）。
-    let cursorColor: NSColor
+    let cursorColor: TerminalPlatformColor
+    /// 选区底色：与编辑器同用 VS Code 选区蓝（深 #264F78 / 浅 #ADD6FF，同 `EditorTheme.selectionBg`），
+    /// 保证选中文字在两种底上都可读。
+    let selectionColor: TerminalPlatformColor
     /// 16-色 ANSI palette（0-7 normal, 8-15 bright），按 SwiftTerm.installColors 顺序。
     let ansiColors: [SwiftTerm.Color]
 
@@ -35,6 +47,18 @@ struct TerminalColorScheme {
             return UInt16(scaled / 10)
         }
         return SwiftTerm.Color(red: blend(c.red), green: blend(c.green), blue: blend(c.blue))
+    }
+
+    /// sRGB 0xRRGGBB → 平台颜色。
+    private static func rgb(_ hex: UInt32) -> TerminalPlatformColor {
+        let r = CGFloat((hex >> 16) & 0xFF) / 255
+        let g = CGFloat((hex >> 8) & 0xFF) / 255
+        let b = CGFloat(hex & 0xFF) / 255
+        #if canImport(AppKit)
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+        #else
+        return UIColor(red: r, green: g, blue: b, alpha: 1)
+        #endif
     }
 
     private static func ansi(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> SwiftTerm.Color {
@@ -70,10 +94,11 @@ struct TerminalColorScheme {
         displayName: "VS Code Dark",
         // 暗夜终端底 = 卡面色 #141414（UD.panel）：终端坐在工作区内容卡的凹槽里，纯黑会成一块
         // 黑洞、四角还露出卡面色的圆角帽（实机反馈「终端背景不用纯黑」）。与日间「白终端 = 白卡」同理。
-        backgroundColor: NSColor(srgbRed: 0x14/255, green: 0x14/255, blue: 0x14/255, alpha: 1),
-        foregroundColor: NSColor(srgbRed: 0xD4/255, green: 0xD4/255, blue: 0xD4/255, alpha: 1),
-        accentColor: NSColor(srgbRed: 0x56/255, green: 0x9C/255, blue: 0xD6/255, alpha: 1),
-        cursorColor: NSColor(srgbRed: 0xAE/255, green: 0xAF/255, blue: 0xAD/255, alpha: 1),
+        backgroundColor: rgb(0x141414),
+        foregroundColor: rgb(0xD4D4D4),
+        accentColor: rgb(0x569CD6),
+        cursorColor: rgb(0xAEAFAD),
+        selectionColor: rgb(0x264F78),
         ansiColors: makeAnsi(
             black:   (0x00, 0x00, 0x00),
             red:     (0xF1, 0x4C, 0x4C),
@@ -92,10 +117,11 @@ struct TerminalColorScheme {
     /// 深灰段底上提亮，两种方向都正确。
     static let vscodeLight = TerminalColorScheme(
         displayName: "VS Code Light",
-        backgroundColor: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-        foregroundColor: NSColor(srgbRed: 0x3B/255, green: 0x3B/255, blue: 0x3B/255, alpha: 1),
-        accentColor: NSColor(srgbRed: 0x00/255, green: 0x5F/255, blue: 0xB8/255, alpha: 1),
-        cursorColor: NSColor(srgbRed: 0x3B/255, green: 0x3B/255, blue: 0x3B/255, alpha: 1),
+        backgroundColor: rgb(0xFFFFFF),
+        foregroundColor: rgb(0x3B3B3B),
+        accentColor: rgb(0x005FB8),
+        cursorColor: rgb(0x3B3B3B),
+        selectionColor: rgb(0xADD6FF),
         ansiColors: makeAnsi(
             normals: [(0x00,0x00,0x00),(0xCD,0x31,0x31),(0x00,0xBC,0x00),(0x94,0x98,0x00),
                       (0x04,0x51,0xA5),(0xBC,0x05,0xBC),(0x05,0x98,0xBC),(0x55,0x55,0x55)],

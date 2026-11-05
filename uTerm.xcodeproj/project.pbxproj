@@ -281,8 +281,6 @@
 				Features/Terminal/SSHSessionRestorer.swift,
 				Features/Terminal/TerminalAttentionCenter.swift,
 				Features/Terminal/TerminalCloseGuard.swift,
-				Features/Terminal/TerminalColorScheme.swift,
-				Features/Terminal/TerminalCursorShape.swift,
 				Features/Terminal/TerminalHostView.swift,
 				Features/Terminal/TerminalMirrorTap.swift,
 				Features/Terminal/TerminalQuitPolicy.swift,
