@@ -41,4 +41,25 @@ struct ServerProfileStore {
         }
         if changed { try? context.save() }
     }
+
+    /// 删除一台主机及其附属数据，两端共用：
+    /// - 钥匙串里**本主机自己**的 password / passphrase / 旧版按 `profile.id` 存的 privateKey；
+    /// - 按 serverID 关联的端口转发规则（不删会成无主孤儿）；
+    /// - 其它主机里把它当跳板机的 `jumpHost` 引用显式置空（否则留下指向已删服务器的悬空引用）。
+    ///
+    /// `jumpHost` 是「引用一台已有服务器」，被引用者本身仍是正常服务器——故绝不删
+    /// `profile.jumpHost` 或它的 secrets / 规则。关会话等界面收尾由调用方在调用前做。
+    func delete(_ profile: ServerProfile, keychain: KeychainStore = KeychainStore()) {
+        let id = profile.id
+        for kind in [SecretKind.password, .passphrase, .privateKey] {
+            try? keychain.delete(profileID: id, kind: kind)
+        }
+        ForwardingRuleStore(context: context).deleteAll(forServer: id)
+        let profiles = (try? context.fetch(FetchDescriptor<ServerProfile>())) ?? []
+        for other in profiles where other.id != id && other.jumpHost?.id == id {
+            other.jumpHost = nil
+        }
+        context.delete(profile)
+        try? context.save()
+    }
 }

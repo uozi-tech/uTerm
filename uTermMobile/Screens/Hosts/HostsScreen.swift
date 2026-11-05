@@ -159,11 +159,8 @@ struct HostsScreen: View {
             }
             if workspace.isEmpty { store.showWorkspace = false }
         }
-        let keychain = KeychainStore()
-        try? keychain.delete(profileID: host.id, kind: .password)
-        try? keychain.delete(profileID: host.id, kind: .passphrase)
-        context.delete(host)
-        try? context.save()
+        // 钥匙串 secrets / 端口转发规则 / 跳板机悬空引用一并清理（改前漏了后三者）。
+        ServerProfileStore(context: context).delete(host)
         pendingDelete = nil
     }
 }
