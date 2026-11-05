@@ -8,6 +8,7 @@ struct RemoteMacSection: View {
     @Environment(MobileStore.self) private var store: MobileStore?
     @State private var selected: RemoteMacDirectory.Mac?
     @State private var scanning = false
+    @Environment(\.mAccent) private var accent
     /// 刚扫码配上、此刻还不在线的 Mac：它一上线就自动打开。
     @State private var awaitingMac: String?
 
@@ -18,23 +19,17 @@ struct RemoteMacSection: View {
     }
 
     private func group(_ directory: RemoteMacDirectory) -> some View {
-        MInsetGroup(header: "我的 Mac", footer: footer(directory)) {
+        MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
             if !directory.isActivated {
-                MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端",
-                          sub: "同一 Wi-Fi 下使用", chevron: true) {
+                MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
                     directory.activate()
                 }
             } else if directory.macs.isEmpty {
-                MInsetRow(icon: "mac", label: "还没有配对的 Mac",
-                          sub: "同一 Apple ID 的 Mac 打开 设置 › 远程控制 后会自动出现")
+                MInsetRow(icon: "mac", label: "还没有配对的 Mac", sub: "同一 Apple ID 的 Mac 会自动出现", last: true)
             } else {
                 ForEach(directory.macs) { mac in
-                    macRow(mac)
+                    macRow(mac, last: mac.id == directory.macs.last?.id)
                 }
-            }
-            MInsetRow(icon: "qr", label: "扫码配对 Mac", sub: "其他 Apple ID 的 Mac：在它的 设置 › 远程控制 里显示二维码",
-                      chevron: true, last: true) {
-                scanning = true
             }
         }
         .onAppear {
@@ -65,24 +60,20 @@ struct RemoteMacSection: View {
         }
     }
 
-    private func macRow(_ mac: RemoteMacDirectory.Mac) -> some View {
-        MInsetRow(icon: "mac", iconColor: mac.isOnline ? nil : M.text3, label: mac.name,
-                  sub: source(mac), value: mac.isOnline ? nil : "不在线", chevron: mac.isOnline,
-                  onTap: mac.isOnline ? { selected = mac } : nil)
-    }
-
-    private func source(_ mac: RemoteMacDirectory.Mac) -> String? {
-        switch mac.source {
-        case .iCloud: return "同一 Apple ID"
-        case .paired: return "扫码配对"
-        case .debug: return nil
+    /// 不同 Apple ID 的 Mac 扫它 设置 › 远程控制 里的二维码配对。同一 Apple ID 的自动出现，用不着它。
+    private var scanButton: some View {
+        Button { scanning = true } label: {
+            Label("扫码配对", systemImage: "qrcode.viewfinder")
+                .font(M.sans(13, weight: .medium))
+                .foregroundStyle(accent)
         }
+        .buttonStyle(.borderless)
     }
 
-    private func footer(_ directory: RemoteMacDirectory) -> String? {
-        directory.isActivated
-            ? "只显示配对过的 Mac。同一 Apple ID 的设备要打开 iCloud 钥匙串才能自动配对。"
-            : "首次使用会请求「本地网络」权限，用于连接局域网里你的 Mac。"
+    private func macRow(_ mac: RemoteMacDirectory.Mac, last: Bool) -> some View {
+        MInsetRow(icon: "mac", iconColor: mac.isOnline ? nil : M.text3, label: mac.name,
+                  value: mac.isOnline ? nil : "不在线", chevron: mac.isOnline, last: last,
+                  onTap: mac.isOnline ? { selected = mac } : nil)
     }
 }
 

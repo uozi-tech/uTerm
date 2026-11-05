@@ -241,6 +241,29 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
+    /// 主机页的「我的 Mac」：一台在线（调试直连）、一台不在线（名册里的），标题右侧是扫码配对。
+    func testRemoteMacSection() async throws {
+        defer { MobileProbeWindow.closeAll() }
+        let suite = "StyleGalleryTests.remoteMacs.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("127.0.0.1:1", forKey: "RemoteDebugEndpoint")
+        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
+        roster.publish(RemoteRosterEntry(id: UUID(), name: "办公室 iMac", publicKey: Data(count: 32), platform: .mac,
+                                         updatedAt: .now))
+        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                           roster: roster, defaults: defaults)
+        directory.activate()
+        for device in Self.devices {
+            try await shoot("remote-mac-section", on: device) {
+                ScrollView { RemoteMacSection().padding(.top, 20) }
+                    .background(M.canvas)
+                    .environment(directory)
+                    .environment(MobileStore())
+            }
+        }
+    }
+
     /// 远程桌面的键盘条：与终端同一个外壳，黑底深色。
     func testRemoteDesktopKeyBarPanels() async throws {
         defer { MobileProbeWindow.closeAll() }

@@ -55,7 +55,6 @@ enum MGlyph {
         case "person":     return "person"
         case "eye":        return "eye"
         case "eye-off":    return "eye.slash"
-        case "qr":         return "qrcode.viewfinder"
         default:           return "circle"
         }
     }

@@ -330,6 +330,8 @@ struct MChip: View {
 
 struct MInsetGroup<Content: View>: View {
     var header: String? = nil
+    /// 区段标题右侧的小操作（例如「扫码配对」）。
+    var headerTrailing: AnyView? = nil
     var footer: String? = nil
     /// 行数可能上千（如已知主机指纹）时置 true：行按需构建，而不是一打开就全部建出来。
     var lazy = false
@@ -339,11 +341,15 @@ struct MInsetGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             if let header {
                 // 区段标题与脚注是信息层（text3），不是装饰层（text4 只给分隔线 / 行号 / 禁用态）。
-                Text(header.uppercased())
-                    .font(M.sans(12, weight: .semibold))
-                    .tracking(0.4)
-                    .foregroundStyle(M.text3)
-                    .padding(.horizontal, 20).padding(.bottom, 7)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(header.uppercased())
+                        .font(M.sans(12, weight: .semibold))
+                        .tracking(0.4)
+                        .foregroundStyle(M.text3)
+                    Spacer(minLength: 8)
+                    if let headerTrailing { headerTrailing }
+                }
+                .padding(.horizontal, 20).padding(.bottom, 7)
             }
             Group {
                 if lazy { LazyVStack(spacing: 0) { content } } else { VStack(spacing: 0) { content } }
