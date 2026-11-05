@@ -35,29 +35,8 @@ final class FileBrowserModel {
         var status: Status
     }
 
-    /// 递归删除的进度快照。值类型，驱动侧栏 / 独立窗口顶部的删除进度条。
-    ///
-    /// 两段式：先深度优先枚举整棵子树（总数未知 → 不定态 + 已发现计数），
-    /// 再逐项删（确定态 done/total）。删一个几千项的目录要几千次网络往返，
-    /// 没有这条状态用户只能对着不动的列表干等。
-    struct DeletionProgress: Equatable, Sendable {
-        enum Phase: Sendable, Equatable { case counting, deleting }
-        /// 被删的顶层项名（展示用）。
-        let name: String
-        var phase: Phase
-        /// counting 阶段 = 已发现条目数；deleting 阶段 = 已删除条目数。
-        var count: Int
-        /// 待删总条目数（含目录自身）。counting 阶段为 nil。
-        var total: Int?
-        /// 用户已点取消，正在等当前这次网络往返返回。
-        var isCancelling: Bool
-
-        /// 确定态进度（0...1）。counting 阶段恒 0（视图此时用不定态条）。
-        var fraction: Double {
-            guard let total, total > 0 else { return 0 }
-            return min(1, Double(count) / Double(total))
-        }
-    }
+    /// 递归删除的进度快照（两端共享的 `RemoteDeletionProgress`），这里保留旧名。
+    typealias DeletionProgress = RemoteDeletionProgress
 
     private(set) var state: State = .idle
     private(set) var currentPath: String = "/"
@@ -141,11 +120,6 @@ final class FileBrowserModel {
     private(set) var deletion: DeletionProgress?
     /// 取消旗标。`cancelDeletion()` 置位，删除循环在每次往返前检查。
     private var deletionCancelled = false
-    /// 上一次把删除进度写回 `deletion` 的时刻（节流用）。
-    private var lastDeletionPublish: Date?
-    /// 删除进度写回的最小间隔：每删一项都写会让 SwiftUI 在大目录上每秒重渲染上千次。
-    private static let deletionPublishInterval: TimeInterval = 0.10
-    private static let ownerStatChunkSize = 80
     @ObservationIgnored private var ownerEnrichmentTask: Task<Void, Never>?
     private var ownerEnrichmentGeneration = 0
 
@@ -430,17 +404,17 @@ final class FileBrowserModel {
         guard let provider, entry.isSymlink, !isNavigating else { return nil }
         isNavigating = true
         defer { isNavigating = false }
-        let linkPath = Self.join(currentPath, entry.name)
-        if let targetEntries = try? await provider.list(path: linkPath) {
+        switch await RemoteFileOperations.resolveSymlink(entry, in: currentPath, provider: provider) {
+        case .directory(let linkPath, let targetEntries):
             currentPath = linkPath
             entries = await resolveOwnerNames(for: targetEntries, provider: provider, directoryPath: linkPath)
             state = .browsing
             didEverBrowse = true
             transientError = nil
             return nil
+        case .file(let linkPath, let size, let mtime):
+            return (linkPath, size, mtime)
         }
-        let stat = try? await provider.stat(linkPath)
-        return (linkPath, stat?.size, stat?.mtime)
     }
 
     func upload(fileName: String, data: Data) async {
@@ -470,12 +444,13 @@ final class FileBrowserModel {
         } catch { transientError = "新建文件失败：\(error)" }
     }
 
+    /// 同目录改名。名字去首尾空白；空名或没变不发请求、也不刷新（共享的
+    /// `RemoteFileOperations.rename`，iOS 同一条规则）。
     func rename(entry: RemoteEntry, to newName: String) async {
         guard let provider else { return }
-        let from = Self.join(currentPath, entry.name)
-        let to = Self.join(currentPath, newName)
         do {
-            try await provider.rename(from, to: to)
+            guard try await RemoteFileOperations.rename(
+                entry, to: newName, in: currentPath, provider: provider) else { return }
             await refresh()
         } catch { transientError = "重命名失败：\(error)" }
     }
@@ -577,28 +552,22 @@ final class FileBrowserModel {
             transientError = "正在删除「\(deletion?.name ?? "")」，请等它结束后再删下一项。"
             return
         }
-        let path = Self.join(currentPath, entry.name)
         var failure: String?
         if entry.isDirectory {
             deletionCancelled = false
-            lastDeletionPublish = nil
-            deletion = DeletionProgress(name: entry.name, phase: .counting,
-                                        count: 0, total: nil, isCancelling: false)
-            do {
-                try await deleteTree(at: path, provider: provider)
-            } catch is DeletionCancelled {
-                // 用户主动取消：不是错误，只把已删掉的部分刷出来。
-            } catch {
-                failure = "删除失败：\(FriendlyError.describe(error))"
-            }
-            deletion = nil
-        } else {
-            do {
-                try await provider.removeFile(path)
-            } catch {
-                failure = "删除失败：\(FriendlyError.describe(error))"
-            }
+            deletion = .starting(entry.name)
         }
+        do {
+            try await RemoteFileOperations.delete(
+                entry, in: currentPath, provider: provider,
+                isCancelled: { deletionCancelled },
+                onProgress: { deletion?.apply($0) })
+        } catch is RemoteFileOperations.DeletionCancelled {
+            // 用户主动取消：不是错误，只把已删掉的部分刷出来。
+        } catch {
+            failure = "删除失败：\(FriendlyError.describe(error))"
+        }
+        deletion = nil
         await refresh()
         if let failure { transientError = failure }
     }
@@ -611,72 +580,6 @@ final class FileBrowserModel {
         deletion?.isCancelling = true
     }
 
-    /// 内部流程控制哨兵：用户取消删除。不上报给用户（不是错误）。
-    private struct DeletionCancelled: Error {}
-
-    /// 递归删目录：先一趟广度优先枚举拿到全部待删项（顺带得到总数 → 进度条能给
-    /// 确定态），再先删文件、后按发现顺序**倒序**删目录。
-    ///
-    /// 倒序即可保证 rmdir 时目录一定已空：枚举是前序的（父一定先于子入列），
-    /// 倒过来自然子先于父。这样整棵树只需一次 list 遍历，不必边删边重列。
-    private func deleteTree(at root: String, provider: any SFTPProviding) async throws {
-        // 前序：`directories[0]` 是 root，父恒排在子之前。
-        var directories: [String] = [root]
-        var files: [String] = []
-        var cursor = 0
-        while cursor < directories.count {
-            try checkDeletionCancelled()
-            let dir = directories[cursor]
-            cursor += 1
-            for child in try await provider.list(path: dir) {
-                let childPath = Self.join(dir, child.name)
-                // symlink 的 isDirectory 恒 false（列目录走 lstat）→ 只 unlink 链接
-                // 本身，绝不跟随它进目标目录删别人的东西。
-                if child.isDirectory {
-                    directories.append(childPath)
-                } else {
-                    files.append(childPath)
-                }
-            }
-            publishDeletionCount(files.count + directories.count, force: false)
-        }
-
-        try checkDeletionCancelled()
-        deletion?.phase = .deleting
-        deletion?.count = 0
-        deletion?.total = files.count + directories.count
-        lastDeletionPublish = nil
-
-        var done = 0
-        for file in files {
-            try checkDeletionCancelled()
-            try await provider.removeFile(file)
-            done += 1
-            publishDeletionCount(done, force: false)
-        }
-        for directory in directories.reversed() {
-            try checkDeletionCancelled()
-            try await provider.removeDirectory(directory)
-            done += 1
-            publishDeletionCount(done, force: false)
-        }
-        publishDeletionCount(done, force: true)
-    }
-
-    private func checkDeletionCancelled() throws {
-        if deletionCancelled { throw DeletionCancelled() }
-    }
-
-    /// 把计数写回 `deletion`，按 `deletionPublishInterval` 节流。
-    /// `force` 用于阶段收尾，保证最后一帧（100%）一定落到 UI 上。
-    private func publishDeletionCount(_ count: Int, force: Bool) {
-        let now = Date()
-        if !force, let last = lastDeletionPublish,
-           now.timeIntervalSince(last) < Self.deletionPublishInterval { return }
-        lastDeletionPublish = now
-        deletion?.count = count
-    }
-
     /// 设置文件 / 文件夹权限（chmod）。`mode` 取低 9 位（`& 0o777`）。
     /// - 非递归（或文件）：走 SFTP `setstat`（`provider.setPermissions`）。
     /// - 递归（目录 + `recursive`）：开 exec channel 跑 `chmod -R <oct> <path>`，
@@ -684,15 +587,9 @@ final class FileBrowserModel {
     /// 完成后刷新列表；失败置 `transientError`。
     func setPermissions(entry: RemoteEntry, mode: UInt32, recursive: Bool) async {
         guard let provider else { return }
-        let path = Self.join(currentPath, entry.name)
-        let perm = mode & 0o777
         do {
-            if recursive && entry.isDirectory {
-                let oct = String(perm, radix: 8)
-                _ = try await provider.exec("chmod -R \(oct) \(Self.shellQuote(path))")
-            } else {
-                try await provider.setPermissions(path: path, mode: perm)
-            }
+            try await RemoteFileOperations.setPermissions(
+                entry, in: currentPath, mode: mode, recursive: recursive, provider: provider)
             await refresh()
         } catch { transientError = "权限设置失败：\(error)" }
     }
@@ -713,10 +610,8 @@ final class FileBrowserModel {
 
     /// 同上，但入参是文件名（供测试 / 程序化上传）。
     func existingRemoteNames(uploadFileNames names: [String]) async -> [String] {
-        guard let provider, !names.isEmpty else { return [] }
-        guard let listed = try? await provider.list(path: currentPath) else { return [] }
-        let existing = Set(listed.map(\.name))
-        return names.filter { existing.contains($0) }
+        guard let provider else { return [] }
+        return await RemoteFileOperations.existingNames(names, in: currentPath, provider: provider)
     }
 
     // MARK: - 传输队列
@@ -1037,78 +932,11 @@ final class FileBrowserModel {
         RemotePath.shellQuote(s)
     }
 
-    private struct OwnerStatRow {
-        let uid: UInt32?
-        let gid: UInt32?
-        let ownerName: String?
-        let groupName: String?
-    }
-
+    /// 属主名补全（共享的 `RemoteFileOperations.resolveOwnerNames`）。iOS 不跑这一步。
     private func resolveOwnerNames(for entries: [RemoteEntry],
                                    provider: any SFTPProviding,
                                    directoryPath: String) async -> [RemoteEntry] {
-        guard !entries.isEmpty else { return entries }
-        var resolved = entries
-        let indexedEntries = entries.enumerated()
-            .filter { $0.element.uid != nil || $0.element.gid != nil }
-            .map { (index: $0.offset, entry: $0.element) }
-        guard !indexedEntries.isEmpty else { return entries }
-
-        for start in stride(from: 0, to: indexedEntries.count, by: Self.ownerStatChunkSize) {
-            let end = min(start + Self.ownerStatChunkSize, indexedEntries.count)
-            let chunk = Array(indexedEntries[start..<end])
-            let paths = chunk.map { Self.join(directoryPath, $0.entry.name) }
-            let command = Self.ownerStatCommand(paths: paths)
-            guard let output = try? await provider.exec(command) else { continue }
-            let rows = Self.parseOwnerStatOutput(output)
-            guard rows.count == chunk.count else { continue }
-
-            for (indexed, row) in zip(chunk, rows) {
-                resolved[indexed.index] = Self.entry(indexed.entry, applying: row)
-            }
-        }
-        return resolved
-    }
-
-    private static func entry(_ entry: RemoteEntry, applying row: OwnerStatRow) -> RemoteEntry {
-        let uid = row.uid ?? entry.uid
-        let gid = row.gid ?? entry.gid
-        let ownerName = row.uid == entry.uid || entry.uid == nil ? row.ownerName : nil
-        let groupName = row.gid == entry.gid || entry.gid == nil ? row.groupName : nil
-        return entry.withOwnerInfo(
-            uid: uid,
-            gid: gid,
-            ownerName: ownerName,
-            groupName: groupName)
-    }
-
-    private static func ownerStatCommand(paths: [String]) -> String {
-        let quotedPaths = paths.map(shellQuote).joined(separator: " ")
-        let gnuFormat = shellQuote("%u\t%g\t%U\t%G")
-        let bsdFormat = shellQuote("%u\t%g\t%Su\t%Sg")
-        return "(stat -c \(gnuFormat) -- \(quotedPaths) 2>/dev/null) || " +
-            "stat -f \(bsdFormat) \(quotedPaths) 2>/dev/null"
-    }
-
-    private static func parseOwnerStatOutput(_ output: String) -> [OwnerStatRow] {
-        output.split(whereSeparator: \.isNewline).compactMap { line in
-            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard fields.count >= 4 else { return nil }
-            let uid = UInt32(fields[0])
-            let gid = UInt32(fields[1])
-            return OwnerStatRow(
-                uid: uid,
-                gid: gid,
-                ownerName: normalizedOwnerName(fields[2], numericID: uid),
-                groupName: normalizedOwnerName(fields[3], numericID: gid))
-        }
-    }
-
-    private static func normalizedOwnerName(_ raw: Substring, numericID: UInt32?) -> String? {
-        let value = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, value != "UNKNOWN", value != "?" else { return nil }
-        if let numericID, value == String(numericID) { return nil }
-        return value
+        await RemoteFileOperations.resolveOwnerNames(for: entries, in: directoryPath, provider: provider)
     }
 
     private static func canMoveRemoteDragItem(sourcePath: String,

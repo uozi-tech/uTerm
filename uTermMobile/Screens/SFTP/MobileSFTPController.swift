@@ -16,6 +16,14 @@ final class MobileSFTPController {
     var path: String = "/"
     var entries: [RemoteEntry] = []
     var loading = false
+    /// 单次操作（打开目录 / 删除 / 改名 / chmod / 上传 / 下载）失败的提示。
+    /// 只有连接本身断了才把 `state` 翻成 `.failed`；其余失败浏览照常，视图弹一个
+    /// 「操作失败」提示（对齐 macOS `FileBrowserModel.transientError`）。
+    private(set) var transientError: String?
+    /// 正在进行的递归删除；nil = 无。同一时刻只允许一个（见 `delete`）。
+    private(set) var deletion: RemoteDeletionProgress?
+    /// 取消旗标：`cancelDeletion()` / `close()` 置位，删除循环在每次往返前检查。
+    @ObservationIgnored private var deletionCancelled = false
 
     /// 当前会话。生产是 `SFTPSession`，测试是任意 `SFTPProviding` 实现。
     @ObservationIgnored private var session: (any SFTPProviding)?
@@ -126,10 +134,26 @@ final class MobileSFTPController {
             path = target
         } catch {
             guard generation == loadGeneration else { return }
-            state = .failed(error.localizedDescription)
+            loading = false
+            report(error, action: "打开目录")
+            return
         }
         loading = false
     }
+
+    /// 把一次操作失败落到状态上：连接已死 → `.failed`（连接中页给「重试」）；
+    /// 其余（权限不足、文件不存在……）→ `transientError`，标签继续可浏览。
+    private func report(_ error: Error, action: String) {
+        guard session != nil else { return }   // 标签已关：晚到的失败没人看
+        if SSHTransportFailure.isTransportFailure(error) {
+            state = .failed(FriendlyError.describe(error))
+        } else {
+            transientError = "\(action)失败：\(FriendlyError.describe(error))"
+        }
+    }
+
+    /// 清除一次性错误（绑定到错误提示的关闭）。
+    func clearTransientError() { transientError = nil }
 
     /// iOS 列表的固定排序：目录在前、名字升序（与 macOS 同一套 `RemoteEntrySort` 规则，
     /// Finder 式比较，`f2` 在 `f10` 前），**显示点文件**——手机上没有「显示隐藏文件」开关，
@@ -145,10 +169,43 @@ final class MobileSFTPController {
     /// 重新列当前目录（增删改之后）。
     private func reload() async { await load(path) }
 
+    /// 进目录。符号链接先解析（见 `openSymlink`）：指向目录才进，指向文件什么也不做——
+    /// 要按文件处理（弹操作单）的调用方直接用 `openSymlink` 的返回值。
     func open(_ entry: RemoteEntry) {
-        guard entry.isDirectory || entry.isSymlink else { return }
+        if entry.isSymlink {
+            Task { _ = await openSymlink(entry) }
+            return
+        }
+        guard entry.isDirectory else { return }
         let next = RemotePath.join(path, entry.name)
         Task { await load(next) }
+    }
+
+    /// 点符号链接：沿链接探测（共享的 `RemoteFileOperations.resolveSymlink`）。
+    /// 指向目录 → 进入（复用探测到的列表，省一次往返），返回 false；
+    /// 指向文件（或目标不存在）→ 不动当前列表，返回 true，调用方按文件处理。
+    ///
+    /// 与 `load` 共用加载代次：解析期间用户又点了别的目录，晚到的结果直接丢弃。
+    func openSymlink(_ entry: RemoteEntry, in directory: String? = nil) async -> Bool {
+        guard let session, entry.isSymlink else { return false }
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        loading = true
+        let target = await RemoteFileOperations.resolveSymlink(
+            entry, in: directory ?? path, provider: session)
+        guard generation == loadGeneration else { return false }
+        switch target {
+        case .directory(let linkPath, let listed):
+            let sorted = await Self.sortedEntries(listed)
+            guard generation == loadGeneration else { return false }
+            entries = sorted
+            path = linkPath
+            loading = false
+            return false
+        case .file:
+            loading = false
+            return true
+        }
     }
 
     func goUp() {
@@ -162,23 +219,52 @@ final class MobileSFTPController {
     /// `directory` 是条目所在目录。操作单从长按到确认之间隔着动画与确认框，
     /// 这期间当前目录可能已经换了——调用方应传长按那一刻的目录（见 `FilesSessionBody`），
     /// 不传则取当前目录。
+    ///
+    /// 目录递归删（共享的 `RemoteFileOperations`：先枚举整棵子树再逐项删），进度写进
+    /// `deletion` 驱动删除提示，可中途 `cancelDeletion()`。同一时刻只跑一个删除任务，
+    /// 第二次请求给出提示而不是静默吞掉。无论成功 / 失败 / 取消都重列目录——
+    /// 失败或取消时远端多半已被删掉一部分。
     func delete(_ entry: RemoteEntry, in directory: String? = nil) {
         guard let session else { return }
-        let full = RemotePath.join(directory ?? path, entry.name)
-        Task { [weak self] in
-            do {
-                if entry.isDirectory { try await session.removeDirectory(full) }
-                else { try await session.removeFile(full) }
-                await self?.reload()
-            } catch {
-                self?.state = .failed(error.localizedDescription)
-            }
+        if let running = deletion {
+            transientError = "正在删除「\(running.name)」，请等它结束后再删下一项。"
+            return
         }
+        let dir = directory ?? path
+        if entry.isDirectory {
+            deletionCancelled = false
+            deletion = .starting(entry.name)
+        }
+        Task { [weak self] in
+            var failure: Error?
+            do {
+                try await RemoteFileOperations.delete(
+                    entry, in: dir, provider: session,
+                    isCancelled: { self?.deletionCancelled ?? true },
+                    onProgress: { self?.deletion?.apply($0) })
+            } catch is RemoteFileOperations.DeletionCancelled {
+                // 用户主动取消：不是错误，只把已删掉的部分刷出来。
+            } catch {
+                failure = error
+            }
+            guard let self else { return }
+            self.deletion = nil
+            await self.reload()
+            if let failure { self.report(failure, action: "删除") }
+        }
+    }
+
+    /// 请求中止正在进行的递归删除。已经删掉的部分不会回滚（SFTP 没有事务）。
+    func cancelDeletion() {
+        guard deletion != nil, !deletionCancelled else { return }
+        deletionCancelled = true
+        deletion?.isCancelling = true
     }
 
     func close() {
         connectGeneration &+= 1
         loadGeneration &+= 1
+        deletionCancelled = true
         connectTask?.cancel()
         connectTask = nil
         let s = session
@@ -194,6 +280,7 @@ final class MobileSFTPController {
         close()
         entries = []
         path = "/"
+        transientError = nil
         started = false
         state = .idle
         start(profile: profile, container: container, relay: relay)
@@ -207,31 +294,29 @@ final class MobileSFTPController {
     /// 改权限（真实 chmod，经 Citadel setAttributes，仅 9 位 POSIX 位）。
     func chmod(_ entry: RemoteEntry, mode: UInt32, in directory: String? = nil) {
         guard let session else { return }
-        let full = RemotePath.join(directory ?? path, entry.name)
+        let dir = directory ?? path
         Task { [weak self] in
             do {
-                try await session.setPermissions(path: full, mode: mode & 0o777)
+                try await RemoteFileOperations.setPermissions(
+                    entry, in: dir, mode: mode, provider: session)
                 await self?.reload()
             } catch {
-                self?.state = .failed(error.localizedDescription)
+                self?.report(error, action: "权限设置")
             }
         }
     }
 
-    /// 重命名（同目录内移动）。
+    /// 重命名（同目录内移动）。名字去首尾空白；空名或没变不发请求。
     func rename(_ entry: RemoteEntry, to newName: String, in directory: String? = nil) {
-        guard let session else { return }
-        let trimmed = newName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != entry.name else { return }
+        guard let session,
+              RemoteFileOperations.validatedNewName(newName, for: entry) != nil else { return }
         let dir = directory ?? path
-        let from = RemotePath.join(dir, entry.name)
-        let to = RemotePath.join(dir, trimmed)
         Task { [weak self] in
             do {
-                try await session.rename(from, to: to)
+                try await RemoteFileOperations.rename(entry, to: newName, in: dir, provider: session)
                 await self?.reload()
             } catch {
-                self?.state = .failed(error.localizedDescription)
+                self?.report(error, action: "重命名")
             }
         }
     }
@@ -257,7 +342,7 @@ final class MobileSFTPController {
             if let destination {
                 try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
             }
-            if self.session != nil { state = .failed(error.localizedDescription) }
+            report(error, action: "下载")
             return nil
         }
     }
@@ -273,7 +358,7 @@ final class MobileSFTPController {
                 try await session.upload(localURL: url, toRemotePath: dest, onProgress: nil)
                 await self?.reload()
             } catch {
-                self?.state = .failed(error.localizedDescription)
+                self?.report(error, action: "上传")
             }
         }
     }

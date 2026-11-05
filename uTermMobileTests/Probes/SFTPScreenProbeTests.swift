@@ -276,18 +276,20 @@ final class SFTPScreenProbeTests: XCTestCase {
                          count, renameMS, deleteMS, chmodMS,
                          await m.provider.callCount(.list)))
 
-            // 失败注入：删除失败必须落到 `.failed` 态（不能静默吞掉）。
+            // 失败注入：删除失败必须报出来（不能静默吞掉），但只是一次性提示——
+            // 连接没断，标签不能翻成「连接失败」页。
             await m.provider.inject(.removeFile, message: "权限不足（探针注入）")
             let doomed = try XCTUnwrap(m.controller.entries.first { $0.isRegularFileForProbe })
             let entriesBefore = m.controller.entries.count
-            _ = try await settleLayout(m, "删除失败落到 failed 态") {
-                if case .failed = m.controller.state { return true }
-                return false
+            _ = try await settleLayout(m, "删除失败给出提示") {
+                m.controller.transientError != nil
             } beforeStart: {
                 m.controller.delete(doomed)
             }
+            XCTAssertEqual(m.controller.state, .connected, "单次删除失败不能翻成失败页")
             XCTAssertEqual(m.controller.entries.count, entriesBefore,
                            "删除失败不能把列表改掉")
+            m.controller.clearTransientError()
             await m.rig.close()
         }
     }

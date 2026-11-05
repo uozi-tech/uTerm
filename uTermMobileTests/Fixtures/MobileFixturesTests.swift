@@ -238,14 +238,15 @@ final class MobileFixturesTests: XCTestCase {
         let downloaded = try XCTUnwrap(downloadedURL)
         XCTAssertEqual(try Data(contentsOf: downloaded), payload, "上传下载必须字节一致")
 
-        // 5. 失败注入：删除失败要落到 `.failed` 态。
+        // 5. 失败注入：删除失败要报出来，但只是一次性提示（`transientError`），
+        //    连接没断，标签不翻成 `.failed`。
         await provider.inject(.removeFile, message: "权限不足")
         let another = try XCTUnwrap(controller.entries.first { $0.isRegularFileForProbe })
         controller.delete(another)
-        try await MobileFakeSFTP.settle("失败注入后进入 failed 态") {
-            if case .failed = controller.state { return true }
-            return false
+        try await MobileFakeSFTP.settle("失败注入后给出提示") {
+            controller.transientError != nil
         }
+        XCTAssertEqual(controller.state, .connected)
     }
 
     /// 先点的目录后返回：慢的那次结果不能把列表和路径改回去（目录加载的代次守卫）。

@@ -36,6 +36,24 @@ struct FilesSessionBody: View {
             pathBar
             content
                 .animation(.mSwap, value: controller.state)
+                // 递归删除进行中：底部浮一条进度提示（可取消），列表照常可看。
+                .overlay(alignment: .bottom) {
+                    if let progress = controller.deletion {
+                        FilesDeletionBanner(progress: progress, onCancel: controller.cancelDeletion)
+                            .padding(.horizontal, 12).padding(.bottom, 12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.mSwap, value: controller.deletion != nil)
+                // 单次操作失败（删除 / 改名 / chmod / 上传 / 下载 / 打开目录）：只弹提示，
+                // 不再把整个标签翻成「连接失败」页。
+                .alert("操作失败", isPresented: Binding(
+                    get: { controller.transientError != nil },
+                    set: { if !$0 { controller.clearTransientError() } })) {
+                    Button("好", role: .cancel) { controller.clearTransientError() }
+                } message: {
+                    Text(controller.transientError ?? "")
+                }
             if case .connected = controller.state { footerBar }
         }
         // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
@@ -46,6 +64,10 @@ struct FilesSessionBody: View {
                 if let t = pendingDelete { controller.delete(t.entry, in: t.directory); pendingDelete = nil }
             }
             Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: {
+            if pendingDelete?.entry.isDirectory == true {
+                Text("文件夹里的全部内容都会一并删除，且无法恢复。")
+            }
         }
         // 长按文件 → 操作单（设计稿 FileActionSheet）。
         .sheet(item: $actionEntry) { target in
@@ -191,7 +213,8 @@ struct FilesSessionBody: View {
                                     // 而面板开着的时候这一行本来就不该响应点击，
                                     // 不双触发时这里读到的又恒是 nil，是个惰性守卫。
                                     guard actionEntry == nil else { return }
-                                    if entry.isDirectory || entry.isSymlink { controller.open(entry) }
+                                    if entry.isDirectory { controller.open(entry) }
+                                    else if entry.isSymlink { openSymlink(entry) }
                                     else { actionEntry = EntryTarget(entry: entry, directory: controller.path) }
                                 }
                                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -203,6 +226,16 @@ struct FilesSessionBody: View {
                 }
                 .scrollIndicators(.hidden)
             }
+        }
+    }
+
+    /// 点符号链接：先解析。指向目录 → 控制器直接进入；指向文件 → 按文件处理（弹操作单）。
+    /// 目录取点击那一刻的，解析往返期间用户切走了也不会把操作单挂到别的目录上。
+    private func openSymlink(_ entry: RemoteEntry) {
+        let directory = controller.path
+        Task {
+            guard await controller.openSymlink(entry, in: directory), actionEntry == nil else { return }
+            actionEntry = EntryTarget(entry: entry, directory: directory)
         }
     }
 
@@ -231,4 +264,45 @@ struct SFTPRow: View {
     }
 
     private var subtitle: String { "\(entry.sizeOrKindText) · \(entry.symbolicText)" }
+}
+
+/// 递归删除进度提示：浮在文件列表底部。枚举阶段总数未知 → 不定态；删除阶段 → done/total。
+private struct FilesDeletionBanner: View {
+    let progress: RemoteDeletionProgress
+    var onCancel: () -> Void
+    @Environment(\.mAccent) private var accent
+
+    private var detail: String {
+        switch progress.phase {
+        case .counting:
+            return "正在统计… 已发现 \(UFormat.count(progress.count)) 项"
+        case .deleting:
+            return "\(UFormat.count(progress.count)) / \(UFormat.count(progress.total ?? 0))"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("正在删除「\(progress.name)」")
+                    .font(M.sans(14, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
+                Group {
+                    if progress.phase == .deleting {
+                        ProgressView(value: progress.fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
+                }
+                .tint(accent)
+                Text(detail).font(M.mono(11.5)).foregroundStyle(M.text3).lineLimit(1)
+            }
+            MBtn(title: progress.isCancelling ? "正在取消…" : "取消", kind: .secondary, height: 36,
+                 disabled: progress.isCancelling, action: onCancel)
+                .fixedSize()
+        }
+        .padding(14)
+        .background(M.card, in: RoundedRectangle(cornerRadius: MRadius.list))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .accessibilityElement(children: .contain)
+    }
 }
