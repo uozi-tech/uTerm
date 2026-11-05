@@ -242,6 +242,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         if ack.failed { forceKeyframe = true }
         if rate.observe(latencyNanos: latency, now: now) { applyRate() }
         pacer.maxInflightFrames = rate.inflightFrameLimit
+        pacer.maxInflightBytes = rate.inflightByteLimit
         logRateIfDue(now: now)
         pump()
     }
@@ -261,9 +262,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         func percentile(_ p: Double) -> Double {
             trips.isEmpty ? 0 : Double(trips[min(trips.count - 1, Int(Double(trips.count) * p))]) / 1e6
         }
-        let message = String(format: "桌面码控：目标 %.1f Mbps %d fps｜实发 %.1f fps %.1f Mbps｜往返 p50 %.0f p95 %.0f ms，"
+        let message = String(format: "桌面码控：目标 %.1f Mbps %d fps｜采集 %.1f fps，实发 %.1f fps %.1f Mbps｜往返 p50 %.0f p95 %.0f ms，"
                              + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
-                             Double(rate.bitrate) / 1e6, rate.frameRate, Double(sent) / seconds,
+                             Double(rate.bitrate) / 1e6, rate.frameRate,
+                             Double(current.captured - last.stats.captured) / seconds, Double(sent) / seconds,
                              Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
                              percentile(0.5), percentile(0.95), Double(rate.baselineLatency ?? 0) / 1e6,
                              pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,

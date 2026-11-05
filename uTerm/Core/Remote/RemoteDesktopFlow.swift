@@ -9,8 +9,8 @@ import Foundation
 /// 规则（调研 §3.3「编码之前丢，绝不在编码之后丢」）：
 /// - **在途** = 已交给编码器、还没收到手机「解码完」确认的帧。在途 ≥ `maxInflightFrames` 帧或
 ///   ≥ `maxInflightBytes` 字节时，新画面不送编码器，先**留着最新的一帧**（更旧的那帧直接丢掉）。
-///   帧数上限跟着链路往返时间走（`RemoteRateController.inflightFrameLimit`）：固定 2 帧时往返一过
-///   33 ms 就到不了 60 帧。
+///   两个上限都跟着链路往返时间走（`RemoteRateController.inflightFrameLimit` / `inflightByteLimit`）：
+///   固定 2 帧时往返一过 33 ms 就到不了 60 帧。
 /// - 确认一回来（链路追上了），立刻把留着的那帧编出去。屏幕静止时 ScreenCaptureKit 不再出新帧，
 ///   不补这一下手机就会停在旧画面上。
 /// - 帧率上限（码率控制降帧时用）：距上一次送编码器不足一个帧间隔的画面也先留着，到点再编。
@@ -18,10 +18,11 @@ import Foundation
 /// 确认在手机**解码之后**才发，所以这里的背压是端到端的：网络慢、手机解码慢，都会让 Mac 少编。
 nonisolated struct RemoteDesktopPacer<Frame> {
     static var defaultInflightFrames: Int { 2 }
-    static var maxInflightBytes: Int { 768 * 1024 }
+    static var defaultInflightBytes: Int { 768 * 1024 }
 
-    /// 在途帧数上限，由码率控制按往返时间调。
+    /// 在途上限，由码率控制按往返时间调。
     var maxInflightFrames = Self.defaultInflightFrames
+    var maxInflightBytes = Self.defaultInflightBytes
 
     /// 序号 → 编出来的字节数（还在编码器里时为 0）。
     private(set) var inflight: [UInt32: Int] = [:]
@@ -40,7 +41,7 @@ nonisolated struct RemoteDesktopPacer<Frame> {
     init() {}
 
     var hasCapacity: Bool {
-        inflight.count < maxInflightFrames && inflightBytes < Self.maxInflightBytes
+        inflight.count < maxInflightFrames && inflightBytes < maxInflightBytes
     }
 
     /// 采集到一帧。返回现在就该编的帧（带分配好的序号）；nil = 先留着。
@@ -148,8 +149,8 @@ nonisolated struct RemoteRateController: Equatable {
         var baselineWindow: UInt64 = 10_000_000_000
         var fullFrameRate = 60
         var reducedFrameRate = 30
-        var maxInflightFrames = 4
-        var jitterMargin: UInt64 = 30_000_000
+        var maxInflightFrames = 8
+        var jitterMargin: UInt64 = 80_000_000
     }
 
     let config: Config
@@ -203,12 +204,24 @@ nonisolated struct RemoteRateController: Equatable {
     }
 
     /// 在途帧数上限：一个往返（基线再加 `jitterMargin` 的 Wi-Fi 抖动）里能送出去的帧数 + 1，
-    /// 至少 2、至多 `maxInflightFrames`。只按基线算时，真机 Wi-Fi（基线 30、p50 50 ms）上 60 帧只跑到 48。
+    /// 至少 2、至多 `maxInflightFrames`。
+    ///
+    /// 余量要盖住确认回程的抖动：确认是手机经 Wi-Fi 上行发回来的小包，手机省电时会被攒着晚到，画面本身
+    /// 早就到了。真机（基线 30、p50 50、p95 110 ms）：上限 4 帧时每 2 s 因在途满丢 10–19 帧、实发约 50 fps；
+    /// 放到 8 帧丢帧归零、实发 55–57 fps，往返 p50 / p95 不变——说明没有排队，只是确认晚到。
     var inflightFrameLimit: Int {
         let interval = 1_000_000_000 / UInt64(max(1, frameRate))
         guard let baseline = baselineLatency else { return 2 }
         let frames = Int((baseline + config.jitterMargin + interval - 1) / interval) + 1
         return min(config.maxInflightFrames, max(2, frames))
+    }
+
+    /// 在途字节上限：目标码率下同一段时间里该发出去的量，至少 `RemoteDesktopPacer.defaultInflightBytes`。
+    var inflightByteLimit: Int {
+        let defaultLimit = RemoteDesktopPacer<Int>.defaultInflightBytes
+        guard let baseline = baselineLatency else { return defaultLimit }
+        let window = Double(baseline + config.jitterMargin) / 1e9
+        return max(defaultLimit, Int(Double(bitrate) / 8 * window))
     }
 
     /// 报一次拥塞。返回码率或帧率有没有变。

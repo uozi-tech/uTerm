@@ -265,13 +265,29 @@ final class RemoteDesktopFlowTests: XCTestCase {
                                         initialBitrate: 10_000_000, now: 0)
         XCTAssertEqual(rate.inflightFrameLimit, 2, "还没有确认：保守")
         rate.observe(latencyNanos: 2 * ms, now: 10 * ms)
-        XCTAssertEqual(rate.inflightFrameLimit, 3, "2 ms + 30 ms 抖动余量：60 帧要送 2 帧，再留 1 帧")
+        XCTAssertEqual(rate.inflightFrameLimit, 6, "2 ms + 80 ms 抖动余量：60 帧要送 5 帧，再留 1 帧")
         var slow = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
         slow.observe(latencyNanos: 30 * ms, now: 10 * ms)
-        XCTAssertEqual(slow.inflightFrameLimit, 4, "真机 Wi-Fi 的基线 30 ms：按 60 ms 算要送 4 帧，封顶 4")
+        XCTAssertEqual(slow.inflightFrameLimit, 8, "真机 Wi-Fi 的基线 30 ms：按 110 ms 算要送 7 帧，再留 1 帧")
         slow.observe(latencyNanos: 200 * ms, now: 20 * ms)
-        XCTAssertEqual(slow.inflightFrameLimit, 4, "基线取最小值")
+        XCTAssertEqual(slow.inflightFrameLimit, 8, "基线取最小值")
+        var crawl = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
+                                         initialBitrate: 10_000_000, now: 0)
+        crawl.observe(latencyNanos: 300 * ms, now: 10 * ms)
+        XCTAssertEqual(crawl.inflightFrameLimit, 8, "封顶 8 帧")
+    }
+
+    func test_inflight_byte_limit_covers_the_bitrate_over_a_round_trip() {
+        var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 100_000_000),
+                                        initialBitrate: 90_000_000, now: 0)
+        XCTAssertEqual(rate.inflightByteLimit, 768 * 1024, "还没有确认：默认")
+        rate.observe(latencyNanos: 30 * ms, now: 10 * ms)
+        XCTAssertEqual(rate.inflightByteLimit, 90_000_000 / 8 * 110 / 1000, "90 Mbps × 110 ms")
+        var slow = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 100_000_000),
+                                        initialBitrate: 1_000_000, now: 0)
+        slow.observe(latencyNanos: 30 * ms, now: 10 * ms)
+        XCTAssertEqual(slow.inflightByteLimit, 768 * 1024, "码率低时不低于默认值，关键帧要放得下")
     }
 
     func test_pacer_frame_window_is_adjustable() {
