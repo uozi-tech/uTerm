@@ -171,6 +171,8 @@ struct SwiftTermView: UIViewRepresentable {
         // 去掉 SwiftTerm 自带的键盘附加栏（esc/ctrl/tab/F1/方向键……），它和我们自绘的
         // `TerminalKeyBar` 重复堆两层。置 nil 后键盘上方只留 `TerminalKeyBar` 一层。
         view.inputAccessoryView = nil
+        // 收起键盘后用户还在看这个终端，光标不该变成表示失焦的空心框。分屏的当前格由焦点框标出。
+        view.caretViewTracksFocus = false
         view.minimumContrastRatio = MTerminalColors.minimumContrastRatio
         applyColorsIfNeeded(to: view, coordinator: context.coordinator)
         if isFresh {
