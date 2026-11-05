@@ -44,9 +44,8 @@ struct MobileApp: App {
         if LANSyncActivation.isActivated { lan.start() }
         _lanSync = State(initialValue: lan)
 
-        // 应用锁：读 requireAuthAtLaunch（缺键视作「关」——iOS 默认不锁，由设置开启）。
-        // 用 object as? Bool 而非 UserDefaults.bool，避免缺键时 false 与「显式关」混淆。
-        let requireAuth = (UserDefaults.standard.object(forKey: "requireAuthAtLaunch") as? Bool) ?? false
+        // 应用锁：读 requireAuthAtLaunch（iOS 缺键视作「关」，由设置开启，见 `AppLockPreference`）。
+        let requireAuth = AppLockPreference.isEnabled()
         _lock = State(initialValue: AppLockModel(
             authenticator: SystemBiometricAuthenticator(),
             requireAuthAtLaunch: requireAuth))

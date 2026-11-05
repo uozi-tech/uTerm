@@ -22,19 +22,6 @@ enum MobileBiometry {
         default:       return ("生物识别", "lock")
         }
     }
-
-    /// 设置里打开应用锁前先验证一次：既确认设备可用（有生物识别或已设密码），
-    /// 也取得用户授权——避免开关一拨就把下次启动锁死却无从解锁。返回收敛后的结果。
-    static func confirmEnable() async -> AuthOutcome {
-        let auth = SystemBiometricAuthenticator()
-        let policy: LAPolicy
-        if case .biometrics = auth.availability() {
-            policy = .deviceOwnerAuthenticationWithBiometrics
-        } else {
-            policy = .deviceOwnerAuthentication
-        }
-        return await auth.authenticate(policy: policy, reason: "开启 uTerm 应用锁")
-    }
 }
 
 extension View {
@@ -48,7 +35,7 @@ private struct MobileAppLockGate: ViewModifier {
     let model: AppLockModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("requireAuthAtLaunch") private var requireAuth = false
+    @AppStorage(AppLockPreference.key) private var requireAuth = AppLockPreference.defaultValue
     @State private var lockWindow = MobileLockWindow()
 
     func body(content: Content) -> some View {
@@ -171,12 +158,5 @@ struct MobileLockCover: View {
         }
     }
 
-    private var message: String {
-        switch model.state {
-        case .unlocked:        return ""
-        case .authenticating:  return "正在验证身份…"
-        case .locked:          return "uTerm 已锁定"
-        case .failed(let msg): return msg
-        }
-    }
+    private var message: String { model.state.message }
 }

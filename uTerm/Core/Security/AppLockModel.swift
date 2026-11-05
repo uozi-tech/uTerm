@@ -2,6 +2,26 @@ import Foundation
 import LocalAuthentication
 import Observation
 
+/// 「启动时要求验证身份」偏好（两端共用同一个 UserDefaults 键）。
+///
+/// **键名不能改**：已安装用户的开关值就存在这个键下。两端默认值有意相反——macOS 缺键视作
+/// 开（沿用最初的默认），iOS 缺键视作关（由设置里验证一次后开启，见 `AppLockModel.confirmEnable`）。
+nonisolated enum AppLockPreference {
+    static let key = "requireAuthAtLaunch"
+
+    #if os(macOS)
+    static let defaultValue = true
+    #else
+    static let defaultValue = false
+    #endif
+
+    /// 启动时读当前值。用 `object(forKey:) as? Bool` 而非 `bool(forKey:)`：后者缺键时返回
+    /// false，会把 mac 的「默认开」误读成「关」。
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: key) as? Bool) ?? defaultValue
+    }
+}
+
 /// 启动应用锁的状态机。持锁定态、按机器能力选验证策略、指纹锁定时退回登录密码、
 /// 用一次性 guard 保证多窗口只触发一次启动验证。
 ///
@@ -18,6 +38,16 @@ final class AppLockModel {
         case authenticating
         case locked
         case failed(String)
+
+        /// 锁屏上的状态文案（两端锁屏共用）。
+        var message: String {
+            switch self {
+            case .unlocked:        ""
+            case .authenticating:  "正在验证身份…"
+            case .locked:          "uTerm 已锁定"
+            case .failed(let msg): msg
+            }
+        }
     }
 
     private(set) var state: LockState
@@ -39,6 +69,22 @@ final class AppLockModel {
     }
 
     var isUnlocked: Bool { state == .unlocked }
+
+    /// 打开应用锁前先验证一次：既确认设备可用（有生物识别或已设密码），也取得用户授权——
+    /// 避免开关一拨就把下次启动锁死却无从解锁。有生物识别就强制走生物识别，否则用设备密码。
+    /// 目前只有 iOS 的设置开关调用；macOS 开关直接生效（行为未改）。
+    static func confirmEnable(
+        authenticator: BiometricAuthenticator = SystemBiometricAuthenticator(),
+        reason: String = "开启 uTerm 应用锁"
+    ) async -> AuthOutcome {
+        let policy: LAPolicy
+        if case .biometrics = authenticator.availability() {
+            policy = .deviceOwnerAuthenticationWithBiometrics
+        } else {
+            policy = .deviceOwnerAuthentication
+        }
+        return await authenticator.authenticate(policy: policy, reason: reason)
+    }
 
     /// 各 Scene 的 `AppLockGate` 在 `.task` 里调用；didStart guard 保证全 App 只跑一次首验，
     /// 且 `state == .locked` 判断让重试期间（已 .authenticating）的重复调用安全空转。

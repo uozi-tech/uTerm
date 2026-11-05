@@ -10,7 +10,7 @@ struct SettingsScreen: View {
     @AppStorage("appearancePreference")
     private var appearanceRaw: String = AppearancePreference.system.rawValue
     /// 应用锁开关，与启动时读的键同源（缺键视作关）。
-    @AppStorage("requireAuthAtLaunch") private var appLockOn = false
+    @AppStorage(AppLockPreference.key) private var appLockOn = AppLockPreference.defaultValue
     /// 会话保留窗口（天）。与 macOS 共用 key，可经 iCloud KVS / 局域网同步。
     @AppStorage(ChatHistoryStore.retentionDaysKey)
     private var chatRetentionDays = ChatHistoryStore.defaultRetentionDays
@@ -108,7 +108,7 @@ struct SettingsScreen: View {
             set: { wantOn in
                 guard wantOn else { appLockOn = false; return }
                 Task {
-                    let outcome = await MobileBiometry.confirmEnable()
+                    let outcome = await AppLockModel.confirmEnable()
                     if case .success = outcome {
                         appLockOn = true
                     } else {
