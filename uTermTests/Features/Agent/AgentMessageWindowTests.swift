@@ -105,10 +105,11 @@ final class AgentMessageWindowTests: XCTestCase {
                       + "hitTest 473 → 664µs、NSView 803 → 817，读数是反的")
         XCTAssertTrue(codeBlock.contains(".textSelection(.enabled)"), "代码正文必须仍可选中")
 
-        // 贴底跟随仍走共享策略，且合并延迟没有被改动。
+        // 贴底跟随仍走共享策略；合并走共享的 `TailScrollCoalescer`（默认窗口即
+        // `AgentScrollPolicy.coalescingDelay`，没有另传延迟）。
         for file in [assistant, terminalAgent] {
             XCTAssertTrue(file.contains("AgentScrollPolicy.isNearBottom"))
-            XCTAssertTrue(file.contains("AgentScrollPolicy.coalescingDelay"))
+            XCTAssertTrue(file.contains("TailScrollCoalescer()"))
         }
         // 两个 Agent 面板都挂了渲染窗口，且窗口只切视图不切 model。
         for file in [assistant, terminalAgent] {
