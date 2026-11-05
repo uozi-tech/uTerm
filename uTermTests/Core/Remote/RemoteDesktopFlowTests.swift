@@ -112,8 +112,8 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertTrue(rate.tick(now: 1_000 * ms))
         XCTAssertEqual(rate.frameRate, 60)
         XCTAssertEqual(rate.bitrate, 1_000_000)
-        XCTAssertFalse(rate.tick(now: 1_500 * ms), "两次上调也要隔开")
-        XCTAssertTrue(rate.tick(now: 2_000 * ms))
+        XCTAssertFalse(rate.tick(now: 1_300 * ms), "两次上调也要隔开")
+        XCTAssertTrue(rate.tick(now: 1_500 * ms))
         XCTAssertEqual(rate.bitrate, 1_250_000)
         var now = 2_000 * ms
         for _ in 0..<20 {
@@ -126,10 +126,11 @@ final class RemoteDesktopFlowTests: XCTestCase {
     func test_rate_controller_treats_sustained_high_latency_as_congestion() {
         var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
-        XCTAssertFalse(rate.observe(latencyNanos: 80 * ms, now: 100 * ms))
-        XCTAssertFalse(rate.observe(latencyNanos: 121 * ms, now: 200 * ms))
-        XCTAssertFalse(rate.observe(latencyNanos: 121 * ms, now: 216 * ms))
-        XCTAssertTrue(rate.observe(latencyNanos: 121 * ms, now: 232 * ms), "连着 3 帧慢才算拥塞")
+        XCTAssertFalse(rate.observe(latencyNanos: 20 * ms, now: 100 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 75 * ms, now: 150 * ms), "比基线多 55 ms，还在阈值内")
+        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 200 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 216 * ms))
+        XCTAssertTrue(rate.observe(latencyNanos: 100 * ms, now: 232 * ms), "连着 3 帧排队超过 60 ms 才算拥塞")
         XCTAssertEqual(rate.bitrate, 7_000_000)
         // 拥塞之后要重新稳定满 1 s 才升。
         XCTAssertFalse(rate.observe(latencyNanos: 10 * ms, now: 1_200 * ms))
@@ -150,6 +151,103 @@ final class RemoteDesktopFlowTests: XCTestCase {
             rate.observe(latencyNanos: 10 * ms, now: now)
         }
         XCTAssertEqual(rate.bitrate, 10_000_000, "慢帧被快帧打断就不累计")
+    }
+
+    /// 往返本来就慢（Wi-Fi、手机解码慢）但很稳：不是拥塞，码率照样涨到上限。
+    /// 以前按绝对耗时判，这种链路上一直「拥塞」，码率压到底再也上不来。
+    func test_rate_controller_climbs_on_a_slow_but_steady_link() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 30_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 1_000_000, now: 0)
+        var now: UInt64 = 0
+        while now < 30_000 * ms {
+            now += 16 * ms
+            rate.observe(latencyNanos: 150 * ms + (now / ms % 7) * ms, now: now)
+        }
+        XCTAssertEqual(rate.bitrate, config.maxBitrate)
+        XCTAssertEqual(rate.frameRate, 60)
+    }
+
+    /// 退避到底之后链路好了：先回 60 帧，再一路涨回上限，越过上次出事的码率也不停。
+    func test_rate_controller_recovers_fully_after_backing_off_to_the_floor() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 30_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 30_000_000, now: 0)
+        var now: UInt64 = 0
+        // 先确认基线 20 ms，再让排队延迟一直很高：一路降到底、帧率减半。
+        rate.observe(latencyNanos: 20 * ms, now: now)
+        while rate.frameRate > 30 {
+            now += 16 * ms
+            rate.observe(latencyNanos: 300 * ms, now: now)
+        }
+        XCTAssertEqual(rate.bitrate, config.minBitrate)
+
+        var recovered: UInt64?
+        let start = now
+        while now < start + 30_000 * ms {
+            now += 16 * ms
+            rate.observe(latencyNanos: 22 * ms, now: now)
+            if recovered == nil, rate.bitrate == config.maxBitrate { recovered = now - start }
+        }
+        XCTAssertEqual(rate.frameRate, 60)
+        let elapsed = try? XCTUnwrap(recovered, "要涨回上限，不能停在退避到的那一档")
+        XCTAssertLessThan(elapsed ?? .max, 25_000 * ms, "1 → 30 Mbps 不能拖太久")
+    }
+
+    /// 接近上次出事的码率时改小步试探；越过去以后照样往上走。
+    func test_rate_controller_probes_gently_near_the_bitrate_that_congested() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 40_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 20_000_000, now: 0)
+        rate.congestion(now: 0)
+        XCTAssertEqual(rate.bitrate, 14_000_000)
+        rate.tick(now: 1_000 * ms)
+        XCTAssertEqual(rate.bitrate, 17_500_000, "离 20 Mbps 还远：快涨")
+        rate.tick(now: 1_500 * ms)
+        XCTAssertEqual(rate.bitrate, 18_900_000, "到了 20 Mbps 的 85% 以上：小步")
+        var now = 1_500 * ms
+        for _ in 0..<40 {
+            now += 500 * ms
+            rate.tick(now: now)
+        }
+        XCTAssertEqual(rate.bitrate, config.maxBitrate)
+    }
+
+    /// 链路整体变慢（比如换到远一点的 Wi-Fi）：基线跟着抬，一个窗口后不再把新常态当拥塞。
+    func test_rate_controller_baseline_follows_a_link_that_got_slower() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 30_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 30_000_000, now: 0)
+        var now: UInt64 = 0
+        for _ in 0..<100 {
+            now += 16 * ms
+            rate.observe(latencyNanos: 20 * ms, now: now)
+        }
+        for _ in 0..<1_500 {
+            now += 16 * ms
+            rate.observe(latencyNanos: 120 * ms, now: now)
+        }
+        XCTAssertEqual(rate.baselineLatency, 120 * ms)
+        XCTAssertEqual(rate.bitrate, config.maxBitrate, "新常态下又涨回上限")
+    }
+
+    func test_inflight_frame_limit_follows_the_round_trip() {
+        var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
+                                        initialBitrate: 10_000_000, now: 0)
+        XCTAssertEqual(rate.inflightFrameLimit, 2, "还没有确认：保守")
+        rate.observe(latencyNanos: 10 * ms, now: 10 * ms)
+        XCTAssertEqual(rate.inflightFrameLimit, 2)
+        var slow = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
+                                        initialBitrate: 10_000_000, now: 0)
+        slow.observe(latencyNanos: 45 * ms, now: 10 * ms)
+        XCTAssertEqual(slow.inflightFrameLimit, 4, "45 ms 往返里 60 帧要送 3 帧，再留 1 帧")
+        slow.observe(latencyNanos: 200 * ms, now: 20 * ms)
+        XCTAssertEqual(slow.inflightFrameLimit, 4, "基线取最小值；上限 4 帧")
+    }
+
+    func test_pacer_frame_window_is_adjustable() {
+        var pacer = RemoteDesktopPacer<Int>()
+        pacer.maxInflightFrames = 3
+        XCTAssertNotNil(pacer.offer(1, now: 0).submit)
+        XCTAssertNotNil(pacer.offer(2, now: 16 * ms).submit)
+        XCTAssertNotNil(pacer.offer(3, now: 32 * ms).submit)
+        XCTAssertNil(pacer.offer(4, now: 48 * ms).submit)
     }
 
     func test_initial_bitrate_scales_with_pixels() {

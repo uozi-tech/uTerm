@@ -9,21 +9,26 @@ import Foundation
 /// 规则（调研 §3.3「编码之前丢，绝不在编码之后丢」）：
 /// - **在途** = 已交给编码器、还没收到手机「解码完」确认的帧。在途 ≥ `maxInflightFrames` 帧或
 ///   ≥ `maxInflightBytes` 字节时，新画面不送编码器，先**留着最新的一帧**（更旧的那帧直接丢掉）。
+///   帧数上限跟着链路往返时间走（`RemoteRateController.inflightFrameLimit`）：固定 2 帧时往返一过
+///   33 ms 就到不了 60 帧。
 /// - 确认一回来（链路追上了），立刻把留着的那帧编出去。屏幕静止时 ScreenCaptureKit 不再出新帧，
 ///   不补这一下手机就会停在旧画面上。
 /// - 帧率上限（码率控制降帧时用）：距上一次送编码器不足一个帧间隔的画面也先留着，到点再编。
 ///
 /// 确认在手机**解码之后**才发，所以这里的背压是端到端的：网络慢、手机解码慢，都会让 Mac 少编。
 nonisolated struct RemoteDesktopPacer<Frame> {
-    static var maxInflightFrames: Int { 2 }
+    static var defaultInflightFrames: Int { 2 }
     static var maxInflightBytes: Int { 768 * 1024 }
+
+    /// 在途帧数上限，由码率控制按往返时间调。
+    var maxInflightFrames = Self.defaultInflightFrames
 
     /// 序号 → 编出来的字节数（还在编码器里时为 0）。
     private(set) var inflight: [UInt32: Int] = [:]
     private(set) var inflightBytes = 0
     /// 留着待编的最新一帧。
     private(set) var pending: Frame?
-    /// 因链路拥塞被替掉（没编就丢）的帧数——码率控制据此判断拥塞。
+    /// 因在途已满被替掉（没编就丢）的帧数。只做统计：码率控制看的是延迟，见 `RemoteRateController`。
     private(set) var congestionDrops = 0
     /// 因帧率上限被替掉的帧数（不算拥塞）。
     private(set) var pacingDrops = 0
@@ -35,7 +40,7 @@ nonisolated struct RemoteDesktopPacer<Frame> {
     init() {}
 
     var hasCapacity: Bool {
-        inflight.count < Self.maxInflightFrames && inflightBytes < Self.maxInflightBytes
+        inflight.count < maxInflightFrames && inflightBytes < Self.maxInflightBytes
     }
 
     /// 采集到一帧。返回现在就该编的帧（带分配好的序号）；nil = 先留着。
@@ -110,12 +115,17 @@ nonisolated struct RemoteDesktopPacer<Frame> {
     }
 }
 
-/// 码率 / 帧率控制。
+/// 码率 / 帧率控制：按排队延迟调，涨跌都是持续的。
 ///
-/// - 拥塞（编码前丢帧、或「采集 → 手机解码完」连续 `slowAcksForCongestion` 次超过 `latencyThreshold`）：
-///   码率 ×0.7，两次下调至少隔 `decreaseSpacing`（一次拥塞往往连着报好几帧，不隔开会一口气砍到底）。
-///   码率已到下限还拥塞，帧率减半到 30。单独一次慢往返多半是 Wi-Fi 抖动，不是带宽不够，不降。
-/// - 连续 `stableInterval` 没有拥塞：先把帧率恢复到 60，再码率 ×1.25，直到上限。
+/// - **基线** = 最近 `baselineWindow` 内最小的「采集 → 手机解码完」耗时：链路空着时的往返加编解码。
+///   排队延迟 = 这一帧的耗时 − 基线。只看排队延迟、不看绝对耗时：往返本来就慢的链路（Wi-Fi、手机解码慢）
+///   绝对耗时一直高，按绝对值判就会一直「拥塞」、码率压到底再也上不来。
+/// - **拥塞** = 连续 `slowAcksForCongestion` 帧排队延迟超过 `queueDelayThreshold`：码率 ×0.7，
+///   两次下调至少隔 `decreaseSpacing`。码率到底还拥塞，帧率减半到 30。单独一次慢多半是 Wi-Fi 抖动，不降。
+///   编码前丢帧（在途满了）**不算**拥塞：那只说明往返比帧间隔长，带宽真不够时延迟自己会涨上去。
+/// - **恢复**：拥塞后静默 `stableInterval`，之后每 `increaseInterval` 往上调一档，先恢复帧率再加码率。
+///   离上次出事的码率还远时 ×`increaseFactor` 快涨，到它上下 15% 以内 ×`probeFactor` 小步试探，
+///   越过去了说明链路好转，接着快涨到上限：不能停在退避到的那一档。
 ///
 /// 码率按局域网定（调研 §14）：低延迟 HEVC 在 2144×1206 的桌面上给多少都只用到 24–29 Mbps
 ///（约每像素 12 bit/s），从 10 Mbps 起步要白白糊几秒，起步就给到这个量。
@@ -125,12 +135,16 @@ nonisolated struct RemoteRateController: Equatable {
         var maxBitrate: Int
         var decreaseFactor = 0.7
         var increaseFactor = 1.25
+        var probeFactor = 1.08
         var decreaseSpacing: UInt64 = 500_000_000
         var stableInterval: UInt64 = 1_000_000_000
-        var latencyThreshold: UInt64 = 120_000_000
+        var increaseInterval: UInt64 = 500_000_000
+        var queueDelayThreshold: UInt64 = 60_000_000
         var slowAcksForCongestion = 3
+        var baselineWindow: UInt64 = 10_000_000_000
         var fullFrameRate = 60
         var reducedFrameRate = 30
+        var maxInflightFrames = 4
     }
 
     let config: Config
@@ -140,6 +154,13 @@ nonisolated struct RemoteRateController: Equatable {
     private var lastCongestion: UInt64
     private var lastIncrease: UInt64
     private var slowAcks = 0
+    /// 上一轮拥塞开始时（第一次下调之前）的码率：涨回它附近就改成小步试探。一轮拥塞里会连降好几次，
+    /// 记最后一次的话就成了底线附近，之后一路小步，涨回上限要几十秒。
+    private var congestedBitrate: Int?
+    /// 基线按两个半窗取最小：当前半窗与上一个半窗。旧的最小值最多留一个窗口，链路变了基线跟着变。
+    private var baselineCurrent: UInt64?
+    private var baselinePrevious: UInt64?
+    private var baselineBucketStart: UInt64
 
     /// 起始码率按像素算：每像素 12 bit/s（2144×1206 ≈ 31 Mbps，低延迟编码器在桌面内容上用得到的量），
     /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），下限 1 Mbps。
@@ -159,6 +180,7 @@ nonisolated struct RemoteRateController: Equatable {
         frameRate = config.fullFrameRate
         lastCongestion = now
         lastIncrease = now
+        baselineBucketStart = now
     }
 
     init(width: Int, height: Int, now: UInt64) {
@@ -166,13 +188,31 @@ nonisolated struct RemoteRateController: Equatable {
                   initialBitrate: Self.initialBitrate(width: width, height: height), now: now)
     }
 
+    /// 链路空着时的「采集 → 解码完」耗时；还没有确认时为 nil。
+    var baselineLatency: UInt64? {
+        switch (baselineCurrent, baselinePrevious) {
+        case let (current?, previous?): return min(current, previous)
+        case let (current, previous): return current ?? previous
+        }
+    }
+
+    /// 在途帧数上限：一个往返里能送出去的帧数 + 1，至少 2、至多 `maxInflightFrames`。
+    var inflightFrameLimit: Int {
+        let interval = 1_000_000_000 / UInt64(max(1, frameRate))
+        guard let baseline = baselineLatency else { return 2 }
+        let frames = Int((baseline + interval - 1) / interval) + 1
+        return min(config.maxInflightFrames, max(2, frames))
+    }
+
     /// 报一次拥塞。返回码率或帧率有没有变。
     @discardableResult
     mutating func congestion(now: UInt64) -> Bool {
+        let newEpisode = now &- lastCongestion >= config.stableInterval || congestedBitrate == nil
         lastCongestion = now
         if let lastDecrease, now &- lastDecrease < config.decreaseSpacing { return false }
         lastDecrease = now
         if bitrate > config.minBitrate {
+            if newEpisode { congestedBitrate = bitrate }
             bitrate = max(config.minBitrate, Int(Double(bitrate) * config.decreaseFactor))
             return true
         }
@@ -183,10 +223,12 @@ nonisolated struct RemoteRateController: Equatable {
         return false
     }
 
-    /// 一帧的「采集 → 手机解码完」耗时。连续 `slowAcksForCongestion` 帧超过阈值才算拥塞。
+    /// 一帧的「采集 → 手机解码完」耗时。排队延迟连续 `slowAcksForCongestion` 帧超过阈值才算拥塞。
     @discardableResult
     mutating func observe(latencyNanos: UInt64, now: UInt64) -> Bool {
-        guard latencyNanos > config.latencyThreshold else {
+        updateBaseline(latencyNanos, now: now)
+        let queueDelay = latencyNanos &- (baselineLatency ?? latencyNanos)
+        guard queueDelay > config.queueDelayThreshold else {
             slowAcks = 0
             return tick(now: now)
         }
@@ -196,10 +238,19 @@ nonisolated struct RemoteRateController: Equatable {
         return congestion(now: now)
     }
 
-    /// 定期调用（每次确认时顺带）：稳定够久就往上调。返回有没有变。
+    private mutating func updateBaseline(_ latency: UInt64, now: UInt64) {
+        if now &- baselineBucketStart >= config.baselineWindow / 2 {
+            baselinePrevious = baselineCurrent
+            baselineCurrent = nil
+            baselineBucketStart = now
+        }
+        baselineCurrent = min(baselineCurrent ?? latency, latency)
+    }
+
+    /// 定期调用（每次确认时顺带）：拥塞后静默够久就往上调。返回有没有变。
     @discardableResult
     mutating func tick(now: UInt64) -> Bool {
-        guard now &- lastCongestion >= config.stableInterval, now &- lastIncrease >= config.stableInterval else {
+        guard now &- lastCongestion >= config.stableInterval, now &- lastIncrease >= config.increaseInterval else {
             return false
         }
         lastIncrease = now
@@ -208,7 +259,11 @@ nonisolated struct RemoteRateController: Equatable {
             return true
         }
         guard bitrate < config.maxBitrate else { return false }
-        bitrate = min(config.maxBitrate, Int(Double(bitrate) * config.increaseFactor))
+        let probing = congestedBitrate.map {
+            (Double($0) * 0.85..<Double($0) * 1.15).contains(Double(bitrate))
+        } ?? false
+        let factor = probing ? config.probeFactor : config.increaseFactor
+        bitrate = min(config.maxBitrate, max(bitrate + 1, Int(Double(bitrate) * factor)))
         return true
     }
 }

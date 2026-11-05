@@ -204,10 +204,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private func offer(_ frame: RemoteCapturedFrame) {
         let now = DispatchTime.now().uptimeNanoseconds
         let (submit, congested) = pacer.offer(frame, now: now)
-        if congested {
-            stats.recordDrop()
-            if rate.congestion(now: now) { applyRate() }
-        }
+        // 在途满了被替掉只记数，不降码率：往返比帧间隔长也会这样，带宽真不够时延迟会涨，由 `rate` 看延迟判。
+        if congested { stats.recordDrop() }
         if let (sequence, frame) = submit {
             encode(sequence, frame, refine: false)
         }
@@ -240,6 +238,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
         if ack.failed { forceKeyframe = true }
         if rate.observe(latencyNanos: latency, now: now) { applyRate() }
+        pacer.maxInflightFrames = rate.inflightFrameLimit
         pump()
     }
 
