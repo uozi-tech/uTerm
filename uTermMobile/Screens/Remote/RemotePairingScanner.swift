@@ -96,6 +96,10 @@ private struct QRCodeCamera: UIViewControllerRepresentable {
         var onCode: ((String) -> Bool)?
         private let session = AVCaptureSession()
         private var preview: AVCaptureVideoPreviewLayer?
+        /// 取景画面的旋转：按相机装在机身上的方向和此刻的姿态（含屏幕方向）算角度，跟着转。
+        /// 不设时预览一直是传感器的原始方向，横握或倒握时画面是歪的。
+        private var rotation: AVCaptureDevice.RotationCoordinator?
+        private var rotationObservation: NSKeyValueObservation?
         private var finished = false
         /// 同一个不认识的码不反复提示。
         private var lastRejected: String?
@@ -115,6 +119,19 @@ private struct QRCodeCamera: UIViewControllerRepresentable {
             preview.videoGravity = .resizeAspectFill
             view.layer.addSublayer(preview)
             self.preview = preview
+            let rotation = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: preview)
+            self.rotation = rotation
+            applyRotation(rotation.videoRotationAngleForHorizonLevelPreview)
+            rotationObservation = rotation.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) {
+                [weak self] _, change in
+                guard let angle = change.newValue else { return }
+                DispatchQueue.main.async { self?.applyRotation(angle) }
+            }
+        }
+
+        private func applyRotation(_ angle: CGFloat) {
+            guard let connection = preview?.connection, connection.isVideoRotationAngleSupported(angle) else { return }
+            connection.videoRotationAngle = angle
         }
 
         override func viewDidLayoutSubviews() {
