@@ -146,7 +146,7 @@ struct FilesSessionBody: View {
     /// 上一级（`..`）行，对齐设计稿带返回箭头的双色文件夹图标。
     private var upRow: some View {
         HStack(spacing: 13) {
-            MFileIcon(kind: .folder, isUp: true, size: 26).frame(width: 26)
+            RemoteFileIcon(kind: .folder, isUp: true, size: 26).frame(width: 26)
             Text("..").font(M.sans(15)).foregroundStyle(M.text2)
             Spacer()
         }
@@ -218,7 +218,7 @@ struct SFTPRow: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            MFileIcon(kind: kind, size: 26).frame(width: 26)
+            RemoteFileIcon(kind: kind, size: 26).frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)
                 Text(subtitle).font(M.mono(11.5)).foregroundStyle(M.text4).lineLimit(1)

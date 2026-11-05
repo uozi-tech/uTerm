@@ -305,7 +305,7 @@ struct MobileFakeSFTPTree: Sendable {
     /// 条目形态刻意散开（都是排版 / 截断成本的来源）：
     /// - 文件名长短混合：`a.txt` 到 130 字符的长名，含中文与空格；
     /// - 类型混合：目录 / 普通文件 / 符号链接（`S_IFLNK`，`isDirectory` 恒 false）；
-    /// - 大小从 0 到 ~40GB（`MFileIcon` 与副标题的格式化分支都要走到）；
+    /// - 大小从 0 到 ~40GB（`RemoteFileIcon` 与副标题的格式化分支都要走到）；
     /// - 权限混合 0644 / 0755 / 0600 / 0777；
     /// - 修改时间散布在 3 年内（「今天 / 本月 / 去年」三种日期格式都出现）。
     static func entries(count: Int,

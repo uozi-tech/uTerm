@@ -635,7 +635,7 @@ private struct ProbeAttributionList: View {
     private func compactBody(_ entry: RemoteEntry, kind: BrowserFileKind,
                              selected: Bool) -> some View {
         HStack(spacing: 9) {
-            SFTPFileIcon(kind: kind, size: 16).frame(width: 22)
+            RemoteFileIcon(kind: kind, size: 16).frame(width: 22)
             Text(entry.name).font(.system(size: 13))
                 .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
@@ -653,7 +653,7 @@ private struct ProbeAttributionList: View {
     private func wideBody(_ entry: RemoteEntry, kind: BrowserFileKind,
                           selected: Bool) -> some View {
         HStack(spacing: 12) {
-            SFTPFileIcon(kind: kind).frame(width: 30)
+            RemoteFileIcon(kind: kind, size: 19).frame(width: 30)
             Text(entry.name).font(.system(size: 13.5))
                 .foregroundStyle(UD.text).lineLimit(1).truncationMode(.middle)
                 .frame(width: 420, alignment: .leading)

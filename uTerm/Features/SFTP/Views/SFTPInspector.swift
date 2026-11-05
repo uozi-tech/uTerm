@@ -64,7 +64,7 @@ struct SFTPInspector: View {
                             RoundedRectangle(cornerRadius: 18)
                                 .fill(item.isDirectory ? UD.accentSoft : UD.fillFaint)
                                 .frame(width: 84, height: 84)
-                            SFTPFileIcon(kind: kind).scaleEffect(2.1)
+                            RemoteFileIcon(kind: kind, size: 19).scaleEffect(2.1)
                         }
                         VStack(spacing: 4) {
                             Text(item.name).font(.system(size: 15, weight: .medium))

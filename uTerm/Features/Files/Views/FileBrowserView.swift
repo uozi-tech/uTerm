@@ -384,7 +384,7 @@ struct FileBrowserContent: View {
     private var upRow: some View {
         let upSelected = selectedID == Self.upRowID
         return HStack(spacing: 9) {
-            SFTPFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
+            RemoteFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
             Text("..")
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text2)
@@ -467,7 +467,7 @@ struct FileBrowserContent: View {
         let base = HStack(spacing: 9) {
             // 复用独立 SFTP 窗口同款图标（双色蓝文件夹 + 文件类型彩色角标），按
             // 侧边栏窄栏缩到 16pt。
-            SFTPFileIcon(kind: kind, size: 16).frame(width: 22)
+            RemoteFileIcon(kind: kind, size: 16).frame(width: 22)
             Text(entry.name)
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text)
