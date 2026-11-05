@@ -14,8 +14,8 @@ import SwiftData
 /// 各自维护一套同义词。
 ///
 /// 于是这里只补工厂：控制器持有 `MobileTerminalTransportFactory`，默认 `.live`
-/// 就是原来 `start()` 里那段 `SSHAuthResolver` + `HostKeyVerifier` + `SSHConnection`
-/// 的组装，逐行搬过来，**生产路径零行为变化**。测试注入别的工厂即可拿到假后端。
+/// 就是 `SSHAuthResolver` + `HostKeyVerifier` + `SSHConnection` 的组装（与 mac 共用
+/// `SSHConnection.make`）。测试注入别的工厂即可拿到假后端。
 
 /// 建一条终端传输所需的全部输入。
 ///
@@ -32,7 +32,7 @@ struct MobileTerminalTransportRequest {
 
 /// 造终端后端的工厂。`MobileTerminalController` 的唯一后端来源。
 ///
-/// 抛错的语义与改动前一致：只有「认证材料解析失败」这一种，控制器把它包成
+/// 只会从认证材料解析那一步抛错（含跳板机凭据缺失），控制器把它包成
 /// `.failed("认证材料解析失败：…")`。
 ///
 /// `async`：生产实现要读钥匙串（每次 3~5 次 `SecItemCopyMatching`，有跳板机再翻倍），
@@ -48,16 +48,10 @@ struct MobileTerminalTransportFactory {
     /// 生产实现：真 SSH。
     static let live = MobileTerminalTransportFactory(make: makeLive)
 
-    /// `@Model` 的字段在主线程拍成快照，钥匙串读取离开主线程。
+    /// 组装与 mac 进程内连接同一份（`SSHConnection.make`）：钥匙串读取离开主线程，跳板机凭据缺了直接报错。
+    /// 首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
     private static func makeLive(_ request: MobileTerminalTransportRequest) async throws -> any TerminalBackend {
-        let snapshot = SSHConnection.ProfileSnapshot(request.profile)
-        let resolved = try await SSHAuthResolver.resolveOffMain(
-            SSHAuthResolver.Lookup(request.profile),
-            jump: request.profile.jumpHost.map { SSHAuthResolver.Lookup($0) })
-        let verifier = HostKeyVerifier(modelContainer: request.container)
-        // 首次连接 / 密钥变化时弹出信任确认；信任后由 verifier 写入 known-hosts。
-        return SSHConnection(profile: snapshot, auth: resolved.auth, jumpHostAuth: resolved.jump,
-                             hostKeyVerifier: verifier,
-                             hostKeyApprover: request.relay.makeApprover())
+        try await SSHConnection.make(profile: request.profile, container: request.container,
+                                     approver: request.relay.makeApprover())
     }
 }

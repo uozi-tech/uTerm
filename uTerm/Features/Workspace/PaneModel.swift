@@ -91,7 +91,8 @@ final class PaneModel: Identifiable {
                 backend = makeHeldBackend(profile: profile, modelContainer: modelContainer)
             } else {
                 AppLogger.error("终端辅助程序不可用，这条 SSH 连接留在 App 进程内", category: "ssh")
-                backend = try makeInProcessBackend(profile: profile, modelContainer: modelContainer)
+                backend = try await SSHConnection.make(profile: profile, container: modelContainer,
+                                                       approver: hostKeyRelay.makeApprover())
             }
             timeline.mark("backend")
             await session.connect(using: backend)
@@ -122,20 +123,6 @@ final class PaneModel: Identifiable {
                 hostKeyVerifier: HostKeyVerifier(modelContainer: modelContainer),
                 hostKeyApprover: hostKeyRelay.makeApprover()),
             attributes: sessionAttributes(title: profile.name))
-    }
-
-    private func makeInProcessBackend(profile: ServerProfile, modelContainer: ModelContainer) throws -> SSHConnection {
-        let keychain = KeychainStore()
-        let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
-        var jumpAuth: ResolvedAuth?
-        if let jump = profile.jumpHost {
-            jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-        }
-        return SSHConnection(
-            profile: SSHConnection.ProfileSnapshot(profile),
-            auth: auth, jumpHostAuth: jumpAuth,
-            hostKeyVerifier: HostKeyVerifier(modelContainer: modelContainer),
-            hostKeyApprover: hostKeyRelay.makeApprover())
     }
 
     /// 重启后据此把标签放回原来的窗口。窗口还没把凭条发下来时是 nil，`adopt(registrar:)` 时补。
