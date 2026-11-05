@@ -167,19 +167,12 @@ struct KeyManagerView: View {
     // MARK: - 派生
 
     private func profilesUsing(_ key: SSHKey) -> [ServerProfile] {
-        profiles.filter { $0.keyID == key.id }
+        SSHKeyLibrary.users(of: key, in: profiles)
     }
     private func hostCount(for key: SSHKey) -> Int { profilesUsing(key).count }
 
     /// `keyID → 使用该密钥的主机数`，一趟建好给列表查表用。
-    private var hostCounts: [UUID: Int] {
-        var counts: [UUID: Int] = [:]
-        for p in profiles {
-            guard let id = p.keyID else { continue }
-            counts[id, default: 0] += 1
-        }
-        return counts
-    }
+    private var hostCounts: [UUID: Int] { SSHKeyLibrary.usageCounts(profiles) }
     private func usedByNames(for key: SSHKey) -> [String] {
         profilesUsing(key).map(\.name).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
@@ -205,13 +198,11 @@ struct KeyManagerView: View {
     }
 
     private func deleteKey(_ key: SSHKey) {
-        keyStore.delete(keyID: key.id)
-        // 解绑引用此密钥的服务器（连接时会回退/报缺密钥）。
-        for p in profilesUsing(key) { p.keyID = nil }
-        if selectedID == key.id { selectedID = nil }
-        modelContext.delete(key)
-        try? modelContext.save()
-        selectedID = keys.first(where: { $0.id != key.id })?.id
+        // 清钥匙串 + 解绑引用此密钥的服务器（连接时会回退/报缺密钥）+ 删行。
+        let deletedID = key.id
+        if selectedID == deletedID { selectedID = nil }
+        SSHKeyLibrary(context: modelContext, keyStore: keyStore).delete(key)
+        selectedID = keys.first(where: { $0.id != deletedID })?.id
     }
 }
 

@@ -117,10 +117,7 @@ struct ServerRow: View {
         .accessibilityAction(named: Text("打开")) { onDoubleTap() }
     }
 
-    private var groupLabel: String {
-        if let g = profile.group, !g.isEmpty { return g }
-        return "未分组"
-    }
+    private var groupLabel: String { profile.groupLabel }
 
     /// 选中 > hover > 透明。用 `Color.primary` 透明叠底，浅色下变深、深色下变浅，
     /// 与设计稿的 white-alpha 叠底等效且自适应外观设置。

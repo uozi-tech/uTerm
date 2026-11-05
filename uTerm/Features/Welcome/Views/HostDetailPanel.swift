@@ -28,7 +28,7 @@ struct HostDetailPanel: View {
     /// 反馈自动消失的代际令牌：快速连点时只让最后一次的清除生效。
     @State private var copiedToken = 0
 
-    private var fullEndpoint: String { "\(profile.username)@\(profile.host):\(profile.port)" }
+    private var fullEndpoint: String { profile.endpointWithPort }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -312,14 +312,9 @@ struct HostDetailPanel: View {
 
     // MARK: derived
 
-    private var groupLabel: String {
-        if let g = profile.group, !g.isEmpty { return g }
-        return "未分组"
-    }
+    private var groupLabel: String { profile.groupLabel }
 
-    private var authLabel: String {
-        profile.authMethod == .privateKey ? "SSH 密钥" : "密码"
-    }
+    private var authLabel: String { profile.authMethod.label }
 
     private var jumpLabel: String {
         if let jump = profile.jumpHost, !jump.name.isEmpty { return jump.name }

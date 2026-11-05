@@ -124,39 +124,19 @@ struct KeyGeneratorView: View {
         let chosenType = type
         let bits = rsaBits
         let cmt = comment
-        let nm = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nm = name
 
         Task {
-            do {
-                let generated: SSHKeyGenerator.GeneratedKey = try await Task.detached(priority: .userInitiated) {
-                    switch chosenType {
-                    case .ed25519: return SSHKeyGenerator.generateEd25519(comment: cmt)
-                    case .rsa:     return try SSHKeyGenerator.generateRSA(bits: bits, comment: cmt)
-                    case .ecdsaP256, .ecdsaP384, .ecdsaP521:
-                        return try SSHKeyGenerator.generateECDSA(type: chosenType, comment: cmt)
-                    }
-                }.value
-
-                let key = SSHKey()
-                key.name = nm
-                key.type = chosenType
-                key.bits = switch chosenType {
-                case .ed25519: 256
-                case .rsa: bits
-                case .ecdsaP256: 256
-                case .ecdsaP384: 384
-                case .ecdsaP521: 521
-                }
-                key.comment = cmt
-                key.fingerprint = generated.fingerprint
-                key.publicKey = generated.publicKey
-                key.hasPassphrase = false
-                try keyStore.save(keyID: key.id, privateKey: generated.privateKeyText, passphrase: nil)
-                generating = false
+            let result = await KeyGeneration.run(
+                kind: chosenType, bits: bits, name: nm, comment: cmt, keyStore: keyStore)
+            generating = false
+            switch result {
+            case .success(let key):
                 onCreate(key)
-            } catch {
-                generating = false
-                errorText = "生成失败：\((error as? LocalizedError)?.errorDescription ?? String(describing: error))"
+            case .failure(.cancelled):
+                return
+            case .failure(.failed(let message)):
+                errorText = message
             }
         }
     }

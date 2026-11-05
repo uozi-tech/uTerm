@@ -71,36 +71,20 @@ struct KeyGenSheet: View {
 
     private func generate() {
         busy = true; error = nil
-        let nm = name.trimmingCharacters(in: .whitespaces)
-        let cm = comment.trimmingCharacters(in: .whitespaces)
+        let name = self.name, comment = self.comment
         let kind = self.kind, bits = self.bits
         generation = Task {
-            do {
-                let gen = try await Task.detached(priority: .userInitiated) { () throws -> SSHKeyGenerator.GeneratedKey in
-                    switch kind {
-                    case .rsa: return try SSHKeyGenerator.generateRSA(bits: bits, comment: cm)
-                    default:   return SSHKeyGenerator.generateEd25519(comment: cm)
-                    }
-                }.value
-                guard !Task.isCancelled else { return }
-                let key = SSHKey()
-                key.name = nm
-                key.type = kind
-                key.bits = kind == .ed25519 ? 256 : bits
-                key.comment = cm
-                key.fingerprint = gen.fingerprint
-                key.publicKey = gen.publicKey
-                key.hasPassphrase = false
-                // 先写钥匙串、成功了才插入模型：反过来的话钥匙串写失败时，已插入的空私钥
-                // 记录会被下一次任意 save 一并落盘。
-                try KeyStore().save(keyID: key.id, privateKey: gen.privateKeyText, passphrase: nil)
+            let result = await KeyGeneration.run(kind: kind, bits: bits, name: name, comment: comment)
+            busy = false
+            switch result {
+            case .success(let key):
                 context.insert(key)
                 try? context.save()
-                busy = false
                 dismiss()
-            } catch {
-                busy = false
-                self.error = "生成失败：\(error.localizedDescription)"
+            case .failure(.cancelled):
+                return
+            case .failure(.failed(let message)):
+                self.error = message
             }
         }
     }

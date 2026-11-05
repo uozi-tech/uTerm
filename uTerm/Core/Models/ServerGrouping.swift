@@ -25,7 +25,7 @@ import Foundation
 enum ServerGrouping {
 
     /// 空 / nil 组名在 iOS 列表里显示成的段名。
-    static let ungroupedLabel = "未分组"
+    nonisolated static let ungroupedLabel = "未分组"
 
     /// 按分组保序归类：段的顺序 = 组名在 `profiles` 里**首次出现**的顺序，
     /// 段内主机保持 `profiles` 的原顺序（调用方通常已按 `sortOrder` 排好）。
@@ -68,6 +68,14 @@ enum ServerGrouping {
             counts[group, default: 0] += 1
         }
         return counts
+    }
+
+    /// 主机里出现过的非空分组名：去重 + 本地化升序（表单与右键菜单里的「已有分组」候选）。
+    static func existingNames(_ profiles: [ServerProfile]) -> [String] {
+        Set(profiles.compactMap { p -> String? in
+            let group = p.group ?? ""
+            return group.isEmpty ? nil : group
+        }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     /// 最近连接：有 `lastConnectedAt` 的按时间倒序，最多 `limit` 条。

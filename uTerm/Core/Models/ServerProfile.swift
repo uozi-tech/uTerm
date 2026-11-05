@@ -63,3 +63,26 @@ final class ServerProfile {
         return String(first).uppercased()
     }
 }
+
+// MARK: - 展示文案（两端主机列表 / 详情共用）
+
+extension AuthMethod {
+    /// 认证方式的展示名：「SSH 密钥」/「密码」。
+    nonisolated var label: String {
+        switch self {
+        case .password: return "密码"
+        case .privateKey: return "SSH 密钥"
+        }
+    }
+}
+
+extension ServerProfile {
+    /// 分组的展示名：nil 与空串都显示「未分组」。
+    var groupLabel: String {
+        if let group, !group.isEmpty { return group }
+        return ServerGrouping.ungroupedLabel
+    }
+
+    /// `用户名@主机:端口`。端口用 `String(port)`，避免进 `Text` 时按本地化加千分位（`2,222`）。
+    var endpointWithPort: String { "\(username)@\(host):\(String(port))" }
+}

@@ -1,36 +1,10 @@
 import SwiftUI
 
-/// 移动端局域网监听何时开始。
-///
-/// 监听（Bonjour 广播 + NWListener）会触发系统的「查找本地网络上的设备」授权。按 Apple 的
-/// 做法，授权应在用户真正用到这项功能时才请求，而不是首次启动就弹：所以首次启动不监听，
-/// 用户第一次在设置里看到「局域网接收」区块时才开始（此时弹授权，上下文清楚），并记下已启用，
-/// 之后每次启动直接监听（授权只问一次，之后不再弹）。
-enum LANSyncActivation {
-    private static let activatedKey = "lanSync.receiverActivated"
-    private static let pairingCodeKey = "lanSync.pairingCode"
-
-    /// 已启用过：看到过局域网接收区块，或升级前就配过配对码（老用户不必再进一次设置）。
-    static var isActivated: Bool {
-        let defaults = UserDefaults.standard
-        if defaults.bool(forKey: activatedKey) { return true }
-        return !(defaults.string(forKey: pairingCodeKey) ?? "").isEmpty
-    }
-
-    /// 局域网接收区块滚进可视区时调用：记下已启用，并在还没监听（或上次出错）时开始监听。
-    @MainActor static func activate(_ coordinator: LANSyncCoordinator) {
-        UserDefaults.standard.set(true, forKey: activatedKey)
-        switch coordinator.status {
-        case .stopped, .error: coordinator.start()
-        default: break
-        }
-    }
-}
-
 /// 移动端局域网同步入口：移动端只监听，Mac 发起后由这里请求确认。
 struct LANSyncSettingsSection: View {
     @Environment(LANSyncCoordinator.self) private var lanSync
-    @AppStorage("lanSync.pairingCode") private var pairingCode = ""
+    /// 配对码的唯一来源是协调器（它负责落盘），视图只读。
+    private var pairingCode: String { lanSync.pairingCode }
     @State private var editingCode = false
     @State private var draftCode = ""
 
@@ -46,7 +20,7 @@ struct LANSyncSettingsSection: View {
         }
         // 设置页是非 lazy 的 VStack，onAppear 在一进设置就触发；要的是「滚到这个区块」时才请求授权。
         .onScrollVisibilityChange(threshold: 0.5) { visible in
-            if visible { LANSyncActivation.activate(lanSync) }
+            if visible { lanSync.activateReceiver() }
         }
         .sheet(isPresented: $editingCode) {
             PairingCodeSheet(code: $draftCode, hasSavedCode: !pairingCode.isEmpty,
@@ -59,10 +33,8 @@ struct LANSyncSettingsSection: View {
 
 extension LANSyncSettingsSection {
     private func save(_ code: String) {
-        // 与 LANSyncCoordinator.setPairingCode 同一规范化：只留数字、最多 6 位。
-        let normalized = MCodeField.normalize(code, length: 6)
-        pairingCode = normalized
-        lanSync.setPairingCode(normalized)
+        // 配对码只存在协调器里（它负责规范化与落盘：只留数字、最多 6 位）。
+        lanSync.setPairingCode(MCodeField.normalize(code, length: 6))
         editingCode = false
     }
 }
@@ -125,11 +97,8 @@ private struct MobileLANSyncHost: ViewModifier {
             // 退到后台后系统会让监听失效（状态转为出错 / 停止）。改前只有用户滚到设置里那一块
             // 才会重启，期间 Mac 怎么发都找不到这台手机。已启用过的回前台就重新监听。
             .onChange(of: scenePhase) { _, phase in
-                guard phase == .active, LANSyncActivation.isActivated else { return }
-                switch lanSync.status {
-                case .stopped, .error: lanSync.start()
-                default: break
-                }
+                guard phase == .active else { return }
+                lanSync.resumeIfActivated()
             }
     }
 

@@ -76,15 +76,7 @@ struct KeysScreen: View {
     }
 
     /// keyID → 使用它的主机数，一趟过。
-    private var keyUsage: [UUID: Int] {
-        var out: [UUID: Int] = [:]
-        out.reserveCapacity(keys.count)
-        for h in hosts {
-            guard let id = h.keyID else { continue }
-            out[id, default: 0] += 1
-        }
-        return out
-    }
+    private var keyUsage: [UUID: Int] { SSHKeyLibrary.usageCounts(hosts) }
 }
 
 struct KeyDetailSheet: View {
@@ -94,7 +86,7 @@ struct KeyDetailSheet: View {
     @Query private var hosts: [ServerProfile]
     @State private var pendingDelete = false
 
-    private var usedBy: [ServerProfile] { hosts.filter { $0.keyID == key.id } }
+    private var usedBy: [ServerProfile] { SSHKeyLibrary.users(of: key, in: hosts) }
     /// 危险区卡片：`MBtn` 的 `lg` 圆角 + 卡片内边距 14pt。
     private let dangerRadius = MRadius.concentric(MRadius.lg, inset: 14)
 
@@ -162,9 +154,8 @@ struct KeyDetailSheet: View {
     }
 
     private func delete() {
-        KeyStore().delete(keyID: key.id)
-        context.delete(key)
-        try? context.save()
+        // 连带把引用它的主机 keyID 置空（改前漏了：主机仍指着一把已不存在的密钥）。
+        SSHKeyLibrary(context: context).delete(key)
         dismiss()
     }
 }
@@ -174,7 +165,7 @@ struct FlowChipsView: View {
     let items: [String]
     @Environment(\.mAccent) private var accent
     var body: some View {
-        FlexWrap(spacing: 7, lineSpacing: 7) {
+        FlowLayout(spacing: 7) {
             ForEach(items, id: \.self) { name in
                 HStack(spacing: 6) {
                     MDot(color: accent, size: 6)
@@ -184,33 +175,6 @@ struct FlowChipsView: View {
                 .background(M.fillFaint)
                 .clipShape(Capsule())
             }
-        }
-    }
-}
-
-/// 极简自适应换行容器（基于 Layout 协议）。
-struct FlexWrap: Layout {
-    var spacing: CGFloat = 8
-    var lineSpacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxW = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > maxW, x > 0 { x = 0; y += lineH + lineSpacing; lineH = 0 }
-            x += s.width + spacing; lineH = max(lineH, s.height)
-        }
-        return CGSize(width: maxW == .infinity ? x : maxW, height: y + lineH)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, lineH: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += lineH + lineSpacing; lineH = 0 }
-            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
-            x += s.width + spacing; lineH = max(lineH, s.height)
         }
     }
 }

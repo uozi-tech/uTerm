@@ -25,7 +25,7 @@ struct HostSheet: View {
                     MGroupChip(g, tint: groupColor)
                 }
             }
-            Text("\(host.username)@\(host.host):\(String(host.port))")
+            Text(host.endpointWithPort)
                 .font(M.mono(13.5)).foregroundStyle(M.text2).lineLimit(1).padding(.top, 5)
 
             metaGrid.padding(.top, 20)
@@ -45,9 +45,9 @@ struct HostSheet: View {
     private var metaGrid: some View {
         let items: [(String, String, Bool)] = [
             ("端口", "\(host.port)", true),
-            ("认证", host.authMethod == .privateKey ? "SSH 密钥" : "密码", false),
+            ("认证", host.authMethod.label, false),
             ("上次连接", lastText, false),
-            ("分组", host.group ?? "未分组", false),
+            ("分组", host.groupLabel, false),
         ]
         // 用 Grid 而不是 LazyVGrid：懒加载容器的格子不跟父视图的滑入转场走，面板还在往上滑时
         // 这几格文字就先停在了终点（实机反馈「弹窗还没弹完字体就出来了」）。只有四格，不需要懒加载。

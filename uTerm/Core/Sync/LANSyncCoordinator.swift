@@ -90,6 +90,7 @@ final class LANSyncCoordinator {
     private static let deviceIDKey = "lanSync.deviceID"
     private static let hostPairingCodeKey = "lanSync.hostPairingCode"
     private static let mobilePairingCodeKey = "lanSync.pairingCode"
+    private static let receiverActivatedKey = "lanSync.receiverActivated"
 
     private(set) var status: Status = .stopped
     private(set) var lastSyncedAt: Date?
@@ -191,6 +192,41 @@ final class LANSyncCoordinator {
         let normalized = String(code.filter(\.isNumber).prefix(6))
         pairingCode = normalized
         defaults.set(normalized, forKey: Self.mobilePairingCodeKey)
+    }
+
+    // MARK: - 接收端何时开始监听
+
+    // 监听（Bonjour 广播 + NWListener）会触发系统的「查找本地网络上的设备」授权。按 Apple 的
+    // 做法，授权应在用户真正用到这项功能时才请求，而不是首次启动就弹：所以首次启动不监听，
+    // 用户第一次在设置里看到「局域网接收」区块时才开始（此时弹授权，上下文清楚），并记下已启用，
+    // 之后每次启动直接监听（授权只问一次，之后不再弹）。只对接收端（移动端）生效。
+
+    /// 已启用过：看到过局域网接收区块，或升级前就配过配对码（老用户不必再进一次设置）。
+    var isReceiverActivated: Bool {
+        guard role == .receiver else { return false }
+        if defaults.bool(forKey: Self.receiverActivatedKey) { return true }
+        return !pairingCode.isEmpty
+    }
+
+    /// 局域网接收区块滚进可视区时调用：记下已启用，并在还没监听（或上次出错）时开始监听。
+    func activateReceiver() {
+        guard role == .receiver else { return }
+        defaults.set(true, forKey: Self.receiverActivatedKey)
+        startIfIdle()
+    }
+
+    /// 启动时 / 回到前台时调用：启用过的才（重新）开始监听。退到后台后系统会让监听失效
+    ///（状态转为出错 / 停止），不重启的话 Mac 怎么发都找不到这台手机。
+    func resumeIfActivated() {
+        guard isReceiverActivated else { return }
+        startIfIdle()
+    }
+
+    private func startIfIdle() {
+        switch status {
+        case .stopped, .error: start()
+        default: break
+        }
     }
 
     private func respondToPendingSync(accepted: Bool) {
@@ -421,7 +457,7 @@ final class LANSyncCoordinator {
 
     /// 接收端的读帧看门狗：在等某一帧、超过发送端超时还没等到就判失败。
     /// 发送端合盖或断 Wi-Fi 时不一定发 RST，`receive` 会一直挂着，状态永远停在「同步中」，
-    /// 而 `LANSyncActivation.activate` 只在 `.stopped` / `.error` 时重启——只能杀进程。
+    /// 而 `activateReceiver` / `resumeIfActivated` 只在 `.stopped` / `.error` 时重启——只能杀进程。
     private func startReceiveWatchdog(on context: ConnectionContext) {
         context.watchdog = Task { [weak self, weak context] in
             while !Task.isCancelled {
