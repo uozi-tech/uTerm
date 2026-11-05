@@ -31,6 +31,11 @@ struct ParallelRunView: View {
     /// 控制器工厂。默认造真控制器（真实 SSH 执行器），**生产调用点不变**；
     /// 探针注入一个带假执行器的控制器，整屏就能在没有真机器的情况下挂起来量。
     let makeController: @MainActor (ParallelRunSetup) -> ParallelRunController
+    /// 控制器造好时交给持有者（`ParallelRunSession`），之后关掉全屏页也继续跑、再打开拿回同一个。
+    let onControllerReady: (ParallelRunController) -> Void
+    /// 点了「重新运行」（持有者据此重新申请后台保活）。
+    let onRerun: () -> Void
+    /// 关掉全屏页。还在跑时左上角是「后台运行」，同样走这里：运行不停，转到后台。
     let onClose: () -> Void
 
     @Environment(\.modelContext) private var context
@@ -49,6 +54,7 @@ struct ParallelRunView: View {
     /// 从 AI 泳道点「原始输出」跳过来时，要滚到的那一台（窄屏列表用）。
     @State private var revealLane: UUID?
     @State private var aiFilter: ParAIFilter = .all
+    @Namespace private var modeThumb
     private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     /// - Parameters:
@@ -60,9 +66,13 @@ struct ParallelRunView: View {
          makeController: @escaping @MainActor (ParallelRunSetup) -> ParallelRunController
             = ParallelRunView.defaultController,
          controller: ParallelRunController? = nil,
+         onControllerReady: @escaping (ParallelRunController) -> Void = { _ in },
+         onRerun: @escaping () -> Void = {},
          onClose: @escaping () -> Void) {
         self.request = request
         self.makeController = makeController
+        self.onControllerReady = onControllerReady
+        self.onRerun = onRerun
         self.onClose = onClose
         _controller = State(initialValue: controller)
     }
@@ -89,10 +99,19 @@ struct ParallelRunView: View {
             .modifier(ParPinnedBars())
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    MToolbarCloseButton(action: onClose)
+                    if controller?.allDone == false {
+                        // 还在跑：关掉 = 转到后台继续跑，标签栏上方的「正在运行」条可以回来。
+                        Button(action: onClose) {
+                            Image(systemName: "chevron.down")
+                        }
+                        .accessibilityLabel(Text("后台运行"))
+                        .accessibilityHint(Text("关闭页面，运行在后台继续"))
+                    } else {
+                        MToolbarCloseButton(action: onClose)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { controller?.rerun() } label: {
+                    Button { controller?.rerun(); onRerun() } label: {
                         Image(systemName: MGlyph.symbol("rerun"))
                     }
                     .disabled(controller?.allDone != true)
@@ -110,6 +129,7 @@ struct ParallelRunView: View {
         let c = makeController(ParallelRunSetup(request: request, targets: targets,
                                                 providers: providers, context: context))
         controller = c
+        onControllerReady(c)
         c.start()
     }
 
@@ -162,18 +182,15 @@ struct ParallelRunView: View {
     /// 底栏：只放视图切换，始终居中（页码点在内容里、网格下方——放进底栏会把分段控件挤到一边，
     /// 实机反馈）。
     ///
-    /// iOS 26 起工具栏会给每一项包一层共享的玻璃胶囊，分段控件放进去叠出了「两层玻璃」
-    /// （实机反馈）。所以这一项关掉共享背景，由分段控件自己带一层。
+    /// iOS 26 起工具栏会给每一项包一层共享的玻璃胶囊。这一项关掉共享背景、自己带一层
+    /// 可交互玻璃（与工具栏同款），里面不再有第二层。
     @ToolbarContentBuilder
     private var bottomBar: some ToolbarContent {
         if let c = controller {
             if #available(iOS 26.0, *) {
                 ToolbarSpacer(.flexible, placement: .bottomBar)
-                // 关掉工具栏那层共享胶囊，再给分段控件自己包**一层**玻璃：只关不包的话，
-                // 分段控件在工具栏里不画底，深色下连选中滑块都看不见（截图核过）。
                 ToolbarItem(placement: .bottomBar) {
                     modePicker(c)
-                        .padding(4)
                         .glassEffect(.regular.interactive(), in: .capsule)
                 }
                 .sharedBackgroundVisibility(.hidden)
@@ -188,15 +205,38 @@ struct ParallelRunView: View {
         }
     }
 
-    /// 底栏里的视图切换：系统分段控件（iOS 26 起自带玻璃滑块、VoiceOver 与动态字体）。
+    /// 底栏里的视图切换。不用系统分段控件：放进工具栏后它会再画一层自己的轨道，
+    /// 在不同系统 / 设备上叠出「两层玻璃」，模拟器里还看不出来（真机反馈了两次）。
+    /// 这里外面只有一层玻璃（由底栏那一项给），选中项是胶囊里一块平涂的淡色底，
+    /// 与 iOS 26 标签栏选中项同一做法；Shell 用强调色、AI 介入用紫色。
     private func modePicker(_ c: ParallelRunController) -> some View {
-        Picker("视图", selection: Binding(get: { c.mode },
-                                         set: { m in withAnimation(.snappy) { c.mode = m } })) {
-            Text("Shell").tag(PMode.shell)
-            Text("AI 介入").tag(PMode.ai)
+        HStack(spacing: 2) {
+            ForEach(PMode.allCases, id: \.self) { m in
+                let on = c.mode == m
+                let tint: Color = m == .ai ? M.aiAccent : accent
+                Button { withAnimation(.snappy) { c.mode = m } } label: {
+                    HStack(spacing: 5) {
+                        if m == .ai { Image(systemName: "sparkles").font(.system(size: 13, weight: .semibold)) }
+                        Text(m == .ai ? "AI 介入" : "Shell")
+                            .font(.system(size: 15, weight: on ? .semibold : .medium))
+                    }
+                    .foregroundStyle(on ? tint : M.text2)
+                    .frame(width: 104, height: 36)
+                    .background {
+                        if on {
+                            Capsule().fill(tint.opacity(0.14))
+                                .matchedGeometryEffect(id: "thumb", in: modeThumb)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
         }
-        .pickerStyle(.segmented)
-        .frame(width: 220)
+        .padding(4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("视图"))
     }
 
     private func showsPageDots(_ c: ParallelRunController) -> Bool {

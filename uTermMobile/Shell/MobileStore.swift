@@ -61,8 +61,14 @@ final class MobileStore {
     /// 命令面板里「新建主机」触发：切到主机标签并弹出新建表单。
     var requestNewServer = false
 
-    /// 并行执行请求（命令详情「运行」发起）。根视图以全屏覆盖呈现（设计稿 `ParallelRun`）。
-    var parallelRun: ParallelRunRequest?
+    /// 并行执行：每次「运行」一个会话，关掉全屏页也继续跑（标签栏上方的「正在运行」条可回来看）。
+    /// 跑完且看过 / 划掉之后才移除。
+    var parallelSessions: [ParallelRunSession] = []
+    /// 正在全屏呈现的那一次。
+    var presentedParallel: ParallelRunSession?
+    /// 切到别的 App 后让运行继续（iOS 26 系统后台继续处理；更早的系统短暂延时）。
+    @ObservationIgnored
+    lazy var parallelKeeper = ParallelBackgroundKeeper { [weak self] in self?.parallelSessions ?? [] }
 
     /// 远程桌面（Mac 面板「屏幕」发起）。根视图以全屏覆盖呈现。
     var remoteDesktop: MRemoteDesktopRequest?
@@ -76,8 +82,34 @@ final class MobileStore {
     var teardownTabIDs: Set<UUID> = []
 
     func runCommand(_ cmd: QuickCommand) {
-        parallelRun = ParallelRunRequest(commandID: cmd.id, name: cmd.name, command: cmd.command,
-                                         intent: cmd.intent, aiAssisted: cmd.aiAssisted, serverIDs: cmd.serverIDs)
+        let session = ParallelRunSession(request: ParallelRunRequest(
+            commandID: cmd.id, name: cmd.name, command: cmd.command,
+            intent: cmd.intent, aiAssisted: cmd.aiAssisted, serverIDs: cmd.serverIDs))
+        parallelSessions.append(session)
+        presentedParallel = session
+        ParallelBackgroundKeeper.requestProvisionalNotifications()
+        parallelKeeper.runStarted(title: cmd.name)
+    }
+
+    /// 回到某一次运行（「正在运行」条）。
+    func showParallel(_ session: ParallelRunSession) {
+        presentedParallel = session
+    }
+
+    /// 全屏页关掉：还在跑就留着（转到后台）；跑完了就一并移除。
+    func closeParallel(_ session: ParallelRunSession) {
+        if presentedParallel?.id == session.id { presentedParallel = nil }
+        if !session.isRunning { removeParallel(session) }
+    }
+
+    /// 划掉一次已结束的运行。
+    func removeParallel(_ session: ParallelRunSession) {
+        parallelSessions.removeAll { $0.id == session.id }
+    }
+
+    /// 全屏页里点了「重新运行」：后台保活重新算起。
+    func parallelRerun(_ session: ParallelRunSession) {
+        parallelKeeper.runStarted(title: session.title)
     }
 
     /// 所有「连接主机」入口都走这里：切到目标标签、记录来源、呈现连接中页。
