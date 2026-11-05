@@ -147,28 +147,3 @@ nonisolated enum MRadius {
         max(outer - inset, minimum)
     }
 }
-
-/// 把十六进制字符串转 Color。仅剩 `MFileIcon` 在用；新代码用共享的 `Color(hex:)`
-/// （`uTerm/Core/Theme/Color+Hex.swift`）。
-extension Color {
-    init(hexString: String) {
-        var s = hexString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.hasPrefix("#") { s.removeFirst() }
-        var v: UInt64 = 0
-        Scanner(string: s).scanHexInt64(&v)
-        let r, g, b, a: Double
-        switch s.count {
-        case 8:
-            r = Double((v >> 24) & 0xFF) / 255
-            g = Double((v >> 16) & 0xFF) / 255
-            b = Double((v >> 8) & 0xFF) / 255
-            a = Double(v & 0xFF) / 255
-        default:
-            r = Double((v >> 16) & 0xFF) / 255
-            g = Double((v >> 8) & 0xFF) / 255
-            b = Double(v & 0xFF) / 255
-            a = 1
-        }
-        self = Color(.sRGB, red: r, green: g, blue: b, opacity: a)
-    }
-}
