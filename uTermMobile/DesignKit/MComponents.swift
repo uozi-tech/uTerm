@@ -589,6 +589,8 @@ nonisolated func mCardColumns(for width: CGFloat, minColumnWidth: CGFloat = M.ca
 
 struct MCardGrid<Content: View>: View {
     var maxColumns: Int = 3
+    /// 关掉懒加载：内容高度一开始就是准的，代价是卡片全部常驻。见 `MCardList.lazy`。
+    var lazy: Bool = true
     @ViewBuilder var content: Content
 
     @State private var width: CGFloat = 0
@@ -598,12 +600,57 @@ struct MCardGrid<Content: View>: View {
         let count = mCardColumns(for: width, maxColumns: maxColumns)
         let columns = Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
                             count: count)
-        LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
-            content
+        Group {
+            if lazy {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
+                    content
+                }
+            } else {
+                MEagerCardColumns(columns: count, spacing: spacing) {
+                    content
+                }
+            }
         }
         // LazyVGrid 不会把格子拉到整行同高：行数可变的卡片据此在多列时预留满行数。
         .environment(\.mCardGridColumns, count)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+/// `MCardGrid` 的非懒加载版：等宽多列，每行取最高卡片的高度，格子顶部对齐（与 LazyVGrid 的 `.top` 一致）。
+private struct MEagerCardColumns: Layout {
+    var columns: Int
+    var spacing: CGFloat
+
+    private func cellWidth(in width: CGFloat) -> CGFloat {
+        max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+    }
+
+    private func rowHeights(_ subviews: Subviews, cellWidth: CGFloat) -> [CGFloat] {
+        stride(from: 0, to: subviews.count, by: columns).map { start in
+            subviews[start..<min(start + columns, subviews.count)].map {
+                $0.sizeThatFits(ProposedViewSize(width: cellWidth, height: nil)).height
+            }.max() ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 0
+        let heights = rowHeights(subviews, cellWidth: cellWidth(in: width))
+        return CGSize(width: width, height: heights.reduce(0, +) + spacing * CGFloat(max(0, heights.count - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let cell = cellWidth(in: bounds.width)
+        var y = bounds.minY
+        for (row, height) in rowHeights(subviews, cellWidth: cell).enumerated() {
+            for column in 0..<columns where row * columns + column < subviews.count {
+                subviews[row * columns + column].place(
+                    at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing), y: y),
+                    proposal: ProposedViewSize(width: cell, height: nil))
+            }
+            y += height + spacing
+        }
     }
 }
 
@@ -623,13 +670,24 @@ extension EnvironmentValues {
 /// 主机 / 终端 / 文件 / 命令四个 tab 的卡片列表共用，替代写死的 spacing。
 struct MCardList<Content: View>: View {
     var alignment: HorizontalAlignment = .center
+    /// 懒加载时，没画出来的卡片只能估高，滚动中总高度不断被修正。主机页（Duo 真机、真实数据）录到修正时
+    /// 整块内容被挪位：滑回顶部偏移正常，内容却往下错开 317pt，手指不动就一直空着。关掉就没有估高。
+    var lazy: Bool = true
     @ViewBuilder var content: Content
 
     @State private var width: CGFloat = 0
 
     var body: some View {
-        LazyVStack(alignment: alignment, spacing: mCardSpacing(for: width)) {
-            content
+        Group {
+            if lazy {
+                LazyVStack(alignment: alignment, spacing: mCardSpacing(for: width)) {
+                    content
+                }
+            } else {
+                VStack(alignment: alignment, spacing: mCardSpacing(for: width)) {
+                    content
+                }
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }

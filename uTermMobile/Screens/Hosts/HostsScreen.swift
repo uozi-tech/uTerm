@@ -22,6 +22,9 @@ struct HostsScreen: View {
     @State private var creating = false
     @State private var pendingDelete: ServerProfile?
 
+    /// 不超过这么多台时不用懒加载（为什么见 `MCardList.lazy`）。更多时卡片全部常驻太贵，仍走懒加载。
+    static let eagerHostLimit = 120
+
     var body: some View {
         // 三个派生量在这里**各求一次**，往下传。
         //
@@ -37,9 +40,10 @@ struct HostsScreen: View {
         let groupColors = MGroupTint.colors(for: groups)
         let sections = ServerGrouping.grouped(hosts)
         let recent = ServerGrouping.recent(hosts)
+        let lazy = hosts.count > Self.eagerHostLimit
 
         return MScreen(title: "主机", sub: "\(hosts.count) 台服务器",
-                       maxContentWidth: M.gridContentWidth, actions: {
+                       maxContentWidth: M.gridContentWidth, pinsHeader: true, actions: {
             // 有会话开着（工作区收起了）时给一个回去的入口。系统工具栏按钮，底由系统画。
             if let workspace, !workspace.isEmpty {
                 Button { store.showWorkspace = true } label: {
@@ -70,22 +74,22 @@ struct HostsScreen: View {
                 } else if filter == .recent {
                     // 宽屏（iPhone Duo 展开 / iPad / 横屏）一行排 2–3 张卡（MCardGrid 按宽度定列数），
                     // 窄屏仍是一列。分组标题在网格外，独占一行。
-                    MCardList(alignment: .leading) {
+                    MCardList(alignment: .leading, lazy: lazy) {
                         sectionLabel("最近连接 · \(recent.count)")
                         if recent.isEmpty {
                             Text("还没有连接记录").font(M.sans(13)).foregroundStyle(M.text4)
                                 .frame(maxWidth: .infinity).padding(.vertical, 24)
                         }
-                        MCardGrid {
+                        MCardGrid(lazy: lazy) {
                             ForEach(recent) { host in card(host, groupColors: groupColors) }
                         }
                     }
                     .padding(.horizontal, 16)
                 } else {
-                    MCardList(alignment: .leading) {
+                    MCardList(alignment: .leading, lazy: lazy) {
                         ForEach(sections, id: \.name) { sec in
                             sectionLabel("\(sec.name) · \(sec.hosts.count)")
-                            MCardGrid {
+                            MCardGrid(lazy: lazy) {
                                 ForEach(sec.hosts) { host in card(host, groupColors: groupColors) }
                             }
                         }

@@ -88,6 +88,12 @@ nonisolated extension MChromeGeometry {
         return (safeAreaInsets.trailing, bar.maxY - root.minY)
     }
 
+    /// 状态栏占右侧一整列、顶边没有安全区（Duo 外屏、Duo 展开横屏）。只看安全区：真机不把状态栏
+    /// 报成遮挡保留区，`statusColumn` 在真机上是 nil。普通 iPhone 横屏左右都有安全区，不算。
+    var hasSideStatusColumn: Bool {
+        safeAreaInsets.top == 0 && safeAreaInsets.leading == 0 && safeAreaInsets.trailing > 0
+    }
+
     /// 状态栏在顶部一行的右端（Duo 展开竖屏）：整条顶边都算安全区，但状态栏只占右边一块，
     /// 左边那一截可以放自己的东西。返回该行高度（= 顶部安全区）。
     ///

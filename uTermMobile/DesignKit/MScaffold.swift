@@ -17,11 +17,14 @@ struct MScreen<Header: View, Content: View>: View {
     /// 内容的最大宽度（水平居中）。列表页取易读宽度；卡片网格页传 `M.gridContentWidth`。
     var maxContentWidth: CGFloat = M.readableWidth
     var embedsNavigationStack: Bool = true
+    /// 页头固定在顶部：手指滚动时系统不把导航栏滑走。
+    var pinsHeader: Bool = false
     @ViewBuilder var actions: Header
     @ViewBuilder var content: Content
     /// 系统 TabView 已为内容预留底部安全区，这里只补少量呼吸留白。
     var bottomInset: CGFloat = 12
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.mChrome) private var chrome
 
     var body: some View {
         if embedsNavigationStack {
@@ -41,11 +44,15 @@ struct MScreen<Header: View, Content: View>: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .top)
             }
             .scrollIndicators(.hidden)
+            .clipShape(MTopEdgeClip(clipsTop: chrome.hasSideStatusColumn))
         }
         .background(M.canvas)
         .navigationTitle(title)
-        .modifier(MTitleDisplayMode(regularWidth: horizontalSizeClass == .regular))
+        // 关掉栏的自动隐藏后，`.large` 会照常收起成小字；侧边状态栏形态下要真固定就得用 `.inlineLarge`。
+        .modifier(MTitleDisplayMode(regularWidth: horizontalSizeClass == .regular
+                                    || (pinsHeader && chrome.hasSideStatusColumn)))
         .mNavigationSubtitle(sub)
+        .modifier(MPinnedHeader(isPinned: pinsHeader))
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 actions.environment(\.mToolbarItem, true)
@@ -54,12 +61,44 @@ struct MScreen<Header: View, Content: View>: View {
     }
 }
 
+/// iOS 27 起系统会在手指上滑时把导航栏滑出屏幕、反向滑动再滑回来（Duo 真机录到：栏高 82→24，
+/// 标题移到屏幕外）。只有真实手势触发，程序设 `contentOffset` 不会，所以自动化用例看不到。
+private struct MPinnedHeader: ViewModifier {
+    var isPinned: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.toolbarMinimizationBehavior(isPinned ? .never : .automatic, for: .navigationBar)
+        } else {
+            content
+        }
+    }
+}
+
+/// 状态栏在侧边时（Duo 外屏、展开横屏），系统不管标题模式都把标题钉在顶上、滚动不收起，
+/// 内容一直从标题下面滑过。实测 `.large` / `.inlineLarge` / `.automatic` 一样，能不能看清全靠系统的
+/// 滚动边缘虚化；实机截图里它没出现，标题直接压在内容上。这里让内容停在标题栏下沿，不再依赖它。
+/// 不用 `toolbarBackground` 铺实底：它会让标题字号变大，顶边还留一条没盖住。
+///
+/// 始终挂着、只改形状：换成 `if` 分支的话，开合时 ScrollView 身份一变，滚动位置和页面状态都会丢。
+/// path 可以大过 bounds，SwiftUI 不与 bounds 求交，所以其余方向不受影响。
+nonisolated private struct MTopEdgeClip: Shape {
+    var clipsTop: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let outset: CGFloat = 4000
+        let top = clipsTop ? rect.minY : rect.minY - outset
+        return Path(CGRect(x: rect.minX - outset, y: top,
+                           width: rect.width + outset * 2, height: rect.maxY + outset - top))
+    }
+}
+
 extension MScreen where Header == EmptyView {
     init(title: String, sub: String? = nil, maxContentWidth: CGFloat = M.readableWidth,
-         embedsNavigationStack: Bool = true, bottomInset: CGFloat = 12,
+         embedsNavigationStack: Bool = true, pinsHeader: Bool = false, bottomInset: CGFloat = 12,
          @ViewBuilder content: () -> Content) {
         self.init(title: title, sub: sub, maxContentWidth: maxContentWidth,
-                  embedsNavigationStack: embedsNavigationStack,
+                  embedsNavigationStack: embedsNavigationStack, pinsHeader: pinsHeader,
                   actions: { EmptyView() }, content: content, bottomInset: bottomInset)
     }
 }

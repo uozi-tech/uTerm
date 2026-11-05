@@ -63,7 +63,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         NavigationStack {
-            MScreen(title: "设置", embedsNavigationStack: false) {
+            MScreen(title: "设置", embedsNavigationStack: false, pinsHeader: true) {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup

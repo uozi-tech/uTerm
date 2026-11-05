@@ -14,7 +14,7 @@ struct CommandsScreen: View {
             // 与「主机 / 终端 / 文件 / 设置」四个标签同一套大标题页头（MScreen）：此前这里是系统
             // 内联导航栏 + 「快捷命令」小标题，五个标签里唯独它换了一种页头。
             MScreen(title: "命令", sub: commands.isEmpty ? nil : "\(commands.count) 条快捷命令",
-                    maxContentWidth: M.gridContentWidth, embedsNavigationStack: false, actions: {
+                    maxContentWidth: M.gridContentWidth, embedsNavigationStack: false, pinsHeader: true, actions: {
                 MRoundBtn(icon: "plus", filled: true) { creating = true }
                     .accessibilityLabel(Text("新建命令"))
             }) {
