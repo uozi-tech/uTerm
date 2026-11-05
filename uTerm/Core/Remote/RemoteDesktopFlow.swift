@@ -120,8 +120,11 @@ nonisolated struct RemoteDesktopPacer<Frame> {
 /// - **基线** = 最近 `baselineWindow` 内最小的「采集 → 手机解码完」耗时：链路空着时的往返加编解码。
 ///   排队延迟 = 这一帧的耗时 − 基线。只看排队延迟、不看绝对耗时：往返本来就慢的链路（Wi-Fi、手机解码慢）
 ///   绝对耗时一直高，按绝对值判就会一直「拥塞」、码率压到底再也上不来。
-/// - **拥塞** = 连续 `slowAcksForCongestion` 帧排队延迟超过 `queueDelayThreshold`：码率 ×0.7，
-///   两次下调至少隔 `decreaseSpacing`。码率到底还拥塞，帧率减半到 30。单独一次慢多半是 Wi-Fi 抖动，不降。
+/// - **拥塞** = 最近 `congestionWindow` 内**最快**的那帧也比基线慢了 `queueDelayThreshold`（至少
+///   `samplesForCongestion` 个样本）：码率 ×0.7，两次下调至少隔 `decreaseSpacing`。码率到底还拥塞，帧率减半到 30。
+///   取窗口里的最小值是为了分开排队与抖动：真排队时每一帧都慢，最小值跟着抬；Wi-Fi 抖动（手机省电、
+///   空口重传）只让一部分帧慢。真机实测（iPhone 经 Wi-Fi，1 Mbps 几乎空载）：基线 30 ms，往返 p50 50、
+///   p95 110 ms，「连续 3 帧超阈值」的判法在这上面一直报拥塞，码率钉死在 1 Mbps。
 ///   编码前丢帧（在途满了）**不算**拥塞：那只说明往返比帧间隔长，带宽真不够时延迟自己会涨上去。
 /// - **恢复**：拥塞后静默 `stableInterval`，之后每 `increaseInterval` 往上调一档，先恢复帧率再加码率。
 ///   离上次出事的码率还远时 ×`increaseFactor` 快涨，到它上下 15% 以内 ×`probeFactor` 小步试探，
@@ -140,11 +143,13 @@ nonisolated struct RemoteRateController: Equatable {
         var stableInterval: UInt64 = 1_000_000_000
         var increaseInterval: UInt64 = 500_000_000
         var queueDelayThreshold: UInt64 = 60_000_000
-        var slowAcksForCongestion = 3
+        var congestionWindow: UInt64 = 300_000_000
+        var samplesForCongestion = 3
         var baselineWindow: UInt64 = 10_000_000_000
         var fullFrameRate = 60
         var reducedFrameRate = 30
         var maxInflightFrames = 4
+        var jitterMargin: UInt64 = 30_000_000
     }
 
     let config: Config
@@ -153,7 +158,8 @@ nonisolated struct RemoteRateController: Equatable {
     private var lastDecrease: UInt64?
     private var lastCongestion: UInt64
     private var lastIncrease: UInt64
-    private var slowAcks = 0
+    /// 最近 `congestionWindow` 内的「采集 → 解码完」耗时。
+    private var recent: [LatencySample] = []
     /// 上一轮拥塞开始时（第一次下调之前）的码率：涨回它附近就改成小步试探。一轮拥塞里会连降好几次，
     /// 记最后一次的话就成了底线附近，之后一路小步，涨回上限要几十秒。
     private var congestedBitrate: Int?
@@ -196,11 +202,12 @@ nonisolated struct RemoteRateController: Equatable {
         }
     }
 
-    /// 在途帧数上限：一个往返里能送出去的帧数 + 1，至少 2、至多 `maxInflightFrames`。
+    /// 在途帧数上限：一个往返（基线再加 `jitterMargin` 的 Wi-Fi 抖动）里能送出去的帧数 + 1，
+    /// 至少 2、至多 `maxInflightFrames`。只按基线算时，真机 Wi-Fi（基线 30、p50 50 ms）上 60 帧只跑到 48。
     var inflightFrameLimit: Int {
         let interval = 1_000_000_000 / UInt64(max(1, frameRate))
         guard let baseline = baselineLatency else { return 2 }
-        let frames = Int((baseline + interval - 1) / interval) + 1
+        let frames = Int((baseline + config.jitterMargin + interval - 1) / interval) + 1
         return min(config.maxInflightFrames, max(2, frames))
     }
 
@@ -223,18 +230,24 @@ nonisolated struct RemoteRateController: Equatable {
         return false
     }
 
-    /// 一帧的「采集 → 手机解码完」耗时。排队延迟连续 `slowAcksForCongestion` 帧超过阈值才算拥塞。
+    private struct LatencySample: Equatable {
+        var nanos: UInt64
+        var latency: UInt64
+    }
+
+    /// 一帧的「采集 → 手机解码完」耗时。最近一小段里最快的一帧都排着队，才算拥塞。
     @discardableResult
     mutating func observe(latencyNanos: UInt64, now: UInt64) -> Bool {
         updateBaseline(latencyNanos, now: now)
-        let queueDelay = latencyNanos &- (baselineLatency ?? latencyNanos)
-        guard queueDelay > config.queueDelayThreshold else {
-            slowAcks = 0
-            return tick(now: now)
+        recent.removeAll { now &- $0.nanos > config.congestionWindow }
+        recent.append(LatencySample(nanos: now, latency: latencyNanos))
+        let fastest = recent.lazy.map(\.latency).min() ?? latencyNanos
+        let queueDelay = fastest &- (baselineLatency ?? fastest)
+        guard recent.count >= config.samplesForCongestion, queueDelay > config.queueDelayThreshold else {
+            return queueDelay > config.queueDelayThreshold ? false : tick(now: now)
         }
-        slowAcks += 1
-        guard slowAcks >= config.slowAcksForCongestion else { return false }
-        slowAcks = 0
+        // 这一段已经判过了：清掉，下一次要靠新样本重新攒够。
+        recent.removeAll()
         return congestion(now: now)
     }
 
@@ -264,6 +277,76 @@ nonisolated struct RemoteRateController: Equatable {
         } ?? false
         let factor = probing ? config.probeFactor : config.increaseFactor
         bitrate = min(config.maxBitrate, max(bitrate + 1, Int(Double(bitrate) * factor)))
+        return true
+    }
+}
+
+/// 主流编码的 QP 上限：让低延迟编码器把码率预算用上，又不透支。
+///
+/// 低延迟码控自己选的 QP 偏高，码率给多少都只用一点（实测 2600×1462、目标 90 Mbps、滚动终端文字：
+/// 不设上限每帧 3–4 KB、约 1–2 Mbps，字是糊的；上限 30 时每帧 18 KB 且不丢帧）。但上限一压，编码器就按它出帧、
+/// 不管预算：复杂画面上每帧近 1 MB，透支的码率要靠之后连续丢帧还，写回 51 放开后还要丢好几秒（实测 50 Mbps 下
+/// 丢一半帧超过 4 s）。写 nil 清属性不管用。所以上限只能小步收、一超就退：
+/// - 起步不限。每 `window` 结算：没丢帧、样本够、实发不到目标码率一半，收紧一档（不限时直接到 `relaxed`）。
+/// - 非关键帧大过每帧预算的 `oversizeFactor` 倍、或一个窗口里码控丢到 `dropsToRaise` 帧：**当场**放宽 `raiseStep`
+///  （到 `relaxed` 以上就不限），重新计窗。画面一下变复杂时一两帧之内退开，不攒成透支。
+/// - 码率控制报拥塞时同样放宽。
+nonisolated struct RemoteQualityCap: Equatable {
+    static let floor = 24
+    static let relaxed = 40
+    static let unrestricted = 51
+    static let raiseStep = 3
+    static let dropsToRaise = 3
+    static let oversizeFactor = 1.5
+    static let window: UInt64 = 500_000_000
+    static let minFramesToTighten = 10
+
+    private(set) var maxQP = Self.unrestricted
+    private var windowStart: UInt64
+    private var frames = 0
+    private var drops = 0
+    private var bytes = 0
+
+    init(now: UInt64) {
+        windowStart = now
+    }
+
+    /// 编码器出了一帧（`bytes`）或丢了一帧（nil）。返回上限有没有变。
+    @discardableResult
+    mutating func record(encodedBytes: Int?, keyframe: Bool = false, targetBitrate: Int, frameRate: Int,
+                         now: UInt64) -> Bool {
+        frames += 1
+        if let encodedBytes { bytes += encodedBytes } else { drops += 1 }
+        let frameBudget = Double(targetBitrate) / 8 / Double(max(1, frameRate))
+        let oversize = !keyframe && Double(encodedBytes ?? 0) > frameBudget * Self.oversizeFactor
+        if oversize || drops >= Self.dropsToRaise {
+            restartWindow(now)
+            return raise()
+        }
+        let elapsed = now &- windowStart
+        guard elapsed >= Self.window else { return false }
+        defer { restartWindow(now) }
+        let sentBitrate = Double(bytes) * 8 / (Double(elapsed) / 1e9)
+        guard drops == 0, frames >= Self.minFramesToTighten, sentBitrate < Double(targetBitrate) / 2,
+              maxQP > Self.floor else { return false }
+        maxQP = min(maxQP, Self.relaxed + 1) - 1
+        return true
+    }
+
+    /// 链路拥塞：放宽。
+    @discardableResult
+    mutating func congestion() -> Bool { raise() }
+
+    private mutating func restartWindow(_ now: UInt64) {
+        windowStart = now
+        frames = 0
+        drops = 0
+        bytes = 0
+    }
+
+    private mutating func raise() -> Bool {
+        guard maxQP < Self.unrestricted else { return false }
+        maxQP = maxQP + Self.raiseStep > Self.relaxed ? Self.unrestricted : maxQP + Self.raiseStep
         return true
     }
 }

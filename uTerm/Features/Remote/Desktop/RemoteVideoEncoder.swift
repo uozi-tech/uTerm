@@ -24,7 +24,8 @@ nonisolated enum RemoteVideoEncoderError: Error, Equatable {
 /// - `EnableLowLatencyRateControl`：单帧编码 p50 从 10–14 ms 降到 6 ms，码流小一半多；HEVC 在这台机器上也可用。
 ///   代价是**静默降成 4:2:0**（喂 4:4:4 也一样），所以采集直接要 4:2:0，不白费一次色彩转换。
 /// - `RealTime`、不重排（没有 B 帧，编一帧出一帧）、无限 GOP（低延迟模式本身就是），关键帧只按需强制。
-/// - 码率由 `RemoteRateController` 动态改；静止精修时临时压低 `MaxAllowedFrameQP`（只有低延迟模式认这个键）。
+/// - 码率由 `RemoteRateController` 动态改；QP 上限由 `RemoteQualityCap` 动态改（低延迟码控自己选的 QP 偏高，
+///   不压上限它不肯花码率）；静止精修时临时再压低 `MaxAllowedFrameQP`（只有低延迟模式认这个键）。
 ///
 /// 旁路精修（`Purpose.still`）是另一个会话：普通码控、按画质（`stillQuality`）而不是码率编单帧关键帧。
 /// 它不进主流的参考链，主流的码控也就不用为这一大帧还账（主流里精修时，之后 30 帧会被码控丢掉一半）。
@@ -54,6 +55,8 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     private let session: VTCompressionSession
     private let lock = NSLock()
     private var refineFramesInFlight = 0
+    /// 主流平时的 QP 上限；精修帧编完恢复到它。
+    private var streamMaxQP = RemoteVideoEncoder.unrestrictedQP
 
     /// - Parameter tenBit: HEVC Main10。低延迟模式认它，编码耗时不变，同码率画质高 1.4–2.6 dB（调研 §14）。
     ///   H.264 没有 10-bit 硬编，忽略。
@@ -129,14 +132,25 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         set(kVTCompressionPropertyKey_ExpectedFrameRate, frameRate as CFNumber)
     }
 
+    /// 主流的 QP 上限。精修帧在编时先记下，等它编完再生效。
+    func setMaxQP(_ qp: Int) {
+        lock.lock()
+        streamMaxQP = qp
+        let apply = refineFramesInFlight == 0
+        lock.unlock()
+        // 放开写 51；写 nil 清属性不管用，上限照旧生效。
+        if apply { set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber) }
+    }
+
     /// 编一帧。`refine` = 静止精修：这一帧临时放开画质（压低 QP 上限），编完恢复。
     func encode(_ image: CVPixelBuffer, presentationNanos: UInt64, forceKeyframe: Bool, refine: Bool,
                 completion: @escaping @Sendable (Result<RemoteEncodedFrame, RemoteVideoEncoderError>) -> Void) {
         if refine {
             lock.lock()
             refineFramesInFlight += 1
+            let qp = min(Self.refineMaxQP, streamMaxQP)
             lock.unlock()
-            set(kVTCompressionPropertyKey_MaxAllowedFrameQP, Self.refineMaxQP as CFNumber)
+            set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber)
         }
         let properties: CFDictionary? = forceKeyframe
             ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary : nil
@@ -170,9 +184,10 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         lock.lock()
         refineFramesInFlight -= 1
         let restore = refineFramesInFlight == 0
+        let qp = streamMaxQP
         lock.unlock()
         if restore {
-            set(kVTCompressionPropertyKey_MaxAllowedFrameQP, Self.unrestrictedQP as CFNumber)
+            set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber)
         }
     }
 

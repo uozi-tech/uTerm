@@ -127,14 +127,14 @@ final class RemoteDesktopFlowTests: XCTestCase {
         var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
         XCTAssertFalse(rate.observe(latencyNanos: 20 * ms, now: 100 * ms))
-        XCTAssertFalse(rate.observe(latencyNanos: 75 * ms, now: 150 * ms), "比基线多 55 ms，还在阈值内")
-        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 200 * ms))
-        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 216 * ms))
-        XCTAssertTrue(rate.observe(latencyNanos: 100 * ms, now: 232 * ms), "连着 3 帧排队超过 60 ms 才算拥塞")
+        XCTAssertFalse(rate.observe(latencyNanos: 75 * ms, now: 450 * ms), "比基线多 55 ms，还在阈值内")
+        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 800 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 100 * ms, now: 816 * ms))
+        XCTAssertTrue(rate.observe(latencyNanos: 100 * ms, now: 832 * ms), "窗口里 3 帧、最快的也排队超过 60 ms 才算拥塞")
         XCTAssertEqual(rate.bitrate, 7_000_000)
         // 拥塞之后要重新稳定满 1 s 才升。
-        XCTAssertFalse(rate.observe(latencyNanos: 10 * ms, now: 1_200 * ms))
-        XCTAssertTrue(rate.observe(latencyNanos: 10 * ms, now: 1_240 * ms))
+        XCTAssertFalse(rate.observe(latencyNanos: 10 * ms, now: 1_800 * ms))
+        XCTAssertTrue(rate.observe(latencyNanos: 10 * ms, now: 1_840 * ms))
     }
 
     func test_rate_controller_ignores_isolated_slow_acks() {
@@ -165,6 +165,39 @@ final class RemoteDesktopFlowTests: XCTestCase {
         }
         XCTAssertEqual(rate.bitrate, config.maxBitrate)
         XCTAssertEqual(rate.frameRate, 60)
+    }
+
+    /// 真机 Wi-Fi 的抖动（iPhone 经 Wi-Fi、几乎空载时读到的：基线 30 ms、p50 约 50、p95 约 110 ms）
+    /// 不是排队：码率要能涨到上限。旧判法「连续 3 帧超阈值」在这上面一直报拥塞，码率钉在 1 Mbps。
+    func test_rate_controller_shrugs_off_wifi_jitter() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 30_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 1_000_000, now: 0)
+        let jitter: [UInt64] = [32, 45, 50, 110, 118, 125, 48, 60, 38, 130, 52, 41, 95, 55, 35, 70, 47, 120, 105, 112]
+        var now: UInt64 = 0
+        var index = 0
+        while now < 20_000 * ms {
+            now += 25 * ms
+            rate.observe(latencyNanos: jitter[index % jitter.count] * ms, now: now)
+            index += 1
+        }
+        XCTAssertEqual(rate.bitrate, config.maxBitrate)
+        XCTAssertEqual(rate.frameRate, 60)
+    }
+
+    /// 真排队：每一帧都比基线慢一大截，最快的那帧也一样，要降。
+    func test_rate_controller_still_backs_off_when_every_frame_queues() {
+        let config = RemoteRateController.Config(minBitrate: 1_000_000, maxBitrate: 30_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 30_000_000, now: 0)
+        var now: UInt64 = 0
+        for _ in 0..<20 {
+            now += 16 * ms
+            rate.observe(latencyNanos: 30 * ms, now: now)
+        }
+        for step in 0..<60 {
+            now += 16 * ms
+            rate.observe(latencyNanos: (110 + UInt64(step % 5) * 10) * ms, now: now)
+        }
+        XCTAssertLessThan(rate.bitrate, config.maxBitrate / 2)
     }
 
     /// 退避到底之后链路好了：先回 60 帧，再一路涨回上限，越过上次出事的码率也不停。
@@ -231,14 +264,14 @@ final class RemoteDesktopFlowTests: XCTestCase {
         var rate = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
         XCTAssertEqual(rate.inflightFrameLimit, 2, "还没有确认：保守")
-        rate.observe(latencyNanos: 10 * ms, now: 10 * ms)
-        XCTAssertEqual(rate.inflightFrameLimit, 2)
+        rate.observe(latencyNanos: 2 * ms, now: 10 * ms)
+        XCTAssertEqual(rate.inflightFrameLimit, 3, "2 ms + 30 ms 抖动余量：60 帧要送 2 帧，再留 1 帧")
         var slow = RemoteRateController(config: .init(minBitrate: 1_000_000, maxBitrate: 20_000_000),
                                         initialBitrate: 10_000_000, now: 0)
-        slow.observe(latencyNanos: 45 * ms, now: 10 * ms)
-        XCTAssertEqual(slow.inflightFrameLimit, 4, "45 ms 往返里 60 帧要送 3 帧，再留 1 帧")
+        slow.observe(latencyNanos: 30 * ms, now: 10 * ms)
+        XCTAssertEqual(slow.inflightFrameLimit, 4, "真机 Wi-Fi 的基线 30 ms：按 60 ms 算要送 4 帧，封顶 4")
         slow.observe(latencyNanos: 200 * ms, now: 20 * ms)
-        XCTAssertEqual(slow.inflightFrameLimit, 4, "基线取最小值；上限 4 帧")
+        XCTAssertEqual(slow.inflightFrameLimit, 4, "基线取最小值")
     }
 
     func test_pacer_frame_window_is_adjustable() {
@@ -248,6 +281,80 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertNotNil(pacer.offer(2, now: 16 * ms).submit)
         XCTAssertNotNil(pacer.offer(3, now: 32 * ms).submit)
         XCTAssertNil(pacer.offer(4, now: 48 * ms).submit)
+    }
+
+    // MARK: - QP 上限
+
+    /// 喂半秒钟的帧（60 fps）：每帧 `bytes`，前 `drops` 帧被码控丢掉。
+    private func feedWindow(_ cap: inout RemoteQualityCap, from start: UInt64, frames: Int = 30, bytes: Int,
+                            drops: Int = 0, target: Int = 90_000_000) -> UInt64 {
+        var now = start
+        for index in 0..<frames {
+            now = start + UInt64(index + 1) * 500 * ms / UInt64(frames)
+            cap.record(encodedBytes: index < drops ? nil : bytes, targetBitrate: target, frameRate: 60, now: now)
+        }
+        return now
+    }
+
+    func test_quality_cap_starts_unrestricted_and_tightens_while_the_budget_is_unused() {
+        var cap = RemoteQualityCap(now: 0)
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted, "起步不限：不先压后退")
+        var now = feedWindow(&cap, from: 0, bytes: 4_000)
+        XCTAssertEqual(cap.maxQP, 40)
+        for _ in 0..<20 { now = feedWindow(&cap, from: now, bytes: 4_000) }
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.floor, "每帧 4 KB、预算 90 Mbps：一路收紧到下限")
+    }
+
+    /// 画面一下变复杂：第一帧超预算就退，不等丢帧（等到丢帧时码率已经透支，要连丢好几秒还）。
+    func test_quality_cap_backs_off_on_the_first_oversized_frame() {
+        var cap = RemoteQualityCap(now: 0)
+        var now: UInt64 = 0
+        for _ in 0..<12 { now = feedWindow(&cap, from: now, bytes: 4_000) }
+        XCTAssertEqual(cap.maxQP, 29)
+        // 90 Mbps / 60 fps ≈ 187 KB 一帧；300 KB 超了 1.5 倍。
+        XCTAssertTrue(cap.record(encodedBytes: 300_000, targetBitrate: 90_000_000, frameRate: 60, now: now + 16 * ms))
+        XCTAssertEqual(cap.maxQP, 32)
+        XCTAssertFalse(cap.record(encodedBytes: 300_000, keyframe: true, targetBitrate: 90_000_000, frameRate: 60,
+                                  now: now + 32 * ms), "关键帧本来就大，不算")
+        for step in 0..<3 {
+            cap.record(encodedBytes: 300_000, targetBitrate: 90_000_000, frameRate: 60, now: now + UInt64(48 + step * 16) * ms)
+        }
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted, "连着超：35 → 38 → 到 40 以上就不限")
+    }
+
+    func test_quality_cap_backs_off_when_the_encoder_drops() {
+        var cap = RemoteQualityCap(now: 0)
+        var now: UInt64 = 0
+        for _ in 0..<12 { now = feedWindow(&cap, from: now, bytes: 4_000) }
+        now = feedWindow(&cap, from: now, bytes: 4_000, drops: 2)
+        XCTAssertEqual(cap.maxQP, 29, "零星丢帧不收也不放")
+        for drop in 1...3 {
+            cap.record(encodedBytes: nil, targetBitrate: 90_000_000, frameRate: 60, now: now + UInt64(drop) * 16 * ms)
+        }
+        XCTAssertEqual(cap.maxQP, 32, "一个窗口里丢到 3 帧当场放宽")
+    }
+
+    func test_quality_cap_holds_when_the_budget_is_already_used() {
+        var cap = RemoteQualityCap(now: 0)
+        // 30 帧 × 100 KB / 0.5 s ≈ 49 Mbps，超过 90 Mbps 的一半：不再逼编码器多出。
+        _ = feedWindow(&cap, from: 0, bytes: 100_000)
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted)
+    }
+
+    func test_quality_cap_relaxes_on_congestion() {
+        var cap = RemoteQualityCap(now: 0)
+        XCTAssertFalse(cap.congestion(), "不限时没得放")
+        var now: UInt64 = 0
+        for _ in 0..<4 { now = feedWindow(&cap, from: now, bytes: 4_000) }
+        XCTAssertEqual(cap.maxQP, 37)
+        XCTAssertTrue(cap.congestion())
+        XCTAssertEqual(cap.maxQP, 40)
+    }
+
+    func test_quality_cap_needs_enough_frames_to_tighten() {
+        var cap = RemoteQualityCap(now: 0)
+        _ = feedWindow(&cap, from: 0, frames: 5, bytes: 4_000)
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted, "半秒只有 5 帧：样本太少，不收紧")
     }
 
     func test_initial_bitrate_scales_with_pixels() {

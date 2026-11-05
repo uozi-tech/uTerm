@@ -71,6 +71,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var stillEncoder: RemoteVideoEncoder?
     private var pacer = RemoteDesktopPacer<RemoteCapturedFrame>()
     private var rate: RemoteRateController
+    private var quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
     private var isLive = false
     private var isStopped = false
     private var lastFrame: RemoteCapturedFrame?
@@ -81,6 +82,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var sawInput = false
     private var cursorTimer: DispatchSourceTimer?
     private var lastCursor: RemoteDesktopCursor?
+    /// 码控日志：上一次打印时的读数（真机 Wi-Fi 上看码率为什么上不去，只有这一个来源）。
+    private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
          display: RemoteDesktopDisplay, sidecarRefine: Bool = false, source: any RemoteDesktopFrameSource,
@@ -239,10 +242,48 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         if ack.failed { forceKeyframe = true }
         if rate.observe(latencyNanos: latency, now: now) { applyRate() }
         pacer.maxInflightFrames = rate.inflightFrameLimit
+        logRateIfDue(now: now)
         pump()
     }
 
+    /// 有画面在走时每 2 s 记一行：目标码率、实发帧率与码率、往返、基线、丢帧。
+    private func logRateIfDue(now: UInt64) {
+        guard let last = lastRateLog else {
+            lastRateLog = (now, stats.snapshot())
+            return
+        }
+        guard now &- last.nanos >= 2_000_000_000 else { return }
+        let current = stats.snapshot()
+        lastRateLog = (now, current)
+        let seconds = Double(now &- last.nanos) / 1e9
+        let sent = current.sent - last.stats.sent
+        let trips = current.roundTripNanos.suffix(min(sent, current.roundTripNanos.count)).sorted()
+        func percentile(_ p: Double) -> Double {
+            trips.isEmpty ? 0 : Double(trips[min(trips.count - 1, Int(Double(trips.count) * p))]) / 1e6
+        }
+        let message = String(format: "桌面码控：目标 %.1f Mbps %d fps｜实发 %.1f fps %.1f Mbps｜往返 p50 %.0f p95 %.0f ms，"
+                             + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
+                             Double(rate.bitrate) / 1e6, rate.frameRate, Double(sent) / seconds,
+                             Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
+                             percentile(0.5), percentile(0.95), Double(rate.baselineLatency ?? 0) / 1e6,
+                             pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,
+                             current.encoderDrops - last.stats.encoderDrops, quality.maxQP)
+        AppLogger.info(message, category: RemoteLog.category)
+    }
+
+    /// 主流的一帧编完（nil = 码控丢了）：按丢帧与预算用量调 QP 上限。
+    private func recordQuality(bytes: Int?, keyframe: Bool) {
+        guard encoder?.isLowLatency == true,
+              quality.record(encodedBytes: bytes, keyframe: keyframe, targetBitrate: rate.bitrate,
+                             frameRate: rate.frameRate, now: DispatchTime.now().uptimeNanoseconds) else { return }
+        encoder?.setMaxQP(quality.maxQP)
+    }
+
     private func applyRate() {
+        if rate.bitrate < stats.snapshot().bitrate || rate.frameRate < rate.config.fullFrameRate,
+           encoder?.isLowLatency == true, quality.congestion() {
+            encoder?.setMaxQP(quality.maxQP)
+        }
         encoder?.setBitrate(rate.bitrate)
         encoder?.setFrameRate(rate.frameRate)
         pacer.minimumIntervalNanos = rate.frameRate >= rate.config.fullFrameRate
@@ -335,6 +376,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.pacer.abandon(sequence)
                     if keyframe { self.forceKeyframe = true }
                     self.stats.recordEncoderDrop()
+                    if !refine { self.recordQuality(bytes: nil, keyframe: keyframe) }
                     if refine {
                         // 精修帧被丢：画面已经在手机上了，只是不够清楚。等码控缓过来再精修，别当普通帧重发。
                         self.retryRefine()
@@ -348,6 +390,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.forceKeyframe = true
                     self.pump()
                 case .success(let encoded):
+                    if !refine { self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe) }
                     var flags: RemoteDesktopFrame.Flags = []
                     if encoded.isKeyframe { flags.insert(.keyframe) }
                     if refine { flags.insert(.refine) }
