@@ -206,7 +206,7 @@ struct QuickCommandDetailView: View {
             .buttonStyle(MPressStyle())
             .accessibilityLabel(Text("编辑命令"))
             Button { pendingDelete = true } label: {
-                MIcon(name: "trash", size: 18, color: M.text3).frame(width: 48, height: 48)
+                MIcon(name: "trash", size: 18, color: M.danger).frame(width: 48, height: 48)
                     .background(M.button)
                     .clipShape(RoundedRectangle(cornerRadius: MRadius.lg))
             }

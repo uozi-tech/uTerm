@@ -196,7 +196,7 @@ struct GroupDetailView: View {
             }
             Spacer()
             Button { pendingDelete = true } label: {
-                MIcon(name: "trash", size: 17, color: M.text3).frame(width: 38, height: 38)
+                MIcon(name: "trash", size: 17, color: M.danger).frame(width: 38, height: 38)
                     .background(M.fillFaint)
                     .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
             }.buttonStyle(MPressStyle())
