@@ -47,6 +47,8 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     /// 手机能另开一个解码器解旁路精修帧（`RemoteDesktopFrame.Flags.sidecar`）。HEVC 时 Mac 据此改用
     /// 10-bit 主流 + 旁路精修；nil / false（老手机）时照旧 8-bit + 主流里精修。老 Mac 不认这个键，照旧发。
     var sidecarRefine: Bool? = nil
+    /// 手机能从数据报通道收视频。路径是公网直连时 Mac 才会用；老 Mac 不认这个键，照旧走可靠通道。
+    var videoDatagrams: Bool? = nil
 }
 
 /// Mac → 手机：开流结果（`desktopStarted`，通道 = 这条桌面流的通道）。
@@ -77,6 +79,8 @@ nonisolated struct RemoteDesktopInfo: Codable, Equatable, Sendable {
     var canControl: Bool = false
     /// `canControl == false` 时的说明。
     var controlNote: String? = nil
+    /// 这条流的视频走数据报通道。
+    var videoDatagrams: Bool? = nil
 }
 
 /// 一帧视频（`desktopFrame`）：
@@ -93,6 +97,10 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         /// 参考链。手机用另一个解码器解、显示到下一帧主流画面为止；主流接着从自己的上一帧往下解。
         /// 只发给开流时声明了 `sidecarRefine` 的手机。
         static let sidecar = Flags(rawValue: 1 << 2)
+        /// 只参考手机确认收到过的长期参考帧（LTR），前面丢了帧也解得开。不是关键帧，小得多。
+        static let ltrRefresh = Flags(rawValue: 1 << 3)
+        /// 带 `ltrToken`。
+        static let hasLTRToken = Flags(rawValue: 1 << 4)
     }
 
     var flags: Flags
@@ -104,6 +112,8 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
     var height: UInt16
     var parameterSets: [Data]
     var data: Data
+    /// 这一帧是长期参考帧：手机解出来后把它带回确认，Mac 才知道以后可以参考它。
+    var ltrToken: UInt64? = nil
 
     var isKeyframe: Bool { flags.contains(.keyframe) }
 
@@ -117,6 +127,7 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         writer.u64(captureNanos)
         writer.u16(width)
         writer.u16(height)
+        if flags.contains(.hasLTRToken) { writer.u64(ltrToken ?? 0) }
         if isKeyframe {
             writer.u8(UInt8(parameterSets.count))
             for set in parameterSets {
@@ -129,8 +140,9 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
     }
 
     init(flags: Flags, codec: RemoteVideoCodec, sequence: UInt32, captureNanos: UInt64,
-         width: UInt16, height: UInt16, parameterSets: [Data], data: Data) {
-        self.flags = flags
+         width: UInt16, height: UInt16, parameterSets: [Data], data: Data, ltrToken: UInt64? = nil) {
+        self.ltrToken = ltrToken
+        self.flags = ltrToken == nil ? flags.subtracting(.hasLTRToken) : flags.union(.hasLTRToken)
         self.codec = codec
         self.sequence = sequence
         self.captureNanos = captureNanos
@@ -149,6 +161,7 @@ nonisolated struct RemoteDesktopFrame: Equatable, Sendable {
         captureNanos = try reader.u64()
         width = try reader.u16()
         height = try reader.u16()
+        if flags.contains(.hasLTRToken) { ltrToken = try reader.u64() }
         var sets: [Data] = []
         if flags.contains(.keyframe) {
             let count = Int(try reader.u8())
@@ -173,21 +186,25 @@ nonisolated struct RemoteDesktopAck: Equatable, Sendable {
     var decodeMicros: UInt32
     /// 这一帧没能解出来（手机随后会单独请求关键帧）。
     var failed: Bool = false
+    /// 这一帧解出来了，且它是长期参考帧。
+    var ltrToken: UInt64? = nil
 
     func encoded() -> Data {
-        var writer = RemoteByteWriter(capacity: 17)
+        var writer = RemoteByteWriter(capacity: 25)
         writer.u32(sequence)
         writer.u64(captureNanos)
         writer.u32(decodeMicros)
-        writer.u8(failed ? 1 : 0)
+        writer.u8((failed ? 1 : 0) | (ltrToken != nil ? 2 : 0))
+        if let ltrToken { writer.u64(ltrToken) }
         return writer.data
     }
 
-    init(sequence: UInt32, captureNanos: UInt64, decodeMicros: UInt32, failed: Bool = false) {
+    init(sequence: UInt32, captureNanos: UInt64, decodeMicros: UInt32, failed: Bool = false, ltrToken: UInt64? = nil) {
         self.sequence = sequence
         self.captureNanos = captureNanos
         self.decodeMicros = decodeMicros
         self.failed = failed
+        self.ltrToken = ltrToken
     }
 
     init(decoding payload: Data) throws {
@@ -195,7 +212,34 @@ nonisolated struct RemoteDesktopAck: Equatable, Sendable {
         sequence = try reader.u32()
         captureNanos = try reader.u64()
         decodeMicros = try reader.u32()
-        failed = try reader.u8() & 1 == 1
+        let flags = try reader.u8()
+        failed = flags & 1 == 1
+        if flags & 2 != 0 { ltrToken = try reader.u64() }
+    }
+}
+
+/// 手机 → Mac：这些视频帧放弃了（`desktopVideoLost`）。`[u16 个数]{[u32 视频序号]}`。
+nonisolated struct RemoteDesktopVideoLost: Equatable, Sendable {
+    var videoSequences: [UInt32]
+
+    func encoded() -> Data {
+        let limited = videoSequences.prefix(1024)
+        var writer = RemoteByteWriter(capacity: 2 + limited.count * 4)
+        writer.u16(UInt16(limited.count))
+        for sequence in limited { writer.u32(sequence) }
+        return writer.data
+    }
+
+    init(videoSequences: [UInt32]) {
+        self.videoSequences = videoSequences
+    }
+
+    init(decoding payload: Data) throws {
+        var reader = RemoteByteReader(payload)
+        let count = try reader.u16()
+        var list: [UInt32] = []
+        for _ in 0..<count { list.append(try reader.u32()) }
+        videoSequences = list
     }
 }
 
@@ -340,7 +384,7 @@ nonisolated enum RemoteDesktopInput: Equatable, Sendable {
 /// Mac 写进系统剪贴板后替用户按一下 ⌘V，所以只在手机有控制权时生效。`[u8 类型][内容]`。
 ///
 /// 整条消息要放进一帧（`RemoteConstants.maxFrameBytes` 4 MiB），内容上限留出余量；
-/// 图片超了由手机端先压（见 `RemoteDesktopPasteSource`），不在协议里分片。
+/// 图片超了由手机端先压（见 `RemoteDesktopPasteSource`）。Mac 认得分块时大内容走 `RemoteDesktopPasteChunk`。
 nonisolated enum RemoteDesktopPaste: Equatable, Sendable {
     static let maxContentBytes = 3_800_000
 
@@ -382,6 +426,153 @@ nonisolated enum RemoteDesktopPaste: Equatable, Sendable {
         case .jpeg:
             self = .jpeg(content)
         }
+    }
+}
+
+/// 大内容粘贴的一块：`[u32 编号][u32 偏移][u32 总长][内容]`。拼起来是 `RemoteDesktopPaste.encoded()`。
+nonisolated struct RemoteDesktopPasteChunk: Equatable, Sendable {
+    static let headerBytes = 12
+    /// 拼完不能超过这么多：一个字节的类型加内容上限。
+    static let maxTotalBytes = RemoteDesktopPaste.maxContentBytes + 1
+
+    var pasteID: UInt32
+    var offset: UInt32
+    var total: UInt32
+    var bytes: Data
+
+    func encoded() -> Data {
+        var writer = RemoteByteWriter(capacity: Self.headerBytes + bytes.count)
+        writer.u32(pasteID)
+        writer.u32(offset)
+        writer.u32(total)
+        writer.bytes(bytes)
+        return writer.data
+    }
+
+    init(pasteID: UInt32, offset: UInt32, total: UInt32, bytes: Data) {
+        self.pasteID = pasteID
+        self.offset = offset
+        self.total = total
+        self.bytes = bytes
+    }
+
+    init(decoding payload: Data) throws {
+        var reader = RemoteByteReader(payload)
+        pasteID = try reader.u32()
+        offset = try reader.u32()
+        total = try reader.u32()
+        bytes = reader.rest()
+    }
+}
+
+/// Mac 这边把分块拼回一次粘贴。链路可靠有序，所以偏移必须正好接上；接不上就是对端出错，整个扔掉。
+nonisolated struct RemoteDesktopPasteAssembler {
+    private var pasteID: UInt32?
+    private var total = 0
+    private var buffer = Data()
+
+    /// 拼完了返回内容。
+    mutating func receive(_ chunk: RemoteDesktopPasteChunk) -> RemoteDesktopPaste? {
+        if chunk.offset == 0 {
+            // 新的一次粘贴顶掉没传完的那次。
+            guard chunk.total > 0, chunk.total <= UInt32(RemoteDesktopPasteChunk.maxTotalBytes) else {
+                reset()
+                return nil
+            }
+            pasteID = chunk.pasteID
+            total = Int(chunk.total)
+            buffer = Data()
+        }
+        guard chunk.pasteID == pasteID, Int(chunk.total) == total, Int(chunk.offset) == buffer.count,
+              buffer.count + chunk.bytes.count <= total else {
+            reset()
+            return nil
+        }
+        buffer.append(chunk.bytes)
+        guard buffer.count == total else { return nil }
+        defer { reset() }
+        return try? RemoteDesktopPaste(decoding: buffer)
+    }
+
+    private mutating func reset() {
+        pasteID = nil
+        total = 0
+        buffer = Data()
+    }
+}
+
+/// 手机这边把粘贴内容排着队发出去。大内容切块，发完一块再发下一块，中间按键和确认能插进来。
+nonisolated final class RemoteDesktopPasteUploader: @unchecked Sendable {
+    static let chunkBytes = 32 * 1024
+    /// 同时在途几块。太少的话直连上每个往返只传一块（确认才算完成），太多又把链路占满。
+    static let window = 4
+
+    private let link: RemoteLink
+    private let channel: UInt32
+    private let supportsChunks: Bool
+    private var waiting: [Data] = []
+    private var current: Data?
+    private var offset = 0
+    private var inFlight = 0
+    private var nextID: UInt32 = 1
+    private var failed = false
+
+    init(link: RemoteLink, channel: UInt32, supportsChunks: Bool) {
+        self.link = link
+        self.channel = channel
+        self.supportsChunks = supportsChunks
+    }
+
+    func isFor(link other: RemoteLink, channel otherChannel: UInt32) -> Bool {
+        link === other && channel == otherChannel
+    }
+
+    func enqueue(_ payload: Data) {
+        link.queue.async { [self] in
+            waiting.append(payload)
+            pump()
+        }
+    }
+
+    /// 一切都在 `link.queue` 上。
+    private func pump() {
+        while !failed {
+            if current == nil {
+                guard !waiting.isEmpty else { return }
+                let next = waiting.removeFirst()
+                guard supportsChunks, next.count > Self.chunkBytes else {
+                    // 排在队里的就按序发：小内容不能抢到前面的大内容之前。
+                    link.sendOnQueue(RemoteMessage(.desktopPaste, channel: channel, payload: next))
+                    continue
+                }
+                current = next
+                offset = 0
+            }
+            guard let payload = current else { return }
+            while inFlight < Self.window, offset < payload.count {
+                let end = min(payload.count, offset + Self.chunkBytes)
+                let chunk = RemoteDesktopPasteChunk(pasteID: nextID, offset: UInt32(offset), total: UInt32(payload.count),
+                                                    bytes: Data(payload[(payload.startIndex + offset)..<(payload.startIndex + end)]))
+                offset = end
+                inFlight += 1
+                link.sendOnQueue(RemoteMessage(.desktopPasteChunk, channel: channel, payload: chunk.encoded()),
+                                 completion: { [weak self] error in self?.chunkFinished(error) })
+            }
+            guard offset >= payload.count else { return }
+            current = nil
+            nextID &+= 1
+        }
+    }
+
+    private func chunkFinished(_ error: Error?) {
+        inFlight -= 1
+        if error != nil {
+            failed = true
+            waiting = []
+            current = nil
+            return
+        }
+        pump()
     }
 }
 

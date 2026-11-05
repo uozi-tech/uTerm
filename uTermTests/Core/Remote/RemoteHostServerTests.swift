@@ -91,6 +91,108 @@ final class RemoteHostServerTests: XCTestCase {
         inbox.of(.pairing).compactMap { $0.payload.first.flatMap(RemotePairingState.init(rawValue:)) }
     }
 
+    /// 声明支持密钥确认、但始终发不出合法密文的连接（比如拿着别人公开的长期公钥来冒充）：
+    /// 不能写进信任、不能算已连接，也不能弹审批，到时限就断开。
+    func test_peer_that_never_confirms_its_key_is_not_trusted_or_authorized() async throws {
+        let registry = TerminalSessionRegistry()
+        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
+                                      advertises: false, keyConfirmationTimeout: .milliseconds(200))
+        server.start()
+        defer { server.stop() }
+        let ready = await waitUntil { server.port != nil }
+        XCTAssertTrue(ready)
+
+        let victim = Phone()
+        try identity.trust(RemotePeer(id: victim.id, name: victim.name,
+                                      publicKey: victim.staticKey.publicKey.rawRepresentation, pairedAt: Date()))
+        let spoofer = Curve25519.KeyAgreement.PrivateKey()
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let inbox = Inbox()
+        let link = RemoteLink(connection: NWConnection(host: "127.0.0.1",
+                                                       port: NWEndpoint.Port(rawValue: try XCTUnwrap(server.port))!,
+                                                       using: RemoteLink.parameters()))
+        link.setHandlers(onMessage: { inbox.add($0) }, onClose: { _ in inbox.close() })
+        let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: victim.id, deviceName: victim.name,
+                                ephemeralKey: ephemeral.publicKey.rawRepresentation,
+                                staticKey: victim.staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.keyConfirmation])
+        // 手里没有受害者的私钥，算出来的会话密钥和 Mac 不一样。
+        _ = try await link.establish(role: .initiator, hello: hello, staticKey: spoofer, ephemeralKey: ephemeral)
+
+        let closed = await waitUntil { inbox.closed }
+        XCTAssertTrue(closed, "到时限应该断开")
+        XCTAssertTrue(server.connectedDevices.isEmpty)
+        XCTAssertTrue(server.pairingRequests.isEmpty)
+        XCTAssertTrue(inbox.of(.pairing).isEmpty, "身份没确认前不该告诉对方配对结果")
+    }
+
+    /// 名册担保的设备：要先确认密钥才写进本机信任。
+    func test_known_device_is_authorized_only_after_key_confirmation() async throws {
+        let (server, session, _, _, port) = try await makeServer()
+        defer { server.stop(); session.dispose() }
+        let phone = Phone()
+        try server.identity.trust(RemotePeer(id: phone.id, name: phone.name,
+                                             publicKey: phone.staticKey.publicKey.rawRepresentation, pairedAt: Date()))
+        let inbox = Inbox()
+        let link = RemoteLink(connection: NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!,
+                                                       using: RemoteLink.parameters()))
+        link.setHandlers(onMessage: { inbox.add($0) }, onClose: { _ in inbox.close() })
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
+                                ephemeralKey: ephemeral.publicKey.rawRepresentation,
+                                staticKey: phone.staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.keyConfirmation])
+        _ = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey, ephemeralKey: ephemeral)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(server.connectedDevices.isEmpty, "还没确认密钥")
+        XCTAssertTrue(inbox.of(.pairing).isEmpty)
+
+        link.send(RemoteMessage(.keyConfirm))
+        let authorized = await waitUntil { self.pairingStates(inbox).contains(.trusted) }
+        XCTAssertTrue(authorized)
+        XCTAssertEqual(server.connectedDevices, [phone.name])
+        link.close()
+    }
+
+    /// 真实的手机客户端带着能力位走完配对，密钥确认对它透明。
+    func test_real_client_pairs_through_key_confirmation() async throws {
+        let (server, session, _, _, port) = try await makeServer()
+        defer { server.stop(); session.dispose() }
+        let client = RemoteMacClient(macName: "测试 Mac",
+                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+        defer { client.disconnect() }
+        let connecting = Task { await client.connect() }
+        let asked = await waitUntil { !server.pairingRequests.isEmpty }
+        XCTAssertTrue(asked)
+        server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))
+        await connecting.value
+        XCTAssertEqual(client.state, .connected)
+    }
+
+    /// 不经过 `listener` 的连接也能接：公网路径就是这样进来的，局域网监听失败不该连累它。
+    func test_accept_transport_works_without_a_listener() async throws {
+        let server = RemoteHostServer(registry: TerminalSessionRegistry(),
+                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      localName: "测试 Mac", localID: UUID(), advertises: false)
+        let (phoneSide, macSide) = RemoteMemoryTransport.pair()
+        server.accept(transport: macSide)
+
+        let phone = Phone()
+        let inbox = Inbox()
+        let link = RemoteLink(transport: phoneSide)
+        link.setHandlers(onMessage: { inbox.add($0) }, onClose: { _ in inbox.close() })
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
+                                ephemeralKey: ephemeral.publicKey.rawRepresentation,
+                                staticKey: phone.staticKey.publicKey.rawRepresentation)
+        let established = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey,
+                                                   ephemeralKey: ephemeral)
+        XCTAssertEqual(established.peer.deviceName, "测试 Mac")
+        link.close()
+    }
+
     /// 手机看到的是 Mac 标签上的名字；程序连续改标题时合并推送，`title` 保持稳定。
     func test_session_list_follows_tab_title_and_merges_rapid_changes() async throws {
         let (server, session, _, sessionID, port) = try await makeServer()

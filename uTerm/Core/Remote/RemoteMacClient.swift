@@ -107,6 +107,9 @@ final class RemoteMacClient: Identifiable {
     private(set) var pairingRefused = false
     /// 握手后才知道的 Mac 设备 ID（「忘记这台 Mac」要用）。
     private(set) var macDeviceID: UUID?
+    /// 这条连接走的路，以及最近一次测到的往返时间（毫秒）。
+    private(set) var path: RemoteLinkPath?
+    private(set) var roundTripMillis: Int?
     /// 这台 Mac 报的可选能力（握手后才有；老版本 Mac 为空）。
     private(set) var macFeatures: [String] = []
 
@@ -114,8 +117,14 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktop: Bool { macFeatures.contains(RemoteFeature.desktop) }
     /// 远程桌面里能不能粘贴手机的图片 / 文字（老 Mac 收到 `desktopPaste` 会断开整条连接）。
     var supportsDesktopPaste: Bool { macFeatures.contains(RemoteFeature.desktopPaste) }
+    var supportsDesktopPasteChunks: Bool { macFeatures.contains(RemoteFeature.desktopPasteChunks) }
 
-    @ObservationIgnored private var endpoint: NWEndpoint
+    /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
+    @ObservationIgnored private var endpoint: NWEndpoint?
+    /// 跨公网连它的办法（配了中继、知道它的公钥才有）。
+    @ObservationIgnored private var internetDialer: (@Sendable () async throws -> RemoteDialedPath)?
+    /// Mac 发来的中继配置交给谁存。
+    @ObservationIgnored var onRelayConfig: (@MainActor (RemoteRelayConfig) -> Void)?
     @ObservationIgnored private let identity: RemoteIdentityStore
     /// 要连的是哪台 Mac（设备 ID + 长期公钥，来自名册或扫码）。握手出来对不上就拒绝。nil = 调试直连等
     /// 事先不知道身份的情况，按「认识就核对、不认识就等 Mac 审批」处理。
@@ -169,6 +178,12 @@ final class RemoteMacClient: Identifiable {
         self.endpoint = endpoint
     }
 
+    /// 更新能走的路。已经连着的不受影响，下次连接或重连时按新的走。
+    func updateRoutes(endpoint: NWEndpoint?, internetDialer: (@Sendable () async throws -> RemoteDialedPath)?) {
+        self.endpoint = endpoint
+        self.internetDialer = internetDialer
+    }
+
     /// 连接断了、可以不打扰任何人地自动连回去。
     var canAutoReconnect: Bool {
         switch state {
@@ -192,8 +207,32 @@ final class RemoteMacClient: Identifiable {
     private func runConnect() async {
         defer { connectTask = nil }
         state = .connecting
-        let link = RemoteLink(connection: NWConnection(to: endpoint, using: RemoteLink.parameters()))
+        // 局域网优先。Bonjour 的结果可能已经过时，局域网连不上时再走公网。
+        if let endpoint {
+            let dialed = RemoteDialedPath(
+                transport: RemoteNWTransport(connection: NWConnection(to: endpoint, using: RemoteLink.parameters())),
+                handshakeKeys: nil, path: .localNetwork)
+            await attempt(dialed)
+            guard isFailed, !failureIsPermanent, internetDialer != nil else { return }
+            state = .connecting
+        }
+        guard let internetDialer else {
+            if endpoint == nil { state = .failed("Mac 不在线") }
+            return
+        }
+        do {
+            await attempt(try await internetDialer())
+        } catch {
+            failureIsPermanent = (error as? RemoteProtocolError)?.isPermanent ?? false
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    private func attempt(_ dialed: RemoteDialedPath) async {
+        let link = RemoteLink(transport: dialed.transport)
         self.link = link
+        path = dialed.path
+        roundTripMillis = nil
         let table = self.table
         link.setHandlers(
             onMessage: { [weak self, weak link] message in
@@ -218,7 +257,7 @@ final class RemoteMacClient: Identifiable {
                                     staticKey: phoneKey,
                                     features: RemoteConstants.localFeatures, pairingProof: proof)
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
-                                                       ephemeralKey: ephemeral)
+                                                       ephemeralKey: ephemeral, handshakeKeys: dialed.handshakeKeys)
             // 连上的不是要找的那台（同一地址上换了台机器，或有人冒充）：不往下走。
             if let expectedPeer, expectedPeer.id != established.peer.deviceID
                 || expectedPeer.publicKey != established.peer.staticKey {
@@ -235,6 +274,10 @@ final class RemoteMacClient: Identifiable {
             macFeatures = established.peer.features ?? []
             // 等 Mac 告诉我们配对结果（已信任 / 等审批 / 同意 / 拒绝）。核对码先备着，等审批时显示。
             pendingCode = established.verificationCode
+            // 配对结果要等 Mac 认定身份之后才来，所以先证明身份。
+            if established.peer.supports(RemoteFeature.keyConfirmation) {
+                link.send(RemoteMessage(.keyConfirm))
+            }
             await withCheckedContinuation { continuation in
                 if state == .connected || isFailed {
                     continuation.resume()
@@ -311,6 +354,8 @@ final class RemoteMacClient: Identifiable {
     private func linkClosed(_ closedLink: RemoteLink, error: Error?) {
         guard closedLink === link else { return }
         link = nil
+        path = nil
+        roundTripMillis = nil
         sessions = []
         listedSessionIDs = nil
         if state == .connected || state == .connecting {
@@ -358,6 +403,9 @@ final class RemoteMacClient: Identifiable {
                 table.bind(sessionID: result.sessionID, channel: message.channel)
             }
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
+        case .pong:
+            let millis = link.latestRoundTrip.map { Int(($0 * 1000).rounded()) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { client?.roundTripMillis = millis } }
         default:
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
         }
@@ -376,6 +424,8 @@ final class RemoteMacClient: Identifiable {
             if let raw = message.payload.first, let pairing = RemotePairingState(rawValue: raw) {
                 handlePairing(pairing)
             }
+        case .relayConfig:
+            if let config = RemoteRelayConfig(importing: message.payload) { onRelayConfig?(config) }
         case .sessions:
             if let list = try? RemoteJSON.decode([RemoteSessionInfo].self, from: message.payload) {
                 receiveSessions(list)
@@ -511,19 +561,27 @@ extension RemoteMacClient {
     /// 此时没有通道可用。成功后视频帧与光标经 `sink.onMessage` 在连接队列上流入（第一帧是关键帧）。
     ///
     /// 调用前应已确认 `supportsDesktop`；这里再挡一次，老 Mac 收到桌面消息会断开整条连接。
-    func startDesktop(_ request: RemoteDesktopStartRequest,
-                      sink: RemoteChannelSink) async throws -> (attachment: RemoteAttachment, info: RemoteDesktopInfo) {
+    /// `prepareVideo`：这条连接能从数据报通道收视频时调用，要在开流之前挂好接收端（第一帧可能比回复先到）。
+    func startDesktop(_ request: RemoteDesktopStartRequest, sink: RemoteChannelSink,
+                      prepareVideo: ((any RemoteVideoDatagramChannel, RemoteLink) -> Void)? = nil) async throws
+        -> (attachment: RemoteAttachment, info: RemoteDesktopInfo) {
         await connect()
         guard state == .connected, let link else {
             throw connectionFailure
         }
         guard supportsDesktop else { throw RemoteDesktopError.macTooOld }
+        var request = request
+        if let video = link.videoChannel, let prepareVideo {
+            prepareVideo(video, link)
+            request.videoDatagrams = true
+        }
+        let startRequest = request
         table.expect(sessionID: request.requestID, sink: sink)
         let (channel, info) = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>) in
             desktopWaiters.removeValue(forKey: request.requestID)?.resume(throwing: RemoteProtocolError.closed)
             desktopWaiters[request.requestID] = continuation
-            link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(request)))
+            link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(startRequest)))
         }
         return (RemoteAttachment(link: link, channel: channel), info)
     }

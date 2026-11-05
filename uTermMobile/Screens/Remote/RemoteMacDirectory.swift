@@ -34,8 +34,10 @@ final class RemoteMacDirectory {
         var source: Source
         /// 在线时的服务端点；nil = 此刻在局域网里找不到它。
         var endpoint: NWEndpoint?
+        /// 此刻在中继上，可以跨公网连。
+        var isOnRelay = false
 
-        var isOnline: Bool { endpoint != nil }
+        var isOnline: Bool { endpoint != nil || isOnRelay }
 
         var expectedPeer: RemotePeer? {
             guard let deviceID, let publicKey else { return nil }
@@ -64,11 +66,18 @@ final class RemoteMacDirectory {
     @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
     @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    /// 中继配置存放处。测试里为 nil：不读写真实的 iCloud 钥匙串。
+    @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
+    @ObservationIgnored private var relayClient: RemoteRelayClient?
+    @ObservationIgnored private var relayPoll: Task<Void, Never>?
+    /// 中继上此刻在线的 Mac。
+    @ObservationIgnored private var relayHosts: Set<UUID> = []
 
     init(identity: RemoteIdentityStore = RemoteIdentityStore(), roster: RemoteCloudRoster? = nil,
-         defaults: UserDefaults = .standard) {
+         relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard) {
         self.identity = identity
         self.roster = roster
+        self.relayStore = relayStore
         self.defaults = defaults
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
         if isActivated { publishSelf() }
@@ -91,6 +100,7 @@ final class RemoteMacDirectory {
     }
 
     private func didEnterBackground() {
+        stopRelayPolling()
         guard backgroundTask == .invalid, clients.values.contains(where: { $0.state == .connected }) else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Remote terminals") { [weak self] in
             MainActor.assumeIsolated { self?.endBackgroundTask() }
@@ -101,6 +111,7 @@ final class RemoteMacDirectory {
         endBackgroundTask()
         // 名册可能在后台经 iCloud 同步来了新的 Mac。
         refreshPaired()
+        if isActivated { startRelayPolling() }
         for client in clients.values { client.returnedToForeground() }
     }
 
@@ -127,6 +138,7 @@ final class RemoteMacDirectory {
 
     func startBrowsing() {
         refreshPaired()
+        startRelayPolling()
         guard browser == nil else { return }
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: RemoteConstants.serviceType, domain: nil), using: .tcp)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
@@ -187,16 +199,16 @@ final class RemoteMacDirectory {
 
     /// 某台 Mac 的远控客户端（同一台 Mac 复用同一个，标签之间共用一条连接）。只对在线的 Mac 调。
     func client(for mac: Mac) -> RemoteMacClient {
-        let endpoint = mac.endpoint ?? .hostPort(host: "0.0.0.0", port: 1)
         let client: RemoteMacClient
         if let existing = clients[mac.id] {
-            existing.updateEndpoint(endpoint)
             client = existing
         } else {
-            client = RemoteMacClient(macName: mac.name, endpoint: endpoint, identity: identity,
-                                     expectedPeer: mac.expectedPeer)
+            client = RemoteMacClient(macName: mac.name, endpoint: mac.endpoint ?? .hostPort(host: "0.0.0.0", port: 1),
+                                     identity: identity, expectedPeer: mac.expectedPeer)
+            client.onRelayConfig = { [weak self] config in self?.importRelayConfig(config) }
             clients[mac.id] = client
         }
+        client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
         if let deviceID = mac.deviceID, let token = pendingTokens.removeValue(forKey: deviceID) {
             client.pairingToken = token
         }
@@ -206,6 +218,73 @@ final class RemoteMacDirectory {
             }
         }
         return client
+    }
+
+    // MARK: - 中继
+
+    /// 导入中继配置（扫码，或配对过的 Mac 发来）。
+    @discardableResult
+    func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
+        guard let relayStore else {
+            relayConfigOverride = config
+            startRelayPolling()
+            return true
+        }
+        guard (try? relayStore.save(config)) != nil else { return false }
+        startRelayPolling()
+        return true
+    }
+
+    /// 没有钥匙串可写时（测试）用的配置。
+    @ObservationIgnored private var relayConfigOverride: RemoteRelayConfig?
+
+    private func currentRelayClient() -> RemoteRelayClient? {
+        guard let config = relayConfigOverride ?? relayStore?.load() else {
+            relayClient = nil
+            return nil
+        }
+        if relayClient?.relayConfig != config { relayClient = RemoteRelayClient(config: config) }
+        return relayClient
+    }
+
+    /// 这台 Mac 能不能做打洞诊断：配了中继、Mac 在中继上。
+    func iceProbeRunner(for mac: Mac) -> (runner: RemoteICEProbeRunner, peer: RemotePeer)? {
+        guard mac.isOnRelay, let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
+        return (RemoteICEProbeRunner(relay: relay, identity: identity, localID: RemoteLocalDevice.id()), peer)
+    }
+
+    private func internetDialer(for mac: Mac) -> (@Sendable () async throws -> RemoteDialedPath)? {
+        guard let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
+        let dialer = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
+        return { try await dialer.dial(peer) }
+    }
+
+    /// 前台时每隔一会儿问一次中继谁在线。后台不问，回前台再接着问。
+    private func startRelayPolling() {
+        relayPoll?.cancel()
+        relayPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let relay = self?.currentRelayClient() else {
+                    self?.setRelayHosts([])
+                    return
+                }
+                let hosts = (try? await relay.onlineHosts()) ?? []
+                guard !Task.isCancelled else { return }
+                self?.setRelayHosts(hosts)
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    private func stopRelayPolling() {
+        relayPoll?.cancel()
+        relayPoll = nil
+    }
+
+    private func setRelayHosts(_ hosts: Set<UUID>) {
+        guard hosts != relayHosts else { return }
+        relayHosts = hosts
+        rebuild()
     }
 
     /// 扫到 Mac 出示的配对码：信任这台 Mac（解除之前的拉黑），下次连它时带上凭据，Mac 那边就直接认这台手机。
@@ -232,14 +311,19 @@ final class RemoteMacDirectory {
 
     private func rebuild() {
         macs = debugMacs + Self.knownMacs(trusted: identity.trustedPeers(), roster: roster?.entries() ?? [],
-                                         blocked: identity.isBlocked, online: online)
+                                         blocked: identity.isBlocked, online: online, relayHosts: relayHosts)
+        // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。
+        for mac in macs {
+            clients[mac.id]?.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+        }
     }
 
     /// 配对过的 Mac：本机信任的 ∪ 名册里的 Mac（本机拉黑的除外）。同一设备 ID 只算一台；名册里有它时公钥以名册
     /// 为准（Mac 重装后换了密钥，名册经同一 Apple ID 同步的是新的，本机记的旧公钥会把它永远挡在外面）。
     /// 名字在线时取 Bonjour 的电脑名（改过名也跟得上），否则取记下的。
     nonisolated static func knownMacs(trusted: [RemotePeer], roster: [RemoteRosterEntry], blocked: (UUID) -> Bool,
-                                      online: [UUID: (name: String, endpoint: NWEndpoint)]) -> [Mac] {
+                                      online: [UUID: (name: String, endpoint: NWEndpoint)],
+                                      relayHosts: Set<UUID> = []) -> [Mac] {
         var byID: [UUID: Mac] = [:]
         for entry in roster where entry.platform == .mac && !blocked(entry.id) {
             byID[entry.id] = Mac(id: entry.id.uuidString, deviceID: entry.id, name: entry.name,
@@ -252,6 +336,9 @@ final class RemoteMacDirectory {
         for (id, seen) in online where byID[id] != nil {
             byID[id]?.endpoint = seen.endpoint
             byID[id]?.name = seen.name
+        }
+        for id in relayHosts where byID[id] != nil {
+            byID[id]?.isOnRelay = true
         }
         return byID.values.sorted {
             if $0.isOnline != $1.isOnline { return $0.isOnline }

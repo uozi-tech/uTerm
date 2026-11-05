@@ -23,6 +23,11 @@ final class RemoteHostConnection {
     private(set) var peerID: UUID?
     /// 手机声明了会定时 ping（老手机空闲时不发任何东西，不能按无声断开）。
     private var peerSendsHeartbeat = false
+    /// 从哪条路进来的。公网路径规则更严：不弹审批、不收扫码凭据。
+    let origin: RemoteConnectionOrigin
+    private var peerSupportsRelayConfig = false
+    private var keyConfirmed = false
+    private var keyConfirmationWaiter: CheckedContinuation<Bool, Never>?
     private(set) var isAuthorized = false
     private var subscribedToSessions = false
     private var isClosed = false
@@ -37,9 +42,10 @@ final class RemoteHostConnection {
         let subscriberID: UUID
     }
 
-    init(link: RemoteLink, server: RemoteHostServer) {
+    init(link: RemoteLink, server: RemoteHostServer, origin: RemoteConnectionOrigin = .localNetwork) {
         self.link = link
         self.server = server
+        self.origin = origin
         self.pump = RemoteOutputPump(link: link)
         self.desktopRoute = RemoteDesktopRoute(queue: link.queue)
         self.pump.onOutputSent = { [weak server] in
@@ -60,7 +66,11 @@ final class RemoteHostConnection {
             },
             onWritable: { pump.drainOnQueue() }
         )
-        Task { await handshake() }
+        // 握手可能跨越很长时间（等审批、等密钥确认），期间要保证 server 还在，`server` 是 unowned。
+        Task { [server] in
+            await handshake()
+            withExtendedLifetime(server) {}
+        }
     }
 
     func close() {
@@ -78,11 +88,19 @@ final class RemoteHostConnection {
                                     staticKey: staticKey.publicKey.rawRepresentation,
                                     features: server.localFeatures.isEmpty ? nil : server.localFeatures)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
-                                                       ephemeralKey: ephemeral)
+                                                       ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
             peerName = peer.deviceName
             peerID = peer.deviceID
             peerSendsHeartbeat = peer.features?.contains(RemoteFeature.heartbeat) ?? false
+            peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
+            if case .internet(let expected, _, _) = origin {
+                try await authorizeFromInternet(peer: peer, expected: expected)
+                return
+            }
+            if peer.supports(RemoteFeature.keyConfirmation), server.localFeatures.contains(RemoteFeature.keyConfirmation) {
+                try await waitForKeyConfirmation()
+            }
             if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
                 // 名册担保的设备第一次来：记进本机信任，设置里就能看到它、也能撤销。
                 if server.identity.peer(id: peer.deviceID) == nil {
@@ -117,11 +135,68 @@ final class RemoteHostConnection {
         }
     }
 
+    /// 公网来的连接：只认信令里打过招呼的那台设备，必须能证明持有私钥，且此刻仍被允许。
+    /// 任何一条不满足就断开。不弹审批框，否则任何拿到中继配置的人都能远程刷弹窗骗点击。
+    private func authorizeFromInternet(peer: RemoteHello, expected: UUID) async throws {
+        guard peer.deviceID == expected, peer.supports(RemoteFeature.keyConfirmation) else {
+            throw RemoteProtocolError.handshakeFailed("公网连接的身份与信令不符")
+        }
+        try await waitForKeyConfirmation()
+        guard !isClosed, server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster),
+              server.allowsInternetAccess(peer.deviceID) else {
+            throw RemoteProtocolError.pairingRejected
+        }
+        if server.identity.peer(id: peer.deviceID) == nil {
+            try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
+                                        pairedAt: Date()))
+        }
+        authorize(.trusted)
+    }
+
+    /// 等手机证明它真的持有握手里报的长期私钥。公钥是公开的，只凭握手消息信任会让冒充者被记进信任列表、
+    /// 显示成「已连接」（虽然它解不开也发不出任何密文）。
+    private func waitForKeyConfirmation() async throws {
+        let timeout = server.keyConfirmationTimeout
+        let confirmed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            if keyConfirmed || isClosed {
+                continuation.resume(returning: keyConfirmed)
+                return
+            }
+            keyConfirmationWaiter = continuation
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.finishKeyConfirmation(false)
+            }
+        }
+        guard confirmed else { throw RemoteProtocolError.timeout }
+    }
+
+    private func finishKeyConfirmation(_ confirmed: Bool) {
+        keyConfirmed = keyConfirmed || confirmed
+        keyConfirmationWaiter?.resume(returning: keyConfirmed)
+        keyConfirmationWaiter = nil
+    }
+
     private func authorize(_ state: RemotePairingState) {
         isAuthorized = true
         sendPairing(state)
-        if peerSendsHeartbeat { link.startSilenceWatch(limit: server.peerSilenceLimit) }
+        // 公网连接不管对方声明什么都要判死，否则不发东西的连接会一直占着名额。
+        if peerSendsHeartbeat || origin.isInternet { link.startSilenceWatch(limit: server.peerSilenceLimit) }
         server.connectionAuthorized(self)
+        sendRelayConfigIfAllowed()
+    }
+
+    /// 把中继配置交给勾选过公网接入的设备。之后它在外面也连得上。
+    func sendRelayConfigIfAllowed() {
+        guard isAuthorized, peerSupportsRelayConfig, let peerID, server.allowsInternetAccess(peerID),
+              let config = server.relayConfig else { return }
+        link.send(RemoteMessage(.relayConfig, payload: RemoteJSON.encode(config)))
+    }
+
+    /// 公网接入被关掉，或这台设备被取消勾选：公网连接立刻断开。
+    func enforceInternetPolicy() {
+        guard origin.isInternet, let peerID, !server.allowsInternetAccess(peerID) else { return }
+        link.close(RemoteProtocolError.pairingRejected)
     }
 
     private func sendPairing(_ state: RemotePairingState) {
@@ -131,6 +206,10 @@ final class RemoteHostConnection {
     // MARK: - 消息
 
     private func handle(_ message: RemoteMessage) {
+        if message.kind == .keyConfirm {
+            finishKeyConfirmation(true)
+            return
+        }
         // 审批通过之前，对端说什么都不理。
         guard isAuthorized, !isClosed else { return }
         switch message.kind {
@@ -174,11 +253,11 @@ final class RemoteHostConnection {
             Task { await startDesktop(request) }
         case .desktopStop:
             stopDesktop(channel: message.channel, notify: false)
-        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste:
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
-        case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
-             .localShellOpened, .terminalImageResult, .localWorkspaces:
+        case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
+             .desktopCursor, .localShellOpened, .terminalImageResult, .localWorkspaces:
             break
         }
     }
@@ -305,6 +384,7 @@ final class RemoteHostConnection {
     private func didClose() {
         guard !isClosed else { return }
         isClosed = true
+        finishKeyConfirmation(false)
         for channel in Array(attachments.keys) {
             detach(channel: channel, notify: false)
         }
@@ -358,9 +438,10 @@ extension RemoteHostConnection {
         let device = peerName
         // 新手机（能解旁路精修帧）+ HEVC：10-bit 主流 + 旁路精修。老手机照旧，免得它把旁路帧当主流解。
         let sidecar = request.codec == .hevc && request.sidecarRefine == true
+        let video = request.videoDatagrams == true ? link.videoChannel : nil
         let streamer = RemoteDesktopStreamer(
             link: link, channel: channel, codec: request.codec, width: size.width, height: size.height, display: display,
-            sidecarRefine: sidecar,
+            sidecarRefine: sidecar, path: origin.path, video: video,
             source: environment.makeSource(display, size.width, size.height, sidecar),
             injector: canControl ? environment.makeInjector(display) : nil,
             cursorLocation: environment.cursorLocation,
@@ -387,7 +468,8 @@ extension RemoteHostConnection {
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
-            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 远程控制 里授权后重启 uTerm 即可控制")
+            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 远程控制 里授权后重启 uTerm 即可控制",
+            videoDatagrams: video != nil ? true : nil)
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
         Task {
@@ -483,6 +565,24 @@ nonisolated final class RemoteOutputPump: @unchecked Sendable {
     }
 }
 
-nonisolated enum RemoteLog {
-    static let category = "remote"
+/// 一条连接是从哪条路进来的。
+enum RemoteConnectionOrigin {
+    case localNetwork
+    /// 经信令打过招呼才进来的公网连接：`peerID` 是打招呼的那台设备。
+    case internet(peerID: UUID, keys: RemoteHandshakeKeys, path: RemoteLinkPath)
+
+    var isInternet: Bool {
+        if case .internet = self { return true }
+        return false
+    }
+
+    var handshakeKeys: RemoteHandshakeKeys? {
+        if case .internet(_, let keys, _) = self { return keys }
+        return nil
+    }
+
+    var path: RemoteLinkPath {
+        if case .internet(_, _, let path) = self { return path }
+        return .localNetwork
+    }
 }

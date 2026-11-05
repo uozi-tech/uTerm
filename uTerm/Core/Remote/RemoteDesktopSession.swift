@@ -37,6 +37,7 @@ final class RemoteDesktopSession {
     private let maxWidth: Int
     private let maxHeight: Int
     @ObservationIgnored private var attachment: RemoteAttachment?
+    @ObservationIgnored private var pasteUploader: RemoteDesktopPasteUploader?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var statsTask: Task<Void, Never>?
     @ObservationIgnored private var isStopped = false
@@ -106,7 +107,9 @@ final class RemoteDesktopSession {
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
                                                 sidecarRefine: true)
-        let (attached, info) = try await client.startDesktop(request, sink: sink)
+        let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
+            receiver.attachVideo(video, link: link, generation: current)
+        })
         guard current == generation, !isStopped else {
             if info.failure == nil { client.stopDesktop(attached) }
             return
@@ -171,7 +174,11 @@ final class RemoteDesktopSession {
     /// 把一张图片或一段文字粘贴进 Mac 当前的前台 app（Mac 写剪贴板后按 ⌘V）。
     func paste(_ content: RemoteDesktopPaste) {
         guard let attachment, canPaste else { return }
-        attachment.link.send(RemoteMessage(.desktopPaste, channel: attachment.channel, payload: content.encoded()))
+        if pasteUploader?.isFor(link: attachment.link, channel: attachment.channel) != true {
+            pasteUploader = RemoteDesktopPasteUploader(link: attachment.link, channel: attachment.channel,
+                                                       supportsChunks: client.supportsDesktopPasteChunks)
+        }
+        pasteUploader?.enqueue(content.encoded())
     }
 
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
@@ -201,6 +208,10 @@ nonisolated final class RemoteDesktopReceiverStats: @unchecked Sendable {
         var decodeMillis: Double = 0
         var decodeFailures = 0
         var totalFrames = 0
+        /// 等到时限也没收齐的帧。
+        var lostFrames = 0
+        /// 等恢复帧期间跳过的帧。
+        var skippedFrames = 0
     }
 
     private let lock = NSLock()
@@ -209,6 +220,8 @@ nonisolated final class RemoteDesktopReceiverStats: @unchecked Sendable {
     private var decodeNanos: UInt64 = 0
     private var failures = 0
     private var total = 0
+    private var lost = 0
+    private var skipped = 0
     private var windowStart = DispatchTime.now().uptimeNanoseconds
 
     func record(bytes count: Int, decodeNanos nanos: UInt64, failed: Bool) {
@@ -220,6 +233,9 @@ nonisolated final class RemoteDesktopReceiverStats: @unchecked Sendable {
         if failed { failures += 1 }
     }
 
+    func recordLost(_ count: Int) { lock.lock(); lost += count; lock.unlock() }
+    func recordSkipped() { lock.lock(); skipped += 1; lock.unlock() }
+
     func snapshot() -> Snapshot {
         lock.lock(); defer { lock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -227,7 +243,7 @@ nonisolated final class RemoteDesktopReceiverStats: @unchecked Sendable {
         let result = Snapshot(framesPerSecond: Double(frames) / seconds,
                               megabitsPerSecond: Double(bytes) * 8 / seconds / 1e6,
                               decodeMillis: frames > 0 ? Double(decodeNanos) / Double(frames) / 1e6 : 0,
-                              decodeFailures: failures, totalFrames: total)
+                              decodeFailures: failures, totalFrames: total, lostFrames: lost, skippedFrames: skipped)
         frames = 0
         bytes = 0
         decodeNanos = 0
@@ -256,6 +272,14 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     private var lastKeyframeRequest: UInt64 = 0
     private var onImage: (@Sendable (CVPixelBuffer, RemoteDesktopFrame) -> Void)?
     private var onCursor: (@Sendable (RemoteDesktopCursor) -> Void)?
+    private var video: (any RemoteVideoDatagramChannel)?
+    // 以下只在解码队列上。
+    /// 参考链断了，在等恢复帧（关键帧或 LTR 刷新帧）。
+    private var recovering = false
+    private var recoveringSince: UInt64 = 0
+
+    /// 等恢复帧这么久还没来，再催一次。恢复帧自己也可能丢。
+    static let recoveryRetryNanos: UInt64 = 500_000_000
 
     init(outputPixelFormat: OSType) {
         decoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
@@ -279,7 +303,42 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         decodeQueue.async {
             self.decoder.invalidate()
             self.stillDecoder.invalidate()
+            self.recovering = false
         }
+    }
+
+    /// 视频从数据报通道来。要在开流之前调用：第一帧可能比开流回复先到。
+    func attachVideo(_ channel: any RemoteVideoDatagramChannel, link: RemoteLink, generation: Int) {
+        lock.lock()
+        video = channel
+        lock.unlock()
+        channel.startVideoReceiving(onFrame: { [weak self] payload, desktopChannel in
+            guard let self else { return }
+            self.decodeQueue.async {
+                self.decode(payload, channel: desktopChannel, link: link, generation: generation)
+            }
+        }, onLost: { [weak self] videoSequences, desktopChannel in
+            guard let self else { return }
+            self.decodeQueue.async {
+                self.videoLost(videoSequences, channel: desktopChannel, link: link, generation: generation)
+            }
+        })
+    }
+
+    /// 有帧放弃了：参考链断了。告诉 Mac，之后的帧都跳过，直到恢复帧来。
+    private func videoLost(_ videoSequences: [UInt32], channel: UInt32, link: RemoteLink, generation: Int) {
+        lock.lock()
+        let current = generation == self.generation
+        lock.unlock()
+        guard current else { return }
+        decoder.markReferenceLost()
+        if !recovering {
+            recovering = true
+            recoveringSince = DispatchTime.now().uptimeNanoseconds
+        }
+        stats.recordLost(videoSequences.count)
+        link.send(RemoteMessage(.desktopVideoLost, channel: channel,
+                                payload: RemoteDesktopVideoLost(videoSequences: videoSequences).encoded()))
     }
 
     func attach(link: RemoteLink, channel: UInt32, generation: Int) {
@@ -292,6 +351,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     func detach() {
         lock.lock(); defer { lock.unlock() }
         link = nil
+        video?.stopVideoReceiving()
+        video = nil
     }
 
     /// 连接队列上调用。`link` 是消息来的那条连接：开流的第一帧（关键帧）可能先于 `attach` 到达，
@@ -329,13 +390,26 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         guard current, let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
         let sidecar = frame.flags.contains(.sidecar)
         let start = DispatchTime.now().uptimeNanoseconds
+        // 在等恢复帧：这一帧的参考没了，不能喂给解码器。确认照发，Mac 的在途计数靠它释放。
+        if recovering, !sidecar, !frame.isKeyframe, !frame.flags.contains(.ltrRefresh) {
+            link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
+                sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 0).encoded()))
+            stats.recordSkipped()
+            if start &- recoveringSince >= Self.recoveryRetryNanos {
+                recoveringSince = start
+                link.send(RemoteMessage(.desktopVideoLost, channel: channel,
+                                        payload: RemoteDesktopVideoLost(videoSequences: []).encoded()))
+            }
+            return
+        }
         let image = try? (sidecar ? stillDecoder : decoder).decode(frame)
         let elapsed = DispatchTime.now().uptimeNanoseconds - start
         // 先确认再渲染：确认决定 Mac 什么时候编下一帧，越早发出去链路越满。
         // 旁路帧解坏了不报失败：Mac 收到失败会给主流补关键帧，而主流没出问题。
         let ack = RemoteDesktopAck(sequence: frame.sequence, captureNanos: frame.captureNanos,
                                    decodeMicros: UInt32(min(UInt64(UInt32.max), elapsed / 1000)),
-                                   failed: image == nil && !sidecar)
+                                   failed: image == nil && !sidecar, ltrToken: image != nil ? frame.ltrToken : nil)
+        if image != nil, !sidecar { recovering = false }
         // 确认发回帧来的那条连接。
         link.send(RemoteMessage(.desktopAck, channel: channel, payload: ack.encoded()))
         stats.record(bytes: payload.count, decodeNanos: elapsed, failed: image == nil)

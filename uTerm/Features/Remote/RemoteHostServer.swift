@@ -59,6 +59,11 @@ final class RemoteHostServer {
     }
 
     private(set) var desktopViewer: DesktopViewer?
+    /// 在中继上的注册（打开公网接入且导入过配置时才有）。
+    private(set) var relayLink: RemoteRelayHostLink?
+    /// 存中继配置的地方。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
+    @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
+    @ObservationIgnored private var internetActivity: NSObjectProtocol?
     /// 远程桌面依赖的外部能力（采集、注入、授权、开关）。测试里换成合成的。
     @ObservationIgnored var desktopEnvironment: RemoteDesktopEnvironment
     /// 手机要的「新建本机终端」：开窗口、等会话登记好，回会话 id。测试里换成假的。
@@ -77,8 +82,16 @@ final class RemoteHostServer {
     @ObservationIgnored let localFeatures: [String]
     /// 声明支持心跳的手机这么久无声就断开。
     @ObservationIgnored let peerSilenceLimit: TimeInterval
+    /// 等手机发来 `keyConfirm` 的时限。
+    @ObservationIgnored let keyConfirmationTimeout: Duration
     @ObservationIgnored private let advertises: Bool
     @ObservationIgnored private var listener: NWListener?
+    /// 服务开着。不看 `listener`：局域网监听失败时公网接入照常工作，会话推送也要继续。
+    @ObservationIgnored private var isRunning = false
+    /// 经公网接入的规则，由设置决定。默认谁都不行。
+    @ObservationIgnored var internetAccessPolicy: (UUID) -> Bool = { _ in false }
+    /// 当前的中继配置，交给勾选过的设备。
+    @ObservationIgnored var relayConfig: RemoteRelayConfig?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
     @ObservationIgnored private var pairingWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     /// 会话 → 正在接管它的连接与通道。
@@ -98,9 +111,13 @@ final class RemoteHostServer {
          advertises: Bool = true,
          localFeatures: [String] = RemoteConstants.localFeatures,
          peerSilenceLimit: TimeInterval = RemoteHeartbeat.standard.peerSilenceLimit,
+         keyConfirmationTimeout: Duration = RemoteConstants.handshakeTimeout,
+         relayStore: RemoteRelayConfigStore? = nil,
          desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
+        self.relayStore = relayStore
         self.localFeatures = localFeatures
         self.peerSilenceLimit = peerSilenceLimit
+        self.keyConfirmationTimeout = keyConfirmationTimeout
         self.registry = registry
         self.desktopEnvironment = desktopEnvironment
         self.identity = identity
@@ -115,6 +132,7 @@ final class RemoteHostServer {
 
     func start() {
         guard listener == nil else { return }
+        isRunning = true
         do {
             // 先把本机长期密钥备好：钥匙串出错时在设置页里直接显示，而不是等到第一台设备连上来。
             let key = try identity.localIdentity().publicKey.rawRepresentation
@@ -142,6 +160,7 @@ final class RemoteHostServer {
     }
 
     func stop() {
+        isRunning = false
         listener?.cancel()
         listener = nil
         port = nil
@@ -149,6 +168,9 @@ final class RemoteHostServer {
         for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
         cancelPairingInvitation()
         roster?.withdraw(id: localID)
+        relayLink?.stop()
+        relayLink = nil
+        updateInternetActivity(active: false, keepAwake: false)
         status = .stopped
     }
 
@@ -182,9 +204,98 @@ final class RemoteHostServer {
             connection.cancel()
             return
         }
-        let host = RemoteHostConnection(link: RemoteLink(connection: connection), server: self)
+        accept(transport: RemoteNWTransport(connection: connection))
+    }
+
+    /// 接一条已经在路上的连接。不看 `listener`：公网路径不经过它，局域网监听失败也不该连累公网接入。
+    func accept(transport: any RemoteTransport, origin: RemoteConnectionOrigin = .localNetwork) {
+        if origin.isInternet {
+            let unauthenticated = connections.values.filter { $0.origin.isInternet && !$0.isAuthorized }.count
+            guard unauthenticated < Self.maxUnauthenticatedInternetConnections else {
+                transport.cancel()
+                return
+            }
+        }
+        let host = RemoteHostConnection(link: RemoteLink(transport: transport), server: self, origin: origin)
         connections[host.id] = host
         host.start()
+    }
+
+    private static let maxUnauthenticatedInternetConnections = 8
+
+    // MARK: - 公网接入
+
+    func allowsInternetAccess(_ id: UUID) -> Bool {
+        internetAccessPolicy(id) && !identity.isBlocked(id)
+    }
+
+    /// 这个设备 ID 是谁：本机信任过的，或名册担保的。信令用它决定回不回应。
+    func knownPeer(id: UUID) -> RemotePeer? {
+        if identity.isBlocked(id) { return nil }
+        if let peer = identity.peer(id: id) { return peer }
+        return roster?.entry(id: id)?.peer
+    }
+
+    /// 能在设置里勾选公网接入的设备：配对过的手机，加上名册里的手机。
+    var internetAccessCandidates: [RemotePeer] {
+        var byID = Dictionary(trustedPeers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for entry in roster?.entries() ?? [] where entry.platform == .mobile && !identity.isBlocked(entry.id) {
+            if byID[entry.id] == nil { byID[entry.id] = entry.peer }
+        }
+        return byID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// 按设置起停中继注册。配置变了就换一条。
+    func updateInternetAccess(enabled: Bool, keepAwake: Bool) {
+        relayConfig = relayStore?.load() ?? relayConfig
+        if enabled, let relayConfig {
+            if relayLink?.config != relayConfig {
+                relayLink?.stop()
+                let link = RemoteRelayHostLink(config: relayConfig, server: self)
+                relayLink = link
+                link.start()
+            }
+        } else {
+            relayLink?.stop()
+            relayLink = nil
+        }
+        updateInternetActivity(active: relayLink != nil, keepAwake: keepAwake)
+        internetAccessChanged()
+    }
+
+    /// 导入中继配置。文件不对时返回 false。
+    @discardableResult
+    func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
+        do {
+            try relayStore?.save(config)
+        } catch {
+            AppLogger.info("保存中继配置失败：\(error.localizedDescription)", category: RemoteLog.category)
+            return false
+        }
+        relayConfig = config
+        return true
+    }
+
+    func clearRelayConfig() {
+        relayStore?.clear()
+        relayConfig = nil
+    }
+
+    /// App Nap 会把心跳拖到几分钟一次，中继就把这台 Mac 摘掉了。只有用户选了「保持唤醒」才阻止闲置睡眠。
+    private func updateInternetActivity(active: Bool, keepAwake: Bool) {
+        if let internetActivity { ProcessInfo.processInfo.endActivity(internetActivity) }
+        internetActivity = nil
+        guard active else { return }
+        let options: ProcessInfo.ActivityOptions = keepAwake ? .userInitiated : .userInitiatedAllowingIdleSystemSleep
+        internetActivity = ProcessInfo.processInfo.beginActivity(options: options, reason: "uTerm 公网接入")
+    }
+
+    /// 公网接入的设置变了：断开不再允许的连接，把配置交给新勾选的设备。
+    func internetAccessChanged() {
+        for connection in connections.values {
+            connection.enforceInternetPolicy()
+            connection.sendRelayConfigIfAllowed()
+        }
     }
 
     // MARK: - 连接回调
@@ -404,7 +515,7 @@ final class RemoteHostServer {
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.listener != nil else { return }
+                    guard let self, self.isRunning else { return }
                     let alive = Set(self.registry.entries.map(\.id))
                     for connection in self.connections.values { connection.sessionsChanged(alive: alive) }
                     self.observeRegistry()
@@ -426,12 +537,12 @@ final class RemoteHostServer {
     }
 
     private func scheduleTabTitlePush() {
-        guard listener != nil, tabTitlePush == nil else { return }
+        guard isRunning, tabTitlePush == nil else { return }
         tabTitlePush = Task { [weak self] in
             try? await Task.sleep(for: RemoteConstants.tabTitlePushInterval)
             guard let self else { return }
             self.tabTitlePush = nil
-            guard self.listener != nil else { return }
+            guard self.isRunning else { return }
             for connection in self.connections.values { connection.sendSessions() }
             self.observeTabTitles()
         }

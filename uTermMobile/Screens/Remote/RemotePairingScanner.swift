@@ -5,6 +5,8 @@ import UIKit
 /// 扫 Mac 在 设置 › 远程控制 里显示的配对二维码。扫到 uTerm 的配对码就交给调用方，别的码提示一句继续扫。
 struct RemotePairingScanner: View {
     let onScanned: (RemotePairingInvitation) -> Void
+    /// 扫到的是中继配置（Mac 设置 › 远程控制 › 公网接入的二维码）。
+    var onRelayConfig: ((RemoteRelayConfig) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var access: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
@@ -37,6 +39,10 @@ struct RemotePairingScanner: View {
             } else {
                 ZStack(alignment: .bottom) {
                     QRCodeCamera { text in
+                        if let config = RemoteRelayConfig(scanned: text), let onRelayConfig {
+                            onRelayConfig(config)
+                            return true
+                        }
                         guard let invitation = RemotePairingInvitation(scanned: text) else {
                             note = "这不是 uTerm 的配对码"
                             return false

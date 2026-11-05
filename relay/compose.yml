@@ -1,0 +1,22 @@
+# uterm-relay. Put this directory on a server both devices can reach, then:
+#
+#   RELAY_PUBLIC_HOST=relay.example.com docker compose up -d --build
+#   docker compose exec relay /uterm-relay config > uterm-relay.json
+#
+# and import uterm-relay.json into uTerm. See README.md.
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PUBLIC_PORT:-47310}:47310/tcp"
+      - "${RELAY_PUBLIC_PORT:-47310}:47310/udp"
+    environment:
+      RELAY_PUBLIC_HOST: ${RELAY_PUBLIC_HOST:-}
+      RELAY_PUBLIC_PORT: ${RELAY_PUBLIC_PORT:-47310}
+      RELAY_NAME: ${RELAY_NAME:-}
+      RELAY_RATE_PER_IP: ${RELAY_RATE_PER_IP:-60}
+    volumes:
+      - relay-data:/data
+volumes:
+  relay-data:

@@ -12,6 +12,9 @@ final class RemoteControlSettings {
         static let enabled = "remote.enabled"
         static let desktopEnabled = "remote.desktopEnabled"
         static let localShellEnabled = "remote.localShellEnabled"
+        static let internetEnabled = "remote.internetEnabled"
+        static let internetDevices = "remote.internetDevices"
+        static let keepAwakeForInternet = "remote.keepAwakeForInternet"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -45,11 +48,46 @@ final class RemoteControlSettings {
         }
     }
 
+    /// 「允许经公网接入」（默认关）：Mac 注册到中继，勾选过的设备不在同一局域网也能连。
+    var isInternetEnabled: Bool {
+        didSet {
+            guard isInternetEnabled != oldValue else { return }
+            defaults.set(isInternetEnabled, forKey: Keys.internetEnabled)
+            onChange?(self)
+        }
+    }
+
+    /// 允许经公网接入的设备。不因为配对过、或在同一 Apple ID 名册里就自动有：否则 iCloud 账号失守等于
+    /// 对方能静默控制这台 Mac。
+    var internetDevices: Set<UUID> {
+        didSet {
+            guard internetDevices != oldValue else { return }
+            defaults.set(internetDevices.map(\.uuidString).sorted(), forKey: Keys.internetDevices)
+            onChange?(self)
+        }
+    }
+
+    /// 打开公网接入期间不让 Mac 闲置睡眠（默认关）：睡着就掉线，中继叫不醒它。
+    var keepsAwakeForInternet: Bool {
+        didSet {
+            guard keepsAwakeForInternet != oldValue else { return }
+            defaults.set(keepsAwakeForInternet, forKey: Keys.keepAwakeForInternet)
+            onChange?(self)
+        }
+    }
+
+    func allowsInternetAccess(_ id: UUID) -> Bool {
+        isEnabled && isInternetEnabled && internetDevices.contains(id)
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false
         isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
+        isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
+        internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))
+        keepsAwakeForInternet = defaults.object(forKey: Keys.keepAwakeForInternet) as? Bool ?? false
     }
 
     /// 开关变化时回调（起停 `RemoteHostServer`）。设置后立即回调一次，与持久化状态对齐。

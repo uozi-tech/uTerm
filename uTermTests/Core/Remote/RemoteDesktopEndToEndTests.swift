@@ -152,7 +152,9 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertEqual(mac.injector.all, inputs)
         // 粘贴：图片与文字原样到达 Mac 的落点（生产里写剪贴板再按 ⌘V）。
         XCTAssertTrue(session.canPaste)
-        let pastes: [RemoteDesktopPaste] = [.png(Data(repeating: 7, count: 200_000)), .text("剪贴板里的字")]
+        // 大图走分块。后面的小内容不能抢到前面去。
+        let pastes: [RemoteDesktopPaste] = [.png(Data(repeating: 7, count: 200_000)), .text("剪贴板里的字"),
+                                            .jpeg(Data((0..<100_000).map { UInt8(truncatingIfNeeded: $0) }))]
         for content in pastes { session.paste(content) }
         let pasted = await waitUntil { mac.injector.allPastes.count == pastes.count }
         XCTAssertTrue(pasted)
