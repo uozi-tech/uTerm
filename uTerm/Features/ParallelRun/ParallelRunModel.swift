@@ -234,7 +234,7 @@ final class ParallelRunModel {
                 }
                 states[index].lines.append(ParallelTermLine(kind: .err, text: "执行超时：" + message))
                 initialOutput = stalled.partial.output
-                initialNote = "这条命令被判定卡住并已终止（连同子进程）：\(message)远端可能停在半截，先查清现场再继续。"
+                initialNote = ParallelRunCopy.stalledNote(message)
                 ranInitial = true
             } else if let result = outcome.result {
                 initialExit = result.exitCode
@@ -269,27 +269,24 @@ final class ParallelRunModel {
         // 2) 非 AI 命令：必有 command（表单校验），按退出码模板叙述。
         guard aiAssisted else {
             states[index].tone = ok ? .ok : .failed
-            states[index].summary = ok
-                ? "命令执行完成，退出码 0。"
-                : "命令以退出码 \(exitText(initialExit)) 结束，执行失败。"
+            states[index].summary = ok ? ParallelRunCopy.succeeded : ParallelRunCopy.shellFailed(exit: initialExit)
             return
         }
 
         // 3) AI 命令：多步 Agent（无可用 provider → 退回模板叙述）。
         guard let doctor else {
-            if ranInitial {
-                states[index].tone = ok ? .ok : .failed
-                states[index].summary = ok
-                    ? "命令执行完成，退出码 0。"
-                    : "命令执行失败（退出码 \(exitText(initialExit))）。未配置 AI provider，无法自动诊断修复。"
-            } else {
-                states[index].tone = .failed
-                states[index].summary = "未配置 AI provider，无法按「\(goalText)」自主下发命令。请到设置里配置 AI provider。"
-            }
+            states[index].tone = ok ? .ok : .failed
+            states[index].summary = ok
+                ? ParallelRunCopy.succeeded
+                : ParallelRunCopy.noProvider(ranInitial: ranInitial, exit: initialExit, goal: goalText)
             return
         }
-        await runAgent(at: index, target: target, doctor: doctor, ranInitial: ranInitial,
-                       initialOutput: initialOutput ?? "", initialExit: initialExit, initialNote: initialNote)
+        let request = ParallelAgentRequest(
+            goal: goalText, command: command, serverName: target.name, endpoint: target.endpoint,
+            initial: ranInitial
+                ? .init(output: initialOutput ?? "", exitCode: initialExit, note: initialNote)
+                : nil)
+        await runAgent(at: index, target: target, doctor: doctor, request: request)
     }
 
     /// AI 命令交给 Agent 的自然语言目标：优先 intent，其次等效命令，再次命令名。
@@ -299,162 +296,53 @@ final class ParallelRunModel {
         return commandName
     }
 
-    /// 多步自愈 Agent 循环：把目标 + 初始结果交给模型，它用 `run_command` 逐条推进，每条真实结果
-    /// 回喂；按安全档位决定**自动执行**还是**仅建议**。模型停止调用工具并给出结论 JSON 即收束。
+    /// 多步 Agent：交给与 iOS 共用的 `ParallelAgentEngine`，按全局安全档位审批每条命令。
+    /// 这里只负责在这台上执行命令（并把原始输出追加进 Shell 窗格），以及把进度写进泳道。
     private func runAgent(at index: Int, target: ExecTarget, doctor: ParallelAIDoctor,
-                         ranInitial: Bool, initialOutput: String, initialExit: Int?,
-                         initialNote: String?) async {
-        let autoExecute = safety != .confirm
+                          request: ParallelAgentRequest) async {
         // 跑过初始命令且失败 → 诊断中；否则（无初始命令）显「执行中」直到 Agent 下发命令。
-        states[index].diagnosing = ranInitial && (initialExit != 0)
-
-        let system = Self.agentSystemPrompt(autoExecute: autoExecute, safetyLabel: safety.label)
-        var convo: [ChatMessage] = [ChatMessage(role: .user,
-            text: agentInitialPrompt(target: target, ranInitial: ranInitial, output: initialOutput,
-                                     exit: initialExit, note: initialNote))]
-        var executedAny = false
-        var lastExit = initialExit
-        var conclusion: (status: String, summary: String)?
-        var stoppedForSafety = false
-        var interruption: String?
-
-        agentLoop: for turnIndex in 0..<ParallelAgentPolicy.maxTurns {
-            let turn: ParallelAIDoctor.Turn
-            switch await doctor.turn(messages: convo, system: system, withTools: true) {
-            case .success(let t):
-                turn = t
-            case .failure(let error):
-                interruption = "AI 服务请求失败（\(ParallelAgentPolicy.describe(error))），已重试仍未恢复"
-                break agentLoop
-            }
-
-            // 模型不再调用工具 → 这轮文本即结论。
-            if turn.calls.isEmpty {
-                conclusion = ParallelAIDoctor.parseConclusion(turn.text)
-                    ?? (turn.text.isEmpty ? nil : (status: "", summary: turn.text))
-                break
-            }
-
-            // 安全档位不允许自动执行：记录建议命令、停止，交人工确认。
-            if !autoExecute {
-                for call in turn.calls {
-                    let st = ToolCallState(from: call)
-                    guard !st.command.isEmpty else { continue }
-                    states[index].steps.append("建议执行：" + stepLabel(st))
-                }
-                conclusion = (status: "failed",
-                              summary: turn.text.isEmpty
-                                ? "已诊断并给出修复建议；当前安全档位「\(safety.label)」需人工确认，未自动执行。"
-                                : turn.text)
-                stoppedForSafety = true
-                break
-            }
-
-            // 自动执行档位：逐条在本台执行，真实输出回喂模型。
-            var resolvedCalls: [ToolCallState] = []
-            for call in turn.calls {
-                var st = ToolCallState(from: call)
-                guard !st.command.isEmpty else {
-                    st.status = .failed; st.output = "(空命令)"; resolvedCalls.append(st); continue
-                }
-                let request = AgentToolApproval.Request(
-                    id: UUID().uuidString, toolName: st.name, command: st.command,
-                    userIntent: goalText, context: "目标服务器：\(target.name)",
-                    mode: safety == .readAuto ? .readOnly : .standard)
-                let decision = await AgentToolApproval.evaluate(request) { system, prompt in
-                    let config = LLMRequestConfig(model: doctor.model, baseURL: doctor.baseURL, apiKey: doctor.apiKey)
-                    return try await reviewToolApproval(client: doctor.client, config: config,
-                                                        system: system, prompt: prompt)
-                }
-                guard decision.approved, !Task.isCancelled else {
-                    states[index].steps.append("需人工确认：" + stepLabel(st) + "；" + decision.reason)
-                    conclusion = (status: "failed", summary: decision.reason)
-                    stoppedForSafety = true
-                    break
-                }
-                states[index].steps.append(AgentToolApproval.isReadOnly(request)
-                                           ? decision.reason : "AI 已批准：" + decision.reason)
-                states[index].lines.append(ParallelTermLine(kind: .cmd, text: st.command))
-                let outcome = await Self.execSupervised(executor: target.executor, command: st.command)
-                let cmdExit = outcome.result?.exitCode
-                if let r = outcome.result {
-                    states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (cmdExit ?? -1) != 0))
-                    st.output = ParallelAgentPolicy.clipForModel(r.output)
-                } else if let stalled = outcome.stalled {
-                    // 超时：判定前的输出 + 原因一起回喂模型（卡在哪一步通常就在最后几行），
-                    // 也显示在原始输出里。
-                    let reason = "执行超时：" + (outcome.stallMessage ?? "")
-                    if !stalled.partial.output.isEmpty {
-                        states[index].lines.append(contentsOf: Self.outputLines(from: stalled.partial, failed: false))
-                    }
-                    states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
-                    st.output = ParallelAgentPolicy.clipForModel(stalled.partial.output.isEmpty
-                        ? reason
-                        : stalled.partial.output + "\n" + reason)
-                } else {
-                    // 真实失败原因回喂模型 + 显示在原始输出里（不再笼统「连接或执行失败」），
-                    // 让模型据「连接失败」做对的决定，也方便用户判断。
-                    let reason = "连接失败：\(Self.connectionReason(outcome.errorText))"
-                    states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
-                    st.output = reason
-                }
-                st.exitCode = cmdExit
-                st.status = .done
-                lastExit = cmdExit
-                executedAny = true
-                states[index].steps.append("执行 \(stepLabel(st)) → 退出码 \(exitText(cmdExit))")
-                resolvedCalls.append(st)
-            }
-            if stoppedForSafety { break }
-            if let note = ParallelAgentPolicy.budgetNote(afterTurn: turnIndex), let last = resolvedCalls.indices.last {
-                resolvedCalls[last].output = (resolvedCalls[last].output ?? "") + "\n\n" + note
-            }
-            convo.append(ChatMessage(role: .assistant, text: turn.text, toolCalls: resolvedCalls))
-            if turnIndex == ParallelAgentPolicy.maxTurns - 1 {
-                interruption = "已用完 \(ParallelAgentPolicy.maxTurns) 轮仍未得出结论"
-            }
-        }
-
+        states[index].diagnosing = request.initial.map { $0.exitCode != 0 } ?? false
+        let engine = ParallelAgentEngine(doctor: doctor, approval: .safety(safety), host: "macOS 原生 SSH 终端")
+        let outcome = await engine.run(
+            request,
+            execute: { command in await self.executeAgentCommand(command, at: index, target: target) },
+            onEvent: { [weak self] event in self?.apply(event, at: index) })
         states[index].diagnosing = false
-        applyConclusion(at: index, conclusion: conclusion, interruption: interruption,
-                        executedAny: executedAny, lastExit: lastExit, initialExit: initialExit,
-                        ranInitial: ranInitial, stoppedForSafety: stoppedForSafety)
+        states[index].tone = outcome.succeeded ? .ok : .failed
+        states[index].summary = outcome.summary
     }
 
-    /// 把 Agent 结论落到该台的 `tone` / `summary`。
-    private func applyConclusion(at index: Int, conclusion: (status: String, summary: String)?,
-                                 interruption: String?, executedAny: Bool, lastExit: Int?,
-                                 initialExit: Int?, ranInitial: Bool, stoppedForSafety: Bool) {
-        // 只报成功 / 失败：达成目标（含修复后达成）= ok，未达成 = failed，不单列「自愈」。
-        let status = conclusion?.status ?? ""
-        let tone: ParallelLaneTone
-        if stoppedForSafety {
-            tone = .failed
-        } else if status == "ok" {
-            tone = .ok
-        } else if status == "failed" {
-            tone = .failed
-        } else if conclusion == nil, interruption != nil, executedAny {
-            // 中途断了（模型请求失败 / 轮数用完）：做到一半，不能凭最后一条的退出码报成功。
-            tone = .failed
-        } else if !executedAny {
-            // 没下发任何命令：有初始命令且成功 → ok；否则（无初始命令，Agent 又没动手）→ failed。
-            tone = (ranInitial && initialExit == 0) ? .ok : .failed
-        } else {
-            // 动过手：末次命令退出码 0 即视为达成（无论中途是否修复过）。
-            tone = (lastExit == 0) ? .ok : .failed
+    /// 泳道只记文字步骤（建议 / 审批理由 / 「执行 X → 退出码 N」），不显示两步之间的动态。
+    private func apply(_ event: ParallelAgentEvent, at index: Int) {
+        switch event {
+        case .suggested(let line), .approved(let line), .stepFinished(_, _, let line):
+            states[index].steps.append(line)
+        case .activity, .stepStarted:
+            break
         }
-        states[index].tone = tone
-        let summary = (conclusion?.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !summary.isEmpty {
-            states[index].summary = summary
-        } else if let interruption {
-            states[index].summary = tone == .ok
-                ? "命令执行完成，退出码 0；\(interruption)，未做进一步复核。"
-                : "\(interruption)。可查看处理过程，确认后重新运行。"
-        } else {
-            states[index].summary = defaultSummary(tone: tone, exit: ranInitial ? initialExit : lastExit)
+    }
+
+    /// 在这台上执行 Agent 下发的一条命令，原始输出追加进 Shell 窗格。
+    private func executeAgentCommand(_ command: String, at index: Int,
+                                     target: ExecTarget) async -> ParallelCommandOutcome {
+        states[index].lines.append(ParallelTermLine(kind: .cmd, text: command))
+        let outcome = await Self.execSupervised(executor: target.executor, command: command)
+        if let r = outcome.result {
+            states[index].lines.append(contentsOf: Self.outputLines(from: r, failed: (r.exitCode ?? -1) != 0))
+            return .completed(r)
         }
+        if let stalled = outcome.stalled {
+            let reason = "执行超时：" + (outcome.stallMessage ?? "")
+            if !stalled.partial.output.isEmpty {
+                states[index].lines.append(contentsOf: Self.outputLines(from: stalled.partial, failed: false))
+            }
+            states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
+            return .stalled(partial: stalled.partial.output, reason: reason)
+        }
+        // 真实失败原因回喂模型 + 显示在原始输出里（不笼统「连接或执行失败」）。
+        let reason = "连接失败：\(ParallelRunCopy.connectionReason(outcome.errorText))"
+        states[index].lines.append(ParallelTermLine(kind: .err, text: reason))
+        return .unreachable(reason: reason, timedOut: false)
     }
 
     /// 连接层失败（命令没跑起来）落定该台：识别原因、给确定性结论，并在「指纹未信任」时
@@ -467,17 +355,15 @@ final class ParallelRunModel {
         if let challenge = target.hostKeyChallenges?.take() {
             states[index].failure = .hostKeyUntrusted(challenge)
             states[index].lines.append(ParallelTermLine(kind: .err, text: "主机指纹未信任，连接被拒绝"))
-            states[index].summary = challenge.kind == .mismatch
-                ? "无法连接：该主机的密钥与已信任的不一致（可能是服务器重装，也可能存在中间人风险）。请核对指纹，确认无误后「信任并重试」。"
-                : "无法连接：尚未信任该主机的指纹。请核对指纹，确认无误后点「信任并重试」。"
+            states[index].summary = ParallelRunCopy.hostKeyUntrusted(mismatch: challenge.kind == .mismatch)
         } else if let stalled = outcome.stalled {
             // 连通性预检（`true`）都卡住：多半是连接半死不活。
             markStalled(at: index, stalled: stalled, message: outcome.stallMessage ?? "")
         } else {
-            let reason = Self.connectionReason(outcome.errorText ?? target.setupErrorText)
+            let reason = ParallelRunCopy.connectionReason(outcome.errorText ?? target.setupErrorText)
             states[index].failure = .connection(reason)
             states[index].lines.append(ParallelTermLine(kind: .err, text: "连接失败：\(reason)"))
-            states[index].summary = "无法连接到该服务器：\(reason)。命令未执行。"
+            states[index].summary = ParallelRunCopy.unreachable(reason)
         }
     }
 
@@ -490,9 +376,7 @@ final class ParallelRunModel {
             states[index].lines.append(contentsOf: Self.outputLines(from: stalled.partial, failed: false))
         }
         states[index].lines.append(ParallelTermLine(kind: .err, text: "执行超时：" + message))
-        states[index].summary = "执行超时：" + message + (stalled.kill == .signalled
-            ? "远端状态可能停在半截，请人工复核。"
-            : "")
+        states[index].summary = ParallelRunCopy.stalled(message, signalled: stalled.kill == .signalled)
     }
 
     /// 一台收尾：全部台都落定（`tone != .running`）才终局（AI 汇总 → 落库）。
@@ -529,12 +413,7 @@ final class ParallelRunModel {
 
     /// LLM 汇总不可用时的模板兜底（只讲成功 / 失败）。
     private func fallbackSynthesis() -> String {
-        let failed = states.filter { $0.tone == .failed }.map(\.name)
-        if failed.isEmpty {
-            return "\(total) 台全部执行成功，无异常。"
-        }
-        let okCount = total - failed.count
-        return "\(total) 台中 \(okCount) 台成功，\(failed.joined(separator: "、")) 失败，建议人工复核。"
+        ParallelRunCopy.fallbackSynthesis(total: total, failedNames: states.filter { $0.tone == .failed }.map(\.name))
     }
 
     /// 把本轮真实结果落为一条执行日志（含 AI 记录），同步更新命令的 lastRunAt/runCount。
@@ -559,81 +438,7 @@ final class ParallelRunModel {
                         results: results, aiRecord: aiRecord)
     }
 
-    // MARK: - 提示词
-
-    private func agentInitialPrompt(target: ExecTarget, ranInitial: Bool, output: String, exit: Int?,
-                                    note: String?) -> String {
-        var s = """
-        目标（自然语言）：\(goalText)
-        服务器：\(target.name)（\(target.endpoint)）
-
-
-        """
-        if ranInitial {
-            s += """
-            我已先执行了等效命令 `\(command)`，结果：
-            退出码：\(exitText(exit))\(note.map { "\n" + $0 } ?? "")
-            输出：
-            \(output.isEmpty ? "（无输出）" : ParallelAgentPolicy.clipForModel(output))
-
-            若退出码非 0 或输出里有报错，先判断原因并尝试处理，不要直接给 failed。
-
-            若已达成目标，直接给结论；若还需后续步骤（例如更新后要重启服务、改完配置后要 reload 或做一次健康检查），\
-            就用 run_command 工具逐条继续，每条命令我会把真实输出与退出码回给你，直到达成或确认无法自动完成。
-            """
-        } else {
-            s += """
-            目前还没有执行任何命令。请你根据上面的「目标」，用 run_command 工具逐条执行来达成它\
-            （例如「更新软件包」就执行对应包管理器的命令；按需多步：更新 → 必要时重启服务 → 做一次校验）。\
-            每条命令我会把真实输出与退出码回给你，直到达成目标或确认无法自动完成。
-            """
-        }
-        return s
-    }
-
-    nonisolated static func agentSystemPrompt(autoExecute: Bool, safetyLabel: String) -> String {
-        var s = """
-        你是 uTerm（macOS 原生 SSH 终端）里的运维助手，正在一台服务器上自主完成一个运维目标。
-        你可以用 run_command 工具逐条执行 shell 命令；每条命令我会把真实的标准输出/错误与退出码回给你（很长的输出只给头尾）。
-        请像有经验的运维一样按需多步操作：例如更新后若需要重启服务就再执行重启，改完配置后做一次校验或健康检查。
-
-        \(ParallelAgentPolicy.workingRules(idleSeconds: Self.idleSeconds, maxDurationSeconds: Self.maxDurationSeconds))
-
-        \(ParallelAgentPolicy.conclusionFormat)
-        """
-        if !autoExecute {
-            s += "\n\n注意：当前安全档位为「\(safetyLabel)」，不允许自动执行写操作。若需要修复，请用 run_command "
-                + "给出你建议执行的命令（我不会真的执行），并给出 failed 结论说明需人工确认。"
-        }
-        return s
-    }
-
     // MARK: - 文案 / 解析
-
-    private func stepLabel(_ st: ToolCallState) -> String {
-        if let e = st.explanation, !e.isEmpty { return "\(e)（\(st.command)）" }
-        return st.command
-    }
-
-    private func defaultSummary(tone: ParallelLaneTone, exit: Int?) -> String {
-        switch tone {
-        case .ok:      return "命令执行完成，退出码 0。"
-        case .failed:  return "命令执行失败（退出码 \(exitText(exit))），需人工介入。"
-        case .running: return ""
-        }
-    }
-
-    private func exitText(_ code: Int?) -> String { code.map(String.init) ?? "未知" }
-
-    /// 静默超时 / 总时长上限的秒数（取自 `SupervisedExec.interactive*`），用于提示词。
-    nonisolated static var idleSeconds: Int { Int(SupervisedExec.interactiveIdle.components.seconds) }
-    nonisolated static var maxDurationSeconds: Int { Int(SupervisedExec.interactiveMaxDuration.components.seconds) }
-
-    /// 把连接错误信息整理成一句可读原因（去空白；空则给兜底）。
-    private nonisolated static func connectionReason(_ text: String?) -> String {
-        let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "无法建立连接" : t
-    }
 
     /// 把一次执行结果切成渲染用的逐行 `ParallelTermLine`。失败时末行标红。
     /// 输出为空（含纯空白）时给占位行——`"".split` 会得到 `[""]` 而非空数组，故不能靠 isEmpty 判空。

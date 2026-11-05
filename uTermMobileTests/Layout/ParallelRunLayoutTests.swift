@@ -120,9 +120,9 @@ final class ParallelRunLayoutTests: XCTestCase {
             FetchDescriptor<ServerProfile>(sortBy: [SortDescriptor(\.sortOrder)])).prefix(hosts))
         XCTAssertEqual(profiles.count, hosts)
         let command = aiAssisted ? "" : "apt-get update && apt-get -y upgrade"
-        var doctor: ParallelDoctor?
+        var doctor: ParallelAIDoctor?
         if aiAssisted {
-            var d = ParallelDoctor(client: LaneLLM(failing: profiles[1].name), model: "t",
+            var d = ParallelAIDoctor(client: LaneLLM(failing: profiles[1].name), model: "t",
                                    baseURL: URL(string: "https://example.invalid")!, apiKey: "k")
             d.retryDelay = { _ in .zero }
             doctor = d

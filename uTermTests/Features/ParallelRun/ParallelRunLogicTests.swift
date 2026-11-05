@@ -44,8 +44,8 @@ final class ParallelRunLogicTests: XCTestCase {
 
     /// 提示词要跟看门狗的真实行为一致：按静默判超时、超时会终止进程，而不是「远端还在跑」。
     func testAgentPromptDescribesIdleTimeoutAndTermination() {
-        let prompt = ParallelRunModel.agentSystemPrompt(autoExecute: true, safetyLabel: "自动")
-        XCTAssertTrue(prompt.contains("连续约 \(ParallelRunModel.idleSeconds) 秒没有任何输出"), prompt)
+        let prompt = ParallelAgentEngine.systemPrompt(host: "macOS 原生 SSH 终端", approval: .safety(.auto))
+        XCTAssertTrue(prompt.contains("连续约 \(ParallelAgentEngine.idleSeconds) 秒没有任何输出"), prompt)
         XCTAssertTrue(prompt.contains("终止"))
         XCTAssertFalse(prompt.contains("远端进程通常仍在后台继续"), "看门狗现在会杀进程组，旧说法会误导模型")
     }

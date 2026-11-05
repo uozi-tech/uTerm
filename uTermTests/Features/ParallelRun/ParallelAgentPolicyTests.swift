@@ -120,7 +120,7 @@ final class ParallelAgentPolicyTests: XCTestCase {
     }
 
     func testMacPromptUsesSharedRules() {
-        let prompt = ParallelRunModel.agentSystemPrompt(autoExecute: true, safetyLabel: "自动")
+        let prompt = ParallelAgentEngine.systemPrompt(host: "macOS 原生 SSH 终端", approval: .safety(.auto))
         XCTAssertTrue(prompt.contains("不要立刻放弃"))
         XCTAssertTrue(prompt.contains(#"{"status":"ok|failed""#))
     }

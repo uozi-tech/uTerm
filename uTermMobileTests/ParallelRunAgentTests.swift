@@ -104,7 +104,7 @@ final class ParallelRunAgentTests: XCTestCase {
                                command: String) async throws -> PServerState {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let profile = try XCTUnwrap(try container.mainContext.fetch(FetchDescriptor<ServerProfile>()).first)
-        var doctor = ParallelDoctor(client: llm, model: "test", baseURL: URL(string: "https://example.invalid")!,
+        var doctor = ParallelAIDoctor(client: llm, model: "test", baseURL: URL(string: "https://example.invalid")!,
                                     apiKey: "k")
         doctor.retryDelay = { _ in .zero }
         let controller = ParallelRunController(

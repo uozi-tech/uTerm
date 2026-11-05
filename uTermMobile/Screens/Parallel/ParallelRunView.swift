@@ -98,19 +98,7 @@ struct ParallelRunView: View {
                     .disabled(controller?.allDone != true)
                     .accessibilityLabel(Text("重新运行"))
                 }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    if let c = controller {
-                        if showsPageDots(c) {
-                            modePicker(c)
-                            Spacer()
-                            pageDots(c)
-                        } else {
-                            Spacer()
-                            modePicker(c)
-                            Spacer()
-                        }
-                    }
-                }
+                bottomBar
             }
         }
         .onAppear { if controller == nil { setup() } }
@@ -132,7 +120,7 @@ struct ParallelRunView: View {
             commandID: setup.request.commandID, commandName: setup.request.name,
             command: setup.request.command, intent: setup.request.intent,
             aiAssisted: setup.request.aiAssisted,
-            targets: setup.targets, doctor: ParallelDoctor.make(provider: setup.providers.first),
+            targets: setup.targets, doctor: ParallelAIDoctor.make(provider: setup.providers.first),
             store: QuickCommandStore(context: setup.context), container: setup.context.container)
     }
 
@@ -169,6 +157,35 @@ struct ParallelRunView: View {
         if c.failedCount > 0 { parts.append("\(c.failedCount) 失败") }
         parts.append(UFormat.duration(seconds: max(0, elapsed)))
         return parts.joined(separator: " · ")
+    }
+
+    /// 底栏：只放视图切换，始终居中（页码点在内容里、网格下方——放进底栏会把分段控件挤到一边，
+    /// 实机反馈）。
+    ///
+    /// iOS 26 起工具栏会给每一项包一层共享的玻璃胶囊，分段控件放进去叠出了「两层玻璃」
+    /// （实机反馈）。所以这一项关掉共享背景，由分段控件自己带一层。
+    @ToolbarContentBuilder
+    private var bottomBar: some ToolbarContent {
+        if let c = controller {
+            if #available(iOS 26.0, *) {
+                ToolbarSpacer(.flexible, placement: .bottomBar)
+                // 关掉工具栏那层共享胶囊，再给分段控件自己包**一层**玻璃：只关不包的话，
+                // 分段控件在工具栏里不画底，深色下连选中滑块都看不见（截图核过）。
+                ToolbarItem(placement: .bottomBar) {
+                    modePicker(c)
+                        .padding(4)
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.flexible, placement: .bottomBar)
+            } else {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Spacer()
+                    modePicker(c)
+                    Spacer()
+                }
+            }
+        }
     }
 
     /// 底栏里的视图切换：系统分段控件（iOS 26 起自带玻璃滑块、VoiceOver 与动态字体）。
@@ -255,7 +272,17 @@ struct ParallelRunView: View {
     }
 
     /// 大屏：每页 2×2 四台（矮屏一行两台）、横向翻页；每格定高，格内输出自己滚并贴底跟随。
+    /// 多于一页时网格下方一行页码点（不放进底栏：会把居中的分段控件挤到一边）。
     private func shellGrid(_ c: ParallelRunController) -> some View {
+        VStack(spacing: 0) {
+            shellPager(c)
+            if showsPageDots(c) {
+                pageDots(c).frame(maxWidth: .infinity).padding(.bottom, 2)
+            }
+        }
+    }
+
+    private func shellPager(_ c: ParallelRunController) -> some View {
         let pages = Self.shellPages(count: c.states.count, perPage: shellPerPage)
         return GeometryReader { geo in
             ScrollView(.horizontal) {
@@ -728,9 +755,6 @@ struct ParAILane: View {
     var onTrust: () -> Void
     @State private var open: Bool
 
-    /// 运行中只露最近几步，落定后收进「处理过程」。
-    private static let liveSteps = 3
-
     init(state: PServerState, initiallyOpen: Bool = false,
          onShowOutput: (() -> Void)? = nil, onTrust: @escaping () -> Void) {
         self.state = state
@@ -800,23 +824,28 @@ struct ParAILane: View {
         }
     }
 
-    /// 运行中：最近几步 + 这一刻在做什么。
+    /// 运行中：只留最近一步 + 这一刻在做什么，每行都是一行、超出省略——十几张卡同时在跑时
+    /// 高度稳定、扫得过来。完整步骤落定后在「处理过程」里看。
     private var runningBody: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            if !state.agentSteps.isEmpty {
-                let hidden = state.agentSteps.count - Self.liveSteps
-                if hidden > 0 {
-                    Text("… 前面还有 \(hidden) 步").font(M.sans(11.5)).foregroundStyle(M.text4)
+        VStack(alignment: .leading, spacing: 7) {
+            if let last = state.agentSteps.last {
+                HStack(spacing: 8) {
+                    ParStepTimeline.icon(last.state).frame(width: 16, height: 16)
+                    let index = Text("第 \(state.agentSteps.count) 步 · ").font(M.mono(12)).foregroundStyle(M.text4)
+                    let what = Text(last.explanation.flatMap { $0.isEmpty ? nil : $0 } ?? last.command)
+                        .font(M.sans(13)).foregroundStyle(M.text2)
+                    Text("\(index)\(what)")
                 }
-                ParStepTimeline(steps: Array(state.agentSteps.suffix(Self.liveSteps)))
+                .lineLimit(1).truncationMode(.tail)
             }
-            // 有一步正在跑时，时间线里那一行已经说明了在做什么；只在两步之间
+            // 有一步正在跑时，上面那一行已经说明了在做什么；只在两步之间
             // （分析结果、重试模型请求、跑初始命令）补一行。
             if state.agentSteps.last?.state != .running {
-                HStack(alignment: .top, spacing: 6) {
-                    MIcon(name: "spark", size: 11, color: M.aiAccent).padding(.top, 2)
+                HStack(spacing: 8) {
+                    MIcon(name: "spark", size: 11, color: M.aiAccent).frame(width: 16, height: 16)
                     Text(state.activity ?? state.laneStatusText)
-                        .font(M.sans(13)).foregroundStyle(M.text2).lineLimit(2)
+                        .font(M.sans(13)).foregroundStyle(M.text2)
+                        .lineLimit(1).truncationMode(.tail)
                 }
             }
         }
@@ -913,7 +942,7 @@ struct ParStepTimeline: View {
         VStack(alignment: .leading, spacing: 9) {
             ForEach(steps) { step in
                 HStack(alignment: .top, spacing: 9) {
-                    icon(step.state).frame(width: 16, height: 16).padding(.top, 1)
+                    Self.icon(step.state).frame(width: 16, height: 16).padding(.top, 1)
                     VStack(alignment: .leading, spacing: 2) {
                         if let e = step.explanation, !e.isEmpty {
                             Text(e).font(M.sans(13)).foregroundStyle(M.text2)
@@ -933,7 +962,7 @@ struct ParStepTimeline: View {
     }
 
     @ViewBuilder
-    private func icon(_ state: PAgentStep.State) -> some View {
+    static func icon(_ state: PAgentStep.State) -> some View {
         switch state {
         case .running:
             ProgressView().controlSize(.mini)

@@ -139,26 +139,15 @@ struct ParallelRunWindowView: View {
         m.start()
     }
 
-    /// 按当前活动 provider 造一个 AI 诊断医生；缺 provider/key/baseURL 则返回 nil（退回模板叙述）。
+    /// 按当前活动 provider 造模型后端（与 iOS 共用 `ParallelAIDoctor.make`）；
+    /// 缺 provider / key / 地址 / 模型则返回 nil（退回模板叙述）。
     private func makeDoctor() -> ParallelAIDoctor? {
-        guard let provider = activeProvider,
-              let key = AgentKeychain().load(for: provider.id),
-              let baseURL = resolveBaseURL(for: provider) else { return nil }
-        return ParallelAIDoctor(client: LLMClientFactory.make(for: provider),
-                                model: provider.model, baseURL: baseURL, apiKey: key)
+        ParallelAIDoctor.make(provider: activeProvider)
     }
 
     private var activeProvider: AIProvider? {
         if let id = UUID(uuidString: activeProviderIDString),
            let p = providers.first(where: { $0.id == id }) { return p }
         return providers.min(by: { $0.sortOrder < $1.sortOrder })
-    }
-
-    private func resolveBaseURL(for provider: AIProvider) -> URL? {
-        switch ProviderEndpointPolicy.resolve(configuredBaseURL: provider.baseURL,
-                                              kind: provider.kind) {
-        case .success(let url): return url
-        case .failure: return nil
-        }
     }
 }
