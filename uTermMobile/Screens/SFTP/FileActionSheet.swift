@@ -118,14 +118,12 @@ struct FileInfoView: View {
             VStack(spacing: 0) {
                 MInsetGroup(header: "信息") {
                     MInsetRow(label: "名称", value: entry.name)
-                    MInsetRow(label: "类型",
-                              value: entry.isDirectory ? "文件夹" : (entry.isSymlink ? "符号链接" : "文件"))
-                    if !entry.isDirectory, let s = entry.size {
-                        MInsetRow(label: "大小",
-                                  value: UFormat.bytes(Int64(clamping: s)))
+                    MInsetRow(label: "类型", value: entry.kind.label)
+                    if !entry.isDirectory, entry.size != nil {
+                        MInsetRow(label: "大小", value: entry.sizeText)
                     }
                     if entry.permissions != nil {
-                        MInsetRow(label: "权限", value: posixOctalString(entry.permissions), valueMono: true)
+                        MInsetRow(label: "权限", value: entry.octalText, valueMono: true)
                     }
                     MInsetRow(label: "路径", value: fullPath, valueMono: true, last: true)
                 }
@@ -169,11 +167,7 @@ struct FileActionSheet: View {
     @Environment(\.mAccent) private var accent
 
     private var isFolder: Bool { entry.isDirectory }
-    private var subtitle: String {
-        let kind = isFolder ? "文件夹" : (entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? "文件")
-        let perm = posixOctalString(entry.permissions)
-        return "\(kind) · \(perm)"
-    }
+    private var subtitle: String { "\(entry.sizeOrKindText) · \(entry.octalText)" }
 
     var body: some View {
         // 权限 / 简介在本单内**下钻 + 返回**，不再各开新抽屉（复用导航返回）。

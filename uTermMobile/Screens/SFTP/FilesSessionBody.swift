@@ -212,13 +212,9 @@ struct FilesSessionBody: View {
 struct SFTPRow: View {
     let entry: RemoteEntry
 
-    private var kind: BrowserFileKind {
-        BrowserFileKind.from(name: entry.name, isDirectory: entry.isDirectory, isSymlink: entry.isSymlink)
-    }
-
     var body: some View {
         HStack(spacing: 13) {
-            RemoteFileIcon(kind: kind, size: 26).frame(width: 26)
+            RemoteFileIcon(kind: entry.kind, size: 26).frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)
                 Text(subtitle).font(M.mono(11.5)).foregroundStyle(M.text4).lineLimit(1)
@@ -234,10 +230,5 @@ struct SFTPRow: View {
         .overlay(alignment: .bottom) { MRowDivider(inset: 55) }
     }
 
-    private var subtitle: String {
-        let perms = posixPermissionString(entry.permissions)
-        if entry.isDirectory { return "文件夹 · \(perms)" }
-        let size = entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder
-        return "\(size) · \(perms)"
-    }
+    private var subtitle: String { "\(entry.sizeOrKindText) · \(entry.symbolicText)" }
 }

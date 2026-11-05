@@ -311,7 +311,7 @@ struct SFTPFileTable: View {
     // MARK: 文件行
 
     private func row(_ e: RemoteEntry, widths: SFTPFileTableColumnWidths) -> some View {
-        let kind = BrowserFileKind.from(name: e.name, isDirectory: e.isDirectory, isSymlink: e.isSymlink)
+        let kind = e.kind
         let selected = e.id == selectedID
         let base = HStack(spacing: SFTPFileTableColumnWidths.spacing) {
             RemoteFileIcon(kind: kind, size: 19).frame(width: SFTPFileTableColumnWidths.iconWidth)
@@ -330,8 +330,7 @@ struct SFTPFileTable: View {
                 .font(UD.mono(12)).foregroundStyle(UD.text3)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(width: widths.modified, alignment: .leading)
-            Text(e.isDirectory || e.size == nil
-                 ? UFormat.placeholder : UFormat.bytes(Int64(clamping: e.size!)))
+            Text(e.sizeText)
                 .font(UD.mono(12)).foregroundStyle((e.size ?? 0) > 0 ? UD.text2 : UD.text4)
                 .lineLimit(1)
                 .frame(width: widths.size, alignment: .trailing)
@@ -363,11 +362,8 @@ struct SFTPFileTable: View {
     /// VoiceOver 朗读值：种类 + 大小 + 修改时间，让无障碍用户不依赖列布局即可了解条目。
     private func accessibilityValue(_ e: RemoteEntry, kind: BrowserFileKind) -> String {
         var parts: [String] = [kind.label]
-        if e.isDirectory {
-            // 文件夹无大小
-        } else if let size = e.size {
-            parts.append(UFormat.bytes(Int64(clamping: size)))
-        }
+        // 文件夹无大小。
+        if !e.isDirectory, e.size != nil { parts.append(e.sizeText) }
         if let m = e.modifiedAt { parts.append(UFormat.dateTime(m)) }
         return parts.joined(separator: "，")
     }
@@ -376,10 +372,10 @@ struct SFTPFileTable: View {
     /// 给完整符号串（drwxr-xr-x）。
     @ViewBuilder
     private func permChip(_ e: RemoteEntry) -> some View {
-        Text(posixOctalString(e.permissions))
+        Text(e.octalText)
             .font(UD.mono(11)).foregroundStyle(UD.text2)
             .padding(.horizontal, 6).padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
-            .help(posixPermissionString(e.permissions))
+            .help(e.symbolicText)
     }
 }
