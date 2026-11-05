@@ -24,3 +24,10 @@ nonisolated enum RemotePasteboard {
         }
     }
 }
+
+/// 远程桌面回传剪贴板时读的 Mac 系统剪贴板。
+nonisolated final class RemoteSystemClipboard: RemoteDesktopClipboardSource {
+    var changeCount: Int { NSPasteboard.general.changeCount }
+
+    func text() -> String? { NSPasteboard.general.string(forType: .string) }
+}

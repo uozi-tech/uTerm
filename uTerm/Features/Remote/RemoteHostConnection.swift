@@ -23,6 +23,8 @@ final class RemoteHostConnection {
     private(set) var peerID: UUID?
     /// 手机声明了会定时 ping（老手机空闲时不发任何东西，不能按无声断开）。
     private var peerSendsHeartbeat = false
+    /// 手机认得 `desktopClipboard`（老手机收到会当未知消息断开整条连接）。
+    private var peerTakesClipboard = false
     private(set) var isAuthorized = false
     private var subscribedToSessions = false
     private var isClosed = false
@@ -82,7 +84,8 @@ final class RemoteHostConnection {
             let peer = established.peer
             peerName = peer.deviceName
             peerID = peer.deviceID
-            peerSendsHeartbeat = peer.features?.contains(RemoteFeature.heartbeat) ?? false
+            peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
+            peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
                 // 名册担保的设备第一次来：记进本机信任，设置里就能看到它、也能撤销。
                 if server.identity.peer(id: peer.deviceID) == nil {
@@ -178,7 +181,7 @@ final class RemoteHostConnection {
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
-             .localShellOpened, .terminalImageResult, .localWorkspaces:
+             .desktopClipboard, .localShellOpened, .terminalImageResult, .localWorkspaces:
             break
         }
     }
@@ -364,6 +367,7 @@ extension RemoteHostConnection {
             source: environment.makeSource(display, size.width, size.height, sidecar),
             injector: canControl ? environment.makeInjector(display) : nil,
             cursorLocation: environment.cursorLocation,
+            clipboard: canControl && peerTakesClipboard ? environment.clipboard : nil,
             onFirstInput: { [weak self] in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {

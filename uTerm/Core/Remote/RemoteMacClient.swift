@@ -9,7 +9,7 @@ nonisolated final class RemoteChannelSink: @unchecked Sendable {
     /// `sessionEnded` = Mac 明确结束了这个终端（关闭 / 断开 / 被别的设备接管）；
     /// false = 只是连接断了，可以重连再接入。
     let onClosed: @Sendable (_ reason: String, _ sessionEnded: Bool) -> Void
-    /// 桌面通道的视频帧与光标（`desktopFrame` / `desktopCursor`）原样交给它，连同它来自的那条连接
+    /// 桌面通道的视频帧、光标与剪贴板（`desktopFrame` / `desktopCursor` / `desktopClipboard`）原样交给它，连同它来自的那条连接
     ///（接收端要在同一条连接上回确认，而这时开流的调用可能还没返回）。终端通道不用。
     let onMessage: (@Sendable (RemoteMessage, RemoteLink) -> Void)?
 
@@ -343,7 +343,7 @@ final class RemoteMacClient: Identifiable {
         switch message.kind {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
-        case .desktopFrame, .desktopCursor:
+        case .desktopFrame, .desktopCursor, .desktopClipboard:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。

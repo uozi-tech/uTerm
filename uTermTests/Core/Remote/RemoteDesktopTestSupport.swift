@@ -206,8 +206,25 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     }
 }
 
-/// 记录注入的输入（替代 CGEvent）。
+/// 内存里的 Mac 剪贴板（替代 `NSPasteboard.general`，测试不碰真实剪贴板）。
+final class FakeClipboard: RemoteDesktopClipboardSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var content: String?
+
+    var changeCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+
+    func text() -> String? { lock.lock(); defer { lock.unlock() }; return content }
+
+    /// 模拟 Mac 上的一次拷贝；nil = 拷贝了不是文字的东西（图片、文件）。
+    func copy(_ text: String?) {
+        lock.lock(); count += 1; content = text; lock.unlock()
+    }
+}
+
+/// 记录注入的输入（替代 CGEvent）。粘贴像生产一样先写剪贴板（给了 `clipboard` 时）。
 final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
+    private let clipboard: FakeClipboard?
     private let lock = NSLock()
     private var inputs: [RemoteDesktopInput] = []
     private var pastes: [RemoteDesktopPaste] = []
@@ -217,7 +234,15 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
         lock.lock(); inputs.append(input); lock.unlock()
     }
 
+    init(clipboard: FakeClipboard? = nil) {
+        self.clipboard = clipboard
+    }
+
     func paste(_ content: RemoteDesktopPaste) {
+        switch content {
+        case .text(let text): clipboard?.copy(text)
+        case .png, .jpeg: clipboard?.copy(nil)
+        }
         lock.lock(); pastes.append(content); lock.unlock()
     }
 
@@ -238,7 +263,8 @@ final class FakeDesktopMac {
     var canControl = true
     let display = RemoteDesktopDisplay(id: 7, bounds: CGRect(x: 0, y: 0, width: 1512, height: 982),
                                        pixelWidth: 3024, pixelHeight: 1964)
-    let injector = RecordingInputSink()
+    let clipboard = FakeClipboard()
+    lazy var injector = RecordingInputSink(clipboard: clipboard)
     var detail = false
     private(set) var sources: [SyntheticFrameSource] = []
     var cursor = CGPoint(x: 756, y: 491)
@@ -259,7 +285,8 @@ final class FakeDesktopMac {
                 return source
             },
             makeInjector: { [weak self] _ in self?.injector ?? RecordingInputSink() },
-            cursorLocation: { cursorBox.value })
+            cursorLocation: { cursorBox.value },
+            clipboard: clipboard)
     }
 
     private var cursorBox: CursorBox?

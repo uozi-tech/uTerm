@@ -385,6 +385,56 @@ nonisolated enum RemoteDesktopPaste: Equatable, Sendable {
     }
 }
 
+/// Mac → 手机：手机控制桌面时 Mac 剪贴板里新拷贝的文字（`desktopClipboard`），手机放进自己的剪贴板。
+/// `[u8 类型][内容]`：文字是 UTF-8；太大没回传时只带原文字节数（`u32`），让手机提示一句。
+///
+/// 只发给 `features` 带 `desktop-clipboard` 的手机。先只做文字：图片等别的内容不回传。
+nonisolated enum RemoteDesktopClipboard: Equatable, Sendable {
+    /// 文字上限（UTF-8 字节）。超了发 `.tooLarge`，不截断：拷贝的半截代码粘出来比没有更糟。
+    static let maxTextBytes = 1_000_000
+
+    case text(String)
+    case tooLarge(bytes: Int)
+
+    private enum Tag: UInt8 {
+        case text = 1, tooLarge = 2
+    }
+
+    /// 剪贴板里的一段文字该发什么：空文字不发（nil），超上限只报大小。
+    static func message(for text: String) -> RemoteDesktopClipboard? {
+        let bytes = text.utf8.count
+        guard bytes > 0 else { return nil }
+        return bytes <= maxTextBytes ? .text(text) : .tooLarge(bytes: bytes)
+    }
+
+    func encoded() -> Data {
+        var writer = RemoteByteWriter(capacity: 5)
+        switch self {
+        case .text(let text):
+            writer.u8(Tag.text.rawValue)
+            writer.bytes(Data(text.utf8))
+        case .tooLarge(let bytes):
+            writer.u8(Tag.tooLarge.rawValue)
+            writer.u32(UInt32(clamping: bytes))
+        }
+        return writer.data
+    }
+
+    init(decoding payload: Data) throws {
+        var reader = RemoteByteReader(payload)
+        guard let tag = Tag(rawValue: try reader.u8()) else { throw RemoteProtocolError.malformedMessage }
+        switch tag {
+        case .text:
+            let content = reader.rest()
+            guard !content.isEmpty, content.count <= Self.maxTextBytes,
+                  let text = String(data: content, encoding: .utf8) else { throw RemoteProtocolError.malformedMessage }
+            self = .text(text)
+        case .tooLarge:
+            self = .tooLarge(bytes: Int(try reader.u32()))
+        }
+    }
+}
+
 // MARK: - 字节读写
 
 /// 大端定长字段的拼装。

@@ -29,6 +29,14 @@ nonisolated protocol RemoteDesktopInputSink: AnyObject, Sendable {
     func releaseButtons()
 }
 
+/// Mac 的系统剪贴板（只读）：生产是 `NSPasteboard.general`，测试是内存里的假剪贴板。在连接队列上调用。
+nonisolated protocol RemoteDesktopClipboardSource: AnyObject, Sendable {
+    /// 每次有人写剪贴板就变（`NSPasteboard.changeCount`）。
+    var changeCount: Int { get }
+    /// 剪贴板里的纯文字；没有文字（图片、文件）时 nil。
+    func text() -> String?
+}
+
 /// 采集到的一帧，在来源队列、连接队列、编码器之间传递。
 nonisolated struct RemoteCapturedFrame: @unchecked Sendable {
     let image: CVPixelBuffer
@@ -48,6 +56,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     static let refineMinBitrate = 4_000_000
     /// 光标位置的轮询间隔（只在变化时发）。
     static let cursorIntervalNanos: UInt64 = 16_000_000
+    /// 剪贴板的轮询间隔：macOS 没有剪贴板变化通知，只能看 `changeCount`。读它只是一次进程间查询，很便宜。
+    static let clipboardIntervalNanos: UInt64 = 500_000_000
 
     let link: RemoteLink
     let channel: UInt32
@@ -62,6 +72,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private let source: any RemoteDesktopFrameSource
     private let injector: (any RemoteDesktopInputSink)?
     private let cursorLocation: (@Sendable () -> CGPoint?)?
+    /// 有它才把 Mac 上新拷贝的文字回传手机：手机认得 `desktopClipboard`、且这条流能控制时才给。
+    private let clipboard: (any RemoteDesktopClipboardSource)?
     private let onFirstInput: @Sendable () -> Void
     private let onSourceStopped: @Sendable (Error?) -> Void
 
@@ -82,12 +94,16 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var sawInput = false
     private var cursorTimer: DispatchSourceTimer?
     private var lastCursor: RemoteDesktopCursor?
+    private var clipboardTimer: DispatchSourceTimer?
+    /// 已经处理过（发过、或不该发）的剪贴板版本。
+    private var seenClipboardChange = 0
     /// 码控日志：上一次打印时的读数（真机 Wi-Fi 上看码率为什么上不去，只有这一个来源）。
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
          display: RemoteDesktopDisplay, sidecarRefine: Bool = false, source: any RemoteDesktopFrameSource,
          injector: (any RemoteDesktopInputSink)?, cursorLocation: (@Sendable () -> CGPoint?)?,
+         clipboard: (any RemoteDesktopClipboardSource)? = nil,
          onFirstInput: @escaping @Sendable () -> Void, onSourceStopped: @escaping @Sendable (Error?) -> Void) {
         self.link = link
         self.channel = channel
@@ -99,6 +115,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.source = source
         self.injector = injector
         self.cursorLocation = cursorLocation
+        self.clipboard = clipboard
         self.onFirstInput = onFirstInput
         self.onSourceStopped = onSourceStopped
         rate = RemoteRateController(width: width, height: height, now: DispatchTime.now().uptimeNanoseconds)
@@ -155,6 +172,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.injector?.releaseButtons()
             self.cursorTimer?.cancel()
             self.cursorTimer = nil
+            self.clipboardTimer?.cancel()
+            self.clipboardTimer = nil
             self.encoder = nil
             self.stillEncoder = nil
             self.lastFrame = nil
@@ -175,14 +194,18 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             acknowledged(ack)
         case .desktopInput:
             guard let input = try? RemoteDesktopInput(decoding: message.payload), let injector else { return }
-            injector.inject(input)
             if !sawInput {
                 sawInput = true
+                // 剪贴板的起点取在注入第一下之前：这一下本身可能就是 ⌘C。
+                startClipboardWatch()
                 onFirstInput()
             }
+            injector.inject(input)
         case .desktopPaste:
             guard let content = try? RemoteDesktopPaste(decoding: message.payload), let injector else { return }
             injector.paste(content)
+            // 粘贴已经同步写好了剪贴板：这一版是手机自己送来的，不回传。
+            if let clipboard { seenClipboardChange = clipboard.changeCount }
         case .desktopKeyframe:
             forceKeyframe = true
             // 屏幕静止时不会有新帧来触发编码：把最后一帧重编成关键帧。
@@ -451,6 +474,33 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
         timer.resume()
         cursorTimer = timer
+    }
+}
+
+nonisolated extension RemoteDesktopStreamer {
+    // MARK: - 剪贴板回传
+
+    /// 手机第一次操作时开始看剪贴板：只查看的手机拿不到 Mac 的剪贴板。起点是此刻的版本，开流前就在剪贴板里的
+    /// 东西不发。
+    private func startClipboardWatch() {
+        guard let clipboard, clipboardTimer == nil else { return }
+        seenClipboardChange = clipboard.changeCount
+        let timer = DispatchSource.makeTimerSource(queue: link.queue)
+        let interval = Int(Self.clipboardIntervalNanos)
+        timer.schedule(deadline: .now() + .nanoseconds(interval), repeating: .nanoseconds(interval),
+                       leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in self?.pollClipboard(clipboard) }
+        timer.resume()
+        clipboardTimer = timer
+    }
+
+    private func pollClipboard(_ clipboard: any RemoteDesktopClipboardSource) {
+        guard isLive else { return }
+        let change = clipboard.changeCount
+        guard change != seenClipboardChange else { return }
+        seenClipboardChange = change
+        guard let text = clipboard.text(), let content = RemoteDesktopClipboard.message(for: text) else { return }
+        link.sendOnQueue(RemoteMessage(.desktopClipboard, channel: channel, payload: content.encoded()))
     }
 }
 
