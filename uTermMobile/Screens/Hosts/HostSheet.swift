@@ -7,12 +7,7 @@ struct HostSheet: View {
     var onConnect: () -> Void
     var onSFTP: () -> Void
     var onEdit: () -> Void
-    @Environment(\.mAccent) private var accent
 
-    private var statusColor: Color {
-        guard let last = host.lastConnectedAt else { return M.text4 }
-        return Date().timeIntervalSince(last) < 3600 ? M.success : M.caution
-    }
     private var lastText: String { UTermFormat.relative(host.lastConnectedAt) }
 
     var body: some View {
@@ -20,7 +15,10 @@ struct HostSheet: View {
         // 不再用 .sheet + 测量出来的 .height detent（「有时候很高」的根源，见 MBottomPanel）。
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                MDot(color: groupColor ?? accent, size: 10)
+                MHostAvatar(monogram: host.monogram,
+                            tint: groupColor,
+                            reachability: HostReachabilityMonitor.shared.entry(for: host),
+                            size: 40)
                 Text(host.name).font(M.sans(23, weight: .bold)).tracking(-0.4).foregroundStyle(M.text).lineLimit(1)
                 Spacer(minLength: 6)
                 if let g = host.group, !g.isEmpty {
@@ -41,6 +39,7 @@ struct HostSheet: View {
             .padding(.top, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .mWatchesReachability(of: host)
     }
 
     private var metaGrid: some View {

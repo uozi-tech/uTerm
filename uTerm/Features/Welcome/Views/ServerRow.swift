@@ -19,9 +19,9 @@ enum ServerGroupBadgeTint {
 
 /// Welcome 主列表的单行（设计稿 Variant A · HostRow）。
 ///
-/// 等边内距：品牌脉冲圆点 + 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次
-/// 连接」相对时间与描边分组 chip。选中态用半透明叠底（浅深自适应），不再画左侧竖条
-/// —— 选中由更亮的底色 + 脉冲圆点 + 右侧详情面板共同表达。
+/// 等边内距：主机头像（分组色色块 + 首字母，角标 = 在线状态，见 `HostAvatar`）+
+/// 名称（13.5/medium）+ 等宽 endpoint，右侧是「上次连接」相对时间与分组 chip。
+/// 选中态用半透明叠底（浅深自适应），不画左侧竖条 —— 选中由更亮的底色 + 右侧详情面板共同表达。
 ///
 /// **渲染成本形态（见 `docs/scroll-perf-findings.md`「欢迎页服务器列表」）**：
 /// 这一行曾经整个包在一个 plain `Button` 里、两个 `.help` 常驻、每行现建一个
@@ -52,7 +52,9 @@ struct ServerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            PulseDot(color: groupColor ?? UD.accent, pulse: isSelected)
+            HostAvatar(monogram: profile.monogram,
+                       tint: groupColor,
+                       reachability: HostReachabilityMonitor.shared.entry(for: profile))
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -95,6 +97,12 @@ struct ServerRow: View {
         // （`UAppKitBridge/RowHoverTracker.swift`），滚动期间由 `ScrollHoverGate`
         // 停更、停下补算一次。
         .rowHover(rowHover, id: profile.id) { hover = $0 }
+        // 在线角标：只在行可见期间登记探测，滚出屏幕 task 取消即注销（见 `HostReachabilityMonitor`）。
+        // 跳板机主机 key 为 nil，不探。
+        .task(id: HostEndpointKey(profile)) {
+            guard let key = HostEndpointKey(profile) else { return }
+            await HostReachabilityMonitor.shared.watch(key)
+        }
         // 鼠标单击 / 双击**不在这里**接 —— 两个 `onTapGesture` 链式会让 SwiftUI
         // 等满系统双击间隔才发单击（实测选中要 390~510ms）。改由 `ServerList`
         // 在整个 `LazyVStack` 上挂一个透明 AppKit 层，按 `NSEvent.clickCount`

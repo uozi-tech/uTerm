@@ -53,4 +53,13 @@ final class ServerProfile {
 
     /// 展示用的 `用户名@主机` 端点字符串。
     var displayEndpoint: String { "\(username)@\(host)" }
+
+    /// 头像色块里的首字母（两端主机列表共用）。
+    var monogram: String { Self.monogram(for: name) }
+
+    /// 名字的第一个可见字符，拉丁字母转大写；名字为空白时退回 `?`。
+    nonisolated static func monogram(for name: String) -> String {
+        guard let first = name.first(where: { !$0.isWhitespace }) else { return "?" }
+        return String(first).uppercased()
+    }
 }

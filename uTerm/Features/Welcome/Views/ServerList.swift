@@ -63,6 +63,8 @@ struct ServerList: View {
             listColumn
             if let selected = selectedProfile {
                 HostDetailPanel(profile: selected,
+                                groupColor: ServerGroupBadgeTint.color(for: selected.group,
+                                                                       in: groupColorHexes),
                                 onConnect: { onOpen(selected) },
                                 onOpenTerminal: { onContextAction(.openTerminalWindow, selected) },
                                 onBrowseSFTP: { onContextAction(.openSFTP, selected) })

@@ -58,10 +58,14 @@ final class WelcomeEqualPaddingLayoutTests: XCTestCase {
             "uTerm/Features/Welcome/Views/ServerRow.swift"
         ), encoding: .utf8)
 
-        // 状态点在 a72371e4 从 UDHostDot（SwiftUI repeatForever）换成了 CA 驱动的 PulseDot，
-        // 这里钉的是「点的颜色取分组色、没有分组才退回强调色」，与点用哪个实现无关。
-        XCTAssertTrue(source.contains("PulseDot(color: groupColor ?? UD.accent"),
-                      "服务器行的状态点必须取分组色，没有分组才退回强调色")
+        // 行首从分组色圆点换成了与 iOS 同构的头像（分组色色块 + 首字母，角标 = 在线状态）。
+        // 这里钉的是「色块取分组色」与「角标读在线探测」，不钉头像内部怎么画。
+        XCTAssertTrue(source.contains("HostAvatar(monogram: profile.monogram,\n                       tint: groupColor,"),
+                      "服务器行的头像色块必须取分组色")
+        XCTAssertTrue(source.contains("reachability: HostReachabilityMonitor.shared.entry(for: profile)"),
+                      "头像角标必须是服务器在线状态")
+        XCTAssertTrue(source.contains("await HostReachabilityMonitor.shared.watch(key)"),
+                      "行可见期间要登记在线探测")
         XCTAssertTrue(source.contains("UDGroupChip(groupLabel, tint: groupColor)"))
         XCTAssertFalse(source.contains("UDGroupChip(groupLabel)"))
     }

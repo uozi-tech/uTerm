@@ -18,6 +18,7 @@ import AppKit
 /// 升为主操作（accent + ↵），终端入口降级为带锁的禁用提示「终端会话已禁用 · 仅文件传输」。
 struct HostDetailPanel: View {
     let profile: ServerProfile
+    var groupColor: Color? = nil
     let onConnect: () -> Void
     let onOpenTerminal: () -> Void
     let onBrowseSFTP: () -> Void
@@ -49,14 +50,17 @@ struct HostDetailPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            PulseDot(pulse: true)
+            HostAvatar(monogram: profile.monogram,
+                       tint: groupColor,
+                       reachability: HostReachabilityMonitor.shared.entry(for: profile),
+                       size: 28)
             // 主机名点击即复制（与端点行同一套「已复制」反馈）。
             NameCopyButton(name: profile.name) { copy(profile.name, field: "name") }
             Spacer(minLength: 6)
             if profile.sftpOnly {
                 SftpOnlyBadge()
             } else {
-                UDGroupChip(groupLabel)
+                UDGroupChip(groupLabel, tint: groupColor)
             }
         }
     }

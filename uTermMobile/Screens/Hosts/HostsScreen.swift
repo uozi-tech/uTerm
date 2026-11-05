@@ -178,12 +178,6 @@ struct HostCard: View {
     var onEdit: () -> Void
     var onDelete: () -> Void
 
-    @Environment(\.mAccent) private var accent
-
-    private var statusColor: Color {
-        guard let last = host.lastConnectedAt else { return M.text4 }
-        return Date().timeIntervalSince(last) < 3600 ? M.success : M.caution
-    }
     /// 共享格式化器。**别改回「每行现建一个」**——这是逐行调用的。
     private var lastText: String { UTermFormat.relative(host.lastConnectedAt, fallback: "从未连接") }
 
@@ -194,7 +188,6 @@ struct HostCard: View {
                     avatar
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 7) {
-                            MDot(color: groupColor ?? accent, size: 8)
                             Text(host.name).font(M.sans(16, weight: .semibold))
                                 .foregroundStyle(M.text).lineLimit(1)
                             if host.isPinned { MIcon(name: "tag", size: 11, color: M.warning) }
@@ -233,6 +226,7 @@ struct HostCard: View {
             .clipShape(RoundedRectangle(cornerRadius: MRadius.card))
         }
         .buttonStyle(MPressStyle())
+        .mWatchesReachability(of: host)
         .contextMenu {
             Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
             Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
@@ -241,11 +235,10 @@ struct HostCard: View {
         }
     }
 
+    /// 分组色色块 + 首字母，角标 = 在线状态（见 `MHostAvatar`）。
     private var avatar: some View {
-        Text(String(host.name.prefix(1)).uppercased())
-            .font(M.mono(16, weight: .semibold)).foregroundStyle(accent)
-            .frame(width: 38, height: 38)
-            .background(accent.opacity(0.14))
-            .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
+        MHostAvatar(monogram: host.monogram,
+                    tint: groupColor,
+                    reachability: HostReachabilityMonitor.shared.entry(for: host))
     }
 }
