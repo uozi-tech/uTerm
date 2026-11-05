@@ -25,7 +25,7 @@ import Foundation
 enum ServerGrouping {
 
     /// 空 / nil 组名在 iOS 列表里显示成的段名。
-    static let ungroupedLabel = "未分组"
+    nonisolated static let ungroupedLabel = "未分组"
 
     /// 按分组保序归类：段的顺序 = 组名在 `profiles` 里**首次出现**的顺序，
     /// 段内主机保持 `profiles` 的原顺序（调用方通常已按 `sortOrder` 排好）。

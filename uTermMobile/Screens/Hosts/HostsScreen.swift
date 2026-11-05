@@ -189,7 +189,7 @@ struct HostCard: View {
                                 .foregroundStyle(M.text).lineLimit(1)
                             if host.isPinned { MIcon(name: "tag", size: 11, color: M.warning) }
                         }
-                        Text("\(host.username)@\(host.host):\(String(host.port))")
+                        Text(host.endpointWithPort)
                             .font(M.mono(12.5)).foregroundStyle(M.text3).lineLimit(1)
                     }
                     Spacer(minLength: 4)
@@ -209,8 +209,8 @@ struct HostCard: View {
                 }
 
                 HStack(spacing: 6) {
-                    MGroupChip(host.group?.isEmpty == false ? host.group! : "未分组", tint: groupColor)
-                    MChip(text: host.authMethod == .privateKey ? "SSH 密钥" : "密码", icon: "key", tone: .accent)
+                    MGroupChip(host.groupLabel, tint: groupColor)
+                    MChip(text: host.authMethod.label, icon: "key", tone: .accent)
                     if host.sftpOnly { MChip(text: "仅 SFTP", icon: "folder") }
                     Spacer(minLength: 6)
                     // 窄屏（iPhone Duo 分屏 ≈ 330pt）让位给 chip：时间单行截断，chip 不折行。
