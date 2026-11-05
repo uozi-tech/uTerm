@@ -42,3 +42,12 @@ final class AIProvider {
         ProviderKind(rawValue: kindRaw) ?? .openai
     }
 }
+
+extension AIProvider {
+    /// 当前该用哪个模型服务：先按存着的 `activeProviderID` 找，没存或已删掉就取 `sortOrder`
+    /// 最小的那个；一个都没配时为 nil。Agent 对话与并行执行（两端）都按这一条选。
+    static func active(in providers: [AIProvider], id: UUID?) -> AIProvider? {
+        if let id, let match = providers.first(where: { $0.id == id }) { return match }
+        return providers.min(by: { $0.sortOrder < $1.sortOrder })
+    }
+}

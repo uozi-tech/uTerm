@@ -142,12 +142,7 @@ struct ParallelRunWindowView: View {
     /// 按当前活动 provider 造模型后端（与 iOS 共用 `ParallelAIDoctor.make`）；
     /// 缺 provider / key / 地址 / 模型则返回 nil（退回模板叙述）。
     private func makeDoctor() -> ParallelAIDoctor? {
-        ParallelAIDoctor.make(provider: activeProvider)
-    }
-
-    private var activeProvider: AIProvider? {
-        if let id = UUID(uuidString: activeProviderIDString),
-           let p = providers.first(where: { $0.id == id }) { return p }
-        return providers.min(by: { $0.sortOrder < $1.sortOrder })
+        ParallelAIDoctor.make(providers: providers,
+                              activeProviderID: UUID(uuidString: activeProviderIDString))
     }
 }

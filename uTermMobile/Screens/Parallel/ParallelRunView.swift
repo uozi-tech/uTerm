@@ -22,6 +22,8 @@ struct ParallelRunSetup {
     /// 按 `request.serverIDs` 选中的主机（顺序与 serverIDs 一致）。
     let targets: [ServerProfile]
     let providers: [AIProvider]
+    /// Agent 里选中的模型服务（`@AppStorage("activeProviderID")`）；没选过为 nil。
+    let activeProviderID: UUID?
     let context: ModelContext
 }
 
@@ -42,6 +44,7 @@ struct ParallelRunView: View {
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var allHosts: [ServerProfile]
     @Query(sort: [SortDescriptor(\AIProvider.sortOrder)]) private var providers: [AIProvider]
+    @AppStorage("activeProviderID") private var activeProviderIDString = ""
 
     @State private var controller: ParallelRunController?
     @State private var now = Date()
@@ -127,7 +130,9 @@ struct ParallelRunView: View {
     private func setup() {
         let targets = QuickCommandTargets.runnable(request.serverIDs, in: allHosts)
         let c = makeController(ParallelRunSetup(request: request, targets: targets,
-                                                providers: providers, context: context))
+                                                providers: providers,
+                                                activeProviderID: UUID(uuidString: activeProviderIDString),
+                                                context: context))
         controller = c
         onControllerReady(c)
         c.start()
@@ -140,7 +145,11 @@ struct ParallelRunView: View {
             commandID: setup.request.commandID, commandName: setup.request.name,
             command: setup.request.command, intent: setup.request.intent,
             aiAssisted: setup.request.aiAssisted,
-            targets: setup.targets, doctor: ParallelAIDoctor.make(provider: setup.providers.first),
+            targets: setup.targets,
+            // 只有 AI 介入才要模型后端（造它要读钥匙串）；与 Agent 用同一个选中的模型服务。
+            doctor: setup.request.aiAssisted
+                ? ParallelAIDoctor.make(providers: setup.providers, activeProviderID: setup.activeProviderID)
+                : nil,
             store: QuickCommandStore(context: setup.context), container: setup.context.container)
     }
 
