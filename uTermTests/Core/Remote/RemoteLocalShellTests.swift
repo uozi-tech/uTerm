@@ -44,7 +44,7 @@ final class RemoteLocalShellTests: XCTestCase {
         let shell = TerminalSession()
         let shellBackend = MockBackend()
         var opened = 0
-        let opener = RemoteLocalShellOpener {
+        let opener = RemoteLocalShellOpener { _ in
             opened += 1
             await shell.connect(using: shellBackend)
             let id = UUID()
@@ -85,7 +85,7 @@ final class RemoteLocalShellTests: XCTestCase {
 
     func test_opener_failure_reaches_phone_without_dropping_the_connection() async throws {
         let registry = TerminalSessionRegistry()
-        let opener = RemoteLocalShellOpener { .failure(.init(message: "Mac 上没有打开「允许打开本机终端」")) }
+        let opener = RemoteLocalShellOpener { _ in .failure(.init(message: "Mac 上没有打开「允许打开本机终端」")) }
         let (server, client) = try await pairedClient(registry: registry, opener: opener)
         defer { server.stop() }
 
@@ -101,7 +101,7 @@ final class RemoteLocalShellTests: XCTestCase {
     func test_old_mac_without_local_shell_feature_is_refused_on_the_phone() async throws {
         let registry = TerminalSessionRegistry()
         var opened = false
-        let opener = RemoteLocalShellOpener {
+        let opener = RemoteLocalShellOpener { _ in
             opened = true
             return .failure(.init(message: "不该走到这里"))
         }
@@ -118,6 +118,67 @@ final class RemoteLocalShellTests: XCTestCase {
         }
         XCTAssertFalse(opened)
         XCTAssertEqual(client.state, .connected)
+    }
+
+    func test_phone_lists_workspaces_then_opens_a_shell_in_the_chosen_one() async throws {
+        let registry = TerminalSessionRegistry()
+        let shell = TerminalSession()
+        var requested: [String?] = []
+        let opener = RemoteLocalShellOpener(workspaces: { ["/Users/me/Workspace/uTerm", "/opt/app"] }, open: { directory in
+            requested.append(directory)
+            await shell.connect(using: MockBackend())
+            let id = UUID()
+            registry.register(TerminalSessionEntry(id: id, serverID: RemoteConstants.localShellServerID,
+                                                   serverName: LocalShellIdentity.serverName,
+                                                   windowKind: TerminalWindowKind.terminal, title: "zsh",
+                                                   connectedAt: Date()), session: shell)
+            return .success(id)
+        })
+        let (server, client) = try await pairedClient(registry: registry, opener: opener)
+        defer { server.stop(); shell.dispose() }
+
+        let listed = await client.localWorkspaces()
+        let workspaces = try XCTUnwrap(listed)
+        XCTAssertEqual(workspaces.directories, ["/Users/me/Workspace/uTerm", "/opt/app"])
+        XCTAssertEqual(workspaces.home, LocalShellWorkspaces.home)
+
+        _ = try await client.openLocalShell(directory: workspaces.directories[0])
+        _ = try await client.openLocalShell()
+        XCTAssertEqual(requested, ["/Users/me/Workspace/uTerm", nil])
+    }
+
+    func test_old_mac_without_workspaces_feature_is_not_asked() async throws {
+        let registry = TerminalSessionRegistry()
+        var asked = false
+        let opener = RemoteLocalShellOpener(workspaces: {
+            asked = true
+            return ["/opt/app"]
+        }, open: { _ in .failure(.init(message: "不该走到这里")) })
+        // 老版本 Mac 收到 `listLocalWorkspaces` 会当未知消息断开整条连接，所以手机端根本不发。
+        let (server, client) = try await pairedClient(registry: registry, features: [RemoteFeature.localShell], opener: opener)
+        defer { server.stop() }
+
+        let workspaces = await client.localWorkspaces()
+        XCTAssertNil(workspaces)
+        XCTAssertFalse(asked)
+        XCTAssertEqual(client.state, .connected)
+    }
+
+    func test_workspaces_stay_on_the_mac_while_local_shell_is_not_allowed() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "uTerm.tests.remote-local-shell-off"))
+        defaults.removePersistentDomain(forName: "uTerm.tests.remote-local-shell-off")
+        let settings = RemoteControlSettings(defaults: defaults)
+        settings.isLocalShellEnabled = false
+        let registry = TerminalSessionRegistry()
+        XCTAssertEqual(RemoteLocalShellOpener.live(settings: settings, registry: registry).workspaces(), [])
+    }
+
+    func test_workspace_paths_are_abbreviated_only_under_home() {
+        let home = "/Users/me"
+        XCTAssertEqual(RemoteLocalWorkspaces.displayPath("/Users/me/Workspace/uTerm", home: home), "~/Workspace/uTerm")
+        XCTAssertEqual(RemoteLocalWorkspaces.displayPath("/Users/me", home: home), "~")
+        XCTAssertEqual(RemoteLocalWorkspaces.displayPath("/Users/meow/x", home: home), "/Users/meow/x")
+        XCTAssertEqual(RemoteLocalWorkspaces.displayPath("/opt/app", home: home), "/opt/app")
     }
 
     func test_phone_closes_the_session_on_mac_through_the_window_closer() async throws {
@@ -165,6 +226,13 @@ final class RemoteLocalShellTests: XCTestCase {
         XCTAssertEqual(RemoteMessage.Kind.openLocalShell.rawValue, 7)
         XCTAssertEqual(RemoteMessage.Kind.localShellOpened.rawValue, 28)
         XCTAssertEqual(RemoteMessage.Kind.closeSession.rawValue, 8)
+        XCTAssertEqual(RemoteMessage.Kind.listLocalWorkspaces.rawValue, 16)
+        XCTAssertEqual(RemoteMessage.Kind.localWorkspaces.rawValue, 31)
+        XCTAssertEqual(RemoteFeature.localWorkspaces, "local-workspaces")
+        XCTAssertTrue(RemoteConstants.localFeatures.contains(RemoteFeature.localWorkspaces))
+        // 老手机不带这个键：Mac 要按主目录开。
+        let oldRequest = try RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: Data(#"{"requestID":"00000000-0000-0000-0000-000000000001"}"#.utf8))
+        XCTAssertNil(oldRequest.directory)
         XCTAssertEqual(RemoteFeature.closeSession, "close-session")
         XCTAssertTrue(RemoteConstants.localFeatures.contains(RemoteFeature.closeSession))
         let close = RemoteCloseSessionRequest(sessionID: UUID())

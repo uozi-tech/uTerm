@@ -197,6 +197,7 @@
 				Features/LocalShell/LocalShellRestorer.swift,
 				Features/LocalShell/LocalShellService.swift,
 				Features/LocalShell/LocalShellWindow.swift,
+				Features/LocalShell/LocalShellWorkspaces.swift,
 				Features/ParallelRun/ParallelAIDoctor.swift,
 				Features/ParallelRun/ParallelRunModel.swift,
 				Features/ParallelRun/ParallelRunTypes.swift,

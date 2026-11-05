@@ -90,10 +90,10 @@ final class TerminalSessionRegistry {
     ///   `terminal-open` 拿到窗口 id 后用 `waitForSession(inWindow:)` 等会话注册上来。
     var openTerminalWindow: (@MainActor (UUID) -> UUID?)?
 
-    /// 开一个本机终端：有本机终端窗口就加一个标签进去，没有才开窗口。返回**会话** id（预先定好的），
+    /// 开一个本机终端（工作目录为参数，nil = 主目录）：有本机终端窗口就加一个标签进去，没有才开窗口。返回**会话** id（预先定好的），
     /// 调用方用 `waitForSession(id:)` 等它登记——窗口里可能已经有别的会话，不能按窗口等。
     /// 注入方式与 `openTerminalWindow` 相同；手机远控的「新建本机终端」用它。
-    var openLocalShell: (@MainActor () -> UUID?)?
+    var openLocalShell: (@MainActor (String?) -> UUID?)?
 
     /// 会话本体的弱引用槽（读屏 / 注入要拿到它）。
     @ObservationIgnored private var sessions: [UUID: WeakSessionBox] = [:]

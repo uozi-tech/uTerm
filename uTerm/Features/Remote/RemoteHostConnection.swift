@@ -145,6 +145,11 @@ final class RemoteHostConnection {
         case .openLocalShell:
             guard let request = try? RemoteJSON.decode(RemoteOpenLocalShellRequest.self, from: message.payload) else { return }
             openLocalShell(request)
+        case .listLocalWorkspaces:
+            guard let request = try? RemoteJSON.decode(RemoteLocalWorkspacesRequest.self, from: message.payload) else { return }
+            let reply = RemoteLocalWorkspaces(requestID: request.requestID, home: LocalShellWorkspaces.home,
+                                              directories: server.localShellOpener.workspaces())
+            link.send(RemoteMessage(.localWorkspaces, payload: RemoteJSON.encode(reply)))
         case .closeSession:
             guard let request = try? RemoteJSON.decode(RemoteCloseSessionRequest.self, from: message.payload) else { return }
             let closed = server.registry.requestClose(sessionID: request.sessionID)
@@ -162,7 +167,7 @@ final class RemoteHostConnection {
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame, .desktopCursor,
-             .localShellOpened, .terminalImageResult:
+             .localShellOpened, .terminalImageResult, .localWorkspaces:
             break
         }
     }
@@ -242,7 +247,7 @@ final class RemoteHostConnection {
         AppLogger.info("远控：\(device) 请求新建本机终端", category: RemoteLog.category)
         Task { [weak self] in
             guard let opener = self?.server.localShellOpener else { return }
-            let result = await opener.open()
+            let result = await opener.open(request.directory)
             guard let self, !self.isClosed else { return }
             let reply: RemoteOpenLocalShellResult
             switch result {

@@ -62,6 +62,7 @@ struct RemoteMacSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var openingShell = false
     @State private var shellError: String?
+    @State private var workspaceChoices: RemoteLocalWorkspaces?
     @State private var pendingClose: RemoteSessionInfo?
 
     var body: some View {
@@ -159,7 +160,10 @@ struct RemoteMacSheet: View {
                     MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
                               sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
                         guard !openingShell else { return }
-                        Task { await openLocalShell() }
+                        Task { await chooseWorkspace() }
+                    }
+                    .macWorkspaceDialog($workspaceChoices) { directory in
+                        Task { await openLocalShell(directory: directory) }
                     }
                 } else {
                     MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
@@ -262,11 +266,23 @@ struct RemoteMacSheet: View {
         }
     }
 
-    private func openLocalShell() async {
+    /// Mac 有最近的工作区就先问开在哪，没有就直接开。
+    private func chooseWorkspace() async {
+        openingShell = true
+        let workspaces = await client.localWorkspaces()
+        openingShell = false
+        if let workspaces, !workspaces.directories.isEmpty {
+            workspaceChoices = workspaces
+        } else {
+            await openLocalShell(directory: nil)
+        }
+    }
+
+    private func openLocalShell(directory: String?) async {
         openingShell = true
         defer { openingShell = false }
         do {
-            let sessionID = try await client.openLocalShell()
+            let sessionID = try await client.openLocalShell(directory: directory)
             takeOver(focus: sessionID)
         } catch {
             shellError = error.localizedDescription
@@ -294,6 +310,24 @@ extension RemoteMacClient {
     }
 }
 
+extension View {
+    /// 在 Mac 上新开终端前问开在哪。要挂在触发它的行上：宽屏下它是 popover，箭头指向所挂的视图。
+    func macWorkspaceDialog(_ choices: Binding<RemoteLocalWorkspaces?>,
+                            onPick: @escaping (_ directory: String?) -> Void) -> some View {
+        confirmationDialog("在哪个目录打开？",
+                           isPresented: Binding(get: { choices.wrappedValue != nil },
+                                                set: { if !$0 { choices.wrappedValue = nil } }),
+                           titleVisibility: .visible,
+                           presenting: choices.wrappedValue) { workspaces in
+            Button("主目录") { onPick(nil) }
+            ForEach(workspaces.directories, id: \.self) { directory in
+                Button(RemoteLocalWorkspaces.displayPath(directory, home: workspaces.home)) { onPick(directory) }
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+}
+
 /// 新建终端抽屉里的「这台 Mac 的本机终端」：每台配对过的 Mac 一行，点一下在 Mac 上开一个新的登录 shell。
 struct MacTerminalRows: View {
     let directory: RemoteMacDirectory
@@ -302,6 +336,8 @@ struct MacTerminalRows: View {
     @Environment(\.mAccent) private var accent
     @State private var openingMac: String?
     @State private var shellError: String?
+    @State private var choosingMac: String?
+    @State private var workspaceChoices: RemoteLocalWorkspaces?
 
     var body: some View {
         ForEach(directory.pairedMacs) { mac in
@@ -319,7 +355,7 @@ struct MacTerminalRows: View {
     }
 
     private func row(_ mac: RemoteMacDirectory.Mac) -> some View {
-        Button { open(mac) } label: {
+        Button { chooseWorkspace(mac) } label: {
             HStack(spacing: 12) {
                 MIcon(name: "mac", size: 18, color: accent)
                     .frame(width: 38, height: 38)
@@ -343,15 +379,34 @@ struct MacTerminalRows: View {
         }
         .buttonStyle(MPressStyle())
         .disabled(openingMac != nil)
+        .macWorkspaceDialog(Binding(get: { choosingMac == mac.id ? workspaceChoices : nil },
+                                    set: { workspaceChoices = $0 })) { directory in
+            open(mac, directory: directory)
+        }
     }
 
-    private func open(_ mac: RemoteMacDirectory.Mac) {
+    /// Mac 有最近的工作区就先问开在哪，没有就直接开。要先连上 Mac 才知道，所以这段时间也显示「正在打开…」。
+    private func chooseWorkspace(_ mac: RemoteMacDirectory.Mac) {
+        openingMac = mac.id
+        Task {
+            let workspaces = await directory.client(for: mac).localWorkspaces()
+            openingMac = nil
+            if let workspaces, !workspaces.directories.isEmpty {
+                choosingMac = mac.id
+                workspaceChoices = workspaces
+            } else {
+                open(mac, directory: nil)
+            }
+        }
+    }
+
+    private func open(_ mac: RemoteMacDirectory.Mac, directory shellDirectory: String?) {
         let client = directory.client(for: mac)
         openingMac = mac.id
         Task {
             defer { openingMac = nil }
             do {
-                onOpen(client, try await client.openLocalShell())
+                onOpen(client, try await client.openLocalShell(directory: shellDirectory))
             } catch {
                 shellError = error.localizedDescription
             }

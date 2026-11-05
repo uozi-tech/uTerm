@@ -124,6 +124,7 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]
     @ObservationIgnored private var desktopWaiters: [UUID: CheckedContinuation<(UInt32, RemoteDesktopInfo), Error>] = [:]
     @ObservationIgnored private var localShellWaiters: [UUID: CheckedContinuation<UUID, Error>] = [:]
+    @ObservationIgnored private var workspaceWaiters: [UUID: CheckedContinuation<RemoteLocalWorkspaces?, Never>] = [:]
     @ObservationIgnored private var imageWaiters: [UUID: CheckedContinuation<RemoteTerminalImageResult, Error>] = [:]
     @ObservationIgnored private var peer: RemoteHello?
     @ObservationIgnored private let heartbeat: RemoteHeartbeat
@@ -305,6 +306,8 @@ final class RemoteMacClient: Identifiable {
         desktopWaiters.removeAll()
         for (_, waiter) in localShellWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         localShellWaiters.removeAll()
+        for (_, waiter) in workspaceWaiters { waiter.resume(returning: nil) }
+        workspaceWaiters.removeAll()
         for (_, waiter) in imageWaiters { waiter.resume(throwing: RemoteProtocolError.closed) }
         imageWaiters.removeAll()
         for sink in table.removeAll() { sink.onClosed("与 Mac 的连接已断开", false) }
@@ -377,6 +380,10 @@ final class RemoteMacClient: Identifiable {
             } else {
                 waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 没能打开本机终端"))
             }
+        case .localWorkspaces:
+            guard let workspaces = try? RemoteJSON.decode(RemoteLocalWorkspaces.self, from: message.payload),
+                  let waiter = workspaceWaiters.removeValue(forKey: workspaces.requestID) else { return }
+            waiter.resume(returning: workspaces)
         case .terminalImageResult:
             guard let result = try? RemoteJSON.decode(RemoteTerminalImageResult.self, from: message.payload),
                   let waiter = imageWaiters.removeValue(forKey: result.requestID) else { return }
@@ -447,7 +454,7 @@ final class RemoteMacClient: Identifiable {
     /// 请 Mac 开一个本机 shell（Mac 上同时弹出它的终端窗口），返回会话 id；之后照常 `attach`。
     /// Mac 上没开「允许打开本机终端」、辅助程序没授权等情况抛 `RemoteAttachError.rejected`，带给人看的原因；
     /// 连不上 Mac 抛 `.unreachable`。
-    func openLocalShell() async throws -> UUID {
+    func openLocalShell(directory: String? = nil) async throws -> UUID {
         await connect()
         guard state == .connected, let link else {
             throw connectionFailure
@@ -458,7 +465,19 @@ final class RemoteMacClient: Identifiable {
         let requestID = UUID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
             localShellWaiters[requestID] = continuation
-            link.send(RemoteMessage(.openLocalShell, payload: RemoteJSON.encode(RemoteOpenLocalShellRequest(requestID: requestID))))
+            link.send(RemoteMessage(.openLocalShell, payload: RemoteJSON.encode(RemoteOpenLocalShellRequest(requestID: requestID, directory: directory))))
+        }
+    }
+
+    /// 问 Mac 最近的工作区，给「开在哪」用。连不上、老 Mac、Mac 没开本机终端都回 nil 或空列表：这时不用问，
+    /// 直接走 `openLocalShell()`，开不了的原因由它报。
+    func localWorkspaces() async -> RemoteLocalWorkspaces? {
+        await connect()
+        guard state == .connected, let link, macFeatures.contains(RemoteFeature.localWorkspaces) else { return nil }
+        let requestID = UUID()
+        return await withCheckedContinuation { continuation in
+            workspaceWaiters[requestID] = continuation
+            link.send(RemoteMessage(.listLocalWorkspaces, payload: RemoteJSON.encode(RemoteLocalWorkspacesRequest(requestID: requestID))))
         }
     }
 }

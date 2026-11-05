@@ -11,6 +11,8 @@ nonisolated struct LocalShellWindowID: Codable, Hashable, Sendable, Identifiable
     let id: UUID
     /// 第一个标签的会话 id。手机远控开窗口时预先定好，好按它等会话登记；为 nil 时窗口自己开一个。
     var firstPaneID: UUID?
+    /// 第一个标签的工作目录，nil = 主目录。
+    var directory: String?
 }
 
 /// 存在 holder 里的会话归属：App 重启后据此把标签放回原来的窗口。holder 只当它是不透明的数据。
@@ -36,15 +38,22 @@ final class LocalShellPane: Identifiable {
     let shellName = (LocalShellPane.userShell() as NSString).lastPathComponent
     /// 窗口里的序号。开标签时定下、不随位置变：标签可以拖来拖去，名字不该跟着改。
     let ordinal: Int
+    /// shell 现在所在的目录；还没问到时是开标签时要的那个。重新启动时从这里接着。
+    private(set) var workingDirectory: String?
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
+    @ObservationIgnored private var directoryTracking: Task<Void, Never>?
     @ObservationIgnored private(set) var isDisposed = false
+
+    /// `cd` 没有事件可等，只能隔一阵问一次。只是一次系统调用，开销可以忽略；短暂路过的目录也不会被记进最近列表。
+    private static let directoryPollInterval: Duration = .seconds(3)
 
     /// 同名 shell 多开时名字带序号（zsh、zsh 2……），手机列表里分得清；shell 没设标题时标签也显示它。
     var defaultTitle: String { ordinal > 1 ? "\(shellName) \(ordinal)" : shellName }
 
-    init(id: UUID = UUID(), ordinal: Int = 1) {
+    init(id: UUID = UUID(), ordinal: Int = 1, directory: String? = nil) {
         self.id = id
         self.ordinal = ordinal
+        workingDirectory = directory
         session.onConnectionStateChange = { [weak self] state in
             self?.syncRegistration(state)
         }
@@ -60,12 +69,27 @@ final class LocalShellPane: Identifiable {
         await session.close()
         let terminal = session.terminalView.getTerminal()
         let backend = LocalShellBackend(client: LocalShellService.shared.client, sessionID: id,
-                                        columns: terminal.cols, rows: terminal.rows,
+                                        directory: workingDirectory, columns: terminal.cols, rows: terminal.rows,
                                         ownsResponsibility: LocalShellNetworkPolicy.keepsLANConnections())
         await session.connect(using: backend)
         if let windowID = registrar?.windowID, session.backend === backend,
            let attributes = try? JSONEncoder().encode(LocalShellSessionAttributes(windowID: windowID, ordinal: ordinal)) {
             await backend.setAttributes(attributes)
+        }
+        trackWorkingDirectory(backend)
+    }
+
+    private func trackWorkingDirectory(_ backend: LocalShellBackend) {
+        directoryTracking?.cancel()
+        directoryTracking = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.session.connectionState == .connected else { return }
+                if let directory = await backend.workingDirectory(), directory != self.workingDirectory {
+                    self.workingDirectory = directory
+                    LocalShellWorkspaces.shared.note(directory)
+                }
+                try? await Task.sleep(for: Self.directoryPollInterval)
+            }
         }
     }
 
@@ -73,6 +97,7 @@ final class LocalShellPane: Identifiable {
     func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
+        directoryTracking?.cancel()
         registrar?.unregister(paneID: id)
         session.closeForDisposal()
     }
@@ -133,8 +158,8 @@ final class LocalShellWindowModel {
 
     /// 在 `groupID`（默认活动组）新开一个标签并切过去，返回它的会话 id（可以预先指定）。
     @discardableResult
-    func addTab(id: UUID = UUID(), ordinal: Int? = nil, in groupID: UUID? = nil) -> UUID {
-        let tab = makeTab(id: id, ordinal: ordinal)
+    func addTab(id: UUID = UUID(), ordinal: Int? = nil, directory: String? = nil, in groupID: UUID? = nil) -> UUID {
+        let tab = makeTab(id: id, ordinal: ordinal, directory: directory)
         groups.openTab({ tab }, in: groupID)
         return id
     }
@@ -194,8 +219,8 @@ final class LocalShellWindowModel {
         registrar.registry.setFocusedSession(active?.id, inWindow: registrar.windowID)
     }
 
-    private func makeTab(id: UUID = UUID(), ordinal: Int? = nil) -> UPaneTab<LocalShellPane> {
-        let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal())
+    private func makeTab(id: UUID = UUID(), ordinal: Int? = nil, directory: String? = nil) -> UPaneTab<LocalShellPane> {
+        let pane = LocalShellPane(id: id, ordinal: ordinal ?? nextOrdinal(), directory: directory)
         if let registrar { pane.attach(registrar) }
         startShell(pane)
         return UPaneTab(id: id, payload: pane)
@@ -245,6 +270,16 @@ final class LocalShellWindowRouter {
         entries.values.flatMap { $0.model?.panes ?? [] }
     }
 
+    /// 开着的标签所在的目录：最近活跃的窗口在前，窗口里当前标签在前。
+    var openDirectories: [String] {
+        activationOrder.reversed().flatMap { id -> [String] in
+            guard let model = entries[id]?.model else { return [] }
+            let panes = model.panes
+            return (panes.filter { $0.id == model.active?.id } + panes.filter { $0.id != model.active?.id })
+                .compactMap(\.workingDirectory)
+        }
+    }
+
     func markActive(windowID: UUID) {
         guard entries[windowID] != nil else { return }
         activationOrder.removeAll { $0 == windowID }
@@ -253,20 +288,20 @@ final class LocalShellWindowRouter {
 
     /// 新开一个本机 shell：有本机终端窗口就加一个标签进去，没有才开窗口。返回预先定好的会话 id。
     @discardableResult
-    func openShell(openWindow: (LocalShellWindowID) -> Void) -> UUID {
+    func openShell(directory: String? = nil, openWindow: (LocalShellWindowID) -> Void) -> UUID {
         let paneID = UUID()
-        if !openTabInExistingWindow(paneID: paneID) {
-            openWindow(LocalShellWindowID(id: UUID(), firstPaneID: paneID))
+        if !openTabInExistingWindow(paneID: paneID, directory: directory) {
+            openWindow(LocalShellWindowID(id: UUID(), firstPaneID: paneID, directory: directory))
         }
         return paneID
     }
 
     /// 在最近活跃的本机终端窗口里开一个标签（会话 id = `paneID`）并带到前台。
     /// 返回 false = 当前没有本机终端窗口，调用方应开新窗口。
-    func openTabInExistingWindow(paneID: UUID) -> Bool {
+    func openTabInExistingWindow(paneID: UUID, directory: String? = nil) -> Bool {
         for id in activationOrder.reversed() {
             guard let entry = entries[id], let model = entry.model else { continue }
-            model.addTab(id: paneID)
+            model.addTab(id: paneID, directory: directory)
             if let window = entry.window {
                 if window.isMiniaturized { window.deminiaturize(nil) }
                 window.makeKeyAndOrderFront(nil)
@@ -290,8 +325,8 @@ extension OpenWindowAction {
     /// 手机、命令行发起的直接走这里：Mac 前可能没有人，不能弹框挡住。
     @MainActor
     @discardableResult
-    func newLocalShell() -> UUID {
-        LocalShellWindowRouter.shared.openShell { self(value: $0) }
+    func newLocalShell(directory: String? = nil) -> UUID {
+        LocalShellWindowRouter.shared.openShell(directory: directory) { self(value: $0) }
     }
 }
 
@@ -361,7 +396,7 @@ struct LocalShellWindowView: View {
             }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
-            if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID()) }
+            if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID(), directory: windowID.directory) }
         }
         .onChange(of: controlActiveState) { _, state in
             guard let windowID else { return }
@@ -426,7 +461,7 @@ struct LocalShellTerminalArea: View {
             },
             emptyGroup: { _ in background },
             onRequestClose: { tab in model.requestClose(tab.id) },
-            stripAccessory: { groupID in newTabButton(groupID) })
+            stripAccessory: { groupID in LocalShellNewTabButton(model: model, groupID: groupID) })
             .uPaneGroupStyle(.card)
             .uPaneGroupWells()
     }
@@ -443,19 +478,48 @@ struct LocalShellTerminalArea: View {
             leadingDot: status?.tabDot ?? (session.connectionState == .connected ? UD.success : UD.text4),
             help: controlled ? "正在被手机接管" : status?.tabHelp ?? shellTitle ?? pane.defaultTitle)
     }
+}
 
-    private func newTabButton(_ groupID: UUID) -> some View {
-        Button {
-            model.addTab(in: groupID)
-        } label: {
-            Image(systemName: "plus")
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
+/// 标签条上的「＋」：有最近的工作区时弹菜单选开在哪，没有就直接开主目录。⌘T 总是直接开主目录。
+private struct LocalShellNewTabButton: View {
+    let model: LocalShellWindowModel
+    let groupID: UUID
+
+    var body: some View {
+        let directories = LocalShellWorkspaces.shared.list(open: LocalShellWindowRouter.shared.openDirectories)
+        if directories.isEmpty {
+            Button {
+                model.addTab(in: groupID)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .iconButtonHover(cornerRadius: 6)
+            .help("新开本机终端（⌘T）")
+            .accessibilityLabel(Text("新开本机终端"))
+        } else {
+            Menu {
+                Button("主目录") { model.addTab(in: groupID) }
+                Section("最近的工作区") {
+                    ForEach(directories, id: \.self) { directory in
+                        Button(RemoteLocalWorkspaces.displayPath(directory, home: LocalShellWorkspaces.home)) {
+                            model.addTab(directory: directory, in: groupID)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .iconButtonHover(cornerRadius: 6)
+            .help("新开本机终端")
+            .accessibilityLabel(Text("新开本机终端"))
         }
-        .buttonStyle(.plain)
-        .iconButtonHover(cornerRadius: 6)
-        .help("新开本机终端（⌘T）")
-        .accessibilityLabel(Text("新开本机终端"))
     }
 }
 

@@ -28,6 +28,7 @@ nonisolated enum RemoteConstants {
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
     static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
+                                          RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
@@ -59,6 +60,8 @@ nonisolated enum RemoteFeature {
     static let desktopPaste = "desktop-paste"
     /// 能在 Mac 上开一个本机 shell：认得 `openLocalShell`。
     static let localShell = "local-shell"
+    /// 能列出最近的工作区，并在指定目录开本机 shell：认得 `listLocalWorkspaces`。
+    static let localWorkspaces = "local-workspaces"
     /// 手机关标签时能连 Mac 上的终端一起关：认得 `closeSession`。
     static let closeSession = "close-session"
     /// 能把手机的图片交给远控终端里的程序：认得 `terminalImage`。
@@ -107,6 +110,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 把手机上的图片 / 文字粘贴到 Mac（桌面通道）。负载 = `RemoteDesktopPaste`（二进制）。
         /// 只发给 `features` 带 `desktop-paste` 的 Mac。
         case desktopPaste = 15
+        /// 要 Mac 最近的工作区（通道 0）。负载 = `RemoteLocalWorkspacesRequest`（JSON）。Mac 回 `.localWorkspaces`。
+        /// 只发给 `features` 带 `local-workspaces` 的 Mac。
+        case listLocalWorkspaces = 16
 
         // Mac → 手机
         /// 会话列表。负载 = `[RemoteSessionInfo]`（JSON）。
@@ -131,6 +137,8 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case terminalImageResult = 29
         /// 配对状态（只在通道 0）。负载 = `RemotePairingState` 的 rawValue（1 字节）。
         case pairing = 30
+        /// 最近的工作区。负载 = `RemoteLocalWorkspaces`（JSON）。
+        case localWorkspaces = 31
     }
 
     var kind: Kind
@@ -336,6 +344,26 @@ nonisolated struct RemoteTerminalImageResult: Codable, Equatable, Sendable {
 nonisolated struct RemoteOpenLocalShellRequest: Codable, Equatable, Sendable {
     /// 回复里原样带回，手机据此认出是哪一次请求。
     var requestID: UUID
+    /// Mac 上的工作目录，nil = 主目录。老 Mac 不读这个键，所以只在对端声明 `local-workspaces` 时才有可选的目录。
+    var directory: String? = nil
+}
+
+nonisolated struct RemoteLocalWorkspacesRequest: Codable, Equatable, Sendable {
+    var requestID: UUID
+}
+
+nonisolated struct RemoteLocalWorkspaces: Codable, Equatable, Sendable {
+    var requestID: UUID
+    /// Mac 上的主目录，显示路径时缩写成 `~`。
+    var home: String
+    /// 绝对路径，最相关的在前。不含主目录。
+    var directories: [String]
+
+    /// `~/Workspace/uTerm` 这种给人看的写法。两端的菜单都用它。
+    nonisolated static func displayPath(_ path: String, home: String) -> String {
+        if path == home { return "~" }
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
 }
 
 nonisolated struct RemoteOpenLocalShellResult: Codable, Equatable, Sendable {

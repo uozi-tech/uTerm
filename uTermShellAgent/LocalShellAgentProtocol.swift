@@ -24,10 +24,10 @@ nonisolated enum LocalShellAgent {
 @objc nonisolated protocol LocalShellAgentProtocol {
     /// 探活：设置页据此显示「辅助进程正常」。回辅助进程的版本号。
     func ping(reply: @escaping @Sendable (String) -> Void)
-    /// 连上会话 `id`；还没有就新起一个（用户的登录 shell，工作目录是主目录）。成功回（到 holder 的连接，nil）。
+    /// 连上会话 `id`；还没有就新起一个（用户的登录 shell，工作目录是 `directory`，nil = 主目录）。成功回（到 holder 的连接，nil）。
     /// `namespace` 隔开互不相干的 uTerm（正式版一份，每个 Debug 构建路径一份）。
     /// `ownsResponsibility`：新会话自己当责任进程，见 `LocalShellNetworkPolicy`。接回已有会话时不起作用。
-    func openSession(namespace: String, id: String, columns: Int, rows: Int, ownsResponsibility: Bool,
+    func openSession(namespace: String, id: String, directory: String?, columns: Int, rows: Int, ownsResponsibility: Bool,
                      reply: @escaping @Sendable (FileHandle?, String?) -> Void)
     /// SSH 会话版的 `openSession`：`id` 已有会话就只回（到 holder 的连接，nil，nil）；否则起一个跑 `uterm-ssh` 的 holder，
     /// 回（到 holder 的连接，控制通道，nil）。App 经控制通道把连接参数交给 `uterm-ssh`，见 `SSHBridgeMessage`。

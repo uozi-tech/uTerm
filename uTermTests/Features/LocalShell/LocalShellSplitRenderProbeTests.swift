@@ -12,6 +12,48 @@ import XCTest
 @MainActor
 final class LocalShellSplitRenderProbeTests: XCTestCase {
 
+    /// 真 shell 走一遍：开在选中的目录 → `cd` 到别处 → 进最近列表 → 「＋」变成菜单 → 选它开出的 shell 落在那里。
+    func test_new_tab_menu_lists_the_directory_a_real_shell_moved_to() async throws {
+        let model = LocalShellWindowModel()
+        let windowID = UUID()
+        LocalShellWindowRouter.shared.register(windowID: windowID, window: nil, model: model)
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 960, height: 560))
+        let host = NSHostingView(rootView: LocalShellTerminalArea(model: model))
+        host.frame = NSRect(origin: .zero, size: NSSize(width: 960, height: 560))
+        window.contentView = host
+        defer {
+            LocalShellWindowRouter.shared.unregister(windowID: windowID)
+            model.disposeAll()
+            window.contentView = NSView()
+            window.orderOut(nil)
+        }
+
+        let tab = model.addTab(directory: "/usr/bin")
+        let pane = try XCTUnwrap(model.groups.tab(tab)?.payload)
+        await waitUntil("shell 起来") { pane.session.connectionState == .connected }
+        pane.session.writeRemoteInput(Data("cd /usr/lib\n".utf8))
+        await waitUntil("问到新目录") { pane.workingDirectory == "/usr/lib" }
+        XCTAssertEqual(LocalShellWorkspaces.shared.recent.first, "/usr/lib")
+        XCTAssertEqual(LocalShellWindowRouter.shared.openDirectories, ["/usr/lib"])
+
+        await waitUntil("「＋」变成菜单") { self.popUpButton(in: host) != nil }
+        // 菜单项是 SwiftUI 点开时才生成的，这里读不到。验它的数据源和选中后走的同一个入口。
+        let listed = LocalShellWorkspaces.shared.list(open: LocalShellWindowRouter.shared.openDirectories)
+        XCTAssertEqual(listed.first, "/usr/lib")
+
+        let second = model.addTab(directory: try XCTUnwrap(listed.first))
+        let secondPane = try XCTUnwrap(model.groups.tab(second)?.payload)
+        await waitUntil("新标签的 shell 起来") { secondPane.session.connectionState == .connected }
+        let backend = try XCTUnwrap(secondPane.session.backend as? LocalShellBackend)
+        let started = await backend.workingDirectory()
+        XCTAssertEqual(started, "/usr/lib")
+    }
+
+    private func popUpButton(in view: NSView) -> NSPopUpButton? {
+        if let button = view as? NSPopUpButton { return button }
+        return view.subviews.lazy.compactMap { self.popUpButton(in: $0) }.first
+    }
+
     func test_dragging_a_tab_to_the_edge_shows_both_shells_side_by_side() async throws {
         let model = LocalShellWindowModel()
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 960, height: 560))

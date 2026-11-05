@@ -6,7 +6,7 @@ import os
 ///
 /// 这里不留任何会话状态：会话归 holder，socket 目录就是真值。所以这个进程随 uTerm 退出也不影响任何 shell。
 nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, LocalShellAgentProtocol, @unchecked Sendable {
-    static let version = "4"
+    static let version = "5"
     /// 等 holder 开始监听的上限。正常几毫秒。
     private static let spawnWaitSeconds = 5.0
     /// 控制通道在 holder 和 `uterm-ssh` 里的 fd 号。0/1/2 之后第一个，holder 自己开的 fd 都排在它后面。
@@ -33,7 +33,7 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         reply(Self.version)
     }
 
-    func openSession(namespace: String, id: String, columns: Int, rows: Int, ownsResponsibility: Bool,
+    func openSession(namespace: String, id: String, directory shellDirectory: String?, columns: Int, rows: Int, ownsResponsibility: Bool,
                      reply: @escaping @Sendable (FileHandle?, String?) -> Void) {
         queue.async {
             do {
@@ -45,7 +45,8 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 }
                 let shell = Self.loginShell()
                 let pid = try self.spawnHolder(
-                    directory: directory, name: name, columns: columns, rows: rows, executable: shell,
+                    directory: directory, name: name, columns: columns, rows: rows,
+                    workingDirectory: shellDirectory ?? NSHomeDirectory(), executable: shell,
                     argv0: "-" + (shell as NSString).lastPathComponent, environment: Self.environment(shell: shell), controlFD: nil,
                     ownsResponsibility: ownsResponsibility)
                 reply(try self.waitForHolder(pid: pid, directory: directory, name: name), nil)
@@ -74,7 +75,8 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
                 let appEnd = FileHandle(fileDescriptor: pair[0], closeOnDealloc: true)
                 defer { close(pair[1]) }
                 let pid = try self.spawnHolder(
-                    directory: directory, name: name, columns: columns, rows: rows, executable: try self.helper("uterm-ssh"),
+                    directory: directory, name: name, columns: columns, rows: rows,
+                    workingDirectory: NSHomeDirectory(), executable: try self.helper("uterm-ssh"),
                     argv0: "uterm-ssh", environment: Self.environment(shell: Self.loginShell()) + ["UTERM_SSH_CONTROL_FD=\(Self.childControlFD)"],
                     controlFD: pair[1], ownsResponsibility: true)
                 reply(try self.waitForHolder(pid: pid, directory: directory, name: name), appEnd, nil)
@@ -189,10 +191,11 @@ nonisolated final class ShellAgentServer: NSObject, NSXPCListenerDelegate, Local
         return path
     }
 
-    private func spawnHolder(directory: String, name: String, columns: Int, rows: Int, executable: String, argv0: String,
+    private func spawnHolder(directory: String, name: String, columns: Int, rows: Int, workingDirectory: String,
+                             executable: String, argv0: String,
                              environment: [String], controlFD: Int32?, ownsResponsibility: Bool = false) throws -> pid_t {
         let holder = try helper("uterm-holder")
-        let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), executable, argv0]
+        let arguments = [holder, directory, name, String(max(1, columns)), String(max(1, rows)), workingDirectory, executable, argv0]
 
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)

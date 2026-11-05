@@ -94,8 +94,8 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
         }
     }
 
-    /// 连上会话 `id`；还没有就新起一个 shell。
-    func openSession(namespace: String, id: UUID, columns: Int, rows: Int,
+    /// 连上会话 `id`；还没有就在 `directory`（nil = 主目录）新起一个 shell。
+    func openSession(namespace: String, id: UUID, directory: String? = nil, columns: Int, rows: Int,
                      ownsResponsibility: Bool = false) async throws -> FileHandle {
         try await withCheckedThrowingContinuation { continuation in
             let once = LocalShellOnce(continuation)
@@ -103,7 +103,7 @@ nonisolated final class LocalShellAgentClient: @unchecked Sendable {
                 once.resume(throwing: LocalShellError.agentUnavailable("无法建立连接"))
                 return
             }
-            agent.openSession(namespace: namespace, id: id.uuidString, columns: columns, rows: rows,
+            agent.openSession(namespace: namespace, id: id.uuidString, directory: directory, columns: columns, rows: rows,
                               ownsResponsibility: ownsResponsibility) { handle, error in
                 once.finish(handle, error: error)
             }

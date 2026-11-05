@@ -203,9 +203,9 @@ struct uTermApp: App {
             open(value: TerminalWindowID(id: windowID, serverID: serverID))
             return windowID
         }
-        terminalRegistry.openLocalShell = {
+        terminalRegistry.openLocalShell = { directory in
             UTermLifecycleDelegate.showGUI()
-            return open.newLocalShell()
+            return open.newLocalShell(directory: directory)
         }
         // 上次退出时留下的本机终端接回来。`open` 只能在 Scene 环境里拿到，所以在这里装；后台隐藏启动时等 GUI 打开。
         LocalShellRestorer.shared.install { windowID, firstPaneID in

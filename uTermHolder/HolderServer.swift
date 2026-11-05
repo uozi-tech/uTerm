@@ -23,6 +23,7 @@ final class HolderServer: @unchecked Sendable {
 
     private let directory: String
     private let socketName: String
+    private let workingDirectory: String
     private let executable: String
     private let argv: [String]
     /// `uterm-ssh` 会话：XPC 服务放在这个 fd 上的控制通道要留给子进程。本机 shell 没有。
@@ -52,12 +53,14 @@ final class HolderServer: @unchecked Sendable {
     /// 到 `uterm-ssh` 的转发通道。持有连接的是它，App 要在这条连接上跑命令得经这里。
     private var childRelay: HolderClient?
 
-    init(directory: String, socketName: String, cols: UInt16, rows: UInt16, executable: String, argv: [String],
+    init(directory: String, socketName: String, cols: UInt16, rows: UInt16, workingDirectory: String,
+         executable: String, argv: [String],
          childControlFD: Int32? = nil) {
         self.directory = directory
         self.socketName = socketName
         self.cols = cols
         self.rows = rows
+        self.workingDirectory = workingDirectory
         self.executable = executable
         self.argv = argv
         self.childControlFD = childControlFD
@@ -252,6 +255,7 @@ final class HolderServer: @unchecked Sendable {
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         let cArgs = argv.map { strdup($0) } + [nil]
         let cExecutable = strdup(executable)
+        let cWorkingDirectory = strdup(workingDirectory)
         let cHome = strdup(NSHomeDirectory())
         let maxDescriptor = min(getdtablesize(), 4096)
         let keptDescriptor = childControlFD ?? -1
@@ -279,7 +283,8 @@ final class HolderServer: @unchecked Sendable {
                 if descriptor != keptDescriptor, relayChildEnd < 0 || descriptor != relayFD { close(descriptor) }
                 descriptor += 1
             }
-            _ = chdir(cHome)
+            // 目录可能刚被删掉：shell 还是要起来，落在主目录。
+            if chdir(cWorkingDirectory) != 0 { _ = chdir(cHome) }
             _ = execv(cExecutable, cArgs)
             _exit(127)
         }

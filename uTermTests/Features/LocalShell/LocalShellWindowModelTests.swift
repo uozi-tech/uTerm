@@ -20,6 +20,34 @@ final class LocalShellWindowModelTests: XCTestCase {
         XCTAssertEqual(started, [id])
     }
 
+    func test_new_tab_keeps_the_directory_it_was_opened_in() throws {
+        let model = makeModel()
+        let home = model.addTab()
+        let project = model.addTab(directory: "/opt/app")
+        XCTAssertNil(model.groups.tab(home)?.payload.workingDirectory)
+        XCTAssertEqual(model.groups.tab(project)?.payload.workingDirectory, "/opt/app")
+    }
+
+    func test_open_directories_put_the_active_tab_of_the_latest_window_first() {
+        let router = LocalShellWindowRouter.shared
+        let earlier = makeModel(), latest = makeModel()
+        let earlierID = UUID(), latestID = UUID()
+        defer {
+            router.unregister(windowID: earlierID)
+            router.unregister(windowID: latestID)
+        }
+        earlier.addTab(directory: "/earlier")
+        let first = latest.addTab(directory: "/latest/first")
+        latest.addTab(directory: "/latest/second")
+        latest.addTab()   // 主目录的标签还没问到目录，不列。
+        latest.reveal(first)
+        router.register(windowID: earlierID, window: nil, model: earlier)
+        router.register(windowID: latestID, window: nil, model: latest)
+        router.markActive(windowID: latestID)
+
+        XCTAssertEqual(router.openDirectories, ["/latest/first", "/latest/second", "/earlier"])
+    }
+
     func test_dragging_a_tab_to_another_groups_edge_splits_and_keeps_the_same_shell() throws {
         let model = makeModel()
         let first = model.addTab()

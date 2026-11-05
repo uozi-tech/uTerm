@@ -11,18 +11,20 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     private let client: LocalShellAgentClient
     private let namespace: String
     private let sessionID: UUID
+    private let directory: String?
     private let initialColumns: Int
     private let initialRows: Int
     private let ownsResponsibility: Bool
     private let writeImageToPasteboard: @Sendable (TerminalImage) -> Void
 
     init(client: LocalShellAgentClient, namespace: String = LocalShellNamespace.current, sessionID: UUID = UUID(),
-         columns: Int, rows: Int, ownsResponsibility: Bool = false,
+         directory: String? = nil, columns: Int, rows: Int, ownsResponsibility: Bool = false,
          writeImageToPasteboard: @escaping @Sendable (TerminalImage) -> Void = { RemotePasteboard.write($0) }) {
         self.ownsResponsibility = ownsResponsibility
         self.client = client
         self.namespace = namespace
         self.sessionID = sessionID
+        self.directory = directory
         self.writeImageToPasteboard = writeImageToPasteboard
         initialColumns = max(1, columns)
         initialRows = max(1, rows)
@@ -31,6 +33,16 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     /// 本机 shell 的进程号（已结束 / 未启动时 nil）。
     var pid: Int32? {
         get async { await core.pid }
+    }
+
+    /// shell 现在的工作目录（已结束 / 未启动时 nil）。问内核，所以 shell 不用配合，程序在前台跑着也问得到。
+    func workingDirectory() async -> String? {
+        guard let shell = await core.pid else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.stride)
+        guard proc_pidinfo(shell, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+        return path.isEmpty ? nil : path
     }
 
     func connect() async throws {
@@ -44,7 +56,7 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
     }
 
     private func open() async throws -> FileHandle {
-        try await client.openSession(namespace: namespace, id: sessionID, columns: initialColumns, rows: initialRows,
+        try await client.openSession(namespace: namespace, id: sessionID, directory: directory, columns: initialColumns, rows: initialRows,
                                      ownsResponsibility: ownsResponsibility)
     }
 

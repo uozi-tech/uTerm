@@ -58,6 +58,43 @@ final class LocalShellIntegrationTests: XCTestCase {
         XCTAssertFalse(Self.isAlive(pid), "结束后 shell 进程还在")
     }
 
+    /// 起在指定目录；目录没了还是要起来，落在主目录；之后 `cd` 问得到。
+    func test_shell_starts_in_the_requested_directory_and_reports_where_it_went() async throws {
+        let client = LocalShellAgentClient()
+        defer { client.invalidate() }
+
+        func waitForDirectory(_ backend: LocalShellBackend, _ expected: String) async -> String? {
+            let deadline = Date().addingTimeInterval(15)
+            var current = await backend.workingDirectory()
+            while current != expected, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(50))
+                current = await backend.workingDirectory()
+            }
+            return current
+        }
+
+        let backend = LocalShellBackend(client: client, namespace: "integration-test", directory: "/usr/bin", columns: 80, rows: 24)
+        try await backend.connect()
+        let drain = Task { for await _ in backend.outputStream {} }
+        defer { drain.cancel() }
+        let started = await waitForDirectory(backend, "/usr/bin")
+        XCTAssertEqual(started, "/usr/bin")
+
+        await backend.write(Data("cd /usr/lib\n".utf8))
+        let moved = await waitForDirectory(backend, "/usr/lib")
+        XCTAssertEqual(moved, "/usr/lib")
+        await backend.close()
+
+        let missing = LocalShellBackend(client: client, namespace: "integration-test", directory: "/no/such/directory",
+                                        columns: 80, rows: 24)
+        try await missing.connect()
+        let drainMissing = Task { for await _ in missing.outputStream {} }
+        defer { drainMissing.cancel() }
+        let fallback = await waitForDirectory(missing, LocalShellWorkspaces.home)
+        XCTAssertEqual(fallback, LocalShellWorkspaces.home)
+        await missing.close()
+    }
+
     /// shell 自己退出（用户敲 exit）：后端要报告会话结束，否则界面和手机上画面一直冻着。
     func test_natural_shell_exit_is_reported_on_exit_stream() async throws {
         let client = LocalShellAgentClient()
