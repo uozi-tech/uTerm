@@ -159,7 +159,7 @@ struct MobileFakeSFTPTree: Sendable {
 
     // MARK: 变更
 
-    /// 落一个条目进某个目录，保持产品的排序（目录在前、按名不区分大小写升序）。
+    /// 落一个条目进某个目录，保持产品的排序（`MobileSFTPController.sortOptions`）。
     private mutating func insert(_ entry: RemoteEntry, into dir: String) {
         let d = Self.normalize(dir)
         var list = directories[d] ?? []
@@ -169,10 +169,7 @@ struct MobileFakeSFTPTree: Sendable {
     }
 
     static func sorted(_ list: [RemoteEntry]) -> [RemoteEntry] {
-        list.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        RemoteEntrySort.sorted(list, options: MobileSFTPController.sortOptions)
     }
 
     /// mkdir。父目录必须存在，路径不能已被占用。
@@ -305,7 +302,7 @@ struct MobileFakeSFTPTree: Sendable {
     /// 条目形态刻意散开（都是排版 / 截断成本的来源）：
     /// - 文件名长短混合：`a.txt` 到 130 字符的长名，含中文与空格；
     /// - 类型混合：目录 / 普通文件 / 符号链接（`S_IFLNK`，`isDirectory` 恒 false）；
-    /// - 大小从 0 到 ~40GB（`MFileIcon` 与副标题的格式化分支都要走到）；
+    /// - 大小从 0 到 ~40GB（`RemoteFileIcon` 与副标题的格式化分支都要走到）；
     /// - 权限混合 0644 / 0755 / 0600 / 0777；
     /// - 修改时间散布在 3 年内（「今天 / 本月 / 去年」三种日期格式都出现）。
     static func entries(count: Int,

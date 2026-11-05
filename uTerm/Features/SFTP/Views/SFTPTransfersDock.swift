@@ -335,7 +335,7 @@ struct SFTPTransferRow: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            SFTPFileIcon(kind: kind, size: 15).frame(width: 26).opacity(item.status == .done ? 0.55 : 1)
+            RemoteFileIcon(kind: kind, size: 15).frame(width: 26).opacity(item.status == .done ? 0.55 : 1)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(item.fileName).font(.system(size: 12.5))

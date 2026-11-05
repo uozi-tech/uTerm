@@ -20,40 +20,20 @@ struct SFTPPermissionSheet: View {
     @State private var bits: [Bool]
     @State private var recursive = false
 
-    private static let masks: [UInt32] = [
-        0o400, 0o200, 0o100,
-        0o040, 0o020, 0o010,
-        0o004, 0o002, 0o001,
-    ]
-    private static let symbols = ["r", "w", "x", "r", "w", "x", "r", "w", "x"]
     private static let classes = ["所有者", "群组", "其他"]
     private static let cols = ["读", "写", "执行"]
 
     init(entry: RemoteEntry, onApply: @escaping (UInt32, Bool) -> Void) {
         self.entry = entry
         self.onApply = onApply
-        // nil 权限时给合理默认：目录 755 / 符号链接 777 / 普通文件 644。
-        let initial = entry.permissions.map { $0 & 0o777 }
-            ?? (entry.isDirectory ? 0o755 : (entry.isSymlink ? 0o777 : 0o644))
-        _bits = State(initialValue: Self.masks.map { (initial & $0) != 0 })
+        _bits = State(initialValue: POSIXPermissionBits.bits(
+            from: POSIXPermissionBits.initialMode(for: entry)))
     }
 
-    private var typeChar: String {
-        entry.isDirectory ? "d" : (entry.isSymlink ? "l" : "-")
-    }
-    private var mode: UInt32 {
-        var m: UInt32 = 0
-        for (i, on) in bits.enumerated() where on { m |= Self.masks[i] }
-        return m
-    }
-    private var octal: String {
-        func g(_ base: Int) -> String {
-            String((bits[base] ? 4 : 0) + (bits[base + 1] ? 2 : 0) + (bits[base + 2] ? 1 : 0))
-        }
-        return g(0) + g(3) + g(6)
-    }
+    private var mode: UInt32 { POSIXPermissionBits.mode(from: bits) }
+    private var octal: String { POSIXPermissionBits.octal(bits) }
     private var symbolic: String {
-        typeChar + bits.enumerated().map { $0.element ? Self.symbols[$0.offset] : "-" }.joined()
+        POSIXPermissionBits.symbolic(bits, typeChar: POSIXPermissionBits.typeChar(for: entry))
     }
 
     var body: some View {

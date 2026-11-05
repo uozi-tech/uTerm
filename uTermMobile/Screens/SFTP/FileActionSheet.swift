@@ -37,33 +37,6 @@ struct MSheetNavHeader: View {
     }
 }
 
-// MARK: - POSIX 权限位换算（设计稿 m-overlays 的 permParse/permStr/permOctal）
-
-enum POSIXPerm {
-    /// mode → 9 个布尔位，顺序 rwx(owner) rwx(group) rwx(other)。
-    static func bits(from mode: UInt32) -> [Bool] {
-        (0..<9).map { (mode & (1 << UInt32(8 - $0))) != 0 }
-    }
-    static func mode(from bits: [Bool]) -> UInt32 {
-        var m: UInt32 = 0
-        for (i, b) in bits.enumerated() where b { m |= (1 << UInt32(8 - i)) }
-        return m
-    }
-    static func octal(_ bits: [Bool]) -> String {
-        func g(_ a: Bool, _ b: Bool, _ c: Bool) -> Int { (a ? 4 : 0) + (b ? 2 : 0) + (c ? 1 : 0) }
-        return "\(g(bits[0], bits[1], bits[2]))\(g(bits[3], bits[4], bits[5]))\(g(bits[6], bits[7], bits[8]))"
-    }
-    static func symbolic(_ bits: [Bool], isDir: Bool) -> String {
-        let ch = ["r", "w", "x", "r", "w", "x", "r", "w", "x"]
-        let body = bits.enumerated().map { $0.element ? ch[$0.offset] : "-" }.joined()
-        return (isDir ? "d" : "-") + body
-    }
-    static func initialBits(_ entry: RemoteEntry) -> [Bool] {
-        let mode = entry.permissions.map { $0 & 0o777 } ?? (entry.isDirectory ? 0o755 : 0o644)
-        return bits(from: mode)
-    }
-}
-
 // MARK: - chmod 编辑器（设计稿 PermissionSheet），作为操作单内的下钻页
 
 struct PermissionGrid: View {
@@ -76,7 +49,8 @@ struct PermissionGrid: View {
     init(entry: RemoteEntry, onApply: @escaping (UInt32) -> Void) {
         self.entry = entry
         self.onApply = onApply
-        _bits = State(initialValue: POSIXPerm.initialBits(entry))
+        _bits = State(initialValue: POSIXPermissionBits.bits(
+            from: POSIXPermissionBits.initialMode(for: entry)))
     }
 
     private let classes: [(String, Int)] = [("所有者", 0), ("群组", 3), ("其他", 6)]
@@ -86,10 +60,10 @@ struct PermissionGrid: View {
         ScrollView {
             VStack(spacing: 0) {
                 HStack(spacing: 14) {
-                    Text(POSIXPerm.octal(bits)).font(M.mono(30, weight: .bold))
+                    Text(POSIXPermissionBits.octal(bits)).font(M.mono(30, weight: .bold))
                         .foregroundStyle(accent).tracking(1)
                     Rectangle().fill(M.divider).frame(width: 1, height: 26)
-                    Text(POSIXPerm.symbolic(bits, isDir: entry.isDirectory))
+                    Text(POSIXPermissionBits.symbolic(bits, typeChar: POSIXPermissionBits.typeChar(for: entry)))
                         .font(M.mono(16)).foregroundStyle(M.text2).tracking(1)
                 }
                 .padding(.vertical, 18)
@@ -123,7 +97,7 @@ struct PermissionGrid: View {
                 .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                 .padding(.horizontal, 16)
 
-                MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPerm.mode(from: bits)) }
+                MBtn(title: "应用", full: true, height: 48) { onApply(POSIXPermissionBits.mode(from: bits)) }
                     .padding(.horizontal, 16).padding(.top, 20)
             }
             .padding(.vertical, 8)
@@ -144,14 +118,12 @@ struct FileInfoView: View {
             VStack(spacing: 0) {
                 MInsetGroup(header: "信息") {
                     MInsetRow(label: "名称", value: entry.name)
-                    MInsetRow(label: "类型",
-                              value: entry.isDirectory ? "文件夹" : (entry.isSymlink ? "符号链接" : "文件"))
-                    if !entry.isDirectory, let s = entry.size {
-                        MInsetRow(label: "大小",
-                                  value: UFormat.bytes(Int64(clamping: s)))
+                    MInsetRow(label: "类型", value: entry.kind.label)
+                    if !entry.isDirectory, entry.size != nil {
+                        MInsetRow(label: "大小", value: entry.sizeText)
                     }
-                    if let p = entry.permissions {
-                        MInsetRow(label: "权限", value: String(format: "%o", p & 0o777), valueMono: true)
+                    if entry.permissions != nil {
+                        MInsetRow(label: "权限", value: entry.octalText, valueMono: true)
                     }
                     MInsetRow(label: "路径", value: fullPath, valueMono: true, last: true)
                 }
@@ -195,11 +167,7 @@ struct FileActionSheet: View {
     @Environment(\.mAccent) private var accent
 
     private var isFolder: Bool { entry.isDirectory }
-    private var subtitle: String {
-        let kind = isFolder ? "文件夹" : (entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? "文件")
-        let perm = entry.permissions.map { String(format: "%o", $0 & 0o777) } ?? "—"
-        return "\(kind) · \(perm)"
-    }
+    private var subtitle: String { "\(entry.sizeOrKindText) · \(entry.octalText)" }
 
     var body: some View {
         // 权限 / 简介在本单内**下钻 + 返回**，不再各开新抽屉（复用导航返回）。

@@ -28,9 +28,9 @@ nonisolated enum RemoteFileSearch {
         return (home, expanded)
     }
 
-    /// 单引号转义：包 '…'，内部 ' → '\''。
+    /// 单引号转义：包 '…'，内部 ' → '\''。转发到共享的 `RemotePath.shellQuote`。
     static func shSingleQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        RemotePath.shellQuote(s)
     }
 
     /// find <root> -maxdepth N \( -type f -o -type d \) -iname '*<pat>*' -printf '%y\t%p\n' 2>/dev/null | head -n L

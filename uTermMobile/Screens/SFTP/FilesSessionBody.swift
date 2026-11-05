@@ -14,7 +14,7 @@ private struct EntryTarget: Identifiable {
     let entry: RemoteEntry
     let directory: String
     var id: String { fullPath }
-    var fullPath: String { directory == "/" ? "/\(entry.name)" : "\(directory)/\(entry.name)" }
+    var fullPath: String { RemotePath.join(directory, entry.name) }
 }
 
 /// 一个文件浏览会话标签的主体：路径条 + 远程文件列表 + 底栏，长按文件出操作单。
@@ -36,6 +36,24 @@ struct FilesSessionBody: View {
             pathBar
             content
                 .animation(.mSwap, value: controller.state)
+                // 递归删除进行中：底部浮一条进度提示（可取消），列表照常可看。
+                .overlay(alignment: .bottom) {
+                    if let progress = controller.deletion {
+                        FilesDeletionBanner(progress: progress, onCancel: controller.cancelDeletion)
+                            .padding(.horizontal, 12).padding(.bottom, 12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.mSwap, value: controller.deletion != nil)
+                // 单次操作失败（删除 / 改名 / chmod / 上传 / 下载 / 打开目录）：只弹提示，
+                // 不再把整个标签翻成「连接失败」页。
+                .alert("操作失败", isPresented: Binding(
+                    get: { controller.transientError != nil },
+                    set: { if !$0 { controller.clearTransientError() } })) {
+                    Button("好", role: .cancel) { controller.clearTransientError() }
+                } message: {
+                    Text(controller.transientError ?? "")
+                }
             if case .connected = controller.state { footerBar }
         }
         // 整格一个工作面：路径条 / 列表 / 底栏同底色，区块之间只用 hairline。
@@ -46,6 +64,10 @@ struct FilesSessionBody: View {
                 if let t = pendingDelete { controller.delete(t.entry, in: t.directory); pendingDelete = nil }
             }
             Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: {
+            if pendingDelete?.entry.isDirectory == true {
+                Text("文件夹里的全部内容都会一并删除，且无法恢复。")
+            }
         }
         // 长按文件 → 操作单（设计稿 FileActionSheet）。
         .sheet(item: $actionEntry) { target in
@@ -124,10 +146,10 @@ struct FilesSessionBody: View {
     private var breadcrumbs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                let segs = pathSegments(controller.path)
+                let segs = RemotePath.breadcrumbs(controller.path)
                 ForEach(Array(segs.enumerated()), id: \.offset) { i, seg in
                     Button { Task { await controller.load(seg.full) } } label: {
-                        Text(seg.label).font(M.mono(12.5))
+                        Text(seg.name).font(M.mono(12.5))
                             .foregroundStyle(i == segs.count - 1 ? M.text : M.text3)
                             // 面包屑段的命中区撑到整条高（原先只有字形 ~15pt 高）。
                             .padding(.vertical, 10).padding(.horizontal, 2)
@@ -143,20 +165,10 @@ struct FilesSessionBody: View {
         .mKeepsScrollContentInSafeArea()
     }
 
-    private func pathSegments(_ path: String) -> [(label: String, full: String)] {
-        var result: [(label: String, full: String)] = [(label: "/", full: "/")]
-        var cur = ""
-        for comp in path.split(separator: "/") {
-            cur += "/\(comp)"
-            result.append((label: String(comp), full: cur))
-        }
-        return result
-    }
-
     /// 上一级（`..`）行，对齐设计稿带返回箭头的双色文件夹图标。
     private var upRow: some View {
         HStack(spacing: 13) {
-            MFileIcon(kind: .folder, isUp: true, size: 26).frame(width: 26)
+            RemoteFileIcon(kind: .folder, isUp: true, size: 26).frame(width: 26)
             Text("..").font(M.sans(15)).foregroundStyle(M.text2)
             Spacer()
         }
@@ -201,7 +213,8 @@ struct FilesSessionBody: View {
                                     // 而面板开着的时候这一行本来就不该响应点击，
                                     // 不双触发时这里读到的又恒是 nil，是个惰性守卫。
                                     guard actionEntry == nil else { return }
-                                    if entry.isDirectory || entry.isSymlink { controller.open(entry) }
+                                    if entry.isDirectory { controller.open(entry) }
+                                    else if entry.isSymlink { openSymlink(entry) }
                                     else { actionEntry = EntryTarget(entry: entry, directory: controller.path) }
                                 }
                                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -216,19 +229,25 @@ struct FilesSessionBody: View {
         }
     }
 
+    /// 点符号链接：先解析。指向目录 → 控制器直接进入；指向文件 → 按文件处理（弹操作单）。
+    /// 目录取点击那一刻的，解析往返期间用户切走了也不会把操作单挂到别的目录上。
+    private func openSymlink(_ entry: RemoteEntry) {
+        let directory = controller.path
+        Task {
+            guard await controller.openSymlink(entry, in: directory), actionEntry == nil else { return }
+            actionEntry = EntryTarget(entry: entry, directory: directory)
+        }
+    }
+
 }
 
 /// 文件行（设计稿 `FileRow2`）：双色文件夹 / 白纸折角文档 + 角标，扁平行 + 底分隔线。
 struct SFTPRow: View {
     let entry: RemoteEntry
 
-    private var kind: BrowserFileKind {
-        BrowserFileKind.from(name: entry.name, isDirectory: entry.isDirectory, isSymlink: entry.isSymlink)
-    }
-
     var body: some View {
         HStack(spacing: 13) {
-            MFileIcon(kind: kind, size: 26).frame(width: 26)
+            RemoteFileIcon(kind: entry.kind, size: 26).frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).font(M.sans(15)).foregroundStyle(M.text).lineLimit(1)
                 Text(subtitle).font(M.mono(11.5)).foregroundStyle(M.text4).lineLimit(1)
@@ -244,34 +263,46 @@ struct SFTPRow: View {
         .overlay(alignment: .bottom) { MRowDivider(inset: 55) }
     }
 
-    private var subtitle: String {
-        let perms = permString()
-        if entry.isDirectory { return "文件夹 · \(perms)" }
-        let size = entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder
-        return "\(size) · \(perms)"
-    }
+    private var subtitle: String { "\(entry.sizeOrKindText) · \(entry.symbolicText)" }
+}
 
-    /// `drwxr-xr-x` 形式；缺权限位时给类型字符 + 占位。
-    ///
-    /// 改前每渲染一行都要现建一个 9 元组的数组字面量、`map` 成 **9 个 String**、
-    /// 再 `joined()`——一行 10 次小字符串分配。现在直接往一个预留好容量的
-    /// `String` 里追加 `Character`，位表提到 `static let`，一行一次分配。
-    private func permString() -> String {
-        let type: Character = entry.isDirectory ? "d" : (entry.isSymlink ? "l" : "-")
-        var out = ""
-        out.reserveCapacity(10)
-        out.append(type)
-        guard let mode = entry.permissions else {
-            out.append(contentsOf: "---------")
-            return out
+/// 递归删除进度提示：浮在文件列表底部。枚举阶段总数未知 → 不定态；删除阶段 → done/total。
+private struct FilesDeletionBanner: View {
+    let progress: RemoteDeletionProgress
+    var onCancel: () -> Void
+    @Environment(\.mAccent) private var accent
+
+    private var detail: String {
+        switch progress.phase {
+        case .counting:
+            return "正在统计… 已发现 \(UFormat.count(progress.count)) 项"
+        case .deleting:
+            return "\(UFormat.count(progress.count)) / \(UFormat.count(progress.total ?? 0))"
         }
-        for (bit, ch) in Self.permBits { out.append((mode & bit) != 0 ? ch : "-") }
-        return out
     }
 
-    private static let permBits: [(UInt32, Character)] = [
-        (0o400, "r"), (0o200, "w"), (0o100, "x"),
-        (0o040, "r"), (0o020, "w"), (0o010, "x"),
-        (0o004, "r"), (0o002, "w"), (0o001, "x"),
-    ]
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("正在删除「\(progress.name)」")
+                    .font(M.sans(14, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
+                Group {
+                    if progress.phase == .deleting {
+                        ProgressView(value: progress.fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
+                }
+                .tint(accent)
+                Text(detail).font(M.mono(11.5)).foregroundStyle(M.text3).lineLimit(1)
+            }
+            MBtn(title: progress.isCancelling ? "正在取消…" : "取消", kind: .secondary, height: 36,
+                 disabled: progress.isCancelling, action: onCancel)
+                .fixedSize()
+        }
+        .padding(14)
+        .background(M.card, in: RoundedRectangle(cornerRadius: MRadius.list))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .accessibilityElement(children: .contain)
+    }
 }

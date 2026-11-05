@@ -384,7 +384,7 @@ struct FileBrowserContent: View {
     private var upRow: some View {
         let upSelected = selectedID == Self.upRowID
         return HStack(spacing: 9) {
-            SFTPFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
+            RemoteFileIcon(kind: .folder, isUp: true, size: 16).frame(width: 22)
             Text("..")
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text2)
@@ -462,19 +462,19 @@ struct FileBrowserContent: View {
         // onTapGesture 设 selectedID（并聚焦容器）；双击 / 回车 / VoiceOver 才
         // activate(_:)。键盘 + VoiceOver 激活由 .accessibilityAction 补回 button
         // trait + 激活能力（双击是鼠标专属，键盘走选中 + 回车）。
-        let kind = BrowserFileKind.from(name: entry.name, isDirectory: entry.isDirectory, isSymlink: entry.isSymlink)
+        let kind = entry.kind
         let isSelected = entry.id == selectedID
         let base = HStack(spacing: 9) {
             // 复用独立 SFTP 窗口同款图标（双色蓝文件夹 + 文件类型彩色角标），按
             // 侧边栏窄栏缩到 16pt。
-            SFTPFileIcon(kind: kind, size: 16).frame(width: 22)
+            RemoteFileIcon(kind: kind, size: 16).frame(width: 22)
             Text(entry.name)
                 .font(.system(size: 13))
                 .foregroundStyle(UD.text)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
-            if let size = entry.size, !entry.isDirectory {
-                Text(UFormat.bytes(Int64(clamping: size))).font(UD.mono(11)).foregroundStyle(UD.text3)
+            if !entry.isDirectory, entry.size != nil {
+                Text(entry.sizeText).font(UD.mono(11)).foregroundStyle(UD.text3)
             }
         }
         .padding(.horizontal, 10)
@@ -515,9 +515,7 @@ struct FileBrowserContent: View {
     /// VoiceOver 朗读值：种类 + 大小，方便无障碍用户不依赖列布局了解条目。
     private func entryAccessibilityValue(_ entry: RemoteEntry, kind: BrowserFileKind) -> String {
         var parts: [String] = [kind.label]
-        if !entry.isDirectory, let size = entry.size {
-            parts.append(UFormat.bytes(Int64(clamping: size)))
-        }
+        if !entry.isDirectory, entry.size != nil { parts.append(entry.sizeText) }
         return parts.joined(separator: "，")
     }
 

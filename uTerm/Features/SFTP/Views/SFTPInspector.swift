@@ -44,15 +44,14 @@ struct SFTPInspector: View {
     // MARK: 选中态
 
     private func detail(_ item: RemoteEntry) -> some View {
-        let kind = BrowserFileKind.from(name: item.name, isDirectory: item.isDirectory, isSymlink: item.isSymlink)
-        let fullPath = currentPath == "/" ? "/\(item.name)" : "\(currentPath)/\(item.name)"
-        let sizeText = item.isDirectory ? "文件夹"
-            : (item.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder)
+        let kind = item.kind
+        let fullPath = item.fullPath(in: currentPath)
+        let sizeText = item.sizeOrKindText
         let rows: [(String, String, Bool)] = [
             ("种类", kind.label, false),
             ("大小", sizeText, false),
             ("修改时间", item.modifiedAt.map { UFormat.dateTime($0) } ?? UFormat.placeholder, false),
-            ("权限", posixPermissionString(item.permissions), true),
+            ("权限", item.symbolicText, true),
             ("所有者", item.ownerDisplayText, false),
         ]
         return VStack(spacing: 0) {
@@ -64,7 +63,7 @@ struct SFTPInspector: View {
                             RoundedRectangle(cornerRadius: 18)
                                 .fill(item.isDirectory ? UD.accentSoft : UD.fillFaint)
                                 .frame(width: 84, height: 84)
-                            SFTPFileIcon(kind: kind).scaleEffect(2.1)
+                            RemoteFileIcon(kind: kind, size: 19).scaleEffect(2.1)
                         }
                         VStack(spacing: 4) {
                             Text(item.name).font(.system(size: 15, weight: .medium))
