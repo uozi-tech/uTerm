@@ -71,9 +71,10 @@ struct SSHParallelExecutor: ParallelCommandExecuting {
                                       connection: made.connection,
                                       setupErrorText: nil)
         } catch {
+            // 与终端 / SFTP 的建连失败同一套说人话的文案。
             return SSHParallelSession(executor: nil, hostKeyChallenges: nil,
                                       connection: nil,
-                                      setupErrorText: error.localizedDescription)
+                                      setupErrorText: FriendlyError.describe(error))
         }
     }
 

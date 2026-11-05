@@ -132,7 +132,8 @@ struct ParallelRunWindowView: View {
                                  aiAssisted: command.aiAssisted,
                                  targets: targets,
                                  doctor: command.aiAssisted ? makeDoctor() : nil,
-                                 safety: AgentSafety(rawValue: agentSafetyRaw) ?? .readAuto,
+                                 approval: .safety(AgentSafety(rawValue: agentSafetyRaw) ?? .readAuto),
+                                 hostLabel: "macOS 原生 SSH 终端",
                                  store: store,
                                  container: modelContext.container)
         model = m
