@@ -67,9 +67,13 @@ struct ParallelRunView: View {
         _controller = State(initialValue: controller)
     }
 
-    /// 全屏覆盖层自带一层 `NavigationStack`，页头用**系统导航栏**：左关闭、右重新运行，
-    /// 命令名 + 「并行 · N 台」作导航标题 / 副标题。改前是自绘页头（+ `mTopClearance` 手补顶边），
-    /// iPhone Duo 上按钮不会随系统挪到侧边状态栏下方那一列。
+    /// 全屏覆盖层自带一层 `NavigationStack`。按液态玻璃的分层：**控件在导航层、输出在内容层**。
+    /// - 顶栏（系统）：左关闭、右重新运行；标题 = 命令名，副标题 = 实时进度（完成数 / 失败数 / 用时）。
+    /// - 底栏（系统）：Shell / AI 介入的系统分段控件；大屏 Shell 的页码点也在这里。
+    /// - 内容：命令条 + 进度条 + 输出，全部是实底，不上玻璃。
+    /// 系统栏不铺自定义底色，交给系统按玻璃强度 / 降低透明度 / 增强对比度自己适配。
+    /// 改前是自绘页头（+ `mTopClearance` 手补顶边），iPhone Duo 上按钮不会随系统挪到侧边状态栏下方那一列；
+    /// 再之前模式切换与状态栏都是内容里自绘的。
     var body: some View {
         NavigationStack {
             Group {
@@ -82,7 +86,7 @@ struct ParallelRunView: View {
             .navigationTitle(controller?.commandName ?? request.name)
             .mNavigationSubtitle(controller.map(subtitle))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(M.surface, for: .navigationBar)
+            .modifier(ParPinnedBars())
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     MToolbarCloseButton(action: onClose)
@@ -93,6 +97,19 @@ struct ParallelRunView: View {
                     }
                     .disabled(controller?.allDone != true)
                     .accessibilityLabel(Text("重新运行"))
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    if let c = controller {
+                        if showsPageDots(c) {
+                            modePicker(c)
+                            Spacer()
+                            pageDots(c)
+                        } else {
+                            Spacer()
+                            modePicker(c)
+                            Spacer()
+                        }
+                    }
                 }
             }
         }
@@ -128,79 +145,59 @@ struct ParallelRunView: View {
 
     private func content(_ c: ParallelRunController) -> some View {
         VStack(spacing: 0) {
-            if wide {
-                wideControlBar(c)
-            } else {
-                modeToggle(c).padding(.horizontal, 16).padding(.top, 10)
-                broadcastBar(c)
-            }
+            commandStrip(c)
             if c.mode == .ai {
                 aiBody(c)
             } else {
                 shellBody(c)
             }
-            statusBar(c)
         }
-        // 整屏一个工作面：导航栏 / 模式切换 / 广播条 / 输出 / 状态栏同底色，区块之间只用 hairline
-        // （「线或底色差，二选一」）。
-        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
-        .background(M.surface)
+        // 内容层 = 画布 + 卡片（`canvas` 浅灰 / 纯黑，每台一张 `card`），靠底色差分界、不描边。
+        // 不走终端那类「整屏单面 + hairline」：这里是十几台并排比较，一台一张卡才分得清。
+        .background(M.canvas)
         .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { width = $0 }
+        // 整次运行落定时给一下触觉：全成功 = success，有失败 = warning。
+        .sensoryFeedback(trigger: c.allDone) { _, done in
+            done ? (c.failedCount > 0 ? .warning : .success) : nil
+        }
     }
 
-    /// 导航栏副标题（原页头里的「并行 · N 台」徽标）。AI 介入时前缀「AI」。
+    /// 导航栏副标题：台数 + 实时进度。失败数与用时也在这里，不再另画一条底部状态栏。
     private func subtitle(_ c: ParallelRunController) -> String {
-        c.mode == .ai ? "AI · \(c.total) 台" : "并行 · \(c.total) 台"
+        let elapsed = (c.finishedAt ?? now).timeIntervalSince(c.startedAt)
+        var parts = ["\(c.mode == .ai ? "AI" : "并行") · \(c.total) 台", "完成 \(c.doneCount)/\(c.total)"]
+        if c.failedCount > 0 { parts.append("\(c.failedCount) 失败") }
+        parts.append(UFormat.duration(seconds: max(0, elapsed)))
+        return parts.joined(separator: " · ")
     }
 
-    private func modeToggle(_ c: ParallelRunController) -> some View {
-        HStack(spacing: 3) {
-            ForEach(PMode.allCases, id: \.self) { m in
-                let on = c.mode == m
-                let c2: Color = m == .ai ? M.aiAccent : accent
-                Button { c.mode = m } label: {
-                    HStack(spacing: 6) {
-                        if m == .ai { MIcon(name: "spark", size: 13, color: on ? .white : M.text2) }
-                        Text(m == .ai ? "AI 介入" : "Shell")
-                            .font(M.sans(13.5, weight: on ? .semibold : .medium))
-                            .foregroundStyle(on ? .white : M.text2)
-                    }
-                    .frame(maxWidth: .infinity).frame(height: 32)
-                    .background(on ? c2 : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: MRadius.sm))
-                    .contentShape(Rectangle())   // 整段可点（含透明区），不必点到文字
-                }.buttonStyle(MPressStyle())
-            }
+    /// 底栏里的视图切换：系统分段控件（iOS 26 起自带玻璃滑块、VoiceOver 与动态字体）。
+    private func modePicker(_ c: ParallelRunController) -> some View {
+        Picker("视图", selection: Binding(get: { c.mode },
+                                         set: { m in withAnimation(.snappy) { c.mode = m } })) {
+            Text("Shell").tag(PMode.shell)
+            Text("AI 介入").tag(PMode.ai)
         }
-        .padding(3).background(M.inputBg)
-        .clipShape(RoundedRectangle(cornerRadius: MRadius.concentric(MRadius.sm, inset: 3)))
+        .pickerStyle(.segmented)
+        .frame(width: 220)
     }
 
-    private func broadcastBar(_ c: ParallelRunController) -> some View {
-        VStack(spacing: 10) {
+    private func showsPageDots(_ c: ParallelRunController) -> Bool {
+        wide && c.mode == .shell && c.states.count > shellPerPage
+    }
+
+    /// 命令条 + 进度条（内容层，实底）。窄屏上下两行，大屏并成一行。
+    private func commandStrip(_ c: ParallelRunController) -> some View {
+        let layout = wide
+            ? AnyLayout(HStackLayout(spacing: 14))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+        return layout {
             commandChip(c)
-            HStack(spacing: 12) {
-                progressBar(c)
-                progressStats(c)
-            }
+            progressBar(c).frame(maxWidth: wide ? 180 : .infinity)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
-    }
-
-    /// 大屏：模式切换 | 广播命令 | 进度，一行放下。
-    private func wideControlBar(_ c: ParallelRunController) -> some View {
-        HStack(spacing: 14) {
-            modeToggle(c).frame(width: 236)
-            commandChip(c)
-            HStack(spacing: 10) {
-                progressBar(c).frame(width: 110)
-                progressStats(c)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(Text("完成 \(c.doneCount)/\(c.total)" + (c.failedCount > 0 ? "，\(c.failedCount) 台失败" : "")))
     }
 
     private func tint(_ c: ParallelRunController) -> Color { c.mode == .ai ? M.aiAccent : accent }
@@ -212,32 +209,16 @@ struct ParallelRunView: View {
             Text(c.broadcastText).font(M.mono(13)).foregroundStyle(M.text2).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 11).frame(height: 38)
-        .background(M.cmdSurface)
-        .overlay(RoundedRectangle(cornerRadius: MRadius.md).stroke(M.border, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: MRadius.md))
+        .padding(.horizontal, 12).frame(height: 40)
+        .background(M.card)
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
 
     private func progressBar(_ c: ParallelRunController) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(M.fillFaint)
-                Capsule().fill(c.failedCount > 0 ? M.caution : tint(c))
-                    .frame(width: geo.size.width * (c.total == 0 ? 0 : Double(c.doneCount) / Double(c.total)))
-                    .animation(.easeOut(duration: 0.35), value: c.doneCount)
-            }
-        }.frame(height: 6)
-    }
-
-    private func progressStats(_ c: ParallelRunController) -> some View {
-        let elapsed = (c.finishedAt ?? now).timeIntervalSince(c.startedAt)
-        return HStack(spacing: 11) {
-            Text("完成 \(c.doneCount)/\(c.total)").font(M.mono(12)).foregroundStyle(M.text2)
-            if c.failedCount > 0 {
-                Text("\(c.failedCount) 失败").font(M.mono(12)).foregroundStyle(M.danger)
-            }
-            Text(UFormat.duration(seconds: max(0, elapsed))).font(M.mono(12)).foregroundStyle(M.text4)
-        }
+        ProgressView(value: Double(c.doneCount), total: Double(max(c.total, 1)))
+            .progressViewStyle(.linear)
+            .tint(c.failedCount > 0 ? M.caution : tint(c))
+            .animation(.easeOut(duration: 0.35), value: c.doneCount)
     }
 
     // MARK: Shell
@@ -255,13 +236,13 @@ struct ParallelRunView: View {
     private func shellList(_ c: ParallelRunController) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: Self.cardGap) {
                     ForEach(c.states) { s in
                         ParShellPane(state: s, accent: accent) { c.trustAndRetry(serverID: s.id) }
                             .id(s.id)
-                        Rectangle().fill(M.divider).frame(height: 1)
                     }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
@@ -310,12 +291,10 @@ struct ParallelRunView: View {
         let rows = stride(from: 0, to: indices.count, by: columns).map {
             Array(indices[$0..<min($0 + columns, indices.count)])
         }
-        return VStack(spacing: 0) {
+        return VStack(spacing: Self.cardGap) {
             ForEach(rows.indices, id: \.self) { r in
-                if r > 0 { Rectangle().fill(M.divider).frame(height: 1) }
-                HStack(spacing: 0) {
+                HStack(spacing: Self.cardGap) {
                     ForEach(0..<columns, id: \.self) { col in
-                        if col > 0 { Rectangle().fill(M.divider).frame(width: 1) }
                         if col < rows[r].count, c.states.indices.contains(rows[r][col]) {
                             let s = c.states[rows[r][col]]
                             ParShellPane(state: s, accent: accent, fillsCell: true) {
@@ -329,7 +308,11 @@ struct ParallelRunView: View {
                 .frame(maxHeight: .infinity)
             }
         }
+        .padding(.horizontal, 12).padding(.vertical, 10)
     }
+
+    /// 卡片之间的缝。
+    static let cardGap: CGFloat = 10
 
     /// 大屏 Shell 的分页：按原顺序每 `perPage` 台一页，返回每页的下标。
     nonisolated static func shellPages(count: Int, perPage: Int = 4) -> [[Int]] {
@@ -404,7 +387,7 @@ struct ParallelRunView: View {
                     if c.total > 1 { filterBar(c).fixedSize(horizontal: true, vertical: false) }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(M.fillFaint)
+                .background(M.card)
                 .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
                 synthesisBlock(c, cornerRadius: MRadius.list)
             }
@@ -427,7 +410,7 @@ struct ParallelRunView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(M.fillFaint)
+            .background(M.card)
             .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
         }
     }
@@ -519,7 +502,8 @@ struct ParallelRunView: View {
                             }
                             .foregroundStyle(on ? f.tint : M.text2)
                             .padding(.horizontal, 12).frame(height: 30)
-                            .background(on ? f.tint.opacity(0.14) : M.fillFaint)
+                            // `button` 在画布（窄屏）与卡片（宽屏，芯片在总览卡里）上都成形。
+                            .background(on ? f.tint.opacity(0.14) : M.button)
                             .clipShape(Capsule())
                             .contentShape(Capsule())
                         }
@@ -539,22 +523,17 @@ struct ParallelRunView: View {
         revealLane = id
         c.mode = .shell
     }
+}
 
-    private func statusBar(_ c: ParallelRunController) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 5) {
-                MIcon(name: "parallel", size: 11, color: tint(c))
-                Text(c.mode == .ai ? "AI 介入" : "并行广播").foregroundStyle(tint(c))
-            }
-            Text("\(c.total) 台").foregroundStyle(M.text3)
-            Spacer()
-            Text(c.allDone ? "已完成" : "执行中").foregroundStyle(M.text3)
+/// iOS 27 起系统会随滚动把导航栏 / 底栏收起。这一页的进度在副标题、视图切换在底栏，
+/// 收起就看不到了，所以两条都钉住。
+private struct ParPinnedBars: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.toolbarMinimizationBehavior(.never, for: .navigationBar, .bottomBar)
+        } else {
+            content
         }
-        .font(M.mono(11)).frame(height: 30).padding(.horizontal, 14)
-        .overlay {
-            if wide, c.mode == .shell, c.states.count > shellPerPage { pageDots(c) }
-        }
-        .overlay(alignment: .top) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 }
 
@@ -602,14 +581,6 @@ struct ParShellPane: View {
     var fillsCell = false
     var onTrust: () -> Void
 
-    private var tint: Color {
-        switch state.status {
-        case .running: return accent
-        case .succeeded: return M.success
-        case .failed: return M.danger
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -626,28 +597,53 @@ struct ParShellPane: View {
                     .onChange(of: state.lines.count) { scrollToBottom(proxy) }
                 }
             } else {
-                lineStack.frame(minHeight: 84, alignment: .topLeading)
+                lineStack.frame(minHeight: 72, alignment: .topLeading)
             }
         }
+        // 一台一张卡（画布上靠底色差成形，不描边）。状态只在卡头表达，不再铺彩色顶边：
+        // 全部成功时满屏绿条反而把真正要看的失败淹掉。
+        .background(M.card)
+        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
+
+    private var failed: Bool { state.status == .failed }
 
     private var header: some View {
         HStack(spacing: 8) {
-            MDot(color: tint, pulse: state.status == .running, size: 7)
             Text(state.name).font(M.sans(13, weight: .semibold)).foregroundStyle(M.text).lineLimit(1)
             Text(state.endpointDisplay).font(M.mono(11)).foregroundStyle(M.text4).lineLimit(1)
             Spacer(minLength: 6)
-            if state.status == .running {
+            status
+        }
+        .padding(.horizontal, 12).frame(height: 36)
+        // 失败的卡头铺淡红；其余与卡同底，只靠下面那条细线和输出分开。
+        .background(failed ? M.danger.opacity(0.08) : .clear)
+        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+    }
+
+    /// 卡头右侧的状态：运行中 = 脉冲点；成功 = 小绿勾 + 退出码（低调）；失败 = 红叉 + 红色退出码。
+    @ViewBuilder
+    private var status: some View {
+        switch state.status {
+        case .running:
+            HStack(spacing: 6) {
+                MDot(color: accent, pulse: true, size: 7)
                 Text("运行中").font(M.mono(11)).foregroundStyle(M.text3)
-            } else if let code = state.exitCode {
-                Text("退出码 \(code)").font(M.mono(11)).foregroundStyle(state.status == .failed ? M.danger : M.text4)
-            } else if state.status == .failed {
-                Text("失败").font(M.mono(11)).foregroundStyle(M.danger)
+            }
+        case .succeeded:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(M.success)
+                if let code = state.exitCode {
+                    Text("退出码 \(code)").font(M.mono(11)).foregroundStyle(M.text4)
+                }
+            }
+        case .failed:
+            HStack(spacing: 4) {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(M.danger)
+                Text(state.exitCode.map { "退出码 \($0)" } ?? "失败")
+                    .font(M.mono(11, weight: .medium)).foregroundStyle(M.danger)
             }
         }
-        .padding(.horizontal, 12).frame(height: 34)
-        .overlay(alignment: .top) { Rectangle().fill(tint).frame(height: 2) }
-        .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
     }
 
     // `LazyVStack` 而不是 `VStack`：一格就是一台的全部输出（自愈多步 × 200 行，
@@ -741,10 +737,13 @@ struct ParAILane: View {
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(state.tone == .failed ? M.danger.opacity(0.05) : M.fillFaint)
-        // 失败态保留红描边（状态边）；常态卡片按 v2 只靠灰填充成形
-        .overlay(RoundedRectangle(cornerRadius: MRadius.list)
-            .stroke(state.tone == .failed ? M.danger.opacity(0.25) : .clear, lineWidth: 1))
+        // 白卡（画布上靠底色差成形，不描边）；失败的卡整张铺一层淡红，扫一眼就能找到。
+        .background {
+            ZStack {
+                M.card
+                if state.tone == .failed { M.danger.opacity(0.07) }
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
     }
 
@@ -840,7 +839,7 @@ struct ParAILane: View {
                 Text(title).font(M.sans(12)).foregroundStyle(M.text2)
             }
             .padding(.horizontal, 10).frame(height: 28)
-            .background(M.fillMed)
+            .background(M.button)
             .clipShape(Capsule())
             .contentShape(Capsule())
         }.buttonStyle(MPressStyle())

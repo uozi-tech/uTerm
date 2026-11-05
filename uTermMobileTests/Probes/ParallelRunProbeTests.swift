@@ -416,7 +416,7 @@ final class ParallelRunProbeTests: XCTestCase {
         await running.rig.close()
         XCTAssertEqual(linesDuringWindow, 4, "这一档不该在窗口里吐行（每台只有首行 cmd）")
         XCTAssertNotNil(runA)
-        XCTAssertNotEqual(runA, runB,
+        XCTAssertFalse(Self.samePixels(runA, runB),
                           "运行态两帧一模一样 = 这套像素判法看不见变化，下面的「完成态相同」就没有意义")
 
         // ── 完成态：全部落定之后不该再有任何东西在动。
@@ -426,18 +426,58 @@ final class ParallelRunProbeTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTAssertTrue(done.controller.allDone, "假执行器没把这一档跑完")
-        try await Task.sleep(for: .milliseconds(600))
-        done.rig.layout()
-        let doneA = done.rig.capturePNG()
+        // 先等画面稳定（连续两帧相同）再比：视图切换移进系统底栏（输出从玻璃栏下面滚过）之后，
+        // 落定后画面还会再变一次（空闲机器上约 0.6~1.8 秒内，之后逐帧不变；连取 5 帧、间隔 1.2 秒
+        // 实测），机器忙时会更晚。那是一次性的收尾，不是常驻动画。常驻动画永远等不到两帧相同，
+        // 下面的断言照样会红。
+        var settled = done.rig.capturePNG()
+        for _ in 0..<10 {
+            try await Task.sleep(for: .milliseconds(600))
+            done.rig.layout()
+            let next = done.rig.capturePNG()
+            if Self.samePixels(next, settled) { break }
+            settled = next
+        }
+        let doneA = settled
         try await Task.sleep(for: .milliseconds(1200))
         let doneB = done.rig.capturePNG()
         done.controller.cancel()
         await done.rig.close()
 
         XCTAssertNotNil(doneA)
-        XCTAssertEqual(doneA, doneB,
-                       "完成态两帧不同 = ticker 或 MDot 脉冲还在跑（应当只在运行中的行上跑）")
+        XCTAssertTrue(Self.samePixels(doneA, doneB),
+                      "完成态两帧不同 = ticker 或 MDot 脉冲还在跑（应当只在运行中的行上跑）")
         print("[par-ticker] 运行态两帧不同（\(runA?.count ?? 0) vs \(runB?.count ?? 0) 字节）、"
               + "完成态两帧一致（\(doneA?.count ?? 0) 字节）")
+    }
+
+    /// 两帧「看起来一样」：逐像素比 8 位 RGBA，每个通道差不超过 `tolerance`。
+    ///
+    /// 不直接比 PNG 字节：系统液态玻璃底栏（分段控件胶囊的边缘）会偶发 1/255 的抖动，
+    /// 实测在落定后、画面完全静止时也会出现（23×42pt 一小块、最大差 256/65535），肉眼不可见，
+    /// 也不是本页的内容。脉冲点、秒表这类真动画的差远大于这个容差。
+    static func samePixels(_ a: Data?, _ b: Data?, tolerance: UInt8 = 2) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        if a == b { return true }
+        guard let pa = rgba(a), let pb = rgba(b), pa.width == pb.width, pa.height == pb.height else { return false }
+        for i in 0..<pa.bytes.count {
+            let d = pa.bytes[i] > pb.bytes[i] ? pa.bytes[i] - pb.bytes[i] : pb.bytes[i] - pa.bytes[i]
+            if d > tolerance { return false }
+        }
+        return true
+    }
+
+    private static func rgba(_ png: Data) -> (width: Int, height: Int, bytes: [UInt8])? {
+        guard let image = UIImage(data: png)?.cgImage else { return nil }
+        let w = image.width, h = image.height
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return ok ? (w, h, bytes) : nil
     }
 }

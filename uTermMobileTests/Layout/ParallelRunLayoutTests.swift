@@ -45,14 +45,33 @@ final class ParallelRunLayoutTests: XCTestCase {
         XCTAssertEqual(pager.contentSize.width, pager.bounds.width * CGFloat(expectedPages), accuracy: 2,
                        "\(hosts) 台应为 \(expectedPages) 页")
         // 格内贴底：每格的纵向 ScrollView 停在最底部（看得到最新输出）。
-        let cells = scrollViews(in: pager).filter { $0 !== pager && $0.contentSize.height > $0.bounds.height + 1 }
+        // 按 adjustedContentInset 算：格子挨着底栏时，系统会给滚动视图加上底栏那段内边距。
+        func maxOffset(_ v: UIScrollView) -> CGFloat {
+            v.contentSize.height + v.adjustedContentInset.bottom - v.bounds.height
+        }
+        let cells = scrollViews(in: pager).filter {
+            $0 !== pager && maxOffset($0) > -$0.adjustedContentInset.top + 1
+        }
         if overflows { XCTAssertFalse(cells.isEmpty, "格内输出没溢出，这一档量不到贴底") }
         for cell in cells where cell.window != nil && cell.frame.minX < pager.bounds.width {
-            let gap = cell.contentSize.height - cell.bounds.height - cell.contentOffset.y
+            let gap = maxOffset(cell) - cell.contentOffset.y
             XCTAssertLessThan(gap, 4, "格内输出没贴底（离底 \(gap)pt）")
         }
         save(screen.rig.capturePNG(), label)
         await screen.rig.close()
+    }
+
+    /// 深色模式各截一张：画布纯黑、卡片 #141414，失败卡的淡红在深底上也要看得出来。
+    func testDarkSnapshots() async throws {
+        for ai in [false, true] {
+            let screen = try makeScreen(hosts: 6, aiAssisted: ai, size: tallWideSize,
+                                        label: "par-dark", colorScheme: .dark)
+            try await waitUntilDone(screen.controller)
+            try await Task.sleep(for: .milliseconds(400))
+            save(screen.rig.capturePNG(), ai ? "par-dark-ai" : "par-dark-shell")
+            screen.controller.cancel()
+            await screen.rig.close()
+        }
     }
 
     func testPerPageFollowsGridHeight() {
@@ -94,7 +113,8 @@ final class ParallelRunLayoutTests: XCTestCase {
         let controller: ParallelRunController
     }
 
-    private func makeScreen(hosts: Int, aiAssisted: Bool, size: CGSize, label: String) throws -> Screen {
+    private func makeScreen(hosts: Int, aiAssisted: Bool, size: CGSize, label: String,
+                            colorScheme: ColorScheme = .light) throws -> Screen {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let profiles = Array(try container.mainContext.fetch(
             FetchDescriptor<ServerProfile>(sortBy: [SortDescriptor(\.sortOrder)])).prefix(hosts))
@@ -112,14 +132,16 @@ final class ParallelRunLayoutTests: XCTestCase {
             intent: aiAssisted ? "更新软件包和内核、执行 autoremove 清理，必要时重启服务器" : "",
             aiAssisted: aiAssisted, targets: profiles, doctor: doctor,
             store: QuickCommandStore(context: container.mainContext), container: container,
-            executor: LayoutExecutor(slowHost: profiles.last?.id))
+            executor: LayoutExecutor(slowHost: profiles.last?.id, failHost: profiles[1].id))
         let request = ParallelRunRequest(commandID: UUID(), name: "更新软件包", command: command,
                                          intent: controller.intent, aiAssisted: aiAssisted,
                                          serverIDs: profiles.map(\.id))
         let rig = MobileProbeRig(label: label, size: size)
         controller.start()
         rig.mount(ParallelRunView(request: request, controller: controller, onClose: {})
-            .modelContainer(container))
+            .modelContainer(container)
+            .environment(\.colorScheme, colorScheme)
+            .preferredColorScheme(colorScheme))
         return Screen(rig: rig, controller: controller)
     }
 
@@ -195,20 +217,23 @@ private nonisolated struct LaneLLM: LLMClient {
 
 private struct LayoutExecutor: ParallelCommandExecuting {
     let slowHost: UUID?
+    /// Shell 模式下这一台的广播命令以非 0 退出，截图里要有一张失败卡。
+    let failHost: UUID?
     func makeSession(for profile: ServerProfile, trustNewKeys: Bool) async -> ParallelExecutionSession {
-        LayoutSession(slow: profile.id == slowHost)
+        LayoutSession(slow: profile.id == slowHost, failsBroadcast: profile.id == failHost)
     }
 }
 
 private nonisolated struct LayoutSession: ParallelExecutionSession {
     let slow: Bool
+    let failsBroadcast: Bool
     var setupErrorText: String? { nil }
 
     func run(_ command: String,
              onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
         try await Task.sleep(for: .milliseconds(slow ? 2500 : 150))
         if command == "true" { return CommandResult(output: "", exitCode: 0) }
-        let fail = command == "apt-get update"
+        let fail = command == "apt-get update" || (failsBroadcast && command.hasPrefix("apt-get update &&"))
         let lines = fail
             ? ["Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease",
                "Err:2 https://mirror.example.com noble-security InRelease",
