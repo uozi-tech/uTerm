@@ -16,8 +16,9 @@ import XCTest
 /// - **真实档 6 台 × 600 行**：一条快捷命令绑定的服务器数（`QuickCommand.serverIDs`，
 ///   一次广播通常是「一个分组」量级）；行数来自 `SSHCommandExecutor(maxLines: 200)`
 ///   × 自愈几步。
-/// - **极端档 24 台 × 1200 行**：`ParallelRunController.maxAgentSteps = 6`，每步一条
-///   命令最多回 200 行 → 6 × 200 = 1200 行封顶；24 台 = 一个中型分组整批广播。
+/// - **极端档 24 台 × 1200 行**：定档时 Agent 每台最多 6 步，每步一条命令最多回 200 行
+///   → 1200 行；24 台 = 一个中型分组整批广播。（现在 `ParallelAgentPolicy.maxTurns = 16`，
+///   一台真实能到的行数更多，这一档仍按原口径量，便于和历史读数对照。）
 /// - **追加速率**：任务给的口径是 50 行/秒/台；这里与桌面
 ///   `ParallelRunScrollCostTests` 对齐成「10 秒内把该档的行数全流进来」
 ///   （真实档 60 行/秒、极端档 120 行/秒），于是两档的**追加期一样长**、可比。
@@ -325,7 +326,7 @@ final class ParallelRunProbeTests: XCTestCase {
             s.summary = failed
                 ? "apt 锁被占用，更新未完成；已回滚到更新前状态，建议稍后复核 /var/log/apt/term.log 再重试。"
                 : "已更新软件包并重启 app.service，健康检查返回 200，目标达成。"
-            // maxAgentSteps = 6：一台最多 6 步。
+            // 每台 6 步：够撑起「展开后内容明显变高」的对照。
             s.steps = (0..<6).map { k in
                 "执行 检查并修复第 \(k + 1) 步（systemctl status app --no-pager -l）→ 退出码 \(k == 3 ? 1 : 0)"
             }

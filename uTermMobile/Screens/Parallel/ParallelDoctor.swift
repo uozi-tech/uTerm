@@ -10,33 +10,40 @@ nonisolated struct ParallelDoctor: Sendable {
     let model: String
     let baseURL: URL
     let apiKey: String
+    /// 模型请求失败后的退避时长；只有测试会换成 0。
+    var retryDelay: @Sendable (Int) -> Duration = { ParallelAgentPolicy.retryDelay(afterAttempt: $0) }
 
     nonisolated struct Turn: Sendable {
         let text: String
         let calls: [LLMToolCall]
     }
 
-    func turn(messages: [ChatMessage], system: String, withTools: Bool) async -> Turn? {
+    /// 跑一轮对话；限流 / 过载 / 流中断等暂时性错误按 `ParallelAgentPolicy` 退避重试，
+    /// 最终失败把原因带回去（改前一律 nil，泳道只能写「需人工介入」）。
+    func turn(messages: [ChatMessage], system: String, withTools: Bool,
+              onRetry: @Sendable (Int, Error) -> Void = { _, _ in }) async -> Result<Turn, Error> {
+        await ParallelAgentPolicy.withRetry(delay: retryDelay, onRetry: onRetry) {
+            try await self.streamTurn(messages: messages, system: system, withTools: withTools)
+        }
+    }
+
+    private func streamTurn(messages: [ChatMessage], system: String, withTools: Bool) async throws -> Turn {
         var config = LLMRequestConfig(model: model, baseURL: baseURL, apiKey: apiKey)
         config.tools = withTools ? [.runCommand] : []
         var text = ""
         var calls: [LLMToolCall] = []
-        do {
-            // 套静默超时（与 `AssistantModel` 同一个）：provider 保持连接、只发 keep-alive 时
-            // 这一轮永远不返回，泳道停在「诊断中」、整次运行不收尾也不记日志。
-            let events = withIdleTimeout(
-                client.stream(messages: messages, system: system, config: config),
-                timeout: config.streamIdleTimeout)
-            for try await event in events {
-                switch event {
-                case .text(let delta): text += delta
-                case .toolCall(let call): calls.append(call)
-                // 这里不开思考参数，不会有 thinking 块；即便有也无须回传。
-                case .thinking: break
-                }
+        // 套静默超时（与 `AssistantModel` 同一个）：provider 保持连接、只发 keep-alive 时
+        // 这一轮永远不返回，泳道停在「诊断中」、整次运行不收尾也不记日志。
+        let events = withIdleTimeout(
+            client.stream(messages: messages, system: system, config: config),
+            timeout: config.streamIdleTimeout)
+        for try await event in events {
+            switch event {
+            case .text(let delta): text += delta
+            case .toolCall(let call): calls.append(call)
+            // 这里不开思考参数，不会有 thinking 块；即便有也无须回传。
+            case .thinking: break
             }
-        } catch {
-            return nil
         }
         return Turn(text: text, calls: calls)
     }
@@ -46,7 +53,7 @@ nonisolated struct ParallelDoctor: Sendable {
             + "若有失败的服务器，点名并给一句复核建议（只讲成功 / 失败，不要单列「自愈」）。只输出汇总文本，不要 JSON、不要列表。"
         let body = lanes.map { "- \($0.name)：[\($0.tone)] \($0.summary)" }.joined(separator: "\n")
         let user = "命令「\(commandName)」在 \(lanes.count) 台服务器执行完成。逐台结论：\n\(body)"
-        let t = await turn(messages: [ChatMessage(role: .user, text: user)], system: system, withTools: false)
+        let t = try? await turn(messages: [ChatMessage(role: .user, text: user)], system: system, withTools: false).get()
         let text = t?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return text.isEmpty ? nil : text
     }

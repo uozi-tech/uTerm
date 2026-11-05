@@ -14,7 +14,7 @@ import XCTest
 /// - **真实档 6 台 × 600 行**：一条快捷命令绑定的服务器数（`QuickCommand.serverIDs`，
 ///   欢迎页 Tweaks 钳 50 台但一条命令实际广播的是「一个分组」量级）；行数来自
 ///   `SSHCommandExecutor(maxLines: 200, maxBytes: 16000)` × 自愈几步。
-/// - **极端档 24 台 × 1200 行**：`ParallelRunModel.maxAgentSteps = 6`，每步一条命令
+/// - **极端档 24 台 × 1200 行**：定档时 Agent 每台最多 6 步，每步一条命令
 ///   最多回 200 行 → 6 × 200 = 1200 行封顶；24 台是「把一个中型分组整批广播」。
 /// - **追加速率 50 行/秒/台 × 10 秒**：模型里 `states[i].lines.append(contentsOf:)`
 ///   是每条命令跑完一次性灌进去的（`ParallelRunModel.swift:232/337`），
