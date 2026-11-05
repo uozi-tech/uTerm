@@ -245,33 +245,9 @@ struct SFTPRow: View {
     }
 
     private var subtitle: String {
-        let perms = permString()
+        let perms = posixPermissionString(entry.permissions)
         if entry.isDirectory { return "文件夹 · \(perms)" }
         let size = entry.size.map { UFormat.bytes(Int64(clamping: $0)) } ?? UFormat.placeholder
         return "\(size) · \(perms)"
     }
-
-    /// `drwxr-xr-x` 形式；缺权限位时给类型字符 + 占位。
-    ///
-    /// 改前每渲染一行都要现建一个 9 元组的数组字面量、`map` 成 **9 个 String**、
-    /// 再 `joined()`——一行 10 次小字符串分配。现在直接往一个预留好容量的
-    /// `String` 里追加 `Character`，位表提到 `static let`，一行一次分配。
-    private func permString() -> String {
-        let type: Character = entry.isDirectory ? "d" : (entry.isSymlink ? "l" : "-")
-        var out = ""
-        out.reserveCapacity(10)
-        out.append(type)
-        guard let mode = entry.permissions else {
-            out.append(contentsOf: "---------")
-            return out
-        }
-        for (bit, ch) in Self.permBits { out.append((mode & bit) != 0 ? ch : "-") }
-        return out
-    }
-
-    private static let permBits: [(UInt32, Character)] = [
-        (0o400, "r"), (0o200, "w"), (0o100, "x"),
-        (0o040, "r"), (0o020, "w"), (0o010, "x"),
-        (0o004, "r"), (0o002, "w"), (0o001, "x"),
-    ]
 }

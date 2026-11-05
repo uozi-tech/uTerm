@@ -60,26 +60,31 @@ enum BrowserFileKind: Equatable {
 
 /// POSIX 权限位 → `drwxr-xr-x` 串。`mode` 含文件类型位（`S_IFMT` 掩码 `0o170000`）。
 /// `mode` 为 nil 时返回占位 `----------`。
-func posixPermissionString(_ mode: UInt32?) -> String {
-    guard let mode else { return "----------" }
-    var s: String
-    switch mode & 0o170000 {
-    case 0o040000: s = "d"
-    case 0o120000: s = "l"
-    default:       s = "-"
+///
+/// 列表每渲染一行都要调一次：往预留好容量的 `String` 里逐个追加 `Character`，
+/// 位表是 `POSIXPermissionBits.table`（`static let`），一行只有一次分配。
+/// 改前每次现建一个 9 元组数组、再拼 9 个小 `String`。
+nonisolated func posixPermissionString(_ mode: UInt32?) -> String {
+    var out = ""
+    out.reserveCapacity(10)
+    guard let mode else {
+        out.append(contentsOf: "----------")
+        return out
     }
-    let bits: [(UInt32, String)] = [
-        (0o400, "r"), (0o200, "w"), (0o100, "x"),
-        (0o040, "r"), (0o020, "w"), (0o010, "x"),
-        (0o004, "r"), (0o002, "w"), (0o001, "x"),
-    ]
-    for (mask, ch) in bits { s += (mode & mask) != 0 ? ch : "-" }
-    return s
+    switch mode & 0o170000 {
+    case 0o040000: out.append("d")
+    case 0o120000: out.append("l")
+    default:       out.append("-")
+    }
+    for (mask, symbol) in POSIXPermissionBits.table {
+        out.append((mode & mask) != 0 ? symbol : "-")
+    }
+    return out
 }
 
 /// POSIX 权限位 → `"755"` / 含特殊位时 `"4755"`。`mode` 为 nil 返回 `"—"`。
 /// 只取低 12 位（`& 0o7777`，含 setuid/setgid/sticky）；文件类型位被忽略。
-func posixOctalString(_ mode: UInt32?) -> String {
+nonisolated func posixOctalString(_ mode: UInt32?) -> String {
     guard let mode else { return "—" }
     let perm = mode & 0o7777
     let special = (perm >> 9) & 0o7
