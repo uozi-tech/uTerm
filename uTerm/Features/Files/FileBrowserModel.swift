@@ -18,17 +18,8 @@ final class FileBrowserModel {
         case failed(String)
     }
 
-    enum SortKey: String, CaseIterable, Identifiable, Sendable {
-        case name, size, modified
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .name: return "名称"
-            case .size: return "大小"
-            case .modified: return "修改时间"
-            }
-        }
-    }
+    /// 排序键已挪到两端共享的 `RemoteEntrySortKey`（`RemoteEntrySort.swift`），这里保留旧名。
+    typealias SortKey = RemoteEntrySortKey
 
     enum TransferDirection: Sendable, Equatable { case up, down }
 
@@ -128,69 +119,14 @@ final class FileBrowserModel {
         }
     }
 
-    /// 按当前排序偏好重算 `sortedEntries`。
-    ///
-    /// 稳定性 / nil 处理：
-    /// - Swift 的 `Array.sorted` 不保证稳定 —— 用原始 index 做 tiebreaker
-    ///   保证等值时按 provider 给的顺序排，列表不会跳。
-    /// - size / modifiedAt 为 nil 时永远排最后（不受 ascending 翻转影响）。
-    ///   之前用 `?? 0` 会让所有 dir（size=nil）撞 0、跟 0 字节文件混在一起。
+    /// 按当前排序偏好重算 `sortedEntries`。排序规则（稳定、nil 恒在末尾、
+    /// Finder 式名字比较）在共享的 `RemoteEntrySort`；偏好的读写留在这里。
     private func recomputeSortedEntries() {
-        let ascending = sortAscending
-        let key = sortKey
-        let source = showHidden ? entries : entries.filter { !$0.name.hasPrefix(".") }
-
-        func primary(_ a: RemoteEntry, _ b: RemoteEntry) -> ComparisonResult {
-            switch key {
-            case .name:
-                return a.name.localizedStandardCompare(b.name)
-            case .size:
-                switch (a.size, b.size) {
-                case let (sa?, sb?): return sa < sb ? .orderedAscending : (sa > sb ? .orderedDescending : .orderedSame)
-                case (nil, nil):     return .orderedSame
-                case (nil, _):       return .orderedDescending  // nil 总是更大 → 排末尾
-                case (_, nil):       return .orderedAscending
-                }
-            case .modified:
-                switch (a.modifiedAt, b.modifiedAt) {
-                case let (ta?, tb?): return ta < tb ? .orderedAscending : (ta > tb ? .orderedDescending : .orderedSame)
-                case (nil, nil):     return .orderedSame
-                case (nil, _):       return .orderedDescending
-                case (_, nil):       return .orderedAscending
-                }
-            }
-        }
-
-        // 给每一项打原始 index，等值时用 index 当 tiebreaker → 稳定排序。
-        let indexed = source.enumerated().map { (idx: $0.offset, e: $0.element) }
-
-        func cmp(_ a: (idx: Int, e: RemoteEntry), _ b: (idx: Int, e: RemoteEntry)) -> Bool {
-            let p = primary(a.e, b.e)
-            if p != .orderedSame {
-                // nil-end 路径：nil 总是 orderedDescending（更大），
-                // 排序时无论 ascending 是 true / false，都要落到末尾。
-                let aHasNilEnd: Bool = {
-                    switch key {
-                    case .name: return false
-                    case .size: return a.e.size == nil || b.e.size == nil
-                    case .modified: return a.e.modifiedAt == nil || b.e.modifiedAt == nil
-                    }
-                }()
-                if aHasNilEnd {
-                    return p == .orderedAscending
-                }
-                return ascending ? (p == .orderedAscending) : (p == .orderedDescending)
-            }
-            return a.idx < b.idx
-        }
-
-        if foldersFirst {
-            let dirs  = indexed.filter {  $0.e.isDirectory }.sorted(by: cmp).map(\.e)
-            let files = indexed.filter { !$0.e.isDirectory }.sorted(by: cmp).map(\.e)
-            sortedEntries = dirs + files
-        } else {
-            sortedEntries = indexed.sorted(by: cmp).map(\.e)
-        }
+        sortedEntries = RemoteEntrySort.sorted(entries, options: RemoteEntrySortOptions(
+            key: sortKey,
+            ascending: sortAscending,
+            foldersFirst: foldersFirst,
+            showHidden: showHidden))
     }
 
     /// 主机密钥审批的 UI 桥接（驱动 `FileBrowserView` 的 sheet）。

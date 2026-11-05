@@ -159,7 +159,7 @@ struct MobileFakeSFTPTree: Sendable {
 
     // MARK: 变更
 
-    /// 落一个条目进某个目录，保持产品的排序（目录在前、按名不区分大小写升序）。
+    /// 落一个条目进某个目录，保持产品的排序（`MobileSFTPController.sortOptions`）。
     private mutating func insert(_ entry: RemoteEntry, into dir: String) {
         let d = Self.normalize(dir)
         var list = directories[d] ?? []
@@ -169,10 +169,7 @@ struct MobileFakeSFTPTree: Sendable {
     }
 
     static func sorted(_ list: [RemoteEntry]) -> [RemoteEntry] {
-        list.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        RemoteEntrySort.sorted(list, options: MobileSFTPController.sortOptions)
     }
 
     /// mkdir。父目录必须存在，路径不能已被占用。

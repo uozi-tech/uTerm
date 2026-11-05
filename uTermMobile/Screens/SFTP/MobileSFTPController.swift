@@ -131,13 +131,15 @@ final class MobileSFTPController {
         loading = false
     }
 
-    /// 目录在前、名字按本地化大小写无关排序。大目录（上万条）要做几十万次本地化比较，
-    /// 放在并发线程池里，不占主线程。
+    /// iOS 列表的固定排序：目录在前、名字升序（与 macOS 同一套 `RemoteEntrySort` 规则，
+    /// Finder 式比较，`f2` 在 `f10` 前），**显示点文件**——手机上没有「显示隐藏文件」开关，
+    /// 滤掉的话 `.ssh` / `.bashrc` 就没有入口了。
+    nonisolated static let sortOptions = RemoteEntrySortOptions(
+        key: .name, ascending: true, foldersFirst: true, showHidden: true)
+
+    /// 大目录（上万条）要做几十万次本地化比较，放在并发线程池里，不占主线程。
     @concurrent nonisolated private static func sortedEntries(_ list: [RemoteEntry]) async -> [RemoteEntry] {
-        list.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        RemoteEntrySort.sorted(list, options: sortOptions)
     }
 
     /// 重新列当前目录（增删改之后）。
