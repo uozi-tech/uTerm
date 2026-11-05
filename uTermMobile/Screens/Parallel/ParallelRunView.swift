@@ -344,18 +344,27 @@ struct ParallelRunView: View {
 
     private func aiBody(_ c: ParallelRunController) -> some View {
         let visible = c.states.filter { aiFilter.includes($0.tone) }
-        let columns = wide
-            ? [GridItem(.flexible(), spacing: 12, alignment: .top), GridItem(.flexible(), spacing: 12, alignment: .top)]
-            : [GridItem(.flexible(), alignment: .top)]
         return ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 aiOverview(c)
                 if c.total > 1, !wide { filterBar(c) }
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                    ForEach(visible) { s in
-                        ParAILane(state: s, onShowOutput: { showOutput(of: s.id, in: c) }) {
-                            c.trustAndRetry(serverID: s.id)
+                if wide {
+                    // `Grid` 而不是 `LazyVGrid`：懒网格按各自内容量高，同一行两张卡高矮不齐；
+                    // `Grid` 的一行取最高那张，卡片再 `maxHeight: .infinity` 撑满，整行等高。
+                    // 台数是几十量级、卡片很轻，不懒没关系。
+                    Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                        ForEach(Self.pairs(visible), id: \.first?.id) { pair in
+                            GridRow(alignment: .top) {
+                                ForEach(pair) { s in lane(s, in: c) }
+                                if pair.count == 1 {
+                                    Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                                }
+                            }
                         }
+                    }
+                } else {
+                    LazyVStack(spacing: 12) {
+                        ForEach(visible) { s in lane(s, in: c) }
                     }
                 }
                 if visible.isEmpty {
@@ -369,6 +378,17 @@ struct ParallelRunView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func lane(_ s: PServerState, in c: ParallelRunController) -> some View {
+        ParAILane(state: s, onShowOutput: { showOutput(of: s.id, in: c) }) {
+            c.trustAndRetry(serverID: s.id)
+        }
+    }
+
+    /// 宽屏两列：按原顺序两两成行。
+    static func pairs<T>(_ items: [T]) -> [[T]] {
+        stride(from: 0, to: items.count, by: 2).map { Array(items[$0..<min($0 + 2, items.count)]) }
     }
 
     /// 顶部总览：进度环 + 成功 / 失败 / 进行中计数；全部落定后接 AI 汇总。
@@ -736,7 +756,9 @@ struct ParAILane: View {
             if resolved { resolvedBody } else { runningBody }
         }
         .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // `maxHeight: .infinity`：宽屏 `Grid` 一行里撑到与同行那张一样高；窄屏在 ScrollView 里
+        // 高度不受限，等于按内容高，不受影响。
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // 白卡（画布上靠底色差成形，不描边）；失败的卡整张铺一层淡红，扫一眼就能找到。
         .background {
             ZStack {
@@ -803,18 +825,22 @@ struct ParAILane: View {
     /// 落定后：结论 + 操作 + 可展开的完整处理过程。
     private var resolvedBody: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(state.summary).font(M.sans(13.5)).foregroundStyle(M.text).lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            if state.hostKeyUntrusted {
-                MBtn(title: "信任并重试", icon: "shield", kind: .tinted, height: 36, action: onTrust)
-                    .fixedSize()
+            // 结论这一块吃掉卡片被撑高的那部分，按钮行于是贴在卡底，同一行两张卡的按钮对齐。
+            VStack(alignment: .leading, spacing: 10) {
+                summaryText
+                if state.hostKeyUntrusted {
+                    MBtn(title: "信任并重试", icon: "shield", kind: .tinted, height: 36, action: onTrust)
+                        .fixedSize()
+                }
             }
-            if stepCount > 0 || onShowOutput != nil {
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            if stepCount > 0 || onShowOutput != nil || open {
                 HStack(spacing: 8) {
                     if stepCount > 0 {
-                        pill(icon: "chev", title: open ? "收起处理过程" : "处理过程 · \(stepCount) 步",
+                        pill(icon: "chev", title: open ? "收起" : "处理过程 · \(stepCount) 步",
                              rotate: open) { withAnimation(.snappy) { open.toggle() } }
+                    } else if open {
+                        pill(icon: "chev", title: "收起", rotate: true) { withAnimation(.snappy) { open = false } }
                     }
                     if let onShowOutput {
                         pill(icon: "term", title: "原始输出", rotate: false, action: onShowOutput)
@@ -828,6 +854,24 @@ struct ParAILane: View {
                     ParStepTimeline(steps: state.agentSteps)
                 }
             }
+        }
+    }
+
+    /// 结论默认只占一行、超出省略，十几张卡扫下来整齐；点结论或「处理过程」展开看全文。
+    /// 不开 `textSelection`：可选中的文字每段都会建 UIKit 选择视图，视图数跟着展开的卡涨
+    /// （`testAILaneExpansionCost` 抓到 +26），而复制结论用处不大（汇总卡在上面）。
+    @ViewBuilder
+    private var summaryText: some View {
+        let text = Text(state.summary).font(M.sans(13.5)).foregroundStyle(M.text).lineSpacing(2)
+        if open {
+            text.fixedSize(horizontal: false, vertical: true)
+        } else {
+            text.lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.snappy) { open = true } }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("展开完整结论"))
         }
     }
 
