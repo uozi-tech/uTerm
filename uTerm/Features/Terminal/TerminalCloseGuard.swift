@@ -5,17 +5,17 @@ import SwiftUI
 extension TerminalSession {
     /// 关标签前问：前台还有没有程序在跑。没连上就没有程序可中断。
     func foregroundActivity() async -> TerminalActivity {
-        guard connectionState == .connected, let backend else { return .idle }
-        let probed = await backend.foregroundActivity()
-        return probed.resolved(alternateScreen: terminalView.getTerminal().isCurrentBufferAlternate)
+        await TerminalCloseProbe.foregroundActivity(connected: connectionState == .connected, backend: backend) {
+            terminalView.getTerminal().isCurrentBufferAlternate
+        }
     }
 }
 
 /// 用户关终端标签时的二次确认：前台还有程序在跑才问。
 @MainActor
 enum TerminalCloseGuard {
-    /// 正在探测的会话。探测要走一趟网络，连按 ⌘W 不重复发起。
-    private static var probing: Set<ObjectIdentifier> = []
+    /// 探测要走一趟网络，连按 ⌘W 不重复发起；确认 sheet 开着时也不叠第二个。
+    private static let probe = TerminalCloseProbe()
 
     /// `session` 为 nil（空组没有会话）时直接关。`close` 里要重新定位标签：探测和确认都要时间。
     /// `window` 取发起关闭时的 key window：探测期间用户可能切走，弹框要落在原来的窗口上。
@@ -28,13 +28,11 @@ enum TerminalCloseGuard {
             close()
             return
         }
-        let id = ObjectIdentifier(session)
-        guard probing.insert(id).inserted else { return }
         Task {
-            let activity = await session.foregroundActivity()
-            defer { probing.remove(id) }
-            if let prompt = activity.closePrompt, await !confirm(prompt, action: "关闭标签", in: window) { return }
-            close()
+            await probe.probe(ObjectIdentifier(session), activity: session.foregroundActivity) { prompt in
+                if let prompt, await !confirm(prompt, action: "关闭标签", in: window) { return }
+                close()
+            }
         }
     }
 

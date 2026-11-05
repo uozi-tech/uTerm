@@ -423,9 +423,9 @@ final class MobileTerminalController {
 
     /// 关标签前问：前台还有没有程序在跑。没连上就没有程序可中断。
     func foregroundActivity() async -> TerminalActivity {
-        guard state == .connected, let connection else { return .idle }
-        let probed = await connection.foregroundActivity()
-        return probed.resolved(alternateScreen: terminalView?.getTerminal().isCurrentBufferAlternate ?? false)
+        await TerminalCloseProbe.foregroundActivity(connected: state == .connected, backend: connection) {
+            terminalView?.getTerminal().isCurrentBufferAlternate ?? false
+        }
     }
 
     /// 失败后在同一控制器 / 同一终端视图上重连（连接中页「重试」）。终端视图仍挂着，
