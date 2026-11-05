@@ -59,6 +59,29 @@ final class ShouldBeIgnored {
 }
 SWIFT
 
+# 注册表（ModelRegistry）与两个建容器的文件：注册表核对现在找不到它们会报错退出，
+# 所以前面几条用例也要先铺好。
+mkdir -p "$tmp/repo/uTerm/Core/Persistence" "$tmp/repo/uTerm/App" "$tmp/repo/uTermMobile/App"
+write_registry() { # $@ = 注册的类型名
+	{
+		printf 'import SwiftData\n// 注释里的 Ghost.self 不算注册\nenum ModelRegistry {\n'
+		printf '    nonisolated static let types: [any PersistentModel.Type] = [\n'
+		for t in "$@"; do printf '        %s.self,\n' "$t"; done
+		printf '    ]\n}\n'
+	} > "$tmp/repo/uTerm/Core/Persistence/ModelRegistry.swift"
+}
+write_registry Widget Gadget
+for f in uTerm/App/AppModelContainer.swift uTermMobile/App/MobileModelContainer.swift; do
+	cat > "$tmp/repo/$f" <<'SWIFT'
+import SwiftData
+enum Container {
+    static func make() -> ModelContainer {
+        try! ModelContainer(for: Schema(ModelRegistry.types))
+    }
+}
+SWIFT
+done
+
 widget_fields='        CD_blob        BYTES QUERYABLE SORTABLE,
         CD_count       INT64 QUERYABLE SORTABLE,
         CD_enabled     INT64 QUERYABLE SORTABLE,
@@ -164,24 +187,43 @@ s = open(p).read()
 open(p, "w").write(s.split("@Model\nfinal class Exotic")[0])
 PY
 
-# 6) 模型没注册进容器 -> 报漂移
-mkdir -p "$tmp/repo/uTerm/App"
-cat > "$tmp/repo/uTerm/App/AppModelContainer.swift" <<'SWIFT'
-import SwiftData
-enum AppModelContainer {
-    static func make() -> ModelContainer {
-        try! ModelContainer(for: Widget.self)
-    }
-}
-SWIFT
+# 6) 模型没进注册表 -> 报漂移
+write_registry Widget
 expect 1 "未注册的模型被检出" run "$tmp/full.ckdb"
 case "$LAST_OUT" in
 	*Gadget*没有注册*|*没有注册*Gadget*) echo "ok: 报出了未注册的 Gadget" ;;
 	*) echo "FAIL: 没报未注册的 Gadget"; fail=1 ;;
 esac
-sed -i '' 's/ModelContainer(for: Widget.self)/ModelContainer(for: Widget.self, Gadget.self)/' \
-	"$tmp/repo/uTerm/App/AppModelContainer.swift"
+write_registry Widget Gadget
 expect 0 "补齐注册后通过" run "$tmp/full.ckdb"
+
+# 6b) 建容器的文件不走注册表 -> 报漂移（核对的那份不是容器真正用的）
+cp "$tmp/repo/uTermMobile/App/MobileModelContainer.swift" "$tmp/mobile.bak"
+sed -i '' 's/Schema(ModelRegistry.types)/Schema([Widget.self])/' "$tmp/repo/uTermMobile/App/MobileModelContainer.swift"
+expect 1 "容器绕开注册表被检出" run "$tmp/full.ckdb"
+case "$LAST_OUT" in
+	*MobileModelContainer*ModelRegistry.types*) echo "ok: 点名了 MobileModelContainer" ;;
+	*) echo "FAIL: 没点名绕开注册表的容器"; fail=1 ;;
+esac
+cp "$tmp/mobile.bak" "$tmp/repo/uTermMobile/App/MobileModelContainer.swift"
+
+# 6c) 建容器的文件不存在 -> 退出码 2（不再静默跳过）
+mv "$tmp/repo/uTerm/App/AppModelContainer.swift" "$tmp/app.bak"
+expect 2 "缺建容器文件报错" run "$tmp/full.ckdb"
+mv "$tmp/app.bak" "$tmp/repo/uTerm/App/AppModelContainer.swift"
+
+# 6d) 注册表不存在 / 解析出 0 个类型 -> 退出码 2（不再静默跳过）
+mv "$tmp/repo/uTerm/Core/Persistence/ModelRegistry.swift" "$tmp/registry.bak"
+expect 2 "缺注册表报错" run "$tmp/full.ckdb"
+case "$LAST_OUT" in
+	*ModelRegistry.swift*) echo "ok: 报错点名了注册表文件" ;;
+	*) echo "FAIL: 缺注册表的报错没点名文件"; fail=1 ;;
+esac
+mv "$tmp/registry.bak" "$tmp/repo/uTerm/Core/Persistence/ModelRegistry.swift"
+write_registry
+expect 2 "空注册表报错" run "$tmp/full.ckdb"
+write_registry Widget Gadget
+expect 0 "恢复注册表后通过" run "$tmp/full.ckdb"
 
 # 7) 扫描根下没有 @Model -> 退出码 2（防止「什么都没扫到」被当成通过）
 mkdir -p "$tmp/repo/Empty"
