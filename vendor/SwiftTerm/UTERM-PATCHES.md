@@ -296,6 +296,18 @@ uTerm 侧入口：`uTerm/Features/Terminal/TerminalFlushPacing.swift` 的 `feedP
 uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalFontChangeTests.swift` 和
 `MTerminalContainerViewTests.testRotationKeepsProgramModes`。上游若已修，跳过。
 
+## 15. 默认光标样式可配
+
+上游把 `CSI 0 q`（以及不带参数的 `CSI q`）固定解释成闪烁方块，完整重置（`ESC c`，`reset` 命令）则不动光标。
+vim、fish 这类程序退出时发它们，是想回到终端的默认光标，而默认应该是用户在设置里选的。uTerm 不再反复应用光标设置之后
+（补丁 #13 同一轮的 `TerminalTheme.applyLook`），不改的话用户的样式回不来。
+
+涉及文件：`Terminal.swift` 新增 `defaultCursorStyle`，`cmdSetCursorStyle` 和 `resetToInitialState` 读它。
+默认 nil，行为与上游相同；`CSI 1 q` 仍是闪烁方块。
+
+uTerm 侧入口：`TerminalTheme.applyCursor`。iOS 没有设置它，行为不变。回归测试见
+`uTermTests/Features/Terminal/TerminalThemeTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

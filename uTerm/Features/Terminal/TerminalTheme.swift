@@ -94,6 +94,9 @@ enum TerminalTheme {
         view.caretColor = scheme.cursorColor
         view.caretTextColor = (shape == .block) ? view.nativeBackgroundColor : nil
         view.feed(text: "\u{1B}[\(shape.decscusrParameter(blink: blink)) q")
+        // 程序发 `CSI 0 q` 或 `reset` 时回到这里。`applyLook` 只在设置变了才走到，不能指望它再装一次。
+        let terminal = view.getTerminal()
+        terminal.defaultCursorStyle = terminal.options.cursorStyle
     }
 
     /// 圆角设置抽离出来：原 `apply(to:fontSize:scrollback:)` 内联了

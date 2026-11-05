@@ -40,6 +40,48 @@ final class TerminalThemeTests: XCTestCase {
         XCTAssertEqual(view.getTerminal().options.cursorStyle, .steadyBar)
     }
 
+    /// vim、fish 这类程序退出时发 `CSI 0 q`（回到默认光标）。默认指用户在设置里选的，不是上游写死的闪烁方块。
+    func testProgramResetSequencesReturnToUserCursorSetting() {
+        for sequence in ["\u{1B}[0 q", "\u{1B}[ q", "\u{1B}c"] {
+            let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+            TerminalTheme.apply(to: view, settings: cursorSettings(.bar, blink: false), dark: true)
+            view.feed(text: "\u{1B}[3 q")
+
+            view.feed(text: sequence)
+
+            XCTAssertEqual(view.getTerminal().options.cursorStyle, .steadyBar, sequence.debugDescription)
+        }
+    }
+
+    func testProgramCanStillAskForBlinkingBlockExplicitly() {
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        TerminalTheme.apply(to: view, settings: cursorSettings(.bar, blink: false), dark: true)
+
+        view.feed(text: "\u{1B}[1 q")
+
+        XCTAssertEqual(view.getTerminal().options.cursorStyle, .blinkBlock)
+    }
+
+    func testResetFollowsLatestCursorSetting() {
+        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        TerminalTheme.apply(to: view, settings: cursorSettings(.bar, blink: false), dark: true)
+        TerminalTheme.apply(to: view, settings: cursorSettings(.underline, blink: true), dark: true)
+
+        view.feed(text: "\u{1B}[0 q")
+
+        XCTAssertEqual(view.getTerminal().options.cursorStyle, .blinkUnderline)
+    }
+
+    private func cursorSettings(_ shape: TerminalCursorShape, blink: Bool) -> TerminalSettings {
+        let name = "TerminalThemeTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        var settings = TerminalSettings.read(from: defaults)
+        settings.cursorShape = shape
+        settings.cursorBlink = blink
+        return settings
+    }
+
     func testRepeatedApplyKeepsProgramColors() {
         let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         TerminalTheme.apply(to: view, settings: .read(), dark: true)

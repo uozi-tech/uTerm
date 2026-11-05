@@ -4136,6 +4136,11 @@ open class Terminal {
         setCursor(col: 0, row: 0)
     }
 
+    /// uTerm patch #15: the style that `CSI 0 q` and a full reset return to.
+    /// nil keeps upstream behavior (blinking block, and a full reset leaves the
+    /// style alone). See UTERM-PATCHES.md.
+    public var defaultCursorStyle: CursorStyle?
+
     public func setCursorStyle (_ style: CursorStyle)
     {
         if options.cursorStyle != style {
@@ -4157,6 +4162,10 @@ open class Terminal {
     func cmdSetCursorStyle (_ pars: [Int], _ collect: cstring)
     {
         if collect.count == 0 || collect != [32] { /* space */
+            return
+        }
+        if let defaultCursorStyle, (pars.first ?? 0) == 0 {
+            setCursorStyle (defaultCursorStyle)
             return
         }
         let p = max (pars.count == 0 ? 1 : pars [0], 1)
@@ -6410,6 +6419,9 @@ open class Terminal {
         setup (isReset: true)
         clearAllKittyImages()
         cursorHidden = savedCursorHidden
+        if let defaultCursorStyle {
+            setCursorStyle (defaultCursorStyle)
+        }
         refresh (startRow: 0, endRow: rows-1)
         syncScrollArea ()
         // A full reset replaces the buffer, so the view's scroll geometry — which
