@@ -145,8 +145,7 @@ final class AssistantModel {
 
     /// 顶栏展示的会话标题。
     var sessionTitle: String {
-        if let t = currentSession?.title, !t.isEmpty { return t }
-        return "新对话"
+        currentSession?.displayTitle ?? "新对话"
     }
 
     /// 全部已配置的 provider（外部灌入，按 sortOrder）。

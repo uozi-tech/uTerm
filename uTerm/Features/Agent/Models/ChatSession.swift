@@ -12,6 +12,11 @@ import Foundation
 // package treats that column as an opaque string because uTerm encodes
 // `ToolCallState` into it while uTable encodes `ToolCall` — two different
 // Codable shapes the package must not know about.
+extension ChatSession {
+    /// 历史列表 / 顶栏里显示的标题；还没起标题的会话叫「新对话」。
+    var displayTitle: String { title.isEmpty ? "新对话" : title }
+}
+
 extension ChatMessageRecord {
     var role: ChatMessage.Role { ChatMessage.Role(rawValue: roleRaw) ?? .user }
 

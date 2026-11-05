@@ -116,9 +116,9 @@ struct MobileAgentChat: View {
                     ForEach(sessions) { session in
                         Button { model.load(session) } label: {
                             if model.currentSession?.id == session.id {
-                                Label(session.title.isEmpty ? "新对话" : session.title, systemImage: "checkmark")
+                                Label(session.displayTitle, systemImage: "checkmark")
                             } else {
-                                Text(session.title.isEmpty ? "新对话" : session.title)
+                                Text(session.displayTitle)
                             }
                         }
                     }
@@ -167,7 +167,7 @@ struct MobileAgentChat: View {
                         ForEach(mountedMessages) { msg in
                             messageRow(msg).id(msg.id)
                         }
-                        if let err = errorText {
+                        if let err = model.bannerError {
                             Label(err, systemImage: "exclamationmark.triangle.fill")
                                 .font(M.sans(13)).foregroundStyle(M.danger)
                                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -339,10 +339,10 @@ struct MobileAgentChat: View {
             // 助手是裸文本 + 整宽命令卡。
             VStack(alignment: .leading, spacing: 8) {
                 if !m.text.isEmpty {
-                    MStreamingMarkdown(text: m.text, isStreaming: isStreamingTail(m))
+                    MStreamingMarkdown(text: m.text, isStreaming: model.isStreamingTail(m))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                } else if isStreamingTail(m) {
+                } else if model.isStreamingTail(m) {
                     MAgentThinkingIndicator()
                 } else if m.toolCalls.isEmpty {
                     Text("…").font(M.sans(15)).foregroundStyle(M.text3)
@@ -368,27 +368,12 @@ struct MobileAgentChat: View {
         }
     }
 
-    private func isStreamingTail(_ m: ChatMessage) -> Bool {
-        m.id == model.messages.last?.id && model.state == .streaming
-    }
-
     private func mStatus(_ call: ToolCallState) -> MToolCall.Status {
-        switch call.status {
+        switch call.phase {
         case .pending: return .pending
         case .running: return .running
-        case .done, .failed, .skipped: return .done(output: call.output)
+        case .done: return .done(output: call.output)
         }
-    }
-
-    /// 错误红条：仅当错误尚未内联进末条助手气泡时显示——避免与 `AssistantModel` 追加进
-    /// 消息文本的「[错误：…]」重复。provider / key / baseURL / 未选模型的校验失败发生在追加
-    /// 助手消息之前（无内联文本），此时红条是唯一的错误反馈。
-    private var errorText: String? {
-        guard case .failed(let msg) = model.state else { return nil }
-        if let last = model.messages.last, last.role == .assistant, last.text.contains("[错误：") {
-            return nil
-        }
-        return msg
     }
 
     // MARK: - 输入区
@@ -418,7 +403,7 @@ struct MobileAgentChat: View {
 
     /// 硬件键盘 ⌘↵：有待确认命令则运行最早那条，否则发送（与 macOS 同一语义）。
     private func handleCommandReturn() {
-        if model.state == .awaitingApproval, let id = model.firstPendingToolCallID {
+        if let id = model.commandReturnTarget {
             tasks.add(Task { await model.approveAndRun(id: id) })
         } else {
             send()

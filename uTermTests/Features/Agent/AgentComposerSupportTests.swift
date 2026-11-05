@@ -174,6 +174,49 @@ final class AgentComposerSupportTests: XCTestCase {
         XCTAssertEqual(model.composerStatus, "已停止")
     }
 
+    // MARK: - 两端对话列表共用的小判断
+
+    /// ⌘↵ 只在等确认时落到最早一张待确认卡上，其余时候交给发送。
+    func testCommandReturnTargetOnlyWhileAwaitingApproval() async {
+        let client = MockLLMClient(events: [
+            .toolCall(LLMToolCall(id: "c1", name: "run_command", argumentsJSON: #"{"command":"ls"}"#)),
+        ])
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = MockCommandExecutor()
+        XCTAssertNil(model.commandReturnTarget)
+        model.input = "列目录"
+        await model.send(serverContext: "")
+        XCTAssertEqual(model.commandReturnTarget, "c1")
+        XCTAssertFalse(model.messages.contains { model.isStreamingTail($0) }, "没在流式输出")
+        model.stop()
+        XCTAssertNil(model.commandReturnTarget)
+    }
+
+    /// 没配模型服务时失败发生在追加助手消息之前，错误条是唯一的反馈。
+    func testBannerErrorShowsWhenFailureNotInlined() async {
+        let model = AssistantModel()
+        XCTAssertNil(model.bannerError)
+        model.input = "hello"
+        await model.send(serverContext: "")
+        XCTAssertNotNil(model.bannerError)
+    }
+
+    func testToolCallPhaseFoldsFinishedStatuses() {
+        func call(_ status: ToolCallState.Status) -> ToolCallState {
+            ToolCallState(id: "x", name: "run_command", command: "ls", status: status)
+        }
+        XCTAssertEqual(call(.pending).phase, .pending)
+        XCTAssertEqual(call(.running).phase, .running)
+        XCTAssertEqual(call(.done).phase, .done)
+        XCTAssertEqual(call(.failed).phase, .done)
+        XCTAssertEqual(call(.skipped).phase, .done)
+    }
+
+    func testSessionDisplayTitleFallsBackToNewChat() {
+        XCTAssertEqual(ChatSession(title: "").displayTitle, "新对话")
+        XCTAssertEqual(ChatSession(title: "查磁盘").displayTitle, "查磁盘")
+    }
+
     // MARK: - 审批档位
 
     func testSafetyMenuOrderAndSymbols() {

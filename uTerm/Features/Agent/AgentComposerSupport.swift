@@ -185,6 +185,28 @@ extension AssistantModel {
         }
     }
 
+    /// 这条是不是正在流式输出的末条（流式 Markdown / 光标只给它）。
+    func isStreamingTail(_ message: ChatMessage) -> Bool {
+        message.id == messages.last?.id && state == .streaming
+    }
+
+    /// ⌘↵ 的落点：在等确认时是最早一张待确认命令卡，否则 nil（调用方改为发送输入）。
+    var commandReturnTarget: String? {
+        guard state == .awaitingApproval else { return nil }
+        return firstPendingToolCallID
+    }
+
+    /// 错误条的文字：只在失败、且错误还没内联进末条助手气泡时有值——`AssistantModel` 会把
+    /// 「[错误：…]」追加进消息文本，再出一条就重复了。provider / key / 地址 / 未选模型的校验
+    /// 失败发生在追加助手消息之前（没有内联文本），这时错误条是唯一的反馈。
+    var bannerError: String? {
+        guard case .failed(let message) = state else { return nil }
+        if let last = messages.last, last.role == .assistant, last.text.contains("[错误：") {
+            return nil
+        }
+        return message
+    }
+
     /// 最早一张待确认的命令卡（⌘↵ / 「运行全部」的落点）。
     var firstPendingToolCallID: String? {
         for message in messages {
