@@ -182,7 +182,7 @@ struct TerminalKeyBar: View {
     /// 贴图片：剪贴板里的图，或相册里选一张。直连服务器传成 `/tmp` 下的文件并粘上路径；
     /// Mac 本机终端放进 Mac 剪贴板再按 Ctrl+V（Claude Code 等从剪贴板读图）。
     private var imageMenu: some View {
-        Menu {
+        MMenu {
             Button {
                 controller.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
             } label: { Label("粘贴剪贴板里的图片", systemImage: "doc.on.clipboard") }

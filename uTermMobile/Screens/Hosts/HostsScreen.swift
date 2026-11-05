@@ -196,7 +196,7 @@ struct HostCard: View {
                             .font(M.mono(12.5)).foregroundStyle(M.text3).lineLimit(1)
                     }
                     Spacer(minLength: 4)
-                    Menu {
+                    MMenu {
                         Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
                         Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
                         Button { onEdit() } label: { Label("编辑", systemImage: "pencil") }
@@ -227,7 +227,7 @@ struct HostCard: View {
         }
         .buttonStyle(MPressStyle())
         .mWatchesReachability(of: host)
-        .contextMenu {
+        .mContextMenu {
             Button { onConnect() } label: { Label("连接终端", systemImage: "terminal") }
             Button { onSFTP() } label: { Label("浏览文件", systemImage: "folder") }
             Button { onEdit() } label: { Label("编辑", systemImage: "pencil") }

@@ -164,7 +164,7 @@ struct WorkspaceTabStrip: View {
     @Environment(\.mInStatusRow) private var inStatusRow
 
     private var newMenu: some View {
-        Menu {
+        MMenu {
             Button { onNew(.terminal) } label: { Label("新建终端", systemImage: MGlyph.symbol("term")) }
             Button { onNew(.sftp) } label: { Label("浏览文件", systemImage: MGlyph.symbol("folder")) }
         } label: {
@@ -332,7 +332,7 @@ struct WorkspaceTabChip: View {
             onDragStart()
             return WorkspaceTabDrag.itemProvider(tabID: tab.id)
         }
-        .contextMenu {
+        .mContextMenu {
             if canMove {
                 Button(action: onMove) {
                     Label("移到另一侧", systemImage: "rectangle.righthalf.inset.filled.arrow.right")

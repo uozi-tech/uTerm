@@ -164,7 +164,7 @@ struct MPromptGridSection: View {
                 ForEach(prompts, id: \.self) { prompt in
                     Button { submit(prompt) } label: { cap(prompt) }
                         .buttonStyle(MPressStyle())
-                        .contextMenu {
+                        .mContextMenu {
                             Button { fill(prompt) } label: { Label("填入，不发送", systemImage: "text.cursor") }
                         }
                 }

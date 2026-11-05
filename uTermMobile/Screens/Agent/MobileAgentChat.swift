@@ -109,7 +109,7 @@ struct MobileAgentChat: View {
                 .padding(.leading, 4)
             Spacer(minLength: 6)
 
-            Menu {
+            MMenu {
                 if sessions.isEmpty {
                     Text("还没有历史会话")
                 } else {
@@ -325,7 +325,7 @@ struct MobileAgentChat: View {
                     .textSelection(.enabled)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .contextMenu {
+                    .mContextMenu {
                         Button { UIPasteboard.general.string = m.text } label: {
                             Label("复制", systemImage: "doc.on.doc")
                         }

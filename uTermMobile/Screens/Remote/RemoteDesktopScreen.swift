@@ -113,7 +113,7 @@ struct RemoteDesktopScreen: View {
             .onTapGesture { showStats.toggle() }
             Spacer(minLength: 8)
             if session?.canPaste == true {
-                Menu {
+                MMenu {
                     Button { Task { await pasteClipboard() } } label: {
                         Label("粘贴剪贴板内容", systemImage: "doc.on.clipboard")
                     }

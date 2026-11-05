@@ -59,7 +59,7 @@ struct KeysScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
+                MMenu {
                     Button { generating = true } label: { Label("生成新密钥", systemImage: "plus") }
                     Button { importing = true } label: { Label("导入私钥", systemImage: "square.and.arrow.down") }
                 } label: {

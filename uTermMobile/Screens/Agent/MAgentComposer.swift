@@ -125,7 +125,7 @@ struct MAgentComposer: View {
     @ViewBuilder
     private func effortMenu(compact: Bool) -> some View {
         if let choice = model.effortChoice {
-            Menu {
+            MMenu {
                 Picker("思考深度", selection: Binding(get: { choice.selection }, set: choice.select)) {
                     ForEach(choice.options, id: \.self) { option in
                         Text(option.label).tag(option.value)
@@ -145,7 +145,7 @@ struct MAgentComposer: View {
 
     /// 审批档位：每一项带一行说明——三档的差别靠名字猜不出来。
     private func safetyMenu(compact: Bool) -> some View {
-        Menu {
+        MMenu {
             Picker("审批档位", selection: $safety) {
                 ForEach(AgentSafety.byAutonomy) { mode in
                     Label {

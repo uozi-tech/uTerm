@@ -237,7 +237,7 @@ struct SettingsScreen: View {
         MInsetGroup(header: "历史", footer: chatRetentionFooter) {
             MInsetRow(icon: "clock", label: "会话保留", last: true,
                       trailing: AnyView(
-                          Menu {
+                          MMenu {
                               ForEach(Self.retentionOptions, id: \.0) { option in
                                   Button(option.1) { chatRetentionDays = option.0 }
                               }
