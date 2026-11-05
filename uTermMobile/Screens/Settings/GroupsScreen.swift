@@ -218,7 +218,7 @@ struct GroupDetailView: View {
     private var colorSection: some View {
         VStack(alignment: .leading, spacing: 11) {
             MSectionCap(text: "颜色")
-            FlexWrap(spacing: 12, lineSpacing: 12) {
+            FlowLayout(spacing: 12) {
                 ForEach(ServerGroup.palette, id: \.self) { hex in
                     let (r, g, b) = groupHexRGB(hex)
                     let on = hex == group.colorHex
