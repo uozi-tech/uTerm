@@ -25,17 +25,10 @@ struct ServerFormView: View {
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query(sort: \SSHKey.createdAt, order: .reverse) private var allKeys: [SSHKey]
 
-    @State private var name = ""
-    @State private var host = ""
-    @State private var port = "22"
-    @State private var username = ""
-    @State private var group = ""
-    @State private var authMethod: AuthMethod = .privateKey
-    @State private var password = ""
-    @State private var keyID: UUID?
-    @State private var sftpOnly = false
-    @State private var useJumpHost = false
-    @State private var jumpProfileID: UUID?
+    /// 表单字段（校验与写回见 `HostDraft`）。新建默认私钥认证。
+    @State private var draft = HostDraft(auth: .privateKey)
+    /// 编辑时打开表单那一刻的值：保存只写真正改过的字段。新建 / 复制为 nil。
+    @State private var original: HostDraft?
 
     @State private var keyPickerOpen = false
     @State private var jumpPickerOpen = false
@@ -57,13 +50,13 @@ struct ServerFormView: View {
 
     private let keychain = KeychainStore()
 
-    private var selectedKey: SSHKey? { allKeys.first { $0.id == keyID } }
+    private var selectedKey: SSHKey? { allKeys.first { $0.id == draft.keyID } }
 
     /// 可作跳板机的服务器：除自己外的全部 profile。
     private var availableJumps: [ServerProfile] {
         allProfiles.filter { $0.id != editing?.id }
     }
-    private var selectedJump: ServerProfile? { availableJumps.first { $0.id == jumpProfileID } }
+    private var selectedJump: ServerProfile? { availableJumps.first { $0.id == draft.jumpHostID } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,40 +114,40 @@ struct ServerFormView: View {
     private var targetSection: some View {
         DarkFormSection(title: "目标服务器") {
             DarkFormField(label: "名称") {
-                UDTextField(placeholder: "例如：api-prod", text: $name)
+                UDTextField(placeholder: "例如：api-prod", text: $draft.name)
             }
             HStack(alignment: .top, spacing: 10) {
                 DarkFormField(label: "主机") {
-                    UDTextField(placeholder: "host.example.com", text: $host,
+                    UDTextField(placeholder: "host.example.com", text: $draft.host,
                                 errorMessage: hostError, monospaced: true)
-                        .accessibilityValue(host.isEmpty ? "未填写" : host)
-                        .onChange(of: host) { _, _ in hostTouched = true }
+                        .accessibilityValue(draft.host.isEmpty ? "未填写" : draft.host)
+                        .onChange(of: draft.host) { _, _ in hostTouched = true }
                 }
                 DarkFormField(label: "端口") {
-                    UDTextField(placeholder: "22", text: $port,
-                                errorMessage: portError, monospaced: true)
-                        .accessibilityValue(port.isEmpty ? "未填写" : port)
+                    UDTextField(placeholder: "22", text: $draft.port,
+                                errorMessage: draft.portError, monospaced: true)
+                        .accessibilityValue(draft.port.isEmpty ? "未填写" : draft.port)
                 }
                 .frame(width: 96)
             }
             DarkFormField(label: "用户名") {
-                UDTextField(placeholder: "root", text: $username, monospaced: true)
+                UDTextField(placeholder: "root", text: $draft.username, monospaced: true)
             }
             DarkFormField(label: "认证方式") {
-                UDSegmented(selection: $authMethod, options: [
+                UDSegmented(selection: $draft.auth, options: [
                     (.password, "密码"), (.privateKey, "私钥"),
                 ])
             }
-            if authMethod == .password {
+            if draft.auth == .password {
                 DarkFormField(label: "密码", hint: "仅保存在系统钥匙串") {
-                    UDTextField(placeholder: "••••••••", text: $password,
+                    UDTextField(placeholder: "••••••••", text: $draft.password,
                                 isSecure: true, revealable: true)
                 }
             } else {
                 DarkFormField(label: "密钥", hint: "从密钥管理器选择") {
                     KeySelectorView(
                         keys: allKeys, selected: selectedKey, open: $keyPickerOpen,
-                        onPick: { keyID = $0; keyPickerOpen = false },
+                        onPick: { draft.keyID = $0; keyPickerOpen = false },
                         onManage: { openWindow(id: "keys") })
                 }
             }
@@ -164,12 +157,12 @@ struct ServerFormView: View {
     private var groupSection: some View {
         DarkFormSection(title: "分组") {
             DarkFormField(label: "分组", hint: "可选") {
-                UDTextField(placeholder: "例如：prod", text: $group)
+                UDTextField(placeholder: "例如：prod", text: $draft.group)
             }
             if !existingGroups.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(existingGroups, id: \.self) { g in
-                        UDSelectableGroupChip(label: g, selected: g == group) { group = g }
+                        UDSelectableGroupChip(label: g, selected: g == draft.group) { draft.group = g }
                     }
                 }
             }
@@ -180,9 +173,9 @@ struct ServerFormView: View {
     /// 关：提示默认开启终端会话；开：强调色说明卡，声明终端会话与命令执行均被禁用。
     private var sftpSection: some View {
         DarkFormSection(title: "仅 SFTP 连接", trailing: {
-            UDToggle($sftpOnly)
+            UDToggle($draft.sftpOnly)
         }) {
-            if !sftpOnly {
+            if !draft.sftpOnly {
                 Text("默认开启终端会话，并可随时打开 SFTP 文件浏览。")
                     .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -210,9 +203,9 @@ struct ServerFormView: View {
 
     private var jumpSection: some View {
         DarkFormSection(title: "跳板机", trailing: {
-            UDToggle($useJumpHost)
+            UDToggle($draft.useJumpHost)
         }) {
-            if !useJumpHost {
+            if !draft.useJumpHost {
                 Text("如目标服务器在内网，可通过跳板机间接连接。")
                     .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -220,7 +213,7 @@ struct ServerFormView: View {
                 DarkFormField(label: "跳板机", hint: "只能从已有服务器中选择") {
                     JumpHostSelectorView(
                         hosts: availableJumps, selected: selectedJump, open: $jumpPickerOpen,
-                        onPick: { jumpProfileID = $0; jumpPickerOpen = false })
+                        onPick: { draft.jumpHostID = $0; jumpPickerOpen = false })
                 }
             }
         }
@@ -266,26 +259,13 @@ struct ServerFormView: View {
 
     // MARK: - 校验
 
-    private var isValid: Bool {
-        guard !name.isEmpty, !host.isEmpty, !username.isEmpty, hostError == nil, portError == nil else { return false }
-        if authMethod == .privateKey, keyID == nil { return false }
-        if useJumpHost, jumpProfileID == nil { return false }
-        return true
-    }
+    /// 共享校验之外再加一条：主机字段编辑过又清空时的 inline 报错也拦住保存。
+    private var isValid: Bool { draft.isValid && hostError == nil }
 
     /// 主机名 inline 校验：必填。仅在用户编辑过又清空时提示（避免开屏 / 编辑态即红）。
     private var hostError: String? {
         guard hostTouched else { return nil }
-        return host.trimmingCharacters(in: .whitespaces).isEmpty ? "请填写主机地址" : nil
-    }
-
-    /// 端口 inline 校验：必须是 1–65535 的整数。空 / 非法均给出提示。
-    private var portError: String? {
-        let trimmed = port.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return nil }
-        guard let p = Int(trimmed) else { return "端口必须是数字" }
-        guard (1...65535).contains(p) else { return "端口需在 1–65535 之间" }
-        return nil
+        return draft.trimmedHost.isEmpty ? "请填写主机地址" : nil
     }
 
     /// 已有的非空分组名，去重 + locale 排序。
@@ -303,13 +283,12 @@ struct ServerFormView: View {
     /// 是否具备发起测试的最小条件：必填项齐、端口合法、认证材料就绪、跳板机已选。
     /// 测试进行中时由 footer 单独判定（按钮转「取消测试」），此处不含 inFlight。
     private var canTest: Bool {
-        guard !host.trimmingCharacters(in: .whitespaces).isEmpty,
-              !username.trimmingCharacters(in: .whitespaces).isEmpty,
-              portError == nil else { return false }
-        if useJumpHost, jumpProfileID == nil { return false }
-        switch authMethod {
-        case .password: return !password.isEmpty
-        case .privateKey: return keyID != nil
+        guard !draft.trimmedHost.isEmpty, !draft.trimmedUsername.isEmpty,
+              draft.portError == nil else { return false }
+        if draft.useJumpHost, draft.jumpHostID == nil { return false }
+        switch draft.auth {
+        case .password: return !draft.password.isEmpty
+        case .privateKey: return draft.keyID != nil
         }
     }
 
@@ -352,7 +331,7 @@ struct ServerFormView: View {
 
         // 2. 跳板机鉴权：跳板机只能选已有 profile，凭据已在钥匙串。
         var jumpAuth: ResolvedAuth?
-        let jump = useJumpHost ? selectedJump : nil
+        let jump = draft.useJumpHost ? selectedJump : nil
         if let jump {
             do {
                 jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
@@ -363,8 +342,8 @@ struct ServerFormView: View {
 
         // 3. 用表单标量字段建快照（尚未保存，无 profile 可摘）。
         let snapshot = SSHConnection.ProfileSnapshot(
-            host: host.trimmingCharacters(in: .whitespaces),
-            port: Int(port.trimmingCharacters(in: .whitespaces)) ?? 22,
+            host: draft.trimmedHost,
+            port: draft.portValue,
             jumpHost: jump.map {
                 SSHConnection.ProfileSnapshot.JumpHostSnapshot(host: $0.host, port: $0.port)
             })
@@ -391,16 +370,16 @@ struct ServerFormView: View {
     /// 密码取表单输入，私钥正文 / 口令按所选密钥库条目从钥匙串读出。
     private func resolvedAuthFromForm() throws -> ResolvedAuth {
         let probe = ServerProfile()
-        probe.username = username.trimmingCharacters(in: .whitespaces)
-        probe.authMethod = authMethod
+        probe.username = draft.trimmedUsername
+        probe.authMethod = draft.auth
         var pem: String?
         var passphrase: String?
-        if authMethod == .privateKey, let keyID {
+        if draft.auth == .privateKey, let keyID = draft.keyID {
             pem = try keychain.load(profileID: keyID, kind: .privateKey)
             passphrase = try keychain.load(profileID: keyID, kind: .passphrase)
         }
         return try SSHAuthResolver.resolve(
-            profile: probe, password: password,
+            profile: probe, password: draft.password,
             privateKey: pem, passphrase: passphrase)
     }
 
@@ -415,61 +394,17 @@ struct ServerFormView: View {
     // MARK: - 载入 / 保存
 
     private func loadForEditing() {
-        // 编辑 → 用现有 profile；复制 → 用源 profile 预填但存为新。
-        guard let source = editing ?? duplicating else { return }
-        // 复制时给名字加「副本」后缀，避免与源同名混淆；编辑时保持原名。
-        name = editing == nil ? duplicateName(of: source.name) : source.name
-        host = source.host
-        port = String(source.port)
-        username = source.username
-        group = source.group ?? ""
-        authMethod = source.authMethod
-        keyID = source.keyID
-        sftpOnly = source.sftpOnly
-        password = (try? keychain.load(profileID: source.id, kind: .password)) ?? ""
-        if let jump = source.jumpHost {
-            useJumpHost = true
-            jumpProfileID = jump.id
+        // 编辑 → 用现有 profile；复制 → 用源 profile 预填（名字加「副本」）但存为新。
+        if let editing {
+            draft = HostDraft(from: editing, keychain: keychain)
+            original = draft
+        } else if let duplicating {
+            draft = HostDraft(duplicating: duplicating, keychain: keychain)
         }
-    }
-
-    /// 复制时的默认新名：`原名 副本`（原名为空则只 "副本"）。
-    private func duplicateName(of original: String) -> String {
-        let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "副本" : "\(trimmed) 副本"
     }
 
     private func save() {
-        let isNew = editing == nil
-        let profile = editing ?? ServerProfile()
-        profile.name = name
-        profile.host = host
-        profile.port = Int(port) ?? 22
-        profile.username = username
-        if isNew {
-            profile.sortOrder = ServerProfileStore(context: modelContext).nextSortOrder()
-        }
-        let trimmedGroup = group.trimmingCharacters(in: .whitespacesAndNewlines)
-        profile.group = trimmedGroup.isEmpty ? nil : trimmedGroup
-        if let g = profile.group {
-            GroupStore(context: modelContext).ensure(name: g)
-        }
-        profile.authMethod = authMethod
-        profile.sftpOnly = sftpOnly
-
-        if authMethod == .password {
-            try? keychain.save(password, profileID: profile.id, kind: .password)
-            profile.keyID = nil
-        } else {
-            profile.keyID = keyID
-            // 私钥正文不再按 profile.id 存（改由密钥库承载）；清掉可能存在的旧密码。
-            try? keychain.delete(profileID: profile.id, kind: .password)
-        }
-
-        profile.jumpHost = useJumpHost ? availableJumps.first { $0.id == jumpProfileID } : nil
-
-        if isNew { modelContext.insert(profile) }
-        try? modelContext.save()
+        draft.save(original: original, to: editing, context: modelContext, keychain: keychain)
         dismiss()
     }
 }
