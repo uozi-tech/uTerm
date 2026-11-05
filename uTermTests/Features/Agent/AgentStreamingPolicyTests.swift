@@ -58,6 +58,27 @@ final class AgentStreamingPolicyTests: XCTestCase {
         XCTAssertEqual(renderer.renderedSource, "ABC")
     }
 
+    /// iOS 打开的两个选项：按长度放大的节流间隔（8KB 一档、最多 5 倍），落定后走缓存。
+    func testMarkdownRendererScaledDelayAndSettledCache() async throws {
+        let base = Duration.milliseconds(100)
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 0), .milliseconds(100))
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 8_192), .milliseconds(200))
+        XCTAssertEqual(StreamingMarkdownRenderer.scaledDelay(base: base, bytes: 1_000_000), .milliseconds(500))
+
+        let cache = MarkdownDocumentCache(capacity: 2)
+        let renderer = StreamingMarkdownRenderer(reparseDelay: .milliseconds(20),
+                                                 scalesDelayWithLength: true, settledCache: cache)
+        renderer.renderImmediately("A", isStreaming: true)
+        renderer.update("AB", isStreaming: true)
+        renderer.update("ABC", isStreaming: true)
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(renderer.renderedSource, "ABC", "节流窗口到点解析的是最新文本")
+
+        renderer.update("**done**", isStreaming: false)
+        XCTAssertEqual(renderer.renderedSource, "**done**")
+        XCTAssertEqual(renderer.document.format(), cache.document(for: "**done**").format())
+    }
+
     // MARK: - 贴底滚动合并器
 
     func testTailScrollCoalescerFiresOncePerWindow() async throws {
