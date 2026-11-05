@@ -14,10 +14,25 @@ enum AccessibilityTreeForTests {
     private static let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
 
     static func enable(for testCase: XCTestCase) {
-        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        setEnhancedUserInterface(true)
         testCase.addTeardownBlock { @MainActor in
-            NSApp.accessibilitySetValue(false, forAttribute: attribute)
+            setEnhancedUserInterface(false)
         }
+    }
+
+    /// `AXEnhancedUserInterface` 是私有属性，NSAccessibility 协议里没有它的 setter，只能走老式的
+    /// `accessibilitySetValue(_:forAttribute:)`（macOS 10.10 起标废弃）。经 ObjC 运行时调，免编译期废弃警告。
+    private static func setEnhancedUserInterface(_ on: Bool) {
+        let selector = NSSelectorFromString("accessibilitySetValue:forAttribute:")
+        _ = NSApp.perform(selector, with: NSNumber(value: on), with: attribute.rawValue as NSString)
+    }
+
+    /// 元素的标准 AX 动作名（AXPress / AXScrollToVisible…），只用于诊断输出。
+    /// 协议版接口只有逐个动作的方法、没有「列出全部」，老式 `accessibilityActionNames()` 已废弃，同样经运行时调。
+    static func legacyActionNames(of element: AnyObject) -> [String] {
+        let selector = NSSelectorFromString("accessibilityActionNames")
+        guard element.responds(to: selector) else { return [] }
+        return element.perform(selector)?.takeUnretainedValue() as? [String] ?? []
     }
 }
 

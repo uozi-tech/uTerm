@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import NIOCore
-import NIOSSH
+@preconcurrency import NIOSSH
 import SwiftData
 import XCTest
 @testable import Citadel

@@ -8,11 +8,12 @@ import XCTest
 final class MobileTerminalKeyboardFlowTests: XCTestCase {
     private var window: UIWindow?
 
-    override func tearDown() {
+    // async 版 tearDown 跑在主 actor 上；同步版是 nonisolated，碰不了窗口与探针夹具。
+    override func tearDown() async throws {
         window?.isHidden = true
         window = nil
         MobileProbeWindow.closeAll()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     /// 已连接、各自挂在同一个真窗口里的终端（不在窗口里的视图当不了第一响应者）。

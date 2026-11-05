@@ -1233,7 +1233,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.Holder;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.holder;
 				PRODUCT_NAME = "uterm-holder";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1252,7 +1252,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/uterm-holder-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.Holder;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uozi.uTerm.holder;
 				PRODUCT_NAME = "uterm-holder";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

@@ -40,7 +40,9 @@ final class StyleGalleryTests: XCTestCase {
 
     private var outputDir: URL!
 
-    override func setUpWithError() throws {
+    // async 版 setUp 跑在主 actor 上；同步版是 nonisolated，写不了 outputDir。
+    override func setUp() async throws {
+        try await super.setUp()
         guard let dir = ProcessInfo.processInfo.environment["UTERM_STYLE_SHOTS_DIR"], !dir.isEmpty else {
             throw XCTSkip("未设置 UTERM_STYLE_SHOTS_DIR：样式画廊只按需跑")
         }

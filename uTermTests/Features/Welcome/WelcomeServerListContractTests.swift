@@ -150,7 +150,7 @@ final class WelcomeServerListContractTests: XCTestCase {
         let target = list[5]
         let element = try axElement(target.name, in: host)
         print("[ax-dump] class=\(type(of: element)) "
-              + "actionNames=\(element.accessibilityActionNames?() ?? []) "
+              + "actionNames=\(AccessibilityTreeForTests.legacyActionNames(of: element)) "
               + "custom=\((element.accessibilityCustomActions?() ?? []).map(\.name))")
 
         // SwiftUI 的 `.accessibilityAction(named:)` 在 AppKit 侧落成
@@ -160,7 +160,7 @@ final class WelcomeServerListContractTests: XCTestCase {
         let open = try XCTUnwrap(custom.first { $0.name.contains("打开") },
                                  "行必须暴露「打开」这个具名 AX 动作（双击的等价路径）："
                                  + "custom=\(custom.map(\.name)) "
-                                 + "standard=\(element.accessibilityActionNames?() ?? [])")
+                                 + "standard=\(AccessibilityTreeForTests.legacyActionNames(of: element))")
 
         _ = open.handler?()
         settle(host)

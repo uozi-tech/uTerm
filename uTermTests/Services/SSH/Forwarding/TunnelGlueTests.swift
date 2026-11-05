@@ -130,7 +130,7 @@ final class TunnelGlueTests: XCTestCase {
         XCTAssertEqual(total, responseLen,
             "晚于 A→B EOF 写出的 B→A 响应必须全部排空送达，未被早取消截断")
 
-        await glue.value
+        _ = await glue.value
         await stopA()
         await stopB()
         try? await group.shutdownGracefully()

@@ -490,7 +490,7 @@ final class RemoteDesktopCanvasView: UIView {
 
     func setKeyboardVisible(_ visible: Bool) {
         if visible, !keyInput.isFirstResponder {
-            keyInput.becomeFirstResponder()
+            _ = keyInput.becomeFirstResponder()
         } else if !visible, keyInput.isFirstResponder {
             keyInput.dismissKeyboard()
             becomeFirstResponder()

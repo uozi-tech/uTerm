@@ -6,17 +6,18 @@ final class TerminalSettingsTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName: String!
 
-    override func setUp() {
-        super.setUp()
+    // async 版 setUp / tearDown 跑在主 actor 上；同步版是 nonisolated，碰不了这两个主 actor 属性。
+    override func setUp() async throws {
+        try await super.setUp()
         suiteName = "TerminalSettingsTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     func test_fixed_font_constants() {

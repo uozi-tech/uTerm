@@ -5,9 +5,10 @@ import XCTest
 /// 远程桌面的键盘条：和终端共用外壳与面板（`MKeyBar`），发的是 Mac 键码。
 @MainActor
 final class RemoteDesktopKeyBarTests: XCTestCase {
-    override func tearDown() {
+    // async 版 tearDown 跑在主 actor 上；同步版是 nonisolated，碰不了窗口与探针夹具。
+    override func tearDown() async throws {
         MobileProbeWindow.closeAll()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func press(_ code: UInt16, _ modifiers: RemoteKeyModifiers = []) -> [RemoteDesktopInput] {

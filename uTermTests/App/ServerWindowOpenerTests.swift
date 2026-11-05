@@ -9,7 +9,9 @@ final class ServerWindowOpenerTests: XCTestCase {
     private var sftpWindows: [SFTPWindowID] = []
     private var workspaceWindows: [WorkspaceWindowID] = []
 
-    override func setUpWithError() throws {
+    // async 版 setUp 跑在主 actor 上；同步版是 nonisolated，改不了这几个主 actor 属性。
+    override func setUp() async throws {
+        try await super.setUp()
         let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: ServerProfile.self, configurations: config)
         context = ModelContext(container)

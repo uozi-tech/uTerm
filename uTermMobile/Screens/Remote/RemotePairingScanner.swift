@@ -141,14 +141,14 @@ private struct QRCodeCamera: UIViewControllerRepresentable {
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            let session = session
-            DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+            let box = CaptureSessionBox(session: session)
+            DispatchQueue.global(qos: .userInitiated).async { box.session.startRunning() }
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            let session = session
-            DispatchQueue.global(qos: .userInitiated).async { session.stopRunning() }
+            let box = CaptureSessionBox(session: session)
+            DispatchQueue.global(qos: .userInitiated).async { box.session.stopRunning() }
         }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject],
@@ -164,4 +164,10 @@ private struct QRCodeCamera: UIViewControllerRepresentable {
             }
         }
     }
+}
+
+/// `AVCaptureSession` 没标 `Sendable`，但 `startRunning()` / `stopRunning()` 会阻塞，Apple 的要求本来就是
+/// 放到后台队列调——跨线程调这两个方法是它支持的用法。只为把会话带进后台闭包，别拿它跨线程改配置。
+nonisolated private struct CaptureSessionBox: @unchecked Sendable {
+    let session: AVCaptureSession
 }

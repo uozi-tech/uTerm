@@ -100,7 +100,9 @@ actor LocalShellBackend: HeldTerminalBackend, TerminalImageReceiving {
         if foreground == shell { return .idle }
         var name = [CChar](repeating: 0, count: 256)
         let length = proc_name(foreground, &name, UInt32(name.count))
-        return .running(length > 0 ? String(cString: name) : nil)
+        guard length > 0 else { return .running(nil) }
+        let bytes = name.prefix(Int(length)).prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return .running(String(decoding: bytes, as: UTF8.self))
     }
 
     func close() async {

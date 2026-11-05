@@ -253,22 +253,14 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
     private func receive(_ message: SSHBridgeMessage) {
         switch message {
         case .verifyHostKey(let id, let key):
+            // 信任库的查 / 记都不抛错（存储失败在 `HostKeyVerifier` 内部吞掉），原来的 do/catch 走不到。
             Task { [self] in
-                do {
-                    send(.verifyResult(id: id, Self.verification(try await verifier.verify(key.packageKey))))
-                } catch {
-                    // 查不了信任记录就别继续握手。
-                    connection.close()
-                }
+                send(.verifyResult(id: id, Self.verification(await verifier.verify(key.packageKey))))
             }
         case .rememberHostKey(let id, let key):
             Task { [self] in
-                do {
-                    try await verifier.remember(key.packageKey)
-                    send(.rememberResult(id: id))
-                } catch {
-                    connection.close()
-                }
+                await verifier.remember(key.packageKey)
+                send(.rememberResult(id: id))
             }
         case .approveHostKey(let id, let challenge):
             Task { [self] in

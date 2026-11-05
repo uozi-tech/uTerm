@@ -14,10 +14,11 @@ final class MobileTerminalKeyboardTests: XCTestCase {
 
     private var window: UIWindow?
 
-    override func tearDown() {
+    // async 版 tearDown 跑在主 actor 上；同步版是 nonisolated，碰不了窗口与探针夹具。
+    override func tearDown() async throws {
         window?.isHidden = true
         window = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func host() throws -> (ModelContainer, ServerProfile, HostKeyChallengeRelay) {

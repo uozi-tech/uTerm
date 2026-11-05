@@ -94,9 +94,12 @@ final class SplitResizeProbeTests: XCTestCase {
         _ = await MobileFakeTerminal.waitUntilConnected(term.controller)
         try await Task.sleep(for: .seconds(2))
         let view = try XCTUnwrap(term.controller.terminalView)
-        var kb = CGRect.zero
+        // 通知闭包是 @Sendable，不能直接改捕获的 var；交给主 actor 上的盒子（队列就是 .main）。
+        let kbBox = KeyboardFrameBox()
+        var kb: CGRect { kbBox.rect }
         let obs = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidChangeFrameNotification, object: nil, queue: .main) { n in
-            kb = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
+            let rect = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
+            MainActor.assumeIsolated { kbBox.rect = rect }
         }
         defer { NotificationCenter.default.removeObserver(obs) }
         term.controller.ownsKeyboard = true
@@ -143,4 +146,10 @@ final class SplitResizeProbeTests: XCTestCase {
         print("KBPROBE grids-on-split=\(try await watchGrid(2))")
         term.controller.close()
     }
+}
+
+/// 键盘探针记下的最近一次键盘帧（通知回调在主队列上写、探针在主 actor 上读）。
+@MainActor
+private final class KeyboardFrameBox {
+    var rect = CGRect.zero
 }

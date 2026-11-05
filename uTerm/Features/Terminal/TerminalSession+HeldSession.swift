@@ -188,7 +188,7 @@ final class TerminalHeldCheckpoints {
         isDirty = false
         bytesSinceCapture = 0
         lastCapture = .now
-        let blob = terminal.snapshotSequence(scrollbackLimit: min(terminal.options.scrollback ?? 0, Self.maxScrollbackLines))
+        let blob = terminal.snapshotSequence(scrollbackLimit: min(terminal.options.scrollback, Self.maxScrollbackLines))
         link.checkpoint(offset: offset, cols: UInt16(clamping: terminal.cols), rows: UInt16(clamping: terminal.rows), blob: blob)
     }
 }
