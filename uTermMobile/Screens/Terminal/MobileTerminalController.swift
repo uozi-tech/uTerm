@@ -338,13 +338,12 @@ final class MobileTerminalController {
         Task { [weak self] in
             do {
                 let image = try await load()
-                let delivery = try await receiver.deliverImage(image)
+                let delivery = try await TerminalPaste.deliver(image: image, to: receiver) { self?.paste($0) }
                 guard let self else { return }
                 switch delivery {
                 case .clipboard:
                     self.showImageNote("图片已放进 Mac 剪贴板，并按了 Ctrl+V")
                 case .file(let path):
-                    self.paste(path + " ")
                     self.showImageNote("图片已传到 \(path)")
                 }
             } catch {
@@ -356,12 +355,12 @@ final class MobileTerminalController {
     /// 像系统粘贴一样送一段文字：终端开了 bracketed paste 就包上起止标记（程序据此认出是粘贴，
     /// 例如 Claude Code 把粘进来的图片路径当附件）。
     func paste(_ text: String) {
-        let bracketed = terminalView?.getTerminal().bracketedPasteMode ?? false
-        var data = Data()
-        if bracketed { data.append(contentsOf: Array("\u{1b}[200~".utf8)) }
-        data.append(Data(text.utf8))
-        if bracketed { data.append(contentsOf: Array("\u{1b}[201~".utf8)) }
-        write(data)
+        write(TerminalPaste.wrap(text, bracketed: bracketedPasteMode))
+    }
+
+    /// 终端里的程序有没有开括号粘贴（DECSET 2004）。
+    private var bracketedPasteMode: Bool {
+        terminalView?.getTerminal().bracketedPasteMode ?? false
     }
 
     private func showImageNote(_ note: String, sticky: Bool = false) {
@@ -381,8 +380,7 @@ final class MobileTerminalController {
 
     /// 把提示词交给终端里的程序，不提交。程序开了括号粘贴就按粘贴发，一次到达不会被拆开解读。
     func insertPrompt(_ text: String) {
-        let bracketed = terminalView?.getTerminal().bracketedPasteMode ?? false
-        sendText(bracketed ? "\u{1b}[200~\(text)\u{1b}[201~" : text)
+        paste(text)
     }
 
     /// 发送提示词并提交。回车必须隔一下单独发：Codex 把和文字同一包到达的回车当粘贴里的换行，
