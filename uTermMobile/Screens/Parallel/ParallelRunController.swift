@@ -1,65 +1,15 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - 状态类型（iOS 本地版，移植自 macOS ParallelRunTypes）
+// MARK: - 状态类型：与 macOS 共用 `ParallelRunTypes.swift`，这里只留 iOS 侧的旧名
 
-enum PMode: String, CaseIterable { case shell, ai }
-enum PStatus: Sendable, Equatable { case running, succeeded, failed }
-enum PTone: Sendable, Equatable { case running, ok, failed }
-
-struct PLine: Identifiable, Sendable {
-    enum Kind: Sendable { case cmd, out, ok, err }
-    let id = UUID()
-    let kind: Kind
-    let text: String
-}
-
-enum PFailure { case hostKeyUntrusted(HostKeyChallenge); case connection(String) }
-
-/// AI 泳道里的一步（模型下发的一条命令）。`PServerState.steps` 是落日志用的纯文本，
-/// 这个是给界面画「命令 + 结果」用的结构化版本，两者一一对应。
-struct PAgentStep: Identifiable, Sendable {
-    enum State: Sendable { case running, ok, failed, timedOut }
-    let id = UUID()
-    let command: String
-    let explanation: String?
-    var state: State = .running
-    var exitCode: Int?
-}
-
-@MainActor
-struct PServerState: Identifiable {
-    let id: UUID
-    let name: String
-    let endpoint: String
-    let endpointDisplay: String
-
-    var status: PStatus = .running
-    var exitCode: Int?
-    var durationMs: Int?
-    var lines: [PLine] = []
-
-    var tone: PTone = .running
-    var diagnosing = false
-    var summary = ""
-    var steps: [String] = []
-    var agentSteps: [PAgentStep] = []
-    /// 运行中这一刻在做什么（「正在分析结果…」「AI 服务繁忙，重试中…」）；落定后为 nil。
-    var activity: String?
-    var failure: PFailure?
-
-    var laneStatusText: String {
-        switch tone {
-        case .running: return diagnosing ? "诊断中…" : "执行中…"
-        case .ok:      return "成功"
-        case .failed:  return "失败"
-        }
-    }
-    var hostKeyUntrusted: Bool {
-        if case .hostKeyUntrusted = failure { return true }
-        return false
-    }
-}
+typealias PMode = ParallelViewMode
+typealias PStatus = ParallelRunStatus
+typealias PTone = ParallelLaneTone
+typealias PLine = ParallelTermLine
+typealias PFailure = ParallelLaneFailure
+typealias PAgentStep = ParallelAgentStep
+typealias PServerState = ParallelServerState
 
 // MARK: - 并行执行控制器（移植自 macOS ParallelRunModel；iOS 默认自动执行，无安全档位）
 

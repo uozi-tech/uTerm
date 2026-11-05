@@ -199,7 +199,6 @@
 				Features/LocalShell/LocalShellWindow.swift,
 				Features/LocalShell/LocalShellWorkspaces.swift,
 				Features/ParallelRun/ParallelRunModel.swift,
-				Features/ParallelRun/ParallelRunTypes.swift,
 				Features/ParallelRun/ParallelRunWindowID.swift,
 				Features/ParallelRun/Views/ParallelAgentView.swift,
 				Features/ParallelRun/Views/ParallelHostKeyCard.swift,

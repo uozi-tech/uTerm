@@ -3,15 +3,13 @@ import SwiftData
 
 /// 并行执行的执行器缝：**按主机起一条会话、按节拍回吐输出行、可取消、可失败**。
 ///
-/// 为什么要这条缝：`ParallelRunController` 原本在 `makeExecTarget` 里直接调
-/// `WorkspaceCommandExecutorFactory.make(server:container:…)` 现造真连接，于是
-/// 整屏（`ParallelRunView`）在测试里只能连真机器才跑得起来 —— 探针挂不上，
+/// macOS 与 iOS 共用（这个文件两个 target 都编）。没有这条缝时状态机在 `makeExecTarget` 里
+/// 直接现造真连接，整屏 / 整个状态机在测试里只能连真机器才跑得起来 —— 探针挂不上，
 /// 「24 台一起吐输出时主线程还剩多少」这类账根本量不到。
 ///
-/// 生产实现是 `SSHParallelExecutor`（原样包住那个工厂），探针注入
-/// `MobileFakeParallelRun`。**协议之外的生产路径逐行未改**：真实会话不使用
-/// `onLines`（SSH exec 只有命令跑完才拿得到完整输出），控制器照旧从返回的
-/// `CommandResult` 切行追加。
+/// 生产实现是 `SSHParallelExecutor`（包住 `WorkspaceCommandExecutorFactory`），测试与探针注入
+/// 假实现（iOS `MobileFakeParallelRun`）。真实会话不使用 `onLines`（SSH exec 只有命令跑完才拿得到
+/// 完整输出），状态机照旧从返回的 `CommandResult` 切行追加。
 @MainActor
 protocol ParallelCommandExecuting {
     /// 为一台主机开一条执行会话。真实实现在这里解析认证材料、准备复用连接；
@@ -44,7 +42,7 @@ nonisolated protocol ParallelExecutionSession: Sendable {
     ///   避免同一批输出被追加两遍。
     /// - Returns: 完整输出与退出码（供退出码判定与 AI 提示词使用）。
     func run(_ command: String,
-             onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult
+             onLines: @escaping @Sendable ([ParallelTermLine]) -> Void) async throws -> CommandResult
 
     /// 读取并清空本次建连记录下的 host-key 质询（有则 UI 摆指纹 +「信任并重试」）。
     func takeHostKeyChallenge() -> HostKeyChallenge?
@@ -98,7 +96,7 @@ nonisolated struct SSHParallelSession: ParallelExecutionSession {
 
     /// 真实 SSH 在看门狗下跑、结束时一次交付，所以**不吐中间行**，`onLines` 原样忽略。
     func run(_ command: String,
-             onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
+             onLines: @escaping @Sendable ([ParallelTermLine]) -> Void) async throws -> CommandResult {
         guard let executor else { throw ParallelExecutionUnavailable() }
         return try await executor.runSupervised(command)
     }
@@ -140,7 +138,7 @@ extension SSHCommandExecutor: ParallelExecutionSession {
     var setupErrorText: String? { nil }
 
     func run(_ command: String,
-             onLines: @escaping @Sendable ([PLine]) -> Void) async throws -> CommandResult {
+             onLines: @escaping @Sendable ([ParallelTermLine]) -> Void) async throws -> CommandResult {
         try await runSupervised(command)
     }
 
