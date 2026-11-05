@@ -92,12 +92,7 @@ struct WelcomeView: View {
         return true
     }
 
-    private var existingGroups: [String] {
-        Set(displayProfiles.compactMap { p -> String? in
-            let g = p.group ?? ""
-            return g.isEmpty ? nil : g
-        }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
+    private var existingGroups: [String] { ServerGrouping.existingNames(displayProfiles) }
 
     private var groupColorHexes: [String: String] {
         var result: [String: String] = [:]

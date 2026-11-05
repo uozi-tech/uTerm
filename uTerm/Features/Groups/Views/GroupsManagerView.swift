@@ -80,15 +80,7 @@ struct GroupsManagerView: View {
     /// 每个组名的成员数，**一趟聚合**。原来每行都 `GroupStore.members(of:in:profiles).count`
     /// 全表扫一遍：60 组 × 2000 台 = 每次 body 12 万次比较，而且每次比较都要过
     /// SwiftData 的属性访问器。这里一趟 O(profiles) 建字典，行里改成 O(1) 查表。
-    private var memberCounts: [String: Int] {
-        var counts: [String: Int] = [:]
-        for p in profiles {
-            let g = p.group ?? ""
-            guard !g.isEmpty else { continue }
-            counts[g, default: 0] += 1
-        }
-        return counts
-    }
+    private var memberCounts: [String: Int] { ServerGrouping.memberCounts(profiles) }
     private var ungroupedCount: Int { profiles.count - memberCounts.values.reduce(0, +) }
     private var totalHosts: Int { profiles.count }
     private var selectedGroup: ServerGroup? {
@@ -283,9 +275,14 @@ struct GroupsManagerView: View {
     // MARK: - 动作
 
     private func createGroup() {
-        guard let g = store.create(name: newGroupName) else { return }
-        newGroupName = ""
-        selection = .group(g.persistentModelID)
+        // 已有同名分组：照旧选中那一行，不另建。
+        switch store.createUnique(name: newGroupName) {
+        case .created(let g), .duplicate(let g):
+            newGroupName = ""
+            selection = .group(g.persistentModelID)
+        case .emptyName:
+            return
+        }
     }
 
     private func beginRename(_ g: ServerGroup) {

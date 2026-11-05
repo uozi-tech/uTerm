@@ -70,6 +70,14 @@ enum ServerGrouping {
         return counts
     }
 
+    /// 主机里出现过的非空分组名：去重 + 本地化升序（表单与右键菜单里的「已有分组」候选）。
+    static func existingNames(_ profiles: [ServerProfile]) -> [String] {
+        Set(profiles.compactMap { p -> String? in
+            let group = p.group ?? ""
+            return group.isEmpty ? nil : group
+        }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     /// 最近连接：有 `lastConnectedAt` 的按时间倒序，最多 `limit` 条。
     ///
     /// `limit` 的默认值与 `ServerFilter.apply` 的 `.recent` 段一致（20）——

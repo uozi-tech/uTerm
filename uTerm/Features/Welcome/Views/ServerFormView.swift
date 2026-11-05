@@ -289,12 +289,7 @@ struct ServerFormView: View {
     }
 
     /// 已有的非空分组名，去重 + locale 排序。
-    private var existingGroups: [String] {
-        Set(allProfiles.compactMap { p -> String? in
-            let g = p.group ?? ""
-            return g.isEmpty ? nil : g
-        }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
+    private var existingGroups: [String] { ServerGrouping.existingNames(allProfiles) }
 
     /// 标题：编辑 / 复制 / 新建。
     private var titleText: String {

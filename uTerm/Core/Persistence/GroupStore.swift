@@ -61,9 +61,29 @@ struct GroupStore {
     /// 新建空组（去空白；空名 nil；已存在返回原行）。
     @discardableResult
     func create(name: String) -> ServerGroup? {
+        switch createUnique(name: name) {
+        case .created(let group), .duplicate(let group): return group
+        case .emptyName: return nil
+        }
+    }
+
+    /// `createUnique` 的结果：调用方按需区分「新建了」与「已有同名」（macOS 选中已有行，iOS 提示重名）。
+    enum CreateResult {
+        case created(ServerGroup)
+        case duplicate(ServerGroup)
+        case emptyName
+    }
+
+    /// 新建空组：去首尾空白；空名 → `.emptyName`；已有同名 → `.duplicate(已有行)`，不改它的颜色；
+    /// 否则建新行（`colorHex` 为 nil 时按 palette 轮转配色）。
+    func createUnique(name: String, colorHex: String? = nil) -> CreateResult {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return ensure(name: trimmed)
+        guard !trimmed.isEmpty else { return .emptyName }
+        let descriptor = FetchDescriptor<ServerGroup>(predicate: #Predicate { $0.name == trimmed })
+        if let found = try? context.fetch(descriptor).first { return .duplicate(found) }
+        let group = ensure(name: trimmed)
+        if let colorHex, group.colorHex != colorHex { setColor(group, hex: colorHex) }
+        return .created(group)
     }
 
     /// 重命名。目标名被别的组占用 → false 不改；空名 → false；同名自身 → true no-op。

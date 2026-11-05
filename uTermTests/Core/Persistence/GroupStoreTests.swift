@@ -151,6 +151,53 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<ServerGroup>()).count, 1)
     }
 
+    func testCreateUniqueDistinguishesCreatedDuplicateAndEmpty() throws {
+        let ctx = try makeContext()
+        let store = GroupStore(context: ctx)
+        guard case .created(let g) = store.createUnique(name: "  prod ", colorHex: "#60a5fa") else {
+            return XCTFail("首次应新建")
+        }
+        XCTAssertEqual(g.name, "prod")
+        XCTAssertEqual(g.colorHex, "#60a5fa")
+        guard case .duplicate(let same) = store.createUnique(name: "prod", colorHex: "#f87171") else {
+            return XCTFail("同名应报 duplicate")
+        }
+        XCTAssertEqual(same.persistentModelID, g.persistentModelID)
+        XCTAssertEqual(same.colorHex, "#60a5fa", "重名时不改已有分组的颜色")
+        guard case .emptyName = store.createUnique(name: " \n ") else {
+            return XCTFail("空名应报 emptyName")
+        }
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<ServerGroup>()).count, 1)
+        XCTAssertFalse(ctx.hasChanges)
+    }
+
+    func testCreateUniqueWithoutColorUsesPaletteRotation() throws {
+        let ctx = try makeContext()
+        guard case .created(let g) = GroupStore(context: ctx).createUnique(name: "dev") else {
+            return XCTFail("应新建")
+        }
+        XCTAssertEqual(g.colorHex, GroupStore.nextColor(existingCount: 0))
+    }
+
+    func testMemberOpsAndDeleteThroughStore() throws {
+        let ctx = try makeContext()
+        let store = GroupStore(context: ctx)
+        let a = profile("a", group: nil), b = profile("b", group: nil)
+        ctx.insert(a); ctx.insert(b)
+        let g = store.ensure(name: "prod")
+        store.addMember(a, to: "prod")
+        store.addMember(b, to: "prod")
+        store.removeMember(b)
+        XCTAssertEqual(a.group, "prod")
+        XCTAssertNil(b.group)
+        store.setColor(g, hex: "#9aa7b5")
+        XCTAssertEqual(g.colorHex, "#9aa7b5")
+        store.delete(g)
+        XCTAssertNil(a.group, "删组后成员解组")
+        XCTAssertTrue(try ctx.fetch(FetchDescriptor<ServerGroup>()).isEmpty)
+        XCTAssertFalse(ctx.hasChanges)
+    }
+
     func testRenameUpdatesGroupAndMembers() throws {
         let ctx = try makeContext()
         let p = profile("p1", group: "dev"); ctx.insert(p)

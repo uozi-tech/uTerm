@@ -117,23 +117,24 @@ struct GroupFormSheet: View {
     }
 
     private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let store = GroupStore(context: context)
         if let group {
             // 走 GroupStore：查重名，并把成员主机的 `group` 一起改过去。
-            guard GroupStore(context: context).rename(group, to: trimmed) else {
+            guard store.rename(group, to: name) else {
                 duplicateName = true
                 return
             }
-            group.colorHex = colorHex
+            store.setColor(group, hex: colorHex)
         } else {
-            let sameName = FetchDescriptor<ServerGroup>(predicate: #Predicate { $0.name == trimmed })
-            guard ((try? context.fetchCount(sameName)) ?? 0) == 0 else {
+            switch store.createUnique(name: name, colorHex: colorHex) {
+            case .created: break
+            case .duplicate:
                 duplicateName = true
                 return
+            case .emptyName:
+                return
             }
-            GroupStore(context: context).ensure(name: trimmed).colorHex = colorHex
         }
-        try? context.save()
         dismiss()
     }
 }
@@ -221,7 +222,7 @@ struct GroupDetailView: View {
                 ForEach(ServerGroup.palette, id: \.self) { hex in
                     let (r, g, b) = groupHexRGB(hex)
                     let on = hex == group.colorHex
-                    Button { group.colorHex = hex; try? context.save() } label: {
+                    Button { GroupStore(context: context).setColor(group, hex: hex) } label: {
                         Color(.sRGB, red: r, green: g, blue: b)
                             .frame(width: 32, height: 32)
                             .overlay { if on { MIcon(name: "check", size: 15, color: .white, weight: .bold) } }
@@ -287,8 +288,8 @@ struct GroupDetailView: View {
             Text(h.name).font(M.mono(14)).foregroundStyle(M.text).lineLimit(1)
             Spacer(minLength: 6)
             Button {
-                if tab == 0 { h.group = nil } else { h.group = group.name }
-                try? context.save()
+                let store = GroupStore(context: context)
+                if tab == 0 { store.removeMember(h) } else { store.addMember(h, to: group.name) }
             } label: {
                 Text(tab == 0 ? "移出" : "+ 加入").font(M.sans(12.5, weight: .medium))
                     .foregroundStyle(tab == 0 ? M.text2 : accent)
@@ -311,9 +312,8 @@ struct GroupDetailView: View {
         if !GroupStore(context: context).rename(group, to: new) { duplicateName = true }
     }
     private func delete() {
-        for h in members { h.group = nil }
-        context.delete(group)
-        try? context.save()
+        // 成员解组 + 删行同一次 save。
+        GroupStore(context: context).delete(group)
         dismiss()
     }
 }

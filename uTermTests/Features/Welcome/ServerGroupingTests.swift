@@ -65,6 +65,19 @@ final class ServerGroupingTests: XCTestCase {
         }
     }
 
+    /// 已有分组名：去重、跳过 nil / 空串、本地化升序（`item10` 排在 `item9` 之后）。
+    func testExistingNamesDedupesSkipsBlankAndSortsLocalized() {
+        let profiles = WelcomeServerListCostTests.makeProfiles(count: 6, groups: 2)
+        profiles[0].group = "item10"
+        profiles[1].group = nil
+        profiles[2].group = "item9"
+        profiles[3].group = ""
+        profiles[4].group = "item10"
+        profiles[5].group = "Alpha"
+        XCTAssertEqual(ServerGrouping.existingNames(profiles), ["Alpha", "item9", "item10"])
+        XCTAssertEqual(ServerGrouping.existingNames([]), [])
+    }
+
     /// 空 / nil 组名都要落进「未分组」，且**保持首次出现的顺序**。
     func testGroupedPutsBlankAndNilIntoUngrouped() {
         let profiles = WelcomeServerListCostTests.makeProfiles(count: 6, groups: 2)
