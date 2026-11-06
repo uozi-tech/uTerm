@@ -102,40 +102,22 @@ struct SettingsPageHeader: View {
 struct SettingsGroup<Content: View>: View {
     let title: String?
     var footer: String?
-    /// 标题行右侧的附加内容（计数、小按钮）。
-    var accessory: AnyView?
     @ViewBuilder let content: () -> Content
 
     init(title: String?, footer: String? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.footer = footer
-        self.accessory = nil
-        self.content = content
-    }
-
-    init<Accessory: View>(title: String?, footer: String? = nil,
-                          @ViewBuilder accessory: () -> Accessory,
-                          @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self.footer = footer
-        self.accessory = AnyView(accessory())
         self.content = content
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if title != nil || accessory != nil {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let title {
-                        Text(title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(UD.text)
-                            .accessibilityAddTraits(.isHeader)
-                    }
-                    Spacer(minLength: 0)
-                    accessory
-                }
-                .padding(.horizontal, 2)
+            if let title {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(UD.text)
+                    .padding(.horizontal, 2)
+                    .accessibilityAddTraits(.isHeader)
             }
             Group(subviews: content()) { subviews in
                 if !subviews.isEmpty {

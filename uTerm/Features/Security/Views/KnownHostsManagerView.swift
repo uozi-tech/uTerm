@@ -150,6 +150,7 @@ private struct KnownHostRow: View {
                 Text(host.trustedDateText)
                     .font(UD.monoMetric)
                     .foregroundStyle(UD.text3)
+                    .fixedSize()
                 UDIconButton(systemImage: "trash", size: 26, style: .danger, action: onDelete)
                     .help("删除")
                     .accessibilityLabel("删除 \(host.displayAddress) 的指纹")
