@@ -142,6 +142,7 @@ LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 .PHONY: help test-fast test-relay-e2e test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
+	sync-strings sync-strings-build check-strings \
 	verify-distribution-signing notarize staple \
 	archive-mobile export-mobile verify-mobile-signing upload-mobile notify-mobile \
 	testflight-notes-mobile release-mobile \
@@ -165,6 +166,8 @@ help:
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
 	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
 	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
+	@printf '%s\n' '  make sync-strings                      Build both targets, merge new strings into Localizable.xcstrings'
+	@printf '%s\n' '  make check-strings                     Same, but only fail if the catalog is behind the code'
 	@printf '%s\n' '  make clean                             Remove build artifacts'
 	@printf '%s\n' '  make dmg                               Archive, export and package build/uTerm.dmg'
 	@printf '%s\n' '  make install                           Install the app to /Applications'
@@ -330,6 +333,46 @@ test-mobile:
 		-derivedDataPath "$(DERIVED_DATA)" \
 		$(MOBILE_PACKAGE_ARGS) \
 		test
+
+# 把代码里的文案合进 String Catalog，不用在 Xcode 里按 ⌘B。
+# 编译器按 SWIFT_EMIT_LOC_STRINGS 给每个源文件吐 .stringsdata，Xcode 的 IDE 在构建后把它们合进
+# .xcstrings——这一步 xcodebuild 不做、xcstringstool sync 会删光未翻译的键，所以用
+# scripts/sync-strings.swift 自己合（格式逐字节对齐 Xcode，自测 scripts/sync-strings.test.sh）。
+# 两端都要先编一遍：mac-only 文件的文案只有 uTerm 构建才产出，反之亦然；只给一端会把另一端独有的键
+# 当成「代码里没了」删掉。构建产物与 make test-fast 共用 DerivedData 的 Debug，通常是增量。
+STRINGS_CATALOG := uTerm/Localizable.xcstrings
+SYNC_STRINGS_TOOL := $(BUILD_DIR)/tools/sync-strings
+STRINGSDATA_MAC := $(DERIVED_DATA)/Build/Intermediates.noindex/uTerm.build/$(TEST_CONFIGURATION)/uTerm.build/Objects-normal
+STRINGSDATA_MOBILE := $(DERIVED_DATA)/Build/Intermediates.noindex/uTerm.build/$(TEST_CONFIGURATION)-iphonesimulator/$(MOBILE_SCHEME).build/Objects-normal
+
+$(SYNC_STRINGS_TOOL): scripts/sync-strings.swift
+	mkdir -p "$(dir $@)"
+	swiftc -O -o "$@" "$<"
+
+sync-strings-build:
+	xcodebuild build -quiet \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		$(PACKAGE_ARGS)
+	xcodebuild build -quiet \
+		-project "$(PROJECT)" \
+		-scheme "$(MOBILE_SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "generic/platform=iOS Simulator" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		$(MOBILE_PACKAGE_ARGS)
+
+sync-strings: sync-strings-build $(SYNC_STRINGS_TOOL)
+	"$(SYNC_STRINGS_TOOL)" --catalog "$(STRINGS_CATALOG)" \
+		--stringsdata-dir "$(STRINGSDATA_MAC)" --stringsdata-dir "$(STRINGSDATA_MOBILE)"
+
+# 只核不写：目录落后于代码时非零退出（给 CI / 发版前自检用）。
+check-strings: sync-strings-build $(SYNC_STRINGS_TOOL)
+	"$(SYNC_STRINGS_TOOL)" --catalog "$(STRINGS_CATALOG)" --check \
+		--stringsdata-dir "$(STRINGSDATA_MAC)" --stringsdata-dir "$(STRINGSDATA_MOBILE)"
 
 # 命令行客户端的离线自测：起一个假的 Unix socket 服务端，把每个子命令跑一遍
 # （请求编码 / 输出格式化 / 退出码映射）。不需要 Xcode，也不需要 uTerm 在跑。
