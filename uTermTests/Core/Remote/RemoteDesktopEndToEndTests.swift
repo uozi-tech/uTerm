@@ -349,8 +349,11 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         _ = try await link.establish(role: .initiator,
                                      hello: RemoteHello(version: 1, deviceID: id, deviceName: "原始手机",
                                                         ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                                        staticKey: phone.publicKey.rawRepresentation),
+                                                        staticKey: phone.publicKey.rawRepresentation,
+                                                        // 只带密钥确认（Mac 硬要求），其余能力都不报：模拟最老的手机。
+                                                        features: [RemoteFeature.keyConfirmation]),
                                      staticKey: phone, ephemeralKey: ephemeral)
+        link.send(RemoteMessage(.keyConfirm))
         let paired = await waitUntil { inbox.of(.pairing).count == 1 }
         XCTAssertTrue(paired)
         link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(
