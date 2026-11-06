@@ -546,6 +546,9 @@ final class RemoteMacClient: Identifiable {
     /// 远控终端里能不能贴图片（老 Mac 收到 `terminalImage` 会断开整条连接）。
     var supportsTerminalImage: Bool { macFeatures.contains(RemoteFeature.terminalImage) }
 
+    /// 贴图等 Mac 回复的上限：SSH 会话要先把图片传到服务器上。
+    private static let terminalImageTimeout = Duration.seconds(60)
+
     /// 把一张图片交给接入的终端，等 Mac 处理完：本机 shell 放进 Mac 剪贴板并按了 Ctrl+V（`.clipboard`），
     /// SSH 会话传成了服务器上的文件（`.file`，路径由调用方粘进终端）。
     func sendTerminalImage(_ image: TerminalImage, over attachment: RemoteAttachment) async throws -> TerminalImageDelivery {
@@ -555,11 +558,19 @@ final class RemoteMacClient: Identifiable {
         guard image.data.count <= RemoteTerminalImageRequest.maxImageBytes else {
             throw TerminalImageError.unsupported("图片太大了")
         }
+        // 重连的空档里调用方手上可能还是旧连接的接入：发出去不会有回音，断开时也不会被收尾（只认当前连接）。
+        guard attachment.link === link else { throw RemoteProtocolError.closed }
         let request = RemoteTerminalImageRequest(requestID: UUID(), image: image)
+        let requestID = request.requestID
         let result = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<RemoteTerminalImageResult, Error>) in
-            imageWaiters[request.requestID] = continuation
+            imageWaiters[requestID] = continuation
             attachment.link.send(RemoteMessage(.terminalImage, channel: attachment.channel, payload: request.encoded()))
+            // Mac 一直不回（处理途中出错、旧版本丢了请求）也不能让贴图一直转圈。
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.terminalImageTimeout)
+                self?.imageWaiters.removeValue(forKey: requestID)?.resume(throwing: RemoteProtocolError.timeout)
+            }
         }
         if let error = result.error { throw TerminalImageError.unsupported(error) }
         return result.path.map { .file(path: $0) } ?? .clipboard
