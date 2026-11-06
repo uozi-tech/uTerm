@@ -268,20 +268,20 @@ func TestBindingSurvivesRestartAndForgetClearsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := store.BindHost("mac", "key-a"); !ok || err != nil {
+	if ok, err := store.BindHost("mac", "key-a", DefaultLimits().Bindings); !ok || err != nil {
 		t.Fatalf("first bind: %v %v", ok, err)
 	}
 	reopened, err := OpenStore(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := reopened.BindHost("mac", "key-b"); ok {
+	if ok, _ := reopened.BindHost("mac", "key-b", DefaultLimits().Bindings); ok {
 		t.Fatal("binding was lost across restart")
 	}
 	if err := reopened.Forget("mac"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := reopened.BindHost("mac", "key-b"); !ok {
+	if ok, _ := reopened.BindHost("mac", "key-b", DefaultLimits().Bindings); !ok {
 		t.Fatal("forget did not clear the binding")
 	}
 }
@@ -488,6 +488,70 @@ func TestLimitsAreEnforced(t *testing.T) {
 	}
 }
 
+func TestConcurrentRegistrationsStayWithinHostLimit(t *testing.T) {
+	limits := testLimits()
+	limits.Hosts = 3
+	h := newHarness(t, limits)
+	const attempts = 24
+	var (
+		group    sync.WaitGroup
+		mu       sync.Mutex
+		accepted int
+	)
+	for index := 0; index < attempts; index++ {
+		key := newKey(t)
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			conn, answer := h.tryRegister(fmt.Sprintf("mac-%d", index), key, h.member)
+			t.Cleanup(func() { conn.Close() })
+			if answer.OK {
+				mu.Lock()
+				accepted++
+				mu.Unlock()
+			}
+		}()
+	}
+	group.Wait()
+	if accepted != limits.Hosts {
+		t.Fatalf("%d hosts registered, limit %d", accepted, limits.Hosts)
+	}
+	if online := len(h.server.Status().Hosts); online != limits.Hosts {
+		t.Fatalf("%d hosts online, limit %d", online, limits.Hosts)
+	}
+}
+
+func TestBindingLimitRefusesNewHostIDsButKeepsKnownOnes(t *testing.T) {
+	limits := testLimits()
+	limits.Bindings = 2
+	h := newHarness(t, limits)
+	first, second := newKey(t), newKey(t)
+	h.registerHost("mac-1", first).Close()
+	h.registerHost("mac-2", second).Close()
+	waitFor(t, func() bool { return len(h.server.Status().Hosts) == 0 })
+
+	if _, answer := h.tryRegister("mac-3", newKey(t), h.member); answer.Reason != reasonFull {
+		t.Fatalf("a third host ID was bound: %+v", answer)
+	}
+	h.registerHost("mac-1", first)
+	if _, answer := h.tryRegister("mac-2", newKey(t), h.member); answer.Reason != reasonHostKey {
+		t.Fatalf("a full store must still check known IDs: %+v", answer)
+	}
+	if err := h.store.Forget("mac-2"); err != nil {
+		t.Fatal(err)
+	}
+	h.registerHost("mac-3", newKey(t))
+
+	data, err := os.ReadFile(h.store.hostsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]string
+	if err := json.Unmarshal(data, &saved); err != nil || len(saved) != limits.Bindings {
+		t.Fatalf("hosts.json holds %v (%v)", saved, err)
+	}
+}
+
 func TestRateLimitPerAddress(t *testing.T) {
 	limiter := newRateLimiter(2, time.Second)
 	address := netip.MustParseAddr("192.0.2.1")
@@ -599,9 +663,7 @@ func TestSTUNAnswersBindingWithXorMappedAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	request := make([]byte, 20)
-	binary.BigEndian.PutUint16(request, stunBindingRequest)
-	binary.BigEndian.PutUint32(request[4:], stunMagicCookie)
+	request := libjuiceBindingRequest()
 	copy(request[8:], "transaction!")
 	conn.Write(request)
 
@@ -631,11 +693,76 @@ func TestSTUNAnswersBindingWithXorMappedAddress(t *testing.T) {
 	}
 }
 
+// stunBindingRequestOfSize builds a Binding Request of exactly `size` bytes, the attributes being one
+// comprehension-optional padding attribute that the relay doesn't read.
+func stunBindingRequestOfSize(size int) []byte {
+	request := make([]byte, size)
+	binary.BigEndian.PutUint16(request, stunBindingRequest)
+	binary.BigEndian.PutUint16(request[2:], uint16(size-stunHeaderBytes))
+	binary.BigEndian.PutUint32(request[4:], stunMagicCookie)
+	if size > stunHeaderBytes {
+		binary.BigEndian.PutUint16(request[20:], 0x8026)
+		binary.BigEndian.PutUint16(request[22:], uint16(size-stunHeaderBytes-4))
+	}
+	return request
+}
+
+// libjuiceBindingRequest is what the app's ICE agent sends a STUN server: SOFTWARE "libjuice" and
+// FINGERPRINT, 40 bytes.
+func libjuiceBindingRequest() []byte {
+	request := make([]byte, stunHeaderBytes, 40)
+	binary.BigEndian.PutUint16(request, stunBindingRequest)
+	binary.BigEndian.PutUint16(request[2:], 20)
+	binary.BigEndian.PutUint32(request[4:], stunMagicCookie)
+	request = binary.BigEndian.AppendUint16(request, 0x8022)
+	request = binary.BigEndian.AppendUint16(request, 8)
+	request = append(request, "libjuice"...)
+	request = binary.BigEndian.AppendUint16(request, 0x8028)
+	request = binary.BigEndian.AppendUint16(request, 4)
+	return binary.BigEndian.AppendUint32(request, 0xDEADBEEF)
+}
+
+func TestSTUNNeverAnswersWithMoreBytesThanItGot(t *testing.T) {
+	sources := []netip.AddrPort{
+		netip.MustParseAddrPort("192.0.2.1:1000"),
+		netip.MustParseAddrPort("[2001:db8::1]:1000"),
+	}
+	for _, from := range sources {
+		for size := stunHeaderBytes; size <= 64; size += 4 {
+			request := stunBindingRequestOfSize(size)
+			if response := stunResponse(request, from); len(response) > len(request) {
+				t.Fatalf("%v: %d-byte request got %d bytes", from, size, len(response))
+			}
+		}
+	}
+	if stunResponse(stunBindingRequestOfSize(stunHeaderBytes), sources[0]) != nil {
+		t.Fatal("a bare 20-byte request must not be answered")
+	}
+}
+
+func TestSTUNAnswersWhatLibjuiceSends(t *testing.T) {
+	request := libjuiceBindingRequest()
+	if len(request) != 40 {
+		t.Fatalf("request is %d bytes", len(request))
+	}
+	if response := stunResponse(request, netip.MustParseAddrPort("192.0.2.1:1000")); len(response) != 32 ||
+		binary.BigEndian.Uint16(response) != stunBindingResponse {
+		t.Fatalf("IPv4 answer % x", response)
+	}
+	// The IPv6 address doesn't fit in 40 bytes: a prompt 500 keeps libjuice from retrying for twenty seconds.
+	response := stunResponse(request, netip.MustParseAddrPort("[2001:db8::1]:1000"))
+	if len(response) != stunErrorBytes || binary.BigEndian.Uint16(response) != stunBindingError ||
+		!bytes.Equal(response[4:20], request[4:20]) {
+		t.Fatalf("IPv6 answer % x", response)
+	}
+	if binary.BigEndian.Uint16(response[20:]) != stunErrorCode || int(response[26])*100+int(response[27]) != 500 {
+		t.Fatalf("error code % x", response[20:])
+	}
+}
+
 func TestSTUNIgnoresEverythingElse(t *testing.T) {
 	from := netip.MustParseAddrPort("192.0.2.1:1000")
-	valid := make([]byte, 20)
-	binary.BigEndian.PutUint16(valid, stunBindingRequest)
-	binary.BigEndian.PutUint32(valid[4:], stunMagicCookie)
+	valid := libjuiceBindingRequest()
 	if stunResponse(valid, from) == nil {
 		t.Fatal("valid request ignored")
 	}
@@ -652,9 +779,7 @@ func TestSTUNIgnoresEverythingElse(t *testing.T) {
 }
 
 func TestSTUNEncodesIPv6(t *testing.T) {
-	request := make([]byte, 20)
-	binary.BigEndian.PutUint16(request, stunBindingRequest)
-	binary.BigEndian.PutUint32(request[4:], stunMagicCookie)
+	request := stunBindingRequestOfSize(20 + 4 + 20)
 	response := stunResponse(request, netip.MustParseAddrPort("[2001:db8::1]:1000"))
 	if len(response) != 20+4+20 || response[25] != 2 {
 		t.Fatalf("bad IPv6 answer % x", response)

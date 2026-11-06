@@ -215,12 +215,20 @@ func (s *Store) Rotate() error {
 	return s.saveHostsLocked()
 }
 
-// BindHost records hostID → key the first time and checks it afterwards.
-func (s *Store) BindHost(hostID, key string) (bool, error) {
+// errBindingsFull means hosts.json already holds the most bindings the relay keeps.
+var errBindingsFull = errors.New("host bindings are full")
+
+// BindHost records hostID → key the first time and checks it afterwards. Every member shares one key,
+// so without a limit any of them could grow hosts.json forever with made-up host IDs. A full store still
+// checks the IDs it already holds; new ones fail with errBindingsFull until `forget` frees a slot.
+func (s *Store) BindHost(hostID, key string, limit int) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if bound, ok := s.hosts[hostID]; ok {
 		return bound == key, nil
+	}
+	if len(s.hosts) >= limit {
+		return false, errBindingsFull
 	}
 	s.hosts[hostID] = key
 	return true, s.saveHostsLocked()

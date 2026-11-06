@@ -52,7 +52,7 @@ docker compose exec relay /uterm-relay status
 | `config` / `config-url` | 打印配置（JSON / 二维码链接） |
 | `status` | 在线主机和连接数 |
 | `rotate` | 换成员密钥并断开所有连接，所有设备要重新导入。配置泄露时用 |
-| `forget <主机 ID>` | 解除主机 ID 与其密钥的绑定，Mac 重装后用 |
+| `forget <主机 ID>` | 解除主机 ID 与其密钥的绑定，Mac 重装后用；绑定满了（1024 个）新 Mac 注册不上时也用它腾位置 |
 
 ## 限制
 

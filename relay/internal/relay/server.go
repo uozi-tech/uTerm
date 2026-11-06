@@ -17,6 +17,7 @@ import (
 // Limits bound what one relay holds. Tests shrink the timeouts.
 type Limits struct {
 	Hosts          int
+	Bindings       int // host ID → key bindings kept in hosts.json, online or not
 	TicketsPerHost int
 	Splices        int
 	Controls       int
@@ -33,7 +34,7 @@ type Limits struct {
 // DefaultLimits are the production values, documented in PROTOCOL.md.
 func DefaultLimits() Limits {
 	return Limits{
-		Hosts: 64, TicketsPerHost: 32, Splices: 512, Controls: 256, Unauthed: 64,
+		Hosts: 64, Bindings: 1024, TicketsPerHost: 32, Splices: 512, Controls: 256, Unauthed: 64,
 		RatePerIP: 60, RateWindow: 10 * time.Second,
 		RequestTimeout: 5 * time.Second, TicketLife: 10 * time.Second,
 		HostSilence: 200 * time.Second, ClientSilence: 200 * time.Second,
@@ -313,27 +314,30 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 		writeFrame(conn, answerFrame{Reason: reasonHostKey})
 		return
 	}
-	s.mu.Lock()
-	if _, online := s.hosts[request.HostID]; !online && len(s.hosts) >= s.limits.Hosts {
-		s.mu.Unlock()
+	bound, err := s.store.BindHost(request.HostID, request.HostKey, s.limits.Bindings)
+	switch {
+	case errors.Is(err, errBindingsFull):
 		writeFrame(conn, answerFrame{Reason: reasonFull})
 		return
-	}
-	s.mu.Unlock()
-	bound, err := s.store.BindHost(request.HostID, request.HostKey)
-	if err != nil {
+	case err != nil:
 		log.Printf("uterm-relay: saving host binding: %v", err)
 		writeFrame(conn, answerFrame{Reason: reasonFull})
 		return
-	}
-	if !bound {
+	case !bound:
 		writeFrame(conn, answerFrame{Reason: reasonHostKey})
 		return
 	}
 
 	host := &control{conn: conn, hostID: request.HostID, hostKey: request.HostKey, tickets: map[string]struct{}{}}
+	// The capacity check and the insert share one critical section, or concurrent registrations could
+	// all pass the check before any of them is counted.
 	s.mu.Lock()
-	previous := s.hosts[request.HostID]
+	previous, online := s.hosts[request.HostID]
+	if !online && len(s.hosts) >= s.limits.Hosts {
+		s.mu.Unlock()
+		writeFrame(conn, answerFrame{Reason: reasonFull})
+		return
+	}
 	s.hosts[request.HostID] = host
 	s.mu.Unlock()
 	if previous != nil {
