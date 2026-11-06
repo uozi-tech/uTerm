@@ -43,7 +43,8 @@ nonisolated struct RemotePathDialer: Sendable {
         let attempt = allowsDirect ? await startDirect() : nil
         defer { attempt?.close() }
         let offer = RemoteSignalBody(kind: .offer, deviceID: localID, sentAt: Date().timeIntervalSince1970,
-                                     nonce: RemoteSignalBody.newNonce(), ice: attempt?.localDescription())
+                                     nonce: RemoteSignalBody.newNonce(),
+                                     ice: attempt?.localDescription().map { RemoteICEDescriptionFilter.keep($0, family: nil) })
         let sealed = try RemoteSignalBox.seal(offer, key: shared, session: session, direction: .phoneToMac)
         let replyBox = try await relay.signal(to: mac.id, from: localID, session: session, box: sealed)
         let reply: RemoteSignalBody
@@ -84,7 +85,9 @@ nonisolated struct RemotePathDialer: Sendable {
     }
 
     private func connectDirect(_ attempt: RemoteDirectAttempt, remote: String, keys: RemoteDirectKeys) async -> RemoteP2PTransport? {
-        guard attempt.setRemote(remote) else { return nil }
+        // 链路本地与 ULA 不出公网：同一局域网里本来就走 Bonjour 那条路。不去掉的话，手机插着线时会经 USB 或
+        // devicectl 调试隧道「直连」，看着通，其实测不到公网。
+        guard attempt.setRemote(RemoteICEDescriptionFilter.keep(remote, family: nil)) else { return nil }
         guard await attempt.waitForConnection(limit: RemoteDirectAttempt.connectLimit) else {
             AppLogger.info("打洞没打通，改走中继", category: RemoteLog.category)
             return nil

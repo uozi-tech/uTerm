@@ -49,6 +49,17 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var sidecarRefine: Bool? = nil
     /// 手机能从数据报通道收视频。路径是公网直连时 Mac 才会用；老 Mac 不认这个键，照旧走可靠通道。
     var videoDatagrams: Bool? = nil
+    /// 手机要画面往返读数（`desktopLatency`），显示在调试信息里。老 Mac 不认这个键，什么都不发。
+    var latencyStats: Bool? = nil
+}
+
+/// Mac → 手机：画面往返（`desktopLatency`），有画面在走时每 2 s 一条。
+///
+/// 往返 = Mac 采集这一帧 → 手机解码完回确认 → Mac 收到确认。它约等于手机上的一次操作到看见结果：
+/// 输入去 Mac 的半程 + 画面回手机的半程，正好对上确认回程 + 画面去程。手机自己量不了：帧上的采集时刻是 Mac 的钟。
+nonisolated struct RemoteDesktopLatency: Codable, Equatable, Sendable {
+    var p50Millis: Int
+    var p95Millis: Int
 }
 
 /// Mac → 手机：开流结果（`desktopStarted`，通道 = 这条桌面流的通道）。

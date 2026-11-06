@@ -150,8 +150,10 @@ struct RemoteDesktopScreen: View {
             let base = session.canControl ? "触控板模式" : "只能查看"
             guard showStats else { return base }
             let stats = session.stats
-            return String(format: "%@ · %.0f fps · %.1f Mbps · 解码 %.1f ms", base, stats.framesPerSecond,
-                          stats.megabitsPerSecond, stats.decodeMillis)
+            // 延迟放最前：最先要看的是「点一下多久见到结果」，其余是排查用的分项。
+            let latency = session.latency.map { "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）· " } ?? ""
+            return base + " · " + latency + String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
+                                                   stats.megabitsPerSecond, stats.decodeMillis)
         case .idle, .connecting: return "正在连接…"
         case .reconnecting: return "连接中断，正在重连…"
         case .failed: return "连接失败"

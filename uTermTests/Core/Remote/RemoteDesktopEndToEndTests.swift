@@ -246,6 +246,52 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         for frame in frames { _ = try decoder.decode(frame) }
     }
 
+    // MARK: - 画面往返读数
+
+    /// 新手机开流时要了读数：画面在走时 Mac 每 2 s 报一次往返，手机拿来显示「延迟」。
+    func test_latency_readings_reach_a_phone_that_asked_for_them() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let source = try XCTUnwrap(mac.latestSource)
+        let reported = await waitUntil(6) {
+            _ = source.emit()
+            try? await Task.sleep(for: .milliseconds(50))
+            return session.latency != nil
+        }
+        XCTAssertTrue(reported, "画面在走 6 s 内应收到往返读数（已收 \(screen.frames.count) 帧）")
+        let latency = try XCTUnwrap(session.latency)
+        XCTAssertGreaterThan(latency.p50Millis, 0)
+        XCTAssertGreaterThanOrEqual(latency.p95Millis, latency.p50Millis)
+    }
+
+    /// 老手机不认 `desktopLatency`（解析会当成坏消息断开），开流请求里没要就一条也不能发。
+    func test_old_phone_never_gets_latency_readings() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        client.disconnect()
+        let (link, inbox, channel) = try await rawPhone(server)
+        defer { link.close() }
+        let source = try XCTUnwrap(mac.latestSource)
+        var acknowledged = 0
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            _ = source.emit()
+            let frames = (try? inbox.of(.desktopFrame).map { try RemoteDesktopFrame(decoding: $0.payload) }) ?? []
+            for frame in frames.dropFirst(acknowledged) {
+                link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
+                    sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 1000).encoded()))
+            }
+            acknowledged = frames.count
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertGreaterThan(acknowledged, 10, "要有足够的帧走完 2 s 的记录周期")
+        XCTAssertTrue(inbox.of(.desktopLatency).isEmpty, "没要读数的手机不能收到 desktopLatency")
+    }
+
     // MARK: - 背压（真实服务端 + 不回确认的原始客户端）
 
     func test_streamer_stops_at_two_unacknowledged_frames_and_sends_latest_after_ack() async throws {

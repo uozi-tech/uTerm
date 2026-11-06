@@ -30,6 +30,8 @@ final class RemoteDesktopSession {
     private(set) var info: RemoteDesktopInfo?
     /// 每秒刷新一次的读数（帧率、码率、解码耗时），给界面上的小字用。
     private(set) var stats = RemoteDesktopReceiverStats.Snapshot()
+    /// Mac 报来的画面往返（≈ 一次操作到看见结果）；老 Mac 不报，一直是 nil。
+    private(set) var latency: RemoteDesktopLatency?
 
     nonisolated let receiver: RemoteDesktopReceiver
     let client: RemoteMacClient
@@ -106,7 +108,7 @@ final class RemoteDesktopSession {
             onMessage: { message, link in receiver.receive(message, from: link, generation: current) }
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
-                                                sidecarRefine: true)
+                                                sidecarRefine: true, latencyStats: true)
         let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
             receiver.attachVideo(video, link: link, generation: current)
         })
@@ -193,8 +195,10 @@ final class RemoteDesktopSession {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 let snapshot = receiver.stats.snapshot()
+                let latency = receiver.latestLatency
                 guard let self else { return }
                 self.stats = snapshot
+                if self.latency != latency { self.latency = latency }
             }
         }
     }
@@ -272,6 +276,13 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     private var lastKeyframeRequest: UInt64 = 0
     private var onImage: (@Sendable (CVPixelBuffer, RemoteDesktopFrame) -> Void)?
     private var onCursor: (@Sendable (RemoteDesktopCursor) -> Void)?
+    private var latestLatencyValue: RemoteDesktopLatency?
+
+    /// Mac 最近报的画面往返。
+    var latestLatency: RemoteDesktopLatency? {
+        lock.lock(); defer { lock.unlock() }
+        return latestLatencyValue
+    }
     private var video: (any RemoteVideoDatagramChannel)?
     // 以下只在解码队列上。
     /// 参考链断了，在等恢复帧（关键帧或 LTR 刷新帧）。
@@ -377,6 +388,9 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
             let payload = message.payload
             let channel = message.channel
             decodeQueue.async { self.decode(payload, channel: channel, link: link, generation: generation) }
+        case .desktopLatency:
+            guard let latency = try? JSONDecoder().decode(RemoteDesktopLatency.self, from: message.payload) else { return }
+            lock.lock(); latestLatencyValue = latency; lock.unlock()
         default:
             break
         }

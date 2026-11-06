@@ -93,9 +93,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var lastCursor: RemoteDesktopCursor?
     /// 码控日志：上一次打印时的读数（真机 Wi-Fi 上看码率为什么上不去，只有这一个来源）。
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
+    /// 手机开流时要了画面往返读数：随码控日志每 2 s 发一条 `desktopLatency`。
+    private let sendsLatency: Bool
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
-         display: RemoteDesktopDisplay, sidecarRefine: Bool = false, path: RemoteLinkPath = .localNetwork,
+         display: RemoteDesktopDisplay, sidecarRefine: Bool = false, sendsLatency: Bool = false,
+         path: RemoteLinkPath = .localNetwork,
          video: (any RemoteVideoDatagramChannel)? = nil, source: any RemoteDesktopFrameSource,
          injector: (any RemoteDesktopInputSink)?, cursorLocation: (@Sendable () -> CGPoint?)?,
          onFirstInput: @escaping @Sendable () -> Void, onSourceStopped: @escaping @Sendable (Error?) -> Void) {
@@ -106,6 +109,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.height = height
         self.display = display
         self.sidecarRefine = sidecarRefine
+        self.sendsLatency = sendsLatency
         self.video = video
         self.source = source
         self.injector = injector
@@ -349,6 +353,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                    current.lostFrames)
         } ?? ""
         AppLogger.info(message + link, category: RemoteLog.category)
+        if sendsLatency, !trips.isEmpty,
+           let payload = try? JSONEncoder().encode(RemoteDesktopLatency(p50Millis: Int(percentile(0.5).rounded()),
+                                                                        p95Millis: Int(percentile(0.95).rounded()))) {
+            self.link.sendOnQueue(RemoteMessage(.desktopLatency, channel: channel, payload: payload))
+        }
     }
 
     /// 主流的一帧编完（nil = 码控丢了）：按丢帧与预算用量调 QP 上限。

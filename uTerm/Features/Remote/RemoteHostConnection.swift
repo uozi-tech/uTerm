@@ -257,7 +257,7 @@ final class RemoteHostConnection {
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
-             .desktopCursor, .localShellOpened, .terminalImageResult, .localWorkspaces:
+             .desktopCursor, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces:
             break
         }
     }
@@ -441,7 +441,7 @@ extension RemoteHostConnection {
         let video = request.videoDatagrams == true ? link.videoChannel : nil
         let streamer = RemoteDesktopStreamer(
             link: link, channel: channel, codec: request.codec, width: size.width, height: size.height, display: display,
-            sidecarRefine: sidecar, path: origin.path, video: video,
+            sidecarRefine: sidecar, sendsLatency: request.latencyStats == true, path: origin.path, video: video,
             source: environment.makeSource(display, size.width, size.height, sidecar),
             injector: canControl ? environment.makeInjector(display) : nil,
             cursorLocation: environment.cursorLocation,

@@ -163,6 +163,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 中继配置（通道 0）。负载 = `RemoteRelayConfig`（JSON）。只发给 Mac 上勾选过公网接入、且 `features` 带
         /// `relay-config` 的设备，扫码配对、不共用 iCloud 钥匙串的手机靠它拿到配置。
         case relayConfig = 32
+        /// 画面往返（桌面通道）。负载 = `RemoteDesktopLatency`（JSON）。只在开流时 `latencyStats` 为 true 才发，
+        /// 老手机不认这个类型（解析会当成坏消息），所以必须先要后发。
+        case desktopLatency = 33
     }
 
     var kind: Kind
