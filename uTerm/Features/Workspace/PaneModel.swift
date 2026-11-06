@@ -172,6 +172,6 @@ final class PaneModel: Identifiable {
         guard fileBuffer == nil else { return }
         registrar?.unregister(paneID: id)
         session.closeForDisposal()
-        hostKeyRelay.resolve(false)
+        hostKeyRelay.abandon()
     }
 }

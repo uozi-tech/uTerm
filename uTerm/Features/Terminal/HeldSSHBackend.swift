@@ -328,16 +328,31 @@ nonisolated private final class SSHBridgeAppPeer: @unchecked Sendable {
 /// 后来的弹不出来，那个标签就永远卡在「连接中」。
 actor HostKeyApprovalCoalescer {
     static let shared = HostKeyApprovalCoalescer()
-    private var inFlight: [String: Task<Bool, Never>] = [:]
+
+    private enum Outcome { case approved, rejected, abandoned }
+    private struct Ask {
+        let token = UUID()
+        let task: Task<Outcome, Never>
+    }
+
+    private var inFlight: [String: Ask] = [:]
 
     func approve(_ challenge: HostKeyChallenge, approver: @escaping @Sendable (HostKeyChallenge) async -> Bool) async -> Bool {
         let key = "\(challenge.host):\(challenge.port) \(challenge.newFingerprint)"
-        if let running = inFlight[key] { return await running.value }
-        let task = Task { await approver(challenge) }
-        inFlight[key] = task
-        let approved = await task.value
-        inFlight[key] = nil
-        return approved
+        while let running = inFlight[key] {
+            let outcome = await running.task.value
+            if outcome != .abandoned { return outcome == .approved }
+            // 问的那个标签关掉了，用户没回答：撤掉这次询问，由还在等的标签重新问。
+            if inFlight[key]?.token == running.token { inFlight[key] = nil }
+        }
+        let ask = Ask(task: Task {
+            if await approver(challenge) { return .approved }
+            return HostKeyAbandonment.take(challenge.id) ? .abandoned : .rejected
+        })
+        inFlight[key] = ask
+        let outcome = await ask.task.value
+        if inFlight[key]?.token == ask.token { inFlight[key] = nil }
+        return outcome == .approved
     }
 }
 

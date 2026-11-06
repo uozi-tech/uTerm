@@ -965,7 +965,7 @@ final class FileBrowserModel {
     /// 之后再 `connect(...)` 可以重新用。
     func dispose() {
         isDisposed = true
-        hostKeyRelay.resolve(false)
+        hostKeyRelay.abandon()
         ownerEnrichmentTask?.cancel()
         ownerEnrichmentTask = nil
         loadGeneration &+= 1
