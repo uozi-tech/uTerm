@@ -4,35 +4,45 @@ import UDesignKit
 
 /// 授权引导窗口：uTerm 用到的系统权限集中在一处，逐项说明用途、显示当前状态、一键去授权。
 /// 第一次启动自动弹一次（见 `PermissionGuideWindow.shouldPresentAtLaunch`），之后从「uTerm › 授权引导…」打开。
+///
+/// 版式：标题栏画在画布上，下面整块内容是**一张卡**（四周留 `cardInset`），收尾栏在卡内最下方。
+/// 卡的圆角下沿和下面那条画布明确告诉人「到底了」——旧版内容平铺到窗口下沿，底栏像被屏幕截断，总让人想往下滚。
+/// 每项用途压成一行（补充说明放悬停提示），五项全出加重启提示也远低于 13 寸屏的可用高度。
 struct PermissionGuideView: View {
-    @State private var model = PermissionGuideModel(environment: .live)
+    @State private var model: PermissionGuideModel
     @Environment(\.dismiss) private var dismiss
+
+    init(model: PermissionGuideModel = PermissionGuideModel(environment: .live)) {
+        _model = State(initialValue: model)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             PermissionGuideTitleBar()
             // 最多五项，内容本身就放得下，不套 ScrollView；窗口高度跟着内容走（Scene 上是 .contentSize）。
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(spacing: 0) {
                 header
-                section(title: "常用", hint: nil, kinds: [.notifications, .localNetwork])
-                section(title: "远程控制", hint: "只有让手机查看或操作这台 Mac 时才需要。",
+                section("常用", kinds: [.notifications, .localNetwork])
+                section("远程控制", hint: "只有让手机查看或操作这台 Mac 时才需要",
                         kinds: [.screenCapture, .accessibility])
                 if model.needsRelaunch {
-                    relaunchBanner
+                    relaunchNotice
                 }
                 if model.visibleKinds.contains(.loginItem) {
-                    section(title: "后台运行", hint: nil, kinds: [.loginItem])
+                    section("后台运行", kinds: [.loginItem])
                 }
+                UDPaneDivider(.horizontal)
+                    .padding(.top, 14)
+                footer
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
-            footer
+            .udCard()
+            .padding([.horizontal, .bottom], UD.Layout.cardInset)
         }
         .frame(width: 580)
         .fixedSize(horizontal: false, vertical: true)
-        .background(UD.bg)
+        .background(UD.pageBg)
         .contentSizedUnderTitleBar()
-        .background(WorkspaceWindowChrome(serverName: "授权引导"))
+        .background(WorkspaceWindowChrome(serverName: "授权引导", background: WS.canvasNSColor))
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         // 从系统设置切回来时重新读一遍（屏幕录制 / 辅助功能在本进程里通常仍是旧值，要重启才变）。
@@ -42,23 +52,27 @@ struct PermissionGuideView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
-            ULogo(size: 52)
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 14) {
+            ULogo(size: 40)
+            VStack(alignment: .leading, spacing: 3) {
                 Text("让 uTerm 用上全部功能")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(UD.text)
-                Text("下面这些权限要你在 macOS 里亲自点头。都可以先跳过，用不到的功能不必打开，以后从菜单「uTerm › 授权引导…」随时回来。")
+                Text("都可以先跳过，以后从菜单「uTerm › 授权引导…」随时回来。")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text2)
-                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, PermissionGuideMetrics.inset)
+        .padding(.top, 18)
+        .padding(.bottom, 4)
     }
 
-    private func section(title: String, hint: String?, kinds: [PermissionKind]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func section(_ title: LocalizedStringKey, hint: LocalizedStringKey? = nil,
+                         kinds: [PermissionKind]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title)
                     .font(.system(size: 10.5, weight: .medium))
@@ -72,50 +86,71 @@ struct PermissionGuideView: View {
                         .foregroundStyle(UD.text3)
                 }
             }
-            VStack(spacing: 0) {
-                ForEach(Array(kinds.enumerated()), id: \.element) { index, kind in
-                    if index > 0 { UDPaneDivider(.horizontal) }
-                    PermissionGuideRow(kind: kind, status: model.status(of: kind),
-                                       request: { Task { await model.request(kind) } },
-                                       openSettings: { model.openSettings(kind) })
+            .padding(.horizontal, PermissionGuideMetrics.inset)
+            .padding(.top, 16)
+            .padding(.bottom, 2)
+            ForEach(Array(kinds.enumerated()), id: \.element) { index, kind in
+                if index > 0 {
+                    // 分隔线从文字起点开始，图标列不切开，一组读起来是一块。
+                    UDPaneDivider(.horizontal)
+                        .padding(.leading, PermissionGuideMetrics.textLeading)
+                        .padding(.trailing, PermissionGuideMetrics.inset)
                 }
+                PermissionGuideRow(kind: kind, status: model.status(of: kind),
+                                   request: { Task { await model.request(kind) } },
+                                   openSettings: { model.openSettings(kind) })
             }
-            .udCard()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var relaunchBanner: some View {
-        HStack(spacing: 12) {
+    /// 紧跟在「远程控制」两项下面：重启只跟这两项有关。
+    private var relaunchNotice: some View {
+        HStack(spacing: 10) {
             Image(systemName: "arrow.clockwise.circle.fill")
-                .font(.system(size: 18))
+                .font(.system(size: 15))
                 .foregroundStyle(UD.caution)
             Text("在系统设置里打开屏幕录制或辅助功能后，要重新启动 uTerm 才生效。")
                 .font(.system(size: 12))
                 .foregroundStyle(UD.text)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
-            UDButton(title: "重新启动", style: .primary) { model.relaunch() }
+            UDButton(title: "重新启动", style: .primary, height: PermissionGuideMetrics.buttonHeight) {
+                model.relaunch()
+            }
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(UD.caution.opacity(0.1)))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.caution.opacity(0.1)))
+        .padding(.horizontal, PermissionGuideMetrics.inset - 8)
+        .padding(.top, 6)
     }
 
+    /// 收尾栏：卡内最后一块，上面一条分隔线；左边是进度，右边是唯一的「完成」。
     private var footer: some View {
         HStack(spacing: 12) {
-            Text("已就绪 \(model.grantedCount) / \(model.visibleKinds.count)")
-                .font(.system(size: 12))
-                .foregroundStyle(UD.text3)
-                .monospacedDigit()
+            PermissionProgress(granted: model.grantedCount, total: model.visibleKinds.count)
             Spacer()
             UDButton(title: "完成", style: .primary) { dismiss() }
                 .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 56)
+        .padding(.horizontal, PermissionGuideMetrics.inset - 4)
+        .frame(height: 52)
     }
 }
 
-/// 一项权限：图标、名称、状态、用途，右侧是这一态下能做的事。
+private enum PermissionGuideMetrics {
+    /// 卡内左右边距。
+    static let inset: CGFloat = 20
+    static let iconSize: CGFloat = 28
+    static let iconSpacing: CGFloat = 12
+    /// 行内文字的起点（分隔线从这里开始）。
+    static let textLeading: CGFloat = inset + iconSize + iconSpacing
+    /// 行内按钮比标准 32 矮一档，行高由两行文字决定，不被按钮撑高。
+    static let buttonHeight: CGFloat = 28
+}
+
+/// 一项权限：图标、名称、状态、一行用途，右侧是这一态下能做的事。
 private struct PermissionGuideRow: View {
     let kind: PermissionKind
     let status: PermissionStatus
@@ -123,13 +158,13 @@ private struct PermissionGuideRow: View {
     let openSettings: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: PermissionGuideMetrics.iconSpacing) {
             Image(systemName: kind.symbol)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(UD.accent)
-                .frame(width: 32, height: 32)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.accentSoft))
-            VStack(alignment: .leading, spacing: 3) {
+                .frame(width: PermissionGuideMetrics.iconSize, height: PermissionGuideMetrics.iconSize)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(UD.accentSoft))
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(kind.title)
                         .font(.system(size: 13, weight: .medium))
@@ -139,31 +174,56 @@ private struct PermissionGuideRow: View {
                 Text(kind.purpose)
                     .font(.system(size: 11.5))
                     .foregroundStyle(UD.text3)
-                    .lineSpacing(1.5)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .help(kind.detail ?? "")
             Spacer(minLength: 12)
             actions
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, PermissionGuideMetrics.inset)
+        .padding(.vertical, 9)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(kind.title)
     }
 
     @ViewBuilder private var actions: some View {
+        let height = PermissionGuideMetrics.buttonHeight
         switch status {
         case .checking, .granted:
             EmptyView()
         case .notAsked:
-            UDButton(title: "允许", style: .primary, action: request)
+            UDButton(title: "允许", style: .primary, height: height, action: request)
         case .notGranted where kind.takesEffectAfterRelaunch:
-            VStack(alignment: .trailing, spacing: 4) {
-                UDButton(title: "授权", style: .primary, action: request)
-                UDButton(title: "打开系统设置", style: .link, height: 20, action: openSettings)
+            // 横排，不叠两层：叠起来会把这一行撑得比别的行高一截。
+            HStack(spacing: 10) {
+                UDButton(title: "打开系统设置", style: .link, height: height, action: openSettings)
+                UDButton(title: "授权", style: .primary, height: height, action: request)
             }
         case .notGranted, .needsRelaunch:
-            UDButton(title: "打开系统设置", style: .secondary, action: openSettings)
+            UDButton(title: "打开系统设置", style: .secondary, height: height, action: openSettings)
+        }
+    }
+}
+
+/// 「已就绪 n / m」配一排小格，一眼看出还差几项。
+private struct PermissionProgress: View {
+    let granted: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 3) {
+                ForEach(0..<total, id: \.self) { index in
+                    Capsule()
+                        .fill(index < granted ? UD.success : UD.fillMed)
+                        .frame(width: 14, height: 4)
+                }
+            }
+            .accessibilityHidden(true)
+            Text("已就绪 \(granted) / \(total)")
+                .font(.system(size: 12))
+                .foregroundStyle(granted == total ? UD.success : UD.text3)
+                .monospacedDigit()
         }
     }
 }
@@ -281,6 +341,8 @@ private struct TitleBarHeightReader: NSViewRepresentable {
     }
 }
 
+
+/// 标题栏直接画在画布上：不铺底色、不画分隔线（分区方案 v3.3），和下面的内容卡靠底色差分开。
 private struct PermissionGuideTitleBar: View {
     var body: some View {
         Text("授权引导")
@@ -291,9 +353,6 @@ private struct PermissionGuideTitleBar: View {
             .frame(height: 38)
             .frame(maxWidth: .infinity)
             .background(WindowDragHandle())
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(UD.border).frame(height: 1)
-            }
     }
 }
 
@@ -308,18 +367,30 @@ private extension PermissionKind {
         }
     }
 
+    /// 一行讲清用途；放不下的补充放 `detail`（悬停提示）。
     var purpose: String {
         switch self {
         case .notifications:
-            return "终端里的命令跑完、或程序在等你输入时，标签不在眼前也能提醒你。"
+            return "命令跑完、或程序等你输入时，标签不在眼前也能提醒你。"
         case .localNetwork:
-            return "Mac 与 iPhone / iPad 之间的局域网同步、用手机远程控制这台 Mac 都要用到。连局域网里的服务器时，系统会以「uTerm 终端」的名义另问一次。"
+            return "局域网同步、用手机远程控制这台 Mac 都要用到。"
         case .screenCapture:
-            return "让配对过的手机看到这台 Mac 的屏幕。macOS 会定期请你重新确认。"
+            return "让配对过的手机看到这台 Mac 的屏幕。"
         case .accessibility:
-            return "让手机操作这台 Mac 的鼠标和键盘。没有这项时，远程桌面只能看不能动。"
+            return "让手机操作这台 Mac 的鼠标和键盘，没有它只能看不能动。"
         case .loginItem:
             return "你开了「登录时在后台启动」，还差系统批准这一步。"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .localNetwork:
+            return "Mac 与 iPhone / iPad 之间同步要用。连局域网里的服务器时，系统会以「uTerm 终端」的名义另问一次。"
+        case .screenCapture:
+            return "macOS 会定期请你重新确认。"
+        case .notifications, .accessibility, .loginItem:
+            return nil
         }
     }
 
