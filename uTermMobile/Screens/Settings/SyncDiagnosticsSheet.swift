@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 /// 同步诊断弹窗：展示 CloudKit 最近事件（环形缓冲，新→旧）+ 复制日志。
-/// iOS 无 Console，故在 app 内提供——对照 macOS「诊断 › 显示日志」的 Console 入口。
+/// 排版与文案和 macOS 设置 · 同步的「查看事件…」弹窗共用 `SyncDiagnosticsPresentation`。
 struct SyncDiagnosticsSheet: View {
     let sync: CloudKitSyncMonitor
     @Environment(\.dismiss) private var dismiss
@@ -11,7 +11,7 @@ struct SyncDiagnosticsSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("同步诊断").font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
+                Text(SyncDiagnosticsPresentation.title).font(M.sans(17, weight: .semibold)).foregroundStyle(M.text)
                 Spacer()
                 Button("完成") { dismiss() }
                     .font(M.sans(15)).foregroundStyle(M.accent)
@@ -22,15 +22,16 @@ struct SyncDiagnosticsSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    if sync.recentEvents.isEmpty {
-                        Text("暂无同步事件。保持 app 前台、已登录 iCloud 后，setup / import / export 事件会出现在这里。")
+                    let rows = SyncDiagnosticsPresentation.rows(sync.recentEvents)
+                    if rows.isEmpty {
+                        Text(SyncDiagnosticsPresentation.emptyMessage)
                             .font(M.sans(13)).foregroundStyle(M.text4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 24)
                     } else {
-                        ForEach(sync.recentEvents.reversed()) { e in
+                        ForEach(rows) { e in
                             HStack(alignment: .top, spacing: 10) {
-                                Text(UFormat.time(e.date))
+                                Text(e.time)
                                     .font(M.mono(11)).foregroundStyle(M.text4)
                                     .frame(width: 62, alignment: .leading)
                                 Text(e.text).font(M.mono(12)).foregroundStyle(M.text2)
@@ -43,7 +44,7 @@ struct SyncDiagnosticsSheet: View {
                 .padding(16)
             }
 
-            MBtn(title: "复制日志", kind: .secondary, full: true, height: 48) {
+            MBtn(title: SyncDiagnosticsPresentation.copyButtonTitle, kind: .secondary, full: true, height: 48) {
                 UIPasteboard.general.string = sync.exportText()
             }
             .padding(.horizontal, MSheetMetrics.contentInset).padding(.vertical, 16)

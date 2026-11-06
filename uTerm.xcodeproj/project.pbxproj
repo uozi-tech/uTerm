@@ -276,6 +276,7 @@
 				Features/Settings/Views/SecuritySettingsView.swift,
 				Features/Settings/Views/SettingsPrimitives.swift,
 				Features/Settings/Views/SettingsView.swift,
+				Features/Settings/Views/SyncDiagnosticsView.swift,
 				Features/Settings/Views/SyncSettingsView.swift,
 				Features/Settings/Views/TerminalPreview.swift,
 				Features/Settings/Views/TerminalSettingsView.swift,

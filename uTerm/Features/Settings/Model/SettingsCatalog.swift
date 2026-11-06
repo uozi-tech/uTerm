@@ -110,7 +110,7 @@ nonisolated enum SettingsCatalog {
         Item(id: "sync.icloud", section: .sync, group: "同步", title: "iCloud 同步",
              kind: .status, key: nil, syncScope: .none, platforms: .both),
         Item(id: "sync.diagnostics", section: .sync, group: "同步", title: "同步诊断",
-             kind: .link, key: nil, syncScope: .none, platforms: .iOS),
+             kind: .link, key: nil, syncScope: .none, platforms: .both),
         Item(id: "sync.lanSend", section: .sync, group: "同步", title: "局域网发送",
              kind: .action, key: nil, syncScope: .none, platforms: .macOS),
         Item(id: "sync.lanReceive", section: .sync, group: "局域网接收", title: "接收状态",

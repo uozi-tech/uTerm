@@ -1,9 +1,9 @@
 import UDesignKit
 import SwiftUI
 
-/// 设置 · 同步：iCloud 状态、Mac 主动发起的局域网全量加密同步、AI 会话保留窗口
+/// 设置 · 同步：iCloud 状态与同步诊断、Mac 主动发起的局域网全量加密同步、AI 会话保留窗口
 /// （原「高级」里的「同步」与「历史」两组）。状态图标 / 色调 / 文案与 iOS 共用
-/// `SyncStatusPresentation` / `ChatRetentionPresentation`。
+/// `SyncStatusPresentation` / `SyncDiagnosticsPresentation` / `ChatRetentionPresentation`。
 struct SyncSettingsView: View {
     @AppStorage(ChatHistoryStore.retentionDaysKey)
     private var chatRetentionDays: Int = ChatHistoryStore.defaultRetentionDays
@@ -11,6 +11,7 @@ struct SyncSettingsView: View {
     @Environment(LANSyncCoordinator.self) private var lanSync
     /// CloudKit 同步实时状态（uTermApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
     @Environment(CloudKitSyncMonitor.self) private var sync
+    @State private var showDiagnostics = false
 
     var body: some View {
         SettingsScroll {
@@ -25,6 +26,11 @@ struct SyncSettingsView: View {
                             .font(.system(size: 12.5))
                             .foregroundStyle(UD.text2)
                     }
+                }
+                SettingsRow(label: "同步诊断",
+                            hint: SyncStatusPresentation.diagnosticsSubtitle(status: syncStatus,
+                                                                            lastError: sync.lastError)) {
+                    UDButton(title: "查看事件…", style: .secondary) { showDiagnostics = true }
                 }
                 SettingsRow(label: "局域网发送", hint: "Mac 发现移动设备后主动发送全量数据，移动端确认后才会传输。") {
                     let lan = SyncStatusPresentation.lan(lanSync.status)
@@ -59,6 +65,9 @@ struct SyncSettingsView: View {
                                         minValue: 0, maxValue: 3_650, suffix: "天")
                 }
             }
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            SyncDiagnosticsView(sync: sync)
         }
     }
 

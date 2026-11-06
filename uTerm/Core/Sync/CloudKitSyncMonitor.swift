@@ -22,8 +22,8 @@ final class CloudKitSyncMonitor {
     /// 当前同步阶段。`.idle` = 空闲（含从未同步）；其余为某类事件正在进行 / 最近失败。
     enum Phase: Equatable { case idle, setup, importing, exporting, error }
 
-    /// 一条诊断记录（时间 + 文本），供 `recentEvents` 与复制用。
-    struct Entry: Identifiable {
+    /// 一条诊断记录（时间 + 文本），供 `recentEvents` 与复制用。纯值，`SyncDiagnosticsPresentation` 在 actor 外排版。
+    nonisolated struct Entry: Identifiable, Sendable {
         let id = UUID()
         let date: Date
         let text: String
