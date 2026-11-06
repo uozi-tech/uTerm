@@ -46,6 +46,12 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         )
         let requested = size
         let attached = try await client.attach(sessionID: sessionID, size: requested, sink: sink)
+        // 接入请求在路上时标签已经关了：close() 那会儿还没有 attachment 可 detach，这里补上，
+        // 否则 Mac 上的会话一直按手机尺寸、标成被手机接管。
+        guard !isClosed else {
+            await client.detach(attached)
+            return
+        }
         attachment = attached
         reconnectingContinuation.yield(false)
         // 接入请求在路上时视图可能刚布局完、报来了真实尺寸（那时还没有通道，发不出去）：补发一次。
