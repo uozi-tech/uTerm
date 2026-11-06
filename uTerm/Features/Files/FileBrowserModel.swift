@@ -1,9 +1,15 @@
-import SwiftUI
+import Foundation
+import Observation
 import SwiftData
-import UniformTypeIdentifiers
 
-/// 文件浏览面板的状态机。导航/刷新/上传/下载经一个 `SFTPProviding`。
-/// 生产用 `connect(...)` 建一个真实 `SFTPSession`；测试用 `init(testProvider:startPath:)`。
+/// 远程文件浏览的状态机（macOS 与 iOS 共用）。导航 / 刷新 / 文件操作 / 传输都经一个 `SFTPProviding`。
+///
+/// 生产用 `connect(...)` 建真实 `SFTPSession`（`SFTPSession.make`）；测试用 `init(testProvider:startPath:)`。
+/// macOS 的文件侧栏与 SFTP 窗口直接持有它（拖放 / 外部打开在 mac 专属的
+/// `FileBrowserModel+Desktop.swift`）；iOS 的 `MobileSFTPController` 是它的一层转发壳。
+///
+/// 两端的有意差异做成参数：`sortOptions`（nil = macOS 读写排序偏好；iOS 固定显示点文件）、
+/// `resolvesOwnerNames`（macOS 列完目录再经 exec 补属主名，iOS 不显示属主、不跑这一步）。
 @MainActor
 @Observable
 final class FileBrowserModel {
@@ -39,23 +45,24 @@ final class FileBrowserModel {
     typealias DeletionProgress = RemoteDeletionProgress
 
     private(set) var state: State = .idle
+    /// 当前所在目录。只在目录**列成功之后**才改：列不出的目录不进去，留在原目录
+    /// （首次建连除外，见 `connectUsingLastRequest`）。
     private(set) var currentPath: String = "/"
-    /// 是否正在切换目录（取新列表的网络往返进行中）。驱动视图加载态 + 再入守卫。
+    /// 是否正在切到**别的**目录（或解析符号链接）。驱动 macOS 的加载盖层，
+    /// 也是 `navigate(toPath:)` 的再入守卫。刷新当前目录不算。
     private(set) var isNavigating = false
+    /// 是否有目录加载在途（含刷新当前目录）。iOS 的 `loading` 读它。
+    private(set) var isLoading = false
     /// 由 provider 返回的原始顺序；UI 应读取 `sortedEntries`（已按当前偏好排好）。
-    private(set) var entries: [RemoteEntry] = [] {
-        didSet { recomputeSortedEntries() }
-    }
-    /// `entries` 经当前 sortKey / sortAscending / foldersFirst 排序后的缓存。
+    private(set) var entries: [RemoteEntry] = []
+    /// `entries` 经当前排序选项排好、滤过隐藏文件后的缓存。
     ///
-    /// 改成缓存（之前是 computed）：list 视图每次 body 重渲染都会读这条；如果
-    /// 是 computed，SwiftUI 在 LazyList 滚动 + hover 触发的重渲染下会反复重新
-    /// 过滤 + 排序 N 遍（n=条目数，最坏每秒数十次）。改成 stored cache，只在
-    /// entries / sort 偏好变化时重算一次。
+    /// 缓存而不是 computed：列表视图每次 body 重渲染都会读这条；如果是 computed，SwiftUI 在
+    /// LazyList 滚动 + hover 触发的重渲染下会反复重新过滤 + 排序 N 遍。只在 entries / 排序偏好
+    /// 变化时重算一次。新列表的排序在并发线程池里做（上万条要几十万次本地化比较），不占主线程。
     private(set) var sortedEntries: [RemoteEntry] = []
 
-    /// 排序偏好。改写后重新算 `sortedEntries`，并同步持久化到 UserDefaults
-    /// （全局共享，所有 server 一致）。
+    /// 排序偏好（macOS 全局共享，所有 server 一致，存 UserDefaults）。
     private enum PrefKey {
         static let sortKey       = "fileBrowser.sortKey"
         static let sortAscending = "fileBrowser.sortAscending"
@@ -63,52 +70,75 @@ final class FileBrowserModel {
         static let showHidden    = "fileBrowser.showHidden"
     }
 
-    var sortKey: SortKey = {
-        if let raw = UserDefaults.standard.string(forKey: PrefKey.sortKey),
-           let k = SortKey(rawValue: raw) { return k }
-        return .name
-    }() {
-        didSet {
-            UserDefaults.standard.set(sortKey.rawValue, forKey: PrefKey.sortKey)
-            recomputeSortedEntries()
-        }
+    /// 非 nil = 排序固定成这一套、不读写偏好（iOS）；nil = 读写 macOS 的排序偏好。
+    @ObservationIgnored private let persistsSortPreferences: Bool
+    /// 列完目录后是否经 exec 补属主 / 属组名（macOS 显示，iOS 不显示）。
+    @ObservationIgnored private let resolvesOwnerNames: Bool
+
+    var sortKey: SortKey = .name {
+        didSet { persistSortPreferences(); recomputeSortedEntries() }
     }
-    var sortAscending: Bool = {
-        UserDefaults.standard.object(forKey: PrefKey.sortAscending) as? Bool ?? true
-    }() {
-        didSet {
-            UserDefaults.standard.set(sortAscending, forKey: PrefKey.sortAscending)
-            recomputeSortedEntries()
-        }
+    var sortAscending = true {
+        didSet { persistSortPreferences(); recomputeSortedEntries() }
     }
-    var foldersFirst: Bool = {
-        UserDefaults.standard.object(forKey: PrefKey.foldersFirst) as? Bool ?? true
-    }() {
-        didSet {
-            UserDefaults.standard.set(foldersFirst, forKey: PrefKey.foldersFirst)
-            recomputeSortedEntries()
-        }
+    var foldersFirst = true {
+        didSet { persistSortPreferences(); recomputeSortedEntries() }
     }
-    var showHidden: Bool = {
-        UserDefaults.standard.object(forKey: PrefKey.showHidden) as? Bool ?? false
-    }() {
-        didSet {
-            UserDefaults.standard.set(showHidden, forKey: PrefKey.showHidden)
-            recomputeSortedEntries()
-        }
+    var showHidden = false {
+        didSet { persistSortPreferences(); recomputeSortedEntries() }
     }
 
-    /// 按当前排序偏好重算 `sortedEntries`。排序规则（稳定、nil 恒在末尾、
-    /// Finder 式名字比较）在共享的 `RemoteEntrySort`；偏好的读写留在这里。
+    var sortOptions: RemoteEntrySortOptions {
+        RemoteEntrySortOptions(key: sortKey, ascending: sortAscending,
+                               foldersFirst: foldersFirst, showHidden: showHidden)
+    }
+
+    private static func persistedSortOptions() -> RemoteEntrySortOptions {
+        let defaults = UserDefaults.standard
+        return RemoteEntrySortOptions(
+            key: defaults.string(forKey: PrefKey.sortKey).flatMap(SortKey.init(rawValue:)) ?? .name,
+            ascending: defaults.object(forKey: PrefKey.sortAscending) as? Bool ?? true,
+            foldersFirst: defaults.object(forKey: PrefKey.foldersFirst) as? Bool ?? true,
+            showHidden: defaults.object(forKey: PrefKey.showHidden) as? Bool ?? false)
+    }
+
+    private func persistSortPreferences() {
+        guard persistsSortPreferences else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(sortKey.rawValue, forKey: PrefKey.sortKey)
+        defaults.set(sortAscending, forKey: PrefKey.sortAscending)
+        defaults.set(foldersFirst, forKey: PrefKey.foldersFirst)
+        defaults.set(showHidden, forKey: PrefKey.showHidden)
+    }
+
+    private func applySortOptions(_ options: RemoteEntrySortOptions) {
+        sortKey = options.key
+        sortAscending = options.ascending
+        foldersFirst = options.foldersFirst
+        showHidden = options.showHidden
+    }
+
+    /// 排序偏好变了：同步重排（用户操作触发，条目已在手里）。规则在共享的 `RemoteEntrySort`。
     private func recomputeSortedEntries() {
-        sortedEntries = RemoteEntrySort.sorted(entries, options: RemoteEntrySortOptions(
-            key: sortKey,
-            ascending: sortAscending,
-            foldersFirst: foldersFirst,
-            showHidden: showHidden))
+        sortedEntries = RemoteEntrySort.sorted(entries, options: sortOptions)
     }
 
-    /// 主机密钥审批的 UI 桥接（驱动 `FileBrowserView` 的 sheet）。
+    /// 新列表的排序放到并发线程池里。排序期间偏好被改了就按新偏好在主线程补排一次。
+    private func sortedForDisplay(_ list: [RemoteEntry]) async -> [RemoteEntry] {
+        let options = sortOptions
+        let sorted = await Self.sortedOffMain(list, options: options)
+        return options == sortOptions ? sorted : RemoteEntrySort.sorted(list, options: sortOptions)
+    }
+
+    @concurrent nonisolated private static func sortedOffMain(
+        _ list: [RemoteEntry],
+        options: RemoteEntrySortOptions
+    ) async -> [RemoteEntry] {
+        RemoteEntrySort.sorted(list, options: options)
+    }
+
+    /// 主机密钥审批的 UI 桥接（驱动 macOS `FileBrowserView` 的 sheet）。iOS 建连时传自己工作区的
+    /// relay（`connect(..., hostKeyRelay:)`），这一份就不用。
     let hostKeyRelay = HostKeyChallengeRelay()
 
     private var provider: (any SFTPProviding)?
@@ -116,12 +146,22 @@ final class FileBrowserModel {
     private(set) var transientError: String?
     /// 传输队列（上传 + 下载）。仅 standalone SFTP 窗口渲染；侧边栏不写。
     private(set) var transfers: [TransferItem] = []
-    /// 正在进行的递归删除；nil = 无。同一时刻只允许一个（见 `delete(entry:)` 的守卫）。
+    /// 正在进行的递归删除；nil = 无。同一时刻只允许一个（见 `beginDelete` 的守卫）。
     private(set) var deletion: DeletionProgress?
-    /// 取消旗标。`cancelDeletion()` 置位，删除循环在每次往返前检查。
-    private var deletionCancelled = false
+    /// 取消旗标。`cancelDeletion()` / `dispose()` 置位，删除循环在每次往返前检查。
+    @ObservationIgnored private var deletionCancelled = false
     @ObservationIgnored private var ownerEnrichmentTask: Task<Void, Never>?
-    private var ownerEnrichmentGeneration = 0
+
+    /// 目录加载代次：每次加载（含符号链接解析）递增，晚到的旧结果直接丢弃 —— 网速慢时先点 A
+    /// 再点 B，A 后返回不能把列表和路径改回 A。`dispose()` 也递增，关掉后不再落任何结果。
+    @ObservationIgnored private var loadGeneration = 0
+    /// 在途加载的目标目录。加载期间触发的刷新（如上传完成）列它而不是旧目录，
+    /// 否则刷新会把刚发起的切换顶掉。
+    @ObservationIgnored private var pendingPath: String?
+    /// 建连代次：`dispose()` / 新一次建连递增；在途建连落地时对不上就关掉刚建的会话。
+    @ObservationIgnored private var connectGeneration = 0
+    /// `dispose()` 之后为 true：晚到的失败没人看，不再写提示。
+    @ObservationIgnored private var isDisposed = false
 
     /// 每个传输的不可展示状态：数据来源、取消句柄、测速采样点。
     /// MainActor 隔离，用 class 便于原地改可变字段。
@@ -169,7 +209,7 @@ final class FileBrowserModel {
     private var restoredInitialPath: String?
     /// 是否成功浏览过至少一次。重连「保留当前目录」只在浏览过后才成立 ——
     /// 首次连接就失败时 `currentPath` 还是占位 "/"，强行保留会把重连后的
-    /// 起始目录从用户家目录钉死到根目录。
+    /// 起始目录从用户家目录钉死到根目录。也用来区分「列目录失败」该翻失败页还是只给提示。
     private var didEverBrowse = false
     private let sftpConnector: SFTPConnector
     @ObservationIgnored private var lastConnectionRequest: ConnectionRequest?
@@ -177,108 +217,122 @@ final class FileBrowserModel {
     private struct ConnectionRequest {
         let profile: ServerProfile
         let modelContainer: ModelContainer
+        let hostKeyRelay: HostKeyChallengeRelay
     }
 
     /// 供 FilePreviewModel 共享同一 SFTP 通道（避免一个 workspace 开两个 channel）。
     /// nil 表示尚未 connect。Spec 2A §1.4。
     var sftpProvider: (any SFTPProviding)? { provider }
-    /// 当前连接的主机（外部打开 / 交给 uTable 用）。尚未 connect 时为 nil。
-    var connectedHost: ExternalOpenHost? {
-        guard let profile = lastConnectionRequest?.profile else { return nil }
-        return ExternalOpenHost(id: profile.id, name: profile.name,
-                                usesJumpHost: profile.jumpHost != nil)
-    }
+    /// 当前连接的主机。尚未 connect（或已 `dispose` / `markUnavailable`）时为 nil。
+    var connectedProfile: ServerProfile? { lastConnectionRequest?.profile }
     var snapshotCurrentPath: String? {
         state == .browsing || restoredInitialPath != nil ? currentPath : nil
     }
 
-    init(sftpConnector: @escaping SFTPConnector = FileBrowserModel.makeLiveSFTPProvider) {
+    /// - Parameters:
+    ///   - sortOptions: nil = 读写 macOS 的排序偏好；非 nil = 固定这一套、不持久化（iOS）。
+    ///   - resolvesOwnerNames: 列完目录后是否补属主 / 属组名。
+    init(sftpConnector: @escaping SFTPConnector = FileBrowserModel.makeLiveSFTPProvider,
+         sortOptions: RemoteEntrySortOptions? = nil,
+         resolvesOwnerNames: Bool = true) {
         self.fixedConcurrencyLimit = nil
         self.sftpConnector = sftpConnector
+        self.persistsSortPreferences = sortOptions == nil
+        self.resolvesOwnerNames = resolvesOwnerNames
+        applySortOptions(sortOptions ?? Self.persistedSortOptions())
     }
 
-    init(testProvider: any SFTPProviding, startPath: String, maxConcurrentTransfers: Int = 4) {
+    init(testProvider: any SFTPProviding, startPath: String, maxConcurrentTransfers: Int = 4,
+         sortOptions: RemoteEntrySortOptions? = nil, resolvesOwnerNames: Bool = true) {
         self.fixedConcurrencyLimit = maxConcurrentTransfers
         self.sftpConnector = { _, _, _ in testProvider }
+        self.persistsSortPreferences = false
+        self.resolvesOwnerNames = resolvesOwnerNames
         self.provider = testProvider
         self.currentPath = startPath
         self.state = .browsing
+        applySortOptions(sortOptions ?? Self.persistedSortOptions())
     }
 
-    func connect(profile: ServerProfile, modelContainer: ModelContainer) async {
+    /// 连到一台主机。视图层 `.task(id:)` 重建时会重复调用：已连接 / 连接中是 no-op，
+    /// 只有 `.idle`（首次）/ `.failed`（重试）才真去建连。
+    ///
+    /// - Parameter hostKeyRelay: 首连主机密钥审批走哪一个 relay；nil = 本模型自己的
+    ///   `hostKeyRelay`（macOS）。iOS 传工作区共用的那一份。
+    func connect(profile: ServerProfile, modelContainer: ModelContainer,
+                 hostKeyRelay relay: HostKeyChallengeRelay? = nil) async {
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再静默挂着。
         ConnectionWatchdog.shared.register(self)
-        lastConnectionRequest = ConnectionRequest(profile: profile, modelContainer: modelContainer)
+        isDisposed = false
+        lastConnectionRequest = ConnectionRequest(
+            profile: profile, modelContainer: modelContainer,
+            hostKeyRelay: relay ?? hostKeyRelay)
         await connectUsingLastRequest(force: false, initialPath: nil)
     }
 
     private func connectUsingLastRequest(force: Bool, initialPath: String?,
                                          waitForOwnerNames: Bool = true) async {
-        guard let lastConnectionRequest else { return }
-        // 视图层 `.task(id:)` 会在视图重建时重新触发 connect；已连接/连接中则视为
-        // no-op，不撕掉活动 SFTP 会话。仅 .idle（首次）/ .failed（重试）才继续。
+        guard let request = lastConnectionRequest else { return }
         guard force || state == .idle || Self.isFailed(state) else { return }
-        if force {
+        // 失败态重试时旧会话可能还在（目录列失败而不是连接断了）：先关掉，免得被新会话顶掉后泄漏。
+        if provider != nil {
             closeCurrentProvider()
         }
+        connectGeneration &+= 1
+        let attempt = connectGeneration
         state = .connecting
         // 任务被取消（如 sidebar 折叠 / 窗口关闭）时把 .connecting 重置回 .idle，
         // 否则下一次 connect 被 guard 直接跳过、永远停在 spinner 上（Fix #7）。
         defer {
-            if Task.isCancelled, state == .connecting {
+            if Task.isCancelled, state == .connecting, connectGeneration == attempt {
                 state = .idle
             }
         }
-        let timeline = ConnectTimeline(kind: "sftp",
-                                       target: lastConnectionRequest.profile.timingTarget)
+        let timeline = ConnectTimeline(kind: "sftp", target: request.profile.timingTarget)
         await ConnectTimeline.$current.withValue(timeline) {
             do {
                 let session = try await sftpConnector(
-                    lastConnectionRequest.profile,
-                    lastConnectionRequest.modelContainer,
-                    hostKeyRelay)
+                    request.profile, request.modelContainer, request.hostKeyRelay)
+                // 建连期间被 `dispose()` / 新一次建连取代：这条会话没人要了，关掉而不是挂在那里。
+                guard connectGeneration == attempt else {
+                    timeline.finish("superseded")
+                    await session.close()
+                    return
+                }
                 provider = session
+                let startPath: String
                 if let initialPath {
-                    currentPath = initialPath
+                    startPath = initialPath
                 } else if let restoredInitialPath {
-                    currentPath = restoredInitialPath
+                    startPath = restoredInitialPath
                     self.restoredInitialPath = nil
                 } else {
-                    currentPath = (try? await session.realPath(".")) ?? "/"
+                    startPath = (try? await session.realPath(".")) ?? "/"
                     timeline.mark("realPath")
+                    guard connectGeneration == attempt else { return }
                 }
-                await refresh(reconnectOnTransportFailure: false,
-                              waitForOwnerNames: waitForOwnerNames)
+                // 首次建连先落路径：起始目录列失败时失败页 / 重连也认这个目录。
+                currentPath = startPath
+                await load(startPath, reconnectOnTransportFailure: false,
+                           waitForOwnerNames: waitForOwnerNames)
                 timeline.finish(state == .browsing ? "ok" : "list failed")
             } catch {
                 timeline.finish("failed")
+                guard connectGeneration == attempt else { return }
                 provider = nil
-                state = .failed("\(error)")
+                state = .failed(FriendlyError.describe(error))
             }
         }
     }
 
+    /// 生产建连：由主机解析凭据并建 SFTP 会话（`SFTPSession.make`，与终端同一套凭据解析 + 共享连接池）。
     private static func makeLiveSFTPProvider(
         profile: ServerProfile,
         modelContainer: ModelContainer,
         hostKeyRelay: HostKeyChallengeRelay
     ) async throws -> any SFTPProviding {
-        let keychain = KeychainStore()
-        let auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
-        var jumpAuth: ResolvedAuth?
-        if let jump = profile.jumpHost {
-            jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-        }
-        ConnectTimeline.current?.mark("keychain")
-        let verifier = HostKeyVerifier(modelContainer: modelContainer)
-        let approver = hostKeyRelay.makeApprover()
-        let connected = try await SSHClientFactory.connectShared(
-            profile: SSHConnection.ProfileSnapshot(profile),
-            auth: auth, jumpHostAuth: jumpAuth,
-            hostKeyVerifier: verifier, hostKeyApprover: approver)
-        let session = try await SFTPSession(connected: connected)
-        ConnectTimeline.current?.mark("sftpInit")
-        return session
+        try await SFTPSession.make(profile: profile, container: modelContainer,
+                                   approver: hostKeyRelay.makeApprover())
     }
 
     func restoreCurrentPath(_ path: String) {
@@ -287,84 +341,120 @@ final class FileBrowserModel {
         restoredInitialPath = path
     }
 
+    /// 重新列当前目录（有切换在途时列它的目标）。连接已断会自动重连并保留目录。
     func refresh() async {
-        await refresh(reconnectOnTransportFailure: true, waitForOwnerNames: true)
+        await load(pendingPath ?? currentPath, reconnectOnTransportFailure: true,
+                   waitForOwnerNames: true)
     }
 
     /// Agent 命令后的关键路径只等待目录列表。owner/group 的 exec 补全在后台继续，
     /// 让模型续轮不再被每 80 项一次的串行 shell 往返阻塞。
     func refreshListingAfterRemoteCommand() async {
-        await refresh(reconnectOnTransportFailure: true, waitForOwnerNames: false)
+        await load(pendingPath ?? currentPath, reconnectOnTransportFailure: true,
+                   waitForOwnerNames: false)
     }
 
-    private func refresh(reconnectOnTransportFailure: Bool,
-                         waitForOwnerNames: Bool) async {
+    /// 列一个目录并进去（iOS 的进目录 / 面包屑，及刷新）。后发者胜：在途的旧加载结果直接丢弃。
+    /// 与 `navigate(toPath:)` 的区别：不做「同一目录 / 有切换在途」的守卫。
+    func load(_ path: String) async {
+        await load(path, reconnectOnTransportFailure: true, waitForOwnerNames: true)
+    }
+
+    private func load(_ target: String, reconnectOnTransportFailure: Bool,
+                      waitForOwnerNames: Bool) async {
         guard let provider else {
             if reconnectOnTransportFailure {
-                _ = await reconnectPreservingCurrentPath(waitForOwnerNames: waitForOwnerNames)
+                _ = await reconnectPreservingCurrentPath(at: target,
+                                                         waitForOwnerNames: waitForOwnerNames)
             }
             return
         }
+        loadGeneration &+= 1
+        let generation = loadGeneration
         ownerEnrichmentTask?.cancel()
-        ownerEnrichmentGeneration &+= 1
-        let generation = ownerEnrichmentGeneration
-        let directoryPath = currentPath
+        ownerEnrichmentTask = nil
+        pendingPath = target
+        isLoading = true
+        isNavigating = target != currentPath
         do {
-            let listed = try await provider.list(path: directoryPath)
+            let listed = try await provider.list(path: target)
+            let sorted = await sortedForDisplay(listed)
+            guard generation == loadGeneration else { return }
             // 先发布 SFTP 原始 uid/gid；名字补全不是目录正确性的前置条件。
-            entries = listed
-            state = .browsing
-            didEverBrowse = true
-            transientError = nil
+            finishLoad(at: target, listed: listed, sorted: sorted)
             // 列表此刻已上屏；属主名补全在后面单独计。
             ConnectTimeline.current?.mark("list(\(listed.count))")
+            guard resolvesOwnerNames else { return }
             if waitForOwnerNames {
                 let enriched = await resolveOwnerNames(
-                    for: listed,
-                    provider: provider,
-                    directoryPath: directoryPath)
-                publishOwnerEnrichment(
-                    enriched,
-                    generation: generation,
-                    directoryPath: directoryPath)
+                    for: listed, provider: provider, directoryPath: target)
+                await publishOwnerEnrichment(enriched, generation: generation, directoryPath: target)
                 ConnectTimeline.current?.mark("ownerNames")
             } else {
                 ownerEnrichmentTask = Task { [weak self, provider] in
                     guard let self else { return }
                     let enriched = await self.resolveOwnerNames(
-                        for: listed,
-                        provider: provider,
-                        directoryPath: directoryPath)
+                        for: listed, provider: provider, directoryPath: target)
                     guard !Task.isCancelled else { return }
-                    self.publishOwnerEnrichment(
-                        enriched,
-                        generation: generation,
-                        directoryPath: directoryPath)
+                    await self.publishOwnerEnrichment(
+                        enriched, generation: generation, directoryPath: target)
                 }
             }
         } catch {
-            if reconnectOnTransportFailure,
-               Self.isRecoverableTransportError(error),
-               await reconnectPreservingCurrentPath(waitForOwnerNames: waitForOwnerNames) {
+            guard generation == loadGeneration else { return }
+            settleLoading()
+            let isTransport = Self.isRecoverableTransportError(error)
+            if reconnectOnTransportFailure, isTransport, canReconnect {
+                _ = await reconnectPreservingCurrentPath(at: target,
+                                                         waitForOwnerNames: waitForOwnerNames)
                 return
             }
-            state = .failed("\(error)")
+            if state == .browsing, didEverBrowse, !isTransport {
+                // 已经在浏览：列不出的目录（权限不足 / 不存在）不进去，留在原目录给个提示。
+                // 整页翻成失败只留给连接本身的问题与首次列目录。
+                transientError = "打开目录失败：\(FriendlyError.describe(error))"
+            } else {
+                state = .failed(FriendlyError.describe(error))
+            }
         }
+    }
+
+    private func finishLoad(at path: String, listed: [RemoteEntry], sorted: [RemoteEntry]) {
+        // 路径、列表与加载态在同一次同步更新里落地：盖层一撤就直接是新列表，不露旧目录。
+        currentPath = path
+        entries = listed
+        sortedEntries = sorted
+        state = .browsing
+        didEverBrowse = true
+        transientError = nil
+        settleLoading()
+    }
+
+    private func settleLoading() {
+        isLoading = false
+        isNavigating = false
+        pendingPath = nil
     }
 
     private func publishOwnerEnrichment(_ enriched: [RemoteEntry],
                                         generation: Int,
-                                        directoryPath: String) {
-        guard generation == ownerEnrichmentGeneration,
-              currentPath == directoryPath else { return }
+                                        directoryPath: String) async {
+        guard generation == loadGeneration, currentPath == directoryPath else { return }
+        let sorted = await sortedForDisplay(enriched)
+        guard generation == loadGeneration, currentPath == directoryPath else { return }
         entries = enriched
+        sortedEntries = sorted
     }
 
-    private func reconnectPreservingCurrentPath(waitForOwnerNames: Bool = true) async -> Bool {
-        guard lastConnectionRequest != nil else { return false }
-        guard state != .connecting else { return false }
+    private var canReconnect: Bool {
+        lastConnectionRequest != nil && state != .connecting
+    }
+
+    private func reconnectPreservingCurrentPath(at path: String? = nil,
+                                                waitForOwnerNames: Bool = true) async -> Bool {
+        guard canReconnect else { return false }
         await connectUsingLastRequest(force: true,
-                                      initialPath: didEverBrowse ? currentPath : nil,
+                                      initialPath: didEverBrowse ? (path ?? currentPath) : nil,
                                       waitForOwnerNames: waitForOwnerNames)
         return state == .browsing
     }
@@ -379,43 +469,56 @@ final class FileBrowserModel {
         await navigate(toPath: Self.parent(of: currentPath))
     }
 
-    /// 直接跳到绝对路径（供面包屑 / 历史栈 / 前进后退 / `..` 驱动）。
+    /// 直接跳到绝对路径（供 macOS 面包屑 / 历史栈 / 前进后退 / `..` 驱动）。
     ///
-    /// 再入守卫：一次目录切换的网络往返还没回来时，重复点击（典型是连点 `..`）
-    /// 直接忽略 —— 否则第二次点会基于已经前移的 `currentPath` 再上一级，造成
-    /// 越级。`isNavigating` 同时驱动视图加载态，让单击立刻有反馈、不被误以为没
-    /// 生效（修复“点两次才返回 + 切目录闪烁”同源问题）。
+    /// 再入守卫：一次目录切换的网络往返还没回来时，重复点击直接忽略 —— 前进 / 后退的历史下标
+    /// 由视图在调用前移动，放行第二次会让下标与 `currentPath` 脱钩。`isNavigating` 同时驱动
+    /// 视图加载态，让单击立刻有反馈。
     func navigate(toPath path: String) async {
         guard path != currentPath, !isNavigating else { return }
-        isNavigating = true
-        defer { isNavigating = false }
-        currentPath = path
-        await refresh()
+        await load(path)
     }
 
     /// 点击符号链接时懒解析：沿链接路径探测 —— `opendir` 跟随符号链接，能列出即
     /// 目标是目录，直接进入（复用探测到的列表，省一次往返）；否则当文件，`stat`
-    /// 跟随链接取目标 size/mtime 返回，由调用方去打开（侧栏预览）/ 下载（独立窗口）。
+    /// 跟随链接取目标 size/mtime 返回，由调用方去打开（侧栏预览）/ 下载（独立窗口）/ 弹操作单（iOS）。
     ///
-    /// 返回 nil = 已进入目录（或非 symlink / 解析进行中）；非 nil = 目标是文件。
+    /// 返回 nil = 已进入目录（或非 symlink / 被更新的加载取代）；非 nil = 目标是文件。
+    /// 与目录加载共用代次：解析期间用户又点了别的目录，晚到的结果直接丢弃。
     /// 全程置 `isNavigating`，让侧栏加载层在解析往返期间盖住列表、不露旧目录。
-    func resolveSymlinkForOpen(_ entry: RemoteEntry) async
+    ///
+    /// - Parameter directory: 链接所在目录；nil = 当前目录。
+    func resolveSymlinkForOpen(_ entry: RemoteEntry, in directory: String? = nil) async
         -> (path: String, size: Int64?, mtime: Date?)? {
-        guard let provider, entry.isSymlink, !isNavigating else { return nil }
+        guard let provider, entry.isSymlink else { return nil }
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        ownerEnrichmentTask?.cancel()
+        ownerEnrichmentTask = nil
+        isLoading = true
         isNavigating = true
-        defer { isNavigating = false }
-        switch await RemoteFileOperations.resolveSymlink(entry, in: currentPath, provider: provider) {
+        let target = await RemoteFileOperations.resolveSymlink(
+            entry, in: directory ?? currentPath, provider: provider)
+        guard generation == loadGeneration else { return nil }
+        switch target {
         case .directory(let linkPath, let targetEntries):
-            currentPath = linkPath
-            entries = await resolveOwnerNames(for: targetEntries, provider: provider, directoryPath: linkPath)
-            state = .browsing
-            didEverBrowse = true
-            transientError = nil
+            let named = resolvesOwnerNames
+                ? await resolveOwnerNames(for: targetEntries, provider: provider, directoryPath: linkPath)
+                : targetEntries
+            let sorted = await sortedForDisplay(named)
+            guard generation == loadGeneration else { return nil }
+            finishLoad(at: linkPath, listed: named, sorted: sorted)
             return nil
         case .file(let linkPath, let size, let mtime):
+            settleLoading()
             return (linkPath, size, mtime)
         }
     }
+
+    // MARK: - 文件操作
+    //
+    // 带 `in directory:` 的操作：nil = 当前目录。iOS 的操作单从长按到确认之间隔着动画与确认框，
+    // 这期间当前目录可能已经换了，调用方传长按那一刻的目录。
 
     func upload(fileName: String, data: Data) async {
         guard let provider else { return }
@@ -423,7 +526,22 @@ final class FileBrowserModel {
             try await provider.upload(data: data, toRemotePath: Self.join(currentPath, fileName))
             await refresh()
         } catch {
-            transientError = "上传失败：\(error)"
+            report(error, action: "上传")
+        }
+    }
+
+    /// 不进传输队列的单文件流式上传（iOS 文件标签：没有传输 Dock，失败直接提示）。
+    /// 不先把整个文件读进内存。
+    func upload(localURL url: URL, in directory: String? = nil) async {
+        guard let provider else { return }
+        let destination = Self.join(directory ?? currentPath, url.lastPathComponent)
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            try await provider.upload(localURL: url, toRemotePath: destination, onProgress: nil)
+            await refresh()
+        } catch {
+            report(error, action: "上传")
         }
     }
 
@@ -432,7 +550,7 @@ final class FileBrowserModel {
         do {
             try await provider.createDirectory(Self.join(currentPath, name))
             await refresh()
-        } catch { transientError = "新建文件夹失败：\(error)" }
+        } catch { report(error, action: "新建文件夹") }
     }
 
     /// 在当前目录新建一个空文件（fail-if-exists，见 `SFTPProviding.createFile`）。
@@ -441,135 +559,63 @@ final class FileBrowserModel {
         do {
             try await provider.createFile(Self.join(currentPath, name))
             await refresh()
-        } catch { transientError = "新建文件失败：\(error)" }
+        } catch { report(error, action: "新建文件") }
     }
 
     /// 同目录改名。名字去首尾空白；空名或没变不发请求、也不刷新（共享的
-    /// `RemoteFileOperations.rename`，iOS 同一条规则）。
-    func rename(entry: RemoteEntry, to newName: String) async {
+    /// `RemoteFileOperations.rename`）。
+    func rename(entry: RemoteEntry, to newName: String, in directory: String? = nil) async {
         guard let provider else { return }
         do {
             guard try await RemoteFileOperations.rename(
-                entry, to: newName, in: currentPath, provider: provider) else { return }
+                entry, to: newName, in: directory ?? currentPath, provider: provider) else { return }
             await refresh()
-        } catch { transientError = "重命名失败：\(error)" }
+        } catch { report(error, action: "重命名") }
     }
 
-    func remoteDragItem(for entry: RemoteEntry) -> RemoteFileDragItem {
-        RemoteFileDragItem(
-            scopeID: remoteDragScopeID,
-            path: Self.join(currentPath, entry.name),
-            name: entry.name,
-            isDirectory: entry.isDirectory)
+    /// 删除一个条目（等它结束）。见 `beginDelete`。
+    func delete(entry: RemoteEntry, in directory: String? = nil) async {
+        await beginDelete(entry, in: directory)?.value
     }
 
-    func remoteDragProvider(for entry: RemoteEntry) -> NSItemProvider {
-        let item = remoteDragItem(for: entry)
-        let provider = RemoteFileDragPayload.itemProvider(item: item)
-        provider.suggestedName = entry.name
-
-        guard !entry.isDirectory else { return provider }
-        let size = Self.int64Size(entry.size)
-        let type = Self.contentType(forFileName: entry.name)
-        provider.registerFileRepresentation(
-            forTypeIdentifier: type.identifier,
-            fileOptions: [],
-            visibility: .all
-        ) { [weak self] completion in
-            let progress = Progress(totalUnitCount: max(1, size))
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    completion(nil, false, CocoaError(.userCancelled))
-                    return
-                }
-                let destinationURL: URL
-                do {
-                    destinationURL = try Self.promisedDownloadURL(fileName: item.name)
-                } catch {
-                    completion(nil, false, error)
-                    return
-                }
-                guard await self.downloadWithProgress(
-                    remotePath: item.path,
-                    fileName: item.name,
-                    size: size,
-                    to: destinationURL) else {
-                    completion(nil, false, NSError(
-                        domain: "uTerm.RemoteFileDrag",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "下载失败"]))
-                    return
-                }
-                progress.completedUnitCount = progress.totalUnitCount
-                completion(destinationURL, false, nil)
-            }
-            return progress
-        }
-        return provider
-    }
-
-    @discardableResult
-    func moveRemoteDragItem(_ item: RemoteFileDragItem, into target: RemoteEntry) async -> Bool {
-        guard target.isDirectory else { return false }
-        return await moveRemoteDragItem(item, intoDirectory: Self.join(currentPath, target.name))
-    }
-
-    @discardableResult
-    func moveRemoteDragItem(_ item: RemoteFileDragItem,
-                            intoDirectory targetDirectoryPath: String) async -> Bool {
-        guard let provider, item.scopeID == remoteDragScopeID else { return false }
-        let source = Self.normalizedRemotePath(item.path)
-        let targetDirectory = Self.normalizedRemotePath(targetDirectoryPath)
-        guard Self.canMoveRemoteDragItem(
-            sourcePath: source,
-            itemName: item.name,
-            isDirectory: item.isDirectory,
-            targetDirectoryPath: targetDirectory) else { return false }
-
-        let destination = Self.join(targetDirectory, item.name)
-        do {
-            try await provider.rename(source, to: destination)
-            await refresh()
-            return true
-        } catch {
-            transientError = "移动失败：\(error)"
-            return false
-        }
-    }
-
-    /// 删除一个条目。文件 = 一次 `removeFile`；目录 = 枚举整棵子树后逐项删，
-    /// 全程把进度写进 `deletion` 驱动进度条，并可中途取消（`cancelDeletion()`）。
+    /// 发起删除，返回执行它的任务（守卫没过返回 nil）。文件 = 一次 `removeFile`；目录 = 枚举整棵
+    /// 子树后逐项删，全程把进度写进 `deletion` 驱动进度条，并可中途取消（`cancelDeletion()`）。
     ///
-    /// 无论成功 / 失败 / 取消，收尾都会 `refresh()` —— 失败或取消时远端多半已被删掉
-    /// 一部分，列表必须跟着变。旧实现只在成功路径刷新，中途出错（典型：某个子项
-    /// 无权限）就把已经不存在的项继续挂在侧栏上。错误消息在 refresh **之后**再置，
-    /// 因为 refresh 成功会清空 `transientError`。
-    func delete(entry: RemoteEntry) async {
-        guard let provider else { return }
+    /// 守卫与进度在**调用这一刻**同步落地（iOS 是发射后不管的调用，要立刻有进度可显示、
+    /// 第二次删除立刻提示）。无论成功 / 失败 / 取消，收尾都会 `refresh()` —— 失败或取消时远端
+    /// 多半已被删掉一部分，列表必须跟着变。错误消息在 refresh **之后**再置，因为 refresh 成功会
+    /// 清空 `transientError`。
+    @discardableResult
+    func beginDelete(_ entry: RemoteEntry, in directory: String? = nil) -> Task<Void, Never>? {
+        guard let provider else { return nil }
         // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
         // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
-        guard deletion == nil else {
-            transientError = "正在删除「\(deletion?.name ?? "")」，请等它结束后再删下一项。"
-            return
+        if let running = deletion {
+            transientError = "正在删除「\(running.name)」，请等它结束后再删下一项。"
+            return nil
         }
-        var failure: String?
+        let dir = directory ?? currentPath
         if entry.isDirectory {
             deletionCancelled = false
             deletion = .starting(entry.name)
         }
-        do {
-            try await RemoteFileOperations.delete(
-                entry, in: currentPath, provider: provider,
-                isCancelled: { deletionCancelled },
-                onProgress: { deletion?.apply($0) })
-        } catch is RemoteFileOperations.DeletionCancelled {
-            // 用户主动取消：不是错误，只把已删掉的部分刷出来。
-        } catch {
-            failure = "删除失败：\(FriendlyError.describe(error))"
+        return Task { [weak self] in
+            var failure: Error?
+            do {
+                try await RemoteFileOperations.delete(
+                    entry, in: dir, provider: provider,
+                    isCancelled: { self?.deletionCancelled ?? true },
+                    onProgress: { self?.deletion?.apply($0) })
+            } catch is RemoteFileOperations.DeletionCancelled {
+                // 用户主动取消：不是错误，只把已删掉的部分刷出来。
+            } catch {
+                failure = error
+            }
+            guard let self else { return }
+            self.deletion = nil
+            await self.refresh()
+            if let failure { self.report(failure, action: "删除", reconnect: false) }
         }
-        deletion = nil
-        await refresh()
-        if let failure { transientError = failure }
     }
 
     /// 请求中止正在进行的递归删除。已经删掉的部分不会回滚（SFTP 没有事务），
@@ -585,13 +631,35 @@ final class FileBrowserModel {
     /// - 递归（目录 + `recursive`）：开 exec channel 跑 `chmod -R <oct> <path>`，
     ///   一次性把整棵子树改掉（比逐项 setstat 可靠且快）。
     /// 完成后刷新列表；失败置 `transientError`。
-    func setPermissions(entry: RemoteEntry, mode: UInt32, recursive: Bool) async {
+    func setPermissions(entry: RemoteEntry, mode: UInt32, recursive: Bool,
+                        in directory: String? = nil) async {
         guard let provider else { return }
         do {
             try await RemoteFileOperations.setPermissions(
-                entry, in: currentPath, mode: mode, recursive: recursive, provider: provider)
+                entry, in: directory ?? currentPath, mode: mode, recursive: recursive,
+                provider: provider)
             await refresh()
-        } catch { transientError = "权限设置失败：\(error)" }
+        } catch { report(error, action: "权限设置") }
+    }
+
+    /// 把一次操作失败落成「操作失败」提示（`<动作>失败：<原因>`），浏览照常。
+    /// 连接已断（传输层错误）时再刷新一次：`refresh()` 会自动重连并保留目录，重连不上才翻失败页。
+    ///
+    /// - Parameter reconnect: 调用方已经刷新过（如删除收尾）时传 false，免得重复列目录。
+    func report(_ error: Error, action: String, reconnect: Bool = true) {
+        guard !isDisposed else { return }   // 已关闭：晚到的失败没人看
+        let message = "\(action)失败：\(FriendlyError.describe(error))"
+        guard reconnect, Self.isRecoverableTransportError(error) else {
+            transientError = message
+            return
+        }
+        // 先重连再提示：刷新成功会清空 `transientError`，提示要落在它之后。
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refresh()
+            guard !self.isDisposed else { return }
+            self.transientError = message
+        }
     }
 
     // MARK: - 上传覆盖检查
@@ -730,10 +798,11 @@ final class FileBrowserModel {
             to: localURL)
     }
 
-    private func downloadWithProgress(remotePath: String,
-                                      fileName: String,
-                                      size: Int64,
-                                      to localURL: URL) async -> Bool {
+    /// 下载入队的公共入口（macOS 拖出到 Finder 的文件承诺也走它，见 `FileBrowserModel+Desktop`）。
+    func downloadWithProgress(remotePath: String,
+                              fileName: String,
+                              size: Int64,
+                              to localURL: URL) async -> Bool {
         guard provider != nil, !Task.isCancelled else { return false }
         let id = UUID()
         return await withTaskCancellationHandler {
@@ -891,11 +960,20 @@ final class FileBrowserModel {
         if transfers[idx].bytesTotal == 0 { transfers[idx].bytesTotal = p.bytesTotal }
     }
 
+    /// 关掉（窗口 / 标签关闭）。在途的建连落地后直接关掉、在途的加载与删除结果不再落地，
+    /// 也不再对这台主机自动重连（看门狗 / 删除收尾的刷新都会因此 no-op）。
+    /// 之后再 `connect(...)` 可以重新用。
     func dispose() {
+        isDisposed = true
         hostKeyRelay.resolve(false)
         ownerEnrichmentTask?.cancel()
         ownerEnrichmentTask = nil
-        ownerEnrichmentGeneration &+= 1
+        loadGeneration &+= 1
+        connectGeneration &+= 1
+        settleLoading()
+        deletionCancelled = true
+        if state == .connecting { state = .idle }
+        lastConnectionRequest = nil
         cancelAllActiveTransfers()
         closeCurrentProvider()
     }
@@ -932,54 +1010,16 @@ final class FileBrowserModel {
         RemotePath.shellQuote(s)
     }
 
-    /// 属主名补全（共享的 `RemoteFileOperations.resolveOwnerNames`）。iOS 不跑这一步。
+    /// 属主名补全（共享的 `RemoteFileOperations.resolveOwnerNames`）。
     private func resolveOwnerNames(for entries: [RemoteEntry],
                                    provider: any SFTPProviding,
                                    directoryPath: String) async -> [RemoteEntry] {
         await RemoteFileOperations.resolveOwnerNames(for: entries, in: directoryPath, provider: provider)
     }
 
-    private static func canMoveRemoteDragItem(sourcePath: String,
-                                              itemName: String,
-                                              isDirectory: Bool,
-                                              targetDirectoryPath: String) -> Bool {
-        guard !itemName.isEmpty, sourcePath != "/" else { return false }
-        let destination = join(targetDirectoryPath, itemName)
-        guard destination != sourcePath else { return false }
-        if isDirectory {
-            guard targetDirectoryPath != sourcePath else { return false }
-            guard !targetDirectoryPath.hasPrefix(sourcePath + "/") else { return false }
-        }
-        return true
-    }
-
-    private static func normalizedRemotePath(_ path: String) -> String {
-        RemotePath.normalized(path)
-    }
-
-    private static func int64Size(_ size: UInt64?) -> Int64 {
+    static func int64Size(_ size: UInt64?) -> Int64 {
         guard let size else { return 0 }
         return size > UInt64(Int64.max) ? Int64.max : Int64(size)
-    }
-
-    private static func contentType(forFileName fileName: String) -> UTType {
-        let ext = (fileName as NSString).pathExtension
-        if !ext.isEmpty, let type = UTType(filenameExtension: ext) {
-            return type
-        }
-        return .data
-    }
-
-    /// 拖出到 Finder 的文件承诺落盘路径：独立 0700 随机目录 + 清洗过的文件名
-    /// （`ExternalFileStager`，与外部打开 / iOS 下载同一套）。
-    ///
-    /// 不在落盘后收紧到 0600：这份文件会被系统交给拖放目标（桌面 / Finder 窗口），
-    /// 用户拿到的就是它，权限应保持 SFTP 下载的默认值。
-    private static func promisedDownloadURL(fileName: String) throws -> URL {
-        try ExternalFileStager.prepareDestination(
-            suggestedName: fileName,
-            rootDirectory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("uterm-drag-downloads", isDirectory: true))
     }
 
     private func closeCurrentProvider() {
@@ -997,7 +1037,7 @@ final class FileBrowserModel {
     /// 判定委托给 `SSHTransportFailure`：按错误类型精确匹配 + 修正过词序的
     /// 字符串兜底（NIO 实际报 "I/O on closed channel"，旧词表只认
     /// "channel closed"，导致断网后刷新永远不重连）。
-    private static func isRecoverableTransportError(_ error: Error) -> Bool {
+    static func isRecoverableTransportError(_ error: Error) -> Bool {
         SSHTransportFailure.isTransportFailure(error)
     }
 }
@@ -1009,13 +1049,14 @@ extension FileBrowserModel: ConnectionHealthProbing {
     /// - 浏览中：探测底层传输是否还活着；判死时 provider 的底层通道已被
     ///   强制关闭，`refresh()` 会立刻拿到传输错误并自动重连、保留当前目录。
     /// - 失败态：直接试一次 `refresh()`（断网期间失败 → 网络恢复后侧栏自愈）。
-    ///   `markUnavailable`（服务器配置已删除）会清掉 `lastConnectionRequest`，
-    ///   不会对已删除的服务器发起重连。
+    ///   `markUnavailable`（服务器配置已删除）/ `dispose` 会清掉 `lastConnectionRequest`，
+    ///   不会对已删除 / 已关闭的主机发起重连。
     func probeConnectionHealth() async {
         switch state {
         case .browsing:
             guard let provider else { return }
             if await provider.verifyConnectionAlive() { return }
+            guard provider === self.provider else { return }
             await refresh()
         case .failed:
             guard lastConnectionRequest != nil else { return }

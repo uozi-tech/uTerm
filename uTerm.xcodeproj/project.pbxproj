@@ -176,7 +176,7 @@
 				Features/ExternalOpen/UTableHandoff.swift,
 				Features/ExternalOpen/Views/ExternalOpenOverlay.swift,
 				Features/ExternalOpen/Views/ExternalOpenWindowBinding.swift,
-				Features/Files/FileBrowserModel.swift,
+				"Features/Files/FileBrowserModel+Desktop.swift",
 				Features/Files/RemoteFileDragPayload.swift,
 				Features/Files/RemoteRowDropTargeting.swift,
 				Features/Files/Views/FileBrowserView.swift,
