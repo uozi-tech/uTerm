@@ -33,7 +33,7 @@ nonisolated enum ResolvedAuth: Equatable, Sendable {
 /// `nonisolated`：纯函数式工具，无 UI 状态，无需 MainActor 隔离。
 nonisolated enum SSHAuthResolver {
     /// 解析认证用到的 `ServerProfile` 字段快照。`@Model` 不是 `Sendable`，
-    /// 拍成值以后钥匙串读取才能离开主线程（见 `resolveOffMain`）。
+    /// 拍成值以后钥匙串读取才能离开主线程（见异步版 `resolveForConnect`）。
     struct Lookup: Sendable {
         let id: UUID
         let keyID: UUID?
@@ -119,21 +119,9 @@ nonisolated enum SSHAuthResolver {
             passphrase: passphrase)
     }
 
-    /// 主线程调用方用：字段快照在主线程拍好，钥匙串那 3~5 次（有跳板机再翻倍）
-    /// `SecItemCopyMatching` IPC 放到并发线程池里做，不和连接中页的入场动画抢主线程。
-    /// 跳板机解析失败按「没有跳板机认证」处理，与各调用点原来的 `try?` 同义。
-    @concurrent static func resolveOffMain(
-        _ profile: Lookup,
-        jump: Lookup?
-    ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
-        let keychain = KeychainStore()
-        let auth = try resolve(profile, keychain: keychain)
-        let jumpAuth = jump.flatMap { try? resolve($0, keychain: keychain) }
-        return (auth, jumpAuth)
-    }
-
-    /// 新建连接用：跟 `resolveOffMain` 的区别是跳板机的凭据缺了要报错，不能悄悄当作没有。
-    /// 钥匙串读取在并发线程池里做；规则本身见同名同步版。
+    /// 新建连接用：字段快照在调用线程拍好，钥匙串那 3~5 次（有跳板机再翻倍）`SecItemCopyMatching`
+    /// 放到并发线程池里做，不和连接中页的入场动画抢主线程。跳板机凭据缺了报错，不能悄悄当作没有。
+    /// 规则本身见同名同步版。
     @concurrent static func resolveForConnect(
         _ profile: Lookup,
         jump: Lookup?

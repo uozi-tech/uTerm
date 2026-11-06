@@ -18,7 +18,7 @@ extension SFTPSession {
         keychain: some KeychainReading & Sendable = KeychainStore()
     ) async throws -> SFTPSession {
         let snapshot = SSHConnection.ProfileSnapshot(profile)
-        let resolved = try await resolveOffMain(
+        let resolved = try await resolveAuthOffMain(
             SSHAuthResolver.Lookup(profile),
             jump: profile.jumpHost.map(SSHAuthResolver.Lookup.init),
             keychain: keychain)
@@ -34,7 +34,7 @@ extension SFTPSession {
     }
 
     /// 钥匙串读取放到并发线程池里做；规则本身是 `SSHAuthResolver.resolveForConnect` 的同步版。
-    @concurrent private static func resolveOffMain(
+    @concurrent private static func resolveAuthOffMain(
         _ profile: SSHAuthResolver.Lookup,
         jump: SSHAuthResolver.Lookup?,
         keychain: some KeychainReading & Sendable
