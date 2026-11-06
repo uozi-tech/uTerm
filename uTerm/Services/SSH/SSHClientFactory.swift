@@ -134,6 +134,7 @@ nonisolated enum SSHClientFactory {
         hostKeyApprover: @escaping @Sendable (HostKeyChallenge) async -> Bool,
         protocolOptions: Set<SSHProtocolOption> = SSHClientFactory.channelWindowOptions
     ) async throws -> ConnectedClient {
+        LocalNetworkUse.markUsed()
         let target = packageAuth(auth)
         let jumpHost: USSHKit.SSHJumpHost?
         if let jump = profile.jumpHost {

@@ -64,6 +64,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.lanSyncHostPairingCode, "lanSync.hostPairingCode"),
         (DefaultsKey.lanSyncPairingCode, "lanSync.pairingCode"),
         (DefaultsKey.lanSyncReceiverActivated, "lanSync.receiverActivated"),
+        (DefaultsKey.localNetworkUsed, "localNetwork.used"),
         (DefaultsKey.fileBrowserSortKey, "fileBrowser.sortKey"),
         (DefaultsKey.fileBrowserSortAscending, "fileBrowser.sortAscending"),
         (DefaultsKey.fileBrowserFoldersFirst, "fileBrowser.foldersFirst"),

@@ -68,6 +68,7 @@ final class HostReachabilityMonitor {
     let maxConcurrent: Int
 
     private let probe: Probe?
+    private let allowsProbe: (HostEndpointKey) -> Bool
     private let now: () -> Date
     private var entries: [HostEndpointKey: HostReachabilityEntry] = [:]
     private var pending: [HostEndpointKey] = []
@@ -77,8 +78,10 @@ final class HostReachabilityMonitor {
          refreshInterval: Duration = .seconds(300),
          staleAfter: TimeInterval = 120,
          maxConcurrent: Int = 6,
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init,
+         allowsProbe: @escaping (HostEndpointKey) -> Bool = { LocalNetworkUse.allowsBackgroundProbe(host: $0.host) }) {
         self.probe = probe
+        self.allowsProbe = allowsProbe
         self.refreshInterval = refreshInterval
         self.staleAfter = staleAfter
         self.maxConcurrent = maxConcurrent
@@ -114,6 +117,9 @@ final class HostReachabilityMonitor {
 
     private func enqueueIfStale(_ key: HostEndpointKey, entry: HostReachabilityEntry, maxAge: TimeInterval) {
         guard probe != nil, !entry.queued else { return }
+        // iOS：用户还没用过本地网络时不碰局域网地址，否则首启一出主机列表就弹「本地网络」授权。
+        // 下一轮周期重探（或行重新出现）时再看。
+        guard allowsProbe(key) else { return }
         if let last = entry.lastProbe, now().timeIntervalSince(last) < maxAge { return }
         entry.queued = true
         pending.append(key)

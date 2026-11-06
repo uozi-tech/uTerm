@@ -90,6 +90,8 @@ nonisolated enum DefaultsKey {
     static let lanSyncHostPairingCode = "lanSync.hostPairingCode"
     static let lanSyncPairingCode = "lanSync.pairingCode"
     static let lanSyncReceiverActivated = "lanSync.receiverActivated"
+    /// iOS：用户主动连过 SSH 主机，之后在线探测可以碰局域网地址（见 `LocalNetworkUse`）。
+    static let localNetworkUsed = "localNetwork.used"
 
     /// macOS SFTP 浏览器的排序 / 过滤偏好。
     /// 待接线：`FileBrowserModel.PrefKey` 仍写着同值的字面量（该文件本轮不动）。
