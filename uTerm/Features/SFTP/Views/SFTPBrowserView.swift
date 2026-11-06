@@ -306,13 +306,21 @@ struct SFTPBrowserView: View {
     // hIdx 与 currentPath 不会因连点而脱钩（修复「点两次才返回」同源问题）。
     private func goBack() {
         guard hIdx > 0, !model.isNavigating else { return }
-        hIdx -= 1
-        Task { await model.navigate(toPath: history[hIdx]) }
+        step(to: hIdx - 1)
     }
     private func goFwd() {
         guard hIdx < history.count - 1, !model.isNavigating else { return }
-        hIdx += 1
-        Task { await model.navigate(toPath: history[hIdx]) }
+        step(to: hIdx + 1)
+    }
+    private func step(to index: Int) {
+        let previous = hIdx
+        let target = history[index]
+        hIdx = index
+        Task {
+            await model.navigate(toPath: target)
+            // 目标打不开（被删 / 改了权限）时停在原目录、只提示：位置也退回去，否则下次前进 / 后退会跳过或重复一格。
+            if model.currentPath != target, hIdx == index { hIdx = previous }
+        }
     }
     private func syncHistory(to newPath: String) {
         if history.indices.contains(hIdx), history[hIdx] == newPath { return }
