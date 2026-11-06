@@ -137,7 +137,15 @@ nonisolated enum SSHAuthResolver {
         _ profile: Lookup,
         jump: Lookup?
     ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
-        let keychain = KeychainStore()
+        try await resolveForConnect(profile, jump: jump, keychain: KeychainStore())
+    }
+
+    /// 同上，钥匙串可换（测试注入假钥匙串，不碰正式版的钥匙串条目）。
+    @concurrent static func resolveForConnect(
+        _ profile: Lookup,
+        jump: Lookup?,
+        keychain: some KeychainReading & Sendable
+    ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
         let auth = try resolve(profile, keychain: keychain)
         let jumpAuth = try jump.map { try resolve($0, keychain: keychain) }
         return (auth, jumpAuth)
