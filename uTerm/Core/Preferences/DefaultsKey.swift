@@ -79,7 +79,8 @@ nonisolated enum DefaultsKey {
     static let remotePathMatrixLog = "remote.pathMatrixLog"
     static let remoteIceProbeNote = "remote.iceProbeNote"
     static let remotePathMatrixRounds = "remote.pathMatrixRounds"
-    static let remotePathMatrixModes = "remote.pathMatrixModes"
+    /// 不测的路（存「跳过哪些」而不是「测哪些」：以后加了新路，默认就会测）。
+    static let remotePathMatrixSkippedModes = "remote.pathMatrixSkippedModes"
     /// iOS：用户点过「控制我的 Mac」之后才在启动时浏览（要「本地网络」授权）。
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。

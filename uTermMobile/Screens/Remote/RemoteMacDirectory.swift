@@ -73,7 +73,8 @@ final class RemoteMacDirectory {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var browser: NWBrowser?
     /// Bonjour 此刻看到的、带设备 ID 的 Mac：设备 ID → (电脑名, 端点)。网络诊断测局域网用它。
-    @ObservationIgnored private var discovered: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
+    /// 要被观察：「只走公网」打开时 `macs` 不随它变，诊断页的「局域网」标记全靠它刷新。
+    private var discovered: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
     /// 正式连接认的局域网 Mac：「只走公网」打开时为空。
     @ObservationIgnored private var online: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
     @ObservationIgnored private var clients: [String: RemoteMacClient] = [:]

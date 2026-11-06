@@ -15,8 +15,8 @@ struct RemoteNetworkDiagnosticsScreen: View {
     @Environment(\.mAccent) private var accent
     @AppStorage(DefaultsKey.remoteIceProbeNote) private var note = ""
     @AppStorage(DefaultsKey.remotePathMatrixRounds) private var rounds = 3
-    @AppStorage(DefaultsKey.remotePathMatrixModes) private var modesRaw = RemotePathProbeMode.allCases.map(\.rawValue)
-        .joined(separator: ",")
+    /// 跳过的路（逗号分隔）。存跳过的而不是要测的：以后加了新路，默认就会测。
+    @AppStorage(DefaultsKey.remotePathMatrixSkippedModes) private var skippedRaw = ""
     @State private var selectedMacID: String?
     @State private var network = "…"
     @State private var relayName: String?
@@ -105,8 +105,8 @@ struct RemoteNetworkDiagnosticsScreen: View {
     // MARK: - 运行
 
     private var modes: [RemotePathProbeMode] {
-        let raw = Set(modesRaw.split(separator: ",").map(String.init))
-        return RemotePathProbeMode.allCases.filter { raw.contains($0.rawValue) }
+        let skipped = Set(skippedRaw.split(separator: ",").map(String.init))
+        return RemotePathProbeMode.allCases.filter { !skipped.contains($0.rawValue) }
     }
 
     private var selectedMac: RemoteMacDirectory.Mac? {
@@ -180,6 +180,9 @@ struct RemoteNetworkDiagnosticsScreen: View {
         return MInsetGroup(header: header, footer: context) {
             if running == nil {
                 RemotePathVerdictRow(chosen: RemotePathVerdict.chosen(summaries, skipsLocalNetwork: directory.internetOnly),
+                                     untested: RemotePathProbeMode.allCases.filter { mode in
+                                         !summaries.contains { $0.mode == mode }
+                                     },
                                      skipsLocalNetwork: directory.internetOnly)
             }
             ForEach(summaries, id: \.mode) { summary in
@@ -194,7 +197,8 @@ struct RemoteNetworkDiagnosticsScreen: View {
         Binding(get: { modes.contains(mode) }, set: { on in
             var set = Set(modes)
             if on { set.insert(mode) } else { set.remove(mode) }
-            modesRaw = RemotePathProbeMode.allCases.filter(set.contains).map(\.rawValue).joined(separator: ",")
+            skippedRaw = RemotePathProbeMode.allCases.filter { !set.contains($0) }.map(\.rawValue)
+                .joined(separator: ",")
         })
     }
 
@@ -248,6 +252,8 @@ struct RemoteNetworkDiagnosticsScreen: View {
 /// 结论：实际连接会走哪条路。
 private struct RemotePathVerdictRow: View {
     let chosen: RemotePathProbeSummary?
+    /// 这次没测的路：结论只对测过的路负责。
+    let untested: [RemotePathProbeMode]
     let skipsLocalNetwork: Bool
 
     var body: some View {
@@ -263,15 +269,16 @@ private struct RemotePathVerdictRow: View {
     }
 
     private var title: String {
-        guard let chosen else { return "这台 Mac 现在连不上" }
+        guard let chosen else { return untested.isEmpty ? "这台 Mac 现在连不上" : "测过的路都不通" }
         return "实际会走\(chosen.mode.label)"
     }
 
     private var detail: String {
-        guard let chosen else { return "所有测过的路都不通，看下面每条路的原因。" }
+        let notTested = untested.isEmpty ? "" : "这次没测\(untested.map(\.label).joined(separator: "、"))（在「检测设置」里打开）。"
+        guard let chosen else { return "看下面每条路的原因。\(notTested)" }
         let latency = chosen.medianRoundTripMillis.map { String(format: "往返约 %.0f ms", $0) } ?? "往返未测出"
         let skip = skipsLocalNetwork ? "「只走公网」已打开，正式连接会跳过局域网。" : ""
-        return "连接按局域网 → 直连 → 中继的顺序挑第一条通的，\(latency)。\(skip)"
+        return "连接按局域网 → 直连 → 中继的顺序挑第一条通的，\(latency)。\(skip)\(notTested)"
     }
 }
 
