@@ -62,9 +62,10 @@ struct SSHParallelExecutor: ParallelCommandExecuting {
         let lookup = SSHAuthResolver.Lookup(profile)
         let jump = profile.jumpHost.map { SSHAuthResolver.Lookup($0) }
         do {
-            let auth = try await Self.resolve(lookup, jump: jump)
+            // 钥匙串在并发线程池里读；跳板机解析失败与目标一样整台判失败。
+            let auth = try await SSHAuthResolver.resolveForConnect(lookup, jump: jump)
             let made = WorkspaceCommandExecutorFactory.make(
-                snapshot: snapshot, auth: auth.target, jumpAuth: auth.jump, container: container,
+                snapshot: snapshot, auth: auth.auth, jumpAuth: auth.jump, container: container,
                 trustNewKeys: trustNewKeys, reuseConnection: true)
             return SSHParallelSession(executor: made.executor,
                                       hostKeyChallenges: made.hostKeyChallenges,
@@ -76,15 +77,6 @@ struct SSHParallelExecutor: ParallelCommandExecuting {
                                       connection: nil,
                                       setupErrorText: FriendlyError.describe(error))
         }
-    }
-
-    /// 读钥匙串。跳板机解析失败与目标一样整台判失败（与 `WorkspaceCommandExecutorFactory.make` 同义）。
-    @concurrent nonisolated private static func resolve(
-        _ target: SSHAuthResolver.Lookup, jump: SSHAuthResolver.Lookup?
-    ) async throws -> (target: ResolvedAuth, jump: ResolvedAuth?) {
-        let keychain = KeychainStore()
-        return (try SSHAuthResolver.resolve(target, keychain: keychain),
-                try jump.map { try SSHAuthResolver.resolve($0, keychain: keychain) })
     }
 }
 

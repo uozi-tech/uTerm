@@ -184,14 +184,9 @@ enum WorkspaceCommandExecutorFactory {
         reuseConnection: Bool = false
     ) throws -> (executor: SSHCommandExecutor, hostKeyChallenges: HostKeyChallengeSink, connection: ReusableSSHConnection?) {
         // 1) 在 MainActor 上解析所有建连输入为 Sendable 值。
-        let keychain = KeychainStore()
         let snapshot = SSHConnection.ProfileSnapshot(server)
-        let auth = try SSHAuthResolver.resolve(profile: server, keychain: keychain)
-        var jumpAuth: ResolvedAuth?
-        if let jump = server.jumpHost {
-            jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-        }
-        return make(snapshot: snapshot, auth: auth, jumpAuth: jumpAuth, container: container,
+        let resolved = try SSHAuthResolver.resolveForConnect(profile: server, keychain: KeychainStore())
+        return make(snapshot: snapshot, auth: resolved.auth, jumpAuth: resolved.jump, container: container,
                     trustNewKeys: trustNewKeys, reuseConnection: reuseConnection)
     }
 

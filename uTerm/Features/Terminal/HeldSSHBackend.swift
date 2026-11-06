@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 @_spi(uTermIntegration) import USSHKit
 
 /// SSH 终端的后端：连接和 PTY 都在 `uterm-holder` 里跑的 `uterm-ssh` 进程上，App 重启不影响远端程序。
@@ -14,6 +15,24 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         let resolveAuth: @Sendable () async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?)
         let hostKeyVerifier: HostKeyVerifier
         let hostKeyApprover: @Sendable (HostKeyChallenge) async -> Bool
+
+        /// 由一台已保存主机组装：凭据规则与进程内终端的 `SSHConnection.make` 是同一份
+        /// （`SSHAuthResolver.resolveForConnect`，钥匙串离开主线程读、跳板机缺凭据报错），
+        /// 只是推迟到真要新建连接时才读——接回已有会话不碰钥匙串。
+        @MainActor
+        static func make(
+            profile: ServerProfile,
+            container: ModelContainer,
+            approver: @escaping @Sendable (HostKeyChallenge) async -> Bool
+        ) -> Target {
+            let lookup = SSHAuthResolver.Lookup(profile)
+            let jumpLookup = profile.jumpHost.map(SSHAuthResolver.Lookup.init)
+            return Target(
+                profile: SSHConnection.ProfileSnapshot(profile),
+                resolveAuth: { try await SSHAuthResolver.resolveForConnect(lookup, jump: jumpLookup) },
+                hostKeyVerifier: HostKeyVerifier(modelContainer: container),
+                hostKeyApprover: approver)
+        }
     }
 
     private static let foregroundTimeout = Duration.milliseconds(1500)

@@ -330,14 +330,14 @@ struct ServerFormView: View {
         }
 
         // 2. 跳板机鉴权：跳板机只能选已有 profile，凭据已在钥匙串。
-        var jumpAuth: ResolvedAuth?
+        //    与新建连接同一条规则：选了跳板机就必须读到它的凭据。
+        let jumpAuth: ResolvedAuth?
         let jump = draft.useJumpHost ? selectedJump : nil
-        if let jump {
-            do {
-                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-            } catch {
-                publish(false, "跳板机认证读取失败：\(describe(error))"); return
-            }
+        do {
+            jumpAuth = try SSHAuthResolver.resolveJump(
+                jump.map(SSHAuthResolver.Lookup.init), keychain: keychain)
+        } catch {
+            publish(false, "跳板机认证读取失败：\(describe(error))"); return
         }
 
         // 3. 用表单标量字段建快照（尚未保存，无 profile 可摘）。

@@ -112,16 +112,10 @@ final class PaneModel: Identifiable {
     }
 
     private func makeHeldBackend(profile: ServerProfile, modelContainer: ModelContainer) -> HeldSSHBackend {
-        let lookup = SSHAuthResolver.Lookup(profile)
-        let jumpLookup = profile.jumpHost.map(SSHAuthResolver.Lookup.init)
         let terminal = session.terminalView.getTerminal()
         return HeldSSHBackend(
             client: LocalShellService.shared.client, sessionID: id, columns: terminal.cols, rows: terminal.rows,
-            target: HeldSSHBackend.Target(
-                profile: SSHConnection.ProfileSnapshot(profile),
-                resolveAuth: { try await SSHAuthResolver.resolveForConnect(lookup, jump: jumpLookup) },
-                hostKeyVerifier: HostKeyVerifier(modelContainer: modelContainer),
-                hostKeyApprover: hostKeyRelay.makeApprover()),
+            target: .make(profile: profile, container: modelContainer, approver: hostKeyRelay.makeApprover()),
             attributes: sessionAttributes(title: profile.name))
     }
 

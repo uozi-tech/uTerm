@@ -133,14 +133,45 @@ nonisolated enum SSHAuthResolver {
     }
 
     /// 新建连接用：跟 `resolveOffMain` 的区别是跳板机的凭据缺了要报错，不能悄悄当作没有。
+    /// 钥匙串读取在并发线程池里做；规则本身见同名同步版。
     @concurrent static func resolveForConnect(
         _ profile: Lookup,
         jump: Lookup?
     ) async throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
-        let keychain = KeychainStore()
+        try resolveForConnect(profile, jump: jump, keychain: KeychainStore())
+    }
+
+    /// 由已保存主机新建连接时解析凭据的**唯一规则**：目标与跳板机都必须解析成功。
+    /// 终端、SFTP、端口转发、CLI 控制通道、Agent / 并行执行都经这里（或上面的异步版），
+    /// 不要在调用点各自再拼一遍 `resolve` + 跳板机。
+    ///
+    /// 同步版在调用线程读钥匙串：给本身就是同步、拿到结果才能往下走的调用点用
+    /// （端口转发的会话屏障、CLI 的建连输入）；能 `await` 的调用点用异步版。
+    static func resolveForConnect(
+        _ profile: Lookup,
+        jump: Lookup?,
+        keychain: some KeychainReading
+    ) throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
         let auth = try resolve(profile, keychain: keychain)
-        let jumpAuth = try jump.map { try resolve($0, keychain: keychain) }
-        return (auth, jumpAuth)
+        return (auth, try resolveJump(jump, keychain: keychain))
+    }
+
+    /// 便捷重载：直接从一台已保存主机解析（字段快照在调用线程拍）。
+    static func resolveForConnect(
+        profile: ServerProfile,
+        keychain: some KeychainReading
+    ) throws -> (auth: ResolvedAuth, jump: ResolvedAuth?) {
+        try resolveForConnect(Lookup(profile), jump: profile.jumpHost.map(Lookup.init), keychain: keychain)
+    }
+
+    /// 跳板机凭据：没配跳板机返回 nil；配了就必须解析成功，缺了报错——
+    /// 新建连接绝不能悄悄绕过跳板机直连。目标凭据另有来源的调用点（表单里「测试连接」
+    /// 用的是尚未保存的输入）单独用它。
+    static func resolveJump(
+        _ jump: Lookup?,
+        keychain: some KeychainReading
+    ) throws -> ResolvedAuth? {
+        try jump.map { try resolve($0, keychain: keychain) }
     }
 
     /// 读取一条钥匙串密钥：条目不存在返回 `nil`（沿用 `KeychainStore.load` 的语义），

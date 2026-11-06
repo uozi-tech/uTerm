@@ -294,15 +294,11 @@ final class ForwardingCoordinator {
         relays[server.id] = relay
         if let existing = sessions[server.id] { return existing }
 
-        // 认证解析 —— 镜像 FileBrowserModel.makeLiveSFTPProvider（@MainActor）。
-        let keychain = KeychainStore()
-        let auth: ResolvedAuth
-        var jumpAuth: ResolvedAuth?
+        // 认证解析：与终端 / CLI 同一条规则（跳板机凭据缺了报错，不直连）。
+        // 同步读钥匙串 —— 会话必须在这里同步登记进 `sessions`，后来的 start 才能复用同一条屏障。
+        let resolved: (auth: ResolvedAuth, jump: ResolvedAuth?)
         do {
-            auth = try SSHAuthResolver.resolve(profile: server, keychain: keychain)
-            if let jump = server.jumpHost {
-                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-            }
+            resolved = try SSHAuthResolver.resolveForConnect(profile: server, keychain: KeychainStore())
         } catch {
             AppLogger.error("转发认证解析失败 \(server.host)：\(error.localizedDescription)",
                             category: ForwardingLog.category)
@@ -340,8 +336,8 @@ final class ForwardingCoordinator {
         }
         let session = ForwardingSession(
             profile: SSHConnection.ProfileSnapshot(server),
-            auth: auth,
-            jumpHostAuth: jumpAuth,
+            auth: resolved.auth,
+            jumpHostAuth: resolved.jump,
             hostKeyVerifier: verifier,
             hostKeyApprover: approver,
             onStatus: onStatus,

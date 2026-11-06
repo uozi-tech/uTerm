@@ -4,7 +4,7 @@ import SwiftData
 /// CLI 建连所需的一切，**已解析成 `Sendable` 值**。
 ///
 /// 这是 MainActor 与连接池 actor 之间的唯一桥：认证材料在 MainActor 上从
-/// `ServerProfile` + 钥匙串解析出来（`SSHAuthResolver.resolve`），之后连接闭包只捕获
+/// `ServerProfile` + 钥匙串解析出来（`SSHAuthResolver.resolveForConnect`），之后连接闭包只捕获
 /// 这些值，不捕获任何 MainActor 隔离状态 —— 与 `WorkspaceCommandExecutorFactory.make`
 /// 的做法一致。
 nonisolated struct HostConnectionSpec: Sendable {
@@ -45,9 +45,9 @@ nonisolated struct HostConnectionSpec: Sendable {
 
     /// 在 MainActor 上把一台主机解析成可跨隔离域传递的建连输入。
     ///
-    /// 照 `WorkspaceCommandExecutorFactory.make` 的前半段（但**不**复制它的执行器构造）：
     /// `KeychainStore()` → `SSHConnection.ProfileSnapshot(profile)` →
-    /// `SSHAuthResolver.resolve(profile:keychain:)`，跳板机同样解析一次。
+    /// `SSHAuthResolver.resolveForConnect(profile:keychain:)`（目标 + 跳板机，跳板机缺凭据报错；
+    /// 与终端 / 端口转发 / Agent 同一条规则）。
     /// 解析失败（钥匙串里没有密码 / 私钥，或钥匙串本身读不了）抛
     /// `ControlConnectError.authFailed` —— handler 把它翻成 `auth_failed`。
     @MainActor
@@ -57,13 +57,9 @@ nonisolated struct HostConnectionSpec: Sendable {
     ) throws -> HostConnectionSpec {
         let keychain: any KeychainReading = keychainOverride ?? KeychainStore()
         let snapshot = SSHConnection.ProfileSnapshot(profile)
-        let auth: ResolvedAuth
-        var jumpAuth: ResolvedAuth?
+        let resolved: (auth: ResolvedAuth, jump: ResolvedAuth?)
         do {
-            auth = try SSHAuthResolver.resolve(profile: profile, keychain: keychain)
-            if let jump = profile.jumpHost {
-                jumpAuth = try SSHAuthResolver.resolve(profile: jump, keychain: keychain)
-            }
+            resolved = try SSHAuthResolver.resolveForConnect(profile: profile, keychain: keychain)
         } catch {
             throw ControlConnectError.authFailed(FriendlyError.describe(error))
         }
@@ -72,8 +68,8 @@ nonisolated struct HostConnectionSpec: Sendable {
             id: profile.id,
             name: displayName,
             profile: snapshot,
-            auth: auth,
-            jumpAuth: jumpAuth,
+            auth: resolved.auth,
+            jumpAuth: resolved.jump,
             container: container
         )
     }
