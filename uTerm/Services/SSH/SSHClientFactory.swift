@@ -278,7 +278,7 @@ nonisolated enum SSHClientFactory {
     }
 
     static func packageHostKeyPolicy() -> USSHKit.SSHHostKeyPolicy {
-        let raw = UserDefaults.standard.string(forKey: "sshHostKeyPolicy")
+        let raw = UserDefaults.standard.string(forKey: PreferenceKey.sshHostKeyPolicy)
             ?? SSHHostKeyPolicy.ask.rawValue
         switch SSHHostKeyPolicy(rawValue: raw) ?? .ask {
         case .strict:
@@ -312,7 +312,7 @@ nonisolated enum SSHClientFactory {
     }
 
     static func connectTimeoutSeconds() -> Int64 {
-        let seconds = (UserDefaults.standard.object(forKey: "sshConnectTimeout") as? Int) ?? 30
+        let seconds = (UserDefaults.standard.object(forKey: PreferenceKey.sshConnectTimeout) as? Int) ?? 30
         return Int64(seconds)
     }
 }

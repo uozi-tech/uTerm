@@ -112,7 +112,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 }
 
 nonisolated enum SettingsTabSelection {
-    static let key = "settingsTabSelection"
+    static let key = PreferenceKey.settingsTabSelection
     static let aboutMenuTarget = SettingsTab.about.rawValue
 
     static func tab(from rawValue: String?) -> SettingsTab {

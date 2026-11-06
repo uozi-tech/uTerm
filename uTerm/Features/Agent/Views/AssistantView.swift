@@ -75,7 +75,7 @@ struct AssistantView: View {
     // 一开窗就把库里全部会话物化出来）。
     @Query(ChatSessionQueries.recent) private var sessions: [ChatSession]
 
-    @AppStorage("agentSafety") private var agentSafetyRaw = AgentSafety.readAuto.rawValue
+    @AppStorage(PreferenceKey.agentSafety) private var agentSafetyRaw = AgentSafety.readAuto.rawValue
     private var safetyBinding: Binding<AgentSafety> {
         Binding(get: { AgentSafety(rawValue: agentSafetyRaw) ?? .readAuto },
                 set: { agentSafetyRaw = $0.rawValue })

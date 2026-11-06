@@ -19,7 +19,7 @@ import Carbon.HIToolbox
 final class CopyableTerminalView: SwiftTerm.TerminalView {
 
     /// 是否在选中后自动把内容写入剪贴板。由 TerminalHostView 据
-    /// @AppStorage("terminalCopyOnSelect") 同步更新。
+    /// `@AppStorage(PreferenceKey.terminalCopyOnSelect)` 同步更新。
     var copyOnSelect: Bool = false
 
     /// 远控接管尺寸时钉住的视图尺寸（恰好是对端行列数 × 字符格）。非 nil 时

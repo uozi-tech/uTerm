@@ -22,7 +22,7 @@ struct ParallelRunSetup {
     /// 按 `request.serverIDs` 选中的主机（顺序与 serverIDs 一致）。
     let targets: [ServerProfile]
     let providers: [AIProvider]
-    /// Agent 里选中的模型服务（`@AppStorage("activeProviderID")`）；没选过为 nil。
+    /// Agent 里选中的模型服务（`@AppStorage(PreferenceKey.activeProviderID)`）；没选过为 nil。
     let activeProviderID: UUID?
     let context: ModelContext
 }
@@ -44,7 +44,7 @@ struct ParallelRunView: View {
     @Environment(\.mAccent) private var accent
     @Query(sort: [SortDescriptor(\ServerProfile.sortOrder)]) private var allHosts: [ServerProfile]
     @Query(sort: [SortDescriptor(\AIProvider.sortOrder)]) private var providers: [AIProvider]
-    @AppStorage("activeProviderID") private var activeProviderIDString = ""
+    @AppStorage(PreferenceKey.activeProviderID) private var activeProviderIDString = ""
 
     @State private var controller: ParallelRunController?
     @State private var now = Date()

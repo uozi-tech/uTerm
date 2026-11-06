@@ -6,10 +6,10 @@ import AppKit
 /// CloudKit、SwiftData）之前退出。
 struct uTermApp: App {
     @NSApplicationDelegateAdaptor(UTermLifecycleDelegate.self) private var lifecycleDelegate
-    @AppStorage("appearancePreference")
+    @AppStorage(PreferenceKey.appearancePreference)
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
-    @AppStorage("appLanguage")
+    @AppStorage(PreferenceKey.appLanguage)
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     /// `terminal-open` 需要从 App 层捕获开窗口动作（见 `installTerminalWindowOpener`）。
@@ -88,7 +88,7 @@ struct uTermApp: App {
         AgentKeychain.purgeLegacy()
         // 启动即应用主题：读 UserDefaults（@AppStorage 此刻还不能保证可读 wrappedValue），
         // 写 NSApp.appearance，避免首帧用错外观闪一下。live 切换由 AppAppearanceSync 负责。
-        let raw = UserDefaults.standard.string(forKey: "appearancePreference") ?? ""
+        let raw = UserDefaults.standard.string(forKey: PreferenceKey.appearancePreference) ?? ""
         NSApplication.shared.appearance = (AppearancePreference(rawValue: raw) ?? .system).nsAppearance
         // 启动应用锁：读 requireAuthAtLaunch（mac 缺键视作开，与 @AppStorage 默认对齐，见 `AppLockPreference`）。
         // 锁屏遮罩与首次验证由各 Scene 上的 .appLockGate(lockModel) 驱动。

@@ -16,7 +16,7 @@ final class LocalShellWorkspaces {
     nonisolated static let listLimit = 8
     /// 多存一些：列表里的目录可能已经被删了，要有后备顶上。
     private static let storedLimit = 24
-    private static let defaultsKey = "localShell.recentDirectories"
+    private static let defaultsKey = PreferenceKey.localShellRecentDirectories
 
     /// 真实的主目录。沙盒里 `NSHomeDirectory()` 是容器。
     nonisolated static var home: String { SkillTarget.realHomeDirectoryURL.path }

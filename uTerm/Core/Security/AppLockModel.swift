@@ -7,7 +7,7 @@ import Observation
 /// **键名不能改**：已安装用户的开关值就存在这个键下。两端默认值有意相反——macOS 缺键视作
 /// 开（沿用最初的默认），iOS 缺键视作关（由设置里验证一次后开启，见 `AppLockModel.confirmEnable`）。
 nonisolated enum AppLockPreference {
-    static let key = "requireAuthAtLaunch"
+    static let key = PreferenceKey.requireAuthAtLaunch
 
     #if os(macOS)
     static let defaultValue = true

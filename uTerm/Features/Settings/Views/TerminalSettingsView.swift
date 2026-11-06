@@ -8,10 +8,10 @@ import SwiftUI
 /// 余下 @AppStorage 仍全部 live-update：TerminalHostView 观察同名 key
 /// 触发 updateNSView 重 apply。
 struct TerminalSettingsView: View {
-    @AppStorage("terminalCursorShape")  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
-    @AppStorage("terminalCursorBlink")  private var cursorBlink: Bool = false
-    @AppStorage("terminalScrollback")   private var scrollback: Int = 3_000
-    @AppStorage("terminalCopyOnSelect") private var copyOnSelect: Bool = false
+    @AppStorage(PreferenceKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
+    @AppStorage(PreferenceKey.terminalCursorBlink)  private var cursorBlink: Bool = false
+    @AppStorage(PreferenceKey.terminalScrollback)   private var scrollback: Int = 3_000
+    @AppStorage(PreferenceKey.terminalCopyOnSelect) private var copyOnSelect: Bool = false
 
     private var cursorShapeBinding: Binding<TerminalCursorShape> {
         Binding(

@@ -16,7 +16,7 @@ import SwiftData
 @MainActor
 struct ChatHistoryStore {
     /// 会话保留窗口（天）的 UserDefaults 键。`0` = 不清理。
-    nonisolated static let retentionDaysKey = "chatRetentionDays"
+    nonisolated static let retentionDaysKey = PreferenceKey.chatRetentionDays
     /// 默认窗口。比执行日志的 30 天宽得多——对话的信息密度和可替代性都不一样。
     nonisolated static let defaultRetentionDays = 180
 

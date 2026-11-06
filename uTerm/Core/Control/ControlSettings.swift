@@ -9,8 +9,8 @@ import Observation
 @Observable
 public final class ControlSettings {
     enum Keys {
-        static let enabled = "control.enabled"
-        static let allowMutations = "control.allowMutations"
+        static let enabled = PreferenceKey.controlEnabled
+        static let allowMutations = PreferenceKey.controlAllowMutations
     }
 
     @ObservationIgnored private let defaults: UserDefaults

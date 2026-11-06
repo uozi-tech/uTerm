@@ -16,7 +16,7 @@ import SwiftData
 @Observable
 final class GlobalForwardingModel {
     /// 主开关持久化键（应用级自启总闸）。缺键默认 **开**（只作用于用户显式标记的规则，故安全）。
-    private static let autoKey = "globalForwarding.launchAtAppStart.enabled"
+    private static let autoKey = PreferenceKey.globalForwardingLaunchAtAppStart
 
     /// 启动序列相位（驱动横幅副文案与行上过程态芯片的显隐）。
     var phase: GFPhase = .idle
