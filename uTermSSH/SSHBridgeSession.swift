@@ -74,7 +74,7 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
         for delay in Self.localNetworkRetryDelays {
             do {
                 return try await connect(request)
-            } catch where String(describing: error).contains("errno: \(EHOSTUNREACH)") {
+            } catch where Self.isHostUnreachable(error) {
                 try await Task.sleep(for: delay)
             }
         }
@@ -103,7 +103,13 @@ nonisolated final class SSHBridgeSession: @unchecked Sendable {
     }
 
     private func fail(_ request: SSHBridgeConnectRequest, _ error: Error) async {
-        await control.send(.failed(Self.failure(for: error, hasJumpHost: request.jumpHost != nil)))
+        var failure = Self.failure(for: error, hasJumpHost: request.jumpHost != nil)
+        if Self.isHostUnreachable(error) { failure.localNetworkUnreachable = true }
+        await control.send(.failed(failure))
+    }
+
+    private static func isHostUnreachable(_ error: Error) -> Bool {
+        String(describing: error).contains("errno: \(EHOSTUNREACH)")
     }
 
     /// 分类与 `SSHClientFactory.connect` 保持一致，用户看到的文案不因走了这个进程而变。

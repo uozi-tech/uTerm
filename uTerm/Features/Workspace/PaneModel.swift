@@ -85,30 +85,49 @@ final class PaneModel: Identifiable {
         connectedServerName = profile.name
         defer { SSHSessionRestorer.shared.settled(id) }
         do {
-            let backend: any TerminalBackend
             // 辅助程序出了问题也不能连不上服务器：退回到 App 进程内的连接，只是活不过重启。
-            if (try? await LocalShellService.shared.client.ping()) != nil {
-                backend = makeHeldBackend(profile: profile, modelContainer: modelContainer)
-            } else {
+            let endpoint = Self.endpointKey(profile)
+            let viaHelper = !Self.inProcessEndpoints.contains(endpoint)
+            if viaHelper, (try? await LocalShellService.shared.client.ping()) != nil {
+                let held = makeHeldBackend(profile: profile, modelContainer: modelContainer)
+                timeline.mark("backend")
+                await session.connect(using: held)
+                // `uterm-ssh` 是自己的「责任进程」，局域网权限单独问；用户拒绝或没回答时它一直路由不可达。
+                // App 自己的权限通常早有了：这台主机本次运行改走进程内连接，免得每开一个标签都等一轮重试。
+                guard case .failed = session.connectionState, await held.failedOnLocalNetwork else {
+                    registerIfConnected(profile)
+                    return
+                }
+                Self.inProcessEndpoints.insert(endpoint)
+                AppLogger.error("终端辅助程序连不到局域网（权限未授予？），这台主机改走 App 进程内连接", category: "ssh")
+            } else if viaHelper {
                 AppLogger.error("终端辅助程序不可用，这条 SSH 连接留在 App 进程内", category: "ssh")
-                backend = try await SSHConnection.make(profile: profile, container: modelContainer,
-                                                       approver: hostKeyRelay.makeApprover())
             }
+            let backend = try await SSHConnection.make(profile: profile, container: modelContainer,
+                                                       approver: hostKeyRelay.makeApprover())
             timeline.mark("backend")
             await session.connect(using: backend)
-            // 连上了才登记 —— `terminals` 列的是「能读能写的活会话」，
-            // 连接中 / 已失败的窗格对 CLI 没有意义。钩子通常已经登记过了，
-            // 这一次是幂等兜底（同 id 重复登记 = 原地更新）。
-            if session.connectionState == .connected {
-                registrar?.register(paneID: id,
-                                    serverID: profile.id,
-                                    serverName: profile.name,
-                                    session: session)
-            }
+            registerIfConnected(profile)
         } catch {
             timeline.finish("failed")
             session.markFailed("\(error)")
         }
+    }
+
+    /// 连上了才登记 —— `terminals` 列的是「能读能写的活会话」，
+    /// 连接中 / 已失败的窗格对 CLI 没有意义。钩子通常已经登记过了，
+    /// 这一次是幂等兜底（同 id 重复登记 = 原地更新）。
+    private func registerIfConnected(_ profile: ServerProfile) {
+        guard session.connectionState == .connected else { return }
+        registrar?.register(paneID: id, serverID: profile.id, serverName: profile.name, session: session)
+    }
+
+    /// 本次运行里辅助程序连不到局域网的主机（`host:port`），之后直接走进程内连接。不持久化：
+    /// 用户去系统设置里放行后，重启 uTerm 就回到能活过重启的连接。
+    private static var inProcessEndpoints: Set<String> = []
+
+    private static func endpointKey(_ profile: ServerProfile) -> String {
+        "\(profile.host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()):\(profile.port)"
     }
 
     private func makeHeldBackend(profile: ServerProfile, modelContainer: ModelContainer) -> HeldSSHBackend {

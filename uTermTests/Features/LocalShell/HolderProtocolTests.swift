@@ -137,4 +137,16 @@ final class HolderProtocolTests: XCTestCase {
         XCTAssertEqual(buffer.droppedBytes(generation: 5), 700 + 1976 + 700 + 10, "清屏丢的也算")
         XCTAssertEqual(buffer.droppedBytes(generation: 4), 0)
     }
+
+    /// `localNetworkUnreachable` 是后加的可选字段：旧 `uterm-ssh` 发的失败没有它，新 App 照样解；反过来旧 App 忽略它。
+    func test_bridge_failure_decodes_with_and_without_local_network_flag() throws {
+        let old = Data(#"{"kind":"connect","message":"x"}"#.utf8)
+        let decodedOld = try JSONDecoder().decode(SSHBridgeFailure.self, from: old)
+        XCTAssertNil(decodedOld.localNetworkUnreachable)
+
+        var failure = SSHBridgeFailure(kind: .connect, message: "路由不可达")
+        failure.localNetworkUnreachable = true
+        let roundTrip = try JSONDecoder().decode(SSHBridgeFailure.self, from: JSONEncoder().encode(failure))
+        XCTAssertEqual(roundTrip.localNetworkUnreachable, true)
+    }
 }

@@ -51,6 +51,8 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
     private let target: Target
     private var attributes: Data?
     private var handshake: HolderConnection?
+    /// 新建连接失败在「路由不可达」上：`uterm-ssh` 的局域网权限多半没拿到。调用方据此退回进程内连接。
+    private(set) var failedOnLocalNetwork = false
 
     init(client: LocalShellAgentClient, namespace: String = SSHSessionNamespace.current, sessionID: UUID,
          columns: Int, rows: Int, target: Target, attributes: Data?) {
@@ -110,6 +112,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         case .connected:
             return
         case .failed(let failure):
+            failedOnLocalNetwork = failure.localNetworkUnreachable == true
             switch failure.kind {
             case .jumpHost: throw SSHConnection.SSHConnectionError.jumpHostFailed(failure.message)
             case .connect: throw SSHConnection.SSHConnectionError.connectFailed(failure.message)
