@@ -87,8 +87,9 @@ struct WorkspaceScreen: View {
         // 主机被同步删掉（LAN 覆盖 / 别的设备经 CloudKit 删除）：收掉它的会话标签。
         // 本机在主机页删除时 HostsScreen 会先收，这里兜的是同步路径。
         .onChange(of: Set(hosts.map(\.persistentModelID))) { _, live in
-            // 只看库里的主机：远控标签挂的是不入库的临时主机，本来就不在列表里，不是被删了。
-            let orphaned = Set(workspace.tabs.filter { $0.host.modelContext != nil }.map { $0.host.persistentModelID })
+            // 跳过远控标签：它挂的是不入库的临时主机，本来就不在列表里，不是被删了。
+            // 不能按 modelContext 判：被同步删掉的主机 modelContext 也会变 nil，那正是要收掉的。
+            let orphaned = Set(workspace.tabs.filter { $0.terminal?.remote == nil }.map { $0.host.persistentModelID })
                 .subtracting(live)
             guard !orphaned.isEmpty else { return }
             for host in orphaned {
