@@ -20,6 +20,8 @@ final class HolderServer: @unchecked Sendable {
     private static let exitedLingerSeconds = 24 * 60 * 60
     private static let pauseAboveBytes = 1024 * 1024
     private static let resumeBelowBytes = 256 * 1024
+    /// 输入积压暂停读 App 之后，这么久一个字节都没写进 PTY：前台程序不读 stdin，积压的再等也送不进去。
+    private static let inputStallSeconds = 10
 
     private let directory: String
     private let socketName: String
@@ -40,6 +42,9 @@ final class HolderServer: @unchecked Sendable {
     private var isMasterWriteArmed = false
     private var isMasterClosed = false
     private var pendingInput = HolderByteQueue()
+    /// 累计写进 PTY 的输入字节，判断积压有没有在动。
+    private var inputWrittenTotal: UInt64 = 0
+    private var isInputStallCheckScheduled = false
     private var log = HolderOutputLog()
     private var checkpoint: HolderCheckpoint?
     private var attributes: [UInt8] = []
@@ -390,7 +395,29 @@ final class HolderServer: @unchecked Sendable {
         guard !isMasterClosed else { return }
         pendingInput.append(bytes)
         drainInput()
-        attached?.setReadingPaused(pendingInput.count > Self.pauseAboveBytes)
+        let paused = pendingInput.count > Self.pauseAboveBytes
+        attached?.setReadingPaused(paused)
+        if paused { scheduleInputStallCheck() }
+    }
+
+    /// 暂停读 App 的期间，App 后面发来的帧（关标签时的 terminate、改尺寸）都堵在积压的输入后面。
+    /// 前台程序一直不读 stdin 就永远轮不到它们：关掉的标签留下一个没人管的 shell。
+    /// 积压一段时间纹丝不动时丢掉它、恢复读，后面的帧才能进来。
+    private func scheduleInputStallCheck() {
+        guard !isInputStallCheckScheduled else { return }
+        isInputStallCheckScheduled = true
+        let mark = inputWrittenTotal
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(Self.inputStallSeconds)) { [weak self] in
+            guard let self else { return }
+            isInputStallCheckScheduled = false
+            guard pendingInput.count >= Self.resumeBelowBytes else { return }
+            if inputWrittenTotal == mark {
+                pendingInput = HolderByteQueue()
+                attached?.setReadingPaused(false)
+            } else {
+                scheduleInputStallCheck()
+            }
+        }
     }
 
     private func drainInput() {
@@ -399,6 +426,7 @@ final class HolderServer: @unchecked Sendable {
             let written = pendingInput.withReadable { write(master, $0.baseAddress, $0.count) }
             if written > 0 {
                 pendingInput.consume(written)
+                inputWrittenTotal &+= UInt64(written)
                 continue
             }
             if written < 0, errno == EINTR { continue }
@@ -517,12 +545,17 @@ final class HolderClient: @unchecked Sendable {
     }
 
     func start() {
+        // fd 要等两个 source 都取消完才能关：先关的话 accept 可能马上复用这个编号，
+        // 还没撤掉的 source 就盯在了新客户端的 fd 上。
+        let closer = HolderFDCloser(fd: fd, sources: 2)
         let read = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         read.setEventHandler { [weak self] in self?.readAvailable() }
+        read.setCancelHandler { closer.sourceCancelled() }
         read.resume()
         readSource = read
         let write = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
         write.setEventHandler { [weak self] in self?.flush() }
+        write.setCancelHandler { closer.sourceCancelled() }
         writeSource = write
     }
 
@@ -598,7 +631,24 @@ final class HolderClient: @unchecked Sendable {
         readSource?.cancel()
         if !isWriteArmed { writeSource?.resume() }
         writeSource?.cancel()
-        close(fd)
+        // 没 start 过就没有 source 替它关。
+        if readSource == nil { close(fd) }
         onClosed?()
+    }
+}
+
+/// 两个 source 的取消回调都在主队列上，计数不用加锁。
+private final class HolderFDCloser: @unchecked Sendable {
+    private let fd: Int32
+    private var remaining: Int
+
+    init(fd: Int32, sources: Int) {
+        self.fd = fd
+        remaining = sources
+    }
+
+    func sourceCancelled() {
+        remaining -= 1
+        if remaining == 0 { close(fd) }
     }
 }
