@@ -73,6 +73,15 @@ enum MWorkTab: Identifiable {
         return host.isDeleted || host.modelContext == nil ? snapshot : host.name
     }
 
+    /// 关闭后的收尾（连接已关）：收键盘、停 Agent 在途任务。主机被删时整批收标签也要走这一步，
+    /// 否则 Agent 的模型流和工具循环还会对着已删除的主机跑命令。
+    func disposeSession() {
+        guard case .terminal(let t) = self else { return }
+        t.controller.resignKeyboard()
+        t.agent.dispose()
+        t.agentTasks.cancelAll()
+    }
+
     /// 断开这个标签的连接（终端 / SFTP）。
     func shutdown() {
         switch self {
@@ -340,6 +349,7 @@ final class MobileWorkspace {
         for tab in doomed {
             close(tab.id)
             tab.shutdown()
+            tab.disposeSession()
         }
         return doomed.map(\.id)
     }

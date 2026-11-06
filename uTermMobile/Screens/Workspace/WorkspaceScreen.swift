@@ -230,10 +230,7 @@ struct WorkspaceScreen: View {
 
     /// 关闭后的视图侧清理（连接已关）：收键盘、停 Agent 在途任务。
     private func dispose(_ tab: MWorkTab) {
-        guard case .terminal(let t) = tab else { return }
-        t.controller.resignKeyboard()
-        t.agent.dispose()
-        t.agentTasks.cancelAll()
+        tab.disposeSession()
     }
 
     /// 「+」：先把焦点给发起的那一格（新标签开在聚焦格），再开抽屉选主机。
