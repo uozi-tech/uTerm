@@ -114,11 +114,10 @@ struct TerminalSessionBody: View {
                                       onInteract: onInteract)
                     }
                     // 终端页边距（对齐 macOS `TerminalContainerView` 的 8pt 左右边）：字符不再贴着屏幕
-                    // 边 / 圆角；上下各留 4pt，与上面标签条、下面键盘条的 hairline 拉开一行气口。
+                    // 边 / 圆角；上下不留，行数才能用满。
                     // 外层不 ignoresSafeArea，横屏刘海 / iPhone Duo 侧边灵动岛仍由安全区让开，
                     // 底色（同 M.surface）则铺满安全区。
                     .padding(.horizontal, Self.terminalInset.horizontal)
-                    .padding(.vertical, Self.terminalInset.vertical)
                     .background(terminalBg, ignoresSafeAreaEdges: .mSessionBody)
                     .overlay(alignment: .top) {
                         if tab.controller.isReconnecting { MTerminalReconnectBanner() }
@@ -130,7 +129,7 @@ struct TerminalSessionBody: View {
     }
 
     /// 终端文本区与四周的间距（pt）。
-    static let terminalInset = (horizontal: CGFloat(8), vertical: CGFloat(4))
+    static let terminalInset = (horizontal: CGFloat(8), vertical: CGFloat(0))
 
     /// 终端字号随可用宽度自适应。以 iPhone 14/15 竖屏逻辑宽度 390pt 为参考点，对应 11pt 基准：
     /// - 比它窄（SE、iPhone Duo 分屏 ≈ 330pt）：按比例缩小，最小 9pt，换出更多列；
