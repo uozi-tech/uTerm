@@ -270,8 +270,6 @@ final class RemoteVideoDatagramTests: XCTestCase {
     /// 发送端和接收端接起来，在确定的随机丢包下跑一长串帧，策略要真的把画面救回来。
     private func simulate(loss: Double, fec: Int, roundTripMillis: UInt64 = 60, frames: Int = 300,
                           frameBytes: Int = 8000) -> (delivered: Int, lost: Int, fecRecovered: Int, nacked: Int, overhead: Double) {
-        var random = SystemRandomNumberGenerator()
-        _ = random
         var seed: UInt64 = 42
         func chance(_ probability: Double) -> Bool {
             seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407

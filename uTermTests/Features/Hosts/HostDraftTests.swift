@@ -9,14 +9,14 @@ final class HostDraftTests: XCTestCase {
     private let keychain = KeychainStore(service: "com.uozi.uTerm.tests.hostdraft")
     private var touchedIDs: [UUID] = []
 
-    override func tearDown() {
+    override func tearDown() async throws {
         for id in touchedIDs {
             for kind in [SecretKind.password, .passphrase, .privateKey] {
                 try? keychain.delete(profileID: id, kind: kind)
             }
         }
         touchedIDs = []
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeContext() throws -> ModelContext {

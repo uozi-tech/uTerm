@@ -9,13 +9,13 @@ final class KeyGenerationTests: XCTestCase {
     private var createdIDs: [UUID] = []
     private var keyStore: KeyStore { KeyStore(keychain: keychain) }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         for id in createdIDs {
             try? keychain.delete(profileID: id, kind: .privateKey)
             try? keychain.delete(profileID: id, kind: .passphrase)
         }
         createdIDs = []
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func generate(_ kind: SSHKeyKind, bits: Int = 2048,

@@ -9,10 +9,10 @@ final class SSHKeyLibraryTests: XCTestCase {
     private var keyStore: KeyStore { KeyStore(keychain: keychain) }
     private var keyIDs: [UUID] = []
 
-    override func tearDown() {
+    override func tearDown() async throws {
         for id in keyIDs { keyStore.delete(keyID: id) }
         keyIDs = []
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeContext() throws -> ModelContext {

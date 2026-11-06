@@ -33,9 +33,9 @@ final class TerminalOutputPumpTests: XCTestCase {
         return view
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         views.removeAll()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {
