@@ -28,29 +28,16 @@ struct MobileApp: App {
     let modelContainer: ModelContainer
 
     init() {
-        // 必须在创建 SwiftData 容器之前订阅：CloudKit 可能在容器初始化期间就发出 setup / import 事件。
-        let sync = CloudKitSyncMonitor()
-        sync.start()
-        _cloudKitSync = State(initialValue: sync)
-        modelContainer = MobileModelContainer.make()
+        // 两端共用的启动引导第 1–4 步（CloudKit 订阅 → 容器 → 偏好 → 局域网接收端），顺序见 `AppBootstrap`。
+        // 接收端只有看到过 设置 › 局域网接收（或早就配过配对码）的才在启动时开始监听，首次启动不弹「本地网络」授权。
+        let core = AppBootstrap.startCore(lanRole: .receiver, makeContainer: MobileModelContainer.make)
+        _cloudKitSync = State(initialValue: core.cloudKitSync)
+        modelContainer = core.modelContainer
+        _sharedPreferences = State(initialValue: core.preferences)
+        _lanSync = State(initialValue: core.lanSync)
 
-        let preferences = SharedPreferencesSync()
-        _sharedPreferences = State(initialValue: preferences)
-        let lan = LANSyncCoordinator(
-            role: .receiver, preferences: preferences,
-            dataStore: LANSyncDataStore(container: modelContainer))
-        // 局域网监听要「本地网络」授权；没用过局域网同步的人不该一启动就被弹窗问。只有看到过
-        // 设置 › 局域网接收（或早就配过配对码）的才在启动时开始监听，见 LANSyncCoordinator.isReceiverActivated。
-        lan.resumeIfActivated()
-        _lanSync = State(initialValue: lan)
-
-        // 应用锁：读 requireAuthAtLaunch（iOS 缺键视作「关」，由设置开启，见 `AppLockPreference`）。
-        let requireAuth = AppLockPreference.isEnabled()
-        _lock = State(initialValue: AppLockModel(
-            authenticator: SystemBiometricAuthenticator(),
-            requireAuthAtLaunch: requireAuth))
-        // Pull shared scalar preferences before the first scene body is evaluated.
-        preferences.startForAppLaunch()
+        // 第 5–6 步：应用锁（iOS 缺键视作「关」，由设置开启，见 `AppLockPreference`）→ 拉共享偏好。
+        _lock = State(initialValue: AppBootstrap.finishCore(core))
         StartupMaintenance.run(container: modelContainer)
         LaunchTiming.initFinished()
     }

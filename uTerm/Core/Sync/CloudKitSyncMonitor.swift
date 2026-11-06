@@ -39,6 +39,9 @@ final class CloudKitSyncMonitor {
     private var observer: NSObjectProtocol?
     private static let maxEvents = 80
 
+    /// 是否已订阅。启动引导要求它早于建容器（见 `AppBootstrap`），测试据此核对顺序。
+    var isStarted: Bool { observer != nil }
+
     /// 幂等启动：订阅 CloudKit 镜像事件通知。重复调用安全（已订阅则直接返回）。
     func start() {
         guard observer == nil else { return }

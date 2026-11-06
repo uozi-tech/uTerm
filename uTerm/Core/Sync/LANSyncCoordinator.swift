@@ -215,6 +215,16 @@ final class LANSyncCoordinator {
         startIfIdle()
     }
 
+    /// App 启动时调用一次（`AppBootstrap.startCore`）。发送端（Mac）立即开始搜索移动设备；
+    /// 接收端只在启用过时才监听——没用过局域网同步的人不该一启动就被「本地网络」授权弹窗问，
+    /// 见 `isReceiverActivated`。
+    func startForAppLaunch() {
+        switch role {
+        case .sender: start()
+        case .receiver: resumeIfActivated()
+        }
+    }
+
     /// 启动时 / 回到前台时调用：启用过的才（重新）开始监听。退到后台后系统会让监听失效
     ///（状态转为出错 / 停止），不重启的话 Mac 怎么发都找不到这台手机。
     func resumeIfActivated() {
