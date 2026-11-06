@@ -75,18 +75,24 @@ final class FileBrowserModel {
     /// 列完目录后是否经 exec 补属主 / 属组名（macOS 显示，iOS 不显示）。
     @ObservationIgnored private let resolvesOwnerNames: Bool
 
+    // 每项只写自己那个键：几个窗口各缓存一份时，改「显示隐藏文件」不能把自己那份过时的排序方式也写回去，
+    // 盖掉别的窗口刚改的。别的窗口写了，经 `sortPreferenceObserver` 同步过来。
     var sortKey: SortKey = .name {
-        didSet { persistSortPreferences(); recomputeSortedEntries() }
+        didSet { persistSortPreference(sortKey.rawValue, oldValue != sortKey, PrefKey.sortKey); recomputeSortedEntries() }
     }
     var sortAscending = true {
-        didSet { persistSortPreferences(); recomputeSortedEntries() }
+        didSet { persistSortPreference(sortAscending, oldValue != sortAscending, PrefKey.sortAscending); recomputeSortedEntries() }
     }
     var foldersFirst = true {
-        didSet { persistSortPreferences(); recomputeSortedEntries() }
+        didSet { persistSortPreference(foldersFirst, oldValue != foldersFirst, PrefKey.foldersFirst); recomputeSortedEntries() }
     }
     var showHidden = false {
-        didSet { persistSortPreferences(); recomputeSortedEntries() }
+        didSet { persistSortPreference(showHidden, oldValue != showHidden, PrefKey.showHidden); recomputeSortedEntries() }
     }
+
+    /// 读写偏好时监听别处（另一个窗口 / 标签）改了排序，跟着变。
+    @ObservationIgnored nonisolated(unsafe) private var sortPreferenceObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var isSyncingSortPreferences = false
 
     var sortOptions: RemoteEntrySortOptions {
         RemoteEntrySortOptions(key: sortKey, ascending: sortAscending,
@@ -102,13 +108,29 @@ final class FileBrowserModel {
             showHidden: defaults.object(forKey: PrefKey.showHidden) as? Bool ?? false)
     }
 
-    private func persistSortPreferences() {
-        guard persistsSortPreferences else { return }
-        let defaults = UserDefaults.standard
-        defaults.set(sortKey.rawValue, forKey: PrefKey.sortKey)
-        defaults.set(sortAscending, forKey: PrefKey.sortAscending)
-        defaults.set(foldersFirst, forKey: PrefKey.foldersFirst)
-        defaults.set(showHidden, forKey: PrefKey.showHidden)
+    private func persistSortPreference(_ value: Any, _ changed: Bool, _ key: String) {
+        guard persistsSortPreferences, changed, !isSyncingSortPreferences else { return }
+        UserDefaults.standard.set(value, forKey: key)
+    }
+
+    private func observeSortPreferences() {
+        sortPreferenceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: UserDefaults.standard, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncSortPreferences() }
+        }
+    }
+
+    private func syncSortPreferences() {
+        let stored = Self.persistedSortOptions()
+        guard stored != sortOptions else { return }
+        isSyncingSortPreferences = true
+        defer { isSyncingSortPreferences = false }
+        applySortOptions(stored)
+    }
+
+    deinit {
+        if let sortPreferenceObserver { NotificationCenter.default.removeObserver(sortPreferenceObserver) }
     }
 
     private func applySortOptions(_ options: RemoteEntrySortOptions) {
@@ -240,6 +262,7 @@ final class FileBrowserModel {
         self.persistsSortPreferences = sortOptions == nil
         self.resolvesOwnerNames = resolvesOwnerNames
         applySortOptions(sortOptions ?? Self.persistedSortOptions())
+        if persistsSortPreferences { observeSortPreferences() }
     }
 
     init(testProvider: any SFTPProviding, startPath: String, maxConcurrentTransfers: Int = 4,
