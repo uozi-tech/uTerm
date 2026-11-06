@@ -3084,12 +3084,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     open func showCursor(source: Terminal) {
         guard let caretView else { return }
+        // uTerm patch #16: `updateCursorPosition` settles the caret when the frame ends.
+        if terminal.synchronizedOutputActive { return }
         if caretView.superview == nil {
             addSubview(caretView)
         }
     }
 
     open func hideCursor(source: Terminal) {
+        if terminal.synchronizedOutputActive { return }
         caretView?.removeFromSuperview()
     }
     

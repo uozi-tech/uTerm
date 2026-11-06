@@ -308,6 +308,22 @@ vim、fish 这类程序退出时发它们，是想回到终端的默认光标，
 uTerm 侧入口：`TerminalTheme.applyCursor`。iOS 没有设置它，行为不变。回归测试见
 `uTermTests/Features/Terminal/TerminalThemeTests.swift`。
 
+## 16. 同步输出（DEC 2026）的帧只重绘变过的行，帧没写完时不动光标、不滚动
+
+Claude Code 在 SwiftTerm 里每帧都包 `?2026h` … `?2026l`，思考时约 10 帧/秒、每帧约 150 字节。一帧也可能被拆进两次读取
+（实测 144 帧里 47 帧）。上游有三处按「帧很大、很少」来做：
+
+- `Terminal.swift` `endSynchronizedOutput`：帧结束时把整屏标脏。帧内变过的行本来就累积在更新范围里（窗口期视图不消费它），
+  删掉后只重绘变过的行。回放真实帧，贴底时单次绘制从约 5ms 降到约 1ms。
+- `Mac/MacTerminalView.swift`、`iOS/iOSTerminalView.swift` `showCursor` / `hideCursor`：帧内的 `?25l` / `?25h` 立刻增删
+  `caretView`，帧被拆开时光标闪一下，没拆也每帧付一次 AppKit 增删视图的开销。帧内不再处理，帧结束后由
+  `updateCursorPosition` 按最终状态摆好。
+- `Mac/MacTerminalView.swift` `scrollWheel` + `Apple/AppleTerminalView.swift` `synchronizedOutputChanged`：滚动会立刻按实时
+  缓冲重绘，帧没写完时就把半帧画出来。滚轮的行数先攒着，帧结束再滚（`applyScrollDeferredBySync`）。程序卡在帧中间时，
+  上游 1 秒的超时会结束这一帧。iOS 的滚动由 `UIScrollView` 驱动，没有改。
+
+uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalSynchronizedOutputTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

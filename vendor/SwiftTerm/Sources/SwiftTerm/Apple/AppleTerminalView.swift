@@ -762,6 +762,9 @@ extension TerminalView {
     public func synchronizedOutputChanged (source: Terminal, active: Bool)
     {
         if !active {
+            #if os(macOS)
+            applyScrollDeferredBySync()
+            #endif
             updateScroller()
             queuePendingDisplay()
             terminalDelegate?.scrolled(source: self, position: scrollPosition)

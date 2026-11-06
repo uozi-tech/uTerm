@@ -2996,6 +2996,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Leftover fractional trackpad scroll (in points) carried between events so
     /// sub-cell precise deltas accumulate instead of being dropped.
     private var scrollAccumulator: CGFloat = 0
+    /// uTerm patch #16: wheel lines received while a synchronized frame is open.
+    private var scrollLinesDeferredBySync = 0
+
+    /// uTerm patch #16: scrolling repaints the viewport from the live buffer, which would show
+    /// a half-written frame. The wheel waits for the frame to end instead.
+    func applyScrollDeferredBySync() {
+        let lines = scrollLinesDeferredBySync
+        scrollLinesDeferredBySync = 0
+        if lines > 0 {
+            scrollUp(lines: lines)
+        } else if lines < 0 {
+            scrollDown(lines: -lines)
+        }
+    }
 
     /// Multiplier applied to wheel/trackpad scroll deltas. `1.0` scrolls at the
     /// system's native rate; values below `1.0` slow scrolling down, above speed
@@ -3074,6 +3088,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
                     sendKeyDown()
                 }
             }
+        } else if terminal.synchronizedOutputActive {
+            scrollLinesDeferredBySync += scrollingUp ? magnitude : -magnitude
         } else {
             if scrollingUp {
                 scrollUp(lines: magnitude)
@@ -3146,6 +3162,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             queueMetalDisplay()
             return
         }
+        // uTerm patch #16: `updateCursorPosition` settles the caret when the frame ends.
+        if terminal.synchronizedOutputActive { return }
         if caretView.superview == nil && caretRowIsInViewport {
             addSubview(caretView)
         }
@@ -3156,6 +3174,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             queueMetalDisplay()
             return
         }
+        if terminal.synchronizedOutputActive { return }
         caretView.removeFromSuperview()
     }
     

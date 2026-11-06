@@ -6849,7 +6849,8 @@ open class Terminal {
         synchronizedOutputActive = false
         synchronizedOutputTimeoutItem?.cancel()
         synchronizedOutputTimeoutItem = nil
-        refresh (startRow: 0, endRow: rows - 1)
+        // uTerm patch #16: rows changed inside the frame are already in the update range
+        // (the view does not consume it while the frame is open), so repaint only those.
         tdel?.synchronizedOutputChanged(source: self, active: false)
     }
 
