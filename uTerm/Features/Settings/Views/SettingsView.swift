@@ -1,18 +1,24 @@
 import UDesignKit
 import SwiftUI
 
-/// macOS Settings 窗口（⌘,）—— 自定义 tab 壳。
+/// macOS Settings 窗口（⌘,）—— 左侧栏 + 右详情。
 ///
-/// 不用原生 `TabView` 的 preferences 工具栏（大图标叠标签、居中），改用设计稿
-/// `settings.jsx` 的窗口内 tab 条：图标 + 文字横排、左对齐、选中态微底 pill。
-/// 窗口标题栏（红绿灯 + 居中标题）仍由系统原生 chrome 提供。
+/// 分区（`SettingsSection`）与 iOS 设置根页同一份信息架构；侧栏按三组排：
+/// 通用 / 外观 / 终端，模型服务 … 命令行与技能，诊断 / 关于。组间留白，不显示分组标题。
 struct SettingsView: View {
     @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsSection.general.rawValue
 
-    /// macOS 设置窗里有页面的分区，按 tab 条顺序。
-    static let sections: [SettingsSection] = [.general, .providers, .terminal, .remote, .connection, .cli, .about]
+    /// 侧栏分组（自上而下）。每个 macOS 可用的分区恰好出现一次（`SettingsCatalogTests` 钉住）。
+    static let sidebarGroups: [[SettingsSection]] = [
+        [.general, .appearance, .terminal],
+        [.providers, .connection, .security, .sync, .remote, .cli],
+        [.diagnostics, .about],
+    ]
 
-    /// 记住的分区不在本窗（旧版本写的、或命令面板写了 iOS 才有的分区）时回到「通用」。
+    /// macOS 设置窗里有页面的分区，按侧栏顺序。
+    static let sections: [SettingsSection] = sidebarGroups.flatMap { $0 }
+
+    /// 记住的分区不在本窗（iOS 才有的分区）时回到「通用」。
     private var tab: SettingsSection {
         let stored = SettingsTabSelection.tab(from: selectedTab)
         return Self.sections.contains(stored) ? stored : .general
@@ -26,36 +32,41 @@ struct SettingsView: View {
         }
     }
 
-    /// 分区 → 页面。不在本窗的分区（`sections` 之外）给空视图。
+    /// 分区 → 页面。
     @ViewBuilder
     static func page(for section: SettingsSection) -> some View {
         switch section {
-        case .general:    GeneralSettingsView()
-        case .providers:  ProvidersSettingsView()
-        case .terminal:   TerminalSettingsView()
-        case .remote:     RemoteControlSettingsView()
-        case .connection: AdvancedSettingsView()
-        case .cli:        CLISettingsView()
-        case .about:      AboutSettingsView()
-        case .appearance, .security, .sync, .diagnostics:
-            EmptyView()
+        case .general:     GeneralSettingsView()
+        case .appearance:  AppearanceSettingsView()
+        case .terminal:    TerminalSettingsView()
+        case .providers:   ProvidersSettingsView()
+        case .connection:  ConnectionSettingsView()
+        case .security:    SecuritySettingsView()
+        case .sync:        SyncSettingsView()
+        case .remote:      RemoteControlSettingsView()
+        case .cli:         CLISettingsView()
+        case .diagnostics: DiagnosticsSettingsView()
+        case .about:       AboutSettingsView()
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             SettingsTitleBar()
-            SettingsTabStrip(selection: tabBinding)
-
-            // 内容区
-            Self.page(for: tab)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack(spacing: 0) {
+                SettingsSidebar(selection: tabBinding)
+                // 与 ProvidersSettingsView / KeyManagerView 同：UD.border 实色竖线区隔，不用系统 Divider。
+                Rectangle().fill(UD.border).frame(width: 1)
+                // 内容区
+                Self.page(for: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         // 用 minHeight（而非固定 height）让内容**铺满整窗**——与 Welcome / Keys 一致。
         // 固定 height:480 + .ignoresSafeArea(.top) 会把内容上提、底部空出一条未覆盖区，
         // 露出窗口默认（浅色）底，短内容的「通用」tab 上显成「底部 footer」。铺满后
         // 该条由 UD.bg 覆盖消失。窗口初始尺寸由 Scene 的 .defaultSize 决定。
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 780, minHeight: 500)
         // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #000000）。其余主窗
         // （工作区 / SFTP / 表单 / 密钥）皆已 .background(UD.bg)，设置窗补齐对齐。
         // 自绘扁平 chrome：透明系统标题栏 + full-size content，红绿灯让位由 SettingsTitleBar
@@ -99,49 +110,60 @@ nonisolated enum SettingsWindow {
     static let id = "settings"
 }
 
-/// 设计稿 tab 条：高 44、左对齐、tab 间距 4、底部 1px 描边。
-/// 每个 tab：padding 6×12、圆角 7、图标 + 文字横排（间距 7）、12.5pt；
-/// 选中 = accent 淡底 + accentInk（驾驶舱 pill），未选 = 次要文本色。
-private struct SettingsTabStrip: View {
+/// 设置侧栏：宽 184、坐在 UD.bg 上；行 = 14pt 图标 + 13pt 文字，行高 30、圆角 6；
+/// 选中 = accent 淡底 + accentInk，hover = UD.rowHover。组间 10pt 留白，不显示分组标题。
+private struct SettingsSidebar: View {
     @Binding var selection: SettingsSection
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(SettingsView.sections) { item in
-                tabButton(item)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(SettingsView.sidebarGroups.enumerated()), id: \.offset) { _, group in
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(group) { item in
+                            SettingsSidebarRow(item: item, isOn: item == selection) {
+                                selection = item
+                            }
+                        }
+                    }
+                }
             }
-            Spacer(minLength: 0)
+            .padding(8)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 44)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(UD.border)
-                .frame(height: 1)
-        }
+        .frame(width: 184)
+        .background(UD.bg)
     }
+}
 
-    @ViewBuilder
-    private func tabButton(_ item: SettingsSection) -> some View {
-        let isOn = item == selection
-        Button {
-            selection = item
-        } label: {
-            HStack(spacing: 7) {
+private struct SettingsSidebarRow: View {
+    let item: SettingsSection
+    let isOn: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
                 Image(systemName: item.symbol)
-                    .font(.system(size: 12))
+                    .font(.system(size: 14))
+                    .frame(width: 18)
                 Text(item.title)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(isOn ? UD.accentInk : UD.text2)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? UD.accentSoft : Color.clear))   // 选中 = accent-soft（去黑 6% 灰底）
+            .foregroundStyle(isOn ? UD.accentInk : UD.text)
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isOn ? UD.accentSoft : (hovering ? UD.rowHover : Color.clear))
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // 原设计无任何 tab 描边：选中态仅靠 accentSoft 填充。原生 Button 本就键盘可达，
-        // 不再叠 .focusable()（会多生一个可聚焦元素 + macOS 系统焦点环 → 双层 border）。
+        .onHover { hovering = $0 }
+        // 原生 Button 本就键盘可达，不再叠 .focusable()（会多生一个可聚焦元素 + 系统焦点环）。
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 }

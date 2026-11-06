@@ -3,8 +3,9 @@ import SwiftUI
 import SwiftData
 import Combine
 
-/// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作 / 模型服务 / 外观 / 终端 / 安全 / 历史 /
-/// 局域网接收 / 远程控制 / 关于。各分组在 `Sections/` 下；共享的状态与文案在 `uTerm/Features/Settings/Model/`。
+/// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作，再按 `sectionOrder` 排各分区
+/// （与 macOS 设置窗同一份 `SettingsSection` 信息架构）+ 版权。各分组在 `Sections/` 下；
+/// 共享的状态与文案在 `uTerm/Features/Settings/Model/`。
 struct SettingsScreen: View {
     @State private var appLock = AppLockToggleModel()
     @State private var showSyncDiag = false
@@ -13,6 +14,11 @@ struct SettingsScreen: View {
     @Environment(CloudKitSyncMonitor.self) private var sync
 
     @Environment(\.modelContext) private var context
+
+    /// 根页的分区顺序（品牌卡与「动作」之后）。iOS 可用的每个分区恰好出现一次（`MobileSettingsSectionsTests` 钉住）。
+    static let sectionOrder: [SettingsSection] = [
+        .appearance, .terminal, .providers, .connection, .security, .sync, .remote, .diagnostics, .about,
+    ]
 
     /// 行尾的数量徽标。走 `fetchCount` 不物化对象（见 `LibraryCounts`），代价是没有自动订阅，
     /// 所以在 `onAppear`（切进标签 / 从二级页返回）和 `ModelContext.didSave`（本机任何一次写）两处刷新。
@@ -28,18 +34,9 @@ struct SettingsScreen: View {
                 VStack(spacing: 0) {
                     profileCard
                     actionsGroup
-                    SettingsProvidersSection(providerCount: counts.providers)
-                    SettingsAppearanceSection()
-                    SettingsTerminalSection()
-                    SettingsSecuritySection(counts: counts, appLock: appLock)
-                    SettingsHistorySection()
-                    LANSyncSettingsSection()
-                    SettingsRemoteSection()
-                    SettingsAboutSection(syncDiagnosticsSubtitle: syncDiagSub,
-                                         showSyncDiagnostics: { showSyncDiag = true })
-                    #if DEBUG
-                    debugGroup
-                    #endif
+                    ForEach(Self.sectionOrder) { section in
+                        sectionView(section)
+                    }
                     copyrightFooter
                 }
             }
@@ -101,17 +98,25 @@ struct SettingsScreen: View {
         }
     }
 
-    #if DEBUG
-    @AppStorage(MLayoutDiagnostics.key) private var layoutDiagnostics = false
-
-    /// 仅 Debug 构建：布局诊断浮层开关（见 MLayoutDiagnostics）。
-    private var debugGroup: some View {
-        MInsetGroup(header: "调试", footer: "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。") {
-            MInsetRow(label: "布局诊断", last: true,
-                      trailing: AnyView(MSwitch(on: $layoutDiagnostics)))
+    @ViewBuilder
+    private func sectionView(_ section: SettingsSection) -> some View {
+        switch section {
+        case .appearance:  SettingsAppearanceSection()
+        case .terminal:    SettingsTerminalSection()
+        case .providers:   SettingsProvidersSection(providerCount: counts.providers)
+        case .connection:  SettingsConnectionSection()
+        case .security:    SettingsSecuritySection(counts: counts, appLock: appLock)
+        case .sync:        SettingsSyncSection(cloudStatus: syncStatus,
+                                               diagnosticsSubtitle: syncDiagSub,
+                                               showDiagnostics: { showSyncDiag = true })
+        case .remote:      SettingsRemoteSection()
+        case .diagnostics: SettingsDiagnosticsSection()
+        case .about:       SettingsAboutSection()
+        case .general, .cli:
+            // 只有 macOS 有（启动 / 更新、本机命令行接口）。
+            EmptyView()
         }
     }
-    #endif
 
     /// 如实的同步状态（两端共用 `CloudKitSyncStatus`）：本地存储（CloudKit 未建成）/
     /// 未登录 iCloud / 叠上 monitor.phase 的进行态 / 已同步 · 等待同步。

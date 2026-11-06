@@ -11,7 +11,7 @@ import UDesignKit
 /// 无需改 entitlement，App Store / Developer-ID 均合规。
 ///
 /// 职责：
-/// 1. 把每个事件写进 `AppLogger`（category `sync`，Console.app 可见——macOS「高级 ›
+/// 1. 把每个事件写进 `AppLogger`（category `sync`，Console.app 可见——macOS「诊断 ›
 ///    显示日志」即过滤此 subsystem）；
 /// 2. 暴露 `@Observable` 的实时状态（`phase` / `lastError` / `lastSyncedAt`）给设置页展示；
 /// 3. 留一份最近事件环形缓冲（`recentEvents`）供 app 内诊断 / 复制——iOS 无 Console 时尤有用。

@@ -86,21 +86,21 @@ nonisolated enum SettingsCatalog {
 
         // MARK: 连接
         Item(id: "connection.timeout", section: .connection, group: "SSH 连接", title: "连接超时",
-             kind: .number, key: DefaultsKey.sshConnectTimeout, syncScope: .synced, platforms: .macOS),
+             kind: .number, key: DefaultsKey.sshConnectTimeout, syncScope: .synced, platforms: .both),
         Item(id: "connection.hostKeyPolicy", section: .connection, group: "SSH 连接", title: "主机密钥校验",
-             kind: .choice, key: DefaultsKey.sshHostKeyPolicy, syncScope: .synced, platforms: .macOS),
+             kind: .choice, key: DefaultsKey.sshHostKeyPolicy, syncScope: .synced, platforms: .both),
         Item(id: "connection.sftpConcurrency", section: .connection, group: "文件传输", title: "并发上传数",
-             kind: .number, key: DefaultsKey.sftpMaxConcurrentTransfers, syncScope: .synced, platforms: .macOS),
+             kind: .number, key: DefaultsKey.sftpMaxConcurrentTransfers, syncScope: .synced, platforms: .both),
 
         // MARK: 安全
         // 键两端相同，缺键默认值有意相反（mac 开 / iOS 关），本机设置不同步。
         Item(id: "security.appLock", section: .security, group: "安全", title: "启动时验证身份",
              kind: .toggle, key: DefaultsKey.requireAuthAtLaunch, syncScope: .local, platforms: .both),
         Item(id: "security.sshKeys", section: .security, group: "安全", title: "SSH 密钥",
-             kind: .link, key: nil, syncScope: .none, platforms: .iOS),
+             kind: .link, key: nil, syncScope: .none, platforms: .both),
         Item(id: "security.hostGroups", section: .security, group: "安全", title: "主机分组",
-             kind: .link, key: nil, syncScope: .none, platforms: .iOS),
-        // mac 还没有已知主机指纹的管理界面（待补）。
+             kind: .link, key: nil, syncScope: .none, platforms: .both),
+        // mac 还没有已知主机指纹的管理界面（待补）。mac 的「SSH 密钥」「主机分组」是打开管理窗口的按钮。
         Item(id: "security.knownHosts", section: .security, group: "安全", title: "已知主机指纹",
              kind: .link, key: nil, syncScope: .none, platforms: .iOS),
         Item(id: "security.forwardingRules", section: .security, group: "安全", title: "端口转发规则",
@@ -143,6 +143,9 @@ nonisolated enum SettingsCatalog {
              kind: .status, key: nil, syncScope: .none, platforms: .macOS),
         Item(id: "remote.networkDiagnostics", section: .remote, group: "远程控制", title: "网络诊断",
              kind: .link, key: nil, syncScope: .none, platforms: .iOS),
+        // 读写经 `RemoteMacDirectory.internetOnly`（切换即断开重连），本机开发者选项。
+        Item(id: "remote.internetOnly", section: .remote, group: "远程控制", title: "只走公网",
+             kind: .toggle, key: DefaultsKey.remoteInternetOnly, syncScope: .local, platforms: .iOS),
 
         // MARK: 命令行与技能（mac）
         Item(id: "cli.enabled", section: .cli, group: "命令行接口", title: "启用命令行接口",
@@ -162,7 +165,7 @@ nonisolated enum SettingsCatalog {
 
         // MARK: 诊断
         Item(id: "diagnostics.logLevel", section: .diagnostics, group: "诊断", title: "日志等级",
-             kind: .choice, key: DefaultsKey.logLevel, syncScope: .synced, platforms: .macOS),
+             kind: .choice, key: DefaultsKey.logLevel, syncScope: .synced, platforms: .both),
         Item(id: "diagnostics.console", section: .diagnostics, group: "诊断", title: "显示日志",
              kind: .action, key: nil, syncScope: .none, platforms: .macOS),
         // 仅 Debug 构建可见。
@@ -187,9 +190,5 @@ nonisolated enum SettingsCatalog {
         DefaultsKey.globalForwardingLaunchAtAppStart: "mac 专属：端口转发只在 mac 上跑，开关在全局端口转发窗口里",
         DefaultsKey.activeProviderID: "在 Agent 输入区的模型菜单里选，不在设置页",
         DefaultsKey.agentSafety: "在 Agent 输入区的信任档位里选，不在设置页",
-        DefaultsKey.sshConnectTimeout: "iOS 共享代码已生效，但 iOS 还没有设置入口",
-        DefaultsKey.sshHostKeyPolicy: "iOS 共享代码已生效，但 iOS 还没有设置入口",
-        DefaultsKey.sftpMaxConcurrentTransfers: "iOS 共享代码已生效，但 iOS 还没有设置入口",
-        DefaultsKey.logLevel: "iOS 共享代码已生效，但 iOS 还没有设置入口",
     ]
 }

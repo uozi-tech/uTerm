@@ -16,7 +16,7 @@ struct uTermApp: App {
     @Environment(\.openWindow) private var openWindow
 
     @State private var appUpdater = AppUpdater()
-    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「高级 › iCloud 同步」行实时状态。
+    /// CloudKit 同步可观测器：订阅镜像事件，喂 AppLogger + 给「同步 › iCloud 同步」行实时状态。
     @State private var cloudKitSync = CloudKitSyncMonitor()
     /// 普通偏好：本机 UserDefaults 为准，经 iCloud KVS 跨设备保底，局域网同步另按快照传输。
     @State private var sharedPreferences = SharedPreferencesSync()
@@ -532,7 +532,7 @@ struct uTermApp: App {
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 720, height: 480)   // 初始尺寸；内容用 minHeight 铺满，避免底部露出浅色窗底
+        .defaultSize(width: 860, height: 560)   // 初始尺寸（侧栏 184 + 内容）；内容用 minHeight 铺满，避免底部露出浅色窗底
         .routesNewWindowToWelcome()
         .commands {
             AppInfoCommands(appUpdater: appUpdater)

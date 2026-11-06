@@ -13,7 +13,7 @@ struct LANSyncSettingsSection: View {
             MInsetRow(icon: "wifi", label: "接收状态", sub: lanSync.status.label,
                       value: "前台监听", last: false)
             // 点按后在弹窗里输入：行内常驻的数字键盘没有「完成」键，聚焦后键盘关不掉（实机反馈）。
-            MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 高级中显示的 6 位代码",
+            MInsetRow(label: "配对码", sub: "输入 Mac 设置 › 同步中显示的 6 位代码",
                       value: pairingCode.isEmpty ? "未设置" : pairingCode, valueMono: !pairingCode.isEmpty,
                       chevron: true, last: true,
                       onTap: { draftCode = ""; editingCode = true })
@@ -51,7 +51,7 @@ private struct PairingCodeSheet: View {
         VStack(spacing: 18) {
             VStack(spacing: 6) {
                 Text("输入配对码").font(M.sans(18, weight: .semibold)).foregroundStyle(M.text)
-                Text("在 Mac 的 设置 › 高级 中查看 6 位配对码")
+                Text("在 Mac 的 设置 › 同步 中查看 6 位配对码")
                     .font(M.sans(13)).foregroundStyle(M.text3)
                     .multilineTextAlignment(.center)
             }

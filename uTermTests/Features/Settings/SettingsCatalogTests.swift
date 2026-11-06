@@ -98,6 +98,23 @@ final class SettingsCatalogTests: XCTestCase {
         XCTAssertFalse(titles.contains(""))
     }
 
+    /// macOS 设置窗侧栏：每个 mac 可用的分区恰好一页（`SettingsView.page(for:)` 的 switch 由编译器保证穷尽）。
+    func testMacSidebarCoversEveryMacSectionOnce() {
+        let sidebar = SettingsView.sidebarGroups.flatMap { $0 }
+        XCTAssertEqual(Set(sidebar).count, sidebar.count, "侧栏有重复分区：\(sidebar)")
+        let expected = SettingsSection.allCases.filter { $0.availability.includes(.macOS) }
+        XCTAssertEqual(Set(sidebar), Set(expected))
+        XCTAssertEqual(SettingsView.sections, sidebar)
+        XCTAssertEqual(SettingsView.sidebarGroups.first?.first, .general, "回落分区「通用」在最上面")
+    }
+
+    /// 两端都有入口的项，所在分区必须两端都有页面。
+    func testBothPlatformItemsLiveInBothPlatformSections() {
+        for item in SettingsCatalog.items where item.platforms == .both {
+            XCTAssertEqual(item.section.availability, .both, item.id)
+        }
+    }
+
     func testMacOnlySections() {
         XCTAssertEqual(SettingsSection.allCases.filter { $0.availability == .macOS }, [.general, .cli])
     }
