@@ -54,13 +54,12 @@ struct SyncDiagnosticsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                    .fill(UD.card))
+                .settingsCard()
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
             }
             .frame(maxHeight: .infinity)
-            .background(UD.pageBg)
+            .background(UD.bg)
 
             Rectangle().fill(UD.border).frame(height: 1)
             HStack(spacing: 8) {

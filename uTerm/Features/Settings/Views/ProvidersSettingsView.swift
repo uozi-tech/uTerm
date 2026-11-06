@@ -74,7 +74,7 @@ struct ProvidersSettingsView: View {
             .padding(12)
         }
         .frame(width: 240)
-        .background(UD.card)
+        .background(UD.bg)
     }
 
     // MARK: - 右列
@@ -92,7 +92,7 @@ struct ProvidersSettingsView: View {
                     .frame(maxWidth: 320)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(UD.pageBg)
+            .background(UD.bg)
         }
     }
 

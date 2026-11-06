@@ -30,9 +30,9 @@ struct KnownHostsManagerView: View {
         }
         .frame(minWidth: 640, minHeight: 440)
         // 自绘扁平 chrome（同密钥 / 分组管理窗口）：透明系统标题栏 + 让位红绿灯的自绘标题栏。
-        // 内容区与设置窗同一套：pageBg 上一张 card 列表（见 SettingsPrimitives）。
+        // 内容区与设置窗同一套：窗底上一张描边卡片列表（见 SettingsPrimitives）。
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.pageBg)
+        .background(UD.bg)
         .background(WorkspaceWindowChrome(serverName: "已知主机指纹"))
         .overlay { deleteConfirmOverlay }
     }
@@ -43,7 +43,7 @@ struct KnownHostsManagerView: View {
         UDSearchField(text: $query, placeholder: "按地址或指纹搜索", showsHotkeyChip: false)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            // 搜索框落在白条上：灰底输入框压在 pageBg 上会糊成一块灰。
+            // 搜索条与列表同底色，底部 1pt 线分隔。
             .background(UD.bg)
             .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
     }
@@ -54,8 +54,7 @@ struct KnownHostsManagerView: View {
         if rows.isEmpty {
             VStack {
                 SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "没有匹配「\(query)」的主机"))
-                    .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                        .fill(UD.card))
+                    .settingsCard()
                 Spacer()
             }
             .padding(.horizontal, 20)
@@ -74,8 +73,7 @@ struct KnownHostsManagerView: View {
                         KnownHostRow(host: host, onDelete: { pendingDelete = host })
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                    .fill(UD.card))
+                .settingsCard()
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
             }

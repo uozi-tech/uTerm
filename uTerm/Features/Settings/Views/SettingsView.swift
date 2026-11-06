@@ -61,7 +61,7 @@ struct SettingsView: View {
                 // （曾经「模型服务」的固定宽输入框在 780 宽时把整个 HStack 撑宽、居中，侧栏左侧被裁掉约 20pt）。
                 Self.page(for: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(UD.pageBg)
+                    .background(UD.bg)
                     .clipped()
             }
         }
@@ -148,7 +148,7 @@ private struct SettingsSidebarRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                SettingsSidebarIcon(section: item)
+                SettingsSidebarIcon(section: item, isOn: isOn)
                 Text(item.title)
                     .font(.system(size: 13, weight: isOn ? .medium : .regular))
                     .foregroundStyle(isOn ? UD.accentInk : UD.text)
@@ -170,43 +170,16 @@ private struct SettingsSidebarRow: View {
     }
 }
 
-/// 侧栏图标：22pt 圆角方块，每个分区一个固定底色，白色符号（金色底上用深色符号保对比度）。
+/// 侧栏图标：单色 SF Symbol，选中随文字走 accentInk，未选中 `UD.text2`；不用彩色方块（user 定）。
 private struct SettingsSidebarIcon: View {
     let section: SettingsSection
+    let isOn: Bool
 
     var body: some View {
         Image(systemName: section.symbol)
-            .font(.system(size: 11.5, weight: .semibold))
-            .foregroundStyle(section.sidebarSymbolColor)
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(isOn ? UD.accentInk : UD.text2)
             .frame(width: 22, height: 22)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(section.sidebarTint))
             .accessibilityHidden(true)
     }
-}
-
-extension SettingsSection {
-    /// 侧栏图标方块的底色。按分区固定，取 `UD` 语义色 / 强调色调色板；中性分区用系统灰。
-    @MainActor
-    var sidebarTint: Color {
-        switch self {
-        case .general, .about: return Self.neutralTint
-        case .appearance:      return UD.accentViolet
-        case .terminal:        return Self.terminalTint
-        case .providers:       return UD.aiAccent
-        case .connection:      return UD.info
-        case .security:        return UD.success
-        case .sync:            return UD.accent
-        case .remote:          return UD.caution
-        case .cli:             return UD.accentGold
-        case .diagnostics:     return UD.danger
-        }
-    }
-
-    /// 金色底上白字对比度不够，改用深色符号。
-    var sidebarSymbolColor: Color {
-        self == .cli ? Color.black.opacity(0.78) : .white
-    }
-
-    private static let neutralTint = UD.dyn(.hex(0x636366), .hex(0x8E8E93))
-    private static let terminalTint = UD.dyn(.hex(0x48484A), .hex(0x3A3A3C))
 }

@@ -3,8 +3,8 @@ import SwiftUI
 
 // macOS 设置窗的排版原语：分组卡片范式（对齐系统设置），配色全走 `UD.*`。
 //
-// - 页面坐在 `UD.pageBg` 上，每个分组一张 `UD.card` 卡片——浅色下「白卡坐在淡灰页面上」本身就是层级，
-//   卡片里不再铺灰底；卡片靠底色区分、不加描边（设计语言 v2「填充即边界」）。
+// - 页面坐在窗底 `UD.bg` 上（user 定：不要灰色页面底），每个分组一张与页面同底色、1pt `UD.border`
+//   描边的卡片；卡片里不铺灰底。描边是这里唯一的分组边界，属于设计语言 v2 的描边保留例外。
 // - 卡片里一行一项，行间 1pt `UD.border`，左侧缩进到文字起点（列表行缩进到图标之后）。
 // - 组标题在卡片上方，长说明放卡片下方的脚注，行内说明只放一两句。
 //
@@ -29,10 +29,29 @@ extension View {
         containerValue(\.settingsDividerInset, inset)
     }
 
-    /// 作为上一项的子项：整行右移一级，分隔线跟着缩进。
+    /// 作为上一项的子项：整行右移一级，左侧画一条竖向导轨（光缩进会像一块空白），分隔线跟着缩进。
     func settingsNested() -> some View {
         padding(.leading, SettingsMetrics.nestedIndent)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(UD.border)
+                    .frame(width: 2)
+                    .padding(.vertical, 10)
+                    .padding(.leading, SettingsMetrics.rowInset + 4)
+            }
             .settingsDivider(inset: SettingsMetrics.rowInset + SettingsMetrics.nestedIndent)
+    }
+}
+
+extension View {
+    /// 设置窗的卡片底：与页面同底色，1pt `UD.border` 描边划出分组边界（不用灰底，user 定）。
+    func settingsCard() -> some View {
+        background(
+            RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                .fill(UD.bg)
+                .overlay(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                    .strokeBorder(UD.border, lineWidth: 1))
+        )
     }
 }
 
@@ -53,7 +72,7 @@ enum SettingsMetrics {
 
 // MARK: - 页
 
-/// 设置页容器：`UD.pageBg` 底、内容列 maxWidth 640 左对齐、顶部 24 / 左右 32 / 底 32，分组间距 24。
+/// 设置页容器：`UD.bg` 底、内容列 maxWidth 640 左对齐、顶部 24 / 左右 32 / 底 32，分组间距 24。
 struct SettingsScroll<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
@@ -68,7 +87,7 @@ struct SettingsScroll<Content: View>: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(UD.pageBg)
+        .background(UD.bg)
     }
 }
 
@@ -95,7 +114,7 @@ struct SettingsPageHeader: View {
     }
 }
 
-/// 分组卡片：标题在上、`UD.card` 圆角卡片、行间自动插分隔线、脚注在下。
+/// 分组卡片：标题在上、同底色 + 1pt 描边的圆角卡片、行间自动插分隔线、脚注在下。
 ///
 /// 调用点照旧写 `SettingsGroup(title:) { SettingsRow… }`；`if` 不成立的行不占位也不多画分隔线
 /// （按子视图拆分，见 `Group(subviews:)`）。
@@ -133,8 +152,7 @@ struct SettingsGroup<Content: View>: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                        .fill(UD.card))
+                    .settingsCard()
                 }
             }
             if let footer {
