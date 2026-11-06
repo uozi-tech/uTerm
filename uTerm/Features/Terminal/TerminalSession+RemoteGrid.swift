@@ -5,6 +5,10 @@ import SwiftTerm
 
 extension TerminalSession {
 
+    /// 远端接管尺寸的上限：远大于任何手机 / 平板能排下的行列，又不至于让缓冲区失控。
+    static let maxRemoteGridCols = 1000
+    static let maxRemoteGridRows = 500
+
     /// 远端设备接管尺寸：把终端钉成 `cols × rows`，远端 PTY 随之调整。
     ///
     /// 做法是把终端视图的尺寸钉成「行列数 × 字符格」：SwiftTerm 只在视图尺寸变化时重算行列数，
@@ -13,7 +17,10 @@ extension TerminalSession {
     ///
     /// 字符格宽包外拿不到（`cellDimension` 与滚动条预留宽度都是 internal），所以先按估算设一次，
     /// 再看 SwiftTerm 实际算出的列数，差几列补几列。设尺寸会同步触发重算，两三步就收敛。
-    func pinRemoteGrid(cols: Int, rows: Int, controller: String) {
+    func pinRemoteGrid(cols requestedCols: Int, rows requestedRows: Int, controller: String) {
+        // 行列数来自手机：不设上限的话 65535×65535 会让 SwiftTerm 分配几十亿个格子，Mac 端卡死或被系统杀掉。
+        let cols = min(requestedCols, Self.maxRemoteGridCols)
+        let rows = min(requestedRows, Self.maxRemoteGridRows)
         guard cols > 0, rows > 0, let view = terminalView as? CopyableTerminalView else { return }
         remoteController = controller
         let terminal = view.getTerminal()
