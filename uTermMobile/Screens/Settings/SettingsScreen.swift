@@ -46,10 +46,10 @@ struct SettingsScreen: View {
                 .receive(on: DispatchQueue.main)) { _ in
                 refreshCounts()
             }
-            .alert("无法开启应用锁", isPresented: $appLock.unavailableAlert) {
+            .alert(AppLockToggleModel.unavailableTitle, isPresented: $appLock.unavailableAlert) {
                 Button("好", role: .cancel) {}
             } message: {
-                Text("请先在系统「设置」里启用 Face ID / 触控 ID 或设置锁屏密码，再开启应用锁。")
+                Text(AppLockToggleModel.unavailableMessage)
             }
             .sheet(isPresented: $showSyncDiag) {
                 SyncDiagnosticsSheet(sync: sync).mSheetContentMargins()

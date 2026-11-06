@@ -72,7 +72,7 @@ final class AppLockModel {
 
     /// 打开应用锁前先验证一次：既确认设备可用（有生物识别或已设密码），也取得用户授权——
     /// 避免开关一拨就把下次启动锁死却无从解锁。有生物识别就强制走生物识别，否则用设备密码。
-    /// 目前只有 iOS 的设置开关调用；macOS 开关直接生效（行为未改）。
+    /// 两端设置页的开关都经 `AppLockToggleModel` 调它（mac 走 Touch ID 或登录密码）。
     static func confirmEnable(
         authenticator: BiometricAuthenticator = SystemBiometricAuthenticator(),
         reason: String = "开启 uTerm 应用锁"

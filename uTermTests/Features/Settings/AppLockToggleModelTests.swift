@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// iOS 应用锁开关的开启流程（`AppLockToggleModel`），验证换成假实现，不弹系统窗。
+/// 应用锁开关的开启流程（`AppLockToggleModel`，两端设置页共用），验证换成假实现，不弹系统窗。
 @MainActor
 final class AppLockToggleModelTests: XCTestCase {
     private var defaults: UserDefaults!
@@ -67,5 +67,28 @@ final class AppLockToggleModelTests: XCTestCase {
         XCTAssertFalse(m.isOn)
         XCTAssertEqual(defaults.object(forKey: AppLockPreference.key) as? Bool, false)
         XCTAssertEqual(calls.count, 0)
+    }
+
+    /// mac 缺键视作开（`AppLockPreference.defaultValue`）：从没碰过开关的用户直接关，不验证、立刻写 false。
+    func testTurningOffFromMissingKeyDefaultSkipsConfirm() {
+        XCTAssertNil(defaults.object(forKey: AppLockPreference.key))
+        let calls = Counter()
+        let m = model(.failed, calls: calls)
+        XCTAssertEqual(m.isOn, AppLockPreference.defaultValue)
+        #if os(macOS)
+        XCTAssertTrue(m.isOn, "mac 缺键默认开")
+        #endif
+        m.set(false)
+        XCTAssertFalse(m.isOn)
+        XCTAssertEqual(defaults.object(forKey: AppLockPreference.key) as? Bool, false)
+        XCTAssertEqual(calls.count, 0)
+    }
+
+    func testUnavailableCopyIsPresent() {
+        XCTAssertEqual(AppLockToggleModel.unavailableTitle, "无法开启应用锁")
+        XCTAssertFalse(AppLockToggleModel.unavailableMessage.isEmpty)
+        #if os(macOS)
+        XCTAssertFalse(AppLockToggleModel.unavailableMessage.contains("Face ID"), "mac 没有 Face ID")
+        #endif
     }
 }

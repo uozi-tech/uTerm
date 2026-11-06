@@ -5,9 +5,9 @@ import Combine
 
 /// 设置 · 安全：启动时验证身份（原在「通用」），以及 SSH 密钥 / 主机分组 / 已知主机指纹三个管理窗口的入口。
 ///
-/// mac 的应用锁开关直接写偏好（下次启动生效），不走 iOS「先验证一次再开启」的流程。
+/// 应用锁开关与 iOS 同走 `AppLockToggleModel`：开启前先验证一次（Touch ID 或登录密码），关闭直接生效。
 struct SecuritySettingsView: View {
-    @AppStorage(AppLockPreference.key) private var requireAuthAtLaunch = AppLockPreference.defaultValue
+    @State private var appLock = AppLockToggleModel()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var context
 
@@ -18,8 +18,8 @@ struct SecuritySettingsView: View {
         SettingsScroll {
             SettingsGroup(title: "应用锁") {
                 SettingsRow(label: "启动时验证身份",
-                            hint: "下次启动 uTerm 时要求 Touch ID 或登录密码 · 改动下次启动生效") {
-                    UDToggle($requireAuthAtLaunch)
+                            hint: "开启前先验证一次；下次启动 uTerm 时要求 Touch ID 或登录密码") {
+                    UDToggle(Binding(get: { appLock.isOn }, set: { appLock.set($0) }))
                 }
             }
             SettingsGroup(title: "密钥、分组与指纹") {
@@ -34,6 +34,11 @@ struct SecuritySettingsView: View {
                     UDButton(title: "打开…", style: .secondary) { openWindow(id: "known-hosts") }
                 }
             }
+        }
+        .alert(AppLockToggleModel.unavailableTitle, isPresented: $appLock.unavailableAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(AppLockToggleModel.unavailableMessage)
         }
         .onAppear(perform: refreshCounts)
         // 后台上下文（局域网覆盖）也会发 didSave，回主线程再刷新。

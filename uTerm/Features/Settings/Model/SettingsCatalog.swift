@@ -93,7 +93,7 @@ nonisolated enum SettingsCatalog {
              kind: .number, key: DefaultsKey.sftpMaxConcurrentTransfers, syncScope: .synced, platforms: .both),
 
         // MARK: 安全
-        // 键两端相同，缺键默认值有意相反（mac 开 / iOS 关），本机设置不同步。
+        // 键两端相同，缺键默认值有意相反（mac 开 / iOS 关），本机设置不同步。两端开启前都先验证一次（`AppLockToggleModel`）。
         Item(id: "security.appLock", section: .security, group: "安全", title: "启动时验证身份",
              kind: .toggle, key: DefaultsKey.requireAuthAtLaunch, syncScope: .local, platforms: .both),
         Item(id: "security.sshKeys", section: .security, group: "安全", title: "SSH 密钥",
