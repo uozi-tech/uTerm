@@ -108,11 +108,12 @@ enum HeldTerminalSessions {
     static var all: [TerminalSession] { entries.compactMap(\.session) }
 }
 
-/// 什么时候存检查点：有输出时最多 5 秒一次，累计 4 MiB 也存；尺寸变了很快存一次（之后的字节是按新尺寸产生的）。
-/// 全部在主线程：序列化终端状态要读解析器，默认 3000 行约几毫秒。
+/// 什么时候存检查点：累计 4 MiB 输出存一次；尺寸变了很快存一次（之后的字节是按新尺寸产生的）；退出时存一次。
+/// 不按时间存：之后的字节都在 holder 里（16 MiB），接回时重放就行，最多重放 4 MiB。
+/// 而序列化要读解析器，只能在主线程上做，3000 行回滚最少 30ms，会让正在进行的滚动明显掉帧。
+/// Claude Code 思考时每秒只输出约 1 KB，按时间存等于全程隔几秒卡一下。
 @MainActor
 final class TerminalHeldCheckpoints {
-    private static let interval = Duration.seconds(5)
     private static let resizeDelay = Duration.milliseconds(300)
     private static let retryDelay = Duration.milliseconds(200)
     private static let maxPendingBytes = 4 * 1024 * 1024
@@ -126,7 +127,6 @@ final class TerminalHeldCheckpoints {
     private let generation: Int
     private var fedBytes: UInt64 = 0
     private var bytesSinceCapture = 0
-    private var lastCapture = ContinuousClock.now
     private var isDirty = false
     private var scheduled: Task<Void, Never>?
 
@@ -149,9 +149,6 @@ final class TerminalHeldCheckpoints {
         markDirty()
         if bytesSinceCapture >= Self.maxPendingBytes {
             captureNow()
-        } else if scheduled == nil {
-            let elapsed = ContinuousClock.now - lastCapture
-            schedule(after: elapsed >= Self.interval ? .zero : Self.interval - elapsed)
         }
     }
 
@@ -187,7 +184,6 @@ final class TerminalHeldCheckpoints {
         guard isDirty, terminal.isAtSnapshotBoundary else { return }
         isDirty = false
         bytesSinceCapture = 0
-        lastCapture = .now
         let blob = terminal.snapshotSequence(scrollbackLimit: min(terminal.options.scrollback, Self.maxScrollbackLines))
         link.checkpoint(offset: offset, cols: UInt16(clamping: terminal.cols), rows: UInt16(clamping: terminal.rows), blob: blob)
     }

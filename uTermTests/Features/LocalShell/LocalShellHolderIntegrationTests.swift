@@ -124,6 +124,32 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         return unsafeBitCast(symbol, to: Lookup.self)(pid)
     }
 
+    /// 少量输出不按时间存检查点（Claude Code 思考时存会让滚动掉帧）；被杀掉之后靠 holder 里的字节恢复。
+    func test_small_output_stays_in_holder_and_restores_after_kill() async throws {
+        let id = makeSession()
+        let (first, firstBackend) = try await connected(id)
+        // 等连接时改尺寸触发的那次检查点过去。
+        try await Task.sleep(for: .seconds(1))
+        await firstBackend.write(Data("echo SMALL_$((40+2))\n".utf8))
+        let printed = await wait { self.screen(first).contains("SMALL_42") }
+        XCTAssertTrue(printed, screen(first))
+        try await Task.sleep(for: .milliseconds(5500))
+        first.dispose()
+        await firstBackend.detach()
+
+        let probe = backend(id)
+        try await probe.connect()
+        let taken = await probe.takeReplay()
+        let replay = try XCTUnwrap(taken)
+        XCTAssertTrue(String(decoding: replay.output, as: UTF8.self).contains("SMALL_42"), "这段输出不该已经被存进检查点")
+        await probe.detach()
+
+        let (second, secondBackend) = try await connected(id)
+        defer { second.dispose() }
+        XCTAssertTrue(screen(second).contains("SMALL_42"), screen(second))
+        await secondBackend.close()
+    }
+
     func test_probe_frame_is_ignored_for_local_shell() async throws {
         let id = makeSession()
         let (session, held) = try await connected(id)
