@@ -19,10 +19,13 @@ struct RemoteCapabilitiesGroup: View {
                 UDToggle(Binding(get: { settings.isLocalShellEnabled }, set: { settings.isLocalShellEnabled = $0 }))
             }
             if settings.isLocalShellEnabled {
+                // 正常时只显示状态；连不上才给「重试」（正常还放个「检查」按钮像是要用户做什么）。
                 SettingsRow(label: "辅助程序", hint: helperHint) {
                     HStack(spacing: 10) {
                         helperStatus
-                        UDButton(title: "检查", style: .secondary) { Task { await shell.checkHelper() } }
+                        if case .failed = shell.helperState {
+                            UDButton(title: "重试", style: .secondary) { Task { await shell.checkHelper() } }
+                        }
                     }
                 }
                 .settingsNested()
