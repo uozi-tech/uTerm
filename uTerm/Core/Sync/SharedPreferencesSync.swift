@@ -63,6 +63,9 @@ final class SharedPreferencesSync {
                    defaultValue: .integer(ChatHistoryStore.defaultRetentionDays), legacyKeys: []),
     ]
 
+    /// 同步清单里的全部键（设置清单对账用，见 `SettingsCatalogTests`）。
+    static var syncedKeys: [String] { definitions.map(\.key) }
+
     private let defaults: UserDefaults
     private let store: NSUbiquitousKeyValueStore
     private var defaultsObserver: NSObjectProtocol?

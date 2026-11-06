@@ -82,7 +82,7 @@ private struct CheckForUpdatesMenuButton: View {
 
 private struct AboutMenuButton: View {
     @Environment(\.openWindow) private var openWindow
-    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsTab.general.rawValue
+    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsSection.general.rawValue
 
     var body: some View {
         Button("关于 \(appName)") {

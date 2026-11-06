@@ -7,17 +7,16 @@ import SwiftUI
 ///   在那里直接切换（`AgentModelDirectory`）。这里的「测试连接」就是拉一次模型列表。
 /// - kind 切换若 baseURL 当前等于另一 kind 的预置，自动替为本 kind 的预置；
 ///   用户已自定义的 baseURL 不动。
-/// - apiKey 不在 SwiftData，由本视图持有 @State keyDraft，「保存 Key」
-///   按钮直接调 AgentKeychain.save(_:for:)。
+/// - apiKey 不在 SwiftData：草稿、保存与测试连接的状态在共享的 `ProviderDraftModel`
+///   （iOS 编辑页同一份），「保存 Key」写钥匙串。
 struct ProviderEditView: View {
     @Bindable var provider: AIProvider
-    @State private var keyDraft = ""
-    @State private var keySaveError: String?
-    @State private var keySaved = false
-    @State private var testInFlight = false
-    @State private var testResult: (ok: Bool, message: String)?
+    @State private var draft: ProviderDraftModel
 
-    private let keychain = AgentKeychain()
+    init(provider: AIProvider) {
+        self.provider = provider
+        _draft = State(initialValue: ProviderDraftModel(provider: provider))
+    }
 
     /// 显式 String 而非字面量 —— `help(_:)` 有 LocalizedStringKey / StringProtocol
     /// 两个 overload，字面量 prefer LocalizedStringKey，会把 `https://...` 当
@@ -35,11 +34,6 @@ struct ProviderEditView: View {
     /// 名称必填；空时返回错误文案。
     private var nameError: String? {
         ProviderManagement.nameError(provider.name)
-    }
-
-    /// 待保存的 API Key 草稿（去空白）。
-    private var keyDraftTrimmed: String {
-        keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -77,17 +71,17 @@ struct ProviderEditView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         UDTextField(
                             placeholder: "粘贴新 key 后按下方保存",
-                            text: $keyDraft,
+                            text: $draft.keyDraft,
                             isSecure: true,
                             revealable: true
                         )
                         .frame(width: 360)
                         .accessibilityLabel("API Key")
-                        .accessibilityValue(keyDraftTrimmed.isEmpty ? "未输入" : "已输入新 key")
+                        .accessibilityValue(draft.canSaveKey ? "已输入新 key" : "未输入")
 
                         HStack(spacing: 10) {
-                            UDButton(title: "保存 Key", style: .secondary) { saveKey() }
-                                .disabled(keyDraftTrimmed.isEmpty)
+                            UDButton(title: "保存 Key", style: .secondary) { draft.saveKey() }
+                                .disabled(!draft.canSaveKey)
                             keyStatus
                             Spacer(minLength: 0)
                         }
@@ -102,15 +96,15 @@ struct ProviderEditView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     UDButton(title: "测试连接", style: .secondary) {
-                        Task { await testConnection() }
+                        Task { await draft.testConnection() }
                     }
-                    .disabled(testInFlight || baseURLError != nil)
+                    .disabled(draft.testInFlight || baseURLError != nil)
 
-                    if testInFlight {
+                    if draft.testInFlight {
                         UDIndeterminateBar()
                             .frame(width: 72)
                     }
-                    if let r = testResult {
+                    if let r = draft.testResult {
                         statusLabel(r.message, ok: r.ok)
                     }
                     Spacer(minLength: 0)
@@ -119,23 +113,19 @@ struct ProviderEditView: View {
         }
         .id(provider.id)              // 切换选中行时重建本视图，清空 keyDraft 等本地状态。
         .onChange(of: provider.id) { _, _ in
-            keyDraft = ""
-            keySaved = false
-            keySaveError = nil
-            testInFlight = false
-            testResult = nil
+            draft.reset(to: provider)
         }
     }
 
     @ViewBuilder
     private var keyStatus: some View {
-        if keySaved {
+        if draft.keySaved {
             statusLabel("已保存", ok: true)
         }
-        if let err = keySaveError {
+        if let err = draft.keySaveError {
             statusLabel(err, ok: false)
         }
-        if ProviderManagement.hasKey(provider, keychain: keychain) {
+        if draft.hasKey {
             Text("已有 Key")
                 .font(UD.caption)
                 .foregroundStyle(UD.text3)
@@ -158,28 +148,6 @@ struct ProviderEditView: View {
         Binding(
             get: { provider.kind },
             set: { ProviderManagement.setKind($0, on: provider) })
-    }
-
-    /// 测试连接 = 拉一次 `/v1/models`（`ProviderManagement.testConnection`）；
-    /// 用未保存的 keyDraft（若有）覆盖钥匙串中的 key——便于先试再保存。
-    private func testConnection() async {
-        testInFlight = true
-        defer { testInFlight = false }
-        let result = await ProviderManagement.testConnection(provider, keyDraft: keyDraft, keychain: keychain)
-        testResult = (result.ok, result.message)
-    }
-
-    private func saveKey() {
-        guard !keyDraftTrimmed.isEmpty else { return }
-        do {
-            try ProviderManagement.saveKey(keyDraftTrimmed, for: provider, keychain: keychain)
-            keyDraft = ""
-            keySaveError = nil
-            keySaved = true
-        } catch {
-            keySaveError = "保存到钥匙串失败：\(error)"
-            keySaved = false
-        }
     }
 }
 

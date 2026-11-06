@@ -43,30 +43,43 @@ struct SettingsGroup<Content: View>: View {
     }
 }
 
-/// 设置行。左侧 label（可带 hint），右侧控件。最小高度 36，纵向 padding 4。
+/// 设置行。左侧 label（可带 hint、可带图标），右侧控件。最小高度 36，纵向 padding 4。
 struct SettingsRow<Trailing: View>: View {
+    /// hint 的排版：普通说明文字，或可选中的等宽文本（路径、地址这类要复制的值）。
+    enum HintStyle {
+        case text
+        case monospaced
+    }
+
     let label: String
     let hint: String?
+    let icon: String?
+    let hintStyle: HintStyle
     @ViewBuilder let trailing: () -> Trailing
 
-    init(label: String, hint: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing) {
+    init(label: String, hint: String? = nil, icon: String? = nil, hintStyle: HintStyle = .text,
+         @ViewBuilder trailing: @escaping () -> Trailing) {
         self.label = label
         self.hint = hint
+        self.icon = icon
+        self.hintStyle = hintStyle
         self.trailing = trailing
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: icon == nil ? 16 : 12) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(UD.text2)
+                    .frame(width: 20)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.system(size: 13))
                     .foregroundStyle(UD.text)
                 if let hint {
-                    Text(hint)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(UD.text3)
-                        .lineSpacing(1.5)
-                        .fixedSize(horizontal: false, vertical: true)
+                    hintText(hint)
                 }
             }
             Spacer()
@@ -79,13 +92,31 @@ struct SettingsRow<Trailing: View>: View {
         .frame(minHeight: 36)
         .padding(.vertical, 4)
     }
+
+    @ViewBuilder
+    private func hintText(_ hint: String) -> some View {
+        switch hintStyle {
+        case .text:
+            Text(hint)
+                .font(.system(size: 11.5))
+                .foregroundStyle(UD.text3)
+                .lineSpacing(1.5)
+                .fixedSize(horizontal: false, vertical: true)
+        case .monospaced:
+            Text(hint)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(UD.text3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
 // MARK: - 自适应表单控件
 //
 // 分段控制 / 开关已迁移到 DesignKit `UDSegmented` / `UDToggle`（深 / 浅动态，
-// 设计稿 Forms 段规格）。本文件保留 SettingsScroll/Group/Row、SettingsNumberField、
-// SettingsInlineButton 等布局原语。
+// 设计稿 Forms 段规格）。本文件保留 SettingsScroll/Group/Row、SettingsNumberField
+// 等布局原语；次要按钮直接用 `UDButton(style: .secondary)`。
 
 /// 设置行里的整数输入框。外观对齐 DesignKit 输入框，但改用语义色 token（Settings
 /// 窗口随全局浅 / 深外观变化），focus 时加 accent 描边。供需要精确数值、不便用滑块
@@ -125,14 +156,16 @@ struct SettingsNumberField: View {
     }
 }
 
-/// 设计稿信息条里的次要按钮：h26、圆角 6、透明底 + 细描边、hover 微亮。
-struct SettingsInlineButton: View {
-    let title: String
-    var enabled: Bool = true
-    let action: () -> Void
-
-    var body: some View {
-        UDButton(title: title, style: .secondary, action: action)
-        .disabled(!enabled)
+extension SettingsTone {
+    /// 共享状态色调在 macOS 设置页上的颜色。`warning` 沿用系统橙（与之前各页一致）。
+    var color: Color {
+        switch self {
+        case .muted:   return UD.text3
+        case .neutral: return UD.text2
+        case .active:  return UD.accent
+        case .warning: return .orange
+        case .success: return UD.success
+        case .danger:  return UD.danger
+        }
     }
 }

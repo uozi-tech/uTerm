@@ -12,27 +12,6 @@ struct GeneralSettingsView: View {
     @AppStorage(DefaultsKey.appearancePreference) private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
     @AppStorage(DefaultsKey.appLanguage) private var appLanguageRaw: String = AppLanguage.system.rawValue
 
-    private var appearanceBinding: Binding<AppearancePreference> {
-        Binding(
-            get: { AppearancePreference(rawValue: appearancePreferenceRaw) ?? .system },
-            set: { appearancePreferenceRaw = $0.rawValue }
-        )
-    }
-
-    private var appLanguageBinding: Binding<AppLanguage> {
-        Binding(
-            get: { AppLanguage(rawValue: appLanguageRaw) ?? .system },
-            set: { appLanguageRaw = $0.rawValue }
-        )
-    }
-
-    private var startupBehaviorBinding: Binding<StartupBehavior> {
-        Binding(
-            get: { StartupBehavior(rawValue: startupBehaviorRaw) ?? .welcome },
-            set: { startupBehaviorRaw = $0.rawValue }
-        )
-    }
-
     @Environment(AppUpdater.self) private var appUpdater
 
     var body: some View {
@@ -41,7 +20,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "启动时",
                             hint: "打开 uTerm 时首先展示的页面") {
                     UDSegmented(
-                        selection: startupBehaviorBinding,
+                        selection: $startupBehaviorRaw.rawValue(StartupBehavior.self, default: .welcome),
                         options: StartupBehavior.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "恢复终端会话",
@@ -58,7 +37,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "主题",
                             hint: "立即生效。改主题影响 uTerm 窗口外观与终端配色（终端按主题自动切深/浅）。") {
                     UDSegmented(
-                        selection: appearanceBinding,
+                        selection: $appearancePreferenceRaw.rawValue(AppearancePreference.self, default: .system),
                         options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })
                 }
                 SettingsRow(label: "强调色",
@@ -68,7 +47,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "语言",
                             hint: "改语言后需重启 uTerm 生效。") {
                     UDSegmented(
-                        selection: appLanguageBinding,
+                        selection: $appLanguageRaw.rawValue(AppLanguage.self, default: .system),
                         options: AppLanguage.allCases.map { ($0, $0.localizedLabel) })
                 }
             }
@@ -148,9 +127,10 @@ private struct UpdateStatusPanel: View {
 
             Spacer()
 
-            SettingsInlineButton(title: "检查更新", enabled: appUpdater.canCheckForUpdates) {
+            UDButton(title: "检查更新", style: .secondary) {
                 appUpdater.checkForUpdates()
             }
+            .disabled(!appUpdater.canCheckForUpdates)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

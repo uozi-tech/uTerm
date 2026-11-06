@@ -96,19 +96,8 @@ struct CLISettingsView: View {
     }
 
     private var socketRow: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("接口地址")
-                    .font(.system(size: 13))
-                    .foregroundStyle(UD.text)
-                Text(settings.socketPath)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(UD.text3)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            SettingsInlineButton(title: copied ? "已复制" : "复制") {
+        SettingsRow(label: "接口地址", hint: settings.socketPath, hintStyle: .monospaced) {
+            UDButton(title: copied ? "已复制" : "复制", style: .secondary) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(settings.socketPath, forType: .string)
                 copied = true
@@ -118,8 +107,6 @@ struct CLISettingsView: View {
                 }
             }
         }
-        .frame(minHeight: 36)
-        .padding(.vertical, 4)
     }
 
     // MARK: - 技能
@@ -159,38 +146,25 @@ struct CLISettingsView: View {
     private func targetRow(_ target: SkillTarget) -> some View {
         let status = skills.status(for: target)
         let busy = skills.isBusy(target)
-        return HStack(alignment: .center, spacing: 12) {
-            Image(systemName: target.iconSystemName)
-                .font(.system(size: 14))
-                .foregroundStyle(UD.text2)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(target.displayName)
-                    .font(.system(size: 13))
-                    .foregroundStyle(UD.text)
-                Text(status.conflictReason ?? statusHint(status))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(UD.text3)
-                    .lineSpacing(1.5)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            // 已安装不再挂「已安装」徽标：右侧已经有「卸载」，状态一目了然（user 要求去掉）。
-            if case .installed = status {} else { statusPill(status) }
-            if status.canInstall {
-                UDButton(title: "安装", style: .primary, isLoading: busy) {
-                    Task { await skills.install(target) }
+        return SettingsRow(label: target.displayName,
+                           hint: status.conflictReason ?? statusHint(status),
+                           icon: target.iconSystemName) {
+            HStack(spacing: 12) {
+                // 已安装不再挂「已安装」徽标：右侧已经有「卸载」，状态一目了然（user 要求去掉）。
+                if case .installed = status {} else { statusPill(status) }
+                if status.canInstall {
+                    UDButton(title: "安装", style: .primary, isLoading: busy) {
+                        Task { await skills.install(target) }
+                    }
+                    .disabled(busy)
+                } else if status.canUninstall {
+                    UDButton(title: "卸载", style: .secondary, isLoading: busy) {
+                        Task { await skills.uninstall(target) }
+                    }
+                    .disabled(busy)
                 }
-                .disabled(busy)
-            } else if status.canUninstall {
-                UDButton(title: "卸载", style: .secondary, isLoading: busy) {
-                    Task { await skills.uninstall(target) }
-                }
-                .disabled(busy)
             }
         }
-        .frame(minHeight: 36)
-        .padding(.vertical, 4)
     }
 
     /// 可选的 PATH 链接。与技能安装分开：不装技能也能只要这条链接。

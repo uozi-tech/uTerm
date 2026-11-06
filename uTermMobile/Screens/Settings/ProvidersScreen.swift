@@ -117,41 +117,48 @@ private struct ProviderListRow: View {
 
 /// 编辑一条已存在的 provider：名称 / 类型 / Base URL 直接写进 `@Model`（自动持久，经
 /// CloudKit 同步到 Mac），API Key 单独「保存」进钥匙串（经 iCloud 钥匙串同步，见 `AgentKeychain`）。
+/// Key 草稿、保存与测试连接的状态在共享的 `ProviderDraftModel`（mac 编辑页同一份）。
 struct ProviderEditScreen: View {
     @Bindable var provider: AIProvider
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
-    @State private var keyDraft = ""
-    @State private var keyStatus: (ok: Bool, message: String)?
-    @State private var hasKey = false
+    @State private var draft: ProviderDraftModel
     @State private var confirmingDelete = false
+
+    init(provider: AIProvider) {
+        self.provider = provider
+        _draft = State(initialValue: ProviderDraftModel(provider: provider))
+    }
 
     var body: some View {
         Form {
             ProviderBasicsSection(name: $provider.name, kind: kindBinding, baseURL: $provider.baseURL)
 
             Section {
-                ProviderKeyField(text: $keyDraft, placeholder: hasKey ? "粘贴新 Key 以替换" : "sk-…")
-                Button("保存 Key", action: saveKey)
-                    .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                ProviderKeyField(text: $draft.keyDraft, placeholder: draft.hasKey ? "粘贴新 Key 以替换" : "sk-…")
+                Button("保存 Key") { draft.saveKey(errorDescription: { $0.localizedDescription }) }
+                    .disabled(!draft.canSaveKey)
             } header: {
                 Text("API Key")
             } footer: {
-                if let keyStatus {
-                    Label(keyStatus.message, systemImage: keyStatus.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                        .foregroundStyle(keyStatus.ok ? M.success : M.danger)
+                if draft.keySaved {
+                    Label("已保存", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(M.success)
+                } else if let error = draft.keySaveError {
+                    Label(error, systemImage: "xmark.octagon.fill")
+                        .foregroundStyle(M.danger)
                 } else {
-                    Text(hasKey ? "已有 Key。保存在钥匙串，经 iCloud 钥匙串端到端加密同步。"
-                                : "尚未设置 Key。保存在钥匙串，请求时仅发送给该服务。")
-                        .foregroundStyle(hasKey ? M.text3 : M.warning)
+                    Text(draft.hasKey ? "已有 Key。保存在钥匙串，经 iCloud 钥匙串端到端加密同步。"
+                                      : "尚未设置 Key。保存在钥匙串，请求时仅发送给该服务。")
+                        .foregroundStyle(draft.hasKey ? M.text3 : M.warning)
                 }
             }
             .listRowBackground(M.card)
 
             ProviderDiagnosticsSection(
-                canTest: ProviderManagement.baseURLError(provider.baseURL, kind: provider.kind) == nil,
-                test: { await ProviderManagement.testConnection(provider, keyDraft: keyDraft) })
+                draft: draft,
+                canTest: ProviderManagement.baseURLError(provider.baseURL, kind: provider.kind) == nil)
 
             Section {
                 Button("删除模型服务", role: .destructive) { confirmingDelete = true }
@@ -162,7 +169,7 @@ struct ProviderEditScreen: View {
         .background(M.canvas)
         .navigationTitle(provider.name.isEmpty ? "模型服务" : provider.name)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { hasKey = ProviderManagement.hasKey(provider) }
+        .onAppear { draft.refreshHasKey() }
         .alert("删除「\(provider.name)」？", isPresented: $confirmingDelete) {
             Button("删除", role: .destructive) {
                 ProviderManagement.delete(provider, in: context)
@@ -178,16 +185,6 @@ struct ProviderEditScreen: View {
         Binding(get: { provider.kind }, set: { ProviderManagement.setKind($0, on: provider) })
     }
 
-    private func saveKey() {
-        do {
-            try ProviderManagement.saveKey(keyDraft, for: provider)
-            keyDraft = ""
-            hasKey = true
-            keyStatus = (true, "已保存")
-        } catch {
-            keyStatus = (false, "保存到钥匙串失败：\(error.localizedDescription)")
-        }
-    }
 }
 
 // MARK: - 新建
@@ -203,12 +200,14 @@ struct NewProviderSheet: View {
     @State private var name = ""
     @State private var kind: ProviderKind = .anthropic
     @State private var baseURL = ProviderPreset.anthropicBaseURL
-    @State private var keyDraft = ""
+    /// 草稿阶段的 Key 与测试连接；`provider` 是不进库的临时对象，测试前换成最新草稿。
+    @State private var draft = ProviderDraftModel(
+        provider: AIProvider(name: "", kind: .anthropic, baseURL: ProviderPreset.anthropicBaseURL, model: ""))
 
     private var valid: Bool {
         ProviderManagement.nameError(name) == nil
             && ProviderManagement.baseURLError(baseURL, kind: kind) == nil
-            && !keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && draft.canSaveKey
     }
 
     var body: some View {
@@ -217,7 +216,7 @@ struct NewProviderSheet: View {
                 ProviderBasicsSection(name: $name, kind: kindBinding, baseURL: $baseURL,
                                       reportsEmptyName: false)
                 Section {
-                    ProviderKeyField(text: $keyDraft, placeholder: "sk-…")
+                    ProviderKeyField(text: $draft.keyDraft, placeholder: "sk-…")
                 } header: {
                     Text("API Key")
                 } footer: {
@@ -225,8 +224,9 @@ struct NewProviderSheet: View {
                 }
                 .listRowBackground(M.card)
                 ProviderDiagnosticsSection(
+                    draft: draft,
                     canTest: ProviderManagement.baseURLError(baseURL, kind: kind) == nil,
-                    test: testDraft)
+                    prepare: syncDraftProvider)
             }
             .scrollContentBackground(.hidden)
             .background(M.canvas)
@@ -241,10 +241,9 @@ struct NewProviderSheet: View {
         }
     }
 
-    /// 用草稿试连：临时对象不进库，只为喂给共享的 `testConnection`。
-    private func testDraft() async -> ProviderManagement.ConnectionResult {
-        let draft = AIProvider(name: name, kind: kind, baseURL: baseURL, model: "")
-        return await ProviderManagement.testConnection(draft, keyDraft: keyDraft)
+    /// 试连前把表单草稿装进临时对象：它不进库，只为喂给共享的 `testConnection`。
+    private func syncDraftProvider() {
+        draft.provider = AIProvider(name: name, kind: kind, baseURL: baseURL, model: "")
     }
 
     private var kindBinding: Binding<ProviderKind> {
@@ -259,7 +258,7 @@ struct NewProviderSheet: View {
                                               kind: kind,
                                               baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
                                               in: context)
-        try? ProviderManagement.saveKey(keyDraft, for: provider)
+        try? ProviderManagement.saveKey(draft.keyDraft, for: provider)
         onCreated(provider)
         dismiss()
     }
@@ -331,30 +330,27 @@ private struct ProviderKeyField: View {
     }
 }
 
-/// 测试连接：拉一次 `/v1/models`（`ProviderManagement.testConnection`）。
+/// 测试连接：拉一次 `/v1/models`（`ProviderDraftModel.testConnection`）。
 private struct ProviderDiagnosticsSection: View {
+    let draft: ProviderDraftModel
     let canTest: Bool
-    let test: () async -> ProviderManagement.ConnectionResult
-    @State private var inFlight = false
-    @State private var result: ProviderManagement.ConnectionResult?
+    /// 测试前的准备（新建表单借此把草稿装进临时对象）。
+    var prepare: () -> Void = {}
 
     var body: some View {
         Section {
             Button {
-                Task {
-                    inFlight = true
-                    result = await test()
-                    inFlight = false
-                }
+                prepare()
+                Task { await draft.testConnection() }
             } label: {
                 HStack {
                     Text("测试连接")
                     Spacer()
-                    if inFlight { ProgressView() }
+                    if draft.testInFlight { ProgressView() }
                 }
             }
-            .disabled(inFlight || !canTest)
-            if let result {
+            .disabled(draft.testInFlight || !canTest)
+            if let result = draft.testResult {
                 Label(result.message, systemImage: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
                     .font(M.sans(13))
                     .foregroundStyle(result.ok ? M.success : M.danger)

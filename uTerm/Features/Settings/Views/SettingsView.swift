@@ -7,17 +7,38 @@ import SwiftUI
 /// `settings.jsx` 的窗口内 tab 条：图标 + 文字横排、左对齐、选中态微底 pill。
 /// 窗口标题栏（红绿灯 + 居中标题）仍由系统原生 chrome 提供。
 struct SettingsView: View {
-    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsTab.general.rawValue
+    @AppStorage(SettingsTabSelection.key) private var selectedTab = SettingsSection.general.rawValue
 
-    private var tab: SettingsTab {
-        SettingsTabSelection.tab(from: selectedTab)
+    /// macOS 设置窗里有页面的分区，按 tab 条顺序。
+    static let sections: [SettingsSection] = [.general, .providers, .terminal, .remote, .connection, .cli, .about]
+
+    /// 记住的分区不在本窗（旧版本写的、或命令面板写了 iOS 才有的分区）时回到「通用」。
+    private var tab: SettingsSection {
+        let stored = SettingsTabSelection.tab(from: selectedTab)
+        return Self.sections.contains(stored) ? stored : .general
     }
 
-    private var tabBinding: Binding<SettingsTab> {
+    private var tabBinding: Binding<SettingsSection> {
         Binding {
-            SettingsTabSelection.tab(from: selectedTab)
+            tab
         } set: { newValue in
             selectedTab = newValue.rawValue
+        }
+    }
+
+    /// 分区 → 页面。不在本窗的分区（`sections` 之外）给空视图。
+    @ViewBuilder
+    static func page(for section: SettingsSection) -> some View {
+        switch section {
+        case .general:    GeneralSettingsView()
+        case .providers:  ProvidersSettingsView()
+        case .terminal:   TerminalSettingsView()
+        case .remote:     RemoteControlSettingsView()
+        case .connection: AdvancedSettingsView()
+        case .cli:        CLISettingsView()
+        case .about:      AboutSettingsView()
+        case .appearance, .security, .sync, .diagnostics:
+            EmptyView()
         }
     }
 
@@ -27,17 +48,7 @@ struct SettingsView: View {
             SettingsTabStrip(selection: tabBinding)
 
             // 内容区
-            Group {
-                switch tab {
-                case .general:   GeneralSettingsView()
-                case .providers: ProvidersSettingsView()
-                case .terminal:  TerminalSettingsView()
-                case .remote:    RemoteControlSettingsView()
-                case .advanced:  AdvancedSettingsView()
-                case .cli:       CLISettingsView()
-                case .about:     AboutSettingsView()
-                }
-            }
+            Self.page(for: tab)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // 用 minHeight（而非固定 height）让内容**铺满整窗**——与 Welcome / Keys 一致。
@@ -80,46 +91,6 @@ private struct SettingsTitleBar: View {
     }
 }
 
-/// 设置 tab 标识。`label` / `symbol` 对应设计稿 `settings.jsx` 的 tab 条。
-enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, providers, terminal, remote, advanced, cli, about
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .general:   return "通用"
-        case .providers: return "AI 服务商"
-        case .terminal:  return "终端"
-        case .remote:    return "远程控制"
-        case .advanced:  return "高级"
-        case .cli:       return "命令行与技能"
-        case .about:     return "关于"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .general:   return "gearshape"
-        case .providers: return "sparkles"
-        case .terminal:  return "terminal"
-        case .remote:    return "iphone.radiowaves.left.and.right"
-        case .advanced:  return "slider.horizontal.3"
-        case .cli:       return "terminal"
-        case .about:     return "info.circle"
-        }
-    }
-}
-
-nonisolated enum SettingsTabSelection {
-    static let key = DefaultsKey.settingsTabSelection
-    static let aboutMenuTarget = SettingsTab.about.rawValue
-
-    static func tab(from rawValue: String?) -> SettingsTab {
-        rawValue.flatMap(SettingsTab.init(rawValue:)) ?? .general
-    }
-}
-
 /// 设置窗口标识。改用普通 `Window`（而非 macOS `Settings`/Preferences 场景）打开，
 /// 原因：Preferences 场景不可靠地忽略 `.windowStyle(.hiddenTitleBar)`，始终画系统标题栏，
 /// 自绘 chrome（`SettingsTitleBar` + `WorkspaceWindowChrome`）盖不住。改普通 Window 后
@@ -132,11 +103,11 @@ nonisolated enum SettingsWindow {
 /// 每个 tab：padding 6×12、圆角 7、图标 + 文字横排（间距 7）、12.5pt；
 /// 选中 = accent 淡底 + accentInk（驾驶舱 pill），未选 = 次要文本色。
 private struct SettingsTabStrip: View {
-    @Binding var selection: SettingsTab
+    @Binding var selection: SettingsSection
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(SettingsTab.allCases) { item in
+            ForEach(SettingsView.sections) { item in
                 tabButton(item)
             }
             Spacer(minLength: 0)
@@ -151,7 +122,7 @@ private struct SettingsTabStrip: View {
     }
 
     @ViewBuilder
-    private func tabButton(_ item: SettingsTab) -> some View {
+    private func tabButton(_ item: SettingsSection) -> some View {
         let isOn = item == selection
         Button {
             selection = item
@@ -159,7 +130,7 @@ private struct SettingsTabStrip: View {
             HStack(spacing: 7) {
                 Image(systemName: item.symbol)
                     .font(.system(size: 12))
-                Text(item.label)
+                Text(item.title)
                     .font(.system(size: 12.5))
             }
             .foregroundStyle(isOn ? UD.accentInk : UD.text2)

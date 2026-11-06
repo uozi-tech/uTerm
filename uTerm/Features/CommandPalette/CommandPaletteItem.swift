@@ -143,16 +143,16 @@ nonisolated func dedupeCommandPaletteByID(_ items: [CommandPaletteItem]) -> [Com
 /// `openSettings` 由各窗口注入（`@Environment(\.openSettings)` 包成闭包）。
 @MainActor
 func commandPaletteSettingsItems(openSettings: @escaping () -> Void) -> [CommandPaletteItem] {
-    let tabs: [(SettingsTab, String)] = [
+    let tabs: [(SettingsSection, String)] = [
         (.general,   "外观、启动、语言、更新"),
         (.providers, "Anthropic / OpenAI 兼容"),
         (.terminal,  "字体、颜色、行距"),
-        (.advanced,  "SSH 超时 / 主机校验 / 日志"),
+        (.connection, "SSH 超时 / 主机校验 / 日志"),
     ]
     return tabs.map { tab, detail in
         CommandPaletteItem(
             id: "setting.\(tab.rawValue)", kind: .setting,
-            title: "设置 · \(tab.label)", detail: detail, hint: "↵", group: nil) {
+            title: "设置 · \(tab.title)", detail: detail, hint: "↵", group: nil) {
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTabSelection.key)
                 openSettings()
             }

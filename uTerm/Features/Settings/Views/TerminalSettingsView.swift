@@ -14,10 +14,7 @@ struct TerminalSettingsView: View {
     @AppStorage(DefaultsKey.terminalCopyOnSelect) private var copyOnSelect: Bool = false
 
     private var cursorShapeBinding: Binding<TerminalCursorShape> {
-        Binding(
-            get: { TerminalCursorShape(rawValue: cursorShapeRaw) ?? .block },
-            set: { cursorShapeRaw = $0.rawValue }
-        )
+        $cursorShapeRaw.rawValue(TerminalCursorShape.self, default: .block)
     }
 
     private var currentSettings: TerminalSettings {
