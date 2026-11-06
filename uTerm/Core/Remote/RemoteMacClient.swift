@@ -297,6 +297,42 @@ final class RemoteMacClient: Identifiable {
     }
 
     @ObservationIgnored private var pendingCode = ""
+    /// 网络诊断在等的那一个 pong（毫秒；超时为 nil）与它的编号，超时和 pong 谁先到谁收。
+    @ObservationIgnored private var pongWaiter: (token: Int, continuation: CheckedContinuation<Double?, Never>)?
+    @ObservationIgnored private var pongToken = 0
+
+    /// 网络诊断：连着的时候逐个发 ping、等 pong，返回每次往返（毫秒）与丢了几次。
+    /// 每次最多等 `timeout`；心跳只在链路安静时才发，这里一直在发，不会和它抢。
+    func measureRoundTrips(count: Int, interval: Duration = .milliseconds(50),
+                           timeout: Duration = .seconds(1)) async -> (millis: [Double], lost: Int) {
+        var millis: [Double] = []
+        var lost = 0
+        for _ in 0..<count {
+            guard let link, state == .connected, !Task.isCancelled else {
+                lost += 1
+                continue
+            }
+            pongToken += 1
+            let token = pongToken
+            let trip = await withCheckedContinuation { (continuation: CheckedContinuation<Double?, Never>) in
+                pongWaiter = (token, continuation)
+                link.send(RemoteMessage(.ping))
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: timeout)
+                    self?.finishPong(token: token, millis: nil)
+                }
+            }
+            if let trip { millis.append(trip) } else { lost += 1 }
+            try? await Task.sleep(for: interval)
+        }
+        return (millis, lost)
+    }
+
+    private func finishPong(token: Int?, millis: Double?) {
+        guard let waiter = pongWaiter, token == nil || waiter.token == token else { return }
+        pongWaiter = nil
+        waiter.continuation.resume(returning: millis)
+    }
     /// `state == .failed` 时这次失败是否重试也没用。false = 网络问题，调用方可以退避重试。
     @ObservationIgnored private var failureIsPermanent = false
 
@@ -404,8 +440,14 @@ final class RemoteMacClient: Identifiable {
             }
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
         case .pong:
-            let millis = link.latestRoundTrip.map { Int(($0 * 1000).rounded()) }
-            DispatchQueue.main.async { MainActor.assumeIsolated { client?.roundTripMillis = millis } }
+            let precise = link.latestRoundTrip.map { $0 * 1000 }
+            let millis = precise.map { Int($0.rounded()) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    client?.roundTripMillis = millis
+                    client?.finishPong(token: nil, millis: precise)
+                }
+            }
         default:
             DispatchQueue.main.async { MainActor.assumeIsolated { client?.handleControl(message) } }
         }

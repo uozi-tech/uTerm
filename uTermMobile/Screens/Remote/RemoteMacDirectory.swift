@@ -52,13 +52,17 @@ final class RemoteMacDirectory {
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
-    /// 只走公网：无视局域网里看到的 Mac，连接一律经中继或打洞，打洞也不用私有地址。网络诊断用，默认关。
+    /// 只走公网（开发者选项）：正式连接无视局域网里看到的 Mac，一律经中继或打洞，打洞也不用私有地址，用来在家里
+    /// 复现外出时的情况。默认关。网络诊断不看它：诊断的每条路都强制只走自己。
+    /// 切换立即生效：已有连接马上断开，按新的路重连（只换路由表的话，连着的那条会一直留在旧路上）。
     /// 启动参数 `-remote.internetOnly YES` 同样生效（手机插着线收日志时，Mac 会经 USB 链路被 Bonjour 发现）。
     var internetOnly: Bool {
         didSet {
             guard internetOnly != oldValue else { return }
             defaults.set(internetOnly, forKey: Self.internetOnlyKey)
-            if isBrowsing { restartBrowsing() } else { rebuild() }
+            online = internetOnly ? [:] : discovered
+            rebuild()
+            for client in clients.values { client.disconnect() }
         }
     }
     private static let internetOnlyKey = DefaultsKey.remoteInternetOnly
@@ -68,7 +72,9 @@ final class RemoteMacDirectory {
     @ObservationIgnored let roster: RemoteCloudRoster?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var browser: NWBrowser?
-    /// Bonjour 此刻看到的、带设备 ID 的 Mac：设备 ID → (电脑名, 端点)。
+    /// Bonjour 此刻看到的、带设备 ID 的 Mac：设备 ID → (电脑名, 端点)。网络诊断测局域网用它。
+    @ObservationIgnored private var discovered: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
+    /// 正式连接认的局域网 Mac：「只走公网」打开时为空。
     @ObservationIgnored private var online: [UUID: (name: String, endpoint: NWEndpoint)] = [:]
     @ObservationIgnored private var clients: [String: RemoteMacClient] = [:]
     /// 扫码拿到、还没用掉的令牌：设备 ID → 令牌。
@@ -196,16 +202,12 @@ final class RemoteMacDirectory {
 
     /// 只认 TXT 里带设备 ID 的结果；电脑名只拿来显示。没有设备 ID 的（老版本 Mac）不认。
     private func update(_ results: Set<NWBrowser.Result>) {
-        guard !internetOnly else {
-            online = [:]
-            rebuild()
-            return
-        }
-        online = Self.onlineMacs(results.compactMap { result in
+        discovered = Self.onlineMacs(results.compactMap { result in
             guard case .service(let name, _, _, _) = result.endpoint,
                   case .bonjour(let txt) = result.metadata else { return nil }
             return (name, txt[RemoteConstants.deviceIDKey], result.endpoint)
         })
+        online = internetOnly ? [:] : discovered
         rebuild()
     }
 
@@ -280,10 +282,26 @@ final class RemoteMacDirectory {
         (relayConfigOverride ?? relayStore?.load())?.name
     }
 
-    /// 这台 Mac 能不能跑链路矩阵：条件同打洞诊断。
+    /// 这台 Mac 此刻在局域网里吗（不看「只走公网」）。
+    func isOnLocalNetwork(_ mac: Mac) -> Bool {
+        mac.deviceID.map { discovered[$0] != nil } ?? false
+    }
+
+    /// 对这台 Mac 跑网络诊断。要知道它的身份（配对过）；局域网与中继缺哪条，对应的路直接判不通并写明原因。
     func pathMatrixRunner(for mac: Mac) -> (runner: RemotePathMatrixRunner, peer: RemotePeer)? {
-        guard mac.isOnRelay, let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
-        return (RemotePathMatrixRunner(relay: relay, identity: identity, localID: RemoteLocalDevice.id()), peer)
+        guard let peer = mac.expectedPeer, let deviceID = mac.deviceID else { return nil }
+        var runner = RemotePathMatrixRunner(identity: identity, localID: RemoteLocalDevice.id())
+        if let found = discovered[deviceID] {
+            runner.lan = RemoteLANTarget(macName: found.name, endpoint: found.endpoint, expectedPeer: peer)
+        }
+        if let relay = currentRelayClient() {
+            if mac.isOnRelay {
+                runner.relay = relay
+            } else {
+                runner.relayUnavailable = "Mac 不在中继上（没开「允许经公网接入」或没勾选这台手机）"
+            }
+        }
+        return (runner, peer)
     }
 
     private func internetDialer(for mac: Mac) -> (@Sendable () async throws -> RemoteDialedPath)? {
@@ -365,7 +383,7 @@ final class RemoteMacDirectory {
 
     private func runDebugMatrixIfRequested() {
         let rounds = defaults.integer(forKey: Self.debugMatrixKey)
-        guard rounds > 0, !debugMatrixStarted, let mac = macs.first(where: \.isOnRelay),
+        guard rounds > 0, !debugMatrixStarted, let mac = macs.first(where: \.isOnline),
               let probe = pathMatrixRunner(for: mac) else { return }
         debugMatrixStarted = true
         let defaults = self.defaults

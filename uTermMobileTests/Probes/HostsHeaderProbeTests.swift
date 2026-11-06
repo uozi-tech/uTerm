@@ -236,6 +236,7 @@ final class HostsHeaderProbeTests: XCTestCase {
             .environment(MobileStore())
             .environment(CloudKitSyncMonitor())
             .environment(lan)
+            .environment(RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage())))
             .modelContainer(container)
         let (window, host) = MobileProbeWindow.make(placement: .visibleOnScreen, rootView: root)
         host.safeAreaRegions = .all

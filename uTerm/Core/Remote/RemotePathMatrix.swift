@@ -1,17 +1,20 @@
 import CryptoKit
 import Foundation
+@preconcurrency import Network
 
-// 链路矩阵诊断：同一台 Mac，IPv6 直连、IPv4 直连、TCP 中继各跑几轮，一次看清每条路能不能通、多快能通、
-// 通了之后的往返与丢包。不接业务，不影响现有连接。
+// 网络诊断：同一台 Mac，局域网、IPv6 直连、IPv4 直连、TCP 中继各跑几轮，一次看清每条路能不能通、多快能通、
+// 通了之后的往返与丢包。每条路都强制只走自己（不看「只走公网」），不接业务，不影响现有连接。
 
-/// 测哪条路。
+/// 测哪条路。顺序即实际连接的优先级：局域网 → 打洞直连 → 中继。
 nonisolated enum RemotePathProbeMode: String, Codable, CaseIterable, Sendable {
+    case localNetwork
     case directIPv6
     case directIPv4
     case relay
 
     var label: String {
         switch self {
+        case .localNetwork: return "局域网"
         case .directIPv6: return "直连 IPv6"
         case .directIPv4: return "直连 IPv4"
         case .relay: return "中继"
@@ -22,9 +25,18 @@ nonisolated enum RemotePathProbeMode: String, Codable, CaseIterable, Sendable {
         switch self {
         case .directIPv6: return .ipv6
         case .directIPv4: return .ipv4
-        case .relay: return nil
+        case .localNetwork, .relay: return nil
         }
     }
+
+    var isDirect: Bool { family != nil }
+}
+
+/// 局域网那条路要的：Bonjour 此刻看到的端点。
+nonisolated struct RemoteLANTarget: Sendable {
+    let macName: String
+    let endpoint: NWEndpoint
+    let expectedPeer: RemotePeer?
 }
 
 /// 一条路跑一次的结果。不含 IP 地址。
@@ -97,9 +109,13 @@ nonisolated struct RemotePathProbeSummary: Equatable, Sendable {
 
 /// 手机这边跑矩阵：每轮依次测每条路，一条测完再测下一条，互不干扰。
 nonisolated struct RemotePathMatrixRunner: Sendable {
-    let relay: RemoteRelayClient
     let identity: RemoteIdentityStore
     let localID: UUID
+    /// nil = Mac 此刻不在这个局域网里（局域网那条路直接判不通）。
+    var lan: RemoteLANTarget?
+    /// nil = 没配中继或 Mac 不在中继上（直连与中继都要经中继交换地址，直接判不通，原因见 `relayUnavailable`）。
+    var relay: RemoteRelayClient?
+    var relayUnavailable = "没有配置中继"
 
     func run(mac: RemotePeer, rounds: Int, modes: [RemotePathProbeMode] = RemotePathProbeMode.allCases,
              progress: @Sendable (RemotePathProbeResult) async -> Void) async -> [RemotePathProbeResult] {
@@ -119,6 +135,15 @@ nonisolated struct RemotePathMatrixRunner: Sendable {
     }
 
     func probe(mac: RemotePeer, mode: RemotePathProbeMode) async -> RemotePathProbeResult {
+        if mode == .localNetwork {
+            guard let lan else {
+                return RemotePathProbeResult(mode: mode, connected: false, failure: "Mac 不在这个局域网里")
+            }
+            return await RemoteLANProbe(identity: identity).run(lan)
+        }
+        guard let relay else {
+            return RemotePathProbeResult(mode: mode, connected: false, failure: relayUnavailable)
+        }
         if let family = mode.family {
             let runner = RemoteICEProbeRunner(relay: relay, identity: identity, localID: localID)
             let ice = await runner.run(mac: mac, family: family)
@@ -133,6 +158,68 @@ nonisolated struct RemotePathMatrixRunner: Sendable {
             return result
         }
         return await RemoteRelayProbe(relay: relay, identity: identity, localID: localID).run(mac: mac)
+    }
+}
+
+/// 局域网这条路：用一个临时客户端只走 Bonjour 端点，握手 + 配对确认接通，再在这条连接上逐个 ping。
+/// 和正式连接走的是同一套代码；Mac 允许同一台手机同时有几条连接，不会挤掉正在用的那条。
+@MainActor
+struct RemoteLANProbe {
+    static let connectLimit: Duration = .seconds(8)
+
+    let identity: RemoteIdentityStore
+
+    func run(_ target: RemoteLANTarget, pings: Int = 40) async -> RemotePathProbeResult {
+        var result = RemotePathProbeResult(mode: .localNetwork)
+        let client = RemoteMacClient(macName: target.macName, endpoint: target.endpoint, identity: identity,
+                                     expectedPeer: target.expectedPeer)
+        client.updateRoutes(endpoint: target.endpoint, internetDialer: nil)
+        defer { client.disconnect() }
+        let started = DispatchTime.now()
+        let connecting = Task { await client.connect() }
+        let clock = ContinuousClock()
+        let deadline = clock.now + Self.connectLimit
+        while clock.now < deadline, !Task.isCancelled {
+            if case .connected = client.state { break }
+            if case .failed = client.state { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        connecting.cancel()
+        switch client.state {
+        case .connected:
+            break
+        case .failed(let message):
+            result.failure = message
+            return result
+        case .awaitingApproval:
+            result.failure = "Mac 上还没同意这台手机"
+            return result
+        case .idle, .connecting:
+            result.failure = "超时"
+            return result
+        }
+        result.setupMillis = RemoteRelayProbe.millis(since: started)
+        let measured = await client.measureRoundTrips(count: pings)
+        let percentiles = RemoteRoundTrips.percentiles(measured.millis.sorted())
+        result.connected = true
+        result.selectedPair = "TCP 局域网"
+        result.roundTripMillis = percentiles.p50
+        result.roundTripP95Millis = percentiles.p95
+        result.lossPercent = measured.lost * 100 / max(1, pings)
+        return result
+    }
+}
+
+/// 一次诊断的结论：实际连接会走哪条路。正式连接先试局域网，再打洞（两族里谁先通走谁，这里取往返更短的），
+/// 最后中继。
+nonisolated enum RemotePathVerdict {
+    static func chosen(_ summaries: [RemotePathProbeSummary], skipsLocalNetwork: Bool = false)
+        -> RemotePathProbeSummary? {
+        let usable = summaries.filter { $0.successes > 0 }
+        if !skipsLocalNetwork, let lan = usable.first(where: { $0.mode == .localNetwork }) { return lan }
+        let direct = usable.filter(\.mode.isDirect)
+            .min { ($0.medianRoundTripMillis ?? .infinity) < ($1.medianRoundTripMillis ?? .infinity) }
+        return direct ?? usable.first { $0.mode == .relay }
     }
 }
 

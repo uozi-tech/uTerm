@@ -301,15 +301,30 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let mac = try await makeMac(config: config, allowed: allowed)
         defer { mac.server.stop(); mac.session.dispose() }
         try mac.server.trust(try phone.peer())
-        let runner = RemotePathMatrixRunner(relay: RemoteRelayClient(config: config), identity: phone.identity,
-                                            localID: phone.id)
+        var runner = RemotePathMatrixRunner(identity: phone.identity, localID: phone.id)
+        runner.relay = RemoteRelayClient(config: config)
+        // 局域网那条路：本机起监听，经回环连（和 Bonjour 解析出的端点同一套连接代码）。
+        mac.server.start()
+        let listening = await waitUntil { mac.server.port != nil }
+        XCTAssertTrue(listening)
+        let port = try XCTUnwrap(mac.server.port.flatMap { NWEndpoint.Port(rawValue: $0) })
+        runner.lan = RemoteLANTarget(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: port),
+                                     expectedPeer: mac.peer)
         let reported = Reported()
         let results = await runner.run(mac: mac.peer, rounds: 2) { await reported.add($0) }
         for summary in RemotePathProbeSummary.summarize(results) { print("[链路矩阵·本机] \(summary.line)") }
-        XCTAssertEqual(results.map(\.mode), [.directIPv6, .directIPv4, .relay, .directIPv6, .directIPv4, .relay])
-        XCTAssertEqual(results.map(\.round), [1, 1, 1, 2, 2, 2])
+        let modes: [RemotePathProbeMode] = [.localNetwork, .directIPv6, .directIPv4, .relay]
+        XCTAssertEqual(results.map(\.mode), modes + modes)
+        XCTAssertEqual(results.map(\.round), [1, 1, 1, 1, 2, 2, 2, 2])
         let count = await reported.count
-        XCTAssertEqual(count, 6)
+        XCTAssertEqual(count, 8)
+        let lan = results.filter { $0.mode == .localNetwork }
+        XCTAssertTrue(lan.allSatisfy(\.connected), "局域网这条路在本机必须通：\(lan.map(\.summaryLine))")
+        XCTAssertTrue(lan.allSatisfy { $0.lossPercent == 0 && $0.roundTripMillis != nil })
+        let chosen = RemotePathVerdict.chosen(RemotePathProbeSummary.summarize(results))
+        XCTAssertEqual(chosen?.mode, .localNetwork, "局域网通时实际连接走局域网")
+        XCTAssertEqual(RemotePathVerdict.chosen(RemotePathProbeSummary.summarize(results), skipsLocalNetwork: true)?.mode,
+                       .relay, "只走公网时跳过局域网；本机没有公网地址可打洞，落到中继")
         XCTAssertTrue(results.filter { $0.mode == .relay }.allSatisfy(\.connected), "中继这条路在本机必须通")
     }
 

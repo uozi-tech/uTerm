@@ -22,6 +22,7 @@ struct SettingsScreen: View {
     @Environment(CloudKitSyncMonitor.self) private var sync
 
     @Environment(\.modelContext) private var context
+    @Environment(RemoteMacDirectory.self) private var remoteMacs
 
     /// 五个徽标计数。
     ///
@@ -73,6 +74,7 @@ struct SettingsScreen: View {
                     securityGroup
                     historyGroup
                     LANSyncSettingsSection()
+                    remoteGroup
                     aboutGroup
                     #if DEBUG
                     debugGroup
@@ -275,14 +277,25 @@ struct SettingsScreen: View {
     }
     #endif
 
+    /// 远程控制：网络诊断入口与「只走公网」开发者选项。
+    private var remoteGroup: some View {
+        MInsetGroup(header: "远程控制",
+                    footer: "「只走公网」打开后，即使 Mac 就在同一个局域网里，连接也经中继或打洞，用来在家里复现外出时的情况。"
+                        + "切换后马上断开现有连接、按新的路重连。网络诊断不受它影响。") {
+            NavigationLink { RemoteNetworkDiagnosticsScreen() } label: {
+                MInsetRow(icon: "globe", label: "网络诊断", chevron: true)
+            }
+            .buttonStyle(MRowStyle())
+            MInsetRow(icon: "forward", label: "只走公网", last: true,
+                      trailing: AnyView(MSwitch(on: Binding(get: { remoteMacs.internetOnly },
+                                                            set: { remoteMacs.internetOnly = $0 }))))
+        }
+    }
+
     private var aboutGroup: some View {
         MInsetGroup(header: "关于") {
             MInsetRow(icon: "icloud", label: "同步诊断", sub: syncDiagSub,
                       chevron: true, onTap: { showSyncDiag = true })
-            NavigationLink { RemoteNetworkDiagnosticsScreen() } label: {
-                MInsetRow(icon: "globe", label: "网络诊断", sub: "远程控制的中继与直连", chevron: true)
-            }
-            .buttonStyle(MRowStyle())
             MInsetRow(label: "版本", value: appVersion, last: true)
         }
     }

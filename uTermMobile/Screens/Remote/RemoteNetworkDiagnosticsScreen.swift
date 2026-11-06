@@ -2,9 +2,10 @@ import Network
 import SwiftUI
 import UIKit
 
-/// 网络诊断：手机此刻的网络、中继、「只走公网」开关，以及对一台 Mac 的链路矩阵
-/// （IPv6 直连、IPv4 直连、中继各跑几轮，看通断、建立耗时、往返与丢包）。
-/// 入口：设置 › 关于 › 网络诊断；远控里 Mac 那一行的长按菜单（带上那台 Mac）。
+/// 网络诊断：对一台 Mac 把局域网、IPv6 直连、IPv4 直连、中继各测一遍，给出「实际会走哪条路、多快」。
+///
+/// 每条路都强制只走自己，不看「只走公网」（那是正式连接的开发者选项，在 设置 › 远程控制）。
+/// 入口：设置 › 远程控制 › 网络诊断；主机页「我的 Mac」那一行的长按菜单（带上那台 Mac）。
 struct RemoteNetworkDiagnosticsScreen: View {
     /// 从某台 Mac 的长按菜单进来时预选它。
     var preferredMacID: String?
@@ -22,20 +23,19 @@ struct RemoteNetworkDiagnosticsScreen: View {
     @State private var running: Task<Void, Never>?
     @State private var current: [RemotePathProbeResult] = []
     @State private var currentTotal = 0
-    @State private var history: [RemotePathProbeResult] = []
-    /// 打开页面时显示的上次结果；开始新一次诊断后换成本次的。
     @State private var lastRun: [RemotePathProbeResult] = []
-    @State private var copied = false
+    @State private var historyCount = 0
+    @State private var showsSettings = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                networkGroup
-                if !current.isEmpty || !lastRun.isEmpty { currentGroup }
-                runControls
                 targetGroup
-                testsGroup
-                if !history.isEmpty { historyGroup }
+                environmentGroup
+                runControls
+                if !shown.isEmpty { resultsGroup }
+                settingsGroup
+                historyGroup
             }
             .padding(.top, 8)
             .frame(maxWidth: M.readableWidth)
@@ -47,45 +47,33 @@ struct RemoteNetworkDiagnosticsScreen: View {
         .task {
             directory.startBrowsing()
             relayName = directory.relayServerName()
+            reloadHistory()
+            if selectedMacID == nil { selectedMacID = preferredMacID ?? candidates.first(where: isReachable)?.id }
             network = await RemoteNetworkLabel.current()
-            history = log.load()
-            lastRun = log.lastRun()
-            if selectedMacID == nil { selectedMacID = preferredMacID ?? relayMacs.first?.id }
         }
         .onDisappear { running?.cancel() }
     }
 
-    // MARK: - 网络
+    // MARK: - 测哪台 Mac
 
-    private var networkGroup: some View {
-        MInsetGroup(header: "网络", footer: "打开「只走公网」后，即使 Mac 就在同一个局域网里，连接也一律经中继或打洞，"
-                    + "打洞也不用私有地址，用来复现外出时的情况。诊断量的始终是公网：插着数据线、连着同一个 Wi-Fi 都没关系。") {
-            MInsetRow(icon: "globe", label: "手机网络", value: network)
-            MInsetRow(icon: "link", label: "中继服务器", value: relayName ?? "未配置")
-            MInsetRow(icon: "forward", label: "只走公网", last: true,
-                      trailing: AnyView(MSwitch(on: internetOnlyBinding)))
-        }
+    /// 能诊断的 Mac：知道身份的（配对过的）。
+    private var candidates: [RemoteMacDirectory.Mac] {
+        directory.macs.filter { $0.expectedPeer != nil }
     }
 
-    private var internetOnlyBinding: Binding<Bool> {
-        Binding(get: { directory.internetOnly }, set: { directory.internetOnly = $0 })
-    }
-
-    // MARK: - 目标
-
-    private var relayMacs: [RemoteMacDirectory.Mac] {
-        directory.macs.filter(\.isOnRelay)
+    private func isReachable(_ mac: RemoteMacDirectory.Mac) -> Bool {
+        mac.isOnRelay || directory.isOnLocalNetwork(mac)
     }
 
     @ViewBuilder private var targetGroup: some View {
-        let macs = relayMacs
-        MInsetGroup(header: "诊断哪台 Mac", footer: macs.isEmpty ? emptyTargetHint : nil) {
+        let macs = candidates
+        MInsetGroup(header: "检测哪台 Mac",
+                    footer: macs.isEmpty ? "还没有配对过的 Mac。先在同一个局域网里连一次。" : nil) {
             if macs.isEmpty {
-                MInsetRow(icon: "mac", label: relayName == nil ? "还没有配置中继" : "没有在中继上的 Mac", last: true)
+                MInsetRow(icon: "mac", label: "没有可检测的 Mac", last: true)
             } else {
                 ForEach(macs) { mac in
-                    MInsetRow(icon: "mac", label: mac.name, value: mac.endpoint == nil ? "中继" : "局域网 · 中继",
-                              last: mac.id == macs.last?.id,
+                    MInsetRow(icon: "mac", label: mac.name, value: reachability(mac), last: mac.id == macs.last?.id,
                               trailing: AnyView(selectionMark(mac.id == selectedMacID)),
                               onTap: running == nil ? { selectedMacID = mac.id } : nil)
                 }
@@ -93,50 +81,37 @@ struct RemoteNetworkDiagnosticsScreen: View {
         }
     }
 
-    private var emptyTargetHint: String {
-        relayName == nil
-            ? "先在 Mac 的「设置 › 远程控制 › 中继服务器」导入中继配置，再让手机在局域网里连一次 Mac，配置会自动带过来。"
-            : "Mac 要打开「设置 › 远程控制 › 允许经公网接入」并勾选这台手机。Mac 离线或睡眠时也看不到。"
+    private func reachability(_ mac: RemoteMacDirectory.Mac) -> String {
+        let parts = [directory.isOnLocalNetwork(mac) ? "局域网" : nil, mac.isOnRelay ? "中继" : nil].compactMap { $0 }
+        return parts.isEmpty ? "不在线" : parts.joined(separator: " · ")
     }
 
     @ViewBuilder private func selectionMark(_ selected: Bool) -> some View {
         if selected { MIcon(name: "check", size: 15, color: accent, weight: .semibold) }
     }
 
-    // MARK: - 测试项
+    // MARK: - 环境
+
+    private var environmentGroup: some View {
+        MInsetGroup(header: "这台手机") {
+            MInsetRow(icon: "globe", label: "网络", value: network)
+            MInsetRow(icon: "link", label: "中继服务器", value: relayName ?? "未配置", last: !directory.internetOnly)
+            if directory.internetOnly {
+                MInsetRow(icon: "forward", label: "只走公网", value: "已打开", last: true)
+            }
+        }
+    }
+
+    // MARK: - 运行
 
     private var modes: [RemotePathProbeMode] {
         let raw = Set(modesRaw.split(separator: ",").map(String.init))
         return RemotePathProbeMode.allCases.filter { raw.contains($0.rawValue) }
     }
 
-    private func modeBinding(_ mode: RemotePathProbeMode) -> Binding<Bool> {
-        Binding(get: { modes.contains(mode) }, set: { on in
-            var set = Set(modes)
-            if on { set.insert(mode) } else { set.remove(mode) }
-            modesRaw = RemotePathProbeMode.allCases.filter(set.contains).map(\.rawValue).joined(separator: ",")
-        })
+    private var selectedMac: RemoteMacDirectory.Mac? {
+        candidates.first { $0.id == selectedMacID }
     }
-
-    private var testsGroup: some View {
-        MInsetGroup(header: "测试项", footer: "IPv6 直连要两端都有公网 IPv6；IPv4 直连要穿过两边的 NAT，"
-                    + "运营商网络下常常不通；中继经服务器转发，是兜底的那条路。") {
-            ForEach(RemotePathProbeMode.allCases, id: \.self) { mode in
-                MInsetRow(label: mode.label, trailing: AnyView(MSwitch(on: modeBinding(mode))))
-            }
-            MInsetRow(label: "每条路跑几轮", trailing: AnyView(
-                Stepper("\(rounds) 轮", value: $rounds, in: 1...10).fixedSize()
-                    .font(M.sans(14)).foregroundStyle(M.text2)))
-            HStack(spacing: 12) {
-                Text("备注").font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
-                TextField("如：移动 5G ↔ 家里电信", text: $note)
-                    .font(M.sans(14)).multilineTextAlignment(.trailing).foregroundStyle(M.text2)
-            }
-            .padding(.horizontal, 14).frame(minHeight: 50)
-        }
-    }
-
-    // MARK: - 运行
 
     @ViewBuilder private var runControls: some View {
         VStack(spacing: 10) {
@@ -146,27 +121,22 @@ struct RemoteNetworkDiagnosticsScreen: View {
                 Text(progressText).font(M.sans(13)).foregroundStyle(M.text3)
                 MBtn(title: "停止", kind: .secondary, full: true, height: 46) { running?.cancel() }
             } else {
-                MBtn(title: "开始诊断", icon: "run", full: true, height: 46,
-                     disabled: selectedMacID == nil || modes.isEmpty || relayMacs.isEmpty, action: run)
+                MBtn(title: "开始检测", icon: "run", full: true, height: 46,
+                     disabled: selectedMac == nil || modes.isEmpty, action: run)
             }
         }
         .padding(.horizontal, 16).padding(.bottom, 22)
     }
 
     private var progressText: String {
-        let next = currentTotal > current.count ? nextStep : nil
-        return "已完成 \(current.count)/\(currentTotal)" + (next.map { " · 正在测 \($0)" } ?? "")
-    }
-
-    private var nextStep: String? {
-        guard !modes.isEmpty else { return nil }
+        guard current.count < currentTotal, !modes.isEmpty else { return "收尾中…" }
         let index = current.count
-        return "第 \(index / modes.count + 1) 轮 \(modes[index % modes.count].label)"
+        let round = rounds > 1 ? "第 \(index / modes.count + 1) 轮 · " : ""
+        return "\(round)正在测\(modes[index % modes.count].label)（\(index + 1)/\(currentTotal)）"
     }
 
     private func run() {
-        guard let mac = relayMacs.first(where: { $0.id == selectedMacID }),
-              let probe = directory.pathMatrixRunner(for: mac) else { return }
+        guard let mac = selectedMac, let probe = directory.pathMatrixRunner(for: mac) else { return }
         let modes = self.modes
         let rounds = self.rounds
         let note = self.note
@@ -184,74 +154,137 @@ struct RemoteNetworkDiagnosticsScreen: View {
                     log.append([result])
                 }
             }
-            history = log.load()
-            lastRun = log.lastRun()
+            reloadHistory()
             running = nil
         }
     }
 
+    private func reloadHistory() {
+        historyCount = log.load().count
+        lastRun = log.lastRun()
+    }
+
     // MARK: - 结果
 
-    private var currentGroup: some View {
-        let shown = current.isEmpty ? lastRun : current
-        let header = running != nil ? "正在诊断" : current.isEmpty
-            ? "上次结果 · \(shown.first?.date.formatted(date: .abbreviated, time: .shortened) ?? "")" : "本次结果"
-        return MInsetGroup(header: header, footer: shown.first.map { context($0) }) {
-            let summaries = RemotePathProbeSummary.summarize(shown)
+    /// 正在测或刚测完的这一次；否则上一次。
+    private var shown: [RemotePathProbeResult] {
+        current.isEmpty ? lastRun : current
+    }
+
+    private var resultsGroup: some View {
+        let results = shown
+        let summaries = RemotePathProbeSummary.summarize(results)
+        let header = running != nil ? "正在检测" : current.isEmpty
+            ? "上次结果 · \(results.first?.date.formatted(date: .abbreviated, time: .shortened) ?? "")" : "检测结果"
+        let context = results.first.map { [$0.network, $0.note].filter { !$0.isEmpty }.joined(separator: " · ") }
+        return MInsetGroup(header: header, footer: context) {
+            if running == nil {
+                RemotePathVerdictRow(chosen: RemotePathVerdict.chosen(summaries, skipsLocalNetwork: directory.internetOnly),
+                                     skipsLocalNetwork: directory.internetOnly)
+            }
             ForEach(summaries, id: \.mode) { summary in
-                RemotePathSummaryRow(summary: summary, results: shown, last: summary.mode == summaries.last?.mode)
+                RemotePathSummaryRow(summary: summary, results: results, last: summary.mode == summaries.last?.mode)
             }
         }
     }
+
+    // MARK: - 检测设置
+
+    private func modeBinding(_ mode: RemotePathProbeMode) -> Binding<Bool> {
+        Binding(get: { modes.contains(mode) }, set: { on in
+            var set = Set(modes)
+            if on { set.insert(mode) } else { set.remove(mode) }
+            modesRaw = RemotePathProbeMode.allCases.filter(set.contains).map(\.rawValue).joined(separator: ",")
+        })
+    }
+
+    private var settingsGroup: some View {
+        MInsetGroup(header: "检测设置", footer: showsSettings
+                    ? "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经服务器转发。每条路都只走自己，"
+                        + "插着数据线、连着同一个 Wi-Fi 都不影响结果。"
+                    : nil) {
+            MInsetRow(label: "测试项与轮数", value: settingsSummary, last: !showsSettings,
+                      trailing: AnyView(MIcon(name: showsSettings ? "chev-down" : "chev", size: 14, color: M.text4,
+                                              weight: .semibold)),
+                      onTap: { withAnimation(.easeOut(duration: 0.15)) { showsSettings.toggle() } })
+            if showsSettings {
+                ForEach(RemotePathProbeMode.allCases, id: \.self) { mode in
+                    MInsetRow(label: mode.label, trailing: AnyView(MSwitch(on: modeBinding(mode))))
+                }
+                MInsetRow(label: "每条路跑几轮", trailing: AnyView(
+                    Stepper("\(rounds) 轮", value: $rounds, in: 1...10).fixedSize()
+                        .font(M.sans(14)).foregroundStyle(M.text2)))
+                HStack(spacing: 12) {
+                    Text("备注").font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
+                    TextField("如：移动 5G ↔ 家里电信", text: $note)
+                        .font(M.sans(14)).multilineTextAlignment(.trailing).foregroundStyle(M.text2)
+                }
+                .padding(.horizontal, 14).frame(minHeight: 50)
+            }
+        }
+    }
+
+    private var settingsSummary: String {
+        let count = modes.count == RemotePathProbeMode.allCases.count ? "全部" : "\(modes.count) 条路"
+        return "\(count) · \(rounds) 轮"
+    }
+
+    // MARK: - 历史
 
     private var historyGroup: some View {
-        MInsetGroup(header: "历史记录", headerTrailing: AnyView(historyActions),
-                    footer: "最近 \(history.count) 条，只保存在这台手机上，不含 IP 地址。") {
-            let recent = Array(history.prefix(30))
-            ForEach(recent) { result in
-                RemotePathHistoryRow(result: result, detail: historySub(result), last: result.id == recent.last?.id)
+        MInsetGroup {
+            NavigationLink {
+                RemotePathHistoryScreen(log: log, onCleared: reloadHistory)
+            } label: {
+                MInsetRow(icon: "clock", label: "历史记录", value: historyCount == 0 ? "无" : "\(historyCount) 条",
+                          chevron: true, last: true)
             }
+            .buttonStyle(MRowStyle())
+            .disabled(historyCount == 0)
         }
-    }
-
-    private var historyActions: some View {
-        HStack(spacing: 14) {
-            Button(copied ? "已复制" : "复制全部") {
-                let summaries = RemotePathProbeSummary.summarize(history).map(\.line)
-                UIPasteboard.general.string = (summaries + [""] + history.map(\.summaryLine)).joined(separator: "\n")
-                copied = true
-                Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-            }
-            Button("清空", role: .destructive) {
-                log.clear()
-                history = []
-                lastRun = []
-                current = []
-            }
-            .disabled(running != nil)
-        }
-        .font(M.sans(12, weight: .semibold))
-    }
-
-    private func context(_ result: RemotePathProbeResult) -> String {
-        [result.network, result.note].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    private func historySub(_ result: RemotePathProbeResult) -> String {
-        let context = context(result)
-        let detail = result.connected
-            ? "\(result.setupMillis ?? -1)ms · 往返 \(RemotePathProbeResult.format(result.roundTripMillis))"
-                + "/\(RemotePathProbeResult.format(result.roundTripP95Millis)) · 丢包 \(result.lossPercent ?? -1)%"
-            : (result.failure ?? "未知")
-        return context.isEmpty ? detail : "\(context) · \(detail)"
     }
 }
 
-/// 一条路的汇总：通过率着色，下面一排四个读数。
-private struct RemotePathSummaryRow: View {
+/// 结论：实际连接会走哪条路。
+private struct RemotePathVerdictRow: View {
+    let chosen: RemotePathProbeSummary?
+    let skipsLocalNetwork: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(M.sans(17, weight: .semibold)).foregroundStyle(chosen == nil ? M.danger : M.text)
+                Text(detail).font(M.sans(13)).foregroundStyle(M.text3).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 14)
+        .overlay(alignment: .bottom) { MRowDivider() }
+    }
+
+    private var title: String {
+        guard let chosen else { return "这台 Mac 现在连不上" }
+        return "实际会走\(chosen.mode.label)"
+    }
+
+    private var detail: String {
+        guard let chosen else { return "所有测过的路都不通，看下面每条路的原因。" }
+        let latency = chosen.medianRoundTripMillis.map { String(format: "往返约 %.0f ms", $0) } ?? "往返未测出"
+        let skip = skipsLocalNetwork ? "「只走公网」已打开，正式连接会跳过局域网。" : ""
+        return "连接按局域网 → 直连 → 中继的顺序挑第一条通的，\(latency)。\(skip)"
+    }
+}
+
+/// 一条路的汇总：通过率着色，下面一排四个读数；没通过的写原因。
+struct RemotePathSummaryRow: View {
     let summary: RemotePathProbeSummary
     let results: [RemotePathProbeResult]
     let last: Bool
+
+    private var tone: Color {
+        if summary.successes == summary.attempts { return M.success }
+        return summary.successes == 0 ? M.danger : M.warning
+    }
 
     /// 失败原因按出现次数排：「超时 ×3」。
     private var failures: String {
@@ -263,11 +296,6 @@ private struct RemotePathSummaryRow: View {
             counts[reason, default: 0] += 1
         }
         return order.map { counts[$0]! > 1 ? "\($0) ×\(counts[$0]!)" : $0 }.joined(separator: "；")
-    }
-
-    private var tone: Color {
-        if summary.successes == summary.attempts { return M.success }
-        return summary.successes == 0 ? M.danger : M.warning
     }
 
     var body: some View {
@@ -283,8 +311,8 @@ private struct RemotePathSummaryRow: View {
             if summary.successes > 0 {
                 HStack(spacing: 0) {
                     metric("建立", summary.medianSetupMillis.map { "\($0)ms" })
-                    metric("往返", RemotePathProbeResult.formatted(summary.medianRoundTripMillis))
-                    metric("p95", RemotePathProbeResult.formatted(summary.medianP95Millis))
+                    metric("往返", Self.millis(summary.medianRoundTripMillis))
+                    metric("p95", Self.millis(summary.medianP95Millis))
                     metric("丢包", summary.meanLossPercent.map { "\($0)%" })
                 }
             }
@@ -303,36 +331,90 @@ private struct RemotePathSummaryRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-}
 
-/// 历史里的一条：路名与通断一行，网络、备注、读数或失败原因一行（正文字体，不用等宽：中英混排等宽会拉开间距）。
-private struct RemotePathHistoryRow: View {
-    let result: RemotePathProbeResult
-    let detail: String
-    let last: Bool
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    MDot(color: result.connected ? M.success : M.danger, size: 7)
-                    Text(result.mode.label).font(M.sans(15, weight: .medium)).foregroundStyle(M.text)
-                }
-                Text(detail).font(M.sans(12)).foregroundStyle(M.text3).lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Text(result.date.formatted(date: .omitted, time: .shortened))
-                .font(M.sans(13)).foregroundStyle(M.text3)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(minHeight: 50)
-        .overlay(alignment: .bottom) { if !last { MRowDivider() } }
+    static func millis(_ value: Double?) -> String? {
+        value.map { $0 < 10 ? String(format: "%.1fms", $0) : String(format: "%.0fms", $0) }
     }
 }
 
-private extension RemotePathProbeResult {
-    static func formatted(_ millis: Double?) -> String? {
-        millis.map { String(format: "%.0fms", $0) }
+/// 历史记录：按每次检测分组，最新在上。复制全部给排查用。
+struct RemotePathHistoryScreen: View {
+    let log: RemotePathMatrixLog
+    var onCleared: () -> Void = {}
+
+    @State private var runs: [[RemotePathProbeResult]] = []
+    @State private var copied = false
+    @State private var confirmsClear = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(runs, id: \.first?.id) { run in
+                    let summaries = RemotePathProbeSummary.summarize(run)
+                    MInsetGroup(header: run.first?.date.formatted(date: .abbreviated, time: .shortened),
+                                footer: context(run)) {
+                        ForEach(summaries, id: \.mode) { summary in
+                            RemotePathSummaryRow(summary: summary, results: run,
+                                                 last: summary.mode == summaries.last?.mode)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: M.readableWidth)
+            .frame(maxWidth: .infinity)
+        }
+        .background(M.canvas)
+        .navigationTitle("历史记录")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                MMenu {
+                    Button(copied ? "已复制" : "复制全部", systemImage: "doc.on.doc", action: copyAll)
+                    Button("清空", systemImage: "trash", role: .destructive) { confirmsClear = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .confirmationDialog("清空全部诊断记录？", isPresented: $confirmsClear, titleVisibility: .visible) {
+            Button("清空", role: .destructive) {
+                log.clear()
+                runs = []
+                onCleared()
+            }
+        }
+        .onAppear { runs = Self.group(log.load()) }
+    }
+
+    /// 网络与备注放脚注：区段标题会转大写，「Wi-Fi」会变成「WI-FI」。
+    private func context(_ run: [RemotePathProbeResult]) -> String? {
+        let parts = [run.first?.network ?? "", run.first?.note ?? ""].filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func copyAll() {
+        let all = runs.flatMap { $0 }
+        let summaries = RemotePathProbeSummary.summarize(all).map(\.line)
+        UIPasteboard.general.string = (summaries + [""] + all.map(\.summaryLine)).joined(separator: "\n")
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
+    }
+
+    /// 记录是最新在前的平铺列表；按 `runID` 切成一次次检测（旧记录没有 `runID` 的各自成组）。
+    static func group(_ results: [RemotePathProbeResult]) -> [[RemotePathProbeResult]] {
+        var runs: [[RemotePathProbeResult]] = []
+        for result in results {
+            if let runID = result.runID, let index = runs.lastIndex(where: { $0.first?.runID == runID }) {
+                runs[index].append(result)
+            } else {
+                runs.append([result])
+            }
+        }
+        return runs.map { $0.reversed() }
     }
 }
 

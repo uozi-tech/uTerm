@@ -134,6 +134,7 @@ final class StyleGalleryTests: XCTestCase {
                     .environment(store(tab: .settings))
                     .environment(sync)
                     .environment(lan)
+                    .environment(RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage())))
                     .modelContainer(c)
             }
             try await shoot("keys", on: device) {
@@ -266,35 +267,47 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    /// 网络诊断：上次结果（中继全通、IPv4 打洞全失败）+ 历史记录。没配中继时目标那一组给出指引。
+    /// 网络诊断：上次结果（局域网通、IPv4 打洞全失败、中继通）+ 结论；历史页按次分组。没配中继时目标那一组给出指引。
     func testNetworkDiagnostics() async throws {
         defer { MobileProbeWindow.closeAll() }
         let suite = "StyleGalleryTests.networkDiagnostics.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let log = RemotePathMatrixLog(defaults: defaults)
-        let runID = UUID()
-        var seeded: [RemotePathProbeResult] = []
-        for round in 1...3 {
-            var direct = RemotePathProbeResult(runID: runID, round: round, mode: .directIPv4, note: "移动 5G ↔ 家里电信",
-                                               network: "蜂窝 · 无 IPv6", connected: false, failure: "超时")
-            direct.date = .now
-            var relay = RemotePathProbeResult(runID: runID, round: round, mode: .relay, note: "移动 5G ↔ 家里电信",
-                                              network: "蜂窝 · 无 IPv6", connected: true)
-            relay.setupMillis = [1199, 1014, 936][round - 1]
-            relay.roundTripMillis = [96, 113, 113][round - 1]
-            relay.roundTripP95Millis = [174, 143, 184][round - 1]
-            relay.lossPercent = 0
-            relay.selectedPair = "TCP 中继"
-            seeded += [direct, relay]
+        for (runIndex, network) in ["蜂窝 · 无 IPv6", "Wi-Fi · 有 IPv6"].enumerated() {
+            let runID = UUID()
+            var seeded: [RemotePathProbeResult] = []
+            for round in 1...3 {
+                var lan = RemotePathProbeResult(runID: runID, round: round, mode: .localNetwork,
+                                                note: runIndex == 1 ? "家里" : "", network: network,
+                                                connected: runIndex == 1, failure: runIndex == 1 ? nil : "Mac 不在这个局域网里")
+                if runIndex == 1 {
+                    lan.setupMillis = 180
+                    lan.roundTripMillis = 4.2
+                    lan.roundTripP95Millis = 9.8
+                    lan.lossPercent = 0
+                }
+                let direct = RemotePathProbeResult(runID: runID, round: round, mode: .directIPv4, network: network,
+                                                   connected: false, failure: "超时")
+                var relay = RemotePathProbeResult(runID: runID, round: round, mode: .relay, network: network,
+                                                  connected: true)
+                relay.setupMillis = [1199, 1014, 936][round - 1]
+                relay.roundTripMillis = [96, 113, 113][round - 1]
+                relay.roundTripP95Millis = [174, 143, 184][round - 1]
+                relay.lossPercent = 0
+                seeded += [lan, direct, relay]
+            }
+            log.append(seeded)
         }
-        log.append(seeded)
         let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
                                            defaults: defaults)
         for device in Self.devices {
             try await shoot("network-diagnostics", on: device, settle: .milliseconds(600)) {
                 NavigationStack { RemoteNetworkDiagnosticsScreen(log: log) }
                     .environment(directory)
+            }
+            try await shoot("network-diagnostics-history", on: device, settle: .milliseconds(600)) {
+                NavigationStack { RemotePathHistoryScreen(log: log) }
             }
         }
     }
