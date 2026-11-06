@@ -155,8 +155,13 @@ final class RemoteHostServer {
             }
             listener.start(queue: DispatchQueue(label: "com.uozi.uTerm.remote.listener"))
             self.listener = listener
-            observeRegistry()
-            observeTabTitles()
+            // 监听失败后 listener 置空但 isRunning 仍为真，设置一变又会进来：旧的观察链靠代次作废，
+            // 不然每进来一次多挂一条，每次变化推送 N 遍。
+            observationGeneration &+= 1
+            tabTitlePush?.cancel()
+            tabTitlePush = nil
+            observeRegistry(generation: observationGeneration)
+            observeTabTitles(generation: observationGeneration)
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -514,16 +519,19 @@ final class RemoteHostServer {
         return connections[viewer.connection]?.desktopStats
     }
 
-    private func observeRegistry() {
+    /// 当前这一轮观察链的代次。`start()` 每次挂新链时加一，旧链醒来对不上就自行结束。
+    private var observationGeneration = 0
+
+    private func observeRegistry(generation: Int) {
         withObservationTracking {
             _ = registry.entries
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.isRunning else { return }
+                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
                     let alive = Set(self.registry.entries.map(\.id))
                     for connection in self.connections.values { connection.sessionsChanged(alive: alive) }
-                    self.observeRegistry()
+                    self.observeRegistry(generation: generation)
                 }
             }
         }
@@ -531,25 +539,26 @@ final class RemoteHostServer {
 
     /// 程序可能每秒改很多次标题（Claude Code 的转圈动画），所以标签名不走 `observeRegistry` 那条即时通道，
     /// 第一次变化后等一个间隔，把这段时间的变化合成一次推送。
-    private func observeTabTitles() {
+    private func observeTabTitles(generation: Int) {
         withObservationTracking {
             for entry in registry.entries { _ = registry.displayTitle(of: entry) }
         } onChange: { [weak self] in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.scheduleTabTitlePush() }
+                MainActor.assumeIsolated { self?.scheduleTabTitlePush(generation: generation) }
             }
         }
     }
 
-    private func scheduleTabTitlePush() {
-        guard isRunning, tabTitlePush == nil else { return }
+    private func scheduleTabTitlePush(generation: Int) {
+        guard isRunning, generation == observationGeneration, tabTitlePush == nil else { return }
         tabTitlePush = Task { [weak self] in
             try? await Task.sleep(for: RemoteConstants.tabTitlePushInterval)
-            guard let self else { return }
+            // 旧代次的任务（start() 已经撤掉它）不碰 tabTitlePush：那里可能已经是新代次的任务。
+            guard let self, generation == self.observationGeneration else { return }
             self.tabTitlePush = nil
             guard self.isRunning else { return }
             for connection in self.connections.values { connection.sendSessions() }
-            self.observeTabTitles()
+            self.observeTabTitles(generation: generation)
         }
     }
 }
