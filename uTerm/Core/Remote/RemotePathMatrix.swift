@@ -332,7 +332,8 @@ nonisolated final class RemoteStreamEchoMeter: @unchecked Sendable {
                 packet.append(UInt8(truncatingIfNeeded: sequence >> UInt64(shift)))
             }
             locked { sentAt[sequence] = .now() }
-            queue.async { self.transport.send(packet) { _ in } }
+            let probe = packet
+            queue.async { self.transport.send(probe) { _ in } }
             try? await Task.sleep(for: interval)
         }
         let clock = ContinuousClock()

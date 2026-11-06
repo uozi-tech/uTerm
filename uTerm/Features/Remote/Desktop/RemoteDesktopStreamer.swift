@@ -168,7 +168,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 在连接队列上发出「开流成功」并开始推流：保证手机先收到 `desktopStarted` 再收到第一帧。
     func activate(started: RemoteMessage) {
-        link.queue.async {
+        link.queue.async { [self] in
             guard !self.isStopped else { return }
             self.link.sendOnQueue(started)
             self.video?.startVideoSending(channel: self.channel, callbackQueue: self.link.queue,

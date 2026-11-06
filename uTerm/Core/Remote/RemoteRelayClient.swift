@@ -37,7 +37,7 @@ actor RemoteRelayClient {
             Task {
                 await self.sendOrFail(connection, message)
                 try? await Task.sleep(for: .seconds(timeout))
-                await self.finishSignal(session, .failure(RemoteRelayError.notAllowed))
+                self.finishSignal(session, .failure(RemoteRelayError.notAllowed))
             }
         }
     }

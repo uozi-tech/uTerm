@@ -109,7 +109,7 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
     /// 连上并读 hello。
     func open(timeout: TimeInterval = requestTimeout) async throws -> RemoteRelayHello {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            queue.async {
+            queue.async { [self] in
                 self.readyWaiter = continuation
                 self.connection.stateUpdateHandler = { [weak self] state in self?.stateChanged(state) }
                 self.connection.start(queue: self.queue)

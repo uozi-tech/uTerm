@@ -94,9 +94,11 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             kcp?.update(nowMillis: Self.millis(now))
         }
         path.start(onDatagram: { [weak self] datagram in
-            self?.queue.async { self?.receive(datagram) }
+            guard let self else { return }
+            queue.async { [weak self] in self?.receive(datagram) }
         }, onFailure: { [weak self] error in
-            self?.queue.async { self?.fail(error ?? RemoteProtocolError.closed) }
+            guard let self else { return }
+            queue.async { [weak self] in self?.fail(error ?? RemoteProtocolError.closed) }
         })
     }
 
@@ -311,7 +313,8 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             completions.removeFirst()
         }
         if !finished.isEmpty {
-            callbackQueue?.async { for completion in finished { completion(nil) } }
+            let completed = finished
+            callbackQueue?.async { for completion in completed { completion(nil) } }
         }
         if kcp.isDead { fail(RemoteProtocolError.timeout) }
     }
