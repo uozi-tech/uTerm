@@ -107,9 +107,20 @@ final class SSHSessionRestorer {
         let known = knownServerIDs?() ?? []
         for (id, hello) in found {
             guard let hello else { continue }
-            guard let attributes = try? JSONDecoder().decode(SSHSessionAttributes.self, from: Data(hello.attributes)),
-                  known.isEmpty || known.contains(attributes.serverID) else {
-                // 归属没来得及写，或者服务器已经删了：没有地方放它。
+            let attributes: SSHSessionAttributes
+            if hello.attributes.isEmpty {
+                // 归属没来得及写：没有地方放它。
+                await HolderProbe.terminate(id, client: client, namespace: namespace)
+                continue
+            } else if let decoded = try? JSONDecoder().decode(SSHSessionAttributes.self, from: Data(hello.attributes)) {
+                attributes = decoded
+            } else {
+                // 写了但解不开（别的版本的格式）：不替用户杀掉远端会话，留给写它的那个版本。
+                AppLogger.error("SSH 会话 \(id) 的归属解不开，跳过恢复", category: "ssh")
+                continue
+            }
+            guard known.isEmpty || known.contains(attributes.serverID) else {
+                // 服务器已经删了：没有地方放它。
                 await HolderProbe.terminate(id, client: client, namespace: namespace)
                 continue
             }

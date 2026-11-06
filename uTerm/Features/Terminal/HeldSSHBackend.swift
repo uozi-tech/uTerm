@@ -376,4 +376,23 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
     var title: String
     /// 标签的先后（打开时的时间戳）。
     var order: Double
+
+    init(windowID: UUID, windowKind: String, serverID: UUID, title: String, order: Double) {
+        self.windowID = windowID
+        self.windowKind = windowKind
+        self.serverID = serverID
+        self.title = title
+        self.order = order
+    }
+
+    /// 存在 holder 里、会跨版本读：只有放回窗口必需的两个 ID 是硬要求，其余缺了给默认值。
+    /// 以后加字段一律可选，旧版 App 读新版写的归属也不至于整条解不开。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        windowID = try container.decode(UUID.self, forKey: .windowID)
+        serverID = try container.decode(UUID.self, forKey: .serverID)
+        windowKind = try container.decodeIfPresent(String.self, forKey: .windowKind) ?? TerminalWindowKind.workspace
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        order = try container.decodeIfPresent(Double.self, forKey: .order) ?? 0
+    }
 }
