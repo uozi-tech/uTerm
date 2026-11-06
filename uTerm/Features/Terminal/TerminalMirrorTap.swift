@@ -4,7 +4,7 @@ import SwiftTerm
 /// 把一条终端会话镜像给远端设备（远控接入）。
 ///
 /// 接入时先给订阅者一份快照（`Terminal.snapshotSequence`，以 RIS 开头），之后把 Mac 自己的
-/// 终端吃进去的每一批字节原样转给它。接入点在 `TerminalSession.flushPendingOutput`，也就是
+/// 终端吃进去的每一批字节原样转给它。接入点在输出泵每拍喂完之后（`TerminalOutputPump.onFed`），也就是
 /// `terminalView.feed` 的旁边，而不是读 SSH 输出的地方：只有在这里，字节顺序与 Mac 终端实际
 /// 解析的顺序完全一致，快照与之后的字节也都在 MainActor 上产生，中间不会插进或漏掉字节。
 ///

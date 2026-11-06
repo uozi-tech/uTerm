@@ -12,25 +12,22 @@ import AppKit
 final class TerminalSession: NSObject, TerminalViewDelegate {
     let terminalView: SwiftTerm.TerminalView
     private(set) var backend: (any TerminalBackend)?
-    private var feedTask: Task<Void, Never>?
-    @ObservationIgnored let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
+    /// 输出泵（两端共用，见 `TerminalOutputPump`）。每拍喂完后转给镜像与检查点。
+    @ObservationIgnored let outputPump = TerminalOutputPump(pacing: .desktop)
+    /// 键盘 / 粘贴 / 远端输入与尺寸变化发往后端的有序通道（两端共用，见 `TerminalInputChannel`）。
+    @ObservationIgnored let inputChannel = TerminalInputChannel()
+    var outputBuffer: TerminalOutputBuffer { outputPump.buffer }
     /// 单测换掉它，预算的走向才不取决于这台机器解析得多快。
-    @ObservationIgnored var flushPacing = TerminalFlushPacing.desktop
-    @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
-    private(set) var feedGeneration: Int = 0
+    var flushPacing: TerminalFlushPacing {
+        get { outputPump.pacing }
+        set { outputPump.pacing = newValue }
+    }
+    /// 当前绑定的代次：`connect` / `detach` / `dispose` / `close` 都会递增，旧绑定的在途结果据此作废。
+    var feedGeneration: Int { outputPump.generation }
     /// 正在回放接回的历史输出：屏蔽终端应答和副作用（见 `TerminalSession+HeldSession`）。
     @ObservationIgnored var isReplayingHeldOutput = false
     /// 持有 PTY 的后端才有。
     @ObservationIgnored var heldCheckpoints: TerminalHeldCheckpoints?
-
-    // Resize forwarding state. `TerminalContainerView` commits a new size only
-    // once the pane has stopped changing, so a splitter drag produces one
-    // `sizeChanged`, forwarded to the backend right away.
-    // `lastForwardedResize` dedupes "same dimensions" reports.
-    @ObservationIgnored var latestReportedResize: (cols: UInt16, rows: UInt16)?
-    @ObservationIgnored var lastForwardedResize: (cols: UInt16, rows: UInt16)?
-    @ObservationIgnored var pendingResize: (cols: UInt16, rows: UInt16)?
-    @ObservationIgnored var resizeFlushTask: Task<Void, Never>?
 
     /// 终端连接状态。`connect(using:)` 推进；远端结束置 `disconnected`。
     typealias ConnectionState = TerminalConnectionState
@@ -99,6 +96,13 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         self.terminalView = view
         self.mirrorTap = TerminalMirrorTap { [unowned view] in view.getTerminal() }
         super.init()
+        outputPump.terminalView = view
+        outputPump.onFed = { [weak self] bytes in
+            guard let self else { return }
+            // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
+            self.mirrorTap.didFeed(bytes)
+            self.heldCheckpoints?.noteFed(bytes.count)
+        }
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
         terminalView.menu = Self.makeContextMenu(for: terminalView)
@@ -151,7 +155,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     }
 
     var currentProcessSize: (cols: UInt16, rows: UInt16) {
-        latestReportedResize ?? (cols: 120, rows: 30)
+        inputChannel.latestSize ?? (cols: 120, rows: 30)
     }
 
     /// 用给定后端建立连接：connect() 成功则绑定并开始泵送输出，
@@ -165,6 +169,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // When this call resumes it must not clobber the newer binding's state.
         let myGen = feedGeneration
         self.backend = backend
+        // 建连期间的键入照样排进这条后端（与改前一样）；尺寸等连上之后再补发。
+        inputChannel.bind(to: backend, sendingLatestSize: false)
         connectionState = .connecting
         do {
             try await backend.connect()
@@ -174,6 +180,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             guard feedGeneration == myGen else { return }
             connectionState = .failed("\(error)")
             self.backend = nil
+            inputChannel.unbind()
             return
         }
         // Superseded check: bail unless this is still the live binding. The
@@ -189,11 +196,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
         // 「已连接」徽标静默挂着。弱引用注册，幂等。
         ConnectionWatchdog.shared.register(self)
-        if let latestReportedResize {
-            forwardResizeImmediately(latestReportedResize)
-        }
-        startFeedLoop()
-        startOutputFlushLoop()
+        inputChannel.sendLatestSizeNow()
+        outputPump.start(backend.outputStream)
         observeExit(of: backend, generation: myGen)
         injectPendingTrackedRun()
     }
@@ -218,18 +222,14 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     func refreshTerminalSizeSoon() {
         terminalView.needsLayout = true
         terminalView.layoutSubtreeIfNeeded()
-        if let latestReportedResize {
-            forwardResizeImmediately(latestReportedResize)
-        }
+        inputChannel.sendLatestSizeNow()
 
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
             guard let self else { return }
             self.terminalView.needsLayout = true
             self.terminalView.layoutSubtreeIfNeeded()
-            if let latestReportedResize = self.latestReportedResize {
-                self.forwardResizeImmediately(latestReportedResize)
-            }
+            self.inputChannel.sendLatestSizeNow()
         }
     }
 
@@ -267,16 +267,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// both the ingress task and the flush loop. The generation bump must come
     /// first for that rejection to be reliable.
     private func resetFeedAndResizeState() {
-        feedGeneration &+= 1
-        feedTask?.cancel()
-        feedTask = nil
-        outputFlushTask?.cancel()
-        outputFlushTask = nil
-        outputBuffer.clear()
-        pendingResize = nil
-        resizeFlushTask?.cancel()
-        resizeFlushTask = nil
-        lastForwardedResize = nil
+        outputPump.reset()
+        inputChannel.unbind()
         exitObserverTask?.cancel()
         exitObserverTask = nil
         heldCheckpoints?.cancel()
@@ -284,104 +276,6 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // 换了一条连接，上一个程序设的光标不该留下来：下次 SwiftUI 更新时重装。
         (terminalView as? CopyableTerminalView)?.appliedLook = nil
     }
-
-    private func startFeedLoop() {
-        guard let backend else { return }
-        let myGen = feedGeneration
-        let buffer = outputBuffer
-
-        // Iterate on a detached task so it isn't gated by MainActor work
-        // (SwiftUI rendering, other panes' feed loops). Chunks are staged in a
-        // bounded buffer and a MainActor flusher feeds SwiftTerm on a frame-like
-        // cadence instead of hopping to MainActor for every output batch.
-        feedTask = Task.detached(priority: .userInitiated) {
-            let stream = backend.outputStream
-            for await chunk in stream {
-                if Task.isCancelled { break }
-                buffer.append(chunk, generation: myGen)
-            }
-        }
-    }
-
-    private func startOutputFlushLoop() {
-        outputFlushTask?.cancel()
-        let myGen = feedGeneration
-        let buffer = outputBuffer
-        outputFlushTask = Task { [weak self] in
-            var pacer = TerminalFlushPacer(pacing: self?.flushPacing ?? .desktop)
-            while !Task.isCancelled {
-                guard let self else { return }
-                guard self.feedGeneration == myGen else { return }
-                pacer.use(self.flushPacing)
-
-                if let delayMs = self.flushPendingOutput(generation: myGen, pacer: &pacer) {
-                    // 活跃路径：让短时间内陆续到达的字节合批一次性 feed。
-                    try? await Task.sleep(for: .milliseconds(delayMs))
-                } else {
-                    // 空闲路径：挂起到下一次 append（或 clear 唤醒，让被取消的
-                    // generation 通过下一轮顶部的 guard 退出）。这条路径取代了
-                    // 旧的 100ms 轮询 —— 那 100ms 是 echo 字符在终端中可见前
-                    // 的最坏延迟，是"输入不跟手"的根因。
-                    await buffer.waitForData()
-                }
-            }
-        }
-    }
-
-    /// 无条件 feed —— 后台（非活动）标签也在全速解析 VT，这是**有意保留**的。
-    ///
-    /// 2026-09-01 量过它的成本结构，别再凭「批量化能省」的直觉来改这里。
-    /// 测法：同进程内交替翻转块大小做配对测量（这台机器 load 在 4–14 乱跳，
-    /// 跨进程不可比），6 个 `TerminalView` 交错喂同一份 `script(1)` 录的真实
-    /// 语料（带色 git log/ls -laR + vim 进出 alternate screen + top 全屏重绘），
-    /// 每轮正逆序交替、7 轮取中位数，Release 构建。
-    ///
-    ///   每次 feed 的块大小    调用次数    6.57 MB 总耗时
-    ///   64 B                 107 719     176.8 ms
-    ///   433 B（线上实测均值）  15 922      157.4 ms
-    ///   32 KB                211         153.3 ms
-    ///   256 KB               27          153.9 ms
-    ///
-    /// 拟合出来：**每次调用的固定开销只有 0.21 µs，按字节的解析是 23.3 ms/MB**
-    /// （随内容在 9–27 ms/MB 之间浮动）。也就是说线上那 433 B 的包里，固定开销
-    /// 只占 feed 总耗时的 2.6%；把 flush 从 433 B 攒到 32 KB 就只能省这 2.6%，
-    /// 连 64 B → 256 KB 的极端全跨度也只有 13%。批量化在这里省不到 CPU。预算放大
-    /// （`TerminalFlushPacing`）要解决的是积压时的吞吐，不是省 CPU；没有积压时每拍
-    /// 只有几百字节，预算多大都一样，也就不影响 echo 延迟。
-    ///
-    /// 绝对量级也不值得动：6 个后台标签合计 142 KB/s 的输出，在 Release 下
-    /// ≈ 3.3 ms/s 主线程时间（0.3% 单核）。`uAppKit/docs/pane-groups-design.md`
-    /// §6-2 记的 31.5–65 ms/s 是 **Debug** 构建（`-Onone`）量的，不代表发布版：
-    /// 同一份语料同一套测法，Debug 224.8 ms/MB vs Release 23.9 ms/MB，差 9.4×。
-    ///
-    /// 再往下就只剩「后台标签先不解析、切回来再补」。它省不到 CPU（字节一个不少
-    /// 还是要解析，只是挪到切回来的那一刻，反而制造一次卡顿），却必然改变行为：
-    /// 补 feed 之前若发生过 resize，积压字节会按新 cols 重排，切回来的内容与不
-    /// 优化时不再逐字相同。为 3.3 ms/s 付这个代价不划算。
-    ///
-    /// 顺带钉住一条：SwiftTerm 的解析器对分块边界是中立的 —— 上面五种块大小
-    /// 喂完同一份语料后，主屏/alt 屏全文、逐格字符与属性、scrollback、光标位置
-    /// 全部逐字相同（实测比对过指纹）。所以将来真要改批量策略，正确性这一侧
-    /// 是安全的，不安全的只有上面那条「延迟到可见时再补」。
-    ///
-    /// 返回下一拍前要等的毫秒数；nil 表示没有可喂的字节。
-    private func flushPendingOutput(generation: Int, pacer: inout TerminalFlushPacer) -> Int? {
-        guard feedGeneration == generation else { return nil }
-        let chunk = outputBuffer.drain(maxBytes: pacer.budget, generation: generation)
-        guard !chunk.isEmpty else { return nil }
-
-        let bytes = ArraySlice([UInt8](chunk))
-        let backlogged = pacer.isBacklogged(fed: bytes.count, hasMore: outputBuffer.hasBufferedBytes)
-        let start = CFAbsoluteTimeGetCurrent()
-        terminalView.feedPaced(bytes, backlogged: backlogged)
-        let end = CFAbsoluteTimeGetCurrent()
-        // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
-        mirrorTap.didFeed(bytes)
-        heldCheckpoints?.noteFed(bytes.count)
-        return pacer.didFeed(bytes: bytes.count, elapsedMs: (end - start) * 1000,
-                             backlogged: backlogged, nowMs: end * 1000)
-    }
-
 }
 
 // MARK: - 读屏与注入（CLI `terminal-read` / `terminal-send`，Agent 的 read_terminal 也走这里）

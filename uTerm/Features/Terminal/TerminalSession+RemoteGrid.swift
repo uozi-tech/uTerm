@@ -47,10 +47,8 @@ extension TerminalSession {
 
     /// 远端设备的键盘输入：原始字节原样写进后端。
     ///
-    /// 与本地键盘（`send(source:data:)`）走同一个 `backend.write`，顺序同样由
-    /// `SSHConnection` 内部的 FIFO 写队列保证。
+    /// 与本地键盘（`send(source:data:)`）走同一条有序输入通道，两边的字节按到达顺序交错。
     func writeRemoteInput(_ data: Data) {
-        guard let backend else { return }
-        Task { await backend.write(data) }
+        inputChannel.write(data)
     }
 }
