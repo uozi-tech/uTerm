@@ -49,7 +49,7 @@ struct ParallelRunAccessory: View {
                 .accessibilityHint(Text("回到这次运行"))
 
                 if store.parallelSessions.count > 1 {
-                    Menu {
+                    MMenu {
                         ForEach(store.parallelSessions.reversed()) { s in
                             Button { store.showParallel(s) } label: {
                                 Label("\(s.title) · \(s.progressText)",
