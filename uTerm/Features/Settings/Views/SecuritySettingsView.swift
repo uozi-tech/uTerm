@@ -16,21 +16,26 @@ struct SecuritySettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsGroup(title: "应用锁") {
-                SettingsRow(label: "启动时验证身份",
-                            hint: "开启前先验证一次；下次启动 uTerm 时要求 Touch ID 或登录密码") {
+            SettingsPageHeader(title: "安全", subtitle: String(localized: "应用锁与密钥"))
+
+            SettingsGroup(title: "应用锁",
+                          footer: String(localized: "开启前先验证一次；下次启动 uTerm 时要求 Touch ID 或登录密码。")) {
+                SettingsRow(label: "启动时验证身份") {
                     UDToggle(Binding(get: { appLock.isOn }, set: { appLock.set($0) }))
                 }
             }
-            SettingsGroup(title: "密钥、分组与指纹") {
-                SettingsRow(label: "SSH 密钥", hint: "生成、导入与查看本机保存的 SSH 密钥，经 iCloud 同步到其他设备。") {
+            SettingsGroup(title: "密钥、分组与指纹",
+                          footer: String(localized: "密钥与分组经 iCloud 同步到你的其他设备；删除已知主机指纹后，下次连接该主机会重新确认。")) {
+                SettingsListRow(icon: "key.fill", tint: UD.warning, title: String(localized: "SSH 密钥"),
+                                subtitle: String(localized: "\(counts.keys) 把密钥 · 生成、导入与查看")) {
                     UDButton(title: "打开…", style: .secondary) { openWindow(id: "keys") }
                 }
-                SettingsRow(label: "主机分组", hint: "给主机建分组、改名、调整顺序。") {
+                SettingsListRow(icon: "tag.fill", tint: UD.info, title: String(localized: "主机分组"),
+                                subtitle: String(localized: "\(counts.groups) 个分组 · 建分组、改名、调整顺序")) {
                     UDButton(title: "打开…", style: .secondary) { openWindow(id: "groups") }
                 }
-                SettingsRow(label: "已知主机指纹",
-                            hint: "已信任 \(counts.knownHosts) 台主机的密钥指纹；删除后下次连接会重新确认。") {
+                SettingsListRow(icon: "checkmark.shield.fill", tint: UD.success, title: String(localized: "已知主机指纹"),
+                                subtitle: String(localized: "\(counts.knownHosts) 台已信任的主机")) {
                     UDButton(title: "打开…", style: .secondary) { openWindow(id: "known-hosts") }
                 }
             }

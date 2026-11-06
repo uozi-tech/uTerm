@@ -8,19 +8,19 @@ struct AppearanceSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsGroup(title: "外观") {
-                SettingsRow(label: "主题",
-                            hint: "立即生效。改主题影响 uTerm 窗口外观与终端配色（终端按主题自动切深/浅）。") {
+            SettingsPageHeader(title: "外观", subtitle: String(localized: "主题、强调色与界面语言"))
+
+            SettingsGroup(title: "外观",
+                          footer: String(localized: "主题与强调色立即生效，终端配色随主题自动切换深 / 浅；语言重启 uTerm 后生效。")) {
+                SettingsRow(label: "主题") {
                     UDSegmented(
                         selection: $appearancePreferenceRaw.rawValue(AppearancePreference.self, default: .system),
                         options: AppearancePreference.allCases.map { ($0, $0.localizedLabel) })
                 }
-                SettingsRow(label: "强调色",
-                            hint: "选中 / 按钮 / 高亮的主色，立即全局生效。") {
+                SettingsRow(label: "强调色") {
                     AccentSwatchPicker()
                 }
-                SettingsRow(label: "语言",
-                            hint: "改语言后需重启 uTerm 生效。") {
+                SettingsRow(label: "语言") {
                     UDSegmented(
                         selection: $appLanguageRaw.rawValue(AppLanguage.self, default: .system),
                         options: AppLanguage.allCases.map { ($0, $0.localizedLabel) })
@@ -30,32 +30,29 @@ struct AppearanceSettingsView: View {
     }
 }
 
-/// 强调色色板：横排 5 个圆色板，当前选中显示 ✓。点选写 AccentState.shared.selected。
+/// 强调色色板：横排圆色板，当前选中外加 2pt 同色环。点选写 AccentState.shared.selected。
 private struct AccentSwatchPicker: View {
     @Bindable private var accent = AccentState.shared
     @Environment(\.colorScheme) private var scheme
     @FocusState private var focusedColor: AccentColor?
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             ForEach(AccentColor.allCases) { color in
                 let isSelected = accent.selected == color
                 let isFocused = focusedColor == color
+                let swatch = color.base(dark: scheme == .dark).color()
                 Circle()
-                    .fill(color.base(dark: scheme == .dark).color())
-                    .frame(width: 20, height: 20)
-                    .overlay(
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .opacity(isSelected ? 1 : 0)
-                    )
-                    // 键盘焦点环：focusable 时 accent 描边外扩 3pt（与圆色板区隔）。
+                    .fill(swatch)
+                    .frame(width: 18, height: 18)
+                    // 选中：外扩 3pt 的 2pt 同色环；键盘焦点：同位置的 accent 环（选中时已有环，不再叠）。
                     .overlay(
                         Circle()
-                            .strokeBorder(UD.accent, lineWidth: isFocused ? 2 : 0)
-                            .padding(-3)
+                            .strokeBorder(isSelected ? swatch : UD.accent,
+                                          lineWidth: isSelected || isFocused ? 2 : 0)
+                            .padding(-4)
                     )
+                    .padding(4)
                     .contentShape(Circle())
                     .onTapGesture { accent.selected = color }
                     .focusable()

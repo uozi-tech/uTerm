@@ -8,20 +8,18 @@ struct DiagnosticsSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsGroup(title: "诊断") {
+            SettingsPageHeader(title: "诊断", subtitle: String(localized: "日志等级与系统日志"))
+
+            SettingsGroup(title: "日志",
+                          footer: String(localized: "在 Console.app 的 Subsystem 过滤栏输入 com.uozi.uTerm，可只看 uTerm 的日志。")) {
                 SettingsRow(label: "日志等级", hint: LogLevel.settingsHint) {
                     UDSegmented(selection: $logLevelRaw.rawValue(LogLevel.self, default: .info),
                                 options: LogLevel.allCases.map { ($0, $0.localizedLabel) })
                 }
-                SettingsRow(label: "显示日志",
-                            hint: "打开 Console.app；在 Subsystem 过滤栏输入下方文本可只看 uTerm 的日志。") {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        UDButton(title: "打开 Console", style: .secondary, action: openConsole)
-                        Text("com.uozi.uTerm")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(UD.text3)
-                            .textSelection(.enabled)
-                    }
+                SettingsListRow(icon: "doc.text.magnifyingglass", tint: UD.text2,
+                                title: String(localized: "显示日志"),
+                                subtitle: "com.uozi.uTerm", subtitleStyle: .monospaced) {
+                    UDButton(title: "打开 Console", style: .secondary, action: openConsole)
                 }
             }
         }

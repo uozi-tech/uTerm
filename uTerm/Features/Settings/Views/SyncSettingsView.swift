@@ -1,5 +1,6 @@
 import UDesignKit
 import SwiftUI
+import AppKit
 
 /// 设置 · 同步：iCloud 状态与同步诊断、Mac 主动发起的局域网全量加密同步、AI 会话保留窗口
 /// （原「高级」里的「同步」与「历史」两组）。状态图标 / 色调 / 文案与 iOS 共用
@@ -12,56 +13,62 @@ struct SyncSettingsView: View {
     /// CloudKit 同步实时状态（uTermApp 注入；订阅 NSPersistentCloudKitContainer 事件）。
     @Environment(CloudKitSyncMonitor.self) private var sync
     @State private var showDiagnostics = false
+    @State private var copiedCode = false
 
     var body: some View {
         SettingsScroll {
-            SettingsGroup(title: "同步") {
+            SettingsPageHeader(title: "同步", subtitle: String(localized: "iCloud 后台同步与局域网快速同步"))
+
+            SettingsGroup(title: "iCloud") {
                 SettingsRow(label: "iCloud 同步", hint: SyncStatusPresentation.cloudHint(loggedIn: loggedIntoiCloud)) {
                     let cloud = SyncStatusPresentation.cloud(syncStatus)
-                    HStack(spacing: 6) {
-                        Image(systemName: cloud.symbol)
-                            .font(.system(size: 12))
-                            .foregroundStyle(cloud.tone.color)
-                        Text(syncStatus.label)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(UD.text2)
-                    }
+                    SettingsStatusLabel(symbol: cloud.symbol, tone: cloud.tone, text: syncStatus.label)
                 }
                 SettingsRow(label: "同步诊断",
                             hint: SyncStatusPresentation.diagnosticsSubtitle(status: syncStatus,
                                                                             lastError: sync.lastError)) {
                     UDButton(title: "查看事件…", style: .secondary) { showDiagnostics = true }
                 }
-                SettingsRow(label: "局域网发送", hint: "Mac 发现移动设备后主动发送全量数据，移动端确认后才会传输。") {
+            }
+
+            SettingsGroup(title: "局域网",
+                          footer: String(localized: "Mac 发现同一局域网里的 iPhone / iPad 后主动发送全量数据，移动端确认后才会传输。在移动端的「局域网同步」里输入上面的配对码。")) {
+                SettingsRow(label: "发送状态") {
                     let lan = SyncStatusPresentation.lan(lanSync.status)
-                    HStack(spacing: 6) {
-                        Image(systemName: lan.symbol)
-                            .font(.system(size: 12))
-                            .foregroundStyle(lan.tone.color)
-                        Text(lanSync.status.label)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(UD.text2)
-                    }
+                    SettingsStatusLabel(symbol: lan.symbol, tone: lan.tone, text: lanSync.status.label)
                 }
-                if !lanSync.peers.isEmpty {
-                    SettingsRow(label: "移动设备", hint: "选择已发现的 iPhone / iPad，发送前会在移动端再次确认。") {
+                ForEach(lanSync.peers) { peer in
+                    SettingsListRow(icon: settingsDeviceSymbol(for: peer.name), tint: UD.accent,
+                                    title: peer.name, subtitle: String(localized: "已在局域网发现")) {
                         UDButton(title: "发送同步", style: .secondary, systemImage: "arrow.up.circle") {
-                            lanSync.sendSync()
+                            lanSync.sendSync(to: peer)
                         }
                     }
                 }
-                SettingsRow(label: "配对码", hint: "在 iPhone / iPad 的局域网同步中输入此 6 位代码。") {
-                    Text(lanSync.pairingCode)
-                        .font(.system(size: 14, design: .monospaced).weight(.semibold))
-                        .foregroundStyle(UD.text)
-                        .textSelection(.enabled)
+                SettingsRow(label: "配对码") {
+                    HStack(spacing: 10) {
+                        Text(lanSync.pairingCode)
+                            .font(.system(size: 16, design: .monospaced).weight(.semibold))
+                            .tracking(2)
+                            .foregroundStyle(UD.text)
+                            .textSelection(.enabled)
+                        UDButton(title: copiedCode ? "已复制" : "复制", style: .secondary) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(lanSync.pairingCode, forType: .string)
+                            copiedCode = true
+                            Task {
+                                try? await Task.sleep(for: .seconds(2))
+                                copiedCode = false
+                            }
+                        }
+                    }
                 }
             }
 
-            SettingsGroup(title: "历史") {
-                SettingsRow(label: "会话保留",
-                            hint: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .macOS)) {
-                    SettingsNumberField(value: $chatRetentionDays, width: 80,
+            SettingsGroup(title: "历史",
+                          footer: ChatRetentionPresentation.footer(for: chatRetentionDays, platform: .macOS)) {
+                SettingsRow(label: "AI 会话保留") {
+                    SettingsNumberField(value: $chatRetentionDays, width: 72,
                                         minValue: 0, maxValue: 3_650, suffix: "天")
                 }
             }

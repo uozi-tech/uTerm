@@ -14,6 +14,8 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         SettingsScroll {
+            SettingsPageHeader(title: "通用", subtitle: String(localized: "启动与更新"))
+
             SettingsGroup(title: "启动") {
                 SettingsRow(label: "启动时",
                             hint: "打开 uTerm 时首先展示的页面") {
@@ -34,49 +36,23 @@ struct GeneralSettingsView: View {
                         set: { appUpdater.automaticallyChecksForUpdates = $0 }
                     ))
                 }
-                UpdateStatusPanel()
+                SettingsListRow(icon: "arrow.down.circle", tint: UD.accent,
+                                title: "uTerm \(AppUpdater.currentVersionString)",
+                                subtitle: lastCheckLine) {
+                    UDButton(title: "检查更新", style: .secondary) {
+                        appUpdater.checkForUpdates()
+                    }
+                    .disabled(!appUpdater.canCheckForUpdates)
+                }
             }
         }
     }
-}
 
-/// 内联状态面板：左侧绿点 + 中间状态文字 + 右侧 "检查更新" 按钮。
-/// 设计稿 GeneralTab "更新" 区组的信息条样式。
-private struct UpdateStatusPanel: View {
-    @Environment(AppUpdater.self) private var appUpdater
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(UD.success)
-                .frame(width: 6, height: 6)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusLine)
-                    .font(.system(size: 12))
-                    .foregroundStyle(UD.text)
-                Text("当前版本 \(AppUpdater.currentVersionString)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(UD.text3)
-            }
-
-            Spacer()
-
-            UDButton(title: "检查更新", style: .secondary) {
-                appUpdater.checkForUpdates()
-            }
-            .disabled(!appUpdater.canCheckForUpdates)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 7).fill(UD.fillFaint))
-    }
-
-    private var statusLine: String {
+    private var lastCheckLine: String {
         if let date = appUpdater.lastUpdateCheckDate {
-            return "上次检查：\(UFormat.relative(date))"
+            return String(localized: "上次检查：\(UFormat.relative(date))")
         } else {
-            return "从未检查更新"
+            return String(localized: "从未检查更新")
         }
     }
 }

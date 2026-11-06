@@ -45,10 +45,11 @@ struct TerminalPreview: View {
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(bg)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // 浅色下终端底与卡片同为白：留一条 hairline 才看得出预览框（深色下终端底 #000 落在卡片 #141414 上，线几乎不可见）。
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(UD.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(UD.border, lineWidth: 1)
         )
         .font(previewFont)
         // 整块作为单个示意元素：VoiceOver 不逐行念假终端输出。

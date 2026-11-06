@@ -17,23 +17,25 @@ struct ConnectionSettingsView: View {
 
     var body: some View {
         SettingsScroll {
-            SettingsGroup(title: "SSH 连接") {
+            SettingsPageHeader(title: "连接", subtitle: String(localized: "SSH 握手与文件传输"))
+
+            SettingsGroup(title: "SSH 连接", footer: hostKeyPolicyBinding.wrappedValue.settingsHint) {
                 SettingsRow(label: "连接超时",
-                            hint: "建立 SSH 握手的最长等待秒数。改动只对下次连接生效。") {
-                    SettingsNumberField(value: $connectTimeout, width: 80, minValue: 1, suffix: "秒")
+                            hint: "建立 SSH 握手的最长等待时间，对下次连接生效") {
+                    SettingsNumberField(value: $connectTimeout, width: 72, minValue: 1, suffix: "秒")
                 }
-                SettingsRow(label: "主机密钥校验",
-                            hint: hostKeyPolicyBinding.wrappedValue.settingsHint) {
-                    UDSegmented(selection: hostKeyPolicyBinding,
-                                options: SSHHostKeyPolicy.allCases.map { ($0, $0.localizedLabel) })
+                SettingsRow(label: "主机密钥校验") {
+                    SettingsPicker(selection: hostKeyPolicyBinding,
+                                   options: SSHHostKeyPolicy.allCases.map { ($0, $0.localizedLabel) })
                 }
             }
 
-            SettingsGroup(title: "文件传输") {
+            SettingsGroup(title: "文件传输",
+                          footer: String(localized: "超出的文件排队，随槽位空出依次开始。改动对新开始的传输生效。")) {
                 SettingsRow(label: "并发上传数",
-                            hint: "SFTP 同时上传的文件数上限（1–64）。超出的文件排队，随槽位空出依次开始。改动对新开始的传输生效。") {
+                            hint: "SFTP 同时上传的文件数上限（1–64）") {
                     SettingsNumberField(value: $maxConcurrentUploads,
-                                        width: 80, minValue: 1, maxValue: 64, suffix: "个")
+                                        width: 72, minValue: 1, maxValue: 64, suffix: "个文件")
                 }
             }
         }

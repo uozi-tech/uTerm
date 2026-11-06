@@ -31,8 +31,11 @@ struct TerminalSettingsView: View {
 
     var body: some View {
         SettingsScroll {
+            SettingsPageHeader(title: "终端", subtitle: String(localized: "光标、回滚缓冲与退出时的行为"))
+
             SettingsGroup(title: "预览") {
                 TerminalPreview(settings: currentSettings)
+                    .padding(10)
             }
             SettingsGroup(title: "光标") {
                 SettingsRow(label: "形状") {
@@ -46,13 +49,15 @@ struct TerminalSettingsView: View {
             SettingsGroup(title: "行为") {
                 SettingsRow(label: "历史行数",
                             hint: "保留在内存中的回滚缓冲区行数") {
-                    SettingsNumberField(value: $scrollback)
+                    SettingsNumberField(value: $scrollback, width: 96, suffix: String(localized: "行"))
                 }
                 SettingsRow(label: "选中即复制") {
                     UDToggle($copyOnSelect)
                 }
-                SettingsRow(label: "退出 uTerm 时",
-                            hint: "选择保留时，本机和 SSH 终端里的程序继续运行，下次打开 uTerm 时自动接回。崩溃和应用更新一律保留。") {
+            }
+            SettingsGroup(title: "退出与重启",
+                          footer: String(localized: "选择保留时，本机和 SSH 终端里的程序继续运行，下次打开 uTerm 时自动接回；崩溃和应用更新一律保留。保住局域网连接需要系统再授权一次（记在「uTerm 终端」名下），只影响之后新开的本机终端；SSH 标签总是保住。")) {
+                SettingsRow(label: "退出 uTerm 时") {
                     UDSegmented(selection: $quitBehavior, options: [
                         (value: TerminalQuitPolicy.Behavior.ask.rawValue, label: String(localized: "询问")),
                         (value: TerminalQuitPolicy.Behavior.keep.rawValue, label: String(localized: "保留")),
@@ -60,7 +65,7 @@ struct TerminalSettingsView: View {
                     ])
                 }
                 SettingsRow(label: "重启时保住本机终端的局域网连接",
-                            hint: "比如在本机终端里 ssh 到局域网的机器。打开后系统会就访问文稿、局域网等再问一次授权，记在「uTerm 终端」名下。只影响之后新开的终端；SSH 标签不受这项影响，总是保住。") {
+                            hint: "比如在本机终端里 ssh 到局域网的机器") {
                     UDToggle($keepsLANConnections)
                 }
             }
