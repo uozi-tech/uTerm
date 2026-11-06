@@ -54,9 +54,27 @@ actor MockSFTP: SFTPProviding {
     }
 
     func list(path: String) async throws -> [RemoteEntry] {
+        listCalls.append(path)
+        while heldListPaths.contains(path) {
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
         if let listError { throw listError }
+        if let error = listErrorsByPath[path] { throw error }
         return tree[path] ?? []
     }
+
+    // MARK: - 按路径的列目录闸门 / 错误（测试加载代次、列失败留在原目录）
+
+    /// 依次被列过的路径。
+    private(set) var listCalls: [String] = []
+    /// 这些路径的 `list` 挂起，直到 `releaseList(_:)`。
+    private var heldListPaths: Set<String> = []
+    /// 只对这些路径抛的列目录错误（`listError` 对所有路径生效）。
+    private var listErrorsByPath: [String: Error] = [:]
+
+    func holdList(_ path: String) { heldListPaths.insert(path) }
+    func releaseList(_ path: String) { heldListPaths.remove(path) }
+    func setListError(_ error: Error, at path: String) { listErrorsByPath[path] = error }
 
     func realPath(_ path: String) async throws -> String {
         path == "." ? "/home/user" : path
