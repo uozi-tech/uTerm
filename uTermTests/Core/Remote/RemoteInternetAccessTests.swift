@@ -237,8 +237,10 @@ final class RemoteInternetAccessTests: XCTestCase {
         _ = try await local.establish(role: .initiator,
                                       hello: RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: "手机",
                                                          ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                                         staticKey: phone.key.publicKey.rawRepresentation),
+                                                         staticKey: phone.key.publicKey.rawRepresentation,
+                                                         features: [RemoteFeature.keyConfirmation]),
                                       staticKey: phone.key, ephemeralKey: ephemeral)
+        local.send(RemoteMessage(.keyConfirm))
 
         allowed = []
         server.internetAccessChanged()
@@ -298,8 +300,9 @@ final class RemoteInternetAccessTests: XCTestCase {
                                      hello: RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: "手机",
                                                         ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                                         staticKey: phone.key.publicKey.rawRepresentation,
-                                                        features: [RemoteFeature.relayConfig]),
+                                                        features: [RemoteFeature.relayConfig, RemoteFeature.keyConfirmation]),
                                      staticKey: phone.key, ephemeralKey: ephemeral)
+        link.send(RemoteMessage(.keyConfirm))
         let paired = await waitUntil { !self.pairing(inbox).isEmpty }
         XCTAssertTrue(paired)
         try await Task.sleep(for: .milliseconds(100))

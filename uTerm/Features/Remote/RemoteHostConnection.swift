@@ -101,7 +101,12 @@ final class RemoteHostConnection {
                 try await authorizeFromInternet(peer: peer, expected: expected)
                 return
             }
-            if peer.supports(RemoteFeature.keyConfirmation), server.localFeatures.contains(RemoteFeature.keyConfirmation) {
+            if server.localFeatures.contains(RemoteFeature.keyConfirmation) {
+                // 不能按对方声明的能力决定要不要验：冒充者在握手里不报 key-confirm 就能跳过验证、被记进信任列表。
+                // 远控随 2.0 首发，能连上来的手机都带这一能力。
+                guard peer.supports(RemoteFeature.keyConfirmation) else {
+                    throw RemoteProtocolError.handshakeFailed("对方没有证明自己持有私钥")
+                }
                 try await waitForKeyConfirmation()
             }
             if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {

@@ -179,8 +179,11 @@ final class RemoteReconnectTests: XCTestCase {
         defer { link.close() }
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: UUID(), deviceName: "老手机",
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                staticKey: staticKey.publicKey.rawRepresentation, features: nil)
+                                staticKey: staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.keyConfirmation])
         _ = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey, ephemeralKey: ephemeral)
+        // 不报心跳，但密钥确认是 Mac 的硬要求（不能由对方的声明跳过）。
+        link.send(RemoteMessage(.keyConfirm))
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
         XCTAssertTrue(asked)
         server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))

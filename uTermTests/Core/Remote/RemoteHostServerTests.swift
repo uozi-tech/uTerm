@@ -80,9 +80,12 @@ final class RemoteHostServerTests: XCTestCase {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                staticKey: phone.staticKey.publicKey.rawRepresentation)
+                                staticKey: phone.staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.keyConfirmation])
         let established = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey,
                                                    ephemeralKey: ephemeral)
+        // 与真手机一样握手后先证明持有私钥：Mac 不接受不做这一步的连接。
+        link.send(RemoteMessage(.keyConfirm))
         XCTAssertEqual(established.peer.deviceName, "测试 Mac")
         return (link, inbox, established.verificationCode)
     }
@@ -125,6 +128,44 @@ final class RemoteHostServerTests: XCTestCase {
         XCTAssertTrue(server.connectedDevices.isEmpty)
         XCTAssertTrue(server.pairingRequests.isEmpty)
         XCTAssertTrue(inbox.of(.pairing).isEmpty, "身份没确认前不该告诉对方配对结果")
+    }
+
+    /// 冒充者在握手里干脆不报 key-confirm：不能因此跳过验证，直接断开。
+    func test_peer_that_omits_key_confirmation_feature_is_rejected() async throws {
+        let registry = TerminalSessionRegistry()
+        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
+                                      advertises: false, keyConfirmationTimeout: .seconds(5))
+        server.start()
+        defer { server.stop() }
+        let ready = await waitUntil { server.port != nil }
+        XCTAssertTrue(ready)
+
+        let victim = Phone()
+        try identity.trust(RemotePeer(id: victim.id, name: victim.name,
+                                      publicKey: victim.staticKey.publicKey.rawRepresentation, pairedAt: Date()))
+        let spoofer = Curve25519.KeyAgreement.PrivateKey()
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let inbox = Inbox()
+        let link = RemoteLink(connection: NWConnection(host: "127.0.0.1",
+                                                       port: NWEndpoint.Port(rawValue: try XCTUnwrap(server.port))!,
+                                                       using: RemoteLink.parameters()))
+        link.setHandlers(onMessage: { inbox.add($0) }, onClose: { _ in inbox.close() })
+        let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: victim.id, deviceName: victim.name,
+                                ephemeralKey: ephemeral.publicKey.rawRepresentation,
+                                staticKey: victim.staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.heartbeat])
+        // Mac 一看到握手内容就断开时，这边的握手可能走不完；用例看的是「被断开」。
+        do {
+            _ = try await link.establish(role: .initiator, hello: hello, staticKey: spoofer, ephemeralKey: ephemeral)
+        } catch {
+            inbox.close()
+        }
+
+        let closed = await waitUntil { inbox.closed }
+        XCTAssertTrue(closed, "不报 key-confirm 应该立刻断开，而不是等超时")
+        XCTAssertTrue(server.connectedDevices.isEmpty)
+        XCTAssertTrue(inbox.of(.pairing).isEmpty)
     }
 
     /// 名册担保的设备：要先确认密钥才写进本机信任。
@@ -186,9 +227,12 @@ final class RemoteHostServerTests: XCTestCase {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: phone.id, deviceName: phone.name,
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                staticKey: phone.staticKey.publicKey.rawRepresentation)
+                                staticKey: phone.staticKey.publicKey.rawRepresentation,
+                                features: [RemoteFeature.keyConfirmation])
         let established = try await link.establish(role: .initiator, hello: hello, staticKey: phone.staticKey,
                                                    ephemeralKey: ephemeral)
+        // 与真手机一样握手后先证明持有私钥：Mac 不接受不做这一步的连接。
+        link.send(RemoteMessage(.keyConfirm))
         XCTAssertEqual(established.peer.deviceName, "测试 Mac")
         link.close()
     }
@@ -337,6 +381,8 @@ final class RemoteHostServerTests: XCTestCase {
                                     pairedAt: Date()))
         let attachStart = Date()
         let (link, inbox, _) = try await connect(phone, port: port)
+        // 密钥确认之后才授权：没授权前发的请求 Mac 不理。
+        _ = await waitUntil { self.pairingStates(inbox).contains(.trusted) }
         link.send(RemoteMessage(.attach, payload: RemoteJSON.encode(RemoteAttachRequest(sessionID: sessionID, cols: 80, rows: 24))))
         _ = await waitUntil { !inbox.of(.output).isEmpty }
         let attachMs = Date().timeIntervalSince(attachStart) * 1000

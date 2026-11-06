@@ -144,7 +144,8 @@ final class RemoteDesktopClipboardTests: XCTestCase {
         defer { server.stop(); withExtendedLifetime(mac) {} }
 
         // 老手机（握手不带 desktop-clipboard）：收到不认识的消息会断开整条连接，所以一条都不能发。
-        let old = try await rawPhone(server, features: [RemoteFeature.desktop, RemoteFeature.heartbeat])
+        let old = try await rawPhone(server, features: [RemoteFeature.desktop, RemoteFeature.heartbeat,
+                                                          RemoteFeature.keyConfirmation])
         defer { old.link.close() }
         old.link.send(RemoteMessage(.desktopInput, channel: old.channel, payload: RemoteDesktopInput.move(x: 0, y: 0).encoded()))
         let oldMoved = await waitUntil { mac.injector.all.count == 1 }
@@ -155,7 +156,8 @@ final class RemoteDesktopClipboardTests: XCTestCase {
         old.link.close()
 
         // 同样的手机只多声明这一项：照常收到。
-        let new = try await rawPhone(server, features: [RemoteFeature.desktop, RemoteFeature.desktopClipboard])
+        let new = try await rawPhone(server, features: [RemoteFeature.desktop, RemoteFeature.desktopClipboard,
+                                                          RemoteFeature.keyConfirmation])
         defer { new.link.close() }
         new.link.send(RemoteMessage(.desktopInput, channel: new.channel, payload: RemoteDesktopInput.move(x: 0, y: 0).encoded()))
         let newMoved = await waitUntil { mac.injector.all.count == 2 }
