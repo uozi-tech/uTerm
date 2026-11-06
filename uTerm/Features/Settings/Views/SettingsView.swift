@@ -57,16 +57,19 @@ struct SettingsView: View {
                 SettingsSidebar(selection: tabBinding)
                 // 与 ProvidersSettingsView / KeyManagerView 同：UD.border 实色竖线区隔，不用系统 Divider。
                 Rectangle().fill(UD.border).frame(width: 1)
-                // 内容区
+                // 内容区。左上对齐并裁剪：任何页面再溢出也只裁右边，侧栏永远不会被挤出窗口
+                // （曾经「模型服务」的固定宽输入框在 780 宽时把整个 HStack 撑宽、居中，侧栏左侧被裁掉约 20pt）。
                 Self.page(for: tab)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(UD.pageBg)
+                    .clipped()
             }
         }
         // 用 minHeight（而非固定 height）让内容**铺满整窗**——与 Welcome / Keys 一致。
         // 固定 height:480 + .ignoresSafeArea(.top) 会把内容上提、底部空出一条未覆盖区，
         // 露出窗口默认（浅色）底，短内容的「通用」tab 上显成「底部 footer」。铺满后
         // 该条由 UD.bg 覆盖消失。窗口初始尺寸由 Scene 的 .defaultSize 决定。
-        .frame(minWidth: 780, minHeight: 500)
+        .frame(minWidth: 880, minHeight: 600)
         // 设计稿 settings.jsx：整窗内容坐在 `U.bg` 上（深 #000000）。其余主窗
         // （工作区 / SFTP / 表单 / 密钥）皆已 .background(UD.bg)，设置窗补齐对齐。
         // 自绘扁平 chrome：透明系统标题栏 + full-size content，红绿灯让位由 SettingsTitleBar
@@ -110,16 +113,16 @@ nonisolated enum SettingsWindow {
     static let id = "settings"
 }
 
-/// 设置侧栏：宽 184、坐在 UD.bg 上；行 = 14pt 图标 + 13pt 文字，行高 30、圆角 6；
-/// 选中 = accent 淡底 + accentInk，hover = UD.rowHover。组间 10pt 留白，不显示分组标题。
+/// 设置侧栏：宽 200、坐在 UD.bg 上；行 = 22pt 彩色圆角方块图标 + 13pt 文字，行高 32、圆角 7；
+/// 选中 = accent 淡底 + accentInk，hover = UD.rowHover。组间 12pt 留白，不显示分组标题。
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsSection
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(SettingsView.sidebarGroups.enumerated()), id: \.offset) { _, group in
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 2) {
                         ForEach(group) { item in
                             SettingsSidebarRow(item: item, isOn: item == selection) {
                                 selection = item
@@ -128,9 +131,10 @@ private struct SettingsSidebar: View {
                     }
                 }
             }
-            .padding(8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
         }
-        .frame(width: 184)
+        .frame(width: 200)
         .background(UD.bg)
     }
 }
@@ -143,20 +147,18 @@ private struct SettingsSidebarRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 14))
-                    .frame(width: 18)
+            HStack(spacing: 9) {
+                SettingsSidebarIcon(section: item)
                 Text(item.title)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13, weight: isOn ? .medium : .regular))
+                    .foregroundStyle(isOn ? UD.accentInk : UD.text)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(isOn ? UD.accentInk : UD.text)
-            .padding(.horizontal, 8)
-            .frame(height: 30)
+            .padding(.horizontal, 6)
+            .frame(height: 32)
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(isOn ? UD.accentSoft : (hovering ? UD.rowHover : Color.clear))
             )
             .contentShape(Rectangle())
@@ -166,4 +168,45 @@ private struct SettingsSidebarRow: View {
         // 原生 Button 本就键盘可达，不再叠 .focusable()（会多生一个可聚焦元素 + 系统焦点环）。
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
+}
+
+/// 侧栏图标：22pt 圆角方块，每个分区一个固定底色，白色符号（金色底上用深色符号保对比度）。
+private struct SettingsSidebarIcon: View {
+    let section: SettingsSection
+
+    var body: some View {
+        Image(systemName: section.symbol)
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(section.sidebarSymbolColor)
+            .frame(width: 22, height: 22)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(section.sidebarTint))
+            .accessibilityHidden(true)
+    }
+}
+
+extension SettingsSection {
+    /// 侧栏图标方块的底色。按分区固定，取 `UD` 语义色 / 强调色调色板；中性分区用系统灰。
+    @MainActor
+    var sidebarTint: Color {
+        switch self {
+        case .general, .about: return Self.neutralTint
+        case .appearance:      return UD.accentViolet
+        case .terminal:        return Self.terminalTint
+        case .providers:       return UD.aiAccent
+        case .connection:      return UD.info
+        case .security:        return UD.success
+        case .sync:            return UD.accent
+        case .remote:          return UD.caution
+        case .cli:             return UD.accentGold
+        case .diagnostics:     return UD.danger
+        }
+    }
+
+    /// 金色底上白字对比度不够，改用深色符号。
+    var sidebarSymbolColor: Color {
+        self == .cli ? Color.black.opacity(0.78) : .white
+    }
+
+    private static let neutralTint = UD.dyn(.hex(0x636366), .hex(0x8E8E93))
+    private static let terminalTint = UD.dyn(.hex(0x48484A), .hex(0x3A3A3C))
 }

@@ -545,7 +545,7 @@ struct uTermApp: App {
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 860, height: 560)   // 初始尺寸（侧栏 184 + 内容）；内容用 minHeight 铺满，避免底部露出浅色窗底
+        .defaultSize(width: 940, height: 640)   // 初始尺寸（侧栏 200 + 内容列 640 + 边距）；内容用 minHeight 铺满，避免底部露出浅色窗底
         .routesNewWindowToWelcome()
         .commands {
             AppInfoCommands(appUpdater: appUpdater)
