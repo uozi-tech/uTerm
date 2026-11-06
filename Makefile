@@ -477,8 +477,8 @@ verify-distribution-signing:
 	test -d "$(EXPORT_APP)"
 	python3 scripts/verify-background-launcher.py "$(EXPORT_APP)" "uTermBackgroundLauncher"
 	codesign --verify --deep --strict --verbose=4 "$(EXPORT_APP)"
-	@for helper in uterm-holder uterm-ssh; do \
-		path="$(EXPORT_APP)/Contents/Helpers/$$helper"; \
+	@for helper in Helpers/uterm-holder Helpers/uterm-ssh XPCServices/uTermShellAgent.xpc; do \
+		path="$(EXPORT_APP)/Contents/$$helper"; \
 		info=$$(codesign -dv --verbose=4 "$$path" 2>&1) || { printf '%s\n' "ERROR: $$path is missing or unsigned."; exit 1; }; \
 		if ! printf '%s\n' "$$info" | grep -q 'Authority=Developer ID Application' \
 			|| ! printf '%s\n' "$$info" | grep -q 'flags=.*runtime'; then \
