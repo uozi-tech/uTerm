@@ -64,10 +64,10 @@ final class FileBrowserModel {
 
     /// 排序偏好（macOS 全局共享，所有 server 一致，存 UserDefaults）。
     private enum PrefKey {
-        static let sortKey       = "fileBrowser.sortKey"
-        static let sortAscending = "fileBrowser.sortAscending"
-        static let foldersFirst  = "fileBrowser.foldersFirst"
-        static let showHidden    = "fileBrowser.showHidden"
+        static let sortKey       = DefaultsKey.fileBrowserSortKey
+        static let sortAscending = DefaultsKey.fileBrowserSortAscending
+        static let foldersFirst  = DefaultsKey.fileBrowserFoldersFirst
+        static let showHidden    = DefaultsKey.fileBrowserShowHidden
     }
 
     /// 非 nil = 排序固定成这一套、不读写偏好（iOS）；nil = 读写 macOS 的排序偏好。
@@ -199,7 +199,7 @@ final class FileBrowserModel {
 
     /// 上传和下载共用的总并发预算（用户设置；默认 4，钳 1…64）。
     static var maxConcurrentTransfers: Int {
-        let raw = UserDefaults.standard.object(forKey: "sftpMaxConcurrentTransfers") as? Int ?? 4
+        let raw = UserDefaults.standard.object(forKey: DefaultsKey.sftpMaxConcurrentTransfers) as? Int ?? 4
         return min(64, max(1, raw))
     }
     /// 测试用的固定上限：测试宿主的 `UserDefaults.standard` 就是正式版的设置，不能写。

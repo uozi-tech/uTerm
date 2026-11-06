@@ -11,9 +11,7 @@ import XCTest
 final class DefaultsKeyLintTests: XCTestCase {
 
     /// 还没接线到 `DefaultsKey` 的文件（本轮别的改动在动它们）。接好后从这里删掉。
-    private static let pendingFiles: Set<String> = [
-        "uTerm/Features/Files/FileBrowserModel.swift",
-    ]
+    private static let pendingFiles: Set<String> = []
 
     func testNoRawAppStorageKeyLiterals() throws {
         let offenders = try Self.scan(pattern: /@AppStorage\(\s*"/)
