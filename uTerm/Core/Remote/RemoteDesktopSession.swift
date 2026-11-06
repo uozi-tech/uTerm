@@ -30,6 +30,9 @@ final class RemoteDesktopSession {
     private(set) var info: RemoteDesktopInfo?
     /// 每秒刷新一次的读数（帧率、码率、解码耗时），给界面上的小字用。
     private(set) var stats = RemoteDesktopReceiverStats.Snapshot()
+    /// Mac 上拷贝的文字回传过来了（手机控制桌面时，Mac 认得 `desktopClipboard` 才会发）。界面在这里写系统
+    /// 剪贴板并提示；共享目录里不碰 `UIPasteboard`，Mac 单测才能端到端驱动。
+    @ObservationIgnored var onClipboard: (@MainActor (RemoteDesktopClipboard) -> Void)?
 
     nonisolated let receiver: RemoteDesktopReceiver
     let client: RemoteMacClient
@@ -102,7 +105,16 @@ final class RemoteDesktopSession {
                     MainActor.assumeIsolated { self?.channelClosed(generation: current, reason: reason, ended: ended) }
                 }
             },
-            onMessage: { message, link in receiver.receive(message, from: link, generation: current) }
+            onMessage: { [weak self] message, link in
+                guard message.kind == .desktopClipboard else {
+                    receiver.receive(message, from: link, generation: current)
+                    return
+                }
+                guard let content = try? RemoteDesktopClipboard(decoding: message.payload) else { return }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.clipboardArrived(content, generation: current) }
+                }
+            }
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
                                                 sidecarRefine: true)
@@ -118,6 +130,11 @@ final class RemoteDesktopSession {
         attachment = attached
         receiver.attach(link: attached.link, channel: attached.channel, generation: current)
         state = .streaming
+    }
+
+    private func clipboardArrived(_ content: RemoteDesktopClipboard, generation arrived: Int) {
+        guard arrived == generation, !isStopped else { return }
+        onClipboard?(content)
     }
 
     private func channelClosed(generation closed: Int, reason: String, ended: Bool) {

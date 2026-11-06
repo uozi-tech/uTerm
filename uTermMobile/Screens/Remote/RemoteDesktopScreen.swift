@@ -19,7 +19,7 @@ struct RemoteDesktopScreen: View {
     @State private var showStats = false
     @State private var pickingPhoto = false
     @State private var pickedPhoto: PhotosPickerItem?
-    /// 粘贴的结果提示（「已粘贴到 Mac」/ 失败原因），几秒后自己消失。
+    /// 粘贴的结果提示（「已粘贴到 Mac」/「已复制到手机」/ 失败原因），几秒后自己消失。
     @State private var pasteNote: String?
     @State private var pasteNoteTask: Task<Void, Never>?
     /// 顶栏左右要让出的距离（按屏幕圆角算，见 `ScreenCornerInsetsReader`）。
@@ -64,6 +64,7 @@ struct RemoteDesktopScreen: View {
             .task {
                 guard session == nil else { return }
                 let created = makeSession(size: geometry.size)
+                created.onClipboard = { content in copyFromMac(content) }
                 session = created
                 await created.start()
             }
@@ -201,6 +202,18 @@ struct RemoteDesktopScreen: View {
         switch content {
         case .text: showPasteNote("已把文字粘贴到 Mac")
         case .png, .jpeg: showPasteNote("已把图片粘贴到 Mac")
+        }
+    }
+
+    /// Mac 上拷贝的文字（⌘C / 右键「拷贝」）放进手机剪贴板。
+    private func copyFromMac(_ content: RemoteDesktopClipboard) {
+        switch content {
+        case .text(let text):
+            UIPasteboard.general.string = text
+            showPasteNote("已复制到手机")
+        case .tooLarge(let bytes):
+            let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+            showPasteNote("Mac 上拷贝的内容太大（\(size)），没有复制到手机")
         }
     }
 

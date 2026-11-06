@@ -19,6 +19,8 @@ struct RemoteDesktopEnvironment {
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
     /// Mac 光标的全局坐标（在连接队列上轮询）。
     var cursorLocation: (@Sendable () -> CGPoint?)?
+    /// Mac 的系统剪贴板（拷贝的文字回传手机）。nil = 不回传。
+    var clipboard: (any RemoteDesktopClipboardSource)? = nil
 
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
@@ -36,7 +38,8 @@ struct RemoteDesktopEnvironment {
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
             },
             makeInjector: { display in RemoteEventInjector(display: display) },
-            cursorLocation: { CGEvent(source: nil)?.location })
+            cursorLocation: { CGEvent(source: nil)?.location },
+            clipboard: RemoteSystemClipboard())
     }
 
     /// 显示器的全局点坐标与原生像素尺寸。

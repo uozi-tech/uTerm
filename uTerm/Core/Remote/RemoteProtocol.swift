@@ -31,7 +31,8 @@ nonisolated enum RemoteConstants {
     /// 本机支持的可选能力，握手时放进 `RemoteHello.features`。协议版本号不变：老版本对端
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
-    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste, RemoteFeature.localShell,
+    static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste,
+                                          RemoteFeature.desktopClipboard, RemoteFeature.localShell,
                                           RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat]
@@ -62,6 +63,8 @@ nonisolated enum RemoteFeature {
     static let desktop = "desktop"
     /// 远程桌面里粘贴手机的图片 / 文字：认得 `desktopPaste`。
     static let desktopPaste = "desktop-paste"
+    /// 远程桌面里 Mac 拷贝的文字回传到手机：手机认得 `desktopClipboard`。Mac 只发给声明了这一项的手机。
+    static let desktopClipboard = "desktop-clipboard"
     /// 能在 Mac 上开一个本机 shell：认得 `openLocalShell`。
     static let localShell = "local-shell"
     /// 能列出最近的工作区，并在指定目录开本机 shell：认得 `listLocalWorkspaces`。
@@ -143,6 +146,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case pairing = 30
         /// 最近的工作区。负载 = `RemoteLocalWorkspaces`（JSON）。
         case localWorkspaces = 31
+        /// 手机控制桌面时 Mac 上新拷贝的文字（桌面通道）。负载 = `RemoteDesktopClipboard`（二进制）。
+        /// 只发给 `features` 带 `desktop-clipboard` 的手机。
+        case desktopClipboard = 32
     }
 
     var kind: Kind
