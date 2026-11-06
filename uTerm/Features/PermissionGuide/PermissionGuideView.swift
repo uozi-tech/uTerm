@@ -221,7 +221,63 @@ private struct ContentSizedUnderTitleBar: ViewModifier {
         content
             .padding(.bottom, -topInset)
             .ignoresSafeArea(.container, edges: .top)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+            .background(TitleBarHeightReader { topInset = $0 })
+    }
+}
+
+/// 从窗口读标题栏高度（`frame` 减 `contentLayoutRect`），不从 SwiftUI 几何量。
+///
+/// 在这个视图上量 `safeAreaInsets.top` 是自指的：底部扣回 t 之后量到的是 (标题栏 + t) / 2，
+/// 每轮只把误差减半，要约 55 轮才收敛到 32；窗口一改尺寸读数又归零重来。真窗口里它一直收敛不完，
+/// 主线程 100% 卡在 SwiftUI 更新里（授权引导窗口启动即弹，整个 app 卡死）。窗口的标题栏高度与内容无关，
+/// 读一次就是终值。
+private struct TitleBarHeightReader: NSViewRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ReaderView { ReaderView(onChange: onChange) }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) {
+        nsView.onChange = onChange
+    }
+
+    final class ReaderView: NSView {
+        var onChange: (CGFloat) -> Void
+        private var reported: CGFloat?
+        private var observers: [NSObjectProtocol] = []
+
+        init(onChange: @escaping (CGFloat) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            guard let window else { return }
+            let names: [Notification.Name] = [
+                NSWindow.didResizeNotification,
+                NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification,
+            ]
+            observers = names.map { name in
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.report() }
+                }
+            }
+            report()
+        }
+
+        private func report() {
+            guard let window else { return }
+            let height = window.frame.height - window.contentLayoutRect.height
+            guard height != reported else { return }
+            reported = height
+            // 不在 AppKit / SwiftUI 布局过程中改 SwiftUI 状态。
+            DispatchQueue.main.async { [onChange] in onChange(height) }
+        }
     }
 }
 
