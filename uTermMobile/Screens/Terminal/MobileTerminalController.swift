@@ -61,18 +61,13 @@ final class MobileTerminalController {
     private(set) var isReconnecting = false
     /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
     @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
-    @ObservationIgnored private var outputTask: Task<Void, Never>?
-    @ObservationIgnored private var outputFlushTask: Task<Void, Never>?
-    @ObservationIgnored private let outputBuffer = TerminalOutputBuffer(capacityBytes: 4 * 1024 * 1024)
+    /// 输出泵与输入 / 尺寸通道，两端共用（`TerminalOutputPump` / `TerminalInputChannel`）。
+    @ObservationIgnored private let outputPump = TerminalOutputPump(pacing: .foreground)
+    @ObservationIgnored private let inputChannel = TerminalInputChannel()
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     /// 建连代次：close() / restart() 递增，在途建连落地时对不上就丢弃结果。
     @ObservationIgnored private var connectGeneration = 0
-    @ObservationIgnored private var inputContinuation: AsyncStream<TerminalInput>.Continuation?
-    @ObservationIgnored private var resizeTask: Task<Void, Never>?
-    /// 终端当前的行列数。新传输接上时补发：首次排布和重连时，尺寸可能早于输入通道就绪。
-    @ObservationIgnored private var latestSize: (cols: UInt16, rows: UInt16)?
-    @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
     /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
     ///
@@ -86,12 +81,11 @@ final class MobileTerminalController {
     /// 等待截断。
     var isForeground = true {
         didSet {
-            guard isForeground != oldValue, isForeground, outputFlushTask != nil else { return }
-            startOutputFlushLoop(generation: outputGeneration)
+            guard isForeground != oldValue else { return }
+            outputPump.pacing = isForeground ? .foreground : .background
+            if isForeground { outputPump.restartFlushLoop() }
         }
     }
-
-    private var outputGeneration = 0
 
     typealias FlushPacing = TerminalFlushPacing
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
@@ -111,6 +105,7 @@ final class MobileTerminalController {
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
+        outputPump.terminalView = view
         // 远控快照带这么多行历史，接收端要装得下（SwiftTerm 默认只有 500 行）。
         let terminal = view.getTerminal()
         if (terminal.options.scrollback) < RemoteConstants.snapshotScrollback {
@@ -283,20 +278,9 @@ final class MobileTerminalController {
             }
         }
         acceptsImages = conn is any TerminalImageReceiving
-        let outStream = conn.outputStream
         let exitStream = conn.exitStream
-        resetOutputPipeline()
-        let generation = outputGeneration
-        let buffer = outputBuffer
-
-        // SSH 入站不再每个 chunk 都 hop MainActor；先进入有界缓冲，再按帧合并 feed。
-        outputTask = Task.detached(priority: .userInitiated) {
-            for await chunk in outStream {
-                if Task.isCancelled { break }
-                buffer.append(chunk, generation: generation)
-            }
-        }
-        startOutputFlushLoop(generation: generation)
+        outputPump.reset()
+        outputPump.start(conn.outputStream)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
                 if case .failed = self?.state { } else { self?.state = .disconnected }
@@ -304,25 +288,12 @@ final class MobileTerminalController {
             }
         }
 
-        // 击键 / 尺寸变化走同一条 FIFO：每次各起一个 Task 时，两个 Task 谁先进
-        // 后端 actor 没有语言层面的保证，快速连打可能乱序。
-        let (inputs, continuation) = AsyncStream.makeStream(of: TerminalInput.self)
-        inputContinuation = continuation
-        if let latestSize {
-            continuation.yield(.resize(cols: latestSize.cols, rows: latestSize.rows))
-        }
-        inputTask = Task {
-            for await input in inputs {
-                switch input {
-                case .data(let data): await conn.write(data)
-                case .resize(let cols, let rows): await conn.resize(cols: cols, rows: rows)
-                }
-            }
-        }
+        // 击键 / 尺寸变化走同一条 FIFO。尺寸可能早于传输就绪（首次排布、重连），接上时先补发。
+        inputChannel.bind(to: conn, sendingLatestSize: true)
     }
 
     func write(_ data: Data) {
-        inputContinuation?.yield(.data(data))
+        inputChannel.write(data)
     }
 
     // MARK: - 图片
@@ -404,15 +375,9 @@ final class MobileTerminalController {
     }
     private static let promptSubmitDelay = Duration.milliseconds(120)
 
-    /// 把新尺寸告诉远端。尺寸已由 `MTerminalContainerView` 等停稳才提交，这里不再按时间防抖：
-    /// 缓冲区已经重排，程序越早知道越好。只合并同一轮主线程里的连续变化。
+    /// 把新尺寸告诉远端：只合并同一轮主线程里的连续变化，和上次发出的相同就不发（见 `TerminalInputChannel`）。
     func resize(cols: UInt16, rows: UInt16) {
-        latestSize = (cols, rows)
-        resizeTask?.cancel()
-        resizeTask = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-            self?.inputContinuation?.yield(.resize(cols: cols, rows: rows))
-        }
+        inputChannel.reportSize(cols: cols, rows: rows)
     }
 
     func close() {
@@ -443,72 +408,23 @@ final class MobileTerminalController {
         connectGeneration &+= 1
         connectTask?.cancel()
         connectTask = nil
-        resetOutputPipeline()
+        outputPump.reset()
         exitTask?.cancel()
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
-        resizeTask?.cancel()
-        inputContinuation?.finish()
-        inputContinuation = nil
-        inputTask = nil
+        inputChannel.unbind()
         let conn = connection
         Task { await conn?.close() }
         connection = nil
     }
 
-    private func resetOutputPipeline() {
-        outputGeneration &+= 1
-        outputTask?.cancel()
-        outputTask = nil
-        outputFlushTask?.cancel()
-        outputFlushTask = nil
-        outputBuffer.clear()
-    }
-
-    private func startOutputFlushLoop(generation: Int) {
-        outputFlushTask?.cancel()
-        let buffer = outputBuffer
-        outputFlushTask = Task { [weak self] in
-            var pacer = TerminalFlushPacer(pacing: .foreground)
-            while !Task.isCancelled {
-                guard let self, self.outputGeneration == generation else { return }
-                guard let terminalView = self.terminalView else {
-                    // attach 通常早于 start；若视图尚未挂上，保留 buffer 并低频重试。
-                    try? await Task.sleep(for: .milliseconds(FlushPacing.foreground.intervalMs))
-                    continue
-                }
-
-                pacer.use(self.isForeground ? .foreground : .background)
-                let chunk = buffer.drain(maxBytes: pacer.budget, generation: generation)
-                if chunk.isEmpty {
-                    await buffer.waitForData()
-                } else {
-                    let backlogged = pacer.isBacklogged(fed: chunk.count, hasMore: buffer.hasBufferedBytes)
-                    let t0 = CFAbsoluteTimeGetCurrent()
-                    terminalView.feedPaced(ArraySlice([UInt8](chunk)), backlogged: backlogged)
-                    let t1 = CFAbsoluteTimeGetCurrent()
-                    let delayMs = pacer.didFeed(bytes: chunk.count, elapsedMs: (t1 - t0) * 1000,
-                                                backlogged: backlogged, nowMs: t1 * 1000)
-                    try? await Task.sleep(for: .milliseconds(delayMs))
-                }
-            }
-        }
-    }
-
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
-        outputTask?.cancel(); outputFlushTask?.cancel(); exitTask?.cancel(); connectTask?.cancel()
-        inputContinuation?.finish()
-        outputBuffer.clear()
+        // 输出泵与输入通道随控制器释放，各自的 deinit 收尾。
+        exitTask?.cancel(); connectTask?.cancel()
     }
-}
-
-/// 发往后端的输入，按产生顺序排队。
-private enum TerminalInput: Sendable {
-    case data(Data)
-    case resize(cols: UInt16, rows: UInt16)
 }
 
 extension MobileTerminalController: ConnectionHealthProbing {

@@ -14,7 +14,7 @@ import SwiftData
 ///
 /// 因此这些都是**真的**被量到的：
 /// - `TerminalOutputBuffer` 的入队 / 合并 / drain 节流；
-/// - `MobileTerminalController.startOutputFlushLoop` 每 16ms 一次的 `feed`；
+/// - `TerminalOutputPump`（`MobileTerminalController` 持有）每 16ms 一次的 `feed`；
 /// - SwiftTerm 自己的解析与重绘（vendored，不动）；
 /// - `TerminalScreen` 的 `ZStack + ForEach(tabs)` 全常驻挂载。
 ///
