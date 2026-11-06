@@ -138,8 +138,26 @@ final class RemoteICETests: XCTestCase {
         XCTAssertEqual(labels(nil), ["host-v4", "host-v6", "srflx-v4"], "链路本地与 ULA（USB 线、devicectl 调试隧道）不参与")
         XCTAssertEqual(labels(.ipv4), ["host-v4", "srflx-v4"])
         XCTAssertEqual(labels(.ipv6), ["host-v6"])
+        let publicOnly = RemoteICECandidateKind.all(inDescription:
+            RemoteICEDescriptionFilter.keep(description, family: nil, publicOnly: true)).map(\.label)
+        XCTAssertEqual(publicOnly, ["host-v6", "srflx-v4"], "只走公网：192.168 的私有地址也不用，公网映射留着")
         let kept = RemoteICEDescriptionFilter.keep(description, family: .ipv6)
         XCTAssertTrue(kept.contains("a=ice-ufrag:abcd") && kept.contains("a=ice-pwd:efgh") && kept.contains("a=end-of-candidates"))
+    }
+
+    func test_public_only_drops_every_private_ipv4_range() {
+        func kept(_ address: String) -> Bool {
+            let line = "a=candidate:1 1 UDP 2122317823 \(address) 49160 typ host"
+            return !RemoteICECandidateKind.all(inDescription:
+                RemoteICEDescriptionFilter.keep(line, family: nil, publicOnly: true)).isEmpty
+        }
+        for address in ["10.1.2.3", "172.16.0.1", "172.31.255.1", "192.168.31.119", "100.64.0.1", "100.127.1.1",
+                        "127.0.0.1", "198.18.0.1", "198.19.255.1"] {
+            XCTAssertFalse(kept(address), address)
+        }
+        for address in ["45.76.10.20", "172.32.0.1", "100.128.0.1", "198.20.0.1", "110.53.20.14", "2408:8207::1"] {
+            XCTAssertTrue(kept(address), address)
+        }
     }
 
     func test_percentiles_and_summary() {

@@ -59,7 +59,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
 
     private var networkGroup: some View {
         MInsetGroup(header: "网络", footer: "打开「只走公网」后，即使 Mac 就在同一个局域网里，连接也一律经中继或打洞，"
-                    + "用来复现外出时的情况。诊断时插着数据线也没关系：USB 链路与调试隧道的地址不参与。") {
+                    + "打洞也不用私有地址，用来复现外出时的情况。诊断量的始终是公网：插着数据线、连着同一个 Wi-Fi 都没关系。") {
             MInsetRow(icon: "globe", label: "手机网络", value: network)
             MInsetRow(icon: "link", label: "中继服务器", value: relayName ?? "未配置")
             MInsetRow(icon: "forward", label: "只走公网", last: true,

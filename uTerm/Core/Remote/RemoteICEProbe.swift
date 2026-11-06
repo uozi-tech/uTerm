@@ -176,7 +176,8 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
 
     /// `family`：只用这一族的候选地址（nil = 都用）。不出公网的地址（`fe80::`、`169.254.*`、`fc00::/7`）一律不用：
     /// 手机插着线或连着调试隧道时两端会经那条链路互相看见，打通的是那根线，不是公网。
-    func run(mac: RemotePeer, family: RemoteICEAddressFamily? = nil) async -> RemoteICEProbeResult {
+    /// `publicOnly`：私有 IPv4 也不用（默认）。诊断量的是公网路径，同一局域网里私有地址一配就通，会把局域网算成直连。
+    func run(mac: RemotePeer, family: RemoteICEAddressFamily? = nil, publicOnly: Bool = true) async -> RemoteICEProbeResult {
         var result = RemoteICEProbeResult()
         result.macName = mac.name
         let config = relay.relayConfig
@@ -198,7 +199,7 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
                 result.failure = "拿不到本机描述"
                 return result
             }
-            let description = RemoteICEDescriptionFilter.keep(gathered, family: family)
+            let description = RemoteICEDescriptionFilter.keep(gathered, family: family, publicOnly: publicOnly)
             result.localCandidates = Self.labels(description)
             guard !result.localCandidates.isEmpty else {
                 result.failure = "本机没有\(family?.label ?? "")公网候选地址"
@@ -207,7 +208,7 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
 
             let fullAnswer = try await exchange(description: description, mac: mac)
             result.signalMillis = Self.millis(since: started) - result.gatherMillis
-            let answer = RemoteICEDescriptionFilter.keep(fullAnswer, family: family)
+            let answer = RemoteICEDescriptionFilter.keep(fullAnswer, family: family, publicOnly: publicOnly)
             result.remoteCandidates = Self.labels(answer)
             guard !result.remoteCandidates.isEmpty else {
                 result.failure = "Mac 没有\(family?.label ?? "")公网候选地址"
@@ -278,7 +279,11 @@ nonisolated enum RemoteICEAddressFamily: String, Codable, CaseIterable, Sendable
 
 /// 按地址族筛候选地址，并去掉不出公网的地址（链路本地、IPv6 唯一本地）。不是候选地址的行（ufrag、密码……）原样留着。
 nonisolated enum RemoteICEDescriptionFilter {
-    static func keep(_ description: String, family: RemoteICEAddressFamily?) -> String {
+    /// `publicOnly`：再去掉不出公网的 IPv4（10/8、172.16/12、192.168/16、运营商 NAT 100.64/10、回环，以及
+    /// 198.18/15——Clash / Surge 一类代理的 TUN 网卡用它当假地址，Mac 开着代理时会成为 host 候选）。
+    /// 「只走公网」与网络诊断用：同一局域网里两端的私有地址一配就通，量到的是局域网，不是外出时的那条路。
+    /// srflx 候选的地址本身是公网映射，留着。
+    static func keep(_ description: String, family: RemoteICEAddressFamily?, publicOnly: Bool = false) -> String {
         description.split(separator: "\r\n", omittingEmptySubsequences: false).flatMap {
             $0.split(separator: "\n", omittingEmptySubsequences: false)
         }.filter { line in
@@ -290,6 +295,7 @@ nonisolated enum RemoteICEDescriptionFilter {
             if isIPv6 ? Self.isLinkLocalOrPrivateIPv6(address) : address.hasPrefix("169.254.") {
                 return false
             }
+            if publicOnly, !isIPv6, Self.isPrivateIPv4(address) { return false }
             switch family {
             case nil: return true
             case .ipv4: return !isIPv6
@@ -302,6 +308,18 @@ nonisolated enum RemoteICEDescriptionFilter {
     /// 调试隧道就是 ULA（经 USB 或 Wi-Fi），打洞要是挑中它，量到的是那条隧道。
     private static func isLinkLocalOrPrivateIPv6(_ address: String) -> Bool {
         ["fe8", "fe9", "fea", "feb", "fc", "fd"].contains { address.hasPrefix($0) }
+    }
+
+    private static func isPrivateIPv4(_ address: String) -> Bool {
+        let octets = address.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        switch (octets[0], octets[1]) {
+        case (10, _), (127, _), (192, 168): return true
+        case (172, 16...31): return true
+        case (100, 64...127): return true
+        case (198, 18...19): return true
+        default: return false
+        }
     }
 }
 

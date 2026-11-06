@@ -52,7 +52,7 @@ final class RemoteMacDirectory {
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
-    /// 只走公网：无视局域网里看到的 Mac，连接一律经中继或打洞。网络诊断用，默认关。
+    /// 只走公网：无视局域网里看到的 Mac，连接一律经中继或打洞，打洞也不用私有地址。网络诊断用，默认关。
     /// 启动参数 `-remote.internetOnly YES` 同样生效（手机插着线收日志时，Mac 会经 USB 链路被 Bonjour 发现）。
     var internetOnly: Bool {
         didSet {
@@ -288,7 +288,9 @@ final class RemoteMacDirectory {
 
     private func internetDialer(for mac: Mac) -> (@Sendable () async throws -> RemoteDialedPath)? {
         guard let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
-        let dialer = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
+        var configured = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
+        configured.publicOnly = internetOnly
+        let dialer = configured
         return { try await dialer.dial(peer) }
     }
 

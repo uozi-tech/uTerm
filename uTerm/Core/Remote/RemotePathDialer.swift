@@ -35,6 +35,8 @@ nonisolated struct RemotePathDialer: Sendable {
     let identity: RemoteIdentityStore
     let localID: UUID
     var allowsDirect = true
+    /// 「只走公网」：打洞时连私有 IPv4 也不用，否则同一局域网里两端的私有地址一配就通，测不到外出时的路。
+    var publicOnly = false
 
     func dial(_ mac: RemotePeer) async throws -> RemoteDialedPath {
         let session = Data(SymmetricKey(size: .bits128).withUnsafeBytes { Array($0) }).base64URLEncoded
@@ -44,7 +46,9 @@ nonisolated struct RemotePathDialer: Sendable {
         defer { attempt?.close() }
         let offer = RemoteSignalBody(kind: .offer, deviceID: localID, sentAt: Date().timeIntervalSince1970,
                                      nonce: RemoteSignalBody.newNonce(),
-                                     ice: attempt?.localDescription().map { RemoteICEDescriptionFilter.keep($0, family: nil) })
+                                     ice: attempt?.localDescription().map {
+                                         RemoteICEDescriptionFilter.keep($0, family: nil, publicOnly: publicOnly)
+                                     })
         let sealed = try RemoteSignalBox.seal(offer, key: shared, session: session, direction: .phoneToMac)
         let replyBox = try await relay.signal(to: mac.id, from: localID, session: session, box: sealed)
         let reply: RemoteSignalBody
@@ -87,7 +91,9 @@ nonisolated struct RemotePathDialer: Sendable {
     private func connectDirect(_ attempt: RemoteDirectAttempt, remote: String, keys: RemoteDirectKeys) async -> RemoteP2PTransport? {
         // 链路本地与 ULA 不出公网：同一局域网里本来就走 Bonjour 那条路。不去掉的话，手机插着线时会经 USB 或
         // devicectl 调试隧道「直连」，看着通，其实测不到公网。
-        guard attempt.setRemote(RemoteICEDescriptionFilter.keep(remote, family: nil)) else { return nil }
+        guard attempt.setRemote(RemoteICEDescriptionFilter.keep(remote, family: nil, publicOnly: publicOnly)) else {
+            return nil
+        }
         guard await attempt.waitForConnection(limit: RemoteDirectAttempt.connectLimit) else {
             AppLogger.info("打洞没打通，改走中继", category: RemoteLog.category)
             return nil

@@ -264,7 +264,8 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         try mac.server.trust(try phone.peer())
         let runner = RemoteICEProbeRunner(relay: RemoteRelayClient(config: config), identity: phone.identity,
                                           localID: phone.id)
-        let result = await runner.run(mac: mac.peer)
+        // 两端都在这台机器上，只有私有与回环地址可配：关掉「只要公网」，这里验的是经中继交换地址的流程。
+        let result = await runner.run(mac: mac.peer, publicOnly: false)
         print("[打洞探针·中继] \(result.summaryLine)")
         XCTAssertNil(result.failure)
         XCTAssertTrue(result.connected)
@@ -325,7 +326,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         try mac.server.trust(try phone.peer())
         let runner = RemoteICEProbeRunner(relay: RemoteRelayClient(config: config), identity: phone.identity,
                                           localID: phone.id)
-        let result = await runner.run(mac: mac.peer)
+        let result = await runner.run(mac: mac.peer, publicOnly: false)
         XCTAssertFalse(result.connected)
         XCTAssertEqual(result.failure, RemoteRelayError.notAllowed.localizedDescription)
         XCTAssertTrue(result.remoteCandidates.isEmpty, "没勾选的设备拿不到 Mac 的地址")
