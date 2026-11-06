@@ -56,6 +56,9 @@ actor HeldSessionCore {
         }
         return try await withCheckedThrowingContinuation { continuation in
             receiver.onReplayFinished = { result in
+                // 接入失败（如回包看不懂）时连接没人再持有：先关掉，免得写端 DispatchSource
+                // 没启动就随连接释放，libdispatch 直接崩（"Release of an inactive object"）。
+                if case .failure = result { connection.close() }
                 continuation.resume(with: result.map { (connection, $0) })
             }
             connection.onFrame = { receiver.receive($0) }
