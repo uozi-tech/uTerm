@@ -44,9 +44,9 @@ struct PermissionGuideEnvironment {
     var notificationStatus: @MainActor () async -> PermissionStatus
     var requestNotifications: @MainActor () async -> Void
     var screenCaptureGranted: @MainActor () async -> Bool
-    var requestScreenCapture: @MainActor () -> Void
+    var requestScreenCapture: @MainActor () async -> Void
     var postEventsGranted: @MainActor () async -> Bool
-    var requestPostEvents: @MainActor () -> Void
+    var requestPostEvents: @MainActor () async -> Void
     var loginItemNeedsApproval: @MainActor () async -> Bool
     /// 开始观察本地网络授权，返回停止观察的闭包。
     var observeLocalNetwork: @MainActor (_ update: @escaping @MainActor (PermissionStatus) -> Void) -> @MainActor () -> Void
@@ -122,10 +122,10 @@ final class PermissionGuideModel {
             await environment.requestNotifications()
         case .screenCapture:
             requestedThisRun.insert(kind)
-            environment.requestScreenCapture()
+            await environment.requestScreenCapture()
         case .accessibility:
             requestedThisRun.insert(kind)
-            environment.requestPostEvents()
+            await environment.requestPostEvents()
         case .localNetwork, .loginItem:
             environment.openSettings(kind)
         }

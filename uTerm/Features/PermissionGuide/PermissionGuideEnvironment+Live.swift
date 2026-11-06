@@ -17,9 +17,9 @@ extension PermissionGuideEnvironment {
             _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
         },
         screenCaptureGranted: { await RemoteDesktopPermissions.screenCaptureGranted() },
-        requestScreenCapture: { RemoteDesktopPermissions.requestScreenCapture() },
+        requestScreenCapture: { await RemoteDesktopPermissions.requestScreenCapture() },
         postEventsGranted: { await RemoteDesktopPermissions.postEventsGranted() },
-        requestPostEvents: { RemoteDesktopPermissions.requestPostEvents() },
+        requestPostEvents: { await RemoteDesktopPermissions.requestPostEvents() },
         loginItemNeedsApproval: {
             let identifier = BackgroundServiceSettings.loginItemIdentifier
             return await Task.detached {

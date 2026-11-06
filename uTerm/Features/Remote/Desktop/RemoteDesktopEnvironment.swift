@@ -69,11 +69,26 @@ enum RemoteDesktopPermissions {
     }
 
     /// 弹系统授权框（第一次）或什么都不做（已经拒绝过，只能去设置里开）。返回当前进程内的结果。
+    ///
+    /// 两个 `CGRequest…` 都同步等 tccd 把系统授权框处理完才返回，放在主线程上整个 app 会卡住
+    /// （授权引导点「授权」即卡死）。所以和 preflight 一样放到后台线程。
     @discardableResult
-    static func requestScreenCapture() -> Bool { CGRequestScreenCaptureAccess() }
+    static func requestScreenCapture() async -> Bool {
+        await timedRequest("屏幕录制") { CGRequestScreenCaptureAccess() }
+    }
 
     @discardableResult
-    static func requestPostEvents() -> Bool { CGRequestPostEventAccess() }
+    static func requestPostEvents() async -> Bool {
+        await timedRequest("辅助功能") { CGRequestPostEventAccess() }
+    }
+
+    private static func timedRequest(_ name: String, _ body: @escaping @Sendable () -> Bool) async -> Bool {
+        let start = ContinuousClock.now
+        let granted = await Task.detached(operation: body).value
+        let elapsed = ContinuousClock.now - start
+        AppLogger.info("授权请求「\(name)」耗时 \(elapsed)，结果 \(granted)", category: "permissions")
+        return granted
+    }
 
     static func openScreenCaptureSettings() {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
@@ -138,13 +153,17 @@ final class RemoteDesktopPermissionState {
     /// 系统授权框自带「打开系统设置」，这里不再另开设置页，免得两个窗口叠在一起。
     func requestScreenCapture() {
         requestedThisRun = true
-        RemoteDesktopPermissions.requestScreenCapture()
-        Task { await refresh() }
+        Task {
+            await RemoteDesktopPermissions.requestScreenCapture()
+            await refresh()
+        }
     }
 
     func requestPostEvents() {
         requestedThisRun = true
-        RemoteDesktopPermissions.requestPostEvents()
-        Task { await refresh() }
+        Task {
+            await RemoteDesktopPermissions.requestPostEvents()
+            await refresh()
+        }
     }
 }
