@@ -2,14 +2,16 @@ import Foundation
 
 /// 全部 `UserDefaults` / `@AppStorage` / iCloud KVS 键名的唯一出处（iOS 与 macOS 共用一份）。
 ///
+/// 不叫 `PreferenceKey`：那会在本模块里遮住 SwiftUI 的 `PreferenceKey` 协议。
+///
 /// **字符串值一个字都不能改**：已安装用户的设置就存在这些键下，跨设备同步（iCloud KVS、
 /// 局域网快照）也按键名对齐——改了等于把用户设置清零、并让两端各说各话。
-/// `PreferenceKeyTests` 把每个值钉死；`PreferenceKeyLintTests` 拦生产代码里新写的裸
+/// `DefaultsKeyTests` 把每个值钉死；`DefaultsKeyLintTests` 拦生产代码里新写的裸
 /// `@AppStorage("…")`。新增键加在这里，再在用到的地方引用常量。
 ///
 /// 两端共用同名设置时就是**同一个键**（如 `activeProviderID`、`agentSafety`、`appearancePreference`），
 /// 默认值有意不同的见各常量注释（目前只有 `requireAuthAtLaunch`）。
-nonisolated enum PreferenceKey {
+nonisolated enum DefaultsKey {
 
     // MARK: - 跨设备同步（`SharedPreferencesSync` 的清单，iCloud KVS + 局域网）
 

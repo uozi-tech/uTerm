@@ -9,9 +9,9 @@ import Observation
 @Observable
 final class RemoteControlSettings {
     enum Keys {
-        static let enabled = PreferenceKey.remoteEnabled
-        static let desktopEnabled = PreferenceKey.remoteDesktopEnabled
-        static let localShellEnabled = PreferenceKey.remoteLocalShellEnabled
+        static let enabled = DefaultsKey.remoteEnabled
+        static let desktopEnabled = DefaultsKey.remoteDesktopEnabled
+        static let localShellEnabled = DefaultsKey.remoteLocalShellEnabled
     }
 
     @ObservationIgnored private let defaults: UserDefaults

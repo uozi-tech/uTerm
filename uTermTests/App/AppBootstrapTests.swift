@@ -61,10 +61,10 @@ final class AppBootstrapTests: XCTestCase {
 
     func testLockFollowsStoredPreference() {
         let core = startReceiverCore()
-        defaults.set(true, forKey: PreferenceKey.requireAuthAtLaunch)
+        defaults.set(true, forKey: DefaultsKey.requireAuthAtLaunch)
         XCTAssertEqual(AppBootstrap.finishCore(core, authenticator: FakeBiometricAuthenticator(),
                                                defaults: defaults).state, .locked)
-        defaults.set(false, forKey: PreferenceKey.requireAuthAtLaunch)
+        defaults.set(false, forKey: DefaultsKey.requireAuthAtLaunch)
         XCTAssertEqual(AppBootstrap.finishCore(core, authenticator: FakeBiometricAuthenticator(),
                                                defaults: defaults).state, .unlocked)
     }

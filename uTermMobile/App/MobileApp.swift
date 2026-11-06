@@ -12,7 +12,7 @@ struct MobileApp: App {
     /// 仅用于向 APNs 注册远程通知（CloudKit 静默推送的送达前提，见 `MobileAppDelegate`）。
     @UIApplicationDelegateAdaptor(MobileAppDelegate.self) private var appDelegate
 
-    @AppStorage(PreferenceKey.appearancePreference)
+    @AppStorage(DefaultsKey.appearancePreference)
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
     @State private var lock: AppLockModel

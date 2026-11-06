@@ -17,12 +17,12 @@ struct TerminalHostView: NSViewRepresentable {
     /// 这个终端是不是当前该接收键盘输入的那一个，见 `TerminalContainerView.isActive`。
     var isActive = true
 
-    @AppStorage(PreferenceKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
-    @AppStorage(PreferenceKey.terminalCursorBlink)  private var cursorBlink: Bool = false
+    @AppStorage(DefaultsKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
+    @AppStorage(DefaultsKey.terminalCursorBlink)  private var cursorBlink: Bool = false
     /// Small live scrollback as a per-pane memory bound.
     /// 3000 lines ≈ 5MB/pane vs 24MB at 10k — meaningful win at 6 panes.
-    @AppStorage(PreferenceKey.terminalScrollback)   private var scrollback: Int = 3_000
-    @AppStorage(PreferenceKey.terminalCopyOnSelect) private var copyOnSelect: Bool = false
+    @AppStorage(DefaultsKey.terminalScrollback)   private var scrollback: Int = 3_000
+    @AppStorage(DefaultsKey.terminalCopyOnSelect) private var copyOnSelect: Bool = false
 
     /// app 主题（解钉后即工作区/SFTP 窗口的外观）。变化会触发 updateNSView 重 apply。
     @Environment(\.colorScheme) private var appColorScheme

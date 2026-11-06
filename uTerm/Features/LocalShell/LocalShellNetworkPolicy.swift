@@ -7,7 +7,7 @@ import AppKit
 /// 责任进程在起 shell 时就定了，改了之后只影响新开的终端。
 enum LocalShellNetworkPolicy {
     /// 设置页也读写这个键。没有值 = 还没问过。
-    static let key = PreferenceKey.localShellKeepsLANConnections
+    static let key = DefaultsKey.localShellKeepsLANConnections
 
     static func keepsLANConnections(in defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: key)

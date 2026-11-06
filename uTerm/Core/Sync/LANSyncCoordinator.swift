@@ -87,10 +87,10 @@ final class LANSyncCoordinator {
     private var pendingConnectionID: ObjectIdentifier?
     private var syncGeneration = 0
 
-    private static let deviceIDKey = PreferenceKey.lanSyncDeviceID
-    private static let hostPairingCodeKey = PreferenceKey.lanSyncHostPairingCode
-    private static let mobilePairingCodeKey = PreferenceKey.lanSyncPairingCode
-    private static let receiverActivatedKey = PreferenceKey.lanSyncReceiverActivated
+    private static let deviceIDKey = DefaultsKey.lanSyncDeviceID
+    private static let hostPairingCodeKey = DefaultsKey.lanSyncHostPairingCode
+    private static let mobilePairingCodeKey = DefaultsKey.lanSyncPairingCode
+    private static let receiverActivatedKey = DefaultsKey.lanSyncReceiverActivated
 
     private(set) var status: Status = .stopped
     private(set) var lastSyncedAt: Date?

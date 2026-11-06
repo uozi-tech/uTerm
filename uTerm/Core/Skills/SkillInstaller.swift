@@ -405,7 +405,7 @@ nonisolated extension SkillInstaller {
 /// `temporary-exception.files.home-relative-path.read-write` 的 `/.local/bin/`。
 nonisolated struct BinLinkInstaller: Sendable {
     /// 设置页开关落的 `UserDefaults` 键。
-    static let enabledDefaultsKey = PreferenceKey.controlLinkToLocalBin
+    static let enabledDefaultsKey = DefaultsKey.controlLinkToLocalBin
     static let executableName = "utermctl"
 
     let homeDirectoryURL: URL

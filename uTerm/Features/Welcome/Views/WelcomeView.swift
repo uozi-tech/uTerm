@@ -22,7 +22,7 @@ struct WelcomeView: View {
     @Query(sort: \ServerProfile.sortOrder) private var allProfiles: [ServerProfile]
     @Query private var groups: [ServerGroup]
 
-    @AppStorage(PreferenceKey.startupBehavior)
+    @AppStorage(DefaultsKey.startupBehavior)
     private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
 
     @State private var filter = ServerFilter()

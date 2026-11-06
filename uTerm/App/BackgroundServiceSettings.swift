@@ -32,8 +32,8 @@ final class BackgroundServiceSettings {
 
     static let loginItemIdentifier = "com.uozi.uTerm.BackgroundLauncher"
     enum Keys {
-        static let launchAtLogin = PreferenceKey.backgroundLaunchAtLogin
-        static let allowOnDemandLaunch = PreferenceKey.backgroundAllowOnDemandLaunch
+        static let launchAtLogin = DefaultsKey.backgroundLaunchAtLogin
+        static let allowOnDemandLaunch = DefaultsKey.backgroundAllowOnDemandLaunch
     }
 
     @ObservationIgnored private let defaults: UserDefaults

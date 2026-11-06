@@ -9,7 +9,7 @@ import class SwiftTerm.TerminalView
 /// 不一定一致，只按 VM 实测写的布局在真机上可能不生效（2026-11-03：真机竖屏标签条没进
 /// 状态栏那一行、右格终端内容右移约 100pt）。打开方式：设置 › 长按「版本」一行。
 enum MLayoutDiagnostics {
-    static let key = PreferenceKey.debugLayoutDiagnostics
+    static let key = DefaultsKey.debugLayoutDiagnostics
 }
 
 /// 根视图挂一次：开关打开时在左下角显示诊断文本，每秒刷新。

@@ -98,7 +98,7 @@ nonisolated final class ConnectTimeline: Sendable {
 ///     defaults write com.uozi.uTerm sshTimingProbe -bool YES
 nonisolated enum ConnectProbe {
     static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: PreferenceKey.sshTimingProbe)
+        UserDefaults.standard.bool(forKey: DefaultsKey.sshTimingProbe)
     }
 
     /// getaddrinfo 的耗时与地址族分布，如 `dns=3ms(v4:1,v6:0)`。

@@ -248,7 +248,7 @@ struct WSCanvasTab<Leading: View>: View {
 /// 用户正在拖动时也一样，而系统拖动按增量继续，光标与窗口的相对位置就一直错开，严重时
 /// 光标落到窗口外。AppKit 首次用到时才读取并缓存，所以要在创建任何窗口之前调用。
 enum WindowMoveBehavior {
-    nonisolated static let screenLayoutAdjustKey = PreferenceKey.screenLayoutAdjustOnWindowMove
+    nonisolated static let screenLayoutAdjustKey = DefaultsKey.screenLayoutAdjustOnWindowMove
 
     nonisolated static func disableScreenLayoutAdjustment() {
         UserDefaults.standard.register(defaults: [screenLayoutAdjustKey: false])
@@ -319,7 +319,7 @@ struct WindowDragHandle: NSViewRepresentable {
             guard let window else { return }
             // 双击标题栏遵循系统「双击标题栏时」偏好（最小化 / 缩放 / 不操作）。
             if event.clickCount == 2 {
-                switch UserDefaults.standard.string(forKey: PreferenceKey.appleActionOnDoubleClick) {
+                switch UserDefaults.standard.string(forKey: DefaultsKey.appleActionOnDoubleClick) {
                 case "Minimize": window.miniaturize(nil)
                 case "None":     break
                 default:         window.zoom(nil)   // 缺省 = Maximize/Zoom

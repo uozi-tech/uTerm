@@ -62,14 +62,14 @@ final class TestModelConfigurationLintTests: XCTestCase {
         let sync = try String(
             contentsOf: Self.repoRoot.appendingPathComponent("uTerm/Core/Sync/SharedPreferencesSync.swift"),
             encoding: .utf8)
-        // 清单写的是 `PreferenceKey.xxx`，键名的字面量在键名表里，按常量名查回去。
+        // 清单写的是 `DefaultsKey.xxx`，键名的字面量在键名表里，按常量名查回去。
         let table = try String(
-            contentsOf: Self.repoRoot.appendingPathComponent("uTerm/Core/Preferences/PreferenceKey.swift"),
+            contentsOf: Self.repoRoot.appendingPathComponent("uTerm/Core/Preferences/DefaultsKey.swift"),
             encoding: .utf8)
         let values = Dictionary(
             table.matches(of: /static let (\w+) = "([^"]+)"/).map { (String($0.output.1), String($0.output.2)) },
             uniquingKeysWith: { first, _ in first })
-        let keys = sync.matches(of: /Definition\(key: PreferenceKey\.(\w+)/).compactMap { values[String($0.output.1)] }
+        let keys = sync.matches(of: /Definition\(key: DefaultsKey\.(\w+)/).compactMap { values[String($0.output.1)] }
         XCTAssertGreaterThan(keys.count, 10, "夹具失效：应该能从同步清单读到十几个键")
 
         var offenders: [String] = []

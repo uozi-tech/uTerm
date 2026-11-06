@@ -1,16 +1,16 @@
 import Foundation
 import XCTest
 
-/// 生产源码 lint：偏好键名只许出自 `PreferenceKey`（`uTerm/Core/Preferences/PreferenceKey.swift`）。
+/// 生产源码 lint：偏好键名只许出自 `DefaultsKey`（`uTerm/Core/Preferences/DefaultsKey.swift`）。
 ///
 /// ## 为什么
 ///
 /// 键名散在两端各写一份字面量时，一边手滑（或「顺手改个更好的名字」）编译期毫无信号，
 /// 结果是那项设置在该端被清零、iCloud KVS / 局域网同步按键名对不上——两端各说各话。
 /// 集中到一张表后再用这条 lint 拦住新写的裸字面量。
-final class PreferenceKeyLintTests: XCTestCase {
+final class DefaultsKeyLintTests: XCTestCase {
 
-    /// 还没接线到 `PreferenceKey` 的文件（本轮别的改动在动它们）。接好后从这里删掉。
+    /// 还没接线到 `DefaultsKey` 的文件（本轮别的改动在动它们）。接好后从这里删掉。
     private static let pendingFiles: Set<String> = [
         "uTerm/Features/Files/FileBrowserModel.swift",
     ]
@@ -20,7 +20,7 @@ final class PreferenceKeyLintTests: XCTestCase {
         XCTAssertTrue(offenders.isEmpty, """
             生产代码里有裸的 @AppStorage("…") 键名（\(offenders.count) 处）：
             \(offenders.joined(separator: "\n"))
-            把键加进 PreferenceKey（值保持原样），这里改成 @AppStorage(PreferenceKey.xxx)。
+            把键加进 DefaultsKey（值保持原样），这里改成 @AppStorage(DefaultsKey.xxx)。
             """)
     }
 
@@ -31,7 +31,7 @@ final class PreferenceKeyLintTests: XCTestCase {
         XCTAssertTrue(offenders.isEmpty, """
             生产代码里有裸的 UserDefaults 键名（\(offenders.count) 处）：
             \(offenders.joined(separator: "\n"))
-            把键加进 PreferenceKey（值保持原样），这里改成 forKey: PreferenceKey.xxx。
+            把键加进 DefaultsKey（值保持原样），这里改成 forKey: DefaultsKey.xxx。
             """)
     }
 
@@ -41,9 +41,9 @@ final class PreferenceKeyLintTests: XCTestCase {
         XCTAssertGreaterThan(files.count, 300)
         XCTAssertTrue(files.contains { $0.path.contains("/uTermMobile/") })
         let uses = try files.reduce(0) { total, file in
-            total + (try String(contentsOf: file, encoding: .utf8)).matches(of: /@AppStorage\(PreferenceKey\./).count
+            total + (try String(contentsOf: file, encoding: .utf8)).matches(of: /@AppStorage\(DefaultsKey\./).count
         }
-        XCTAssertGreaterThan(uses, 20, "夹具失效：应当有二十多处 @AppStorage(PreferenceKey.…)")
+        XCTAssertGreaterThan(uses, 20, "夹具失效：应当有二十多处 @AppStorage(DefaultsKey.…)")
     }
 
     // MARK: - 扫描
