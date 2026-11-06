@@ -25,6 +25,7 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
     private static let identityAccount = "identity"
     private static let peersAccount = "trustedPeers"
     private static let blockedAccount = "blockedPeers"
+    private static let relayHostKeyAccount = "relayHostKey"
 
     init(storage: any RemoteSecretStorage = RemoteKeychainStorage()) {
         self.storage = storage
@@ -43,6 +44,20 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         let key = Curve25519.KeyAgreement.PrivateKey()
         try storage.save(key.rawRepresentation, account: Self.identityAccount)
         cachedIdentity = key
+        return key
+    }
+
+    /// 这台 Mac 在中继上的身份（P-256）。中继第一次见到它就和设备 ID 绑定，别的成员顶替不了这台 Mac。
+    /// 长期密钥是 X25519，只能协商不能签名，所以单独一把。
+    func relayHostKey() throws -> P256.Signing.PrivateKey {
+        lock.lock()
+        defer { lock.unlock() }
+        if let data = try storage.load(Self.relayHostKeyAccount),
+           let key = try? P256.Signing.PrivateKey(rawRepresentation: data) {
+            return key
+        }
+        let key = P256.Signing.PrivateKey()
+        try storage.save(key.rawRepresentation, account: Self.relayHostKeyAccount)
         return key
     }
 

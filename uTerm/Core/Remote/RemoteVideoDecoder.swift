@@ -45,10 +45,16 @@ nonisolated final class RemoteVideoDecoder {
         awaitingKeyframe = true
     }
 
+    /// 前面有帧没收到，参考链断了。在关键帧或 LTR 刷新帧之前不能再解：实测把参考断掉的 P 帧喂给 HEVC 硬解，
+    /// 它会一直报错（-12909），连之后的 LTR 刷新帧也解不开，所以必须跳过，不能指望解码器自己报错再恢复。
+    func markReferenceLost() {
+        awaitingKeyframe = true
+    }
+
     func decode(_ frame: RemoteDesktopFrame) throws -> CVPixelBuffer {
         if frame.isKeyframe {
             try prepare(for: frame)
-        } else if awaitingKeyframe || session == nil {
+        } else if session == nil || (awaitingKeyframe && !frame.flags.contains(.ltrRefresh)) {
             throw RemoteVideoDecodeError.needsKeyframe
         }
         guard let session, let format else { throw RemoteVideoDecodeError.needsKeyframe }

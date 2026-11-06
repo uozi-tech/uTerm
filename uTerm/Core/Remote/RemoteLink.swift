@@ -13,11 +13,17 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     }
 
     let queue: DispatchQueue
-    private let connection: NWConnection
+    private let transport: any RemoteTransport
 
     private var frames = RemoteFrameBuffer()
     private var sendCipher: RemoteCipher?
     private var receiveCipher: RemoteCipher?
+    /// 公网路径上包住握手帧的密钥（见 `RemoteHandshakeKeys`）。局域网为 nil，握手帧是明文。
+    private var handshakeSendCipher: RemoteCipher?
+    private var handshakeReceiveCipher: RemoteCipher?
+    private var pingSentAt: DispatchTime?
+    /// 最近一次 ping 的往返时间（秒，只在 `queue` 上读）。
+    private(set) var latestRoundTrip: TimeInterval?
     private var readyWaiter: CheckedContinuation<Void, Error>?
     private var helloWaiter: CheckedContinuation<Data, Error>?
     private var isReady = false
@@ -48,9 +54,13 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         return NWParameters(tls: nil, tcp: tcp)
     }
 
-    init(connection: NWConnection, label: String = "com.uozi.uTerm.remote.link") {
-        self.connection = connection
+    init(transport: any RemoteTransport, label: String = "com.uozi.uTerm.remote.link") {
+        self.transport = transport
         self.queue = DispatchQueue(label: label, qos: .userInteractive)
+    }
+
+    convenience init(connection: NWConnection, label: String = "com.uozi.uTerm.remote.link") {
+        self.init(transport: RemoteNWTransport(connection: connection), label: label)
     }
 
     /// 回调都在 `queue` 上执行。必须在 `establish` 之前设好。
@@ -73,8 +83,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         role: RemoteKeySchedule.Role,
         hello: RemoteHello,
         staticKey: Curve25519.KeyAgreement.PrivateKey,
-        ephemeralKey: Curve25519.KeyAgreement.PrivateKey
+        ephemeralKey: Curve25519.KeyAgreement.PrivateKey,
+        handshakeKeys: RemoteHandshakeKeys? = nil
     ) async throws -> Established {
+        if let handshakeKeys {
+            queue.sync {
+                handshakeSendCipher = RemoteCipher(key: handshakeKeys.send)
+                handshakeReceiveCipher = RemoteCipher(key: handshakeKeys.receive)
+            }
+        }
         queue.asyncAfter(deadline: .now() + .milliseconds(Int(RemoteConstants.handshakeTimeout.components.seconds * 1000))) {
             [weak self] in
             guard let self, !self.isEstablished else { return }
@@ -107,6 +124,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 }
                 self.sendCipher = RemoteCipher(key: keys.send)
                 self.receiveCipher = RemoteCipher(key: keys.receive)
+                (self.transport as? RemoteP2PTransport)?.installMediaKeys(
+                    .media(sessionSend: keys.send, sessionReceive: keys.receive))
                 self.isEstablished = true
                 // 对端可能在我们装好密钥之前就发来了第一帧密文，它们还躺在缓冲里。
                 self.processFrames()
@@ -126,16 +145,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                     return
                 }
                 self.readyWaiter = continuation
-                self.connection.stateUpdateHandler = { [weak self] state in
-                    self?.handleState(state)
+                self.transport.start(queue: self.queue) { [weak self] event in
+                    self?.handleEvent(event)
                 }
-                self.connection.start(queue: self.queue)
             }
         }
     }
 
-    private func handleState(_ state: NWConnection.State) {
-        switch state {
+    private func handleEvent(_ event: RemoteTransportEvent) {
+        switch event {
         case .ready:
             guard !isReady else { return }
             isReady = true
@@ -149,8 +167,6 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             if !isReady { fail(error) }
         case .cancelled:
             fail(closeError)
-        default:
-            break
         }
     }
 
@@ -167,12 +183,22 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         }
     }
 
+    private func openHandshakeFrame(_ frame: Data) throws -> Data {
+        guard handshakeReceiveCipher != nil else { return frame }
+        return try handshakeReceiveCipher!.open(frame)
+    }
+
     private func sendPlain(_ data: Data) throws {
-        let framed = try RemoteFrameBuffer.frame(data)
         queue.async { [self] in
-            self.connection.send(content: framed, completion: .contentProcessed { [weak self] error in
-                if let error { self?.fail(error) }
-            })
+            do {
+                let content = self.handshakeSendCipher != nil ? try self.handshakeSendCipher!.seal(data) : data
+                let framed = try RemoteFrameBuffer.frame(content)
+                self.transport.send(framed) { [weak self] error in
+                    if let error { self?.fail(error) }
+                }
+            } catch {
+                self.fail(error)
+            }
         }
     }
 
@@ -184,9 +210,18 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     }
 
     /// 在 `queue` 上直接发，不再跳一次队列。
-    func sendOnQueue(_ message: RemoteMessage) {
+    /// - Parameters:
+    ///   - countsTowardBackpressure: 计入 `canSendMore` 的在途量吗。视频有自己的流控，不计：一个关键帧就有几百 KB，
+    ///     算进来的话终端会以为链路堵了，改发快照。
+    ///   - completion: 链路接走这段数据后在 `queue` 上调用。
+    func sendOnQueue(_ message: RemoteMessage, countsTowardBackpressure: Bool = true,
+                     completion: (@Sendable (Error?) -> Void)? = nil) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard !isClosed, sendCipher != nil else { return }
+        guard !isClosed, sendCipher != nil else {
+            completion?(RemoteProtocolError.closed)
+            return
+        }
+        if message.kind == .ping { pingSentAt = .now() }
         let framed: Data
         do {
             framed = try RemoteFrameBuffer.frame(try sendCipher!.seal(message.encoded()))
@@ -194,10 +229,11 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             fail(error)
             return
         }
-        let count = framed.count
+        let count = countsTowardBackpressure ? framed.count : 0
         lastSent = .now()
         inflightBytes += count
-        connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+        transport.send(framed) { [weak self] error in
+            defer { completion?(error) }
             guard let self else { return }
             let wasBlocked = self.inflightBytes > RemoteConstants.maxInflightBytes
             self.inflightBytes -= count
@@ -206,7 +242,17 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             } else if wasBlocked && self.inflightBytes <= RemoteConstants.maxInflightBytes {
                 self.onWritable?()
             }
-        })
+        }
+    }
+
+    /// 公网直连时视频走的不可靠通道。其余路径为 nil，视频还是普通消息。
+    var videoChannel: (any RemoteVideoDatagramChannel)? {
+        transport as? any RemoteVideoDatagramChannel
+    }
+
+    /// 链路现状（公网直连才有）。诊断和测试用。
+    var datagramLinkState: RemoteLinkState? {
+        (transport as? RemoteP2PTransport)?.linkState
     }
 
     var canSendMore: Bool {
@@ -215,7 +261,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     }
 
     private func receiveNext() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 512 * 1024) { [weak self] data, _, isComplete, error in
+        transport.receive(maximumLength: 512 * 1024) { [weak self] data, isComplete, error in
             guard let self, !self.isClosed else { return }
             if let data {
                 self.lastReceived = .now()
@@ -247,11 +293,20 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             }
             if let waiter = helloWaiter {
                 helloWaiter = nil
-                waiter.resume(returning: frame)
+                do {
+                    waiter.resume(returning: try openHandshakeFrame(frame))
+                } catch {
+                    waiter.resume(throwing: error)
+                }
                 continue
             }
             do {
                 let message = try RemoteMessage(decoding: try receiveCipher!.open(frame))
+                if message.kind == .pong, let pingSentAt {
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    latestRoundTrip = TimeInterval(now &- pingSentAt.uptimeNanoseconds) / 1_000_000_000
+                    self.pingSentAt = nil
+                }
                 onMessage?(message)
             } catch {
                 fail(error)
@@ -345,9 +400,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 self.fail(error)
                 return
             }
-            self.connection.send(content: framed, completion: .contentProcessed { _ in
+            self.transport.send(framed) { _ in
                 self.fail(error)
-            })
+            }
         }
     }
 
@@ -361,8 +416,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         readyWaiter = nil
         helloWaiter?.resume(throwing: error ?? RemoteProtocolError.closed)
         helloWaiter = nil
-        connection.stateUpdateHandler = nil
-        connection.cancel()
+        transport.cancel()
         let handler = onClose
         onMessage = nil
         onClose = nil

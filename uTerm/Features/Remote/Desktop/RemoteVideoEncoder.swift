@@ -8,6 +8,8 @@ nonisolated struct RemoteEncodedFrame: Sendable {
     var isKeyframe: Bool
     var parameterSets: [Data]
     var data: Data
+    /// 这一帧是长期参考帧，手机确认后要交回 `acknowledgeLTR`。
+    var ltrToken: UInt64? = nil
 }
 
 nonisolated enum RemoteVideoEncoderError: Error, Equatable {
@@ -52,16 +54,20 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     let height: Int
     /// 实际是否开上了低延迟码控（老机器不支持时退回普通模式）。
     let isLowLatency: Bool
+    /// 开上了长期参考帧（只有低延迟模式支持）。
+    let usesLTR: Bool
     private let session: VTCompressionSession
     private let lock = NSLock()
+    private var acknowledgedLTR: [UInt64] = []
     private var refineFramesInFlight = 0
     /// 主流平时的 QP 上限；精修帧编完恢复到它。
     private var streamMaxQP = RemoteVideoEncoder.unrestrictedQP
 
     /// - Parameter tenBit: HEVC Main10。低延迟模式认它，编码耗时不变，同码率画质高 1.4–2.6 dB（调研 §14）。
     ///   H.264 没有 10-bit 硬编，忽略。
+    /// - Parameter ltr: 长期参考帧。丢帧时可以发一个只参考已确认帧的 P 帧恢复，比关键帧小 5–8 倍（调研 §15）。
     init(codec: RemoteVideoCodec, width: Int, height: Int, bitrate: Int, frameRate: Int, tenBit: Bool = false,
-         purpose: Purpose = .stream) throws {
+         purpose: Purpose = .stream, ltr: Bool = false) throws {
         self.codec = codec
         self.width = width
         self.height = height
@@ -75,6 +81,8 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         guard status == noErr, let created else { throw RemoteVideoEncoderError.create(status) }
         session = created
         isLowLatency = lowLatency
+        usesLTR = ltr && lowLatency
+            && VTSessionSetProperty(created, key: kVTCompressionPropertyKey_EnableLTR, value: kCFBooleanTrue) == noErr
         set(kVTCompressionPropertyKey_RealTime, (purpose == .stream ? kCFBooleanTrue : kCFBooleanFalse)!)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, frameRate as CFNumber)
@@ -142,8 +150,17 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         if apply { set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber) }
     }
 
+    /// 手机解出了这个长期参考帧。下一次编码时告诉编码器。
+    func acknowledgeLTR(_ token: UInt64) {
+        lock.lock()
+        acknowledgedLTR.append(token)
+        lock.unlock()
+    }
+
     /// 编一帧。`refine` = 静止精修：这一帧临时放开画质（压低 QP 上限），编完恢复。
-    func encode(_ image: CVPixelBuffer, presentationNanos: UInt64, forceKeyframe: Bool, refine: Bool,
+    /// `forceLTRRefresh` = 只参考已确认的长期参考帧（一个都没确认时编码器会出关键帧）。
+    func encode(_ image: CVPixelBuffer, presentationNanos: UInt64, forceKeyframe: Bool, forceLTRRefresh: Bool = false,
+                refine: Bool,
                 completion: @escaping @Sendable (Result<RemoteEncodedFrame, RemoteVideoEncoderError>) -> Void) {
         if refine {
             lock.lock()
@@ -152,8 +169,19 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
             lock.unlock()
             set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber)
         }
-        let properties: CFDictionary? = forceKeyframe
-            ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary : nil
+        var options: [CFString: Any] = [:]
+        if forceKeyframe { options[kVTEncodeFrameOptionKey_ForceKeyFrame] = kCFBooleanTrue }
+        if usesLTR {
+            lock.lock()
+            let acknowledged = acknowledgedLTR
+            acknowledgedLTR = []
+            lock.unlock()
+            if !acknowledged.isEmpty {
+                options[kVTEncodeFrameOptionKey_AcknowledgedLTRTokens] = acknowledged.map { $0 as NSNumber } as CFArray
+            }
+            if forceLTRRefresh, !forceKeyframe { options[kVTEncodeFrameOptionKey_ForceLTRRefresh] = kCFBooleanTrue }
+        }
+        let properties: CFDictionary? = options.isEmpty ? nil : options as CFDictionary
         let pts = CMTime(value: CMTimeValue(presentationNanos), timescale: 1_000_000_000)
         let codec = self.codec
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: image, presentationTimeStamp: pts,
@@ -202,16 +230,20 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         }
         guard status == kCMBlockBufferNoErr else { return nil }
         var isKeyframe = true
+        var ltrToken: UInt64?
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[CFString: Any]],
-           let first = attachments.first, let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool {
-            isKeyframe = !notSync
+           let first = attachments.first {
+            if let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool { isKeyframe = !notSync }
+            if let token = first[kVTSampleAttachmentKey_RequireLTRAcknowledgementToken] as? NSNumber {
+                ltrToken = token.uint64Value
+            }
         }
         var parameterSets: [Data] = []
         if isKeyframe, let format = CMSampleBufferGetFormatDescription(sample) {
             parameterSets = Self.parameterSets(format, codec: codec)
             if parameterSets.isEmpty { return nil }
         }
-        return RemoteEncodedFrame(isKeyframe: isKeyframe, parameterSets: parameterSets, data: data)
+        return RemoteEncodedFrame(isKeyframe: isKeyframe, parameterSets: parameterSets, data: data, ltrToken: ltrToken)
     }
 
     static func parameterSets(_ format: CMFormatDescription, codec: RemoteVideoCodec) -> [Data] {

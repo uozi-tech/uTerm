@@ -139,7 +139,7 @@ APPCAST_DMG_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).dmg
 APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
-.PHONY: help test-fast test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
+.PHONY: help test-fast test-relay-e2e test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	verify-distribution-signing notarize staple \
@@ -161,6 +161,7 @@ help:
 	@printf '%s\n' '  make test-mobile                       Run uTermMobileTests on an iOS Simulator'
 	@printf '%s\n' '  make test-fast                         Run tests in parallel, recheck failures serially'
 	@printf '%s\n' '  make test-mobile-fast                  Same for uTermMobileTests'
+	@printf '%s\n' '  make test-relay-e2e                    Run end-to-end tests through a real uterm-relay'
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
 	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
 	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
@@ -294,6 +295,17 @@ test-fast:
 	scripts/test-parallel.sh "$(SCHEME)" "$(DESTINATION)" "$(TEST_WORKERS)" \
 		-project "$(PROJECT)" \
 		-configuration "$(TEST_CONFIGURATION)" \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-enableCodeCoverage NO \
+		$(PACKAGE_ARGS)
+
+# 起一个真实的 uterm-relay 跑经它的端到端用例。中继自身的测试：cd relay && GOWORK=off go test ./...
+test-relay-e2e:
+	scripts/test-relay-e2e.sh \
+		-project "$(PROJECT)" \
+		-scheme "$(SCHEME)" \
+		-configuration "$(TEST_CONFIGURATION)" \
+		-destination "$(DESTINATION)" \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)

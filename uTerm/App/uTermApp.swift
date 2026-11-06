@@ -105,7 +105,9 @@ struct uTermApp: App {
         // 测试宿主不碰真实的 iCloud 名册：它和正式版共用身份与设置，写进去会以正式版的名义同步出去。
         let remoteServer = RemoteHostServer(registry: terminalRegistry,
                                             roster: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteCloudRoster(),
+                                            relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
                                             desktopEnvironment: .live(settings: remoteSettings))
+        remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)
@@ -138,6 +140,8 @@ struct uTermApp: App {
             }
             remoteSettings.observe { settings in
                 if settings.isEnabled { remoteServer.start() } else { remoteServer.stop() }
+                remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
+                                                  keepAwake: settings.keepsAwakeForInternet)
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
             }
             let server = controlServer

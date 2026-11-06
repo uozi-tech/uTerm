@@ -8,6 +8,7 @@ struct RemoteMacSection: View {
     @Environment(MobileStore.self) private var store: MobileStore?
     @State private var selected: RemoteMacDirectory.Mac?
     @State private var scanning = false
+    @State private var diagnosing: RemoteMacDirectory.Mac?
     @Environment(\.mAccent) private var accent
     /// 刚扫码配上、此刻还不在线的 Mac：它一上线就自动打开。
     @State private var awaitingMac: String?
@@ -46,12 +47,25 @@ struct RemoteMacSection: View {
         .sheet(item: $selected, onDismiss: { directory.refreshPaired() }) { mac in
             RemoteMacSheet(client: directory.client(for: mac)) { directory.forget(mac) }
         }
+        .sheet(item: $diagnosing) { mac in
+            NavigationStack {
+                RemoteNetworkDiagnosticsScreen(preferredMacID: mac.id)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("关闭") { diagnosing = nil }
+                        }
+                    }
+            }
+        }
         .sheet(isPresented: $scanning) {
-            RemotePairingScanner { invitation in
+            RemotePairingScanner(onScanned: { invitation in
                 scanning = false
                 guard let mac = try? directory.pair(with: invitation) else { return }
                 if mac.isOnline { selected = mac } else { awaitingMac = mac.id }
-            }
+            }, onRelayConfig: { config in
+                scanning = false
+                directory.importRelayConfig(config)
+            })
         }
         .onChange(of: directory.macs) { _, macs in
             guard let awaitingMac, let mac = macs.first(where: { $0.id == awaitingMac }), mac.isOnline else { return }
@@ -70,10 +84,20 @@ struct RemoteMacSection: View {
         .buttonStyle(.borderless)
     }
 
+    private func rowValue(_ mac: RemoteMacDirectory.Mac) -> String? {
+        if !mac.isOnline { return "不在线" }
+        return mac.endpoint == nil ? "公网" : nil
+    }
+
     private func macRow(_ mac: RemoteMacDirectory.Mac, last: Bool) -> some View {
         MInsetRow(icon: "mac", iconColor: mac.isOnline ? nil : M.text3, label: mac.name,
-                  value: mac.isOnline ? nil : "不在线", chevron: mac.isOnline, last: last,
+                  value: rowValue(mac), chevron: mac.isOnline, last: last,
                   onTap: mac.isOnline ? { selected = mac } : nil)
+            .mContextMenu {
+                if mac.isOnRelay {
+                    Button { diagnosing = mac } label: { Label("网络诊断", systemImage: "stethoscope") }
+                }
+            }
     }
 }
 
@@ -139,6 +163,21 @@ struct RemoteMacSheet: View {
             }
         case .connected:
             sessions
+                .safeAreaInset(edge: .top, spacing: 0) { pathBadge }
+        }
+    }
+
+    /// 这条连接走哪条路、延迟多少。中继上卡顿时用户一眼能看出原因。
+    @ViewBuilder private var pathBadge: some View {
+        if let path = client.path {
+            HStack(spacing: 6) {
+                Text(path.label)
+                if let millis = client.roundTripMillis { Text("\(millis) ms") }
+            }
+            .font(M.sans(12))
+            .foregroundStyle(M.text3)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
         }
     }
 

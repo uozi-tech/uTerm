@@ -67,6 +67,19 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopEnabled = "remote.desktopEnabled"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
     static let remoteDeviceID = "remote.deviceID"
+    /// macOS：允许经公网（中继 / 打洞）接入。
+    static let remoteInternetEnabled = "remote.internetEnabled"
+    /// macOS：允许经公网接入的设备 ID。
+    static let remoteInternetDevices = "remote.internetDevices"
+    /// macOS：开着公网接入时保持唤醒。
+    static let remoteKeepAwakeForInternet = "remote.keepAwakeForInternet"
+    /// iOS：只走公网（网络诊断）。
+    static let remoteInternetOnly = "remote.internetOnly"
+    /// iOS：网络诊断的记录、备注、轮数与测试项。
+    static let remotePathMatrixLog = "remote.pathMatrixLog"
+    static let remoteIceProbeNote = "remote.iceProbeNote"
+    static let remotePathMatrixRounds = "remote.pathMatrixRounds"
+    static let remotePathMatrixModes = "remote.pathMatrixModes"
     /// iOS：用户点过「控制我的 Mac」之后才在启动时浏览（要「本地网络」授权）。
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。
@@ -89,6 +102,8 @@ nonisolated enum DefaultsKey {
     static let sshTimingProbe = "sshTimingProbe"
     static let remoteDebugOpenDesktop = "RemoteDebugOpenDesktop"
     static let remoteDebugEndpoint = "RemoteDebugEndpoint"
+    /// iOS 调试：启动即对第一台在中继上的 Mac 跑 N 轮链路矩阵，结果打到标准输出。
+    static let remoteDebugPathMatrix = "RemoteDebugPathMatrix"
     static let debugLayoutDiagnostics = "debug.layoutDiagnostics"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）

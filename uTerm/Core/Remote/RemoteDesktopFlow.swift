@@ -161,6 +161,7 @@ nonisolated struct RemoteRateController: Equatable {
     private var lastIncrease: UInt64
     /// 最近 `congestionWindow` 内的「采集 → 解码完」耗时。
     private var recent: [LatencySample] = []
+    private var recentLostFrames: [UInt64] = []
     /// 上一轮拥塞开始时（第一次下调之前）的码率：涨回它附近就改成小步试探。一轮拥塞里会连降好几次，
     /// 记最后一次的话就成了底线附近，之后一路小步，涨回上限要几十秒。
     private var congestedBitrate: Int?
@@ -174,6 +175,23 @@ nonisolated struct RemoteRateController: Equatable {
     static func config(width: Int, height: Int) -> Config {
         let pixels = max(1, width * height)
         return Config(minBitrate: 1_000_000, maxBitrate: max(2_000_000, pixels * 24))
+    }
+
+    /// 公网路径的配置：上限不变（不设固定额度），在途帧放宽到按字节算的带宽时延积说了算，否则
+    /// 往返 200 ms 时被 8 帧卡在 40 fps。
+    static func config(width: Int, height: Int, path: RemoteLinkPath) -> Config {
+        var config = config(width: width, height: height)
+        if path.isInternet { config.maxInflightFrames = 30 }
+        return config
+    }
+
+    /// 公网起始码率：局域网那个起点（2144×1206 约 31 Mbps）在蜂窝和跨省链路上一开始就是几秒的排队。
+    /// 从这里起步，链路空着再由码控往上涨。
+    static let internetInitialBitrate = 6_000_000
+
+    static func initialBitrate(width: Int, height: Int, path: RemoteLinkPath) -> Int {
+        let bitrate = initialBitrate(width: width, height: height)
+        return path.isInternet ? min(bitrate, internetInitialBitrate) : bitrate
     }
 
     static func initialBitrate(width: Int, height: Int) -> Int {
@@ -190,9 +208,9 @@ nonisolated struct RemoteRateController: Equatable {
         baselineBucketStart = now
     }
 
-    init(width: Int, height: Int, now: UInt64) {
-        self.init(config: Self.config(width: width, height: height),
-                  initialBitrate: Self.initialBitrate(width: width, height: height), now: now)
+    init(width: Int, height: Int, path: RemoteLinkPath = .localNetwork, now: UInt64) {
+        self.init(config: Self.config(width: width, height: height, path: path),
+                  initialBitrate: Self.initialBitrate(width: width, height: height, path: path), now: now)
     }
 
     /// 链路空着时的「采集 → 解码完」耗时；还没有确认时为 nil。
@@ -241,6 +259,25 @@ nonisolated struct RemoteRateController: Equatable {
             return true
         }
         return false
+    }
+
+    /// 链路丢包率。随机丢包有重传和纠错兜着，不降码率；丢到这个份上才当拥塞（多半撞上了限速）。
+    static let heavyLossRate = 0.20
+
+    @discardableResult
+    mutating func observeLoss(lossRate: Double, now: UInt64) -> Bool {
+        guard lossRate >= Self.heavyLossRate else { return false }
+        return congestion(now: now)
+    }
+
+    /// 视频帧等到时限也没收齐。零星一帧是突发丢包，恢复一下就好；一秒内连着丢说明这个码率这条链路扛不住。
+    @discardableResult
+    mutating func observeLostFrames(count: Int, now: UInt64) -> Bool {
+        recentLostFrames.removeAll { now &- $0 > 1_000_000_000 }
+        recentLostFrames.append(contentsOf: repeatElement(now, count: count))
+        guard recentLostFrames.count >= RemoteLossPolicy.lostFramesForCongestion else { return false }
+        recentLostFrames.removeAll()
+        return congestion(now: now)
     }
 
     private struct LatencySample: Equatable {

@@ -2,6 +2,7 @@ import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UDesignKit
+import UniformTypeIdentifiers
 
 /// 设置 · 远程控制：总开关与监听状态、本机终端、远程桌面（开关 + 两项系统授权）、已配对的设备（可撤销）。
 /// 从「高级」里拆出来单独成页：项多、而且都是要用户明确打开的权限。
@@ -10,6 +11,9 @@ struct RemoteControlSettingsView: View {
     @Environment(RemoteHostServer.self) private var server
     @State private var permissions = RemoteDesktopPermissionState()
     @Environment(\.openWindow) private var openWindow
+    @State private var importingRelayConfig = false
+    @State private var showsRelayCode = false
+    @State private var relayImportError: String?
     private let shell = LocalShellService.shared
 
     var body: some View {
@@ -34,6 +38,7 @@ struct RemoteControlSettingsView: View {
             if settings.isEnabled {
                 localShellGroup
                 desktopGroup
+                internetGroup
             }
             pairedDevicesGroup
         }
@@ -153,6 +158,140 @@ struct RemoteControlSettingsView: View {
                 UDButton(title: "打开系统设置", style: .secondary, action: openSettings)
                 UDButton(title: "授权", style: .primary, action: request)
             }
+        }
+    }
+
+    // MARK: - 公网接入
+
+    private var internetGroup: some View {
+        SettingsGroup(title: "公网接入") {
+            SettingsRow(label: "中继服务器", hint: relayHint) {
+                HStack(spacing: 8) {
+                    if server.relayConfig != nil {
+                        UDButton(title: showsRelayCode ? "收起" : "二维码", style: .secondary) { showsRelayCode.toggle() }
+                        UDButton(title: "移除", style: .secondary) {
+                            settings.isInternetEnabled = false
+                            server.clearRelayConfig()
+                            showsRelayCode = false
+                            refreshInternetAccess()
+                        }
+                    }
+                    UDButton(title: server.relayConfig == nil ? "导入配置" : "更换", style: .secondary) {
+                        importingRelayConfig = true
+                    }
+                }
+            }
+            if showsRelayCode, let url = server.relayConfig?.url {
+                PairingQRCode(text: url.absoluteString)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            if server.relayConfig != nil {
+                SettingsRow(label: "允许经公网接入",
+                            hint: "打开后，这台 Mac 会注册到上面的中继，勾选的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容都是端到端加密。") {
+                    UDToggle(Binding(get: { settings.isInternetEnabled }, set: { settings.isInternetEnabled = $0 }))
+                }
+            }
+            if server.relayConfig != nil, settings.isInternetEnabled {
+                SettingsRow(label: "状态", hint: relayStatusHint) {
+                    HStack(spacing: 6) {
+                        Image(systemName: relayStatusIcon).foregroundStyle(relayStatusTint)
+                        Text(relayStatusLabel).font(.system(size: 12.5)).foregroundStyle(UD.text)
+                    }
+                }
+                ForEach(server.internetAccessCandidates) { peer in
+                    SettingsRow(label: peer.name, hint: "允许这台设备经公网连接") {
+                        UDToggle(Binding(
+                            get: { settings.internetDevices.contains(peer.id) },
+                            set: { allowed in
+                                if allowed {
+                                    settings.internetDevices.insert(peer.id)
+                                } else {
+                                    settings.internetDevices.remove(peer.id)
+                                }
+                            }))
+                    }
+                }
+                SettingsRow(label: "保持唤醒",
+                            hint: "Mac 睡眠时会从中继掉线，手机无法远程唤醒它。打开后不让 Mac 闲置睡眠；合盖仍会睡眠。") {
+                    UDToggle(Binding(get: { settings.keepsAwakeForInternet }, set: { settings.keepsAwakeForInternet = $0 }))
+                }
+            }
+        }
+        .onAppear { refreshInternetAccess() }
+        .fileImporter(isPresented: $importingRelayConfig, allowedContentTypes: [.json]) { result in
+            importRelayConfig(result)
+        }
+        .alert("没能导入中继配置", isPresented: Binding(get: { relayImportError != nil },
+                                                       set: { if !$0 { relayImportError = nil } })) {
+            Button("好", role: .cancel) { relayImportError = nil }
+        } message: {
+            Text(relayImportError ?? "")
+        }
+    }
+
+    private func refreshInternetAccess() {
+        server.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
+                                    keepAwake: settings.keepsAwakeForInternet)
+    }
+
+    private func importRelayConfig(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let config = RemoteRelayConfig(importing: try Data(contentsOf: url)) else {
+                relayImportError = "这不是 uterm-relay 的配置文件。请在服务器上运行 uterm-relay config 生成。"
+                return
+            }
+            guard server.importRelayConfig(config) else {
+                relayImportError = "保存到钥匙串失败。"
+                return
+            }
+            refreshInternetAccess()
+        } catch {
+            relayImportError = error.localizedDescription
+        }
+    }
+
+    private var relayHint: String {
+        if let config = server.relayConfig {
+            return "\(config.name)（\(config.endpointDescription)）。这份配置含成员密钥，二维码只给自己的设备扫。"
+        }
+        return "跨网络控制需要一台你自己的服务器，部署方法见 relay/README.md。配置文件由 uterm-relay config 生成。"
+    }
+
+    private var relayStatusLabel: String {
+        switch server.relayLink?.state {
+        case .registered: return "已连接中继"
+        case .connecting, .none: return "正在连接"
+        case .failed: return "连不上"
+        case .superseded: return "被其他设备顶替"
+        case .stopped: return "已停止"
+        }
+    }
+
+    private var relayStatusHint: String? {
+        switch server.relayLink?.state {
+        case .failed(let message): return message
+        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继，这里不再自动重连。"
+        default: return nil
+        }
+    }
+
+    private var relayStatusIcon: String {
+        switch server.relayLink?.state {
+        case .registered: return "checkmark.circle.fill"
+        case .failed, .superseded: return "exclamationmark.triangle.fill"
+        default: return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var relayStatusTint: Color {
+        switch server.relayLink?.state {
+        case .registered: return UD.success
+        case .failed, .superseded: return UD.danger
+        default: return UD.text2
         }
     }
 

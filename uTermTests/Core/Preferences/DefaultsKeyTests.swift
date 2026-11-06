@@ -50,6 +50,14 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteDesktopEnabled, "remote.desktopEnabled"),
         (DefaultsKey.remoteLocalShellEnabled, "remote.localShellEnabled"),
         (DefaultsKey.remoteDeviceID, "remote.deviceID"),
+        (DefaultsKey.remoteInternetEnabled, "remote.internetEnabled"),
+        (DefaultsKey.remoteInternetDevices, "remote.internetDevices"),
+        (DefaultsKey.remoteKeepAwakeForInternet, "remote.keepAwakeForInternet"),
+        (DefaultsKey.remoteInternetOnly, "remote.internetOnly"),
+        (DefaultsKey.remotePathMatrixLog, "remote.pathMatrixLog"),
+        (DefaultsKey.remoteIceProbeNote, "remote.iceProbeNote"),
+        (DefaultsKey.remotePathMatrixRounds, "remote.pathMatrixRounds"),
+        (DefaultsKey.remotePathMatrixModes, "remote.pathMatrixModes"),
         (DefaultsKey.remoteBrowseActivated, "remote.browseActivated"),
         (DefaultsKey.remoteDesktopKeyboardLanguage, "remote.desktop.keyboardLanguage"),
         (DefaultsKey.lanSyncDeviceID, "lanSync.deviceID"),
@@ -64,6 +72,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.sshTimingProbe, "sshTimingProbe"),
         (DefaultsKey.remoteDebugOpenDesktop, "RemoteDebugOpenDesktop"),
         (DefaultsKey.remoteDebugEndpoint, "RemoteDebugEndpoint"),
+        (DefaultsKey.remoteDebugPathMatrix, "RemoteDebugPathMatrix"),
         (DefaultsKey.debugLayoutDiagnostics, "debug.layoutDiagnostics"),
         // 系统定义
         (DefaultsKey.appleActionOnDoubleClick, "AppleActionOnDoubleClick"),
@@ -107,6 +116,9 @@ final class DefaultsKeyTests: XCTestCase {
         XCTAssertEqual(RemoteControlSettings.Keys.enabled, DefaultsKey.remoteEnabled)
         XCTAssertEqual(RemoteControlSettings.Keys.desktopEnabled, DefaultsKey.remoteDesktopEnabled)
         XCTAssertEqual(RemoteControlSettings.Keys.localShellEnabled, DefaultsKey.remoteLocalShellEnabled)
+        XCTAssertEqual(RemoteControlSettings.Keys.internetEnabled, DefaultsKey.remoteInternetEnabled)
+        XCTAssertEqual(RemoteControlSettings.Keys.internetDevices, DefaultsKey.remoteInternetDevices)
+        XCTAssertEqual(RemoteControlSettings.Keys.keepAwakeForInternet, DefaultsKey.remoteKeepAwakeForInternet)
         XCTAssertEqual(BackgroundServiceSettings.Keys.launchAtLogin, DefaultsKey.backgroundLaunchAtLogin)
         XCTAssertEqual(BackgroundServiceSettings.Keys.allowOnDemandLaunch, DefaultsKey.backgroundAllowOnDemandLaunch)
         XCTAssertEqual(ExternalAppPreference.defaultsKey, DefaultsKey.externalOpenAppByExtension)

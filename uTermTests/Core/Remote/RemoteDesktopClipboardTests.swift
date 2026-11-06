@@ -185,6 +185,8 @@ final class RemoteDesktopClipboardTests: XCTestCase {
                                                         ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                                         staticKey: phone.publicKey.rawRepresentation, features: features),
                                      staticKey: phone, ephemeralKey: ephemeral)
+        // 声明了 `key-confirm` 的手机握手后要先发一帧确认，Mac 才往下走（与真手机一样）。
+        if features.contains(RemoteFeature.keyConfirmation) { link.send(RemoteMessage(.keyConfirm)) }
         let paired = await waitUntil { !inbox.of(.pairing).isEmpty }
         XCTAssertTrue(paired)
         link.send(RemoteMessage(.desktopStart, payload: RemoteJSON.encode(

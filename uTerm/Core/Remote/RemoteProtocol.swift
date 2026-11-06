@@ -32,10 +32,12 @@ nonisolated enum RemoteConstants {
     /// 解码时忽略这个键，新版本据此判断对端能不能做某件事（例如老 Mac 不认桌面消息，
     /// 收到会当作未知消息断开整条连接，所以手机必须先看能力再发）。
     static let localFeatures: [String] = [RemoteFeature.desktop, RemoteFeature.desktopPaste,
-                                          RemoteFeature.desktopClipboard, RemoteFeature.localShell,
+                                          RemoteFeature.desktopClipboard, RemoteFeature.desktopPasteChunks,
+                                          RemoteFeature.localShell,
                                           RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
-                                          RemoteFeature.heartbeat]
+                                          RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
+                                          RemoteFeature.relayConfig]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -65,6 +67,8 @@ nonisolated enum RemoteFeature {
     static let desktopPaste = "desktop-paste"
     /// 远程桌面里 Mac 拷贝的文字回传到手机：手机认得 `desktopClipboard`。Mac 只发给声明了这一项的手机。
     static let desktopClipboard = "desktop-clipboard"
+    /// 大内容分块粘贴：认得 `desktopPasteChunk`。
+    static let desktopPasteChunks = "desktop-paste-chunks"
     /// 能在 Mac 上开一个本机 shell：认得 `openLocalShell`。
     static let localShell = "local-shell"
     /// 能列出最近的工作区，并在指定目录开本机 shell：认得 `listLocalWorkspaces`。
@@ -73,6 +77,10 @@ nonisolated enum RemoteFeature {
     static let closeSession = "close-session"
     /// 能把手机的图片交给远控终端里的程序：认得 `terminalImage`。
     static let terminalImage = "terminal-image"
+    /// 握手后手机先发一帧 `keyConfirm`，Mac 解开它才算认定对方持有长期私钥，再决定信任与授权。
+    static let keyConfirmation = "key-confirm"
+    /// 认得 `relayConfig` 消息。
+    static let relayConfig = "relay-config"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -120,6 +128,15 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 要 Mac 最近的工作区（通道 0）。负载 = `RemoteLocalWorkspacesRequest`（JSON）。Mac 回 `.localWorkspaces`。
         /// 只发给 `features` 带 `local-workspaces` 的 Mac。
         case listLocalWorkspaces = 16
+        /// 握手后的第一帧（通道 0，无负载）。会话密钥绑定了双方的长期私钥，能发出 Mac 解得开的密文就证明了身份。
+        /// 只发给 `features` 带 `key-confirm` 的 Mac。
+        case keyConfirm = 17
+        /// 这些视频帧等到时限也没收齐，放弃了（桌面通道）。负载 = `RemoteDesktopVideoLost`。Mac 据此释放在途计数，
+        /// 发一个恢复帧。只在开流时协商了 `videoDatagrams` 才会发。
+        case desktopVideoLost = 18
+        /// 大内容粘贴的一块（桌面通道）。负载 = `RemoteDesktopPasteChunk`。公网上一张图要传十几秒，
+        /// 整条发的话按键和确认都得排在它后面。只发给 `features` 带 `desktop-paste-chunks` 的 Mac。
+        case desktopPasteChunk = 19
 
         // Mac → 手机
         /// 会话列表。负载 = `[RemoteSessionInfo]`（JSON）。
@@ -149,6 +166,12 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 手机控制桌面时 Mac 上新拷贝的文字（桌面通道）。负载 = `RemoteDesktopClipboard`（二进制）。
         /// 只发给 `features` 带 `desktop-clipboard` 的手机。
         case desktopClipboard = 32
+        /// 中继配置（通道 0）。负载 = `RemoteRelayConfig`（JSON）。只发给 Mac 上勾选过公网接入、且 `features` 带
+        /// `relay-config` 的设备，扫码配对、不共用 iCloud 钥匙串的手机靠它拿到配置。
+        case relayConfig = 33
+        /// 画面往返（桌面通道）。负载 = `RemoteDesktopLatency`（JSON）。只在开流时 `latencyStats` 为 true 才发，
+        /// 老手机不认这个类型（解析会当成坏消息），所以必须先要后发。
+        case desktopLatency = 34
     }
 
     var kind: Kind

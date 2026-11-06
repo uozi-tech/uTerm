@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4B43500000000000000000A3 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A1 /* CKCP */; };
+		4B43500000000000000000A4 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A2 /* CKCP */; };
+		4A55494345000000000000A3 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A1 /* CJuice */; };
+		4A55494345000000000000A4 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A2 /* CJuice */; };
 		10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D1 /* SwiftTerm */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
@@ -252,6 +256,7 @@
 				Features/Remote/RemoteLocalShellOpener.swift,
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Remote/RemotePasteboard.swift,
+				Features/Remote/RemoteRelayHostLink.swift,
 				Features/Settings/Views/AboutSettingsView.swift,
 				Features/Settings/Views/AdvancedSettingsView.swift,
 				Features/Settings/Views/CLISettingsView.swift,
@@ -465,6 +470,8 @@
 				555353484B49540000000012 /* USSHKit in Frameworks */,
 				4147454E544B495400000012 /* AgentKit in Frameworks */,
 				10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */,
+				4A55494345000000000000A4 /* CJuice in Frameworks */,
+				4B43500000000000000000A4 /* CKCP in Frameworks */,
 				10C0DE0000000000000000E2 /* Citadel in Frameworks */,
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
 				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
@@ -532,6 +539,8 @@
 				91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */,
 				95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */,
 				61F520A343F1018B24C632F4 /* TreeSitterINI in Frameworks */,
+				4A55494345000000000000A3 /* CJuice in Frameworks */,
+				4B43500000000000000000A3 /* CKCP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -644,6 +653,8 @@
 				555353484B49540000000002 /* USSHKit */,
 				4147454E544B495400000002 /* AgentKit */,
 				10C0DE0000000000000000D1 /* SwiftTerm */,
+				4A55494345000000000000A2 /* CJuice */,
+				4B43500000000000000000A2 /* CKCP */,
 				10C0DE0000000000000000D2 /* Citadel */,
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
 				10C0DE0000000000000000D4 /* _CryptoExtras */,
@@ -785,6 +796,8 @@
 				A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */,
 				C9011540443CD85AA784C8A9 /* TreeSitterTOML */,
 				4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */,
+				4A55494345000000000000A1 /* CJuice */,
+				4B43500000000000000000A1 /* CKCP */,
 			);
 			productName = uTerm;
 			productReference = 85D6BEEF2FBC4E7E00FC90D8 /* uTerm.app */;
@@ -885,6 +898,8 @@
 				TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */,
 				DD7AB4FBC0DEDD0514728E59 /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
+				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
+				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1780,6 +1795,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "vendor/kcp";
+		};
+		4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "vendor/libjuice";
+		};
 		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
@@ -1902,6 +1925,26 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		4B43500000000000000000A1 /* CKCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
+			productName = CKCP;
+		};
+		4B43500000000000000000A2 /* CKCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
+			productName = CKCP;
+		};
+		4A55494345000000000000A1 /* CJuice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
+			productName = CJuice;
+		};
+		4A55494345000000000000A2 /* CJuice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
+			productName = CJuice;
+		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
