@@ -26,12 +26,12 @@ nonisolated struct TerminalSettings: Equatable {
 
     /// 用 UserDefaults 实际值 + 写死的 fallback 构造，对应 @AppStorage 默认。
     /// 这是测试时的便捷入口；生产代码直接用 @AppStorage 属性。
+    /// 光标两项走共享的 `TerminalCursorPreference`（iOS 终端读同一份默认值）。
     static func read(from defaults: UserDefaults = .standard) -> TerminalSettings {
-        TerminalSettings(
-            cursorShape: TerminalCursorShape(
-                rawValue: defaults.string(forKey: DefaultsKey.terminalCursorShape) ?? "block"
-            ) ?? .block,
-            cursorBlink: (defaults.object(forKey: DefaultsKey.terminalCursorBlink) as? Bool) ?? false,
+        let cursor = TerminalCursorPreference.read(from: defaults)
+        return TerminalSettings(
+            cursorShape: cursor.shape,
+            cursorBlink: cursor.blink,
             scrollback: (defaults.object(forKey: DefaultsKey.terminalScrollback) as? Int) ?? defaultScrollback,
             copyOnSelect: (defaults.object(forKey: DefaultsKey.terminalCopyOnSelect) as? Bool) ?? false
         )

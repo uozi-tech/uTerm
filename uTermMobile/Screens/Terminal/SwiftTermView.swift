@@ -15,6 +15,9 @@ final class MTerminalView: SwiftTerm.TerminalView {
     /// 是否已按真实窗格排布过。首次排布立即生效（此时还没有程序在画），之后的变化都要等停稳，
     /// 见 `MTerminalContainerView`。
     var hasHostedLayout = false
+    /// 上次装进来的光标样式；nil = 还没装过。记在视图上而不是 Coordinator：外壳切换时视图复用、
+    /// Coordinator 重建，记在 Coordinator 上会让每次重建都重装一遍、盖掉程序自己设的光标。
+    var appliedCursor: TerminalCursorLook?
 
     override var canBecomeFirstResponder: Bool { controller?.canTakeKeyboard ?? false }
 
@@ -139,12 +142,20 @@ struct SwiftTermView: UIViewRepresentable {
     var onInteract: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.mTerminalHoldsFontSize) private var holdsFontSize
+    /// 光标形状 / 闪烁：与 Mac 同步的两个偏好（设置 › 终端里改，默认见 `TerminalCursorPreference`）。
+    @AppStorage(DefaultsKey.terminalCursorShape)
+    private var cursorShapeRaw: String = TerminalCursorPreference.defaultShape.rawValue
+    @AppStorage(DefaultsKey.terminalCursorBlink)
+    private var cursorBlink: Bool = TerminalCursorPreference.defaultBlink
+
+    private var cursorLook: TerminalCursorLook {
+        TerminalCursorLook(shape: TerminalCursorPreference.shape(rawValue: cursorShapeRaw), blink: cursorBlink)
+    }
 
     func makeUIView(context: Context) -> MTerminalContainerView {
         // 复用控制器已持有的终端视图：横屏翻 size class 会令外壳在 Tab/Split 间切换、
         // TerminalScreen 连带重建——复用同一视图可保活 SwiftTerm 的屏幕缓冲与回滚，
         // 既不空白也不断连。仅首次创建新视图。
-        let isFresh = controller.terminalView == nil
         let view = controller.terminalView ?? MTerminalView(
             frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
         (view as? MTerminalView)?.controller = controller
@@ -174,13 +185,8 @@ struct SwiftTermView: UIViewRepresentable {
         // 收起键盘后用户还在看这个终端，光标不该变成表示失焦的空心框。分屏的当前格由焦点框标出。
         view.caretViewTracksFocus = false
         applyColorsIfNeeded(to: view, coordinator: context.coordinator)
-        if isFresh {
-            // 稳定块光标（对齐设计稿 / macOS：steady block，不闪烁），仅新建时设一次——再设会盖掉
-            // 程序自己设的光标（vim 插入模式的竖线）。同时记成终端默认样式：程序发 `CSI 0 q` / reset
-            // 时回到这里，而不是 SwiftTerm 自带的闪烁块。
-            TerminalAppearance.applyCursor(to: view, scheme: MTerminalColors.resolve(dark: colorScheme == .dark),
-                                           shape: .block, blink: false)
-        }
+        // 新建视图时装一次；复用的视图样式没变就不装（见 `applyCursorIfNeeded`）。
+        applyCursorIfNeeded(to: view)
         controller.attach(view)
         // 键盘默认展开：会话出现即聚焦，无需先点终端（仅激活态、非连接中页期间、已连上、用户没收起——
         // 失败重试成功后失败页换回本视图时走这里）。
@@ -197,6 +203,8 @@ struct SwiftTermView: UIViewRepresentable {
         // 调到这里（拖分隔条 / 拖标签时每帧一次），而装一次配色会清掉 SwiftTerm 的属性
         // 与颜色缓存并整屏重绘——所有挂着的终端（含看不见的标签）都会跟着每帧重绘。
         applyColorsIfNeeded(to: uiView, coordinator: context.coordinator)
+        // 设置里改了光标形状 / 闪烁（或从 Mac 同步过来）时重装。
+        applyCursorIfNeeded(to: uiView)
         container.isOnScreen = isOnScreen
         // 字号随屏幕 / 视图宽度自适应：旋转、分屏时和新宽度一起提交，缓冲区只重排一次。
         // 拖分隔条时等松手再换，否则停顿一下就要重排一次。
@@ -215,10 +223,22 @@ struct SwiftTermView: UIViewRepresentable {
         coordinator.appliedDark = dark
         let scheme = MTerminalColors.resolve(dark: dark)
         TerminalAppearance.applyColors(to: view, scheme: scheme)
-        // 光标颜色随配色切，形状不动（iOS 固定块光标，见 makeUIView）。
-        TerminalAppearance.applyCaretColors(to: view, scheme: scheme, shape: .block)
+        // 光标颜色随配色切，形状不动（形状只在设置变了才装，见 applyCursorIfNeeded）。
+        TerminalAppearance.applyCaretColors(to: view, scheme: scheme, shape: cursorLook.shape)
         // iOS 独有：UIScrollView 自己的底色（滚出内容区、橡皮筋回弹时露出来）也随终端底色。
         view.backgroundColor = scheme.backgroundColor
+    }
+
+    /// 光标形状 + 闪烁，只在和上次装的不同才装：装光标会盖掉程序自己设的（vim 插入模式的竖线），
+    /// 并把它记成终端默认样式——程序发 `CSI 0 q` / reset 时回到用户选的样式，而不是 SwiftTerm 自带的闪烁块。
+    /// 与 mac `TerminalTheme.applyLook` 同一取舍：用户改设置时接受盖掉程序当下自设的光标。
+    private func applyCursorIfNeeded(to view: SwiftTerm.TerminalView) {
+        let look = cursorLook
+        let terminal = view as? MTerminalView
+        if let terminal, terminal.appliedCursor == look { return }
+        terminal?.appliedCursor = look
+        TerminalAppearance.applyCursor(to: view, scheme: MTerminalColors.resolve(dark: colorScheme == .dark),
+                                       shape: look.shape, blink: look.blink)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(controller: controller) }

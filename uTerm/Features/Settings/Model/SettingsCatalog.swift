@@ -59,10 +59,11 @@ nonisolated enum SettingsCatalog {
              kind: .choice, key: DefaultsKey.appLanguage, syncScope: .synced, platforms: .macOS),
 
         // MARK: 终端
+        // iOS 两行在「终端」组里（「光标形状」「闪烁」），iOS 终端照读。
         Item(id: "terminal.cursorShape", section: .terminal, group: "光标", title: "形状",
-             kind: .choice, key: DefaultsKey.terminalCursorShape, syncScope: .synced, platforms: .macOS),
+             kind: .choice, key: DefaultsKey.terminalCursorShape, syncScope: .synced, platforms: .both),
         Item(id: "terminal.cursorBlink", section: .terminal, group: "光标", title: "闪烁",
-             kind: .toggle, key: DefaultsKey.terminalCursorBlink, syncScope: .synced, platforms: .macOS),
+             kind: .toggle, key: DefaultsKey.terminalCursorBlink, syncScope: .synced, platforms: .both),
         Item(id: "terminal.scrollback", section: .terminal, group: "行为", title: "历史行数",
              kind: .number, key: DefaultsKey.terminalScrollback, syncScope: .synced, platforms: .macOS),
         Item(id: "terminal.copyOnSelect", section: .terminal, group: "行为", title: "选中即复制",
@@ -72,12 +73,10 @@ nonisolated enum SettingsCatalog {
         Item(id: "terminal.localShellKeepsLAN", section: .terminal, group: "行为",
              title: "重启时保住本机终端的局域网连接",
              kind: .toggle, key: DefaultsKey.localShellKeepsLANConnections, syncScope: .local, platforms: .macOS),
-        // iOS 终端外观固定，只读展示。
+        // iOS 终端字体 / 字号固定，只读展示。
         Item(id: "terminal.mobileFont", section: .terminal, group: "终端", title: "字体",
              kind: .status, key: nil, syncScope: .none, platforms: .iOS),
         Item(id: "terminal.mobileFontSize", section: .terminal, group: "终端", title: "字号",
-             kind: .status, key: nil, syncScope: .none, platforms: .iOS),
-        Item(id: "terminal.mobileCursor", section: .terminal, group: "终端", title: "光标",
              kind: .status, key: nil, syncScope: .none, platforms: .iOS),
 
         // MARK: 模型服务（列表在 SwiftData，Key 在钥匙串）
@@ -180,8 +179,6 @@ nonisolated enum SettingsCatalog {
     /// 同步清单里**没有两端入口**的键 → 理由。`SettingsCatalogTests` 要求每个同步键要么在清单里
     /// 两端都有入口，要么在这里写明为什么没有。
     static let syncedKeyExemptions: [String: String] = [
-        DefaultsKey.terminalCursorShape: "iOS 终端外观固定（稳定块光标），不读这个键",
-        DefaultsKey.terminalCursorBlink: "iOS 终端不闪烁光标，不读这个键",
         DefaultsKey.terminalScrollback: "iOS 终端的回滚缓冲区不可配，不读这个键",
         DefaultsKey.terminalCopyOnSelect: "iOS 靠长按选择与系统菜单复制，没有「选中即复制」",
         DefaultsKey.appLanguage: "mac 专属：iOS 跟随系统语言（系统设置里按 App 改）",
