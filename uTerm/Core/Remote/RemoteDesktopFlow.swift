@@ -417,9 +417,10 @@ nonisolated enum RemoteDesktopGeometry {
 ///
 /// `zoom == 1` 是「适配屏幕」（整块显示器完整放进视图，留黑边）。`center` 是可见区域中心在显示器上的
 /// 归一化坐标。放大后拖不出显示器边界；某个方向内容比视图小时那个方向居中。
-/// 允许缩到适配以下（`minZoom`）：边缘落在圆角 / 开孔附近时，缩小一点才看得全、点得着。
+/// 缩放下限就是适配（`minZoom == 1`），不允许缩到适配以下：再缩只是四周多黑边、内容更小，
+/// 主流远程桌面也都这么做。想看到更多应该改 Mac 端的输出分辨率，而不是缩画面。
 nonisolated struct RemoteDesktopViewport: Equatable {
-    static let minZoom: CGFloat = 0.5
+    static let minZoom: CGFloat = 1
     static let maxZoom: CGFloat = 8
 
     /// 显示器的点尺寸（只用纵横比与相对大小）。
