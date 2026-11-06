@@ -7,7 +7,7 @@ import Combine
 /// 设置标签（设计稿 `m-more` 的 `MoreBody`）：品牌卡 + 动作 / 外观 / 终端 / 安全 / 关于。
 /// 保持五标签结构不变——设计稿「更多」分区在此承载（命令面板 / 密钥 / 分组 / 指纹）。
 struct SettingsScreen: View {
-    @AppStorage("appearancePreference")
+    @AppStorage(DefaultsKey.appearancePreference)
     private var appearanceRaw: String = AppearancePreference.system.rawValue
     /// 应用锁开关，与启动时读的键同源（缺键视作关）。
     @AppStorage(AppLockPreference.key) private var appLockOn = AppLockPreference.defaultValue

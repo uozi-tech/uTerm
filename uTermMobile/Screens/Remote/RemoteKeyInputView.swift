@@ -72,7 +72,7 @@ nonisolated enum RemoteKeyboardRouting {
 /// 视图铺在画布底边显示组字内容，不接触摸，候选框（iPad 的浮动候选）也贴着它。
 @MainActor
 final class RemoteKeyInputView: UIView, UITextInput {
-    static let languageKey = "remote.desktop.keyboardLanguage"
+    static let languageKey = DefaultsKey.remoteDesktopKeyboardLanguage
 
     var keys: RemoteDesktopKeyState?
     var send: ((RemoteDesktopInput) -> Void)?

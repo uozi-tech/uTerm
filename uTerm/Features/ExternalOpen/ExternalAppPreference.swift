@@ -5,7 +5,7 @@ import Foundation
 /// 只在用户**主动选过**应用时写入（「打开方式…」或没有默认应用时弹的选择框）；
 /// 之后同扩展名直接用它，不再问。记的是应用包路径——应用被删 / 挪走时视为没记过。
 nonisolated struct ExternalAppPreference {
-    static let defaultsKey = "externalOpen.appByExtension"
+    static let defaultsKey = DefaultsKey.externalOpenAppByExtension
 
     private let defaults: UserDefaults
     private let fileExists: (String) -> Bool

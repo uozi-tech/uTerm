@@ -9,7 +9,7 @@ enum TrueColorOffer: Equatable {
 
 extension TerminalSession {
 
-    private static let dismissedHostsKey = "trueColorOfferDismissedHosts"
+    private static let dismissedHostsKey = DefaultsKey.trueColorOfferDismissedHosts
 
     /// 有 Agent 开始报告状态时查一次：只有 Agent 才明显受 256 色影响，普通 shell 不打扰。
     /// 一条连接只查一次，断开后重置（`resetTrueColorOffer`）。

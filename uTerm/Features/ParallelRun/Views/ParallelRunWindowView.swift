@@ -17,8 +17,8 @@ struct ParallelRunWindowView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("activeProviderID") private var activeProviderIDString: String = ""
-    @AppStorage("agentSafety") private var agentSafetyRaw: String = AgentSafety.readAuto.rawValue
+    @AppStorage(DefaultsKey.activeProviderID) private var activeProviderIDString: String = ""
+    @AppStorage(DefaultsKey.agentSafety) private var agentSafetyRaw: String = AgentSafety.readAuto.rawValue
 
     @State private var model: ParallelRunModel?
 

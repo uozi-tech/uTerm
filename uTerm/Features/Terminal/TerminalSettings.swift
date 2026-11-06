@@ -29,11 +29,11 @@ nonisolated struct TerminalSettings: Equatable {
     static func read(from defaults: UserDefaults = .standard) -> TerminalSettings {
         TerminalSettings(
             cursorShape: TerminalCursorShape(
-                rawValue: defaults.string(forKey: "terminalCursorShape") ?? "block"
+                rawValue: defaults.string(forKey: DefaultsKey.terminalCursorShape) ?? "block"
             ) ?? .block,
-            cursorBlink: (defaults.object(forKey: "terminalCursorBlink") as? Bool) ?? false,
-            scrollback: (defaults.object(forKey: "terminalScrollback") as? Int) ?? defaultScrollback,
-            copyOnSelect: (defaults.object(forKey: "terminalCopyOnSelect") as? Bool) ?? false
+            cursorBlink: (defaults.object(forKey: DefaultsKey.terminalCursorBlink) as? Bool) ?? false,
+            scrollback: (defaults.object(forKey: DefaultsKey.terminalScrollback) as? Int) ?? defaultScrollback,
+            copyOnSelect: (defaults.object(forKey: DefaultsKey.terminalCopyOnSelect) as? Bool) ?? false
         )
     }
 

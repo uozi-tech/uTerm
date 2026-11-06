@@ -6,11 +6,11 @@ import SwiftUI
 /// - 外观：主题（spec 05）+ 语言（spec 06，i18n 基础设施，文案翻译留后续子 spec）
 /// - 更新：自动检查更新 + 立即检查（spec 07 in-app；EdDSA + appcast 待 07b）
 struct GeneralSettingsView: View {
-    @AppStorage("startupBehavior") private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
-    @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
+    @AppStorage(DefaultsKey.startupBehavior) private var startupBehaviorRaw: String = StartupBehavior.welcome.rawValue
+    @AppStorage(DefaultsKey.restoreTerminalSession) private var restoreTerminalSession = true
     @AppStorage(AppLockPreference.key) private var requireAuthAtLaunch = AppLockPreference.defaultValue
-    @AppStorage("appearancePreference") private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
-    @AppStorage("appLanguage") private var appLanguageRaw: String = AppLanguage.system.rawValue
+    @AppStorage(DefaultsKey.appearancePreference) private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
+    @AppStorage(DefaultsKey.appLanguage) private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     private var appearanceBinding: Binding<AppearancePreference> {
         Binding(

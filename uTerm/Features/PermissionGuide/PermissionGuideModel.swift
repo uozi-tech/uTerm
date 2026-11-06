@@ -6,7 +6,7 @@ nonisolated enum PermissionGuideWindow {
     static let id = "permission-guide"
     /// 引导内容的版本。以后加了新的授权项就 +1，升级上来的用户会再看到一次。
     static let revision = 1
-    static let presentedRevisionKey = "permissionGuide.presentedRevision"
+    static let presentedRevisionKey = DefaultsKey.permissionGuidePresentedRevision
 
     /// 后台启动（CLI 按需唤起、登录项）不弹：那时用户不在看屏幕，等下次正常打开再说。
     static func shouldPresentAtLaunch(presentedRevision: Int, startsHidden: Bool, isTestHost: Bool) -> Bool {

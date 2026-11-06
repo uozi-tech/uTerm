@@ -87,10 +87,10 @@ final class LANSyncCoordinator {
     private var pendingConnectionID: ObjectIdentifier?
     private var syncGeneration = 0
 
-    private static let deviceIDKey = "lanSync.deviceID"
-    private static let hostPairingCodeKey = "lanSync.hostPairingCode"
-    private static let mobilePairingCodeKey = "lanSync.pairingCode"
-    private static let receiverActivatedKey = "lanSync.receiverActivated"
+    private static let deviceIDKey = DefaultsKey.lanSyncDeviceID
+    private static let hostPairingCodeKey = DefaultsKey.lanSyncHostPairingCode
+    private static let mobilePairingCodeKey = DefaultsKey.lanSyncPairingCode
+    private static let receiverActivatedKey = DefaultsKey.lanSyncReceiverActivated
 
     private(set) var status: Status = .stopped
     private(set) var lastSyncedAt: Date?
@@ -213,6 +213,16 @@ final class LANSyncCoordinator {
         guard role == .receiver else { return }
         defaults.set(true, forKey: Self.receiverActivatedKey)
         startIfIdle()
+    }
+
+    /// App 启动时调用一次（`AppBootstrap.startCore`）。发送端（Mac）立即开始搜索移动设备；
+    /// 接收端只在启用过时才监听——没用过局域网同步的人不该一启动就被「本地网络」授权弹窗问，
+    /// 见 `isReceiverActivated`。
+    func startForAppLaunch() {
+        switch role {
+        case .sender: start()
+        case .receiver: resumeIfActivated()
+        }
     }
 
     /// 启动时 / 回到前台时调用：启用过的才（重新）开始监听。退到后台后系统会让监听失效

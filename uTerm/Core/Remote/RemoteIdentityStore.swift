@@ -175,7 +175,7 @@ nonisolated final class RemoteMemoryStorage: RemoteSecretStorage, @unchecked Sen
 
 /// 本机在远控里的身份信息（握手时报给对端）。
 nonisolated enum RemoteLocalDevice {
-    private static let idKey = "remote.deviceID"
+    private static let idKey = DefaultsKey.remoteDeviceID
 
     static func id(defaults: UserDefaults = .standard) -> UUID {
         if let raw = defaults.string(forKey: idKey), let id = UUID(uuidString: raw) { return id }

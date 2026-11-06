@@ -43,23 +43,23 @@ final class SharedPreferencesSync {
     /// it exists: window state, app lock, and other device-specific values must
     /// not unexpectedly overwrite another device.
     private static let definitions: [Definition] = [
-        Definition(key: "appearancePreference", kind: .string, defaultValue: .string("system"), legacyKeys: []),
-        Definition(key: "appLanguage", kind: .string, defaultValue: .string("system"), legacyKeys: []),
-        Definition(key: "accentColor", kind: .string, defaultValue: .string("blue"), legacyKeys: []),
-        Definition(key: "startupBehavior", kind: .string, defaultValue: .string("welcome"), legacyKeys: []),
-        Definition(key: "restoreTerminalSession", kind: .bool, defaultValue: .bool(true), legacyKeys: []),
-        Definition(key: "sshConnectTimeout", kind: .integer, defaultValue: .integer(30), legacyKeys: []),
-        Definition(key: "sshHostKeyPolicy", kind: .string, defaultValue: .string("ask"), legacyKeys: []),
-        Definition(key: "logLevel", kind: .string, defaultValue: .string("info"), legacyKeys: []),
-        Definition(key: "sftpMaxConcurrentTransfers", kind: .integer, defaultValue: .integer(4), legacyKeys: []),
-        Definition(key: "terminalCursorShape", kind: .string, defaultValue: .string("block"), legacyKeys: []),
-        Definition(key: "terminalCursorBlink", kind: .bool, defaultValue: .bool(false), legacyKeys: []),
-        Definition(key: "terminalScrollback", kind: .integer, defaultValue: .integer(3_000), legacyKeys: []),
-        Definition(key: "terminalCopyOnSelect", kind: .bool, defaultValue: .bool(false), legacyKeys: []),
-        Definition(key: "activeProviderID", kind: .string, defaultValue: .string(""), legacyKeys: ["mobileAgentActiveProviderID"]),
-        Definition(key: "agentSafety", kind: .string, defaultValue: .string("readAuto"), legacyKeys: ["mobileAgentSafety"]),
-        Definition(key: "globalForwarding.launchAtAppStart.enabled", kind: .bool, defaultValue: .bool(true), legacyKeys: []),
-        Definition(key: ChatHistoryStore.retentionDaysKey, kind: .integer,
+        Definition(key: DefaultsKey.appearancePreference, kind: .string, defaultValue: .string("system"), legacyKeys: []),
+        Definition(key: DefaultsKey.appLanguage, kind: .string, defaultValue: .string("system"), legacyKeys: []),
+        Definition(key: DefaultsKey.accentColor, kind: .string, defaultValue: .string("blue"), legacyKeys: []),
+        Definition(key: DefaultsKey.startupBehavior, kind: .string, defaultValue: .string("welcome"), legacyKeys: []),
+        Definition(key: DefaultsKey.restoreTerminalSession, kind: .bool, defaultValue: .bool(true), legacyKeys: []),
+        Definition(key: DefaultsKey.sshConnectTimeout, kind: .integer, defaultValue: .integer(30), legacyKeys: []),
+        Definition(key: DefaultsKey.sshHostKeyPolicy, kind: .string, defaultValue: .string("ask"), legacyKeys: []),
+        Definition(key: DefaultsKey.logLevel, kind: .string, defaultValue: .string("info"), legacyKeys: []),
+        Definition(key: DefaultsKey.sftpMaxConcurrentTransfers, kind: .integer, defaultValue: .integer(4), legacyKeys: []),
+        Definition(key: DefaultsKey.terminalCursorShape, kind: .string, defaultValue: .string("block"), legacyKeys: []),
+        Definition(key: DefaultsKey.terminalCursorBlink, kind: .bool, defaultValue: .bool(false), legacyKeys: []),
+        Definition(key: DefaultsKey.terminalScrollback, kind: .integer, defaultValue: .integer(3_000), legacyKeys: []),
+        Definition(key: DefaultsKey.terminalCopyOnSelect, kind: .bool, defaultValue: .bool(false), legacyKeys: []),
+        Definition(key: DefaultsKey.activeProviderID, kind: .string, defaultValue: .string(""), legacyKeys: [DefaultsKey.legacyMobileAgentActiveProviderID]),
+        Definition(key: DefaultsKey.agentSafety, kind: .string, defaultValue: .string("readAuto"), legacyKeys: [DefaultsKey.legacyMobileAgentSafety]),
+        Definition(key: DefaultsKey.globalForwardingLaunchAtAppStart, kind: .bool, defaultValue: .bool(true), legacyKeys: []),
+        Definition(key: DefaultsKey.chatRetentionDays, kind: .integer,
                    defaultValue: .integer(ChatHistoryStore.defaultRetentionDays), legacyKeys: []),
     ]
 
@@ -259,7 +259,7 @@ final class SharedPreferencesSync {
     }
 
     private func modifiedKey(_ key: String) -> String {
-        "lanSync.preferenceModified.\(key)"
+        DefaultsKey.syncModifiedPrefix + key
     }
 
     private func value(_ raw: Any?, for definition: Definition) -> Value? {

@@ -221,7 +221,7 @@ extension ControlHandler {
 
     /// `sshConnectTimeout`（设置 ▸ 高级）；缺省 30 s，与 `SSHClientFactory` 同源。
     private static var startTimeoutSeconds: Int {
-        let stored = UserDefaults.standard.object(forKey: "sshConnectTimeout") as? Int
+        let stored = UserDefaults.standard.object(forKey: DefaultsKey.sshConnectTimeout) as? Int
         return max(1, stored ?? 30)
     }
 

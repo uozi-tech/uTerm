@@ -22,8 +22,8 @@ struct TerminalWindowView: View {
 
     @Query private var profiles: [ServerProfile]
     @Query(sort: \AIProvider.sortOrder) private var providers: [AIProvider]
-    @AppStorage("activeProviderID") private var activeProviderIDString: String = ""
-    @AppStorage("agentSafety") private var agentSafetyRaw: String = AgentSafety.readAuto.rawValue
+    @AppStorage(DefaultsKey.activeProviderID) private var activeProviderIDString: String = ""
+    @AppStorage(DefaultsKey.agentSafety) private var agentSafetyRaw: String = AgentSafety.readAuto.rawValue
 
     @State private var workspace = WorkspaceModel()
     @State private var mode: TerminalWindowContentMode = .terminal

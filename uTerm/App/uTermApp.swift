@@ -6,10 +6,10 @@ import AppKit
 /// CloudKit、SwiftData）之前退出。
 struct uTermApp: App {
     @NSApplicationDelegateAdaptor(UTermLifecycleDelegate.self) private var lifecycleDelegate
-    @AppStorage("appearancePreference")
+    @AppStorage(DefaultsKey.appearancePreference)
     private var appearancePreferenceRaw: String = AppearancePreference.system.rawValue
 
-    @AppStorage("appLanguage")
+    @AppStorage(DefaultsKey.appLanguage)
     private var appLanguageRaw: String = AppLanguage.system.rawValue
 
     /// `terminal-open` 需要从 App 层捕获开窗口动作（见 `installTerminalWindowOpener`）。
@@ -66,18 +66,12 @@ struct uTermApp: App {
     init() {
         WindowMoveBehavior.disableScreenLayoutAdjustment()
 
-        // 必须在创建 SwiftData 容器之前订阅：CloudKit 可能在容器初始化期间就发出 setup / import 事件。
-        let sync = CloudKitSyncMonitor()
-        sync.start()
-        _cloudKitSync = State(initialValue: sync)
-        modelContainer = AppModelContainer.make()
-
-        let preferences = SharedPreferencesSync()
-        _sharedPreferences = State(initialValue: preferences)
-        let lan = LANSyncCoordinator(role: .sender, preferences: preferences,
-                                     dataStore: LANSyncDataStore(container: modelContainer))
-        lan.start()
-        _lanSync = State(initialValue: lan)
+        // 两端共用的启动引导第 1–4 步（CloudKit 订阅 → 容器 → 偏好 → 局域网发送端），顺序见 `AppBootstrap`。
+        let core = AppBootstrap.startCore(lanRole: .sender, makeContainer: AppModelContainer.make)
+        _cloudKitSync = State(initialValue: core.cloudKitSync)
+        modelContainer = core.modelContainer
+        _sharedPreferences = State(initialValue: core.preferences)
+        _lanSync = State(initialValue: core.lanSync)
 
         // uTerm 自己已有工作区/终端标签，禁用 macOS 把独立窗口再合并成系统 Tab。
         // 必须在任何 Scene 创建 NSWindow 前设置，才能阻止系统按用户偏好自动合并。
@@ -88,18 +82,11 @@ struct uTermApp: App {
         AgentKeychain.purgeLegacy()
         // 启动即应用主题：读 UserDefaults（@AppStorage 此刻还不能保证可读 wrappedValue），
         // 写 NSApp.appearance，避免首帧用错外观闪一下。live 切换由 AppAppearanceSync 负责。
-        let raw = UserDefaults.standard.string(forKey: "appearancePreference") ?? ""
+        let raw = UserDefaults.standard.string(forKey: DefaultsKey.appearancePreference) ?? ""
         NSApplication.shared.appearance = (AppearancePreference(rawValue: raw) ?? .system).nsAppearance
-        // 启动应用锁：读 requireAuthAtLaunch（mac 缺键视作开，与 @AppStorage 默认对齐，见 `AppLockPreference`）。
+        // 启动引导第 5–6 步：应用锁（mac 缺键视作开，见 `AppLockPreference`）→ 拉共享偏好。
         // 锁屏遮罩与首次验证由各 Scene 上的 .appLockGate(lockModel) 驱动。
-        let requireAuth = AppLockPreference.isEnabled()
-        _lockModel = State(initialValue: AppLockModel(
-            authenticator: SystemBiometricAuthenticator(),
-            requireAuthAtLaunch: requireAuth))
-        // Pull shared scalar preferences before the first scene body is evaluated.
-        // This matters for stateful services such as AccentState, which initialize
-        // from UserDefaults once rather than observing it continuously.
-        preferences.startForAppLaunch()
+        _lockModel = State(initialValue: AppBootstrap.finishCore(core))
 
         // App.init runs before SwiftUI installs State storage. Bootstrap with local
         // references, then give the same instances to the scenes through State.

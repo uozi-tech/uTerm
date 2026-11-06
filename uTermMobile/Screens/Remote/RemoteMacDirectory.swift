@@ -43,7 +43,7 @@ final class RemoteMacDirectory {
         }
     }
 
-    private static let activatedKey = "remote.browseActivated"
+    private static let activatedKey = DefaultsKey.remoteBrowseActivated
 
     /// 配对过的 Mac（在线的在前）。
     private(set) var macs: [Mac] = []
@@ -148,7 +148,7 @@ final class RemoteMacDirectory {
     /// 模拟器与 Mac 共用网络栈，回环地址又不受「本地网络」权限管，联调时用它直连 Mac 上的测试服务。
     private var debugMacs: [Mac] {
         #if DEBUG
-        guard let raw = defaults.string(forKey: "RemoteDebugEndpoint"), let colon = raw.lastIndex(of: ":"),
+        guard let raw = defaults.string(forKey: DefaultsKey.remoteDebugEndpoint), let colon = raw.lastIndex(of: ":"),
               let port = NWEndpoint.Port(String(raw[raw.index(after: colon)...])) else { return [] }
         let host = NWEndpoint.Host(String(raw[..<colon]))
         return [Mac(id: "debug:\(raw)", deviceID: nil, name: "调试 Mac（\(raw)）", publicKey: nil, source: .debug,

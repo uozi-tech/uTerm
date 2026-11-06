@@ -49,9 +49,9 @@ struct MobileAgentChat: View {
     @State private var tailScroll = TailScrollCoalescer()
     @State private var sendCount = 0
     /// 活动 provider 的持久化选择（与 macOS 共用 key，可经 iCloud KVS 同步）。
-    @AppStorage("activeProviderID") private var activeProviderIDString = ""
+    @AppStorage(DefaultsKey.activeProviderID) private var activeProviderIDString = ""
     /// 「自然语言 → 执行」信任档位（与 macOS 共用 key，可经 iCloud KVS 同步）。
-    @AppStorage("agentSafety") private var safetyRaw = AgentSafety.readAuto.rawValue
+    @AppStorage(DefaultsKey.agentSafety) private var safetyRaw = AgentSafety.readAuto.rawValue
 
     private var ctx: String { serverContext ?? "" }
     private var safety: AgentSafety { AgentSafety(rawValue: safetyRaw) ?? .readAuto }

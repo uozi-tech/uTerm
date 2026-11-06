@@ -6,7 +6,7 @@ import AppKit
 final class TerminalQuitPolicy {
     static let shared = TerminalQuitPolicy()
     /// 设置页也读写这个键。
-    static let behaviorKey = "terminalQuitBehavior"
+    static let behaviorKey = DefaultsKey.terminalQuitBehavior
 
     enum Behavior: String, CaseIterable {
         case ask, keep, end

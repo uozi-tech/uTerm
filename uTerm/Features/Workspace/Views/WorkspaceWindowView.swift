@@ -12,8 +12,8 @@ struct WorkspaceWindowView: View {
 
     @Query private var profiles: [ServerProfile]
     @Query(sort: \AIProvider.sortOrder) private var providers: [AIProvider]
-    @AppStorage("activeProviderID") private var activeProviderIDString: String = ""
-    @AppStorage("restoreTerminalSession") private var restoreTerminalSession = true
+    @AppStorage(DefaultsKey.activeProviderID) private var activeProviderIDString: String = ""
+    @AppStorage(DefaultsKey.restoreTerminalSession) private var restoreTerminalSession = true
     @State private var workspace: WorkspaceModel
     @State private var didRestore = false
     /// 大文件确认 / 阻断 sheet 的状态（Spec 2A §1.5 / §7）。

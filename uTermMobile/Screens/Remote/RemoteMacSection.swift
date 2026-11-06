@@ -37,7 +37,7 @@ struct RemoteMacSection: View {
             #if DEBUG
             // 调试：启动参数 `-RemoteDebugOpenDesktop YES`（配合 `-RemoteDebugEndpoint`）直接打开第一台 Mac 的屏幕，
             // 模拟器联调远程桌面时不用手点。
-            if UserDefaults.standard.bool(forKey: "RemoteDebugOpenDesktop"), let mac = directory.macs.first,
+            if UserDefaults.standard.bool(forKey: DefaultsKey.remoteDebugOpenDesktop), let mac = directory.macs.first,
                let store, store.remoteDesktop == nil {
                 store.remoteDesktop = MRemoteDesktopRequest(client: directory.client(for: mac))
             }

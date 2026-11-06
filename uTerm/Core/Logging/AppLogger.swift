@@ -27,7 +27,7 @@ nonisolated enum AppLogger {
     }
 
     private static func currentSettingRaw() -> String? {
-        UserDefaults.standard.string(forKey: "logLevel")
+        UserDefaults.standard.string(forKey: DefaultsKey.logLevel)
     }
 
     private static func logger(category: String) -> Logger {

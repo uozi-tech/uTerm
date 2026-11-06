@@ -10,10 +10,10 @@ import AppKit
 /// 砍掉的设计稿项：keepalive 与 SSH 压缩（Citadel/NIOSSH 不支持）、
 /// 转发 / 代理 group（spec 08-10）、清空数据（用户取消）。
 struct AdvancedSettingsView: View {
-    @AppStorage("sshConnectTimeout") private var connectTimeout: Int = 30
-    @AppStorage("sshHostKeyPolicy")  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
-    @AppStorage("logLevel")          private var logLevelRaw: String = LogLevel.info.rawValue
-    @AppStorage("sftpMaxConcurrentTransfers") private var maxConcurrentUploads: Int = 4
+    @AppStorage(DefaultsKey.sshConnectTimeout) private var connectTimeout: Int = 30
+    @AppStorage(DefaultsKey.sshHostKeyPolicy)  private var hostKeyPolicyRaw: String = SSHHostKeyPolicy.ask.rawValue
+    @AppStorage(DefaultsKey.logLevel)          private var logLevelRaw: String = LogLevel.info.rawValue
+    @AppStorage(DefaultsKey.sftpMaxConcurrentTransfers) private var maxConcurrentUploads: Int = 4
     @AppStorage(ChatHistoryStore.retentionDaysKey)
     private var chatRetentionDays: Int = ChatHistoryStore.defaultRetentionDays
     /// Mac 作为局域网同步服务端，移动端通过 Bonjour 发现它。
