@@ -71,6 +71,8 @@ enum ExternalEditCloseGuard {
         case .uploadThenProceed:
             Task {
                 let ok = await flush(coordinators)
+                // 上传失败、退出取消：终端的「退出中」状态要一起复位，否则之后关标签会走退出分支。
+                if !ok { TerminalQuitPolicy.shared.quitCancelled() }
                 sender.reply(toApplicationShouldTerminate: ok)
             }
             return .terminateLater
