@@ -33,7 +33,7 @@ struct SyncDiagnosticsView: View {
                         // 事件最多 80 条，按设置页卡片的样式手画分隔线（时间列之后对齐）。
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                             if index > 0 {
-                                Rectangle().fill(UD.border).frame(height: 1)
+                                Rectangle().fill(SettingsLine.row).frame(height: 1)
                                     .padding(.leading, SettingsMetrics.rowInset)
                             }
                             HStack(alignment: .firstTextBaseline, spacing: 10) {

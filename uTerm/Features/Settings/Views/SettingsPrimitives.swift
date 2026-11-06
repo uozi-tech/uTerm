@@ -47,15 +47,24 @@ extension View {
 }
 
 extension View {
-    /// 设置窗的卡片底：与页面同底色，1pt `UD.border` 描边划出分组边界（不用灰底，user 定）。
+    /// 设置窗的卡片底：与页面同底色，1pt `SettingsLine.card` 描边划出分组边界（不用灰底，user 定）。
     func settingsCard() -> some View {
         background(
             RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
                 .fill(UD.bg)
                 .overlay(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                    .strokeBorder(UD.border, lineWidth: 1))
+                    .strokeBorder(SettingsLine.card, lineWidth: 1))
         )
     }
+}
+
+/// 设置窗里的线：比全局 `UD.border` 淡一档（user 反馈分割线太显眼）。卡片描边略深于行间线，
+/// 两者都只起「分组 / 分行」的提示作用，不参与层级。窗口级的栏间线仍用 `UD.border`，与其它窗口一致。
+enum SettingsLine {
+    /// 卡片描边。
+    static let card = UD.dyn(.white(0.09), .black(0.065))
+    /// 卡片内行间线。
+    static let row = UD.dyn(.white(0.065), .black(0.045))
 }
 
 /// 设置页的尺寸常量。
@@ -147,7 +156,7 @@ struct SettingsGroup<Content: View>: View {
                         ForEach(Array(subviews.enumerated()), id: \.element.id) { index, subview in
                             if index > 0, let inset = subview.containerValues.settingsDividerInset {
                                 Rectangle()
-                                    .fill(UD.border)
+                                    .fill(SettingsLine.row)
                                     .frame(height: 1)
                                     .padding(.leading, inset)
                             }

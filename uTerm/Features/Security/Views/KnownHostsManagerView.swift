@@ -67,7 +67,7 @@ struct KnownHostsManagerView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, host in
                         if index > 0 {
-                            Rectangle().fill(UD.border).frame(height: 1)
+                            Rectangle().fill(SettingsLine.row).frame(height: 1)
                                 .padding(.leading, SettingsMetrics.listTextInset)
                         }
                         KnownHostRow(host: host, onDelete: { pendingDelete = host })
