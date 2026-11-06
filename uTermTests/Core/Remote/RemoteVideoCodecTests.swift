@@ -90,6 +90,19 @@ final class RemoteVideoCodecTests: XCTestCase {
         }
     }
 
+    /// 参数集或码流是空的（坏帧）：报错，不能在取指针时崩掉。
+    func test_empty_parameter_set_or_payload_throws_instead_of_crashing() throws {
+        XCTAssertThrowsError(try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: [Data([0x40]), Data()]))
+        XCTAssertThrowsError(try RemoteVideoDecoder.formatDescription(codec: .h264, parameterSets: [Data()]))
+        let width = 320, height = 192
+        let encoder = try RemoteVideoEncoder(codec: .h264, width: width, height: height, bitrate: 1_000_000, frameRate: 30)
+        let key = try encode(encoder, RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 3), nanos: 1,
+                             keyframe: true)
+        let frame = try wire(key, codec: .h264, sequence: 1, width: width, height: height)
+        let format = try RemoteVideoDecoder.formatDescription(codec: .h264, parameterSets: frame.parameterSets)
+        XCTAssertThrowsError(try RemoteVideoDecoder.sampleBuffer(Data(), format: format))
+    }
+
     func test_decoder_refuses_delta_frames_until_keyframe() throws {
         let width = 640, height = 384
         let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 2_000_000, frameRate: 60)

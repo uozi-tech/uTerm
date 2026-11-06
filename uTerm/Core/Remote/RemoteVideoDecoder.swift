@@ -122,7 +122,10 @@ nonisolated final class RemoteVideoDecoder {
     }
 
     static func formatDescription(codec: RemoteVideoCodec, parameterSets: [Data]) throws -> CMVideoFormatDescription {
-        guard !parameterSets.isEmpty else { throw RemoteVideoDecodeError.formatDescription(-1) }
+        // 空的一段取不到 baseAddress（下面会强解包）：坏帧当解码失败处理，不能让 App 崩掉。
+        guard !parameterSets.isEmpty, !parameterSets.contains(where: \.isEmpty) else {
+            throw RemoteVideoDecodeError.formatDescription(-1)
+        }
         // 指针只在闭包里有效：先把每段拷进连续内存，再一次性取指针数组。
         let buffers = parameterSets.map { [UInt8]($0) }
         var description: CMFormatDescription?
@@ -162,6 +165,7 @@ nonisolated final class RemoteVideoDecoder {
 
     /// AVCC 码流 → 一个样本（拷进 CMBlockBuffer 自己的内存，`Data` 的生命周期不用操心）。
     static func sampleBuffer(_ data: Data, format: CMVideoFormatDescription) throws -> CMSampleBuffer {
+        guard !data.isEmpty else { throw RemoteVideoDecodeError.decode(-1) }
         var block: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: data.count, blockAllocator: kCFAllocatorDefault,
