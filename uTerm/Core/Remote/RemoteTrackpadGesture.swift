@@ -83,8 +83,12 @@ nonisolated struct RemoteTrackpadGesture {
     }
 
     /// 时间推进：判定按住。
-    mutating func tick(at time: TimeInterval) -> [RemoteTrackpadAction] {
-        guard case .pendingOne(let id, let start, let startTime) = phase else { return [] }
+    ///
+    /// `fingerLifted`：系统已经知道这根手指抬起了，只是抬起事件还没送到画布（父视图上的手势识别器
+    /// 会扣住 touchesEnded 等自己判定失败，主线程忙时也会晚到）。这时计时到点也不能按下左键：
+    /// 那会把一次轻点变成按住，Mac 上的点击全成了长按。等抬起事件到了照常算单击。
+    mutating func tick(at time: TimeInterval, fingerLifted: Bool = false) -> [RemoteTrackpadAction] {
+        guard case .pendingOne(let id, let start, let startTime) = phase, !fingerLifted else { return [] }
         guard time - startTime >= Self.holdDuration else { return [] }
         phase = .drag(id: id)
         tracked = start

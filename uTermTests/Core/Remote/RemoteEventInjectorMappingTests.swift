@@ -37,4 +37,74 @@ final class RemoteEventInjectorMappingTests: XCTestCase {
     func testModifiersCombine() {
         XCTAssertEqual(RemoteEventInjector.flags([.command, .shift]), [.maskCommand, .maskShift])
     }
+
+    // MARK: - 一次按键成组（macOS 27）
+
+    private func makeInjector() -> RemoteEventInjector {
+        RemoteEventInjector(display: RemoteDesktopDisplay(id: 1, bounds: CGRect(x: 0, y: 0, width: 1000, height: 500),
+                                                          pixelWidth: 2000, pixelHeight: 1000))
+    }
+
+    private func button(_ button: RemoteMouseButton = .left, down: Bool, clicks: UInt8 = 1,
+                        modifiers: RemoteKeyModifiers = []) -> RemoteDesktopInput {
+        .button(button, down: down, clickCount: clicks, x: 0.5, y: 0.5, modifiers: modifiers)
+    }
+
+    private func number(_ event: CGEvent?) -> Int64? {
+        event?.getIntegerValueField(.mouseEventNumber)
+    }
+
+    func testClickDownAndUpShareOneEventNumber() throws {
+        let injector = makeInjector()
+        let down = try XCTUnwrap(injector.mouseEvent(for: button(down: true)))
+        let up = try XCTUnwrap(injector.mouseEvent(for: button(down: false)))
+        XCTAssertEqual(down.type, .leftMouseDown)
+        XCTAssertEqual(up.type, .leftMouseUp)
+        XCTAssertNotEqual(number(down), 0, "编号 0 等于没设，交给系统逐个分配")
+        XCTAssertEqual(number(down), number(up), "抬起要和这次按下同号，macOS 27 才把它当成这次按键的结束")
+    }
+
+    func testDragCarriesThePressNumberClickStateAndModifiers() throws {
+        let injector = makeInjector()
+        let down = injector.mouseEvent(for: button(down: true, clicks: 2, modifiers: .shift))
+        let drag = try XCTUnwrap(injector.mouseEvent(for: .move(x: 0.6, y: 0.5)))
+        let up = injector.mouseEvent(for: button(down: false, clicks: 2, modifiers: .shift))
+        XCTAssertEqual(drag.type, .leftMouseDragged)
+        XCTAssertEqual(number(drag), number(down))
+        XCTAssertEqual(number(up), number(down))
+        XCTAssertEqual(drag.getIntegerValueField(.mouseEventClickState), 2)
+        XCTAssertTrue(drag.flags.contains(.maskShift), "按着 Shift 拖选时拖动事件也要带 Shift")
+    }
+
+    func testEachNewPressGetsANewNumber() {
+        let injector = makeInjector()
+        let first = number(injector.mouseEvent(for: button(down: true)))
+        _ = injector.mouseEvent(for: button(down: false))
+        let second = number(injector.mouseEvent(for: button(down: true)))
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testPointerMoveWithoutButtonIsPlainMove() throws {
+        let injector = makeInjector()
+        _ = injector.mouseEvent(for: button(down: true))
+        _ = injector.mouseEvent(for: button(down: false))
+        let move = try XCTUnwrap(injector.mouseEvent(for: .move(x: 0.2, y: 0.2)))
+        XCTAssertEqual(move.type, .mouseMoved)
+    }
+
+    func testSecondButtonDuringDragKeepsTheFirstPressNumber() {
+        let injector = makeInjector()
+        let down = number(injector.mouseEvent(for: button(down: true)))
+        let rightDown = number(injector.mouseEvent(for: button(.right, down: true)))
+        _ = injector.mouseEvent(for: button(.right, down: false))
+        let drag = number(injector.mouseEvent(for: .move(x: 0.7, y: 0.5)))
+        let up = number(injector.mouseEvent(for: button(down: false)))
+        XCTAssertEqual(rightDown, down)
+        XCTAssertEqual(drag, down)
+        XCTAssertEqual(up, down)
+    }
+
+    func testNonMouseInputHasNoMouseEvent() {
+        XCTAssertNil(makeInjector().mouseEvent(for: .text("a")))
+    }
 }

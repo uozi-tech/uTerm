@@ -77,8 +77,12 @@ final class RemoteDesktopCanvasView: UIView {
     private var pointer = CGPoint(x: 0.5, y: 0.5)
     private var lastSentPointer: CGPoint?
     private var lastLocalInput: CFTimeInterval = 0
+    /// 触摸时间戳与显示时钟的偏差只记一次（排查用）。
+    private var loggedClockSkew = false
     private var displayLink: CADisplayLink?
     private var gesture = RemoteTrackpadGesture()
+    /// 正在等按住时长的那根手指：计时到点前先看它是不是其实已经抬起（抬起事件可能晚到，见 `tick`）。
+    private weak var holdTouch: UITouch?
     private var dragging = false
     private var dragLocation: CGPoint?
     /// 拖拽离开过边缘区才开始自动走：从边缘起手的拖拽不该一按下光标就自己跑。
@@ -228,7 +232,8 @@ final class RemoteDesktopCanvasView: UIView {
     }
 
     fileprivate func tick(_ link: CADisplayLink) {
-        apply(gesture.tick(at: link.timestamp))
+        let lifted = holdTouch.map { $0.phase == .ended || $0.phase == .cancelled } ?? false
+        apply(gesture.tick(at: link.timestamp, fingerLifted: lifted))
         let duration = link.targetTimestamp - link.timestamp
         if momentumActive { stepMomentum(duration: duration) }
         let edgeMoving = stepDragEdge(duration: duration)
@@ -267,16 +272,22 @@ final class RemoteDesktopCanvasView: UIView {
             stopMomentum()
             gesture.suppressNextTap()
         }
-        feedTouches(event, at: touches.first?.timestamp)
+        if !loggedClockSkew, let timestamp = touches.first?.timestamp,
+           abs(CACurrentMediaTime() - timestamp) > 0.2 {
+            loggedClockSkew = true
+            AppLogger.info("远程桌面：触摸时间与显示时钟差 \(Int((CACurrentMediaTime() - timestamp) * 1000)) ms",
+                           category: RemoteLog.category)
+        }
+        feedTouches(event)
         wake()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        feedTouches(event, at: touches.first?.timestamp)
+        feedTouches(event)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        feedTouches(event, at: touches.first?.timestamp)
+        feedTouches(event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -284,13 +295,17 @@ final class RemoteDesktopCanvasView: UIView {
         apply(gesture.cancel())
     }
 
-    private func feedTouches(_ event: UIEvent?, at timestamp: TimeInterval?) {
+    /// 时间一律取送达画布的这一刻，和 `tick` 的 `CADisplayLink` 同一个时钟（与 Moonlight 从
+    /// touchesBegan 起计时一致）。不用 `UITouch.timestamp`：它和显示时钟对不上、或按下事件晚送到时，
+    /// 按下那一刻就已「按满 0.45 s」，每一下都成了按住左键——点击变长按、移动光标变拖选。
+    private func feedTouches(_ event: UIEvent?) {
         noteLocalInput()
         let active = (event?.touches(for: self) ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
         let touches = active.map {
             RemoteTrackpadTouch(id: Int(bitPattern: ObjectIdentifier($0)), location: $0.location(in: self))
         }
-        apply(gesture.update(touches, at: timestamp ?? CACurrentMediaTime()))
+        apply(gesture.update(touches, at: CACurrentMediaTime()))
+        holdTouch = gesture.needsTick && active.count == 1 ? active.first : nil
     }
 
     private func apply(_ actions: [RemoteTrackpadAction]) {

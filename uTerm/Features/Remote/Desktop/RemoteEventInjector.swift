@@ -7,12 +7,21 @@ import Foundation
 /// 需要「辅助功能」授权（PostEvent 沿用 Accessibility 的授权）；没有授权时 `post` 静默无效，
 /// 所以开流时先查 `CGPreflightPostEventAccess`，没授权就告诉手机「只能看」，根本不建这个对象。
 ///
+/// 鼠标事件按 macOS 27 的要求成组：一次按下到抬起之间的按下、拖动、抬起带同一个
+/// `mouseEventNumber`。不设的话编号由系统逐个分配，macOS 27 不把抬起认作那次按下的结束，
+/// 点击变成按住不放、窗口也拖不动（Chromium 远程桌面同样的修复：4e33c976af，2026-10）。
+///
 /// 只在连接队列上调用（串行），按键状态（哪个键按着、上次点击位置）因此不用加锁。
 nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked Sendable {
     private let display: RemoteDesktopDisplay
     private let source = CGEventSource(stateID: .hidSystemState)
     private var location: CGPoint
     private var pressed: Set<UInt8> = []
+    /// 当前这次按键的编号：每次按下加一，之后的拖动与抬起沿用。
+    private var mouseEventNumber: Int64 = 0
+    /// 当前这次按键的连点次数与修饰键：拖动事件也要带上，和按下一致。
+    private var clickState: Int64 = 1
+    private var pressedFlags: CGEventFlags = []
     /// 像素滚动只收整数：小数部分攒起来，下一次一起发，慢速滚动才不会丢。
     private var scrollRemainder = CGPoint.zero
 
@@ -23,19 +32,8 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
 
     func inject(_ input: RemoteDesktopInput) {
         switch input {
-        case .move(let x, let y):
-            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
-            let (type, button) = dragType()
-            post(CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location, mouseButton: button))
-        case .button(let button, let down, let clicks, let x, let y, let modifiers):
-            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
-            if down { pressed.insert(button.rawValue) } else { pressed.remove(button.rawValue) }
-            let (type, cgButton) = Self.buttonEvent(button, down: down)
-            let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
-                                mouseButton: cgButton)
-            event?.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, clicks)))
-            event?.flags = Self.flags(modifiers)
-            post(event)
+        case .move, .button:
+            post(mouseEvent(for: input))
         case .scroll(let dx, let dy, let phase):
             let total = CGPoint(x: scrollRemainder.x + CGFloat(dx), y: scrollRemainder.y + CGFloat(dy))
             let wheelY = Int32(total.y.rounded(.towardZero)), wheelX = Int32(total.x.rounded(.towardZero))
@@ -61,9 +59,51 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
     func releaseButtons() {
         for button in pressed.compactMap(RemoteMouseButton.init(rawValue:)) {
             let (type, cgButton) = Self.buttonEvent(button, down: false)
-            post(CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location, mouseButton: cgButton))
+            let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
+                                mouseButton: cgButton)
+            stampPress(event, flags: pressedFlags)
+            post(event)
         }
         pressed = []
+    }
+
+    /// 指针移动 / 按键对应的鼠标事件（不投递），并更新按键状态。其余输入返回 nil。
+    func mouseEvent(for input: RemoteDesktopInput) -> CGEvent? {
+        switch input {
+        case .move(let x, let y):
+            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
+            let (type, button) = dragType()
+            let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
+                                mouseButton: button)
+            if !pressed.isEmpty { stampPress(event, flags: pressedFlags) }
+            return event
+        case .button(let button, let down, let clicks, let x, let y, let modifiers):
+            location = RemoteDesktopGeometry.globalPoint(x: x, y: y, displayBounds: display.bounds)
+            let flags = Self.flags(modifiers)
+            if down {
+                // 另一个键已按着时（左键拖动中再按右键）不开新的一组：抬起要和最早那次按下配对。
+                if pressed.isEmpty { mouseEventNumber += 1 }
+                pressed.insert(button.rawValue)
+                clickState = Int64(max(1, clicks))
+                pressedFlags = flags
+            } else {
+                pressed.remove(button.rawValue)
+            }
+            let (type, cgButton) = Self.buttonEvent(button, down: down)
+            let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
+                                mouseButton: cgButton)
+            stampPress(event, flags: flags)
+            event?.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, clicks)))
+            return event
+        case .scroll, .key, .text:
+            return nil
+        }
+    }
+
+    private func stampPress(_ event: CGEvent?, flags: CGEventFlags) {
+        event?.setIntegerValueField(.mouseEventNumber, value: mouseEventNumber)
+        event?.setIntegerValueField(.mouseEventClickState, value: clickState)
+        event?.flags = flags
     }
 
     /// 写剪贴板再按 ⌘V。图片按原始格式放（PNG / JPEG 各自的 UTI），收图的 app 自己挑能读的；

@@ -53,6 +53,15 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         XCTAssertEqual(gesture.update([], at: 0.6), [.dragEnded])
     }
 
+    func test_tap_whose_lift_arrives_late_still_clicks() {
+        // 抬手事件被父视图的手势识别器扣住、晚于按住时长才送到：计时到点时手指其实已经抬起。
+        _ = gesture.update([touch(1, 100)], at: 0)
+        XCTAssertEqual(gesture.tick(at: 0.5, fingerLifted: true), [], "手指已抬起，不能按下左键")
+        XCTAssertTrue(gesture.needsTick)
+        XCTAssertEqual(gesture.update([], at: 0.08), [.click(.left)])
+        XCTAssertFalse(gesture.needsTick)
+    }
+
     func test_drag_survives_a_second_finger_until_the_first_lifts() {
         _ = gesture.update([touch(1, 100)], at: 0)
         _ = gesture.tick(at: 0.5)
