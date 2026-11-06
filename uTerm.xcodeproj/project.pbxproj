@@ -7,10 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		4B43500000000000000000A3 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A1 /* CKCP */; };
-		4B43500000000000000000A4 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A2 /* CKCP */; };
-		4A55494345000000000000A3 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A1 /* CJuice */; };
-		4A55494345000000000000A4 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A2 /* CJuice */; };
 		10C0DE0000000000000000E1 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D1 /* SwiftTerm */; };
 		10C0DE0000000000000000E2 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D2 /* Citadel */; };
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
@@ -21,6 +17,10 @@
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
 		4147454E544B495400000011 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000001 /* AgentKit */; };
 		4147454E544B495400000012 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4147454E544B495400000002 /* AgentKit */; };
+		4A55494345000000000000A3 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A1 /* CJuice */; };
+		4A55494345000000000000A4 /* CJuice in Frameworks */ = {isa = PBXBuildFile; productRef = 4A55494345000000000000A2 /* CJuice */; };
+		4B43500000000000000000A3 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A1 /* CKCP */; };
+		4B43500000000000000000A4 /* CKCP in Frameworks */ = {isa = PBXBuildFile; productRef = 4B43500000000000000000A2 /* CKCP */; };
 		5541424B0000000000000011 /* UAppKitBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 5541424B0000000000000001 /* UAppKitBridge */; };
 		5544455349474E0000000011 /* UDesignKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5544455349474E0000000001 /* UDesignKit */; };
 		5550414E45540000000011 /* UPaneTree in Frameworks */ = {isa = PBXBuildFile; productRef = 5550414E45540000000001 /* UPaneTree */; };
@@ -1795,17 +1795,17 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "vendor/kcp";
-		};
-		4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "vendor/libjuice";
-		};
 		4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "vendor/tree-sitter-grammars";
+		};
+		4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/libjuice;
+		};
+		4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/kcp;
 		};
 		A1B2C3D4E5F6789ABCDEF000 /* XCLocalSwiftPackageReference "vendor/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -1925,26 +1925,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		4B43500000000000000000A1 /* CKCP */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
-			productName = CKCP;
-		};
-		4B43500000000000000000A2 /* CKCP */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
-			productName = CKCP;
-		};
-		4A55494345000000000000A1 /* CJuice */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
-			productName = CJuice;
-		};
-		4A55494345000000000000A2 /* CJuice */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
-			productName = CJuice;
-		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
@@ -1984,6 +1964,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5541504B0000000000000000 /* XCRemoteSwiftPackageReference "uAppKit" */;
 			productName = AgentKit;
+		};
+		4A55494345000000000000A1 /* CJuice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
+			productName = CJuice;
+		};
+		4A55494345000000000000A2 /* CJuice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */;
+			productName = CJuice;
+		};
+		4B43500000000000000000A1 /* CKCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
+			productName = CKCP;
+		};
+		4B43500000000000000000A2 /* CKCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */;
+			productName = CKCP;
 		};
 		4F3E4D36AABE4DB844CCF540 /* TreeSitterINI */ = {
 			isa = XCSwiftPackageProductDependency;
