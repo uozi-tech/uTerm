@@ -17,9 +17,7 @@ struct SyncDiagnosticsView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(UD.text)
                 Spacer()
-                Text("\(rows.count) 条")
-                    .font(UD.monoMetric)
-                    .foregroundStyle(UD.text4)
+                UDCountBadge(rows.count)
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
@@ -27,35 +25,42 @@ struct SyncDiagnosticsView: View {
             Rectangle().fill(UD.border).frame(height: 1)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 0) {
                     if rows.isEmpty {
-                        Text(SyncDiagnosticsPresentation.emptyMessage)
-                            .font(.system(size: 12))
-                            .foregroundStyle(UD.text4)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 16)
+                        SettingsEmptyRow(symbol: "clock.arrow.circlepath",
+                                         text: SyncDiagnosticsPresentation.emptyMessage)
                     } else {
-                        ForEach(rows) { row in
+                        // 事件最多 80 条，按设置页卡片的样式手画分隔线（时间列之后对齐）。
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                            if index > 0 {
+                                Rectangle().fill(UD.border).frame(height: 1)
+                                    .padding(.leading, SettingsMetrics.rowInset)
+                            }
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 Text(row.time)
                                     .font(UD.mono(11))
-                                    .foregroundStyle(UD.text4)
+                                    .foregroundStyle(UD.text3)
                                     .frame(width: 62, alignment: .leading)
                                 Text(row.text)
                                     .font(UD.mono(11.5))
-                                    .foregroundStyle(UD.text2)
+                                    .foregroundStyle(UD.text)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 0)
                             }
+                            .padding(.horizontal, SettingsMetrics.rowInset)
+                            .padding(.vertical, 8)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                    .fill(UD.card))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
             }
             .frame(maxHeight: .infinity)
+            .background(UD.pageBg)
 
             Rectangle().fill(UD.border).frame(height: 1)
             HStack(spacing: 8) {

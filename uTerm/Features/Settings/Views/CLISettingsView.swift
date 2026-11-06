@@ -18,6 +18,8 @@ struct CLISettingsView: View {
 
     var body: some View {
         SettingsScroll {
+            SettingsPageHeader(title: "命令行与技能",
+                               subtitle: String(localized: "让本机的 AI 工具经 uTerm 使用你保存的主机"))
             interfaceGroup
             backgroundGroup
             skillsGroup
@@ -33,27 +35,28 @@ struct CLISettingsView: View {
     }
 
     private var backgroundGroup: some View {
-        SettingsGroup(title: "后台服务") {
-            SettingsRow(label: "登录后在后台启动", hint: "登录 macOS 后启动 uTerm 的本机服务，不弹窗口，也不显示 Dock 图标。") {
+        SettingsGroup(title: "后台服务",
+                      footer: String(localized: "后台实例不弹窗口，也不显示 Dock 图标。")) {
+            SettingsRow(label: "登录后在后台启动", hint: "登录 macOS 后启动 uTerm 的本机服务") {
                 UDToggle(Binding(
                     get: { backgroundSettings.launchAtLogin },
                     set: { backgroundSettings.setLaunchAtLogin($0) }
                 ))
             }
-            SettingsRow(label: "允许 CLI 按需启动", hint: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪。") {
+            SettingsRow(label: "允许 CLI 按需启动", hint: "uTerm 未运行时，utermctl 可以静默启动一个后台实例并等待接口就绪") {
                 UDToggle(Binding(
                     get: { backgroundSettings.allowOnDemandLaunch },
                     set: { backgroundSettings.allowOnDemandLaunch = $0 }
                 ))
             }
             if let error = backgroundSettings.loginItemError {
-                Text(error).font(.system(size: 11.5)).foregroundStyle(UD.danger)
+                SettingsInlineNote(tone: .danger, text: error)
             } else if backgroundSettings.needsLoginItemApproval {
-                Text("等待系统批准。请前往系统设置 ▸ 通用 ▸ 登录项与扩展，允许 uTerm 后台项目。")
-                    .font(.system(size: 11.5)).foregroundStyle(UD.caution)
+                SettingsInlineNote(tone: .warning,
+                                   text: String(localized: "等待系统批准。请前往系统设置 ▸ 通用 ▸ 登录项与扩展，允许 uTerm 后台项目。"))
             } else if backgroundSettings.loginItemStatus == .notFound {
-                Text("登录后台启动尚未注册，或系统尚未识别该组件。开启后会再次向系统注册。")
-                    .font(.system(size: 11.5)).foregroundStyle(UD.text3)
+                SettingsInlineNote(tone: .muted,
+                                   text: String(localized: "登录后台启动尚未注册，或系统尚未识别该组件。开启后会再次向系统注册。"))
             }
         }
     }
@@ -61,10 +64,11 @@ struct CLISettingsView: View {
     // MARK: - 接口
 
     private var interfaceGroup: some View {
-        SettingsGroup(title: "命令行接口") {
+        SettingsGroup(title: "命令行接口",
+                      footer: String(localized: "密码与私钥不会离开 uTerm。执行任意 shell 命令等同于对该主机的完全访问，请按需开启写入。")) {
             SettingsRow(
                 label: "启用命令行接口",
-                hint: "本机的 AI 工具可以经 uTerm 使用你已保存的主机执行命令、读写文件、启停隧道。密码与私钥不会离开 uTerm。"
+                hint: "本机的 AI 工具可以经 uTerm 使用你已保存的主机执行命令、读写文件、启停隧道"
             ) {
                 UDToggle(
                     Binding(get: { settings.isEnabled }, set: { settings.isEnabled = $0 })
@@ -73,7 +77,7 @@ struct CLISettingsView: View {
 
             SettingsRow(
                 label: "允许执行命令与写入",
-                hint: "放开 run、SFTP 写入、端口转发启停与终端注入。执行任意 shell 命令等同于对该主机的完全访问，请按需开启。"
+                hint: "放开 run、SFTP 写入、端口转发启停与终端注入"
             ) {
                 UDToggle(
                     Binding(get: { settings.allowMutations }, set: { settings.allowMutations = $0 })
@@ -85,12 +89,7 @@ struct CLISettingsView: View {
             socketRow
 
             if let error = settings.startupError {
-                Text(error)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(UD.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                SettingsInlineNote(tone: .danger, text: error)
             }
         }
     }
@@ -113,11 +112,17 @@ struct CLISettingsView: View {
 
     @ViewBuilder
     private var skillsGroup: some View {
-        SettingsGroup(title: "AI 技能") {
+        SettingsGroup(
+            title: "AI 技能",
+            footer: "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
+                + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
+                + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
+        ) {
             if !skills.didLoad {
-                emptyRow("正在检测本机的 AI 命令行工具…")
+                SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "正在检测本机的 AI 命令行工具…"))
             } else if skills.availableTargets.isEmpty {
-                emptyRow("没有检测到 Claude、Codex、Cursor 或 CodeBuddy 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy）。装好其中之一后回到这里即可安装技能。")
+                SettingsEmptyRow(symbol: "sparkles",
+                                 text: String(localized: "没有检测到 Claude、Codex、Cursor 或 CodeBuddy 的命令行配置目录（~/.claude、~/.codex、~/.cursor、~/.codebuddy）。装好其中之一后回到这里即可安装技能。"))
             } else {
                 ForEach(skills.availableTargets, id: \.self) { target in
                     targetRow(target)
@@ -127,29 +132,18 @@ struct CLISettingsView: View {
             binLinkRow
 
             if let error = skills.lastError {
-                Text(error)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(UD.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                SettingsInlineNote(tone: .danger, text: error)
             }
-
-            emptyRow(
-                "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
-                    + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
-                    + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
-            )
         }
     }
 
     private func targetRow(_ target: SkillTarget) -> some View {
         let status = skills.status(for: target)
         let busy = skills.isBusy(target)
-        return SettingsRow(label: target.displayName,
-                           hint: status.conflictReason ?? statusHint(status),
-                           icon: target.iconSystemName) {
-            HStack(spacing: 12) {
+        return SettingsListRow(icon: target.iconSystemName, tint: statusTint(status),
+                               title: target.displayName,
+                               subtitle: status.conflictReason ?? statusHint(status)) {
+            HStack(spacing: 10) {
                 // 已安装不再挂「已安装」徽标：右侧已经有「卸载」，状态一目了然（user 要求去掉）。
                 if case .installed = status {} else { statusPill(status) }
                 if status.canInstall {
@@ -164,6 +158,15 @@ struct CLISettingsView: View {
                     .disabled(busy)
                 }
             }
+        }
+    }
+
+    private func statusTint(_ status: SkillInstallStatus) -> Color {
+        switch status {
+        case .installed: return UD.success
+        case .brokenLink: return UD.caution
+        case .conflict: return UD.danger
+        case .notInstalled: return UD.text2
         }
     }
 
@@ -185,7 +188,7 @@ struct CLISettingsView: View {
     }
 
     private var binLinkHint: String {
-        let base = "让你在自己的终端里也能直接敲 utermctl。链接指向 uTerm.app 内的脚本，与技能自带的那份同源；移动 uTerm.app 后下次启动会自动改指。"
+        let base = "在自己的终端里也能直接敲 utermctl，与技能自带的那份同源"
         switch skills.binLinkStatus {
         case .installed:
             return base + "（已链接）"
@@ -219,17 +222,6 @@ struct CLISettingsView: View {
             .foregroundStyle(color)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Capsule(style: .continuous).fill(color.opacity(0.12)))
-            .overlay(Capsule(style: .continuous).stroke(color.opacity(0.35), lineWidth: 1))
-    }
-
-    private func emptyRow(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(UD.text3)
-            .lineSpacing(1.5)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 8)
+            .background(Capsule(style: .continuous).fill(color.opacity(0.14)))
     }
 }

@@ -23,7 +23,6 @@ struct KnownHostsManagerView: View {
                 emptyState
             } else {
                 searchBar
-                Rectangle().fill(UD.border).frame(height: 1)
                 list
                 Rectangle().fill(UD.border).frame(height: 1)
                 footer
@@ -31,8 +30,9 @@ struct KnownHostsManagerView: View {
         }
         .frame(minWidth: 640, minHeight: 440)
         // 自绘扁平 chrome（同密钥 / 分组管理窗口）：透明系统标题栏 + 让位红绿灯的自绘标题栏。
+        // 内容区与设置窗同一套：pageBg 上一张 card 列表（见 SettingsPrimitives）。
         .ignoresSafeArea(.container, edges: .top)
-        .background(UD.bg)
+        .background(UD.pageBg)
         .background(WorkspaceWindowChrome(serverName: "已知主机指纹"))
         .overlay { deleteConfirmOverlay }
     }
@@ -41,27 +41,43 @@ struct KnownHostsManagerView: View {
 
     private var searchBar: some View {
         UDSearchField(text: $query, placeholder: "按地址或指纹搜索", showsHotkeyChip: false)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 20)
             .padding(.vertical, 10)
+            // 搜索框落在白条上：灰底输入框压在 pageBg 上会糊成一块灰。
+            .background(UD.bg)
+            .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 
     @ViewBuilder
     private var list: some View {
         let rows = filtered
         if rows.isEmpty {
-            Text("没有匹配「\(query)」的主机")
-                .font(.system(size: 12))
-                .foregroundStyle(UD.text4)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack {
+                SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "没有匹配「\(query)」的主机"))
+                    .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                        .fill(UD.card))
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                // 懒加载：连过几百台机器的库里 KnownHost 有上千行。
+                // 懒加载：连过几百台机器的库里 KnownHost 有上千行。分组卡片的自动分隔线要先拆子视图，
+                // 不懒，所以这里照同样的样式手画：卡片底 + 行间缩进到文字起点的 1pt 线。
                 LazyVStack(spacing: 0) {
-                    ForEach(rows) { host in
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, host in
+                        if index > 0 {
+                            Rectangle().fill(UD.border).frame(height: 1)
+                                .padding(.leading, SettingsMetrics.listTextInset)
+                        }
                         KnownHostRow(host: host, onDelete: { pendingDelete = host })
                     }
                 }
-                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                    .fill(UD.card))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
             }
         }
     }
@@ -72,10 +88,11 @@ struct KnownHostsManagerView: View {
             Spacer()
             Text("首次连接或主机密钥变化时，uTerm 会要求你确认指纹后才信任。")
         }
-        .font(.system(size: 11))
-        .foregroundStyle(UD.text4)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .font(.system(size: 11.5))
+        .foregroundStyle(UD.text3)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 9)
+        .background(UD.bg)
     }
 
     private var emptyState: some View {
@@ -88,7 +105,7 @@ struct KnownHostsManagerView: View {
                 .foregroundStyle(UD.text2)
             Text(KnownHostCopy.emptyMessage)
                 .font(.system(size: 12))
-                .foregroundStyle(UD.text4)
+                .foregroundStyle(UD.text3)
                 .multilineTextAlignment(.center)
         }
         .padding(24)
@@ -113,52 +130,31 @@ struct KnownHostsManagerView: View {
 
 // MARK: - 行
 
-/// 一条已知主机：地址 / 指纹（等宽，可选中复制）/ 密钥类型 / 信任日期 / 删除钮。
+/// 一条已知主机（设置页的列表行样式）：地址 / 指纹（等宽，可选中复制）、密钥类型、信任日期、删除钮。
 private struct KnownHostRow: View {
     let host: KnownHost
     let onDelete: () -> Void
 
-    @State private var hover = false
-
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "shield")
-                .font(.system(size: 13))
-                .foregroundStyle(UD.text3)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(host.displayAddress)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(UD.text)
-                        .lineLimit(1)
-                    Text(host.keyTypeLabel)
-                        .font(UD.mono(10.5))
-                        .foregroundStyle(UD.text3)
-                        .padding(.horizontal, 6)
-                        .frame(height: 17)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillSoft))
-                }
-                Text(host.fingerprint)
-                    .font(UD.mono(11))
+        SettingsListRow(icon: "checkmark.shield.fill", tint: UD.success,
+                        title: host.displayAddress,
+                        subtitle: host.fingerprint, subtitleStyle: .monospaced) {
+            HStack(spacing: 10) {
+                Text(host.keyTypeLabel)
+                    .font(UD.mono(10.5))
+                    .foregroundStyle(UD.text2)
+                    .padding(.horizontal, 6)
+                    .frame(height: 18)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(UD.fillFaint))
+                    .fixedSize()
+                Text(host.trustedDateText)
+                    .font(UD.monoMetric)
                     .foregroundStyle(UD.text3)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                UDIconButton(systemImage: "trash", size: 26, style: .danger, action: onDelete)
+                    .help("删除")
+                    .accessibilityLabel("删除 \(host.displayAddress) 的指纹")
             }
-            Spacer(minLength: 8)
-            Text(host.trustedDateText)
-                .font(UD.monoMetric)
-                .foregroundStyle(UD.text4)
-            UDIconButton(systemImage: "trash", size: 24, action: onDelete)
-                .help("删除")
-                .accessibilityLabel("删除 \(host.displayAddress) 的指纹")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hover ? UD.rowHover : Color.clear))
-        .padding(.horizontal, 6)
-        .onHover { hover = $0 }
     }
 }
 
