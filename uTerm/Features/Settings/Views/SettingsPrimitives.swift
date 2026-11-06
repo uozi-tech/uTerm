@@ -58,11 +58,11 @@ extension View {
     }
 }
 
-/// 设置窗里的线：比全局 `UD.border` 淡一档（user 反馈分割线太显眼）。卡片描边略深于行间线，
-/// 两者都只起「分组 / 分行」的提示作用，不参与层级。窗口级的栏间线仍用 `UD.border`，与其它窗口一致。
+/// 设置窗里的线。全局 `UD.border` 已随 uAppKit 1.9.4 调淡（user 反馈线太显眼），卡片描边直接用它，
+/// 与窗口级的栏间线同一个值；卡片内的行间线再淡一档，只起分行提示，不参与层级。
 enum SettingsLine {
-    /// 卡片描边。
-    static let card = UD.dyn(.white(0.09), .black(0.065))
+    /// 卡片描边 = 全局描边。
+    static let card = UD.border
     /// 卡片内行间线。
     static let row = UD.dyn(.white(0.065), .black(0.045))
 }

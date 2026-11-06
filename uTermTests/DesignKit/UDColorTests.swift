@@ -94,8 +94,8 @@ final class UDColorTests: XCTestCase {
 
     func test_neutrals_light_use_neutral_black() {
         assertHex(UD.panelHover,  .aqua, 0x000000, alpha: 0.04, "panelHover = 纯黑@4%（半透明，叠在任何面上都可见）")
-        assertHex(UD.border,      .aqua, 0x000000, alpha: 0.09, "border = 纯黑@9%（#F0F0F0 在白卡上看不见分隔线）")
-        assertHex(UD.borderHi,    .aqua, 0xD9D9D9, "borderHi = #D9D9D9")
+        assertHex(UD.border,      .aqua, 0x000000, alpha: 0.065, "border = 纯黑@6.5%（uAppKit 1.9.4 起调淡；#F0F0F0 在白卡上看不见分隔线，再淡就没了）")
+        assertHex(UD.borderHi,    .aqua, 0xE0E0E0, "borderHi = #E0E0E0（uAppKit 1.9.4 起调淡）")
         // 文本 ramp 真值 = 组件库调色板（Ant Design 预设）日间实色四阶。
         assertHex(UD.text2,       .aqua, 0x595959, "text2 = #595959（正文层）")
         assertHex(UD.text3,       .aqua, 0x8C8C8C, "text3 = #8C8C8C（次要信息层）")
