@@ -40,6 +40,9 @@ final class RemoteHostServer {
     private(set) var status: Status = .stopped
     /// 已通过认证、正连着的设备名。
     private(set) var connectedDevices: [String] = []
+    /// 已通过握手的连接对应的对端 `deviceID`。设置页按它判「在线」——按名字判会错：握手报的设备名
+    /// 和配对时存进 `trustedPeers` 的名字可能不同（改过设备名、或 iCloud 配对记的是另一个名字）。
+    private(set) var connectedPeerIDs: Set<UUID> = []
     private(set) var trustedPeers: [RemotePeer] = []
     /// 排队中的配对请求；审批面板只显示第一个。
     private(set) var pairingRequests: [PairingRequest] = []
@@ -311,7 +314,9 @@ final class RemoteHostServer {
     }
 
     private func refreshConnectedDevices() {
-        connectedDevices = connections.values.filter(\.isAuthorized).map(\.peerName).sorted()
+        let authorized = connections.values.filter(\.isAuthorized)
+        connectedDevices = authorized.map(\.peerName).sorted()
+        connectedPeerIDs = Set(authorized.compactMap(\.peerID))
     }
 
     // MARK: - 配对

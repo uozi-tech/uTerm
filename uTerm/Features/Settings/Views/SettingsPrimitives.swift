@@ -29,15 +29,18 @@ extension View {
         containerValue(\.settingsDividerInset, inset)
     }
 
-    /// 作为上一项的子项：整行右移一级，左侧画一条竖向导轨（光缩进会像一块空白），分隔线跟着缩进。
+    /// 作为上一项的子项：整行右移一级，缩进处放一个「↳」记号（光缩进会像一块空白，
+    /// 竖导轨又像画错的线），分隔线跟着缩进。
     func settingsNested() -> some View {
         padding(.leading, SettingsMetrics.nestedIndent)
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(UD.border)
-                    .frame(width: 2)
-                    .padding(.vertical, 10)
-                    .padding(.leading, SettingsMetrics.rowInset + 4)
+            .overlay(alignment: .topLeading) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(UD.text4)
+                    .frame(width: SettingsMetrics.nestedIndent, height: 18)
+                    .padding(.top, 11)
+                    .padding(.leading, SettingsMetrics.rowInset)
+                    .accessibilityHidden(true)
             }
             .settingsDivider(inset: SettingsMetrics.rowInset + SettingsMetrics.nestedIndent)
     }
@@ -312,9 +315,10 @@ struct SettingsListRow<Trailing: View>: View {
                     }
                 }
             }
-            .layoutPriority(1)
             Spacer(minLength: 12)
+            // 右侧是按钮 / 菜单 / 开关，按自身宽度排，不让长副文案把「显示二维码」挤成竖排折行。
             trailing()
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(title)
         }

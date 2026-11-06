@@ -29,7 +29,7 @@ struct RemotePairedDevicesGroup: View {
                 SettingsEmptyRow(symbol: "iphone.slash", text: String(localized: "还没有配对的设备"))
             } else {
                 ForEach(server.trustedPeers) { peer in
-                    let online = server.connectedDevices.contains(peer.name)
+                    let online = server.connectedPeerIDs.contains(peer.id)
                     SettingsListRow(icon: settingsDeviceSymbol(for: peer.name),
                                     tint: online ? UD.success : UD.accent,
                                     title: peer.name,
