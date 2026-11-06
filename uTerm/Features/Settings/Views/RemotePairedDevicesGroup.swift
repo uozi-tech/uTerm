@@ -45,9 +45,10 @@ struct RemotePairedDevicesGroup: View {
         }
     }
 
+    /// 手机只在真的用着（远控面板 / 终端 / 桌面）时才和 Mac 保持连接，没连接不等于「离线」，
+    /// 所以只在有连接时标「已连接」，平时只显示配对日期。
     private func subtitle(for peer: RemotePeer, online: Bool) -> String {
         let paired = peer.pairedAt.formatted(date: .abbreviated, time: .omitted)
-        let state = online ? String(localized: "在线") : String(localized: "离线")
-        return String(localized: "配对于 \(paired) · \(state)")
+        return online ? String(localized: "配对于 \(paired) · 已连接") : String(localized: "配对于 \(paired)")
     }
 }

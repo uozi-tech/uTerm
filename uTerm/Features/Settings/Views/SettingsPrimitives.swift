@@ -232,11 +232,12 @@ struct SettingsRow<Trailing: View>: View {
                     hintText(hint)
                 }
             }
-            .layoutPriority(1)
             Spacer(minLength: 12)
             // 把行 label 关联到右侧控件——UDToggle / UDSegmented / Slider 等
             // 无内建 label，VoiceOver 借此念出「<标签> 开关 / 选择」而非孤立的「开/关」。
+            // 右侧先拿到自己的理想宽度（layoutPriority），长说明再折行；否则「查看事件…」会被挤成竖排。
             trailing()
+                .layoutPriority(1)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(label)
         }

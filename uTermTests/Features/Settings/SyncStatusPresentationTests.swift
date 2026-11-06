@@ -44,7 +44,8 @@ final class SyncStatusPresentationTests: XCTestCase {
     func testDiagnosticsSubtitle() {
         XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .signedOut, lastError: "boom"),
                        CloudKitSyncStatus.signedOut.label, "看不了细节时只报基础状态")
-        XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .synced, lastError: "boom"), "boom")
+        XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .synced, lastError: "boom"),
+                       "最近一次同步出错，点右侧查看详情与日志", "错误原文不进副标题，只提示去弹窗看")
         XCTAssertEqual(SyncStatusPresentation.diagnosticsSubtitle(status: .synced, lastError: nil),
                        "查看最近同步事件 · 复制日志")
     }

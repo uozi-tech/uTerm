@@ -48,9 +48,10 @@ enum SyncStatusPresentation {
             : "未登录 iCloud，跨设备同步只能走下面的局域网通道。"
     }
 
-    /// 「同步诊断」行的副标题：能看细节时显示最近错误或入口说明，否则直接报基础状态。
+    /// 「同步诊断」行的副标题：能看细节时一句话提示有没有出错，否则直接报基础状态。
+    /// 整段错误原文不放这里（CloudKit 的错误动辄三行，会把右侧按钮挤没），进「查看事件…」弹窗看。
     static func diagnosticsSubtitle(status: CloudKitSyncStatus, lastError: String?) -> String {
         guard status.isCloudActive else { return status.label }
-        return lastError ?? "查看最近同步事件 · 复制日志"
+        return lastError == nil ? "查看最近同步事件 · 复制日志" : "最近一次同步出错，点右侧查看详情与日志"
     }
 }
