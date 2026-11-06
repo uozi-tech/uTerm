@@ -52,6 +52,16 @@ final class RemoteMacDirectory {
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
+    /// 只走公网：无视局域网里看到的 Mac，连接一律经中继或打洞。网络诊断用，默认关。
+    /// 启动参数 `-remote.internetOnly YES` 同样生效（手机插着线收日志时，Mac 会经 USB 链路被 Bonjour 发现）。
+    var internetOnly: Bool {
+        didSet {
+            guard internetOnly != oldValue else { return }
+            defaults.set(internetOnly, forKey: Self.internetOnlyKey)
+            if isBrowsing { restartBrowsing() } else { rebuild() }
+        }
+    }
+    private static let internetOnlyKey = "remote.internetOnly"
 
     @ObservationIgnored let identity: RemoteIdentityStore
     /// 同一 Apple ID 的名册。测试里为 nil：不读写真实的 iCloud 钥匙串。
@@ -80,9 +90,16 @@ final class RemoteMacDirectory {
         self.relayStore = relayStore
         self.defaults = defaults
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
+        self.internetOnly = defaults.bool(forKey: Self.internetOnlyKey)
         if isActivated { publishSelf() }
         refreshPaired()
         observeLifecycle()
+        #if DEBUG
+        // 调试跑链路矩阵时不等用户点进远控页：直接开始找 Mac、问中继。
+        if defaults.integer(forKey: Self.debugMatrixKey) > 0 {
+            Task { @MainActor [weak self] in self?.startBrowsing() }
+        }
+        #endif
     }
 
     /// 切到别的 App 回个消息：申请一段后台时间，短暂离开连接不断，回来也不用重发快照。
@@ -179,6 +196,11 @@ final class RemoteMacDirectory {
 
     /// 只认 TXT 里带设备 ID 的结果；电脑名只拿来显示。没有设备 ID 的（老版本 Mac）不认。
     private func update(_ results: Set<NWBrowser.Result>) {
+        guard !internetOnly else {
+            online = [:]
+            rebuild()
+            return
+        }
         online = Self.onlineMacs(results.compactMap { result in
             guard case .service(let name, _, _, _) = result.endpoint,
                   case .bonjour(let txt) = result.metadata else { return nil }
@@ -253,6 +275,17 @@ final class RemoteMacDirectory {
         return (RemoteICEProbeRunner(relay: relay, identity: identity, localID: RemoteLocalDevice.id()), peer)
     }
 
+    /// 配好的中继服务器名字；没配是 nil。读钥匙串，别放进视图 body。
+    func relayServerName() -> String? {
+        (relayConfigOverride ?? relayStore?.load())?.name
+    }
+
+    /// 这台 Mac 能不能跑链路矩阵：条件同打洞诊断。
+    func pathMatrixRunner(for mac: Mac) -> (runner: RemotePathMatrixRunner, peer: RemotePeer)? {
+        guard mac.isOnRelay, let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
+        return (RemotePathMatrixRunner(relay: relay, identity: identity, localID: RemoteLocalDevice.id()), peer)
+    }
+
     private func internetDialer(for mac: Mac) -> (@Sendable () async throws -> RemoteDialedPath)? {
         guard let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
         let dialer = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
@@ -316,7 +349,39 @@ final class RemoteMacDirectory {
         for mac in macs {
             clients[mac.id]?.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
         }
+        #if DEBUG
+        runDebugMatrixIfRequested()
+        #endif
     }
+
+    #if DEBUG
+    /// 调试：启动参数 `-RemoteDebugPathMatrix <轮数>`，第一台在中继上的 Mac 一出现就自动跑链路矩阵，
+    /// 结果打到标准输出（`devicectl device process launch --console` 收得到）并存进诊断记录。
+    /// 配合 `-remote.internetOnly YES` 插着线也测得到公网路径（链路本地与 ULA 地址不参与打洞）。
+    private static let debugMatrixKey = "RemoteDebugPathMatrix"
+    @ObservationIgnored private var debugMatrixStarted = false
+
+    private func runDebugMatrixIfRequested() {
+        let rounds = defaults.integer(forKey: Self.debugMatrixKey)
+        guard rounds > 0, !debugMatrixStarted, let mac = macs.first(where: \.isOnRelay),
+              let probe = pathMatrixRunner(for: mac) else { return }
+        debugMatrixStarted = true
+        let defaults = self.defaults
+        Task {
+            let network = await RemoteNetworkLabel.current()
+            print("[链路矩阵] 开始：\(mac.name)，\(rounds) 轮，\(network)")
+            var results = await probe.runner.run(mac: probe.peer, rounds: rounds) { result in
+                print("[链路矩阵] \(result.summaryLine)")
+            }
+            for index in results.indices { results[index].network = network }
+            for summary in RemotePathProbeSummary.summarize(results) {
+                print("[链路矩阵·汇总] \(summary.line)")
+            }
+            RemotePathMatrixLog(defaults: defaults).append(results)
+            print("[链路矩阵] 结束")
+        }
+    }
+    #endif
 
     /// 配对过的 Mac：本机信任的 ∪ 名册里的 Mac（本机拉黑的除外）。同一设备 ID 只算一台；名册里有它时公钥以名册
     /// 为准（Mac 重装后换了密钥，名册经同一 Apple ID 同步的是新的，本机记的旧公钥会把它永远挡在外面）。

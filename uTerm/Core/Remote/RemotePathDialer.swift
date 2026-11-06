@@ -58,7 +58,7 @@ nonisolated struct RemotePathDialer: Sendable {
         }
         switch reply.kind {
         case .denied: throw RemoteRelayError.notAllowed
-        case .offer, .iceProbe, .iceProbeAnswer: throw RemoteRelayError.malformed
+        case .offer, .iceProbe, .iceProbeAnswer, .relayProbe, .relayProbeAnswer: throw RemoteRelayError.malformed
         case .answer: break
         }
         let keys = RemoteSignalBox.handshakeKeys(sharedKey: shared, phoneNonce: offer.nonce, macNonce: reply.nonce,

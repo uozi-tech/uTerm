@@ -199,9 +199,11 @@ final class RemoteRelayHostLink {
         switch responder?.receiveOffer(session: session, from: message.from, box: message.box, now: now,
                                        acceptsDirect: canTryDirect) {
         case .reply(let reply):
+            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），不试直连，等中继回拨", category: RemoteLog.category)
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
             return
         case .direct(let offer):
+            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），先试直连", category: RemoteLog.category)
             startDirect(offer, session: session, connection: connection)
             return
         case .ignore, nil:
@@ -212,6 +214,8 @@ final class RemoteRelayHostLink {
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
         case .accepted(let request):
             startProbe(request, session: session, connection: connection)
+        case .relayEcho(let reply):
+            try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
         case .ignore, nil:
             break
         }
@@ -260,11 +264,20 @@ final class RemoteRelayHostLink {
         }
         try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
         guard let attempt, description != nil else {
+            AppLogger.info("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
             attempt?.close()
             return
         }
         // 打洞要几秒。这期间用户可能关了公网接入，或者取消了这台设备的勾选。
-        guard await attempt.waitForCheck(keys: offer.directKeys.check), runner != nil, let server,
+        let checked = await attempt.waitForCheck(keys: offer.directKeys.check)
+        if checked, let selected = attempt.selectedCandidates() {
+            let local = RemoteICECandidateKind(sdp: selected.local)?.label ?? "?"
+            let remote = RemoteICECandidateKind(sdp: selected.remote)?.label ?? "?"
+            AppLogger.info("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
+        } else if !checked {
+            AppLogger.info("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
+        }
+        guard checked, runner != nil, let server,
               server.allowsInternetAccess(offer.peer.id),
               let transport = attempt.makeTransport(keys: offer.directKeys.datagram) else {
             attempt.close()
@@ -278,8 +291,22 @@ final class RemoteRelayHostLink {
 
     private func handleIncoming(_ message: RemoteRelayMessage) {
         guard let session = message.session, let ticket = message.ticket,
-              let pending = responder?.claim(session: session, now: Date().timeIntervalSince1970),
               callbacksInFlight < Self.maxCallbacksInFlight else { return }
+        let now = Date().timeIntervalSince1970
+        if responder?.claimEcho(session: session, now: now) == true {
+            callbacksInFlight += 1
+            Task { [weak self] in
+                defer { self?.callbacksInFlight -= 1 }
+                do {
+                    guard let transport = try await self?.accept(ticket: ticket) else { return }
+                    await RemoteStreamEchoServer.serve(transport)
+                } catch {
+                    AppLogger.info("中继诊断回拨失败：\(error.localizedDescription)", category: RemoteLog.category)
+                }
+            }
+            return
+        }
+        guard let pending = responder?.claim(session: session, now: now) else { return }
         callbacksInFlight += 1
         Task { [weak self] in
             defer { self?.callbacksInFlight -= 1 }
@@ -292,7 +319,15 @@ final class RemoteRelayHostLink {
     }
 
     private func callBack(ticket: String, pending: RemoteSignalResponder.PendingSession) async throws {
-        guard let server else { return }
+        guard let server, let transport = try await accept(ticket: ticket) else { return }
+        AppLogger.info("公网接入：中继回拨接通", category: RemoteLog.category)
+        server.accept(transport: transport,
+                      origin: .internet(peerID: pending.peer.id, keys: pending.keys, path: .relay))
+    }
+
+    /// 拿着中继给的票回拨，接上就交出字节流。
+    private func accept(ticket: String) async throws -> (any RemoteTransport)? {
+        guard let server else { return nil }
         let hostKey = try server.identity.relayHostKey()
         let connection = RemoteRelayConnection(config: config)
         do {
@@ -307,7 +342,6 @@ final class RemoteRelayHostLink {
             connection.close()
             throw error
         }
-        server.accept(transport: connection.detach(),
-                      origin: .internet(peerID: pending.peer.id, keys: pending.keys, path: .relay))
+        return connection.detach()
     }
 }

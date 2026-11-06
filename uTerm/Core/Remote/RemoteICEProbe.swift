@@ -24,6 +24,7 @@ nonisolated struct RemoteICEProbeResult: Codable, Equatable, Identifiable, Senda
     var selectedLocal: String?
     var selectedRemote: String?
     var roundTripMillis: Double?
+    var roundTripP95Millis: Double?
     var lossPercent: Int?
 
     var summaryLine: String {
@@ -105,9 +106,9 @@ nonisolated final class RemoteICEProbeSession: @unchecked Sendable {
         return false
     }
 
-    /// 发一串 ping，量往返和丢包。
-    func measure(count: Int = 40, interval: Duration = .milliseconds(50),
-                 settle: Duration = .milliseconds(800)) async -> (roundTripMillis: Double?, lossPercent: Int) {
+    /// 发一串 ping，量往返（中位数、p95）和丢包。
+    func measure(count: Int = 40, interval: Duration = .milliseconds(50), settle: Duration = .milliseconds(800)) async
+        -> (roundTripMillis: Double?, p95Millis: Double?, lossPercent: Int) {
         for sequence in 0..<UInt64(count) {
             locked { sentAt[sequence] = .now() }
             agent?.send(Self.packet(Self.pingByte, sequence))
@@ -115,8 +116,8 @@ nonisolated final class RemoteICEProbeSession: @unchecked Sendable {
         }
         try? await Task.sleep(for: settle)
         let trips = locked { roundTrips.values.sorted() }
-        let median = trips.isEmpty ? nil : trips[trips.count / 2]
-        return (median, (count - trips.count) * 100 / max(1, count))
+        let percentiles = RemoteRoundTrips.percentiles(trips)
+        return (percentiles.p50, percentiles.p95, (count - trips.count) * 100 / max(1, count))
     }
 
     private func record(phase newPhase: RemoteICEAgent.Phase) {
@@ -173,7 +174,9 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
     let identity: RemoteIdentityStore
     let localID: UUID
 
-    func run(mac: RemotePeer) async -> RemoteICEProbeResult {
+    /// `family`：只用这一族的候选地址（nil = 都用）。不出公网的地址（`fe80::`、`169.254.*`、`fc00::/7`）一律不用：
+    /// 手机插着线或连着调试隧道时两端会经那条链路互相看见，打通的是那根线，不是公网。
+    func run(mac: RemotePeer, family: RemoteICEAddressFamily? = nil) async -> RemoteICEProbeResult {
         var result = RemoteICEProbeResult()
         result.macName = mac.name
         let config = relay.relayConfig
@@ -191,15 +194,25 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
             }
             await session.waitForGathering(limit: Self.gatherLimit)
             result.gatherMillis = Self.millis(since: started)
-            guard let description = session.localDescription() else {
+            guard let gathered = session.localDescription() else {
                 result.failure = "拿不到本机描述"
                 return result
             }
+            let description = RemoteICEDescriptionFilter.keep(gathered, family: family)
             result.localCandidates = Self.labels(description)
+            guard !result.localCandidates.isEmpty else {
+                result.failure = "本机没有\(family?.label ?? "")公网候选地址"
+                return result
+            }
 
-            let answer = try await exchange(description: description, mac: mac)
+            let fullAnswer = try await exchange(description: description, mac: mac)
             result.signalMillis = Self.millis(since: started) - result.gatherMillis
+            let answer = RemoteICEDescriptionFilter.keep(fullAnswer, family: family)
             result.remoteCandidates = Self.labels(answer)
+            guard !result.remoteCandidates.isEmpty else {
+                result.failure = "Mac 没有\(family?.label ?? "")公网候选地址"
+                return result
+            }
             let answered = DispatchTime.now()
             guard session.setRemote(answer) else {
                 result.failure = "Mac 的描述解析失败"
@@ -219,6 +232,7 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
             }
             let measured = await session.measure()
             result.roundTripMillis = measured.roundTripMillis
+            result.roundTripP95Millis = measured.p95Millis
             result.lossPercent = measured.lossPercent
         } catch {
             result.failure = error.localizedDescription
@@ -255,6 +269,51 @@ nonisolated struct RemoteICEProbeRunner: Sendable {
     }
 }
 
+nonisolated enum RemoteICEAddressFamily: String, Codable, CaseIterable, Sendable {
+    case ipv4
+    case ipv6
+
+    var label: String { self == .ipv4 ? " IPv4 " : " IPv6 " }
+}
+
+/// 按地址族筛候选地址，并去掉不出公网的地址（链路本地、IPv6 唯一本地）。不是候选地址的行（ufrag、密码……）原样留着。
+nonisolated enum RemoteICEDescriptionFilter {
+    static func keep(_ description: String, family: RemoteICEAddressFamily?) -> String {
+        description.split(separator: "\r\n", omittingEmptySubsequences: false).flatMap {
+            $0.split(separator: "\n", omittingEmptySubsequences: false)
+        }.filter { line in
+            guard line.hasPrefix("a=candidate:") else { return true }
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard let typeIndex = fields.firstIndex(of: "typ"), typeIndex >= 2 else { return false }
+            let address = fields[typeIndex - 2].lowercased()
+            let isIPv6 = address.contains(":")
+            if isIPv6 ? Self.isLinkLocalOrPrivateIPv6(address) : address.hasPrefix("169.254.") {
+                return false
+            }
+            switch family {
+            case nil: return true
+            case .ipv4: return !isIPv6
+            case .ipv6: return isIPv6
+            }
+        }.joined(separator: "\r\n")
+    }
+
+    /// `fe80::/10` 链路本地与 `fc00::/7` 唯一本地（ULA）。后者不出公网：`devicectl` 在手机与 Mac 之间建的
+    /// 调试隧道就是 ULA（经 USB 或 Wi-Fi），打洞要是挑中它，量到的是那条隧道。
+    private static func isLinkLocalOrPrivateIPv6(_ address: String) -> Bool {
+        ["fe8", "fe9", "fea", "feb", "fc", "fd"].contains { address.hasPrefix($0) }
+    }
+}
+
+/// 往返时间的中位数和 p95。
+nonisolated enum RemoteRoundTrips {
+    static func percentiles(_ sorted: [Double]) -> (p50: Double?, p95: Double?) {
+        guard !sorted.isEmpty else { return (nil, nil) }
+        let p95Index = min(sorted.count - 1, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1)
+        return (sorted[sorted.count / 2], sorted[max(0, p95Index)])
+    }
+}
+
 /// Mac 回应一次打洞诊断：回复自己的候选地址，把收到的 ping 弹回去，到时间就关。
 nonisolated enum RemoteICEProbeResponder {
     static let lifetime: Duration = .seconds(30)
@@ -273,29 +332,5 @@ nonisolated enum RemoteICEProbeResponder {
                                                      direction: .macToPhone) else { return }
         await reply(sealed)
         try? await Task.sleep(for: lifetime)
-    }
-}
-
-/// 诊断记录：只存在这台手机上，留最近 100 条。
-nonisolated struct RemoteICEProbeLog {
-    private static let key = "remote.iceProbeLog"
-    private static let limit = 100
-    let defaults: UserDefaults
-
-    func load() -> [RemoteICEProbeResult] {
-        guard let data = defaults.data(forKey: Self.key) else { return [] }
-        return (try? JSONDecoder().decode([RemoteICEProbeResult].self, from: data)) ?? []
-    }
-
-    func append(_ result: RemoteICEProbeResult) {
-        var all = load()
-        all.insert(result, at: 0)
-        if let data = try? JSONEncoder().encode(Array(all.prefix(Self.limit))) {
-            defaults.set(data, forKey: Self.key)
-        }
-    }
-
-    func clear() {
-        defaults.removeObject(forKey: Self.key)
     }
 }

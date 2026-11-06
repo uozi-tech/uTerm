@@ -279,6 +279,10 @@ struct SettingsScreen: View {
         MInsetGroup(header: "关于") {
             MInsetRow(icon: "icloud", label: "同步诊断", sub: syncDiagSub,
                       chevron: true, onTap: { showSyncDiag = true })
+            NavigationLink { RemoteNetworkDiagnosticsScreen() } label: {
+                MInsetRow(icon: "globe", label: "网络诊断", sub: "远程控制的中继与直连", chevron: true)
+            }
+            .buttonStyle(MRowStyle())
             MInsetRow(label: "版本", value: appVersion, last: true)
         }
     }

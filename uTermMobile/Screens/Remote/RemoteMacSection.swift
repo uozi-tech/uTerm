@@ -48,7 +48,14 @@ struct RemoteMacSection: View {
             RemoteMacSheet(client: directory.client(for: mac)) { directory.forget(mac) }
         }
         .sheet(item: $diagnosing) { mac in
-            RemoteICEDiagnosticsView(mac: mac, directory: directory)
+            NavigationStack {
+                RemoteNetworkDiagnosticsScreen(preferredMacID: mac.id)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("关闭") { diagnosing = nil }
+                        }
+                    }
+            }
         }
         .sheet(isPresented: $scanning) {
             RemotePairingScanner(onScanned: { invitation in
@@ -88,7 +95,7 @@ struct RemoteMacSection: View {
                   onTap: mac.isOnline ? { selected = mac } : nil)
             .mContextMenu {
                 if mac.isOnRelay {
-                    Button { diagnosing = mac } label: { Label("打洞诊断", systemImage: "stethoscope") }
+                    Button { diagnosing = mac } label: { Label("网络诊断", systemImage: "stethoscope") }
                 }
             }
     }

@@ -17,6 +17,10 @@ nonisolated struct RemoteSignalBody: Codable, Equatable, Sendable {
         case iceProbe
         /// Mac：打洞诊断的回复，`ice` 是我的候选地址。
         case iceProbeAnswer
+        /// 手机：中继诊断。Mac 经中继回拨后，把收到的字节原样弹回。
+        case relayProbe
+        /// Mac：中继诊断的回复，可以拨了。
+        case relayProbeAnswer
     }
 
     var kind: Kind
@@ -157,6 +161,8 @@ nonisolated struct RemoteSignalResponder {
 
     private var replayGuard = RemoteSignalReplayGuard()
     private var pending: [String: PendingSession] = [:]
+    /// 中继诊断的会话：中继回拨时弹回字节，不接进远控。会话 → 过期时刻。
+    private var echoSessions: [String: TimeInterval] = [:]
 
     init(localKey: Curve25519.KeyAgreement.PrivateKey, localID: UUID, recognize: @escaping (UUID) -> RemotePeer?,
          isAllowed: @escaping (UUID) -> Bool) {
@@ -242,6 +248,8 @@ nonisolated struct RemoteSignalResponder {
         /// 认识，但没有勾选公网接入。附上要回给手机的密封内容。
         case denied(String)
         case accepted(ProbeRequest)
+        /// 中继诊断：会话已登记，附上要回给手机的密封回复。
+        case relayEcho(String)
     }
 
     /// 打洞诊断的门禁和正式连接一样：只回应认识的设备，候选地址（含 Mac 的公网 IP）只给勾选过的设备。
@@ -249,8 +257,8 @@ nonisolated struct RemoteSignalResponder {
         guard let from, let deviceID = UUID(uuidString: from), let box, let peer = recognize(deviceID),
               let shared = try? RemoteSignalBox.sharedKey(local: localKey, remotePublicKey: peer.publicKey),
               let offer = try? RemoteSignalBox.open(box, key: shared, session: session, direction: .phoneToMac),
-              offer.kind == .iceProbe, offer.deviceID == deviceID, let description = offer.ice,
-              replayGuard.accept(offer, now: now) else {
+              offer.kind == .iceProbe || offer.kind == .relayProbe, offer.deviceID == deviceID,
+              offer.kind == .relayProbe || offer.ice != nil, replayGuard.accept(offer, now: now) else {
             return .ignore
         }
         guard isAllowed(deviceID) else {
@@ -260,7 +268,24 @@ nonisolated struct RemoteSignalResponder {
             }
             return .denied(sealed)
         }
+        guard offer.kind == .iceProbe, let description = offer.ice else {
+            echoSessions = echoSessions.filter { $0.value > now }
+            guard echoSessions.count < Self.maxPendingSessions else { return .ignore }
+            let reply = RemoteSignalBody(kind: .relayProbeAnswer, deviceID: localID, sentAt: now,
+                                         nonce: RemoteSignalBody.newNonce())
+            guard let sealed = try? RemoteSignalBox.seal(reply, key: shared, session: session, direction: .macToPhone) else {
+                return .ignore
+            }
+            echoSessions[session] = now + Self.sessionLifetime
+            return .relayEcho(sealed)
+        }
         return .accepted(ProbeRequest(peer: peer, sharedKey: shared, remoteDescription: description))
+    }
+
+    /// 中继说手机为诊断接进来了。一个会话只能接一次。
+    mutating func claimEcho(session: String, now: TimeInterval) -> Bool {
+        guard let expiresAt = echoSessions.removeValue(forKey: session) else { return false }
+        return expiresAt > now
     }
 
     /// 中继说手机接进来了。一个会话只能接一次。

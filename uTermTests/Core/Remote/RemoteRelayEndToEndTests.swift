@@ -272,6 +272,51 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertFalse(result.remoteCandidates.isEmpty)
     }
 
+    /// 中继诊断走完整流程：真实中继的信令与回拨，Mac 把字节原样弹回，不接进远控。
+    func test_relay_probe_echoes_through_the_relay() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        allowed.set([phone.id])
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        try mac.server.trust(try phone.peer())
+        let probe = RemoteRelayProbe(relay: RemoteRelayClient(config: config), identity: phone.identity,
+                                     localID: phone.id)
+        let result = await probe.run(mac: mac.peer, pings: 20)
+        print("[链路矩阵·中继] \(result.summaryLine)")
+        XCTAssertNil(result.failure)
+        XCTAssertTrue(result.connected)
+        XCTAssertEqual(result.lossPercent, 0)
+        XCTAssertNotNil(result.roundTripP95Millis)
+    }
+
+    /// 整个矩阵：每条路每轮一条结果，按顺序回报。
+    func test_path_matrix_reports_every_mode_every_round() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        allowed.set([phone.id])
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        try mac.server.trust(try phone.peer())
+        let runner = RemotePathMatrixRunner(relay: RemoteRelayClient(config: config), identity: phone.identity,
+                                            localID: phone.id)
+        let reported = Reported()
+        let results = await runner.run(mac: mac.peer, rounds: 2) { await reported.add($0) }
+        for summary in RemotePathProbeSummary.summarize(results) { print("[链路矩阵·本机] \(summary.line)") }
+        XCTAssertEqual(results.map(\.mode), [.directIPv6, .directIPv4, .relay, .directIPv6, .directIPv4, .relay])
+        XCTAssertEqual(results.map(\.round), [1, 1, 1, 2, 2, 2])
+        let count = await reported.count
+        XCTAssertEqual(count, 6)
+        XCTAssertTrue(results.filter { $0.mode == .relay }.allSatisfy(\.connected), "中继这条路在本机必须通")
+    }
+
+    private actor Reported {
+        var count = 0
+        func add(_ result: RemotePathProbeResult) { count += 1 }
+    }
+
     func test_ice_probe_is_denied_for_an_unticked_device() async throws {
         let config = try relayConfig()
         let phone = Phone()

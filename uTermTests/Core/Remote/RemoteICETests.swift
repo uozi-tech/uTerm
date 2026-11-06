@@ -85,6 +85,87 @@ final class RemoteICETests: XCTestCase {
         XCTAssertNil(gate.claim(session: "s", now: 100))
     }
 
+    // MARK: - 中继诊断
+
+    /// 中继诊断：登记会话、回一个可以拨的答复；回拨来时只能认领一次，也不会被当成正式连接接进来。
+    func test_relay_probe_registers_a_one_time_echo_session() throws {
+        let mac = Device(), phone = Device()
+        var gate = responder(mac: mac, phone: phone, allowed: true)
+        let box = try sealedProbe(from: phone, to: mac, session: "r", kind: .relayProbe, at: 100)
+        guard case .relayEcho(let sealed) = gate.receiveProbe(session: "r", from: phone.id.uuidString, box: box, now: 100) else {
+            return XCTFail("勾选过的设备应该拿到中继诊断的答复")
+        }
+        let shared = try RemoteSignalBox.sharedKey(local: phone.key, remotePublicKey: mac.peer.publicKey)
+        let reply = try RemoteSignalBox.open(sealed, key: shared, session: "r", direction: .macToPhone)
+        XCTAssertEqual(reply.kind, .relayProbeAnswer)
+        XCTAssertNil(gate.claim(session: "r", now: 101), "诊断会话不能开正式连接")
+        XCTAssertTrue(gate.claimEcho(session: "r", now: 101))
+        XCTAssertFalse(gate.claimEcho(session: "r", now: 102), "一个会话只能认领一次")
+    }
+
+    func test_relay_probe_is_denied_for_an_unticked_device_and_expires() throws {
+        let mac = Device(), phone = Device()
+        var denied = responder(mac: mac, phone: phone, allowed: false)
+        let box = try sealedProbe(from: phone, to: mac, session: "r", kind: .relayProbe, at: 100)
+        guard case .denied = denied.receiveProbe(session: "r", from: phone.id.uuidString, box: box, now: 100) else {
+            return XCTFail("没勾选的设备要明确拒绝")
+        }
+        XCTAssertFalse(denied.claimEcho(session: "r", now: 100))
+
+        var gate = responder(mac: mac, phone: phone, allowed: true)
+        let fresh = try sealedProbe(from: phone, to: mac, session: "e", kind: .relayProbe, at: 100)
+        _ = gate.receiveProbe(session: "e", from: phone.id.uuidString, box: fresh, now: 100)
+        XCTAssertFalse(gate.claimEcho(session: "e", now: 100 + RemoteSignalResponder.sessionLifetime + 1), "过期")
+    }
+
+    // MARK: - 链路矩阵
+
+    func test_filter_drops_link_local_and_keeps_the_requested_family() {
+        let description = [
+            "a=ice-ufrag:abcd", "a=ice-pwd:efgh",
+            "a=candidate:1 1 UDP 2122317823 192.168.1.2 49160 typ host",
+            "a=candidate:2 1 UDP 2122317823 169.254.50.3 49161 typ host",
+            "a=candidate:3 1 UDP 2122317823 fe80::1c2b:3aff:fe11:2233 49162 typ host",
+            "a=candidate:4 1 UDP 2122317823 2408:8207::1 49163 typ host",
+            "a=candidate:6 1 UDP 2122317823 fdec:4e30:7a52::1 49164 typ host",
+            "a=candidate:5 1 UDP 1686052607 45.76.10.20 50000 typ srflx raddr 0.0.0.0 rport 0",
+            "a=end-of-candidates",
+        ].joined(separator: "\r\n")
+        func labels(_ family: RemoteICEAddressFamily?) -> [String] {
+            RemoteICECandidateKind.all(inDescription: RemoteICEDescriptionFilter.keep(description, family: family))
+                .map(\.label)
+        }
+        XCTAssertEqual(labels(nil), ["host-v4", "host-v6", "srflx-v4"], "链路本地与 ULA（USB 线、devicectl 调试隧道）不参与")
+        XCTAssertEqual(labels(.ipv4), ["host-v4", "srflx-v4"])
+        XCTAssertEqual(labels(.ipv6), ["host-v6"])
+        let kept = RemoteICEDescriptionFilter.keep(description, family: .ipv6)
+        XCTAssertTrue(kept.contains("a=ice-ufrag:abcd") && kept.contains("a=ice-pwd:efgh") && kept.contains("a=end-of-candidates"))
+    }
+
+    func test_percentiles_and_summary() {
+        let trips = (1...20).map(Double.init)
+        let percentiles = RemoteRoundTrips.percentiles(trips)
+        XCTAssertEqual(percentiles.p50, 11)
+        XCTAssertEqual(percentiles.p95, 19)
+        XCTAssertNil(RemoteRoundTrips.percentiles([]).p50)
+
+        var ok = RemotePathProbeResult(mode: .relay, connected: true)
+        ok.setupMillis = 300
+        ok.roundTripMillis = 40
+        ok.roundTripP95Millis = 90
+        ok.lossPercent = 0
+        let failed = RemotePathProbeResult(mode: .relay, connected: false, failure: "超时")
+        let direct = RemotePathProbeResult(mode: .directIPv6, connected: false, failure: "所有候选地址都不通")
+        let summaries = RemotePathProbeSummary.summarize([ok, failed, direct])
+        XCTAssertEqual(summaries.map(\.mode), [.directIPv6, .relay])
+        let relay = try? XCTUnwrap(summaries.last)
+        XCTAssertEqual(relay?.attempts, 2)
+        XCTAssertEqual(relay?.successes, 1)
+        XCTAssertEqual(relay?.medianSetupMillis, 300)
+        XCTAssertEqual(relay?.medianRoundTripMillis, 40)
+        XCTAssertEqual(summaries.first?.successes, 0)
+    }
+
     func test_body_without_ice_still_decodes() throws {
         let json = #"{"kind":"offer","deviceID":"7D4E9A2C-1F1B-4B7E-9C55-0A6E2D8F3B11","sentAt":1,"nonce":"AAAA"}"#
         let body = try JSONDecoder().decode(RemoteSignalBody.self, from: Data(json.utf8))
@@ -102,20 +183,33 @@ final class RemoteICETests: XCTestCase {
         XCTAssertEqual(RemoteICECandidateKind.all(inDescription: sampleDescription).map(\.label), ["host-v4"])
     }
 
-    func test_log_keeps_the_newest_hundred() {
+    func test_log_keeps_the_newest_records() {
         let suite = "remote.ice.test.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let log = RemoteICEProbeLog(defaults: defaults)
-        for index in 0..<105 {
-            var result = RemoteICEProbeResult()
+        let log = RemotePathMatrixLog(defaults: defaults)
+        for index in 0..<(RemotePathMatrixLog.limit + 5) {
+            var result = RemotePathProbeResult()
             result.note = "\(index)"
-            log.append(result)
+            log.append([result])
         }
-        XCTAssertEqual(log.load().count, 100)
-        XCTAssertEqual(log.load().first?.note, "104")
+        XCTAssertEqual(log.load().count, RemotePathMatrixLog.limit)
+        XCTAssertEqual(log.load().first?.note, "\(RemotePathMatrixLog.limit + 4)")
         log.clear()
         XCTAssertTrue(log.load().isEmpty)
+    }
+
+    func test_last_run_is_the_newest_run_in_order() {
+        let suite = "remote.ice.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = RemotePathMatrixLog(defaults: defaults)
+        XCTAssertTrue(log.lastRun().isEmpty)
+        let old = UUID(), new = UUID()
+        log.append([RemotePathProbeResult(runID: old, round: 1, mode: .relay)])
+        log.append([RemotePathProbeResult(runID: new, round: 1, mode: .directIPv6)])
+        log.append([RemotePathProbeResult(runID: new, round: 1, mode: .relay)])
+        XCTAssertEqual(log.lastRun().map(\.mode), [.directIPv6, .relay], "只取最近一次，按时间先后")
     }
 
     func test_summary_line_has_no_address() {
