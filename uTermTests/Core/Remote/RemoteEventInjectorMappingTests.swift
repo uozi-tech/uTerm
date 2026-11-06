@@ -107,4 +107,14 @@ final class RemoteEventInjectorMappingTests: XCTestCase {
     func testNonMouseInputHasNoMouseEvent() {
         XCTAssertNil(makeInjector().mouseEvent(for: .text("a")))
     }
+
+    /// 滚动增量来自手机：非有限值或超出 Int32 的值转换时会让整个 App 崩掉。
+    func testScrollDeltaIsClampedBeforeIntConversion() {
+        XCTAssertEqual(RemoteEventInjector.clampScroll(.nan), 0)
+        XCTAssertEqual(RemoteEventInjector.clampScroll(.infinity), 0)
+        XCTAssertEqual(RemoteEventInjector.clampScroll(-.infinity), 0)
+        XCTAssertEqual(RemoteEventInjector.clampScroll(1e10), 100_000)
+        XCTAssertEqual(RemoteEventInjector.clampScroll(-1e10), -100_000)
+        XCTAssertEqual(RemoteEventInjector.clampScroll(12.5), 12.5)
+    }
 }

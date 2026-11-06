@@ -35,7 +35,9 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         case .move, .button:
             post(mouseEvent(for: input))
         case .scroll(let dx, let dy, let phase):
-            let total = CGPoint(x: scrollRemainder.x + CGFloat(dx), y: scrollRemainder.y + CGFloat(dy))
+            // 增量来自手机：非有限值或超出 Int32 的值转换时会直接崩掉整个 App，先夹住。
+            let total = CGPoint(x: Self.clampScroll(scrollRemainder.x + CGFloat(dx)),
+                                y: Self.clampScroll(scrollRemainder.y + CGFloat(dy)))
             let wheelY = Int32(total.y.rounded(.towardZero)), wheelX = Int32(total.x.rounded(.towardZero))
             scrollRemainder = CGPoint(x: total.x - CGFloat(wheelX), y: total.y - CGFloat(wheelY))
             guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
@@ -167,6 +169,12 @@ nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked 
         if modifiers.contains(.capsLock) { flags.insert(.maskAlphaShift) }
         if modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
         return flags
+    }
+
+    /// 单次滚动像素上限：远大于任何真实手势，又远小于 Int32 上限。
+    static func clampScroll(_ value: CGFloat) -> CGFloat {
+        guard value.isFinite else { return 0 }
+        return min(max(value, -100_000), 100_000)
     }
 
     /// 手势阶段 → (`scrollPhase`, `momentumPhase`)。前者取 `CGScrollPhase`（began 1 / changed 2 / ended 4），
