@@ -185,6 +185,7 @@ struct uTermApp: App {
     @MainActor
     private func installTerminalWindowOpener() {
         let open = openWindow
+        UTermLifecycleDelegate.openWelcome = { open(id: "welcome") }
         terminalRegistry.openTerminalWindow = { serverID in
             UTermLifecycleDelegate.showGUI()
             let windowID = UUID()
@@ -289,9 +290,6 @@ struct uTermApp: App {
                 .environment(backgroundSettings)
                 .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
-                .onReceive(NotificationCenter.default.publisher(for: .showWelcomeWindow)) { _ in
-                    openWindow(id: "welcome")
-                }
         }
         .modelContainer(modelContainer)
         // 自绘扁平 chrome：隐藏系统标题栏，红绿灯浮在自绘 WelcomeTitleBar 上、内容铺到顶。

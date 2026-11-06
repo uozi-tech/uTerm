@@ -86,10 +86,51 @@ enum LaunchForwardingBootstrap {
     }
 }
 
+/// 把 GUI 叫出来时，该让哪个窗口到最前。
+///
+/// 输入必须是 `NSApp.orderedWindows`：`NSApp.windows` 不保证顺序，实测欢迎窗常排第一。两个列表
+/// 都留着已关闭和已隐藏的窗口，所以还要筛。有可见窗口就用最靠前的，全部最小化时才还原一个。
+enum ReopenWindowPicker {
+    static func pick(frontToBack windows: [NSWindow]) -> NSWindow? {
+        let candidates = windows.filter { !($0 is NSPanel) }
+        return candidates.first(where: \.isVisible) ?? candidates.first(where: \.isMiniaturized)
+    }
+}
+
+/// 转入后台时藏起来的窗口。`orderOut` 后的窗口和已关闭的窗口外观上分不开，只能自己记。
+@MainActor
+final class BackgroundedWindows: NSObject {
+    private var windows: [NSWindow] = []
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: nil)
+    }
+
+    func hideAll() {
+        windows = NSApp.orderedWindows.filter(\.isVisible) + windows
+        NSApp.windows.forEach { $0.orderOut(nil) }
+    }
+
+    func restore() {
+        windows.reversed().forEach { $0.orderFront(nil) }
+        windows = []
+    }
+
+    /// 后台里会话结束也会关窗口，这种窗口不能再放出来。
+    @objc private func windowWillClose(_ notification: Notification) {
+        windows.removeAll { $0 === notification.object as AnyObject? }
+    }
+}
+
 @MainActor
 final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
     /// 开窗入口要从 Scene 环境取，由 `uTermApp` 装好后注入；此前 Dock 菜单没有自定义项。
     var dockMenu: DockMenuController?
+    /// 欢迎窗关掉后它的视图就卸载了，所以入口不能挂在欢迎窗自己身上。
+    static var openWelcome: (() -> Void)?
+    private static let backgroundedWindows = BackgroundedWindows()
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         dockMenu?.makeMenu()
@@ -103,7 +144,7 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard BackgroundLaunchMode.shouldStartHidden else { return }
-        NSApp.windows.forEach { $0.orderOut(nil) }
+        Self.backgroundedWindows.hideAll()
     }
 
     /// 退出前依次问：运行中的终端怎么办（`TerminalQuitPolicy`）；「打开」出去、还没传回服务器的文件
@@ -118,7 +159,8 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         precondition(BackgroundLaunchMode.reopenPresentation == .foreground)
         Self.showGUI()
-        return true
+        // showGUI 已处理完。返回 true 时 AppKit 还会走默认流程，可能再还原一个窗口或多开一个。
+        return false
     }
 
     static func showGUI() {
@@ -126,26 +168,22 @@ final class UTermLifecycleDelegate: NSObject, NSApplicationDelegate {
         SSHSessionRestorer.shared.restoreIfNeeded()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        let windows = NSApp.windows.filter { !($0 is NSPanel) }
-        if let window = windows.first {
+        backgroundedWindows.restore()
+        if let window = ReopenWindowPicker.pick(frontToBack: NSApp.orderedWindows) {
             window.makeKeyAndOrderFront(nil)
         } else {
-            NotificationCenter.default.post(name: .showWelcomeWindow, object: nil)
+            openWelcome?()
         }
     }
 
     static func moveToBackground() {
-        NSApp.windows.forEach { $0.orderOut(nil) }
+        backgroundedWindows.hideAll()
         NSApp.setActivationPolicy(.accessory)
     }
 
     static func quitCompletely() {
         NSApp.terminate(nil)
     }
-}
-
-extension Notification.Name {
-    static let showWelcomeWindow = Notification.Name("uterm.showWelcomeWindow")
 }
 
 struct BackgroundLifecycleCommands: Commands {
