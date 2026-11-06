@@ -352,7 +352,7 @@ private struct PermissionGuideTitleBar: View {
             .allowsHitTesting(false)
             .frame(height: 38)
             .frame(maxWidth: .infinity)
-            .background(WindowDragHandle())
+            .background(WindowDragHandle(fill: WS.canvasNSColor))
     }
 }
 
