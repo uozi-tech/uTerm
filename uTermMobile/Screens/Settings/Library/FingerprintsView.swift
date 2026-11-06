@@ -11,8 +11,8 @@ struct FingerprintsView: View {
     var body: some View {
         Group {
             if hosts.isEmpty {
-                MEmptyState(icon: "shield", title: "暂无已知主机",
-                            message: "首次连接并信任一台主机后，它的密钥指纹会记录在此。")
+                MEmptyState(icon: "shield", title: KnownHostCopy.emptyTitle,
+                            message: KnownHostCopy.emptyMessage)
             } else {
                 list
             }
@@ -20,13 +20,13 @@ struct FingerprintsView: View {
         .background(M.canvas)
         .navigationTitle("已知主机指纹")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("删除「\(pendingDelete.map(address) ?? "")」的指纹？",
+        .alert(KnownHostCopy.deleteTitle(address: pendingDelete?.displayAddress ?? ""),
                isPresented: deleteBinding,
                presenting: pendingDelete) { host in
             Button("删除", role: .destructive) { delete(host) }
             Button("取消", role: .cancel) {}
         } message: { _ in
-            Text("下次连接这台主机时会重新要求确认指纹。经 iCloud 同步的设备上也会删除。")
+            Text(KnownHostCopy.deleteMessage)
         }
     }
 
@@ -35,11 +35,11 @@ struct FingerprintsView: View {
         List {
             Section {
                 ForEach(hosts) { h in
-                    MInsetRow(icon: "shield", label: h.host,
-                              sub: "\(h.fingerprint) · \(keyTypeLabel(h.keyTypeRaw))",
+                    MInsetRow(icon: "shield", label: h.displayAddress,
+                              sub: "\(h.fingerprint) · \(h.keyTypeLabel)",
                               last: true,
                               trailing: AnyView(
-                                Text(addedText(h.firstTrustedAt))
+                                Text(h.trustedDateText)
                                     .font(M.mono(12)).foregroundStyle(M.text4)))
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(M.card)
@@ -64,14 +64,7 @@ struct FingerprintsView: View {
     }
 
     private func delete(_ host: KnownHost) {
-        context.delete(host)
-        try? context.save()
+        KnownHostLibrary.delete(host, in: context)
         pendingDelete = nil
     }
-
-    private func address(_ h: KnownHost) -> String { h.port == 22 ? h.host : "\(h.host):\(h.port)" }
-    private func keyTypeLabel(_ raw: String) -> String {
-        raw.hasPrefix("ssh-") ? String(raw.dropFirst(4)) : raw
-    }
-    private func addedText(_ date: Date) -> String { UTermFormat.date(date) }
 }

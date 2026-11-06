@@ -330,6 +330,19 @@ struct uTermApp: App {
         .windowStyle(.hiddenTitleBar)
         .routesNewWindowToWelcome()
 
+        // 设置 · 安全 的「已知主机指纹 › 打开…」用 openWindow(id:"known-hosts") 打开。
+        Window("已知主机指纹", id: "known-hosts") {
+            KnownHostsManagerView()
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .modelContainer(modelContainer)
+        .windowStyle(.hiddenTitleBar)
+        .routesNewWindowToWelcome()
+
         Window("导入 SSH 配置", id: "import") {
             SSHConfigImportView()
                 .modifier(AppAppearanceSync(preference: currentAppearance))

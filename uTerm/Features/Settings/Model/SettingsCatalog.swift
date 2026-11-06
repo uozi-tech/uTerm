@@ -100,9 +100,9 @@ nonisolated enum SettingsCatalog {
              kind: .link, key: nil, syncScope: .none, platforms: .both),
         Item(id: "security.hostGroups", section: .security, group: "安全", title: "主机分组",
              kind: .link, key: nil, syncScope: .none, platforms: .both),
-        // mac 还没有已知主机指纹的管理界面（待补）。mac 的「SSH 密钥」「主机分组」是打开管理窗口的按钮。
+        // mac 的「SSH 密钥」「主机分组」「已知主机指纹」是打开管理窗口的按钮。
         Item(id: "security.knownHosts", section: .security, group: "安全", title: "已知主机指纹",
-             kind: .link, key: nil, syncScope: .none, platforms: .iOS),
+             kind: .link, key: nil, syncScope: .none, platforms: .both),
         Item(id: "security.forwardingRules", section: .security, group: "安全", title: "端口转发规则",
              kind: .status, key: nil, syncScope: .none, platforms: .iOS),
 

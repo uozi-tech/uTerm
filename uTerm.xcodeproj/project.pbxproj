@@ -257,6 +257,7 @@
 				Features/Remote/RemotePairingPanel.swift,
 				Features/Remote/RemotePasteboard.swift,
 				Features/Remote/RemoteRelayHostLink.swift,
+				Features/Security/Views/KnownHostsManagerView.swift,
 				Features/Settings/Model/RemoteControlPresentation.swift,
 				Features/Settings/Views/AboutSettingsView.swift,
 				Features/Settings/Views/AppearanceSettingsView.swift,
