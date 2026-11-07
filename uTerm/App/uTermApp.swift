@@ -522,6 +522,20 @@ struct uTermApp: App {
         .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 
+        // 一台远程 Mac 的屏幕一个窗口：黑底、一条细工具栏，和手机上的远程桌面一样，与终端窗口共用连接。
+        WindowGroup(for: RemoteDesktopWindowID.self) { $macID in
+            RemoteDesktopWindowView(windowID: macID)
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 840)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。
         WindowGroup(for: PortForwardWindowID.self) { $pfID in
             PortForwardWindowView(windowID: pfID)

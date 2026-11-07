@@ -255,7 +255,7 @@
 				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
 				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,
 				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
-				Features/Remote/Controller/RemoteDesktopMacView.swift,
+				Features/Remote/Controller/RemoteDesktopWindow.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
 				Features/Remote/Controller/RemoteMacsWindow.swift,

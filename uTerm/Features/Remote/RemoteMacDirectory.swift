@@ -138,6 +138,22 @@ final class RemoteMacDirectory {
         #endif
     }
 
+    /// 每台 Mac 有几个窗口在用它的连接（Mac 上终端窗口与屏幕窗口共用一条）。
+    @ObservationIgnored private var holders: [String: Int] = [:]
+
+    /// 一个窗口开始用这台 Mac 的连接。和 `releaseClient` 成对调用。
+    func acquireClient(for mac: Mac) -> RemoteMacClient {
+        holders[mac.id, default: 0] += 1
+        return client(for: mac)
+    }
+
+    /// 一个窗口不用了：没有别的窗口在用时才断开，免得关屏幕窗口把终端窗口也断掉。
+    func releaseClient(macID: String) {
+        let left = max(0, (holders[macID] ?? 0) - 1)
+        holders[macID] = left == 0 ? nil : left
+        if left == 0 { clients[macID]?.disconnect() }
+    }
+
     /// 有连着的 Mac（iOS 退到后台时据此申请一段后台时间）。
     var hasConnectedClients: Bool {
         clients.values.contains { $0.state == .connected }

@@ -196,37 +196,51 @@ final class RemoteMacDesktopTests: XCTestCase {
         return Rig(server: server, mac: mac, client: client)
     }
 
-    private func makeModel(_ client: RemoteMacClient) -> RemoteMacWindowModel {
-        RemoteMacWindowModel(client: client, startTerminal: { _ in }, makeDesktop: { client in
-            let pane = RemoteDesktopPane(session: RemoteDesktopSession(client: client, maxWidth: 1920, maxHeight: 1080))
-            Task { await pane.session.start() }
-            return pane
-        })
-    }
-
-    func test_screen_tab_is_one_per_window_survives_terminal_follow_and_stops_when_closed() async throws {
+    func test_screen_window_connects_then_streams_and_stops_the_stream_on_close() async throws {
         let rig = try await makeRig()
         defer { rig.client.disconnect() }
-        let model = makeModel(rig.client)
-        model.takeOver()
-        model.openDesktop()
-        let desktop = try XCTUnwrap(model.desktop)
-        let streaming = await waitUntil { desktop.session.state == .streaming }
-        XCTAssertTrue(streaming, "\(desktop.session.state)")
-        XCTAssertTrue(model.panes.isEmpty, "终端列表里不含屏幕标签")
-        XCTAssertEqual(model.tabCount, 1)
+        rig.client.disconnect()
+        _ = await waitUntil { rig.client.state != .connected }
+        let model = RemoteDesktopWindowModel(
+            client: rig.client, session: RemoteDesktopSession(client: rig.client, maxWidth: 1920, maxHeight: 1080))
+        await model.start()
+        XCTAssertEqual(rig.client.state, .connected, "开窗口时没连着就先连")
+        XCTAssertEqual(model.session.state, .streaming)
+        await model.start()
+        XCTAssertEqual(rig.mac.sources.count, 1, "已经在放就不重开")
+        model.close()
+        XCTAssertEqual(model.session.state, .idle, "关窗口停掉画面")
+        XCTAssertEqual(rig.client.state, .connected, "连接由目录按窗口计数决定，窗口自己不断")
+        await model.startStreamIfConnected()
+        XCTAssertEqual(model.session.state, .idle, "关掉之后连接状态再变也不自己重开")
+    }
 
-        model.openDesktop()
-        XCTAssertEqual(model.tabCount, 1, "再点一次只带到前台")
-        XCTAssertTrue(model.desktop === desktop)
-
-        model.follow([])
-        XCTAssertNotNil(model.desktop, "那台 Mac 的终端列表变化不影响屏幕标签")
-
-        XCTAssertTrue(model.close(desktop.id))
-        XCTAssertEqual(desktop.session.state, .idle, "关标签停掉画面")
-        XCTAssertNil(model.desktop)
-        model.disposeAll()
+    func test_shared_connection_is_dropped_only_when_the_last_window_lets_go() async throws {
+        let rig = try await makeRig()
+        rig.client.disconnect()
+        let suite = "RemoteMacDesktopTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try rig.server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "这台 Mac",
+                                        publicKey: try identity.localIdentity().publicKey.rawRepresentation,
+                                        pairedAt: Date()))
+        let directory = RemoteMacDirectory(identity: identity, defaults: defaults, adoptsRelayAsDefault: false)
+        let port = try XCTUnwrap(NWEndpoint.Port(rawValue: try XCTUnwrap(rig.server.port)))
+        let mac = RemoteMacDirectory.Mac(id: "mini", deviceID: nil, name: "远程 Mac", publicKey: nil, source: .debug,
+                                         endpoint: .hostPort(host: "127.0.0.1", port: port))
+        let terminals = directory.acquireClient(for: mac)
+        let screen = directory.acquireClient(for: mac)
+        XCTAssertTrue(terminals === screen, "终端窗口与屏幕窗口共用一条连接")
+        await screen.connect()
+        XCTAssertEqual(screen.state, .connected)
+        directory.releaseClient(macID: mac.id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(terminals.state, .connected, "关掉一扇窗口，另一扇照常连着")
+        directory.releaseClient(macID: mac.id)
+        let dropped = await waitUntil { terminals.state != .connected }
+        XCTAssertTrue(dropped, "最后一扇窗口关掉才断开")
+        directory.releaseClient(macID: mac.id)
     }
 
     func test_canvas_sends_absolute_clicks_keys_and_releases_held_keys_on_focus_loss() async throws {

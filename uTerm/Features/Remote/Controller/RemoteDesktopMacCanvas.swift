@@ -35,6 +35,9 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
 /// 画布本体。
 ///
 /// - 画面：`AVSampleBufferDisplayLayer`，帧在解码队列上直接 enqueue，不经主线程（与手机端同一条路）。
+///   视图是「图层宿主」（自己建根图层再 `wantsLayer`）：AppKit 不再管这棵图层树，不会在重绘 / 改透明度时
+///   动到视频图层。视频图层的 frame 只在真的变了时才设：Mac 上鼠标一动光标回报每秒约 60 次，每次都重设
+///   同一个 frame 也会让视频图层重新布局。
 /// - 指针：绝对坐标。本机指针在画面上就是那台 Mac 的指针（那边采集时不画光标，本机光标就是它）；
 ///   本机指针不在画面上、或只能查看时，按那台 Mac 回报的位置画一个箭头。
 /// - 键盘：画布是第一响应者时，按键（含 ⌘ 组合）原样发过去，不进本机菜单，也不进本机输入法：
@@ -66,9 +69,12 @@ final class RemoteDesktopCanvasNSView: NSView {
     init(session: RemoteDesktopSession) {
         self.session = session
         super.init(frame: .zero)
+        let root = CALayer()
+        root.backgroundColor = NSColor.black.cgColor
+        root.masksToBounds = true
+        root.isGeometryFlipped = true
+        layer = root
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
-        layer?.masksToBounds = true
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
@@ -82,6 +88,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         cursorLayer.isHidden = true
         layer?.addSublayer(cursorLayer)
         attachReceiver()
+        AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
         NotificationCenter.default.addObserver(self, selector: #selector(windowResignedKey),
                                                name: NSWindow.didResignKeyNotification, object: nil)
     }
@@ -94,6 +101,7 @@ final class RemoteDesktopCanvasNSView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func teardown() {
+        AppLogger.info("远程桌面画布：拆除", category: RemoteLog.category)
         releaseAll()
         stopEdgeTimer()
         NotificationCenter.default.removeObserver(self)
@@ -114,11 +122,23 @@ final class RemoteDesktopCanvasNSView: NSView {
             })
     }
 
+    /// 渲染器从解码队列上用。出错（或系统要求 flush）时先记一笔原因，flush 后把这一帧照常送进去，
+    /// 画面不会停在黑屏上等下一次变化。
     private nonisolated final class RendererBox: @unchecked Sendable {
         let renderer: AVSampleBufferVideoRenderer
+        private var failures = 0
         init(_ renderer: AVSampleBufferVideoRenderer) { self.renderer = renderer }
         func enqueue(_ sample: CMSampleBuffer) {
-            if renderer.status == .failed { renderer.flush() }
+            if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
+                failures += 1
+                if failures <= 20 || failures % 100 == 0 {
+                    let reason = renderer.error.map { "\($0)" } ?? "需要 flush"
+                    let count = failures
+                    AppLogger.info("远程桌面画布：渲染器出错，flush 后继续（第 \(count) 次）：\(reason)",
+                                   category: RemoteLog.category)
+                }
+                renderer.flush()
+            }
             renderer.enqueue(sample)
         }
     }
@@ -154,8 +174,8 @@ final class RemoteDesktopCanvasNSView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
+        layer?.contentsScale = scale
         cursorLayer.contentsScale = scale
-        displayLayer.contentsScale = scale
     }
 
     private func applyScale() {
@@ -173,7 +193,8 @@ final class RemoteDesktopCanvasNSView: NSView {
     private func layoutContent() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = viewport.contentFrame
+        let frame = viewport.contentFrame
+        if displayLayer.frame != frame { displayLayer.frame = frame }
         cursorLayer.position = viewport.viewPoint(normalized: CGPoint(x: CGFloat(macCursor.x), y: CGFloat(macCursor.y)))
         // 本机指针在画面上并且能控制时，本机光标就是那台 Mac 的光标，不再画一个。
         let localIsCursor = session.canControl && mouseInside
