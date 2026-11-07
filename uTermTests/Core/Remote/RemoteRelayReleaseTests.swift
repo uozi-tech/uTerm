@@ -56,7 +56,8 @@ final class RemoteRelayReleaseTests: XCTestCase {
         XCTAssertTrue(prompt.contains("references/relay.md"))
         XCTAssertTrue(prompt.contains("relay import"))
         XCTAssertTrue(prompt.contains("relay check"))
-        XCTAssertTrue(prompt.contains("47310"))
+        XCTAssertTrue(prompt.contains("随机"))
+        XCTAssertTrue(prompt.contains("不要用默认的 47310"))
         XCTAssertTrue(prompt.contains("不要运行 uterm-relay config"))
         XCTAssertTrue(RemoteRelayAgentPrompt.deploy(hostName: nil).contains("问我装在哪台"))
         XCTAssertTrue(RemoteRelayAgentPrompt.update(hostName: "relay-host").contains("「relay-host」"))
@@ -120,13 +121,16 @@ final class RemoteRelayReleaseTests: XCTestCase {
         XCTAssertFalse(monitor.updateAvailable, "还不知道中继在跑哪个版本")
         XCTAssertTrue(notified.isEmpty)
 
-        monitor.noteRunning(nil)  // 1.0.0 的 hello 不带版本
+        monitor.noteRunning("1.0.0")
         XCTAssertEqual(monitor.runningVersion, "1.0.0")
         XCTAssertTrue(monitor.updateAvailable)
         XCTAssertEqual(notified.map(\.1), ["1.1.0"])
 
-        monitor.noteRunning(nil)
+        monitor.noteRunning("1.0.0")
         XCTAssertEqual(notified.count, 1, "同一个版本只提醒一次")
+
+        monitor.noteRunning(nil)
+        XCTAssertFalse(monitor.updateAvailable, "不知道版本就不提醒")
 
         monitor.noteRunning("1.1.0")
         XCTAssertFalse(monitor.updateAvailable)

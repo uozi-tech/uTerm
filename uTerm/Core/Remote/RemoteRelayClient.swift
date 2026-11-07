@@ -53,7 +53,7 @@ actor RemoteRelayClient {
             try await connection.send(RemoteRelayRequest(role: "dial", hostID: host.uuidString, session: session,
                                                          sig: signature))
             // 比中继的 ticket 时限长一点：过期由中继明确告诉我们。
-            let answer: RemoteRelayAnswer = try await connection.receive(timeout: 13)
+            let answer = try await connection.answer(timeout: 13)
             guard answer.ok else {
                 if answer.reason == "offline" { throw RemoteRelayError.macOffline }
                 throw RemoteRelayError.refused(answer.reason ?? "")
@@ -84,7 +84,7 @@ actor RemoteRelayClient {
                 let signature = try RemoteRelaySignature.sign(memberKey, role: "client", relayID: config.relayID,
                                                               nonce: hello.nonce, parameter: "")
                 try await connection.send(RemoteRelayRequest(role: "client", sig: signature))
-                let answer: RemoteRelayAnswer = try await connection.receive()
+                let answer = try await connection.answer()
                 guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
                 return connection
             } catch {

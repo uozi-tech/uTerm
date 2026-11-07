@@ -143,7 +143,7 @@ final class RemoteRelayHostLink {
                                                parameter: hostID),
             hostSig: try RemoteRelaySignature.sign(hostKey, role: "host", relayID: config.relayID, nonce: hello.nonce,
                                                    parameter: hostID)))
-        let answer: RemoteRelayAnswer = try await connection.receive()
+        let answer = try await connection.answer()
         guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
 
         responder = RemoteSignalResponder(
@@ -151,7 +151,7 @@ final class RemoteRelayHostLink {
             recognize: { [weak server] id in MainActor.assumeIsolated { server?.knownPeer(id: id) } },
             isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } })
         state = .registered
-        server.relayUpdates.noteRunning(hello.server)
+        server.relayUpdates.noteRunning(answer.server)
         retryDelay = .seconds(1)
         lastHeard = Date()
         startHeartbeat(connection)
@@ -337,7 +337,7 @@ final class RemoteRelayHostLink {
                 role: "accept", ticket: ticket,
                 hostSig: try RemoteRelaySignature.sign(hostKey, role: "accept", relayID: config.relayID,
                                                        nonce: hello.nonce, parameter: ticket)))
-            let answer: RemoteRelayAnswer = try await connection.receive()
+            let answer = try await connection.answer()
             guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
         } catch {
             connection.close()

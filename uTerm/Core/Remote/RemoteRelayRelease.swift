@@ -7,8 +7,6 @@ nonisolated enum RemoteRelayRelease {
     static var installScriptURL: URL { baseURL.appending(path: "install.sh") }
     static var latestURL: URL { baseURL.appending(path: "latest.json") }
 
-    /// 1.0.0 的 hello 里没有版本号。
-    static let legacyVersion = "1.0.0"
     static let defaultPort = 47310
     /// 安装脚本把设备配置写在 SSH 登录用户主目录下的这里（0600）。相对路径：SFTP 从主目录起算。
     static let clientConfigPath = ".config/uterm-relay/client.json"
@@ -106,7 +104,7 @@ nonisolated enum RemoteRelayAgentPrompt {
         return [
             String(localized: "用 uterm 技能部署一台 uTerm 中继，按技能里 references/relay.md 的步骤做。"),
             "- " + target,
-            "- " + String(localized: "动手前先问我：监听端口（默认 \(String(RemoteRelayRelease.defaultPort))）、手机连接用的域名或公网 IP。"),
+            "- " + String(localized: "动手前先问我手机连接用的域名或公网 IP。监听端口让安装脚本随机挑一个（不要用默认的 \(String(RemoteRelayRelease.defaultPort))），装完告诉我是哪个，提醒我在安全组放行它的 TCP 和 UDP。"),
             "- " + String(localized: "装好后用 utermctl relay import 把配置导入 uTerm，再用 utermctl relay check 测试；不通就按结果排查，直到测通。"),
             "- " + String(localized: "不要运行 uterm-relay config，不要读取或打印中继的配置文件和成员密钥。"),
         ].joined(separator: "\n")

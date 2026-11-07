@@ -20,6 +20,9 @@ uTerm，再测通。
 - 配置只用 `relay import` 导入；它的响应里只有名字、地址和 relayID。
 - **不要** `uterm-relay rotate`，除非用户明确说要换钥（换完所有设备都要重新导入）。
 - 安装脚本的所有输出都不含密钥，可以照常读。
+- **不要**在对话或文档里四处写中继的地址和端口，也不要用 `nc` / 浏览器去「探」它：中继对认证
+  之前的连接一律不回话（只吐 32 字节随机数或直接断开），这本来就是为了不被扫到。要测就用
+  `relay check`。
 
 ## 部署
 
@@ -43,11 +46,13 @@ uTerm，再测通。
 
 ### 2. 问用户三件事（不要自己定）
 
-1. **监听端口**：默认 `47310`。先查有没有被占：
+1. **监听端口**：**每台中继用一个随机的高位端口，不要用 47310**（固定的默认端口最先被扫）。
+   默认就是不给 `--port`，安装脚本自己在 20000–32767 里挑一个没被占用的，装完从输出的
+   `port=` 读出来告诉用户。用户坚持要指定端口时才加 `--port`，先查有没有被占：
    ```sh
    "$UTERMCTL" run -H <主机> -c 'ss -lntu | grep -E ":<端口>\b" || echo free'
    ```
-   被占了就请用户换一个。TCP 和 UDP 用**同一个**端口号。
+   TCP 和 UDP 用**同一个**端口号。
 2. **对外地址**：手机和 Mac 连接用的域名或公网 IP。可以先给出候选——主机档案里的地址，
    或 `run -c 'curl -s4 https://ifconfig.me'` 查到的出口 IP——让用户确认。内网地址
    （`10.*`、`172.16–31.*`、`192.168.*`）在外面连不上。
@@ -60,13 +65,15 @@ uTerm，再测通。
 
 ```sh
 "$UTERMCTL" run -H <主机> --timeout 180 -c \
-  'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sh -s -- install --port <端口> --public-host <地址> --name "<名字>"'
+  'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sh -s -- install --public-host <地址> --name "<名字>"'
 ```
+
+（用户指定了端口才加 `--port <端口>`。）
 
 非 root 时在 `sh` 前加 `sudo`：`… | sudo sh -s -- install …`。需要 sudo 密码时：
 
 ```sh
-"$UTERMCTL" terminal open -H <主机> -- sh -c 'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --port <端口> --public-host <地址>'
+"$UTERMCTL" terminal open -H <主机> -- sh -c 'curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --public-host <地址>'
 "$UTERMCTL" terminal wait -t <返回的会话 id>
 ```
 
@@ -77,7 +84,7 @@ uTerm，再测通。
 | 键 | 含义 |
 |---|---|
 | `version` | 装上的版本 |
-| `port` / `endpoint` | 监听端口、设备连接用的地址 |
+| `port` / `endpoint` | 监听端口（没给 `--port` 时是随机挑的）、设备连接用的地址 |
 | `relay_id` | 这台中继的 ID |
 | `client_config` | 设备配置写在哪（**不要读它**） |
 | `firewall` | `none` / `ufw-opened` / `firewalld-opened` / `ufw-active-not-opened` / `firewalld-active-not-opened` |
@@ -90,8 +97,8 @@ uTerm，再测通。
 
 ### 4. 提醒安全组
 
-**云厂商控制台的安全组你碰不到**。明确告诉用户：去服务器所在云厂商的控制台，把端口
-`<端口>` 的 **TCP 和 UDP** 都放行（入方向，来源 `0.0.0.0/0`，有 IPv6 的话也放 `::/0`）。
+**云厂商控制台的安全组你碰不到**。明确告诉用户：去服务器所在云厂商的控制台，把安装输出里
+`port=` 那个端口的 **TCP 和 UDP** 都放行（入方向，来源 `0.0.0.0/0`，有 IPv6 的话也放 `::/0`）。
 这是最常见的「装好了却连不上」的原因。
 
 ### 5. 导入到 uTerm

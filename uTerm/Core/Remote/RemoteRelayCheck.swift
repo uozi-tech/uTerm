@@ -18,7 +18,7 @@ nonisolated public struct RemoteRelayCheckResult: Codable, Equatable, Sendable {
     public var udp: Outcome
     /// 从开始连接到读到 hello 的毫秒数。
     public var rttMs: Int?
-    /// 中继的构建版本；1.0.0 的 hello 不带版本，这里填 `RemoteRelayRelease.legacyVersion`。
+    /// 中继的构建版本（认证通过才知道）。
     public var serverVersion: String?
     /// 此刻注册在中继上的 Mac 数。
     public var onlineHosts: Int?
@@ -58,11 +58,11 @@ nonisolated enum RemoteRelayCheck {
         let hello: RemoteRelayHello
         do {
             hello = try await connection.open(timeout: timeout)
-        } catch RemoteRelayError.refused("auth") {
-            // open() 在 relayID 对不上时这样报：连上了，但不是配置里那台中继。
+        } catch RemoteRelayError.rejected {
+            // TCP 连上了，魔数之后却一言不发：这个端口上不是 uTerm 中继，或者版本不一致。
             result.tcp = .ok
             result.auth = .failed
-            result.problems.append(String(localized: "连上的不是配置里的那台中继（relayID 不符）。地址可能指到了别的服务器，或中继的数据目录被重建过，请重新导入配置。"))
+            result.problems.append(String(localized: "\(config.endpointDescription) 在监听，但不像 uTerm 中继（或中继版本不一致）。检查地址和端口是否指到了别的服务。"))
             return result
         } catch {
             result.problems.append(String(localized: "TCP \(config.endpointDescription) 连不上（\(error.localizedDescription)）。检查中继服务是否在运行、云厂商安全组和服务器防火墙是否放行了 TCP \(String(config.port))。"))
@@ -70,15 +70,15 @@ nonisolated enum RemoteRelayCheck {
         }
         result.tcp = .ok
         result.rttMs = Int(Date().timeIntervalSince(started) * 1000)
-        result.serverVersion = hello.server ?? RemoteRelayRelease.legacyVersion
 
         do {
             let signature = try RemoteRelaySignature.sign(memberKey, role: "client", relayID: config.relayID,
                                                           nonce: hello.nonce, parameter: "")
             try await connection.send(RemoteRelayRequest(role: "client", sig: signature))
-            let answer: RemoteRelayAnswer = try await connection.receive(timeout: timeout)
+            let answer = try await connection.answer(timeout: timeout)
             guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
             result.auth = .ok
+            result.serverVersion = answer.server
             try await connection.send(RemoteRelayMessage(type: "list"))
             // 控制连接上还可能先来一个 pong 之类的帧，读到 hosts 为止。
             for _ in 0..<4 {
@@ -88,6 +88,9 @@ nonisolated enum RemoteRelayCheck {
                     break
                 }
             }
+        } catch RemoteRelayError.rejected where result.auth != .ok {
+            result.auth = .failed
+            result.problems.append(String(localized: "中继没有接受这份配置，直接断开了连接：成员密钥不对（中继换过钥？），或配置不是这台中继的。请重新导入。"))
         } catch {
             if result.auth != .ok { result.auth = .failed }
             result.problems.append(error.localizedDescription)

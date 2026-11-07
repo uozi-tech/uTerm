@@ -35,6 +35,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let refused = await RemoteRelayCheck.run(config: stranger)
         XCTAssertEqual(refused.tcp, .ok)
         XCTAssertEqual(refused.auth, .failed)
+        XCTAssertNil(refused.serverVersion, "认证没过不该知道中继版本")
         XCTAssertFalse(refused.isUsable)
     }
 
@@ -220,7 +221,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
             _ = try await relay.onlineHosts()
             XCTFail("错误的成员密钥不该通过")
         } catch {
-            XCTAssertEqual(error as? RemoteRelayError, .refused("auth"))
+            XCTAssertEqual(error as? RemoteRelayError, .rejected, "中继对认证没过的请求一言不发直接断开")
         }
     }
 

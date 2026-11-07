@@ -47,7 +47,7 @@ func DefaultLimits() Limits {
 
 // Server is a running relay.
 type Server struct {
-	// Version is the build version sent in the hello; set it before Listen.
+	// Version is the build version told to authenticated members; set it before Listen.
 	Version string
 
 	store  *Store
@@ -277,20 +277,19 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 	configureSocket(conn)
 	conn.SetDeadline(time.Now().Add(s.limits.RequestTimeout))
 
+	// Until a member signature checks out, the only thing a stranger ever gets back is 32 random bytes:
+	// no name, no relay ID, no version, no failure reason. Anything wrong closes the connection silently,
+	// so a scanner can't tell this port apart from any other service that hangs up on garbage.
 	var prefix [5]byte
-	if _, err := io.ReadFull(conn, prefix[:]); err != nil || string(prefix[:4]) != magic {
+	if _, err := io.ReadFull(conn, prefix[:]); err != nil || string(prefix[:4]) != magic || prefix[4] != protocolVersion {
 		return
 	}
 	relayID, member := s.store.Identity()
-	nonce := base64.StdEncoding.EncodeToString(randomBytes(32))
-	hello := helloFrame{Relay: "uterm-relay", Version: protocolVersion, RelayID: relayID, Nonce: nonce, Server: s.Version}
-	if err := writeFrame(conn, hello); err != nil {
+	challenge := randomBytes(nonceBytes)
+	if _, err := conn.Write(challenge); err != nil {
 		return
 	}
-	if prefix[4] != protocolVersion {
-		writeFrame(conn, answerFrame{Reason: reasonVersion})
-		return
-	}
+	nonce := base64.StdEncoding.EncodeToString(challenge)
 	// Buffered only until the request is out of the way: a splice must not lose
 	// bytes that were read ahead, so reads stay unbuffered here.
 	var request requestFrame
@@ -302,21 +301,18 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 	case roleHost:
 		message := signedMessage(roleHost, relayID, nonce, request.HostID)
 		if !verifySignature(member, message, request.Sig) {
-			writeFrame(conn, answerFrame{Reason: reasonAuth})
 			return
 		}
 		release()
 		s.serveHost(conn, request, message)
 	case roleClient:
 		if !verifySignature(member, signedMessage(roleClient, relayID, nonce, ""), request.Sig) {
-			writeFrame(conn, answerFrame{Reason: reasonAuth})
 			return
 		}
 		release()
 		s.serveClient(conn)
 	case roleDial:
 		if !verifySignature(member, signedMessage(roleDial, relayID, nonce, request.HostID), request.Sig) {
-			writeFrame(conn, answerFrame{Reason: reasonAuth})
 			return
 		}
 		release()
@@ -325,7 +321,7 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 		release()
 		s.serveAccept(conn, request, relayID, nonce)
 	default:
-		writeFrame(conn, answerFrame{Reason: reasonInvalid})
+		// Not a role: as silent as a bad signature.
 	}
 }
 
@@ -388,7 +384,7 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 	defer s.removeHost(host)
 
 	conn.SetDeadline(time.Time{})
-	if err := host.send(answerFrame{OK: true}, s.limits.WriteTimeout); err != nil {
+	if err := host.send(answerFrame{OK: true, Server: s.Version}, s.limits.WriteTimeout); err != nil {
 		return
 	}
 	reader := bufio.NewReader(conn)
@@ -466,7 +462,7 @@ func (s *Server) serveClient(conn net.Conn) {
 	}()
 
 	conn.SetDeadline(time.Time{})
-	if err := client.send(answerFrame{OK: true}, s.limits.WriteTimeout); err != nil {
+	if err := client.send(answerFrame{OK: true, Server: s.Version}, s.limits.WriteTimeout); err != nil {
 		return
 	}
 	reader := bufio.NewReader(conn)
@@ -629,13 +625,12 @@ func (s *Server) serveAccept(conn net.Conn, request requestFrame, relayID, nonce
 	s.mu.Lock()
 	dial := s.tickets[request.Ticket]
 	s.mu.Unlock()
+	// Before the host signature checks out the caller is a stranger: say nothing.
 	if dial == nil {
-		writeFrame(conn, answerFrame{Reason: reasonTicket})
 		return
 	}
 	hostKey, err := parsePublicKey(dial.host.hostKey)
 	if err != nil || !verifySignature(hostKey, signedMessage(roleAccept, relayID, nonce, request.Ticket), request.HostSig) {
-		writeFrame(conn, answerFrame{Reason: reasonHostKey})
 		return
 	}
 	s.mu.Lock()

@@ -42,9 +42,9 @@ final class RemoteRelayUpdateMonitor {
         RemoteRelayVersion.isUpdate(latest: latestVersion, running: runningVersion)
     }
 
-    /// 连上中继时调用。hello 里没有版本就是 1.0.0。
+    /// 认证通过时调用。没报版本就当不知道，不提醒。
     func noteRunning(_ version: String?) {
-        runningVersion = version ?? RemoteRelayRelease.legacyVersion
+        runningVersion = version
         refreshIfStale()
         notifyIfNeeded()
     }

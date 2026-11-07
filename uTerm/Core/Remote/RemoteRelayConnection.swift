@@ -2,13 +2,12 @@ import CryptoKit
 import Foundation
 @preconcurrency import Network
 
-nonisolated struct RemoteRelayHello: Decodable, Sendable {
-    var relay: String
-    var version: Int
-    var relayID: String
+/// 中继在魔数之后写回的挑战：32 字节随机数。签名覆盖它的 base64。
+///
+/// 认证通过之前中继不说任何别的话（没有名字、relayID、版本、失败原因），扫端口的人认不出它。
+nonisolated struct RemoteRelayHello: Sendable {
+    static let nonceBytes = 32
     var nonce: String
-    /// 中继的构建版本（1.1.0 起才有；更早的版本没有这个字段）。
-    var server: String?
 }
 
 nonisolated struct RemoteRelayRequest: Encodable, Sendable {
@@ -24,6 +23,8 @@ nonisolated struct RemoteRelayRequest: Encodable, Sendable {
 nonisolated struct RemoteRelayAnswer: Decodable, Sendable {
     var ok: Bool
     var reason: String?
+    /// 中继的构建版本。只在成员认证通过（`host` / `client`）后才给，匿名探测拿不到；1.1.1 之前没有。
+    var server: String?
 }
 
 /// 控制连接上除第一帧之外的所有帧。
@@ -51,6 +52,11 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
     case timeout
     case malformed
     /// Mac 不在中继上（睡着了、没开公网接入）。
+    /// 中继在我们发出请求后一言不发就断开：认证前的任何失败都是这样（密钥不对、配置不是这台中继的、
+    /// 协议版本不一致）。
+    case rejected
+    /// 对端正常关闭了连接。
+    case closed
     case macOffline
     /// Mac 认识这台设备，但没有允许它经公网接入。
     case notAllowed
@@ -63,6 +69,8 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
         case .refused(let reason): return Self.describe(reason)
         case .timeout: return "中继服务器没有响应"
         case .malformed: return "中继服务器的回应无法识别"
+        case .closed: return "连接已断开"
+        case .rejected: return "中继服务器没有接受这份配置（密钥不对、配置不是这台中继的，或版本不一致），请重新导入"
         case .macOffline: return "Mac 不在线。它可能睡眠了，或者没有打开公网接入"
         case .notAllowed: return "这台设备还不能经公网连接。请在 Mac 的 设置 › 远程控制 里勾选它"
         case .notConfigured: return "还没有配置中继服务器"
@@ -71,8 +79,6 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
 
     private static func describe(_ reason: String) -> String {
         switch reason {
-        case "auth": return "中继服务器拒绝了这份配置，它可能已经换过密钥。请重新导入"
-        case "version": return "中继服务器的版本不兼容，请更新"
         case "full": return "中继服务器已满"
         case "offline": return "Mac 不在线"
         case "hostKey": return "这台 Mac 在中继上的身份对不上。如果重装过，请在服务器上运行 uterm-relay forget"
@@ -120,10 +126,26 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
         var opening = Data("UTRL".utf8)
         opening.append(1)
         try await sendRaw(opening)
-        let hello: RemoteRelayHello = try await receive(timeout: timeout)
-        guard hello.relay == "uterm-relay", hello.version == 1 else { throw RemoteRelayError.malformed }
-        guard hello.relayID == config.relayID else { throw RemoteRelayError.refused("auth") }
-        return hello
+        let watchdog = DispatchWorkItem { [connection] in connection.cancel() }
+        queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer { watchdog.cancel() }
+        let challenge: Data
+        do {
+            challenge = try await read(exactly: RemoteRelayHello.nonceBytes)
+        } catch RemoteRelayError.closed {
+            // 魔数之后什么都不回：不是中继，或者协议版本不一致。
+            throw RemoteRelayError.rejected
+        }
+        return RemoteRelayHello(nonce: challenge.base64EncodedString())
+    }
+
+    /// 读请求的答复。中继对认证没过的请求一言不发直接断开，这里把它翻成 `.rejected`。
+    func answer(timeout: TimeInterval = requestTimeout) async throws -> RemoteRelayAnswer {
+        do {
+            return try await receive(timeout: timeout)
+        } catch RemoteRelayError.closed {
+            throw RemoteRelayError.rejected
+        }
     }
 
     private func stateChanged(_ state: NWConnection.State) {
@@ -188,6 +210,9 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
             connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
                 if let data, data.count == count {
                     continuation.resume(returning: data)
+                } else if error == nil, data?.isEmpty ?? true {
+                    // 对端正常关闭（FIN），不是网络出错。
+                    continuation.resume(throwing: RemoteRelayError.closed)
                 } else {
                     continuation.resume(throwing: RemoteRelayError.unreachable(error?.localizedDescription ?? "连接已断开"))
                 }

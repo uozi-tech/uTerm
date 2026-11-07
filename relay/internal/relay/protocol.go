@@ -19,7 +19,9 @@ const (
 	protocolVersion = 1
 	magic           = "UTRL"
 	maxFrameBytes   = 64 * 1024
-	signPrefix      = "uterm-relay-v1"
+	// nonceBytes is the raw challenge the relay writes after the client's magic.
+	nonceBytes = 32
+	signPrefix = "uterm-relay-v1"
 )
 
 const (
@@ -31,24 +33,12 @@ const (
 
 // Reasons sent in a failed answer.
 const (
-	reasonVersion = "version"
-	reasonAuth    = "auth"
 	reasonHostKey = "hostKey"
 	reasonFull    = "full"
 	reasonOffline = "offline"
 	reasonTicket  = "ticket"
 	reasonInvalid = "invalid"
 )
-
-type helloFrame struct {
-	Relay   string `json:"relay"`
-	Version int    `json:"version"`
-	RelayID string `json:"relayID"`
-	Nonce   string `json:"nonce"`
-	// Server is the relay build, e.g. "1.1.0", so apps can tell the owner an update exists.
-	// Absent from 1.0.0. The protocol version above is what decides compatibility.
-	Server string `json:"server,omitempty"`
-}
 
 // requestFrame is the first frame of a connection.
 type requestFrame struct {
@@ -64,6 +54,10 @@ type requestFrame struct {
 type answerFrame struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+	// Server is the relay build, e.g. "1.1.1", so apps can tell the owner an update exists. Only sent to
+	// a member that has just authenticated as host or client: an anonymous prober must not learn the
+	// version and pick targets by it. Absent before 1.1.1.
+	Server string `json:"server,omitempty"`
 }
 
 // messageFrame is every frame after the request on a control connection.

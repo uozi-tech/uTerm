@@ -12,12 +12,16 @@
 
 ### 安装脚本
 
-Linux + systemd，amd64 或 arm64。放行同一端口号的 **TCP 和 UDP**（默认 47310），云服务器的安全组要手动放行。
+Linux + systemd，amd64 或 arm64。
 
 ```sh
 curl -fsSL https://downloads.example.com/uTerm/relay/install.sh \
-  | sudo sh -s -- install --port 47310 --public-host relay.example.com [--name 家里] [--open-firewall]
+  | sudo sh -s -- install --public-host relay.example.com [--port P] [--name 家里] [--open-firewall]
 ```
+
+不给 `--port` 时脚本在 20000–32767 里随机挑一个空闲端口（输出的 `port=`），不要用固定的 47310：扫默认端口的人最先找到它。云服务器的安全组要手动放行这个端口的 **TCP 和 UDP**。
+
+中继对认证之前的连接一律不回话：魔数之后只回 32 字节随机数，任何不对（版本、签名、格式）都直接断开，不带名字、版本号或失败原因，扫端口认不出它。
 
 脚本从 OSS 下载对应架构的二进制、按 `SHA256SUMS` 校验，装到 `/usr/local/bin/uterm-relay`，写 `/etc/uterm-relay/relay.env` 和 `uterm-relay.service`（DynamicUser，数据在 `/var/lib/uterm-relay`）。设备配置写到运行 sudo 的那个用户的 `~/.config/uterm-relay/client.json`（0600），然后在 uTerm 里导入：
 

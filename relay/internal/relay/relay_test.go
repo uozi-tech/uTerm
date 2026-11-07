@@ -101,7 +101,14 @@ func newKey(t *testing.T) *ecdsa.PrivateKey {
 	return key
 }
 
-// open connects and reads the hello.
+// helloFrame is the client's view of the challenge: the relay writes 32 raw bytes, signatures cover
+// their base64.
+type helloFrame struct{ Nonce string }
+
+// reasonClosed stands for "the relay hung up without answering", which is all a stranger gets.
+const reasonClosed = "(closed)"
+
+// open connects and reads the challenge.
 func (h *harness) open() (net.Conn, helloFrame) {
 	h.t.Helper()
 	conn, err := net.Dial("tcp", h.address)
@@ -113,18 +120,23 @@ func (h *harness) open() (net.Conn, helloFrame) {
 	if _, err := conn.Write(append([]byte(magic), protocolVersion)); err != nil {
 		h.t.Fatal(err)
 	}
-	var hello helloFrame
-	if err := readFrame(conn, &hello); err != nil {
+	return conn, h.readChallenge(conn)
+}
+
+func (h *harness) readChallenge(conn net.Conn) helloFrame {
+	h.t.Helper()
+	raw := make([]byte, nonceBytes)
+	if _, err := io.ReadFull(conn, raw); err != nil {
 		h.t.Fatal(err)
 	}
-	return conn, hello
+	return helloFrame{Nonce: base64.StdEncoding.EncodeToString(raw)}
 }
 
 func (h *harness) answer(conn net.Conn) answerFrame {
 	h.t.Helper()
 	var answer answerFrame
 	if err := readFrame(conn, &answer); err != nil {
-		h.t.Fatalf("no answer: %v", err)
+		return answerFrame{Reason: reasonClosed}
 	}
 	return answer
 }
@@ -186,11 +198,44 @@ func readMessage(t *testing.T, conn net.Conn) messageFrame {
 	return frame
 }
 
-func TestHelloCarriesTheBuildVersion(t *testing.T) {
+// A stranger who knows the magic gets 32 random bytes and nothing else: no name, relay ID or version
+// to fingerprint the port by. The build version goes only to a member that has authenticated.
+func TestStrangersLearnNothingAndMembersLearnTheVersion(t *testing.T) {
 	h := newHarness(t, testLimits())
-	_, hello := h.open()
-	if hello.Version != protocolVersion || hello.Server != "9.8.7" || hello.RelayID != h.relayID {
-		t.Fatalf("hello = %+v", hello)
+	first, a := h.open()
+	second, b := h.open()
+	if a.Nonce == b.Nonce {
+		t.Fatal("challenge repeats")
+	}
+	for _, conn := range []net.Conn{first, second} {
+		conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		if n, _ := conn.Read(make([]byte, 64)); n != 0 {
+			t.Fatalf("relay said %d more bytes before any request", n)
+		}
+	}
+
+	if conn := h.client(); conn == nil {
+		t.Fatal("no client")
+	}
+	conn, hello := h.open()
+	writeFrame(conn, requestFrame{Role: roleClient, Sig: sign(t, h.member, signedMessage(roleClient, h.relayID, hello.Nonce, ""))})
+	if answer := h.answer(conn); !answer.OK || answer.Server != "9.8.7" {
+		t.Fatalf("client answer = %+v", answer)
+	}
+
+	conn, hello = h.open()
+	writeFrame(conn, requestFrame{Role: roleClient, Sig: sign(t, newKey(t), signedMessage(roleClient, h.relayID, hello.Nonce, ""))})
+	if answer := h.answer(conn); answer.Reason != reasonClosed {
+		t.Fatalf("a stranger got an answer: %+v", answer)
+	}
+	conn, _ = h.open()
+	writeFrame(conn, requestFrame{Role: "who"})
+	if answer := h.answer(conn); answer.Reason != reasonClosed {
+		t.Fatalf("an unknown role got an answer: %+v", answer)
+	}
+
+	if _, answer := h.tryRegister("host-version", newKey(t), h.member); !answer.OK || answer.Server != "9.8.7" {
+		t.Fatalf("host answer = %+v", answer)
 	}
 }
 
@@ -198,17 +243,17 @@ func TestWrongMemberKeyIsRefusedOnEveryRole(t *testing.T) {
 	h := newHarness(t, testLimits())
 	stranger := newKey(t)
 
-	if _, answer := h.tryRegister("host-1", newKey(t), stranger); answer.Reason != reasonAuth {
+	if _, answer := h.tryRegister("host-1", newKey(t), stranger); answer.Reason != reasonClosed {
 		t.Fatalf("host: %+v", answer)
 	}
 	conn, hello := h.open()
 	writeFrame(conn, requestFrame{Role: roleClient, Sig: sign(t, stranger, signedMessage(roleClient, h.relayID, hello.Nonce, ""))})
-	if answer := h.answer(conn); answer.Reason != reasonAuth {
+	if answer := h.answer(conn); answer.Reason != reasonClosed {
 		t.Fatalf("client: %+v", answer)
 	}
 	conn, hello = h.open()
 	writeFrame(conn, requestFrame{Role: roleDial, HostID: "h", Sig: sign(t, stranger, signedMessage(roleDial, h.relayID, hello.Nonce, "h"))})
-	if answer := h.answer(conn); answer.Reason != reasonAuth {
+	if answer := h.answer(conn); answer.Reason != reasonClosed {
 		t.Fatalf("dial: %+v", answer)
 	}
 }
@@ -218,12 +263,12 @@ func TestSignatureFromAnotherConnectionIsRefused(t *testing.T) {
 	conn, _ := h.open()
 	replayed := sign(t, h.member, signedMessage(roleClient, h.relayID, "someone-elses-nonce", ""))
 	writeFrame(conn, requestFrame{Role: roleClient, Sig: replayed})
-	if answer := h.answer(conn); answer.Reason != reasonAuth {
+	if answer := h.answer(conn); answer.Reason != reasonClosed {
 		t.Fatalf("replayed signature accepted: %+v", answer)
 	}
 }
 
-func TestVersionMismatchIsAnswered(t *testing.T) {
+func TestVersionMismatchGetsNothing(t *testing.T) {
 	h := newHarness(t, testLimits())
 	conn, err := net.Dial("tcp", h.address)
 	if err != nil {
@@ -232,12 +277,8 @@ func TestVersionMismatchIsAnswered(t *testing.T) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
 	conn.Write(append([]byte(magic), 99))
-	var hello helloFrame
-	if err := readFrame(conn, &hello); err != nil {
-		t.Fatal(err)
-	}
-	if answer := h.answer(conn); answer.Reason != reasonVersion {
-		t.Fatalf("got %+v", answer)
+	if n, _ := conn.Read(make([]byte, 64)); n != 0 {
+		t.Fatalf("a wrong protocol version got %d bytes back", n)
 	}
 }
 
@@ -426,13 +467,13 @@ func TestOnlyTheHostItWasOfferedToCanAcceptATicket(t *testing.T) {
 	h.dial("mac-1")
 	incoming := readMessage(t, host)
 
-	if _, answer := h.accept(incoming.Ticket, newKey(t)); answer.Reason != reasonHostKey {
+	if _, answer := h.accept(incoming.Ticket, newKey(t)); answer.Reason != reasonClosed {
 		t.Fatalf("wrong key accepted: %+v", answer)
 	}
 	if _, answer := h.accept(incoming.Ticket, key); !answer.OK {
 		t.Fatalf("right key refused: %+v", answer)
 	}
-	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonTicket {
+	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonClosed {
 		t.Fatalf("a ticket must work once: %+v", answer)
 	}
 }
@@ -447,7 +488,7 @@ func TestTicketExpiresAndPhoneIsTold(t *testing.T) {
 	if answer := h.answer(phone); answer.Reason != reasonTicket {
 		t.Fatalf("got %+v", answer)
 	}
-	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonTicket {
+	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonClosed {
 		t.Fatalf("expired ticket accepted: %+v", answer)
 	}
 	waitFor(t, func() bool { return h.server.Status().Splices == 0 })
@@ -463,7 +504,7 @@ func TestPhoneLeavingKillsTheTicket(t *testing.T) {
 	incoming := readMessage(t, host)
 	phone.Close()
 	waitFor(t, func() bool { return h.server.Status().Splices == 0 })
-	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonTicket {
+	if _, answer := h.accept(incoming.Ticket, key); answer.Reason != reasonClosed {
 		t.Fatalf("got %+v", answer)
 	}
 }
@@ -715,7 +756,7 @@ func TestRotateInvalidatesOldMembersAndBindings(t *testing.T) {
 		t.Fatalf("old connection should be dropped: %v", err)
 	}
 	h.loadMember()
-	if _, answer := h.tryRegister("mac-2", newKey(t), old); answer.Reason != reasonAuth {
+	if _, answer := h.tryRegister("mac-2", newKey(t), old); answer.Reason != reasonClosed {
 		t.Fatalf("old key still works: %+v", answer)
 	}
 	h.registerHost("mac-1", newKey(t))

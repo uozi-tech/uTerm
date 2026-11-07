@@ -4,7 +4,9 @@
 #   curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --port 47310 --public-host relay.example.com
 #
 # Subcommands:
-#   install --port P --public-host H [--name N] [--open-firewall] [--version V]
+#   install --public-host H [--port P] [--name N] [--open-firewall] [--version V]
+#                             without --port a random free port in 20000-32767 is picked: every relay on
+#                             its own port, so a scan of the default one finds nothing
 #   update [--version V]      replace the binary with the latest (or V) and restart; rolls back if it will not start
 #   status                    installed / latest version, service state, online hosts
 #   client-config             write the device configuration again (after `uterm-relay rotate`)
@@ -110,6 +112,20 @@ load_settings() {
 	export RELAY_DATA
 }
 
+# A random free port below Linux's ephemeral range (32768+), so outgoing connections never hold it.
+random_port() {
+	tries=0
+	while [ $tries -lt 50 ]; do
+		candidate=$(awk -v seed="$$$tries$(date +%s)" 'BEGIN { srand(seed); print 20000 + int(rand() * 12768) }')
+		if ! port_taken "$candidate"; then
+			echo "$candidate"
+			return 0
+		fi
+		tries=$((tries + 1))
+	done
+	die "找不到空闲端口，用 --port 指定一个"
+}
+
 port_taken() {
 	command -v ss >/dev/null 2>&1 || return 1
 	ss -lntu 2>/dev/null | awk 'NR > 1 { print $5 }' | grep -Eq "[:.]$1\$"
@@ -213,7 +229,7 @@ firewall_hint() {
 }
 
 cmd_install() {
-	port=47310 public_host="" name="" version="" firewall=0
+	port="" public_host="" name="" version="" firewall=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--port) port=${2:-}; shift 2 ;;
@@ -224,7 +240,8 @@ cmd_install() {
 		*) die "不认识的参数：$1" ;;
 		esac
 	done
-	case "$port" in '' | *[!0-9]*) die "端口要是数字：$port" ;; esac
+	[ -n "$port" ] || port=$(random_port) || exit 1
+	case "$port" in *[!0-9]*) die "端口要是数字：${port}" ;; esac
 	[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "端口超出范围：$port"
 	[ -n "$public_host" ] || die "要用 --public-host 指定设备连接用的域名或公网 IP"
 	case "$public_host" in *[[:space:]\"\'\$\`\\]*) die "对外地址里有不允许的字符" ;; esac
