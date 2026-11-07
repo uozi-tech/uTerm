@@ -125,6 +125,46 @@ nonisolated enum RemoteSignalBox {
     }
 }
 
+/// 凭邀请第一次经公网连过来时的信令外层。
+///
+/// 平时的信令用两端长期公钥协商出的密钥封，被控端靠设备 ID 查到对方公钥才解得开；凭邀请来的设备它还不认识。
+/// 所以外面再包一层：密钥由邀请令牌派生，里面放主控端的长期公钥和照常封好的信令。中继没有令牌，
+/// 看不到公钥；拿不到令牌的人也做不出被控端肯打开的外层。只用于打招呼，回复照常用长期密钥封。
+nonisolated enum RemoteInvitationSignal {
+    /// 前缀不在 base64 字母表里，和平时的信令分得开；老版本的被控端解不开，当作不认识，什么都不回。
+    static let prefix = "p1:"
+
+    private struct Envelope: Codable {
+        var key: Data
+        var box: String
+    }
+
+    private static func key(token: Data) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: token), salt: Data("uterm-pair-signal-v1".utf8),
+                               info: Data("envelope".utf8), outputByteCount: 32)
+    }
+
+    private static func additionalData(_ session: String) -> Data {
+        Data("uterm-pair-signal-v1\n\(session)".utf8)
+    }
+
+    static func wrap(_ box: String, clientKey: Data, token: Data, session: String) throws -> String {
+        let plain = try JSONEncoder().encode(Envelope(key: clientKey, box: box))
+        let sealed = try ChaChaPoly.seal(plain, using: key(token: token), authenticating: additionalData(session))
+        return prefix + sealed.combined.base64EncodedString()
+    }
+
+    /// 打开外层，得到主控端的长期公钥与里面的信令。不是外层、令牌不对或内容坏了返回 nil。
+    static func unwrap(_ box: String, token: Data, session: String) -> (clientKey: Data, box: String)? {
+        guard box.hasPrefix(prefix), let data = Data(base64Encoded: String(box.dropFirst(prefix.count))),
+              let sealed = try? ChaChaPoly.SealedBox(combined: data),
+              let plain = try? ChaChaPoly.open(sealed, using: key(token: token), authenticating: additionalData(session)),
+              let envelope = try? JSONDecoder().decode(Envelope.self, from: plain), envelope.key.count == 32
+        else { return nil }
+        return (envelope.key, envelope.box)
+    }
+}
+
 /// 拒绝重放：时间差太大的不要，时限内同一个随机数只认一次。
 nonisolated struct RemoteSignalReplayGuard {
     static let window: TimeInterval = 120
@@ -158,6 +198,8 @@ nonisolated struct RemoteSignalResponder {
     let recognize: (UUID) -> RemotePeer?
     /// 这台设备可以经公网接入吗。
     let isAllowed: (UUID) -> Bool
+    /// 本机此刻出示的邀请令牌；nil = 没在邀请，凭邀请来的打招呼一律不理。
+    let invitationToken: () -> Data?
 
     private var replayGuard = RemoteSignalReplayGuard()
     private var pending: [String: PendingSession] = [:]
@@ -165,11 +207,25 @@ nonisolated struct RemoteSignalResponder {
     private var echoSessions: [String: TimeInterval] = [:]
 
     init(localKey: Curve25519.KeyAgreement.PrivateKey, localID: UUID, recognize: @escaping (UUID) -> RemotePeer?,
-         isAllowed: @escaping (UUID) -> Bool) {
+         isAllowed: @escaping (UUID) -> Bool, invitationToken: @escaping () -> Data? = { nil }) {
         self.localKey = localKey
         self.localID = localID
         self.recognize = recognize
         self.isAllowed = isAllowed
+        self.invitationToken = invitationToken
+    }
+
+    /// 打招呼的是谁、里面那层信令是什么。凭邀请来的设备用外层里报的公钥（握手时还会再核对它持有私钥，
+    /// 被控端核销邀请凭据时也绑定这把公钥）；它此刻算允许经公网接入，正式放行由核销凭据决定。
+    private func caller(_ deviceID: UUID, box: String, session: String)
+        -> (peer: RemotePeer, box: String, invited: Bool)? {
+        if box.hasPrefix(RemoteInvitationSignal.prefix) {
+            guard let token = invitationToken(),
+                  let opened = RemoteInvitationSignal.unwrap(box, token: token, session: session) else { return nil }
+            return (RemotePeer(id: deviceID, name: "", publicKey: opened.clientKey, pairedAt: Date()), opened.box, true)
+        }
+        guard let peer = recognize(deviceID) else { return nil }
+        return (peer, box, false)
     }
 
     /// 手机想打洞直连，Mac 要先收集自己的地址才能回复。
@@ -201,15 +257,16 @@ nonisolated struct RemoteSignalResponder {
     /// 处理连接请求。`acceptsDirect`：现在还能再开一个打洞尝试吗。
     mutating func receiveOffer(session: String, from: String?, box: String?, now: TimeInterval,
                                acceptsDirect: Bool) -> OfferDecision {
-        guard let from, let deviceID = UUID(uuidString: from), let box, let peer = recognize(deviceID),
+        guard let from, let deviceID = UUID(uuidString: from), let box,
+              let (peer, inner, invited) = caller(deviceID, box: box, session: session),
               let shared = try? RemoteSignalBox.sharedKey(local: localKey, remotePublicKey: peer.publicKey),
-              let offer = try? RemoteSignalBox.open(box, key: shared, session: session, direction: .phoneToMac),
+              let offer = try? RemoteSignalBox.open(inner, key: shared, session: session, direction: .phoneToMac),
               offer.kind == .offer, offer.deviceID == deviceID, replayGuard.accept(offer, now: now) else {
             return .ignore
         }
         pending = pending.filter { $0.value.expiresAt > now }
         var reply = RemoteSignalBody(kind: .answer, deviceID: localID, sentAt: now, nonce: RemoteSignalBody.newNonce())
-        guard isAllowed(deviceID) else {
+        guard invited || isAllowed(deviceID) else {
             reply.kind = .denied
             let sealed = try? RemoteSignalBox.seal(reply, key: shared, session: session, direction: .macToPhone)
             return sealed.map(OfferDecision.reply) ?? .ignore

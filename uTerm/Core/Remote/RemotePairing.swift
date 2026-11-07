@@ -7,10 +7,13 @@ import Security
 // - 邀请：被控端出一张一次性邀请（`RemotePairingInvitation`），主控端扫码或打开链接就知道该信任哪台主机、
 //   哪把公钥；连接时在握手消息里带上凭据（`RemotePairingInvitation.proof`），被控端核对通过就信任它，不用人点。
 
-/// Mac 出示的配对邀请，编成二维码给手机扫。
+/// 被控端出示的配对邀请，编成二维码给手机扫，或作为 `uterm://pair` 链接发给另一台设备。
 ///
 /// 一次性、有时限：令牌用过一次或过期就作废（Mac 端管）。凭据绑定两端的长期公钥，旁观者截到握手消息也
 /// 换不到别的设备上用。
+///
+/// 被控端开着公网接入时，邀请还带上它的中继配置（`relay`），对方不在同一网络、不是同一 Apple ID 也能配对。
+/// 这等于把中继分享给了对方：成员密钥是这台中继所有成员共用的。
 nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     static let scheme = "uterm"
     static let host = "pair"
@@ -22,12 +25,15 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     /// Mac 的长期公钥（X25519 原始 32 字节）。
     var macKey: Data
     var token: Data
+    /// 被控端所在的中继。nil = 只能在局域网里配对。
+    var relay: RemoteRelayConfig?
 
-    init(macID: UUID, macName: String, macKey: Data, token: Data) {
+    init(macID: UUID, macName: String, macKey: Data, token: Data, relay: RemoteRelayConfig? = nil) {
         self.macID = macID
         self.macName = macName
         self.macKey = macKey
         self.token = token
+        self.relay = relay
     }
 
     /// 新的随机令牌。
@@ -37,18 +43,30 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
         return Data(bytes)
     }
 
-    /// `uterm://pair?v=1&d=<设备 ID>&n=<名字>&k=<公钥>&t=<令牌>`，二进制用 base64url。
+    /// `uterm://pair?v=1&d=<设备 ID>&n=<名字>&k=<公钥>&t=<令牌>`，二进制用 base64url。带中继时再加
+    /// `rn` / `rh` / `rp` / `ri` / `rk`（名字、地址、端口、中继 ID、成员密钥）。版本号不变：老版本不认这几个键，
+    /// 照样能在局域网里配对。
     var url: URL {
         var components = URLComponents()
         components.scheme = Self.scheme
         components.host = Self.host
-        components.queryItems = [
+        var items = [
             URLQueryItem(name: "v", value: String(Self.version)),
             URLQueryItem(name: "d", value: macID.uuidString),
             URLQueryItem(name: "n", value: macName),
             URLQueryItem(name: "k", value: macKey.base64URLEncoded),
             URLQueryItem(name: "t", value: token.base64URLEncoded),
         ]
+        if let relay, let key = Data(base64Encoded: relay.key) {
+            items += [
+                URLQueryItem(name: "rn", value: relay.name),
+                URLQueryItem(name: "rh", value: relay.host),
+                URLQueryItem(name: "rp", value: String(relay.port)),
+                URLQueryItem(name: "ri", value: relay.relayID),
+                URLQueryItem(name: "rk", value: key.base64URLEncoded),
+            ]
+        }
+        components.queryItems = items
         return components.url!
     }
 
@@ -64,7 +82,16 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
               let key = items["k"].flatMap(Data.init(base64URLEncoded:)), key.count == 32,
               let token = items["t"].flatMap(Data.init(base64URLEncoded:)), token.count == Self.tokenLength
         else { return nil }
-        self.init(macID: id, macName: name, macKey: key, token: token)
+        self.init(macID: id, macName: name, macKey: key, token: token, relay: Self.relay(from: items))
+    }
+
+    /// 中继参数缺一个或不合法就当没带：邀请仍能在局域网里用，不因为它整张作废。
+    private static func relay(from items: [String: String]) -> RemoteRelayConfig? {
+        guard let host = items["rh"], let port = items["rp"].flatMap(Int.init), let relayID = items["ri"],
+              let key = items["rk"].flatMap(Data.init(base64URLEncoded:)) else { return nil }
+        let config = RemoteRelayConfig(name: items["rn"] ?? host, host: host, port: port, relayID: relayID,
+                                       key: key.base64EncodedString())
+        return config.isValid ? config : nil
     }
 
     /// 手机放进握手消息的凭据：HMAC(令牌, 用途 ‖ 手机公钥 ‖ Mac 公钥)。

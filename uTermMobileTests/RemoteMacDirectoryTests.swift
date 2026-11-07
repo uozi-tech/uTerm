@@ -166,4 +166,49 @@ final class RemoteMacDirectoryTests: XCTestCase {
         let size = host.sizeThatFits(in: CGSize(width: 390, height: 400))
         XCTAssertGreaterThan(size.height, 60, "一行至少 38pt 图标 + 内边距")
     }
+
+    // MARK: - 邀请带中继
+
+    private func relay(_ id: String, name: String) -> RemoteRelayConfig {
+        RemoteRelayConfig(name: name, host: "\(id).example", port: 47310, relayID: id,
+                          key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+    }
+
+    func testInvitationRelayBecomesTheDefaultWhenThereIsNone() throws {
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let directory = try directory(identity: identity, debugEndpoint: false)
+        let theirs = relay("B", name: "朋友的中继")
+        let invitation = RemotePairingInvitation(macID: UUID(), macName: "朋友的 Mac", macKey: key(),
+                                                 token: RemotePairingInvitation.newToken(), relay: theirs)
+        _ = try directory.pair(with: invitation)
+        XCTAssertEqual(directory.relayServerName(), "朋友的中继")
+        XCTAssertNil(identity.peer(id: invitation.macID)?.relay, "默认就是它，不用单独记")
+        XCTAssertEqual(identity.peer(id: invitation.macID)?.isMac, true)
+    }
+
+    func testInvitationRelayDoesNotReplaceMyOwnRelay() throws {
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let directory = try directory(identity: identity, debugEndpoint: false)
+        directory.importRelayConfig(relay("A", name: "我的中继"))
+        let theirs = relay("B", name: "朋友的中继")
+        let invitation = RemotePairingInvitation(macID: UUID(), macName: "朋友的 Mac", macKey: key(),
+                                                 token: RemotePairingInvitation.newToken(), relay: theirs)
+        let mac = try XCTUnwrap(try directory.pair(with: invitation))
+        XCTAssertEqual(directory.relayServerName(), "我的中继", "本机连的其他 Mac 还在自己的中继上")
+        XCTAssertEqual(identity.peer(id: invitation.macID)?.relay, theirs)
+        XCTAssertEqual(mac.relay, theirs, "连这台 Mac 走朋友的中继")
+        XCTAssertEqual(directory.client(for: mac).pairingToken, invitation.token)
+    }
+
+    func testRelayConfigSentByAConnectedMacFollowsTheSameRule() throws {
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        let directory = try directory(identity: identity, debugEndpoint: false)
+        directory.importRelayConfig(relay("A", name: "我的中继"))
+        let peer = RemotePeer(id: UUID(), name: "朋友的 Mac", publicKey: key(), pairedAt: .now)
+        try identity.trust(peer)
+        let theirs = relay("B", name: "朋友的中继")
+        directory.receiveRelayConfig(theirs, from: peer.id)
+        XCTAssertEqual(identity.peer(id: peer.id)?.relay, theirs)
+        XCTAssertEqual(directory.relayServerName(), "我的中继")
+    }
 }

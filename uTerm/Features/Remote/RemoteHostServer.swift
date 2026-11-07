@@ -100,6 +100,9 @@ final class RemoteHostServer {
     @ObservationIgnored private var isRunning = false
     /// 经公网接入的规则，由设置决定。默认谁都不行。
     @ObservationIgnored var internetAccessPolicy: (UUID) -> Bool = { _ in false }
+    /// 凭邀请经公网配上的设备：替它勾上「允许经公网接入」。邀请是本机的人主动发出去的，配上了还要再去设置里
+    /// 勾一次的话，对方第一次连就会被断开。
+    @ObservationIgnored var grantInternetAccess: (UUID) -> Void = { _ in }
     /// 当前的中继配置，交给勾选过的设备。可观察：命令行导入后设置页要跟着变。
     var relayConfig: RemoteRelayConfig?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
@@ -358,8 +361,9 @@ final class RemoteHostServer {
     @discardableResult
     func makePairingInvitation() throws -> RemotePairingInvitation {
         let key = try identity.localIdentity().publicKey.rawRepresentation
+        // 开着公网接入（已注册到中继）才带上中继：否则对方拿着它也找不到这台 Mac。
         let invitation = RemotePairingInvitation(macID: localID, macName: localName, macKey: key,
-                                                 token: RemotePairingInvitation.newToken())
+                                                 token: RemotePairingInvitation.newToken(), relay: relayLink?.config)
         pairingInvitation = invitation
         invitationExpiry?.cancel()
         invitationExpiry = Task { [weak self] in
@@ -375,7 +379,7 @@ final class RemoteHostServer {
         pairingInvitation = nil
     }
 
-    /// 手机带来的扫码凭据对得上正在出示的邀请：用掉它（一次性）并返回 true。
+    /// 对方带来的邀请凭据对得上正在出示的邀请：用掉它（一次性）并返回 true。
     func redeemPairingProof(_ proof: Data, phoneKey: Data) -> Bool {
         guard let invitation = pairingInvitation,
               RemotePairingInvitation.verify(proof, token: invitation.token, phoneKey: phoneKey,

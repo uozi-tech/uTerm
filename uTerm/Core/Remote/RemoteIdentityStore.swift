@@ -17,6 +17,10 @@ nonisolated struct RemotePeer: Codable, Equatable, Sendable, Identifiable {
     /// 对端握手时报的设备类别（`RemoteDevicePlatform` 的原始值）。老版本不报，解出来是 nil，当手机看。
     var platform: String? = nil
 
+    /// 主控端记的、这台主机所在的中继，和本机默认中继不是同一台时才有（凭邀请配的别人的 Mac、或主机发来的
+    /// 配置与默认不同）。nil = 走本机默认中继。存在本机专属的钥匙串里，不同步。
+    var relay: RemoteRelayConfig? = nil
+
     /// 对端是 Mac（另一台 Mac 来控制本机，或本机控制的主机）。
     var isMac: Bool { platform == RemoteDevicePlatform.mac.rawValue }
 

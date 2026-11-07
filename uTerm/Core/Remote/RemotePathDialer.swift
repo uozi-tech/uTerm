@@ -38,7 +38,8 @@ nonisolated struct RemotePathDialer: Sendable {
     /// 「只走公网」：打洞时连私有 IPv4 也不用，否则同一局域网里两端的私有地址一配就通，测不到外出时的路。
     var publicOnly = false
 
-    func dial(_ mac: RemotePeer) async throws -> RemoteDialedPath {
+    /// `invitationToken`：凭邀请第一次连这台 Mac（它还不认识本机），打招呼时包上邀请外层。
+    func dial(_ mac: RemotePeer, invitationToken: Data? = nil) async throws -> RemoteDialedPath {
         let session = Data(SymmetricKey(size: .bits128).withUnsafeBytes { Array($0) }).base64URLEncoded
         let staticKey = try identity.localIdentity()
         let shared = try RemoteSignalBox.sharedKey(local: staticKey, remotePublicKey: mac.publicKey)
@@ -49,7 +50,11 @@ nonisolated struct RemotePathDialer: Sendable {
                                      ice: attempt?.localDescription().map {
                                          RemoteICEDescriptionFilter.keep($0, family: nil, publicOnly: publicOnly)
                                      })
-        let sealed = try RemoteSignalBox.seal(offer, key: shared, session: session, direction: .phoneToMac)
+        var sealed = try RemoteSignalBox.seal(offer, key: shared, session: session, direction: .phoneToMac)
+        if let invitationToken {
+            sealed = try RemoteInvitationSignal.wrap(sealed, clientKey: staticKey.publicKey.rawRepresentation,
+                                                     token: invitationToken, session: session)
+        }
         let replyBox = try await relay.signal(to: mac.id, from: localID, session: session, box: sealed)
         let reply: RemoteSignalBody
         do {

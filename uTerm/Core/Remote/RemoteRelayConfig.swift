@@ -6,7 +6,7 @@ import Security
 ///
 /// `key` 是成员私钥，等同口令：凭它能注册主机、看到谁在线、发起中继。但它进不了端到端加密的会话，
 /// 连上来的人还要过配对身份和「允许经公网接入」。
-nonisolated struct RemoteRelayConfig: Codable, Equatable, Sendable {
+nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
     static let format = "uterm-relay"
     static let version = 1
     static let scheme = "uterm"
@@ -72,9 +72,22 @@ nonisolated struct RemoteRelayConfig: Codable, Equatable, Sendable {
         return try? P256.Signing.PrivateKey(rawRepresentation: raw)
     }
 
-    private var isValid: Bool {
+    var isValid: Bool {
         format == Self.format && version == Self.version && !host.isEmpty && (1...65535).contains(port)
             && !relayID.isEmpty && memberKey != nil
+    }
+}
+
+/// 主机带来的中继配置（邀请里的、或连上后主机发来的）该记在哪。
+nonisolated enum RemoteRelayPlacement: Equatable, Sendable {
+    /// 本机还没有默认中继，或就是默认那台（换了成员密钥）：存成默认。
+    case setDefault
+    /// 和默认的不是同一台：只给这台主机用，不顶掉默认（本机连的其他主机还在默认中继上）。
+    case perHost
+
+    static func place(_ incoming: RemoteRelayConfig, current: RemoteRelayConfig?) -> RemoteRelayPlacement {
+        guard let current, current.relayID != incoming.relayID else { return .setDefault }
+        return .perHost
     }
 }
 

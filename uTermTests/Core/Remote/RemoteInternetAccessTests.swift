@@ -59,7 +59,7 @@ final class RemoteInternetAccessTests: XCTestCase {
     /// 发起一条公网连接，走完握手。`confirm` = 握手后发不发 `keyConfirm`。
     private func connect(_ phone: Phone, to server: RemoteHostServer, expected: UUID? = nil, helloID: UUID? = nil,
                          features: [String]? = [RemoteFeature.keyConfirmation, RemoteFeature.heartbeat],
-                         confirm: Bool = true) async -> (RemoteLink, Inbox) {
+                         proof: Data? = nil, confirm: Bool = true) async -> (RemoteLink, Inbox) {
         let (phoneSide, macSide) = RemoteMemoryTransport.pair()
         let pair = keys()
         server.accept(transport: macSide, origin: .internet(peerID: expected ?? phone.id, keys: pair.mac, path: .relay))
@@ -70,7 +70,8 @@ final class RemoteInternetAccessTests: XCTestCase {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: helloID ?? phone.id, deviceName: "手机",
                                 ephemeralKey: ephemeral.publicKey.rawRepresentation,
-                                staticKey: phone.key.publicKey.rawRepresentation, features: features)
+                                staticKey: phone.key.publicKey.rawRepresentation, features: features,
+                                pairingProof: proof)
         do {
             _ = try await link.establish(role: .initiator, hello: hello, staticKey: phone.key, ephemeralKey: ephemeral,
                                          handshakeKeys: pair.phone)
@@ -368,5 +369,58 @@ final class RemoteInternetAccessTests: XCTestCase {
         }
         XCTAssertNotNil(measured)
         link.close()
+    }
+
+    // MARK: - 凭邀请经公网配对
+
+    private func proof(_ invitation: RemotePairingInvitation, for phone: Phone) -> Data {
+        RemotePairingInvitation.proof(token: invitation.token, phoneKey: phone.key.publicKey.rawRepresentation,
+                                      macKey: invitation.macKey)
+    }
+
+    /// 不同 Apple ID、不在同一网络：凭邀请凭据第一次经公网连上来就配对，并替它开通公网接入，不弹审批框。
+    func test_invitation_proof_pairs_an_unknown_device_over_the_internet() async throws {
+        let phone = Phone()
+        var granted: [UUID] = []
+        var allowed: Set<UUID> = []
+        let server = makeServer()
+        server.internetAccessPolicy = { allowed.contains($0) }
+        server.grantInternetAccess = { granted.append($0); allowed.insert($0) }
+        let invitation = try server.makePairingInvitation()
+
+        let (link, inbox) = await connect(phone, to: server, proof: proof(invitation, for: phone))
+        let approved = await waitUntil { self.pairing(inbox).contains(.approved) }
+        XCTAssertTrue(approved)
+        XCTAssertTrue(server.pairingRequests.isEmpty, "公网上仍然不弹审批框")
+        XCTAssertEqual(server.trustedPeers.map(\.id), [phone.id])
+        XCTAssertEqual(granted, [phone.id], "替它勾上公网接入，否则立刻会被断开")
+        XCTAssertNil(server.pairingInvitation, "邀请用一次就作废")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(inbox.closed, "开通之后连接留着")
+        link.close()
+
+        let late = Phone()
+        let (_, lateInbox) = await connect(late, to: server, proof: proof(invitation, for: late))
+        let closed = await waitUntil { lateInbox.closed }
+        XCTAssertTrue(closed, "同一张邀请第二台设备用不了")
+        XCTAssertEqual(server.trustedPeers.count, 1)
+    }
+
+    func test_proof_for_another_key_or_expired_invitation_is_refused() async throws {
+        let phone = Phone(), other = Phone()
+        let server = makeServer()
+        var granted = false
+        server.grantInternetAccess = { _ in granted = true }
+        let invitation = try server.makePairingInvitation()
+        let (_, inbox) = await connect(phone, to: server, proof: proof(invitation, for: other))
+        let closed = await waitUntil { inbox.closed }
+        XCTAssertTrue(closed, "截到别人的凭据换一把钥匙用不了")
+
+        server.cancelPairingInvitation()
+        let (_, lateInbox) = await connect(phone, to: server, proof: proof(invitation, for: phone))
+        let lateClosed = await waitUntil { lateInbox.closed }
+        XCTAssertTrue(lateClosed, "收起（或过期）的邀请不算数")
+        XCTAssertTrue(server.trustedPeers.isEmpty)
+        XCTAssertFalse(granted)
     }
 }

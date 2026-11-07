@@ -51,6 +51,7 @@ struct MobileApp: App {
         WindowGroup {
             MobileLaunchRoot(appearance: appearance, lock: lock)
                 .modifier(RemoteRelayLinkHandler())
+                .modifier(RemotePairingLinkHandler())
                 .environment(lanSync)
                 .environment(remoteMacs)
                 .environment(cloudKitSync)

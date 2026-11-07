@@ -149,7 +149,8 @@ final class RemoteRelayHostLink {
         responder = RemoteSignalResponder(
             localKey: try identity.localIdentity(), localID: server.localID,
             recognize: { [weak server] id in MainActor.assumeIsolated { server?.knownPeer(id: id) } },
-            isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } })
+            isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } },
+            invitationToken: { [weak server] in MainActor.assumeIsolated { server?.pairingInvitation?.token } })
         state = .registered
         server.relayUpdates.noteRunning(answer.server)
         retryDelay = .seconds(1)

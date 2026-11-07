@@ -36,6 +36,8 @@ final class RemoteMacDirectory {
         var endpoint: NWEndpoint?
         /// 此刻在中继上，可以跨公网连。
         var isOnRelay = false
+        /// 只给这台用的中继（配对时记下的）；nil = 走默认中继。
+        var relay: RemoteRelayConfig?
 
         var isOnline: Bool { endpoint != nil || isOnRelay }
 
@@ -51,6 +53,8 @@ final class RemoteMacDirectory {
     private(set) var macs: [Mac] = []
     /// 局域网里此刻在线、还没配对的 Mac。
     private(set) var nearbyMacs: [Mac] = []
+    /// 刚凭邀请配上、等它一上线就打开的 Mac（`Mac.id`）。主机页的「我的 Mac」负责打开并清掉。
+    var pendingOpenMacID: String?
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
@@ -85,10 +89,11 @@ final class RemoteMacDirectory {
     @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     /// 中继配置存放处。测试里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
-    @ObservationIgnored private var relayClient: RemoteRelayClient?
+    /// 每台中继一个客户端，按中继 ID。
+    @ObservationIgnored private var relayClients: [String: RemoteRelayClient] = [:]
     @ObservationIgnored private var relayPoll: Task<Void, Never>?
-    /// 中继上此刻在线的 Mac。
-    @ObservationIgnored private var relayHosts: Set<UUID> = []
+    /// 各台中继上此刻在线的 Mac：中继 ID → 主机 ID。
+    @ObservationIgnored private var relayHosts: [String: Set<UUID>] = [:]
     /// 问中继「谁在线」。测试注入假的，好数清楚问了几次。
     @ObservationIgnored private let fetchRelayHosts: @Sendable (RemoteRelayClient) async throws -> Set<UUID>
     /// 前台时多久问一次中继。
@@ -242,7 +247,8 @@ final class RemoteMacDirectory {
         } else {
             client = RemoteMacClient(macName: mac.name, endpoint: mac.endpoint ?? .hostPort(host: "0.0.0.0", port: 1),
                                      identity: identity, expectedPeer: mac.expectedPeer)
-            client.onRelayConfig = { [weak self] config in self?.importRelayConfig(config) }
+            let deviceID = mac.deviceID
+            client.onRelayConfig = { [weak self] config in self?.receiveRelayConfig(config, from: deviceID) }
             client.onPaired = { [weak self] in self?.rebuild() }
             clients[mac.id] = client
         }
@@ -260,7 +266,21 @@ final class RemoteMacDirectory {
 
     // MARK: - 中继
 
-    /// 导入中继配置（扫码，或配对过的 Mac 发来）。
+    /// 连着的 Mac 发来它的中继配置：和默认中继是同一台（或本机还没有）就存成默认，否则只记在这台 Mac 上。
+    func receiveRelayConfig(_ config: RemoteRelayConfig, from deviceID: UUID?) {
+        guard let deviceID, var peer = identity.peer(id: deviceID),
+              RemoteRelayPlacement.place(config, current: defaultRelayConfig()) == .perHost else {
+            importRelayConfig(config)
+            return
+        }
+        guard peer.relay != config else { return }
+        peer.relay = config
+        try? identity.trust(peer)
+        rebuild()
+        startRelayPolling()
+    }
+
+    /// 导入默认中继配置（扫码、打开链接、或配对过的 Mac 发来）。
     @discardableResult
     func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
         guard let relayStore else {
@@ -276,24 +296,42 @@ final class RemoteMacDirectory {
     /// 没有钥匙串可写时（测试）用的配置。
     @ObservationIgnored private var relayConfigOverride: RemoteRelayConfig?
 
-    private func currentRelayClient() -> RemoteRelayClient? {
-        guard let config = relayConfigOverride ?? relayStore?.load() else {
-            relayClient = nil
-            return nil
+    private func defaultRelayConfig() -> RemoteRelayConfig? {
+        relayConfigOverride ?? relayStore?.load()
+    }
+
+    /// 要问的中继：默认那台，加上各台 Mac 单独记的。同一个中继 ID 只问一次（单独记的优先，它更新）。
+    private func relayConfigs() -> [RemoteRelayConfig] {
+        var byID: [String: RemoteRelayConfig] = [:]
+        if let config = defaultRelayConfig() { byID[config.relayID] = config }
+        for peer in identity.trustedPeers() {
+            if let relay = peer.relay { byID[relay.relayID] = relay }
         }
-        if relayClient?.relayConfig != config { relayClient = RemoteRelayClient(config: config) }
-        return relayClient
+        return byID.values.sorted { $0.relayID < $1.relayID }
+    }
+
+    private func relayClient(for config: RemoteRelayConfig) -> RemoteRelayClient {
+        if let existing = relayClients[config.relayID], existing.relayConfig == config { return existing }
+        let client = RemoteRelayClient(config: config)
+        relayClients[config.relayID] = client
+        return client
+    }
+
+    /// 连这台 Mac 走哪台中继：它单独记的，否则默认的。
+    private func relayClient(for mac: Mac) -> RemoteRelayClient? {
+        guard let config = mac.relay ?? defaultRelayConfig() else { return nil }
+        return relayClient(for: config)
     }
 
     /// 这台 Mac 能不能做打洞诊断：配了中继、Mac 在中继上。
     func iceProbeRunner(for mac: Mac) -> (runner: RemoteICEProbeRunner, peer: RemotePeer)? {
-        guard mac.isOnRelay, let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
+        guard mac.isOnRelay, let relay = relayClient(for: mac), let peer = mac.expectedPeer else { return nil }
         return (RemoteICEProbeRunner(relay: relay, identity: identity, localID: RemoteLocalDevice.id()), peer)
     }
 
-    /// 配好的中继服务器名字；没配是 nil。读钥匙串，别放进视图 body。
+    /// 配好的默认中继名字；没配是 nil。读钥匙串，别放进视图 body。
     func relayServerName() -> String? {
-        (relayConfigOverride ?? relayStore?.load())?.name
+        defaultRelayConfig()?.name
     }
 
     /// 这台 Mac 此刻在局域网里吗（不看「只走公网」）。
@@ -308,7 +346,7 @@ final class RemoteMacDirectory {
         if let found = discovered[deviceID] {
             runner.lan = RemoteLANTarget(macName: found.name, endpoint: found.endpoint, expectedPeer: peer)
         }
-        if let relay = currentRelayClient() {
+        if let relay = relayClient(for: mac) {
             if mac.isOnRelay {
                 runner.relay = relay
             } else {
@@ -318,12 +356,12 @@ final class RemoteMacDirectory {
         return (runner, peer)
     }
 
-    private func internetDialer(for mac: Mac) -> (@Sendable () async throws -> RemoteDialedPath)? {
-        guard let relay = currentRelayClient(), let peer = mac.expectedPeer else { return nil }
+    private func internetDialer(for mac: Mac) -> RemoteMacClient.InternetDialer? {
+        guard let relay = relayClient(for: mac), let peer = mac.expectedPeer else { return nil }
         var configured = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
         configured.publicOnly = internetOnly
         let dialer = configured
-        return { try await dialer.dial(peer) }
+        return { token in try await dialer.dial(peer, invitationToken: token) }
     }
 
     /// 马上问一次中继谁在线；之后只要还有界面在显示在线状态、App 在前台，就每 `relayPollInterval` 再问一次。
@@ -340,12 +378,15 @@ final class RemoteMacDirectory {
         relayPoll = Task { [weak self] in
             defer { self?.relayPollEnded(generation) }
             while !Task.isCancelled {
-                guard let relay = self?.currentRelayClient() else {
+                guard let relays = self?.pollTargets(), !relays.isEmpty else {
                     self?.lastRelayPoll = .now
-                    self?.setRelayHosts([])
+                    self?.setRelayHosts([:])
                     return
                 }
-                let hosts = (try? await fetch(relay)) ?? []
+                var hosts: [String: Set<UUID>] = [:]
+                for (relayID, client) in relays {
+                    hosts[relayID] = (try? await fetch(client)) ?? []
+                }
                 guard !Task.isCancelled else { return }
                 self?.lastRelayPoll = .now
                 self?.setRelayHosts(hosts)
@@ -401,7 +442,11 @@ final class RemoteMacDirectory {
         }
     }
 
-    private func setRelayHosts(_ hosts: Set<UUID>) {
+    private func pollTargets() -> [(relayID: String, client: RemoteRelayClient)] {
+        relayConfigs().map { ($0.relayID, relayClient(for: $0)) }
+    }
+
+    private func setRelayHosts(_ hosts: [String: Set<UUID>]) {
         guard hosts != relayHosts else { return }
         relayHosts = hosts
         rebuild()
@@ -411,13 +456,22 @@ final class RemoteMacDirectory {
     /// 返回这台 Mac（可能此刻不在线）。
     @discardableResult
     func pair(with invitation: RemotePairingInvitation) throws -> Mac? {
-        try identity.trust(RemotePeer(id: invitation.macID, name: invitation.macName, publicKey: invitation.macKey,
-                                      pairedAt: Date()))
+        var peer = RemotePeer(id: invitation.macID, name: invitation.macName, publicKey: invitation.macKey,
+                              pairedAt: Date(), platform: RemoteDevicePlatform.mac.rawValue)
+        // 邀请带着中继：本机没有默认中继（或就是同一台）就存成默认，否则只给这台 Mac 用。
+        if let relay = invitation.relay {
+            switch RemoteRelayPlacement.place(relay, current: defaultRelayConfig()) {
+            case .setDefault: importRelayConfig(relay)
+            case .perHost: peer.relay = relay
+            }
+        }
+        try identity.trust(peer)
         pendingTokens[invitation.macID] = invitation.token
         // 之前按旧身份建过的客户端作废：要按扫到的公钥核对。
         clients[invitation.macID.uuidString] = nil
         if !isActivated { activate() }
         refreshPaired()
+        startRelayPolling()
         return macs.first { $0.deviceID == invitation.macID }
     }
 
@@ -434,7 +488,12 @@ final class RemoteMacDirectory {
 
     private func rebuild() {
         let trusted = identity.trustedPeers()
-        macs = debugMacs + Self.knownMacs(trusted: trusted, online: online, relayHosts: relayHosts)
+        let defaultRelayID = defaultRelayConfig()?.relayID
+        // 每台 Mac 只看它自己那台中继上在不在。
+        let onRelay = Set(trusted.filter { peer in
+            (peer.relay?.relayID ?? defaultRelayID).flatMap { relayHosts[$0] }?.contains(peer.id) ?? false
+        }.map(\.id))
+        macs = debugMacs + Self.knownMacs(trusted: trusted, online: online, relayHosts: onRelay)
         nearbyMacs = Self.nearbyMacs(online: online, paired: Set(trusted.map(\.id)), localID: RemoteLocalDevice.id())
         // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。局域网又找到它、中继报它上线时，
         // 客户端会叫醒正在退避的标签马上重试（Mac 长时间离线后没人看的标签退避可达一分钟）。
@@ -483,7 +542,7 @@ final class RemoteMacDirectory {
         var byID: [UUID: Mac] = [:]
         for peer in trusted where byID[peer.id] == nil {
             byID[peer.id] = Mac(id: peer.id.uuidString, deviceID: peer.id, name: peer.name, publicKey: peer.publicKey,
-                                source: .paired)
+                                source: .paired, relay: peer.relay)
         }
         for (id, seen) in online where byID[id] != nil {
             byID[id]?.endpoint = seen.endpoint

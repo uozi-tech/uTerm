@@ -38,7 +38,7 @@ final class RemoteHostConnection {
     private var remotelyUnlocked = false
     /// 正在执行解锁（按键序列 + 轮询）：同时来的第二个请求直接拒掉，免得两串按键交错。
     private var unlockInFlight = false
-    /// 从哪条路进来的。公网路径规则更严：不弹审批、不收扫码凭据。
+    /// 从哪条路进来的。公网路径规则更严：不弹审批框，没配对过的只认邀请凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
     private var keyConfirmed = false
@@ -164,19 +164,27 @@ final class RemoteHostConnection {
         }
     }
 
-    /// 公网来的连接：只认信令里打过招呼的那台设备，必须能证明持有私钥，且此刻仍被允许。
+    /// 公网来的连接：只认信令里打过招呼的那台设备，必须能证明持有私钥，且此刻仍被允许；
+    /// 或者带着本机正在出示的邀请凭据（凭据绑定它的公钥，一次性），这时配对并替它开通公网接入。
     /// 任何一条不满足就断开。不弹审批框，否则任何拿到中继配置的人都能远程刷弹窗骗点击。
     private func authorizeFromInternet(peer: RemoteHello, expected: UUID) async throws {
         guard peer.deviceID == expected, peer.supports(RemoteFeature.keyConfirmation) else {
             throw RemoteProtocolError.handshakeFailed("公网连接的身份与信令不符")
         }
         try await waitForKeyConfirmation()
-        guard !isClosed, server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey),
-              server.allowsInternetAccess(peer.deviceID) else {
+        guard !isClosed else { throw RemoteProtocolError.closed }
+        if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey),
+           server.allowsInternetAccess(peer.deviceID) {
+            try rememberRecognized(peer)
+            authorize(.trusted)
+            return
+        }
+        guard let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) else {
             throw RemoteProtocolError.pairingRejected
         }
-        try rememberRecognized(peer)
-        authorize(.trusted)
+        try server.trust(newPeer(from: peer))
+        server.grantInternetAccess(peer.deviceID)
+        authorize(.approved)
     }
 
     /// 认出来的设备只跟着更新名字与机型。名字只在配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，

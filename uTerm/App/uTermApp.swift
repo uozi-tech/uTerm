@@ -109,6 +109,7 @@ struct uTermApp: App {
                                             relayUpdates: BackgroundLaunchMode.isRunningInTestHost ? .inert() : RemoteRelayUpdateMonitor(),
                                             desktopEnvironment: .live(settings: remoteSettings))
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
+        remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
         _remoteSettings = State(initialValue: remoteSettings)
         _remoteServer = State(initialValue: remoteServer)
         remotePairingPrompt = BackgroundLaunchMode.isRunningInTestHost ? nil : RemotePairingPrompt(server: remoteServer)

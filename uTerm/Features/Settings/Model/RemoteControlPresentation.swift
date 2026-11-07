@@ -132,9 +132,17 @@ enum RemoteControlPresentation {
 
     // MARK: - 配对
 
+    /// 二维码下面的说明：邀请带不带中继，决定了对方能不能在外网配对，也要讲明中继会一起交出去。
+    static func invitationCaption(relayName: String?) -> String {
+        guard let relayName else {
+            return String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码，或拷贝链接发给对方。这张邀请只能在同一局域网里用；打开「允许经公网接入」后重新显示，不在同一网络也能配对。")
+        }
+        return String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码，或拷贝链接发给对方。邀请里带着中继「\(relayName)」，不在同一网络也能配对；对方配上后可以经公网连接这台 Mac，也能使用这台中继。")
+    }
+
     static func pairingHint(hasInvitation: Bool) -> String {
         hasInvitation
-            ? "二维码 10 分钟内有效，只能用一次。"
-            : "手机不在同一局域网时用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码。"
+            ? "二维码和链接 10 分钟内有效，只能用一次。"
+            : "不在同一局域网的设备用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码，或把链接发给对方。"
     }
 }

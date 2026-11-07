@@ -68,7 +68,7 @@ final class RemoteWANImpairmentTests: XCTestCase {
         let proxyPort = try XCTUnwrap(proxy.port)
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phoneIdentity)
-        client.updateRoutes(endpoint: nil, internetDialer: {
+        client.updateRoutes(endpoint: nil, internetDialer: { _ in
             let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxyPort)!,
                                           using: RemoteLink.parameters())
             return RemoteDialedPath(transport: RemoteNWTransport(connection: connection), handshakeKeys: phoneKeys, path: path)

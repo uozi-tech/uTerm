@@ -56,7 +56,7 @@ final class RemoteDesktopDatagramTests: XCTestCase {
                       origin: .internet(peerID: phoneID, keys: macHandshake, path: .direct))
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phoneIdentity)
-        client.updateRoutes(endpoint: nil, internetDialer: {
+        client.updateRoutes(endpoint: nil, internetDialer: { _ in
             RemoteDialedPath(transport: RemoteP2PTransport(path: phonePath, keys: datagramKeys.second),
                              handshakeKeys: phoneHandshake, path: .direct)
         })

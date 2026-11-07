@@ -169,6 +169,69 @@ final class RemoteSignalingTests: XCTestCase {
         XCTAssertNil(responder.respond(session: "s", from: "不是 UUID", box: box, now: now))
         XCTAssertNil(responder.respond(session: "s", from: phoneID.uuidString, box: nil, now: now))
     }
+
+    // MARK: - 凭邀请打招呼
+
+    private func invitedResponder(token: Data?, allowed: Bool = false) -> RemoteSignalResponder {
+        RemoteSignalResponder(localKey: macKey, localID: macID, recognize: { _ in nil }, isAllowed: { _ in allowed },
+                              invitationToken: { token })
+    }
+
+    private func invitedOffer(token: Data, session: String = "s") throws -> (String, RemoteSignalBody) {
+        let (inner, body) = try offer(session: session)
+        let box = try RemoteInvitationSignal.wrap(inner, clientKey: phoneKey.publicKey.rawRepresentation, token: token,
+                                                  session: session)
+        return (box, body)
+    }
+
+    func test_invited_device_is_answered_while_the_invitation_is_shown() throws {
+        let token = RemotePairingInvitation.newToken()
+        var responder = invitedResponder(token: token)
+        let (box, sent) = try invitedOffer(token: token)
+        XCTAssertTrue(box.hasPrefix(RemoteInvitationSignal.prefix))
+        XCTAssertFalse(box.contains(phoneKey.publicKey.rawRepresentation.base64EncodedString()), "中继看不到公钥")
+
+        let reply = try XCTUnwrap(responder.respond(session: "s", from: phoneID.uuidString, box: box, now: now),
+                                  "还不认识、也没勾选公网接入，凭邀请照样回应")
+        let body = try RemoteSignalBox.open(reply, key: try shared(), session: "s", direction: .macToPhone)
+        XCTAssertEqual(body.kind, .answer, "回复照常用两端长期密钥封，手机按邀请里的 Mac 公钥解得开")
+        let pending = try XCTUnwrap(responder.claim(session: "s", now: now))
+        XCTAssertEqual(pending.peer.publicKey, phoneKey.publicKey.rawRepresentation, "用外层里报的公钥")
+        let phone = RemoteSignalBox.handshakeKeys(sharedKey: try shared(), phoneNonce: sent.nonce, macNonce: body.nonce,
+                                                  session: "s", role: .initiator)
+        XCTAssertEqual(phone.send, pending.keys.receive)
+    }
+
+    func test_invited_hello_is_ignored_without_the_right_token() throws {
+        let token = RemotePairingInvitation.newToken()
+        let (box, _) = try invitedOffer(token: token)
+        var notInviting = invitedResponder(token: nil)
+        XCTAssertNil(notInviting.respond(session: "s", from: phoneID.uuidString, box: box, now: now), "没在邀请：什么都不回")
+        var otherInvitation = invitedResponder(token: RemotePairingInvitation.newToken())
+        XCTAssertNil(otherInvitation.respond(session: "s", from: phoneID.uuidString, box: box, now: now), "旧邀请的令牌不算数")
+        var invited = invitedResponder(token: token)
+        XCTAssertNil(invited.respond(session: "other", from: phoneID.uuidString, box: box, now: now), "外层绑定会话")
+        let (plain, _) = try offer()
+        XCTAssertNil(invited.respond(session: "s", from: phoneID.uuidString, box: plain, now: now),
+                     "不带外层的陌生设备仍然不理")
+    }
+
+    func test_invited_hello_cannot_be_replayed() throws {
+        let token = RemotePairingInvitation.newToken()
+        var responder = invitedResponder(token: token)
+        let (box, _) = try invitedOffer(token: token)
+        XCTAssertNotNil(responder.respond(session: "s", from: phoneID.uuidString, box: box, now: now))
+        XCTAssertNil(responder.respond(session: "s", from: phoneID.uuidString, box: box, now: now))
+    }
+
+    func test_relay_from_a_host_goes_to_the_default_only_when_it_is_the_same_relay() {
+        let mine = RemoteRelayConfig(name: "家", host: "a.example", port: 47310, relayID: "A", key: "k1")
+        let rotated = RemoteRelayConfig(name: "家", host: "a.example", port: 47310, relayID: "A", key: "k2")
+        let theirs = RemoteRelayConfig(name: "朋友", host: "b.example", port: 47310, relayID: "B", key: "k3")
+        XCTAssertEqual(RemoteRelayPlacement.place(theirs, current: nil), .setDefault, "本机还没有中继")
+        XCTAssertEqual(RemoteRelayPlacement.place(rotated, current: mine), .setDefault, "同一台中继换了密钥")
+        XCTAssertEqual(RemoteRelayPlacement.place(theirs, current: mine), .perHost, "别人的中继不顶掉自己的")
+    }
 }
 
 /// 中继配置的导入。里面有成员私钥，坏数据一律拒绝。

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UDesignKit
 
@@ -18,11 +19,18 @@ struct RemotePairedDevicesGroup: View {
                     if server.pairingInvitation == nil {
                         UDButton(title: "显示二维码", style: .secondary) { _ = try? server.makePairingInvitation() }
                     } else {
-                        UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                        HStack(spacing: 8) {
+                            UDButton(title: "拷贝链接", style: .secondary) {
+                                guard let invitation = server.pairingInvitation else { return }
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(invitation.url.absoluteString, forType: .string)
+                            }
+                            UDButton(title: "收起", style: .secondary) { server.cancelPairingInvitation() }
+                        }
                     }
                 }
                 if let invitation = server.pairingInvitation {
-                    SettingsCenteredBlock(caption: String(localized: "在 iPhone / iPad 的 uTerm 主机页打开「我的 Mac › 扫码配对」扫这个二维码。")) {
+                    SettingsCenteredBlock(caption: RemoteControlPresentation.invitationCaption(relayName: invitation.relay?.name)) {
                         PairingQRCode(text: invitation.url.absoluteString)
                     }
                     .settingsDivider(inset: nil)

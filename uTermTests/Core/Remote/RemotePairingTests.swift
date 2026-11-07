@@ -323,4 +323,21 @@ final class RemotePairingTests: XCTestCase {
         rig.server.rejectPairing(try XCTUnwrap(rig.server.pairingRequests.first?.id))
         await connecting.value
     }
+
+    // MARK: - 邀请带中继
+
+    func test_invitation_carries_the_relay_and_old_links_still_parse() throws {
+        let relay = RemoteRelayConfig(name: "家里", host: "relay.example.com", port: 47310, relayID: "6F1C",
+                                      key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+        let invitation = RemotePairingInvitation(macID: UUID(), macName: "Mac", macKey: key(),
+                                                 token: RemotePairingInvitation.newToken(), relay: relay)
+        let text = invitation.url.absoluteString
+        XCTAssertEqual(RemotePairingInvitation(scanned: text), invitation)
+        XCTAssertTrue(text.contains("v=1"), "版本号不变，老版本照样能在局域网里配对")
+
+        let broken = text.replacingOccurrences(of: "&rp=47310", with: "&rp=0")
+        let parsed = try XCTUnwrap(RemotePairingInvitation(scanned: broken), "中继参数坏了邀请照样能用")
+        XCTAssertNil(parsed.relay)
+        XCTAssertEqual(parsed.token, invitation.token)
+    }
 }

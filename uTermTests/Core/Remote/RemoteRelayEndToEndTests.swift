@@ -86,7 +86,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
     }
 
     private struct Phone {
-        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        var identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let id = RemoteLocalDevice.id()
 
         func peer() throws -> RemotePeer {
@@ -100,7 +100,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let client = RemoteMacClient(macName: mac.name, endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phone.identity, expectedPeer: mac)
         let dialer = RemotePathDialer(relay: relay, identity: phone.identity, localID: phone.id, allowsDirect: allowsDirect)
-        client.updateRoutes(endpoint: nil, internetDialer: { try await dialer.dial(mac) })
+        client.updateRoutes(endpoint: nil, internetDialer: { token in try await dialer.dial(mac, invitationToken: token) })
         return client
     }
 
@@ -109,6 +109,41 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         private var bytes = Data()
         func add(_ data: Data) { lock.lock(); bytes.append(data); lock.unlock() }
         func contains(_ needle: Data) -> Bool { lock.lock(); defer { lock.unlock() }; return bytes.range(of: needle) != nil }
+    }
+
+    /// 不同 Apple ID、不在同一网络：凭带中继的邀请第一次经中继连过来就配上，并开通公网接入；之后不带凭据也能连。
+    func test_invitation_pairs_a_stranger_through_the_relay() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        mac.server.grantInternetAccess = { id in allowed.set([id]) }
+        let invitation = try mac.server.makePairingInvitation()
+        XCTAssertEqual(invitation.relay, config, "开着公网接入：邀请带上中继")
+        let scanned = try XCTUnwrap(RemotePairingInvitation(scanned: invitation.url.absoluteString))
+        let relay = RemoteRelayClient(config: try XCTUnwrap(scanned.relay))
+
+        let first = makeClient(phone: phone, mac: mac.peer, relay: relay)
+        first.pairingToken = scanned.token
+        await first.connect()
+        XCTAssertEqual(first.state, .connected)
+        XCTAssertEqual(first.path, .relay)
+        XCTAssertTrue(mac.server.pairingRequests.isEmpty)
+        XCTAssertEqual(mac.server.trustedPeers.map(\.id), [phone.id])
+        XCTAssertTrue(allowed.contains(phone.id))
+        first.disconnect()
+
+        let again = makeClient(phone: phone, mac: mac.peer, relay: relay)
+        defer { again.disconnect() }
+        await again.connect()
+        XCTAssertEqual(again.state, .connected, "配上之后照常连")
+
+        let stranger = Phone(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let late = makeClient(phone: stranger, mac: mac.peer, relay: relay)
+        late.pairingToken = scanned.token
+        await late.connect()
+        XCTAssertNotEqual(late.state, .connected, "用过的邀请别的设备用不了")
     }
 
     func test_phone_controls_a_terminal_through_the_relay() async throws {

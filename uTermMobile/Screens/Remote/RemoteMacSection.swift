@@ -10,8 +10,6 @@ struct RemoteMacSection: View {
     @State private var scanning = false
     @State private var diagnosing: RemoteMacDirectory.Mac?
     @Environment(\.mAccent) private var accent
-    /// 刚扫码配上、此刻还不在线的 Mac：它一上线就自动打开。
-    @State private var awaitingMac: String?
 
     var body: some View {
         if let directory = injected {
@@ -52,6 +50,7 @@ struct RemoteMacSection: View {
         .task { await directory.keepLiveStatusFresh() }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
+            openPendingIfOnline(directory)
             #if DEBUG
             // 调试：启动参数 `-RemoteDebugOpenDesktop YES`（配合 `-RemoteDebugEndpoint`）直接打开第一台 Mac 的屏幕，
             // 模拟器联调远程桌面时不用手点。
@@ -78,17 +77,23 @@ struct RemoteMacSection: View {
             RemotePairingScanner(onScanned: { invitation in
                 scanning = false
                 guard let mac = try? directory.pair(with: invitation) else { return }
-                if mac.isOnline { selected = mac } else { awaitingMac = mac.id }
+                directory.pendingOpenMacID = mac.id
+                openPendingIfOnline(directory)
             }, onRelayConfig: { config in
                 scanning = false
                 directory.importRelayConfig(config)
             })
         }
-        .onChange(of: directory.macs) { _, macs in
-            guard let awaitingMac, let mac = macs.first(where: { $0.id == awaitingMac }), mac.isOnline else { return }
-            self.awaitingMac = nil
-            selected = mac
-        }
+        .onChange(of: directory.macs) { _, _ in openPendingIfOnline(directory) }
+        .onChange(of: directory.pendingOpenMacID) { _, _ in openPendingIfOnline(directory) }
+    }
+
+    /// 刚凭邀请（扫码或链接）配上的 Mac：一上线（局域网或中继）就自动打开，用掉邀请完成配对。
+    private func openPendingIfOnline(_ directory: RemoteMacDirectory) {
+        guard let id = directory.pendingOpenMacID, selected == nil,
+              let mac = directory.macs.first(where: { $0.id == id }), mac.isOnline else { return }
+        directory.pendingOpenMacID = nil
+        selected = mac
     }
 
     /// 不在同一局域网的 Mac：扫它「设置 › 远程控制」里的二维码配对。

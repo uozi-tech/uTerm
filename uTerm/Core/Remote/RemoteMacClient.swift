@@ -125,8 +125,10 @@ final class RemoteMacClient: Identifiable {
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?
-    /// 跨公网连它的办法（配了中继、知道它的公钥才有）。
-    @ObservationIgnored private var internetDialer: (@Sendable () async throws -> RemoteDialedPath)?
+    /// 跨公网连它的办法（配了中继、知道它的公钥才有）。参数是还没用掉的邀请令牌：带着它打招呼，
+    /// 还不认识本机的被控端才肯回应（见 `RemoteInvitationSignal`）。
+    typealias InternetDialer = @Sendable (_ pairingToken: Data?) async throws -> RemoteDialedPath
+    @ObservationIgnored private var internetDialer: InternetDialer?
     /// Mac 发来的中继配置交给谁存。
     @ObservationIgnored var onRelayConfig: (@MainActor (RemoteRelayConfig) -> Void)?
     /// 这次连接让本机新记住了这台 Mac（局域网审批通过、或第一次连邀请里的 Mac）：目录据此把它挪进「已配对」。
@@ -190,7 +192,7 @@ final class RemoteMacClient: Identifiable {
     ///
     /// 多出一条路（局域网又找到了它、刚配好中继）是 Mac 可能连得上了的迹象：正在退避的标签马上重试。
     /// 没人看的标签在 Mac 长时间离线后最长一分钟才试一次（`RemoteReconnectPolicy`），靠这里不让 Mac 回来时干等。
-    func updateRoutes(endpoint: NWEndpoint?, internetDialer: (@Sendable () async throws -> RemoteDialedPath)?) {
+    func updateRoutes(endpoint: NWEndpoint?, internetDialer: InternetDialer?) {
         let gainedRoute = (self.endpoint == nil && endpoint != nil) || (self.internetDialer == nil && internetDialer != nil)
         self.endpoint = endpoint
         self.internetDialer = internetDialer
@@ -245,7 +247,7 @@ final class RemoteMacClient: Identifiable {
             return
         }
         do {
-            await attempt(try await internetDialer())
+            await attempt(try await internetDialer(pairingToken))
         } catch {
             failureIsPermanent = (error as? RemoteProtocolError)?.isPermanent ?? false
             state = .failed(error.localizedDescription)
