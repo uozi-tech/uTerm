@@ -1637,6 +1637,19 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // Clamp to the scroll view's real maximum so following the bottom rests
         // flush against the last line instead of over-scrolling past it.
         let offsetY = min(desiredY, maxContentOffsetY())
+        // uTerm patch #17: following the bottom while the scroll view is still
+        // coasting or rubber-banding. The coast lands on (or bounces back to) the
+        // bottom by itself; snapping contentOffset here fights that animation on
+        // every output tick — Claude Code ends a DEC 2026 frame ~10 times a
+        // second, each one landing here — and the view shakes at the bottom.
+        // Only when output pulled the tail more than a row away do we take over,
+        // and then stop the coast first so UIKit does not drag it back.
+        if !userScrolling && isDecelerating {
+            if contentOffset.y >= offsetY - cellDimension.height {
+                return
+            }
+            setContentOffset(contentOffset, animated: false)
+        }
         setContentOffsetFromTerminal(CGPoint (x: 0, y: offsetY))
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize

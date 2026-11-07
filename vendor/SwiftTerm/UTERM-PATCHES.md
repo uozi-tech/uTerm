@@ -324,6 +324,18 @@ Claude Code 在 SwiftTerm 里每帧都包 `?2026h` … `?2026l`，思考时约 1
 
 uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalSynchronizedOutputTests.swift`。
 
+## 17. iOS 跟随底部时，惯性 / 回弹还没停就不抢滚动位置
+
+`iOS/iOSTerminalView.swift` `updateScroller`：跟随底部（`userScrolling == false`）时，上游每次调用都把 `contentOffset`
+直接设成底部，只在手指按着时让开。`synchronizedOutputChanged` 每帧结束都调它，Claude Code 思考时一秒约 10 次；用户把
+终端甩回底部、松手后的减速或橡皮筋回弹还在走，这里每帧把位置硬拽回底部，UIKit 的动画下一帧又按自己的轨迹设回去，滚到
+底部时整屏抖。没有同步帧的普通输出不增行就不会走到这里，所以只有 Claude 思考时才明显。
+
+改成：正在减速（含回弹）且离底部不到一行时什么也不做，让它自己落到底部，下一帧输出再贴齐；新输出把尾巴拉开超过一行时
+先 `setContentOffset(_, animated: false)` 停掉惯性再贴底。手指按着、往上翻看历史（`userScrolling`）的行为不变。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalBottomFollowTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）
