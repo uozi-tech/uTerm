@@ -87,6 +87,21 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertTrue(RemoteDesktopEventMapper.isOnDisplay(CGPoint(x: 250, y: 60), in: viewport))
     }
 
+    func test_window_is_resized_so_the_picture_has_no_letterbox() {
+        // 窗口 1280×840，顶栏 38：画布 1280×802。那台是 16:9 → 画布要 1280×720，窗口高 758，上沿不动。
+        let window = CGRect(x: 100, y: 100, width: 1280, height: 840)
+        let visible = CGRect(x: 0, y: 0, width: 1512, height: 945)
+        let fitted = RemoteDesktopCanvasNSView.fittedFrame(window: window, canvas: CGSize(width: 1280, height: 802),
+                                                           display: CGSize(width: 1920, height: 1080), visible: visible)
+        XCTAssertEqual(fitted, CGRect(x: 100, y: 182, width: 1280, height: 758))
+        // 竖屏的那台：按可见区高度封顶，宽度等比缩。
+        let tall = RemoteDesktopCanvasNSView.fittedFrame(window: window, canvas: CGSize(width: 1280, height: 802),
+                                                         display: CGSize(width: 1080, height: 1920), visible: visible)
+        XCTAssertEqual(tall.maxY, window.maxY, "上沿不动")
+        XCTAssertEqual(tall.minY, visible.minY)
+        XCTAssertEqual(tall.height - 38, (tall.width * 1920 / 1080).rounded(), accuracy: 1)
+    }
+
     // MARK: - 本机剪贴板
 
     private func image(width: Int, height: Int, noise: Bool, type: UTType) -> Data {
@@ -257,12 +272,14 @@ final class RemoteMacDesktopTests: XCTestCase {
         defer { canvas.teardown() }
         // 窗口与那台 Mac 的屏幕同比例：整块正好铺满，没有黑边。
         let size = CGSize(width: info.displayWidth / 2, height: info.displayHeight / 2)
-        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless],
-                              backing: .buffered, defer: false)
+        // 放进屏幕可见区里：画布第一次拿到尺寸会把窗口对上那台的比例，比例已经对上就不动。
+        let visible = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: visible.minX + 10, y: visible.minY + 10), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         window.contentView = canvas
-        canvas.update(displaySize: CGSize(width: info.displayWidth, height: info.displayHeight), scaleMode: .fit)
+        canvas.update(displaySize: CGSize(width: info.displayWidth, height: info.displayHeight))
         window.layoutIfNeeded()
         canvas.layoutSubtreeIfNeeded()
         XCTAssertTrue(window.makeFirstResponder(canvas))

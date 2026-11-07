@@ -2,17 +2,9 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-/// 远程桌面的显示比例：适配窗口（整块屏幕放进来）或原始大小（那台 Mac 的一个点 = 本机一个点，超出的部分
-/// 指针推到窗口边上时画面跟着走）。
-nonisolated enum RemoteDesktopScaleMode: String, Hashable, Sendable {
-    case fit
-    case actual
-}
-
 /// Mac 上看 / 控另一台 Mac 的画布。
 struct RemoteDesktopMacCanvas: NSViewRepresentable {
     let session: RemoteDesktopSession
-    let scaleMode: RemoteDesktopScaleMode
     /// 那台 Mac 的显示器点尺寸（开流后才有）。作为参数传进来，SwiftUI 才会在它变化时调 `updateNSView`。
     let displaySize: CGSize?
     /// ⌘V 时本机剪贴板里的内容粘过去了（或读不出来）：外面显示一句提示。
@@ -24,7 +16,7 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
 
     func updateNSView(_ view: RemoteDesktopCanvasNSView, context: Context) {
         view.onPasteNote = onPasteNote
-        view.update(displaySize: displaySize, scaleMode: scaleMode)
+        view.update(displaySize: displaySize)
     }
 
     static func dismantleNSView(_ view: RemoteDesktopCanvasNSView, coordinator: ()) {
@@ -52,7 +44,6 @@ final class RemoteDesktopCanvasNSView: NSView {
     var onPasteNote: (String) -> Void = { _ in }
 
     private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero)
-    private var scaleMode: RemoteDesktopScaleMode = .fit
     private var trackingArea: NSTrackingArea?
     private var mouseInside = false
     /// 最近一次发出的指针（归一化），重复的不再发。
@@ -62,8 +53,6 @@ final class RemoteDesktopCanvasNSView: NSView {
     /// 按下还没抬起的键 / 鼠标键，失焦时补抬起。
     private var pressedKeys: [UInt16: RemoteKeyModifiers] = [:]
     private var pressedButtons: Set<UInt8> = []
-    private var lastMouseLocation: CGPoint?
-    private var edgeTimer: Timer?
     private var pasting = false
 
     init(session: RemoteDesktopSession) {
@@ -103,7 +92,6 @@ final class RemoteDesktopCanvasNSView: NSView {
     func teardown() {
         AppLogger.info("远程桌面画布：拆除", category: RemoteLog.category)
         releaseAll()
-        stopEdgeTimer()
         NotificationCenter.default.removeObserver(self)
         session.receiver.setHandlers(onImage: nil, onCursor: nil)
     }
@@ -151,24 +139,47 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     // MARK: - 布局
 
-    func update(displaySize: CGSize?, scaleMode: RemoteDesktopScaleMode) {
-        var changed = false
-        if let size = displaySize, size.width > 0, size.height > 0, size != viewport.contentSize {
-            viewport.contentSize = size
-            changed = true
+    /// 画面总是整块适配进窗口（留黑边，不裁不拉伸）。
+    func update(displaySize: CGSize?) {
+        guard let size = displaySize, size.width > 0, size.height > 0, size != viewport.contentSize else { return }
+        viewport.contentSize = size
+        applyFit()
+        fitWindowOnce()
+    }
+
+    private var fittedWindow = false
+
+    /// 第一次拿到那台屏幕的尺寸：把窗口高度对上它的比例（宽度不动，放不下就按屏幕高度缩宽度），画面上下不留黑边。
+    /// 之后用户怎么拉都不再管。全屏时不动。
+    private func fitWindowOnce() {
+        guard !fittedWindow, let window, !window.styleMask.contains(.fullScreen), bounds.width > 0,
+              let screen = window.screen ?? NSScreen.main else { return }
+        fittedWindow = true
+        let target = Self.fittedFrame(window: window.frame, canvas: bounds.size, display: viewport.contentSize,
+                                      visible: screen.visibleFrame)
+        if target != window.frame { window.setFrame(target, display: true, animate: true) }
+    }
+
+    /// 窗口要多大，画布才正好是那台屏幕的比例。上沿不动；超出可见区时等比缩小宽度。
+    nonisolated static func fittedFrame(window: CGRect, canvas: CGSize, display: CGSize, visible: CGRect) -> CGRect {
+        guard canvas.width > 0, display.width > 0, display.height > 0 else { return window }
+        let chrome = CGSize(width: window.width - canvas.width, height: window.height - canvas.height)
+        var width = canvas.width
+        var height = (width * display.height / display.width).rounded()
+        let maxHeight = window.maxY - visible.minY - chrome.height
+        if height > maxHeight, maxHeight > 0 {
+            height = maxHeight
+            width = (height * display.width / display.height).rounded()
         }
-        if scaleMode != self.scaleMode {
-            self.scaleMode = scaleMode
-            changed = true
-        }
-        if changed { applyScale() }
+        let size = CGSize(width: width + chrome.width, height: height + chrome.height)
+        return CGRect(x: window.minX, y: window.maxY - size.height, width: size.width, height: size.height)
     }
 
     override func layout() {
         super.layout()
         guard viewport.viewSize != bounds.size else { return }
         viewport.viewSize = bounds.size
-        applyScale()
+        applyFit()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -178,15 +189,8 @@ final class RemoteDesktopCanvasNSView: NSView {
         cursorLayer.contentsScale = scale
     }
 
-    private func applyScale() {
-        switch scaleMode {
-        case .fit:
-            viewport.reset()
-        case .actual:
-            let fit = viewport.fitScale
-            viewport.setZoom(fit > 0 ? 1 / fit : 1)
-        }
-        viewport.clamp()
+    private func applyFit() {
+        viewport.reset()
         layoutContent()
     }
 
@@ -233,7 +237,6 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         mouseInside = false
-        stopEdgeTimer()
         layoutContent()
     }
 
@@ -261,10 +264,7 @@ final class RemoteDesktopCanvasNSView: NSView {
     }
 
     private func pointerMoved(_ event: NSEvent) {
-        let point = location(of: event)
-        lastMouseLocation = point
-        updateEdgeTimer(at: point)
-        sendMove(to: point)
+        sendMove(to: location(of: event))
     }
 
     private func sendMove(to point: CGPoint) {
@@ -291,40 +291,6 @@ final class RemoteDesktopCanvasNSView: NSView {
                                                           phase: event.phase, momentumPhase: event.momentumPhase)
         else { return }
         session.send(input)
-    }
-
-    // MARK: - 原始大小：指针推到窗口边上时画面跟着走
-
-    private func updateEdgeTimer(at point: CGPoint) {
-        let velocity = RemoteTrackpad.edgeVelocity(at: point, in: bounds.size, zone: 24, maxSpeed: 900)
-        let overflows = viewport.contentFrame.width > bounds.width + 0.5 || viewport.contentFrame.height > bounds.height + 0.5
-        guard scaleMode == .actual, overflows, velocity != .zero else {
-            stopEdgeTimer()
-            return
-        }
-        guard edgeTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stepEdge() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        edgeTimer = timer
-    }
-
-    private func stepEdge() {
-        guard let point = lastMouseLocation else { return stopEdgeTimer() }
-        let velocity = RemoteTrackpad.edgeVelocity(at: point, in: bounds.size, zone: 24, maxSpeed: 900)
-        guard velocity != .zero else { return stopEdgeTimer() }
-        let before = viewport.contentFrame.origin
-        // 指针往右推，看右边的内容：画面往左走。
-        viewport.pan(by: CGSize(width: -velocity.width / 60, height: -velocity.height / 60))
-        guard viewport.contentFrame.origin != before else { return }
-        layoutContent()
-        sendMove(to: point)
-    }
-
-    private func stopEdgeTimer() {
-        edgeTimer?.invalidate()
-        edgeTimer = nil
     }
 
     // MARK: - 键盘

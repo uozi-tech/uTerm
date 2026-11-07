@@ -15,7 +15,6 @@ nonisolated struct RemoteDesktopWindowID: Codable, Hashable, Sendable {
 final class RemoteDesktopWindowModel {
     let client: RemoteMacClient
     let session: RemoteDesktopSession
-    var scaleMode: RemoteDesktopScaleMode = .fit
     @ObservationIgnored private var closed = false
 
     init(client: RemoteMacClient, session: RemoteDesktopSession? = nil) {
@@ -59,7 +58,7 @@ final class RemoteDesktopWindowModel {
     }
 }
 
-/// 一台远程 Mac 的屏幕窗口：整窗黑底，顶上一条细工具栏（名字与状态、适配 / 原始大小、帘幕、全屏），
+/// 一台远程 Mac 的屏幕窗口：整窗黑底，顶上一条细栏（居中是名字与状态点，右边是读数、帘幕、全屏），
 /// 下面全是画面，和手机上的远程桌面一样。画面上按状态盖遮罩（连接中 / 核对配对 / 失败 / 锁屏…）。
 struct RemoteDesktopWindowView: View {
     let windowID: RemoteDesktopWindowID?
@@ -75,7 +74,7 @@ struct RemoteDesktopWindowView: View {
                 RemoteDesktopContent(model: model)
             } else {
                 VStack(spacing: 0) {
-                    RemoteDesktopTitleBar { Text(missing ? "找不到这台 Mac" : "").foregroundStyle(.white) }
+                    RemoteDesktopTitleBar { Text(missing ? "找不到这台 Mac" : "").foregroundStyle(.white.opacity(0.9)) }
                     Color.black.overlay {
                         if missing {
                             Text("它可能已被忘记。在「我的 Mac」里重新配对。")
@@ -119,19 +118,30 @@ struct RemoteDesktopWindowView: View {
     }
 }
 
-/// 窗口顶上那条栏：黑底、可拖动窗口，左边让出红绿灯。
-private struct RemoteDesktopTitleBar<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+/// 窗口顶上那条栏：黑底、可拖动窗口。标题居中（和别的窗口一样），按钮靠右，左边让出红绿灯。
+private struct RemoteDesktopTitleBar<Title: View, Trailing: View>: View {
+    @ViewBuilder var title: () -> Title
+    @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 10) {
-            content()
+        ZStack {
+            title()
+                .padding(.horizontal, 120)
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                trailing()
+            }
+            .padding(.trailing, 10)
         }
-        .padding(.leading, 80)
-        .padding(.trailing, 10)
         .frame(height: 38)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .background(WindowDragHandle(fill: .black))
+    }
+}
+
+extension RemoteDesktopTitleBar where Trailing == EmptyView {
+    init(@ViewBuilder title: @escaping () -> Title) {
+        self.init(title: title) { EmptyView() }
     }
 }
 
@@ -150,16 +160,17 @@ struct RemoteDesktopContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RemoteDesktopTitleBar { toolbar }
+            RemoteDesktopTitleBar { title } trailing: { buttons }
             ZStack {
                 RemoteDesktopMacCanvas(
-                    session: session, scaleMode: model.scaleMode,
+                    session: session,
                     displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
                     onPasteNote: { show($0) })
                 stateOverlay
                 lockOverlay
             }
             .overlay(alignment: .top) { toast }
+            .overlay(alignment: .topLeading) { statsBadge }
         }
         .onAppear {
             session.onClipboard = { content in show(RemoteDesktopMacPasteSource.receive(content)) }
@@ -167,30 +178,33 @@ struct RemoteDesktopContent: View {
         .onChange(of: client.state) { _, _ in Task { await model.startStreamIfConnected() } }
     }
 
-    // MARK: - 工具栏
+    // MARK: - 顶栏
 
-    private var toolbar: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(client.macName)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(statusLine)
-                    .font(UD.mono(10.5))
-                    .foregroundStyle(.white.opacity(0.6))
+    /// 居中：状态点 + 名字；不是正常可控时在名字后面跟一句状态。
+    private var title: some View {
+        HStack(spacing: 7) {
+            Circle().fill(statusDot).frame(width: 7, height: 7)
+            Text(client.macName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+            if let statusText {
+                Text(statusText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
             }
-            .contentShape(Rectangle())
-            .onTapGesture { showStats.toggle() }
-            .help(String(localized: "点按显示 / 隐藏帧率与延迟"))
-            Spacer(minLength: 8)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 4) {
             if session.state == .streaming {
-                UDSegmented(selection: $model.scaleMode, options: [
-                    (RemoteDesktopScaleMode.fit, String(localized: "适配窗口")),
-                    (RemoteDesktopScaleMode.actual, String(localized: "原始大小")),
-                ])
-                .fixedSize()
+                barButton("gauge.with.dots.needle.33percent", active: showStats,
+                          help: showStats ? String(localized: "隐藏延迟与帧率") : String(localized: "显示延迟与帧率")) {
+                    showStats.toggle()
+                }
                 if session.supportsUnlock, session.canControl, !session.screen.locked {
                     barButton(session.screen.curtained ? "eye.slash.fill" : "eye.slash",
                               active: session.screen.curtained,
@@ -206,40 +220,61 @@ struct RemoteDesktopContent: View {
         }
     }
 
-    private func barButton(_ symbol: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(active ? UD.accent : .white.opacity(0.85))
-                .frame(width: 28, height: 24)
-                .background(Color.white.opacity(active ? 0.18 : 0.08), in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
+    /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。
+    @ViewBuilder private var statsBadge: some View {
+        if showStats, session.state == .streaming {
+            let stats = session.stats
+            let latency = session.latency.map { String(localized: "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）") }
+            let rest = String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
+                              stats.megabitsPerSecond, stats.decodeMillis)
+            Text([latency, rest].compactMap(\.self).joined(separator: " · "))
+                .font(UD.mono(11))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(.black.opacity(0.6)))
+                .padding(10)
+                .allowsHitTesting(false)
         }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(Text(help))
     }
 
-    private var statusLine: String {
+    private var statusDot: Color {
+        if case .awaitingApproval = client.state { return UD.warning }
+        switch session.state {
+        case .streaming: return session.canControl ? UD.success : UD.warning
+        case .idle, .connecting, .reconnecting: return .white.opacity(0.35)
+        case .failed, .ended, .unsupported: return UD.danger
+        }
+    }
+
+    /// 正常可控时不写字（绿点就够了）。
+    private var statusText: String? {
         switch client.state {
         case .connecting where session.state != .streaming: return String(localized: "正在连接…")
         case .awaitingApproval: return String(localized: "等待那台 Mac 确认配对")
         default: break
         }
         switch session.state {
-        case .streaming:
-            let base = session.canControl ? String(localized: "可以控制") : String(localized: "只能查看")
-            guard showStats else { return base }
-            let stats = session.stats
-            let latency = session.latency.map { "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）· " } ?? ""
-            return base + " · " + latency + String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
-                                                   stats.megabitsPerSecond, stats.decodeMillis)
+        case .streaming: return session.canControl ? nil : String(localized: "只能查看")
         case .idle, .connecting: return String(localized: "正在连接…")
-        case .reconnecting: return String(localized: "连接中断，正在重连…")
+        case .reconnecting: return String(localized: "正在重连…")
         case .failed: return String(localized: "连接失败")
         case .ended: return String(localized: "已结束")
-        case .unsupported: return String(localized: "那台 Mac 上的 uTerm 版本太旧")
+        case .unsupported: return String(localized: "版本太旧")
         }
+    }
+
+    private func barButton(_ symbol: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(active ? .white : .white.opacity(0.6))
+                .frame(width: 28, height: 24)
+                .background(Color.white.opacity(active ? 0.16 : 0), in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(Text(help))
     }
 
     // MARK: - 遮罩
