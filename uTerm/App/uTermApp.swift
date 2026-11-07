@@ -550,6 +550,7 @@ struct uTermApp: App {
                 .environment(backgroundSettings)
                 .environment(remoteSettings)
                 .environment(remoteServer)
+                .environment(terminalRegistry)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .windowStyle(.hiddenTitleBar)

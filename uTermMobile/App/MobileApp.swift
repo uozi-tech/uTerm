@@ -50,6 +50,7 @@ struct MobileApp: App {
     var body: some Scene {
         WindowGroup {
             MobileLaunchRoot(appearance: appearance, lock: lock)
+                .modifier(RemoteRelayLinkHandler())
                 .environment(lanSync)
                 .environment(remoteMacs)
                 .environment(cloudKitSync)

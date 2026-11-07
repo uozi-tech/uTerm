@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.uozi.uTerm.relay</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>uterm</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>uTerm 使用局域网发现 Mac，用于同步设置，以及远程控制 Mac 上的终端和屏幕。</string>
 	<key>NSBonjourServices</key>

@@ -103,8 +103,8 @@ final class RemoteHostServer {
     @ObservationIgnored private var isRunning = false
     /// 经公网接入的规则，由设置决定。默认谁都不行。
     @ObservationIgnored var internetAccessPolicy: (UUID) -> Bool = { _ in false }
-    /// 当前的中继配置，交给勾选过的设备。
-    @ObservationIgnored var relayConfig: RemoteRelayConfig?
+    /// 当前的中继配置，交给勾选过的设备。可观察：命令行导入后设置页要跟着变。
+    var relayConfig: RemoteRelayConfig?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
     @ObservationIgnored private var pairingWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     /// 会话 → 正在接管它的连接与通道。

@@ -54,7 +54,53 @@ enum RemoteControlPresentation {
         if let config {
             return "\(config.name)（\(config.endpointDescription)）。这份配置含成员密钥，二维码只给自己的设备扫。"
         }
-        return "跨网络控制需要一台你自己的服务器，部署方法见 relay/README.md。配置文件由 uterm-relay config 生成。"
+        return "跨网络控制需要一台你自己的服务器。可以让 AI 经 uterm 技能装在你保存的主机上，或导入 uterm-relay 生成的配置文件。"
+    }
+
+    /// 已配中继那一行的副标题：名字 · 地址 · 版本（知道时）。
+    static func relaySubtitle(_ config: RemoteRelayConfig, version: String?) -> String {
+        var parts = [config.name, config.endpointDescription]
+        if let version { parts.append("v\(version)") }
+        return parts.joined(separator: " · ")
+    }
+
+    static func relayUpdateHint(running: String?, host: String?) -> String {
+        let current = running.map { String(localized: "正在运行 \($0)。") } ?? ""
+        if let host {
+            return current + String(localized: "会在「\(host)」上下载、校验后替换并重启，新版本起不来会自动换回。")
+        }
+        return current + String(localized: "还不知道中继装在哪台主机：在更多菜单里「指定所在主机」，或让 AI 更新。")
+    }
+
+    struct Note: Equatable {
+        let tone: SettingsTone
+        let text: String
+    }
+
+    static func relayUpdateNote(_ phase: RemoteRelayManager.UpdatePhase) -> Note? {
+        switch phase {
+        case .idle: return nil
+        case .running: return Note(tone: .muted, text: String(localized: "正在更新中继…"))
+        case .finished(let text): return Note(tone: .success, text: text)
+        case .openedTerminal:
+            return Note(tone: .warning, text: String(localized: "这台主机的 sudo 要密码，已经开了一个终端窗口跑更新命令，请在那里输入密码。"))
+        case .failed(let text): return Note(tone: .danger, text: String(localized: "更新失败：\(text)"))
+        }
+    }
+
+    /// 测试结果：一行总评，再逐条列问题。
+    static func relayCheckNotes(_ result: RemoteRelayCheckResult) -> [Note] {
+        func mark(_ outcome: RemoteRelayCheckResult.Outcome) -> String {
+            switch outcome {
+            case .ok: return "✓"
+            case .failed: return "✗"
+            case .skipped: return "–"
+            }
+        }
+        var summary = "TCP \(mark(result.tcp))   认证 \(mark(result.auth))   UDP \(mark(result.udp))"
+        if let rtt = result.rttMs { summary += String(localized: "   往返 \(String(rtt)) ms") }
+        let tone: SettingsTone = !result.isUsable ? .danger : (result.udp == .ok ? .success : .warning)
+        return [Note(tone: tone, text: summary)] + result.problems.map { Note(tone: .warning, text: $0) }
     }
 
     /// `state == nil` 表示中继连接还没建出来（刚打开开关），按「正在连接」显示。
