@@ -88,6 +88,12 @@ nonisolated enum RemoteFeature {
     /// 手机退到后台时让 Mac 暂停推流、回前台再接上：认得 `desktopPause`。老 Mac 不认这个类型（收到会当未知消息
     /// 断开整条连接），所以手机只对声明了这一项的 Mac 发；老 Mac 照旧推流，手机退回「照收照确认、不解码」。
     static let desktopPause = "desktop-pause"
+    /// 远程桌面的声音：认得 `desktopAudio` / `desktopAudioFormat` / `desktopAudioFrame`。两端都要声明：
+    /// 手机只对声明了的 Mac 发开关，Mac 只给声明了的手机送声音。
+    static let desktopAudio = "desktop-audio"
+    /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
+    /// 否则照旧整条消息直接交给 TCP。
+    static let linkFlow = "link-flow"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -191,7 +197,23 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopUnlock = 37
         /// 打开 / 关闭帘幕模式（桌面通道）。负载 = `RemoteDesktopCurtainRequest`（JSON）。
         case desktopCurtain = 38
-        // 39–43 已预留给声音与链路层计量，新的从 44 起编，免得两边各自合进来时撞号。
+        /// 打开 / 关闭声音（桌面通道）。负载 = `RemoteDesktopAudioRequest`（JSON）。只发给 `features` 带
+        /// `desktop-audio` 的 Mac。
+        case desktopAudio = 39
+
+        // Mac → 手机（续）
+        /// 声音流的格式（桌面通道）。负载 = `RemoteDesktopAudioFormat`（JSON）。只发给声明了 `desktop-audio` 的手机。
+        case desktopAudioFormat = 40
+        /// 一包声音（桌面通道）。负载 = `RemoteDesktopAudioFrame`（二进制）。
+        case desktopAudioFrame = 41
+
+        // 两个方向（链路层，`RemoteLink` 自己收发，不交给上层）
+        /// 累计收到多少链路字节（`[u64]`，通道 0）。只在两端都声明 `link-flow` 时发。
+        case linkAck = 42
+        /// 大消息的一片（`[u8 标志][u8 队列][片]`，通道 0）。拼齐后按原消息交给上层。只在两端都声明 `link-flow` 时发。
+        case linkFragment = 43
+
+        // 之后的编号与声音、链路层无关
         /// 暂停 / 恢复推流（桌面通道）。负载 = `RemoteDesktopPauseRequest`（JSON）。手机退到后台时发「暂停」，
         /// 回前台发「恢复」——恢复同时就是关键帧请求。只发给 `features` 带 `desktop-pause` 的 Mac。
         case desktopPause = 44

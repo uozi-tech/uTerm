@@ -326,12 +326,13 @@ final class RemoteHostConnection {
             guard let request = try? RemoteJSON.decode(RemoteDesktopCurtainRequest.self, from: message.payload) else { return }
             setCurtain(request.on, channel: message.channel)
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause:
+             .desktopPause, .desktopAudio:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
-             .desktopScreenState, .desktopUnlockResult, .desktopCursorImage:
+             .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
+             .linkAck, .linkFragment:
             break
         }
     }
