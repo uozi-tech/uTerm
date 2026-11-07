@@ -23,6 +23,14 @@ final class RemoteDesktopSession {
         case ended(String)
         /// Mac 上的 uTerm 太旧，不认桌面消息。
         case unsupported
+
+        /// 停在这里不会自己变了（要用户点重试 / 关闭）。
+        var isTerminal: Bool {
+            switch self {
+            case .failed, .ended, .unsupported: return true
+            case .idle, .connecting, .streaming, .reconnecting: return false
+            }
+        }
     }
 
     private(set) var state: State = .idle
@@ -212,6 +220,12 @@ final class RemoteDesktopSession {
         pasteUploader?.enqueue(content.encoded())
     }
 
+    /// App 退到后台 / 回到前台。后台时画面没人看（显示层也不出图），接收端只回确认、不解码不渲染，
+    /// 回前台再从关键帧接上。见 `RemoteDesktopReceiver.setPaused`。
+    func setBackgrounded(_ backgrounded: Bool) {
+        receiver.setPaused(backgrounded)
+    }
+
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
     func requestKeyframe() {
         receiver.requestKeyframe(force: true)
@@ -250,10 +264,13 @@ final class RemoteDesktopSession {
         statsTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                // 失败 / 结束 / Mac 太旧：没有流了，不再每秒醒一次。重试走 `start()`，会重新起这个计时。
+                if self.state.isTerminal { return }
                 let snapshot = receiver.stats.snapshot()
                 let latency = receiver.latestLatency
-                guard let self else { return }
-                self.stats = snapshot
+                // 读数没变（画面静止、连接中）就不写：`@Observable` 每次赋值都通知，读着它的界面会白白重算。
+                if self.stats != snapshot { self.stats = snapshot }
                 if self.latency != latency { self.latency = latency }
             }
         }
@@ -333,6 +350,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     private var onImage: (@Sendable (CVPixelBuffer, RemoteDesktopFrame) -> Void)?
     private var onCursor: (@Sendable (RemoteDesktopCursor) -> Void)?
     private var latestLatencyValue: RemoteDesktopLatency?
+    /// App 在后台：帧照收照确认，但不解码、不渲染（见 `setPaused`）。
+    private var paused = false
 
     /// Mac 最近报的画面往返。
     var latestLatency: RemoteDesktopLatency? {
@@ -344,6 +363,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     /// 参考链断了，在等恢复帧（关键帧或 LTR 刷新帧）。
     private var recovering = false
     private var recoveringSince: UInt64 = 0
+    /// 暂停期间跳过过帧：解码器的参考链已经断了，恢复后要等关键帧。
+    private var skippedWhilePaused = false
 
     /// 等恢复帧这么久还没来，再催一次。恢复帧自己也可能丢。
     static let recoveryRetryNanos: UInt64 = 500_000_000
@@ -359,6 +380,17 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.onImage = onImage
         self.onCursor = onCursor
+    }
+
+    /// App 退到后台时暂停解码，回前台恢复。
+    ///
+    /// 后台时屏幕上看不见画面，解码、往显示层送帧都是白耗电；iOS 还会在后台收走硬解会话，每帧解码失败 →
+    /// 回「失败」确认 → Mac 每帧都补关键帧，链路上全是大帧。暂停期间每帧照常回确认（不报失败），Mac 的
+    /// 在途计数与码控看到的是一条正常的流：不会因为「没确认 / 丢帧」降码率，回前台画质不用重新爬升。
+    /// 恢复后第一帧前把解码器标成「参考断了」，P 帧跳过、等关键帧（调用方同时会要一个）。
+    func setPaused(_ paused: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        self.paused = paused
     }
 
     /// 新开一条流之前：换代，旧流迟到的帧不再处理；解码器回到「等关键帧」。
@@ -456,8 +488,21 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         lock.lock()
         let current = generation == self.generation
         let handler = onImage
+        let paused = self.paused
         lock.unlock()
         guard current, let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        // 后台暂停：只回确认（不报失败、不带 LTR 令牌——没解过），不解码不渲染。
+        if paused {
+            skippedWhilePaused = true
+            link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
+                sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 0).encoded()))
+            stats.recordSkipped()
+            return
+        }
+        if skippedWhilePaused {
+            skippedWhilePaused = false
+            decoder.markReferenceLost()
+        }
         let sidecar = frame.flags.contains(.sidecar)
         let start = DispatchTime.now().uptimeNanoseconds
         // 在等恢复帧：这一帧的参考没了，不能喂给解码器。确认照发，Mac 的在途计数靠它释放。

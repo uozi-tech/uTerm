@@ -75,8 +75,24 @@ nonisolated final class RemoteVideoDecoder {
             return output
         } catch {
             awaitingKeyframe = true
+            if Self.sessionIsGone(error) { dropSession() }
             throw error
         }
+    }
+
+    /// iOS 在 App 退到后台时会收走硬解会话，之后每次解码都报 `kVTInvalidSessionErr`。会话对象还在，
+    /// `prepare` 见参数集没变就直接复用它——下一个关键帧照样失败，失败确认又让 Mac 补关键帧，循环下去画面
+    /// 一直不出、链路上全是关键帧（白耗电）。报这个错就扔掉会话，下一个关键帧重建。
+    static func sessionIsGone(_ error: Error) -> Bool {
+        guard case RemoteVideoDecodeError.decode(let status) = error else { return false }
+        return status == kVTInvalidSessionErr
+    }
+
+    private func dropSession() {
+        if let session { VTDecompressionSessionInvalidate(session) }
+        session = nil
+        format = nil
+        parameterSets = []
     }
 
     /// 关键帧：参数集变了（开流、Mac 换了分辨率）就重建格式描述；会话接不了新格式就重建会话。

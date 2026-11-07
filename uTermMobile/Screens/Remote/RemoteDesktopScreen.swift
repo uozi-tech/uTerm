@@ -27,6 +27,8 @@ struct RemoteDesktopScreen: View {
     @State private var enteringPassword = false
     @State private var passwordDraft = ""
     @State private var vault: RemoteUnlockPasswordStore = KeychainRemoteUnlockStore()
+    /// 这一屏在显示中（控制屏幕常亮用，见 `keepsScreenAwake`）。
+    @State private var onScreen = false
 
     enum UnlockPhase: Equatable {
         case idle
@@ -87,15 +89,42 @@ struct RemoteDesktopScreen: View {
         .defersSystemGestures(on: .all)
         // 这一屏永远是黑底：配色一律按深色解析。跟随系统时浅色模式下的次要按钮是深灰字，落在黑底上看不见。
         .environment(\.colorScheme, .dark)
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        // 看画面时不自动锁屏；停在失败 / 已结束这类要人处理的页面上就交还系统，不然手机放着屏幕一直亮。
+        // 重连中照样不锁：短暂断一下就恢复，静静看着的人不该在这几秒里被锁屏。
+        .onChange(of: Self.keepsScreenAwake(session?.state)) { _, awake in
+            // 离开后（`stop()` 把状态改回 idle 也会触发这里）不能再把常亮打开。
+            guard onScreen else { return }
+            UIApplication.shared.isIdleTimerDisabled = awake
+        }
+        .onAppear {
+            onScreen = true
+            UIApplication.shared.isIdleTimerDisabled = Self.keepsScreenAwake(session?.state)
+        }
         .onDisappear {
+            onScreen = false
             UIApplication.shared.isIdleTimerDisabled = false
             session?.stop()
         }
         .onChange(of: scenePhase) { _, phase in
-            // 回到前台：连接还在就要一个关键帧（后台期间可能丢了解码状态）；断了的由会话自己重连。
-            if phase == .active { session?.requestKeyframe() }
+            switch phase {
+            case .background:
+                // 看不见画面了（切走 / 锁屏）：后台时间里流还在走，停掉解码和渲染，只回确认。
+                session?.setBackgrounded(true)
+            case .active:
+                // 回到前台：连接还在就要一个关键帧（后台期间跳过了帧、硬解会话也可能被收走）；断了的由会话自己重连。
+                session?.setBackgrounded(false)
+                session?.requestKeyframe()
+            default:
+                // inactive（拉下控制中心、来电横幅）画面还看得见，照常解。
+                break
+            }
         }
+    }
+
+    /// 什么时候让屏幕常亮：还没开流、连接中、看画面中、重连中。
+    static func keepsScreenAwake(_ state: RemoteDesktopSession.State?) -> Bool {
+        guard let state else { return true }
+        return !state.isTerminal
     }
 
     /// 视频尺寸按这台设备的屏幕像素要（与方向无关），至少 1080p：放大看细节时还有余量。

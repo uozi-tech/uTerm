@@ -216,6 +216,49 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertEqual(client.state, .connected, "结束桌面流不断开整条连接")
     }
 
+    // MARK: - 退到后台
+
+    /// App 退到后台（切走 / 锁屏）时流还在走：帧照收照确认——Mac 不会因为在途满了停发、也不会因为丢帧降码率——
+    /// 但不解码、不渲染。回前台后从关键帧接上，不往屏幕上送参考已断的 P 帧。
+    func test_backgrounded_phone_acks_without_decoding_and_resumes_from_a_keyframe() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let first = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(first, "开流后应收到第一帧")
+        let source = try XCTUnwrap(mac.latestSource)
+
+        session.setBackgrounded(true)
+        // 暂停之前已经进了解码队列的帧可能还会显示出来：等它们走完再记起点。
+        try? await Task.sleep(for: .milliseconds(200))
+        let shownBefore = screen.frames.count
+        let skippedBefore = session.receiver.stats.snapshot().skippedFrames
+        // 在途上限最多 8 帧：跳过的帧远多于它，说明确认一直在回、Mac 一直在编。
+        let streamed = await waitUntil(8) {
+            _ = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+            return session.receiver.stats.snapshot().skippedFrames - skippedBefore >= 16
+        }
+        XCTAssertTrue(streamed, "后台时 Mac 应照常收到确认并继续发帧")
+        XCTAssertEqual(screen.frames.count, shownBefore, "后台时不解码、不渲染")
+        XCTAssertEqual(session.state, .streaming, "暂停不影响连接")
+
+        session.setBackgrounded(false)
+        session.requestKeyframe()
+        var latest = 0
+        let resumed = await waitUntil(5) {
+            latest = source.emit()
+            try? await Task.sleep(for: .milliseconds(30))
+            return screen.frames.dropFirst(shownBefore).contains { !$0.sidecar && self.matches($0, seed: latest) }
+        }
+        XCTAssertTrue(resumed, "回前台后画面应恢复")
+        let firstMain = try XCTUnwrap(screen.frames.dropFirst(shownBefore).first { !$0.sidecar })
+        XCTAssertTrue(firstMain.keyframe, "回前台后主流第一张必须是关键帧")
+    }
+
     // MARK: - 老手机
 
     func test_phone_without_sidecar_support_gets_refine_inside_the_main_stream() async throws {
