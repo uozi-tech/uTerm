@@ -143,6 +143,11 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored var pairingToken: Data?
     @ObservationIgnored private let table = RemoteChannelTable()
     @ObservationIgnored private var link: RemoteLink?
+    /// 当前连接启用了链路排队（`link-flow`）。诊断和测试用。
+    var usesLinkFlow: Bool {
+        guard let link else { return false }
+        return link.queue.sync { link.usesLinkFlow }
+    }
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     @ObservationIgnored private var outcomeWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var attachWaiters: [UUID: CheckedContinuation<UInt32, Error>] = [:]

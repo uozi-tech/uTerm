@@ -63,7 +63,8 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         func contains(_ id: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return ids.contains(id) }
     }
 
-    private func makeMac(config: RemoteRelayConfig, allowed: Allowed) async throws -> Mac {
+    private func makeMac(config: RemoteRelayConfig, allowed: Allowed,
+                         desktop: RemoteDesktopEnvironment = .disabled) async throws -> Mac {
         let registry = TerminalSessionRegistry()
         let session = TerminalSession()
         let backend = MockBackend()
@@ -77,7 +78,8 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
-                                      advertises: false, relayRevocations: RemoteRelayRevocations(defaults: defaults))
+                                      advertises: false, relayRevocations: RemoteRelayRevocations(defaults: defaults),
+                                      desktopEnvironment: desktop)
         server.internetAccessPolicy = { allowed.contains($0) }
         server.relayConfig = config
         server.updateInternetAccess(enabled: true, keepAwake: false)
@@ -298,6 +300,53 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         await mac.backend.emitOutput(big)
         let finished = await waitUntil(20) { received.contains(Data("<end>".utf8)) }
         XCTAssertTrue(finished, "大块输出也要完整通过")
+        XCTAssertEqual(client.state, .connected)
+    }
+
+    /// 声音经真实中继（调研 §16）：桌面视频拉满的同时开声音，走 TCP 中继 + `link-flow`，按 10 ms 拉取播放不断音。
+    func test_desktop_audio_plays_through_the_relay_while_video_runs() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        allowed.set([phone.id])
+        let fake = FakeDesktopMac()
+        fake.detail = true
+        let mac = try await makeMac(config: config, allowed: allowed, desktop: fake.environment())
+        defer { mac.server.stop(); mac.session.dispose() }
+        try mac.server.trust(try phone.peer())
+        let client = makeClient(phone: phone, mac: mac.peer, relay: RemoteRelayClient(config: config))
+        defer { client.disconnect() }
+        await client.connect()
+        XCTAssertEqual(client.path, .relay)
+        let output = SilentAudioOutput()
+        let session = RemoteDesktopSession(client: client, maxWidth: 1206, maxHeight: 2622, audioOutput: output)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        session.setAudio(true)
+        let playing = await waitUntil { session.audioState == .playing }
+        XCTAssertTrue(playing, "\(session.audioState)")
+        XCTAssertTrue(client.usesLinkFlow, "经中继也要启用链路排队")
+        let source = try XCTUnwrap(fake.latestSource)
+        source.prepareCycle(count: 12)
+        source.run(fps: 30)
+        let pull = try XCTUnwrap(output.pull)
+        let player = Task.detached {
+            while !Task.isCancelled {
+                _ = pull(480)
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        try await Task.sleep(for: .seconds(8))
+        player.cancel()
+        source.pause()
+        let audio = session.audioReceiver.snapshot()
+        print("[中继探针·声音] 放出 \(audio.counters.played)，收到 \(audio.received)，补静音 \(audio.counters.concealed)，"
+              + "欠载 \(audio.counters.underruns)，丢包追上 \(audio.counters.dropped)，目标深度 \(audio.targetMillis) ms，"
+              + "视频 \(session.stats.framesPerSecond) fps \(String(format: "%.1f", session.stats.megabitsPerSecond)) Mbps")
+        XCTAssertGreaterThan(audio.counters.played, 300, "8 s 应放出约 400 包")
+        XCTAssertEqual(audio.counters.concealed, 0, "TCP 不丢包，不该有洞")
+        XCTAssertLessThanOrEqual(audio.counters.underruns, 1)
         XCTAssertEqual(client.state, .connected)
     }
 
