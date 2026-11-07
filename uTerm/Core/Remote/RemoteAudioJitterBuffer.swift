@@ -53,6 +53,8 @@ nonisolated struct RemoteAudioJitterBuffer {
     private var offset = 0
     /// 确定是静音的序号（Mac 发了静音包）：轮到时不算补洞。
     private var silentThrough: UInt32?
+    /// 追积压时从中间丢掉的静音包：轮到时同样不算补洞。
+    private var quietGaps: Set<UInt32> = []
     /// 最近的（到达时刻, 到达 − 采集）。
     private var transits: [(arrival: UInt64, transit: Int64)] = []
     /// 上一个放出去的采样（每声道），淡出从它开始。
@@ -168,7 +170,7 @@ nonisolated struct RemoteAudioJitterBuffer {
                     written += count
                     offset += count * channels
                     if offset / channels >= config.framesPerPacket {
-                        if (silentThrough ?? 0) < sequence { counters.concealed += 1 }
+                        if (silentThrough ?? 0) < sequence, quietGaps.remove(sequence) == nil { counters.concealed += 1 }
                         advance()
                     }
                 } else {
@@ -218,19 +220,32 @@ nonisolated struct RemoteAudioJitterBuffer {
     }
 
     /// 积压超过目标太多：在包的边界上丢包追上。先丢静音包，没有静音包丢最早的。
+    ///
+    /// 丢最早的就是让播放位置往前跳。播放位置停在洞上（那包丢了）时先跳过洞：要是还从洞后面最早的那包丢起，
+    /// 丢的全是播放位置前面的包，播放位置自己卡在洞上一格格补静音，永远追不上（直连真机前在模拟链路上踩到过）。
     private mutating func dropIfBacklogged() {
-        guard offset == 0, let current = playhead else { return }
-        while bufferedNanos > targetNanos + config.dropSlackNanos {
+        guard offset == 0, playhead != nil else { return }
+        while bufferedNanos > targetNanos + config.dropSlackNanos, let current = playhead {
             let pending = chunks.keys.filter { $0 >= current }.sorted()
             guard pending.count > 1 else { return }
-            let quiet = pending.first { RemoteAudioJitterBuffer.isQuiet(chunks[$0] ?? []) }
-            let victim = quiet ?? pending[0]
-            chunks[victim] = nil
-            counters.dropped += 1
-            if victim == playhead {
-                playhead = victim &+ 1
+            if pending[0] != current {
+                // 播放位置在洞上：先跳到下一包现有的（不算丢包，洞本来就没有内容）。
+                playhead = pending[0]
                 fadeIn = fadeFrames
+                continue
             }
+            if let quiet = pending.first(where: { RemoteAudioJitterBuffer.isQuiet(chunks[$0] ?? []) }) {
+                chunks[quiet] = nil
+                counters.dropped += 1
+                // 中间丢掉的静音包轮到时按静音处理，不算补洞。
+                quietGaps.insert(quiet)
+                if quiet == current { playhead = pending[1] }
+                continue
+            }
+            chunks[current] = nil
+            counters.dropped += 1
+            playhead = pending[1]
+            fadeIn = fadeFrames
         }
     }
 

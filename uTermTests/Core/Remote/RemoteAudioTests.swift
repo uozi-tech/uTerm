@@ -112,6 +112,16 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertFalse(packets[10].isSilent)
     }
 
+    /// 逐包解：每包都要解出一整包的采样（抖动缓冲按包放，解出空包就成了洞）。
+    func test_each_opus_packet_decodes_to_a_full_packet() throws {
+        let encoder = try RemoteAudioEncoder(codec: .opus, bitrate: 64_000)
+        let packets = try encoder.encode(sine(seconds: 1), captureNanos: 0)
+        let decoder = try RemoteAudioDecoder(format: RemoteDesktopAudioFormat(stream: 1, codec: .opus,
+                                                                             framesPerPacket: encoder.framesPerPacket))
+        let counts = try packets.map { try decoder.decode($0.data).count / 2 }
+        XCTAssertEqual(Set(counts.dropFirst()), [960], "\(counts)")
+    }
+
     func test_aac_eld_round_trip_quality() throws {
         let (packets, db) = try roundTrip(.aacELD, chunk: 441)
         XCTAssertGreaterThanOrEqual(packets.count, 80)
@@ -218,6 +228,51 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertLessThanOrEqual(buffer.bufferedNanos, buffer.targetNanos + 60 * ms)
         XCTAssertFalse(buffer.contains(3), "先丢静音包")
         XCTAssertTrue([1, 2, 4, 5].allSatisfy { buffer.contains($0) })
+    }
+
+    /// 播放开始前已经攒了很多包（拉取晚开始），之后按 10 ms 拉 480 个采样、包按 20 ms 到：先丢包追上，然后逐包放。
+    func test_jitter_buffer_catches_up_then_plays_with_half_packet_pulls() {
+        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var now: UInt64 = 0
+        for sequence in 0..<100 as Range<UInt32> {
+            buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
+                          arrivalNanos: UInt64(sequence) * 20 * ms + 5 * ms)
+            now = UInt64(sequence) * 20 * ms + 5 * ms
+        }
+        var next: UInt32 = 100
+        var heard = 0
+        for step in 0..<200 {
+            now += 10 * ms
+            if step % 2 == 0 {
+                buffer.insert(sequence: next, captureNanos: UInt64(next) * 20 * ms, samples: chunk(0.5), arrivalNanos: now)
+                next += 1
+            }
+            if buffer.pull(frames: 480).contains(where: { $0 > 0.4 }) { heard += 1 }
+        }
+        XCTAssertGreaterThan(buffer.counters.played, 90, "\(buffer.counters)")
+        XCTAssertEqual(buffer.counters.concealed, 0, "\(buffer.counters)")
+        XCTAssertGreaterThan(heard, 190)
+    }
+
+    /// 积压里有洞（真丢了的包）：追积压时播放位置要跳过洞，不能卡在洞上把后面的包一个个丢光。
+    func test_jitter_buffer_catches_up_across_a_hole() {
+        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        for sequence in 0..<60 as Range<UInt32> where sequence != 30 {
+            buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
+                          arrivalNanos: UInt64(sequence) * 20 * ms + 5 * ms)
+        }
+        var now: UInt64 = 60 * 20 * ms
+        var next: UInt32 = 60
+        for step in 0..<100 {
+            now += 10 * ms
+            if step % 2 == 0 {
+                buffer.insert(sequence: next, captureNanos: UInt64(next) * 20 * ms, samples: chunk(0.5), arrivalNanos: now)
+                next += 1
+            }
+            _ = buffer.pull(frames: 480)
+        }
+        XCTAssertGreaterThan(buffer.counters.played, 45, "\(buffer.counters)")
+        XCTAssertLessThanOrEqual(buffer.counters.concealed, 1, "\(buffer.counters)")
     }
 
     /// 到达有抖动时目标会升（不超过上限），抖动过去后慢慢降回去。
