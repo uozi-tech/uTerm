@@ -111,4 +111,24 @@ final class RemoteCurtainMuteTests: XCTestCase {
         print("默认输出 \(uid)：静音 \(muted.map(String.init) ?? "不支持")，音量 \(volume.map { String($0) } ?? "不支持")")
         XCTAssertTrue(muted != nil || volume != nil, "内建扬声器至少支持其一")
     }
+
+    /// 真实 CoreAudio，会写：在沙盒测试宿主里把默认输出静音、读回、再恢复（uTerm 本身是沙盒应用）。
+    /// 会短暂动到这台 Mac 的扬声器，所以默认跳过；`TEST_RUNNER_UTERM_REAL_AUDIO=1` 时才跑。
+    func test_core_audio_can_mute_and_restore_from_the_sandbox() throws {
+        guard ProcessInfo.processInfo.environment["UTERM_REAL_AUDIO"] == "1" else {
+            throw XCTSkip("会动真实扬声器，设 TEST_RUNNER_UTERM_REAL_AUDIO=1 才跑")
+        }
+        let store = defaults()
+        let control = CoreAudioOutputControl()
+        let uid = try XCTUnwrap(control.defaultOutputUID())
+        let before = try XCTUnwrap(control.isMuted(uid), "默认输出不支持静音")
+        let mute = RemoteCurtainMute(control: control, defaults: store)
+        mute.engage()
+        let during = control.isMuted(uid)
+        mute.release()
+        let after = control.isMuted(uid)
+        print("沙盒里静音 \(uid)：之前 \(before)，帘幕期间 \(String(describing: during))，之后 \(String(describing: after))")
+        XCTAssertEqual(during, true)
+        XCTAssertEqual(after, before)
+    }
 }
