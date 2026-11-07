@@ -59,6 +59,12 @@ struct RemoteCapabilitiesGroup: View {
                         .settingsNested()
                     }
                 }
+                SettingsRow(label: "允许远程解锁",
+                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠）") {
+                    UDToggle(Binding(get: { settings.isDesktopUnlockEnabled },
+                                     set: { settings.isDesktopUnlockEnabled = $0 }))
+                }
+                .settingsNested()
                 if let viewer = server.desktopViewer {
                     SettingsListRow(icon: settingsDeviceSymbol(for: viewer.deviceName), tint: UD.caution,
                                     title: viewer.deviceName,

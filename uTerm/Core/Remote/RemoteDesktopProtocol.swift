@@ -94,6 +94,51 @@ nonisolated struct RemoteDesktopInfo: Codable, Equatable, Sendable {
     var videoDatagrams: Bool? = nil
 }
 
+/// Mac → 手机：锁屏与帘幕状态（`desktopScreenState`，桌面通道）。只发给声明了 `desktop-unlock` 的手机。
+nonisolated struct RemoteDesktopScreenState: Codable, Equatable, Sendable {
+    /// Mac 停在锁屏界面上。
+    var locked: Bool
+    /// 帘幕模式开着：Mac 的物理屏是黑的，本机键鼠暂停。
+    var curtained: Bool
+    /// 这台 Mac 允许手机远程解锁、挂帘幕（开了设置里的开关，并且有「辅助功能」授权）。
+    var unlockAvailable: Bool
+}
+
+/// 手机 → Mac：用登录密码解锁锁屏（`desktopUnlock`，桌面通道）。密码只在 Mac 内存里用一次。
+nonisolated struct RemoteDesktopUnlockRequest: Codable, Equatable, Sendable, CustomStringConvertible,
+    CustomDebugStringConvertible {
+    var requestID: UUID
+    var password: String
+
+    /// 不让密码经 `print` / 字符串插值意外进日志。
+    var description: String { "RemoteDesktopUnlockRequest(\(requestID))" }
+    var debugDescription: String { description }
+}
+
+/// Mac → 手机：解锁结果（`desktopUnlockResult`，桌面通道）。
+nonisolated struct RemoteDesktopUnlockResult: Codable, Equatable, Sendable {
+    enum Outcome: String, Codable, Sendable {
+        /// 解开了，帘幕已挂上。
+        case unlocked
+        /// 输完密码 Mac 仍锁着：多半是密码不对。
+        case rejected
+        /// Mac 本来就没锁。
+        case notLocked
+        /// Mac 没开远程解锁，或没有「辅助功能」授权，或这台手机不是正在看屏幕的那台。
+        case notAllowed
+        /// 等不到锁屏状态变化。
+        case timedOut
+    }
+
+    var requestID: UUID
+    var outcome: Outcome
+}
+
+/// 手机 → Mac：开 / 关帘幕（`desktopCurtain`，桌面通道）。
+nonisolated struct RemoteDesktopCurtainRequest: Codable, Equatable, Sendable {
+    var on: Bool
+}
+
 /// 一帧视频（`desktopFrame`）：
 /// `[u8 标志][u8 编码][u32 序号][u64 Mac 采集时刻 ns][u16 宽][u16 高]`
 /// + 关键帧时 `[u8 参数集个数]{[u16 长度][参数集]}`（H.264 = SPS/PPS，HEVC = VPS/SPS/PPS）

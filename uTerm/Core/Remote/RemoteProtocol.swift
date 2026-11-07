@@ -37,7 +37,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
-                                          RemoteFeature.relayConfig]
+                                          RemoteFeature.relayConfig, RemoteFeature.desktopUnlock]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -81,6 +81,9 @@ nonisolated enum RemoteFeature {
     static let keyConfirmation = "key-confirm"
     /// 认得 `relayConfig` 消息。
     static let relayConfig = "relay-config"
+    /// 远程桌面里的锁屏状态、远程解锁与帘幕模式：认得 `desktopScreenState` / `desktopUnlock` /
+    /// `desktopUnlockResult` / `desktopCurtain`。两端都要声明，Mac 只给声明了的手机发状态。
+    static let desktopUnlock = "desktop-unlock"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -172,6 +175,18 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 画面往返（桌面通道）。负载 = `RemoteDesktopLatency`（JSON）。只在开流时 `latencyStats` 为 true 才发，
         /// 老手机不认这个类型（解析会当成坏消息），所以必须先要后发。
         case desktopLatency = 34
+        /// Mac 的锁屏 / 帘幕状态（桌面通道）。负载 = `RemoteDesktopScreenState`（JSON）。开流后发一次，变化时再发。
+        /// 只发给 `features` 带 `desktop-unlock` 的手机。
+        case desktopScreenState = 35
+        /// 解锁结果（桌面通道）。负载 = `RemoteDesktopUnlockResult`（JSON）。
+        case desktopUnlockResult = 36
+
+        // 手机 → Mac（20–34 已被 Mac → 手机占满，新的接着往后编）
+        /// 用密码解锁 Mac 的锁屏（桌面通道）。负载 = `RemoteDesktopUnlockRequest`（JSON）。只发给 `features` 带
+        /// `desktop-unlock` 的 Mac。
+        case desktopUnlock = 37
+        /// 打开 / 关闭帘幕模式（桌面通道）。负载 = `RemoteDesktopCurtainRequest`（JSON）。
+        case desktopCurtain = 38
     }
 
     var kind: Kind

@@ -11,6 +11,7 @@ final class RemoteControlSettings {
     enum Keys {
         static let enabled = DefaultsKey.remoteEnabled
         static let desktopEnabled = DefaultsKey.remoteDesktopEnabled
+        static let desktopUnlockEnabled = DefaultsKey.remoteDesktopUnlockEnabled
         static let localShellEnabled = DefaultsKey.remoteLocalShellEnabled
         static let internetEnabled = DefaultsKey.remoteInternetEnabled
         static let internetDevices = DefaultsKey.remoteInternetDevices
@@ -34,6 +35,16 @@ final class RemoteControlSettings {
         didSet {
             guard isDesktopEnabled != oldValue else { return }
             defaults.set(isDesktopEnabled, forKey: Keys.desktopEnabled)
+            onChange?(self)
+        }
+    }
+
+    /// 「允许远程解锁」：Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕模式（默认关）。在远程桌面之上
+    /// 再单独开一次——解锁等于交出这台 Mac 的登录，比看屏幕更重。
+    var isDesktopUnlockEnabled: Bool {
+        didSet {
+            guard isDesktopUnlockEnabled != oldValue else { return }
+            defaults.set(isDesktopUnlockEnabled, forKey: Keys.desktopUnlockEnabled)
             onChange?(self)
         }
     }
@@ -84,6 +95,7 @@ final class RemoteControlSettings {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false
+        isDesktopUnlockEnabled = defaults.object(forKey: Keys.desktopUnlockEnabled) as? Bool ?? false
         isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
         isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
         internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))

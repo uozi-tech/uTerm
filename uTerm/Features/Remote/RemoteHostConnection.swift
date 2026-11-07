@@ -25,6 +25,10 @@ final class RemoteHostConnection {
     private var peerSendsHeartbeat = false
     /// 手机认得 `desktopClipboard`（老手机收到会当未知消息断开整条连接）。
     private var peerTakesClipboard = false
+    /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
+    private var peerSupportsUnlock = false
+    /// 这条桌面流的锁屏状态监听（当前在看屏幕时才挂）。
+    private var lockObservers: [NSObjectProtocol] = []
     /// 从哪条路进来的。公网路径规则更严：不弹审批、不收扫码凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
@@ -79,6 +83,15 @@ final class RemoteHostConnection {
         link.close()
     }
 
+    /// 握手里报给手机的能力。远程解锁没开时不报 `desktop-unlock`，手机据此不显示解锁入口。
+    private func advertisedFeatures() -> [String] {
+        var features = server.localFeatures
+        if !server.desktopEnvironment.isUnlockEnabled() {
+            features.removeAll { $0 == RemoteFeature.desktopUnlock }
+        }
+        return features
+    }
+
     // MARK: - 握手与配对
 
     private func handshake() async {
@@ -88,7 +101,7 @@ final class RemoteHostConnection {
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: server.localID,
                                     deviceName: server.localName, ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: staticKey.publicKey.rawRepresentation,
-                                    features: server.localFeatures.isEmpty ? nil : server.localFeatures)
+                                    features: advertisedFeatures().isEmpty ? nil : advertisedFeatures())
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
@@ -96,6 +109,7 @@ final class RemoteHostConnection {
             peerID = peer.deviceID
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
+            peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
@@ -261,11 +275,20 @@ final class RemoteHostConnection {
             Task { await startDesktop(request) }
         case .desktopStop:
             stopDesktop(channel: message.channel, notify: false)
+        case .desktopUnlock:
+            guard var request = try? RemoteJSON.decode(RemoteDesktopUnlockRequest.self, from: message.payload) else { return }
+            let password = request.password
+            request.password = ""
+            handleUnlock(requestID: request.requestID, password: password, channel: message.channel)
+        case .desktopCurtain:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopCurtainRequest.self, from: message.payload) else { return }
+            setCurtain(request.on, channel: message.channel)
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
-             .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces:
+             .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
+             .desktopScreenState, .desktopUnlockResult:
             break
         }
     }
@@ -473,6 +496,7 @@ extension RemoteHostConnection {
         desktop = (channel, streamer)
         desktopRoute.set(streamer)
         server.claimDesktop(connection: self, channel: channel, canControl: canControl)
+        setupScreenControl(channel: channel)
         let info = RemoteDesktopInfo(
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
@@ -495,6 +519,8 @@ extension RemoteHostConnection {
                 return
             }
             streamer.activate(started: RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(info)))
+            // 初始锁屏状态排在 `desktopStarted` 之后发：手机要先靠它绑定通道，才接得到后续消息。
+            sendScreenState()
         }
     }
 
@@ -504,10 +530,88 @@ extension RemoteHostConnection {
         desktop = nil
         desktopRoute.set(nil)
         current.streamer.stop()
+        teardownScreenControl()
         server.releaseDesktop(connection: self, channel: channel)
         if notify {
             link.send(RemoteMessage(.closed, channel: channel, payload: Data(reason.utf8)))
         }
+    }
+}
+
+// MARK: - 远程解锁与帘幕
+
+extension RemoteHostConnection {
+    /// 开桌面流后（手机支持远程解锁时）：点亮显示器、推一次锁屏状态、挂锁屏状态监听、接本机解除帘幕的出口。
+    func setupScreenControl(channel: UInt32) {
+        guard peerSupportsUnlock, server.desktopEnvironment.isUnlockEnabled(),
+              let controller = server.screenController else { return }
+        controller.wake()
+        controller.onLocalCurtainRelease = { [weak self] in
+            guard let self, let channel = self.desktop?.channel else { return }
+            self.stopDesktop(channel: channel, notify: true, reason: "已在 Mac 上解除帘幕")
+        }
+        let center = DistributedNotificationCenter.default()
+        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
+            let observer = center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.sendScreenState() }
+            }
+            lockObservers.append(observer)
+        }
+    }
+
+    private func teardownScreenControl() {
+        for observer in lockObservers { DistributedNotificationCenter.default().removeObserver(observer) }
+        lockObservers.removeAll()
+        if let controller = server.screenController {
+            controller.onLocalCurtainRelease = nil
+            // 远控结束时若仍在帘幕：先把 Mac 锁回去，再撤掉黑屏与本机输入暂停，避免一撤帘幕就露出桌面。
+            if controller.isCurtained {
+                controller.lockScreen()
+                controller.setCurtain(false)
+            }
+        }
+    }
+
+    /// 把当前锁屏 / 帘幕状态推给手机。
+    func sendScreenState() {
+        guard peerSupportsUnlock, let channel = desktop?.channel, let controller = server.screenController else { return }
+        let state = RemoteDesktopScreenState(
+            locked: controller.isLocked, curtained: controller.isCurtained,
+            unlockAvailable: server.desktopEnvironment.isUnlockEnabled() && (server.desktopViewer?.canControl ?? false))
+        link.send(RemoteMessage(.desktopScreenState, channel: channel, payload: RemoteJSON.encode(state)))
+    }
+
+    private var canUnlockRemotely: Bool {
+        peerSupportsUnlock && server.desktopEnvironment.isUnlockEnabled()
+            && (server.desktopViewer?.canControl ?? false) && server.screenController != nil
+    }
+
+    fileprivate func handleUnlock(requestID: UUID, password: String, channel: UInt32) {
+        func reply(_ outcome: RemoteDesktopUnlockResult.Outcome) {
+            link.send(RemoteMessage(.desktopUnlockResult, channel: channel,
+                                    payload: RemoteJSON.encode(RemoteDesktopUnlockResult(requestID: requestID, outcome: outcome))))
+        }
+        guard canUnlockRemotely, let controller = server.screenController else { return reply(.notAllowed) }
+        guard controller.isLocked else { return reply(.notLocked) }
+        AppLogger.info("远程桌面：\(self.peerName) 请求解锁 Mac", category: RemoteLog.category)
+        Task {
+            let success = await controller.unlock(password: password)
+            guard !isClosed, desktop?.channel == channel else { return }
+            if success {
+                controller.setCurtain(true)
+                AppLogger.info("远程桌面：解锁成功，已进入帘幕", category: RemoteLog.category)
+            } else {
+                AppLogger.info("远程桌面：解锁未成功", category: RemoteLog.category)
+            }
+            reply(success ? .unlocked : .rejected)
+            sendScreenState()
+        }
+    }
+
+    fileprivate func setCurtain(_ on: Bool, channel: UInt32) {
+        guard canUnlockRemotely, let controller = server.screenController else { return }
+        controller.setCurtain(on)
+        sendScreenState()
     }
 }
 

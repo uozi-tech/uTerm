@@ -118,6 +118,8 @@ final class RemoteMacClient: Identifiable {
     /// 远程桌面里能不能粘贴手机的图片 / 文字（老 Mac 收到 `desktopPaste` 会断开整条连接）。
     var supportsDesktopPaste: Bool { macFeatures.contains(RemoteFeature.desktopPaste) }
     var supportsDesktopPasteChunks: Bool { macFeatures.contains(RemoteFeature.desktopPasteChunks) }
+    /// Mac 支持远程解锁 / 帘幕（会发 `desktopScreenState`、认得 `desktopUnlock`）。
+    var supportsUnlock: Bool { macFeatures.contains(RemoteFeature.desktopUnlock) }
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?
@@ -424,7 +426,7 @@ final class RemoteMacClient: Identifiable {
         switch message.kind {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
-        case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency:
+        case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。

@@ -21,6 +21,10 @@ struct RemoteDesktopEnvironment {
     var cursorLocation: (@Sendable () -> CGPoint?)?
     /// Mac 的系统剪贴板（拷贝的文字回传手机）。nil = 不回传。
     var clipboard: (any RemoteDesktopClipboardSource)? = nil
+    /// 锁屏状态、唤醒、远程解锁与帘幕。nil = 这台 Mac 不支持远程解锁（不声明 `desktop-unlock` 能力）。
+    var makeScreenController: (@MainActor () -> any RemoteScreenController)? = nil
+    /// 用户是否打开了「允许远程解锁」。关着时不声明 `desktop-unlock` 能力、也拒绝解锁请求。
+    var isUnlockEnabled: @MainActor () -> Bool = { false }
 
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
@@ -39,7 +43,9 @@ struct RemoteDesktopEnvironment {
             },
             makeInjector: { display in RemoteEventInjector(display: display) },
             cursorLocation: { CGEvent(source: nil)?.location },
-            clipboard: RemoteSystemClipboard())
+            clipboard: RemoteSystemClipboard(),
+            makeScreenController: { LiveRemoteScreenController() },
+            isUnlockEnabled: { settings.isDesktopUnlockEnabled })
     }
 
     /// 显示器的全局点坐标与原生像素尺寸。

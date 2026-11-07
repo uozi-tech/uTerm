@@ -261,6 +261,8 @@ final class FakeDesktopMac {
     var enabled = true
     var screenAuthorized = true
     var canControl = true
+    var unlockEnabled = true
+    let screen = FakeScreenController()
     let display = RemoteDesktopDisplay(id: 7, bounds: CGRect(x: 0, y: 0, width: 1512, height: 982),
                                        pixelWidth: 3024, pixelHeight: 1964)
     let clipboard = FakeClipboard()
@@ -286,7 +288,9 @@ final class FakeDesktopMac {
             },
             makeInjector: { [weak self] _ in self?.injector ?? RecordingInputSink() },
             cursorLocation: { cursorBox.value },
-            clipboard: clipboard)
+            clipboard: clipboard,
+            makeScreenController: { [weak self] in self?.screen ?? FakeScreenController() },
+            isUnlockEnabled: { [weak self] in self?.unlockEnabled ?? false })
     }
 
     private var cursorBox: CursorBox?
@@ -304,4 +308,44 @@ final class FakeDesktopMac {
             set { lock.lock(); point = newValue; lock.unlock() }
         }
     }
+}
+
+/// 记录型「屏幕控制」假件：锁屏状态、解锁结果可编排，帘幕与锁屏调用都记下来，供远程解锁用例断言。
+@MainActor
+final class FakeScreenController: RemoteScreenController {
+    var locked = true
+    /// 下一次 `unlock` 是否成功。
+    var unlockSucceeds = true
+    /// 收到的密码（断言用完清零，默认不校验内容）。
+    private(set) var lastPassword: String?
+    private(set) var unlockCalls = 0
+    private(set) var curtainHistory: [Bool] = []
+    private(set) var lockScreenCalls = 0
+    private(set) var wakeCalls = 0
+    var onLocalCurtainRelease: (() -> Void)?
+
+    var isLocked: Bool { locked }
+    private(set) var isCurtained = false
+
+    func wake() { wakeCalls += 1 }
+
+    func unlock(password: String) async -> Bool {
+        unlockCalls += 1
+        lastPassword = password
+        if unlockSucceeds { locked = false }
+        return unlockSucceeds
+    }
+
+    func lockScreen() {
+        lockScreenCalls += 1
+        locked = true
+    }
+
+    func setCurtain(_ on: Bool) {
+        isCurtained = on
+        curtainHistory.append(on)
+    }
+
+    /// 触发「本机解除帘幕」出口（模拟坐在 Mac 前的人连按 Esc）。
+    func fireLocalRelease() { onLocalCurtainRelease?() }
 }

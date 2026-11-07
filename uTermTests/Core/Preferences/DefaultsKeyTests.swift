@@ -48,6 +48,7 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.backgroundAllowOnDemandLaunch, "background.allowOnDemandLaunch"),
         (DefaultsKey.remoteEnabled, "remote.enabled"),
         (DefaultsKey.remoteDesktopEnabled, "remote.desktopEnabled"),
+        (DefaultsKey.remoteDesktopUnlockEnabled, "remote.desktopUnlockEnabled"),
         (DefaultsKey.remoteLocalShellEnabled, "remote.localShellEnabled"),
         (DefaultsKey.remoteDeviceID, "remote.deviceID"),
         (DefaultsKey.remoteInternetEnabled, "remote.internetEnabled"),

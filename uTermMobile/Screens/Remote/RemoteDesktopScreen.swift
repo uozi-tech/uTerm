@@ -22,6 +22,17 @@ struct RemoteDesktopScreen: View {
     /// 粘贴的结果提示（「已粘贴到 Mac」/「已复制到手机」/ 失败原因），几秒后自己消失。
     @State private var pasteNote: String?
     @State private var pasteNoteTask: Task<Void, Never>?
+    /// 远程解锁的进行态与密码输入。
+    @State private var unlockPhase: UnlockPhase = .idle
+    @State private var enteringPassword = false
+    @State private var passwordDraft = ""
+    @State private var vault: RemoteUnlockPasswordStore = KeychainRemoteUnlockStore()
+
+    enum UnlockPhase: Equatable {
+        case idle
+        case working
+        case failed(String)
+    }
     /// 顶栏左右要让出的距离（按屏幕圆角算，见 `ScreenCornerInsetsReader`）。
     @State private var barInsets = EdgeInsets(top: 14, leading: 24, bottom: 0, trailing: 24)
     @Environment(\.scenePhase) private var scenePhase
@@ -40,6 +51,7 @@ struct RemoteDesktopScreen: View {
                         RemoteDesktopCanvas(session: session, keys: keys, keyboardVisible: $keyboardVisible, fitToken: fitToken,
                                             displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) })
                         overlay(session)
+                        lockOverlay(session)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -279,6 +291,112 @@ struct RemoteDesktopScreen: View {
                    message: RemoteDesktopError.macTooOld.localizedDescription) {
                 MBtn(title: "关闭", kind: .primary, height: 42, action: onClose).fixedSize()
             }
+        }
+    }
+
+    // MARK: - 锁屏解锁
+
+    /// Mac 停在锁屏、且这台 Mac 支持远程解锁时盖在画面上：一个「解锁 Mac」入口。解锁成功后 Mac 进入帘幕，
+    /// 锁屏状态由 Mac 推来的 `desktopScreenState` 翻转，这层自然消失。
+    @ViewBuilder private func lockOverlay(_ session: RemoteDesktopSession) -> some View {
+        if session.supportsUnlock, session.screen.locked {
+            let working = unlockPhase == .working
+            notice(spinner: working, title: "Mac 已锁定",
+                   message: lockMessage(session)) {
+                if !working {
+                    MBtn(title: vaultHasPassword ? "解锁 Mac" : "输入密码解锁", kind: .primary, height: 42) {
+                        beginUnlock(session)
+                    }.fixedSize()
+                    if vaultHasPassword {
+                        MBtn(title: "改用其他密码", kind: .secondary, height: 42) {
+                            passwordDraft = ""
+                            enteringPassword = true
+                        }.fixedSize()
+                    }
+                    MBtn(title: "关闭", kind: .secondary, height: 42, action: onClose).fixedSize()
+                }
+            }
+            .sheet(isPresented: $enteringPassword) { passwordSheet(session) }
+        }
+    }
+
+    private func lockMessage(_ session: RemoteDesktopSession) -> String {
+        if case .failed(let reason) = unlockPhase { return reason }
+        if !session.screen.unlockAvailable {
+            return "这台 Mac 没有开启远程解锁（设置 › 远程控制 › 允许远程解锁），或没有「辅助功能」授权。"
+        }
+        return vaultHasPassword ? "用 Face ID 取出已保存的密码解锁，解锁后 Mac 屏幕会变黑并暂停本机键鼠。"
+            : "输入这台 Mac 的登录密码，解锁后 Mac 屏幕会变黑并暂停本机键鼠。密码只存在这台手机上。"
+    }
+
+    private var vaultHasPassword: Bool {
+        guard let macID = client.macDeviceID else { return false }
+        return vault.hasPassword(forMac: macID)
+    }
+
+    private func passwordSheet(_ session: RemoteDesktopSession) -> some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("登录密码", text: $passwordDraft)
+                        .textContentType(.password)
+                } footer: {
+                    Text("密码只保存在这台手机的钥匙串里，不会同步到 iCloud，取用时需要 Face ID。")
+                }
+            }
+            .navigationTitle("解锁 \(client.macName)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { enteringPassword = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("解锁") {
+                        let password = passwordDraft
+                        passwordDraft = ""
+                        enteringPassword = false
+                        if let macID = client.macDeviceID { try? vault.save(password, forMac: macID) }
+                        Task { await submitUnlock(session, password: password) }
+                    }.disabled(passwordDraft.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func beginUnlock(_ session: RemoteDesktopSession) {
+        guard let macID = client.macDeviceID, vault.hasPassword(forMac: macID) else {
+            passwordDraft = ""
+            enteringPassword = true
+            return
+        }
+        unlockPhase = .working
+        Task {
+            do {
+                guard let password = try await vault.password(forMac: macID, reason: "解锁 \(client.macName)") else {
+                    unlockPhase = .idle
+                    enteringPassword = true
+                    return
+                }
+                await submitUnlock(session, password: password)
+            } catch {
+                unlockPhase = .failed("Face ID 验证未通过，请重试。")
+            }
+        }
+    }
+
+    private func submitUnlock(_ session: RemoteDesktopSession, password: String) async {
+        unlockPhase = .working
+        let outcome = await session.unlock(password: password)
+        switch outcome {
+        case .unlocked, .notLocked:
+            unlockPhase = .idle
+        case .rejected:
+            unlockPhase = .failed("密码不对，请重试或改用其他密码。")
+        case .timedOut:
+            unlockPhase = .failed("解锁超时，请重试。")
+        case .notAllowed:
+            unlockPhase = .failed("这台 Mac 当前不允许远程解锁。")
         }
     }
 

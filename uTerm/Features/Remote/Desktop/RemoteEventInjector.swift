@@ -14,7 +14,12 @@ import Foundation
 /// 只在连接队列上调用（串行），按键状态（哪个键按着、上次点击位置）因此不用加锁。
 nonisolated final class RemoteEventInjector: RemoteDesktopInputSink, @unchecked Sendable {
     private let display: RemoteDesktopDisplay
-    private let source = CGEventSource(stateID: .hidSystemState)
+    private let source: CGEventSource? = {
+        let source = CGEventSource(stateID: .hidSystemState)
+        // 帘幕模式靠这个标记认出「手机注入的事件」并放行，本机键鼠则拦掉。
+        source?.userData = RemoteInjectedEvent.userDataTag
+        return source
+    }()
     private var location: CGPoint
     private var pressed: Set<UInt8> = []
     /// 当前这次按键的编号：每次按下加一，之后的拖动与抬起沿用。

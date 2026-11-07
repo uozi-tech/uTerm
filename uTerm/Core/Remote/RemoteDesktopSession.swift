@@ -35,6 +35,11 @@ final class RemoteDesktopSession {
     @ObservationIgnored var onClipboard: (@MainActor (RemoteDesktopClipboard) -> Void)?
     /// Mac 报来的画面往返（≈ 一次操作到看见结果）；老 Mac 不报，一直是 nil。
     private(set) var latency: RemoteDesktopLatency?
+    /// Mac 的锁屏 / 帘幕状态（支持远程解锁的 Mac 才发）。
+    private(set) var screen = RemoteDesktopScreenState(locked: false, curtained: false, unlockAvailable: false)
+    /// 这台 Mac 支持远程解锁（能收到锁屏状态、能发解锁请求）。
+    var supportsUnlock: Bool { client.supportsUnlock }
+    @ObservationIgnored private var unlockWaiters: [UUID: CheckedContinuation<RemoteDesktopUnlockResult.Outcome, Never>] = [:]
 
     nonisolated let receiver: RemoteDesktopReceiver
     let client: RemoteMacClient
@@ -109,13 +114,20 @@ final class RemoteDesktopSession {
                 }
             },
             onMessage: { [weak self] message, link in
-                guard message.kind == .desktopClipboard else {
+                switch message.kind {
+                case .desktopClipboard:
+                    guard let content = try? RemoteDesktopClipboard(decoding: message.payload) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self?.clipboardArrived(content, generation: current) }
+                    }
+                case .desktopScreenState:
+                    guard let state = try? RemoteJSON.decode(RemoteDesktopScreenState.self, from: message.payload) else { return }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.screen = state } }
+                case .desktopUnlockResult:
+                    guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
+                default:
                     receiver.receive(message, from: link, generation: current)
-                    return
-                }
-                guard let content = try? RemoteDesktopClipboard(decoding: message.payload) else { return }
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { self?.clipboardArrived(content, generation: current) }
                 }
             }
         )
@@ -203,6 +215,33 @@ final class RemoteDesktopSession {
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
     func requestKeyframe() {
         receiver.requestKeyframe(force: true)
+    }
+
+    /// 用密码解锁 Mac 的锁屏。密码来自手机本机钥匙串（Face ID 取出），只经加密信道发一次。
+    func unlock(password: String) async -> RemoteDesktopUnlockResult.Outcome {
+        guard let attachment, supportsUnlock else { return .notAllowed }
+        let requestID = UUID()
+        let request = RemoteDesktopUnlockRequest(requestID: requestID, password: password)
+        attachment.link.send(RemoteMessage(.desktopUnlock, channel: attachment.channel, payload: RemoteJSON.encode(request)))
+        return await withCheckedContinuation { continuation in
+            unlockWaiters[requestID] = continuation
+            // Mac 解锁要走输入+轮询，给足够时间；超时当失败处理。
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(12))
+                self?.unlockWaiters.removeValue(forKey: requestID)?.resume(returning: .timedOut)
+            }
+        }
+    }
+
+    /// 开 / 关帘幕（手机顶栏手动控制）。
+    func setCurtain(_ on: Bool) {
+        guard let attachment, supportsUnlock else { return }
+        let request = RemoteDesktopCurtainRequest(on: on)
+        attachment.link.send(RemoteMessage(.desktopCurtain, channel: attachment.channel, payload: RemoteJSON.encode(request)))
+    }
+
+    private func unlockResultArrived(_ result: RemoteDesktopUnlockResult) {
+        unlockWaiters.removeValue(forKey: result.requestID)?.resume(returning: result.outcome)
     }
 
     private func startStatsTicker() {

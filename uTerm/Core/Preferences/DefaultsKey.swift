@@ -65,6 +65,8 @@ nonisolated enum DefaultsKey {
 
     static let remoteEnabled = "remote.enabled"
     static let remoteDesktopEnabled = "remote.desktopEnabled"
+    /// macOS：允许手机远程解锁锁屏并进入帘幕模式（需在远程桌面之上单独开）。
+    static let remoteDesktopUnlockEnabled = "remote.desktopUnlockEnabled"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
     static let remoteDeviceID = "remote.deviceID"
     /// macOS：允许经公网（中继 / 打洞）接入。

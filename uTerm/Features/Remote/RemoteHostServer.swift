@@ -69,6 +69,12 @@ final class RemoteHostServer {
     @ObservationIgnored private var internetActivity: NSObjectProtocol?
     /// 远程桌面依赖的外部能力（采集、注入、授权、开关）。测试里换成合成的。
     @ObservationIgnored var desktopEnvironment: RemoteDesktopEnvironment
+    /// 这台 Mac 的屏幕控制（锁屏状态、唤醒、远程解锁、帘幕），全连接共用一个。环境没提供则为 nil（不支持远程解锁）。
+    @ObservationIgnored private var _screenController: (any RemoteScreenController)?
+    var screenController: (any RemoteScreenController)? {
+        if _screenController == nil { _screenController = desktopEnvironment.makeScreenController?() }
+        return _screenController
+    }
     /// 手机要的「新建本机终端」：开窗口、等会话登记好，回会话 id。测试里换成假的。
     @ObservationIgnored var localShellOpener: RemoteLocalShellOpener = .unavailable
     /// 手机看会话列表、接入之前要等它：Mac 刚重启时本机终端还没接回来。
