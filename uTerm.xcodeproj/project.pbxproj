@@ -251,6 +251,7 @@
 				Features/Remote/Desktop/RemoteFrameScaler.swift,
 				Features/Remote/Desktop/RemoteScreenControl.swift,
 				Features/Remote/Desktop/RemoteVideoEncoder.swift,
+				Features/Remote/Desktop/RemoteSystemCursor.swift,
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
 				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
 				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,

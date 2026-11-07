@@ -56,6 +56,10 @@ final class RemoteDesktopSession {
     private let maxHeight: Int
     /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
     private(set) var displayID: UInt32?
+    /// 要不要光标形状（Mac 主控端要，拿它当本机光标；手机自己画箭头，不要）。
+    private let wantsCursorImages: Bool
+    /// Mac 报来的光标此刻的样子（开流时要了才有）。
+    private(set) var cursorImage: RemoteDesktopCursorImage?
     @ObservationIgnored private var attachment: RemoteAttachment?
     @ObservationIgnored private var pasteUploader: RemoteDesktopPasteUploader?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
@@ -69,9 +73,11 @@ final class RemoteDesktopSession {
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
     ///   - outputPixelFormat: 解出来的像素格式（显示用 4:2:0，测试比对用 BGRA）。
     init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
-         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, displayID: UInt32? = nil) {
+         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, displayID: UInt32? = nil,
+         cursorImages: Bool = false) {
         self.client = client
         self.displayID = displayID
+        self.wantsCursorImages = cursorImages
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.codec = codec
@@ -144,6 +150,14 @@ final class RemoteDesktopSession {
                 case .desktopScreenState:
                     guard let state = try? RemoteJSON.decode(RemoteDesktopScreenState.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.screen = state } }
+                case .desktopCursorImage:
+                    guard let image = try? RemoteJSON.decode(RemoteDesktopCursorImage.self, from: message.payload) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, current == self.generation else { return }
+                            self.cursorImage = image
+                        }
+                    }
                 case .desktopUnlockResult:
                     guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
@@ -153,7 +167,8 @@ final class RemoteDesktopSession {
             }
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
-                                                displayID: displayID, sidecarRefine: true, latencyStats: true)
+                                                displayID: displayID, sidecarRefine: true, latencyStats: true,
+                                                cursorImages: wantsCursorImages ? true : nil)
         let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
             receiver.attachVideo(video, link: link, generation: current)
         })

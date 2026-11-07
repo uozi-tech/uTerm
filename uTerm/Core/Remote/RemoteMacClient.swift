@@ -462,7 +462,8 @@ final class RemoteMacClient: Identifiable {
         switch message.kind {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
-        case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult:
+        case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult,
+             .desktopCursorImage:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。

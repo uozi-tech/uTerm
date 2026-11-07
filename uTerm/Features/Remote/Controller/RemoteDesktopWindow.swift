@@ -20,7 +20,8 @@ final class RemoteDesktopWindowModel {
     init(client: RemoteMacClient, session: RemoteDesktopSession? = nil) {
         self.client = client
         let size = Self.requestedPixels()
-        self.session = session ?? RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height)
+        self.session = session ?? RemoteDesktopSession(client: client, maxWidth: size.width, maxHeight: size.height,
+                                                       cursorImages: true)
     }
 
     /// 连上（第一次时在那台 Mac 上核对配对数字），再开流。已经在放就什么也不做。

@@ -51,6 +51,17 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var videoDatagrams: Bool? = nil
     /// 手机要画面往返读数（`desktopLatency`），显示在调试信息里。老 Mac 不认这个键，什么都不发。
     var latencyStats: Bool? = nil
+    /// 要光标形状（`desktopCursorImage`）：Mac 主控端拿它当本机光标。老 Mac 不认这个键，什么都不发。
+    var cursorImages: Bool? = nil
+}
+
+/// Mac → 主控端：光标此刻的样子（I 形、调整大小的箭头…）。图是 PNG，尺寸与热点都按点算。
+nonisolated struct RemoteDesktopCursorImage: Codable, Equatable, Sendable {
+    var png: Data
+    var width: Double
+    var height: Double
+    var hotX: Double
+    var hotY: Double
 }
 
 /// Mac → 手机：画面往返（`desktopLatency`），有画面在走时每 2 s 一条。

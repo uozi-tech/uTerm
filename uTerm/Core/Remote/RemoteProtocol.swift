@@ -195,6 +195,9 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 暂停 / 恢复推流（桌面通道）。负载 = `RemoteDesktopPauseRequest`（JSON）。手机退到后台时发「暂停」，
         /// 回前台发「恢复」——恢复同时就是关键帧请求。只发给 `features` 带 `desktop-pause` 的 Mac。
         case desktopPause = 44
+        /// Mac 上光标的形状（桌面通道）：形状变了才发。负载 = `RemoteDesktopCursorImage`（JSON）。
+        /// 只在开流请求带 `cursorImages` 时才发，老客户端不认这个类型。
+        case desktopCursorImage = 45
     }
 
     var kind: Kind

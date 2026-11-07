@@ -23,6 +23,7 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
         view.onShortcutCaptureFailed = onShortcutCaptureFailed
         view.sendSystemShortcuts = sendSystemShortcuts
         view.update(displaySize: displaySize)
+        view.update(cursorImage: session.cursorImage)
     }
 
     static func dismantleNSView(_ view: RemoteDesktopCanvasNSView, coordinator: ()) {
@@ -215,6 +216,7 @@ final class RemoteDesktopCanvasNSView: NSView {
     private func applyFit() {
         viewport.reset()
         layoutContent()
+        window?.invalidateCursorRects(for: self)
     }
 
     private func layoutContent() {
@@ -240,6 +242,34 @@ final class RemoteDesktopCanvasNSView: NSView {
         path.addLine(to: CGPoint(x: 12.3, y: 12))
         path.closeSubpath()
         return path
+    }
+
+    // MARK: - 光标形状
+
+    private var remoteCursorImage: RemoteDesktopCursorImage?
+    private var remoteCursor: NSCursor?
+
+    /// 那台 Mac 的光标换了样子（I 形、调整大小…）：本机指针在画面上时就用它。
+    func update(cursorImage: RemoteDesktopCursorImage?) {
+        guard cursorImage != remoteCursorImage else { return }
+        remoteCursorImage = cursorImage
+        remoteCursor = cursorImage.flatMap(Self.cursor(from:))
+        window?.invalidateCursorRects(for: self)
+        if mouseInside, session.canControl { (remoteCursor ?? .arrow).set() }
+    }
+
+    nonisolated static func cursor(from image: RemoteDesktopCursorImage) -> NSCursor? {
+        guard image.width > 0, image.height > 0, let picture = NSImage(data: image.png) else { return nil }
+        picture.size = NSSize(width: image.width, height: image.height)
+        return NSCursor(image: picture, hotSpot: NSPoint(x: image.hotX, y: image.hotY))
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard session.canControl, let remoteCursor else { return }
+        let picture = viewport.contentFrame.intersection(bounds)
+        guard !picture.isEmpty else { return }
+        addCursorRect(picture, cursor: remoteCursor)
     }
 
     // MARK: - 指针

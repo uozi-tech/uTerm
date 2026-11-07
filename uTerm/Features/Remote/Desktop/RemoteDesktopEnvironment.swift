@@ -21,6 +21,9 @@ struct RemoteDesktopEnvironment {
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
     /// Mac 光标的全局坐标（在连接队列上轮询）。
     var cursorLocation: (@Sendable () -> CGPoint?)?
+    /// 光标形状的指纹（便宜，每 100 ms 调一次）与图（贵，指纹变了才调）。nil = 不发形状。
+    var cursorSignature: (@MainActor () -> Int?)? = nil
+    var cursorImage: (@MainActor () -> RemoteDesktopCursorImage?)? = nil
     /// Mac 的系统剪贴板（拷贝的文字回传手机）。nil = 不回传。
     var clipboard: (any RemoteDesktopClipboardSource)? = nil
     /// 锁屏状态、唤醒、远程解锁与帘幕。nil = 这台 Mac 不支持远程解锁（不声明 `desktop-unlock` 能力）。
@@ -48,6 +51,8 @@ struct RemoteDesktopEnvironment {
             },
             makeInjector: { display in RemoteEventInjector(display: display) },
             cursorLocation: { CGEvent(source: nil)?.location },
+            cursorSignature: { RemoteSystemCursor.signature() },
+            cursorImage: { RemoteSystemCursor.image() },
             clipboard: RemoteSystemClipboard(),
             makeScreenController: { LiveRemoteScreenController() },
             isUnlockEnabled: { settings.isDesktopUnlockEnabled },

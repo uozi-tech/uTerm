@@ -38,6 +38,9 @@ final class RemoteHostConnection {
     private var remotelyUnlocked = false
     /// 正在执行解锁（按键序列 + 轮询）：同时来的第二个请求直接拒掉，免得两串按键交错。
     private var unlockInFlight = false
+    /// 光标形状的轮询（开流请求要了 `cursorImages` 才挂）与上次发出的形状。
+    private var cursorShapeTimer: Timer?
+    private var lastCursorSignature: Int?
     /// 从哪条路进来的。公网路径规则更严：不弹审批框，没配对过的只认邀请凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
@@ -322,7 +325,7 @@ final class RemoteHostConnection {
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
-             .desktopScreenState, .desktopUnlockResult:
+             .desktopScreenState, .desktopUnlockResult, .desktopCursorImage:
             break
         }
     }
@@ -557,8 +560,9 @@ extension RemoteHostConnection {
                 return
             }
             streamer.activate(started: RemoteMessage(.desktopStarted, channel: channel, payload: RemoteJSON.encode(info)))
-            // 初始锁屏状态排在 `desktopStarted` 之后发：手机要先靠它绑定通道，才接得到后续消息。
+            // 初始锁屏状态、光标形状排在 `desktopStarted` 之后发：对端要先靠它绑定通道，才接得到后续消息。
             sendScreenState()
+            if request.cursorImages == true { startCursorShapes(channel: channel) }
         }
     }
 
@@ -568,11 +572,40 @@ extension RemoteHostConnection {
         desktop = nil
         desktopRoute.set(nil)
         current.streamer.stop()
+        stopCursorShapes()
         teardownScreenControl()
         server.releaseDesktop(connection: self, channel: channel)
         if notify {
             link.send(RemoteMessage(.closed, channel: channel, payload: Data(reason.utf8)))
         }
+    }
+}
+
+// MARK: - 光标形状
+
+extension RemoteHostConnection {
+    /// 每 100 ms 看一眼系统光标，形状变了才发（一张几 KB 的 PNG）。主控端拿它当本机光标，I 形、调整大小这些都对得上。
+    func startCursorShapes(channel: UInt32) {
+        stopCursorShapes()
+        let environment = server.desktopEnvironment
+        guard let signature = environment.cursorSignature, let image = environment.cursorImage else { return }
+        let tick: @MainActor () -> Void = { [weak self] in
+            guard let self, self.desktop?.channel == channel, let current = signature(),
+                  current != self.lastCursorSignature else { return }
+            self.lastCursorSignature = current
+            guard let shape = image() else { return }
+            self.link.send(RemoteMessage(.desktopCursorImage, channel: channel, payload: RemoteJSON.encode(shape)))
+        }
+        tick()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
+        RunLoop.main.add(timer, forMode: .common)
+        cursorShapeTimer = timer
+    }
+
+    func stopCursorShapes() {
+        cursorShapeTimer?.invalidate()
+        cursorShapeTimer = nil
+        lastCursorSignature = nil
     }
 }
 

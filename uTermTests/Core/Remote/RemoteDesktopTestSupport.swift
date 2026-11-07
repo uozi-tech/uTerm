@@ -269,6 +269,10 @@ final class FakeDesktopMac {
     let secondDisplay = RemoteDesktopDisplay(id: 9, bounds: CGRect(x: 1512, y: 0, width: 1920, height: 1080),
                                              pixelWidth: 1920, pixelHeight: 1080)
     var hasSecondDisplay = false
+    /// 光标此刻的样子（nil = 不报形状）。
+    var cursorShape: RemoteDesktopCursorImage?
+    /// 取了几次图（指纹没变就不该取）。
+    private(set) var cursorImageReads = 0
     /// 每次开流用的是哪块显示器。
     private(set) var openedDisplays: [UInt32] = []
     let clipboard = FakeClipboard()
@@ -305,6 +309,11 @@ final class FakeDesktopMac {
             },
             makeInjector: { [weak self] _ in self?.injector ?? RecordingInputSink() },
             cursorLocation: { cursorBox.value },
+            cursorSignature: { [weak self] in self?.cursorShape.map { $0.png.hashValue ^ Int($0.hotX * 100) } },
+            cursorImage: { [weak self] in
+                self?.cursorImageReads += 1
+                return self?.cursorShape
+            },
             clipboard: clipboard,
             makeScreenController: { [weak self] in self?.screen ?? FakeScreenController() },
             isUnlockEnabled: { [weak self] in self?.unlockEnabled ?? false })

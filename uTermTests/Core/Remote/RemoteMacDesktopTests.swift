@@ -148,6 +148,55 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(RemoteDesktopContent.displayTitle(main), "内建视网膜显示器（主显示器，1512×982）")
     }
 
+        private func shape(_ seed: UInt8, hot: Double) -> RemoteDesktopCursorImage {
+        let png = image(width: 8 + Int(seed), height: 16, noise: false, type: .png)
+        return RemoteDesktopCursorImage(png: png, width: 8 + Double(seed) / 2, height: 8, hotX: hot, hotY: hot)
+    }
+
+    func test_cursor_shape_is_sent_only_when_asked_and_only_when_it_changes() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        let arrow = shape(0, hot: 1), beam = shape(4, hot: 3)
+        rig.mac.cursorShape = arrow
+        let phone = RemoteDesktopSession(client: rig.client, maxWidth: 1920, maxHeight: 1080)
+        await phone.start()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(phone.cursorImage, "手机不要形状，Mac 就不发")
+        XCTAssertEqual(rig.mac.cursorImageReads, 0)
+        phone.stop()
+
+        let mac = RemoteDesktopSession(client: rig.client, maxWidth: 1920, maxHeight: 1080, cursorImages: true)
+        defer { mac.stop() }
+        await mac.start()
+        let first = await waitUntil { mac.cursorImage == arrow }
+        XCTAssertTrue(first, "开流就发一次当前形状")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(rig.mac.cursorImageReads, 1, "形状没变就不再取图、不再发")
+        rig.mac.cursorShape = beam
+        let changed = await waitUntil { mac.cursorImage == beam }
+        XCTAssertTrue(changed)
+        XCTAssertEqual(rig.mac.cursorImageReads, 2)
+    }
+
+    func test_cursor_image_becomes_a_local_cursor_with_its_size_and_hotspot() throws {
+        let image = shape(4, hot: 3)
+        let cursor = try XCTUnwrap(RemoteDesktopCanvasNSView.cursor(from: image))
+        XCTAssertEqual(cursor.image.size, NSSize(width: 10, height: 8), "按点算，不按像素")
+        XCTAssertEqual(cursor.hotSpot, NSPoint(x: 3, y: 3))
+        XCTAssertNil(RemoteDesktopCanvasNSView.cursor(from: RemoteDesktopCursorImage(png: Data([1, 2]), width: 8, height: 8,
+                                                                                     hotX: 0, hotY: 0)))
+    }
+
+    func test_system_cursor_sampler_produces_a_decodable_image() throws {
+        guard let signature = RemoteSystemCursor.signature(), let image = RemoteSystemCursor.image() else {
+            throw XCTSkip("这个进程拿不到系统光标")
+        }
+        XCTAssertEqual(signature, RemoteSystemCursor.signature(), "光标没变，指纹稳定")
+        XCTAssertGreaterThan(image.width, 0)
+        XCTAssertNotNil(NSImage(data: image.png))
+        XCTAssertTrue(image.png.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+    }
+
         // MARK: - 本机剪贴板
 
     private func image(width: Int, height: Int, noise: Bool, type: UTType) -> Data {
