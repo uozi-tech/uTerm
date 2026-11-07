@@ -45,6 +45,9 @@ type helloFrame struct {
 	Version int    `json:"version"`
 	RelayID string `json:"relayID"`
 	Nonce   string `json:"nonce"`
+	// Server is the relay build, e.g. "1.1.0", so apps can tell the owner an update exists.
+	// Absent from 1.0.0. The protocol version above is what decides compatibility.
+	Server string `json:"server,omitempty"`
 }
 
 // requestFrame is the first frame of a connection.

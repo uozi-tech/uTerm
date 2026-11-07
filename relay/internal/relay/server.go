@@ -47,6 +47,9 @@ func DefaultLimits() Limits {
 
 // Server is a running relay.
 type Server struct {
+	// Version is the build version sent in the hello; set it before Listen.
+	Version string
+
 	store  *Store
 	limits Limits
 	rate   *rateLimiter
@@ -280,7 +283,7 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 	}
 	relayID, member := s.store.Identity()
 	nonce := base64.StdEncoding.EncodeToString(randomBytes(32))
-	hello := helloFrame{Relay: "uterm-relay", Version: protocolVersion, RelayID: relayID, Nonce: nonce}
+	hello := helloFrame{Relay: "uterm-relay", Version: protocolVersion, RelayID: relayID, Nonce: nonce, Server: s.Version}
 	if err := writeFrame(conn, hello); err != nil {
 		return
 	}

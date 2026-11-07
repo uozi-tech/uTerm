@@ -48,6 +48,7 @@ func newHarness(t *testing.T, limits Limits) *harness {
 		t.Fatal(err)
 	}
 	server := NewServer(store, limits)
+	server.Version = "9.8.7"
 	bound, err := server.Listen("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +184,14 @@ func readMessage(t *testing.T, conn net.Conn) messageFrame {
 		t.Fatalf("no message: %v", err)
 	}
 	return frame
+}
+
+func TestHelloCarriesTheBuildVersion(t *testing.T) {
+	h := newHarness(t, testLimits())
+	_, hello := h.open()
+	if hello.Version != protocolVersion || hello.Server != "9.8.7" || hello.RelayID != h.relayID {
+		t.Fatalf("hello = %+v", hello)
+	}
 }
 
 func TestWrongMemberKeyIsRefusedOnEveryRole(t *testing.T) {

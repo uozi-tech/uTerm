@@ -14,7 +14,7 @@ import (
 	"uterm.local/relay/internal/relay"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 const usage = `uterm-relay %s
 
@@ -90,6 +90,7 @@ func serve(dataDir, socket string) error {
 		}
 	}
 	server := relay.NewServer(store, limits)
+	server.Version = version
 	bound, err := server.Listen(envOr("RELAY_LISTEN", ":47310"))
 	if err != nil {
 		return err
