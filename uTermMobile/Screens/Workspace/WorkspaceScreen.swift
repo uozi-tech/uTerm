@@ -544,6 +544,10 @@ struct WorkspaceScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { newKind = nil } } }
         }
+        // 中继在线查询只在有界面看着时才轮询（RemoteMacDirectory.keepLiveStatusFresh）。
+        // 抽屉里一台在线 Mac 都没有时 MacTerminalRows 不出行、登记不上，在这里兜一次，
+        // 期间刚连上中继的 Mac 才能照旧在 15 秒内出现。
+        .task { await macs?.keepLiveStatusFresh() }
         .presentationDetents([.medium, .large])
     }
 
