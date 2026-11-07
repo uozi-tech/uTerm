@@ -122,6 +122,8 @@ final class RemoteMacClient: Identifiable {
     var supportsUnlock: Bool { macFeatures.contains(RemoteFeature.desktopUnlock) }
     /// Mac 认得 `desktopPause`：手机退到后台时能让它停止推流（老 Mac 收到会断开整条连接）。
     var supportsDesktopPause: Bool { macFeatures.contains(RemoteFeature.desktopPause) }
+    /// Mac 能把声音传过来（认得 `desktopAudio`）。
+    var supportsDesktopAudio: Bool { macFeatures.contains(RemoteFeature.desktopAudio) }
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?
@@ -463,7 +465,7 @@ final class RemoteMacClient: Identifiable {
         case .output:
             table.sink(message.channel)?.onOutput(message.payload)
         case .desktopFrame, .desktopCursor, .desktopClipboard, .desktopLatency, .desktopScreenState, .desktopUnlockResult,
-             .desktopCursorImage:
+             .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame:
             table.sink(message.channel)?.onMessage?(message, link)
         case .desktopStarted:
             // 同 `attached`：在队列上先绑定通道，紧随其后的第一帧（关键帧）才不会丢。

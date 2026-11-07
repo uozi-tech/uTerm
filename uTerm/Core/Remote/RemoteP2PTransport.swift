@@ -16,6 +16,11 @@ nonisolated protocol RemoteVideoDatagramChannel: AnyObject, Sendable {
     func startVideoReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void,
                              onLost: @escaping @Sendable ([UInt32], UInt32) -> Void)
     func stopVideoReceiving()
+    /// Mac：发一包声音（`RemoteDesktopAudioFrame` 编码后的字节）。不重传。
+    func sendAudio(_ payload: Data, channel: UInt32)
+    /// 手机：开始收声音。回调在内部队列上；第二个参数是桌面通道号。
+    func startAudioReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void)
+    func stopAudioReceiving()
 }
 
 /// 把一条数据报路径变成 `RemoteLink` 要的可靠字节流，并在旁边开一条不可靠的视频通道。
@@ -75,6 +80,8 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private var reassembler = RemoteVideoReassembler()
     private var onVideoFrame: (@Sendable (Data, UInt32) -> Void)?
     private var onVideoLost: (@Sendable ([UInt32], UInt32) -> Void)?
+    // 声音接收。
+    private var onAudioFrame: (@Sendable (Data, UInt32) -> Void)?
 
     init(path: any RemoteDatagramPath, keys: RemoteDatagramKeys) {
         self.path = path
@@ -249,6 +256,26 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
+    func sendAudio(_ payload: Data, channel: UInt32) {
+        queue.async { [self] in
+            guard !isStopped else { return }
+            var writer = RemoteByteWriter(capacity: 4 + payload.count)
+            writer.u32(channel)
+            writer.bytes(payload)
+            pacer.enqueue(.audio, writer.data, priority: .audio)
+            pump()
+            rearm()
+        }
+    }
+
+    func startAudioReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void) {
+        queue.async { self.onAudioFrame = onFrame }
+    }
+
+    func stopAudioReceiving() {
+        queue.async { self.onAudioFrame = nil }
+    }
+
     func startVideoReceiving(onFrame: @escaping @Sendable (Data, UInt32) -> Void,
                              onLost: @escaping @Sendable ([UInt32], UInt32) -> Void) {
         queue.async { [self] in
@@ -295,6 +322,10 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             guard let nack = try? RemoteVideoNack(decoding: opened.payload), nack.channel == videoChannel else { return }
             // 重传排在新帧前面：这一帧不到，解码器就卡着。
             for packet in videoBuffer.packets(for: nack, now: now) { pacer.enqueue(.media, packet, priority: .control) }
+        case .audio:
+            guard let onAudioFrame, opened.payload.count > 4 else { return }
+            let channel = opened.payload.prefix(4).reduce(0) { $0 << 8 | UInt32($1) }
+            onAudioFrame(Data(opened.payload.dropFirst(4)), channel)
         case .pathCheck:
             break
         }

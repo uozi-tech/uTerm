@@ -71,6 +71,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 公网直连时视频走的不可靠通道；nil = 视频是 `link` 上的普通消息。
     private let video: (any RemoteVideoDatagramChannel)?
+    /// 同上，给声音用：视频走数据报时声音也走。
+    var datagramChannel: (any RemoteVideoDatagramChannel)? { video }
     private let source: any RemoteDesktopFrameSource
     private let injector: (any RemoteDesktopInputSink)?
     private let cursorLocation: (@Sendable () -> CGPoint?)?

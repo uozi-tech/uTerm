@@ -12,6 +12,7 @@ final class RemoteControlSettings {
         static let enabled = DefaultsKey.remoteEnabled
         static let desktopEnabled = DefaultsKey.remoteDesktopEnabled
         static let desktopUnlockEnabled = DefaultsKey.remoteDesktopUnlockEnabled
+        static let desktopAudioEnabled = DefaultsKey.remoteDesktopAudioEnabled
         static let localShellEnabled = DefaultsKey.remoteLocalShellEnabled
         static let internetEnabled = DefaultsKey.remoteInternetEnabled
         static let internetDevices = DefaultsKey.remoteInternetDevices
@@ -45,6 +46,16 @@ final class RemoteControlSettings {
         didSet {
             guard isDesktopUnlockEnabled != oldValue else { return }
             defaults.set(isDesktopUnlockEnabled, forKey: Keys.desktopUnlockEnabled)
+            onChange?(self)
+        }
+    }
+
+    /// 「允许传输声音」：看桌面时把 Mac 的系统声音传到手机（默认开）。授权就是屏幕录制那一项（系统里叫
+    /// 「录屏与系统录音」），所以不用再授权；手机上的扬声器按钮默认关，打开才传。
+    var isDesktopAudioEnabled: Bool {
+        didSet {
+            guard isDesktopAudioEnabled != oldValue else { return }
+            defaults.set(isDesktopAudioEnabled, forKey: Keys.desktopAudioEnabled)
             onChange?(self)
         }
     }
@@ -95,6 +106,7 @@ final class RemoteControlSettings {
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false
         isDesktopUnlockEnabled = defaults.object(forKey: Keys.desktopUnlockEnabled) as? Bool ?? false
+        isDesktopAudioEnabled = defaults.object(forKey: Keys.desktopAudioEnabled) as? Bool ?? true
         isLocalShellEnabled = defaults.object(forKey: Keys.localShellEnabled) as? Bool ?? false
         isInternetEnabled = defaults.object(forKey: Keys.internetEnabled) as? Bool ?? false
         internetDevices = Set((defaults.stringArray(forKey: Keys.internetDevices) ?? []).compactMap(UUID.init(uuidString:)))

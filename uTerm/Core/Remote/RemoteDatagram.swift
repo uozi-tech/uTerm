@@ -26,10 +26,12 @@ nonisolated enum RemoteDatagramKind: UInt8, Sendable {
     case mediaNack = 5
     /// 打洞后确认路径双向可用（见 `RemoteDirectAttempt`）。用单独的密钥，传输层解不开也用不着解。
     case pathCheck = 6
+    /// 声音包：`[u32 桌面通道][RemoteDesktopAudioFrame]`。不重传，丢包靠包里的冗余补。老版本解不出这个种类，直接丢掉。
+    case audio = 7
 
     /// 视频用会话密钥派生的密钥，其余用信令派生的密钥。信令密钥只由两端长期密钥和随机数决定，
     /// 长期密钥日后泄露就能解开录下来的流量；会话密钥有临时密钥参与，所以画面不能用前者加密。
-    var usesMediaKey: Bool { self == .media || self == .mediaNack }
+    var usesMediaKey: Bool { self == .media || self == .mediaNack || self == .audio }
 }
 
 /// 一个方向一把密钥。
@@ -170,9 +172,14 @@ nonisolated struct RemoteDatagramPacer {
     enum Priority {
         /// KCP、报告、视频重传请求。
         case control
+        /// 声音包：排在控制之后、视频之前。视频占满上行时声音也不被挤掉。
+        case audio
         /// 视频分片。
         case media
     }
+
+    /// 声音最多排这么多包（20 ms 一包 = 200 ms）：再旧的到了也赶不上播放，丢掉最旧的。
+    static let maxQueuedAudio = 10
 
     /// 字节 / 秒。
     var rate: Double
@@ -180,6 +187,7 @@ nonisolated struct RemoteDatagramPacer {
     private var lastRefill: UInt64
     private var control: [(RemoteDatagramKind, Data)] = []
     private var controlHead = 0
+    private var audio: [(RemoteDatagramKind, Data)] = []
     private var media: [(RemoteDatagramKind, Data)] = []
     private var mediaHead = 0
     private(set) var queuedMediaBytes = 0
@@ -195,11 +203,14 @@ nonisolated struct RemoteDatagramPacer {
         max(2400, rate * 0.005)
     }
 
-    var isEmpty: Bool { controlHead == control.count && mediaHead == media.count }
+    var isEmpty: Bool { controlHead == control.count && audio.isEmpty && mediaHead == media.count }
 
     mutating func enqueue(_ kind: RemoteDatagramKind, _ payload: Data, priority: Priority) {
         switch priority {
         case .control: control.append((kind, payload))
+        case .audio:
+            audio.append((kind, payload))
+            if audio.count > Self.maxQueuedAudio { audio.removeFirst(audio.count - Self.maxQueuedAudio) }
         case .media:
             media.append((kind, payload))
             queuedMediaBytes += payload.count
@@ -217,6 +228,11 @@ nonisolated struct RemoteDatagramPacer {
                 control.removeAll(keepingCapacity: true)
                 controlHead = 0
             }
+            tokens -= Double(item.1.count + RemoteDatagramCipher.overhead)
+            return item
+        }
+        if !audio.isEmpty {
+            let item = audio.removeFirst()
             tokens -= Double(item.1.count + RemoteDatagramCipher.overhead)
             return item
         }

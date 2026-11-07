@@ -255,9 +255,88 @@ final class RecordingInputSink: RemoteDesktopInputSink, @unchecked Sendable {
     var allPastes: [RemoteDesktopPaste] { lock.lock(); defer { lock.unlock() }; return pastes }
 }
 
+/// 合成的系统声音：每 10 ms 出一块（与 SCK 的节拍相近），可切成静音。
+final class SyntheticAudioSource: RemoteAudioSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "test.audio.source")
+    private var timer: DispatchSourceTimer?
+    private var onSamples: (@Sendable ([Float], UInt64) -> Void)?
+    private var frame = 0
+    private var silent = false
+    private(set) var started = false
+    private(set) var stopped = false
+
+    func setSilent(_ value: Bool) { lock.lock(); silent = value; lock.unlock() }
+
+    func start(onSamples: @escaping @Sendable ([Float], UInt64) -> Void,
+               onStop: @escaping @Sendable (Error?) -> Void) async throws {
+        begin(onSamples)
+    }
+
+    private func begin(_ onSamples: @escaping @Sendable ([Float], UInt64) -> Void) {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        timer.setEventHandler { [weak self] in self?.tick() }
+        lock.lock()
+        self.onSamples = onSamples
+        started = true
+        self.timer = timer
+        lock.unlock()
+        timer.resume()
+    }
+
+    private func tick() {
+        lock.lock()
+        let handler = onSamples
+        let quiet = silent
+        let start = frame
+        frame += 480
+        lock.unlock()
+        var samples = [Float](repeating: 0, count: 960)
+        if !quiet {
+            for index in 0..<480 {
+                let value = Float(sin(Double(start + index) * 2 * .pi * 440 / 48_000)) * 0.5
+                samples[2 * index] = value
+                samples[2 * index + 1] = value
+            }
+        }
+        handler?(samples, DispatchTime.now().uptimeNanoseconds &- 10_000_000)
+    }
+
+    func stop() {
+        lock.lock()
+        timer?.cancel()
+        timer = nil
+        onSamples = nil
+        stopped = true
+        lock.unlock()
+    }
+}
+
+/// 手机端的假扬声器：不出声，只记下有没有在放、把取样的回调留给用例自己拉。
+@MainActor
+final class SilentAudioOutput: RemoteAudioOutput {
+    var onInterrupted: ((String) -> Void)?
+    private(set) var isPlaying = false
+    private(set) var pull: (@Sendable (Int) -> [Float])?
+
+    func start(pull: @escaping @Sendable (Int) -> [Float]) throws {
+        isPlaying = true
+        self.pull = pull
+    }
+
+    func stop() {
+        isPlaying = false
+        pull = nil
+    }
+}
+
 /// 一个可变的「Mac 环境」：开关与授权可在用例里随时改。
 @MainActor
 final class FakeDesktopMac {
+    var audioEnabled = true
+    private(set) var audioSources: [SyntheticAudioSource] = []
+    var latestAudioSource: SyntheticAudioSource? { audioSources.last }
     var enabled = true
     var screenAuthorized = true
     var canControl = true
@@ -319,7 +398,13 @@ final class FakeDesktopMac {
             },
             clipboard: clipboard,
             makeScreenController: { [weak self] in self?.screen ?? FakeScreenController() },
-            isUnlockEnabled: { [weak self] in self?.unlockEnabled ?? false })
+            isUnlockEnabled: { [weak self] in self?.unlockEnabled ?? false },
+            isAudioEnabled: { [weak self] in self?.audioEnabled ?? false },
+            makeAudioSource: { [weak self] _ in
+                let source = SyntheticAudioSource()
+                self?.audioSources.append(source)
+                return source
+            })
     }
 
     private var cursorBox: CursorBox?

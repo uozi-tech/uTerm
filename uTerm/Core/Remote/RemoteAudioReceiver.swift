@@ -1,0 +1,228 @@
+import AVFoundation
+import Foundation
+
+/// 手机这一侧的声音接收（调研 §16.4）：按格式建解码器 → 解包（含冗余补洞）→ 抖动缓冲 → 播放回调来取。
+///
+/// 线程：包在连接队列（TCP）或数据报队列（直连）上到达，转到自己的解码队列；播放回调在音频线程上取样，
+/// 抖动缓冲用锁保护（取样只是拷几百个采样，锁持有时间很短）。
+nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
+    struct Snapshot: Equatable, Sendable {
+        var stream: UInt16?
+        var codec: RemoteAudioCodec?
+        var counters = RemoteAudioJitterBuffer.Counters()
+        var targetMillis = 0
+        var bufferedMillis = 0
+        var received = 0
+        var recovered = 0
+    }
+
+    private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.audio.decode", qos: .userInteractive)
+    private let lock = NSLock()
+    private let config: RemoteAudioJitterBuffer.Config
+    // 锁内。
+    private var buffer: RemoteAudioJitterBuffer?
+    private var stream: UInt16?
+    private var codec: RemoteAudioCodec?
+    private var received = 0
+    private var recovered = 0
+    // 只在 queue 上。
+    private var decoder: RemoteAudioDecoder?
+    /// 解到第几个序号了：解码器要按顺序喂，比它旧的包（含冗余里的）不再解。
+    private var lastDecoded: UInt32?
+
+    init(config: RemoteAudioJitterBuffer.Config) {
+        self.config = config
+    }
+
+    /// 新的声音流（或 Mac 说没有声音了：`codec == nil`）。
+    func receive(format: RemoteDesktopAudioFormat) {
+        queue.async { [self] in
+            lastDecoded = nil
+            decoder = format.codec != nil ? try? RemoteAudioDecoder(format: format) : nil
+            var config = self.config
+            config.framesPerPacket = Int(format.framesPerPacket)
+            config.channels = Int(format.channels)
+            config.sampleRate = format.sampleRate
+            lock.lock()
+            stream = format.codec != nil ? format.stream : nil
+            codec = format.codec
+            buffer = format.codec != nil ? RemoteAudioJitterBuffer(config: config) : nil
+            received = 0
+            recovered = 0
+            lock.unlock()
+        }
+    }
+
+    /// 一包声音（`RemoteDesktopAudioFrame` 编码后的字节）。
+    func receive(frame payload: Data) {
+        let arrival = DispatchTime.now().uptimeNanoseconds
+        queue.async { [self] in
+            guard let frame = try? RemoteDesktopAudioFrame(decoding: payload), let decoder else { return }
+            lock.lock()
+            let current = stream
+            lock.unlock()
+            guard frame.stream == current else { return }
+            if frame.isSilence {
+                lastDecoded = max(lastDecoded ?? 0, frame.sequence)
+                lock.lock()
+                buffer?.markSilence(through: frame.sequence, captureNanos: frame.captureNanos, arrivalNanos: arrival)
+                lock.unlock()
+                return
+            }
+            // 冗余里的旧包先解（序号从小到大），补上前面丢的洞；解码器只能往前走。
+            let packetNanos = UInt64(Double(decoder.format.framesPerPacket) / decoder.format.sampleRate * 1e9)
+            for (offset, data) in frame.redundant.enumerated().reversed() {
+                let distance = UInt32(offset + 1)
+                guard frame.sequence >= distance else { continue }
+                let sequence = frame.sequence - distance
+                guard lastDecoded.map({ sequence > $0 }) ?? true else { continue }
+                lock.lock()
+                let have = buffer?.contains(sequence) ?? true
+                lock.unlock()
+                guard !have, let samples = try? decoder.decode(data) else { continue }
+                lastDecoded = sequence
+                insert(sequence: sequence, captureNanos: frame.captureNanos &- UInt64(distance) * packetNanos,
+                       samples: samples, arrival: arrival, recovered: true)
+            }
+            guard lastDecoded.map({ frame.sequence > $0 }) ?? true, let samples = try? decoder.decode(frame.data) else {
+                return
+            }
+            lastDecoded = frame.sequence
+            insert(sequence: frame.sequence, captureNanos: frame.captureNanos, samples: samples, arrival: arrival,
+                   recovered: false)
+        }
+    }
+
+    private func insert(sequence: UInt32, captureNanos: UInt64, samples: [Float], arrival: UInt64, recovered: Bool) {
+        lock.lock()
+        buffer?.insert(sequence: sequence, captureNanos: captureNanos, samples: samples, arrivalNanos: arrival)
+        if recovered { self.recovered += 1 } else { received += 1 }
+        lock.unlock()
+    }
+
+    /// 播放回调来取 `frames` 个采样（每声道），返回交错数组。没有声音流时全是 0。
+    func pull(frames: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard buffer != nil else { return [Float](repeating: 0, count: frames * Int(RemoteAudioPolicy.channels)) }
+        return buffer!.pull(frames: frames)
+    }
+
+    func reset() {
+        queue.async { [self] in
+            decoder = nil
+            lastDecoded = nil
+            lock.lock()
+            buffer = nil
+            stream = nil
+            codec = nil
+            lock.unlock()
+        }
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(stream: stream, codec: codec, counters: buffer?.counters ?? .init(),
+                        targetMillis: Int((buffer?.targetNanos ?? 0) / 1_000_000),
+                        bufferedMillis: Int((buffer?.bufferedNanos ?? 0) / 1_000_000), received: received,
+                        recovered: recovered)
+    }
+}
+
+/// 声音放到哪里：生产是 `AVAudioEngine`，Mac 单测里是什么都不放的假输出（测试不能真出声）。
+@MainActor
+protocol RemoteAudioOutput: AnyObject {
+    /// 开始放。`pull` 在音频线程上调用，返回交错采样。
+    func start(pull: @escaping @Sendable (Int) -> [Float]) throws
+    func stop()
+    /// 系统要求停下（iOS：拔了耳机、被来电打断后不再恢复）。参数是给人看的原因。
+    var onInterrupted: ((String) -> Void)? { get set }
+}
+
+/// `AVAudioEngine` + `AVAudioSourceNode`：音频线程按输出节拍来取，缓冲深度完全由抖动缓冲控制。
+@MainActor
+final class RemoteAudioEnginePlayer: RemoteAudioOutput {
+    private let engine = AVAudioEngine()
+    private var node: AVAudioSourceNode?
+    var onInterrupted: ((String) -> Void)?
+    #if os(iOS)
+    private var observers: [NSObjectProtocol] = []
+    #endif
+
+    init() {}
+
+    func start(pull: @escaping @Sendable (Int) -> [Float]) throws {
+        stop()
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        // 声音按钮默认关，打开是用户的选择：静音键下也出声，与看视频一致。
+        try session.setCategory(.playback, mode: .default, options: [])
+        try? session.setPreferredIOBufferDuration(0.01)
+        try session.setActive(true)
+        observeSession()
+        #endif
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: RemoteAudioPolicy.sampleRate,
+                                         channels: AVAudioChannelCount(RemoteAudioPolicy.channels)) else { return }
+        let node = AVAudioSourceNode(format: format) { _, _, frameCount, bufferList in
+            let frames = Int(frameCount)
+            let samples = pull(frames)
+            let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
+            // 标准格式是每声道一块（非交错）。
+            for (channel, buffer) in buffers.enumerated() {
+                guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                let source = min(channel, Int(RemoteAudioPolicy.channels) - 1)
+                for frame in 0..<frames {
+                    data[frame] = frame * 2 + source < samples.count ? samples[frame * 2 + source] : 0
+                }
+            }
+            return noErr
+        }
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        self.node = node
+        try engine.start()
+    }
+
+    func stop() {
+        engine.stop()
+        if let node {
+            engine.detach(node)
+            self.node = nil
+        }
+        #if os(iOS)
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers.removeAll()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+    }
+
+    #if os(iOS)
+    private func observeSession() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil,
+                                            queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+            let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if options.contains(.shouldResume) {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    try? self.engine.start()
+                } else {
+                    self.onInterrupted?("声音被其他应用打断")
+                }
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil,
+                                            queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+            // 拔了耳机：按系统惯例停下，免得突然从扬声器外放。
+            MainActor.assumeIsolated { self?.onInterrupted?("耳机已断开") }
+        })
+    }
+    #endif
+}

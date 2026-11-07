@@ -67,6 +67,12 @@ nonisolated enum DefaultsKey {
     static let remoteDesktopEnabled = "remote.desktopEnabled"
     /// macOS：允许手机远程解锁锁屏并进入帘幕模式（需在远程桌面之上单独开）。
     static let remoteDesktopUnlockEnabled = "remote.desktopUnlockEnabled"
+    /// macOS：看桌面时允许把声音传到手机。
+    static let remoteDesktopAudioEnabled = "remote.desktopAudioEnabled"
+    /// macOS：帘幕模式改过静音的输出设备与原值（崩溃后下次启动据此恢复）。只在本机，不同步。
+    static let remoteCurtainMutedOutputs = "remote.curtainMutedOutputs"
+    /// iOS：看桌面时要声音的 Mac（设备 ID）。
+    static let remoteDesktopAudioMacs = "remote.desktopAudioMacs"
     static let remoteLocalShellEnabled = "remote.localShellEnabled"
     static let remoteDeviceID = "remote.deviceID"
     /// macOS：允许经公网（中继 / 打洞）接入。

@@ -34,6 +34,10 @@ struct RemoteDesktopEnvironment {
     var isUnlockEnabled: @MainActor () -> Bool = { false }
     /// 开流前点亮显示器并等它醒来：息屏时 ScreenCaptureKit 列不出睡着的显示器，采集会起不来。测试里不做事。
     var wakeDisplay: @MainActor (_ id: CGDirectDisplayID) async -> Void = { _ in }
+    /// 用户是否打开了「允许传输声音」。
+    var isAudioEnabled: @MainActor () -> Bool = { false }
+    /// 系统声音的来源。nil = 这台 Mac 不送声音。
+    var makeAudioSource: (@MainActor (_ display: RemoteDesktopDisplay) -> any RemoteAudioSource)? = nil
 
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
@@ -59,7 +63,9 @@ struct RemoteDesktopEnvironment {
             clipboard: RemoteSystemClipboard(),
             makeScreenController: { LiveRemoteScreenController() },
             isUnlockEnabled: { settings.isDesktopUnlockEnabled },
-            wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) })
+            wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) },
+            isAudioEnabled: { settings.isDesktopAudioEnabled },
+            makeAudioSource: { display in ScreenCaptureAudioSource(displayID: display.id) })
     }
 
     /// 接着的显示器，主显示器在前。名字取系统给的（「内建视网膜显示器」、外接显示器的型号）。

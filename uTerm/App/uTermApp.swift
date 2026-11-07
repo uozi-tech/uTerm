@@ -151,6 +151,7 @@ struct uTermApp: App {
                                                   keepAwake: settings.keepsAwakeForInternet)
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
                 remoteServer.desktopSettingsChanged()
+                if !settings.isDesktopAudioEnabled { remoteServer.endDesktopAudio(reason: "Mac 上关闭了「允许传输声音」") }
             }
             let server = controlServer
             NotificationCenter.default.addObserver(

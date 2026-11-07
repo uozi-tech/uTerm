@@ -58,6 +58,8 @@ final class RemoteHostServer {
         let canControl: Bool
         /// 收到过输入：从「查看」升级成「控制」（Mac 上的指示据此改字）。
         var isControlling = false
+        /// 正在把声音传给它（指示条上加一个扬声器）。
+        var hasAudio = false
     }
 
     private(set) var desktopViewer: DesktopViewer?
@@ -622,6 +624,18 @@ final class RemoteHostServer {
     func desktopSettingsChanged() {
         guard let viewer = desktopViewer else { return }
         connections[viewer.connection]?.sendScreenState()
+    }
+
+    func desktopAudioChanged(connection: RemoteHostConnection, channel: UInt32, on: Bool) {
+        guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel,
+              viewer.hasAudio != on else { return }
+        desktopViewer?.hasAudio = on
+    }
+
+    /// Mac 上关了「允许传输声音」：正在送的声音停掉（画面不受影响）。
+    func endDesktopAudio(reason: String) {
+        guard let viewer = desktopViewer, let holder = connections[viewer.connection] else { return }
+        holder.stopAudio(notify: reason)
     }
 
     /// 在 Mac 上结束桌面流（指示条上的「断开」、关掉开关）。

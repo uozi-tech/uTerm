@@ -17,6 +17,12 @@ final class RemoteHostConnection {
     private let desktopRoute: RemoteDesktopRoute
     /// 当前的桌面流（同一连接最多一路）。
     private var desktop: (channel: UInt32, streamer: RemoteDesktopStreamer)?
+    /// 当前桌面流上的声音（手机打开了扬声器才有）。
+    private var audio: RemoteAudioStreamer?
+    /// 每开一次声音 +1，手机据此认出新的一条声音流（序号从头算）。
+    private var audioStreamCounter: UInt16 = 0
+    /// 手机认得声音消息（`desktop-audio`）。
+    private var peerSupportsAudio = false
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -126,6 +132,7 @@ final class RemoteHostConnection {
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
+            peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
@@ -325,8 +332,15 @@ final class RemoteHostConnection {
         case .desktopCurtain:
             guard let request = try? RemoteJSON.decode(RemoteDesktopCurtainRequest.self, from: message.payload) else { return }
             setCurtain(request.on, channel: message.channel)
+        case .desktopAudio:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopAudioRequest.self, from: message.payload) else { return }
+            if request.enabled {
+                Task { await startAudio(request, channel: message.channel) }
+            } else {
+                stopAudio(notify: nil)
+            }
         case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
-             .desktopPause, .desktopAudio:
+             .desktopPause:
             // 已在连接队列上交给发送端（`RemoteDesktopRoute`），不会走到这里。
             break
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
@@ -578,6 +592,7 @@ extension RemoteHostConnection {
     /// 结束桌面流。`notify` = 告诉手机（Mac 上断开、被别的设备接管、采集停了）。
     func stopDesktop(channel: UInt32, notify: Bool, reason: String = "") {
         guard let current = desktop, current.channel == channel else { return }
+        stopAudio(notify: nil)
         desktop = nil
         desktopRoute.set(nil)
         current.streamer.stop()
@@ -615,6 +630,71 @@ extension RemoteHostConnection {
         cursorShapeTimer?.invalidate()
         cursorShapeTimer = nil
         lastCursorSignature = nil
+    }
+}
+
+// MARK: - 声音
+
+extension RemoteHostConnection {
+    /// 手机打开了扬声器：开一条声音流。先发格式，之后的声音包按它解。开不起来（Mac 上关了开关、编码器或采集起不来）
+    /// 回一条没有编码的格式，带上原因，桌面流不受影响。
+    fileprivate func startAudio(_ request: RemoteDesktopAudioRequest, channel: UInt32) async {
+        guard let current = desktop, current.channel == channel, peerSupportsAudio else { return }
+        stopAudio(notify: nil)
+        audioStreamCounter &+= 1
+        let stream = audioStreamCounter
+        let environment = server.desktopEnvironment
+        func refuse(_ message: String) {
+            link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(
+                RemoteDesktopAudioFormat(stream: stream, codec: nil, message: message))))
+        }
+        guard environment.isAudioEnabled(), let makeSource = environment.makeAudioSource else {
+            return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许传输声音")
+        }
+        guard let codec = request.codecs.first(where: { (try? RemoteAudioEncoder(codec: $0, bitrate: 64_000)) != nil }) else {
+            return refuse("Mac 上编不了手机能解的声音格式")
+        }
+        let display = current.streamer.display
+        let streamer = RemoteAudioStreamer(
+            link: link, channel: channel, stream: stream, codec: codec, datagrams: current.streamer.datagramChannel,
+            source: makeSource(display),
+            onSourceStopped: { [weak self] error in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        AppLogger.info("远程桌面声音采集停止：\(error?.localizedDescription ?? "无错误")", category: RemoteLog.category)
+                        self?.stopAudio(notify: "Mac 上的声音采集已停止")
+                    }
+                }
+            })
+        audio = streamer
+        do {
+            let format = try await streamer.start()
+            // 等采集起来的这段时间里，桌面流可能结束了、声音可能又被关了。
+            guard audio === streamer, desktop?.channel == channel, !isClosed else {
+                streamer.stop()
+                return
+            }
+            link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(format)))
+            server.desktopAudioChanged(connection: self, channel: channel, on: true)
+            AppLogger.info("远程桌面：开始向 \(self.peerName) 传输声音（\(codec.rawValue)）", category: RemoteLog.category)
+        } catch {
+            guard audio === streamer else { return }
+            audio = nil
+            streamer.stop()
+            refuse("Mac 上的声音采集没能启动：\(error.localizedDescription)")
+        }
+    }
+
+    /// 停掉声音。`notify` 不为 nil 时告诉手机原因（它会把扬声器按钮复位并提示）。
+    func stopAudio(notify reason: String?) {
+        guard let streamer = audio else { return }
+        audio = nil
+        streamer.stop()
+        server.desktopAudioChanged(connection: self, channel: streamer.channel, on: false)
+        if let reason {
+            link.send(RemoteMessage(.desktopAudioFormat, channel: streamer.channel, payload: RemoteJSON.encode(
+                RemoteDesktopAudioFormat(stream: streamer.stream, codec: nil, message: reason))))
+        }
     }
 }
 

@@ -107,6 +107,13 @@ struct RemoteDesktopIndicatorView: View {
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(UD.text)
                 .lineLimit(1)
+            if viewer.hasAudio {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(UD.text3)
+                    .help("正在把这台 Mac 的声音传过去")
+                    .accessibilityLabel("含声音")
+            }
             Button("断开", action: onDisconnect)
                 .buttonStyle(.plain)
                 .font(.system(size: 12.5, weight: .semibold))

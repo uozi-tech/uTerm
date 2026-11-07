@@ -47,6 +47,25 @@ final class RemoteDesktopSession {
     private(set) var screen = RemoteDesktopScreenState(locked: false, curtained: false, unlockAvailable: false)
     /// 这台 Mac 支持远程解锁（能收到锁屏状态、能发解锁请求）。
     var supportsUnlock: Bool { client.supportsUnlock }
+
+    /// 声音（调研 §16）。
+    enum AudioState: Equatable {
+        case off
+        /// 已经请求，等 Mac 回格式。
+        case starting
+        case playing
+        /// Mac 没开开关、采集停了、耳机拔了……附带原因。按钮复位为关。
+        case unavailable(String)
+    }
+    private(set) var audioState: AudioState = .off
+    /// 这台 Mac 能传声音。
+    var supportsAudio: Bool { client.supportsDesktopAudio }
+    /// 每秒刷新一次的声音读数（调试信息用）。
+    private(set) var audioStats = RemoteAudioReceiver.Snapshot()
+    @ObservationIgnored private var wantsAudio = false
+    @ObservationIgnored private let audioOutput: (any RemoteAudioOutput)?
+    @ObservationIgnored private var audioPlaying = false
+    nonisolated let audioReceiver: RemoteAudioReceiver
     @ObservationIgnored private var unlockWaiters: [UUID: CheckedContinuation<RemoteDesktopUnlockResult.Outcome, Never>] = [:]
 
     nonisolated let receiver: RemoteDesktopReceiver
@@ -72,9 +91,10 @@ final class RemoteDesktopSession {
     /// - Parameters:
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
     ///   - outputPixelFormat: 解出来的像素格式（显示用 4:2:0，测试比对用 BGRA）。
+    ///   - audioOutput: 声音放到哪里。nil = 系统扬声器（`RemoteAudioEnginePlayer`）；Mac 单测传一个不出声的。
     init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
          outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, displayID: UInt32? = nil,
-         cursorImages: Bool = false) {
+         cursorImages: Bool = false, audioOutput: (any RemoteAudioOutput)? = nil) {
         self.client = client
         self.displayID = displayID
         self.wantsCursorImages = cursorImages
@@ -82,6 +102,9 @@ final class RemoteDesktopSession {
         self.maxHeight = maxHeight
         self.codec = codec
         receiver = RemoteDesktopReceiver(outputPixelFormat: outputPixelFormat)
+        // 直连的抖动小；TCP 中继上关键帧前后包会成串晚到，起步缓深一些。
+        audioReceiver = RemoteAudioReceiver(config: client.path == .relay ? .relay : .direct)
+        self.audioOutput = audioOutput ?? RemoteAudioEnginePlayer()
     }
 
     var canControl: Bool { info?.canControl ?? false }
@@ -116,6 +139,8 @@ final class RemoteDesktopSession {
         }
         attachment = nil
         receiver.detach()
+        stopAudioPlayback()
+        audioReceiver.reset()
         state = .idle
     }
 
@@ -133,6 +158,7 @@ final class RemoteDesktopSession {
         let current = generation
         let receiver = self.receiver
         receiver.reset(generation: current)
+        let audioReceiver = self.audioReceiver
         let sink = RemoteChannelSink(
             onOutput: { _ in },
             onClosed: { [weak self] reason, ended in
@@ -161,6 +187,14 @@ final class RemoteDesktopSession {
                 case .desktopUnlockResult:
                     guard let result = try? RemoteJSON.decode(RemoteDesktopUnlockResult.self, from: message.payload) else { return }
                     DispatchQueue.main.async { MainActor.assumeIsolated { self?.unlockResultArrived(result) } }
+                case .desktopAudioFrame:
+                    audioReceiver.receive(frame: message.payload)
+                case .desktopAudioFormat:
+                    guard let format = try? RemoteJSON.decode(RemoteDesktopAudioFormat.self, from: message.payload) else { return }
+                    audioReceiver.receive(format: format)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self?.audioFormatArrived(format, generation: current) }
+                    }
                 default:
                     receiver.receive(message, from: link, generation: current)
                 }
@@ -171,6 +205,8 @@ final class RemoteDesktopSession {
                                                 cursorImages: wantsCursorImages ? true : nil)
         let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
             receiver.attachVideo(video, link: link, generation: current)
+            // 视频走数据报时声音也走数据报（Mac 那边同样按这条路选）。
+            video.startAudioReceiving { payload, _ in audioReceiver.receive(frame: payload) }
         })
         guard current == generation, !isStopped else {
             if info.failure == nil { client.stopDesktop(attached) }
@@ -185,6 +221,8 @@ final class RemoteDesktopSession {
         state = .streaming
         // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
         if backgrounded { sendPause(true) }
+        // 重连后重新要声音：Mac 那边的声音流随旧的桌面流一起结束了。
+        if wantsAudio { requestAudio(true) }
     }
 
     private func clipboardArrived(_ content: RemoteDesktopClipboard, generation arrived: Int) {
@@ -278,6 +316,64 @@ final class RemoteDesktopSession {
         return true
     }
 
+    // MARK: - 声音
+
+    /// 打开 / 关闭声音（手机工具栏上的扬声器按钮）。
+    func setAudio(_ on: Bool) {
+        guard supportsAudio else { return }
+        wantsAudio = on
+        if on {
+            audioState = .starting
+            startAudioPlayback()
+        } else {
+            audioState = .off
+            stopAudioPlayback()
+        }
+        requestAudio(on)
+    }
+
+    private func requestAudio(_ on: Bool) {
+        guard let attachment else { return }
+        let request = RemoteDesktopAudioRequest(enabled: on)
+        attachment.link.send(RemoteMessage(.desktopAudio, channel: attachment.channel, payload: RemoteJSON.encode(request)))
+    }
+
+    private func audioFormatArrived(_ format: RemoteDesktopAudioFormat, generation arrived: Int) {
+        guard arrived == generation, !isStopped, wantsAudio else { return }
+        if format.codec == nil {
+            wantsAudio = false
+            stopAudioPlayback()
+            audioState = .unavailable(format.message ?? "Mac 没有传声音过来")
+        } else {
+            audioState = .playing
+        }
+    }
+
+    private func startAudioPlayback() {
+        guard !audioPlaying, let audioOutput else { return }
+        let receiver = audioReceiver
+        audioOutput.onInterrupted = { [weak self] reason in self?.audioInterrupted(reason) }
+        do {
+            try audioOutput.start(pull: { receiver.pull(frames: $0) })
+            audioPlaying = true
+        } catch {
+            audioState = .unavailable("手机上的声音没能打开：\(error.localizedDescription)")
+            wantsAudio = false
+        }
+    }
+
+    private func stopAudioPlayback() {
+        guard audioPlaying else { return }
+        audioPlaying = false
+        audioOutput?.stop()
+    }
+
+    private func audioInterrupted(_ reason: String) {
+        guard wantsAudio else { return }
+        setAudio(false)
+        audioState = .unavailable(reason)
+    }
+
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。
     func requestKeyframe() {
         receiver.requestKeyframe(force: true)
@@ -323,6 +419,8 @@ final class RemoteDesktopSession {
                 let latency = receiver.latestLatency
                 // 读数没变（画面静止、连接中）就不写：`@Observable` 每次赋值都通知，读着它的界面会白白重算。
                 if self.stats != snapshot { self.stats = snapshot }
+                let audio = self.audioReceiver.snapshot()
+                if self.audioStats != audio { self.audioStats = audio }
                 if self.latency != latency { self.latency = latency }
             }
         }
@@ -503,6 +601,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         link = nil
         video?.stopVideoReceiving()
+        video?.stopAudioReceiving()
         video = nil
     }
 
