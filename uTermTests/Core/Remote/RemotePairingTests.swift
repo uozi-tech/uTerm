@@ -132,6 +132,69 @@ final class RemotePairingTests: XCTestCase {
         client.disconnect()
     }
 
+    func test_trusted_phone_name_follows_what_it_reports() async throws {
+        let rig = try await makeServer()
+        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneKey = try phoneIdentity.localIdentity().publicKey.rawRepresentation
+        let pairedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        // 早先配对时手机只报得出「iPhone」（iOS 16 起没有权限拿不到用户起的名字）。
+        try rig.server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "iPhone", publicKey: phoneKey,
+                                        pairedAt: pairedAt))
+
+        let client = phone(rig, expecting: RemotePeer(id: rig.macID, name: "测试 Mac", publicKey: rig.macKey,
+                                                      pairedAt: .now), identity: phoneIdentity)
+        await client.connect()
+        XCTAssertEqual(client.state, .connected)
+
+        let stored = try XCTUnwrap(rig.server.trustedPeers.first { $0.id == RemoteLocalDevice.id() })
+        XCTAssertEqual(stored.name, LANSyncCoordinator.localDeviceName(), "再连上来时换成手机现在报的名字")
+        XCTAssertEqual(stored.pairedAt, pairedAt, "配对时间不变")
+        XCTAssertEqual(stored.publicKey, phoneKey)
+        XCTAssertEqual(rig.server.trustedPeers.count, 1)
+        client.disconnect()
+    }
+
+    func test_alias_set_on_mac_survives_reconnect_and_names_the_connection() async throws {
+        let rig = try await makeServer()
+        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneKey = try phoneIdentity.localIdentity().publicKey.rawRepresentation
+        try rig.server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "iPhone", publicKey: phoneKey,
+                                        pairedAt: .now, model: "iPhone 16 Pro", alias: "办公室手机"))
+
+        let client = phone(rig, expecting: RemotePeer(id: rig.macID, name: "测试 Mac", publicKey: rig.macKey,
+                                                      pairedAt: .now), identity: phoneIdentity)
+        await client.connect()
+        XCTAssertEqual(client.state, .connected)
+
+        let stored = try XCTUnwrap(rig.server.trustedPeers.first { $0.id == RemoteLocalDevice.id() })
+        XCTAssertEqual(stored.alias, "办公室手机", "设备报的新名字不覆盖 Mac 上起的名字")
+        XCTAssertEqual(stored.model, "iPhone 16 Pro", "没报机型的连接不清掉上次记的机型")
+        XCTAssertEqual(rig.server.connectedDevices, ["办公室手机"])
+        client.disconnect()
+    }
+
+    func test_renaming_connected_phone_updates_its_live_name() async throws {
+        let rig = try await makeServer()
+        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneKey = try phoneIdentity.localIdentity().publicKey.rawRepresentation
+        let id = RemoteLocalDevice.id()
+        try rig.server.trust(RemotePeer(id: id, name: "iPhone", publicKey: phoneKey, pairedAt: .now))
+        let client = phone(rig, expecting: RemotePeer(id: rig.macID, name: "测试 Mac", publicKey: rig.macKey,
+                                                      pairedAt: .now), identity: phoneIdentity)
+        await client.connect()
+        XCTAssertEqual(client.state, .connected)
+
+        try rig.server.rename(id, to: "  卧室 iPad  ")
+        XCTAssertEqual(rig.server.trustedPeers.first?.displayName, "卧室 iPad")
+        XCTAssertEqual(rig.server.connectedDevices, ["卧室 iPad"], "正连着的不用等重连就换名字")
+
+        try rig.server.rename(id, to: "")
+        let reported = try XCTUnwrap(rig.server.trustedPeers.first)
+        XCTAssertNil(reported.alias, "留空 = 恢复设备自己报的名字")
+        XCTAssertEqual(rig.server.connectedDevices, [reported.name])
+        client.disconnect()
+    }
+
     func test_scanned_invitation_pairs_once_without_approval() async throws {
         let rig = try await makeServer()
         let invitation = try rig.server.makePairingInvitation()

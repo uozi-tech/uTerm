@@ -131,9 +131,14 @@ final class LANSyncCoordinator {
     /// 主线程上创建，首次安装启动时主线程就卡在授权弹窗上，20 s 后被系统启动看门狗杀掉
     /// （`process-launch watchdog transgression`，栈底正是这一行）。macOS 上它同样会做反向解析，
     /// DNS 不通时也能卡上好几秒。
+    ///
+    /// iOS 16 起没有 user-assigned-device-name 权限时 `UIDevice.current.name` 只回通用的「iPhone」/「iPad」
+    /// （与 `model` 相同），这时退回机型商品名（「iPhone 16 Pro」），几台设备在对端才分得开。
     static func localDeviceName() -> String {
         #if canImport(UIKit)
-        return UIDevice.current.name
+        let name = UIDevice.current.name
+        if name == UIDevice.current.model, let model = RemoteDeviceModel.current() { return model }
+        return name
         #elseif canImport(SystemConfiguration)
         return (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
         #else

@@ -257,7 +257,8 @@ final class RemoteMacClient: Identifiable {
                                     deviceName: LANSyncCoordinator.localDeviceName(),
                                     ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: phoneKey,
-                                    features: RemoteConstants.localFeatures, pairingProof: proof)
+                                    features: RemoteConstants.localFeatures, pairingProof: proof,
+                                    deviceModel: RemoteDeviceModel.current())
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: dialed.handshakeKeys)
             // 连上的不是要找的那台（同一地址上换了台机器，或有人冒充）：不往下走。

@@ -21,6 +21,11 @@ final class RemoteHostConnection {
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
     private(set) var peerID: UUID?
+
+    /// 在 Mac 上给这台设备改了名：正连着的这条立刻换成新名字，不用等它重连。
+    func peerRenamed(to name: String) {
+        peerName = name
+    }
     /// 手机声明了会定时 ping（老手机空闲时不发任何东西，不能按无声断开）。
     private var peerSendsHeartbeat = false
     /// 手机认得 `desktopClipboard`（老手机收到会当未知消息断开整条连接）。
@@ -124,17 +129,12 @@ final class RemoteHostConnection {
                 try await waitForKeyConfirmation()
             }
             if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
-                // 名册担保的设备第一次来：记进本机信任，设置里就能看到它、也能撤销。
-                if server.identity.peer(id: peer.deviceID) == nil {
-                    try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
-                                                pairedAt: Date()))
-                }
+                try rememberRecognized(peer)
                 authorize(.trusted)
                 return
             }
             if let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
-                try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
-                                            pairedAt: Date()))
+                try server.trust(newPeer(from: peer))
                 authorize(.approved)
                 return
             }
@@ -148,8 +148,7 @@ final class RemoteHostConnection {
                           thenClose: RemoteProtocolError.pairingRejected)
                 return
             }
-            try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
-                                        pairedAt: Date()))
+            try server.trust(newPeer(from: peer))
             authorize(.approved)
         } catch {
             AppLogger.info("远控握手失败：\(error.localizedDescription)", category: RemoteLog.category)
@@ -168,11 +167,30 @@ final class RemoteHostConnection {
               server.allowsInternetAccess(peer.deviceID) else {
             throw RemoteProtocolError.pairingRejected
         }
-        if server.identity.peer(id: peer.deviceID) == nil {
-            try server.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
-                                        pairedAt: Date()))
-        }
+        try rememberRecognized(peer)
         authorize(.trusted)
+    }
+
+    /// 认出来的设备：名册担保、第一次来的记进本机信任（设置里才看得到、能撤销）；早就信任的只跟着更新名字。
+    /// 名字只在首次配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，Mac 上永远是旧的。
+    /// 已信任的那条保留原公钥与配对时间：名册担保的新公钥不该顶掉本机记的那把。
+    private func rememberRecognized(_ peer: RemoteHello) throws {
+        guard var known = server.identity.peer(id: peer.deviceID) else {
+            try server.trust(newPeer(from: peer))
+            return
+        }
+        let reported = known
+        let name = peer.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { known.name = name }
+        // 老版本不报机型：保留上次记的，别清空。本机起的别名不动。
+        if let model = peer.deviceModel { known.model = model }
+        guard known != reported else { return }
+        try server.trust(known)
+    }
+
+    private func newPeer(from peer: RemoteHello) -> RemotePeer {
+        RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
+                   model: peer.deviceModel)
     }
 
     /// 等手机证明它真的持有握手里报的长期私钥。公钥是公开的，只凭握手消息信任会让冒充者被记进信任列表、
@@ -201,6 +219,8 @@ final class RemoteHostConnection {
 
     private func authorize(_ state: RemotePairingState) {
         isAuthorized = true
+        // 横幅、桌面指示条、设置里的「已连接」都按这个名字显示：在 Mac 上改过名就用改过的。
+        if let peerID, let known = server.identity.peer(id: peerID) { peerName = known.displayName }
         sendPairing(state)
         // 公网连接不管对方声明什么都要判死，否则不发东西的连接会一直占着名额。
         if peerSendsHeartbeat || origin.isInternet { link.startSilenceWatch(limit: server.peerSilenceLimit) }

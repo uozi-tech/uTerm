@@ -55,7 +55,7 @@ final class RemoteHostServer {
     struct DesktopViewer: Equatable {
         let connection: UUID
         let channel: UInt32
-        let deviceName: String
+        var deviceName: String
         let canControl: Bool
         /// 收到过输入：从「查看」升级成「控制」（Mac 上的指示据此改字）。
         var isControlling = false
@@ -262,7 +262,7 @@ final class RemoteHostServer {
         for entry in roster?.entries() ?? [] where entry.platform == .mobile && !identity.isBlocked(entry.id) {
             if byID[entry.id] == nil { byID[entry.id] = entry.peer }
         }
-        return byID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        return byID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
 
     /// 按设置起停中继注册。配置变了就换一条。
@@ -401,6 +401,21 @@ final class RemoteHostServer {
     func trust(_ peer: RemotePeer) throws {
         try identity.trust(peer)
         trustedPeers = identity.trustedPeers()
+    }
+
+    /// 在 Mac 上给已配对的设备改名（只存本机，不告诉对方）。传空或与设备报的名字相同 = 恢复跟着设备报的名字走。
+    func rename(_ peerID: UUID, to name: String) throws {
+        guard let peer = identity.peer(id: peerID) else { return }
+        let renamed = peer.renamed(name)
+        guard renamed != peer else { return }
+        try trust(renamed)
+        for connection in connections.values where connection.peerID == peerID {
+            connection.peerRenamed(to: renamed.displayName)
+        }
+        if desktopViewer.map({ connections[$0.connection]?.peerID == peerID }) == true {
+            desktopViewer?.deviceName = renamed.displayName
+        }
+        refreshConnectedDevices()
     }
 
     /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。

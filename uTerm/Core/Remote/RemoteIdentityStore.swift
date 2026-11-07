@@ -10,6 +10,27 @@ nonisolated struct RemotePeer: Codable, Equatable, Sendable, Identifiable {
     /// 对端长期公钥（X25519 原始 32 字节）。之后每次握手都用它认证对方。
     var publicKey: Data
     var pairedAt: Date
+    /// 对端握手时报的机型（如「iPhone 16 Pro」）。老版本不报，解出来是 nil。
+    var model: String? = nil
+    /// 本机给它起的名字（设置里「重命名」）。有了它就不再跟着对端报的名字走。
+    var alias: String? = nil
+
+    /// 列表、横幅里显示的名字：本机起的别名优先，其次对端报的名字。
+    var displayName: String { alias ?? name }
+
+    /// 本机改名后的样子。空白、或与对端报的名字相同 = 去掉别名，回到跟着对端报的名字走。
+    func renamed(_ input: String) -> RemotePeer {
+        var peer = self
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        peer.alias = trimmed.isEmpty || trimmed == name ? nil : trimmed
+        return peer
+    }
+
+    /// 副标题里的机型：与标题相同（名字本来就是退回的机型名）就不重复。
+    var modelDetail: String? {
+        guard let model, model != displayName else { return nil }
+        return model
+    }
 }
 
 /// 远控身份：本机长期密钥 + 已信任的对端列表。

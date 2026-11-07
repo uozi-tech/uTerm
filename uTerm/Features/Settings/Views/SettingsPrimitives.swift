@@ -410,7 +410,7 @@ struct SettingsCenteredBlock<Content: View>: View {
     }
 }
 
-/// 设备列表的图标：名字里带 iPad 的用 ipad，其余按 iPhone 画（配对信息里只有设备名）。
+/// 设备列表的图标：机型（老版本没报机型就用名字）里带 iPad 的用 ipad，其余按 iPhone 画。
 nonisolated func settingsDeviceSymbol(for name: String) -> String {
     name.localizedCaseInsensitiveContains("ipad") ? "ipad" : "iphone"
 }

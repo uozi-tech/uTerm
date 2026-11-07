@@ -443,6 +443,9 @@ nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     /// 手机扫码配对后第一次连接时带上的凭据（见 `RemotePairingInvitation.proof`）。握手消息整段进密钥推导，
     /// 中途改不了。
     var pairingProof: Data? = nil
+    /// 机型的商品名（如「iPhone 16 Pro」，见 `RemoteDeviceModel`）。只作展示；老版本不带这个键。
+    /// 握手按收到的原始字节做转录，多出来的键不影响老版本对端认证。
+    var deviceModel: String? = nil
 
     func supports(_ feature: String) -> Bool {
         features?.contains(feature) ?? false

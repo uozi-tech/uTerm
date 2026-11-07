@@ -65,9 +65,9 @@ struct RemoteInternetGroup: View {
                     }
                     ForEach(server.internetAccessCandidates) { peer in
                         let allowed = settings.internetDevices.contains(peer.id)
-                        SettingsListRow(icon: settingsDeviceSymbol(for: peer.name),
+                        SettingsListRow(icon: settingsDeviceSymbol(for: peer.model ?? peer.name),
                                         tint: allowed ? UD.accent : UD.text3,
-                                        title: peer.name,
+                                        title: peer.displayName,
                                         subtitle: allowed ? String(localized: "可经公网连接") : String(localized: "仅限局域网")) {
                             UDToggle(Binding(
                                 get: { settings.internetDevices.contains(peer.id) },
