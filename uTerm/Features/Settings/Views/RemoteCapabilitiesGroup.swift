@@ -59,8 +59,14 @@ struct RemoteCapabilitiesGroup: View {
                         .settingsNested()
                     }
                 }
+                SettingsRow(label: "允许传输声音",
+                            hint: "看屏幕时把这台 Mac 的声音传到手机，手机上打开扬声器才传。用的就是屏幕录制那项授权") {
+                    UDToggle(Binding(get: { settings.isDesktopAudioEnabled },
+                                     set: { settings.isDesktopAudioEnabled = $0 }))
+                }
+                .settingsNested()
                 SettingsRow(label: "允许远程解锁",
-                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠）") {
+                            hint: "Mac 锁屏时，配对过的手机能用登录密码解锁并进入帘幕（屏幕变黑、暂停本机键鼠和扬声器）") {
                     UDToggle(Binding(get: { settings.isDesktopUnlockEnabled },
                                      set: { settings.isDesktopUnlockEnabled = $0 }))
                 }
@@ -97,7 +103,8 @@ struct RemoteCapabilitiesGroup: View {
     }
 
     private func viewerSubtitle(_ viewer: RemoteHostServer.DesktopViewer) -> String {
-        let action = viewer.isControlling ? String(localized: "正在控制") : String(localized: "正在查看")
+        var action = viewer.isControlling ? String(localized: "正在控制") : String(localized: "正在查看")
+        if viewer.hasAudio { action += String(localized: " · 含声音") }
         return viewer.canControl ? action : action + String(localized: " · 只能查看（没有「辅助功能」授权）")
     }
 

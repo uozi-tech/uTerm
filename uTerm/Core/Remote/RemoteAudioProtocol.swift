@@ -154,3 +154,16 @@ nonisolated enum RemoteAudioPolicy {
     /// 停发期间每隔这么久发一个静音包，手机据此知道链路还在、不是丢了。
     static let silenceHeartbeatNanos: UInt64 = 1_000_000_000
 }
+
+/// 手机记住每台 Mac 要不要声音（远程桌面工具栏上的扬声器按钮），下次看这台 Mac 时照样打开。只在本机，不同步。
+nonisolated enum RemoteDesktopAudioPreference {
+    static func wantsAudio(mac: UUID, defaults: UserDefaults = .standard) -> Bool {
+        (defaults.stringArray(forKey: DefaultsKey.remoteDesktopAudioMacs) ?? []).contains(mac.uuidString)
+    }
+
+    static func setWantsAudio(_ on: Bool, mac: UUID, defaults: UserDefaults = .standard) {
+        var macs = Set(defaults.stringArray(forKey: DefaultsKey.remoteDesktopAudioMacs) ?? [])
+        if on { macs.insert(mac.uuidString) } else { macs.remove(mac.uuidString) }
+        defaults.set(macs.sorted(), forKey: DefaultsKey.remoteDesktopAudioMacs)
+    }
+}

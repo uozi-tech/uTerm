@@ -129,6 +129,13 @@ struct RemoteDesktopScreen: View {
                 unlockPhase = .idle
             }
         }
+        .onChange(of: session?.state) { _, state in
+            if state == .streaming, let session { restoreAudioIfWanted(session) }
+        }
+        .onChange(of: session?.audioState) { _, state in
+            // Mac 上没开、采集停了、拔了耳机：按钮已经复位，这里说一声为什么。
+            if case .unavailable(let reason) = state { showPasteNote(reason) }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
@@ -178,6 +185,10 @@ struct RemoteDesktopScreen: View {
             }
             .onTapGesture { showStats.toggle() }
             Spacer(minLength: 8)
+            if let session, session.supportsAudio, session.state == .streaming {
+                barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { toggleAudio(session) }
+                    .accessibilityLabel(audioOn ? "关闭声音" : "打开声音")
+            }
             barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
                 .accessibilityLabel("适配屏幕")
             if session?.canControl == true {
@@ -187,7 +198,7 @@ struct RemoteDesktopScreen: View {
                 }
                 .accessibilityLabel(keyBarShown ? "收起键盘" : "弹出键盘")
             }
-            // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留适配屏幕和键盘。
+            // 不常用的（粘贴、帘幕、解锁密码）收进一个菜单，顶栏只留声音、适配屏幕和键盘。
             if hasMoreActions {
                 MMenu { moreActions } label: { barIcon("ellipsis") }
                     .accessibilityLabel("更多")
@@ -253,6 +264,35 @@ struct RemoteDesktopScreen: View {
         }
     }
 
+    // MARK: - 声音
+
+    private var audioOn: Bool {
+        switch session?.audioState {
+        case .starting, .playing: return true
+        default: return false
+        }
+    }
+
+    private func toggleAudio(_ session: RemoteDesktopSession) {
+        let on = !audioOn
+        session.setAudio(on)
+        if let mac = client.macDeviceID { RemoteDesktopAudioPreference.setWantsAudio(on, mac: mac) }
+    }
+
+    /// 开流成功后：上次看这台 Mac 时开着声音就照样打开。
+    private func restoreAudioIfWanted(_ session: RemoteDesktopSession) {
+        guard session.supportsAudio, session.audioState == .off, let mac = client.macDeviceID,
+              RemoteDesktopAudioPreference.wantsAudio(mac: mac) else { return }
+        session.setAudio(true)
+    }
+
+    private var audioStatsLine: String {
+        guard let session, audioOn else { return "" }
+        let audio = session.audioStats
+        return String(format: " · 声音 缓冲 %d ms（目标 %d）补洞 %d", audio.bufferedMillis, audio.targetMillis,
+                      audio.counters.concealed)
+    }
+
     private var statusLine: String {
         guard let session else { return "正在连接…" }
         switch session.state {
@@ -264,7 +304,7 @@ struct RemoteDesktopScreen: View {
             // 延迟放最前：最先要看的是「点一下多久见到结果」，其余是排查用的分项。
             let latency = session.latency.map { "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）· " } ?? ""
             return base + " · " + latency + String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
-                                                   stats.megabitsPerSecond, stats.decodeMillis)
+                                                   stats.megabitsPerSecond, stats.decodeMillis) + audioStatsLine
         case .idle, .connecting: return "正在连接…"
         case .reconnecting: return "连接已断开，正在重新连接…"
         case .failed: return "连接失败"
