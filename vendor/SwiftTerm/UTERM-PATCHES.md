@@ -336,6 +336,30 @@ uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalSynch
 
 uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalBottomFollowTests.swift`。
 
+## 20. CoreGraphics 绘制按行缓存排版结果
+
+iOS 上 `setNeedsDisplay(rect)` 只标一小块也没用：`draw` 拿到的永远是整个视图（实测连最简单的 `UIView` 子类也一样），
+位图整块清掉重画，滚动时每一帧也是。所以「只重绘变过的行」在 iOS 上省不到任何东西，能省的是「没变的行别再排一遍版」。
+uTerm 配色下采样（54×58 的屏、优化构建）：建属性串约 25%、建 CTLine 约 11%、释放约 3%。
+
+`Apple/AppleTerminalView.swift`：绘制循环里原先每行都 `buildAttributedString` + 建 CTLine，改成走 `renderedRow`，按绝对行号缓存
+`ViewLineInfo` 和备好的段（CTLine + 每段属性）。命中条件 = 同一个行对象（滚动会在环形缓冲里轮换行对象）+ `RowRenderKey` 相等：
+行的 `generation`、双向文字段落修订号（同 Metal 渲染器）、列数，以及不在格子里、但会改变这一行样子的视图状态——这一行的选区、
+链接高亮（模式、修饰键、悬停范围）、闪烁相位、属性缓存代次（`resetCaches` / `colorsChanged` 里 +1，覆盖配色、字号、最低对比度）、
+自绘方块字形开关、双向文字策略、选区配色。CoreGraphics 路径拿不到脏行范围（iOS 总是整屏），所以视图状态只能放进键里。
+缓存只留绘制位置前后两屏，超过六屏就修剪。两端共用这段代码，Mac 也受益（Mac 滚动时同样整块重画）。
+
+读数（同一次运行、优化构建、模拟器）：不开缓存三种情形都是 3.8–4.1ms；开缓存后内容没变（滚动、回弹的每一帧）2.1ms，
+只变一行（Claude Code 思考时转圈那一行）2.2ms，每行都变 3.7ms。
+
+注意：软折行连成的段落里一行变了，整段都要重排（双向文字按段落排版，修订号按段落算）。Claude Code 按终端宽度自己断行、输出硬换行，
+不受影响；长的软折行输出会。
+没做：剩下的时间主要在 CoreGraphics 记录字形时比对颜色（`colorResourceForColor`，约 17%）、光栅化字形和填背景。
+试过把缓存的 `CGColor` 转成标准 sRGB，没有变化；把背景填充改成 `.copy` 只在上游默认的透明背景下有用，uTerm 用实色背景，填充本来就走 `memset`。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalRowCacheTests.swift`（缓存视图与全新视图逐字节比截图，键里每一项都做过破坏性 A/B）
+和 `uTermMobileTests/Probes/TerminalDrawCostProbeTests.swift`（同一次运行里的相对开销）。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）

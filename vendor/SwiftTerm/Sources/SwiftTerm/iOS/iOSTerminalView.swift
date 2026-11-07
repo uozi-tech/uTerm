@@ -256,6 +256,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    /// uTerm patch #20: laid-out rows by absolute buffer row, see `renderedRow`.
+    var rowRenderCache: [Int: RowRenderCacheEntry] = [:]
+    /// uTerm patch #20: bumped whenever `attributes` is reset (colors, font, contrast).
+    var rowRenderGeneration: UInt64 = 0
 
     /// uTerm patch #13: how long `queuePendingDisplay` waits before the next
     /// redraw. The host raises it while a large repaint is draining, so the
