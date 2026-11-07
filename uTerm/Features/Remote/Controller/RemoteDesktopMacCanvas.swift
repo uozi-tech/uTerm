@@ -169,14 +169,15 @@ final class RemoteDesktopCanvasNSView: NSView {
         refreshCapture()
     }
 
-    private var fittedWindow = false
+    /// 上次按哪块屏幕的尺寸对过窗口。
+    private var fittedFor: CGSize?
 
-    /// 第一次拿到那台屏幕的尺寸：把窗口高度对上它的比例（宽度不动，放不下就按屏幕高度缩宽度），画面上下不留黑边。
-    /// 之后用户怎么拉都不再管。全屏时不动。
+    /// 拿到（或换了）那台屏幕的尺寸：把窗口高度对上它的比例（宽度不动，放不下就按屏幕高度缩宽度），画面上下不留黑边。
+    /// 同一块屏幕只对一次，之后用户怎么拉都不再管。全屏时不动。
     private func fitWindowOnce() {
-        guard !fittedWindow, let window, !window.styleMask.contains(.fullScreen), bounds.width > 0,
+        guard fittedFor != viewport.contentSize, let window, !window.styleMask.contains(.fullScreen), bounds.width > 0,
               let screen = window.screen ?? NSScreen.main else { return }
-        fittedWindow = true
+        fittedFor = viewport.contentSize
         let target = Self.fittedFrame(window: window.frame, canvas: bounds.size, display: viewport.contentSize,
                                       visible: screen.visibleFrame)
         if target != window.frame { window.setFrame(target, display: true, animate: true) }

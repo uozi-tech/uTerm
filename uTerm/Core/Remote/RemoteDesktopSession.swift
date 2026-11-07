@@ -54,6 +54,8 @@ final class RemoteDesktopSession {
     private let codec: RemoteVideoCodec
     private let maxWidth: Int
     private let maxHeight: Int
+    /// 要看的显示器（nil = 那台 Mac 的主显示器）。`switchDisplay` 改它再重开流。
+    private(set) var displayID: UInt32?
     @ObservationIgnored private var attachment: RemoteAttachment?
     @ObservationIgnored private var pasteUploader: RemoteDesktopPasteUploader?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
@@ -67,8 +69,9 @@ final class RemoteDesktopSession {
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
     ///   - outputPixelFormat: 解出来的像素格式（显示用 4:2:0，测试比对用 BGRA）。
     init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
-         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, displayID: UInt32? = nil) {
         self.client = client
+        self.displayID = displayID
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.codec = codec
@@ -110,6 +113,14 @@ final class RemoteDesktopSession {
         state = .idle
     }
 
+    /// 换一块显示器看：停掉当前这路，按新的 id 重开（Mac 那边换采集源与注入坐标系）。
+    func switchDisplay(to id: UInt32) async {
+        guard id != info?.displayID else { return }
+        displayID = id
+        stop()
+        await start()
+    }
+
     /// 开一条流。失败（Mac 拒绝）抛 `RemoteAttachError.rejected`。
     private func open() async throws {
         generation += 1
@@ -142,7 +153,7 @@ final class RemoteDesktopSession {
             }
         )
         let request = RemoteDesktopStartRequest(requestID: UUID(), maxWidth: maxWidth, maxHeight: maxHeight, codec: codec,
-                                                sidecarRefine: true, latencyStats: true)
+                                                displayID: displayID, sidecarRefine: true, latencyStats: true)
         let (attached, info) = try await client.startDesktop(request, sink: sink, prepareVideo: { video, link in
             receiver.attachVideo(video, link: link, generation: current)
         })

@@ -265,6 +265,12 @@ final class FakeDesktopMac {
     let screen = FakeScreenController()
     let display = RemoteDesktopDisplay(id: 7, bounds: CGRect(x: 0, y: 0, width: 1512, height: 982),
                                        pixelWidth: 3024, pixelHeight: 1964)
+    /// 第二块显示器（外接 1080p，放在主显示器右边）。只在 `hasSecondDisplay` 时报给主控端。
+    let secondDisplay = RemoteDesktopDisplay(id: 9, bounds: CGRect(x: 1512, y: 0, width: 1920, height: 1080),
+                                             pixelWidth: 1920, pixelHeight: 1080)
+    var hasSecondDisplay = false
+    /// 每次开流用的是哪块显示器。
+    private(set) var openedDisplays: [UInt32] = []
     let clipboard = FakeClipboard()
     lazy var injector = RecordingInputSink(clipboard: clipboard)
     var detail = false
@@ -280,8 +286,19 @@ final class FakeDesktopMac {
             isEnabled: { [weak self] in self?.enabled ?? false },
             screenCaptureAuthorized: { [weak self] in self?.screenAuthorized ?? false },
             canPostEvents: { [weak self] in self?.canControl ?? false },
-            display: { [weak self] _ in self?.display },
-            makeSource: { [weak self] _, width, height, _ in
+            display: { [weak self] requested in
+                guard let self else { return nil }
+                return requested == self.secondDisplay.id && self.hasSecondDisplay ? self.secondDisplay : self.display
+            },
+            listDisplays: { [weak self] in
+                guard let self, self.hasSecondDisplay else { return [] }
+                return [self.display, self.secondDisplay].map {
+                    RemoteDesktopDisplaySummary(id: $0.id, name: $0.id == 7 ? "内建显示器" : "外接显示器",
+                                                width: $0.bounds.width, height: $0.bounds.height, isMain: $0.id == 7)
+                }
+            },
+            makeSource: { [weak self] display, width, height, _ in
+                self?.openedDisplays.append(display.id)
                 let source = SyntheticFrameSource(width: width, height: height, detail: self?.detail ?? false)
                 self?.sources.append(source)
                 return source

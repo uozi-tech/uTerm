@@ -42,7 +42,7 @@ nonisolated struct RemoteDesktopStartRequest: Codable, Equatable, Sendable {
     var maxWidth: Int
     var maxHeight: Int
     var codec: RemoteVideoCodec
-    /// nil = 主显示器。多显示器切换留的口子，本期 Mac 只认主显示器。
+    /// nil = 主显示器。要看别的显示器时填 `RemoteDesktopInfo.displays` 里的 id。
     var displayID: UInt32? = nil
     /// 手机能另开一个解码器解旁路精修帧（`RemoteDesktopFrame.Flags.sidecar`）。HEVC 时 Mac 据此改用
     /// 10-bit 主流 + 旁路精修；nil / false（老手机）时照旧 8-bit + 主流里精修。老 Mac 不认这个键，照旧发。
@@ -92,6 +92,18 @@ nonisolated struct RemoteDesktopInfo: Codable, Equatable, Sendable {
     var controlNote: String? = nil
     /// 这条流的视频走数据报通道。
     var videoDatagrams: Bool? = nil
+    /// Mac 上此刻接着的全部显示器（老 Mac 不报，为 nil）。看哪一块由开流请求的 `displayID` 定。
+    var displays: [RemoteDesktopDisplaySummary]? = nil
+}
+
+/// 一块显示器的简介：给主控端的「切换显示器」菜单用。
+nonisolated struct RemoteDesktopDisplaySummary: Codable, Equatable, Hashable, Sendable {
+    var id: UInt32
+    var name: String
+    /// 点尺寸。
+    var width: Double
+    var height: Double
+    var isMain: Bool
 }
 
 /// Mac → 手机：锁屏与帘幕状态（`desktopScreenState`，桌面通道）。只发给声明了 `desktop-unlock` 的手机。

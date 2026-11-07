@@ -14,6 +14,8 @@ struct RemoteDesktopEnvironment {
     var canPostEvents: @MainActor () async -> Bool
     /// 要看的显示器（nil = 主显示器）。
     var display: @MainActor (_ requested: UInt32?) -> RemoteDesktopDisplay?
+    /// 此刻接着的全部显示器（主显示器在前）。
+    var listDisplays: @MainActor () -> [RemoteDesktopDisplaySummary] = { [] }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
         -> any RemoteDesktopFrameSource
     var makeInjector: @MainActor (_ display: RemoteDesktopDisplay) -> any RemoteDesktopInputSink
@@ -40,6 +42,7 @@ struct RemoteDesktopEnvironment {
             screenCaptureAuthorized: { await RemoteDesktopPermissions.screenCaptureGranted() },
             canPostEvents: { await RemoteDesktopPermissions.postEventsGranted() },
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
+            listDisplays: { RemoteDesktopEnvironment.activeDisplays() },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)
             },
@@ -49,6 +52,28 @@ struct RemoteDesktopEnvironment {
             makeScreenController: { LiveRemoteScreenController() },
             isUnlockEnabled: { settings.isDesktopUnlockEnabled },
             wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) })
+    }
+
+    /// 接着的显示器，主显示器在前。名字取系统给的（「内建视网膜显示器」、外接显示器的型号）。
+    static func activeDisplays() -> [RemoteDesktopDisplaySummary] {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        guard count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        let names = Dictionary(NSScreen.screens.compactMap { screen -> (CGDirectDisplayID, String)? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            return (CGDirectDisplayID(number.uint32Value), screen.localizedName)
+        }, uniquingKeysWith: { first, _ in first })
+        let main = CGMainDisplayID()
+        return ids.prefix(Int(count)).map { id in
+            let bounds = CGDisplayBounds(id)
+            return RemoteDesktopDisplaySummary(id: id, name: names[id] ?? String(localized: "显示器 \(id)"),
+                                               width: bounds.width, height: bounds.height, isMain: id == main)
+        }
+        .sorted { $0.isMain && !$1.isMain }
     }
 
     /// 显示器的全局点坐标与原生像素尺寸。

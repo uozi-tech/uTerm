@@ -116,6 +116,38 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertFalse(should(control: false), "只能查看")
     }
 
+        func test_switching_to_another_display_reopens_the_stream_on_it() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        rig.mac.hasSecondDisplay = true
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 1920, maxHeight: 1080)
+        defer { session.stop() }
+        await session.start()
+        let first = try XCTUnwrap(session.info)
+        XCTAssertEqual(first.displayID, 7, "不指定就看主显示器")
+        XCTAssertEqual(first.displays?.map(\.id), [7, 9])
+        XCTAssertEqual(first.displays?.first?.isMain, true)
+        await session.switchDisplay(to: 9)
+        XCTAssertEqual(session.state, .streaming)
+        let second = try XCTUnwrap(session.info)
+        XCTAssertEqual(second.displayID, 9)
+        XCTAssertEqual(second.displayWidth, 1920)
+        XCTAssertEqual(rig.mac.openedDisplays, [7, 9])
+        await session.switchDisplay(to: 9)
+        XCTAssertEqual(rig.mac.openedDisplays, [7, 9], "已经在看这块就不重开")
+    }
+
+    func test_old_mac_without_display_list_and_single_display_get_no_menu_data() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 1920, maxHeight: 1080)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertNil(session.info?.displays, "只有一块（或老 Mac）时不报")
+        let main = RemoteDesktopDisplaySummary(id: 1, name: "内建视网膜显示器", width: 1512, height: 982, isMain: true)
+        XCTAssertEqual(RemoteDesktopContent.displayTitle(main), "内建视网膜显示器（主显示器，1512×982）")
+    }
+
         // MARK: - 本机剪贴板
 
     private func image(width: Int, height: Int, noise: Bool, type: UTType) -> Data {

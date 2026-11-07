@@ -207,6 +207,9 @@ struct RemoteDesktopContent: View {
     private var buttons: some View {
         HStack(spacing: 4) {
             if session.state == .streaming {
+                if let displays = session.info?.displays, displays.count > 1 {
+                    displayMenu(displays)
+                }
                 if session.canControl {
                     barButton("command", active: sendSystemShortcuts,
                               help: sendSystemShortcuts
@@ -232,6 +235,40 @@ struct RemoteDesktopContent: View {
                 NSApp.keyWindow?.toggleFullScreen(nil)
             }
         }
+    }
+
+    /// 那台 Mac 接着几块显示器时：选看哪一块（重开这路画面）。
+    private func displayMenu(_ displays: [RemoteDesktopDisplaySummary]) -> some View {
+        Menu {
+            ForEach(displays, id: \.id) { display in
+                Button {
+                    Task { await session.switchDisplay(to: display.id) }
+                } label: {
+                    if display.id == session.info?.displayID {
+                        Label(Self.displayTitle(display), systemImage: "checkmark")
+                    } else {
+                        Text(Self.displayTitle(display))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "display.2")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(String(localized: "切换显示器"))
+        .accessibilityLabel(Text("切换显示器"))
+    }
+
+    nonisolated static func displayTitle(_ display: RemoteDesktopDisplaySummary) -> String {
+        let size = "\(Int(display.width))×\(Int(display.height))"
+        return display.isMain ? String(localized: "\(display.name)（主显示器，\(size)）")
+                              : String(localized: "\(display.name)（\(size)）")
     }
 
     /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。

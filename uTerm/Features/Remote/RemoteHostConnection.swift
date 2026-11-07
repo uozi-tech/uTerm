@@ -539,7 +539,8 @@ extension RemoteHostConnection {
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
             controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的「设置 › 远程控制」里授权后重启 uTerm，即可控制。",
-            videoDatagrams: video != nil ? true : nil)
+            videoDatagrams: video != nil ? true : nil,
+            displays: { let all = environment.listDisplays(); return all.isEmpty ? nil : all }())
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
         Task {
