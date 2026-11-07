@@ -6,27 +6,63 @@
 
 ## 部署
 
-需要 Docker Compose，并放行同一端口号的 **TCP 和 UDP**（默认 47310）。云服务器的安全组要手动放行。
+### 让 AI 装（推荐）
+
+在 uTerm 设置 › 远程控制 › 公网接入 点「让 AI 部署…」，复制提示词贴给装了 uterm 技能的 AI 工具（Claude Code、Codex 等）。它会在你 uTerm 里保存的一台主机上跑下面的安装脚本、经 `utermctl relay import` 把配置交给 uTerm、再用 `utermctl relay check` 测通。成员密钥只从服务器文件直接进 uTerm 的钥匙串，不经过 AI。流程见 `skills/uterm/references/relay.md`。
+
+### 安装脚本
+
+Linux + systemd，amd64 或 arm64。放行同一端口号的 **TCP 和 UDP**（默认 47310），云服务器的安全组要手动放行。
+
+```sh
+curl -fsSL https://downloads.example.com/uTerm/relay/install.sh \
+  | sudo sh -s -- install --port 47310 --public-host relay.example.com [--name 家里] [--open-firewall]
+```
+
+脚本从 OSS 下载对应架构的二进制、按 `SHA256SUMS` 校验，装到 `/usr/local/bin/uterm-relay`，写 `/etc/uterm-relay/relay.env` 和 `uterm-relay.service`（DynamicUser，数据在 `/var/lib/uterm-relay`）。设备配置写到运行 sudo 的那个用户的 `~/.config/uterm-relay/client.json`（0600），然后在 uTerm 里导入：
+
+```sh
+utermctl relay import -H <这台主机>   # 或 设置 › 远程控制 › 导入配置，选这个文件
+utermctl relay check
+```
+
+脚本只输出 `key=value` 摘要，不打印密钥。其它子命令：
+
+| 子命令 | 作用 |
+|---|---|
+| `update [--version V]` | 换成最新版（或 V）并重启；起不来自动换回旧版 |
+| `status` | 安装版本、最新版本、服务状态、在线主机 |
+| `client-config` | 重新生成设备配置（`rotate` 之后，或换了 SSH 用户） |
+
+uTerm 会提醒新版本；中继是经 `relay import` 导入的话，设置页里能一键更新。
+
+### Docker / 手动编译
+
+需要源码。Docker Compose：
 
 ```sh
 RELAY_PUBLIC_HOST=relay.example.com docker compose up -d --build
 docker compose exec relay /uterm-relay config > uterm-relay.json
 ```
 
-不用 Docker（Go 1.25 或更新，只用标准库）：
+或者（Go 1.25 或更新，只用标准库）：
 
 ```sh
 go build -o uterm-relay ./cmd/uterm-relay
 RELAY_DATA=/var/lib/uterm-relay RELAY_PUBLIC_HOST=relay.example.com ./uterm-relay
 ```
 
-`uterm-relay.json` 含成员私钥，等同口令：不要提交到仓库，也不要发到公开渠道。导入后可以删掉服务器上的 `member.key`，之后 `config` 就打印不出来了，要新配置只能 `rotate`。
+`uterm-relay.json` 含成员私钥，等同口令：不要提交到仓库，也不要发到公开渠道。
+
+### 发布（维护者）
+
+`make relay-publish`：交叉编译两个架构、生成 `SHA256SUMS` 与 `latest.json`，连同 `install.sh` 传到 OSS 的 `uTerm/relay/`。版本取 `cmd/uterm-relay/main.go` 的 `version`；hello 里会带上它，uTerm 据此提醒更新。
 
 ## 导入
 
-- **Mac：** 设置 › 远程控制 › 中继服务器，选配置文件。
+- **Mac：** 设置 › 远程控制 › 中继服务器，选配置文件；或 `utermctl relay import`。
 - **同一 Apple ID 的手机：** 经 iCloud 钥匙串自动同步。
-- **其它手机：** 在 Mac 设置里显示二维码，手机在「我的 Mac」扫码；或运行 `uterm-relay config-url` 自己生成二维码。
+- **其它手机：** Mac 设置里「分享到我的设备…」（AirDrop / 信息，手机上点开链接确认导入），或「显示二维码」后在手机「我的 Mac」扫码。
 
 然后在 Mac 上打开「允许经公网接入」，并勾选允许的设备。名册里的设备不会自动获得公网接入权限。
 
