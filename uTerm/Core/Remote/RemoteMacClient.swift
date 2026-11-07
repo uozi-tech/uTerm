@@ -183,9 +183,25 @@ final class RemoteMacClient: Identifiable {
     }
 
     /// 更新能走的路。已经连着的不受影响，下次连接或重连时按新的走。
+    ///
+    /// 多出一条路（局域网又找到了它、刚配好中继）是 Mac 可能连得上了的迹象：正在退避的标签马上重试。
+    /// 没人看的标签在 Mac 长时间离线后最长一分钟才试一次（`RemoteReconnectPolicy`），靠这里不让 Mac 回来时干等。
     func updateRoutes(endpoint: NWEndpoint?, internetDialer: (@Sendable () async throws -> RemoteDialedPath)?) {
+        let gainedRoute = (self.endpoint == nil && endpoint != nil) || (self.internetDialer == nil && internetDialer != nil)
         self.endpoint = endpoint
         self.internetDialer = internetDialer
+        if gainedRoute { retryGate.kick() }
+    }
+
+    /// 中继上一次报的这台 Mac 在不在线（只有界面在显示在线状态时才会去问，见 `RemoteMacDirectory`）。
+    @ObservationIgnored private var seenOnRelay = false
+
+    /// 中继报的在线情况。从不在变成在：Mac 醒了或刚打开公网接入，正在退避的标签马上重试。
+    /// 只用作叫醒的信号，不拿它拦建连：这份结果可能是十几秒前的，Mac 不在时建连自己会很快失败。
+    func relayPresenceChanged(_ isOnRelay: Bool) {
+        let cameOnline = isOnRelay && !seenOnRelay
+        seenOnRelay = isOnRelay
+        if cameOnline { retryGate.kick() }
     }
 
     /// 连接断了、可以不打扰任何人地自动连回去。
@@ -367,6 +383,9 @@ final class RemoteMacClient: Identifiable {
             state = .connected
             link?.startHeartbeat(heartbeat)
             resumeOutcome()
+            // 一个标签把连接接回来了：同一台 Mac 的其它标签与桌面流还睡在各自的退避里（没人看的最长一分钟），
+            // 叫醒它们在这条现成的连接上接入，不必各自再等、再建连。
+            retryGate.kick()
         case .awaitingApproval:
             state = .awaitingApproval(pendingCode)
         case .rejected:

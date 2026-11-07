@@ -445,9 +445,12 @@ final class RemoteMacDirectory {
     private func rebuild() {
         macs = debugMacs + Self.knownMacs(trusted: identity.trustedPeers(), roster: roster?.entries() ?? [],
                                          blocked: identity.isBlocked, online: online, relayHosts: relayHosts)
-        // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。
+        // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。局域网又找到它、中继报它上线时，
+        // 客户端会叫醒正在退避的标签马上重试（Mac 长时间离线后没人看的标签退避可达一分钟）。
         for mac in macs {
-            clients[mac.id]?.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+            guard let client = clients[mac.id] else { continue }
+            client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+            client.relayPresenceChanged(mac.isOnRelay)
         }
         #if DEBUG
         runDebugMatrixIfRequested()

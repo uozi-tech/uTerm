@@ -83,6 +83,7 @@ final class MobileTerminalController {
         didSet {
             guard isForeground != oldValue else { return }
             updatePacing()
+            syncRemoteWatch()
         }
     }
 
@@ -95,6 +96,7 @@ final class MobileTerminalController {
             guard isAppInBackground != oldValue else { return }
             (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
             updatePacing()
+            syncRemoteWatch()
         }
     }
 
@@ -114,6 +116,12 @@ final class MobileTerminalController {
         outputPump.pacing = next
         // 换到前台档时截断后台档那一拍的等待。
         if next == .foreground { outputPump.restartFlushLoop() }
+    }
+
+    /// 远控标签：告诉后端此刻有没有人看着它（与按前台档喂字节同一个判定）。Mac 长时间离线时，没人看的标签
+    /// 重连退避才会放长到最长一分钟；切回来的那一刻后端立刻重试（见 `RemoteReconnectPolicy`）。
+    private func syncRemoteWatch() {
+        (connection as? RemoteTerminalBackend)?.setWatched(isForeground && !isAppInBackground)
     }
 
     typealias FlushPacing = TerminalFlushPacing
@@ -324,6 +332,7 @@ final class MobileTerminalController {
                 self?.isReconnecting = false
             }
         }
+        syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
         let exitStream = conn.exitStream
         outputPump.reset()

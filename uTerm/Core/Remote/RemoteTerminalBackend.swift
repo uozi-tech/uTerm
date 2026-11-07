@@ -23,6 +23,11 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     private var attachment: RemoteAttachment?
     private var isClosed = false
     private var reconnectTask: Task<Void, Never>?
+    /// 有没有人在看这个标签（前台标签且 App 在前台）。决定断线久了以后退避能不能放长，见 `RemoteReconnectPolicy`。
+    /// 放在锁里而不是 actor 状态：界面切标签时同步写进来，几次快速切换不会因为异步任务乱序而留下旧值。
+    /// 默认 true：不告诉它的调用方（Mac 端、测试）保持以前的退避。
+    private nonisolated let watchLock = NSLock()
+    private nonisolated(unsafe) var watchedStorage = true
 
     init(client: RemoteMacClient, sessionID: UUID) {
         self.client = client
@@ -97,6 +102,19 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
         exitContinuation.finish()
     }
 
+    /// 界面告诉后端这个标签此刻有没有人看。从没人看变成有人看时立刻叫醒重连：它可能正睡在最长一分钟的退避里，
+    /// 用户切过来不能对着「正在重连」干等。叫醒的是同一台 Mac 的所有等待者，它们同时醒来会合并成一次建连
+    ///（`RemoteMacClient.connect` 复用在途的那次）；没在重连时没有等待者，叫醒什么也不做。
+    nonisolated func setWatched(_ watched: Bool) {
+        let becameWatched = watchLock.withLock { () -> Bool in
+            defer { watchedStorage = watched }
+            return watched && !watchedStorage
+        }
+        if becameWatched { client.retryGate.kick() }
+    }
+
+    private nonisolated var isWatched: Bool { watchLock.withLock { watchedStorage } }
+
     func verifyConnectionAlive() async -> Bool {
         attachment != nil || reconnectTask != nil
     }
@@ -115,10 +133,14 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
 
     /// 连接断了（Wi-Fi 切换、App 被挂起、Mac 睡眠唤醒）：退避重连，接上后 Mac 会先发一份快照。
     /// App 在后台时任务本来就被挂起，回到前台自然继续，不需要另外接生命周期事件。
+    /// 退避节奏见 `RemoteReconnectPolicy`：有人看着时与以前一样封顶 5 秒；没人看且断了很久才放长。
     private func reconnectLoop() async {
-        var delay: Duration = .milliseconds(500)
+        let outageStart = ContinuousClock.now
+        var failures = 0
         while !Task.isCancelled && !isClosed {
-            if await client.retryGate.wait(delay) { delay = .milliseconds(500) }
+            let delay = RemoteReconnectPolicy.delay(failures: failures, outage: ContinuousClock.now - outageStart,
+                                                    watched: isWatched)
+            if await client.retryGate.wait(delay) { failures = 0 }
             guard !Task.isCancelled, !isClosed else { break }
             do {
                 try await attach()
@@ -127,7 +149,7 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
                 end(message)
                 break
             } catch {
-                delay = min(delay * 2, .seconds(5))
+                failures += 1
             }
         }
         reconnectTask = nil
