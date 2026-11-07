@@ -38,7 +38,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
-                                          RemoteFeature.desktopPause]
+                                          RemoteFeature.desktopPause, RemoteFeature.linkFlow]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!

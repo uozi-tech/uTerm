@@ -34,8 +34,24 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     private var onClose: (@Sendable (Error?) -> Void)?
     private var onWritable: (@Sendable () -> Void)?
 
-    /// 已交给网络栈、还没发完的字节数（只在 `queue` 上读）。
+    /// 已交给网络栈、还没发完的字节数（只在 `queue` 上读）。启用了链路排队时也算上排着的。
     private(set) var inflightBytes = 0
+
+    /// 链路层排队与端到端计量（两端都声明 `link-flow` 才有，见 `RemoteLinkFlow`）。nil = 消息直接交给网络栈。
+    private var flow: RemoteLinkFlow?
+    /// 排着的消息交出去之后要回调的完成，以及它计入 `inflightBytes` 的字节数。
+    private var flowCompletions: [Int: (count: Int, completion: (@Sendable (Error?) -> Void)?)] = [:]
+    private var nextFlowToken = 0
+    /// 收方的 `linkAck` 已经约好了。
+    private var ackScheduled = false
+
+    /// 启用了链路排队（诊断和测试用，只在 `queue` 上读）。
+    var usesLinkFlow: Bool { flow != nil }
+    /// 链路排队的读数（诊断和测试用，只在 `queue` 上读）。
+    var linkFlowState: (inPipe: Int, budget: Int, queued: Int, rate: Double?, roundTripNanos: UInt64?)? {
+        guard let flow else { return nil }
+        return (flow.inPipe, flow.budget, flow.queuedBytes, flow.deliveryRate, flow.minimumRoundTripNanos)
+    }
 
     // 存活判定（只在 `queue` 上读写）。
     private var lastReceived = DispatchTime.now()
@@ -124,6 +140,10 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 }
                 self.sendCipher = RemoteCipher(key: keys.send)
                 self.receiveCipher = RemoteCipher(key: keys.receive)
+                // 两端从第一条密文起各自计数，口径一致（见 `RemoteLinkFlow`）。
+                if hello.supports(RemoteFeature.linkFlow) && remote.supports(RemoteFeature.linkFlow) {
+                    self.flow = RemoteLinkFlow()
+                }
                 (self.transport as? RemoteP2PTransport)?.installMediaKeys(
                     .media(sessionSend: keys.send, sessionReceive: keys.receive))
                 self.isEstablished = true
@@ -222,6 +242,10 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             return
         }
         if message.kind == .ping { pingSentAt = .now() }
+        if flow != nil {
+            enqueueOnFlow(message, countsTowardBackpressure: countsTowardBackpressure, completion: completion)
+            return
+        }
         let framed: Data
         do {
             framed = try RemoteFrameBuffer.frame(try sendCipher!.seal(message.encoded()))
@@ -241,6 +265,80 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 self.fail(error)
             } else if wasBlocked && self.inflightBytes <= RemoteConstants.maxInflightBytes {
                 self.onWritable?()
+            }
+        }
+    }
+
+    // MARK: - 链路排队（`link-flow`）
+
+    private func enqueueOnFlow(_ message: RemoteMessage, countsTowardBackpressure: Bool,
+                               completion: (@Sendable (Error?) -> Void)?) {
+        // 计入背压的口径与直接发时一致：封装后的帧长（长度前缀 4 + 密文，密文比明文多 16 字节的校验）。
+        let count = countsTowardBackpressure ? RemoteMessage.headerSize + message.payload.count + 20 : 0
+        let token = nextFlowToken
+        nextFlowToken &+= 1
+        flowCompletions[token] = (count, completion)
+        inflightBytes += count
+        flow!.enqueue(message, token: token)
+        drainFlow()
+    }
+
+    /// 把闸门放行的记录交给网络栈。对端每次报来收到多少、或有新消息排进来时调用。
+    private func drainFlow() {
+        while !isClosed, let record = flow?.next() {
+            let framed: Data
+            do {
+                framed = try RemoteFrameBuffer.frame(try sendCipher!.seal(record.message.encoded()))
+            } catch {
+                fail(error)
+                return
+            }
+            flow?.recordSent(bytes: framed.count, now: DispatchTime.now().uptimeNanoseconds)
+            lastSent = .now()
+            let token = record.token
+            transport.send(framed) { [weak self] error in
+                guard let self else { return }
+                if let token { self.finishFlowMessage(token, error) }
+                if let error { self.fail(error) }
+            }
+        }
+    }
+
+    private func finishFlowMessage(_ token: Int, _ error: Error?) {
+        guard let entry = flowCompletions.removeValue(forKey: token) else { return }
+        let wasBlocked = inflightBytes > RemoteConstants.maxInflightBytes
+        inflightBytes -= entry.count
+        entry.completion?(error)
+        if error == nil, wasBlocked, inflightBytes <= RemoteConstants.maxInflightBytes { onWritable?() }
+    }
+
+    /// 收方：回一个 `linkAck`。不排队、不计数（双方都不计它，免得为确认而确认）。
+    private func sendLinkAck() {
+        guard !isClosed, let total = flow?.takeAck() else { return }
+        guard let sealed = try? sendCipher?.seal(RemoteMessage(.linkAck, payload: RemoteLinkAck.encode(total)).encoded()),
+              let framed = try? RemoteFrameBuffer.frame(sealed) else { return }
+        transport.send(framed) { [weak self] error in
+            if let error { self?.fail(error) }
+        }
+    }
+
+    /// 收方：一条记录到了，按需回 `linkAck`。
+    private func noteReceived(frameBytes: Int) {
+        guard let decision = flow?.recordReceived(bytes: frameBytes + 4, now: DispatchTime.now().uptimeNanoseconds) else {
+            return
+        }
+        switch decision {
+        case .none:
+            break
+        case .now:
+            sendLinkAck()
+        case .at(let due):
+            guard !ackScheduled else { return }
+            ackScheduled = true
+            queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: due)) { [weak self] in
+                guard let self else { return }
+                self.ackScheduled = false
+                self.sendLinkAck()
             }
         }
     }
@@ -301,7 +399,19 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 continue
             }
             do {
-                let message = try RemoteMessage(decoding: try receiveCipher!.open(frame))
+                var message = try RemoteMessage(decoding: try receiveCipher!.open(frame))
+                if flow != nil {
+                    if message.kind == .linkAck {
+                        flow?.receiveAck(try RemoteLinkAck.decode(message.payload), now: DispatchTime.now().uptimeNanoseconds)
+                        drainFlow()
+                        continue
+                    }
+                    noteReceived(frameBytes: frame.count)
+                    if message.kind == .linkFragment {
+                        guard let whole = try flow?.reassemble(message.payload) else { continue }
+                        message = whole
+                    }
+                }
                 if message.kind == .pong, let pingSentAt {
                     let now = DispatchTime.now().uptimeNanoseconds
                     latestRoundTrip = TimeInterval(now &- pingSentAt.uptimeNanoseconds) / 1_000_000_000
@@ -398,6 +508,12 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// 所以等这一帧真正交出去之后再关。
     func send(_ message: RemoteMessage, thenClose error: Error?) {
         queue.async {
+            if self.flow != nil, !self.isClosed, self.sendCipher != nil {
+                // 排在已经排着的消息后面（同一通道保序），交出去再关；对端一直不收也最多等 2 s。
+                self.sendOnQueue(message) { _ in self.fail(error) }
+                self.queue.asyncAfter(deadline: .now() + 2) { self.fail(error) }
+                return
+            }
             guard !self.isClosed, self.sendCipher != nil,
                   let sealed = try? self.sendCipher!.seal(message.encoded()),
                   let framed = try? RemoteFrameBuffer.frame(sealed) else {
@@ -421,6 +537,10 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         helloWaiter?.resume(throwing: error ?? RemoteProtocolError.closed)
         helloWaiter = nil
         transport.cancel()
+        let pending = flowCompletions.values.compactMap(\.completion)
+        flowCompletions.removeAll()
+        flow = nil
+        for completion in pending { completion(error ?? RemoteProtocolError.closed) }
         let handler = onClose
         onMessage = nil
         onClose = nil
