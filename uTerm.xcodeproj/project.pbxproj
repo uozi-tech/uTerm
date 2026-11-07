@@ -254,6 +254,7 @@
 				Features/Remote/Desktop/ScreenCaptureFrameSource.swift,
 				Features/Remote/Controller/RemoteDesktopEventMapper.swift,
 				Features/Remote/Controller/RemoteDesktopMacCanvas.swift,
+				Features/Remote/Controller/RemoteDesktopKeyboardCapture.swift,
 				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
 				Features/Remote/Controller/RemoteDesktopWindow.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,

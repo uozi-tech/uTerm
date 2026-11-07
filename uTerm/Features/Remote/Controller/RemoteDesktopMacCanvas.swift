@@ -9,6 +9,10 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
     let displaySize: CGSize?
     /// ⌘V 时本机剪贴板里的内容粘过去了（或读不出来）：外面显示一句提示。
     var onPasteNote: (String) -> Void = { _ in }
+    /// 把 ⌘Tab、⌘空格、⌘W 这些系统 / 本机快捷键也发过去（要「辅助功能」授权）。
+    var sendSystemShortcuts = true
+    /// 截取系统快捷键挂不上（没有「辅助功能」授权）。
+    var onShortcutCaptureFailed: () -> Void = {}
 
     func makeNSView(context: Context) -> RemoteDesktopCanvasNSView {
         RemoteDesktopCanvasNSView(session: session)
@@ -16,6 +20,8 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
 
     func updateNSView(_ view: RemoteDesktopCanvasNSView, context: Context) {
         view.onPasteNote = onPasteNote
+        view.onShortcutCaptureFailed = onShortcutCaptureFailed
+        view.sendSystemShortcuts = sendSystemShortcuts
         view.update(displaySize: displaySize)
     }
 
@@ -36,12 +42,20 @@ struct RemoteDesktopMacCanvas: NSViewRepresentable {
 ///   中文等由那台 Mac 的输入法处理。⌘W 例外（关本机标签，由窗口拦下）；⌘V 在本机剪贴板有图片 / 文字时
 ///   改成「粘贴到那台 Mac」。系统级快捷键（⌘Tab、⌘空格）本机系统先拿走，发不过去。
 /// - 失焦（切走窗口）时把按着的键和鼠标键全部抬起，那边不会卡住修饰键。
+/// - 「发送系统快捷键」开着时，画布有焦点期间挂键盘事件钩子（`RemoteDesktopKeyboardCapture`），
+///   ⌘Tab / ⌘空格 / 调度中心 / ⌘W / ⌘Q 也发过去；切走窗口或 app 立刻摘掉。
 @MainActor
 final class RemoteDesktopCanvasNSView: NSView {
     private let session: RemoteDesktopSession
     private let displayLayer = AVSampleBufferDisplayLayer()
     private let cursorLayer = CAShapeLayer()
     var onPasteNote: (String) -> Void = { _ in }
+    var onShortcutCaptureFailed: () -> Void = {}
+    var sendSystemShortcuts = true {
+        didSet { if sendSystemShortcuts != oldValue { refreshCapture() } }
+    }
+    private let capture = RemoteDesktopKeyboardCapture()
+    private var reportedCaptureFailure = false
 
     private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero)
     private var trackingArea: NSTrackingArea?
@@ -78,8 +92,14 @@ final class RemoteDesktopCanvasNSView: NSView {
         layer?.addSublayer(cursorLayer)
         attachReceiver()
         AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
-        NotificationCenter.default.addObserver(self, selector: #selector(windowResignedKey),
-                                               name: NSWindow.didResignKeyNotification, object: nil)
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(windowResignedKey),
+                           name: NSWindow.didResignKeyNotification, object: nil)
+        for name in [NSWindow.didBecomeKeyNotification, NSApplication.didBecomeActiveNotification,
+                     NSApplication.didResignActiveNotification] {
+            center.addObserver(self, selector: #selector(focusChanged), name: name, object: nil)
+        }
+        capture.onKey = { [weak self] event in self?.captured(event) }
     }
 
     @available(*, unavailable)
@@ -91,6 +111,7 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     func teardown() {
         AppLogger.info("远程桌面画布：拆除", category: RemoteLog.category)
+        capture.set(active: false)
         releaseAll()
         NotificationCenter.default.removeObserver(self)
         session.receiver.setHandlers(onImage: nil, onCursor: nil)
@@ -145,6 +166,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         viewport.contentSize = size
         applyFit()
         fitWindowOnce()
+        refreshCapture()
     }
 
     private var fittedWindow = false
@@ -359,14 +381,55 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     // MARK: - 失焦
 
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        DispatchQueue.main.async { [weak self] in self?.refreshCapture() }
+        return accepted
+    }
+
     override func resignFirstResponder() -> Bool {
+        capture.set(active: false)
         releaseAll()
         return super.resignFirstResponder()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshCapture()
+    }
+
     @objc private func windowResignedKey(_ note: Notification) {
         guard (note.object as? NSWindow) === window else { return }
+        capture.set(active: false)
         releaseAll()
+    }
+
+    @objc private func focusChanged(_ note: Notification) {
+        refreshCapture()
+    }
+
+    // MARK: - 系统快捷键
+
+    /// 按现在的焦点挂上 / 摘掉键盘钩子。
+    private func refreshCapture() {
+        let active = RemoteDesktopKeyboardCapture.shouldCapture(
+            enabled: sendSystemShortcuts, appActive: NSApp.isActive, windowKey: window?.isKeyWindow ?? false,
+            canvasFocused: window?.firstResponder === self, canControl: session.canControl)
+        capture.set(active: active)
+        if active, capture.failed, !reportedCaptureFailure {
+            reportedCaptureFailure = true
+            onShortcutCaptureFailed()
+        }
+    }
+
+    /// 钩子截下的按键：和窗口收到的按键同一套处理（⌘V 照样先看本机剪贴板）。
+    private func captured(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown: keyDown(with: event)
+        case .keyUp: keyUp(with: event)
+        case .flagsChanged: flagsChanged(with: event)
+        default: break
+        }
     }
 
     /// 按着的键和鼠标键全部抬起：切走窗口后本机收不到抬起，那边会一直以为 ⌘ 按着。

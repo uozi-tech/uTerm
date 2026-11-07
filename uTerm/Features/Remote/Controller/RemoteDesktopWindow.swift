@@ -151,6 +151,7 @@ struct RemoteDesktopContent: View {
     @State private var note: String?
     @State private var noteTask: Task<Void, Never>?
     @State private var showStats = false
+    @AppStorage(DefaultsKey.remoteDesktopSendSystemShortcuts) private var sendSystemShortcuts = true
     @State private var password = ""
     @State private var unlocking = false
     @State private var unlockError: String?
@@ -165,7 +166,12 @@ struct RemoteDesktopContent: View {
                 RemoteDesktopMacCanvas(
                     session: session,
                     displaySize: session.info.map { CGSize(width: $0.displayWidth, height: $0.displayHeight) },
-                    onPasteNote: { show($0) })
+                    onPasteNote: { show($0) },
+                    sendSystemShortcuts: sendSystemShortcuts,
+                    onShortcutCaptureFailed: {
+                        show(String(localized: "在「系统设置 › 隐私与安全性 › 辅助功能」里允许 uTerm，才能把 ⌘Tab 等系统快捷键发过去"),
+                             seconds: 6)
+                    })
                 stateOverlay
                 lockOverlay
             }
@@ -201,6 +207,14 @@ struct RemoteDesktopContent: View {
     private var buttons: some View {
         HStack(spacing: 4) {
             if session.state == .streaming {
+                if session.canControl {
+                    barButton("command", active: sendSystemShortcuts,
+                              help: sendSystemShortcuts
+                                ? String(localized: "正在把 ⌘Tab、⌘空格、⌘W 等快捷键发给那台 Mac（点按改为留在本机）")
+                                : String(localized: "⌘Tab、⌘空格、⌘W 等快捷键留在本机（点按改为发给那台 Mac）")) {
+                        sendSystemShortcuts.toggle()
+                    }
+                }
                 barButton("gauge.with.dots.needle.33percent", active: showStats,
                           help: showStats ? String(localized: "隐藏延迟与帧率") : String(localized: "显示延迟与帧率")) {
                     showStats.toggle()
@@ -413,11 +427,11 @@ struct RemoteDesktopContent: View {
         }
     }
 
-    private func show(_ text: String) {
+    private func show(_ text: String, seconds: Double = 2.5) {
         noteTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) { note = text }
         noteTask = Task {
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             withAnimation(.easeIn(duration: 0.2)) { note = nil }
         }

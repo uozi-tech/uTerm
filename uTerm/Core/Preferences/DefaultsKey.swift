@@ -87,6 +87,8 @@ nonisolated enum DefaultsKey {
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。
     static let remoteDesktopKeyboardLanguage = "remote.desktop.keyboardLanguage"
+    /// macOS：控制另一台 Mac 时把系统快捷键（⌘Tab、⌘空格、⌘W…）也发过去。
+    static let remoteDesktopSendSystemShortcuts = "remote.desktop.sendSystemShortcuts"
     /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
     static let remoteRelayManagedHosts = "remote.relay.managedHosts"
     /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。

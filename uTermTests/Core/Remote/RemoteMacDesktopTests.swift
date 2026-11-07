@@ -102,7 +102,21 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(tall.height - 38, (tall.width * 1920 / 1080).rounded(), accuracy: 1)
     }
 
-    // MARK: - 本机剪贴板
+    func test_shortcut_capture_only_while_this_window_has_the_keyboard() {
+        func should(_ enabled: Bool = true, app: Bool = true, key: Bool = true, focused: Bool = true,
+                    control: Bool = true) -> Bool {
+            RemoteDesktopKeyboardCapture.shouldCapture(enabled: enabled, appActive: app, windowKey: key,
+                                                       canvasFocused: focused, canControl: control)
+        }
+        XCTAssertTrue(should())
+        XCTAssertFalse(should(false), "开关关着")
+        XCTAssertFalse(should(app: false), "切到别的 app：立刻放开整台机器的键盘")
+        XCTAssertFalse(should(key: false), "切到本 app 的别的窗口")
+        XCTAssertFalse(should(focused: false), "焦点在输入框（如锁屏密码）上")
+        XCTAssertFalse(should(control: false), "只能查看")
+    }
+
+        // MARK: - 本机剪贴板
 
     private func image(width: Int, height: Int, noise: Bool, type: UTType) -> Data {
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
