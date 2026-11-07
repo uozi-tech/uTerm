@@ -142,9 +142,16 @@ extension TerminalAttentionCenter: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let text = response.notification.request.content.userInfo[Self.sessionIDKey] as? String
+        let userInfo = response.notification.request.content.userInfo
+        let text = userInfo[Self.sessionIDKey] as? String
+        // 这里是全 app 唯一的通知 delegate：中继更新提醒也从这里回来。
+        let isRelayUpdate = userInfo[RemoteRelayUpdateMonitor.notificationKey] != nil
         Task { @MainActor in
-            self.handleNotificationClick(userInfo: text.map { [Self.sessionIDKey: $0] } ?? [:])
+            if isRelayUpdate {
+                RemoteRelayUpdateMonitor.handleNotificationClick()
+            } else {
+                self.handleNotificationClick(userInfo: text.map { [Self.sessionIDKey: $0] } ?? [:])
+            }
         }
         completionHandler()
     }

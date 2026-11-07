@@ -103,6 +103,16 @@ DEFAULT_PAYLOADS = {
                               "output": "[sudo] password for deploy:\nroot", "truncated": False,
                               "requestedAt": "2026-10-22T01:00:00Z"}},
     "disconnect": {},
+    "relay-import": {"relay": {"name": "home", "endpoint": "relay.example.com:47310",
+                               "relayID": "be7ee457a6407b1a", "managedHost": "prod-web",
+                               "internetEnabled": True, "registered": False}},
+    "relay-check": {"relay": {"name": "home", "endpoint": "relay.example.com:47310",
+                              "relayID": "be7ee457a6407b1a", "latestVersion": "1.1.0",
+                              "updateAvailable": False,
+                              "check": {"tcp": "ok", "auth": "ok", "udp": "failed", "rttMs": 42,
+                                        "serverVersion": "1.1.0", "onlineHosts": 1,
+                                        "problems": ["UDP 47310 没有回应"]}},
+                    "message": "TCP 通 · 认证 通 · UDP 不通"},
 }
 
 
@@ -638,6 +648,15 @@ def exercise(server, root, rejecting):
     equal(last(server)["action"], "terminal-open", "terminal-open")
     run_cli(server, ["disconnect", "-H", "prod-web"])
     equal(last(server)["action"], "disconnect", "disconnect")
+    run_cli(server, ["relay", "import", "-H", "prod-web"])
+    equal(last(server)["action"], "relay-import", "relay import")
+    equal(last(server)["host"], "prod-web", "relay import 带 host")
+    check("force" not in last(server) and "path" not in last(server), "relay import 缺省不带 force / path")
+    run_cli(server, ["relay", "import", "-H", "prod-web", "--path", "/root/c.json", "--replace"])
+    equal(last(server)["force"], True, "relay import --replace → force")
+    equal(last(server)["path"], "/root/c.json", "relay import --path")
+    run_cli(server, ["relay", "check"])
+    equal(last(server)["action"], "relay-check", "relay check")
 
     print("格式化")
     proc = run_cli(server, ["hosts", "--format", "table"])
@@ -657,6 +676,9 @@ def exercise(server, root, rejecting):
     check("磁盘水位" in proc.stdout, "quickCommands 表")
     proc = run_cli(server, ["forward", "list", "--format", "table"])
     check("15432" in proc.stdout, "rules 表")
+    proc = run_cli(server, ["relay", "check", "--format", "table"])
+    check("UDP 不通" in proc.stdout and "check.rttMs" in proc.stdout and "42" in proc.stdout,
+          "relay check 表：摘要 + 字段")
     proc = run_cli(server, ["terminals", "--format", "table"])
     check("workspace" in proc.stdout, "terminals 表")
     # stat 表：类型单列，mode 与 ls 一样是 & 0o7777 的八进制（33188 → 0644）。

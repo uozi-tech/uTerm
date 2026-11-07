@@ -7,6 +7,8 @@ nonisolated struct RemoteRelayHello: Decodable, Sendable {
     var version: Int
     var relayID: String
     var nonce: String
+    /// 中继的构建版本（1.1.0 起才有；更早的版本没有这个字段）。
+    var server: String?
 }
 
 nonisolated struct RemoteRelayRequest: Encodable, Sendable {

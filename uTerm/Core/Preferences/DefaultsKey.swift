@@ -87,6 +87,13 @@ nonisolated enum DefaultsKey {
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。
     static let remoteDesktopKeyboardLanguage = "remote.desktop.keyboardLanguage"
+    /// macOS：中继 relayID → 装着它的已保存主机（ServerProfile.id），本机自己管，不同步。
+    static let remoteRelayManagedHosts = "remote.relay.managedHosts"
+    /// macOS：最近一次从 OSS 取到的中继最新版本与取的时间。
+    static let remoteRelayLatestVersion = "remote.relay.latestVersion"
+    static let remoteRelayLatestCheckedAt = "remote.relay.latestCheckedAt"
+    /// macOS：已经为哪个中继新版本发过通知（每个版本只提醒一次）。
+    static let remoteRelayNotifiedVersion = "remote.relay.notifiedVersion"
 
     static let lanSyncDeviceID = "lanSync.deviceID"
     static let lanSyncHostPairingCode = "lanSync.hostPairingCode"

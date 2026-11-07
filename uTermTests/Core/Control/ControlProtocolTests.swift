@@ -253,6 +253,7 @@ final class ControlProtocolTests: XCTestCase {
             .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
             .forwardStart, .forwardStop,
             .terminalSend, .terminalOpen,
+            .relayImport,
         ]
         let execCapable: Set<ControlAction> = [.run, .runMany, .quickRun, .terminalSend, .terminalOpen]
 

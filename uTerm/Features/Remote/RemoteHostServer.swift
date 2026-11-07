@@ -66,6 +66,10 @@ final class RemoteHostServer {
     private(set) var relayLink: RemoteRelayHostLink?
     /// 存中继配置的地方。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
+    /// 中继版本与新版本提醒。
+    let relayUpdates: RemoteRelayUpdateMonitor
+    /// 上次 `updateInternetAccess` 的「保持唤醒」，命令行换配置后重连时沿用。
+    @ObservationIgnored private var keepsAwakeForInternet = false
     @ObservationIgnored private var internetActivity: NSObjectProtocol?
     /// 远程桌面依赖的外部能力（采集、注入、授权、开关）。测试里换成合成的。
     @ObservationIgnored var desktopEnvironment: RemoteDesktopEnvironment
@@ -122,8 +126,10 @@ final class RemoteHostServer {
          peerSilenceLimit: TimeInterval = RemoteHeartbeat.standard.peerSilenceLimit,
          keyConfirmationTimeout: Duration = RemoteConstants.handshakeTimeout,
          relayStore: RemoteRelayConfigStore? = nil,
+         relayUpdates: RemoteRelayUpdateMonitor = .inert(),
          desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
         self.relayStore = relayStore
+        self.relayUpdates = relayUpdates
         self.localFeatures = localFeatures
         self.peerSilenceLimit = peerSilenceLimit
         self.keyConfirmationTimeout = keyConfirmationTimeout
@@ -261,6 +267,7 @@ final class RemoteHostServer {
 
     /// 按设置起停中继注册。配置变了就换一条。
     func updateInternetAccess(enabled: Bool, keepAwake: Bool) {
+        keepsAwakeForInternet = keepAwake
         relayConfig = relayStore?.load() ?? relayConfig
         if enabled, let relayConfig {
             if relayLink?.config != relayConfig {
@@ -277,6 +284,11 @@ final class RemoteHostServer {
         internetAccessChanged()
     }
 
+    /// 钥匙串里当前的中继配置（没有存储的测试里用内存里那份）。
+    func loadRelayConfig() -> RemoteRelayConfig? {
+        relayStore?.load() ?? relayConfig
+    }
+
     /// 导入中继配置。文件不对时返回 false。
     @discardableResult
     func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
@@ -286,13 +298,17 @@ final class RemoteHostServer {
             AppLogger.info("保存中继配置失败：\(error.localizedDescription)", category: RemoteLog.category)
             return false
         }
+        if relayConfig?.relayID != config.relayID { relayUpdates.reset() }
         relayConfig = config
+        // 开着公网接入时立刻换到新中继上（设置页之外的入口——命令行——不会再去调 updateInternetAccess）。
+        if relayLink != nil { updateInternetAccess(enabled: true, keepAwake: keepsAwakeForInternet) }
         return true
     }
 
     func clearRelayConfig() {
         relayStore?.clear()
         relayConfig = nil
+        relayUpdates.reset()
     }
 
     /// App Nap 会把心跳拖到几分钟一次，中继就把这台 Mac 摘掉了。只有用户选了「保持唤醒」才阻止闲置睡眠。

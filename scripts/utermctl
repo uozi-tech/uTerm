@@ -314,6 +314,17 @@ def build_parser():
     p.add_argument("--terminal", "-t", required=True, help="会话 id 或其唯一前缀")
     p.add_argument("--wait", type=float, help="最多等几秒，默认 90，封顶 1800；没跑完回 state=running")
 
+    # --- relay ---
+    relay = sub.add_parser("relay", parents=[shared], help="自建中继：导入配置、测试连通")
+    relay_sub = relay.add_subparsers(dest="relay_action", required=True)
+    p = relay_sub.add_parser("import", parents=[shared],
+                             help="让 uTerm 经 SFTP 读主机上安装脚本写的设备配置并存进钥匙串（密钥不经过本客户端）")
+    p.add_argument("--host", "-H", required=True, help="装着中继的主机名或 UUID")
+    p.add_argument("--path", help="设备配置在远端的路径，默认 ~/.config/uterm-relay/client.json")
+    p.add_argument("--replace", action="store_true", help="已经导入了另一台中继时换成这一台")
+    relay_sub.add_parser("check", parents=[shared],
+                         help="从这台 Mac 测已导入的中继：TCP、成员认证、UDP，附带版本")
+
     p = add("disconnect", "松开命令行连接池对主机的持有")
     p.add_argument("--host", "-H", help="不给就释放全部")
 
@@ -341,7 +352,7 @@ def transfer_options(p, force_help):
 
 def resolved_action(args):
     """把 `sftp ls` / `forward list` / `terminal read` 拼成协议里的 kebab action。"""
-    for group in ("sftp", "forward", "terminal"):
+    for group in ("sftp", "forward", "terminal", "relay"):
         leaf = getattr(args, group + "_action", None)
         if args.action == group and leaf:
             return "%s-%s" % (group, leaf)
@@ -412,6 +423,8 @@ def make_request(args):
 
     if getattr(args, "enter", False):
         request["enter"] = True
+    if action == "relay-import" and getattr(args, "replace", False):
+        request["force"] = True
 
     return request
 
@@ -602,7 +615,7 @@ def exit_code_for(response):
         return EXIT_GATED
     if code.endswith("_not_found") or code.endswith("_ambiguous"):
         return EXIT_NOT_FOUND
-    if (code in ("connect_failed", "auth_failed", "forward_failed")
+    if (code in ("connect_failed", "auth_failed", "forward_failed", "relay_unreachable")
             or code.startswith("host_key_") or code.endswith("_refused")):
         return EXIT_REMOTE
     if code in ("command_timeout", "handler_timeout", "client_timeout"):
@@ -1377,6 +1390,21 @@ def terminal_run_output(response):
 RUN_BATCH_CODES = ("run_failed", "run_partial_failure")
 
 
+RELAY_FIELDS = ["name", "endpoint", "relayID", "managedHost", "internetEnabled", "registered",
+                "latestVersion", "updateAvailable"]
+RELAY_CHECK_FIELDS = ["tcp", "auth", "udp", "rttMs", "serverVersion", "onlineHosts", "mappedAddress"]
+
+
+def relay_output(response, fmt):
+    relay = response.get("relay") or {}
+    check = relay.get("check") or {}
+    rows = [[key, cell(relay.get(key))] for key in RELAY_FIELDS]
+    rows += [["check." + key, cell(check.get(key))] for key in RELAY_CHECK_FIELDS if check]
+    header = ["字段", "值"]
+    table = render_table(header, rows) if fmt == "table" else render_csv(header, rows)
+    return (response.get("message") or "") + "\n\n" + table
+
+
 def render(response, fmt, args):
     if not response.get("ok"):
         # run-many / quick-run 失败时 results 才是有用的东西（逐台的 errorCode），
@@ -1413,6 +1441,10 @@ def render(response, fmt, args):
 
     if action in ("run", "run-many", "quick-run"):
         return run_output(response)
+
+    relay = response.get("relay")
+    if isinstance(relay, dict):
+        return relay_output(response, fmt)
 
     table = rows_of(response)
     if table is None:

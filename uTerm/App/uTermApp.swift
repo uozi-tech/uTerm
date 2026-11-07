@@ -106,6 +106,7 @@ struct uTermApp: App {
         let remoteServer = RemoteHostServer(registry: terminalRegistry,
                                             roster: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteCloudRoster(),
                                             relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
+                                            relayUpdates: BackgroundLaunchMode.isRunningInTestHost ? .inert() : RemoteRelayUpdateMonitor(),
                                             desktopEnvironment: .live(settings: remoteSettings))
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
         _remoteSettings = State(initialValue: remoteSettings)
@@ -125,7 +126,8 @@ struct uTermApp: App {
                 settings: controlSettings,
                 modelContainer: modelContainer,
                 forwardingCoordinator: forwardingCoordinator,
-                registry: terminalRegistry
+                registry: terminalRegistry,
+                relay: remoteServer
             )
             LaunchForwardingBootstrap.start(
                 modelContainer: modelContainer,
@@ -190,6 +192,10 @@ struct uTermApp: App {
     private func installTerminalWindowOpener() {
         let open = openWindow
         UTermLifecycleDelegate.openWelcome = { open(id: "welcome") }
+        RemoteRelayUpdateMonitor.openSettings = {
+            UTermLifecycleDelegate.showGUI()
+            open(id: SettingsWindow.id)
+        }
         terminalRegistry.openTerminalWindow = { serverID in
             UTermLifecycleDelegate.showGUI()
             let windowID = UUID()
@@ -252,7 +258,8 @@ struct uTermApp: App {
         settings: ControlSettings,
         modelContainer: ModelContainer,
         forwardingCoordinator: ForwardingCoordinator,
-        registry: TerminalSessionRegistry
+        registry: TerminalSessionRegistry,
+        relay: any ControlRelayManaging
     ) {
         let handler = ControlHandler.shared
         handler.attach(ControlHandler.Dependencies(
@@ -260,7 +267,8 @@ struct uTermApp: App {
             modelContainer: modelContainer,
             forwardingCoordinator: forwardingCoordinator,
             pool: ControlConnectionPool.shared,
-            registry: registry
+            registry: registry,
+            relay: relay
         ))
         settings.observe { settings in
             if settings.isEnabled {

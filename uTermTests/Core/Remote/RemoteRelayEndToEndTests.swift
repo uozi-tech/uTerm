@@ -17,6 +17,27 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         return try XCTUnwrap(RemoteRelayConfig(importing: Data(json.utf8)))
     }
 
+    /// 「测试连接」：TCP、成员认证、UDP 三项都通，并读到中继的构建版本；换一把成员密钥认证就不过。
+    func testCheckPassesAgainstARealRelay() async throws {
+        let config = try relayConfig()
+        let result = await RemoteRelayCheck.run(config: config)
+        XCTAssertEqual(result.tcp, .ok, result.problems.joined(separator: "\n"))
+        XCTAssertEqual(result.auth, .ok, result.problems.joined(separator: "\n"))
+        XCTAssertEqual(result.udp, .ok, result.problems.joined(separator: "\n"))
+        XCTAssertNotNil(result.mappedAddress)
+        XCTAssertNotNil(result.onlineHosts)
+        if let built = ProcessInfo.processInfo.environment["UTERM_RELAY_VERSION"], !built.isEmpty {
+            XCTAssertEqual(result.serverVersion, built, "hello 里的版本应是这次编出来的中继")
+        }
+
+        var stranger = config
+        stranger.key = P256.Signing.PrivateKey().rawRepresentation.base64EncodedString()
+        let refused = await RemoteRelayCheck.run(config: stranger)
+        XCTAssertEqual(refused.tcp, .ok)
+        XCTAssertEqual(refused.auth, .failed)
+        XCTAssertFalse(refused.isUsable)
+    }
+
     private func waitUntil(_ timeout: TimeInterval = 10, _ condition: () async -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !(await condition()) {

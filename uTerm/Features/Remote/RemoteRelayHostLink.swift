@@ -151,6 +151,7 @@ final class RemoteRelayHostLink {
             recognize: { [weak server] id in MainActor.assumeIsolated { server?.knownPeer(id: id) } },
             isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } })
         state = .registered
+        server.relayUpdates.noteRunning(hello.server)
         retryDelay = .seconds(1)
         lastHeard = Date()
         startHeartbeat(connection)

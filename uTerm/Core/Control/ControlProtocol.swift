@@ -63,6 +63,13 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
     /// 等 `terminal-open -- <命令>` 在窗口里跑的那条命令结束，回退出码与输出。
     case terminalWait = "terminal-wait"
 
+    // MARK: 中继
+
+    /// 用 SFTP 从已保存主机读安装脚本写下的设备配置，直接存进钥匙串。成员密钥不经过客户端。
+    case relayImport = "relay-import"
+    /// 从这台 Mac 测一遍已导入的中继：TCP、成员认证、UDP（STUN），附带版本。
+    case relayCheck = "relay-check"
+
     // MARK: 收尾
 
     /// 松开 CLI 连接池对某主机的 exec / SFTP 持有。
@@ -82,12 +89,14 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
         case .trust, .run, .runMany, .quickRun,
              .sftpPut, .sftpMkdir, .sftpRm, .sftpRmdir, .sftpMv, .sftpChmod,
              .forwardStart, .forwardStop,
-             .terminalSend, .terminalOpen:
+             .terminalSend, .terminalOpen,
+             .relayImport:
             return true
         case .ping, .hosts, .hostKey, .quickCommands,
              .sftpLs, .sftpStat, .sftpCat, .sftpGet,
              .forwardList,
              .terminals, .terminalRead, .terminalWait,
+             .relayCheck,
              .disconnect:
             return false
         }
@@ -118,6 +127,8 @@ nonisolated public enum ControlAction: String, Codable, Sendable, CaseIterable {
             return .forward
         case .terminals, .terminalRead, .terminalSend, .terminalOpen, .terminalWait:
             return .terminal
+        case .relayImport, .relayCheck:
+            return .relay
         case .ping, .disconnect:
             return .misc
         }
@@ -131,6 +142,7 @@ nonisolated public enum ControlActionGroup: String, Codable, Sendable, CaseItera
     case sftp
     case forward
     case terminal
+    case relay
     case misc
 }
 
@@ -257,6 +269,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
     public var screen: ControlScreenSnapshot?
     /// `terminal-open -- <命令>` / `terminal-wait`：窗口里那条命令的状态。
     public var run: ControlTerminalRun?
+    /// `relay-import` / `relay-check`：中继的公开信息与测试结果。永远不含成员密钥。
+    public var relay: ControlRelayInfo?
 
     public init(
         id: String? = nil,
@@ -276,8 +290,10 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
         screen: ControlScreenSnapshot? = nil,
-        run: ControlTerminalRun? = nil
+        run: ControlTerminalRun? = nil,
+        relay: ControlRelayInfo? = nil
     ) {
+        self.relay = relay
         self.id = id
         self.ok = ok
         self.code = code
@@ -315,7 +331,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
         rules: [ControlForwardSnapshot]? = nil,
         terminals: [ControlTerminalSnapshot]? = nil,
         screen: ControlScreenSnapshot? = nil,
-        run: ControlTerminalRun? = nil
+        run: ControlTerminalRun? = nil,
+        relay: ControlRelayInfo? = nil
     ) -> ControlResponse {
         ControlResponse(
             id: id,
@@ -335,7 +352,8 @@ nonisolated public struct ControlResponse: Codable, Sendable, Equatable {
             rules: rules,
             terminals: terminals,
             screen: screen,
-            run: run
+            run: run,
+            relay: relay
         )
     }
 
@@ -811,6 +829,23 @@ nonisolated public struct ControlQuickCommandSnapshot: Codable, Sendable, Equata
     }
 }
 
+// MARK: - 中继
+
+/// 中继的公开信息。**不含成员密钥**——协议里根本没有放它的字段。
+nonisolated public struct ControlRelayInfo: Codable, Sendable, Equatable {
+    public var name: String
+    public var endpoint: String
+    public var relayID: String
+    /// 装着它的已保存主机名（导入时记下，uTerm 更新中继时用它）。
+    public var managedHost: String?
+    /// 这台 Mac 的公网接入开着没有、在中继上注册上没有。
+    public var internetEnabled: Bool?
+    public var registered: Bool?
+    public var latestVersion: String?
+    public var updateAvailable: Bool?
+    public var check: RemoteRelayCheckResult?
+}
+
 // MARK: - 错误码
 
 /// 协议层错误码。客户端按它映射退出码，技能文档里有总表。
@@ -867,6 +902,16 @@ nonisolated public enum ControlErrorCode: String, Codable, Sendable, CaseIterabl
     case terminal_not_found
     case terminal_ambiguous
     case terminal_disconnected
+
+    // 中继
+    /// 还没导入中继配置（`relay-check`）。
+    case relay_not_configured
+    /// 已经导入了另一台中继；加 `--replace` 才换。
+    case relay_exists
+    /// 读到的文件不是 uterm-relay 的设备配置。
+    case relay_config_invalid
+    /// `relay-check`：这台 Mac 连不上中继或认证没过。逐项结果在 `relay.check` 里。
+    case relay_unreachable
 
     // 服务端兜底
     case handler_timeout

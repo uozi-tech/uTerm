@@ -33,7 +33,7 @@ done
 
 config=$("$work/uterm-relay" config)
 set +e
-TEST_RUNNER_UTERM_RELAY_CONFIG="$config" xcodebuild test \
+TEST_RUNNER_UTERM_RELAY_CONFIG="$config" TEST_RUNNER_UTERM_RELAY_VERSION="$("$work/uterm-relay" version)" xcodebuild test \
     -only-testing:uTermTests/RemoteRelayEndToEndTests "$@"
 status=$?
 set -e
