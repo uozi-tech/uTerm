@@ -39,7 +39,7 @@ RELAY_DATA=/var/lib/uterm-relay RELAY_PUBLIC_HOST=relay.example.com ./uterm-rela
 | `RELAY_NAME` | App 里显示的名字 | 同 `RELAY_PUBLIC_HOST` |
 | `RELAY_LISTEN` | 监听地址 | `:47310` |
 | `RELAY_DATA` | 数据目录 | `/data` |
-| `RELAY_RATE_PER_IP` | 单 IP 每 10 秒可新建的连接数，`0` 关闭 | `60` |
+| `RELAY_RATE_PER_IP` | 单 IP（IPv6 按 /64）每 10 秒可新建的连接数。`0` 关闭，同时关闭单来源最多 16 条未认证连接的上限；中继前面有代理、所有连接看起来来自同一地址时要设 `0` | `60` |
 
 ## 命令
 

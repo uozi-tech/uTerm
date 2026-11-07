@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,7 @@ import (
 func testLimits() Limits {
 	limits := DefaultLimits()
 	limits.RatePerIP = 0
+	limits.UnauthedPerSource = 0
 	limits.TicketLife = 300 * time.Millisecond
 	limits.RequestTimeout = 300 * time.Millisecond
 	return limits
@@ -567,6 +569,114 @@ func TestRateLimitPerAddress(t *testing.T) {
 	}
 	if !limiter.allow(address, now.Add(2*time.Second)) {
 		t.Fatal("the window should pass")
+	}
+}
+
+func TestIPv6SourcesCountPerSlash64(t *testing.T) {
+	for address, want := range map[string]string{
+		"2001:db8:1:2:aaaa:bbbb:cccc:dddd": "2001:db8:1:2::",
+		"2001:db8:1:2::1":                  "2001:db8:1:2::",
+		"2001:db8:1:3::1":                  "2001:db8:1:3::",
+		"::ffff:192.0.2.7":                 "192.0.2.7",
+		"192.0.2.7":                        "192.0.2.7",
+	} {
+		if got := sourceAddress(netip.MustParseAddr(address)); got != netip.MustParseAddr(want) {
+			t.Errorf("%s counts as %s, want %s", address, got, want)
+		}
+	}
+}
+
+// rawConnect opens a TCP connection and sends nothing, the way a slow or hostile
+// client holds an unauthenticated slot.
+func rawConnect(t *testing.T, address string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// closedByServer reports whether the relay hung up without saying anything.
+func closedByServer(conn net.Conn) bool {
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	var probe [1]byte
+	_, err := conn.Read(probe[:])
+	var timeout net.Error
+	return err != nil && !(errors.As(err, &timeout) && timeout.Timeout())
+}
+
+func TestOneSourceCannotHoldEveryUnauthenticatedSlot(t *testing.T) {
+	limits := testLimits()
+	limits.UnauthedPerSource = 2
+	limits.RequestTimeout = 10 * time.Second
+	h := newHarness(t, limits)
+
+	first := rawConnect(t, h.address)
+	rawConnect(t, h.address)
+	waitFor(t, func() bool {
+		h.server.mu.Lock()
+		defer h.server.mu.Unlock()
+		return h.server.unauthed == 2
+	})
+	if third := rawConnect(t, h.address); !closedByServer(third) {
+		t.Fatal("a third unauthenticated connection from the same source was kept")
+	}
+
+	first.Close()
+	waitFor(t, func() bool {
+		h.server.mu.Lock()
+		defer h.server.mu.Unlock()
+		return h.server.unauthed == 1
+	})
+	// The slot comes back, and a connection that authenticates gives its slot up.
+	h.client()
+	h.client()
+	h.server.mu.Lock()
+	defer h.server.mu.Unlock()
+	if h.server.unauthed != 1 || h.server.unauthedFrom[netip.MustParseAddr("127.0.0.1")] != 1 {
+		t.Fatalf("unauthed = %d, per source = %v", h.server.unauthed, h.server.unauthedFrom)
+	}
+}
+
+func TestOpenStoreTightensAnOpenDataDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { // the umask may have taken bits off
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(dir, "test"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o700 {
+		t.Fatalf("data directory is %o", mode)
+	}
+}
+
+func TestRegistrationRefusedAsFullLeavesNoBinding(t *testing.T) {
+	limits := testLimits()
+	limits.Hosts = 1
+	h := newHarness(t, limits)
+	h.registerHost("mac-1", newKey(t))
+	for index := 2; index <= 5; index++ {
+		if _, answer := h.tryRegister(fmt.Sprintf("mac-%d", index), newKey(t), h.member); answer.Reason != reasonFull {
+			t.Fatalf("mac-%d: %+v", index, answer)
+		}
+	}
+	data, err := os.ReadFile(h.store.hostsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]string
+	if err := json.Unmarshal(data, &saved); err != nil || len(saved) != 1 || saved["mac-1"] == "" {
+		t.Fatalf("hosts.json holds %v (%v)", saved, err)
 	}
 }
 

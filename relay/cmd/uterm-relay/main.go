@@ -83,6 +83,11 @@ func serve(dataDir, socket string) error {
 			return fmt.Errorf("RELAY_RATE_PER_IP: %w", err)
 		}
 		limits.RatePerIP = value
+		if value <= 0 {
+			// Turned off when every connection seems to come from one address (a proxy
+			// in front): counting unauthenticated slots per source would then cap them all.
+			limits.UnauthedPerSource = 0
+		}
 	}
 	server := relay.NewServer(store, limits)
 	bound, err := server.Listen(envOr("RELAY_LISTEN", ":47310"))

@@ -4,7 +4,8 @@ COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /uterm-relay ./cmd/uterm-relay
-RUN mkdir -p /data && chown 65532:65532 /data
+# 0700: the directory holds the member private key. A new named volume copies this mode.
+RUN mkdir -p /data && chown 65532:65532 /data && chmod 700 /data
 
 FROM scratch
 COPY --from=build /uterm-relay /uterm-relay

@@ -22,20 +22,23 @@ type Limits struct {
 	Splices        int
 	Controls       int
 	Unauthed       int
-	RatePerIP      int
-	RateWindow     time.Duration
-	RequestTimeout time.Duration
-	TicketLife     time.Duration
-	HostSilence    time.Duration
-	ClientSilence  time.Duration
-	WriteTimeout   time.Duration
+	// UnauthedPerSource caps how many of the Unauthed slots one source holds, so a
+	// single machine can't fill them all. 0 turns it off, as RatePerIP 0 does.
+	UnauthedPerSource int
+	RatePerIP         int
+	RateWindow        time.Duration
+	RequestTimeout    time.Duration
+	TicketLife        time.Duration
+	HostSilence       time.Duration
+	ClientSilence     time.Duration
+	WriteTimeout      time.Duration
 }
 
 // DefaultLimits are the production values, documented in PROTOCOL.md.
 func DefaultLimits() Limits {
 	return Limits{
 		Hosts: 64, Bindings: 1024, TicketsPerHost: 32, Splices: 512, Controls: 256, Unauthed: 64,
-		RatePerIP: 60, RateWindow: 10 * time.Second,
+		UnauthedPerSource: 16, RatePerIP: 60, RateWindow: 10 * time.Second,
 		RequestTimeout: 5 * time.Second, TicketLife: 10 * time.Second,
 		HostSilence: 200 * time.Second, ClientSilence: 200 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -48,18 +51,20 @@ type Server struct {
 	limits Limits
 	rate   *rateLimiter
 
-	mu        sync.Mutex
-	hosts     map[string]*control
-	clients   map[*control]struct{}
-	sessions  map[string]*control // signaling session → the phone that opened it
-	tickets   map[string]*pendingDial
-	splices   int
-	unauthed  int
-	closed    bool
-	listener  net.Listener
-	packet    *net.UDPConn
-	allConns  map[net.Conn]struct{}
-	waitGroup sync.WaitGroup
+	mu       sync.Mutex
+	hosts    map[string]*control
+	clients  map[*control]struct{}
+	sessions map[string]*control // signaling session → the phone that opened it
+	tickets  map[string]*pendingDial
+	splices  int
+	unauthed int
+	// unauthed connections per source, only tracked while UnauthedPerSource is on
+	unauthedFrom map[netip.Addr]int
+	closed       bool
+	listener     net.Listener
+	packet       *net.UDPConn
+	allConns     map[net.Conn]struct{}
+	waitGroup    sync.WaitGroup
 }
 
 // control is one registered Mac or one phone's control connection.
@@ -90,6 +95,8 @@ func NewServer(store *Store, limits Limits) *Server {
 		sessions: map[string]*control{},
 		tickets:  map[string]*pendingDial{},
 		allConns: map[net.Conn]struct{}{},
+
+		unauthedFrom: map[netip.Addr]int{},
 	}
 }
 
@@ -187,20 +194,21 @@ func (s *Server) accept(listener net.Listener) {
 		if err != nil {
 			return
 		}
-		if !s.admit(conn) {
+		source := sourceOf(conn)
+		if !s.admit(conn, source) {
 			conn.Close()
 			continue
 		}
 		s.waitGroup.Add(1)
 		go func() {
 			defer s.waitGroup.Done()
-			s.handle(conn)
+			s.handle(conn, source)
 		}()
 	}
 }
 
-func (s *Server) admit(conn net.Conn) bool {
-	if !s.rate.allow(remoteAddress(conn), time.Now()) {
+func (s *Server) admit(conn net.Conn, source netip.Addr) bool {
+	if !s.rate.allow(source, time.Now()) {
 		return false
 	}
 	s.mu.Lock()
@@ -208,20 +216,38 @@ func (s *Server) admit(conn net.Conn) bool {
 	if s.closed || s.unauthed >= s.limits.Unauthed {
 		return false
 	}
+	if perSource := s.limits.UnauthedPerSource; perSource > 0 {
+		if s.unauthedFrom[source] >= perSource {
+			return false
+		}
+		s.unauthedFrom[source]++
+	}
 	s.unauthed++
 	s.allConns[conn] = struct{}{}
 	return true
 }
 
-func remoteAddress(conn net.Conn) netip.Addr {
-	if address, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-		return address.AddrPort().Addr().Unmap()
+// sourceOf is the address limits are counted against. An IPv6 host usually owns
+// a whole /64 and can pick a new address for every connection, so the /64 counts
+// as one source.
+func sourceOf(conn net.Conn) netip.Addr {
+	address, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return netip.Addr{}
 	}
-	return netip.Addr{}
+	return sourceAddress(address.AddrPort().Addr())
+}
+
+func sourceAddress(address netip.Addr) netip.Addr {
+	address = address.Unmap()
+	if address.Is6() {
+		return netip.PrefixFrom(address, 64).Masked().Addr()
+	}
+	return address
 }
 
 // handle reads the request and routes the connection. Exactly one path releases `unauthed`.
-func (s *Server) handle(conn net.Conn) {
+func (s *Server) handle(conn net.Conn, source netip.Addr) {
 	defer func() {
 		conn.Close()
 		s.mu.Lock()
@@ -236,6 +262,11 @@ func (s *Server) handle(conn net.Conn) {
 		released = true
 		s.mu.Lock()
 		s.unauthed--
+		if s.limits.UnauthedPerSource > 0 {
+			if s.unauthedFrom[source]--; s.unauthedFrom[source] <= 0 {
+				delete(s.unauthedFrom, source)
+			}
+		}
 		s.mu.Unlock()
 	}
 	defer release()
@@ -314,6 +345,13 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 		writeFrame(conn, answerFrame{Reason: reasonHostKey})
 		return
 	}
+	// Checked before binding as well: a registration refused as full must not
+	// leave a binding behind, or a member could fill hosts.json without ever
+	// holding a place online. The check that counts is the one at the insert below.
+	if s.hostsFull(request.HostID) {
+		writeFrame(conn, answerFrame{Reason: reasonFull})
+		return
+	}
 	bound, err := s.store.BindHost(request.HostID, request.HostKey, s.limits.Bindings)
 	switch {
 	case errors.Is(err, errBindingsFull):
@@ -332,8 +370,8 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 	// The capacity check and the insert share one critical section, or concurrent registrations could
 	// all pass the check before any of them is counted.
 	s.mu.Lock()
-	previous, online := s.hosts[request.HostID]
-	if !online && len(s.hosts) >= s.limits.Hosts {
+	previous := s.hosts[request.HostID]
+	if s.hostsFullLocked(request.HostID) {
 		s.mu.Unlock()
 		writeFrame(conn, answerFrame{Reason: reasonFull})
 		return
@@ -372,6 +410,18 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 			}
 		}
 	}
+}
+
+func (s *Server) hostsFull(hostID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hostsFullLocked(hostID)
+}
+
+// hostsFullLocked reports whether hostID would need a new place online and none is left.
+func (s *Server) hostsFullLocked(hostID string) bool {
+	_, online := s.hosts[hostID]
+	return !online && len(s.hosts) >= s.limits.Hosts
 }
 
 func (s *Server) removeHost(host *control) {

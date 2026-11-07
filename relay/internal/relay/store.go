@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -65,6 +66,13 @@ type Store struct {
 func OpenStore(dir, name string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
+	}
+	// MkdirAll leaves an existing directory as it was, e.g. a volume created
+	// 0755 by an older image. Nobody else needs to list where the key lives.
+	if info, err := os.Stat(dir); err == nil && info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, info.Mode().Perm()&0o700); err != nil {
+			log.Printf("uterm-relay: %s is readable by others and can't be tightened: %v", dir, err)
+		}
 	}
 	store := &Store{dir: dir, name: name, hosts: map[string]string{}}
 	unlock, err := store.lockFiles()
