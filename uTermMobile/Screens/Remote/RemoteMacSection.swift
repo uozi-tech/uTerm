@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 主机页的「我的 Mac」：配对过的 Mac（同一 Apple ID 自动出现，其他的扫码配对），在线的点进 `RemoteMacSheet`。
-/// 局域网里别人的 Mac 不出现在这里。
+/// 主机页的「我的 Mac」：配对过的 Mac，在线的点进 `RemoteMacSheet`；下面「附近的 Mac」列局域网里还没配对的，
+/// 点了同样进 `RemoteMacSheet`，先在 Mac 上核对 6 位码并点「允许」。不在同一局域网的 Mac 扫它的二维码配对。
 struct RemoteMacSection: View {
     /// 可选：样式画廊、探针等直接渲染主机页的地方不注入它，那时整块不显示。
     @Environment(RemoteMacDirectory.self) private var injected: RemoteMacDirectory?
@@ -20,16 +20,31 @@ struct RemoteMacSection: View {
     }
 
     private func group(_ directory: RemoteMacDirectory) -> some View {
-        MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
-            if !directory.isActivated {
-                MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
-                    directory.activate()
+        VStack(spacing: 12) {
+            MInsetGroup(header: "我的 Mac", headerTrailing: AnyView(scanButton)) {
+                if !directory.isActivated {
+                    MInsetRow(icon: "mac", label: "控制我的 Mac 上的终端", chevron: true, last: true) {
+                        directory.activate()
+                    }
+                } else if directory.macs.isEmpty {
+                    MInsetRow(icon: "mac", label: "还没有配对的 Mac",
+                              sub: directory.nearbyMacs.isEmpty ? "在 Mac 上打开「远程控制」，或扫 Mac 上的二维码" : "在下面选一台开始配对",
+                              last: true)
+                } else {
+                    ForEach(directory.macs) { mac in
+                        macRow(mac, last: mac.id == directory.macs.last?.id)
+                    }
                 }
-            } else if directory.macs.isEmpty {
-                MInsetRow(icon: "mac", label: "还没有配对的 Mac", sub: "同一 Apple ID 的 Mac 会自动出现", last: true)
-            } else {
-                ForEach(directory.macs) { mac in
-                    macRow(mac, last: mac.id == directory.macs.last?.id)
+            }
+            if directory.isActivated, !directory.nearbyMacs.isEmpty {
+                MInsetGroup(header: "附近的 Mac",
+                            footer: "同一局域网里打开了远程控制、还没和这台手机配对的 Mac。点一下，在 Mac 上核对数字并点「允许」即可配对。") {
+                    ForEach(directory.nearbyMacs) { mac in
+                        MInsetRow(icon: "mac", label: mac.name, value: "配对", chevron: true,
+                                  last: mac.id == directory.nearbyMacs.last?.id) {
+                            selected = mac
+                        }
+                    }
                 }
             }
         }
@@ -76,7 +91,7 @@ struct RemoteMacSection: View {
         }
     }
 
-    /// 不同 Apple ID 的 Mac 扫它 设置 › 远程控制 里的二维码配对。同一 Apple ID 的自动出现，用不着它。
+    /// 不在同一局域网的 Mac：扫它「设置 › 远程控制」里的二维码配对。
     private var scanButton: some View {
         Button { scanning = true } label: {
             Label("扫码配对", systemImage: "qrcode.viewfinder")

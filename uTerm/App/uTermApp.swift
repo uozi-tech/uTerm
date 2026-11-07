@@ -102,9 +102,9 @@ struct uTermApp: App {
         _globalForwarding = State(initialValue: globalForwarding)
         _launchRelay = State(initialValue: launchRelay)
         let remoteSettings = RemoteControlSettings()
-        // 测试宿主不碰真实的 iCloud 名册：它和正式版共用身份与设置，写进去会以正式版的名义同步出去。
+        // 测试宿主不碰真实的 iCloud 钥匙串：它和正式版共用身份与设置，写进去会以正式版的名义同步出去。
+        if !BackgroundLaunchMode.isRunningInTestHost { RemoteLegacyRoster.withdrawLocalDevice() }
         let remoteServer = RemoteHostServer(registry: terminalRegistry,
-                                            roster: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteCloudRoster(),
                                             relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
                                             relayUpdates: BackgroundLaunchMode.isRunningInTestHost ? .inert() : RemoteRelayUpdateMonitor(),
                                             desktopEnvironment: .live(settings: remoteSettings))

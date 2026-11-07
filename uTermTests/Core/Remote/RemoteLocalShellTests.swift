@@ -21,7 +21,7 @@ final class RemoteLocalShellTests: XCTestCase {
     /// 起服务端 + 配对好的手机客户端。`features` 传 nil 用默认能力（含 local-shell）。
     private func pairedClient(registry: TerminalSessionRegistry, features: [String]? = nil,
                               opener: RemoteLocalShellOpener) async throws -> (RemoteHostServer, RemoteMacClient) {
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features ?? RemoteConstants.localFeatures)
         server.localShellOpener = opener
@@ -30,7 +30,7 @@ final class RemoteLocalShellTests: XCTestCase {
         let port = try XCTUnwrap(server.port)
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
         _ = await waitUntil { !server.pairingRequests.isEmpty }
         server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))

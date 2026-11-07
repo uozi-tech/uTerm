@@ -2,11 +2,10 @@ import CryptoKit
 import Foundation
 import Security
 
-// 配对的两条路（两端共用）：
-// - 同一 Apple ID：各自把**公开**身份（设备 ID、名字、长期公钥）写进 iCloud 钥匙串的名册（`RemoteCloudRoster`），
-//   名册里设备 ID 与公钥都对得上的对端直接信任。私钥仍只在本机（`RemoteIdentityStore`）。
-// - 扫码：Mac 出一张一次性邀请（`RemotePairingInvitation`），手机扫到就知道该信任哪台 Mac、哪把公钥；
-//   连接时在握手消息里带上凭据（`RemotePairingInvitation.proof`），Mac 核对通过就信任这台手机，不用人点。
+// 配对（两端共用）。不论是不是同一 Apple ID，每对设备都要配对一次，信任只记在本机（`RemoteIdentityStore`）：
+// - 局域网审批：主控端连上来，被控端弹窗显示核对码，人点「允许」。
+// - 邀请：被控端出一张一次性邀请（`RemotePairingInvitation`），主控端扫码或打开链接就知道该信任哪台主机、
+//   哪把公钥；连接时在握手消息里带上凭据（`RemotePairingInvitation.proof`），被控端核对通过就信任它，不用人点。
 
 /// Mac 出示的配对邀请，编成二维码给手机扫。
 ///
@@ -84,139 +83,21 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     }
 }
 
-// MARK: - iCloud 名册
+// MARK: - 旧版 iCloud 名册的清理
 
-/// 名册里的一台设备：只有公开信息。
-nonisolated struct RemoteRosterEntry: Codable, Equatable, Sendable, Identifiable {
-    enum Platform: String, Codable, Sendable {
-        case mac
-        case mobile
-    }
+/// 之前的测试版里，同一 Apple ID 的设备把公开身份写进 iCloud 钥匙串的名册，对得上就直接信任。现在所有设备都要
+/// 配对，名册不再读；每台设备升级后撤下自己那一条，免得还没升级的设备继续凭它放行本机。
+nonisolated enum RemoteLegacyRoster {
+    static let service = "com.uozi.uTerm.remote.roster"
 
-    var id: UUID
-    var name: String
-    var publicKey: Data
-    var platform: Platform
-    var updatedAt: Date
-
-    var peer: RemotePeer {
-        RemotePeer(id: id, name: name, publicKey: publicKey, pairedAt: updatedAt)
-    }
-}
-
-/// 同一 Apple ID 下各台设备的远控身份，经 iCloud 钥匙串同步（端到端加密）。
-///
-/// 每台设备只写自己那一条（account = 设备 ID），读全部。名册只决定「该信任谁」，信任与否在握手里
-/// 按设备 ID + 公钥核对；本机拉黑的设备（`RemoteIdentityStore.isBlocked`）名册里有也不认。
-nonisolated final class RemoteCloudRoster: @unchecked Sendable {
-    private let storage: any RemoteRosterStorage
-
-    init(storage: any RemoteRosterStorage = RemoteKeychainRosterStorage()) {
-        self.storage = storage
-    }
-
-    func entries() -> [RemoteRosterEntry] {
-        storage.loadAll().compactMap { try? JSONDecoder().decode(RemoteRosterEntry.self, from: $0) }
-    }
-
-    func entry(id: UUID) -> RemoteRosterEntry? {
-        entries().first { $0.id == id }
-    }
-
-    /// 写入（或更新）本机这一条。内容没变就不写，免得每次启动都推一次同步。
-    func publish(_ entry: RemoteRosterEntry) {
-        if let existing = self.entry(id: entry.id), existing.name == entry.name, existing.publicKey == entry.publicKey,
-           existing.platform == entry.platform { return }
-        guard let data = try? JSONEncoder().encode(entry) else { return }
-        try? storage.save(data, account: entry.id.uuidString)
-    }
-
-    /// 撤下一条（本机关掉远控，或在别的设备上「忘记」它）。
-    func withdraw(id: UUID) {
+    static func withdraw(id: UUID, storage: any RemoteSyncedStorage = RemoteKeychainSyncedStorage(service: service)) {
         try? storage.delete(account: id.uuidString)
     }
 
-    /// 名册里设备 ID 与公钥都对得上：同一 Apple ID 下的设备。
-    func vouches(for id: UUID, publicKey: Data) -> Bool {
-        entry(id: id)?.publicKey == publicKey
-    }
-}
-
-nonisolated protocol RemoteRosterStorage: Sendable {
-    func loadAll() -> [Data]
-    func save(_ data: Data, account: String) throws
-    func delete(account: String) throws
-}
-
-/// 名册的钥匙串存储：可同步、设备首次解锁后可读（Mac 锁屏时远控服务仍要能核对来连的手机）。
-///
-/// 读、删一律用 `kSecAttrSynchronizableAny`（见 `KeychainStore.baseQuery` 的说明）。
-nonisolated struct RemoteKeychainRosterStorage: RemoteRosterStorage {
-    private let service: String
-
-    init(service: String = "com.uozi.uTerm.remote.roster") {
-        self.service = service
-    }
-
-    private var base: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
-        ]
-    }
-
-    func loadAll() -> [Data] {
-        var query = base
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitAll
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return [] }
-        return result as? [Data] ?? []
-    }
-
-    func save(_ data: Data, account: String) throws {
-        try delete(account: account)
-        var add = base
-        add[kSecAttrAccount as String] = account
-        add[kSecAttrSynchronizable as String] = kCFBooleanTrue
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        add[kSecValueData as String] = data
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
-    }
-
-    func delete(account: String) throws {
-        var query = base
-        query[kSecAttrAccount as String] = account
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
-    }
-}
-
-/// 测试用的内存名册。
-nonisolated final class RemoteMemoryRosterStorage: RemoteRosterStorage, @unchecked Sendable {
-    private let lock = NSLock()
-    private var items: [String: Data] = [:]
-
-    init() {}
-
-    func loadAll() -> [Data] {
-        lock.lock()
-        defer { lock.unlock() }
-        return items.keys.sorted().compactMap { items[$0] }
-    }
-
-    func save(_ data: Data, account: String) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        items[account] = data
-    }
-
-    func delete(account: String) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        items[account] = nil
+    /// 启动时调：同步钥匙串的删除可能要等 iCloud，放到后台线程。
+    static func withdrawLocalDevice() {
+        let id = RemoteLocalDevice.id()
+        DispatchQueue.global(qos: .utility).async { withdraw(id: id) }
     }
 }
 

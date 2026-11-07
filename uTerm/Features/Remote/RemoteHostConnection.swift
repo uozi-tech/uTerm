@@ -112,7 +112,9 @@ final class RemoteHostConnection {
             let hello = RemoteHello(version: RemoteConstants.protocolVersion, deviceID: server.localID,
                                     deviceName: server.localName, ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: staticKey.publicKey.rawRepresentation,
-                                    features: advertisedFeatures().isEmpty ? nil : advertisedFeatures())
+                                    features: advertisedFeatures().isEmpty ? nil : advertisedFeatures(),
+                                    deviceModel: RemoteDeviceModel.current(),
+                                    platform: RemoteDevicePlatform.current.rawValue)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
@@ -134,7 +136,7 @@ final class RemoteHostConnection {
                 }
                 try await waitForKeyConfirmation()
             }
-            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster) {
+            if server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey) {
                 try rememberRecognized(peer)
                 authorize(.trusted)
                 return
@@ -169,7 +171,7 @@ final class RemoteHostConnection {
             throw RemoteProtocolError.handshakeFailed("公网连接的身份与信令不符")
         }
         try await waitForKeyConfirmation()
-        guard !isClosed, server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey, roster: server.roster),
+        guard !isClosed, server.identity.recognizes(id: peer.deviceID, publicKey: peer.staticKey),
               server.allowsInternetAccess(peer.deviceID) else {
             throw RemoteProtocolError.pairingRejected
         }
@@ -177,26 +179,23 @@ final class RemoteHostConnection {
         authorize(.trusted)
     }
 
-    /// 认出来的设备：名册担保、第一次来的记进本机信任（设置里才看得到、能撤销）；早就信任的只跟着更新名字。
-    /// 名字只在首次配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，Mac 上永远是旧的。
-    /// 已信任的那条保留原公钥与配对时间：名册担保的新公钥不该顶掉本机记的那把。
+    /// 认出来的设备只跟着更新名字与机型。名字只在配对时记一次的话，手机改了名、或 App 后来拿到了真实设备名，
+    /// Mac 上永远是旧的。公钥与配对时间不动。
     private func rememberRecognized(_ peer: RemoteHello) throws {
-        guard var known = server.identity.peer(id: peer.deviceID) else {
-            try server.trust(newPeer(from: peer))
-            return
-        }
+        guard var known = server.identity.peer(id: peer.deviceID) else { return }
         let reported = known
         let name = peer.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty { known.name = name }
         // 老版本不报机型：保留上次记的，别清空。本机起的别名不动。
         if let model = peer.deviceModel { known.model = model }
+        if let platform = peer.platform { known.platform = platform }
         guard known != reported else { return }
         try server.trust(known)
     }
 
     private func newPeer(from peer: RemoteHello) -> RemotePeer {
         RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
-                   model: peer.deviceModel)
+                   model: peer.deviceModel, platform: peer.platform)
     }
 
     /// 等手机证明它真的持有握手里报的长期私钥。公钥是公开的，只凭握手消息信任会让冒充者被记进信任列表、

@@ -135,6 +135,6 @@ enum RemoteControlPresentation {
     static func pairingHint(hasInvitation: Bool) -> String {
         hasInvitation
             ? "二维码 10 分钟内有效，只能用一次。"
-            : "不同 Apple ID 的 iPhone / iPad 用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码。"
+            : "手机不在同一局域网时用这个配对：在手机 uTerm 主机页「我的 Mac › 扫码配对」扫二维码。"
     }
 }

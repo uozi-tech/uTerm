@@ -39,7 +39,7 @@ final class RemoteReconnectTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       peerSilenceLimit: heartbeat.peerSilenceLimit)
         server.start()
@@ -49,7 +49,7 @@ final class RemoteReconnectTests: XCTestCase {
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1",
                                                          port: NWEndpoint.Port(rawValue: try XCTUnwrap(proxy.port))!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
                                      heartbeat: heartbeat)
         let connecting = Task { await client.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
@@ -164,12 +164,12 @@ final class RemoteReconnectTests: XCTestCase {
     /// 老手机不发心跳，空闲时一个字节都没有：Mac 不能把它当成死链路断开。
     func test_mac_does_not_cut_old_phone_without_heartbeat() async throws {
         let registry = TerminalSessionRegistry()
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false, peerSilenceLimit: 0.3)
         server.start()
         defer { server.stop() }
         _ = await waitUntil { server.port != nil }
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let staticKey = try identity.localIdentity()
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let port = try XCTUnwrap(server.port)

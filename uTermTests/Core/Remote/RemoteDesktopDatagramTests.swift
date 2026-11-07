@@ -36,10 +36,10 @@ final class RemoteDesktopDatagramTests: XCTestCase {
     }
 
     private func makeRig(desktop: RemoteDesktopEnvironment) throws -> Rig {
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let phoneID = RemoteLocalDevice.id()
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       desktopEnvironment: desktop)
         server.internetAccessPolicy = { $0 == phoneID }

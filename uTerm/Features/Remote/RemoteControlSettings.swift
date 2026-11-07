@@ -68,8 +68,7 @@ final class RemoteControlSettings {
         }
     }
 
-    /// 允许经公网接入的设备。不因为配对过、或在同一 Apple ID 名册里就自动有：否则 iCloud 账号失守等于
-    /// 对方能静默控制这台 Mac。
+    /// 允许经公网接入的设备。不因为配对过就自动有：要在设置里逐台打开。
     var internetDevices: Set<UUID> {
         didSet {
             guard internetDevices != oldValue else { return }

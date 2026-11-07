@@ -15,7 +15,7 @@ final class MobileWorkspaceTests: XCTestCase {
 
     private func macClient() -> RemoteMacClient {
         RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
-                        identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                        identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
     }
 
     // MARK: - 接管 Mac

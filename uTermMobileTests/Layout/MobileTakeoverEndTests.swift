@@ -9,7 +9,7 @@ import XCTest
 final class MobileTakeoverEndTests: XCTestCase {
     private func macClient(_ name: String = "测试 Mac") -> RemoteMacClient {
         RemoteMacClient(macName: name, endpoint: .hostPort(host: "127.0.0.1", port: 1),
-                        identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                        identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
     }
 
     private func takeOver(_ workspace: MobileWorkspace, _ client: RemoteMacClient, _ ids: [UUID]) {

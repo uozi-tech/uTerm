@@ -72,7 +72,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
         let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
                                       advertises: false)
         server.internetAccessPolicy = { allowed.contains($0) }
@@ -86,7 +86,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
     }
 
     private struct Phone {
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let id = RemoteLocalDevice.id()
 
         func peer() throws -> RemotePeer {

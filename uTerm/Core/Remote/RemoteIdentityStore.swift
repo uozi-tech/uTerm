@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Security
 
-/// 配对过的对端：Mac 记住的是手机，手机记住的是 Mac。
+/// 配对过的对端：被控端记住的是来控制它的设备，主控端记住的是它控制的主机。
 nonisolated struct RemotePeer: Codable, Equatable, Sendable, Identifiable {
     /// 对端握手时报的 `deviceID`。
     var id: UUID
@@ -14,6 +14,11 @@ nonisolated struct RemotePeer: Codable, Equatable, Sendable, Identifiable {
     var model: String? = nil
     /// 本机给它起的名字（设置里「重命名」）。有了它就不再跟着对端报的名字走。
     var alias: String? = nil
+    /// 对端握手时报的设备类别（`RemoteDevicePlatform` 的原始值）。老版本不报，解出来是 nil，当手机看。
+    var platform: String? = nil
+
+    /// 对端是 Mac（另一台 Mac 来控制本机，或本机控制的主机）。
+    var isMac: Bool { platform == RemoteDevicePlatform.mac.rawValue }
 
     /// 列表、横幅里显示的名字：本机起的别名优先，其次对端报的名字。
     var displayName: String { alias ?? name }
@@ -33,7 +38,32 @@ nonisolated struct RemotePeer: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// 远控身份：本机长期密钥 + 已信任的对端列表。
+/// 一张信任表管哪个方向。两个方向必须分开存：Mac 既能被控制、又能去控制别的 Mac，若共用一张表，
+/// 「我要控制 B」记下的 B 会被被控端当成「允许来控制我」，B 就能免审批反过来控制本机。
+nonisolated enum RemoteTrustRole: Sendable {
+    /// 允许来控制本机的设备（被控端）。
+    case controllers
+    /// 本机去控制的主机（主控端）。
+    case hosts
+
+    /// iOS 只当主控端，主机一直记在最早那个账号里，沿用它免得迁移。
+    fileprivate var accounts: (peers: String, blocked: String) {
+        switch self {
+        case .controllers:
+            return ("trustedPeers", "blockedPeers")
+        case .hosts:
+            #if os(iOS)
+            return ("trustedPeers", "blockedPeers")
+            #else
+            return ("trustedHosts", "blockedHosts")
+            #endif
+        }
+    }
+}
+
+/// 远控身份：本机长期密钥 + 一个方向上已信任的对端列表（见 `RemoteTrustRole`）。
+///
+/// 本机长期密钥两个方向共用，设备 ID 也只有一个。
 ///
 /// 存钥匙串，**不同步、只限本机**（`ThisDeviceOnly`）：同一 Apple ID 下的另一台设备拿到这把
 /// 私钥就能冒充本机，所以它不能跟着 iCloud 钥匙串走。这也是不复用 `KeychainStore` 的原因，
@@ -43,13 +73,18 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
     private let lock = NSLock()
     private var cachedIdentity: Curve25519.KeyAgreement.PrivateKey?
 
+    private let peersAccount: String
+    private let blockedAccount: String
+
     private static let identityAccount = "identity"
-    private static let peersAccount = "trustedPeers"
-    private static let blockedAccount = "blockedPeers"
     private static let relayHostKeyAccount = "relayHostKey"
 
-    init(storage: any RemoteSecretStorage = RemoteKeychainStorage()) {
+    let role: RemoteTrustRole
+
+    init(role: RemoteTrustRole, storage: any RemoteSecretStorage = RemoteKeychainStorage()) {
+        self.role = role
         self.storage = storage
+        (peersAccount, blockedAccount) = role.accounts
     }
 
     /// 本机长期私钥；第一次调用时生成并保存。
@@ -98,17 +133,17 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         defer { lock.unlock() }
         var peers = loadPeers().filter { $0.id != peer.id }
         peers.append(peer)
-        try storage.save(try JSONEncoder().encode(peers), account: Self.peersAccount)
+        try storage.save(try JSONEncoder().encode(peers), account: peersAccount)
         let blocked = loadBlocked()
         if blocked.contains(peer.id) { try saveBlocked(blocked.subtracting([peer.id])) }
     }
 
-    /// 撤销信任并拉黑：同一 Apple ID 的名册里还有它，也不再自动信任，直到重新扫码配对（`trust`）。
+    /// 撤销信任并拉黑：再来连要重新配对（`trust` 解除拉黑）。
     func revoke(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
         let peers = loadPeers().filter { $0.id != id }
-        try storage.save(try JSONEncoder().encode(peers), account: Self.peersAccount)
+        try storage.save(try JSONEncoder().encode(peers), account: peersAccount)
         try saveBlocked(loadBlocked().union([id]))
     }
 
@@ -118,25 +153,22 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
         return loadBlocked().contains(id)
     }
 
-    /// 这个对端可以直接放行：本机信任过它，或者同一 Apple ID 的名册替它担保（且没被本机拉黑）。
-    /// 两种都要设备 ID 与公钥同时对得上。
-    func recognizes(id: UUID, publicKey: Data, roster: RemoteCloudRoster?) -> Bool {
-        if peer(id: id)?.publicKey == publicKey { return true }
-        guard let roster, !isBlocked(id) else { return false }
-        return roster.vouches(for: id, publicKey: publicKey)
+    /// 这个对端可以直接放行：本机和它配对过，设备 ID 与公钥都对得上。同一 Apple ID 不再算数。
+    func recognizes(id: UUID, publicKey: Data) -> Bool {
+        peer(id: id)?.publicKey == publicKey
     }
 
     private func loadBlocked() -> Set<UUID> {
-        guard let data = try? storage.load(Self.blockedAccount) else { return [] }
+        guard let data = try? storage.load(blockedAccount) else { return [] }
         return (try? JSONDecoder().decode(Set<UUID>.self, from: data)) ?? []
     }
 
     private func saveBlocked(_ ids: Set<UUID>) throws {
-        try storage.save(try JSONEncoder().encode(ids), account: Self.blockedAccount)
+        try storage.save(try JSONEncoder().encode(ids), account: blockedAccount)
     }
 
     private func loadPeers() -> [RemotePeer] {
-        guard let data = try? storage.load(Self.peersAccount) else { return [] }
+        guard let data = try? storage.load(peersAccount) else { return [] }
         return (try? JSONDecoder().decode([RemotePeer].self, from: data)) ?? []
     }
 }

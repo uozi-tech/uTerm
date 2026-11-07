@@ -59,13 +59,13 @@ struct RemoteInternetGroup: View {
 
             if server.relayConfig != nil, settings.isInternetEnabled {
                 SettingsGroup(title: "允许经公网连接的设备",
-                              footer: String(localized: "配对过、或在同一 Apple ID 名册里的设备不会自动获得公网权限，要在这里逐台打开。")) {
+                              footer: String(localized: "配对过的设备不会自动获得公网权限，要在这里逐台打开。")) {
                     if server.internetAccessCandidates.isEmpty {
                         SettingsEmptyRow(symbol: "iphone.slash", text: String(localized: "还没有可以放行的设备"))
                     }
                     ForEach(server.internetAccessCandidates) { peer in
                         let allowed = settings.internetDevices.contains(peer.id)
-                        SettingsListRow(icon: settingsDeviceSymbol(for: peer.model ?? peer.name),
+                        SettingsListRow(icon: settingsDeviceSymbol(for: peer),
                                         tint: allowed ? UD.accent : UD.text3,
                                         title: peer.displayName,
                                         subtitle: allowed ? String(localized: "可经公网连接") : String(localized: "仅限局域网")) {

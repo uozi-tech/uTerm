@@ -3,13 +3,12 @@ import Foundation
 @preconcurrency import Network
 import Observation
 
-/// Mac 端远控服务：让配对过的手机接入这台 Mac 上已打开的终端。
+/// Mac 端远控服务：让配对过的设备（手机或另一台 Mac）接入这台 Mac 上已打开的终端。
 ///
 /// `RemoteControlSettings` 打开时监听（Bonjour `_uterm-remote._tcp`，TXT 带本机设备 ID），关闭时连广播一起撤掉。
 ///
-/// 谁能直接接入：本机信任过的设备，或同一 Apple ID 名册里的设备（`RemoteCloudRoster`），或带着本机正在出示的
-/// 扫码邀请凭据来的设备（`pairingInvitation`）。都不是的，才退回到在 Mac 上核对 6 位码、点「允许」——
-/// 名册还没同步过来、或老版本的手机，走的是这一条。
+/// 谁能直接接入：本机配对过的设备，或带着本机正在出示的邀请凭据来的设备（`pairingInvitation`）。都不是的，
+/// 退回到在 Mac 上核对 6 位码、点「允许」。同一 Apple ID 不算数：每对设备都要配对一次。
 /// 每台连上来的设备一个 `RemoteHostConnection`。同一个终端同一时刻只给一台设备接管尺寸：
 /// 后来的设备接入时，前一台收到「已被接管」并断开该终端。
 @MainActor
@@ -86,8 +85,6 @@ final class RemoteHostServer {
 
     @ObservationIgnored let registry: TerminalSessionRegistry
     @ObservationIgnored let identity: RemoteIdentityStore
-    /// 同一 Apple ID 的名册。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
-    @ObservationIgnored let roster: RemoteCloudRoster?
     @ObservationIgnored private var invitationExpiry: Task<Void, Never>?
     @ObservationIgnored let localName: String
     @ObservationIgnored let localID: UUID
@@ -117,8 +114,7 @@ final class RemoteHostServer {
     @ObservationIgnored private var tabTitlePush: Task<Void, Never>?
 
     init(registry: TerminalSessionRegistry,
-         identity: RemoteIdentityStore = RemoteIdentityStore(),
-         roster: RemoteCloudRoster? = nil,
+         identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
          localName: String = LANSyncCoordinator.localDeviceName(),
          localID: UUID = RemoteLocalDevice.id(),
          advertises: Bool = true,
@@ -135,8 +131,9 @@ final class RemoteHostServer {
         self.keyConfirmationTimeout = keyConfirmationTimeout
         self.registry = registry
         self.desktopEnvironment = desktopEnvironment
+        // 被控端只认「允许来控制本机」那张表；传成主控端的表，本机去控制过的主机就能反过来免审批控制本机。
+        precondition(identity.role == .controllers, "被控端必须用 controllers 方向的信任表")
         self.identity = identity
-        self.roster = roster
         self.localName = localName
         self.localID = localID
         self.advertises = advertises
@@ -150,15 +147,12 @@ final class RemoteHostServer {
         isRunning = true
         do {
             // 先把本机长期密钥备好：钥匙串出错时在设置页里直接显示，而不是等到第一台设备连上来。
-            let key = try identity.localIdentity().publicKey.rawRepresentation
+            _ = try identity.localIdentity()
             let listener = try NWListener(using: RemoteLink.parameters(), on: .any)
             if advertises {
                 let txt = NWTXTRecord([RemoteConstants.deviceIDKey: localID.uuidString])
                 listener.service = NWListener.Service(name: localName, type: RemoteConstants.serviceType, txtRecord: txt)
             }
-            // 同一 Apple ID 的手机凭名册直接认出这台 Mac；关掉远控时撤下。
-            roster?.publish(RemoteRosterEntry(id: localID, name: localName, publicKey: key, platform: .mac,
-                                              updatedAt: Date()))
             listener.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.listenerStateChanged(state) } }
             }
@@ -193,7 +187,6 @@ final class RemoteHostServer {
         for connection in connections.values { connection.close() }
         for id in Array(pairingWaiters.keys) { resolvePairing(id, approved: false) }
         cancelPairingInvitation()
-        roster?.withdraw(id: localID)
         relayLink?.stop()
         relayLink = nil
         updateInternetActivity(active: false, keepAwake: false)
@@ -255,20 +248,15 @@ final class RemoteHostServer {
         internetAccessPolicy(id) && !identity.isBlocked(id)
     }
 
-    /// 这个设备 ID 是谁：本机信任过的，或名册担保的。信令用它决定回不回应。
+    /// 这个设备 ID 是谁：本机配对过的设备。信令用它决定回不回应。
     func knownPeer(id: UUID) -> RemotePeer? {
         if identity.isBlocked(id) { return nil }
-        if let peer = identity.peer(id: id) { return peer }
-        return roster?.entry(id: id)?.peer
+        return identity.peer(id: id)
     }
 
-    /// 能在设置里勾选公网接入的设备：配对过的手机，加上名册里的手机。
+    /// 能在设置里勾选公网接入的设备：配对过的设备（手机、Mac 都算）。
     var internetAccessCandidates: [RemotePeer] {
-        var byID = Dictionary(trustedPeers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for entry in roster?.entries() ?? [] where entry.platform == .mobile && !identity.isBlocked(entry.id) {
-            if byID[entry.id] == nil { byID[entry.id] = entry.peer }
-        }
-        return byID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        trustedPeers.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
 
     /// 按设置起停中继注册。配置变了就换一条。

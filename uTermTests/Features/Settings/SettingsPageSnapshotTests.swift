@@ -116,7 +116,7 @@ final class SettingsPageSnapshotTests: XCTestCase {
             defaults: defaults)
 
         let remoteSettings = RemoteControlSettings(defaults: defaults)
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
         if options.pairedDevices {
             let peers: [(String, TimeInterval)] = [
                 ("我的 iPhone", 1_789_000_000),

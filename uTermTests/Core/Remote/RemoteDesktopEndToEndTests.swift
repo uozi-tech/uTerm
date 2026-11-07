@@ -60,13 +60,13 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         async throws -> (RemoteHostServer, FakeDesktopMac, RemoteMacClient) {
         let mac = FakeDesktopMac()
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features, desktopEnvironment: mac.environment())
         server.start()
         let ready = await waitUntil { server.port != nil }
         XCTAssertTrue(ready, "服务端没起来：\(server.status)")
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         try server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "测试 iPhone",
                                     publicKey: try phoneIdentity.localIdentity().publicKey.rawRepresentation,
                                     pairedAt: Date()))
@@ -647,7 +647,7 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         // 第二台设备（另一份身份）：首次要在 Mac 上审批。
         let other = RemoteMacClient(macName: "测试 Mac",
                                     endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: try XCTUnwrap(server.port))!),
-                                    identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                    identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await other.connect() }
         let asked = await waitUntil { !server.pairingRequests.isEmpty }
         XCTAssertTrue(asked)

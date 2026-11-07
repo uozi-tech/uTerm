@@ -31,9 +31,9 @@ final class RemoteWANImpairmentTests: XCTestCase {
     private func makeRig(registry: TerminalSessionRegistry = TerminalSessionRegistry(),
                          desktop: RemoteDesktopEnvironment = .disabled,
                          impairment: RemoteLinkImpairment, path: RemoteLinkPath = .relay) async throws -> Rig {
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let phoneID = RemoteLocalDevice.id()
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       desktopEnvironment: desktop)
         server.internetAccessPolicy = { $0 == phoneID }

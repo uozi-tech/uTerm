@@ -415,6 +415,13 @@ nonisolated func settingsDeviceSymbol(for name: String) -> String {
     name.localizedCaseInsensitiveContains("ipad") ? "ipad" : "iphone"
 }
 
+/// 配对过的设备的图标：Mac 按机型分笔记本 / 台式，其余按名字分 iPhone / iPad。
+nonisolated func settingsDeviceSymbol(for peer: RemotePeer) -> String {
+    let name = peer.model ?? peer.name
+    guard peer.isMac else { return settingsDeviceSymbol(for: name) }
+    return name.localizedCaseInsensitiveContains("MacBook") ? "laptopcomputer" : "desktopcomputer"
+}
+
 // MARK: - 状态与提示
 
 /// 状态：符号（或圆点）+ 文字，12.5pt。各页不再各写一份 `HStack { Image; Text }`。

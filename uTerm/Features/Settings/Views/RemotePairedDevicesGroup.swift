@@ -11,7 +11,7 @@ struct RemotePairedDevicesGroup: View {
 
     var body: some View {
         SettingsGroup(title: "已配对的设备",
-                      footer: String(localized: "同一 Apple ID 的手机打开 uTerm 主机页「我的 Mac」就会自动配对；其他手机扫码配对。撤销后这台设备要重新扫码才能连接，同一 Apple ID 也不会再自动配对。")) {
+                      footer: String(localized: "配对过的设备才能连接这台 Mac，同一 Apple ID 的也要配对一次。撤销后这台设备要重新配对。")) {
             if settings.isEnabled {
                 SettingsListRow(icon: "qrcode", tint: UD.accent, title: String(localized: "扫码配对"),
                                 subtitle: RemoteControlPresentation.pairingHint(hasInvitation: server.pairingInvitation != nil)) {
@@ -33,7 +33,7 @@ struct RemotePairedDevicesGroup: View {
             } else {
                 ForEach(server.trustedPeers) { peer in
                     let online = server.connectedPeerIDs.contains(peer.id)
-                    SettingsListRow(icon: settingsDeviceSymbol(for: peer.model ?? peer.name),
+                    SettingsListRow(icon: settingsDeviceSymbol(for: peer),
                                     tint: online ? UD.success : UD.accent,
                                     title: peer.displayName,
                                     subtitle: subtitle(for: peer, online: online)) {
@@ -45,7 +45,7 @@ struct RemotePairedDevicesGroup: View {
                             UDMenuItem(label: String(localized: "撤销配对…"), systemImage: "xmark.circle", danger: true) {
                                 server.revoke(peer.id)
                             },
-                        ], help: String(localized: "撤销后这台设备要重新扫码才能连接，同一 Apple ID 也不会再自动配对"))
+                        ], help: String(localized: "撤销后这台设备要重新配对才能连接"))
                     }
                 }
             }

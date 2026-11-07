@@ -4,12 +4,12 @@ import Foundation
 import Observation
 import UIKit
 
-/// 「我的 Mac」：配对过的 Mac，以及每台 Mac 的远控客户端。
+/// 「我的 Mac」：配对过的 Mac、局域网里还没配对的 Mac，以及每台 Mac 的远控客户端。
 ///
-/// 列表只来自配对关系，不来自局域网：同一 Apple ID 名册里的 Mac（`RemoteCloudRoster`，自动配对）加上本机信任过的
-/// Mac（扫码配对的、或老版本审批配上的）。Bonjour（`_uterm-remote._tcp`）只用来回答「这几台里哪台此刻在线、
-/// 地址是什么」：按 TXT 记录里的设备 ID 对号，对不上的 Mac 不显示、也不连。设备 ID 与公钥在握手里再核对一遍
-///（`RemoteMacClient.expectedPeer`）。
+/// 配对过的 Mac 只来自本机信任（局域网审批或邀请配上的），同一 Apple ID 不算数。Bonjour（`_uterm-remote._tcp`）
+/// 回答「哪台此刻在线、地址是什么」：按 TXT 记录里的设备 ID 对号，设备 ID 与公钥在握手里再核对一遍
+///（`RemoteMacClient.expectedPeer`）。对不上号的在线 Mac 列进「附近的 Mac」，点了就发起局域网配对：
+/// Mac 上弹出核对码，人点「允许」之后才记进本机信任。
 ///
 /// 浏览要「本地网络」授权，所以和局域网同步一样推迟：用户第一次点「连接我的 Mac」才开始
 /// （之后每次进主机页自动开始），不会一启动就弹系统授权框。
@@ -18,10 +18,10 @@ import UIKit
 final class RemoteMacDirectory {
     nonisolated struct Mac: Identifiable, Hashable {
         enum Source: Hashable {
-            /// 同一 Apple ID 的名册。
-            case iCloud
-            /// 本机信任过（扫码或老版本审批）。
+            /// 本机配对过（局域网审批或邀请）。
             case paired
+            /// 局域网里看到、还没配对。连上去要在 Mac 上审批。
+            case nearby
             /// 调试直连（`-RemoteDebugEndpoint`），事先不知道身份。
             case debug
         }
@@ -49,6 +49,8 @@ final class RemoteMacDirectory {
 
     /// 配对过的 Mac（在线的在前）。
     private(set) var macs: [Mac] = []
+    /// 局域网里此刻在线、还没配对的 Mac。
+    private(set) var nearbyMacs: [Mac] = []
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
@@ -68,8 +70,6 @@ final class RemoteMacDirectory {
     private static let internetOnlyKey = DefaultsKey.remoteInternetOnly
 
     @ObservationIgnored let identity: RemoteIdentityStore
-    /// 同一 Apple ID 的名册。测试里为 nil：不读写真实的 iCloud 钥匙串。
-    @ObservationIgnored let roster: RemoteCloudRoster?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var browser: NWBrowser?
     /// Bonjour 此刻看到的、带设备 ID 的 Mac：设备 ID → (电脑名, 端点)。网络诊断测局域网用它。
@@ -102,14 +102,13 @@ final class RemoteMacDirectory {
     /// 轮询任务的代号：旧任务收尾时不能把新任务的引用清掉。
     @ObservationIgnored private var relayPollGeneration = 0
 
-    init(identity: RemoteIdentityStore = RemoteIdentityStore(), roster: RemoteCloudRoster? = nil,
+    init(identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts),
          relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard,
          relayPollInterval: Duration = .seconds(15),
          fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {
              try await $0.onlineHosts()
          }) {
         self.identity = identity
-        self.roster = roster
         self.relayStore = relayStore
         self.defaults = defaults
         self.relayPollInterval = relayPollInterval
@@ -118,7 +117,6 @@ final class RemoteMacDirectory {
         self.isInForeground = UIApplication.shared.applicationState != .background
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
         self.internetOnly = defaults.bool(forKey: Self.internetOnlyKey)
-        if isActivated { publishSelf() }
         refreshPaired()
         observeLifecycle()
         #if DEBUG
@@ -155,7 +153,6 @@ final class RemoteMacDirectory {
     private func willEnterForeground() {
         isInForeground = true
         endBackgroundTask()
-        // 名册可能在后台经 iCloud 同步来了新的 Mac。
         refreshPaired()
         // 只在有界面显示在线状态时才接着问中继；没人看时等界面出现（或抽屉读 `pairedMacs`）再问。
         if isActivated, wantsLiveRelayStatus { startRelayPolling() }
@@ -168,19 +165,11 @@ final class RemoteMacDirectory {
         backgroundTask = .invalid
     }
 
-    /// 用户主动点了「连接我的 Mac」：记住，之后自动浏览；同时把本机登进名册，同一 Apple ID 的 Mac 认得出这台手机。
+    /// 用户主动点了「连接我的 Mac」：记住，之后自动浏览。
     func activate() {
         defaults.set(true, forKey: Self.activatedKey)
         isActivated = true
-        publishSelf()
         startBrowsing()
-    }
-
-    private func publishSelf() {
-        guard let roster, let key = try? identity.localIdentity().publicKey.rawRepresentation else { return }
-        roster.publish(RemoteRosterEntry(id: RemoteLocalDevice.id(),
-                                         name: LANSyncCoordinator.localDeviceName(), publicKey: key,
-                                         platform: .mobile, updatedAt: Date()))
     }
 
     func startBrowsing() {
@@ -254,6 +243,7 @@ final class RemoteMacDirectory {
             client = RemoteMacClient(macName: mac.name, endpoint: mac.endpoint ?? .hostPort(host: "0.0.0.0", port: 1),
                                      identity: identity, expectedPeer: mac.expectedPeer)
             client.onRelayConfig = { [weak self] config in self?.importRelayConfig(config) }
+            client.onPaired = { [weak self] in self?.rebuild() }
             clients[mac.id] = client
         }
         client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
@@ -437,17 +427,18 @@ final class RemoteMacDirectory {
         return macs.filter(\.isOnline)
     }
 
-    /// 重新读本机信任与名册（配对 / 忘记之后、回到前台时）。
+    /// 重新读本机信任（配对 / 忘记之后、回到前台时）。
     func refreshPaired() {
         rebuild()
     }
 
     private func rebuild() {
-        macs = debugMacs + Self.knownMacs(trusted: identity.trustedPeers(), roster: roster?.entries() ?? [],
-                                         blocked: identity.isBlocked, online: online, relayHosts: relayHosts)
+        let trusted = identity.trustedPeers()
+        macs = debugMacs + Self.knownMacs(trusted: trusted, online: online, relayHosts: relayHosts)
+        nearbyMacs = Self.nearbyMacs(online: online, paired: Set(trusted.map(\.id)), localID: RemoteLocalDevice.id())
         // 局域网和中继的情况变了，已有的客户端下次重连时按新路走。局域网又找到它、中继报它上线时，
         // 客户端会叫醒正在退避的标签马上重试（Mac 长时间离线后没人看的标签退避可达一分钟）。
-        for mac in macs {
+        for mac in macs + nearbyMacs {
             guard let client = clients[mac.id] else { continue }
             client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
             client.relayPresenceChanged(mac.isOnRelay)
@@ -486,17 +477,10 @@ final class RemoteMacDirectory {
     }
     #endif
 
-    /// 配对过的 Mac：本机信任的 ∪ 名册里的 Mac（本机拉黑的除外）。同一设备 ID 只算一台；名册里有它时公钥以名册
-    /// 为准（Mac 重装后换了密钥，名册经同一 Apple ID 同步的是新的，本机记的旧公钥会把它永远挡在外面）。
-    /// 名字在线时取 Bonjour 的电脑名（改过名也跟得上），否则取记下的。
-    nonisolated static func knownMacs(trusted: [RemotePeer], roster: [RemoteRosterEntry], blocked: (UUID) -> Bool,
-                                      online: [UUID: (name: String, endpoint: NWEndpoint)],
+    /// 配对过的 Mac：本机信任的。名字在线时取 Bonjour 的电脑名（改过名也跟得上），否则取记下的。
+    nonisolated static func knownMacs(trusted: [RemotePeer], online: [UUID: (name: String, endpoint: NWEndpoint)],
                                       relayHosts: Set<UUID> = []) -> [Mac] {
         var byID: [UUID: Mac] = [:]
-        for entry in roster where entry.platform == .mac && !blocked(entry.id) {
-            byID[entry.id] = Mac(id: entry.id.uuidString, deviceID: entry.id, name: entry.name,
-                                 publicKey: entry.publicKey, source: .iCloud)
-        }
         for peer in trusted where byID[peer.id] == nil {
             byID[peer.id] = Mac(id: peer.id.uuidString, deviceID: peer.id, name: peer.name, publicKey: peer.publicKey,
                                 source: .paired)
@@ -514,7 +498,18 @@ final class RemoteMacDirectory {
         }
     }
 
-    /// 忘记一台 Mac：本机不再信任并拉黑（名册里还有它也不再自动出现），直到重新扫码。
+    /// 局域网里在线、没配对过的 Mac（按名字排）。本机自己不算：Mac 当主控时 Bonjour 也看得到自己。
+    nonisolated static func nearbyMacs(online: [UUID: (name: String, endpoint: NWEndpoint)], paired: Set<UUID>,
+                                       localID: UUID) -> [Mac] {
+        online.compactMap { id, seen -> Mac? in
+            guard id != localID, !paired.contains(id) else { return nil }
+            return Mac(id: id.uuidString, deviceID: id, name: seen.name, publicKey: nil, source: .nearby,
+                       endpoint: seen.endpoint)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// 忘记一台 Mac：本机不再信任，再连要重新配对。
     func forget(_ mac: Mac) {
         if let deviceID = mac.deviceID { try? identity.revoke(id: deviceID) }
         clients.removeValue(forKey: mac.id)?.disconnect()

@@ -81,9 +81,9 @@ nonisolated struct RemoteRelayConfig: Codable, Equatable, Sendable {
 /// 中继配置的存放处：iCloud 钥匙串，同一 Apple ID 的设备自动拿到。
 nonisolated final class RemoteRelayConfigStore: @unchecked Sendable {
     private static let account = "default"
-    private let storage: any RemoteRosterStorage
+    private let storage: any RemoteSyncedStorage
 
-    init(storage: any RemoteRosterStorage = RemoteKeychainRosterStorage(service: "com.uozi.uTerm.remote.relay")) {
+    init(storage: any RemoteSyncedStorage = RemoteKeychainSyncedStorage(service: "com.uozi.uTerm.remote.relay")) {
         self.storage = storage
     }
 

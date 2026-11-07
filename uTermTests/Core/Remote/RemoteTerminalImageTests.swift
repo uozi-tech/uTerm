@@ -51,7 +51,7 @@ final class RemoteTerminalImageTests: XCTestCase {
         registry.register(TerminalSessionEntry(id: sessionID, serverID: UUID(), serverName: "测试主机",
                                                windowKind: TerminalWindowKind.terminal, title: "bash",
                                                connectedAt: Date()), session: session)
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features ?? RemoteConstants.localFeatures)
         server.start()
@@ -59,7 +59,7 @@ final class RemoteTerminalImageTests: XCTestCase {
         let port = try XCTUnwrap(server.port)
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
         _ = await waitUntil { !server.pairingRequests.isEmpty }
         server.approvePairing(try XCTUnwrap(server.pairingRequests.first?.id))

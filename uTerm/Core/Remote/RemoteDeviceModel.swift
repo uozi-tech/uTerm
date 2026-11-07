@@ -1,4 +1,21 @@
 import Foundation
+#if os(macOS)
+import IOKit
+#endif
+
+/// 本机在远控里是哪类设备。只作展示（列表图标、文案），信任与能力都不看它。
+nonisolated enum RemoteDevicePlatform: String, Sendable {
+    case mac
+    case mobile
+
+    static var current: RemoteDevicePlatform {
+        #if os(macOS)
+        .mac
+        #else
+        .mobile
+        #endif
+    }
+}
 
 /// 本机机型的商品名（「iPhone 16 Pro」「iPad Air (13-inch) (M3)」），给远控 / 局域网同步对端看的。
 ///
@@ -8,14 +25,30 @@ import Foundation
 /// 表照抄 DeviceKit 的 `Device.generated.swift`，只留 iOS 18（本 App 最低版本）装得上的机型；
 /// 新机型发布后补表即可，查不到的返回 nil、调用方退回系统给的通用名，不会显示错的型号。
 nonisolated enum RemoteDeviceModel {
-    /// 本机的商品名；macOS 与查不到的新机型返回 nil。
+    /// 本机的商品名；查不到的新机型返回 nil。
     static func current() -> String? {
         #if canImport(UIKit)
         marketingName(for: hardwareIdentifier())
+        #elseif os(macOS)
+        macProductName()
         #else
         nil
         #endif
     }
+
+    #if os(macOS)
+    /// Mac 的商品名（「MacBook Pro (14-inch, M5 Pro)」）：Apple 芯片的设备树里直接有，不用查表。
+    /// Intel Mac 没有这个节点，返回 nil。
+    private static func macProductName() -> String? {
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+        guard entry != 0 else { return nil }
+        defer { IOObjectRelease(entry) }
+        guard let data = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Data else { return nil }
+        let name = String(decoding: data.prefix { $0 != 0 }, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+    #endif
 
     static func marketingName(for identifier: String) -> String? {
         table[identifier]

@@ -222,7 +222,7 @@ final class RemoteRelayConfigTests: XCTestCase {
     }
 
     func test_store_round_trips_and_clears() throws {
-        let store = RemoteRelayConfigStore(storage: RemoteMemoryRosterStorage())
+        let store = RemoteRelayConfigStore(storage: RemoteMemorySyncedStorage())
         XCTAssertNil(store.load())
         let config = sample()
         try store.save(config)

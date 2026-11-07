@@ -102,9 +102,9 @@ final class RemoteCryptoTests: XCTestCase {
 
     func test_identity_store_persists_key_and_peers() throws {
         let storage = RemoteMemoryStorage()
-        let store = RemoteIdentityStore(storage: storage)
+        let store = RemoteIdentityStore(role: .controllers, storage: storage)
         let key = try store.localIdentity()
-        XCTAssertEqual(try RemoteIdentityStore(storage: storage).localIdentity().rawRepresentation,
+        XCTAssertEqual(try RemoteIdentityStore(role: .controllers, storage: storage).localIdentity().rawRepresentation,
                        key.rawRepresentation)
 
         let peer = RemotePeer(id: UUID(), name: "iPhone", publicKey: Data(repeating: 1, count: 32), pairedAt: Date())
@@ -113,6 +113,6 @@ final class RemoteCryptoTests: XCTestCase {
         XCTAssertEqual(store.trustedPeers().count, 1)
         XCTAssertEqual(store.peer(id: peer.id)?.name, "iPhone 改名")
         try store.revoke(id: peer.id)
-        XCTAssertNil(RemoteIdentityStore(storage: storage).peer(id: peer.id))
+        XCTAssertNil(RemoteIdentityStore(role: .controllers, storage: storage).peer(id: peer.id))
     }
 }

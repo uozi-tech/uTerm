@@ -18,7 +18,7 @@ final class RemoteDesktopUnlockTests: XCTestCase {
 
     private func makeServer(_ mac: FakeDesktopMac) async throws -> RemoteHostServer {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       desktopEnvironment: mac.environment())
         server.start()
@@ -28,7 +28,7 @@ final class RemoteDesktopUnlockTests: XCTestCase {
     }
 
     private func makeClient(_ server: RemoteHostServer) async throws -> RemoteMacClient {
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         try server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "测试 iPhone",
                                     publicKey: try identity.localIdentity().publicKey.rawRepresentation, pairedAt: Date()))
         let client = RemoteMacClient(macName: "测试 Mac",

@@ -129,9 +129,11 @@ final class RemoteMacClient: Identifiable {
     @ObservationIgnored private var internetDialer: (@Sendable () async throws -> RemoteDialedPath)?
     /// Mac 发来的中继配置交给谁存。
     @ObservationIgnored var onRelayConfig: (@MainActor (RemoteRelayConfig) -> Void)?
+    /// 这次连接让本机新记住了这台 Mac（局域网审批通过、或第一次连邀请里的 Mac）：目录据此把它挪进「已配对」。
+    @ObservationIgnored var onPaired: (@MainActor () -> Void)?
     @ObservationIgnored private let identity: RemoteIdentityStore
-    /// 要连的是哪台 Mac（设备 ID + 长期公钥，来自名册或扫码）。握手出来对不上就拒绝。nil = 调试直连等
-    /// 事先不知道身份的情况，按「认识就核对、不认识就等 Mac 审批」处理。
+    /// 要连的是哪台 Mac（设备 ID + 长期公钥，来自本机配对记录或邀请）。握手出来对不上就拒绝。nil = 还没配对
+    /// （局域网里发现的新 Mac、调试直连），按「认识就核对、不认识就等 Mac 审批」处理。
     @ObservationIgnored private let expectedPeer: RemotePeer?
     /// 扫码拿到的一次性令牌：下一次握手带上凭据，Mac 核对通过就直接信任这台手机。配上后清掉。
     @ObservationIgnored var pairingToken: Data?
@@ -156,6 +158,8 @@ final class RemoteMacClient: Identifiable {
          heartbeat: RemoteHeartbeat = .standard) {
         self.macName = macName
         self.endpoint = endpoint
+        // 主控端只往「本机控制的主机」那张表里记。记进被控端那张，这台 Mac 就能反过来免审批控制本机。
+        precondition(identity.role == .hosts, "主控端必须用 hosts 方向的信任表")
         self.identity = identity
         self.expectedPeer = expectedPeer
         self.heartbeat = heartbeat
@@ -276,7 +280,8 @@ final class RemoteMacClient: Identifiable {
                                     ephemeralKey: ephemeral.publicKey.rawRepresentation,
                                     staticKey: phoneKey,
                                     features: RemoteConstants.localFeatures, pairingProof: proof,
-                                    deviceModel: RemoteDeviceModel.current())
+                                    deviceModel: RemoteDeviceModel.current(),
+                                    platform: RemoteDevicePlatform.current.rawValue)
             let established = try await link.establish(role: .initiator, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: dialed.handshakeKeys)
             // 连上的不是要找的那台（同一地址上换了台机器，或有人冒充）：不往下走。
@@ -285,7 +290,7 @@ final class RemoteMacClient: Identifiable {
                 throw RemoteProtocolError.peerIdentityChanged
             }
             // 配对过的 Mac 换了长期密钥：可能是冒充，也可能是重装过 uTerm。宁可拒绝，让用户手动忘记重配。
-            // 给了 `expectedPeer` 时以它为准（上面已经核对过）：名册里的新公钥替换本机记的旧公钥。
+            // 给了 `expectedPeer` 时以它为准（上面已经核对过）：扫到的新邀请替换本机记的旧公钥。
             if expectedPeer == nil, let known = identity.peer(id: established.peer.deviceID),
                known.publicKey != established.peer.staticKey {
                 throw RemoteProtocolError.peerIdentityChanged
@@ -375,8 +380,15 @@ final class RemoteMacClient: Identifiable {
         case .trusted, .approved:
             if let peer {
                 // 第一次见到这台 Mac（或手机这边忘过）：记住它的长期公钥，之后每次握手都核对。
-                try? identity.trust(RemotePeer(id: peer.deviceID, name: peer.deviceName,
-                                               publicKey: peer.staticKey, pairedAt: Date()))
+                // 早就记着的：只跟着更新名字与机型，本机起的别名与配对时间不动。
+                let known = identity.peer(id: peer.deviceID).flatMap { $0.publicKey == peer.staticKey ? $0 : nil }
+                var updated = known ?? RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey,
+                                                  pairedAt: Date())
+                updated.name = peer.deviceName
+                if let model = peer.deviceModel { updated.model = model }
+                if let platform = peer.platform { updated.platform = platform }
+                if updated != known { try? identity.trust(updated) }
+                if known == nil { onPaired?() }
             }
             pairingToken = nil
             pairingRefused = false

@@ -134,7 +134,7 @@ final class StyleGalleryTests: XCTestCase {
                     .environment(store(tab: .settings))
                     .environment(sync)
                     .environment(lan)
-                    .environment(RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage())))
+                    .environment(RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())))
                     .modelContainer(c)
             }
             try await shoot("keys", on: device) {
@@ -244,18 +244,16 @@ final class StyleGalleryTests: XCTestCase {
         }
     }
 
-    /// 主机页的「我的 Mac」：一台在线（调试直连）、一台不在线（名册里的），标题右侧是扫码配对。
+    /// 主机页的「我的 Mac」：一台在线（调试直连）、一台不在线（配对过的），标题右侧是扫码配对。
     func testRemoteMacSection() async throws {
         defer { MobileProbeWindow.closeAll() }
         let suite = "StyleGalleryTests.remoteMacs.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("127.0.0.1:1", forKey: "RemoteDebugEndpoint")
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: UUID(), name: "办公室 iMac", publicKey: Data(count: 32), platform: .mac,
-                                         updatedAt: .now))
-        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
-                                           roster: roster, defaults: defaults)
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
+        try identity.trust(RemotePeer(id: UUID(), name: "办公室 iMac", publicKey: Data(count: 32), pairedAt: .now))
+        let directory = RemoteMacDirectory(identity: identity, defaults: defaults)
         directory.activate()
         for device in Self.devices {
             try await shoot("remote-mac-section", on: device) {
@@ -299,7 +297,7 @@ final class StyleGalleryTests: XCTestCase {
             }
             log.append(seeded)
         }
-        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
                                            defaults: defaults)
         for device in Self.devices {
             try await shoot("network-diagnostics", on: device, settle: .milliseconds(600)) {

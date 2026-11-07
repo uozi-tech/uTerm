@@ -42,9 +42,9 @@ final class RemoteInternetAccessTests: XCTestCase {
         return true
     }
 
-    private func makeServer(allowed: Set<UUID> = [], roster: RemoteCloudRoster? = nil) -> RemoteHostServer {
+    private func makeServer(allowed: Set<UUID> = []) -> RemoteHostServer {
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()), roster: roster,
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       keyConfirmationTimeout: .milliseconds(300))
         server.internetAccessPolicy = { allowed.contains($0) }
@@ -119,23 +119,15 @@ final class RemoteInternetAccessTests: XCTestCase {
         XCTAssertTrue(server.connectedDevices.isEmpty)
     }
 
-    /// 名册里的设备也要单独勾选：iCloud 账号失守不等于能静默控制这台 Mac。
-    func test_roster_device_needs_the_tick_too() async throws {
+    /// 没配对过的设备勾选了也连不进来：公网来的连接不弹审批框，只认本机配对过的。
+    func test_unpaired_device_is_refused_even_if_ticked() async throws {
         let phone = Phone()
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: phone.id, name: "手机", publicKey: phone.peer.publicKey, platform: .mobile,
-                                         updatedAt: Date()))
-        let refused = makeServer(allowed: [], roster: roster)
-        let (_, refusedInbox) = await connect(phone, to: refused)
-        let closed = await waitUntil { refusedInbox.closed }
+        let server = makeServer(allowed: [phone.id])
+        let (_, inbox) = await connect(phone, to: server)
+        let closed = await waitUntil { inbox.closed }
         XCTAssertTrue(closed)
-        XCTAssertTrue(refused.identity.trustedPeers().isEmpty)
-
-        let allowed = makeServer(allowed: [phone.id], roster: roster)
-        let (link, inbox) = await connect(phone, to: allowed)
-        let trusted = await waitUntil { self.pairing(inbox).contains(.trusted) }
-        XCTAssertTrue(trusted)
-        link.close()
+        XCTAssertTrue(server.identity.trustedPeers().isEmpty)
+        XCTAssertTrue(server.pairingRequests.isEmpty, "公网连接不弹审批")
     }
 
     func test_identity_different_from_the_signaled_device_is_dropped() async throws {
@@ -219,7 +211,7 @@ final class RemoteInternetAccessTests: XCTestCase {
         let phone = Phone()
         var allowed: Set<UUID> = [phone.id]
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.internetAccessPolicy = { allowed.contains($0) }
         try server.trust(phone.peer)
@@ -310,16 +302,15 @@ final class RemoteInternetAccessTests: XCTestCase {
         link.close()
     }
 
-    func test_internet_candidates_merge_trusted_and_roster_phones_only() throws {
-        let phone = Phone(), rosterPhone = Phone(), rosterMac = Phone()
-        let roster = RemoteCloudRoster(storage: RemoteMemoryRosterStorage())
-        roster.publish(RemoteRosterEntry(id: rosterPhone.id, name: "B", publicKey: rosterPhone.peer.publicKey, platform: .mobile,
-                                         updatedAt: Date()))
-        roster.publish(RemoteRosterEntry(id: rosterMac.id, name: "Mac", publicKey: rosterMac.peer.publicKey, platform: .mac,
-                                         updatedAt: Date()))
-        let server = makeServer(roster: roster)
+    /// 能勾选公网接入的就是配对过的设备，手机和 Mac 都算。
+    func test_internet_candidates_are_the_paired_devices() throws {
+        let phone = Phone(), mac = Phone()
+        let server = makeServer()
         try server.trust(phone.peer)
-        XCTAssertEqual(Set(server.internetAccessCandidates.map(\.id)), [phone.id, rosterPhone.id])
+        var macPeer = mac.peer
+        macPeer.platform = RemoteDevicePlatform.mac.rawValue
+        try server.trust(macPeer)
+        XCTAssertEqual(Set(server.internetAccessCandidates.map(\.id)), [phone.id, mac.id])
     }
 
     func test_settings_default_to_closed_and_persist() {
