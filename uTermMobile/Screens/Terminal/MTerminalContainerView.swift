@@ -21,7 +21,7 @@ final class MTerminalContainerView: UIView {
     var isOnScreen = true {
         didSet {
             guard isOnScreen != oldValue else { return }
-            (terminalView as? MTerminalView)?.suppressesDrawing = !isOnScreen
+            (terminalView as? MTerminalView)?.isOffScreen = !isOnScreen
             if isOnScreen {
                 commitsOnNextLayout = true
                 setNeedsLayout()
@@ -39,6 +39,8 @@ final class MTerminalContainerView: UIView {
         terminalView.translatesAutoresizingMaskIntoConstraints = true
         terminalView.autoresizingMask = []
         addSubview(terminalView)
+        // 外壳切换时新容器接走旧视图：以新容器的状态为准，别沿用上一个容器留下的「不在屏上」。
+        (terminalView as? MTerminalView)?.isOffScreen = !isOnScreen
     }
 
     @available(*, unavailable)

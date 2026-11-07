@@ -240,6 +240,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 #endif
     var cellDimension: CellDimension
     var caretView: CaretView?
+    /// uTerm patch #19: stop the blinking caret's repeating animation while the
+    /// host keeps this view in the window but hidden (a background tab). Turning
+    /// it back off restarts the blink. Upstream only stops it outside a window.
+    public var suspendsCaretAnimation = false {
+        didSet {
+            if oldValue != suspendsCaretAnimation {
+                caretView?.updateCursorStyle()
+            }
+        }
+    }
     var _lineSpacing: CGFloat = 1.0
     var terminal: Terminal!
     private var progressBarView: TerminalProgressBarView?
@@ -281,8 +291,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
-    // Timer to display the terminal buffer
-    var link: CADisplayLink!
+    // uTerm patch #18: upstream kept a `CADisplayLink` here ("Timer to display
+    // the terminal buffer"), removed. See `setupDisplayUpdates`.
     // Cache for the colors in the 0..255 range
     var colors: [UIColor?] = Array(repeating: nil, count: 256)
     var trueColors: [Attribute.Color:UIColor] = [:]
@@ -509,12 +519,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 #endif
 
+    // uTerm patch #18: upstream created a `CADisplayLink` here that `feed` unpaused
+    // in `feedPrepare` and paused again in `feedFinish`. Both run synchronously in
+    // the same call on the main thread (the only way uTerm feeds), so the link
+    // never got to fire; redraws are all driven by `queuePendingDisplay` /
+    // `displayImmediately`. Yet every feed (up to 60 per second per terminal)
+    // flipped its paused state, registering and unregistering it with the vsync
+    // source each time. The link also retained the view as its target and was
+    // only invalidated by `updateUiClosed()`, so every terminal that was not
+    // explicitly closed leaked along with its whole scrollback.
+    // Start/suspend are kept as no-ops, like on the Mac.
     func setupDisplayUpdates ()
     {
-        link = CADisplayLink(target: self, selector: #selector(step))
-            
-        link.add(to: .current, forMode: .default)
-        suspendDisplayUpdates()
     }
 
     private func setupProgressBar() {
@@ -579,23 +595,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         resetProgressReportTimer()
     }
     
-    @objc
-    func step(displaylink: CADisplayLink) {
-        updateDisplay()
-    }
-
     func startDisplayUpdates()
     {
-        link.isPaused = false
+        // uTerm patch #18: no display link anymore.
     }
     
     func suspendDisplayUpdates()
     {
-        link.isPaused = true
+        // uTerm patch #18: no display link anymore.
     }
     
     public func updateUiClosed() {
-        self.link.invalidate()
         stopTextBlinking()
     }
     

@@ -336,6 +336,34 @@ uTerm 侧无入口，回归测试见 `uTermTests/Features/Terminal/TerminalSynch
 
 uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalBottomFollowTests.swift`。
 
+## 18. iOS 去掉永不触发的 CADisplayLink
+
+上游 iOS 在 `setupDisplayUpdates` 里建一个 `CADisplayLink`，`feedPrepare` 里取消暂停、`feedFinish` 里再暂停。两者在
+同一次主线程调用里同步执行（uTerm 只在主线程 feed），链接从来轮不到触发——重绘全靠 `queuePendingDisplay` /
+`displayImmediately`——但每次 feed（每个终端最多每秒 60 次）都要把它的暂停状态翻两次，反复向 vsync 源登记、注销。
+链接还把视图当 target 强持有，只有 `updateUiClosed()` 才 `invalidate`，uTerm 从不调：关掉的标签连同整份回滚缓冲
+（远控要 1 万行）一直留在内存里。
+
+涉及文件：`iOS/iOSTerminalView.swift`：删掉 `link` 属性与 `step(displaylink:)`；`setupDisplayUpdates` /
+`startDisplayUpdates` / `suspendDisplayUpdates` 留空（同 Mac）；`updateUiClosed()` 只停文字闪烁。
+
+uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalHiddenRenderingTests.swift`
+（`testTerminalViewIsReleasedWhenNoLongerReferenced`）。上游若改成真用这个链接（例如后台线程 feed），重新评估。
+
+## 19. iOS 隐藏的终端不跑光标闪烁动画
+
+`iOS/iOSCaretView.swift` 的闪烁光标是一个 `.repeat` 的 `UIView.animate`，上游只在视图离开窗口时停。uTerm 的后台标签
+留在窗口里（`opacity(0)` / 移出屏外），程序设了闪烁光标（`CSI 1 q`，zsh vi 模式等）时，每个后台标签的光标都在
+让 Core Animation 一帧帧出图。
+
+涉及文件：
+
+- `iOS/iOSTerminalView.swift`：新增 `public var suspendsCaretAnimation`，变化时重新应用光标样式。
+- `iOS/iOSCaretView.swift`：`updateAnimation` 在它为真时只复位不透明度、不起动画。
+
+uTerm 侧入口：`uTermMobile/Screens/Terminal/SwiftTermView.swift` 的 `MTerminalView.suppressesDrawing`（后台标签或
+App 在后台时为真）。回归测试见 `uTermMobileTests/TerminalHiddenRenderingTests.swift`。
+
 ## 20. CoreGraphics 绘制按行缓存排版结果
 
 iOS 上 `setNeedsDisplay(rect)` 只标一小块也没用：`draw` 拿到的永远是整个视图（实测连最简单的 `UIView` 子类也一样），

@@ -25,10 +25,30 @@ final class MTerminalView: SwiftTerm.TerminalView {
 
     /// 隐藏标签的 `opacity(0)` 拦不住绘制（实测 alpha 0 和 `isHidden` 都照画）：后台标签里程序还在输出时，
     /// 每一帧都在主线程上画一张没人看的图。字节照常解析，露出来时补画一次。
-    var suppressesDrawing = false {
+    ///
+    /// 两种「看不见」都算：所在格的后台标签 / Agent 模式（`isOffScreen`，容器同步），以及整个 App
+    /// 退到了后台（`isAppInBackground`，控制器同步）。后者是并行执行用 `BGContinuedProcessingTask`
+    /// 续命、或退后台后系统给的那几十秒：SSH 还连着、输出照样到，前台标签照旧每帧重绘，
+    /// 画的东西谁也看不见。系统切后台时取快照发生在 `didEnterBackground` 之后，此前最后一帧已经画好，
+    /// 快照不受影响；`willEnterForeground` 时补画一次，回来看到的就是最新内容。
+    var isOffScreen = false {
+        didSet { updateDrawingSuppression() }
+    }
+    var isAppInBackground = false {
+        didSet { updateDrawingSuppression() }
+    }
+    private(set) var suppressesDrawing = false {
         didSet {
-            if oldValue, !suppressesDrawing { super.setNeedsDisplay(bounds) }
+            guard suppressesDrawing != oldValue else { return }
+            // 看不见时闪烁光标的动画也停掉（SwiftTerm 补丁 #19）：它是个重复动画，只要在跑，
+            // Core Animation 就得一帧帧地出图。
+            suspendsCaretAnimation = suppressesDrawing
+            if !suppressesDrawing { super.setNeedsDisplay(bounds) }
         }
+    }
+
+    private func updateDrawingSuppression() {
+        suppressesDrawing = isOffScreen || isAppInBackground
     }
 
     override func setNeedsDisplay() {

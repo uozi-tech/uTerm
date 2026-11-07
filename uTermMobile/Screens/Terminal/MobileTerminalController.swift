@@ -82,9 +82,38 @@ final class MobileTerminalController {
     var isForeground = true {
         didSet {
             guard isForeground != oldValue else { return }
-            outputPump.pacing = isForeground ? .foreground : .background
-            if isForeground { outputPump.restartFlushLoop() }
+            updatePacing()
         }
+    }
+
+    /// 整个 App 在后台（`didEnterBackground` → `willEnterForeground`）。这段时间里 SSH 照常收发
+    ///（并行执行靠 `BGContinuedProcessingTask` 续命、或系统给的几十秒），只是谁也看不见终端：
+    /// 前台标签也按后台档喂（64ms 一拍，主线程每秒醒 16 次而不是 60 次），终端视图不画。
+    /// 字节一个不少照常解析，回到前台立刻重起泵、补画一次。网络 I/O 不受影响——入站任务不看它。
+    @ObservationIgnored private(set) var isAppInBackground = UIApplication.shared.applicationState == .background {
+        didSet {
+            guard isAppInBackground != oldValue else { return }
+            (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
+            updatePacing()
+        }
+    }
+
+    /// 进出后台由通知驱动；测试直接调它。
+    func appVisibilityChanged(inBackground: Bool) {
+        isAppInBackground = inBackground
+    }
+
+    /// 只有「前台标签 + App 在前台」才按 16ms 喂。
+    nonisolated static func pacing(isForeground: Bool, isAppInBackground: Bool) -> TerminalFlushPacing {
+        isForeground && !isAppInBackground ? .foreground : .background
+    }
+
+    private func updatePacing() {
+        let next = Self.pacing(isForeground: isForeground, isAppInBackground: isAppInBackground)
+        guard next != outputPump.pacing else { return }
+        outputPump.pacing = next
+        // 换到前台档时截断后台档那一拍的等待。
+        if next == .foreground { outputPump.restartFlushLoop() }
     }
 
     typealias FlushPacing = TerminalFlushPacing
@@ -92,6 +121,8 @@ final class MobileTerminalController {
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
     @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
     @ObservationIgnored private nonisolated(unsafe) var metaResetObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var backgroundObserver: NSObjectProtocol?
+    @ObservationIgnored private nonisolated(unsafe) var foregroundObserver: NSObjectProtocol?
 
     /// 记下首次建连参数，供失败后 `restart()` 在同一控制器 / 同一终端视图上重连。
     @ObservationIgnored private var lastProfile: ServerProfile?
@@ -101,11 +132,27 @@ final class MobileTerminalController {
     /// `transportFactory` 默认真 SSH——生产侧调用点（`TermTab`）不用改。
     init(transportFactory: MobileTerminalTransportFactory = .live) {
         self.transportFactory = transportFactory
+        installAppVisibilityObservers()
+    }
+
+    /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、
+    /// 来电横幅、切 App 卡片时 App 只是 inactive，终端还看得见，不能停画。
+    private func installAppVisibilityObservers() {
+        let center = NotificationCenter.default
+        backgroundObserver = center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appVisibilityChanged(inBackground: true) }
+        }
+        foregroundObserver = center.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appVisibilityChanged(inBackground: false) }
+        }
     }
 
     func attach(_ view: SwiftTerm.TerminalView) {
         terminalView = view
         outputPump.terminalView = view
+        (view as? MTerminalView)?.isAppInBackground = isAppInBackground
         // 远控快照带这么多行历史，接收端要装得下（SwiftTerm 默认只有 500 行）。
         let terminal = view.getTerminal()
         if (terminal.options.scrollback) < RemoteConstants.snapshotScrollback {
@@ -422,6 +469,8 @@ final class MobileTerminalController {
     deinit {
         if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
         if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
+        if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         // 输出泵与输入通道随控制器释放，各自的 deinit 收尾。
         exitTask?.cancel(); connectTask?.cancel()
     }
