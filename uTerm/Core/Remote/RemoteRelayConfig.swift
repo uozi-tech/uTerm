@@ -84,8 +84,14 @@ nonisolated enum RemoteRelayPlacement: Equatable, Sendable {
     case setDefault
     /// 和默认的不是同一台：只给这台主机用，不顶掉默认（本机连的其他主机还在默认中继上）。
     case perHost
+    /// 和默认的一模一样：什么都不用记。
+    case keep
 
-    static func place(_ incoming: RemoteRelayConfig, current: RemoteRelayConfig?) -> RemoteRelayPlacement {
+    /// `adoptsAsDefault` 为 false（Mac 当主控端）时从不改默认中继：默认的那台也是它自己被控时用的。
+    static func place(_ incoming: RemoteRelayConfig, current: RemoteRelayConfig?,
+                      adoptsAsDefault: Bool = true) -> RemoteRelayPlacement {
+        if incoming == current { return .keep }
+        guard adoptsAsDefault else { return .perHost }
         guard let current, current.relayID != incoming.relayID else { return .setDefault }
         return .perHost
     }

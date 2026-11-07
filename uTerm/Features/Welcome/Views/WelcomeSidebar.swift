@@ -298,6 +298,14 @@ struct WelcomeSidebar: View {
                     shortcutHint: WelcomeSidebarNav.shortcutHint(for: .quickCommands, in: navEntries)
                 )
                 .padding(.horizontal, 8)
+                // 去控制别的 Mac：开独立的「我的 Mac」窗口，不占主机面板。
+                UDSidebarRow(
+                    systemImage: "desktopcomputer",
+                    label: "我的 Mac",
+                    selected: false,
+                    action: { openWindow(id: RemoteMacsWindow.id) }
+                )
+                .padding(.horizontal, 8)
             }
             // 设计稿 Sidebar：padding 6 0 14 —— 顶部紧贴工具栏，分组靠 16pt 间距 + 小标题。
             .padding(.top, 6)

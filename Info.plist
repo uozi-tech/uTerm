@@ -17,6 +17,17 @@
 	<integer>14400</integer>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.uozi.uTerm.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>uterm</string>
+			</array>
+		</dict>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

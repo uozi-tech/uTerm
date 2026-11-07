@@ -2,9 +2,9 @@ import CryptoKit
 import Foundation
 @preconcurrency import Network
 import Observation
-import UIKit
 
-/// 「我的 Mac」：配对过的 Mac、局域网里还没配对的 Mac，以及每台 Mac 的远控客户端。
+/// 「我的 Mac」：配对过的 Mac、局域网里还没配对的 Mac，以及每台 Mac 的远控客户端。两端共用：
+/// iPhone / iPad 与 Mac 当主控端都是它；iOS 退到后台的处理在 `RemoteMacDirectoryLifecycle`。
 ///
 /// 配对过的 Mac 只来自本机信任（局域网审批或邀请配上的），同一 Apple ID 不算数。Bonjour（`_uterm-remote._tcp`）
 /// 回答「哪台此刻在线、地址是什么」：按 TXT 记录里的设备 ID 对号，设备 ID 与公钥在握手里再核对一遍
@@ -55,6 +55,8 @@ final class RemoteMacDirectory {
     private(set) var nearbyMacs: [Mac] = []
     /// 刚凭邀请配上、等它一上线就打开的 Mac（`Mac.id`）。主机页的「我的 Mac」负责打开并清掉。
     var pendingOpenMacID: String?
+    /// 打开链接收到、还没确认的邀请（Mac 上点开 `uterm://pair`）。「我的 Mac」窗口弹出确认并清掉。
+    var pendingInvitation: RemotePairingInvitation?
     private(set) var isBrowsing = false
     /// 存储属性而不是现读 UserDefaults：视图要能观察到它从 false 变成 true。
     private(set) var isActivated: Bool
@@ -85,8 +87,11 @@ final class RemoteMacDirectory {
     /// 扫码拿到、还没用掉的令牌：设备 ID → 令牌。
     @ObservationIgnored private var pendingTokens: [UUID: Data] = [:]
     @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
-    @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
-    @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    /// 平台的前后台监听（iOS 的 `RemoteMacDirectoryLifecycle`），跟着目录活。
+    @ObservationIgnored var lifecycle: AnyObject?
+    /// 主机带来的中继能不能当本机默认中继（见 `RemoteRelayPlacement`）。iOS 能；Mac 不能：Mac 的默认中继也是
+    /// 它自己被控时注册的那台，不能因为去控制别人就换掉。
+    @ObservationIgnored let adoptsRelayAsDefault: Bool
     /// 中继配置存放处。测试里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
     /// 每台中继一个客户端，按中继 ID。
@@ -109,6 +114,7 @@ final class RemoteMacDirectory {
 
     init(identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts),
          relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard,
+         adoptsRelayAsDefault: Bool = true, startsInForeground: Bool = true,
          relayPollInterval: Duration = .seconds(15),
          fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {
              try await $0.onlineHosts()
@@ -116,15 +122,15 @@ final class RemoteMacDirectory {
         self.identity = identity
         self.relayStore = relayStore
         self.defaults = defaults
+        self.adoptsRelayAsDefault = adoptsRelayAsDefault
         self.relayPollInterval = relayPollInterval
         self.fetchRelayHosts = fetchRelayHosts
-        // 推送把 App 拉起在后台时不该问中继；回到前台由 willEnterForeground 翻过来。
-        self.isInForeground = UIApplication.shared.applicationState != .background
+        // 推送把 App 拉起在后台时不该问中继；回到前台由 returnedToForeground 翻过来。
+        self.isInForeground = startsInForeground
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
         self.internetOnly = defaults.bool(forKey: Self.internetOnlyKey)
         refreshPaired()
-        observeLifecycle()
-        #if DEBUG
+        #if DEBUG && os(iOS)
         // 调试跑链路矩阵时不等用户点进远控页：直接开始找 Mac、问中继。
         if defaults.integer(forKey: Self.debugMatrixKey) > 0 {
             Task { @MainActor [weak self] in self?.startBrowsing() }
@@ -132,42 +138,24 @@ final class RemoteMacDirectory {
         #endif
     }
 
-    /// 切到别的 App 回个消息：申请一段后台时间，短暂离开连接不断，回来也不用重发快照。
-    /// 到期后 iOS 挂起 App，连接随之断开，回前台再重连。
-    private func observeLifecycle() {
-        let center = NotificationCenter.default
-        lifecycleObservers = [
-            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.didEnterBackground() }
-            },
-            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.willEnterForeground() }
-            },
-        ]
+    /// 有连着的 Mac（iOS 退到后台时据此申请一段后台时间）。
+    var hasConnectedClients: Bool {
+        clients.values.contains { $0.state == .connected }
     }
 
-    private func didEnterBackground() {
+    /// App 退到后台：不再问中继谁在线。
+    func enteredBackground() {
         isInForeground = false
         stopRelayPolling()
-        guard backgroundTask == .invalid, clients.values.contains(where: { $0.state == .connected }) else { return }
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Remote terminals") { [weak self] in
-            MainActor.assumeIsolated { self?.endBackgroundTask() }
-        }
     }
 
-    private func willEnterForeground() {
+    /// App 回到前台：重读配对、接着问中继，各条连接看看还通不通。
+    func returnedToForeground() {
         isInForeground = true
-        endBackgroundTask()
         refreshPaired()
         // 只在有界面显示在线状态时才接着问中继；没人看时等界面出现（或抽屉读 `pairedMacs`）再问。
         if isActivated, wantsLiveRelayStatus { startRelayPolling() }
         for client in clients.values { client.returnedToForeground() }
-    }
-
-    private func endBackgroundTask() {
-        guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask)
-        backgroundTask = .invalid
     }
 
     /// 用户主动点了「连接我的 Mac」：记住，之后自动浏览。
@@ -269,8 +257,9 @@ final class RemoteMacDirectory {
     /// 连着的 Mac 发来它的中继配置：和默认中继是同一台（或本机还没有）就存成默认，否则只记在这台 Mac 上。
     func receiveRelayConfig(_ config: RemoteRelayConfig, from deviceID: UUID?) {
         guard let deviceID, var peer = identity.peer(id: deviceID),
-              RemoteRelayPlacement.place(config, current: defaultRelayConfig()) == .perHost else {
-            importRelayConfig(config)
+              RemoteRelayPlacement.place(config, current: defaultRelayConfig(),
+                                         adoptsAsDefault: adoptsRelayAsDefault) == .perHost else {
+            if adoptsRelayAsDefault { importRelayConfig(config) }
             return
         }
         guard peer.relay != config else { return }
@@ -460,9 +449,10 @@ final class RemoteMacDirectory {
                               pairedAt: Date(), platform: RemoteDevicePlatform.mac.rawValue)
         // 邀请带着中继：本机没有默认中继（或就是同一台）就存成默认，否则只给这台 Mac 用。
         if let relay = invitation.relay {
-            switch RemoteRelayPlacement.place(relay, current: defaultRelayConfig()) {
+            switch RemoteRelayPlacement.place(relay, current: defaultRelayConfig(), adoptsAsDefault: adoptsRelayAsDefault) {
             case .setDefault: importRelayConfig(relay)
             case .perHost: peer.relay = relay
+            case .keep: break
             }
         }
         try identity.trust(peer)
@@ -473,6 +463,11 @@ final class RemoteMacDirectory {
         refreshPaired()
         startRelayPolling()
         return macs.first { $0.deviceID == invitation.macID }
+    }
+
+    /// 按 `Mac.id` 找：配对过的，或附近还没配对的。
+    func mac(id: String) -> Mac? {
+        macs.first { $0.id == id } ?? nearbyMacs.first { $0.id == id }
     }
 
     /// 配对过、此刻在局域网里能找到的 Mac。新建终端抽屉只列它们。
@@ -502,12 +497,13 @@ final class RemoteMacDirectory {
             client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
             client.relayPresenceChanged(mac.isOnRelay)
         }
-        #if DEBUG
+        #if DEBUG && os(iOS)
         runDebugMatrixIfRequested()
         #endif
     }
 
-    #if DEBUG
+    // 只在 iOS：网络标签 `RemoteNetworkLabel` 在手机的诊断页里，Mac 当主控端不跑这个调试矩阵。
+    #if DEBUG && os(iOS)
     /// 调试：启动参数 `-RemoteDebugPathMatrix <轮数>`，第一台在中继上的 Mac 一出现就自动跑链路矩阵，
     /// 结果打到标准输出（`devicectl device process launch --console` 收得到）并存进诊断记录。
     /// 配合 `-remote.internetOnly YES` 插着线也测得到公网路径（链路本地与 ULA 地址不参与打洞）。

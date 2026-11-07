@@ -108,11 +108,7 @@ struct RemoteTabChanges {
 
 private struct RemoteFollow {
     let client: RemoteMacClient
-    /// 上次收到的终端列表。
-    var listed: Set<UUID> = []
-    /// 接管时已开标签、但还没在列表里出现过的终端。刚在 Mac 上开的本机 shell 可能排在列表更新之前，
-    /// 不能因为列表里没有就当它关了。
-    var awaitingListing: Set<UUID>
+    var follower: RemoteSessionFollower
 }
 
 /// 移动端工作区：全部会话标签（终端 / 文件）+ 至多两个分屏格 + 聚焦格。
@@ -198,7 +194,8 @@ final class MobileWorkspace {
     /// 这里只摆标签：`opened` 由调用方建连，`removed` 由调用方清理。
     func takeOver(_ takeover: MRemoteTakeover) -> RemoteTabChanges {
         follows.removeAll { $0.client === takeover.client }
-        follows.append(RemoteFollow(client: takeover.client, awaitingListing: Set(takeover.sessionIDs)))
+        follows.append(RemoteFollow(client: takeover.client,
+                                    follower: RemoteSessionFollower(takingOver: takeover.sessionIDs)))
         let changes = openRemoteTabs(takeover.client, sessionIDs: takeover.sessionIDs, activate: true)
         if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
             activate(front.id)
@@ -234,13 +231,7 @@ final class MobileWorkspace {
         guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
-        let current = Set(sessionIDs)
-        let gone = follows[index].listed.subtracting(current)
-        let fresh = sessionIDs.filter {
-            !follows[index].listed.contains($0) && !follows[index].awaitingListing.contains($0)
-        }
-        follows[index].listed = current
-        follows[index].awaitingListing.subtract(current)
+        let (gone, fresh) = follows[index].follower.update(sessionIDs)
 
         var changes = RemoteTabChanges()
         for sessionID in gone {

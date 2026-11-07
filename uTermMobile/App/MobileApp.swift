@@ -23,7 +23,7 @@ struct MobileApp: App {
     @State private var lanSync: LANSyncCoordinator
     /// 远控：配对过的 Mac 及其连接。不会自己开始浏览（要「本地网络」授权），
     /// 等用户在主机页点「控制我的 Mac 上的终端」。测试宿主不碰真实的 iCloud 钥匙串。
-    @State private var remoteMacs = RemoteMacDirectory(relayStore: TestHostEnvironment.isActive ? nil : RemoteRelayConfigStore())
+    @State private var remoteMacs = RemoteMacDirectory.mobile(relayStore: TestHostEnvironment.isActive ? nil : RemoteRelayConfigStore())
 
     let modelContainer: ModelContainer
 
