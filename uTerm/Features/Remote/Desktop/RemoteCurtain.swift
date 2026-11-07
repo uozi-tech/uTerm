@@ -34,6 +34,8 @@ final class RemoteCurtain {
         startInputBlock()
         CGAssociateMouseAndMouseCursorPosition(0)
         CGDisplayRegisterReconfigurationCallback(Self.reconfigured, nil)
+        // 屏幕黑了，Mac 本机的扬声器也别再出声（传到手机的声音不受影响）。
+        RemoteCurtainMute.shared.engage()
         AppLogger.info("远程桌面：帘幕已开启", category: RemoteLog.category)
     }
 
@@ -44,6 +46,7 @@ final class RemoteCurtain {
         stopInputBlock()
         CGAssociateMouseAndMouseCursorPosition(1)
         restoreAllDisplays()
+        RemoteCurtainMute.shared.release()
         AppLogger.info("远程桌面：帘幕已关闭", category: RemoteLog.category)
     }
 

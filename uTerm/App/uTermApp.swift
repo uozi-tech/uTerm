@@ -122,6 +122,8 @@ struct uTermApp: App {
         // IPC must exist even when no SwiftUI scene is visible. The opener is installed later,
         // because `openWindow` is a scene environment action; all headless operations are ready now.
         if !BackgroundLaunchMode.isRunningInTestHost {
+            // 上次在帘幕期间退出（崩溃、强制退出）：把帘幕静音的输出设备恢复回去。
+            RemoteCurtainMute.shared.restoreLeftovers()
             StartupMaintenance.run(container: modelContainer)
             // 技能链接直接指向 app 包内：升级后首次启动 / app 搬家后把旧链接改指过来，
             // 与命令行接口开没开无关（技能文档先读得到，接口没开时 utermctl 会照实报错）。

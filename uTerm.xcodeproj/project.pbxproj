@@ -245,6 +245,7 @@
 				Features/Preview/Views/PreviewTabMenu.swift,
 				Features/Remote/Desktop/RemoteAudioStreamer.swift,
 				Features/Remote/Desktop/RemoteCurtain.swift,
+				Features/Remote/Desktop/RemoteCurtainMute.swift,
 				Features/Remote/Desktop/RemoteDesktopEnvironment.swift,
 				Features/Remote/Desktop/RemoteDesktopIndicator.swift,
 				Features/Remote/Desktop/RemoteDesktopStreamer.swift,
