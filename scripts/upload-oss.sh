@@ -4,13 +4,24 @@
 set -euo pipefail
 
 DRY_RUN=0
+# --file LOCAL NAME (repeatable): upload just these files to $OSS_PREFIX/NAME instead of the appcast and DMGs.
+FILES=()
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--dry-run)
 			DRY_RUN=1
 			;;
+		--file)
+			if [ "$#" -lt 3 ]; then
+				echo "ERROR: --file needs a local path and a remote name" >&2
+				exit 1
+			fi
+			FILES+=("$2" "$3")
+			shift 2
+			;;
 		-h|--help)
-			echo "Usage: $0 [--dry-run]"
+			echo "Usage: $0 [--dry-run] [--file LOCAL NAME]..."
+			echo "Without --file: upload build/appcast (appcast.xml and DMGs)."
 			echo "Environment: ENV_FILE=/path/to/.env"
 			exit 0
 			;;
@@ -65,13 +76,15 @@ fi
 OSS_PREFIX="${OSS_PREFIX:-uTerm}"
 
 APPCAST_DIR="$REPO_ROOT/build/appcast"
-if [ "$DRY_RUN" -eq 0 ] && [ ! -d "$APPCAST_DIR" ]; then
+if [ ${#FILES[@]} -gt 0 ]; then
+	: # single-file mode, see below
+elif [ "$DRY_RUN" -eq 0 ] && [ ! -d "$APPCAST_DIR" ]; then
 	echo "ERROR: $APPCAST_DIR does not exist. Run 'make appcast' first." >&2
 	exit 1
 fi
 
 APPCAST_XML="$APPCAST_DIR/appcast.xml"
-if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$APPCAST_XML" ]; then
+if [ ${#FILES[@]} -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ ! -f "$APPCAST_XML" ]; then
 	echo "ERROR: $APPCAST_XML not found. Run 'make appcast' first." >&2
 	exit 1
 fi
@@ -80,7 +93,7 @@ fi
 shopt -s nullglob
 DMGS=("$APPCAST_DIR"/*.dmg)
 shopt -u nullglob
-if [ "$DRY_RUN" -eq 0 ] && [ ${#DMGS[@]} -eq 0 ]; then
+if [ ${#FILES[@]} -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ ${#DMGS[@]} -eq 0 ]; then
 	echo "ERROR: no .dmg files in $APPCAST_DIR. Run 'make appcast' first." >&2
 	exit 1
 fi
@@ -104,7 +117,17 @@ content_type_for() {
 	case "$1" in
 		*.dmg) printf '%s\n' 'application/x-apple-diskimage' ;;
 		*.xml) printf '%s\n' 'application/xml' ;;
+		*.json) printf '%s\n' 'application/json' ;;
+		*.sh|*SHA256SUMS) printf '%s\n' 'text/plain; charset=utf-8' ;;
 		*) printf '%s\n' 'application/octet-stream' ;;
+	esac
+}
+
+# Files replaced in place (appcast, latest.json, install.sh) must not be served stale.
+cache_control_for() {
+	case "$1" in
+		*.xml|*.json|*.sh) printf '%s\n' 'no-cache' ;;
+		*) printf '%s\n' 'max-age=86400' ;;
 	esac
 }
 
@@ -179,6 +202,7 @@ upload() {
 			--upload-file "$file" \
 			--header "Date: $date_header" \
 			--header "Content-Type: $content_type" \
+			--header "Cache-Control: $(cache_control_for "$name")" \
 			--header "Authorization: OSS $OSS_ACCESS_KEY_ID:$signature" \
 			--header "x-oss-object-acl: public-read" \
 			"$url"
@@ -276,6 +300,19 @@ cleanup_remote_old_dmgs() {
 		done <<< "$remote_names"
 	done
 }
+
+if [ ${#FILES[@]} -gt 0 ]; then
+	echo "Public URLs:"
+	for ((i = 0; i < ${#FILES[@]}; i += 2)); do
+		if [ "$DRY_RUN" -eq 0 ] && [ ! -f "${FILES[i]}" ]; then
+			echo "ERROR: ${FILES[i]} not found" >&2
+			exit 1
+		fi
+		upload "${FILES[i]}" "${FILES[i + 1]}"
+	done
+	echo "Done."
+	exit 0
+fi
 
 cleanup_remote_old_dmgs
 

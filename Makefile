@@ -139,7 +139,7 @@ APPCAST_DMG_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).dmg
 APPCAST_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION)-$(BUILD_NUMBER).html
 LEGACY_RELEASE_NOTES_NAME := $(APP_NAME)-$(VERSION).html
 
-.PHONY: help test-fast test-relay-e2e test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
+.PHONY: help test-fast test-relay-e2e relay-dist relay-publish test-mobile-fast list print-version print-build set-version bump-patch bump-minor bump-major \
 	print-version-mobile set-version-mobile bump-patch-mobile bump-minor-mobile bump-major-mobile tag-mobile \
 	build archive export-app test test-mobile check-cli check-skills check-cloudkit-schema clean dmg dmg-background sign-release-app install verify \
 	sync-strings sync-strings-build check-strings \
@@ -163,6 +163,8 @@ help:
 	@printf '%s\n' '  make test-fast                         Run tests in parallel, recheck failures serially'
 	@printf '%s\n' '  make test-mobile-fast                  Same for uTermMobileTests'
 	@printf '%s\n' '  make test-relay-e2e                    Run end-to-end tests through a real uterm-relay'
+	@printf '%s\n' '  make relay-dist                        Build uterm-relay for linux amd64/arm64 into build/relay'
+	@printf '%s\n' '  make relay-publish                     relay-dist, then upload binaries, install.sh and latest.json to OSS'
 	@printf '%s\n' '  make check-cli                         Self-test scripts/utermctl (no Xcode, no uTerm)'
 	@printf '%s\n' '  make check-skills                      Run the bundled skills / utermctl tests'
 	@printf '%s\n' '  make check-cloudkit-schema             Diff @Model against the deployed CloudKit schema'
@@ -312,6 +314,33 @@ test-relay-e2e:
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-enableCodeCoverage NO \
 		$(PACKAGE_ARGS)
+
+# 中继发布：交叉编译两个架构 + SHA256SUMS + latest.json，传到 OSS 的 $(OSS_PREFIX)/relay/。
+# 版本取 relay/cmd/uterm-relay/main.go 的 version。先传二进制、最后传 latest.json，
+# 免得 uTerm 和安装脚本看到新版本号时文件还没上去。
+RELAY_VERSION := $(shell sed -n 's/^const version = "\(.*\)"/\1/p' relay/cmd/uterm-relay/main.go)
+RELAY_DIST := build/relay
+
+relay-dist:
+	@test -n "$(RELAY_VERSION)" || { echo "relay version not found in relay/cmd/uterm-relay/main.go" >&2; exit 1; }
+	cd relay && GOWORK=off go test ./... && bash scripts/install.test.sh
+	rm -rf "$(RELAY_DIST)" && mkdir -p "$(RELAY_DIST)/$(RELAY_VERSION)"
+	for arch in amd64 arm64; do \
+		(cd relay && GOWORK=off GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+			-o "../$(RELAY_DIST)/$(RELAY_VERSION)/uterm-relay-linux-$$arch" ./cmd/uterm-relay) || exit 1; \
+	done
+	cd "$(RELAY_DIST)/$(RELAY_VERSION)" && shasum -a 256 uterm-relay-linux-* > SHA256SUMS
+	printf '{ "version": "%s" }\n' "$(RELAY_VERSION)" > "$(RELAY_DIST)/latest.json"
+	cp relay/scripts/install.sh "$(RELAY_DIST)/install.sh"
+	@printf '%s\n' "Built uterm-relay $(RELAY_VERSION) in $(RELAY_DIST)"
+
+relay-publish: relay-dist
+	scripts/upload-oss.sh \
+		--file "$(RELAY_DIST)/$(RELAY_VERSION)/uterm-relay-linux-amd64" "relay/$(RELAY_VERSION)/uterm-relay-linux-amd64" \
+		--file "$(RELAY_DIST)/$(RELAY_VERSION)/uterm-relay-linux-arm64" "relay/$(RELAY_VERSION)/uterm-relay-linux-arm64" \
+		--file "$(RELAY_DIST)/$(RELAY_VERSION)/SHA256SUMS" "relay/$(RELAY_VERSION)/SHA256SUMS" \
+		--file "$(RELAY_DIST)/install.sh" "relay/install.sh"
+	scripts/upload-oss.sh --file "$(RELAY_DIST)/latest.json" "relay/latest.json"
 
 test-mobile-fast:
 	scripts/test-parallel.sh "$(MOBILE_SCHEME)" "$(MOBILE_DESTINATION)" "$(MOBILE_TEST_WORKERS)" \
