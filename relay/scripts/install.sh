@@ -1,11 +1,11 @@
 #!/bin/sh
 # Install, update and inspect uterm-relay on a Linux server with systemd.
 #
-#   curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --port 47310 --public-host relay.example.com
+#   curl -fsSL https://downloads.example.com/uTerm/relay/install.sh | sudo sh -s -- install --public-host relay.example.com
 #
 # Subcommands:
 #   install --public-host H [--port P] [--name N] [--open-firewall] [--version V]
-#                             without --port a random free port in 20000-32767 is picked: every relay on
+#                             without --port a random free port in 1000-65535 is picked: every relay on
 #                             its own port, so a scan of the default one finds nothing
 #   update [--version V]      replace the binary with the latest (or V) and restart; rolls back if it will not start
 #   status                    installed / latest version, service state, online hosts
@@ -112,11 +112,11 @@ load_settings() {
 	export RELAY_DATA
 }
 
-# A random free port below Linux's ephemeral range (32768+), so outgoing connections never hold it.
+# A random free port in 1000-65535. The unit grants CAP_NET_BIND_SERVICE, so ports below 1024 work too.
 random_port() {
 	tries=0
 	while [ $tries -lt 50 ]; do
-		candidate=$(awk -v seed="$$$tries$(date +%s)" 'BEGIN { srand(seed); print 20000 + int(rand() * 12768) }')
+		candidate=$(awk -v seed="$$$tries$(date +%s)" 'BEGIN { srand(seed); print 1000 + int(rand() * 64536) }')
 		if ! port_taken "$candidate"; then
 			echo "$candidate"
 			return 0

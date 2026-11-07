@@ -57,7 +57,6 @@ final class RemoteRelayReleaseTests: XCTestCase {
         XCTAssertTrue(prompt.contains("relay import"))
         XCTAssertTrue(prompt.contains("relay check"))
         XCTAssertTrue(prompt.contains("随机"))
-        XCTAssertTrue(prompt.contains("不要用默认的 47310"))
         XCTAssertTrue(prompt.contains("不要运行 uterm-relay config"))
         XCTAssertTrue(RemoteRelayAgentPrompt.deploy(hostName: nil).contains("问我装在哪台"))
         XCTAssertTrue(RemoteRelayAgentPrompt.update(hostName: "relay-host").contains("「relay-host」"))

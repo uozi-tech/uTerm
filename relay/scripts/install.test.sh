@@ -89,7 +89,7 @@ ROOT2="$WORK/root2"
 mkdir -p "$ROOT2/home/$(id -un)"
 out=$(UTERM_RELAY_ROOT="$ROOT2" run install --public-host relay.example.com)
 random=$(echo "$out" | sed -n 's/^port=//p')
-[ -n "$random" ] && [ "$random" -ge 20000 ] && [ "$random" -le 32767 ] || fail "random port out of range: $out"
+[ -n "$random" ] && [ "$random" -ge 1000 ] && [ "$random" -le 65535 ] || fail "random port out of range: $out"
 [ "$random" != 47310 ] || fail "random port is the default"
 grep -qx "RELAY_LISTEN=:$random" "$ROOT2/etc/uterm-relay/relay.env" || fail "random port not in env file"
 pass "without --port a random high port is picked ($random)"
