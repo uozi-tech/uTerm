@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 import UPaneGroups
 
@@ -43,12 +43,74 @@ final class RemoteTerminalPane: Identifiable {
     }
 }
 
-/// 一台远程 Mac 的窗口：整台接管它的终端，每个一个标签，之后跟着它增减（`RemoteSessionFollower`）。
+/// 那台 Mac 的屏幕在本机的标签。一个窗口最多一个（那台 Mac 同一时间也只推一路画面）。
+@MainActor
+@Observable
+final class RemoteDesktopPane: Identifiable {
+    let id = UUID()
+    let session: RemoteDesktopSession
+    var scaleMode: RemoteDesktopScaleMode = .fit
+
+    init(session: RemoteDesktopSession) {
+        self.session = session
+    }
+
+    /// 关标签 / 关窗口：停掉这一路画面（那台 Mac 停止采集，帘幕随之撤掉）。
+    func dispose() {
+        session.stop()
+    }
+
+    /// 要多大的画面：按本机最大那块屏幕的像素，至少 1080p。那台 Mac 会按自己显示器的比例套进这个框里。
+    static func requestedPixels(screens: [NSScreen] = NSScreen.screens) -> (width: Int, height: Int) {
+        var width = 1920, height = 1080
+        for screen in screens {
+            let scale = screen.backingScaleFactor
+            let w = Int(screen.frame.width * scale), h = Int(screen.frame.height * scale)
+            width = max(width, max(w, h))
+            height = max(height, min(w, h))
+        }
+        return (width, height)
+    }
+}
+
+/// 窗口里的一个标签：那台 Mac 上的一个终端，或它的屏幕。
+@MainActor
+enum RemoteMacPane: Identifiable {
+    case terminal(RemoteTerminalPane)
+    case desktop(RemoteDesktopPane)
+
+    var id: UUID {
+        switch self {
+        case .terminal(let pane): return pane.id
+        case .desktop(let pane): return pane.id
+        }
+    }
+
+    var terminal: RemoteTerminalPane? {
+        if case .terminal(let pane) = self { return pane }
+        return nil
+    }
+
+    var desktop: RemoteDesktopPane? {
+        if case .desktop(let pane) = self { return pane }
+        return nil
+    }
+
+    func dispose() {
+        switch self {
+        case .terminal(let pane): pane.dispose()
+        case .desktop(let pane): pane.dispose()
+        }
+    }
+}
+
+/// 一台远程 Mac 的窗口：整台接管它的终端，每个一个标签，之后跟着它增减（`RemoteSessionFollower`）；
+/// 另可开一个「屏幕」标签看 / 控它的桌面。
 @MainActor
 @Observable
 final class RemoteMacWindowModel {
     let client: RemoteMacClient
-    let groups = UPaneGroupsModel<RemoteTerminalPane>(policy: UPaneGroupsPolicy(
+    let groups = UPaneGroupsModel<RemoteMacPane>(policy: UPaneGroupsPolicy(
         splitButtonMaxGroups: nil,
         collapsesEmptyGroups: true,
         allowsLastGroupEmpty: true,
@@ -57,16 +119,42 @@ final class RemoteMacWindowModel {
     /// 接管之后的对账；nil = 还没接管（没连上过）。
     @ObservationIgnored private(set) var follower: RemoteSessionFollower?
     private let startTerminal: @MainActor (RemoteTerminalPane) -> Void
+    private let makeDesktop: @MainActor (RemoteMacClient) -> RemoteDesktopPane
 
-    var panes: [RemoteTerminalPane] { groups.allTabs.map(\.payload) }
-    var active: RemoteTerminalPane? { groups.activeTab?.payload }
+    /// 终端标签（不含屏幕）。
+    var panes: [RemoteTerminalPane] { groups.allTabs.compactMap(\.payload.terminal) }
+    var desktop: RemoteDesktopPane? { groups.allTabs.lazy.compactMap(\.payload.desktop).first }
+    var active: RemoteMacPane? { groups.activeTab?.payload }
+    /// 一个标签也没有（终端、屏幕都没开）。
+    var isEmpty: Bool { groups.allTabs.isEmpty }
+    var tabCount: Int { groups.allTabs.count }
 
-    init(client: RemoteMacClient, startTerminal: @escaping @MainActor (RemoteTerminalPane) -> Void = { pane in
-        Task { await pane.start() }
-    }) {
+    init(client: RemoteMacClient,
+         startTerminal: @escaping @MainActor (RemoteTerminalPane) -> Void = { pane in Task { await pane.start() } },
+         makeDesktop: @escaping @MainActor (RemoteMacClient) -> RemoteDesktopPane = RemoteMacWindowModel.liveDesktop) {
         self.client = client
         self.startTerminal = startTerminal
+        self.makeDesktop = makeDesktop
         groups.onTabRemoved = { removed, _ in removed.payload.dispose() }
+    }
+
+    /// 真的开流：按本机屏幕要画面大小，建好就开始。
+    static func liveDesktop(_ client: RemoteMacClient) -> RemoteDesktopPane {
+        let size = RemoteDesktopPane.requestedPixels()
+        let pane = RemoteDesktopPane(session: RemoteDesktopSession(client: client, maxWidth: size.width,
+                                                                   maxHeight: size.height))
+        Task { await pane.session.start() }
+        return pane
+    }
+
+    /// 打开（或带到前台）屏幕标签。
+    func openDesktop() {
+        if let pane = desktop, let at = groups.locateTab(pane.id) {
+            groups.activateTab(groupID: at.groupID, index: at.index)
+            return
+        }
+        let pane = makeDesktop(client)
+        groups.openTab({ UPaneTab(id: pane.id, payload: .desktop(pane)) })
     }
 
     /// 连上了：接管它上面的全部终端，第一个放前台。重连后再调不重复开。
@@ -97,7 +185,7 @@ final class RemoteMacWindowModel {
 
     /// 打开（或带到前台）一个终端的标签。已有标签且还接着就不重开；接入已结束的换一个新的。
     func open(_ id: UUID, activate: Bool) {
-        if let at = groups.locateTab(id), let pane = groups.tab(id)?.payload {
+        if let at = groups.locateTab(id), let pane = groups.tab(id)?.payload.terminal {
             switch pane.session.connectionState {
             case .disconnected, .failed:
                 groups.closeTab(groupID: at.groupID, index: at.index)
@@ -108,7 +196,7 @@ final class RemoteMacWindowModel {
         }
         let pane = RemoteTerminalPane(id: id, client: client)
         startTerminal(pane)
-        let tab = UPaneTab(id: id, payload: pane)
+        let tab = UPaneTab(id: id, payload: RemoteMacPane.terminal(pane))
         if activate || groups.allTabs.isEmpty {
             groups.openTab({ tab })
         } else {
@@ -135,7 +223,7 @@ final class RemoteMacWindowModel {
     }
 
     func disposeAll() {
-        for pane in panes { pane.dispose() }
+        for tab in groups.allTabs { tab.payload.dispose() }
         groups.reset()
         follower = nil
     }

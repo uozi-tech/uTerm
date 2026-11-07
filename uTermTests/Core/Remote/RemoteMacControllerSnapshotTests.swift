@@ -64,7 +64,13 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
         try identity.trust(RemotePeer(id: UUID(), name: "办公室 Mac Studio", publicKey: key, pairedAt: .now,
                                       platform: RemoteDevicePlatform.mac.rawValue))
         let directory = RemoteMacDirectory(identity: identity, defaults: defaults, adoptsRelayAsDefault: false)
+        let client = RemoteMacClient(macName: "办公室 Mac Studio", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                     identity: identity)
+        let desktop = RemoteDesktopPane(session: RemoteDesktopSession(client: client, maxWidth: 1920, maxHeight: 1080))
         for dark in [false, true] {
+            try await shoot("desktop-connecting", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
+                RemoteDesktopMacView(pane: desktop, macName: "办公室 Mac Studio").background(UD.bg)
+            }
             try await shoot("my-macs", size: NSSize(width: 620, height: 560), dark: dark, into: dir) {
                 RemoteMacsWindowView().environment(directory)
             }

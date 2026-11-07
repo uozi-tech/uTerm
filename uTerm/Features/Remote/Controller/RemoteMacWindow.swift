@@ -3,8 +3,8 @@ import SwiftUI
 import UDesignKit
 import UPaneGroups
 
-/// 一台远程 Mac 的窗口：连上（第一次时在那台 Mac 上核对数字配对），整台接管它的终端，每个一个标签。
-/// 关标签、关窗口只断开接入，那台 Mac 上的终端照常运行。
+/// 一台远程 Mac 的窗口：连上（第一次时在那台 Mac 上核对数字配对），整台接管它的终端，每个一个标签；
+/// 标签条上的「屏幕」按钮再开一个看 / 控它桌面的标签。关标签、关窗口只断开接入，那台 Mac 上的终端照常运行。
 struct RemoteMacWindowView: View {
     let windowID: RemoteMacWindowID?
 
@@ -27,7 +27,7 @@ struct RemoteMacWindowView: View {
         .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
         .background(WindowTitleBinding(title: title))
         .background(WorkspaceCloseShortcutInstaller { window in
-            guard let model, model.panes.count > 1, let active = model.active else {
+            guard let model, model.tabCount > 1, let active = model.active else {
                 window.performClose(nil)
                 return
             }
@@ -90,11 +90,11 @@ private struct RemoteMacSessionView: View {
         let client = model.client
         Group {
             switch client.state {
-            case .idle where model.panes.isEmpty, .connecting where model.panes.isEmpty:
+            case .idle where model.isEmpty, .connecting where model.isEmpty:
                 RemoteMacProgressView(text: String(localized: "正在连接 \(client.macName)…"))
             case .awaitingApproval(let code):
                 RemoteMacPairingCodeView(macName: client.macName, code: code)
-            case .failed(let message) where model.panes.isEmpty:
+            case .failed(let message) where model.isEmpty:
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法连接"),
                                    detail: message) {
                     UDButton(title: "重试") { Task { await client.connect() } }
@@ -128,22 +128,28 @@ private struct RemoteMacSessionView: View {
     }
 }
 
-/// 终端标签区：拖放分屏、按下即激活都在组件里，与本机终端窗口一致。不显示分屏按钮：远程终端没法「复制」一个。
+/// 标签区（终端 + 屏幕）：拖放分屏、按下即激活都在组件里，与本机终端窗口一致。不显示分屏按钮：远程终端没法「复制」一个。
 private struct RemoteMacTerminalArea: View {
     let model: RemoteMacWindowModel
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var pendingClose: RemoteTerminalPane?
     @State private var openError: String?
 
     var body: some View {
         let background = SwiftUI.Color(
             nsColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
         Group {
-            if model.panes.isEmpty {
+            if model.isEmpty {
                 RemoteMacStateView(systemImage: "terminal", title: String(localized: "这台 Mac 上没有打开的终端"),
                                    detail: String(localized: "新建一个，那台 Mac 上也会弹出对应的终端窗口。")) {
-                    newShellButton
+                    HStack(spacing: 8) {
+                        UDButton(title: "新建终端") { openNewShell() }
+                            .disabled(!canOpenShell)
+                        if model.client.supportsDesktop {
+                            UDButton(title: "查看屏幕", style: .secondary) { model.openDesktop() }
+                                .disabled(model.client.state != .connected)
+                        }
+                    }
                 }
             } else {
                 UPaneGroupArea(
@@ -155,10 +161,20 @@ private struct RemoteMacTerminalArea: View {
                     splitButtonDirection: .automatic,
                     splitButtonIcon: .system("rectangle.split.2x1"),
                     descriptor: { tab in descriptor(for: tab.payload) },
-                    content: { tab, _ in RemoteTerminalPaneView(pane: tab.payload, background: background) },
+                    content: { tab, _ in
+                        switch tab.payload {
+                        case .terminal(let pane): RemoteTerminalPaneView(pane: pane, background: background)
+                        case .desktop(let pane): RemoteDesktopMacView(pane: pane, macName: model.client.macName)
+                        }
+                    },
                     emptyGroup: { _ in background },
                     onRequestClose: { tab in model.close(tab.id) },
-                    stripAccessory: { _ in newShellButton })
+                    stripAccessory: { _ in
+                        HStack(spacing: 2) {
+                            if model.client.supportsDesktop { desktopButton }
+                            newShellButton
+                        }
+                    })
                     .uPaneGroupStyle(.card)
                     .uPaneGroupWells()
             }
@@ -167,6 +183,17 @@ private struct RemoteMacTerminalArea: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(openError ?? "")
+        }
+    }
+
+    private func descriptor(for tab: RemoteMacPane) -> UPaneTabDescriptor {
+        switch tab {
+        case .terminal(let pane): return descriptor(for: pane)
+        case .desktop(let pane):
+            let streaming = pane.session.state == .streaming
+            return UPaneTabDescriptor(title: String(localized: "屏幕"), icon: .system("display"),
+                                      leadingDot: streaming ? UD.success : UD.text4,
+                                      help: String(localized: "\(model.client.macName) 的屏幕"))
         }
     }
 
@@ -180,19 +207,36 @@ private struct RemoteMacTerminalArea: View {
             help: status?.tabHelp ?? pane.title(in: model.client.sessions))
     }
 
+    private var canOpenShell: Bool { model.client.supportsLocalShell && model.client.state == .connected }
+
+    private func openNewShell() {
+        Task {
+            do { try await model.openNewShell() } catch { openError = error.localizedDescription }
+        }
+    }
+
+    private var desktopButton: some View {
+        Button { model.openDesktop() } label: {
+            Image(systemName: "display")
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .iconButtonHover(cornerRadius: 6)
+        .disabled(model.client.state != .connected)
+        .help(String(localized: "查看这台 Mac 的屏幕"))
+        .accessibilityLabel(Text("查看屏幕"))
+    }
+
     private var newShellButton: some View {
-        Button {
-            Task {
-                do { try await model.openNewShell() } catch { openError = error.localizedDescription }
-            }
-        } label: {
+        Button { openNewShell() } label: {
             Image(systemName: "plus")
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .iconButtonHover(cornerRadius: 6)
-        .disabled(!model.client.supportsLocalShell || model.client.state != .connected)
+        .disabled(!canOpenShell)
         .help(model.client.supportsLocalShell ? String(localized: "在这台 Mac 上新建终端")
                                               : String(localized: "那台 Mac 上的 uTerm 版本太旧，不能新建终端"))
         .accessibilityLabel(Text("新建终端"))
