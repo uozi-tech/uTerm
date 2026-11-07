@@ -60,6 +60,8 @@ final class RemoteDesktopSession {
     @ObservationIgnored private var statsTask: Task<Void, Never>?
     @ObservationIgnored private var isStopped = false
     @ObservationIgnored private var generation = 0
+    /// App 在后台。重连开出的新流在 Mac 那边从不暂停起步，开好后要按它再暂停一次。
+    @ObservationIgnored private var backgrounded = false
 
     /// - Parameters:
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
@@ -155,6 +157,8 @@ final class RemoteDesktopSession {
         attachment = attached
         receiver.attach(link: attached.link, channel: attached.channel, generation: current)
         state = .streaming
+        // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
+        if backgrounded { sendPause(true) }
     }
 
     private func clipboardArrived(_ content: RemoteDesktopClipboard, generation arrived: Int) {
@@ -220,10 +224,32 @@ final class RemoteDesktopSession {
         pasteUploader?.enqueue(content.encoded())
     }
 
-    /// App 退到后台 / 回到前台。后台时画面没人看（显示层也不出图），接收端只回确认、不解码不渲染，
-    /// 回前台再从关键帧接上。见 `RemoteDesktopReceiver.setPaused`。
+    /// App 退到后台 / 回到前台。后台时画面没人看（显示层也不出图）。
+    ///
+    /// - 新 Mac（认得 `desktopPause`）：请它停止推流——iOS 给的约 30 s 后台时间里不再收满码率的帧，省电省射频；
+    ///   回前台发「恢复」，Mac 恢复时自带关键帧。
+    /// - 老 Mac：发了会被当未知消息断开整条连接，所以不发，Mac 照旧推流；接收端照收照确认、不解码不渲染，
+    ///   回前台另要一个关键帧。见 `RemoteDesktopReceiver.setPaused`。
+    ///
+    /// 新 Mac 也同样让接收端暂停：暂停消息到达之前已在路上的帧照样只回确认、不解码。
+    /// 回前台（包括从 inactive 回来）总会拿到一个关键帧，与改动前每次回前台都要关键帧的行为一致。
     func setBackgrounded(_ backgrounded: Bool) {
+        self.backgrounded = backgrounded
         receiver.setPaused(backgrounded)
+        if backgrounded {
+            sendPause(true)
+        } else if !sendPause(false) {
+            requestKeyframe()
+        }
+    }
+
+    /// 发暂停 / 恢复。没有流（重连中）或 Mac 不认得时返回 false。
+    @discardableResult
+    private func sendPause(_ paused: Bool) -> Bool {
+        guard let attachment, client.supportsDesktopPause else { return false }
+        attachment.link.send(RemoteMessage(.desktopPause, channel: attachment.channel,
+                                           payload: RemoteJSON.encode(RemoteDesktopPauseRequest(paused: paused))))
+        return true
     }
 
     /// 回到前台等场合主动要一个关键帧（解码出错时接收端会自己要）。

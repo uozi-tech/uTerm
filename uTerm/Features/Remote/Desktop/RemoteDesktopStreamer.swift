@@ -88,6 +88,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
     private var isLive = false
     private var isStopped = false
+    /// 手机在后台（`desktopPause`）：照常采集（留着最新一张），但不编码、不发帧、不发光标。只属于这一条流——
+    /// 重连 / 重新开流是新的发送端，从不暂停起步，不会卡在暂停里。
+    private var isPaused = false
     private var lastFrame: RemoteCapturedFrame?
     private var lastCaptureNanos: UInt64 = 0
     private var refined = true
@@ -241,6 +244,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             guard let lost = try? RemoteDesktopVideoLost(decoding: message.payload) else { return }
             // 手机说放弃了，就算编码序号已经被别的途径释放过（空列表），也要恢复：它在等。
             video?.videoLost(lost.videoSequences) { [weak self] in self?.framesLost($0, recoverEvenIfEmpty: true) }
+        case .desktopPause:
+            guard let request = try? RemoteJSON.decode(RemoteDesktopPauseRequest.self, from: message.payload) else { return }
+            setPaused(request.paused)
         default:
             break
         }
@@ -253,12 +259,14 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         refined = false
         refineRetries = 0
         stats.recordCapture()
-        guard isLive else { return }
+        guard isLive, !isPaused else { return }
         offer(frame)
         scheduleRefineCheck()
     }
 
     private func offer(_ frame: RemoteCapturedFrame) {
+        // 暂停期间所有「补一帧」的入口（关键帧请求、丢帧恢复、码控重送）都落到这里：一律不编，恢复时统一补关键帧。
+        guard !isPaused else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let (submit, congested) = pacer.offer(frame, now: now)
         // 在途满了被替掉只记数，不降码率：往返比帧间隔长也会这样，带宽真不够时延迟会涨，由 `rate` 看延迟判。
@@ -271,6 +279,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 能编就把留着的帧编出去；卡在帧间隔上就到点再来。
     private func pump() {
+        guard !isPaused else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         while let (sequence, frame) = pacer.next(now: now) {
             encode(sequence, frame, refine: false)
@@ -431,7 +440,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
-        guard isLive, !refined, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
+        guard isLive, !isPaused, !refined, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
               pacer.inflight.isEmpty,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
@@ -524,6 +533,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 编好的一帧发出去，计入在途。在连接队列上调用。
     private func send(_ encoded: RemoteEncodedFrame, sequence: UInt32, captureNanos: UInt64,
                       flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64) {
+        // 暂停那一刻还在编码器里的帧：编好也不发。手机不看了，恢复时反正从关键帧接上，参考链断了无所谓。
+        guard !isPaused else {
+            pacer.abandon(sequence)
+            return
+        }
         let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence, captureNanos: captureNanos,
                                          width: UInt16(clamping: width), height: UInt16(clamping: height),
                                          parameterSets: encoded.parameterSets, data: encoded.data,
@@ -558,6 +572,42 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    // MARK: - 暂停（手机在后台）
+
+    /// 手机退到后台 / 回到前台（`desktopPause`）。
+    ///
+    /// 暂停只是不编不发：采集照旧（只留最新一张，恢复时有画面可编），码控、QP 上限、链路估计都不碰——对它们来说
+    /// 跟屏幕静止一阵没有区别（静止时同样一帧不发），回前台不用重新爬码率。帘幕、锁屏、连接与心跳也都不受影响。
+    /// 恢复一律从关键帧接上：暂停前后手机可能跳过了帧，iOS 也可能在后台收走了硬解会话。恢复本身就当关键帧请求，
+    /// 手机不用再另发一条（否则同一张画面会编两遍关键帧）。
+    private func setPaused(_ paused: Bool) {
+        if paused {
+            guard !isPaused else { return }
+            isPaused = true
+            // 等着编的那张不编了；在途的照常等手机确认（后台的手机照收照确认，见 `RemoteDesktopReceiver.setPaused`）。
+            _ = pacer.takePending()
+            return
+        }
+        let wasPaused = isPaused
+        isPaused = false
+        forceKeyframe = true
+        forceLTRRefresh = false
+        // 光标在暂停期间没发：清掉记录，下一拍按当前位置补发。
+        lastCursor = nil
+        guard isLive, let lastFrame else { return }
+        if pacer.pending == nil {
+            offer(lastFrame)
+        } else {
+            pump()
+        }
+        if wasPaused {
+            // 恢复后若画面一直静止，关键帧之后照常补一次精修。
+            refined = false
+            refineRetries = 0
+            scheduleRefineCheck()
+        }
+    }
+
     // MARK: - 光标
 
     private func startCursorTimer() {
@@ -566,7 +616,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(Self.cursorIntervalNanos)), leeway: .milliseconds(2))
         let bounds = display.bounds
         timer.setEventHandler { [weak self] in
-            guard let self, self.isLive, let location = cursorLocation() else { return }
+            guard let self, self.isLive, !self.isPaused, let location = cursorLocation() else { return }
             let point = RemoteDesktopGeometry.normalized(location, displayBounds: bounds)
             let visible = bounds.contains(location)
             let cursor = RemoteDesktopCursor(x: point.x, y: point.y, visible: visible)
@@ -690,7 +740,8 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
     /// 在连接队列上调用。返回 true = 这是桌面流的消息，已处理（或已按通道不符丢弃）。
     func handle(_ message: RemoteMessage) -> Bool {
         switch message.kind {
-        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost:
+        case .desktopAck, .desktopInput, .desktopKeyframe, .desktopPaste, .desktopPasteChunk, .desktopVideoLost,
+             .desktopPause:
             if let streamer, streamer.channel == message.channel { streamer.handle(message) }
             return true
         default:

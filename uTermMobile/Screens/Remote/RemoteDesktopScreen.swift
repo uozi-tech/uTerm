@@ -108,12 +108,12 @@ struct RemoteDesktopScreen: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
-                // 看不见画面了（切走 / 锁屏）：后台时间里流还在走，停掉解码和渲染，只回确认。
+                // 看不见画面了（切走 / 锁屏）：请 Mac 暂停推流（老 Mac 不认得就照旧推流），本机停掉解码和渲染、只回确认。
                 session?.setBackgrounded(true)
             case .active:
-                // 回到前台：连接还在就要一个关键帧（后台期间跳过了帧、硬解会话也可能被收走）；断了的由会话自己重连。
+                // 回到前台：恢复推流并从关键帧接上（后台期间跳过了帧、硬解会话也可能被收走）——会话自己要关键帧，
+                // 新 Mac 靠「恢复」、老 Mac 靠关键帧请求；断了的由会话自己重连。
                 session?.setBackgrounded(false)
-                session?.requestKeyframe()
             default:
                 // inactive（拉下控制中心、来电横幅）画面还看得见，照常解。
                 break

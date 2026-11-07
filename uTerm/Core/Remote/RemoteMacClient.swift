@@ -120,6 +120,8 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktopPasteChunks: Bool { macFeatures.contains(RemoteFeature.desktopPasteChunks) }
     /// Mac 支持远程解锁 / 帘幕（会发 `desktopScreenState`、认得 `desktopUnlock`）。
     var supportsUnlock: Bool { macFeatures.contains(RemoteFeature.desktopUnlock) }
+    /// Mac 认得 `desktopPause`：手机退到后台时能让它停止推流（老 Mac 收到会断开整条连接）。
+    var supportsDesktopPause: Bool { macFeatures.contains(RemoteFeature.desktopPause) }
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?

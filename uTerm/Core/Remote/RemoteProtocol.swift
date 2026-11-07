@@ -37,7 +37,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.localWorkspaces,
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
-                                          RemoteFeature.relayConfig, RemoteFeature.desktopUnlock]
+                                          RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
+                                          RemoteFeature.desktopPause]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -84,6 +85,9 @@ nonisolated enum RemoteFeature {
     /// 远程桌面里的锁屏状态、远程解锁与帘幕模式：认得 `desktopScreenState` / `desktopUnlock` /
     /// `desktopUnlockResult` / `desktopCurtain`。两端都要声明，Mac 只给声明了的手机发状态。
     static let desktopUnlock = "desktop-unlock"
+    /// 手机退到后台时让 Mac 暂停推流、回前台再接上：认得 `desktopPause`。老 Mac 不认这个类型（收到会当未知消息
+    /// 断开整条连接），所以手机只对声明了这一项的 Mac 发；老 Mac 照旧推流，手机退回「照收照确认、不解码」。
+    static let desktopPause = "desktop-pause"
 }
 
 /// 加密信道里的一条消息：`[u8 类型][u32 通道（大端）][负载]`。
@@ -187,6 +191,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         case desktopUnlock = 37
         /// 打开 / 关闭帘幕模式（桌面通道）。负载 = `RemoteDesktopCurtainRequest`（JSON）。
         case desktopCurtain = 38
+        // 39–43 已预留给声音与链路层计量，新的从 44 起编，免得两边各自合进来时撞号。
+        /// 暂停 / 恢复推流（桌面通道）。负载 = `RemoteDesktopPauseRequest`（JSON）。手机退到后台时发「暂停」，
+        /// 回前台发「恢复」——恢复同时就是关键帧请求。只发给 `features` 带 `desktop-pause` 的 Mac。
+        case desktopPause = 44
     }
 
     var kind: Kind

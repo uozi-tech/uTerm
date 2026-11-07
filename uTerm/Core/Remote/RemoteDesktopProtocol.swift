@@ -139,6 +139,14 @@ nonisolated struct RemoteDesktopCurtainRequest: Codable, Equatable, Sendable {
     var on: Bool
 }
 
+/// 手机 → Mac：暂停 / 恢复推流（`desktopPause`，桌面通道）。
+///
+/// 只管这一条桌面流：Mac 换流（重连、重新开流）后从不暂停起步。暂停不动帘幕 / 锁屏、不断连接，
+/// 也不动码控状态（对码控而言就像屏幕静止了一阵）。
+nonisolated struct RemoteDesktopPauseRequest: Codable, Equatable, Sendable {
+    var paused: Bool
+}
+
 /// 一帧视频（`desktopFrame`）：
 /// `[u8 标志][u8 编码][u32 序号][u64 Mac 采集时刻 ns][u16 宽][u16 高]`
 /// + 关键帧时 `[u8 参数集个数]{[u16 长度][参数集]}`（H.264 = SPS/PPS，HEVC = VPS/SPS/PPS）
