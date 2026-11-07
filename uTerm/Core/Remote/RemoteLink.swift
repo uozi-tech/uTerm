@@ -366,7 +366,11 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             self.lastSent = .now()
             var lastTick = DispatchTime.now()
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + interval, repeating: interval)
+            // 给定时器 10% 的余量：不带余量时系统只能按精确时刻单独唤醒 CPU，带了才能和别的定时器（网络栈、
+            // 其他连接的心跳）并成一次唤醒。手机这端约 1.7 秒一拍，余量约 0.17 秒，相对 5 秒发 ping、20 秒判死的
+            // 门限可以忽略；「挂起过」的判定是隔了 3 拍以上，也远大于这点余量。
+            timer.schedule(deadline: .now() + interval, repeating: interval,
+                           leeway: .milliseconds(max(1, Int(interval * 100))))
             timer.setEventHandler { [weak self] in
                 guard let self, !self.isClosed else { return }
                 let now = DispatchTime.now()

@@ -89,13 +89,33 @@ final class RemoteMacDirectory {
     @ObservationIgnored private var relayPoll: Task<Void, Never>?
     /// 中继上此刻在线的 Mac。
     @ObservationIgnored private var relayHosts: Set<UUID> = []
+    /// 问中继「谁在线」。测试注入假的，好数清楚问了几次。
+    @ObservationIgnored private let fetchRelayHosts: @Sendable (RemoteRelayClient) async throws -> Set<UUID>
+    /// 前台时多久问一次中继。
+    @ObservationIgnored let relayPollInterval: Duration
+    /// 此刻有几处界面在显示 Mac 的在线状态（主机页「我的 Mac」、新建终端抽屉里的 Mac 行、网络诊断）。
+    /// 只有它大于 0 时才按 `relayPollInterval` 一直问；没人看就不问。见 `keepLiveStatusFresh()`。
+    @ObservationIgnored private var liveStatusDemand = 0
+    @ObservationIgnored private var isInForeground: Bool
+    /// 最近一次问完中继的时刻；nil = 还没问过。
+    @ObservationIgnored private var lastRelayPoll: ContinuousClock.Instant?
+    /// 轮询任务的代号：旧任务收尾时不能把新任务的引用清掉。
+    @ObservationIgnored private var relayPollGeneration = 0
 
     init(identity: RemoteIdentityStore = RemoteIdentityStore(), roster: RemoteCloudRoster? = nil,
-         relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard) {
+         relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard,
+         relayPollInterval: Duration = .seconds(15),
+         fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {
+             try await $0.onlineHosts()
+         }) {
         self.identity = identity
         self.roster = roster
         self.relayStore = relayStore
         self.defaults = defaults
+        self.relayPollInterval = relayPollInterval
+        self.fetchRelayHosts = fetchRelayHosts
+        // 推送把 App 拉起在后台时不该问中继；回到前台由 willEnterForeground 翻过来。
+        self.isInForeground = UIApplication.shared.applicationState != .background
         self.isActivated = defaults.bool(forKey: Self.activatedKey)
         self.internetOnly = defaults.bool(forKey: Self.internetOnlyKey)
         if isActivated { publishSelf() }
@@ -124,6 +144,7 @@ final class RemoteMacDirectory {
     }
 
     private func didEnterBackground() {
+        isInForeground = false
         stopRelayPolling()
         guard backgroundTask == .invalid, clients.values.contains(where: { $0.state == .connected }) else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Remote terminals") { [weak self] in
@@ -132,10 +153,12 @@ final class RemoteMacDirectory {
     }
 
     private func willEnterForeground() {
+        isInForeground = true
         endBackgroundTask()
         // 名册可能在后台经 iCloud 同步来了新的 Mac。
         refreshPaired()
-        if isActivated { startRelayPolling() }
+        // 只在有界面显示在线状态时才接着问中继；没人看时等界面出现（或抽屉读 `pairedMacs`）再问。
+        if isActivated, wantsLiveRelayStatus { startRelayPolling() }
         for client in clients.values { client.returnedToForeground() }
     }
 
@@ -313,26 +336,79 @@ final class RemoteMacDirectory {
         return { try await dialer.dial(peer) }
     }
 
-    /// 前台时每隔一会儿问一次中继谁在线。后台不问，回前台再接着问。
+    /// 马上问一次中继谁在线；之后只要还有界面在显示在线状态、App 在前台，就每 `relayPollInterval` 再问一次。
+    ///
+    /// 以前是 App 在前台就一直每 15 秒问：用户在 SSH 终端、设置里待一个小时，也要往中继发 240 次请求，
+    /// 每次都把蜂窝射频从省电态拉起来、再拖几秒尾巴。在线状态只有主机页、新建终端抽屉和网络诊断显示，
+    /// 所以改成只在它们出现期间问（出现时立刻问一次，所以打开时不会看到更旧的状态）。
+    /// 连接本身不看这份结果（`internetDialer` 只要配了中继、知道公钥），所以不影响连接与重连。
     private func startRelayPolling() {
         relayPoll?.cancel()
+        relayPollGeneration += 1
+        let generation = relayPollGeneration
+        let fetch = fetchRelayHosts
         relayPoll = Task { [weak self] in
+            defer { self?.relayPollEnded(generation) }
             while !Task.isCancelled {
                 guard let relay = self?.currentRelayClient() else {
+                    self?.lastRelayPoll = .now
                     self?.setRelayHosts([])
                     return
                 }
-                let hosts = (try? await relay.onlineHosts()) ?? []
+                let hosts = (try? await fetch(relay)) ?? []
                 guard !Task.isCancelled else { return }
+                self?.lastRelayPoll = .now
                 self?.setRelayHosts(hosts)
-                try? await Task.sleep(for: .seconds(15))
+                // 只借用一下 self，不在睡眠期间强持有它。
+                guard let interval = self?.relayPollInterval, self?.wantsLiveRelayStatus == true else { return }
+                try? await Task.sleep(for: interval)
             }
         }
+    }
+
+    private func relayPollEnded(_ generation: Int) {
+        guard generation == relayPollGeneration else { return }
+        relayPoll = nil
     }
 
     private func stopRelayPolling() {
         relayPoll?.cancel()
         relayPoll = nil
+    }
+
+    /// 要不要接着按间隔问：App 在前台，且有界面在显示在线状态。
+    private var wantsLiveRelayStatus: Bool {
+        guard isInForeground else { return false }
+        #if DEBUG
+        if defaults.integer(forKey: Self.debugMatrixKey) > 0 { return true }
+        #endif
+        return liveStatusDemand > 0
+    }
+
+    /// 显示 Mac 在线状态的界面在可见期间挂着它（`.task { await directory.keepLiveStatusFresh() }`），
+    /// 任务取消（界面消失）就返回。第一个挂上时马上问一次中继，最后一个走了就不再问。
+    func keepLiveStatusFresh() async {
+        liveStatusDemand += 1
+        if isActivated, isInForeground, relayPoll == nil { startRelayPolling() }
+        defer {
+            liveStatusDemand -= 1
+            if !wantsLiveRelayStatus { stopRelayPolling() }
+        }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3600))
+        }
+    }
+
+    /// 读在线列表时结果已经旧了、又没有在问：补问一次。新建终端抽屉在工作区里打开，那里挂不上
+    /// `keepLiveStatusFresh`（抽屉里一台在线的 Mac 都没有时没有可挂的行），靠这里保证打开时状态是新的。
+    private func refreshRelayHostsIfStale() {
+        guard isActivated, isInForeground, relayPoll == nil else { return }
+        if let lastRelayPoll, ContinuousClock.now - lastRelayPoll < relayPollInterval { return }
+        // 多半是在视图求值时读到的：不在这一拍里改状态，挪到下一拍。
+        Task { @MainActor [weak self] in
+            guard let self, self.relayPoll == nil else { return }
+            self.startRelayPolling()
+        }
     }
 
     private func setRelayHosts(_ hosts: Set<UUID>) {
@@ -356,7 +432,10 @@ final class RemoteMacDirectory {
     }
 
     /// 配对过、此刻在局域网里能找到的 Mac。新建终端抽屉只列它们。
-    var pairedMacs: [Mac] { macs.filter(\.isOnline) }
+    var pairedMacs: [Mac] {
+        refreshRelayHostsIfStale()
+        return macs.filter(\.isOnline)
+    }
 
     /// 重新读本机信任与名册（配对 / 忘记之后、回到前台时）。
     func refreshPaired() {

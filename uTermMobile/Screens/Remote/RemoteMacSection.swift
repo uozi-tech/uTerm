@@ -33,6 +33,8 @@ struct RemoteMacSection: View {
                 }
             }
         }
+        // 可见期间按间隔问中继谁在线；切到别的标签页、进终端就不再问（省电，见 `keepLiveStatusFresh`）。
+        .task { await directory.keepLiveStatusFresh() }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
             #if DEBUG
@@ -410,6 +412,9 @@ struct MacTerminalRows: View {
         .onAppear {
             if directory.isActivated { directory.startBrowsing() }
         }
+        // 每一行可见期间让在线状态保持新鲜（Mac 下线了能及时从抽屉里消失）。一行都没有时，
+        // 抽屉打开那一刻读 `pairedMacs` 会补问一次中继。
+        .task { await directory.keepLiveStatusFresh() }
         .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }

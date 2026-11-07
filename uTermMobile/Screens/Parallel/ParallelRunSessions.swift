@@ -86,7 +86,8 @@ final class ParallelBackgroundKeeper {
             while !Task.isCancelled {
                 guard let self else { return }
                 if !self.tick() { break }
-                try? await Task.sleep(for: .seconds(1))
+                // 进度一秒一推就够，不需要准点：给 250 ms 余量，系统可以把这次唤醒和别的定时器并在一起。
+                try? await Task.sleep(for: .seconds(1), tolerance: .milliseconds(250))
             }
         }
     }

@@ -75,6 +75,8 @@ final class ConnectionWatchdog {
     func register(_ probe: any ConnectionHealthProbing) {
         entries[ObjectIdentifier(probe)] = WeakEntry(value: probe)
         installObserversIfNeeded()
+        // 周期心跳在注册表空了之后会自己停（见 `startPeriodicProbing`），有新连接登记时再开。
+        if observersInstalled { startPeriodicProbing() }
     }
 
     /// 合并窗口内的重复触发（唤醒 + 网络恢复几乎总是同时来），settle 后扫一遍。
@@ -155,6 +157,12 @@ final class ConnectionWatchdog {
                 try? await Task.sleep(for: interval)
                 guard let self else { return }
                 await self.sweep()
+                // 一条连接都没登记了（全关了）：停下这个 30 秒一拍的唤醒，别在没有任何 SSH 连接时空转；
+                // 下次 `register` 时重新开始。有连接时的探测节拍（即保活）不变。
+                if self.entries.isEmpty {
+                    self.periodicTask = nil
+                    return
+                }
             }
         }
     }

@@ -51,6 +51,8 @@ struct RemoteNetworkDiagnosticsScreen: View {
             if selectedMacID == nil { selectedMacID = preferredMacID ?? candidates.first(where: isReachable)?.id }
             network = await RemoteNetworkLabel.current()
         }
+        // 页面开着时持续刷新各台 Mac 在不在中继上（「局域网 · 中继」那一栏）。
+        .task { await directory.keepLiveStatusFresh() }
         .onDisappear { running?.cancel() }
     }
 
