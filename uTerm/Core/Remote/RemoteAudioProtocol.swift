@@ -173,7 +173,7 @@ nonisolated enum RemoteAudioPolicy {
     static let channels: UInt32 = 2
 
     /// 声音最多占链路容量的多少：画面要紧，声音让着它（a7 的码控给编码器留了 10% 余量，声音在这里面）。
-    static let maxShare = 0.03
+    static let maxShare = 0.05
     /// 最低码率：链路再差，语音、提示音也要听得清。
     static let floorBitrate = 32_000
     /// Opus 各档（立体声）。实测 Apple 的编码器是 VBR，实际码率约为设定值的 86–93%。
@@ -211,8 +211,8 @@ nonisolated enum RemoteAudioPolicy {
 
     /// 这条链路该用哪一档（不含升档的等待，见 `RemoteAudioTierSelector`）。
     ///
-    /// 码率取不超过容量 3% 的最高一档（下限 `floorBitrate`）：64k 要 ≥ 2.1 Mbps、128k ≥ 4.3、256k ≥ 8.5、
-    /// 384k ≥ 12.8。无损只在容量 ≥ 40 Mbps、丢包 < 0.1%、手机能解时用；够格却有丢包时退到 Opus 510k。
+    /// 码率取不超过容量 5% 的最高一档：64k 要 ≥ 1.28 Mbps、128k ≥ 2.56、256k ≥ 5.12、384k ≥ 7.68
+    ///（即「≥ 8 Mbps 上 384k」）；不够 64k 时取 max(`floorBitrate`, 5%)。无损只在容量 ≥ 40 Mbps、丢包 < 0.1%、手机能解时用；够格却有丢包时退到 Opus 510k。
     static func profile(for link: Link) -> RemoteAudioProfile {
         if link.path == .relay { return .opus(bitrate: relayBitrate, frameMillis: 20) }
         guard let capacity = link.capacity else { return .opus(bitrate: relayBitrate, frameMillis: 20) }

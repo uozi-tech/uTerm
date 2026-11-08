@@ -12,7 +12,7 @@ final class RemoteAudioTierTests: XCTestCase {
         Link(path: .direct, capacity: mbps * 1_000_000, lossRate: loss, peerDecodesLossless: lossless)
     }
 
-    func test_bitrate_follows_capacity_and_never_exceeds_three_percent() {
+    func test_bitrate_follows_capacity_and_never_exceeds_five_percent() {
         for mbps in stride(from: 0.5, through: 39.5, by: 0.25) {
             let profile = RemoteAudioPolicy.profile(for: direct(mbps))
             let bitrate = try! XCTUnwrap(profile.bitrate)
@@ -20,12 +20,15 @@ final class RemoteAudioTierTests: XCTestCase {
                           || bitrate == RemoteAudioPolicy.floorBitrate, "\(mbps) Mbps → \(bitrate)")
         }
         XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(0.5)), .opus(bitrate: 32_000, frameMillis: 20), "下限")
-        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(1.5)), .opus(bitrate: 45_000, frameMillis: 20))
-        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(3)), .opus(bitrate: 64_000, frameMillis: 20))
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(1)), .opus(bitrate: 50_000, frameMillis: 20), "不够 64k 取 5%")
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(1.5)), .opus(bitrate: 64_000, frameMillis: 20))
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(2.5)), .opus(bitrate: 64_000, frameMillis: 20))
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(3)), .opus(bitrate: 128_000, frameMillis: 20))
         XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(5)), .opus(bitrate: 128_000, frameMillis: 20))
-        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(10)), .opus(bitrate: 256_000, frameMillis: 20))
-        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(13)), .opus(bitrate: 384_000, frameMillis: 10),
-                       "384k 在数据报上 10 ms 一包")
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(6)), .opus(bitrate: 256_000, frameMillis: 20))
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(7.5)), .opus(bitrate: 256_000, frameMillis: 20))
+        XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(8)), .opus(bitrate: 384_000, frameMillis: 10),
+                       "≥ 8 Mbps 上 384k，数据报上 10 ms 一包")
         XCTAssertEqual(RemoteAudioPolicy.profile(for: direct(30)), .opus(bitrate: 384_000, frameMillis: 10))
     }
 
@@ -226,8 +229,8 @@ final class RemoteAudioTierTests: XCTestCase {
             .compactMap { try? RemoteJSON.decode(RemoteDesktopAudioFormat.self, from: $0.payload) } }
         let flowing = await waitUntil(3) { frames().count >= 20 }
         XCTAssertTrue(flowing)
-        // 4 Mbps × 3% → 64k（起步上限 256k 之内，降到够格的那档立刻生效）。
-        XCTAssertEqual(pair.mac.queue.sync { streamer.currentProfile }, .opus(bitrate: 64_000, frameMillis: 20))
+        // 4 Mbps × 5% → 128k（起步上限 256k 之内，降到够格的那档立刻生效）。
+        XCTAssertEqual(pair.mac.queue.sync { streamer.currentProfile }, .opus(bitrate: 128_000, frameMillis: 20))
 
         box.link = Link(path: .localNetwork, capacity: 80_000_000, peerDecodesLossless: true)
         let switched = await waitUntil(9) { formats().contains { $0.codec == .alac } }

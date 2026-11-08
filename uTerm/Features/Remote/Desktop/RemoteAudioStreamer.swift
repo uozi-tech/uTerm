@@ -17,7 +17,7 @@ nonisolated enum RemoteAudioStreamerError: Error {
 /// 一条桌面流上的声音发送端（调研 §17）：采集 → 编码 → 静音检测 → 冗余 → 发送。
 ///
 /// - 编码在自己的队列上（Opus 编 1 s 声音约 9 ms），发送回到连接队列（`link.queue`）。
-/// - 档位（`RemoteAudioPolicy.profile`）：按链路容量挑码率，声音最多占 3%；宽裕且不丢包时用无损。
+/// - 档位（`RemoteAudioPolicy.profile`）：按链路容量挑码率，声音最多占 5%；宽裕且不丢包时用无损。
 ///   只改码率直接调编码器；换编码或包长（Opus 20 ms ↔ 10 ms、Opus ↔ 无损）时换一个流号、先发新格式，
 ///   手机见到新流号重建解码器。降档立刻、升档要连续 5 秒够格（`RemoteAudioTierSelector`）。
 /// - 静音：连续 200 ms 静音就停发，之后每秒发一个静音包；有声了立刻接着发，并把停发前最后一包当冗余带上，
