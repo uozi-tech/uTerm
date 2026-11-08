@@ -189,6 +189,57 @@ final class HeldSessionLayoutRestoreTests: XCTestCase {
         restored.dispose()
     }
 
+    /// 退出 App 时攒批里的布局要同步写出去（之后连接就断了，异步任务不一定来得及跑）。
+    func test_quit_flushes_pending_layout_synchronously() async throws {
+        let windowID = UUID(), server = UUID()
+        let workspace = WorkspaceModel()
+        workspace.attachSessionRegistry(registry, windowID: windowID, windowKind: TerminalWindowKind.terminal)
+        let first = workspace.openServer(profileID: server, title: "a")
+        let second = workspace.openServer(profileID: server, title: "b")
+        let local = localModel(windowID: UUID())
+        let x = local.addTab(), y = local.addTab()
+        let panes = workspace.terminalGroups.allTabs.map(\.payload)
+        let settled = await wait {
+            panes.allSatisfy { $0.heldAttributes()?.layout != nil } && local.panes.allSatisfy { $0.attributes?.layout != nil }
+        }
+        XCTAssertTrue(settled)
+
+        workspace.terminalGroups.reorderTab(second, before: first)
+        local.groups.reorderTab(y, before: x)
+        HeldLayoutWriters.flushPending()   // 同步：不让出主线程。
+        let sshTree = sshTree(workspace)
+        XCTAssertTrue(panes.allSatisfy { $0.heldAttributes()?.layout?.tree == sshTree }, "SSH 窗格还是旧布局")
+        XCTAssertTrue(local.panes.allSatisfy { $0.attributes?.layout?.tree.groups.first?.tabs == [y, x] }, "本机终端还是旧布局")
+        workspace.dispose()
+        local.disposeAll()
+    }
+
+    /// 退出途中窗口跟着关：关窗口时把攒着的那份先写掉；平时关窗口（会话随之结束）不写。
+    func test_stopping_the_writer_flushes_only_when_asked() async throws {
+        let groups = UPaneGroupsModel<Int>()
+        let a = UUID(), b = UUID()
+        groups.openTab({ UPaneTab(id: a, payload: 1) }, in: nil)
+        groups.openTab({ UPaneTab(id: b, payload: 2) }, in: nil)
+        var written: [[UUID]] = []
+        func makeWriter() -> HeldLayoutWriter<Int> {
+            HeldLayoutWriter(groups: groups, delay: .seconds(10), id: \.id) { written.append($0.tree.groups[0].tabs) }
+        }
+
+        let closing = makeWriter()
+        groups.reorderTab(b, before: a)
+        try await Task.sleep(for: .milliseconds(50))   // 让变化先进攒批。
+        closing.stop()
+        XCTAssertEqual(written, [])
+
+        let quitting = makeWriter()
+        groups.reorderTab(a, before: b)
+        try await Task.sleep(for: .milliseconds(50))
+        quitting.stop(flushingPending: true)
+        XCTAssertEqual(written, [[a, b]])
+        HeldLayoutWriters.flushPending()   // 停掉的不再写。
+        XCTAssertEqual(written, [[a, b]])
+    }
+
     func test_ssh_old_attributes_without_layout_decode_and_keep_open_order() throws {
         let windowID = UUID(), server = UUID()
         let json = #"{"windowID":"\#(windowID.uuidString)","serverID":"\#(server.uuidString)","title":"t","order":5}"#

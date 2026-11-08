@@ -304,8 +304,28 @@ extension UPaneGroupsModel {
     }
 }
 
+/// 退出 App 时把各窗口还攒着没写的布局写出去（`TerminalQuitPolicy.applicationWillTerminate`）。
+/// 写布局的地方是泛型的，这里只记一个「立刻写」的入口。
+@MainActor
+enum HeldLayoutWriters {
+    private static var flushers: [ObjectIdentifier: () -> Void] = [:]
+
+    static func add(_ writer: AnyObject, flush: @escaping () -> Void) {
+        flushers[ObjectIdentifier(writer)] = flush
+    }
+
+    static func remove(_ writer: AnyObject) {
+        flushers[ObjectIdentifier(writer)] = nil
+    }
+
+    /// 同步写完才返回：之后 holder 的连接就要断了。
+    static func flushPending() {
+        for flush in Array(flushers.values) { flush() }
+    }
+}
+
 /// 布局一变（重排、拆分、跨组拖动、关标签、拖分隔条、切前台标签）就把新布局交给 `write`。
-/// 拖分隔条每帧都在变，攒一小会儿再写。
+/// 拖分隔条每帧都在变，攒一小会儿再写；退出 App 时攒着的那份立刻写（`HeldLayoutWriters.flushPending`）。
 @MainActor
 final class HeldLayoutWriter<Payload> {
     private weak var groups: UPaneGroupsModel<Payload>?
@@ -313,6 +333,8 @@ final class HeldLayoutWriter<Payload> {
     private let id: (UPaneTab<Payload>) -> UUID?
     private let write: @MainActor (HeldSessionLayout) -> Void
     private var pending: Task<Void, Never>?
+    /// 布局变了、还没写。变化的那一刻就记下（观察回调里同步），不等攒批任务排上：⌘Q 可能就在下一刻。
+    private var isDirty = false
     private var isStopped = false
 
     init(groups: UPaneGroupsModel<Payload>, delay: Duration = .milliseconds(300),
@@ -322,17 +344,33 @@ final class HeldLayoutWriter<Payload> {
         self.id = id
         self.write = write
         observe()
+        HeldLayoutWriters.add(self) { [weak self] in self?.flushPending() }
     }
 
-    func stop() {
+    isolated deinit {
+        HeldLayoutWriters.remove(self)
+    }
+
+    /// 窗口关了。`flushingPending`：退出 App 途中窗口跟着关，攒着的那份先写掉，不丢最后一次改动。
+    func stop(flushingPending: Bool = false) {
+        if flushingPending { flushPending() }
         isStopped = true
         pending?.cancel()
         pending = nil
+        HeldLayoutWriters.remove(self)
+    }
+
+    /// 还有攒着没写的就立刻写。
+    func flushPending() {
+        guard isDirty else { return }
+        flush()
     }
 
     /// `id` 返回 nil 的标签（文件预览）不进布局。
     private func flush() {
+        pending?.cancel()
         pending = nil
+        isDirty = false
         guard !isStopped, let groups else { return }
         write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id)))
     }
@@ -342,6 +380,8 @@ final class HeldLayoutWriter<Payload> {
         withObservationTracking {
             _ = groups.snapshot(id)
         } onChange: { [weak self] in
+            // 布局模型只在主线程上改，回调同步跑在改它的那一刻。
+            MainActor.assumeIsolated { self?.isDirty = true }
             Task { @MainActor in self?.changed() }
         }
     }

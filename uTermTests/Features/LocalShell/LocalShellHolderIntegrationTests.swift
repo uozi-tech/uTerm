@@ -249,6 +249,48 @@ final class LocalShellHolderIntegrationTests: XCTestCase {
         XCTAssertTrue(removed, "结束后会话还在列表里")
     }
 
+    /// 退出前最后一刻改了布局（还在 0.3 秒攒批里）：退出流程里要趁连接还在把它写进 holder，接回时按新布局放。
+    func test_layout_changed_right_before_quit_reaches_the_holder() async throws {
+        let windowID = UUID()
+        let model = LocalShellWindowModel(startShell: { _ in })
+        model.attach(TerminalSessionRegistrar(registry: TerminalSessionRegistry(), windowID: windowID,
+                                              windowKind: TerminalWindowKind.terminal))
+        let a = model.addTab(id: makeSession()), b = model.addTab(id: makeSession())
+        for pane in model.panes { await pane.session.connect(using: backend(pane.id)) }
+        XCTAssertTrue(model.panes.allSatisfy { $0.session.connectionState == .connected })
+        func stored(_ id: UUID) async throws -> LocalShellSessionAttributes? {
+            let hello = await HolderProbe.hello(id, client: client, namespace: Self.namespace)
+            let reply = try XCTUnwrap(hello)
+            return try? JSONDecoder().decode(LocalShellSessionAttributes.self, from: Data(reply.attributes))
+        }
+        // 先等攒批写一次，holder 里是 [a, b]。
+        let first = await wait(timeout: 5) { model.panes.allSatisfy { $0.attributes?.layout?.tree.groups.first?.tabs == [a, b] } }
+        XCTAssertTrue(first)
+        try await Task.sleep(for: .milliseconds(200))
+        let before = try await stored(a)
+        XCTAssertEqual(before?.layout?.tree.groups.first?.tabs, [a, b])
+
+        model.groups.reorderTab(b, before: a)
+        let quit = TerminalQuitPolicy.shared
+        defer { quit.quitCancelled() }
+        quit.applicationWillTerminate()   // 不等攒批：这之后 App 就没了。
+        // 退出流程断开连接、shell 留着；下次启动从 holder 读到的是新布局。
+        for id in [a, b] {
+            let after = try await stored(id)
+            XCTAssertEqual(after?.layout?.tree.groups.first?.tabs, [b, a], "\(id == a ? "a" : "b") 的 holder 里还是旧布局")
+        }
+        let restored = LocalShellWindowModel(startShell: { _ in })
+        var sessions: [(id: UUID, attributes: LocalShellSessionAttributes)] = []
+        for id in [a, b] {
+            let attributes = try await stored(id)
+            sessions.append((id, try XCTUnwrap(attributes)))
+        }
+        LocalShellRestorer.adopt(sessions, windowID: windowID, into: restored)
+        XCTAssertEqual(restored.panes.map(\.id), [b, a])
+        restored.disposeAll()
+        model.disposeAll()
+    }
+
     private func waitForSessionRemoved(_ id: UUID) async throws -> Bool {
         for _ in 0..<100 {
             if !(try await client.listSessions(namespace: Self.namespace)).contains(id) { return true }
@@ -555,3 +597,4 @@ final class LocalShellRestorerTests: XCTestCase {
         await restorer.finished()
     }
 }
+

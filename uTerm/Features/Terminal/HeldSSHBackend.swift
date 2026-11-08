@@ -169,6 +169,17 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         await core.setAttributes(attributes)
     }
 
+    /// 同步交给连接的发送队列（退出 App 途中异步任务不一定来得及跑，之后的 `flushAndClose` 会等它写完），
+    /// 再记下来供重连时重发。
+    nonisolated func sendAttributes(_ attributes: Data) {
+        holderLink.send(HolderFrame(.setAttributes, payload: Array(attributes)))
+        Task { await remember(attributes) }
+    }
+
+    private func remember(_ attributes: Data) {
+        self.attributes = attributes
+    }
+
     /// 探活在 `uterm-ssh` 里做（它才有连接）。死了它退出，由退出流程报告，所以这里总是回 true。
     func verifyConnectionAlive() async -> Bool {
         await core.send(HolderFrame(.probe))

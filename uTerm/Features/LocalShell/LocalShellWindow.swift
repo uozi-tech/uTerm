@@ -115,7 +115,7 @@ final class LocalShellPane: Identifiable {
         self.layout = layout
         guard !isDisposed, session.connectionState == .connected,
               let backend = session.backend as? LocalShellBackend, let attributes = encodedAttributes() else { return }
-        Task { await backend.setAttributes(attributes) }
+        backend.sendAttributes(attributes)
     }
 
     private func trackWorkingDirectory(_ backend: LocalShellBackend) {
@@ -254,7 +254,7 @@ final class LocalShellWindowModel {
     }
 
     func disposeAll() {
-        layoutWriter?.stop()
+        layoutWriter?.stop(flushingPending: TerminalQuitPolicy.shared.isQuitting)
         for pane in panes { pane.dispose() }
         groups.reset()
     }

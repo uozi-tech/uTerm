@@ -84,6 +84,8 @@ final class TerminalQuitPolicy {
     /// 进程马上结束。存最后一次检查点，要结束的告诉 holder 结束。
     func applicationWillTerminate() {
         isQuitting = true
+        // 退出前最后一刻改的布局还在攒批里：趁连接还在写进 holder，下次按它接回。
+        HeldLayoutWriters.flushPending()
         for session in HeldTerminalSessions.all {
             session.finishHeldForQuit(endingSession: endsSessionsOnQuit)
         }

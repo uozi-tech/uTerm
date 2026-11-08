@@ -158,7 +158,7 @@ final class PaneModel: Identifiable {
         self.layout = layout
         guard let backend = session.backend as? HeldSSHBackend,
               let attributes = sessionAttributes(title: connectedServerName) else { return }
-        Task { await backend.setAttributes(attributes) }
+        backend.sendAttributes(attributes)
     }
 
     /// 窗口把注册表凭条补发下来时调用（窗口视图的 `.task` 可能晚于窗格建连）。

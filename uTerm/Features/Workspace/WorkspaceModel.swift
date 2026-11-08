@@ -248,7 +248,7 @@ final class WorkspaceModel {
     /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
     /// 预览 buffers，同时停止 Agent 的模型请求和自动续轮。
     func dispose() {
-        layoutWriter?.stop()
+        layoutWriter?.stop(flushingPending: TerminalQuitPolicy.shared.isQuitting)
         agentRefreshGeneration = UUID()
         // 拆资源之前先把快照冻结：之后 tab.disposeAll() 会清空 panes 映射，
         // 再取快照就只剩空布局（见 `frozenSnapshot`）。
