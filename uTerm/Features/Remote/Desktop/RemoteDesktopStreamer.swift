@@ -152,6 +152,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var forceLTRRefresh = false
     /// 上一个恢复帧（关键帧 / LTR 刷新帧）被编码器丢了：下一个恢复帧临时按码控目标编（见 `encode`）。
     private var recoveryDropped = false
+    /// 手机在等主流的恢复帧（报了丢帧 / 解坏 / 要关键帧），还没确认收到。这期间不精修：精修帧（尤其是旁路那张
+    /// 高画质关键帧）跟恢复帧抢窄链路，手机上只剩隔一阵来一张的精修在动（2026-11-08 mini）。
+    private var awaitingRecovery = false
+    /// 已发出、还没确认的主流恢复帧（关键帧 / LTR 刷新帧）。确认了就不再等恢复。
+    private var recoverySequences: Set<UInt32> = []
     /// 已发出、还没确认的精修帧。它们的确认不进码控与往返读数：一张 4K 精修几百 KB，「采集 → 解码完」
     /// 量的是它自己发多久，不是链路排队。
     private var refineSequences: Set<UInt32> = []
@@ -302,6 +307,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             if let clipboard { seenClipboardChange = clipboard.changeCount }
         case .desktopKeyframe:
             forceKeyframe = true
+            awaitingRecovery = true
             // 屏幕静止时不会有新帧来触发编码：把最后一帧重编成关键帧。
             if let lastFrame, pacer.pending == nil { offer(lastFrame) }
         case .desktopVideoLost:
@@ -369,8 +375,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         for sequence in sequences {
             pacer.abandon(sequence)
             refineSequences.remove(sequence)
+            recoverySequences.remove(sequence)
         }
         stats.recordLostFrames(sequences.count)
+        awaitingRecovery = true
         if encoder?.usesLTR == true {
             forceLTRRefresh = true
         } else {
@@ -416,10 +424,14 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         video?.acknowledgeVideo(sequence: ack.sequence)
         if let token = ack.ltrToken { encoder?.acknowledgeLTR(token) }
         let refine = refineSequences.remove(ack.sequence) != nil
+        if recoverySequences.remove(ack.sequence) != nil, !ack.failed { awaitingRecovery = false }
         guard pacer.acknowledge(ack.sequence) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let latency = now &- ack.captureNanos
-        if ack.failed { forceKeyframe = true }
+        if ack.failed {
+            forceKeyframe = true
+            awaitingRecovery = true
+        }
         if !refine {
             stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
             let linkQueueing = linkState.map { $0.queueDelayNanos > rate.config.queueDelayThreshold }
@@ -517,7 +529,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
-        guard isLive, !isPaused, !refined, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
+        guard isLive, !isPaused, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
               pacer.inflight.isEmpty,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
@@ -662,6 +674,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
         pacer.encoded(sequence, bytes: payload.count)
         if flags.contains(.refine) { refineSequences.insert(sequence) }
+        if !flags.contains(.refine), flags.contains(.keyframe) || flags.contains(.ltrRefresh) {
+            recoverySequences.insert(sequence)
+        }
         // 旁路精修帧不在参考链里，丢了也不用恢复，体积又大：走可靠通道，慢一点无所谓。
         if let video, !flags.contains(.sidecar) {
             video.sendVideo(payload, sequence: sequence,
