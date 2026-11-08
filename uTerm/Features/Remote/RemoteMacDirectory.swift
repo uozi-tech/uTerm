@@ -154,6 +154,12 @@ final class RemoteMacDirectory {
         if left == 0 { clients[macID]?.disconnect() }
     }
 
+    /// 已有的远控连接（开过这台 Mac 的窗口才有）；没有就返回 nil，不新建。
+    ///
+    /// `clients` 不在观察跟踪里：读它的视图看不到「新建了一条连接」，要自己隔一会儿再取一次
+    ///（拿到之后连接本身是 `@Observable`，连上 / 断开 / 往返都会刷新）。
+    func existingClient(macID: String) -> RemoteMacClient? { clients[macID] }
+
     /// 有连着的 Mac（iOS 退到后台时据此申请一段后台时间）。
     var hasConnectedClients: Bool {
         clients.values.contains { $0.state == .connected }
