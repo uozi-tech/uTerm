@@ -318,7 +318,7 @@ final class RemoteDesktopSession {
 
     // MARK: - 声音
 
-    /// 打开 / 关闭声音（手机工具栏上的扬声器按钮）。
+    /// 打开 / 关闭声音（远程桌面工具栏上的扬声器按钮，见 `toggleAudio`）。
     func setAudio(_ on: Bool) {
         guard supportsAudio else { return }
         wantsAudio = on
@@ -364,7 +364,11 @@ final class RemoteDesktopSession {
             try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
             audioPlaying = true
         } catch {
+            #if os(macOS)
+            audioState = .unavailable("这台 Mac 上无法播放声音：\(error.localizedDescription)")
+            #else
             audioState = .unavailable("手机上无法播放声音：\(error.localizedDescription)")
+            #endif
             wantsAudio = false
         }
     }

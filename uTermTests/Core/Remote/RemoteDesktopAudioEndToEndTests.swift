@@ -1,5 +1,7 @@
+import AppKit
 import CryptoKit
 @preconcurrency import Network
+import SwiftUI
 import XCTest
 @testable import uTerm
 
@@ -191,5 +193,146 @@ final class RemoteDesktopAudioEndToEndTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(client.state, .connected)
         XCTAssertTrue(mac.audioSources.isEmpty)
+    }
+
+    // MARK: - 工具栏扬声器按钮（手机与 Mac 主控端共用 `toggleAudio` / `restoreAudioIfWanted`）
+
+    private func scratchDefaults() throws -> (UserDefaults, () -> Void) {
+        let suite = "RemoteDesktopAudioToggle.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        return (defaults, { defaults.removePersistentDomain(forName: suite) })
+    }
+
+    /// 点按钮：叫 Mac 开 / 关声音，并按这台 Mac 记住选择。
+    func test_toolbar_toggle_turns_mac_audio_on_and_off_and_remembers_the_choice() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        let macID = try XCTUnwrap(client.macDeviceID)
+        let (session, output) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertFalse(session.isAudioOn)
+        XCTAssertNil(session.audioStatsText)
+
+        session.toggleAudio(defaults: defaults)
+        XCTAssertTrue(session.isAudioOn)
+        XCTAssertTrue(output.isPlaying)
+        let capturing = await waitUntil { mac.latestAudioSource?.started == true && session.audioState == .playing }
+        XCTAssertTrue(capturing, "Mac 应开始采集并回格式：\(session.audioState)")
+        XCTAssertTrue(RemoteDesktopAudioPreference.wantsAudio(mac: macID, defaults: defaults))
+        XCTAssertNotNil(session.audioStatsText)
+
+        session.toggleAudio(defaults: defaults)
+        XCTAssertFalse(session.isAudioOn)
+        XCTAssertFalse(output.isPlaying)
+        let source = try XCTUnwrap(mac.latestAudioSource)
+        let stopped = await waitUntil { source.stopped }
+        XCTAssertTrue(stopped, "关掉后 Mac 停采集")
+        XCTAssertFalse(RemoteDesktopAudioPreference.wantsAudio(mac: macID, defaults: defaults))
+        XCTAssertEqual(session.state, .streaming)
+    }
+
+    /// 上次看这台 Mac 时开着声音：开流后自动打开；没开过就不动。
+    func test_restore_reopens_audio_only_when_remembered_for_this_mac() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        let (session, _) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+
+        session.restoreAudioIfWanted(defaults: defaults)
+        XCTAssertEqual(session.audioState, .off, "没记过就不开")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(mac.audioSources.isEmpty)
+
+        RemoteDesktopAudioPreference.setWantsAudio(true, mac: try XCTUnwrap(client.macDeviceID), defaults: defaults)
+        session.restoreAudioIfWanted(defaults: defaults)
+        let playing = await waitUntil { session.audioState == .playing && mac.latestAudioSource?.started == true }
+        XCTAssertTrue(playing, "\(session.audioState)")
+    }
+
+    /// 那台 Mac 不支持声音：按钮不显示；就算被调到也不发消息、不记选择。
+    func test_toolbar_toggle_is_inert_without_audio_capability() async throws {
+        let features = RemoteConstants.localFeatures.filter { $0 != RemoteFeature.desktopAudio }
+        let (server, mac, client) = try await makeRig(features: features)
+        defer { server.stop() }
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        let (session, output) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        XCTAssertFalse(session.supportsAudio, "工具栏据此隐藏扬声器按钮")
+
+        session.toggleAudio(defaults: defaults)
+        XCTAssertFalse(session.isAudioOn)
+        XCTAssertFalse(output.isPlaying)
+        XCTAssertFalse(RemoteDesktopAudioPreference.wantsAudio(mac: try XCTUnwrap(client.macDeviceID), defaults: defaults))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(client.state, .connected)
+        XCTAssertTrue(mac.audioSources.isEmpty)
+    }
+
+    /// Mac 主控端工具栏截图（开声音前后、老 Mac 无按钮）。设置 `UTERM_REMOTE_SHOTS` 才跑，见 `RemoteMacControllerSnapshotTests`。
+    func test_render_mac_desktop_toolbar_audio_states() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let raw = env["UTERM_REMOTE_SHOTS"] ?? env["TEST_RUNNER_UTERM_REMOTE_SHOTS"], !raw.isEmpty else {
+            throw XCTSkip("设置 UTERM_REMOTE_SHOTS=<目录> 才拍工具栏截图")
+        }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("remote-shots", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+
+        func shoot(_ name: String, _ model: RemoteDesktopWindowModel) async throws {
+            let size = NSSize(width: 900, height: 160)
+            let host = NSHostingView(rootView: RemoteDesktopContent(model: model)
+                .background(Color.black).environment(\.colorScheme, .dark).frame(width: size.width, height: size.height))
+            host.frame = NSRect(origin: .zero, size: size)
+            let window = ProbeWindow.make(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
+                                          contentView: host, placement: .offScreen)
+            defer { window.orderOut(nil) }
+            window.appearance = NSAppearance(named: .darkAqua)
+            try await Task.sleep(for: .milliseconds(500))
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            try png.write(to: dir.appendingPathComponent("\(name).png"))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = "\(name).png"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, _) = makeSession(client)
+        defer { session.stop() }
+        let model = RemoteDesktopWindowModel(client: client, session: session)
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        try await shoot("desktop-toolbar-audio-off", model)
+        session.toggleAudio(defaults: defaults)
+        let playing = await waitUntil { session.audioState == .playing }
+        XCTAssertTrue(playing, "\(session.audioState)")
+        try await shoot("desktop-toolbar-audio-on", model)
+
+        let old = RemoteConstants.localFeatures.filter { $0 != RemoteFeature.desktopAudio }
+        let (oldServer, oldMac, oldClient) = try await makeRig(features: old)
+        defer { oldServer.stop() }
+        let (oldSession, _) = makeSession(oldClient)
+        defer { oldSession.stop() }
+        await oldSession.start()
+        XCTAssertEqual(oldSession.state, .streaming)
+        try await shoot("desktop-toolbar-old-mac", RemoteDesktopWindowModel(client: oldClient, session: oldSession))
+        // 假 Mac 在服务端只是弱引用，测试期间要留着，不然远程桌面会被当成没打开。
+        withExtendedLifetime((mac, oldMac)) {}
+        print("[remote-shots] dir=\(dir.path)")
     }
 }

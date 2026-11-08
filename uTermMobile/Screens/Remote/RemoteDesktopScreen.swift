@@ -130,7 +130,7 @@ struct RemoteDesktopScreen: View {
             }
         }
         .onChange(of: session?.state) { _, state in
-            if state == .streaming, let session { restoreAudioIfWanted(session) }
+            if state == .streaming { session?.restoreAudioIfWanted() }
         }
         .onChange(of: session?.audioState) { _, state in
             // Mac 上没开、采集停了、拔了耳机：按钮已经复位，这里说一声为什么。
@@ -186,7 +186,7 @@ struct RemoteDesktopScreen: View {
             .onTapGesture { showStats.toggle() }
             Spacer(minLength: 8)
             if let session, session.supportsAudio, session.state == .streaming {
-                barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { toggleAudio(session) }
+                barButton(audioOn ? "speaker.wave.2.fill" : "speaker.slash", active: audioOn) { session.toggleAudio() }
                     .accessibilityLabel(audioOn ? "关闭声音" : "打开声音")
             }
             barButton("arrow.down.right.and.arrow.up.left") { fitToken += 1 }
@@ -266,31 +266,10 @@ struct RemoteDesktopScreen: View {
 
     // MARK: - 声音
 
-    private var audioOn: Bool {
-        switch session?.audioState {
-        case .starting, .playing: return true
-        default: return false
-        }
-    }
-
-    private func toggleAudio(_ session: RemoteDesktopSession) {
-        let on = !audioOn
-        session.setAudio(on)
-        if let mac = client.macDeviceID { RemoteDesktopAudioPreference.setWantsAudio(on, mac: mac) }
-    }
-
-    /// 开流成功后：上次看这台 Mac 时开着声音就照样打开。
-    private func restoreAudioIfWanted(_ session: RemoteDesktopSession) {
-        guard session.supportsAudio, session.audioState == .off, let mac = client.macDeviceID,
-              RemoteDesktopAudioPreference.wantsAudio(mac: mac) else { return }
-        session.setAudio(true)
-    }
+    private var audioOn: Bool { session?.isAudioOn == true }
 
     private var audioStatsLine: String {
-        guard let session, audioOn else { return "" }
-        let audio = session.audioStats
-        return String(format: " · 声音 缓冲 %d ms（目标 %d）补洞 %d", audio.bufferedMillis, audio.targetMillis,
-                      audio.counters.concealed)
+        session?.audioStatsText.map { " · " + $0 } ?? ""
     }
 
     private var statusLine: String {

@@ -59,7 +59,7 @@ final class RemoteDesktopWindowModel {
     }
 }
 
-/// 一台远程 Mac 的屏幕窗口：整窗黑底，顶上一条细栏（居中是名字与状态点，右边是读数、帘幕、全屏），
+/// 一台远程 Mac 的屏幕窗口：整窗黑底，顶上一条细栏（居中是名字与状态点，右边是声音、读数、帘幕、全屏），
 /// 下面全是画面，和手机上的远程桌面一样。画面上按状态盖遮罩（连接中 / 核对配对 / 失败 / 锁屏…）。
 struct RemoteDesktopWindowView: View {
     let windowID: RemoteDesktopWindowID?
@@ -188,6 +188,13 @@ struct RemoteDesktopContent: View {
             session.onClipboard = { content in show(RemoteDesktopMacPasteSource.receive(content)) }
         }
         .onChange(of: client.state) { _, _ in Task { await model.startStreamIfConnected() } }
+        .onChange(of: session.state) { _, state in
+            if state == .streaming { session.restoreAudioIfWanted() }
+        }
+        .onChange(of: session.audioState) { _, state in
+            // 那台 Mac 上没开、采集停了、本机输出设备没了：按钮已经复位，这里说一声为什么。
+            if case .unavailable(let reason) = state { show(reason, seconds: 4) }
+        }
     }
 
     // MARK: - 顶栏
@@ -222,6 +229,13 @@ struct RemoteDesktopContent: View {
                                 ? String(localized: "正在把 ⌘Tab、⌘空格、⌘W 等快捷键发给那台 Mac（点按改为留在本机）")
                                 : String(localized: "⌘Tab、⌘空格、⌘W 等快捷键留在本机（点按改为发给那台 Mac）")) {
                         sendSystemShortcuts.toggle()
+                    }
+                }
+                if session.supportsAudio {
+                    barButton(session.isAudioOn ? "speaker.wave.2.fill" : "speaker.slash", active: session.isAudioOn,
+                              help: session.isAudioOn ? String(localized: "关闭声音")
+                                                      : String(localized: "打开声音：在本机播放那台 Mac 的声音")) {
+                        session.toggleAudio()
                     }
                 }
                 barButton("gauge.with.dots.needle.33percent", active: showStats,
@@ -284,7 +298,7 @@ struct RemoteDesktopContent: View {
             let latency = session.latency.map { String(localized: "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）") }
             let rest = String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
                               stats.megabitsPerSecond, stats.decodeMillis)
-            Text([latency, rest].compactMap(\.self).joined(separator: " · "))
+            Text([latency, rest, session.audioStatsText].compactMap(\.self).joined(separator: " · "))
                 .font(UD.mono(11))
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 10).padding(.vertical, 5)
