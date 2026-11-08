@@ -73,6 +73,7 @@ final class RemoteMacWindowModel {
     }
 
     /// 连上了：接管它上面的全部终端，第一个放前台。重连后再调不重复开。
+    /// 列表本来就按那台 Mac 上的标签顺序发来（老版本 Mac 是打开先后），照着开就是它的顺序。
     func takeOver() {
         guard follower == nil else { return }
         let ids = client.listedSessionIDs ?? client.sessions.map(\.id)
@@ -83,13 +84,37 @@ final class RemoteMacWindowModel {
         }
     }
 
-    /// 那台 Mac 的终端列表变了：新开的在后台加标签，关掉的摘标签。nil = 还没收到列表，什么也不动。
-    func follow(_ sessionIDs: [UUID]?) {
+    /// 那台 Mac 的终端列表变了：新开的在后台加标签，关掉的摘标签，按它上面的顺序排（`order`，老版本 Mac 不发）。
+    /// nil = 还没收到列表，什么也不动。
+    func follow(_ sessionIDs: [UUID]?, order: [UUID]? = nil) {
         guard let sessionIDs, var follower else { return }
         let (gone, fresh) = follower.update(sessionIDs)
         self.follower = follower
         for id in gone { close(id) }
         for id in fresh { open(id, activate: false) }
+        if let order { arrange(by: order) }
+    }
+
+    /// 每个组各排各的，只在组里这些标签原来的位置之间换（`RemoteTabArrangement`）。各组的前台标签和活动组不变，
+    /// 正看着的那个不会被切走。
+    func arrange(by order: [UUID]) {
+        let fronts = groups.groupIDs.compactMap { id in groups.groups[id]?.activeTab.map { (group: id, tab: $0.id) } }
+        let activeGroup = groups.activeGroupID
+        var moved = false
+        for groupID in groups.groupIDs {
+            guard let current = groups.groups[groupID]?.tabs.map(\.id) else { continue }
+            let arranged = RemoteTabArrangement.arranged(current, order: order) { $0 }
+            for (index, id) in arranged.enumerated() {
+                guard let tabs = groups.groups[groupID]?.tabs, tabs[index].id != id else { continue }
+                groups.reorderTab(id, before: tabs[index].id)
+                moved = true
+            }
+        }
+        guard moved else { return }
+        // `reorderTab` 会把挪动的标签切到前台：还回去，活动组最后还，它才是最终的活动组。
+        for front in fronts.filter({ $0.group != activeGroup }) + fronts.filter({ $0.group == activeGroup }) {
+            if let at = groups.locateTab(front.tab) { groups.activateTab(groupID: at.groupID, index: at.index) }
+        }
     }
 
     /// 在那台 Mac 上新开一个本机终端（它那边也会弹出窗口），开成前台标签。

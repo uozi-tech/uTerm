@@ -114,7 +114,7 @@ private struct RemoteMacSessionView: View {
         .onChange(of: client.state, initial: true) { _, state in
             if state == .connected { model.takeOver() }
         }
-        .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids) }
+        .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids, order: client.sessions.macTabOrder) }
     }
 
     /// 连着的过程中断了：标签留着（各自在后台重连），顶上说一声。

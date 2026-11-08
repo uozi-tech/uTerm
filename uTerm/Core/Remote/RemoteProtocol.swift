@@ -348,8 +348,20 @@ nonisolated struct RemoteSessionInfo: Codable, Equatable, Sendable, Identifiable
     var controlledBy: String?
     /// Mac 标签上此刻显示的名字，跟着程序设的标题变。老版本 Mac 不发这个键。
     var tabTitle: String? = nil
+    /// 在 Mac 上的排位（0 起）：窗口按打开先后，窗口里的组从左到右、从上到下，组里按标签顺序。列表本身也按它排。
+    /// 老版本 Mac 不发这个键，那时设备上的标签保持原来的顺序。
+    var order: Int? = nil
 
     var displayTitle: String { tabTitle ?? title }
+}
+
+extension Array where Element == RemoteSessionInfo {
+    /// Mac 上的标签顺序；有哪一条没带排位（老版本 Mac）就是 nil，设备上的标签别跟着动。
+    nonisolated var macTabOrder: [UUID]? {
+        let ranked = compactMap { info in info.order.map { (rank: $0, id: info.id) } }
+        guard !isEmpty, ranked.count == count else { return nil }
+        return ranked.sorted { $0.rank < $1.rank }.map(\.id)
+    }
 }
 
 nonisolated struct RemoteGridSize: Equatable, Sendable {

@@ -332,6 +332,10 @@ final class WorkspaceModel {
         registry.setRevealer(forWindow: windowID) { [weak self] paneID in
             self?.revealTerminal(paneID: paneID) ?? false
         }
+        // 手机远控按 Mac 上的标签顺序排标签：取写进 holder 的同一份布局。
+        registry.setTabOrder(forWindow: windowID) { [weak self] in
+            self?.terminalGroups.snapshot(Self.heldSessionID).tabOrder ?? []
+        }
         syncTerminalTitles()
     }
 

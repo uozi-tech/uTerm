@@ -25,3 +25,26 @@ nonisolated struct RemoteSessionFollower: Equatable, Sendable {
         return (gone, fresh)
     }
 }
+
+/// 按 Mac 上的标签顺序重排本机一条标签条里属于那台 Mac 的标签（两端共用，界面各自落到自己的标签条上）。
+///
+/// 只在这些标签原来占的那几格之间换位置：别的标签（直连主机、文件、另一台 Mac 的）原地不动，`order` 里没有的
+/// 远控标签（刚开的本机 shell 还没进列表）也不动。前台标签是谁由调用方保留，这里只排顺序。
+nonisolated enum RemoteTabArrangement {
+    /// `sessionID` 取标签接着的那台 Mac 上的会话 id；不是这台 Mac 的标签返回 nil。
+    static func arranged<Tab>(_ tabs: [Tab], order: [UUID], sessionID: (Tab) -> UUID?) -> [Tab] {
+        var rank: [UUID: Int] = [:]
+        for (index, id) in order.enumerated() where rank[id] == nil { rank[id] = index }
+        var slots: [Int] = []
+        var ranked: [(rank: Int, tab: Tab)] = []
+        for (slot, tab) in tabs.enumerated() {
+            guard let id = sessionID(tab), let position = rank[id] else { continue }
+            slots.append(slot)
+            ranked.append((position, tab))
+        }
+        ranked.sort { $0.rank < $1.rank }
+        var arranged = tabs
+        for (slot, entry) in zip(slots, ranked) { arranged[slot] = entry.tab }
+        return arranged
+    }
+}

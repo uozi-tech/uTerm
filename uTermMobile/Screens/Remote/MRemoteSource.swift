@@ -24,6 +24,8 @@ struct MRemoteTakeover: Equatable {
     let sessionIDs: [UUID]
     /// 放到前台的那个，连接中页跟踪它。
     let focus: UUID
+    /// Mac 上的标签顺序；老版本 Mac 不发，为 nil。
+    var order: [UUID]? = nil
     /// 让同样内容的连续请求也能被 `onChange` 看到。
     let token = UUID()
 

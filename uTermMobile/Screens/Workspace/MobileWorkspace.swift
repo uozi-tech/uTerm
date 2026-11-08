@@ -197,6 +197,7 @@ final class MobileWorkspace {
         follows.append(RemoteFollow(client: takeover.client,
                                     follower: RemoteSessionFollower(takingOver: takeover.sessionIDs)))
         let changes = openRemoteTabs(takeover.client, sessionIDs: takeover.sessionIDs, activate: true)
+        arrangeRemoteTabs(of: takeover.client, order: takeover.order)
         if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
             activate(front.id)
         }
@@ -226,8 +227,9 @@ final class MobileWorkspace {
     /// Mac 的终端列表更新了，手机上的标签跟着它走：
     /// - 没见过的终端在后台开标签，不抢前台。在手机上关掉的不算新的，不会再开回来。
     /// - 列表里出现过、现在没了的终端（在 Mac 上关了、Mac 上的连接断了）关掉标签。之后回来的算新的。
+    /// - `order` 是 Mac 上的标签顺序（老版本 Mac 不发，为 nil），这台 Mac 的标签跟着它排（`arrangeRemoteTabs`）。
     /// - `sessionIDs` 为 nil = 这条连接上还没收到列表（刚连上、断开了），不能当成「终端都没了」，什么也不动。
-    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?) -> RemoteTabChanges {
+    func follow(_ client: RemoteMacClient, sessionIDs: [UUID]?, order: [UUID]? = nil) -> RemoteTabChanges {
         guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
@@ -242,7 +244,22 @@ final class MobileWorkspace {
         let added = openRemoteTabs(client, sessionIDs: fresh, activate: false)
         changes.opened = added.opened
         changes.removed += added.removed
+        arrangeRemoteTabs(of: client, order: order)
         return changes
+    }
+
+    /// 这台 Mac 的标签按它上面的顺序排：每一格各排各的，只在这些标签原来占的位置之间换（`RemoteTabArrangement`），
+    /// 直连与文件标签、用户挪到另一格的远控标签都留在原处。前台标签和聚焦格不变，正看着的那个不会被切走。
+    /// `order` 为 nil（老版本 Mac）时不动。
+    func arrangeRemoteTabs(of client: RemoteMacClient, order: [UUID]?) {
+        guard let order else { return }
+        for index in panes.indices {
+            let arranged = RemoteTabArrangement.arranged(panes[index].tabIDs, order: order) { id in
+                guard let remote = tab(id)?.terminal?.remote, remote.client === client else { return nil }
+                return remote.sessionID
+            }
+            if arranged != panes[index].tabIDs { panes[index].tabIDs = arranged }
+        }
     }
 
     /// 还接着的标签不动；接入已结束的（被别的设备接管、在 Mac 上断开）换成新标签，不然就是一张死画面。

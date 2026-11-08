@@ -127,6 +127,8 @@ final class RemoteHostServer {
     @ObservationIgnored private var tabTitlePush: Task<Void, Never>?
     /// 上次推给设备的程序状态（含 `idle`）。变化推送拿它比出哪些会话变了。
     @ObservationIgnored private var pushedProgramReports: [UUID: ProgramStatusRecord] = [:]
+    /// 上次发出去的会话列表里的先后。重排之后跟它不同才重发列表：新开、关掉标签时列表已经随之发过了。
+    @ObservationIgnored private var listedTabOrder: [UUID] = []
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
@@ -189,6 +191,8 @@ final class RemoteHostServer {
             observeTabTitles(generation: observationGeneration)
             pushedProgramReports = currentProgramReports()
             observeProgramStatuses(generation: observationGeneration)
+            listedTabOrder = registry.orderedEntries().map(\.id)
+            observeTabOrder(generation: observationGeneration)
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -534,12 +538,15 @@ final class RemoteHostServer {
 
     // MARK: - 会话与接管
 
+    /// 会话列表，按 Mac 上的标签顺序排（`TerminalSessionRegistry.orderedEntries`），每条带上排位。
     func sessionInfos() -> [RemoteSessionInfo] {
-        registry.entries.map { entry in
+        let ordered = registry.orderedEntries()
+        listedTabOrder = ordered.map(\.id)
+        return ordered.enumerated().map { index, entry in
             RemoteSessionInfo(id: entry.id, serverID: entry.serverID, serverName: entry.serverName, title: entry.title,
                               windowKind: entry.windowKind, connectedAt: entry.connectedAt,
                               controlledBy: controllers[entry.id].flatMap { connections[$0.connection]?.peerName },
-                              tabTitle: registry.displayTitle(of: entry))
+                              tabTitle: registry.displayTitle(of: entry), order: index)
         }
     }
 
@@ -728,6 +735,24 @@ final class RemoteHostServer {
                     guard let self, self.isRunning, generation == self.observationGeneration else { return }
                     self.pushProgramStatusChanges()
                     self.observeProgramStatuses(generation: generation)
+                }
+            }
+        }
+    }
+
+    /// Mac 上重排、拆分、跨组拖动标签：重发会话列表，设备上的标签跟着换顺序。不节流，重排本来就不频繁；
+    /// 拖分隔条也会叫醒这里，但先后没变就不发。
+    private func observeTabOrder(generation: Int) {
+        withObservationTracking {
+            _ = registry.orderedEntries()
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                    if self.registry.orderedEntries().map(\.id) != self.listedTabOrder {
+                        for connection in self.connections.values { connection.sendSessions() }
+                    }
+                    self.observeTabOrder(generation: generation)
                 }
             }
         }

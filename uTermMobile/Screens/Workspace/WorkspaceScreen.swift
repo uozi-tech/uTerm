@@ -154,15 +154,16 @@ struct WorkspaceScreen: View {
         req.companionTabIDs = changes.opened.map(\.id).filter { $0 != front?.id }
     }
 
-    /// 接管中的 Mac 的终端列表。nil = 这条连接上还没收到，不能当成「终端都没了」。
+    /// 接管中的 Mac 的终端列表（按 Mac 上的标签顺序发来，重排了也会变）。nil = 这条连接上还没收到，
+    /// 不能当成「终端都没了」。
     private var followedSessionIDs: [[UUID]?] {
         workspace.followedClients.map(\.listedSessionIDs)
     }
 
-    /// Mac 上开关了终端：手机上的标签跟着开关。
+    /// Mac 上开关、重排了终端：手机上的标签跟着开关、换顺序。
     private func followRemoteSessions() {
         for client in workspace.followedClients {
-            apply(workspace.follow(client, sessionIDs: client.listedSessionIDs))
+            apply(workspace.follow(client, sessionIDs: client.listedSessionIDs, order: client.sessions.macTabOrder))
         }
     }
 

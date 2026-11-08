@@ -277,6 +277,20 @@ nonisolated struct HeldSessionLayout: Codable, Equatable, Sendable {
     }
 }
 
+extension UPaneGroupsSnapshot {
+    /// 窗口里标签的先后：组从左到右、从上到下（分屏的 `first` 一侧，即左 / 上，在前），组里按标签顺序。
+    /// 远控按它给接入的设备排标签。树没引用到的组不算。
+    nonisolated var tabOrder: [P] {
+        func walk(_ node: Node) -> [P] {
+            switch node {
+            case .leaf(let index): groups.indices.contains(index) ? groups[index].tabs : []
+            case .split(_, _, let first, let second): walk(first) + walk(second)
+            }
+        }
+        return walk(root)
+    }
+}
+
 extension UPaneGroupsModel {
     /// 接回上次留下的会话：按布局放回原来的组和位置，布局里没有的（旧版写的归属、布局还没来得及写进去的会话）
     /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。

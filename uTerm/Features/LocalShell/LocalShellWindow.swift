@@ -447,6 +447,10 @@ struct LocalShellWindowView: View {
             registry.setRevealer(forWindow: windowID.id) { [weak windowModel] paneID in
                 windowModel?.reveal(paneID) ?? false
             }
+            // 手机远控按 Mac 上的标签顺序排标签：取写进 holder 的同一份布局。
+            registry.setTabOrder(forWindow: windowID.id) { [weak windowModel] in
+                windowModel?.groups.snapshot(\.id).tabOrder ?? []
+            }
             registry.setKeyWindow(windowID: windowID.id, isKey: controlActiveState == .key)
             LocalShellRestorer.shared.adoptPending(windowID: windowID.id, into: model)
             if model.panes.isEmpty { model.addTab(id: windowID.firstPaneID ?? UUID(), directory: windowID.directory) }
