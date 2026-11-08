@@ -23,6 +23,13 @@ nonisolated protocol RemoteTransport: AnyObject, Sendable {
     func receive(maximumLength: Int, completion: @escaping @Sendable (Data?, _ isComplete: Bool, Error?) -> Void)
     /// 立刻关闭，丢弃还没发完的数据。之后不再发出事件。
     func cancel()
+    /// 这条传输眼下走的网卡名（en0、pdp_ip0……）。不知道（打洞、测试替身）时为 nil。
+    /// 网络变化时据此判断：它用的网卡没了，连接就不用再探，直接判死。
+    var interfaceName: String? { get }
+}
+
+extension RemoteTransport {
+    nonisolated var interfaceName: String? { nil }
 }
 
 /// 局域网路径：一条 `NWConnection`。
@@ -60,4 +67,6 @@ nonisolated final class RemoteNWTransport: RemoteTransport, @unchecked Sendable 
         connection.stateUpdateHandler = nil
         connection.cancel()
     }
+
+    var interfaceName: String? { connection.currentPath?.availableInterfaces.first?.name }
 }

@@ -151,7 +151,7 @@ struct RemoteMacSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(M.canvas)
-        .task { await client.connect() }
+        .task { await client.connectInteractively() }
         .alert("无法新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
@@ -171,15 +171,20 @@ struct RemoteMacSheet: View {
     @ViewBuilder private var content: some View {
         switch client.state {
         case .idle, .connecting:
-            scrolling { statusRow(icon: "refresh", text: "正在连接 \(client.macName)…") }
+            scrolling {
+                statusRow(icon: "refresh", text: "正在连接 \(client.macName)…",
+                          detail: client.connectStage?.progress)
+            }
         case .awaitingApproval(let code):
             scrolling { pairing(code) }
+        case .failed(let message) where client.isAutoRetrying:
+            scrolling { statusRow(icon: "refresh", text: "连接失败，正在重试…", detail: message) }
         case .failed(let message):
             scrolling {
-                MInsetGroup {
+                MInsetGroup(footer: client.failureContext) {
                     MInsetRow(icon: "warn", iconColor: M.danger, label: "连接失败", sub: message, last: false)
                     MInsetRow(icon: "refresh", label: "重试", chevron: true, last: true) {
-                        Task { await client.connect() }
+                        Task { await client.connectInteractively() }
                     }
                 }
             }
@@ -210,10 +215,17 @@ struct RemoteMacSheet: View {
         }
     }
 
-    private func statusRow(icon: String, text: String) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            Text(text).font(M.sans(14)).foregroundStyle(M.text2)
+    private func statusRow(icon: String, text: String, detail: String? = nil) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(text).font(M.sans(14)).foregroundStyle(M.text2)
+            }
+            if let detail {
+                Text(detail).font(M.sans(12)).foregroundStyle(M.text3)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

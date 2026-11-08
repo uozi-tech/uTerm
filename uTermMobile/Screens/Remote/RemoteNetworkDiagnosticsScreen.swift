@@ -200,6 +200,12 @@ struct RemoteNetworkDiagnosticsScreen: View {
     private var historyGroup: some View {
         MInsetGroup {
             NavigationLink {
+                RemoteConnectHistoryScreen()
+            } label: {
+                MInsetRow(icon: "network", label: "最近的连接", sub: "每次连接 Mac 每一步的耗时与结果", chevron: true)
+            }
+            .buttonStyle(MRowStyle())
+            NavigationLink {
                 RemotePathHistoryScreen(log: model.log, onCleared: model.reloadHistory)
             } label: {
                 MInsetRow(icon: "clock", label: "历史记录",

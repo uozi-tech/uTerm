@@ -105,7 +105,9 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let client = RemoteMacClient(macName: mac.name, endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: phone.identity, expectedPeer: mac)
         let dialer = RemotePathDialer(relay: relay, identity: phone.identity, localID: phone.id, allowsDirect: allowsDirect)
-        client.updateRoutes(endpoint: nil, internetDialer: { token in try await dialer.dial(mac, invitationToken: token) })
+        client.updateRoutes(endpoint: nil, internetDialer: { context in
+            try await dialer.dial(mac, invitationToken: context.pairingToken, trace: context.trace)
+        })
         return client
     }
 

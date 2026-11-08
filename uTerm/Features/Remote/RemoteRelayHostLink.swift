@@ -85,8 +85,8 @@ final class RemoteRelayHostLink {
         guard runner == nil else { return }
         state = .connecting
         // 换了网络，旧连接多半已经死了；等 keepalive 报错要半分钟。
-        networkWatcher = RemoteNetworkWatcher { [weak self] isSatisfied in
-            if isSatisfied { self?.reconnectNow() }
+        networkWatcher = RemoteNetworkWatcher { [weak self] snapshot in
+            if snapshot.isSatisfied { self?.reconnectNow() }
         }
         // 睡醒时连接多半已经死了；被顶替时也趁这一下再试一次。
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -292,11 +292,11 @@ final class RemoteRelayHostLink {
         switch responder?.receiveOffer(session: session, from: message.from, box: message.box, now: now,
                                        acceptsDirect: canTryDirect) {
         case .reply(let reply):
-            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），不试直连，等中继回拨", category: RemoteLog.category)
+            AppLogger.notice("公网接入：收到打招呼（\(session.prefix(6))），不试直连，等中继回拨", category: RemoteLog.category)
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
             return
         case .direct(let offer):
-            AppLogger.info("公网接入：收到打招呼（\(session.prefix(6))），先试直连", category: RemoteLog.category)
+            AppLogger.notice("公网接入：收到打招呼（\(session.prefix(6))），先试直连", category: RemoteLog.category)
             startDirect(offer, session: session, connection: connection)
             return
         case .ignore, nil:
@@ -367,7 +367,7 @@ final class RemoteRelayHostLink {
         }
         try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
         guard let attempt, description != nil else {
-            AppLogger.info("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：Mac 这边收集不到地址，只能走中继", category: RemoteLog.category)
             attempt?.close()
             return
         }
@@ -376,9 +376,9 @@ final class RemoteRelayHostLink {
         if checked, let selected = attempt.selectedCandidates() {
             let local = RemoteICECandidateKind(sdp: selected.local)?.label ?? "?"
             let remote = RemoteICECandidateKind(sdp: selected.remote)?.label ?? "?"
-            AppLogger.info("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：直连打通，Mac \(local) ← 手机 \(remote)", category: RemoteLog.category)
         } else if !checked {
-            AppLogger.info("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
+            AppLogger.notice("公网接入（\(session.prefix(6))）：直连没打通，等中继回拨", category: RemoteLog.category)
         }
         guard checked, runner != nil, let server,
               server.allowsInternetAccess(offer.peer.id),
@@ -416,14 +416,14 @@ final class RemoteRelayHostLink {
             do {
                 try await self?.callBack(ticket: ticket, pending: pending)
             } catch {
-                AppLogger.info("中继回拨失败：\(error.localizedDescription)", category: RemoteLog.category)
+                AppLogger.notice("中继回拨失败：\(error.localizedDescription)", category: RemoteLog.category)
             }
         }
     }
 
     private func callBack(ticket: String, pending: RemoteSignalResponder.PendingSession) async throws {
         guard let server, let transport = try await accept(ticket: ticket) else { return }
-        AppLogger.info("公网接入：中继回拨接通", category: RemoteLog.category)
+        AppLogger.notice("公网接入：中继回拨接通", category: RemoteLog.category)
         server.accept(transport: transport,
                       origin: .internet(peerID: pending.peer.id, keys: pending.keys, path: .relay))
     }

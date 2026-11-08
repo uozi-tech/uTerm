@@ -118,6 +118,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
     /// 手机开流时要了画面往返读数：随码控日志每 2 s 发一条 `desktopLatency`。
     private let sendsLatency: Bool
+    /// 建出来的时刻与第一帧发没发（日志：开流到第一帧要多久）。
+    private let createdNanos = DispatchTime.now().uptimeNanoseconds
+    private var sentFirstFrame = false
 
     init(link: RemoteLink, channel: UInt32, codec: RemoteVideoCodec, width: Int, height: Int,
          display: RemoteDesktopDisplay, sidecarRefine: Bool = false, sendsLatency: Bool = false,
@@ -554,6 +557,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         guard !isPaused else {
             pacer.abandon(sequence)
             return
+        }
+        if !sentFirstFrame {
+            sentFirstFrame = true
+            let millis = (DispatchTime.now().uptimeNanoseconds &- createdNanos) / 1_000_000
+            AppLogger.notice("远程桌面：第一帧已发出（\(flags.contains(.keyframe) ? "关键帧" : "非关键帧") "
+                             + "\(encoded.data.count / 1024) KB，开流后 \(millis) ms）", category: RemoteLog.category)
         }
         let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence, captureNanos: captureNanos,
                                          width: UInt16(clamping: width), height: UInt16(clamping: height),

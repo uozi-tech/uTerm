@@ -376,9 +376,15 @@ struct RemoteDesktopScreen: View {
     @ViewBuilder private func overlay(_ session: RemoteDesktopSession) -> some View {
         switch session.state {
         case .idle, .connecting:
-            notice(spinner: true, title: "正在连接 \(client.macName) 的屏幕…", message: nil)
+            if let reason = session.retryReason {
+                notice(spinner: true, title: "没打开，正在重试…", message: reason)
+            } else {
+                notice(spinner: true, title: "正在连接 \(client.macName) 的屏幕…", message: session.progress)
+            }
         case .reconnecting:
             notice(spinner: true, title: "连接已断开，正在重新连接…", message: "重新连接后画面自动恢复", dim: true)
+        case .streaming where session.awaitingFirstFrame:
+            notice(spinner: true, title: "正在连接 \(client.macName) 的屏幕…", message: session.progress, dim: true)
         case .streaming:
             if !session.canControl, let note = session.info?.controlNote {
                 VStack {

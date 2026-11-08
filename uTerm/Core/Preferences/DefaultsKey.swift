@@ -89,6 +89,10 @@ nonisolated enum DefaultsKey {
     static let remotePathMatrixRounds = "remote.pathMatrixRounds"
     /// 不测的路（存「跳过哪些」而不是「测哪些」：以后加了新路，默认就会测）。
     static let remotePathMatrixSkippedModes = "remote.pathMatrixSkippedModes"
+    /// 最近 20 次建连的时间线（本机诊断数据，不同步）。
+    static let remoteConnectTraces = "remote.connectTraces"
+    /// 按网络类型记的最近几次打洞成败，决定下次等直连多久（本机，不同步）。
+    static let remoteDirectOutcomes = "remote.directOutcomes"
     /// iOS：用户点过「控制我的 Mac」之后才在启动时浏览（要「本地网络」授权）。
     static let remoteBrowseActivated = "remote.browseActivated"
     /// iOS：远程桌面里手机键盘上次用的输入语言。

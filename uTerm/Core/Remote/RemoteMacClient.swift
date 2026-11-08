@@ -22,6 +22,14 @@ nonisolated final class RemoteChannelSink: @unchecked Sendable {
     }
 }
 
+/// 拨公网时交给 `RemoteMacClient.InternetDialer` 的东西。
+nonisolated struct RemoteDialContext: Sendable {
+    /// 还没用掉的邀请令牌：带着它打招呼，还不认识本机的被控端才肯回应（见 `RemoteInvitationSignal`）。
+    var pairingToken: Data?
+    /// 这次建连的时间线，拨号的每一步记进去。
+    var trace: RemoteConnectTrace
+}
+
 /// 一次接入：往哪条连接、哪个通道发输入与尺寸。
 nonisolated struct RemoteAttachment: Sendable {
     let link: RemoteLink
@@ -112,6 +120,21 @@ final class RemoteMacClient: Identifiable {
     private(set) var roundTripMillis: Int?
     /// 这台 Mac 报的可选能力（握手后才有；老版本 Mac 为空）。
     private(set) var macFeatures: [String] = []
+    /// 正在连接时走到了哪一步（界面显示进度）。不在连接时为 nil。
+    private(set) var connectStage: RemoteConnectStage?
+    /// 上次失败时在什么网络、停在哪一步，如「蜂窝网络 · 经中继联系 Mac」。和 `state` 的失败原因分开放，
+    /// 原因的文字保持稳定（测试与重试判断都按它）。
+    private(set) var failureContext: String?
+    /// 失败后正在自动重试（`connectInteractively`）：界面不显示失败页，显示「正在重试」。
+    private(set) var isAutoRetrying = false
+
+    /// 一次建连（不含等 Mac 上的人审批配对）最多多久。超过就判失败、说明停在哪一步。测试里调短。
+    @ObservationIgnored var connectDeadline: Duration = .seconds(25)
+    /// 还有公网可走时，局域网这一步最多等多久。局域网通的时候 0.1 秒内就握完手了；
+    /// 等久了的多半是 Bonjour 结果过时（刚关了 Wi-Fi）。
+    @ObservationIgnored var localNetworkLimit: Duration = .seconds(3)
+    /// 用户打开时（`connectInteractively`）失败后自动再试几次、隔多久。
+    nonisolated static let interactiveRetryDelays: [Duration] = [.milliseconds(500), .seconds(2)]
 
     /// Mac 认不认桌面消息。老版本 Mac 收到桌面消息会当作未知消息断开整条连接，所以发之前必须先看这个。
     var supportsDesktop: Bool { macFeatures.contains(RemoteFeature.desktop) }
@@ -162,9 +185,8 @@ final class RemoteMacClient: Identifiable {
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?
-    /// 跨公网连它的办法（配了中继、知道它的公钥才有）。参数是还没用掉的邀请令牌：带着它打招呼，
-    /// 还不认识本机的被控端才肯回应（见 `RemoteInvitationSignal`）。
-    typealias InternetDialer = @Sendable (_ pairingToken: Data?) async throws -> RemoteDialedPath
+    /// 跨公网连它的办法（配了中继、知道它的公钥才有）。
+    typealias InternetDialer = @Sendable (_ context: RemoteDialContext) async throws -> RemoteDialedPath
     @ObservationIgnored private var internetDialer: InternetDialer?
     /// Mac 发来的中继配置交给谁存。
     @ObservationIgnored var onRelayConfig: (@MainActor (RemoteRelayConfig) -> Void)?
@@ -220,6 +242,18 @@ final class RemoteMacClient: Identifiable {
         retryGate.kick()
     }
 
+    /// 同上，带着变化后的网卡：连接走的网卡已经不在了（关了 Wi-Fi 改走蜂窝），不用等探测超时，直接断开重连。
+    func networkChanged(_ snapshot: RemoteNetworkSnapshot) {
+        currentTrace?.event("网络变化：\(snapshot.label)（\(snapshot.interfaces.joined(separator: ","))）")
+        if snapshot.isSatisfied, let link, let name = link.interfaceName, !snapshot.interfaces.contains(name) {
+            AppLogger.notice("远控连接走的网卡 \(name) 没了，断开重连", category: RemoteLog.category)
+            link.close(RemoteProtocolError.closed)
+            retryGate.kick()
+            return
+        }
+        networkChanged(isSatisfied: snapshot.isSatisfied)
+    }
+
     /// App 回到前台：挂起期间连接可能已经死了，问一声；正在退避等待重连的，马上再试一次。
     func returnedToForeground() {
         link?.probe(replyLimit: heartbeat.probeReplyLimit)
@@ -272,35 +306,145 @@ final class RemoteMacClient: Identifiable {
         await connectTask?.value
     }
 
+    /// 用户主动打开时（Mac 详情、远程桌面）：网络问题导致的失败自动再试两次，期间界面显示「正在重试」，
+    /// 不让人对着失败页自己反复点。永久性失败（拒绝配对、身份变了）不重试。
+    func connectInteractively() async {
+        var delays = Self.interactiveRetryDelays[...]
+        while true {
+            await connect()
+            guard isFailed, canAutoReconnect, let delay = delays.popFirst(), !Task.isCancelled else { break }
+            isAutoRetrying = true
+            AppLogger.notice("连接 \(self.macName) 失败，\(Self.secondsText(delay)) 后自动重试", category: RemoteLog.category)
+            _ = await retryGate.wait(delay)
+            guard !Task.isCancelled, isFailed else { break }
+        }
+        isAutoRetrying = false
+    }
+
+    nonisolated private static func secondsText(_ duration: Duration) -> String {
+        String(format: "%.1f s", Double(RemoteConnectTrace.millis(duration)) / 1000)
+    }
+
+    /// 正在进行的这次建连（网络变化等事件记进去）。
+    @ObservationIgnored private var currentTrace: RemoteConnectTrace?
+    @ObservationIgnored private var connectAttempts = 0
+    /// 这次建连的握手完成了没有（局域网时限只管握手之前）。
+    @ObservationIgnored private var handshakeDone = false
+
     private func runConnect() async {
         defer { connectTask = nil }
         state = .connecting
+        failureContext = nil
+        connectAttempts = isAutoRetrying ? connectAttempts + 1 : 1
+        let trace = RemoteConnectTrace(kind: .connect, macName: macName, attempt: connectAttempts) { [weak self] stage in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.stageChanged(stage) } }
+        }
+        currentTrace = trace
+        let network = await RemoteNetworkLabel.current()
+        trace.setNetwork(network)
+        let deadline = ContinuousClock.now + connectDeadline
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            guard !Task.isCancelled else { return }
+            self?.connectDeadlinePassed(trace)
+        }
+        defer {
+            watchdog.cancel()
+            finishTrace(trace, network: network)
+        }
         // 局域网优先。Bonjour 的结果可能已经过时，局域网连不上时再走公网。
         if let endpoint {
             let dialed = RemoteDialedPath(
                 transport: RemoteNWTransport(connection: NWConnection(to: endpoint, using: RemoteLink.parameters())),
                 handshakeKeys: nil, path: .localNetwork)
-            await attempt(dialed)
-            guard isFailed, !failureIsPermanent, internetDialer != nil else { return }
+            await attempt(dialed, trace: trace,
+                          establishLimit: internetDialer != nil ? localNetworkLimit : nil)
+            guard isFailed, !failureIsPermanent, internetDialer != nil, !deadlinePassed(trace) else { return }
             state = .connecting
         }
         guard let internetDialer else {
             if endpoint == nil { state = .failed("Mac 不在线") }
             return
         }
+        let context = RemoteDialContext(pairingToken: pairingToken, trace: trace)
         do {
-            await attempt(try await internetDialer(pairingToken))
+            let remaining = deadline - ContinuousClock.now
+            let dialed = try await RemoteDeadline.run(remaining, timeoutError: RemoteProtocolError.timeout,
+                                                      discard: { $0.transport.cancel() }) {
+                try await internetDialer(context)
+            }
+            await attempt(dialed, trace: trace, establishLimit: nil)
         } catch {
+            if case RemoteProtocolError.timeout = error, ContinuousClock.now >= deadline {
+                connectDeadlinePassed(trace)
+            }
+            if deadlinePassed(trace) { return }
             failureIsPermanent = (error as? RemoteProtocolError)?.isPermanent ?? false
             state = .failed(error.localizedDescription)
         }
     }
 
-    private func attempt(_ dialed: RemoteDialedPath) async {
+    private func stageChanged(_ stage: RemoteConnectStage) {
+        guard state == .connecting else { return }
+        connectStage = stage
+    }
+
+    /// 总时限到了，还没连上也不在等人审批：判失败，说明停在哪一步。
+    @ObservationIgnored private var expiredTraceID: String?
+
+    private func deadlinePassed(_ trace: RemoteConnectTrace) -> Bool { expiredTraceID == trace.id }
+
+    private func connectDeadlinePassed(_ trace: RemoteConnectTrace) {
+        guard currentTrace === trace, state == .connecting else { return }
+        expiredTraceID = trace.id
+        let stage = connectStage?.label ?? "?"
+        trace.event("总时限 \(Self.secondsText(connectDeadline)) 到了，停在「\(stage)」")
+        failureIsPermanent = false
+        state = .failed(String(localized: "连接超时（停在「\(stage)」）"))
+        link?.close(RemoteProtocolError.timeout)
+        link = nil
+        resumeOutcome()
+    }
+
+    private func finishTrace(_ trace: RemoteConnectTrace, network: String) {
+        defer {
+            if currentTrace === trace { currentTrace = nil }
+            connectStage = nil
+        }
+        switch state {
+        case .connected:
+            trace.finish(ok: true, outcome: path?.label ?? "")
+        case .awaitingApproval:
+            trace.finish(ok: true, outcome: String(localized: "等 Mac 上确认配对"))
+        case .failed(let message):
+            failureContext = connectStage.map { String(localized: "\(network)，停在「\($0.label)」") } ?? network
+            trace.finish(ok: false, outcome: message)
+        case .idle, .connecting:
+            trace.finish(ok: false, outcome: String(localized: "已取消"))
+        }
+    }
+
+    private func attempt(_ dialed: RemoteDialedPath, trace: RemoteConnectTrace, establishLimit: Duration?) async {
         let link = RemoteLink(transport: dialed.transport)
         self.link = link
         path = dialed.path
         roundTripMillis = nil
+        handshakeDone = false
+        let stepIndex = trace.begin(dialed.path == .localNetwork ? .localNetwork : .handshake,
+                                    detail: dialed.path == .localNetwork ? nil : dialed.path.label)
+        var stepOpen = true
+        func endStep(ok: Bool, detail: String? = nil) {
+            guard stepOpen else { return }
+            stepOpen = false
+            trace.end(stepIndex, ok: ok, detail: detail ?? (ok ? link.interfaceName : nil))
+        }
+        if let establishLimit {
+            Task { [weak self, weak link] in
+                try? await Task.sleep(for: establishLimit)
+                guard let self, let link, self.link === link, !self.handshakeDone else { return }
+                link.close(RemoteProtocolError.timeout)
+            }
+        }
         let table = self.table
         link.setHandlers(
             onMessage: { [weak self, weak link] message in
@@ -339,6 +483,8 @@ final class RemoteMacClient: Identifiable {
                known.publicKey != established.peer.staticKey {
                 throw RemoteProtocolError.peerIdentityChanged
             }
+            handshakeDone = true
+            endStep(ok: true)
             peer = established.peer
             macDeviceID = established.peer.deviceID
             macFeatures = established.peer.features ?? []
@@ -348,6 +494,7 @@ final class RemoteMacClient: Identifiable {
             if established.peer.supports(RemoteFeature.keyConfirmation) {
                 link.send(RemoteMessage(.keyConfirm))
             }
+            let pairingStep = trace.begin(.pairing)
             await withCheckedContinuation { continuation in
                 if state == .connected || isFailed {
                     continuation.resume()
@@ -355,10 +502,13 @@ final class RemoteMacClient: Identifiable {
                     outcomeWaiter = continuation
                 }
             }
+            trace.end(pairingStep, ok: state == .connected)
             if state == .connected {
                 link.send(RemoteMessage(.subscribeSessions))
             }
         } catch {
+            endStep(ok: false, detail: error.localizedDescription)
+            if deadlinePassed(trace) { return }
             failureIsPermanent = (error as? RemoteProtocolError)?.isPermanent ?? false
             state = .failed(error.localizedDescription)
             link.close(error)

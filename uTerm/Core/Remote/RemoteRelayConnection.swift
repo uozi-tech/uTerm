@@ -92,12 +92,15 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
     case notConfigured
     /// 那台 Mac 发的成员证书过期了（设备太久没连过它）。
     case certificateExpired
+    /// 信令交给中继了，Mac 没在时限内回（睡着了、不认识这台设备，或者网络太差）。
+    case noReply
 
     var errorDescription: String? {
         switch self {
         case .unreachable(let reason): return "无法连接中继：\(reason)"
         case .refused(let reason): return Self.describe(reason)
-        case .timeout: return "中继没有响应"
+        case .timeout: return "中继没有响应（网络可能刚切换或信号太差）"
+        case .noReply: return "Mac 没有回应。它可能已睡眠、没有允许这台设备经公网连接，或者网络太差"
         case .malformed: return "中继的回应无法识别"
         case .closed: return "连接已断开"
         case .rejected: return "中继没有接受这份配置（成员密钥不对、配置不属于这台中继，或版本不一致），需要重新导入"
@@ -139,6 +142,8 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.relay", qos: .userInteractive)
     private let config: RemoteRelayConfig
     private var readyWaiter: CheckedContinuation<Void, Error>?
+    /// 建连超时被看门狗关掉的（队列上读写）。
+    private var openTimedOut = false
 
     init(config: RemoteRelayConfig) {
         self.config = config
@@ -151,6 +156,13 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
         guard RemoteLocalState.allowsRelay(host: config.host) else {
             throw RemoteRelayError.unreachable("测试宿主不连外部中继")
         }
+        // 时限从建连开始算：连上、发魔数、读挑战整段一起，不让任何一步单独拖过时限。
+        let watchdog = DispatchWorkItem { [weak self] in
+            self?.openTimedOut = true
+            self?.connection.cancel()
+        }
+        queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer { watchdog.cancel() }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 self.readyWaiter = continuation
@@ -161,15 +173,15 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
         var opening = Data("UTRL".utf8)
         opening.append(1)
         try await sendRaw(opening)
-        let watchdog = DispatchWorkItem { [connection] in connection.cancel() }
-        queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
-        defer { watchdog.cancel() }
         let challenge: Data
         do {
             challenge = try await read(exactly: RemoteRelayHello.nonceBytes)
-        } catch RemoteRelayError.closed {
+        } catch {
+            // 时限到了被看门狗关掉的：是网络慢，不是中继不认。
+            if queue.sync(execute: { openTimedOut }) { throw RemoteRelayError.timeout }
             // 魔数之后什么都不回：不是中继，或者协议版本不一致。
-            throw RemoteRelayError.rejected
+            if case RemoteRelayError.closed = error { throw RemoteRelayError.rejected }
+            throw error
         }
         return RemoteRelayHello(nonce: challenge.base64EncodedString())
     }
@@ -193,7 +205,7 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
             readyWaiter = nil
             if case .waiting = state { connection.cancel() }
         case .cancelled:
-            readyWaiter?.resume(throwing: RemoteRelayError.unreachable("连接已关闭"))
+            readyWaiter?.resume(throwing: openTimedOut ? RemoteRelayError.timeout : RemoteRelayError.unreachable("连接已关闭"))
             readyWaiter = nil
         default:
             break
@@ -266,6 +278,11 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
     func close() {
         connection.cancel()
     }
+
+    /// 这条连接走的网卡（连上之后才有）。
+    var interfaceLabel: String? {
+        queue.sync { RemoteNetworkLabel.interface(of: connection.currentPath) }
+    }
 }
 
 /// 一条已经连上、在自己队列上跑的 `NWConnection`。回调转到 `RemoteLink` 的队列上。
@@ -309,4 +326,6 @@ nonisolated final class RemoteStartedNWTransport: RemoteTransport, @unchecked Se
         connection.stateUpdateHandler = nil
         connection.cancel()
     }
+
+    var interfaceName: String? { connection.currentPath?.availableInterfaces.first?.name }
 }

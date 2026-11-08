@@ -62,6 +62,8 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteIceProbeNote, "remote.iceProbeNote"),
         (DefaultsKey.remotePathMatrixRounds, "remote.pathMatrixRounds"),
         (DefaultsKey.remotePathMatrixSkippedModes, "remote.pathMatrixSkippedModes"),
+        (DefaultsKey.remoteConnectTraces, "remote.connectTraces"),
+        (DefaultsKey.remoteDirectOutcomes, "remote.directOutcomes"),
         (DefaultsKey.remoteBrowseActivated, "remote.browseActivated"),
         (DefaultsKey.remoteDesktopKeyboardLanguage, "remote.desktop.keyboardLanguage"),
         (DefaultsKey.remoteDesktopSendSystemShortcuts, "remote.desktop.sendSystemShortcuts"),

@@ -470,6 +470,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         }
     }
 
+    /// 脚下传输走的网卡名（不知道时 nil，见 `RemoteTransport.interfaceName`）。
+    var interfaceName: String? { transport.interfaceName }
+
     /// 网络刚变化或刚回到前台：发一个 ping，`replyLimit` 秒内收到任何字节都算活着，否则判死。
     func probe(replyLimit: TimeInterval) {
         queue.async { [self] in

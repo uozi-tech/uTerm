@@ -267,11 +267,24 @@ final class RemoteMacDirectory {
             client.pairingToken = token
         }
         if networkWatcher == nil {
-            networkWatcher = RemoteNetworkWatcher { [weak self] isSatisfied in
-                for client in self?.clients.values ?? [:].values { client.networkChanged(isSatisfied: isSatisfied) }
-            }
+            networkWatcher = RemoteNetworkWatcher { [weak self] snapshot in self?.networkChanged(snapshot) }
         }
         return client
+    }
+
+    /// 网络变了（换网卡、断网、恢复）：
+    /// - 中继的控制连接可能绑在没了的网卡上，全部扔掉，下次用到时在新网络上重连；
+    /// - Bonjour 的结果可能过时了（刚关 Wi-Fi 时它还挂着几秒），清掉重新浏览，没有局域网时根本不试局域网；
+    /// - 各远控连接按新网卡判断要不要断开重连。
+    private func networkChanged(_ snapshot: RemoteNetworkSnapshot) {
+        for relay in relayClients.values { Task { await relay.networkChanged() } }
+        if !discovered.isEmpty || browser != nil {
+            discovered = [:]
+            online = [:]
+            rebuild()
+            if isActivated, snapshot.hasLocalNetwork { restartBrowsing() }
+        }
+        for client in clients.values { client.networkChanged(snapshot) }
     }
 
     // MARK: - 中继
@@ -387,7 +400,7 @@ final class RemoteMacDirectory {
         var configured = RemotePathDialer(relay: relay, identity: identity, localID: RemoteLocalDevice.id())
         configured.publicOnly = internetOnly
         let dialer = configured
-        return { token in try await dialer.dial(peer, invitationToken: token) }
+        return { context in try await dialer.dial(peer, invitationToken: context.pairingToken, trace: context.trace) }
     }
 
     /// 马上问一次中继谁在线；之后只要还有界面在显示在线状态、App 在前台，就每 `relayPollInterval` 再问一次。

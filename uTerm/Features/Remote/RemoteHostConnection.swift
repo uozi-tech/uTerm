@@ -11,6 +11,8 @@ import Foundation
 @MainActor
 final class RemoteHostConnection {
     let id = UUID()
+    /// 接入的时刻（日志：握手、开流各在接入后多久）。
+    private let createdAt = ContinuousClock.now
     private let link: RemoteLink
     private unowned let server: RemoteHostServer
     private let pump: RemoteOutputPump
@@ -257,6 +259,8 @@ final class RemoteHostConnection {
         isAuthorized = true
         // 横幅、桌面指示条、设置里的「已连接」都按这个名字显示：在 Mac 上改过名就用改过的。
         if let peerID, let known = server.identity.peer(id: peerID) { peerName = known.displayName }
+        AppLogger.notice("远控：\(self.peerName) 已确认身份（\(self.origin.path.label)，接入后 "
+                         + "\(RemoteConnectTrace.millis(ContinuousClock.now - self.createdAt)) ms）", category: RemoteLog.category)
         sendPairing(state)
         // 公网连接不管对方声明什么都要判死，否则不发东西的连接会一直占着名额。
         if peerSendsHeartbeat || origin.isInternet { link.startSilenceWatch(limit: server.peerSilenceLimit) }
@@ -526,21 +530,34 @@ extension RemoteHostConnection {
         guard environment.isEnabled() else {
             return reject(.disabled, "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
         }
+        let clock = ContinuousClock()
+        let started = clock.now
+        func millis() -> Int { RemoteConnectTrace.millis(clock.now - started) }
+        AppLogger.notice("远程桌面：收到 \(self.peerName) 的开流请求（连接接入后 \(RemoteConnectTrace.millis(clock.now - self.createdAt)) ms）",
+                         category: RemoteLog.category)
+        // 息屏要等显示器醒来（最多约 3 秒），和授权查询、准备显示器同时进行，不排在它们后面。
+        // 准备显示器可能换出别的显示器，下面还会对真正要采的那块再确认一次（醒着时立即返回）。
+        let earlyWake = Task { await environment.wakeDisplay(request.displayID ?? CGMainDisplayID()) }
         async let screenAuthorized = environment.screenCaptureAuthorized()
         async let postEventsAuthorized = environment.canPostEvents()
         let (canCapture, canControl) = await (screenAuthorized, postEventsAuthorized)
+        let authorizedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard canCapture else {
             return reject(.screenPermission,
                           "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
         }
         await environment.prepareDisplays()
+        let preparedAt = millis()
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
             return reject(.captureFailed, "找不到 Mac 的显示器")
         }
         // 息屏时先把显示器叫醒再采集，否则 ScreenCaptureKit 找不到它。等的这会儿可能又来了新请求或断了。
+        await earlyWake.value
         await environment.wakeDisplay(display.id)
+        AppLogger.notice("远程桌面开流计时：授权 \(authorizedAt) ms · 准备显示器 \(preparedAt) ms · 显示器就绪 \(millis()) ms",
+                         category: RemoteLog.category)
         guard generation == desktopStartGeneration, !isClosed else { return }
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),

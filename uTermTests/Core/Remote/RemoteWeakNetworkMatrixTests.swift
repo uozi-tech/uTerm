@@ -530,8 +530,8 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                     let peer = mac.peer
                     let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                                  identity: mac.phoneIdentity, expectedPeer: peer)
-                    client.updateRoutes(endpoint: nil, internetDialer: { [dialer] token in
-                        try await dialer.dial(peer, invitationToken: token)
+                    client.updateRoutes(endpoint: nil, internetDialer: { [dialer] context in
+                        try await dialer.dial(peer, invitationToken: context.pairingToken, trace: context.trace)
                     })
                     let started = Date()
                     await client.connect()

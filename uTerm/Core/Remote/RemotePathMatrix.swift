@@ -288,7 +288,7 @@ nonisolated struct RemoteRelayProbe: Sendable {
         do {
             box = try await relay.signal(to: mac.id, from: localID, session: session, box: sealed,
                                          timeout: Self.signalTimeout)
-        } catch RemoteRelayError.notAllowed {
+        } catch RemoteRelayError.noReply {
             throw RemoteRelayProbeError.noAnswer
         }
         let reply: RemoteSignalBody

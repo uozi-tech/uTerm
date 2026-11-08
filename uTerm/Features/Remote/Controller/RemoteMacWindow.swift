@@ -78,7 +78,7 @@ struct RemoteMacWindowView: View {
         }
         let model = RemoteMacWindowModel(client: directory.acquireClient(for: mac))
         self.model = model
-        await model.client.connect()
+        await model.client.connectInteractively()
     }
 }
 
@@ -93,14 +93,17 @@ private struct RemoteMacSessionView: View {
         Group {
             switch client.state {
             case .idle where model.panes.isEmpty, .connecting where model.panes.isEmpty:
-                RemoteMacProgressView(text: String(localized: "正在连接 \(client.macName)…"))
+                RemoteMacProgressView(text: client.connectStage.map { String(localized: "正在连接 \(client.macName)：\($0.progress)") }
+                                      ?? String(localized: "正在连接 \(client.macName)…"))
+            case .failed where model.panes.isEmpty && client.isAutoRetrying:
+                RemoteMacProgressView(text: String(localized: "没连上 \(client.macName)，正在重试…"))
             case .awaitingApproval(let code):
                 RemoteMacPairingCodeView(macName: client.macName, code: code)
             case .failed(let message) where model.panes.isEmpty:
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法连接"),
-                                   detail: message) {
+                                   detail: [message, client.failureContext].compactMap { $0 }.joined(separator: "\n")) {
                     HStack(spacing: 8) {
-                        UDButton(title: "重试") { Task { await client.connect() } }
+                        UDButton(title: "重试") { Task { await client.connectInteractively() } }
                         UDButton(title: "网络诊断", style: .secondary) {
                             openWindow(value: RemoteDiagnosticsWindowID(macID: macID))
                         }
@@ -126,7 +129,7 @@ private struct RemoteMacSessionView: View {
         case .failed(let message):
             HStack(spacing: 8) {
                 SettingsInlineNote(tone: .warning, text: message)
-                UDButton(title: "重试", style: .secondary) { Task { await model.client.connect() } }
+                UDButton(title: "重试", style: .secondary) { Task { await model.client.connectInteractively() } }
             }
             .padding(8)
         default:
