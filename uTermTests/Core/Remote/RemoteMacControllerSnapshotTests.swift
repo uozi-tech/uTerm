@@ -64,6 +64,11 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
         let macID = UUID()
         try identity.trust(RemotePeer(id: macID, name: "办公室 Mac Studio", publicKey: key, pairedAt: .now,
                                       platform: RemoteDevicePlatform.mac.rawValue))
+        try identity.trust(RemotePeer(id: UUID(), name: "家里的 MacBook Pro", publicKey: key,
+                                      pairedAt: .now.addingTimeInterval(-86_400 * 12),
+                                      platform: RemoteDevicePlatform.mac.rawValue))
+        // 调试直连当作一台局域网里在线的 Mac（列表里唯一能伪造出「在线」的入口）。
+        defaults.set("127.0.0.1:9", forKey: DefaultsKey.remoteDebugEndpoint)
         let directory = RemoteMacDirectory(identity: identity, defaults: defaults, adoptsRelayAsDefault: false)
         let client = RemoteMacClient(macName: "办公室 Mac Studio", endpoint: .hostPort(host: "127.0.0.1", port: 9),
                                      identity: identity)
@@ -95,8 +100,16 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
             try await shoot("desktop-window-connecting", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
                 RemoteDesktopContent(model: desktop).background(Color.black).environment(\.colorScheme, .dark)
             }
-            try await shoot("my-macs", size: NSSize(width: 620, height: 560), dark: dark, into: dir) {
+            // 欢迎窗口去掉侧栏后的内容区大小。第一台是调试直连（局域网在线），第二台配对过、不在线。
+            try await shoot("my-macs-online", size: NSSize(width: 860, height: 560), dark: dark, into: dir) {
                 RemoteMacsPane().environment(directory)
+            }
+            try await shoot("my-macs-offline", size: NSSize(width: 860, height: 560), dark: dark, into: dir) {
+                RemoteMacsPane(initialSelectionID: macID.uuidString).environment(directory)
+            }
+            // 空态直接画：整个面板一出现就开 Bonjour，本机局域网里的 Mac 会混进来。
+            try await shoot("my-macs-empty", size: NSSize(width: 860, height: 560), dark: dark, into: dir) {
+                RemoteMacsEmptyState {}.background(UD.panel)
             }
             try await shoot("pairing-code", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
                 RemoteMacPairingCodeView(macName: "办公室 Mac Studio", code: "482913").background(UD.bg)
