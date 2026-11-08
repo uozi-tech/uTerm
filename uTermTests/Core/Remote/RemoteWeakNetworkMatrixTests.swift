@@ -81,20 +81,25 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
 
     /// 直连中途断掉（包全丢，手机不知道网络变了：NAT 映射过期、中间设备掐流）→ 靠心跳发现 → 回落中继。
     func test_matrix_7_direct_breaks_silently() async throws {
-        try await runPathSwitch(notifies: false)
+        for _ in 0..<Self.rounds { try await runPathSwitch(notifies: false) }
     }
 
     /// Wi-Fi 换蜂窝：直连断掉的同时系统报网络变了（`networkChanged`）→ 探一下 → 回落中继。
     func test_matrix_8_network_change() async throws {
-        try await runPathSwitch(notifies: true)
+        for _ in 0..<Self.rounds { try await runPathSwitch(notifies: true) }
+    }
+
+    /// 每格跑几轮（`UTERM_WEAK_NET_ROUNDS`，默认 3）：单轮之间差得很多，表里给中位数和范围。
+    nonisolated static var rounds: Int {
+        max(1, Int(ProcessInfo.processInfo.environment["UTERM_WEAK_NET_ROUNDS"] ?? "") ?? 3)
     }
 
     private func runBoth(_ profile: Profile) async throws {
-        for transport in Transport.allCases {
+        for _ in 0..<Self.rounds { for transport in Transport.allCases {
             let row = try await measure(profile, transport: transport)
             Self.report.add(row)
             print("[弱网矩阵] \(row.consoleLine)")
-        }
+        } }
     }
 
     // MARK: - 夹具
@@ -673,6 +678,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         /// 降速期间的卡顿。
         var stallsDuringDrop = 0
         var stallSecondsDuringDrop = 0.0
+        var longestDuringDrop = 0.0
         /// 恢复带宽后，目标码率回到降速前八成用了多久（秒）；nil = 观测窗口内没回去。
         var reboundSeconds: Double?
         var targetBeforeDrop = 0.0
@@ -695,6 +701,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         for (later, earlier) in zip(points.dropFirst(), points) where Double(later - earlier) / 1e9 > 0.2 {
             result.stallsDuringDrop += 1
             result.stallSecondsDuringDrop += Double(later - earlier) / 1e9
+            result.longestDuringDrop = max(result.longestDuringDrop, Double(later - earlier) / 1e9)
             settle = Double(later - dropStart) / 1e9
         }
         result.settleSeconds = settle
@@ -768,39 +775,48 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
             lock.lock(); defer { lock.unlock() }
             var out: [String] = []
             if !rows.isEmpty {
+                let groups = grouped(rows) { "\($0.profile.id)|\($0.transport.rawValue)" }
+                let rounds = groups.map(\.count).max() ?? 1
                 out.append("### 远程桌面 + 声音")
                 out.append("")
-                out.append("卡顿 = 画面超过 200 ms 没有新帧（源一直按 30 fps 出满屏变化的画面）。码率是 Mac 端码控的目标码率，"
-                           + "「实发」是发送端实际吐出的字节。声音延迟 = 单程网络时延 + 抖动缓冲平均深度（估算）。")
+                out.append("每格 \(rounds) 轮，写中位数，小字是各轮的最小–最大。卡顿 = 画面超过 200 ms 没有新帧（源一直按 30 fps 出满屏变化的画面）。"
+                           + "码率是 Mac 端码控的目标码率，「实发」是发送端实际吐出的字节。声音延迟 = 单程网络时延 + 抖动缓冲平均深度（估算）。")
                 out.append("")
-                out.append("| 档位 | 路径 | 建连 | 首帧 | 卡顿（次 / 总时长 / 最长） | 帧率 | 目标码率 起→低→末 | 实发 | 帧往返 p50 / p95 | 关键帧 / 丢帧 | 声音欠载 / 补洞 / 晚到 | 声音缓冲 / 估算延迟 |")
-                out.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
-                for row in rows {
-                    let v = row.video
-                    let a = row.audio
-                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.transport.rawValue) | \(ms(row.connectMillis)) | \(row.firstFrameMillis.map { ms($0) } ?? "> 20 s") | "
-                               + "\(v?.stalls ?? 0) / \(f1(v?.stallSeconds)) s / \(f2(v?.longestGap)) s | \(f1(v?.fps)) | "
-                               + "\(f1(v?.targetStart)) → \(f1(v?.targetMin)) → \(f1(v?.targetEnd)) Mbps | \(f1(v?.sentMbps)) Mbps | "
-                               + "\(ms(v?.roundTripP50)) / \(ms(v?.roundTripP95)) | \(v?.keyframes ?? 0) / \(v?.lostFrames ?? 0) | "
-                               + "\(a?.underruns ?? 0) / \(a?.concealed ?? 0) / \(a?.late ?? 0) | "
-                               + "\(f0(a?.bufferedMillis)) ms（目标 \(a?.targetMillis ?? 0)）/ \(f0(a?.estimatedMillis)) ms |")
+                out.append("| 档位 | 路径 | 建连 | 首帧 | 卡顿次数 | 卡顿总时长 | 最长卡顿 | 帧率 | 目标码率 最低 / 末 | 实发 | 帧往返 p50 | 帧往返 p95 | 关键帧 / 丢帧 | 声音欠载 / 补洞 | 声音估算延迟 |")
+                out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+                for group in groups {
+                    let row = group[0]
+                    let v = group.compactMap(\.video)
+                    let a = group.compactMap(\.audio)
+                    let firsts = group.map { $0.firstFrameMillis ?? 20_000 }
+                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.transport.rawValue) | "
+                               + agg(group.map(\.connectMillis), ms) + " | "
+                               + agg(firsts) { $0 >= 20_000 ? "> 20 s" : ms($0) } + " | "
+                               + agg(v.map { Double($0.stalls) }, f0) + " | " + agg(v.map(\.stallSeconds)) { "\(f1($0)) s" } + " | "
+                               + agg(v.map(\.longestGap)) { "\(f2($0)) s" } + " | " + agg(v.map(\.fps), f1) + " | "
+                               + agg(v.map(\.targetMin), f1) + " / " + agg(v.map(\.targetEnd), f1) + " Mbps | "
+                               + agg(v.map(\.sentMbps), f1) + " Mbps | " + agg(v.map(\.roundTripP50), ms) + " | "
+                               + agg(v.map(\.roundTripP95), ms) + " | " + agg(v.map { Double($0.keyframes) }, f0) + " / "
+                               + agg(v.map { Double($0.lostFrames) }, f0) + " | " + agg(a.map { Double($0.underruns) }, f0) + " / "
+                               + agg(a.map { Double($0.concealed) }, f0) + " | " + agg(a.map(\.estimatedMillis), ms) + " |")
                 }
-                let drops = rows.filter { $0.recovery != nil }
+                let drops = groups.filter { $0[0].recovery != nil }
                 if !drops.isEmpty {
                     out.append("")
                     out.append("#### 带宽骤降的恢复")
                     out.append("")
-                    out.append("| 路径 | 降速前目标 | 降速期间最低目标 | 降速期间卡顿 | 降速后最后一次卡顿结束 | 恢复带宽后码率回到八成 |")
+                    out.append("| 路径 | 降速前目标 | 降速期间最低目标 | 降速期间卡顿总时长 | 降速期间最长卡顿 | 恢复带宽后码率回到八成 |")
                     out.append("|---|---|---|---|---|---|")
-                    for row in drops {
-                        guard let r = row.recovery else { continue }
-                        out.append("| \(row.transport.rawValue) | \(f1(r.targetBeforeDrop)) Mbps | \(f1(r.targetDuringDrop)) Mbps | "
-                                   + "\(r.stallsDuringDrop) 次 / \(f1(r.stallSecondsDuringDrop)) s | 降速后 \(f1(r.settleSeconds)) s | "
-                                   + (r.reboundSeconds.map { "\(f1($0)) s" } ?? "观测窗口内没回去") + " |")
+                    for group in drops {
+                        let r = group.compactMap(\.recovery)
+                        out.append("| \(group[0].transport.rawValue) | " + agg(r.map(\.targetBeforeDrop), f1) + " Mbps | "
+                                   + agg(r.map(\.targetDuringDrop), f1) + " Mbps | " + agg(r.map(\.stallSecondsDuringDrop)) { "\(f1($0)) s" }
+                                   + " | " + agg(r.map(\.longestDuringDrop)) { "\(f2($0)) s" } + " | "
+                                   + agg(r.map { $0.reboundSeconds ?? 99 }) { $0 >= 99 ? "没回去" : "\(f1($0)) s" } + " |")
                     }
                 }
                 out.append("")
-                out.append("#### 码率曲线（每 2 秒：目标 / 实发，Mbps）")
+                out.append("#### 码率曲线（每 2 秒：目标 / 实发，Mbps；每轮一行）")
                 out.append("")
                 for row in rows {
                     let curve = row.video?.curve.map { "\(f1($0.target))/\(f1($0.sent))" }.joined(separator: " → ") ?? ""
@@ -811,15 +827,20 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 out.append("")
                 out.append("### 路径切换（基线网络，直连 → 中继 TCP）")
                 out.append("")
-                out.append("时间都从断开那一刻算起。")
+                out.append("时间都从断开那一刻算起；中位数，小字是各轮范围。")
                 out.append("")
-                out.append("| 场景 | 察觉断开 | 连回（中继） | 画面恢复 | 恢复后 10 s 卡顿 | 恢复后帧率 | 恢复后声音欠载 / 补洞 |")
-                out.append("|---|---|---|---|---|---|---|")
-                for row in switches {
-                    let v = row.afterRecovery
-                    out.append("| \(row.name)<br><sub>\(row.summary)</sub> | \(ms(row.detectMillis)) | \(ms(row.reconnectMillis)) | "
-                               + "\(ms(row.firstFrameMillis)) | \(v?.stalls ?? 0) 次 / \(f1(v?.stallSeconds)) s | \(f1(v?.fps)) | "
-                               + (row.audio.map { "\($0.underruns) / \($0.concealed)" } ?? "（声音没恢复）") + " |")
+                out.append("| 场景 | 轮数 | 察觉断开 | 连回（中继） | 画面恢复 | 恢复后 10 s 卡顿总时长 | 恢复后帧率 | 恢复后声音欠载 / 补洞 |")
+                out.append("|---|---|---|---|---|---|---|---|")
+                for group in grouped(switches, by: \.name) {
+                    let row = group[0]
+                    let v = group.compactMap(\.afterRecovery)
+                    let a = group.compactMap(\.audio)
+                    out.append("| \(row.name)<br><sub>\(row.summary)</sub> | \(group.count) | "
+                               + agg(group.compactMap(\.detectMillis), ms) + " | " + agg(group.compactMap(\.reconnectMillis), ms) + " | "
+                               + agg(group.compactMap(\.firstFrameMillis), ms) + " | " + agg(v.map(\.stallSeconds)) { "\(f1($0)) s" } + " | "
+                               + agg(v.map(\.fps), f1) + " | "
+                               + (a.isEmpty ? "（声音没恢复）" : agg(a.map { Double($0.underruns) }, f0) + " / "
+                                  + agg(a.map { Double($0.concealed) }, f0)) + " |")
                 }
             }
             if !connects.isEmpty {
@@ -837,6 +858,28 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 }
             }
             return out.joined(separator: "\n")
+        }
+
+        /// 按键分组，保持第一次出现的顺序。
+        private func grouped<T>(_ items: [T], by key: (T) -> String) -> [[T]] {
+            var order: [String] = []
+            var groups: [String: [T]] = [:]
+            for item in items {
+                let k = key(item)
+                if groups[k] == nil { order.append(k) }
+                groups[k, default: []].append(item)
+            }
+            return order.compactMap { groups[$0] }
+        }
+
+        /// 中位数；多轮且不一样时后面跟各轮的最小–最大。
+        private func agg(_ values: [Double], _ format: (Double) -> String) -> String {
+            guard !values.isEmpty else { return "—" }
+            let sorted = values.sorted()
+            let median = sorted.count % 2 == 1 ? sorted[sorted.count / 2]
+                                               : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+            let low = format(sorted.first!), high = format(sorted.last!)
+            return sorted.count > 1 && low != high ? "\(format(median))<br><sub>\(low)–\(high)</sub>" : format(median)
         }
     }
 

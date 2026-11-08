@@ -4,6 +4,7 @@
 #
 # 用法：scripts/test-weak-network.sh [传给 xcodebuild 的其余参数...]
 #       WEAK_NET_ONLY="test_matrix_2_3g test_matrix_9_connect_through_relay" 只跑其中几条。
+#       WEAK_NET_ROUNDS=1 每格只跑一轮（默认 3 轮，表里给中位数和范围）。
 set -euo pipefail
 
 report=${WEAK_NET_REPORT:-docs/remote-weak-network-baseline.md}
@@ -44,7 +45,9 @@ fi
 log="$work/xcodebuild.log"
 load_before=$(sysctl -n vm.loadavg)
 set +e
+rounds=${WEAK_NET_ROUNDS:-3}
 TEST_RUNNER_UTERM_WEAK_NET_MATRIX=1 \
+TEST_RUNNER_UTERM_WEAK_NET_ROUNDS="$rounds" \
 TEST_RUNNER_UTERM_RELAY_CONFIG="$("$work/uterm-relay" config)" \
 TEST_RUNNER_UTERM_RELAY_VERSION="$relay_version" \
     xcodebuild test "${only[@]}" -parallel-testing-enabled NO "$@" 2>&1 | tee "$log" | grep -E '^\[弱网矩阵\]|Test Case .*(passed|failed|skipped)|error:|\*\* TEST'
@@ -62,7 +65,7 @@ fi
     echo
     echo "- 生成：$(date '+%Y-%m-%d %H:%M')，提交 $(git rev-parse --short HEAD)$(git diff --quiet || echo '（工作区有改动）')"
     echo "- 机器：$(sysctl -n hw.model)，$(sysctl -n machdep.cpu.brand_string)，macOS $(sw_vers -productVersion)"
-    echo "- 中继：本机 uterm-relay $relay_version"
+    echo "- 中继：本机 uterm-relay $relay_version；每格 ${rounds} 轮"
     echo "- 平均负载（1/5/15 分钟）：开跑前 ${load_before}，跑完 ${load_after}"
     echo "- 重跑：\`make test-weak-network\`（用例 \`uTermTests/Core/Remote/RemoteWeakNetworkMatrixTests.swift\`）"
     echo
@@ -70,7 +73,7 @@ fi
     echo
     echo "### 读数的边界"
     echo
-    echo "- 每格只跑一轮，同一档两次之间可能差很多（首轮 2026-11-08 高丢包 5% 直连一次 7.6 Mbps / 16 fps、一次 1.7 Mbps / 1.7 fps）。拿来定策略前每格至少跑 3 轮。"
+    echo "- 同一档各轮之间可能差很多（2026-11-08 高丢包 5% 直连一次 7.6 Mbps / 16 fps、一次 1.7 Mbps / 1.7 fps），看中位数也要看范围。"
     echo "- 抖动按包独立取值，UDP 上会大量乱序，比真实网络（多为排队造成的、基本有序的抖动）更狠。"
     echo "- 中继 TCP 是把手机到 Mac 整段当一跳模拟：丢包表现为该段数据晚到 200 ms（重传），没有真实 TCP 的拥塞窗口收缩。"
     echo "- 建连那组的打洞在本机回环上进行，差网络只加在手机到中继这一段。"
