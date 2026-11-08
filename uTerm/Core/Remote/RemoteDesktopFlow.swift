@@ -337,7 +337,10 @@ nonisolated struct RemoteRateController: Equatable {
 /// 不设上限每帧 3–4 KB、约 1–2 Mbps，字是糊的；上限 30 时每帧 18 KB 且不丢帧）。但上限一压，编码器就按它出帧、
 /// 不管预算：复杂画面上每帧近 1 MB，透支的码率要靠之后连续丢帧还，写回 51 放开后还要丢好几秒（实测 50 Mbps 下
 /// 丢一半帧超过 4 s）。写 nil 清属性不管用。所以上限只能小步收、一超就退：
-/// - 起步不限。每 `window` 结算：没丢帧、样本够、实发不到目标码率一半，收紧一档（不限时直接到 `relaxed`）。
+/// - 起步不限。每 `window` 结算：没丢帧、窗口里出过帧、实发不到目标码率一半，收紧一档（不限时直接到 `relaxed`）。
+///   帧少不是不收的理由：屏幕上只有光标闪、时钟走时每秒只采到 3–5 帧，以前要求半秒 10 帧就永远收不紧，
+///   上限卡在开头那档，静止的字一直是关键帧那张的糊样子（真机 3840×2160、目标 199 Mbps、实发 4–9 Mbps、
+///   上限停在 37）。帧少时每帧分到的预算反而宽，收紧之后画面一动、单帧超预算就当场退开。
 /// - 非关键帧大过每帧预算的 `oversizeFactor` 倍、或一个窗口里码控丢到 `dropsToRaise` 帧：**当场**放宽 `raiseStep`
 ///  （到 `relaxed` 以上就不限），重新计窗。画面一下变复杂时一两帧之内退开，不攒成透支。
 /// - 码率控制报拥塞时同样放宽。
@@ -349,7 +352,7 @@ nonisolated struct RemoteQualityCap: Equatable {
     static let dropsToRaise = 3
     static let oversizeFactor = 1.5
     static let window: UInt64 = 500_000_000
-    static let minFramesToTighten = 10
+    static let minFramesToTighten = 1
 
     private(set) var maxQP = Self.unrestricted
     private var windowStart: UInt64

@@ -367,10 +367,16 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertEqual(cap.maxQP, 40)
     }
 
-    func test_quality_cap_needs_enough_frames_to_tighten() {
+    /// 屏幕上只有光标闪、时钟走：每秒几帧也要收紧，否则静止的字一直糊（真机 4K 上限卡在 37）。
+    func test_quality_cap_tightens_at_a_low_frame_rate() {
         var cap = RemoteQualityCap(now: 0)
-        _ = feedWindow(&cap, from: 0, frames: 5, bytes: 4_000)
-        XCTAssertEqual(cap.maxQP, RemoteQualityCap.unrestricted, "半秒只有 5 帧：样本太少，不收紧")
+        var now = feedWindow(&cap, from: 0, frames: 2, bytes: 4_000)
+        XCTAssertEqual(cap.maxQP, 40, "半秒只有 2 帧、预算没用上：照样收")
+        for _ in 0..<20 { now = feedWindow(&cap, from: now, frames: 2, bytes: 4_000) }
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.floor)
+        // 收到底后画面一动、单帧超预算：当场放宽。
+        XCTAssertTrue(cap.record(encodedBytes: 400_000, targetBitrate: 90_000_000, frameRate: 60, now: now + 16 * ms))
+        XCTAssertEqual(cap.maxQP, RemoteQualityCap.floor + RemoteQualityCap.raiseStep)
     }
 
     func test_initial_bitrate_scales_with_pixels() {
