@@ -271,6 +271,8 @@ nonisolated struct HeldSessionLayout: Codable, Equatable, Sendable {
     /// 写下这份布局的时刻（Unix 秒）。
     var revision: Double
     var tree: UPaneGroupsSnapshot<UUID>
+    /// 窗口的位置与大小。旧版写的、还没挂上窗口时写的没有。
+    var window: HeldWindowFrame? = nil
 
     static func newest(_ layouts: some Sequence<HeldSessionLayout?>) -> HeldSessionLayout? {
         layouts.compactMap { $0 }.max { $0.revision < $1.revision }
@@ -295,11 +297,14 @@ extension UPaneGroupsModel {
     /// 接回上次留下的会话：按布局放回原来的组和位置，布局里没有的（旧版写的归属、布局还没来得及写进去的会话）
     /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。
     /// `id` 取标签的会话 id（SSH 终端的标签 id 与会话 id 不是同一个）。
+    /// 返回是否套用了布局（模型原本空着）：说明这个窗口就是为接回开的，窗口位置也该照布局还原。
+    @discardableResult
     func adoptHeldSessions(_ ids: [UUID], layout: HeldSessionLayout?, id: (UPaneTab<Payload>) -> UUID?,
-                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) {
+                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) -> Bool {
         let existing = Set(allTabs.compactMap(id))
         var remaining = ids.filter { !existing.contains($0) }
         var restoredActive: UUID?
+        var applied = false
         if allTabs.isEmpty, let layout {
             let wanted = Set(remaining)
             var placed: Set<UUID> = []
@@ -309,12 +314,14 @@ extension UPaneGroupsModel {
             }
             remaining.removeAll { placed.contains($0) }
             restoredActive = activeTab?.id
+            applied = true
         }
         for id in remaining { append(id) }
         // 补在后面的会话开进来时会抢成前台，把布局里的前台标签还回去。
         if !remaining.isEmpty, let restoredActive, let at = locateTab(restoredActive) {
             activateTab(groupID: at.groupID, index: at.index)
         }
+        return applied
     }
 }
 
@@ -338,7 +345,7 @@ enum HeldLayoutWriters {
     }
 }
 
-/// 布局一变（重排、拆分、跨组拖动、关标签、拖分隔条、切前台标签）就把新布局交给 `write`。
+/// 布局一变（重排、拆分、跨组拖动、关标签、拖分隔条、切前台标签、窗口挪动或改大小）就把新布局交给 `write`。
 /// 拖分隔条每帧都在变，攒一小会儿再写；退出 App 时攒着的那份立刻写（`HeldLayoutWriters.flushPending`）。
 @MainActor
 final class HeldLayoutWriter<Payload> {
@@ -350,6 +357,8 @@ final class HeldLayoutWriter<Payload> {
     /// 布局变了、还没写。变化的那一刻就记下（观察回调里同步），不等攒批任务排上：⌘Q 可能就在下一刻。
     private var isDirty = false
     private var isStopped = false
+    /// 窗口最近的位置（`HeldWindowTracker` 报来）。
+    private var window: HeldWindowFrame?
 
     init(groups: UPaneGroupsModel<Payload>, delay: Duration = .milliseconds(300),
          id: @escaping (UPaneTab<Payload>) -> UUID?, write: @escaping @MainActor (HeldSessionLayout) -> Void) {
@@ -374,6 +383,14 @@ final class HeldLayoutWriter<Payload> {
         HeldLayoutWriters.remove(self)
     }
 
+    /// 窗口挪了、改了大小或成了前台。
+    func noteWindow(_ frame: HeldWindowFrame) {
+        guard frame != window, !isStopped else { return }
+        window = frame
+        isDirty = true
+        schedule()
+    }
+
     /// 还有攒着没写的就立刻写。
     func flushPending() {
         guard isDirty else { return }
@@ -386,7 +403,7 @@ final class HeldLayoutWriter<Payload> {
         pending = nil
         isDirty = false
         guard !isStopped, let groups else { return }
-        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id)))
+        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id), window: window))
     }
 
     private func observe() {
@@ -403,6 +420,10 @@ final class HeldLayoutWriter<Payload> {
     private func changed() {
         guard !isStopped else { return }
         observe()
+        schedule()
+    }
+
+    private func schedule() {
         pending?.cancel()
         pending = Task { [weak self, delay] in
             try? await Task.sleep(for: delay)

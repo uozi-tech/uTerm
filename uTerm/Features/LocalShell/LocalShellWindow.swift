@@ -174,6 +174,8 @@ final class LocalShellWindowModel {
         keepAlive: TerminalPaneAreaTuning.keepAlive))
     @ObservationIgnored private var registrar: TerminalSessionRegistrar?
     @ObservationIgnored private var layoutWriter: HeldLayoutWriter<LocalShellPane>?
+    /// 窗口的位置跟布局一起存；接回时照它还原。
+    @ObservationIgnored let windowTracker = HeldWindowTracker()
     private let startShell: @MainActor (LocalShellPane) -> Void
 
     var panes: [LocalShellPane] { groups.allTabs.map(\.payload) }
@@ -189,9 +191,11 @@ final class LocalShellWindowModel {
         // 分屏按钮 / ⌘D 开的新组里放一个新 shell。
         groups.makeTabForNewGroup = { [weak self] in self?.makeTab() }
         // 重启后按它放回标签的顺序和分屏（`LocalShellRestorer`）。
-        layoutWriter = HeldLayoutWriter(groups: groups, id: \.id) { [weak self] layout in
+        let layoutWriter = HeldLayoutWriter(groups: groups, id: \.id) { [weak self] layout in
             for pane in self?.panes ?? [] { pane.updateLayout(layout) }
         }
+        windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
+        self.layoutWriter = layoutWriter
     }
 
     func attach(_ registrar: TerminalSessionRegistrar) {
@@ -262,9 +266,10 @@ final class LocalShellWindowModel {
     /// 接回上次留下的会话（`LocalShellRestorer`）：窗口还空着时按布局放回原位，其余按序号接在活动组末尾。
     func adopt(_ restored: [(id: UUID, ordinal: Int)], layout: HeldSessionLayout?) {
         let ordinals = Dictionary(restored.map { ($0.id, $0.ordinal) }, uniquingKeysWith: { first, _ in first })
-        groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: \.id,
-                                 make: { makeTab(id: $0, ordinal: ordinals[$0]) },
-                                 append: { addTab(id: $0, ordinal: ordinals[$0]) })
+        let applied = groups.adoptHeldSessions(restored.map(\.id), layout: layout, id: \.id,
+                                               make: { makeTab(id: $0, ordinal: ordinals[$0]) },
+                                               append: { addTab(id: $0, ordinal: ordinals[$0]) })
+        if applied { windowTracker.restore(layout?.window) }
     }
 
     func syncFocus() {
@@ -420,6 +425,7 @@ struct LocalShellWindowView: View {
         .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
         .background(LocalShellWindowTitleBinding(model: model))
         .background(LocalShellWindowRouterBinding(windowID: windowID?.id, model: model))
+        .background(HeldWindowTrackerBinding(tracker: model.windowTracker))
         .background(WorkspaceCloseShortcutInstaller { window in
             model.handleCloseShortcut { window.performClose(nil) }
         })

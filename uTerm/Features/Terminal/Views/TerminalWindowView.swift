@@ -106,6 +106,7 @@ struct TerminalWindowView: View {
         .background(WorkspaceCloseShortcutInstaller { window in
             handleCloseShortcut(window: window)
         })
+        .background(HeldWindowTrackerBinding(tracker: workspace.windowTracker))
         .background(TerminalWindowCloseGuardInstaller(sessions: {
             workspace.terminalGroups.allTabs.map(\.payload.session)
         }))

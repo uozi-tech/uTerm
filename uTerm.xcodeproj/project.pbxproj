@@ -197,6 +197,7 @@
 				Features/Keys/Views/KeyImportView.swift,
 				Features/Keys/Views/KeyManagerView.swift,
 				Features/LocalShell/HeldSessionCore.swift,
+				Features/LocalShell/HeldWindowFrame.swift,
 				Features/LocalShell/HolderConnection.swift,
 				Features/LocalShell/LocalShellBackend.swift,
 				Features/LocalShell/LocalShellNetworkPolicy.swift,

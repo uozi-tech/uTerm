@@ -84,6 +84,8 @@ final class WorkspaceModel {
     /// 「服务器配置已被删除」的终端。dispose 前冻结一份，之后一律返回它。
     @ObservationIgnored private var frozenSnapshot: WorkspaceSnapshot?
     @ObservationIgnored private var layoutWriter: HeldLayoutWriter<PaneModel>?
+    /// 终端窗口的位置跟布局一起存；接回时照它还原（工作区窗口由系统恢复，不挂它）。
+    @ObservationIgnored let windowTracker = HeldWindowTracker()
     /// 布局里记的是会话 id（`PaneModel.id`，不是标签 id）；文件标签不是会话，不进布局。
     private static let heldSessionID: (TerminalTab) -> UUID? = { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
 
@@ -157,9 +159,11 @@ final class WorkspaceModel {
         }
         // 布局写进每条 SSH 会话的 holder 归属：重启后没有工作区快照可用时（纯终端窗口、关了自动恢复）
         // 按它放回标签的顺序与分屏。文件标签不是会话，不进布局。
-        layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.heldSessionID) { [weak self] layout in
+        let layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.heldSessionID) { [weak self] layout in
             for tab in self?.terminalGroups.allTabs ?? [] { tab.payload.updateLayout(layout) }
         }
+        windowTracker.onChange = { [weak layoutWriter] in layoutWriter?.noteWindow($0) }
+        self.layoutWriter = layoutWriter
     }
 
     /// 分屏开新组时新会话连哪台服务器：跟随当前活动标签（旧
@@ -564,9 +568,12 @@ final class WorkspaceModel {
                                                  sessionOrder: session.order))
         }
         // 工作区快照已经放好了布局的话，快照为准；否则（纯终端窗口、关了自动恢复）按会话自己存的布局放回。
-        terminalGroups.adoptHeldSessions(sessions.map(\.id), layout: HeldSessionLayout.newest(sessions.map(\.layout)),
-                                         id: Self.heldSessionID, make: tab,
-                                         append: { id in terminalGroups.openTab({ tab(id) }, in: nil) })
+        let layout = HeldSessionLayout.newest(sessions.map(\.layout))
+        let applied = terminalGroups.adoptHeldSessions(sessions.map(\.id), layout: layout,
+                                                       id: Self.heldSessionID, make: tab,
+                                                       append: { id in terminalGroups.openTab({ tab(id) }, in: nil) })
+        // 窗口只有挂了 `HeldWindowTrackerBinding`（纯终端窗口）才会被摆；工作区窗口的位置归系统恢复。
+        if applied { windowTracker.restore(layout?.window) }
         syncTerminalTitles()
     }
 
