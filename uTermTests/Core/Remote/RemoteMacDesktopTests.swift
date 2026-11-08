@@ -154,8 +154,8 @@ final class RemoteMacDesktopTests: XCTestCase {
         }
         XCTAssertEqual(plan(available: [oneX]), .createVirtual, "真实的占位屏（unkn/virt）只有 1 倍：建虚拟屏")
         XCTAssertEqual(plan(available: modes), .switchMode(3), "带 2 倍模式就直接换")
-        XCTAssertEqual(plan(vendor: Display.rememberedVendor, model: 0x1234, available: modes), .switchMode(3))
-        XCTAssertEqual(plan(vendor: Display.rememberedVendor, model: 0x1234, available: [oneX]), .none)
+        XCTAssertEqual(plan(vendor: Display.screenSharingVendor, model: Display.screenSharingModel, available: modes),
+                       .none, "「屏幕共享」的独占虚拟屏不是占位屏，不碰")
         XCTAssertEqual(plan(current: twoX, available: modes), .none, "已经是 2 倍")
         XCTAssertEqual(plan(vendor: 0x10AC, available: [oneX]), .none, "真显示器")
         XCTAssertEqual(plan(online: 2, available: [oneX]), .none, "不止一块屏")

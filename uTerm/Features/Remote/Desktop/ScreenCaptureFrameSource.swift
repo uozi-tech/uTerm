@@ -47,7 +47,8 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
             if attempt < 9 { try? await Task.sleep(for: .milliseconds(200)) }
         }
         guard let target else {
-            throw RemoteDesktopCaptureError.displayNotFound
+            throw RemoteHeadlessDisplay.screenSharingHoldsDisplay()
+                ? RemoteDesktopCaptureError.heldByScreenSharing : RemoteDesktopCaptureError.displayNotFound
         }
         let filter = SCContentFilter(display: target, excludingWindows: [])
         let configuration = SCStreamConfiguration()
@@ -136,10 +137,13 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
 
 nonisolated enum RemoteDesktopCaptureError: LocalizedError {
     case displayNotFound
+    /// 系统「屏幕共享」以高性能模式连着，它的独占虚拟屏把别的显示器都断开了，自己又采不到。
+    case heldByScreenSharing
 
     var errorDescription: String? {
         switch self {
         case .displayNotFound: return "找不到要采集的显示器"
+        case .heldByScreenSharing: return "这台 Mac 正被系统「屏幕共享」连着，它独占了显示器。断开屏幕共享后再试"
         }
     }
 }
