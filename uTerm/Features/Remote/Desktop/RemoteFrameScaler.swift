@@ -1,6 +1,7 @@
 import CoreImage
 import CoreVideo
 import Metal
+import VideoToolbox
 
 /// 采集帧的高质量缩小：在线性光下用 Lanczos 缩到视频尺寸，直接写进编码器要的 4:2:0。
 ///
@@ -11,7 +12,8 @@ import Metal
 /// - Metal / Core Image 在 gamma 码值上做 Lanczos：锐（2.85），但缩小时没把高频压下去，条纹残留 33.8——滚动时细笔画会闪。
 /// - **Core Image 在线性光下做 Lanczos**：最锐（2.94，≈ 原生 5K 直接 Lanczos 的效果），条纹残留 22.7。每帧约 5 ms。
 ///
-/// 只在采集源自己的串行队列上调用。
+/// 现在只给静止精修用（运动帧走 `RemoteFastFrameScaler`）：精修帧要的是看得清，几毫秒不要紧。
+/// 采集队列与连接队列都会调（不同时），`CIContext` 与缓冲池都可跨线程用。
 nonisolated final class RemoteFrameScaler: @unchecked Sendable {
     let width: Int
     let height: Int
@@ -63,5 +65,61 @@ nonisolated final class RemoteFrameScaler: @unchecked Sendable {
         CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+    }
+}
+
+/// 运动帧的缩小：VideoToolbox 像素转换，走专用的缩放硬件，GPU 时间≈0、每帧约 1 ms（调研 §14.5 的 B 项实测）。
+///
+/// 画质与让 ScreenCaptureKit 自己缩同级（先整数步再缩 1.19 时锐度是 Lanczos 的 87%），比 Lanczos 软一点；
+/// 画面在动时看不出来，静止下来后由精修帧换成 `RemoteFrameScaler` 的 Lanczos 版本。它的 CPU 只有 Lanczos
+/// 的四分之一左右（Core Image 每帧在 CPU 上还要 4–7 ms）。
+///
+/// 只在采集源自己的串行队列上调用。
+nonisolated final class RemoteFastFrameScaler: @unchecked Sendable {
+    let width: Int
+    let height: Int
+    private let session: VTPixelTransferSession
+    private let outputPool: CVPixelBufferPool
+
+    init?(width: Int, height: Int, outputFormat: OSType) {
+        var created: VTPixelTransferSession?
+        guard VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &created) == noErr,
+              let session = created else { return nil }
+        VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_ScalingMode, value: kVTScalingMode_Normal)
+        // 码值本来就是 Display P3、sRGB 曲线：目标标得一样，转换只缩放、转 YUV，不做色域变换。
+        VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationYCbCrMatrix,
+                             value: kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+        VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationColorPrimaries,
+                             value: kCVImageBufferColorPrimaries_P3_D65)
+        VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationTransferFunction,
+                             value: kCVImageBufferTransferFunction_sRGB)
+        VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_RealTime, value: kCFBooleanTrue)
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: outputFormat,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+        ]
+        var pool: CVPixelBufferPool?
+        guard CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool) == kCVReturnSuccess, let pool else {
+            VTPixelTransferSessionInvalidate(session)
+            return nil
+        }
+        self.width = width
+        self.height = height
+        self.session = session
+        outputPool = pool
+    }
+
+    deinit { VTPixelTransferSessionInvalidate(session) }
+
+    /// `image` 是 BGRA（Display P3 码值）。失败返回 nil（这一帧丢掉）。
+    func scale(_ image: CVPixelBuffer) -> CVPixelBuffer? {
+        var created: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, outputPool, &created) == kCVReturnSuccess, let output = created else {
+            return nil
+        }
+        RemoteFrameScaler.tag(output)
+        return VTPixelTransferSessionTransferImage(session, from: image, to: output) == noErr ? output : nil
     }
 }

@@ -119,6 +119,14 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     private(set) var stopped = false
     /// 已经交出去的帧的 seed（按顺序）。
     private(set) var emitted: [Int] = []
+    /// 设了它，精修时来源换给一张这个 seed 的画面（模拟「运动帧快缩、精修用 Lanczos 重缩」）。
+    var refinedSeed: Int? {
+        get { lock.lock(); defer { lock.unlock() }; return _refinedSeed }
+        set { lock.lock(); _refinedSeed = newValue; lock.unlock() }
+    }
+    private var _refinedSeed: Int?
+    /// 精修时来源被问了几次。
+    private(set) var refinedRequests = 0
 
     init(width: Int, height: Int, detail: Bool = false) {
         self.width = width
@@ -148,6 +156,14 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     }
 
     var isStarted: Bool { lock.lock(); defer { lock.unlock() }; return started && !stopped }
+
+    func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer? {
+        lock.lock()
+        refinedRequests += 1
+        let seed = _refinedSeed
+        lock.unlock()
+        return seed.map { RemoteDesktopFixture.makeFrame(width: width, height: height, seed: $0, detail: detail) }
+    }
 
     /// 出一帧（新画面）。
     @discardableResult

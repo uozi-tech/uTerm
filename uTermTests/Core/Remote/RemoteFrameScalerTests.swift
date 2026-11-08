@@ -58,6 +58,34 @@ final class RemoteFrameScalerTests: XCTestCase {
         XCTAssertLessThan(linear, gamma * 0.85)
     }
 
+    /// 运动帧的快缩法（VideoToolbox）：尺寸、格式、色彩标注与 Lanczos 版一致，平坦区亮度不变，
+    /// 这样运动帧与精修帧交替时画面不跳色、不跳亮度。
+    func test_fast_scaler_matches_lanczos_size_tags_and_brightness() throws {
+        for format in [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange] {
+            let fast = try XCTUnwrap(RemoteFastFrameScaler(width: 2144, height: 1206, outputFormat: format))
+            let output = try XCTUnwrap(fast.scale(Self.bgra(width: 2560, height: 1440) { _, _ in 128 }))
+            XCTAssertEqual(CVPixelBufferGetWidth(output), 2144)
+            XCTAssertEqual(CVPixelBufferGetHeight(output), 1206)
+            XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), format)
+            XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferColorPrimariesKey, nil) as? String,
+                           kCVImageBufferColorPrimaries_P3_D65 as String)
+            XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferYCbCrMatrixKey, nil) as? String,
+                           kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String)
+            XCTAssertEqual(CVBufferCopyAttachment(output, kCVImageBufferTransferFunctionKey, nil) as? String,
+                           kCVImageBufferTransferFunction_sRGB as String)
+        }
+        let fast = try XCTUnwrap(RemoteFastFrameScaler(width: 2144, height: 1206,
+                                                       outputFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange))
+        let lanczos = try XCTUnwrap(RemoteFrameScaler(width: 2144, height: 1206,
+                                                      outputFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange))
+        let blocks = Self.bgra(width: 2560, height: 1440) { x, _ in x < 1280 ? 40 : 210 }
+        let quick = try XCTUnwrap(fast.scale(blocks)), sharp = try XCTUnwrap(lanczos.scale(blocks))
+        for columns in [200..<800, 1300..<1900] {
+            XCTAssertEqual(Self.lumaMean(quick, columns: columns), Self.lumaMean(sharp, columns: columns), accuracy: 1.5,
+                           "\(columns)")
+        }
+    }
+
     // MARK: - 夹具
 
     private static func bgra(width: Int, height: Int, value: (Int, Int) -> UInt8) -> CVPixelBuffer {

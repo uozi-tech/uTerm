@@ -18,6 +18,13 @@ nonisolated protocol RemoteDesktopFrameSource: AnyObject, Sendable {
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
                onStop: @escaping @Sendable (Error?) -> Void) async throws
     func stop()
+    /// 静止精修用的那张：`frame`（之前交出去的某一帧）的高画质版本，没有就是 nil（照用 `frame`）。
+    /// 采集要再缩一截时，运动帧用快的缩法，这里换成 Lanczos 从原始采集重缩。在连接队列上调用。
+    func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer?
+}
+
+nonisolated extension RemoteDesktopFrameSource {
+    func refinedImage(of frame: CVPixelBuffer) -> CVPixelBuffer? { nil }
 }
 
 /// 输入落点：生产是 `CGEvent` 注入，测试是记录器。在连接队列上调用。
@@ -513,10 +520,14 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
         refined = true
+        // 采集要再缩一截时运动帧用的是快缩法：精修换成来源从原始采集用 Lanczos 重缩的那张（采集时刻不变，
+        // `encodeStill` 据此判断画面变没变）。
+        let still = source.refinedImage(of: frame.image)
+            .map { RemoteCapturedFrame(image: $0, captureNanos: frame.captureNanos, change: frame.change) } ?? frame
         if sidecarRefine {
-            encodeStill(sequence, frame)
+            encodeStill(sequence, still)
         } else {
-            encode(sequence, frame, refine: true)
+            encode(sequence, still, refine: true)
         }
     }
 

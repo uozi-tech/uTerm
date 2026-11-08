@@ -6,9 +6,11 @@ import ObjectiveC
 /// 没接显示器的 Mac：系统给一块占位屏（厂商号 'unkn'、型号 'virt'），只有 1920×1080 的 1 倍模式，远程看过去
 /// 文字又粗又糊。远程桌面开流前把它换成视网膜的：
 ///
-/// - 建一块**按看的那台设备的像素**来的 2 倍虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16；
-///   做法同 Sunshine 的 macOS 分支 Lumen）：像素正好等于视频尺寸，采集直接出 4:2:0、不用再缩，宽高比也
-///   对得上（不再把 16:9 的屏塞进 16:10 或手机的框里留黑边）。它一出现，系统就撤掉占位屏，它成为唯一的主屏。
+/// - 建一块**按看的那台设备的宽高比**来的 2 倍虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16；
+///   做法同 Sunshine 的 macOS 分支 Lumen）：宽高比对得上，不再把 16:9 的屏塞进 16:10 或手机的框里留黑边。
+///   点数不小于 1920×1080（窗口、菜单栏放得下，user 定的下限）：看的设备够大时像素正好等于视频尺寸，采集
+///   直接出 4:2:0、不用再缩；更小的设备（手机、MacBook）按比例放大到下限，采集比视频大，由采集源再缩一截。
+///   它一出现，系统就撤掉占位屏，它成为唯一的主屏。
 /// - 换了一台设备来看：新尺寸没超过这块屏建时定的上限就只换模式（同一块屏、同一个显示器号，窗口留在原处，
 ///   系统只按新尺寸把放不下的挪进来）；超了才拆掉重建。
 /// - 最后一个人走了：等一会儿（`releaseGrace`）还没人来再拆，免得断线重连、换设备接管时窗口来回搬。
@@ -29,12 +31,12 @@ enum RemoteHeadlessDisplay {
     nonisolated static let screenSharingModel: UInt32 = 0x1234
     /// 不知道看的设备多大时（老客户端）虚拟屏的点数：与占位屏一样。
     nonisolated static let defaultPoints = (width: 1920, height: 1080)
-    /// 虚拟屏点数的下限与上限：太小的窗口放不下菜单栏和常见窗口，太大的像素 WindowServer 不收。
-    nonisolated static let minimumPoints = (width: 1024, height: 576)
+    /// 虚拟屏点数的下限与上限：太小了窗口和菜单栏放不下，太大的像素 WindowServer 不收。
+    nonisolated static let minimumPoints = (width: 1920, height: 1080)
     nonisolated static let maximumPoints = (width: 3840, height: 2160)
     /// 建屏时像素上限至少给到这么大：之后换一台不超过它的设备来看只换模式、不重建。
-    /// 3840×2400：16:10 的 4K，盖住 MacBook Pro 16（3456×2234）与各尺寸 iPad、iPhone。
-    nonisolated static let minimumMaxPixels = (width: 3840, height: 2400)
+    /// 5120×2880：盖住按下限放大后的 iPhone 横屏（约 4694×2160）、iPad 13（3840×2880）与 MacBook（3840×24xx）。
+    nonisolated static let minimumMaxPixels = (width: 5120, height: 2880)
     /// 最后一个人走后多久拆虚拟屏。
     nonisolated static let releaseGrace: Duration = .seconds(30)
 
@@ -61,15 +63,17 @@ enum RemoteHeadlessDisplay {
         case rebuild
     }
 
-    /// 看的设备要的像素（与方向无关）→ 虚拟屏的点数。Mac 的屏总是横的：长边做宽。像素正好是要的那么大
-    /// （取偶，点数是一半），点数夹在上下限之间；不知道多大（nil）时与占位屏同大。
+    /// 看的设备要的像素（与方向无关）→ 虚拟屏的点数。Mac 的屏总是横的：长边做宽。点数先取像素的一半，
+    /// 哪一边不到下限就整体等比放大到够（宽高比照旧，不拉变形），再夹在上限之内；不知道多大（nil）时与占位屏同大。
     nonisolated static func virtualSize(viewerPixels: (width: Int, height: Int)?) -> VirtualSize {
         guard let viewerPixels, viewerPixels.width > 0, viewerPixels.height > 0 else {
             return VirtualSize(width: defaultPoints.width, height: defaultPoints.height)
         }
-        let long = max(viewerPixels.width, viewerPixels.height), short = min(viewerPixels.width, viewerPixels.height)
-        return VirtualSize(width: min(maximumPoints.width, max(minimumPoints.width, long / 2)),
-                           height: min(maximumPoints.height, max(minimumPoints.height, short / 2)))
+        let long = Double(max(viewerPixels.width, viewerPixels.height)) / 2
+        let short = Double(min(viewerPixels.width, viewerPixels.height)) / 2
+        let grow = max(1, Double(minimumPoints.width) / long, Double(minimumPoints.height) / short)
+        return VirtualSize(width: min(maximumPoints.width, Int((long * grow).rounded())),
+                           height: min(maximumPoints.height, Int((short * grow).rounded())))
     }
 
     /// 建屏时的像素上限：至少 `minimumMaxPixels`，要的更大就按要的。

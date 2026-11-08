@@ -423,6 +423,33 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertTrue(flowingAgain, "重连后的流不该沿用暂停")
     }
 
+    // MARK: - 精修用来源给的高画质版本
+
+    /// 采集要再缩一截时运动帧用快缩法，精修要换成来源从原始采集用 Lanczos 重缩的那张：手机收到的精修帧是
+    /// 来源给的画面，不是运动帧那张。少了这一步，精修就和运动帧一样软。
+    func test_refine_uses_the_sources_high_quality_image() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        let source = try XCTUnwrap(mac.latestSource)
+        source.refinedSeed = 4242
+        let shown = await waitUntil { !screen.frames.isEmpty }
+        XCTAssertTrue(shown)
+        let seed = source.emit()
+        let moved = await waitUntil { screen.frames.contains { !$0.refine && self.matches($0, seed: seed) } }
+        XCTAssertTrue(moved, "运动帧照常是采集的那张")
+        let refined = await waitUntil(3) { screen.frames.contains(where: \.refine) }
+        let bitrates = server.desktopStats?.snapshot().bitrateHistory ?? []
+        let floor = RemoteRateController.config(width: 1856, height: 1206).minBitrate
+        if let bitrate = bitrates.last, bitrate <= floor { return }  // 码率压到下限时按设计不精修，见上面的用例。
+        XCTAssertTrue(refined, "画面静止后应有一帧精修（码率变化 \(bitrates)）")
+        XCTAssertGreaterThan(source.refinedRequests, 0)
+        let refine = try XCTUnwrap(screen.frames.last(where: \.refine))
+        XCTAssertTrue(matches(refine, seed: 4242), "精修的是来源给的高画质那张")
+    }
+
     // MARK: - 老手机
 
     func test_phone_without_sidecar_support_gets_refine_inside_the_main_stream() async throws {

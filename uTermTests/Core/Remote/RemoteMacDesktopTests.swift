@@ -188,32 +188,41 @@ final class RemoteMacDesktopTests: XCTestCase {
                       "接上真显示器：拆掉虚拟屏")
     }
 
-    /// 虚拟屏按看的设备的像素来：像素正好等于要的（长边做宽），点数是一半，夹在上下限之间。
+    /// 虚拟屏按看的设备的宽高比来（长边做宽），点数是像素的一半；不到 1920×1080 点的整体等比放大到下限。
     /// 换一台设备来看：没超过建屏时的像素上限就只换模式，超了才重建。
     func test_virtual_display_follows_viewer_pixels() {
         typealias Display = RemoteHeadlessDisplay
         typealias Size = RemoteHeadlessDisplay.VirtualSize
-        XCTAssertEqual(Display.virtualSize(viewerPixels: (3024, 1964)), Size(width: 1512, height: 982), "MacBook Pro 14")
-        XCTAssertEqual(Display.virtualSize(viewerPixels: (2868, 1320)), Size(width: 1434, height: 660), "iPhone 横竖都按长边做宽")
-        XCTAssertEqual(Display.virtualSize(viewerPixels: (1320, 2868)), Size(width: 1434, height: 660))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (5120, 2880)), Size(width: 2560, height: 1440), "够大：像素正好等于要的")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3840, 2160)), Size(width: 1920, height: 1080), "正好是下限")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3024, 1964)), Size(width: 1920, height: 1247),
+                       "MacBook Pro 14：宽不到下限，等比放大")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2868, 1320)), Size(width: 2347, height: 1080),
+                       "iPhone 横屏：短边抬到 1080，长边跟着放大，不拉变形")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (1320, 2868)), Size(width: 2347, height: 1080), "与方向无关")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2752, 2064)), Size(width: 1920, height: 1440), "iPad 13（4:3）")
         XCTAssertEqual(Display.virtualSize(viewerPixels: nil), Size(width: 1920, height: 1080), "老客户端：与占位屏同大")
-        XCTAssertEqual(Display.virtualSize(viewerPixels: (800, 600)), Size(width: 1024, height: 576), "下限")
         XCTAssertEqual(Display.virtualSize(viewerPixels: (16000, 9000)), Size(width: 3840, height: 2160), "上限")
-        XCTAssertEqual(Display.virtualSize(viewerPixels: (3025, 1965)).pixelWidth, 3024, "像素取偶")
+        for viewer in [(3024, 1964), (2868, 1320), (2752, 2064), (1920, 1080), (6000, 1000)] {
+            let size = Display.virtualSize(viewerPixels: viewer)
+            XCTAssertGreaterThanOrEqual(size.width, 1920, "\(viewer)")
+            XCTAssertGreaterThanOrEqual(size.height, 1080, "\(viewer)")
+        }
 
-        let mbp = Size(width: 1512, height: 982)
+        let mbp = Display.virtualSize(viewerPixels: (3024, 1964))
         let limit = Display.maxPixels(for: mbp)
-        XCTAssertEqual(limit.width, 3840, "上限至少 3840×2400：之后换小一点的设备只换模式")
-        XCTAssertEqual(limit.height, 2400)
+        XCTAssertEqual(limit.width, 5120, "上限至少 5120×2880：之后换别的常见设备只换模式")
+        XCTAssertEqual(limit.height, 2880)
         let state = Display.VirtualState(size: mbp, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
         XCTAssertEqual(Display.change(from: state, to: mbp), .keep)
-        XCTAssertEqual(Display.change(from: state, to: Size(width: 1434, height: 660)), .switchMode)
-        XCTAssertEqual(Display.change(from: state, to: Size(width: 1920, height: 1200)), .switchMode, "正好到上限")
-        XCTAssertEqual(Display.change(from: state, to: Size(width: 1728, height: 1117)), .switchMode, "MacBook Pro 16")
-        XCTAssertEqual(Display.change(from: state, to: Size(width: 2560, height: 1440)), .rebuild, "5K 超了上限")
-        let big = Display.maxPixels(for: Size(width: 2560, height: 1440))
-        XCTAssertEqual(big.width, 5120, "要的比 3840×2160 大就按要的")
-        XCTAssertEqual(big.height, 2880)
+        for other in [(2868, 1320), (2752, 2064), (3456, 2234), (5120, 2880)] {
+            XCTAssertEqual(Display.change(from: state, to: Display.virtualSize(viewerPixels: other)), .switchMode,
+                           "\(other)")
+        }
+        XCTAssertEqual(Display.change(from: state, to: Size(width: 3008, height: 1692)), .rebuild, "6K 超了上限")
+        let big = Display.maxPixels(for: Size(width: 3008, height: 1692))
+        XCTAssertEqual(big.width, 6016, "要的比 5120×2880 大就按要的")
+        XCTAssertEqual(big.height, 3384)
     }
 
     /// 开流前把看的设备要的像素交给「整理显示器」；有人开始看、看完了都通知（虚拟屏据此留着或过一会儿拆）。
