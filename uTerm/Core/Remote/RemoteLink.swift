@@ -59,6 +59,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// 上次发 ping 的时刻（只在 `queue` 上读写）；还没发过是 0，心跳第一拍就会问一声，连上就有往返读数。
     private var lastPingSent = DispatchTime(uptimeNanoseconds: 0)
     private var livenessTimer: DispatchSourceTimer?
+    /// 开着远程桌面：数据本该一直在走，静默断开要几秒内发现，不能等 20 秒判死（见 `expectSteadyTraffic`）。
+    private var steadyTraffic = false
+    private var heartbeatConfig: RemoteHeartbeat?
 
     /// 终端流量很小又讲究回显延迟：关 Nagle（`noDelay`），开 keepalive 及早发现对端消失。
     static func parameters() -> NWParameters {
@@ -443,11 +446,16 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     /// 手机这一端：链路安静时发 ping，太久没收到任何字节就判死。握手和配对都结束后才开始（等 Mac 上的人点
     /// 「允许」期间 Mac 不回 ping）。
     func startHeartbeat(_ heartbeat: RemoteHeartbeat) {
+        queue.async { [self] in self.heartbeatConfig = heartbeat }
         startLivenessTimer(every: heartbeat.pingInterval / 3) { link, quiet, silent, wasSuspended in
             if wasSuspended {
                 // App 刚从挂起回来：这段时间收不到东西不算链路死了。重新计时，并马上问一声。
                 link.lastReceived = .now()
                 link.sendOnQueue(RemoteMessage(.ping))
+                return
+            }
+            if link.steadyTraffic {
+                link.steadyTick(heartbeat, quiet: quiet)
                 return
             }
             if quiet > heartbeat.replyLimit {
@@ -456,6 +464,38 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                         || link.secondsSinceLastPing > heartbeat.roundTripRefresh {
                 link.sendOnQueue(RemoteMessage(.ping))
             }
+        }
+    }
+
+    /// 开着远程桌面时由桌面会话打开（App 在前台、流在走），关掉流或进后台时关上。打开期间：安静
+    /// `activeQuietPing` 就 ping，ping 发出后 `activeReplyLimit`（往返长时按 3 倍往返放宽）内一个字节都没收到就判死。
+    /// 判据是「一个字节都没收到」而不是「pong 晚到」：拥塞的中继上 pong 排在视频后面，但字节一直在到。
+    /// 只在开着屏幕时这么做：平时（只开着终端）按 5 秒 ping、20 秒判死，不多唤醒蜂窝射频。
+    func expectSteadyTraffic(_ on: Bool) {
+        queue.async { [self] in
+            guard !self.isClosed, self.steadyTraffic != on else { return }
+            self.steadyTraffic = on
+            guard let heartbeat = self.heartbeatConfig, let timer = self.livenessTimer else { return }
+            let interval = on ? heartbeat.activeTick : heartbeat.pingInterval / 3
+            timer.schedule(deadline: .now() + interval, repeating: interval,
+                           leeway: .milliseconds(max(1, Int(interval * 100))))
+        }
+    }
+
+    private func steadyTick(_ heartbeat: RemoteHeartbeat, quiet: TimeInterval) {
+        let wait = max(heartbeat.activeReplyLimit, 3 * (latestRoundTrip ?? 0))
+        if let pingSentAt, lastReceived < pingSentAt {
+            let unanswered = TimeInterval(DispatchTime.now().uptimeNanoseconds &- pingSentAt.uptimeNanoseconds)
+                / 1_000_000_000
+            if unanswered > wait || quiet > heartbeat.replyLimit {
+                AppLogger.notice("远控连接：开着屏幕时 \(String(format: "%.1f", quiet)) 秒没收到任何数据，判断已断开",
+                                 category: RemoteLog.category)
+                fail(RemoteProtocolError.timeout)
+            }
+            return
+        }
+        if quiet > heartbeat.activeQuietPing || secondsSinceLastPing > heartbeat.roundTripRefresh {
+            sendOnQueue(RemoteMessage(.ping))
         }
     }
 

@@ -165,6 +165,7 @@ final class RemoteDesktopSession {
         guard !isStopped else { return }
         isStopped = true
         finishOpenTrace(ok: false, outcome: String(localized: "已关闭"))
+        attachment?.link.expectSteadyTraffic(false)
         reconnectTask?.cancel()
         reconnectTask = nil
         statsTask?.cancel()
@@ -286,6 +287,8 @@ final class RemoteDesktopSession {
         self.info = info
         attachment = attached
         receiver.attach(link: attached.link, channel: attached.channel, generation: current)
+        // 流在走、有人在看：静默断开几秒内就要发现（见 `RemoteLink.expectSteadyTraffic`）。
+        attached.link.expectSteadyTraffic(!backgrounded)
         state = .streaming
         // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
         if backgrounded { sendPause(true) }
@@ -324,6 +327,7 @@ final class RemoteDesktopSession {
         guard closed == generation, !isStopped else { return }
         finishOpenTrace(ok: false, outcome: reason)
         awaitingFirstFrame = false
+        attachment?.link.expectSteadyTraffic(false)
         attachment = nil
         receiver.detach()
         if ended {
@@ -392,6 +396,7 @@ final class RemoteDesktopSession {
     func setBackgrounded(_ backgrounded: Bool) {
         self.backgrounded = backgrounded
         receiver.setPaused(backgrounded)
+        attachment?.link.expectSteadyTraffic(!backgrounded)
         if backgrounded {
             sendPause(true)
         } else if !sendPause(false) {

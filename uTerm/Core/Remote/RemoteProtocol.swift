@@ -59,6 +59,13 @@ nonisolated struct RemoteHeartbeat: Sendable {
     /// 手机：链路一直有数据在走（开着屏幕、终端在刷）时也隔这么久 ping 一次，好让往返读数不断档。
     /// 只按「安静了才 ping」的话，流不停就永远测不到往返。
     var roundTripRefresh: TimeInterval = 15
+    /// 手机：开着远程桌面（数据本该一直在走）时，安静这么久就 ping。
+    var activeQuietPing: TimeInterval = 1
+    /// 手机：开着远程桌面时，ping 发出后这么久一个字节都没收到就判死。实测往返长时按 3 倍往返放宽，
+    /// 拥塞但还活着的中继（往返十几秒）不会被误判。
+    var activeReplyLimit: TimeInterval = 2.5
+    /// 开着远程桌面时检查得勤一点（平时约 1.7 秒一拍）。
+    var activeTick: TimeInterval = 0.5
 
     static let standard = RemoteHeartbeat()
 }

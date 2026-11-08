@@ -232,4 +232,46 @@ final class RemoteReconnectTests: XCTestCase {
         // 输入后超过 30 分钟的输出（无人理会的 htop）不再算。
         XCTAssertFalse(RemoteSleepPolicy.holdsAwake(now: start + 41 * minute, lastInput: start, lastOutput: start + 40 * minute))
     }
+
+    /// 开着屏幕时（`expectSteadyTraffic`）链路静默断开：用正式的心跳参数，5 秒内发现（之后由桌面会话 / 标签重连），
+    /// 不等平时的 20 秒判死。没有网络变化通知（NAT 映射过期、中间设备掐流）。
+    func test_silent_break_is_detected_within_five_seconds_while_the_screen_is_open() async throws {
+        let fixture = try await makeFixture()
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        let attachment = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                         size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+        attachment.link.expectSteadyTraffic(true)
+        try await Task.sleep(for: .seconds(1))
+
+        let before = fixture.proxy.accepted
+        fixture.proxy.setMode(.stalled)
+        let start = Date()
+        let noticed = await waitUntil(8) { fixture.client.state != .connected }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertTrue(noticed)
+        XCTAssertLessThan(elapsed, 5, "开着屏幕时静默断开应在 5 秒内发现（用了 \(elapsed) 秒）")
+        XCTAssertEqual(fixture.proxy.accepted, before, "判死靠自己的探测，不是重连撞出来的")
+    }
+
+    /// 同样开着屏幕，但链路健康、只是没有画面在变：靠 ping 的回音保持，不能误判。
+    func test_quiet_but_healthy_link_is_kept_while_the_screen_is_open() async throws {
+        let fixture = try await makeFixture()
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        let sink = RemoteChannelSink(onOutput: { _ in }, onClosed: { _, _ in })
+        let attachment = try await fixture.client.attach(sessionID: fixture.sessionID,
+                                                         size: RemoteGridSize(cols: 80, rows: 24), sink: sink)
+        attachment.link.expectSteadyTraffic(true)
+        try await Task.sleep(for: .seconds(6))
+        XCTAssertEqual(fixture.client.state, .connected)
+    }
+
 }
