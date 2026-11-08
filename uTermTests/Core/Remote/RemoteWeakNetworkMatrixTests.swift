@@ -103,12 +103,19 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         }
     }
 
+    /// 画面怎么变（`UTERM_WEAK_NET_CONTENT`，逗号分隔：full / typing / scroll / area；默认全跑）。
+    nonisolated static var contents: [SyntheticContent] {
+        let raw = ProcessInfo.processInfo.environment["UTERM_WEAK_NET_CONTENT"] ?? ""
+        let picked = raw.split(separator: ",").compactMap { SyntheticContent(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
+        return picked.isEmpty ? SyntheticContent.allCases : picked
+    }
+
     private func runBoth(_ profile: Profile) async throws {
-        for _ in 0..<Self.rounds { for transport in Self.transports {
-            let row = try await measure(profile, transport: transport)
+        for _ in 0..<Self.rounds { for content in Self.contents { for transport in Self.transports {
+            let row = try await measure(profile, transport: transport, content: content)
             Self.report.add(row)
             print("[弱网矩阵] \(row.consoleLine)")
-        } }
+        } } }
     }
 
     // MARK: - 夹具
@@ -118,14 +125,26 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         case relay = "中继 TCP"
     }
 
+    /// 手机上显示出来的一帧新画面：显示时刻与它在 Mac 上被采集的时刻（同一进程、同一个钟）。
+    nonisolated struct ShownFrame: Sendable {
+        let at: UInt64
+        let capture: UInt64
+    }
+
+    /// 只记新画面：精修帧、旁路帧是同一张画面的重编（采集时刻相同），不算。
     private final class Frames: @unchecked Sendable {
         private let lock = NSLock()
-        private var times: [UInt64] = []
-        func add() {
+        private var shown: [ShownFrame] = []
+        private var lastCapture: UInt64 = 0
+        func add(_ frame: RemoteDesktopFrame) {
             let now = DispatchTime.now().uptimeNanoseconds
-            lock.lock(); times.append(now); lock.unlock()
+            lock.lock(); defer { lock.unlock() }
+            guard frame.captureNanos > lastCapture else { return }
+            lastCapture = frame.captureNanos
+            shown.append(ShownFrame(at: now, capture: frame.captureNanos))
         }
-        var all: [UInt64] { lock.lock(); defer { lock.unlock() }; return times }
+        var all: [UInt64] { lock.lock(); defer { lock.unlock() }; return shown.map(\.at) }
+        var frames: [ShownFrame] { lock.lock(); defer { lock.unlock() }; return shown }
     }
 
     /// 按墙钟拉声音（和真实的播放回调一样匀速），断线重开后换成新的取样回调。
@@ -339,7 +358,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         let session = RemoteDesktopSession(client: rig.client, maxWidth: 1206, maxHeight: 2622, codec: .hevc,
                                            audioOutput: output)
         let frames = Frames()
-        session.receiver.setHandlers(onImage: { _, _ in frames.add() }, onCursor: { _ in })
+        session.receiver.setHandlers(onImage: { _, frame in frames.add(frame) }, onCursor: { _ in })
         let desktopStart = DispatchTime.now().uptimeNanoseconds
         await session.start()
         XCTAssertEqual(session.state, .streaming)
@@ -357,22 +376,25 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                          audioStartMillis: playing ? Date().timeIntervalSince(audioStart) * 1000 : nil)
     }
 
-    /// Mac 每开一次流就建一个新的采集源：发现新的就让它按 30 fps 出满屏变化的画面。
+    /// Mac 每开一次流就建一个新的采集源：发现新的就让它按 `content` 出画面。
     @MainActor private final class SourceDriver {
+        let content: SyntheticContent
         private var running: [ObjectIdentifier] = []
+        init(content: SyntheticContent) { self.content = content }
         func drive(_ mac: FakeDesktopMac) {
             for source in mac.sources where !running.contains(ObjectIdentifier(source)) {
                 running.append(ObjectIdentifier(source))
-                source.prepareCycle(count: 12)
-                source.run(fps: 30)
+                source.play(content)
             }
         }
+        /// 所有采集源一共出过几帧（重连会换新的源）。
+        func produced(_ mac: FakeDesktopMac) -> Int { mac.sources.reduce(0) { $0 + $1.produced } }
         func stop(_ mac: FakeDesktopMac) {
             for source in mac.sources { source.pause() }
         }
     }
 
-    private func measure(_ profile: Profile, transport: Transport) async throws -> Row {
+    private func measure(_ profile: Profile, transport: Transport, content: SyntheticContent) async throws -> Row {
         let rig: Rig
         if transport == .direct {
             rig = try makeDirectRig(link: profile.link)
@@ -382,12 +404,13 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         defer { rig.teardown() }
         let streaming = try await startStreaming(rig)
         defer { streaming.stop() }
-        let driver = SourceDriver()
+        let driver = SourceDriver(content: content)
         driver.drive(rig.mac)
         defer { driver.stop(rig.mac) }
 
         let sampler = Sampler()
         let start = DispatchTime.now().uptimeNanoseconds
+        let producedBefore = driver.produced(rig.mac)
         let audioBefore = streaming.session.audioReceiver.snapshot()
         var pending = profile.phases
         while true {
@@ -404,16 +427,18 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
         }
         let end = DispatchTime.now().uptimeNanoseconds
+        let produced = driver.produced(rig.mac) - producedBefore
         let audioAfter = streaming.session.audioReceiver.snapshot()
         let stats = rig.server.desktopStats?.snapshot()
-        XCTAssertEqual(rig.client.state, .connected, "\(profile.name) · \(transport.rawValue) 跑完应该还连着")
+        XCTAssertEqual(rig.client.state, .connected,
+                       "\(profile.name) · \(content.name) · \(transport.rawValue) 跑完应该还连着")
 
-        var row = Row(profile: profile, transport: transport)
+        var row = Row(profile: profile, transport: transport, content: content)
         row.connectMillis = streaming.connectMillis
         row.firstFrameMillis = streaming.firstFrameMillis
         row.audioStartMillis = streaming.audioStartMillis
-        row.video = VideoReadout(frames: streaming.frames.all, start: start, end: end, samples: sampler.samples,
-                                 stats: stats)
+        row.video = VideoReadout(frames: streaming.frames.frames, start: start, end: end, samples: sampler.samples,
+                                 stats: stats, produced: produced)
         row.audio = AudioReadout(before: audioBefore, after: audioAfter, buffered: sampler.bufferedMillis,
                                  oneWayMillis: profile.meanOneWayMillis)
         if !profile.phases.isEmpty {
@@ -455,7 +480,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         let streaming = try await startStreaming(rig)
         defer { streaming.stop() }
         XCTAssertEqual(client.path, .direct)
-        let driver = SourceDriver()
+        let driver = SourceDriver(content: .fullScreen)
         driver.drive(mac)
         defer { driver.stop(mac) }
         try await Task.sleep(for: .seconds(6))
@@ -509,7 +534,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         row.firstFrameMillis = firstFrame
         if let firstFrame {
             let resumed = breakAt + UInt64(firstFrame * 1e6)
-            row.afterRecovery = VideoReadout(frames: streaming.frames.all, start: resumed, end: end,
+            row.afterRecovery = VideoReadout(frames: streaming.frames.frames, start: resumed, end: end,
                                              samples: [], stats: rig.server.desktopStats?.snapshot())
         }
         // 重连后声音是新的一路流，计数从头算：只比恢复之后的这一段。
@@ -635,12 +660,26 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         var keyframes = 0
         var lostFrames = 0
         var congestionDrops = 0
+        /// 画面从 Mac 上采集到在手机上显示（毫秒）：p50 / p95 / 最大。只算新画面。
+        var latencyP50 = 0.0
+        var latencyP95 = 0.0
+        var latencyMax = 0.0
+        /// 源在窗口里出了多少帧新画面、手机显示了其中多少（nil = 不知道源出了几帧）。
+        var delivered: Double?
         /// 每 2 秒一格：目标 / 实发（Mbps）。
         var curve: [(target: Double, sent: Double)] = []
 
-        init(frames: [UInt64], start: UInt64, end: UInt64, samples: [Sample],
-             stats: RemoteDesktopStreamerStats.Snapshot?) {
-            let window = frames.filter { $0 > start && $0 <= end }
+        init(frames shownFrames: [ShownFrame], start: UInt64, end: UInt64, samples: [Sample],
+             stats: RemoteDesktopStreamerStats.Snapshot?, produced: Int? = nil) {
+            let shownWindow = shownFrames.filter { $0.at > start && $0.at <= end }
+            let window = shownWindow.map(\.at)
+            let latencies = shownWindow.map { Double($0.at &- $0.capture) / 1e6 }.sorted()
+            if !latencies.isEmpty {
+                latencyP50 = latencies[latencies.count / 2]
+                latencyP95 = latencies[min(latencies.count - 1, Int(Double(latencies.count) * 0.95))]
+                latencyMax = latencies.last ?? 0
+            }
+            if let produced, produced > 0 { delivered = min(1, Double(window.count) / Double(produced)) }
             let seconds = Double(end - start) / 1e9
             shown = window.count
             fps = Double(window.count) / max(seconds, 0.001)
@@ -746,6 +785,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
     nonisolated struct Row: Sendable {
         let profile: Profile
         let transport: Transport
+        let content: SyntheticContent
         var connectMillis = 0.0
         var firstFrameMillis: Double?
         var audioStartMillis: Double?
@@ -755,8 +795,9 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
 
         var consoleLine: String {
             let v = video
-            return "\(profile.name) · \(transport.rawValue)：建连 \(ms(connectMillis))，首帧 \(ms(firstFrameMillis))，"
-                + "卡顿 \(v?.stalls ?? -1) 次 \(f1(v?.stallSeconds)) s，\(f1(v?.fps)) fps，"
+            return "\(profile.name) · \(content.name) · \(transport.rawValue)：建连 \(ms(connectMillis))，首帧 \(ms(firstFrameMillis))，"
+                + "卡顿 \(v?.stalls ?? -1) 次 \(f1(v?.stallSeconds)) s，\(f1(v?.fps)) fps，交付 \(pct(v?.delivered))，"
+                + "画面延迟 p50 \(ms(v?.latencyP50)) / p95 \(ms(v?.latencyP95))，"
                 + "目标 \(f1(v?.targetStart))→\(f1(v?.targetMin))→\(f1(v?.targetEnd)) Mbps，实发 \(f1(v?.sentMbps)) Mbps，"
                 + "声音欠载 \(audio?.underruns ?? -1)"
         }
@@ -810,25 +851,33 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
             lock.lock(); defer { lock.unlock() }
             var out: [String] = []
             if !rows.isEmpty {
-                let groups = grouped(rows) { "\($0.profile.id)|\($0.transport.rawValue)" }
+                let groups = grouped(rows) { "\($0.profile.id)|\($0.content.rawValue)|\($0.transport.rawValue)" }
                 let rounds = groups.map(\.count).max() ?? 1
                 out.append("### 远程桌面 + 声音")
                 out.append("")
-                out.append("每格 \(rounds) 轮，写中位数，小字是各轮的最小–最大。卡顿 = 画面超过 200 ms 没有新帧（源一直按 30 fps 出满屏变化的画面）。"
-                           + "码率是 Mac 端码控的目标码率，「实发」是发送端实际吐出的字节。声音延迟 = 单程网络时延 + 抖动缓冲平均深度（估算）。")
+                out.append("每格 \(rounds) 轮，写中位数，小字是各轮的最小–最大。")
                 out.append("")
-                out.append("| 档位 | 路径 | 建连 | 首帧 | 卡顿次数 | 卡顿总时长 | 最长卡顿 | 帧率 | 目标码率 最低 / 末 | 实发 | 帧往返 p50 | 帧往返 p95 | 关键帧 / 丢帧 | 声音欠载 / 补洞 | 声音估算延迟 |")
-                out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+                out.append("画面内容：" + SyntheticContent.allCases.map { "**\($0.name)**——\($0.summary)" }.joined(separator: "；") + "。")
+                out.append("")
+                out.append("卡顿 = 超过 200 ms 没有新画面（精修帧不算新画面）。交付 = 源出的新画面里手机显示了几成。"
+                           + "画面延迟 = 一帧在 Mac 上采集到在手机上显示（同一进程同一个钟，含编码、传输、解码）。"
+                           + "码率是 Mac 端码控的目标码率，「实发」是发送端实际吐出的字节。声音延迟 = 单程网络时延 + 抖动缓冲平均深度（估算）。"
+                           + "帧往返是 Mac 码控自己量的（发出到收到确认）。")
+                out.append("")
+                out.append("| 档位 | 内容 | 路径 | 建连 | 首帧 | 卡顿次数 | 卡顿总时长 | 最长卡顿 | 帧率 | 交付 | 画面延迟 p50 | 画面延迟 p95 | 目标码率 最低 / 末 | 实发 | 帧往返 p50 | 帧往返 p95 | 关键帧 / 丢帧 | 声音欠载 / 补洞 | 声音估算延迟 |")
+                out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
                 for group in groups {
                     let row = group[0]
                     let v = group.compactMap(\.video)
                     let a = group.compactMap(\.audio)
                     let firsts = group.map { $0.firstFrameMillis ?? 20_000 }
-                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.transport.rawValue) | "
+                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.content.name) | \(row.transport.rawValue) | "
                                + agg(group.map(\.connectMillis), ms) + " | "
                                + agg(firsts) { $0 >= 20_000 ? "> 20 s" : ms($0) } + " | "
                                + agg(v.map { Double($0.stalls) }, f0) + " | " + agg(v.map(\.stallSeconds)) { "\(f1($0)) s" } + " | "
                                + agg(v.map(\.longestGap)) { "\(f2($0)) s" } + " | " + agg(v.map(\.fps), f1) + " | "
+                               + agg(v.compactMap(\.delivered), pct) + " | " + agg(v.map(\.latencyP50), ms) + " | "
+                               + agg(v.map(\.latencyP95), ms) + " | "
                                + agg(v.map(\.targetMin), f1) + " / " + agg(v.map(\.targetEnd), f1) + " Mbps | "
                                + agg(v.map(\.sentMbps), f1) + " Mbps | " + agg(v.map(\.roundTripP50), ms) + " | "
                                + agg(v.map(\.roundTripP95), ms) + " | " + agg(v.map { Double($0.keyframes) }, f0) + " / "
@@ -840,11 +889,11 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                     out.append("")
                     out.append("#### 带宽骤降的恢复")
                     out.append("")
-                    out.append("| 路径 | 降速前目标 | 降速期间最低目标 | 降速期间卡顿总时长 | 降速期间最长卡顿 | 恢复带宽后码率回到八成 |")
-                    out.append("|---|---|---|---|---|---|")
+                    out.append("| 内容 | 路径 | 降速前目标 | 降速期间最低目标 | 降速期间卡顿总时长 | 降速期间最长卡顿 | 恢复带宽后码率回到八成 |")
+                    out.append("|---|---|---|---|---|---|---|")
                     for group in drops {
                         let r = group.compactMap(\.recovery)
-                        out.append("| \(group[0].transport.rawValue) | " + agg(r.map(\.targetBeforeDrop), f1) + " Mbps | "
+                        out.append("| \(group[0].content.name) | \(group[0].transport.rawValue) | " + agg(r.map(\.targetBeforeDrop), f1) + " Mbps | "
                                    + agg(r.map(\.targetDuringDrop), f1) + " Mbps | " + agg(r.map(\.stallSecondsDuringDrop)) { "\(f1($0)) s" }
                                    + " | " + agg(r.map(\.longestDuringDrop)) { "\(f2($0)) s" } + " | "
                                    + agg(r.map { $0.reboundSeconds ?? 99 }) { $0 >= 99 ? "没回去" : "\(f1($0)) s" } + " |")
@@ -855,7 +904,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 out.append("")
                 for row in rows {
                     let curve = row.video?.curve.map { "\(f1($0.target))/\(f1($0.sent))" }.joined(separator: " → ") ?? ""
-                    out.append("- \(row.profile.name) · \(row.transport.rawValue)：\(curve)")
+                    out.append("- \(row.profile.name) · \(row.content.name) · \(row.transport.rawValue)：\(curve)")
                 }
             }
             if !switches.isEmpty {
@@ -933,6 +982,28 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
 private nonisolated func ms(_ value: Double?) -> String {
     guard let value else { return "—" }
     return value >= 10_000 ? String(format: "%.1f s", value / 1000) : String(format: "%.0f ms", value)
+}
+
+private nonisolated func pct(_ value: Double?) -> String { value.map { String(format: "%.0f%%", $0 * 100) } ?? "—" }
+
+extension SyntheticContent {
+    nonisolated var name: String {
+        switch self {
+        case .fullScreen: "满屏变化"
+        case .typing: "打字"
+        case .scroll: "局部滚动"
+        case .smallArea: "小区域"
+        }
+    }
+
+    nonisolated var summary: String {
+        switch self {
+        case .fullScreen: "每帧整屏都变，30 fps（压力上限）"
+        case .typing: "终端里一个字一个字出现，10 字/秒"
+        case .scroll: "约四成屏幕的窗格里文字匀速上滚，30 fps"
+        case .smallArea: "一角约 4% 的区域整块变化，30 fps"
+        }
+    }
 }
 
 private nonisolated func f0(_ value: Double?) -> String { value.map { String(format: "%.0f", $0) } ?? "—" }

@@ -6,6 +6,7 @@
 #       WEAK_NET_ONLY="test_matrix_2_3g test_matrix_9_connect_through_relay" 只跑其中几条。
 #       WEAK_NET_ROUNDS=1 每格只跑一轮（默认 3 轮，表里给中位数和范围）。
 #       WEAK_NET_TRANSPORT=direct|relay 只跑一条路。
+#       WEAK_NET_CONTENT=full,typing,scroll,area 画面怎么变（逗号分隔，默认四种全跑）。
 set -euo pipefail
 
 report=${WEAK_NET_REPORT:-docs/remote-weak-network-baseline.md}
@@ -50,6 +51,7 @@ rounds=${WEAK_NET_ROUNDS:-3}
 TEST_RUNNER_UTERM_WEAK_NET_MATRIX=1 \
 TEST_RUNNER_UTERM_WEAK_NET_ROUNDS="$rounds" \
 TEST_RUNNER_UTERM_WEAK_NET_TRANSPORT="${WEAK_NET_TRANSPORT:-}" \
+TEST_RUNNER_UTERM_WEAK_NET_CONTENT="${WEAK_NET_CONTENT:-}" \
 TEST_RUNNER_UTERM_RELAY_CONFIG="$("$work/uterm-relay" config)" \
 TEST_RUNNER_UTERM_RELAY_VERSION="$relay_version" \
     xcodebuild test "${only[@]}" -parallel-testing-enabled NO "$@" 2>&1 | tee "$log" | grep -E '^\[弱网矩阵\]|Test Case .*(passed|failed|skipped)|error:|\*\* TEST'
@@ -69,7 +71,7 @@ fi
     echo
     echo "- 生成：$(date '+%Y-%m-%d %H:%M')，提交 $(git rev-parse --short HEAD)$(git diff --quiet || echo '（工作区有改动）')"
     echo "- 机器：$(sysctl -n hw.model)，$(sysctl -n machdep.cpu.brand_string)，macOS $(sw_vers -productVersion)"
-    echo "- 中继：本机 uterm-relay ${relay_version}；每格 ${rounds} 轮"
+    echo "- 中继：本机 uterm-relay ${relay_version}；每格 ${rounds} 轮；画面内容 ${WEAK_NET_CONTENT:-全部}"
     echo "- 平均负载（1/5/15 分钟）：开跑前 ${load_before}，跑完 ${load_after}"
     echo "- 重跑：\`make test-weak-network\`（用例 \`uTermTests/Core/Remote/RemoteWeakNetworkMatrixTests.swift\`）"
     echo
@@ -81,6 +83,7 @@ fi
     echo "- 抖动按包独立取值，UDP 上会大量乱序，比真实网络（多为排队造成的、基本有序的抖动）更狠。"
     echo "- 中继 TCP 是把手机到 Mac 整段当一跳模拟：丢包表现为该段数据晚到 200 ms（重传），没有真实 TCP 的拥塞窗口收缩。"
     echo "- 建连那组的打洞在本机回环上进行，差网络只加在手机到中继这一段。"
+    echo "- 合成画面是 4:2:0 色块加点阵字，编码器对它的压缩率和真实桌面不同；局部变化几档的码率要和真机读数对照着看。"
     echo "- 模拟测不到的：真实 TCP 拥塞控制、蜂窝空口调度、Wi-Fi 与蜂窝切换时系统的真实时序——这些要用 Network Link Conditioner 在真机上补。"
 } > "$report"
 echo "报告：$report"

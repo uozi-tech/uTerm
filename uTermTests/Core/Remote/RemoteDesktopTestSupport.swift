@@ -116,6 +116,200 @@ enum RemoteDesktopFixture {
     }
 }
 
+/// 合成画面怎么变（弱网矩阵用）。真实使用里多数时候只有一小块在变；满屏每帧都变是压力上限。
+nonisolated enum SyntheticContent: String, CaseIterable, Sendable {
+    /// 每帧满屏变化（滚动整页、播视频），30 fps。
+    case fullScreen = "full"
+    /// 终端里打字：静止桌面上一块深色文字区，一个字一个字出现，光标跟着走；每秒 10 个字。
+    case typing
+    /// 一个窗格（约四成屏幕）里的文字匀速往上滚，其余不动；30 fps。
+    case scroll
+    /// 屏幕一角约 4% 的区域整块变化（进度动画、小窗视频），30 fps。
+    case smallArea = "area"
+
+    /// 出帧节奏：打字是每秒 10 个字，其余按 30 fps。
+    var fps: Int { self == .typing ? 10 : 30 }
+}
+
+/// 局部变化的画面：一张静止底图，每帧复制一份、只改一小块。
+///
+/// 每帧现场生成（Debug 下改一小块只要几毫秒）；滚动窗格事先画好一条比窗格高出一个循环周期的亮度条，
+/// 每帧按偏移整行拷贝，循环处严丝合缝（周期是行高的整数倍）。
+final class LocalChangeRenderer: @unchecked Sendable {
+    let content: SyntheticContent
+    let width: Int
+    let height: Int
+    private let base: CVPixelBuffer
+
+    // 打字
+    private let cellWidth: Int
+    private let cellHeight: Int
+    private let textColumns = 60
+    private let textLines = 8
+    private let textOrigin: (x: Int, y: Int)
+
+    // 滚动
+    private let pane: (x: Int, y: Int, w: Int, h: Int)
+    private let rowHeight: Int
+    private let scrollStep: Int
+    private let scrollPeriodRows = 12
+    private var strip: [UInt8] = []
+
+    // 小区域
+    private let area: (x: Int, y: Int, w: Int, h: Int)
+
+    init(content: SyntheticContent, width: Int, height: Int) {
+        self.content = content
+        self.width = width
+        self.height = height
+        cellWidth = max(4, width / 160) / 2 * 2
+        cellHeight = cellWidth * 2
+        textOrigin = (width / 10 / 2 * 2, height / 4 / 2 * 2)
+        pane = (width * 12 / 100 / 2 * 2, height * 12 / 100 / 2 * 2, width * 55 / 100 / 2 * 2, height * 70 / 100 / 2 * 2)
+        rowHeight = max(10, height / 60 / 5 * 5)
+        scrollStep = rowHeight / 5
+        area = (width * 72 / 100 / 2 * 2, height * 8 / 100 / 2 * 2, width * 20 / 100 / 2 * 2, height * 20 / 100 / 2 * 2)
+        base = RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1000, detail: true)
+        switch content {
+        case .typing:
+            fill(base, x: textOrigin.x - cellWidth, y: textOrigin.y - cellHeight / 2,
+                 w: (textColumns + 2) * cellWidth, h: textLines * cellHeight * 3 / 2 + cellHeight, luma: 28)
+        case .scroll:
+            buildStrip()
+        default:
+            break
+        }
+    }
+
+    /// 第 `index` 帧（从 0 起）。
+    func frame(_ index: Int) -> CVPixelBuffer {
+        let image = copy(base)
+        CVPixelBufferLockBaseAddress(image, [])
+        defer { CVPixelBufferUnlockBaseAddress(image, []) }
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!.assumingMemoryBound(to: UInt8.self)
+        switch content {
+        case .fullScreen:
+            preconditionFailure("满屏变化走 SyntheticFrameSource.prepareCycle")
+        case .typing:
+            let typed = index % (textColumns * textLines) + 1
+            for i in 0..<typed { drawGlyph(i, luma: luma, stride: stride) }
+            // 光标：下一个字的位置一个实心块。
+            let (cx, cy) = cellOrigin(typed)
+            for y in cy..<(cy + cellHeight) { for x in cx..<(cx + cellWidth) { luma[y * stride + x] = 170 } }
+        case .scroll:
+            let offset = (index % (scrollPeriodRows * rowHeight / scrollStep)) * scrollStep
+            strip.withUnsafeBufferPointer { source in
+                for row in 0..<pane.h {
+                    let from = source.baseAddress! + (row + offset) * pane.w
+                    (luma + (pane.y + row) * stride + pane.x).update(from: from, count: pane.w)
+                }
+            }
+        case .smallArea:
+            for y in 0..<area.h {
+                for x in 0..<area.w {
+                    let cell = ((x + index * 5) / 6) &* 31 ^ ((y + index * 3) / 6) &* 17
+                    luma[(area.y + y) * stride + area.x + x] = UInt8(40 + (cell &+ index * 7) % 170)
+                }
+            }
+            let chromaStride = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+            let chroma = CVPixelBufferGetBaseAddressOfPlane(image, 1)!.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<(area.h / 2) {
+                for x in 0..<(area.w / 2) {
+                    let at = (area.y / 2 + y) * chromaStride + (area.x / 2 + x) * 2
+                    chroma[at] = UInt8(90 + (index * 7 + x / 4) % 60)
+                    chroma[at + 1] = UInt8(90 + (index * 11 + y / 4) % 60)
+                }
+            }
+        }
+        return image
+    }
+
+    private func cellOrigin(_ i: Int) -> (Int, Int) {
+        let i = i % (textColumns * textLines)
+        return (textOrigin.x + (i % textColumns) * cellWidth, textOrigin.y + (i / textColumns) * cellHeight * 3 / 2)
+    }
+
+    /// 第 `i` 个字：3×5 点阵，笔画由 `i` 决定；每 7 个左右有一个空格。
+    private func drawGlyph(_ i: Int, luma: UnsafeMutablePointer<UInt8>, stride: Int) {
+        let bits = Self.glyphBits(i)
+        guard bits != 0 else { return }
+        let (ox, oy) = cellOrigin(i)
+        for gy in 1..<(cellHeight - 1) {
+            for gx in 1..<(cellWidth - 1) where bits >> ((gy * 5 / cellHeight) * 3 + gx * 3 / cellWidth) & 1 == 1 {
+                luma[(oy + gy) * stride + ox + gx] = 215
+            }
+        }
+    }
+
+    private static func glyphBits(_ i: Int) -> Int {
+        let hash = (UInt64(i) &+ 1) &* 0x9E37_79B9_7F4A_7C15
+        if hash >> 59 % 7 == 0 { return 0 }
+        return Int(truncatingIfNeeded: hash >> 20) & 0x7FFF | 0x2
+    }
+
+    /// 滚动窗格的亮度条：窗格高 + 一个周期，第 r 行文字的内容只看 r 对周期取模，循环无缝。
+    private func buildStrip() {
+        let period = scrollPeriodRows * rowHeight
+        let total = pane.h + period
+        let glyphWidth = max(4, rowHeight * 2 / 5)
+        strip = [UInt8](repeating: 28, count: pane.w * total)
+        for y in 0..<total {
+            let textRow = (y / rowHeight) % scrollPeriodRows
+            let inRow = y % rowHeight
+            guard inRow >= 2, inRow < rowHeight - 2 else { continue }
+            let length = 20 + (textRow * 37) % 50
+            for x in 0..<pane.w {
+                let column = x / glyphWidth
+                guard column < length else { break }
+                let bits = Self.glyphBits(textRow * 97 + column)
+                let gx = (x % glyphWidth) * 3 / glyphWidth, gy = (inRow - 2) * 5 / (rowHeight - 4)
+                if bits >> (gy * 3 + gx) & 1 == 1 { strip[y * pane.w + x] = 205 }
+            }
+        }
+    }
+
+    private func fill(_ image: CVPixelBuffer, x: Int, y: Int, w: Int, h: Int, luma value: UInt8) {
+        CVPixelBufferLockBaseAddress(image, [])
+        defer { CVPixelBufferUnlockBaseAddress(image, []) }
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!.assumingMemoryBound(to: UInt8.self)
+        for row in max(0, y)..<min(height, y + h) {
+            (luma + row * stride + max(0, x)).update(repeating: value, count: min(width, x + w) - max(0, x))
+        }
+        let chromaStride = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+        let chroma = CVPixelBufferGetBaseAddressOfPlane(image, 1)!.assumingMemoryBound(to: UInt8.self)
+        for row in max(0, y / 2)..<min(height / 2, (y + h) / 2) {
+            (chroma + row * chromaStride + max(0, x) / 2 * 2).update(repeating: 128, count: (min(width, x + w) - max(0, x)) / 2 * 2)
+        }
+    }
+
+    private func copy(_ source: CVPixelBuffer) -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        let status = CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                         attributes as CFDictionary, &buffer)
+        precondition(status == kCVReturnSuccess, "CVPixelBufferCreate \(status)")
+        let image = buffer!
+        CVPixelBufferLockBaseAddress(source, .readOnly)
+        CVPixelBufferLockBaseAddress(image, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(image, [])
+            CVPixelBufferUnlockBaseAddress(source, .readOnly)
+        }
+        for plane in 0..<2 {
+            let rows = CVPixelBufferGetHeightOfPlane(source, plane)
+            let from = CVPixelBufferGetBaseAddressOfPlane(source, plane)!
+            let to = CVPixelBufferGetBaseAddressOfPlane(image, plane)!
+            let fromStride = CVPixelBufferGetBytesPerRowOfPlane(source, plane)
+            let toStride = CVPixelBufferGetBytesPerRowOfPlane(image, plane)
+            let bytes = min(fromStride, toStride)
+            for row in 0..<rows { (to + row * toStride).copyMemory(from: from + row * fromStride, byteCount: bytes) }
+        }
+        return image
+    }
+}
+
 /// 合成采集源：按需（`emit`）或按定时器出帧，模拟 ScreenCaptureKit「有变化才出帧」的行为。
 final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable {
     let width: Int
@@ -138,6 +332,10 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     private var _refinedSeed: Int?
     /// 精修时来源被问了几次。
     private(set) var refinedRequests = 0
+    /// 定时器出过几帧（`run` / `play`；每帧都是新画面）。
+    private var ticks = 0
+    var produced: Int { lock.lock(); defer { lock.unlock() }; return ticks }
+    private var local: LocalChangeRenderer?
 
     init(width: Int, height: Int, detail: Bool = false) {
         self.width = width
@@ -213,9 +411,16 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
             self.lock.lock()
             let handler = self.onFrame
             let frames = self.cycle
+            let local = self.local
+            let tick = self.ticks
+            self.ticks += 1
             self.cycleIndex = frames.isEmpty ? 0 : (self.cycleIndex + 1) % frames.count
             let index = self.cycleIndex
             self.lock.unlock()
+            if let local {
+                handler?(local.frame(tick), DispatchTime.now().uptimeNanoseconds)
+                return
+            }
             guard !frames.isEmpty else {
                 self.emit()
                 return
@@ -233,6 +438,17 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
         lock.lock(); defer { lock.unlock() }
         timer?.cancel()
         timer = nil
+    }
+
+    /// 按 `content` 的方式与节奏连续出帧。满屏变化同 `prepareCycle(count: 12)` + `run(fps: 30)`。
+    func play(_ content: SyntheticContent) {
+        if content == .fullScreen {
+            prepareCycle(count: 12)
+        } else {
+            let renderer = LocalChangeRenderer(content: content, width: width, height: height)
+            lock.lock(); local = renderer; lock.unlock()
+        }
+        run(fps: content.fps)
     }
 }
 
