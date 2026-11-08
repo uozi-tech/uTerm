@@ -6,7 +6,7 @@ import UDesignKit
 ///
 /// 左列配对过的（在上）与局域网里还没配对的（另起一组），双击打开它的窗口（`RemoteMacWindowView`，
 /// 没配对的在那里走配对）；不在同一网络的，粘贴那台 Mac 设置里拷出的邀请链接配对。
-/// 右栏是选中那台的详情：在线状态与路径、打开终端 / 屏幕、网络诊断、忘记。
+/// 右栏是选中那台的详情：在线状态与路径、打开终端 / 屏幕、网络诊断。「忘记」只在列表的右键菜单里。
 struct RemoteMacsPane: View {
     @Environment(RemoteMacDirectory.self) private var directory
     @Environment(\.openWindow) private var openWindow
@@ -36,8 +36,7 @@ struct RemoteMacsPane: View {
                         RemoteMacDetailPanel(mac: selected,
                                              onOpen: { open(selected) },
                                              onOpenScreen: { openWindow(value: RemoteDesktopWindowID(macID: selected.id)) },
-                                             onDiagnose: { openWindow(value: RemoteDiagnosticsWindowID(macID: selected.id)) },
-                                             onForget: { forgetting = selected })
+                                             onDiagnose: { openWindow(value: RemoteDiagnosticsWindowID(macID: selected.id)) })
                             .id(selected.id)
                     }
                 }
@@ -107,11 +106,10 @@ struct RemoteMacsPane: View {
                         .foregroundStyle(UD.text4)
                 }
                 Spacer()
-                UDButton(title: String(localized: "粘贴邀请链接…"), style: .secondary, systemImage: "link") {
-                    pasting = true
-                }
-                .controlSize(.small)
-                .help(Text("不在同一网络的 Mac：在它的「设置 › 远程控制」里显示邀请并拷贝链接，粘贴到这里。"))
+                // 列表头只放一个图标钮（同表单头的关闭钮），说明放悬停提示；空态里才是带字的大按钮。
+                UDIconButton(systemImage: "link") { pasting = true }
+                    .help(Text("粘贴邀请链接：不在同一网络的 Mac，在它的「设置 › 远程控制」里显示邀请并拷贝链接。"))
+                    .accessibilityLabel(Text("粘贴邀请链接"))
             }
             .padding(.horizontal, 16)
             // 分区方案 v3：列表头并入卡顶，无底线（同快捷命令列表）。
@@ -250,7 +248,6 @@ private struct RemoteMacDetailPanel: View {
     let onOpen: () -> Void
     let onOpenScreen: () -> Void
     let onDiagnose: () -> Void
-    let onForget: () -> Void
 
     @Environment(RemoteMacDirectory.self) private var directory
     /// 开着这台 Mac 窗口时的那条连接（目录里的 `clients` 不在观察跟踪里，见 `existingClient`）。
@@ -340,8 +337,10 @@ private struct RemoteMacDetailPanel: View {
         return String(localized: "不在线")
     }
 
+    /// 没连上是「—」；连上了、第一次 ping 还没回来（心跳第一拍约 2 秒）是「测量中…」。
     private var roundTripText: String {
-        guard let millis = connectedClient?.roundTripMillis else { return "—" }
+        guard let connectedClient else { return "—" }
+        guard let millis = connectedClient.roundTripMillis else { return String(localized: "测量中…") }
         return "\(millis) ms"
     }
 
@@ -364,10 +363,7 @@ private struct RemoteMacDetailPanel: View {
                     DetailActionButton(title: "打开屏幕", systemImage: "display", action: onOpenScreen)
                         .disabled(!mac.isOnline)
                     DetailActionButton(title: "网络诊断", systemImage: "stethoscope", action: onDiagnose)
-                }
-                UDButton(title: String(localized: "忘记这台 Mac…"), style: .ghost, action: onForget)
-                    .padding(.top, 2)
-            }
+                }            }
         }
     }
 }
