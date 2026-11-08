@@ -171,17 +171,37 @@ nonisolated struct RemoteRateController: Equatable {
     private var baselineBucketStart: UInt64
 
     /// 起始码率按像素算：每像素 12 bit/s（2144×1206 ≈ 31 Mbps，低延迟编码器在桌面内容上用得到的量），
-    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），下限 1 Mbps。
+    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），
+    /// 下限见 `minimumBitrate`。
     static func config(width: Int, height: Int) -> Config {
         let pixels = max(1, width * height)
-        return Config(minBitrate: 1_000_000, maxBitrate: max(2_000_000, pixels * 24))
+        return Config(minBitrate: minimumBitrate(pixels: pixels), maxBitrate: max(2_000_000, pixels * 24))
     }
 
-    /// 公网路径的配置：上限不变（不设固定额度），在途帧放宽到按字节算的带宽时延积说了算，否则
-    /// 往返 200 ms 时被 8 帧卡在 40 fps。
-    static func config(width: Int, height: Int, path: RemoteLinkPath) -> Config {
+    /// 码率下限：每像素 1 bit/s，夹在 2–8 Mbps（1920×1080 约 2 Mbps、2600×1462 约 3.8 Mbps、3840×2160 8 Mbps）。
+    ///
+    /// 以前一律 1 Mbps：真机 3840×2160 公网直连被压到 1.2–2 Mbps，QP 一直顶在 51，一动就糊成色块。下限只管
+    /// 「采集 → 解码完」这条信号能压到多低；链路真扛不住时，编码器拿到的是链路实测节奏（`linkShare`）与它取小，
+    /// 下限再高也不会多发。
+    static func minimumBitrate(pixels: Int) -> Int {
+        min(maxMinimumBitrate, max(minMinimumBitrate, pixels))
+    }
+
+    static let minMinimumBitrate = 2_000_000
+    static let maxMinimumBitrate = 8_000_000
+    /// 没有链路节奏兜底时（中继转发的 TCP：视频不走数据报）的下限。那里「采集 → 解码完」是唯一的拥塞信号，
+    /// 下限定高了，窄链路上就是一直排着几秒的队。
+    static let unpacedMinimumBitrate = 1_000_000
+
+    /// 按路径的配置。公网上限不变（不设固定额度），在途帧放宽到按字节算的带宽时延积说了算，否则
+    /// 往返 200 ms 时被 8 帧卡在 40 fps。`paced`：视频走数据报、有链路节奏兜底。公网上没有它时下限退回
+    /// `unpacedMinimumBitrate`。
+    static func config(width: Int, height: Int, path: RemoteLinkPath, paced: Bool = false) -> Config {
         var config = config(width: width, height: height)
-        if path.isInternet { config.maxInflightFrames = 30 }
+        if path.isInternet {
+            config.maxInflightFrames = 30
+            if !paced { config.minBitrate = unpacedMinimumBitrate }
+        }
         return config
     }
 
@@ -208,8 +228,8 @@ nonisolated struct RemoteRateController: Equatable {
         baselineBucketStart = now
     }
 
-    init(width: Int, height: Int, path: RemoteLinkPath = .localNetwork, now: UInt64) {
-        self.init(config: Self.config(width: width, height: height, path: path),
+    init(width: Int, height: Int, path: RemoteLinkPath = .localNetwork, paced: Bool = false, now: UInt64) {
+        self.init(config: Self.config(width: width, height: height, path: path, paced: paced),
                   initialBitrate: Self.initialBitrate(width: width, height: height, path: path), now: now)
     }
 
@@ -286,8 +306,14 @@ nonisolated struct RemoteRateController: Equatable {
     }
 
     /// 一帧的「采集 → 手机解码完」耗时。最近一小段里最快的一帧都排着队，才算拥塞。
+    ///
+    /// `linkQueueing`：链路层（`RemoteLinkEstimator`）此刻量没量到网络排队；nil = 没有链路层估计（局域网 TCP、
+    /// 中继转发），只能靠这条信号。有估计、且它说网络没排队时，帧耗时再高也不降码率：多出来的是自己的大帧
+    /// （关键帧、旁路精修）在发送队列里排着、或者确认在 Wi-Fi 上行晚到，降码率既治不了也只会让画面糊。
+    /// 真机 3840×2160 公网直连：链路 丢包 0%、往返 27–85 ms，帧往返 p95 却 1.1–2 s，码率被一路压到 1.2 Mbps。
+    /// 网络真排队时链路层自己会退节奏（编码器拿到的码率跟着节奏走），也会让这里照旧降。
     @discardableResult
-    mutating func observe(latencyNanos: UInt64, now: UInt64) -> Bool {
+    mutating func observe(latencyNanos: UInt64, now: UInt64, linkQueueing: Bool? = nil) -> Bool {
         updateBaseline(latencyNanos, now: now)
         recent.removeAll { now &- $0.nanos > config.congestionWindow }
         recent.append(LatencySample(nanos: now, latency: latencyNanos))
@@ -296,6 +322,8 @@ nonisolated struct RemoteRateController: Equatable {
         guard recent.count >= config.samplesForCongestion, queueDelay > config.queueDelayThreshold else {
             return queueDelay > config.queueDelayThreshold ? false : tick(now: now)
         }
+        // 排队不在网络上：不当拥塞。照常往上试——编码器拿到的码率还受链路节奏管着，涨的只是这条信号的上限。
+        guard linkQueueing != false else { return tick(now: now) }
         // 这一段已经判过了：清掉，下一次要靠新样本重新攒够。
         recent.removeAll()
         return congestion(now: now)

@@ -98,6 +98,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var refined = true
     private var forceKeyframe = true
     private var forceLTRRefresh = false
+    /// 已发出、还没确认的精修帧。它们的确认不进码控与往返读数：一张 4K 精修几百 KB，「采集 → 解码完」
+    /// 量的是它自己发多久，不是链路排队。
+    private var refineSequences: Set<UInt32> = []
     /// 这条链路现在的纠错强度（见 `RemoteLossPolicy`）。
     private var fecGroupSize = 0
     private var pasteAssembler = RemoteDesktopPasteAssembler()
@@ -138,7 +141,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         self.clipboard = clipboard
         self.onFirstInput = onFirstInput
         self.onSourceStopped = onSourceStopped
-        rate = RemoteRateController(width: width, height: height, path: path, now: DispatchTime.now().uptimeNanoseconds)
+        rate = RemoteRateController(width: width, height: height, path: path, paced: video != nil,
+                                    now: DispatchTime.now().uptimeNanoseconds)
     }
 
     /// 建编码器、开采集。采集出的帧在 `activate` 之前只留最新一张，不编码不发送。
@@ -302,7 +306,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 这些帧丢了：释放在途，发恢复帧。
     private func framesLost(_ sequences: [UInt32], recoverEvenIfEmpty: Bool = false) {
         guard !isStopped, !sequences.isEmpty || recoverEvenIfEmpty else { return }
-        for sequence in sequences { pacer.abandon(sequence) }
+        for sequence in sequences {
+            pacer.abandon(sequence)
+            refineSequences.remove(sequence)
+        }
         stats.recordLostFrames(sequences.count)
         if encoder?.usesLTR == true {
             forceLTRRefresh = true
@@ -348,12 +355,16 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private func acknowledged(_ ack: RemoteDesktopAck) {
         video?.acknowledgeVideo(sequence: ack.sequence)
         if let token = ack.ltrToken { encoder?.acknowledgeLTR(token) }
+        let refine = refineSequences.remove(ack.sequence) != nil
         guard pacer.acknowledge(ack.sequence) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
         let latency = now &- ack.captureNanos
-        stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
         if ack.failed { forceKeyframe = true }
-        if rate.observe(latencyNanos: latency, now: now) { applyRate() }
+        if !refine {
+            stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
+            let linkQueueing = linkState.map { $0.queueDelayNanos > rate.config.queueDelayThreshold }
+            if rate.observe(latencyNanos: latency, now: now, linkQueueing: linkQueueing) { applyRate() }
+        }
         pacer.maxInflightFrames = rate.inflightFrameLimit
         pacer.maxInflightBytes = rate.inflightByteLimit
         logRateIfDue(now: now)
@@ -371,15 +382,19 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         lastRateLog = (now, current)
         let seconds = Double(now &- last.nanos) / 1e9
         let sent = current.sent - last.stats.sent
-        let trips = current.roundTripNanos.suffix(min(sent, current.roundTripNanos.count)).sorted()
+        // 精修帧的确认不计往返（见 `refineSequences`）。
+        let acked = max(0, sent - (current.refines - last.stats.refines))
+        let trips = current.roundTripNanos.suffix(min(acked, current.roundTripNanos.count)).sorted()
         func percentile(_ p: Double) -> Double {
             trips.isEmpty ? 0 : Double(trips[min(trips.count - 1, Int(Double(trips.count) * p))]) / 1e6
         }
-        let message = String(format: "桌面码控：目标 %.1f Mbps %d fps｜采集 %.1f fps，实发 %.1f fps %.1f Mbps｜往返 p50 %.0f p95 %.0f ms，"
+        let message = String(format: "桌面码控：目标 %.1f Mbps（编码器 %.1f）%d fps｜采集 %.1f fps，实发 %.1f fps %.1f Mbps"
+                             + "（关键帧 %d 精修 %d）｜往返 p50 %.0f p95 %.0f ms，"
                              + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
-                             Double(rate.bitrate) / 1e6, rate.frameRate,
+                             Double(rate.bitrate) / 1e6, Double(mediaBitrate) / 1e6, rate.frameRate,
                              Double(current.captured - last.stats.captured) / seconds, Double(sent) / seconds,
                              Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
+                             current.keyframes - last.stats.keyframes, current.refines - last.stats.refines,
                              percentile(0.5), percentile(0.95), Double(rate.baselineLatency ?? 0) / 1e6,
                              pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,
                              current.encoderDrops - last.stats.encoderDrops, quality.maxQP)
@@ -553,6 +568,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             return
         }
         pacer.encoded(sequence, bytes: payload.count)
+        if flags.contains(.refine) { refineSequences.insert(sequence) }
         // 旁路精修帧不在参考链里，丢了也不用恢复，体积又大：走可靠通道，慢一点无所谓。
         if let video, !flags.contains(.sidecar) {
             video.sendVideo(payload, sequence: sequence)
