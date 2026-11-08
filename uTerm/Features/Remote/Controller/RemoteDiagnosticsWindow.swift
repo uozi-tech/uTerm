@@ -212,7 +212,7 @@ struct RemoteDiagnosticsContent: View {
 
     private var settingsGroup: some View {
         SettingsGroup(title: String(localized: "检测设置"),
-                      footer: String(localized: "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经服务器转发。两台 Mac 在同一个局域网里也不影响直连和中继的结果。")) {
+                      footer: String(localized: "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继这条路由中继转发。两台 Mac 在同一个局域网里也不影响直连和中继的结果。")) {
             ForEach(RemotePathProbeMode.allCases, id: \.self) { mode in
                 SettingsRow(label: mode.label) {
                     UDToggle(modeBinding(mode))
