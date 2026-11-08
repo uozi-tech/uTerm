@@ -175,6 +175,25 @@ final class RemoteVideoDatagramTests: XCTestCase {
         XCTAssertEqual(lost, [1])
     }
 
+    /// 窄链路上的大帧：分片一片片慢慢到，2.5 s 才到齐，计划时长也是这么长——不能在 1.5 s 时拦腰放弃。
+    func test_large_slow_frame_is_not_cut_at_the_normal_limit() {
+        let data = payload(200_000)
+        let all = packets(data, deadline: 2600)
+        var assembler = RemoteVideoReassembler()
+        var frames: [Data] = []
+        var lost: [UInt32] = []
+        let step = 2500 * ms / UInt64(all.count)
+        for (index, packet) in all.enumerated() {
+            let now = 1000 * ms + UInt64(index) * step
+            let output = assembler.receive(packet, now: now)
+            frames += output.frames
+            lost += output.lost
+            lost += assembler.tick(now: now).lost
+        }
+        XCTAssertEqual(lost, [])
+        XCTAssertEqual(frames, [data])
+    }
+
     /// 整帧都没到：比它新的帧来了才知道，先要一次，到时限再放弃。
     func test_wholly_missing_frame_is_requested_then_given_up() {
         let third = payload(3000, seed: 3)

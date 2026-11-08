@@ -219,7 +219,8 @@ final class RemoteDesktopDatagramTests: XCTestCase {
             var sequence: UInt32 = 0
             while !Task.isCancelled {
                 sequence += 1
-                mac.sendVideo(Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 40_000), sequence: sequence)
+                mac.sendVideo(Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 40_000), sequence: sequence,
+                              recovery: false)
                 try? await Task.sleep(for: .milliseconds(33))
             }
         }

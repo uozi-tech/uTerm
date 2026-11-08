@@ -269,7 +269,7 @@ final class RemoteAudioTierTests: XCTestCase {
         func startVideoSending(channel: UInt32, callbackQueue: DispatchQueue,
                                onLinkState: @escaping @Sendable (RemoteLinkState) -> Void,
                                onExpired: @escaping @Sendable ([UInt32]) -> Void) {}
-        func sendVideo(_ payload: Data, sequence: UInt32) {}
+        func sendVideo(_ payload: Data, sequence: UInt32, recovery: Bool) {}
         func acknowledgeVideo(sequence: UInt32) {}
         func videoLost(_ videoSequences: [UInt32], completion: @escaping @Sendable ([UInt32]) -> Void) {}
         func setVideoFEC(groupSize: Int) {}

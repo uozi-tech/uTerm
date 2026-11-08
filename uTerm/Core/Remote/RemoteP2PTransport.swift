@@ -6,7 +6,9 @@ nonisolated protocol RemoteVideoDatagramChannel: AnyObject, Sendable {
     func startVideoSending(channel: UInt32, callbackQueue: DispatchQueue,
                            onLinkState: @escaping @Sendable (RemoteLinkState) -> Void,
                            onExpired: @escaping @Sendable ([UInt32]) -> Void)
-    func sendVideo(_ payload: Data, sequence: UInt32)
+    /// `recovery`：恢复帧（关键帧 / LTR 刷新帧）。只有它们能等到 `RemoteLossPolicy.maxFrameWaitNanos`，
+    /// 普通帧过时了不如等下一帧，见 `RemoteLossPolicy.frameDeadlineMillis`。
+    func sendVideo(_ payload: Data, sequence: UInt32, recovery: Bool)
     func acknowledgeVideo(sequence: UInt32)
     /// 手机说这些帧放弃了，把对应的编码序号回给 `completion`（在回调队列上）。
     func videoLost(_ videoSequences: [UInt32], completion: @escaping @Sendable ([UInt32]) -> Void)
@@ -222,13 +224,13 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
-    func sendVideo(_ payload: Data, sequence: UInt32) {
+    func sendVideo(_ payload: Data, sequence: UInt32, recovery: Bool) {
         queue.async { [self] in
             guard !isStopped, let videoChannel else { return }
             let now = DispatchTime.now().uptimeNanoseconds
             let state = estimator.state
             let deadline = RemoteLossPolicy.frameDeadlineMillis(frameBytes: payload.count, roundTripNanos: state.roundTripNanos,
-                                                                pacingRate: state.pacingRate)
+                                                                pacingRate: state.pacingRate, recovery: recovery)
             let packets = videoBuffer.add(payload: payload, sequence: sequence, channel: videoChannel,
                                           fecGroupSize: fecGroupSize, deadlineMillis: deadline,
                                           roundTripMillis: Int((state.roundTripNanos ?? 0) / 1_000_000), now: now)

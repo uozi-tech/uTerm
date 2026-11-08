@@ -230,8 +230,19 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertEqual(small, 250)
         let key = RemoteLossPolicy.frameDeadlineMillis(frameBytes: 500_000, roundTripNanos: 100_000_000, pacingRate: 1_000_000)
         XCTAssertEqual(key, 740)
-        XCTAssertLessThanOrEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 1_000_000_000,
-                                                                      pacingRate: 100_000), 1500)
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 1_000_000_000,
+                                                            pacingRate: 100_000), 1500, "普通帧封顶 1.5 s")
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 1_000_000_000,
+                                                            pacingRate: 100_000, recovery: true), 5000,
+                       "恢复帧封顶跟着最长等待")
+        // 窄链路上的大恢复帧（4K 在 2 Mbps 上）：发得完要多久就给多久；普通帧仍 1.5 s。
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 500_000, roundTripNanos: 60_000_000,
+                                                            pacingRate: 250_000, recovery: true), 2160)
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 500_000, roundTripNanos: 60_000_000,
+                                                            pacingRate: 250_000), 1500)
+        XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 100), RemoteLossPolicy.baseFrameWaitNanos)
+        XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 2160), 3_240_000_000)
+        XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 5000), RemoteLossPolicy.maxFrameWaitNanos)
     }
 
     func test_rate_controller_ignores_light_loss_but_not_heavy_loss() {

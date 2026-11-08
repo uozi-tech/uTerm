@@ -271,16 +271,34 @@ nonisolated enum RemoteLossPolicy {
         fecGroupSize > 0 ? Double(fecGroupSize) / Double(fecGroupSize + 1) : 1
     }
 
-    /// 不管分片到得多慢，一帧最多等这么久。
-    static let maxFrameWaitNanos: UInt64 = 1_500_000_000
+    /// 一帧最多等这么久（大帧在窄链路上要这么久才发得完，见 `frameWaitCap`）。
+    static let maxFrameWaitNanos: UInt64 = 5_000_000_000
+    /// 普通帧的等待上限：发得完的帧都在这之内。
+    static let baseFrameWaitNanos: UInt64 = 1_500_000_000
+
+    /// 接收端为一帧最多等多久：计划时长的 1.5 倍，夹在 `baseFrameWaitNanos` 与 `maxFrameWaitNanos` 之间。
+    ///
+    /// 以前一律 1.5 s：4K 的恢复帧（关键帧 / LTR 刷新帧）在 2–5 Mbps 上光发就要 1–3 s，永远拼不齐，放弃了再要、
+    /// 又拼不齐，看的那端一直停在旧画面（2026-11-08 mini）。分片停了照样按「最后一片后两轮重传」放弃，这里只是
+    /// 不再把还在一片片到的大帧拦腰截断。
+    static func frameWaitCap(deadlineMillis: Int) -> UInt64 {
+        let planned = UInt64(max(0, deadlineMillis)) * 1_500_000
+        return min(maxFrameWaitNanos, max(baseFrameWaitNanos, planned))
+    }
     /// 编码码率最多占发送节奏的多少。留点余量给重传和终端，否则发送队列只涨不跌，延迟越排越长。
     static let linkShare = 0.9
 
     /// 接收端等一帧等多久（毫秒）：够它发完，再够两轮重传。等太久画面卡，太短动不动要恢复。
-    static func frameDeadlineMillis(frameBytes: Int, roundTripNanos: UInt64?, pacingRate: Double) -> Int {
+    ///
+    /// 普通帧封顶 1.5 s：过时了不如等下一帧（一开始对所有帧都放宽到 5 s，1% 丢包下的声音+视频用例 3/7 次
+    /// 收包只剩四成）。恢复帧（`recovery`）封顶跟着 `maxFrameWaitNanos`：看的那端在等它，发得完要多久就等多久
+    ///（以前一律 1.5 s，窄链路上的 4K 恢复帧永远拼不齐）。
+    static func frameDeadlineMillis(frameBytes: Int, roundTripNanos: UInt64?, pacingRate: Double,
+                                    recovery: Bool = false) -> Int {
         let roundTrip = Double(roundTripNanos ?? 100_000_000) / 1e6
         let sending = Double(frameBytes) / max(1, pacingRate) * 1000
-        return min(1500, Int(sending + roundTrip * 2 + 40))
+        let cap = recovery ? maxFrameWaitNanos : baseFrameWaitNanos
+        return min(Int(cap / 1_000_000), Int(sending + roundTrip * 2 + 40))
     }
 
     /// 视频连续判丢多少帧算拥塞（一秒内）。零星丢一帧是突发丢包，恢复一下就好。

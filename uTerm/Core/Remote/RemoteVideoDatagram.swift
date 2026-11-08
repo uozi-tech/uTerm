@@ -165,7 +165,8 @@ nonisolated struct RemoteVideoSendBuffer {
     struct Limits: Equatable {
         var maxFrames = 256
         var maxBytes = 32 * 1024 * 1024
-        var maxAgeNanos: UInt64 = 2_000_000_000
+        /// 接收端最多等一帧 `RemoteLossPolicy.maxFrameWaitNanos`，在那之前还可能来要重传：多留一秒。
+        var maxAgeNanos: UInt64 = RemoteLossPolicy.maxFrameWaitNanos + 1_000_000_000
     }
 
     private struct Frame {
@@ -310,7 +311,7 @@ nonisolated struct RemoteVideoReassembler {
         var deadline: UInt64 {
             let planned = firstArrival &+ UInt64(header.deadlineMillis) * 1_000_000
             let quiet = max(80_000_000, UInt64(header.roundTripMillis) * 2_000_000 + 40_000_000)
-            let cap = firstArrival &+ RemoteLossPolicy.maxFrameWaitNanos
+            let cap = firstArrival &+ RemoteLossPolicy.frameWaitCap(deadlineMillis: Int(header.deadlineMillis))
             return min(cap, max(planned, lastArrival &+ quiet))
         }
         var isComplete: Bool { received == fragments.count }

@@ -646,7 +646,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         if flags.contains(.refine) { refineSequences.insert(sequence) }
         // 旁路精修帧不在参考链里，丢了也不用恢复，体积又大：走可靠通道，慢一点无所谓。
         if let video, !flags.contains(.sidecar) {
-            video.sendVideo(payload, sequence: sequence)
+            video.sendVideo(payload, sequence: sequence,
+                            recovery: !flags.contains(.refine) && (flags.contains(.keyframe) || flags.contains(.ltrRefresh)))
         } else {
             link.sendOnQueue(RemoteMessage(.desktopFrame, channel: channel, payload: payload),
                              countsTowardBackpressure: false)
