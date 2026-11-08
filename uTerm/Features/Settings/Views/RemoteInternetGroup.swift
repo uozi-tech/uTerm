@@ -25,6 +25,12 @@ struct RemoteInternetGroup: View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsGroup(title: "公网接入",
                           footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容全程端到端加密。Mac 睡眠时会与中继断开，手机无法远程唤醒它；「保持唤醒」不让 Mac 闲置睡眠，合盖仍会睡眠。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
+                if let block = server.relayRegistrationBlock {
+                    SettingsRow(label: "中继注册", hint: RemoteControlPresentation.relayRegistrationBlockHint(block)) {
+                        SettingsStatusLabel(symbol: "hammer.fill", tone: .warning,
+                                            text: RemoteControlPresentation.relayRegistrationBlockLabel(block))
+                    }
+                }
                 relayRow
                 if server.relayConfig == nil, showsAgentPrompt {
                     RemoteRelayAgentPromptBlock(purpose: .deploy)
@@ -44,7 +50,7 @@ struct RemoteInternetGroup: View {
                         UDToggle(Binding(get: { settings.isInternetEnabled }, set: { settings.isInternetEnabled = $0 }))
                     }
                 }
-                if server.relayConfig != nil, settings.isInternetEnabled {
+                if server.relayConfig != nil, settings.isInternetEnabled, server.relayRegistrationBlock == nil {
                     let relayState = server.relayLink?.state
                     SettingsRow(label: "中继状态", hint: RemoteControlPresentation.relayStatusHint(relayState)) {
                         let status = RemoteControlPresentation.relayStatus(relayState)

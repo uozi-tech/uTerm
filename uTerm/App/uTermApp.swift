@@ -111,7 +111,11 @@ struct uTermApp: App {
         let remoteServer = RemoteHostServer(registry: terminalRegistry,
                                             relayStore: BackgroundLaunchMode.isRunningInTestHost ? nil : RemoteRelayConfigStore(),
                                             relayUpdates: BackgroundLaunchMode.isRunningInTestHost ? .inert() : RemoteRelayUpdateMonitor(),
-                                            desktopEnvironment: .live(settings: remoteSettings))
+                                            desktopEnvironment: .live(settings: remoteSettings),
+                                            relayRegistrationBlock: .current(
+                                                isTestHost: BackgroundLaunchMode.isRunningInTestHost,
+                                                isInstalled: AppInstallLocation.isCurrentInstalled,
+                                                arguments: ProcessInfo.processInfo.arguments))
         remoteServer.internetAccessPolicy = { [remoteSettings] in remoteSettings.allowsInternetAccess($0) }
         remoteServer.grantInternetAccess = { [remoteSettings] in remoteSettings.internetDevices.insert($0) }
         _remoteSettings = State(initialValue: remoteSettings)

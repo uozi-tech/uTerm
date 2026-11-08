@@ -320,7 +320,13 @@ nonisolated extension SkillInstaller {
     ///
     /// 测试宿主里不调（`BackgroundLaunchMode.isRunningInTestHost`），否则跑一次测试就会
     /// 把开发机上真实的 `~/.claude/skills` 改指到 DerivedData 里的测试构建。
-    static func reconcileOnLaunch() {
+    static func reconcileOnLaunch(isInstalled: Bool = AppInstallLocation.isCurrentInstalled) {
+        // 开发构建（DerivedData、worktree 里编出来的）不动链接：改指向它之后，utermctl 的按需启动会拉起这个
+        // 开发构建，它又以本机身份注册中继、顶掉正式版。调试命令行用 UTERM_CONTROL_SOCKET 指过去。
+        guard isInstalled else {
+            AppLogger.info("开发构建不对齐技能与 utermctl 的链接", category: "skills")
+            return
+        }
         Task.detached(priority: .utility) {
             let installers = SkillDefinition.catalog.map { SkillInstaller(definition: $0) }
             for target in SkillTarget.allCases {

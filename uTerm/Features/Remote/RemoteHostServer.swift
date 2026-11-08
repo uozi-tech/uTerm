@@ -65,6 +65,8 @@ final class RemoteHostServer {
     private(set) var desktopViewer: DesktopViewer?
     /// 在中继上的注册（打开公网接入且导入过配置时才有）。
     private(set) var relayLink: RemoteRelayHostLink?
+    /// 这个进程为什么不注册中继（nil = 照常注册）。开发构建与测试宿主和正式版同身份，注册了就会把它顶掉。
+    let relayRegistrationBlock: RemoteRelayRegistrationBlock?
     /// 存中继配置的地方。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
     /// 中继版本与新版本提醒。
@@ -135,8 +137,10 @@ final class RemoteHostServer {
          relayStore: RemoteRelayConfigStore? = nil,
          relayUpdates: RemoteRelayUpdateMonitor = .inert(),
          relayRevocations: RemoteRelayRevocations = RemoteRelayRevocations(defaults: RemoteLocalState.defaults),
-         desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
+         desktopEnvironment: RemoteDesktopEnvironment = .disabled,
+         relayRegistrationBlock: RemoteRelayRegistrationBlock? = nil) {
         self.relayStore = relayStore
+        self.relayRegistrationBlock = relayRegistrationBlock
         self.relayRevocations = relayRevocations
         self.relayUpdates = relayUpdates
         self.localFeatures = localFeatures
@@ -278,7 +282,7 @@ final class RemoteHostServer {
     func updateInternetAccess(enabled: Bool, keepAwake: Bool) {
         keepsAwakeForInternet = keepAwake
         relayConfig = relayStore?.load() ?? relayConfig
-        if enabled, let relayConfig {
+        if enabled, let relayConfig, relayRegistrationBlock == nil {
             if relayLink?.config != relayConfig {
                 relayLink?.stop()
                 let link = RemoteRelayHostLink(config: relayConfig, server: self)
@@ -753,5 +757,19 @@ final class RemoteHostServer {
             for connection in self.connections.values { connection.sendSessions() }
             self.observeTabTitles(generation: generation)
         }
+    }
+}
+
+/// 这个进程不注册中继的原因。
+nonisolated enum RemoteRelayRegistrationBlock: Equatable, Sendable {
+    /// 不在 /Applications 或 ~/Applications 里的开发构建（启动参数 `-RemoteRelayAllowDevBuild YES` 可放开）。
+    case developmentBuild
+    /// 跑测试的宿主进程。
+    case testHost
+
+    static func current(isTestHost: Bool, isInstalled: Bool, arguments: [String]) -> Self? {
+        if isTestHost { return .testHost }
+        if isInstalled || AppInstallLocation.allowsDevBuildRelay(arguments: arguments) { return nil }
+        return .developmentBuild
     }
 }

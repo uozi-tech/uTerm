@@ -122,6 +122,23 @@ enum RemoteControlPresentation {
         }
     }
 
+    /// 这个 uTerm 不注册中继（开发构建 / 测试宿主）：设置页公网区顶上那一行。
+    static func relayRegistrationBlockLabel(_ block: RemoteRelayRegistrationBlock) -> String {
+        switch block {
+        case .developmentBuild: return "开发构建，不注册"
+        case .testHost: return "测试宿主，不注册"
+        }
+    }
+
+    static func relayRegistrationBlockHint(_ block: RemoteRelayRegistrationBlock) -> String {
+        switch block {
+        case .developmentBuild:
+            return "这个 uTerm 不在「应用程序」文件夹里，不会以这台 Mac 的身份注册中继，以免顶替已安装的 uTerm。"
+        case .testHost:
+            return "这是跑测试用的 uTerm，不连接中继，也不读写已安装的 uTerm 的远程控制设置。"
+        }
+    }
+
     static func relayStatus(_ state: RemoteRelayHostLink.State?) -> (symbol: String, tone: SettingsTone) {
         switch state {
         case .registered: return ("checkmark.circle.fill", .success)
