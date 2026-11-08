@@ -264,7 +264,7 @@ final class RemoteInternetAccessTests: XCTestCase {
         XCTAssertTrue(refused, "第 9 条起直接拒绝，实际 \(closedInboxes.filter(\.closed).count)")
     }
 
-    /// 老中继（1.2.0 之前）不认成员证书：照旧发共用的成员密钥。
+    /// 老中继（1.3.0 之前）不认有到期时间的成员证书：照旧发共用的成员密钥。
     func test_ticked_device_receives_the_relay_config_after_connecting() async throws {
         let phone = Phone()
         let server = makeServer(allowed: [phone.id], relayVersion: "1.1.1")
@@ -283,7 +283,7 @@ final class RemoteInternetAccessTests: XCTestCase {
     /// 中继认证书：发的是只能连这台 Mac 的成员证书，不是中继本身的成员密钥。
     func test_ticked_device_receives_its_own_certificate() async throws {
         let phone = Phone()
-        let server = makeServer(allowed: [phone.id], relayVersion: "1.2.0")
+        let server = makeServer(allowed: [phone.id], relayVersion: "1.3.0")
         try server.trust(phone.peer)
         let config = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
                                        key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
@@ -295,6 +295,7 @@ final class RemoteInternetAccessTests: XCTestCase {
         let received = try XCTUnwrap(RemoteRelayConfig(importing: try XCTUnwrap(inbox.of(.relayConfig).first).payload))
         XCTAssertEqual(received.scope, server.localID.uuidString)
         XCTAssertNotEqual(received.key, config.key)
+        XCTAssertNotNil(received.expires)
         XCTAssertEqual(server.identity.peer(id: phone.id)?.relayGrant, received)
         link.close()
     }
@@ -310,7 +311,7 @@ final class RemoteInternetAccessTests: XCTestCase {
                                               features: [RemoteFeature.keyConfirmation, RemoteFeature.relayConfig])
         let early = await waitUntil(0.5) { !inbox.of(.relayConfig).isEmpty }
         XCTAssertFalse(early)
-        server.relayUpdates.noteRunning("1.2.0")
+        server.relayUpdates.noteRunning("1.3.0")
         server.relayRegistered()
         let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
         XCTAssertTrue(delivered)

@@ -5,31 +5,42 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
 
-// certMember is a member that holds its own key: the relay's key signed a certificate for it and one host.
+// certMember is a member that holds its own key: the relay's key signed a certificate for it and one
+// host, valid until expires.
 type certMember struct {
-	key    *ecdsa.PrivateKey
-	public string
-	cert   string
-	scope  string
+	key     *ecdsa.PrivateKey
+	public  string
+	cert    string
+	scope   string
+	expires int64
 }
 
+// hostCertLifetime is what hosts issue.
+const hostCertLifetime = 90 * 24 * time.Hour
+
 func (h *harness) certify(scope string) certMember {
+	h.t.Helper()
+	return h.certifyUntil(scope, time.Now().Add(hostCertLifetime).Unix())
+}
+
+func (h *harness) certifyUntil(scope string, expires int64) certMember {
 	h.t.Helper()
 	key := newKey(h.t)
 	public, err := encodePublicKey(&key.PublicKey)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return certMember{key: key, public: public, scope: scope,
-		cert: sign(h.t, h.member, certMessage(h.relayID, public, scope))}
+	return certMember{key: key, public: public, scope: scope, expires: expires,
+		cert: sign(h.t, h.member, certMessage(h.relayID, public, scope, expires))}
 }
 
 func (m certMember) request(t *testing.T, role, relayID, nonce, parameter string) requestFrame {
-	return requestFrame{Role: role, Member: m.public, Cert: m.cert, Scope: m.scope,
+	return requestFrame{Role: role, Member: m.public, Cert: m.cert, Scope: m.scope, Expires: m.expires,
 		Sig: sign(t, m.key, signedMessage(role, relayID, nonce, parameter))}
 }
 
@@ -135,7 +146,7 @@ func TestForgedOrMismatchedCertificatesAreRefusedSilently(t *testing.T) {
 
 	cases := map[string]certMember{}
 	selfSigned := good
-	selfSigned.cert = sign(t, good.key, certMessage(h.relayID, good.public, good.scope))
+	selfSigned.cert = sign(t, good.key, certMessage(h.relayID, good.public, good.scope, good.expires))
 	cases["signed by the member itself"] = selfSigned
 	widened := good
 	widened.scope = "mac-2"
@@ -148,8 +159,21 @@ func TestForgedOrMismatchedCertificatesAreRefusedSilently(t *testing.T) {
 	cases["no certificate"] = noCert
 	noScope := good
 	noScope.scope = ""
-	noScope.cert = sign(t, h.member, certMessage(h.relayID, good.public, ""))
+	noScope.cert = sign(t, h.member, certMessage(h.relayID, good.public, "", good.expires))
 	cases["no scope"] = noScope
+	extended := good
+	extended.expires += 3600
+	cases["expiry moved after signing"] = extended
+	noExpiry := good
+	noExpiry.expires = 0
+	noExpiry.cert = sign(t, h.member, certMessage(h.relayID, good.public, good.scope, 0))
+	cases["no expiry"] = noExpiry
+	cases["expired"] = h.certifyUntil("mac-1", time.Now().Add(-time.Minute).Unix())
+	cases["longer than the relay allows"] = h.certifyUntil("mac-1", time.Now().Add(certMaxLifetime+time.Hour).Unix())
+	legacy := good
+	legacy.cert = sign(t, h.member, []byte(strings.Join([]string{"uterm-relay-member-v1", h.relayID, good.public,
+		good.scope}, "\n")))
+	cases["1.2.x certificate without expiry"] = legacy
 
 	for name, member := range cases {
 		if _, answer := h.certClient(member); answer.Reason != reasonClosed {
@@ -174,7 +198,7 @@ func TestRevokedMemberIsCutOffAndStaysOut(t *testing.T) {
 	}
 	other, _ := h.certClient(keep)
 
-	writeFrame(host, messageFrame{Type: "revoke", Member: member.public})
+	writeFrame(host, messageFrame{Type: "revoke", Member: member.public, Expires: member.expires})
 	if got := readMessage(t, host); got.Type != "revoked" || got.Member != member.public {
 		t.Fatalf("host got %+v", got)
 	}
@@ -207,14 +231,15 @@ func TestRevocationListKeepsTheNewest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	soon := time.Now().Add(time.Hour).Unix()
 	for i := 0; i < revocationLimit+5; i++ {
-		store.revoked[fmt.Sprintf("old-%05d", i)] = int64(i)
+		store.revoked[fmt.Sprintf("old-%05d", i)] = soon + int64(i)
 	}
-	if err := store.Revoke("newest"); err != nil {
+	if err := store.Revoke("newest", soon); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.revoked) != revocationLimit || !store.IsRevoked("newest") || store.IsRevoked("old-00000") {
-		t.Fatalf("kept %d, newest %v, oldest %v", len(store.revoked), store.IsRevoked("newest"),
+		t.Fatalf("kept %d, newest %v, closest to expiring %v", len(store.revoked), store.IsRevoked("newest"),
 			store.IsRevoked("old-00000"))
 	}
 }
@@ -224,7 +249,7 @@ func TestRotateForgetsRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Revoke("member"); err != nil {
+	if err := store.Revoke("member", time.Now().Add(time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Rotate(); err != nil {
@@ -235,20 +260,77 @@ func TestRotateForgetsRevocations(t *testing.T) {
 	}
 }
 
-func TestFreshRevocationSurvivesSameSecondEviction(t *testing.T) {
+func TestFreshRevocationSurvivesEviction(t *testing.T) {
 	store, err := OpenStore(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().Unix()
+	later := time.Now().Add(time.Hour).Unix()
 	for i := 0; i < revocationLimit; i++ {
-		store.revoked[fmt.Sprintf("same-second-%05d", i)] = now
+		store.revoked[fmt.Sprintf("same-expiry-%05d", i)] = later
 	}
-	// Sorts before every existing key, all from the same second: it must still be the one kept.
-	if err := store.Revoke("0-fresh"); err != nil {
+	// Expires first and sorts before every existing key: it must still be the one kept.
+	if err := store.Revoke("0-fresh", later-60); err != nil {
 		t.Fatal(err)
 	}
 	if !store.IsRevoked("0-fresh") || len(store.revoked) != revocationLimit {
 		t.Fatalf("fresh revocation kept: %v, size %d", store.IsRevoked("0-fresh"), len(store.revoked))
+	}
+}
+
+// Revocations leave once the certificate they cover has expired, so the list stays small without
+// dropping one that still matters.
+func TestExpiredRevocationsAreCleanedUp(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	store.revoked["expired"] = now - 1
+	store.revoked["legacy-revocation-time"] = now - 86400
+	if store.IsRevoked("expired") {
+		t.Fatal("an expired certificate's revocation still counts")
+	}
+	if err := store.Revoke("live", now+3600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.revoked["expired"]; ok {
+		t.Fatal("expired revocation not pruned on the next write")
+	}
+	if err := store.Revoke("already-expired", now-5); err != nil || store.IsRevoked("already-expired") {
+		t.Fatalf("revoking an expired certificate stored it: %v", err)
+	}
+	// Revoking again after a renewal keeps the later expiry.
+	if err := store.Revoke("live", now+60); err != nil || store.revoked["live"] != now+3600 {
+		t.Fatalf("earlier expiry replaced the later one: %d %v", store.revoked["live"], err)
+	}
+
+	// 1.2.x stored revocation times: they are pruned at load.
+	store.revoked["from-1.2"] = now - 10
+	if err := store.saveRevokedLocked(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reopened.revoked["from-1.2"]; ok || !reopened.IsRevoked("live") {
+		t.Fatalf("after reload: %+v", reopened.revoked)
+	}
+}
+
+// A host that sends no expiry still gets its revocation kept for as long as any certificate could last.
+func TestRevokeWithoutExpiryLastsTheMaximum(t *testing.T) {
+	h := newHarness(t, testLimits())
+	host := h.registerHost("mac-1", newKey(t))
+	member := h.certify("mac-1")
+	writeFrame(host, messageFrame{Type: "revoke", Member: member.public})
+	if got := readMessage(t, host); got.Type != "revoked" {
+		t.Fatalf("host got %+v", got)
+	}
+	expires := h.store.revoked[member.public]
+	if expires < time.Now().Add(certMaxLifetime-time.Minute).Unix() {
+		t.Fatalf("kept until %d", expires)
 	}
 }

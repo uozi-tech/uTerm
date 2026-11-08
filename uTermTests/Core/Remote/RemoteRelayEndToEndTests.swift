@@ -127,6 +127,8 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertEqual(shared.relayID, config.relayID)
         XCTAssertEqual(shared.scope, mac.peer.id.uuidString, "带的是只能连这台 Mac 的成员证书")
         XCTAssertNotEqual(shared.key, config.key, "中继本身的成员密钥不外发")
+        XCTAssertEqual(TimeInterval(try XCTUnwrap(shared.expires)), Date().timeIntervalSince1970 + 86_400, accuracy: 5,
+                       "邀请里的证书只给一天：没用掉的自己作废")
         let scanned = try XCTUnwrap(RemotePairingInvitation(scanned: invitation.url.absoluteString))
         XCTAssertEqual(scanned.relay, shared)
         let relay = RemoteRelayClient(config: try XCTUnwrap(scanned.relay))
@@ -138,7 +140,15 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertEqual(first.path, .relay)
         XCTAssertTrue(mac.server.pairingRequests.isEmpty)
         XCTAssertEqual(mac.server.trustedPeers.map(\.id), [phone.id])
-        XCTAssertEqual(mac.server.trustedPeers.first?.relayGrant, shared, "证书记到这台设备名下，忘记它时吊销")
+        let grant = try XCTUnwrap(mac.server.trustedPeers.first?.relayGrant, "证书记到这台设备名下，忘记它时吊销")
+        XCTAssertEqual(grant.key, shared.key)
+        XCTAssertEqual(TimeInterval(try XCTUnwrap(grant.expires)),
+                       Date().timeIntervalSince1970 + RemoteRelayConfig.certificateLifetime, accuracy: 5,
+                       "配上后第一次连上来就续成 90 天，同一把钥匙")
+        let renewedRelay = RemoteRelayClient(config: grant)
+        let renewedSees = try await renewedRelay.onlineHosts()
+        await renewedRelay.stop()
+        XCTAssertEqual(renewedSees, [mac.peer.id], "续过的证书在真中继上照样能用")
         XCTAssertTrue(allowed.contains(phone.id))
         first.disconnect()
 
@@ -186,6 +196,25 @@ final class RemoteRelayEndToEndTests: XCTestCase {
             return false
         }
         XCTAssertTrue(failed, "证书不能注册主机：\(String(describing: host.relayLink?.state))")
+    }
+
+    /// 中继 1.3.0 只认有到期时间、且没过期的证书。
+    func test_relay_refuses_certificates_without_a_valid_expiry() async throws {
+        let config = try relayConfig()
+        let mac = try await makeMac(config: config, allowed: Allowed())
+        defer { mac.server.stop(); mac.session.dispose() }
+        var legacy = try config.certificate(for: mac.peer.id)
+        legacy.expires = nil
+        await assertRejected(legacy)
+        var stretched = try config.certificate(for: mac.peer.id)
+        stretched.expires = (stretched.expires ?? 0) + 86_400
+        await assertRejected(stretched)
+        let tooLong = try config.certificate(for: mac.peer.id, lifetime: 200 * 86_400)
+        await assertRejected(tooLong)
+        let good = RemoteRelayClient(config: try config.certificate(for: mac.peer.id))
+        let seen = try await good.onlineHosts()
+        await good.stop()
+        XCTAssertEqual(seen, [mac.peer.id])
     }
 
     /// 忘记设备、或邀请没用掉就作废：发出去的证书在中继上吊销，之后连不上。

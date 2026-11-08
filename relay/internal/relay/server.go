@@ -351,10 +351,13 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 }
 
 // certified checks a member certificate: the relay's key vouches for this member key and the host
-// it may reach, and no host has revoked it since.
+// it may reach, it hasn't expired (nor claims to last longer than certMaxLifetime), and no host has
+// revoked it since.
 func (s *Server) certified(request requestFrame, relayID string, root *ecdsa.PublicKey) (*ecdsa.PublicKey, bool) {
+	now := time.Now()
 	if request.Scope == "" || request.Cert == "" ||
-		!verifySignature(root, certMessage(relayID, request.Member, request.Scope), request.Cert) ||
+		request.Expires <= now.Unix() || request.Expires > now.Add(certMaxLifetime).Unix() ||
+		!verifySignature(root, certMessage(relayID, request.Member, request.Scope, request.Expires), request.Cert) ||
 		s.store.IsRevoked(request.Member) {
 		return nil, false
 	}
@@ -390,8 +393,8 @@ func (s *Server) trackMember(member string, conn net.Conn) func() {
 }
 
 // revoke withdraws a member key and cuts off whatever it has open, relayed connections included.
-func (s *Server) revoke(member string) error {
-	if err := s.store.Revoke(member); err != nil {
+func (s *Server) revoke(member string, expires int64) error {
+	if err := s.store.Revoke(member, expires); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -486,7 +489,12 @@ func (s *Server) serveHost(conn net.Conn, request requestFrame, message []byte) 
 			if frame.Member == "" {
 				continue
 			}
-			if err := s.revoke(frame.Member); err != nil {
+			// A revoke without an expiry is kept as long as any certificate could still last.
+			expires := frame.Expires
+			if expires == 0 {
+				expires = time.Now().Add(certMaxLifetime).Unix()
+			}
+			if err := s.revoke(frame.Member, expires); err != nil {
 				log.Printf("uterm-relay: saving revocation: %v", err)
 				continue
 			}

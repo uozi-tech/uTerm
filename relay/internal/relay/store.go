@@ -21,8 +21,9 @@ import (
 	"time"
 )
 
-// revocationLimit bounds revoked.json. Past it the oldest entries go: a key revoked that long ago
-// has long been replaced, and only a host can add entries, so the list can't be flooded by strangers.
+// revocationLimit bounds revoked.json. Entries leave on their own when the revoked certificate expires
+// (at most certMaxLifetime ahead), so this is only reached by thousands of revocations inside that
+// window. Past it the entry closest to expiring goes. Only a host can add entries.
 const revocationLimit = 4096
 
 // ClientConfig is the file devices import. It holds the member private key.
@@ -107,6 +108,7 @@ func OpenStore(dir, name string) (*Store, error) {
 		if err := json.Unmarshal(data, &store.revoked); err != nil {
 			return nil, fmt.Errorf("revoked.json: %w", err)
 		}
+		store.pruneRevokedLocked(time.Now().Unix())
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
@@ -281,31 +283,37 @@ func (s *Store) saveHostsLocked() error {
 	return writeAtomic(s.hostsPath(), body, 0o644)
 }
 
-// Revoke withdraws a member key that a certificate let in. Already-revoked keys keep their first time.
-func (s *Store) Revoke(member string) error {
+// Revoke withdraws a member key that a certificate let in, until its certificate expires (Unix seconds).
+// Revoking again keeps the later expiry: a host may have renewed the certificate in between.
+func (s *Store) Revoke(member string, expires int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.revoked[member]; ok {
+	now := time.Now().Unix()
+	s.pruneRevokedLocked(now)
+	if expires <= now {
+		// Already expired: the certificate can't be used anyway.
 		return nil
 	}
-	s.revoked[member] = time.Now().Unix()
+	if current, ok := s.revoked[member]; ok && current >= expires {
+		return nil
+	}
+	s.revoked[member] = expires
 	if len(s.revoked) > revocationLimit {
 		type entry struct {
-			key  string
-			when int64
+			key     string
+			expires int64
 		}
 		entries := make([]entry, 0, len(s.revoked))
 		for key, when := range s.revoked {
 			entries = append(entries, entry{key, when})
 		}
-		// The one just added always survives: entries from the same second would otherwise sort by key,
-		// and a fresh revocation could be dropped the moment it was made.
+		// The one just added always survives; of the rest, the closest to expiring goes first.
 		sort.Slice(entries, func(i, j int) bool {
 			if (entries[i].key == member) != (entries[j].key == member) {
 				return entries[j].key == member
 			}
-			if entries[i].when != entries[j].when {
-				return entries[i].when < entries[j].when
+			if entries[i].expires != entries[j].expires {
+				return entries[i].expires < entries[j].expires
 			}
 			return entries[i].key < entries[j].key
 		})
@@ -316,12 +324,23 @@ func (s *Store) Revoke(member string) error {
 	return s.saveRevokedLocked()
 }
 
+// pruneRevokedLocked drops revocations whose certificate has expired: the relay refuses it anyway.
+// revoked.json from 1.2.x stored revocation times rather than expiries, so those entries go at once,
+// which is right: 1.2.x certificates carry no expiry and are no longer accepted at all.
+func (s *Store) pruneRevokedLocked(now int64) {
+	for key, expires := range s.revoked {
+		if expires <= now {
+			delete(s.revoked, key)
+		}
+	}
+}
+
 // IsRevoked reports whether a host withdrew this member key.
 func (s *Store) IsRevoked(member string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.revoked[member]
-	return ok
+	expires, ok := s.revoked[member]
+	return ok && expires > time.Now().Unix()
 }
 
 func (s *Store) saveRevokedLocked() error {

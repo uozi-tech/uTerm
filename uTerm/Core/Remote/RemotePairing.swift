@@ -45,8 +45,8 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     }
 
     /// `uterm://pair?v=1&d=<设备 ID>&n=<名字>&k=<公钥>&t=<令牌>`，二进制用 base64url。带中继时再加
-    /// `rn` / `rh` / `rp` / `ri` / `rk`（名字、地址、端口、中继 ID、成员密钥），成员证书再加 `rs` / `rc`
-    /// （能连的主机、证书）。版本号不变：老版本不认这几个键，照样能在局域网里配对。
+    /// `rn` / `rh` / `rp` / `ri` / `rk`（名字、地址、端口、中继 ID、成员密钥），成员证书再加 `rs` / `rc` / `re`
+    /// （能连的主机、证书、到期时间）。版本号不变：老版本不认这几个键，照样能在局域网里配对。
     var url: URL {
         var components = URLComponents()
         components.scheme = Self.scheme
@@ -68,6 +68,7 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
             ]
             if let scope = relay.scope, let cert = relay.cert.flatMap({ Data(base64Encoded: $0) }) {
                 items += [URLQueryItem(name: "rs", value: scope), URLQueryItem(name: "rc", value: cert.base64URLEncoded)]
+                if let expires = relay.expires { items.append(URLQueryItem(name: "re", value: String(expires))) }
             }
         }
         components.queryItems = items
@@ -95,7 +96,8 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
               let key = items["rk"].flatMap(Data.init(base64URLEncoded:)) else { return nil }
         let config = RemoteRelayConfig(name: items["rn"] ?? host, host: host, port: port, relayID: relayID,
                                        key: key.base64EncodedString(), scope: items["rs"],
-                                       cert: items["rc"].flatMap(Data.init(base64URLEncoded:))?.base64EncodedString())
+                                       cert: items["rc"].flatMap(Data.init(base64URLEncoded:))?.base64EncodedString(),
+                                       expires: items["re"].flatMap(Int64.init))
         return config.isValid ? config : nil
     }
 

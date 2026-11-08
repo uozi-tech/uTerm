@@ -373,7 +373,9 @@ final class RemoteHostServer {
         let key = try identity.localIdentity().publicKey.rawRepresentation
         cancelPairingInvitation()
         // 开着公网接入（已注册到中继）才带上中继：否则对方拿着它也找不到这台 Mac。
-        let relay = relayLink.flatMap { sharedRelay(from: $0.config) }
+        let relay = relayLink.flatMap {
+            sharedRelay(from: $0.config, lifetime: RemoteRelayConfig.invitationCertificateLifetime)
+        }
         invitationGrant = relay?.isCertificate == true ? relay : nil
         let invitation = RemotePairingInvitation(macID: localID, macName: localName, macKey: key,
                                                  token: RemotePairingInvitation.newToken(), relay: relay)
@@ -413,29 +415,35 @@ final class RemoteHostServer {
 
     // MARK: - 中继成员证书
 
-    /// 交给别人的中继：中继认证书（1.2.0 起）时是只能连本机的证书，老中继上是共用的成员密钥，还不知道中继版本
-    /// （没注册上）时不给。
-    private func sharedRelay(from root: RemoteRelayConfig, peer: inout RemotePeer?) -> RemoteRelayConfig? {
+    /// 交给别人的中继：中继认证书（1.3.0 起）时是只能连本机、有到期时间的证书，老中继上是共用的成员密钥，
+    /// 还不知道中继版本（没注册上）时不给。
+    ///
+    /// 同一台设备复用上次那张；剩不到 `certificateRenewWithin` 就续（同一把钥匙、新的到期时间）。设备每次连上来
+    /// 主机都会把它交过去，所以正常用着的设备感觉不到续期。邀请里那张只给 `lifetime`（1 天），配上后第一次
+    /// 连上来就续成 90 天。
+    private func sharedRelay(from root: RemoteRelayConfig, peer: inout RemotePeer?,
+                             lifetime: TimeInterval = RemoteRelayConfig.certificateLifetime) -> RemoteRelayConfig? {
         guard !root.isCertificate,
               let supported = RemoteRelayVersion.supportsMemberCertificates(relayUpdates.runningVersion) else { return nil }
         guard supported else { return root }
         if var grant = peer?.relayGrant, grant.relayID == root.relayID {
-            // 同一台设备复用上次发的证书；中继改了地址或名字就跟着改。
+            if grant.needsRenewal(), let renewed = try? grant.renewed(by: root) { grant = renewed }
+            // 中继改了地址或名字就跟着改。
             grant.name = root.name
             grant.host = root.host
             grant.port = root.port
             peer?.relayGrant = grant
             return grant
         }
-        guard let grant = try? root.certificate(for: localID) else { return nil }
+        guard let grant = try? root.certificate(for: localID, lifetime: lifetime) else { return nil }
         if let old = peer?.relayGrant { revokeRelayGrant(old) }
         peer?.relayGrant = grant
         return grant
     }
 
-    private func sharedRelay(from root: RemoteRelayConfig) -> RemoteRelayConfig? {
+    private func sharedRelay(from root: RemoteRelayConfig, lifetime: TimeInterval) -> RemoteRelayConfig? {
         var none: RemotePeer?
-        return sharedRelay(from: root, peer: &none)
+        return sharedRelay(from: root, peer: &none, lifetime: lifetime)
     }
 
     /// 交给这台配对过的设备的中继配置（见 `sharedRelay`）。第一次给它发证书时记到它名下。
@@ -450,7 +458,7 @@ final class RemoteHostServer {
     /// 吊销一张发出去的证书：先记下，注册在那台中继上时立刻发，否则下次注册上再补。
     func revokeRelayGrant(_ grant: RemoteRelayConfig) {
         guard let member = grant.memberPublicKey else { return }
-        relayRevocations.add(member, relayID: grant.relayID)
+        relayRevocations.add(member, relayID: grant.relayID, expires: grant.expires)
         relayLink?.sendRevocations()
     }
 

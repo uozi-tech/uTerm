@@ -18,15 +18,18 @@ nonisolated struct RemoteRelayRequest: Encodable, Sendable {
     var ticket: String?
     var sig: String?
     var hostSig: String?
-    /// 用成员证书认证时：自己的成员公钥、证书、能连的主机。中继 1.2.0 之前不认，证书在老中继上用不了。
+    /// 用成员证书认证时：自己的成员公钥、证书、能连的主机、到期时间。中继 1.3.0 之前不认。
     var member: String?
     var cert: String?
     var scope: String?
+    var exp: Int64?
 
     /// 成员身份的请求（`client` / `dial`）：用配置里的成员私钥签，持证书时一并带上证书。
     static func member(role: String, config: RemoteRelayConfig, nonce: String, parameter: String = "",
                        hostID: String? = nil, session: String? = nil) throws -> RemoteRelayRequest {
         guard let key = config.memberKey else { throw RemoteRelayError.notConfigured }
+        // 过期的证书中继只会一言不发地断开；本地先拦下，说清楚怎么续。
+        guard !config.isExpired() else { throw RemoteRelayError.certificateExpired }
         var request = RemoteRelayRequest(
             role: role, hostID: hostID, session: session,
             sig: try RemoteRelaySignature.sign(key, role: role, relayID: config.relayID, nonce: nonce,
@@ -35,6 +38,7 @@ nonisolated struct RemoteRelayRequest: Encodable, Sendable {
             request.member = config.memberPublicKey
             request.cert = config.cert
             request.scope = config.scope
+            request.exp = config.expires
         }
         return request
     }
@@ -58,6 +62,8 @@ nonisolated struct RemoteRelayMessage: Codable, Sendable {
     var hosts: [String]?
     /// `revoke` / `revoked`：吊销的成员公钥。
     var member: String?
+    /// `revoke`：那张证书的到期时间（Unix 秒）。中继记到那时为止。
+    var exp: Int64?
 
     init(type: String, session: String? = nil, from: String? = nil, to: String? = nil, box: String? = nil) {
         self.type = type
@@ -84,6 +90,8 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
     case notAllowed
     /// 手机这边的配置缺东西（还没导入中继、不知道 Mac 的公钥）。
     case notConfigured
+    /// 那台 Mac 发的成员证书过期了（设备太久没连过它）。
+    case certificateExpired
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +104,8 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
         case .macOffline: return "Mac 不在线。它可能已睡眠，或者没有打开「允许经公网接入」"
         case .notAllowed: return "这台设备还不能经公网连接。在 Mac 的「设置 › 远程控制」里的「允许经公网连接的设备」中勾选它"
         case .notConfigured: return "还没有配置中继"
+        case .certificateExpired:
+            return "这台 Mac 给的中继授权已过期（很久没连过它）。在同一网络里连一次这台 Mac，或重新扫码配对，就会自动续上"
         }
     }
 

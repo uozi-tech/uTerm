@@ -37,10 +37,14 @@ final class RemoteRelayCertificateTests: XCTestCase {
         let member = try XCTUnwrap(certificate.memberPublicKey)
         let signature = try P256.Signing.ECDSASignature(derRepresentation: try XCTUnwrap(
             Data(base64Encoded: try XCTUnwrap(certificate.cert))))
-        let message = RemoteRelayConfig.certificateMessage(relayID: root.relayID, member: member, scope: host.uuidString)
+        let expires = try XCTUnwrap(certificate.expires)
+        let message = RemoteRelayConfig.certificateMessage(relayID: root.relayID, member: member, scope: host.uuidString,
+                                                           expires: expires)
         XCTAssertTrue(rootKey.publicKey.isValidSignature(signature, for: message))
         XCTAssertEqual(String(decoding: message, as: UTF8.self),
-                       "uterm-relay-member-v1\n6f1c00aa\n\(member)\n\(host.uuidString)")
+                       "uterm-relay-member-v2\n6f1c00aa\n\(member)\n\(host.uuidString)\n\(expires)")
+        XCTAssertEqual(TimeInterval(expires), Date().timeIntervalSince1970 + RemoteRelayConfig.certificateLifetime,
+                       accuracy: 5, "90 天后到期")
 
         XCTAssertThrowsError(try certificate.certificate(for: host), "证书不能再签证书")
         XCTAssertNotEqual(try root.certificate(for: host).key, certificate.key, "每次一把新钥匙")
@@ -159,25 +163,40 @@ final class RemoteRelayCertificateTests: XCTestCase {
         XCTAssertNil(RemoteRelayVersion.supportsMemberCertificates(nil))
         XCTAssertNil(RemoteRelayVersion.supportsMemberCertificates("dev"))
         XCTAssertEqual(RemoteRelayVersion.supportsMemberCertificates("1.1.1"), false)
-        XCTAssertEqual(RemoteRelayVersion.supportsMemberCertificates("1.2.0"), true)
+        XCTAssertEqual(RemoteRelayVersion.supportsMemberCertificates("1.2.0"), false, "1.2.x 的证书没有到期时间，不再发")
+        XCTAssertEqual(RemoteRelayVersion.supportsMemberCertificates("1.3.0"), true)
         XCTAssertEqual(RemoteRelayVersion.supportsMemberCertificates("1.10"), true)
     }
 
     func testRevocationQueueKeepsUntilConfirmed() {
+        let later = Int64(Date().timeIntervalSince1970) + 86_400
         let queue = RemoteRelayRevocations(defaults: defaults)
-        queue.add("a", relayID: "r1")
-        queue.add("a", relayID: "r1")
-        queue.add("b", relayID: "r1")
-        queue.add("c", relayID: "r2")
-        XCTAssertEqual(queue.pending(relayID: "r1"), ["a", "b"])
+        queue.add("a", relayID: "r1", expires: later)
+        queue.add("a", relayID: "r1", expires: later - 100)
+        queue.add("b", relayID: "r1", expires: nil)
+        queue.add("c", relayID: "r2", expires: later)
+        XCTAssertEqual(queue.pending(relayID: "r1").map(\.member), ["a", "b"])
+        XCTAssertEqual(queue.pending(relayID: "r1").first?.expires, later, "续过期的证书按更晚的到期时间吊销")
+        XCTAssertNil(queue.pending(relayID: "r1").last?.expires, "1.2.x 的证书没有到期时间，中继按最长记")
         queue.confirm("a", relayID: "r1")
         queue.confirm("zzz", relayID: "r1")
-        XCTAssertEqual(RemoteRelayRevocations(defaults: defaults).pending(relayID: "r1"), ["b"], "存下来，重启后还在")
+        XCTAssertEqual(RemoteRelayRevocations(defaults: defaults).pending(relayID: "r1").map(\.member), ["b"],
+                       "存下来，重启后还在")
         queue.confirm("c", relayID: "r2")
         XCTAssertEqual(queue.pending(relayID: "r2"), [])
-        for index in 0..<(RemoteRelayRevocations.limit + 3) { queue.add("m\(index)", relayID: "r3") }
-        XCTAssertEqual(queue.pending(relayID: "r3").count, RemoteRelayRevocations.limit)
-        XCTAssertEqual(queue.pending(relayID: "r3").last, "m\(RemoteRelayRevocations.limit + 2)")
+        for index in 0..<(RemoteRelayRevocations.limit + 3) {
+            queue.add(String(format: "m%05d", index), relayID: "r3", expires: later + Int64(index))
+        }
+        let kept = queue.pending(relayID: "r3")
+        XCTAssertEqual(kept.count, RemoteRelayRevocations.limit)
+        XCTAssertFalse(kept.contains { $0.member == "m00000" }, "满了丢最快到期的")
+        XCTAssertTrue(kept.contains { $0.member == String(format: "m%05d", RemoteRelayRevocations.limit + 2) })
+
+        // 证书过期了就不用再发。
+        var clock = RemoteRelayRevocations(defaults: defaults)
+        clock.now = { Date(timeIntervalSince1970: TimeInterval(later + 10_000)) }
+        XCTAssertEqual(clock.pending(relayID: "r1").map(\.member), ["b"], "没有到期时间的留着")
+        XCTAssertEqual(clock.pending(relayID: "r3"), [], "全过期了")
     }
 
     /// 主控端导入证书（链接、扫码、主机发来）：记到发证的那台 Mac 名下，不当默认；没配对那台就导入不了。
@@ -201,6 +220,77 @@ final class RemoteRelayCertificateTests: XCTestCase {
         XCTAssertEqual(identity.peer(id: mac.id)?.relay, certificate, "有成员密钥时新证书不覆盖")
     }
 
+    // MARK: - 有效期
+
+    func testRenewalKeepsTheKeyAndPushesTheExpiryOut() throws {
+        let issued = Date(timeIntervalSince1970: 1_800_000_000)
+        let certificate = try root.certificate(for: UUID(), now: issued)
+        XCTAssertFalse(certificate.needsRenewal(now: issued + 29 * 86_400), "前 30 天不续")
+        XCTAssertTrue(certificate.needsRenewal(now: issued + 31 * 86_400), "剩不到 60 天就续")
+        XCTAssertFalse(certificate.isExpired(now: issued + 89 * 86_400))
+        XCTAssertTrue(certificate.isExpired(now: issued + 90 * 86_400))
+
+        let renewed = try certificate.renewed(by: root, now: issued + 31 * 86_400)
+        XCTAssertEqual(renewed.key, certificate.key, "同一把钥匙：吊销仍认同一个公钥")
+        XCTAssertEqual(renewed.scope, certificate.scope)
+        XCTAssertEqual(renewed.expires, Int64(issued.timeIntervalSince1970) + 121 * 86_400)
+        XCTAssertNotEqual(renewed.cert, certificate.cert)
+        XCTAssertTrue(renewed.sameMember(as: certificate))
+        XCTAssertThrowsError(try certificate.renewed(by: certificate), "只有中继本身的成员密钥能续")
+
+        var legacy = certificate
+        legacy.expires = nil
+        XCTAssertTrue(legacy.isValid, "1.2.x 发的证书读得回来")
+        XCTAssertTrue(legacy.needsRenewal(), "没有到期时间：马上续")
+        XCTAssertFalse(legacy.isExpired())
+
+        var rootWithExpiry = root
+        rootWithExpiry.expires = 1
+        XCTAssertFalse(rootWithExpiry.isValid, "只有证书有到期时间")
+    }
+
+    func testExpiryRoundTripsThroughFileQRAndInvitation() throws {
+        let certificate = try root.certificate(for: UUID())
+        XCTAssertEqual(RemoteRelayConfig(importing: try JSONEncoder().encode(certificate))?.expires, certificate.expires)
+        XCTAssertEqual(RemoteRelayConfig(scanned: try XCTUnwrap(certificate.url).absoluteString)?.expires,
+                       certificate.expires)
+        let invitation = RemotePairingInvitation(macID: UUID(), macName: "Mac", macKey: Data(repeating: 1, count: 32),
+                                                 token: RemotePairingInvitation.newToken(), relay: certificate)
+        XCTAssertEqual(RemotePairingInvitation(scanned: invitation.url.absoluteString)?.relay, certificate)
+    }
+
+    func testExpiredCertificateFailsLocallyWithAWayOut() throws {
+        let expired = try root.certificate(for: UUID(), lifetime: -60)
+        XCTAssertThrowsError(try RemoteRelayRequest.member(role: "client", config: expired, nonce: "bm9uY2U=")) { error in
+            XCTAssertEqual(error as? RemoteRelayError, .certificateExpired)
+            XCTAssertTrue(error.localizedDescription.contains("重新扫码"), error.localizedDescription)
+        }
+        let request = try RemoteRelayRequest.member(role: "client", config: try root.certificate(for: UUID()),
+                                                    nonce: "bm9uY2U=")
+        XCTAssertNotNil(request.exp, "请求带上到期时间，中继按它验签")
+    }
+
+    func testHostRenewsAnAgingGrantWhenTheDeviceComesBack() throws {
+        let (server, identity, peer) = try makeServer(version: "1.3.0")
+        let first = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
+        // 拨回 50 天前发的：只剩 40 天。
+        var aging = try XCTUnwrap(identity.peer(id: peer.id))
+        aging.relayGrant = try first.renewed(by: root, now: Date() - 50 * 86_400)
+        try identity.trust(aging)
+        let renewed = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
+        XCTAssertEqual(renewed.key, first.key)
+        XCTAssertEqual(TimeInterval(try XCTUnwrap(renewed.expires)),
+                       Date().timeIntervalSince1970 + RemoteRelayConfig.certificateLifetime, accuracy: 5)
+        XCTAssertEqual(identity.peer(id: peer.id)?.relayGrant, renewed, "续过的记下来，吊销按新的到期时间")
+        XCTAssertEqual(server.relayConfig(forPeer: peer.id), renewed, "刚续过的不再续")
+
+        // 1.2.x 时代发的（没有到期时间）也续成新的。
+        var legacy = try XCTUnwrap(identity.peer(id: peer.id))
+        legacy.relayGrant?.expires = nil
+        try identity.trust(legacy)
+        XCTAssertNotNil(server.relayConfig(forPeer: peer.id)?.expires)
+    }
+
     // MARK: - 被控端怎么发
 
     private func makeServer(version: String?) throws -> (RemoteHostServer, RemoteIdentityStore, RemotePeer) {
@@ -217,7 +307,7 @@ final class RemoteRelayCertificateTests: XCTestCase {
     }
 
     func testHostGivesEachDeviceItsOwnCertificateAndRevokesItOnForget() throws {
-        let (server, identity, peer) = try makeServer(version: "1.2.0")
+        let (server, identity, peer) = try makeServer(version: "1.3.0")
         let first = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
         XCTAssertEqual(first.scope, server.localID.uuidString)
         XCTAssertEqual(identity.peer(id: peer.id)?.relayGrant, first, "记到这台设备名下")
@@ -231,19 +321,23 @@ final class RemoteRelayCertificateTests: XCTestCase {
         XCTAssertEqual(followed.host, "relay2.example.com")
 
         server.revoke(peer.id)
-        XCTAssertEqual(server.relayRevocations.pending(relayID: root.relayID), [try XCTUnwrap(first.memberPublicKey)])
+        XCTAssertEqual(server.relayRevocations.pending(relayID: root.relayID),
+                       [.init(member: try XCTUnwrap(first.memberPublicKey), expires: first.expires)])
         XCTAssertNil(server.relayConfig(forPeer: peer.id), "忘记了就什么都不给")
     }
 
     func testOldRelayGetsTheSharedKeyAndUnknownGetsNothing() throws {
         let (old, _, oldPeer) = try makeServer(version: "1.1.1")
         XCTAssertEqual(old.relayConfig(forPeer: oldPeer.id), root, "老中继不认证书，照旧发成员密钥")
+        let (noExpiry, _, noExpiryPeer) = try makeServer(version: "1.2.0")
+        XCTAssertEqual(noExpiry.relayConfig(forPeer: noExpiryPeer.id), root,
+                       "1.2.x 只认没有到期时间的证书：这一版不再发那种证书，照旧发成员密钥")
         let (unknown, _, unknownPeer) = try makeServer(version: nil)
         XCTAssertNil(unknown.relayConfig(forPeer: unknownPeer.id), "还不知道中继版本时不发，注册上再发")
     }
 
     func testUnusedInvitationCertificateIsRevokedWhenReplaced() throws {
-        let (server, _, _) = try makeServer(version: "1.2.0")
+        let (server, _, _) = try makeServer(version: "1.3.0")
         // 没有中继注册：邀请不带中继，也就没有要吊销的。
         XCTAssertNil(try server.makePairingInvitation().relay)
         server.cancelPairingInvitation()

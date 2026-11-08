@@ -184,9 +184,10 @@ final class RemoteRelayHostLink {
         let pending = server.relayRevocations.pending(relayID: config.relayID)
         guard !pending.isEmpty else { return }
         Task {
-            for member in pending {
+            for revocation in pending {
                 var message = RemoteRelayMessage(type: "revoke")
-                message.member = member
+                message.member = revocation.member
+                message.exp = revocation.expires
                 try? await control.send(message)
             }
         }
