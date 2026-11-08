@@ -130,6 +130,8 @@ final class RemotePowerTests: XCTestCase {
     func testPollingPausesInBackgroundAndResumesInForeground() async throws {
         let counter = Counter()
         let directory = try directory(interval: .milliseconds(50), counter: counter)
+        // 前后台通知由 iOS 的生命周期桥接转给目录（目录本身两端共享，不认 UIApplication）。
+        directory.lifecycle = RemoteMacDirectoryLifecycle(directory: directory)
         XCTAssertTrue(directory.importRelayConfig(relay))
         let watcher = Task { await directory.keepLiveStatusFresh() }
         defer { watcher.cancel() }
