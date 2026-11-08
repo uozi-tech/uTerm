@@ -22,13 +22,13 @@ final class RemoteDesktopAudioEndToEndTests: XCTestCase {
         async throws -> (RemoteHostServer, FakeDesktopMac, RemoteMacClient) {
         let mac = FakeDesktopMac()
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
-                                      identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
                                       localFeatures: features, desktopEnvironment: mac.environment())
         server.start()
         let ready = await waitUntil { server.port != nil }
         XCTAssertTrue(ready, "服务端没起来：\(server.status)")
-        let phoneIdentity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let phoneIdentity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         try server.trust(RemotePeer(id: RemoteLocalDevice.id(), name: "测试 iPhone",
                                     publicKey: try phoneIdentity.localIdentity().publicKey.rawRepresentation,
                                     pairedAt: Date()))
