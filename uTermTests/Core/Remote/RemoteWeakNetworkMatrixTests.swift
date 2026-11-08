@@ -426,17 +426,23 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         dead.lossRate = 1
         macPath.setImpairment(dead)
         phonePath.setImpairment(dead)
-        if notifies { client.networkChanged(isSatisfied: true) }
+        // 系统报网络变了总在接口换完之后：晚 1 s 再通知，这时已经收不到旧路径上还在路上的包
+        // （立刻通知的话，那些包会被当成「探测有回音」）。
+        var notified = !notifies
 
         var detected: Double?
         var reconnected: Double?
         var firstFrame: Double?
-        let audioBefore = streaming.session.audioReceiver.snapshot()
+        var audioAtResume: RemoteAudioReceiver.Snapshot?
         let limit: Double = 60
         var settledAt: Double?
         while true {
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - breakAt) / 1e9
             if elapsed > limit { break }
+            if !notified, elapsed >= 1 {
+                client.networkChanged(isSatisfied: true)
+                notified = true
+            }
             if detected == nil, client.state != .connected { detected = elapsed * 1000 }
             if detected != nil, reconnected == nil, client.state == .connected, client.path == .relay {
                 reconnected = elapsed * 1000
@@ -445,6 +451,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                reconnected != nil {
                 firstFrame = Double(frame - breakAt) / 1e6
                 settledAt = elapsed
+                audioAtResume = streaming.session.audioReceiver.snapshot()
             }
             driver.drive(mac)
             streaming.puller.set(streaming.output.pull)
@@ -456,7 +463,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         XCTAssertNotNil(firstFrame, "60 s 内应该回落到中继并恢复画面")
 
         var row = SwitchRow(name: notifies ? "网络切换（系统通知）" : "直连静默中断",
-                            summary: notifies ? "直连断 + networkChanged → 中继 TCP" : "直连包全丢、无通知 → 中继 TCP")
+                            summary: notifies ? "直连包全丢，1 s 后系统报网络变了 → 中继 TCP" : "直连包全丢、无通知 → 中继 TCP")
         row.detectMillis = detected
         row.reconnectMillis = reconnected
         row.firstFrameMillis = firstFrame
@@ -465,8 +472,11 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
             row.afterRecovery = VideoReadout(frames: streaming.frames.all, start: resumed, end: end,
                                              samples: [], stats: rig.server.desktopStats?.snapshot())
         }
-        row.audio = AudioReadout(before: audioBefore, after: audioAfter, buffered: [],
-                                 oneWayMillis: profile.meanOneWayMillis)
+        // 重连后声音是新的一路流，计数从头算：只比恢复之后的这一段。
+        if let audioAtResume, audioAtResume.stream == audioAfter.stream {
+            row.audio = AudioReadout(before: audioAtResume, after: audioAfter, buffered: [],
+                                     oneWayMillis: profile.meanOneWayMillis)
+        }
         Self.report.add(row)
         print("[弱网矩阵] \(row.consoleLine)")
     }
@@ -488,7 +498,6 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
 
     nonisolated enum DialVariant: String, CaseIterable, Sendable {
         case punched = "打洞成功 → 直连"
-        case punchFails = "打洞不通 → 中继"
         case macNoDirect = "Mac 不给直连 → 中继"
         case relayOnly = "不打洞，直接中继"
     }
@@ -518,7 +527,6 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                     let relay = RemoteRelayClient(config: phoneConfig)
                     var dialer = RemotePathDialer(relay: relay, identity: mac.phoneIdentity, localID: mac.phoneID,
                                                   allowsDirect: variant != .relayOnly)
-                    dialer.publicOnly = variant == .punchFails
                     let peer = mac.peer
                     let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                                  identity: mac.phoneIdentity, expectedPeer: peer)
@@ -770,7 +778,7 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 for row in rows {
                     let v = row.video
                     let a = row.audio
-                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.transport.rawValue) | \(ms(row.connectMillis)) | \(ms(row.firstFrameMillis)) | "
+                    out.append("| \(row.profile.name)<br><sub>\(row.profile.summary)</sub> | \(row.transport.rawValue) | \(ms(row.connectMillis)) | \(row.firstFrameMillis.map { ms($0) } ?? "> 20 s") | "
                                + "\(v?.stalls ?? 0) / \(f1(v?.stallSeconds)) s / \(f2(v?.longestGap)) s | \(f1(v?.fps)) | "
                                + "\(f1(v?.targetStart)) → \(f1(v?.targetMin)) → \(f1(v?.targetEnd)) Mbps | \(f1(v?.sentMbps)) Mbps | "
                                + "\(ms(v?.roundTripP50)) / \(ms(v?.roundTripP95)) | \(v?.keyframes ?? 0) / \(v?.lostFrames ?? 0) | "
@@ -805,18 +813,21 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 out.append("")
                 out.append("时间都从断开那一刻算起。")
                 out.append("")
-                out.append("| 场景 | 察觉断开 | 连回（中继） | 画面恢复 | 恢复后 10 s 卡顿 | 恢复后帧率 | 声音欠载 / 补洞（断开起） |")
+                out.append("| 场景 | 察觉断开 | 连回（中继） | 画面恢复 | 恢复后 10 s 卡顿 | 恢复后帧率 | 恢复后声音欠载 / 补洞 |")
                 out.append("|---|---|---|---|---|---|---|")
                 for row in switches {
                     let v = row.afterRecovery
                     out.append("| \(row.name)<br><sub>\(row.summary)</sub> | \(ms(row.detectMillis)) | \(ms(row.reconnectMillis)) | "
                                + "\(ms(row.firstFrameMillis)) | \(v?.stalls ?? 0) 次 / \(f1(v?.stallSeconds)) s | \(f1(v?.fps)) | "
-                               + "\(row.audio?.underruns ?? 0) / \(row.audio?.concealed ?? 0) |")
+                               + (row.audio.map { "\($0.underruns) / \($0.concealed)" } ?? "（声音没恢复）") + " |")
                 }
             }
             if !connects.isEmpty {
                 out.append("")
                 out.append("### 建连耗时（经真实中继 1.3.0，手机到中继一段加差网络，各 3 次）")
+                out.append("")
+                out.append("「打洞不通 → 中继」在本机测不出（两端都在回环上，打洞总能通）：它比「Mac 不给直连」多出等打洞的时间，"
+                           + "上限是 `RemoteDirectAttempt.connectLimit`（\(RemoteDirectAttempt.connectLimit)）。")
                 out.append("")
                 out.append("| 档位 | 方式 | 中位数 | 3 次 | 实际路径 |")
                 out.append("|---|---|---|---|---|")
