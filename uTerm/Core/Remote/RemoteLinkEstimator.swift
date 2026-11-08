@@ -67,7 +67,9 @@ nonisolated struct RemoteLinkState: Equatable, Sendable {
 /// 瓶颈把多出来的包全丢掉，重传反而占掉带宽。发出去的也不能比实际送达的快太多，送不到的再发也没用。
 nonisolated struct RemoteLinkEstimator {
     struct Config: Equatable {
-        var minRate: Double = 125_000
+        /// 250 kbps。以前 1 Mbps：带宽掉到 1 Mbps（3G 只有 750 kbps）时节奏退不到链路以下，媒体加纠错加重传一直
+        /// 超载，瓶颈把控制消息一起丢掉。
+        var minRate: Double = 31_250
         var maxRate: Double = 125_000_000
         var initialRate: Double = 1_000_000
         var growth: Double = 1.25
