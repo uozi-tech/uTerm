@@ -11,6 +11,8 @@ import ScreenCaptureKit
 ///   `RemoteFrameScaler` 用 Lanczos 缩到视频尺寸并转 4:2:0（SCK 自己缩非整数倍会让字发软、滚动时闪烁）。
 ///   采集尺寸正好等于视频尺寸时 SCK 直接出 4:2:0，零拷贝。
 /// - 屏幕静止时 SCK 只出 `idle` 状态的帧，这里不交出去 → 不编码不发送，空闲带宽≈0。
+/// - 一直只有一小块在变时把采集降到 30 fps，大面积变化立刻回满帧（`RemoteCaptureRateGovernor`，看每帧的
+///   `dirtyRects`）。编码器的期望帧率由发送端按实际到达间隔自己跟上，这里不管。
 /// - `showsCursor = false`：光标位置单独发，手机本地画（光标移动不触发编码）。
 /// - 只在有人看的时候存在：桌面流结束即 `stopCapture`，不在后台空转。
 nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSource, SCStreamOutput, SCStreamDelegate,
@@ -25,6 +27,10 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
     private var stream: SCStream?
     /// 采集尺寸比视频大时才有。只在 `queue` 上用（`start` 里在开始采集之前挂上）。
     private var scaler: RemoteFrameScaler?
+    /// 以下只在 `queue` 上用：采集帧率的调速、当前配置（改帧率时整份交回 SCK）、采集尺寸。
+    private var governor: RemoteCaptureRateGovernor
+    private var configuration: SCStreamConfiguration?
+    private var captureFrameSize = CGSize.zero
     private var onFrame: (@Sendable (CVPixelBuffer, UInt64) -> Void)?
     private var onStop: (@Sendable (Error?) -> Void)?
 
@@ -34,6 +40,7 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         self.height = height
         self.tenBit = tenBit
         self.frameRate = frameRate
+        governor = RemoteCaptureRateGovernor(fullRate: frameRate)
     }
 
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
@@ -80,7 +87,12 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         configuration.scalesToFit = true
         configuration.capturesAudio = false
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-        queue.sync { self.scaler = scaler }
+        let frameSize = CGSize(width: configuration.width, height: configuration.height)
+        queue.sync {
+            self.scaler = scaler
+            self.configuration = configuration
+            self.captureFrameSize = frameSize
+        }
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         install(stream: stream, onFrame: onFrame, onStop: onStop)
         try await stream.startCapture()
@@ -115,6 +127,7 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
               SCFrameStatus(rawValue: rawStatus) == .complete,
               let captured = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let nanos = DispatchTime.now().uptimeNanoseconds
+        adjustRate(attachments.first, stream: stream, now: nanos)
         var image = captured
         if let scaler {
             // 缩好的帧来自缩放器自己的缓冲池：SCK 的这块表面用完即还，不占它的采集队列。缩失败就丢这一帧。
@@ -125,6 +138,21 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         let handler = onFrame
         lock.unlock()
         handler?(image, nanos)
+    }
+
+    /// 按这一帧的变化面积调采集帧率（在 `queue` 上）。改配置是异步的，改完前到的帧照常处理。
+    private func adjustRate(_ info: [SCStreamFrameInfo: Any]?, stream: SCStream, now: UInt64) {
+        let rects = (info?[.dirtyRects] as? [NSDictionary])?.compactMap { CGRect(dictionaryRepresentation: $0) }
+        let fraction = rects.map { RemoteCaptureRateGovernor.dirtyFraction($0, frameSize: captureFrameSize) }
+        guard let rate = governor.frame(dirtyFraction: fraction, now: now), let configuration else { return }
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(rate))
+        AppLogger.debug("远程桌面：采集帧率 → \(rate) fps", category: RemoteLog.category)
+        stream.updateConfiguration(configuration) { error in
+            if let error {
+                AppLogger.info("远程桌面：采集帧率没改成 \(rate) fps：\(error.localizedDescription)",
+                               category: RemoteLog.category)
+            }
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
