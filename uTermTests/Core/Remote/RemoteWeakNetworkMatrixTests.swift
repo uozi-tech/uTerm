@@ -94,8 +94,17 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         max(1, Int(ProcessInfo.processInfo.environment["UTERM_WEAK_NET_ROUNDS"] ?? "") ?? 3)
     }
 
+    /// 只跑一条路（`UTERM_WEAK_NET_TRANSPORT` = direct / relay），调参时省一半时间。
+    nonisolated static var transports: [Transport] {
+        switch ProcessInfo.processInfo.environment["UTERM_WEAK_NET_TRANSPORT"] {
+        case "direct": return [.direct]
+        case "relay": return [.relay]
+        default: return Transport.allCases
+        }
+    }
+
     private func runBoth(_ profile: Profile) async throws {
-        for _ in 0..<Self.rounds { for transport in Transport.allCases {
+        for _ in 0..<Self.rounds { for transport in Self.transports {
             let row = try await measure(profile, transport: transport)
             Self.report.add(row)
             print("[弱网矩阵] \(row.consoleLine)")
@@ -179,29 +188,55 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         return Trusted(server: server, phoneIdentity: phoneIdentity, phoneID: phoneID)
     }
 
-    private static func handshakeKeys() -> (mac: RemoteHandshakeKeys, phone: RemoteHandshakeKeys) {
+    private nonisolated static func handshakeKeys() -> (mac: RemoteHandshakeKeys, phone: RemoteHandshakeKeys) {
         let a = SymmetricKey(size: .bits256), b = SymmetricKey(size: .bits256)
         return (RemoteHandshakeKeys(send: b, receive: a), RemoteHandshakeKeys(send: a, receive: b))
     }
 
     /// 直连：Mac 那头已经接上的数据报通道，手机拨号就拿另一头。
+    /// 直连的一对数据报路径。每次拨号新建一对、Mac 那头接上：断线重连时和真实的重新打洞一样拿到一条新路，
+    /// 不会去复用已经关掉的那条（复用的话「恢复」永远量不出来）。
+    private final class DirectPaths: @unchecked Sendable {
+        private let lock = NSLock()
+        private var link: RemoteLinkImpairment
+        private var current: (mac: RemoteMemoryDatagramPath, phone: RemoteMemoryDatagramPath)?
+        init(link: RemoteLinkImpairment) { self.link = link }
+        func make() -> (mac: RemoteMemoryDatagramPath, phone: RemoteMemoryDatagramPath) {
+            lock.lock(); defer { lock.unlock() }
+            let pair = RemoteMemoryDatagramPath.pair(impairment: link)
+            current = pair
+            return pair
+        }
+        func setLink(_ value: RemoteLinkImpairment) {
+            lock.lock(); defer { lock.unlock() }
+            link = value
+            current?.mac.setImpairment(value)
+            current?.phone.setImpairment(value)
+        }
+    }
+
     private func makeDirectRig(link: RemoteLinkImpairment) throws -> Rig {
         let mac = FakeDesktopMac()
         mac.detail = true
         let trusted = try makeServer(desktop: mac.environment())
-        let keys = Self.handshakeKeys()
-        let (macPath, phonePath) = RemoteMemoryDatagramPath.pair(impairment: link)
-        let datagramKeys = makeDatagramKeys()
-        trusted.server.accept(transport: RemoteP2PTransport(path: macPath, keys: datagramKeys.first),
-                              origin: .internet(peerID: trusted.phoneID, keys: keys.mac, path: .direct))
+        let paths = DirectPaths(link: link)
+        let server = trusted.server
+        let phoneID = trusted.phoneID
         let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
                                      identity: trusted.phoneIdentity)
-        client.updateRoutes(endpoint: nil, internetDialer: { _ in
-            RemoteDialedPath(transport: RemoteP2PTransport(path: phonePath, keys: datagramKeys.second),
-                             handshakeKeys: keys.phone, path: .direct)
+        client.updateRoutes(endpoint: nil, internetDialer: { [weak server] _ in
+            let (macPath, phonePath) = paths.make()
+            let keys = Self.handshakeKeys()
+            let datagramKeys = makeDatagramKeys()
+            await MainActor.run {
+                server?.accept(transport: RemoteP2PTransport(path: macPath, keys: datagramKeys.first),
+                               origin: .internet(peerID: phoneID, keys: keys.mac, path: .direct))
+            }
+            return RemoteDialedPath(transport: RemoteP2PTransport(path: phonePath, keys: datagramKeys.second),
+                                    handshakeKeys: keys.phone, path: .direct)
         })
         return Rig(server: trusted.server, client: client, mac: mac,
-                   setLink: { macPath.setImpairment($0); phonePath.setImpairment($0) },
+                   setLink: { paths.setLink($0) },
                    teardown: { client.disconnect(); trusted.server.stop() })
     }
 

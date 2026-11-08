@@ -5,6 +5,7 @@
 # 用法：scripts/test-weak-network.sh [传给 xcodebuild 的其余参数...]
 #       WEAK_NET_ONLY="test_matrix_2_3g test_matrix_9_connect_through_relay" 只跑其中几条。
 #       WEAK_NET_ROUNDS=1 每格只跑一轮（默认 3 轮，表里给中位数和范围）。
+#       WEAK_NET_TRANSPORT=direct|relay 只跑一条路。
 set -euo pipefail
 
 report=${WEAK_NET_REPORT:-docs/remote-weak-network-baseline.md}
@@ -48,12 +49,15 @@ set +e
 rounds=${WEAK_NET_ROUNDS:-3}
 TEST_RUNNER_UTERM_WEAK_NET_MATRIX=1 \
 TEST_RUNNER_UTERM_WEAK_NET_ROUNDS="$rounds" \
+TEST_RUNNER_UTERM_WEAK_NET_TRANSPORT="${WEAK_NET_TRANSPORT:-}" \
 TEST_RUNNER_UTERM_RELAY_CONFIG="$("$work/uterm-relay" config)" \
 TEST_RUNNER_UTERM_RELAY_VERSION="$relay_version" \
     xcodebuild test "${only[@]}" -parallel-testing-enabled NO "$@" 2>&1 | tee "$log" | grep -E '^\[弱网矩阵\]|Test Case .*(passed|failed|skipped)|error:|\*\* TEST'
 status=${PIPESTATUS[0]}
 set -e
 load_after=$(sysctl -n vm.loadavg)
+# 完整的 xcodebuild 输出留一份在报告旁边（逐轮读数、断言失败都在里面）。
+cp "$log" "${report%.md}.log" 2>/dev/null || true
 
 table=$(awk '/<!-- weak-net-matrix:begin -->/{on=1; next} /<!-- weak-net-matrix:end -->/{on=0} on' "$log")
 if [ -z "$table" ]; then
@@ -65,7 +69,7 @@ fi
     echo
     echo "- 生成：$(date '+%Y-%m-%d %H:%M')，提交 $(git rev-parse --short HEAD)$(git diff --quiet || echo '（工作区有改动）')"
     echo "- 机器：$(sysctl -n hw.model)，$(sysctl -n machdep.cpu.brand_string)，macOS $(sw_vers -productVersion)"
-    echo "- 中继：本机 uterm-relay $relay_version；每格 ${rounds} 轮"
+    echo "- 中继：本机 uterm-relay ${relay_version}；每格 ${rounds} 轮"
     echo "- 平均负载（1/5/15 分钟）：开跑前 ${load_before}，跑完 ${load_after}"
     echo "- 重跑：\`make test-weak-network\`（用例 \`uTermTests/Core/Remote/RemoteWeakNetworkMatrixTests.swift\`）"
     echo
