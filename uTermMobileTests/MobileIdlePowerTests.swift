@@ -32,6 +32,9 @@ final class MobileIdlePowerTests: XCTestCase {
     // MARK: 源码守卫
 
     func testMobileSourcesAvoidPerpetualSwiftUIAnimationsAndTimers() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("扫的是 Mac 上的源码目录，真机读不到；在模拟器上跑")
+        #endif
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("uTermMobile")
