@@ -66,6 +66,8 @@ final class RemoteDesktopCanvasView: UIView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     private let cursorLayer = CAShapeLayer()
     private let keyInput = RemoteKeyInputView()
+    /// 量画布四角落在多大的屏幕圆角里（见 `screenCornerRadius`）。不画东西、不接触摸。
+    private let cornerProbe = UIView()
     var fitToken = 0
     var onKeyboardDismissed: (() -> Void)?
 
@@ -116,6 +118,10 @@ final class RemoteDesktopCanvasView: UIView {
         cursorLayer.shadowOffset = CGSize(width: 0, height: 1)
         layer.addSublayer(cursorLayer)
         addSubview(keyInput)
+        cornerProbe.isUserInteractionEnabled = false
+        cornerProbe.alpha = 0
+        if #available(iOS 26.0, *) { cornerProbe.cornerConfiguration = .corners(radius: .containerConcentric()) }
+        addSubview(cornerProbe)
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
@@ -176,10 +182,32 @@ final class RemoteDesktopCanvasView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         viewport.viewSize = bounds.size
+        cornerProbe.frame = bounds
+        viewport.cornerRadius = screenCornerRadius()
         viewport.clamp()
         layoutContent()
         keyInput.frame = CGRect(x: 0, y: max(0, bounds.height - 48), width: bounds.width, height: min(48, bounds.height))
     }
+
+    /// 画布四角里最大的屏幕圆角：画布铺满整屏，下面两个角（键盘条收起时）正是屏幕的物理圆角，
+    /// 「适配屏幕」要让画面四角落在弧线以内（`RemoteDesktopCornerFit`）。
+    ///
+    /// iOS 26 起用系统的同心圆角：探针视图与画布同框，`containerConcentric` 给出每个角离屏幕圆角
+    /// 还剩多大的半径（不在屏幕角上的角是 0）。在 `layoutSubviews` 里读，变了系统会再排一次版。
+    /// 更早的系统没有这个接口：画布的角贴着屏幕的角、且屏幕有 Home 条（全面屏）时按 55pt 算。
+    private func screenCornerRadius() -> CGFloat {
+        if #available(iOS 26.0, *) {
+            return cornerProbe.effectiveRadius(corner: .allCorners)
+        }
+        guard let window, window.safeAreaInsets.bottom > 0 else { return 0 }
+        let frame = convert(bounds, to: window)
+        let screen = window.bounds
+        let touchesBottom = abs(frame.maxY - screen.maxY) < 1, touchesTop = abs(frame.minY - screen.minY) < 1
+        let touchesSide = abs(frame.minX - screen.minX) < 1 || abs(frame.maxX - screen.maxX) < 1
+        return touchesSide && (touchesTop || touchesBottom) ? Self.legacyScreenCornerRadius : 0
+    }
+
+    private static let legacyScreenCornerRadius: CGFloat = 55
 
     func updateContentSize(_ size: CGSize?) {
         guard let size, size.width > 0, size.height > 0, size != viewport.contentSize else { return }

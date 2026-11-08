@@ -59,6 +59,8 @@ final class RemoteDesktopCanvasNSView: NSView {
     private var reportedCaptureFailure = false
 
     private var viewport = RemoteDesktopViewport(contentSize: CGSize(width: 16, height: 10), viewSize: .zero)
+    /// 量画布四角落在多大的窗口圆角里（见 `windowCornerRadius`）。
+    private let cornerProbe = RemoteDesktopCornerProbeView()
     private var trackingArea: NSTrackingArea?
     private var mouseInside = false
     /// 最近一次发出的指针（归一化），重复的不再发。
@@ -91,6 +93,8 @@ final class RemoteDesktopCanvasNSView: NSView {
         cursorLayer.shadowRadius = 1.5
         cursorLayer.isHidden = true
         layer?.addSublayer(cursorLayer)
+        cornerProbe.onChange = { [weak self] in self?.cornersChanged() }
+        addSubview(cornerProbe)
         attachReceiver()
         AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
         let center = NotificationCenter.default
@@ -201,10 +205,35 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     override func layout() {
         super.layout()
-        guard viewport.viewSize != bounds.size else { return }
+        cornerProbe.frame = bounds
+        let radius = windowCornerRadius()
+        guard viewport.viewSize != bounds.size || viewport.cornerRadius != radius else { return }
         viewport.viewSize = bounds.size
+        viewport.cornerRadius = radius
         applyFit()
     }
+
+    /// 进出全屏、换窗口时角会变，尺寸却不一定变。
+    private func cornersChanged() {
+        needsLayout = true
+    }
+
+    /// 画布四角里最大的窗口圆角：画布铺到窗口底边，下面两个角就是窗口的圆角，「适配屏幕」要让画面四角
+    /// 落在弧线以内（`RemoteDesktopCornerFit`），不然 Dock 两端被切掉。
+    ///
+    /// macOS 27 起用系统的同心圆角（探针视图与画布同框，全屏时也会给出屏幕自己的圆角）；
+    /// macOS 26 没有这个接口：窗口模式下画布贴着窗口底边就按 `legacyWindowCornerRadius` 算，全屏按直角。
+    private func windowCornerRadius() -> CGFloat {
+        if #available(macOS 27.0, *), let radii = cornerProbe.effectiveCornerRadii {
+            return max(radii.topLeft, radii.topRight, radii.bottomLeft, radii.bottomRight)
+        }
+        guard let window, !window.styleMask.contains(.fullScreen), let content = window.contentView else { return 0 }
+        let frame = convert(bounds, to: content)
+        let touchesBottom = content.isFlipped ? abs(frame.maxY - content.bounds.maxY) < 1 : abs(frame.minY) < 1
+        return touchesBottom ? Self.legacyWindowCornerRadius : 0
+    }
+
+    static let legacyWindowCornerRadius: CGFloat = 16
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
@@ -483,4 +512,20 @@ final class RemoteDesktopCanvasNSView: NSView {
         }
         pressedButtons.removeAll()
     }
+}
+
+/// 只用来读画布四角的同心圆角（macOS 27 起）：自己不画、不接事件，圆角变了通知画布重新适配。
+final class RemoteDesktopCornerProbeView: NSView {
+    var onChange: (() -> Void)?
+
+    @available(macOS 27.0, *)
+    override var cornerConfiguration: NSViewCornerConfiguration? { .corners(radius: .containerConcentric) }
+
+    @available(macOS 27.0, *)
+    override func viewDidChangeEffectiveCornerRadii() {
+        super.viewDidChangeEffectiveCornerRadii()
+        onChange?()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
