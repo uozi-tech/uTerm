@@ -97,4 +97,16 @@ final class ParallelRunSessionTests: XCTestCase {
             XCTAssertNotEqual(error.code, .notPermitted, "系统说不允许：还缺 Info.plist / 后台模式配置")
         }
     }
+
+    /// 系统在后台队列上调启动回调：回调不能带主线程隔离（否则一进来就崩），交给 `adopt` 时要回到主线程。
+    func testLaunchHandlerRunsOffTheMainThreadAndHandsBackToMain() async throws {
+        let adopted = expectation(description: "回到主线程交给 adopt")
+        let handler = ParallelBackgroundKeeper.launchHandler { (value: NSString) in
+            XCTAssertTrue(Thread.isMainThread)
+            XCTAssertEqual(value, "任务")
+            adopted.fulfill()
+        }
+        DispatchQueue.global(qos: .utility).async { handler("任务" as NSString) }
+        await fulfillment(of: [adopted], timeout: 5)
+    }
 }

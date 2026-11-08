@@ -443,4 +443,15 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertTrue(arrived, "\(rig.mac.injector.all)")
         XCTAssertEqual(rig.mac.injector.all, expected, "失焦时补抬起还按着的 A 键")
     }
+
+    /// 显示器重配回调由 CoreGraphics 调，不保证在主线程：不能带主线程隔离（否则一进来就崩）。
+    func test_headless_display_reconfiguration_callback_runs_off_the_main_thread() async {
+        let done = expectation(description: "后台线程上调完")
+        DispatchQueue.global(qos: .utility).async {
+            // 不含接上 / 启用的标志：回调直接返回，不去碰虚拟屏。
+            RemoteHeadlessDisplay.reconfigured(0, CGDisplayChangeSummaryFlags(rawValue: 0), nil)
+            done.fulfill()
+        }
+        await fulfillment(of: [done], timeout: 5)
+    }
 }

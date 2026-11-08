@@ -109,11 +109,15 @@ enum RemoteHeadlessDisplay {
     private static func watchReconfiguration() {
         guard !watchesReconfiguration else { return }
         watchesReconfiguration = true
-        CGDisplayRegisterReconfigurationCallback({ _, flags, _ in
-            guard flags.contains(.addFlag) || flags.contains(.enabledFlag) else { return }
-            // 回调在主线程的 run loop 上来，但不保证；拆屏放回主线程做。
-            Task { @MainActor in RemoteHeadlessDisplay.releaseIfRealDisplayAppeared() }
-        }, nil)
+        CGDisplayRegisterReconfigurationCallback(Self.reconfigured, nil)
+    }
+
+    /// 显示器配置变了（接上了真显示器）。回调在主线程的 run loop 上来，但不保证；拆屏放回主线程做。
+    /// 必须是 nonisolated：内联写在本类型（`@MainActor`）里的闭包会被推断成主线程隔离、进入时检查执行者，
+    /// 哪天系统在别的线程上调它就会崩（同远程桌面声音的播放回调，ebd13a48）。
+    nonisolated static let reconfigured: CGDisplayReconfigurationCallBack = { _, flags, _ in
+        guard flags.contains(.addFlag) || flags.contains(.enabledFlag) else { return }
+        Task { @MainActor in RemoteHeadlessDisplay.releaseIfRealDisplayAppeared() }
     }
 
     /// 主屏是 1 倍的占位屏时把它换成 2 倍的。建虚拟屏时等它成为主屏再返回（最多 3 秒）。
