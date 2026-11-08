@@ -138,21 +138,28 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(rig.mac.openedDisplays, [7, 9], "已经在看这块就不重开")
     }
 
-    /// 无显示器的 Mac：占位屏 1 倍时换成同点数的 2 倍模式；已经 2 倍、没有这种模式、或接着真显示器时不动。
-    func test_headless_placeholder_switches_to_the_matching_hidpi_mode() {
+    /// 无显示器的 Mac：1 倍占位屏有同点数 2 倍模式就换过去，没有就建 2 倍虚拟屏；接着真显示器、不止一块屏、
+    /// 已经是 2 倍时不动。
+    func test_headless_placeholder_becomes_hidpi() {
+        typealias Display = RemoteHeadlessDisplay
         typealias Mode = RemoteHeadlessDisplay.Mode
         let oneX = Mode(width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080)
         let twoX = Mode(width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160)
         let modes = [Mode(width: 1440, height: 900, pixelWidth: 2880, pixelHeight: 1800), oneX,
                      Mode(width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, usable: false), twoX]
-        XCTAssertEqual(RemoteHeadlessDisplay.hiDPIUpgrade(current: oneX, available: modes), 3)
-        XCTAssertNil(RemoteHeadlessDisplay.hiDPIUpgrade(current: twoX, available: modes), "已经是 2 倍")
-        XCTAssertNil(RemoteHeadlessDisplay.hiDPIUpgrade(current: oneX, available: [oneX]), "没有同点数的 2 倍模式")
-        let vendor = RemoteHeadlessDisplay.placeholderVendor
-        XCTAssertTrue(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: false, onlineDisplays: 1))
-        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: 0x10AC, builtin: false, onlineDisplays: 1), "真显示器")
-        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: false, onlineDisplays: 2))
-        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: true, onlineDisplays: 1))
+        func plan(vendor: UInt32 = Display.placeholderVendor, model: UInt32 = Display.placeholderModel,
+                  builtin: Bool = false, online: Int = 1, current: Mode = oneX, available: [Mode]) -> Display.Plan {
+            Display.plan(vendor: vendor, model: model, builtin: builtin, onlineDisplays: online, current: current,
+                         available: available)
+        }
+        XCTAssertEqual(plan(available: [oneX]), .createVirtual, "真实的占位屏（unkn/virt）只有 1 倍：建虚拟屏")
+        XCTAssertEqual(plan(available: modes), .switchMode(3), "带 2 倍模式就直接换")
+        XCTAssertEqual(plan(vendor: Display.rememberedVendor, model: 0x1234, available: modes), .switchMode(3))
+        XCTAssertEqual(plan(vendor: Display.rememberedVendor, model: 0x1234, available: [oneX]), .none)
+        XCTAssertEqual(plan(current: twoX, available: modes), .none, "已经是 2 倍")
+        XCTAssertEqual(plan(vendor: 0x10AC, available: [oneX]), .none, "真显示器")
+        XCTAssertEqual(plan(online: 2, available: [oneX]), .none, "不止一块屏")
+        XCTAssertEqual(plan(builtin: true, available: [oneX]), .none, "内建屏")
     }
 
     func test_old_mac_without_display_list_and_single_display_get_no_menu_data() async throws {
