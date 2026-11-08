@@ -112,18 +112,6 @@ final class RemoteProgramStatusTests: XCTestCase {
         XCTAssertEqual(book.display(for: id)?.state, .done)
     }
 
-    func test_book_results_arriving_while_watched_count_as_seen() {
-        let id = UUID()
-        var book = RemoteProgramStatusBook()
-        book.setWatched(id, true)
-        book.apply(.init(replacesAll: false, entries: [.init(sessionID: id, status: .init(record(.error)))]))
-        XCTAssertNil(book.display(for: id), "正看着这个终端时出的结果不用再提示")
-        book.setWatched(id, false)
-        book.apply(.init(replacesAll: false, entries: [.init(sessionID: id, status: .init(record(.working)))]))
-        book.apply(.init(replacesAll: false, entries: [.init(sessionID: id, status: .init(record(.done)))]))
-        XCTAssertEqual(book.display(for: id)?.state, .done, "切走之后的结果照常提示")
-    }
-
     // MARK: - 端到端
 
     private struct MacSide {
@@ -293,6 +281,70 @@ final class RemoteProgramStatusTests: XCTestCase {
         XCTAssertEqual(mac.session.programStatus?.state, .done)
     }
 
+    // MARK: - Mac 控制 Mac：到达时正看着就算看过
+
+    /// 接入一个 `RemoteTerminalPane`（Mac 控制 Mac 的标签），「用户在不在看」由测试决定。
+    private func attachedPane(_ mac: MacSide, _ client: RemoteMacClient,
+                              looking: @escaping @MainActor () -> Bool) async throws -> RemoteTerminalPane {
+        let pane = RemoteTerminalPane(id: mac.sessionID, client: client)
+        pane.session.attentionSink = { _ in }
+        pane.session.userLookingOverride = looking
+        await pane.start()
+        let attached = await waitUntil { mac.session.remoteController != nil }
+        XCTAssertTrue(attached)
+        return pane
+    }
+
+    func test_result_arriving_on_the_focused_mirror_tab_is_seen_at_once() async throws {
+        let mac = try await makeMac()
+        defer { mac.server.stop(); mac.session.dispose() }
+        let client = try await pairedClient(mac)
+        defer { client.disconnect() }
+        let pane = try await attachedPane(mac, client) { true }
+        defer { pane.dispose() }
+
+        await mac.backend.emitOutput(osc("state=working:app=codex"))
+        let working = await waitUntil { client.programStatus(for: mac.sessionID)?.state == .working }
+        XCTAssertTrue(working, "运行中照常上标签")
+        await mac.backend.emitOutput(osc("state=done:app=codex"))
+        let arrived = await waitUntil { client.programReport(for: mac.sessionID)?.state == .done }
+        XCTAssertTrue(arrived)
+        XCTAssertNil(client.programStatus(for: mac.sessionID), "正看着的标签上结果一到就算看过，不等下次获得焦点")
+        XCTAssertEqual(mac.session.programStatus?.state, .done, "那台 Mac 上没人看，仍是已完成")
+
+        await mac.backend.emitOutput(osc("state=blocked:app=codex:kind=question"))
+        let blocked = await waitUntil { client.programStatus(for: mac.sessionID)?.state == .blocked }
+        XCTAssertTrue(blocked, "卡住等人的不会因为正看着就消失")
+    }
+
+    func test_result_on_an_unfocused_mirror_tab_stays_until_it_gains_focus() async throws {
+        let mac = try await makeMac()
+        defer { mac.server.stop(); mac.session.dispose() }
+        let client = try await pairedClient(mac)
+        defer { client.disconnect() }
+        let looking = LookingFlag()
+        let pane = try await attachedPane(mac, client) { looking.value }
+
+        await mac.backend.emitOutput(osc("state=done:app=codex"))
+        let arrived = await waitUntil { client.programStatus(for: mac.sessionID)?.state == .done }
+        XCTAssertTrue(arrived)
+        try await Task.sleep(for: Self.quietWait)
+        XCTAssertEqual(client.programStatus(for: mac.sessionID)?.state, .done, "没看着的结果留在标签上")
+
+        // 获得焦点（`CopyableTerminalView.onFocusGained` → `acknowledgeProgramStatus`）。
+        looking.value = true
+        let view = try XCTUnwrap(pane.session.terminalView as? CopyableTerminalView)
+        view.hasFocus = true
+        XCTAssertNil(client.programStatus(for: mac.sessionID))
+
+        // 关了标签就不再问它：之后的结果照常留着。
+        pane.dispose()
+        await mac.backend.emitOutput(osc("state=working:app=codex"))
+        await mac.backend.emitOutput(osc("state=error:app=codex"))
+        let failed = await waitUntil { client.programStatus(for: mac.sessionID)?.state == .error }
+        XCTAssertTrue(failed)
+    }
+
     // MARK: - 原始手机
 
     /// 直接用 `RemoteLink` 说话、握手声明 `features` 的「手机」（已被 Mac 信任），订阅了会话列表。
@@ -319,6 +371,11 @@ final class RemoteProgramStatusTests: XCTestCase {
         XCTAssertTrue(listed)
         return (link, inbox)
     }
+}
+
+@MainActor
+private final class LookingFlag {
+    var value = false
 }
 
 private final class RawInbox: @unchecked Sendable {

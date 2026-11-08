@@ -144,14 +144,21 @@ final class RemoteMacClient: Identifiable {
         programStatusBook.acknowledge(sessionID)
     }
 
-    /// 此刻有没有人看着这个终端（前台标签且 App 在前台）：看着的时候结果一到就算看过。
-    func setProgramStatusWatched(_ sessionID: UUID, _ isWatched: Bool) {
-        programStatusBook.setWatched(sessionID, isWatched)
+    /// 问「用户此刻正看着这个终端吗」的入口，由显示它的标签登记（nil = 撤掉）。状态到达时问一次：
+    /// 正看着，结果一到就算看过（同本机终端在收到报告那一刻按 `isLooking` 处理）。没看着的结果留到
+    /// 标签再被看见时由它调 `acknowledgeProgramStatus`。
+    func setProgramStatusLooker(_ sessionID: UUID, _ isLooking: (@MainActor () -> Bool)?) {
+        programStatusLookers[sessionID] = isLooking
     }
 
     func receiveProgramStatus(_ update: RemoteProgramStatusUpdate) {
         programStatusBook.apply(update)
+        for entry in update.entries where programStatusLookers[entry.sessionID]?() == true {
+            programStatusBook.acknowledge(entry.sessionID)
+        }
     }
+
+    @ObservationIgnored private var programStatusLookers: [UUID: @MainActor () -> Bool] = [:]
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?

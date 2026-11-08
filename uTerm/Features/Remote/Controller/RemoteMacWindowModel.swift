@@ -27,11 +27,14 @@ final class RemoteTerminalPane: Identifiable {
     func start() async {
         guard session.connectionState != .connected, session.connectionState != .connecting else { return }
         await session.close()
+        // 状态是那台 Mac 推来的：到达时这个标签正看着，就当场算看过（同本机终端），不用等下次获得焦点。
+        client.setProgramStatusLooker(id) { [weak session] in session?.isUserLooking ?? false }
         await session.connect(using: RemoteTerminalBackend(client: client, sessionID: id))
     }
 
     /// 关标签 / 关窗口：只断开接入，那台 Mac 上的终端照常运行。
     func dispose() {
+        client.setProgramStatusLooker(id, nil)
         session.closeForDisposal()
     }
 

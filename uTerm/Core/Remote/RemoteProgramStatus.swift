@@ -48,8 +48,6 @@ nonisolated struct RemoteProgramStatusBook: Equatable, Sendable {
     private(set) var reports: [UUID: ProgramStatusRecord] = [:]
     /// 在这台设备上看过的结果（`done` / `error`）。Mac 上没人看，它那边仍是「已完成」，这里不再提示。
     private var acknowledged: [UUID: ProgramStatusRecord] = [:]
-    /// 此刻有人看着的会话：结果一到就算看过。
-    private var watched: Set<UUID> = []
 
     init() {}
 
@@ -85,19 +83,9 @@ nonisolated struct RemoteProgramStatusBook: Equatable, Sendable {
         acknowledged[sessionID] = report
     }
 
-    mutating func setWatched(_ sessionID: UUID, _ isWatched: Bool) {
-        if isWatched {
-            watched.insert(sessionID)
-            acknowledge(sessionID)
-        } else {
-            watched.remove(sessionID)
-        }
-    }
-
     private mutating func set(_ record: ProgramStatusRecord?, for sessionID: UUID) {
         reports[sessionID] = record
         // 换成了别的状态，之前看过的那个结果作废：下一次「已完成」是新的结果。
         if let seen = acknowledged[sessionID], seen != record { acknowledged[sessionID] = nil }
-        if watched.contains(sessionID) { acknowledge(sessionID) }
     }
 }

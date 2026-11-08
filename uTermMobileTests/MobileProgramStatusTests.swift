@@ -128,6 +128,37 @@ final class MobileProgramStatusTests: XCTestCase {
         controller.close()
     }
 
+    /// 远控标签：Mac 推来的结果到达时这个标签正看着，就当场算看过；没看着的留到切回来。
+    func testRemoteResultIsSeenOnArrivalOnlyWhileLooking() async throws {
+        let (c, h, relay) = try host()
+        let client = RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 9),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        let sessionID = UUID()
+        let controller = MobileTerminalController(transportFactory: .remote(client: client, sessionID: sessionID))
+        controller.isForeground = false
+        controller.start(profile: h, container: c, relay: relay)
+        _ = await MobileFakeTerminal.waitUntil { controller.state != .connecting }
+        func push(_ state: ProgramState) {
+            client.receiveProgramStatus(RemoteProgramStatusUpdate(replacesAll: false, entries: [
+                .init(sessionID: sessionID, status: RemoteProgramStatus(ProgramStatusRecord(state: state, app: "codex")))]))
+        }
+
+        push(.done)
+        XCTAssertEqual(client.programStatus(for: sessionID)?.state, .done, "后台标签：结果留着")
+        controller.isForeground = true
+        XCTAssertNil(client.programStatus(for: sessionID), "切回来就算看过")
+
+        push(.working)
+        push(.error)
+        XCTAssertNil(client.programStatus(for: sessionID), "正看着时到的结果当场算看过")
+        push(.blocked)
+        XCTAssertEqual(client.programStatus(for: sessionID)?.state, .blocked, "卡住等人的照样上标签")
+
+        controller.close()
+        push(.done)
+        XCTAssertEqual(client.programStatus(for: sessionID)?.state, .done, "标签关了就不再算它在看")
+    }
+
     /// 标签圆点的配色与 mac 的 `tabDot` 一一对应。
     func testTabDotColorsFollowTheSharedTone() {
         let accent = Color.purple

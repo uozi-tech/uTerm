@@ -134,7 +134,7 @@ final class MobileTerminalController {
     private func syncRemoteWatch() {
         guard let remote = connection as? RemoteTerminalBackend else { return }
         remote.setWatched(isLooking)
-        remote.client.setProgramStatusWatched(remote.sessionID, isLooking)
+        if isLooking { remote.client.acknowledgeProgramStatus(for: remote.sessionID) }
     }
 
     /// 用户此刻看得见这个终端：前台标签，且 App 在前台。
@@ -389,6 +389,9 @@ final class MobileTerminalController {
                 self?.isReconnecting = false
             }
         }
+        if let remote = conn as? RemoteTerminalBackend {
+            remote.client.setProgramStatusLooker(remote.sessionID) { [weak self] in self?.isLooking ?? false }
+        }
         syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
         let exitStream = conn.exitStream
@@ -527,7 +530,7 @@ final class MobileTerminalController {
         reconnectTask = nil
         isReconnecting = false
         if let remote = connection as? RemoteTerminalBackend {
-            remote.client.setProgramStatusWatched(remote.sessionID, false)
+            remote.client.setProgramStatusLooker(remote.sessionID, nil)
         }
         inputChannel.unbind()
         let conn = connection

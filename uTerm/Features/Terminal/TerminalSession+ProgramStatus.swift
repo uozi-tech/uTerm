@@ -33,8 +33,9 @@ extension TerminalSession {
 
     /// 用户此刻正看着这条会话：app 在前台、窗口是 key、键盘焦点在这个终端上。
     /// `hasFocus` 在视图不在窗口里时也可能为真（切走的标签），所以要单独看 `window`。
-    private var isUserLooking: Bool {
-        NSApp.isActive && terminalView.window != nil && terminalView.hasFocus
+    var isUserLooking: Bool {
+        if let userLookingOverride { return userLookingOverride() }
+        return NSApp.isActive && terminalView.window != nil && terminalView.hasFocus
     }
 
     func applyProgramStatus(_ message: ProgramStatusMessage, isLooking: Bool) {
