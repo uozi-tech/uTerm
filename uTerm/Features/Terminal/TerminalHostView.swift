@@ -209,7 +209,10 @@ final class TerminalContainerView: NSView {
         let decision = settler.decide(
             target: TerminalResizeSettler.Target(size: target.size),
             current: TerminalResizeSettler.Target(size: terminalView.frame.size),
-            isFirstMount: copyable?.hasHostedLayout == false,
+            // mac 只在连上之后才挂终端，挂上时 pty 已经有尺寸、程序已经在画（接回的 Claude Code 等），
+            // 首次挂载也是一次尺寸变化：挂上那一刻量到的可能只是中间态（窗口还在定尺寸、分屏还在排），
+            // 直接提交会把它发给 pty，程序按它重排一段输出。所以和平时一样等停稳。
+            isFirstMount: false,
             settled: settled,
             onSettled: { [weak self] in self?.syncTerminalFrame(settled: true) })
         switch decision {
@@ -219,7 +222,6 @@ final class TerminalContainerView: NSView {
             if let heldBefore, heldBefore.size != target.size {
                 AppLogger.debug("cancelled \(heldBefore.size) -> \(target.size)", category: Self.logCategory)
             }
-            copyable?.hasHostedLayout = true
             layer?.masksToBounds = false
             terminalView.frame = target
         case .hold(let started):

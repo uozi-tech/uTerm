@@ -58,6 +58,7 @@ final class TerminalResizeSettler {
     /// - target: 终端该跟上的布局；nil = 现在没有可跟的目标。
     /// - current: 终端此刻的布局。
     /// - isFirstMount: 终端还没在任何容器里排过版——首挂直接提交，不然会先按 .zero 起一个空终端。
+    ///   只给挂上时还没有程序在画的一端用（iOS 建连前就挂）；mac 连上才挂，传 false。
     /// - settled: 计时已到点（`onSettled` 里回调进来时传 true），或调用方要求立刻提交。
     /// - onSettled: 停稳后要做的事（一般是用 `settled: true` 重新走一遍布局）。只在返回 `.hold(started: true)` 时记下。
     func decide(target: Target?,
