@@ -24,7 +24,7 @@ struct RemoteInternetGroup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsGroup(title: "公网接入",
-                          footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容全程端到端加密。Mac 睡眠时会与中继断开，手机无法远程唤醒它；「保持唤醒」不让 Mac 闲置睡眠，合盖仍会睡眠。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
+                          footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容全程端到端加密。Mac 睡眠时会与中继断开，手机无法远程唤醒它。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
                 if let block = server.relayRegistrationBlock {
                     SettingsRow(label: "中继注册", hint: RemoteControlPresentation.relayRegistrationBlockHint(block)) {
                         SettingsStatusLabel(symbol: "hammer.fill", tone: .warning,
@@ -65,6 +65,9 @@ struct RemoteInternetGroup: View {
                     SettingsRow(label: "保持唤醒", hint: "公网接入期间不让 Mac 闲置睡眠") {
                         UDToggle(Binding(get: { settings.keepsAwakeForInternet }, set: { settings.keepsAwakeForInternet = $0 }))
                     }
+                    // 「保持唤醒」只拦闲置睡眠，合盖照样睡（系统规则，App 拦不住），紧贴开关说清楚。
+                    SettingsInlineNote(tone: .muted,
+                                       text: String(localized: "合盖仍会睡眠。要合盖使用，请接上电源和外接显示器。"))
                 }
             }
 
