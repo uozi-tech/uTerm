@@ -45,6 +45,9 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private var kcp: RemoteKCP?
     private var pacer: RemoteDatagramPacer
     private var estimator: RemoteLinkEstimator
+    private var activityHandler: (@Sendable (TimeInterval?) -> Void)?
+    private var lastActivityNotice: UInt64 = 0
+    private static let activityNoticeInterval: UInt64 = 100_000_000
     private let timer: DispatchSourceTimer
     private var armedFor: UInt64 = .max
 
@@ -177,8 +180,13 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         }
     }
 
+    func onAuthenticatedActivity(_ handler: @escaping @Sendable (TimeInterval?) -> Void) {
+        queue.async { self.activityHandler = handler }
+    }
+
     func cancel() {
         queue.async { [self] in
+            activityHandler = nil
             guard !isStopped else { return }
             isStopped = true
             // 尽力告诉对端，省得它等超时。丢了也没事，对端有心跳。
@@ -296,6 +304,11 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
     private func receive(_ datagram: Data) {
         guard !isStopped, let opened = cipher.open(datagram) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
+        // 验过的才算对端还在；一秒最多报十次，存活判定的精度远粗于它。
+        if let activityHandler, now &- lastActivityNotice >= Self.activityNoticeInterval {
+            lastActivityNotice = now
+            activityHandler(estimator.minimumRoundTripNanos.map { TimeInterval($0) / 1_000_000_000 })
+        }
         receivedHighest = max(receivedHighest, opened.sequence)
         receivedPackets += 1
         receivedBytes += UInt64(datagram.count)

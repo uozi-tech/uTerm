@@ -26,10 +26,18 @@ nonisolated protocol RemoteTransport: AnyObject, Sendable {
     /// 这条传输眼下走的网卡名（en0、pdp_ip0……）。不知道（打洞、测试替身）时为 nil。
     /// 网络变化时据此判断：它用的网卡没了，连接就不用再探，直接判死。
     var interfaceName: String? { get }
+    /// 收到对端发来的、验过的东西（不经过 `receive` 的那些：直连的视频、纠错、链路报告数据报）时调用 `handler`。
+    /// 开着屏幕时的存活判定靠它：拥塞时控制通道（KCP）按序交付会被一个要重传的分片堵上好几秒，数据报却一直在到，
+    /// 不能因此把一条慢但活着的路判死。字节流传输没有这类数据，不用实现。
+    ///
+    /// `handler` 的参数是传输层量到的路径往返下限（秒；还没量到时为 nil）。它来自数据报的回执，不受控制通道排队影响，
+    /// 比 ping 的往返更接近这条路本身。
+    func onAuthenticatedActivity(_ handler: @escaping @Sendable (TimeInterval?) -> Void)
 }
 
 extension RemoteTransport {
     nonisolated var interfaceName: String? { nil }
+    nonisolated func onAuthenticatedActivity(_ handler: @escaping @Sendable (TimeInterval?) -> Void) {}
 }
 
 /// 局域网路径：一条 `NWConnection`。

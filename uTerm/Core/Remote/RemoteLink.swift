@@ -24,6 +24,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     private var pingSentAt: DispatchTime?
     /// 最近一次 ping 的往返时间（秒，只在 `queue` 上读）。
     private(set) var latestRoundTrip: TimeInterval?
+    /// 最近几次 ping 的往返（存活判定用其中最小的，见 `pathRoundTrip`）。
+    private var recentRoundTrips: [TimeInterval] = []
+    /// 传输层从数据报回执量到的往返下限（只有直连有）。
+    private var transportRoundTrip: TimeInterval?
+    /// 开着屏幕时按哪个往返放宽等待：两者取小。ping 走控制通道，拥塞时排在视频后面，连最小值都能到 2 s；
+    /// 传输层的下限不受这层排队影响。
+    private var pathRoundTrip: TimeInterval {
+        [recentRoundTrips.min(), transportRoundTrip].compactMap { $0 }.min() ?? 0
+    }
     private var readyWaiter: CheckedContinuation<Void, Error>?
     private var helloWaiter: CheckedContinuation<Data, Error>?
     private var isReady = false
@@ -55,6 +64,9 @@ nonisolated final class RemoteLink: @unchecked Sendable {
 
     // 存活判定（只在 `queue` 上读写）。
     private var lastReceived = DispatchTime.now()
+    /// 上一次从控制通道收到字节。`lastReceived` 还算上直连的数据报，这只只认控制通道：单向断（Mac → 手机通、
+    /// 手机 → Mac 断）时数据报（尤其不等确认的声音）会一直到，只有 ping 等不到 pong 才看得出来。
+    private var lastControlReceived = DispatchTime.now()
     private var lastSent = DispatchTime.now()
     /// 上次发 ping 的时刻（只在 `queue` 上读写）；还没发过是 0，心跳第一拍就会问一声，连上就有往返读数。
     private var lastPingSent = DispatchTime(uptimeNanoseconds: 0)
@@ -78,6 +90,17 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     init(transport: any RemoteTransport, label: String = "com.uozi.uTerm.remote.link") {
         self.transport = transport
         self.queue = DispatchQueue(label: label, qos: .userInteractive)
+        transport.onAuthenticatedActivity { [weak self] trip in self?.noteTransportActivity(pathTrip: trip) }
+    }
+
+    /// 传输层收到了对端发来的、验过的数据报（直连的视频、纠错、链路报告）：对端还在。
+    /// 只刷新「收到任何东西」那只钟；兜底的「控制通道多久没消息」不动（见 `steadyTick`）。
+    private func noteTransportActivity(pathTrip: TimeInterval?) {
+        queue.async { [self] in
+            guard !isClosed else { return }
+            lastReceived = .now()
+            if let pathTrip { transportRoundTrip = pathTrip }
+        }
     }
 
     convenience init(connection: NWConnection, label: String = "com.uozi.uTerm.remote.link") {
@@ -379,6 +402,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             guard let self, !self.isClosed else { return }
             if let data {
                 self.lastReceived = .now()
+                self.lastControlReceived = self.lastReceived
                 self.frames.append(data)
             }
             self.processFrames()
@@ -431,6 +455,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 if message.kind == .pong, let pingSentAt {
                     let now = DispatchTime.now().uptimeNanoseconds
                     latestRoundTrip = TimeInterval(now &- pingSentAt.uptimeNanoseconds) / 1_000_000_000
+                    recentRoundTrips.append(latestRoundTrip ?? 0)
+                    if recentRoundTrips.count > 5 { recentRoundTrips.removeFirst() }
                     self.pingSentAt = nil
                 }
                 onMessage?(message)
@@ -451,6 +477,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             if wasSuspended {
                 // App 刚从挂起回来：这段时间收不到东西不算链路死了。重新计时，并马上问一声。
                 link.lastReceived = .now()
+                link.lastControlReceived = link.lastReceived
                 link.sendOnQueue(RemoteMessage(.ping))
                 return
             }
@@ -483,18 +510,36 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     }
 
     private func steadyTick(_ heartbeat: RemoteHeartbeat, quiet: TimeInterval) {
-        let wait = max(heartbeat.activeReplyLimit, 3 * (latestRoundTrip ?? 0))
-        if let pingSentAt, lastReceived < pingSentAt {
-            let unanswered = TimeInterval(DispatchTime.now().uptimeNanoseconds &- pingSentAt.uptimeNanoseconds)
-                / 1_000_000_000
-            if unanswered > wait || quiet > heartbeat.replyLimit {
-                AppLogger.notice("远控连接：开着屏幕时 \(String(format: "%.1f", quiet)) 秒没收到任何数据，判断已断开",
-                                 category: RemoteLog.category)
-                fail(RemoteProtocolError.timeout)
-            }
+        // 兜底：控制通道 `replyLimit` 没有任何消息。拥塞时 KCP 这么久总能把 pong 送到；单向断时数据报一直在到，
+        // 下面那条快判据看不出来，靠它。
+        let controlQuiet = TimeInterval(DispatchTime.now().uptimeNanoseconds &- lastControlReceived.uptimeNanoseconds)
+            / 1_000_000_000
+        if controlQuiet > heartbeat.replyLimit {
+            AppLogger.notice("远控连接：开着屏幕时控制通道 \(String(format: "%.1f", controlQuiet)) 秒没有消息，判断已断开",
+                             category: RemoteLog.category)
+            fail(RemoteProtocolError.timeout)
             return
         }
-        if quiet > heartbeat.activeQuietPing || secondsSinceLastPing > heartbeat.roundTripRefresh {
+        let wait = max(heartbeat.activeReplyLimit, 3 * pathRoundTrip)
+        if let pingSentAt {
+            // 有一个 ping 在等回音：对端什么都没发来（`quiet` 也算数据报）超过 `wait`，且这个 ping 至少给了
+            // 回音的时间，就判死。不再看「ping 之后有没有收到过东西」：断开那一刻路上还有几百毫秒的数据报，
+            // 它们会让那个 ping 看起来「之后收到过」，非要再等 1 s 安静重新问一遍，发现就晚了好几秒。
+            let unanswered = TimeInterval(DispatchTime.now().uptimeNanoseconds &- pingSentAt.uptimeNanoseconds)
+                / 1_000_000_000
+            let answerTime = max(heartbeat.activeReplyLimit * 0.6, 2 * pathRoundTrip)
+            if (quiet > wait && unanswered > answerTime) || quiet > heartbeat.replyLimit {
+                let detail = String(format: "%.1f 秒没收到任何数据，判断已断开（ping 往返 %.0f ms，等回音上限 %.1f s）",
+                                    quiet, pathRoundTrip * 1000, wait)
+                AppLogger.notice("远控连接：开着屏幕时 \(detail)", category: RemoteLog.category)
+                fail(RemoteProtocolError.timeout)
+            }
+            // 已经有一个在等回音就不再发：重发会把等回音的计时清零；KCP 可靠送达，回音迟早会来。
+            return
+        }
+        // 数据报一直在到时 `quiet` 不会涨：控制通道安静了也要问一声，否则单向断要等 `roundTripRefresh` 才发 ping。
+        if quiet > heartbeat.activeQuietPing || controlQuiet > heartbeat.activeQuietPing
+            || secondsSinceLastPing > heartbeat.roundTripRefresh {
             sendOnQueue(RemoteMessage(.ping))
         }
     }

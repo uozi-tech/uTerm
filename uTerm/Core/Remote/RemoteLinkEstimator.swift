@@ -143,6 +143,9 @@ nonisolated struct RemoteLinkEstimator {
         minTrips.lazy.map(\.value).min()
     }
 
+    /// 最近 `minRoundTripWindow` 里量到的最短往返：路径本身的往返，不含排队。
+    var minimumRoundTripNanos: UInt64? { minTrip }
+
     private var queueDelay: UInt64 {
         guard let base = minTrip, let fastest = trips.lazy.map(\.value).min(), fastest > base else { return 0 }
         return fastest - base
