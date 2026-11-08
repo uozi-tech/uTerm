@@ -728,6 +728,10 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
         var concealed = 0
         var late = 0
         var dropped = 0
+        /// 为把深度垫回目标多放的静音包（不算补洞，但也是一段空白）。
+        var stretched = 0
+        /// 接收端等不到、跳过的包。
+        var skipped = 0
         var targetMillis = 0
         var bufferedMillis = 0.0
         var estimatedMillis = 0.0
@@ -739,6 +743,8 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
             concealed = after.counters.concealed - before.counters.concealed
             late = after.counters.late - before.counters.late
             dropped = after.counters.dropped - before.counters.dropped
+            stretched = after.counters.stretched - before.counters.stretched
+            skipped = after.skipped - before.skipped
             targetMillis = after.targetMillis
             bufferedMillis = buffered.isEmpty ? Double(after.bufferedMillis)
                                               : Double(buffered.reduce(0, +)) / Double(buffered.count)
@@ -799,7 +805,8 @@ final class RemoteWeakNetworkMatrixTests: XCTestCase {
                 + "卡顿 \(v?.stalls ?? -1) 次 \(f1(v?.stallSeconds)) s，\(f1(v?.fps)) fps，交付 \(pct(v?.delivered))，"
                 + "画面延迟 p50 \(ms(v?.latencyP50)) / p95 \(ms(v?.latencyP95))，"
                 + "目标 \(f1(v?.targetStart))→\(f1(v?.targetMin))→\(f1(v?.targetEnd)) Mbps，实发 \(f1(v?.sentMbps)) Mbps，"
-                + "声音欠载 \(audio?.underruns ?? -1)"
+                + "声音欠载 \(audio?.underruns ?? -1) / 补洞 \(audio?.concealed ?? -1) / 垫静音 \(audio?.stretched ?? -1)"
+                + " / 晚到 \(audio?.late ?? -1) / 跳过 \(audio?.skipped ?? -1)，声音目标 \(audio?.targetMillis ?? -1) ms"
         }
     }
 
