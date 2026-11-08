@@ -184,7 +184,20 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
                                          channels: AVAudioChannelCount(RemoteAudioPolicy.channels)) else { return }
         // 交错采样的中转区：一次分配、跟着节点的闭包走，音频线程上不再分配内存。
         let scratch = RemoteAudioScratch(frames: 8192, channels: Int(RemoteAudioPolicy.channels))
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, bufferList in
+        let node = AVAudioSourceNode(format: format, renderBlock: Self.renderBlock(scratch: scratch, pull: pull))
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        self.node = node
+        try engine.start()
+    }
+
+    /// 播放回调。必须在 nonisolated 的地方建：在本类（`@MainActor`）的方法里直接写闭包，Swift 会把它推断成主线程隔离、
+    /// 进入时检查执行者，而它是在音频线程上被调的——真机一开声音就在 `dispatch_assert_queue` 上崩（Mac 单测用的是假输出，
+    /// 碰不到这里）。
+    nonisolated static func renderBlock(scratch: RemoteAudioScratch,
+                                        pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void)
+        -> AVAudioSourceNodeRenderBlock {
+        { _, _, frameCount, bufferList in
             let frames = min(Int(frameCount), scratch.frames)
             let channels = scratch.channels
             let samples = UnsafeMutableBufferPointer(rebasing: scratch.buffer[0..<frames * channels])
@@ -200,10 +213,6 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             }
             return noErr
         }
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        self.node = node
-        try engine.start()
     }
 
     func stop() {

@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreMedia
 import XCTest
 @testable import uTerm
@@ -227,6 +228,36 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertFalse(buffer.isPlaying)
         XCTAssertEqual(buffer.counters.underruns, 0)
         XCTAssertEqual(buffer.counters.played, 3)
+    }
+
+    /// 播放回调在音频线程上被调：不能带主线程隔离（真机一开声音就崩过），且要把交错采样拆成每声道一块。
+    func test_render_block_runs_off_the_main_thread_and_deinterleaves() {
+        let scratch = RemoteAudioScratch(frames: 64, channels: 2)
+        let block = RemoteAudioEnginePlayer.renderBlock(scratch: scratch) { output, frames in
+            for frame in 0..<frames {
+                output[frame * 2] = 0.25
+                output[frame * 2 + 1] = -0.5
+            }
+        }
+        let frames = 16
+        let left = UnsafeMutablePointer<Float>.allocate(capacity: frames)
+        let right = UnsafeMutablePointer<Float>.allocate(capacity: frames)
+        defer { left.deallocate(); right.deallocate() }
+        let list = AudioBufferList.allocate(maximumBuffers: 2)
+        defer { free(list.unsafeMutablePointer) }
+        list[0] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(frames * 4), mData: left)
+        list[1] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(frames * 4), mData: right)
+        let done = expectation(description: "音频线程上跑完")
+        let pointer = list.unsafeMutablePointer
+        DispatchQueue.global(qos: .userInteractive).async {
+            var silence: ObjCBool = false
+            var time = AudioTimeStamp()
+            _ = block(&silence, &time, AVAudioFrameCount(frames), pointer)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(left[frames - 1], 0.25)
+        XCTAssertEqual(right[0], -0.5)
     }
 
     /// SCK 声音的采集时刻取样本自带的时间戳（主机时钟），换算到单调时钟；时间戳离谱时退回「交付时刻 − 时长」。
