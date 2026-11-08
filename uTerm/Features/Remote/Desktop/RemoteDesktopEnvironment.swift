@@ -14,6 +14,8 @@ struct RemoteDesktopEnvironment {
     var canPostEvents: @MainActor () async -> Bool
     /// 要看的显示器（nil = 主显示器）。
     var display: @MainActor (_ requested: UInt32?) -> RemoteDesktopDisplay?
+    /// 开流前整理显示器：无显示器的 Mac 把占位屏换成 2 倍模式（`RemoteHeadlessDisplay`）。
+    var prepareDisplays: @MainActor () -> Void = {}
     /// 此刻接着的全部显示器（主显示器在前）。
     var listDisplays: @MainActor () -> [RemoteDesktopDisplaySummary] = { [] }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
@@ -45,6 +47,7 @@ struct RemoteDesktopEnvironment {
             screenCaptureAuthorized: { await RemoteDesktopPermissions.screenCaptureGranted() },
             canPostEvents: { await RemoteDesktopPermissions.postEventsGranted() },
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
+            prepareDisplays: { RemoteHeadlessDisplay.ensureHiDPI() },
             listDisplays: { RemoteDesktopEnvironment.activeDisplays() },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)

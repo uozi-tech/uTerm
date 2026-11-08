@@ -116,7 +116,7 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertFalse(should(control: false), "只能查看")
     }
 
-        func test_switching_to_another_display_reopens_the_stream_on_it() async throws {
+    func test_switching_to_another_display_reopens_the_stream_on_it() async throws {
         let rig = try await makeRig()
         defer { rig.client.disconnect() }
         rig.mac.hasSecondDisplay = true
@@ -133,8 +133,26 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(second.displayID, 9)
         XCTAssertEqual(second.displayWidth, 1920)
         XCTAssertEqual(rig.mac.openedDisplays, [7, 9])
+        XCTAssertEqual(rig.mac.preparedDisplays, 2, "每次开流前先整理显示器（无显示器换 2 倍）")
         await session.switchDisplay(to: 9)
         XCTAssertEqual(rig.mac.openedDisplays, [7, 9], "已经在看这块就不重开")
+    }
+
+    /// 无显示器的 Mac：占位屏 1 倍时换成同点数的 2 倍模式；已经 2 倍、没有这种模式、或接着真显示器时不动。
+    func test_headless_placeholder_switches_to_the_matching_hidpi_mode() {
+        typealias Mode = RemoteHeadlessDisplay.Mode
+        let oneX = Mode(width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080)
+        let twoX = Mode(width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160)
+        let modes = [Mode(width: 1440, height: 900, pixelWidth: 2880, pixelHeight: 1800), oneX,
+                     Mode(width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, usable: false), twoX]
+        XCTAssertEqual(RemoteHeadlessDisplay.hiDPIUpgrade(current: oneX, available: modes), 3)
+        XCTAssertNil(RemoteHeadlessDisplay.hiDPIUpgrade(current: twoX, available: modes), "已经是 2 倍")
+        XCTAssertNil(RemoteHeadlessDisplay.hiDPIUpgrade(current: oneX, available: [oneX]), "没有同点数的 2 倍模式")
+        let vendor = RemoteHeadlessDisplay.placeholderVendor
+        XCTAssertTrue(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: false, onlineDisplays: 1))
+        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: 0x10AC, builtin: false, onlineDisplays: 1), "真显示器")
+        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: false, onlineDisplays: 2))
+        XCTAssertFalse(RemoteHeadlessDisplay.isPlaceholder(vendor: vendor, builtin: true, onlineDisplays: 1))
     }
 
     func test_old_mac_without_display_list_and_single_display_get_no_menu_data() async throws {
