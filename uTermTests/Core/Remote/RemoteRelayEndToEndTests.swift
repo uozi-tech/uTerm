@@ -466,8 +466,19 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertTrue(lan.allSatisfy { $0.lossPercent == 0 && $0.roundTripMillis != nil })
         let chosen = RemotePathVerdict.chosen(RemotePathProbeSummary.summarize(results))
         XCTAssertEqual(chosen?.mode, .localNetwork, "局域网通时实际连接走局域网")
-        XCTAssertEqual(RemotePathVerdict.chosen(RemotePathProbeSummary.summarize(results), skipsLocalNetwork: true)?.mode,
-                       .relay, "只走公网时跳过局域网；本机没有公网地址可打洞，落到中继")
+        // 只走公网时跳过局域网。打洞能不能通看本机网络（有公网 IPv6 时 IPv6 直连在本机就能打通），
+        // 所以按这一次实测：哪条直连通过就该选它，都没通才落到中继。
+        let internet = RemotePathVerdict.chosen(RemotePathProbeSummary.summarize(results), skipsLocalNetwork: true)?.mode
+        let punched = [RemotePathProbeMode.directIPv6, .directIPv4].filter { mode in
+            results.contains { $0.mode == mode && $0.connected }
+        }
+        print("[链路矩阵·本机] 打洞通过：\(punched)，只走公网时选：\(String(describing: internet))")
+        if punched.isEmpty {
+            XCTAssertEqual(internet, .relay, "只走公网、打洞都没通：落到中继")
+        } else {
+            XCTAssertTrue(internet.map { punched.contains($0) } ?? false,
+                          "只走公网、打洞通了：选打通的那条直连，实际选 \(String(describing: internet))")
+        }
         XCTAssertTrue(results.filter { $0.mode == .relay }.allSatisfy(\.connected), "中继这条路在本机必须通")
     }
 
