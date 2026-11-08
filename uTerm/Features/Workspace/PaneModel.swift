@@ -16,8 +16,10 @@ final class PaneModel: Identifiable {
     /// 终端连接的 host-key 审批桥接。
     let hostKeyRelay = HostKeyChallengeRelay()
     private var isConnecting = false
-    /// 标签的先后，存进 holder：重启后纯终端窗口按它排标签。
+    /// 打开时的时间戳，存进 holder：重启后布局里没有这条会话（旧版写的归属）时按它排先后。
     @ObservationIgnored private let sessionOrder: Double
+    /// 所在窗口最近一次的布局，跟归属一起存进 holder：重启后按它放回标签的位置与分屏。
+    @ObservationIgnored private var layout: HeldSessionLayout?
 
     /// 跨窗口会话注册的凭条（CLI 的 `terminals` / `terminal-read` / `terminal-send`）。
     /// 由 `WorkspaceModel.attachSessionRegistry` 在窗口视图注入注册表后 stamp；
@@ -140,10 +142,23 @@ final class PaneModel: Identifiable {
 
     /// 重启后据此把标签放回原来的窗口。窗口还没把凭条发下来时是 nil，`adopt(registrar:)` 时补。
     private func sessionAttributes(title: String?) -> Data? {
+        heldAttributes(title: title).flatMap { try? JSONEncoder().encode($0) }
+    }
+
+    func heldAttributes(title: String? = nil) -> SSHSessionAttributes? {
         guard let registrar else { return nil }
-        return try? JSONEncoder().encode(SSHSessionAttributes(
+        return SSHSessionAttributes(
             windowID: registrar.windowID, windowKind: registrar.windowKind, serverID: serverProfileID,
-            title: tabTitle ?? title ?? "", order: sessionOrder))
+            title: tabTitle ?? title ?? "", order: sessionOrder, layout: layout)
+    }
+
+    /// 窗口布局变了。已经交给 holder 的会话立刻改写归属；还没建连的等 `makeHeldBackend` 时一起带上。
+    func updateLayout(_ layout: HeldSessionLayout) {
+        guard fileBuffer == nil else { return }
+        self.layout = layout
+        guard let backend = session.backend as? HeldSSHBackend,
+              let attributes = sessionAttributes(title: connectedServerName) else { return }
+        Task { await backend.setAttributes(attributes) }
     }
 
     /// 窗口把注册表凭条补发下来时调用（窗口视图的 `.task` 可能晚于窗格建连）。

@@ -83,6 +83,9 @@ final class WorkspaceModel {
     /// 叶子写进一个随机 `serverProfileID`，于是下次打开工作区恢复出一个永远
     /// 「服务器配置已被删除」的终端。dispose 前冻结一份，之后一律返回它。
     @ObservationIgnored private var frozenSnapshot: WorkspaceSnapshot?
+    @ObservationIgnored private var layoutWriter: HeldLayoutWriter<PaneModel>?
+    /// 布局里记的是会话 id（`PaneModel.id`，不是标签 id）；文件标签不是会话，不进布局。
+    private static let heldSessionID: (TerminalTab) -> UUID? = { $0.payload.fileBuffer == nil ? $0.payload.id : nil }
 
     init(windowID: WorkspaceWindowID? = nil,
          fileBrowserModel: FileBrowserModel = FileBrowserModel()) {
@@ -151,6 +154,11 @@ final class WorkspaceModel {
         terminalGroups.makeTabForNewGroup = { [weak self] in
             guard let self, let seed = self.splitSeedServer() else { return nil }
             return TerminalTab(payload: self.makePane(serverProfileID: seed.id, tabTitle: seed.title))
+        }
+        // 布局写进每条 SSH 会话的 holder 归属：重启后没有工作区快照可用时（纯终端窗口、关了自动恢复）
+        // 按它放回标签的顺序与分屏。文件标签不是会话，不进布局。
+        layoutWriter = HeldLayoutWriter(groups: terminalGroups, id: Self.heldSessionID) { [weak self] layout in
+            for tab in self?.terminalGroups.allTabs ?? [] { tab.payload.updateLayout(layout) }
         }
     }
 
@@ -240,6 +248,7 @@ final class WorkspaceModel {
     /// 窗口关闭时调用：释放 tab 内所有窗格 + 左 sidebar 的 SFTP 会话 +
     /// 预览 buffers，同时停止 Agent 的模型请求和自动续轮。
     func dispose() {
+        layoutWriter?.stop()
         agentRefreshGeneration = UUID()
         // 拆资源之前先把快照冻结：之后 tab.disposeAll() 会清空 panes 映射，
         // 再取快照就只剩空布局（见 `frozenSnapshot`）。
@@ -544,13 +553,16 @@ final class WorkspaceModel {
 
     /// 把上次留下的 SSH 会话放回来（窗格 id 就是会话 id，连接时接回）。已经在标签树里的（快照恢复的）跳过。
     func adoptHeldSessions(_ sessions: [SSHSessionRestorer.Session]) {
-        let existing = Set(terminalGroups.allTabs.map(\.payload.id))
-        for session in sessions where !existing.contains(session.id) {
-            terminalGroups.openTab({
-                TerminalTab(payload: self.makePane(id: session.id, serverProfileID: session.serverID, tabTitle: session.title,
-                                                   sessionOrder: session.order))
-            }, in: nil)
+        let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func tab(_ id: UUID) -> TerminalTab {
+            let session = byID[id]!
+            return TerminalTab(payload: makePane(id: session.id, serverProfileID: session.serverID, tabTitle: session.title,
+                                                 sessionOrder: session.order))
         }
+        // 工作区快照已经放好了布局的话，快照为准；否则（纯终端窗口、关了自动恢复）按会话自己存的布局放回。
+        terminalGroups.adoptHeldSessions(sessions.map(\.id), layout: HeldSessionLayout.newest(sessions.map(\.layout)),
+                                         id: Self.heldSessionID, make: tab,
+                                         append: { id in terminalGroups.openTab({ tab(id) }, in: nil) })
         syncTerminalTitles()
     }
 

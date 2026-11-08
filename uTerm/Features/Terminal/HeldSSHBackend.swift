@@ -374,15 +374,19 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
     var windowKind: String
     var serverID: UUID
     var title: String
-    /// 标签的先后（打开时的时间戳）。
+    /// 标签打开时的时间戳。只在没有 `layout`（旧版写的）或会话不在布局里时用来排先后。
     var order: Double
+    /// 写入时整个窗口的布局，位置以它为准（见 `HeldSessionLayout`）。
+    var layout: HeldSessionLayout?
 
-    init(windowID: UUID, windowKind: String, serverID: UUID, title: String, order: Double) {
+    init(windowID: UUID, windowKind: String, serverID: UUID, title: String, order: Double,
+         layout: HeldSessionLayout? = nil) {
         self.windowID = windowID
         self.windowKind = windowKind
         self.serverID = serverID
         self.title = title
         self.order = order
+        self.layout = layout
     }
 
     /// 存在 holder 里、会跨版本读：只有放回窗口必需的两个 ID 是硬要求，其余缺了给默认值。
@@ -394,5 +398,6 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
         windowKind = try container.decodeIfPresent(String.self, forKey: .windowKind) ?? TerminalWindowKind.workspace
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         order = try container.decodeIfPresent(Double.self, forKey: .order) ?? 0
+        layout = try container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
     }
 }

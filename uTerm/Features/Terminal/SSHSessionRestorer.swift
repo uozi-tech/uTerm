@@ -13,6 +13,8 @@ final class SSHSessionRestorer {
         let serverID: UUID
         let title: String
         let order: Double
+        /// 这条会话存的窗口布局；同一窗口取最新的一份（`HeldSessionLayout.newest`）。
+        var layout: HeldSessionLayout?
     }
 
     private struct PendingWindow {
@@ -124,7 +126,8 @@ final class SSHSessionRestorer {
                 await HolderProbe.terminate(id, client: client, namespace: namespace)
                 continue
             }
-            let session = Session(id: id, serverID: attributes.serverID, title: attributes.title, order: attributes.order)
+            let session = Session(id: id, serverID: attributes.serverID, title: attributes.title, order: attributes.order,
+                                  layout: attributes.layout)
             pending[attributes.windowID, default: PendingWindow(kind: attributes.windowKind, sessions: [])].sessions.append(session)
             unsettled.insert(id)
         }

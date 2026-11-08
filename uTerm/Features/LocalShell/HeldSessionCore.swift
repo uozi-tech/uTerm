@@ -1,4 +1,5 @@
 import Foundation
+import UPaneGroups
 
 /// 连着一个 `uterm-holder` 的会话：attach、收发帧、收尾。本机 shell 和 SSH 两种后端共用。
 ///
@@ -256,5 +257,97 @@ nonisolated private final class HolderSessionReceiver: @unchecked Sendable {
         let finished = onReplayFinished
         onReplayFinished = nil
         finished?(result)
+    }
+}
+
+// MARK: - 窗口布局
+
+/// 窗口的终端布局（分屏方向与比例、每组的标签顺序、前台标签、活动组），标签记成会话 id。
+///
+/// 存进窗口里**每个**会话的 holder 归属：holder 是会话的真值，App 重启后谁活着就从谁那里读。布局一变就重写
+/// 一遍，各份副本可能新旧不一（刚开的会话还没连上、写的那一刻某个 holder 正好没接上），恢复时取 `revision`
+/// 最大的一份。
+nonisolated struct HeldSessionLayout: Codable, Equatable, Sendable {
+    /// 写下这份布局的时刻（Unix 秒）。
+    var revision: Double
+    var tree: UPaneGroupsSnapshot<UUID>
+
+    static func newest(_ layouts: some Sequence<HeldSessionLayout?>) -> HeldSessionLayout? {
+        layouts.compactMap { $0 }.max { $0.revision < $1.revision }
+    }
+}
+
+extension UPaneGroupsModel {
+    /// 接回上次留下的会话：按布局放回原来的组和位置，布局里没有的（旧版写的归属、布局还没来得及写进去的会话）
+    /// 按 `ids` 的顺序交给 `append`。只在模型还空着时套用布局，已经有标签的不动它们的位置。
+    /// `id` 取标签的会话 id（SSH 终端的标签 id 与会话 id 不是同一个）。
+    func adoptHeldSessions(_ ids: [UUID], layout: HeldSessionLayout?, id: (UPaneTab<Payload>) -> UUID?,
+                           make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) {
+        let existing = Set(allTabs.compactMap(id))
+        var remaining = ids.filter { !existing.contains($0) }
+        if allTabs.isEmpty, let layout {
+            let wanted = Set(remaining)
+            var placed: Set<UUID> = []
+            restore(layout.tree) { id -> UPaneTab<Payload>? in
+                guard wanted.contains(id), placed.insert(id).inserted else { return nil }
+                return make(id)
+            }
+            remaining.removeAll { placed.contains($0) }
+        }
+        for id in remaining { append(id) }
+    }
+}
+
+/// 布局一变（重排、拆分、跨组拖动、关标签、拖分隔条、切前台标签）就把新布局交给 `write`。
+/// 拖分隔条每帧都在变，攒一小会儿再写。
+@MainActor
+final class HeldLayoutWriter<Payload> {
+    private weak var groups: UPaneGroupsModel<Payload>?
+    private let delay: Duration
+    private let id: (UPaneTab<Payload>) -> UUID?
+    private let write: @MainActor (HeldSessionLayout) -> Void
+    private var pending: Task<Void, Never>?
+    private var isStopped = false
+
+    init(groups: UPaneGroupsModel<Payload>, delay: Duration = .milliseconds(300),
+         id: @escaping (UPaneTab<Payload>) -> UUID?, write: @escaping @MainActor (HeldSessionLayout) -> Void) {
+        self.groups = groups
+        self.delay = delay
+        self.id = id
+        self.write = write
+        observe()
+    }
+
+    func stop() {
+        isStopped = true
+        pending?.cancel()
+        pending = nil
+    }
+
+    /// `id` 返回 nil 的标签（文件预览）不进布局。
+    private func flush() {
+        pending = nil
+        guard !isStopped, let groups else { return }
+        write(HeldSessionLayout(revision: Date().timeIntervalSince1970, tree: groups.snapshot(id)))
+    }
+
+    private func observe() {
+        guard !isStopped, let groups else { return }
+        withObservationTracking {
+            _ = groups.snapshot(id)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.changed() }
+        }
+    }
+
+    private func changed() {
+        guard !isStopped else { return }
+        observe()
+        pending?.cancel()
+        pending = Task { [weak self, delay] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.flush()
+        }
     }
 }
