@@ -129,6 +129,40 @@ final class TerminalMirrorTapTests: XCTestCase {
         session.dispose()
     }
 
+    /// 手机连着变尺寸（Duo 展开 / 合上、转屏）：每一次 Mac 都要钉到恰好那个行列数。差一列 Claude Code 就按
+    /// 另一个宽度画框，手机上的输入框整个错位（真机回归：手机 62 列，Mac 停在 61 列）。
+    func test_pin_remote_grid_lands_exactly_after_a_sequence_of_sizes() async throws {
+        let (session, _) = await connectedSession()
+        let mac = session.terminalView.getTerminal()
+        var misses: [String] = []
+        let sizes = [(89, 32), (120, 40), (62, 30), (89, 32), (61, 29), (62, 30), (150, 45), (40, 20), (89, 32),
+                     (88, 32), (90, 33), (63, 30), (62, 30)]
+        for (cols, rows) in sizes {
+            session.pinRemoteGrid(cols: cols, rows: rows, controller: "测试 iPhone")
+            if mac.cols != cols || mac.rows != rows { misses.append("\(cols)×\(rows) → \(mac.cols)×\(mac.rows)") }
+        }
+        XCTAssertEqual(misses, [])
+        session.dispose()
+    }
+
+    /// 逼近算法本身：真实格宽 7.5、边距 15（列数 = ⌊(宽 − 15) ÷ 7.5⌋），估算格宽偏大 / 偏小都要落到目标列。
+    /// 偏大 2%（这次真机回归的情形：估算 7.64）时只按差额补，会在 61 与 63 之间来回跳。
+    func test_grid_fit_converges_even_when_the_cell_estimate_is_off() {
+        func columns(_ width: CGFloat) -> Int { Int(((width - 15) / 7.5).rounded(.down)) }
+        for estimate in [7.2, 7.4, 7.5, 7.64, 7.9, 8.4] as [CGFloat] {
+            for target in 20...200 {
+                var fit = RemoteGridFit(target: target, cell: estimate)
+                var width = fit.first
+                var steps = 0
+                while columns(width) != target, steps < RemoteGridFit.maxSteps {
+                    width = fit.next(after: width, got: columns(width))
+                    steps += 1
+                }
+                XCTAssertEqual(columns(width), target, "估算格宽 \(estimate)，目标 \(target) 列")
+            }
+        }
+    }
+
     /// 钉住的终端比窗格矮：贴左上角；比窗格高：贴底边（裁掉顶上的旧行，提示符那一行留在屏上）。
     func test_pinned_terminal_keeps_its_bottom_visible_when_taller_than_the_pane() {
         let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
