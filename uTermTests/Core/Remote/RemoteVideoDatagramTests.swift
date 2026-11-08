@@ -105,6 +105,60 @@ final class RemoteVideoDatagramTests: XCTestCase {
         XCTAssertEqual(nacks.first?.indices, (1..<UInt16(all.count)).map { $0 })
     }
 
+    /// 抖动大的链路上分片会晚到上百毫秒。头一次按 6 ms 判丢、要了重传，原来那份半个往返内就到了：乱序窗口
+    /// 撑到那么大，之后同样的乱序不再去要重传（以前每片都要，重传挤掉新分片，2026-11-09 高延迟抖动直连 0 fps）。
+    func test_reordering_widens_the_window_and_stops_spurious_requests() {
+        var assembler = RemoteVideoReassembler()
+        var requested: [[UInt16]] = []
+        for frame in 1...2 {
+            let all = packets(payload(11_000, seed: UInt8(frame)), sequence: UInt32(frame), deadline: 2000, roundTrip: 300)
+            let start = UInt64(frame) * 1000 * ms
+            // 第 3 片比第 4 片晚 100 ms。
+            var schedule: [(UInt64, Data)] = all.indices.map { (start + UInt64($0) * 2 * ms, all[$0]) }
+            schedule[3].0 = schedule[4].0 + 100 * ms
+            schedule.sort { $0.0 < $1.0 }
+            var now = start
+            var next = 0
+            while now < start + 400 * ms {
+                while next < schedule.count, schedule[next].0 <= now {
+                    _ = assembler.receive(schedule[next].1, now: now)
+                    next += 1
+                }
+                requested.append(contentsOf: assembler.tick(now: now).nacks.compactMap(\.indices))
+                now += 5 * ms
+            }
+            if frame == 1 { XCTAssertFalse(requested.isEmpty, "头一次只能按 6 ms 判") ; requested = [] }
+        }
+        XCTAssertEqual(requested, [], "窗口撑大以后同样的乱序不再要重传")
+        XCTAssertGreaterThanOrEqual(assembler.reorderWindow, 100 * ms)
+    }
+
+    /// 关键帧（时限超过 5 s）在窄链路上一片片慢慢到，7 s 才到齐：不能在 5 s 时拦腰放弃，否则永远出不来画面。
+    /// 刷新帧仍封顶 5 s。
+    func test_keyframe_still_arriving_after_five_seconds_is_not_given_up() {
+        for (deadline, expectDelivered) in [(5001, true), (5000, false)] {
+            let data = payload(150_000)
+            let all = packets(data, deadline: deadline, roundTrip: 300)
+            var assembler = RemoteVideoReassembler()
+            var frames: [Data] = []
+            var lost: [UInt32] = []
+            let step = 7000 * ms / UInt64(all.count)
+            for (index, packet) in all.enumerated() {
+                let now = 1000 * ms + UInt64(index) * step
+                let output = assembler.receive(packet, now: now)
+                frames += output.frames
+                lost += output.lost
+                lost += assembler.tick(now: now).lost
+            }
+            if expectDelivered {
+                XCTAssertEqual(frames, [data], "关键帧")
+                XCTAssertEqual(lost, [])
+            } else {
+                XCTAssertEqual(lost, [1], "刷新帧到 5 s 放弃")
+            }
+        }
+    }
+
     func test_requests_are_not_repeated_within_a_round_trip() {
         let all = packets(payload(5000), roundTrip: 100)
         var assembler = RemoteVideoReassembler()
@@ -272,6 +326,22 @@ final class RemoteVideoDatagramTests: XCTestCase {
         XCTAssertTrue(buffer.expire(now: 1150 * ms, graceNanos: 100 * ms).isEmpty)
         XCTAssertEqual(buffer.expire(now: 1250 * ms, graceNanos: 100 * ms), [7])
         XCTAssertTrue(buffer.isEmpty)
+    }
+
+    /// 关键帧接收端会等到 `frameWaitCap`（最长 30 s）：发送端也留着它、不提前按丢失处理（否则再发一个一样大的
+    /// 关键帧排在后面）。普通帧照旧。
+    func test_buffer_keeps_keyframes_as_long_as_the_receiver_waits() {
+        var buffer = RemoteVideoSendBuffer()
+        _ = buffer.add(payload: payload(100), sequence: 7, channel: 1, fecGroupSize: 0, deadlineMillis: 8000,
+                       roundTripMillis: 300, now: 0)
+        _ = buffer.add(payload: payload(100), sequence: 8, channel: 1, fecGroupSize: 0, deadlineMillis: 100,
+                       roundTripMillis: 300, now: 0)
+        XCTAssertEqual(buffer.expire(now: 9000 * ms, graceNanos: 800 * ms), [8])
+        _ = buffer.add(payload: payload(100), sequence: 9, channel: 1, fecGroupSize: 0, deadlineMillis: 100,
+                       roundTripMillis: 300, now: 10_000 * ms)
+        XCTAssertFalse(buffer.packets(for: RemoteVideoNack(channel: 1, videoSequence: 1, indices: [0]), now: 10_000 * ms)
+            .isEmpty, "过了 6 s 还留着关键帧")
+        XCTAssertEqual(buffer.expire(now: 12_900 * ms, graceNanos: 800 * ms), [7, 9])
     }
 
     func test_buffer_memory_is_bounded() {

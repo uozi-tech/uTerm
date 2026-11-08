@@ -191,6 +191,82 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertGreaterThan(now, 0)
     }
 
+    /// 每份报告的往返各自加一段随机延迟（数据包和报告两段各 0…`jitter`），可复现。发送端一直有东西等着发，
+    /// 按节奏发、链路最多送 10 Mbps：节奏退下去，送达也跟着少（真实链路上就是这样一路退到底的）。
+    private func feedJittered(_ estimator: inout RemoteLinkEstimator, seconds: Double, base: UInt64, jitter: UInt64,
+                              extra: (Int) -> UInt64 = { _ in 0 }, seed: inout UInt64, start: UInt64,
+                              state: inout (sequence: UInt64, received: UInt64, bytes: UInt64)) -> UInt64 {
+        func random() -> UInt64 {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return (seed >> 33) % (jitter + 1)
+        }
+        var now = start
+        for step in 0..<Int(seconds / 0.05) {
+            let trip = base + random() + random() + extra(step)
+            let packets = UInt64(min(52, max(1, Int(estimator.pacingRate * 0.05 / 1200))))
+            for _ in 0..<packets {
+                state.sequence += 1
+                estimator.recordSent(sequence: state.sequence, now: now &- trip)
+            }
+            state.received += packets
+            state.bytes += packets * 1200
+            estimator.noteBacklog()
+            estimator.record(RemoteLinkReport(highestSequence: state.sequence, packets: state.received, bytes: state.bytes,
+                                              echoSequence: state.sequence, echoHeldMicros: 0), now: now)
+            now += 50_000_000
+        }
+        return now
+    }
+
+    /// 弱网矩阵「高延迟抖动」：10 Mbps、往返 300 ± 150 ms，每个包各自晚到。最快往返常比基线慢上百毫秒，
+    /// 以前当排队，节奏一路退到下限（0.2 Mbps），首个关键帧永远发不完（2026-11-09）。
+    func test_jitter_alone_is_not_queueing() {
+        for allowance in [0.0, RemoteLinkEstimator.Config().jitterAllowance] {
+            var config = RemoteLinkEstimator.Config()
+            config.jitterAllowance = allowance
+            var estimator = RemoteLinkEstimator(config: config, now: 0)
+            var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)
+            var seed: UInt64 = 7
+            _ = feedJittered(&estimator, seconds: 20, base: 150_000_000, jitter: 150_000_000, seed: &seed,
+                             start: 1_000_000_000, state: &state)
+            if allowance == 0 {
+                XCTAssertLessThan(estimator.pacingRate, config.initialRate / 4, "不扣抖动时会一路退（对照）")
+            } else {
+                XCTAssertGreaterThan(estimator.pacingRate, config.initialRate / 2, "抖动不是排队，节奏不该退")
+                XCTAssertGreaterThan(estimator.state.jitterNanos, 30_000_000)
+            }
+        }
+    }
+
+    /// 抖动链路上真排起队来（往返一路变长）照样要退：抖动只从往返变短那一步量，排队不会抬高门槛。
+    func test_queue_building_on_a_jittery_link_still_backs_off() {
+        var estimator = RemoteLinkEstimator(now: 0)
+        var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)
+        var seed: UInt64 = 11
+        var now = feedJittered(&estimator, seconds: 10, base: 150_000_000, jitter: 150_000_000, seed: &seed,
+                               start: 1_000_000_000, state: &state)
+        let before = estimator.pacingRate
+        // 2 秒里排队涨到 1 秒。
+        now = feedJittered(&estimator, seconds: 2, base: 150_000_000, jitter: 150_000_000,
+                           extra: { UInt64($0) * 25_000_000 }, seed: &seed, start: now, state: &state)
+        XCTAssertLessThan(estimator.pacingRate, before)
+        XCTAssertGreaterThan(now, 0)
+    }
+
+    /// 干净的链路上门槛跟以前一样：往返平稳时抖动接近 0，涨 60 ms 就算排队。
+    func test_clean_link_keeps_the_plain_queue_threshold() {
+        var estimator = RemoteLinkEstimator(now: 0)
+        var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)
+        var seed: UInt64 = 3
+        var now = feedJittered(&estimator, seconds: 5, base: 50_000_000, jitter: 1_000_000, seed: &seed,
+                               start: 1_000_000_000, state: &state)
+        let before = estimator.pacingRate
+        now = feedJittered(&estimator, seconds: 0.5, base: 110_000_000, jitter: 1_000_000, seed: &seed,
+                           start: now, state: &state)
+        XCTAssertLessThan(estimator.pacingRate, before)
+        XCTAssertLessThan(estimator.state.jitterNanos, 2_000_000)
+    }
+
     func test_heavy_loss_backs_off_after_it_persists() {
         var estimator = RemoteLinkEstimator(now: 0)
         var state: (sequence: UInt64, received: UInt64, bytes: UInt64) = (0, 0, 0)
@@ -233,16 +309,32 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 1_000_000_000,
                                                             pacingRate: 100_000), 1500, "普通帧封顶 1.5 s")
         XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 1_000_000_000,
-                                                            pacingRate: 100_000, recovery: true), 5000,
-                       "恢复帧封顶跟着最长等待")
-        // 窄链路上的大恢复帧（4K 在 2 Mbps 上）：发得完要多久就给多久；普通帧仍 1.5 s。
+                                                            pacingRate: 100_000, kind: .refresh), 5000,
+                       "刷新帧封顶跟着最长等待")
+        // 窄链路上的大刷新帧（4K 在 2 Mbps 上）：发得完要多久就给多久；普通帧仍 1.5 s。
         XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 500_000, roundTripNanos: 60_000_000,
-                                                            pacingRate: 250_000, recovery: true), 2160)
+                                                            pacingRate: 250_000, kind: .refresh), 2160)
         XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 500_000, roundTripNanos: 60_000_000,
                                                             pacingRate: 250_000), 1500)
         XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 100), RemoteLossPolicy.baseFrameWaitNanos)
         XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 2160), 3_240_000_000)
         XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 5000), RemoteLossPolicy.maxFrameWaitNanos)
+    }
+
+    /// 关键帧：手机手上没有能用的参考帧，放弃它也只能再要一个一样大的。时限至少比刷新帧的上限多一点（接收端
+    /// 靠这个认出关键帧），封顶 30 s；按计划算出来的再长也照给（节奏估计偏低时计划偏短）。
+    func test_keyframes_get_a_longer_deadline_than_refresh_frames() {
+        let small = RemoteLossPolicy.frameDeadlineMillis(frameBytes: 10_000, roundTripNanos: 100_000_000,
+                                                         pacingRate: 1_000_000, kind: .keyframe)
+        XCTAssertEqual(small, 5001)
+        XCTAssertGreaterThan(UInt64(small) * 1_000_000, RemoteLossPolicy.maxFrameWaitNanos)
+        // 184 KB 在 0.2 Mbps（25 KB/s）上：7.36 s 再加两轮往返。
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 184_000, roundTripNanos: 300_000_000,
+                                                            pacingRate: 25_000, kind: .keyframe), 8000)
+        XCTAssertEqual(RemoteLossPolicy.frameDeadlineMillis(frameBytes: 4_000_000, roundTripNanos: 300_000_000,
+                                                            pacingRate: 25_000, kind: .keyframe), 30_000)
+        XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 5001), 7_501_500_000)
+        XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 30_000), RemoteLossPolicy.keyframeMaxWaitNanos)
     }
 
     func test_rate_controller_ignores_light_loss_but_not_heavy_loss() {

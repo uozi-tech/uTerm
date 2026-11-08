@@ -220,7 +220,7 @@ final class RemoteDesktopDatagramTests: XCTestCase {
             while !Task.isCancelled {
                 sequence += 1
                 mac.sendVideo(Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 40_000), sequence: sequence,
-                              recovery: false)
+                              kind: .normal)
                 try? await Task.sleep(for: .milliseconds(33))
             }
         }

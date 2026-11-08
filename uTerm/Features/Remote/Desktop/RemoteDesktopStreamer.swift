@@ -477,9 +477,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                              pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,
                              current.encoderDrops - last.stats.encoderDrops, quality.maxQP)
         let link = linkState.map {
-            String(format: "｜链路 丢包 %.1f%% 往返 %.0f ms 节奏 %.1f Mbps 纠错 %d 丢帧 %d",
-                   $0.lossRate * 100, Double($0.roundTripNanos ?? 0) / 1e6, $0.pacingRate * 8 / 1e6, fecGroupSize,
-                   current.lostFrames)
+            String(format: "｜链路 丢包 %.1f%% 往返 %.0f ms 抖动 %.0f ms 排队 %.0f ms 节奏 %.1f Mbps 纠错 %d 丢帧 %d",
+                   $0.lossRate * 100, Double($0.roundTripNanos ?? 0) / 1e6, Double($0.jitterNanos) / 1e6,
+                   Double($0.queueDelayNanos) / 1e6, $0.pacingRate * 8 / 1e6, fecGroupSize, current.lostFrames)
         } ?? ""
         AppLogger.info(message + link, category: RemoteLog.category)
         if sendsLatency, !trips.isEmpty,
@@ -693,8 +693,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
         // 旁路精修帧不在参考链里，丢了也不用恢复，体积又大：走可靠通道，慢一点无所谓。
         if let video, !flags.contains(.sidecar) {
-            video.sendVideo(payload, sequence: sequence,
-                            recovery: !flags.contains(.refine) && (flags.contains(.keyframe) || flags.contains(.ltrRefresh)))
+            let kind: RemoteLossPolicy.FrameKind = flags.contains(.refine) ? .normal
+                : flags.contains(.keyframe) ? .keyframe : flags.contains(.ltrRefresh) ? .refresh : .normal
+            video.sendVideo(payload, sequence: sequence, kind: kind)
         } else {
             link.sendOnQueue(RemoteMessage(.desktopFrame, channel: channel, payload: payload),
                              countsTowardBackpressure: false)

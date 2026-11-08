@@ -165,7 +165,8 @@ nonisolated struct RemoteVideoSendBuffer {
     struct Limits: Equatable {
         var maxFrames = 256
         var maxBytes = 32 * 1024 * 1024
-        /// 接收端最多等一帧 `RemoteLossPolicy.maxFrameWaitNanos`，在那之前还可能来要重传：多留一秒。
+        /// 接收端最多等一帧 `RemoteLossPolicy.maxFrameWaitNanos`，在那之前还可能来要重传：多留一秒。关键帧
+        /// 等得更久（`RemoteLossPolicy.frameWaitCap`），按它自己的时限留。
         var maxAgeNanos: UInt64 = RemoteLossPolicy.maxFrameWaitNanos + 1_000_000_000
     }
 
@@ -176,6 +177,8 @@ nonisolated struct RemoteVideoSendBuffer {
         let dataCount: Int
         let sentNanos: UInt64
         let expiresNanos: UInt64
+        /// 留到什么时候：接收端还可能为它来要重传。
+        let keepUntil: UInt64
         var lastProbeNanos: UInt64
         var lastWholeResend: UInt64 = 0
 
@@ -196,6 +199,13 @@ nonisolated struct RemoteVideoSendBuffer {
 
     var isEmpty: Bool { frames.isEmpty }
 
+    /// 发出去多久没人回话就按丢失处理。关键帧（时限超过 `RemoteLossPolicy.maxFrameWaitNanos`）跟接收端一样等到
+    /// `frameWaitCap`：接收端还在一片片拼的时候就当它丢了，只会再发一个一样大的关键帧排在后面。
+    static func answerWait(deadlineMillis: Int) -> UInt64 {
+        let deadline = UInt64(max(0, deadlineMillis)) * 1_000_000
+        return deadline > RemoteLossPolicy.maxFrameWaitNanos ? RemoteLossPolicy.frameWaitCap(deadlineMillis: deadlineMillis) : deadline
+    }
+
     /// 切好一帧，返回要发的分片。
     mutating func add(payload: Data, sequence: UInt32, channel: UInt32, fecGroupSize: Int, deadlineMillis: Int,
                       roundTripMillis: Int, now: UInt64) -> [Data] {
@@ -206,7 +216,10 @@ nonisolated struct RemoteVideoSendBuffer {
                                                     roundTripMillis: roundTripMillis)
         frames.append(Frame(videoSequence: videoSequence, sequence: sequence, packets: packets,
                             dataCount: RemoteVideoPacketizer.fragmentCount(totalBytes: payload.count),
-                            sentNanos: now, expiresNanos: now &+ UInt64(deadlineMillis) * 1_000_000, lastProbeNanos: now))
+                            sentNanos: now, expiresNanos: now &+ Self.answerWait(deadlineMillis: deadlineMillis),
+                            keepUntil: now &+ max(limits.maxAgeNanos,
+                                                  RemoteLossPolicy.frameWaitCap(deadlineMillis: deadlineMillis) + 1_000_000_000),
+                            lastProbeNanos: now))
         totalBytes += payload.count
         trim(now: now)
         return packets
@@ -269,8 +282,12 @@ nonisolated struct RemoteVideoSendBuffer {
     }
 
     private mutating func trim(now: UInt64) {
-        while let oldest = frames.first,
-              frames.count > limits.maxFrames || totalBytes > limits.maxBytes || now &- oldest.sentNanos > limits.maxAgeNanos {
+        frames.removeAll { frame in
+            guard now > frame.keepUntil else { return false }
+            totalBytes -= frame.byteCount
+            return true
+        }
+        while let oldest = frames.first, frames.count > limits.maxFrames || totalBytes > limits.maxBytes {
             totalBytes -= oldest.byteCount
             frames.removeFirst()
         }
@@ -299,6 +316,8 @@ nonisolated struct RemoteVideoReassembler {
     private struct Partial {
         var header: RemoteVideoPacketHeader
         var fragments: [Data?]
+        /// 每个数据分片第一次到的时刻（0 = 还没到），判乱序用。
+        var arrivals: [UInt64]
         var parities: [Data?]
         var firstArrival: UInt64
         var lastArrival: UInt64
@@ -307,18 +326,21 @@ nonisolated struct RemoteVideoReassembler {
         var received = 0
 
         /// 什么时候放弃。分片还在一片片到，说明它只是发得慢（节奏刚被压下去，或者排在别的帧后面），不算丢：
-        /// 从最后一片算起再等够两轮重传。总时长封顶，解码器不能为一帧无限等下去。
-        var deadline: UInt64 {
+        /// 从最后一片算起再等够两轮重传（抖动大时再加两倍乱序窗口，分片之间本来就会空出这么久）。总时长封顶，
+        /// 解码器不能为一帧无限等下去。
+        func deadline(reorderWindow: UInt64) -> UInt64 {
             let planned = firstArrival &+ UInt64(header.deadlineMillis) * 1_000_000
-            let quiet = max(80_000_000, UInt64(header.roundTripMillis) * 2_000_000 + 40_000_000)
+            let quiet = max(80_000_000, UInt64(header.roundTripMillis) * 2_000_000 + 40_000_000, reorderWindow * 2)
             let cap = firstArrival &+ RemoteLossPolicy.frameWaitCap(deadlineMillis: Int(header.deadlineMillis))
             return min(cap, max(planned, lastArrival &+ quiet))
         }
         var isComplete: Bool { received == fragments.count }
     }
 
-    /// 一个分片后面的分片到了，这个分片等多久算丢（包会乱序）。
+    /// 一个分片后面的分片到了，这个分片至少等多久才算丢（包会乱序）。实际等多久看 `reorderWindow`。
     static let reorderWaitNanos: UInt64 = 6_000_000
+    /// 乱序窗口的上限。
+    static let maxReorderWindowNanos: UInt64 = 500_000_000
     /// 一帧在途最多拼多少帧：超出的是对端出错。
     static let maxPartialFrames = 128
     static let maxFrameBytes = UInt32(RemoteConstants.maxFrameBytes)
@@ -330,6 +352,12 @@ nonisolated struct RemoteVideoReassembler {
     private var missing: [UInt32: UInt64] = [:]
     private var lastMissingNack: [UInt32: UInt64] = [:]
     private var highestSeen: UInt32 = 0
+    /// 整帧没见过的帧是什么时候发现的：乱序窗口过了才要重传，赶在之前到了就是乱序，量一下晚了多久。
+    private var missingSince: [UInt32: UInt64] = [:]
+    /// 乱序窗口（RACK 的思路）：一个分片后面的分片已经到了这么久，它还没到才算丢。按实际观察到的乱序有多晚来定：
+    /// 以前固定 6 ms，±150 ms 抖动下几乎每个分片都被当成丢了去要重传，重传又挤掉新分片（2026-11-09）。
+    /// 晚到的分片立刻把窗口撑大，之后没那么晚了再慢慢收回来。
+    private(set) var reorderWindow: UInt64 = RemoteVideoReassembler.reorderWaitNanos
     private(set) var counters = Counters()
 
     var hasWork: Bool { !partials.isEmpty || !missing.isEmpty }
@@ -348,6 +376,7 @@ nonisolated struct RemoteVideoReassembler {
             channel = header.channel
             partials = [:]
             missing = [:]
+            missingSince = [:]
             lastMissingNack = [:]
             nextExpected = 1
             highestSeen = 0
@@ -364,15 +393,26 @@ nonisolated struct RemoteVideoReassembler {
             let count = RemoteVideoPacketizer.fragmentCount(totalBytes: Int(header.totalBytes))
             let parities = RemoteVideoPacketizer.parityCount(fragments: count, groupSize: Int(header.fecGroupSize))
             partials[videoSequence] = Partial(header: header, fragments: Array(repeating: nil, count: count),
+                                              arrivals: Array(repeating: 0, count: count),
                                               parities: Array(repeating: nil, count: parities),
                                               firstArrival: now, lastArrival: now)
+            // 整帧晚到：要重传的请求发出去不到半个往返就到了，只能是原来那份。
+            if let since = missingSince.removeValue(forKey: videoSequence),
+               lastMissingNack[videoSequence] == nil
+                || now &- (since &+ reorderWindow) < UInt64(header.roundTripMillis) * 500_000 {
+                noteReordering(lateness: now &- since)
+            }
             missing[videoSequence] = nil
+            lastMissingNack[videoSequence] = nil
         }
         // 比它旧、没见过的帧：整帧都没到。
         if videoSequence > highestSeen {
             var cursor = max(highestSeen &+ 1, nextExpected)
             while cursor < videoSequence {
-                if partials[cursor] == nil { missing[cursor] = now &+ UInt64(header.deadlineMillis) * 1_000_000 }
+                if partials[cursor] == nil {
+                    missing[cursor] = now &+ UInt64(header.deadlineMillis) * 1_000_000
+                    missingSince[cursor] = now
+                }
                 cursor &+= 1
             }
             highestSeen = videoSequence
@@ -387,7 +427,15 @@ nonisolated struct RemoteVideoReassembler {
                 counters.duplicates += 1
             } else if body.count == expected {
                 partial.fragments[index] = Data(body)
+                partial.arrivals[index] = now
                 partial.received += 1
+                // 后面的分片先到了、它没被要过重传（或者要了还不到半个往返，不可能是重传的那份）：纯乱序，
+                // 量一下晚了多久。
+                let original = partial.lastNack[index].map { now &- $0 < UInt64(header.roundTripMillis) * 500_000 } ?? true
+                if index < partial.highestIndex, original,
+                   let earliest = partial.arrivals[(index + 1)...].lazy.filter({ $0 > 0 }).min() {
+                    noteReordering(lateness: now &- earliest)
+                }
             }
         } else if index - partial.fragments.count < partial.parities.count, body.count == RemoteVideoPacketizer.fragmentBytes {
             partial.parities[index - partial.fragments.count] = Data(body)
@@ -402,17 +450,23 @@ nonisolated struct RemoteVideoReassembler {
     mutating func tick(now: UInt64) -> Output {
         var output = Output()
         for videoSequence in partials.keys.sorted() {
-            guard var partial = partials[videoSequence], !partial.isComplete, now < partial.deadline else { continue }
-            let wait = max(Self.reorderWaitNanos, UInt64(partial.header.roundTripMillis) * 1_000_000 / 4)
+            guard var partial = partials[videoSequence], !partial.isComplete,
+                  now < partial.deadline(reorderWindow: reorderWindow) else { continue }
+            let wait = max(reorderWindow, UInt64(partial.header.roundTripMillis) * 1_000_000 / 4)
             let retry = max(10_000_000, UInt64(partial.header.roundTripMillis) * 1_250_000)
             let tailQuiet = now &- partial.lastArrival >= wait
+            // 从后往前扫，记住后面已到分片里最早的到达时刻：它到了超过乱序窗口，前面缺的才算丢。
+            var laterArrival = UInt64.max
             var indices: [UInt16] = []
-            for index in partial.fragments.indices where partial.fragments[index] == nil {
-                guard (index < partial.highestIndex && now &- partial.lastArrival >= Self.reorderWaitNanos) || tailQuiet,
-                      now &- (partial.lastNack[index] ?? 0) >= retry else { continue }
+            for index in partial.fragments.indices.reversed() {
+                defer { if partial.arrivals[index] > 0 { laterArrival = min(laterArrival, partial.arrivals[index]) } }
+                guard partial.fragments[index] == nil else { continue }
+                let overtaken = laterArrival != .max && now &- laterArrival >= reorderWindow
+                guard overtaken || tailQuiet, now &- (partial.lastNack[index] ?? 0) >= retry else { continue }
                 partial.lastNack[index] = now
                 indices.append(UInt16(index))
             }
+            indices.reverse()
             if !indices.isEmpty {
                 counters.nackedPackets += indices.count
                 output.nacks.append(RemoteVideoNack(channel: channel, videoSequence: videoSequence, indices: indices))
@@ -420,6 +474,7 @@ nonisolated struct RemoteVideoReassembler {
             partials[videoSequence] = partial
         }
         for (videoSequence, deadline) in missing where now < deadline {
+            if let since = missingSince[videoSequence], now &- since < reorderWindow { continue }
             let last = lastMissingNack[videoSequence] ?? 0
             guard now &- last >= 30_000_000 else { continue }
             lastMissingNack[videoSequence] = now
@@ -427,6 +482,15 @@ nonisolated struct RemoteVideoReassembler {
         }
         deliver(into: &output, now: now)
         return output
+    }
+
+    /// 一个没被要过重传的分片（或整帧）比它后面的晚到了 `lateness`。
+    private mutating func noteReordering(lateness: UInt64) {
+        if lateness > reorderWindow {
+            reorderWindow = min(Self.maxReorderWindowNanos, lateness + lateness / 8)
+        } else {
+            reorderWindow = max(Self.reorderWaitNanos, reorderWindow - (reorderWindow - lateness) / 64)
+        }
     }
 
     /// 同一组里只缺一个数据分片、纠错分片到了：异或补回来。
@@ -467,7 +531,7 @@ nonisolated struct RemoteVideoReassembler {
                     }
                     output.frames.append(frame)
                     counters.completedFrames += 1
-                } else if now >= partial.deadline {
+                } else if now >= partial.deadline(reorderWindow: reorderWindow) {
                     output.lost.append(nextExpected)
                     counters.lostFrames += 1
                 } else {
@@ -477,6 +541,7 @@ nonisolated struct RemoteVideoReassembler {
             } else if let deadline = missing[nextExpected] {
                 guard now >= deadline else { return }
                 missing[nextExpected] = nil
+                missingSince[nextExpected] = nil
                 lastMissingNack[nextExpected] = nil
                 output.lost.append(nextExpected)
                 counters.lostFrames += 1
