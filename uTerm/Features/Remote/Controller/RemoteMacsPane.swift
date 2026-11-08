@@ -166,8 +166,9 @@ struct RemoteMacsPane: View {
         if mac.source == .nearby {
             Button("配对…") { open(mac) }
         } else {
+            // 不在线时终端与屏幕都打不开；「网络诊断」留着，正好查为什么不在线。
             Button("打开终端") { open(mac) }.disabled(!mac.isOnline)
-            Button("打开屏幕") { openWindow(value: RemoteDesktopWindowID(macID: mac.id)) }
+            Button("打开屏幕") { openWindow(value: RemoteDesktopWindowID(macID: mac.id)) }.disabled(!mac.isOnline)
             Button("网络诊断") { openWindow(value: RemoteDiagnosticsWindowID(macID: mac.id)) }
             Divider()
             Button("忘记这台 Mac…", role: .destructive) { forgetting = mac }
@@ -361,6 +362,7 @@ private struct RemoteMacDetailPanel: View {
                     .disabled(!mac.isOnline)
                 HStack(spacing: 8) {
                     DetailActionButton(title: "打开屏幕", systemImage: "display", action: onOpenScreen)
+                        .disabled(!mac.isOnline)
                     DetailActionButton(title: "网络诊断", systemImage: "stethoscope", action: onDiagnose)
                 }
                 UDButton(title: String(localized: "忘记这台 Mac…"), style: .ghost, action: onForget)
