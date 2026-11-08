@@ -420,9 +420,9 @@ final class RemoteHostServer {
     /// 交给别人的中继：中继认证书（1.3.0 起）时是只能连本机、有到期时间的证书，老中继上是共用的成员密钥，
     /// 还不知道中继版本（没注册上）时不给。
     ///
-    /// 同一台设备复用上次那张；剩不到 `certificateRenewWithin` 就续（同一把钥匙、新的到期时间）。设备每次连上来
-    /// 主机都会把它交过去，所以正常用着的设备感觉不到续期。邀请里那张只给 `lifetime`（1 天），配上后第一次
-    /// 连上来就续成 90 天。
+    /// 同一台设备复用上次那张；签发超过 7 天就续（同一把钥匙、新的到期时间，见 `needsRenewal`）。设备每次连上来
+    /// 主机都会把它交过去，平时还会经中继来要（`renewRelayGrant`），所以正常用着的设备感觉不到续期。邀请里那张
+    /// 只给 `lifetime`（1 天），配上后第一次就续成一年。
     private func sharedRelay(from root: RemoteRelayConfig, peer: inout RemotePeer?,
                              lifetime: TimeInterval = RemoteRelayConfig.certificateLifetime) -> RemoteRelayConfig? {
         guard !root.isCertificate,
@@ -455,6 +455,16 @@ final class RemoteHostServer {
         let config = sharedRelay(from: root, peer: &peer)
         if let peer, peer != known { try? trust(peer) }
         return config
+    }
+
+    /// 设备经中继来续它手里那张证书：只续自己给这台设备记着的那张（公钥对得上、还没过期），勾选过公网接入
+    /// （信令那层已核对）。续了还是同一把钥匙；没到续的时候就原样再给一次。
+    func renewRelayGrant(peerID: UUID, member: String) -> RemoteRelayConfig? {
+        guard let grant = identity.peer(id: peerID)?.relayGrant, grant.memberPublicKey == member,
+              !grant.isExpired() else { return nil }
+        let renewed = relayConfig(forPeer: peerID)
+        guard renewed?.memberPublicKey == member else { return nil }
+        return renewed
     }
 
     /// 吊销一张发出去的证书：先记下，注册在那台中继上时立刻发，否则下次注册上再补。

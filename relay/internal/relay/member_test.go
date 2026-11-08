@@ -21,7 +21,7 @@ type certMember struct {
 }
 
 // hostCertLifetime is what hosts issue.
-const hostCertLifetime = 90 * 24 * time.Hour
+const hostCertLifetime = 365 * 24 * time.Hour
 
 func (h *harness) certify(scope string) certMember {
 	h.t.Helper()

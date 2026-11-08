@@ -27,9 +27,9 @@ const (
 	// certPrefix starts the text a member certificate signs, see certMessage. v1 certificates (relay 1.2.x)
 	// had no expiry and are no longer accepted.
 	certPrefix = "uterm-relay-member-v2"
-	// certMaxLifetime caps how far ahead a certificate may expire. Hosts issue 90 days; anything signed
+	// certMaxLifetime caps how far ahead a certificate may expire. Hosts issue a year; anything signed
 	// further out is refused, which also bounds how long a revocation has to be kept.
-	certMaxLifetime = 180 * 24 * time.Hour
+	certMaxLifetime = 400 * 24 * time.Hour
 )
 
 const (

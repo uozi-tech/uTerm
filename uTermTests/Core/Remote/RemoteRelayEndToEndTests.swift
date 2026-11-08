@@ -200,6 +200,104 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertTrue(failed, "证书不能注册主机：\(String(describing: host.relayLink?.state))")
     }
 
+    /// 签发超过一周的证书：设备经中继向签发的 Mac 要一张新的（同一把钥匙、一年后到期），旧的在自己到期前照样能用；
+    /// 忘记设备（吊销）后要不到，过期的本地就拦下。
+    func test_device_renews_its_certificate_through_the_relay() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        allowed.set([phone.id])
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        try mac.server.trust(try phone.peer())
+        let issued = try XCTUnwrap(mac.server.relayConfig(forPeer: phone.id))
+        var record = try XCTUnwrap(mac.server.identity.peer(id: phone.id))
+        let aged = try issued.renewed(by: config, now: Date() - 10 * 86_400)
+        record.relayGrant = aged
+        try mac.server.identity.trust(record)
+
+        let relay = RemoteRelayClient(config: aged)
+        let renewed = try await RemoteRelayCertificateRenewal.renew(aged, from: mac.peer, relay: relay,
+                                                                   identity: phone.identity, localID: phone.id)
+        await relay.stop()
+        XCTAssertEqual(renewed.key, aged.key, "同一把钥匙")
+        XCTAssertEqual(TimeInterval(try XCTUnwrap(renewed.expires)),
+                       Date().timeIntervalSince1970 + RemoteRelayConfig.certificateLifetime, accuracy: 5)
+        XCTAssertEqual(mac.server.identity.peer(id: phone.id)?.relayGrant, renewed, "Mac 记下新的，吊销按它的到期时间")
+
+        let old = RemoteRelayClient(config: aged)
+        let oldSees = try await old.onlineHosts()
+        await old.stop()
+        XCTAssertEqual(oldSees, [mac.peer.id], "旧证书在自己到期前照样能用")
+
+        // 没勾选公网接入：Mac 不回，按超时失败。
+        allowed.set([])
+        let unticked = RemoteRelayClient(config: renewed)
+        do {
+            _ = try await RemoteRelayCertificateRenewal.renew(renewed, from: mac.peer, relay: unticked,
+                                                              identity: phone.identity, localID: phone.id, timeout: 1)
+            XCTFail("没勾选的设备不该续上")
+        } catch {}
+        await unticked.stop()
+
+        mac.server.revoke(phone.id)
+        let confirmed = await waitUntil { mac.server.relayRevocations.pending(relayID: config.relayID).isEmpty }
+        XCTAssertTrue(confirmed)
+        let revoked = RemoteRelayClient(config: renewed)
+        do {
+            _ = try await RemoteRelayCertificateRenewal.renew(renewed, from: mac.peer, relay: revoked,
+                                                              identity: phone.identity, localID: phone.id, timeout: 1)
+            XCTFail("吊销后不能续")
+        } catch {
+            XCTAssertEqual(error as? RemoteRelayError, .rejected, "中继直接不让吊销的证书进来")
+        }
+        await revoked.stop()
+
+        let expired = try issued.renewed(by: config, now: Date() - 400 * 86_400)
+        let stale = RemoteRelayClient(config: expired)
+        do {
+            _ = try await RemoteRelayCertificateRenewal.renew(expired, from: mac.peer, relay: stale,
+                                                              identity: phone.identity, localID: phone.id)
+            XCTFail("过期的不能续")
+        } catch {
+            XCTAssertEqual(error as? RemoteRelayError, .certificateExpired)
+        }
+        await stale.stop()
+    }
+
+    /// 平时查 Mac 在不在线时就顺手续：目录问完中继，签发超过一周的证书经中继换成新的，用户无感。
+    func test_directory_renews_certificates_while_checking_who_is_online() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        allowed.set([phone.id])
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        try mac.server.trust(try phone.peer())
+        let issued = try XCTUnwrap(mac.server.relayConfig(forPeer: phone.id))
+        var record = try XCTUnwrap(mac.server.identity.peer(id: phone.id))
+        let aged = try issued.renewed(by: config, now: Date() - 10 * 86_400)
+        record.relayGrant = aged
+        try mac.server.identity.trust(record)
+
+        var known = mac.peer
+        known.platform = RemoteDevicePlatform.mac.rawValue
+        known.relay = aged
+        try phone.identity.trust(known)
+        let suite = "RemoteRelayEndToEndTests.directory.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: DefaultsKey.remoteBrowseActivated)
+        let directory = RemoteMacDirectory(identity: phone.identity, defaults: defaults, adoptsRelayAsDefault: false)
+        let watcher = Task { await directory.keepLiveStatusFresh() }
+        defer { watcher.cancel() }
+        let renewed = await waitUntil(15) {
+            (phone.identity.peer(id: mac.peer.id)?.relay?.expires ?? 0) > (aged.expires ?? 0)
+        }
+        XCTAssertTrue(renewed, "查在线状态时续上了")
+        XCTAssertEqual(phone.identity.peer(id: mac.peer.id)?.relay?.key, aged.key)
+    }
+
     /// 中继 1.3.0 只认有到期时间、且没过期的证书。
     func test_relay_refuses_certificates_without_a_valid_expiry() async throws {
         let config = try relayConfig()
@@ -211,7 +309,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         var stretched = try config.certificate(for: mac.peer.id)
         stretched.expires = (stretched.expires ?? 0) + 86_400
         await assertRejected(stretched)
-        let tooLong = try config.certificate(for: mac.peer.id, lifetime: 200 * 86_400)
+        let tooLong = try config.certificate(for: mac.peer.id, lifetime: 401 * 86_400)
         await assertRejected(tooLong)
         let good = RemoteRelayClient(config: try config.certificate(for: mac.peer.id))
         let seen = try await good.onlineHosts()

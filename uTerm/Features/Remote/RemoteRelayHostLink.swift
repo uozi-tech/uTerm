@@ -240,8 +240,18 @@ final class RemoteRelayHostLink {
             startProbe(request, session: session, connection: connection)
         case .relayEcho(let reply):
             try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: reply))
+            return
         case .ignore, nil:
             break
+        }
+        if let request = responder?.receiveRenewal(session: session, from: message.from, box: message.box, now: now),
+           let renewed = server?.renewRelayGrant(peerID: request.peer.id, member: request.member) {
+            var reply = RemoteSignalBody(kind: .renewedCertificate, deviceID: server?.localID ?? UUID(), sentAt: now,
+                                         nonce: RemoteSignalBody.newNonce())
+            reply.relay = RemoteJSON.encode(renewed)
+            guard let sealed = try? RemoteSignalBox.seal(reply, key: request.sharedKey, session: session,
+                                                         direction: .macToPhone) else { return }
+            try? await connection.send(RemoteRelayMessage(type: "signal", session: session, box: sealed))
         }
     }
 

@@ -69,6 +69,8 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<!-- 后台刷新：经中继续成员证书的补充（RemoteMacDirectoryLifecycle，系统不保证执行）。 -->
+		<string>fetch</string>
 	</array>
 	<!-- 并行执行切到别的 App 后继续跑：iOS 26 的 BGContinuedProcessingTask（用户点「运行」时
 	     在前台提交，系统在锁屏 / 灵动岛显示进度）。见 Screens/Parallel/ParallelRunSessions.swift
@@ -77,6 +79,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.uozi.uTerm.parallel.*</string>
+		<string>com.uozi.uTerm.relay.renewCertificates</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

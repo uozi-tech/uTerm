@@ -415,6 +415,8 @@ final class RemoteMacDirectory {
                 guard !Task.isCancelled else { return }
                 self?.lastRelayPoll = .now
                 self?.setRelayHosts(hosts)
+                // 刚和中继打过交道：手里该续的证书顺手去续（在线的那几台）。
+                self?.startCertificateRenewals()
                 // 只借用一下 self，不在睡眠期间强持有它。
                 guard let interval = self?.relayPollInterval, self?.wantsLiveRelayStatus == true else { return }
                 try? await Task.sleep(for: interval)
@@ -476,6 +478,69 @@ final class RemoteMacDirectory {
             Task { await client.stop() }
         }
         return configs.map { ($0.memberIdentity, relayClient(for: $0)) }
+    }
+
+    /// 正在续、或最近试过（Mac 不在线、不回）的证书：Mac ID → 上次开始的时刻。
+    @ObservationIgnored private var renewalAttempts: [UUID: Date] = [:]
+    @ObservationIgnored private var renewalsInFlight: Set<UUID> = []
+
+    /// 该续的证书（签发超过一周、还没过期）、它的 Mac 此刻在中继上、最近一小时没试过：经中继去要新的。
+    private func certificatesDue(now: Date) -> [RemotePeer] {
+        identity.trustedPeers().filter { peer in
+            guard let relay = peer.relay, relay.needsRenewal(now: now), !relay.isExpired(now: now),
+                  !renewalsInFlight.contains(peer.id) else { return false }
+            if let last = renewalAttempts[peer.id],
+               now.timeIntervalSince(last) < RemoteRelayCertificateRenewal.retryInterval { return false }
+            return relayHosts[relay.memberIdentity]?.contains(peer.id) ?? false
+        }
+    }
+
+    private func startCertificateRenewals() {
+        let due = certificatesDue(now: Date())
+        guard !due.isEmpty else { return }
+        Task { [weak self] in await self?.renew(due) }
+    }
+
+    /// 手里有别的 Mac 发的成员证书：后台刷新才有事可做。读钥匙串，别放进视图 body。
+    var holdsRelayCertificates: Bool {
+        identity.trustedPeers().contains { $0.relay?.isCertificate == true }
+    }
+
+    /// 后台刷新（iOS 的 BGAppRefreshTask）里调：先问一遍中继谁在线，再把该续的续了。等它们都结束才返回。
+    func renewDueCertificates() async {
+        guard isActivated else { return }
+        var online: [String: Set<UUID>] = [:]
+        for (identity, client) in pollTargets() where identity.contains("/") {
+            online[identity] = (try? await fetchRelayHosts(client)) ?? []
+        }
+        for (identity, hosts) in online { relayHosts[identity] = hosts }
+        await renew(certificatesDue(now: Date()))
+    }
+
+    private func renew(_ peers: [RemotePeer]) async {
+        let localID = RemoteLocalDevice.id()
+        await withTaskGroup(of: Void.self) { group in
+            for peer in peers {
+                guard let certificate = peer.relay, !renewalsInFlight.contains(peer.id) else { continue }
+                renewalsInFlight.insert(peer.id)
+                renewalAttempts[peer.id] = Date()
+                let relay = relayClient(for: certificate)
+                let identity = self.identity
+                group.addTask { [weak self] in
+                    let renewed = try? await RemoteRelayCertificateRenewal.renew(
+                        certificate, from: peer, relay: relay, identity: identity, localID: localID)
+                    await self?.finishRenewal(peer.id, renewed)
+                }
+            }
+        }
+    }
+
+    private func finishRenewal(_ macID: UUID, _ renewed: RemoteRelayConfig?) {
+        renewalsInFlight.remove(macID)
+        guard let renewed else { return }
+        AppLogger.info("远程控制：经中继续好了成员证书", category: RemoteLog.category)
+        renewalAttempts[macID] = nil
+        receiveRelayConfig(renewed, from: macID)
     }
 
     private func setRelayHosts(_ hosts: [String: Set<UUID>]) {

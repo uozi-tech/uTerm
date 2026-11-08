@@ -44,7 +44,8 @@ final class RemoteRelayCertificateTests: XCTestCase {
         XCTAssertEqual(String(decoding: message, as: UTF8.self),
                        "uterm-relay-member-v2\n6f1c00aa\n\(member)\n\(host.uuidString)\n\(expires)")
         XCTAssertEqual(TimeInterval(expires), Date().timeIntervalSince1970 + RemoteRelayConfig.certificateLifetime,
-                       accuracy: 5, "90 天后到期")
+                       accuracy: 5, "一年后到期")
+        XCTAssertEqual(RemoteRelayConfig.certificateLifetime, 365 * 86_400)
 
         XCTAssertThrowsError(try certificate.certificate(for: host), "证书不能再签证书")
         XCTAssertNotEqual(try root.certificate(for: host).key, certificate.key, "每次一把新钥匙")
@@ -225,15 +226,18 @@ final class RemoteRelayCertificateTests: XCTestCase {
     func testRenewalKeepsTheKeyAndPushesTheExpiryOut() throws {
         let issued = Date(timeIntervalSince1970: 1_800_000_000)
         let certificate = try root.certificate(for: UUID(), now: issued)
-        XCTAssertFalse(certificate.needsRenewal(now: issued + 29 * 86_400), "前 30 天不续")
-        XCTAssertTrue(certificate.needsRenewal(now: issued + 31 * 86_400), "剩不到 60 天就续")
-        XCTAssertFalse(certificate.isExpired(now: issued + 89 * 86_400))
-        XCTAssertTrue(certificate.isExpired(now: issued + 90 * 86_400))
+        XCTAssertFalse(certificate.needsRenewal(now: issued + 6 * 86_400), "签发一周内不续")
+        XCTAssertTrue(certificate.needsRenewal(now: issued + 8 * 86_400), "签发超过一周就续")
+        XCTAssertFalse(certificate.isExpired(now: issued + 364 * 86_400))
+        XCTAssertTrue(certificate.isExpired(now: issued + 365 * 86_400))
+        let invitation = try root.certificate(for: UUID(), lifetime: RemoteRelayConfig.invitationCertificateLifetime,
+                                              now: issued)
+        XCTAssertTrue(invitation.needsRenewal(now: issued), "邀请里那张一天的：配上就续")
 
         let renewed = try certificate.renewed(by: root, now: issued + 31 * 86_400)
         XCTAssertEqual(renewed.key, certificate.key, "同一把钥匙：吊销仍认同一个公钥")
         XCTAssertEqual(renewed.scope, certificate.scope)
-        XCTAssertEqual(renewed.expires, Int64(issued.timeIntervalSince1970) + 121 * 86_400)
+        XCTAssertEqual(renewed.expires, Int64(issued.timeIntervalSince1970) + (31 + 365) * 86_400)
         XCTAssertNotEqual(renewed.cert, certificate.cert)
         XCTAssertTrue(renewed.sameMember(as: certificate))
         XCTAssertThrowsError(try certificate.renewed(by: certificate), "只有中继本身的成员密钥能续")
@@ -273,9 +277,9 @@ final class RemoteRelayCertificateTests: XCTestCase {
     func testHostRenewsAnAgingGrantWhenTheDeviceComesBack() throws {
         let (server, identity, peer) = try makeServer(version: "1.3.0")
         let first = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
-        // 拨回 50 天前发的：只剩 40 天。
+        // 拨回 10 天前发的：签发超过一周。
         var aging = try XCTUnwrap(identity.peer(id: peer.id))
-        aging.relayGrant = try first.renewed(by: root, now: Date() - 50 * 86_400)
+        aging.relayGrant = try first.renewed(by: root, now: Date() - 10 * 86_400)
         try identity.trust(aging)
         let renewed = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
         XCTAssertEqual(renewed.key, first.key)
@@ -334,6 +338,66 @@ final class RemoteRelayCertificateTests: XCTestCase {
                        "1.2.x 只认没有到期时间的证书：这一版不再发那种证书，照旧发成员密钥")
         let (unknown, _, unknownPeer) = try makeServer(version: nil)
         XCTAssertNil(unknown.relayConfig(forPeer: unknownPeer.id), "还不知道中继版本时不发，注册上再发")
+    }
+
+    /// 经中继来续：只续自己给这台设备记着的那张（公钥对得上、没过期、没被忘记），续了还是同一把钥匙。
+    func testHostRenewsOnlyItsOwnLiveGrant() throws {
+        let (server, identity, peer) = try makeServer(version: "1.3.0")
+        let first = try XCTUnwrap(server.relayConfig(forPeer: peer.id))
+        let member = try XCTUnwrap(first.memberPublicKey)
+        var aging = try XCTUnwrap(identity.peer(id: peer.id))
+        aging.relayGrant = try first.renewed(by: root, now: Date() - 10 * 86_400)
+        try identity.trust(aging)
+
+        let renewed = try XCTUnwrap(server.renewRelayGrant(peerID: peer.id, member: member))
+        XCTAssertEqual(renewed.key, first.key)
+        XCTAssertGreaterThan(try XCTUnwrap(renewed.expires), try XCTUnwrap(aging.relayGrant?.expires))
+        XCTAssertNil(server.renewRelayGrant(peerID: peer.id, member: try XCTUnwrap(try root.certificate(for: UUID())
+            .memberPublicKey)), "别的钥匙不给续")
+        XCTAssertNil(server.renewRelayGrant(peerID: UUID(), member: member), "不认识的设备")
+
+        var expired = try XCTUnwrap(identity.peer(id: peer.id))
+        expired.relayGrant = try first.renewed(by: root, now: Date() - 400 * 86_400)
+        try identity.trust(expired)
+        XCTAssertNil(server.renewRelayGrant(peerID: peer.id, member: member), "过期的不续：同网连一次或重新扫码")
+
+        server.revoke(peer.id)
+        XCTAssertNil(server.renewRelayGrant(peerID: peer.id, member: member), "忘记（吊销）后不能续")
+    }
+
+    /// 续期信令：只回认识、勾选过公网接入的设备；重放、别的种类、不认识的一律不理。
+    func testRenewalSignalGate() throws {
+        let macKey = Curve25519.KeyAgreement.PrivateKey()
+        let phoneKey = Curve25519.KeyAgreement.PrivateKey()
+        let phoneID = UUID()
+        let phone = RemotePeer(id: phoneID, name: "手机", publicKey: phoneKey.publicKey.rawRepresentation, pairedAt: .now)
+        var allowed = true
+        var responder = RemoteSignalResponder(localKey: macKey, localID: UUID(),
+                                              recognize: { $0 == phoneID ? phone : nil }, isAllowed: { _ in allowed })
+        let shared = try RemoteSignalBox.sharedKey(local: phoneKey, remotePublicKey: macKey.publicKey.rawRepresentation)
+        let now = Date().timeIntervalSince1970
+        func box(_ kind: RemoteSignalBody.Kind, member: String? = "pk", session: String) throws -> String {
+            var body = RemoteSignalBody(kind: kind, deviceID: phoneID, sentAt: now, nonce: RemoteSignalBody.newNonce())
+            body.member = member
+            return try RemoteSignalBox.seal(body, key: shared, session: session, direction: .phoneToMac)
+        }
+        let sealed = try box(.renewCertificate, session: "s1")
+        XCTAssertEqual(responder.receiveRenewal(session: "s1", from: phoneID.uuidString, box: sealed, now: now)?.member, "pk")
+        XCTAssertNil(responder.receiveRenewal(session: "s1", from: phoneID.uuidString, box: sealed, now: now), "重放")
+        XCTAssertNil(responder.receiveRenewal(session: "s2", from: phoneID.uuidString,
+                                              box: try box(.renewCertificate, member: nil, session: "s2"), now: now))
+        XCTAssertNil(responder.receiveRenewal(session: "s3", from: phoneID.uuidString,
+                                              box: try box(.relayProbe, session: "s3"), now: now))
+        XCTAssertNil(responder.receiveRenewal(session: "s4", from: UUID().uuidString,
+                                              box: try box(.renewCertificate, session: "s4"), now: now), "不认识")
+        allowed = false
+        XCTAssertNil(responder.receiveRenewal(session: "s5", from: phoneID.uuidString,
+                                              box: try box(.renewCertificate, session: "s5"), now: now), "没勾选公网接入")
+        // 连接请求的入口不吃续期信令（也不占它的防重放）。
+        allowed = true
+        let renewal = try box(.renewCertificate, session: "s6")
+        XCTAssertNil(responder.respond(session: "s6", from: phoneID.uuidString, box: renewal, now: now))
+        XCTAssertNotNil(responder.receiveRenewal(session: "s6", from: phoneID.uuidString, box: renewal, now: now))
     }
 
     func testUnusedInvitationCertificateIsRevokedWhenReplaced() throws {

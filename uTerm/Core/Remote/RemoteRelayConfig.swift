@@ -70,10 +70,10 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
     }
 
     static let certificatePrefix = "uterm-relay-member-v2"
-    /// 配对后的证书有效期。设备 90 天没连过这台主机才会过期。
-    static let certificateLifetime: TimeInterval = 90 * 86_400
-    /// 剩不到这么久时，设备下次连上来就续一张：正常用着的设备一个月续一次。
-    static let certificateRenewWithin: TimeInterval = 60 * 86_400
+    /// 配对后的证书有效期：一年没和中继打过交道的设备才会过期。
+    static let certificateLifetime: TimeInterval = 365 * 86_400
+    /// 签发超过这么久，设备下次和中继打交道（查在线、远程控制）或连上主机时就续一张。
+    static let certificateRenewAfter: TimeInterval = 7 * 86_400
     /// 邀请里带的证书：配上后马上续成 90 天，没配上的一天后自己作废。
     static let invitationCertificateLifetime: TimeInterval = 86_400
 
@@ -109,11 +109,12 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
         return renewed
     }
 
-    /// 该续了：没有到期时间（1.2.x 发的）、或剩不到 `certificateRenewWithin`。
+    /// 该续了：没有到期时间（1.2.x 发的），或签发已超过 `certificateRenewAfter`（按剩余有效期算：
+    /// 邀请里那张只有一天，配上后第一次就续）。
     func needsRenewal(now: Date = Date()) -> Bool {
         guard isCertificate else { return false }
         guard let expires else { return true }
-        return TimeInterval(expires) - now.timeIntervalSince1970 < Self.certificateRenewWithin
+        return TimeInterval(expires) - now.timeIntervalSince1970 < Self.certificateLifetime - Self.certificateRenewAfter
     }
 
     /// 证书过期了（中继不会再认）。

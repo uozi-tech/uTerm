@@ -21,6 +21,10 @@ nonisolated struct RemoteSignalBody: Codable, Equatable, Sendable {
         case relayProbe
         /// Mac：中继诊断的回复，可以拨了。
         case relayProbeAnswer
+        /// 设备：我手里这张你发的成员证书（`member` 是它的公钥）该续了。
+        case renewCertificate
+        /// Mac：续好的证书（`relay` 是配置 JSON）。
+        case renewedCertificate
     }
 
     var kind: Kind
@@ -32,6 +36,10 @@ nonisolated struct RemoteSignalBody: Codable, Equatable, Sendable {
     /// ICE 描述（ufrag、密码、候选地址）。里面有 IP 地址，所以只放在密封的信令里。
     /// `offer` / `answer` 上是可选的：没有就走中继，旧版本的对端自然落到这条路上。
     var ice: String?
+    /// `renewCertificate`：要续的那张证书的成员公钥。
+    var member: String?
+    /// `renewedCertificate`：续好的证书（`RemoteRelayConfig` 的 JSON）。
+    var relay: Data?
 
     static func newNonce() -> Data {
         Data(SymmetricKey(size: .bits256).withUnsafeBytes { Array($0) })
@@ -337,6 +345,24 @@ nonisolated struct RemoteSignalResponder {
             return .relayEcho(sealed)
         }
         return .accepted(ProbeRequest(peer: peer, sharedKey: shared, remoteDescription: description))
+    }
+
+    /// 设备要续成员证书。
+    struct RenewalRequest: Sendable {
+        let peer: RemotePeer
+        let sharedKey: SymmetricKey
+        /// 要续的那张证书的成员公钥：被控端只续自己记着的那张，续了还是这把钥匙。
+        let member: String
+    }
+
+    /// 只认识的设备才回应（不认识的连「拒绝」都不回）；勾选、公钥核对由被控端做。
+    mutating func receiveRenewal(session: String, from: String?, box: String?, now: TimeInterval) -> RenewalRequest? {
+        guard let from, let deviceID = UUID(uuidString: from), let box, let peer = recognize(deviceID),
+              let shared = try? RemoteSignalBox.sharedKey(local: localKey, remotePublicKey: peer.publicKey),
+              let request = try? RemoteSignalBox.open(box, key: shared, session: session, direction: .phoneToMac),
+              request.kind == .renewCertificate, request.deviceID == deviceID, let member = request.member,
+              isAllowed(deviceID), replayGuard.accept(request, now: now) else { return nil }
+        return RenewalRequest(peer: peer, sharedKey: shared, member: member)
     }
 
     /// 中继说手机为诊断接进来了。一个会话只能接一次。
