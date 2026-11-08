@@ -76,6 +76,8 @@ final class MTabCloseFlow {
 struct WorkspaceTabStrip: View {
     /// 标签条高度（不含顶边净空）。
     static let height: CGFloat = 48
+    /// 工作区分屏区的坐标空间：拖动判定、分隔条、标签条与标签的位置都在这里量。
+    static let coordinateSpace = "workspace-split"
     let tabs: [MWorkTab]
     let activeID: UUID?
     /// 本格是否为聚焦格。
@@ -97,7 +99,13 @@ struct WorkspaceTabStrip: View {
     /// Agent / 分屏两个开关是否放在条尾。状态栏在右侧一列时（Duo），它们改放到那一列状态栏
     /// 下面（WorkspaceSideControls），条上只留返回与标签。
     var showsTrailingControls: Bool = true
-    /// 开始拖某个标签（拖到工作区边上分屏 / 拖进另一格）。
+    /// 这一格的 id：标签条与标签的位置按它记进 `frames`。
+    var paneID: UUID? = nil
+    /// 正在进行的标签拖动（被拖的标签在原位留成空位）。
+    var drag: WorkspaceTabDragTracker? = nil
+    /// 标签条与标签的位置，交给工作区做拖动判定。
+    var frames: WorkspaceStripFrames? = nil
+    /// 开始拖某个标签：条里横着拖是排序，拖出条到工作区边上分屏、拖进另一格并入。
     var onDragTab: (UUID) -> Void = { _ in }
     /// 等用户确认的关闭。归属标签自己弹，所以宽屏下的 popover 指向那枚标签。
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
@@ -124,7 +132,15 @@ struct WorkspaceTabStrip: View {
                                              onMove: { onMoveToOtherPane(tab.id) },
                                              onDragStart: { onDragTab(tab.id) },
                                              closePrompt: closePrompt,
-                                             onConfirmClose: { onConfirmClose(tab.id, $0) })
+                                             onConfirmClose: { onConfirmClose(tab.id, $0) },
+                                             isPlaceholder: drag?.isPlaceholder(tab.id) == true)
+                                // 空位换位不滑：它要是也滑，会从让位的标签身上横穿过去。别的标签滑开，空位直接出现在新位置。
+                                .transaction { if drag?.isPlaceholder(tab.id) == true { $0.animation = nil } }
+                                .onGeometryChange(for: CGRect.self) {
+                                    $0.frame(in: .named(Self.coordinateSpace))
+                                } action: { frame in
+                                    if let paneID { frames?.strips[paneID, default: MStripFrame(frame: .zero)].chips[tab.id] = frame }
+                                }
                                 .id(tab.id)
                         }
                         newMenu
@@ -153,7 +169,15 @@ struct WorkspaceTabStrip: View {
         // 与终端同一个工作面（M.surface = 终端底色），只用底边 hairline 分区。
         .background(M.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named(Self.coordinateSpace))
+        } action: { frame in
+            guard let paneID, let frames else { return }
+            // 关掉 / 挪走的标签留下的旧位置不用清：判定只看这一格此刻的标签。
+            frames.strips[paneID, default: MStripFrame(frame: frame)].frame = frame
+        }
     }
+
 
     private func activity(_ tab: MWorkTab) -> MTabActivity {
         guard tab.id == activeID else { return .inactive }
@@ -267,6 +291,8 @@ struct WorkspaceTabChip: View {
     var onDragStart: () -> Void = {}
     var closePrompt: Binding<MTabClosePrompt?> = .constant(nil)
     var onConfirmClose: (_ alsoOnMac: Bool) -> Void = { _ in }
+    /// 正被拖着：原位只留一个空位（淡淡的胶囊底，没有字），被拖的标签由系统画在手指下。
+    var isPlaceholder = false
     @Environment(\.mAccent) private var accent
     /// Duo 状态行里胶囊加高到 36pt（行高 82，30pt 的胶囊显得太扁，实机反馈）。
     @Environment(\.mInStatusRow) private var inStatusRow
@@ -317,9 +343,10 @@ struct WorkspaceTabChip: View {
             }
         }
         .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: pillHeight)
+        .opacity(isPlaceholder ? 0 : 1)
         .background(
             RoundedRectangle(cornerRadius: MRadius.sm, style: .continuous)
-                .fill(isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
+                .fill(isPlaceholder ? M.pressed : isFront ? M.panelHi : (hovering ? M.pressed : Color.clear)))
         // 挂在胶囊上而不是下面撑到 44pt 的命中区上：popover 的箭头要贴着看得见的标签。
         .modifier(TabCloseDialog(tabID: tab.id, prompt: closePrompt, onConfirm: onConfirmClose))
         .padding(.vertical, (44 - pillHeight) / 2)   // 命中区 44pt

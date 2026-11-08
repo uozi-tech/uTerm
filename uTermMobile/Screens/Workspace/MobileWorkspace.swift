@@ -109,6 +109,8 @@ struct RemoteTabChanges {
 private struct RemoteFollow {
     let client: RemoteMacClient
     var follower: RemoteSessionFollower
+    /// 用户在手机上拖动排过这台 Mac 的标签：之后 Mac 推来的顺序不再覆盖，直到重新接管。
+    var arrangedByHand = false
 }
 
 /// 移动端工作区：全部会话标签（终端 / 文件）+ 至多两个分屏格 + 聚焦格。
@@ -251,8 +253,9 @@ final class MobileWorkspace {
     /// 这台 Mac 的标签按它上面的顺序排：每一格各排各的，只在这些标签原来占的位置之间换（`RemoteTabArrangement`），
     /// 直连与文件标签、用户挪到另一格的远控标签都留在原处。前台标签和聚焦格不变，正看着的那个不会被切走。
     /// `order` 为 nil（老版本 Mac）时不动。
+    /// 用户在手机上亲手排过这台 Mac 的标签（`noteArrangedByHand`）之后也不动，重新接管才恢复。
     func arrangeRemoteTabs(of client: RemoteMacClient, order: [UUID]?) {
-        guard let order else { return }
+        guard let order, follows.first(where: { $0.client === client })?.arrangedByHand != true else { return }
         for index in panes.indices {
             let arranged = RemoteTabArrangement.arranged(panes[index].tabIDs, order: order) { id in
                 guard let remote = tab(id)?.terminal?.remote, remote.client === client else { return nil }
@@ -385,6 +388,40 @@ final class MobileWorkspace {
         merged.activeID = keepActive
         panes = [merged]
         focusedPaneID = merged.id
+    }
+
+    /// 用户亲手把这个标签排到了某个位置：它若是远控标签，这台 Mac 推来的顺序从此不再覆盖手机上的排法，
+    /// 直到重新接管（`takeOver` 换一份新的跟进状态）。
+    func noteArrangedByHand(_ tabID: UUID) {
+        guard let client = tab(tabID)?.terminal?.remote?.client,
+              let index = follows.firstIndex(where: { $0.client === client }) else { return }
+        follows[index].arrangedByHand = true
+    }
+
+    /// 这台 Mac 的标签是否被用户亲手排过。
+    func isArrangedByHand(_ client: RemoteMacClient) -> Bool {
+        follows.first { $0.client === client }?.arrangedByHand ?? false
+    }
+
+    /// 在所在格里把标签挪到第 `index` 位（拖动排序）。前台标签与聚焦格不变，越界时夹到两端。
+    func reorder(_ tabID: UUID, to index: Int) {
+        guard let pane = paneIndex(containing: tabID),
+              let from = panes[pane].tabIDs.firstIndex(of: tabID) else { return }
+        var ids = panes[pane].tabIDs
+        ids.remove(at: from)
+        ids.insert(tabID, at: min(max(index, 0), ids.count))
+        if ids != panes[pane].tabIDs { panes[pane].tabIDs = ids }
+    }
+
+    /// 拖到另一格的标签条上松手：并进那一格的第 `index` 位，成为那一格的前台并聚焦。原格空了就收起。
+    func move(_ tabID: UUID, toPane paneID: UUID, at index: Int) {
+        guard let source = paneIndex(containing: tabID),
+              let target = panes.firstIndex(where: { $0.id == paneID }),
+              source != target else { return }
+        move(tabID, from: source, to: target)
+        reorder(tabID, to: index)
+        focusedPaneID = panes[target].id
+        if panes[source].tabIDs.isEmpty { removePane(at: source) }
     }
 
     /// 把标签挪到另一格（没分屏就先拆出一格）。挪走后原格空了会收起，等同取消分屏。
