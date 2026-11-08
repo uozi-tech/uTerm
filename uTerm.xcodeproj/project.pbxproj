@@ -12,6 +12,8 @@
 		10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D3 /* SwiftASN1 */; };
 		10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D4 /* _CryptoExtras */; };
 		10C0DE0000000000000000E5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 10C0DE0000000000000000D5 /* Markdown */; };
+		4748535400000000000000A2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A1 /* GhosttyTerminal */; };
+		4748535400000000000000A4 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4748535400000000000000A3 /* GhosttyKit */; };
 		11C9AA437B69DB1986D60B81 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC2B686538A588EAD56ECE6E /* Cocoa.framework */; };
 		368F5B1883E2F8C03A0CA924 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = F69B4D721E44A1052DC55327 /* TreeSitterSwift */; };
 		3905415EDC215B42B9FCE745 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = 7AC61AE33CA931E6FC3126D2 /* TreeSitterJavaScript */; };
@@ -508,6 +510,8 @@
 				10C0DE0000000000000000E3 /* SwiftASN1 in Frameworks */,
 				10C0DE0000000000000000E4 /* _CryptoExtras in Frameworks */,
 				10C0DE0000000000000000E5 /* Markdown in Frameworks */,
+				4748535400000000000000A2 /* GhosttyTerminal in Frameworks */,
+				4748535400000000000000A4 /* GhosttyKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -691,6 +695,8 @@
 				10C0DE0000000000000000D3 /* SwiftASN1 */,
 				10C0DE0000000000000000D4 /* _CryptoExtras */,
 				10C0DE0000000000000000D5 /* Markdown */,
+				4748535400000000000000A1 /* GhosttyTerminal */,
+				4748535400000000000000A3 /* GhosttyKit */,
 			);
 			productName = uTermMobile;
 			productReference = 10C0DE0000000000000000A6 /* uTermMobile.app */;
@@ -932,6 +938,7 @@
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
+				4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1954,6 +1961,14 @@
 				revision = a0a00f817d02412bd92c54d316f164d827b57b5c;
 			};
 		};
+		4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Lakr233/libghostty-spm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.2.2026110702;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -2151,6 +2166,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = TC000900000000000000000 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
 			productName = TreeSitterMarkdown;
+		};
+		4748535400000000000000A1 /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyTerminal;
+		};
+		4748535400000000000000A3 /* GhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
