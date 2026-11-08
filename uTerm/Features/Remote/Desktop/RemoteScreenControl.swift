@@ -34,6 +34,18 @@ nonisolated final class RemoteDisplayWake: @unchecked Sendable {
         var assertion: IOPMAssertionID = 0
         IOPMAssertionDeclareUserActivity("uTerm 远程桌面" as CFString, kIOPMUserActiveLocal, &assertion)
     }
+
+    /// 点亮显示器并等它醒来（最多约 3 秒）。本来就醒着时立即返回。刚醒时 ScreenCaptureKit 还要一会儿才
+    /// 把它列进可采集的显示器，所以醒来后再多等一小段。
+    static func wake(display id: CGDirectDisplayID) async {
+        guard CGDisplayIsAsleep(id) != 0 else { return }
+        nudge()
+        let deadline = Date().addingTimeInterval(3)
+        while CGDisplayIsAsleep(id) != 0, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+    }
 }
 
 /// 把手机发来的登录密码填进这台 Mac 的锁屏输入框，等同有人在 Mac 键盘上手动输入。密码来自用户自己配对过的
@@ -67,12 +79,18 @@ nonisolated enum RemoteUnlockTypist {
             }
         }
 
+        // 每组按键前都确认仍在锁屏：中途若被 Mac 前的人解开了，这些按键会落到前台 app 里——⌘A + Delete 会清掉
+        // 它的内容，密码会被当普通文字打进去。所以一旦不在锁屏就立即停手（此时 Mac 已解锁，按成功处理）。
+        guard RemoteScreenLock.isLocked() else { return true }
         tap(51)  // Delete：先唤出输入框
         try? await Task.sleep(for: .milliseconds(400))
+        guard RemoteScreenLock.isLocked() else { return true }
         tap(0, flags: .maskCommand)  // ⌘A 全选
         tap(51)  // Delete：清空输入框里本机可能已输入的字符
         try? await Task.sleep(for: .milliseconds(200))
+        guard RemoteScreenLock.isLocked() else { return true }
         type(password)
+        guard RemoteScreenLock.isLocked() else { return true }
         tap(36)  // Return 提交
 
         let deadline = Date().addingTimeInterval(pollSeconds)

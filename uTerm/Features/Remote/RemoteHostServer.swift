@@ -181,6 +181,12 @@ final class RemoteHostServer {
 
     func stop() {
         isRunning = false
+        // 连接的关闭是异步的，退出 uTerm 时等不到它们各自收尾：帘幕还挂着就在这里先锁屏、再撤帘幕，
+        // 免得进程一退、gamma 一恢复就把已解锁的桌面露出来。
+        if let controller = _screenController, controller.isCurtained {
+            controller.lockScreen()
+            controller.setCurtain(false)
+        }
         listener?.cancel()
         listener = nil
         port = nil
@@ -214,7 +220,7 @@ final class RemoteHostServer {
     /// Bonjour 广播注册报 NoAuth（-65555），手机就发现不了这台 Mac。
     private static func describe(_ error: NWError) -> String {
         if case .dns(let code) = error, code == DNSServiceErrorType(kDNSServiceErr_NoAuth) {
-            return "macOS 没有允许 uTerm 使用本地网络。请在 系统设置 › 隐私与安全性 › 本地网络 里打开 uTerm，再重新打开这个开关"
+            return "macOS 没有允许 uTerm 使用本地网络。在「系统设置 › 隐私与安全性 › 本地网络」里打开 uTerm，再重新打开这个开关。"
         }
         return error.localizedDescription
     }
@@ -538,6 +544,12 @@ final class RemoteHostServer {
         guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel,
               !viewer.isControlling else { return }
         desktopViewer?.isControlling = true
+    }
+
+    /// 远控设置变了（如打开 / 关闭「允许远程解锁」）：把最新的锁屏状态推给正在看屏幕的手机，解锁入口立刻随之变化。
+    func desktopSettingsChanged() {
+        guard let viewer = desktopViewer else { return }
+        connections[viewer.connection]?.sendScreenState()
     }
 
     /// 在 Mac 上结束桌面流（指示条上的「断开」、关掉开关）。

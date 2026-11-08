@@ -14,7 +14,7 @@ final class RemoteCurtain {
     static let shared = RemoteCurtain()
 
     private(set) var isActive = false
-    /// 本机连续两次按电源 / 锁屏键要求解除帘幕时回调（坐在 Mac 前的人拿回控制）。
+    /// 本机连按三下 Esc 要求解除帘幕时回调（坐在 Mac 前的人拿回控制；之后 Mac 会锁屏，由他自己解锁）。
     var onLocalRelease: (() -> Void)?
 
     private var savedGamma: [CGDirectDisplayID: GammaTable] = [:]
@@ -56,7 +56,9 @@ final class RemoteCurtain {
             var red = [CGGammaValue](repeating: 0, count: Int(capacity))
             var green = red, blue = red
             var count: UInt32 = 0
-            if CGGetDisplayTransferByTable(display, capacity, &red, &green, &blue, &count) == .success, count > 0 {
+            // 只在第一次黑屏这块屏时记原值：显示器重配置后再次置黑时，当前表已经是全零，再记就把原值冲掉了。
+            if savedGamma[display] == nil,
+               CGGetDisplayTransferByTable(display, capacity, &red, &green, &blue, &count) == .success, count > 0 {
                 savedGamma[display] = GammaTable(red: Array(red.prefix(Int(count))),
                                                  green: Array(green.prefix(Int(count))),
                                                  blue: Array(blue.prefix(Int(count))))

@@ -38,8 +38,15 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
 
     func start(onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
                onStop: @escaping @Sendable (Error?) -> Void) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let target = content.displays.first(where: { $0.displayID == display.id }) else {
+        // 显示器刚从睡眠里醒来时，可采集列表要过一会儿才有它：找不到就隔一会儿再问，最多约 2 秒。
+        var target: SCDisplay?
+        for attempt in 0..<10 {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            target = content.displays.first(where: { $0.displayID == display.id })
+            if target != nil { break }
+            if attempt < 9 { try? await Task.sleep(for: .milliseconds(200)) }
+        }
+        guard let target else {
             throw RemoteDesktopCaptureError.displayNotFound
         }
         let filter = SCContentFilter(display: target, excludingWindows: [])

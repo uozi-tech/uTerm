@@ -329,9 +329,13 @@ final class FakeScreenController: RemoteScreenController {
 
     func wake() { wakeCalls += 1 }
 
+    /// 每次 `unlock` 被调用时帘幕是否已经挂上（应先黑屏再输密码）。
+    private(set) var curtainedDuringUnlock: [Bool] = []
+
     func unlock(password: String) async -> Bool {
         unlockCalls += 1
         lastPassword = password
+        curtainedDuringUnlock.append(isCurtained)
         if unlockSucceeds { locked = false }
         return unlockSucceeds
     }

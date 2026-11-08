@@ -34,6 +34,10 @@ final class RemoteHostConnection {
     private var peerSupportsUnlock = false
     /// 这条桌面流的锁屏状态监听（当前在看屏幕时才挂）。
     private var lockObservers: [NSObjectProtocol] = []
+    /// 这条连接远程解锁过 Mac：远控结束时不管帘幕开没开都要锁回去。
+    private var remotelyUnlocked = false
+    /// 正在执行解锁（按键序列 + 轮询）：同时来的第二个请求直接拒掉，免得两串按键交错。
+    private var unlockInFlight = false
     /// 从哪条路进来的。公网路径规则更严：不弹审批、不收扫码凭据。
     let origin: RemoteConnectionOrigin
     private var peerSupportsRelayConfig = false
@@ -88,10 +92,12 @@ final class RemoteHostConnection {
         link.close()
     }
 
-    /// 握手里报给手机的能力。远程解锁没开时不报 `desktop-unlock`，手机据此不显示解锁入口。
+    /// 握手里报给手机的能力。`desktop-unlock` 只表示「这台 Mac 认得解锁消息、会推锁屏状态」，与设置开关无关：
+    /// 能力只在握手时交换一次，连接会一直留着，若随开关增减，打开开关后已有连接永远看不到解锁入口。
+    /// 开关是否打开随锁屏状态（`unlockAvailable`）实时推送。
     private func advertisedFeatures() -> [String] {
         var features = server.localFeatures
-        if !server.desktopEnvironment.isUnlockEnabled() {
+        if server.desktopEnvironment.makeScreenController == nil {
             features.removeAll { $0 == RemoteFeature.desktopUnlock }
         }
         return features
@@ -370,7 +376,7 @@ final class RemoteHostConnection {
                 do {
                     if case .file(let path) = try await backend.deliverImage(request.image) { reply.path = path }
                 } catch {
-                    reply.error = "图片没传过去：\(error.localizedDescription)"
+                    reply.error = "图片发送失败：\(error.localizedDescription)"
                 }
             } else {
                 reply.error = "这个终端不能接收图片"
@@ -468,7 +474,7 @@ extension RemoteHostConnection {
                 RemoteDesktopInfo(requestID: request.requestID, failure: failure, message: message))))
         }
         guard environment.isEnabled() else {
-            return reject(.disabled, "Mac 上没有打开远程桌面。请在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许远程桌面")
+            return reject(.disabled, "Mac 上没有打开远程桌面。在 Mac 的 uTerm 里打开「设置 › 远程控制」中的「允许远程桌面」。")
         }
         async let screenAuthorized = environment.screenCaptureAuthorized()
         async let postEventsAuthorized = environment.canPostEvents()
@@ -476,11 +482,14 @@ extension RemoteHostConnection {
         guard generation == desktopStartGeneration, !isClosed else { return }
         guard canCapture else {
             return reject(.screenPermission,
-                          "Mac 上的 uTerm 还没有屏幕录制权限。请在 Mac 的 设置 › 远程控制 里授权，并按提示重启 uTerm")
+                          "Mac 上的 uTerm 还没有「屏幕录制」权限。在 Mac 的「设置 › 远程控制」里授权，并按提示重启 uTerm。")
         }
         guard let display = environment.display(request.displayID) ?? environment.display(nil) else {
             return reject(.captureFailed, "找不到 Mac 的显示器")
         }
+        // 息屏时先把显示器叫醒再采集，否则 ScreenCaptureKit 找不到它。等的这会儿可能又来了新请求或断了。
+        await environment.wakeDisplay(display.id)
+        guard generation == desktopStartGeneration, !isClosed else { return }
         let size = RemoteDesktopGeometry.streamSize(
             displayPixels: CGSize(width: display.pixelWidth, height: display.pixelHeight),
             maxWidth: request.maxWidth, maxHeight: request.maxHeight)
@@ -522,7 +531,7 @@ extension RemoteHostConnection {
             requestID: request.requestID, displayID: display.id,
             displayWidth: display.bounds.width, displayHeight: display.bounds.height,
             streamWidth: size.width, streamHeight: size.height, codec: request.codec, canControl: canControl,
-            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的 设置 › 远程控制 里授权后重启 uTerm 即可控制",
+            controlNote: canControl ? nil : "Mac 上的 uTerm 没有「辅助功能」权限，只能查看。在 Mac 的「设置 › 远程控制」里授权后重启 uTerm，即可控制。",
             videoDatagrams: video != nil ? true : nil)
         AppLogger.info("远程桌面：\(device) 开始查看，\(size.width)×\(size.height) \(request.codec.rawValue)，可控制 \(canControl)",
                        category: RemoteLog.category)
@@ -532,7 +541,7 @@ extension RemoteHostConnection {
             } catch {
                 guard desktop?.channel == channel else { return }
                 stopDesktop(channel: channel, notify: false)
-                reject(.captureFailed, "Mac 上的屏幕采集没能启动：\(error.localizedDescription)")
+                reject(.captureFailed, "Mac 上的屏幕采集无法启动：\(error.localizedDescription)")
                 return
             }
             guard desktop?.channel == channel, !isClosed else {
@@ -564,9 +573,8 @@ extension RemoteHostConnection {
 extension RemoteHostConnection {
     /// 开桌面流后（手机支持远程解锁时）：点亮显示器、推一次锁屏状态、挂锁屏状态监听、接本机解除帘幕的出口。
     func setupScreenControl(channel: UInt32) {
-        guard peerSupportsUnlock, server.desktopEnvironment.isUnlockEnabled(),
-              let controller = server.screenController else { return }
-        controller.wake()
+        // 不看开关：开关关着也要推锁屏状态，手机才能显示「已锁定、未开启远程解锁」并在开关打开后立刻可用。
+        guard peerSupportsUnlock, let controller = server.screenController else { return }
         controller.onLocalCurtainRelease = { [weak self] in
             guard let self, let channel = self.desktop?.channel else { return }
             self.stopDesktop(channel: channel, notify: true, reason: "已在 Mac 上解除帘幕")
@@ -585,12 +593,14 @@ extension RemoteHostConnection {
         lockObservers.removeAll()
         if let controller = server.screenController {
             controller.onLocalCurtainRelease = nil
-            // 远控结束时若仍在帘幕：先把 Mac 锁回去，再撤掉黑屏与本机输入暂停，避免一撤帘幕就露出桌面。
-            if controller.isCurtained {
+            // 远控结束时：远程解锁过、或帘幕还开着，就先把 Mac 锁回去，再撤掉黑屏与本机输入暂停，
+            // 避免一撤帘幕就露出桌面；手机中途手动关了帘幕的，同样要锁回去。
+            if remotelyUnlocked || controller.isCurtained {
                 controller.lockScreen()
                 controller.setCurtain(false)
             }
         }
+        remotelyUnlocked = false
     }
 
     /// 把当前锁屏 / 帘幕状态推给手机。
@@ -602,9 +612,15 @@ extension RemoteHostConnection {
         link.send(RemoteMessage(.desktopScreenState, channel: channel, payload: RemoteJSON.encode(state)))
     }
 
-    private var canUnlockRemotely: Bool {
+    /// 发请求的这条连接正是在看屏幕、能控制的那一路（另一台已配对的手机没开桌面流，不能替它解锁）。
+    private func ownsControllingDesktop(channel: UInt32) -> Bool {
+        guard desktop?.channel == channel, let viewer = server.desktopViewer else { return false }
+        return viewer.connection == id && viewer.channel == channel && viewer.canControl
+    }
+
+    private func canUnlockRemotely(channel: UInt32) -> Bool {
         peerSupportsUnlock && server.desktopEnvironment.isUnlockEnabled()
-            && (server.desktopViewer?.canControl ?? false) && server.screenController != nil
+            && ownsControllingDesktop(channel: channel) && server.screenController != nil
     }
 
     fileprivate func handleUnlock(requestID: UUID, password: String, channel: UInt32) {
@@ -612,16 +628,30 @@ extension RemoteHostConnection {
             link.send(RemoteMessage(.desktopUnlockResult, channel: channel,
                                     payload: RemoteJSON.encode(RemoteDesktopUnlockResult(requestID: requestID, outcome: outcome))))
         }
-        guard canUnlockRemotely, let controller = server.screenController else { return reply(.notAllowed) }
+        guard canUnlockRemotely(channel: channel), !unlockInFlight,
+              let controller = server.screenController else { return reply(.notAllowed) }
         guard controller.isLocked else { return reply(.notLocked) }
         AppLogger.info("远程桌面：\(self.peerName) 请求解锁 Mac", category: RemoteLog.category)
+        unlockInFlight = true
+        // 先挂帘幕再输密码：gamma 黑屏在锁屏界面上同样有效，锁屏一消失物理屏已经是黑的，不会闪出桌面。
+        // 本机输入暂停在锁屏时不起作用（系统收走了输入流），解锁后立即生效。
+        let wasCurtained = controller.isCurtained
+        controller.setCurtain(true)
         Task {
             let success = await controller.unlock(password: password)
-            guard !isClosed, desktop?.channel == channel else { return }
+            unlockInFlight = false
+            guard !isClosed, desktop?.channel == channel else {
+                // 手机在解锁过程中走了：解开了就锁回去，别把已解锁的桌面晾在那里。
+                if success { controller.lockScreen() }
+                if !wasCurtained { controller.setCurtain(false) }
+                return
+            }
             if success {
-                controller.setCurtain(true)
+                remotelyUnlocked = true
                 AppLogger.info("远程桌面：解锁成功，已进入帘幕", category: RemoteLog.category)
             } else {
+                // 没解开：撤掉为这次解锁临时挂上的帘幕，Mac 前的人还能看到锁屏。
+                if !wasCurtained { controller.setCurtain(false) }
                 AppLogger.info("远程桌面：解锁未成功", category: RemoteLog.category)
             }
             reply(success ? .unlocked : .rejected)
@@ -630,7 +660,9 @@ extension RemoteHostConnection {
     }
 
     fileprivate func setCurtain(_ on: Bool, channel: UInt32) {
-        guard canUnlockRemotely, let controller = server.screenController else { return }
+        guard let controller = server.screenController, ownsControllingDesktop(channel: channel) else { return }
+        // 关帘幕不看开关：开关中途被关掉时，手机仍要能把帘幕撤掉。开帘幕才要求开关打开。
+        if on, !canUnlockRemotely(channel: channel) { return }
         controller.setCurtain(on)
         sendScreenState()
     }

@@ -25,6 +25,8 @@ struct RemoteDesktopEnvironment {
     var makeScreenController: (@MainActor () -> any RemoteScreenController)? = nil
     /// 用户是否打开了「允许远程解锁」。关着时不声明 `desktop-unlock` 能力、也拒绝解锁请求。
     var isUnlockEnabled: @MainActor () -> Bool = { false }
+    /// 开流前点亮显示器并等它醒来：息屏时 ScreenCaptureKit 列不出睡着的显示器，采集会起不来。测试里不做事。
+    var wakeDisplay: @MainActor (_ id: CGDirectDisplayID) async -> Void = { _ in }
 
     /// 没接入设置时（测试里只测终端的那些用例）：桌面一律关闭。
     static let disabled = RemoteDesktopEnvironment(
@@ -45,7 +47,8 @@ struct RemoteDesktopEnvironment {
             cursorLocation: { CGEvent(source: nil)?.location },
             clipboard: RemoteSystemClipboard(),
             makeScreenController: { LiveRemoteScreenController() },
-            isUnlockEnabled: { settings.isDesktopUnlockEnabled })
+            isUnlockEnabled: { settings.isDesktopUnlockEnabled },
+            wakeDisplay: { id in await RemoteDisplayWake.wake(display: id) })
     }
 
     /// 显示器的全局点坐标与原生像素尺寸。

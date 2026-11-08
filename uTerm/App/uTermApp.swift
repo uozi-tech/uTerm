@@ -145,6 +145,7 @@ struct uTermApp: App {
                 remoteServer.updateInternetAccess(enabled: settings.isEnabled && settings.isInternetEnabled,
                                                   keepAwake: settings.keepsAwakeForInternet)
                 if !settings.isDesktopEnabled { remoteServer.endDesktop(reason: "Mac 上关闭了远程桌面") }
+                remoteServer.desktopSettingsChanged()
             }
             let server = controlServer
             NotificationCenter.default.addObserver(
@@ -394,7 +395,7 @@ struct uTermApp: App {
             // 所有工作区级快捷键的唯一注册点 —— 工具栏按钮不再挂 .keyboardShortcut，
             // 避免双重注册导致的双触发 no-op（Fix #4 + #10）。
             CommandGroup(after: .newItem) {
-                Button("新建终端标签") {
+                Button("新建终端标签页") {
                     NotificationCenter.default.post(name: .newTerminalTab, object: nil)
                 }
                 .keyboardShortcut("t", modifiers: .command)
@@ -419,7 +420,7 @@ struct uTermApp: App {
 
                 Divider()
 
-                Button("显示/隐藏 SFTP") {
+                Button("显示/隐藏文件") {
                     NotificationCenter.default.post(name: .toggleLeftSidebar, object: nil)
                 }
                 .keyboardShortcut("1", modifiers: [.command, .option])

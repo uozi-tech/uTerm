@@ -48,16 +48,32 @@ final class RemoteDesktopUnlockTests: XCTestCase {
 
     // MARK: - 能力门控
 
-    func test_unlock_feature_not_offered_when_setting_off() async throws {
+    /// 能力与开关无关（能力只在握手时交换一次，随开关增减的话，开关打开后已有连接永远看不到入口）；
+    /// 开关关着时状态里 `unlockAvailable` 为 false，解锁请求被拒；打开开关后立刻推新状态，无需重连。
+    func test_setting_off_blocks_unlock_and_turning_on_takes_effect_without_reconnect() async throws {
         let mac = FakeDesktopMac()
         mac.unlockEnabled = false
+        mac.screen.locked = true
         let server = try await makeServer(mac)
         defer { server.stop() }
         let client = try await makeClient(server)
         defer { client.disconnect() }
-        XCTAssertFalse(client.supportsUnlock, "关掉远程解锁时不应声明 desktop-unlock 能力")
+        XCTAssertTrue(client.supportsUnlock, "能力应始终声明")
         let session = await startSession(client)
-        session.stop()
+        defer { session.stop() }
+        let lockedButOff = await waitUntil { session.screen.locked && !session.screen.unlockAvailable }
+        XCTAssertTrue(lockedButOff)
+
+        let refused = await session.unlock(password: "x")
+        XCTAssertEqual(refused, .notAllowed)
+        XCTAssertEqual(mac.screen.unlockCalls, 0)
+
+        mac.unlockEnabled = true
+        server.desktopSettingsChanged()
+        let available = await waitUntil { session.screen.unlockAvailable }
+        XCTAssertTrue(available, "打开开关后不重连也应可用")
+        let outcome = await session.unlock(password: "hunter2")
+        XCTAssertEqual(outcome, .unlocked)
     }
 
     func test_unlock_feature_offered_when_setting_on() async throws {
@@ -138,6 +154,69 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         let outcome = await session.unlock(password: "x")
         XCTAssertEqual(outcome, .notLocked)
         XCTAssertEqual(mac.screen.unlockCalls, 0)
+    }
+
+    /// 先挂帘幕再输密码：锁屏一消失物理屏已经是黑的。
+    func test_curtain_goes_up_before_password_is_typed() async throws {
+        let mac = FakeDesktopMac()
+        mac.screen.locked = true
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        defer { session.stop() }
+        let becameLocked = await waitUntil { session.screen.locked }
+        XCTAssertTrue(becameLocked)
+
+        _ = await session.unlock(password: "hunter2")
+        XCTAssertEqual(mac.screen.curtainedDuringUnlock, [true])
+    }
+
+    /// 远程解锁后手机手动关了帘幕，结束远控时仍要锁回去。
+    func test_remote_unlock_is_locked_back_even_if_curtain_was_turned_off() async throws {
+        let mac = FakeDesktopMac()
+        mac.screen.locked = true
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        let becameLocked = await waitUntil { session.screen.locked }
+        XCTAssertTrue(becameLocked)
+        _ = await session.unlock(password: "hunter2")
+        session.setCurtain(false)
+        let off = await waitUntil { !mac.screen.isCurtained }
+        XCTAssertTrue(off)
+
+        server.endDesktop(reason: "测试结束")
+        let lockedBack = await waitUntil { mac.screen.lockScreenCalls == 1 }
+        XCTAssertTrue(lockedBack, "远程解锁过就要锁回去，不管帘幕开没开")
+        session.stop()
+    }
+
+    /// 开关中途被关掉：手机仍能撤掉帘幕（只有开帘幕要求开关打开）。
+    func test_curtain_can_be_turned_off_after_setting_is_disabled() async throws {
+        let mac = FakeDesktopMac()
+        mac.screen.locked = false
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        defer { session.stop() }
+        let ready = await waitUntil { session.screen.unlockAvailable }
+        XCTAssertTrue(ready)
+        session.setCurtain(true)
+        let on = await waitUntil { mac.screen.isCurtained }
+        XCTAssertTrue(on)
+
+        mac.unlockEnabled = false
+        server.desktopSettingsChanged()
+        session.setCurtain(true)  // 关了开关后不能再开……
+        session.setCurtain(false) // ……但必须能关
+        let off = await waitUntil { !mac.screen.isCurtained }
+        XCTAssertTrue(off)
     }
 
     // MARK: - 结束时锁回去
