@@ -59,6 +59,8 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     private let session: VTCompressionSession
     private let lock = NSLock()
     private var acknowledgedLTR: [UInt64] = []
+    /// 手机确认过至少一个长期参考帧。没有时不能要 LTR 刷新，见 `encode`。
+    private var hasAcknowledgedLTR = false
     private var refineFramesInFlight = 0
     /// 主流平时的 QP 上限；精修帧编完恢复到它。
     private var streamMaxQP = RemoteVideoEncoder.unrestrictedQP
@@ -154,11 +156,14 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     func acknowledgeLTR(_ token: UInt64) {
         lock.lock()
         acknowledgedLTR.append(token)
+        hasAcknowledgedLTR = true
         lock.unlock()
     }
 
     /// 编一帧。`refine` = 静止精修：这一帧临时放开画质（压低 QP 上限），编完恢复。
-    /// `forceLTRRefresh` = 只参考已确认的长期参考帧（一个都没确认时编码器会出关键帧）。
+    /// `forceLTRRefresh` = 只参考已确认的长期参考帧。一个都没确认时直接改要关键帧：VideoToolbox 虽然也出关键帧，
+    /// 但之后的每一帧都跟关键帧一样大（实测 3024×1964 只变 4% 的画面，普通帧 182–307 KB，正常 2–10 KB），
+    /// 窄链路上一帧接一帧收不齐、再要刷新，就此卡死（2026-11-08 mini：刚连上第一帧丢了）。
     func encode(_ image: CVPixelBuffer, presentationNanos: UInt64, forceKeyframe: Bool, forceLTRRefresh: Bool = false,
                 refine: Bool,
                 completion: @escaping @Sendable (Result<RemoteEncodedFrame, RemoteVideoEncoderError>) -> Void) {
@@ -170,17 +175,20 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
             set(kVTCompressionPropertyKey_MaxAllowedFrameQP, qp as CFNumber)
         }
         var options: [CFString: Any] = [:]
-        if forceKeyframe { options[kVTEncodeFrameOptionKey_ForceKeyFrame] = kCFBooleanTrue }
+        var forceKeyframe = forceKeyframe
         if usesLTR {
             lock.lock()
             let acknowledged = acknowledgedLTR
             acknowledgedLTR = []
+            let canRefresh = hasAcknowledgedLTR
             lock.unlock()
+            if forceLTRRefresh, !canRefresh { forceKeyframe = true }
             if !acknowledged.isEmpty {
                 options[kVTEncodeFrameOptionKey_AcknowledgedLTRTokens] = acknowledged.map { $0 as NSNumber } as CFArray
             }
             if forceLTRRefresh, !forceKeyframe { options[kVTEncodeFrameOptionKey_ForceLTRRefresh] = kCFBooleanTrue }
         }
+        if forceKeyframe { options[kVTEncodeFrameOptionKey_ForceKeyFrame] = kCFBooleanTrue }
         let properties: CFDictionary? = options.isEmpty ? nil : options as CFDictionary
         let pts = CMTime(value: CMTimeValue(presentationNanos), timescale: 1_000_000_000)
         let codec = self.codec

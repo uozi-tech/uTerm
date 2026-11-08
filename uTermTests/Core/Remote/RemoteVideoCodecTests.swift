@@ -271,4 +271,47 @@ final class RemoteVideoCodecTests: XCTestCase {
                      Double(bitrate) / 1e6, before, after, refined.data.count, bytes.sorted()[bytes.count / 2], next.data.count, recoveryMs, drops))
         XCTAssertGreaterThanOrEqual(after, before - 0.5)
     }
+
+    /// 一个长期参考帧都没确认过（刚连上第一帧就丢了）时要 LTR 刷新：改出关键帧，之后的普通帧照常小。
+    /// 回归：直接交给 VideoToolbox 要刷新时它也出关键帧，但之后每一帧都跟关键帧一样大（2026-11-08 mini 卡死）。
+    func test_ltr_refresh_without_any_acknowledged_frame_falls_back_to_a_keyframe() throws {
+        let width = 3024, height = 1964
+        let window = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.2)
+        let background = RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1, detail: true)
+        let frames = (0..<6).map {
+            RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1000 + $0, detail: true,
+                                           window: window, background: 1)
+        }
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 6_000_000,
+                                             frameRate: 60, tenBit: true, ltr: true)
+        try XCTSkipUnless(encoder.usesLTR, "这台机器的编码器不支持长期参考帧")
+        var nanos = DispatchTime.now().uptimeNanoseconds
+        // 第一帧（关键帧）发出去就丢了：手机什么都没确认。
+        _ = try encode(encoder, background, nanos: nanos, keyframe: true)
+        encoder.setBitrate(1_600_000)
+        encoder.setFrameRate(5)
+        var recovery: RemoteEncodedFrame?
+        var sizes: [Int] = []
+        for frame in [background] + frames {
+            Thread.sleep(forTimeInterval: 0.2)
+            nanos = DispatchTime.now().uptimeNanoseconds
+            let done = expectation(description: "encoded")
+            nonisolated(unsafe) var output: Result<RemoteEncodedFrame, RemoteVideoEncoderError>?
+            encoder.encode(frame, presentationNanos: nanos, forceKeyframe: false, forceLTRRefresh: recovery == nil,
+                           refine: false) { result in
+                output = result
+                done.fulfill()
+            }
+            wait(for: [done], timeout: 5)
+            guard case .success(let encoded) = output else { continue }
+            if let token = encoded.ltrToken { encoder.acknowledgeLTR(token) }
+            if recovery == nil { recovery = encoded } else { sizes.append(encoded.data.count) }
+        }
+        let key = try XCTUnwrap(recovery)
+        XCTAssertTrue(key.isKeyframe)
+        XCTAssertFalse(sizes.isEmpty, "恢复之后的普通帧全被丢了")
+        for size in sizes {
+            XCTAssertLessThan(size, key.data.count / 8, "只变 4% 的画面，普通帧不该跟关键帧一样大：\(sizes)")
+        }
+    }
 }

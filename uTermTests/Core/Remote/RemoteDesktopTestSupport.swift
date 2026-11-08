@@ -9,7 +9,9 @@ import XCTest
 enum RemoteDesktopFixture {
     /// 一张 4:2:0 视频范围的合成画面：4×4 色块网格（每块的 Y / Cb / Cr 由 `seed` 决定），
     /// `detail` 时再叠上类似文字的细线（压力场景，用于读数）。
-    static func makeFrame(width: Int, height: Int, seed: Int, detail: Bool = false) -> CVPixelBuffer {
+    /// `window`（按宽高的比例）：只有这块区域按 `seed` 画，其余按 `background` 画——像真实桌面那样只有一个窗口在变。
+    static func makeFrame(width: Int, height: Int, seed: Int, detail: Bool = false,
+                          window: CGRect? = nil, background: Int = 0) -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
         let status = CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
@@ -22,8 +24,17 @@ enum RemoteDesktopFixture {
         let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!.assumingMemoryBound(to: UInt8.self)
         let chromaStride = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
         let chroma = CVPixelBufferGetBaseAddressOfPlane(image, 1)!.assumingMemoryBound(to: UInt8.self)
+        let area = window.map {
+            (x0: Int($0.minX * Double(width)), x1: Int($0.maxX * Double(width)),
+             y0: Int($0.minY * Double(height)), y1: Int($0.maxY * Double(height)))
+        }
+        func seedAt(x: Int, y: Int) -> Int {
+            guard let area else { return seed }
+            return x >= area.x0 && x < area.x1 && y >= area.y0 && y < area.y1 ? seed : background
+        }
         for y in 0..<height {
             for x in 0..<width {
+                let seed = seedAt(x: x, y: y)
                 let block = (y * 4 / height) * 4 + (x * 4 / width)
                 var value = Int(lumaValue(block: block, seed: seed))
                 if detail, (x + seed * 3) % 9 == 0 || (y % 14 == 3 && (x / 5 + seed) % 3 != 0) {
@@ -35,7 +46,7 @@ enum RemoteDesktopFixture {
         for y in 0..<(height / 2) {
             for x in 0..<(width / 2) {
                 let block = (y * 2 * 4 / height) * 4 + (x * 2 * 4 / width)
-                let (cb, cr) = chromaValue(block: block, seed: seed)
+                let (cb, cr) = chromaValue(block: block, seed: seedAt(x: x * 2, y: y * 2))
                 chroma[y * chromaStride + x * 2] = cb
                 chroma[y * chromaStride + x * 2 + 1] = cr
             }
@@ -183,9 +194,12 @@ final class SyntheticFrameSource: RemoteDesktopFrameSource, @unchecked Sendable 
     private var cycle: [CVPixelBuffer] = []
     private var cycleIndex = 0
 
-    func prepareCycle(count: Int) {
+    /// `window`：只让这块区域变（其余保持最后一次 `emit` 的画面），见 `RemoteDesktopFixture.makeFrame`。
+    func prepareCycle(count: Int, window: CGRect? = nil) {
+        lock.lock(); let background = seed; lock.unlock()
         let frames = (0..<count).map {
-            RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1000 + $0, detail: detail)
+            RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1000 + $0, detail: detail,
+                                           window: window, background: background)
         }
         lock.lock(); cycle = frames; lock.unlock()
     }
