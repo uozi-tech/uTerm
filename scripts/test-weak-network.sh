@@ -74,7 +74,7 @@ fi
     echo "- 抖动按包独立取值，UDP 上会大量乱序，比真实网络（多为排队造成的、基本有序的抖动）更狠。"
     echo "- 中继 TCP 是把手机到 Mac 整段当一跳模拟：丢包表现为该段数据晚到 200 ms（重传），没有真实 TCP 的拥塞窗口收缩。"
     echo "- 建连那组的打洞在本机回环上进行，差网络只加在手机到中继这一段。"
-    echo "- 真机补测（Network Link Conditioner）见 docs/remote-control-research.md 或另行安排。"
+    echo "- 模拟测不到的：真实 TCP 拥塞控制、蜂窝空口调度、Wi-Fi 与蜂窝切换时系统的真实时序——这些要用 Network Link Conditioner 在真机上补。"
 } > "$report"
 echo "报告：$report"
 exit "$status"
