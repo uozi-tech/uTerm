@@ -136,6 +136,22 @@ final class RemoteReconnectTests: XCTestCase {
         XCTAssertTrue(back, "链路恢复后应自动接回")
     }
 
+    /// 连上就有往返读数：心跳第一拍就 ping，不等链路安静满 `pingInterval`。
+    /// 「我的 Mac」详情在已连接时显示往返；以前只在安静时 ping，开着屏幕、终端在刷就一直是「—」。
+    func test_round_trip_is_measured_right_after_connecting() async throws {
+        // 安静 6 秒才 ping：修之前最早第 6 秒才有读数；心跳一拍 2 秒，修之后第一拍就有。
+        let heartbeat = RemoteHeartbeat(pingInterval: 6, replyLimit: 600, probeReplyLimit: 5, peerSilenceLimit: 600)
+        let fixture = try await makeFixture(heartbeat: heartbeat)
+        defer {
+            fixture.server.stop()
+            fixture.proxy.stop()
+            fixture.session.dispose()
+        }
+        XCTAssertNil(fixture.client.roundTripMillis)
+        let measured = await waitUntil(4.5) { fixture.client.roundTripMillis != nil }
+        XCTAssertTrue(measured, "连上后第一拍心跳就应 ping 一次、拿到往返")
+    }
+
     /// 网络一变就问一声：链路已经走不通时不用等完整的判死时限。
     func test_network_change_probe_detects_dead_link_quickly_and_wakes_backoff() async throws {
         let slowPing = RemoteHeartbeat(pingInterval: 60, replyLimit: 600, probeReplyLimit: 0.3, peerSilenceLimit: 600)

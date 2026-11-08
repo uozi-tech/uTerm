@@ -56,6 +56,9 @@ nonisolated struct RemoteHeartbeat: Sendable {
     var probeReplyLimit: TimeInterval = 5
     /// Mac：声明支持心跳的手机这么久无声就断开。
     var peerSilenceLimit: TimeInterval = 30
+    /// 手机：链路一直有数据在走（开着屏幕、终端在刷）时也隔这么久 ping 一次，好让往返读数不断档。
+    /// 只按「安静了才 ping」的话，流不停就永远测不到往返。
+    var roundTripRefresh: TimeInterval = 15
 
     static let standard = RemoteHeartbeat()
 }

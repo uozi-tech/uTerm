@@ -56,6 +56,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     // 存活判定（只在 `queue` 上读写）。
     private var lastReceived = DispatchTime.now()
     private var lastSent = DispatchTime.now()
+    /// 上次发 ping 的时刻（只在 `queue` 上读写）；还没发过是 0，心跳第一拍就会问一声，连上就有往返读数。
+    private var lastPingSent = DispatchTime(uptimeNanoseconds: 0)
     private var livenessTimer: DispatchSourceTimer?
 
     /// 终端流量很小又讲究回显延迟：关 Nagle（`noDelay`），开 keepalive 及早发现对端消失。
@@ -241,7 +243,11 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             completion?(RemoteProtocolError.closed)
             return
         }
-        if message.kind == .ping { pingSentAt = .now() }
+        if message.kind == .ping {
+            let now = DispatchTime.now()
+            pingSentAt = now
+            lastPingSent = now
+        }
         if flow != nil {
             enqueueOnFlow(message, countsTowardBackpressure: countsTowardBackpressure, completion: completion)
             return
@@ -446,10 +452,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             }
             if quiet > heartbeat.replyLimit {
                 link.fail(RemoteProtocolError.timeout)
-            } else if quiet > heartbeat.pingInterval || silent > heartbeat.pingInterval {
+            } else if quiet > heartbeat.pingInterval || silent > heartbeat.pingInterval
+                        || link.secondsSinceLastPing > heartbeat.roundTripRefresh {
                 link.sendOnQueue(RemoteMessage(.ping))
             }
         }
+    }
+
+    private var secondsSinceLastPing: TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds &- lastPingSent.uptimeNanoseconds) / 1_000_000_000
     }
 
     /// Mac 这一端：只判死，不主动发。
