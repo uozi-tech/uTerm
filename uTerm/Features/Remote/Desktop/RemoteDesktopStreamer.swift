@@ -41,6 +41,45 @@ nonisolated protocol RemoteDesktopClipboardSource: AnyObject, Sendable {
 nonisolated struct RemoteCapturedFrame: @unchecked Sendable {
     let image: CVPixelBuffer
     let captureNanos: UInt64
+    /// 跟上一张采集帧比，抽样点里变了几成（0…1）；nil = 没量（第一张、格式不认）。只用于诊断日志。
+    var change: Double? = nil
+}
+
+/// 量相邻两张采集帧变了多少：在亮度平面（单平面格式就是整张图）上按 256×256 的格子抽字节，数有几成不一样。
+/// 只为诊断「编码器把在变的画面当成没变跳过了」还是「画面本来就几乎没变」。在采集回调的队列上用，不加锁。
+nonisolated final class RemoteFrameChangeProbe: @unchecked Sendable {
+    static let grid = 256
+    private var previous: [UInt8] = []
+    private var previousSize = (0, 0)
+
+    func measure(_ image: CVPixelBuffer) -> Double? {
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        let planar = CVPixelBufferIsPlanar(image)
+        let width = planar ? CVPixelBufferGetWidthOfPlane(image, 0) : CVPixelBufferGetWidth(image)
+        let height = planar ? CVPixelBufferGetHeightOfPlane(image, 0) : CVPixelBufferGetHeight(image)
+        let stride = planar ? CVPixelBufferGetBytesPerRowOfPlane(image, 0) : CVPixelBufferGetBytesPerRow(image)
+        guard width > 0, height > 0,
+              let base = planar ? CVPixelBufferGetBaseAddressOfPlane(image, 0) : CVPixelBufferGetBaseAddress(image)
+        else { return nil }
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        let bytesPerPixel = max(1, stride / width)
+        var samples = [UInt8](repeating: 0, count: Self.grid * Self.grid)
+        for row in 0..<Self.grid {
+            let y = row * height / Self.grid
+            for column in 0..<Self.grid {
+                samples[row * Self.grid + column] = bytes[y * stride + column * width / Self.grid * bytesPerPixel]
+            }
+        }
+        defer {
+            previous = samples
+            previousSize = (width, height)
+        }
+        guard previousSize == (width, height), previous.count == samples.count else { return nil }
+        var changed = 0
+        for index in samples.indices where samples[index] != previous[index] { changed += 1 }
+        return Double(changed) / Double(samples.count)
+    }
 }
 
 /// 一条桌面流的发送端：采集 → 节拍（背压 / 丢帧）→ 编码 → 发送，以及确认、输入、光标。
@@ -95,6 +134,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var isPaused = false
     private var lastFrame: RemoteCapturedFrame?
     private var lastCaptureNanos: UInt64 = 0
+    /// 采集回调里量画面变化（诊断用）。采集回调是串行的。
+    private let changeProbe = RemoteFrameChangeProbe()
+    private var diagnostics = RemoteEncoderDiagnostics()
+    private var lastDiagnosticsLog: UInt64 = 0
+    /// 被编码器丢掉、还没补发过的那一张：画面随后静止就补发一次（见 `resendIfStill`）。
+    private var droppedCapture: UInt64?
     private var refined = true
     private var forceKeyframe = true
     private var forceLTRRefresh = false
@@ -166,7 +211,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         try await source.start(
             onFrame: { [weak self] image, nanos in
                 guard let self else { return }
-                let frame = RemoteCapturedFrame(image: image, captureNanos: nanos)
+                let frame = RemoteCapturedFrame(image: image, captureNanos: nanos,
+                                                change: self.changeProbe.measure(image))
                 self.link.queue.async { self.captured(frame) }
             },
             onStop: { [weak self] error in
@@ -263,6 +309,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     private func captured(_ frame: RemoteCapturedFrame) {
         guard !isStopped else { return }
+        diagnostics.recordCapture(change: frame.change)
+        logDiagnosticsIfDue(now: DispatchTime.now().uptimeNanoseconds)
         lastFrame = frame
         lastCaptureNanos = DispatchTime.now().uptimeNanoseconds
         refined = false
@@ -524,12 +572,15 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     if keyframe { self.forceKeyframe = true }
                     if refresh { self.forceLTRRefresh = true }
                     self.stats.recordEncoderDrop()
-                    if !refine { self.recordQuality(bytes: nil, keyframe: keyframe) }
+                    if !refine {
+                        self.recordQuality(bytes: nil, keyframe: keyframe)
+                        self.diagnostics.recordDrop(keyframe: keyframe, refresh: refresh, change: frame.change)
+                    }
                     if refine {
                         // 精修帧被丢：画面已经在手机上了，只是不够清楚。等码控缓过来再精修，别当普通帧重发。
                         self.retryRefine()
                     } else {
-                        self.retryLater(frame)
+                        self.resendIfStill(frame)
                     }
                     self.pump()
                 case .failure:
@@ -538,7 +589,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.forceKeyframe = true
                     self.pump()
                 case .success(let encoded):
-                    if !refine { self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe) }
+                    if !refine {
+                        self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe)
+                        self.diagnostics.recordSent(change: frame.change)
+                        if self.droppedCapture == frame.captureNanos { self.droppedCapture = nil }
+                    }
                     var flags: RemoteDesktopFrame.Flags = []
                     if encoded.isKeyframe { flags.insert(.keyframe) }
                     if refine { flags.insert(.refine) }
@@ -590,13 +645,33 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                           refine: flags.contains(.refine))
     }
 
-    /// 码控丢掉的画面：一帧时间后若还没有更新的画面，再送一次。
-    private func retryLater(_ frame: RemoteCapturedFrame) {
-        link.queue.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
-            guard let self, !self.isStopped, self.pacer.pending == nil,
-                  self.lastFrame?.captureNanos == frame.captureNanos else { return }
-            self.offer(frame)
+    /// 编码器丢掉的画面：不马上重送。以前 16 ms 后重送同一张，编码器（低延迟码控把变化太小的帧整帧跳过）
+    /// 再跳、再重送，日志里的丢帧被放大成每 2 秒上百（2026-11-08 mini：采集 11 fps 时丢 92）。画面接着在变时
+    /// 下一张新画面自然会来；只有画面随后静止下来（`resendDelay` 内没有新采集帧），手机会停在更旧的画面上，
+    /// 这时把它补发一次。补发的那张再被丢就算了：静止够久还有精修。
+    private func resendIfStill(_ frame: RemoteCapturedFrame) {
+        guard droppedCapture != frame.captureNanos else {
+            droppedCapture = nil
+            return
         }
+        let capture = frame.captureNanos
+        droppedCapture = capture
+        // 只记时间戳，不攥着这张图：采集的表面池只有 `queueDepth` 张，多扣一张半秒，采集就可能出不了新帧。
+        link.queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.resendDelayNanos))) { [weak self] in
+            guard let self, !self.isStopped, self.pacer.pending == nil, self.droppedCapture == capture,
+                  let last = self.lastFrame, last.captureNanos == capture else { return }
+            self.offer(last)
+        }
+    }
+
+    static let resendDelayNanos: UInt64 = 500_000_000
+
+    /// 每 2 秒一行：编码器丢的帧分类、采集帧变了多少（info 级，只在有画面时）。
+    private func logDiagnosticsIfDue(now: UInt64) {
+        guard now &- lastDiagnosticsLog >= 2_000_000_000 else { return }
+        lastDiagnosticsLog = now
+        guard let line = diagnostics.drain() else { return }
+        AppLogger.info("桌面编码诊断：" + line, category: RemoteLog.category)
     }
 
     // MARK: - 暂停（手机在后台）
@@ -774,5 +849,50 @@ nonisolated final class RemoteDesktopRoute: @unchecked Sendable {
         default:
             return false
         }
+    }
+}
+
+/// 编码器丢帧的诊断计数（连接队列上用）。区分「编码器把在变的画面当成没变跳过」与「画面本来就几乎没变」。
+nonisolated struct RemoteEncoderDiagnostics {
+    private var captured = 0
+    private var identical = 0
+    private var captureChanges: [Double] = []
+    private var dropNormal = 0
+    private var dropRefresh = 0
+    private var dropKeyframe = 0
+    private var dropChanges: [Double] = []
+    private var sentChanges: [Double] = []
+
+    mutating func recordCapture(change: Double?) {
+        captured += 1
+        guard let change else { return }
+        if change == 0 { identical += 1 }
+        captureChanges.append(change)
+    }
+
+    mutating func recordDrop(keyframe: Bool, refresh: Bool, change: Double?) {
+        if keyframe { dropKeyframe += 1 } else if refresh { dropRefresh += 1 } else { dropNormal += 1 }
+        if let change { dropChanges.append(change) }
+    }
+
+    mutating func recordSent(change: Double?) {
+        if let change { sentChanges.append(change) }
+    }
+
+    /// 这一段的一行摘要并清零；什么都没发生时返回 nil。
+    mutating func drain() -> String? {
+        defer { self = RemoteEncoderDiagnostics() }
+        guard captured > 0 || dropNormal + dropRefresh + dropKeyframe > 0 else { return nil }
+        func spread(_ values: [Double]) -> String {
+            guard !values.isEmpty else { return "—" }
+            let sorted = values.sorted()
+            func pct(_ q: Double) -> String {
+                String(format: "%.1f%%", sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))] * 100)
+            }
+            return "p50 \(pct(0.5)) / p95 \(pct(0.95))"
+        }
+        return "编码器丢 普通 \(dropNormal) 刷新 \(dropRefresh) 关键帧 \(dropKeyframe)｜采集 \(captured) 帧，"
+            + "与上一张完全相同 \(identical)，变化面积 \(spread(captureChanges))｜被丢的帧变化 \(spread(dropChanges))"
+            + "｜发出的帧变化 \(spread(sentChanges))"
     }
 }

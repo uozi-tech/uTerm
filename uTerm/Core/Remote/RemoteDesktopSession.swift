@@ -199,7 +199,7 @@ final class RemoteDesktopSession {
         openTrace = trace
         trace.setNetwork(client.path?.label ?? String(localized: "未连接"))
         awaitingFirstFrame = false
-        receiver.expectFirstImage { [weak self] in
+        receiver.expectFirstImage(trace: trace) { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.firstImageArrived(generation: current) }
             }
@@ -609,6 +609,50 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     private var onImage: (@Sendable (CVPixelBuffer, RemoteDesktopFrame) -> Void)?
     /// 下一帧解出来时调一次（开流后量第一帧要多久）。
     private var onFirstImage: (@Sendable () -> Void)?
+    /// 开屏时间线：第一帧上屏之前的各段记在它上面（见 `FirstImageProgress`）。
+    private var firstImageTrace: RemoteConnectTrace?
+    /// 只在解码队列上。
+    private var firstImageProgress = FirstImageProgress()
+    /// 每 2 秒一行的接收诊断（只在解码队列上）。
+    private var receiveCounts = ReceiveCounts()
+    private var lastReceiveLog: UInt64 = 0
+
+    /// 收到什么、解出什么、为什么没解：看「卡在第一帧」是不是一直在等恢复帧。
+    private struct ReceiveCounts {
+        var keyframes = 0
+        var refreshes = 0
+        var normal = 0
+        var sidecar = 0
+        var decoded = 0
+        var skippedRecovering = 0
+        var failed = 0
+        var lost = 0
+        var nudges = 0
+        var isEmpty: Bool { keyframes + refreshes + normal + sidecar + lost == 0 }
+    }
+
+    private func logReceiveIfDue(now: UInt64) {
+        guard now &- lastReceiveLog >= 2_000_000_000 else { return }
+        lastReceiveLog = now
+        let c = receiveCounts
+        receiveCounts = ReceiveCounts()
+        guard !c.isEmpty else { return }
+        let waiting = recovering ? String(format: "，在等恢复帧 %.1f s", Double(now &- recoveringStarted) / 1e9) : ""
+        AppLogger.info("桌面接收：收到 关键帧 \(c.keyframes) 刷新 \(c.refreshes) 普通 \(c.normal) 旁路 \(c.sidecar)｜"
+                       + "解出 \(c.decoded)，等恢复跳过 \(c.skippedRecovering)，解码失败 \(c.failed)，没收齐 \(c.lost)，"
+                       + "催恢复 \(c.nudges)\(waiting)", category: RemoteLog.category)
+    }
+
+    /// 开流到第一帧上屏之间发生了什么：各记一次，第一帧解出来时一并报数。
+    private struct FirstImageProgress {
+        var sawFrame = false
+        var reportedLost = false
+        var reportedFailure = false
+        var lost = 0
+        var skipped = 0
+        var failed = 0
+        var stale = 0
+    }
     private var onCursor: (@Sendable (RemoteDesktopCursor) -> Void)?
     private var latestLatencyValue: RemoteDesktopLatency?
     /// App 在后台：帧照收照确认，但不解码、不渲染（见 `setPaused`）。
@@ -624,6 +668,8 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     /// 参考链断了，在等恢复帧（关键帧或 LTR 刷新帧）。
     private var recovering = false
     private var recoveringSince: UInt64 = 0
+    /// 这一轮从什么时候开始等恢复帧（`recoveringSince` 每催一次会重置，日志看的是这个）。
+    private var recoveringStarted: UInt64 = 0
     /// 暂停期间跳过过帧：解码器的参考链已经断了，恢复后要等关键帧。
     private var skippedWhilePaused = false
 
@@ -656,10 +702,25 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
 
     /// 新开一条流之前：换代，旧流迟到的帧不再处理；解码器回到「等关键帧」。
     /// 下一次解出画面时调 `callback` 一次。
-    func expectFirstImage(_ callback: @escaping @Sendable () -> Void) {
+    func expectFirstImage(trace: RemoteConnectTrace? = nil, _ callback: @escaping @Sendable () -> Void) {
         lock.lock()
         onFirstImage = callback
+        firstImageTrace = trace
         lock.unlock()
+        decodeQueue.async { self.firstImageProgress = FirstImageProgress() }
+    }
+
+    /// 第一帧上屏之前的事记到开屏时间线上。在解码队列上调用。
+    private func noteBeforeFirstImage(_ text: String) {
+        lock.lock()
+        let trace = firstImageTrace
+        lock.unlock()
+        trace?.event(text)
+    }
+
+    private var awaitingFirstImage: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return firstImageTrace != nil
     }
 
     func reset(generation: Int) {
@@ -698,11 +759,21 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         let current = generation == self.generation
         lock.unlock()
         guard current else { return }
+        if awaitingFirstImage {
+            firstImageProgress.lost += videoSequences.count
+            if !firstImageProgress.reportedLost {
+                firstImageProgress.reportedLost = true
+                noteBeforeFirstImage("首帧前有帧没收齐、放弃（\(videoSequences.count) 帧）")
+            }
+        }
         decoder.markReferenceLost()
         if !recovering {
             recovering = true
             recoveringSince = DispatchTime.now().uptimeNanoseconds
+            recoveringStarted = recoveringSince
         }
+        receiveCounts.lost += videoSequences.count
+        logReceiveIfDue(now: DispatchTime.now().uptimeNanoseconds)
         stats.recordLost(videoSequences.count)
         link.send(RemoteMessage(.desktopVideoLost, channel: channel,
                                 payload: RemoteDesktopVideoLost(videoSequences: videoSequences).encoded()))
@@ -758,8 +829,29 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         let current = generation == self.generation
         let handler = onImage
         let paused = self.paused
+        let viaDatagram = video != nil
         lock.unlock()
-        guard current, let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        guard current else {
+            if awaitingFirstImage { firstImageProgress.stale += 1 }
+            return
+        }
+        guard let frame = try? RemoteDesktopFrame(decoding: payload) else { return }
+        if frame.flags.contains(.sidecar) {
+            receiveCounts.sidecar += 1
+        } else if frame.isKeyframe {
+            receiveCounts.keyframes += 1
+        } else if frame.flags.contains(.ltrRefresh) {
+            receiveCounts.refreshes += 1
+        } else {
+            receiveCounts.normal += 1
+        }
+        logReceiveIfDue(now: DispatchTime.now().uptimeNanoseconds)
+        if awaitingFirstImage, !firstImageProgress.sawFrame {
+            firstImageProgress.sawFrame = true
+            let kind = frame.isKeyframe ? "关键帧" : frame.flags.contains(.ltrRefresh) ? "刷新帧" : "普通帧"
+            noteBeforeFirstImage("收到首个视频帧（\(kind) \(payload.count / 1024) KB，序号 \(frame.sequence)，"
+                                 + "\(viaDatagram ? "直连数据报" : "可靠通道")）")
+        }
         // 后台暂停：只回确认（不报失败、不带 LTR 令牌——没解过），不解码不渲染。
         if paused {
             skippedWhilePaused = true
@@ -779,7 +871,10 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
             link.send(RemoteMessage(.desktopAck, channel: channel, payload: RemoteDesktopAck(
                 sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 0).encoded()))
             stats.recordSkipped()
+            receiveCounts.skippedRecovering += 1
+            if awaitingFirstImage { firstImageProgress.skipped += 1 }
             if start &- recoveringSince >= Self.recoveryRetryNanos {
+                receiveCounts.nudges += 1
                 recoveringSince = start
                 link.send(RemoteMessage(.desktopVideoLost, channel: channel,
                                         payload: RemoteDesktopVideoLost(videoSequences: []).encoded()))
@@ -797,14 +892,29 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
         // 确认发回帧来的那条连接。
         link.send(RemoteMessage(.desktopAck, channel: channel, payload: ack.encoded()))
         stats.record(bytes: payload.count, decodeNanos: elapsed, failed: image == nil)
+        if image != nil { receiveCounts.decoded += 1 } else { receiveCounts.failed += 1 }
         if let image {
             handler?(image, frame)
             lock.lock()
             let first = onFirstImage
+            let trace = firstImageTrace
             onFirstImage = nil
+            firstImageTrace = nil
             lock.unlock()
+            if let trace {
+                let p = firstImageProgress
+                trace.event("首帧解码完（\(frame.isKeyframe ? "关键帧" : "非关键帧")，解码 \(elapsed / 1_000_000) ms；此前"
+                            + "没收齐 \(p.lost)、等恢复帧跳过 \(p.skipped)、解码失败 \(p.failed)、旧流丢弃 \(p.stale)）")
+            }
             first?()
         } else if !sidecar {
+            if awaitingFirstImage {
+                firstImageProgress.failed += 1
+                if !firstImageProgress.reportedFailure {
+                    firstImageProgress.reportedFailure = true
+                    noteBeforeFirstImage("首帧前解码失败（\(frame.isKeyframe ? "关键帧" : "非关键帧")，序号 \(frame.sequence)）")
+                }
+            }
             requestKeyframe(force: false)
         }
     }

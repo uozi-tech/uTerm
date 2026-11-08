@@ -475,6 +475,26 @@ final class RemoteDesktopEndToEndTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(latency.p95Millis, latency.p50Millis)
     }
 
+    /// 开屏时间线把第一帧之前的各段补全：收到首个视频帧、首帧解码完（2026-11-08 MBP 等了 5.9 s 才见到 mini 的
+    /// 第一帧，而 mini 170 ms 就发出了；中间缺日志，看不出卡在哪一段）。
+    func test_open_timeline_records_first_frame_arrival_and_decode() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, screen) = makeSession(client)
+        defer { session.stop() }
+        _ = mac
+        await session.start()
+        XCTAssertEqual(session.state, .streaming)
+        let shown = await waitUntil(6) { !screen.frames.isEmpty }
+        XCTAssertTrue(shown)
+        let finished = await waitUntil(3) { RemoteConnectTraceLog.standard.load().first?.kind == .desktop }
+        XCTAssertTrue(finished)
+        let record = try XCTUnwrap(RemoteConnectTraceLog.standard.load().first)
+        XCTAssertTrue(record.ok)
+        XCTAssertTrue(record.events.contains { $0.contains("收到首个视频帧（关键帧") }, "\(record.events)")
+        XCTAssertTrue(record.events.contains { $0.contains("首帧解码完（关键帧") }, "\(record.events)")
+    }
+
     /// 老手机不认 `desktopLatency`（解析会当成坏消息断开），开流请求里没要就一条也不能发。
     func test_old_phone_never_gets_latency_readings() async throws {
         let (server, mac, client) = try await makeRig()
