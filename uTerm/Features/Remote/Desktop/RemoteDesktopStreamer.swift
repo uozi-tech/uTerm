@@ -134,6 +134,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var pacer = RemoteDesktopPacer<RemoteCapturedFrame>()
     private var rate: RemoteRateController
     private var quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
+    /// 告诉编码器的帧率跟着实际采集帧率走（见 `RemoteEncoderFrameRate`）。
+    private var encoderFrameRateEstimate = RemoteEncoderFrameRate()
+    private var encoderFrameRate = 0
     private var isLive = false
     private var isStopped = false
     /// 手机在后台（`desktopPause`）：照常采集（留着最新一张），但不编码、不发帧、不发光标。只属于这一条流——
@@ -221,6 +224,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.stillEncoder = stillEncoder
         }
         appliedRate = rate.bitrate
+        encoderFrameRate = rate.frameRate
         stats.setBitrate(rate.bitrate)
         try await source.start(
             onFrame: { [weak self] image, nanos in
@@ -328,6 +332,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         logDiagnosticsIfDue(now: DispatchTime.now().uptimeNanoseconds)
         lastFrame = frame
         lastCaptureNanos = DispatchTime.now().uptimeNanoseconds
+        encoderFrameRateEstimate.record(now: lastCaptureNanos)
+        updateEncoderFrameRate(now: lastCaptureNanos)
         refined = false
         refineRetries = 0
         stats.recordCapture()
@@ -460,10 +466,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         func percentile(_ p: Double) -> Double {
             trips.isEmpty ? 0 : Double(trips[min(trips.count - 1, Int(Double(trips.count) * p))]) / 1e6
         }
-        let message = String(format: "桌面码控：目标 %.1f Mbps（编码器 %.1f）%d fps｜采集 %.1f fps，实发 %.1f fps %.1f Mbps"
+        let message = String(format: "桌面码控：目标 %.1f Mbps（编码器 %.1f）%d fps（编码器按 %d）｜采集 %.1f fps，实发 %.1f fps %.1f Mbps"
                              + "（关键帧 %d 精修 %d）｜往返 p50 %.0f p95 %.0f ms，"
                              + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
-                             Double(rate.bitrate) / 1e6, Double(mediaBitrate) / 1e6, rate.frameRate,
+                             Double(rate.bitrate) / 1e6, Double(mediaBitrate) / 1e6, rate.frameRate, encoderFrameRate,
                              Double(current.captured - last.stats.captured) / seconds, Double(sent) / seconds,
                              Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
                              current.keyframes - last.stats.keyframes, current.refines - last.stats.refines,
@@ -487,7 +493,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private func recordQuality(bytes: Int?, keyframe: Bool) {
         guard encoder?.isLowLatency == true,
               quality.record(encodedBytes: bytes, keyframe: keyframe, targetBitrate: mediaBitrate,
-                             frameRate: rate.frameRate, now: DispatchTime.now().uptimeNanoseconds) else { return }
+                             frameRate: encoderFrameRate, now: DispatchTime.now().uptimeNanoseconds) else { return }
         encoder?.setMaxQP(quality.maxQP)
     }
 
@@ -497,11 +503,19 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             encoder?.setMaxQP(quality.maxQP)
         }
         encoder?.setBitrate(mediaBitrate)
-        encoder?.setFrameRate(rate.frameRate)
+        updateEncoderFrameRate(now: DispatchTime.now().uptimeNanoseconds)
         pacer.minimumIntervalNanos = rate.frameRate >= rate.config.fullFrameRate
             ? 0 : 1_000_000_000 / UInt64(max(1, rate.frameRate))
         appliedRate = rate.bitrate
         stats.setBitrate(mediaBitrate)
+    }
+
+    /// 编码器的预期帧率 = 平滑后的采集帧率，不超过码控帧率；变了才写给编码器。
+    private func updateEncoderFrameRate(now: UInt64) {
+        let frameRate = encoderFrameRateEstimate.expected(limit: rate.frameRate, now: now)
+        guard frameRate != encoderFrameRate else { return }
+        encoderFrameRate = frameRate
+        encoder?.setFrameRate(frameRate)
     }
 
     // MARK: - 静止精修

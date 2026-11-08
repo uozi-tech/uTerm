@@ -359,6 +359,65 @@ nonisolated struct RemoteRateController: Equatable {
     }
 }
 
+/// 告诉编码器的帧率（`ExpectedFrameRate`）：按实际采集帧率，平滑过、隔一阵才改一次。
+///
+/// 低延迟码控按「码率 ÷ 预期帧率」给每帧分预算。一直报 60 fps 而画面每秒只变 6 次时，每帧只分到十分之一，
+/// 稍大一点的帧（恢复帧、一个窗口整片刷新）就被编码器整帧丢掉（2026-11-08 mini：采集 6 fps，丢 3 出 1）。
+/// - 采集间隔按指数平均；静止的长间隔按 `maxInterval` 算，一段静止不会把帧率拉到 0。
+/// - 快升慢降：间隔变短（画面动起来了）按 `attack` 快跟、立刻写给编码器——报低了每帧预算偏大，满屏在变时
+///   一帧比一帧大、链路排队；间隔变长按 `smoothing` 慢跟，离上次改不到 `minChangeInterval`、差不到
+///   `changeRatio` 不改，别每帧都去动编码器。
+/// - 报给编码器的是采集帧率的 `headroom` 倍：如实报时，画面每帧都在变（30 fps 满屏细节）每帧预算翻倍、帧变大、
+///   码控丢得更多，显示帧数少两成（随机丢包闸门 188 vs 233）。留一倍余量后 30 fps 仍报 60，跟以前一样；
+///   6 fps 报 12，每帧预算比报 60 时大五倍，恢复帧不再被整帧丢掉。
+/// - 结果夹在 `[floor, 码控帧率]`：帧太少时也不让一帧独吞好几秒的预算（一帧要发那么久，延迟就上去了）。
+nonisolated struct RemoteEncoderFrameRate: Equatable {
+    static let smoothing = 0.2
+    static let attack = 0.5
+    static let maxInterval: UInt64 = 1_000_000_000
+    static let floor = 5
+    static let headroom = 2.0
+    static let changeRatio = 0.2
+    static let minChangeInterval: UInt64 = 1_000_000_000
+
+    private var lastCapture: UInt64?
+    private var interval: Double?
+    private var lastChange: UInt64 = 0
+    /// 当前告诉编码器的帧率（nil = 还没定过，用码控帧率）。
+    private(set) var applied: Int?
+
+    /// 采集到一帧。
+    mutating func record(now: UInt64) {
+        defer { lastCapture = now }
+        guard let lastCapture else { return }
+        let gap = Double(min(now &- lastCapture, Self.maxInterval))
+        interval = interval.map { $0 + (gap - $0) * (gap < $0 ? Self.attack : Self.smoothing) } ?? gap
+    }
+
+    /// 给编码器的帧率；`limit` = 码控现在允许的帧率。返回值跟上次不同才需要写给编码器。
+    mutating func expected(limit: Int, now: UInt64) -> Int {
+        let ceiling = max(1, limit)
+        guard let interval, interval > 0 else { return applied.map { min($0, ceiling) } ?? ceiling }
+        let measured = min(ceiling, max(min(Self.floor, ceiling), Int((Self.headroom * 1e9 / interval).rounded())))
+        guard let current = applied else {
+            applied = measured
+            lastChange = now
+            return measured
+        }
+        // 画面动快了、或码控把帧率压下去了：立刻跟。
+        if measured > current || current > ceiling {
+            applied = measured
+            lastChange = now
+            return measured
+        }
+        guard now &- lastChange >= Self.minChangeInterval,
+              abs(Double(measured - current)) >= Double(current) * Self.changeRatio else { return current }
+        applied = measured
+        lastChange = now
+        return measured
+    }
+}
+
 /// 主流编码的 QP 上限：让低延迟编码器把码率预算用上，又不透支。
 ///
 /// 低延迟码控自己选的 QP 偏高，码率给多少都只用一点（实测 2600×1462、目标 90 Mbps、滚动终端文字：
