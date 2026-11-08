@@ -150,6 +150,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var refined = true
     private var forceKeyframe = true
     private var forceLTRRefresh = false
+    /// 上一个恢复帧（关键帧 / LTR 刷新帧）被编码器丢了：下一个恢复帧临时按码控目标编（见 `encode`）。
+    private var recoveryDropped = false
     /// 已发出、还没确认的精修帧。它们的确认不进码控与往返读数：一张 4K 精修几百 KB，「采集 → 解码完」
     /// 量的是它自己发多久，不是链路排队。
     private var refineSequences: Set<UInt32> = []
@@ -567,6 +569,15 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         forceKeyframe = false
         let refresh = forceLTRRefresh && !keyframe
         forceLTRRefresh = false
+        // 恢复帧被编码器丢过一次：这一帧放开到码控目标，不受「链路节奏 × linkShare」封顶，QP 上限也临时放开。
+        // 恢复帧比普通帧大得多，4K 下预算被节奏压在几 Mbps、又按帧率分到每帧，QP 再被画质上限卡住时，编码器会把它
+        // 整帧丢掉、再要、再丢，看的那端一直等恢复帧、普通帧全跳过（2026-11-08 mini：卡在刚连上的第一帧）。
+        // 编完立刻回到封顶：多出来的只有这一帧，由发送节奏摊开。
+        let boosted = (keyframe || refresh) && !refine && recoveryDropped
+        if boosted {
+            if rate.bitrate > mediaBitrate { encoder.setBitrate(rate.bitrate) }
+            if encoder.isLowLatency { encoder.setMaxQP(RemoteQualityCap.unrestricted) }
+        }
         let submitted = DispatchTime.now().uptimeNanoseconds
         let captureNanos = frame.captureNanos
         encoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: keyframe, forceLTRRefresh: refresh,
@@ -575,6 +586,13 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             let encodeNanos = DispatchTime.now().uptimeNanoseconds &- submitted
             self.link.queue.async {
                 guard !self.isStopped else { return }
+                if boosted {
+                    self.encoder?.setBitrate(self.mediaBitrate)
+                    if self.encoder?.isLowLatency == true { self.encoder?.setMaxQP(self.quality.maxQP) }
+                }
+                if keyframe || refresh, !refine {
+                    if case .failure(.dropped) = result { self.recoveryDropped = true } else { self.recoveryDropped = false }
+                }
                 switch result {
                 case .failure(.dropped):
                     // 码控丢帧：参考链没断，不要关键帧（关键帧更大，只会丢得更多）。但这张画面没发出去，
@@ -591,7 +609,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                         // 精修帧被丢：画面已经在手机上了，只是不够清楚。等码控缓过来再精修，别当普通帧重发。
                         self.retryRefine()
                     } else {
-                        self.resendIfStill(frame)
+                        self.resendIfStill(frame, recovery: keyframe || refresh)
                     }
                     self.pump()
                 case .failure:
@@ -661,8 +679,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 再跳、再重送，日志里的丢帧被放大成每 2 秒上百（2026-11-08 mini：采集 11 fps 时丢 92）。画面接着在变时
     /// 下一张新画面自然会来；只有画面随后静止下来（`resendDelay` 内没有新采集帧），手机会停在更旧的画面上，
     /// 这时把它补发一次。补发的那张再被丢就算了：静止够久还有精修。
-    private func resendIfStill(_ frame: RemoteCapturedFrame) {
-        guard droppedCapture != frame.captureNanos else {
+    /// `recovery`：被丢的是恢复帧。看的那端在等它、普通帧全跳过，屏幕静止时没有别的帧会把它带出来——
+    /// 不能像普通帧那样重送一次就算了，每隔 `resendDelayNanos` 再来一次，直到编出来。
+    private func resendIfStill(_ frame: RemoteCapturedFrame, recovery: Bool = false) {
+        guard recovery || droppedCapture != frame.captureNanos else {
             droppedCapture = nil
             return
         }
