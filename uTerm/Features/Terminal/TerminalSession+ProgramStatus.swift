@@ -43,7 +43,8 @@ extension TerminalSession {
     /// 用户此刻正看着这条会话：app 在前台、窗口是 key、键盘焦点在这个终端上。
     /// `hasFocus` 在视图不在窗口里时也可能为真（切走的标签），所以要单独看 `window`。
     private var isUserLooking: Bool {
-        NSApp.isActive && terminalView.window != nil && terminalView.hasFocus
+        if let ghostty { return NSApp.isActive && ghostty.isFocusedInWindow }
+        return NSApp.isActive && terminalView.window != nil && terminalView.hasFocus
     }
 
     func applyProgramStatus(_ message: ProgramStatusMessage, isLooking: Bool) {
@@ -51,7 +52,7 @@ extension TerminalSession {
         case .query:
             // 不写 states / kinds：规格规定缺省即全部支持。
             let reply = "\u{1b}]7501;?\u{1b}\\"
-            send(source: terminalView, data: Array(reply.utf8)[...])
+            sendHostBytes(Data(reply.utf8))
             return
         case .clear(let id):
             programStatusBoard.clear(id: id)

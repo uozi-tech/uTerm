@@ -10,6 +10,18 @@ struct RemoteControlledTerminal: View {
     let session: TerminalSession
     /// 分屏时只有活动组的前台标签算活动。没有这个门的宿主只挂活动标签，挂着就是活动。
     @Environment(\.activePaneGate) private var activePaneGate
+    /// 试验：窗格改用 Ghostty 渲染（默认关，`defaults write com.uozi.uTerm debug.terminalGhosttyRenderer -bool YES`）。
+    @AppStorage(DefaultsKey.terminalGhosttyRenderer) private var rendersWithGhostty = false
+
+    @ViewBuilder private var terminalHost: some View {
+        if rendersWithGhostty {
+            GhosttyHostView(session: session, isActive: activePaneGate?.isActive ?? true)
+        } else {
+            TerminalHostView(terminalView: session.terminalView,
+                             isActive: activePaneGate?.isActive ?? true)
+                .onAppear { session.disableGhostty() }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,8 +30,7 @@ struct RemoteControlledTerminal: View {
                     session.remoteDisconnect?()
                 }
             }
-            TerminalHostView(terminalView: session.terminalView,
-                             isActive: activePaneGate?.isActive ?? true)
+            terminalHost
                 .overlay(alignment: .topTrailing) {
                     if let offer = session.trueColorOffer {
                         TrueColorOfferBanner(session: session, offer: offer)

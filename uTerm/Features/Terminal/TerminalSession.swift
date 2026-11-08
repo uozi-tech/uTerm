@@ -81,6 +81,10 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 在 Mac 上断开远端接管（窗格指示条上的「断开」）。由远控连接在接入时装上。
     @ObservationIgnored var remoteDisconnect: (@MainActor () -> Void)?
 
+    /// 试验开关 `DefaultsKey.terminalGhosttyRenderer` 打开时，窗格改由 Ghostty 渲染，`terminalView` 退成影子
+    /// （见 `GhosttyTerminalBridge`）。nil = 照常用 SwiftTerm。
+    @ObservationIgnored var ghostty: GhosttyTerminalBridge?
+
     override init() {
         // Give SwiftTerm a non-trivial initial frame so its first `setFrameSize`
         // pass computes a meaningful `cellDimension` + initial cols/rows. With
@@ -102,6 +106,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
             self.mirrorTap.didFeed(bytes)
             self.heldCheckpoints?.noteFed(bytes.count)
+            self.ghostty?.didFeedShadow(bytes)
         }
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
@@ -152,6 +157,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         resetFeedAndResizeState()
         terminalView.terminalDelegate = nil
         backend = nil
+        disableGhostty()
     }
 
     var currentProcessSize: (cols: UInt16, rows: UInt16) {
@@ -191,6 +197,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         if let held = backend as? any HeldTerminalBackend {
             guard await restoreHeldScreen(from: held, generation: myGen),
                   feedGeneration == myGen, self.backend === backend else { return }
+            ghostty?.resync()
         }
         connectionState = .connected
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
@@ -242,6 +249,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         // 这几个字节不走输出流，镜像那边改发一份快照对齐。
         mirrorTap.invalidateAll()
         heldCheckpoints?.noteScreenChanged()
+        ghostty?.resync()
     }
 
     func detach() {

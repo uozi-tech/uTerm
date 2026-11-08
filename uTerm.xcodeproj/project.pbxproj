@@ -34,6 +34,8 @@
 		91E07E991F7C417500676A7C /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A71645B71BBA465E1AFEBA34 /* TreeSitterYAML */; };
 		95DAD3163C31654A803C30AD /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = C9011540443CD85AA784C8A9 /* TreeSitterTOML */; };
 		A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */; };
+		474853540000000000000A11 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A01 /* GhosttyTerminal */; };
+		474853540000000000000A12 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 474853540000000000000A02 /* GhosttyKit */; };
 		A50000000000000000000002 /* SwiftASN1 in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* SwiftASN1 */; };
 		A61DF38274718E88C0968BB9 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29DE64AF6B8DE16B490ADC2 /* main.swift */; };
 		A8F2B48E261AD518FE41585C /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = 018260924700EAFE1739852A /* TreeSitterPython */; };
@@ -296,6 +298,9 @@
 				Features/SFTP/Views/SFTPTransfersDock.swift,
 				Features/SFTP/Views/SFTPWindowView.swift,
 				Features/Terminal/CopyableTerminalView.swift,
+				Features/Terminal/Ghostty/GhosttyHostView.swift,
+				Features/Terminal/Ghostty/GhosttyTerminalBridge.swift,
+				Features/Terminal/Ghostty/GhosttyTerminalConfig.swift,
 				Features/Terminal/HeldSSHBackend.swift,
 				Features/Terminal/SSHSessionRestorer.swift,
 				Features/Terminal/TerminalAttentionCenter.swift,
@@ -537,6 +542,8 @@
 				5541424B0000000000000011 /* UAppKitBridge in Frameworks */,
 				5550414E4750000000000011 /* UPaneGroups in Frameworks */,
 				A1B2C3D4E5F6789ABCDEF002 /* SwiftTerm in Frameworks */,
+				474853540000000000000A11 /* GhosttyTerminal in Frameworks */,
+				474853540000000000000A12 /* GhosttyKit in Frameworks */,
 				SPRK00000000000000000002 /* Sparkle in Frameworks */,
 				C17ADE1000000000000002 /* Citadel in Frameworks */,
 				A50000000000000000000002 /* SwiftASN1 in Frameworks */,
@@ -794,6 +801,8 @@
 				5541424B0000000000000001 /* UAppKitBridge */,
 				5550414E4750000000000001 /* UPaneGroups */,
 				A1B2C3D4E5F6789ABCDEF001 /* SwiftTerm */,
+				474853540000000000000A01 /* GhosttyTerminal */,
+				474853540000000000000A02 /* GhosttyKit */,
 				SPRK00000000000000000001 /* Sparkle */,
 				C17ADE1000000000000001 /* Citadel */,
 				A50000000000000000000001 /* SwiftASN1 */,
@@ -916,6 +925,7 @@
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
+				474853540000000000000A00 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1938,9 +1948,27 @@
 				revision = a0a00f817d02412bd92c54d316f164d827b57b5c;
 			};
 		};
+		474853540000000000000A00 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Lakr233/libghostty-spm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.2.2026110702;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		474853540000000000000A01 /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 474853540000000000000A00 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyTerminal;
+		};
+		474853540000000000000A02 /* GhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 474853540000000000000A00 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyKit;
+		};
 		018260924700EAFE1739852A /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */;
