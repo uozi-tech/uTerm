@@ -262,7 +262,7 @@ final class RemoteMacDirectory {
             client.onPaired = { [weak self] in self?.rebuild() }
             clients[mac.id] = client
         }
-        client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+        updateRoutes(client, for: mac)
         if let deviceID = mac.deviceID, let token = pendingTokens.removeValue(forKey: deviceID) {
             client.pairingToken = token
         }
@@ -393,6 +393,15 @@ final class RemoteMacDirectory {
             }
         }
         return (runner, peer)
+    }
+
+    private func updateRoutes(_ client: RemoteMacClient, for mac: Mac) {
+        client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+        if let relay = relayClient(for: mac) {
+            client.prewarmInternet = { Task { _ = try? await relay.warmUp() } }
+        } else {
+            client.prewarmInternet = nil
+        }
     }
 
     private func internetDialer(for mac: Mac) -> RemoteMacClient.InternetDialer? {
@@ -629,7 +638,7 @@ final class RemoteMacDirectory {
         // 客户端会叫醒正在退避的标签马上重试（Mac 长时间离线后没人看的标签退避可达一分钟）。
         for mac in macs + nearbyMacs {
             guard let client = clients[mac.id] else { continue }
-            client.updateRoutes(endpoint: mac.endpoint, internetDialer: internetDialer(for: mac))
+            updateRoutes(client, for: mac)
             client.relayPresenceChanged(mac.isOnRelay)
         }
         #if DEBUG && os(iOS)

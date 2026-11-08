@@ -188,6 +188,8 @@ final class RemoteMacClient: Identifiable {
     /// 跨公网连它的办法（配了中继、知道它的公钥才有）。
     typealias InternetDialer = @Sendable (_ context: RemoteDialContext) async throws -> RemoteDialedPath
     @ObservationIgnored private var internetDialer: InternetDialer?
+    /// 先试局域网时顺手把公网那路的准备做了（连上中继的控制连接）：局域网不通再走公网时少等几个往返。
+    @ObservationIgnored var prewarmInternet: (@Sendable () -> Void)?
     /// Mac 发来的中继配置交给谁存。
     @ObservationIgnored var onRelayConfig: (@MainActor (RemoteRelayConfig) -> Void)?
     /// 这次连接让本机新记住了这台 Mac（局域网审批通过、或第一次连邀请里的 Mac）：目录据此把它挪进「已配对」。
@@ -353,6 +355,7 @@ final class RemoteMacClient: Identifiable {
             finishTrace(trace, network: network)
         }
         // 局域网优先。Bonjour 的结果可能已经过时，局域网连不上时再走公网。
+        if endpoint != nil, internetDialer != nil { prewarmInternet?() }
         if let endpoint {
             let dialed = RemoteDialedPath(
                 transport: RemoteNWTransport(connection: NWConnection(to: endpoint, using: RemoteLink.parameters())),

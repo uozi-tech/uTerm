@@ -37,6 +37,8 @@ nonisolated struct RemotePathDialer: Sendable {
     var allowsDirect = true
     /// 「只走公网」：打洞时连私有 IPv4 也不用，否则同一局域网里两端的私有地址一配就通，测不到外出时的路。
     var publicOnly = false
+    /// 按网络类型记的打洞成败，决定这次让直连先跑多久。
+    var history = RemoteDirectHistory.standard
 
     /// `invitationToken`：凭邀请第一次连这台 Mac（它还不认识本机），打招呼时包上邀请外层。
     /// `trace`：每一步（收集地址、连中继、信令、直连、中继接通）的耗时与结果记进去。
@@ -45,6 +47,10 @@ nonisolated struct RemotePathDialer: Sendable {
         let session = Data(SymmetricKey(size: .bits128).withUnsafeBytes { Array($0) }).base64URLEncoded
         let staticKey = try identity.localIdentity()
         let shared = try RemoteSignalBox.sharedKey(local: staticKey, remotePublicKey: mac.publicKey)
+        // 连中继与收集打洞地址同时进行：两样都要等一两个往返，排着做白白多等。
+        let control = trace.begin(.relayControl, detail: relay.relayConfig.name)
+        let relay = self.relay
+        let warming = Task { try await relay.warmUp() }
         var attempt: RemoteDirectAttempt?
         if allowsDirect {
             let gather = trace.begin(.gather)
@@ -52,9 +58,10 @@ nonisolated struct RemotePathDialer: Sendable {
             trace.end(gather, ok: attempt != nil, detail: attempt.flatMap { Self.candidateSummary($0.localDescription()) })
         }
         defer { attempt?.close() }
-        let control = trace.begin(.relayControl, detail: relay.relayConfig.name)
+        let network: String
         do {
-            let interface = try await relay.warmUp()
+            let interface = try await warming.value
+            network = interface ?? "?"
             trace.end(control, ok: true, detail: interface)
         } catch {
             trace.end(control, ok: false, detail: error.localizedDescription)
@@ -91,20 +98,50 @@ nonisolated struct RemotePathDialer: Sendable {
         }
         let keys = RemoteSignalBox.handshakeKeys(sharedKey: shared, phoneNonce: offer.nonce, macNonce: reply.nonce,
                                                  session: session, role: .initiator)
-        if let attempt, let remote = reply.ice {
-            let direct = RemoteSignalBox.directKeys(sharedKey: shared, phoneNonce: offer.nonce, macNonce: reply.nonce,
-                                                    session: session, role: .initiator)
-            let step = trace.begin(.direct)
-            let outcome = await connectDirect(attempt, remote: remote, keys: direct)
-            trace.end(step, ok: outcome.transport != nil, detail: outcome.detail)
-            if let transport = outcome.transport {
-                return RemoteDialedPath(transport: transport, handshakeKeys: keys, path: .direct)
+        guard let attempt, let remote = reply.ice else {
+            let transport = try await trace.step(.relayDial) {
+                try await relay.dial(host: mac.id, session: session)
             }
+            return RemoteDialedPath(transport: transport, handshakeKeys: keys, path: .relay)
         }
-        let transport = try await trace.step(.relayDial) {
-            try await relay.dial(host: mac.id, session: session)
+        let direct = RemoteSignalBox.directKeys(sharedKey: shared, phoneNonce: offer.nonce, macNonce: reply.nonce,
+                                                session: session, role: .initiator)
+        // 中继与打洞同时拨（Mac 收到招呼时已经把中继那路登记好）。直连先独跑 `window`：这段时间里它通了就用它；
+        // 之后谁先给出能用的连接用谁。握手只在选中的那条路上发，没选中的关掉。
+        let window = history.window(on: network)
+        let race = RemoteRelayRace { try await relay.dial(host: mac.id, session: session) }
+        let relayStep = trace.begin(.relayDial, detail: String(localized: "与直连同时开始"))
+        let directStep = trace.begin(.direct, detail: String(localized: "先等 \(RemoteConnectTrace.millis(window)) ms"))
+        let directTask = Task { await connectDirect(attempt, remote: remote, keys: direct) }
+        let early = try? await RemoteDeadline.run(window, timeoutError: RemoteProtocolError.timeout) {
+            await directTask.value
         }
-        return RemoteDialedPath(transport: transport, handshakeKeys: keys, path: .relay)
+        let pick: RemotePathPick
+        if let early, let transport = early.transport {
+            pick = .direct(transport, detail: early.detail)
+        } else {
+            pick = await RemotePathPick.first(direct: directTask, relay: race)
+        }
+        switch pick {
+        case .direct(let transport, let detail):
+            race.abandon()
+            trace.end(directStep, ok: true, detail: detail)
+            trace.end(relayStep, ok: false, detail: String(localized: "直连先通，不用了"))
+            history.record(true, on: network)
+            return RemoteDialedPath(transport: transport, handshakeKeys: keys, path: .direct)
+        case .relay(let transport, let directDetail):
+            trace.end(relayStep, ok: true)
+            trace.end(directStep, ok: false, detail: directDetail ?? String(localized: "中继先通"))
+            history.record(false, on: network)
+            // 直连之后要是也通了，那条用不上，关掉。
+            Task { if let late = await directTask.value.transport { late.cancel() } }
+            return RemoteDialedPath(transport: transport, handshakeKeys: keys, path: .relay)
+        case .failed(let error, let directDetail):
+            trace.end(directStep, ok: false, detail: directDetail)
+            trace.end(relayStep, ok: false, detail: error.localizedDescription)
+            history.record(false, on: network)
+            throw error
+        }
     }
 
     /// 日志里的地址摘要：几个本机地址、几个反射地址，不写具体 IP。
