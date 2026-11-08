@@ -1,0 +1,72 @@
+#!/bin/bash
+# 弱网矩阵（RemoteWeakNetworkMatrixTests）：起一个本机 uterm-relay，带开关跑矩阵用例，把读数表写进
+# docs/remote-weak-network-baseline.md（WEAK_NET_REPORT 可改路径）。用例默认跳过，不进 test-fast。
+#
+# 用法：scripts/test-weak-network.sh [传给 xcodebuild 的其余参数...]
+#       WEAK_NET_ONLY="test_matrix_2_3g test_matrix_9_connect_through_relay" 只跑其中几条。
+set -euo pipefail
+
+report=${WEAK_NET_REPORT:-docs/remote-weak-network-baseline.md}
+work=$(mktemp -d)
+relay_pid=""
+cleanup() {
+    if [ -n "$relay_pid" ]; then kill "$relay_pid" 2>/dev/null || true; fi
+    rm -rf "$work"
+}
+trap cleanup EXIT
+
+GOWORK=off go -C relay build -o "$work/uterm-relay" ./cmd/uterm-relay
+
+port=${UTERM_RELAY_TEST_PORT:-47397}
+export RELAY_DATA="$work/data"
+export RELAY_LISTEN="127.0.0.1:$port"
+export RELAY_PUBLIC_HOST=127.0.0.1
+export RELAY_PUBLIC_PORT="$port"
+export RELAY_NAME="WeakNet"
+export RELAY_RATE_PER_IP=0
+
+"$work/uterm-relay" serve > "$work/relay.log" 2>&1 &
+relay_pid=$!
+for _ in $(seq 1 100); do
+    if "$work/uterm-relay" status > /dev/null 2>&1; then break; fi
+    sleep 0.1
+done
+"$work/uterm-relay" status > /dev/null
+relay_version=$("$work/uterm-relay" version)
+
+only=()
+if [ -n "${WEAK_NET_ONLY:-}" ]; then
+    for name in $WEAK_NET_ONLY; do only+=(-only-testing:"uTermTests/RemoteWeakNetworkMatrixTests/$name"); done
+else
+    only=(-only-testing:uTermTests/RemoteWeakNetworkMatrixTests)
+fi
+
+log="$work/xcodebuild.log"
+load_before=$(sysctl -n vm.loadavg)
+set +e
+TEST_RUNNER_UTERM_WEAK_NET_MATRIX=1 \
+TEST_RUNNER_UTERM_RELAY_CONFIG="$("$work/uterm-relay" config)" \
+TEST_RUNNER_UTERM_RELAY_VERSION="$relay_version" \
+    xcodebuild test "${only[@]}" -parallel-testing-enabled NO "$@" 2>&1 | tee "$log" | grep -E '^\[弱网矩阵\]|Test Case .*(passed|failed|skipped)|error:|\*\* TEST'
+status=${PIPESTATUS[0]}
+set -e
+load_after=$(sysctl -n vm.loadavg)
+
+table=$(awk '/<!-- weak-net-matrix:begin -->/{on=1; next} /<!-- weak-net-matrix:end -->/{on=0} on' "$log")
+if [ -z "$table" ]; then
+    echo "没有读到矩阵结果（用例被跳过或中途失败），不写报告" >&2
+    exit "$status"
+fi
+{
+    echo "# 弱网矩阵基线"
+    echo
+    echo "- 生成：$(date '+%Y-%m-%d %H:%M')，提交 $(git rev-parse --short HEAD)$(git diff --quiet || echo '（工作区有改动）')"
+    echo "- 机器：$(sysctl -n hw.model)，$(sysctl -n machdep.cpu.brand_string)，macOS $(sw_vers -productVersion)"
+    echo "- 中继：本机 uterm-relay $relay_version"
+    echo "- 平均负载（1/5/15 分钟）：开跑前 $load_before，跑完 $load_after"
+    echo "- 重跑：\`make test-weak-network\`（用例 \`uTermTests/Core/Remote/RemoteWeakNetworkMatrixTests.swift\`）"
+    echo
+    echo "$table"
+} > "$report"
+echo "报告：$report"
+exit "$status"
