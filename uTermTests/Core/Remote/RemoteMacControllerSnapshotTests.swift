@@ -61,14 +61,37 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let key = try identity.localIdentity().publicKey.rawRepresentation
-        try identity.trust(RemotePeer(id: UUID(), name: "办公室 Mac Studio", publicKey: key, pairedAt: .now,
+        let macID = UUID()
+        try identity.trust(RemotePeer(id: macID, name: "办公室 Mac Studio", publicKey: key, pairedAt: .now,
                                       platform: RemoteDevicePlatform.mac.rawValue))
         let directory = RemoteMacDirectory(identity: identity, defaults: defaults, adoptsRelayAsDefault: false)
         let client = RemoteMacClient(macName: "办公室 Mac Studio", endpoint: .hostPort(host: "127.0.0.1", port: 9),
                                      identity: identity)
         let desktop = RemoteDesktopWindowModel(
             client: client, session: RemoteDesktopSession(client: client, maxWidth: 1920, maxHeight: 1080))
+        let log = RemotePathMatrixLog(defaults: defaults)
+        let runID = UUID()
+        func probe(_ mode: RemotePathProbeMode, _ connected: Bool, failure: String? = nil,
+                   setup: Int? = nil, rtt: Double? = nil) -> RemotePathProbeResult {
+            var result = RemotePathProbeResult(runID: runID, mode: mode, network: "Wi-Fi · 有 IPv6",
+                                               connected: connected, failure: failure)
+            result.setupMillis = setup
+            result.roundTripMillis = rtt
+            result.roundTripP95Millis = rtt.map { $0 * 1.8 }
+            result.lossPercent = connected ? 0 : nil
+            return result
+        }
+        log.append([probe(.localNetwork, false, failure: "Mac 不在这个局域网里"),
+                    probe(.directIPv6, true, setup: 1240, rtt: 18.4),
+                    probe(.directIPv4, false, failure: "打洞超时"),
+                    probe(.relay, true, setup: 620, rtt: 42.7)])
+        let diagnostics = RemotePathDiagnosticsModel(log: log, networkLabel: { "Wi-Fi · 有 IPv6" })
+        diagnostics.reloadHistory()
         for dark in [false, true] {
+            try await shoot("diagnostics", size: NSSize(width: 640, height: 900), dark: dark, into: dir) {
+                RemoteDiagnosticsContent(model: diagnostics, macID: macID.uuidString)
+                    .background(UD.bg).environment(directory)
+            }
             try await shoot("desktop-window-connecting", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
                 RemoteDesktopContent(model: desktop).background(Color.black).environment(\.colorScheme, .dark)
             }

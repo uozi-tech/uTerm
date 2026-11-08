@@ -355,7 +355,7 @@ final class RemoteMacDirectory {
             if mac.isOnRelay {
                 runner.relay = relay
             } else {
-                runner.relayUnavailable = "Mac 不在中继上（未打开「允许经公网接入」，或未勾选这台手机）"
+                runner.relayUnavailable = "Mac 不在中继上（未打开「允许经公网接入」，或未勾选这台设备）"
             }
         }
         return (runner, peer)
@@ -518,7 +518,7 @@ final class RemoteMacDirectory {
         #endif
     }
 
-    // 只在 iOS：网络标签 `RemoteNetworkLabel` 在手机的诊断页里，Mac 当主控端不跑这个调试矩阵。
+    // 只在 iOS：这个启动参数是给真机 `devicectl --console` 跑的，Mac 上用「网络诊断」窗口。
     #if DEBUG && os(iOS)
     /// 调试：启动参数 `-RemoteDebugPathMatrix <轮数>`，第一台在中继上的 Mac 一出现就自动跑链路矩阵，
     /// 结果打到标准输出（`devicectl device process launch --console` 收得到）并存进诊断记录。

@@ -66,13 +66,16 @@ struct RemoteDesktopWindowView: View {
 
     @Environment(RemoteMacDirectory.self) private var directory
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     @State private var model: RemoteDesktopWindowModel?
     @State private var missing = false
 
     var body: some View {
         Group {
             if let model {
-                RemoteDesktopContent(model: model)
+                RemoteDesktopContent(model: model, onDiagnose: windowID.map { id in
+                    { openWindow(value: RemoteDiagnosticsWindowID(macID: id.macID)) }
+                })
             } else {
                 VStack(spacing: 0) {
                     RemoteDesktopTitleBar { Text(missing ? "找不到这台 Mac" : "").foregroundStyle(.white.opacity(0.9)) }
@@ -148,6 +151,8 @@ extension RemoteDesktopTitleBar where Trailing == EmptyView {
 
 struct RemoteDesktopContent: View {
     @Bindable var model: RemoteDesktopWindowModel
+    /// 连不上时给的「网络诊断」入口；nil 不显示。
+    var onDiagnose: (() -> Void)?
 
     @State private var note: String?
     @State private var noteTask: Task<Void, Never>?
@@ -336,7 +341,12 @@ struct RemoteDesktopContent: View {
             RemoteMacPairingCodeView(macName: client.macName, code: code).background(Color.black)
         } else if case .failed(let message) = client.state, session.state != .streaming {
             notice(spinner: false, title: String(localized: "无法连接 \(client.macName)"), message: message) {
-                UDButton(title: "重试") { Task { await model.start() } }
+                HStack(spacing: 8) {
+                    UDButton(title: "重试") { Task { await model.start() } }
+                    if let onDiagnose {
+                        UDButton(title: "网络诊断", style: .secondary, action: onDiagnose)
+                    }
+                }
             }
         } else {
             sessionOverlay

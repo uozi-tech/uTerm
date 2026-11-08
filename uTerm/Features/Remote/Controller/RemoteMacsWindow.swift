@@ -88,6 +88,9 @@ struct RemoteMacsWindowView: View {
                                 UDMenuItem(label: String(localized: "查看屏幕"), systemImage: "display") {
                                     openWindow(value: RemoteDesktopWindowID(macID: mac.id))
                                 },
+                                UDMenuItem(label: String(localized: "网络诊断"), systemImage: "stethoscope") {
+                                    openWindow(value: RemoteDiagnosticsWindowID(macID: mac.id))
+                                },
                                 UDMenuItem(label: String(localized: "忘记这台 Mac…"), systemImage: "xmark.circle",
                                            danger: true) { forgetting = mac },
                             ])

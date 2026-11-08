@@ -86,6 +86,7 @@ struct RemoteMacWindowView: View {
 private struct RemoteMacSessionView: View {
     let model: RemoteMacWindowModel
     let macID: String
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let client = model.client
@@ -98,7 +99,12 @@ private struct RemoteMacSessionView: View {
             case .failed(let message) where model.panes.isEmpty:
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法连接"),
                                    detail: message) {
-                    UDButton(title: "重试") { Task { await client.connect() } }
+                    HStack(spacing: 8) {
+                        UDButton(title: "重试") { Task { await client.connect() } }
+                        UDButton(title: "网络诊断", style: .secondary) {
+                            openWindow(value: RemoteDiagnosticsWindowID(macID: macID))
+                        }
+                    }
                 }
             default:
                 RemoteMacTerminalArea(model: model, macID: macID)

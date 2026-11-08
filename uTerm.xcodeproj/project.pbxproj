@@ -258,6 +258,7 @@
 				Features/Remote/Controller/RemoteDesktopKeyboardCapture.swift,
 				Features/Remote/Controller/RemoteDesktopMacPasteSource.swift,
 				Features/Remote/Controller/RemoteDesktopWindow.swift,
+				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
 				Features/Remote/Controller/RemoteMacsWindow.swift,

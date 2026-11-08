@@ -536,6 +536,21 @@ struct uTermApp: App {
         .restorationBehavior(.disabled)
         .routesNewWindowToWelcome()
 
+        // 一台远程 Mac 的网络诊断：各条路逐一测，看实际会走哪条。
+        WindowGroup(for: RemoteDiagnosticsWindowID.self) { $windowID in
+            RemoteDiagnosticsWindowView(windowID: windowID)
+                .modifier(AppAppearanceSync(preference: currentAppearance))
+                .modifier(LocaleOverride(locale: currentLocale))
+                .modifier(TitlebarDragRegion())
+                .appLockGate(lockModel)
+                .environment(remoteMacs)
+                .bootstrapsAppServices(bootstrapAppServices)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 640, height: 720)
+        .restorationBehavior(.disabled)
+        .routesNewWindowToWelcome()
+
         // 端口转发独立窗口 —— 每个绑定一台服务器的转发规则管理器，可多实例。
         WindowGroup(for: PortForwardWindowID.self) { $pfID in
             PortForwardWindowView(windowID: pfID)
