@@ -12,52 +12,170 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         windows.removeAll()
     }
 
-    /// 「适配屏幕」避开圆角：画面四角都在圆角弧线以内（手机铺满整屏的画布、Mac 的圆角窗口）。
-    /// 两种几何：MacBook 内建屏（带刘海，1512×982）与 16:9 外接屏（2560×1440）。
-    func test_viewport_fit_keeps_all_four_corners_out_of_rounded_corners() {
-        let builtIn = CGSize(width: 1512, height: 982)
-        let external = CGSize(width: 2560, height: 1440)
-        // 手机横屏（Duo 内屏一类）：画布在顶栏下面、铺到屏幕底边，下面两个角是 55pt 的屏幕圆角。
-        // Mac 窗口：窗口按屏幕比例对好（画布正好是显示器比例），四角 16pt。
-        let cases: [(content: CGSize, view: CGSize, radius: CGFloat)] = [
-            (builtIn, CGSize(width: 1000, height: 660), 55),
-            (external, CGSize(width: 1000, height: 660), 55),
-            (builtIn, CGSize(width: 402, height: 820), 55),   // 竖屏：上下留黑边
-            (builtIn, CGSize(width: 1200, height: 1200 * 982 / 1512), 16),
-            (external, CGSize(width: 1280, height: 720), 16),
-        ]
-        for (content, view, radius) in cases {
-            let viewport = RemoteDesktopViewport(contentSize: content, viewSize: view, cornerRadius: radius)
-            let plain = RemoteDesktopViewport(contentSize: content, viewSize: view)
-            let frame = viewport.contentFrame
-            let label = "\(content) in \(view) r=\(radius)"
-            // 四个角离视图两边的距离一样（居中），且都在弧线以内。
-            XCTAssertEqual(frame.midX, view.width / 2, accuracy: 1e-6, label)
-            XCTAssertEqual(frame.midY, view.height / 2, accuracy: 1e-6, label)
-            XCTAssertTrue(RemoteDesktopCornerFit.clears(dx: frame.minX, dy: frame.minY, radius: radius), label)
-            // 等比，不超过普通适配；只缩到刚好避开为止（再大一点就进了弧线），面积损失有限。
-            XCTAssertEqual(frame.width / frame.height, content.width / content.height, accuracy: 1e-6, label)
-            XCTAssertLessThanOrEqual(viewport.fitScale, plain.fitScale + 1e-9, label)
-            let bigger = viewport.fitScale * 1.002
-            if bigger < plain.fitScale {
-                XCTAssertFalse(RemoteDesktopCornerFit.clears(dx: (view.width - content.width * bigger) / 2,
-                                                             dy: (view.height - content.height * bigger) / 2,
-                                                             radius: radius), label)
-            }
-            XCTAssertGreaterThan(viewport.fitScale / plain.fitScale, 0.9, label)
+    private static let builtIn = CGSize(width: 1512, height: 982)
+    private static let external = CGSize(width: 2560, height: 1440)
+
+    /// 一个几何场景：画布尺寸与它四个角的外圆角。
+    private struct Scene {
+        var name: String
+        var content: CGSize
+        var canvas: CGSize
+        var corners: RemoteDesktopCornerRadii
+    }
+
+    /// 手机横竖屏铺满整屏（四角都是 55pt 屏幕圆角）、Duo 内屏一类顶栏下面的画布（只有下面两个角）、
+    /// Mac 窗口（窗口按屏幕比例对好，底角 16pt）；内建屏（1512×982，带刘海）与 16:9 外接屏各一遍。
+    private static func scenes() -> [Scene] {
+        var scenes: [Scene] = []
+        let phone = RemoteDesktopCornerRadii(all: 55)
+        let bottomOnly = RemoteDesktopCornerRadii(bottomLeft: 55, bottomRight: 55)
+        let window = RemoteDesktopCornerRadii(bottomLeft: 16, bottomRight: 16)
+        for (tag, content) in [("builtin", builtIn), ("external", external)] {
+            scenes.append(Scene(name: "phone-landscape-\(tag)", content: content, canvas: CGSize(width: 874, height: 402), corners: phone))
+            scenes.append(Scene(name: "phone-portrait-\(tag)", content: content, canvas: CGSize(width: 402, height: 874), corners: phone))
+            scenes.append(Scene(name: "duo-inner-\(tag)", content: content, canvas: CGSize(width: 1000, height: 660), corners: bottomOnly))
+            // 窗口按 `fittedFrame` 对好：标题栏 36pt，画布扣掉窄边后正好是显示器比例。
+            let frame = RemoteDesktopCanvasNSView.fittedFrame(
+                window: CGRect(x: 0, y: 0, width: 1236, height: 836), canvas: CGSize(width: 1236, height: 800),
+                display: content, visible: CGRect(x: 0, y: 0, width: 4000, height: 4000),
+                margin: RemoteDesktopCanvasNSView.fittedMargin(corners: window))
+            scenes.append(Scene(name: "mac-window-\(tag)", content: content,
+                                canvas: CGSize(width: frame.width, height: frame.height - 36), corners: window))
         }
-        // 两侧本来就留着足够黑边的（竖屏），不用缩。
-        let portrait = RemoteDesktopViewport(contentSize: builtIn, viewSize: CGSize(width: 402, height: 820), cornerRadius: 55)
-        XCTAssertGreaterThan(portrait.contentFrame.minY, 55 * RemoteDesktopCornerFit.continuousAllowance)
-        XCTAssertEqual(portrait.fitScale, RemoteDesktopViewport(contentSize: builtIn, viewSize: CGSize(width: 402, height: 820)).fitScale,
-                       accuracy: 1e-9)
-        // 没有圆角就是原来的适配。
-        XCTAssertEqual(RemoteDesktopCornerFit.scale(content: builtIn, view: CGSize(width: 874, height: 402), cornerRadius: 0),
-                       402.0 / 982.0, accuracy: 1e-9)
-        // 放大后可以铺进圆角（缩放下限仍是避开圆角的适配）。
-        var zoomed = RemoteDesktopViewport(contentSize: builtIn, viewSize: CGSize(width: 1000, height: 660), cornerRadius: 55)
-        zoomed.zoom(by: 2, anchor: CGPoint(x: 500, y: 330))
+        return scenes
+    }
+
+    /// 「适配屏幕」与屏幕 / 窗口圆角同心：画面离四边留一样宽的窄边铺满（紧的那个方向正好是窄边），
+    /// 画面的角切成同心圆角、整个落在外面的圆角以内；只有直角的画布照旧铺满不留边。
+    func test_fit_fills_with_uniform_margin_and_concentric_corners() {
+        let gap = RemoteDesktopCornerFit.gap
+        for scene in Self.scenes() {
+            let viewport = RemoteDesktopViewport(contentSize: scene.content, viewSize: scene.canvas, corners: scene.corners)
+            let frame = viewport.contentFrame
+            let label = scene.name
+            let dx = frame.minX, dy = frame.minY
+            // 居中、等比。
+            XCTAssertEqual(frame.midX, scene.canvas.width / 2, accuracy: 1e-6, label)
+            XCTAssertEqual(frame.midY, scene.canvas.height / 2, accuracy: 1e-6, label)
+            XCTAssertEqual(frame.width / frame.height, scene.content.width / scene.content.height, accuracy: 1e-6, label)
+            // 普通适配下角落进弧线的：四边至少留窄边，紧的那个方向正好是窄边（铺满，不再为直角多缩）。
+            // 角本来就在弧线外的：照旧铺满，紧的那个方向贴边。
+            let full = min(scene.canvas.width / scene.content.width, scene.canvas.height / scene.content.height)
+            let fullDx = (scene.canvas.width - scene.content.width * full) / 2
+            let fullDy = (scene.canvas.height - scene.content.height * full) / 2
+            let needsMargin = !RemoteDesktopCornerFit.clears(dx: fullDx, dy: fullDy, radius: scene.corners.max)
+            XCTAssertEqual(min(dx, dy), needsMargin ? gap : 0, accuracy: 1e-6, label)
+            if !needsMargin { XCTAssertEqual(viewport.fitScale, full, accuracy: 1e-9, label) }
+            print("[corner-fit] \(label): margin \(needsMargin ? gap : 0) dx \(dx) dy \(dy) "
+                  + "radius \(viewport.pictureCorners.radius) scale \(viewport.fitScale) / full \(full)")
+            // 画面的每个角都在外圆角以内（按圆弧逐点量）。
+            let picture = viewport.pictureCorners
+            XCTAssertTrue(Self.pictureInsideCanvas(frame: frame, picture: picture, canvas: scene.canvas, corners: scene.corners),
+                          "\(label) 画面角出了外圆角")
+            // 外圆角里有角时，画面的角是圆的；直角那几个角（Duo 顶栏下面的上沿、Mac 窗口上沿）画面也是直角。
+            let distance = max(dx, dy)
+            for (outer, cut) in [(scene.corners.topLeft, picture.topLeft), (scene.corners.topRight, picture.topRight),
+                                 (scene.corners.bottomLeft, picture.bottomLeft), (scene.corners.bottomRight, picture.bottomRight)] {
+                XCTAssertEqual(cut, outer - distance > 0.5, "\(label) 外圆角 \(outer) 离 \(distance)")
+            }
+            if picture.radius > 0 {
+                XCTAssertEqual(picture.radius, scene.corners.max - distance, accuracy: 1e-6, label)
+            }
+        }
+        // Mac 窗口对好比例后四边一样宽，画面圆角正好同心：16 − 8 = 8。
+        let window = Self.scenes().first { $0.name == "mac-window-builtin" }!
+        let viewport = RemoteDesktopViewport(contentSize: window.content, viewSize: window.canvas, corners: window.corners)
+        XCTAssertEqual(viewport.contentFrame.minX, RemoteDesktopCornerFit.gap, accuracy: 0.5)
+        XCTAssertEqual(viewport.contentFrame.minY, RemoteDesktopCornerFit.gap, accuracy: 0.5)
+        XCTAssertEqual(viewport.pictureCorners.radius, 16 - RemoteDesktopCornerFit.gap, accuracy: 0.5)
+        XCTAssertTrue(viewport.pictureCorners.bottomLeft && viewport.pictureCorners.bottomRight)
+        XCTAssertFalse(viewport.pictureCorners.topLeft || viewport.pictureCorners.topRight)
+        // 没有圆角就是原来的适配：铺满、不留边、直角。
+        let plain = RemoteDesktopViewport(contentSize: Self.builtIn, viewSize: CGSize(width: 874, height: 402))
+        XCTAssertEqual(plain.fitScale, 402.0 / 982.0, accuracy: 1e-9)
+        XCTAssertTrue(plain.pictureCorners.isSquare)
+        // 放大后可以铺进圆角，出了画布的角不切。
+        var zoomed = RemoteDesktopViewport(contentSize: Self.builtIn, viewSize: CGSize(width: 874, height: 402),
+                                           corners: RemoteDesktopCornerRadii(all: 55))
+        zoomed.zoom(by: 2, anchor: CGPoint(x: 437, y: 201))
         XCTAssertLessThan(zoomed.contentFrame.minX, 0)
+        XCTAssertTrue(zoomed.pictureCorners.isSquare)
+    }
+
+    /// 只在 86e1b171 那版也要缩的场景里让出窄边，且最多让出一圈窄边：比普通适配小不超过 2×gap。
+    func test_concentric_fit_only_gives_up_the_margin() {
+        for scene in Self.scenes() where scene.corners.max > 0 {
+            let viewport = RemoteDesktopViewport(contentSize: scene.content, viewSize: scene.canvas, corners: scene.corners)
+            let full = min(scene.canvas.width / scene.content.width, scene.canvas.height / scene.content.height)
+            let old = Self.squareCornerScale(content: scene.content, view: scene.canvas, radius: scene.corners.max)
+            let gap = RemoteDesktopCornerFit.gap
+            let floor = full * min((scene.canvas.width - gap * 2) / scene.canvas.width,
+                                   (scene.canvas.height - gap * 2) / scene.canvas.height)
+            XCTAssertGreaterThanOrEqual(viewport.fitScale, floor - 1e-9, scene.name)
+            if old >= full - 1e-9 { XCTAssertEqual(viewport.fitScale, full, accuracy: 1e-9, "\(scene.name) 本来不用缩") }
+        }
+    }
+
+    /// Mac 窗口按屏幕比例对好时把窄边算进去：画布扣掉四边窄边后正好是显示器比例。
+    func test_fitted_window_leaves_room_for_the_margin() {
+        let fitted = RemoteDesktopCanvasNSView.fittedFrame(
+            window: CGRect(x: 100, y: 100, width: 1280, height: 838), canvas: CGSize(width: 1280, height: 802),
+            display: Self.builtIn, visible: CGRect(x: 0, y: 0, width: 3000, height: 3000), margin: 8)
+        let canvasHeight = fitted.height - 36
+        XCTAssertEqual((canvasHeight - 16) / (fitted.width - 16), Self.builtIn.height / Self.builtIn.width, accuracy: 0.002)
+        XCTAssertEqual(fitted.maxY, 938, "上沿不动")
+    }
+
+    /// 画面圆角矩形是否整个在画布圆角矩形以内（圆弧模型）：沿画面四个角的弧线取点逐个量。
+    private static func pictureInsideCanvas(frame: CGRect, picture: RemoteDesktopPictureCorners, canvas: CGSize,
+                                            corners: RemoteDesktopCornerRadii) -> Bool {
+        // 外圆角圆心：角在左上 → 圆心 (r, r)，依此类推；点落在圆心与角之间的那个方块里时，必须在圆内。
+        let arcs = [(corners.topLeft, CGPoint(x: corners.topLeft, y: corners.topLeft), CGPoint(x: -1, y: -1)),
+                    (corners.topRight, CGPoint(x: canvas.width - corners.topRight, y: corners.topRight), CGPoint(x: 1, y: -1)),
+                    (corners.bottomLeft, CGPoint(x: corners.bottomLeft, y: canvas.height - corners.bottomLeft), CGPoint(x: -1, y: 1)),
+                    (corners.bottomRight, CGPoint(x: canvas.width - corners.bottomRight, y: canvas.height - corners.bottomRight),
+                     CGPoint(x: 1, y: 1))]
+        func inside(_ p: CGPoint) -> Bool {
+            let eps: CGFloat = 1e-6
+            guard p.x >= -eps, p.y >= -eps, p.x <= canvas.width + eps, p.y <= canvas.height + eps else { return false }
+            for (r, c, out) in arcs where r > 0 {
+                let beyond = (p.x - c.x) * out.x > 0 && (p.y - c.y) * out.y > 0
+                if beyond, hypot(p.x - c.x, p.y - c.y) > r + eps { return false }
+            }
+            return true
+        }
+        let cuts = [(picture.topLeft, CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: 1, y: 1)),
+                    (picture.topRight, CGPoint(x: frame.maxX, y: frame.minY), CGPoint(x: -1, y: 1)),
+                    (picture.bottomLeft, CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: 1, y: -1)),
+                    (picture.bottomRight, CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: -1, y: -1))]
+        for (cut, corner, toward) in cuts {
+            let r = cut ? picture.radius : 0
+            let center = CGPoint(x: corner.x + toward.x * r, y: corner.y + toward.y * r)
+            for step in 0...32 {
+                let angle = CGFloat(step) / 32 * .pi / 2
+                let p = CGPoint(x: center.x - toward.x * r * cos(angle), y: center.y - toward.y * r * sin(angle))
+                if !inside(p) { return false }
+            }
+        }
+        return true
+    }
+
+    /// 86e1b171 的适配：等比居中，直角落在圆弧以内（连续曲率按放大 1.2 倍的圆弧算）。只给对照图和比较用。
+    private static func squareCornerScale(content: CGSize, view: CGSize, radius: CGFloat) -> CGFloat {
+        let full = min(view.width / content.width, view.height / content.height)
+        func fits(_ s: CGFloat) -> Bool {
+            let dx = (view.width - content.width * s) / 2, dy = (view.height - content.height * s) / 2
+            let r = radius * 1.2 + 1
+            if dx >= r || dy >= r { return true }
+            return (r - dx) * (r - dx) + (r - dy) * (r - dy) <= r * r
+        }
+        guard radius > 0, !fits(full) else { return full }
+        var low: CGFloat = 0, high = full
+        for _ in 0..<40 {
+            let mid = (low + high) / 2
+            if fits(mid) { low = mid } else { high = mid }
+        }
+        return low
     }
 
     /// 和远程屏幕窗口同一种窗口（隐藏标题栏、内容铺满）：探针贴着窗口底边时量出窗口的圆角，挪开就没有。
@@ -91,8 +209,9 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
 
     // MARK: - 几何对照图
 
-    /// 设置 `UTERM_REMOTE_SHOTS` 才画：每张图左边是改前（按矩形适配），右边是改后（避开圆角）。
-    /// 画面用示意的 Mac 屏幕：顶上菜单栏（两头各一个标记）、底下 Dock（两端各一个标记），标记被切就看得出来。
+    /// 设置 `UTERM_REMOTE_SHOTS` 才画：每张图左边是改前（86e1b171：缩到直角落进圆弧以内），右边是改后
+    ///（同心圆角 + 四边一样宽的窄边铺满）。画面用示意的 Mac 屏幕：顶上菜单栏（两头各一个标记）、
+    /// 底下 Dock（两端各一个标记），标记被切就看得出来。
     func test_render_corner_fit_geometry() throws {
         let env = ProcessInfo.processInfo.environment
         guard let raw = env["UTERM_REMOTE_SHOTS"] ?? env["TEST_RUNNER_UTERM_REMOTE_SHOTS"], !raw.isEmpty else {
@@ -101,21 +220,12 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("remote-shots", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let builtIn = CGSize(width: 1512, height: 982)
-        let external = CGSize(width: 2560, height: 1440)
-        // 手机横屏：顶栏 56pt 不画画面，画布铺到屏幕底边，屏幕四角 55pt。
-        let phone = (screen: CGSize(width: 1000, height: 716), canvasTop: CGFloat(56), radius: CGFloat(55))
-        let shots: [(String, CGSize, CGSize, CGFloat, CGFloat)] = [
-            ("corner-fit-phone-builtin", builtIn, phone.screen, phone.canvasTop, phone.radius),
-            ("corner-fit-phone-external", external, phone.screen, phone.canvasTop, phone.radius),
-            // Mac 窗口：标题栏 36pt，画布按显示器比例对好，窗口四角 16pt。
-            ("corner-fit-mac-window-builtin", builtIn,
-             CGSize(width: 1200, height: 36 + 1200 * builtIn.height / builtIn.width), 36, 16),
-            ("corner-fit-mac-window-external", external,
-             CGSize(width: 1280, height: 36 + 1280 * external.height / external.width), 36, 16),
-        ]
-        for (name, content, screen, top, radius) in shots {
-            let png = try render(content: content, screen: screen, canvasTop: top, radius: radius)
+        for scene in Self.scenes() {
+            // Duo 顶栏下面的画布上面还有 56pt 顶栏，Mac 窗口上面是 36pt 标题栏：外形画整块屏幕 / 窗口。
+            let top: CGFloat = scene.name.hasPrefix("duo") ? 56 : scene.name.hasPrefix("mac") ? 36 : 0
+            let outerRadius = scene.corners.max
+            let png = try render(scene: scene, canvasTop: top, outerRadius: outerRadius)
+            let name = "corner-fit-\(scene.name)"
             try png.write(to: dir.appendingPathComponent("\(name).png"))
             let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
             attachment.name = "\(name).png"
@@ -125,12 +235,15 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         print("[remote-shots] dir=\(dir.path)")
     }
 
-    private func render(content: CGSize, screen: CGSize, canvasTop: CGFloat, radius: CGFloat) throws -> Data {
+    private func render(scene: Scene, canvasTop: CGFloat, outerRadius: CGFloat) throws -> Data {
+        let screen = CGSize(width: scene.canvas.width, height: scene.canvas.height + canvasTop)
         let gap: CGFloat = 40
         let size = CGSize(width: screen.width * 2 + gap * 3, height: screen.height + gap * 2 + 24)
-        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
-                                                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2),
+                                                 pixelsHigh: Int(size.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                                 bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = size
         let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep))
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
@@ -142,23 +255,46 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: true)
         cg.setFillColor(NSColor(white: 0.92, alpha: 1).cgColor)
         cg.fill(CGRect(origin: .zero, size: size))
-        let canvas = CGSize(width: screen.width, height: screen.height - canvasTop)
-        for (index, corners) in [CGFloat(0), radius].enumerated() {
+        for index in 0..<2 {
             let origin = CGPoint(x: gap + CGFloat(index) * (screen.width + gap), y: gap + 24)
-            let label = index == 0 ? "改前：按矩形适配" : "改后：避开圆角（r=\(Int(radius))）"
+            let canvasOrigin = CGPoint(x: origin.x, y: origin.y + canvasTop)
+            let label: String
+            let frame: CGRect
+            let picture: RemoteDesktopPictureCorners
+            if index == 0 {
+                let scale = Self.squareCornerScale(content: scene.content, view: scene.canvas, radius: scene.corners.max)
+                let pictureSize = CGSize(width: scene.content.width * scale, height: scene.content.height * scale)
+                frame = CGRect(x: (scene.canvas.width - pictureSize.width) / 2, y: (scene.canvas.height - pictureSize.height) / 2,
+                               width: pictureSize.width, height: pictureSize.height)
+                picture = .square
+                label = "改前：直角缩进圆弧"
+            } else {
+                let viewport = RemoteDesktopViewport(contentSize: scene.content, viewSize: scene.canvas, corners: scene.corners)
+                frame = viewport.contentFrame
+                picture = viewport.pictureCorners
+                label = "改后：同心 r=\(Int(picture.radius.rounded()))，边 \(Int(RemoteDesktopCornerFit.gap))"
+            }
             (label as NSString).draw(at: CGPoint(x: origin.x, y: gap - 4),
                                      withAttributes: [.font: NSFont.systemFont(ofSize: 15, weight: .semibold)])
             cg.saveGState()
-            // 屏幕 / 窗口的外形：圆角之外看不见。
-            let outline = CGPath(roundedRect: CGRect(origin: origin, size: screen), cornerWidth: radius, cornerHeight: radius,
-                                 transform: nil)
+            // 屏幕 / 窗口的外形：圆角之外看不见。手机四角都圆；Duo 内屏与 Mac 窗口只有下面两个角落在画布上，
+            // 但外形本身四角都圆。
+            let outline = CGPath(roundedRect: CGRect(origin: origin, size: screen), cornerWidth: outerRadius,
+                                 cornerHeight: outerRadius, transform: nil)
             cg.addPath(outline)
             cg.clip()
             cg.setFillColor(NSColor.black.cgColor)
             cg.fill(CGRect(origin: origin, size: screen))
-            let viewport = RemoteDesktopViewport(contentSize: content, viewSize: canvas, cornerRadius: corners)
-            let frame = viewport.contentFrame.offsetBy(dx: origin.x, dy: origin.y + canvasTop)
-            drawMacScreen(in: frame, cg: cg)
+            if canvasTop > 0 {
+                cg.setFillColor(NSColor(white: 0.18, alpha: 1).cgColor)
+                cg.fill(CGRect(origin: origin, size: CGSize(width: screen.width, height: canvasTop)))
+            }
+            let placed = frame.offsetBy(dx: canvasOrigin.x, dy: canvasOrigin.y)
+            cg.saveGState()
+            cg.addPath(Self.roundedPath(placed, picture))
+            cg.clip()
+            drawMacScreen(in: placed, cg: cg)
+            cg.restoreGState()
             cg.restoreGState()
             cg.addPath(outline)
             cg.setStrokeColor(NSColor(white: 0.55, alpha: 1).cgColor)
@@ -166,6 +302,25 @@ final class RemoteDesktopCornerFitTests: XCTestCase {
             cg.strokePath()
         }
         return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+    }
+
+    /// 只在 `picture` 选中的角上切圆角的路径（左上角原点坐标）。
+    private static func roundedPath(_ rect: CGRect, _ picture: RemoteDesktopPictureCorners) -> CGPath {
+        let path = CGMutablePath()
+        let r = picture.isSquare ? 0 : picture.radius
+        let tl = picture.topLeft ? r : 0, tr = picture.topRight ? r : 0
+        let bl = picture.bottomLeft ? r : 0, br = picture.bottomRight ? r : 0
+        path.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + tr), radius: tr)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX - br, y: rect.maxY), radius: br)
+        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY - bl), radius: bl)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + tl, y: rect.minY), radius: tl)
+        path.closeSubpath()
+        return path
     }
 
     /// 示意的 Mac 屏幕：壁纸、菜单栏（左头苹果、右头时钟的位置画红块）、Dock（两端红块）。

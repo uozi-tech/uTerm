@@ -494,22 +494,27 @@ nonisolated struct RemoteDesktopViewport: Equatable {
     /// 显示器的点尺寸（只用纵横比与相对大小）。
     var contentSize: CGSize
     var viewSize: CGSize
-    /// 视图四角里最大的那个圆角（视图点）：画布铺到了屏幕 / 窗口的圆角里时由视图量出来，0 = 四角都是直角。
-    var cornerRadius: CGFloat = 0
+    /// 视图四个角各自落在多大的圆角里（视图点）：画布铺到了屏幕 / 窗口的圆角里时由视图量出来。
+    var corners: RemoteDesktopCornerRadii = .square
     private(set) var zoom: CGFloat = 1
     private(set) var center = CGPoint(x: 0.5, y: 0.5)
 
-    init(contentSize: CGSize, viewSize: CGSize, cornerRadius: CGFloat = 0) {
+    init(contentSize: CGSize, viewSize: CGSize, corners: RemoteDesktopCornerRadii = .square) {
         self.contentSize = contentSize
         self.viewSize = viewSize
-        self.cornerRadius = cornerRadius
+        self.corners = corners
     }
 
-    /// 适配时每个显示器点占多少视图点：等比放进视图，四角还要落在圆角弧线以内
-    ///（菜单栏两头、Dock 两端不被手机屏幕或窗口的圆角切掉）。
+    /// 适配时每个显示器点占多少视图点：等比放进视图；画面的角会落进外圆角时四边留一圈窄边
+    ///（见 `RemoteDesktopCornerFit`）。
     var fitScale: CGFloat {
         guard contentSize.width > 0, contentSize.height > 0 else { return 1 }
-        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize, cornerRadius: cornerRadius)
+        return RemoteDesktopCornerFit.scale(content: contentSize, view: viewSize, corners: corners)
+    }
+
+    /// 画面四角与视图圆角同心的圆角（放大后出了视图的角不切）。
+    var pictureCorners: RemoteDesktopPictureCorners {
+        RemoteDesktopCornerFit.pictureCorners(frame: contentFrame, view: viewSize, corners: corners)
     }
 
     var scale: CGFloat { fitScale * zoom }

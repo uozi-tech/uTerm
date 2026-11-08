@@ -183,28 +183,33 @@ final class RemoteDesktopCanvasView: UIView {
         super.layoutSubviews()
         viewport.viewSize = bounds.size
         cornerProbe.frame = bounds
-        viewport.cornerRadius = screenCornerRadius()
+        viewport.corners = screenCorners()
         viewport.clamp()
         layoutContent()
         keyInput.frame = CGRect(x: 0, y: max(0, bounds.height - 48), width: bounds.width, height: min(48, bounds.height))
     }
 
-    /// 画布四角里最大的屏幕圆角：画布铺满整屏，下面两个角（键盘条收起时）正是屏幕的物理圆角，
-    /// 「适配屏幕」要让画面四角落在弧线以内（`RemoteDesktopCornerFit`）。
+    /// 画布四个角各自落在多大的屏幕圆角里：画布铺满整屏，四角（键盘条收起时连下面两个）正是屏幕的
+    /// 物理圆角，「适配屏幕」让画面离四边留一圈窄边、自己的角切成同心圆角（`RemoteDesktopCornerFit`）。
     ///
     /// iOS 26 起用系统的同心圆角：探针视图与画布同框，`containerConcentric` 给出每个角离屏幕圆角
     /// 还剩多大的半径（不在屏幕角上的角是 0）。在 `layoutSubviews` 里读，变了系统会再排一次版。
     /// 更早的系统没有这个接口：画布的角贴着屏幕的角、且屏幕有 Home 条（全面屏）时按 55pt 算。
-    private func screenCornerRadius() -> CGFloat {
+    private func screenCorners() -> RemoteDesktopCornerRadii {
         if #available(iOS 26.0, *) {
-            return cornerProbe.effectiveRadius(corner: .allCorners)
+            return RemoteDesktopCornerRadii(topLeft: cornerProbe.effectiveRadius(corner: .topLeft),
+                                            topRight: cornerProbe.effectiveRadius(corner: .topRight),
+                                            bottomLeft: cornerProbe.effectiveRadius(corner: .bottomLeft),
+                                            bottomRight: cornerProbe.effectiveRadius(corner: .bottomRight))
         }
-        guard let window, window.safeAreaInsets.bottom > 0 else { return 0 }
+        guard let window, window.safeAreaInsets.bottom > 0 else { return .square }
         let frame = convert(bounds, to: window)
         let screen = window.bounds
-        let touchesBottom = abs(frame.maxY - screen.maxY) < 1, touchesTop = abs(frame.minY - screen.minY) < 1
-        let touchesSide = abs(frame.minX - screen.minX) < 1 || abs(frame.maxX - screen.maxX) < 1
-        return touchesSide && (touchesTop || touchesBottom) ? Self.legacyScreenCornerRadius : 0
+        let top = abs(frame.minY - screen.minY) < 1, bottom = abs(frame.maxY - screen.maxY) < 1
+        let left = abs(frame.minX - screen.minX) < 1, right = abs(frame.maxX - screen.maxX) < 1
+        let r = Self.legacyScreenCornerRadius
+        return RemoteDesktopCornerRadii(topLeft: top && left ? r : 0, topRight: top && right ? r : 0,
+                                        bottomLeft: bottom && left ? r : 0, bottomRight: bottom && right ? r : 0)
     }
 
     private static let legacyScreenCornerRadius: CGFloat = 55
@@ -225,6 +230,7 @@ final class RemoteDesktopCanvasView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         displayLayer.frame = viewport.contentFrame
+        displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
         cursorLayer.position = viewport.viewPoint(normalized: pointer)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()

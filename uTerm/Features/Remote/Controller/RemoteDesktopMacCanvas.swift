@@ -184,20 +184,27 @@ final class RemoteDesktopCanvasNSView: NSView {
               let screen = window.screen ?? NSScreen.main else { return }
         fittedFor = viewport.contentSize
         let target = Self.fittedFrame(window: window.frame, canvas: bounds.size, display: viewport.contentSize,
-                                      visible: screen.visibleFrame)
+                                      visible: screen.visibleFrame, margin: Self.fittedMargin(corners: viewport.corners))
         if target != window.frame { window.setFrame(target, display: true, animate: true) }
     }
 
-    /// 窗口要多大，画布才正好是那台屏幕的比例。上沿不动；超出可见区时等比缩小宽度。
-    nonisolated static func fittedFrame(window: CGRect, canvas: CGSize, display: CGSize, visible: CGRect) -> CGRect {
-        guard canvas.width > 0, display.width > 0, display.height > 0 else { return window }
+    /// 对窗口比例时给画面留的窄边：画布四角有圆角（贴着窗口底边，见 `windowCorners`）时，对好之后画面的角
+    /// 一定落在弧线里，`RemoteDesktopCornerFit` 会让出窄边，窗口就把它算进去。
+    nonisolated static func fittedMargin(corners: RemoteDesktopCornerRadii) -> CGFloat {
+        corners.max > 0 ? RemoteDesktopCornerFit.gap : 0
+    }
+
+    /// 窗口要多大，画布扣掉四边各 `margin` 的窄边后才正好是那台屏幕的比例。上沿不动；超出可见区时等比缩小宽度。
+    nonisolated static func fittedFrame(window: CGRect, canvas: CGSize, display: CGSize, visible: CGRect,
+                                        margin: CGFloat = 0) -> CGRect {
+        guard canvas.width > margin * 2, display.width > 0, display.height > 0 else { return window }
         let chrome = CGSize(width: window.width - canvas.width, height: window.height - canvas.height)
         var width = canvas.width
-        var height = (width * display.height / display.width).rounded()
+        var height = ((width - margin * 2) * display.height / display.width + margin * 2).rounded()
         let maxHeight = window.maxY - visible.minY - chrome.height
-        if height > maxHeight, maxHeight > 0 {
+        if height > maxHeight, maxHeight > margin * 2 {
             height = maxHeight
-            width = (height * display.width / display.height).rounded()
+            width = ((height - margin * 2) * display.width / display.height + margin * 2).rounded()
         }
         let size = CGSize(width: width + chrome.width, height: height + chrome.height)
         return CGRect(x: window.minX, y: window.maxY - size.height, width: size.width, height: size.height)
@@ -206,10 +213,10 @@ final class RemoteDesktopCanvasNSView: NSView {
     override func layout() {
         super.layout()
         cornerProbe.frame = bounds
-        let radius = windowCornerRadius()
-        guard viewport.viewSize != bounds.size || viewport.cornerRadius != radius else { return }
+        let corners = windowCorners()
+        guard viewport.viewSize != bounds.size || viewport.corners != corners else { return }
         viewport.viewSize = bounds.size
-        viewport.cornerRadius = radius
+        viewport.corners = corners
         applyFit()
     }
 
@@ -218,19 +225,22 @@ final class RemoteDesktopCanvasNSView: NSView {
         needsLayout = true
     }
 
-    /// 画布四角里最大的窗口圆角：画布铺到窗口底边，下面两个角就是窗口的圆角，「适配屏幕」要让画面四角
-    /// 落在弧线以内（`RemoteDesktopCornerFit`），不然 Dock 两端被切掉。
+    /// 画布四个角各自落在多大的窗口圆角里：画布铺到窗口底边，下面两个角就是窗口的圆角，「适配屏幕」让画面
+    /// 离四边留一圈窄边、自己的角切成同心圆角（`RemoteDesktopCornerFit`）。
     ///
     /// macOS 27 起用系统的同心圆角（探针视图与画布同框，全屏时也会给出屏幕自己的圆角）；
     /// macOS 26 没有这个接口：窗口模式下画布贴着窗口底边就按 `legacyWindowCornerRadius` 算，全屏按直角。
-    private func windowCornerRadius() -> CGFloat {
+    private func windowCorners() -> RemoteDesktopCornerRadii {
         if #available(macOS 27.0, *), let radii = cornerProbe.effectiveCornerRadii {
-            return max(radii.topLeft, radii.topRight, radii.bottomLeft, radii.bottomRight)
+            // 探针视图不翻转：top 是屏幕上方。
+            return RemoteDesktopCornerRadii(topLeft: radii.topLeft, topRight: radii.topRight,
+                                            bottomLeft: radii.bottomLeft, bottomRight: radii.bottomRight)
         }
-        guard let window, !window.styleMask.contains(.fullScreen), let content = window.contentView else { return 0 }
+        guard let window, !window.styleMask.contains(.fullScreen), let content = window.contentView else { return .square }
         let frame = convert(bounds, to: content)
         let touchesBottom = content.isFlipped ? abs(frame.maxY - content.bounds.maxY) < 1 : abs(frame.minY) < 1
-        return touchesBottom ? Self.legacyWindowCornerRadius : 0
+        let r = Self.legacyWindowCornerRadius
+        return touchesBottom ? RemoteDesktopCornerRadii(bottomLeft: r, bottomRight: r) : .square
     }
 
     static let legacyWindowCornerRadius: CGFloat = 16
@@ -253,6 +263,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         CATransaction.setDisableActions(true)
         let frame = viewport.contentFrame
         if displayLayer.frame != frame { displayLayer.frame = frame }
+        displayLayer.applyRemoteDesktopCorners(viewport.pictureCorners)
         cursorLayer.position = viewport.viewPoint(normalized: CGPoint(x: CGFloat(macCursor.x), y: CGFloat(macCursor.y)))
         // 本机指针在画面上并且能控制时，本机光标就是那台 Mac 的光标，不再画一个。
         let localIsCursor = session.canControl && mouseInside
