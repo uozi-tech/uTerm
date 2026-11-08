@@ -147,6 +147,7 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktopPause: Bool { macFeatures.contains(RemoteFeature.desktopPause) }
     /// Mac 能把声音传过来（认得 `desktopAudio`）。
     var supportsDesktopAudio: Bool { macFeatures.contains(RemoteFeature.desktopAudio) }
+    var supportsDesktopAudioLossless: Bool { macFeatures.contains(RemoteFeature.desktopAudioLossless) }
     /// Mac 会推终端里程序的状态（`programStatus`）。老 Mac 不推，标签只显示连接状态。
     var supportsProgramStatus: Bool { macFeatures.contains(RemoteFeature.programStatus) }
     /// 各会话的程序状态。要在单枚标签自己的 body 里读（同 `TerminalSession.programStatus`）。

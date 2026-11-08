@@ -433,7 +433,8 @@ final class RemoteDesktopSession {
 
     private func requestAudio(_ on: Bool) {
         guard let attachment else { return }
-        let request = RemoteDesktopAudioRequest(enabled: on)
+        let request = RemoteDesktopAudioRequest(
+            enabled: on, codecs: RemoteDesktopAudioRequest.codecs(lossless: client.supportsDesktopAudioLossless))
         attachment.link.send(RemoteMessage(.desktopAudio, channel: attachment.channel, payload: RemoteJSON.encode(request)))
     }
 

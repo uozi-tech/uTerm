@@ -43,9 +43,7 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertEqual(RemoteAudioPolicy.redundancy(lossRate: 0), 0)
         XCTAssertEqual(RemoteAudioPolicy.redundancy(lossRate: 0.01), 1)
         XCTAssertEqual(RemoteAudioPolicy.redundancy(lossRate: 0.08), 2)
-        XCTAssertEqual(RemoteAudioPolicy.bitrate(pacingRate: nil), RemoteAudioPolicy.normalBitrate)
-        XCTAssertEqual(RemoteAudioPolicy.bitrate(pacingRate: 10_000_000 / 8), RemoteAudioPolicy.normalBitrate)
-        XCTAssertEqual(RemoteAudioPolicy.bitrate(pacingRate: 1_000_000 / 8), RemoteAudioPolicy.lowBitrate)
+        // 码率分档见 `RemoteAudioTierTests`。
     }
 
     // MARK: - 编解码

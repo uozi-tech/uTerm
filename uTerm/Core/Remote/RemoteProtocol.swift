@@ -40,7 +40,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
                                           RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
-                                          RemoteFeature.programStatus]
+                                          RemoteFeature.desktopAudioLossless, RemoteFeature.programStatus]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -106,6 +106,9 @@ nonisolated enum RemoteFeature {
     /// 远程桌面的声音：认得 `desktopAudio` / `desktopAudioFormat` / `desktopAudioFrame`。两端都要声明：
     /// 手机只对声明了的 Mac 发开关，Mac 只给声明了的手机送声音。
     static let desktopAudio = "desktop-audio"
+    /// 声音的无损档（ALAC）：认得 `RemoteAudioCodec.alac`。老 Mac 解手机的编码列表时遇到不认识的值会整条请求
+    /// 解不开，所以手机只对声明了这一项的 Mac 列无损；Mac 只在手机列了时才用。
+    static let desktopAudioLossless = "desktop-audio-lossless"
     /// 终端里程序（Claude Code、Codex……）的状态：认得 `programStatus`。Mac 只给声明了的设备推；
     /// 老 Mac 不推，设备上的标签照旧只显示连接状态。
     static let programStatus = "program-status"

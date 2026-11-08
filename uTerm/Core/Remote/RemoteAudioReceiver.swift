@@ -63,13 +63,15 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
             lock.unlock()
             guard frame.stream == current else { return }
             if frame.isSilence {
-                lastDecoded = max(lastDecoded ?? 0, frame.sequence)
+                // 不动 `lastDecoded`：它记的是解码器自己吃到哪一包。有声后 Mac 会把停发前最后一包当冗余带来，
+                // 要让解码器先吃它接上状态（见下面的冗余）。
                 lock.lock()
                 buffer?.markSilence(through: frame.sequence, captureNanos: frame.captureNanos, arrivalNanos: arrival)
                 lock.unlock()
                 return
             }
-            // 冗余里的旧包先解（序号从小到大），补上前面丢的洞；解码器只能往前走。
+            // 冗余里的旧包先解（序号从小到大），补上前面丢的洞；解码器只能往前走。已经有了（或已放过）的包也照样
+            // 喂给解码器，只是不再放进缓冲：解码器缺了中间的包，下一包开头可能带一个小咔哒（静音停发后恢复时最明显）。
             let packetNanos = UInt64(Double(decoder.format.framesPerPacket) / decoder.format.sampleRate * 1e9)
             for (offset, data) in frame.redundant.enumerated().reversed() {
                 let distance = UInt32(offset + 1)
@@ -79,8 +81,9 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
                 lock.lock()
                 let have = buffer?.contains(sequence) ?? true
                 lock.unlock()
-                guard !have, let samples = try? decoder.decode(data) else { continue }
+                guard let samples = try? decoder.decode(data) else { continue }
                 lastDecoded = sequence
+                guard !have else { continue }
                 insert(sequence: sequence, captureNanos: frame.captureNanos &- UInt64(distance) * packetNanos,
                        samples: samples, arrival: arrival, recovered: true)
             }

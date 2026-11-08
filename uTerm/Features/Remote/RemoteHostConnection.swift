@@ -22,12 +22,15 @@ final class RemoteHostConnection {
     /// 当前桌面流上的声音（手机打开了扬声器才有）。
     private var audio: RemoteAudioStreamer?
     /// 每开一次声音 +1，手机据此认出新的一条声音流（序号从头算）。
-    private var audioStreamCounter: UInt16 = 0
+    /// 声音流号：开新声音流、声音中途换档都从这里取（换档在连接队列上，所以要加锁）。
+    private let audioStreams = RemoteAudioStreamNumbers()
     /// 手机每发一次开 / 关声音就 +1（收到时同步加）。开声音要先 hop 一次再开采集，这期间又收到了关或新的开，
     /// 旧的那次就作废：不然「开了马上关」时关先执行、扑空，开随后照样把声音流开起来。
     private var audioRequestGeneration = 0
     /// 手机认得声音消息（`desktop-audio`）。
     private var peerSupportsAudio = false
+    /// 对端能解无损声音（声明了 `desktopAudioLossless`）。
+    private var peerSupportsAudioLossless = false
     /// 对端认得 `programStatus`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
     private var peerTakesProgramStatus = false
 
@@ -143,6 +146,7 @@ final class RemoteHostConnection {
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
             peerSupportsUnlockOutcomes = peer.supports(RemoteFeature.desktopUnlockOutcomes)
             peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
+            peerSupportsAudioLossless = peer.supports(RemoteFeature.desktopAudioLossless)
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
                 && server.localFeatures.contains(RemoteFeature.programStatus)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
@@ -681,8 +685,7 @@ extension RemoteHostConnection {
         guard generation == audioRequestGeneration, let current = desktop, current.channel == channel,
               peerSupportsAudio else { return }
         stopAudio(notify: nil)
-        audioStreamCounter &+= 1
-        let stream = audioStreamCounter
+        let stream = audioStreams.next()
         let environment = server.desktopEnvironment
         func refuse(_ message: String) {
             link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(
@@ -692,8 +695,13 @@ extension RemoteHostConnection {
             return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」")
         }
         let display = current.streamer.display
+        let numbers = audioStreams
         let streamer = RemoteAudioStreamer(
-            link: link, channel: channel, stream: stream, codecs: request.codecs, datagrams: current.streamer.datagramChannel,
+            link: link, channel: channel, stream: stream, codecs: request.codecs,
+            nextStream: { numbers.next() },
+            linkInfo: Self.audioLinkInfo(link: link, path: origin.path, video: current.streamer,
+                                         lossless: peerSupportsAudioLossless),
+            datagrams: current.streamer.datagramChannel,
             source: makeSource(display),
             onSourceStopped: { [weak self] error in
                 DispatchQueue.main.async {
@@ -723,6 +731,24 @@ extension RemoteHostConnection {
             } else {
                 refuse("Mac 上的声音采集无法启动：\(error.localizedDescription)")
             }
+        }
+    }
+
+    /// 声音档位要的链路情况（在连接队列上调）。直连走数据报时用发送节奏与丢包率；局域网 TCP 没有节奏，
+    /// 用画面编码器眼下的码率当容量（画面码控对局域网的估计）；中继给固定档。
+    static func audioLinkInfo(link: RemoteLink, path: RemoteLinkPath, video: RemoteDesktopStreamer,
+                              lossless: Bool) -> () -> RemoteAudioPolicy.Link {
+        let datagrams = video.datagramChannel != nil
+        let stats = video.stats
+        return {
+            if datagrams, let state = link.datagramLinkState {
+                return RemoteAudioPolicy.Link(path: .direct, capacity: state.pacingRate * 8, lossRate: state.lossRate,
+                                              peerDecodesLossless: lossless)
+            }
+            if path == .relay { return RemoteAudioPolicy.Link(path: .relay) }
+            let bitrate = stats.snapshot().bitrate
+            return RemoteAudioPolicy.Link(path: .localNetwork, capacity: bitrate > 0 ? Double(bitrate) : nil,
+                                          peerDecodesLossless: lossless)
         }
     }
 
@@ -933,5 +959,17 @@ enum RemoteConnectionOrigin {
     var path: RemoteLinkPath {
         if case .internet(_, _, let path) = self { return path }
         return .localNetwork
+    }
+}
+
+/// 声音流号的计数器（加锁：连接在主线程上开新流，声音发送端在连接队列上换档）。
+nonisolated final class RemoteAudioStreamNumbers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt16 = 0
+
+    func next() -> UInt16 {
+        lock.lock(); defer { lock.unlock() }
+        value &+= 1
+        return value
     }
 }

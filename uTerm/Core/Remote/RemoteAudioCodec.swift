@@ -55,8 +55,9 @@ nonisolated final class RemoteAudioEncoder {
     /// 已出的包数。
     private var producedPackets: Int64 = 0
 
-    init(codec: RemoteAudioCodec, bitrate: Int, sampleRate: Double = RemoteAudioPolicy.sampleRate,
-         channels: UInt32 = RemoteAudioPolicy.channels) throws {
+    /// - framesPerPacket: 一包多少采样；nil = 编码的默认值。Opus 可以 480（10 ms）或 960（20 ms）；ALAC 只能 352 或 4096。
+    init(codec: RemoteAudioCodec, bitrate: Int, framesPerPacket requestedFrames: UInt32? = nil,
+         sampleRate: Double = RemoteAudioPolicy.sampleRate, channels: UInt32 = RemoteAudioPolicy.channels) throws {
         self.codec = codec
         self.channels = channels
         self.sampleRate = sampleRate
@@ -65,7 +66,14 @@ nonisolated final class RemoteAudioEncoder {
         output.mFormatID = codec.formatID
         output.mSampleRate = sampleRate
         output.mChannelsPerFrame = channels
-        if codec == .opus { output.mFramesPerPacket = codec.framesPerPacket }
+        switch codec {
+        case .opus: output.mFramesPerPacket = requestedFrames ?? codec.framesPerPacket
+        case .alac:
+            // 16-bit：系统混音出来的浮点声音按 CD 精度存；24-bit 包更大、多出来的位听不出来。
+            output.mFramesPerPacket = requestedFrames ?? codec.framesPerPacket
+            output.mFormatFlags = kAppleLosslessFormatFlag_16BitSourceData
+        case .aacELD: break
+        }
         var converter: AudioConverterRef?
         let status = AudioConverterNew(&input, &output, &converter)
         guard status == noErr, let converter else { throw RemoteAudioCodecError.converter(status) }
@@ -98,6 +106,7 @@ nonisolated final class RemoteAudioEncoder {
     }
 
     func setBitrate(_ bitrate: Int) {
+        guard codec != .alac else { return }
         var value = UInt32(bitrate)
         AudioConverterSetProperty(converter, kAudioConverterEncodeBitRate, UInt32(MemoryLayout<UInt32>.size), &value)
     }
@@ -196,6 +205,7 @@ nonisolated final class RemoteAudioDecoder {
         input.mSampleRate = format.sampleRate
         input.mChannelsPerFrame = format.channels
         input.mFramesPerPacket = format.framesPerPacket
+        if codec == .alac { input.mFormatFlags = kAppleLosslessFormatFlag_16BitSourceData }
         var output = RemoteAudioPCM.format(sampleRate: format.sampleRate, channels: format.channels)
         var converter: AudioConverterRef?
         let status = AudioConverterNew(&input, &output, &converter)
