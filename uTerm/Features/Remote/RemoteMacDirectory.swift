@@ -435,7 +435,7 @@ final class RemoteMacDirectory {
     /// 要不要接着按间隔问：App 在前台，且有界面在显示在线状态。
     private var wantsLiveRelayStatus: Bool {
         guard isInForeground else { return false }
-        #if DEBUG
+        #if DEBUG && os(iOS)
         if defaults.integer(forKey: Self.debugMatrixKey) > 0 { return true }
         #endif
         return liveStatusDemand > 0

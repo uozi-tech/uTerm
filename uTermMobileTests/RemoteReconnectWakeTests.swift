@@ -23,7 +23,7 @@ final class RemoteReconnectWakeTests: XCTestCase {
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         // 直接写「已启用」，不调 activate()：那会开始 Bonjour 浏览。
         defaults.set(true, forKey: DefaultsKey.remoteBrowseActivated)
-        let identity = RemoteIdentityStore(storage: RemoteMemoryStorage())
+        let identity = RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage())
         let macID = UUID()
         try identity.trust(RemotePeer(id: macID, name: "MacBook Pro",
                                       publicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,

@@ -19,6 +19,8 @@ struct RemoteMacsPane: View {
             pairedGroup
             if !directory.nearbyMacs.isEmpty { nearbyGroup }
         }
+        // 列表在看时按间隔问中继谁在线；关掉窗口、切走这一栏就不再问。
+        .task { await directory.keepLiveStatusFresh() }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() } else { directory.activate() }
             takePendingInvitation()

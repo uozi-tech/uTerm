@@ -73,6 +73,8 @@ struct RemoteDiagnosticsContent: View {
             settingsGroup
             historyGroup
         }
+        // 页面开着时持续刷新这台 Mac 在不在中继上。
+        .task { await directory.keepLiveStatusFresh() }
         .task {
             relayName = directory.relayServerName()
             model.reloadHistory()

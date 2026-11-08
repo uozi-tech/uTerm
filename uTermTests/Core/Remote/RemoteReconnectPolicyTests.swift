@@ -53,7 +53,7 @@ final class RemoteReconnectPolicyTests: XCTestCase {
 
     private func makeClient() -> RemoteMacClient {
         RemoteMacClient(macName: "测试 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
-                        identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                        identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
     }
 
     private let lan = NWEndpoint.hostPort(host: "192.168.1.9", port: 4000)
@@ -88,7 +88,7 @@ final class RemoteReconnectPolicyTests: XCTestCase {
         let client = makeClient()
         client.updateRoutes(endpoint: nil, internetDialer: nil)
         let woken = await woke(client.retryGate) {
-            client.updateRoutes(endpoint: nil, internetDialer: { throw RemoteProtocolError.closed })
+            client.updateRoutes(endpoint: nil, internetDialer: { _ in throw RemoteProtocolError.closed })
         }
         XCTAssertTrue(woken)
     }
@@ -118,7 +118,8 @@ final class RemoteReconnectPolicyTests: XCTestCase {
     /// 一个标签把连接接回来时，同一台 Mac 的其它标签不该还睡在各自的长退避里。
     func test_reconnected_client_wakes_other_waiting_tabs() async throws {
         let registry = TerminalSessionRegistry()
-        let server = RemoteHostServer(registry: registry, identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let server = RemoteHostServer(registry: registry,
+                                      identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false)
         server.start()
         defer { server.stop() }
@@ -127,7 +128,7 @@ final class RemoteReconnectPolicyTests: XCTestCase {
         let client = RemoteMacClient(macName: "测试 Mac",
                                      endpoint: .hostPort(host: "127.0.0.1",
                                                          port: NWEndpoint.Port(rawValue: try XCTUnwrap(server.port))!),
-                                     identity: RemoteIdentityStore(storage: RemoteMemoryStorage()))
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let otherTab = Task { await client.retryGate.wait(.seconds(30)) }
         let connecting = Task { await client.connect() }
         while server.pairingRequests.isEmpty, ContinuousClock.now < deadline {

@@ -87,7 +87,7 @@ final class RemotePowerTests: XCTestCase {
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         // 直接写「已启用」，不调 activate()：那会开始 Bonjour 浏览。
         defaults.set(true, forKey: DefaultsKey.remoteBrowseActivated)
-        return RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()), defaults: defaults,
+        return RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()), defaults: defaults,
                                   relayPollInterval: interval) { _ in
             counter.increment()
             return []
@@ -168,7 +168,7 @@ final class RemotePowerTests: XCTestCase {
         let suite = "RemotePowerTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(storage: RemoteMemoryStorage()),
+        let directory = RemoteMacDirectory(identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()),
                                            defaults: defaults, relayPollInterval: .milliseconds(50)) { _ in
             counter.increment()
             return []
