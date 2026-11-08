@@ -297,7 +297,7 @@ final class MobileTerminalController {
             return conn
         case .failure(let error):
             // 工厂只会从认证材料解析那一步抛错（与抽工厂之前同义）。
-            state = .failed("认证材料解析失败：\(error.localizedDescription)")
+            state = .failed("凭据解析失败：\(error.localizedDescription)")
             return nil
         }
     }
@@ -372,9 +372,9 @@ final class MobileTerminalController {
                 guard let self else { return }
                 switch delivery {
                 case .clipboard:
-                    self.showImageNote("图片已放进 Mac 剪贴板，并按了 Ctrl+V")
+                    self.showImageNote("图片已放入 Mac 剪贴板，并已发送 Ctrl+V")
                 case .file(let path):
-                    self.showImageNote("图片已传到 \(path)")
+                    self.showImageNote("图片已上传到 \(path)")
                 }
             } catch {
                 self?.showImageNote(error.localizedDescription)

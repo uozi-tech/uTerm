@@ -442,7 +442,7 @@ final class ParallelRunModel {
     nonisolated static func outputLines(from result: CommandResult?, failed: Bool) -> [ParallelTermLine] {
         guard let result else { return [ParallelTermLine(kind: .err, text: "连接或执行失败")] }
         if result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return [ParallelTermLine(kind: failed ? .err : .out, text: failed ? "（无输出）" : "done.")]
+            return [ParallelTermLine(kind: failed ? .err : .out, text: "（无输出）")]
         }
         let raw = result.output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         return raw.enumerated().map { idx, text in

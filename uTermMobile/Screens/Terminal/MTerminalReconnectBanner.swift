@@ -5,7 +5,7 @@ struct MTerminalReconnectBanner: View {
     var body: some View {
         HStack(spacing: 6) {
             ProgressView().controlSize(.mini)
-            Text("与 Mac 的连接已断开，正在重连…")
+            Text("与 Mac 的连接已断开，正在重新连接…")
                 .font(.footnote)
                 .foregroundStyle(M.text)
         }

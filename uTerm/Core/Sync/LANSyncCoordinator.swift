@@ -26,10 +26,10 @@ final class LANSyncCoordinator {
         var label: String {
             switch self {
             case .stopped: return "未启动"
-            case .searching: return "搜索移动设备"
+            case .searching: return "搜索 iPhone 和 iPad"
             case .hosting: return "等待同步请求"
             case .ready: return "可发送"
-            case .waitingForConfirmation: return "等待移动端确认"
+            case .waitingForConfirmation: return "等待 iPhone 或 iPad 确认"
             case .syncing: return "同步中…"
             case .error(let message): return message
             }
@@ -173,7 +173,7 @@ final class LANSyncCoordinator {
         guard role == .sender else { return }
         guard !pairingCode.isEmpty else { status = .error("配对码未生成"); return }
         guard let peer = peer ?? peers.first else {
-            status = .error("未发现移动设备，请确认两端在同一局域网")
+            status = .error("未发现 iPhone 或 iPad，确认两台设备在同一局域网")
             return
         }
         syncGeneration += 1
@@ -380,7 +380,7 @@ final class LANSyncCoordinator {
                 context.phase = "waiting for encrypted offer"
                 self.receiveOffer(on: context)
             } catch {
-                self.sendRejectionAndClose(context, message: "移动端未设置配对码或配对码无效",
+                self.sendRejectionAndClose(context, message: "iPhone 或 iPad 上没有设置配对码，或配对码无效",
                                             error: error)
             }
         }
@@ -704,7 +704,7 @@ final class LANSyncCoordinator {
                     completion(value, bytes)
                 case .failure(let error):
                     if expectedType == "offer" {
-                        self.sendRejectionAndClose(context, message: "配对码不正确或移动端未设置配对码",
+                        self.sendRejectionAndClose(context, message: "配对码不正确，或 iPhone 或 iPad 上没有设置配对码",
                                                     error: error)
                         return
                     }
@@ -745,7 +745,7 @@ final class LANSyncCoordinator {
             try? await Task.sleep(for: .seconds(LANSyncConstants.syncTimeoutSeconds))
             guard let self, let context, self.syncGeneration == generation,
                   self.connections[ObjectIdentifier(context.connection)] != nil else { return }
-            self.fail(context, error: LANSyncTransportError.connectionFailed("等待移动端响应超时"))
+            self.fail(context, error: LANSyncTransportError.connectionFailed("等待 iPhone 或 iPad 响应超时"))
         }
     }
 

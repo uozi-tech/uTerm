@@ -45,8 +45,8 @@ struct KeyDeleteConfirm: View {
 
     private var message: String {
         if hostCount > 0 {
-            return "使用此密钥的 \(hostCount) 台主机将无法连接。操作不可恢复。"
+            return "使用此密钥的 \(hostCount) 台主机将无法连接。此操作无法撤销。"
         }
-        return "此密钥未被任何主机使用。操作不可恢复。"
+        return "此密钥未被任何主机使用。此操作无法撤销。"
     }
 }

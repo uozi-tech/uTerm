@@ -74,7 +74,7 @@ final class ParallelRunLogicTests: XCTestCase {
 
     func testOutputLinesEmptyOutputPlaceholders() {
         let ok = ParallelRunModel.outputLines(from: CommandResult(output: "", exitCode: 0), failed: false)
-        XCTAssertEqual(ok.map(\.text), ["done."])
+        XCTAssertEqual(ok.map(\.text), ["（无输出）"])
         let fail = ParallelRunModel.outputLines(from: CommandResult(output: "", exitCode: 1), failed: true)
         XCTAssertEqual(fail.map(\.text), ["（无输出）"])
     }

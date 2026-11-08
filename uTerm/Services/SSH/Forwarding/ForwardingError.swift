@@ -45,7 +45,7 @@ nonisolated struct ForwardingError: Error, Sendable, Equatable {
             // App Sandbox），在远端侧（-R）= 服务器拒绝绑定。按规则方向给对症文案，避免对
             // 本地转发误报「需要 GatewayPorts」。
             if rule.kind == .remote {
-                reason = String(localized: "远端拒绝建立转发（可能需要服务器开启 GatewayPorts）")
+                reason = String(localized: "主机拒绝建立远程转发（可能需要在 SSH 服务端开启 GatewayPorts）")
             } else {
                 reason = String(localized: "本地端口 \(rule.listenPort) 绑定被拒绝（端口低于 1024 需管理员权限，建议改用 ≥1024 的端口）")
             }

@@ -70,7 +70,7 @@ struct StatusBarView: View {
             } else if !workspace.terminalGroups.isEmpty {
                 // 未连接 / 无遥测：回退到分组 · 标签计数（旧文案是「窗格 · 标签」，
                 // 但窗口级标签这个层次已经没有了，数的是组与全部标签）。
-                Text("\(workspace.terminalGroups.groupCount) 分组 · \(workspace.terminalGroups.allTabs.count) 标签")
+                Text("\(workspace.terminalGroups.groupCount) 个分组 · \(workspace.terminalGroups.allTabs.count) 个标签页")
                     .foregroundStyle(UD.text3)
             }
         }
@@ -132,10 +132,10 @@ struct StatusBarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("内存 \(text) · \(Self.percent(pct))"))
-        .help("查看内存负载历史")
+        .help("查看内存占用历史")
         .popover(isPresented: $memPopover, arrowEdge: .bottom) {
             SparklinePopover(
-                title: "内存负载",
+                title: "内存占用",
                 summary: "\(text) · \(Self.percent(pct))",
                 color: UD.mMem,
                 history: workspace.telemetryModel.memHistory)

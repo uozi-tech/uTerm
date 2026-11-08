@@ -129,7 +129,7 @@ struct TerminalArea: View {
     private func newTabButton(_ groupID: UUID) -> some View {
         if allowsOtherHosts {
             Menu {
-                Section("在新标签中打开") {
+                Section("在新标签页中打开") {
                     ForEach(hostChoices) { profile in
                         Button(profile.name) {
                             workspace.openServer(profileID: profile.id, title: profile.name, in: groupID)
@@ -146,8 +146,8 @@ struct TerminalArea: View {
             .frame(width: 26, height: 26)
             .contentShape(Rectangle())
             .iconButtonHover(cornerRadius: 6)
-            .help("新建终端标签（⌘T）· 按住选择其他主机")
-            .accessibilityLabel(Text("新建终端标签"))
+            .help("新建终端标签页（⌘T）· 按住选择其他主机")
+            .accessibilityLabel(Text("新建终端标签页"))
         } else {
             Button {
                 workspace.openServer(profileID: server.id, title: server.name, in: groupID)
@@ -160,8 +160,8 @@ struct TerminalArea: View {
             }
             .buttonStyle(.plain)
             .iconButtonHover(cornerRadius: 6)
-            .help("新建终端标签（⌘T）")
-            .accessibilityLabel(Text("新建终端标签"))
+            .help("新建终端标签页（⌘T）")
+            .accessibilityLabel(Text("新建终端标签页"))
         }
     }
 
@@ -199,11 +199,11 @@ struct TerminalArea: View {
                     .foregroundStyle(UD.text3)
             }
             if showsText {
-                Text("没有打开的终端标签")
+                Text("没有打开的终端标签页")
                     .font(.callout)
                     .foregroundStyle(UD.text2)
             }
-            UDButton(title: "新建终端标签", systemImage: "plus") {
+            UDButton(title: "新建终端标签页", systemImage: "plus") {
                 workspace.openServer(profileID: server.id, title: server.name)
             }
         }

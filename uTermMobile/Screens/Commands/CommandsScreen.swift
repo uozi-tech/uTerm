@@ -94,8 +94,8 @@ struct CommandFormSheet: View {
                     MInsetGroup(header: "AI 介入") {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("让 AI 自动执行").font(M.sans(15)).foregroundStyle(M.text)
-                                Text("用自然语言描述目标，由 Agent 决策").font(M.sans(12)).foregroundStyle(M.text3)
+                                Text("启用 AI 介入").font(M.sans(15)).foregroundStyle(M.text)
+                                Text("运行时让 AI 读取输出、自动诊断并续接下一步").font(M.sans(12)).foregroundStyle(M.text3)
                             }
                             Spacer()
                             MSwitch(on: $ai)

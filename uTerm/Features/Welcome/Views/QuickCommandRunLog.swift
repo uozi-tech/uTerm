@@ -174,7 +174,7 @@ struct QuickCommandLogEntry: View {
 
     private func resultDetail(_ result: QuickCommandServerResult) -> String {
         let duration = UFormat.duration(milliseconds: Double(result.durationMs))
-        guard let code = result.exitCode else { return "连接失败 · \(duration)" }
+        guard let code = result.exitCode else { return "连接失败或超时 · \(duration)" }
         return "退出码 \(code) · \(duration)"
     }
 

@@ -81,9 +81,9 @@ nonisolated enum ParallelAgentPolicy {
             case 429:      return "请求太频繁被限流（HTTP 429）"
             default:       return "请求失败（HTTP \(status)）"
             }
-        case .invalidResponse:    return "服务返回了无法解析的响应"
+        case .invalidResponse:    return "模型服务返回了无法解析的响应"
         case .streamIdleTimeout:  return "响应长时间没有新内容"
-        case .streamError(let d): return "服务端中途报错：\(d)"
+        case .streamError(let d): return "模型服务中途报错：\(d)"
         case .incompleteStream:   return "连接在回复完成前断开"
         case .outputLimitReached: return "回复超出单次输出上限"
         }

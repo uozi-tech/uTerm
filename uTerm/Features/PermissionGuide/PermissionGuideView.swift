@@ -110,7 +110,7 @@ struct PermissionGuideView: View {
             Image(systemName: "arrow.clockwise.circle.fill")
                 .font(.system(size: 15))
                 .foregroundStyle(UD.caution)
-            Text("在系统设置里打开屏幕录制或辅助功能后，要重新启动 uTerm 才生效。")
+            Text("在「系统设置」里打开「屏幕录制」或「辅助功能」后，要重新启动 uTerm 才生效。")
                 .font(.system(size: 12))
                 .foregroundStyle(UD.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -371,24 +371,24 @@ private extension PermissionKind {
     var purpose: String {
         switch self {
         case .notifications:
-            return "命令跑完、或程序等你输入时，标签不在眼前也能提醒你。"
+            return "命令执行完毕或程序等待输入时，即使标签页不在前台也能通知你。"
         case .localNetwork:
             return "局域网同步、用手机远程控制这台 Mac 都要用到。"
         case .screenCapture:
             return "让配对过的手机看到这台 Mac 的屏幕。"
         case .accessibility:
-            return "让手机操作这台 Mac 的鼠标和键盘，没有它只能看不能动。"
+            return "让手机操作这台 Mac 的鼠标和键盘；没有这项授权时手机只能查看。"
         case .loginItem:
-            return "你开了「登录时在后台启动」，还差系统批准这一步。"
+            return "你已打开「登录后在后台启动」，还需要系统批准。"
         }
     }
 
     var detail: String? {
         switch self {
         case .localNetwork:
-            return "Mac 与 iPhone / iPad 之间同步要用。连局域网里的服务器时，系统会以「uTerm 终端」的名义另问一次。"
+            return "Mac 与 iPhone / iPad 之间同步要用。连接局域网里的主机时，系统会以「uTerm 终端」的名义再问一次。"
         case .screenCapture:
-            return "macOS 会定期请你重新确认。"
+            return "macOS 会定期要求重新确认。"
         case .notifications, .accessibility, .loginItem:
             return nil
         }

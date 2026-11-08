@@ -43,7 +43,7 @@ struct CommandPaletteView: View {
                         LazyVStack(alignment: .leading, spacing: 2) {
                             if r.showNewHost {
                                 cap("动作")
-                                row(icon: "plus", title: "新建主机…", detail: "创建一台新服务器", tinted: true) {
+                                row(icon: "plus", title: "新建主机…", detail: "添加一台 SSH 主机", tinted: true) {
                                     close(); store.tab = .hosts; store.requestNewServer = true
                                 }
                             }
@@ -118,7 +118,7 @@ struct CommandPaletteView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("没有匹配「\(q)」的结果").font(M.sans(15)).foregroundStyle(M.text3)
-            Text("试试 host、md、密钥").font(M.mono(12.5)).foregroundStyle(M.text4)
+            Text("试试主机名、命令名或密钥名").font(M.mono(12.5)).foregroundStyle(M.text4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 80)

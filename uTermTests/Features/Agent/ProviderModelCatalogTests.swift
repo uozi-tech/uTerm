@@ -47,7 +47,7 @@ final class ProviderModelCatalogTests: XCTestCase {
 
     func testErrorMessages() {
         XCTAssertEqual(ProviderModelCatalog.message(for: LLMClientError.httpError(status: 401, body: "")),
-                       "认证失败，请检查 API Key")
+                       "认证失败，检查 API Key")
         XCTAssertEqual(ProviderModelCatalog.message(for: LLMClientError.httpError(status: 404, body: "x")),
                        "该端点没有 /v1/models 模型列表接口，检查 Base URL")
         XCTAssertEqual(ProviderModelCatalog.message(for: LLMClientError.httpError(status: 500, body: "boom")),
@@ -97,7 +97,7 @@ final class ProviderModelListTests: XCTestCase {
         }
         list.load(request)
         await list.waitUntilSettled()
-        XCTAssertEqual(list.phase, .failed("认证失败，请检查 API Key"))
+        XCTAssertEqual(list.phase, .failed("认证失败，检查 API Key"))
         list.retry()
         await list.waitUntilSettled()
         XCTAssertEqual(list.phase, .loaded(["m"]))

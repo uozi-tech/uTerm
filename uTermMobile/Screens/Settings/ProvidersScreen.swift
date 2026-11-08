@@ -102,7 +102,7 @@ private struct ProviderListRow: View {
             }
             Spacer(minLength: 8)
             if !hasKey {
-                Label("缺 Key", systemImage: "exclamationmark.triangle.fill")
+                Label("缺少 API Key", systemImage: "exclamationmark.triangle.fill")
                     .labelStyle(.iconOnly)
                     .foregroundStyle(M.warning)
             }
@@ -136,8 +136,8 @@ struct ProviderEditScreen: View {
             ProviderBasicsSection(name: $provider.name, kind: kindBinding, baseURL: $provider.baseURL)
 
             Section {
-                ProviderKeyField(text: $draft.keyDraft, placeholder: draft.hasKey ? "粘贴新 Key 以替换" : "sk-…")
-                Button("保存 Key") { draft.saveKey(errorDescription: { $0.localizedDescription }) }
+                ProviderKeyField(text: $draft.keyDraft, placeholder: draft.hasKey ? "粘贴新的 API Key 以替换" : "sk-…")
+                Button("保存 API Key") { draft.saveKey(errorDescription: { $0.localizedDescription }) }
                     .disabled(!draft.canSaveKey)
             } header: {
                 Text("API Key")
@@ -149,8 +149,8 @@ struct ProviderEditScreen: View {
                     Label(error, systemImage: "xmark.octagon.fill")
                         .foregroundStyle(M.danger)
                 } else {
-                    Text(draft.hasKey ? "已有 Key。保存在钥匙串，经 iCloud 钥匙串端到端加密同步。"
-                                      : "尚未设置 Key。保存在钥匙串，请求时仅发送给该服务。")
+                    Text(draft.hasKey ? "已设置 API Key。保存在钥匙串，经 iCloud 钥匙串端到端加密同步。"
+                                      : "尚未设置 API Key。保存在钥匙串，请求时只发送给该服务。")
                         .foregroundStyle(draft.hasKey ? M.text3 : M.warning)
                 }
             }

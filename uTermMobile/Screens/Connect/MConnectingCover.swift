@@ -248,7 +248,7 @@ struct ConnectingCoverView: View {
     private var topChip: some View {
         HStack(spacing: 7) {
             MIcon(name: isSftp ? "folder-tag" : "term", size: 14, color: accent)
-            Text(isSftp ? "SFTP 文件" : (request.remote != nil ? "Mac 上的终端" : "终端会话"))
+            Text(isSftp ? "浏览文件" : (request.remote != nil ? "Mac 上的终端" : "终端会话"))
                 .font(M.sans(12.5)).foregroundStyle(M.text2)
         }
         .padding(.horizontal, 13).padding(.vertical, 6)
@@ -326,13 +326,13 @@ struct ConnectingCoverView: View {
                 ("接入终端", "按本机尺寸 · 画面同步"),
             ]
         }
-        let authDetail = host.authMethod == .privateKey ? "publickey · ed25519" : "密码"
+        let authDetail = host.authMethod == .privateKey ? "密钥" : "密码"
         let last: (String, String) = isSftp
             ? ("打开 SFTP 子系统", "sftp v3")
             : ("启动登录会话", "\(host.username) · pty")
         return [
             ("解析主机地址", host.host),
-            ("建立安全连接", "curve25519 · chacha20"),
+            ("建立安全连接", "SSH 密钥交换"),
             ("认证身份", authDetail),
             last,
         ]

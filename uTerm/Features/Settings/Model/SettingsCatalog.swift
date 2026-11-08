@@ -66,12 +66,12 @@ nonisolated enum SettingsCatalog {
              kind: .toggle, key: DefaultsKey.terminalCursorBlink, syncScope: .synced, platforms: .both),
         Item(id: "terminal.scrollback", section: .terminal, group: "行为", title: "历史行数",
              kind: .number, key: DefaultsKey.terminalScrollback, syncScope: .synced, platforms: .macOS),
-        Item(id: "terminal.copyOnSelect", section: .terminal, group: "行为", title: "选中即复制",
+        Item(id: "terminal.copyOnSelect", section: .terminal, group: "行为", title: "选中即拷贝",
              kind: .toggle, key: DefaultsKey.terminalCopyOnSelect, syncScope: .synced, platforms: .macOS),
         Item(id: "terminal.quitBehavior", section: .terminal, group: "行为", title: "退出 uTerm 时",
              kind: .choice, key: DefaultsKey.terminalQuitBehavior, syncScope: .local, platforms: .macOS),
         Item(id: "terminal.localShellKeepsLAN", section: .terminal, group: "行为",
-             title: "重启时保住本机终端的局域网连接",
+             title: "重启时保持本机终端的局域网连接",
              kind: .toggle, key: DefaultsKey.localShellKeepsLANConnections, syncScope: .local, platforms: .macOS),
         // iOS 终端字体 / 字号固定，只读展示。
         Item(id: "terminal.mobileFont", section: .terminal, group: "终端", title: "字体",
@@ -88,7 +88,7 @@ nonisolated enum SettingsCatalog {
              kind: .number, key: DefaultsKey.sshConnectTimeout, syncScope: .synced, platforms: .both),
         Item(id: "connection.hostKeyPolicy", section: .connection, group: "SSH 连接", title: "主机密钥校验",
              kind: .choice, key: DefaultsKey.sshHostKeyPolicy, syncScope: .synced, platforms: .both),
-        Item(id: "connection.sftpConcurrency", section: .connection, group: "文件传输", title: "并发上传数",
+        Item(id: "connection.sftpConcurrency", section: .connection, group: "文件传输", title: "同时传输数",
              kind: .number, key: DefaultsKey.sftpMaxConcurrentTransfers, syncScope: .synced, platforms: .both),
 
         // MARK: 安全
@@ -118,7 +118,7 @@ nonisolated enum SettingsCatalog {
              kind: .status, key: DefaultsKey.lanSyncHostPairingCode, syncScope: .local, platforms: .macOS),
         Item(id: "sync.pairingCode", section: .sync, group: "局域网接收", title: "配对码",
              kind: .link, key: DefaultsKey.lanSyncPairingCode, syncScope: .local, platforms: .iOS),
-        Item(id: "sync.chatRetention", section: .sync, group: "历史", title: "会话保留",
+        Item(id: "sync.chatRetention", section: .sync, group: "历史", title: "AI 对话保留",
              kind: .choice, key: DefaultsKey.chatRetentionDays, syncScope: .synced, platforms: .both),
 
         // MARK: 远程控制
@@ -128,7 +128,7 @@ nonisolated enum SettingsCatalog {
              kind: .toggle, key: DefaultsKey.remoteLocalShellEnabled, syncScope: .local, platforms: .macOS),
         Item(id: "remote.desktop", section: .remote, group: "远程桌面", title: "允许远程桌面",
              kind: .toggle, key: DefaultsKey.remoteDesktopEnabled, syncScope: .local, platforms: .macOS),
-        Item(id: "remote.relayConfig", section: .remote, group: "公网接入", title: "中继服务器",
+        Item(id: "remote.relayConfig", section: .remote, group: "公网接入", title: "中继",
              kind: .action, key: nil, syncScope: .none, platforms: .macOS),
         Item(id: "remote.internet", section: .remote, group: "公网接入", title: "允许经公网接入",
              kind: .toggle, key: DefaultsKey.remoteInternetEnabled, syncScope: .local, platforms: .macOS),
@@ -180,7 +180,7 @@ nonisolated enum SettingsCatalog {
     /// 两端都有入口，要么在这里写明为什么没有。
     static let syncedKeyExemptions: [String: String] = [
         DefaultsKey.terminalScrollback: "iOS 终端的回滚缓冲区不可配，不读这个键",
-        DefaultsKey.terminalCopyOnSelect: "iOS 靠长按选择与系统菜单复制，没有「选中即复制」",
+        DefaultsKey.terminalCopyOnSelect: "iOS 靠长按选择与系统菜单拷贝，没有「选中即拷贝」",
         DefaultsKey.appLanguage: "mac 专属：iOS 跟随系统语言（系统设置里按 App 改）",
         DefaultsKey.startupBehavior: "mac 专属：启动时打开欢迎窗还是上次主机",
         DefaultsKey.restoreTerminalSession: "mac 专属：恢复工作区的标签与分屏",

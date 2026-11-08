@@ -33,7 +33,7 @@ struct SFTPInspector: View {
             VStack(spacing: 6) {
                 Text("未选择文件").font(.system(size: 14, weight: .medium))
                     .foregroundStyle(UD.text2)
-                Text("在左侧选择一个文件或文件夹\n即可查看详情并进行操作。")
+                Text("在左侧选择文件或文件夹，\n查看详情与可用操作。")
                     .font(.system(size: 12.5)).multilineTextAlignment(.center)
                     .foregroundStyle(UD.text4).lineSpacing(3)
             }

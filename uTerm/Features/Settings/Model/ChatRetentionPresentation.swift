@@ -16,14 +16,14 @@ nonisolated enum ChatRetentionPresentation {
     static func footer(for days: Int, platform: SettingsPlatform) -> String {
         guard days > 0 else {
             switch platform {
-            case .iOS: return "选“不清理”后会话会一直累积，并占用 iCloud 配额。"
-            case .macOS: return "填 0 表示不清理。会话会一直累积，并占用 iCloud 配额。"
+            case .iOS: return "选「不清理」后对话会一直累积，并占用 iCloud 配额。"
+            case .macOS: return "填 0 表示不清理。对话会一直累积，并占用 iCloud 配额。"
             }
         }
-        let base = "超过该天数未更新的 AI 会话会在启动时清理，连同其中的消息。"
+        let base = "超过该天数未更新的 AI 对话会在启动时清理，连同其中的消息。"
         switch platform {
         case .iOS: return base + "该设置与 Mac 同步。"
-        case .macOS: return base + "执行日志另有固定的 30 天窗口。"
+        case .macOS: return base + "快捷命令的执行日志固定保留 30 天。"
         }
     }
 }

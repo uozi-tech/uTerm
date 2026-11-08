@@ -37,7 +37,7 @@ struct KeyImportView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("导入密钥").font(.system(size: 17, weight: .medium)).foregroundStyle(UD.text)
-                    Text("粘贴私钥内容，或从文件读取。私钥保存在钥匙串，永不离开本机。")
+                    Text("粘贴私钥内容，或从文件读取。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。")
                         .font(.system(size: 12)).foregroundStyle(UD.text3)
                 }
 
@@ -60,7 +60,7 @@ struct KeyImportView: View {
                     }
                     if showsPassphrase {
                         DarkFormField(label: "口令", hint: "此私钥已加密") {
-                            UDTextField(placeholder: "私钥口令（不是服务器登录密码）", text: $passphrase,
+                            UDTextField(placeholder: "私钥口令（不是主机登录密码）", text: $passphrase,
                                         isSecure: true, revealable: true)
                         }
                     }

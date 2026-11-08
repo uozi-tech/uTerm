@@ -2,7 +2,7 @@ import Foundation
 @_spi(uTermIntegration) import USSHKit
 
 nonisolated struct ForwardingTimeoutError: LocalizedError, Sendable {
-    var errorDescription: String? { "开通道超时（上游无响应）" }
+    var errorDescription: String? { "打开转发通道超时（目标没有响应）" }
 }
 
 nonisolated func withForwardingTimeout<T: Sendable>(

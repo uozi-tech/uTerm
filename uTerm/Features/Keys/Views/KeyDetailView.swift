@@ -101,7 +101,7 @@ struct KeyDetailView: View {
             HStack {
                 sectionLabel("公钥")
                 Spacer()
-                CopyButton(text: key.publicKey, label: "复制公钥", bordered: true)
+                CopyButton(text: key.publicKey, label: "拷贝公钥", bordered: true)
             }
             Text(key.publicKey.isEmpty ? "—" : key.publicKey)
                 .font(UD.mono(11.5)).foregroundStyle(UD.text2)
@@ -161,7 +161,7 @@ struct KeyDetailView: View {
         return HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("删除此密钥").font(.system(size: 13, weight: .medium)).foregroundStyle(danger)
-                Text("密钥将从钥匙串移除，使用此密钥的 \(usedByNames.count) 台主机将无法连接，需重新选择。")
+                Text("密钥将从钥匙串删除，使用它的 \(usedByNames.count) 台主机将无法连接，需重新选择密钥。")
                     .font(.system(size: 11.5)).foregroundStyle(UD.text2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
@@ -182,17 +182,17 @@ struct KeyDetailView: View {
 
 private struct CopyButton: View {
     let text: String
-    var label: String = "复制"
+    var label: String = "拷贝"
     var bordered: Bool = false
     @State private var copied = false
 
     var body: some View {
-        UDButton(title: copied ? "已复制" : label, style: bordered ? .secondary : .ghost) {
+        UDButton(title: copied ? "已拷贝" : label, style: bordered ? .secondary : .ghost) {
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
-            AccessibilityNotification.Announcement("已复制").post()
+            AccessibilityNotification.Announcement("已拷贝").post()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
         }
         .accessibilityLabel(label)

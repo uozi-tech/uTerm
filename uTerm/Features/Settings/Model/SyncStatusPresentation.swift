@@ -52,6 +52,6 @@ enum SyncStatusPresentation {
     /// 整段错误原文不放这里（CloudKit 的错误动辄三行，会把右侧按钮挤没），进「查看事件…」弹窗看。
     static func diagnosticsSubtitle(status: CloudKitSyncStatus, lastError: String?) -> String {
         guard status.isCloudActive else { return status.label }
-        return lastError == nil ? "查看最近同步事件 · 复制日志" : "最近一次同步出错，点右侧查看详情与日志"
+        return lastError == nil ? "查看最近同步事件 · 拷贝日志" : "最近一次同步出错，点右侧查看详情与日志"
     }
 }

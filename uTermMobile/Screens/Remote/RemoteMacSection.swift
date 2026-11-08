@@ -132,7 +132,7 @@ struct RemoteMacSheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(M.canvas)
         .task { await client.connect() }
-        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+        .alert("无法新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
         } message: {
@@ -205,7 +205,7 @@ struct RemoteMacSheet: View {
             Text("\(code.prefix(3)) \(code.suffix(3))")
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(M.text)
-            Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接被人截获，请拒绝。")
+            Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
                 .font(M.sans(13)).foregroundStyle(M.text3)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -220,8 +220,8 @@ struct RemoteMacSheet: View {
         List {
             section("这台 Mac",
                     footer: client.supportsLocalShell
-                        ? "在 Mac 上打开你的登录 shell，Mac 上也会弹出对应的终端窗口，断开后留在 Mac 上可以接着用。"
-                        : "Mac 上的 uTerm 版本太旧，不能新建终端。请先把 Mac 上的 uTerm 更新到最新版。") {
+                        ? "在 Mac 上打开你的登录 shell，并在 Mac 上弹出对应的终端窗口；断开后终端仍留在 Mac 上，可以接着用。"
+                        : "Mac 上的 uTerm 版本过旧，无法新建终端。将其更新到最新版本后即可使用。") {
                 if client.supportsLocalShell {
                     MInsetRow(icon: "term", label: openingShell ? "正在打开…" : "新建终端",
                               sub: "Mac 本机的 shell", chevron: !openingShell, last: true) {
@@ -232,21 +232,21 @@ struct RemoteMacSheet: View {
                         Task { await openLocalShell(directory: directory) }
                     }
                 } else {
-                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "请更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "term", iconColor: M.text3, label: "新建终端", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
-            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本太旧，不支持远程桌面。请先把 Mac 上的 uTerm 更新到最新版。") {
+            section("屏幕", footer: client.supportsDesktop ? nil : "Mac 上的 uTerm 版本过旧，不支持远程桌面。将其更新到最新版本后即可使用。") {
                 if client.supportsDesktop {
                     MInsetRow(icon: "display", label: "查看并控制屏幕", sub: "像触控板一样操作 Mac 的鼠标与键盘",
                               chevron: true, last: true) {
                         openDesktop()
                     }
                 } else {
-                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "请更新 Mac 上的 uTerm", last: true)
+                    MInsetRow(icon: "display", iconColor: M.text3, label: "查看并控制屏幕", sub: "需要更新 Mac 上的 uTerm", last: true)
                 }
             }
             section("Mac 上的终端",
-                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签，之后 Mac 上新开或关掉终端，手机上的标签也跟着变，直到断开全部。接管期间它们按这部手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
+                    footer: "点任意一个都会接管这台 Mac 上的全部终端，各开一个标签页，之后 Mac 上新开或关闭终端，手机上的标签页也跟着变，直到点「断开全部终端」。接管期间它们按这台手机的尺寸运行，Mac 上的窗格会标出「正在接管」，断开后恢复。") {
                 if client.sessions.isEmpty {
                     MInsetRow(icon: "term", label: "Mac 上没有已连接的终端", sub: "在 Mac 上打开一个终端后会出现在这里", last: true)
                 } else {
@@ -264,7 +264,7 @@ struct RemoteMacSheet: View {
                     let taken = workspace.remoteTabIDs(of: client)
                     MInsetRow(icon: "x", label: "断开全部终端",
                               sub: taken.isEmpty ? "不再自动接入这台 Mac 新开的终端"
-                                  : "关掉手机上的 \(taken.count) 个标签，Mac 上的终端继续运行",
+                                  : "关闭手机上的 \(taken.count) 个标签页，Mac 上的终端继续运行",
                               last: true) {
                         endTakeover()
                     }
@@ -415,7 +415,7 @@ struct MacTerminalRows: View {
         // 每一行可见期间让在线状态保持新鲜（Mac 下线了能及时从抽屉里消失）。一行都没有时，
         // 抽屉打开那一刻读 `pairedMacs` 会补问一次中继。
         .task { await directory.keepLiveStatusFresh() }
-        .alert("没能新建终端", isPresented: Binding(get: { shellError != nil },
+        .alert("无法新建终端", isPresented: Binding(get: { shellError != nil },
                                                    set: { if !$0 { shellError = nil } })) {
             Button("好", role: .cancel) { shellError = nil }
         } message: {

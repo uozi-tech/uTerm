@@ -84,7 +84,7 @@ final class TerminalCloseGuardTests: XCTestCase {
         var closed = false
         TerminalCloseGuard.requestClose(session, window: window) { closed = true }
         try await waitUntil { self.window.attachedSheet != nil }
-        try button("关闭标签", in: window.attachedSheet).performClick(nil)
+        try button("关闭标签页", in: window.attachedSheet).performClick(nil)
         try await waitUntil { closed }
     }
 
@@ -106,7 +106,7 @@ final class TerminalCloseGuardTests: XCTestCase {
         TerminalCloseGuard.requestClose(session, window: window) { closeCount += 1 }
         try await waitUntil { self.window.attachedSheet != nil }
         TerminalCloseGuard.requestClose(session, window: window) { closeCount += 1 }
-        try button("关闭标签", in: window.attachedSheet).performClick(nil)
+        try button("关闭标签页", in: window.attachedSheet).performClick(nil)
         try await waitUntil { closeCount > 0 }
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(closeCount, 1)

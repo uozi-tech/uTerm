@@ -260,7 +260,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
         guard case .failed(let message) = controller.state else {
             return XCTFail("应当是 .failed，实际 \(controller.state)")
         }
-        XCTAssertTrue(message.hasPrefix("认证材料解析失败："), "错误文案变了：\(message)")
+        XCTAssertTrue(message.hasPrefix("凭据解析失败："), "错误文案变了：\(message)")
         XCTAssertTrue(message.contains("钥匙串里没有这把密钥"))
     }
 

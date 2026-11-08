@@ -58,7 +58,7 @@ struct RemotePairedDevicesGroup: View {
                 renaming = nil
             }
         } message: {
-            Text("只改这台 Mac 上显示的名字。留空则恢复为设备自己报的名字。")
+            Text("只改这台 Mac 上显示的名称；留空则恢复为设备上报的名称。")
         }
     }
 

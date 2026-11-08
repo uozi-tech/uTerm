@@ -275,7 +275,7 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(
             ws.assistantContext(for: server),
-            "服务器：prod（root@10.0.0.24）\n当前文件：/usr/local/etc/xray/config.json")
+            "主机：prod（root@10.0.0.24）\n当前文件：/usr/local/etc/xray/config.json")
     }
 
     func testAssistantContextOmitsFileLineWhenNoFileIsOpen() {
@@ -286,7 +286,7 @@ final class WorkspaceModelTests: XCTestCase {
         server.host = "10.0.0.24"
 
         XCTAssertEqual(ws.assistantContext(for: server),
-                       "服务器：prod（root@10.0.0.24）")
+                       "主机：prod（root@10.0.0.24）")
     }
 
     func testDefaultUIState() {

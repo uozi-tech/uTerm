@@ -127,7 +127,7 @@ struct SFTPTransfersDock: View {
             HStack(spacing: 8) {
                 statusIcon("arrow.up", color: UD.accent, weight: .medium,
                            yOffset: SFTPTransfersDockLayout.statusArrowYOffset)
-                Text("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
+                Text("正在\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
                     .foregroundStyle(UD.text2)
                 UDLinearBar(progress: aggPct, height: 5).frame(width: 72)
                 Text(UTermFormat.progress(aggPct)).font(UD.mono(11)).foregroundStyle(UD.text3)
@@ -139,7 +139,7 @@ struct SFTPTransfersDock: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
+        .accessibilityLabel("正在\(allUp ? "上传" : "传输") \(summary.activeCount) 个文件")
         .accessibilityValue(UTermFormat.progress(aggPct))
         .accessibilityHint("展开传输列表")
     }
@@ -261,7 +261,7 @@ struct SFTPTransfersPanel: View {
         HStack(spacing: 9) {
             Text("传输").font(.system(size: 13, weight: .semibold)).foregroundStyle(UD.text)
                 .accessibilityAddTraits(.isHeader)
-            Text(activeCount > 0 ? "\(activeCount) 进行中" : "\(doneCount) 已完成")
+            Text(activeCount > 0 ? "\(activeCount) 个进行中" : "\(doneCount) 个已完成")
                 .font(UD.mono(10.5)).foregroundStyle(UD.text2)
                 .padding(.horizontal, 7).padding(.vertical, 1)
                 .background(UD.fillSoft, in: Capsule())

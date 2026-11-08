@@ -15,9 +15,9 @@ final class ChatRetentionPresentationTests: XCTestCase {
     }
 
     func testFootersShareWordingWithPlatformVariants() {
-        let base = "超过该天数未更新的 AI 会话会在启动时清理，连同其中的消息。"
+        let base = "超过该天数未更新的 AI 对话会在启动时清理，连同其中的消息。"
         XCTAssertEqual(ChatRetentionPresentation.footer(for: 30, platform: .iOS), base + "该设置与 Mac 同步。")
-        XCTAssertEqual(ChatRetentionPresentation.footer(for: 30, platform: .macOS), base + "执行日志另有固定的 30 天窗口。")
+        XCTAssertEqual(ChatRetentionPresentation.footer(for: 30, platform: .macOS), base + "快捷命令的执行日志固定保留 30 天。")
         XCTAssertTrue(ChatRetentionPresentation.footer(for: 0, platform: .iOS).contains("不清理"))
         XCTAssertTrue(ChatRetentionPresentation.footer(for: 0, platform: .macOS).contains("填 0 表示不清理"))
     }

@@ -24,7 +24,7 @@ struct KeysScreen: View {
         return Group {
             if keys.isEmpty {
                 MEmptyState(icon: "key", title: "密钥库为空",
-                            message: "生成新的 SSH 密钥，或导入已有私钥；私钥只保存在当前设备钥匙串。",
+                            message: "生成新的 SSH 密钥，或导入已有私钥。私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备。",
                             actionTitle: "生成密钥", action: { generating = true },
                             secondaryTitle: "导入密钥", secondaryIcon: "import",
                             secondaryAction: { importing = true })
@@ -39,12 +39,12 @@ struct KeysScreen: View {
                         MInsetGroup {
                             ForEach(Array(keys.enumerated()), id: \.element.id) { idx, key in
                                 MInsetRow(icon: "key", iconColor: M.warning, label: key.name,
-                                          sub: "\(key.typeLabel) · \(usage[key.id] ?? 0) 主机", chevron: true,
+                                          sub: "\(key.typeLabel) · \(usage[key.id] ?? 0) 台主机", chevron: true,
                                           last: idx == keys.count - 1,
                                           onTap: { detail = key })
                             }
                         }
-                        Text("\(keys.count) 把密钥 · 私钥保存在钥匙串，永不离开本机")
+                        Text("\(keys.count) 个密钥 · 私钥保存在钥匙串，经 iCloud 钥匙串同步")
                             .font(M.sans(12)).foregroundStyle(M.text4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 22).padding(.top, 2)
@@ -60,8 +60,8 @@ struct KeysScreen: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 MMenu {
-                    Button { generating = true } label: { Label("生成新密钥", systemImage: "plus") }
-                    Button { importing = true } label: { Label("导入私钥", systemImage: "square.and.arrow.down") }
+                    Button { generating = true } label: { Label("生成密钥", systemImage: "plus") }
+                    Button { importing = true } label: { Label("导入密钥", systemImage: "square.and.arrow.down") }
                 } label: {
                     MIcon(name: "plus", size: 18, color: accent)
                 }
@@ -125,7 +125,7 @@ struct KeyDetailSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("删除此密钥").font(M.sans(14, weight: .semibold)).foregroundStyle(Color(hex: 0xFCA5A5))
-                        Text("密钥将从钥匙串移除，使用此密钥的 \(usedBy.count) 台主机将无法连接。")
+                        Text("密钥将从钥匙串删除，经 iCloud 钥匙串同步的设备上也会删除；使用此密钥的 \(usedBy.count) 台主机将无法连接。")
                             .font(M.sans(12.5)).foregroundStyle(M.text2).lineSpacing(2)
                         MBtn(title: "删除密钥", icon: "trash", kind: .dangerTint, height: 42) { pendingDelete = true }
                             .fixedSize().padding(.top, 4)
@@ -149,7 +149,7 @@ struct KeyDetailSheet: View {
             .alert("删除密钥「\(key.name)」？", isPresented: $pendingDelete) {
                 Button("删除", role: .destructive) { delete() }
                 Button("取消", role: .cancel) {}
-            } message: { Text("此操作不可恢复。") }
+            } message: { Text("此操作无法撤销。") }
         }
     }
 

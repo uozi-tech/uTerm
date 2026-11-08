@@ -22,11 +22,11 @@ struct HostKeyRetryCard: View {
             HStack(spacing: 7) {
                 Image(systemName: isMismatch ? "exclamationmark.triangle.fill" : "lock.shield")
                     .font(.system(size: 12)).foregroundStyle(tint)
-                Text(isMismatch ? "主机密钥已变化" : "主机指纹未信任")
+                Text(isMismatch ? "主机密钥已变化" : "主机密钥未信任")
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(tint)
             }
             Text(isMismatch
-                 ? "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是服务器重装，也可能是中间人攻击）。请核对指纹，确认无误后再信任。"
+                 ? "\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不一致（可能是主机重装过系统，也可能是中间人攻击）。核对指纹无误后再信任。"
                  : "\(challenge.host):\(String(challenge.port)) 的主机密钥尚未被信任，因此并行执行时直接拒绝了连接。")
                 .font(.system(size: 11.5)).foregroundStyle(UD.text3)
                 .lineSpacing(3).fixedSize(horizontal: false, vertical: true)

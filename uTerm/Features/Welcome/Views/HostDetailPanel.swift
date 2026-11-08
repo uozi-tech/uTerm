@@ -94,7 +94,7 @@ struct HostDetailPanel: View {
                 if copiedField != nil {
                     HStack(spacing: 3) {
                         Image(systemName: "checkmark")
-                        Text("已复制")
+                        Text("已拷贝")
                     }
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(UD.success)
@@ -107,7 +107,7 @@ struct HostDetailPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("复制 \(fullEndpoint)")
+        .help("拷贝 \(fullEndpoint)")
     }
 
     /// 写剪贴板 + 触发瞬时「已复制」反馈（与 SFTP / 密钥详情的复制实现一致）。
@@ -191,7 +191,7 @@ struct HostDetailPanel: View {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
                     .font(.system(size: 13, weight: .medium))
-                Text("SFTP 浏览文件")
+                Text("在 SFTP 中打开")
                     .font(.system(size: 13.5, weight: .medium))
                 Text("↵")
                     .font(.system(size: 10.5, design: .monospaced))
@@ -293,7 +293,7 @@ struct HostDetailPanel: View {
     private var browseSFTPButton: some View {
         Button(action: onBrowseSFTP) {
             HStack(spacing: 8) {
-                Text("SFTP 浏览文件")
+                Text("在 SFTP 中打开")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UD.text)
                     .lineLimit(1)
@@ -348,7 +348,7 @@ private struct EndpointCopyChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .help("点击复制：\(text)")
+        .help("点击拷贝：\(text)")
     }
 }
 
@@ -377,7 +377,7 @@ private struct NameCopyButton: View {
         .buttonStyle(.plain)
         .padding(.horizontal, -4)
         .onHover { hover = $0 }
-        .help("点击复制：\(name)")
+        .help("点击拷贝：\(name)")
     }
 }
 

@@ -433,7 +433,7 @@ struct ParallelRunView: View {
                     }
                 }
                 if visible.isEmpty {
-                    Text("没有\(aiFilter.title)的服务器")
+                    Text("没有\(aiFilter.title)的主机")
                         .font(M.sans(13)).foregroundStyle(M.text3)
                         .frame(maxWidth: .infinity).padding(.vertical, 24)
                 }
@@ -484,7 +484,7 @@ struct ParallelRunView: View {
                         overviewTitle(c, size: 16)
                         overviewCounts(c)
                         if !c.allDone, c.aiAssisted {
-                            Text("遇到报错会先自行诊断、换办法修复，处理不了的才交给你。")
+                            Text("遇到报错时先自行诊断并尝试其他办法修复，无法解决的再交给你。")
                                 .font(M.sans(12.5)).foregroundStyle(M.text3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -518,7 +518,7 @@ struct ParallelRunView: View {
 
     private func overviewTitle(_ c: ParallelRunController, size: CGFloat) -> some View {
         let title: String = !c.allDone
-            ? "正在 \(c.total) 台服务器上执行"
+            ? "正在 \(c.total) 台主机上执行"
             : (c.failedCount > 0 ? "已完成，\(c.failedCount) 台失败" : "全部 \(c.total) 台执行成功")
         return Text(title).font(M.sans(size, weight: .semibold)).foregroundStyle(M.text)
     }

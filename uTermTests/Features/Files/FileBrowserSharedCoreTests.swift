@@ -45,7 +45,7 @@ final class FileBrowserSharedCoreTests: XCTestCase {
         XCTAssertEqual(model.entries.map(\.name), ["locked", "a.txt"])
         XCTAssertFalse(model.isNavigating)
         XCTAssertFalse(model.isLoading)
-        XCTAssertEqual(model.transientError?.hasPrefix("打开目录失败"), true)
+        XCTAssertEqual(model.transientError?.hasPrefix("打开文件夹失败"), true)
     }
 
     // MARK: - 加载代次

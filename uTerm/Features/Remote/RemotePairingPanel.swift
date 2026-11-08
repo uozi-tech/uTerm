@@ -107,7 +107,7 @@ private struct RemotePairingPanelView: View {
                     .font(.system(size: 30, weight: .semibold, design: .monospaced))
                     .foregroundStyle(UD.text)
                     .textSelection(.enabled)
-                Text("确认手机上显示的是同一组数字再允许。不一致说明连接被人截获，请拒绝。")
+                Text("确认手机上显示的是同一组数字再允许。如果不一致，连接可能已被截获，应当拒绝。")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text2)
                     .fixedSize(horizontal: false, vertical: true)

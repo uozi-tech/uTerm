@@ -41,7 +41,7 @@ nonisolated enum RemoteRelayCheck {
             result.mappedAddress = address
         case .failure(let reason):
             result.udp = .failed
-            result.problems.append(String(localized: "UDP \(String(config.port)) 没有回应（\(reason.description)）：手机和 Mac 没法打洞直连，会一直走中继。检查安全组和防火墙是否放行了 UDP。"))
+            result.problems.append(String(localized: "UDP \(String(config.port)) 没有回应（\(reason.description)）：手机和 Mac 无法打洞直连，会一直经中继连接。检查安全组和防火墙是否放行了 UDP。"))
         }
         return result
     }
@@ -49,7 +49,7 @@ nonisolated enum RemoteRelayCheck {
     private static func checkTCP(config: RemoteRelayConfig, timeout: TimeInterval) async -> RemoteRelayCheckResult {
         var result = RemoteRelayCheckResult(tcp: .failed, auth: .skipped, udp: .skipped, problems: [])
         guard let memberKey = config.memberKey else {
-            result.problems.append(String(localized: "这份中继配置里的成员密钥无效，请重新导入。"))
+            result.problems.append(String(localized: "这份中继配置里的成员密钥无效，需要重新导入。"))
             return result
         }
         let connection = RemoteRelayConnection(config: config)
@@ -65,7 +65,7 @@ nonisolated enum RemoteRelayCheck {
             result.problems.append(String(localized: "\(config.endpointDescription) 在监听，但不像 uTerm 中继（或中继版本不一致）。检查地址和端口是否指到了别的服务。"))
             return result
         } catch {
-            result.problems.append(String(localized: "TCP \(config.endpointDescription) 连不上（\(error.localizedDescription)）。检查中继服务是否在运行、云厂商安全组和服务器防火墙是否放行了 TCP \(String(config.port))。"))
+            result.problems.append(String(localized: "TCP \(config.endpointDescription) 无法连接（\(error.localizedDescription)）。检查中继是否在运行、云厂商安全组和主机防火墙是否放行了 TCP \(String(config.port))。"))
             return result
         }
         result.tcp = .ok
@@ -90,7 +90,7 @@ nonisolated enum RemoteRelayCheck {
             }
         } catch RemoteRelayError.rejected where result.auth != .ok {
             result.auth = .failed
-            result.problems.append(String(localized: "中继没有接受这份配置，直接断开了连接：成员密钥不对（中继换过钥？），或配置不是这台中继的。请重新导入。"))
+            result.problems.append(String(localized: "中继没有接受这份配置，直接断开了连接：成员密钥不对（中继可能更换过密钥），或配置不属于这台中继。需要重新导入。"))
         } catch {
             if result.auth != .ok { result.auth = .failed }
             result.problems.append(error.localizedDescription)

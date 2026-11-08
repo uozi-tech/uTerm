@@ -123,7 +123,7 @@ extension ProgramStatusRecord {
             }
         case .working: String(localized: "运行中")
         case .done: String(localized: "已完成")
-        case .error: String(localized: "出错了")
+        case .error: String(localized: "出错")
         case .idle: String(localized: "空闲")
         }
     }

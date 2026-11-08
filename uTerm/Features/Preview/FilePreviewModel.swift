@@ -116,7 +116,7 @@ final class FilePreviewModel {
         var errorDescription: String? {
             switch self {
             case .providerUnavailable:
-                return "SFTP 通道未就绪"
+                return "SFTP 尚未连接"
             case .missingBuffer:
                 return "文件缓冲区不存在"
             case .invalidMarkdownImageSource:
@@ -243,7 +243,7 @@ final class FilePreviewModel {
 
         // 大小检查
         if let fileSize, fileSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+            buf.state = .failed("文件超过 50 MB，用本机应用打开")
             return
         }
 
@@ -400,7 +400,7 @@ final class FilePreviewModel {
                 guard remote.size <= Self.maximumPreviewBytes else {
                     buf.byteSize = remote.size
                     buf.mtimeWhenLoaded = remote.mtime
-                    buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+                    buf.state = .failed("文件超过 50 MB，用本机应用打开")
                     continue
                 }
 
@@ -450,13 +450,13 @@ final class FilePreviewModel {
         }
 
         if let byteSize = buf.byteSize, byteSize > Self.maximumPreviewBytes {
-            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+            buf.state = .failed("文件超过 50 MB，用本机应用打开")
             return
         }
 
         guard let sftp = sftpProvider() else {
             if failIfProviderMissing {
-                buf.state = .failed("SFTP 通道未就绪")
+                buf.state = .failed("SFTP 尚未连接")
             }
             return
         }
@@ -550,7 +550,7 @@ final class FilePreviewModel {
         }
         guard case .loaded = buf.state else { return .noop }
         guard buf.isDirty else { return .noop }
-        guard let sftp = sftpProvider() else { return .failed("SFTP 通道未就绪") }
+        guard let sftp = sftpProvider() else { return .failed("SFTP 尚未连接") }
 
         // mtime 冲突检测
         do {
@@ -637,7 +637,7 @@ final class FilePreviewModel {
             guard let img = NSImage(data: data) else {
                 buf.imageData = nil
                 buf.imageSize = .zero
-                buf.state = .failed("图片无法解码，不支持预览。可以用外部应用打开，保存后会自动上传回服务器。")
+                buf.state = .failed("图片无法解码，不支持预览。可以用本机应用打开，保存后自动上传回主机。")
                 return false
             }
             buf.imageData = data
@@ -645,7 +645,7 @@ final class FilePreviewModel {
         case .code, .markdown, .plainText:
             guard let text = previewableText(from: data) else {
                 buf.text = ""
-                buf.state = .failed("检测到二进制内容，不支持预览。可以用外部应用打开，保存后会自动上传回服务器。")
+                buf.state = .failed("检测到二进制内容，不支持预览。可以用本机应用打开，保存后自动上传回主机。")
                 return false
             }
             buf.text = text
@@ -656,7 +656,7 @@ final class FilePreviewModel {
     private static func applyPreviewLoadFailure(_ error: Error, to buf: FileBuffer) {
         if let limitError = error as? SFTPDownloadLimitExceeded {
             buf.byteSize = limitError.observedBytes
-            buf.state = .failed("文件超过 50 MB，请用外部编辑器")
+            buf.state = .failed("文件超过 50 MB，用本机应用打开")
         } else {
             buf.state = .failed("\(error)")
         }

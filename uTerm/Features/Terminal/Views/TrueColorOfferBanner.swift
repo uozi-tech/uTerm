@@ -57,7 +57,7 @@ struct TrueColorOfferBanner: View {
             Button("不再询问") { session.dismissTrueColorOfferForHost() }
                 .foregroundStyle(UD.text3)
         } else {
-            Button("知道了") { session.closeTrueColorOffer() }
+            Button("好") { session.closeTrueColorOffer() }
                 .foregroundStyle(UD.accent)
         }
     }

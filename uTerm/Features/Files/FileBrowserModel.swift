@@ -435,7 +435,7 @@ final class FileBrowserModel {
             if state == .browsing, didEverBrowse, !isTransport {
                 // 已经在浏览：列不出的目录（权限不足 / 不存在）不进去，留在原目录给个提示。
                 // 整页翻成失败只留给连接本身的问题与首次列目录。
-                transientError = "打开目录失败：\(FriendlyError.describe(error))"
+                transientError = "打开文件夹失败：\(FriendlyError.describe(error))"
             } else {
                 state = .failed(FriendlyError.describe(error))
             }
@@ -614,7 +614,7 @@ final class FileBrowserModel {
         // 同一条 SFTP 通道上一次只跑一个删除任务。静默吞掉第二次请求会让用户
         // 以为点击没生效（他刚在确认框上按了「删除」），故明确说一声。
         if let running = deletion {
-            transientError = "正在删除「\(running.name)」，请等它结束后再删下一项。"
+            transientError = "正在删除「\(running.name)」，等它结束后再删下一项。"
             return nil
         }
         let dir = directory ?? currentPath

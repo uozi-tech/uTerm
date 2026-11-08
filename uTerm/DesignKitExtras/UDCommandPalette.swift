@@ -291,7 +291,7 @@ private struct CommandPaletteEmpty: View {
                 CommandPaletteItem(id: "h1", kind: .host, title: "demo-server",
                                    detail: "root@203.0.113.10", hint: "连接") {},
                 CommandPaletteItem(id: "c1", kind: .command, title: "新建主机…",
-                                   detail: "创建一台新服务器", hint: "⌘N") {},
+                                   detail: "新建一台主机", hint: "⌘N") {},
                 CommandPaletteItem(id: "f1", kind: .file, title: "main.go",
                                    detail: "~/src/main.go", hint: "打开") {},
                 CommandPaletteItem(id: "s1", kind: .setting, title: "设置 · 终端",

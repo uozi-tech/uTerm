@@ -58,7 +58,7 @@ struct QuickCommandForm: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(initial == nil ? "新建快捷命令" : "编辑命令")
+                Text(initial == nil ? "新建快捷命令" : "编辑快捷命令")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UD.text)
                 Spacer()
@@ -72,7 +72,7 @@ struct QuickCommandForm: View {
                     QCField(label: "名称") {
                         UDTextField(placeholder: "例如：重启 Nginx 并健康检查", text: $name)
                     }
-                    QCField(label: "关联服务器", hint: "可多选 · 并行执行") {
+                    QCField(label: "关联主机", hint: "可多选 · 并行执行") {
                         serverMultiSelect
                     }
                     // AI 介入开启时先出现「AI 指令（自然语言）」——AI 命令以说人话为主。
@@ -136,7 +136,7 @@ struct QuickCommandForm: View {
                         }
                     }
                 } else {
-                    Text("选择服务器…（可多选）")
+                    Text("选择主机…（可多选）")
                         .font(.system(size: 13))
                         .foregroundStyle(UD.text4)
                 }
@@ -162,7 +162,7 @@ struct QuickCommandForm: View {
     private var serverPopoverContent: some View {
         VStack(spacing: 0) {
             if hostRefs.isEmpty {
-                Text("没有可用服务器")
+                Text("没有可用的主机")
                     .font(.system(size: 12))
                     .foregroundStyle(UD.text4)
                     .padding(.vertical, 18)

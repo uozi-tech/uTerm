@@ -147,7 +147,7 @@ struct WelcomeView: View {
             }
         }
         .confirmationDialog(
-            "删除服务器？",
+            "删除主机？",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }),
@@ -329,7 +329,7 @@ struct WelcomeView: View {
         }
         items.append(CommandPaletteItem(
             id: "cmd.newHost", kind: .command,
-            title: "新建主机…", detail: "创建一台新服务器", hint: "⌘N", group: nil) {
+            title: "新建主机…", detail: "添加一台主机", hint: "⌘N", group: nil) {
                 formRoute = .new
             })
         items.append(CommandPaletteItem(
@@ -349,7 +349,7 @@ struct WelcomeView: View {
             })
         items.append(CommandPaletteItem(
             id: "cmd.globalForwarding", kind: .command,
-            title: "全局转发…", detail: "跨主机管理端口转发 + 随 uTerm 启动", hint: "↵", group: nil) {
+            title: "全局端口转发…", detail: "跨主机管理端口转发，可随 uTerm 启动", hint: "↵", group: nil) {
                 openWindow(id: "global-forwarding")
             })
         items.append(contentsOf: commandPaletteSettingsItems(openSettings: { openWindow(id: SettingsWindow.id) }))
@@ -589,7 +589,7 @@ struct WelcomeTitleBar: View {
             UDIconButton(systemImage: "arrow.left.arrow.right") {
                 openWindow(id: "global-forwarding")
             }
-            .help("全局转发")
+            .help("全局端口转发")
             .padding(.trailing, 8)
         }
         .frame(height: 38)

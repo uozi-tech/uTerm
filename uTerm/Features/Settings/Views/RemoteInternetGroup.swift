@@ -24,7 +24,7 @@ struct RemoteInternetGroup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsGroup(title: "公网接入",
-                          footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容都是端到端加密。Mac 睡眠时会从中继掉线，手机无法远程唤醒它；「保持唤醒」不让 Mac 闲置睡眠，合盖仍会睡眠。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
+                          footer: String(localized: "打开后，这台 Mac 会注册到中继，允许的设备不在同一局域网也能连接。优先直连，打不通时经中继转发，内容全程端到端加密。Mac 睡眠时会与中继断开，手机无法远程唤醒它；「保持唤醒」不让 Mac 闲置睡眠，合盖仍会睡眠。同一 Apple ID 的手机经 iCloud 钥匙串自动拿到中继配置，其他手机扫二维码或用「分享到我的设备」。")) {
                 relayRow
                 if server.relayConfig == nil, showsAgentPrompt {
                     RemoteRelayAgentPromptBlock(purpose: .deploy)
@@ -98,7 +98,7 @@ struct RemoteInternetGroup: View {
         .fileImporter(isPresented: $importingRelayConfig, allowedContentTypes: [.json]) { result in
             importRelayConfig(result)
         }
-        .alert("没能导入中继配置", isPresented: Binding(get: { relayImportError != nil },
+        .alert("无法导入中继配置", isPresented: Binding(get: { relayImportError != nil },
                                                        set: { if !$0 { relayImportError = nil } })) {
             Button("好", role: .cancel) { relayImportError = nil }
         } message: {
@@ -110,7 +110,7 @@ struct RemoteInternetGroup: View {
     @ViewBuilder private var relayRow: some View {
         if let config = server.relayConfig {
             SettingsListRow(icon: "server.rack", tint: UD.info,
-                            title: String(localized: "中继服务器"),
+                            title: String(localized: "中继"),
                             subtitle: RemoteControlPresentation.relaySubtitle(config, version: server.relayUpdates.runningVersion)) {
                 SettingsMoreMenu(items: [
                     UDMenuItem(label: String(localized: "测试连接"), systemImage: "stethoscope") {
@@ -141,7 +141,7 @@ struct RemoteInternetGroup: View {
             }
         } else {
             SettingsListRow(icon: "server.rack", tint: UD.text3,
-                            title: String(localized: "中继服务器"),
+                            title: String(localized: "中继"),
                             subtitle: RemoteControlPresentation.relayHint(nil)) {
                 HStack(spacing: 8) {
                     UDButton(title: showsAgentPrompt ? "收起" : "让 AI 部署…", style: .secondary) {
@@ -252,7 +252,7 @@ struct RemoteInternetGroup: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             guard let config = RemoteRelayConfig(importing: try Data(contentsOf: url)) else {
-                relayImportError = "这不是 uterm-relay 的配置文件。请在服务器上运行 uterm-relay config 生成。"
+                relayImportError = "这不是 uterm-relay 的配置文件。在中继所在的主机上运行 uterm-relay config 生成。"
                 return
             }
             guard server.importRelayConfig(config) else {

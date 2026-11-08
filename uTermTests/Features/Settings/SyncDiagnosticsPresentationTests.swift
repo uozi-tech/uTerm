@@ -33,6 +33,6 @@ final class SyncDiagnosticsPresentationTests: XCTestCase {
 
     func testTitles() {
         XCTAssertEqual(SyncDiagnosticsPresentation.title, "同步诊断")
-        XCTAssertEqual(SyncDiagnosticsPresentation.copyButtonTitle, "复制日志")
+        XCTAssertEqual(SyncDiagnosticsPresentation.copyButtonTitle, "拷贝日志")
     }
 }

@@ -42,7 +42,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>uTerm 使用相机扫描 Mac 上显示的配对二维码。</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。</string>
+	<string>uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。</string>
 	<!-- 只声明真正用到的后台模式。`remote-notification` 是 SwiftData 的 CloudKit 镜像
 	     （NSPersistentCloudKitContainer）接静默推送所必需，见 MobileApp.swift 的
 	     MobileAppDelegate 注释。

@@ -497,8 +497,8 @@ private struct LocalShellNewTabButton: View {
             }
             .buttonStyle(.plain)
             .iconButtonHover(cornerRadius: 6)
-            .help("新开本机终端（⌘T）")
-            .accessibilityLabel(Text("新开本机终端"))
+            .help("新建本机终端（⌘T）")
+            .accessibilityLabel(Text("新建本机终端"))
         } else {
             Menu {
                 Button("主目录") { model.addTab(in: groupID) }
@@ -517,8 +517,8 @@ private struct LocalShellNewTabButton: View {
             .frame(width: 26, height: 26)
             .contentShape(Rectangle())
             .iconButtonHover(cornerRadius: 6)
-            .help("新开本机终端")
-            .accessibilityLabel(Text("新开本机终端"))
+            .help("新建本机终端")
+            .accessibilityLabel(Text("新建本机终端"))
         }
     }
 }
@@ -546,7 +546,7 @@ private struct LocalShellPaneView: View {
         case .connected:
             RemoteControlledTerminal(session: pane.session)
         case .failed(let message):
-            stateView(systemImage: "exclamationmark.triangle", title: "本机终端没能启动", detail: message)
+            stateView(systemImage: "exclamationmark.triangle", title: "本机终端未能启动", detail: message)
         case .disconnected:
             stateView(systemImage: "checkmark.circle", title: "shell 已退出", detail: "")
         }
@@ -563,7 +563,7 @@ private struct LocalShellPaneView: View {
             }
             HStack(spacing: 10) {
                 UDButton(title: "重新启动") { Task { await pane.start() } }
-                UDButton(title: "关闭标签", style: .secondary, action: onClose)
+                UDButton(title: "关闭标签页", style: .secondary, action: onClose)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

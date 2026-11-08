@@ -172,7 +172,7 @@ struct WorkspaceTabStrip: View {
                 .padding(.vertical, inStatusRow ? 4 : 7).padding(.horizontal, 4)   // 命中区 ≥ 38×44
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel(Text("新建会话"))
+        .accessibilityLabel(Text("新建标签页"))
     }
 
     private var agentButton: some View {
@@ -313,7 +313,7 @@ struct WorkspaceTabChip: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text("关闭会话"))
+                .accessibilityLabel(Text("关闭标签页"))
             }
         }
         .padding(.leading, 10).padding(.trailing, isFront || hovering ? 0 : 10).frame(height: pillHeight)
@@ -372,7 +372,7 @@ private struct TabCloseDialog: ViewModifier {
     /// 收起动画期间 `prompt` 已清空，标题仍要有字。
     private var title: Text {
         if case .busy(let busy)? = prompt?.kind { return Text(busy.title) }
-        return Text("关闭这个标签？")
+        return Text("关闭这个标签页？")
     }
 
     func body(content: Content) -> some View {
@@ -387,7 +387,7 @@ private struct TabCloseDialog: ViewModifier {
                 Button("只在手机上关闭") { onConfirm(false) }
                 Button("同时关闭 Mac 上的终端", role: .destructive) { onConfirm(true) }
             case .busy:
-                Button("关闭标签", role: .destructive) { onConfirm(false) }
+                Button("关闭标签页", role: .destructive) { onConfirm(false) }
             }
             Button("取消", role: .cancel) {}
         } message: { prompt in

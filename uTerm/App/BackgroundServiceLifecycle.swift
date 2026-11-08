@@ -39,7 +39,7 @@ enum BackgroundLaunchMode {
     static func cliLaunchRefusal(arguments: [String], defaults: UserDefaults) -> String? {
         guard launchSource(arguments: arguments) == cliLaunchSource else { return nil }
         guard defaults.object(forKey: BackgroundServiceSettings.Keys.allowOnDemandLaunch) as? Bool == true else {
-            return "设置中没有允许 CLI 按需启动"
+            return "没有打开「允许 CLI 按需启动」（设置 › 命令行与技能）"
         }
         guard defaults.object(forKey: ControlSettings.Keys.enabled) as? Bool == true else {
             return "命令行接口未启用"

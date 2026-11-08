@@ -292,7 +292,7 @@ struct ForwardEditorSheet: View {
     private var footer: some View {
         HStack(spacing: 8) {
             if conflict != nil {
-                Text("端口冲突，请先解决")
+                Text("端口冲突，改用其他端口后再保存")
                     .font(.system(size: 11.5))
                     .foregroundStyle(UD.danger)
             }

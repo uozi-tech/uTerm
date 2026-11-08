@@ -160,7 +160,7 @@ struct TerminalSessionBody: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: 340)
                 HStack(spacing: 10) {
-                    MBtn(title: "复制错误", icon: "copy", kind: .secondary, height: 44) {
+                    MBtn(title: "拷贝错误", icon: "copy", kind: .secondary, height: 44) {
                         UIPasteboard.general.string = msg
                     }.fixedSize()
                     MBtn(title: "关闭", kind: .tinted, height: 44, action: onClose).fixedSize()

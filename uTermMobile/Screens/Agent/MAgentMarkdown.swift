@@ -241,12 +241,12 @@ struct MChatCodeBlock: View {
             } label: {
                 HStack(spacing: 4) {
                     MIcon(name: copied ? "check" : "copy", size: 11, color: copied ? M.success : M.text3)
-                    Text(copied ? "已复制" : "复制")
+                    Text(copied ? "已拷贝" : "拷贝")
                         .font(M.sans(10.5)).foregroundStyle(copied ? M.success : M.text3)
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(copied ? "已复制代码" : "复制代码")
+            .accessibilityLabel(copied ? "已拷贝代码" : "拷贝代码")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .overlay(alignment: .bottom) { Rectangle().fill(M.divider).frame(height: 1) }

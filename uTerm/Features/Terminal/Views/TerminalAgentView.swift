@@ -60,18 +60,18 @@ struct TerminalAgentView: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             } content: {
-                UDMenu(width: 240, head: "会话历史", maxHeight: 320, items: sessionMenuItems)
+                UDMenu(width: 240, head: "对话历史", maxHeight: 320, items: sessionMenuItems)
             }
             .fixedSize()
-            .accessibilityLabel("会话历史")
-            .help("会话历史")
+            .accessibilityLabel("对话历史")
+            .help("对话历史")
 
             Button { model.startNewSession() } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12)).foregroundStyle(UD.text3)
                     .frame(width: 26, height: 26).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).help("新对话").accessibilityLabel("新对话")
+            .buttonStyle(.plain).help("新建对话").accessibilityLabel("新建对话")
         }
         .padding(.horizontal, 12)
         // v3：上下文条并入卡片顶部（40 高，与终端模式的标签条同高），无底色、无底线。
@@ -366,7 +366,7 @@ struct TerminalAgentView: View {
 
     private var sessionMenuItems: [UDMenuItem] {
         guard !sessions.isEmpty else {
-            return [UDMenuItem(label: "还没有历史会话")]
+            return [UDMenuItem(label: "还没有对话")]
         }
         return sessions.map { session in
             UDMenuItem(
@@ -381,10 +381,10 @@ struct TerminalAgentView: View {
     private var emptyProviderState: some View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(UD.text3)
-            Text("还没添加 AI Provider").font(.headline).foregroundStyle(UD.text)
-            Text("在 Settings 添加一个 Anthropic / OpenAI 配置。")
+            Text("还没有添加模型服务").font(.headline).foregroundStyle(UD.text)
+            Text("在「设置 › 模型服务」里添加 Anthropic 或 OpenAI。")
                 .font(.caption).foregroundStyle(UD.text3).multilineTextAlignment(.center)
-            UDButton(title: "打开 Settings", systemImage: "gearshape") { onOpenSettings() }
+            UDButton(title: "打开设置", systemImage: "gearshape") { onOpenSettings() }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

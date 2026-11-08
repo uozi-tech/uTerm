@@ -121,7 +121,7 @@ final class AppLockModel {
             case .canceled:
                 state = .failed("验证已取消")
             case .failed, .unavailable:
-                state = .failed("验证失败，请重试")
+                state = .failed("验证失败，再试一次")
             }
         case .passwordOnly:
             await authenticateWithPassword(generation: generation)
@@ -138,7 +138,7 @@ final class AppLockModel {
         case .canceled:
             state = .failed("验证已取消")
         case .failed, .biometryLockout, .unavailable:
-            state = .failed("验证失败，请重试")
+            state = .failed("验证失败，再试一次")
         }
     }
 }

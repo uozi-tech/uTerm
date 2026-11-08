@@ -175,8 +175,8 @@ nonisolated enum HolderSessionFailure: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .disconnected: return "终端的辅助进程断开了连接"
-        case .badReply: return "终端的辅助进程回了看不懂的内容"
+        case .disconnected: return "终端辅助程序断开了连接"
+        case .badReply: return "终端辅助程序返回了无法识别的内容"
         }
     }
 }

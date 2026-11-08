@@ -264,7 +264,7 @@ final class WorkspaceModel {
     /// 每次向工作区 Agent 发送消息时使用的实时上下文。活动文件来自预览模型，因而
     /// 切换编辑标签或分屏焦点后，Agent 能直接定位当前窗口对应的远端绝对路径。
     func assistantContext(for server: ServerProfile) -> String {
-        var lines = ["服务器：\(server.name)（\(server.displayEndpoint)）"]
+        var lines = ["主机：\(server.name)（\(server.displayEndpoint)）"]
         if let path = filePreviewModel.activeBuffer?.remotePath {
             lines.append("当前文件：\(path)")
         }

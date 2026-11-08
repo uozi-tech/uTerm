@@ -130,7 +130,7 @@ actor HeldSSHBackend: HeldTerminalBackend, TerminalImageReceiving, TerminalTrueC
         var jumpHost: SSHBridgeJumpHost?
         if let jump = target.profile.jumpHost {
             guard let jumpAuth = resolved.jump else {
-                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少跳板机认证材料")
+                throw SSHConnection.SSHConnectionError.jumpHostFailed("缺少登录凭据")
             }
             let jumpMaterial = Self.material(jumpAuth)
             jumpHost = SSHBridgeJumpHost(host: jump.host, port: jump.port, username: jumpMaterial.username,

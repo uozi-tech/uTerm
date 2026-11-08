@@ -57,7 +57,7 @@ extension TerminalSession {
                 try await TerminalPaste.deliver(image: image, to: receiver) { self?.pasteText($0) }
             } catch {
                 // 用户正等着图片出现，失败必须看得见；不走「是否在看」的判断。
-                self?.attentionSink?(TerminalAttention(title: String(localized: "图片没传过去"),
+                self?.attentionSink?(TerminalAttention(title: String(localized: "图片发送失败"),
                                                        body: error.localizedDescription))
             }
         }

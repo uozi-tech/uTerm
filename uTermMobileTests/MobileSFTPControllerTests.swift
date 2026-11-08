@@ -54,7 +54,7 @@ final class MobileSFTPControllerTests: XCTestCase {
         XCTAssertEqual(controller.path, "/", "列不出的目录不进去，留在原目录")
         XCTAssertEqual(controller.entries.map(\.name), ["locked", "a"])
         XCTAssertFalse(controller.loading)
-        XCTAssertEqual(controller.transientError?.hasPrefix("打开目录失败"), true)
+        XCTAssertEqual(controller.transientError?.hasPrefix("打开文件夹失败"), true)
     }
 
     func testRenameAndChmodFailuresAreTransient() async throws {

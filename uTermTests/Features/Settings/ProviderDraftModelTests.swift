@@ -9,7 +9,7 @@ final class ProviderDraftModelTests: XCTestCase {
         var keys: [UUID: String] = [:]
         var saveError: Error?
         var testCalls: [(name: String, keyDraft: String)] = []
-        var testResult = ProviderManagement.ConnectionResult(ok: true, message: "连接 OK · 3 个可用模型")
+        var testResult = ProviderManagement.ConnectionResult(ok: true, message: "连接成功 · 3 个可用模型")
 
         var operations: ProviderDraftModel.Operations {
             ProviderDraftModel.Operations(

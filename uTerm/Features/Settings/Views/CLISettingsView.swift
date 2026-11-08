@@ -53,7 +53,7 @@ struct CLISettingsView: View {
                 SettingsInlineNote(tone: .danger, text: error)
             } else if backgroundSettings.needsLoginItemApproval {
                 SettingsInlineNote(tone: .warning,
-                                   text: String(localized: "等待系统批准。请前往系统设置 ▸ 通用 ▸ 登录项与扩展，允许 uTerm 后台项目。"))
+                                   text: String(localized: "等待系统批准：在「系统设置 › 通用 › 登录项与扩展」里允许 uTerm 在后台运行。"))
             } else if backgroundSettings.loginItemStatus == .notFound {
                 SettingsInlineNote(tone: .muted,
                                    text: String(localized: "登录后台启动尚未注册，或系统尚未识别该组件。开启后会再次向系统注册。"))
@@ -65,7 +65,7 @@ struct CLISettingsView: View {
 
     private var interfaceGroup: some View {
         SettingsGroup(title: "命令行接口",
-                      footer: String(localized: "密码与私钥不会离开 uTerm。执行任意 shell 命令等同于对该主机的完全访问，请按需开启写入。")) {
+                      footer: String(localized: "密码与私钥不会交给命令行工具。执行任意 shell 命令等同于对该主机的完全访问，按需开启写入。")) {
             SettingsRow(
                 label: "启用命令行接口",
                 hint: "本机的 AI 工具可以经 uTerm 使用你已保存的主机执行命令、读写文件、启停隧道"
@@ -96,7 +96,7 @@ struct CLISettingsView: View {
 
     private var socketRow: some View {
         SettingsRow(label: "接口地址", hint: settings.socketPath, hintStyle: .monospaced) {
-            UDButton(title: copied ? "已复制" : "复制", style: .secondary) {
+            UDButton(title: copied ? "已拷贝" : "拷贝", style: .secondary) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(settings.socketPath, forType: .string)
                 copied = true
@@ -116,7 +116,7 @@ struct CLISettingsView: View {
             title: "AI 技能",
             footer: "安装会在该工具的 skills 目录里建符号链接，直接指向 uTerm.app 内的 "
                 + SkillDefinition.catalog.map(\.slug).joined(separator: "、")
-                + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后下次启动会自动改指。"
+                + " 技能与 utermctl 客户端；uTerm 升级后技能内容自动跟着更新，移动 uTerm.app 后，下次启动会自动更新链接。"
         ) {
             if !skills.didLoad {
                 SettingsEmptyRow(symbol: "magnifyingglass", text: String(localized: "正在检测本机的 AI 命令行工具…"))

@@ -131,7 +131,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// of which view currently holds first responder.
     private static func makeContextMenu(for terminalView: SwiftTerm.TerminalView) -> NSMenu {
         let menu = NSMenu()
-        let copyItem = NSMenuItem(title: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let copyItem = NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         let pasteItem = NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         let selectAllItem = NSMenuItem(title: "全选", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
         for item in [copyItem, pasteItem, selectAllItem] {

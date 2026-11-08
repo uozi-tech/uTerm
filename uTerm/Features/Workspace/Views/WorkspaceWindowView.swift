@@ -56,7 +56,7 @@ struct WorkspaceWindowView: View {
                     workspaceBody(server: server, windowID: windowID)
                 } else {
                     // 有窗口身份但查不到服务器 —— 该服务器已被删除。
-                    ContentUnavailableView("服务器已删除", systemImage: "server.rack")
+                    ContentUnavailableView("主机已删除", systemImage: "server.rack")
                 }
             } else {
                 // windowID 尚未注入（macOS 窗口状态恢复过程中的瞬态）。
@@ -401,9 +401,9 @@ struct WorkspaceWindowView: View {
         case .conflict(let remoteMtime):
             let alert = NSAlert()
             alert.messageText = "远程文件已变化"
-            alert.informativeText = "远程已被另一处保存。"
-            alert.addButton(withTitle: "保留我的（覆盖远程）")
-            alert.addButton(withTitle: "用远程的（丢弃本地）")
+            alert.informativeText = "这个文件在你打开后被别处改过。覆盖会丢掉那些改动。"
+            alert.addButton(withTitle: "覆盖远程文件")
+            alert.addButton(withTitle: "放弃本地改动")
             alert.addButton(withTitle: "取消")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
@@ -463,7 +463,7 @@ private struct BlockedFileAlerts: ViewModifier {
                 actions(for: file)
             } message: { file in
                 if case .unsupportedType(let ext) = file.reason {
-                    Text(".\(ext) 文件不是文本，无法预览。可以用本机应用打开（保存后自动上传回服务器），或下载一份到本地。")
+                    Text(".\(ext) 文件不是文本，无法预览。可以用本机应用打开（保存后自动上传回主机），或下载到本地。")
                 }
             }
             .alert("文件太大",
@@ -472,7 +472,7 @@ private struct BlockedFileAlerts: ViewModifier {
                 actions(for: file)
             } message: { file in
                 if case .tooLarge(let size) = file.reason {
-                    Text("该文件 \(UFormat.bytes(size))，超过 50 MB 预览上限。可以用本机应用打开（保存后自动上传回服务器），或下载一份到本地。")
+                    Text("文件大小 \(UFormat.bytes(size))，超过 50 MB 预览上限。可以用本机应用打开（保存后自动上传回主机），或下载到本地。")
                 }
             }
     }

@@ -65,25 +65,25 @@ nonisolated enum RemoteRelayError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .unreachable(let reason): return "连不上中继服务器：\(reason)"
+        case .unreachable(let reason): return "无法连接中继：\(reason)"
         case .refused(let reason): return Self.describe(reason)
-        case .timeout: return "中继服务器没有响应"
-        case .malformed: return "中继服务器的回应无法识别"
+        case .timeout: return "中继没有响应"
+        case .malformed: return "中继的回应无法识别"
         case .closed: return "连接已断开"
-        case .rejected: return "中继服务器没有接受这份配置（密钥不对、配置不是这台中继的，或版本不一致），请重新导入"
-        case .macOffline: return "Mac 不在线。它可能睡眠了，或者没有打开公网接入"
-        case .notAllowed: return "这台设备还不能经公网连接。请在 Mac 的 设置 › 远程控制 里勾选它"
-        case .notConfigured: return "还没有配置中继服务器"
+        case .rejected: return "中继没有接受这份配置（成员密钥不对、配置不属于这台中继，或版本不一致），需要重新导入"
+        case .macOffline: return "Mac 不在线。它可能已睡眠，或者没有打开「允许经公网接入」"
+        case .notAllowed: return "这台设备还不能经公网连接。在 Mac 的「设置 › 远程控制」里的「允许经公网连接的设备」中勾选它"
+        case .notConfigured: return "还没有配置中继"
         }
     }
 
     private static func describe(_ reason: String) -> String {
         switch reason {
-        case "full": return "中继服务器已满"
+        case "full": return "中继已满"
         case "offline": return "Mac 不在线"
-        case "hostKey": return "这台 Mac 在中继上的身份对不上。如果重装过，请在服务器上运行 uterm-relay forget"
+        case "hostKey": return "这台 Mac 在中继上登记的身份不一致。如果重装过 uTerm，在中继所在的主机上运行 uterm-relay forget"
         case "ticket": return "Mac 没有及时响应"
-        default: return "中继服务器拒绝了连接（\(reason)）"
+        default: return "中继拒绝了连接（\(reason)）"
         }
     }
 }

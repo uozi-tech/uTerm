@@ -516,7 +516,7 @@ final class RemoteMacClient: Identifiable {
             if let sessionID = result.sessionID {
                 waiter.resume(returning: sessionID)
             } else {
-                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 没能打开本机终端"))
+                waiter.resume(throwing: RemoteAttachError.rejected(result.error ?? "Mac 无法打开本机终端"))
             }
         case .localWorkspaces:
             guard let workspaces = try? RemoteJSON.decode(RemoteLocalWorkspaces.self, from: message.payload),
@@ -577,10 +577,10 @@ final class RemoteMacClient: Identifiable {
     /// SSH 会话传成了服务器上的文件（`.file`，路径由调用方粘进终端）。
     func sendTerminalImage(_ image: TerminalImage, over attachment: RemoteAttachment) async throws -> TerminalImageDelivery {
         guard supportsTerminalImage else {
-            throw TerminalImageError.unsupported("这台 Mac 上的 uTerm 版本太旧，不能往终端里贴图片。请把 Mac 上的 uTerm 更新到最新版")
+            throw TerminalImageError.unsupported("这台 Mac 上的 uTerm 版本太旧，不支持往终端里贴图片。把 Mac 上的 uTerm 更新到最新版后再试")
         }
         guard image.data.count <= RemoteTerminalImageRequest.maxImageBytes else {
-            throw TerminalImageError.unsupported("图片太大了")
+            throw TerminalImageError.unsupported("图片太大")
         }
         // 重连的空档里调用方手上可能还是旧连接的接入：发出去不会有回音，断开时也不会被收尾（只认当前连接）。
         guard attachment.link === link else { throw RemoteProtocolError.closed }
@@ -609,7 +609,7 @@ final class RemoteMacClient: Identifiable {
             throw connectionFailure
         }
         guard supportsLocalShell else {
-            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。请把 Mac 上的 uTerm 更新到最新版")
+            throw RemoteAttachError.rejected("这台 Mac 上的 uTerm 版本太旧，不能新建本机终端。把 Mac 上的 uTerm 更新到最新版后再试")
         }
         let requestID = UUID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UUID, Error>) in
@@ -675,7 +675,7 @@ nonisolated enum RemoteDesktopError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .macTooOld: return "这台 Mac 上的 uTerm 版本太旧，不支持远程桌面。请把 Mac 上的 uTerm 更新到最新版"
+        case .macTooOld: return "这台 Mac 上的 uTerm 版本太旧，不支持远程桌面。把 Mac 上的 uTerm 更新到最新版后再试"
         }
     }
 }

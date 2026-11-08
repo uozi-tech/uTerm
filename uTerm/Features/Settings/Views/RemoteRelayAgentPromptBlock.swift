@@ -30,7 +30,7 @@ struct RemoteRelayAgentPromptBlock: View {
                 SettingsInlineNote(tone: .warning, text: text)
             }
             if !missingPrerequisites.isEmpty {
-                SettingsRow(label: "命令行与技能", hint: "在那一页打开两个开关、给你用的 AI 工具装上 uterm 技能") {
+                SettingsRow(label: "命令行与技能", hint: "打开「启用命令行接口」与「允许执行命令与写入」，并给所用的 AI 工具安装 uterm 技能") {
                     UDButton(title: "前往", style: .secondary) {
                         UserDefaults.standard.set(SettingsSection.cli.rawValue, forKey: SettingsTabSelection.key)
                     }
@@ -55,12 +55,12 @@ struct RemoteRelayAgentPromptBlock: View {
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(UD.inputBg))
                 HStack {
-                    Text("贴给 Claude Code、Codex 等装了 uterm 技能的 AI 工具。提示词里没有密钥，配置由 uTerm 自己从服务器读取。")
+                    Text("贴给 Claude Code、Codex 等装了 uterm 技能的 AI 工具。提示词里没有密钥，配置由 uTerm 自己从主机读取。")
                         .font(.system(size: 11.5))
                         .foregroundStyle(UD.text3)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 12)
-                    UDButton(title: copied ? "已复制" : "复制提示词", style: .primary, systemImage: "doc.on.doc") {
+                    UDButton(title: copied ? "已拷贝" : "拷贝提示词", style: .primary, systemImage: "doc.on.doc") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(prompt, forType: .string)
                         copied = true
@@ -99,8 +99,8 @@ struct RemoteRelayAgentPromptBlock: View {
 
     private var missingPrerequisites: [String] {
         var missing: [String] = []
-        if !control.isEnabled { missing.append(String(localized: "命令行接口没有启用：AI 工具连不上 uTerm。")) }
-        if !control.allowMutations { missing.append(String(localized: "「允许执行命令与写入」没有打开：AI 没法在主机上安装，也没法导入配置。")) }
+        if !control.isEnabled { missing.append(String(localized: "命令行接口没有启用：AI 工具无法连接 uTerm。")) }
+        if !control.allowMutations { missing.append(String(localized: "「允许执行命令与写入」未打开：AI 无法在主机上安装中继，也无法导入配置。")) }
         let installed = skills.availableTargets.contains { skills.status(for: $0) == .installed }
         if skills.didLoad, !installed { missing.append(String(localized: "还没有给任何 AI 工具安装 uterm 技能。")) }
         return missing

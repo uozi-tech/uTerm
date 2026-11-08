@@ -24,7 +24,7 @@ struct ProviderEditView: View {
     /// "Only unstyled text can be used with help(_:)"
     /// 已知 String 类型走 StringProtocol overload 跳过 markdown 解析。
     private let baseURLHelpText: String =
-        "不含路径段。OpenAI-兼容端点按同样规则填，如 https://api.deepseek.com、http://localhost:11434。"
+        "只填到域名（和端口），不含 /v1 等路径。OpenAI 兼容端点同理，如 https://api.deepseek.com、http://localhost:11434。"
 
     /// Base URL 必填；远程端点须 HTTPS，loopback 开发服务可用 HTTP。
     private var baseURLError: String? {
@@ -68,7 +68,7 @@ struct ProviderEditView: View {
             }
 
             SettingsGroup(title: "API Key", footer: keyFootnote) {
-                SettingsRow(label: "密钥") {
+                SettingsRow(label: "API Key") {
                     HStack(spacing: 8) {
                         UDTextField(
                             placeholder: "粘贴新 Key",
@@ -78,7 +78,7 @@ struct ProviderEditView: View {
                         )
                         .frame(minWidth: 140, maxWidth: 280)
                         .accessibilityLabel("API Key")
-                        .accessibilityValue(draft.canSaveKey ? "已输入新 key" : "未输入")
+                        .accessibilityValue(draft.canSaveKey ? "已输入新 Key" : "未输入")
                         UDButton(title: "保存", style: .primary) { draft.saveKey() }
                             .disabled(!draft.canSaveKey)
                     }
@@ -93,7 +93,7 @@ struct ProviderEditView: View {
 
             SettingsGroup(title: "诊断",
                           footer: String(localized: "在 Agent 输入区的模型菜单里切换模型 —— 那里列出所有服务的全部可用模型（取自各自的 /v1/models）。")) {
-                SettingsRow(label: "测试连接", hint: String(localized: "用当前地址与 Key 拉一次模型列表")) {
+                SettingsRow(label: "测试连接", hint: String(localized: "用上面的 Base URL 与 API Key 请求一次模型列表")) {
                     HStack(spacing: 10) {
                         if draft.testInFlight {
                             UDIndeterminateBar()
@@ -119,8 +119,8 @@ struct ProviderEditView: View {
 
     private var keyFootnote: String {
         draft.hasKey
-            ? String(localized: "钥匙串里已有 Key。粘贴新 Key 并保存会替换它。")
-            : String(localized: "尚未设置 Key。粘贴后点「保存」写入钥匙串。")
+            ? String(localized: "钥匙串里已有 API Key。粘贴新 Key 并保存会替换它。")
+            : String(localized: "尚未设置 API Key。粘贴后点「保存」写入钥匙串。")
     }
 
     /// kind 改时若 baseURL 是另一 kind 的预置，自动同步过来；用户已自定义的 baseURL 不动。

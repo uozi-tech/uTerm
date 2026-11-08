@@ -51,7 +51,7 @@ struct RemotePairingScanner: View {
                         return true
                     }
                     .ignoresSafeArea()
-                    Text(note ?? "对准 Mac 上 设置 › 远程控制 › 扫码配对 的二维码")
+                    Text(note ?? "对准 Mac 上「设置 › 远程控制 › 扫码配对」中的二维码")
                         .font(M.sans(14, weight: .medium))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
@@ -64,7 +64,7 @@ struct RemotePairingScanner: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         default:
             VStack(spacing: 16) {
-                message("没有相机权限，请在系统设置里允许 uTerm 使用相机")
+                message("uTerm 没有相机权限。前往「设置」允许 uTerm 访问相机。")
                 MBtn(title: "打开设置", kind: .primary, height: 42) {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                 }

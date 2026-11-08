@@ -20,7 +20,7 @@ struct HostKeyPromptView: View {
                 Label("主机密钥已变化", systemImage: "exclamationmark.triangle.fill")
                     .font(.headline)
                     .foregroundStyle(UD.danger)
-                Text("\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。这可能是服务器重装，也可能是中间人攻击。")
+                Text("\(challenge.host):\(String(challenge.port)) 出示的主机密钥与已信任的不同。这可能是主机重装过系统，也可能是中间人攻击。")
                     .foregroundStyle(UD.danger)
                 if let old = challenge.oldFingerprint {
                     fingerprintRow("已信任", old)

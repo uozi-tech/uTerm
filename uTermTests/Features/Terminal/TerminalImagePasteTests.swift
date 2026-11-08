@@ -160,7 +160,7 @@ final class TerminalImagePasteTests: XCTestCase {
         await connect(ImageBackend(failure: .notConnected))
         XCTAssertTrue(session.pasteImage(uTerm.TerminalImage(format: .png, data: png)))
         try await waitUntil { await MainActor.run { !self.attentions.isEmpty } }
-        XCTAssertEqual(attentions.first?.title, "图片没传过去")
+        XCTAssertEqual(attentions.first?.title, "图片发送失败")
     }
 
     // MARK: ⌃V

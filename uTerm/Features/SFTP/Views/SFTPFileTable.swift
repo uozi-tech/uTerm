@@ -119,7 +119,7 @@ struct SFTPFileTable: View {
                 Rectangle().fill(UD.border).frame(height: 1)
                 Group {
                     if entries.isEmpty && !showParent {
-                        Text(query.isEmpty ? "空目录" : "没有匹配「\(query)」的文件")
+                        Text(query.isEmpty ? "空文件夹" : "没有匹配「\(query)」的文件")
                             .font(.system(size: 13)).foregroundStyle(UD.text4)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {

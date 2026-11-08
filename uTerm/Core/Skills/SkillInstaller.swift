@@ -119,7 +119,7 @@ nonisolated struct SkillInstaller: Sendable {
     var unavailableReason: String? {
         if let reason = Self.transientBundleReason(bundleURL) { return reason }
         guard Self.fileType(at: sourceDirectoryURL.appending(path: "SKILL.md")) == S_IFREG else {
-            return "uTerm.app 里缺少技能文件（\(definition.slug)），请重新安装 uTerm。"
+            return "uTerm.app 里缺少技能文件（\(definition.slug)），重新安装 uTerm 即可。"
         }
         return nil
     }
@@ -134,7 +134,7 @@ nonisolated struct SkillInstaller: Sendable {
             .volumeIsReadOnly == true
         guard readOnly || bundleURL.path.contains("/AppTranslocation/") else { return nil }
         return "uTerm 正从临时位置运行（磁盘映像，或下载后没拖进「应用程序」），"
-            + "请先把 uTerm.app 移到「应用程序」文件夹再安装。"
+            + "先把 uTerm.app 移到「应用程序」文件夹再安装。"
     }
 
     func status(for target: SkillTarget) -> SkillInstallStatus {
@@ -482,7 +482,7 @@ nonisolated struct BinLinkInstaller: Sendable {
             throw SkillInstallError.failed(reason)
         }
         guard SkillInstaller.fileType(at: sourceURL) != nil else {
-            throw SkillInstallError.failed("uTerm.app 里缺少 \(Self.executableName)，请重新安装 uTerm。")
+            throw SkillInstallError.failed("uTerm.app 里缺少 \(Self.executableName)，重新安装 uTerm 即可。")
         }
         switch status() {
         case .installed:

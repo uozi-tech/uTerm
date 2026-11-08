@@ -54,7 +54,7 @@ final class TerminalQuitPolicy {
     private func ask(liveCount: Int) -> Decision {
         let alert = NSAlert()
         alert.messageText = String(localized: "还有 \(liveCount) 个终端在运行")
-        alert.informativeText = String(localized: "保留的话，里面的程序继续运行，下次打开 uTerm 时自动接回。")
+        alert.informativeText = String(localized: "选择保留，终端里的程序会继续运行，下次打开 uTerm 时自动接回。")
         alert.addButton(withTitle: String(localized: "保留并退出"))
         alert.addButton(withTitle: String(localized: "全部结束并退出"))
         alert.addButton(withTitle: String(localized: "取消"))

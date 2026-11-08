@@ -95,7 +95,7 @@ struct QuickCommandDetail: View {
     private var targetSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                sectionLabel("目标服务器")
+                sectionLabel("目标主机")
                 if serverCount > 1 { QCParallelTag() }
                 Spacer()
                 Text("\(serverCount) 台")
@@ -155,7 +155,7 @@ struct QuickCommandDetail: View {
             Text("运行中…").font(.system(size: 10.5)).foregroundStyle(UD.text4)
         case .done(let ok, let code, let ms):
             let duration = UFormat.duration(milliseconds: Double(ms))
-            Text(ok ? "退出码 \(code ?? 0) · \(duration)" : (code == nil ? "连接失败" : "退出码 \(code!) · \(duration)"))
+            Text(ok ? "退出码 \(code ?? 0) · \(duration)" : (code == nil ? "连接失败或超时" : "退出码 \(code!) · \(duration)"))
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(ok ? UD.text4 : UD.danger)
         }
@@ -242,7 +242,7 @@ struct QuickCommandDetail: View {
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(UD.panelHi))
 
             Button(action: copy) {
-                Text(copied ? "已复制" : "复制")
+                Text(copied ? "已拷贝" : "拷贝")
                     .font(.system(size: 10.5))
                     .foregroundStyle(copied ? UD.success : UD.text3)
                     .padding(.horizontal, 8)
@@ -264,7 +264,7 @@ struct QuickCommandDetail: View {
             metaCell("执行方式", serverCount > 1 ? "并行 · \(serverCount) 台" : "单台")
             metaCell("上次运行", UTermFormat.relative(command.lastRunAt))
             metaCell("运行次数", "\(command.runCount)", mono: true)
-            metaCell("AI 介入", command.aiAssisted ? "已开启" : "关闭",
+            metaCell("AI 介入", command.aiAssisted ? "已开启" : "已关闭",
                      valueColor: command.aiAssisted ? UD.aiAccent : UD.text)
         }
     }

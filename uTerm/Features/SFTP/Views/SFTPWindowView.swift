@@ -48,7 +48,7 @@ struct SFTPWindowView: View {
         if windowID != nil, let server {
             sftpBody(server: server)
         } else {
-            placeholder(windowID == nil ? "正在恢复…" : "服务器已删除",
+            placeholder(windowID == nil ? "正在恢复…" : "主机已删除",
                         systemImage: windowID == nil ? "clock" : "server.rack")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)
@@ -261,8 +261,8 @@ struct SFTPTabBar: View {
                     }
                     .buttonStyle(.plain)
                     .iconButtonHover(cornerRadius: 6)
-                    .help("新建 SFTP 标签")
-                    .accessibilityLabel(Text("新建 SFTP 标签"))
+                    .help("新建 SFTP 标签页")
+                    .accessibilityLabel(Text("新建 SFTP 标签页"))
                     .padding(.leading, 4)
                 }
                 // 胶囊比卡片轮廓 / 投影多出 1–2pt，留出来别被 ScrollView 裁掉。

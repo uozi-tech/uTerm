@@ -218,7 +218,7 @@ struct ServerList: View {
         // WelcomeView 的本地监听抢先消费，故不存在重复触发。
         // 「仅 SFTP」主机禁用终端会话，隐藏「连接」，仅保留 SFTP 浏览入口。
         if !profile.sftpOnly {
-            Button("连接") { onContextAction(.connect, profile) }
+            Button("在工作区打开") { onContextAction(.connect, profile) }
                 .keyboardShortcut(.return, modifiers: [])
             Button("在终端中打开") { onContextAction(.openTerminalWindow, profile) }
                 .keyboardShortcut(.return, modifiers: .option)
@@ -231,7 +231,7 @@ struct ServerList: View {
         }
         Button("编辑…") { onContextAction(.edit, profile) }
             .keyboardShortcut("e", modifiers: .command)
-        Button("复制为新服务器…") { onContextAction(.duplicate, profile) }
+        Button("复制为新主机…") { onContextAction(.duplicate, profile) }
             .keyboardShortcut("d", modifiers: .command)
         Menu("移动到分组") {
             ForEach(existingGroups, id: \.self) { g in

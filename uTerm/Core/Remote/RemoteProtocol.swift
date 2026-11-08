@@ -243,17 +243,17 @@ nonisolated enum RemoteProtocolError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .malformedMessage: return "远控消息格式无效"
-        case .unknownMessage(let kind): return "未知的远控消息类型 \(kind)"
-        case .frameTooLarge(let bytes): return "远控数据帧过大（\(bytes) 字节）"
-        case .versionMismatch(let version): return "远控协议版本不兼容（对端 \(version)，本机 \(RemoteConstants.protocolVersion)），请把两端更新到同一版本"
-        case .handshakeFailed(let reason): return "远控握手失败：\(reason)"
-        case .decryptionFailed: return "远控数据校验失败，连接已断开"
-        case .peerIdentityChanged: return "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，请在手机上移除后重新配对"
+        case .malformedMessage: return "远程控制消息格式无效"
+        case .unknownMessage(let kind): return "未知的远程控制消息类型 \(kind)"
+        case .frameTooLarge(let bytes): return "远程控制数据帧过大（\(bytes) 字节）"
+        case .versionMismatch(let version): return "远程控制协议版本不兼容（对端 \(version)，本机 \(RemoteConstants.protocolVersion)），把两端的 uTerm 更新到同一版本"
+        case .handshakeFailed(let reason): return "远程控制握手失败：\(reason)"
+        case .decryptionFailed: return "远程控制数据校验失败，连接已断开"
+        case .peerIdentityChanged: return "这台 Mac 的身份与配对时不一致，已拒绝连接。若重装过 uTerm，在手机上移除这台 Mac 后重新配对"
         case .notPaired: return "这台设备尚未配对"
         case .pairingRejected: return "Mac 拒绝了配对请求"
-        case .timeout: return "远控连接超时"
-        case .closed: return "远控连接已断开"
+        case .timeout: return "远程控制连接超时"
+        case .closed: return "远程控制已断开"
         }
     }
 

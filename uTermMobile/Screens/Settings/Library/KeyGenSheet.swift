@@ -24,7 +24,7 @@ struct KeyGenSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("私钥保存在钥匙串，永不离开本机；公钥可一键复制到服务器。")
+                    Text("私钥保存在钥匙串，开启 iCloud 钥匙串后会同步到你的其他设备；拷贝公钥后，把它添加到主机的 ~/.ssh/authorized_keys。")
                         .font(M.sans(13)).foregroundStyle(M.text3).lineSpacing(2)
 
                     MField(label: "名称", hint: "在 uTerm 内引用") {

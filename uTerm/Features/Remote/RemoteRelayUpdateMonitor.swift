@@ -85,7 +85,7 @@ final class RemoteRelayUpdateMonitor {
     static func postNotification(running: String, latest: String) {
         let content = UNMutableNotificationContent()
         content.title = String(localized: "中继有新版本 \(latest)")
-        content.body = String(localized: "你的中继服务器还在用 \(running)。到 设置 › 远程控制 可以一键更新。")
+        content.body = String(localized: "你的中继仍在运行 \(running)，可以在「设置 › 远程控制」里一键更新。")
         content.userInfo = [notificationKey: latest]
         let request = UNNotificationRequest(identifier: notificationID, content: content, trigger: nil)
         Task {

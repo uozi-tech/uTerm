@@ -24,7 +24,7 @@ final class RemoteControlPresentationTests: XCTestCase {
         XCTAssertEqual(RemoteControlPresentation.helperDisplay(.ok("1.0")),
                        .badge(symbol: "checkmark.circle.fill", tone: .success, label: "正常"))
         XCTAssertEqual(RemoteControlPresentation.helperDisplay(.failed("x")),
-                       .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: "连不上"))
+                       .badge(symbol: "exclamationmark.triangle.fill", tone: .danger, label: "无法连接"))
         XCTAssertEqual(RemoteControlPresentation.helperHint(.failed("连不上 XPC")), "连不上 XPC")
         XCTAssertTrue(RemoteControlPresentation.helperHint(.unknown).contains("辅助程序"))
     }
@@ -33,7 +33,7 @@ final class RemoteControlPresentationTests: XCTestCase {
         XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(nil), "正在连接")
         XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.connecting), "正在连接")
         XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.registered), "已连接中继")
-        XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.failed("x")), "连不上")
+        XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.failed("x")), "无法连接")
         XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.superseded), "被其他设备顶替")
         XCTAssertEqual(RemoteControlPresentation.relayStatusLabel(.stopped), "已停止")
 

@@ -1186,7 +1186,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1225,7 +1225,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "uTermMobile-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = uTerm;
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用 Face ID 解锁应用，保护你的服务器与密钥信息。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "uTerm 使用面容 ID 解锁应用，并在远程解锁 Mac 时取用你保存的登录密码。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

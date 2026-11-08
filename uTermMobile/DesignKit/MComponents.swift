@@ -489,7 +489,7 @@ struct MCopyField: View {
                 done = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { done = false }
             } label: {
-                Text(done ? "已复制" : "复制")
+                Text(done ? "已拷贝" : "拷贝")
                     .font(M.sans(11.5))
                     .foregroundStyle(done ? M.success : M.text3)
                     .padding(.horizontal, 10).frame(height: 26)

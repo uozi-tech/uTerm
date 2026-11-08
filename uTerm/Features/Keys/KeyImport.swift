@@ -22,9 +22,9 @@ enum KeyImport {
         var message: String {
             switch self {
             case .publicKeyPasted:
-                return "这是公钥（.pub），不是私钥。请粘贴 -----BEGIN … PRIVATE KEY----- 开头的私钥内容。"
+                return "这是公钥（.pub），不是私钥。粘贴 -----BEGIN … PRIVATE KEY----- 开头的私钥内容。"
             case .needsPassphrase:
-                return "此私钥已加密，请填写口令后再导入。"
+                return "此私钥已加密，填写口令后再导入。"
             case .duplicate(let existingName):
                 return "密钥库里已有这把密钥：「\(existingName)」。"
             case .failed(let message):
@@ -42,7 +42,7 @@ enum KeyImport {
         existingKeys: [SSHKey],
         keyStore: KeyStore = KeyStore()
     ) async -> Result<SSHKey, Failure> {
-        guard !text.isEmpty else { return .failure(.failed("请先粘贴或读取私钥内容")) }
+        guard !text.isEmpty else { return .failure(.failed("先粘贴或读取私钥内容")) }
         if KeyPasteText.isPublicKeyLine(text) { return .failure(.publicKeyPasted) }
         let pass: String? = passphrase.isEmpty ? nil : passphrase
 
@@ -86,7 +86,7 @@ enum KeyImport {
             for: NSError(domain: "uTerm.keys", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "无法读取私钥文件",
                 NSLocalizedFailureReasonErrorKey: "读取 \(fileName) 时失败：\(FriendlyError.describe(error))",
-                NSLocalizedRecoverySuggestionErrorKey: "请确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
+                NSLocalizedRecoverySuggestionErrorKey: "确认文件仍存在、当前用户有读取权限，并且它是文本格式的 SSH 私钥。",
             ]),
             fallback: "无法读取私钥文件"
         )
@@ -101,7 +101,7 @@ enum KeyImport {
             throw NSError(domain: "uTerm.keys", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "无法加入密钥库",
                 NSLocalizedFailureReasonErrorKey: "私钥解析成功，但无法生成密钥库所需的公钥或指纹元数据。",
-                NSLocalizedRecoverySuggestionErrorKey: "请确认密钥算法为 RSA、Ed25519 或 ECDSA；如果仍失败，可用 ssh-keygen -y -f <key> 检查该私钥。",
+                NSLocalizedRecoverySuggestionErrorKey: "确认密钥算法为 RSA、Ed25519 或 ECDSA；如果仍失败，可用 ssh-keygen -y -f <key> 检查该私钥。",
             ])
         }
     }

@@ -16,7 +16,7 @@ nonisolated enum RemoteDesktopPasteSource {
             switch self {
             case .empty: return "剪贴板里没有图片或文字"
             case .noImage: return "剪贴板里没有图片"
-            case .unreadableImage: return "这张图片读不出来"
+            case .unreadableImage: return "无法读取这张图片"
             case .textTooLong: return "文字太长，一次最多粘贴约 3.8 MB"
             }
         }

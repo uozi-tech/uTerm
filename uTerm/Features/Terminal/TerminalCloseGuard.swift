@@ -30,7 +30,7 @@ enum TerminalCloseGuard {
         }
         Task {
             await probe.probe(ObjectIdentifier(session), activity: session.foregroundActivity) { prompt in
-                if let prompt, await !confirm(prompt, action: "关闭标签", in: window) { return }
+                if let prompt, await !confirm(prompt, action: "关闭标签页", in: window) { return }
                 close()
             }
         }

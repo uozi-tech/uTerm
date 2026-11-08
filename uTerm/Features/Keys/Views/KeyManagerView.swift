@@ -226,7 +226,7 @@ private struct KeyRow: View {
                         Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(UD.text4)
                     }
                 }
-                Text("\(key.typeLabel) · \(hostCount) 主机")
+                Text("\(key.typeLabel) · \(hostCount) 台主机")
                     .font(UD.mono(11)).foregroundStyle(UD.text4).lineLimit(1)
             }
             Spacer(minLength: 0)

@@ -60,15 +60,15 @@ nonisolated enum ProviderModelCatalog {
     static func message(for error: Error) -> String {
         switch error as? LLMClientError {
         case .httpError(401, _), .httpError(403, _):
-            return "认证失败，请检查 API Key"
+            return "认证失败，检查 API Key"
         case .httpError(404, _):
             return "该端点没有 /v1/models 模型列表接口，检查 Base URL"
         case .httpError(429, _):
-            return "请求过于频繁，请稍后再试"
+            return "请求过于频繁，稍后再试"
         case .httpError(let status, let body):
             return body.isEmpty ? "HTTP \(status)" : "HTTP \(status)：\(body.prefix(120))"
         case .invalidResponse:
-            return "服务器返回了无法解析的模型列表"
+            return "模型服务返回了无法解析的模型列表"
         default:
             return "获取失败：\(FriendlyError.describe(error))"
         }

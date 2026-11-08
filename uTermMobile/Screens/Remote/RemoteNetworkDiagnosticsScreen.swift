@@ -70,7 +70,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
     @ViewBuilder private var targetGroup: some View {
         let macs = candidates
         MInsetGroup(header: "检测哪台 Mac",
-                    footer: macs.isEmpty ? "还没有配对过的 Mac。先在同一个局域网里连一次。" : nil) {
+                    footer: macs.isEmpty ? "还没有配对过的 Mac。同一 Apple ID 的 Mac 会自动出现，其他 Mac 可以扫码配对。" : nil) {
             if macs.isEmpty {
                 MInsetRow(icon: "mac", label: "没有可检测的 Mac", last: true)
             } else {
@@ -97,7 +97,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
     private var environmentGroup: some View {
         MInsetGroup(header: "这台手机") {
             MInsetRow(icon: "globe", label: "网络", value: network)
-            MInsetRow(icon: "link", label: "中继服务器", value: relayName ?? "未配置", last: !directory.internetOnly)
+            MInsetRow(icon: "link", label: "中继", value: relayName ?? "未配置", last: !directory.internetOnly)
             if directory.internetOnly {
                 MInsetRow(icon: "forward", label: "只走公网", value: "已打开", last: true)
             }
@@ -134,7 +134,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
         guard current.count < currentTotal, !modes.isEmpty else { return "收尾中…" }
         let index = current.count
         let round = rounds > 1 ? "第 \(index / modes.count + 1) 轮 · " : ""
-        return "\(round)正在测\(modes[index % modes.count].label)（\(index + 1)/\(currentTotal)）"
+        return "\(round)正在测试\(modes[index % modes.count].label)（\(index + 1)/\(currentTotal)）"
     }
 
     private func run() {
@@ -206,7 +206,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
 
     private var settingsGroup: some View {
         MInsetGroup(header: "检测设置", footer: showsSettings
-                    ? "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经服务器转发。每条路都只走自己，"
+                    ? "局域网走 Bonjour 找到的地址；IPv6 / IPv4 直连只用公网地址打洞；中继经你自建的中继转发。每条路径单独测试，"
                         + "插着数据线、连着同一个 Wi-Fi 都不影响结果。"
                     : nil) {
             MInsetRow(label: "测试项与轮数", value: settingsSummary, last: !showsSettings,
@@ -217,7 +217,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
                 ForEach(RemotePathProbeMode.allCases, id: \.self) { mode in
                     MInsetRow(label: mode.label, trailing: AnyView(MSwitch(on: modeBinding(mode))))
                 }
-                MInsetRow(label: "每条路跑几轮", trailing: AnyView(
+                MInsetRow(label: "每条路径的轮数", trailing: AnyView(
                     Stepper("\(rounds) 轮", value: $rounds, in: 1...10).fixedSize()
                         .font(M.sans(14)).foregroundStyle(M.text2)))
                 HStack(spacing: 12) {
@@ -271,16 +271,16 @@ private struct RemotePathVerdictRow: View {
     }
 
     private var title: String {
-        guard let chosen else { return untested.isEmpty ? "这台 Mac 现在连不上" : "测过的路都不通" }
+        guard let chosen else { return untested.isEmpty ? "现在无法连接这台 Mac" : "测试过的路径都不通" }
         return "实际会走\(chosen.mode.label)"
     }
 
     private var detail: String {
-        let notTested = untested.isEmpty ? "" : "这次没测\(untested.map(\.label).joined(separator: "、"))（在「检测设置」里打开）。"
-        guard let chosen else { return "看下面每条路的原因。\(notTested)" }
+        let notTested = untested.isEmpty ? "" : "这次未测试\(untested.map(\.label).joined(separator: "、"))（在「检测设置」中打开）。"
+        guard let chosen else { return "各路径的失败原因见下方。\(notTested)" }
         let latency = chosen.medianRoundTripMillis.map { String(format: "往返约 %.0f ms", $0) } ?? "往返未测出"
         let skip = skipsLocalNetwork ? "「只走公网」已打开，正式连接会跳过局域网。" : ""
-        return "连接按局域网 → 直连 → 中继的顺序挑第一条通的，\(latency)。\(skip)\(notTested)"
+        return "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，\(latency)。\(skip)\(notTested)"
     }
 }
 
@@ -319,7 +319,7 @@ struct RemotePathSummaryRow: View {
             }
             if summary.successes > 0 {
                 HStack(spacing: 0) {
-                    metric("建立", summary.medianSetupMillis.map { "\($0)ms" })
+                    metric("建立", summary.medianSetupMillis.map { "\($0) ms" })
                     metric("往返", Self.millis(summary.medianRoundTripMillis))
                     metric("p95", Self.millis(summary.medianP95Millis))
                     metric("丢包", summary.meanLossPercent.map { "\($0)%" })
@@ -342,7 +342,7 @@ struct RemotePathSummaryRow: View {
     }
 
     static func millis(_ value: Double?) -> String? {
-        value.map { $0 < 10 ? String(format: "%.1fms", $0) : String(format: "%.0fms", $0) }
+        value.map { $0 < 10 ? String(format: "%.1f ms", $0) : String(format: "%.0f ms", $0) }
     }
 }
 
@@ -379,7 +379,7 @@ struct RemotePathHistoryScreen: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 MMenu {
-                    Button(copied ? "已复制" : "复制全部", systemImage: "doc.on.doc", action: copyAll)
+                    Button(copied ? "已拷贝" : "拷贝全部", systemImage: "doc.on.doc", action: copyAll)
                     Button("清空", systemImage: "trash", role: .destructive) { confirmsClear = true }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -438,7 +438,7 @@ enum RemoteNetworkLabel {
                 if path.usesInterfaceType(.wifi) {
                     parts.append("Wi-Fi")
                 } else if path.usesInterfaceType(.cellular) {
-                    parts.append("蜂窝")
+                    parts.append("蜂窝网络")
                 } else if path.usesInterfaceType(.wiredEthernet) {
                     parts.append("有线")
                 } else {

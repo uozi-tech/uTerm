@@ -165,7 +165,7 @@ struct GlobalForwardingWindowView: View {
                 .font(.system(size: 28)).foregroundStyle(UD.text4)
             Text("还没有端口转发规则")
                 .font(.system(size: 14)).foregroundStyle(UD.text2)
-            Text("在某台主机的「端口转发」窗口里新建规则，再回到这里统一管理与自启。")
+            Text("点「新建」选一台主机，添加第一条转发规则。")
                 .font(.system(size: 11.5)).foregroundStyle(UD.text4)
                 .multilineTextAlignment(.center)
         }
