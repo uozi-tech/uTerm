@@ -147,9 +147,54 @@ final class RemoteAudioTests: XCTestCase {
     private func chunk(_ value: Float) -> [Float] { Array(repeating: value, count: 960 * 2) }
     private let ms: UInt64 = 1_000_000
 
+    /// 稳态下的直连配置（起步深度 = 下限），测的是开流之后的行为。
+    private var steadyDirect: RemoteAudioJitterBuffer.Config {
+        var config = RemoteAudioJitterBuffer.Config.direct
+        config.startupTargetNanos = config.minimumTargetNanos
+        return config
+    }
+
+    /// 按实时节拍模拟：每 10 ms 拉一次 480 个采样，把那之前到达的包放进去。返回计数。
+    private func simulate(_ config: RemoteAudioJitterBuffer.Config, packets: Int,
+                          arrival: (Int) -> UInt64) -> (RemoteAudioJitterBuffer.Counters, [UInt64]) {
+        var buffer = RemoteAudioJitterBuffer(config: config)
+        var next = 0
+        var targets: [UInt64] = []
+        var now: UInt64 = 0
+        while now <= arrival(packets - 1) {
+            while next < packets, arrival(next) <= now {
+                buffer.insert(sequence: UInt32(next), captureNanos: UInt64(next) * 20 * ms, samples: chunk(0.5),
+                              arrivalNanos: arrival(next))
+                next += 1
+            }
+            _ = buffer.pull(frames: 480)
+            targets.append(buffer.targetNanos)
+            now += 10 * ms
+        }
+        return (buffer.counters, targets)
+    }
+
+    /// 刚开流：声音和视频的第一个关键帧挤在一起，开头几包成串晚到 90 ms。从下限 40 ms 起步会欠载、补洞
+    /// （真机上「刚连上时会抖」）；起步先缓 120 ms 就不会。之后链路平稳，2 秒后目标慢慢收回下限附近。
+    func test_jitter_buffer_starts_deep_so_the_first_burst_does_not_stutter() {
+        // 第 3–8 包被关键帧压住，一起晚到 90 ms；之后按节拍到达（10 ms 传输）。
+        let ms = self.ms
+        let arrival: (Int) -> UInt64 = { index in
+            let base = UInt64(index) * 20 * ms + 10 * ms
+            return (3...8).contains(index) ? max(base, 8 * 20 * ms + 100 * ms) : base
+        }
+        let (steady, _) = simulate(steadyDirect, packets: 50, arrival: arrival)
+        XCTAssertGreaterThan(steady.underruns + steady.concealed, 0, "从下限起步应当会抖：\(steady)")
+        let (startup, targets) = simulate(.direct, packets: 600, arrival: arrival)
+        XCTAssertEqual(startup.underruns, 0, "\(startup)")
+        XCTAssertEqual(startup.concealed, 0, "\(startup)")
+        XCTAssertGreaterThanOrEqual(targets[150], 120 * ms, "头 2 秒不往下收")
+        XCTAssertLessThanOrEqual(try XCTUnwrap(targets.last), 60 * ms, "平稳之后收回下限附近")
+    }
+
     /// 按 20 ms 节拍到达、抖动为 0：缓到目标深度才开始放，之后逐包放出、不补洞不丢包。
     func test_jitter_buffer_waits_for_target_then_plays_in_order() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         XCTAssertEqual(buffer.targetNanos, 40 * ms)
         buffer.insert(sequence: 0, captureNanos: 0, samples: chunk(0.1), arrivalNanos: 5 * ms)
         // 只有 20 ms，不够 40 ms：出静音。
@@ -171,7 +216,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// 中间丢一包：轮到它时补一包静音，接着放后面的。
     func test_jitter_buffer_conceals_missing_packet() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in [0, 1, 2, 4, 5] as [UInt32] {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
                           arrivalNanos: UInt64(sequence) * 20 * ms)
@@ -188,7 +233,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// Mac 说过是静音的那段，空着不算补洞。
     func test_jitter_buffer_does_not_count_announced_silence_as_concealment() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in [0, 1, 2] as [UInt32] {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
                           arrivalNanos: UInt64(sequence) * 20 * ms)
@@ -202,7 +247,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// 缓冲整个放空：回到缓冲中，等够深度再放；中间只出静音，不重复旧声音。
     func test_jitter_buffer_rebuffers_after_underrun() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in 0..<3 as Range<UInt32> {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
                           arrivalNanos: UInt64(sequence) * 20 * ms)
@@ -218,7 +263,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// Mac 停发静音（只报了「到这里都是静音」）导致缓冲放空：这是正常的停顿，不算欠载。
     func test_jitter_buffer_does_not_count_announced_silence_as_underrun() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in 0..<3 as Range<UInt32> {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
                           arrivalNanos: UInt64(sequence) * 20 * ms)
@@ -284,7 +329,7 @@ final class RemoteAudioTests: XCTestCase {
     /// 积压超过目标 + 60 ms：丢包追上，先丢静音包。到达很平稳（目标停在 40 ms），是播放这边卡了一阵、
     /// 攒下了 120 ms（两端时钟漂移攒久了也是这样）：超出 20 ms，正好丢一包。
     func test_jitter_buffer_drops_quiet_packets_first_when_backlogged() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in 0..<6 as Range<UInt32> {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms,
                           samples: chunk(sequence == 3 ? 0 : 0.5), arrivalNanos: UInt64(sequence) * 20 * ms + 10 * ms)
@@ -299,7 +344,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// 播放开始前已经攒了很多包（拉取晚开始），之后按 10 ms 拉 480 个采样、包按 20 ms 到：先丢包追上，然后逐包放。
     func test_jitter_buffer_catches_up_then_plays_with_half_packet_pulls() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         var now: UInt64 = 0
         for sequence in 0..<100 as Range<UInt32> {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
@@ -323,7 +368,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// 积压里有洞（真丢了的包）：追积压时播放位置要跳过洞，不能卡在洞上把后面的包一个个丢光。
     func test_jitter_buffer_catches_up_across_a_hole() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         for sequence in 0..<60 as Range<UInt32> where sequence != 30 {
             buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
                           arrivalNanos: UInt64(sequence) * 20 * ms + 5 * ms)
@@ -344,7 +389,7 @@ final class RemoteAudioTests: XCTestCase {
 
     /// 到达有抖动时目标会升（不超过上限），抖动过去后慢慢降回去。
     func test_jitter_buffer_target_follows_arrival_jitter() {
-        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
         // 每 5 包有一包晚到 90 ms。
         for sequence in 0..<100 as Range<UInt64> {
             let late: UInt64 = sequence % 5 == 0 ? 90 * ms : 0

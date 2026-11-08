@@ -17,15 +17,21 @@ nonisolated struct RemoteAudioJitterBuffer {
         /// 目标深度的下限与上限。
         var minimumTargetNanos: UInt64
         var maximumTargetNanos: UInt64
+        /// 刚开流时的目标深度：这时还没有到达的读数，声音又正好和视频的第一个关键帧一起挤在链路上，
+        /// 从下限起步会一连欠载好几次（真机上「刚连上时会抖」）。先缓深一点，`startupHoldNanos` 之后再按读数往下收。
+        var startupTargetNanos: UInt64
+        var startupHoldNanos: UInt64 = 2_000_000_000
         /// 超出目标多少才丢包追上。
         var dropSlackNanos: UInt64 = 60_000_000
         /// 估计波动看最近多久的到达。
         var windowNanos: UInt64 = 3_000_000_000
 
         /// 直连与局域网：往返短、抖动小。
-        static let direct = Config(minimumTargetNanos: 40_000_000, maximumTargetNanos: 150_000_000)
+        static let direct = Config(minimumTargetNanos: 40_000_000, maximumTargetNanos: 150_000_000,
+                                   startupTargetNanos: 120_000_000)
         /// TCP 中继：关键帧前后的排队会让包成串晚到。
-        static let relay = Config(minimumTargetNanos: 80_000_000, maximumTargetNanos: 300_000_000)
+        static let relay = Config(minimumTargetNanos: 80_000_000, maximumTargetNanos: 300_000_000,
+                                  startupTargetNanos: 200_000_000)
     }
 
     struct Counters: Equatable, Sendable {
@@ -63,13 +69,15 @@ nonisolated struct RemoteAudioJitterBuffer {
     private var fadeIn = 0
     /// 上一次把目标往下调的时刻：只升得快，降得慢。
     private var lastTargetDecrease: UInt64 = 0
+    /// 第一包到达的时刻（本机钟）：起步深度从这时起保持 `startupHoldNanos`。
+    private var firstArrival: UInt64?
 
     private var fadeFrames: Int { max(1, Int(config.sampleRate / 1000)) }
     private var packetNanos: UInt64 { UInt64(Double(config.framesPerPacket) / config.sampleRate * 1e9) }
 
     init(config: Config) {
         self.config = config
-        targetNanos = config.minimumTargetNanos
+        targetNanos = min(config.maximumTargetNanos, max(config.minimumTargetNanos, config.startupTargetNanos))
         lastSample = Array(repeating: 0, count: config.channels)
     }
 
@@ -126,15 +134,18 @@ nonisolated struct RemoteAudioJitterBuffer {
         updateTarget(now: arrivalNanos)
     }
 
-    /// 目标 = 最近到达波动的 p95 + 一包的时长（按包到达，缓冲深度天然会差一包）。升得快、降得慢。
+    /// 目标 = 最近到达波动的 p95 + 一包的时长（按包到达，缓冲深度天然会差一包）。升得快、降得慢；开流头几秒只升不降。
     private mutating func updateTarget(now: UInt64) {
+        let first = firstArrival ?? now
+        firstArrival = first
         guard transits.count >= 5, let fastest = transits.map(\.transit).min() else { return }
         let jitters = transits.map { UInt64(max(0, $0.transit - fastest)) }.sorted()
         let p95 = jitters[min(jitters.count - 1, Int(Double(jitters.count) * 0.95))]
         let wanted = min(config.maximumTargetNanos, max(config.minimumTargetNanos, p95 + packetNanos))
         if wanted > targetNanos {
             targetNanos = wanted
-        } else if wanted < targetNanos, now &- lastTargetDecrease >= 1_000_000_000 {
+        } else if wanted < targetNanos, now &- first >= config.startupHoldNanos,
+                  now &- lastTargetDecrease >= 1_000_000_000 {
             // 每秒最多降 10%：一阵抖动刚过去就收紧，下一阵来时又会欠载。
             targetNanos = max(wanted, targetNanos - targetNanos / 10)
             lastTargetDecrease = now
