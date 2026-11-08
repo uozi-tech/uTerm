@@ -25,6 +25,20 @@ nonisolated struct LocalShellSessionAttributes: Codable, Equatable, Sendable {
     var ordinal: Int
     /// 写入时整个窗口的布局。位置以它为准。
     var layout: HeldSessionLayout?
+
+    init(windowID: UUID, ordinal: Int, layout: HeldSessionLayout? = nil) {
+        self.windowID = windowID
+        self.ordinal = ordinal
+        self.layout = layout
+    }
+
+    /// 布局是别的版本写的、解不开时当没有，不连累整条归属：否则这个会话会被单独开进一个新窗口。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        windowID = try container.decode(UUID.self, forKey: .windowID)
+        ordinal = try container.decode(Int.self, forKey: .ordinal)
+        layout = try? container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
+    }
 }
 
 /// 本机 shell 在会话注册表里的身份。不对应任何 `ServerProfile`：`serverID` 用固定的哨兵值，

@@ -285,6 +285,7 @@ extension UPaneGroupsModel {
                            make: (UUID) -> UPaneTab<Payload>, append: (UUID) -> Void) {
         let existing = Set(allTabs.compactMap(id))
         var remaining = ids.filter { !existing.contains($0) }
+        var restoredActive: UUID?
         if allTabs.isEmpty, let layout {
             let wanted = Set(remaining)
             var placed: Set<UUID> = []
@@ -293,8 +294,13 @@ extension UPaneGroupsModel {
                 return make(id)
             }
             remaining.removeAll { placed.contains($0) }
+            restoredActive = activeTab?.id
         }
         for id in remaining { append(id) }
+        // 补在后面的会话开进来时会抢成前台，把布局里的前台标签还回去。
+        if !remaining.isEmpty, let restoredActive, let at = locateTab(restoredActive) {
+            activateTab(groupID: at.groupID, index: at.index)
+        }
     }
 }
 

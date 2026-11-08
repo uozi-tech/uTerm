@@ -105,7 +105,25 @@ final class HeldSessionLayoutRestoreTests: XCTestCase {
         XCTAssertEqual(Set(tree.groups.flatMap(\.tabs)), [a, b, c])
         XCTAssertEqual(tree.groups.first?.tabs.first, b)
         XCTAssertTrue(tree.groups.contains { $0.tabs.prefix(1) == [a] })
+        // 补在后面的 c 不抢前台：前台仍是布局里活动组的前台标签。
+        XCTAssertEqual(restored.active?.id, b)
         restored.disposeAll()
+    }
+
+    /// 布局是别的版本写的、解不开：当没有布局，归属其余部分照用（会话不能因此被扔进新窗口）。
+    func test_unreadable_layout_does_not_lose_the_rest_of_the_attributes() throws {
+        let windowID = UUID(), server = UUID()
+        let local = #"{"windowID":"\#(windowID.uuidString)","ordinal":3,"layout":{"revision":"x","tree":7}}"#
+        let decodedLocal = try JSONDecoder().decode(LocalShellSessionAttributes.self, from: Data(local.utf8))
+        XCTAssertEqual(decodedLocal.windowID, windowID)
+        XCTAssertEqual(decodedLocal.ordinal, 3)
+        XCTAssertNil(decodedLocal.layout)
+
+        let ssh = #"{"windowID":"\#(windowID.uuidString)","serverID":"\#(server.uuidString)","order":2,"layout":[1]}"#
+        let decodedSSH = try JSONDecoder().decode(SSHSessionAttributes.self, from: Data(ssh.utf8))
+        XCTAssertEqual(decodedSSH.serverID, server)
+        XCTAssertEqual(decodedSSH.order, 2)
+        XCTAssertNil(decodedSSH.layout)
     }
 
     /// 旧版写的归属没有布局：照旧按序号排成一组。新版写的旧版也解得开（这里用只认旧字段的类型代替旧版）。

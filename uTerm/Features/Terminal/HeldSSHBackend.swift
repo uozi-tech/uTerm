@@ -398,6 +398,7 @@ nonisolated struct SSHSessionAttributes: Codable, Equatable, Sendable {
         windowKind = try container.decodeIfPresent(String.self, forKey: .windowKind) ?? TerminalWindowKind.workspace
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         order = try container.decodeIfPresent(Double.self, forKey: .order) ?? 0
-        layout = try container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
+        // 布局只是锦上添花：别的版本写的解不开就当没有，不连累整条归属（那样会话就接不回来了）。
+        layout = try? container.decodeIfPresent(HeldSessionLayout.self, forKey: .layout)
     }
 }
