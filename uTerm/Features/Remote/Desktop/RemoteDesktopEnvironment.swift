@@ -14,8 +14,11 @@ struct RemoteDesktopEnvironment {
     var canPostEvents: @MainActor () async -> Bool
     /// 要看的显示器（nil = 主显示器）。
     var display: @MainActor (_ requested: UInt32?) -> RemoteDesktopDisplay?
-    /// 开流前整理显示器：无显示器的 Mac 把 1 倍占位屏换成视网膜的（`RemoteHeadlessDisplay`）。
-    var prepareDisplays: @MainActor () async -> Void = {}
+    /// 开流前整理显示器：无显示器的 Mac 建一块按看的设备像素（与方向无关）来的 2 倍虚拟屏
+    ///（`RemoteHeadlessDisplay`）。
+    var prepareDisplays: @MainActor (_ viewerPixels: (width: Int, height: Int)) async -> Void = { _ in }
+    /// 有没有人在看桌面：没人了虚拟屏过一会儿拆掉，又有人来就留着。
+    var displaysInUse: @MainActor (_ inUse: Bool) -> Void = { _ in }
     /// 此刻接着的全部显示器（主显示器在前）。
     var listDisplays: @MainActor () -> [RemoteDesktopDisplaySummary] = { [] }
     var makeSource: @MainActor (_ display: RemoteDesktopDisplay, _ width: Int, _ height: Int, _ tenBit: Bool)
@@ -51,7 +54,10 @@ struct RemoteDesktopEnvironment {
             screenCaptureAuthorized: { await RemoteDesktopPermissions.screenCaptureGranted() },
             canPostEvents: { await RemoteDesktopPermissions.postEventsGranted() },
             display: { requested in RemoteDesktopEnvironment.display(id: requested ?? CGMainDisplayID()) },
-            prepareDisplays: { await RemoteHeadlessDisplay.ensureHiDPI() },
+            prepareDisplays: { viewer in await RemoteHeadlessDisplay.ensureHiDPI(viewerPixels: viewer) },
+            displaysInUse: { inUse in
+                if inUse { RemoteHeadlessDisplay.cancelRelease() } else { RemoteHeadlessDisplay.scheduleRelease() }
+            },
             listDisplays: { RemoteDesktopEnvironment.activeDisplays() },
             makeSource: { display, width, height, tenBit in
                 ScreenCaptureFrameSource(display: display, width: width, height: height, tenBit: tenBit)

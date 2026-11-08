@@ -153,8 +153,8 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(rig.mac.openedDisplays, [7, 9], "已经在看这块就不重开")
     }
 
-    /// 无显示器的 Mac：1 倍占位屏有同点数 2 倍模式就换过去，没有就建 2 倍虚拟屏；接着真显示器、不止一块屏、
-    /// 已经是 2 倍时不动。
+    /// 无显示器的 Mac：能建虚拟屏就建（按看的设备像素来）；建不了时占位屏有同点数 2 倍模式就换过去。
+    /// 接着真显示器、不止一块屏时不动。
     func test_headless_placeholder_becomes_hidpi() {
         typealias Display = RemoteHeadlessDisplay
         typealias Mode = RemoteHeadlessDisplay.Mode
@@ -163,15 +163,18 @@ final class RemoteMacDesktopTests: XCTestCase {
         let modes = [Mode(width: 1440, height: 900, pixelWidth: 2880, pixelHeight: 1800), oneX,
                      Mode(width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, usable: false), twoX]
         func plan(vendor: UInt32 = Display.placeholderVendor, model: UInt32 = Display.placeholderModel,
-                  builtin: Bool = false, online: Int = 1, current: Mode = oneX, available: [Mode]) -> Display.Plan {
+                  builtin: Bool = false, online: Int = 1, current: Mode = oneX, available: [Mode],
+                  virtual: Bool = true) -> Display.Plan {
             Display.plan(vendor: vendor, model: model, builtin: builtin, onlineDisplays: online, current: current,
-                         available: available)
+                         available: available, canCreateVirtual: virtual)
         }
-        XCTAssertEqual(plan(available: [oneX]), .createVirtual, "真实的占位屏（unkn/virt）只有 1 倍：建虚拟屏")
-        XCTAssertEqual(plan(available: modes), .switchMode(3), "带 2 倍模式就直接换")
+        XCTAssertEqual(plan(available: [oneX]), .createVirtual, "真实的占位屏（unkn/virt）：建虚拟屏")
+        XCTAssertEqual(plan(available: modes), .createVirtual, "带 2 倍模式也建：占位屏的 2 倍只有 16:9 一种")
+        XCTAssertEqual(plan(available: modes, virtual: false), .switchMode(3), "建不了虚拟屏时换占位屏的 2 倍模式")
+        XCTAssertEqual(plan(available: [oneX], virtual: false), .none)
+        XCTAssertEqual(plan(current: twoX, available: modes, virtual: false), .none, "已经是 2 倍")
         XCTAssertEqual(plan(vendor: Display.screenSharingVendor, model: Display.screenSharingModel, available: modes),
                        .none, "「屏幕共享」的独占虚拟屏不是占位屏，不碰")
-        XCTAssertEqual(plan(current: twoX, available: modes), .none, "已经是 2 倍")
         XCTAssertEqual(plan(vendor: 0x10AC, available: [oneX]), .none, "真显示器")
         XCTAssertEqual(plan(online: 2, available: [oneX]), .none, "不止一块屏")
         XCTAssertEqual(plan(builtin: true, available: [oneX]), .none, "内建屏")
@@ -183,6 +186,47 @@ final class RemoteMacDesktopTests: XCTestCase {
                        "「屏幕共享」的独占屏走了会把虚拟屏接回来，不拆")
         XCTAssertTrue(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1), (3, 0x10AC, 0xA0C5)]),
                       "接上真显示器：拆掉虚拟屏")
+    }
+
+    /// 虚拟屏按看的设备的像素来：像素正好等于要的（长边做宽），点数是一半，夹在上下限之间。
+    /// 换一台设备来看：没超过建屏时的像素上限就只换模式，超了才重建。
+    func test_virtual_display_follows_viewer_pixels() {
+        typealias Display = RemoteHeadlessDisplay
+        typealias Size = RemoteHeadlessDisplay.VirtualSize
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3024, 1964)), Size(width: 1512, height: 982), "MacBook Pro 14")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (2868, 1320)), Size(width: 1434, height: 660), "iPhone 横竖都按长边做宽")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (1320, 2868)), Size(width: 1434, height: 660))
+        XCTAssertEqual(Display.virtualSize(viewerPixels: nil), Size(width: 1920, height: 1080), "老客户端：与占位屏同大")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (800, 600)), Size(width: 1024, height: 576), "下限")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (16000, 9000)), Size(width: 3840, height: 2160), "上限")
+        XCTAssertEqual(Display.virtualSize(viewerPixels: (3025, 1965)).pixelWidth, 3024, "像素取偶")
+
+        let mbp = Size(width: 1512, height: 982)
+        let limit = Display.maxPixels(for: mbp)
+        XCTAssertEqual(limit.width, 3840, "上限至少 3840×2400：之后换小一点的设备只换模式")
+        XCTAssertEqual(limit.height, 2400)
+        let state = Display.VirtualState(size: mbp, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
+        XCTAssertEqual(Display.change(from: state, to: mbp), .keep)
+        XCTAssertEqual(Display.change(from: state, to: Size(width: 1434, height: 660)), .switchMode)
+        XCTAssertEqual(Display.change(from: state, to: Size(width: 1920, height: 1200)), .switchMode, "正好到上限")
+        XCTAssertEqual(Display.change(from: state, to: Size(width: 1728, height: 1117)), .switchMode, "MacBook Pro 16")
+        XCTAssertEqual(Display.change(from: state, to: Size(width: 2560, height: 1440)), .rebuild, "5K 超了上限")
+        let big = Display.maxPixels(for: Size(width: 2560, height: 1440))
+        XCTAssertEqual(big.width, 5120, "要的比 3840×2160 大就按要的")
+        XCTAssertEqual(big.height, 2880)
+    }
+
+    /// 开流前把看的设备要的像素交给「整理显示器」；有人开始看、看完了都通知（虚拟屏据此留着或过一会儿拆）。
+    func test_prepare_displays_gets_viewer_pixels_and_viewer_presence() async throws {
+        let rig = try await makeRig()
+        defer { rig.client.disconnect() }
+        let session = RemoteDesktopSession(client: rig.client, maxWidth: 3024, maxHeight: 1964)
+        await session.start()
+        XCTAssertEqual(rig.mac.preparedViewerPixels.map { [$0.width, $0.height] }, [[3024, 1964]])
+        XCTAssertEqual(rig.mac.displayUse, [true])
+        session.stop()
+        let released = await waitUntil { rig.mac.displayUse == [true, false] }
+        XCTAssertTrue(released, "\(rig.mac.displayUse)")
     }
 
     func test_old_mac_without_display_list_and_single_display_get_no_menu_data() async throws {

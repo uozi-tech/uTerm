@@ -6,10 +6,14 @@ import ObjectiveC
 /// 没接显示器的 Mac：系统给一块占位屏（厂商号 'unkn'、型号 'virt'），只有 1920×1080 的 1 倍模式，远程看过去
 /// 文字又粗又糊。远程桌面开流前把它换成视网膜的：
 ///
-/// - 占位屏自己带同点数的 2 倍模式时，用公开 API 换过去。
-/// - 否则建一块 1920×1080 点、3840×2160 像素的虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16）。
-///   它一出现，系统就撤掉占位屏，它成为唯一的主屏，窗口都在它上面。之后不随每次开流建拆，免得窗口来回搬；
+/// - 建一块**按看的那台设备的像素**来的 2 倍虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16；
+///   做法同 Sunshine 的 macOS 分支 Lumen）：像素正好等于视频尺寸，采集直接出 4:2:0、不用再缩，宽高比也
+///   对得上（不再把 16:9 的屏塞进 16:10 或手机的框里留黑边）。它一出现，系统就撤掉占位屏，它成为唯一的主屏。
+/// - 换了一台设备来看：新尺寸没超过这块屏建时定的上限就只换模式（同一块屏、同一个显示器号，窗口留在原处，
+///   系统只按新尺寸把放不下的挪进来）；超了才拆掉重建。
+/// - 最后一个人走了：等一会儿（`releaseGrace`）还没人来再拆，免得断线重连、换设备接管时窗口来回搬。
 ///   接上真显示器时立刻拆掉，不然那块看不见的屏会成为扩展屏，窗口和光标都能跑进去。
+/// - 建不了虚拟屏（系统不支持）时退回老办法：占位屏自己带同点数的 2 倍模式就用公开 API 换过去。
 ///
 /// 接着真显示器（或不止一块屏）时一律不碰。
 ///
@@ -23,8 +27,62 @@ enum RemoteHeadlessDisplay {
     /// 系统「屏幕共享」建的独占虚拟屏：厂商号 'aapl'、型号 0x1234。
     nonisolated static let screenSharingVendor: UInt32 = 0x6161_706C
     nonisolated static let screenSharingModel: UInt32 = 0x1234
-    /// 虚拟屏的点数，与占位屏一样，窗口位置不乱。
-    nonisolated static let virtualSize = (width: 1920, height: 1080)
+    /// 不知道看的设备多大时（老客户端）虚拟屏的点数：与占位屏一样。
+    nonisolated static let defaultPoints = (width: 1920, height: 1080)
+    /// 虚拟屏点数的下限与上限：太小的窗口放不下菜单栏和常见窗口，太大的像素 WindowServer 不收。
+    nonisolated static let minimumPoints = (width: 1024, height: 576)
+    nonisolated static let maximumPoints = (width: 3840, height: 2160)
+    /// 建屏时像素上限至少给到这么大：之后换一台不超过它的设备来看只换模式、不重建。
+    /// 3840×2400：16:10 的 4K，盖住 MacBook Pro 16（3456×2234）与各尺寸 iPad、iPhone。
+    nonisolated static let minimumMaxPixels = (width: 3840, height: 2400)
+    /// 最后一个人走后多久拆虚拟屏。
+    nonisolated static let releaseGrace: Duration = .seconds(30)
+
+    /// 虚拟屏的一种尺寸：点数，像素是它的 2 倍。
+    nonisolated struct VirtualSize: Equatable, Sendable {
+        var width: Int
+        var height: Int
+        var pixelWidth: Int { width * 2 }
+        var pixelHeight: Int { height * 2 }
+    }
+
+    /// 已建的虚拟屏：现在的尺寸和建时定的像素上限。
+    nonisolated struct VirtualState: Equatable, Sendable {
+        var size: VirtualSize
+        var maxPixelWidth: Int
+        var maxPixelHeight: Int
+    }
+
+    nonisolated enum VirtualChange: Equatable, Sendable {
+        case keep
+        /// 同一块屏换个模式。
+        case switchMode
+        /// 新尺寸超过上限：拆掉重建。
+        case rebuild
+    }
+
+    /// 看的设备要的像素（与方向无关）→ 虚拟屏的点数。Mac 的屏总是横的：长边做宽。像素正好是要的那么大
+    /// （取偶，点数是一半），点数夹在上下限之间；不知道多大（nil）时与占位屏同大。
+    nonisolated static func virtualSize(viewerPixels: (width: Int, height: Int)?) -> VirtualSize {
+        guard let viewerPixels, viewerPixels.width > 0, viewerPixels.height > 0 else {
+            return VirtualSize(width: defaultPoints.width, height: defaultPoints.height)
+        }
+        let long = max(viewerPixels.width, viewerPixels.height), short = min(viewerPixels.width, viewerPixels.height)
+        return VirtualSize(width: min(maximumPoints.width, max(minimumPoints.width, long / 2)),
+                           height: min(maximumPoints.height, max(minimumPoints.height, short / 2)))
+    }
+
+    /// 建屏时的像素上限：至少 `minimumMaxPixels`，要的更大就按要的。
+    nonisolated static func maxPixels(for size: VirtualSize) -> (width: Int, height: Int) {
+        (max(minimumMaxPixels.width, size.pixelWidth), max(minimumMaxPixels.height, size.pixelHeight))
+    }
+
+    /// 已有虚拟屏、又来了一台要 `wanted` 的设备：不动、换模式还是重建。
+    nonisolated static func change(from current: VirtualState, to wanted: VirtualSize) -> VirtualChange {
+        if current.size == wanted { return .keep }
+        return wanted.pixelWidth <= current.maxPixelWidth && wanted.pixelHeight <= current.maxPixelHeight
+            ? .switchMode : .rebuild
+    }
 
     nonisolated struct Mode: Equatable, Sendable {
         var width: Int
@@ -42,13 +100,14 @@ enum RemoteHeadlessDisplay {
         case createVirtual
     }
 
-    /// 无显示器的 Mac 该怎么变清晰。只看唯一一块在线、非内建、当前 1 倍的占位屏。
+    /// 无显示器的 Mac 该怎么变清晰。只看唯一一块在线、非内建的占位屏。能建虚拟屏就建（它按看的设备的像素来，
+    /// 占位屏自己的 2 倍模式只有 16:9 一种）；建不了时，当前 1 倍、又带同点数 2 倍模式的就换过去。
     nonisolated static func plan(vendor: UInt32, model: UInt32, builtin: Bool, onlineDisplays: Int,
-                                 current: Mode, available: [Mode]) -> Plan {
-        guard onlineDisplays == 1, !builtin, vendor == placeholderVendor, model == placeholderModel,
-              current.pixelWidth == current.width else { return .none }
+                                 current: Mode, available: [Mode], canCreateVirtual: Bool = true) -> Plan {
+        guard onlineDisplays == 1, !builtin, vendor == placeholderVendor, model == placeholderModel else { return .none }
+        if canCreateVirtual { return .createVirtual }
         if let index = hiDPIUpgrade(current: current, available: available) { return .switchMode(index) }
-        return .createVirtual
+        return .none
     }
 
     /// 现在是 1 倍时，同点数的 2 倍模式在 `available` 里的下标；已经是 2 倍或没有这样的模式时为 nil。
@@ -74,7 +133,10 @@ enum RemoteHeadlessDisplay {
     /// 建出来的虚拟屏。持有它，屏幕就在；放掉它，屏幕就撤。
     private static var virtualDisplay: NSObject?
     private static var virtualDisplayID: CGDirectDisplayID = 0
+    private static var virtualState: VirtualState?
     private static var watchesReconfiguration = false
+    /// 最后一个人走后排着的拆屏。又有人来看就取消。
+    private static var pendingRelease: Task<Void, Never>?
 
     /// 虚拟屏在线时出现了别的真显示器：该把虚拟屏拆掉。占位屏与「屏幕共享」的独占屏不算（前者在虚拟屏
     /// 在时不出现，后者会把虚拟屏暂时断开、走了还会接回来）。
@@ -101,9 +163,33 @@ enum RemoteHeadlessDisplay {
         guard virtualDisplay != nil, realDisplayAppeared(ours: virtualDisplayID, online: onlineDisplays()) else {
             return
         }
+        dropVirtualDisplay()
+        AppLogger.info("远程桌面：接上了显示器，拆掉 2 倍虚拟屏", category: RemoteLog.category)
+    }
+
+    private static func dropVirtualDisplay() {
         virtualDisplay = nil
         virtualDisplayID = 0
-        AppLogger.info("远程桌面：接上了显示器，拆掉 2 倍虚拟屏", category: RemoteLog.category)
+        virtualState = nil
+    }
+
+    /// 又有人在看了：取消排着的拆屏。
+    static func cancelRelease() {
+        pendingRelease?.cancel()
+        pendingRelease = nil
+    }
+
+    /// 没人看了：过 `releaseGrace` 还没人来就拆掉虚拟屏（系统接回 1 倍占位屏）。没建虚拟屏时什么都不做。
+    static func scheduleRelease(after grace: Duration = releaseGrace) {
+        pendingRelease?.cancel()
+        guard virtualDisplay != nil else { return }
+        pendingRelease = Task { @MainActor in
+            try? await Task.sleep(for: grace)
+            guard !Task.isCancelled, virtualDisplay != nil else { return }
+            pendingRelease = nil
+            dropVirtualDisplay()
+            AppLogger.info("远程桌面：没人看了，拆掉虚拟屏", category: RemoteLog.category)
+        }
     }
 
     private static func watchReconfiguration() {
@@ -120,10 +206,29 @@ enum RemoteHeadlessDisplay {
         Task { @MainActor in RemoteHeadlessDisplay.releaseIfRealDisplayAppeared() }
     }
 
-    /// 主屏是 1 倍的占位屏时把它换成 2 倍的。建虚拟屏时等它成为主屏再返回（最多 3 秒）。
-    static func ensureHiDPI() async {
+    /// 开流前：无显示器的 Mac 建（或改）一块按 `viewerPixels` 来的 2 倍虚拟屏，等它就绪再返回（最多 3 秒）。
+    /// 接着真显示器时不动。
+    static func ensureHiDPI(viewerPixels: (width: Int, height: Int)? = nil) async {
+        cancelRelease()
         releaseIfRealDisplayAppeared()
-        guard virtualDisplay == nil else { return }
+        let wanted = virtualSize(viewerPixels: viewerPixels)
+        if let state = virtualState, virtualDisplay != nil {
+            switch change(from: state, to: wanted) {
+            case .keep:
+                return
+            case .switchMode:
+                if await switchVirtualMode(to: wanted) { return }
+                // 换不过去（系统不收这个模式）：重建。
+                dropVirtualDisplay()
+                await createVirtualDisplay(size: wanted)
+                return
+            case .rebuild:
+                dropVirtualDisplay()
+                await waitForPlaceholder()
+                await createVirtualDisplay(size: wanted)
+                return
+            }
+        }
         var count: UInt32 = 0
         CGGetOnlineDisplayList(0, nil, &count)
         let main = CGMainDisplayID()
@@ -132,13 +237,27 @@ enum RemoteHeadlessDisplay {
         let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
         switch plan(vendor: CGDisplayVendorNumber(main), model: CGDisplayModelNumber(main),
                     builtin: CGDisplayIsBuiltin(main) != 0, onlineDisplays: Int(count),
-                    current: mode(current), available: modes.map(mode)) {
+                    current: mode(current), available: modes.map(mode),
+                    canCreateVirtual: NSClassFromString("CGVirtualDisplay") != nil) {
         case .none:
             return
         case .switchMode(let index):
             switchMode(main, to: modes[index])
         case .createVirtual:
-            await createVirtualDisplay()
+            if await createVirtualDisplay(size: wanted) { return }
+            // 建不了：退回占位屏自己的 2 倍模式（有的话）。
+            if let index = hiDPIUpgrade(current: mode(current), available: modes.map(mode)) {
+                switchMode(main, to: modes[index])
+            }
+        }
+    }
+
+    /// 拆了旧屏要等系统把占位屏接回来，再建新的；不然两块屏的配置变化叠在一起，窗口会被搬两遍（最多 2 秒）。
+    private static func waitForPlaceholder() async {
+        for _ in 0..<40 {
+            let main = CGMainDisplayID()
+            if CGDisplayVendorNumber(main) == placeholderVendor, CGDisplayModelNumber(main) == placeholderModel { return }
+            try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
@@ -155,14 +274,18 @@ enum RemoteHeadlessDisplay {
                        category: RemoteLog.category)
     }
 
-    private static func createVirtualDisplay() async {
-        guard let display = makeVirtualDisplay() else {
-            AppLogger.info("远程桌面：无显示器，没能建 2 倍虚拟屏（系统不支持？）", category: RemoteLog.category)
-            return
+    @discardableResult
+    private static func createVirtualDisplay(size: VirtualSize) async -> Bool {
+        let limit = maxPixels(for: size)
+        guard let display = makeVirtualDisplay(size: size, maxPixels: limit) else {
+            AppLogger.info("远程桌面：无显示器，没能建 \(size.pixelWidth)×\(size.pixelHeight) 的虚拟屏（系统不支持？）",
+                           category: RemoteLog.category)
+            return false
         }
         virtualDisplay = display
         let id = (display.value(forKey: "displayID") as? NSNumber)?.uint32Value ?? 0
         virtualDisplayID = id
+        virtualState = VirtualState(size: size, maxPixelWidth: limit.width, maxPixelHeight: limit.height)
         watchReconfiguration()
         // 系统要一会儿才撤掉占位屏、把虚拟屏设成主屏；在那之前开流会采到旧屏。
         var waited = 0
@@ -171,23 +294,44 @@ enum RemoteHeadlessDisplay {
             waited += 1
         }
         let ready = CGMainDisplayID() == id
-        AppLogger.info("远程桌面：无显示器，建了 \(virtualSize.width)×\(virtualSize.height) 的 2 倍虚拟屏"
+        AppLogger.info("远程桌面：无显示器，建了 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）的虚拟屏"
                        + (ready ? "" : "（还没成为主屏）"), category: RemoteLog.category)
+        return true
+    }
+
+    /// 同一块虚拟屏换个模式：显示器号不变，窗口留在这块屏上。等系统报出新的像素尺寸再返回（最多 3 秒）。
+    private static func switchVirtualMode(to size: VirtualSize) async -> Bool {
+        guard let display = virtualDisplay, let settings = virtualSettings(size: size),
+              applySettings(settings, to: display) else {
+            AppLogger.info("远程桌面：虚拟屏换不到 \(size.width)×\(size.height) 点", category: RemoteLog.category)
+            return false
+        }
+        virtualState?.size = size
+        let id = virtualDisplayID
+        var waited = 0
+        while waited < 60 {
+            if let mode = CGDisplayCopyDisplayMode(id), mode.pixelWidth == size.pixelWidth,
+               mode.pixelHeight == size.pixelHeight { break }
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        AppLogger.info("远程桌面：虚拟屏换成 \(size.width)×\(size.height) 点（\(size.pixelWidth)×\(size.pixelHeight) 像素）"
+                       + (waited < 60 ? "" : "（系统还没报出新尺寸）"), category: RemoteLog.category)
+        return true
     }
 
     /// 经 ObjC 运行时建 `CGVirtualDisplay`：描述符 → 显示器 → 设置（hiDPI + 一个模式）。任何一步对不上返回 nil。
-    private static func makeVirtualDisplay() -> NSObject? {
+    private static func makeVirtualDisplay(size: VirtualSize, maxPixels: (width: Int, height: Int)) -> NSObject? {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
-              let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type,
-              let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
-              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else { return nil }
-        let width = virtualSize.width, height = virtualSize.height
+              let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type else { return nil }
         let descriptor = descriptorClass.init()
         descriptor.setValue(String(localized: "uTerm 远程显示器"), forKey: "name")
-        descriptor.setValue(width * 2, forKey: "maxPixelsWide")
-        descriptor.setValue(height * 2, forKey: "maxPixelsHigh")
-        // 27 英寸 16:9 的物理尺寸：系统按它算像素密度，配合 2 倍模式显示为视网膜。
+        descriptor.setValue(maxPixels.width, forKey: "maxPixelsWide")
+        descriptor.setValue(maxPixels.height, forKey: "maxPixelsHigh")
+        // 27 英寸 16:9 的物理尺寸：系统按它算像素密度，配合 2 倍模式显示为视网膜。不随尺寸变：
+        // 物理尺寸大得离谱时 WindowServer 不收（Lumen 的注释）。
         descriptor.setValue(NSValue(size: NSSize(width: 597, height: 336)), forKey: "sizeInMillimeters")
+        // 厂商、型号、序列号固定：系统按它们认出「还是那块屏」，记得上面的窗口摆法。
         descriptor.setValue(0x7554, forKey: "vendorID")
         descriptor.setValue(0x0001, forKey: "productID")
         descriptor.setValue(1, forKey: "serialNum")
@@ -198,25 +342,37 @@ enum RemoteHeadlessDisplay {
         guard displayClass.instancesRespond(to: initDisplay),
               let allocated = (displayClass as AnyObject).perform(alloc)?.takeUnretainedValue(),
               // init 系列返回的是 +1：按 retained 接，放掉 `virtualDisplay` 时它才真的释放、屏幕才撤。
-              let display = allocated.perform(initDisplay, with: descriptor)?.takeRetainedValue() as? NSObject
+              let display = allocated.perform(initDisplay, with: descriptor)?.takeRetainedValue() as? NSObject,
+              let settings = virtualSettings(size: size), applySettings(settings, to: display)
         else { return nil }
+        return display
+    }
 
+    /// 一个模式的设置：hiDPI，模式按点给（像素是 2 倍，受建屏时的像素上限约束）。
+    private static func virtualSettings(size: VirtualSize) -> NSObject? {
+        guard let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
+              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else { return nil }
+        let alloc = NSSelectorFromString("alloc")
         let initMode = NSSelectorFromString("initWithWidth:height:refreshRate:")
-        let apply = NSSelectorFromString("applySettings:")
         guard let modeMethod = class_getInstanceMethod(modeClass, initMode),
-              let applyMethod = class_getInstanceMethod(displayClass, apply),
               let modeAllocated = (modeClass as AnyObject).perform(alloc)?.takeUnretainedValue() else { return nil }
         typealias InitMode = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>
-        typealias Apply = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
         let mode = unsafeBitCast(method_getImplementation(modeMethod), to: InitMode.self)(
-            modeAllocated, initMode, UInt(width), UInt(height), 60).takeRetainedValue()
+            modeAllocated, initMode, UInt(size.width), UInt(size.height), 60).takeRetainedValue()
         let settings = settingsClass.init()
         settings.setValue(2, forKey: "hiDPI")
         settings.setValue([mode], forKey: "modes")
-        guard unsafeBitCast(method_getImplementation(applyMethod), to: Apply.self)(display, apply, settings) else {
-            return nil
+        return settings
+    }
+
+    private static func applySettings(_ settings: NSObject, to display: NSObject) -> Bool {
+        guard let displayClass = NSClassFromString("CGVirtualDisplay"),
+              let applyMethod = class_getInstanceMethod(displayClass, NSSelectorFromString("applySettings:")) else {
+            return false
         }
-        return display
+        typealias Apply = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
+        return unsafeBitCast(method_getImplementation(applyMethod), to: Apply.self)(
+            display, NSSelectorFromString("applySettings:"), settings)
     }
 
     private static func mode(_ mode: CGDisplayMode) -> Mode {

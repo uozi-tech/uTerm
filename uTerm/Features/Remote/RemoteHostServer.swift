@@ -646,12 +646,14 @@ final class RemoteHostServer {
         }
         desktopViewer = DesktopViewer(connection: connection.id, channel: channel, deviceName: connection.peerName,
                                       canControl: canControl)
+        desktopEnvironment.displaysInUse(true)
         updateActivity()
     }
 
     func releaseDesktop(connection: RemoteHostConnection, channel: UInt32) {
         guard let viewer = desktopViewer, viewer.connection == connection.id, viewer.channel == channel else { return }
         desktopViewer = nil
+        desktopEnvironment.displaysInUse(false)
         updateActivity()
     }
 
