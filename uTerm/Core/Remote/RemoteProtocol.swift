@@ -38,7 +38,8 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
-                                          RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio]
+                                          RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
+                                          RemoteFeature.programStatus]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
     /// 自己」，标签用 Mac 的名字。
     static let localShellServerID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
@@ -91,6 +92,9 @@ nonisolated enum RemoteFeature {
     /// 远程桌面的声音：认得 `desktopAudio` / `desktopAudioFormat` / `desktopAudioFrame`。两端都要声明：
     /// 手机只对声明了的 Mac 发开关，Mac 只给声明了的手机送声音。
     static let desktopAudio = "desktop-audio"
+    /// 终端里程序（Claude Code、Codex……）的状态：认得 `programStatus`。Mac 只给声明了的设备推；
+    /// 老 Mac 不推，设备上的标签照旧只显示连接状态。
+    static let programStatus = "program-status"
     /// 链路层的端到端计量与分片（见 `RemoteLinkFlow`）：认得 `linkAck` / `linkFragment`。两端都声明才启用，
     /// 否则照旧整条消息直接交给 TCP。
     static let linkFlow = "link-flow"
@@ -220,6 +224,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// Mac 上光标的形状（桌面通道）：形状变了才发。负载 = `RemoteDesktopCursorImage`（JSON）。
         /// 只在开流请求带 `cursorImages` 时才发，老客户端不认这个类型。
         case desktopCursorImage = 45
+        /// 各终端里程序的状态（通道 0）。负载 = `RemoteProgramStatusUpdate`（JSON）。订阅会话列表后先发一份
+        /// 全量快照，之后只发变了的会话。中途接入的设备看不到早先的 OSC 7501，所以状态由 Mac 记着、推过来，
+        /// 不靠设备自己解析镜像字节。只发给 `features` 带 `program-status` 的设备。
+        case programStatus = 46
     }
 
     var kind: Kind

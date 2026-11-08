@@ -183,6 +183,11 @@ final class TerminalSessionRegistry {
     }
 
     /// 这个会话对象登记时用的 id；没登记过则 nil。
+    /// 那条会话里程序报的状态（含 `idle`）；远控推给接入的设备。在观察里读会跟踪到这条会话。
+    func programReport(of entry: TerminalSessionEntry) -> ProgramStatusRecord? {
+        sessions[entry.id]?.value?.programReport
+    }
+
     func sessionID(of session: TerminalSession) -> UUID? {
         sessions.first { $0.value.value === session }?.key
     }

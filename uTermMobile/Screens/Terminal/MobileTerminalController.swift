@@ -18,7 +18,10 @@ final class MobileTerminalController {
         didSet {
             if !canTakeKeyboard { resignKeyboard() }
             // 标题说的是那条连接上正在跑的程序，连接没了就不再成立（同 mac `TerminalSession`）。
-            if state != .connected { shellTitle = nil }
+            if state != .connected {
+                shellTitle = nil
+                resetProgramStatus()
+            }
         }
     }
     /// 本会话是不是此刻唯一该拿键盘的那个（聚焦格的前台标签、终端模式、上面没有连接中页 /
@@ -35,6 +38,12 @@ final class MobileTerminalController {
     @ObservationIgnored private var keyboardCollapsed = false
     /// shell 或程序用 OSC 0 / 2 设的标题；没设过、设成空、连接已断开时为 nil（标签退回主机名）。
     var shellTitle: String?
+    /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
+    /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
+    private(set) var programStatus: ProgramStatusRecord?
+    @ObservationIgnored private var programStatusTracker = ProgramStatusTracker()
+    /// 已经注册过程序状态处理器的终端视图（横屏切外壳时视图复用，不重复注册）。
+    @ObservationIgnored private weak var programStatusView: SwiftTerm.TerminalView?
     /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
@@ -84,6 +93,7 @@ final class MobileTerminalController {
             guard isForeground != oldValue else { return }
             updatePacing()
             syncRemoteWatch()
+            if isLooking { acknowledgeProgramStatus() }
         }
     }
 
@@ -97,6 +107,7 @@ final class MobileTerminalController {
             (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
             updatePacing()
             syncRemoteWatch()
+            if isLooking { acknowledgeProgramStatus() }
         }
     }
 
@@ -121,8 +132,13 @@ final class MobileTerminalController {
     /// 远控标签：告诉后端此刻有没有人看着它（与按前台档喂字节同一个判定）。Mac 长时间离线时，没人看的标签
     /// 重连退避才会放长到最长一分钟；切回来的那一刻后端立刻重试（见 `RemoteReconnectPolicy`）。
     private func syncRemoteWatch() {
-        (connection as? RemoteTerminalBackend)?.setWatched(isForeground && !isAppInBackground)
+        guard let remote = connection as? RemoteTerminalBackend else { return }
+        remote.setWatched(isLooking)
+        remote.client.setProgramStatusWatched(remote.sessionID, isLooking)
     }
+
+    /// 用户此刻看得见这个终端：前台标签，且 App 在前台。
+    var isLooking: Bool { isForeground && !isAppInBackground }
 
     typealias FlushPacing = TerminalFlushPacing
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
@@ -167,6 +183,47 @@ final class MobileTerminalController {
             terminal.changeScrollback(RemoteConstants.snapshotScrollback)
         }
         installModifierResetObserversIfNeeded()
+        installProgramStatusHandlers(on: view)
+    }
+
+    // MARK: 程序状态（OSC 7501 / 133）
+
+    private func installProgramStatusHandlers(on view: SwiftTerm.TerminalView) {
+        guard programStatusView !== view else { return }
+        programStatusView = view
+        ProgramStatusOSC.install(on: view.getTerminal(), onMessage: { [weak self] message in
+            // 远控标签：Mac 自己回答查询、经远控协议推状态。这里再答一遍就成了 Mac 上的程序收到的多余输入。
+            guard let self, !(self.connection is RemoteTerminalBackend) else { return }
+            self.applyProgramStatus(message)
+        }, onPrompt: { [weak self] in
+            guard let self else { return }
+            self.programStatusTracker.promptStarted()
+            self.publishProgramStatus()
+        })
+    }
+
+    /// 手机上没有系统通知可发：需要注意的状态只上标签。
+    func applyProgramStatus(_ message: ProgramStatusMessage) {
+        if programStatusTracker.receive(message, isLooking: isLooking) == .reply {
+            write(Data(ProgramStatusTracker.queryReply))
+        }
+        publishProgramStatus()
+    }
+
+    /// 用户看到结果了：`done` / `error` 不再上标签。
+    func acknowledgeProgramStatus() {
+        programStatusTracker.acknowledgeResults()
+        publishProgramStatus()
+    }
+
+    private func resetProgramStatus() {
+        programStatusTracker.reset()
+        publishProgramStatus()
+    }
+
+    private func publishProgramStatus() {
+        let next = programStatusTracker.display
+        if next != programStatus { programStatus = next }
     }
 
     // MARK: Ctrl / Alt 粘滞修饰
@@ -469,6 +526,9 @@ final class MobileTerminalController {
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
+        if let remote = connection as? RemoteTerminalBackend {
+            remote.client.setProgramStatusWatched(remote.sessionID, false)
+        }
         inputChannel.unbind()
         let conn = connection
         Task { await conn?.close() }

@@ -17,8 +17,8 @@ actor RemoteTerminalBackend: TerminalImageReceiving {
     private let outputContinuation: AsyncStream<Data>.Continuation
     private let exitContinuation: AsyncStream<Void>.Continuation
 
-    private let client: RemoteMacClient
-    private let sessionID: UUID
+    nonisolated let client: RemoteMacClient
+    nonisolated let sessionID: UUID
     private var size = RemoteGridSize(cols: 80, rows: 24)
     private var attachment: RemoteAttachment?
     private var isClosed = false

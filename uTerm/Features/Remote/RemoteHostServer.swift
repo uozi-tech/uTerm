@@ -121,6 +121,8 @@ final class RemoteHostServer {
     @ObservationIgnored private var lastRemoteOutput: Date?
     @ObservationIgnored private var activityRecheck: Task<Void, Never>?
     @ObservationIgnored private var tabTitlePush: Task<Void, Never>?
+    /// 上次推给设备的程序状态（含 `idle`）。变化推送拿它比出哪些会话变了。
+    @ObservationIgnored private var pushedProgramReports: [UUID: ProgramStatusRecord] = [:]
 
     init(registry: TerminalSessionRegistry,
          identity: RemoteIdentityStore = RemoteIdentityStore(role: .controllers),
@@ -179,6 +181,8 @@ final class RemoteHostServer {
             tabTitlePush = nil
             observeRegistry(generation: observationGeneration)
             observeTabTitles(generation: observationGeneration)
+            pushedProgramReports = currentProgramReports()
+            observeProgramStatuses(generation: observationGeneration)
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -528,6 +532,15 @@ final class RemoteHostServer {
         }
     }
 
+    /// 此刻有程序状态的会话（订阅时的全量快照）。
+    func programStatusSnapshot() -> [RemoteProgramStatusUpdate.Entry] {
+        registry.entries.compactMap { entry in
+            registry.programReport(of: entry).map {
+                RemoteProgramStatusUpdate.Entry(sessionID: entry.id, status: RemoteProgramStatus($0))
+            }
+        }
+    }
+
     /// 某个连接接管一个会话。之前接管它的另一个连接收到「已被接管」并断开该终端。
     func claim(sessionID: UUID, connection: RemoteHostConnection, channel: UInt32) {
         if let previous = controllers[sessionID],
@@ -692,6 +705,41 @@ final class RemoteHostServer {
                 MainActor.assumeIsolated { self?.scheduleTabTitlePush(generation: generation) }
             }
         }
+    }
+
+    /// 程序状态不节流：「等待确认」要马上到手机上。同一轮主线程里的多次变化由观察回调合成一次。
+    private func observeProgramStatuses(generation: Int) {
+        withObservationTracking {
+            for entry in registry.entries { _ = registry.programReport(of: entry) }
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.isRunning, generation == self.observationGeneration else { return }
+                    self.pushProgramStatusChanges()
+                    self.observeProgramStatuses(generation: generation)
+                }
+            }
+        }
+    }
+
+    private func currentProgramReports() -> [UUID: ProgramStatusRecord] {
+        var reports: [UUID: ProgramStatusRecord] = [:]
+        for entry in registry.entries {
+            if let report = registry.programReport(of: entry) { reports[entry.id] = report }
+        }
+        return reports
+    }
+
+    private func pushProgramStatusChanges() {
+        let current = currentProgramReports()
+        let previous = pushedProgramReports
+        pushedProgramReports = current
+        let changed = Set(current.keys).union(previous.keys).filter { current[$0] != previous[$0] }
+        guard !changed.isEmpty else { return }
+        let update = RemoteProgramStatusUpdate(replacesAll: false, entries: changed.sorted { $0.uuidString < $1.uuidString }.map {
+            RemoteProgramStatusUpdate.Entry(sessionID: $0, status: current[$0].map(RemoteProgramStatus.init))
+        })
+        for connection in connections.values { connection.sendProgramStatus(update) }
     }
 
     private func scheduleTabTitlePush(generation: Int) {

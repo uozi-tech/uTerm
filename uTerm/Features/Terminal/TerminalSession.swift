@@ -52,7 +52,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil。
     /// 和 `shellTitle` 一样，要在单枚标签自己的 body 里读。
     var programStatus: ProgramStatusRecord?
-    @ObservationIgnored var programStatusBoard = ProgramStatusBoard()
+    /// 含 `idle` 的那条（远控把它推给接入的设备：程序空闲也说明前台是 Agent 而不是 shell）。
+    var programReport: ProgramStatusRecord?
+    @ObservationIgnored var programStatusTracker = ProgramStatusTracker()
     /// 窗格上的真彩提示，见 `TerminalSession+TrueColor`。
     var trueColorOffer: TrueColorOffer?
     @ObservationIgnored var trueColorChecked = false

@@ -340,11 +340,19 @@ struct WorkspaceTabChip: View {
             Button(role: .destructive, action: onClose) { Label("关闭", systemImage: "xmark") }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(Text(verbatim: programStatus.map { "\($0.appName) \($0.statusLabel)" } ?? ""))
         .accessibilityAddTraits(activity == .active ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// 连接状态点：终端看 SSH 会话，文件浏览看 SFTP 会话。
+    /// 终端里程序（Claude Code、Codex……）的状态；文件浏览没有。
+    private var programStatus: ProgramStatusRecord? {
+        if case .terminal(let t) = tab { return t.programStatus }
+        return nil
+    }
+
+    /// 状态点：程序有状态时说程序（含义与配色同 mac 的标签），否则说连接——终端看 SSH 会话，文件浏览看 SFTP 会话。
     private var stateDot: (color: Color, pulse: Bool) {
+        if let programStatus { return (Self.color(for: programStatus.tone, accent: accent), false) }
         switch tab {
         case .terminal(let t):
             switch t.controller.state {
@@ -359,6 +367,19 @@ struct WorkspaceTabChip: View {
             case .connecting, .idle: return (M.warning, true)
             case .failed: return (M.danger, false)
             }
+        }
+    }
+}
+
+extension WorkspaceTabChip {
+    /// 与 mac `ProgramStatusRecord.tabDot` 一一对应：等人处理 = 警示色，运行中 = 强调色，完成 = 成功色，出错 = 危险色。
+    static func color(for tone: ProgramStatusTone, accent: Color) -> Color {
+        switch tone {
+        case .needsAttention: M.warning
+        case .working: accent
+        case .done: M.success
+        case .failed: M.danger
+        case .idle: M.text4
         }
     }
 }

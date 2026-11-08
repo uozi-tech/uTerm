@@ -24,8 +24,12 @@ extension TerminalImage {
 extension TerminalSession {
 
     /// 有 Agent 正在这条会话里报告状态（包括空闲）。
+    /// 远控镜像不自己解析状态，看那台 Mac 推来的。
     private var hasRunningAgent: Bool {
-        programStatusBoard.summary != nil
+        if let remote = backend as? RemoteTerminalBackend {
+            return remote.client.programReport(for: remote.sessionID) != nil
+        }
+        return programStatusTracker.hasRecords
     }
 
     /// ⌘V 粘贴只有图片的剪贴板。返回 false = 没接管，走普通粘贴。

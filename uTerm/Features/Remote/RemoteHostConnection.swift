@@ -26,6 +26,8 @@ final class RemoteHostConnection {
     private var audioRequestGeneration = 0
     /// 手机认得声音消息（`desktop-audio`）。
     private var peerSupportsAudio = false
+    /// 对端认得 `programStatus`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
+    private var peerTakesProgramStatus = false
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -136,6 +138,8 @@ final class RemoteHostConnection {
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
             peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
+            peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
+                && server.localFeatures.contains(RemoteFeature.programStatus)
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
@@ -289,8 +293,12 @@ final class RemoteHostConnection {
         switch message.kind {
         case .subscribeSessions:
             afterSessionRestoration { [weak self] in
-                self?.subscribedToSessions = true
-                self?.sendSessions()
+                guard let self else { return }
+                self.subscribedToSessions = true
+                self.sendSessions()
+                // 紧跟在列表后面：设备先认识这些会话，再拿到它们的状态。
+                self.sendProgramStatus(RemoteProgramStatusUpdate(replacesAll: true,
+                                                                 entries: self.server.programStatusSnapshot()))
             }
         case .attach:
             guard let request = try? RemoteJSON.decode(RemoteAttachRequest.self, from: message.payload) else { return }
@@ -351,7 +359,7 @@ final class RemoteHostConnection {
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment:
+             .linkAck, .linkFragment, .programStatus:
             break
         }
     }
@@ -373,6 +381,12 @@ final class RemoteHostConnection {
     func sendSessions() {
         guard subscribedToSessions else { return }
         link.send(RemoteMessage(.sessions, payload: RemoteJSON.encode(server.sessionInfos())))
+    }
+
+    /// 程序状态：订阅时的全量快照，之后是变了的会话。只发给认得这条消息、且订阅了会话列表的设备。
+    func sendProgramStatus(_ update: RemoteProgramStatusUpdate) {
+        guard subscribedToSessions, peerTakesProgramStatus else { return }
+        link.send(RemoteMessage(.programStatus, payload: RemoteJSON.encode(update)))
     }
 
     private func attach(_ request: RemoteAttachRequest) {

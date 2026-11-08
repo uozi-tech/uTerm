@@ -124,6 +124,34 @@ final class RemoteMacClient: Identifiable {
     var supportsDesktopPause: Bool { macFeatures.contains(RemoteFeature.desktopPause) }
     /// Mac 能把声音传过来（认得 `desktopAudio`）。
     var supportsDesktopAudio: Bool { macFeatures.contains(RemoteFeature.desktopAudio) }
+    /// Mac 会推终端里程序的状态（`programStatus`）。老 Mac 不推，标签只显示连接状态。
+    var supportsProgramStatus: Bool { macFeatures.contains(RemoteFeature.programStatus) }
+    /// 各会话的程序状态。要在单枚标签自己的 body 里读（同 `TerminalSession.programStatus`）。
+    private(set) var programStatusBook = RemoteProgramStatusBook()
+
+    /// 标签上显示的程序状态：`idle` 与在这台设备上看过的结果不显示。
+    func programStatus(for sessionID: UUID) -> ProgramStatusRecord? {
+        programStatusBook.display(for: sessionID)
+    }
+
+    /// 含 `idle`：那个终端的前台是在报告状态的程序（Agent），不是 shell。
+    func programReport(for sessionID: UUID) -> ProgramStatusRecord? {
+        programStatusBook.report(for: sessionID)
+    }
+
+    /// 用户在这台设备上看过了这个终端的结果。
+    func acknowledgeProgramStatus(for sessionID: UUID) {
+        programStatusBook.acknowledge(sessionID)
+    }
+
+    /// 此刻有没有人看着这个终端（前台标签且 App 在前台）：看着的时候结果一到就算看过。
+    func setProgramStatusWatched(_ sessionID: UUID, _ isWatched: Bool) {
+        programStatusBook.setWatched(sessionID, isWatched)
+    }
+
+    func receiveProgramStatus(_ update: RemoteProgramStatusUpdate) {
+        programStatusBook.apply(update)
+    }
 
     /// 局域网里能找到它时的地址；nil = 此刻局域网里没有。
     @ObservationIgnored private var endpoint: NWEndpoint?
@@ -439,6 +467,7 @@ final class RemoteMacClient: Identifiable {
         roundTripMillis = nil
         sessions = []
         listedSessionIDs = nil
+        programStatusBook.removeAllReports()
         if state == .connected || state == .connecting {
             failureIsPermanent = false
             state = error.map { .failed($0.localizedDescription) } ?? .idle
@@ -503,7 +532,10 @@ final class RemoteMacClient: Identifiable {
     func receiveSessions(_ list: [RemoteSessionInfo]) {
         if sessions != list { sessions = list }
         let ids = list.map(\.id)
-        if listedSessionIDs != ids { listedSessionIDs = ids }
+        if listedSessionIDs != ids {
+            listedSessionIDs = ids
+            programStatusBook.retain(Set(ids))
+        }
     }
 
     private func handleControl(_ message: RemoteMessage) {
@@ -544,6 +576,10 @@ final class RemoteMacClient: Identifiable {
             guard let workspaces = try? RemoteJSON.decode(RemoteLocalWorkspaces.self, from: message.payload),
                   let waiter = workspaceWaiters.removeValue(forKey: workspaces.requestID) else { return }
             waiter.resume(returning: workspaces)
+        case .programStatus:
+            if let update = try? RemoteJSON.decode(RemoteProgramStatusUpdate.self, from: message.payload) {
+                receiveProgramStatus(update)
+            }
         case .terminalImageResult:
             guard let result = try? RemoteJSON.decode(RemoteTerminalImageResult.self, from: message.payload),
                   let waiter = imageWaiters.removeValue(forKey: result.requestID) else { return }

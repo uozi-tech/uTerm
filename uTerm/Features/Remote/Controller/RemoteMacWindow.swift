@@ -193,7 +193,8 @@ private struct RemoteMacTerminalArea: View {
 
     private func descriptor(for pane: RemoteTerminalPane) -> UPaneTabDescriptor {
         let session = pane.session
-        let status = session.programStatus
+        // 镜像不自己解析程序状态（那台 Mac 答查询、推状态），读连接上记着的。
+        let status = model.client.programStatus(for: pane.id)
         return UPaneTabDescriptor(
             title: pane.title(in: model.client.sessions),
             icon: .none,
