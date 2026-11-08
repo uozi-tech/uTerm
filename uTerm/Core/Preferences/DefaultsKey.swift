@@ -96,6 +96,8 @@ nonisolated enum DefaultsKey {
     static let remoteRelayLatestCheckedAt = "remote.relay.latestCheckedAt"
     /// macOS：已经为哪个中继新版本发过通知（每个版本只提醒一次）。
     static let remoteRelayNotifiedVersion = "remote.relay.notifiedVersion"
+    /// macOS：还没被中继确认的成员证书吊销（中继 ID → 成员公钥），注册上中继时补发。
+    static let remoteRelayPendingRevocations = "remote.relay.pendingRevocations"
 
     static let lanSyncDeviceID = "lanSync.deviceID"
     static let lanSyncHostPairingCode = "lanSync.hostPairingCode"

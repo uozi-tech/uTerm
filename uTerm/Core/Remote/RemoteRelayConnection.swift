@@ -18,6 +18,26 @@ nonisolated struct RemoteRelayRequest: Encodable, Sendable {
     var ticket: String?
     var sig: String?
     var hostSig: String?
+    /// 用成员证书认证时：自己的成员公钥、证书、能连的主机。中继 1.2.0 之前不认，证书在老中继上用不了。
+    var member: String?
+    var cert: String?
+    var scope: String?
+
+    /// 成员身份的请求（`client` / `dial`）：用配置里的成员私钥签，持证书时一并带上证书。
+    static func member(role: String, config: RemoteRelayConfig, nonce: String, parameter: String = "",
+                       hostID: String? = nil, session: String? = nil) throws -> RemoteRelayRequest {
+        guard let key = config.memberKey else { throw RemoteRelayError.notConfigured }
+        var request = RemoteRelayRequest(
+            role: role, hostID: hostID, session: session,
+            sig: try RemoteRelaySignature.sign(key, role: role, relayID: config.relayID, nonce: nonce,
+                                               parameter: parameter))
+        if config.isCertificate {
+            request.member = config.memberPublicKey
+            request.cert = config.cert
+            request.scope = config.scope
+        }
+        return request
+    }
 }
 
 nonisolated struct RemoteRelayAnswer: Decodable, Sendable {
@@ -36,6 +56,8 @@ nonisolated struct RemoteRelayMessage: Codable, Sendable {
     var box: String?
     var ticket: String?
     var hosts: [String]?
+    /// `revoke` / `revoked`：吊销的成员公钥。
+    var member: String?
 
     init(type: String, session: String? = nil, from: String? = nil, to: String? = nil, box: String? = nil) {
         self.type = type

@@ -88,6 +88,15 @@ nonisolated struct RemoteRelayVersion: Comparable, Sendable, CustomStringConvert
 
     static func == (lhs: Self, rhs: Self) -> Bool { !(lhs < rhs) && !(rhs < lhs) }
 
+    /// 认成员证书（只能连一台主机、可吊销）的第一个中继版本。
+    static let memberCertificates = "1.2.0"
+
+    /// 中继认不认成员证书。版本还不知道（没注册上、1.1.1 之前不报版本）是 nil。
+    static func supportsMemberCertificates(_ running: String?) -> Bool? {
+        guard let running = running.flatMap(Self.init), let minimum = Self(memberCertificates) else { return nil }
+        return !(running < minimum)
+    }
+
     /// `latest` 比正在跑的新。任一边认不出来都当没有更新，免得乱提醒。
     static func isUpdate(latest: String?, running: String?) -> Bool {
         guard let latest = latest.flatMap(Self.init), let running = running.flatMap(Self.init) else { return false }

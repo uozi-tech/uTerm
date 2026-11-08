@@ -122,7 +122,10 @@ final class RemoteRelayHostLink {
     }
 
     private func registerAndServe() async throws {
-        guard let server, let memberKey = config.memberKey else { throw RemoteRelayError.notConfigured }
+        // 成员证书只能连一台主机，不能注册：本机被控用的必须是中继本身的成员密钥。
+        guard let server, !config.isCertificate, let memberKey = config.memberKey else {
+            throw RemoteRelayError.notConfigured
+        }
         let identity = server.identity
         let hostKey = try identity.relayHostKey()
         let hostID = server.localID.uuidString
@@ -156,6 +159,8 @@ final class RemoteRelayHostLink {
         retryDelay = .seconds(1)
         lastHeard = Date()
         startHeartbeat(connection)
+        server.relayRegistered()
+        sendRevocations()
 
         while !Task.isCancelled {
             let message: RemoteRelayMessage = try await connection.receive(timeout: nil)
@@ -164,11 +169,27 @@ final class RemoteRelayHostLink {
             case "signal": await handleSignal(message, on: connection)
             case "incoming": handleIncoming(message)
             case "ping": try await connection.send(RemoteRelayMessage(type: "pong"))
+            case "revoked":
+                if let member = message.member { server.relayRevocations.confirm(member, relayID: config.relayID) }
             case "superseded": throw RemoteRelayError.refused("superseded")
             default: break
             }
         }
         throw CancellationError()
+    }
+
+    /// 把还没确认的成员证书吊销发给中继。中继回 `revoked` 才从待发里划掉；没注册上就等下次注册。
+    func sendRevocations() {
+        guard state == .registered, let control, let server else { return }
+        let pending = server.relayRevocations.pending(relayID: config.relayID)
+        guard !pending.isEmpty else { return }
+        Task {
+            for member in pending {
+                var message = RemoteRelayMessage(type: "revoke")
+                message.member = member
+                try? await control.send(message)
+            }
+        }
     }
 
     private func startHeartbeat(_ connection: RemoteRelayConnection) {

@@ -144,8 +144,8 @@ final class RemoteHostConnection {
                 authorize(.trusted)
                 return
             }
-            if let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
-                try server.trust(newPeer(from: peer))
+            if let proof = peer.pairingProof, let redemption = server.redeemPairingProof(proof, phoneKey: peer.staticKey) {
+                try server.trust(newPeer(from: peer, redemption: redemption))
                 authorize(.approved)
                 return
             }
@@ -182,10 +182,11 @@ final class RemoteHostConnection {
             authorize(.trusted)
             return
         }
-        guard let proof = peer.pairingProof, server.redeemPairingProof(proof, phoneKey: peer.staticKey) else {
+        guard let proof = peer.pairingProof,
+              let redemption = server.redeemPairingProof(proof, phoneKey: peer.staticKey) else {
             throw RemoteProtocolError.pairingRejected
         }
-        try server.trust(newPeer(from: peer))
+        try server.trust(newPeer(from: peer, redemption: redemption))
         server.grantInternetAccess(peer.deviceID)
         authorize(.approved)
     }
@@ -204,9 +205,14 @@ final class RemoteHostConnection {
         try server.trust(known)
     }
 
-    private func newPeer(from peer: RemoteHello) -> RemotePeer {
-        RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
-                   model: peer.deviceModel, platform: peer.platform)
+    /// 新配上（或重新配对）的设备。之前发给它的中继证书留着；凭邀请配上的换成邀请里那张，旧的吊销。
+    private func newPeer(from peer: RemoteHello, redemption: RemoteHostServer.PairingRedemption? = nil) -> RemotePeer {
+        var trusted = RemotePeer(id: peer.deviceID, name: peer.deviceName, publicKey: peer.staticKey, pairedAt: Date(),
+                                 model: peer.deviceModel, platform: peer.platform)
+        let previous = server.identity.peer(id: peer.deviceID)?.relayGrant
+        trusted.relayGrant = redemption?.relayGrant ?? previous
+        if let previous, previous != trusted.relayGrant { server.revokeRelayGrant(previous) }
+        return trusted
     }
 
     /// 等手机证明它真的持有握手里报的长期私钥。公钥是公开的，只凭握手消息信任会让冒充者被记进信任列表、
@@ -247,7 +253,7 @@ final class RemoteHostConnection {
     /// 把中继配置交给勾选过公网接入的设备。之后它在外面也连得上。
     func sendRelayConfigIfAllowed() {
         guard isAuthorized, peerSupportsRelayConfig, let peerID, server.allowsInternetAccess(peerID),
-              let config = server.relayConfig else { return }
+              let config = server.relayConfig(forPeer: peerID) else { return }
         link.send(RemoteMessage(.relayConfig, payload: RemoteJSON.encode(config)))
     }
 

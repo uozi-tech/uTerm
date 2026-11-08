@@ -48,7 +48,7 @@ nonisolated enum RemoteRelayCheck {
 
     private static func checkTCP(config: RemoteRelayConfig, timeout: TimeInterval) async -> RemoteRelayCheckResult {
         var result = RemoteRelayCheckResult(tcp: .failed, auth: .skipped, udp: .skipped, problems: [])
-        guard let memberKey = config.memberKey else {
+        guard config.memberKey != nil else {
             result.problems.append(String(localized: "这份中继配置里的成员密钥无效，需要重新导入。"))
             return result
         }
@@ -72,9 +72,7 @@ nonisolated enum RemoteRelayCheck {
         result.rttMs = Int(Date().timeIntervalSince(started) * 1000)
 
         do {
-            let signature = try RemoteRelaySignature.sign(memberKey, role: "client", relayID: config.relayID,
-                                                          nonce: hello.nonce, parameter: "")
-            try await connection.send(RemoteRelayRequest(role: "client", sig: signature))
+            try await connection.send(RemoteRelayRequest.member(role: "client", config: config, nonce: hello.nonce))
             let answer = try await connection.answer(timeout: timeout)
             guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
             result.auth = .ok

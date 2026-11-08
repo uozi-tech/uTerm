@@ -13,7 +13,8 @@ import Security
 /// 换不到别的设备上用。
 ///
 /// 被控端开着公网接入时，邀请还带上它的中继配置（`relay`），对方不在同一网络、不是同一 Apple ID 也能配对。
-/// 这等于把中继分享给了对方：成员密钥是这台中继所有成员共用的。
+/// 中继 1.2.0 起带的是只能连这台主机的成员证书（邀请没用掉就作废时吊销）；老中继上带的仍是所有成员共用的
+/// 成员密钥，等于把中继分享给了对方。
 nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     static let scheme = "uterm"
     static let host = "pair"
@@ -44,8 +45,8 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
     }
 
     /// `uterm://pair?v=1&d=<设备 ID>&n=<名字>&k=<公钥>&t=<令牌>`，二进制用 base64url。带中继时再加
-    /// `rn` / `rh` / `rp` / `ri` / `rk`（名字、地址、端口、中继 ID、成员密钥）。版本号不变：老版本不认这几个键，
-    /// 照样能在局域网里配对。
+    /// `rn` / `rh` / `rp` / `ri` / `rk`（名字、地址、端口、中继 ID、成员密钥），成员证书再加 `rs` / `rc`
+    /// （能连的主机、证书）。版本号不变：老版本不认这几个键，照样能在局域网里配对。
     var url: URL {
         var components = URLComponents()
         components.scheme = Self.scheme
@@ -65,6 +66,9 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
                 URLQueryItem(name: "ri", value: relay.relayID),
                 URLQueryItem(name: "rk", value: key.base64URLEncoded),
             ]
+            if let scope = relay.scope, let cert = relay.cert.flatMap({ Data(base64Encoded: $0) }) {
+                items += [URLQueryItem(name: "rs", value: scope), URLQueryItem(name: "rc", value: cert.base64URLEncoded)]
+            }
         }
         components.queryItems = items
         return components.url!
@@ -90,7 +94,8 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
         guard let host = items["rh"], let port = items["rp"].flatMap(Int.init), let relayID = items["ri"],
               let key = items["rk"].flatMap(Data.init(base64URLEncoded:)) else { return nil }
         let config = RemoteRelayConfig(name: items["rn"] ?? host, host: host, port: port, relayID: relayID,
-                                       key: key.base64EncodedString())
+                                       key: key.base64EncodedString(), scope: items["rs"],
+                                       cert: items["rc"].flatMap(Data.init(base64URLEncoded:))?.base64EncodedString())
         return config.isValid ? config : nil
     }
 

@@ -22,6 +22,8 @@ const (
 	// nonceBytes is the raw challenge the relay writes after the client's magic.
 	nonceBytes = 32
 	signPrefix = "uterm-relay-v1"
+	// certPrefix starts the text a member certificate signs, see certMessage.
+	certPrefix = "uterm-relay-member-v1"
 )
 
 const (
@@ -49,6 +51,12 @@ type requestFrame struct {
 	Ticket  string `json:"ticket,omitempty"`
 	Sig     string `json:"sig,omitempty"`
 	HostSig string `json:"hostSig,omitempty"`
+	// Member, Cert and Scope are set by a member that holds its own key instead of the relay's:
+	// Member is its public key, Cert the relay key's signature over certMessage, Scope the only host
+	// it may reach. Sig is then made with the member's own key.
+	Member string `json:"member,omitempty"`
+	Cert   string `json:"cert,omitempty"`
+	Scope  string `json:"scope,omitempty"`
 }
 
 type answerFrame struct {
@@ -69,6 +77,8 @@ type messageFrame struct {
 	Box     string   `json:"box,omitempty"`
 	Ticket  string   `json:"ticket,omitempty"`
 	Hosts   []string `json:"hosts,omitempty"`
+	// Member is the public key a host revokes, and the one the relay confirms.
+	Member string `json:"member,omitempty"`
 }
 
 func writeFrame(w io.Writer, value any) error {
@@ -104,6 +114,11 @@ func readFrame(r io.Reader, value any) error {
 
 func signedMessage(role, relayID, nonce, parameter string) []byte {
 	return []byte(strings.Join([]string{signPrefix, role, relayID, nonce, parameter}, "\n"))
+}
+
+// certMessage is what the relay's member key signs to let another key in: that key may reach one host.
+func certMessage(relayID, member, scope string) []byte {
+	return []byte(strings.Join([]string{certPrefix, relayID, member, scope}, "\n"))
 }
 
 func verifySignature(key *ecdsa.PublicKey, message []byte, signature string) bool {

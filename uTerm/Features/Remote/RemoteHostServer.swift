@@ -103,8 +103,12 @@ final class RemoteHostServer {
     /// 凭邀请经公网配上的设备：替它勾上「允许经公网接入」。邀请是本机的人主动发出去的，配上了还要再去设置里
     /// 勾一次的话，对方第一次连就会被断开。
     @ObservationIgnored var grantInternetAccess: (UUID) -> Void = { _ in }
-    /// 当前的中继配置，交给勾选过的设备。可观察：命令行导入后设置页要跟着变。
+    /// 当前的中继配置。可观察：命令行导入后设置页要跟着变。交给别的设备的是 `relayConfig(forPeer:)`。
     var relayConfig: RemoteRelayConfig?
+    /// 要吊销、中继还没确认的成员证书。
+    @ObservationIgnored let relayRevocations: RemoteRelayRevocations
+    /// 正在出示的邀请里带的成员证书：邀请用掉就记到那台设备名下，作废了就吊销。
+    @ObservationIgnored private var invitationGrant: RemoteRelayConfig?
     @ObservationIgnored private var connections: [UUID: RemoteHostConnection] = [:]
     @ObservationIgnored private var pairingWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     /// 会话 → 正在接管它的连接与通道。
@@ -126,8 +130,10 @@ final class RemoteHostServer {
          keyConfirmationTimeout: Duration = RemoteConstants.handshakeTimeout,
          relayStore: RemoteRelayConfigStore? = nil,
          relayUpdates: RemoteRelayUpdateMonitor = .inert(),
+         relayRevocations: RemoteRelayRevocations = RemoteRelayRevocations(defaults: .standard),
          desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
         self.relayStore = relayStore
+        self.relayRevocations = relayRevocations
         self.relayUpdates = relayUpdates
         self.localFeatures = localFeatures
         self.peerSilenceLimit = peerSilenceLimit
@@ -286,9 +292,13 @@ final class RemoteHostServer {
         relayStore?.load() ?? relayConfig
     }
 
-    /// 导入中继配置。文件不对时返回 false。
+    /// 导入中继配置。文件不对、或是别的 Mac 发的成员证书（注册不了主机）时返回 false。
     @discardableResult
     func importRelayConfig(_ config: RemoteRelayConfig) -> Bool {
+        guard !config.isCertificate else {
+            AppLogger.info("没有导入中继配置：这是别的 Mac 发的成员证书，只能用来连那台 Mac", category: RemoteLog.category)
+            return false
+        }
         do {
             try relayStore?.save(config)
         } catch {
@@ -361,9 +371,12 @@ final class RemoteHostServer {
     @discardableResult
     func makePairingInvitation() throws -> RemotePairingInvitation {
         let key = try identity.localIdentity().publicKey.rawRepresentation
+        cancelPairingInvitation()
         // 开着公网接入（已注册到中继）才带上中继：否则对方拿着它也找不到这台 Mac。
+        let relay = relayLink.flatMap { sharedRelay(from: $0.config) }
+        invitationGrant = relay?.isCertificate == true ? relay : nil
         let invitation = RemotePairingInvitation(macID: localID, macName: localName, macKey: key,
-                                                 token: RemotePairingInvitation.newToken(), relay: relayLink?.config)
+                                                 token: RemotePairingInvitation.newToken(), relay: relay)
         pairingInvitation = invitation
         invitationExpiry?.cancel()
         invitationExpiry = Task { [weak self] in
@@ -373,19 +386,77 @@ final class RemoteHostServer {
         return invitation
     }
 
+    /// 收回正在出示的邀请。没用掉的邀请里带的成员证书一并吊销：链接可能已经发出去了。
     func cancelPairingInvitation() {
         invitationExpiry?.cancel()
         invitationExpiry = nil
         pairingInvitation = nil
+        if let grant = invitationGrant { revokeRelayGrant(grant) }
+        invitationGrant = nil
     }
 
-    /// 对方带来的邀请凭据对得上正在出示的邀请：用掉它（一次性）并返回 true。
-    func redeemPairingProof(_ proof: Data, phoneKey: Data) -> Bool {
+    /// 凭邀请配上的结果：邀请里带的成员证书（有的话）记到那台设备名下。
+    struct PairingRedemption {
+        var relayGrant: RemoteRelayConfig?
+    }
+
+    /// 对方带来的邀请凭据对得上正在出示的邀请：用掉它（一次性）。对不上返回 nil。
+    func redeemPairingProof(_ proof: Data, phoneKey: Data) -> PairingRedemption? {
         guard let invitation = pairingInvitation,
               RemotePairingInvitation.verify(proof, token: invitation.token, phoneKey: phoneKey,
-                                             macKey: invitation.macKey) else { return false }
+                                             macKey: invitation.macKey) else { return nil }
+        let redemption = PairingRedemption(relayGrant: invitationGrant)
+        invitationGrant = nil
         cancelPairingInvitation()
-        return true
+        return redemption
+    }
+
+    // MARK: - 中继成员证书
+
+    /// 交给别人的中继：中继认证书（1.2.0 起）时是只能连本机的证书，老中继上是共用的成员密钥，还不知道中继版本
+    /// （没注册上）时不给。
+    private func sharedRelay(from root: RemoteRelayConfig, peer: inout RemotePeer?) -> RemoteRelayConfig? {
+        guard !root.isCertificate,
+              let supported = RemoteRelayVersion.supportsMemberCertificates(relayUpdates.runningVersion) else { return nil }
+        guard supported else { return root }
+        if var grant = peer?.relayGrant, grant.relayID == root.relayID {
+            // 同一台设备复用上次发的证书；中继改了地址或名字就跟着改。
+            grant.name = root.name
+            grant.host = root.host
+            grant.port = root.port
+            peer?.relayGrant = grant
+            return grant
+        }
+        guard let grant = try? root.certificate(for: localID) else { return nil }
+        if let old = peer?.relayGrant { revokeRelayGrant(old) }
+        peer?.relayGrant = grant
+        return grant
+    }
+
+    private func sharedRelay(from root: RemoteRelayConfig) -> RemoteRelayConfig? {
+        var none: RemotePeer?
+        return sharedRelay(from: root, peer: &none)
+    }
+
+    /// 交给这台配对过的设备的中继配置（见 `sharedRelay`）。第一次给它发证书时记到它名下。
+    func relayConfig(forPeer peerID: UUID) -> RemoteRelayConfig? {
+        guard let root = relayConfig, let known = identity.peer(id: peerID) else { return nil }
+        var peer: RemotePeer? = known
+        let config = sharedRelay(from: root, peer: &peer)
+        if let peer, peer != known { try? trust(peer) }
+        return config
+    }
+
+    /// 吊销一张发出去的证书：先记下，注册在那台中继上时立刻发，否则下次注册上再补。
+    func revokeRelayGrant(_ grant: RemoteRelayConfig) {
+        guard let member = grant.memberPublicKey else { return }
+        relayRevocations.add(member, relayID: grant.relayID)
+        relayLink?.sendRevocations()
+    }
+
+    /// 中继注册上了：现在知道它的版本，把中继交给已经连着、勾选过的设备，补发没确认的吊销。
+    func relayRegistered() {
+        for connection in connections.values { connection.sendRelayConfigIfAllowed() }
     }
 
     func approvePairing(_ id: UUID) { resolvePairing(id, approved: true) }
@@ -416,8 +487,9 @@ final class RemoteHostServer {
         refreshConnectedDevices()
     }
 
-    /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。
+    /// 撤销信任：已连着的这台设备立即断开，之后再连要重新配对。发给它的中继证书一并吊销。
     func revoke(_ peerID: UUID) {
+        if let grant = identity.peer(id: peerID)?.relayGrant { revokeRelayGrant(grant) }
         try? identity.revoke(id: peerID)
         trustedPeers = identity.trustedPeers()
         for connection in connections.values where connection.peerID == peerID {

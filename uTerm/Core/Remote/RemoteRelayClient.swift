@@ -44,14 +44,13 @@ actor RemoteRelayClient {
 
     /// 走中继：等 Mac 回拨接上后，返回到 Mac 的字节流。
     func dial(host: UUID, session: String) async throws -> any RemoteTransport {
-        guard let memberKey = config.memberKey else { throw RemoteRelayError.notConfigured }
+        guard config.memberKey != nil else { throw RemoteRelayError.notConfigured }
         let connection = RemoteRelayConnection(config: config)
         do {
             let hello = try await connection.open()
-            let signature = try RemoteRelaySignature.sign(memberKey, role: "dial", relayID: config.relayID,
-                                                          nonce: hello.nonce, parameter: host.uuidString)
-            try await connection.send(RemoteRelayRequest(role: "dial", hostID: host.uuidString, session: session,
-                                                         sig: signature))
+            try await connection.send(RemoteRelayRequest.member(
+                role: "dial", config: config, nonce: hello.nonce, parameter: host.uuidString,
+                hostID: host.uuidString, session: session))
             // 比中继的 ticket 时限长一点：过期由中继明确告诉我们。
             let answer = try await connection.answer(timeout: 13)
             guard answer.ok else {
@@ -77,13 +76,12 @@ actor RemoteRelayClient {
         if let opening { return try await opening.value }
         let config = self.config
         let task = Task { () throws -> RemoteRelayConnection in
-            guard let memberKey = config.memberKey else { throw RemoteRelayError.notConfigured }
+            guard config.memberKey != nil else { throw RemoteRelayError.notConfigured }
             let connection = RemoteRelayConnection(config: config)
             do {
                 let hello = try await connection.open()
-                let signature = try RemoteRelaySignature.sign(memberKey, role: "client", relayID: config.relayID,
-                                                              nonce: hello.nonce, parameter: "")
-                try await connection.send(RemoteRelayRequest(role: "client", sig: signature))
+                try await connection.send(RemoteRelayRequest.member(role: "client", config: config,
+                                                                    nonce: hello.nonce))
                 let answer = try await connection.answer()
                 guard answer.ok else { throw RemoteRelayError.refused(answer.reason ?? "") }
                 return connection

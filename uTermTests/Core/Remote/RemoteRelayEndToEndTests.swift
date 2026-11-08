@@ -73,8 +73,11 @@ final class RemoteRelayEndToEndTests: XCTestCase {
                                                windowKind: TerminalWindowKind.workspace, title: "zsh",
                                                connectedAt: Date()), session: session)
         let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
+        let suite = "RemoteRelayEndToEndTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let server = RemoteHostServer(registry: registry, identity: identity, localName: "测试 Mac", localID: UUID(),
-                                      advertises: false)
+                                      advertises: false, relayRevocations: RemoteRelayRevocations(defaults: defaults))
         server.internetAccessPolicy = { allowed.contains($0) }
         server.relayConfig = config
         server.updateInternetAccess(enabled: true, keepAwake: false)
@@ -120,8 +123,12 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         defer { mac.server.stop(); mac.session.dispose() }
         mac.server.grantInternetAccess = { id in allowed.set([id]) }
         let invitation = try mac.server.makePairingInvitation()
-        XCTAssertEqual(invitation.relay, config, "开着公网接入：邀请带上中继")
+        let shared = try XCTUnwrap(invitation.relay, "开着公网接入：邀请带上中继")
+        XCTAssertEqual(shared.relayID, config.relayID)
+        XCTAssertEqual(shared.scope, mac.peer.id.uuidString, "带的是只能连这台 Mac 的成员证书")
+        XCTAssertNotEqual(shared.key, config.key, "中继本身的成员密钥不外发")
         let scanned = try XCTUnwrap(RemotePairingInvitation(scanned: invitation.url.absoluteString))
+        XCTAssertEqual(scanned.relay, shared)
         let relay = RemoteRelayClient(config: try XCTUnwrap(scanned.relay))
 
         let first = makeClient(phone: phone, mac: mac.peer, relay: relay)
@@ -131,6 +138,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertEqual(first.path, .relay)
         XCTAssertTrue(mac.server.pairingRequests.isEmpty)
         XCTAssertEqual(mac.server.trustedPeers.map(\.id), [phone.id])
+        XCTAssertEqual(mac.server.trustedPeers.first?.relayGrant, shared, "证书记到这台设备名下，忘记它时吊销")
         XCTAssertTrue(allowed.contains(phone.id))
         first.disconnect()
 
@@ -144,6 +152,84 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         late.pairingToken = scanned.token
         await late.connect()
         XCTAssertNotEqual(late.state, .connected, "用过的邀请别的设备用不了")
+    }
+
+    /// 成员证书只看得见、连得上发证的那台 Mac；不能拿去注册主机。
+    func test_member_certificate_reaches_only_its_mac() async throws {
+        let config = try relayConfig()
+        let mine = try await makeMac(config: config, allowed: Allowed())
+        defer { mine.server.stop(); mine.session.dispose() }
+        let other = try await makeMac(config: config, allowed: Allowed())
+        defer { other.server.stop(); other.session.dispose() }
+        let certificate = try config.certificate(for: mine.peer.id)
+
+        let relay = RemoteRelayClient(config: certificate)
+        let seen = try await relay.onlineHosts()
+        XCTAssertEqual(seen, [mine.peer.id], "只看得见发证的那台")
+        let everything = try await RemoteRelayClient(config: config).onlineHosts()
+        XCTAssertTrue(everything.isSuperset(of: [mine.peer.id, other.peer.id]))
+        do {
+            _ = try await relay.dial(host: other.peer.id, session: "s")
+            XCTFail("证书不该连得上别的 Mac")
+        } catch {
+            XCTAssertEqual(error as? RemoteRelayError, .rejected)
+        }
+
+        let identity = RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage())
+        let host = RemoteHostServer(registry: TerminalSessionRegistry(), identity: identity, localName: "冒名",
+                                    localID: UUID(), advertises: false)
+        defer { host.stop() }
+        host.relayConfig = certificate
+        host.updateInternetAccess(enabled: true, keepAwake: false)
+        let failed = await waitUntil(3) {
+            if case .failed = host.relayLink?.state { return true }
+            return false
+        }
+        XCTAssertTrue(failed, "证书不能注册主机：\(String(describing: host.relayLink?.state))")
+    }
+
+    /// 忘记设备、或邀请没用掉就作废：发出去的证书在中继上吊销，之后连不上。
+    func test_forgetting_a_device_revokes_its_certificate() async throws {
+        let config = try relayConfig()
+        let allowed = Allowed()
+        let phone = Phone()
+        let mac = try await makeMac(config: config, allowed: allowed)
+        defer { mac.server.stop(); mac.session.dispose() }
+        mac.server.grantInternetAccess = { id in allowed.set([id]) }
+
+        let unused = try XCTUnwrap(try mac.server.makePairingInvitation().relay)
+        let used = try XCTUnwrap(try mac.server.makePairingInvitation().relay)
+        XCTAssertNotEqual(unused.key, used.key, "每张邀请一张新证书")
+        let confirmedUnused = await waitUntil { mac.server.relayRevocations.pending(relayID: config.relayID).isEmpty }
+        XCTAssertTrue(confirmedUnused, "换了邀请：旧邀请里的证书吊销并经中继确认")
+        await assertRejected(unused)
+
+        let invitation = try XCTUnwrap(mac.server.pairingInvitation)
+        let client = makeClient(phone: phone, mac: mac.peer, relay: RemoteRelayClient(config: used))
+        client.pairingToken = invitation.token
+        await client.connect()
+        XCTAssertEqual(client.state, .connected)
+        let usedRelay = RemoteRelayClient(config: used)
+        let stillUsable = try await usedRelay.onlineHosts()
+        await usedRelay.stop()
+        XCTAssertEqual(stillUsable, [mac.peer.id], "用掉的邀请里的证书留给那台设备")
+
+        mac.server.revoke(phone.id)
+        let confirmed = await waitUntil { mac.server.relayRevocations.pending(relayID: config.relayID).isEmpty }
+        XCTAssertTrue(confirmed, "忘记设备：它的证书在中继上吊销并经确认")
+        await assertRejected(used)
+        client.disconnect()
+    }
+
+    private func assertRejected(_ config: RemoteRelayConfig, file: StaticString = #filePath, line: UInt = #line) async {
+        let relay = RemoteRelayClient(config: config)
+        do {
+            _ = try await relay.onlineHosts()
+            XCTFail("吊销的证书还能用", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? RemoteRelayError, .rejected, file: file, line: line)
+        }
+        await relay.stop()
     }
 
     func test_phone_controls_a_terminal_through_the_relay() async throws {

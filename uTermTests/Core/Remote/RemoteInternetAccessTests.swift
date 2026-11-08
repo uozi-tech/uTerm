@@ -42,11 +42,13 @@ final class RemoteInternetAccessTests: XCTestCase {
         return true
     }
 
-    private func makeServer(allowed: Set<UUID> = []) -> RemoteHostServer {
+    private func makeServer(allowed: Set<UUID> = [], relayVersion: String? = nil) -> RemoteHostServer {
+        let updates = RemoteRelayUpdateMonitor.inert()
+        updates.noteRunning(relayVersion)
         let server = RemoteHostServer(registry: TerminalSessionRegistry(),
                                       identity: RemoteIdentityStore(role: .controllers, storage: RemoteMemoryStorage()),
                                       localName: "测试 Mac", localID: UUID(), advertises: false,
-                                      keyConfirmationTimeout: .milliseconds(300))
+                                      keyConfirmationTimeout: .milliseconds(300), relayUpdates: updates)
         server.internetAccessPolicy = { allowed.contains($0) }
         return server
     }
@@ -262,9 +264,10 @@ final class RemoteInternetAccessTests: XCTestCase {
         XCTAssertTrue(refused, "第 9 条起直接拒绝，实际 \(closedInboxes.filter(\.closed).count)")
     }
 
+    /// 老中继（1.2.0 之前）不认成员证书：照旧发共用的成员密钥。
     func test_ticked_device_receives_the_relay_config_after_connecting() async throws {
         let phone = Phone()
-        let server = makeServer(allowed: [phone.id])
+        let server = makeServer(allowed: [phone.id], relayVersion: "1.1.1")
         try server.trust(phone.peer)
         let config = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
                                        key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
@@ -274,6 +277,43 @@ final class RemoteInternetAccessTests: XCTestCase {
         let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
         XCTAssertTrue(delivered)
         XCTAssertEqual(RemoteRelayConfig(importing: try XCTUnwrap(inbox.of(.relayConfig).first).payload), config)
+        link.close()
+    }
+
+    /// 中继认证书：发的是只能连这台 Mac 的成员证书，不是中继本身的成员密钥。
+    func test_ticked_device_receives_its_own_certificate() async throws {
+        let phone = Phone()
+        let server = makeServer(allowed: [phone.id], relayVersion: "1.2.0")
+        try server.trust(phone.peer)
+        let config = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
+                                       key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+        server.relayConfig = config
+        let (link, inbox) = await connect(phone, to: server,
+                                              features: [RemoteFeature.keyConfirmation, RemoteFeature.relayConfig])
+        let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertTrue(delivered)
+        let received = try XCTUnwrap(RemoteRelayConfig(importing: try XCTUnwrap(inbox.of(.relayConfig).first).payload))
+        XCTAssertEqual(received.scope, server.localID.uuidString)
+        XCTAssertNotEqual(received.key, config.key)
+        XCTAssertEqual(server.identity.peer(id: phone.id)?.relayGrant, received)
+        link.close()
+    }
+
+    /// 还没注册上中继、不知道它认不认证书：先不发，注册上后补推给连着的设备。
+    func test_relay_config_waits_until_the_relay_version_is_known() async throws {
+        let phone = Phone()
+        let server = makeServer(allowed: [phone.id])
+        try server.trust(phone.peer)
+        server.relayConfig = RemoteRelayConfig(name: "家里", host: "relay.test", port: 47310, relayID: "abc",
+                                               key: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
+        let (link, inbox) = await connect(phone, to: server,
+                                              features: [RemoteFeature.keyConfirmation, RemoteFeature.relayConfig])
+        let early = await waitUntil(0.5) { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertFalse(early)
+        server.relayUpdates.noteRunning("1.2.0")
+        server.relayRegistered()
+        let delivered = await waitUntil { !inbox.of(.relayConfig).isEmpty }
+        XCTAssertTrue(delivered)
         link.close()
     }
 
