@@ -60,7 +60,7 @@ struct RemoteCapabilitiesGroup: View {
                     }
                 }
                 SettingsRow(label: "允许传输声音",
-                            hint: "看屏幕时把这台 Mac 的声音传到手机，手机上打开扬声器才传。用的就是屏幕录制那项授权") {
+                            hint: "查看屏幕时把这台 Mac 的声音传到手机，在手机上打开扬声器后才传输。沿用「屏幕录制」授权，不需要其他权限") {
                     UDToggle(Binding(get: { settings.isDesktopAudioEnabled },
                                      set: { settings.isDesktopAudioEnabled = $0 }))
                 }

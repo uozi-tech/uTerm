@@ -48,7 +48,7 @@ final class RemoteDesktopSession {
     /// 这台 Mac 支持远程解锁（能收到锁屏状态、能发解锁请求）。
     var supportsUnlock: Bool { client.supportsUnlock }
 
-    /// 声音（调研 §16）。
+    /// 声音（调研 §17）。
     enum AudioState: Equatable {
         case off
         /// 已经请求，等 Mac 回格式。
@@ -350,7 +350,7 @@ final class RemoteDesktopSession {
         if format.codec == nil {
             wantsAudio = false
             stopAudioPlayback()
-            audioState = .unavailable(format.message ?? "Mac 没有传声音过来")
+            audioState = .unavailable(format.message ?? "Mac 没有传来声音")
         } else {
             audioState = .playing
         }
@@ -364,7 +364,7 @@ final class RemoteDesktopSession {
             try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
             audioPlaying = true
         } catch {
-            audioState = .unavailable("手机上的声音没能打开：\(error.localizedDescription)")
+            audioState = .unavailable("手机上无法播放声音：\(error.localizedDescription)")
             wantsAudio = false
         }
     }

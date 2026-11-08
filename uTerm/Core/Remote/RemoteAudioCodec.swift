@@ -1,7 +1,7 @@
 import AudioToolbox
 import Foundation
 
-/// 声音编码与解码，两端都用 AudioToolbox 的 `AudioConverter`（调研 §16.2：Mac 与 iOS 上 Opus 都能编能解，
+/// 声音编码与解码，两端都用 AudioToolbox 的 `AudioConverter`（调研 §17.2：Mac 与 iOS 上 Opus 都能编能解，
 /// Mac 编的包 iOS 逐样解得一样）。PCM 一律是 48 kHz、立体声、交错的 Float32。
 ///
 /// 不是线程安全的：每个实例只在一条队列上用。

@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 帘幕静音（调研 §16.6）：只改我们改的、只恢复到原值，换输出设备照样处理，崩溃后下次启动恢复。
+/// 帘幕静音（调研 §17.6）：只改我们改的、只恢复到原值，换输出设备照样处理，崩溃后下次启动恢复。
 /// 用内存里的假设备：测试不能动这台 Mac 真实的扬声器。
 @MainActor
 final class RemoteCurtainMuteTests: XCTestCase {

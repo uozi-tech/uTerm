@@ -303,7 +303,7 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         XCTAssertEqual(client.state, .connected)
     }
 
-    /// 声音经真实中继（调研 §16）：桌面视频拉满的同时开声音，走 TCP 中继 + `link-flow`，按 10 ms 拉取播放不断音。
+    /// 声音经真实中继（调研 §17）：桌面视频拉满的同时开声音，走 TCP 中继 + `link-flow`，按 10 ms 拉取播放不断音。
     func test_desktop_audio_plays_through_the_relay_while_video_runs() async throws {
         let config = try relayConfig()
         let allowed = Allowed()

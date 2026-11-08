@@ -3,7 +3,7 @@ import CryptoKit
 import XCTest
 @testable import uTerm
 
-/// 远程桌面声音端到端（回环，调研 §16）：合成声源 → 真实的 `RemoteHostConnection` / `RemoteAudioStreamer` / Opus 编码 →
+/// 远程桌面声音端到端（回环，调研 §17）：合成声源 → 真实的 `RemoteHostConnection` / `RemoteAudioStreamer` / Opus 编码 →
 /// 127.0.0.1 上的加密链路（`link-flow`）→ 真实的手机侧 `RemoteDesktopSession` / `RemoteAudioReceiver` / 抖动缓冲。
 /// 只有声源与扬声器换成了夹具（测试进程不能真采系统声音、也不该真出声）。
 @MainActor

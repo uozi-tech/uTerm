@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// 手机这一侧的声音接收（调研 §16.4）：按格式建解码器 → 解包（含冗余补洞）→ 抖动缓冲 → 播放回调来取。
+/// 手机这一侧的声音接收（调研 §17.4）：按格式建解码器 → 解包（含冗余补洞）→ 抖动缓冲 → 播放回调来取。
 ///
 /// 线程：包在连接队列（TCP）或数据报队列（直连）上到达，转到自己的解码队列；播放回调在音频线程上取样，
 /// 抖动缓冲用锁保护（取样只是拷几百个采样，锁持有时间很短）。
@@ -229,7 +229,7 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
                 do {
                     try self.engine.start()
                 } catch {
-                    self.onInterrupted?("声音输出设备变了，没能接着放：\(error.localizedDescription)")
+                    self.onInterrupted?("声音输出设备已更改，无法继续播放：\(error.localizedDescription)")
                 }
             }
         })

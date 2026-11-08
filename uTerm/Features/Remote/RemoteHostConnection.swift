@@ -655,7 +655,7 @@ extension RemoteHostConnection {
                 RemoteDesktopAudioFormat(stream: stream, codec: nil, message: message))))
         }
         guard environment.isAudioEnabled(), let makeSource = environment.makeAudioSource else {
-            return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许传输声音")
+            return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开「设置 › 远程控制 › 允许传输声音」")
         }
         let display = current.streamer.display
         let streamer = RemoteAudioStreamer(
@@ -685,9 +685,9 @@ extension RemoteHostConnection {
             audio = nil
             streamer.stop()
             if case RemoteAudioStreamerError.noCodec = error {
-                refuse("Mac 上编不了手机能解的声音格式")
+                refuse("Mac 无法编码手机支持的声音格式")
             } else {
-                refuse("Mac 上的声音采集没能启动：\(error.localizedDescription)")
+                refuse("Mac 上的声音采集无法启动：\(error.localizedDescription)")
             }
         }
     }

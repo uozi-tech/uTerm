@@ -245,7 +245,7 @@ final class RemoteDesktopDatagramTests: XCTestCase {
         XCTAssertLessThan(millis[15], 100, "单程约 50 ms，手机到 Mac 这个方向不限速")
     }
 
-    /// 声音走数据报（调研 §16.3）：视频拉满上行、随机丢 1% 时，声音包排在视频前面，丢的包靠冗余补上，几乎不用补静音。
+    /// 声音走数据报（调研 §17.3）：视频拉满上行、随机丢 1% 时，声音包排在视频前面，丢的包靠冗余补上，几乎不用补静音。
     func test_audio_over_datagrams_survives_loss_alongside_video() async throws {
         let mac = FakeDesktopMac()
         mac.detail = true

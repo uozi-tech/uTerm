@@ -1,7 +1,7 @@
 import CoreAudio
 import Foundation
 
-/// 帘幕期间让 Mac 本机静音（调研 §16.6）。屏幕已经黑了，声音却照样从 Mac 的扬声器放出来，就和帘幕的初衷相反。
+/// 帘幕期间让 Mac 本机静音（调研 §17.6）。屏幕已经黑了，声音却照样从 Mac 的扬声器放出来，就和帘幕的初衷相反。
 ///
 /// - 开帘幕：记下默认输出设备原来的静音状态，然后静音；设备不支持静音的，记下音量、把音量调到 0。
 ///   帘幕期间换了输出设备（插耳机、连蓝牙）也照样处理新设备。
@@ -9,7 +9,7 @@ import Foundation
 /// - 崩溃不会像 gamma 那样被系统自动恢复，所以改过什么写进 `DefaultsKey.remoteCurtainMutedOutputs`，
 ///   下次启动时 `restoreLeftovers` 恢复并清掉。
 ///
-/// 系统声音由 ScreenCaptureKit 在各 app 混音前采集，输出设备静音不影响传到手机的声音（§16.2 待在真机上核实）。
+/// 系统声音由 ScreenCaptureKit 在各 app 混音前采集，输出设备静音不影响传到手机的声音（§17.2 待在真机上核实）。
 @MainActor
 final class RemoteCurtainMute {
     /// 改过的一台设备。按 UID 记：`AudioDeviceID` 重启后会变。

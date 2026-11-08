@@ -2,7 +2,7 @@ import CoreMedia
 import XCTest
 @testable import uTerm
 
-/// 远程桌面声音（调研 §16）：线上格式、编解码往返、冗余与码率策略、抖动缓冲。
+/// 远程桌面声音（调研 §17）：线上格式、编解码往返、冗余与码率策略、抖动缓冲。
 final class RemoteAudioTests: XCTestCase {
 
     // MARK: - 线上格式

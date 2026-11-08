@@ -2,7 +2,7 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
-/// ScreenCaptureKit 采集系统声音（调研 §16）。
+/// ScreenCaptureKit 采集系统声音（调研 §17）。
 ///
 /// 单开一个只采声音的 `SCStream`，不与视频共用：视频流会因分辨率、10-bit 切换重建，共用的话每重建一次声音就断一下。
 /// 授权就是屏幕录制那一项（系统设置里叫「录屏与系统录音」），不另外要权限、不碰麦克风。

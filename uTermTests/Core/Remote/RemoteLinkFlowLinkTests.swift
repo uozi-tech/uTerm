@@ -3,7 +3,7 @@ import CryptoKit
 import XCTest
 @testable import uTerm
 
-/// 链路层排队（调研 §16.5）在真实 TCP 上的效果：两条 `RemoteLink` 经 `RemoteFaultProxy` 相连（10 Mbps、往返 100 ms），
+/// 链路层排队（调研 §17.5）在真实 TCP 上的效果：两条 `RemoteLink` 经 `RemoteFaultProxy` 相连（10 Mbps、往返 100 ms），
 /// Mac 一侧持续发视频把链路塞满（端到端在途最多 1 MB，模拟码控估高了带宽时的中继路径），同时每 20 ms 发一包声音。
 /// 对比开 / 关 `link-flow`：声音的到达延迟、视频的吞吐。
 final class RemoteLinkFlowLinkTests: XCTestCase {

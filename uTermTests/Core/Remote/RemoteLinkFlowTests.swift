@@ -1,7 +1,7 @@
 import XCTest
 @testable import uTerm
 
-/// 链路层排队（调研 §16.5）的纯逻辑：分级、分片、通道内保序、闸门、端到端计量、收方回报节奏。
+/// 链路层排队（调研 §17.5）的纯逻辑：分级、分片、通道内保序、闸门、端到端计量、收方回报节奏。
 final class RemoteLinkFlowTests: XCTestCase {
     private let ms: UInt64 = 1_000_000
 
