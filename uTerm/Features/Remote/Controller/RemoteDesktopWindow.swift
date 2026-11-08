@@ -439,7 +439,8 @@ struct RemoteDesktopContent: View {
             unlocking = false
             switch outcome {
             case .unlocked, .notLocked: unlockError = nil
-            case .rejected: unlockError = String(localized: "密码不对，请重试。")
+            case .stillLocked: unlockError = String(localized: "输完密码 Mac 仍是锁着的：密码可能不对，也可能没输进锁屏，请重试。")
+            case .inputBlocked: unlockError = String(localized: "那台 Mac 上有截图等程序占着键盘，密码没有输入。请先让它退出再试。")
             case .timedOut: unlockError = String(localized: "解锁超时，请重试。")
             case .notAllowed: unlockError = String(localized: "那台 Mac 当前不允许远程解锁。")
             }

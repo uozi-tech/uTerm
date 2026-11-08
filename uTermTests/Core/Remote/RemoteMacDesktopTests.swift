@@ -116,6 +116,21 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertFalse(should(control: false), "只能查看")
     }
 
+    /// 截图快捷键留在本机（user 定，2026-11-08）；其它系统快捷键照旧发过去。
+    func test_screenshot_shortcuts_stay_local_and_other_shortcuts_are_sent() {
+        let cmdShift: CGEventFlags = [.maskCommand, .maskShift]
+        for (code, name) in [(0x14, "⌘⇧3"), (0x15, "⌘⇧4"), (0x17, "⌘⇧5"), (0x16, "⌘⇧6")] {
+            XCTAssertTrue(RemoteDesktopKeyboardCapture.staysLocal(keyCode: Int64(code), flags: cmdShift), name)
+            XCTAssertTrue(RemoteDesktopKeyboardCapture.staysLocal(keyCode: Int64(code), flags: cmdShift.union(.maskControl)),
+                          "⌃\(name)：存到剪贴板的变体")
+        }
+        XCTAssertFalse(RemoteDesktopKeyboardCapture.staysLocal(keyCode: 0x30, flags: .maskCommand), "⌘Tab")
+        XCTAssertFalse(RemoteDesktopKeyboardCapture.staysLocal(keyCode: 0x31, flags: .maskCommand), "⌘空格")
+        XCTAssertFalse(RemoteDesktopKeyboardCapture.staysLocal(keyCode: 0x0D, flags: .maskCommand), "⌘W")
+        XCTAssertFalse(RemoteDesktopKeyboardCapture.staysLocal(keyCode: 0x15, flags: .maskCommand), "⌘4 不带 ⇧")
+        XCTAssertFalse(RemoteDesktopKeyboardCapture.staysLocal(keyCode: 0x15, flags: .maskShift), "⇧4 是打字")
+    }
+
     func test_switching_to_another_display_reopens_the_stream_on_it() async throws {
         let rig = try await makeRig()
         defer { rig.client.disconnect() }

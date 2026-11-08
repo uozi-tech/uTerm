@@ -541,8 +541,10 @@ struct RemoteDesktopScreen: View {
         switch outcome {
         case .unlocked, .notLocked:
             unlockPhase = .idle
-        case .rejected:
-            unlockPhase = .failed("密码不正确。可以重试，或改用其他密码。")
+        case .stillLocked:
+            unlockPhase = .failed("输完密码 Mac 仍是锁着的：密码可能不对，也可能没输进锁屏。可以重试。")
+        case .inputBlocked:
+            unlockPhase = .failed("Mac 上有截图等程序占着键盘，密码没有输入。请先让它退出再试。")
         case .timedOut:
             unlockPhase = .failed("解锁超时，可以重试。")
         case .notAllowed:

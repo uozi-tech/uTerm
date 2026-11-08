@@ -439,6 +439,8 @@ final class FakeScreenController: RemoteScreenController {
     var locked = true
     /// 下一次 `unlock` 是否成功。
     var unlockSucceeds = true
+    /// 下一次 `unlock` 报「有程序占着键盘」（优先于 `unlockSucceeds`）。
+    var inputBlocked = false
     /// 收到的密码（断言用完清零，默认不校验内容）。
     private(set) var lastPassword: String?
     private(set) var unlockCalls = 0
@@ -455,12 +457,13 @@ final class FakeScreenController: RemoteScreenController {
     /// 每次 `unlock` 被调用时帘幕是否已经挂上（应先黑屏再输密码）。
     private(set) var curtainedDuringUnlock: [Bool] = []
 
-    func unlock(password: String) async -> Bool {
+    func unlock(password: String) async -> RemoteUnlockAttempt {
         unlockCalls += 1
         lastPassword = password
         curtainedDuringUnlock.append(isCurtained)
+        if inputBlocked { return .inputBlocked }
         if unlockSucceeds { locked = false }
-        return unlockSucceeds
+        return unlockSucceeds ? .unlocked : .stillLocked
     }
 
     func lockScreen() {

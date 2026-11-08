@@ -38,6 +38,7 @@ nonisolated enum RemoteConstants {
                                           RemoteFeature.closeSession, RemoteFeature.terminalImage,
                                           RemoteFeature.heartbeat, RemoteFeature.keyConfirmation,
                                           RemoteFeature.relayConfig, RemoteFeature.desktopUnlock,
+                                          RemoteFeature.desktopUnlockOutcomes,
                                           RemoteFeature.desktopPause, RemoteFeature.linkFlow, RemoteFeature.desktopAudio,
                                           RemoteFeature.programStatus]
     /// Mac 本机 shell 在会话列表里的 `serverID`：不对应任何 `ServerProfile`，手机见到它就知道是「这台 Mac
@@ -96,6 +97,9 @@ nonisolated enum RemoteFeature {
     /// 远程桌面里的锁屏状态、远程解锁与帘幕模式：认得 `desktopScreenState` / `desktopUnlock` /
     /// `desktopUnlockResult` / `desktopCurtain`。两端都要声明，Mac 只给声明了的手机发状态。
     static let desktopUnlock = "desktop-unlock"
+    /// 认得解锁结果里的 `inputBlocked`。老手机不认（整条结果解不开、等到超时），Mac 只对声明了的发，
+    /// 对老手机退回 `stillLocked`。
+    static let desktopUnlockOutcomes = "desktop-unlock-outcomes"
     /// 手机退到后台时让 Mac 暂停推流、回前台再接上：认得 `desktopPause`。老 Mac 不认这个类型（收到会当未知消息
     /// 断开整条连接），所以手机只对声明了这一项的 Mac 发；老 Mac 照旧推流，手机退回「照收照确认、不解码」。
     static let desktopPause = "desktop-pause"

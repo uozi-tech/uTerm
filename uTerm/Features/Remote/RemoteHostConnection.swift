@@ -45,6 +45,8 @@ final class RemoteHostConnection {
     private var peerTakesClipboard = false
     /// 手机认得远程解锁 / 帘幕相关消息（`desktopScreenState` 等）。
     private var peerSupportsUnlock = false
+    /// 对端认得解锁结果里的 `inputBlocked`。
+    private var peerSupportsUnlockOutcomes = false
     /// 这条桌面流的锁屏状态监听（当前在看屏幕时才挂）。
     private var lockObservers: [NSObjectProtocol] = []
     /// 这条连接远程解锁过 Mac：远控结束时不管帘幕开没开都要锁回去。
@@ -139,6 +141,7 @@ final class RemoteHostConnection {
             peerSendsHeartbeat = peer.supports(RemoteFeature.heartbeat)
             peerTakesClipboard = peer.supports(RemoteFeature.desktopClipboard)
             peerSupportsUnlock = peer.supports(RemoteFeature.desktopUnlock)
+            peerSupportsUnlockOutcomes = peer.supports(RemoteFeature.desktopUnlockOutcomes)
             peerSupportsAudio = peer.supports(RemoteFeature.desktopAudio)
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
                 && server.localFeatures.contains(RemoteFeature.programStatus)
@@ -806,7 +809,8 @@ extension RemoteHostConnection {
         let wasCurtained = controller.isCurtained
         controller.setCurtain(true)
         Task {
-            let success = await controller.unlock(password: password)
+            let attempt = await controller.unlock(password: password)
+            let success = attempt == .unlocked
             unlockInFlight = false
             guard !isClosed, desktop?.channel == channel else {
                 // 手机在解锁过程中走了：解开了就锁回去，别把已解锁的桌面晾在那里。
@@ -820,10 +824,21 @@ extension RemoteHostConnection {
             } else {
                 // 没解开：撤掉为这次解锁临时挂上的帘幕，Mac 前的人还能看到锁屏。
                 if !wasCurtained { controller.setCurtain(false) }
-                AppLogger.info("远程桌面：解锁未成功", category: RemoteLog.category)
+                AppLogger.info(attempt == .inputBlocked ? "远程桌面：解锁未进行（有程序占着键盘）"
+                                                        : "远程桌面：解锁未成功（输完密码仍锁着）", category: RemoteLog.category)
             }
-            reply(success ? .unlocked : .rejected)
+            reply(Self.unlockOutcome(attempt, peerKnowsBlocked: peerSupportsUnlockOutcomes))
             sendScreenState()
+        }
+    }
+
+    /// 解锁结果怎么告诉对端：老对端不认 `inputBlocked`，退回 `stillLocked`。
+    nonisolated static func unlockOutcome(_ attempt: RemoteUnlockAttempt,
+                                          peerKnowsBlocked: Bool) -> RemoteDesktopUnlockResult.Outcome {
+        switch attempt {
+        case .unlocked: .unlocked
+        case .stillLocked: .stillLocked
+        case .inputBlocked: peerKnowsBlocked ? .inputBlocked : .stillLocked
         }
     }
 

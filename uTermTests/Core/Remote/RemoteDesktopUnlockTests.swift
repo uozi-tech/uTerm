@@ -123,7 +123,7 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertTrue(unlockedCurtained)
     }
 
-    func test_unlock_with_wrong_password_is_rejected() async throws {
+    func test_unlock_that_leaves_the_mac_locked_is_not_called_a_wrong_password() async throws {
         let mac = FakeDesktopMac()
         mac.screen.locked = true
         mac.screen.unlockSucceeds = false
@@ -137,8 +137,55 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertTrue(becameLocked)
 
         let outcome = await session.unlock(password: "wrong")
-        XCTAssertEqual(outcome, .rejected)
+        XCTAssertEqual(outcome, .stillLocked, "Mac 读不到锁屏拒绝密码的信号，只能说仍锁着")
         XCTAssertFalse(mac.screen.isCurtained, "解锁失败不进帘幕")
+    }
+
+    /// 截图选区等抓着键盘：Mac 不输密码，告诉手机是键盘被占着（手机声明了 `desktopUnlockOutcomes`）。
+    func test_blocked_keyboard_is_reported_as_such() async throws {
+        let mac = FakeDesktopMac()
+        mac.screen.locked = true
+        mac.screen.inputBlocked = true
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        defer { session.stop() }
+        let becameLocked = await waitUntil { session.screen.locked }
+        XCTAssertTrue(becameLocked)
+
+        let outcome = await session.unlock(password: "pw")
+        XCTAssertEqual(outcome, .inputBlocked)
+        XCTAssertFalse(mac.screen.isCurtained, "没解开：撤掉临时帘幕")
+    }
+
+    /// 老手机不认 `inputBlocked`（整条结果解不开会等到超时），Mac 对它退回 `stillLocked`。
+    func test_old_peer_gets_still_locked_instead_of_input_blocked() {
+        XCTAssertEqual(RemoteHostConnection.unlockOutcome(.inputBlocked, peerKnowsBlocked: false), .stillLocked)
+        XCTAssertEqual(RemoteHostConnection.unlockOutcome(.inputBlocked, peerKnowsBlocked: true), .inputBlocked)
+        XCTAssertEqual(RemoteHostConnection.unlockOutcome(.stillLocked, peerKnowsBlocked: true), .stillLocked)
+        XCTAssertEqual(RemoteHostConnection.unlockOutcome(.unlocked, peerKnowsBlocked: false), .unlocked)
+        XCTAssertEqual(RemoteDesktopUnlockResult.Outcome.stillLocked.rawValue, "rejected", "线上值不能变，老手机认的是它")
+    }
+
+    /// 只有铺满屏的截图遮罩才算占着键盘；截完图的小缩略图、别的程序的大窗口都不算。
+    func test_keyboard_blocker_is_a_full_screen_screenshot_overlay() {
+        func window(pid: pid_t, width: Double, height: Double) -> [String: Any] {
+            [kCGWindowOwnerPID as String: pid,
+             kCGWindowBounds as String: CGRect(x: 0, y: 0, width: width, height: height).dictionaryRepresentation]
+        }
+        let names: [pid_t: String] = [1: "screencapture", 2: "screencaptureui", 3: "Terminal"]
+        let area = 1512.0 * 982
+        let find = { (windows: [[String: Any]]) in
+            RemoteKeyboardBlocker.blocker(windows: windows, screenArea: area, processName: { names[$0] })
+        }
+        XCTAssertEqual(find([window(pid: 1, width: 1512, height: 982)]), "screencapture")
+        XCTAssertEqual(find([window(pid: 3, width: 1512, height: 982), window(pid: 2, width: 1512, height: 982)]),
+                       "screencaptureui")
+        XCTAssertNil(find([window(pid: 2, width: 240, height: 160)]), "截完图的缩略图")
+        XCTAssertNil(find([window(pid: 3, width: 1512, height: 982)]), "别的程序")
+        XCTAssertNil(find([]))
     }
 
     func test_unlock_rejected_when_not_locked() async throws {

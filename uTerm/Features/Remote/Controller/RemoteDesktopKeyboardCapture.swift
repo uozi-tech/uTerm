@@ -7,6 +7,9 @@ import CoreGraphics
 /// 与帘幕暂停本机输入是同一种做法），要「辅助功能」授权。钩子只在屏幕窗口是前台、画布有焦点、
 /// 有控制权、用户没关这个开关时挂着；一切到别的窗口 / app 立刻摘掉，不会把整台机器的键盘扣住。
 /// 鼠标不截：随时能点到别的窗口离开。
+///
+/// 截图快捷键（⌘⇧3 / 4 / 5 / 6，含加 ⌃ 存到剪贴板的变体）不截、留给本机：用户在本机截远控窗口时要的是
+/// 本机截图；转过去会在对面开一个选区截图，它抓着那边的键盘不放，之后连锁屏密码都输不进去（2026-11-08）。
 @MainActor
 final class RemoteDesktopKeyboardCapture {
     /// 截到的按键（已转成 NSEvent），交给画布照常处理。
@@ -29,6 +32,14 @@ final class RemoteDesktopKeyboardCapture {
     nonisolated static func shouldCapture(enabled: Bool, appActive: Bool, windowKey: Bool, canvasFocused: Bool,
                                           canControl: Bool) -> Bool {
         enabled && appActive && windowKey && canvasFocused && canControl
+    }
+
+    /// 截图快捷键的键码：3、4、5、6（kVK_ANSI_*）。
+    nonisolated static let screenshotKeyCodes: Set<Int64> = [0x14, 0x15, 0x17, 0x16]
+
+    /// 这个按键留在本机、不发过去：⌘⇧ + 3 / 4 / 5 / 6，⌃ 有没有都算。纯函数，单测用。
+    nonisolated static func staysLocal(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        flags.contains(.maskCommand) && flags.contains(.maskShift) && screenshotKeyCodes.contains(keyCode)
     }
 
     func set(active: Bool) {
@@ -79,6 +90,10 @@ final class RemoteDesktopKeyboardCapture {
         let capture = Unmanaged<RemoteDesktopKeyboardCapture>.fromOpaque(userInfo).takeUnretainedValue()
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             MainActor.assumeIsolated { capture.reenable() }
+            return Unmanaged.passUnretained(event)
+        }
+        if type == .keyDown || type == .keyUp,
+           staysLocal(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags) {
             return Unmanaged.passUnretained(event)
         }
         // 回调本来就在主线程（钩子挂在主 run loop 上），事件不出这个线程。

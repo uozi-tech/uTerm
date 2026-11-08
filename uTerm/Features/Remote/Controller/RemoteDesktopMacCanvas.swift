@@ -378,7 +378,7 @@ final class RemoteDesktopCanvasNSView: NSView {
     // MARK: - 键盘
 
     override func keyDown(with event: NSEvent) {
-        guard session.canControl else { return }
+        guard session.canControl, !Self.isScreenshotShortcut(event) else { return }
         if RemoteDesktopEventMapper.isPasteShortcut(code: event.keyCode, flags: event.modifierFlags),
            !event.isARepeat, session.canPaste {
             pasteFromLocalClipboard(fallback: event)
@@ -388,8 +388,15 @@ final class RemoteDesktopCanvasNSView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        guard session.canControl, pressedKeys[event.keyCode] != nil else { return }
+        guard session.canControl, pressedKeys[event.keyCode] != nil, !Self.isScreenshotShortcut(event) else { return }
         sendKey(event.keyCode, down: false, flags: event.modifierFlags)
+    }
+
+    /// 截图快捷键留在本机（见 `RemoteDesktopKeyboardCapture.staysLocal`）。系统截图快捷键被关掉时它会落到这里，
+    /// 同样不发。
+    private static func isScreenshotShortcut(_ event: NSEvent) -> Bool {
+        RemoteDesktopKeyboardCapture.staysLocal(keyCode: Int64(event.keyCode),
+                                                flags: CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue)))
     }
 
     override func flagsChanged(with event: NSEvent) {

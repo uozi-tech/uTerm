@@ -143,8 +143,13 @@ nonisolated struct RemoteDesktopUnlockResult: Codable, Equatable, Sendable {
     enum Outcome: String, Codable, Sendable {
         /// 解开了，帘幕已挂上。
         case unlocked
-        /// 输完密码 Mac 仍锁着：多半是密码不对。
-        case rejected
+        /// 输完密码回车后 Mac 仍锁着。不等于密码不对：Mac 读不到锁屏「拒绝了这个密码」的信号，
+        /// 密码也可能根本没进锁屏的输入框（2026-11-08：一个卡住的选区截图抓着键盘，按键全被它吃掉）。
+        /// 线上值沿用老版的 "rejected"，老手机照旧认得。
+        case stillLocked = "rejected"
+        /// Mac 上有程序占着键盘（截图选区等），按 Esc 也没让开：密码没有输。只发给声明了
+        /// `desktopUnlockOutcomes` 的手机。
+        case inputBlocked
         /// Mac 本来就没锁。
         case notLocked
         /// Mac 没开远程解锁，或没有「辅助功能」授权，或这台手机不是正在看屏幕的那台。
