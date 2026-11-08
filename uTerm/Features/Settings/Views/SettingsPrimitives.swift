@@ -86,6 +86,8 @@ enum SettingsMetrics {
 
 /// 设置页容器：`UD.bg` 底、内容列 maxWidth 640 左对齐、顶部 24 / 左右 32 / 底 32，分组间距 24。
 struct SettingsScroll<Content: View>: View {
+    /// 设置窗口里是 UD.bg；嵌进欢迎窗口（整窗 UD.panel）时跟着换。
+    var background: Color = UD.bg
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -99,7 +101,7 @@ struct SettingsScroll<Content: View>: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(UD.bg)
+        .background(background)
     }
 }
 

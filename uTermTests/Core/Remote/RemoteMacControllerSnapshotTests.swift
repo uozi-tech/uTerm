@@ -96,7 +96,7 @@ final class RemoteMacControllerSnapshotTests: XCTestCase {
                 RemoteDesktopContent(model: desktop).background(Color.black).environment(\.colorScheme, .dark)
             }
             try await shoot("my-macs", size: NSSize(width: 620, height: 560), dark: dark, into: dir) {
-                RemoteMacsWindowView().environment(directory)
+                RemoteMacsPane().environment(directory)
             }
             try await shoot("pairing-code", size: NSSize(width: 900, height: 600), dark: dark, into: dir) {
                 RemoteMacPairingCodeView(macName: "办公室 Mac Studio", code: "482913").background(UD.bg)

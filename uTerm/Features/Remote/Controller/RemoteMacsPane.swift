@@ -1,13 +1,9 @@
 import SwiftUI
 import UDesignKit
 
-/// 「我的 Mac」窗口：从这台 Mac 去控制别的 Mac。列配对过的与局域网里还没配对的，点「打开」开它的窗口
+/// 欢迎窗口里的「我的 Mac」面板：从这台 Mac 去控制别的 Mac。列配对过的与局域网里还没配对的，点「打开」开它的窗口
 ///（`RemoteMacWindowView`）；不在同一网络的，粘贴那台 Mac 设置里拷出的邀请链接配对。
-enum RemoteMacsWindow {
-    static let id = "remote-macs"
-}
-
-struct RemoteMacsWindowView: View {
+struct RemoteMacsPane: View {
     @Environment(RemoteMacDirectory.self) private var directory
     @Environment(\.openWindow) private var openWindow
     @State private var pasting = false
@@ -16,28 +12,13 @@ struct RemoteMacsWindowView: View {
     @State private var forgetting: RemoteMacDirectory.Mac?
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("我的 Mac")
-                .font(UD.mono(13))
-                .foregroundStyle(UD.text3)
-                .allowsHitTesting(false)
-                .frame(height: 38)
-                .frame(maxWidth: .infinity)
-                .background(WindowDragHandle(fill: WS.canvasNSColor))
-            SettingsScroll {
-                SettingsPageHeader(title: String(localized: "控制其他 Mac"),
-                                   subtitle: String(localized: "打开另一台 Mac 上的终端。每台 Mac 第一次连接都要配对，配对是单向的：这里配上的 Mac 不能反过来控制这台。"))
-                pairedGroup
-                if !directory.nearbyMacs.isEmpty { nearbyGroup }
-            }
-            .udCard()
-            .padding(.horizontal, UD.Layout.cardInset)
-            .padding(.bottom, UD.Layout.cardInset)
+        // 欢迎窗口整窗一块卡面色，这里跟着用 UD.panel，不另起卡片。
+        SettingsScroll(background: UD.panel) {
+            SettingsPageHeader(title: String(localized: "控制其他 Mac"),
+                               subtitle: String(localized: "打开另一台 Mac 上的终端。每台 Mac 第一次连接都要配对，配对是单向的：这里配上的 Mac 不能反过来控制这台。"))
+            pairedGroup
+            if !directory.nearbyMacs.isEmpty { nearbyGroup }
         }
-        .ignoresSafeArea(.container, edges: .top)
-        .background(UD.pageBg)
-        .background(WorkspaceWindowChrome(serverName: "", background: WS.canvasNSColor))
-        .frame(minWidth: 520, minHeight: 420)
         .onAppear {
             if directory.isActivated { directory.startBrowsing() } else { directory.activate() }
             takePendingInvitation()

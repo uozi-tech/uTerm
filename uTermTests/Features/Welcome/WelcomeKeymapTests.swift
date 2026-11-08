@@ -101,11 +101,12 @@ final class WelcomeSidebarNavTests: XCTestCase {
             .section(.group("vps")),
             .section(.ungrouped),
             .quickCommands,
+            .remoteMacs,
         ])
     }
 
     func testEmptyViewAndGroupSectionsCollapse() {
-        // 无置顶/最近/分组/未分组时，只剩「快捷命令」一项（始终存在）。
+        // 无置顶/最近/分组/未分组时，只剩「快捷命令」「我的 Mac」两项（始终存在）。
         let entries = WelcomeSidebarNav.entries(
             pinnedCount: 0,
             recentCount: 0,
@@ -114,7 +115,7 @@ final class WelcomeSidebarNavTests: XCTestCase {
             ungroupedCount: 0
         )
 
-        XCTAssertEqual(entries, [.quickCommands])
+        XCTAssertEqual(entries, [.quickCommands, .remoteMacs])
     }
 
     func testShortcutHintNumbersFirstNineOnly() {

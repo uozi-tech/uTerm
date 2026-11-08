@@ -262,7 +262,7 @@
 				Features/Remote/Controller/RemoteDiagnosticsWindow.swift,
 				Features/Remote/Controller/RemoteMacWindow.swift,
 				Features/Remote/Controller/RemoteMacWindowModel.swift,
-				Features/Remote/Controller/RemoteMacsWindow.swift,
+				Features/Remote/Controller/RemoteMacsPane.swift,
 				Features/Remote/RemoteControlBanner.swift,
 				Features/Remote/RemoteControlSettings.swift,
 				Features/Remote/RemoteHostConnection.swift,

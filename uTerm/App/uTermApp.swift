@@ -200,7 +200,7 @@ struct uTermApp: App {
         UTermLifecycleDelegate.openWelcome = { open(id: "welcome") }
         UTermLifecycleDelegate.openPairingLink = { [remoteMacs] invitation in
             remoteMacs.pendingInvitation = invitation
-            open(id: RemoteMacsWindow.id)
+            open(id: "welcome")
         }
         RemoteRelayUpdateMonitor.openSettings = {
             UTermLifecycleDelegate.showGUI()
@@ -315,6 +315,7 @@ struct uTermApp: App {
                 .environment(controlSettings)
                 .environment(backgroundSettings)
                 .environment(terminalRegistry)
+                .environment(remoteMacs)
                 .bootstrapsAppServices(bootstrapAppServices)
         }
         .modelContainer(modelContainer)
@@ -491,20 +492,6 @@ struct uTermApp: App {
         // 不用系统的窗口恢复：会话的真值在 holder 里，由 `LocalShellRestorer` 接回。系统恢复的窗口里值可能是空的，
         // 还原出来是没有标签的空窗口，每崩溃一次多一个；已关闭的会话也会被它按旧 id 新开一个 shell。
         .restorationBehavior(.disabled)
-        .routesNewWindowToWelcome()
-
-        // 「我的 Mac」：从这台 Mac 去控制别的 Mac。欢迎窗口侧栏「动作」里打开，也在「窗口」菜单里。
-        Window("我的 Mac", id: RemoteMacsWindow.id) {
-            RemoteMacsWindowView()
-                .modifier(AppAppearanceSync(preference: currentAppearance))
-                .modifier(LocaleOverride(locale: currentLocale))
-                .modifier(TitlebarDragRegion())
-                .appLockGate(lockModel)
-                .environment(remoteMacs)
-                .bootstrapsAppServices(bootstrapAppServices)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 620, height: 560)
         .routesNewWindowToWelcome()
 
         // 一台远程 Mac 一个窗口：整台接管它的终端，每个一个标签。连接不跨重启，不用系统的窗口恢复。

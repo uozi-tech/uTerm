@@ -60,10 +60,11 @@ nonisolated enum WelcomeKeymap {
 
 // MARK: - 侧栏可导航条目顺序（纯函数，便于单测）
 
-/// 侧栏一个可键盘跳转的目标：某个主机分区，或「快捷命令」面板。
+/// 侧栏一个可键盘跳转的目标：某个主机分区，或「快捷命令」/「我的 Mac」面板。
 nonisolated enum WelcomeNavTarget: Hashable, Sendable {
     case section(NavSection)
     case quickCommands
+    case remoteMacs
 }
 
 /// 侧栏 ⌘1…⌘9 / ⌥↑↓ 的条目顺序——必须与 `WelcomeSidebar.body` 渲染顺序逐项对齐，
@@ -81,6 +82,7 @@ nonisolated enum WelcomeSidebarNav {
         for name in groupNames { result.append(.section(.group(name))) }
         if ungroupedCount > 0 { result.append(.section(.ungrouped)) }
         result.append(.quickCommands)
+        result.append(.remoteMacs)
         return result
     }
 
