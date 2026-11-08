@@ -121,6 +121,7 @@
 				App/BackgroundServiceSettings.swift,
 				App/DockMenuController.swift,
 				App/uTermApp.swift,
+				Core/AppInstallLocation.swift,
 				Core/Control/ControlConnectionPool.swift,
 				Core/Control/ControlConnectionPooling.swift,
 				Core/Control/ControlFilePayloadBuilder.swift,
