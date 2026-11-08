@@ -64,9 +64,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
 
     // 存活判定（只在 `queue` 上读写）。
     private var lastReceived = DispatchTime.now()
-    /// 上一次从控制通道收到字节。`lastReceived` 还算上直连的数据报，这只只认控制通道：单向断（Mac → 手机通、
-    /// 手机 → Mac 断）时数据报（尤其不等确认的声音）会一直到，只有 ping 等不到 pong 才看得出来。
-    private var lastControlReceived = DispatchTime.now()
+    /// 上一次收到「Mac 听得见我们」的证据：pong（回 ping）或 linkAck（确认收到我们发的字节）。单向断（Mac → 手机通、
+    /// 手机 → Mac 断）时数据报（尤其不等确认的声音）会一直到，Mac 的控制消息也照发不误——它不知道我们听不见回音，
+    /// KCP 窗口没满就一直送（光标、换声音档的格式通知……），每一条都会把「控制通道收到字节」的钟拨回去。
+    /// 只有对端对我们的回应才证明反方向通（2026-11-09：换档通知在断开 3.5 s 后到达，判死从 5.9 s 拖到 7.8 s）。
+    /// 只在数据报路径上这么认（`seesDatagrams`）：字节流（局域网、中继）上视频也走这条流，pong 会排在视频后面，
+    /// 拥塞的中继往返十几秒，只认回应会误判；字节流也不会出现「这头一直有数据到、那头却断了」。
+    private var lastReplyReceived = DispatchTime.now()
+    /// 传输报过数据报活动（直连）。字节流传输从不报。
+    private var seesDatagrams = false
     private var lastSent = DispatchTime.now()
     /// 上次发 ping 的时刻（只在 `queue` 上读写）；还没发过是 0，心跳第一拍就会问一声，连上就有往返读数。
     private var lastPingSent = DispatchTime(uptimeNanoseconds: 0)
@@ -99,6 +105,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         queue.async { [self] in
             guard !isClosed else { return }
             lastReceived = .now()
+            seesDatagrams = true
             if let pathTrip { transportRoundTrip = pathTrip }
         }
     }
@@ -402,7 +409,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             guard let self, !self.isClosed else { return }
             if let data {
                 self.lastReceived = .now()
-                self.lastControlReceived = self.lastReceived
+                if !self.seesDatagrams { self.lastReplyReceived = self.lastReceived }
                 self.frames.append(data)
             }
             self.processFrames()
@@ -442,6 +449,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                 var message = try RemoteMessage(decoding: try receiveCipher!.open(frame))
                 if flow != nil {
                     if message.kind == .linkAck {
+                        lastReplyReceived = .now()
                         flow?.receiveAck(try RemoteLinkAck.decode(message.payload), now: DispatchTime.now().uptimeNanoseconds)
                         drainFlow()
                         continue
@@ -452,6 +460,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
                         message = whole
                     }
                 }
+                if message.kind == .pong { lastReplyReceived = .now() }
                 if message.kind == .pong, let pingSentAt {
                     let now = DispatchTime.now().uptimeNanoseconds
                     latestRoundTrip = TimeInterval(now &- pingSentAt.uptimeNanoseconds) / 1_000_000_000
@@ -477,7 +486,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             if wasSuspended {
                 // App 刚从挂起回来：这段时间收不到东西不算链路死了。重新计时，并马上问一声。
                 link.lastReceived = .now()
-                link.lastControlReceived = link.lastReceived
+                link.lastReplyReceived = link.lastReceived
                 link.sendOnQueue(RemoteMessage(.ping))
                 return
             }
@@ -502,6 +511,8 @@ nonisolated final class RemoteLink: @unchecked Sendable {
         queue.async { [self] in
             guard !self.isClosed, self.steadyTraffic != on else { return }
             self.steadyTraffic = on
+            // 平时 5 秒才 ping 一次：刚切进来时上一次回音可能已经过了好几秒，从现在起算（快判据照常生效）。
+            if on { self.lastReplyReceived = .now() }
             guard let heartbeat = self.heartbeatConfig, let timer = self.livenessTimer else { return }
             let interval = on ? heartbeat.activeTick : heartbeat.pingInterval / 3
             timer.schedule(deadline: .now() + interval, repeating: interval,
@@ -510,12 +521,12 @@ nonisolated final class RemoteLink: @unchecked Sendable {
     }
 
     private func steadyTick(_ heartbeat: RemoteHeartbeat, quiet: TimeInterval) {
-        // 兜底：控制通道 `replyLimit` 没有任何消息。拥塞时 KCP 这么久总能把 pong 送到；单向断时数据报一直在到，
-        // 下面那条快判据看不出来，靠它。
-        let controlQuiet = TimeInterval(DispatchTime.now().uptimeNanoseconds &- lastControlReceived.uptimeNanoseconds)
+        // 兜底：`replyLimit` 内 Mac 没有回应过我们（pong / linkAck）。拥塞时 KCP 这么久总能把 pong 送到；单向断时
+        // 数据报和 Mac 的控制消息一直在到，下面那条快判据看不出来，靠它。
+        let controlQuiet = TimeInterval(DispatchTime.now().uptimeNanoseconds &- lastReplyReceived.uptimeNanoseconds)
             / 1_000_000_000
         if controlQuiet > heartbeat.replyLimit {
-            AppLogger.notice("远控连接：开着屏幕时控制通道 \(String(format: "%.1f", controlQuiet)) 秒没有消息，判断已断开",
+            AppLogger.notice("远控连接：开着屏幕时 \(String(format: "%.1f", controlQuiet)) 秒没收到 Mac 的回应，判断已断开",
                              category: RemoteLog.category)
             fail(RemoteProtocolError.timeout)
             return
@@ -537,7 +548,7 @@ nonisolated final class RemoteLink: @unchecked Sendable {
             // 已经有一个在等回音就不再发：重发会把等回音的计时清零；KCP 可靠送达，回音迟早会来。
             return
         }
-        // 数据报一直在到时 `quiet` 不会涨：控制通道安静了也要问一声，否则单向断要等 `roundTripRefresh` 才发 ping。
+        // 数据报一直在到时 `quiet` 不会涨：一阵没有回应也要问一声，否则单向断要等 `roundTripRefresh` 才发 ping。
         if quiet > heartbeat.activeQuietPing || controlQuiet > heartbeat.activeQuietPing
             || secondsSinceLastPing > heartbeat.roundTripRefresh {
             sendOnQueue(RemoteMessage(.ping))

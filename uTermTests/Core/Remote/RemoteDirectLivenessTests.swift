@@ -154,4 +154,32 @@ final class RemoteDirectLivenessTests: XCTestCase {
         XCTAssertGreaterThan(elapsed, 3, "靠的是控制通道的兜底钟，不是快判据")
         XCTAssertLessThan(elapsed, 6.5)
     }
+
+    /// 单向断，而 Mac 那头一直有控制消息要发（光标在动、换声音档的格式通知……）：Mac 不知道手机听不见回音，
+    /// KCP 窗口没满就照送，手机这边控制通道一直有字节到。兜底钟只认 Mac 对我们的回应（pong / linkAck），
+    /// 照样在 `replyLimit` 内判死。回归 2026-11-09：断开 3.5 s 后到的一条换档通知把判死从 5.9 s 拖到 7.8 s；
+    /// 光标一直在动时就永远判不死。
+    func test_one_way_break_is_detected_while_the_mac_keeps_sending_control_messages() async throws {
+        var heartbeat = RemoteHeartbeat.standard
+        heartbeat.replyLimit = 4
+        let rig = try makeRig(heartbeat: heartbeat)
+        defer { rig.client.disconnect(); rig.server.stop() }
+        let session = try await startStreaming(rig)
+        defer { session.stop(); rig.mac.latestSource?.pause() }
+        rig.toMac.set(dropsAll: true)
+        let start = Date()
+        var step = 0
+        let noticed = await waitUntil(10) {
+            // 每 200 ms 动一下光标：Mac 每次都发一条控制消息。
+            if Date().timeIntervalSince(start) * 5 > Double(step) {
+                step += 1
+                rig.mac.moveCursor(to: CGPoint(x: 100 + step * 7, y: 200 + step * 3))
+            }
+            return rig.client.state != .connected
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertTrue(noticed, "单向断要判死")
+        XCTAssertGreaterThan(elapsed, 3, "靠的是兜底钟，不是快判据")
+        XCTAssertLessThan(elapsed, 6.5, "光标一直在动也不能把判死往后拖")
+    }
 }
