@@ -62,7 +62,11 @@ final class RemoteEndToEndTests: XCTestCase {
                                      endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
                                      identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
         let connecting = Task { await client.connect() }
-        let asked = await waitUntil { !server.pairingRequests.isEmpty }
+        // Mac 先登记配对请求、再把「等待审批」发给手机，两件事之间隔着一次网络往返：两边都到了才往下。
+        let asked = await waitUntil {
+            guard !server.pairingRequests.isEmpty, case .awaitingApproval = client.state else { return false }
+            return true
+        }
         XCTAssertTrue(asked)
         guard case .awaitingApproval(let phoneCode) = client.state else {
             return XCTFail("手机端应在等待审批，实际 \(client.state)")
