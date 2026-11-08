@@ -9,7 +9,7 @@ import Foundation
 /// - **端到端计量**：收方每收 16 KB 或每 20 ms 回一个 `linkAck`（累计收到的链路字节数）。发方由此知道「发出去了但
 ///   对端还没收到」的字节（含中继里的积压）、送达速率与最小往返。
 /// - **闸门**：只有在途 ≤ 送达速率 × (最小往返 + 30 ms) × 1.25（至少 64 KB）时才交新数据给网络栈，其余留在这里排队。
-///   紧急消息（声音、确认、光标、心跳）不过闸门：它们很小，而且最怕排队。
+///   紧急消息（声音、确认、光标、心跳、桌面开流）不过闸门：它们很小，而且最怕排队。
 /// - **分级与分片**：紧急消息一个 FIFO，最先发；其余按通道各一个 FIFO（同一通道内保序，终端的输出与关闭、
 ///   粘贴与之后的按键都不会颠倒），通道之间轮转。超过 16 KB 的消息切成片，一帧视频不再独占链路。
 ///
@@ -58,10 +58,13 @@ nonisolated struct RemoteLinkFlow {
     }
 
     /// 不过闸门、最先发的消息：小，且怕排队。顺序上它们彼此保序，但会越过普通消息。
+    ///
+    /// `desktopStarted` 也算：手机靠它绑定桌面通道，之后的光标、延迟这些紧急消息要是越过它先到，会因为通道还没绑定
+    /// 被丢掉（光标去重，鼠标不动就不会重发）。它排进紧急队列后，紧急消息之间保序，普通消息本来就在紧急之后。
     static func isUrgent(_ kind: RemoteMessage.Kind) -> Bool {
         switch kind {
         case .ping, .pong, .desktopAck, .desktopCursor, .desktopLatency, .desktopKeyframe, .desktopVideoLost,
-             .desktopAudio, .desktopAudioFormat, .desktopAudioFrame:
+             .desktopStarted, .desktopAudio, .desktopAudioFormat, .desktopAudioFrame:
             return true
         default:
             return false

@@ -143,17 +143,24 @@ nonisolated struct RemoteAudioJitterBuffer {
 
     // MARK: - 取样
 
-    /// 取 `frames` 个采样（每声道），返回交错数组。
+    /// 取 `frames` 个采样（每声道），返回交错数组。测试用；播放回调走不分配内存的 `pull(into:frames:)`。
     mutating func pull(frames: Int) -> [Float] {
+        var output = [Float](repeating: 0, count: frames * config.channels)
+        output.withUnsafeMutableBufferPointer { pull(into: $0, frames: frames) }
+        return output
+    }
+
+    /// 把 `frames` 个采样（每声道）交错写进 `output`（至少 `frames × channels` 个）。不分配内存：在音频线程上调用。
+    mutating func pull(into output: UnsafeMutableBufferPointer<Float>, frames: Int) {
         let channels = config.channels
-        var output = [Float](repeating: 0, count: frames * channels)
+        output.update(repeating: 0)
         var written = 0
         while written < frames {
             if playhead == nil {
                 guard let start = startIfReady() else {
                     // 缓冲中：整段出静音。
-                    writeSilence(into: &output, from: written, count: frames - written)
-                    return output
+                    writeSilence(into: output, from: written, count: frames - written)
+                    return
                 }
                 playhead = start
                 offset = 0
@@ -166,19 +173,20 @@ nonisolated struct RemoteAudioJitterBuffer {
                     // 这包没到，后面的到了：补一包静音、往下走。Mac 说过是静音的不算补洞。
                     let remaining = config.framesPerPacket - offset / channels
                     let count = min(frames - written, remaining)
-                    writeSilence(into: &output, from: written, count: count)
+                    writeSilence(into: output, from: written, count: count)
                     written += count
                     offset += count * channels
                     if offset / channels >= config.framesPerPacket {
-                        if (silentThrough ?? 0) < sequence, quietGaps.remove(sequence) == nil { counters.concealed += 1 }
+                        if !isAnnouncedSilent(sequence), quietGaps.remove(sequence) == nil { counters.concealed += 1 }
                         advance()
                     }
                 } else {
-                    // 缓冲空了：回到缓冲中。
-                    counters.underruns += 1
+                    // 缓冲空了：回到缓冲中。Mac 说过这里起是静音（停发了）的不算欠载，那是正常的停顿。
+                    if !isAnnouncedSilent(sequence) { counters.underruns += 1 }
                     playhead = nil
                     offset = 0
                     chunks.removeAll()
+                    quietGaps.removeAll()
                 }
                 continue
             }
@@ -203,7 +211,6 @@ nonisolated struct RemoteAudioJitterBuffer {
                 advance()
             }
         }
-        return output
     }
 
     /// 缓冲到目标深度了就从最早的那包开始放。
@@ -215,8 +222,20 @@ nonisolated struct RemoteAudioJitterBuffer {
     private mutating func advance() {
         guard let current = playhead else { return }
         chunks[current] = nil
+        // 一格格往前走越不过任何记号（轮到的记号在补洞那里已经拿掉了），不必清理。
         playhead = current &+ 1
         offset = 0
+    }
+
+    /// 播放位置跳到 `next`（追积压、跳过洞时），顺手清掉已经越过的「丢掉的静音包」记号（不然长时间追积压会越攒越多）。
+    private mutating func moveTo(_ next: UInt32) {
+        playhead = next
+        if !quietGaps.isEmpty { quietGaps = quietGaps.filter { $0 >= next } }
+    }
+
+    /// Mac 说过到这一包为止都是静音。
+    private func isAnnouncedSilent(_ sequence: UInt32) -> Bool {
+        silentThrough.map { $0 >= sequence } ?? false
     }
 
     /// 积压超过目标太多：在包的边界上丢包追上。先丢静音包，没有静音包丢最早的。
@@ -230,7 +249,7 @@ nonisolated struct RemoteAudioJitterBuffer {
             guard pending.count > 1 else { return }
             if pending[0] != current {
                 // 播放位置在洞上：先跳到下一包现有的（不算丢包，洞本来就没有内容）。
-                playhead = pending[0]
+                moveTo(pending[0])
                 fadeIn = fadeFrames
                 continue
             }
@@ -239,12 +258,12 @@ nonisolated struct RemoteAudioJitterBuffer {
                 counters.dropped += 1
                 // 中间丢掉的静音包轮到时按静音处理，不算补洞。
                 quietGaps.insert(quiet)
-                if quiet == current { playhead = pending[1] }
+                if quiet == current { moveTo(pending[1]) }
                 continue
             }
             chunks[current] = nil
             counters.dropped += 1
-            playhead = pending[1]
+            moveTo(pending[1])
             fadeIn = fadeFrames
         }
     }
@@ -255,7 +274,7 @@ nonisolated struct RemoteAudioJitterBuffer {
     }
 
     /// 写静音；刚从有声切过来时先用 1 ms 把上一个采样淡到 0，接回有声时再淡入。
-    private mutating func writeSilence(into output: inout [Float], from start: Int, count: Int) {
+    private mutating func writeSilence(into output: UnsafeMutableBufferPointer<Float>, from start: Int, count: Int) {
         let channels = config.channels
         let ramp = lastSample.contains { $0 != 0 } ? min(count, fadeFrames) : 0
         for frame in 0..<ramp {

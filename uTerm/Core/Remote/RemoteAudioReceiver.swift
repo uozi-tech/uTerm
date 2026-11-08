@@ -100,12 +100,15 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// 播放回调来取 `frames` 个采样（每声道），返回交错数组。没有声音流时全是 0。
-    func pull(frames: Int) -> [Float] {
+    /// 播放回调来取 `frames` 个采样（每声道），交错写进 `output`。没有声音流时全是 0。音频线程上调用，不分配内存。
+    func pull(into output: UnsafeMutableBufferPointer<Float>, frames: Int) {
         lock.lock()
         defer { lock.unlock() }
-        guard buffer != nil else { return [Float](repeating: 0, count: frames * Int(RemoteAudioPolicy.channels)) }
-        return buffer!.pull(frames: frames)
+        guard buffer != nil else {
+            output.update(repeating: 0)
+            return
+        }
+        buffer!.pull(into: output, frames: frames)
     }
 
     func reset() {
@@ -133,11 +136,27 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
 /// 声音放到哪里：生产是 `AVAudioEngine`，Mac 单测里是什么都不放的假输出（测试不能真出声）。
 @MainActor
 protocol RemoteAudioOutput: AnyObject {
-    /// 开始放。`pull` 在音频线程上调用，返回交错采样。
-    func start(pull: @escaping @Sendable (Int) -> [Float]) throws
+    /// 开始放。`pull(缓冲, 帧数)` 在音频线程上调用，把交错采样写进缓冲（至少 `帧数 × 2` 个）。
+    func start(pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void) throws
     func stop()
     /// 系统要求停下（iOS：拔了耳机、被来电打断后不再恢复）。参数是给人看的原因。
     var onInterrupted: ((String) -> Void)? { get set }
+}
+
+/// 播放回调的交错采样中转区。随最后一个持有者（节点的渲染闭包）释放。
+nonisolated final class RemoteAudioScratch: @unchecked Sendable {
+    let frames: Int
+    let channels: Int
+    let buffer: UnsafeMutableBufferPointer<Float>
+
+    init(frames: Int, channels: Int) {
+        self.frames = frames
+        self.channels = channels
+        buffer = .allocate(capacity: frames * channels)
+        buffer.initialize(repeating: 0)
+    }
+
+    deinit { buffer.deallocate() }
 }
 
 /// `AVAudioEngine` + `AVAudioSourceNode`：音频线程按输出节拍来取，缓冲深度完全由抖动缓冲控制。
@@ -146,13 +165,11 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
     private let engine = AVAudioEngine()
     private var node: AVAudioSourceNode?
     var onInterrupted: ((String) -> Void)?
-    #if os(iOS)
     private var observers: [NSObjectProtocol] = []
-    #endif
 
     init() {}
 
-    func start(pull: @escaping @Sendable (Int) -> [Float]) throws {
+    func start(pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void) throws {
         stop()
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -162,18 +179,23 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
         try session.setActive(true)
         observeSession()
         #endif
+        observeEngineConfiguration()
         guard let format = AVAudioFormat(standardFormatWithSampleRate: RemoteAudioPolicy.sampleRate,
                                          channels: AVAudioChannelCount(RemoteAudioPolicy.channels)) else { return }
+        // 交错采样的中转区：一次分配、跟着节点的闭包走，音频线程上不再分配内存。
+        let scratch = RemoteAudioScratch(frames: 8192, channels: Int(RemoteAudioPolicy.channels))
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, bufferList in
-            let frames = Int(frameCount)
-            let samples = pull(frames)
+            let frames = min(Int(frameCount), scratch.frames)
+            let channels = scratch.channels
+            let samples = UnsafeMutableBufferPointer(rebasing: scratch.buffer[0..<frames * channels])
+            pull(samples, frames)
             let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
             // 标准格式是每声道一块（非交错）。
             for (channel, buffer) in buffers.enumerated() {
                 guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let source = min(channel, Int(RemoteAudioPolicy.channels) - 1)
-                for frame in 0..<frames {
-                    data[frame] = frame * 2 + source < samples.count ? samples[frame * 2 + source] : 0
+                let source = min(channel, channels - 1)
+                for frame in 0..<Int(frameCount) {
+                    data[frame] = frame < frames ? samples[frame * channels + source] : 0
                 }
             }
             return noErr
@@ -190,11 +212,27 @@ final class RemoteAudioEnginePlayer: RemoteAudioOutput {
             engine.detach(node)
             self.node = nil
         }
-        #if os(iOS)
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
+    }
+
+    /// 输出设备或硬件格式变了（连上 AirPods、采样率变了）：系统会把引擎停掉并发这个通知，连接还在，重新 start 即可。
+    /// 不接的话引擎静悄悄停着，按钮还亮着却没有声音。
+    private func observeEngineConfiguration() {
+        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+                                                                object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.node != nil, !self.engine.isRunning else { return }
+                do {
+                    try self.engine.start()
+                } catch {
+                    self.onInterrupted?("声音输出设备变了，没能接着放：\(error.localizedDescription)")
+                }
+            }
+        })
     }
 
     #if os(iOS)

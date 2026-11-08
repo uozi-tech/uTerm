@@ -21,6 +21,9 @@ final class RemoteHostConnection {
     private var audio: RemoteAudioStreamer?
     /// 每开一次声音 +1，手机据此认出新的一条声音流（序号从头算）。
     private var audioStreamCounter: UInt16 = 0
+    /// 手机每发一次开 / 关声音就 +1（收到时同步加）。开声音要先 hop 一次再开采集，这期间又收到了关或新的开，
+    /// 旧的那次就作废：不然「开了马上关」时关先执行、扑空，开随后照样把声音流开起来。
+    private var audioRequestGeneration = 0
     /// 手机认得声音消息（`desktop-audio`）。
     private var peerSupportsAudio = false
 
@@ -334,8 +337,10 @@ final class RemoteHostConnection {
             setCurtain(request.on, channel: message.channel)
         case .desktopAudio:
             guard let request = try? RemoteJSON.decode(RemoteDesktopAudioRequest.self, from: message.payload) else { return }
+            audioRequestGeneration += 1
             if request.enabled {
-                Task { await startAudio(request, channel: message.channel) }
+                let generation = audioRequestGeneration
+                Task { await startAudio(request, channel: message.channel, generation: generation) }
             } else {
                 stopAudio(notify: nil)
             }
@@ -638,8 +643,9 @@ extension RemoteHostConnection {
 extension RemoteHostConnection {
     /// 手机打开了扬声器：开一条声音流。先发格式，之后的声音包按它解。开不起来（Mac 上关了开关、编码器或采集起不来）
     /// 回一条没有编码的格式，带上原因，桌面流不受影响。
-    fileprivate func startAudio(_ request: RemoteDesktopAudioRequest, channel: UInt32) async {
-        guard let current = desktop, current.channel == channel, peerSupportsAudio else { return }
+    fileprivate func startAudio(_ request: RemoteDesktopAudioRequest, channel: UInt32, generation: Int) async {
+        guard generation == audioRequestGeneration, let current = desktop, current.channel == channel,
+              peerSupportsAudio else { return }
         stopAudio(notify: nil)
         audioStreamCounter &+= 1
         let stream = audioStreamCounter
@@ -651,12 +657,9 @@ extension RemoteHostConnection {
         guard environment.isAudioEnabled(), let makeSource = environment.makeAudioSource else {
             return refuse("Mac 上没有打开「允许传输声音」。在 Mac 的 uTerm 里打开 设置 › 远程控制 › 允许传输声音")
         }
-        guard let codec = request.codecs.first(where: { (try? RemoteAudioEncoder(codec: $0, bitrate: 64_000)) != nil }) else {
-            return refuse("Mac 上编不了手机能解的声音格式")
-        }
         let display = current.streamer.display
         let streamer = RemoteAudioStreamer(
-            link: link, channel: channel, stream: stream, codec: codec, datagrams: current.streamer.datagramChannel,
+            link: link, channel: channel, stream: stream, codecs: request.codecs, datagrams: current.streamer.datagramChannel,
             source: makeSource(display),
             onSourceStopped: { [weak self] error in
                 DispatchQueue.main.async {
@@ -676,12 +679,16 @@ extension RemoteHostConnection {
             }
             link.send(RemoteMessage(.desktopAudioFormat, channel: channel, payload: RemoteJSON.encode(format)))
             server.desktopAudioChanged(connection: self, channel: channel, on: true)
-            AppLogger.info("远程桌面：开始向 \(self.peerName) 传输声音（\(codec.rawValue)）", category: RemoteLog.category)
+            AppLogger.info("远程桌面：开始向 \(self.peerName) 传输声音（\(streamer.codec.rawValue)）", category: RemoteLog.category)
         } catch {
             guard audio === streamer else { return }
             audio = nil
             streamer.stop()
-            refuse("Mac 上的声音采集没能启动：\(error.localizedDescription)")
+            if case RemoteAudioStreamerError.noCodec = error {
+                refuse("Mac 上编不了手机能解的声音格式")
+            } else {
+                refuse("Mac 上的声音采集没能启动：\(error.localizedDescription)")
+            }
         }
     }
 

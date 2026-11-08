@@ -141,6 +141,40 @@ final class RemoteDesktopAudioEndToEndTests: XCTestCase {
         XCTAssertTrue(stopped, "停流后 Mac 不该还在采声音")
     }
 
+    /// 开了马上关：两条消息先后到 Mac，开声音那次要等一拍才开采集，关先执行。关必须作废那次开，
+    /// 不然 Mac 一直采集、发送，手机却已经不放了。
+    func test_turning_audio_on_then_off_immediately_leaves_mac_quiet() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, _) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        for _ in 0..<5 {
+            session.setAudio(true)
+            session.setAudio(false)
+        }
+        XCTAssertEqual(session.audioState, .off)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertTrue(mac.audioSources.allSatisfy(\.stopped), "开关交错后 Mac 不该还有在采集的声音")
+        XCTAssertNotEqual(server.desktopViewer?.hasAudio, true, "Mac 的指示条不该还显示在传声音")
+        XCTAssertEqual(session.audioReceiver.snapshot().received, 0)
+    }
+
+    /// 手机上的声音打不开（如通话中）：不要叫 Mac 开声音。
+    func test_phone_playback_failure_does_not_ask_mac_for_audio() async throws {
+        let (server, mac, client) = try await makeRig()
+        defer { server.stop() }
+        let (session, output) = makeSession(client)
+        defer { session.stop() }
+        await session.start()
+        output.startError = NSError(domain: "测试", code: 1)
+        session.setAudio(true)
+        guard case .unavailable = session.audioState else { return XCTFail("\(session.audioState)") }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(mac.audioSources.allSatisfy(\.stopped), "手机放不了，Mac 不该在采集")
+        XCTAssertNotEqual(server.desktopViewer?.hasAudio, true)
+    }
+
     /// 老 Mac 不报 `desktop-audio`：手机不显示也不发声音开关（老 Mac 收到不认识的消息会断开整条连接）。
     func test_old_mac_without_audio_feature_gets_no_audio_messages() async throws {
         let features = RemoteConstants.localFeatures.filter { $0 != RemoteFeature.desktopAudio }

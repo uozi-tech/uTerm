@@ -329,7 +329,9 @@ final class RemoteDesktopSession {
             audioState = .off
             stopAudioPlayback()
         }
-        requestAudio(on)
+        // 本机播放没能打开时 `startAudioPlayback` 已把 `wantsAudio` 复位：这时不能再叫 Mac 开声音，
+        // 不然 Mac 一路采集、编码、发送，手机这头没人放。
+        requestAudio(wantsAudio)
     }
 
     private func requestAudio(_ on: Bool) {
@@ -339,7 +341,12 @@ final class RemoteDesktopSession {
     }
 
     private func audioFormatArrived(_ format: RemoteDesktopAudioFormat, generation arrived: Int) {
-        guard arrived == generation, !isStopped, wantsAudio else { return }
+        guard arrived == generation, !isStopped else { return }
+        guard wantsAudio else {
+            // 手机已经不要声音了，Mac 却开起了一条（开关交错到达）：叫它停下，免得白白采集、发送。
+            if format.codec != nil { requestAudio(false) }
+            return
+        }
         if format.codec == nil {
             wantsAudio = false
             stopAudioPlayback()
@@ -354,7 +361,7 @@ final class RemoteDesktopSession {
         let receiver = audioReceiver
         audioOutput.onInterrupted = { [weak self] reason in self?.audioInterrupted(reason) }
         do {
-            try audioOutput.start(pull: { receiver.pull(frames: $0) })
+            try audioOutput.start(pull: { receiver.pull(into: $0, frames: $1) })
             audioPlaying = true
         } catch {
             audioState = .unavailable("手机上的声音没能打开：\(error.localizedDescription)")

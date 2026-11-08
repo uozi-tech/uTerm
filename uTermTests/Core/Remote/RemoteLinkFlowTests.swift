@@ -22,6 +22,16 @@ final class RemoteLinkFlowTests: XCTestCase {
         XCTAssertEqual(drain(&flow).map(\.token), [2, 3, 1])
     }
 
+    /// `desktopStarted` 和光标同属紧急：光标不能越过它先到（手机靠它绑定通道，先到的光标会被丢掉）。
+    func test_desktop_started_is_not_overtaken_by_cursor() {
+        var flow = RemoteLinkFlow()
+        flow.enqueue(RemoteMessage(.output, channel: 3, payload: Data(count: 300_000)), token: 1)
+        flow.enqueue(RemoteMessage(.desktopStarted, channel: 9, payload: Data(count: 200)), token: 2)
+        flow.enqueue(RemoteMessage(.desktopCursor, channel: 9, payload: Data(count: 20)), token: 3)
+        let tokens = drain(&flow).compactMap(\.token)
+        XCTAssertEqual(Array(tokens.prefix(2)), [2, 3])
+    }
+
     func test_large_messages_are_fragmented_and_reassembled() throws {
         var flow = RemoteLinkFlow()
         let payload = Data((0..<100_000).map { UInt8($0 % 251) })

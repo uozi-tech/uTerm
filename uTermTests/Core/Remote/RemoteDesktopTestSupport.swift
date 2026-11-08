@@ -318,11 +318,20 @@ final class SyntheticAudioSource: RemoteAudioSource, @unchecked Sendable {
 final class SilentAudioOutput: RemoteAudioOutput {
     var onInterrupted: ((String) -> Void)?
     private(set) var isPlaying = false
+    /// 用例按帧数拉一段交错采样。
     private(set) var pull: (@Sendable (Int) -> [Float])?
 
-    func start(pull: @escaping @Sendable (Int) -> [Float]) throws {
+    /// 设了就模拟手机上的声音打不开（通话中 `AVAudioSession.setActive` 抛错）。
+    var startError: Error?
+
+    func start(pull: @escaping @Sendable (UnsafeMutableBufferPointer<Float>, Int) -> Void) throws {
+        if let startError { throw startError }
         isPlaying = true
-        self.pull = pull
+        self.pull = { frames in
+            var samples = [Float](repeating: 0, count: frames * Int(RemoteAudioPolicy.channels))
+            samples.withUnsafeMutableBufferPointer { pull($0, frames) }
+            return samples
+        }
     }
 
     func stop() {

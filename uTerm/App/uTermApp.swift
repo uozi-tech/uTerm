@@ -163,6 +163,9 @@ struct uTermApp: App {
             ) { _ in
                 server.stop()
                 MainActor.assumeIsolated {
+                    // 帘幕要在这里同步收：断连接后的拆除是异步的，等不到它进程就退了。gamma 系统会自己复位，
+                    // 扬声器的静音不会（只能等下次启动 restoreLeftovers）。
+                    RemoteCurtain.shared.disable()
                     remoteServer.stop()
                     TerminalQuitPolicy.shared.applicationWillTerminate()
                 }

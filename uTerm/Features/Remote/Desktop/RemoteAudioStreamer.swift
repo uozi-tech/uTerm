@@ -9,6 +9,11 @@ nonisolated protocol RemoteAudioSource: AnyObject, Sendable {
     func stop()
 }
 
+nonisolated enum RemoteAudioStreamerError: Error {
+    /// 手机列出的编码 Mac 一个都建不出编码器。
+    case noCodec
+}
+
 /// 一条桌面流上的声音发送端（调研 §16）：采集 → 编码 → 静音检测 → 冗余 → 发送。
 ///
 /// - 编码在自己的队列上（Opus 编 1 s 声音约 9 ms），发送回到连接队列（`link.queue`）。
@@ -20,7 +25,10 @@ nonisolated final class RemoteAudioStreamer: @unchecked Sendable {
     let link: RemoteLink
     let channel: UInt32
     let stream: UInt16
-    let codec: RemoteAudioCodec
+    /// 手机能解的编码，按偏好排；`start` 挑第一个 Mac 也编得出来的。
+    private let codecs: [RemoteAudioCodec]
+    /// `start` 之后才有值。只在 `start` 里写一次，之后只读。
+    private(set) var codec: RemoteAudioCodec = .opus
     let stats = Stats()
 
     private let datagrams: (any RemoteVideoDatagramChannel)?
@@ -47,21 +55,30 @@ nonisolated final class RemoteAudioStreamer: @unchecked Sendable {
         func snapshot() -> Snapshot { lock.lock(); defer { lock.unlock() }; return value }
     }
 
-    init(link: RemoteLink, channel: UInt32, stream: UInt16, codec: RemoteAudioCodec,
+    init(link: RemoteLink, channel: UInt32, stream: UInt16, codecs: [RemoteAudioCodec],
          datagrams: (any RemoteVideoDatagramChannel)?, source: any RemoteAudioSource,
          onSourceStopped: @escaping @Sendable (Error?) -> Void) {
         self.link = link
         self.channel = channel
         self.stream = stream
-        self.codec = codec
+        self.codecs = codecs
         self.datagrams = datagrams
         self.source = source
         self.onSourceStopped = onSourceStopped
     }
 
-    /// 建编码器、开采集，返回要先发给手机的格式。编码器建不起来或采集开不了就抛错。
+    /// 建编码器、开采集，返回要先发给手机的格式。手机能解的编码 Mac 一个都编不了（`RemoteAudioStreamerError.noCodec`）
+    /// 或采集开不了就抛错。
     func start() async throws -> RemoteDesktopAudioFormat {
-        let encoder = try RemoteAudioEncoder(codec: codec, bitrate: RemoteAudioPolicy.normalBitrate)
+        var built: (RemoteAudioCodec, RemoteAudioEncoder)?
+        for candidate in codecs {
+            if let encoder = try? RemoteAudioEncoder(codec: candidate, bitrate: RemoteAudioPolicy.normalBitrate) {
+                built = (candidate, encoder)
+                break
+            }
+        }
+        guard let (codec, encoder) = built else { throw RemoteAudioStreamerError.noCodec }
+        self.codec = codec
         let format = RemoteDesktopAudioFormat(stream: stream, codec: codec, framesPerPacket: encoder.framesPerPacket,
                                               magicCookie: encoder.magicCookie)
         encodeQueue.sync { self.encoder = encoder }

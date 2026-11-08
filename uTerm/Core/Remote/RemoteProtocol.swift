@@ -210,7 +210,7 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         // 两个方向（链路层，`RemoteLink` 自己收发，不交给上层）
         /// 累计收到多少链路字节（`[u64]`，通道 0）。只在两端都声明 `link-flow` 时发。
         case linkAck = 42
-        /// 大消息的一片（`[u8 标志][u8 队列][片]`，通道 0）。拼齐后按原消息交给上层。只在两端都声明 `link-flow` 时发。
+        /// 大消息的一片（`[u8 标志（bit0 = 最后一片）][u32 原消息的通道][片]`，通道 0）。拼齐后按原消息交给上层。只在两端都声明 `link-flow` 时发。
         case linkFragment = 43
 
         // 之后的编号与声音、链路层无关

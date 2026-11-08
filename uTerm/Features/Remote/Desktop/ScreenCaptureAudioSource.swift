@@ -15,6 +15,8 @@ nonisolated final class ScreenCaptureAudioSource: NSObject, RemoteAudioSource, S
     private var stream: SCStream?
     private var onSamples: (@Sendable ([Float], UInt64) -> Void)?
     private var onStop: (@Sendable (Error?) -> Void)?
+    /// 只在 `queue` 上（SCK 的回调队列）。
+    private var loggedTimestampSource = false
 
     init(displayID: UInt32) {
         self.displayID = displayID
@@ -72,14 +74,40 @@ nonisolated final class ScreenCaptureAudioSource: NSObject, RemoteAudioSource, S
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, CMSampleBufferIsValid(sampleBuffer),
               let samples = Self.interleaved(sampleBuffer), !samples.isEmpty else { return }
-        // 第一个采样的时刻：交到这里的时刻往前推这一块的时长。与视频同一个钟（单调时钟纳秒）。
-        let frames = samples.count / Int(RemoteAudioPolicy.channels)
-        let duration = UInt64(Double(frames) / RemoteAudioPolicy.sampleRate * 1e9)
-        let nanos = DispatchTime.now().uptimeNanoseconds &- duration
+        let hostNow = CMClockGetTime(CMClockGetHostTimeClock())
+        let nanos = Self.captureNanos(sampleBuffer, frames: samples.count / Int(RemoteAudioPolicy.channels),
+                                      now: DispatchTime.now().uptimeNanoseconds, hostNow: hostNow)
+        if !loggedTimestampSource {
+            loggedTimestampSource = true
+            let age = Self.presentationAge(sampleBuffer, hostNow: hostNow)
+            AppLogger.info("远程桌面声音：采集时刻取自 \(age.map { String(format: "SCK 时间戳（晚到 %.1f ms）", $0 * 1000) } ?? "交付时刻（时间戳不可用）")",
+                           category: RemoteLog.category)
+        }
         lock.lock()
         let handler = onSamples
         lock.unlock()
         handler?(samples, nanos)
+    }
+
+    /// 第一个采样的采集时刻，换算到单调时钟纳秒（与视频同一个钟）。
+    ///
+    /// 用 SCK 打的时间戳（主机时钟），不用「交到这里的时刻」：SCK 成批、按自己的节奏交声音，交付的抖动有几十 ms，
+    /// 拿交付时刻当采集时刻，这份抖动会被手机当成网络抖动、把缓冲深度顶上去。时间戳缺失或离谱（不在最近 2 秒内）
+    /// 时退回交付时刻往前推这一块的时长。
+    static func captureNanos(_ sampleBuffer: CMSampleBuffer, frames: Int, now: UInt64, hostNow: CMTime) -> UInt64 {
+        guard let age = presentationAge(sampleBuffer, hostNow: hostNow) else {
+            return now &- UInt64(Double(frames) / RemoteAudioPolicy.sampleRate * 1e9)
+        }
+        return now &- UInt64(age * 1e9)
+    }
+
+    /// 这块声音的时间戳比主机时钟的「现在」早多少秒；时间戳缺失或不在最近 2 秒内时为 nil。
+    static func presentationAge(_ sampleBuffer: CMSampleBuffer, hostNow: CMTime) -> Double? {
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard pts.isValid, pts.isNumeric, hostNow.isValid, hostNow.isNumeric else { return nil }
+        let age = CMTimeGetSeconds(CMTimeSubtract(hostNow, pts))
+        guard age.isFinite, age >= 0, age < 2 else { return nil }
+        return age
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {

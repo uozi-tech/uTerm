@@ -1,3 +1,4 @@
+import CoreMedia
 import XCTest
 @testable import uTerm
 
@@ -212,6 +213,41 @@ final class RemoteAudioTests: XCTestCase {
         // 迟到的旧包（比已放过的还旧）不再放。
         buffer.insert(sequence: 1, captureNanos: 20 * ms, samples: chunk(0.9), arrivalNanos: 120 * ms)
         XCTAssertFalse(buffer.isPlaying)
+    }
+
+    /// Mac 停发静音（只报了「到这里都是静音」）导致缓冲放空：这是正常的停顿，不算欠载。
+    func test_jitter_buffer_does_not_count_announced_silence_as_underrun() {
+        var buffer = RemoteAudioJitterBuffer(config: .direct)
+        for sequence in 0..<3 as Range<UInt32> {
+            buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
+                          arrivalNanos: UInt64(sequence) * 20 * ms)
+        }
+        buffer.markSilence(through: 3, captureNanos: 60 * ms, arrivalNanos: 60 * ms)
+        for _ in 0..<5 { _ = buffer.pull(frames: packet) }
+        XCTAssertFalse(buffer.isPlaying)
+        XCTAssertEqual(buffer.counters.underruns, 0)
+        XCTAssertEqual(buffer.counters.played, 3)
+    }
+
+    /// SCK 声音的采集时刻取样本自带的时间戳（主机时钟），换算到单调时钟；时间戳离谱时退回「交付时刻 − 时长」。
+    func test_capture_time_uses_presentation_timestamp() throws {
+        func buffer(at seconds: Double) throws -> CMSampleBuffer {
+            let timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 48_000),
+                                            presentationTimeStamp: CMTime(seconds: seconds, preferredTimescale: 1_000_000_000),
+                                            decodeTimeStamp: .invalid)
+            return try CMSampleBuffer(dataBuffer: nil, formatDescription: nil, numSamples: 1, sampleTimings: [timing],
+                                      sampleSizes: [])
+        }
+        let now: UInt64 = 1_000_000_000_000
+        let hostNow = CMTime(seconds: 500, preferredTimescale: 1_000_000_000)
+        // 时间戳比现在早 35 ms：采集时刻就是 35 ms 前，与这块有多长无关。
+        let early = ScreenCaptureAudioSource.captureNanos(try buffer(at: 499.965), frames: 960, now: now, hostNow: hostNow)
+        XCTAssertEqual(Double(now - early) / 1e6, 35, accuracy: 0.01)
+        // 时间戳在未来或太旧：退回交付时刻往前推 960 帧（20 ms）。
+        for seconds in [500.5, 400.0] {
+            let fallback = ScreenCaptureAudioSource.captureNanos(try buffer(at: seconds), frames: 960, now: now, hostNow: hostNow)
+            XCTAssertEqual(Double(now - fallback) / 1e6, 20, accuracy: 0.01)
+        }
     }
 
     /// 积压超过目标 + 60 ms：丢包追上，先丢静音包。到达很平稳（目标停在 40 ms），是播放这边卡了一阵、

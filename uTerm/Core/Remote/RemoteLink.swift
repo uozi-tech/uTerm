@@ -273,8 +273,15 @@ nonisolated final class RemoteLink: @unchecked Sendable {
 
     private func enqueueOnFlow(_ message: RemoteMessage, countsTowardBackpressure: Bool,
                                completion: (@Sendable (Error?) -> Void)?) {
+        // 整条消息封装后放不进一帧的，和不分片时一样在发方就失败：分了片对端拼回来照样超限，只是改由对端断开。
+        let sealed = RemoteMessage.headerSize + message.payload.count + 16
+        guard sealed <= RemoteConstants.maxFrameBytes else {
+            completion?(RemoteProtocolError.frameTooLarge(sealed))
+            fail(RemoteProtocolError.frameTooLarge(sealed))
+            return
+        }
         // 计入背压的口径与直接发时一致：封装后的帧长（长度前缀 4 + 密文，密文比明文多 16 字节的校验）。
-        let count = countsTowardBackpressure ? RemoteMessage.headerSize + message.payload.count + 20 : 0
+        let count = countsTowardBackpressure ? sealed + 4 : 0
         let token = nextFlowToken
         nextFlowToken &+= 1
         flowCompletions[token] = (count, completion)
