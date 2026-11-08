@@ -3,10 +3,13 @@ import Foundation
 /// 手机端声音的抖动缓冲（调研 §17.4）。纯值类型：收包与取样都由调用方串行驱动，时间由调用方传入，便于单测。
 ///
 /// - 收包 `insert`：解好的 PCM 按序号放进来，同时用「到达 − 采集」的波动估计该缓多深。两端的钟不同，
-///   只用差值的变化，不用绝对值。
+///   只用差值的变化，不用绝对值。接收端先排序再解码时，到达读数（`observe`）和放包（`store`）分开调。
+/// - 晚到：包到时它的位置已经补过洞了（`noteLate`），说明缓得不够深。目标立刻撑到能接住这个晚到的深度，
+///   之后一段时间没再晚到才按到达读数慢慢收回（弱网矩阵「高延迟抖动」：每包独立抖 0–150 ms）。
 /// - 取样 `pull`：播放回调按输出节拍来取。缓冲不够目标深度时先出静音（缓冲中），够了开始放；轮到的包没到
 ///   就补一段静音（后面的包还在就接着放）；整个缓冲空了回到缓冲中；积压超过目标太多就丢包追上（先丢静音包）。
-///   两端时钟几十 ppm 的漂移也靠这两条消掉。
+///   两端时钟几十 ppm 的漂移也靠这两条消掉。播放中目标升上去了、缓冲却浅了一截：在洞上或静音包前多垫一包静音
+///   （`stretched`），把深度垫回目标；不垫的话深度只有欠载重缓时才会变深，乱序造成的补洞永远补不完。
 /// - 从有声切到补静音、从静音接回有声，都做 1 ms 的淡出 / 淡入，免得咔哒一声。
 nonisolated struct RemoteAudioJitterBuffer {
     struct Config: Equatable, Sendable {
@@ -17,6 +20,9 @@ nonisolated struct RemoteAudioJitterBuffer {
         /// 目标深度的下限与上限。
         var minimumTargetNanos: UInt64
         var maximumTargetNanos: UInt64
+        /// 只看到达波动时目标最深到哪：再往深只能是真有包晚到（补过洞）才撑。到达波动在开流的头一阵最容易虚高
+        /// （样本少、p95 就是最大值，关键帧前后那一串），按它直接撑到上限的话正常网络也会白白缓深好几秒。
+        var jitterCeilingNanos: UInt64
         /// 刚开流时的目标深度：这时还没有到达的读数，声音又正好和视频的第一个关键帧一起挤在链路上，
         /// 从下限起步会一连欠载好几次（真机上「刚连上时会抖」）。先缓深一点，`startupHoldNanos` 之后再按读数往下收。
         var startupTargetNanos: UInt64
@@ -25,13 +31,19 @@ nonisolated struct RemoteAudioJitterBuffer {
         var dropSlackNanos: UInt64 = 60_000_000
         /// 估计波动看最近多久的到达。
         var windowNanos: UInt64 = 3_000_000_000
+        /// 晚到撑起来的深度保持多久：这么久没再晚到才按到达读数往下收。太短的话收回去又晚到，来回补洞。
+        var lateHoldNanos: UInt64 = 10_000_000_000
+        /// 接住晚到的包之外再留多少余量。
+        var lateMarginNanos: UInt64 = 5_000_000
 
-        /// 直连与局域网：往返短、抖动小。
-        static let direct = Config(minimumTargetNanos: 40_000_000, maximumTargetNanos: 150_000_000,
-                                   startupTargetNanos: 120_000_000)
+        /// 直连与局域网：往返短、抖动小。到达波动最深撑到 150 ms（和以前一样）；真有包晚到才往下撑，最深 250 ms：
+        /// 抖动大的直连（往返 300 ± 150 ms）要缓 170 ms 左右才接得住，再深的话声音比画面（同一链路 p95 约 250 ms）
+        /// 还晚，不如补洞。
+        static let direct = Config(minimumTargetNanos: 40_000_000, maximumTargetNanos: 250_000_000,
+                                   jitterCeilingNanos: 150_000_000, startupTargetNanos: 120_000_000)
         /// TCP 中继：关键帧前后的排队会让包成串晚到。
         static let relay = Config(minimumTargetNanos: 80_000_000, maximumTargetNanos: 300_000_000,
-                                  startupTargetNanos: 200_000_000)
+                                  jitterCeilingNanos: 300_000_000, startupTargetNanos: 200_000_000)
     }
 
     struct Counters: Equatable, Sendable {
@@ -45,6 +57,8 @@ nonisolated struct RemoteAudioJitterBuffer {
         var dropped = 0
         /// 到得太晚（已经放过它的位置）被扔掉的包。
         var late = 0
+        /// 为了把深度垫回目标多放的静音包。
+        var stretched = 0
     }
 
     let config: Config
@@ -71,6 +85,11 @@ nonisolated struct RemoteAudioJitterBuffer {
     private var lastTargetDecrease: UInt64 = 0
     /// 第一包到达的时刻（本机钟）：起步深度从这时起保持 `startupHoldNanos`。
     private var firstArrival: UInt64?
+    /// 晚到的包要求的深度，和最近一次晚到的时刻。
+    private var lateFloor: UInt64 = 0
+    private var lastLate: UInt64?
+    /// 正在垫的静音还剩几个采样（每声道）。
+    private var stretching = 0
 
     private var fadeFrames: Int { max(1, Int(config.sampleRate / 1000)) }
     private var packetNanos: UInt64 { UInt64(Double(config.framesPerPacket) / config.sampleRate * 1e9) }
@@ -89,6 +108,9 @@ nonisolated struct RemoteAudioJitterBuffer {
 
     var isPlaying: Bool { playhead != nil }
 
+    /// 每包多长（纳秒）。
+    var packetDuration: UInt64 { packetNanos }
+
     private var bufferedSamples: Int {
         var total = 0
         for (sequence, chunk) in chunks {
@@ -101,15 +123,37 @@ nonisolated struct RemoteAudioJitterBuffer {
 
     // MARK: - 收包
 
-    /// 放进一包解好的声音。`captureNanos` 是 Mac 的钟，`arrivalNanos` 是本机的钟。
+    /// 放进一包解好的声音，同时记这一包的到达读数。`captureNanos` 是 Mac 的钟，`arrivalNanos` 是本机的钟。
     mutating func insert(sequence: UInt32, captureNanos: UInt64, samples: [Float], arrivalNanos: UInt64) {
-        recordTransit(captureNanos: captureNanos, arrivalNanos: arrivalNanos)
+        observe(captureNanos: captureNanos, arrivalNanos: arrivalNanos)
+        store(sequence: sequence, samples: samples, captureNanos: captureNanos, arrivalNanos: arrivalNanos)
+    }
+
+    /// 只放包、不记到达读数（读数在包到达时已经 `observe` 过）。它的位置已经放过了就按晚到算。
+    mutating func store(sequence: UInt32, samples: [Float], captureNanos: UInt64, arrivalNanos: UInt64) {
         if let playhead, sequence < playhead {
-            counters.late += 1
+            noteLate(captureNanos: captureNanos, arrivalNanos: arrivalNanos)
             return
         }
         guard chunks[sequence] == nil, !samples.isEmpty else { return }
         chunks[sequence] = samples
+    }
+
+    /// 一包到了：记「到达 − 采集」，按最近的波动调目标。
+    mutating func observe(captureNanos: UInt64, arrivalNanos: UInt64) {
+        recordTransit(captureNanos: captureNanos, arrivalNanos: arrivalNanos)
+    }
+
+    /// 一包到得太晚，它的位置已经补过洞了（接收端放弃等它之后它才到，也走这里）。目标立刻撑到能接住它。
+    mutating func noteLate(captureNanos: UInt64, arrivalNanos: UInt64) {
+        counters.late += 1
+        guard let fastest = transits.map(\.transit).min() else { return }
+        let transit = Int64(bitPattern: arrivalNanos &- captureNanos)
+        let lateness = UInt64(max(0, transit - fastest))
+        if let lastLate, arrivalNanos &- lastLate >= config.lateHoldNanos { lateFloor = 0 }
+        lateFloor = max(lateFloor, min(config.maximumTargetNanos, lateness + packetNanos + config.lateMarginNanos))
+        lastLate = arrivalNanos
+        updateTarget(now: arrivalNanos)
     }
 
     /// Mac 说到 `sequence` 为止都是静音（停发期间的心跳包）。
@@ -134,14 +178,17 @@ nonisolated struct RemoteAudioJitterBuffer {
         updateTarget(now: arrivalNanos)
     }
 
-    /// 目标 = 最近到达波动的 p95 + 一包的时长（按包到达，缓冲深度天然会差一包）。升得快、降得慢；开流头几秒只升不降。
+    /// 目标 = 最近到达波动的 p95 + 一包的时长（按包到达，缓冲深度天然会差一包），且不低于最近晚到的包要求的深度。
+    /// 升得快、降得慢；开流头几秒只升不降。
     private mutating func updateTarget(now: UInt64) {
         let first = firstArrival ?? now
         firstArrival = first
         guard transits.count >= 5, let fastest = transits.map(\.transit).min() else { return }
         let jitters = transits.map { UInt64(max(0, $0.transit - fastest)) }.sorted()
         let p95 = jitters[min(jitters.count - 1, Int(Double(jitters.count) * 0.95))]
-        let wanted = min(config.maximumTargetNanos, max(config.minimumTargetNanos, p95 + packetNanos))
+        let late = lastLate.map { now &- $0 < config.lateHoldNanos } == true ? lateFloor : 0
+        let wanted = min(config.maximumTargetNanos,
+                         max(config.minimumTargetNanos, min(config.jitterCeilingNanos, p95 + packetNanos), late))
         if wanted > targetNanos {
             targetNanos = wanted
         } else if wanted < targetNanos, now &- first >= config.startupHoldNanos,
@@ -177,8 +224,20 @@ nonisolated struct RemoteAudioJitterBuffer {
                 offset = 0
                 fadeIn = fadeFrames
             }
+            if stretching > 0 {
+                let count = min(frames - written, stretching)
+                writeSilence(into: output, from: written, count: count)
+                written += count
+                stretching -= count
+                continue
+            }
             dropIfBacklogged()
             guard let sequence = playhead else { continue }
+            if offset == 0, shouldStretch(at: sequence) {
+                stretching = config.framesPerPacket
+                counters.stretched += 1
+                continue
+            }
             guard let chunk = chunks[sequence] else {
                 if chunks.keys.contains(where: { $0 > sequence }) {
                     // 这包没到，后面的到了：补一包静音、往下走。Mac 说过是静音的不算补洞。
@@ -196,6 +255,7 @@ nonisolated struct RemoteAudioJitterBuffer {
                     if !isAnnouncedSilent(sequence) { counters.underruns += 1 }
                     playhead = nil
                     offset = 0
+                    stretching = 0
                     chunks.removeAll()
                     quietGaps.removeAll()
                 }
@@ -222,6 +282,14 @@ nonisolated struct RemoteAudioJitterBuffer {
                 advance()
             }
         }
+    }
+
+    /// 播放中缓冲比目标浅了两包以上（目标因为晚到撑起来了）：在洞上（这包没到、后面的到了）或静音包前垫一包静音。
+    /// 有声的包前面不垫，免得把一段声音从中间切开。
+    private func shouldStretch(at sequence: UInt32) -> Bool {
+        guard bufferedNanos + 2 * packetNanos < targetNanos else { return false }
+        if let chunk = chunks[sequence] { return RemoteAudioJitterBuffer.isQuiet(chunk) }
+        return chunks.keys.contains { $0 > sequence }
     }
 
     /// 缓冲到目标深度了就从最早的那包开始放。

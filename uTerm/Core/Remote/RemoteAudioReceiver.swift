@@ -1,10 +1,15 @@
 import AVFoundation
 import Foundation
 
-/// 手机这一侧的声音接收（调研 §17.4）：按格式建解码器 → 解包（含冗余补洞）→ 抖动缓冲 → 播放回调来取。
+/// 手机这一侧的声音接收（调研 §17.4）：按格式建解码器 → 排序 → 解包（含冗余补洞）→ 抖动缓冲 → 播放回调来取。
 ///
 /// 线程：包在连接队列（TCP）或数据报队列（直连）上到达，转到自己的解码队列；播放回调在音频线程上取样，
 /// 抖动缓冲用锁保护（取样只是拷几百个采样，锁持有时间很短）。
+///
+/// 解码器只能按序号往前喂（Opus 每包接着上一包的状态），所以数据报乱序到达时先排序：缺的那包没到，后面的
+/// 先存着不解。缺的到了就接着解；冗余里带着它也算到了；Mac 说过是静音的不用等。真等不到才跳过它（交给缓冲
+/// 补洞）：缓冲在放时等到快放空（`giveUpMarginNanos`），没在放时等过乱序窗口。以前是谁先到解谁，晚到一步的
+/// 包整个扔掉——每包独立抖动的链路上近一半的包这样没了（弱网矩阵「高延迟抖动」补洞 428–550 次，欠载 0）。
 nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
     struct Snapshot: Equatable, Sendable {
         var stream: UInt16?
@@ -14,30 +19,68 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
         var bufferedMillis = 0
         var received = 0
         var recovered = 0
+        /// 晚于后面的包到达、排序后照样解出来的包。
+        var reordered = 0
+        /// 等不到、跳过去的包（交给缓冲补洞）。
+        var skipped = 0
+        var reorderWindowMillis = 0
+    }
+
+    /// 缓冲在放时，缓冲里只剩这么多就不再等缺的包：要盖住一次播放回调取走的量（iOS 要的是 10 ms、系统可能给
+    /// 21 ms）加上检查的间隔，不然缺的包没等到，后面存着的也没来得及放进去，缓冲整个放空、重新缓冲。
+    static let giveUpMarginNanos: UInt64 = 30_000_000
+    /// 有包在等时多久查一次。
+    static let checkIntervalNanos: UInt64 = 5_000_000
+    /// 乱序窗口的下限与起始值：缓冲没在放时（刚开流、静音之后）缺的包等这么久。实际按观察到的乱序撑大，
+    /// 但不超过缓冲目标（再等下去缓冲本来也是空的）。
+    static let minimumReorderWindowNanos: UInt64 = 10_000_000
+    /// 最多存多少包等缺的那包：超出说明它不会来了。
+    static let maxPending = 512
+
+    private struct Pending {
+        var frame: RemoteDesktopAudioFrame
+        var arrival: UInt64
     }
 
     private let queue = DispatchQueue(label: "com.uozi.uTerm.remote.audio.decode", qos: .userInteractive)
     private let lock = NSLock()
     private let config: RemoteAudioJitterBuffer.Config
+    /// 本机单调钟（纳秒）。单测换成手拨的钟。
+    private let clock: @Sendable () -> UInt64
     // 锁内。
     private var buffer: RemoteAudioJitterBuffer?
     private var stream: UInt16?
     private var codec: RemoteAudioCodec?
     private var received = 0
     private var recovered = 0
+    private var reordered = 0
+    private var skippedCount = 0
+    private var reorderWindowSnapshot: UInt64 = 0
     // 只在 queue 上。
     private var decoder: RemoteAudioDecoder?
-    /// 解到第几个序号了：解码器要按顺序喂，比它旧的包（含冗余里的）不再解。
+    /// 解到第几个序号了（含跳过的）：比它旧的包不再解。
     private var lastDecoded: UInt32?
+    /// 比 `lastDecoded + 1` 新、还在等前面的包。
+    private var pending: [UInt32: Pending] = [:]
+    /// Mac 说到这里为止都是静音（停发）：这些序号不会来，不用等。
+    private var silentThrough: UInt32?
+    /// 跳过的序号：之后到了按晚到算（让缓冲撑深）。只留最近的。
+    private var skipped: [UInt32] = []
+    private var reorderWindow = RemoteAudioReceiver.minimumReorderWindowNanos
+    /// 每换一次流加一：换流之前排好的检查作废。
+    private var generation = 0
+    private var checkScheduled = false
 
-    init(config: RemoteAudioJitterBuffer.Config) {
+    init(config: RemoteAudioJitterBuffer.Config,
+         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.config = config
+        self.clock = clock
     }
 
     /// 新的声音流（或 Mac 说没有声音了：`codec == nil`）。
     func receive(format: RemoteDesktopAudioFormat) {
         queue.async { [self] in
-            lastDecoded = nil
+            resetOrdering()
             decoder = format.codec != nil ? try? RemoteAudioDecoder(format: format) : nil
             var config = self.config
             config.framesPerPacket = Int(format.framesPerPacket)
@@ -49,58 +92,168 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
             buffer = format.codec != nil ? RemoteAudioJitterBuffer(config: config) : nil
             received = 0
             recovered = 0
+            reordered = 0
+            skippedCount = 0
             lock.unlock()
         }
     }
 
     /// 一包声音（`RemoteDesktopAudioFrame` 编码后的字节）。
     func receive(frame payload: Data) {
-        let arrival = DispatchTime.now().uptimeNanoseconds
+        let arrival = clock()
         queue.async { [self] in
-            guard let frame = try? RemoteDesktopAudioFrame(decoding: payload), let decoder else { return }
+            guard let frame = try? RemoteDesktopAudioFrame(decoding: payload), decoder != nil else { return }
             lock.lock()
             let current = stream
+            if frame.stream == current, !frame.isSilence {
+                // 到达读数按包自己到的时刻记（存着等前面的包不影响）；静音包在 `markSilence` 里记。
+                buffer?.observe(captureNanos: frame.captureNanos, arrivalNanos: arrival)
+            }
             lock.unlock()
             guard frame.stream == current else { return }
             if frame.isSilence {
-                // 不动 `lastDecoded`：它记的是解码器自己吃到哪一包。有声后 Mac 会把停发前最后一包当冗余带来，
-                // 要让解码器先吃它接上状态（见下面的冗余）。
                 lock.lock()
                 buffer?.markSilence(through: frame.sequence, captureNanos: frame.captureNanos, arrivalNanos: arrival)
                 lock.unlock()
+                silentThrough = max(silentThrough ?? 0, frame.sequence)
+                drain(now: arrival)
                 return
             }
-            // 冗余里的旧包先解（序号从小到大），补上前面丢的洞；解码器只能往前走。已经有了（或已放过）的包也照样
-            // 喂给解码器，只是不再放进缓冲：解码器缺了中间的包，下一包开头可能带一个小咔哒（静音停发后恢复时最明显）。
-            let packetNanos = UInt64(Double(decoder.format.framesPerPacket) / decoder.format.sampleRate * 1e9)
-            for (offset, data) in frame.redundant.enumerated().reversed() {
-                let distance = UInt32(offset + 1)
-                guard frame.sequence >= distance else { continue }
-                let sequence = frame.sequence - distance
-                guard lastDecoded.map({ sequence > $0 }) ?? true else { continue }
+            if let lastDecoded, frame.sequence <= lastDecoded {
+                // 已经解过（冗余里先到了）或已经跳过。跳过的才算晚到：缓冲要撑深到能接住它。
+                if let index = skipped.firstIndex(of: frame.sequence) {
+                    skipped.remove(at: index)
+                    lock.lock()
+                    buffer?.noteLate(captureNanos: frame.captureNanos, arrivalNanos: arrival)
+                    lock.unlock()
+                }
+                return
+            }
+            guard pending[frame.sequence] == nil else { return }
+            if lastDecoded.map({ frame.sequence == $0 &+ 1 }) == true, let earliest = pending.values.map(\.arrival).min() {
+                // 缺的那包到了，比它后面的晚了这么久：按这个撑大乱序窗口（RACK 的思路，之后慢慢收回）。
+                noteReordering(lateness: arrival &- earliest)
                 lock.lock()
-                let have = buffer?.contains(sequence) ?? true
+                reordered += 1
                 lock.unlock()
-                guard let samples = try? decoder.decode(data) else { continue }
-                lastDecoded = sequence
-                guard !have else { continue }
-                insert(sequence: sequence, captureNanos: frame.captureNanos &- UInt64(distance) * packetNanos,
-                       samples: samples, arrival: arrival, recovered: true)
             }
-            guard lastDecoded.map({ frame.sequence > $0 }) ?? true, let samples = try? decoder.decode(frame.data) else {
-                return
-            }
-            lastDecoded = frame.sequence
-            insert(sequence: frame.sequence, captureNanos: frame.captureNanos, samples: samples, arrival: arrival,
-                   recovered: false)
+            pending[frame.sequence] = Pending(frame: frame, arrival: arrival)
+            drain(now: arrival)
         }
     }
 
-    private func insert(sequence: UInt32, captureNanos: UInt64, samples: [Float], arrival: UInt64, recovered: Bool) {
+    /// 按序号能解的都解掉；缺的那包按规则等或跳过。还有包在等就排一次检查。
+    private func drain(now: UInt64) {
+        while !pending.isEmpty {
+            let next = lastDecoded.map { $0 &+ 1 } ?? pending.keys.min()!
+            if let item = pending.removeValue(forKey: next) {
+                decodeAndStore(item.frame.data, sequence: next, captureNanos: item.frame.captureNanos,
+                               arrival: item.arrival, recovered: false)
+                continue
+            }
+            if let silentThrough, next <= silentThrough {
+                // Mac 说过这段是静音：直接越过（解码器不用吃这些包，有声时 Mac 会把停发前最后一包当冗余带来接上状态）。
+                lastDecoded = min(silentThrough, pending.keys.min()! &- 1)
+                continue
+            }
+            if let (carrier, distance) = redundancyCarrier(for: next) {
+                let frame = carrier.frame
+                decodeAndStore(frame.redundant[distance - 1], sequence: next,
+                               captureNanos: frame.captureNanos &- UInt64(distance) * packetNanos,
+                               arrival: carrier.arrival, recovered: true)
+                continue
+            }
+            guard shouldGiveUp(now: now) else { break }
+            lastDecoded = next
+            skipped.append(next)
+            if skipped.count > 64 { skipped.removeFirst(skipped.count - 64) }
+            lock.lock()
+            skippedCount += 1
+            lock.unlock()
+        }
         lock.lock()
-        buffer?.insert(sequence: sequence, captureNanos: captureNanos, samples: samples, arrivalNanos: arrival)
+        reorderWindowSnapshot = reorderWindow
+        lock.unlock()
+        if !pending.isEmpty { scheduleCheck() }
+    }
+
+    /// 存着的包里有没有把 `sequence` 当冗余带着的。
+    private func redundancyCarrier(for sequence: UInt32) -> (Pending, Int)? {
+        for key in pending.keys.sorted() {
+            let distance = Int(key &- sequence)
+            guard let item = pending[key] else { continue }
+            if distance <= item.frame.redundant.count { return (item, distance) }
+            if distance > 2 + item.frame.redundant.count { break }
+        }
+        return nil
+    }
+
+    /// 缺的那包还要不要等。
+    private func shouldGiveUp(now: UInt64) -> Bool {
+        if pending.count > Self.maxPending { return true }
+        lock.lock()
+        let playing = buffer?.isPlaying ?? false
+        let buffered = buffer?.bufferedNanos ?? 0
+        let target = buffer?.targetNanos ?? 0
+        let packet = buffer?.packetDuration ?? 0
+        lock.unlock()
+        guard let earliest = pending.values.map(\.arrival).min() else { return true }
+        let waited = now &- earliest
+        // 等得比缓冲最深还久，到了也用不上了。也兜住没人来取的时候（播放被打断、单测不拉取）：缓冲一直显得很满。
+        if waited >= config.maximumTargetNanos { return true }
+        if playing { return buffered <= Self.giveUpMarginNanos }
+        // 没在放（刚开流、静音或欠载之后）：等过乱序窗口。不超过缓冲目标：缓冲要攒够目标深度才开始放，
+        // 等这么久不会让开头更晚。
+        let window = min(reorderWindow, max(Self.minimumReorderWindowNanos, target &- min(target, packet)))
+        return waited >= window
+    }
+
+    private func noteReordering(lateness: UInt64) {
+        if lateness > reorderWindow {
+            reorderWindow = min(config.maximumTargetNanos, lateness + lateness / 8)
+        } else {
+            reorderWindow = max(Self.minimumReorderWindowNanos, reorderWindow - (reorderWindow - lateness) / 64)
+        }
+    }
+
+    private var packetNanos: UInt64 {
+        guard let decoder else { return 0 }
+        return UInt64(Double(decoder.format.framesPerPacket) / decoder.format.sampleRate * 1e9)
+    }
+
+    private func decodeAndStore(_ data: Data, sequence: UInt32, captureNanos: UInt64, arrival: UInt64, recovered: Bool) {
+        lastDecoded = sequence
+        guard let decoder, let samples = try? decoder.decode(data) else { return }
+        lock.lock()
+        buffer?.store(sequence: sequence, samples: samples, captureNanos: captureNanos, arrivalNanos: arrival)
         if recovered { self.recovered += 1 } else { received += 1 }
         lock.unlock()
+    }
+
+    private func scheduleCheck() {
+        guard !checkScheduled else { return }
+        checkScheduled = true
+        let generation = self.generation
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.checkIntervalNanos))) { [weak self] in
+            guard let self, self.generation == generation else { return }
+            self.checkScheduled = false
+            self.drain(now: self.clock())
+        }
+    }
+
+    /// 单测：等解码队列上已经排着的活干完，再按当前的钟查一次缺的包。
+    func settle() {
+        queue.sync { drain(now: clock()) }
+    }
+
+    private func resetOrdering() {
+        generation += 1
+        checkScheduled = false
+        lastDecoded = nil
+        pending.removeAll()
+        silentThrough = nil
+        skipped.removeAll()
+        reorderWindow = Self.minimumReorderWindowNanos
     }
 
     /// 播放回调来取 `frames` 个采样（每声道），交错写进 `output`。没有声音流时全是 0。音频线程上调用，不分配内存。
@@ -117,7 +270,7 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
     func reset() {
         queue.async { [self] in
             decoder = nil
-            lastDecoded = nil
+            resetOrdering()
             lock.lock()
             buffer = nil
             stream = nil
@@ -132,7 +285,8 @@ nonisolated final class RemoteAudioReceiver: @unchecked Sendable {
         return Snapshot(stream: stream, codec: codec, counters: buffer?.counters ?? .init(),
                         targetMillis: Int((buffer?.targetNanos ?? 0) / 1_000_000),
                         bufferedMillis: Int((buffer?.bufferedNanos ?? 0) / 1_000_000), received: received,
-                        recovered: recovered)
+                        recovered: recovered, reordered: reordered, skipped: skippedCount,
+                        reorderWindowMillis: Int(reorderWindowSnapshot / 1_000_000))
     }
 }
 

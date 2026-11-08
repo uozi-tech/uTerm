@@ -406,4 +406,154 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertLessThan(buffer.targetNanos, raised)
         XCTAssertGreaterThanOrEqual(buffer.targetNanos, 40 * ms)
     }
+    // MARK: - 晚到与乱序
+
+    /// 一包晚到（它的位置已经补过洞）：目标立刻撑到能接住它，之后在洞上 / 静音包前垫静音把深度垫上去。
+    func test_late_packet_deepens_target_and_buffer_stretches_to_reach_it() {
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
+        var now: UInt64 = 0
+        var next: UInt32 = 0
+        var late: [UInt32: UInt64] = [:]
+        // 每 20 ms 到一包；第 40、60、80 包晚 90 ms。每 10 ms 拉半包。
+        for step in 0..<400 {
+            now = UInt64(step) * 10 * ms
+            if step % 2 == 0, next < 200 {
+                if [40, 60, 80].contains(next) {
+                    late[next] = now + 90 * ms
+                } else {
+                    buffer.insert(sequence: next, captureNanos: UInt64(next) * 20 * ms, samples: chunk(0.5), arrivalNanos: now)
+                }
+                next += 1
+            }
+            for (sequence, arrival) in late where arrival <= now {
+                buffer.insert(sequence: sequence, captureNanos: UInt64(sequence) * 20 * ms, samples: chunk(0.5),
+                              arrivalNanos: arrival)
+                late[sequence] = nil
+            }
+            _ = buffer.pull(frames: 480)
+            if step == 100 { XCTAssertGreaterThanOrEqual(buffer.targetNanos, 110 * ms, "第一包晚到后目标接住 90 ms") }
+        }
+        XCTAssertGreaterThan(buffer.counters.stretched, 0, "\(buffer.counters)")
+        XCTAssertGreaterThanOrEqual(buffer.counters.late, 1)
+        // 深度垫上去之后，后面晚 90 ms 的包赶得上：第一包之后不再全部补洞。
+        XCTAssertLessThan(buffer.counters.concealed, 3, "\(buffer.counters)")
+    }
+
+    /// 平稳的网络（抖 ±2 ms）上目标停在下限，不垫静音、没有晚到：正常网络下延迟不变深。
+    func test_steady_link_keeps_minimum_depth_and_never_stretches() {
+        var buffer = RemoteAudioJitterBuffer(config: steadyDirect)
+        var next: UInt32 = 0
+        for step in 0..<1000 {
+            let now = UInt64(step) * 10 * ms
+            if step % 2 == 0 {
+                let wobble = UInt64((Int(next) * 7919) % 5) * ms
+                buffer.insert(sequence: next, captureNanos: UInt64(next) * 20 * ms, samples: chunk(next % 9 == 0 ? 0 : 0.5),
+                              arrivalNanos: now + wobble)
+                next += 1
+            }
+            _ = buffer.pull(frames: 480)
+        }
+        XCTAssertEqual(buffer.targetNanos, 40 * ms)
+        XCTAssertEqual(buffer.counters.stretched, 0, "\(buffer.counters)")
+        XCTAssertEqual(buffer.counters.late, 0)
+        XCTAssertEqual(buffer.counters.concealed, 0)
+        XCTAssertEqual(buffer.counters.underruns, 0)
+    }
+
+    /// 弱网矩阵「高延迟抖动」的形状：每包独立抖 0–150 ms（数据报，大量乱序）、不丢包。以前后一包先到就把前一包整个
+    /// 扔掉，近一半的包补洞；排序后解码 + 缓冲按晚到撑深，开头几秒之后基本不补洞。
+    func test_receiver_reorders_jittered_datagrams_instead_of_dropping_them() throws {
+        let encoder = try RemoteAudioEncoder(codec: .opus, bitrate: 128_000)
+        let packets = try encoder.encode(sine(seconds: 8), captureNanos: 1_000_000_000)
+        let clock = ManualClock()
+        let receiver = RemoteAudioReceiver(config: .direct, clock: { clock.now })
+        receiver.receive(format: RemoteDesktopAudioFormat(stream: 1, codec: .opus, framesPerPacket: encoder.framesPerPacket))
+        var random = SplitMix(seed: 9)
+        let arrivals = packets.enumerated().map { index, packet in
+            (index, packet.captureNanos + 75 * ms + random.next() % (150 * ms))
+        }.sorted { $0.1 < $1.1 }
+        let output = UnsafeMutableBufferPointer<Float>.allocate(capacity: 240 * 2)
+        defer { output.deallocate() }
+        var delivered = 0
+        var afterWarmup: RemoteAudioJitterBuffer.Counters?
+        var time = packets[0].captureNanos
+        let end = try XCTUnwrap(arrivals.last?.1) + 100 * ms
+        while time < end {
+            clock.now = time
+            while delivered < arrivals.count, arrivals[delivered].1 <= time {
+                let (index, packet) = (arrivals[delivered].0, packets[arrivals[delivered].0])
+                receiver.receive(frame: RemoteDesktopAudioFrame(stream: 1, sequence: UInt32(index),
+                                                                captureNanos: packet.captureNanos, data: packet.data).encoded())
+                delivered += 1
+            }
+            receiver.settle()
+            receiver.pull(into: output, frames: 240)
+            if afterWarmup == nil, time >= packets[0].captureNanos + 3_000_000_000 {
+                afterWarmup = receiver.snapshot().counters
+            }
+            time += 5 * ms
+        }
+        let snapshot = receiver.snapshot()
+        let warm = try XCTUnwrap(afterWarmup)
+        print("[声音乱序] \(snapshot)")
+        XCTAssertGreaterThan(snapshot.reordered, packets.count / 5, "确实大量乱序：\(snapshot)")
+        XCTAssertEqual(snapshot.counters.underruns - warm.underruns, 0, "\(snapshot)")
+        XCTAssertLessThanOrEqual(snapshot.counters.concealed, 8, "整段补洞：\(snapshot)")
+        XCTAssertLessThanOrEqual(snapshot.counters.concealed - warm.concealed, 2, "开头 3 秒之后：\(snapshot)")
+        XCTAssertLessThanOrEqual(snapshot.targetMillis, 250)
+    }
+
+    /// 真丢了一包（没有冗余）：缓冲快放空前放弃等它、交给缓冲补洞，后面的照常放，不会因为等它把缓冲放空。
+    func test_receiver_gives_up_on_a_lost_packet_before_the_buffer_runs_dry() throws {
+        let encoder = try RemoteAudioEncoder(codec: .opus, bitrate: 64_000)
+        let packets = try encoder.encode(sine(seconds: 3), captureNanos: 1_000_000_000)
+        let clock = ManualClock()
+        let receiver = RemoteAudioReceiver(config: .direct, clock: { clock.now })
+        receiver.receive(format: RemoteDesktopAudioFormat(stream: 1, codec: .opus, framesPerPacket: encoder.framesPerPacket))
+        let output = UnsafeMutableBufferPointer<Float>.allocate(capacity: 240 * 2)
+        defer { output.deallocate() }
+        var next = 0
+        var time = packets[0].captureNanos
+        while next < packets.count || time < packets[packets.count - 1].captureNanos + 50 * ms {
+            clock.now = time
+            while next < packets.count, packets[next].captureNanos + 10 * ms <= time {
+                if next != 70 {
+                    receiver.receive(frame: RemoteDesktopAudioFrame(stream: 1, sequence: UInt32(next),
+                                                                    captureNanos: packets[next].captureNanos,
+                                                                    data: packets[next].data).encoded())
+                }
+                next += 1
+            }
+            receiver.settle()
+            receiver.pull(into: output, frames: 240)
+            time += 5 * ms
+        }
+        let snapshot = receiver.snapshot()
+        XCTAssertEqual(snapshot.skipped, 1, "\(snapshot)")
+        XCTAssertEqual(snapshot.counters.concealed, 1, "\(snapshot)")
+        XCTAssertEqual(snapshot.counters.underruns, 0, "\(snapshot)")
+        XCTAssertEqual(snapshot.counters.stretched, 0, "\(snapshot)")
+    }
+}
+
+/// 单测里手拨的钟。
+private final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    var now: UInt64 {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
+private struct SplitMix {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
 }
