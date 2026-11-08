@@ -1867,16 +1867,36 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// redrew for that on top of the redraw already queued for the same output —
     /// two full draws per tick, and the throttle never applied. Let the queued one
     /// paint it; `updateFullScreen` makes sure it finds something to do.
+    ///
+    /// uTerm patch #21: that hand-off is only right when the output itself
+    /// moved the offset. When the user's drag or momentum moved it, the queued
+    /// redraw lands a frame or two later — this frame shows the old bitmap at the
+    /// new offset and the next one jumps. Claude Code ends ~10 output frames a
+    /// second, so scrolling while it thinks skipped ~10 frames a second. Paint the
+    /// queued output in this frame instead; the throttle timer then finds nothing
+    /// to do, so it is still one draw.
     private func redrawAfterLayout(sizeChanged: Bool, originChanged: Bool) {
-        if !sizeChanged, originChanged, pendingDisplay {
+        let scrolledByUser = contentOffsetMovedByUser
+        contentOffsetMovedByUser = false
+        if !sizeChanged, originChanged, pendingDisplay, !scrolledByUser {
             terminal.updateFullScreen()
         } else if sizeChanged || originChanged {
+            if originChanged, pendingDisplay {
+                flushPendingDisplay()
+            }
             setNeedsDisplay(bounds)
         }
     }
 
+    /// uTerm patch #21: set when `contentOffset` changed other than through
+    /// `setContentOffsetFromTerminal` since the last layout.
+    private var contentOffsetMovedByUser = false
+
     open override var contentOffset: CGPoint {
         didSet {
+            if !updatingContentOffsetFromTerminal, contentOffset != oldValue {
+                contentOffsetMovedByUser = true
+            }
             syncYDispFromContentOffset()
 #if canImport(MetalKit)
             if useMetalRenderer, metalView != nil {

@@ -388,6 +388,29 @@ uTerm 配色下采样（54×58 的屏、优化构建）：建属性串约 25%、
 uTerm 侧无入口，回归测试见 `uTermMobileTests/TerminalRowCacheTests.swift`（缓存视图与全新视图逐字节比截图，键里每一项都做过破坏性 A/B）
 和 `uTermMobileTests/Probes/TerminalDrawCostProbeTests.swift`（同一次运行里的相对开销）。
 
+## 21. 手指滚动时，排队的输出画进当前这一帧
+
+补丁 #13 的做法：滚动位置变了，但已经有一次绘制在等节流时，这一帧不画，留给排队的那次。
+输出自己引起的滚动这样处理是对的，否则每拍会画两遍。可滚动要是手指或惯性带起来的，排队的那次
+要晚一两帧才到：这一帧滚动位置变了，画面却没动，下一帧再跳过去。Claude Code 思考时每秒结束约
+10 个同步帧，边输出边滚动时，每秒就要丢掉约 10 帧。探针实测，有输出时 4 秒里 245 个滚动帧只画了
+200 次；改完后是 240 次，和没有输出时一样。
+
+涉及文件：`iOS/iOSTerminalView.swift`。`contentOffset` 的 didSet 里，凡是不经过
+`setContentOffsetFromTerminal` 的改动都记一个标记。`redrawAfterLayout` 看到这个标记，
+而且有绘制在排队，就当场 `flushPendingDisplay()` 并重画。节流计时器到点后已经没有要画的东西，
+所以一帧仍然只画一次。输出自己引起的滚动维持 #13 原样，积压时的节流也不受影响。
+尺寸和滚动位置同时变化时（转屏）也走这条路：当场画，省掉计时器到点后的第二遍。
+这里不标整屏脏（不调 `updateFullScreen`）：反正要 `setNeedsDisplay(bounds)`，而同步帧
+（DEC 2026）还没结束时标整屏脏，帧结束后会多重排一整屏。
+
+有意的取舍：输出积压时（节流拉长到 100ms）手指仍在滚动，现在每一帧都画，比积压期间每秒约 10 帧要多。
+滚动本来就要每帧重画，没有输出排队时也是这样。
+
+回归测试见 `uTermMobileTests/TerminalDrawCountTests.swift` 的
+`testUserScrollWithQueuedOutputPaintsInTheSameFrame`；整屏探针（工作区界面、假后端回放 Claude 帧、
+按显示刷新节拍滚动）见 `uTermMobileTests/Probes/TerminalScrollWhileOutputProbeTests.swift`。
+
 ## 升级记录
 
 ### c068a905 → v1.19.0（464df520，2026-08-29）
