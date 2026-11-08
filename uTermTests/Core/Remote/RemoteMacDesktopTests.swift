@@ -160,6 +160,14 @@ final class RemoteMacDesktopTests: XCTestCase {
         XCTAssertEqual(plan(vendor: 0x10AC, available: [oneX]), .none, "真显示器")
         XCTAssertEqual(plan(online: 2, available: [oneX]), .none, "不止一块屏")
         XCTAssertEqual(plan(builtin: true, available: [oneX]), .none, "内建屏")
+
+        let ours: CGDirectDisplayID = 7
+        XCTAssertFalse(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1)]), "只有虚拟屏")
+        XCTAssertFalse(Display.realDisplayAppeared(
+            ours: ours, online: [(9, Display.screenSharingVendor, Display.screenSharingModel)]),
+                       "「屏幕共享」的独占屏走了会把虚拟屏接回来，不拆")
+        XCTAssertTrue(Display.realDisplayAppeared(ours: ours, online: [(ours, 0x7554, 1), (3, 0x10AC, 0xA0C5)]),
+                      "接上真显示器：拆掉虚拟屏")
     }
 
     func test_old_mac_without_display_list_and_single_display_get_no_menu_data() async throws {

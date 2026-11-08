@@ -327,7 +327,11 @@ final class RemoteMacDirectory {
     }
 
     private func relayClient(for config: RemoteRelayConfig) -> RemoteRelayClient {
-        if let existing = relayClients[config.memberIdentity], existing.relayConfig == config { return existing }
+        if let existing = relayClients[config.memberIdentity] {
+            if existing.relayConfig == config { return existing }
+            // 换下来的客户端还握着一条控制连接（自己的读循环让它一直活着），不停掉就一直占着中继的名额。
+            Task { await existing.stop() }
+        }
         let client = RemoteRelayClient(config: config)
         relayClients[config.memberIdentity] = client
         return client
@@ -399,9 +403,14 @@ final class RemoteMacDirectory {
                     self?.setRelayHosts([:])
                     return
                 }
-                var hosts: [String: Set<UUID>] = [:]
-                for (identity, client) in relays {
-                    hosts[identity] = (try? await fetch(client)) ?? []
+                // 各台中继一起问：一台连不上的中继不该把别的中继上的 Mac 也拖成迟迟不显示在线。
+                let hosts = await withTaskGroup(of: (String, Set<UUID>).self) { group in
+                    for (identity, client) in relays {
+                        group.addTask { (identity, (try? await fetch(client)) ?? []) }
+                    }
+                    var hosts: [String: Set<UUID>] = [:]
+                    for await (identity, online) in group { hosts[identity] = online }
+                    return hosts
                 }
                 guard !Task.isCancelled else { return }
                 self?.lastRelayPoll = .now
@@ -459,7 +468,14 @@ final class RemoteMacDirectory {
     }
 
     private func pollTargets() -> [(identity: String, client: RemoteRelayClient)] {
-        relayConfigs().map { ($0.memberIdentity, relayClient(for: $0)) }
+        let configs = relayConfigs()
+        // 不再用的中继（换了默认、忘了带证书的 Mac）：停掉它的客户端，放掉控制连接。
+        let live = Set(configs.map(\.memberIdentity))
+        for (identity, client) in relayClients where !live.contains(identity) {
+            relayClients[identity] = nil
+            Task { await client.stop() }
+        }
+        return configs.map { ($0.memberIdentity, relayClient(for: $0)) }
     }
 
     private func setRelayHosts(_ hosts: [String: Set<UUID>]) {
@@ -472,8 +488,12 @@ final class RemoteMacDirectory {
     /// 返回这台 Mac（可能此刻不在线）。
     @discardableResult
     func pair(with invitation: RemotePairingInvitation) throws -> Mac? {
+        let existing = identity.peer(id: invitation.macID)
         var peer = RemotePeer(id: invitation.macID, name: invitation.macName, publicKey: invitation.macKey,
                               pairedAt: Date(), platform: RemoteDevicePlatform.mac.rawValue)
+        // 重新配同一台 Mac：留下用户起的别名、它单独记的中继（这张邀请没带中继时）。
+        peer.alias = existing?.alias
+        peer.relay = existing?.relay
         // 邀请带着中继：本机没有默认中继（或就是同一台）就存成默认，否则只给这台 Mac 用。
         if let relay = invitation.relay {
             switch RemoteRelayPlacement.place(relay, current: defaultRelayConfig(), adoptsAsDefault: adoptsRelayAsDefault) {
@@ -484,8 +504,12 @@ final class RemoteMacDirectory {
         }
         try identity.trust(peer)
         pendingTokens[invitation.macID] = invitation.token
-        // 之前按旧身份建过的客户端作废：要按扫到的公钥核对。
-        clients[invitation.macID.uuidString] = nil
+        // 公钥变了（Mac 重装过）：之前按旧身份建的客户端作废，先断开它——窗口还握着它的话，计数照旧，
+        // 下次取客户端时按扫到的公钥新建。公钥没变就留着正在用的连接。
+        let id = invitation.macID.uuidString
+        if existing?.publicKey != invitation.macKey, let stale = clients.removeValue(forKey: id) {
+            stale.disconnect()
+        }
         if !isActivated { activate() }
         refreshPaired()
         startRelayPolling()

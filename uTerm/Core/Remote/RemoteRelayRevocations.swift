@@ -3,8 +3,9 @@ import Foundation
 /// 被控端要吊销、中继还没确认的成员证书，按中继分开存。中继此刻连不上也不丢：下次注册上就补发，
 /// 中继回 `revoked` 才划掉。
 nonisolated struct RemoteRelayRevocations {
-    /// 每台中继最多记这么多；再多说明那台中继一直没回，旧的丢掉也只是少吊销几张早就不用的证书。
-    static let limit = 256
+    /// 每台中继最多记这么多。超出时丢最旧的：那张证书在中继上就一直有效，但只能在中继上找到这台 Mac，
+    /// 配对身份早已删除，连不进来。换了另一台中继（relayID 变了）时，旧中继的待发吊销没有连接可发，留着不动。
+    static let limit = 1024
     let defaults: UserDefaults
 
     func pending(relayID: String) -> [String] {

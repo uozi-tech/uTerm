@@ -379,6 +379,10 @@ final class RemoteDesktopCanvasNSView: NSView {
             return super.performKeyEquivalent(with: event)
         }
         keyDown(with: event)
+        // 按着 ⌘ 时 AppKit 不派发 keyUp（NSApplication 自己吞掉）：不补一个松开，远端就当这个键一直按着。
+        if event.modifierFlags.contains(.command), pressedKeys[event.keyCode] != nil {
+            sendKey(event.keyCode, down: false, flags: event.modifierFlags)
+        }
         return true
     }
 

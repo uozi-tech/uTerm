@@ -17,7 +17,8 @@ enum RemoteSystemCursor {
             .compactMap({ $0 as? NSBitmapImageRep })
             .min(by: { $0.pixelsWide < $1.pixelsWide }),
             let data = rep.bitmapData {
-            hasher.combine(Data(bytes: data, count: rep.bytesPerRow * rep.pixelsHigh))
+            // 直接哈希位图内存，不拷一份 Data：每条桌面连接每 100 ms 算一次。
+            hasher.combine(bytes: UnsafeRawBufferPointer(start: data, count: rep.bytesPerRow * rep.pixelsHigh))
         } else if let tiff = cursor.image.tiffRepresentation {
             hasher.combine(tiff)
         }

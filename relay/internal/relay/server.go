@@ -327,6 +327,9 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 		}
 		release()
 		defer s.trackMember(request.Member, conn)()
+		if s.revokedSince(request.Member) {
+			return
+		}
 		s.serveClient(conn, scope)
 	case roleDial:
 		if !verifySignature(signer, signedMessage(roleDial, relayID, nonce, request.HostID), request.Sig) ||
@@ -335,6 +338,9 @@ func (s *Server) handle(conn net.Conn, source netip.Addr) {
 		}
 		release()
 		defer s.trackMember(request.Member, conn)()
+		if s.revokedSince(request.Member) {
+			return
+		}
 		s.serveDial(conn, request)
 	case roleAccept:
 		release()
@@ -354,6 +360,12 @@ func (s *Server) certified(request requestFrame, relayID string, root *ecdsa.Pub
 	}
 	key, err := parsePublicKey(request.Member)
 	return key, err == nil
+}
+
+// revokedSince catches a revocation that landed between the certificate check and trackMember: revoke
+// closes only the connections it finds tracked, so one tracked a moment later must look again itself.
+func (s *Server) revokedSince(member string) bool {
+	return member != "" && s.store.IsRevoked(member)
 }
 
 // trackMember records a connection a certificate let in until the returned func runs.

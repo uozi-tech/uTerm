@@ -234,3 +234,21 @@ func TestRotateForgetsRevocations(t *testing.T) {
 		t.Fatal("revocation survived rotate")
 	}
 }
+
+func TestFreshRevocationSurvivesSameSecondEviction(t *testing.T) {
+	store, err := OpenStore(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	for i := 0; i < revocationLimit; i++ {
+		store.revoked[fmt.Sprintf("same-second-%05d", i)] = now
+	}
+	// Sorts before every existing key, all from the same second: it must still be the one kept.
+	if err := store.Revoke("0-fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsRevoked("0-fresh") || len(store.revoked) != revocationLimit {
+		t.Fatalf("fresh revocation kept: %v, size %d", store.IsRevoked("0-fresh"), len(store.revoked))
+	}
+}

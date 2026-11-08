@@ -8,8 +8,8 @@ import ObjectiveC
 ///
 /// - 占位屏自己带同点数的 2 倍模式时，用公开 API 换过去。
 /// - 否则建一块 1920×1080 点、3840×2160 像素的虚拟屏（私有类 `CGVirtualDisplay`，沙盒里可用，调研 §16）。
-///   它一出现，系统就撤掉占位屏，它成为唯一的主屏，窗口都在它上面。uTerm 运行期间一直留着，不随每次开流
-///   建拆，免得窗口来回搬。
+///   它一出现，系统就撤掉占位屏，它成为唯一的主屏，窗口都在它上面。之后不随每次开流建拆，免得窗口来回搬；
+///   接上真显示器时立刻拆掉，不然那块看不见的屏会成为扩展屏，窗口和光标都能跑进去。
 ///
 /// 接着真显示器（或不止一块屏）时一律不碰。
 ///
@@ -71,11 +71,54 @@ enum RemoteHeadlessDisplay {
         }
     }
 
-    /// 建出来的虚拟屏。持有它，屏幕就在。
+    /// 建出来的虚拟屏。持有它，屏幕就在；放掉它，屏幕就撤。
     private static var virtualDisplay: NSObject?
+    private static var virtualDisplayID: CGDirectDisplayID = 0
+    private static var watchesReconfiguration = false
+
+    /// 虚拟屏在线时出现了别的真显示器：该把虚拟屏拆掉。占位屏与「屏幕共享」的独占屏不算（前者在虚拟屏
+    /// 在时不出现，后者会把虚拟屏暂时断开、走了还会接回来）。
+    nonisolated static func realDisplayAppeared(ours: CGDirectDisplayID,
+                                                online: [(id: CGDirectDisplayID, vendor: UInt32, model: UInt32)])
+        -> Bool {
+        online.contains { display in
+            display.id != ours
+                && !(display.vendor == placeholderVendor && display.model == placeholderModel)
+                && !(display.vendor == screenSharingVendor && display.model == screenSharingModel)
+        }
+    }
+
+    private static func onlineDisplays() -> [(id: CGDirectDisplayID, vendor: UInt32, model: UInt32)] {
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        return ids.prefix(Int(count)).map { ($0, CGDisplayVendorNumber($0), CGDisplayModelNumber($0)) }
+    }
+
+    /// 接上了真显示器：拆掉虚拟屏。
+    private static func releaseIfRealDisplayAppeared() {
+        guard virtualDisplay != nil, realDisplayAppeared(ours: virtualDisplayID, online: onlineDisplays()) else {
+            return
+        }
+        virtualDisplay = nil
+        virtualDisplayID = 0
+        AppLogger.info("远程桌面：接上了显示器，拆掉 2 倍虚拟屏", category: RemoteLog.category)
+    }
+
+    private static func watchReconfiguration() {
+        guard !watchesReconfiguration else { return }
+        watchesReconfiguration = true
+        CGDisplayRegisterReconfigurationCallback({ _, flags, _ in
+            guard flags.contains(.addFlag) || flags.contains(.enabledFlag) else { return }
+            // 回调在主线程的 run loop 上来，但不保证；拆屏放回主线程做。
+            Task { @MainActor in RemoteHeadlessDisplay.releaseIfRealDisplayAppeared() }
+        }, nil)
+    }
 
     /// 主屏是 1 倍的占位屏时把它换成 2 倍的。建虚拟屏时等它成为主屏再返回（最多 3 秒）。
     static func ensureHiDPI() async {
+        releaseIfRealDisplayAppeared()
         guard virtualDisplay == nil else { return }
         var count: UInt32 = 0
         CGGetOnlineDisplayList(0, nil, &count)
@@ -115,6 +158,8 @@ enum RemoteHeadlessDisplay {
         }
         virtualDisplay = display
         let id = (display.value(forKey: "displayID") as? NSNumber)?.uint32Value ?? 0
+        virtualDisplayID = id
+        watchReconfiguration()
         // 系统要一会儿才撤掉占位屏、把虚拟屏设成主屏；在那之前开流会采到旧屏。
         var waited = 0
         while CGMainDisplayID() != id, waited < 60 {
@@ -148,7 +193,8 @@ enum RemoteHeadlessDisplay {
         let initDisplay = NSSelectorFromString("initWithDescriptor:")
         guard displayClass.instancesRespond(to: initDisplay),
               let allocated = (displayClass as AnyObject).perform(alloc)?.takeUnretainedValue(),
-              let display = allocated.perform(initDisplay, with: descriptor)?.takeUnretainedValue() as? NSObject
+              // init 系列返回的是 +1：按 retained 接，放掉 `virtualDisplay` 时它才真的释放、屏幕才撤。
+              let display = allocated.perform(initDisplay, with: descriptor)?.takeRetainedValue() as? NSObject
         else { return nil }
 
         let initMode = NSSelectorFromString("initWithWidth:height:refreshRate:")
@@ -156,10 +202,10 @@ enum RemoteHeadlessDisplay {
         guard let modeMethod = class_getInstanceMethod(modeClass, initMode),
               let applyMethod = class_getInstanceMethod(displayClass, apply),
               let modeAllocated = (modeClass as AnyObject).perform(alloc)?.takeUnretainedValue() else { return nil }
-        typealias InitMode = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> AnyObject
+        typealias InitMode = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>
         typealias Apply = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
         let mode = unsafeBitCast(method_getImplementation(modeMethod), to: InitMode.self)(
-            modeAllocated, initMode, UInt(width), UInt(height), 60)
+            modeAllocated, initMode, UInt(width), UInt(height), 60).takeRetainedValue()
         let settings = settingsClass.init()
         settings.setValue(2, forKey: "hiDPI")
         settings.setValue([mode], forKey: "modes")

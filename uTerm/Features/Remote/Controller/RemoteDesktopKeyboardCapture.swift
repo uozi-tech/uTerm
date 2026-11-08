@@ -15,8 +15,15 @@ final class RemoteDesktopKeyboardCapture {
     /// 挂钩子失败（多半是没有「辅助功能」授权）。
     private(set) var failed = false
 
-    private var tap: CFMachPort?
-    private var source: CFRunLoopSource?
+    // deinit 也要摘：钩子拿的是不持有的 self 指针，主人没调 `set(active: false)` 就释放时，留下的钩子会扣住
+    // 整台机器的键盘，下一个按键还会访问已释放的对象。CFRunLoop 的增删可以在任何线程做。
+    nonisolated(unsafe) private var tap: CFMachPort?
+    nonisolated(unsafe) private var source: CFRunLoopSource?
+
+    deinit {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+    }
 
     /// 该不该挂：前台、有焦点、能控制、开关开着。纯函数，单测用。
     nonisolated static func shouldCapture(enabled: Bool, appActive: Bool, windowKey: Bool, canvasFocused: Bool,

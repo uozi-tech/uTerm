@@ -298,7 +298,12 @@ func (s *Store) Revoke(member string) error {
 		for key, when := range s.revoked {
 			entries = append(entries, entry{key, when})
 		}
+		// The one just added always survives: entries from the same second would otherwise sort by key,
+		// and a fresh revocation could be dropped the moment it was made.
 		sort.Slice(entries, func(i, j int) bool {
+			if (entries[i].key == member) != (entries[j].key == member) {
+				return entries[j].key == member
+			}
 			if entries[i].when != entries[j].when {
 				return entries[i].when < entries[j].when
 			}
