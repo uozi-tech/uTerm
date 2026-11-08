@@ -170,9 +170,22 @@ final class RemoteTrackpadGestureTests: XCTestCase {
     func test_one_stationary_finger_pinch_is_pinch_not_scroll() {
         _ = gesture.update([touch(1, 100), touch(2, 200)], at: 0)
         XCTAssertEqual(gesture.update([touch(1, 100), touch(2, 210)], at: 0.05), [], "另一根可能只是晚起步，先等等")
-        XCTAssertEqual(gesture.update([touch(1, 100), touch(2, 220)], at: 0.1), [], "判定点本身不缩放")
-        guard case .zoomed? = gesture.update([touch(1, 100), touch(2, 230)], at: 0.15).first else {
+        // 沿连线走：两指并排横着滚、后面那根没跟上也是这样，多等到 32pt。
+        XCTAssertEqual(gesture.update([touch(1, 100), touch(2, 220)], at: 0.1), [])
+        XCTAssertEqual(gesture.update([touch(1, 100), touch(2, 230)], at: 0.15), [])
+        XCTAssertEqual(gesture.update([touch(1, 100), touch(2, 235)], at: 0.18), [], "判定点本身不缩放")
+        guard case .zoomed? = gesture.update([touch(1, 100), touch(2, 245)], at: 0.2).first else {
             return XCTFail("单指不动的捏合也算捏合")
+        }
+    }
+
+    /// 支点那根手指被另一根推着往反方向挪了一两个点（捏合时常见）：不算跟着走，仍是捏合。
+    func test_anchor_finger_drifting_against_the_mover_stays_pinch() {
+        _ = gesture.update([touch(1, 100), touch(2, 200)], at: 0)
+        _ = gesture.update([touch(1, 99), touch(2, 220)], at: 0.05)
+        XCTAssertEqual(gesture.update([touch(1, 98), touch(2, 235)], at: 0.1), [], "判定点本身不缩放")
+        guard case .zoomed? = gesture.update([touch(1, 98), touch(2, 245)], at: 0.15).first else {
+            return XCTFail("支点反向微动仍是捏合")
         }
     }
 
@@ -213,6 +226,79 @@ final class RemoteTrackpadGestureTests: XCTestCase {
         _ = gesture.update([touch(1, 100, 100), touch(2, 160, 100)], at: 0)
         XCTAssertEqual(gesture.update([touch(1, 100, 112), touch(2, 160, 100)], at: 0.05), [])
         XCTAssertEqual(gesture.update([touch(1, 100, 118), touch(2, 160, 100)], at: 0.1).first, .scrollBegan)
+    }
+
+    // MARK: - 横向双指滚动（两指左右并排，横着走正好沿着两指连线）
+
+    /// 两指同时起步、一起往右走：滚动，横向位移完整发出去。
+    func test_side_by_side_fingers_moving_right_together_scroll_horizontally() {
+        _ = gesture.update([touch(1, 100), touch(2, 160)], at: 0)
+        XCTAssertEqual(gesture.update([touch(1, 108), touch(2, 168)], at: 0.03),
+                       [.scrollBegan, .scrollMoved(CGSize(width: 8, height: 0))])
+        XCTAssertEqual(gesture.update([touch(1, 118), touch(2, 178)], at: 0.06), [.scrollMoved(CGSize(width: 10, height: 0))])
+    }
+
+    func test_side_by_side_fingers_moving_left_together_scroll_horizontally() {
+        _ = gesture.update([touch(1, 200), touch(2, 260)], at: 0)
+        XCTAssertEqual(gesture.update([touch(1, 192), touch(2, 252)], at: 0.03),
+                       [.scrollBegan, .scrollMoved(CGSize(width: -8, height: 0))])
+    }
+
+    /// 先后起步：前面那根（往外走，间距变大）先走了一大段，后面那根才跟上。
+    func test_side_by_side_late_follower_moving_away_still_scrolls() {
+        _ = gesture.update([touch(1, 100), touch(2, 160)], at: 0)
+        for (step, x) in [168, 176, 184].enumerated() {
+            XCTAssertEqual(gesture.update([touch(1, 100), touch(2, CGFloat(x))], at: 0.02 * Double(step + 1)), [],
+                           "后面那根还没起步时不能判成捏合（右指走到 \(x)）")
+        }
+        let actions = gesture.update([touch(1, 106), touch(2, 190)], at: 0.1)
+        XCTAssertEqual(actions.first, .scrollBegan, "跟上之后方向一致，是滚动：\(actions)")
+    }
+
+    /// 先后起步：后面那根（往里走，间距变小）先走，前面那根才跟上。
+    func test_side_by_side_late_follower_moving_toward_still_scrolls() {
+        _ = gesture.update([touch(1, 100), touch(2, 160)], at: 0)
+        for (step, x) in [108, 116, 124].enumerated() {
+            XCTAssertEqual(gesture.update([touch(1, CGFloat(x)), touch(2, 160)], at: 0.02 * Double(step + 1)), [],
+                           "前面那根还没起步时不能判成捏合（左指走到 \(x)）")
+        }
+        let actions = gesture.update([touch(1, 130), touch(2, 166)], at: 0.1)
+        XCTAssertEqual(actions.first, .scrollBegan, "跟上之后方向一致，是滚动：\(actions)")
+    }
+
+    /// 后面那根手指被摩擦带着只挪了一两个点（不到「起步」的 3pt），另一根已经走了一大段：仍是滚动。
+    func test_side_by_side_sticky_follower_still_scrolls() {
+        _ = gesture.update([touch(1, 100), touch(2, 160)], at: 0)
+        var actions = gesture.update([touch(1, 102), touch(2, 168)], at: 0.02)
+        actions += gesture.update([touch(1, 102.5), touch(2, 178)], at: 0.04)
+        actions += gesture.update([touch(1, 102.8), touch(2, 186)], at: 0.06)
+        actions += gesture.update([touch(1, 106), touch(2, 194)], at: 0.08)
+        XCTAssertEqual(actions.first, .scrollBegan, "\(actions)")
+        XCTAssertFalse(actions.contains { if case .zoomed = $0 { return true } else { return false } })
+    }
+
+    /// 反向用例：两指沿连线反向走（真正的捏合），同时起步与先后起步都还是捏合。
+    func test_side_by_side_fingers_moving_apart_along_their_line_pinch() {
+        _ = gesture.update([touch(1, 100), touch(2, 160)], at: 0)
+        XCTAssertEqual(gesture.update([touch(1, 96), touch(2, 164)], at: 0.03), [], "判定点本身不缩放")
+        guard case .zoomed? = gesture.update([touch(1, 90), touch(2, 170)], at: 0.06).first else {
+            return XCTFail("同时起步的反向张开是捏合")
+        }
+
+        var late = RemoteTrackpadGesture()
+        _ = late.update([touch(1, 100), touch(2, 160)], at: 0)
+        _ = late.update([touch(1, 100), touch(2, 172)], at: 0.02)
+        XCTAssertEqual(late.update([touch(1, 94), touch(2, 180)], at: 0.04), [], "另一根反向起步：判成捏合，判定点不缩放")
+        guard case .zoomed? = late.update([touch(1, 90), touch(2, 186)], at: 0.06).first else {
+            return XCTFail("先后起步的反向张开也是捏合")
+        }
+
+        var closing = RemoteTrackpadGesture()
+        _ = closing.update([touch(1, 100), touch(2, 200)], at: 0)
+        _ = closing.update([touch(1, 106), touch(2, 194)], at: 0.03)
+        guard case .zoomed? = closing.update([touch(1, 112), touch(2, 188)], at: 0.06).first else {
+            return XCTFail("相向合拢是捏合")
+        }
     }
 
     func test_two_fingers_that_moved_do_not_right_click_on_lift() {
