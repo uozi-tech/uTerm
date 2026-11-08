@@ -9,9 +9,15 @@ import Security
 ///
 /// 主机交给配对设备的是**成员证书**（`cert` / `scope` 非空，中继 1.2.0 起）：`key` 是这台设备自己的成员私钥，
 /// `cert` 是中继成员密钥对它的签名，只能连 `scope` 那一台主机、不能注册主机；主机忘记这台设备时吊销它。
+///
+/// 成员证书的格式版本是 `certificateVersion`（2），JSON 与二维码都写 2。不认证书的老版本只收版本 1：它们会把
+/// 证书里设备自己的私钥当成中继的成员密钥存成默认配置，经 iCloud 钥匙串同步给本人所有 Mac，Mac 拿它注册
+/// 中继一律被拒（2026-11-08 实际出过）。版本号不同，老版本就整份丢掉。
 nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
     static let format = "uterm-relay"
     static let version = 1
+    /// 成员证书的格式版本。
+    static let certificateVersion = 2
     static let scheme = "uterm"
     static let urlHost = "relay"
 
@@ -37,6 +43,25 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
         self.key = key
         self.scope = scope
         self.cert = cert
+        version = cert == nil ? Self.version : Self.certificateVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case format, version, name, host, port, relayID, key, scope, cert
+    }
+
+    /// 证书一律写成 `certificateVersion`：之前存下的证书（当时还写 1）再发出去也不会被老版本收下。
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(format, forKey: .format)
+        try container.encode(cert == nil ? version : Self.certificateVersion, forKey: .version)
+        try container.encode(name, forKey: .name)
+        try container.encode(host, forKey: .host)
+        try container.encode(port, forKey: .port)
+        try container.encode(relayID, forKey: .relayID)
+        try container.encode(key, forKey: .key)
+        try container.encodeIfPresent(scope, forKey: .scope)
+        try container.encodeIfPresent(cert, forKey: .cert)
     }
 
     static let certificatePrefix = "uterm-relay-member-v1"
@@ -89,12 +114,12 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
               components.scheme == Self.scheme, components.host == Self.urlHost else { return nil }
         let items = Dictionary((components.queryItems ?? []).compactMap { item in item.value.map { (item.name, $0) } },
                                uniquingKeysWith: { first, _ in first })
-        guard items["v"] == String(Self.version),
+        guard let version = items["v"].flatMap(Int.init), [Self.version, Self.certificateVersion].contains(version),
               let host = items["h"], let port = items["p"].flatMap(Int.init),
               let relayID = items["i"], let raw = items["k"].flatMap(Data.init(base64URLEncoded:)) else { return nil }
         self.init(name: items["n"] ?? host, host: host, port: port, relayID: relayID, key: raw.base64EncodedString(),
                   scope: items["s"], cert: items["c"].flatMap(Data.init(base64URLEncoded:))?.base64EncodedString())
-        guard isValid else { return nil }
+        guard self.version == version, isValid else { return nil }
     }
 
     /// 二维码内容。
@@ -104,7 +129,7 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
         components.scheme = Self.scheme
         components.host = Self.urlHost
         components.queryItems = [
-            URLQueryItem(name: "v", value: String(version)),
+            URLQueryItem(name: "v", value: String(cert == nil ? version : Self.certificateVersion)),
             URLQueryItem(name: "n", value: name),
             URLQueryItem(name: "h", value: host),
             URLQueryItem(name: "p", value: String(port)),
@@ -126,7 +151,9 @@ nonisolated struct RemoteRelayConfig: Codable, Hashable, Sendable {
     }
 
     var isValid: Bool {
-        format == Self.format && version == Self.version && !host.isEmpty && (1...65535).contains(port)
+        // 证书也接受版本 1：这个修正之前存下的证书写的是 1。
+        format == Self.format && (version == Self.version || (version == Self.certificateVersion && cert != nil))
+            && !host.isEmpty && (1...65535).contains(port)
             && !relayID.isEmpty && memberKey != nil
             && (cert == nil) == (scope == nil) && scope?.isEmpty != true
             && cert.map { Data(base64Encoded: $0) != nil } != false

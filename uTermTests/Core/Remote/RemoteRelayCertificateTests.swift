@@ -61,6 +61,37 @@ final class RemoteRelayCertificateTests: XCTestCase {
         XCTAssertFalse(String(decoding: try JSONEncoder().encode(root), as: UTF8.self).contains("scope"))
     }
 
+    /// 老版本只收格式版本 1：证书写成 2，它们整份丢掉，不会把证书里设备自己的私钥当成中继密钥存成默认、
+    /// 再经 iCloud 钥匙串同步给本人的 Mac（Mac 拿它注册中继一律被拒）。
+    func testOldVersionsCannotMistakeACertificateForTheRelayKey() throws {
+        let certificate = try root.certificate(for: UUID())
+        struct OldDecoder: Decodable { var version: Int; var key: String }
+        let json = try JSONEncoder().encode(certificate)
+        XCTAssertEqual(try JSONDecoder().decode(OldDecoder.self, from: json).version,
+                       RemoteRelayConfig.certificateVersion, "老版本校验 version == 1，2 就不收")
+        let qr = try XCTUnwrap(URLComponents(url: try XCTUnwrap(certificate.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(qr.queryItems?.first { $0.name == "v" }?.value, "2")
+        XCTAssertEqual(try XCTUnwrap(RemoteRelayConfig(importing: json)), certificate)
+        XCTAssertEqual(RemoteRelayConfig(scanned: try XCTUnwrap(certificate.url).absoluteString), certificate)
+
+        // 根配置照旧是 1，老版本照常认。
+        XCTAssertEqual(try JSONDecoder().decode(OldDecoder.self, from: JSONEncoder().encode(root)).version, 1)
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(root.url), resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "v" }?.value, "1")
+
+        // 修正之前存下的证书写的是 1：读得回来，再发出去时写 2。
+        var legacy = certificate
+        legacy.version = RemoteRelayConfig.version
+        let stored = try JSONEncoder().encode(legacy)
+        let reloaded = try XCTUnwrap(RemoteRelayConfig(importing: stored))
+        XCTAssertEqual(try JSONDecoder().decode(OldDecoder.self, from: JSONEncoder().encode(reloaded)).version, 2)
+
+        // 版本 2 却没有证书：不合法。
+        var forged = root
+        forged.version = RemoteRelayConfig.certificateVersion
+        XCTAssertNil(RemoteRelayConfig(importing: try JSONEncoder().encode(forged)))
+    }
+
     func testHalfACertificateIsInvalid() throws {
         var noCert = try root.certificate(for: UUID())
         noCert.cert = nil
