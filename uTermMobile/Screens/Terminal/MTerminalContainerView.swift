@@ -21,6 +21,9 @@ final class MTerminalContainerView: UIView {
     var isOnScreen = true {
         didSet {
             guard isOnScreen != oldValue else { return }
+            // 外壳切换时新容器接走了同一个终端视图：旧容器之后的状态变化（它最后一次刷新常常是「不在屏上」）
+            // 不能再写进视图，否则视图停画、画面永远停在那一刻。和 `syncTerminal` 的守卫同一条规则。
+            guard terminalView.superview === self else { return }
             (terminalView as? MTerminalView)?.isOffScreen = !isOnScreen
             if isOnScreen {
                 commitsOnNextLayout = true

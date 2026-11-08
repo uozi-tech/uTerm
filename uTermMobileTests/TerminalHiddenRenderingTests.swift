@@ -127,6 +127,22 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         XCTAssertFalse(view.suppressesDrawing)
     }
 
+    /// 反过来：新容器接走之后，旧容器才被告知「不在屏上」（外壳切换时旧片最后一次刷新）。
+    /// 旧容器已经不摆放这个视图了，不能替新容器决定它画不画——否则画面停在那一刻、再也不刷新。
+    func testStaleContainerCannotStopTheAdoptedViewFromDrawing() async throws {
+        let (view, stale) = try await hostedTerminal()
+        let live = MTerminalContainerView(terminalView: view, fontSize: 11)
+        XCTAssertTrue(view.superview === live)
+
+        stale.isOnScreen = false
+
+        XCTAssertFalse(view.suppressesDrawing, "旧容器改不了新容器里的视图")
+        live.isOnScreen = false
+        XCTAssertTrue(view.suppressesDrawing, "持有视图的容器照常能停画")
+        stale.isOnScreen = true
+        XCTAssertTrue(view.suppressesDrawing, "旧容器也放不开")
+    }
+
     // MARK: 闪烁光标
 
     private func animatedSubviews(of view: UIView) -> [UIView] {
