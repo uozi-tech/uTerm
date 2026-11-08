@@ -8,18 +8,19 @@ final class DockMenuControllerTests: XCTestCase {
     private let serverA = DockMenuController.Server(id: UUID(), title: "web-01 · prod")
     private let serverB = DockMenuController.Server(id: UUID(), title: "db-01")
 
-    func testMenuListsNewLocalShellThenRecentServers() throws {
+    func testMenuListsWelcomeAndNewLocalShellThenRecentServers() throws {
         let menu = try XCTUnwrap(makeController(servers: [serverA, serverB]).makeMenu())
 
-        XCTAssertEqual(menu.items.map(\.title), ["新建本机终端", "", "最近连接", "web-01 · prod", "db-01"])
-        XCTAssertTrue(menu.items[1].isSeparatorItem)
-        XCTAssertNil(menu.items[2].action, "「最近连接」只是小标题，不能点")
+        XCTAssertEqual(menu.items.map(\.title),
+                       ["打开欢迎页", "新建本机终端", "", "最近连接", "web-01 · prod", "db-01"])
+        XCTAssertTrue(menu.items[2].isSeparatorItem)
+        XCTAssertNil(menu.items[3].action, "「最近连接」只是小标题，不能点")
     }
 
     func testMenuOmitsRecentSectionWithoutServers() throws {
         let menu = try XCTUnwrap(makeController(servers: []).makeMenu())
 
-        XCTAssertEqual(menu.items.map(\.title), ["新建本机终端"])
+        XCTAssertEqual(menu.items.map(\.title), ["打开欢迎页", "新建本机终端"])
     }
 
     func testLockedAppExposesNoCustomItems() {
@@ -27,17 +28,21 @@ final class DockMenuControllerTests: XCTestCase {
     }
 
     func testItemsRunTheirActions() throws {
+        var welcomeCount = 0
         var newShellCount = 0
         var opened: [UUID] = []
         let controller = makeController(
             servers: [serverA, serverB],
+            onOpenWelcome: { welcomeCount += 1 },
             onNewLocalShell: { newShellCount += 1 },
             onOpenServer: { opened.append($0) })
         let menu = try XCTUnwrap(controller.makeMenu())
 
         menu.performActionForItem(at: 0)
-        menu.performActionForItem(at: 4)
+        menu.performActionForItem(at: 1)
+        menu.performActionForItem(at: 5)
 
+        XCTAssertEqual(welcomeCount, 1)
         XCTAssertEqual(newShellCount, 1)
         XCTAssertEqual(opened, [serverB.id])
     }
@@ -81,18 +86,20 @@ final class DockMenuControllerTests: XCTestCase {
         XCTAssertNil(delegate.applicationDockMenu(NSApp), "开窗入口装好之前没有自定义项")
 
         delegate.dockMenu = makeController(servers: [])
-        XCTAssertEqual(delegate.applicationDockMenu(NSApp)?.items.first?.title, "新建本机终端")
+        XCTAssertEqual(delegate.applicationDockMenu(NSApp)?.items.first?.title, "打开欢迎页")
     }
 
     private func makeController(
         servers: [DockMenuController.Server],
         isLocked: Bool = false,
+        onOpenWelcome: @escaping @MainActor () -> Void = {},
         onNewLocalShell: @escaping @MainActor () -> Void = {},
         onOpenServer: @escaping @MainActor (UUID) -> Void = { _ in }
     ) -> DockMenuController {
         DockMenuController(
             isLocked: { isLocked },
             recentServers: { servers },
+            onOpenWelcome: onOpenWelcome,
             onNewLocalShell: onNewLocalShell,
             onOpenServer: onOpenServer)
     }

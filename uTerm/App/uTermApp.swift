@@ -235,6 +235,10 @@ struct uTermApp: App {
         lifecycleDelegate.dockMenu = DockMenuController(
             isLocked: { !lock.isUnlocked },
             recentServers: { DockMenuController.recentServers(in: context) },
+            onOpenWelcome: {
+                NSApp.activate(ignoringOtherApps: true)
+                open(id: "welcome")
+            },
             onNewLocalShell: {
                 NSApp.activate(ignoringOtherApps: true)
                 open.newLocalShellAskingFirst()
