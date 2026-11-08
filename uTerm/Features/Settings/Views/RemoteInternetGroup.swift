@@ -54,8 +54,13 @@ struct RemoteInternetGroup: View {
                     let relayState = server.relayLink?.state
                     SettingsRow(label: "中继状态", hint: RemoteControlPresentation.relayStatusHint(relayState)) {
                         let status = RemoteControlPresentation.relayStatus(relayState)
-                        SettingsStatusLabel(symbol: status.symbol, tone: status.tone,
-                                            text: RemoteControlPresentation.relayStatusLabel(relayState))
+                        HStack(spacing: 10) {
+                            SettingsStatusLabel(symbol: status.symbol, tone: status.tone,
+                                                text: RemoteControlPresentation.relayStatusLabel(relayState))
+                            if relayState == .superseded {
+                                UDButton(title: "重新连接", style: .secondary) { server.reconnectRelay() }
+                            }
+                        }
                     }
                     SettingsRow(label: "保持唤醒", hint: "公网接入期间不让 Mac 闲置睡眠") {
                         UDToggle(Binding(get: { settings.keepsAwakeForInternet }, set: { settings.keepsAwakeForInternet = $0 }))

@@ -117,7 +117,7 @@ enum RemoteControlPresentation {
     static func relayStatusHint(_ state: RemoteRelayHostLink.State?) -> String? {
         switch state {
         case .failed(let message): return message
-        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继，这里不再自动重连。"
+        case .superseded: return "另一台机器用这台 Mac 的身份注册了中继。稍后会自动再试，也可以现在重新连接。"
         default: return nil
         }
     }

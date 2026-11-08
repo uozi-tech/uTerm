@@ -1,6 +1,34 @@
+import AppKit
 import CryptoKit
 import Foundation
 import Observation
+
+/// 被顶替（另一台机器用这台 Mac 的身份注册了中继）之后多久再注册：5 分钟起、每次翻倍、最多 1 小时。
+///
+/// 被顶替多半是同一台 Mac 上一个短命的开发构建，它退出后这台得自己回来；但也可能是两台真机共用一个身份
+///（克隆的磁盘、迁移过来的 Mac），那样互相顶的间隔至少是这个下限，并且越来越长，不会每几秒抢一次。
+nonisolated struct RemoteRelaySupersededBackoff: Equatable, Sendable {
+    static let standard = RemoteRelaySupersededBackoff(initial: .seconds(300), maximum: .seconds(3600))
+
+    let initial: Duration
+    let maximum: Duration
+    private(set) var next: Duration
+
+    init(initial: Duration, maximum: Duration) {
+        self.initial = initial
+        self.maximum = maximum
+        next = initial
+    }
+
+    /// 这次被顶替后等多久；下一次翻倍。
+    mutating func take() -> Duration {
+        let delay = next
+        next = min(next * 2, maximum)
+        return delay
+    }
+
+    mutating func reset() { next = initial }
+}
 
 /// Mac 在中继上的注册：保持一条出站控制连接，回应手机的信令，手机要走中继时回拨。
 ///
@@ -12,7 +40,8 @@ final class RemoteRelayHostLink {
         case connecting
         case registered
         case failed(String)
-        /// 另一台机器用同样的身份注册了，互相顶替没有意义，不再自动重连。
+        /// 另一台机器用同样的身份注册了：按 `RemoteRelaySupersededBackoff` 隔一阵再注册，
+        /// 换网络、唤醒或在设置里点「重新连接」时立刻再试。
         case superseded
         case stopped
     }
@@ -32,6 +61,10 @@ final class RemoteRelayHostLink {
     @ObservationIgnored private var networkWatcher: RemoteNetworkWatcher?
     @ObservationIgnored private let pingInterval: Duration
     @ObservationIgnored private let pongTimeout: TimeInterval
+    @ObservationIgnored private var supersededBackoff: RemoteRelaySupersededBackoff
+    /// 这次注册上的时间。注册稳定够久（一个退避上限）再被顶替，退避从头算。
+    @ObservationIgnored private var registeredSince: Date?
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
 
     private static let maxCallbacksInFlight = 4
     private static let maxProbesInFlight = 4
@@ -40,11 +73,12 @@ final class RemoteRelayHostLink {
     @ObservationIgnored var acceptsDirect = true
 
     init(config: RemoteRelayConfig, server: RemoteHostServer, pingInterval: Duration = .seconds(60),
-         pongTimeout: TimeInterval = 20) {
+         pongTimeout: TimeInterval = 20, supersededBackoff: RemoteRelaySupersededBackoff = .standard) {
         self.config = config
         self.server = server
         self.pingInterval = pingInterval
         self.pongTimeout = pongTimeout
+        self.supersededBackoff = supersededBackoff
     }
 
     func start() {
@@ -54,7 +88,27 @@ final class RemoteRelayHostLink {
         networkWatcher = RemoteNetworkWatcher { [weak self] isSatisfied in
             if isSatisfied { self?.reconnectNow() }
         }
+        // 睡醒时连接多半已经死了；被顶替时也趁这一下再试一次。
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reconnectNow() }
+        }
         runner = Task { [weak self] in await self?.run() }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+
+    /// 设置里的「重新连接」：立刻再注册，被顶替的退避从头算。
+    func reconnect() {
+        supersededBackoff.reset()
+        if runner == nil {
+            start()
+            return
+        }
+        reconnectNow()
     }
 
     func stop() {
@@ -63,6 +117,8 @@ final class RemoteRelayHostLink {
         heartbeat?.cancel()
         heartbeat = nil
         networkWatcher = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        wakeObserver = nil
         control?.close()
         control = nil
         wakeRetry()
@@ -99,18 +155,27 @@ final class RemoteRelayHostLink {
                 guard !Task.isCancelled else { return }
                 if case RemoteRelayError.refused(let reason) = error, reason == "superseded" {
                     state = .superseded
-                    return
+                    if let since = registeredSince, Date().timeIntervalSince(since) >= Self.seconds(supersededBackoff.maximum) {
+                        supersededBackoff.reset()
+                    }
+                    registeredSince = nil
+                    let delay = supersededBackoff.take()
+                    let endpoint = config.endpointDescription
+                    AppLogger.notice("中继注册被顶替：另一台机器用这台 Mac 的身份注册了 \(endpoint)，"
+                                     + "\(Int(Self.seconds(delay).rounded())) 秒后再注册", category: RemoteLog.category)
+                    await waitBeforeRetry(delay)
+                    continue
                 }
+                registeredSince = nil
                 state = .failed(error.localizedDescription)
                 AppLogger.info("中继注册断开：\(error.localizedDescription)", category: RemoteLog.category)
             }
-            await waitBeforeRetry()
+            await waitBeforeRetry(retryDelay)
             retryDelay = min(retryDelay * 2, .seconds(60))
         }
     }
 
-    private func waitBeforeRetry() async {
-        let delay = retryDelay
+    private func waitBeforeRetry(_ delay: Duration) async {
         let sleeper = Task { [weak self] in
             try? await Task.sleep(for: delay)
             self?.wakeRetry()
@@ -155,6 +220,10 @@ final class RemoteRelayHostLink {
             isAllowed: { [weak server] id in MainActor.assumeIsolated { server?.allowsInternetAccess(id) ?? false } },
             invitationToken: { [weak server] in MainActor.assumeIsolated { server?.pairingInvitation?.token } })
         state = .registered
+        registeredSince = Date()
+        let endpoint = config.endpointDescription, relayVersion = answer.server ?? "?"
+        AppLogger.notice("已注册到中继 \(endpoint)（中继 \(relayVersion)）",
+                         category: RemoteLog.category)
         server.relayUpdates.noteRunning(answer.server)
         retryDelay = .seconds(1)
         lastHeard = Date()

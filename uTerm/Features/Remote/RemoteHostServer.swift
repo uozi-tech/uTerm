@@ -67,6 +67,8 @@ final class RemoteHostServer {
     private(set) var relayLink: RemoteRelayHostLink?
     /// 这个进程为什么不注册中继（nil = 照常注册）。开发构建与测试宿主和正式版同身份，注册了就会把它顶掉。
     let relayRegistrationBlock: RemoteRelayRegistrationBlock?
+    /// 被顶替后的退避（测试里调短）。
+    @ObservationIgnored var relaySupersededBackoff = RemoteRelaySupersededBackoff.standard
     /// 存中继配置的地方。测试与测试宿主里为 nil：不读写真实的 iCloud 钥匙串。
     @ObservationIgnored private let relayStore: RemoteRelayConfigStore?
     /// 中继版本与新版本提醒。
@@ -285,7 +287,7 @@ final class RemoteHostServer {
         if enabled, let relayConfig, relayRegistrationBlock == nil {
             if relayLink?.config != relayConfig {
                 relayLink?.stop()
-                let link = RemoteRelayHostLink(config: relayConfig, server: self)
+                let link = RemoteRelayHostLink(config: relayConfig, server: self, supersededBackoff: relaySupersededBackoff)
                 relayLink = link
                 link.start()
             }
@@ -295,6 +297,11 @@ final class RemoteHostServer {
         }
         updateInternetActivity(active: relayLink != nil, keepAwake: keepAwake)
         internetAccessChanged()
+    }
+
+    /// 设置里的「重新连接」：被顶替后不等退避，立刻再注册。
+    func reconnectRelay() {
+        relayLink?.reconnect()
     }
 
     /// 钥匙串里当前的中继配置（没有存储的测试里用内存里那份）。

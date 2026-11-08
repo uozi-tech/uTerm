@@ -686,4 +686,106 @@ final class RemoteRelayEndToEndTests: XCTestCase {
         let reconnected = await waitUntil(8) { link.state == .registered }
         XCTAssertTrue(reconnected, "掉线后要自动重新注册，当前 \(link.state)")
     }
+
+    // MARK: - 被顶替
+
+    /// 两台用同一个身份（同一把主机密钥、同一个设备 ID）注册的 Mac。
+    private func makeTwins(config: RemoteRelayConfig, backoff: RemoteRelaySupersededBackoff)
+        -> (RemoteHostServer, RemoteHostServer) {
+        let storage = RemoteMemoryStorage()
+        let id = UUID()
+        func make() -> RemoteHostServer {
+            let suite = "RemoteRelayEndToEndTests.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+            let server = RemoteHostServer(registry: TerminalSessionRegistry(),
+                                          identity: RemoteIdentityStore(role: .controllers, storage: storage),
+                                          localName: "测试 Mac", localID: id, advertises: false,
+                                          relayRevocations: RemoteRelayRevocations(defaults: defaults))
+            server.relaySupersededBackoff = backoff
+            server.relayConfig = config
+            return server
+        }
+        return (make(), make())
+    }
+
+    /// 两台真机共用一个身份时互相顶，每次被顶后至少等退避下限才抢回来，而且越等越久。
+    func test_twins_swap_no_faster_than_the_superseded_backoff() async throws {
+        let config = try relayConfig()
+        let backoff = RemoteRelaySupersededBackoff(initial: .milliseconds(1500), maximum: .seconds(6))
+        let (a, b) = makeTwins(config: config, backoff: backoff)
+        defer {
+            a.updateInternetAccess(enabled: false, keepAwake: false)
+            b.updateInternetAccess(enabled: false, keepAwake: false)
+        }
+        a.updateInternetAccess(enabled: true, keepAwake: false)
+        let aRegistered = await waitUntil { a.relayLink?.state == .registered }
+        XCTAssertTrue(aRegistered)
+        b.updateInternetAccess(enabled: true, keepAwake: false)
+
+        // 记下每台每次「被顶替 → 再注册上」用了多久。
+        var supersededAt: [ObjectIdentifier: Date] = [:]
+        var waits: [TimeInterval] = []
+        var last: [ObjectIdentifier: RemoteRelayHostLink.State] = [:]
+        let deadline = Date().addingTimeInterval(9)
+        while Date() < deadline {
+            for server in [a, b] {
+                guard let state = server.relayLink?.state else { continue }
+                let key = ObjectIdentifier(server)
+                if last[key] != state {
+                    if state == .superseded { supersededAt[key] = Date() }
+                    if state == .registered, let since = supersededAt.removeValue(forKey: key) {
+                        waits.append(Date().timeIntervalSince(since))
+                    }
+                    last[key] = state
+                }
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThanOrEqual(waits.count, 2, "9 秒里应该互换过至少两次：\(waits)")
+        XCTAssertTrue(waits.allSatisfy { $0 >= 1.5 }, "被顶后不能比退避下限更快抢回来：\(waits)")
+        if waits.count >= 3 {
+            XCTAssertGreaterThanOrEqual(waits[2], 2.9, "同一台第二次被顶要等得更久：\(waits)")
+        }
+    }
+
+    /// 被顶替后点「重新连接」：不等退避，立刻注册回来。
+    func test_reconnect_after_being_superseded_registers_immediately() async throws {
+        let config = try relayConfig()
+        let (a, b) = makeTwins(config: config, backoff: RemoteRelaySupersededBackoff(initial: .seconds(60),
+                                                                                       maximum: .seconds(120)))
+        defer { a.updateInternetAccess(enabled: false, keepAwake: false) }
+        a.updateInternetAccess(enabled: true, keepAwake: false)
+        let aRegistered = await waitUntil { a.relayLink?.state == .registered }
+        XCTAssertTrue(aRegistered)
+        b.updateInternetAccess(enabled: true, keepAwake: false)
+        let superseded = await waitUntil { a.relayLink?.state == .superseded }
+        XCTAssertTrue(superseded, "第二台注册后第一台应被顶替，当前 \(String(describing: a.relayLink?.state))")
+        // 顶人的那台走了（开发构建退出的情形），这台点「重新连接」。
+        b.updateInternetAccess(enabled: false, keepAwake: false)
+        let started = Date()
+        a.reconnectRelay()
+        let back = await waitUntil(5) { a.relayLink?.state == .registered }
+        XCTAssertTrue(back, "点「重新连接」应立刻注册回来，当前 \(String(describing: a.relayLink?.state))")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "不该等 60 秒的退避")
+    }
+
+    /// 被顶替后在设置里关掉再打开「允许经公网接入」：换一条新的注册，立刻回来。
+    func test_toggling_internet_access_after_being_superseded_registers_again() async throws {
+        let config = try relayConfig()
+        let (a, b) = makeTwins(config: config, backoff: RemoteRelaySupersededBackoff(initial: .seconds(60),
+                                                                                       maximum: .seconds(120)))
+        defer { a.updateInternetAccess(enabled: false, keepAwake: false) }
+        a.updateInternetAccess(enabled: true, keepAwake: false)
+        let aRegistered = await waitUntil { a.relayLink?.state == .registered }
+        XCTAssertTrue(aRegistered)
+        b.updateInternetAccess(enabled: true, keepAwake: false)
+        let superseded = await waitUntil { a.relayLink?.state == .superseded }
+        XCTAssertTrue(superseded)
+        b.updateInternetAccess(enabled: false, keepAwake: false)
+        a.updateInternetAccess(enabled: false, keepAwake: false)
+        a.updateInternetAccess(enabled: true, keepAwake: false)
+        let back = await waitUntil(5) { a.relayLink?.state == .registered }
+        XCTAssertTrue(back, "关再开公网接入应重新注册，当前 \(String(describing: a.relayLink?.state))")
+    }
 }

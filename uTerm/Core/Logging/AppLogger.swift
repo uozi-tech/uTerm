@@ -50,6 +50,13 @@ nonisolated enum AppLogger {
         logger(category: category).error("[WARN] \(message(), privacy: .public)")
     }
 
+    /// 和 `info` 同一档开关，但用 notice 级写：会落盘，事后 `log show` 查得到（info 只在内存里留一阵）。
+    /// 留给少数事后要追查的状态变化，比如中继注册成功 / 被顶替。
+    static func notice(_ message: @autoclosure @escaping () -> String, category: String = "app") {
+        guard shouldLog(.info, currentSetting: currentSettingRaw()) else { return }
+        logger(category: category).notice("\(message(), privacy: .public)")
+    }
+
     static func info(_ message: @autoclosure @escaping () -> String, category: String = "app") {
         guard shouldLog(.info, currentSetting: currentSettingRaw()) else { return }
         logger(category: category).info("\(message(), privacy: .public)")
