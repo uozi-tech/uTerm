@@ -113,7 +113,7 @@ final class RemoteMacDirectory {
     @ObservationIgnored private var relayPollGeneration = 0
 
     init(identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts),
-         relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = .standard,
+         relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = RemoteLocalState.defaults,
          adoptsRelayAsDefault: Bool = true, startsInForeground: Bool = true,
          relayPollInterval: Duration = .seconds(15),
          fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {

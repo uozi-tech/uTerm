@@ -87,7 +87,7 @@ nonisolated final class RemoteIdentityStore: @unchecked Sendable {
 
     let role: RemoteTrustRole
 
-    init(role: RemoteTrustRole, storage: any RemoteSecretStorage = RemoteKeychainStorage()) {
+    init(role: RemoteTrustRole, storage: any RemoteSecretStorage = RemoteLocalState.secrets) {
         self.role = role
         self.storage = storage
         (peersAccount, blockedAccount) = role.accounts
@@ -251,7 +251,7 @@ nonisolated final class RemoteMemoryStorage: RemoteSecretStorage, @unchecked Sen
 nonisolated enum RemoteLocalDevice {
     private static let idKey = DefaultsKey.remoteDeviceID
 
-    static func id(defaults: UserDefaults = .standard) -> UUID {
+    static func id(defaults: UserDefaults = RemoteLocalState.defaults) -> UUID {
         if let raw = defaults.string(forKey: idKey), let id = UUID(uuidString: raw) { return id }
         let id = UUID()
         defaults.set(id.uuidString, forKey: idKey)

@@ -238,7 +238,7 @@ nonisolated final class RemoteRelayConfigStore: @unchecked Sendable {
     private static let account = "default"
     private let storage: any RemoteSyncedStorage
 
-    init(storage: any RemoteSyncedStorage = RemoteKeychainSyncedStorage(service: "com.uozi.uTerm.remote.relay")) {
+    init(storage: any RemoteSyncedStorage = RemoteLocalState.syncedStorage(service: "com.uozi.uTerm.remote.relay")) {
         self.storage = storage
     }
 

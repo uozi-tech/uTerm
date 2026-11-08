@@ -133,7 +133,7 @@ nonisolated enum RemoteRelayAgentPrompt {
 nonisolated struct RemoteRelayManagedHosts: @unchecked Sendable {
     let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = RemoteLocalState.defaults) {
         self.defaults = defaults
     }
 

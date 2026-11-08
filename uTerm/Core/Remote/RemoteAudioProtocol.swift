@@ -157,11 +157,11 @@ nonisolated enum RemoteAudioPolicy {
 
 /// 手机记住每台 Mac 要不要声音（远程桌面工具栏上的扬声器按钮），下次看这台 Mac 时照样打开。只在本机，不同步。
 nonisolated enum RemoteDesktopAudioPreference {
-    static func wantsAudio(mac: UUID, defaults: UserDefaults = .standard) -> Bool {
+    static func wantsAudio(mac: UUID, defaults: UserDefaults = RemoteLocalState.defaults) -> Bool {
         (defaults.stringArray(forKey: DefaultsKey.remoteDesktopAudioMacs) ?? []).contains(mac.uuidString)
     }
 
-    static func setWantsAudio(_ on: Bool, mac: UUID, defaults: UserDefaults = .standard) {
+    static func setWantsAudio(_ on: Bool, mac: UUID, defaults: UserDefaults = RemoteLocalState.defaults) {
         var macs = Set(defaults.stringArray(forKey: DefaultsKey.remoteDesktopAudioMacs) ?? [])
         if on { macs.insert(mac.uuidString) } else { macs.remove(mac.uuidString) }
         defaults.set(macs.sorted(), forKey: DefaultsKey.remoteDesktopAudioMacs)

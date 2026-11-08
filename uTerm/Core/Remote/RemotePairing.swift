@@ -124,7 +124,7 @@ nonisolated struct RemotePairingInvitation: Equatable, Sendable {
 nonisolated enum RemoteLegacyRoster {
     static let service = "com.uozi.uTerm.remote.roster"
 
-    static func withdraw(id: UUID, storage: any RemoteSyncedStorage = RemoteKeychainSyncedStorage(service: service)) {
+    static func withdraw(id: UUID, storage: any RemoteSyncedStorage = RemoteLocalState.syncedStorage(service: service)) {
         try? storage.delete(account: id.uuidString)
     }
 

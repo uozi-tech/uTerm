@@ -148,6 +148,9 @@ nonisolated final class RemoteRelayConnection: @unchecked Sendable {
 
     /// 连上并读 hello。
     func open(timeout: TimeInterval = requestTimeout) async throws -> RemoteRelayHello {
+        guard RemoteLocalState.allowsRelay(host: config.host) else {
+            throw RemoteRelayError.unreachable("测试宿主不连外部中继")
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 self.readyWaiter = continuation

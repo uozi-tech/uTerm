@@ -101,7 +101,7 @@ final class RemoteControlSettings {
         isEnabled && isInternetEnabled && internetDevices.contains(id)
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = RemoteLocalState.defaults) {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
         isDesktopEnabled = defaults.object(forKey: Keys.desktopEnabled) as? Bool ?? false

@@ -13,7 +13,7 @@ struct RemoteDiagnosticsWindowView: View {
     let windowID: RemoteDiagnosticsWindowID?
 
     @Environment(RemoteMacDirectory.self) private var directory
-    @State private var model = RemotePathDiagnosticsModel(log: RemotePathMatrixLog(defaults: .standard))
+    @State private var model = RemotePathDiagnosticsModel(log: RemotePathMatrixLog(defaults: RemoteLocalState.defaults))
 
     var body: some View {
         VStack(spacing: 0) {

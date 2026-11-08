@@ -132,7 +132,7 @@ final class RemoteHostServer {
          keyConfirmationTimeout: Duration = RemoteConstants.handshakeTimeout,
          relayStore: RemoteRelayConfigStore? = nil,
          relayUpdates: RemoteRelayUpdateMonitor = .inert(),
-         relayRevocations: RemoteRelayRevocations = RemoteRelayRevocations(defaults: .standard),
+         relayRevocations: RemoteRelayRevocations = RemoteRelayRevocations(defaults: RemoteLocalState.defaults),
          desktopEnvironment: RemoteDesktopEnvironment = .disabled) {
         self.relayStore = relayStore
         self.relayRevocations = relayRevocations

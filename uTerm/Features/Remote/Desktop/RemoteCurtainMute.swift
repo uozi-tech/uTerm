@@ -21,7 +21,7 @@ final class RemoteCurtainMute {
         var volume: Float?
     }
 
-    static let shared = RemoteCurtainMute(control: CoreAudioOutputControl(), defaults: .standard)
+    static let shared = RemoteCurtainMute(control: CoreAudioOutputControl(), defaults: RemoteLocalState.defaults)
 
     private let control: any RemoteOutputControl
     private let defaults: UserDefaults

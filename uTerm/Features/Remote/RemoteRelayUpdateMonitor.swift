@@ -22,7 +22,7 @@ final class RemoteRelayUpdateMonitor {
     @ObservationIgnored private let notify: @MainActor (String, String) -> Void
     @ObservationIgnored private var fetching: Task<Void, Never>?
 
-    init(defaults: UserDefaults = .standard,
+    init(defaults: UserDefaults = RemoteLocalState.defaults,
          fetchLatest: @escaping @Sendable () async throws -> String = { try await RemoteRelayRelease.fetchLatestVersion() },
          notify: @escaping @MainActor (String, String) -> Void = RemoteRelayUpdateMonitor.postNotification) {
         self.defaults = defaults

@@ -10,7 +10,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
     var preferredMacID: String?
     @State private var model: RemotePathDiagnosticsModel
 
-    init(preferredMacID: String? = nil, log: RemotePathMatrixLog = RemotePathMatrixLog(defaults: .standard)) {
+    init(preferredMacID: String? = nil, log: RemotePathMatrixLog = RemotePathMatrixLog(defaults: RemoteLocalState.defaults)) {
         self.preferredMacID = preferredMacID
         _model = State(initialValue: RemotePathDiagnosticsModel(log: log))
     }
