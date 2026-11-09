@@ -123,6 +123,34 @@ final class RemoteDesktopFlowTests: XCTestCase {
         XCTAssertEqual(rate.bitrate, config.maxBitrate, "不超过上限")
     }
 
+    func test_rate_ceiling_has_an_absolute_cap_for_huge_screens() {
+        XCTAssertEqual(RemoteRateController.config(width: 1856, height: 1206).maxBitrate, 1856 * 1206 * 24, "常见尺寸照旧")
+        XCTAssertEqual(RemoteRateController.config(width: 5120, height: 2880).maxBitrate,
+                       RemoteRateController.absoluteMaxBitrate, "5K 虚拟屏按像素是 353.9 Mbps")
+    }
+
+    func test_link_pacing_caps_the_target_without_counting_as_congestion() {
+        let config = RemoteRateController.Config(minBitrate: 2_000_000, maxBitrate: 300_000_000)
+        var rate = RemoteRateController(config: config, initialBitrate: 6_000_000, now: 0)
+        rate.capToLink(videoShare: 40_000_000)
+        var now: UInt64 = 0
+        for _ in 0..<40 {
+            now += 1_000 * ms
+            rate.tick(now: now)
+        }
+        XCTAssertEqual(rate.bitrate, 50_000_000, "最多涨到视频份额的 1.25 倍，不是 300 Mbps")
+        XCTAssertTrue(rate.capToLink(videoShare: 8_000_000), "链路变窄：目标跟着往下拉")
+        XCTAssertEqual(rate.bitrate, 10_000_000)
+        XCTAssertEqual(rate.frameRate, 60, "跟着链路走不是拥塞，不减帧率")
+        XCTAssertTrue(rate.capToLink(videoShare: 400_000))
+        XCTAssertEqual(rate.bitrate, config.minBitrate, "不低于下限")
+        XCTAssertFalse(rate.capToLink(videoShare: 80_000_000), "链路变宽不直接抬目标，由 tick 慢慢涨")
+        XCTAssertEqual(rate.bitrate, config.minBitrate)
+        now += 1_000 * ms
+        XCTAssertTrue(rate.tick(now: now))
+        XCTAssertEqual(rate.bitrate, 2_500_000)
+    }
+
     func test_rate_floor_scales_with_pixels_between_2_and_8_mbps() {
         XCTAssertEqual(RemoteRateController.config(width: 64, height: 64).minBitrate, 2_000_000)
         XCTAssertEqual(RemoteRateController.config(width: 1920, height: 1080).minBitrate, 1920 * 1080)

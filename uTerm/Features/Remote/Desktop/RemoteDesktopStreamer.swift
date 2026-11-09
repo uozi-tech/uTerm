@@ -416,6 +416,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private func linkChanged(_ state: RemoteLinkState) {
         guard !isStopped else { return }
         linkState = state
+        // 目标跟着链路封顶：不算降码率（画质上限不收紧），编码器拿的 min(目标, 视频份额) 也不变。
+        if rate.capToLink(videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate)) {
+            appliedRate = min(appliedRate, rate.bitrate)
+        }
         updateInflightLimits()
         let groupSize = RemoteLossPolicy.fecGroupSize(lossRate: state.lossRate, roundTripNanos: state.roundTripNanos)
         let now = DispatchTime.now().uptimeNanoseconds

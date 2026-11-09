@@ -156,6 +156,8 @@ nonisolated struct RemoteRateController: Equatable {
     let config: Config
     private(set) var bitrate: Int
     private(set) var frameRate: Int
+    /// 链路节奏给的目标上限（见 `linkHeadroom`）；nil = 没有链路节奏（局域网、中继）。
+    private(set) var linkCeiling: Int?
     private var lastDecrease: UInt64?
     private var lastCongestion: UInt64
     private var lastIncrease: UInt64
@@ -171,12 +173,24 @@ nonisolated struct RemoteRateController: Equatable {
     private var baselineBucketStart: UInt64
 
     /// 起始码率按像素算：每像素 12 bit/s（2144×1206 ≈ 31 Mbps，低延迟编码器在桌面内容上用得到的量），
-    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），
-    /// 下限见 `minimumBitrate`。
+    /// 局域网轻松给得起；链路真吃紧时由拥塞控制往下压。上限每像素 24 bit/s（更复杂的画面留余量），封顶
+    /// `absoluteMaxBitrate`；下限见 `minimumBitrate`。
     static func config(width: Int, height: Int) -> Config {
         let pixels = max(1, width * height)
-        return Config(minBitrate: minimumBitrate(pixels: pixels), maxBitrate: max(2_000_000, pixels * 24))
+        return Config(minBitrate: minimumBitrate(pixels: pixels),
+                      maxBitrate: min(absoluteMaxBitrate, max(2_000_000, pixels * 24)))
     }
+
+    /// 码率上限的绝对值。按像素算的上限在大屏上离谱：5120×2880 的虚拟屏是 353.9 Mbps，局域网上没有链路节奏
+    /// 兜底，这个数会原样交给编码器，要等延迟涨起来才往下压（2026-11-09 真机 931 读数）。
+    static let absoluteMaxBitrate = 150_000_000
+
+    /// 有链路节奏时目标码率最多是视频份额（`RemoteLossPolicy.videoShare`）的这么多倍。
+    ///
+    /// 直连上编码器拿的是 min(目标, 视频份额)，延迟一直低，目标就每 0.5 s 乘 1.25 涨到上限停着（5K 虚拟屏
+    /// 353.9 Mbps，链路才 60 Mbps）。码控行显示的目标因此没有参考价值，拥塞时按 0.7 倍往下压也压不到编码器
+    /// 头上——要连降好几次才降到链路以下。留 1.25 倍：链路一变宽，编码器马上跟得上。
+    static let linkHeadroom = 1.25
 
     /// 码率下限：每像素 1 bit/s，夹在 2–8 Mbps（1920×1080 约 2 Mbps、2600×1462 约 3.8 Mbps、3840×2160 8 Mbps）。
     ///
@@ -338,6 +352,17 @@ nonisolated struct RemoteRateController: Equatable {
         baselineCurrent = min(baselineCurrent ?? latency, latency)
     }
 
+    /// 链路节奏变了：目标最多是视频份额的 `linkHeadroom` 倍，但不低于下限。返回目标有没有被往下拉——
+    /// 这是跟着链路走，不是拥塞，调用方别把它当降码率处理（画质上限不收紧）。
+    @discardableResult
+    mutating func capToLink(videoShare: Double) -> Bool {
+        let ceiling = max(config.minBitrate, Int(videoShare * Self.linkHeadroom))
+        linkCeiling = ceiling
+        guard bitrate > ceiling else { return false }
+        bitrate = ceiling
+        return true
+    }
+
     /// 定期调用（每次确认时顺带）：拥塞后静默够久就往上调。返回有没有变。
     @discardableResult
     mutating func tick(now: UInt64) -> Bool {
@@ -349,12 +374,13 @@ nonisolated struct RemoteRateController: Equatable {
             frameRate = config.fullFrameRate
             return true
         }
-        guard bitrate < config.maxBitrate else { return false }
+        let limit = min(config.maxBitrate, linkCeiling ?? config.maxBitrate)
+        guard bitrate < limit else { return false }
         let probing = congestedBitrate.map {
             (Double($0) * 0.85..<Double($0) * 1.15).contains(Double(bitrate))
         } ?? false
         let factor = probing ? config.probeFactor : config.increaseFactor
-        bitrate = min(config.maxBitrate, max(bitrate + 1, Int(Double(bitrate) * factor)))
+        bitrate = min(limit, max(bitrate + 1, Int(Double(bitrate) * factor)))
         return true
     }
 }
