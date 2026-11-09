@@ -17,7 +17,14 @@ enum GhosttyTrial {
         fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
 
     static func makeBridge() -> GhosttyTerminalBridge {
-        GhosttyTerminalBridge(controller: controller)
+        // 排查滚动手感时设 `defaults write com.uozi.uTerm debug.ghosttyInputLog -bool YES`（或 Xcode 里改）：打开 GhosttyKit 的
+        // 输入日志（含本地补丁的 uterm-scroll 行），打到 stdout，`devicectl device process launch --console` 抓。平时关着，
+        // 每个滚动事件在主线程上打一行也有开销。
+        if UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyInputLog) {
+            TerminalDebugLog.categories = [.input]
+            TerminalDebugLog.isEnabled = true
+        }
+        return GhosttyTerminalBridge(controller: controller)
     }
 }
 

@@ -40,6 +40,13 @@
         var pixelResidue: CGFloat = 0
         var snapLink: CADisplayLink?
         var snapRemaining: CGFloat = 0
+        // uTerm 本地补丁（回弹，用 0023 的 ghostty_surface_set_overscroll）：拖过顶 / 底时手指走了多少像素（未衰减），
+        // 以及松手 / 惯性撞边后的弹簧状态。
+        var overscrollRaw: CGFloat = 0
+        var bounceLink: CADisplayLink?
+        var bounceStart: CFTimeInterval = 0
+        var bounceFrom: CGFloat = 0
+        var bounceVelocity: CGFloat = 0
     }
 
     extension UITerminalView {
@@ -115,6 +122,7 @@
                 TerminalDebugLog.log(.input, "touch scroll began")
                 stopMomentumScrolling()
                 stopScrollSnap()
+                if momentumScroll.bounceLink != nil { stopBounce(resetting: true) }
 
             case .changed:
                 guard pointer.session.reported == nil else { return }
@@ -137,6 +145,7 @@
                     .input,
                     "touch scroll ended velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))",
                 )
+                if releaseOverscroll() { return }
                 if !usesInlineTextSelection || momentumScroll.scrollsLocally || surface?.isMouseCaptured != true {
                     startMomentumScrolling(velocity: velocity)
                 }
@@ -146,6 +155,7 @@
             case .cancelled, .failed:
                 TerminalDebugLog.log(.input, "touch scroll cancelled")
                 stopMomentumScrolling()
+                _ = releaseOverscroll()
 
             default:
                 break
@@ -165,10 +175,19 @@
                 core.requestImmediateTick()
                 return
             }
-            let pixels = TerminalScrollDistance.scrollPixels(for: delta, displayScale: resolvedDisplayScale())
+            var pixels = TerminalScrollDistance.scrollPixels(for: delta, displayScale: resolvedDisplayScale())
+            if pixels.y != 0, surface?.isMouseCaptured != true {
+                guard let rest = absorbOverscroll(pixels.y, momentum: momentum) else { return }
+                pixels.y = rest
+            }
             let mods = TerminalScrollModifiers(precision: true, momentum: momentum)
             surface?.sendMouseScroll(x: Double(pixels.x), y: Double(pixels.y), mods: mods.rawValue)
             trackScrollResidue(pixels.y)
+            // uTerm 排查用（M16 第三轮）：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
+            TerminalDebugLog.log(
+                .input,
+                "uterm-scroll px=\(String(format: "%.1f", pixels.y)) momentum=\(momentum) residue=\(String(format: "%.1f", momentumScroll.pixelResidue)) bar=\(core.bridge.scrollbar.map { "\($0.offset)/\($0.total)/\($0.len)" } ?? "-") captured=\(surface?.isMouseCaptured == true) inline=\(usesInlineTextSelection) local=\(momentumScroll.scrollsLocally)",
+            )
         }
 
         // MARK: uTerm 本地补丁：停下时吸附整行
@@ -202,6 +221,7 @@
             guard abs(delta) >= 0.5 else { return }
             momentumScroll.snapRemaining = delta
             let link = CADisplayLink(target: self, selector: #selector(scrollSnapFrame(_:)))
+            link.preferredFrameRateRange = Self.scrollFrameRateRange
             link.add(to: .main, forMode: .common)
             momentumScroll.snapLink = link
         }
@@ -222,6 +242,100 @@
             momentumScroll.snapRemaining = 0
         }
 
+        // MARK: uTerm 本地补丁：到顶 / 到底回弹（照 UIScrollView）
+
+        private var scrollAtTop: Bool {
+            guard let bar = core.bridge.scrollbar else { return true }
+            return bar.total <= bar.len || bar.offset == 0
+        }
+
+        private var scrollAtBottom: Bool {
+            guard let bar = core.bridge.scrollbar else { return true }
+            return bar.offset + bar.len >= bar.total
+        }
+
+        /// UIScrollView 的橡皮筋公式：拖出 x，显示 (1 − 1 / (x·0.55 / d + 1))·d，d = 视图高度。
+        private func rubberBand(_ raw: CGFloat) -> CGFloat {
+            let d = max(1, bounds.height * resolvedDisplayScale())
+            return (1 - 1 / (abs(raw) * 0.55 / d + 1)) * d * (raw < 0 ? -1 : 1)
+        }
+
+        private func applyOverscroll(_ shown: CGFloat) {
+            guard let raw = surface?.rawValue else { return }
+            ghostty_surface_set_overscroll(raw, Double(shown))
+        }
+
+        /// 这一步位移里有多少进了回弹：返回剩下要正常滚的像素，nil = 全被回弹吃掉了。
+        /// 正 = 往回滚方向（内容下移）。在顶上还往下拉、在底下还往上推时进回弹；回弹中往回推先把回弹收回去。
+        func absorbOverscroll(_ y: CGFloat, momentum: TerminalScrollModifiers.Momentum) -> CGFloat? {
+            let raw = momentumScroll.overscrollRaw
+            if raw != 0 {
+                let next = raw + y
+                if next != 0, (next > 0) == (raw > 0) {
+                    momentumScroll.overscrollRaw = next
+                    applyOverscroll(rubberBand(next))
+                    return nil
+                }
+                momentumScroll.overscrollRaw = 0
+                applyOverscroll(0)
+                return next == 0 ? nil : next
+            }
+            let pushingPastTop = y > 0 && scrollAtTop
+            let pushingPastBottom = y < 0 && scrollAtBottom
+            guard pushingPastTop || pushingPastBottom else { return y }
+            if momentum == .changed {
+                // 惯性撞边：剩下的速度变成一次回弹（先冲出去再弹回来），惯性到此为止。
+                let velocity = momentumScroll.velocity.y * resolvedDisplayScale()
+                stopMomentumScrolling(sendTerminalEndEvent: false)
+                startBounce(from: 0, velocity: velocity)
+                return nil
+            }
+            momentumScroll.overscrollRaw = y
+            applyOverscroll(rubberBand(y))
+            return nil
+        }
+
+        /// 松手时还在回弹里：弹回去，不起惯性。返回是否接管了。
+        func releaseOverscroll() -> Bool {
+            guard momentumScroll.overscrollRaw != 0 else { return false }
+            let shown = rubberBand(momentumScroll.overscrollRaw)
+            momentumScroll.overscrollRaw = 0
+            startBounce(from: shown, velocity: 0)
+            return true
+        }
+
+        /// 临界阻尼弹簧回到 0：x(t) = (x0 + (v0 + ω·x0)·t)·e^(−ω·t)，ω = 12/s（约 0.45 s 停稳，和 UIScrollView 回弹的观感相近）。
+        func startBounce(from shown: CGFloat, velocity: CGFloat) {
+            stopBounce(resetting: false)
+            momentumScroll.bounceFrom = shown
+            momentumScroll.bounceVelocity = velocity
+            momentumScroll.bounceStart = CACurrentMediaTime()
+            let link = CADisplayLink(target: self, selector: #selector(bounceFrame(_:)))
+            link.preferredFrameRateRange = Self.scrollFrameRateRange
+            link.add(to: .main, forMode: .common)
+            momentumScroll.bounceLink = link
+        }
+
+        @objc func bounceFrame(_ link: CADisplayLink) {
+            let omega: CGFloat = 12
+            let t = CGFloat(link.targetTimestamp - momentumScroll.bounceStart)
+            let x0 = momentumScroll.bounceFrom, v0 = momentumScroll.bounceVelocity
+            var x = (x0 + (v0 + omega * x0) * t) * exp(-omega * t)
+            // 冲出去的那段也按橡皮筋衰减，甩得再快也冲不出半屏。
+            if x0 == 0 { x = rubberBand(x) }
+            if t > 0.25, abs(x) < 0.5 {
+                stopBounce(resetting: true)
+                return
+            }
+            applyOverscroll(x)
+        }
+
+        func stopBounce(resetting: Bool) {
+            momentumScroll.bounceLink?.invalidate()
+            momentumScroll.bounceLink = nil
+            if resetting { applyOverscroll(0) }
+        }
+
         func startMomentumScrolling(velocity: CGPoint) {
             guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
 
@@ -237,15 +351,22 @@
                 target: self,
                 selector: #selector(momentumScrollFrame(_:)),
             )
+            // uTerm 本地补丁：惯性按屏幕最高刷新率走。不设的话这个 link 在 ProMotion 上只有 60 Hz（真机日志：
+            // 惯性每 16.7 ms 一步、每步 70 px 上下），渲染是 120 Hz，同一个位置连画两帧，看起来就是一格一格地跳。
+            link.preferredFrameRateRange = Self.scrollFrameRateRange
             link.add(to: .main, forMode: .common)
             momentumScroll.displayLink = link
         }
 
+        static var scrollFrameRateRange: CAFrameRateRange {
+            CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        }
+
         @objc func momentumScrollFrame(_ link: CADisplayLink) {
             let dt = link.targetTimestamp - link.timestamp
-            // 0.92 per 1/60 s, scaled to the frame so a flick travels the
-            // same distance at 120 Hz as at 60 Hz.
-            let decay = CGFloat(pow(0.92, dt * 60))
+            // uTerm 本地补丁：减速按 UIScrollView 的 `.normal`（每毫秒 0.998），和 SwiftTerm 标签（UIScrollView）
+            // 甩出去的距离、收尾一致。上游是每 1/60 s 0.92，摩擦大得多，甩一下就停。按帧时长缩放，60 / 120 Hz 一样远。
+            let decay = CGFloat(pow(0.998, dt * 1000))
 
             momentumScroll.velocity.x *= decay
             momentumScroll.velocity.y *= decay

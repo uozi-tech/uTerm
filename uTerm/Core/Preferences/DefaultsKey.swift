@@ -133,6 +133,8 @@ nonisolated enum DefaultsKey {
     static let debugLayoutDiagnostics = "debug.layoutDiagnostics"
     /// iOS Debug 构建、Ghostty 评估分支临时：新开的终端标签改用 GhosttyKit（设置 › 诊断 › 调试）。不进 main。
     static let debugGhosttyTrial = "debug.ghosttyTrial"
+    /// 同上，排查试用版滚动手感时打开 GhosttyKit 的输入日志（`defaults write` 手动设）。
+    static let debugGhosttyInputLog = "debug.ghosttyInputLog"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 
