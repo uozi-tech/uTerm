@@ -95,29 +95,22 @@ struct RemoteMacsPane: View {
 
     private var listColumn: some View {
         VStack(spacing: 0) {
+            // 分区方案 v3：列表头并入卡顶，无底线（同快捷命令列表）。侧栏已经写着「我的 Mac」，
+            // 列表头不再重复，直接是第一个分区「已配对」，邀请链接钮跟它同一行。
             HStack(spacing: 8) {
-                HStack(spacing: 5) {
-                    Text("我的 Mac")
-                        .font(.system(size: 12))
-                        .foregroundStyle(UD.text3)
-                        .tracking(0.3)
-                    Text(verbatim: "· \(directory.macs.count)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(UD.text4)
-                }
+                sectionTitle("已配对")
                 Spacer()
                 // 列表头只放一个图标钮（同表单头的关闭钮），说明放悬停提示；空态里才是带字的大按钮。
                 UDIconButton(systemImage: "link") { pasting = true }
                     .help(Text("粘贴邀请链接：不在同一网络的 Mac，在它的「设置 › 远程控制」里显示邀请并拷贝链接。"))
                     .accessibilityLabel(Text("粘贴邀请链接"))
             }
-            .padding(.horizontal, 16)
-            // 分区方案 v3：列表头并入卡顶，无底线（同快捷命令列表）。
+            .padding(.leading, ServerRowLayout.contentPadding)
+            .padding(.trailing, 16)
             .frame(height: 44)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    sectionHeader("已配对")
                     if directory.macs.isEmpty {
                         Text("还没有配对的 Mac")
                             .font(.system(size: 12))
@@ -138,15 +131,19 @@ struct RemoteMacsPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
+    private func sectionTitle(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(UD.text4)
             .tracking(0.3)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
+        sectionTitle(title)
             .padding(.horizontal, ServerRowLayout.contentPadding)
             .padding(.top, 4)
             .padding(.bottom, 6)
-            .accessibilityAddTraits(.isHeader)
     }
 
     private func row(_ mac: RemoteMacDirectory.Mac) -> some View {
@@ -181,10 +178,15 @@ struct RemoteMacsPane: View {
         return String(localized: "不在线")
     }
 
-    /// 状态点与图标的颜色：在线绿、没配对强调色、不在线灰。
+    /// 状态点的颜色：在线绿、没配对强调色、不在线灰。
     static func tint(of mac: RemoteMacDirectory.Mac) -> Color {
         if mac.source == .nearby { return UD.accent }
         return mac.isOnline ? UD.success : UD.text4
+    }
+
+    /// 图标的颜色：强调色（蓝）；不在线的灰掉，跟状态点一致。在线与否由状态点表达，图标不再跟着变绿。
+    static func iconTint(of mac: RemoteMacDirectory.Mac) -> Color {
+        mac.source == .nearby || mac.isOnline ? UD.accent : UD.text4
     }
 }
 
@@ -204,7 +206,7 @@ private struct RemoteMacRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            SettingsListIcon.symbol("desktopcomputer", RemoteMacsPane.tint(of: mac))
+            SettingsListIcon.symbol("desktopcomputer", RemoteMacsPane.iconTint(of: mac))
             VStack(alignment: .leading, spacing: 2) {
                 Text(mac.name)
                     .font(.system(size: 13.5, weight: .medium))
@@ -294,7 +296,7 @@ private struct RemoteMacDetailPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            SettingsListIcon.symbol("desktopcomputer", RemoteMacsPane.tint(of: mac))
+            SettingsListIcon.symbol("desktopcomputer", RemoteMacsPane.iconTint(of: mac))
             Text(mac.name)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(UD.text)
