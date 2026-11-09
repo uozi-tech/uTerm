@@ -60,6 +60,12 @@ final class RemoteMacWindowModel {
         keepAlive: TerminalPaneAreaTuning.keepAlive))
     /// 接管之后的对账；nil = 还没接管（没连上过）。
     @ObservationIgnored private(set) var follower: RemoteSessionFollower?
+    /// 接管时那台 Mac 的列表还没到：等列表来了再决定要不要自动新建（`openFirstShellIfNone`）。
+    private var awaitingFirstList = false
+    /// 正在自动新建第一个终端（防重入）。
+    private var isOpeningFirstShell = false
+    /// 刚连上、第一个标签还没就位：界面显示「正在打开终端」，不闪一下「没有打开的终端」的空态。
+    var isPreparingFirstShell: Bool { awaitingFirstList || isOpeningFirstShell }
     private let startTerminal: @MainActor (RemoteTerminalPane) -> Void
 
     var panes: [RemoteTerminalPane] { groups.allTabs.map(\.payload) }
@@ -82,12 +88,35 @@ final class RemoteMacWindowModel {
         if let first = ids.first, let at = groups.locateTab(first) {
             groups.activateTab(groupID: at.groupID, index: at.index)
         }
+        if client.listedSessionIDs != nil {
+            openFirstShellIfNone(ids)
+        } else {
+            awaitingFirstList = true
+        }
+    }
+
+    /// 打开窗口时那台 Mac 上一个终端都没有：直接新建一个，不让人对着空态再点一次「新建终端」。
+    /// 只在接管时做一次——之后用户把标签关光了，就是想要空着，不再自动开。老版本 Mac 不能新建，照旧显示空态；
+    /// 新建失败也退回空态，按钮还在。
+    private func openFirstShellIfNone(_ ids: [UUID]) {
+        guard ids.isEmpty, client.supportsLocalShell, !isOpeningFirstShell else { return }
+        isOpeningFirstShell = true
+        Task {
+            defer { isOpeningFirstShell = false }
+            do { try await openNewShell() } catch {
+                AppLogger.notice("远程 Mac 窗口：自动新建第一个终端失败：\(error.localizedDescription)", category: RemoteLog.category)
+            }
+        }
     }
 
     /// 那台 Mac 的终端列表变了：新开的在后台加标签，关掉的摘标签，按它上面的顺序排（`order`，老版本 Mac 不发）。
     /// nil = 还没收到列表，什么也不动。
     func follow(_ sessionIDs: [UUID]?, order: [UUID]? = nil) {
         guard let sessionIDs, var follower else { return }
+        if awaitingFirstList {
+            awaitingFirstList = false
+            openFirstShellIfNone(sessionIDs)
+        }
         let (gone, fresh) = follower.update(sessionIDs)
         self.follower = follower
         for id in gone { close(id) }

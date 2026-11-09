@@ -152,7 +152,9 @@ private struct RemoteMacTerminalArea: View {
         let background = SwiftUI.Color(
             nsColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
         Group {
-            if model.panes.isEmpty {
+            if model.panes.isEmpty, model.isPreparingFirstShell {
+                RemoteMacProgressView(text: String(localized: "正在打开终端…"))
+            } else if model.panes.isEmpty {
                 RemoteMacStateView(systemImage: "terminal", title: String(localized: "这台 Mac 上没有打开的终端"),
                                    detail: String(localized: "新建一个，那台 Mac 上也会弹出对应的终端窗口。")) {
                     HStack(spacing: 8) {
