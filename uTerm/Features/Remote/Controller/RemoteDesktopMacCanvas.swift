@@ -84,7 +84,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
-        cursorLayer.path = Self.arrowPath()
+        cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = NSColor.black.cgColor
         cursorLayer.strokeColor = NSColor.white.cgColor
         cursorLayer.lineWidth = 1.5
@@ -95,7 +95,7 @@ final class RemoteDesktopCanvasNSView: NSView {
         layer?.addSublayer(cursorLayer)
         cornerProbe.onChange = { [weak self] in self?.cornersChanged() }
         addSubview(cornerProbe)
-        attachReceiver()
+        session.attachCanvas(displayLayer) { [weak self] cursor in self?.macCursorArrived(cursor) }
         AppLogger.info("远程桌面画布：建立", category: RemoteLog.category)
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(windowResignedKey),
@@ -119,43 +119,10 @@ final class RemoteDesktopCanvasNSView: NSView {
         capture.set(active: false)
         releaseAll()
         NotificationCenter.default.removeObserver(self)
-        session.receiver.setHandlers(onImage: nil, onCursor: nil)
+        session.detachCanvas()
     }
 
     // MARK: - 画面
-
-    private func attachReceiver() {
-        let renderer = RendererBox(displayLayer.sampleBufferRenderer)
-        session.receiver.setHandlers(
-            onImage: { image, _ in
-                guard let sample = RemoteVideoDecoder.displaySample(image) else { return }
-                renderer.enqueue(sample)
-            },
-            onCursor: { [weak self] cursor in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.macCursorArrived(cursor) } }
-            })
-    }
-
-    /// 渲染器从解码队列上用。出错（或系统要求 flush）时先记一笔原因，flush 后把这一帧照常送进去，
-    /// 画面不会停在黑屏上等下一次变化。
-    private nonisolated final class RendererBox: @unchecked Sendable {
-        let renderer: AVSampleBufferVideoRenderer
-        private var failures = 0
-        init(_ renderer: AVSampleBufferVideoRenderer) { self.renderer = renderer }
-        func enqueue(_ sample: CMSampleBuffer) {
-            if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
-                failures += 1
-                if failures <= 20 || failures % 100 == 0 {
-                    let reason = renderer.error.map { "\($0)" } ?? "需要 flush"
-                    let count = failures
-                    AppLogger.info("远程桌面画布：渲染器出错，flush 后继续（第 \(count) 次）：\(reason)",
-                                   category: RemoteLog.category)
-                }
-                renderer.flush()
-            }
-            renderer.enqueue(sample)
-        }
-    }
 
     private func macCursorArrived(_ cursor: RemoteDesktopCursor) {
         guard cursor != macCursor else { return }
@@ -269,19 +236,6 @@ final class RemoteDesktopCanvasNSView: NSView {
         let localIsCursor = session.canControl && mouseInside
         cursorLayer.isHidden = session.info == nil || !macCursor.visible || localIsCursor
         CATransaction.commit()
-    }
-
-    private static func arrowPath() -> CGPath {
-        let path = CGMutablePath()
-        path.move(to: .zero)
-        path.addLine(to: CGPoint(x: 0, y: 17))
-        path.addLine(to: CGPoint(x: 4.2, y: 13))
-        path.addLine(to: CGPoint(x: 7.2, y: 19.5))
-        path.addLine(to: CGPoint(x: 9.8, y: 18.3))
-        path.addLine(to: CGPoint(x: 6.9, y: 12))
-        path.addLine(to: CGPoint(x: 12.3, y: 12))
-        path.closeSubpath()
-        return path
     }
 
     // MARK: - 光标形状

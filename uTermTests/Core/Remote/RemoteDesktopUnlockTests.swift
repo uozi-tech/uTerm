@@ -76,6 +76,40 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertEqual(outcome, .unlocked)
     }
 
+    /// 锁屏时两端显示什么（`lockPrompt`）：没开远程解锁只在底部提示一句、不挡画面；开了才盖解锁入口；
+    /// 正在放时没有状态遮罩；流停了不再叠锁屏提示。
+    func test_lock_prompt_follows_the_unlock_setting() async throws {
+        let mac = FakeDesktopMac()
+        mac.unlockEnabled = false
+        mac.screen.locked = true
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        defer { session.stop() }
+        let lockedButOff = await waitUntil { session.screen.locked && !session.screen.unlockAvailable }
+        XCTAssertTrue(lockedButOff)
+        let firstFrame = await waitUntil { !session.awaitingFirstFrame }
+        XCTAssertTrue(firstFrame)
+
+        guard case .caption(let text) = session.lockPrompt(macName: "测试 Mac") else {
+            return XCTFail("没开远程解锁：只在底部提示")
+        }
+        XCTAssertTrue(text.contains("允许远程解锁"))
+        XCTAssertNil(session.notice(macName: "测试 Mac", showsClose: true), "正在放时不盖遮罩")
+        XCTAssertFalse(session.screen.canToggleCurtain(supportsUnlock: session.supportsUnlock), "锁着不能切帘幕")
+
+        mac.unlockEnabled = true
+        server.desktopSettingsChanged()
+        let available = await waitUntil { session.screen.unlockAvailable }
+        XCTAssertTrue(available)
+        XCTAssertEqual(session.lockPrompt(macName: "测试 Mac"), .unlock)
+
+        session.stop()
+        XCTAssertEqual(session.lockPrompt(macName: "测试 Mac"), .none, "流停了：锁屏状态是旧值，不再叠一层")
+    }
+
     func test_unlock_feature_offered_when_setting_on() async throws {
         let mac = FakeDesktopMac()
         let server = try await makeServer(mac)

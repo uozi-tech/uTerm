@@ -292,8 +292,8 @@ final class RemoteDesktopSession {
         state = .streaming
         // 后台里重连上的（一般是回前台前最后那几秒）：新流照样请 Mac 停下，别在没人看时推满码率。
         if backgrounded { sendPause(true) }
-        // 重连后重新要声音：Mac 那边的声音流随旧的桌面流一起结束了。
-        if wantsAudio { requestAudio(true) }
+        // 重连后重新要声音：Mac 那边的声音流随旧的桌面流一起结束了。第一次开流时，上次看这台 Mac 开着声音就照样打开。
+        if wantsAudio { requestAudio(true) } else { restoreAudioIfWanted() }
     }
 
     @ObservationIgnored private var firstFrameStep: Int?

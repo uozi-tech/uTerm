@@ -46,16 +46,17 @@ final class RemoteDesktopWindowModel {
         session.stop()
     }
 
-    /// 要多大的画面：按本机最大那块屏幕的像素，至少 1080p。那台 Mac 会按自己显示器的比例套进这个框里。
+    /// 要多大的画面：按本机最大那块屏幕的像素（见 `RemoteDesktopSession.requestedSize`）。那台 Mac 会按自己
+    /// 显示器的比例套进这个框里。
     static func requestedPixels(screens: [NSScreen] = NSScreen.screens) -> (width: Int, height: Int) {
-        var width = 1920, height = 1080
+        var long = 0, short = 0
         for screen in screens {
             let scale = screen.backingScaleFactor
             let w = Int(screen.frame.width * scale), h = Int(screen.frame.height * scale)
-            width = max(width, max(w, h))
-            height = max(height, min(w, h))
+            long = max(long, max(w, h))
+            short = max(short, min(w, h))
         }
-        return (width, height)
+        return RemoteDesktopSession.requestedSize(longPixels: long, shortPixels: short)
     }
 }
 
@@ -188,9 +189,6 @@ struct RemoteDesktopContent: View {
             session.onClipboard = { content in show(RemoteDesktopMacPasteSource.receive(content)) }
         }
         .onChange(of: client.state) { _, _ in Task { await model.startStreamIfConnected() } }
-        .onChange(of: session.state) { _, state in
-            if state == .streaming { session.restoreAudioIfWanted() }
-        }
         .onChange(of: session.audioState) { _, state in
             // 那台 Mac 上没开、采集停了、本机输出设备没了：按钮已经复位，这里说一声为什么。
             if case .unavailable(let reason) = state { show(reason, seconds: 4) }
@@ -242,7 +240,7 @@ struct RemoteDesktopContent: View {
                           help: showStats ? String(localized: "隐藏延迟与帧率") : String(localized: "显示延迟与帧率")) {
                     showStats.toggle()
                 }
-                if session.supportsUnlock, session.canControl, !session.screen.locked {
+                if session.screen.canToggleCurtain(supportsUnlock: session.supportsUnlock) {
                     barButton(session.screen.curtained ? "eye.slash.fill" : "eye.slash",
                               active: session.screen.curtained,
                               help: session.screen.curtained ? String(localized: "关闭帘幕：那台 Mac 的屏幕恢复显示")
@@ -294,11 +292,7 @@ struct RemoteDesktopContent: View {
     /// 读数：盖在画面左上角，点顶栏的仪表按钮开关。
     @ViewBuilder private var statsBadge: some View {
         if showStats, session.state == .streaming {
-            let stats = session.stats
-            let latency = session.latency.map { String(localized: "延迟 \($0.p50Millis) ms（p95 \($0.p95Millis)）") }
-            let rest = String(format: "%.0f fps · %.1f Mbps · 解码 %.1f ms", stats.framesPerSecond,
-                              stats.megabitsPerSecond, stats.decodeMillis)
-            Text([latency, rest, session.audioStatsText].compactMap(\.self).joined(separator: " · "))
+            Text(session.statsText)
                 .font(UD.mono(11))
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -324,14 +318,7 @@ struct RemoteDesktopContent: View {
         case .awaitingApproval: return String(localized: "等待那台 Mac 确认配对")
         default: break
         }
-        switch session.state {
-        case .streaming: return session.canControl ? nil : String(localized: "只能查看")
-        case .idle, .connecting: return String(localized: "正在连接…")
-        case .reconnecting: return String(localized: "正在重连…")
-        case .failed: return String(localized: "连接失败")
-        case .ended: return String(localized: "已结束")
-        case .unsupported: return String(localized: "版本太旧")
-        }
+        return session.statusText(controlling: nil)
     }
 
     private func barButton(_ symbol: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
@@ -368,47 +355,53 @@ struct RemoteDesktopContent: View {
     }
 
     @ViewBuilder private var sessionOverlay: some View {
-        switch session.state {
-        case .idle, .connecting:
-            notice(spinner: true, title: String(localized: "正在连接 \(client.macName) 的屏幕…"), message: nil)
-        case .reconnecting:
-            notice(spinner: true, title: String(localized: "连接中断，正在重连…"),
-                   message: String(localized: "接上后画面会自动恢复"), dim: true)
-        case .streaming:
-            if !session.canControl, let controlNote = session.info?.controlNote {
-                VStack {
-                    Spacer()
-                    Text(controlNote)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(Capsule().fill(.black.opacity(0.6)))
-                        .padding(.bottom, 20).padding(.horizontal, 20)
+        if let notice = session.notice(macName: client.macName, showsClose: false) {
+            self.notice(spinner: notice.spinner, title: notice.title, message: notice.message, dim: notice.dim) {
+                ForEach(Array(notice.actions.enumerated()), id: \.offset) { index, action in
+                    UDButton(title: action.title, style: index == 0 ? .primary : .secondary) { perform(action) }
                 }
-                .allowsHitTesting(false)
             }
-        case .failed(let message):
-            notice(spinner: false, title: String(localized: "没能打开屏幕"), message: message) {
-                UDButton(title: "重试") { Task { await session.start() } }
-            }
-        case .ended(let reason):
-            notice(spinner: false, title: String(localized: "远程桌面已结束"), message: reason) {
-                UDButton(title: "重新连接") { Task { await model.start() } }
-            }
-        case .unsupported:
-            notice(spinner: false, title: String(localized: "请更新那台 Mac 上的 uTerm"),
-                   message: RemoteDesktopError.macTooOld.localizedDescription)
+        } else if let caption = session.controlCaption {
+            bottomCaption(caption)
         }
     }
 
+    private func perform(_ action: RemoteDesktopNotice.Action) {
+        switch action {
+        case .retry: Task { await session.start() }
+        // 流结束了：先把连接接上（可能已经断了），再开流。
+        case .reconnect: Task { await model.start() }
+        case .close: NSApp.keyWindow?.performClose(nil)
+        }
+    }
+
+    /// 底部一句说明，不挡画面、不接鼠标。
+    private func bottomCaption(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().fill(.black.opacity(0.6)))
+                .padding(.bottom, 20).padding(.horizontal, 20)
+        }
+        .allowsHitTesting(false)
+    }
+
     /// 那台 Mac 停在锁屏：在这里输登录密码解锁（不保存）。解锁后那台 Mac 进入帘幕，锁屏状态由它推来，这层自然消失。
-    /// 只在画面正在传时显示：流断了 / 结束了，锁屏状态是断开前最后一次推来的旧值，再叠一层密码框会和「已结束」
-    /// 的提示、「重新连接」按钮压在一起（真机截图），而且这时输密码也送不过去。
+    /// 什么时候显示见 `lockPrompt`；没开远程解锁时只在底部提示一句，不挡画面（仍可直接在锁屏上输密码）。
     @ViewBuilder private var lockOverlay: some View {
-        if case .streaming = session.state, session.supportsUnlock, session.screen.locked {
-            notice(spinner: unlocking, title: String(localized: "\(client.macName) 已锁定"), message: lockMessage) {
-                if session.screen.unlockAvailable, !unlocking {
+        switch session.lockPrompt(macName: client.macName) {
+        case .none:
+            EmptyView()
+        case .caption(let text):
+            bottomCaption(text)
+        case .unlock:
+            notice(spinner: unlocking, title: String(localized: "\(client.macName) 已锁定"),
+                   message: unlockError ?? String(localized: "输入那台 Mac 的登录密码。解锁后它的屏幕会变黑并暂停本机键鼠，密码不会保存。")) {
+                if !unlocking {
                     HStack(spacing: 8) {
                         UDTextField(placeholder: String(localized: "登录密码"), text: $password, autoFocus: true,
                                     isSecure: true)
@@ -422,14 +415,6 @@ struct RemoteDesktopContent: View {
         }
     }
 
-    private var lockMessage: String {
-        if let unlockError { return unlockError }
-        if !session.screen.unlockAvailable {
-            return String(localized: "那台 Mac 没有开启远程解锁（设置 › 远程控制 › 允许远程解锁），或没有「辅助功能」授权。")
-        }
-        return String(localized: "输入那台 Mac 的登录密码。解锁后它的屏幕会变黑并暂停本机键鼠，密码不会保存。")
-    }
-
     private func submitUnlock() {
         guard !password.isEmpty, !unlocking else { return }
         let secret = password
@@ -439,13 +424,7 @@ struct RemoteDesktopContent: View {
         Task {
             let outcome = await session.unlock(password: secret)
             unlocking = false
-            switch outcome {
-            case .unlocked, .notLocked: unlockError = nil
-            case .stillLocked: unlockError = String(localized: "输完密码 Mac 仍是锁着的：密码可能不对，也可能没输进锁屏，请重试。")
-            case .inputBlocked: unlockError = String(localized: "那台 Mac 上有截图等程序占着键盘，密码没有输入。请先让它退出再试。")
-            case .timedOut: unlockError = String(localized: "解锁超时，请重试。")
-            case .notAllowed: unlockError = String(localized: "那台 Mac 当前不允许远程解锁。")
-            }
+            unlockError = outcome.failureMessage
         }
     }
 
