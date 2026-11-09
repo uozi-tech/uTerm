@@ -371,6 +371,7 @@
                 if total * v <= 0 { total += v > 0 ? cell : -cell }
                 TerminalDebugLog.log(.input, "glide start v=\(Int(v))px/s projected=\(Int(projected)) total=\(Int(total))")
                 // 三次缓出 p = total·(1 − (1 − t/D)³) 的初速度是 3·total/D，让它等于抬手速度。
+                UTermScrollTrace.signpostGlideStart(velocity: Double(v), total: Double(total), duration: Double(3 * total / v))
                 startGlide(total: total, duration: 3 * total / v)
                 return
             }
@@ -477,6 +478,7 @@
                 scrollTouchContent(by: CGPoint(x: 0, y: delta / resolvedDisplayScale()), momentum: .changed)
                 UTermScrollTrace.span("glide-send", since: sendMark)
             }
+            UTermScrollTrace.signpostGlideTick(target: target, cumulative: Double(momentumScroll.glideSent))
             // 撞边时 scrollTouchContent 已经把 link 停了、交给回弹。
             if u >= 1, momentumScroll.displayLink === link { stopMomentumScrolling() }
         }

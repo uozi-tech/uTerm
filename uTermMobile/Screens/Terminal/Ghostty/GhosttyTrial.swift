@@ -18,6 +18,8 @@ enum GhosttyTrial {
 
     static func makeBridge() -> GhosttyTerminalBridge {
         applyRendererMode()
+        // 给 xctrace 的 signpost（M16 第八轮，按「上玻璃」打分）：惯性每拍和每次换画面各一条。
+        UTermScrollTrace.emitsSignposts = true
         // 排查滚动手感时设 `defaults write com.uozi.uTerm debug.ghosttyInputLog -bool YES`（或 Xcode 里改）：打开 GhosttyKit 的
         // 输入日志（含本地补丁的 uterm-scroll 行），打到 stdout，`devicectl device process launch --console` 抓。平时关着，
         // 每个滚动事件在主线程上打一行也有开销。

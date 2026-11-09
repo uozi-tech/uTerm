@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import os
 import QuartzCore
 
 public enum UTermScrollTrace {
@@ -47,6 +48,39 @@ public enum UTermScrollTrace {
         return enabled ? CACurrentMediaTime() : 0
     }
 
+    // MARK: 给 Instruments 的 signpost（M16 第八轮：按「上玻璃」打分）
+    //
+    // 惯性每一拍（目标 vsync 时刻、累计位移）和每次换画面的 CA 提交各发一条 signpost；外面用 xctrace 录的时候，
+    // trace 里就能把「这一拍想显示的位置」对到「它哪个 vsync 上的玻璃」，user 真手甩的时候也能录。
+    // 由宿主打开（uTerm 的 Ghostty 试用入口打开；本来想用 `.dynamicTracing` 自动判断有没有人在录，实测在
+    // Animation Hitches 模板下探不到）。每条 signpost 约 1 µs，每秒最多一两百条。
+    nonisolated(unsafe) public static var emitsSignposts = false
+    private static let glassSignposter = OSSignposter(subsystem: "com.uozi.uTerm.glass", category: .pointsOfInterest)
+
+    static var isInstrumentsRecording: Bool { emitsSignposts && glassSignposter.isEnabled }
+
+    /// 惯性开始：初速（px/s）、总位移（px）、时长（s）。
+    static func signpostGlideStart(velocity: Double, total: Double, duration: Double) {
+        guard isInstrumentsRecording else { return }
+        // 数值拼成字符串再发：Instruments 显示数值会加千分位、只留 4 位小数，脚本没法读。
+        let text = String(format: "%.6f %.0f %.0f %.4f", CACurrentMediaTime(), velocity, total, duration)
+        glassSignposter.emitEvent("glide-start", "\(text, privacy: .public)")
+    }
+
+    /// 惯性的一拍：这一拍瞄准的 vsync 时刻、到这一拍为止累计发出的位移（px）。
+    static func signpostGlideTick(target: Double, cumulative: Double) {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f %.6f %.0f", CACurrentMediaTime(), target, cumulative)
+        glassSignposter.emitEvent("glide", "\(text, privacy: .public)")
+    }
+
+    /// 画面层换了一张新画面，并且这次 CA 事务已经提交。
+    static func signpostCommit() {
+        guard isInstrumentsRecording else { return }
+        let text = String(format: "%.6f", CACurrentMediaTime())
+        glassSignposter.emitEvent("surface-commit", "\(text, privacy: .public)")
+    }
+
     /// 测试用 A/B 开关：true = 回到第五轮的行为（引擎 wakeup 也让协调器在主线程同步整帧重画）。默认 false。
     nonisolated(unsafe) public static var legacyWakeupSyncDraw = false
 
@@ -84,7 +118,9 @@ public enum UTermScrollTrace {
         nonisolated(unsafe) private static var oneShot: (layer: CALayer?, baseline: ObjectIdentifier?, until: CFTimeInterval,
                                                          handler: @MainActor (CFTimeInterval) -> Void)?
 
-        static var isWanted: Bool { UTermScrollTrace.isEnabled || TerminalDebugLog.isEnabled }
+        static var isWanted: Bool {
+            UTermScrollTrace.isEnabled || TerminalDebugLog.isEnabled || UTermScrollTrace.isInstrumentsRecording
+        }
 
         /// 从现在起再看 `seconds` 秒（每个惯性帧续一次）。
         static func watch(_ view: UIView, seconds: CFTimeInterval = 0.25) {
@@ -128,6 +164,7 @@ public enum UTermScrollTrace {
                 if id != lastContents {
                     lastContents = id
                     UTermScrollTrace.record("commit", now)
+                    UTermScrollTrace.signpostCommit()
                     TerminalDebugLog.log(.input, "uterm-commit t=\(String(format: "%.5f", now))")
                 }
             }

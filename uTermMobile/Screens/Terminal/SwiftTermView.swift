@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import SwiftTerm
 import UIKit
@@ -54,6 +55,23 @@ final class MTerminalView: SwiftTerm.TerminalView {
     override func setNeedsDisplay() {
         if !suppressesDrawing { super.setNeedsDisplay() }
     }
+
+    #if DEBUG
+    // Ghostty 评估分支临时（M16 第八轮，按「上玻璃」给滚动打分）：每次滚动位置变了发一条 signpost（这边的时刻、
+    // 位置的物理像素、是不是在减速 / 手指按着）。外面用 xctrace 录的时候，trace 里就能把「这一帧画的是哪个位置」对到
+    // 「它哪个 vsync 上的玻璃」，真手指甩出来的 UIKit 减速也能量。每条约 1 µs。
+    private static let glassSignposter = OSSignposter(subsystem: "com.uozi.uTerm.glass", category: .pointsOfInterest)
+
+    override var contentOffset: CGPoint {
+        didSet {
+            guard contentOffset.y != oldValue.y, Self.glassSignposter.isEnabled else { return }
+            let px = Double(contentOffset.y * contentScaleFactor)
+            // 数值拼成字符串再发：Instruments 显示数值会加千分位、只留 4 位小数，脚本没法读。
+            let text = String(format: "%.6f %.1f %d %d", CACurrentMediaTime(), px, isDecelerating ? 1 : 0, isTracking ? 1 : 0)
+            Self.glassSignposter.emitEvent("scroll-offset", "\(text, privacy: .public)")
+        }
+    }
+    #endif
 
     override func setNeedsDisplay(_ rect: CGRect) {
         if !suppressesDrawing { super.setNeedsDisplay(rect) }
