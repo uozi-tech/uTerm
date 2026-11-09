@@ -62,6 +62,8 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     /// 手机确认过至少一个长期参考帧。没有时不能要 LTR 刷新，见 `encode`。
     private var hasAcknowledgedLTR = false
     private var refineFramesInFlight = 0
+    /// 旁路精修当前的画质（`Purpose.still` 才用）。
+    private var stillQuality = RemoteVideoEncoder.stillQuality
     /// 主流平时的 QP 上限；精修帧编完恢复到它。
     private var streamMaxQP = RemoteVideoEncoder.unrestrictedQP
 
@@ -139,6 +141,16 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
     /// 改目标码率（bit/s）。同时设峰值限制：1 秒内不超过 1.5 倍，防止一次画面突变吐出一大帧把链路塞住。
     func setBitrate(_ bitrate: Int) {
         set(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
+    }
+
+    /// 旁路精修（`Purpose.still`）的画质：窄链路上降一档换一张发得完的（见 `RemoteDesktopStreamer.refineQuality`）。
+    /// 跟上次一样就不写。
+    func setStillQuality(_ quality: Double) {
+        lock.lock()
+        let changed = stillQuality != quality
+        stillQuality = quality
+        lock.unlock()
+        if changed { set(kVTCompressionPropertyKey_Quality, quality as CFNumber) }
     }
 
     func setFrameRate(_ frameRate: Int) {

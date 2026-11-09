@@ -167,8 +167,14 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var refineSequences: Set<UInt32> = []
     /// 这条链路现在的纠错强度（见 `RemoteLossPolicy`）。
     private var fecGroupSize = 0
-    /// 最近发出的一个关键帧（主流或旁路精修）有多大：估一张精修要占链路多久。
+    /// 最近发出的一个主流关键帧有多大：还没精修过时拿它估一张精修多大。
     private var lastKeyframeBytes = 0
+    /// 旁路精修各档画质最近一次编出来多大（画质 → 字节）。精修按它自己的大小判断链路发不发得完，不按关键帧。
+    private var refineBytes: [Double: Int] = [:]
+    /// 主流里精修（老手机）最近一次编出来多大。
+    private var inStreamRefineBytes: Int?
+    /// 视频延迟分段（见 `RemoteLatencyBreakdown`）。
+    private var latency = RemoteLatencyBreakdown()
     private var pasteAssembler = RemoteDesktopPasteAssembler()
     private var linkState: RemoteLinkState?
     /// 码控上一次定的码率（不扣纠错、不看节奏），用来判断这次是不是在往下调。
@@ -338,6 +344,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         refined = false
         refineRetries = 0
         stats.recordCapture()
+        latency.recordCaptureDelivery(DispatchTime.now().uptimeNanoseconds &- frame.captureNanos)
         guard isLive, !isPaused else { return }
         offer(frame)
         scheduleRefineCheck()
@@ -383,6 +390,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             pacer.abandon(sequence)
             refineSequences.remove(sequence)
             recoverySequences.remove(sequence)
+            latency.forget(sequence: sequence)
         }
         stats.recordLostFrames(sequences.count)
         awaitingRecovery = true
@@ -455,6 +463,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             forceKeyframe = true
             awaitingRecovery = true
         }
+        if refine || ack.failed {
+            self.latency.forget(sequence: ack.sequence)
+        } else {
+            self.latency.recordAck(sequence: ack.sequence, decodeMicros: ack.decodeMicros, now: now)
+        }
         if !refine {
             stats.recordAck(latencyNanos: latency, decodeMicros: ack.decodeMicros)
             let linkQueueing = linkState.map { $0.queueDelayNanos > rate.config.queueDelayThreshold }
@@ -499,6 +512,9 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                    Double($0.queueDelayNanos) / 1e6, $0.pacingRate * 8 / 1e6, fecGroupSize, current.lostFrames)
         } ?? ""
         AppLogger.info(message + link, category: RemoteLog.category)
+        if let breakdown = self.latency.drain() {
+            AppLogger.info("桌面延迟分段：" + breakdown, category: RemoteLog.category)
+        }
         if sendsLatency, !trips.isEmpty,
            let payload = try? JSONEncoder().encode(RemoteDesktopLatency(p50Millis: Int(percentile(0.5).rounded()),
                                                                         p95Millis: Int(percentile(0.95).rounded()))) {
@@ -557,21 +573,52 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
-    /// 一张精修（约一个关键帧那么大）能在链路一秒内发完。窄链路上不精修：3G（0.75 Mbps）上一张 243 KB 的
-    /// 精修要发近 3 秒，它占着在途名额和链路，主流一帧都发不出去（2026-11-09 3G 直连打字卡 8 s）。
-    /// 没有链路节奏（局域网、中继）时照旧。
-    private var refineFitsLink: Bool {
-        guard let linkState, lastKeyframeBytes > 0 else { return true }
-        return Double(lastKeyframeBytes) <= linkState.pacingRate * Self.refineLinkSeconds
+    /// 这次精修用哪档画质：链路一秒内发得完的最高一档；哪档都发不完时 nil（不精修）。窄链路上不能放一张发好几秒
+    /// 的精修：它走可靠通道，占着在途名额和链路，主流一帧都发不出去（2026-11-09 3G 直连打字卡 8 s；同日一张估成
+    /// 61 KB、实际约 145 KB 的旁路精修在 3G 上卡了 2.9 s）。按精修自己的大小估：这档编过就用实测，没编过按主流
+    /// 关键帧折算（`refineSizeFactor`）。旁路精修发不完时降一档画质换一张发得完的，静止后照样能补清楚。
+    /// 没有链路节奏（局域网、中继）时照旧最高档。主流里精修（老手机）没有画质档。
+    private var refineQuality: Double? {
+        let top = Self.stillQualities[0]
+        guard let linkState else { return top }
+        let budget = linkState.pacingRate * Self.refineLinkSeconds
+        guard sidecarRefine else {
+            // 主流里精修跟一个主流关键帧差不多大。
+            return Double(inStreamRefineBytes ?? lastKeyframeBytes) <= budget ? top : nil
+        }
+        return Self.stillQualities.first { Double(estimatedRefineBytes(quality: $0)) <= budget }
+    }
+
+    /// 一张旁路精修大约多大：这档编过就用上次的；别的档编过就按画质折算；都没编过按主流关键帧折算；
+    /// 什么都还没有（0）时不拦。
+    private func estimatedRefineBytes(quality: Double) -> Int {
+        if let measured = refineBytes[quality] { return measured }
+        if let (known, bytes) = refineBytes.first {
+            return Int(Double(bytes) * Self.refineSizeFactor(quality) / Self.refineSizeFactor(known))
+        }
+        return Int(Double(lastKeyframeBytes) * Self.refineSizeFactor(quality))
     }
 
     static let refineLinkSeconds = 1.0
+    /// 旁路精修的画质档，从高到低（最高档即 `RemoteVideoEncoder.stillQuality`）。
+    static let stillQualities: [Double] = [RemoteVideoEncoder.stillQuality, 0.5, 0.3]
+
+    /// 各档旁路精修大约是一个主流关键帧的几倍。旁路编码器按画质编、不看码率，最高档比主流关键帧大一倍多
+    /// （1856×1206 实测：主流关键帧 233 / 264 KB，0.75 档 501 / 561 KB，0.5 档 296 / 338 KB，0.3 档 139 / 155 KB；
+    /// 打字画面 / 满屏细节）。只在这档没编过时粗估用，编过就按实测。
+    static func refineSizeFactor(_ quality: Double) -> Double {
+        switch quality {
+        case 0.6...: return 2.2
+        case 0.4..<0.6: return 1.3
+        default: return 0.6
+        }
+    }
 
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
         guard isLive, !isPaused, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
-              pacer.inflight.isEmpty, refineFitsLink,
+              pacer.inflight.isEmpty, let quality = refineQuality,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
         refined = true
@@ -580,7 +627,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         let still = source.refinedImage(of: frame.image)
             .map { RemoteCapturedFrame(image: $0, captureNanos: frame.captureNanos, change: frame.change) } ?? frame
         if sidecarRefine {
-            encodeStill(sequence, still)
+            encodeStill(sequence, still, quality: quality)
         } else {
             encode(sequence, still, refine: true)
         }
@@ -588,11 +635,12 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 旁路精修：另一个会话把这张静止画面编成高画质关键帧。编好时画面若已经变了（手机上已是更新的
     /// 主流画面），就不发：发了会把旧画面盖回去。
-    private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame) {
+    private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame, quality: Double) {
         guard let stillEncoder = stillEncoderForUse() else {
             pacer.abandon(sequence)
             return
         }
+        stillEncoder.setStillQuality(quality)
         let submitted = DispatchTime.now().uptimeNanoseconds
         stillEncoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: true, refine: false) { [weak self] result in
             guard let self else { return }
@@ -605,6 +653,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.pump()
                     return
                 }
+                self.refineBytes[quality] = encoded.data.count
                 self.send(encoded, sequence: sequence, captureNanos: frame.captureNanos,
                           flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos)
             }
@@ -700,6 +749,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     self.forceKeyframe = true
                     self.pump()
                 case .success(let encoded):
+                    if refine { self.inStreamRefineBytes = encoded.data.count }
                     if !refine {
                         self.recordQuality(bytes: encoded.data.count, keyframe: encoded.isKeyframe)
                         self.diagnostics.recordSent(change: frame.change)
@@ -743,7 +793,11 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             return
         }
         pacer.encoded(sequence, bytes: payload.count)
-        if flags.contains(.keyframe) { lastKeyframeBytes = payload.count }
+        if flags.contains(.keyframe), !flags.contains(.refine) { lastKeyframeBytes = payload.count }
+        if !flags.contains(.refine) {
+            let now = DispatchTime.now().uptimeNanoseconds
+            latency.recordSent(sequence: sequence, captureNanos: captureNanos, encodeNanos: encodeNanos, now: now)
+        }
         if flags.contains(.refine) { refineSequences.insert(sequence) }
         if !flags.contains(.refine), flags.contains(.keyframe) || flags.contains(.ltrRefresh) {
             recoverySequences.insert(sequence)
@@ -1013,5 +1067,82 @@ nonisolated struct RemoteEncoderDiagnostics {
         return "编码器丢 普通 \(dropNormal) 刷新 \(dropRefresh) 关键帧 \(dropKeyframe)｜采集 \(captured) 帧，"
             + "与上一张完全相同 \(identical)，变化面积 \(spread(captureChanges))｜被丢的帧变化 \(spread(dropChanges))"
             + "｜发出的帧变化 \(spread(sentChanges))"
+    }
+}
+
+/// 视频延迟分段（连接队列上用，随码控日志每 2 s 一行）：主流一帧从采集到手机确认，时间都花在哪。
+///
+/// 各段（Mac 单调时钟）：
+/// - 采集交出：ScreenCaptureKit 给的采集时刻 → 帧到连接队列（含采集缩放）。
+/// - 等编码：帧到连接队列 → 送进编码器（在途满、帧间隔）。这一段按「采集时刻 → 送编码」算，含上一段。
+/// - 编码：送进编码器 → 编好回到连接队列。
+/// - 发出到手机解码前：编好交给传输 → 确认回到 Mac，扣掉手机报的解码耗时。含发送节奏排队、链路去程、手机收齐与
+///   排队、确认的回程；直连上要再分只能靠手机的钟，这里不分。
+/// - 手机解码：手机确认里带的解码耗时。
+/// 精修帧、解坏的帧不计（它们量的是自己多大，不是固定开销）。
+nonisolated struct RemoteLatencyBreakdown {
+    private struct Sent {
+        var capture: UInt64
+        var submitted: UInt64
+        var encoded: UInt64
+    }
+
+    private var pending: [UInt32: Sent] = [:]
+    private var captureDelivery: [UInt64] = []
+    private var waits: [UInt64] = []
+    private var encodes: [UInt64] = []
+    private var transits: [UInt64] = []
+    private var decodes: [UInt64] = []
+    private var totals: [UInt64] = []
+    private static let maxPending = 600
+
+    mutating func recordCaptureDelivery(_ nanos: UInt64) {
+        captureDelivery.append(nanos)
+    }
+
+    /// 主流一帧编好交给传输。`encodeNanos` = 送进编码器到编好。
+    mutating func recordSent(sequence: UInt32, captureNanos: UInt64, encodeNanos: UInt64, now: UInt64) {
+        if pending.count >= Self.maxPending, let oldest = pending.min(by: { $0.value.encoded < $1.value.encoded }) {
+            pending.removeValue(forKey: oldest.key)
+        }
+        let submitted = now &- min(encodeNanos, now)
+        pending[sequence] = Sent(capture: captureNanos, submitted: max(submitted, captureNanos), encoded: now)
+    }
+
+    mutating func recordAck(sequence: UInt32, decodeMicros: UInt32, now: UInt64) {
+        guard let sent = pending.removeValue(forKey: sequence), now >= sent.encoded else { return }
+        let decode = UInt64(decodeMicros) * 1000
+        let transit = now - sent.encoded
+        waits.append(sent.submitted &- sent.capture)
+        encodes.append(sent.encoded &- sent.submitted)
+        transits.append(transit > decode ? transit - decode : 0)
+        decodes.append(decode)
+        totals.append(now &- sent.capture)
+    }
+
+    mutating func forget(sequence: UInt32) {
+        pending.removeValue(forKey: sequence)
+    }
+
+    /// 这一段的 p50 / p95（毫秒）一行并清零；这段没有确认过的主流帧时 nil。
+    mutating func drain() -> String? {
+        defer {
+            captureDelivery = []
+            waits = []
+            encodes = []
+            transits = []
+            decodes = []
+            totals = []
+        }
+        guard !totals.isEmpty else { return nil }
+        func spread(_ values: [UInt64]) -> String {
+            guard !values.isEmpty else { return "—" }
+            let sorted = values.sorted()
+            func pct(_ q: Double) -> Double { Double(sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]) / 1e6 }
+            return String(format: "%.0f/%.0f", pct(0.5), pct(0.95))
+        }
+        return "p50/p95 ms｜采集交出 \(spread(captureDelivery))｜采集→送编码 \(spread(waits))｜编码 \(spread(encodes))"
+            + "｜发出→确认（扣手机解码，含节奏、链路往返、手机收齐）\(spread(transits))｜手机解码 \(spread(decodes))"
+            + "｜合计 \(spread(totals))（\(totals.count) 帧）"
     }
 }
