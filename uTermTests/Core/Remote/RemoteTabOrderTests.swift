@@ -255,4 +255,31 @@ final class RemoteTabOrderTests: XCTestCase {
         model.follow(client.listedSessionIDs, order: client.sessions.macTabOrder)
         XCTAssertEqual(model.groups.groups[first]?.tabs.map(\.id), [c, b])
     }
+
+    /// 同手机：用户在这扇窗口里亲手拖过标签，之后 Mac 推来的顺序不再覆盖；新开、关掉的照常跟。
+    func test_mac_controller_window_keeps_tabs_arranged_by_hand() throws {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let client = RemoteMacClient(macName: "远程 Mac", endpoint: .hostPort(host: "127.0.0.1", port: 1),
+                                     identity: RemoteIdentityStore(role: .hosts, storage: RemoteMemoryStorage()))
+        client.receiveSessions([info(a, order: 0), info(b, order: 1), info(c, order: 2)])
+        let model = RemoteMacWindowModel(client: client) { _ in }
+        defer { model.disposeAll() }
+        model.takeOver()
+        XCTAssertFalse(model.isArrangedByHand)
+
+        // 把 c 拖到最前。
+        model.groups.reorderTab(c, before: a)
+        XCTAssertEqual(model.panes.map(\.id), [c, a, b])
+
+        client.receiveSessions([info(a, order: 0), info(b, order: 1), info(c, order: 2), info(d, order: 3)])
+        model.follow(client.listedSessionIDs, order: client.sessions.macTabOrder)
+        XCTAssertTrue(model.isArrangedByHand)
+        XCTAssertEqual(model.panes.map(\.id).filter { $0 != d }, [c, a, b], "亲手排的顺序不被 Mac 的覆盖")
+        XCTAssertTrue(model.panes.contains { $0.id == d }, "新开的照常加标签")
+
+        client.receiveSessions([info(b, order: 0), info(a, order: 1), info(d, order: 2)])
+        model.follow(client.listedSessionIDs, order: client.sessions.macTabOrder)
+        XCTAssertFalse(model.panes.contains { $0.id == c }, "关掉的照常摘")
+        XCTAssertEqual(model.panes.map(\.id).filter { $0 != d }, [a, b])
+    }
 }

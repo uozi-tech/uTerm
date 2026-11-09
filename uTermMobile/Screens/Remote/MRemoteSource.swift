@@ -7,9 +7,9 @@ struct MRemoteSource: Equatable {
 
     var macName: String { client.macName }
 
-    /// Mac 上这枚标签此刻显示的名字。老版本 Mac 或断线时为 nil。
-    var macTabTitle: String? {
-        client.sessions.first { $0.id == sessionID }?.tabTitle
+    /// 那台 Mac 报的这个终端（标签名等）。断线时为 nil。
+    var sessionInfo: RemoteSessionInfo? {
+        client.sessions.first { $0.id == sessionID }
     }
 
     static func == (lhs: MRemoteSource, rhs: MRemoteSource) -> Bool {

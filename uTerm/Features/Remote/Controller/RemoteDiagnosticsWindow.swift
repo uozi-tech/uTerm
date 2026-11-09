@@ -96,10 +96,7 @@ struct RemoteDiagnosticsContent: View {
         directory.macs.first { $0.id == macID && $0.expectedPeer != nil }
     }
 
-    private var modes: [RemotePathProbeMode] {
-        let skipped = Set(skippedRaw.split(separator: ",").map(String.init))
-        return RemotePathProbeMode.allCases.filter { !skipped.contains($0.rawValue) }
-    }
+    private var modes: [RemotePathProbeMode] { RemotePathProbeMode.enabled(skipping: skippedRaw) }
 
     // MARK: - 对象与环境
 
@@ -130,9 +127,7 @@ struct RemoteDiagnosticsContent: View {
     }
 
     nonisolated static func reachability(_ mac: RemoteMacDirectory.Mac, onLAN: Bool) -> String {
-        let parts = [onLAN ? String(localized: "局域网") : nil, mac.isOnRelay ? String(localized: "中继") : nil]
-            .compactMap { $0 }
-        return parts.isEmpty ? String(localized: "现在不在线") : String(localized: "在线 · \(parts.joined(separator: " · "))")
+        mac.reachabilityLabel(.routes, onLocalNetwork: onLAN)
     }
 
     // MARK: - 运行
@@ -178,11 +173,7 @@ struct RemoteDiagnosticsContent: View {
     private var resultsGroup: some View {
         let results = model.shown
         let summaries = model.summaries
-        let title = model.isRunning ? String(localized: "正在检测")
-            : model.current.isEmpty
-            ? String(localized: "上次结果 · \(results.first?.date.formatted(date: .abbreviated, time: .shortened) ?? "")")
-            : String(localized: "检测结果")
-        return SettingsGroup(title: title, footer: Self.context(results)) {
+        return SettingsGroup(title: model.resultsTitle, footer: Self.context(results)) {
             if !model.isRunning {
                 RemoteDiagnosticsVerdictRow(
                     chosen: RemotePathVerdict.chosen(summaries, skipsLocalNetwork: directory.internetOnly),
@@ -195,18 +186,14 @@ struct RemoteDiagnosticsContent: View {
     }
 
     nonisolated static func context(_ run: [RemotePathProbeResult]) -> String? {
-        let parts = [run.first?.network ?? "", run.first?.note ?? ""].filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        RemotePathMatrixLog.context(run)
     }
 
     // MARK: - 设置
 
     private func modeBinding(_ mode: RemotePathProbeMode) -> Binding<Bool> {
         Binding(get: { modes.contains(mode) }, set: { on in
-            var set = Set(modes)
-            if on { set.insert(mode) } else { set.remove(mode) }
-            skippedRaw = RemotePathProbeMode.allCases.filter { !set.contains($0) }.map(\.rawValue)
-                .joined(separator: ",")
+            skippedRaw = RemotePathProbeMode.skippedRaw(skippedRaw, setting: mode, enabled: on)
         })
     }
 
@@ -265,7 +252,7 @@ struct RemoteDiagnosticsContent: View {
     private func copyAll() {
         let board = NSPasteboard.general
         board.clearContents()
-        board.setString(RemotePathMatrixLog.exportText(model.log.load().reversed()), forType: .string)
+        board.setString(model.log.exportAllText(), forType: .string)
         copied = true
         Task {
             try? await Task.sleep(for: .seconds(1.5))
@@ -298,21 +285,10 @@ private struct RemoteDiagnosticsVerdictRow: View {
         .padding(.vertical, 12)
     }
 
-    private var title: String {
-        guard let chosen else {
-            return untested.isEmpty ? String(localized: "这台 Mac 现在连不上") : String(localized: "测过的路都不通")
-        }
-        return String(localized: "实际会走\(chosen.mode.label)")
-    }
+    private var title: String { RemotePathVerdict.title(chosen: chosen, untested: untested) }
 
     private var detail: String {
-        let notTested = untested.isEmpty ? ""
-            : String(localized: "这次没测\(untested.map(\.label).joined(separator: "、"))。")
-        guard let chosen else { return String(localized: "看下面每条路的原因。") + notTested }
-        let latency = chosen.medianRoundTripMillis.map { String(localized: "往返约 \(Int($0.rounded())) ms") }
-            ?? String(localized: "往返未测出")
-        let skip = skipsLocalNetwork ? String(localized: "「只走公网」已打开，正式连接会跳过局域网。") : ""
-        return String(localized: "连接按局域网 → 直连 → 中继的顺序挑第一条通的，\(latency)。") + skip + notTested
+        RemotePathVerdict.detail(chosen: chosen, untested: untested, skipsLocalNetwork: skipsLocalNetwork)
     }
 }
 
@@ -322,8 +298,11 @@ private struct RemoteDiagnosticsSummaryRow: View {
     let results: [RemotePathProbeResult]
 
     private var tone: Color {
-        if summary.successes == summary.attempts { return UD.success }
-        return summary.successes == 0 ? UD.danger : UD.caution
+        switch summary.tone {
+        case .passed: UD.success
+        case .partial: UD.caution
+        case .failed: UD.danger
+        }
     }
 
     var body: some View {

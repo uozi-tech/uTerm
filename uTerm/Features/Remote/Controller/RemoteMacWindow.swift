@@ -92,11 +92,9 @@ private struct RemoteMacSessionView: View {
         let client = model.client
         Group {
             switch client.state {
-            case .idle where model.panes.isEmpty, .connecting where model.panes.isEmpty:
-                RemoteMacProgressView(text: client.connectStage.map { String(localized: "正在连接 \(client.macName)：\($0.progress)") }
-                                      ?? String(localized: "正在连接 \(client.macName)…"))
-            case .failed where model.panes.isEmpty && client.isAutoRetrying:
-                RemoteMacProgressView(text: String(localized: "没连上 \(client.macName)，正在重试…"))
+            case .idle where model.panes.isEmpty, .connecting where model.panes.isEmpty,
+                 .failed where model.panes.isEmpty && client.isAutoRetrying:
+                RemoteMacProgressView(text: client.connectProgress?.title ?? "", detail: client.connectProgress?.detail)
             case .awaitingApproval(let code):
                 RemoteMacPairingCodeView(macName: client.macName, code: code)
             case .failed(let message) where model.panes.isEmpty:
@@ -157,6 +155,9 @@ private struct RemoteMacTerminalArea: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var openError: String?
+    /// 正在问那台 Mac 最近的工作区（问完再决定弹不弹目录选择）。
+    @State private var preparingShell = false
+    @State private var workspaceChoices: RemoteLocalWorkspaces?
 
     var body: some View {
         let background = SwiftUI.Color(
@@ -168,8 +169,9 @@ private struct RemoteMacTerminalArea: View {
                 RemoteMacStateView(systemImage: "terminal", title: String(localized: "这台 Mac 上没有打开的终端"),
                                    detail: String(localized: "新建一个，那台 Mac 上也会弹出对应的终端窗口。")) {
                     HStack(spacing: 8) {
-                        UDButton(title: "新建终端") { openNewShell() }
+                        UDButton(title: preparingShell ? "正在打开…" : "新建终端") { openNewShell() }
                             .disabled(!canOpenShell)
+                            .macWorkspaceDialog(emptyStateChoices) { open(in: $0) }
                         if model.client.supportsDesktop {
                             UDButton(title: "查看屏幕", style: .secondary) { openDesktop() }
                                 .disabled(model.client.state != .connected)
@@ -217,11 +219,37 @@ private struct RemoteMacTerminalArea: View {
             help: status?.tabHelp ?? pane.title(in: model.client.sessions))
     }
 
-    private var canOpenShell: Bool { model.client.supportsLocalShell && model.client.state == .connected }
+    private var canOpenShell: Bool {
+        model.client.supportsLocalShell && model.client.state == .connected && !preparingShell
+    }
 
+    /// 目录选择挂在触发它的按钮上；空态与标签条的「+」不会同时在，按当前显示的那个分给它。
+    private var emptyStateChoices: Binding<RemoteLocalWorkspaces?> {
+        Binding(get: { model.panes.isEmpty ? workspaceChoices : nil }, set: { workspaceChoices = $0 })
+    }
+
+    private var stripChoices: Binding<RemoteLocalWorkspaces?> {
+        Binding(get: { model.panes.isEmpty ? nil : workspaceChoices }, set: { workspaceChoices = $0 })
+    }
+
+    /// 同手机：那台 Mac 有最近的工作区就先问开在哪，没有就直接开在主目录。
+    /// （接管时那台 Mac 一个终端都没有而自动开的第一个，照旧直接开在主目录，不问。）
     private func openNewShell() {
+        guard !preparingShell else { return }
+        preparingShell = true
         Task {
-            do { try await model.openNewShell() } catch { openError = error.localizedDescription }
+            let plan = await model.client.newShellPlan()
+            preparingShell = false
+            switch plan {
+            case .ask(let workspaces): workspaceChoices = workspaces
+            case .openDirectly: open(in: nil)
+            }
+        }
+    }
+
+    private func open(in directory: String?) {
+        Task {
+            do { try await model.openNewShell(directory: directory) } catch { openError = error.localizedDescription }
         }
     }
 
@@ -251,6 +279,7 @@ private struct RemoteMacTerminalArea: View {
         .buttonStyle(.plain)
         .iconButtonHover(cornerRadius: 6)
         .disabled(!canOpenShell)
+        .macWorkspaceDialog(stripChoices) { open(in: $0) }
         .help(model.client.supportsLocalShell ? String(localized: "在这台 Mac 上新建终端")
                                               : String(localized: "那台 Mac 上的 uTerm 版本太旧，不能新建终端"))
         .accessibilityLabel(Text("新建终端"))
@@ -292,7 +321,7 @@ struct RemoteMacPairingCodeView: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("在「\(macName)」上确认配对").font(.system(size: 17, weight: .semibold)).foregroundStyle(UD.text)
-            Text("\(code.prefix(3)) \(code.suffix(3))")
+            Text(RemotePairingCode.grouped(code))
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(UD.text)
             Text("那台 Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
@@ -308,11 +337,17 @@ struct RemoteMacPairingCodeView: View {
 
 struct RemoteMacProgressView: View {
     let text: String
+    var detail: String? = nil
 
     var body: some View {
         VStack(spacing: 10) {
             UDIndeterminateBar().frame(width: 140)
             Text(text).font(UD.caption).foregroundStyle(UD.text3)
+            if let detail, !detail.isEmpty {
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(UD.text4)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

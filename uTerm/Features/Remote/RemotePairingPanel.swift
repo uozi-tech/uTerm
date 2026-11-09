@@ -80,7 +80,7 @@ private struct RemotePairingPanelView: View {
     let onReject: () -> Void
 
     private var spacedCode: String {
-        "\(request.code.prefix(3)) \(request.code.suffix(3))"
+        RemotePairingCode.grouped(request.code)
     }
 
     var body: some View {

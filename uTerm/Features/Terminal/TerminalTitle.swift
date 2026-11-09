@@ -7,4 +7,10 @@ enum TerminalTitle {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    /// 标签上放的标题：标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。
+    nonisolated static func clippedForTab(_ title: String) -> String {
+        let limit = 28
+        return title.count > limit ? "\(title.prefix(limit - 1))…" : title
+    }
 }
