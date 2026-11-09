@@ -100,8 +100,10 @@ nonisolated enum RemoteKeyboardBlocker {
 /// 输入框并等它出来；清掉输入框里可能已有的字符；逐字符输入密码（用 Unicode 方式，不受当前键盘布局影响）；回车；
 /// 轮询锁屏状态判断是否已进入桌面。
 ///
-/// 2026-11-09 mini 停在屏保里解锁超时：原先无条件先按 Esc，锁屏上 Esc 会把刚弹出的输入框收回去，接着 400ms
-/// 内就开始 ⌘A 和打字，输入框还没出来，密码打空了。所以 Esc 只在真有截图选区时按，唤出后也多等一会儿。
+/// 帘幕（黑屏 + 拦本机输入的事件钩子）开着时注入的按键进不了密码框：loginwindow 每个键都走「输入框没显示」
+/// 那条路（日志 `View is hidden password field length = 0`），回车提交的是空密码（2026-11-09 真机实测，
+/// 同一台 Mac 上经远程桌面手动输入、帘幕关着时一切正常）。所以打字时帘幕必须是关的；`beforeSubmit` 在回车前
+/// 挂上帘幕，锁屏一消失物理屏已经是黑的。Esc 也只在真有截图选区时才按：锁屏上 Esc 会把刚弹出的输入框收回去。
 nonisolated enum RemoteUnlockTypist {
     /// 输密码前的一步。
     enum Step: Equatable {
@@ -130,14 +132,16 @@ nonisolated enum RemoteUnlockTypist {
         ]
     }
 
-    static func submit(password: String, pollSeconds: Double = 6) async -> RemoteUnlockAttempt {
+    static func submit(password: String, pollSeconds: Double = 6,
+                       beforeSubmit: @MainActor () -> Void = {}) async -> RemoteUnlockAttempt {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.userData = RemoteInjectedEvent.userDataTag
 
         func tap(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
             for down in [true, false] {
                 let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down)
-                if !flags.isEmpty { event?.flags = flags }
+                // 显式给修饰键：不给就沿用事件源里的状态，可能带着前一个 ⌘A 的 Command。
+                event?.flags = flags
                 event?.post(tap: .cghidEventTap)
             }
         }
@@ -153,6 +157,7 @@ nonisolated enum RemoteUnlockTypist {
                 let units = Array(String(scalarChar).utf16)
                 for down in [true, false] {
                     let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
+                    event?.flags = []
                     units.withUnsafeBufferPointer {
                         event?.keyboardSetUnicodeString(stringLength: $0.count, unicodeString: $0.baseAddress)
                     }
@@ -187,6 +192,7 @@ nonisolated enum RemoteUnlockTypist {
         guard RemoteScreenLock.isLocked() else { return .unlocked }
         type(password)
         guard RemoteScreenLock.isLocked() else { return .unlocked }
+        await beforeSubmit()
         tap(returnKey)
 
         let deadline = Date().addingTimeInterval(pollSeconds)
@@ -206,8 +212,8 @@ protocol RemoteScreenController: AnyObject {
     var isCurtained: Bool { get }
     /// 点亮显示器。
     func wake()
-    /// 用密码解锁。
-    func unlock(password: String) async -> RemoteUnlockAttempt
+    /// 用密码解锁。打完密码、按回车之前调用 `beforeSubmit`（挂帘幕）：帘幕开着时按键进不了密码框。
+    func unlock(password: String, beforeSubmit: @escaping @MainActor () -> Void) async -> RemoteUnlockAttempt
     /// 把 Mac 重新锁回去（远控结束时）。
     func lockScreen()
     func setCurtain(_ on: Bool)
@@ -228,8 +234,8 @@ final class LiveRemoteScreenController: RemoteScreenController {
 
     func wake() { RemoteDisplayWake.nudge() }
 
-    func unlock(password: String) async -> RemoteUnlockAttempt {
-        await RemoteUnlockTypist.submit(password: password)
+    func unlock(password: String, beforeSubmit: @escaping @MainActor () -> Void) async -> RemoteUnlockAttempt {
+        await RemoteUnlockTypist.submit(password: password, beforeSubmit: beforeSubmit)
     }
 
     func lockScreen() { RemoteScreenLock.lock() }

@@ -223,8 +223,8 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertEqual(mac.screen.unlockCalls, 0)
     }
 
-    /// 先挂帘幕再输密码：锁屏一消失物理屏已经是黑的。
-    func test_curtain_goes_up_before_password_is_typed() async throws {
+    /// 打密码时帘幕是关的（帘幕开着时按键进不了锁屏密码框），回车前挂上：锁屏一消失物理屏已经是黑的。
+    func test_curtain_goes_up_after_typing_and_before_submit() async throws {
         let mac = FakeDesktopMac()
         mac.screen.locked = true
         let server = try await makeServer(mac)
@@ -237,7 +237,33 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertTrue(becameLocked)
 
         _ = await session.unlock(password: "hunter2")
-        XCTAssertEqual(mac.screen.curtainedDuringUnlock, [true])
+        XCTAssertEqual(mac.screen.curtainedDuringUnlock, [false])
+        XCTAssertEqual(mac.screen.curtainedAtSubmit, [true])
+        XCTAssertTrue(mac.screen.isCurtained, "解开后进入帘幕")
+    }
+
+    /// 手机先手动开了帘幕再解锁：打字时也要临时撤掉；没解开就恢复成开着。
+    func test_manual_curtain_is_lifted_while_typing_and_restored_on_failure() async throws {
+        let mac = FakeDesktopMac()
+        mac.screen.locked = true
+        mac.screen.unlockSucceeds = false
+        let server = try await makeServer(mac)
+        defer { server.stop() }
+        let client = try await makeClient(server)
+        defer { client.disconnect() }
+        let session = await startSession(client)
+        defer { session.stop() }
+        let becameLocked = await waitUntil { session.screen.locked }
+        XCTAssertTrue(becameLocked)
+        session.setCurtain(true)
+        let curtained = await waitUntil { mac.screen.isCurtained }
+        XCTAssertTrue(curtained)
+
+        let outcome = await session.unlock(password: "hunter2")
+        XCTAssertEqual(outcome, .stillLocked)
+        XCTAssertEqual(mac.screen.curtainedDuringUnlock, [false])
+        let restored = await waitUntil { mac.screen.isCurtained }
+        XCTAssertTrue(restored, "没解开：帘幕恢复成解锁前的开着")
     }
 
     /// 远程解锁后手机手动关了帘幕，结束远控时仍要锁回去。

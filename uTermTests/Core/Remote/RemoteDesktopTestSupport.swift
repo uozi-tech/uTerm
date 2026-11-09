@@ -717,14 +717,18 @@ final class FakeScreenController: RemoteScreenController {
 
     func wake() { wakeCalls += 1 }
 
-    /// 每次 `unlock` 被调用时帘幕是否已经挂上（应先黑屏再输密码）。
+    /// 每次 `unlock` 打密码时帘幕是否挂着（应是关的：帘幕开着时按键进不了锁屏密码框）。
     private(set) var curtainedDuringUnlock: [Bool] = []
+    /// 每次按回车提交时帘幕是否挂着（应已挂上：锁屏一消失物理屏就是黑的）。
+    private(set) var curtainedAtSubmit: [Bool] = []
 
-    func unlock(password: String) async -> RemoteUnlockAttempt {
+    func unlock(password: String, beforeSubmit: @escaping @MainActor () -> Void) async -> RemoteUnlockAttempt {
         unlockCalls += 1
         lastPassword = password
         curtainedDuringUnlock.append(isCurtained)
         if inputBlocked { return .inputBlocked }
+        beforeSubmit()
+        curtainedAtSubmit.append(isCurtained)
         if unlockSucceeds { locked = false }
         return unlockSucceeds ? .unlocked : .stillLocked
     }

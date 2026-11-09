@@ -830,26 +830,28 @@ extension RemoteHostConnection {
         guard controller.isLocked else { return reply(.notLocked) }
         AppLogger.info("远程桌面：\(self.peerName) 请求解锁 Mac", category: RemoteLog.category)
         unlockInFlight = true
-        // 先挂帘幕再输密码：gamma 黑屏在锁屏界面上同样有效，锁屏一消失物理屏已经是黑的，不会闪出桌面。
-        // 本机输入暂停在锁屏时不起作用（系统收走了输入流），解锁后立即生效。
+        // 帘幕开着时注入的按键进不了锁屏密码框（2026-11-09 真机实测，见 `RemoteUnlockTypist`）：打字时撤掉，
+        // 打完密码、按回车之前再挂上——锁屏一消失物理屏已经是黑的，不会闪出桌面。打字期间物理屏上看到的只是锁屏。
         let wasCurtained = controller.isCurtained
-        controller.setCurtain(true)
+        if wasCurtained { controller.setCurtain(false) }
         Task {
-            let attempt = await controller.unlock(password: password)
+            let attempt = await controller.unlock(password: password) { controller.setCurtain(true) }
             let success = attempt == .unlocked
             unlockInFlight = false
             guard !isClosed, desktop?.channel == channel else {
                 // 手机在解锁过程中走了：解开了就锁回去，别把已解锁的桌面晾在那里。
                 if success { controller.lockScreen() }
-                if !wasCurtained { controller.setCurtain(false) }
+                if controller.isCurtained != wasCurtained { controller.setCurtain(wasCurtained) }
                 return
             }
             if success {
+                // 中途被 Mac 前的人解开时没走到回车那一步，这里补上帘幕。
+                if !controller.isCurtained { controller.setCurtain(true) }
                 remotelyUnlocked = true
                 AppLogger.info("远程桌面：解锁成功，已进入帘幕", category: RemoteLog.category)
             } else {
-                // 没解开：撤掉为这次解锁临时挂上的帘幕，Mac 前的人还能看到锁屏。
-                if !wasCurtained { controller.setCurtain(false) }
+                // 没解开：恢复解锁前的帘幕状态，Mac 前的人还能看到锁屏。
+                if controller.isCurtained != wasCurtained { controller.setCurtain(wasCurtained) }
                 AppLogger.info(attempt == .inputBlocked ? "远程桌面：解锁未进行（有程序占着键盘）"
                                                         : "远程桌面：解锁未成功（输完密码仍锁着）", category: RemoteLog.category)
             }
