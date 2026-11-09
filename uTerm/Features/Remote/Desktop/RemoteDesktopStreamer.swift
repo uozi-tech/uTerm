@@ -189,6 +189,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var frameCountSamples: [(nanos: UInt64, captured: Int, sent: Int)] = []
     private var scaler: RemoteFastFrameScaler?
     private var scalerFormat: OSType = 0
+    /// 选好了、还没换成的档：在途还积着帧时先不换（见 `applyPendingScale`）。
+    private var pendingScale: (scale: RemoteStreamScale, from: RemoteStreamScale)?
     /// 换尺寸时还没确认完的帧来自旧编码器：它们的长期参考帧令牌不能交给新编码器。序号小于它的确认不传令牌。
     private var ltrSequenceFloor: UInt32 = 0
     /// 建出来的时刻与第一帧发没发（日志：开流到第一帧要多久）。
@@ -394,6 +396,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             recoverySequences.remove(sequence)
         }
         stats.recordLostFrames(sequences.count)
+        applyPendingScale()
         awaitingRecovery = true
         if encoder?.usesLTR == true {
             forceLTRRefresh = true
@@ -467,6 +470,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             if rate.observe(latencyNanos: latency, now: now, linkQueueing: linkQueueing) { applyRate() }
         }
         updateInflightLimits()
+        applyPendingScale()
         logRateIfDue(now: now)
         pump()
     }
@@ -552,9 +556,19 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate), limited: state.limited,
             width: width, height: height, current: scaleSelector.current)
         let wanted = RemoteStreamScalePolicy.gated(byLink, current: scaleSelector.current, starved: mainStreamStarved(now: now))
-        let previous = scaleSelector.current
-        guard scaleSelector.update(wanted, now: now) else { return }
-        rebuildEncoder(scale: scaleSelector.current, from: previous, pacingRate: state.pacingRate)
+        let previous = pendingScale?.from ?? scaleSelector.current
+        if scaleSelector.update(wanted, now: now) { pendingScale = (scaleSelector.current, previous) }
+        applyPendingScale()
+    }
+
+    /// 选好的档等在途回到链路容得下的量再换：换尺寸的关键帧排在一堆没发完的旧帧后面，只会让看的那端干等（带宽
+    /// 骤降那一刻在途还积着骤降前的约 768 KB，1 Mbps 上要发 6 秒，2026-11-09 A/B 满屏最长卡顿 7 s）。在途上限
+    /// 按链路节奏算（见 `updateInflightLimits`），骤降后马上缩到零点几秒的量；超出的旧帧到点会被放弃，等不了太久。
+    /// 挨着上限的稳态窄链路（3G）不用等。确认、丢帧、链路状态变化时都来看一眼。
+    private func applyPendingScale() {
+        guard let pending = pendingScale, pacer.inflightBytes <= pacer.maxInflightBytes else { return }
+        pendingScale = nil
+        rebuildEncoder(scale: pending.scale, from: pending.from, pacingRate: linkState?.pacingRate ?? 0)
     }
 
     /// 记一份采集 / 送出帧数，看最近 `starvationWindowNanos` 里主流是不是在挨饿。精修帧不算送出。

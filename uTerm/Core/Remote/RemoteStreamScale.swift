@@ -78,15 +78,16 @@ nonisolated enum RemoteStreamScalePolicy {
 
 nonisolated extension RemoteStreamScalePolicy {
     /// 看最近多久的采集与送出帧数。
-    static let starvationWindowNanos: UInt64 = 2_000_000_000
-    /// 至少看了这么久才下结论。
-    static let starvationMinimumNanos: UInt64 = 1_500_000_000
+    static let starvationWindowNanos: UInt64 = 2_500_000_000
+    /// 至少看了这么久才下结论：骤降那一刻之前发得好好的那段不能把它冲淡，也顺带等过骤降时的积压。
+    static let starvationMinimumNanos: UInt64 = 2_000_000_000
     /// 画面在动：采集至少这么多帧 / 秒。
     static let starvedMinCaptureRate = 8.0
-    /// 送出去的不到采集的这么多，算挨饿。
-    static let starvedSendShare = 0.5
+    /// 送出去的不到采集的这么多，算挨饿。3G 上局部滚动全尺寸就能送出五成多，降了反倒少（交付 57% → 46–53%）；
+    /// 满屏在变时全尺寸只送出 4–7%。
+    static let starvedSendShare = 0.35
 
-    /// 主流在挨饿：画面在动，送出去的帧却不到采集的一半（在途满了被替掉、编码器丢帧、等恢复）。
+    /// 主流在挨饿：画面在动，送出去的帧却不到采集的三成多（在途满了被替掉、编码器丢帧、等恢复）。
     static func starved(captured: Int, sent: Int, seconds: Double) -> Bool {
         guard seconds * 1e9 >= Double(starvationMinimumNanos) else { return false }
         guard Double(captured) / seconds >= starvedMinCaptureRate else { return false }
@@ -95,8 +96,7 @@ nonisolated extension RemoteStreamScalePolicy {
 
     /// 降档还要主流真在挨饿。链路窄、画面却只变一小块（局部滚动、打字）时帧照样发得出去，降了只是白白多发
     /// 几个关键帧：带宽骤降（20 → 1 Mbps）时局部滚动本来 30 fps，降档后在拥挤的链路上补关键帧，最长卡顿
-    /// 0.3 → 1.7 s（弱网矩阵 A/B，2026-11-09）。要等挨饿还顺带等了一会儿：骤降那一刻排在前面的全尺寸帧还没
-    /// 发完，这时补的关键帧只能排在它们后面。升档不看这个。
+    /// 0.3 → 1.7 s（弱网矩阵 A/B，2026-11-09）。升档不看这个。
     static func gated(_ wanted: RemoteStreamScale, current: RemoteStreamScale, starved: Bool) -> RemoteStreamScale {
         wanted < current && !starved ? current : wanted
     }

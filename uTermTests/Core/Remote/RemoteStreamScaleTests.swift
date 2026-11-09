@@ -70,12 +70,13 @@ final class RemoteStreamScaleTests: XCTestCase {
         }
     }
 
-    /// 挨饿：画面在动（采集 ≥ 8 fps），送出去的不到一半；看的时间不够 1.5 s 不下结论。
+    /// 挨饿：画面在动（采集 ≥ 8 fps），送出去的不到 35%；看的时间不够 2 s 不下结论。
     func test_starved_needs_motion_and_most_frames_held_back() {
-        XCTAssertTrue(Policy.starved(captured: 60, sent: 10, seconds: 2), "满屏在变、在途满了")
-        XCTAssertFalse(Policy.starved(captured: 60, sent: 58, seconds: 2), "局部滚动照样发得出去")
+        XCTAssertTrue(Policy.starved(captured: 60, sent: 4, seconds: 2), "3G 满屏在变：全尺寸只送出 4–7%")
+        XCTAssertFalse(Policy.starved(captured: 60, sent: 58, seconds: 2), "1 Mbps 上局部滚动照样 30 fps")
+        XCTAssertFalse(Policy.starved(captured: 60, sent: 33, seconds: 2), "3G 局部滚动送出五成多：降了反而少")
         XCTAssertFalse(Policy.starved(captured: 10, sent: 2, seconds: 2), "画面几乎不动")
-        XCTAssertFalse(Policy.starved(captured: 30, sent: 2, seconds: 1), "看得还不够久")
+        XCTAssertFalse(Policy.starved(captured: 45, sent: 2, seconds: 1.5), "看得还不够久：骤降前的积压还没过去")
     }
 
     /// 只有降档要挨饿；升档不看。
@@ -232,12 +233,12 @@ final class RemoteStreamScaleTests: XCTestCase {
         // 链路窄了、画面满屏在变：手机这段时间不回确认（在途满了，新帧一直被替掉），主流挨饿 2 秒多。
         rig.source.prepareCycle(count: 6)
         rig.source.run(fps: 30)
-        let starvedUntil = Date().addingTimeInterval(2.5)
+        let starvedUntil = Date().addingTimeInterval(3)
         while Date() < starvedUntil {
             rig.datagrams.push(Rig.narrow)
             try await Task.sleep(for: .milliseconds(100))
         }
-        // 接着照常解码、确认：挨饿之后换了档，第一张小尺寸的帧是关键帧。
+        // 接着照常解码、确认：挨饿时选了档，在途清掉后换成，第一张小尺寸的帧是关键帧。
         var scaled: (RemoteDesktopFrame, CVPixelBuffer?)?
         let arrived = await waitUntil(10) {
             rig.datagrams.push(Rig.narrow)
