@@ -62,26 +62,37 @@ enum RemoteDesktopFixture {
         (UInt8(80 + (block * 23 + seed * 7) % 96), UInt8(80 + (block * 41 + seed * 13) % 96))
     }
 
+    /// 读亮度平面上一点，换算到 8-bit 刻度：解码器按码流位深出画面，Main10 是 x420（16 位存、高 10 位有效）。
+    /// 调用方负责锁住 base address。
+    static func lumaReader(_ image: CVPixelBuffer) -> (_ x: Int, _ y: Int) -> Double {
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)!
+        if CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange {
+            return { x, y in Double(base.advanced(by: y * stride).assumingMemoryBound(to: UInt16.self)[x]) / 256 }
+        }
+        let luma = base.assumingMemoryBound(to: UInt8.self)
+        return { x, y in Double(luma[y * stride + x]) }
+    }
+
     /// 每个色块中心区域（避开块边缘的振铃）的平均 Y，用于比对解码结果。
     static func blockLuma(_ image: CVPixelBuffer) -> [Double] {
         CVPixelBufferLockBaseAddress(image, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
         let width = CVPixelBufferGetWidthOfPlane(image, 0), height = CVPixelBufferGetHeightOfPlane(image, 0)
-        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
-        let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!.assumingMemoryBound(to: UInt8.self)
+        let luma = lumaReader(image)
         var result: [Double] = []
         for block in 0..<16 {
             let bx = block % 4, by = block / 4
             let x0 = bx * width / 4 + width / 16, x1 = (bx + 1) * width / 4 - width / 16
             let y0 = by * height / 4 + height / 16, y1 = (by + 1) * height / 4 - height / 16
-            var sum = 0, count = 0
+            var sum = 0.0, count = 0
             for y in Swift.stride(from: y0, to: y1, by: 2) {
                 for x in Swift.stride(from: x0, to: x1, by: 2) {
-                    sum += Int(luma[y * stride + x])
+                    sum += luma(x, y)
                     count += 1
                 }
             }
-            result.append(Double(sum) / Double(max(1, count)))
+            result.append(sum / Double(max(1, count)))
         }
         return result
     }
@@ -95,13 +106,11 @@ enum RemoteDesktopFixture {
             CVPixelBufferUnlockBaseAddress(b, .readOnly)
         }
         let width = CVPixelBufferGetWidthOfPlane(a, 0), height = CVPixelBufferGetHeightOfPlane(a, 0)
-        let sa = CVPixelBufferGetBytesPerRowOfPlane(a, 0), sb = CVPixelBufferGetBytesPerRowOfPlane(b, 0)
-        let pa = CVPixelBufferGetBaseAddressOfPlane(a, 0)!.assumingMemoryBound(to: UInt8.self)
-        let pb = CVPixelBufferGetBaseAddressOfPlane(b, 0)!.assumingMemoryBound(to: UInt8.self)
+        let pa = lumaReader(a), pb = lumaReader(b)
         var squared = 0.0
         for y in 0..<height {
             for x in 0..<width {
-                let d = Double(pa[y * sa + x]) - Double(pb[y * sb + x])
+                let d = pa(x, y) - pb(x, y)
                 squared += d * d
             }
         }

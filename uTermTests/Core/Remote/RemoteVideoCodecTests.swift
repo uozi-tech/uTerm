@@ -90,6 +90,87 @@ final class RemoteVideoCodecTests: XCTestCase {
         }
     }
 
+    /// Mac 发的是 HEVC Main10：接收端要按 10-bit 解出来。以前两端都把解码输出写死成 8-bit 的 420v，
+    /// 10-bit 码流在解码这一步被截掉精度，渐变出色带（真机反馈「看着还是 8-bit」）。
+    /// 编一张横向平滑亮度渐变，解码后数一行里不同的亮度级数：8-bit 视频范围最多 220 级，10-bit 应远多于此。
+    func test_main10_stream_decodes_to_ten_bit_and_keeps_gradient_levels() throws {
+        let width = 1280, height = 256
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 40_000_000,
+                                             frameRate: 60, tenBit: true)
+        let source = Self.tenBitLumaRamp(width: width, height: height)
+        let key = try encode(encoder, source, nanos: 1, keyframe: true)
+        let frame = try wire(key, codec: .hevc, sequence: 1, width: width, height: height)
+        let format = try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: frame.parameterSets)
+        XCTAssertEqual(RemoteVideoDecoder.bitDepth(of: format), 10, "Main10 码流")
+
+        let image = try RemoteVideoDecoder().decode(frame)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(image), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                       "默认解码输出要跟着码流走 10-bit")
+        let levels = Self.distinctLumaLevels(image, row: height / 2)
+        XCTAssertGreaterThan(levels, 400, "10-bit 渐变解出来只有 \(levels) 级，精度被截掉了")
+    }
+
+    /// 8-bit 码流照旧出 8-bit：跟着码流走，不是一律 10-bit。
+    func test_eight_bit_stream_still_decodes_to_eight_bit() throws {
+        let width = 640, height = 384
+        let encoder = try RemoteVideoEncoder(codec: .hevc, width: width, height: height, bitrate: 4_000_000, frameRate: 60)
+        let key = try encode(encoder, RemoteDesktopFixture.makeFrame(width: width, height: height, seed: 1), nanos: 1,
+                             keyframe: true)
+        let frame = try wire(key, codec: .hevc, sequence: 1, width: width, height: height)
+        let format = try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: frame.parameterSets)
+        XCTAssertEqual(RemoteVideoDecoder.bitDepth(of: format), 8)
+        let image = try RemoteVideoDecoder().decode(frame)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(image), kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+    }
+
+    /// x420：每个分量 16 位存放、有效 10 位在高位。亮度从 64 线性走到 940（10-bit 视频范围），色度居中。
+    private static func tenBitLumaRamp(width: Int, height: Int) -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                            attributes as CFDictionary, &buffer)
+        let image = buffer!
+        CVPixelBufferLockBaseAddress(image, [])
+        defer { CVPixelBufferUnlockBaseAddress(image, []) }
+        let lumaRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let luma = CVPixelBufferGetBaseAddressOfPlane(image, 0)!
+        for y in 0..<height {
+            let row = luma.advanced(by: y * lumaRow).assumingMemoryBound(to: UInt16.self)
+            for x in 0..<width {
+                let value = 64 + (x * 876) / (width - 1)
+                row[x] = UInt16(value << 6)
+            }
+        }
+        let chromaRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+        let chroma = CVPixelBufferGetBaseAddressOfPlane(image, 1)!
+        for y in 0..<CVPixelBufferGetHeightOfPlane(image, 1) {
+            let row = chroma.advanced(by: y * chromaRow).assumingMemoryBound(to: UInt16.self)
+            for x in 0..<(CVPixelBufferGetWidthOfPlane(image, 1) * 2) { row[x] = UInt16(512 << 6) }
+        }
+        CVBufferSetAttachment(image, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+        CVBufferSetAttachment(image, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
+        CVBufferSetAttachment(image, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        return image
+    }
+
+    /// 一行里不同的亮度码值个数（按输出位深换算到 10-bit 刻度再数）。
+    private static func distinctLumaLevels(_ image: CVPixelBuffer, row: Int) -> Int {
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        let width = CVPixelBufferGetWidthOfPlane(image, 0)
+        let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)!
+            .advanced(by: row * CVPixelBufferGetBytesPerRowOfPlane(image, 0))
+        var seen = Set<Int>()
+        if CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange {
+            let pixels = base.assumingMemoryBound(to: UInt16.self)
+            for x in 0..<width { seen.insert(Int(pixels[x] >> 6)) }
+        } else {
+            let pixels = base.assumingMemoryBound(to: UInt8.self)
+            for x in 0..<width { seen.insert(Int(pixels[x]) << 2) }
+        }
+        return seen.count
+    }
+
     /// 参数集或码流是空的（坏帧）：报错，不能在取指针时崩掉。
     func test_empty_parameter_set_or_payload_throws_instead_of_crashing() throws {
         XCTAssertThrowsError(try RemoteVideoDecoder.formatDescription(codec: .hevc, parameterSets: [Data([0x40]), Data()]))

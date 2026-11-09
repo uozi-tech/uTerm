@@ -104,10 +104,10 @@ final class RemoteDesktopSession {
 
     /// - Parameters:
     ///   - maxWidth/maxHeight: 想要的视频最大像素（与方向无关，Mac 按显示器的横竖套）。
-    ///   - outputPixelFormat: 解出来的像素格式（显示用 4:2:0，测试比对用 BGRA）。
+    ///   - outputPixelFormat: 解出来的像素格式。nil = 按码流位深出 4:2:0（Main10 出 10-bit）；测试比对用 BGRA。
     ///   - audioOutput: 声音放到哪里。nil = 系统扬声器（`RemoteAudioEnginePlayer`）；Mac 单测传一个不出声的。
     init(client: RemoteMacClient, maxWidth: Int, maxHeight: Int, codec: RemoteVideoCodec = .hevc,
-         outputPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, displayID: UInt32? = nil,
+         outputPixelFormat: OSType? = nil, displayID: UInt32? = nil,
          cursorImages: Bool = false, audioOutput: (any RemoteAudioOutput)? = nil) {
         self.client = client
         self.displayID = displayID
@@ -676,7 +676,7 @@ nonisolated final class RemoteDesktopReceiver: @unchecked Sendable {
     /// 等恢复帧这么久还没来，再催一次。恢复帧自己也可能丢。
     static let recoveryRetryNanos: UInt64 = 500_000_000
 
-    init(outputPixelFormat: OSType) {
+    init(outputPixelFormat: OSType?) {
         decoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
         stillDecoder = RemoteVideoDecoder(outputPixelFormat: outputPixelFormat)
     }
