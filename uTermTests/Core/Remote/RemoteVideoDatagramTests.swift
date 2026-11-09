@@ -329,11 +329,35 @@ final class RemoteVideoDatagramTests: XCTestCase {
         XCTAssertEqual(buffer.markLost(videoSequences: [2, 99]), [12], "视频序号没有空洞，编码序号有")
     }
 
+    func test_buffer_does_not_queue_a_second_copy_of_a_retransmit_still_waiting() {
+        var buffer = RemoteVideoSendBuffer()
+        let sent = buffer.add(payload: payload(3000), sequence: 1, channel: 1, fecGroupSize: 0, deadlineMillis: 500,
+                              roundTripMillis: 50, now: 0)
+        let nack = RemoteVideoNack(channel: 1, videoSequence: buffer.newestVideoSequence, indices: [0, 1])
+        // 重传队列此前进过 5 个：这两片拿号 6、7。号 6 在 150 ms 离开，号 7 在 250 ms。
+        let first = 150 * ms, second = 250 * ms
+        func left(sent: UInt64) -> (UInt64) -> UInt64? {
+            { ticket in ticket > sent ? nil : (ticket == 6 ? first : second) }
+        }
+        let gap = 100 * ms
+        XCTAssertEqual(buffer.packets(for: nack, now: 0, firstTicket: 6, resendGapNanos: gap, departure: left(sent: 5)),
+                       [sent[0], sent[1]])
+        XCTAssertTrue(buffer.packets(for: nack, now: 100 * ms, firstTicket: 8, resendGapNanos: gap,
+                                     departure: left(sent: 5)).isEmpty, "两片都还排着")
+        XCTAssertTrue(buffer.packets(for: nack, now: 200 * ms, firstTicket: 8, resendGapNanos: gap,
+                                     departure: left(sent: 6)).isEmpty, "号 6 刚发出去、还在路上；号 7 还排着")
+        XCTAssertEqual(buffer.packets(for: nack, now: 300 * ms, firstTicket: 8, resendGapNanos: gap,
+                                      departure: left(sent: 7)), [sent[0]], "号 6 发出去超过一个往返了，号 7 还在路上")
+        XCTAssertEqual(buffer.packets(for: nack, now: 400 * ms).count, 2, "不传队列状态就不去重")
+    }
+
     func test_buffer_probes_the_tail_until_the_deadline() {
         var buffer = RemoteVideoSendBuffer()
         let sent = buffer.add(payload: payload(3000), sequence: 1, channel: 1, fecGroupSize: 2, deadlineMillis: 500,
-                              roundTripMillis: 50, now: 1000 * ms)
-        XCTAssertTrue(buffer.probes(now: 1010 * ms, roundTripNanos: 50 * ms).isEmpty, "还没到一个往返")
+                              roundTripMillis: 50, now: 900 * ms)
+        XCTAssertTrue(buffer.probes(now: 990 * ms, roundTripNanos: 50 * ms).isEmpty, "还在发送队列里：不探测")
+        buffer.markSent(videoSequence: buffer.newestVideoSequence, now: 1000 * ms)
+        XCTAssertTrue(buffer.probes(now: 1010 * ms, roundTripNanos: 50 * ms).isEmpty, "发出去还没到一个往返")
         let probes = buffer.probes(now: 1070 * ms, roundTripNanos: 50 * ms)
         XCTAssertTrue(probes.contains(sent.last!))
         XCTAssertTrue(buffer.probes(now: 1600 * ms, roundTripNanos: 50 * ms).isEmpty, "过了时限不再探测")

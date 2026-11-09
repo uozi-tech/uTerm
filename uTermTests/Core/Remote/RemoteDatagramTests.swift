@@ -95,6 +95,33 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertEqual(pacer.next(now: 0)?.0, .reliable)
     }
 
+    /// 控制 > 声音 > 视频重传 > 新视频。视频重传以前跟控制同一档、插到声音前面，3G 上声音欠载翻几倍；
+    /// 也不能跟新视频一档，排在一大串新分片后面就过了时限（2026-11-09）。
+    func test_retransmits_go_after_audio_but_before_new_video() {
+        var pacer = RemoteDatagramPacer(rate: 1_000_000_000, now: 0)
+        pacer.enqueue(.media, Data(count: 1000), priority: .media)
+        pacer.enqueue(.media, Data(count: 999), priority: .retransmit)
+        pacer.enqueue(.audio, Data(count: 100), priority: .audio)
+        pacer.enqueue(.report, Data(count: 10), priority: .control)
+        var order: [Int] = []
+        while let item = pacer.next(now: 0) { order.append(item.1.count) }
+        XCTAssertEqual(order, [10, 100, 999, 1000])
+        XCTAssertTrue(pacer.isEmpty)
+        XCTAssertEqual(pacer.mediaEnqueued, 1, "重传不算进新视频的计数")
+        XCTAssertEqual(pacer.mediaSent, 1)
+    }
+
+    func test_media_counters_tell_when_a_frame_has_left_the_queue() {
+        var pacer = RemoteDatagramPacer(rate: 2400, now: 0)
+        for _ in 0..<3 { pacer.enqueue(.media, Data(count: 1000), priority: .media) }
+        let frameEnd = pacer.mediaEnqueued
+        _ = pacer.next(now: 0)
+        _ = pacer.next(now: 0)
+        XCTAssertLessThan(pacer.mediaSent, frameEnd, "令牌不够：最后一片还排着")
+        while pacer.next(now: 10_000_000_000) != nil {}
+        XCTAssertEqual(pacer.mediaSent, frameEnd)
+    }
+
     func test_pacer_reports_how_long_to_wait() {
         var pacer = RemoteDatagramPacer(rate: 100_000, now: 0)
         XCTAssertNil(pacer.waitNanos(now: 0), "空队列不用醒")

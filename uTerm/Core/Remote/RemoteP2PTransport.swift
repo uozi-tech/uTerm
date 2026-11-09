@@ -234,6 +234,7 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
                                           fecGroupSize: fecGroupSize, deadlineMillis: deadline,
                                           roundTripMillis: Int((state.roundTripNanos ?? 0) / 1_000_000), now: now)
             for packet in packets { pacer.enqueue(.media, packet, priority: .media) }
+            frameEnds.append((pacer.mediaEnqueued, videoBuffer.newestVideoSequence))
             nextProbe = nextProbe ?? now &+ probeWait(state)
             pump()
             rearm()
@@ -334,8 +335,11 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             handleVideoOutput(reassembler.receive(opened.payload, now: now))
         case .mediaNack:
             guard let nack = try? RemoteVideoNack(decoding: opened.payload), nack.channel == videoChannel else { return }
-            // 重传排在新帧前面：这一帧不到，解码器就卡着。
-            for packet in videoBuffer.packets(for: nack, now: now) { pacer.enqueue(.media, packet, priority: .control) }
+            // 重传排在新帧前面（这一帧不到，解码器就卡着）、声音后面（见 `RemoteDatagramPacer.Priority.retransmit`）。
+            let resent = videoBuffer.packets(for: nack, now: now, firstTicket: pacer.retransmitEnqueued &+ 1,
+                                             resendGapNanos: estimator.state.roundTripNanos ?? 0,
+                                             departure: retransmitDeparture)
+            for packet in resent { pacer.enqueue(.media, packet, priority: .retransmit) }
         case .audio:
             guard let onAudioFrame, opened.payload.count > 4 else { return }
             let channel = opened.payload.prefix(4).reduce(0) { $0 << 8 | UInt32($1) }
@@ -404,6 +408,17 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
 
     // MARK: - 发与定时
 
+    /// 每帧最后一片在视频队列里的序号（`RemoteDatagramPacer.mediaEnqueued`），发出去后告诉发送缓冲开始探测计时。
+    private var frameEnds: [(end: UInt64, videoSequence: UInt32)] = []
+    /// 重传队列的发出记录：每次 `pump` 发出去的号截至 `upTo`、时刻 `at`。只留 5 秒，更早的当作早就发了。
+    private var retransmitDepartures: [(upTo: UInt64, at: UInt64)] = []
+
+    /// 重传队列里第 `ticket` 个离开的时刻；还排着为 nil。
+    private func retransmitDeparture(_ ticket: UInt64) -> UInt64? {
+        guard ticket <= pacer.retransmitSent else { return nil }
+        return retransmitDepartures.first(where: { $0.upTo >= ticket })?.at ?? 0
+    }
+
     private func pump() {
         let now = DispatchTime.now().uptimeNanoseconds
         while let (kind, payload) = pacer.next(now: now) {
@@ -412,6 +427,16 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
             path.send(datagram)
         }
         if !pacer.isEmpty { estimator.noteBacklog() }
+        if pacer.retransmitSent > (retransmitDepartures.last?.upTo ?? 0) {
+            retransmitDepartures.append((pacer.retransmitSent, now))
+            if let stale = retransmitDepartures.firstIndex(where: { now &- $0.at < 5_000_000_000 }), stale > 0 {
+                retransmitDepartures.removeFirst(stale)
+            }
+        }
+        while let first = frameEnds.first, first.end <= pacer.mediaSent {
+            frameEnds.removeFirst()
+            videoBuffer.markSent(videoSequence: first.videoSequence, now: now)
+        }
     }
 
     private func probeWait(_ state: RemoteLinkState) -> UInt64 {
@@ -441,7 +466,7 @@ nonisolated final class RemoteP2PTransport: RemoteTransport, RemoteVideoDatagram
         if videoChannel != nil, let due = nextProbe, now >= due {
             let state = estimator.state
             for packet in videoBuffer.probes(now: now, roundTripNanos: state.roundTripNanos ?? 100_000_000) {
-                pacer.enqueue(.media, packet, priority: .control)
+                pacer.enqueue(.media, packet, priority: .retransmit)
             }
             let grace = (state.roundTripNanos ?? 100_000_000) * 2 + 200_000_000
             let expired = videoBuffer.expire(now: now, graceNanos: grace)

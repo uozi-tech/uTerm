@@ -181,6 +181,11 @@ nonisolated struct RemoteVideoSendBuffer {
         let keepUntil: UInt64
         var lastProbeNanos: UInt64
         var lastWholeResend: UInt64 = 0
+        /// 最后一片已经离开发送节奏队列。没离开之前不探测：窄链路上队列能排好几秒，按「交给队列」计时，排着的帧
+        /// 每个往返都被探一次，探测插到新视频前面，接收端见到尾片就把整帧要一遍，重传占掉半条链路、队列越排越长。
+        var onWire = false
+        /// 每片最近一次重传在重传队列里的号（见 `packets(for:…)`）。
+        var resendTickets: [Int: UInt64] = [:]
 
         /// 只算原始载荷，和 `add` 里累加的一致。
         var byteCount: Int {
@@ -198,6 +203,9 @@ nonisolated struct RemoteVideoSendBuffer {
     }
 
     var isEmpty: Bool { frames.isEmpty }
+
+    /// 最近一次 `add` 的视频序号。
+    var newestVideoSequence: UInt32 { nextVideoSequence &- 1 }
 
     /// 发出去多久没人回话就按丢失处理。关键帧（时限超过 `RemoteLossPolicy.maxFrameWaitNanos`）跟接收端一样等到
     /// `frameWaitCap`：接收端还在一片片拼的时候就当它丢了，只会再发一个一样大的关键帧排在后面。
@@ -226,15 +234,40 @@ nonisolated struct RemoteVideoSendBuffer {
     }
 
     /// 重传请求要的分片。这一帧已经不在了就什么也不发，接收端到时限自己放弃。
-    mutating func packets(for nack: RemoteVideoNack, now: UInt64) -> [Data] {
+    ///
+    /// 上一次重传还排在重传队列里、或发出去不到 `resendGapNanos`（一个往返：还在路上）的分片不再发一份：
+    /// 窄链路上一批重传要发好几秒，接收端按往返退避的再次请求会先到，原样照发就是同一片排两三份（3G 上首个
+    /// 关键帧 254 KB，开流两秒内被要了 514 KB）。
+    /// 返回的分片要按顺序排进重传队列：第 k 片（从 0 数）的号是 `firstTicket + k`；`departure` 给出某个号
+    /// 离开队列的时刻，还排着为 nil。不传这几个参数就不去重。
+    mutating func packets(for nack: RemoteVideoNack, now: UInt64, firstTicket: UInt64 = 0, resendGapNanos: UInt64 = 0,
+                          departure: (UInt64) -> UInt64? = { _ in 0 }) -> [Data] {
         guard let position = frames.firstIndex(where: { $0.videoSequence == nack.videoSequence }) else { return [] }
-        guard let indices = nack.indices else {
+        let packets = frames[position].packets
+        let wanted: [Int]
+        if let indices = nack.indices {
+            wanted = indices.map(Int.init).filter { $0 < packets.count }
+        } else {
             guard now &- frames[position].lastWholeResend >= 50_000_000 else { return [] }
             frames[position].lastWholeResend = now
-            return frames[position].packets
+            wanted = Array(packets.indices)
         }
-        let packets = frames[position].packets
-        return indices.compactMap { Int($0) < packets.count ? packets[Int($0)] : nil }
+        var result: [Data] = []
+        for index in wanted {
+            if let ticket = frames[position].resendTickets[index] {
+                guard let left = departure(ticket), now &- left >= resendGapNanos else { continue }
+            }
+            frames[position].resendTickets[index] = firstTicket &+ UInt64(result.count)
+            result.append(packets[index])
+        }
+        return result
+    }
+
+    /// 这一帧的最后一片发出去了：探测从这时开始计。
+    mutating func markSent(videoSequence: UInt32, now: UInt64) {
+        guard let position = frames.firstIndex(where: { $0.videoSequence == videoSequence }) else { return }
+        frames[position].onWire = true
+        frames[position].lastProbeNanos = now
     }
 
     mutating func acknowledge(sequence: UInt32) {
@@ -256,11 +289,11 @@ nonisolated struct RemoteVideoSendBuffer {
     }
 
     /// 尾部丢包探测：一帧的最后几片都丢了，接收端没有后续的包可以比对，发现不了。发出去超过一个往返还没
-    /// 确认，就把最后一片再发一次，让接收端知道这一帧的存在和长度。
+    /// 确认，就把最后一片再发一次，让接收端知道这一帧的存在和长度。「发出去」以 `markSent` 为准。
     mutating func probes(now: UInt64, roundTripNanos: UInt64) -> [Data] {
         var result: [Data] = []
         let wait = max(30_000_000, roundTripNanos + roundTripNanos / 4)
-        for position in frames.indices where now &- frames[position].lastProbeNanos >= wait {
+        for position in frames.indices where frames[position].onWire && now &- frames[position].lastProbeNanos >= wait {
             guard now < frames[position].expiresNanos, let last = frames[position].packets.last else { continue }
             frames[position].lastProbeNanos = now
             result.append(frames[position].packets[frames[position].dataCount - 1])
