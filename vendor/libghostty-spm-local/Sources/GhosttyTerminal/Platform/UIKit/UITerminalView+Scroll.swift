@@ -52,6 +52,9 @@
         var glideDuration: CGFloat = 0
         var glideStart: CFTimeInterval = 0
         var glideSent: CGFloat = 0
+        /// 最近一次手指拖动发出位移的时刻，和那一刻 Ghostty 画面层上挂着的 IOSurface（用来判断拖动那一步画出来没有）。
+        var lastDragTime: CFTimeInterval = 0
+        var contentsAtLastDrag: ObjectIdentifier?
     }
 
     extension UITerminalView {
@@ -187,7 +190,11 @@
             }
             let mods = TerminalScrollModifiers(precision: true, momentum: momentum)
             surface?.sendMouseScroll(x: Double(pixels.x), y: Double(pixels.y), mods: mods.rawValue)
-            if momentum == .none, pixels.y != 0 { UTermScrollTrace.record("drag", Double(pixels.y)) }
+            if momentum == .none, pixels.y != 0 {
+                momentumScroll.lastDragTime = CACurrentMediaTime()
+                momentumScroll.contentsAtLastDrag = UTermCommitWatch.contentsIdentity(of: self)
+                UTermScrollTrace.record("drag", Double(pixels.y))
+            }
             if let bar = core.bridge.scrollbar { UTermScrollTrace.record("row", Double(bar.offset)) }
             trackScrollResidue(pixels.y)
             // uTerm 排查用（M16 第三轮）：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
@@ -395,7 +402,9 @@
             stopScrollSnap()
             momentumScroll.glideTotal = total
             momentumScroll.glideDuration = min(max(duration, 0.12), 3.0)
-            momentumScroll.glideStart = CACurrentMediaTime()
+            // 起点在第一次回调时按那一帧的 timestamp 定（见 glideFrame），这样第一帧正好走一帧的量。按调用时刻算的话，
+            // 第一次回调的 targetTimestamp 离调用时刻差不多两帧，第一帧一下走两帧的量（上屏实测：…18, 52, 24, 24…）。
+            momentumScroll.glideStart = 0
             momentumScroll.glideSent = 0
             momentumScroll.velocity = .zero
             scrollTouchContent(by: .zero, momentum: .began)
@@ -406,11 +415,57 @@
         }
 
         @objc func glideFrame(_ link: CADisplayLink) {
+            if momentumScroll.glideStart == 0 {
+                startGlideTimeline(link)
+                if momentumScroll.glideStart != link.timestamp { return }
+            }
+            advanceGlide(link, target: link.targetTimestamp)
+        }
+
+        /// 定惯性的起点。正常情况起点 = 这一帧的 timestamp，第一帧正好走一帧的量。
+        ///
+        /// 交接那一帧要防「一帧走两步」：惯性回调在它这一拍的 vsync（timestamp）之前约 1 ms 就来，手指最后一下拖动若刚
+        /// 发生在它前面一点，拖动那一步还没画上画面层。它要是在 vsync 之后才上画面层，就和惯性第一步同一拍上屏（上屏实测：
+        /// 交接那一拍 43 = 18 + 25 px、117 = 18 + 99 px，前一拍不动）。所以拖动还没上画面层时，这一帧先不走（起点挪到下一帧），
+        /// 等它画上来：赶在 vsync 之前画上来的，说明它落在这一拍，惯性第一步立刻补上（落在下一拍），不空一帧；
+        /// 赶不上的，它自己占下一拍，惯性从再下一拍起走。
+        func startGlideTimeline(_ link: CADisplayLink) {
+            // 拖动后画面层没换过 IOSurface = 拖动那一步还没画上来。拖动才过去不到 1 ms 时，即使换过也是更早那一帧
+            //（Ghostty 画一帧要 1.5 ms 上下），一样当作还没画上来，等下一次换。
+            let sinceDrag = CACurrentMediaTime() - momentumScroll.lastDragTime
+            let current = UTermCommitWatch.contentsIdentity(of: self)
+            let dragPending = sinceDrag < 2 * link.duration && momentumScroll.contentsAtLastDrag != nil
+                && (current == momentumScroll.contentsAtLastDrag || sinceDrag < 0.001)
+            let baseline = current
+            guard dragPending else {
+                momentumScroll.glideStart = link.timestamp
+                UTermScrollTrace.record("glide-first", 0)
+                return
+            }
+            momentumScroll.glideStart = link.targetTimestamp
+            UTermScrollTrace.record("glide-first", 1)
+            let vsync = link.timestamp, target = link.targetTimestamp
+            UTermCommitWatch.onContentsChange(of: self, from: baseline, within: 2 * link.duration) { [weak self] committedAt in
+                guard let self, committedAt < vsync, self.momentumScroll.displayLink === link,
+                      self.momentumScroll.glideSent == 0 else { return }
+                self.momentumScroll.glideStart = vsync
+                UTermScrollTrace.record("glide-first", 2)
+                self.advanceGlide(link, target: target)
+            }
+        }
+
+        /// 把惯性推进到 `target` 这一拍该在的位置（只发整像素，零头留到下一帧）。
+        func advanceGlide(_ link: CADisplayLink, target: CFTimeInterval) {
             let total = momentumScroll.glideTotal, duration = momentumScroll.glideDuration
-            let u = min(1, CGFloat(link.targetTimestamp - momentumScroll.glideStart) / duration)
+            let u = min(1, CGFloat(target - momentumScroll.glideStart) / duration)
             let rest = pow(1 - u, 3)
             let position = u >= 1 ? total : total * (1 - rest)
             let delta = position.rounded() - momentumScroll.glideSent
+            UTermScrollTrace.record("glide-target", target)
+            if UTermCommitWatch.isWanted {
+                UTermCommitWatch.watch(self)
+                TerminalDebugLog.log(.input, "uterm-glide t=\(String(format: "%.5f", CACurrentMediaTime())) target=\(String(format: "%.5f", target)) sent=\(Int(delta))")
+            }
             // 撞边转回弹要用当前速度（pt/s）：v = 3·total/D·(1 − u)²。
             momentumScroll.velocity = CGPoint(x: 0, y: 3 * total / duration * pow(1 - u, 2) / resolvedDisplayScale())
             if delta != 0 {
