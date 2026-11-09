@@ -73,6 +73,55 @@ final class RemoteAudioTierTests: XCTestCase {
         XCTAssertFalse(selector.update(.opus(bitrate: 64_000, frameMillis: 20), now: 11 * second))
     }
 
+    /// 丢包率在 0.1% 上下晃：每从无损掉下来一次，回无损要等的时间翻倍；稳住 2 分钟后清零。
+    func test_lossless_backs_off_after_each_drop_and_resets_after_settling() {
+        let second: UInt64 = 1_000_000_000
+        let opus510 = RemoteAudioProfile.opus(bitrate: 510_000, frameMillis: 10)
+        var selector = RemoteAudioTierSelector(initial: .opus(bitrate: 256_000, frameMillis: 20))
+        var now: UInt64 = 0
+
+        func climb(to wanted: RemoteAudioProfile, seconds: UInt64) {
+            XCTAssertFalse(selector.update(wanted, now: now))
+            XCTAssertFalse(selector.update(wanted, now: now + seconds * second - 1), "\(seconds) 秒前不该升")
+            XCTAssertTrue(selector.update(wanted, now: now + seconds * second))
+            now += seconds * second
+        }
+
+        climb(to: .lossless, seconds: 5)
+        XCTAssertTrue(selector.update(opus510, now: now + 1))  // 第一次掉下来
+        now += 1
+        climb(to: .lossless, seconds: 10)
+        XCTAssertTrue(selector.update(opus510, now: now + 1))  // 第二次
+        now += 1
+        climb(to: .lossless, seconds: 20)
+        // 无损稳住 2 分钟：退避清零。
+        now += 120 * second
+        XCTAssertFalse(selector.update(.lossless, now: now))
+        XCTAssertTrue(selector.update(opus510, now: now + 1))
+        now += 1
+        climb(to: .lossless, seconds: 10)  // 清零后只算这一次掉档
+        // Opus 档之间仍是 5 秒。
+        XCTAssertTrue(selector.update(.opus(bitrate: 256_000, frameMillis: 20), now: now + 1))
+        now += 1
+        climb(to: opus510, seconds: 5)
+    }
+
+    /// 退避有上限：最多等 2 分钟。
+    func test_lossless_backoff_caps_at_two_minutes() {
+        let second: UInt64 = 1_000_000_000
+        var selector = RemoteAudioTierSelector(initial: .opus(bitrate: 256_000, frameMillis: 20))
+        var now: UInt64 = 0
+        for _ in 0..<12 {
+            _ = selector.update(.lossless, now: now)
+            now += 200 * second
+            _ = selector.update(.lossless, now: now)
+            XCTAssertEqual(selector.current, .lossless)
+            now += 1
+            _ = selector.update(.opus(bitrate: 510_000, frameMillis: 10), now: now)
+        }
+        XCTAssertEqual(selector.requiredHold(for: .lossless), RemoteAudioTierSelector.losslessHoldCapNanos)
+    }
+
     func test_profile_switch_needs_new_encoder_only_for_codec_or_packet_length() {
         let a = RemoteAudioProfile.opus(bitrate: 128_000, frameMillis: 20)
         XCTAssertFalse(RemoteAudioProfile.opus(bitrate: 256_000, frameMillis: 20).needsNewEncoder(from: a))

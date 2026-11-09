@@ -96,10 +96,40 @@ nonisolated enum RemoteKeyboardBlocker {
 /// 把手机发来的登录密码填进这台 Mac 的锁屏输入框，等同有人在 Mac 键盘上手动输入。密码来自用户自己配对过的
 /// 手机、走加密信道传来，这里只在内存里用一次，不保存、不记日志。
 ///
-/// 步骤照探针在本机验证过的做法：先按 Esc 让占着键盘的模态（截图选区等）退出，再按一下唤出输入框，清掉
-/// 输入框里可能已有的字符，逐字符输入密码（用 Unicode 方式，不受当前键盘布局影响），回车，然后轮询锁屏
-/// 状态判断是否已进入桌面。
+/// 步骤：键盘被截图选区占着才按 Esc；动一下鼠标、按一下 Shift 把屏保 / 只显示时钟的锁屏叫醒；按 Delete 唤出
+/// 输入框并等它出来；清掉输入框里可能已有的字符；逐字符输入密码（用 Unicode 方式，不受当前键盘布局影响）；回车；
+/// 轮询锁屏状态判断是否已进入桌面。
+///
+/// 2026-11-09 mini 停在屏保里解锁超时：原先无条件先按 Esc，锁屏上 Esc 会把刚弹出的输入框收回去，接着 400ms
+/// 内就开始 ⌘A 和打字，输入框还没出来，密码打空了。所以 Esc 只在真有截图选区时按，唤出后也多等一会儿。
 nonisolated enum RemoteUnlockTypist {
+    /// 输密码前的一步。
+    enum Step: Equatable {
+        case key(CGKeyCode, CGEventFlags = [])
+        case wait(milliseconds: Int)
+        /// 动一下鼠标（屏保只认鼠标或按键才退）。
+        case nudgeMouse
+    }
+
+    static let escape: CGKeyCode = 53
+    static let delete: CGKeyCode = 51
+    static let shift: CGKeyCode = 56
+    static let returnKey: CGKeyCode = 36
+    static let keyA: CGKeyCode = 0
+
+    /// 叫醒锁屏、唤出并清空输入框的按键序列（不含打密码与回车）。Esc 已在调用前单独处理。
+    static func preparation() -> [Step] {
+        [
+            // 屏保 / 时钟界面：鼠标一动、Shift 一按就退，Shift 不会在输入框里留下字符。
+            .nudgeMouse, .key(shift), .wait(milliseconds: 600),
+            // Delete 唤出输入框（空框里按 Delete 无害）。动画要几百毫秒，第二下保证焦点已在框里。
+            .key(delete), .wait(milliseconds: 700),
+            .key(delete), .wait(milliseconds: 300),
+            // ⌘A + Delete 清掉本机可能已输入的字符。
+            .key(keyA, .maskCommand), .key(delete), .wait(milliseconds: 200),
+        ]
+    }
+
     static func submit(password: String, pollSeconds: Double = 6) async -> RemoteUnlockAttempt {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.userData = RemoteInjectedEvent.userDataTag
@@ -109,6 +139,13 @@ nonisolated enum RemoteUnlockTypist {
                 let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down)
                 if !flags.isEmpty { event?.flags = flags }
                 event?.post(tap: .cghidEventTap)
+            }
+        }
+        func nudgeMouse() {
+            let origin = CGEvent(source: nil)?.location ?? .zero
+            for point in [CGPoint(x: origin.x + 1, y: origin.y), origin] {
+                CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point,
+                        mouseButton: .left)?.post(tap: .cghidEventTap)
             }
         }
         func type(_ text: String) {
@@ -127,26 +164,30 @@ nonisolated enum RemoteUnlockTypist {
         // 每组按键前都确认仍在锁屏：中途若被 Mac 前的人解开了，这些按键会落到前台 app 里——⌘A + Delete 会清掉
         // 它的内容，密码会被当普通文字打进去。所以一旦不在锁屏就立即停手（此时 Mac 已解锁，按成功处理）。
         guard RemoteScreenLock.isLocked() else { return .unlocked }
-        // Esc：截图选区、Spotlight 这类模态抓着键盘时，后面的按键全归它；Esc 让它退出。锁屏输入框收到 Esc
-        // 无害（后面还要 ⌘A 清空）。帘幕只认本机的 Esc，这里的事件带着注入标记，不会被当成本机要撤帘幕。
-        tap(53)
-        try? await Task.sleep(for: .milliseconds(300))
-        if let blocker = RemoteKeyboardBlocker.current() {
-            // 还占着：不输密码（输了也只会被它吃掉），如实告诉手机。
-            AppLogger.notice("远程桌面：\(blocker) 占着键盘，按 Esc 也没让开，没有输密码", category: RemoteLog.category)
-            return .inputBlocked
+        if RemoteKeyboardBlocker.current() != nil {
+            // 截图选区抓着键盘时后面的按键全归它；Esc 让它退出。帘幕只认本机的 Esc，这里的事件带着注入标记，
+            // 不会被当成本机要撤帘幕。
+            tap(escape)
+            try? await Task.sleep(for: .milliseconds(300))
+            if let blocker = RemoteKeyboardBlocker.current() {
+                // 还占着：不输密码（输了也只会被它吃掉），如实告诉手机。
+                AppLogger.notice("远程桌面：\(blocker) 占着键盘，按 Esc 也没让开，没有输密码", category: RemoteLog.category)
+                return .inputBlocked
+            }
         }
-        guard RemoteScreenLock.isLocked() else { return .unlocked }
-        tap(51)  // Delete：先唤出输入框
-        try? await Task.sleep(for: .milliseconds(400))
-        guard RemoteScreenLock.isLocked() else { return .unlocked }
-        tap(0, flags: .maskCommand)  // ⌘A 全选
-        tap(51)  // Delete：清空输入框里本机可能已输入的字符
-        try? await Task.sleep(for: .milliseconds(200))
+        RemoteDisplayWake.nudge()
+        for step in preparation() {
+            guard RemoteScreenLock.isLocked() else { return .unlocked }
+            switch step {
+            case let .key(code, flags): tap(code, flags: flags)
+            case let .wait(milliseconds): try? await Task.sleep(for: .milliseconds(milliseconds))
+            case .nudgeMouse: nudgeMouse()
+            }
+        }
         guard RemoteScreenLock.isLocked() else { return .unlocked }
         type(password)
         guard RemoteScreenLock.isLocked() else { return .unlocked }
-        tap(36)  // Return 提交
+        tap(returnKey)
 
         let deadline = Date().addingTimeInterval(pollSeconds)
         while Date() < deadline {

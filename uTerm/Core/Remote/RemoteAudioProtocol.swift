@@ -246,22 +246,42 @@ nonisolated enum RemoteAudioPolicy {
 
 /// 档位的升降：降档立刻（链路变差时声音先让），升档要连续 `upgradeHoldNanos` 都够格（免得在两档之间来回切；
 /// 换编码或包长时手机要重建解码器、重新缓冲一下）。开流时从不高于 256k 的一档起步，够格再往上升。
+///
+/// 无损另加退避：丢包率在 0.1% 上下晃时会在无损和 Opus 510k 之间每十几秒切一次（2026-11-09 真机实测），
+/// 每次都要重建解码器、断一下声。所以每从无损掉下来一次，回无损要等的时间翻倍（5 → 10 → 20 … 最多 2 分钟）；
+/// 在无损上稳住 2 分钟后清零。
 nonisolated struct RemoteAudioTierSelector: Equatable, Sendable {
     static let upgradeHoldNanos: UInt64 = 5_000_000_000
+    static let losslessHoldCapNanos: UInt64 = 120_000_000_000
+    /// 在无损上连续待这么久，退避清零。
+    static let losslessSettleNanos: UInt64 = 120_000_000_000
     static let startCap = RemoteAudioProfile.opus(bitrate: 256_000, frameMillis: 20)
 
     private(set) var current: RemoteAudioProfile
     private var upgradeSince: UInt64?
+    /// 从无损掉下来的次数（退避指数）。
+    private var losslessDrops = 0
+    /// 这次进入无损的时间。
+    private var losslessSince: UInt64?
 
     init(initial wanted: RemoteAudioProfile) {
         current = wanted.rank <= Self.startCap.rank ? wanted : Self.startCap
     }
 
+    /// 升到 `wanted` 要连续够格多久。
+    func requiredHold(for wanted: RemoteAudioProfile) -> UInt64 {
+        guard wanted == .lossless, losslessDrops > 0 else { return Self.upgradeHoldNanos }
+        let shift = UInt64(min(losslessDrops, 8))
+        return min(Self.upgradeHoldNanos << shift, Self.losslessHoldCapNanos)
+    }
+
     /// 喂一次眼下该用的档。返回 true = 档位变了（调用方按 `current` 调码率或重建编码器）。
     mutating func update(_ wanted: RemoteAudioProfile, now: UInt64) -> Bool {
+        if current == .lossless, let since = losslessSince, now &- since >= Self.losslessSettleNanos {
+            losslessDrops = 0
+        }
         if wanted.rank < current.rank || (wanted.rank == current.rank && wanted != current) {
-            current = wanted
-            upgradeSince = nil
+            switchTo(wanted, now: now)
             return true
         }
         guard wanted.rank > current.rank else {
@@ -272,10 +292,16 @@ nonisolated struct RemoteAudioTierSelector: Equatable, Sendable {
             upgradeSince = now
             return false
         }
-        guard now &- since >= Self.upgradeHoldNanos else { return false }
+        guard now &- since >= requiredHold(for: wanted) else { return false }
+        switchTo(wanted, now: now)
+        return true
+    }
+
+    private mutating func switchTo(_ wanted: RemoteAudioProfile, now: UInt64) {
+        if current == .lossless, wanted != .lossless { losslessDrops += 1 }
+        losslessSince = wanted == .lossless ? now : nil
         current = wanted
         upgradeSince = nil
-        return true
     }
 }
 

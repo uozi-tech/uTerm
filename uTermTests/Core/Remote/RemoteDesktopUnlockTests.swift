@@ -188,6 +188,26 @@ final class RemoteDesktopUnlockTests: XCTestCase {
         XCTAssertNil(find([]))
     }
 
+    /// 叫醒锁屏的序列里没有 Esc（锁屏上 Esc 会把刚弹出的输入框收回去），先叫醒再唤出输入框，
+    /// 唤出到 ⌘A 之间留足动画时间。
+    func test_unlock_preparation_wakes_then_summons_field_without_escape() {
+        typealias T = RemoteUnlockTypist
+        let steps = T.preparation()
+        XCTAssertFalse(steps.contains(.key(T.escape)), "Esc 只在截图选区占着键盘时按")
+        XCTAssertEqual(steps.first, .nudgeMouse)
+        let summon = try? XCTUnwrap(steps.firstIndex(of: .key(T.delete)))
+        let selectAll = try? XCTUnwrap(steps.firstIndex(of: .key(T.keyA, .maskCommand)))
+        guard let summon, let selectAll else { return XCTFail("缺唤出或全选") }
+        XCTAssertLessThan(summon, selectAll)
+        let waited = steps[summon..<selectAll].reduce(0) { total, step in
+            if case let .wait(ms) = step { return total + ms }
+            return total
+        }
+        XCTAssertGreaterThanOrEqual(waited, 800, "输入框弹出动画要几百毫秒")
+        XCTAssertEqual(steps.last(where: { if case .key = $0 { return true } else { return false } }), .key(T.delete),
+                       "最后一下是清空用的 Delete，之后才打密码")
+    }
+
     func test_unlock_rejected_when_not_locked() async throws {
         let mac = FakeDesktopMac()
         mac.screen.locked = false

@@ -496,9 +496,9 @@ final class RemoteDesktopSession {
         attachment.link.send(RemoteMessage(.desktopUnlock, channel: attachment.channel, payload: RemoteJSON.encode(request)))
         return await withCheckedContinuation { continuation in
             unlockWaiters[requestID] = continuation
-            // Mac 解锁要走输入+轮询，给足够时间；超时当失败处理。
+            // Mac 解锁要叫醒锁屏（约 2 秒）+ 输入 + 轮询 6 秒，再留出链路余量；超时当失败处理。
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(15))
                 self?.unlockWaiters.removeValue(forKey: requestID)?.resume(returning: .timedOut)
             }
         }
