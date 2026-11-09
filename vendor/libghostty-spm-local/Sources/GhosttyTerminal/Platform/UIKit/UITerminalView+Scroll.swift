@@ -456,6 +456,8 @@
 
         /// 把惯性推进到 `target` 这一拍该在的位置（只发整像素，零头留到下一帧）。
         func advanceGlide(_ link: CADisplayLink, target: CFTimeInterval) {
+            let callbackMark = UTermScrollTrace.mark()
+            defer { UTermScrollTrace.span("glide-cb", since: callbackMark) }
             let total = momentumScroll.glideTotal, duration = momentumScroll.glideDuration
             let u = min(1, CGFloat(target - momentumScroll.glideStart) / duration)
             let rest = pow(1 - u, 3)
@@ -471,7 +473,9 @@
             if delta != 0 {
                 momentumScroll.glideSent += delta
                 UTermScrollTrace.record("momentum", Double(delta))
+                let sendMark = UTermScrollTrace.mark()
                 scrollTouchContent(by: CGPoint(x: 0, y: delta / resolvedDisplayScale()), momentum: .changed)
+                UTermScrollTrace.span("glide-send", since: sendMark)
             }
             // 撞边时 scrollTouchContent 已经把 link 停了、交给回弹。
             if u >= 1, momentumScroll.displayLink === link { stopMomentumScrolling() }

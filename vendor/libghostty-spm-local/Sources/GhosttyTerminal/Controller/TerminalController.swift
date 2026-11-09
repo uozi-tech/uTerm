@@ -347,7 +347,9 @@ public final class TerminalController {
             return
         }
 
+        let mark = UTermScrollTrace.mark()
         tick()
+        UTermScrollTrace.span("wakeup-tick", since: mark)
         for observer in observers {
             observer.onWakeup()
         }

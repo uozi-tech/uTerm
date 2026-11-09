@@ -32,6 +32,21 @@ public enum UTermScrollTrace {
         events.append(Event(time: CACurrentMediaTime(), kind: kind, value: value))
     }
 
+    /// 一段耗时：记在开始时刻，值是毫秒。`start` 用 `CACurrentMediaTime()`；关着时调用方传 0、这里直接返回。
+    static func span(_ kind: String, since start: Double) {
+        guard start > 0 else { return }
+        let now = CACurrentMediaTime()
+        lock.lock(); defer { lock.unlock() }
+        guard enabled else { return }
+        events.append(Event(time: start, kind: kind, value: (now - start) * 1000))
+    }
+
+    /// 打点起点：trace 开着时返回当前时刻，关着时返回 0（span 见 0 就不记）。
+    static func mark() -> Double {
+        lock.lock(); defer { lock.unlock() }
+        return enabled ? CACurrentMediaTime() : 0
+    }
+
     /// 取出并清空。
     public static func drain() -> [Event] {
         lock.lock(); defer { lock.unlock() }

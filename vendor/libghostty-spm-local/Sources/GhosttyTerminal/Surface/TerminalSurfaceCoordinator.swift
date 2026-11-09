@@ -112,6 +112,12 @@ final class TerminalSurfaceCoordinator {
     private var isWindowVisible = true
     private var isApplicationActive = true
     private var pendingImmediateTick = true
+    /// uTerm 本地补丁（M16 第六轮）：这次 tick 要不要在主线程同步整帧重画（`ghostty_surface_draw` = drawFrame(sync: true)：
+    /// 等空闲帧、编码、commit、waitUntilCompleted 等 GPU 画完）。尺寸 / 度量 / 可见性 / 选区这些宿主侧变化要（渲染线程不知道
+    /// 它们，或者要同步出帧防拉伸）；引擎的 wakeup 不要：wakeup 是 app 邮箱里来了消息（标题、滚动条……），这些变化渲染线程
+    /// 自己知道、自己会画。真机甩动时每跨一行渲染器就往邮箱推一条滚动条消息 → wakeup → 下一拍主线程同步重画一整帧，
+    /// 实测每次 1.4–2.2 ms、最长 5.5 ms，还要等 GPU，GPU 一忙就把主线程拖过一拍（user 日志里的晚交帧和惯性 link 跳拍）。
+    private var pendingSyncDraw = true
 
     /// Running only while frames are owed. The engine's wakeups arrive at
     /// PTY speed, not display speed; rendering straight from them draws far
@@ -149,8 +155,9 @@ final class TerminalSurfaceCoordinator {
         }
     }
 
-    func requestImmediateTick() {
+    func requestImmediateTick(syncDraw: Bool = true) {
         pendingImmediateTick = true
+        if syncDraw { pendingSyncDraw = true }
         ensureDisplayLink()
     }
 
@@ -243,7 +250,7 @@ final class TerminalSurfaceCoordinator {
                 return isApplicationActive && isAttached()
             },
             onWakeup: { [weak self] in
-                self?.requestImmediateTick()
+                self?.requestImmediateTick(syncDraw: false)
             },
         )
         TerminalDebugLog.log(.lifecycle, "surface rebuild succeeded")
@@ -535,9 +542,19 @@ final class TerminalSurfaceCoordinator {
         idleFrameCount = 0
         pendingImmediateTick = false
         TerminalDebugLog.log(.render, "tick")
+        // uTerm 测量打点（M16 第六轮）：trace 关着时 mark() 返回 0，span 不记。
+        var mark = UTermScrollTrace.mark()
         controller?.tick()
+        UTermScrollTrace.span("tick-app", since: mark)
+        mark = UTermScrollTrace.mark()
         surface?.refresh()
-        surface?.draw()
+        UTermScrollTrace.span("tick-refresh", since: mark)
+        if pendingSyncDraw {
+            pendingSyncDraw = false
+            mark = UTermScrollTrace.mark()
+            surface?.draw()
+            UTermScrollTrace.span("tick-draw", since: mark)
+        }
         onPostRender?()
     }
 
@@ -708,6 +725,7 @@ final class TerminalSurfaceCoordinator {
         }
 
         pendingImmediateTick = true
+        pendingSyncDraw = true
         tick()
         ensureDisplayLink()
     }
