@@ -233,10 +233,13 @@ enum RemoteHeadlessDisplay {
                 return
             }
         }
-        var count: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &count)
-        let main = CGMainDisplayID()
-        guard let current = CGDisplayCopyDisplayMode(main) else { return }
+        // 拆掉虚拟屏后占位屏会睡着；睡着的屏读不到模式，原先这里直接放弃、不建虚拟屏，开流去采一块睡着的屏，
+        // 手机上报「没有可用的屏幕」，再连一次才好（2026-11-09 mini：拆屏一分钟后再连，准备显示器 2 ms 就返回）。
+        // 先叫醒，等系统报出主屏的模式再判断。
+        guard let (main, current, count) = await awakeMainDisplay() else {
+            AppLogger.notice("远程桌面：主屏 3 秒内没醒来或读不到模式，没准备虚拟屏", category: RemoteLog.category)
+            return
+        }
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
         switch plan(vendor: CGDisplayVendorNumber(main), model: CGDisplayModelNumber(main),
@@ -254,6 +257,23 @@ enum RemoteHeadlessDisplay {
                 switchMode(main, to: modes[index])
             }
         }
+    }
+
+    /// 叫醒主屏，等它醒着、读得到模式（最多约 3 秒）。返回主屏、它的模式和在线屏数；等不到时 nil。
+    private static func awakeMainDisplay() async -> (CGDirectDisplayID, CGDisplayMode, UInt32)? {
+        await RemoteDisplayWake.wake(display: CGMainDisplayID())
+        for attempt in 0..<30 {
+            if attempt > 0 { try? await Task.sleep(for: .milliseconds(100)) }
+            var count: UInt32 = 0
+            CGGetOnlineDisplayList(0, nil, &count)
+            let main = CGMainDisplayID()
+            guard count > 0, CGDisplayIsAsleep(main) == 0, let mode = CGDisplayCopyDisplayMode(main) else {
+                if attempt % 10 == 9 { RemoteDisplayWake.nudge() }
+                continue
+            }
+            return (main, mode, count)
+        }
+        return nil
     }
 
     /// 拆了旧屏要等系统把占位屏接回来，再建新的；不然两块屏的配置变化叠在一起，窗口会被搬两遍（最多 2 秒）。
