@@ -168,6 +168,26 @@ final class RemoteVideoDatagramTests: XCTestCase {
         XCTAssertFalse(assembler.tick(now: 1160 * ms).nacks.isEmpty, "一个往返还没来就再要一次")
     }
 
+    /// 发送端还没量到往返（包头里 0）、首个关键帧在窄链路前排着长队：缺的分片不能每 10 ms 要一次，要按次数
+    /// 翻倍等（2026-11-09 3G 直连：副本把队排到 7 s 以上，首帧 15 s）。
+    func test_repeated_requests_back_off() {
+        let all = packets(payload(5000), deadline: 5001, roundTrip: 0)
+        var assembler = RemoteVideoReassembler()
+        _ = assembler.receive(all[0], now: 1000 * ms)
+        _ = assembler.receive(all[2], now: 1001 * ms)
+        var requests = 0
+        var now = 1000 * ms
+        while now < 3600 * ms {
+            requests += assembler.tick(now: now).nacks.filter { $0.indices?.contains(1) == true }.count
+            now += 5 * ms
+        }
+        XCTAssertLessThanOrEqual(requests, 8, "2.6 s 里最多要七八次")
+        XCTAssertGreaterThanOrEqual(requests, 5)
+        XCTAssertEqual(RemoteVideoReassembler.retryWait(roundTrip: 200_000_000, requests: 1), 250_000_000)
+        XCTAssertEqual(RemoteVideoReassembler.retryWait(roundTrip: 200_000_000, requests: 3), 1_000_000_000)
+        XCTAssertEqual(RemoteVideoReassembler.retryWait(roundTrip: 0, requests: 2), 40_000_000)
+    }
+
     func test_nack_round_trips() throws {
         let some = RemoteVideoNack(channel: 7, videoSequence: 9, indices: [1, 2, 3])
         XCTAssertEqual(try RemoteVideoNack(decoding: some.encoded()), some)

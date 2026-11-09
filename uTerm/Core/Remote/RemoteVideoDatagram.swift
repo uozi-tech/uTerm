@@ -323,6 +323,8 @@ nonisolated struct RemoteVideoReassembler {
         var lastArrival: UInt64
         var highestIndex = 0
         var lastNack: [Int: UInt64] = [:]
+        /// 每个分片已经要过几次重传：再要一次前等的时间按次数翻倍（见 `retryWait`）。
+        var nackCount: [Int: Int] = [:]
         var received = 0
 
         /// 什么时候放弃。分片还在一片片到，说明它只是发得慢（节奏刚被压下去，或者排在别的帧后面），不算丢：
@@ -351,6 +353,7 @@ nonisolated struct RemoteVideoReassembler {
     /// 已知存在但一片都没收到的帧：比它新的帧到了才知道。值 = 判丢时刻。
     private var missing: [UInt32: UInt64] = [:]
     private var lastMissingNack: [UInt32: UInt64] = [:]
+    private var missingNackCount: [UInt32: Int] = [:]
     private var highestSeen: UInt32 = 0
     /// 整帧没见过的帧是什么时候发现的：乱序窗口过了才要重传，赶在之前到了就是乱序，量一下晚了多久。
     private var missingSince: [UInt32: UInt64] = [:]
@@ -378,6 +381,7 @@ nonisolated struct RemoteVideoReassembler {
             missing = [:]
             missingSince = [:]
             lastMissingNack = [:]
+            missingNackCount = [:]
             nextExpected = 1
             highestSeen = 0
         }
@@ -404,6 +408,7 @@ nonisolated struct RemoteVideoReassembler {
             }
             missing[videoSequence] = nil
             lastMissingNack[videoSequence] = nil
+            missingNackCount[videoSequence] = nil
         }
         // 比它旧、没见过的帧：整帧都没到。
         if videoSequence > highestSeen {
@@ -453,7 +458,7 @@ nonisolated struct RemoteVideoReassembler {
             guard var partial = partials[videoSequence], !partial.isComplete,
                   now < partial.deadline(reorderWindow: reorderWindow) else { continue }
             let wait = max(reorderWindow, UInt64(partial.header.roundTripMillis) * 1_000_000 / 4)
-            let retry = max(10_000_000, UInt64(partial.header.roundTripMillis) * 1_250_000)
+            let roundTrip = UInt64(partial.header.roundTripMillis) * 1_000_000
             let tailQuiet = now &- partial.lastArrival >= wait
             // 从后往前扫，记住后面已到分片里最早的到达时刻：它到了超过乱序窗口，前面缺的才算丢。
             var laterArrival = UInt64.max
@@ -462,8 +467,10 @@ nonisolated struct RemoteVideoReassembler {
                 defer { if partial.arrivals[index] > 0 { laterArrival = min(laterArrival, partial.arrivals[index]) } }
                 guard partial.fragments[index] == nil else { continue }
                 let overtaken = laterArrival != .max && now &- laterArrival >= reorderWindow
+                let retry = Self.retryWait(roundTrip: roundTrip, requests: partial.nackCount[index] ?? 0)
                 guard overtaken || tailQuiet, now &- (partial.lastNack[index] ?? 0) >= retry else { continue }
                 partial.lastNack[index] = now
+                partial.nackCount[index, default: 0] += 1
                 indices.append(UInt16(index))
             }
             indices.reverse()
@@ -476,12 +483,25 @@ nonisolated struct RemoteVideoReassembler {
         for (videoSequence, deadline) in missing where now < deadline {
             if let since = missingSince[videoSequence], now &- since < reorderWindow { continue }
             let last = lastMissingNack[videoSequence] ?? 0
-            guard now &- last >= 30_000_000 else { continue }
+            let count = missingNackCount[videoSequence] ?? 0
+            guard now &- last >= Self.retryWait(roundTrip: 0, requests: count, minimum: 30_000_000) else { continue }
             lastMissingNack[videoSequence] = now
+            missingNackCount[videoSequence] = count + 1
             output.nacks.append(RemoteVideoNack(channel: channel, videoSequence: videoSequence, indices: nil))
         }
         deliver(into: &output, now: now)
         return output
+    }
+
+    /// 同一个分片（整帧）要过 `requests` 次之后，再要一次前至少等多久：一个往返的 1.25 倍起（至少
+    /// `minimum`），每要一次翻倍，封顶 1 s。
+    ///
+    /// 以前固定隔一个往返再要。刚开流时发送端还没量到往返（包头里是 0），就成了每 10 ms 要一次；3G 上首个
+    /// 关键帧在 0.75 Mbps 的瓶颈前排着 2.6 s 的队，缺的几片被要了几百遍，重传的副本把队排到 7 s 以上，
+    /// 关键帧在拼齐前被放弃（2026-11-09 3G 直连首帧 15 s）。翻倍之后同样 2.6 s 只要六七次。
+    static func retryWait(roundTrip: UInt64, requests: Int, minimum: UInt64 = 20_000_000) -> UInt64 {
+        let base = max(minimum, roundTrip + roundTrip / 4)
+        return min(1_000_000_000, base << UInt64(min(max(0, requests - 1), 16)))
     }
 
     /// 一个没被要过重传的分片（或整帧）比它后面的晚到了 `lateness`。
@@ -543,6 +563,7 @@ nonisolated struct RemoteVideoReassembler {
                 missing[nextExpected] = nil
                 missingSince[nextExpected] = nil
                 lastMissingNack[nextExpected] = nil
+                missingNackCount[nextExpected] = nil
                 output.lost.append(nextExpected)
                 counters.lostFrames += 1
             }
