@@ -55,6 +55,9 @@ nonisolated struct RemoteLinkState: Equatable, Sendable {
     var queueDelayNanos: UInt64
     /// 往返的抖动（纳秒）：相邻两次往返读数之差的平均幅度。
     var jitterNanos: UInt64 = 0
+    /// 节奏撞到过链路的上限（排队或大量丢包）：此后节奏才代表链路有多宽。没撞到过时节奏只是还没涨上去
+    ///（开流从 8 Mbps 起步，屏幕静止时也不涨），不能据此判断链路窄。
+    var limited = false
 }
 
 /// 从接收报告估计链路：往返、丢包率、实际速率，并决定发送节奏。
@@ -149,7 +152,8 @@ nonisolated struct RemoteLinkEstimator {
 
     var state: RemoteLinkState {
         RemoteLinkState(roundTripNanos: smoothedTrip.map { UInt64($0) }, lossRate: lossRate, deliveryRate: deliveryRate,
-                        pacingRate: pacingRate, queueDelayNanos: queueDelay, jitterNanos: UInt64(jitter))
+                        pacingRate: pacingRate, queueDelayNanos: queueDelay, jitterNanos: UInt64(jitter),
+                        limited: foundCeiling)
     }
 
     private var deliveryRate: Double {

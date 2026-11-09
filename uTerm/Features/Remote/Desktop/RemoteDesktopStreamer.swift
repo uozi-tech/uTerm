@@ -182,6 +182,13 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var lastRateLog: (nanos: UInt64, stats: RemoteDesktopStreamerStats.Snapshot)?
     /// 手机开流时要了画面往返读数：随码控日志每 2 s 发一条 `desktopLatency`。
     private let sendsLatency: Bool
+    /// 窄链路降分辨率：主流按几分之一的尺寸编（见 `RemoteStreamScalePolicy`）。只在直连按发送节奏估容量时动；
+    /// 采集尺寸不变，送编码前用 `scaler` 缩。旁路精修照旧全尺寸。
+    private var scaleSelector = RemoteStreamScaleSelector()
+    private var scaler: RemoteFastFrameScaler?
+    private var scalerFormat: OSType = 0
+    /// 换尺寸时还没确认完的帧来自旧编码器：它们的长期参考帧令牌不能交给新编码器。序号小于它的确认不传令牌。
+    private var ltrSequenceFloor: UInt32 = 0
     /// 建出来的时刻与第一帧发没发（日志：开流到第一帧要多久）。
     private let createdNanos = DispatchTime.now().uptimeNanoseconds
     private var sentFirstFrame = false
@@ -417,6 +424,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         guard !isStopped else { return }
         linkState = state
         updateInflightLimits()
+        updateStreamScale(state)
         let groupSize = RemoteLossPolicy.fecGroupSize(lossRate: state.lossRate, roundTripNanos: state.roundTripNanos)
         let now = DispatchTime.now().uptimeNanoseconds
         let lowered = rate.observeLoss(lossRate: state.lossRate, now: now)
@@ -441,7 +449,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     private func acknowledged(_ ack: RemoteDesktopAck) {
         video?.acknowledgeVideo(sequence: ack.sequence)
-        if let token = ack.ltrToken { encoder?.acknowledgeLTR(token) }
+        if let token = ack.ltrToken, ack.sequence >= ltrSequenceFloor { encoder?.acknowledgeLTR(token) }
         let refine = refineSequences.remove(ack.sequence) != nil
         if recoverySequences.remove(ack.sequence) != nil, !ack.failed { awaitingRecovery = false }
         guard pacer.acknowledge(ack.sequence) else { return }
@@ -529,6 +537,65 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         guard frameRate != encoderFrameRate else { return }
         encoderFrameRate = frameRate
         encoder?.setFrameRate(frameRate)
+    }
+
+    // MARK: - 窄链路降分辨率
+
+    /// 链路现状变了：按每像素每帧分到的比特数选尺寸档，换了档就按新尺寸重建主编码器。局域网、中继（没有
+    /// 发送节奏）不动。
+    private func updateStreamScale(_ state: RemoteLinkState) {
+        guard video != nil else { return }
+        let wanted = RemoteStreamScalePolicy.wanted(
+            videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate), limited: state.limited,
+            width: width, height: height, current: scaleSelector.current)
+        let previous = scaleSelector.current
+        guard scaleSelector.update(wanted, now: DispatchTime.now().uptimeNanoseconds) else { return }
+        rebuildEncoder(scale: scaleSelector.current, from: previous, pacingRate: state.pacingRate)
+    }
+
+    /// 按新尺寸重建主编码器（VideoToolbox 的会话改不了尺寸），下一帧是关键帧。手机每个关键帧按参数集重建解码
+    /// 会话、显示层按 Mac 屏幕的点尺寸拉伸，坐标也按屏幕归一化，新老手机都不用知道尺寸换了。建不了就留着旧的。
+    private func rebuildEncoder(scale: RemoteStreamScale, from previous: RemoteStreamScale, pacingRate: Double) {
+        let size = scale.size(width: width, height: height)
+        guard encoder?.width != size.width || encoder?.height != size.height else { return }
+        let rebuilt: RemoteVideoEncoder
+        do {
+            rebuilt = try RemoteVideoEncoder(codec: codec, width: size.width, height: size.height, bitrate: mediaBitrate,
+                                             frameRate: max(1, encoderFrameRate), tenBit: sidecarRefine, ltr: video != nil)
+        } catch {
+            AppLogger.info("远程桌面：按 \(size.width)×\(size.height) 重建编码器失败（\(error)），照旧", category: RemoteLog.category)
+            return
+        }
+        if rebuilt.isLowLatency { rebuilt.setMaxQP(quality.maxQP) }
+        encoder = rebuilt
+        ltrSequenceFloor = pacer.nextSequence
+        forceKeyframe = true
+        forceLTRRefresh = false
+        recoveryDropped = false
+        AppLogger.info(String(format: "远程桌面：链路 %.2f Mbps，画面 %@ → %@，按 %d×%d 编码",
+                              pacingRate * 8 / 1e6, Self.label(previous), Self.label(scale), size.width, size.height),
+                       category: RemoteLog.category)
+    }
+
+    private static func label(_ scale: RemoteStreamScale) -> String {
+        switch scale {
+        case .full: "全尺寸"
+        case .twoThirds: "2/3"
+        case .half: "1/2"
+        }
+    }
+
+    /// 送进 `encoder` 的那张：尺寸对得上就是原图，否则缩到编码尺寸（采集尺寸不变）。缩不出来返回 nil。
+    private func streamImage(_ image: CVPixelBuffer, for encoder: RemoteVideoEncoder) -> CVPixelBuffer? {
+        guard CVPixelBufferGetWidth(image) != encoder.width || CVPixelBufferGetHeight(image) != encoder.height else {
+            return image
+        }
+        let format = CVPixelBufferGetPixelFormatType(image)
+        if scaler?.width != encoder.width || scaler?.height != encoder.height || scalerFormat != format {
+            scaler = RemoteFastFrameScaler(width: encoder.width, height: encoder.height, outputFormat: format)
+            scalerFormat = format
+        }
+        return scaler?.scale(image)
     }
 
     // MARK: - 静止精修
@@ -634,9 +701,18 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             if rate.bitrate > mediaBitrate { encoder.setBitrate(rate.bitrate) }
             if encoder.isLowLatency { encoder.setMaxQP(RemoteQualityCap.unrestricted) }
         }
+        guard let image = streamImage(frame.image, for: encoder) else {
+            // 缩不出来（缓冲池用尽之类）：这一帧跳过，参考链没动。
+            pacer.abandon(sequence)
+            if keyframe { forceKeyframe = true }
+            if refresh { forceLTRRefresh = true }
+            pump()
+            return
+        }
+        let encodedSize = (width: encoder.width, height: encoder.height)
         let submitted = DispatchTime.now().uptimeNanoseconds
         let captureNanos = frame.captureNanos
-        encoder.encode(frame.image, presentationNanos: submitted, forceKeyframe: keyframe, forceLTRRefresh: refresh,
+        encoder.encode(image, presentationNanos: submitted, forceKeyframe: keyframe, forceLTRRefresh: refresh,
                        refine: refine) { [weak self] result in
             guard let self else { return }
             let encodeNanos = DispatchTime.now().uptimeNanoseconds &- submitted
@@ -684,7 +760,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                     if refine { flags.insert(.refine) }
                     if refresh, !encoded.isKeyframe { flags.insert(.ltrRefresh) }
                     self.send(encoded, sequence: sequence, captureNanos: captureNanos, flags: flags,
-                              encodeNanos: encodeNanos)
+                              encodeNanos: encodeNanos, size: encodedSize)
                 }
             }
         }
@@ -692,7 +768,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     /// 编好的一帧发出去，计入在途。在连接队列上调用。
     private func send(_ encoded: RemoteEncodedFrame, sequence: UInt32, captureNanos: UInt64,
-                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64) {
+                      flags: RemoteDesktopFrame.Flags, encodeNanos: UInt64, size: (width: Int, height: Int)? = nil) {
         // 暂停那一刻还在编码器里的帧：编好也不发。手机不看了，恢复时反正从关键帧接上，参考链断了无所谓。
         guard !isPaused else {
             pacer.abandon(sequence)
@@ -705,7 +781,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                              + "\(encoded.data.count / 1024) KB，开流后 \(millis) ms）", category: RemoteLog.category)
         }
         let payload = RemoteDesktopFrame(flags: flags, codec: codec, sequence: sequence, captureNanos: captureNanos,
-                                         width: UInt16(clamping: width), height: UInt16(clamping: height),
+                                         width: UInt16(clamping: size?.width ?? width),
+                                         height: UInt16(clamping: size?.height ?? height),
                                          parameterSets: encoded.parameterSets, data: encoded.data,
                                          ltrToken: encoded.ltrToken).encoded()
         // 单帧超过分帧上限（几乎不可能：码率上限下一帧远小于 4 MB）：不发，降码率、下一帧重来。
