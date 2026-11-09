@@ -337,6 +337,18 @@ final class RemoteDatagramTests: XCTestCase {
         XCTAssertEqual(RemoteLossPolicy.frameWaitCap(deadlineMillis: 30_000), RemoteLossPolicy.keyframeMaxWaitNanos)
     }
 
+    /// 直连上在途最多攒链路 0.6 s 发得完的量：3G（0.75 Mbps）上码控自己的上限（按 2.2 Mbps 下限和被排队拉长的
+    /// 基线算，至少 768 KB）能攒十来秒，排在后面的普通帧全过时限（2026-11-09 3G 直连 0 fps）。宽链路上不起作用。
+    func test_inflight_bytes_stay_within_a_fraction_of_a_second_of_the_link() {
+        let threeG = RemoteLossPolicy.inflightByteCap(pacingRate: 90_000, roundTripNanos: 300_000_000)
+        XCTAssertEqual(threeG, 54_000)
+        XCTAssertLessThan(threeG, RemoteDesktopPacer<Int>.defaultInflightBytes / 8)
+        XCTAssertEqual(RemoteLossPolicy.inflightByteCap(pacingRate: 90_000, roundTripNanos: 1_920_000_000), 180_000,
+                       "往返更长时按往返算，否则一个往返里一帧都确认不回来")
+        XCTAssertGreaterThan(RemoteLossPolicy.inflightByteCap(pacingRate: 2_500_000, roundTripNanos: 50_000_000),
+                             RemoteDesktopPacer<Int>.defaultInflightBytes, "20 Mbps 上比码控的保底还大，不起作用")
+    }
+
     func test_rate_controller_ignores_light_loss_but_not_heavy_loss() {
         var rate = RemoteRateController(width: 1280, height: 800, path: .direct, now: 0)
         let start = rate.bitrate

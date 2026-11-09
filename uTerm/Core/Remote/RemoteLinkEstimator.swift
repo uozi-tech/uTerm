@@ -335,6 +335,16 @@ nonisolated enum RemoteLossPolicy {
     }
     /// 编码码率最多占发送节奏的多少。留点余量给重传和终端，否则发送队列只涨不跌，延迟越排越长。
     static let linkShare = 0.9
+    /// 声音在窄链路上的固定开销（比特 / 秒）：最低一档 Opus 加上每包的包头、冗余，约 60 kbps，跟链路宽窄无关。
+    static let audioReserve = 64_000.0
+
+    /// 视频（含纠错前）最多用多少比特 / 秒：节奏的 `linkShare`，再扣掉声音的固定开销。
+    ///
+    /// 宽链路上 64 kbps 不到 1%，没有区别；3G（0.7 Mbps）上声音占了快一成，`linkShare` 留的余量全被它吃掉，
+    /// 重传挤不进去，普通帧排到时限边上成批放弃（2026-11-09）。
+    static func videoShare(pacingRate: Double) -> Double {
+        max(pacingRate * 8 * linkShare / 2, pacingRate * 8 * linkShare - audioReserve)
+    }
 
     /// 接收端等一帧等多久（毫秒）：够它发完，再够两轮重传。等太久画面卡，太短动不动要恢复。
     ///
@@ -356,4 +366,18 @@ nonisolated enum RemoteLossPolicy {
 
     /// 视频连续判丢多少帧算拥塞（一秒内）。零星丢一帧是突发丢包，恢复一下就好。
     static let lostFramesForCongestion = 3
+
+    /// 有链路节奏时，在途（编好、还没确认）最多攒多少字节：链路 `inflightLinkSeconds` 发得完的量，往返更长时按
+    /// 往返加 80 ms。普通帧连往返在内只等 1.5 s，排在前面的不能超过这个量的一大半。
+    ///
+    /// 码控自己的在途上限按目标码率和「采集 → 解码完」基线算，直连上目标码率有每像素 1 bit/s 的下限（1856×1206
+    /// 就是 2.2 Mbps），基线一排队又被拉长到好几秒，再加 768 KB 的保底：3G（0.75 Mbps）上能攒下十来秒的帧，
+    /// 排在后面的普通帧个个过了 1.5 s 时限，丢了要恢复、恢复帧又排进去（弱网矩阵 3G 直连 0 fps，2026-11-09）。
+    /// 宽链路上这个量远大于码控的上限，不起作用；一帧总能发（在途空着时不看上限）。
+    static let inflightLinkSeconds = 0.6
+
+    static func inflightByteCap(pacingRate: Double, roundTripNanos: UInt64?) -> Int {
+        let window = max(inflightLinkSeconds, Double(roundTripNanos ?? 0) / 1e9 + 0.08)
+        return max(1, Int(pacingRate * window))
+    }
 }

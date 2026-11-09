@@ -165,6 +165,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     private var refineSequences: Set<UInt32> = []
     /// 这条链路现在的纠错强度（见 `RemoteLossPolicy`）。
     private var fecGroupSize = 0
+    /// 最近发出的一个关键帧（主流或旁路精修）有多大：估一张精修要占链路多久。
+    private var lastKeyframeBytes = 0
     private var pasteAssembler = RemoteDesktopPasteAssembler()
     private var linkState: RemoteLinkState?
     /// 码控上一次定的码率（不扣纠错、不看节奏），用来判断这次是不是在往下调。
@@ -332,7 +334,6 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         logDiagnosticsIfDue(now: DispatchTime.now().uptimeNanoseconds)
         lastFrame = frame
         lastCaptureNanos = DispatchTime.now().uptimeNanoseconds
-        encoderFrameRateEstimate.record(now: lastCaptureNanos)
         updateEncoderFrameRate(now: lastCaptureNanos)
         refined = false
         refineRetries = 0
@@ -400,10 +401,22 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    /// 在途上限：码控按往返给的，直连上再不超过链路约一秒发得完的量（见 `RemoteLossPolicy.inflightByteCap`）。
+    private func updateInflightLimits() {
+        pacer.maxInflightFrames = rate.inflightFrameLimit
+        var bytes = rate.inflightByteLimit
+        if let linkState {
+            bytes = min(bytes, RemoteLossPolicy.inflightByteCap(pacingRate: linkState.pacingRate,
+                                                               roundTripNanos: linkState.roundTripNanos))
+        }
+        pacer.maxInflightBytes = bytes
+    }
+
     /// 链路现状变了：调纠错强度；丢得太多就降码率。
     private func linkChanged(_ state: RemoteLinkState) {
         guard !isStopped else { return }
         linkState = state
+        updateInflightLimits()
         let groupSize = RemoteLossPolicy.fecGroupSize(lossRate: state.lossRate, roundTripNanos: state.roundTripNanos)
         let now = DispatchTime.now().uptimeNanoseconds
         let lowered = rate.observeLoss(lossRate: state.lossRate, now: now)
@@ -422,7 +435,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 给编码器的码率：不超过链路实测能发的，再扣掉纠错分片占的那部分。
     private var mediaBitrate: Int {
         var budget = Double(rate.bitrate)
-        if let linkState { budget = min(budget, linkState.pacingRate * 8 * RemoteLossPolicy.linkShare) }
+        if let linkState { budget = min(budget, RemoteLossPolicy.videoShare(pacingRate: linkState.pacingRate)) }
         return Int(budget * RemoteLossPolicy.mediaBudgetFactor(fecGroupSize: fecGroupSize))
     }
 
@@ -443,8 +456,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             let linkQueueing = linkState.map { $0.queueDelayNanos > rate.config.queueDelayThreshold }
             if rate.observe(latencyNanos: latency, now: now, linkQueueing: linkQueueing) { applyRate() }
         }
-        pacer.maxInflightFrames = rate.inflightFrameLimit
-        pacer.maxInflightBytes = rate.inflightByteLimit
+        updateInflightLimits()
         logRateIfDue(now: now)
         pump()
     }
@@ -468,13 +480,14 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
         let message = String(format: "桌面码控：目标 %.1f Mbps（编码器 %.1f）%d fps（编码器按 %d）｜采集 %.1f fps，实发 %.1f fps %.1f Mbps"
                              + "（关键帧 %d 精修 %d）｜往返 p50 %.0f p95 %.0f ms，"
-                             + "基线 %.0f ms，在途上限 %d｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
+                             + "基线 %.0f ms，在途上限 %d 帧 %d KB｜在途满丢 %d，码控丢 %d｜QP 上限 %d",
                              Double(rate.bitrate) / 1e6, Double(mediaBitrate) / 1e6, rate.frameRate, encoderFrameRate,
                              Double(current.captured - last.stats.captured) / seconds, Double(sent) / seconds,
                              Double(current.bytes - last.stats.bytes) * 8 / seconds / 1e6,
                              current.keyframes - last.stats.keyframes, current.refines - last.stats.refines,
                              percentile(0.5), percentile(0.95), Double(rate.baselineLatency ?? 0) / 1e6,
-                             pacer.maxInflightFrames, current.congestionDrops - last.stats.congestionDrops,
+                             pacer.maxInflightFrames, pacer.maxInflightBytes / 1024,
+                             current.congestionDrops - last.stats.congestionDrops,
                              current.encoderDrops - last.stats.encoderDrops, quality.maxQP)
         let link = linkState.map {
             String(format: "｜链路 丢包 %.1f%% 往返 %.0f ms 抖动 %.0f ms 排队 %.0f ms 节奏 %.1f Mbps 纠错 %d 丢帧 %d",
@@ -510,7 +523,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         stats.setBitrate(mediaBitrate)
     }
 
-    /// 编码器的预期帧率 = 平滑后的采集帧率，不超过码控帧率；变了才写给编码器。
+    /// 编码器的预期帧率 = 平滑后的送编码帧率（见 `encode`），不超过码控帧率；变了才写给编码器。
     private func updateEncoderFrameRate(now: UInt64) {
         let frameRate = encoderFrameRateEstimate.expected(limit: rate.frameRate, now: now)
         guard frameRate != encoderFrameRate else { return }
@@ -540,11 +553,21 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         }
     }
 
+    /// 一张精修（约一个关键帧那么大）能在链路一秒内发完。窄链路上不精修：3G（0.75 Mbps）上一张 243 KB 的
+    /// 精修要发近 3 秒，它占着在途名额和链路，主流一帧都发不出去（2026-11-09 3G 直连打字卡 8 s）。
+    /// 没有链路节奏（局域网、中继）时照旧。
+    private var refineFitsLink: Bool {
+        guard let linkState, lastKeyframeBytes > 0 else { return true }
+        return Double(lastKeyframeBytes) <= linkState.pacingRate * Self.refineLinkSeconds
+    }
+
+    static let refineLinkSeconds = 1.0
+
     /// 画面静止够久、链路空闲、还没精修过：把最后一帧用更高的画质重编一次。
     private func refineIfStill(now: UInt64) {
         let floor = sidecarRefine ? rate.config.minBitrate + 1 : Self.refineMinBitrate
         guard isLive, !isPaused, !refined, !awaitingRecovery, rate.bitrate >= floor, let lastFrame, pacer.pending == nil,
-              pacer.inflight.isEmpty,
+              pacer.inflight.isEmpty, refineFitsLink,
               now &- lastCaptureNanos >= Self.refineDelayNanos,
               let (sequence, frame) = pacer.submitDirect(lastFrame, now: now) else { return }
         refined = true
@@ -595,6 +618,13 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
         forceKeyframe = false
         let refresh = forceLTRRefresh && !keyframe
         forceLTRRefresh = false
+        // 编码器的预期帧率按真正送进主流的帧算，不按采集：窄链路上在途满了，采集 30 fps 只送得进几帧，
+        // 照采集报 60 时每帧预算只剩几百字节，送进去的也被编码器丢掉（2026-11-09 3G 直连）。
+        if !refine {
+            let now = DispatchTime.now().uptimeNanoseconds
+            encoderFrameRateEstimate.record(now: now)
+            updateEncoderFrameRate(now: now)
+        }
         // 恢复帧被编码器丢过一次：这一帧放开到码控目标，不受「链路节奏 × linkShare」封顶，QP 上限也临时放开。
         // 恢复帧比普通帧大得多，4K 下预算被节奏压在几 Mbps、又按帧率分到每帧，QP 再被画质上限卡住时，编码器会把它
         // 整帧丢掉、再要、再丢，看的那端一直等恢复帧、普通帧全跳过（2026-11-08 mini：卡在刚连上的第一帧）。
@@ -687,6 +717,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             return
         }
         pacer.encoded(sequence, bytes: payload.count)
+        if flags.contains(.keyframe) { lastKeyframeBytes = payload.count }
         if flags.contains(.refine) { refineSequences.insert(sequence) }
         if !flags.contains(.refine), flags.contains(.keyframe) || flags.contains(.ltrRefresh) {
             recoverySequences.insert(sequence)

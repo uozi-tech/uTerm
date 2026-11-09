@@ -359,7 +359,10 @@ nonisolated struct RemoteRateController: Equatable {
     }
 }
 
-/// 告诉编码器的帧率（`ExpectedFrameRate`）：按实际采集帧率，平滑过、隔一阵才改一次。
+/// 告诉编码器的帧率（`ExpectedFrameRate`）：按实际送进编码器的主流帧率，平滑过、隔一阵才改一次。
+///
+/// 送进编码器的帧 ≤ 采集的帧：在途满了的画面编码前就丢（`RemoteDesktopPacer`）。宽链路上两者一样；窄链路上
+/// （3G 0.75 Mbps，采集 30 fps 只送得进几帧）按采集报会让每帧预算小到装不下任何一帧（2026-11-09）。
 ///
 /// 低延迟码控按「码率 ÷ 预期帧率」给每帧分预算。一直报 60 fps 而画面每秒只变 6 次时，每帧只分到十分之一，
 /// 稍大一点的帧（恢复帧、一个窗口整片刷新）就被编码器整帧丢掉（2026-11-08 mini：采集 6 fps，丢 3 出 1）。
@@ -386,7 +389,7 @@ nonisolated struct RemoteEncoderFrameRate: Equatable {
     /// 当前告诉编码器的帧率（nil = 还没定过，用码控帧率）。
     private(set) var applied: Int?
 
-    /// 采集到一帧。
+    /// 送了一帧进编码器。
     mutating func record(now: UInt64) {
         defer { lastCapture = now }
         guard let lastCapture else { return }
