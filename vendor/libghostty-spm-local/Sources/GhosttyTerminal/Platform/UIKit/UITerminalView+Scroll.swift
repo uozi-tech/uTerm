@@ -47,6 +47,11 @@
         var bounceStart: CFTimeInterval = 0
         var bounceFrom: CGFloat = 0
         var bounceVelocity: CGFloat = 0
+        // uTerm 本地补丁（落点取整的惯性）：一次滑行要走的总像素、指数速率（1/s）、起点时刻、已发出的整像素。
+        var glideTotal: CGFloat = 0
+        var glideDuration: CGFloat = 0
+        var glideStart: CFTimeInterval = 0
+        var glideSent: CGFloat = 0
     }
 
     extension UITerminalView {
@@ -182,6 +187,8 @@
             }
             let mods = TerminalScrollModifiers(precision: true, momentum: momentum)
             surface?.sendMouseScroll(x: Double(pixels.x), y: Double(pixels.y), mods: mods.rawValue)
+            if momentum == .none, pixels.y != 0 { UTermScrollTrace.record("drag", Double(pixels.y)) }
+            if let bar = core.bridge.scrollbar { UTermScrollTrace.record("row", Double(bar.offset)) }
             trackScrollResidue(pixels.y)
             // uTerm 排查用（M16 第三轮）：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
             TerminalDebugLog.log(
@@ -217,13 +224,9 @@
             var r = momentumScroll.pixelResidue.truncatingRemainder(dividingBy: cell)
             if r < 0 { r += cell }
             let delta = r < cell / 2 ? -r : cell - r
-            momentumScroll.pixelResidue = 0
             guard abs(delta) >= 0.5 else { return }
-            momentumScroll.snapRemaining = delta
-            let link = CADisplayLink(target: self, selector: #selector(scrollSnapFrame(_:)))
-            link.preferredFrameRateRange = Self.scrollFrameRateRange
-            link.add(to: .main, forMode: .common)
-            momentumScroll.snapLink = link
+            // 没有初速度的吸附：同一条减速曲线，0.28 s 落定（起步每帧不到 2 px，不会「先停再挪」）。
+            startGlide(total: delta, duration: 0.28)
         }
 
         @objc func scrollSnapFrame(_: CADisplayLink) {
@@ -231,6 +234,7 @@
             // 每帧走剩下的 40%（120 Hz 下约 0.1 s 收敛），最后不到 1 像素一次补齐。
             let step = abs(remaining) < 1 ? remaining : remaining * 0.4
             momentumScroll.snapRemaining -= step
+            UTermScrollTrace.record("snap", Double(step))
             let mods = TerminalScrollModifiers(precision: true, momentum: .none)
             surface?.sendMouseScroll(x: 0, y: Double(step), mods: mods.rawValue)
             if abs(momentumScroll.snapRemaining) < 0.01 { stopScrollSnap() }
@@ -260,9 +264,16 @@
             return (1 - 1 / (abs(raw) * 0.55 / d + 1)) * d * (raw < 0 ? -1 : 1)
         }
 
+        /// 回弹由宿主平移图层完成（和 UIScrollView 移内容层同一个思路），不让渲染器为它出帧：有输出时渲染器同一帧还要重建格子，
+        /// 走 0023 的 overscroll uniform 会跟着它的出帧节奏抖。露出来的那条是视图后面的终端底色。
         private func applyOverscroll(_ shown: CGFloat) {
-            guard let raw = surface?.rawValue else { return }
-            ghostty_surface_set_overscroll(raw, Double(shown))
+            UTermScrollTrace.record("overscroll", Double(shown))
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.sublayerTransform = shown == 0
+                ? CATransform3DIdentity
+                : CATransform3DMakeTranslation(0, shown / resolvedDisplayScale(), 0)
+            CATransaction.commit()
         }
 
         /// 这一步位移里有多少进了回弹：返回剩下要正常滚的像素，nil = 全被回弹吃掉了。
@@ -338,6 +349,24 @@
 
         func startMomentumScrolling(velocity: CGPoint) {
             guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
+            // uTerm 本地补丁：普通滚动（程序没抓鼠标、不是双指本地滚动）改成「先算落点再滑」，照 UIScrollView 的
+            // targetContentOffset：按 `.normal` 减速率算出能滑多远，取整到最近的整行，再用一条指数曲线正好停在那一行上，
+            // 速度一路连续降到 0，不再惯性停下后另起一段吸附。
+            if abs(velocity.y) > 50, !momentumScroll.scrollsLocally, surface?.isMouseCaptured != true,
+               let metrics = surface?.size(), metrics.cellHeightPixels > 0 {
+                let scale = resolvedDisplayScale()
+                let cell = CGFloat(metrics.cellHeightPixels)
+                let v = velocity.y * scale                                   // px/s
+                let projected = v / 1000 / CGFloat(-log(0.998))              // UIScrollView .normal 滑到停的距离（px）
+                var r = momentumScroll.pixelResidue.truncatingRemainder(dividingBy: cell)
+                if r < 0 { r += cell }
+                var total = ((r + projected) / cell).rounded() * cell - r
+                if total * v <= 0 { total += v > 0 ? cell : -cell }
+                TerminalDebugLog.log(.input, "glide start v=\(Int(v))px/s projected=\(Int(projected)) total=\(Int(total))")
+                // 三次缓出 p = total·(1 − (1 − t/D)³) 的初速度是 3·total/D，让它等于抬手速度。
+                startGlide(total: total, duration: 3 * total / v)
+                return
+            }
 
             momentumScroll.velocity = velocity
             TerminalDebugLog.log(
@@ -356,6 +385,41 @@
             link.preferredFrameRateRange = Self.scrollFrameRateRange
             link.add(to: .main, forMode: .common)
             momentumScroll.displayLink = link
+        }
+
+        /// 沿三次缓出 p(t) = total·(1 − (1 − t/D)³) 滑完 `total` 像素：速度连续降到 0、正好在 D 秒时落在 total 上。
+        /// 不用纯指数衰减：那样最后几个像素要拖上一两秒、每隔几帧才挪 1 px，看着就是收尾卡（第四轮真机读数）。
+        /// 每帧只发整像素（零头留到下一帧），慢下来时文字不会停在子像素位置上闪。
+        func startGlide(total: CGFloat, duration: CGFloat) {
+            stopMomentumScrolling(sendTerminalEndEvent: false)
+            stopScrollSnap()
+            momentumScroll.glideTotal = total
+            momentumScroll.glideDuration = min(max(duration, 0.12), 3.0)
+            momentumScroll.glideStart = CACurrentMediaTime()
+            momentumScroll.glideSent = 0
+            momentumScroll.velocity = .zero
+            scrollTouchContent(by: .zero, momentum: .began)
+            let link = CADisplayLink(target: self, selector: #selector(glideFrame(_:)))
+            link.preferredFrameRateRange = Self.scrollFrameRateRange
+            link.add(to: .main, forMode: .common)
+            momentumScroll.displayLink = link
+        }
+
+        @objc func glideFrame(_ link: CADisplayLink) {
+            let total = momentumScroll.glideTotal, duration = momentumScroll.glideDuration
+            let u = min(1, CGFloat(link.targetTimestamp - momentumScroll.glideStart) / duration)
+            let rest = pow(1 - u, 3)
+            let position = u >= 1 ? total : total * (1 - rest)
+            let delta = position.rounded() - momentumScroll.glideSent
+            // 撞边转回弹要用当前速度（pt/s）：v = 3·total/D·(1 − u)²。
+            momentumScroll.velocity = CGPoint(x: 0, y: 3 * total / duration * pow(1 - u, 2) / resolvedDisplayScale())
+            if delta != 0 {
+                momentumScroll.glideSent += delta
+                UTermScrollTrace.record("momentum", Double(delta))
+                scrollTouchContent(by: CGPoint(x: 0, y: delta / resolvedDisplayScale()), momentum: .changed)
+            }
+            // 撞边时 scrollTouchContent 已经把 link 停了、交给回弹。
+            if u >= 1, momentumScroll.displayLink === link { stopMomentumScrolling() }
         }
 
         static var scrollFrameRateRange: CAFrameRateRange {
@@ -385,6 +449,7 @@
                 "momentum frame velocity=\(String(format: "%.2f", momentumScroll.velocity.x))x\(String(format: "%.2f", momentumScroll.velocity.y)) delta=\(String(format: "%.2f", deltaX))x\(String(format: "%.2f", deltaY))",
             )
 
+            UTermScrollTrace.record("momentum", Double(deltaY * resolvedDisplayScale()))
             scrollTouchContent(by: CGPoint(x: deltaX, y: deltaY), momentum: .changed)
         }
 

@@ -87,6 +87,14 @@ final class GhosttySmoothScrollPixelTests: XCTestCase {
         return try XCTUnwrap(host.view.snapshotImage()?.cgImage)
     }
 
+    /// 整扇窗口的合成结果（回弹靠平移图层，视图自己的 drawHierarchy 不一定带上 sublayerTransform，截窗口才是屏幕上那一帧）。
+    private func windowFrame(_ host: GhosttyProbeHost) async throws -> CGImage {
+        try await Task.sleep(for: .milliseconds(30))
+        let renderer = UIGraphicsImageRenderer(bounds: host.window.bounds)
+        let image = renderer.image { _ in host.window.drawHierarchy(in: host.window.bounds, afterScreenUpdates: false) }
+        return try XCTUnwrap(image.cgImage)
+    }
+
     /// 直接调 C 入口（`sendMouseScroll` + precision）：引擎那一层是不是按像素画。
     func testPrecisionScrollMovesByPixels() async throws {
         let rig = try await makeRig()
@@ -264,16 +272,24 @@ final class GhosttySmoothScrollPixelTests: XCTestCase {
             pan.fakeVelocity = .zero
             _ = host.view.perform(selector, with: pan)
         }
-        let rest = inkProfile(try await frame(host))
+        let restImage = try await windowFrame(host)
+        let rest = inkProfile(restImage)
         send(.began)
         for _ in 0..<5 { send(.changed, dy: -20) }       // 往上推 100 pt = 300 px（已在底部，全进回弹）
-        let pulled = inkProfile(try await frame(host))
+        let pulledImage = try await windowFrame(host)
+        let pulled = inkProfile(pulledImage)
         let d = 600 * scale, x = 100 * scale
         let expected = -(1 - 1 / (x * 0.55 / d + 1)) * d
         let got = shift(from: rest, to: pulled, range: 260).px
         send(.ended)
         try await Task.sleep(for: .milliseconds(800))
-        let back = shift(from: rest, to: inkProfile(try await frame(host)), range: 260).px
+        let backImage = try await windowFrame(host)
+        let back = shift(from: rest, to: inkProfile(backImage), range: 260).px
+        for (name, image) in [("rest", restImage), ("pulled", pulledImage), ("back", backImage)] {
+            let attachment = XCTAttachment(image: UIImage(cgImage: image))
+            attachment.name = "rubber-\(name)"; attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         print(String(format: "SMOOTH rubber-band pulled 300px → shown %dpx (UIScrollView 公式 %.0fpx) | 松手 0.8 s 后偏移 %dpx", got, expected, back))
         XCTAssertEqual(Double(got), expected, accuracy: 4, "回弹位移不符合橡皮筋公式")
         XCTAssertEqual(back, 0, "松手后没弹回原位")
