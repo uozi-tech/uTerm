@@ -70,6 +70,22 @@ final class RemoteStreamScaleTests: XCTestCase {
         }
     }
 
+    /// 挨饿：画面在动（采集 ≥ 8 fps），送出去的不到一半；看的时间不够 1.5 s 不下结论。
+    func test_starved_needs_motion_and_most_frames_held_back() {
+        XCTAssertTrue(Policy.starved(captured: 60, sent: 10, seconds: 2), "满屏在变、在途满了")
+        XCTAssertFalse(Policy.starved(captured: 60, sent: 58, seconds: 2), "局部滚动照样发得出去")
+        XCTAssertFalse(Policy.starved(captured: 10, sent: 2, seconds: 2), "画面几乎不动")
+        XCTAssertFalse(Policy.starved(captured: 30, sent: 2, seconds: 1), "看得还不够久")
+    }
+
+    /// 只有降档要挨饿；升档不看。
+    func test_gate_holds_downgrades_unless_starved() {
+        XCTAssertEqual(Policy.gated(.half, current: .full, starved: false), .full)
+        XCTAssertEqual(Policy.gated(.half, current: .full, starved: true), .half)
+        XCTAssertEqual(Policy.gated(.full, current: .half, starved: false), .full)
+        XCTAssertEqual(Policy.gated(.twoThirds, current: .twoThirds, starved: false), .twoThirds)
+    }
+
     /// 降档立刻；升档连续 5 秒够格、一次一档；中途不够格就重新计时。
     func test_selector_drops_at_once_and_climbs_one_step_after_five_seconds() {
         let second: UInt64 = 1_000_000_000
@@ -154,56 +170,81 @@ final class RemoteStreamScaleTests: XCTestCase {
         return true
     }
 
-    /// 直连链路撞到上限、窄到 3G：主编码器按一半尺寸重建，下一帧是那个尺寸的关键帧，手机的解码器照样解得开
-    ///（按参数集重建会话），解出来就是缩后的尺寸——显示层按 Mac 屏幕的点尺寸拉伸，坐标与它无关。
-    func test_streamer_rebuilds_encoder_at_half_size_on_a_narrow_direct_link() async throws {
-        let pair = try await establishedPair()
+    /// 一条直连桌面流：真实发送端 + 假数据报通道，手机这边解码、确认。
+    private final class Rig {
+        let pair: (phone: RemoteLink, mac: RemoteLink)
         let datagrams = VideoDatagrams()
         let source = SyntheticFrameSource(width: 1856, height: 1206)
-        let display = RemoteDesktopDisplay(id: 1, bounds: CGRect(x: 0, y: 0, width: 928, height: 603),
-                                           pixelWidth: 1856, pixelHeight: 1206)
-        let streamer = RemoteDesktopStreamer(
-            link: pair.mac, channel: 3, codec: .hevc, width: 1856, height: 1206, display: display, path: .direct,
-            video: datagrams, source: source, injector: nil, cursorLocation: nil,
-            onFirstInput: {}, onSourceStopped: { _ in })
-        defer { streamer.stop() }
-        try await streamer.start()
-        streamer.activate(started: RemoteMessage(.desktopStarted, channel: 3, payload: Data()))
+        let streamer: RemoteDesktopStreamer
+        private let decoder = RemoteVideoDecoder()
+        private var acked = 0
+        static let narrow = RemoteLinkState(roundTripNanos: 100_000_000, lossRate: 0, deliveryRate: 90_000,
+                                            pacingRate: 0.75e6 / 8, queueDelayNanos: 0, limited: true)
 
-        let decoder = RemoteVideoDecoder()
-        var acked = 0
-        /// 解码并确认新收到的帧，返回最后一帧（及解出的画面）。
-        func drain() throws -> (RemoteDesktopFrame, CVPixelBuffer?)? {
-            var last: (RemoteDesktopFrame, CVPixelBuffer?)?
+        init(pair: (phone: RemoteLink, mac: RemoteLink)) {
+            self.pair = pair
+            let display = RemoteDesktopDisplay(id: 1, bounds: CGRect(x: 0, y: 0, width: 928, height: 603),
+                                               pixelWidth: 1856, pixelHeight: 1206)
+            streamer = RemoteDesktopStreamer(
+                link: pair.mac, channel: 3, codec: .hevc, width: 1856, height: 1206, display: display, path: .direct,
+                video: datagrams, source: source, injector: nil, cursorLocation: nil,
+                onFirstInput: {}, onSourceStopped: { _ in })
+        }
+
+        func start() async throws {
+            try await streamer.start()
+            streamer.activate(started: RemoteMessage(.desktopStarted, channel: 3, payload: Data()))
+        }
+
+        func stop() {
+            source.pause()
+            streamer.stop()
+        }
+
+        /// 解码并确认新收到的帧，按顺序返回（帧、解出的画面）。
+        func drain() -> [(RemoteDesktopFrame, CVPixelBuffer?)] {
+            var frames: [(RemoteDesktopFrame, CVPixelBuffer?)] = []
             let payloads = datagrams.payloads
             while acked < payloads.count {
-                let frame = try RemoteDesktopFrame(decoding: payloads[acked])
-                acked += 1
+                defer { acked += 1 }
+                guard let frame = try? RemoteDesktopFrame(decoding: payloads[acked]) else { continue }
                 let image = try? decoder.decode(frame)
                 let ack = RemoteDesktopAck(sequence: frame.sequence, captureNanos: frame.captureNanos, decodeMicros: 1,
                                            failed: image == nil, ltrToken: image != nil ? frame.ltrToken : nil)
-                pair.mac.queue.async {
-                    streamer.handle(RemoteMessage(.desktopAck, channel: 3, payload: ack.encoded()))
-                }
-                last = (frame, image)
+                let streamer = self.streamer
+                pair.mac.queue.async { streamer.handle(RemoteMessage(.desktopAck, channel: 3, payload: ack.encoded())) }
+                frames.append((frame, image))
             }
-            return last
+            return frames
         }
+    }
 
-        let first = await waitUntil(10) { !datagrams.payloads.isEmpty }
+    /// 直连链路撞到上限、窄到 3G、主流在挨饿：主编码器按一半尺寸重建，下一帧是那个尺寸的关键帧，手机的解码器
+    /// 照样解得开（按参数集重建会话），解出来就是缩后的尺寸——显示层按 Mac 屏幕的点尺寸拉伸，坐标与它无关。
+    func test_streamer_rebuilds_encoder_at_half_size_when_starved_on_a_narrow_direct_link() async throws {
+        let rig = Rig(pair: try await establishedPair())
+        defer { rig.stop() }
+        try await rig.start()
+        let first = await waitUntil(10) { !rig.datagrams.payloads.isEmpty }
         XCTAssertTrue(first, "第一帧没发出来")
-        let opening = try XCTUnwrap(try drain())
-        XCTAssertEqual(opening.0.width, 1856, "开流全尺寸")
+        XCTAssertEqual(rig.drain().first?.0.width, 1856, "开流全尺寸")
 
-        datagrams.push(RemoteLinkState(roundTripNanos: 100_000_000, lossRate: 0, deliveryRate: 90_000,
-                                       pacingRate: 0.75e6 / 8, queueDelayNanos: 0, limited: true))
+        // 链路窄了、画面满屏在变：手机这段时间不回确认（在途满了，新帧一直被替掉），主流挨饿 2 秒多。
+        rig.source.prepareCycle(count: 6)
+        rig.source.run(fps: 30)
+        let starvedUntil = Date().addingTimeInterval(2.5)
+        while Date() < starvedUntil {
+            rig.datagrams.push(Rig.narrow)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        // 接着照常解码、确认：挨饿之后换了档，第一张小尺寸的帧是关键帧。
         var scaled: (RemoteDesktopFrame, CVPixelBuffer?)?
         let arrived = await waitUntil(10) {
-            source.emit()
-            if let latest = try? drain(), latest.0.width != 1856 { scaled = latest }
+            rig.datagrams.push(Rig.narrow)
+            scaled = scaled ?? rig.drain().first { $0.0.width != 1856 }
             return scaled != nil
         }
-        XCTAssertTrue(arrived, "链路变窄后没有按小尺寸发帧")
+        XCTAssertTrue(arrived, "链路变窄、主流挨饿后没有按小尺寸发帧")
         let (frame, image) = try XCTUnwrap(scaled)
         XCTAssertEqual(frame.width, 928)
         XCTAssertEqual(frame.height, 604)
@@ -211,5 +252,27 @@ final class RemoteStreamScaleTests: XCTestCase {
         let decoded = try XCTUnwrap(image, "手机解不开缩后的关键帧")
         XCTAssertEqual(CVPixelBufferGetWidth(decoded), 928)
         XCTAssertEqual(CVPixelBufferGetHeight(decoded), 604)
+    }
+
+    /// 链路一样窄，但帧照样发得出去（手机一直在确认、没有挨饿）：不降档，不白发关键帧。
+    func test_streamer_keeps_full_size_on_a_narrow_link_while_frames_get_through() async throws {
+        let rig = Rig(pair: try await establishedPair())
+        defer { rig.stop() }
+        try await rig.start()
+        let first = await waitUntil(10) { !rig.datagrams.payloads.isEmpty }
+        XCTAssertTrue(first, "第一帧没发出来")
+        _ = rig.drain()
+
+        rig.source.prepareCycle(count: 6)
+        rig.source.run(fps: 30)
+        var widths: Set<UInt16> = []
+        let until = Date().addingTimeInterval(3)
+        while Date() < until {
+            rig.datagrams.push(Rig.narrow)
+            rig.drain().forEach { widths.insert($0.0.width) }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        widths.formUnion(rig.drain().map(\.0.width))
+        XCTAssertEqual(widths, [1856])
     }
 }

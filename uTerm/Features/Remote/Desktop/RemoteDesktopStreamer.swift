@@ -185,6 +185,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 窄链路降分辨率：主流按几分之一的尺寸编（见 `RemoteStreamScalePolicy`）。只在直连按发送节奏估容量时动；
     /// 采集尺寸不变，送编码前用 `scaler` 缩。旁路精修照旧全尺寸。
     private var scaleSelector = RemoteStreamScaleSelector()
+    /// 最近的采集 / 送出帧数（每份链路状态记一次），判断主流是不是在挨饿（见 `RemoteStreamScalePolicy.starved`）。
+    private var frameCountSamples: [(nanos: UInt64, captured: Int, sent: Int)] = []
     private var scaler: RemoteFastFrameScaler?
     private var scalerFormat: OSType = 0
     /// 换尺寸时还没确认完的帧来自旧编码器：它们的长期参考帧令牌不能交给新编码器。序号小于它的确认不传令牌。
@@ -545,12 +547,25 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 发送节奏）不动。
     private func updateStreamScale(_ state: RemoteLinkState) {
         guard video != nil else { return }
-        let wanted = RemoteStreamScalePolicy.wanted(
+        let now = DispatchTime.now().uptimeNanoseconds
+        let byLink = RemoteStreamScalePolicy.wanted(
             videoShare: RemoteLossPolicy.videoShare(pacingRate: state.pacingRate), limited: state.limited,
             width: width, height: height, current: scaleSelector.current)
+        let wanted = RemoteStreamScalePolicy.gated(byLink, current: scaleSelector.current, starved: mainStreamStarved(now: now))
         let previous = scaleSelector.current
-        guard scaleSelector.update(wanted, now: DispatchTime.now().uptimeNanoseconds) else { return }
+        guard scaleSelector.update(wanted, now: now) else { return }
         rebuildEncoder(scale: scaleSelector.current, from: previous, pacingRate: state.pacingRate)
+    }
+
+    /// 记一份采集 / 送出帧数，看最近 `starvationWindowNanos` 里主流是不是在挨饿。精修帧不算送出。
+    private func mainStreamStarved(now: UInt64) -> Bool {
+        let snapshot = stats.snapshot()
+        frameCountSamples.append((now, snapshot.captured, snapshot.sent - snapshot.refines))
+        frameCountSamples.removeAll { now &- $0.nanos > RemoteStreamScalePolicy.starvationWindowNanos }
+        guard let oldest = frameCountSamples.first, let newest = frameCountSamples.last else { return false }
+        return RemoteStreamScalePolicy.starved(captured: newest.captured - oldest.captured,
+                                               sent: newest.sent - oldest.sent,
+                                               seconds: Double(newest.nanos &- oldest.nanos) / 1e9)
     }
 
     /// 按新尺寸重建主编码器（VideoToolbox 的会话改不了尺寸），下一帧是关键帧。手机每个关键帧按参数集重建解码

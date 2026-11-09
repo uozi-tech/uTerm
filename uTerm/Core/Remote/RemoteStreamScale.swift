@@ -76,6 +76,32 @@ nonisolated enum RemoteStreamScalePolicy {
     }
 }
 
+nonisolated extension RemoteStreamScalePolicy {
+    /// 看最近多久的采集与送出帧数。
+    static let starvationWindowNanos: UInt64 = 2_000_000_000
+    /// 至少看了这么久才下结论。
+    static let starvationMinimumNanos: UInt64 = 1_500_000_000
+    /// 画面在动：采集至少这么多帧 / 秒。
+    static let starvedMinCaptureRate = 8.0
+    /// 送出去的不到采集的这么多，算挨饿。
+    static let starvedSendShare = 0.5
+
+    /// 主流在挨饿：画面在动，送出去的帧却不到采集的一半（在途满了被替掉、编码器丢帧、等恢复）。
+    static func starved(captured: Int, sent: Int, seconds: Double) -> Bool {
+        guard seconds * 1e9 >= Double(starvationMinimumNanos) else { return false }
+        guard Double(captured) / seconds >= starvedMinCaptureRate else { return false }
+        return Double(sent) < Double(captured) * starvedSendShare
+    }
+
+    /// 降档还要主流真在挨饿。链路窄、画面却只变一小块（局部滚动、打字）时帧照样发得出去，降了只是白白多发
+    /// 几个关键帧：带宽骤降（20 → 1 Mbps）时局部滚动本来 30 fps，降档后在拥挤的链路上补关键帧，最长卡顿
+    /// 0.3 → 1.7 s（弱网矩阵 A/B，2026-11-09）。要等挨饿还顺带等了一会儿：骤降那一刻排在前面的全尺寸帧还没
+    /// 发完，这时补的关键帧只能排在它们后面。升档不看这个。
+    static func gated(_ wanted: RemoteStreamScale, current: RemoteStreamScale, starved: Bool) -> RemoteStreamScale {
+        wanted < current && !starved ? current : wanted
+    }
+}
+
 /// 档位的升降：降档立刻（链路变窄时先保住帧率），升档要连续 `upgradeHoldNanos` 都够格、一次只升一档（换一次
 /// 尺寸就要重建编码器、发一个关键帧，不能在两档之间来回切）。与声音档位同一个节奏。
 nonisolated struct RemoteStreamScaleSelector: Equatable, Sendable {
