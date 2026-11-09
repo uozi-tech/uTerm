@@ -33,7 +33,8 @@
 
             @objc func handleSelectionTap(_ gesture: UITapGestureRecognizer) {
                 guard usesInlineTextSelection, gesture.state == .ended, surface != nil else { return }
-                stopMomentumScrolling()
+                // uTerm 本地补丁：这一下若是「点一下停住惯性」，停在半行的视口稍后缓动回整行，不当场跳。
+                stopMomentumScrolling(settle: touchSelection.tapStopsMomentum ? .later : .now)
                 let point = gesture.location(in: self)
                 defer {
                     touchSelection.tapBeganWithMenu = false

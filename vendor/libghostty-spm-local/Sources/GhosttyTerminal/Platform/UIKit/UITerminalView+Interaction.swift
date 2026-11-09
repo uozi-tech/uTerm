@@ -39,7 +39,7 @@
             #else
                 if momentumScroll.displayLink != nil {
                     // A touch during momentum is a scroll-stop, not a tap.
-                    stopMomentumScrolling()
+                    stopMomentumForTouchDown()
                     softwareKeyboard.tapCandidateArmed = false
                 } else if let touch = touches.first,
                           // View-scoped on purpose: `allTouches` spans the
@@ -243,7 +243,7 @@
                 touchSelection.tapBeganWithMenu = isTouchMenuVisible
                 touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil
                 if touchSelection.tapStopsMomentum {
-                    stopMomentumScrolling()
+                    stopMomentumForTouchDown()
                 }
             }
             return true

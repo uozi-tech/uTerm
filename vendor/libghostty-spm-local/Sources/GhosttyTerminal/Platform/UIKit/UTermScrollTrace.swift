@@ -102,6 +102,30 @@ public enum UTermScrollTrace {
             guard let metrics = surface?.size(), metrics.cellWidthPixels > 0, metrics.cellHeightPixels > 0 else { return nil }
             return CGSize(width: Int(metrics.cellWidthPixels), height: Int(metrics.cellHeightPixels))
         }
+
+        /// uTerm 测试用：惯性途中手指落下（`touchesBegan` / `gestureRecognizer(_:shouldReceive:)` 里停惯性的那一句）。
+        func uTermTouchDownDuringMomentum() {
+            stopMomentumForTouchDown()
+        }
+
+        /// uTerm 测试用：滚动状态快照。
+        struct UTermScrollState: Equatable, Sendable {
+            /// 本地镜像：视口首行行号、首行顶边之上滚出去的像素（见 `MomentumScrollState.modelRow`）。
+            public let row: Int
+            public let fractionPixels: Int
+            /// 手指还按在回弹里时，拖过头的像素（未衰减）。
+            public let overscrollPixels: Double
+            public let isGliding: Bool
+            public let isBouncing: Bool
+            /// 没有惯性、没有回弹、没有拖过头，视口在整行上。
+            public var isAtRest: Bool { fractionPixels == 0 && overscrollPixels == 0 && !isGliding && !isBouncing }
+        }
+
+        var uTermScrollState: UTermScrollState {
+            UTermScrollState(row: momentumScroll.modelRow, fractionPixels: momentumScroll.modelFrac,
+                             overscrollPixels: Double(momentumScroll.overscrollRaw),
+                             isGliding: momentumScroll.displayLink != nil, isBouncing: momentumScroll.bounceLink != nil)
+        }
     }
 
     /// 惯性期间「画面哪一刻真正提交给 Core Animation」：在主 runloop 上 CA 提交之后（order 排在 CA 的 2000000 之后）
