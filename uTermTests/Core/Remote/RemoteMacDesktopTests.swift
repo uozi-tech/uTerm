@@ -321,13 +321,13 @@ final class RemoteMacDesktopTests: XCTestCase {
 
     func test_png_and_jpeg_pass_through_and_tiff_is_reencoded() async throws {
         let png = image(width: 40, height: 30, noise: false, type: .png)
-        let pastedPNG = try await RemoteDesktopMacPasteSource.image(data: png)
+        let pastedPNG = try await RemoteDesktopPasteEncoding.image(data: png)
         XCTAssertEqual(pastedPNG, .png(png), "截图原样发，字保持锐利")
         let jpeg = image(width: 40, height: 30, noise: false, type: .jpeg)
-        let pastedJPEG = try await RemoteDesktopMacPasteSource.image(data: jpeg)
+        let pastedJPEG = try await RemoteDesktopPasteEncoding.image(data: jpeg)
         XCTAssertEqual(pastedJPEG, .jpeg(jpeg))
         let tiff = image(width: 40, height: 30, noise: false, type: .tiff)
-        guard case .png(let reencoded) = try await RemoteDesktopMacPasteSource.image(data: tiff) else {
+        guard case .png(let reencoded) = try await RemoteDesktopPasteEncoding.image(data: tiff) else {
             return XCTFail("TIFF 应转成 PNG（不少 app 读不了剪贴板里的 TIFF 以外格式时也认 PNG）")
         }
         XCTAssertTrue(reencoded.starts(with: [0x89, 0x50, 0x4E, 0x47]))
@@ -337,7 +337,7 @@ final class RemoteMacDesktopTests: XCTestCase {
         let png = image(width: 800, height: 800, noise: true, type: .png)
         let limit = 60_000
         XCTAssertGreaterThan(png.count, limit)
-        guard case .jpeg(let jpeg) = try await RemoteDesktopMacPasteSource.image(data: png, limit: limit) else {
+        guard case .jpeg(let jpeg) = try await RemoteDesktopPasteEncoding.image(data: png, limit: limit) else {
             return XCTFail("太大的图应转 JPEG")
         }
         XCTAssertLessThanOrEqual(jpeg.count, limit)

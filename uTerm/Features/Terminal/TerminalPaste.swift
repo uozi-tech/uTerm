@@ -32,3 +32,10 @@ enum TerminalPaste {
         return delivery
     }
 }
+
+/// 给终端里的 AI 程序（Claude Code / Codex）发提示词并提交（手机的终端与远程桌面键盘条共用）。
+nonisolated enum AgentPromptSubmit {
+    /// 文字发出后隔这么久再单独发回车：Codex 把和文字同一包到达的回车当粘贴里的换行，文字留在输入框不提交
+    ///（实测 Codex 0.166.0）。
+    static let enterDelay = Duration.milliseconds(120)
+}

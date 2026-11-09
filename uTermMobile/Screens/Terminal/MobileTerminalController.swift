@@ -480,16 +480,14 @@ final class MobileTerminalController {
         paste(text)
     }
 
-    /// 发送提示词并提交。回车必须隔一下单独发：Codex 把和文字同一包到达的回车当粘贴里的换行，
-    /// 文字留在输入框不提交（实测 Codex 0.166.0）。
+    /// 发送提示词并提交。回车隔一下单独发（见 `AgentPromptSubmit.enterDelay`）。
     func submitPrompt(_ text: String) {
         insertPrompt(text)
         Task { [weak self] in
-            try? await Task.sleep(for: Self.promptSubmitDelay)
+            try? await Task.sleep(for: AgentPromptSubmit.enterDelay)
             self?.sendText("\r")
         }
     }
-    private static let promptSubmitDelay = Duration.milliseconds(120)
 
     /// 把新尺寸告诉远端：只合并同一轮主线程里的连续变化，和上次发出的相同就不发（见 `TerminalInputChannel`）。
     func resize(cols: UInt16, rows: UInt16) {

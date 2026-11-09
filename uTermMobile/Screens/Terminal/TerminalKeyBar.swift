@@ -120,7 +120,7 @@ struct TerminalKeyBar: View {
             pickedPhoto = nil
             controller.sendImage {
                 guard let data = try await item.loadTransferable(type: Data.self) else {
-                    throw RemoteDesktopPasteSource.Failure.unreadableImage
+                    throw RemoteDesktopPasteEncoding.Failure.unreadableImage
                 }
                 return try await RemoteDesktopPasteSource.terminalImage(data: data)
             }

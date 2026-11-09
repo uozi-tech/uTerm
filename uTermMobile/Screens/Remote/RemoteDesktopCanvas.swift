@@ -108,7 +108,7 @@ final class RemoteDesktopCanvasView: UIView {
         displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = UIColor.black.cgColor
         layer.addSublayer(displayLayer)
-        cursorLayer.path = Self.arrowPath()
+        cursorLayer.path = RemoteDesktopArrowCursor.path()
         cursorLayer.fillColor = UIColor.black.cgColor
         cursorLayer.strokeColor = UIColor.white.cgColor
         cursorLayer.lineWidth = 1.5
@@ -125,7 +125,7 @@ final class RemoteDesktopCanvasView: UIView {
         keyInput.keys = keys
         keyInput.send = { [weak self] input in self?.send(input) }
         keyInput.onResign = { [weak self] in self?.onKeyboardDismissed?() }
-        attachReceiver()
+        session.attachCanvas(displayLayer) { [weak self] cursor in self?.macCursor(cursor) }
     }
 
     @available(*, unavailable)
@@ -136,31 +136,7 @@ final class RemoteDesktopCanvasView: UIView {
         stopMomentum()
         displayLink?.invalidate()
         displayLink = nil
-        session.receiver.setHandlers(onImage: nil, onCursor: nil)
-    }
-
-    // MARK: - 画面
-
-    private func attachReceiver() {
-        let renderer = RendererBox(displayLayer.sampleBufferRenderer)
-        session.receiver.setHandlers(
-            onImage: { image, _ in
-                guard let sample = RemoteVideoDecoder.displaySample(image) else { return }
-                renderer.enqueue(sample)
-            },
-            onCursor: { [weak self] cursor in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.macCursor(cursor) } }
-            })
-    }
-
-    /// 渲染器从解码队列上用（`AVSampleBufferVideoRenderer` 可以在任意线程 enqueue；状态出错先 flush 再继续）。
-    private nonisolated final class RendererBox: @unchecked Sendable {
-        let renderer: AVSampleBufferVideoRenderer
-        init(_ renderer: AVSampleBufferVideoRenderer) { self.renderer = renderer }
-        func enqueue(_ sample: CMSampleBuffer) {
-            if renderer.status == .failed { renderer.flush() }
-            renderer.enqueue(sample)
-        }
+        session.detachCanvas()
     }
 
     // MARK: - 布局
@@ -234,20 +210,6 @@ final class RemoteDesktopCanvasView: UIView {
         cursorLayer.position = viewport.viewPoint(normalized: pointer)
         cursorLayer.isHidden = session.info == nil || !macCursorVisible
         CATransaction.commit()
-    }
-
-    /// 箭头光标，尖端在原点。尺寸固定（视图点），不随缩放变。
-    private static func arrowPath() -> CGPath {
-        let path = UIBezierPath()
-        path.move(to: .zero)
-        path.addLine(to: CGPoint(x: 0, y: 17))
-        path.addLine(to: CGPoint(x: 4.2, y: 13))
-        path.addLine(to: CGPoint(x: 7.2, y: 19.5))
-        path.addLine(to: CGPoint(x: 9.8, y: 18.3))
-        path.addLine(to: CGPoint(x: 6.9, y: 12))
-        path.addLine(to: CGPoint(x: 12.3, y: 12))
-        path.close()
-        return path.cgPath
     }
 
     // MARK: - 每帧合并
