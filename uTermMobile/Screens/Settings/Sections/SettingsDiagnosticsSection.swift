@@ -27,6 +27,7 @@ struct SettingsDiagnosticsSection: View {
         }
         #if DEBUG
         DebugLayoutDiagnosticsGroup()
+        DebugGhosttyTrialGroup()
         #endif
     }
 }
@@ -40,6 +41,18 @@ private struct DebugLayoutDiagnosticsGroup: View {
         MInsetGroup(header: "调试", footer: "在屏幕左下角显示安全区、状态栏保留区与终端视图几何，供截图排查布局。仅 Debug 构建可见。") {
             MInsetRow(label: "布局诊断", last: true,
                       trailing: AnyView(MSwitch(on: $layoutDiagnostics)))
+        }
+    }
+}
+
+/// 仅 Debug 构建、Ghostty 评估分支临时（不进 main）：新开的终端标签改用 GhosttyKit，给人比手感（测量门 M16）。
+private struct DebugGhosttyTrialGroup: View {
+    @AppStorage(DefaultsKey.debugGhosttyTrial) private var ghosttyTrial = false
+
+    var body: some View {
+        MInsetGroup(header: "引擎试用", footer: "打开后，之后新开的终端标签由 GhosttyKit 绘制（已开着的标签不变）。用来和 SwiftTerm 比滚动、选区、键盘的手感。仅 Debug 构建可见。") {
+            MInsetRow(label: "Ghostty 试用", last: true,
+                      trailing: AnyView(MSwitch(on: $ghosttyTrial)))
         }
     }
 }

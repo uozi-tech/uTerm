@@ -114,6 +114,8 @@ nonisolated enum GhosttyPresentLog {
     private nonisolated(unsafe) static var rawCalls = 0
     private nonisolated(unsafe) static var nilCalls = 0
     private nonisolated(unsafe) static var installed = false
+    /// 每个 layer（= 每个 surface）各交了几帧，同一套 2ms 去重。多终端探针按它分账。
+    private nonisolated(unsafe) static var perLayer: [ObjectIdentifier: (count: Int, last: Double)] = [:]
 
     @discardableResult
     static func installIfPossible() -> Bool {
@@ -125,7 +127,7 @@ nonisolated enum GhosttyPresentLog {
         typealias Setter = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
         let original = unsafeBitCast(method_getImplementation(inherited), to: Setter.self)
         let block: @convention(block) (AnyObject, AnyObject?) -> Void = { layer, contents in
-            GhosttyPresentLog.record(isNil: contents == nil)
+            GhosttyPresentLog.record(isNil: contents == nil, layer: ObjectIdentifier(layer))
             original(layer, selector, contents)
         }
         let imp = imp_implementationWithBlock(block)
@@ -138,12 +140,16 @@ nonisolated enum GhosttyPresentLog {
 
     /// 一次 present 里 `setContents:` 会来两次（第一轮实测：整屏刷新时 244 拍 488 次、成对出现）。
     /// 2ms 内的连续调用算同一帧——120Hz 下两帧最少隔 8.3ms，不会误并。
-    private static func record(isNil: Bool) {
+    private static func record(isNil: Bool, layer: ObjectIdentifier) {
         let now = CACurrentMediaTime()
         let main = Foundation.Thread.isMainThread
         lock.lock()
         rawCalls += 1
         if isNil { nilCalls += 1 }
+        if !isNil {
+            let entry = perLayer[layer] ?? (0, 0)
+            if now - entry.last > 0.002 { perLayer[layer] = (entry.count + 1, now) } else { perLayer[layer] = (entry.count, now) }
+        }
         if !isNil, times.last.map({ now - $0 > 0.002 }) ?? true {
             times.append(now)
             if !main { offMain += 1 }
@@ -152,12 +158,18 @@ nonisolated enum GhosttyPresentLog {
     }
 
     static func reset() {
-        lock.lock(); times.removeAll(); offMain = 0; rawCalls = 0; nilCalls = 0; lock.unlock()
+        lock.lock(); times.removeAll(); offMain = 0; rawCalls = 0; nilCalls = 0; perLayer.removeAll(); lock.unlock()
     }
 
     static func read() -> (times: [Double], offMain: Int) {
         lock.lock(); defer { lock.unlock() }
         return (times, offMain)
+    }
+
+    /// 各 layer 交的帧数（去重后），按帧数从多到少。
+    static func perLayerCounts() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        return perLayer.values.map(\.count).sorted(by: >)
     }
 
     /// `setContents:` 的原始调用次数与其中设成 nil 的次数（核对去重口径用）。
@@ -171,6 +183,8 @@ nonisolated enum GhosttyPresentLog {
 @MainActor
 enum SwiftTermDrawLog {
     nonisolated(unsafe) static var draws: [(at: Double, cpuMS: Double)] = []
+    /// 每个视图各画了几次（多终端探针按它分账）；和 `draws` 一起清。
+    nonisolated(unsafe) static var perView: [ObjectIdentifier: Int] = [:]
     private static var installed = false
 
     static func install() {
@@ -185,6 +199,7 @@ enum SwiftTermDrawLog {
             call(view, #selector(UIView.draw(_:)), rect)
             let cpu = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu0) / 1e6
             SwiftTermDrawLog.draws.append((at, cpu))
+            SwiftTermDrawLog.perView[ObjectIdentifier(view), default: 0] += 1
         }
         method_setImplementation(method, imp_implementationWithBlock(timed))
     }

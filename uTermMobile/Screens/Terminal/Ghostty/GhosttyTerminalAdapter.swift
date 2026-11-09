@@ -20,6 +20,8 @@ final class MGhosttyTerminalView: UITerminalView {
     var canTakeKeyboard: (() -> Bool)?
 
     override var canBecomeFirstResponder: Bool { canTakeKeyboard?() ?? true }
+    /// 第一响应者变化（宿主据此同步「键盘在不在这个会话上」）。
+    var onFocusChanged: ((Bool) -> Void)?
 
     // MARK: 补丁 #2：键盘类型可写（上游 getter 恒为 .default、setter 是空实现）
 
@@ -49,6 +51,7 @@ final class MGhosttyTerminalView: UITerminalView {
     @discardableResult
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
+        if became { onFocusChanged?(true) }
         if became, !observesInputMode {
             observesInputMode = true
             NotificationCenter.default.addObserver(self, selector: #selector(inputModeDidChange),
@@ -56,6 +59,13 @@ final class MGhosttyTerminalView: UITerminalView {
                                                    object: nil)
         }
         return became
+    }
+
+    @discardableResult
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocusChanged?(false) }
+        return resigned
     }
 
     @objc private func inputModeDidChange() {
@@ -97,6 +107,8 @@ final class GhosttyTerminalBridge {
     let input = TerminalInputChannel()
     /// 最近一次 resize 回调报来的网格（探针读它）。
     private(set) var grid: (cols: Int, rows: Int)?
+    /// 最近一次 resize 回调报来的格子像素尺寸（探针读它，核字体）。
+    private(set) var cellPixels: (width: UInt32, height: UInt32)?
     /// resize 回调次数（探针读它，看转屏时远端会收到几次 SIGWINCH）。
     private(set) var resizeReports = 0
     /// 每一块 write 回调给出的字节（探针读它，核按键编码）。nil = 不记。
@@ -133,7 +145,10 @@ final class GhosttyTerminalBridge {
                 Task { @MainActor in box.bridge?.userInput(data) }
             },
             resize: { viewport in
-                Task { @MainActor in box.bridge?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows)) }
+                Task { @MainActor in
+                    box.bridge?.cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
+                    box.bridge?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                }
             },
             // uTerm 只消费行列数；像素级的尺寸变化（拖分隔条时绝大多数）不必让远端重绘。
             suppressesPixelOnlyResizes: true)
