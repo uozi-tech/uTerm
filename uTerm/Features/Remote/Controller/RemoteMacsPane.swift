@@ -49,6 +49,10 @@ struct RemoteMacsPane: View {
         .onChange(of: allMacs.map(\.id)) { _, _ in selectFirstIfNeeded() }
         // 列表在看时按间隔问中继谁在线；关掉窗口、切走这一栏就不再问。
         .task { await directory.keepLiveStatusFresh() }
+        // 切回 uTerm 时马上问一次：在别的 App 里待着的这段时间，状态多半已经旧了。
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            directory.refreshLiveStatusNow()
+        }
         .onAppear {
             if directory.isActivated { directory.startBrowsing() } else { directory.activate() }
             takePendingInvitation()
@@ -282,6 +286,8 @@ private struct RemoteMacDetailPanel: View {
         // 分区方案 v3.3：与左侧列表同为卡面色，靠 1pt 竖线分开（同主机详情）。
         .overlay(alignment: .leading) { Rectangle().fill(UD.border).frame(width: 1) }
         .task(id: mac.id) { await track() }
+        // 连上 / 断开时列表里的「在线 · 公网」也该跟着变，不等中继下一拍。
+        .onChange(of: client?.state) { _, _ in directory.refreshLiveStatusNow() }
     }
 
     /// 连接是开窗口时才建的、目录不通知：看着详情时每秒取一次。拿到之后它自己是 `@Observable`。

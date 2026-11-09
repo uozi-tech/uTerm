@@ -103,6 +103,15 @@ final class RemoteMacDirectory {
     @ObservationIgnored private let fetchRelayHosts: @Sendable (RemoteRelayClient) async throws -> Set<UUID>
     /// 前台时多久问一次中继。
     @ObservationIgnored let relayPollInterval: Duration
+    /// 只在有界面显示在线状态时才问。Mac 上 15 秒太迟钝：对面 Mac 重启、上下线后要等好久列表才变（user 反馈
+    /// 「要切出去才刷新」）；Mac 没有蜂窝射频的顾虑，缩到 5 秒。iOS 仍是 15 秒，省电。
+    nonisolated static var defaultRelayPollInterval: Duration {
+        #if os(macOS)
+        .seconds(5)
+        #else
+        .seconds(15)
+        #endif
+    }
     /// 此刻有几处界面在显示 Mac 的在线状态（主机页「我的 Mac」、新建终端抽屉里的 Mac 行、网络诊断）。
     /// 只有它大于 0 时才按 `relayPollInterval` 一直问；没人看就不问。见 `keepLiveStatusFresh()`。
     @ObservationIgnored private var liveStatusDemand = 0
@@ -115,7 +124,7 @@ final class RemoteMacDirectory {
     init(identity: RemoteIdentityStore = RemoteIdentityStore(role: .hosts),
          relayStore: RemoteRelayConfigStore? = nil, defaults: UserDefaults = RemoteLocalState.defaults,
          adoptsRelayAsDefault: Bool = true, startsInForeground: Bool = true,
-         relayPollInterval: Duration = .seconds(15),
+         relayPollInterval: Duration = RemoteMacDirectory.defaultRelayPollInterval,
          fetchRelayHosts: @escaping @Sendable (RemoteRelayClient) async throws -> Set<UUID> = {
              try await $0.onlineHosts()
          }) {
@@ -483,6 +492,14 @@ final class RemoteMacDirectory {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(3600))
         }
+    }
+
+    /// 界面上看到的连接状态刚变了（连上 / 断开 / 失败）：不等下一拍，马上重新问一次中继，
+    /// 让列表里的在线状态跟上。只在有界面显示在线状态时问；一秒内问过就不再问。
+    func refreshLiveStatusNow() {
+        guard isActivated, wantsLiveRelayStatus else { return }
+        if let lastRelayPoll, ContinuousClock.now - lastRelayPoll < .seconds(1) { return }
+        startRelayPolling()
     }
 
     /// 读在线列表时结果已经旧了、又没有在问：补问一次。新建终端抽屉在工作区里打开，那里挂不上

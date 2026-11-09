@@ -110,8 +110,11 @@ private struct RemoteMacSessionView: View {
                     }
                 }
             default:
-                RemoteMacTerminalArea(model: model, macID: macID)
-                    .overlay(alignment: .top) { connectionNotice }
+                // 提示条占自己的一行、把标签区往下推：原先叠在标签区顶上，和标签条、右侧按钮压在一起。
+                VStack(spacing: 0) {
+                    connectionNotice
+                    RemoteMacTerminalArea(model: model, macID: macID)
+                }
             }
         }
         .onChange(of: client.state, initial: true) { _, state in
@@ -120,21 +123,28 @@ private struct RemoteMacSessionView: View {
         .onChange(of: client.listedSessionIDs) { _, ids in model.follow(ids, order: client.sessions.macTabOrder) }
     }
 
-    /// 连着的过程中断了：标签留着（各自在后台重连），顶上说一声。
+    /// 连着的过程中断了：标签留着（各自在后台重连），顶上一行说一声。
     @ViewBuilder private var connectionNotice: some View {
         switch model.client.state {
         case .connecting:
-            SettingsInlineNote(tone: .neutral, text: String(localized: "连接断开，正在重新连接…"))
-                .padding(8)
+            noticeBar { SettingsInlineNote(tone: .neutral, text: String(localized: "连接断开，正在重新连接…")) }
         case .failed(let message):
-            HStack(spacing: 8) {
-                SettingsInlineNote(tone: .warning, text: message)
-                UDButton(title: "重试", style: .secondary) { Task { await model.client.connectInteractively() } }
+            noticeBar {
+                HStack(spacing: 8) {
+                    SettingsInlineNote(tone: .warning, text: message)
+                    UDButton(title: "重试", style: .secondary) { Task { await model.client.connectInteractively() } }
+                        .padding(.trailing, 10)
+                }
             }
-            .padding(8)
         default:
             EmptyView()
         }
+    }
+
+    private func noticeBar(@ViewBuilder _ content: () -> some View) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(UD.border).frame(height: 1) }
     }
 }
 

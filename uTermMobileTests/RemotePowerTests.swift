@@ -165,6 +165,30 @@ final class RemotePowerTests: XCTestCase {
         XCTAssertEqual(counter.count, 2, "抽屉反复求值不会一读一问")
     }
 
+    /// 连接状态变了 / 切回 App：有界面在看就不等下一拍、马上问；没界面在看、或一秒内刚问过，就不问。
+    func testRefreshNowAsksAtOnceOnlyWhileAViewShowsStatus() async throws {
+        let counter = Counter()
+        let directory = try directory(interval: .seconds(30), counter: counter)
+        XCTAssertTrue(directory.importRelayConfig(relay))
+        try await waitUntil { counter.count == 1 }
+
+        try await Task.sleep(for: .milliseconds(1100))
+        directory.refreshLiveStatusNow()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(counter.count, 1, "没有界面显示在线状态时不问")
+
+        let watcher = Task { await directory.keepLiveStatusFresh() }
+        defer { watcher.cancel() }
+        try await waitUntil { counter.count == 2 }
+        directory.refreshLiveStatusNow()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(counter.count, 2, "一秒内刚问过不再问")
+
+        try await Task.sleep(for: .milliseconds(1000))
+        directory.refreshLiveStatusNow()
+        try await waitUntil { counter.count == 3 }
+    }
+
     func testNotActivatedDirectoryDoesNotPollForAView() async throws {
         let counter = Counter()
         let suite = "RemotePowerTests.\(UUID().uuidString)"
