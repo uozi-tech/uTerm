@@ -121,20 +121,43 @@ final class GhosttyTerminalBridge {
         Float(points * 72 / 96)
     }
 
-    /// 整个 App 共用一个 ghostty app（`TerminalController`）。配置在这里定：字号、光标、配色、最低对比度。
-    static func makeController(dark: Bool, fontSize: Float) -> GhosttyTerminal.TerminalController {
-        let scheme = TerminalColorScheme.resolve(dark: dark)
-        return GhosttyTerminal.TerminalController { builder in
+    /// 整个 App 共用一个 ghostty app（`TerminalController`）。配置在这里定：字体、字号、光标、留白、最低对比度；
+    /// 配色作为 `theme` 传（深 / 浅两份都来自 uTerm 的 `TerminalColorScheme`），GhosttyKit 按视图的日夜自己切。
+    ///
+    /// 配色必须走 `theme`：controller 先装 base config、再把 theme 叠上去；不传 theme 时用的是 GhosttyKit 自带的
+    /// Alabaster / Afterglow，会把 base 里的 background / foreground / palette / cursor-color 全部盖掉
+    ///（M16 实机：浅色底成了 #F7F7F7、深色 #212121、光标蓝块，和外面 uTerm 的终端底色对不上，左右露出两条）。
+    static func makeController(fontSize: Float) -> GhosttyTerminal.TerminalController {
+        let theme = GhosttyTerminal.TerminalTheme(light: colors(TerminalColorScheme.resolve(dark: false)),
+                                                  dark: colors(TerminalColorScheme.resolve(dark: true)))
+        return GhosttyTerminal.TerminalController(theme: theme) { builder in
+            // 和 SwiftTerm 同一个字体：iOS 的 SF Mono 只认这个私有 family 名（M12 实测；"SF Mono" 等名字都回退）。
+            builder.withFontFamily(UIFont.monospacedSystemFont(ofSize: 11, weight: .regular).familyName)
             builder.withFontSize(fontSize)
             builder.withCursorStyleBlink(TerminalCursorPreference.defaultBlink)
             builder.withBackgroundOpacity(1)
-            builder.withBackground(Self.hex(scheme.backgroundColor))
-            builder.withForeground(Self.hex(scheme.foregroundColor))
-            for (index, color) in scheme.ansiColors.prefix(16).enumerated() {
-                builder.withPalette(index, color: Self.hex(color))
-            }
+            // SwiftTerm 没有内留白：网格从左上角排起，余下的不到一格留在右 / 下边，由外层 8pt 边距同色铺底。
+            builder.withWindowPaddingX(0)
+            builder.withWindowPaddingY(0)
+            builder.withCustom("window-padding-color", "extend")
             // 补丁 #1 的原生对应物：Ghostty 自带 minimum-contrast（同为 WCAG 比值）。
             builder.withMinimumContrast(Double(TerminalColorScheme.minimumContrastRatio))
+        }
+    }
+
+    /// 一份 uTerm 配色 → Ghostty 配置：底色、前景、16 色、光标（块光标下的字用终端底色，同 `TerminalAppearance.applyCaretColors`）、选区。
+    private static func colors(_ scheme: TerminalColorScheme) -> GhosttyTerminal.TerminalConfiguration {
+        GhosttyTerminal.TerminalConfiguration { builder in
+            let background = hex(scheme.backgroundColor)
+            builder.withBackground(background)
+            builder.withForeground(hex(scheme.foregroundColor))
+            for (index, color) in scheme.ansiColors.prefix(16).enumerated() {
+                builder.withPalette(index, color: hex(color))
+            }
+            builder.withCursorColor(hex(scheme.cursorColor))
+            builder.withCursorText(background)
+            builder.withSelectionBackground(hex(scheme.selectionColor, over: scheme.backgroundColor))
+            builder.withSelectionForeground(hex(scheme.foregroundColor))
         }
     }
 
@@ -216,9 +239,15 @@ final class GhosttyTerminalBridge {
         view.toggleStickyModifier(modifier)
     }
 
-    private static func hex(_ color: UIColor) -> String {
+    /// `over` 给了就按透明度合成到它上面（Ghostty 的颜色值不带 alpha）。
+    private static func hex(_ color: UIColor, over base: UIColor? = nil) -> String {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        if let base, a < 1 {
+            var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+            base.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+            r = r * a + br * (1 - a); g = g * a + bg * (1 - a); b = b * a + bb * (1 - a)
+        }
         return String(format: "#%02X%02X%02X", Int(r * 255 + 0.5), Int(g * 255 + 0.5), Int(b * 255 + 0.5))
     }
 

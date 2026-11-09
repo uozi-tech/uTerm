@@ -6,21 +6,18 @@ import UIKit
 // Ghostty 评估分支临时（测量门 M16：给人亲手比手感），只在 Debug 构建里有，不进 main。
 // 设置 › 诊断 › 引擎试用 打开「Ghostty 试用」后，之后新开的终端标签由 `MobileTerminalController` 建一个
 // `GhosttyTerminalBridge`（GhosttyKit 画、host-managed IO 接真实 SSH），`TerminalSessionBody` 换成下面这个视图。
-// 没接的：程序状态（OSC 7501）、贴图、字号随宽度变（固定 11pt 等效）、日夜切换（按开标签那一刻的外观取配色）。
+// 没接的：程序状态（OSC 7501）、贴图、字号随宽度变（固定 11pt 等效）。
 
 @MainActor
 enum GhosttyTrial {
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyTrial) }
 
-    /// 整个 App 共用一个 ghostty app（每种外观一个）。
-    private static var controllers: [Bool: GhosttyTerminal.TerminalController] = [:]
+    /// 整个 App 共用一个 ghostty app；深 / 浅两套配色都在里面，随视图的日夜自己切。
+    private static let controller = GhosttyTerminalBridge.makeController(
+        fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
 
     static func makeBridge() -> GhosttyTerminalBridge {
-        let dark = UIScreen.main.traitCollection.userInterfaceStyle != .light
-        let controller = controllers[dark] ?? GhosttyTerminalBridge.makeController(
-            dark: dark, fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
-        controllers[dark] = controller
-        return GhosttyTerminalBridge(controller: controller)
+        GhosttyTerminalBridge(controller: controller)
     }
 }
 

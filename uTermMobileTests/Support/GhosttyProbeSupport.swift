@@ -272,7 +272,7 @@ func makeSpikeWindow(size: CGSize) throws -> UIWindow {
 /// GhosttyKit 那一侧。整个测试进程共用一个 ghostty app（`TerminalController`），和生产时一样。
 @MainActor
 final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
-    static let controller = GhosttyTerminalBridge.makeController(dark: true,
+    static let controller = GhosttyTerminalBridge.makeController(
                                                                  fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
 
     let window: UIWindow
