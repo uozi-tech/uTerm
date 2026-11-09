@@ -172,7 +172,8 @@ final class StyleGalleryTests: XCTestCase {
                     .environment(store(tab: .commands))
                     .modelContainer(c)
             }
-            try await shoot("connecting", on: device) {
+            // 连接中页的内容晚 150ms 露面、再淡入，默认 350ms 会截到半透明。
+            try await shoot("connecting", on: device, settle: .milliseconds(700)) {
                 ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                     onFinish: {}, onCancel: {}, onRetry: {})
                     .environment(store(tab: .hosts))
@@ -189,7 +190,7 @@ final class StyleGalleryTests: XCTestCase {
                                   safeAreaInsets: EdgeInsets(top: 41, leading: 0, bottom: 0, trailing: 0))
         duo.topBar = CGRect(x: 0, y: 0, width: 520, height: 48)
         duo.isUnfoldedPhone = true
-        try await shoot("connecting-duo-status-row", on: unfolded) {
+        try await shoot("connecting-duo-status-row", on: unfolded, settle: .milliseconds(700)) {
             ConnectingCoverView(request: MConnectRequest(host: host, kind: .terminal, origin: .hosts),
                                 onFinish: {}, onCancel: {}, onRetry: {})
                 .environment(store(tab: .hosts))

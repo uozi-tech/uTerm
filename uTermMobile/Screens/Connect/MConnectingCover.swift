@@ -91,8 +91,11 @@ final class MConnectRequest: Identifiable {
 
 // MARK: - 连接中页（设计稿 m-connect `ConnectingCover`）
 
-/// 全屏「连接中」中转页。整页垂直三段：顶部胶囊 chip / 中部进度环 + 阶段卡片 / 底部长按取消。
-/// 唯一动效是顶部进度环的匀速旋转；阶段行只用「点 / 对勾」三态静态表达。
+/// 全屏「连接中」中转页。整页垂直三段：顶部胶囊 chip / 中部进度环与主机信息 / 底部失败操作或「返回」。
+/// 唯一动效是进度环的匀速旋转。
+///
+/// 节奏按「别让人等动画」来：底色一出现就挡住误触，内容晚 `revealDelay` 才露面——这之前就连上的
+///（同主机复用连接约 60ms）直接进会话、不演成功态；露面后连上的只停 `successHold` 让对勾被看见。
 struct ConnectingCoverView: View {
     let request: MConnectRequest
     /// 已连接、成功态停留片刻后撤下中转页、露出会话。
@@ -108,15 +111,13 @@ struct ConnectingCoverView: View {
     @Environment(\.mAccent) private var accent
     @Environment(\.mChrome) private var chrome
     @State private var height: CGFloat = 0
-    /// 格内且高度不够完整排版（进度环 + 阶段卡 + 底部区约 560pt）：只留进度环、名字与状态。
-    private var compact: Bool { !fillsScreen && height > 0 && height < 560 }
-    /// 阶段计时推进（仅在连接中、且最多到「认证」一项激活——绝不在 `.connected` 前把认证/会话标完成）。
-    @State private var stageProgress = 0
+    /// 格内且高度不够完整排版（进度环 + 名字 + 底部区约 420pt）：收紧上下留白、底部区不占固定高度。
+    private var compact: Bool { !fillsScreen && height > 0 && height < 420 }
     /// 已连接即闩锁（提交成功）：避免「连上即被服务器立刻断开」把状态翻回连接中导致卡死；
     /// 同时一旦提交即隐藏取消按钮，规避「已连上又被取消」竞态。
     @State private var finishing = false
-    /// 连接态最短可见（~0.6s）后置真：瞬连时也先让连接动画走一段，避免状态一闪而过。
-    @State private var minShown = false
+    /// 内容（chip / 进度环 / 文案）是否已露面。露面前只有底色，见类型注释。
+    @State private var revealed = false
     /// 连接耗时过长（~5s 仍未成功/失败）后露出「返回」逃生口：快速连接不显示，
     /// 保留「不可中途打断」的设计意图；卡在某一握手阶段（如认证）时给用户退路。
     @State private var canCancel = false
@@ -126,8 +127,8 @@ struct ConnectingCoverView: View {
     private var phase: MConnPhase { request.phase }
     /// 原始已连接信号（用于闩锁触发）。
     private var connectedNow: Bool { phase == .connected }
-    /// 显示用成功态：已提交且连接态已够时长。
-    private var success: Bool { finishing && minShown }
+    /// 显示用成功态：内容露面后才连上的才演（露面前连上的直接进会话）。
+    private var success: Bool { finishing && revealed }
     private var failureMessage: String? {
         if finishing { return nil }   // 已提交成功：不再显示失败
         if case .failed(let m) = phase { return m }
@@ -157,6 +158,11 @@ struct ConnectingCoverView: View {
     /// chip 半宽的保守估计（「SFTP 文件」/「终端会话」两种文案，实测约 110pt 宽）。
     private static let chipHalfWidth: CGFloat = 64
 
+    /// 内容露面前的等待：短于它的连接（复用连接）整页只闪一下底色。
+    static let revealDelay: Duration = .milliseconds(150)
+    /// 成功对勾的停留：够看清转绿，又不让人干等。
+    static let successHold: Duration = .milliseconds(250)
+
     var body: some View {
         let statusRow = chipStatusRow
         ZStack {
@@ -181,6 +187,7 @@ struct ConnectingCoverView: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, compact ? 14 : 30)
             }
+            .opacity(revealed || failureMessage != nil ? 1 : 0)
             // Duo 展开竖屏：整条顶行都算安全区，chip 伸进去与状态栏同行（见 chipStatusRow）。
             .ignoresSafeArea(.container, edges: statusRow != nil ? .top : [])
             // 中转页对软键盘免疫：底层会话即便弹出键盘也不会顶起本页布局（防动画错乱）。
@@ -205,10 +212,11 @@ struct ConnectingCoverView: View {
             for: UIResponder.keyboardWillShowNotification)) { _ in
             CoverKeyboardGuard.resignTerminalKeyboard()
         }
-        // 阶段计时推进；keyed by attempt → 重试时重跑并复位。
-        .task(id: request.attempt) { stageProgress = 0; await pace() }
-        // 连接态最短可见时长。
-        .task { try? await Task.sleep(nanoseconds: 600_000_000); minShown = true }
+        .task {
+            try? await Task.sleep(for: Self.revealDelay)
+            guard !Task.isCancelled, !finishing else { return }
+            revealed = true
+        }
         // 连接耗时过长后露出「返回」；keyed by attempt → 重试时复位重新计时。
         .task(id: request.attempt) {
             canCancel = false
@@ -217,30 +225,26 @@ struct ConnectingCoverView: View {
             canCancel = true
         }
         // 已连接即闩锁（连上后即便立刻断开也按成功收尾，会话自身再展示断开态）。
-        .onChange(of: connectedNow) { _, c in if c { finishing = true } }
-        .onAppear { if connectedNow { finishing = true } }
-        // 成功态停留 ~0.7s 后进入会话。视图撤下时自动取消。
+        .onChange(of: connectedNow) { _, c in if c { commit() } }
+        .onAppear { if connectedNow { commit() } }
+        // 成功态停留片刻后进入会话。视图撤下时自动取消。
         .task(id: success) {
             guard success else { return }
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            try? await Task.sleep(for: Self.successHold)
             guard !Task.isCancelled else { return }
             onFinish()
         }
-        .animation(.smooth(duration: 0.32), value: success)
-        .animation(.smooth(duration: 0.3), value: failureMessage != nil)
-        .animation(.smooth(duration: 0.3), value: finishing)
-        .animation(.smooth(duration: 0.3), value: canCancel)
+        .animation(.easeOut(duration: 0.18), value: revealed)
+        .animation(.easeOut(duration: 0.2), value: success)
+        .animation(.easeOut(duration: 0.2), value: failureMessage != nil)
+        .animation(.easeOut(duration: 0.2), value: canCancel)
     }
 
-    // 计时只推进到「认证」一项激活（解析 / 建立安全连接 两项标完成是允许的近似），
-    // 认证完成与登录会话/子系统就绪一律等真实 `.connected`（事件驱动）。
-    private func pace() async {
-        let steps: [UInt64] = [520_000_000, 680_000_000]   // → 建立安全连接、→ 认证
-        for ns in steps {
-            try? await Task.sleep(nanoseconds: ns)
-            if Task.isCancelled || finishing || failureMessage != nil { return }
-            withAnimation(.easeOut(duration: 0.28)) { stageProgress = min(stageProgress + 1, 2) }
-        }
+    /// 提交成功。内容还没露面就直接进会话（`revealed` 之后不会再置真，成功态的停留不会再触发）。
+    private func commit() {
+        guard !finishing else { return }
+        finishing = true
+        if !revealed { onFinish() }
     }
 
     // MARK: 顶部 chip
@@ -268,7 +272,6 @@ struct ConnectingCoverView: View {
                 .padding(.top, 22)
             endpointLine.padding(.top, 6)
             statusLine.padding(.top, 6)
-            if !compact { stageCard.padding(.top, 26) }
         }
         .padding(.horizontal, 30)
     }
@@ -299,53 +302,6 @@ struct ConnectingCoverView: View {
             }
         }
         .font(M.sans(12.5))
-    }
-
-    private var stageCard: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(stages.enumerated()), id: \.offset) { i, st in
-                if i > 0 {
-                    MRowDivider(inset: 0)
-                }
-                ConnStageRow(label: st.label, detail: st.detail, state: stageState(i))
-            }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 6)
-        .frame(maxWidth: 320)
-        .background(M.card)
-        .clipShape(RoundedRectangle(cornerRadius: MRadius.list))
-    }
-
-    /// 4 个握手阶段（终端 / SFTP 仅末项文案不同）。
-    private var stages: [(label: String, detail: String)] {
-        if let remote = request.remote {
-            return [
-                ("连接 Mac", remote.macName),
-                ("建立加密通道", "x25519 · chacha20"),
-                ("验证设备", "已配对的长期密钥"),
-                ("接入终端", "按本机尺寸 · 画面同步"),
-            ]
-        }
-        let authDetail = host.authMethod == .privateKey ? "密钥" : "密码"
-        let last: (String, String) = isSftp
-            ? ("打开 SFTP 子系统", "sftp v3")
-            : ("启动登录会话", "\(host.username) · pty")
-        return [
-            ("解析主机地址", host.host),
-            ("建立安全连接", "SSH 密钥交换"),
-            ("认证身份", authDetail),
-            last,
-        ]
-    }
-
-    private func stageState(_ i: Int) -> ConnStageRow.StageState {
-        if success { return .done }
-        if failureMessage != nil {
-            if i < stageProgress { return .done }
-            return i == stageProgress ? .failed : .pending
-        }
-        if i < stageProgress { return .done }
-        return i == stageProgress ? .active : .pending
     }
 
     // MARK: 底部
@@ -432,55 +388,6 @@ private struct ConnRing: View {
             }
     }
 }
-
-// MARK: - 阶段行（设计稿 ConnStage）
-
-/// 一行握手阶段：状态标记 + 标签 + 右侧 mono 细节。本身不带动效（动的只有进度环）。
-private struct ConnStageRow: View {
-    enum StageState { case pending, active, done, failed }
-    let label: String
-    let detail: String
-    let state: StageState
-
-    @Environment(\.mAccent) private var accent
-
-    var body: some View {
-        HStack(spacing: 12) {
-            marker.frame(width: 18, height: 18)
-            Text(label)
-                .font(M.sans(14.5, weight: state == .active ? .semibold : .medium))
-                .foregroundStyle(labelColor)
-            Spacer(minLength: 6)
-            if state == .done, !detail.isEmpty {
-                Text(detail).font(M.mono(12)).foregroundStyle(M.text4).lineLimit(1)
-            }
-        }
-        .padding(.vertical, 10).padding(.horizontal, 2)
-    }
-
-    @ViewBuilder private var marker: some View {
-        switch state {
-        case .done:
-            MIcon(name: "check", size: 15, color: M.success, weight: .bold)
-        case .failed:
-            MIcon(name: "x", size: 14, color: M.danger, weight: .bold)
-        case .active:
-            Circle().fill(accent).frame(width: 8, height: 8)
-        case .pending:
-            Circle().fill(M.text4).frame(width: 6, height: 6).opacity(0.5)
-        }
-    }
-
-    private var labelColor: Color {
-        switch state {
-        case .pending: return M.text4
-        case .active: return M.text
-        case .done: return M.text2
-        case .failed: return M.danger
-        }
-    }
-}
-
 
 // MARK: - 中转页期间压住终端键盘
 

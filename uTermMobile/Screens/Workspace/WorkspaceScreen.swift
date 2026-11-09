@@ -467,7 +467,7 @@ struct WorkspaceScreen: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.22), value: cover?.id)
+        .animation(.easeOut(duration: 0.18), value: cover?.id)
     }
 
     @ViewBuilder
