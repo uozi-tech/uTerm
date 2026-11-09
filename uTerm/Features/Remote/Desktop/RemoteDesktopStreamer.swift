@@ -129,8 +129,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
 
     // 以下只在 link.queue 上。
     private var encoder: RemoteVideoEncoder?
-    /// 旁路精修的编码器（`sidecarRefine` 时才有）。
+    /// 旁路精修的编码器（`sidecarRefine` 时才有）：第一次精修时建，闲久了放掉。
     private var stillEncoder: RemoteVideoEncoder?
+    /// 排着的「放掉旁路精修编码器」。每次精修后重排。
+    private var stillEncoderRelease: DispatchWorkItem?
     private var pacer = RemoteDesktopPacer<RemoteCapturedFrame>()
     private var rate: RemoteRateController
     private var quality = RemoteQualityCap(now: DispatchTime.now().uptimeNanoseconds)
@@ -216,14 +218,10 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     func start() async throws {
         let encoder = try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: rate.bitrate,
                                              frameRate: rate.frameRate, tenBit: sidecarRefine, ltr: video != nil)
-        let stillEncoder = sidecarRefine
-            ? try RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 0, frameRate: rate.frameRate,
-                                     tenBit: true, purpose: .still)
-            : nil
+        // 旁路精修的编码器不在这里建：第一次精修时才建，闲 `stillEncoderIdleNanos` 就放掉（见 `stillEncoderForUse`）。
         // 异步挂上即可：`activate` 排在它后面，之前采到的帧只留着不编。
         link.queue.async {
             self.encoder = encoder
-            self.stillEncoder = stillEncoder
         }
         appliedRate = rate.bitrate
         encoderFrameRate = rate.frameRate
@@ -274,6 +272,8 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
             self.clipboardTimer = nil
             self.encoder = nil
             self.stillEncoder = nil
+            self.stillEncoderRelease?.cancel()
+            self.stillEncoderRelease = nil
             self.lastFrame = nil
             _ = self.pacer.takePending()
         }
@@ -585,7 +585,7 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
     /// 旁路精修：另一个会话把这张静止画面编成高画质关键帧。编好时画面若已经变了（手机上已是更新的
     /// 主流画面），就不发：发了会把旧画面盖回去。
     private func encodeStill(_ sequence: UInt32, _ frame: RemoteCapturedFrame) {
-        guard let stillEncoder else {
+        guard let stillEncoder = stillEncoderForUse() else {
             pacer.abandon(sequence)
             return
         }
@@ -605,6 +605,28 @@ nonisolated final class RemoteDesktopStreamer: @unchecked Sendable {
                           flags: [.keyframe, .refine, .sidecar], encodeNanos: encodeNanos)
             }
         }
+    }
+
+    /// 旁路精修的编码器多久没用就放掉。精修只在画面静止时来一次，一直开着的话这块会话（5K 下几十 MB 的
+    /// 表面与参考数据）大部分时间白占着（2026-11-09 mini：uTerm + VTEncoderXPCService 合计约 1 GB）。
+    static let stillEncoderIdleNanos: UInt64 = 30_000_000_000
+
+    /// 要精修了：没有编码器就现建一个（建不了就不精修），并把「闲久了放掉」往后推。
+    private func stillEncoderForUse() -> RemoteVideoEncoder? {
+        dispatchPrecondition(condition: .onQueue(link.queue))
+        guard sidecarRefine, !isStopped else { return nil }
+        if stillEncoder == nil {
+            stillEncoder = try? RemoteVideoEncoder(codec: codec, width: width, height: height, bitrate: 0,
+                                                   frameRate: rate.frameRate, tenBit: true, purpose: .still)
+        }
+        stillEncoderRelease?.cancel()
+        let release = DispatchWorkItem { [weak self] in
+            self?.stillEncoder = nil
+            self?.stillEncoderRelease = nil
+        }
+        stillEncoderRelease = release
+        link.queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.stillEncoderIdleNanos)), execute: release)
+        return stillEncoder
     }
 
     // MARK: - 编码与发送

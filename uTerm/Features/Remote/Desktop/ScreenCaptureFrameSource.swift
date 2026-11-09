@@ -90,8 +90,9 @@ nonisolated final class ScreenCaptureFrameSource: NSObject, RemoteDesktopFrameSo
         configuration.colorSpaceName = CGColorSpace.displayP3
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(frameRate))
         // 编码器里最多压着 2 帧、发送端再留 1 帧最新的、静止精修还要拿着最后 1 帧（要缩时还多拿 1 张原始
-        // 采集）：留足余量，否则表面池被占满时 SCK 会停住不出帧。
-        configuration.queueDepth = scaler != nil ? 7 : 6
+        // 采集）：再留 1 张余量，否则表面池被占满时 SCK 会停住不出帧。余量从 2 张减到 1 张：5K 虚拟屏上每张
+        // 采集表面约 30 MB（10-bit），mini 上 uTerm + WindowServer 的常驻内存因此少约 60 MB。
+        configuration.queueDepth = scaler != nil ? 6 : 5
         configuration.showsCursor = false
         configuration.scalesToFit = true
         configuration.capturesAudio = false

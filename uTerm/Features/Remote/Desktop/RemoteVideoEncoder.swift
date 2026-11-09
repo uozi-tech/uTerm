@@ -103,7 +103,10 @@ nonisolated final class RemoteVideoEncoder: @unchecked Sendable {
         }
         switch purpose {
         case .stream: setBitrate(bitrate)
-        case .still: set(kVTCompressionPropertyKey_Quality, Self.stillQuality as CFNumber)
+        case .still:
+            set(kVTCompressionPropertyKey_Quality, Self.stillQuality as CFNumber)
+            // 每帧都是关键帧：不留参考帧，会话占的显存 / 内存少一截（5K 虚拟屏上每张参考帧几十 MB）。
+            set(kVTCompressionPropertyKey_AllowTemporalCompression, kCFBooleanFalse)
         }
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
