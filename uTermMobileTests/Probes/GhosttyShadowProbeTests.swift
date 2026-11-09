@@ -25,8 +25,8 @@ final class GhosttyShadowProbeTests: XCTestCase {
     private final class Shadow {
         let handle: OpaquePointer
 
-        /// 回滚上限：字节按 GhosttyKit 的默认 `scrollback-limit`（10 MB）设。vt 默认不留历史，而且只设字节也不留——
-        /// 要同时设 `SCROLLBACK_MAX_LINES`（实测只设字节时 2 MB 喂完 totalRows 仍是 51）。
+        /// 回滚上限：字节按 GhosttyKit 的默认 `scrollback-limit`（10 MB）显式设。vt 自己的默认字节上限很小：
+        /// 只设 `SCROLLBACK_MAX_LINES = 10_000` 时实测只留下 1,075 行（约两页），两个都设才留满 10k 行。
         init(cols: UInt16, rows: UInt16, scrollbackLines: Int? = nil, scrollbackBytes: Int = 10_000_000) {
             var term: OpaquePointer?
             let result = ghostty_terminal_new(nil, &term, cols, rows)
@@ -73,7 +73,6 @@ final class GhosttyShadowProbeTests: XCTestCase {
         for (name, payload) in [("flood-2MB", flood), ("claude-history", history), ("claude-frames", frames)] {
             var rates: [Double] = []
             for _ in 0..<5 {
-                // 回滚要按行再设一次上限：只设字节时 vt 实测一行历史都不留（totalRows 恒为 51）。
                 let shadow = Shadow(cols: 58, rows: 51, scrollbackLines: 10_000)
                 let cpu0 = ThreadCPU.current()
                 for start in stride(from: 0, to: payload.count, by: 16 * 1024) {
@@ -81,7 +80,8 @@ final class GhosttyShadowProbeTests: XCTestCase {
                 }
                 let cpu = ThreadCPU.current() - cpu0
                 rates.append(Double(payload.count) / 1024 / 1024 / cpu)
-                XCTAssertGreaterThan(shadow.totalRows, 51)
+                // Claude 帧是原地重画（光标上移），不滚屏，只核另外两种语料进了回滚。
+                if name != "claude-frames" { XCTAssertGreaterThan(shadow.totalRows, 51) }
             }
             print(String(format: "MEASURE m3 parse %@ bytes=%d MB/s p50=%.0f min=%.0f max=%.0f",
                          name, payload.count, ProbeMetrics.percentile(rates, 0.5), rates.min() ?? 0, rates.max() ?? 0))
