@@ -403,8 +403,10 @@ struct RemoteDesktopContent: View {
     }
 
     /// 那台 Mac 停在锁屏：在这里输登录密码解锁（不保存）。解锁后那台 Mac 进入帘幕，锁屏状态由它推来，这层自然消失。
+    /// 只在画面正在传时显示：流断了 / 结束了，锁屏状态是断开前最后一次推来的旧值，再叠一层密码框会和「已结束」
+    /// 的提示、「重新连接」按钮压在一起（真机截图），而且这时输密码也送不过去。
     @ViewBuilder private var lockOverlay: some View {
-        if session.supportsUnlock, session.screen.locked {
+        if case .streaming = session.state, session.supportsUnlock, session.screen.locked {
             notice(spinner: unlocking, title: String(localized: "\(client.macName) 已锁定"), message: lockMessage) {
                 if session.screen.unlockAvailable, !unlocking {
                     HStack(spacing: 8) {

@@ -421,8 +421,9 @@ struct RemoteDesktopScreen: View {
 
     /// Mac 停在锁屏、且这台 Mac 支持远程解锁时盖在画面上：一个「解锁 Mac」入口。解锁成功后 Mac 进入帘幕，
     /// 锁屏状态由 Mac 推来的 `desktopScreenState` 翻转，这层自然消失。
+    /// 只在画面正在传时显示：流断了 / 结束了，锁屏状态是断开前的旧值，再叠一层会和「已结束」提示压在一起。
     @ViewBuilder private func lockOverlay(_ session: RemoteDesktopSession) -> some View {
-        if session.supportsUnlock, session.screen.locked {
+        if case .streaming = session.state, session.supportsUnlock, session.screen.locked {
             if session.screen.unlockAvailable, !lockOverlayDismissed {
                 let working = unlockPhase == .working
                 notice(spinner: working, title: "Mac 已锁定",
