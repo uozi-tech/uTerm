@@ -938,7 +938,7 @@
 				4742E918F5558B5571B78474 /* XCLocalSwiftPackageReference "vendor/tree-sitter-grammars" */,
 				4A55494345000000000000A0 /* XCLocalSwiftPackageReference "vendor/libjuice" */,
 				4B43500000000000000000A0 /* XCLocalSwiftPackageReference "vendor/kcp" */,
-				4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
+				4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85D6BEF02FBC4E7E00FC90D8 /* Products */;
@@ -1854,6 +1854,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/CodeEditTextView;
 		};
+		4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "vendor/libghostty-spm-local";
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -1959,14 +1963,6 @@
 			requirement = {
 				kind = revision;
 				revision = a0a00f817d02412bd92c54d316f164d827b57b5c;
-			};
-		};
-		4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Lakr233/libghostty-spm.git";
-			requirement = {
-				kind = exactVersion;
-				version = 2.2.2026110702;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -2169,12 +2165,12 @@
 		};
 		4748535400000000000000A1 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
 			productName = GhosttyTerminal;
 		};
 		4748535400000000000000A3 /* GhosttyKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 4748535400000000000000A0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			package = 4748535400000000000000A0 /* XCLocalSwiftPackageReference "vendor/libghostty-spm-local" */;
 			productName = GhosttyKit;
 		};
 /* End XCSwiftPackageProductDependency section */

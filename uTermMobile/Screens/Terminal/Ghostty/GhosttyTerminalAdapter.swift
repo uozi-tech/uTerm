@@ -140,8 +140,19 @@ final class GhosttyTerminalBridge {
             builder.withWindowPaddingX(0)
             builder.withWindowPaddingY(0)
             builder.withCustom("window-padding-color", "extend")
-            // 补丁 #1 的原生对应物：Ghostty 自带 minimum-contrast（同为 WCAG 比值）。
+            // 补丁 #1 的原生对应物：minimum-contrast（同为 WCAG 比值）。上游 Ghostty 判不过就直接换成黑 / 白；
+            // 我们的 GhosttyKit（补丁 0022）改成和 SwiftTerm 一样保色相、只调明度。
             builder.withMinimumContrast(Double(TerminalColorScheme.minimumContrastRatio))
+            // 以下三项对齐 SwiftTerm 的着色规则（M16 第二轮逐格对比查出来的）：
+            // - 256 色的 16–255 由 16 色 + 底色 / 前景按 CIELAB 生成，和 SwiftTerm 默认的 `.base16Lab` 是同一个算法
+            //  （同出 jake-stewart 的提案）；不开的话 Ghostty 用固定的 xterm 表，p10k 的 38;5;103 等全不一样，浅色下灰阶还是反的。
+            builder.withCustom("palette-generate", "true")
+            // - 粗体的 0–7 号色用亮色（SwiftTerm `useBrightColors`）。
+            builder.withCustom("bold-color", "bright")
+            // - dim 按 sRGB（伽马空间）和底色五五开混合，同 SwiftTerm / CoreGraphics；iOS 默认的 linear-corrected
+            //   在线性空间混合，dim 字会亮一截。
+            builder.withCustom("alpha-blending", "native")
+            builder.withCustom("faint-opacity", "0.5")
         }
     }
 
