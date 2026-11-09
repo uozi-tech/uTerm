@@ -424,7 +424,17 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         sampler.stop()
         let trace = UTermScrollTrace.drain()
         UTermScrollTrace.isEnabled = false
-        let sent = trace.filter { $0.kind == "momentum" || $0.kind == "drag" }.map { (time: $0.time, value: $0.value) }
+        // 惯性每一步按它算位置用的 targetTimestamp 归拍（回调偶尔晚到，按回调时刻归会错拍，上屏其实是准的）。
+        var lastTarget: Double?
+        var sent: [(time: Double, value: Double)] = []
+        for event in trace {
+            switch event.kind {
+            case "glide-target": lastTarget = event.value
+            case "momentum": sent.append((time: (lastTarget ?? event.time + 0.0001) - 0.0001, value: event.value))
+            case "drag": sent.append((time: event.time, value: event.value))
+            default: break
+            }
+        }
         let report = Self.analyze("\(label) v=\(Int(velocity)) output=\(output)", sampler: sampler, sentEvents: sent)
         // 惯性 link 算位置用的 targetTimestamp 和参考 link 的是不是同一个 vsync（不是的话就是两条 link 相位不齐）。
         let glideTargets = trace.filter { $0.kind == "glide-target" }.map(\.value)

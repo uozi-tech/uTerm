@@ -47,6 +47,9 @@ public enum UTermScrollTrace {
         return enabled ? CACurrentMediaTime() : 0
     }
 
+    /// 测试用 A/B 开关：true = 回到第五轮的行为（引擎 wakeup 也让协调器在主线程同步整帧重画）。默认 false。
+    nonisolated(unsafe) public static var legacyWakeupSyncDraw = false
+
     /// 取出并清空。
     public static func drain() -> [Event] {
         lock.lock(); defer { lock.unlock() }

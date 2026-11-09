@@ -157,7 +157,7 @@ final class TerminalSurfaceCoordinator {
 
     func requestImmediateTick(syncDraw: Bool = true) {
         pendingImmediateTick = true
-        if syncDraw { pendingSyncDraw = true }
+        if syncDraw || UTermScrollTrace.legacyWakeupSyncDraw { pendingSyncDraw = true }
         ensureDisplayLink()
     }
 

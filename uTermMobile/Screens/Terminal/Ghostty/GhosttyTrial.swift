@@ -17,6 +17,7 @@ enum GhosttyTrial {
         fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
 
     static func makeBridge() -> GhosttyTerminalBridge {
+        applyRendererMode()
         // 排查滚动手感时设 `defaults write com.uozi.uTerm debug.ghosttyInputLog -bool YES`（或 Xcode 里改）：打开 GhosttyKit 的
         // 输入日志（含本地补丁的 uterm-scroll 行），打到 stdout，`devicectl device process launch --console` 抓。平时关着，
         // 每个滚动事件在主线程上打一行也有开销。
@@ -25,6 +26,12 @@ enum GhosttyTrial {
             TerminalDebugLog.isEnabled = true
         }
         return GhosttyTerminalBridge(controller: controller)
+    }
+
+    /// M16 第七轮：user 说第六轮（引擎 wakeup 不再在主线程同步重画）滚动时变糊。测试里两种行为的画面都不撕裂、不混合、
+    /// 边缘一样锐，找不出差别，所以默认先回到第五轮的行为，留一个开关让 user 在同一台手机上来回比（全局生效，下一次 wakeup 起）。
+    static func applyRendererMode() {
+        UTermScrollTrace.legacyWakeupSyncDraw = !UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyFreeRenderer)
     }
 }
 
