@@ -82,8 +82,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
     }
 
     private func reachability(_ mac: RemoteMacDirectory.Mac) -> String {
-        let parts = [directory.isOnLocalNetwork(mac) ? "局域网" : nil, mac.isOnRelay ? "中继" : nil].compactMap { $0 }
-        return parts.isEmpty ? "不在线" : parts.joined(separator: " · ")
+        mac.reachabilityLabel(.routes, onLocalNetwork: directory.isOnLocalNetwork(mac))
     }
 
     @ViewBuilder private func selectionMark(_ selected: Bool) -> some View {
@@ -104,10 +103,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
 
     // MARK: - 运行
 
-    private var modes: [RemotePathProbeMode] {
-        let skipped = Set(skippedRaw.split(separator: ",").map(String.init))
-        return RemotePathProbeMode.allCases.filter { !skipped.contains($0.rawValue) }
-    }
+    private var modes: [RemotePathProbeMode] { RemotePathProbeMode.enabled(skipping: skippedRaw) }
 
     private var selectedMac: RemoteMacDirectory.Mac? {
         candidates.first { $0.id == selectedMacID }
@@ -138,10 +134,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
     private var resultsGroup: some View {
         let results = model.shown
         let summaries = model.summaries
-        let header = model.isRunning ? "正在检测" : model.current.isEmpty
-            ? "上次结果 · \(results.first?.date.formatted(date: .abbreviated, time: .shortened) ?? "")" : "检测结果"
-        let context = results.first.map { [$0.network, $0.note].filter { !$0.isEmpty }.joined(separator: " · ") }
-        return MInsetGroup(header: header, footer: context) {
+        return MInsetGroup(header: model.resultsTitle, footer: RemotePathMatrixLog.context(results)) {
             if !model.isRunning {
                 RemotePathVerdictRow(chosen: RemotePathVerdict.chosen(summaries, skipsLocalNetwork: directory.internetOnly),
                                      untested: model.untested,
@@ -157,10 +150,7 @@ struct RemoteNetworkDiagnosticsScreen: View {
 
     private func modeBinding(_ mode: RemotePathProbeMode) -> Binding<Bool> {
         Binding(get: { modes.contains(mode) }, set: { on in
-            var set = Set(modes)
-            if on { set.insert(mode) } else { set.remove(mode) }
-            skippedRaw = RemotePathProbeMode.allCases.filter { !set.contains($0) }.map(\.rawValue)
-                .joined(separator: ",")
+            skippedRaw = RemotePathProbeMode.skippedRaw(skippedRaw, setting: mode, enabled: on)
         })
     }
 
@@ -237,17 +227,10 @@ private struct RemotePathVerdictRow: View {
         .overlay(alignment: .bottom) { MRowDivider() }
     }
 
-    private var title: String {
-        guard let chosen else { return untested.isEmpty ? "现在无法连接这台 Mac" : "测试过的路径都不通" }
-        return "实际会走\(chosen.mode.label)"
-    }
+    private var title: String { RemotePathVerdict.title(chosen: chosen, untested: untested) }
 
     private var detail: String {
-        let notTested = untested.isEmpty ? "" : "这次未测试\(untested.map(\.label).joined(separator: "、"))（在「检测设置」中打开）。"
-        guard let chosen else { return "各路径的失败原因见下方。\(notTested)" }
-        let latency = chosen.medianRoundTripMillis.map { String(format: "往返约 %.0f ms", $0) } ?? "往返未测出"
-        let skip = skipsLocalNetwork ? "「只走公网」已打开，正式连接会跳过局域网。" : ""
-        return "连接按局域网 → 直连 → 中继的顺序选第一条可用的路径，\(latency)。\(skip)\(notTested)"
+        RemotePathVerdict.detail(chosen: chosen, untested: untested, skipsLocalNetwork: skipsLocalNetwork)
     }
 }
 
@@ -258,8 +241,11 @@ struct RemotePathSummaryRow: View {
     let last: Bool
 
     private var tone: Color {
-        if summary.successes == summary.attempts { return M.success }
-        return summary.successes == 0 ? M.danger : M.warning
+        switch summary.tone {
+        case .passed: M.success
+        case .partial: M.warning
+        case .failed: M.danger
+        }
     }
 
     private var failures: String {
@@ -316,7 +302,7 @@ struct RemotePathHistoryScreen: View {
                 ForEach(runs, id: \.first?.id) { run in
                     let summaries = RemotePathProbeSummary.summarize(run)
                     MInsetGroup(header: run.first?.date.formatted(date: .abbreviated, time: .shortened),
-                                footer: context(run)) {
+                                footer: RemotePathMatrixLog.context(run)) {
                         ForEach(summaries, id: \.mode) { summary in
                             RemotePathSummaryRow(summary: summary, results: run,
                                                  last: summary.mode == summaries.last?.mode)
@@ -351,14 +337,8 @@ struct RemotePathHistoryScreen: View {
         .onAppear { runs = RemotePathMatrixLog.runs(log.load()) }
     }
 
-    /// 网络与备注放脚注：区段标题会转大写，「Wi-Fi」会变成「WI-FI」。
-    private func context(_ run: [RemotePathProbeResult]) -> String? {
-        let parts = [run.first?.network ?? "", run.first?.note ?? ""].filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
     private func copyAll() {
-        UIPasteboard.general.string = RemotePathMatrixLog.exportText(runs.flatMap { $0 })
+        UIPasteboard.general.string = log.exportAllText()
         copied = true
         Task {
             try? await Task.sleep(for: .seconds(1.5))

@@ -38,11 +38,10 @@ final class RemoteTerminalPane: Identifiable {
         session.closeForDisposal()
     }
 
-    /// 标签上的名字：终端自己设的标题，否则那台 Mac 报的。
+    /// 标签上的名字：以那台 Mac 上这枚标签的名字为准（`RemoteSessionInfo.remoteTabTitle`，手机上同一规则）。
     func title(in sessions: [RemoteSessionInfo]) -> String {
-        session.shellTitle.map(TerminalArea.clippedTabTitle)
-            ?? sessions.first { $0.id == id }?.displayTitle
-            ?? String(localized: "终端")
+        RemoteSessionInfo.remoteTabTitle(sessions.first { $0.id == id }, shellTitle: session.shellTitle,
+                                         fallback: String(localized: "终端"))
     }
 }
 
@@ -58,14 +57,16 @@ final class RemoteMacWindowModel {
         allowsLastGroupEmpty: true,
         releasesHiddenEditorFocusOnTabSwitch: true,
         keepAlive: TerminalPaneAreaTuning.keepAlive))
-    /// 接管之后的对账；nil = 还没接管（没连上过）。
-    @ObservationIgnored private(set) var follower: RemoteSessionFollower?
-    /// 接管时那台 Mac 的列表还没到：等列表来了再决定要不要自动新建（`openFirstShellIfNone`）。
-    private var awaitingFirstList = false
+    /// 接管之后的对账（两端共用的 `RemoteTakeoverState`）；nil = 还没接管（没连上过）。
+    private(set) var takeover: RemoteTakeoverState?
+    /// 上次自己摆完标签时各组的顺序：下次对账前比一比，看用户有没有亲手拖过（`UPaneGroups` 没有拖动排序的回调）。
+    @ObservationIgnored private var lastLayout: [[UUID]] = []
     /// 正在自动新建第一个终端（防重入）。
     private var isOpeningFirstShell = false
     /// 刚连上、第一个标签还没就位：界面显示「正在打开终端」，不闪一下「没有打开的终端」的空态。
-    var isPreparingFirstShell: Bool { awaitingFirstList || isOpeningFirstShell }
+    var isPreparingFirstShell: Bool { takeover?.awaitingFirstList == true || isOpeningFirstShell }
+    /// 用户亲手排过这台 Mac 的标签：之后它推来的顺序不再覆盖，直到重新接管。
+    var isArrangedByHand: Bool { takeover?.arrangedByHand ?? false }
     private let startTerminal: @MainActor (RemoteTerminalPane) -> Void
 
     var panes: [RemoteTerminalPane] { groups.allTabs.map(\.payload) }
@@ -81,18 +82,15 @@ final class RemoteMacWindowModel {
     /// 连上了：接管它上面的全部终端，第一个放前台。重连后再调不重复开。
     /// 列表本来就按那台 Mac 上的标签顺序发来（老版本 Mac 是打开先后），照着开就是它的顺序。
     func takeOver() {
-        guard follower == nil else { return }
+        guard takeover == nil else { return }
         let ids = client.listedSessionIDs ?? client.sessions.map(\.id)
-        follower = RemoteSessionFollower(takingOver: ids)
+        takeover = RemoteTakeoverState(takingOver: ids, listReceived: client.listedSessionIDs != nil)
         for id in ids { open(id, activate: false) }
         if let first = ids.first, let at = groups.locateTab(first) {
             groups.activateTab(groupID: at.groupID, index: at.index)
         }
-        if client.listedSessionIDs != nil {
-            openFirstShellIfNone(ids)
-        } else {
-            awaitingFirstList = true
-        }
+        if client.listedSessionIDs != nil { openFirstShellIfNone(ids) }
+        recordLayout()
     }
 
     /// 打开窗口时那台 Mac 上一个终端都没有：直接新建一个，不让人对着空态再点一次「新建终端」。
@@ -111,17 +109,33 @@ final class RemoteMacWindowModel {
 
     /// 那台 Mac 的终端列表变了：新开的在后台加标签，关掉的摘标签，按它上面的顺序排（`order`，老版本 Mac 不发）。
     /// nil = 还没收到列表，什么也不动。
+    /// 用户在这扇窗口里亲手拖过这台 Mac 的标签之后，不再跟着它的顺序排（同手机，直到重新接管）。
     func follow(_ sessionIDs: [UUID]?, order: [UUID]? = nil) {
-        guard let sessionIDs, var follower else { return }
-        if awaitingFirstList {
-            awaitingFirstList = false
-            openFirstShellIfNone(sessionIDs)
-        }
-        let (gone, fresh) = follower.update(sessionIDs)
-        self.follower = follower
-        for id in gone { close(id) }
-        for id in fresh { open(id, activate: false) }
-        if let order { arrange(by: order) }
+        guard let sessionIDs else { return }
+        noticeHandReorder()
+        guard var takeover else { return }
+        let update = takeover.update(sessionIDs)
+        self.takeover = takeover
+        if update.firstListIsEmpty { openFirstShellIfNone(sessionIDs) }
+        for id in update.gone { close(id) }
+        for id in update.fresh { open(id, activate: false) }
+        if let order = takeover.arrangement(order) { arrange(by: order) }
+        recordLayout()
+    }
+
+    /// 各组标签的顺序。
+    private var layout: [[UUID]] {
+        groups.groupIDs.map { groups.groups[$0]?.tabs.map(\.id) ?? [] }
+    }
+
+    /// 我们自己挪完标签记一份布局；下次动之前比一比，组里的相对顺序变了就是用户拖过。
+    private func recordLayout() {
+        lastLayout = layout
+    }
+
+    private func noticeHandReorder() {
+        guard RemoteTabArrangement.reorderedByHand(from: lastLayout, to: layout) else { return }
+        takeover?.noteArrangedByHand()
     }
 
     /// 每个组各排各的，只在组里这些标签原来的位置之间换（`RemoteTabArrangement`）。各组的前台标签和活动组不变，
@@ -149,7 +163,9 @@ final class RemoteMacWindowModel {
     /// 在那台 Mac 上新开一个本机终端（它那边也会弹出窗口），开成前台标签。
     func openNewShell(directory: String? = nil) async throws {
         let id = try await client.openLocalShell(directory: directory)
+        noticeHandReorder()
         open(id, activate: true)
+        recordLayout()
     }
 
     /// 打开（或带到前台）一个终端的标签。已有标签且还接着就不重开；接入已结束的换一个新的。
@@ -194,6 +210,7 @@ final class RemoteMacWindowModel {
     func disposeAll() {
         for pane in panes { pane.dispose() }
         groups.reset()
-        follower = nil
+        takeover = nil
+        lastLayout = []
     }
 }

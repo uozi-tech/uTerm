@@ -52,11 +52,15 @@ enum MWorkTab: Identifiable {
         return nil
     }
 
-    /// 标签标题：远控终端跟 Mac 上那枚标签同名，其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
+    /// 标签标题：远控终端以 Mac 上那枚标签的名字为准（`RemoteSessionInfo.remoteTabTitle`，Mac 控 Mac 同一规则），
+    /// 其他终端优先用 shell 设置的标题（OSC 0/2），文件浏览用主机名。
     var title: String {
         switch self {
         case .terminal(let t):
-            if let title = t.remote?.macTabTitle { return title }
+            if let remote = t.remote {
+                return RemoteSessionInfo.remoteTabTitle(remote.sessionInfo, shellTitle: t.controller.shellTitle,
+                                                        fallback: hostName)
+            }
             return t.controller.shellTitle ?? hostName
         case .files: return hostName
         }
@@ -108,9 +112,8 @@ struct RemoteTabChanges {
 
 private struct RemoteFollow {
     let client: RemoteMacClient
-    var follower: RemoteSessionFollower
-    /// 用户在手机上拖动排过这台 Mac 的标签：之后 Mac 推来的顺序不再覆盖，直到重新接管。
-    var arrangedByHand = false
+    /// 列表对账与「用户亲手排过」（两端共用的 `RemoteTakeoverState`）。
+    var state: RemoteTakeoverState
 }
 
 /// 移动端工作区：全部会话标签（终端 / 文件）+ 至多两个分屏格 + 聚焦格。
@@ -197,7 +200,7 @@ final class MobileWorkspace {
     func takeOver(_ takeover: MRemoteTakeover) -> RemoteTabChanges {
         follows.removeAll { $0.client === takeover.client }
         follows.append(RemoteFollow(client: takeover.client,
-                                    follower: RemoteSessionFollower(takingOver: takeover.sessionIDs)))
+                                    state: RemoteTakeoverState(takingOver: takeover.sessionIDs)))
         let changes = openRemoteTabs(takeover.client, sessionIDs: takeover.sessionIDs, activate: true)
         arrangeRemoteTabs(of: takeover.client, order: takeover.order)
         if let front = existing(remote: MRemoteSource(client: takeover.client, sessionID: takeover.focus)) {
@@ -235,7 +238,8 @@ final class MobileWorkspace {
         guard let sessionIDs, let index = follows.firstIndex(where: { $0.client === client }) else {
             return RemoteTabChanges()
         }
-        let (gone, fresh) = follows[index].follower.update(sessionIDs)
+        let update = follows[index].state.update(sessionIDs)
+        let (gone, fresh) = (update.gone, update.fresh)
 
         var changes = RemoteTabChanges()
         for sessionID in gone {
@@ -255,7 +259,7 @@ final class MobileWorkspace {
     /// `order` 为 nil（老版本 Mac）时不动。
     /// 用户在手机上亲手排过这台 Mac 的标签（`noteArrangedByHand`）之后也不动，重新接管才恢复。
     func arrangeRemoteTabs(of client: RemoteMacClient, order: [UUID]?) {
-        guard let order, follows.first(where: { $0.client === client })?.arrangedByHand != true else { return }
+        guard let order = follows.first(where: { $0.client === client })?.state.arrangement(order) else { return }
         for index in panes.indices {
             let arranged = RemoteTabArrangement.arranged(panes[index].tabIDs, order: order) { id in
                 guard let remote = tab(id)?.terminal?.remote, remote.client === client else { return nil }
@@ -395,12 +399,12 @@ final class MobileWorkspace {
     func noteArrangedByHand(_ tabID: UUID) {
         guard let client = tab(tabID)?.terminal?.remote?.client,
               let index = follows.firstIndex(where: { $0.client === client }) else { return }
-        follows[index].arrangedByHand = true
+        follows[index].state.noteArrangedByHand()
     }
 
     /// 这台 Mac 的标签是否被用户亲手排过。
     func isArrangedByHand(_ client: RemoteMacClient) -> Bool {
-        follows.first { $0.client === client }?.arrangedByHand ?? false
+        follows.first { $0.client === client }?.state.arrangedByHand ?? false
     }
 
     /// 在所在格里把标签挪到第 `index` 位（拖动排序）。前台标签与聚焦格不变，越界时夹到两端。

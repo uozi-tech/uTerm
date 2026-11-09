@@ -106,9 +106,9 @@ struct RemoteMacSection: View {
         .buttonStyle(.borderless)
     }
 
+    /// 局域网里在就不写（最常见、不用提醒），否则写走哪条路（`RemoteMacDirectory.Mac.reachabilityLabel`）。
     private func rowValue(_ mac: RemoteMacDirectory.Mac) -> String? {
-        if !mac.isOnline { return "不在线" }
-        return mac.endpoint == nil ? "公网" : nil
+        mac.endpoint != nil ? nil : mac.reachabilityLabel(.path)
     }
 
     private func macRow(_ mac: RemoteMacDirectory.Mac, last: Bool) -> some View {
@@ -170,15 +170,12 @@ struct RemoteMacSheet: View {
 
     @ViewBuilder private var content: some View {
         switch client.state {
-        case .idle, .connecting:
+        case .idle, .connecting, .failed where client.isAutoRetrying:
             scrolling {
-                statusRow(icon: "refresh", text: "正在连接 \(client.macName)…",
-                          detail: client.connectStage?.progress)
+                statusRow(icon: "refresh", text: client.connectProgress?.title ?? "", detail: client.connectProgress?.detail)
             }
         case .awaitingApproval(let code):
             scrolling { pairing(code) }
-        case .failed(let message) where client.isAutoRetrying:
-            scrolling { statusRow(icon: "refresh", text: "连接失败，正在重试…", detail: message) }
         case .failed(let message):
             scrolling {
                 MInsetGroup(footer: client.failureContext) {
@@ -234,7 +231,7 @@ struct RemoteMacSheet: View {
     private func pairing(_ code: String) -> some View {
         VStack(spacing: 14) {
             Text("在 Mac 上确认配对").font(M.sans(18, weight: .bold)).foregroundStyle(M.text)
-            Text("\(code.prefix(3)) \(code.suffix(3))")
+            Text(RemotePairingCode.grouped(code))
                 .font(.system(size: 40, weight: .semibold, design: .monospaced))
                 .foregroundStyle(M.text)
             Text("Mac 上会弹出同样的 6 位数字。一致再点「允许」；不一致说明连接可能被截获，点「拒绝」。")
@@ -367,12 +364,11 @@ struct RemoteMacSheet: View {
     /// Mac 有最近的工作区就先问开在哪，没有就直接开。
     private func chooseWorkspace() async {
         openingShell = true
-        let workspaces = await client.localWorkspaces()
+        let plan = await client.newShellPlan()
         openingShell = false
-        if let workspaces, !workspaces.directories.isEmpty {
-            workspaceChoices = workspaces
-        } else {
-            await openLocalShell(directory: nil)
+        switch plan {
+        case .ask(let workspaces): workspaceChoices = workspaces
+        case .openDirectly: await openLocalShell(directory: nil)
         }
     }
 
@@ -405,24 +401,6 @@ extension RemoteMacClient {
             host.host = "本机"
         }
         return host
-    }
-}
-
-extension View {
-    /// 在 Mac 上新开终端前问开在哪。要挂在触发它的行上：宽屏下它是 popover，箭头指向所挂的视图。
-    func macWorkspaceDialog(_ choices: Binding<RemoteLocalWorkspaces?>,
-                            onPick: @escaping (_ directory: String?) -> Void) -> some View {
-        confirmationDialog("在哪个目录打开？",
-                           isPresented: Binding(get: { choices.wrappedValue != nil },
-                                                set: { if !$0 { choices.wrappedValue = nil } }),
-                           titleVisibility: .visible,
-                           presenting: choices.wrappedValue) { workspaces in
-            Button("主目录") { onPick(nil) }
-            ForEach(workspaces.directories, id: \.self) { directory in
-                Button(RemoteLocalWorkspaces.displayPath(directory, home: workspaces.home)) { onPick(directory) }
-            }
-            Button("取消", role: .cancel) {}
-        }
     }
 }
 
@@ -490,12 +468,13 @@ struct MacTerminalRows: View {
     private func chooseWorkspace(_ mac: RemoteMacDirectory.Mac) {
         openingMac = mac.id
         Task {
-            let workspaces = await directory.client(for: mac).localWorkspaces()
+            let plan = await directory.client(for: mac).newShellPlan()
             openingMac = nil
-            if let workspaces, !workspaces.directories.isEmpty {
+            switch plan {
+            case .ask(let workspaces):
                 choosingMac = mac.id
                 workspaceChoices = workspaces
-            } else {
+            case .openDirectly:
                 open(mac, directory: nil)
             }
         }

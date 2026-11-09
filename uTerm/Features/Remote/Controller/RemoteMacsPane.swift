@@ -176,10 +176,7 @@ struct RemoteMacsPane: View {
 
     /// 列表行与详情共用的一行状态：「在线 · 局域网」「在线 · 公网」「不在线」；没配对的是「局域网 · 未配对」。
     static func status(of mac: RemoteMacDirectory.Mac) -> String {
-        if mac.source == .nearby { return String(localized: "局域网 · 未配对") }
-        if mac.endpoint != nil { return String(localized: "在线 · 局域网") }
-        if mac.isOnRelay { return String(localized: "在线 · 公网") }
-        return String(localized: "不在线")
+        mac.reachabilityLabel(.status)
     }
 
     /// 状态点的颜色：在线绿、没配对强调色、不在线灰。
@@ -339,10 +336,7 @@ private struct RemoteMacDetailPanel: View {
 
     /// 连上了就是这条连接实际走的路；没连上时只知道目录看到的：局域网里在、中继上在，或都不在。
     private var pathText: String {
-        if let path = connectedClient?.path { return path.label }
-        if mac.endpoint != nil { return String(localized: "局域网") }
-        if mac.isOnRelay { return String(localized: "公网") }
-        return String(localized: "不在线")
+        connectedClient?.path?.label ?? mac.reachabilityLabel(.path)
     }
 
     /// 没连上是「—」；连上了、第一次 ping 还没回来（心跳第一拍约 2 秒）是「测量中…」。
@@ -471,10 +465,5 @@ private struct RemotePairingLinkSheet: View {
         }
     }
 
-    static func summary(_ invitation: RemotePairingInvitation) -> String {
-        guard let relay = invitation.relay else {
-            return String(localized: "将与「\(invitation.macName)」配对。这张邀请没带中继，只能在同一局域网里连接。")
-        }
-        return String(localized: "将与「\(invitation.macName)」配对，并经它的中继「\(relay.name)」在外网连接。")
-    }
+    static func summary(_ invitation: RemotePairingInvitation) -> String { invitation.summary }
 }

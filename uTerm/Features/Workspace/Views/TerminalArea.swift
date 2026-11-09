@@ -114,11 +114,8 @@ struct TerminalArea: View {
                                   help: status.map { "\($0.tabHelp)\n\(baseHelp)" } ?? baseHelp)
     }
 
-    /// 标签宽度随标题撑开、组件不截断，shell 标题又常带整条路径，这里先截短；全文在悬停提示里。
-    static func clippedTabTitle(_ title: String) -> String {
-        let limit = 28
-        return title.count > limit ? "\(title.prefix(limit - 1))…" : title
-    }
+    /// 见 `TerminalTitle.clippedForTab`（两端共用）。
+    static func clippedTabTitle(_ title: String) -> String { TerminalTitle.clippedForTab(title) }
 
     /// 标签条右侧的「＋新建终端」。⌘T 走 `uTermApp` 的 CommandGroup 单独注册
     /// （按在终端焦点区时也能触发），这里只是 UI 入口。

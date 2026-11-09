@@ -37,10 +37,5 @@ struct RemotePairingLinkHandler: ViewModifier {
             }
     }
 
-    private static func message(_ invitation: RemotePairingInvitation) -> String {
-        guard let relay = invitation.relay else {
-            return String(localized: "配对后，这台手机可以控制这台 Mac。只接受你信任的人发来的邀请。")
-        }
-        return String(localized: "配对后，这台手机可以控制这台 Mac，并经中继「\(relay.name)」在外网连接它。只接受你信任的人发来的邀请。")
-    }
+    private static func message(_ invitation: RemotePairingInvitation) -> String { invitation.summary }
 }
