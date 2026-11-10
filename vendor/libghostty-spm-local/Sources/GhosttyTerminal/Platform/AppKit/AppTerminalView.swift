@@ -24,6 +24,8 @@
         var pointer: PointerSelectionState = .init()
         var focusBridge: FocusBridgeState = .init()
         var drop: DropState = .init()
+        // uTerm 本地补丁：触控板平滑滚动的镜像与吸附（见 AppTerminalView+SmoothScroll.swift）。
+        var smoothScroll: SmoothScrollState = .init()
 
         open weak var delegate: (any TerminalSurfaceViewDelegate)? {
             get { core.delegate }

@@ -77,8 +77,12 @@ final class GhosttyTerminalBridge {
 
     // MARK: 字节入
 
+    /// 影子 SwiftTerm 收到过内容没有（输出泵喂过，或 `clearOutput` / held 回放直接写过）。
+    private var shadowHasContent = false
+
     /// 影子 SwiftTerm 刚喂完的一批字节。
     func didFeedShadow(_ bytes: ArraySlice<UInt8>) {
+        shadowHasContent = true
         if isLive {
             io.receive(Data(bytes))
         } else if surfaceAttached {
@@ -88,11 +92,23 @@ final class GhosttyTerminalBridge {
 
     /// 不经过输出泵、直接写进影子的字节（`clearOutput`、held 回放）之后调：重新对齐。
     func resync() {
+        shadowHasContent = true
+        realign()
+    }
+
+    private func realign() {
         isLive = false
         if surfaceAttached { seedIfPossible() }
     }
 
     private func seedIfPossible() {
+        // 影子还是空的（新开的标签，一个字节都没来过）：没有画面可对齐，直接开始转发。
+        // 这时拍快照会把影子的整屏空行写进去；surface 刚挂上时网格还没停稳（常常先报一个偏小的尺寸），
+        // 多出来的空行被挤进回滚，新标签往上滚就是一屏空白。
+        guard shadowHasContent else {
+            isLive = true
+            return
+        }
         guard let terminal = owner?.terminalView.getTerminal(), terminal.isAtSnapshotBoundary else { return }
         io.receive(Data(terminal.snapshotSequence(scrollbackLimit: terminal.options.scrollback)))
         seedCount += 1
@@ -101,7 +117,7 @@ final class GhosttyTerminalBridge {
 
     fileprivate func surfaceDidAttach() {
         surfaceAttached = true
-        resync()
+        realign()
     }
 
     fileprivate func surfaceDidDetach() {
@@ -124,13 +140,21 @@ final class GhosttyTerminalBridge {
 
     // MARK: 外观
 
+    // `GhosttyHostView` 每次 SwiftUI 更新都会调下面两个；值没变就不动，免得每次更新都整份重载配置。
+    private static var appliedDark: Bool?
+    private static var appliedSettings: TerminalSettings?
+
     /// app 外观变了：Ghostty 按 theme 里的深 / 浅两套切。
     static func applyAppearance(dark: Bool) {
+        guard appliedDark != dark else { return }
+        appliedDark = dark
         GhosttyTerminalConfig.controller.setColorScheme(dark ? .dark : .light)
     }
 
     /// 字体 / 光标 / 历史这类设置变了（整份配置重载，所有 Ghostty 窗格一起生效）。
     static func apply(settings: TerminalSettings) {
+        guard appliedSettings != settings else { return }
+        appliedSettings = settings
         GhosttyTerminalConfig.controller.setTerminalConfiguration(GhosttyTerminalConfig.base(settings: settings))
     }
 

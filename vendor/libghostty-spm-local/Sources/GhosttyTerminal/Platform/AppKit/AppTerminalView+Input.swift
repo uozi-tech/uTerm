@@ -251,15 +251,8 @@
         }
 
         override open func scrollWheel(with event: NSEvent) {
-            let scrollMods = TerminalScrollModifiers(
-                precision: event.hasPreciseScrollingDeltas,
-                momentum: TerminalScrollModifiers.momentumFrom(phase: event.momentumPhase),
-            )
-            surface?.sendMouseScroll(
-                x: event.scrollingDeltaX,
-                y: event.scrollingDeltaY,
-                mods: scrollMods.rawValue,
-            )
+            // uTerm 本地补丁：精确位移按屏幕倍率换成像素、停手后吸附整行（见 AppTerminalView+SmoothScroll.swift）。
+            handleScrollWheel(event)
         }
 
         private func showSelectionCopyMenu(with event: NSEvent) {
