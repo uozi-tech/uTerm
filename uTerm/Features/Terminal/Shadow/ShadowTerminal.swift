@@ -6,8 +6,8 @@ import GhosttyVt
 
 // 影子终端：libghostty-vt 的一个终端实例，和画面（GhosttyKit surface）吃同一份字节，同步解析、不经 ghostty 的 app mailbox。
 // 两端共享（迁移计划 docs/ghostty-migration-plan.md §2）：凡是要「读终端内部状态」的功能都找它——快照（远控镜像、holder
-// 检查点、surface 补齐 / 回前台回放）、读屏、光标与备用屏；OSC / 未知序列回调、kitty 键盘标志、整段回滚读文本是下一步
-// 往这个类型上加的（见类型末尾的「扩展位」）。只依赖 Foundation 与 GhosttyVt，不碰 UIKit / AppKit / GhosttyKit。
+// 检查点、surface 补齐 / 回前台回放）、读屏、光标与备用屏、OSC / 未知序列回调、kitty 键盘标志、整段回滚读文本
+// 都在这个类型上（事件见 `Event`，读屏见「读文字」，标记见 `Marker`）。只依赖 Foundation 与 GhosttyVt，不碰 UIKit / AppKit / GhosttyKit。
 //
 // vt 的 C API 是 Ghostty `042b16b6` 时的版本（1.0 之前）：选项一次性传结构体、没有读画笔的接口，不能照官方 vt-1.0.0 的
 // 文档写。头文件在 `build/ghostty-vt/ghostty-vt.xcframework/*/Headers/ghostty/vt/`。vt 必须和 GhosttyKit 是同一棵打过补丁的
@@ -22,8 +22,9 @@ import GhosttyVt
 /// - 读（`cursor`、`viewportText()`、`snapshot()`……）读到的是「已经喂完的那些字节」之后的状态，可以在主线程上读；
 ///   正在 `feed` 一大块时读的一方会等它喂完（解析约 500 MB/s，64 KiB 一片就是 0.1 ms 量级）。要喂大块又不想挡读的一方，
 ///   调用方自己切片。
-/// - 回调（应答、以后的 OSC 回调）是在 `feed` 里、拿着锁同步调用的，发生在喂字节的那条线程上：回调里**不要再调本终端的
-///   任何方法**（会死锁），要做事就把数据带走、换个地方做。
+/// - 回调（应答、`Event`）是在 `feed` 里、拿着锁同步调用的，发生在喂字节的那条线程上。锁可重入，回调里可以读本终端的
+///   状态（读到的是「解析到这个序列为止」的状态），但**不能再 `feed` / `resize` / `restore`**（vt 不允许在回调里改同一个终端）。
+///   要做重活就把数据带走、换个地方做。
 /// - `replay(fromSnapshot:)` 是静态的、只吃快照，不占任何影子的锁。
 nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 建终端时定下、之后不变的配置。回滚的两个上限没有默认值，调用方必须写出来。
@@ -65,8 +66,8 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         case format(Int32)
     }
 
-    private let lock = NSLock()
-    private let handle: OpaquePointer
+    private let lock = NSRecursiveLock()
+    private var handle: OpaquePointer
     private let options: Options
     private var cellWidth: UInt32 = 0
     private var cellHeight: UInt32 = 0
@@ -77,8 +78,15 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// `CSI ? 996 n` 的应答；nil = 不答。
     private var darkAppearance: Bool?
     private let versionReportBytes: [UInt8]
+    private var defaultColors: (fg: GhosttyColorRgb, bg: GhosttyColorRgb, cursor: GhosttyColorRgb?)?
     /// 累计喂进来的字节数。
     private var fedBytes = 0
+    /// 从快照还原过（`restore(snapshot:)` / `init(snapshot:options:)`）：没喂过字节也有内容。
+    private var wasRestored = false
+    /// 事件出口，见 `Event`。在 `feed` 里同步调用。
+    private var eventHandler: (@Sendable (Event) -> Void)?
+    /// 回放历史时关掉事件（里面的状态上报、通知、标记都是过去的事）。
+    private var eventsSuppressed = false
 
     /// 建一个 `cols` × `rows` 的终端。mode 2027（字素簇）默认开，见 `Options.graphemeClusters`。
     init(cols: UInt16, rows: UInt16, options: Options) {
@@ -222,13 +230,20 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         darkAppearance = dark
-        var fg = GhosttyColorRgb(r: foreground.0, g: foreground.1, b: foreground.2)
-        var bg = GhosttyColorRgb(r: background.0, g: background.1, b: background.2)
+        defaultColors = (GhosttyColorRgb(r: foreground.0, g: foreground.1, b: foreground.2),
+                         GhosttyColorRgb(r: background.0, g: background.1, b: background.2),
+                         cursor.map { GhosttyColorRgb(r: $0.0, g: $0.1, b: $0.2) })
+        applyDefaultColors()
+    }
+
+    /// 调用方持锁。
+    private func applyDefaultColors() {
+        guard let colors = defaultColors else { return }
+        var fg = colors.fg, bg = colors.bg
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg)
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg)
-        if let cursor {
-            var color = GhosttyColorRgb(r: cursor.0, g: cursor.1, b: cursor.2)
-            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &color)
+        if var cursor = colors.cursor {
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor)
         }
     }
 
@@ -238,8 +253,15 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             guard let userdata, let bytes, count > 0 else { return }
             let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
             // 在 `feed` 里同步回调，锁已经在手上。
+            let data = Data(bytes: bytes, count: count)
+            // OSC 7501 的查询只有 vt 会答（surface 的 termio 不实现它），所以这一条不看 `repliesEnabled`，
+            // 单独作为事件交给宿主：答不答由宿主定（回放、远控镜像不答）。
+            if data.starts(with: ShadowTerminal.programStatusReplyPrefix) {
+                shadow.emit(.programStatusQuery(reply: data))
+                return
+            }
             guard shadow.repliesEnabled, let handler = shadow.replyHandler else { return }
-            handler(Data(bytes: bytes, count: count))
+            handler(data)
         }
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(writePty, to: UnsafeRawPointer.self))
 
@@ -291,6 +313,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             }
             ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_XTVERSION, unsafeBitCast(version, to: UnsafeRawPointer.self))
         }
+        installEventCallbacks()
     }
 
     // MARK: 快照
@@ -322,20 +345,36 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         self.handle = handle
         self.options = options
         versionReportBytes = Array(options.versionReport.utf8)
+        wasRestored = true
         Self.applyLimits(to: handle, options: options)
         installEffects()
     }
 
-    // MARK: 扩展位（下一步往这里加，别另起一个类型）
-    //
-    // - OSC / 未知序列回调（7501 程序状态、133 提示符、6973 起止行、9 / 777 通知）：vt 的入口是
-    //   `GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS` / `_SEMANTIC_PROMPT` / `_UNKNOWN_SEQUENCE`（要同时设 `_UNKNOWN_MAX_BYTES`）/
-    //   `_DESKTOP_NOTIFICATION`，照 `installEffects()` 里的写法装：C 回调里用 userdata 取回 `self`，把参数拷成 Swift 值，
-    //   交给一个 `@Sendable` 的处理闭包。回调在 `feed` 里拿着锁同步来，见类型注释的线程模型。
-    // - kitty 键盘协议标志：`GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS`，加一个和 `cursor` 一样的只读属性。
-    // - 整段回滚读文本：`viewportLines` 的做法换成整屏选区（`GHOSTTY_POINT_TAG_SCREEN`），或者 formatter 不带选区直接出 PLAIN。
-    // - 从快照还原出来的终端（`init(snapshot:options:)`）不带应答 / 回调的处理闭包与默认颜色：它们是宿主的状态，不在快照里，
-    //   还原后重新装。
+    /// 就地换成快照里的那个终端：对象还是这一个（输出泵、事件处理闭包、应答出口、默认颜色都不用重接），里面的
+    /// 状态整个换掉。尺寸变成快照的尺寸，调用方接着按 surface 的网格 `resize`。之前发出去的 `Marker` 全部失效。
+    func restore(snapshot: Data) throws {
+        let restored = try Self.decode(snapshot, continuationBytes: options.continuationBytes)
+        lock.lock()
+        defer { lock.unlock() }
+        let old = handle
+        handle = restored
+        wasRestored = true
+        Self.applyLimits(to: handle, options: options)
+        if options.graphemeClusters {
+            var mode = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &mode)
+        }
+        installEffects()
+        applyDefaultColors()
+        ghostty_terminal_free(old)
+    }
+
+    /// 喂过字节或从快照还原过：有画面可回放。全新的终端是 false（surface 挂上时不必回放一屏空行）。
+    var hasContent: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return fedBytes > 0 || wasRestored
+    }
 
     /// 解码要显式开「保留续接字节」：这个版本默认不留，停在半个序列里的终端解出来之后再拍快照会失败（M5）。
     private static func decode(_ snapshot: Data, continuationBytes: Int) throws -> OpaquePointer {
@@ -640,6 +679,300 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         color(58, style.underline_color)
         text += "m"
         out.append(contentsOf: Array(text.utf8))
+    }
+
+    // MARK: 事件（OSC 回调）
+
+    /// 终端在解析中碰到的、宿主要处理的事。`feed` 里同步发出（见类型注释的线程模型）；事件带的都是拷出来的值。
+    nonisolated enum Event: Sendable {
+        /// OSC 7501 的一条状态上报（vt 已按规格校验、解好 base64）。RIS 也会来一条 `.clear(id: nil)`。
+        case programStatus(ProgramStatusMessage)
+        /// 程序用 `OSC 7501 ; ?` 问支不支持。`reply` 是 vt 拟好的应答（结束符和请求一致），宿主决定发不发。
+        case programStatusQuery(reply: Data)
+        /// 主屏上出现了新的 shell 提示符（OSC 133 A）。
+        case promptStarted
+        /// vt 不认识的 OSC：`payload` 是 `ESC ]` 和结束符之间的全部内容（含开头的编号，例如 `6973;S;1a2b`）。
+        /// `cursor` 标着这条序列到达时光标所在的位置。
+        case unknownOSC(payload: Data, cursor: Marker?)
+        /// 桌面通知（OSC 9 / 777）。OSC 9 没有标题，`title` 是空串；`9;4` 进度条不走这里。
+        case notification(title: String, body: String)
+        /// OSC 0 / 2 改了标题。
+        case titleChanged(String)
+        case bell
+    }
+
+    /// 事件出口。回放历史时用 `setEventsSuppressed(true)` 关掉。
+    func setEventHandler(_ handler: (@Sendable (Event) -> Void)?) {
+        lock.lock()
+        eventHandler = handler
+        lock.unlock()
+    }
+
+    func setEventsSuppressed(_ suppressed: Bool) {
+        lock.lock()
+        eventsSuppressed = suppressed
+        lock.unlock()
+    }
+
+    /// vt 对 `OSC 7501 ; ?` 的应答都以它开头。
+    fileprivate static let programStatusReplyPrefix = Data("\u{1B}]7501;?".utf8)
+    /// 未知 OSC 最多留多少字节（超出的那条带着截断标记，直接丢）。
+    private static let unknownSequenceBytes = 64 << 10
+
+    /// 调用方持锁（都在 `feed` 的回调里）。
+    fileprivate func emit(_ event: Event) {
+        guard !eventsSuppressed, let handler = eventHandler else { return }
+        handler(event)
+    }
+
+    private static func string(_ value: GhosttyString) -> String {
+        guard let pointer = value.ptr, value.len > 0 else { return "" }
+        return String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
+    }
+
+    private func installEventCallbacks() {
+        let programStatus: GhosttyTerminalProgramStatusFn = { _, userdata, report in
+            guard let userdata, let report = report?.pointee else { return }
+            let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
+            let id = ShadowTerminal.string(report.id)
+            let state: ProgramState
+            switch report.state {
+            case GHOSTTY_PROGRAM_STATUS_STATE_CLEAR:
+                shadow.emit(.programStatus(.clear(id: id.isEmpty ? nil : id)))
+                return
+            case GHOSTTY_PROGRAM_STATUS_STATE_IDLE: state = .idle
+            case GHOSTTY_PROGRAM_STATUS_STATE_WORKING: state = .working
+            case GHOSTTY_PROGRAM_STATUS_STATE_DONE: state = .done
+            case GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED: state = .blocked
+            case GHOSTTY_PROGRAM_STATUS_STATE_ERROR: state = .error
+            default: return
+            }
+            let kind: ProgramBlockKind?
+            switch report.kind {
+            case GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION: kind = .permission
+            case GHOSTTY_PROGRAM_STATUS_KIND_QUESTION: kind = .question
+            case GHOSTTY_PROGRAM_STATUS_KIND_AUTH: kind = .auth
+            default: kind = nil
+            }
+            func text(_ value: GhosttyString) -> String? {
+                let text = ShadowTerminal.string(value)
+                return text.isEmpty ? nil : text
+            }
+            shadow.emit(.programStatus(.report(id: id, record: ProgramStatusRecord(
+                state: state, kind: state == .blocked ? kind : nil,
+                progress: report.progress >= 0 ? Int(report.progress) : nil,
+                app: text(report.app), title: text(report.title), message: text(report.message)))))
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS, unsafeBitCast(programStatus, to: UnsafeRawPointer.self))
+
+        let prompt: GhosttyTerminalSemanticPromptFn = { terminal, userdata, event in
+            guard let terminal, let userdata, let event = event?.pointee,
+                  event.kind == GHOSTTY_SEMANTIC_PROMPT_PROMPT_START, !ShadowTerminal.isAlternate(terminal) else { return }
+            Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue().emit(.promptStarted)
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT, unsafeBitCast(prompt, to: UnsafeRawPointer.self))
+
+        let unknown: GhosttyTerminalUnknownSequenceFn = { terminal, userdata, sequence in
+            guard let terminal, let userdata, let sequence = sequence?.pointee,
+                  sequence.tag == GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_OSC else { return }
+            let osc = sequence.value.osc
+            guard !osc.truncated, let pointer = osc.content.ptr, osc.content.len > 0 else { return }
+            let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
+            guard !shadow.eventsSuppressed, shadow.eventHandler != nil else { return }
+            let payload = Data(bytes: pointer, count: osc.content.len)
+            shadow.emit(.unknownOSC(payload: payload, cursor: shadow.makeCursorMarker(terminal)))
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE, unsafeBitCast(unknown, to: UnsafeRawPointer.self))
+        var unknownBytes = Self.unknownSequenceBytes
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES, &unknownBytes)
+
+        let notification: GhosttyTerminalDesktopNotificationFn = { _, userdata, notification in
+            guard let userdata, let notification = notification?.pointee else { return }
+            Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue().emit(
+                .notification(title: ShadowTerminal.string(notification.title), body: ShadowTerminal.string(notification.body)))
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
+                             unsafeBitCast(notification, to: UnsafeRawPointer.self))
+
+        let title: GhosttyTerminalTitleChangedFn = { terminal, userdata in
+            guard let terminal, let userdata else { return }
+            Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue().emit(
+                .titleChanged(ShadowTerminal.string(terminal, GHOSTTY_TERMINAL_DATA_TITLE)))
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, unsafeBitCast(title, to: UnsafeRawPointer.self))
+
+        let bell: GhosttyTerminalBellFn = { _, userdata in
+            guard let userdata else { return }
+            Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue().emit(.bell)
+        }
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_BELL, unsafeBitCast(bell, to: UnsafeRawPointer.self))
+    }
+
+    // MARK: 标记
+
+    /// 屏幕上的一个位置，内容滚动、改尺寸重排时跟着走（vt 的 tracked grid ref）。所在的行被回滚上限裁掉、屏幕被
+    /// 整个清掉、或者终端被 `restore(snapshot:)` 换掉之后就失效了（读的时候按「从头开始、有截断」处理）。
+    nonisolated final class Marker: @unchecked Sendable {
+        fileprivate let ref: OpaquePointer
+        private let owner: ShadowTerminal
+        /// 打标记时光标在第几列。
+        let column: Int
+
+        fileprivate init(ref: OpaquePointer, owner: ShadowTerminal, column: Int) {
+            self.ref = ref
+            self.owner = owner
+            self.column = column
+        }
+
+        deinit {
+            // 释放要动终端里的跟踪表，和喂字节互斥。
+            owner.lock.lock()
+            ghostty_tracked_grid_ref_free(ref)
+            owner.lock.unlock()
+        }
+    }
+
+    /// 在光标处打一个标记。
+    func markCursor() -> Marker? {
+        lock.lock()
+        defer { lock.unlock() }
+        return makeCursorMarker(handle)
+    }
+
+    /// 调用方持锁。
+    private func makeCursorMarker(_ terminal: OpaquePointer) -> Marker? {
+        let at = Self.cursor(terminal)
+        var point = GhosttyPoint()
+        point.tag = GHOSTTY_POINT_TAG_ACTIVE
+        point.value.coordinate = GhosttyPointCoordinate(x: 0, y: UInt32(at.y))
+        var ref: OpaquePointer?
+        guard ghostty_terminal_grid_ref_track(terminal, point, &ref) == GHOSTTY_SUCCESS, let ref else { return nil }
+        return Marker(ref: ref, owner: self, column: Int(at.x))
+    }
+
+    /// 调用方持锁。标记所在的行在活动屏（含回滚）里是第几行；失效了返回 nil。
+    private func screenRow(of marker: Marker) -> Int? {
+        var coordinate = GhosttyPointCoordinate()
+        guard ghostty_tracked_grid_ref_point(marker.ref, GHOSTTY_POINT_TAG_SCREEN, &coordinate) == GHOSTTY_SUCCESS else { return nil }
+        return Int(coordinate.y)
+    }
+
+    // MARK: 读文字
+
+    /// kitty 键盘协议当前的标志位；0 = 程序没开。
+    var kittyKeyboardFlags: UInt8 {
+        lock.lock()
+        defer { lock.unlock() }
+        var flags: UInt8 = 0
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS, &flags)
+        return flags
+    }
+
+    /// DEC 私有模式开没开（`CSI ? n h`）。
+    func isModeSet(_ mode: UInt16) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return Self.modeOn(handle, mode)
+    }
+
+    /// 括号粘贴（mode 2004）。
+    var bracketedPasteMode: Bool { isModeSet(2004) }
+
+    /// 活动屏（含回滚）最后的 `count` 行：一行终端一段文字（软折行不并），行尾空白去掉，末尾的空行不算。
+    /// `truncated`：上面还有内容没给出。
+    func recentLines(_ count: Int) -> (lines: [String], truncated: Bool) {
+        guard count > 0 else { return ([], false) }
+        lock.lock()
+        defer { lock.unlock() }
+        var total = 0
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+        guard total > 0 else { return ([], false) }
+        // 末尾的空白可以不止一屏（`clear` 之后、全屏程序退出还原主屏之后），所以不够就把窗口往上放大再读。
+        var window = count + Int(Self.rows(handle))
+        while true {
+            let start = max(0, total - window)
+            let lines = Self.plainLines(handle, rows: start..<total, unwrap: false)
+            if lines.count >= count || start == 0 {
+                return (Array(lines.suffix(count)), start > 0 || lines.count > count)
+            }
+            window *= 4
+        }
+    }
+
+    /// 两个标记之间的文字：从 `start` 所在行，到 `end` 所在行（`end` 的列不在行首时含这一行；`end` 为 nil = 到光标）。
+    /// 软折行拼回一行。`truncated`：`start` 已经失效（被回滚上限裁掉了），从现存的第一行读起。在备用屏上读不到（空串）。
+    func text(from start: Marker, to end: Marker?) -> (text: String, truncated: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !Self.isAlternate(handle) else { return ("", false) }
+        var total = 0
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
+        let first = screenRow(of: start)
+        var last: Int
+        var column: Int
+        if let end {
+            guard let row = screenRow(of: end) else { return ("", first == nil) }
+            (last, column) = (row, end.column)
+        } else {
+            let at = Self.cursor(handle)
+            (last, column) = (total - Int(Self.rows(handle)) + Int(at.y), Int(at.x))
+        }
+        if column == 0 { last -= 1 }
+        let from = first ?? 0
+        guard last >= from, last < total else { return ("", first == nil) }
+        return (Self.plainLines(handle, rows: from..<(last + 1), unwrap: true).joined(separator: "\n"), first == nil)
+    }
+
+    /// 活动屏第 `rows` 行（从回滚顶算起）的纯文本，一行一段、行尾空白去掉、末尾的空行不给。调用方持锁。
+    private static func plainLines(_ terminal: OpaquePointer, rows: Range<Int>, unwrap: Bool) -> [String] {
+        let cols = cols(terminal)
+        guard cols > 0, !rows.isEmpty else { return [] }
+        func ref(x: UInt16, y: Int) -> GhosttyGridRef? {
+            var point = GhosttyPoint()
+            point.tag = GHOSTTY_POINT_TAG_SCREEN
+            point.value.coordinate = GhosttyPointCoordinate(x: x, y: UInt32(y))
+            var ref = GhosttyGridRef()
+            ref.size = MemoryLayout<GhosttyGridRef>.size
+            guard ghostty_terminal_grid_ref(terminal, point, &ref) == GHOSTTY_SUCCESS else { return nil }
+            return ref
+        }
+        guard let start = ref(x: 0, y: rows.lowerBound), let end = ref(x: cols - 1, y: rows.upperBound - 1) else { return [] }
+        var selection = GhosttySelection()
+        selection.size = MemoryLayout<GhosttySelection>.size
+        selection.start = start
+        selection.end = end
+        selection.rectangle = false
+        let text: String = withUnsafePointer(to: &selection) { selectionPointer in
+            var options = GhosttyFormatterTerminalOptions()
+            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
+            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+            options.unwrap = unwrap
+            options.trim = true
+            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
+            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
+            options.selection = selectionPointer
+            var formatter: OpaquePointer?
+            guard ghostty_formatter_terminal_new(nil, &formatter, terminal, options) == GHOSTTY_SUCCESS,
+                  let formatter else { return "" }
+            defer { ghostty_formatter_free(formatter) }
+            var pointer: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
+                  let pointer, length > 0 else { return "" }
+            defer { ghostty_free(nil, pointer, length) }
+            return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+        }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { trimmingTrailingWhitespace(String($0)) }
+        while let last = lines.last, last.isEmpty { lines.removeLast() }
+        return lines
+    }
+
+    /// 引擎自己报的版本串（`ghostty_build_info`）。这个版本的 vt 只报「0.1.0-dev」，区分不了补丁，
+    /// 所以判断两端是不是同一个引擎用 `TerminalEngineVersion.current`。
+    static var buildVersion: String {
+        var value = GhosttyString(ptr: nil, len: 0)
+        guard ghostty_build_info(GHOSTTY_BUILD_INFO_VERSION_STRING, &value) == GHOSTTY_SUCCESS else { return "" }
+        return string(value)
     }
 
     // MARK: 读终端的小工具（调用方持锁，或终端是自己独占的克隆）
