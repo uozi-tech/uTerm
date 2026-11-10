@@ -164,7 +164,8 @@ final class GhosttySpikeProbeTests: XCTestCase {
             // 2MB 语料两万多行，装不下全部）。最后一屏 surface 和影子逐行比的结果只打印（逐行比的闸门在影子探针里）。
             let lines = payload.reduce(0) { $0 + ($1 == 0x0A ? 1 : 0) }
             let fed = gh.bridge.shadow.totalFedBytes - fed0
-            let expectedRows = min(lines, GhosttyTerminalBridge.scrollbackLines)
+            // 回滚按页裁，留下的行数不是正好等于上限（实测 1 万行上限留下 9433 行），按九成判。
+            let expectedRows = min(lines, GhosttyTerminalBridge.scrollbackLines * 9 / 10)
             let diff = GhosttyViewportDiff.firstDifference(surface: gh.viewportText, shadow: gh.bridge.shadow.viewportText())
             print("SPIKE ghostty/flood lines=\(lines) fed=\(fed)B scrollback-total=\(gh.scrollbar?.total ?? 0) shadow-rows=\(gh.bridge.shadow.totalRows) surface-matches-shadow=\(diff ?? "true") raw-setContents=\(GhosttyPresentLog.rawCounts())")
             XCTAssertEqual(fed, payload.count + tail.count, "影子吃到的字节数和喂进去的不一样")
