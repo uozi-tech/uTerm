@@ -93,8 +93,8 @@ fetch_one() {
 
 	local src="$FROM/$zip"
 	[ -f "$src" ] || die "找不到 $src
-  清单要 $zip（sha256 $sha）。
-  把它放进 $FROM，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次。
+  清单要 ${zip}（sha256 ${sha}）。
+  把它放进 ${FROM}，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次。
   自己编见 vendor/libghostty-spm/BUILD.md。"
 	local actual
 	actual="$(sha256_of "$src")"
@@ -122,7 +122,7 @@ fetch_one() {
 	printf '%s\n' "$sha" > "$DEST/$dir.stamp"
 	rm -rf "$work"
 	trap - EXIT
-	echo "$dir ← $src（${sha:0:12}…）"
+	echo "$dir ← ${src}（${sha:0:12}…）"
 }
 
 # 不写成 `fetch_one … || …`：那样函数体里 set -e 失效，解包或改名中途失败会接着往下走、写出一个假的 stamp。
