@@ -44,6 +44,26 @@
                 core.freeSurface()
             }
 
+            /// 引擎最近一次报来的滚动条（总行数、视口首行、一屏行数）；没有 surface 或还没报过时 nil。
+            var uTermScrollbar: TerminalScrollbar? { core.bridge.scrollbar }
+
+            /// 清掉选区（程序清了屏、擦掉了选中的内容）：触摸选区（本包自己画的高亮）和 Ghostty 自己的选区（指针拖出来的）
+            /// 都算。`onlyIfBlank`：Ghostty 的选区只在里面只剩空白时清；触摸选区照它自己的规则当场复核一次（选中的
+            /// 文字变了就收起）。输入法正在组字时 Ghostty 的选区不动（清它的入口会连预编辑一起清掉）。
+            func uTermClearSelection(onlyIfBlank: Bool) {
+                if touchSelection.range != nil {
+                    if onlyIfBlank {
+                        touchSelection.lastValidation = 0
+                        refreshTouchSelection()
+                    } else {
+                        dismissTouchSelection(restoringViewport: false)
+                    }
+                }
+                guard let surface else { return }
+                if onlyIfBlank, !surface.selectionIsBlank() { return }
+                surface.clearSelectionWithoutInput(composing: inputHandler.hasMarkedText)
+            }
+
             /// 重新建 surface（视图在窗口里、有尺寸时当场建好，否则等下一次布局）。
             func uTermRestoreSurface() {
                 guard uTermSurfaceReleased else { return }

@@ -199,8 +199,10 @@ final class GhosttyBackgroundTests: XCTestCase {
         enterBackground(bridge)
         var restored = false
         defer { if !restored { enterForeground(bridge) } }
-        // 1 MB 洪流（每行以「说明 ok」结尾，折行位置随宽度变），再来一批把宽字符顶到每一个列位置上的行，最后一屏就是它们。
-        let flood = TerminalSpikeCorpus.flood(bytes: 1024 * 1024)
+        // 洪流（每行以「说明 ok」结尾，折行位置随宽度变），再来一批把宽字符顶到每一个列位置上的行，最后一屏就是它们。
+        // 洪流比补尾巴的上限（`TerminalOutputPump.tailLimit`）多一截：这条核的是整屏回放（软折行并回一行再由 surface 重排），
+        // 后台输出少的时候回前台走的是补尾巴，不回放（见 `GhosttySelectionViewportTests`）。
+        let flood = TerminalSpikeCorpus.flood(bytes: TerminalOutputPump.tailLimit + 512 * 1024)
         for start in stride(from: 0, to: flood.count, by: 16 * 1024) {
             backend.yield(flood.subdata(in: start..<min(flood.count, start + 16 * 1024)))
         }

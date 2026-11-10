@@ -181,6 +181,27 @@ public final class TerminalSurface {
         }
     }
 
+    /// uTerm 本地补丁：清掉 Ghostty 自己的选区。C 接口没有清选区的函数，binding action 里也没有；能清它的入口里
+    /// 唯一不往程序发东西、不碰鼠标状态的是 preedit：`preeditCallback` 收到非空的预编辑文字时按
+    /// `selection-clear-on-typing`（默认开）清选区，而零宽字符（U+200B）算不出格子，不会真的留下预编辑。
+    /// 副作用是同时清掉正在显示的预编辑，所以有输入法组字时（`composing`）不动。没有选区时什么都不做。
+    /// 返回清没清。引擎下次重编时可以换成正经的 C 接口（见 libghostty-spm 的 UTERM-PATCHES.md）。
+    @discardableResult
+    func clearSelectionWithoutInput(composing: Bool) -> Bool {
+        guard !composing, let s = surface, ghostty_surface_has_selection(s) else { return false }
+        let zeroWidth = "\u{200B}"
+        zeroWidth.withCString { cStr in
+            ghostty_surface_preedit(s, cStr, UInt(zeroWidth.utf8.count))
+        }
+        return !ghostty_surface_has_selection(s)
+    }
+
+    /// uTerm 本地补丁：Ghostty 自己的选区里只剩空白（选中的内容被擦掉了）。没有选区时 false。
+    func selectionIsBlank() -> Bool {
+        guard let s = surface, ghostty_surface_has_selection(s), let text = readSelection() else { return false }
+        return text.allSatisfy(\.isWhitespace)
+    }
+
     // MARK: - Actions
 
     /// Invoke a named Ghostty binding action.

@@ -39,6 +39,18 @@
             core.freeSurface()
         }
 
+        /// 引擎最近一次报来的滚动条（总行数、视口首行、一屏行数）；没有 surface 或还没报过时 nil。
+        var uTermScrollbar: TerminalScrollbar? { core.bridge.scrollbar }
+
+        /// 清掉选区（程序清了屏、擦掉了选中的内容）。`onlyIfBlank`：只在选区里只剩空白时清。输入法正在组字时不动
+        /// （清选区的入口会连预编辑一起清掉，见 `TerminalSurface.clearSelectionWithoutInput`）。返回清没清。
+        @discardableResult
+        func uTermClearSelection(onlyIfBlank: Bool) -> Bool {
+            guard let surface else { return false }
+            if onlyIfBlank, !surface.selectionIsBlank() { return false }
+            return surface.clearSelectionWithoutInput(composing: hasMarkedText())
+        }
+
         /// 重新建 surface（视图在窗口里、有尺寸时当场建好，否则等它回到窗口）。
         func uTermRestoreSurface() {
             guard uTermSurfaceReleased else { return }

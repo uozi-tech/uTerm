@@ -46,6 +46,8 @@ final class GhosttyTerminalBridge {
     private var releaseTask: Task<Void, Never>?
     /// 不在屏上多久放掉 surface（测试里改短）。
     var hiddenReleaseDelay: Duration = TerminalSurfaceRetention.hiddenReleaseDelay
+    /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
+    private(set) var keeper: TerminalSurfaceKeeper!
 
     /// `InMemoryTerminalSession` 的 write / resize 回调（任意线程）转到主线程上的 bridge。会话先建 IO、后建 bridge，
     /// 所以中间隔一个盒子。主队列是 FIFO，键入与应答的先后顺序不会乱。
@@ -100,6 +102,10 @@ final class GhosttyTerminalBridge {
             owner.sendHostBytes(Data([0x0D]))
             return true
         }
+        keeper = TerminalSurfaceKeeper(
+            pump: owner.outputPump, shadow: owner.shadow,
+            clearSelection: { [weak self] erase in self?.view.uTermClearSelection(onlyIfBlank: erase == .inPlace) },
+            scrollToRow: { [weak self] row in _ = self?.view.scrollToRow(UInt(row)) })
     }
 
     /// 键盘焦点在这个终端上、窗口是 key（`TerminalSession.isUserLooking` 再加上 app 在前台）。
@@ -200,14 +206,18 @@ final class GhosttyTerminalBridge {
         releaseTask = nil
         if onScreen {
             if view.uTermIsSurfaceReleased {
-                // 重建：建好后走 `surfaceDidAttach` → 网格到位 → 回放。
+                // 重建：建好后走 `surfaceDidAttach` → 网格到位 → 回放 → 由 `keeper` 找回切走前的视口。
                 view.uTermRestoreSurface()
             } else {
                 view.setSurfaceVisible(true)
+                // 期间没来过输出：surface 一直停在原处，不用追，记着的视口作废。
+                if owner?.outputPump.surfaceNeedsCatchUp == false { keeper.forget() }
             }
             syncSurfaceFeeding()
             return
         }
+        // 切走之前记下视口：之后要是只能整屏回放（surface 被放掉、期间输出太多），回来时找回这里。
+        rememberViewport()
         view.setSurfaceVisible(false)
         syncSurfaceFeeding()
         guard hasSurface else { return }
@@ -217,6 +227,14 @@ final class GhosttyTerminalBridge {
             guard !Task.isCancelled, let self, !self.isOnScreen else { return }
             self.view.uTermReleaseSurface()
         }
+    }
+
+    /// 按 surface 此刻的滚动条和视口文字记下视口位置（在底部就不记）。
+    private func rememberViewport() {
+        guard hasSurface, !view.uTermIsSurfaceReleased, let bar = view.uTermScrollbar,
+              let columns = io.surfaceGrid?.columns else { return }
+        keeper.remember(TerminalViewportMark.capture(offset: Int(bar.offset), rows: Int(bar.len), total: Int(bar.total),
+                                                     columns: Int(columns), viewportText: io.readViewportText()))
     }
 
     /// surface 被放掉了没有（测试用）。

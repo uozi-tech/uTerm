@@ -158,6 +158,28 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         return dropped
     }
 
+    /// uTerm 本地补丁：见 `InMemoryTerminalPendingOperations.removeAllWrites`。
+    func takePendingWrites() -> (data: Data, complete: Bool, dropped: Int) {
+        condition.lock()
+        let taken = operations.removeAllWrites()
+        pendingTrimOwed = false
+        let backlogChange = takeBacklogChange()
+        condition.unlock()
+        backlogChange?()
+        return taken
+    }
+
+    /// uTerm 本地补丁：排一个标记，轮到它时（之前排的输出都已交给 surface 解析完）在输出队列上调 `body`。
+    /// 没挂 surface 时和别的操作一样等下一个。
+    func enqueueMarker(_ body: @escaping @Sendable () -> Void) {
+        condition.lock()
+        operations.append(.marker(body))
+        if surface != nil {
+            scheduleDrain()
+        }
+        condition.unlock()
+    }
+
     /// Bytes received and not yet handed to a surface.
     var pendingByteCount: Int {
         condition.lock()
@@ -298,6 +320,8 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
             replay(surface, data)
         case let .processExit(exitCode, runtimeMilliseconds):
             processExit(surface, exitCode, runtimeMilliseconds)
+        case let .marker(body):
+            body()
         }
         return true
     }

@@ -54,6 +54,8 @@ final class GhosttyTerminalBridge {
     var hiddenReleaseDelay: Duration = GhosttyTerminalBridge.defaultHiddenReleaseDelay
     nonisolated static let defaultHiddenReleaseDelay: Duration = .seconds(60)
     private var releaseTask: Task<Void, Never>?
+    /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
+    private(set) var keeper: TerminalSurfaceKeeper!
     private let delegateProxy: SurfaceDelegate
     // nonisolated(unsafe)：只在主线程设，deinit 里读。
     private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
@@ -226,6 +228,10 @@ final class GhosttyTerminalBridge {
                 bridge.onEvent?(.titleChanged(bridge.shadow.title))
             }
         }
+        keeper = TerminalSurfaceKeeper(
+            pump: outputPump, shadow: shadow,
+            clearSelection: { [weak self] erase in self?.view.uTermClearSelection(onlyIfBlank: erase == .inPlace) },
+            scrollToRow: { [weak self] row in _ = self?.view.scrollToRow(UInt(row)) })
         // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后 `syncSurfaceFeeding` 开闸，回放接上。
         installLifecycleObservers()
         if UIApplication.shared.applicationState == .background { setAppInBackground(true) }
@@ -291,8 +297,20 @@ final class GhosttyTerminalBridge {
     func setAppInBackground(_ inBackground: Bool) {
         guard inBackground != isAppInBackground else { return }
         isAppInBackground = inBackground
-        if inBackground { syncShadowColors() }
+        if inBackground {
+            syncShadowColors()
+            // 停喂之前记下视口：回前台时要是只能整屏回放，按它找回原处（能补尾巴的话视口本来就在）。
+            rememberViewport()
+        }
         syncSurfaceFeeding()
+        if !inBackground, !outputPump.surfaceNeedsCatchUp { keeper.forget() }
+    }
+
+    /// 按 surface 此刻的滚动条和视口文字记下视口位置（在底部就不记）。
+    private func rememberViewport() {
+        guard view.surface != nil, let bar = view.uTermScrollbar, let columns = session.surfaceGrid?.columns else { return }
+        keeper.remember(TerminalViewportMark.capture(offset: Int(bar.offset), rows: Int(bar.len), total: Int(bar.total),
+                                                     columns: Int(columns), viewportText: session.readViewportText()))
     }
 
     /// 影子替 surface 答颜色查询要用当前配色（OSC 10 / 11、`CSI ? 996 n`）。
@@ -416,6 +434,8 @@ final class GhosttyTerminalBridge {
 
     private func releaseSurface() {
         guard !isOnScreen else { return }
+        // 放掉之前记下视口：重建后整屏回放（视口回到底部），按它找回原处。
+        rememberViewport()
         view.uTermReleaseSurface()
         view.alignConfiguredFontSize()
     }
