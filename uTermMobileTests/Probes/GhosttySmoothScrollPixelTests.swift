@@ -219,6 +219,7 @@ final class GhosttySmoothScrollPixelTests: XCTestCase {
     /// UIKit 自己的 display link，测试驱动不了也不归我们管。所以改在备用屏上量：less / vim 没抓鼠标时，位移由引擎换成
     /// 方向键发给程序，松手后按速度衰减（UIScrollView `.normal`，每毫秒 0.998，慢到 50 pt/s 停）。顺带核它滑多远。
     func testFlingMomentumRunsAtDisplayRate() async throws {
+        try skipUnlessHighRefreshDisplay()
         let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 600))
         defer { host.close() }
         try await host.waitUntilReady()

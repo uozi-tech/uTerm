@@ -131,6 +131,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
             return value
         }
         let clock = MainLoopClock()
+        let stalls = MainThreadStallSampler()
         let feeder = output ? Task { @MainActor in
             var n = 1
             while !Task.isCancelled {
@@ -145,9 +146,12 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         GhosttyPresentLog.reset()
         sampler.start()
         clock.start()
+        stalls.start()
+        let flingAt = CACurrentMediaTime()
         try await Task.sleep(for: .milliseconds(150))
         fling(CGFloat(velocityPx / scale))
         try await Task.sleep(for: .milliseconds(1900))
+        stalls.stop()
         clock.stop()
         sampler.stop()
         feeder?.cancel()
@@ -216,6 +220,10 @@ final class GhosttyFrameBudgetTests: XCTestCase {
                        f.commit, f.other, f.late ? " LATE" : "", f.skippedBefore ? " SKIP" : "")
             }.joined(separator: " | "))
         }
+        // 主线程一轮忙过 6 ms 的那几次当时在干什么（调用栈，叶子在前；Swift 符号没还原）。
+        for line in stalls.report(stalls.drain(), origin: flingAt) {
+            print("BUDGET-STALL \(label) v=\(Int(velocityPx)) output=\(output) \(line)")
+        }
         return moving
     }
 
@@ -244,6 +252,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     /// 单独窗口（和 user 手机同尺寸 440×956 pt），无 / 有 Claude 输出，6k / 12k / 20k px/s 各甩两次。
     func testFrameBudgetAtUserFlingSpeeds() async throws {
+        try skipUnlessHighRefreshDisplay()
         var all: [String: [Frame]] = [:]
         for output in [false, true] {
             let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 956))
@@ -273,6 +282,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     /// 整个工作区界面（SwiftUI 外壳、标签条、键盘条，输出走假 SSH 后端经控制器进 Ghostty）。
     func testFrameBudgetInWorkspace() async throws {
+        try skipUnlessHighRefreshDisplay()
         defer { MobileProbeWindow.closeAll() }
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
