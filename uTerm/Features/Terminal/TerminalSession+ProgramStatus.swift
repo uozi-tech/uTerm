@@ -1,49 +1,61 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
 import UDesignKit
 
 extension TerminalSession {
 
-    /// 注册程序状态与桌面通知的 OSC 处理器（`init` 里调）。状态的规则两端共用（`ProgramStatusTracker`），
-    /// 这里只管 Mac 的部分：用户有没有在看、系统通知。
-    func installProgramStatusHandlers() {
-        let terminal = terminalView.getTerminal()
-        ProgramStatusOSC.install(on: terminal, onMessage: { [weak self] message in
-            // 回放是重启前的事：不回答、不发通知。检查点里也没有状态，标签等程序下次上报。
-            // 远控镜像：那台 Mac 自己回答查询、经远控协议把状态推过来，这里再答一遍就成了程序收到的多余输入。
-            guard let self, !self.isReplayingHeldOutput, !(self.backend is RemoteTerminalBackend) else { return }
-            self.applyProgramStatus(message, isLooking: self.isUserLooking)
-        }, onPrompt: { [weak self] in
-            self?.programDidEnd()
-        })
-        // 下面两个编号 SwiftTerm 内置了处理，注册后要自己转回去。
-        terminal.registerOscHandler(code: 9) { [weak self] data in
-            MainActor.assumeIsolated {
-                guard let self, !self.terminalView.getTerminal().oscProgressReport(data) else { return }
-                self.postProgramNotification(TerminalAttention.osc9(data))
-            }
-        }
-        terminal.registerOscHandler(code: 777) { [weak self] data in
-            MainActor.assumeIsolated {
-                self?.postProgramNotification(TerminalAttention.osc777(data))
+    /// 接上影子终端的事件（`init` 里调）：程序状态、新提示符、桌面通知、标题、命令跟踪标记。状态的规则两端共用
+    /// （`ProgramStatusTracker`），这里只管 Mac 的部分：用户有没有在看、系统通知。
+    ///
+    /// 事件在喂字节的那条线程上、解析到那个序列时同步发出。在主线程上喂（测试、接回时的回放）就当场处理；
+    /// 否则排到主线程，先后顺序不变。
+    func installShadowEventHandler() {
+        shadow.setEventHandler { [weak self] event in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.handleShadowEvent(event) }
+            } else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.handleShadowEvent(event) } }
             }
         }
     }
 
+    private func handleShadowEvent(_ event: ShadowTerminal.Event) {
+        // 回放是重启前的事：不回答、不发通知、不认标记。检查点里也没有状态，标签等程序下次上报。
+        //（回放期间影子终端的事件本来就关着，这里再挡一次排在主线程队列里晚到的。）
+        guard !isReplayingHeldOutput else { return }
+        switch event {
+        case .programStatus(let message):
+            // 远控镜像：那台 Mac 自己解析状态、经远控协议推过来，这里不再解析一遍。
+            guard !(backend is RemoteTerminalBackend) else { return }
+            applyProgramStatus(message, isLooking: isUserLooking)
+        case .programStatusQuery:
+            // 远控镜像：那台 Mac 自己回答查询，这里再答一遍就成了程序收到的多余输入。
+            // 应答用 uTerm 自己那条最短的（`ProgramStatusTracker.queryReply`，缺省即全部支持），不用引擎拟的那条。
+            guard !(backend is RemoteTerminalBackend) else { return }
+            applyProgramStatus(.query, isLooking: isUserLooking)
+        case .promptStarted:
+            programDidEnd()
+        case .unknownOSC(let payload, let cursor):
+            handleUnknownOSC(payload, cursor: cursor)
+        case .notification(let title, let body):
+            postProgramNotification(TerminalAttention.notification(title: title, body: body))
+        case .titleChanged(let title):
+            receiveShellTitle(title)
+        case .bell:
+            break
+        }
+    }
+
     /// 用户此刻正看着这条会话：app 在前台、窗口是 key、键盘焦点在这个终端上。
-    /// `hasFocus` 在视图不在窗口里时也可能为真（切走的标签），所以要单独看 `window`。
     var isUserLooking: Bool {
         if let userLookingOverride { return userLookingOverride() }
-        if let ghostty { return NSApp.isActive && ghostty.isFocusedInWindow }
-        return NSApp.isActive && terminalView.window != nil && terminalView.hasFocus
+        return NSApp.isActive && ghostty.isFocusedInWindow
     }
 
     func applyProgramStatus(_ message: ProgramStatusMessage, isLooking: Bool) {
         if case .report = message { checkTrueColorIfNeeded() }
         switch programStatusTracker.receive(message, isLooking: isLooking) {
         case .none: break
-        // 应答走 sendHostBytes：Ghostty 模式下影子 SwiftTerm 发出的字节会被丢掉。
         case .reply: sendHostBytes(Data(ProgramStatusTracker.queryReply))
         case .attention(let record): attentionSink?(record.attention)
         }

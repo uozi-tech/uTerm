@@ -87,7 +87,6 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteDebugEndpoint, "RemoteDebugEndpoint"),
         (DefaultsKey.remoteDebugPathMatrix, "RemoteDebugPathMatrix"),
         (DefaultsKey.debugLayoutDiagnostics, "debug.layoutDiagnostics"),
-        (DefaultsKey.terminalGhosttyRenderer, "debug.terminalGhosttyRenderer"),
         (DefaultsKey.debugGhosttyTrial, "debug.ghosttyTrial"),
         (DefaultsKey.debugGhosttyInputLog, "debug.ghosttyInputLog"),
         (DefaultsKey.debugGhosttyFreeRenderer, "debug.ghosttyFreeRenderer"),

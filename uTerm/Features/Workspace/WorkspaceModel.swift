@@ -357,7 +357,7 @@ final class WorkspaceModel {
     func revealTerminal(paneID: UUID) -> Bool {
         guard let tab = terminalGroups.allTabs.first(where: { $0.payload.id == paneID }),
               let at = terminalGroups.locateTab(tab.id) else { return false }
-        let window = terminalGroups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        let window = terminalGroups.allTabs.lazy.compactMap { $0.payload.session.ghostty.view.window }.first
         terminalGroups.activateTab(groupID: at.groupID, index: at.index)
         window?.bringToFront()
         return true

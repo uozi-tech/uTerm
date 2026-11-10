@@ -131,8 +131,6 @@ nonisolated enum DefaultsKey {
     /// iOS 调试：启动即对第一台在中继上的 Mac 跑 N 轮链路矩阵，结果打到标准输出。
     static let remoteDebugPathMatrix = "RemoteDebugPathMatrix"
     static let debugLayoutDiagnostics = "debug.layoutDiagnostics"
-    /// macOS 试验：终端窗格改用 GhosttyKit（libghostty）渲染，默认关。见 `docs/ghostty-eval/macos-spike.md`。
-    static let terminalGhosttyRenderer = "debug.terminalGhosttyRenderer"
     /// iOS Debug 构建、Ghostty 评估分支临时：新开的终端标签改用 GhosttyKit（设置 › 诊断 › 调试）。不进 main。
     static let debugGhosttyTrial = "debug.ghosttyTrial"
     /// 同上，排查试用版滚动手感时打开 GhosttyKit 的输入日志（`defaults write` 手动设）。

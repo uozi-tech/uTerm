@@ -10,20 +10,11 @@ nonisolated struct TerminalAttention: Equatable, Sendable {
 
     private static let maxTextLength = 256
 
-    /// `OSC 9 ; 正文`（iTerm2 通知）。`9;4` 是进度，由 SwiftTerm 处理；`数字;` 开头的其余
-    /// 形式是 ConEmu 的扩展指令，不是给人看的正文。
-    static func osc9(_ data: ArraySlice<UInt8>) -> TerminalAttention? {
-        let text = String(decoding: data, as: UTF8.self)
-        guard text.firstMatch(of: /^\d+;/) == nil else { return nil }
-        return make(title: "", body: text)
-    }
-
-    /// `OSC 777 ; notify ; 标题 ; 正文`（Ghostty、urxvt）。
-    static func osc777(_ data: ArraySlice<UInt8>) -> TerminalAttention? {
-        let parts = String(decoding: data, as: UTF8.self)
-            .split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "notify" else { return nil }
-        return make(title: String(parts[1]), body: String(parts[2]))
+    /// 影子终端解析好的桌面通知：`OSC 9 ; 正文`（iTerm2，没有标题）或 `OSC 777 ; notify ; 标题 ; 正文`（Ghostty、urxvt）。
+    /// `9;4` 进度条引擎单独处理、不会到这里；没有标题而正文以「数字;」开头的是 ConEmu 的其它扩展指令，不是给人看的正文。
+    static func notification(title: String, body: String) -> TerminalAttention? {
+        if title.isEmpty, body.firstMatch(of: /^\d+;/) != nil { return nil }
+        return make(title: title, body: body)
     }
 
     private static func make(title: String, body: String) -> TerminalAttention? {

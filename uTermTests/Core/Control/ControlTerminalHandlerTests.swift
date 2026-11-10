@@ -98,7 +98,7 @@ final class ControlTerminalHandlerTests: XCTestCase {
 
     /// 往离屏 `TerminalView` 里喂 VT 字节（走 SwiftTerm 的解析器，不经后端泵）。
     private func feed(_ session: TerminalSession, _ text: String) {
-        session.terminalView.feed(byteArray: ArraySlice(Array(text.utf8)))
+        session.feedOutput(text: text)
     }
 
     // MARK: terminals

@@ -10,7 +10,7 @@ import XCTest
 final class TerminalShellTitleTests: XCTestCase {
 
     private func feed(_ session: TerminalSession, _ text: String) {
-        session.terminalView.feed(text: text)
+        session.feedOutput(text: text)
     }
 
     func testOSCSequencesSetShellTitle() {

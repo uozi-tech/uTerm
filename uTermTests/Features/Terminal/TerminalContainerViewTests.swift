@@ -239,7 +239,7 @@ final class TerminalContainerViewTests: XCTestCase {
         // 全屏程序的一帧，光标在屏幕下方：这种屏幕缩矮再拉高后内容会整体上移。
         let terminal = session.terminalView.getTerminal()
         let rows = (1...terminal.rows).map { "\u{1b}[\($0);1Hrow \($0)" }.joined()
-        session.terminalView.feed(text: "\u{1b}[?1049h" + rows)
+        session.feedOutput(text: "\u{1b}[?1049h" + rows)
         let before = terminal.snapshotFingerprint(historyLines: 100)
         let forwardedBefore = await forwarded(backend)
 

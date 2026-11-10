@@ -311,7 +311,7 @@ final class GhosttyMeasureTests: XCTestCase {
             b.onWrite = { _ in backendTime.setIfEmpty(CACurrentMediaTime()) }
             backend = b
             if isGhostty {
-                let bridge = s.enableGhostty()
+                let bridge = s.ghostty
                 let container = GhosttyContainerView(surface: bridge.view)
                 container.isActive = true
                 window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
@@ -834,7 +834,7 @@ final class GhosttyMeasureTests: XCTestCase {
         settings.copyOnSelect = false
         if isGhostty {
             GhosttyTerminalBridge.apply(settings: settings)
-            let b = session.enableGhostty()
+            let b = session.ghostty
             bridge = b
             let container = GhosttyContainerView(surface: b.view)
             container.isActive = true

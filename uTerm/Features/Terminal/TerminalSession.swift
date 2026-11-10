@@ -85,9 +85,12 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 在 Mac 上断开远端接管（窗格指示条上的「断开」）。由远控连接在接入时装上。
     @ObservationIgnored var remoteDisconnect: (@MainActor () -> Void)?
 
-    /// 试验开关 `DefaultsKey.terminalGhosttyRenderer` 打开时，窗格改由 Ghostty 渲染，`terminalView` 退成影子
-    /// （见 `GhosttyTerminalBridge`）。nil = 照常用 SwiftTerm。
-    @ObservationIgnored var ghostty: GhosttyTerminalBridge?
+    /// 画面：Ghostty 的视图与它的 host-managed IO（见 `GhosttyTerminalBridge`）。
+    @ObservationIgnored private(set) lazy var ghostty = GhosttyTerminalBridge(owner: self)
+
+    /// 影子终端（libghostty-vt）：和画面吃同一份字节，uTerm 要读的终端状态都从它读——程序状态、通知、命令跟踪标记、
+    /// 读屏、是否在备用屏、光标、kitty 键盘标志。尺寸跟着 Ghostty 报来的网格走。
+    @ObservationIgnored let shadow: ShadowTerminal
 
     override init() {
         // Give SwiftTerm a non-trivial initial frame so its first `setFrameSize`
@@ -103,24 +106,25 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         view.preservesSelectionDuringOutput = true
         self.terminalView = view
         self.mirrorTap = TerminalMirrorTap { [unowned view] in view.getTerminal() }
+        // 回滚上限和 surface 用同一个函数算（`GhosttyTerminalConfig.base`）。初始尺寸就是还没量到网格时报给后端的那个。
+        self.shadow = ShadowTerminal(cols: 120, rows: 30,
+                                     options: TerminalScrollbackLimits(lines: TerminalSettings.read().scrollback).shadowOptions)
         super.init()
+        _ = ghostty
+        installShadowEventHandler()
         outputPump.terminalView = view
         outputPump.onFed = { [weak self] bytes in
             guard let self else { return }
             // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
             self.mirrorTap.didFeed(bytes)
             self.heldCheckpoints?.noteFed(bytes.count)
-            self.ghostty?.didFeedShadow(bytes)
+            // 先影子（同步解析，事件随之到达）后画面：画面挂上时要按影子的状态对齐。
+            self.shadow.feed(Data(bytes))
+            self.ghostty.didFeedShadow(bytes)
             self.repositionPinnedGridIfCursorMoved()
         }
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
-        terminalView.menu = Self.makeContextMenu(for: terminalView)
-        installTrackedRunMarkers()
-        installProgramStatusHandlers()
-        view.onFocusGained = { [weak self] in self?.acknowledgeProgramStatus() }
-        view.onPasteImage = { [weak self] in self?.pasteImage($0) ?? false }
-        view.onControlVImage = { [weak self] in self?.handleControlVImage($0) ?? false }
         attentionSink = { [weak self] attention in
             guard let self else { return }
             TerminalAttentionCenter.shared.post(attention, from: self)
@@ -162,11 +166,20 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         resetFeedAndResizeState()
         terminalView.terminalDelegate = nil
         backend = nil
-        disableGhostty()
+        shadow.setEventHandler(nil)
+        ghostty.dispose()
     }
 
+    /// 起后端时用的行列数：Ghostty 报过网格就用它，还没报过（视图没进过窗口）用影子终端的初始尺寸。
     var currentProcessSize: (cols: UInt16, rows: UInt16) {
         inputChannel.latestSize ?? (cols: 120, rows: 30)
+    }
+
+    /// 后端来了一批输出（测试直接喂字节用；正式路径由输出泵按节拍调同一条链）。
+    func receiveOutputForTesting(_ data: Data) {
+        let bytes = ArraySlice([UInt8](data))
+        terminalView.feed(byteArray: bytes)
+        outputPump.onFed?(bytes)
     }
 
     /// 用给定后端建立连接：connect() 成功则绑定并开始泵送输出，
@@ -202,7 +215,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         if let held = backend as? any HeldTerminalBackend {
             guard await restoreHeldScreen(from: held, generation: myGen),
                   feedGeneration == myGen, self.backend === backend else { return }
-            ghostty?.resync()
+            ghostty.resync()
         }
         connectionState = .connected
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
@@ -232,16 +245,11 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     }
 
     func refreshTerminalSizeSoon() {
-        terminalView.needsLayout = true
-        terminalView.layoutSubtreeIfNeeded()
         inputChannel.sendLatestSizeNow()
 
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
-            guard let self else { return }
-            self.terminalView.needsLayout = true
-            self.terminalView.layoutSubtreeIfNeeded()
-            self.inputChannel.sendLatestSizeNow()
+            self?.inputChannel.sendLatestSizeNow()
         }
     }
 
@@ -251,10 +259,11 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         outputBuffer.clear()
         let bytes = Array("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8)
         terminalView.feed(byteArray: ArraySlice(bytes))
+        shadow.feed(Data(bytes))
         // 这几个字节不走输出流，镜像那边改发一份快照对齐。
         mirrorTap.invalidateAll()
         heldCheckpoints?.noteScreenChanged()
-        ghostty?.resync()
+        ghostty.resync()
     }
 
     func detach() {
@@ -286,8 +295,6 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         exitObserverTask = nil
         heldCheckpoints?.cancel()
         heldCheckpoints = nil
-        // 换了一条连接，上一个程序设的光标不该留下来：下次 SwiftUI 更新时重装。
-        (terminalView as? CopyableTerminalView)?.appliedLook = nil
     }
 }
 
@@ -303,103 +310,24 @@ extension TerminalSession {
 
     /// 抓「最近 `lines` 行」的**快照**（不是流）：既含当前可见屏幕，也兜住刚滚走的输出。
     ///
-    /// 必须在 MainActor 上跑（`terminalView` 是 NSView，缓冲区随渲染线程更新）——
-    /// 类型本身 `@MainActor`，由编译器保证。
-    ///
-    /// - Note: SwiftTerm 只把 `getScrollInvariantLine(row:)`（越界回 nil）、
-    ///   `buffer.totalLinesTrimmed`、`getTopVisibleRow()`、`rows` 开放出来；
-    ///   `buffer.lines` 与 `buffer.linesTop` 都是 **internal**，包外拿不到「缓冲区共几行」。
-    ///   所以末行靠越界二分反推（见 `scrollInvariantEndRow`）。**不要**为此去改
-    ///   `vendor/SwiftTerm` —— 那是带补丁清单的 vendored 副本，补丁越少越好。
+    /// 读的是影子终端的活动屏（含回滚）的末尾，不是用户滚到的位置：用户往上滚过之后，要的仍然是「最近的输出」。
+    /// 末尾的空行先跳过再往上取（`clear` 之后、全屏程序退出还原主屏之后，末尾可以挂着几百行空行），一行终端一段文字。
     func snapshotScreen(
         lines: Int = ControlProtocol.defaultScreenLines,
         maxBytes: Int = ControlProtocol.maxScreenBytes
     ) -> TerminalScreenReader.Result {
-        guard lines > 0, let terminal = terminalView.terminal else {
-            return TerminalScreenReader.Result(lines: [], truncated: false)
-        }
-        let top = terminal.buffer.totalLinesTrimmed  // == buffer.linesTop
-        let end = scrollInvariantEndRow(terminal)    // 排他上界
-        guard end > top else { return TerminalScreenReader.Result(lines: [], truncated: false) }
-
-        // **先向前跳过尾部空行，再往上取 `lines` 行。**
-        //
-        // 不要退回「多取一屏」（`end - (lines + rows)`）那种写法：空白尾巴不止一屏 ——
-        // `clear` 之后、TUI（vim / less）退出还原主屏之后、或者刚 `Ctrl-L` 过，缓冲区
-        // 末尾可以挂着几百行空行。而 `TerminalScreenReader.trim` 会把**全部**尾随空行
-        // 去掉，于是多取的那一屏被裁光，读屏返回空 —— 屏幕上明明有内容。
-        var lastNonEmpty = end - 1
-        while lastNonEmpty >= top, isBlankRow(terminal, lastNonEmpty) { lastNonEmpty -= 1 }
-        guard lastNonEmpty >= top else {
-            return TerminalScreenReader.Result(lines: [], truncated: false)
-        }
-
-        let start = max(top, lastNonEmpty + 1 - lines)
-        var raw: [String] = []
-        raw.reserveCapacity(lastNonEmpty - start + 1)
-        for row in start...lastNonEmpty {
-            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            raw.append(line.translateToString(trimRight: true))
-        }
-
-        var result = TerminalScreenReader.trim(lines: raw, maxLines: lines, maxBytes: maxBytes)
+        guard lines > 0 else { return TerminalScreenReader.Result(lines: [], truncated: false) }
+        let recent = shadow.recentLines(lines)
+        var result = TerminalScreenReader.trim(lines: recent.lines, maxLines: lines, maxBytes: maxBytes)
         // 起点被 `lines` 卡住 → 上面还有历史没读出来，如实标截断。
-        if start > top { result.truncated = true }
+        if recent.truncated { result.truncated = true }
         return result
-    }
-
-    /// 这一行在 `TerminalScreenReader.trim` 眼里算不算空行。
-    ///
-    /// 判定必须与 `trim` **逐字一致**（它按 `String.isEmpty` 去尾），否则要么跳不干净
-    /// （读屏又被 trim 掏空），要么跳过头（把有内容的行当空的丢掉）。所以最终裁决权
-    /// 交给和取行时同一个 `translateToString(trimRight:)`；`getTrimmedLength() == 0`
-    /// 只是它的快速路径 —— 整行都是空 cell（`code == 0`）时不必分配字符串。
-    ///
-    /// 注意 `trimRight` 只去空 cell、**不去字面空格**：一行 8 个空格译出来是
-    /// `"        "`，非空，按「有内容」算。实测如此，别按直觉改。
-    private func isBlankRow(_ terminal: SwiftTerm.Terminal, _ row: Int) -> Bool {
-        guard let line = terminal.getScrollInvariantLine(row: row) else { return true }
-        if line.getTrimmedLength() == 0 { return true }
-        return line.translateToString(trimRight: true).isEmpty
-    }
-
-    /// 反推 scroll-invariant 行号的**排他上界**（= `buffer.linesTop + buffer.lines.count`）。
-    ///
-    /// `buffer.lines` 与 `buffer.linesTop` 都是 internal，包外拿不到行数，只能靠
-    /// `getScrollInvariantLine(row:)` 越界回 nil 来二分。上界不用探 ——
-    /// `buffer.getCorrectBufferLength(rows)`（public，`Buffer.swift` ~654）就是那条
-    /// `CircularBufferLineList` 的 `maxLength`（`rows + scrollback`），行数**永远**
-    /// 不超过它，所以 `linesTop + capacity` 必然越界，直接拿它当二分的右端。
-    ///
-    /// 为什么不能只用可见屏（`getTopVisibleRow() + rows`）：用户往上滚过之后，
-    /// 可见屏的底部不再是缓冲区末行，那样会读到「用户正在看的地方」而不是「最近的输出」。
-    func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
-        let top = terminal.buffer.totalLinesTrimmed
-        guard terminal.getScrollInvariantLine(row: top) != nil else { return top }
-        let capacity = max(terminal.buffer.getCorrectBufferLength(terminal.rows), 1)
-        var known = top                              // 已知合法
-        var unknown = top + capacity                 // 必然越界（见上）
-        // 上游若哪天把 `getScrollInvariantLine` 改成 clamp（越界不再回 nil），
-        // 这个不变量就没了；Debug 下当场炸出来，Release 下二分仍会收敛到
-        // `top + capacity`（不会死循环），只是读到的末行偏大。
-        assert(terminal.getScrollInvariantLine(row: unknown) == nil,
-               "getScrollInvariantLine 不再对越界行返回 nil —— 末行反推失效")
-        while unknown - known > 1 {
-            let mid = known + (unknown - known) / 2
-            if terminal.getScrollInvariantLine(row: mid) != nil {
-                known = mid
-            } else {
-                unknown = mid
-            }
-        }
-        return known + 1
     }
 
     /// 往这条会话的 PTY 写文本 —— 与用户键入走**完全相同**的通道
     /// （`backend.write` → `SSHConnection.write` → `state.enqueue(.write)`）。
     ///
-    /// 因此：注入与用户键入会交错、**没有输出边界**（uTerm 与 vendored SwiftTerm 都
-    /// 没有 OSC 133 shell-integration 标记），不保证调用方能拿到这条命令的结果。
+    /// 因此：注入与用户键入会交错、**没有输出边界**，不保证调用方能拿到这条命令的结果。
     /// 要结果请走 `run`；`terminal-send` 的正当用途是「让用户看见」。
     ///
     /// - Parameter appendEnter: 追加 `\r`（回车）执行。

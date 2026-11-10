@@ -33,16 +33,17 @@ enum GhosttyTerminalConfig {
             b.withWindowPaddingX(0)
             b.withWindowPaddingY(0)
             b.withCustom("window-padding-balance", "false")
-            // 历史上限按行数：这个 Ghostty 版本拆成了 `scrollback-limit-lines`（默认不限）与 `scrollback-limit-bytes`
-            // （默认 50 MB），先到哪个算哪个。旧键 `scrollback-limit` 已经不认（日志里报 InvalidField、静默忽略），
-            // spike 最初写的就是旧键。字节上限留默认，只是兜底。两个键都只对之后新建的 surface 生效。
-            b.withCustom("scrollback-limit-lines", String(max(0, settings.scrollback)))
+            // 历史上限：行数用设置里的，字节上限按行数放宽；和影子终端同一个函数算（`TerminalScrollbackLimits`）。
+            // 两个键都只对之后新建的 surface 生效。
+            for item in TerminalScrollbackLimits(lines: settings.scrollback).ghosttyConfiguration {
+                b.withCustom(item.key, item.value)
+            }
             // 与 SwiftTerm 路径一致：OSC 52 只允许写、不允许读（SwiftTerm 从没实现读）。
             b.withCustom("clipboard-read", "deny")
             b.withCustom("clipboard-write", "allow")
             // 取值是 none / clipboard（`false` 按文档是 none 的别名，但这个版本报 InvalidValue）。
             b.withCustom("copy-on-select", settings.copyOnSelect ? "clipboard" : "none")
-            // 桌面通知（OSC 9 / 777）仍由影子 SwiftTerm 上注册的处理器发（带「用户是否在看」与 9;4 进度条的过滤），
+            // 桌面通知（OSC 9 / 777）由影子终端的事件发（带「用户是否在看」的过滤，标签藏着时也收得到），
             // Ghostty 这边关掉，免得同一条通知发两次。
             b.withCustom("desktop-notifications", "false")
             b.withCustom("confirm-close-surface", "false")

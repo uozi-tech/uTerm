@@ -123,7 +123,7 @@ final class GhosttySpikeTests: XCTestCase {
 
     func testSessionPathRendersCorpus() async throws {
         let session = TerminalSession()
-        let bridge = session.enableGhostty()
+        let bridge = session.ghostty
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),

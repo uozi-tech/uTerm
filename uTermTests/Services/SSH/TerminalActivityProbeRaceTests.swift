@@ -83,7 +83,7 @@ final class TerminalActivityProbeRaceTests: XCTestCase {
         let onMainScreen = await session.foregroundActivity()
         XCTAssertEqual(onMainScreen, .unknown)
 
-        session.terminalView.feed(text: "\u{1b}[?1049h")
+        session.feedOutput(text: "\u{1b}[?1049h")
         let onAlternateScreen = await session.foregroundActivity()
         XCTAssertEqual(onAlternateScreen, .running(nil))
         await session.close()

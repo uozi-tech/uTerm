@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import UniformTypeIdentifiers
 
 extension TerminalImage {
@@ -69,7 +68,7 @@ extension TerminalSession {
 
     /// 像系统粘贴一样送文字。Agent 靠括号粘贴标记认出这是粘贴，才把图片路径当附件。
     private func pasteText(_ text: String) {
-        let data = TerminalPaste.wrap(text, bracketed: terminalView.getTerminal().bracketedPasteMode)
+        let data = TerminalPaste.wrap(text, bracketed: shadow.bracketedPasteMode)
         sendHostBytes(Data(data))
     }
 }

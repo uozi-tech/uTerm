@@ -145,22 +145,11 @@ final class TerminalMirrorTapTests: XCTestCase {
         session.dispose()
     }
 
-    /// 逼近算法本身：真实格宽 7.5、边距 15（列数 = ⌊(宽 − 15) ÷ 7.5⌋），估算格宽偏大 / 偏小都要落到目标列。
-    /// 偏大 2%（这次真机回归的情形：估算 7.64）时只按差额补，会在 61 与 63 之间来回跳。
-    func test_grid_fit_converges_even_when_the_cell_estimate_is_off() {
-        func columns(_ width: CGFloat) -> Int { Int(((width - 15) / 7.5).rounded(.down)) }
-        for estimate in [7.2, 7.4, 7.5, 7.64, 7.9, 8.4] as [CGFloat] {
-            for target in 20...200 {
-                var fit = RemoteGridFit(target: target, cell: estimate)
-                var width = fit.first
-                var steps = 0
-                while columns(width) != target, steps < RemoteGridFit.maxSteps {
-                    width = fit.next(after: width, got: columns(width))
-                    steps += 1
-                }
-                XCTAssertEqual(columns(width), target, "估算格宽 \(estimate)，目标 \(target) 列")
-            }
-        }
+    /// 原来这里核的是 `RemoteGridFit`（按实测列数逼近 SwiftTerm 视图宽度的二分）。Ghostty 没有内留白，视图钉成
+    /// 「行列数 × 格子像素 ÷ 屏幕倍率」就正好是那个行列数，不需要逼近，算法已删；钉任意行列数都精确命中由
+    /// `GhosttyMacHostTests` 在真的 surface 上核。
+    func test_grid_fit_converges_even_when_the_cell_estimate_is_off() throws {
+        throw XCTSkip("RemoteGridFit 随 SwiftTerm 一起删除：Ghostty 按格子像素直接算，见 GhosttyMacHostTests")
     }
 
     /// 钉住的终端比窗格矮：贴左上角；比窗格高、不知道光标在哪：贴底边（裁掉顶上的旧行）。

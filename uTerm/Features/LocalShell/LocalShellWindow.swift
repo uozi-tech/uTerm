@@ -89,9 +89,9 @@ final class LocalShellPane: Identifiable {
     func start() async {
         guard session.connectionState != .connected, session.connectionState != .connecting else { return }
         await session.close()
-        let terminal = session.terminalView.getTerminal()
+        let size = session.currentProcessSize
         let backend = LocalShellBackend(client: LocalShellService.shared.client, sessionID: id,
-                                        directory: workingDirectory, columns: terminal.cols, rows: terminal.rows,
+                                        directory: workingDirectory, columns: Int(size.cols), rows: Int(size.rows),
                                         ownsResponsibility: LocalShellNetworkPolicy.keepsLANConnections())
         await session.connect(using: backend)
         if session.backend === backend, let attributes = encodedAttributes() {
@@ -246,7 +246,7 @@ final class LocalShellWindowModel {
     @discardableResult
     func reveal(_ id: UUID) -> Bool {
         guard let at = groups.locateTab(id) else { return false }
-        let window = groups.allTabs.lazy.compactMap { $0.payload.session.terminalView.window }.first
+        let window = groups.allTabs.lazy.compactMap { $0.payload.session.ghostty.view.window }.first
         groups.activateTab(groupID: at.groupID, index: at.index)
         window?.bringToFront()
         return true

@@ -63,7 +63,7 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
         await connected()
         let pane = try XCTUnwrap(model.groups.tab(id)?.payload)
 
-        pane.session.terminalView.feed(text: "\u{1b}]0;vim main.swift\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;vim main.swift\u{07}")
 
         XCTAssertEqual(pane.session.shellTitle, "vim main.swift")
         XCTAssertEqual(registry.snapshots().first?.title, pane.defaultTitle)
@@ -254,12 +254,12 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
         XCTAssertEqual(descriptor.icon, .none)
         XCTAssertEqual(descriptor.help, pane.defaultTitle)
 
-        pane.session.terminalView.feed(text: "\u{1b}]0;vim main.swift\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;vim main.swift\u{07}")
         descriptor = LocalShellTerminalArea.descriptor(for: pane)
         XCTAssertEqual(descriptor.title, "vim main.swift")
         XCTAssertEqual(descriptor.help, "vim main.swift")
 
-        pane.session.terminalView.feed(text: "\u{1b}]0;\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;\u{07}")
         XCTAssertEqual(LocalShellTerminalArea.descriptor(for: pane).title, pane.defaultTitle)
     }
 
@@ -269,7 +269,7 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
         let pane = try XCTUnwrap(model.groups.tab(id)?.payload)
         let long = String(repeating: "很长的标题", count: 30)
 
-        pane.session.terminalView.feed(text: "\u{1b}]0;\(long)\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;\(long)\u{07}")
 
         let descriptor = LocalShellTerminalArea.descriptor(for: pane)
         XCTAssertEqual(descriptor.title, TerminalArea.clippedTabTitle(long))
@@ -281,7 +281,7 @@ final class LocalShellPaneLifecycleTests: XCTestCase {
         let model = makeModel()
         let id = model.addTab()
         let pane = try XCTUnwrap(model.groups.tab(id)?.payload)
-        pane.session.terminalView.feed(text: "\u{1b}]0;vim\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;vim\u{07}")
 
         pane.session.remoteController = "iPhone"
 

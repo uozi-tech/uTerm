@@ -22,10 +22,15 @@ extension TerminalSession {
         // 检查点和之后的字节都是按当时的尺寸产生的，要先回到那个尺寸。窗口尺寸等视图布局时再改回来。
         if !checkpoint.blob.isEmpty, checkpoint.cols > 0, checkpoint.rows > 0 {
             terminal.resize(cols: Int(checkpoint.cols), rows: Int(checkpoint.rows))
+            shadow.resize(cols: checkpoint.cols, rows: checkpoint.rows)
         }
 
         isReplayingHeldOutput = true
-        defer { isReplayingHeldOutput = false }
+        shadow.setEventsSuppressed(true)
+        defer {
+            isReplayingHeldOutput = false
+            shadow.setEventsSuppressed(false)
+        }
         guard await feedReplay(checkpoint.blob, generation: generation) else { return false }
         if checkpoint.hasGap {
             let notice = String(localized: "重启期间输出过多，较早内容已丢弃")
@@ -54,6 +59,7 @@ extension TerminalSession {
         while start < bytes.count {
             let end = min(start + Self.replayChunkBytes, bytes.count)
             terminalView.feed(byteArray: bytes[start..<end])
+            shadow.feed(Data(bytes[start..<end]))
             start = end
             // 最多 16 MiB，一口气喂会卡住界面。
             await Task.yield()

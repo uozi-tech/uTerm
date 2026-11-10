@@ -158,7 +158,7 @@ final class GhosttyMacScrollTests: XCTestCase {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
         let session = TerminalSession()
         let backend = CaptureBackend()
-        let bridge = session.enableGhostty()
+        let bridge = session.ghostty
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
         let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)

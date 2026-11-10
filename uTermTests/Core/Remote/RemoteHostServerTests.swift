@@ -259,7 +259,7 @@ final class RemoteHostServerTests: XCTestCase {
         let before = inbox.of(.sessions).count
 
         for frame in 0..<50 {
-            session.terminalView.feed(text: "\u{1b}]0;frame \(frame)\u{07}")
+            session.feedOutput(text: "\u{1b}]0;frame \(frame)\u{07}")
             try await Task.sleep(for: .milliseconds(10))
         }
         let followed = await waitUntil { (try? latest())??.tabTitle == "frame 49" }
@@ -267,7 +267,7 @@ final class RemoteHostServerTests: XCTestCase {
         XCTAssertEqual(try latest()?.title, "zsh")
         XCTAssertLessThanOrEqual(inbox.of(.sessions).count - before, 3, "50 次改标题不能变成 50 条推送")
 
-        session.terminalView.feed(text: "\u{1b}]0;\u{07}")
+        session.feedOutput(text: "\u{1b}]0;\u{07}")
         let restored = await waitUntil { (try? latest())??.tabTitle == "zsh" }
         XCTAssertTrue(restored, "程序清掉标题后回到原名")
     }

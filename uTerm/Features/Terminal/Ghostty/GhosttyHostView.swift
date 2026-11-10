@@ -2,7 +2,7 @@ import AppKit
 import GhosttyTerminal
 import SwiftUI
 
-/// `TerminalHostView` 的 Ghostty 版（试验开关 `DefaultsKey.terminalGhosttyRenderer`）。
+/// 把会话的 Ghostty 视图（`TerminalSession.ghostty.view`，会话持有、不随 SwiftUI 重建）挂进 SwiftUI。
 ///
 /// 接了：挂载、焦点、内边距、深浅色、光标 / 历史 / 选中即复制设置、远控钉尺寸（`pinnedFrameSize`）、
 /// 滚动时浮现的滚动条。没接：「停稳再提交」的尺寸判定（Ghostty 自己有 `resizeThrottleMilliseconds`）、
@@ -23,17 +23,15 @@ struct GhosttyHostView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> GhosttyContainerView {
-        let bridge = session.enableGhostty()
         apply()
-        let container = GhosttyContainerView(surface: bridge.view)
+        let container = GhosttyContainerView(surface: session.ghostty.view)
         container.identifier = .utermTerminalRegion
         container.isActive = isActive
         return container
     }
 
     func updateNSView(_ nsView: GhosttyContainerView, context: Context) {
-        let bridge = session.enableGhostty()
-        nsView.attach(bridge.view)
+        nsView.attach(session.ghostty.view)
         nsView.isActive = isActive
         apply()
     }

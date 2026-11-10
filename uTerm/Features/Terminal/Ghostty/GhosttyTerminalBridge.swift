@@ -1,25 +1,21 @@
 import AppKit
 import Carbon.HIToolbox
 import GhosttyTerminal
-import SwiftTerm
 
-/// 把一条 `TerminalSession` 的字节流接到 GhosttyKit 的 host-managed IO（mac-only 试验）。
+/// 把一条 `TerminalSession` 的字节流接到 GhosttyKit 的 host-managed IO：画面、键盘输入、终端应答、网格尺寸都在这里。
 ///
-/// ## 形态：Ghostty 渲染 + 影子 SwiftTerm
+/// ## 形态：Ghostty 画面 + 影子终端
 ///
-/// 字节照旧由 `TerminalOutputPump` 喂给 SwiftTerm，喂完的同一批字节（`onFed`，与镜像同一个点）再交给 Ghostty。
-/// 所以 SwiftTerm 在这里是**不上屏的影子**：远控镜像的快照、`terminal-read` 读屏、holder 检查点、OSC 7501 /
-/// 133 / 9 / 777 这些依赖 SwiftTerm 内部状态（补丁 #6 / #11）的功能全部原样可用，一行没改。
-///
-/// 代价是每个字节解析两遍。应答只能有一个来源：影子 SwiftTerm 发出的应答（DA、DSR…）在
-/// `TerminalSession.send(source:data:)` 里丢掉，以 Ghostty 的为准——用户的键盘输入本来也只从 Ghostty 来。
+/// 字节先进会话的影子终端（`TerminalSession.shadow`，libghostty-vt，同步解析），同一批字节再交给 Ghostty 的 surface
+/// （异步解析、渲染线程出帧）。uTerm 要读的终端状态一律读影子；surface 只管画和输入。
+/// 应答只能有一个来源：DA、DSR 这类查询由 surface 答（`ghosttyDidWrite`），影子终端不答——用户的键盘输入本来也只从
+/// surface 来。
 ///
 /// ## 时序
 ///
 /// Ghostty 的 surface 要等视图进了窗口才建（`AppTerminalView.viewDidMoveToWindow`），之前收到的字节最多缓 1 MiB，
-/// 超了丢最旧的——会截断转义序列。所以 surface 没挂上时不往里送；挂上那一刻用影子 SwiftTerm 的快照
-/// （`snapshotSequence`，以 RIS 开头）把它对齐到当前画面，之后再逐批转发。快照只能在解析边界上拍
-/// （`isAtSnapshotBoundary`），不在边界就等下一批字节喂完再试。
+/// 超了丢最旧的——会截断转义序列。所以 surface 没挂上时不往里送；挂上那一刻把影子终端的状态回放进去
+/// （`ShadowTerminal.makeReplay`，开头自带复位；`receiveReplay` 不产生应答），之后再逐批转发。影子还是空的就不回放。
 @MainActor
 final class GhosttyTerminalBridge {
     let view: GhosttySurfaceView
@@ -45,8 +41,11 @@ final class GhosttyTerminalBridge {
             write: { data in
                 DispatchQueue.main.async { MainActor.assumeIsolated { box.bridge?.ghosttyDidWrite(data) } }
             },
-            resize: { viewport in
+            resize: { [shadow = owner.shadow] viewport in
                 let cols = Int(viewport.columns), rows = Int(viewport.rows)
+                // 影子终端只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
+                shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                              cellWidth: UInt32(viewport.cellWidthPixels), cellHeight: UInt32(viewport.cellHeightPixels))
                 DispatchQueue.main.async { MainActor.assumeIsolated { box.bridge?.ghosttyDidResize(cols: cols, rows: rows) } }
             },
             // 只有行列数要发给远端（SIGWINCH）；像素级变化不用。
@@ -61,10 +60,10 @@ final class GhosttyTerminalBridge {
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
         view.onControlReturn = { [weak self] in
-            // 程序没开 kitty 键盘协议时发回车（同 `CopyableTerminalView`）；开了就让 Ghostty 自己编带修饰键的序列。
-            // 协议开没开看影子 SwiftTerm（吃的是同一份字节）。
-            guard let owner = self?.owner, owner.terminalView.getTerminal().keyboardEnhancementFlags.isEmpty else { return false }
-            owner.sendHostBytes(Data(EscapeSequences.cmdRet))
+            // 程序没开 kitty 键盘协议时发回车；开了就让 Ghostty 自己编带修饰键的序列。
+            // 协议开没开看影子终端（吃的是同一份字节）。
+            guard let owner = self?.owner, owner.shadow.kittyKeyboardFlags == 0 else { return false }
+            owner.sendHostBytes(Data([0x0D]))
             return true
         }
     }
@@ -77,41 +76,35 @@ final class GhosttyTerminalBridge {
 
     // MARK: 字节入
 
-    /// 影子 SwiftTerm 收到过内容没有（输出泵喂过，或 `clearOutput` / held 回放直接写过）。
-    private var shadowHasContent = false
-
-    /// 影子 SwiftTerm 刚喂完的一批字节。
+    /// 影子终端刚喂完的一批字节。
     func didFeedShadow(_ bytes: ArraySlice<UInt8>) {
-        shadowHasContent = true
         if isLive {
             io.receive(Data(bytes))
         } else if surfaceAttached {
-            seedIfPossible()
+            seed()
         }
     }
 
     /// 不经过输出泵、直接写进影子的字节（`clearOutput`、held 回放）之后调：重新对齐。
     func resync() {
-        shadowHasContent = true
         realign()
     }
 
     private func realign() {
         isLive = false
-        if surfaceAttached { seedIfPossible() }
+        if surfaceAttached { seed() }
     }
 
-    private func seedIfPossible() {
+    private func seed() {
         // 影子还是空的（新开的标签，一个字节都没来过）：没有画面可对齐，直接开始转发。
-        // 这时拍快照会把影子的整屏空行写进去；surface 刚挂上时网格还没停稳（常常先报一个偏小的尺寸），
+        // 这时回放会把影子的整屏空行写进去；surface 刚挂上时网格还没停稳（常常先报一个偏小的尺寸），
         // 多出来的空行被挤进回滚，新标签往上滚就是一屏空白。
-        guard shadowHasContent else {
-            isLive = true
-            return
+        if let shadow = owner?.shadow, shadow.hasContent, let replay = try? shadow.makeReplay() {
+            // 回放之前排着的实时字节已经在影子里，再解析一遍只会被回放盖掉。
+            io.discardPendingOutput()
+            io.receiveReplay(replay.stream)
+            seedCount += 1
         }
-        guard let terminal = owner?.terminalView.getTerminal(), terminal.isAtSnapshotBoundary else { return }
-        io.receive(Data(terminal.snapshotSequence(scrollbackLimit: terminal.options.scrollback)))
-        seedCount += 1
         isLive = true
     }
 
@@ -134,7 +127,9 @@ final class GhosttyTerminalBridge {
 
     private func ghosttyDidResize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
+        let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
+        if changed { owner?.shadowGridDidChange() }
         owner?.ghosttyGridDidChange(cols: cols, rows: rows)
         // surface 还没建好时就来了接管：现在有格子尺寸了，补上。
         if let pending = pendingPin, view.pinnedFrameSize == nil { pinGrid(cols: pending.cols, rows: pending.rows) }
@@ -147,7 +142,7 @@ final class GhosttyTerminalBridge {
 
     /// 把 Ghostty 视图钉成 `cols × rows`：Ghostty 没有内留白（配置里 padding 是 0），网格 = ⌊视图像素 ÷ 格子像素⌋，
     /// 所以视图取「行列数 × 格子像素 ÷ 屏幕倍率」正好是那个行列数，不用像 SwiftTerm 那样试探。
-    /// 之后 Ghostty 报来新网格（`ghosttyDidResize`），影子 SwiftTerm、PTY、镜像都跟着走。
+    /// 之后 Ghostty 报来新网格（`ghosttyDidResize`），影子终端、PTY、镜像都跟着走。
     func pinGrid(cols: Int, rows: Int) {
         pendingPin = (cols, rows)
         guard let cell = view.uTermCellPixels else { return }
@@ -168,8 +163,8 @@ final class GhosttyTerminalBridge {
         }
     }
 
-    /// 光标在屏幕第几行（看影子 SwiftTerm：吃的是同一份字节）。
-    private var cursorRow: Int? { owner?.terminalView.getTerminal().getCursorLocation().y }
+    /// 光标在屏幕第几行（看影子终端：吃的是同一份字节）。
+    private var cursorRow: Int? { owner?.shadow.cursor.y }
 
     /// 钉住期间来了新输出：光标换了行就让容器重新摆一次（比窗格高的终端跟着光标走）。
     func repositionPinnedGridIfCursorMoved() {
@@ -223,10 +218,8 @@ final class GhosttyTerminalBridge {
             bridge?.view.onScrollbar?(scrollbar)
         }
 
-        func terminalDidChangeTitle(_ title: String) {
-            // 影子 SwiftTerm 也会报同一个标题；`receiveShellTitle` 去重。
-            bridge?.owner?.receiveShellTitle(title)
-        }
+        /// 标题以影子终端的为准（标签藏着、surface 没在吃字节时它照样更新）；`receiveShellTitle` 去重。
+        func terminalDidChangeTitle(_ title: String) {}
 
         func terminalDidChangeFocus(_ focused: Bool) {
             if focused { bridge?.owner?.acknowledgeProgramStatus() }
@@ -235,14 +228,13 @@ final class GhosttyTerminalBridge {
         func terminalDidAttachSurface(_ surface: TerminalSurface) { bridge?.surfaceDidAttach() }
         func terminalDidDetachSurface() { bridge?.surfaceDidDetach() }
 
-        /// OSC 7。SwiftTerm 路径也没用它（cwd 靠后端轮询），这里同样不接。
+        /// OSC 7。cwd 靠后端轮询，这里不接。
         func terminalDidChangeWorkingDirectory(_ path: String) {}
 
         /// 影子 SwiftTerm 已经响过铃（SwiftTerm 的默认 `bell` 是 `NSSound.beep()`），这里不重复。
         func terminalDidRingBell() {}
 
-        /// 不安全粘贴（多行 / 带控制字符）与受保护的 OSC 52。SwiftTerm 路径没有粘贴保护，这里先照放行处理，
-        /// 真要上线应换成 uTerm 自己的确认框。
+        /// 不安全粘贴（多行 / 带控制字符）与受保护的 OSC 52。uTerm 一直没有粘贴保护，照放行处理；OSC 52 只许写不许读。
         func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {
             switch request.kind {
             case .paste: request.respond(allow: true)
@@ -342,30 +334,15 @@ final class GhosttySurfaceView: AppTerminalView {
 // MARK: - TerminalSession 一侧
 
 extension TerminalSession {
-    /// 开关打开时由 `GhosttyHostView` 调：建好（或拿回）这条会话的 Ghostty 视图。
-    @discardableResult
-    func enableGhostty() -> GhosttyTerminalBridge {
-        if let ghostty { return ghostty }
-        let bridge = GhosttyTerminalBridge(owner: self)
-        ghostty = bridge
-        return bridge
-    }
-
-    /// 回到 SwiftTerm 渲染。SwiftTerm 视图下次挂上时按自己的尺寸重排、重报尺寸。
-    func disableGhostty() {
-        guard let ghostty else { return }
-        ghostty.dispose()
-        self.ghostty = nil
-    }
-
-    /// Ghostty 的网格变了：影子 SwiftTerm 跟到同一个尺寸（快照、读屏、镜像都按它），远端随之 SIGWINCH。
+    /// Ghostty 的网格变了：远端随之 SIGWINCH。影子终端已经在 resize 回调里当场跟上了。
     func ghosttyGridDidChange(cols: Int, rows: Int) {
-        let terminal = terminalView.getTerminal()
-        if terminal.cols != cols || terminal.rows != rows {
-            terminal.resize(cols: cols, rows: rows)
-            mirrorTap.invalidateAll()
-            heldCheckpoints?.noteScreenChanged()
-        }
+        resizeLegacyShadow(cols: cols, rows: rows)
         inputChannel.reportSize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+    }
+
+    /// 网格的行列数真的变了：镜像端改发一份新尺寸下的快照，检查点也重存。
+    func shadowGridDidChange() {
+        mirrorTap.invalidateAll()
+        heldCheckpoints?.noteScreenChanged()
     }
 }

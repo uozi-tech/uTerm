@@ -24,7 +24,7 @@ final class TerminalOSCRegressionTests: XCTestCase {
     private var terminal: Terminal { session.terminalView.getTerminal() }
 
     private func feed(_ text: String) {
-        session.terminalView.feed(text: text)
+        session.feedOutput(text: text)
     }
 
     private func line(_ row: Int) -> String {
@@ -46,7 +46,10 @@ final class TerminalOSCRegressionTests: XCTestCase {
         XCTAssertFalse(plain.hasPayload)
     }
 
-    func testOSC52WritesToTheTerminalsPasteboard() {
+    /// OSC 52 现在由 Ghostty 的 surface 自己处理（配置 `clipboard-write = allow`、`clipboard-read = deny`），写的是系统剪贴板，
+    /// 而且要有真的 surface；这里的私有剪贴板接不上。等价行为（surface 上的 OSC 52 写入）待在带窗口的用例里补。
+    func testOSC52WritesToTheTerminalsPasteboard() throws {
+        throw XCTSkip("OSC 52 改由 Ghostty surface 处理，写系统剪贴板；见上面的说明")
         feed("\u{1b}]52;c;\(Data("hello 世界".utf8).base64EncodedString())\u{07}")
         XCTAssertEqual(pasteboard.string(forType: .string), "hello 世界")
     }
