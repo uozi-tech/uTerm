@@ -93,8 +93,8 @@ fetch_one() {
 
 	local src="$FROM/$zip"
 	[ -f "$src" ] || die "找不到 $src
-  清单要 $zip（sha256 $sha）。
-  把它放进 $FROM，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次。
+  清单要 ${zip}（sha256 ${sha}）。
+  把它放进 ${FROM}，或者用 UTERM_GHOSTTY_ARTIFACTS=<目录> 指到放 zip 的地方再跑一次。
   自己编见 vendor/libghostty-spm/BUILD.md。"
 	local actual
 	actual="$(sha256_of "$src")"
