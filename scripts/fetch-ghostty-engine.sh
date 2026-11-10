@@ -122,7 +122,7 @@ fetch_one() {
 	printf '%s\n' "$sha" > "$DEST/$dir.stamp"
 	rm -rf "$work"
 	trap - EXIT
-	echo "$dir ← $src（${sha:0:12}…）"
+	echo "$dir ← ${src}（${sha:0:12}…）"
 }
 
 # 不写成 `fetch_one … || …`：那样函数体里 set -e 失效，解包或改名中途失败会接着往下走、写出一个假的 stamp。
