@@ -1,4 +1,5 @@
 import Foundation
+import GhosttyKit
 
 /// 终端引擎的版本：画面（GhosttyKit）和影子终端（libghostty-vt）是同一棵源码树编的两份二进制，二进制快照的格式、
 /// 回放出来的画面都跟着这棵树走。两端（远控的 Mac 与接入的设备、存检查点的那次运行与接回的这次运行）版本串不同，
@@ -26,10 +27,29 @@ nonisolated struct TerminalScrollbackLimits: Equatable, Sendable {
         bytes = max(10_000_000, self.lines * 1000)
     }
 
-    /// 影子终端的选项。
+    /// 影子终端的选项（只有回滚上限）。
     var shadowOptions: ShadowTerminal.Options {
         ShadowTerminal.Options(scrollbackLines: lines, scrollbackBytes: bytes)
     }
+
+    /// 影子终端的选项：回滚上限之外，和 surface 的配置对得上的那几项（两端都用这一份）——surface 不吃字节时由影子
+    /// 答查询，要答得一样：光标闪烁（mode 12）的初值跟 surface 的配置走；XTVERSION（`CSI > q`）surface 答的是
+    /// 「ghostty <版本>」，影子默认答「libghostty」。
+    func shadowOptions(cursorBlink: Bool) -> ShadowTerminal.Options {
+        var options = shadowOptions
+        options.cursorBlink = cursorBlink
+        options.versionReport = Self.surfaceVersionReport
+        return options
+    }
+
+    /// surface 答 XTVERSION 的串：「ghostty」+ GhosttyKit 自己报的版本。
+    static let surfaceVersionReport: String = {
+        let info = ghostty_info()
+        guard let version = info.version, info.version_len > 0 else { return "" }
+        let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(version).assumingMemoryBound(to: UInt8.self),
+                                        count: Int(info.version_len))
+        return "ghostty " + String(decoding: bytes, as: UTF8.self)
+    }()
 
     /// Ghostty 配置里对应的两项（键名、取值）。只对之后新建的 surface 生效。
     /// 键是 `scrollback-limit-lines` / `-bytes`；旧键 `scrollback-limit` 这个版本不认、静默忽略。

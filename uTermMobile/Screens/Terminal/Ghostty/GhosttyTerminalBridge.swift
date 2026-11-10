@@ -28,8 +28,10 @@ final class GhosttyTerminalBridge {
     let outputPump: TerminalOutputPump
     /// 击键、粘贴、应答与网格尺寸共用的一条 FIFO。
     let input = TerminalInputChannel()
-    /// 影子终端在解析中碰到的事：程序状态（OSC 7501 / 133）、标题、通知……都从这里出来，主线程上、按字节流的先后到。
+    /// 影子终端的事件：程序状态、查询应答、历史、远控镜像的规则两端共用（`TerminalEventRouter`），控制器接它的出口。
     /// 读状态只认影子：它永远在吃字节，surface 不在（后台、标签没露出、surface 放掉了）时也不漏。
+    let events = TerminalEventRouter()
+    /// 程序状态以外的影子事件（标题、通知、响铃、未知 OSC），主线程上、按字节流的先后到。
     var onEvent: ((ShadowTerminal.Event) -> Void)?
     /// 最近一次 resize 回调报来的网格（探针读它）。
     private(set) var grid: (cols: Int, rows: Int)?
@@ -168,18 +170,9 @@ final class GhosttyTerminalBridge {
         }
     }
 
-    /// 影子终端的配置：和 `makeController` 给 surface 的配置对得上的那几项。
+    /// 影子终端的配置：和 `makeController` 给 surface 的配置对得上的那几项（两端共用的算法）。
     private static func shadowOptions() -> ShadowTerminal.Options {
-        var options = scrollback.shadowOptions
-        options.cursorBlink = TerminalCursorPreference.read().blink
-        // 影子替 surface 答 XTVERSION 时要答得一样；surface 答的是「ghostty <版本>」。
-        let info = ghostty_info()
-        if let version = info.version, info.version_len > 0 {
-            let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(version).assumingMemoryBound(to: UInt8.self),
-                                            count: Int(info.version_len))
-            options.versionReport = "ghostty " + String(decoding: bytes, as: UTF8.self)
-        }
-        return options
+        scrollback.shadowOptions(cursorBlink: TerminalCursorPreference.read().blink)
     }
 
     // MARK: 建立
@@ -231,24 +224,15 @@ final class GhosttyTerminalBridge {
         view.sendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
         // surface 不吃字节时查询由影子答（DA、DSR、光标位置、颜色查询……），和 surface 的应答走同一条路回后端。
         shadow.setReplyHandler { data in
-            Task { @MainActor in box.bridge?.userInput(data) }
+            TerminalMainHop.run { box.bridge?.userInput(data) }
         }
-        // 程序写剪贴板（OSC 52）：以影子为准。影子回放历史、从快照还原时不会再写（vt 那边关着事件 / 不解析字节）。
+        // 程序写剪贴板（OSC 52）：以影子为准。影子从快照还原时不解析字节、喂历史时不调，都不会再写。
         shadow.setClipboardWriteHandler { text in
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { box.bridge?.pasteboard.string = text }
-            } else {
-                Task { @MainActor in box.bridge?.pasteboard.string = text }
-            }
+            TerminalMainHop.run { box.bridge?.pasteboard.string = text }
         }
-        shadow.setEventHandler { event in
-            // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { box.bridge?.onEvent?(event) }
-            } else {
-                Task { @MainActor in box.bridge?.onEvent?(event) }
-            }
-        }
+        // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
+        events.onEvent = { event in box.bridge?.onEvent?(event) }
+        events.install(on: shadow)
         // 影子被整个换掉（远控发来的整屏快照）时不会逐条发事件：回放之后把标题对一次。
         outputPump.onReplayed = {
             Task { @MainActor in

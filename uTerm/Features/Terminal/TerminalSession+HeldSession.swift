@@ -10,7 +10,8 @@ import Foundation
 /// 历史从 holder 还留着的那段字节开始。和快照存在一起的程序状态不认版本，照用。
 ///
 /// 回放的字节全是历史。里面的终端查询、命令跟踪标记、状态上报、通知，当时要么已经处理过，要么过时了，
-/// 所以回放期间不发应答、不发通知、不认标记（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
+/// 所以按历史喂给影子（`ShadowTerminal.feed(_:asHistory:)`）：不应答、不写剪贴板、不发通知、不认标记，否则历史查询的
+/// 回答会打进 shell 的输入。「历史」跟着字节走而不是一个会话级的开关：回放途中（每片之间让出主线程）用户的按键照常发出。
 /// 只有程序状态例外：它跟检查点存在一起，回放的那段字节里的状态变化也照收——一直在 working 的程序跨重启不会再报一次。
 extension TerminalSession {
     private static let replayChunkBytes = 256 * 1024
@@ -21,10 +22,6 @@ extension TerminalSession {
         guard let replay = await backend.takeReplay() else { return true }
         guard feedGeneration == generation else { return false }
 
-        // 回放期间影子终端的事件照发：程序状态要跟着这段字节走（`handleShadowEvent` 里只放行状态，其余都挡掉）。
-        isReplayingHeldOutput = true
-        defer { isReplayingHeldOutput = false }
-
         let checkpoint = replay.checkpoint
         var restored = false
         if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
@@ -33,8 +30,7 @@ extension TerminalSession {
         // 程序状态跟检查点存在一起：一直在 working 的程序接回后不会再报一次，标签上的圆点只能从这里来。
         // 快照用不了（别的引擎版本存的）也照用：状态对应的是检查点那个字节位置，和快照格式无关。
         if let status = TerminalCheckpointBlob.decodeProgramStatus(checkpoint.blob).flatMap(ProgramStatusJournal.decode) {
-            programStatusTracker = status
-            statusJournal.current = status
+            events.restore(status)
         }
         // 检查点没法用（空的、别的引擎版本存的）：之后的字节仍然是按当时的尺寸产生的，先回到那个尺寸。
         if !restored, checkpoint.cols > 0, checkpoint.rows > 0 {
@@ -42,7 +38,7 @@ extension TerminalSession {
         }
         if checkpoint.hasGap {
             let notice = String(localized: "重启期间输出过多，较早内容已丢弃")
-            shadow.feed(Data("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8))
+            shadow.feed(Data("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8), asHistory: true)
         }
         guard await feedReplay(replay.output, generation: generation) else { return false }
 
@@ -55,8 +51,8 @@ extension TerminalSession {
         mirrorTap.invalidateAll()
         // 检查点里的状态 + 回放那段字节里的状态变化：接回的那一刻标签上就是对的，不等程序下一次上报。
         publishProgramStatus()
-        // 都没有的话，状态是丢了还是本来就没有程序，这时分不出来（检查点是别的引擎版本存的、存的时候还不带状态……）。
-        programStatusUnknown = replay.isReattach && !programStatusTracker.hasRecords
+        // 都没有的话，状态是丢了还是本来就没有程序，光看检查点分不出来（检查点是别的引擎版本存的、存的时候还不带状态……）。
+        if replay.isReattach, !programStatusTracker.hasRecords { askForegroundAfterReattach(backend, generation: generation) }
 
         heldCheckpoints = TerminalHeldCheckpoints(link: backend.holderLink, pump: outputPump, baseOffset: replay.endOffset,
                                                   programStatus: { [statusJournal] in statusJournal.encoded })
@@ -73,11 +69,24 @@ extension TerminalSession {
         return true
     }
 
+    /// 接回后马上问一次前台是谁：不是 shell 就当它是重启前一直在跑的 Agent（它只在状态变化时才报，不会为接回再报一次），
+    /// 直到它真的报了状态或者回到提示符（`ProgramStatusTracker.presumedProgram`）；⌘V 贴图据此同步判断。不挡着接回：
+    /// SSH 的 holder 要开一条 exec 通道去问，最长等到超时。问的途中程序已经开口了就不用这个结论。
+    private func askForegroundAfterReattach(_ backend: any HeldTerminalBackend, generation: Int) {
+        Task { [weak self] in
+            let activity = await backend.foregroundActivity()
+            guard let self, self.feedGeneration == generation, !self.programStatusTracker.hasRecords,
+                  case .running(let name) = activity else { return }
+            self.events.presumeRunningProgram(name ?? "")
+            self.publishProgramStatus()
+        }
+    }
+
     private func feedReplay(_ bytes: [UInt8], generation: Int) async -> Bool {
         var start = 0
         while start < bytes.count {
             let end = min(start + Self.replayChunkBytes, bytes.count)
-            shadow.feed(Data(bytes[start..<end]))
+            shadow.feed(Data(bytes[start..<end]), asHistory: true)
             start = end
             // 最多 16 MiB，一口气喂会占住主线程。
             await Task.yield()

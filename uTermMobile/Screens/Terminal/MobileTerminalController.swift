@@ -41,7 +41,6 @@ final class MobileTerminalController {
     /// 程序用 OSC 7501 报告的状态里最需要人处理的那条；没有或空闲时为 nil（规则与 mac 同一份，
     /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
     private(set) var programStatus: ProgramStatusRecord?
-    @ObservationIgnored private var programStatusTracker = ProgramStatusTracker()
     /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
@@ -156,57 +155,32 @@ final class MobileTerminalController {
             guard let self, self.acceptsImages else { return }
             self.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
         }
-        terminal.onEvent = { [weak self] event in self?.handleTerminalEvent(event) }
-    }
-
-    private func handleTerminalEvent(_ event: ShadowTerminal.Event) {
-        switch event {
-        case .titleChanged(let title):
-            receiveShellTitle(title)
-        case .programStatus(let message):
-            guard !isRemoteTab else { return }
-            applyProgramStatus(message)
-        case .programStatusQuery(let reply):
-            // 程序问支不支持 OSC 7501：答一次。画面（surface）不答这个查询，所以不会重复。
-            guard !isRemoteTab else { return }
-            write(reply)
-        case .promptStarted:
-            guard !isRemoteTab else { return }
-            programStatusTracker.promptStarted()
-            publishProgramStatus()
-        case .unknownOSC, .notification, .bell:
-            // 手机上没有系统通知可发、不做命令跟踪（OSC 6973 是 Mac 的 CLI 用的）。
-            break
+        // 程序状态、查询、远控镜像的规则两端共用（`TerminalEventRouter`）。远控标签：Mac 自己回答查询、经远控协议推状态
+        // （见 `TermTab.programStatus`），这里不再处理。手机上没有系统通知可发：需要注意的状态只上标签；
+        // 不做命令跟踪（OSC 6973 是 Mac 的 CLI 用的）。
+        let events = terminal.events
+        events.isMirror = { [weak self] in self?.connection?.mirrorsRemoteGrid ?? false }
+        events.isLooking = { [weak self] in self?.isLooking ?? false }
+        events.sendToProgram = { [weak self] in self?.write($0) }
+        events.onStatusChanged = { [weak self] in self?.publishProgramStatus() }
+        terminal.onEvent = { [weak self] event in
+            if case .titleChanged(let title) = event { self?.receiveShellTitle(title) }
         }
     }
 
     // MARK: 程序状态（OSC 7501 / 133）
 
-    /// 远控标签：Mac 自己回答查询、经远控协议推状态（见 `TermTab.programStatus`）。这里再处理一遍，
-    /// 应答就成了 Mac 上的程序收到的多余输入。
-    private var isRemoteTab: Bool { connection is RemoteTerminalBackend }
-
-    /// 手机上没有系统通知可发：需要注意的状态只上标签。
-    func applyProgramStatus(_ message: ProgramStatusMessage) {
-        if programStatusTracker.receive(message, isLooking: isLooking) == .reply {
-            write(Data(ProgramStatusTracker.queryReply))
-        }
-        publishProgramStatus()
-    }
-
     /// 用户看到结果了：`done` / `error` 不再上标签。
     func acknowledgeProgramStatus() {
-        programStatusTracker.acknowledgeResults()
-        publishProgramStatus()
+        terminal.events.acknowledgeResults()
     }
 
     private func resetProgramStatus() {
-        programStatusTracker.reset()
-        publishProgramStatus()
+        terminal.events.reset()
     }
 
     private func publishProgramStatus() {
-        let next = programStatusTracker.display
+        let next = terminal.events.tracker.display
         if next != programStatus { programStatus = next }
     }
 

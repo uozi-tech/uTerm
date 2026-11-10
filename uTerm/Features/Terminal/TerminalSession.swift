@@ -27,8 +27,6 @@ final class TerminalSession: NSObject {
     @ObservationIgnored let inputChannel = TerminalInputChannel()
     /// 当前绑定的代次：`connect` / `detach` / `dispose` / `close` 都会递增，旧绑定的在途结果据此作废。
     var feedGeneration: Int { outputPump.generation }
-    /// 正在回放接回的历史输出：屏蔽终端应答和副作用（见 `TerminalSession+HeldSession`）。
-    @ObservationIgnored var isReplayingHeldOutput = false
     /// 输出泵的 tap 要用、又得在主线程上换的那几样（检查点、钉尺寸时的跟光标）。
     @ObservationIgnored private let feedTaps = TerminalFeedTaps()
     /// 持有 PTY 的后端才有。
@@ -62,12 +60,11 @@ final class TerminalSession: NSObject {
     var programStatus: ProgramStatusRecord?
     /// 含 `idle` 的那条（远控把它推给接入的设备：程序空闲也说明前台是 Agent 而不是 shell）。
     var programReport: ProgramStatusRecord?
-    @ObservationIgnored var programStatusTracker = ProgramStatusTracker()
-    /// 接回会话时没拿到程序状态（检查点里没有、或用不了），也还没从程序那里听到新的：前台要是有程序在跑，它可能就是
-    /// 重启前一直在跑的 Agent——它只在状态变化时才报，不会为接回再报一次。⌘V 贴图据此去问前台是谁（见 `pasteImage`）。
-    @ObservationIgnored var programStatusUnknown = false
+    /// 影子终端事件的处理（程序状态、查询应答、历史、远控镜像的规则两端共用，见 `TerminalEventRouter`）。
+    @ObservationIgnored let events = TerminalEventRouter()
+    var programStatusTracker: ProgramStatusTracker { events.tracker }
     /// 程序状态的记账副本，和字节位置严格对应，存进 holder 检查点（见 `ProgramStatusJournal`）。
-    @ObservationIgnored let statusJournal = ProgramStatusJournal()
+    var statusJournal: ProgramStatusJournal { events.journal }
     /// 单测替换「用户此刻在不在看」：测试宿主不一定是前台 app，`NSApp.isActive` 由不得测试。
     @ObservationIgnored var userLookingOverride: (@MainActor () -> Bool)?
     /// 窗格上的真彩提示，见 `TerminalSession+TrueColor`。
@@ -100,8 +97,10 @@ final class TerminalSession: NSObject {
 
     override init() {
         // 回滚上限和 surface 用同一个函数算（`GhosttyTerminalConfig.base`）。初始尺寸就是还没量到网格时报给后端的那个。
+        let settings = TerminalSettings.read()
         let shadow = ShadowTerminal(cols: 120, rows: 30,
-                                    options: TerminalScrollbackLimits(lines: TerminalSettings.read().scrollback).shadowOptions)
+                                    options: TerminalScrollbackLimits(lines: settings.scrollback)
+                                        .shadowOptions(cursorBlink: settings.cursorBlink))
         self.shadow = shadow
         // write / resize 由 Ghostty 在任意线程回调，都转给 `GhosttyTerminalBridge`（它建好之后把自己挂进这个盒子）。
         let relay = GhosttyTerminalBridge.Relay()
@@ -130,9 +129,10 @@ final class TerminalSession: NSObject {
                                       exclusively: { pump.performWhileFeedingPaused($0) })
         super.init()
         // tap：影子刚解析完这一片、泵的锁还在手上。镜像与检查点拿到的字节顺序与终端实际解析的顺序完全一致。
-        pump.onFed = { [mirrorTap, feedTaps] bytes in
-            mirrorTap.didFeed(bytes)
-            feedTaps.didFeed(bytes.count)
+        // 弱引用：镜像 tap 借泵的锁（`exclusively` 强持着泵），这里再强持 tap 就成了环，关掉标签后泵、影子、surface IO 都放不掉。
+        pump.onFed = { [weak mirrorTap, weak feedTaps] bytes in
+            mirrorTap?.didFeed(bytes)
+            feedTaps?.didFeed(bytes.count)
         }
         feedTaps.onPinnedFeed = { [weak self] in self?.repositionPinnedGridIfCursorMoved() }
         _ = ghostty
@@ -153,11 +153,7 @@ final class TerminalSession: NSObject {
     /// 在主线程上喂（接回时的回放）就当场处理，回放的标志才挡得住；否则排到主线程，先后顺序不变。
     private func installShadowReplyHandler() {
         shadow.setReplyHandler { [weak self] data in
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { self?.sendHostBytes(data) }
-            } else {
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.sendHostBytes(data) } }
-            }
+            TerminalMainHop.run { self?.sendHostBytes(data) }
         }
     }
 
@@ -179,9 +175,9 @@ final class TerminalSession: NSObject {
     @ObservationIgnored private var shadowColorsAreDark: Bool?
 
     /// uTerm 自己要发给程序的字节（OSC 7501 应答、贴图后的路径），以及 Ghostty 发出的键盘输入与终端应答。
-    /// 进有序输入通道（`TerminalInputChannel`），按产生顺序到达后端。回放的是历史输出，里面的查询当年已经回答过了。
+    /// 进有序输入通道（`TerminalInputChannel`），按产生顺序到达后端。接回时回放的历史不会走到这里（影子喂历史时不应答，
+    /// 见 `ShadowTerminal.feed(_:asHistory:)`），所以回放期间用户的按键照常发出。
     func sendHostBytes(_ data: Data) {
-        guard !isReplayingHeldOutput else { return }
         inputChannel.write(data)
     }
 

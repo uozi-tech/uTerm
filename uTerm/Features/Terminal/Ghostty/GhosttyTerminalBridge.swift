@@ -28,6 +28,8 @@ final class GhosttyTerminalBridge {
 
     /// Ghostty 最近报告的网格。
     private(set) var grid: (cols: Int, rows: Int)?
+    /// 上次通知「网格变了」（`shadowGridDidChange`）时影子的网格。
+    private var notifiedShadowSize: (cols: Int, rows: Int)?
     /// 测试 / 探针用：Ghostty 发往后端的全部字节（键盘与应答）都经过这里。
     var onWriteForTesting: (@MainActor (Data) -> Void)?
     /// surface 此刻在吃实时字节（挂上并且已经用影子的状态对齐过）。
@@ -180,13 +182,9 @@ final class GhosttyTerminalBridge {
     private func surfaceBecameReady() {
         surfaceSizeTimeout?.cancel()
         surfaceSizeTimeout = nil
-        guard !isSurfaceReady, hasSurface, let owner else { return }
+        guard !isSurfaceReady, hasSurface else { return }
         isSurfaceReady = true
-        // 影子先跟到 surface 此刻的网格（回放流要按接收端的尺寸生成）。远控主控端例外：影子跟着对端。
-        if let grid = io.surfaceGrid, !owner.shadowFollowsRemoteGrid.withLock({ $0 }) {
-            owner.shadow.resize(cols: grid.columns, rows: grid.rows,
-                                cellWidth: grid.cellWidthPixels, cellHeight: grid.cellHeightPixels)
-        }
+        // 影子此刻已经在 surface 的终端报来的网格上（resize 回调里当场改的、或兜底认下的那一次）：回放流按它生成。
         syncSurfaceFeeding()
     }
 
@@ -250,19 +248,15 @@ final class GhosttyTerminalBridge {
     fileprivate func ghosttyDidResize(cols reportedCols: Int, rows reportedRows: Int) {
         // 报来的网格是 Ghostty 的 IO 线程在某一刻量的，转到主线程时可能已经过时。最常见的一次：surface 刚建好时先按
         // 引擎默认的 800×600 px 报一个约 53×21，紧接着才是视图的真实尺寸；把过时的那个发给 PTY，正在跑的全屏程序
-        // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以一律以 surface 此刻的网格为准：之后那次报告到达时
-        // 值相同，不会重复发。影子终端在回调里是按报来的值改的，过时的话一并拉回来。
+        // （重启后接回的 Claude Code）就先按 53 列重排一遍。所以发给 PTY 的一律以 surface 此刻的网格为准：之后那次报告
+        // 到达时值相同，不会重复发。
+        // 影子终端不在这里改：它只跟 surface 的终端自己报的网格走（IO 线程的 resize 回调里当场改，M4 的前提——按主线程上
+        // 的网格改，两边会在不同的字节位置换宽度，折行就对不上了）。主线程上的 `surfaceGrid` 可能比终端先变，这一刻
+        // 按它改影子就早了。
         var cols = reportedCols, rows = reportedRows
         if let current = io.surfaceGrid, current.columns > 0, current.rows > 0 {
             cols = Int(current.columns)
             rows = Int(current.rows)
-            // 影子终端一并对齐到这个值：回调里按过时的值改过的拉回来；容器提交尺寸后主动补报的这一次
-            // （`resizeDidSettle`）回调还没到，也在这里跟上，影子和发给 PTY 的尺寸不差出一次。
-            // 远控主控端例外：影子跟着对端的快照走。
-            if owner?.shadowFollowsRemoteGrid.withLock({ $0 }) == false {
-                owner?.shadow.resize(cols: current.columns, rows: current.rows,
-                                     cellWidth: current.cellWidthPixels, cellHeight: current.cellHeightPixels)
-            }
         }
         guard cols > 0, rows > 0 else { return }
         // 远控主控端停着画面等网格对齐的话，现在可能对上了。
@@ -273,7 +267,12 @@ final class GhosttyTerminalBridge {
         }
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
-        if changed { owner?.shadowGridDidChange() }
+        // 镜像端重发快照、检查点重存，要等影子真的换了网格：主线程上的 `surfaceGrid` 可能比终端先变（容器提交尺寸后
+        // 主动补报的那一次），这时影子还是旧网格，按它拍的快照是旧尺寸；IO 线程改完影子、报过来的那一次再算。
+        if let shadowSize = owner?.shadow.size, changed || notifiedShadowSize.map({ $0 != shadowSize }) ?? true {
+            notifiedShadowSize = shadowSize
+            owner?.shadowGridDidChange()
+        }
         // 容器还在等尺寸停稳（首次挂载、接回、窗口在定尺寸）：这时的网格是中间态，不发给 PTY；停稳后
         // `resizeDidSettle` 再发最终那一次。远控钉住的尺寸是确定的目标，照发。
         if !view.holdsGridReports || view.pinnedFrameSize != nil {

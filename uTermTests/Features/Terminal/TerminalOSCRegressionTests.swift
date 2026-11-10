@@ -60,10 +60,10 @@ final class TerminalOSCRegressionTests: XCTestCase {
     func testOSC52IsIgnoredWhileReplayingHeldOutput() {
         pasteboard.clearContents()
         pasteboard.setString("原来的", forType: .string)
-        session.isReplayingHeldOutput = true
-        feed("\u{1b}]52;c;\(Data("old".utf8).base64EncodedString())\u{07}")
-        session.isReplayingHeldOutput = false
+        session.shadow.feed(Data("\u{1b}]52;c;\(Data("old".utf8).base64EncodedString())\u{07}".utf8), asHistory: true)
         XCTAssertEqual(pasteboard.string(forType: .string), "原来的")
+        feed("\u{1b}]52;c;\(Data("new".utf8).base64EncodedString())\u{07}")
+        XCTAssertEqual(pasteboard.string(forType: .string), "new", "实时的照写")
     }
 
     /// 远端程序不能靠 OSC 52 读走 Mac 的剪贴板。

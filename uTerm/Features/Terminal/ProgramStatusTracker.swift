@@ -5,6 +5,10 @@ import Foundation
 /// 只有「此刻有没有人在看」「怎么提醒」由各自平台决定。
 nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
     private(set) var board = ProgramStatusBoard()
+    /// 重启后接回时前台在跑的那个程序（不是 shell）：检查点里没有它的状态，它也不会为接回再报一次——多半就是重启前
+    /// 一直在跑的 Agent。按「有程序在用这套协议」算（`hasRecords`），但不上标签（不知道它此刻是什么状态）。
+    /// 程序报来任何状态、或者回到 shell 提示符就作废。可选：旧检查点里没有这一项。
+    private(set) var presumedProgram: String?
 
     /// 收到一条消息后调用方要做的事。
     enum Effect: Equatable, Sendable {
@@ -26,8 +30,14 @@ nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
         return summary?.state == .idle ? nil : summary
     }
 
-    /// 还有记录（含 `idle`）：有程序在用这套协议，说明前台不是 shell。
-    var hasRecords: Bool { board.summary != nil }
+    /// 还有记录（含 `idle`），或者接回时认定前台是个程序：有程序在用这套协议，说明前台不是 shell。
+    var hasRecords: Bool { board.summary != nil || presumedProgram != nil }
+
+    /// 接回时问到前台在跑 `name`（不是 shell），而检查点里没有任何状态。见 `presumedProgram`。
+    mutating func presumeRunningProgram(_ name: String) {
+        guard board.summary == nil else { return }
+        presumedProgram = name
+    }
 
     /// `isLooking`：用户此刻正看着这条会话，结果不用再提示。
     mutating func receive(_ message: ProgramStatusMessage, isLooking: Bool) -> Effect {
@@ -35,9 +45,11 @@ nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
         case .query:
             return .reply
         case .clear(let id):
+            presumedProgram = nil
             board.clear(id: id)
             return .none
         case .report(let id, let record):
+            presumedProgram = nil
             let needsAttention = board.apply(id: id, record: record)
             if isLooking {
                 board.acknowledgeResults()
@@ -49,6 +61,7 @@ nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
 
     /// 新 shell 提示符出现：上一个程序已经结束。
     mutating func promptStarted() {
+        presumedProgram = nil
         board.programEnded()
     }
 
@@ -59,6 +72,7 @@ nonisolated struct ProgramStatusTracker: Equatable, Sendable, Codable {
 
     /// 连接没了，上面跑的程序也不再有状态可言。
     mutating func reset() {
+        presumedProgram = nil
         board.clear(id: nil)
     }
 }
@@ -142,6 +156,11 @@ nonisolated final class ProgramStatusJournal: @unchecked Sendable {
     /// 用户看过结果了。
     func acknowledgeResults() {
         lock.withLock { tracker.acknowledgeResults() }
+    }
+
+    /// 接回时认定前台是个程序（见 `ProgramStatusTracker.presumedProgram`）。
+    func presumeRunningProgram(_ name: String) {
+        lock.withLock { tracker.presumeRunningProgram(name) }
     }
 
     var current: ProgramStatusTracker {

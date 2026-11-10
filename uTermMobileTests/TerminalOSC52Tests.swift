@@ -92,10 +92,8 @@ final class TerminalOSC52Tests: XCTestCase {
         XCTAssertEqual(pasteboard.string, "原来的", "回放进 surface 不写剪贴板")
         XCTAssertEqual(UIPasteboard.general.changeCount, general)
 
-        host.bridge.shadow.setEventsSuppressed(true)
-        host.feedAndWait(Self.osc52("suppressed"))
-        host.bridge.shadow.setEventsSuppressed(false)
-        XCTAssertEqual(pasteboard.string, "原来的", "影子关着事件（回放历史）时不写")
+        host.bridge.shadow.feed(Data(Self.osc52("history").utf8), asHistory: true)
+        XCTAssertEqual(pasteboard.string, "原来的", "影子喂历史字节时不写")
     }
 
     /// 远端程序不能靠 OSC 52 读走手机的剪贴板：surface 在吃字节（它来答）、只喂影子（影子来答）两种情况都不答。

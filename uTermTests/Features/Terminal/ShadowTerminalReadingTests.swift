@@ -11,13 +11,20 @@ final class ShadowTerminalReadingTests: XCTestCase {
     private final class EventLog: @unchecked Sendable {
         private let lock = NSLock()
         private var storage: [ShadowTerminal.Event] = []
-        func append(_ event: ShadowTerminal.Event) { lock.withLock { storage.append(event) } }
+        private var historyFlags: [Bool] = []
+        func append(_ event: ShadowTerminal.Event, history: Bool = false) {
+            lock.withLock {
+                storage.append(event)
+                historyFlags.append(history)
+            }
+        }
         var events: [ShadowTerminal.Event] { lock.withLock { storage } }
+        var history: [Bool] { lock.withLock { historyFlags } }
     }
 
     private func recording(_ terminal: ShadowTerminal) -> EventLog {
         let log = EventLog()
-        terminal.setEventHandler { log.append($0) }
+        terminal.setEventHandler { log.append($0, history: $1) }
         return log
     }
 
@@ -100,15 +107,30 @@ final class ShadowTerminalReadingTests: XCTestCase {
         XCTAssertTrue(terminal.isOnAlternateScreen)
     }
 
-    func testSuppressedEventsAreDropped() {
+    /// 历史字节（接回时回放的那段）：事件带上历史标记；不应答（7501 查询、DA 都不答）、不写剪贴板、未知 OSC 不交出。
+    /// 之后的实时字节照常。
+    func testHistoryBytesAreMarkedAndNotAnswered() {
         let terminal = makeTerminal()
         let log = recording(terminal)
-        terminal.setEventsSuppressed(true)
-        feed(terminal, "\u{1B}]7501;state=working\u{07}\u{1B}]7501;?\u{07}\u{1B}]9;x\u{07}\u{1B}]6973;S;abc\u{07}\u{07}")
-        XCTAssertTrue(log.events.isEmpty)
-        terminal.setEventsSuppressed(false)
-        feed(terminal, "\u{07}")
-        XCTAssertEqual(log.events.count, 1)
+        let replies = EventLog()
+        terminal.setReplyHandler { _ in replies.append(.bell) }
+        terminal.setRepliesEnabled(true)
+        let clipboard = EventLog()
+        terminal.setClipboardWriteHandler { _ in clipboard.append(.bell) }
+        terminal.feed(Data(("\u{1B}]7501;state=working\u{07}\u{1B}]7501;?\u{07}\u{1B}]9;x\u{07}\u{1B}]6973;S;abc\u{07}"
+                            + "\u{1B}[c\u{1B}]52;c;\(Data("old".utf8).base64EncodedString())\u{07}\u{07}").utf8), asHistory: true)
+        XCTAssertTrue(replies.events.isEmpty, "历史里的查询不答")
+        XCTAssertTrue(clipboard.events.isEmpty, "历史里的 OSC 52 不写")
+        XCTAssertEqual(log.history, Array(repeating: true, count: log.events.count), "历史事件都带标记")
+        XCTAssertFalse(log.events.contains { if case .programStatusQuery = $0 { return true } else { return false } })
+        XCTAssertFalse(log.events.contains { if case .unknownOSC = $0 { return true } else { return false } })
+        XCTAssertTrue(log.events.contains { if case .programStatus = $0 { return true } else { return false } })
+
+        let before = log.events.count
+        feed(terminal, "\u{1B}[c\u{07}")
+        XCTAssertEqual(replies.events.count, 1, "实时的照答")
+        XCTAssertEqual(log.events.count, before + 1)
+        XCTAssertEqual(log.history.last, false)
     }
 
     // MARK: 未知 OSC 与标记

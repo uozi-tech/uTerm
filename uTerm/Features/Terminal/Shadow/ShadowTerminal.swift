@@ -83,11 +83,11 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 从快照还原过（`restore(snapshot:)` / `init(snapshot:options:)`）：没喂过字节也有内容。
     private var wasRestored = false
     /// 事件出口，见 `Event`。在 `feed` 里同步调用。
-    private var eventHandler: (@Sendable (Event) -> Void)?
+    private var eventHandler: (@Sendable (Event, _ isHistory: Bool) -> Void)?
     /// 程序写剪贴板（OSC 52 / OSC 1337 Copy / OSC 5522）。见 `setClipboardWriteHandler`。
     private var clipboardWriteHandler: (@Sendable (String) -> Void)?
-    /// 回放历史时关掉事件（里面的状态上报、通知、标记都是过去的事）。
-    private var eventsSuppressed = false
+    /// 正在喂的这批字节是历史（`feed(_:asHistory:)`）：不应答、不写剪贴板，事件带上历史标记。
+    private var feedingHistory = false
 
     /// 建一个 `cols` × `rows` 的终端。mode 2027（字素簇）默认开，见 `Options.graphemeClusters`。
     init(cols: UInt16, rows: UInt16, options: Options) {
@@ -122,11 +122,17 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     // MARK: 喂字节、尺寸
 
     /// 同步解析一批字节。
-    func feed(_ data: Data) {
+    ///
+    /// `asHistory`：这批字节是过去的输出（重启后接回时 holder 留着的那段）。里面的查询当年已经回答过、剪贴板当年已经
+    /// 写过，所以不应答、不写剪贴板；事件照发但带上历史标记（`setEventHandler`），宿主只拿程序状态记账、不发通知。
+    /// 标记跟着字节走，不是一个开关：同一时刻别处来的真实输入（键盘、surface 的应答）不受影响。
+    func feed(_ data: Data, asHistory: Bool = false) {
         guard !data.isEmpty else { return }
         lock.lock()
         defer { lock.unlock() }
         fedBytes += data.count
+        feedingHistory = asHistory
+        defer { feedingHistory = false }
         data.withUnsafeBytes { raw in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             ghostty_terminal_vt_write(handle, base, raw.count)
@@ -266,7 +272,8 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         let writePty: GhosttyTerminalWritePtyFn = { _, userdata, bytes, count in
             guard let userdata, let bytes, count > 0 else { return }
             let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
-            // 在 `feed` 里同步回调，锁已经在手上。
+            // 在 `feed` 里同步回调，锁已经在手上。历史里的查询当年已经答过。
+            guard !shadow.feedingHistory else { return }
             let data = Data(bytes: bytes, count: count)
             // OSC 7501 的查询只有 vt 会答（surface 的 termio 不实现它），所以这一条不看 `repliesEnabled`，
             // 单独作为事件交给宿主：答不答由宿主定（回放、远控镜像不答）。
@@ -739,25 +746,19 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         case bell
     }
 
-    /// 事件出口。回放历史时用 `setEventsSuppressed(true)` 关掉。
-    func setEventHandler(_ handler: (@Sendable (Event) -> Void)?) {
+    /// 事件出口。第二个参数：事件来自历史字节（`feed(_:asHistory:)`）——那是过去的事，宿主只拿程序状态记账。
+    func setEventHandler(_ handler: (@Sendable (Event, _ isHistory: Bool) -> Void)?) {
         lock.lock()
         eventHandler = handler
         lock.unlock()
     }
 
     /// 程序要写剪贴板（OSC 52 等）：参数是要写的文字（vt 已解好 base64；只取纯文本那一份，清空剪贴板的请求不转）。
-    /// 和事件一样在 `feed` 里同步调用、回放历史时不调。读剪贴板（OSC 52 `?`）不接：vt 不答，程序读不到。
+    /// 和事件一样在 `feed` 里同步调用；历史字节（`feed(_:asHistory:)`）里的不调。读剪贴板（OSC 52 `?`）不接：vt 不答，程序读不到。
     /// 单独一个回调而不是 `Event` 的一种：两端按 `Event` 穷举分发，加一种会让没接的那一端编不过。
     func setClipboardWriteHandler(_ handler: (@Sendable (String) -> Void)?) {
         lock.lock()
         clipboardWriteHandler = handler
-        lock.unlock()
-    }
-
-    func setEventsSuppressed(_ suppressed: Bool) {
-        lock.lock()
-        eventsSuppressed = suppressed
         lock.unlock()
     }
 
@@ -768,8 +769,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
 
     /// 调用方持锁（都在 `feed` 的回调里）。
     fileprivate func emit(_ event: Event) {
-        guard !eventsSuppressed, let handler = eventHandler else { return }
-        handler(event)
+        eventHandler?(event, feedingHistory)
     }
 
     private static func string(_ value: GhosttyString) -> String {
@@ -825,7 +825,8 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             let osc = sequence.value.osc
             guard !osc.truncated, let pointer = osc.content.ptr, osc.content.len > 0 else { return }
             let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
-            guard !shadow.eventsSuppressed, shadow.eventHandler != nil else { return }
+            // 历史里的未知 OSC（命令跟踪标记这类）是过去的事，宿主不要：连拷贝都省掉。
+            guard !shadow.feedingHistory, shadow.eventHandler != nil else { return }
             let payload = Data(bytes: pointer, count: osc.content.len)
             shadow.emit(.unknownOSC(payload: payload, cursor: shadow.makeCursorMarker(terminal)))
         }
@@ -852,7 +853,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             guard let userdata, let request else { return }
             let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
             var result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
-            if !shadow.eventsSuppressed, let handler = shadow.clipboardWriteHandler,
+            if !shadow.feedingHistory, let handler = shadow.clipboardWriteHandler,
                request.pointee.location == GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
                let contents = request.pointee.contents, request.pointee.contents_len > 0 {
                 let items = UnsafeBufferPointer(start: contents, count: request.pointee.contents_len)

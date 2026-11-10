@@ -167,6 +167,10 @@ final class LocalShellAgentImagePasteTests: XCTestCase {
         XCTAssertEqual(second.session.connectionState, .connected)
         XCTAssertTrue(screen(second).contains("SILENT_READY"), "没接回同一个 shell：\(screen(second).suffix(400))")
         XCTAssertNil(second.session.programStatus)
+        // 接回时问过前台：是 perl（不是 shell），认作重启前就在跑的 Agent，但不上标签（不知道它的状态）。
+        let presumed = await waitUntil(5) { second.session.programStatusTracker.hasRecords }
+        XCTAssertTrue(presumed, "接回时该问到前台在跑程序")
+        XCTAssertNil(second.session.programStatus)
 
         XCTAssertTrue(second.session.ghostty.view.performKeyEquivalent(with: try commandV(second)), "⌘V 没被接管")
         let gotControlV = await waitUntil(10) { self.screen(second).contains("GOT16") }
@@ -174,17 +178,18 @@ final class LocalShellAgentImagePasteTests: XCTestCase {
         XCTAssertEqual(written.total, 1)
     }
 
-    /// 接回后前台就是 shell：不替用户按 Ctrl+V（在 zsh 里那是转义输入），问过一次之后也不再猜。
+    /// 接回后前台就是 shell：不替用户按 Ctrl+V（在 zsh 里那是转义输入）。接回时问过一次前台，不再猜。
     func testCommandVAfterReattachAtShellPromptSendsNothing() async throws {
         let first = await open()
         await waitForShell(first)
         try await detachForRestart(first)
 
         let second = await open()
-        XCTAssertTrue(second.session.programStatusUnknown)
-        XCTAssertTrue(second.session.ghostty.view.performKeyEquivalent(with: try commandV(second)))
-        let settled = await waitUntil(5) { !second.session.programStatusUnknown }
-        XCTAssertTrue(settled, "前台是 shell，问过一次就该不再猜")
+        // 接回那一刻问前台的结论是异步落地的：给它一点时间，确认不会认成程序。
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertFalse(second.session.programStatusTracker.hasRecords, "前台是 shell，不该认成程序")
+        _ = second.session.ghostty.view.performKeyEquivalent(with: try commandV(second))
+        try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(written.total, 0, "shell 在前台时不该贴图")
         XCTAssertFalse(second.session.pasteImage(uTerm.TerminalImage(format: .png, data: png)))
     }
@@ -226,6 +231,8 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         private let replay: HolderReplay
         private let activity: TerminalActivity
         private(set) var delivered = 0
+        /// 问过几次前台。
+        private(set) var activityQueries = 0
 
         init(replay: HolderReplay, activity: TerminalActivity, canReadClipboard: Bool) {
             programsCanReadMacClipboard = canReadClipboard
@@ -241,7 +248,10 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         func close() async {}
         func takeReplay() -> HolderReplay? { replay }
         func detach() async {}
-        func foregroundActivity() async -> TerminalActivity { activity }
+        func foregroundActivity() async -> TerminalActivity {
+            activityQueries += 1
+            return activity
+        }
         func deliverImage(_ image: uTerm.TerminalImage) async throws -> TerminalImageDelivery {
             delivered += 1
             return .clipboard
@@ -283,7 +293,11 @@ final class TerminalReattachImagePasteTests: XCTestCase {
 
     func testRunningProgramAfterReattachGetsTheImage() async throws {
         let (session, backend) = await connect(blob: try foreignCheckpoint(), activity: .running("claude"))
-        XCTAssertTrue(session.programStatusUnknown)
+        let presumed = await waitUntil { session.programStatusTracker.hasRecords }
+        XCTAssertTrue(presumed, "接回时该问到前台在跑程序")
+        XCTAssertNil(session.programStatus, "不知道它的状态，不上标签")
+        let queries = await backend.activityQueries
+        XCTAssertEqual(queries, 1)
         XCTAssertTrue(session.pasteImage(image))
         let delivered = await waitUntil { await backend.delivered == 1 }
         XCTAssertTrue(delivered)
@@ -303,7 +317,9 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         XCTAssertTrue(session.programStatusTracker.hasRecords)
         XCTAssertEqual(session.programStatus?.state, .working)
         XCTAssertEqual(session.programStatus?.app, "claude-code")
-        XCTAssertFalse(session.programStatusUnknown)
+        try await Task.sleep(for: .milliseconds(100))
+        let queries = await backend.activityQueries
+        XCTAssertEqual(queries, 0, "检查点里有状态，不用问前台")
         XCTAssertTrue(session.pasteImage(image))
         let delivered = await waitUntil { await backend.delivered == 1 }
         XCTAssertTrue(delivered)
@@ -323,22 +339,26 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         XCTAssertNil(TerminalCheckpointBlob.decodeProgramStatus(truncated))
 
         for blob in [garbled, truncated] {
-            let (session, _) = await connect(blob: blob, activity: .unknown)
+            let (session, backend) = await connect(blob: blob, activity: .unknown)
             XCTAssertFalse(session.programStatusTracker.hasRecords)
             XCTAssertNil(session.programStatus)
-            XCTAssertTrue(session.programStatusUnknown, "接回了却不知道状态，该交给前台判断")
+            let asked = await waitUntil { await backend.activityQueries == 1 }
+            XCTAssertTrue(asked, "接回了却不知道状态，该交给前台判断")
+            XCTAssertFalse(session.programStatusTracker.hasRecords, "前台判断不了：不认成程序")
             session.dispose()
         }
     }
 
-    /// 前台判断不了：不贴，下次再问。
+    /// 前台判断不了：不当它是程序，⌘V 走普通粘贴（剪贴板里只有图片，贴不出东西）。
     func testUnknownForegroundSendsNothing() async throws {
         let (session, backend) = await connect(blob: try foreignCheckpoint(), activity: .unknown)
-        XCTAssertTrue(session.pasteImage(image))
+        let asked = await waitUntil { await backend.activityQueries == 1 }
+        XCTAssertTrue(asked)
+        XCTAssertFalse(session.pasteImage(image))
         try await Task.sleep(for: .milliseconds(200))
         let delivered = await backend.delivered
         XCTAssertEqual(delivered, 0)
-        XCTAssertTrue(session.programStatusUnknown)
+        XCTAssertFalse(session.programStatusTracker.hasRecords)
         session.dispose()
     }
 
@@ -349,8 +369,9 @@ final class TerminalReattachImagePasteTests: XCTestCase {
         original.userLookingOverride = { false }
         original.feedOutput(text: "\u{1b}]7501;state=idle:app=claude-code\u{1b}\\")
         let (session, backend) = await connect(blob: try original.makeHeldCheckpointBlob(), activity: .idle)
-        XCTAssertFalse(session.programStatusUnknown)
         XCTAssertTrue(session.pasteImage(image))
+        let queries = await backend.activityQueries
+        XCTAssertEqual(queries, 0, "检查点里带着状态，不用问前台")
         let delivered = await waitUntil { await backend.delivered == 1 }
         XCTAssertTrue(delivered)
         original.dispose()
@@ -358,9 +379,12 @@ final class TerminalReattachImagePasteTests: XCTestCase {
     }
 
     /// 全新的会话不是接回，没有什么可猜的。
-    func testFreshSessionDoesNotGuess() async {
-        let (session, _) = await connect(blob: nil, activity: .running("vim"))
-        XCTAssertFalse(session.programStatusUnknown)
+    func testFreshSessionDoesNotGuess() async throws {
+        let (session, backend) = await connect(blob: nil, activity: .running("vim"))
+        try await Task.sleep(for: .milliseconds(100))
+        let queries = await backend.activityQueries
+        XCTAssertEqual(queries, 0)
+        XCTAssertFalse(session.programStatusTracker.hasRecords)
         XCTAssertFalse(session.pasteImage(image))
         session.dispose()
     }
@@ -368,14 +392,18 @@ final class TerminalReattachImagePasteTests: XCTestCase {
     /// 接回之后程序开口了、或者回到了 shell 提示符：不再猜。
     func testProgramSpeakingOrPromptEndsTheGuess() async throws {
         let (spoken, _) = await connect(blob: try foreignCheckpoint(), activity: .running("claude"))
+        let spokenPresumed = await waitUntil { spoken.programStatusTracker.hasRecords }
+        XCTAssertTrue(spokenPresumed)
         spoken.feedOutput(text: "\u{1b}]7501;state=clear\u{1b}\\")
-        XCTAssertFalse(spoken.programStatusUnknown)
+        XCTAssertFalse(spoken.programStatusTracker.hasRecords)
         XCTAssertFalse(spoken.pasteImage(image))
         spoken.dispose()
 
         let (prompted, _) = await connect(blob: try foreignCheckpoint(), activity: .running("claude"))
+        let promptedPresumed = await waitUntil { prompted.programStatusTracker.hasRecords }
+        XCTAssertTrue(promptedPresumed)
         prompted.feedOutput(text: "\u{1b}]133;A\u{07}$ ")
-        XCTAssertFalse(prompted.programStatusUnknown)
+        XCTAssertFalse(prompted.programStatusTracker.hasRecords)
         XCTAssertFalse(prompted.pasteImage(image))
         prompted.dispose()
     }
