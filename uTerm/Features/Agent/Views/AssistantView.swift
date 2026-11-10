@@ -586,25 +586,25 @@ struct AssistantView: View {
             minLines: 2,
             safety: safetyBinding,
             activeProviderIDString: $activeProviderIDString,
-            onSend: sendIfPossible,
+            onSend: { sendIfPossible() },
             onAttach: attachCurrentContext,
             onOpenSettings: { openWindow(id: SettingsWindow.id) })
             .padding(10)
     }
 
-    private func sendIfPossible() {
+    private func sendIfPossible(delivery: QueuedMessage.Delivery = .afterTurn) {
         // 同步清空输入再异步发送，避免回车后「先全选再发」的一帧闪烁（与终端 Agent 一致）。
         guard let text = model.takeDraft() else { return }
-        Task { await model.submit(text: text, serverContext: serverContext) }
+        Task { await model.submit(text: text, serverContext: serverContext, delivery: delivery) }
     }
 
-    /// 工作区 Agent 与终端 Agent 共用同一条 ⌘↵ 语义：待确认时优先运行命令，
-    /// 否则发送当前输入。
+    /// 工作区 Agent 与终端 Agent 共用同一条 ⌘↵ 语义：待确认时优先运行命令，否则发送当前
+    /// 输入 —— Agent 忙碌时是「立即发送」：不打断，这一步跑完就送达（↩ 则排到整轮结束）。
     private func handleCommandReturn() {
         if let id = model.commandReturnTarget {
             Task { await model.approveAndRun(id: id) }
         } else {
-            sendIfPossible()
+            sendIfPossible(delivery: .nextStep)
         }
     }
 

@@ -231,6 +231,96 @@ final class AssistantModelToolLoopTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
     }
 
+    // MARK: - 立即发送（下一步送达，不打断）
+
+    private func toolLoopModel(_ client: MockLLMClient) -> AssistantModel {
+        let exec = MockCommandExecutor()
+        exec.results["ls"] = CommandResult(output: "a", exitCode: 0)
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.executor = exec
+        return model
+    }
+
+    /// 工具结果出来后的那次续轮请求里就带上这条消息 —— 没有另开一轮，也没有取消过什么。
+    func testNextStepMessageJoinsTheToolContinuation() async {
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"ls"}"#))],
+            [.text("按新要求答")],
+        ])
+        let model = toolLoopModel(client)
+        model.input = "列目录"
+        await model.send(serverContext: "")
+        XCTAssertEqual(model.state, .awaitingApproval)
+
+        await model.submit(text: "只看隐藏文件", serverContext: "", delivery: .nextStep)
+        XCTAssertEqual(model.queuedMessages.map(\.delivery), [.nextStep])
+
+        await model.approveAndRun(id: "c1")
+
+        XCTAssertEqual(client.captured.callCount, 2, "并进续轮，不另开一轮")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+        XCTAssertEqual(model.messages.map(\.role), [.user, .assistant, .user, .assistant])
+        XCTAssertEqual(model.messages[2].text, "只看隐藏文件")
+        XCTAssertTrue(model.messages[2].continuesTurn)
+        XCTAssertEqual(model.messages.last?.text, "按新要求答")
+        // 续轮发出去的会话：工具结果在前，这条消息紧随其后。
+        let sent = client.captured.messages
+        XCTAssertEqual(sent.map(\.role), [.user, .assistant, .user])
+        XCTAssertEqual(sent[1].toolCalls.first?.output, "a")
+        XCTAssertEqual(sent[2].text, "只看隐藏文件")
+        XCTAssertEqual(model.state, .idle)
+    }
+
+    /// 已经排着的消息点「立即发送」：只送它，其余的仍等整轮结束。
+    func testPromotedQueuedMessageIsDeliveredAtNextStepOthersWaitForTurnEnd() async {
+        let client = MockLLMClient(scripts: [
+            [.toolCall(LLMToolCall(id: "c1", name: "run_command",
+                                   argumentsJSON: #"{"command":"ls"}"#))],
+            [.text("续答")],
+            [.text("答排队的那条")],
+        ])
+        let model = toolLoopModel(client)
+        model.input = "列目录"
+        await model.send(serverContext: "")
+
+        await model.submit(text: "等整轮结束再说", serverContext: "")
+        await model.submit(text: "这条现在就要", serverContext: "")
+        model.sendQueuedAtNextStep(id: model.queuedMessages[1].id)
+        XCTAssertEqual(model.queuedMessages.map(\.text), ["这条现在就要", "等整轮结束再说"])
+
+        await model.approveAndRun(id: "c1")
+
+        XCTAssertEqual(client.captured.callCount, 3)
+        XCTAssertEqual(model.messages.filter { $0.role == .user }.map(\.text),
+                       ["列目录", "这条现在就要", "等整轮结束再说"])
+        XCTAssertEqual(model.messages.filter { $0.role == .user }.map(\.continuesTurn),
+                       [false, true, false])
+        XCTAssertEqual(model.messages.last?.text, "答排队的那条")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+    }
+
+    /// 本轮没有下一步（模型直接答完）：攒着的几条一起开下一轮，而不是一条一轮。
+    func testNextStepMessagesShareOneTurnWhenTheTurnEndsWithoutAStep() async {
+        let client = MockLLMClient(scripts: [
+            [.text("第一轮答完")],
+            [.text("两条一起答")],
+            [.text("答普通排队的")],
+        ])
+        let model = AssistantModel(client: client, provider: provider(), apiKey: "k")
+        model.enqueue("普通排队")
+        model.enqueue("甲", delivery: .nextStep)
+        model.enqueue("乙", delivery: .nextStep)
+        model.input = "你好"
+        await model.send(serverContext: "")
+
+        XCTAssertEqual(client.captured.callCount, 3)
+        XCTAssertEqual(model.messages.map(\.text),
+                       ["你好", "第一轮答完", "甲", "乙", "两条一起答", "普通排队", "答普通排队的"])
+        XCTAssertFalse(model.messages[2].continuesTurn, "开新一轮的消息是轮次边界")
+        XCTAssertTrue(model.queuedMessages.isEmpty)
+    }
+
     // MARK: - FIX #28: 流式期间不可批准/跳过
 
     /// 流式仍在飞行（state == .streaming，但卡片已渲染成 pending）时，approveAndRun

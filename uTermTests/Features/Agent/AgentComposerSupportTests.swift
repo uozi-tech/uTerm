@@ -167,7 +167,7 @@ final class AgentComposerSupportTests: XCTestCase {
         await model.send(serverContext: "")
         XCTAssertEqual(model.state, .awaitingApproval)
         XCTAssertEqual(model.firstPendingToolCallID, "c1")
-        XCTAssertEqual(model.composerPlaceholder("问点什么"), "Agent 正在处理，输入会排队发送…")
+        XCTAssertEqual(model.composerPlaceholder("问点什么"), "Agent 正在处理，↩ 排队，⌘↩ 立即发送…")
 
         model.stop()
         XCTAssertNil(model.firstPendingToolCallID, "停止后待确认卡被跳过")

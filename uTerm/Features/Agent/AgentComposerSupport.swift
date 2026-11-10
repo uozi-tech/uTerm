@@ -161,9 +161,15 @@ extension AssistantModel {
         return state == .running ? "已停止后续步骤，已下发命令仍在运行" : "已停止"
     }
 
-    /// 忙碌时把占位符换成排队说明。
+    /// 忙碌时把占位符换成排队说明。Mac 上多交代一句 ⌘↩（立即发送 = 下一步送达，不打断）；
+    /// iOS 没有这个键，立即发送在排队条带的行尾。
     func composerPlaceholder(_ idle: String) -> String {
-        isBusy ? "Agent 正在处理，输入会排队发送…" : idle
+        guard isBusy else { return idle }
+        #if os(macOS)
+        return "Agent 正在处理，↩ 排队，⌘↩ 立即发送…"
+        #else
+        return "Agent 正在处理，输入会排队发送…"
+        #endif
     }
 
     /// 取走输入框里的草稿并**同步**清空（避免回车后「先全选再发」的闪烁）；

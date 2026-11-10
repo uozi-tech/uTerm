@@ -16,10 +16,15 @@ nonisolated struct AnthropicClient: LLMClient {
     /// - Parameter replayThinking: 开着思考时为 true —— 最后一条用户消息之后（即本轮工具
     ///   循环里）的 assistant 消息把 thinking 块原样放回最前。更早的轮次不回传：从历史前端
     ///   整段移除是 API 允许的形状，而且出站压缩会改写旧轮次，回传反而会被判签名不符。
+    ///   循环中途并进来的用户消息（`continuesTurn`）不算新一轮：它前面那几步仍在本轮里，
+    ///   thinking 照样回传。
+    ///
+    /// 紧跟在用户消息后面的用户消息并进同一条：工具结果后的那条写成
+    /// `[tool_result…, text]`（tool_result 必须排在最前），不发连续两条 user。
     static func buildMessages(conversation: [ChatMessage], replayThinking: Bool = false) -> [[String: Any]] {
         var msgs: [[String: Any]] = []
         let turnStart = replayThinking
-            ? (conversation.lastIndex(where: { $0.role == .user }) ?? -1) + 1
+            ? (conversation.lastIndex(where: { $0.role == .user && !$0.continuesTurn }) ?? -1) + 1
             : conversation.count
         for (offset, m) in conversation.enumerated() {
             let thinking = offset >= turnStart ? m.thinking.map(\.anthropicJSON) : []
@@ -40,6 +45,11 @@ nonisolated struct AnthropicClient: LLMClient {
                 var content = thinking
                 if !m.text.isEmpty { content.append(["type": "text", "text": m.text]) }
                 msgs.append(["role": "assistant", "content": content])
+            } else if m.role == .user, let last = msgs.last, last["role"] as? String == "user" {
+                var blocks = (last["content"] as? [[String: Any]])
+                    ?? [["type": "text", "text": last["content"] as? String ?? ""]]
+                blocks.append(["type": "text", "text": m.text])
+                msgs[msgs.count - 1]["content"] = blocks
             } else {
                 msgs.append(["role": m.role.rawValue, "content": m.text])
             }

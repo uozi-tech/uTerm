@@ -9,7 +9,9 @@ import Foundation
 typealias ContextCompressor = AgentContextCompressor
 
 nonisolated extension ChatMessage: CompressibleMessage {
-    var isTurnBoundary: Bool { role == .user }
+    /// 工具循环中途并进来的用户消息不算边界：窗口要是从它切开，同一轮里更早的步骤会被
+    /// 折叠，而那几条 assistant 消息的 thinking 还要原样回传。
+    var isTurnBoundary: Bool { role == .user && !continuesTurn }
 
     var payloadByteCount: Int {
         var bytes = text.utf8.count

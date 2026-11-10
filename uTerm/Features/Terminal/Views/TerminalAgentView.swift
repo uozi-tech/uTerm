@@ -326,7 +326,7 @@ struct TerminalAgentView: View {
                 minLines: 3,
                 safety: $safety,
                 activeProviderIDString: $activeProviderIDString,
-                onSend: sendInput,
+                onSend: { sendInput() },
                 onAttach: attachContext,
                 onOpenSettings: onOpenSettings)
         }
@@ -340,17 +340,18 @@ struct TerminalAgentView: View {
     }
 
     /// 发送当前输入：**同步**清空输入再异步发送 —— 避免回车后「先全选再发」的闪烁。
-    private func sendInput() {
+    private func sendInput(delivery: QueuedMessage.Delivery = .afterTurn) {
         guard let text = model.takeDraft() else { return }
-        Task { await model.submit(text: text, serverContext: serverContext) }
+        Task { await model.submit(text: text, serverContext: serverContext, delivery: delivery) }
     }
 
-    /// ⌘↵：有待确认命令则运行首个 pending；否则发送当前输入。
+    /// ⌘↵：有待确认命令则运行首个 pending；否则发送当前输入 —— Agent 忙碌时是「立即发送」
+    /// （不打断，这一步跑完就送达；↩ 则排到整轮结束）。
     private func handleCommandReturn() {
         if let id = model.commandReturnTarget {
             Task { await model.approveAndRun(id: id) }
         } else {
-            sendInput()
+            sendInput(delivery: .nextStep)
         }
     }
 
