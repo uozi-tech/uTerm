@@ -20,8 +20,10 @@ final class AssistantModel {
     }
 
     private(set) var messages: [ChatMessage] = []
-    /// 待发队列：Agent 忙碌时提交的消息，空闲后逐条派发。纯内存。
-    private(set) var queuedMessages: [QueuedMessage] = []
+    /// 待发队列：Agent 忙碌时提交的消息。普通的等整轮结束后逐条派发；标成「下一步送达」
+    /// 的在当前这步工具跑完后并入会话，不打断在途回复。纯内存；规则在 AgentKit。
+    private var queue = AgentMessageQueue()
+    var queuedMessages: [QueuedMessage] { queue.items }
     /// 当前处于内联编辑态的用户消息 id（视图驱动；会话切换时清空）。
     var editingMessageID: UUID?
     var input: String = ""
@@ -65,7 +67,7 @@ final class AssistantModel {
         activeOperationID = nil
         activeStream = nil
         stream?.task?.cancel()
-        queuedMessages = []
+        queue.removeAll()
         for mi in messages.indices {
             for ci in messages[mi].toolCalls.indices where messages[mi].toolCalls[ci].status == .pending {
                 messages[mi].toolCalls[ci].status = .skipped
@@ -214,7 +216,7 @@ final class AssistantModel {
             pendingRestoredSessionID = nil
             currentSession = nil
             messages = []
-            queuedMessages = []
+            queue.removeAll()
             editingMessageID = nil
             input = ""
             if case .failed = state { state = .idle }
@@ -225,7 +227,7 @@ final class AssistantModel {
         pendingRestoredSessionID = snapshot.currentSessionID
         currentSession = nil
         messages = []
-        queuedMessages = []
+        queue.removeAll()
         editingMessageID = nil
         if case .failed = state { state = .idle }
         resolvePendingRestoredSessionIfNeeded()
@@ -245,7 +247,7 @@ final class AssistantModel {
         generation = UUID()
         activeOperationID = nil
         activeStream = nil
-        queuedMessages = []
+        queue.removeAll()
         editingMessageID = nil
         lastServerContext = ""
         lastTurnContext = nil
@@ -320,14 +322,16 @@ final class AssistantModel {
 
     /// 显式文本提交入口：视图在 `onSubmit` 里**同步**清空输入后调它 —— 避免「回车后先
     /// 全选再发送」的闪烁（异步清空会留一帧选中态）。
-    func submit(text: String, serverContext: String) async {
+    /// - Parameter delivery: 只在忙碌时有意义 —— 排到整轮结束（缺省），还是下一步就送达。
+    func submit(text: String, serverContext: String,
+                delivery: QueuedMessage.Delivery = .afterTurn) async {
         guard !isDisposed, !Task.isCancelled else { return }
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         if isBusy {
-            enqueue(prompt)
+            enqueue(prompt, delivery: delivery)
         } else {
-            await dispatch(prompt: prompt, serverContext: serverContext)
+            await dispatch(prompts: [prompt], serverContext: serverContext)
         }
     }
 
@@ -336,17 +340,20 @@ final class AssistantModel {
         await submit(serverContext: serverContext)
     }
 
-    /// 发送一条用户 prompt：校验凭据 → 追加消息 → 落库 → 流式。
-    private func dispatch(prompt: String, serverContext: String) async {
-        guard !isDisposed, !Task.isCancelled else { return }
+    /// 发起新一轮：校验凭据 → 追加用户消息 → 落库 → 流式。通常只有一条；排队里攒了几条
+    /// 「下一步送达」却没等到下一步时，它们一起开这一轮。
+    private func dispatch(prompts: [String], serverContext: String) async {
+        guard !isDisposed, !Task.isCancelled, let first = prompts.first else { return }
         guard let ctx = resolvedTurnContext() else { return }
         turnWasStopped = false
         lastTurnContext = ctx
         lastServerContext = serverContext
-        let userMessage = ChatMessage(role: .user, text: prompt)
-        messages.append(userMessage)
-        let session = ensureSession(firstPrompt: prompt)
-        persist(userMessage, in: session)
+        let session = ensureSession(firstPrompt: first)
+        for prompt in prompts {
+            let userMessage = ChatMessage(role: .user, text: prompt)
+            messages.append(userMessage)
+            persist(userMessage, in: session)
+        }
         await streamAssistantTurn(context: ctx, serverContext: serverContext, sessionID: session?.id)
     }
 
@@ -426,9 +433,8 @@ final class AssistantModel {
                                conversation: [ChatMessage], system: String) async {
         guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
         do {
-            let events = withIdleTimeout(context.client.stream(
-                messages: conversation, system: system, config: context.config),
-                timeout: context.config.streamIdleTimeout)
+            let events = context.client.streamWithIdleTimeout(
+                messages: conversation, system: system, config: context.config)
             for try await event in events {
                 guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
                 switch event {
@@ -611,7 +617,19 @@ final class AssistantModel {
             $0.status == .pending || $0.status == .running
         }
         if unresolved { state = .awaitingApproval; return }
+        deliverNextStepMessages()
         await continueAfterTools(context: context, serverContext: serverContext)
+    }
+
+    /// 一步结束、下一次请求之前：把标成「下一步送达」的排队消息并进会话。模型在续轮里
+    /// 同时读到工具结果和这几条消息，在途的回复没有被取消过。
+    private func deliverNextStepMessages() {
+        for item in queue.takeNextStep() {
+            var message = ChatMessage(role: .user, text: item.text)
+            message.continuesTurn = true
+            messages.append(message)
+            persist(message, in: currentSession)
+        }
     }
 
     /// 工具结果已并入会话后再起一轮：复用流式实现（不追加新用户消息）。
@@ -623,15 +641,18 @@ final class AssistantModel {
     // MARK: - 队列消息
 
     /// 入队一条待发消息（trim 后非空才入队）。
-    func enqueue(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        queuedMessages.append(QueuedMessage(text: trimmed))
+    func enqueue(_ text: String, delivery: QueuedMessage.Delivery = .afterTurn) {
+        queue.enqueue(text, delivery: delivery)
     }
 
     /// 移除一条排队消息。
     func removeQueued(id: UUID) {
-        queuedMessages.removeAll { $0.id == id }
+        queue.remove(id: id)
+    }
+
+    /// 「立即发送」：不打断在途回复，把这条排队消息改成下一步送达。
+    func sendQueuedAtNextStep(id: UUID) {
+        queue.sendAtNextStep(id: id)
     }
 
     /// 把某条排队消息载回输入框编辑（草稿非空则前置追加），并出队。
@@ -642,13 +663,15 @@ final class AssistantModel {
         removeQueued(id: id)
     }
 
-    /// 弹出队首消息派发为新一轮（逐条依次）。仅在一轮结算回 idle / failed 时调用：
-    /// 失败也要接着派发，否则排队消息卡在条带里，下一条手动发送还会插到它们前面。
-    /// 经 dispatch→streamAssistantTurn→flushNextQueued 递归，深度 = 队列长度（有界）。
+    /// 取队首派发为新一轮（逐条依次；攒着的「下一步送达」一次取完）。仅在一轮结算回
+    /// idle / failed 时调用：失败也要接着派发，否则排队消息卡在条带里，下一条手动发送还会
+    /// 插到它们前面。
+    /// 经 dispatch→streamAssistantTurn→flushNextQueued 递归，深度 ≤ 队列长度（有界）。
     private func flushNextQueued() async {
-        guard !isDisposed, !Task.isCancelled, !isBusy, !queuedMessages.isEmpty else { return }
-        let next = queuedMessages.removeFirst()
-        await dispatch(prompt: next.text, serverContext: lastServerContext)
+        guard !isDisposed, !Task.isCancelled, !isBusy else { return }
+        let next = queue.takeNextTurn()
+        guard !next.isEmpty else { return }
+        await dispatch(prompts: next.map(\.text), serverContext: lastServerContext)
     }
 
     // MARK: - 编辑 + 分叉重生

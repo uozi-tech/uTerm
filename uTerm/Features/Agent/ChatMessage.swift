@@ -13,6 +13,10 @@ nonisolated struct ChatMessage: Equatable, Sendable, Identifiable {
     var toolCalls: [ToolCallState]
     /// Anthropic 回复里的 thinking 块，只为同一轮工具循环里原样回传（不展示、不落库）。
     var thinking: [LLMThinkingBlock] = []
+    /// 这条用户消息是在工具循环中途并进来的（排队消息的「下一步送达」），不是新一轮的
+    /// 起点：thinking 回传与上下文压缩都不把它当轮次边界。只在内存里有意义，不落库 ——
+    /// 从记录恢复的会话没有在途的工具循环，也没有 thinking 可回传。
+    var continuesTurn = false
 
     init(id: UUID = UUID(), role: Role, text: String, toolCalls: [ToolCallState] = []) {
         self.id = id
@@ -22,13 +26,5 @@ nonisolated struct ChatMessage: Equatable, Sendable, Identifiable {
     }
 }
 
-/// 一条尚未发出的排队消息（Agent 忙碌时提交的待发输入）。运行期纯内存，不落库。
-nonisolated struct QueuedMessage: Identifiable, Equatable, Sendable {
-    let id: UUID
-    let text: String
-
-    init(id: UUID = UUID(), text: String) {
-        self.id = id
-        self.text = text
-    }
-}
+/// 一条尚未发出的排队消息。类型与排队规则在 AgentKit（uTable 共用），这里只留旧名。
+typealias QueuedMessage = AgentQueuedMessage

@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// 向 provider 拉可用模型列表 —— 设置里模型下拉的唯一来源（不预置、不手填）。
@@ -6,53 +7,41 @@ import Foundation
 /// `v1/messages` 同根）：OpenAI 兼容带 `Authorization: Bearer`，Anthropic 带
 /// `x-api-key` + `anthropic-version` 并 `limit=1000` 一页取完。两边响应都是
 /// `{ "data": [ { "id": … } ] }`，一个解码器通吃；按服务端顺序去重、去空白。
+/// 请求与解码在 `AgentKit.LLMWireTransport`（uTable 共用），这里只管本应用的地址约定与错误类型。
 nonisolated enum ProviderModelCatalog {
     static func fetchModels(kind: ProviderKind,
                             baseURL: URL,
                             apiKey: String,
                             session: URLSession = .shared) async throws -> [String] {
-        let (data, response) = try await session.data(for: request(kind: kind, baseURL: baseURL, apiKey: apiKey))
-        guard let http = response as? HTTPURLResponse else {
-            throw LLMClientError.invalidResponse
+        do {
+            return try await LLMWireTransport.fetchModelIDs(
+                url: modelsURL(kind: kind, baseURL: baseURL), apiKey: apiKey,
+                wireProtocol: kind.wireProtocol, session: session)
+        } catch let LLMWireError.http(status, body, _) {
+            throw LLMClientError.httpError(status: status, body: String(body.prefix(300)))
+        } catch {
+            throw LLMClientError.map(error)
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw LLMClientError.httpError(status: http.statusCode, body: String(body.prefix(300)))
-        }
-        return try decodeModelIDs(data)
     }
 
-    static func request(kind: ProviderKind, baseURL: URL, apiKey: String) -> URLRequest {
+    static func modelsURL(kind: ProviderKind, baseURL: URL) -> URL {
         var url = baseURL.appendingPathComponent("v1/models")
         if kind == .anthropic {
             url.append(queryItems: [URLQueryItem(name: "limit", value: "1000")])
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch kind {
-        case .openai:
-            if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
-        case .anthropic:
-            if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "x-api-key") }
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        }
-        return request
+        return url
+    }
+
+    static func request(kind: ProviderKind, baseURL: URL, apiKey: String) -> URLRequest {
+        LLMWireTransport.modelListRequest(url: modelsURL(kind: kind, baseURL: baseURL), apiKey: apiKey,
+                                          wireProtocol: kind.wireProtocol)
     }
 
     static func decodeModelIDs(_ data: Data) throws -> [String] {
-        struct ModelList: Decodable {
-            struct Entry: Decodable { let id: String }
-            let data: [Entry]
-        }
-        guard let list = try? JSONDecoder().decode(ModelList.self, from: data) else {
-            throw LLMClientError.invalidResponse
-        }
-        var seen = Set<String>()
-        return list.data.compactMap { entry in
-            let id = entry.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !id.isEmpty && seen.insert(id).inserted ? id : nil
+        do {
+            return try LLMWireTransport.decodeModelIDs(data)
+        } catch {
+            throw LLMClientError.map(error)
         }
     }
 

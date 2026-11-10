@@ -35,7 +35,9 @@ struct AgentComposer: View {
             // 忙碌时照样能发 —— 进待发队列，Agent 空闲后依次处理。
             canSend: model.hasDraft,
             canStop: model.canStop,
-            sendHelp: model.isBusy ? "排队发送，Agent 空闲后依次处理（↩）" : "发送（↩）",
+            sendHelp: model.isBusy
+                ? "排队发送，Agent 空闲后依次处理（↩）；立即发送，不打断、这一步跑完就送达（⌘↩）"
+                : "发送（↩）",
             stopHelp: "停止生成和审批，取消待执行命令；已下发命令继续回收结果（esc）",
             onSend: onSend,
             onStop: model.stop,

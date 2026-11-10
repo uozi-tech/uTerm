@@ -7,111 +7,47 @@ nonisolated protocol LLMClient: Sendable {
                             system: String,
                             config: LLMRequestConfig)
         -> AsyncThrowingStream<LLMEvent, Error>
+
+    /// 这个后端自己按 `config.streamIdleTimeout` 管静默超时。真实的 HTTP 后端为 true：只有
+    /// 传输层看得见不产出事件的进展（thinking 与工具参数的增量、思考期间的心跳），按事件计时
+    /// 会把「模型还在想」判成卡住。缺省 false（测试替身等），由调用点按事件兜底。
+    nonisolated var enforcesIdleTimeout: Bool { get }
 }
 
-/// 为 provider 的事件流增加应用层 idle timeout。watchdog 每收到一个事件就续期；
-/// 超时后先结束包装流，再取消仍挂在底层 SSE 上的 producer。
+nonisolated extension LLMClient {
+    var enforcesIdleTimeout: Bool { false }
+
+    /// 调用点统一走这个：静默超时恰好套一层 —— 后端自己管的不再套，不管的按事件兜底。
+    func streamWithIdleTimeout(messages: [ChatMessage], system: String,
+                               config: LLMRequestConfig) -> AsyncThrowingStream<LLMEvent, Error> {
+        let events = stream(messages: messages, system: system, config: config)
+        return enforcesIdleTimeout ? events : withIdleTimeout(events, timeout: config.streamIdleTimeout)
+    }
+}
+
+/// 按**事件**计时的静默超时（实现在 AgentKit）：连续 `timeout` 没有事件就以
+/// `LLMClientError.streamIdleTimeout` 结束。只给不经传输层的后端兜底用，见 `enforcesIdleTimeout`。
 nonisolated func withIdleTimeout(
     _ stream: AsyncThrowingStream<LLMEvent, Error>,
     timeout: Duration
 ) -> AsyncThrowingStream<LLMEvent, Error> {
-    AsyncThrowingStream { continuation in
-        let controller = LLMStreamIdleTimeoutController(
-            timeout: timeout,
-            continuation: continuation)
-        let producer = Task {
-            await controller.start()
-            do {
-                for try await event in stream {
-                    await controller.yield(event)
-                }
-                if await controller.complete() {
-                    continuation.finish()
-                }
-            } catch {
-                if await controller.complete() {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
-        Task { await controller.attach(producer) }
-        continuation.onTermination = { _ in
-            Task { await controller.cancel() }
-        }
-    }
+    AgentKit.withIdleTimeout(stream, timeout: timeout, timeoutError: LLMClientError.streamIdleTimeout)
 }
 
-private actor LLMStreamIdleTimeoutController {
-    private let timeout: Duration
-    private let continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
-    private var producer: Task<Void, Never>?
-    private var watchdog: Task<Void, Never>?
-    private var isFinished = false
-
-    init(
-        timeout: Duration,
-        continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
-    ) {
-        self.timeout = timeout
-        self.continuation = continuation
-    }
-
-    func attach(_ producer: Task<Void, Never>) {
-        guard !isFinished else {
-            producer.cancel()
-            return
-        }
-        self.producer = producer
-    }
-
-    func start() {
-        armWatchdog()
-    }
-
-    func yield(_ event: LLMEvent) {
-        guard !isFinished else { return }
-        continuation.yield(event)
-        armWatchdog()
-    }
-
-    /// 返回 true 表示调用方赢得了落定权，应结束 continuation。
-    func complete() -> Bool {
-        guard !isFinished else { return false }
-        isFinished = true
-        watchdog?.cancel()
-        watchdog = nil
-        producer = nil
-        return true
-    }
-
-    func cancel() {
-        guard !isFinished else { return }
-        isFinished = true
-        watchdog?.cancel()
-        watchdog = nil
-        producer?.cancel()
-        producer = nil
-    }
-
-    private func armWatchdog() {
-        watchdog?.cancel()
-        let timeout = timeout
-        watchdog = Task { [weak self] in
+/// 把请求层抛的 `LLMWireError` 折成本应用的 `LLMClientError`；其余错误（`URLError`、取消…）
+/// 原样透传。事件不动。
+nonisolated func mappingWireErrors(
+    _ stream: AsyncThrowingStream<LLMEvent, Error>
+) -> AsyncThrowingStream<LLMEvent, Error> {
+    AsyncThrowingStream { continuation in
+        let task = Task {
             do {
-                try await Task.sleep(for: timeout)
+                for try await event in stream { continuation.yield(event) }
+                continuation.finish()
             } catch {
-                return
+                continuation.finish(throwing: LLMClientError.map(error))
             }
-            await self?.timeOut()
         }
-    }
-
-    private func timeOut() {
-        guard !isFinished else { return }
-        isFinished = true
-        watchdog = nil
-        continuation.finish(throwing: LLMClientError.streamIdleTimeout)
-        producer?.cancel()
-        producer = nil
+        continuation.onTermination = { _ in task.cancel() }
     }
 }

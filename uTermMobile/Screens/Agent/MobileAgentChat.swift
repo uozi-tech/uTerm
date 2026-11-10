@@ -412,27 +412,45 @@ struct MobileAgentChat: View {
 
 // MARK: - 待发队列
 
-/// 待发队列条带：Agent 忙碌时排进 `queuedMessages`、尚未发出的消息（对齐 macOS
-/// `AgentQueueStrip`）。点一行载入输入框编辑，行尾可移除。
+/// 待发队列条带：Agent 忙碌时排进 `queuedMessages`、尚未发出的消息（对齐 macOS 的
+/// `UDAgentQueueStrip`）。整组一块浅底、不描边；点一行载入输入框编辑，行尾「立即发送」
+/// （不打断，这一步跑完就送达）与移除。
 private struct MAgentQueueStrip: View {
     let model: AssistantModel
+    @Environment(\.mAccent) private var accent
 
     var body: some View {
         if !model.queuedMessages.isEmpty {
-            VStack(spacing: 6) {
+            VStack(spacing: 0) {
                 ForEach(model.queuedMessages) { row($0) }
             }
+            .background(M.fillFaint, in: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous))
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
     private func row(_ item: QueuedMessage) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "clock").font(.system(size: 12)).foregroundStyle(M.text4)
+        let sendsAtNextStep = item.delivery == .nextStep
+        return HStack(spacing: 8) {
+            Image(systemName: sendsAtNextStep ? "arrow.turn.down.right" : "clock")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(sendsAtNextStep ? accent : M.text4)
+                .frame(width: 16)
             Text(item.text)
                 .font(M.sans(14)).foregroundStyle(M.text2)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if sendsAtNextStep {
+                Text("下一步送达").font(M.sans(11)).foregroundStyle(M.text4).fixedSize()
+            } else {
+                Button { model.sendQueuedAtNextStep(id: item.id) } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(M.text3)
+                        .frame(width: 36, height: 36).contentShape(Rectangle())
+                }
+                .buttonStyle(MPressStyle())
+                .accessibilityLabel("立即发送")
+            }
             Button { model.removeQueued(id: item.id) } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(M.text3)
@@ -442,18 +460,22 @@ private struct MAgentQueueStrip: View {
             .accessibilityLabel("移除")
         }
         .padding(.leading, 12)
-        .background(M.fillFaint, in: RoundedRectangle(cornerRadius: MRadius.md, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: MRadius.md, style: .continuous)
-            .strokeBorder(M.border, style: StrokeStyle(lineWidth: 1, dash: [3])))
+        .frame(minHeight: 36)
         .contentShape(Rectangle())
         .onTapGesture { model.loadQueuedForEditing(id: item.id) }
         // 整行可点（= 载入编辑），但 `onTapGesture` 对读屏不可见：合成一个元素并补上动作。
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("排队消息：\(item.text)")
+        .accessibilityValue(sendsAtNextStep ? "下一步送达" : "")
         .accessibilityHint("点按载入到输入框编辑")
         .accessibilityAction { model.loadQueuedForEditing(id: item.id) }
-        .accessibilityAction(named: "移除") { model.removeQueued(id: item.id) }
+        .accessibilityActions {
+            if !sendsAtNextStep {
+                Button("立即发送") { model.sendQueuedAtNextStep(id: item.id) }
+            }
+            Button("移除") { model.removeQueued(id: item.id) }
+        }
     }
 }
 

@@ -491,7 +491,7 @@ struct LocalShellWindowView: View {
     private var titleBar: some View {
         Text("本机终端")
             .font(UD.mono(13))
-            .foregroundStyle(UD.text3)
+            .windowTitleForeground()
             // 纯展示，不参与命中测试：否则会截走标题栏空白处的双击（缩放）/ 拖动。
             .allowsHitTesting(false)
             .frame(height: 38)
