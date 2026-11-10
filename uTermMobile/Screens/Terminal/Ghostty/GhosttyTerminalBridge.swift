@@ -1,6 +1,7 @@
 import Foundation
 import GhosttyKit
 import GhosttyTerminal
+import os
 import UIKit
 
 // 命名：GhosttyTerminal 也导出了 `TerminalKey` / `TerminalColorScheme` / `TerminalController` / `TerminalTheme`，
@@ -43,16 +44,18 @@ final class GhosttyTerminalBridge {
     /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节。
     private(set) var isSurfaceReady = false
     /// surface 刚建好，在等它的终端到位（见 `surfaceAttached`）：视图算出来的网格、终端自己报来的网格，以及兜底的计时。
-    private let gridGate: SurfaceGridGate
+    private let gridGate: TerminalSurfaceGridGate
+    /// 远控标签（后端 `mirrorsRemoteGrid`，手机是主控端）：影子的网格跟着 Mac 发来的快照走，surface 报来的网格只发给 Mac、
+    /// 不改影子；网格对齐之前画面停在上一帧（`TerminalOutputPump.followsSnapshotGrid`）。resize 回调在 IO 线程上读它。
+    private let shadowFollowsRemoteGrid: OSAllocatedUnfairLock<Bool>
     private var expectedGrid: (cols: Int, rows: Int)?
     private var reportedGridSinceAttach: (cols: Int, rows: Int)?
     private var surfaceSizeTimeout: Task<Void, Never>?
     /// 这片终端在不在屏上（所在格的前台标签、终端模式）。
     private(set) var isOnScreen = true
-    /// 不在屏上这么久之后放掉 surface（交换链、网格、回滚都还），再露出来时重建并从影子回放。
-    /// 每个 surface 的帧缓冲约 14.5 MB，`setSurfaceVisible(false)` 不还（M2）。
-    var hiddenReleaseDelay: Duration = GhosttyTerminalBridge.defaultHiddenReleaseDelay
-    nonisolated static let defaultHiddenReleaseDelay: Duration = .seconds(60)
+    /// 不在屏上这么久之后放掉 surface（交换链、网格、回滚都还），再露出来时重建并从影子回放（两端同一个值）。
+    /// 每个 surface 的帧缓冲约 14.5 MB，`setSurfaceVisible(false)` 不还（M2）。测试里改短。
+    var hiddenReleaseDelay: Duration = TerminalSurfaceRetention.hiddenReleaseDelay
     private var releaseTask: Task<Void, Never>?
     private let delegateProxy: SurfaceDelegate
     // nonisolated(unsafe)：只在主线程设，deinit 里读。
@@ -174,8 +177,10 @@ final class GhosttyTerminalBridge {
 
     init(controller: GhosttyTerminal.TerminalController = GhosttyTerminalBridge.sharedController, frame: CGRect = .zero) {
         let box = WeakBridgeBox()
-        let gridGate = SurfaceGridGate()
+        let gridGate = TerminalSurfaceGridGate()
         self.gridGate = gridGate
+        let followsRemote = OSAllocatedUnfairLock(initialState: false)
+        shadowFollowsRemoteGrid = followsRemote
         // 先按 80×24 建，surface 的终端报出真实网格后跟着改（见下面的 resize 回调）。
         let shadow = ShadowTerminal(cols: 80, rows: 24, options: Self.shadowOptions())
         let session = InMemoryTerminalSession(
@@ -187,9 +192,11 @@ final class GhosttyTerminalBridge {
                 // 影子缩到默认网格再放回来，备用屏的内容就被裁掉了，远端也白收两次 SIGWINCH。只认和视图算出来的对得上的。
                 guard gridGate.admits(viewport) else { return }
                 // 影子跟着 surface 的终端自己报的尺寸走，而且就在这个回调里改、不绕主线程（M4 的前提：按视图尺寸算或者
-                // 晚一拍改，两边会在不同的字节位置换宽度，折行就对不上了）。
-                shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                              cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+                // 晚一拍改，两边会在不同的字节位置换宽度，折行就对不上了）。远控标签例外：影子跟着 Mac 的快照走。
+                if !followsRemote.withLock({ $0 }) {
+                    shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                                  cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+                }
                 Task { @MainActor in
                     box.bridge?.cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
                     box.bridge?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
@@ -256,9 +263,15 @@ final class GhosttyTerminalBridge {
     /// 背压：surface 没解析完的字节到 1 MiB 时入站任务不再取下一块，落回低水位再取（`TerminalOutputPump`）。
     /// 取不动的字节留在后端的输出流里——那条流（以及 Citadel 的 PTY 输出流）现在是不限长的，所以这还不是
     /// 真正压到 SSH 窗口上的背压，只保证终端这一层有上界；要压到远端得改 Citadel（见 measure-ios.md 的 M10）。
+    ///
+    /// 远控标签（`backend.mirrorsRemoteGrid`）：影子的网格由 Mac 发来的快照定，画面等网格对齐再跟（同 Mac 的远控窗口，
+    /// 见迁移日志「收尾二」第 3 项）。尺寸先于输出：接入请求就带上本地网格，Mac 钉好这个尺寸再拍第一张快照。
     func bind(_ backend: any TerminalBackend) {
+        let mirrorsRemote = backend.mirrorsRemoteGrid
+        shadowFollowsRemoteGrid.withLock { $0 = mirrorsRemote }
         input.bind(to: backend, sendingLatestSize: true)
         outputPump.reset()
+        outputPump.followsSnapshotGrid = mirrorsRemote
         outputPump.start(backend.outputItems)
     }
 
@@ -353,8 +366,10 @@ final class GhosttyTerminalBridge {
 
     /// 认下一次被拦过的网格报告（和 resize 回调里放行的那条路做同样的事）。
     private func adopt(_ viewport: InMemoryTerminalViewport) {
-        shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                      cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+        if !shadowFollowsRemoteGrid.withLock({ $0 }) {
+            shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                          cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+        }
         cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
         gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
     }
@@ -416,7 +431,7 @@ final class GhosttyTerminalBridge {
         guard cellWidth > 0, cellHeight > 0 else { return }
         let cols = UInt16(clamping: max(2, Int(size.width / cellWidth)))
         let rows = UInt16(clamping: max(1, Int(size.height / cellHeight)))
-        shadow.resize(cols: cols, rows: rows)
+        if !shadowFollowsRemoteGrid.withLock({ $0 }) { shadow.resize(cols: cols, rows: rows) }
         input.reportSize(cols: cols, rows: rows)
     }
 
@@ -442,6 +457,8 @@ final class GhosttyTerminalBridge {
         resizeReports += 1
         grid = (cols, rows)
         input.reportSize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+        // 远控标签停着画面等网格对齐的话，surface 这一报可能就对上了（读的是 IO 线程报过的网格）。
+        outputPump.surfaceGridDidChange()
         if view.surface != nil, !isSurfaceReady {
             reportedGridSinceAttach = (cols, rows)
             openGateIfGridSettled()
@@ -492,70 +509,6 @@ final class GhosttyTerminalBridge {
     /// 粘滞修饰的状态变了（点了按钮、被一次按键用掉、被清掉）。
     var onStickyModifiersChanged: (() -> Void)? {
         didSet { view.setStickyModifierChangeHandler(onStickyModifiersChanged) }
-    }
-}
-
-/// 新 surface 的网格报告要不要认。resize 回调在 IO 线程上来、影子要当场跟着改，所以这道判断得是线程安全的、不绕主线程。
-/// - surface 刚建好：只认和视图算出来的网格（主线程上 `expect`）一致的那一次，之前的（出生时的默认网格）拦下；
-/// - 认过一次之后：之后的每一次都认（正常的尺寸变化）。
-private nonisolated final class SurfaceGridGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var settled = false
-    private var expected: (cols: UInt16, rows: UInt16)?
-    private var held: InMemoryTerminalViewport?
-
-    /// surface 拆掉了：从这一刻起不认任何报告。下一个 surface 的 IO 线程一建好就可能报出生时的默认网格，
-    /// 那时宿主还没收到「surface 建好了」的回调——所以闸要在拆的时候就关上，不能等到建好再关。
-    func surfaceDetached() {
-        lock.withLock {
-            settled = false
-            expected = nil
-            held = nil
-        }
-    }
-
-    /// surface 建好了。已经拦下的报告留着：视图算出网格之后（`expect`）对得上就认。
-    func surfaceAttached() {
-        lock.withLock {
-            settled = false
-            expected = nil
-        }
-    }
-
-    /// IO 线程：这次报告认不认。
-    func admits(_ viewport: InMemoryTerminalViewport) -> Bool {
-        lock.withLock {
-            if settled { return true }
-            if let expected, expected.cols == viewport.columns, expected.rows == viewport.rows {
-                settled = true
-                held = nil
-                return true
-            }
-            held = viewport
-            return false
-        }
-    }
-
-    /// 主线程：视图算出来的网格。之前拦下的那次正好是它，就交回去让调用方认。
-    func expect(cols: Int, rows: Int) -> InMemoryTerminalViewport? {
-        lock.withLock {
-            guard !settled else { return nil }
-            expected = (UInt16(clamping: cols), UInt16(clamping: rows))
-            guard let held, held.columns == expected?.cols, held.rows == expected?.rows else { return nil }
-            settled = true
-            self.held = nil
-            return held
-        }
-    }
-
-    /// 兜底开闸：之后的报告都认；返回拦下的最后一次（有的话调用方要认下它）。
-    func settle() -> InMemoryTerminalViewport? {
-        lock.withLock {
-            guard !settled else { return nil }
-            settled = true
-            defer { held = nil }
-            return held
-        }
     }
 }
 

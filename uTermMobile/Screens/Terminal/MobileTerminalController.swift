@@ -290,6 +290,11 @@ final class MobileTerminalController {
             let made: Result<any TerminalBackend, any Error>
             do { made = .success(try await factory.make(request)) } catch { made = .failure(error) }
             guard let conn = self?.adopt(made, attempt: attempt) else { return }
+            // 远控标签：接入请求就带上本地网格，Mac 钉好这个尺寸再拍第一张快照（同 Mac 的 `TerminalSession.connect`）。
+            // 输入通道接上时也会补发，但那是另起的任务，赶不上接入请求就会先按默认的 80×24 接入、再改一次尺寸重发快照。
+            if conn.mirrorsRemoteGrid, let size = self?.terminal.input.latestSize {
+                await conn.resize(cols: size.cols, rows: size.rows)
+            }
             let outcome: (any Error)?
             do { try await conn.connect(); outcome = nil } catch { outcome = error }
             self?.finishConnect(outcome, attempt: attempt, pid: pid, container: container)

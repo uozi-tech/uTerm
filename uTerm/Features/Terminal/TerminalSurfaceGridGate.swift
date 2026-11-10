@@ -1,7 +1,7 @@
 import Foundation
 import GhosttyTerminal
 
-/// 新 surface 的网格报告要不要认（两端共用；iOS 的 `GhosttyTerminalBridge` 里另有一份同样的私有实现，可以换成这个）。
+/// 新 surface 的网格报告要不要认（两端共用：Mac 的 `TerminalSession`、iOS 的 `GhosttyTerminalBridge`）。
 ///
 /// 新 surface 的终端先按出生时的默认网格报一次 resize（Mac 上按 800×600 px 算出约 53×21，iOS 上 30×10 这种），再报真实的。
 /// 那一次不能让影子终端跟：影子缩到默认网格再放回来，备用屏（全屏程序）的内容就被裁掉了，而网格最终没变时程序收不到
