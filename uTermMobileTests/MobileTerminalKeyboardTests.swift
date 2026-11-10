@@ -294,11 +294,17 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         let before = await fake.writes.count
         view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0))
         XCTAssertNotNil(view.markedTextRange, "组字中")
-        // 候选框锚点：比引擎报的上移一行（见 `MGhosttyTerminalView.liftedOneRow`），高度是一行、落在视图里。
+        // 候选框锚点：就是光标那一格（引擎报的 y 是格子底边，本地包 `imeRect` 换成顶边；宽度换成点），落在视图里。
         let caret = view.caretRect(for: view.beginningOfDocument)
         XCTAssertGreaterThan(caret.height, 0)
         XCTAssertTrue(view.bounds.insetBy(dx: -1, dy: -1).contains(CGPoint(x: caret.minX, y: caret.midY)),
                       "候选框锚点不在视图里：\(caret)")
+        let cell = try XCTUnwrap(view.uTermCellPixels)
+        let scale = view.window?.screen.scale ?? UIScreen.main.scale
+        let cursorRow = CGFloat(a.terminal.shadow.cursor.y)
+        XCTAssertEqual(caret.minY, cursorRow * cell.height / scale, accuracy: 1.5, "锚点该是光标那一行的顶边：\(caret)")
+        // 引擎报的宽度是整段预编辑的宽（「ni」两格），按像素给；换成点。
+        XCTAssertEqual(caret.width, 2 * cell.width / scale, accuracy: 1, "宽度要按点算，不是像素：\(caret)")
         try await Task.sleep(for: .milliseconds(200))
         let composing = await fake.writes.count
         XCTAssertEqual(composing, before, "组字期间不该往后端发字")

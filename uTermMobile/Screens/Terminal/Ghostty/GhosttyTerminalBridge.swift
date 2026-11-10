@@ -162,8 +162,8 @@ final class GhosttyTerminalBridge {
         link.platformAllowsFeeding = { [weak self] in !(self?.isAppInBackground ?? true) }
         // surface 没了：查询改由影子答，配色要是当前的。
         link.onSurfaceDetached = { [weak self] in self?.syncShadowColors() }
-        // 硬件键盘上没有绑定接的 ⌘ 组合：程序开了 kitty 键盘协议才发（见 `MGhosttyTerminalView.dropsCommandChord`）。
-        view.sendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
+        // 没有绑定接的 ⌘ 组合：程序开了 kitty 键盘协议才发（本地包里丢，见 `TerminalSurface.sendsCommandChords`）。
+        view.uTermSendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
         // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
         link.events.onEvent = { [weak self] in self?.onEvent?($0) }
         // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后开闸，回放接上。

@@ -1,7 +1,7 @@
 //
 //  UITerminalView+UTermHost.swift
 //  uTerm 本地补丁（不在上游）：宿主要的几个入口——surface 生灭与网格的回调、放掉 / 重建 surface、按点数设字号、
-//  问一个硬件按键是不是按键绑定。
+//  没有绑定接的 ⌘ 组合发不发。
 //
 
 #if canImport(UIKit)
@@ -83,35 +83,11 @@
                 return true
             }
 
-            /// 这次硬件按键会不会被按键绑定（`keybind` 配置）认下（同 Mac 的 `isKeyBinding(_:)`）。宿主在 legacy 键盘模式下
-            /// 丢掉没有绑定的 ⌘ 组合要靠它区分「绑定」和「要编码发给程序的按键」。没有 surface 时 false。
-            func uTermIsKeyBinding(_ key: UIKey) -> Bool {
-                uTermIsKeyBinding(usage: UInt16(key.keyCode.rawValue), modifierFlags: key.modifierFlags,
-                                  charactersIgnoringModifiers: key.charactersIgnoringModifiers)
-            }
-
-            /// 同上，按 `UIKey` 的三项拆开给（`UIKey` 造不出来，用例走这一个）。按键事件的拼法与 `handleKeyPress` 里
-            /// 按下那一刻的一致（键码、修饰键、consumed、unshifted codepoint；带 ⌘ 时那边也不带文字）。
-            func uTermIsKeyBinding(usage: UInt16, modifierFlags: UIKeyModifierFlags,
-                                   charactersIgnoringModifiers: String) -> Bool {
-                guard let rawSurface = surface?.rawValue else { return false }
-                var flags = modifierFlags
-                if TerminalInputText.filteredFunctionKeyText(charactersIgnoringModifiers) == nil {
-                    flags.remove(.numericPad)
-                }
-                var keyEvent = ghostty_input_key_s()
-                keyEvent.action = GHOSTTY_ACTION_PRESS
-                keyEvent.mods = TerminalInputModifiers(from: flags).ghosttyMods
-                keyEvent.keycode = TerminalHardwareKeyRouter.appKitKeyCodeForUIKit(usage: usage)
-                var consumed = flags
-                consumed.remove(.control)
-                consumed.remove(.command)
-                keyEvent.consumed_mods = TerminalInputModifiers(from: consumed).ghosttyMods
-                if let scalar = TerminalInputText.filteredFunctionKeyText(charactersIgnoringModifiers)?.unicodeScalars.first {
-                    keyEvent.unshifted_codepoint = scalar.value
-                }
-                var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
-                return ghostty_surface_key_is_binding(rawSurface, keyEvent, &bindingFlags)
+            /// 程序收不收没有绑定接的 ⌘ 组合（返回 false 时这类按键不交给引擎，按下、重复、抬起成对丢）。所有按键路径都经它：
+            /// 硬件键盘、宿主的 `sendKey`。nil = 照发。见 `TerminalSurface.sendsCommandChords`；同 Mac 的同名属性。
+            var uTermSendsCommandChords: (() -> Bool)? {
+                get { core.sendsCommandChords }
+                set { core.sendsCommandChords = newValue }
             }
         }
     #endif

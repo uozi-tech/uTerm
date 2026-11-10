@@ -22,6 +22,13 @@ public final class TerminalSurface {
     /// hardware keyboard, a host's `sendKey`. Ghostty cannot report the
     /// resulting size, so the coordinator keeps it (`TerminalFontSize`).
     var onFontSizeAction: ((TerminalFontSizeAction) -> Void)?
+    /// uTerm 本地补丁：程序收不收没有绑定接的 ⌘（super）组合（宿主读影子终端：开了 kitty 键盘协议才收）。返回 false 时
+    /// 这类按键不交给引擎——legacy 模式下 Ghostty 会把 ⌘↑ 编成 `CSI 1;9A`、⌘↩ 编成 `CSI 27;9;13~`，shell 不认，只会在命令行里
+    /// 留下「;9A」这类残渣；带 ⌘ 的字母键本来就编不出字节。绑定（⌘← / ⌘→ / ⌘⌫ / ⌘C …）照常。nil = 照发（上游行为）。
+    /// 由 `TerminalSurfaceCoordinator.sendsCommandChords` 设。
+    var sendsCommandChords: (() -> Bool)?
+    /// 按下时丢掉的键码：它们的重复、抬起也丢，成对。
+    private var droppedCommandKeycodes: Set<UInt32> = []
 
     init(_ surface: ghostty_surface_t) {
         self.surface = surface
@@ -39,6 +46,10 @@ public final class TerminalSurface {
             TerminalDebugLog.log(.input, "surface key ignored: missing surface")
             return false
         }
+        if dropsCommandChord(event, on: s) {
+            TerminalDebugLog.log(.input, "surface key dropped: unbound command chord keycode=\(event.keycode)")
+            return true
+        }
         // Asked before the key goes in: the binding check reads the
         // surface's keybind state, which performing the key can move on.
         let fontSizeAction = fontSizeAction(forKey: event)
@@ -52,6 +63,28 @@ public final class TerminalSurface {
         }
         return result
     }
+
+    /// uTerm 本地补丁：见 `sendsCommandChords`。两端所有按键路径（硬件键盘、IME 收字、宿主的 `sendKey`）都经这里。
+    private func dropsCommandChord(_ event: ghostty_input_key_s, on surface: ghostty_surface_t) -> Bool {
+        if event.action == GHOSTTY_ACTION_RELEASE {
+            return droppedCommandKeycodes.remove(event.keycode) != nil
+        }
+        if event.action == GHOSTTY_ACTION_REPEAT, droppedCommandKeycodes.contains(event.keycode) { return true }
+        droppedCommandKeycodes.remove(event.keycode)
+        guard let sendsCommandChords,
+              event.mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0,
+              !Self.modifierKeycodes.contains(event.keycode),
+              !sendsCommandChords()
+        else { return false }
+        var flags = ghostty_binding_flags_e(rawValue: 0)
+        guard !ghostty_surface_key_is_binding(surface, event, &flags) else { return false }
+        droppedCommandKeycodes.insert(event.keycode)
+        return true
+    }
+
+    /// 修饰键本身（按下 ⌘ 那一下也带着 super）：照常交给引擎，它靠这些更新修饰键状态（⌘ 悬停链接等）。
+    /// macOS 虚拟键码；iOS 的硬件键也先换成这套（`TerminalHardwareKeyRouter.appKitKeyCodeForUIKit`）。
+    private static let modifierKeycodes: Set<UInt32> = [0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F]
 
     /// Pastes text into the surface. This is the text path: ghostty treats
     /// it as a paste, wrapping it in bracketed-paste markers for a program

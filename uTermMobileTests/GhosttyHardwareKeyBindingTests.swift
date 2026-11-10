@@ -74,11 +74,12 @@ final class GhosttyHardwareKeyBindingTests: XCTestCase {
     }
 
     /// 没有绑定接的 ⌘ 组合交给引擎的话，legacy 键盘协议下方向键、回车这类会编成带 super 的序列（shell 不认，留残渣）；
-    /// 带 ⌘ 的字母键编不出字节。这是硬件键盘要在视图里丢掉它们的原因（`MGhosttyTerminalView.dropsCommandChord`）；
-    /// `sendKey` 不经那道过滤，这里核的是引擎本身。
+    /// 带 ⌘ 的字母键编不出字节。这是本地包要丢掉它们的原因（`TerminalSurface.sendsCommandChords`）；这里把过滤关掉，
+    /// 核的是引擎本身。
     func testEngineEncodesUnboundCommandChordsAsResidueInLegacyMode() async throws {
         let host = try await makeHost()
         defer { host.close() }
+        host.view.uTermSendsCommandChords = { true }
         let cases: [(GhosttyTerminal.TerminalKey, [UInt8], String)] = [
             (.arrowUp, Array("\u{1B}[1;9A".utf8), "⌘↑"),
             (.enter, Array("\u{1B}[27;9;13~".utf8), "⌘↩"),
@@ -95,30 +96,36 @@ final class GhosttyHardwareKeyBindingTests: XCTestCase {
         }
     }
 
-    /// 硬件键盘的过滤：legacy 协议下没有绑定接的 ⌘ 组合丢掉；绑定（⌘← / ⌘C / ⌘⌫）照常交给引擎；不带 ⌘ 的不管；
-    /// 程序开了 kitty 键盘协议就一律照发。`UIPress` 造不出来，核的是 `pressesBegan` 用的那个判断。
-    func testHardwareCommandChordsAreDroppedUnlessBoundOrKittyProtocol() async throws {
+    /// 没有绑定接的 ⌘ 组合：legacy 协议下丢掉，绑定（⌘← / ⌘⌫）照常；程序开了 kitty 键盘协议就照发。过滤在本地包
+    /// `TerminalSurface.sendKeyEvent` 里，硬件键盘和宿主的 `sendKey` 都经它（`UIPress` 造不出来，这里走 `sendKey`）。
+    func testUnboundCommandChordsAreDroppedUnlessBoundOrKittyProtocol() async throws {
         let host = try await makeHost()
         defer { host.close() }
-        typealias HID = UIKeyboardHIDUsage
-        func drops(_ usage: HID, _ flags: UIKeyModifierFlags, _ text: String) -> Bool {
-            host.view.dropsCommandChord(usage: UInt16(usage.rawValue), modifierFlags: flags, charactersIgnoringModifiers: text)
+        func sent(_ key: GhosttyTerminal.TerminalKey, _ modifiers: TerminalInputModifiers = .super_) async throws -> [UInt8] {
+            host.bridge.inputLog = []
+            host.view.sendKey(key, modifiers: modifiers)
+            try await Task.sleep(for: .milliseconds(60))
+            return [UInt8]((host.bridge.inputLog ?? []).reduce(Data(), +))
         }
-        XCTAssertTrue(drops(.keyboardUpArrow, [.command, .numericPad], UIKeyCommand.inputUpArrow), "⌘↑")
-        XCTAssertTrue(drops(.keyboardReturnOrEnter, .command, "\r"), "⌘↩")
-        XCTAssertTrue(drops(.keyboardJ, .command, "j"), "⌘J")
-        XCTAssertFalse(drops(.keyboardLeftArrow, [.command, .numericPad], UIKeyCommand.inputLeftArrow), "⌘← 是绑定")
-        XCTAssertFalse(drops(.keyboardC, .command, "c"), "⌘C 是绑定")
-        XCTAssertFalse(drops(.keyboardDeleteOrBackspace, .command, "\u{8}"), "⌘⌫ 是绑定")
-        XCTAssertFalse(drops(.keyboardUpArrow, .numericPad, UIKeyCommand.inputUpArrow), "不带 ⌘ 的不管")
-        XCTAssertFalse(drops(.keyboardUpArrow, [.alternate, .numericPad], UIKeyCommand.inputUpArrow))
+        var bytes = try await sent(.arrowUp)
+        XCTAssertEqual(bytes, [], "⌘↑ 丢掉")
+        bytes = try await sent(.enter)
+        XCTAssertEqual(bytes, [], "⌘↩ 丢掉")
+        bytes = try await sent(.arrowLeft)
+        XCTAssertEqual(bytes, [0x01], "⌘← 是绑定")
+        bytes = try await sent(.backspace)
+        XCTAssertEqual(bytes, [0x15], "⌘⌫ 是绑定")
+        bytes = try await sent(.arrowUp, [])
+        XCTAssertEqual(bytes, Array("\u{1B}[A".utf8), "不带 ⌘ 的不管")
 
         // 程序开 kitty 键盘协议（push flags 1）：⌘ 组合照发。
         host.feedAndWait("\u{1B}[>1u")
         XCTAssertEqual(host.bridge.shadow.kittyKeyboardFlags, 1)
-        XCTAssertFalse(drops(.keyboardUpArrow, [.command, .numericPad], UIKeyCommand.inputUpArrow), "kitty 协议下 ⌘↑ 照发")
+        bytes = try await sent(.arrowUp)
+        XCTAssertFalse(bytes.isEmpty, "kitty 协议下 ⌘↑ 照发")
         host.feedAndWait("\u{1B}[<u")
-        XCTAssertTrue(drops(.keyboardUpArrow, [.command, .numericPad], UIKeyCommand.inputUpArrow), "退出 kitty 协议后又丢")
+        bytes = try await sent(.arrowUp)
+        XCTAssertEqual(bytes, [], "退出 kitty 协议后又丢")
     }
 
     /// 清掉默认绑定不该连普通按键一起清掉：⌃C、回车、方向键照常编码。

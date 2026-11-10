@@ -31,6 +31,13 @@
         /// surface 被宿主放掉了没有。
         var uTermIsSurfaceReleased: Bool { uTermSurfaceReleased }
 
+        /// 程序收不收没有绑定接的 ⌘ 组合（返回 false 时这类按键不交给引擎，按下、重复、抬起成对丢）。所有按键路径都经它：
+        /// 键盘、输入法收字、宿主的 `sendKey`。nil = 照发。见 `TerminalSurface.sendsCommandChords`；同 iOS 的同名属性。
+        var uTermSendsCommandChords: (() -> Bool)? {
+            get { core.sendsCommandChords }
+            set { core.sendsCommandChords = newValue }
+        }
+
         /// 放掉 surface（连同它的交换链、网格和回滚），视图留在原处。给长时间看不见的标签省内存用。
         /// 之后回窗口、布局都不会自己重建，直到 `uTermRestoreSurface()`。放掉的内容宿主要自己有一份（uTerm 是影子终端）。
         func uTermReleaseSurface() {

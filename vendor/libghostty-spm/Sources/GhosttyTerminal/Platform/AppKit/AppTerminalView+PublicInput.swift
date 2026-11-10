@@ -74,14 +74,6 @@
             surface?.performBindingAction(action) ?? false
         }
 
-        /// uTerm 本地补丁：这次按键会不会被 Ghostty 的按键绑定认下（`keybind` 配置里的那几条）。
-        /// 宿主据此区分「绑定」和「要编码发给程序的按键」——例如 legacy 键盘模式下丢掉没有绑定的 ⌘ 组合。
-        /// 没有 surface 时 false。
-        func isKeyBinding(_ event: NSEvent) -> Bool {
-            guard let surface else { return false }
-            return keyIsBinding(event, on: surface)
-        }
-
         /// The surface's font size in points, nil while there is no surface.
         /// Ghostty cannot report it, so the wrapper tracks every change it
         /// makes; ``TerminalSurfaceFontSizeDelegate`` hears each one.

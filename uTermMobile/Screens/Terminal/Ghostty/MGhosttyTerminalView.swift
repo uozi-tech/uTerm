@@ -122,65 +122,6 @@ final class MGhosttyTerminalView: UITerminalView {
         chosenInputMode = mode
     }
 
-    // MARK: 候选框锚点（GhosttyKit 2.2.2026110702 低了一行）
-
-    /// GhosttyKit 把 `ghostty_surface_ime_point` 的 y 当成格子顶边，可它是格子底边（Ghostty 的 macOS 前端按
-    /// 「左下角」用它）。实测组字画在 y=76、锚点报 y=90.67，正好差一行（行高 14.67）。上移一个自身高度对齐。
-    /// 宽度也偏大（按像素没除屏幕倍率），候选框只用到原点和高度，这里不动。上游修了就删掉这两个覆写。
-    override func firstRect(for range: UITextRange) -> CGRect {
-        Self.liftedOneRow(super.firstRect(for: range))
-    }
-
-    override func caretRect(for position: UITextPosition) -> CGRect {
-        Self.liftedOneRow(super.caretRect(for: position))
-    }
-
-    nonisolated static func liftedOneRow(_ rect: CGRect) -> CGRect {
-        guard !rect.isNull, rect.height > 0 else { return rect }
-        return rect.offsetBy(dx: 0, dy: -rect.height)
-    }
-
-    // MARK: 硬件键盘：没有绑定接的 ⌘ 组合
-
-    /// 程序开了 kitty 键盘协议（宿主读影子终端的标志位）：这时 ⌘ 组合照发，程序自己声明要。nil = 当作没开。
-    var sendsCommandChords: (() -> Bool)?
-    /// 按下时丢掉的那几个键：它们的抬起 / 取消也不交给引擎。
-    private var droppedCommandPresses: Set<UIPress> = []
-
-    /// 走到这里的 ⌘ 组合是 uTerm 的快捷键（SwiftUI `keyboardShortcut`、`UIKeyCommand`，UIKit 先匹配它们）和系统都没接的。
-    /// 程序没开 kitty 键盘协议时整个丢掉，不交给引擎：Ghostty 在 legacy 模式下会把 ⌘↑ 编成 `CSI 1;9A`、⌘↩ 编成
-    /// `CSI 27;9;13~`（`GhosttyHardwareKeyBindingTests` 核过），shell 不认，只会在命令行里留下「;9A」这类残渣。
-    /// 带 ⌘ 的字母键引擎本来就编不出字节，丢不丢一样。绑定（⌘← / ⌘→ / ⌘⌫ / ⌘C …）照常交给引擎。同 Mac 的
-    /// `GhosttySurfaceView.keyDown`。
-    func dropsCommandChord(usage: UInt16, modifierFlags: UIKeyModifierFlags, charactersIgnoringModifiers: String) -> Bool {
-        guard modifierFlags.contains(.command), sendsCommandChords?() != true else { return false }
-        return !uTermIsKeyBinding(usage: usage, modifierFlags: modifierFlags,
-                                  charactersIgnoringModifiers: charactersIgnoringModifiers)
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let dropped = presses.filter { press in
-            guard let key = press.key else { return false }
-            return dropsCommandChord(usage: UInt16(key.keyCode.rawValue), modifierFlags: key.modifierFlags,
-                                     charactersIgnoringModifiers: key.charactersIgnoringModifiers)
-        }
-        droppedCommandPresses.formUnion(dropped)
-        let rest = presses.subtracting(dropped)
-        if !rest.isEmpty { super.pressesBegan(rest, with: event) }
-    }
-
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let rest = presses.subtracting(droppedCommandPresses)
-        droppedCommandPresses.subtract(presses)
-        if !rest.isEmpty { super.pressesEnded(rest, with: event) }
-    }
-
-    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let rest = presses.subtracting(droppedCommandPresses)
-        droppedCommandPresses.subtract(presses)
-        if !rest.isEmpty { super.pressesCancelled(rest, with: event) }
-    }
-
     // MARK: 粘贴：剪贴板里只有图片时当贴图
 
     override func paste(_ sender: Any?) {

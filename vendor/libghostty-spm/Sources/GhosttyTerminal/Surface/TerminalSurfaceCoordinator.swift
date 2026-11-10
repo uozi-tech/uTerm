@@ -65,6 +65,10 @@ final class TerminalSurfaceCoordinator {
     var onSurfaceAttached: (() -> Void)?
     var onSurfaceDetached: (() -> Void)?
     var onGridMetrics: ((TerminalGridMetrics) -> Void)?
+    /// uTerm 本地补丁：见 `TerminalSurface.sendsCommandChords`；之后建的 surface 也带上。
+    var sendsCommandChords: (() -> Bool)? {
+        didSet { surface?.sendsCommandChords = sendsCommandChords }
+    }
 
     /// Called after every display-link render (`tick`).
     ///
@@ -240,6 +244,7 @@ final class TerminalSurfaceCoordinator {
 
         bridge.rawSurface = rawSurface
         let newSurface = TerminalSurface(rawSurface)
+        newSurface.sendsCommandChords = sendsCommandChords
         surface = newSurface
         surfaceSession = configuration.inMemorySession
         newSurface.setOcclusion(effectiveSurfaceVisible)
