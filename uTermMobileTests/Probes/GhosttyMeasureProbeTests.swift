@@ -693,9 +693,13 @@ final class GhosttyMeasureProbeTests: XCTestCase {
             if elapsed >= nextReport {
                 nextReport += 10
                 let m = MemoryProbe.read()
-                print(String(format: "MEASURE m10 t=%3.0fs footprint=%.1fMB(Δ%.1f) gh-pending=%d gh-titles=%d st-draws=%d gh-presents=%d",
+                // app-state：真机上假的后台通知之外，系统自己也可能发真的进出前台（0 = active，2 = background）；
+                // gh-bg / replays 看 bridge 有没有被真通知翻回前台过。
+                print(String(format: "MEASURE m10 t=%3.0fs footprint=%.1fMB(Δ%.1f) gh-pending=%d gh-titles=%d st-draws=%d gh-presents=%d shadow-only=%d shadow-resident=%.1fMB shadow-rows=%d app-state=%d gh-bg=%@ replays=%d",
                              elapsed, m.footprint, m.footprint - memory0.footprint, gh.session.pendingOutputByteCount,
-                             sink.titles, SwiftTermDrawLog.draws.count, GhosttyPresentLog.read().times.count))
+                             sink.titles, SwiftTermDrawLog.draws.count, GhosttyPresentLog.read().times.count,
+                             gh.router.currentStats.shadowOnlyBytes, Double(gh.shadow.residentBytes) / 1_048_576, gh.shadow.totalRows,
+                             UIApplication.shared.applicationState.rawValue, String(gh.isAppInBackground), gh.router.currentStats.replays))
             }
             let next = t0 + Double(beat) * 0.1
             try await Task.sleep(for: .milliseconds(Int(max(0, next - CACurrentMediaTime()) * 1000)))
@@ -711,6 +715,10 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         print(String(format: "MEASURE m10 background end: frames-sent=%d Δfootprint=%.1fMB gh-pending-max=%d gh-pending-end=%d gh-titles-in-bg=%d st-draws-in-bg=%d gh-presents-in-bg=%d",
                      beat, memoryBG.footprint - memory0.footprint, maxPending, pendingAtEnd, titlesInBackground,
                      drawsInBackground, presentsInBackground))
+        let routed = gh.router.currentStats
+        print(String(format: "MEASURE m10 shadow at background end: shadow-only=%d dropped-surface=%d shadow-resident=%.1fMB shadow-rows=%d shadow-has-marker=%@",
+                     routed.shadowOnlyBytes, routed.droppedSurfaceBytes, Double(gh.shadow.residentBytes) / 1_048_576,
+                     gh.shadow.totalRows, String(gh.shadow.viewportText().contains(marker))))
 
         // 回前台。
         resetFrames()
@@ -735,6 +743,13 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                      ghAt.map { String(format: "%.0fms", ($0 - back) * 1000) } ?? "never",
                      ghParsedAt.map { String(format: "%.0fms", ($0 - back) * 1000) } ?? "never",
                      sink.titles - titlesForeground))
+        let replayed = gh.router.currentStats
+        print(String(format: "MEASURE m10 replay: count=%d snapshot=%dB stream=%dB build=%.1fms (%@) grid=%dx%d unwrapped=%@ error=%@ surface-matches-shadow=%@",
+                     replayed.replays, replayed.lastSnapshotBytes, replayed.lastReplayBytes, replayed.lastReplayBuildSeconds * 1000,
+                     replayed.lastReplayPhases, gh.shadow.size.cols, gh.shadow.size.rows,
+                     String(replayed.lastReplayUnwrapped), replayed.lastReplayError ?? "-",
+                     GhosttyViewportDiff.firstDifference(surface: gh.session.readViewportText() ?? "",
+                                                         shadow: gh.shadow.viewportText()) ?? "true"))
         try await Task.sleep(for: .seconds(2))
         print("MEASURE m10 after foreground \(MemoryProbe.read()) gh-pending=\(gh.session.pendingOutputByteCount)")
         XCTAssertNotNil(stAt, "SwiftTerm 回前台没补出最新画面")
