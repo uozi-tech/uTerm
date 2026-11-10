@@ -535,7 +535,9 @@
             var velocity = velocity
             var stopSpeed: CGFloat = 50
             // uTerm 本地补丁（抓鼠标的程序松手后的惯性）：位移交给引擎，引擎每攒够一格就给程序报一次滚轮，画面由程序自己
-            // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。减速照 UIScrollView `.normal`，甩多快滑多远和普通滚动一样；两处不同：
+            // 一行一行地重画，和 Mac 触控板的惯性滚动是一回事。和普通滚动的惯性有三处不同：
+            // - 滑得近：距离是 UIScrollView `.normal` 的 `UTermScrollTrace.programMomentumTravel` 倍（默认一半，见 momentumScrollFrame）。
+            //   照 `.normal` 滑时 user 觉得太远：整行整行跳的画面跟不住眼睛，程序一次滚轮也可能不止滚一行；
             // - 只留主方向：横向那点速度攒够一格会被报成横向滚轮；
             // - 慢到两行相隔 0.15 s 以上就停：一行一跳的画面，收尾那几下零星的跳比早点停难看
             //  （按 50 pt/s 那条线，13 pt 的行高最后几行要隔 0.26 s 才跳一下）。抬手速度不到这条线的不起惯性。
@@ -694,7 +696,9 @@
             let dt = link.targetTimestamp - link.timestamp
             // uTerm 本地补丁：减速按 UIScrollView 的 `.normal`（每毫秒 0.998），和 SwiftTerm 标签（UIScrollView）
             // 甩出去的距离、收尾一致。上游是每 1/60 s 0.92，摩擦大得多，甩一下就停。按帧时长缩放，60 / 120 Hz 一样远。
-            let decay = CGFloat(pow(0.998, dt * 1000))
+            // 报给程序的那种惯性再按 `programMomentumTravel` 缩短距离（距离和减速率成反比）。
+            let travel = momentumScroll.reportsToProgram ? max(0.05, UTermScrollTrace.programMomentumTravel) : 1
+            let decay = CGFloat(pow(0.998, dt * 1000 / travel))
 
             momentumScroll.velocity.x *= decay
             momentumScroll.velocity.y *= decay

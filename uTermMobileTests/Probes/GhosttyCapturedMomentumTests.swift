@@ -25,6 +25,11 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
               !UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) {
             try await Task.sleep(for: .milliseconds(50))
         }
+        UTermScrollTrace.programMomentumTravel = UTermScrollTrace.defaultProgramMomentumTravel
+    }
+
+    override func tearDown() async throws {
+        UTermScrollTrace.programMomentumTravel = UTermScrollTrace.defaultProgramMomentumTravel
     }
 
     // MARK: 夹具
@@ -134,16 +139,19 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
         return (samples, stoppedAt)
     }
 
-    /// 以 `speed` pt/s 松手，按 `.normal` 减速滑到 `stopSpeed` 为止，要报多少行、花多久。
+    /// 以 `speed` pt/s 松手，滑到 `stopSpeed` 为止，要报多少行、花多久。减速率 = `.normal` ÷ `programMomentumTravel`。
     private func expectation(_ rig: Rig, speed: CGFloat) -> (rows: Double, seconds: Double) {
         let stop = Double(rig.stopSpeed)
-        return ((Double(speed) - stop) / Self.decayRate / Double(rig.cellPt), log(Double(speed) / stop) / Self.decayRate)
+        let rate = Self.decayRate / UTermScrollTrace.programMomentumTravel
+        return ((Double(speed) - stop) / rate / Double(rig.cellPt), log(Double(speed) / stop) / rate)
     }
 
     // MARK: 用例
 
-    /// 甩一下松手：滚轮报告按衰减的速度接着来，条数对得上 UIScrollView 同样速度滑出去的距离，方向和拖动一致，视口不动。
-    private func checkFling(alternateScreen: Bool) async throws {
+    /// 甩一下松手：滚轮报告按衰减的速度接着来，条数对得上按设定的远近滑出去的距离，方向和拖动一致，视口不动。
+    /// `travel`：相对 UIScrollView `.normal` 滑多远；nil = 默认值。
+    private func checkFling(alternateScreen: Bool, travel: Double? = nil) async throws {
+        if let travel { UTermScrollTrace.programMomentumTravel = travel }
         let rig = try await makeRig(alternateScreen: alternateScreen)
         defer { rig.host.close() }
         let barBefore = rig.host.scrollbar
@@ -159,7 +167,7 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
         let after = rig.wheel
         let coasted = after.vertical - dragged.vertical
         let want = expectation(rig, speed: speed)
-        print("CAPTURED-MOMENTUM alt=\(alternateScreen) cell=\(String(format: "%.2f", rig.cellPt))pt drag=\(dragged) "
+        print("CAPTURED-MOMENTUM travel=\(UTermScrollTrace.programMomentumTravel) alt=\(alternateScreen) cell=\(String(format: "%.2f", rig.cellPt))pt drag=\(dragged) "
             + "coasted=\(coasted) rows (want \(String(format: "%.1f", want.rows))) "
             + "for=\(run.coastedFor.map { String(format: "%.2f", $0) } ?? "-")s (want \(String(format: "%.2f", want.seconds)))")
 
@@ -195,6 +203,12 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
         try await checkFling(alternateScreen: false)
     }
 
+    /// 诊断页的三档：远（和普通滚动一样远）、近（四分之一），条数各自对得上。
+    func testTravelSettingScalesDistance() async throws {
+        try await checkFling(alternateScreen: true, travel: 1)
+        try await checkFling(alternateScreen: true, travel: 0.25)
+    }
+
     /// 慢慢抬手（比「停」那条线还慢）：不起惯性，一条滚轮都不多报。
     func testSlowLiftDoesNotCoast() async throws {
         let rig = try await makeRig(alternateScreen: true)
@@ -208,6 +222,7 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
 
     /// 惯性途中手指落下：当场停，之后不再报。
     func testTouchDownStopsCoasting() async throws {
+        UTermScrollTrace.programMomentumTravel = 1
         let rig = try await makeRig(alternateScreen: true)
         defer { rig.host.close() }
         let dragged = try await drag(rig, dy: -12)
@@ -227,6 +242,7 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
     /// 惯性途中程序放开了鼠标（退出全屏界面）：惯性到此为止，剩下的速度不能拿去滚视口。
     /// 往下甩（往回滚方向）：放开之后要是还在滑，主屏的回滚就会被带着滚上去。
     func testCoastingEndsWhenProgramReleasesMouse() async throws {
+        UTermScrollTrace.programMomentumTravel = 1
         let rig = try await makeRig(alternateScreen: false)
         defer { rig.host.close() }
         let barBefore = try XCTUnwrap(rig.host.scrollbar)

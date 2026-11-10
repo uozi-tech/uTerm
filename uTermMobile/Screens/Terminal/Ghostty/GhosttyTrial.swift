@@ -37,6 +37,9 @@ enum GhosttyTrial {
     static func applyRendererMode() {
         UTermScrollTrace.legacyWakeupSyncDraw = !UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyFreeRenderer)
         UTermScrollTrace.usesSystemScrolling = !UserDefaults.standard.bool(forKey: DefaultsKey.debugGhosttyOwnScrollPhysics)
+        // 程序抓着鼠标时松手后的惯性滑多远（百分数，没设用包里的默认值）。
+        let percent = UserDefaults.standard.integer(forKey: DefaultsKey.debugGhosttyProgramMomentum)
+        UTermScrollTrace.programMomentumTravel = percent > 0 ? Double(percent) / 100 : UTermScrollTrace.defaultProgramMomentumTravel
     }
 }
 

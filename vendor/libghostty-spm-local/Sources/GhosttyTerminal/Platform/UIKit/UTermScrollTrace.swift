@@ -88,6 +88,11 @@ public enum UTermScrollTrace {
     /// 拖动 / 惯性 / 回弹。按手势生效（下一次按下起）。宿主的诊断页有开关，默认开。
     nonisolated(unsafe) public static var usesSystemScrolling = true
 
+    /// 程序抓着鼠标时，松手后的惯性滑多远，相对 UIScrollView `.normal`（1 = 和普通滚动一样远；减速率按它的倒数放大）。
+    /// 起因：照 `.normal` 滑，user 在 Claude 的全屏界面里觉得滑得太远。宿主的诊断页可调，下一帧惯性起生效。
+    public static let defaultProgramMomentumTravel = 0.5
+    nonisolated(unsafe) public static var programMomentumTravel = defaultProgramMomentumTravel
+
     /// 触摸的阶段（signpost `touch` 的第二个数）：0 按下、1 开始拖、2 抬起 / 取消。
     public enum TouchPhase: Int { case down = 0, dragBegan = 1, up = 2 }
 
