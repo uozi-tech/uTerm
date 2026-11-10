@@ -255,6 +255,9 @@
     // MARK: - NSEvent Terminal Input Helpers
 
     extension NSEvent {
+        /// kVK_LeftArrow / RightArrow / DownArrow / UpArrow。
+        private static let arrowKeyCodes: Set<UInt16> = [123, 124, 125, 126]
+
         func buildKeyInput(
             action: ghostty_input_action_e,
             translationModifiers: NSEvent.ModifierFlags? = nil,
@@ -265,7 +268,13 @@
             input.composing = false
             input.text = nil
 
-            input.mods = TerminalInputModifiers(from: modifierFlags).ghosttyMods
+            // uTerm 本地补丁：方向键不带 Num Lock。macOS 给四个方向键的事件都带 `.numericPad`（历史原因，它们算
+            // 「数字键盘区」），`TerminalInputModifiers` 把这个标志翻成 Num Lock；程序开了 kitty 键盘协议时，
+            // 一个不带修饰键的 ← 就成了 `CSI 1;129D`（129 = 1 + Num Lock），按「修饰键为空」判断的程序不认它。
+            // Mac 键盘没有 Num Lock，官方 Ghostty 的视图也不报。真正的数字键盘键不动。
+            var mods = TerminalInputModifiers(from: modifierFlags)
+            if Self.arrowKeyCodes.contains(keyCode) { mods.remove(.num) }
+            input.mods = mods.ghosttyMods
 
             // Consumed modifiers: modifiers the key binding system should
             // treat as already handled by text generation. We pass through

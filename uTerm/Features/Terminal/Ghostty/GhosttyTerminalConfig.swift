@@ -59,6 +59,11 @@ enum GhosttyTerminalConfig {
             b.withCustom("shell-integration", "none")
             b.withCustom("cursor-click-to-move", "true")
             b.withCustom("mouse-hide-while-typing", "false")
+            // 按键绑定：Ghostty 的默认绑定全清，只留拷贝 / 粘贴 / 全选、自然文本编辑、翻回滚（清单与理由在共享的
+            // `TerminalKeyBindings`）。uTerm 的快捷键归主菜单和 SwiftUI 管，其余组合发给程序。
+            for item in TerminalKeyBindings.ghosttyConfiguration {
+                b.withCustom(item.key, item.value)
+            }
             // 以下四项是迁移前的着色规则（iOS 试用第二轮逐格对比查出来的，见 docs/ghostty-eval/measure-ios.md M16）：
             // 256 色的 16–255 由 16 色按 CIELAB 生成；粗体的 0–7 号色用亮色；
             // dim 按 sRGB 和底色五五开混合。

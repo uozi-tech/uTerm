@@ -69,6 +69,15 @@ final class GhosttyTerminalBridge {
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
+        view.scrollsPagesLocally = { [weak self] in
+            // 程序自己要翻页键的时候（全屏程序开了应用光标键、开了 kitty 键盘协议、在备用屏上）交给程序。
+            guard let shadow = self?.owner?.shadow else { return false }
+            return shadow.kittyKeyboardFlags == 0 && !shadow.isModeSet(1) && !shadow.isOnAlternateScreen
+        }
+        view.sendsCommandChords = { [weak self] in
+            // 开了 kitty 键盘协议的程序能收带 ⌘（super）的按键；legacy 模式下不发。看影子终端。
+            (self?.owner?.shadow.kittyKeyboardFlags ?? 0) != 0
+        }
         view.onControlReturn = { [weak self] in
             // 程序没开 kitty 键盘协议时发回车；开了就让 Ghostty 自己编带修饰键的序列。
             // 协议开没开看影子终端（吃的是同一份字节）。
@@ -317,6 +326,10 @@ final class GhosttySurfaceView: AppTerminalView {
         onScrollActivity?()
     }
     var pasteboard: NSPasteboard = .general
+    /// PageUp / PageDown（不带修饰键）此刻该不该在本地翻回滚。返回 false = 发给程序。
+    var scrollsPagesLocally: (@MainActor () -> Bool)?
+    /// 没有菜单、没有绑定接的 ⌘ 组合要不要编码发给程序。返回 false（或没设）= 丢掉。
+    var sendsCommandChords: (@MainActor () -> Bool)?
     /// ⌘ 组合先交给主菜单试一次，返回 true = 菜单接了。测试里换掉（真的主菜单会把 ⌘Q、⌘W 执行掉）。
     var performMenuKeyEquivalent: @MainActor (NSEvent) -> Bool = { NSApp.mainMenu?.performKeyEquivalent(with: $0) ?? false }
     /// 这次右键按下弹了我们的菜单（没报给程序）：松开时也不报。
@@ -345,15 +358,39 @@ final class GhosttySurfaceView: AppTerminalView {
         if event.type == .keyDown, window?.firstResponder === self, Self.isControlReturn(event), onControlReturn?() == true {
             return true
         }
-        // ⌘ 组合先问主菜单。key equivalent 是先问视图层级、没人要才轮到菜单；而 Ghostty 自带一套默认按键绑定
-        // （⌘T 新标签、⌘W 关闭、⌘N、⌘D 分屏、⌘K 清屏、⌘,、⌘Q……），GhosttyKit 的视图认了绑定就返回 true——
-        // 终端有焦点时 uTerm 自己的菜单快捷键全被吞掉，⌘K 还会只清 surface 的屏（影子终端不知道）。
-        // 官方 Ghostty 的 macOS 视图也是先试菜单；菜单不要的组合再交回 Ghostty（⌘C / ⌘V 没有菜单项可用时、⌘←/→ 这些）。
+        // ⌘ 组合先问主菜单。key equivalent 是先问视图层级、没人要才轮到菜单；终端视图留着的那几条绑定
+        // （⌘C / ⌘V / ⌘A、⌘← / ⌘→ / ⌘⌫，见 `TerminalKeyBindings`）一旦先认下，「编辑」菜单里的同名项就永远轮不到。
+        // 官方 Ghostty 的 macOS 视图也是先试菜单，菜单不要的组合再回到终端。Ghostty 其余的默认绑定已经在配置里清掉，
+        // 不会再吞 uTerm 的快捷键（SwiftUI 里不在菜单上的 `keyboardShortcut`，如 ⌘K 命令面板，靠的就是这个）。
         if event.type == .keyDown, window?.firstResponder === self, event.modifierFlags.contains(.command),
            performMenuKeyEquivalent(event) {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // PageUp / PageDown 不带修饰键：停在 shell 提示符上时翻一页回滚，不发给程序（shell 收到的是 `CSI 5~`，
+        // 只会在命令行里留下一个「~」）。换引擎之前就是这样；Ghostty 自己没有这条规则，绑定表也表达不了「看模式」。
+        if let action = Self.pageScrollAction(for: event), scrollsPagesLocally?() == true, performBindingAction(action) {
+            return
+        }
+        // 没有菜单、没有绑定接的 ⌘ 组合：程序没开 kitty 键盘协议时丢掉（换引擎之前、Terminal.app 都是这样）。
+        // Ghostty 在 legacy 模式下会把 ⌘↑ 编成 `CSI 1;9A`、⌘↩ 编成 `CSI 27;9;13~`，shell 不认，只会在命令行里
+        // 留下「;9A」这类残渣。绑定（⌘← / ⌘→ / ⌘⌫ / ⌘C …）照常交给 Ghostty。
+        if event.modifierFlags.contains(.command), sendsCommandChords?() != true, !isKeyBinding(event) {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    private static func pageScrollAction(for event: NSEvent) -> String? {
+        guard event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty else { return nil }
+        switch Int(event.keyCode) {
+        case kVK_PageUp: return "scroll_page_up"
+        case kVK_PageDown: return "scroll_page_down"
+        default: return nil
+        }
     }
 
     private static func isControlReturn(_ event: NSEvent) -> Bool {

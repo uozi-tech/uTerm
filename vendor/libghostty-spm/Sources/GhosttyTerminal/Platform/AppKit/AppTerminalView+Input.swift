@@ -260,7 +260,8 @@
             NSMenu.popUpContextMenu(menu, with: event, for: self)
         }
 
-        private func keyIsBinding(
+        // uTerm 本地补丁：原为 private，`isKeyBinding(_:)` 要用。
+        func keyIsBinding(
             _ event: NSEvent,
             on surface: TerminalSurface,
         ) -> Bool {

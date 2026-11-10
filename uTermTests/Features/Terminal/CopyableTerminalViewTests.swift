@@ -148,7 +148,8 @@ final class CopyableTerminalViewTests: XCTestCase {
         XCTAssertEqual(sent, [], "菜单接了：不该往程序里写东西")
     }
 
-    /// 菜单不要的 ⌘ 组合交回 Ghostty。这里顺带把「没有菜单拦着时哪些会被 Ghostty 的默认绑定吃掉」打出来备查。
+    /// 菜单不要的 ⌘ 组合交回终端视图。Ghostty 的默认绑定已在配置里清掉（`TerminalKeyBindings`），这些 uTerm 快捷键
+    /// 没有一条再被终端视图在 key equivalent 这一段认下（按键去向的全表在 `TerminalKeyBindingTests`）。
     func testCommandKeysTheMenuDeclinesFallBackToGhostty() async {
         let harness = await focusedTerminal()
         harness.menuTakesEverything = false
@@ -156,9 +157,8 @@ final class CopyableTerminalViewTests: XCTestCase {
         for (name, event) in appShortcuts(in: harness.window) where harness.view.performKeyEquivalent(with: event) {
             swallowed.append(name)
         }
-        print("[终端快捷键] 菜单不接时被 Ghostty 默认绑定吃掉的：\(swallowed.isEmpty ? "无" : swallowed.joined(separator: "、"))")
         XCTAssertEqual(harness.offeredToMenu.count, 12, "菜单先被问过")
-        XCTAssertTrue(swallowed.contains("⌘↩"), "⌘↩ 没有菜单项：落到 Ghostty 的绑定上")
+        XCTAssertEqual(swallowed, [], "Ghostty 的默认绑定应当已清掉，不再吞 uTerm 的快捷键")
 
         // 不是第一响应者、没按 ⌘ 的组合不问菜单。
         harness.offeredToMenu = []
