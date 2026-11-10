@@ -184,7 +184,7 @@ final class TerminalFlushWiringTests: XCTestCase {
         let newBackend = MockBackend()
         await session.connect(using: newBackend)
         await newBackend.emitOutput(Data("NEW".utf8))
-        let expected = afterClose + TerminalSession.resetCursorShape.count + 3
+        let expected = afterClose + TerminalOutputPump.resetCursorShape.count + 3
         try await waitFor(batches, total: expected)
         XCTAssertEqual(batches.all.last, Data("NEW".utf8))
         await oldBackend.emitOutput(Data("STALE".utf8))

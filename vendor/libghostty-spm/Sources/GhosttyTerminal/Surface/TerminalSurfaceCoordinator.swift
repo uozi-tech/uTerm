@@ -122,12 +122,22 @@ final class TerminalSurfaceCoordinator {
     private var isWindowVisible = true
     private var isApplicationActive = true
     private var pendingImmediateTick = true
-    /// uTerm 本地补丁（M16 第六轮）：这次 tick 要不要在主线程同步整帧重画（`ghostty_surface_draw` = drawFrame(sync: true)：
+    /// uTerm 本地补丁：这次 tick 要不要在主线程同步整帧重画（`ghostty_surface_draw` = drawFrame(sync: true)：
     /// 等空闲帧、编码、commit、waitUntilCompleted 等 GPU 画完）。尺寸 / 度量 / 可见性 / 选区这些宿主侧变化要（渲染线程不知道
     /// 它们，或者要同步出帧防拉伸）；引擎的 wakeup 不要：wakeup 是 app 邮箱里来了消息（标题、滚动条……），这些变化渲染线程
     /// 自己知道、自己会画。真机甩动时每跨一行渲染器就往邮箱推一条滚动条消息 → wakeup → 下一拍主线程同步重画一整帧，
     /// 实测每次 1.4–2.2 ms、最长 5.5 ms，还要等 GPU，GPU 一忙就把主线程拖过一拍（user 日志里的晚交帧和惯性 link 跳拍）。
     private var pendingSyncDraw = true
+
+    /// uTerm 本地补丁：引擎 wakeup（app 邮箱里来了标题、滚动条这类消息）触发的 tick 要不要也在主线程同步整帧重画。
+    /// 按平台定死，不是开关：
+    /// - iOS：要。不画的话（渲染线程自己会画这些变化）真机上滚动发糊；滚动手感是按同步重画验收的。
+    /// - Mac：不要。主线程白画一帧还拿着 draw_mutex 挡渲染线程，Mac 上没有 iOS 那个观感问题。
+    #if os(macOS)
+        static let wakeupDrawsSynchronously = false
+    #else
+        static let wakeupDrawsSynchronously = true
+    #endif
 
     /// Running only while frames are owed. The engine's wakeups arrive at
     /// PTY speed, not display speed; rendering straight from them draws far
@@ -167,7 +177,7 @@ final class TerminalSurfaceCoordinator {
 
     func requestImmediateTick(syncDraw: Bool = true) {
         pendingImmediateTick = true
-        if syncDraw || UTermScrollTrace.wakeupDrawsSynchronously { pendingSyncDraw = true }
+        if syncDraw || Self.wakeupDrawsSynchronously { pendingSyncDraw = true }
         ensureDisplayLink()
     }
 
@@ -555,7 +565,7 @@ final class TerminalSurfaceCoordinator {
         idleFrameCount = 0
         pendingImmediateTick = false
         TerminalDebugLog.log(.render, "tick")
-        // uTerm 测量打点（M16 第六轮）：trace 关着时 mark() 返回 0，span 不记。
+        // uTerm 测量打点：trace 关着时 mark() 返回 0，span 不记。
         var mark = UTermScrollTrace.mark()
         controller?.tick()
         UTermScrollTrace.span("tick-app", since: mark)

@@ -252,15 +252,6 @@ final class TerminalSession: NSObject {
         }
     }
 
-    func refreshTerminalSizeSoon() {
-        inputChannel.sendLatestSizeNow()
-
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(50))
-            self?.inputChannel.sendLatestSizeNow()
-        }
-    }
-
     /// 清掉屏幕与回滚，不断开后端：之后的输出照常流进同一个终端。
     func clearOutput() {
         // 走泵的分流：影子、镜像、检查点、画面按同一个顺序看到这几个字节。
@@ -286,9 +277,6 @@ final class TerminalSession: NSObject {
     }
 
     /// 代次 +1，停掉在途的入站任务、输入通道与退出监听：上一条连接残留的输出随之作废。
-    /// DECSCUSR 0：光标形状、闪烁回到配置的默认值（`TerminalOutputPump.resetCursorShape`）。
-    static let resetCursorShape = TerminalOutputPump.resetCursorShape
-
     private func resetFeedAndResizeState() {
         outputPump.reset()
         inputChannel.unbind()

@@ -157,6 +157,22 @@ final class ShadowTerminalReadingTests: XCTestCase {
         XCTAssertFalse(output.truncated)
     }
 
+    /// 从快照建的、就地还原的影子：RIS 之后字素簇（mode 2027）仍是开的（关了的话 ZWJ 这类字符的宽度和 surface 对不上）。
+    /// 快照带着源终端的模式默认值；三条建法又都按选项设一遍，结果一样。
+    func testSnapshotRestoredTerminalKeepsGraphemeClustersAcrossReset() throws {
+        let source = makeTerminal()
+        feed(source, "hello")
+        XCTAssertTrue(source.isModeSet(2027), "用例前提：新建的默认开")
+        let snapshot = try source.snapshot()
+        let built = try ShadowTerminal(snapshot: snapshot, options: TerminalScrollbackLimits(lines: 10_000).shadowOptions)
+        let restored = makeTerminal()
+        try restored.restore(snapshot: snapshot)
+        for terminal in [built, restored] {
+            feed(terminal, "\u{1B}c")
+            XCTAssertTrue(terminal.isModeSet(2027))
+        }
+    }
+
     /// 默认一条未知 OSC 都不报（iOS 不要）。
     func testUnknownOSCIsNotReportedByDefault() {
         let terminal = makeTerminal()

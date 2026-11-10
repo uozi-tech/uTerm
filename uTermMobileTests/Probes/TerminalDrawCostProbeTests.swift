@@ -12,7 +12,7 @@ import XCTest
 /// 比每行都变便宜 25% 以上」。旧引擎的视图类删掉之后，那个 `draw(_:)` 没有了。
 ///
 /// 新引擎上的对应物：GhosttyKit 的渲染器只重建脏行的格子、内容没变不交帧，iOS 上重画在主线程同步做
-///（`UTermScrollTrace.wakeupDrawsSynchronously`）。所以这里量的是每交一帧（`IOSurfaceLayer.setContents:`）摊到的
+///（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`）。所以这里量的是每交一帧（`IOSurfaceLayer.setContents:`）摊到的
 /// 主线程 CPU 与全部线程 CPU（解析在 GhosttyKit 的串行队列、帧数据在渲染线程，只量主线程会漏账），扣掉「什么都没变」
 /// 那一档量到的宿主基线。
 ///

@@ -18,7 +18,7 @@ import XCTest
 /// 一次只跑一个被测对象（环境变量 `UTERM_GLASS_SUBJECT`），每个对象同一套动作：
 /// 6k / 12k / 20k px/s 各甩一次，无输出、有 Claude 式输出（每 100 ms 一帧）各一遍，方向交替。
 /// - `ghostty-sync`：Ghostty 终端，iOS 上唯一的行为（引擎 wakeup 也在主线程同步重画，
-///   `UTermScrollTrace.wakeupDrawsSynchronously`）；
+///   `TerminalSurfaceCoordinator.wakeupDrawsSynchronously`）；
 /// - `uiscrollview`：一个普通 UIScrollView（1200 行 UILabel），内容由合成器平移——「满分」基准。
 /// 原来还有两个被测对象，现在传进来会跳过（XCTSkip）：
 /// - `ghostty-free`（「渲染不同步」，第六轮）：本地包里那个 A/B 开关已经拿掉，iOS 定死同步重画；
@@ -423,7 +423,7 @@ final class ScrollGlassTraceTests: XCTestCase {
         case "ghostty-sync": try await runGhostty(subject: subject)
         case "ghostty-free":
             throw XCTSkip("ghostty-free（「渲染不同步」，引擎 wakeup 不在主线程同步重画）量不了了：本地包里的 A/B 开关已删，"
-                + "iOS 定死同步重画（UTermScrollTrace.wakeupDrawsSynchronously = true），只剩 ghostty-sync")
+                + "iOS 定死同步重画（TerminalSurfaceCoordinator.wakeupDrawsSynchronously = true），只剩 ghostty-sync")
         case "swiftterm":
             throw XCTSkip("swiftterm 量不了了：旧终端引擎已经从 App 里拿掉，iOS 终端只剩 Ghostty（参照基准用 uiscrollview）")
         case "uiscrollview": try await runScrollView(subject: subject)

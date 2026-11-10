@@ -99,17 +99,25 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         handle = term!
         self.options = options
         versionReportBytes = Array(options.versionReport.utf8)
-        Self.applyLimits(to: handle, options: options)
-        if options.graphemeClusters {
-            var mode = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
-            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &mode)
-        }
+        Self.applyOptions(to: handle, options: options)
         var blink = GhosttyTerminalModeConfig(mode: ghostty_mode_new(12, false), value: options.cursorBlink)
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_MODE, &blink)
         installEffects()
     }
 
     deinit { ghostty_terminal_free(handle) }
+
+    /// 按选项设回滚上限（不在快照里）与模式默认值（快照里带着，再设一遍无妨）。新建、从快照建、就地还原都走这里。
+    private static func applyOptions(to handle: OpaquePointer, options: Options) {
+        applyLimits(to: handle, options: options)
+        if options.graphemeClusters { setGraphemeClustersByDefault(handle) }
+    }
+
+    /// mode 2027（字素簇）默认开：RIS 也回到开。surface 的终端默认开、vt 默认关，见 `Options.graphemeClusters`。
+    private static func setGraphemeClustersByDefault(_ handle: OpaquePointer) {
+        var mode = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &mode)
+    }
 
     private static func applyLimits(to handle: OpaquePointer, options: Options) {
         var bytes = options.scrollbackBytes
@@ -407,7 +415,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return Data(bytes: pointer, count: length)
     }
 
-    /// 从二进制快照还原出一个新的影子终端（上限、默认模式按 `options` 重新设：它们是终端选项，不在快照里）。
+    /// 从二进制快照还原出一个新的影子终端（回滚上限不在快照里，按 `options` 设；模式默认值快照里带着，也按它再设一遍）。
     convenience init(snapshot: Data, options: Options) throws {
         let restored = try Self.decode(snapshot, continuationBytes: options.continuationBytes)
         self.init(adopting: restored, options: options)
@@ -418,7 +426,9 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         self.options = options
         versionReportBytes = Array(options.versionReport.utf8)
         wasRestored = true
-        Self.applyLimits(to: handle, options: options)
+        // 快照带着源终端的模式默认值（实测：从默认开 2027 的终端拍的快照，按关着的选项还原、再 RIS，2027 仍是开的），
+        // 原来这里只设上限、不设 2027 不算错；和新建、就地还原一样按选项再设一遍，三条路一致。
+        Self.applyOptions(to: handle, options: options)
         installEffects()
     }
 
@@ -431,11 +441,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         let old = handle
         handle = restored
         wasRestored = true
-        Self.applyLimits(to: handle, options: options)
-        if options.graphemeClusters {
-            var mode = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
-            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &mode)
-        }
+        Self.applyOptions(to: handle, options: options)
         installEffects()
         applyDefaultColors()
         ghostty_terminal_free(old)
@@ -451,20 +457,26 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 解码要显式开「保留续接字节」：这个版本默认不留，停在半个序列里的终端解出来之后再拍快照会失败（M5）。
     private static func decode(_ snapshot: Data, continuationBytes: Int) throws -> OpaquePointer {
         try snapshot.withUnsafeBytes { raw -> OpaquePointer in
-            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { throw SnapshotError.decode(-2) }
-            var decoder: OpaquePointer?
-            var result = ghostty_snapshot_decoder_new_buf(nil, &decoder, base, raw.count)
-            guard result == GHOSTTY_SUCCESS, let decoder else { throw SnapshotError.decode(result.rawValue) }
+            let decoder = try makeDecoder(raw, continuationBytes: continuationBytes)
             defer { ghostty_snapshot_decoder_free(decoder) }
-            var limit = continuationBytes
-            ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES, &limit)
-            var retain = true
-            ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION, &retain)
             var terminal: OpaquePointer?
-            result = ghostty_snapshot_decoder_decode(decoder, &terminal)
+            let result = ghostty_snapshot_decoder_decode(decoder, &terminal)
             guard result == GHOSTTY_SUCCESS, let terminal else { throw SnapshotError.decode(result.rawValue) }
             return terminal
         }
+    }
+
+    /// 快照解码器（带着半个序列的上限、留着半个序列）。`raw` 要活到解码器放掉为止。
+    private static func makeDecoder(_ raw: UnsafeRawBufferPointer, continuationBytes: Int) throws -> OpaquePointer {
+        guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { throw SnapshotError.decode(-2) }
+        var decoder: OpaquePointer?
+        let result = ghostty_snapshot_decoder_new_buf(nil, &decoder, base, raw.count)
+        guard result == GHOSTTY_SUCCESS, let decoder else { throw SnapshotError.decode(result.rawValue) }
+        var limit = continuationBytes
+        ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES, &limit)
+        var retain = true
+        ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION, &retain)
+        return decoder
     }
 
     // MARK: 快照 → 回放流
@@ -472,19 +484,18 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 把二进制快照变成一段 VT 字节：灌进一个**刚复位**的终端（surface 吃不了二进制快照，只能吃 VT），那个终端就到了
     /// 拍快照时的状态，之后接着喂实时字节即可。开头自带复位（CAN + RIS + 清动态颜色），所以直接灌进用过的 surface 也行。
     ///
-    /// 做法是 `Spikes/GhosttyVT/vtsnap.c`（在构建分支 `worktree-agent-a6bb31349ee21df46` 上）的「vt+」，M5 在 33,243 个
-    /// 切点上核过（3 个不一致；真实语料灌进 surface 320/320 一致）：
-    /// formatter 出 VT（软折行并回一行、全部附加状态）+ formatter 给不出的几样（标题、动态颜色、DECSC 存的光标、
-    /// 备用屏底下的主屏）+ 没走完的半个序列。和 vtsnap 有两处不同，都是因为这里的接收端是带配色的 surface：
+    /// 组成：formatter 出 VT（软折行并回一行、全部附加状态）+ formatter 给不出的几样（标题、动态颜色、DECSC 存的光标、
+    /// 备用屏底下的主屏）+ 没走完的半个序列（M5 在 33,243 个切点上核过：3 个不一致；真实语料灌进 surface 320/320 一致）。
+    /// 因为接收端是带配色的 surface，有两样不照搬：
     /// - 调色板不整份发（formatter 的 `palette` 会把 256 色全用 OSC 4 写死，surface 的配色就被影子的默认调色板盖掉了），
     ///   只发程序改过的那几项；
     /// - OSC 10 / 11 / 12 只在程序改过时发（影子的默认前景 / 背景是为了答查询设的，发过去会变成 surface 上的「程序设的颜色」，
     ///   之后切深浅色不再跟着变）。
     ///
-    /// 发出去之前先自查（vtsnap 的「vt*」）：把生成的流灌进一个临时终端，和源终端比视口文字、总行数、光标、在不在备用屏。
+    /// 发出去之前先自查：把生成的流灌进一个临时终端，和源终端比视口文字、总行数、光标、在不在备用屏。
     /// 对不上就换成「不并软折行」的那一版（每行原样一行，位置不会错，代价是软折行标记丢了、之后改宽度这些行不再连着重排）。
     /// 已知会走到后备的情形：软折行的续行被擦空（formatter 并行时不会把空的续行真正建出来，接收端少一行、整屏错一行；
-    /// 上游问题，见构建分支 `docs/ghostty-eval/vt-snapshot-and-build.md` 1.3）。shell 里敲了一条折行的长命令再删回去就是这样。
+    /// 上游问题）。shell 里敲了一条折行的长命令再删回去就是这样。
     ///
     /// 两个入口：`makeReplay()` 从活的影子直接出（回前台用，省一次整份解码）；`replay(fromSnapshot:)` 只吃快照
     ///（快照是别处来的：远控、检查点；也不占活的影子的锁）。两者生成的流相同。
@@ -551,16 +562,9 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     private static func withReadyClone<T>(_ snapshot: Data, continuationBytes: Int,
                                           _ body: (OpaquePointer) throws -> T) throws -> T {
         try snapshot.withUnsafeBytes { raw -> T in
-            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { throw SnapshotError.decode(-2) }
-            var decoder: OpaquePointer?
-            var result = ghostty_snapshot_decoder_new_buf(nil, &decoder, base, raw.count)
-            guard result == GHOSTTY_SUCCESS, let decoder else { throw SnapshotError.decode(result.rawValue) }
-            var limit = continuationBytes
-            ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES, &limit)
-            var retain = true
-            ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION, &retain)
+            let decoder = try makeDecoder(raw, continuationBytes: continuationBytes)
             var terminal: OpaquePointer?
-            result = ghostty_snapshot_decoder_ready(decoder, &terminal)
+            let result = ghostty_snapshot_decoder_ready(decoder, &terminal)
             guard result == GHOSTTY_SUCCESS, let terminal else {
                 ghostty_snapshot_decoder_free(decoder)
                 throw SnapshotError.decode(result.rawValue)
@@ -581,10 +585,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         guard ghostty_terminal_new(nil, &term, cols(source), rows(source)) == GHOSTTY_SUCCESS, let scratch = term else { return false }
         defer { ghostty_terminal_free(scratch) }
         ghostty_terminal_set(scratch, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, nil)   // NULL = 不限
-        if graphemeClusters {
-            var mode = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
-            ghostty_terminal_set(scratch, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &mode)
-        }
+        if graphemeClusters { setGraphemeClustersByDefault(scratch) }
         stream.withUnsafeBytes { raw in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             ghostty_terminal_vt_write(scratch, base, raw.count)
@@ -1074,31 +1075,7 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             return ref
         }
         guard let start = ref(x: 0, y: rows.lowerBound), let end = ref(x: cols - 1, y: rows.upperBound - 1) else { return [] }
-        var selection = GhosttySelection()
-        selection.size = MemoryLayout<GhosttySelection>.size
-        selection.start = start
-        selection.end = end
-        selection.rectangle = false
-        let text: String = withUnsafePointer(to: &selection) { selectionPointer in
-            var options = GhosttyFormatterTerminalOptions()
-            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = unwrap
-            options.trim = true
-            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
-            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
-            options.selection = selectionPointer
-            var formatter: OpaquePointer?
-            guard ghostty_formatter_terminal_new(nil, &formatter, terminal, options) == GHOSTTY_SUCCESS,
-                  let formatter else { return "" }
-            defer { ghostty_formatter_free(formatter) }
-            var pointer: UnsafeMutablePointer<UInt8>?
-            var length = 0
-            guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
-                  let pointer, length > 0 else { return "" }
-            defer { ghostty_free(nil, pointer, length) }
-            return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
-        }
+        let text = formatPlain(terminal, from: start, to: end, unwrap: unwrap)
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { trimmingTrailingWhitespace(String($0)) }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         return lines
@@ -1183,16 +1160,22 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
 
     /// 一行（`start` 到 `end` 两格之间）的纯文字，行尾空白去掉。
     private static func lineText(_ terminal: OpaquePointer, from start: GhosttyGridRef, to end: GhosttyGridRef) -> String {
+        trimmingTrailingWhitespace(formatPlain(terminal, from: start, to: end, unwrap: false))
+    }
+
+    /// `start`…`end` 之间的纯文字（formatter 的 plain 输出，去掉行尾空格；`unwrap`：软折行并回一行）。
+    private static func formatPlain(_ terminal: OpaquePointer, from start: GhosttyGridRef, to end: GhosttyGridRef,
+                                    unwrap: Bool) -> String {
         var selection = GhosttySelection()
         selection.size = MemoryLayout<GhosttySelection>.size
         selection.start = start
         selection.end = end
         selection.rectangle = false
-        let line: String = withUnsafePointer(to: &selection) { selectionPointer in
+        return withUnsafePointer(to: &selection) { selectionPointer in
             var options = GhosttyFormatterTerminalOptions()
             options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
             options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.unwrap = false
+            options.unwrap = unwrap
             options.trim = true
             options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
             options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
@@ -1208,7 +1191,6 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             defer { ghostty_free(nil, pointer, length) }
             return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
         }
-        return Self.trimmingTrailingWhitespace(line)
     }
 
     static func trimmingTrailingWhitespace(_ line: String) -> String {

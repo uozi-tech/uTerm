@@ -21,7 +21,7 @@ import XCTest
 /// 的一次回调。原来这里是伪造 pan 硬调 `handleTouchScrollGesture:`、按本地包自写惯性的回调（`glide-target`）分拍；
 /// 那套自写物理已经整套删掉，账本改记在系统路径上，两条门槛（赶上 vsync、link 不跳拍）原样。
 ///
-/// 这组读数量的是 iOS 现在唯一的行为：引擎 wakeup 也在主线程同步重画（`UTermScrollTrace.wakeupDrawsSynchronously`，
+/// 这组读数量的是 iOS 现在唯一的行为：引擎 wakeup 也在主线程同步重画（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`，
 /// 第五轮 / 第七轮起的默认）。第六轮「wakeup 不同步重画」的 A/B 开关已经从本地包里拿掉，原来按第六轮定的两条门槛
 ///（甩动期间 tick-draw 0 次、跨行拍主线程忙时 p95 < 2 ms）在同步重画下不成立，改成只打印，见 `summarize` 和
 /// `testRoundSixThresholdsWithoutSyncDraw`。

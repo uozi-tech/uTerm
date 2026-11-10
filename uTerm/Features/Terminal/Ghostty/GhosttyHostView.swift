@@ -10,14 +10,14 @@ struct GhosttyHostView: NSViewRepresentable {
     let session: TerminalSession
     var isActive = true
 
-    @AppStorage(DefaultsKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorShape.block.rawValue
-    @AppStorage(DefaultsKey.terminalCursorBlink)  private var cursorBlink: Bool = false
-    @AppStorage(DefaultsKey.terminalScrollback)   private var scrollback: Int = 3_000
+    @AppStorage(DefaultsKey.terminalCursorShape)  private var cursorShapeRaw: String = TerminalCursorPreference.defaultShape.rawValue
+    @AppStorage(DefaultsKey.terminalCursorBlink)  private var cursorBlink: Bool = TerminalCursorPreference.defaultBlink
+    @AppStorage(DefaultsKey.terminalScrollback)   private var scrollback: Int = TerminalSettings.defaultScrollback
     @AppStorage(DefaultsKey.terminalCopyOnSelect) private var copyOnSelect: Bool = false
     @Environment(\.colorScheme) private var appColorScheme
 
     private var settings: TerminalSettings {
-        TerminalSettings(cursorShape: TerminalCursorShape(rawValue: cursorShapeRaw) ?? .block,
+        TerminalSettings(cursorShape: TerminalCursorPreference.shape(rawValue: cursorShapeRaw),
                          cursorBlink: cursorBlink, scrollback: scrollback, copyOnSelect: copyOnSelect)
     }
 

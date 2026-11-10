@@ -14,8 +14,8 @@ import XCTest
 /// - 第 0 列行边界的过渡宽度（10%–90% 之间的像素数）= 锐度，滚动中和静止时比；
 /// - 同一个 IOSurface 还挂在层上时内容变了 = 正在显示的那张被拿去重画了；
 /// - 相邻两次换画面的位置往回走 = 乱序。
-/// 原来同一次运行里做 A/B：第五轮（引擎 wakeup 也在主线程同步重画）和第六轮（不同步重画）各甩一遍，两种都要过。
-/// 那个开关已经从本地包里拿掉，iOS 定死第五轮的行为（`UTermScrollTrace.wakeupDrawsSynchronously`），这里只留这一半；
+/// 原来同一次运行里做 A/B：引擎 wakeup 也在主线程同步重画、不同步重画，各甩一遍，两种都要过。
+/// 那个开关已经从本地包里拿掉，iOS 定死同步重画（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`），这里只留这一半；
 /// 读数行的标签仍叫 `round5`，和以前的日志对得上。
 ///
 /// 甩动走系统滚动那条路径（单指滚回滚区恒归 UIScrollView）：`EdgeSystemFinger` 拖一步、松手，减速由 display link 每帧

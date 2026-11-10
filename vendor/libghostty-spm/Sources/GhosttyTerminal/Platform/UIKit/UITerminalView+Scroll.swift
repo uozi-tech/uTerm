@@ -224,7 +224,7 @@
             surface?.sendMouseScroll(x: Double(pixels.x), y: Double(pixels.y), mods: mods.rawValue)
             if momentum == .none, pixels.y != 0 { UTermScrollTrace.record("drag", Double(pixels.y)) }
             if let bar = core.bridge.scrollbar { UTermScrollTrace.record("row", Double(bar.offset)) }
-            // uTerm 排查用（M16 第三轮）：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
+            // uTerm 排查用：每次发出的像素、视口行号、程序有没有抓鼠标（抓了就按行报给程序，不会平滑）。
             TerminalDebugLog.log(
                 .input,
                 "uterm-scroll px=\(String(format: "%.1f", pixels.y)) momentum=\(momentum) model=\(momentumScroll.modelRow)+\(momentumScroll.modelFrac)px bar=\(core.bridge.scrollbar.map { "\($0.offset)/\($0.total)/\($0.len)" } ?? "-") captured=\(surface?.isMouseCaptured == true) inline=\(usesInlineTextSelection) local=\(momentumScroll.scrollsLocally)",

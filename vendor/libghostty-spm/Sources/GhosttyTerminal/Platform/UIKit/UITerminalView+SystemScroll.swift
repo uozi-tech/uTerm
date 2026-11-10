@@ -1,9 +1,9 @@
 //
 //  UITerminalView+SystemScroll.swift
-//  uTerm 本地补丁（M16 第十轮）：单指滚动的手势和物理交给 UIScrollView。
+//  uTerm 本地补丁：单指滚动的手势和物理交给 UIScrollView。
 //
-//  第八轮按「真正上玻璃」量 user 真手甩：Ghostty 标签的冻结几乎都在手指参与的时刻（按下停住、拖动、松手交接），
-//  惯性中段反而好。自写的 UIPanGestureRecognizer 每次按下都要重新识别，交接那一拍还要等上一步画出来。
+//  按「真正上玻璃」量真手甩：自写手势时冻结几乎都在手指参与的时刻（按下停住、拖动、松手交接），惯性中段反而好。
+//  自写的 UIPanGestureRecognizer 每次按下都要重新识别，交接那一拍还要等上一步画出来。
 //  UIScrollView 在减速中被按住直接续上跟踪，松手的减速、到头的回弹、落点都是系统的。这里只借它这些：
 //  一个藏在终端视图里、不画东西、不接触摸的 UIScrollView，把它的 panGestureRecognizer 挂到终端视图上，
 //  contentOffset 的变化换成整数物理像素发给引擎（视口位置的镜像见 UITerminalView+Scroll.swift）。

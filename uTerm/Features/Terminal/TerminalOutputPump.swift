@@ -104,11 +104,16 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         var droppedSurfaceBytes = 0
         /// 回放次数。
         var replays = 0
-        /// 最近一次回放：流的字节数、快照的字节数、拍快照 + 生成回放流 + 自查一共用了多久，以及其中三步各多久。
+        /// 最近一次回放：流的字节数、快照的字节数、拍快照 + 生成回放流 + 自查一共用了多久，以及其中三步各多久（秒）。
         var lastReplayBytes = 0
         var lastSnapshotBytes = 0
         var lastReplayBuildSeconds = 0.0
-        var lastReplayPhases = ""
+        var lastReplayPhaseSeconds = (encode: 0.0, stream: 0.0, verify: 0.0)
+        /// 探针打印用（读的时候才拼，不在泵的锁里）。
+        var lastReplayPhases: String {
+            String(format: "encode=%.1fms stream=%.1fms verify=%.1fms", lastReplayPhaseSeconds.encode * 1000,
+                   lastReplayPhaseSeconds.stream * 1000, lastReplayPhaseSeconds.verify * 1000)
+        }
         /// 最近一次回放用的是不是首选的那一版（软折行并回一行）；false = 自查没过，用了逐行的后备版。
         var lastReplayUnwrapped = true
         /// 最近一次回放发出去的那一版自查过了没有（没过也照发，画面可能和影子差一点）。
@@ -122,9 +127,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         /// 主控端因为影子与 surface 网格不一致而停画的次数、等不到对齐超时放行的次数。
         var gridHolds = 0
         var gridHoldTimeouts = 0
-        /// 恢复喂 surface 时补尾巴（而不是整屏回放）的次数，以及最近一次补了多少字节。
+        /// 恢复喂 surface 时补尾巴（而不是整屏回放）的次数。
         var tailCatchUps = 0
-        var lastTailBytes = 0
     }
 
     /// surface 追上影子的方式（`onSurfaceCaughtUp`）。
@@ -361,7 +365,6 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         guard grid == tailGrid, surface.surfaceGridSize.map({ $0 == tailGrid }) ?? true else { return false }
         if !pending.isEmpty { surface.receiveReplay(pending) }
         stats.tailCatchUps += 1
-        stats.lastTailBytes = pending.count
         surfaceIsStale = false
         notifyCaughtUpLocked(.tail)
         return true
@@ -623,8 +626,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             stats.replays += 1
             stats.lastReplayBytes = replay.stream.count
             stats.lastSnapshotBytes = replay.snapshotBytes
-            stats.lastReplayPhases = String(format: "encode=%.1fms stream=%.1fms verify=%.1fms",
-                                            replay.encodeSeconds * 1000, replay.buildSeconds * 1000, replay.verifySeconds * 1000)
+            stats.lastReplayPhaseSeconds = (replay.encodeSeconds, replay.buildSeconds, replay.verifySeconds)
             stats.lastReplayUnwrapped = replay.unwrapped
             stats.lastReplayVerified = replay.verified
             stats.lastReplayError = nil

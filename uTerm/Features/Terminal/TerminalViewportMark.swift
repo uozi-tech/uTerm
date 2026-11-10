@@ -13,9 +13,6 @@ import Foundation
 nonisolated struct TerminalViewportMark: Sendable, Equatable {
     /// 视口首行在整屏（含回滚）里的行号（0 = 回滚最早的一行），即引擎滚动条的 `offset`。
     let offset: Int
-    /// 一屏几行、整屏一共几行（记下时）。
-    let rows: Int
-    let total: Int
     /// 往上最多找这么多行（每行一次读影子；回滚设得很大时不至于卡太久）。
     static let searchLimit = 50_000
     /// 记下时的列数：宽度变了，折行就变了，文字比不上。
@@ -31,7 +28,7 @@ nonisolated struct TerminalViewportMark: Sendable, Equatable {
         let lines = (viewportText ?? "").components(separatedBy: "\n")
         let count = min(rows, historyRows - offset, lines.count)
         let anchor = lines.prefix(max(0, count)).map(Self.trimmed)
-        return TerminalViewportMark(offset: offset, rows: rows, total: total, columns: columns, anchor: Array(anchor))
+        return TerminalViewportMark(offset: offset, columns: columns, anchor: Array(anchor))
     }
 
     /// 回放之后视口该滚到第几行（`scroll_to_row`）。返回 nil = 留在底部（原处已经落进了活动区）。

@@ -50,7 +50,7 @@ public enum UTermScrollTrace {
         return enabled ? CACurrentMediaTime() : 0
     }
 
-    // MARK: 给 Instruments 的 signpost（M16 第八轮：按「上玻璃」打分）
+    // MARK: 给 Instruments 的 signpost（按「上玻璃」打分）
     //
     // 滚动位置（`scroll-offset`）、触摸阶段（`touch`）和系统滚动的排查打点（`sv-*`、`engine-bar`）各发一条 signpost；
     // 外面用 xctrace 录的时候，trace 里就能把「这一刻想显示的位置」对到「它哪个 vsync 上的玻璃」，user 真手甩的时候也能录。
@@ -61,16 +61,6 @@ public enum UTermScrollTrace {
     private static let glassSignposter = OSSignposter(subsystem: "com.uozi.uTerm.glass", category: .pointsOfInterest)
 
     static var isInstrumentsRecording: Bool { emitsSignposts && glassSignposter.isEnabled }
-
-    /// 引擎 wakeup（app 邮箱里来了标题、滚动条这类消息）触发的 tick 要不要在主线程同步整帧重画。按平台定死，不是开关：
-    /// - iOS：要。M16 第六轮试过不画（渲染线程自己会画这些变化），user 在真机上说滚动时发糊，第七轮起回到同步重画，
-    ///   并按这个取值验收了滚动手感。
-    /// - Mac：不要。主线程白画一帧还拿着 draw_mutex 挡渲染线程，Mac 上没有 iOS 那个观感问题。
-    #if os(macOS)
-        public static let wakeupDrawsSynchronously = false
-    #else
-        public static let wakeupDrawsSynchronously = true
-    #endif
 
     /// 程序抓着鼠标时，松手后的惯性滑多远，相对 UIScrollView `.normal`（1 = 和普通滚动一样远；减速率按它的倒数放大）。
     /// user 在 Duo 上的 Claude 全屏界面里比过三档（1 / 0.5 / 0.25）：照 `.normal` 滑得太远，定四分之一。
@@ -88,7 +78,7 @@ public enum UTermScrollTrace {
         glassSignposter.emitEvent("touch", "\(text, privacy: .public)")
     }
 
-    // MARK: 系统滚动的排查打点（M16 第十轮：user 说「顶部底部中间会有反复横跳」）
+    // MARK: 系统滚动的排查打点（查「滚到顶 / 底 / 中间时位置反复横跳」用）
 
     /// 我们主动改滚动视图或引擎位置的原因（不是 UIKit 自己动的）。signpost `sv-write`：时刻、原因、改之前、改之后（物理像素）。
     public enum ScrollWrite: Int {

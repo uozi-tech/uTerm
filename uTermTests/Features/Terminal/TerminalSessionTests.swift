@@ -14,14 +14,14 @@ final class TerminalSessionTests: XCTestCase {
         await session.connect(using: MockBackend())
         var first = Data()
         while let chunk = subscriber.take(maxBytes: 1 << 20) { if case .output(let bytes) = chunk { first.append(bytes) } }
-        XCTAssertNil(first.range(of: TerminalSession.resetCursorShape), "全新的会话不用复位")
+        XCTAssertNil(first.range(of: TerminalOutputPump.resetCursorShape), "全新的会话不用复位")
 
         session.feedOutput(text: "\u{1B}[6 q$ ")
         while subscriber.take(maxBytes: 1 << 20) != nil {}
         await session.connect(using: MockBackend())
         var after = Data()
         while let chunk = subscriber.take(maxBytes: 1 << 20) { if case .output(let bytes) = chunk { after.append(bytes) } }
-        XCTAssertNotNil(after.range(of: TerminalSession.resetCursorShape), "重连后要复位光标形状")
+        XCTAssertNotNil(after.range(of: TerminalOutputPump.resetCursorShape), "重连后要复位光标形状")
     }
 
     func testInitialStateIsIdle() {

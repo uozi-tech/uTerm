@@ -951,11 +951,10 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     /// 又宽又矮的那一档（Duo 内屏横放）：甩到顶、甩回底、来输出，停稳后都在格子上。
     ///
     /// 原来叫 `testAllFourSwitchCombinations`，按两个开关（「渲染不同步」× 自写滚动物理）的四种组合各跑一遍。两个开关都已经
-    /// 从本地包里拿掉，只剩 iOS 现在的这一种：引擎 wakeup 在主线程同步重画（`UTermScrollTrace.wakeupDrawsSynchronously`）
+    /// 从本地包里拿掉，只剩 iOS 现在的这一种：引擎 wakeup 在主线程同步重画（`TerminalSurfaceCoordinator.wakeupDrawsSynchronously`）
     /// + 系统滚动。断言原样。
     func testFlingBothWaysThenOutputLandsOnTheGrid() async throws {
         let sizes = try await probeSizes()
-        XCTAssertTrue(UTermScrollTrace.wakeupDrawsSynchronously, "iOS 上引擎 wakeup 应当在主线程同步重画（这条用例的读数按它验收的）")
         let top = try await topBaseline(size: sizes[2])
         let rig = try await makeRig(size: sizes[2], lines: 200)
         defer { rig.host.close() }
