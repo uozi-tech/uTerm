@@ -95,6 +95,8 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         bridge.setAppInBackground(false)
         bridge.outputPump.waitForCatchUp()
         XCTAssertFalse(bridge.isOnScreen, "App 回前台不该把后台标签放出来")
+        // 回放那一下、隐藏那一刻已经在路上的帧让它交完。
+        try await Task.sleep(for: .milliseconds(200))
         let hidden = try await presentsWhileFeeding(bridge, ticks: 5, tag: "hidden")
         XCTAssertEqual(hidden, 0, "后台标签不交帧")
 
@@ -174,6 +176,39 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         let text = surfaceText(bridge)
         XCTAssertTrue(text.contains("before hiding") && text.contains("while released"), "重建后的画面：\(text.prefix(200))")
         XCTAssertEqual(GhosttyViewportDiff.firstDifference(surface: text, shadow: bridge.shadow.viewportText()), nil)
+    }
+
+    /// 放掉再重建时，新 surface 的终端先按出生时的默认网格报一次尺寸。那一次不能传给影子和远端：影子缩一下再放回来，
+    /// 备用屏（全屏程序）的内容就被裁掉了，而网格最终没变、程序收不到 SIGWINCH、不会重画。
+    func testRestoredSurfaceKeepsTheAlternateScreenAndDoesNotResizeTheRemote() async throws {
+        let (bridge, container) = try await hostedTerminal()
+        bridge.hiddenReleaseDelay = .milliseconds(100)
+        let grid = try XCTUnwrap(bridge.grid)
+        // 全屏程序：进备用屏，在最后一行和最右一列各写一个记号。
+        bridge.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1Htop-left\u{1B}[\(grid.rows);1Hbottom-row\u{1B}[3;\(grid.cols - 4)Hright".utf8))
+        let before = bridge.shadow.viewportText()
+        let reports = bridge.resizeReports
+        let sent = bridge.input.latestSize
+
+        container.isOnScreen = false
+        let released = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) { bridge.view.uTermIsSurfaceReleased }
+        XCTAssertTrue(released)
+        container.isOnScreen = true
+        try await waitUntilFed(bridge)
+        bridge.outputPump.waitForCatchUp()
+        try await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertEqual(bridge.shadow.viewportText(), before, "影子里的备用屏内容被动过")
+        XCTAssertTrue(bridge.shadow.isOnAlternateScreen)
+        let text = surfaceText(bridge)
+        XCTAssertTrue(text.contains("top-left") && text.contains("bottom-row") && text.contains("right"),
+                      "重建后的画面丢了内容：\(text)")
+        XCTAssertEqual(GhosttyViewportDiff.firstDifference(surface: text, shadow: before), nil)
+        XCTAssertEqual(bridge.input.latestSize?.cols, sent?.cols)
+        XCTAssertEqual(bridge.input.latestSize?.rows, sent?.rows)
+        XCTAssertLessThanOrEqual(bridge.resizeReports - reports, 1, "重建 surface 多报了尺寸：\(bridge.resizeReports - reports) 次")
+        XCTAssertEqual(bridge.grid?.cols, grid.cols)
+        XCTAssertEqual(bridge.grid?.rows, grid.rows)
     }
 
     /// 很快切回来：不放 surface，不重建。
