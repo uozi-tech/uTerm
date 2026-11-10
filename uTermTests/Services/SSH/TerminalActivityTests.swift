@@ -1,4 +1,3 @@
-import SwiftTerm
 import XCTest
 @testable import uTerm
 
@@ -178,9 +177,8 @@ final class TerminalActivityTests: XCTestCase {
 
     /// 标记也会流到同一条连接上别的标签，那里没人接，不能显示出来。
     func testTerminalIgnoresTheMarker() {
-        let terminal = HeadlessTerminal(queue: .main, options: .init(cols: 40, rows: 5)) { _ in }.terminal!
-        terminal.feed(text: "a\u{1b}]6974;pts/3\u{07}b")
-        let line = terminal.getLine(row: 0)?.translateToString(trimRight: true)
-        XCTAssertEqual(line, "ab")
+        let terminal = ShadowTerminal(cols: 40, rows: 5, options: TerminalScrollbackLimits(lines: 100).shadowOptions)
+        terminal.feed(Data("a\u{1b}]6974;pts/3\u{07}b".utf8))
+        XCTAssertEqual(terminal.recentLines(1).lines, ["ab"])
     }
 }

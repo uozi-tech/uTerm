@@ -137,7 +137,7 @@ final class GhosttyColorParityTests: XCTestCase {
             window.addSubview(bridge.view)
             // 等 surface 建好、网格到位、画面接上实时字节：在那之前喂的只进影子，要等回放才上屏。
             let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-                bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.router.isFeedingSurface
+                bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
             }
             XCTAssertTrue(ready, "\(mode)：surface 没就绪")
             // 第一次报上来的网格可能还是建 surface 那一刻的尺寸，等它停稳再喂，不然内容会按旧宽度折行。

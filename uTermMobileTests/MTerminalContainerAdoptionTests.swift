@@ -162,7 +162,7 @@ final class MTerminalContainerAdoptionTests: MTerminalContainerTestCase {
 
     private func waitUntilFed(_ terminal: GhosttyTerminalBridge, file: StaticString = #filePath, line: UInt = #line) async {
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            terminal.isSurfaceReady && terminal.router.isFeedingSurface
+            terminal.isSurfaceReady && terminal.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "surface 没就绪", file: file, line: line)
     }

@@ -130,12 +130,12 @@ final class EditorThemeTests: XCTestCase {
     func test_editor_and_terminal_share_selection_background_colors() {
         XCTAssertTrue(
             near(sRGBA(EditorTheme.selectionBg, .darkAqua),
-                 sRGBA(TerminalTheme.normalSelectionColor, .darkAqua)),
+                 sRGBA(TerminalColorScheme.vscodeDark.selectionColor, .darkAqua)),
             "dark selection should use the same resolved RGBA"
         )
         XCTAssertTrue(
             near(sRGBA(EditorTheme.selectionBg, .aqua),
-                 sRGBA(TerminalTheme.lightSelectionColor, .aqua)),
+                 sRGBA(TerminalColorScheme.vscodeLight.selectionColor, .aqua)),
             "light selection should use the same resolved RGBA"
         )
     }

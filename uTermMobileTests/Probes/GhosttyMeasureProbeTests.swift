@@ -58,7 +58,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
             let now = bridges.map { "\(String(describing: $0.grid))" }
             if now != last { last = now; stableSince = CACurrentMediaTime() }
         }
-        func notFeeding(_ bridge: GhosttyTerminalBridge) -> Bool { !(bridge.isSurfaceReady && bridge.router.isFeedingSurface) }
+        func notFeeding(_ bridge: GhosttyTerminalBridge) -> Bool { !(bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface) }
         while CACurrentMediaTime() < deadline, bridges.contains(where: notFeeding) {
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -294,7 +294,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                 GhosttyPresentLog.installIfPossible()
                 let presents = GhosttyPresentLog.read().times
                 if first == nil { first = presents.first }
-                if shown == nil, bridge.isSurfaceReady, bridge.router.isFeedingSurface,
+                if shown == nil, bridge.isSurfaceReady, bridge.outputPump.isFeedingSurface,
                    bridge.session.readViewportText()?.contains("Last login") == true {
                     shown = CACurrentMediaTime()
                 }
@@ -538,8 +538,8 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                 print(String(format: "MEASURE m10 t=%3.0fs footprint=%.1fMB(Δ%.1f) gh-pending=%d gh-titles=%d shadow-titles=%d gh-presents=%d shadow-only=%d shadow-resident=%.1fMB shadow-rows=%d app-state=%d gh-bg=%@ replays=%d",
                              elapsed, m.footprint, m.footprint - memory0.footprint, gh.session.pendingOutputByteCount,
                              sink.titles, sink.shadowTitles, GhosttyPresentLog.read().times.count,
-                             gh.router.currentStats.shadowOnlyBytes, Double(gh.shadow.residentBytes) / 1_048_576, gh.shadow.totalRows,
-                             UIApplication.shared.applicationState.rawValue, String(gh.isAppInBackground), gh.router.currentStats.replays))
+                             gh.outputPump.currentStats.shadowOnlyBytes, Double(gh.shadow.residentBytes) / 1_048_576, gh.shadow.totalRows,
+                             UIApplication.shared.applicationState.rawValue, String(gh.isAppInBackground), gh.outputPump.currentStats.replays))
             }
             let next = t0 + Double(beat) * 0.1
             try await Task.sleep(for: .milliseconds(Int(max(0, next - CACurrentMediaTime()) * 1000)))
@@ -555,7 +555,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         print(String(format: "MEASURE m10 background end: frames-sent=%d Δfootprint=%.1fMB gh-pending-max=%d gh-pending-end=%d gh-titles-in-bg=%d shadow-titles-in-bg=%d gh-presents-in-bg=%d",
                      beat, memoryBG.footprint - memory0.footprint, maxPending, pendingAtEnd, titlesInBackground,
                      shadowTitlesInBackground, presentsInBackground))
-        let routed = gh.router.currentStats
+        let routed = gh.outputPump.currentStats
         let shadowHasMarker = gh.shadow.viewportText().contains(marker)
         print(String(format: "MEASURE m10 shadow at background end: shadow-only=%d dropped-surface=%d shadow-resident=%.1fMB shadow-rows=%d shadow-has-marker=%@",
                      routed.shadowOnlyBytes, routed.droppedSurfaceBytes, Double(gh.shadow.residentBytes) / 1_048_576,
@@ -580,7 +580,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
                      ghAt.map { String(format: "%.0fms", ($0 - back) * 1000) } ?? "never",
                      ghParsedAt.map { String(format: "%.0fms", ($0 - back) * 1000) } ?? "never",
                      sink.titles - titlesForeground))
-        let replayed = gh.router.currentStats
+        let replayed = gh.outputPump.currentStats
         print(String(format: "MEASURE m10 replay: count=%d snapshot=%dB stream=%dB build=%.1fms (%@) grid=%dx%d unwrapped=%@ error=%@ surface-matches-shadow=%@",
                      replayed.replays, replayed.lastSnapshotBytes, replayed.lastReplayBytes, replayed.lastReplayBuildSeconds * 1000,
                      replayed.lastReplayPhases, gh.shadow.size.cols, gh.shadow.size.rows,

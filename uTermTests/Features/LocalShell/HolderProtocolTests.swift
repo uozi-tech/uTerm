@@ -121,21 +121,25 @@ final class HolderProtocolTests: XCTestCase {
         XCTAssertEqual(log.read(from: log.startOffset, maxBytes: capacity)?.count, capacity)
     }
 
-    // MARK: - 丢弃计数
+    // MARK: - 检查点的版本头
+    //
+    // 原来这里核的是 `TerminalOutputBuffer` 的丢弃计数（检查点要靠它算出终端看到了输出流的哪个位置）。新的输出泵不丢
+    // 字节，那个缓冲和计数都删了；检查点这一侧现在要保证的是：只认同一个引擎版本存的快照。
 
-    func test_output_buffer_counts_dropped_bytes_for_current_generation() {
-        let buffer = TerminalOutputBuffer(capacityBytes: 1024)
-        buffer.append(Data(count: 700), generation: 5)
-        buffer.append(Data(count: 700), generation: 5)
-        XCTAssertEqual(buffer.droppedBytes(generation: 5), 700, "最旧的整块被丢")
-        // 单块超过容量：头部截掉的也要算。
-        buffer.append(Data(count: 3000), generation: 5)
-        XCTAssertEqual(buffer.droppedBytes(generation: 5), 700 + 1976 + 700)
-        XCTAssertEqual(buffer.drain(maxBytes: 4096, generation: 5).count, 1024)
-        buffer.append(Data(count: 10), generation: 5)
-        buffer.clear()
-        XCTAssertEqual(buffer.droppedBytes(generation: 5), 700 + 1976 + 700 + 10, "清屏丢的也算")
-        XCTAssertEqual(buffer.droppedBytes(generation: 4), 0)
+    func test_checkpoint_blob_is_only_accepted_from_the_same_engine_version() throws {
+        let terminal = ShadowTerminal(cols: 40, rows: 6, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        terminal.feed(Data("history\r\n$ ".utf8))
+        let snapshot = try terminal.snapshot()
+
+        let blob = TerminalCheckpointBlob.encode(snapshot: snapshot)
+        XCTAssertEqual(TerminalCheckpointBlob.decode(blob), snapshot)
+        XCTAssertNil(TerminalCheckpointBlob.decode(blob, engine: "ghostty-ffffffff+p0000/snapshot-9"), "别的引擎版本存的：丢弃")
+        XCTAssertNil(TerminalCheckpointBlob.decode(Array("\u{1B}c\u{1B}[2Jold VT checkpoint".utf8)), "没有版本头的旧检查点：丢弃")
+        XCTAssertNil(TerminalCheckpointBlob.decode([]))
+
+        let restored = ShadowTerminal(cols: 80, rows: 24, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        try restored.restore(snapshot: XCTUnwrap(TerminalCheckpointBlob.decode(blob)))
+        XCTAssertEqual(restored.recentLines(5).lines, ["history", "$"])
     }
 
     /// `localNetworkUnreachable` 是后加的可选字段：旧 `uterm-ssh` 发的失败没有它，新 App 照样解；反过来旧 App 忽略它。

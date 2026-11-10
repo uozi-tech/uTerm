@@ -1,6 +1,5 @@
 import AppKit
 import Carbon.HIToolbox
-import SwiftTerm
 import XCTest
 @testable import uTerm
 
@@ -43,13 +42,13 @@ final class TerminalImagePasteTests: XCTestCase {
     private let png = Data([0x89, 0x50, 0x4E, 0x47])
     private var pasteboard: NSPasteboard!
     private var session: TerminalSession!
-    private var view: CopyableTerminalView!
+    private var view: GhosttySurfaceView!
     private var attentions: [TerminalAttention] = []
 
     override func setUp() async throws {
         pasteboard = NSPasteboard(name: NSPasteboard.Name("uterm-test-\(UUID().uuidString)"))
         session = TerminalSession()
-        view = session.terminalView as? CopyableTerminalView
+        view = session.ghostty.view
         view.pasteboard = pasteboard
         attentions = []
         session.attentionSink = { [unowned self] in self.attentions.append($0) }
@@ -69,11 +68,11 @@ final class TerminalImagePasteTests: XCTestCase {
     }
 
     private func reportAgent() {
-        view.feed(text: "\u{1b}]7501;state=idle:app=claude-code\u{1b}\\")
+        session.feedOutput(text: "\u{1b}]7501;state=idle:app=claude-code\u{1b}\\")
     }
 
     private func enableBracketedPaste() {
-        view.feed(text: "\u{1b}[?2004h")
+        session.feedOutput(text: "\u{1b}[?2004h")
     }
 
     private func waitUntil(_ condition: () async -> Bool) async throws {

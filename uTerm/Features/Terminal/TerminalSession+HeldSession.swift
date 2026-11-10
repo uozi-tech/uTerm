@@ -1,13 +1,16 @@
 import Foundation
-import SwiftTerm
 
 /// 持有 PTY 的后端（`HeldTerminalBackend`）接回画面、存检查点。
 ///
-/// 画面只有 App 这边的终端解析器懂，holder 只存字节。所以 App 定期把终端状态序列化成一块不透明的数据
-///（检查点）连同它对应的字节位置交给 holder。接回时：喂检查点，再喂那个位置之后的字节，就回到了最新画面。
+/// 画面只有 App 这边的终端引擎懂，holder 只存字节。所以 App 定期把影子终端的状态拍成一张二进制快照
+///（检查点）连同它对应的字节位置交给 holder。接回时：把检查点还原进影子终端，再喂那个位置之后的字节，影子就回到了
+/// 最新画面；画面（surface）等标签第一次露出时再建，建好后由输出泵把影子的状态回放进去（M7）。
 ///
-/// 回放的字节全是历史。里面的终端查询、OSC 52、命令跟踪标记，当时要么已经处理过，要么过时了，
-/// 所以回放期间屏蔽应答和副作用（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
+/// 检查点只认同一个引擎版本存的（`TerminalCheckpointBlob`）：版本变了就丢弃，holder 里的 shell 不受影响，只是回滚
+/// 历史从 holder 还留着的那段字节开始。
+///
+/// 回放的字节全是历史。里面的终端查询、命令跟踪标记、状态上报、通知，当时要么已经处理过，要么过时了，
+/// 所以回放期间关掉影子终端的事件、不发应答（`isReplayingHeldOutput`），否则历史查询的回答会打进 shell 的输入。
 extension TerminalSession {
     private static let replayChunkBytes = 256 * 1024
 
@@ -17,25 +20,37 @@ extension TerminalSession {
         guard let replay = await backend.takeReplay() else { return true }
         guard feedGeneration == generation else { return false }
 
-        let terminal = terminalView.getTerminal()
-        let checkpoint = replay.checkpoint
-        // 检查点和之后的字节都是按当时的尺寸产生的，要先回到那个尺寸。窗口尺寸等视图布局时再改回来。
-        if !checkpoint.blob.isEmpty, checkpoint.cols > 0, checkpoint.rows > 0 {
-            terminal.resize(cols: Int(checkpoint.cols), rows: Int(checkpoint.rows))
+        isReplayingHeldOutput = true
+        shadow.setEventsSuppressed(true)
+        defer {
+            isReplayingHeldOutput = false
+            shadow.setEventsSuppressed(false)
         }
 
-        isReplayingHeldOutput = true
-        defer { isReplayingHeldOutput = false }
-        guard await feedReplay(checkpoint.blob, generation: generation) else { return false }
+        let checkpoint = replay.checkpoint
+        var restored = false
+        if let snapshot = TerminalCheckpointBlob.decode(checkpoint.blob) {
+            restored = (try? shadow.restore(snapshot: snapshot)) != nil
+        }
+        // 检查点没法用（空的、别的引擎版本存的）：之后的字节仍然是按当时的尺寸产生的，先回到那个尺寸。
+        if !restored, checkpoint.cols > 0, checkpoint.rows > 0 {
+            shadow.resize(cols: checkpoint.cols, rows: checkpoint.rows)
+        }
         if checkpoint.hasGap {
             let notice = String(localized: "重启期间输出过多，较早内容已丢弃")
-            guard await feedReplay(Array("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8), generation: generation) else { return false }
+            shadow.feed(Data("\r\n\u{1b}[2m[\(notice)]\u{1b}[0m\r\n".utf8))
         }
         guard await feedReplay(replay.output, generation: generation) else { return false }
 
-        heldCheckpoints = TerminalHeldCheckpoints(
-            link: backend.holderLink, terminal: terminal, baseOffset: replay.endOffset,
-            buffer: outputBuffer, generation: generation)
+        // 画面已经有网格的话（重连同一个窗格）回到它的尺寸；没建过的等它第一次报网格时影子自然跟上。
+        if let grid = ghostty.grid {
+            shadow.resize(cols: UInt16(clamping: grid.cols), rows: UInt16(clamping: grid.rows))
+        }
+        // 影子是绕过输出泵改的：画面、镜像都要重新对齐。
+        outputPump.markSurfaceStale()
+        mirrorTap.invalidateAll()
+
+        heldCheckpoints = TerminalHeldCheckpoints(link: backend.holderLink, pump: outputPump, baseOffset: replay.endOffset)
 
         if replay.isReattach {
             // 尺寸没变时 TIOCSWINSZ 不发信号，TUI 不知道要重画。等视图布局一轮（尺寸变了的话已经发过了）再补一个。
@@ -53,16 +68,16 @@ extension TerminalSession {
         var start = 0
         while start < bytes.count {
             let end = min(start + Self.replayChunkBytes, bytes.count)
-            terminalView.feed(byteArray: bytes[start..<end])
+            shadow.feed(Data(bytes[start..<end]))
             start = end
-            // 最多 16 MiB，一口气喂会卡住界面。
+            // 最多 16 MiB，一口气喂会占住主线程。
             await Task.yield()
             guard feedGeneration == generation else { return false }
         }
         return true
     }
 
-    /// 退出流程里最后存一次。不在解析边界就算了：holder 里还有上一个检查点和之后的全部字节。
+    /// 退出流程里最后存一次。
     func saveHeldCheckpointNow() {
         heldCheckpoints?.captureNow()
     }
@@ -108,83 +123,100 @@ enum HeldTerminalSessions {
     static var all: [TerminalSession] { entries.compactMap(\.session) }
 }
 
-/// 什么时候存检查点：累计 4 MiB 输出存一次；尺寸变了很快存一次（之后的字节是按新尺寸产生的）；退出时存一次。
-/// 不按时间存：之后的字节都在 holder 里（16 MiB），接回时重放就行，最多重放 4 MiB。
-/// 而序列化要读解析器，只能在主线程上做，3000 行回滚最少 30ms，会让正在进行的滚动明显掉帧。
-/// Claude Code 思考时每秒只输出约 1 KB，按时间存等于全程隔几秒卡一下。
-@MainActor
-final class TerminalHeldCheckpoints {
-    private static let resizeDelay = Duration.milliseconds(300)
-    private static let retryDelay = Duration.milliseconds(200)
-    private static let maxPendingBytes = 4 * 1024 * 1024
-    /// 回滚设置可以调得很大，检查点不跟着涨。
-    private static let maxScrollbackLines = 20_000
+/// 检查点的数据：一个版本头 + 影子终端的二进制快照。版本头认不出来或者和现在的引擎不是同一个版本，就当没有检查点。
+nonisolated enum TerminalCheckpointBlob {
+    private static let magic = Array("uTermCP\u{1}".utf8)
+
+    static func encode(snapshot: Data, engine: String = TerminalEngineVersion.current) -> [UInt8] {
+        let version = Array(engine.utf8.prefix(255))
+        return magic + [UInt8(version.count)] + version + snapshot
+    }
+
+    /// 快照部分；不是这个引擎版本存的返回 nil。
+    static func decode(_ blob: [UInt8], engine: String = TerminalEngineVersion.current) -> Data? {
+        guard blob.count > magic.count, Array(blob.prefix(magic.count)) == magic else { return nil }
+        let length = Int(blob[magic.count])
+        let start = magic.count + 1
+        guard blob.count > start + length, Array(blob[start..<(start + length)]) == Array(engine.utf8.prefix(255)) else { return nil }
+        return Data(blob[(start + length)...])
+    }
+}
+
+/// 什么时候存检查点：累计一段输出存一次；尺寸变了很快存一次（之后的字节是按新尺寸产生的）；退出时存一次。
+/// 不按时间存：之后的字节都在 holder 里（16 MiB），接回时重放就行。
+///
+/// 「一段输出」至少 4 MiB；快照比这大（回滚设得很长）时按上一张快照的大小来，最多 12 MiB——快照带着整段回滚，
+/// 这样每输出 1 字节最多摊 1 字节检查点，又不会超出 holder 留着的那 16 MiB。
+///
+/// 线程：`noteFed` 在输出泵喂字节的那条线程上调（泵的锁在手上），其余在主线程上；拍快照和算字节位置都借泵的锁做，
+/// 所以检查点和它声称的位置严格对应。
+nonisolated final class TerminalHeldCheckpoints: @unchecked Sendable {
+    private static let resizeDelay = 0.3
+    private static let minPendingBytes = 4 * 1024 * 1024
+    private static let maxPendingBytes = 12 * 1024 * 1024
 
     private let link: HolderLink
-    private let terminal: Terminal
+    private let pump: TerminalOutputPump
     private let baseOffset: UInt64
-    private let buffer: TerminalOutputBuffer
-    private let generation: Int
+    private let lock = NSLock()
     private var fedBytes: UInt64 = 0
     private var bytesSinceCapture = 0
+    private var lastBlobBytes = 0
     private var isDirty = false
-    private var scheduled: Task<Void, Never>?
+    private var scheduleToken = 0
 
-    init(link: HolderLink, terminal: Terminal, baseOffset: UInt64, buffer: TerminalOutputBuffer, generation: Int) {
+    init(link: HolderLink, pump: TerminalOutputPump, baseOffset: UInt64) {
         self.link = link
-        self.terminal = terminal
+        self.pump = pump
         self.baseOffset = baseOffset
-        self.buffer = buffer
-        self.generation = generation
     }
 
-    /// 已解析的字节 + 被缓冲丢掉的字节 = 输出流的一个前缀（缓冲只从头丢），下一次接回就从这里续。
-    private var offset: UInt64 {
-        baseOffset + fedBytes + buffer.droppedBytes(generation: generation)
-    }
-
+    /// 影子终端又吃进去 `count` 字节（泵的 tap）。
     func noteFed(_ count: Int) {
+        lock.lock()
         fedBytes += UInt64(count)
         bytesSinceCapture += count
-        markDirty()
-        if bytesSinceCapture >= Self.maxPendingBytes {
-            captureNow()
-        }
+        isDirty = true
+        let due = bytesSinceCapture >= min(Self.maxPendingBytes, max(Self.minPendingBytes, lastBlobBytes))
+        lock.unlock()
+        if due { captureNow() }
     }
 
+    /// 画面发生了不经过字节流的变化（尺寸变了）：过一会儿存一次。
     func noteScreenChanged() {
-        markDirty()
-        scheduled?.cancel()
-        schedule(after: Self.resizeDelay)
+        lock.lock()
+        isDirty = true
+        scheduleToken &+= 1
+        let token = scheduleToken
+        lock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.resizeDelay) { [weak self] in
+            guard let self, self.lock.withLock({ self.scheduleToken == token }) else { return }
+            self.captureNow()
+        }
     }
 
     func cancel() {
-        scheduled?.cancel()
-        scheduled = nil
-    }
-
-    private func markDirty() {
-        isDirty = true
-    }
-
-    private func schedule(after delay: Duration) {
-        scheduled = Task { [weak self] in
-            if delay > .zero { try? await Task.sleep(for: delay) }
-            guard !Task.isCancelled, let self else { return }
-            self.scheduled = nil
-            if self.terminal.isAtSnapshotBoundary {
-                self.captureNow()
-            } else {
-                self.schedule(after: Self.retryDelay)
-            }
-        }
+        lock.withLock { scheduleToken &+= 1 }
     }
 
     func captureNow() {
-        guard isDirty, terminal.isAtSnapshotBoundary else { return }
-        isDirty = false
-        bytesSinceCapture = 0
-        let blob = terminal.snapshotSequence(scrollbackLimit: min(terminal.options.scrollback, Self.maxScrollbackLines))
-        link.checkpoint(offset: offset, cols: UInt16(clamping: terminal.cols), rows: UInt16(clamping: terminal.rows), blob: blob)
+        pump.performWhileFeedingPaused {
+            lock.lock()
+            guard isDirty else {
+                lock.unlock()
+                return
+            }
+            let offset = baseOffset + fedBytes
+            lock.unlock()
+            guard let snapshot = try? pump.shadow.snapshot() else { return }
+            let size = pump.shadow.size
+            let blob = TerminalCheckpointBlob.encode(snapshot: snapshot)
+            lock.lock()
+            isDirty = false
+            bytesSinceCapture = 0
+            lastBlobBytes = blob.count
+            lock.unlock()
+            link.checkpoint(offset: offset, cols: UInt16(clamping: size.cols), rows: UInt16(clamping: size.rows), blob: blob)
+        }
     }
 }

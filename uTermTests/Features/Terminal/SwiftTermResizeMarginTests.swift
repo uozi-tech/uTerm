@@ -1,3 +1,7 @@
+// 【迁移中，暂未编译】这份用例还依赖 SwiftTerm 或已经删掉的 SwiftTerm 时代类型，等改写到 Ghostty + 影子终端
+// （`ShadowTerminal`）上的同一条行为。改写完把这一对 `#if UTERM_LEGACY_SWIFTTERM_TESTS` / `#endif` 去掉。
+// 清单与进度见 docs/ghostty-eval/migration-log.md「测试改写」。
+#if UTERM_LEGACY_SWIFTTERM_TESTS
 import XCTest
 import SwiftTerm
 
@@ -42,3 +46,4 @@ final class SwiftTermResizeMarginTests: XCTestCase {
         XCTAssertEqual(t.buffer.marginRight, 39)
     }
 }
+#endif

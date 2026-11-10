@@ -44,9 +44,9 @@ final class TerminalHiddenRenderingTests: XCTestCase {
 
     private func waitUntilFed(_ bridge: GhosttyTerminalBridge, file: StaticString = #filePath, line: UInt = #line) async throws {
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
-        XCTAssertTrue(ready, "surface 没就绪：ready=\(bridge.isSurfaceReady) feeding=\(bridge.router.isFeedingSurface)",
+        XCTAssertTrue(ready, "surface 没就绪：ready=\(bridge.isSurfaceReady) feeding=\(bridge.outputPump.isFeedingSurface)",
                       file: file, line: line)
         GhosttyPresentLog.installIfPossible()
     }
@@ -75,14 +75,14 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         XCTAssertTrue(surfaceText(bridge).contains("front 4"))
 
         bridge.setAppInBackground(true)
-        XCTAssertFalse(bridge.router.isFeedingSurface)
+        XCTAssertFalse(bridge.outputPump.isFeedingSurface)
         _ = try await presentsWhileFeeding(bridge, ticks: 5, tag: "back")
         XCTAssertTrue(bridge.shadow.viewportText().contains("back 4"), "后台的输出照常进影子")
         XCTAssertFalse(surfaceText(bridge).contains("back"), "后台时画面不吃字节")
 
         bridge.setAppInBackground(false)
-        bridge.router.waitForCatchUp()
-        XCTAssertTrue(bridge.router.isFeedingSurface)
+        bridge.outputPump.waitForCatchUp()
+        XCTAssertTrue(bridge.outputPump.isFeedingSurface)
         XCTAssertTrue(surfaceText(bridge).contains("back 4"), "回前台把后台期间的输出补出来")
     }
 
@@ -93,16 +93,16 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         bridge.setAppInBackground(true)
 
         bridge.setAppInBackground(false)
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         XCTAssertFalse(bridge.isOnScreen, "App 回前台不该把后台标签放出来")
         let hidden = try await presentsWhileFeeding(bridge, ticks: 5, tag: "hidden")
         XCTAssertEqual(hidden, 0, "后台标签不交帧")
 
         bridge.setAppInBackground(true)
         container.isOnScreen = true
-        XCTAssertFalse(bridge.router.isFeedingSurface, "标签露出来了，但 App 还在后台：画面仍不吃字节")
+        XCTAssertFalse(bridge.outputPump.isFeedingSurface, "标签露出来了，但 App 还在后台：画面仍不吃字节")
         bridge.setAppInBackground(false)
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         XCTAssertTrue(surfaceText(bridge).contains("hidden 4"))
     }
 
@@ -121,10 +121,10 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         let built = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.isSurfaceReady }
         XCTAssertTrue(built)
         bridge.feed(Data("while away\r\n".utf8))
-        XCTAssertFalse(bridge.router.isFeedingSurface)
+        XCTAssertFalse(bridge.outputPump.isFeedingSurface)
 
         controller.appVisibilityChanged(inBackground: false)
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         XCTAssertTrue(surfaceText(bridge).contains("while away"))
     }
 
@@ -159,7 +159,7 @@ final class TerminalHiddenRenderingTests: XCTestCase {
         let released = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) { bridge.view.uTermIsSurfaceReleased }
         XCTAssertTrue(released)
         XCTAssertNil(bridge.view.surface)
-        XCTAssertFalse(bridge.router.isFeedingSurface)
+        XCTAssertFalse(bridge.outputPump.isFeedingSurface)
         bridge.feed(Data("while released\r\n\u{1B}]2;new title\u{07}".utf8))
         XCTAssertTrue(bridge.shadow.viewportText().contains("while released"))
         // 布局变化不会把它建回来。
@@ -170,7 +170,7 @@ final class TerminalHiddenRenderingTests: XCTestCase {
 
         container.isOnScreen = true
         try await waitUntilFed(bridge)
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         let text = surfaceText(bridge)
         XCTAssertTrue(text.contains("before hiding") && text.contains("while released"), "重建后的画面：\(text.prefix(200))")
         XCTAssertEqual(GhosttyViewportDiff.firstDifference(surface: text, shadow: bridge.shadow.viewportText()), nil)
@@ -187,7 +187,7 @@ final class TerminalHiddenRenderingTests: XCTestCase {
 
         XCTAssertFalse(bridge.view.uTermIsSurfaceReleased)
         XCTAssertNotNil(bridge.view.surface)
-        XCTAssertTrue(bridge.router.isFeedingSurface)
+        XCTAssertTrue(bridge.outputPump.isFeedingSurface)
     }
 
     /// 从没露出过的标签不建 surface（M7：恢复时只要影子，第一次露出再建）；期间的输出只进影子，露出来时回放。
@@ -206,7 +206,7 @@ final class TerminalHiddenRenderingTests: XCTestCase {
 
         container.isOnScreen = true
         try await waitUntilFed(bridge)
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         XCTAssertTrue(surfaceText(bridge).contains("early output"))
         let real = try XCTUnwrap(bridge.grid)
         print("HIDDEN estimated=\(estimated) real=\(real)")

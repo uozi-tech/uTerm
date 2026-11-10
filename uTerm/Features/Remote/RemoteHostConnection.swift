@@ -33,6 +33,8 @@ final class RemoteHostConnection {
     private var peerSupportsAudioLossless = false
     /// 对端认得 `programStatus`（老设备收到会当未知消息断开整条连接）。本机也要声明过才推。
     private var peerTakesProgramStatus = false
+    /// 对端握手里报的终端引擎版本；和本机不同就不让它接入终端。
+    private var peerTerminalEngine: String?
 
     /// 对端设备名与 ID（握手后才有）。
     private(set) var peerName = ""
@@ -135,7 +137,8 @@ final class RemoteHostConnection {
                                     staticKey: staticKey.publicKey.rawRepresentation,
                                     features: advertisedFeatures().isEmpty ? nil : advertisedFeatures(),
                                     deviceModel: RemoteDeviceModel.current(),
-                                    platform: RemoteDevicePlatform.current.rawValue)
+                                    platform: RemoteDevicePlatform.current.rawValue,
+                                    terminalEngine: TerminalEngineVersion.current)
             let established = try await link.establish(role: .responder, hello: hello, staticKey: staticKey,
                                                        ephemeralKey: ephemeral, handshakeKeys: origin.handshakeKeys)
             let peer = established.peer
@@ -149,6 +152,7 @@ final class RemoteHostConnection {
             peerSupportsAudioLossless = peer.supports(RemoteFeature.desktopAudioLossless)
             peerTakesProgramStatus = peer.supports(RemoteFeature.programStatus)
                 && server.localFeatures.contains(RemoteFeature.programStatus)
+            peerTerminalEngine = peer.terminalEngine
             peerSupportsRelayConfig = peer.supports(RemoteFeature.relayConfig)
             if case .internet(let expected, _, _) = origin {
                 try await authorizeFromInternet(peer: peer, expected: expected)
@@ -370,7 +374,7 @@ final class RemoteHostConnection {
         case .keyConfirm, .relayConfig, .sessions, .attached, .output, .closed, .pong, .pairing, .desktopStarted, .desktopFrame,
              .desktopCursor, .desktopClipboard, .desktopLatency, .localShellOpened, .terminalImageResult, .localWorkspaces,
              .desktopScreenState, .desktopUnlockResult, .desktopCursorImage, .desktopAudioFormat, .desktopAudioFrame,
-             .linkAck, .linkFragment, .programStatus:
+             .linkAck, .linkFragment, .programStatus, .terminalSnapshot:
             break
         }
     }
@@ -406,6 +410,11 @@ final class RemoteHostConnection {
         guard let session = server.registry.session(for: request.sessionID),
               session.connectionState == .connected else {
             sendAttachResult(channel, request.sessionID, error: "这个终端已经关闭或断开")
+            return
+        }
+        // 快照是引擎的二进制格式：对端不是同一个引擎版本就解不开，不接入。
+        guard RemoteTerminalEngine.matches(peerTerminalEngine) else {
+            sendAttachResult(channel, request.sessionID, error: RemoteTerminalEngine.mismatchMessage)
             return
         }
         // 先钉尺寸再订阅：第一份快照就是手机的行列数。
@@ -931,8 +940,14 @@ nonisolated final class RemoteOutputPump: @unchecked Sendable {
             for offset in 0..<subscribers.count {
                 let index = (cursor + offset) % subscribers.count
                 let (channel, subscriber) = subscribers[index]
-                guard let bytes = subscriber.take(maxBytes: RemoteConstants.maxOutputChunkBytes) else { continue }
-                link.sendOnQueue(RemoteMessage(.output, channel: channel, payload: bytes))
+                guard let chunk = subscriber.take(maxBytes: RemoteConstants.maxOutputChunkBytes) else { continue }
+                switch chunk {
+                case .output(let bytes):
+                    link.sendOnQueue(RemoteMessage(.output, channel: channel, payload: bytes))
+                case .snapshot(let piece, let isFirst, let isLast):
+                    link.sendOnQueue(RemoteMessage(.terminalSnapshot, channel: channel,
+                                                   payload: RemoteTerminalSnapshotPiece.encode(piece, isFirst: isFirst, isLast: isLast)))
+                }
                 sentAny = true
                 cursor = (index + 1) % subscribers.count
                 if !link.canSendMore { return }

@@ -1,12 +1,11 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
 
 extension TerminalSession {
     /// 关标签前问：前台还有没有程序在跑。没连上就没有程序可中断。
     func foregroundActivity() async -> TerminalActivity {
         await TerminalCloseProbe.foregroundActivity(connected: connectionState == .connected, backend: backend) {
-            terminalView.getTerminal().isCurrentBufferAlternate
+            shadow.isOnAlternateScreen
         }
     }
 }

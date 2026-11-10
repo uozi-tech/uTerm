@@ -309,12 +309,12 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
             try await Task.sleep(for: .milliseconds(20))
             if "\(grid)" != last { last = "\(grid)"; stableSince = CACurrentMediaTime() }
         }
-        while CACurrentMediaTime() < deadline, !(bridge.isSurfaceReady && bridge.router.isFeedingSurface) {
+        while CACurrentMediaTime() < deadline, !(bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface) {
             try await Task.sleep(for: .milliseconds(20))
         }
-        if view.surface != nil, bridge.grid != nil, bridge.isSurfaceReady, bridge.router.isFeedingSurface { return }
+        if view.surface != nil, bridge.grid != nil, bridge.isSurfaceReady, bridge.outputPump.isFeedingSurface { return }
         XCTFail("Ghostty surface 没就绪：surface=\(view.surface != nil) grid=\(String(describing: bridge.grid)) "
-            + "ready=\(bridge.isSurfaceReady) feeding=\(bridge.router.isFeedingSurface) presents=\(GhosttyPresentLog.read().times.count)")
+            + "ready=\(bridge.isSurfaceReady) feeding=\(bridge.outputPump.isFeedingSurface) presents=\(GhosttyPresentLog.read().times.count)")
     }
 
     /// 喂字节并等解析完（`waitForPendingOutput` 在主线程上会边等边 tick app）。

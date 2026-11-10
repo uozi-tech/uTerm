@@ -55,9 +55,9 @@ class MTerminalContainerTestCase: XCTestCase {
         try mount(container)
         lay(container, mounted)
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
-        XCTAssertTrue(ready, "surface 没就绪：ready=\(bridge.isSurfaceReady) feeding=\(bridge.router.isFeedingSurface)",
+        XCTAssertTrue(ready, "surface 没就绪：ready=\(bridge.isSurfaceReady) feeding=\(bridge.outputPump.isFeedingSurface)",
                       file: file, line: line)
         return (bridge, container)
     }

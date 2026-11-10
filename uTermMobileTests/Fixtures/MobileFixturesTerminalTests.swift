@@ -266,7 +266,7 @@ final class MobileFixturesTerminalTests: XCTestCase {
 
     // MARK: 字节真的进了终端
 
-    /// 端到端：假传输吐的字节，经入站任务与 `GhosttyOutputRouter` 的分流，真的进了终端——
+    /// 端到端：假传输吐的字节，经入站任务与 `TerminalOutputPump` 的分流，真的进了终端——
     /// 影子终端（永远在吃、当场同步解析）里读得到语料的文字；画面的 surface 就绪了的话，它的视口里也读得到。
     func testBytesReachTerminalBuffer() async throws {
         defer { MobileProbeWindow.closeAll() }
@@ -301,10 +301,10 @@ final class MobileFixturesTerminalTests: XCTestCase {
 
         // 画面：surface 建好并接上实时字节之后，它的视口里也该有语料（就绪之前的字节由一次回放补上）。
         let surfaceReady = await MobileFakeTerminal.waitUntil(timeout: .seconds(3)) {
-            terminal.isSurfaceReady && terminal.router.isFeedingSurface
+            terminal.isSurfaceReady && terminal.outputPump.isFeedingSurface
         }
         XCTAssertTrue(surfaceReady, "终端挂在窗口里 3 秒了 surface 还没接上实时字节："
-            + "ready=\(terminal.isSurfaceReady) feeding=\(terminal.router.isFeedingSurface)")
+            + "ready=\(terminal.isSurfaceReady) feeding=\(terminal.outputPump.isFeedingSurface)")
         if surfaceReady {
             let reached = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) {
                 terminal.session.readViewportText()?.contains(marker) == true

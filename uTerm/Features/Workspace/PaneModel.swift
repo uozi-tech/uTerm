@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import SwiftTerm
 
 /// 一个终端窗格：绑定一台服务器，持有 SwiftTerm 会话。
 @MainActor
@@ -133,9 +132,9 @@ final class PaneModel: Identifiable {
     }
 
     private func makeHeldBackend(profile: ServerProfile, modelContainer: ModelContainer) -> HeldSSHBackend {
-        let terminal = session.terminalView.getTerminal()
+        let size = session.currentProcessSize
         return HeldSSHBackend(
-            client: LocalShellService.shared.client, sessionID: id, columns: terminal.cols, rows: terminal.rows,
+            client: LocalShellService.shared.client, sessionID: id, columns: Int(size.cols), rows: Int(size.rows),
             target: .make(profile: profile, container: modelContainer, approver: hostKeyRelay.makeApprover()),
             attributes: sessionAttributes(title: profile.name))
     }

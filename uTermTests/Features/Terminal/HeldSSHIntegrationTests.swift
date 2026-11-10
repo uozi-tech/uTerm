@@ -1,6 +1,5 @@
 import AppKit
 import SwiftData
-import SwiftTerm
 import XCTest
 @testable import uTerm
 

@@ -1,11 +1,7 @@
 import GhosttyTerminal
-import SwiftTerm
 import UIKit
 
 /// uTerm 的配色（`TerminalColorScheme`）→ Ghostty 配置。
-///
-/// 这个文件是 iOS 这边最后一处 `import SwiftTerm`：共享的 `TerminalColorScheme.ansiColors` 还是 `[SwiftTerm.Color]`，
-/// 读它的分量要导入定义它的模块。共享层把这个类型换掉之后，这里跟着改、去掉导入。
 enum GhosttyPalette {
     /// 一份配色：底色、前景、16 色、光标（块光标下的字用终端底色）、选区。
     static func colors(_ scheme: TerminalColorScheme) -> GhosttyTerminal.TerminalConfiguration {
@@ -14,7 +10,7 @@ enum GhosttyPalette {
             builder.withBackground(background)
             builder.withForeground(hex(scheme.foregroundColor))
             for (index, color) in scheme.ansiColors.prefix(16).enumerated() {
-                builder.withPalette(index, color: hex(color))
+                builder.withPalette(index, color: color.hex)
             }
             builder.withCursorColor(hex(scheme.cursorColor))
             builder.withCursorText(background)
@@ -40,9 +36,5 @@ enum GhosttyPalette {
             r = r * a + br * (1 - a); g = g * a + bg * (1 - a); b = b * a + bb * (1 - a)
         }
         return String(format: "#%02X%02X%02X", Int(r * 255 + 0.5), Int(g * 255 + 0.5), Int(b * 255 + 0.5))
-    }
-
-    private static func hex(_ color: SwiftTerm.Color) -> String {
-        String(format: "#%02X%02X%02X", Int(color.red >> 8), Int(color.green >> 8), Int(color.blue >> 8))
     }
 }

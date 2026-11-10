@@ -31,7 +31,7 @@ final class TerminalDrawCountTests: XCTestCase {
         window.addSubview(container)
         container.layoutIfNeeded()
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "surface 没就绪")
         GhosttyPresentLog.installIfPossible()

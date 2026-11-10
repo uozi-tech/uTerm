@@ -1,33 +1,35 @@
 import SwiftUI
-import SwiftTerm
 import AppKit
+import GhosttyTerminal
 
-/// Owns one `SwiftTerm.TerminalView` for the lifetime of its enclosing
-/// terminal pane. The view is *not* recreated when the SwiftUI pane is
-/// rebuilt (e.g. on maximize / restore), so the scrollback buffer survives
-/// those layout changes. Acts as the view's delegate so user input / resize
-/// are forwarded to the bound backend without needing a separate coordinator.
+/// 一条终端会话：Ghostty 的画面（`ghostty`）+ 影子终端（`shadow`）+ 后端。窗格的 SwiftUI 视图重建（最大化 / 还原、
+/// 切标签）时会话不重建，画面与回滚随之保留。键盘输入、终端应答、网格尺寸从 Ghostty 来，经有序输入通道发往后端。
 @MainActor
 @Observable
-final class TerminalSession: NSObject, TerminalViewDelegate {
-    let terminalView: SwiftTerm.TerminalView
+final class TerminalSession: NSObject {
     private(set) var backend: (any TerminalBackend)?
-    /// 输出泵（两端共用，见 `TerminalOutputPump`）。每拍喂完后转给镜像与检查点。
-    @ObservationIgnored let outputPump = TerminalOutputPump(pacing: .desktop)
+    /// 影子终端（libghostty-vt）：和画面吃同一份字节，uTerm 要读的终端状态都从它读——程序状态、通知、命令跟踪标记、
+    /// 读屏、是否在备用屏、光标、kitty 键盘标志、镜像与检查点的快照。尺寸跟着 Ghostty 报来的网格走。
+    @ObservationIgnored let shadow: ShadowTerminal
+    /// Ghostty 的 host-managed IO：输出从这里进 surface，键盘输入与应答从它的回调出来。
+    @ObservationIgnored let surfaceIO: InMemoryTerminalSession
+    /// 输出泵（两端共用，见 `TerminalOutputPump`）：后端输出 → 影子终端 → tap（镜像、检查点）→ surface。
+    @ObservationIgnored let outputPump: TerminalOutputPump
+    /// 画面：Ghostty 的视图（见 `GhosttyTerminalBridge`）。surface 等视图第一次进窗口才建。
+    @ObservationIgnored private(set) lazy var ghostty = GhosttyTerminalBridge(owner: self)
     /// 键盘 / 粘贴 / 远端输入与尺寸变化发往后端的有序通道（两端共用，见 `TerminalInputChannel`）。
     @ObservationIgnored let inputChannel = TerminalInputChannel()
-    var outputBuffer: TerminalOutputBuffer { outputPump.buffer }
-    /// 单测换掉它，预算的走向才不取决于这台机器解析得多快。
-    var flushPacing: TerminalFlushPacing {
-        get { outputPump.pacing }
-        set { outputPump.pacing = newValue }
-    }
     /// 当前绑定的代次：`connect` / `detach` / `dispose` / `close` 都会递增，旧绑定的在途结果据此作废。
     var feedGeneration: Int { outputPump.generation }
     /// 正在回放接回的历史输出：屏蔽终端应答和副作用（见 `TerminalSession+HeldSession`）。
     @ObservationIgnored var isReplayingHeldOutput = false
+    /// 输出泵的 tap 要用、又得在主线程上换的那几样（检查点、钉尺寸时的跟光标）。
+    @ObservationIgnored private let feedTaps = TerminalFeedTaps()
     /// 持有 PTY 的后端才有。
-    @ObservationIgnored var heldCheckpoints: TerminalHeldCheckpoints?
+    var heldCheckpoints: TerminalHeldCheckpoints? {
+        get { feedTaps.checkpoints }
+        set { feedTaps.checkpoints = newValue }
+    }
 
     /// 终端连接状态。`connect(using:)` 推进；远端结束置 `disconnected`。
     typealias ConnectionState = TerminalConnectionState
@@ -85,46 +87,88 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     /// 在 Mac 上断开远端接管（窗格指示条上的「断开」）。由远控连接在接入时装上。
     @ObservationIgnored var remoteDisconnect: (@MainActor () -> Void)?
 
-    /// 试验开关 `DefaultsKey.terminalGhosttyRenderer` 打开时，窗格改由 Ghostty 渲染，`terminalView` 退成影子
-    /// （见 `GhosttyTerminalBridge`）。nil = 照常用 SwiftTerm。
-    @ObservationIgnored var ghostty: GhosttyTerminalBridge?
-
     override init() {
-        // Give SwiftTerm a non-trivial initial frame so its first `setFrameSize`
-        // pass computes a meaningful `cellDimension` + initial cols/rows. With
-        // `frame: .zero`, the very first layout has cellDimension nil → cols
-        // stays at the default 80, and any PTY output that arrives before the
-        // real SwiftUI-driven layout pass gets wrapped + frozen in scrollback
-        // at 80 columns. Result: visible "dead zone" on the right side of the
-        // pane until users scroll to brand-new output. 1280×800 ≈ a typical
-        // pane size; SwiftUI overrides this on mount anyway, we only need a
-        // sane initial so cellDimension is valid when the first frame arrives.
-        let view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
-        view.preservesSelectionDuringOutput = true
-        self.terminalView = view
-        self.mirrorTap = TerminalMirrorTap { [unowned view] in view.getTerminal() }
+        // 回滚上限和 surface 用同一个函数算（`GhosttyTerminalConfig.base`）。初始尺寸就是还没量到网格时报给后端的那个。
+        let shadow = ShadowTerminal(cols: 120, rows: 30,
+                                    options: TerminalScrollbackLimits(lines: TerminalSettings.read().scrollback).shadowOptions)
+        self.shadow = shadow
+        // write / resize 由 Ghostty 在任意线程回调，都转给 `GhosttyTerminalBridge`（它建好之后把自己挂进这个盒子）。
+        let relay = GhosttyTerminalBridge.Relay()
+        surfaceIORelay = relay
+        surfaceIO = InMemoryTerminalSession(
+            write: { relay.write($0) },
+            resize: { viewport in
+                // 影子终端只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
+                shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                              cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
+                relay.resize(viewport)
+            },
+            // 只有行列数要发给远端（SIGWINCH）；像素级变化不用。
+            suppressesPixelOnlyResizes: true)
+        let pump = TerminalOutputPump(shadow: shadow, surface: surfaceIO)
+        outputPump = pump
+        mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.snapshot() },
+                                      exclusively: { pump.performWhileFeedingPaused($0) })
         super.init()
-        outputPump.terminalView = view
-        outputPump.onFed = { [weak self] bytes in
-            guard let self else { return }
-            // 紧跟在 feed 之后：镜像拿到的字节顺序与 Mac 终端实际解析的顺序完全一致。
-            self.mirrorTap.didFeed(bytes)
-            self.heldCheckpoints?.noteFed(bytes.count)
-            self.ghostty?.didFeedShadow(bytes)
-            self.repositionPinnedGridIfCursorMoved()
+        // tap：影子刚解析完这一片、泵的锁还在手上。镜像与检查点拿到的字节顺序与终端实际解析的顺序完全一致。
+        pump.onFed = { [mirrorTap, feedTaps] bytes in
+            mirrorTap.didFeed(bytes)
+            feedTaps.didFeed(bytes.count)
         }
-        TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
-        terminalView.terminalDelegate = self
-        terminalView.menu = Self.makeContextMenu(for: terminalView)
-        installTrackedRunMarkers()
-        installProgramStatusHandlers()
-        view.onFocusGained = { [weak self] in self?.acknowledgeProgramStatus() }
-        view.onPasteImage = { [weak self] in self?.pasteImage($0) ?? false }
-        view.onControlVImage = { [weak self] in self?.handleControlVImage($0) ?? false }
+        feedTaps.onPinnedFeed = { [weak self] in self?.repositionPinnedGridIfCursorMoved() }
+        _ = ghostty
+        installShadowEventHandler()
+        installShadowReplyHandler()
+        updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         attentionSink = { [weak self] attention in
             guard let self else { return }
             TerminalAttentionCenter.shared.post(attention, from: self)
         }
+    }
+
+    /// `surfaceIO` 的回调转给 `GhosttyTerminalBridge` 用的盒子。
+    @ObservationIgnored let surfaceIORelay: GhosttyTerminalBridge.Relay
+
+    /// surface 没在吃字节的时候（还没建、被丢弃），查询由影子终端答；应答和键盘输入走同一条通道。
+    /// 在主线程上喂（接回时的回放）就当场处理，回放的标志才挡得住；否则排到主线程，先后顺序不变。
+    private func installShadowReplyHandler() {
+        shadow.setReplyHandler { [weak self] data in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.sendHostBytes(data) }
+            } else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.sendHostBytes(data) } }
+            }
+        }
+    }
+
+    /// 影子终端替 surface 答颜色查询（OSC 10 / 11 / 12、`CSI ? 996 n`）时用的配色，跟着 app 外观走。
+    /// 只在 surface 不吃字节时（还没建）才轮到影子答；`GhosttyHostView` 每次更新都会调，值没变就不动。
+    func updateShadowColors(dark: Bool) {
+        guard shadowColorsAreDark != dark else { return }
+        shadowColorsAreDark = dark
+        let scheme = TerminalColorScheme.resolve(dark: dark)
+        func rgb(_ color: NSColor) -> (UInt8, UInt8, UInt8) {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            return (UInt8((c.redComponent * 255).rounded()), UInt8((c.greenComponent * 255).rounded()),
+                    UInt8((c.blueComponent * 255).rounded()))
+        }
+        shadow.setDefaultColors(foreground: rgb(scheme.foregroundColor), background: rgb(scheme.backgroundColor),
+                                cursor: rgb(scheme.cursorColor), dark: dark)
+    }
+
+    @ObservationIgnored private var shadowColorsAreDark: Bool?
+
+    /// uTerm 自己要发给程序的字节（OSC 7501 应答、贴图后的路径），以及 Ghostty 发出的键盘输入与终端应答。
+    /// 进有序输入通道（`TerminalInputChannel`），按产生顺序到达后端。回放的是历史输出，里面的查询当年已经回答过了。
+    func sendHostBytes(_ data: Data) {
+        guard !isReplayingHeldOutput else { return }
+        inputChannel.write(data)
+    }
+
+    /// 钉住尺寸（远控接管）期间，每批输出之后要看一眼光标换行没有。
+    var tracksCursorForPinnedGrid: Bool {
+        get { feedTaps.notifiesPinnedFeed }
+        set { feedTaps.notifiesPinnedFeed = newValue }
     }
 
     func receiveShellTitle(_ title: String) {
@@ -133,12 +177,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         shellTitle = next
     }
 
-    /// Right-click context menu for the live terminal. SwiftTerm's
-    /// `TerminalView` implements `copy:`, `paste:`, and `selectAll:` (plus
-    /// `validateUserInterfaceItem` to enable/disable them) but ships no context
-    /// menu — `Cmd+C` was the only copy affordance. Items target the terminal
-    /// view directly so a right-click acts on this pane's selection regardless
-    /// of which view currently holds first responder.
+    /// 终端的右键菜单：拷贝 / 粘贴 / 全选。菜单项的 target 直接是终端视图，右键作用在这个窗格的选区上，
+    /// 不管此刻第一响应者是谁。
     static func makeContextMenu(for terminalView: NSView) -> NSMenu {
         let menu = NSMenu()
         let copyItem = NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -154,19 +194,24 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         return menu
     }
 
-    /// Call before letting ARC release this session. Severs the SwiftTerm
-    /// delegate link (which is unowned-unsafe), cancels in-flight tasks, and
-    /// prevents post-dealloc callbacks → objc_release crashes. Must run on
-    /// the MainActor (the type is @MainActor so this is enforced by Swift).
+    /// 放掉这条会话之前调：停掉在途的任务、断开影子终端与画面的回调。
     func dispose() {
         resetFeedAndResizeState()
-        terminalView.terminalDelegate = nil
         backend = nil
-        disableGhostty()
+        shadow.setEventHandler(nil)
+        shadow.setReplyHandler(nil)
+        ghostty.dispose()
     }
 
+    /// 起后端时用的行列数：Ghostty 报过网格就用它，还没报过（视图没进过窗口）用影子终端的初始尺寸。
     var currentProcessSize: (cols: UInt16, rows: UInt16) {
         inputChannel.latestSize ?? (cols: 120, rows: 30)
+    }
+
+    /// 后端来了一批输出（测试直接喂字节用）：和正式路径同一条链（影子 → tap → surface），只是不经入站任务与闸门，
+    /// 返回时影子终端已经解析完、事件已经处理完。
+    func receiveOutputForTesting(_ data: Data) {
+        outputPump.route(data)
     }
 
     /// 用给定后端建立连接：connect() 成功则绑定并开始泵送输出，
@@ -202,14 +247,13 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         if let held = backend as? any HeldTerminalBackend {
             guard await restoreHeldScreen(from: held, generation: myGen),
                   feedGeneration == myGen, self.backend === backend else { return }
-            ghostty?.resync()
         }
         connectionState = .connected
         // 注册到看门狗：系统唤醒 / 网络恢复后主动探测，半死连接不再顶着
         // 「已连接」徽标静默挂着。弱引用注册，幂等。
         ConnectionWatchdog.shared.register(self)
         inputChannel.sendLatestSizeNow()
-        outputPump.start(backend.outputStream)
+        outputPump.start(backend.outputItems)
         observeExit(of: backend, generation: myGen)
         injectPendingTrackedRun()
     }
@@ -232,29 +276,18 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     }
 
     func refreshTerminalSizeSoon() {
-        terminalView.needsLayout = true
-        terminalView.layoutSubtreeIfNeeded()
         inputChannel.sendLatestSizeNow()
 
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
-            guard let self else { return }
-            self.terminalView.needsLayout = true
-            self.terminalView.layoutSubtreeIfNeeded()
-            self.inputChannel.sendLatestSizeNow()
+            self?.inputChannel.sendLatestSizeNow()
         }
     }
 
-    /// Clears the visible terminal and scrollback without detaching from the
-    /// backend, so new output continues to stream into the same view.
+    /// 清掉屏幕与回滚，不断开后端：之后的输出照常流进同一个终端。
     func clearOutput() {
-        outputBuffer.clear()
-        let bytes = Array("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8)
-        terminalView.feed(byteArray: ArraySlice(bytes))
-        // 这几个字节不走输出流，镜像那边改发一份快照对齐。
-        mirrorTap.invalidateAll()
-        heldCheckpoints?.noteScreenChanged()
-        ghostty?.resync()
+        // 走泵的分流：影子、镜像、检查点、画面按同一个顺序看到这几个字节。
+        outputPump.route(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
     }
 
     func detach() {
@@ -275,10 +308,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         connectionState = .idle
     }
 
-    /// Bump the feed generation and tear down every in-flight feed/flush/resize
-    /// task and buffer, so stale output from a previous binding is rejected by
-    /// both the ingress task and the flush loop. The generation bump must come
-    /// first for that rejection to be reliable.
+    /// 代次 +1，停掉在途的入站任务、输入通道与退出监听：上一条连接残留的输出随之作废。
     private func resetFeedAndResizeState() {
         outputPump.reset()
         inputChannel.unbind()
@@ -286,8 +316,6 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         exitObserverTask = nil
         heldCheckpoints?.cancel()
         heldCheckpoints = nil
-        // 换了一条连接，上一个程序设的光标不该留下来：下次 SwiftUI 更新时重装。
-        (terminalView as? CopyableTerminalView)?.appliedLook = nil
     }
 }
 
@@ -303,103 +331,24 @@ extension TerminalSession {
 
     /// 抓「最近 `lines` 行」的**快照**（不是流）：既含当前可见屏幕，也兜住刚滚走的输出。
     ///
-    /// 必须在 MainActor 上跑（`terminalView` 是 NSView，缓冲区随渲染线程更新）——
-    /// 类型本身 `@MainActor`，由编译器保证。
-    ///
-    /// - Note: SwiftTerm 只把 `getScrollInvariantLine(row:)`（越界回 nil）、
-    ///   `buffer.totalLinesTrimmed`、`getTopVisibleRow()`、`rows` 开放出来；
-    ///   `buffer.lines` 与 `buffer.linesTop` 都是 **internal**，包外拿不到「缓冲区共几行」。
-    ///   所以末行靠越界二分反推（见 `scrollInvariantEndRow`）。**不要**为此去改
-    ///   `vendor/SwiftTerm` —— 那是带补丁清单的 vendored 副本，补丁越少越好。
+    /// 读的是影子终端的活动屏（含回滚）的末尾，不是用户滚到的位置：用户往上滚过之后，要的仍然是「最近的输出」。
+    /// 末尾的空行先跳过再往上取（`clear` 之后、全屏程序退出还原主屏之后，末尾可以挂着几百行空行），一行终端一段文字。
     func snapshotScreen(
         lines: Int = ControlProtocol.defaultScreenLines,
         maxBytes: Int = ControlProtocol.maxScreenBytes
     ) -> TerminalScreenReader.Result {
-        guard lines > 0, let terminal = terminalView.terminal else {
-            return TerminalScreenReader.Result(lines: [], truncated: false)
-        }
-        let top = terminal.buffer.totalLinesTrimmed  // == buffer.linesTop
-        let end = scrollInvariantEndRow(terminal)    // 排他上界
-        guard end > top else { return TerminalScreenReader.Result(lines: [], truncated: false) }
-
-        // **先向前跳过尾部空行，再往上取 `lines` 行。**
-        //
-        // 不要退回「多取一屏」（`end - (lines + rows)`）那种写法：空白尾巴不止一屏 ——
-        // `clear` 之后、TUI（vim / less）退出还原主屏之后、或者刚 `Ctrl-L` 过，缓冲区
-        // 末尾可以挂着几百行空行。而 `TerminalScreenReader.trim` 会把**全部**尾随空行
-        // 去掉，于是多取的那一屏被裁光，读屏返回空 —— 屏幕上明明有内容。
-        var lastNonEmpty = end - 1
-        while lastNonEmpty >= top, isBlankRow(terminal, lastNonEmpty) { lastNonEmpty -= 1 }
-        guard lastNonEmpty >= top else {
-            return TerminalScreenReader.Result(lines: [], truncated: false)
-        }
-
-        let start = max(top, lastNonEmpty + 1 - lines)
-        var raw: [String] = []
-        raw.reserveCapacity(lastNonEmpty - start + 1)
-        for row in start...lastNonEmpty {
-            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            raw.append(line.translateToString(trimRight: true))
-        }
-
-        var result = TerminalScreenReader.trim(lines: raw, maxLines: lines, maxBytes: maxBytes)
+        guard lines > 0 else { return TerminalScreenReader.Result(lines: [], truncated: false) }
+        let recent = shadow.recentLines(lines)
+        var result = TerminalScreenReader.trim(lines: recent.lines, maxLines: lines, maxBytes: maxBytes)
         // 起点被 `lines` 卡住 → 上面还有历史没读出来，如实标截断。
-        if start > top { result.truncated = true }
+        if recent.truncated { result.truncated = true }
         return result
-    }
-
-    /// 这一行在 `TerminalScreenReader.trim` 眼里算不算空行。
-    ///
-    /// 判定必须与 `trim` **逐字一致**（它按 `String.isEmpty` 去尾），否则要么跳不干净
-    /// （读屏又被 trim 掏空），要么跳过头（把有内容的行当空的丢掉）。所以最终裁决权
-    /// 交给和取行时同一个 `translateToString(trimRight:)`；`getTrimmedLength() == 0`
-    /// 只是它的快速路径 —— 整行都是空 cell（`code == 0`）时不必分配字符串。
-    ///
-    /// 注意 `trimRight` 只去空 cell、**不去字面空格**：一行 8 个空格译出来是
-    /// `"        "`，非空，按「有内容」算。实测如此，别按直觉改。
-    private func isBlankRow(_ terminal: SwiftTerm.Terminal, _ row: Int) -> Bool {
-        guard let line = terminal.getScrollInvariantLine(row: row) else { return true }
-        if line.getTrimmedLength() == 0 { return true }
-        return line.translateToString(trimRight: true).isEmpty
-    }
-
-    /// 反推 scroll-invariant 行号的**排他上界**（= `buffer.linesTop + buffer.lines.count`）。
-    ///
-    /// `buffer.lines` 与 `buffer.linesTop` 都是 internal，包外拿不到行数，只能靠
-    /// `getScrollInvariantLine(row:)` 越界回 nil 来二分。上界不用探 ——
-    /// `buffer.getCorrectBufferLength(rows)`（public，`Buffer.swift` ~654）就是那条
-    /// `CircularBufferLineList` 的 `maxLength`（`rows + scrollback`），行数**永远**
-    /// 不超过它，所以 `linesTop + capacity` 必然越界，直接拿它当二分的右端。
-    ///
-    /// 为什么不能只用可见屏（`getTopVisibleRow() + rows`）：用户往上滚过之后，
-    /// 可见屏的底部不再是缓冲区末行，那样会读到「用户正在看的地方」而不是「最近的输出」。
-    func scrollInvariantEndRow(_ terminal: SwiftTerm.Terminal) -> Int {
-        let top = terminal.buffer.totalLinesTrimmed
-        guard terminal.getScrollInvariantLine(row: top) != nil else { return top }
-        let capacity = max(terminal.buffer.getCorrectBufferLength(terminal.rows), 1)
-        var known = top                              // 已知合法
-        var unknown = top + capacity                 // 必然越界（见上）
-        // 上游若哪天把 `getScrollInvariantLine` 改成 clamp（越界不再回 nil），
-        // 这个不变量就没了；Debug 下当场炸出来，Release 下二分仍会收敛到
-        // `top + capacity`（不会死循环），只是读到的末行偏大。
-        assert(terminal.getScrollInvariantLine(row: unknown) == nil,
-               "getScrollInvariantLine 不再对越界行返回 nil —— 末行反推失效")
-        while unknown - known > 1 {
-            let mid = known + (unknown - known) / 2
-            if terminal.getScrollInvariantLine(row: mid) != nil {
-                known = mid
-            } else {
-                unknown = mid
-            }
-        }
-        return known + 1
     }
 
     /// 往这条会话的 PTY 写文本 —— 与用户键入走**完全相同**的通道
     /// （`backend.write` → `SSHConnection.write` → `state.enqueue(.write)`）。
     ///
-    /// 因此：注入与用户键入会交错、**没有输出边界**（uTerm 与 vendored SwiftTerm 都
-    /// 没有 OSC 133 shell-integration 标记），不保证调用方能拿到这条命令的结果。
+    /// 因此：注入与用户键入会交错、**没有输出边界**，不保证调用方能拿到这条命令的结果。
     /// 要结果请走 `run`；`terminal-send` 的正当用途是「让用户看见」。
     ///
     /// - Parameter appendEnter: 追加 `\r`（回车）执行。
@@ -421,5 +370,39 @@ extension TerminalSession: ConnectionHealthProbing {
     /// `.disconnected`（窗格盖上「连接已断开 / 重新连接」），这里不写任何状态。
     func probeConnectionHealth() async {
         await connectionState.probeHealth(of: backend)
+    }
+}
+
+/// 输出泵的 tap（喂字节的那条线程）要用、而拥有者在主线程上换的那几样。
+nonisolated final class TerminalFeedTaps: @unchecked Sendable {
+    private let lock = NSLock()
+    private var heldCheckpoints: TerminalHeldCheckpoints?
+    private var wantsPinnedNotice = false
+    private var noticePending = false
+    /// 钉住尺寸期间来了输出：回主线程看一眼光标换行没有。同一时刻最多排一次。
+    var onPinnedFeed: (@MainActor () -> Void)?
+
+    var checkpoints: TerminalHeldCheckpoints? {
+        get { lock.withLock { heldCheckpoints } }
+        set { lock.withLock { heldCheckpoints = newValue } }
+    }
+
+    var notifiesPinnedFeed: Bool {
+        get { lock.withLock { wantsPinnedNotice } }
+        set { lock.withLock { wantsPinnedNotice = newValue } }
+    }
+
+    func didFeed(_ count: Int) {
+        lock.lock()
+        let checkpoints = heldCheckpoints
+        let notify = wantsPinnedNotice && !noticePending
+        if notify { noticePending = true }
+        lock.unlock()
+        checkpoints?.noteFed(count)
+        guard notify else { return }
+        DispatchQueue.main.async {
+            self.lock.withLock { self.noticePending = false }
+            MainActor.assumeIsolated { self.onPinnedFeed?() }
+        }
     }
 }

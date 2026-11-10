@@ -10,10 +10,10 @@ import SwiftData
 /// `MobileTerminalTransportFactory`（见 `uTermMobile/Screens/Terminal/MobileTerminalTransport.swift`）。
 /// 所以这里走的是**正门**：注入一个返回 `MobileFakeTerminalTransport` 的工厂，
 /// 控制器整条真实路径（`connect()` → 状态翻 `.connected` → `GhosttyTerminalBridge.bind` 的入站任务 →
-/// `GhosttyOutputRouter` 分流：影子终端当场同步解析，画面的 surface 就绪后再吃）原样跑起来，只是底下没有 socket。
+/// `TerminalOutputPump` 分流：影子终端当场同步解析，画面的 surface 就绪后再吃）原样跑起来，只是底下没有 socket。
 ///
 /// 因此这些都是**真的**被量到的：
-/// - 入站任务与 `GhosttyOutputRouter` 的切片 / 闸门（surface 积压时的背压）；
+/// - 入站任务与 `TerminalOutputPump` 的切片 / 闸门（surface 积压时的背压）；
 /// - 影子终端（`ShadowTerminal`）的同步解析——surface 在不在它都吃；
 /// - surface 建好之后 GhosttyKit 在自己线程上的解析与按 vsync 的重画（不走输出泵，主线程不参与解析）；
 /// - `TerminalScreen` 的 `ZStack + ForEach(tabs)` 全常驻挂载。

@@ -363,7 +363,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         let bridge = tab.controller.terminal
         // surface 建好、网格到位、画面开始吃字节之后再喂：就绪之前喂的只进影子，要等一次回放才上屏。
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "Ghostty surface 没建起来")
         let transport = try XCTUnwrap(handles.latest)

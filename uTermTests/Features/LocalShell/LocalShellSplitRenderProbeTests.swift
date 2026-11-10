@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
 import UPaneGroups
 import XCTest
@@ -78,7 +77,7 @@ final class LocalShellSplitRenderProbeTests: XCTestCase {
         XCTAssertEqual(model.groups.groupCount, 2)
 
         func frame(_ pane: LocalShellPane) -> NSRect {
-            let view = pane.session.terminalView
+            let view = pane.session.ghostty.view
             guard view.window === window else { return .zero }
             return view.convert(view.bounds, to: nil)
         }
@@ -102,9 +101,18 @@ final class LocalShellSplitRenderProbeTests: XCTestCase {
         for (index, pane) in panes.enumerated() {
             pane.session.writeRemoteInput(Data("echo PANE_$((\(index)+7))\n".utf8))
         }
+        func screens() -> [String] { panes.map { $0.session.snapshotScreen(lines: 200).lines.joined(separator: "\n") } }
         await waitUntil("各自回显") {
-            let texts = panes.map { String(decoding: $0.session.terminalView.getTerminal().getBufferAsData(), as: UTF8.self) }
+            let texts = screens()
             return texts[0].contains("PANE_7") && texts[1].contains("PANE_8")
+        }
+        XCTAssertFalse(screens()[0].contains("PANE_8"), "收发不串")
+        XCTAssertFalse(screens()[1].contains("PANE_7"), "收发不串")
+        // 两格都露出来了：各自的 surface 都建好、在吃实时字节，网格是各自那一格的（比整窗的一半略窄）。
+        for pane in panes {
+            XCTAssertTrue(pane.session.ghostty.isLive)
+            let grid = try XCTUnwrap(pane.session.ghostty.grid)
+            XCTAssertEqual(pane.session.shadow.size.cols, grid.cols, "影子终端跟着这一格的网格")
         }
     }
 

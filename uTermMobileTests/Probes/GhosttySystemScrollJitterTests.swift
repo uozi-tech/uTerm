@@ -136,7 +136,7 @@ final class GhosttySystemScrollJitterTests: XCTestCase {
             let deadline = CACurrentMediaTime() + 5
             // 等到画面开始吃字节（surface 建好、网格到位）：就绪之前喂的只进影子，要等一次回放才上屏。
             while CACurrentMediaTime() < deadline,
-                  bridge.view.surface == nil || bridge.grid == nil || !bridge.isSurfaceReady || !bridge.router.isFeedingSurface {
+                  bridge.view.surface == nil || bridge.grid == nil || !bridge.isSurfaceReady || !bridge.outputPump.isFeedingSurface {
                 try await Task.sleep(for: .milliseconds(20))
             }
             try await Task.sleep(for: .milliseconds(300))

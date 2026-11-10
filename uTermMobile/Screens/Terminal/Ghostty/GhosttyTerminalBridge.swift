@@ -10,21 +10,21 @@ import UIKit
 /// `MobileTerminalController` 每个会话持有一个，视图跨外壳切换复用。
 ///
 /// 字节流方向：
-/// - 远端 → 终端：`bind(_:)` / `feed(_:)` 经 `router` 分流：先进影子终端（同步解析），画面吃得了的时候再 `session.receive`。
+/// - 远端 → 终端：`bind(_:)` / `feed(_:)` 经两端共用的 `TerminalOutputPump` 分流：先进影子终端（同步解析），画面吃得了的时候再 `session.receive`。
 ///   GhosttyKit 在自己的串行队列上解析，按 vsync 画，主线程不参与解析。
 ///   画面吃不了的三种情况——App 在后台（GhosttyKit 不 tick，标题这类消息会把解析卡死）、surface 还没建（标签没露出过）、
 ///   surface 被放掉了（标签隐藏久了）——只喂影子；画面回来时把影子的快照回放进 surface，再接实时字节。
 /// - 终端 → 远端：键盘 / 粘贴 / 查询应答从 `InMemoryTerminalSession` 的 write 回调出来（可能在任意线程），
 ///   跳回主线程进 `TerminalInputChannel`；网格尺寸走 resize 回调进同一个通道（同轮合并、相同不重发）。
-///   应答只有一个来源：画面在吃字节时由 surface 答，其余时候由影子答（`GhosttyOutputRouter` 切换）。
+///   应答只有一个来源：画面在吃字节时由 surface 答，其余时候由影子答（输出泵切换）。
 @MainActor
 final class GhosttyTerminalBridge {
     let view: MGhosttyTerminalView
     let session: InMemoryTerminalSession
     /// 影子终端：和 surface 吃同一份字节，surface 不在时只有它在吃。读状态、拍快照都找它。
     let shadow: ShadowTerminal
-    /// 输出分流（影子永远收、surface 只在能吃时收）与入站的闸门。
-    let router: GhosttyOutputRouter
+    /// 输出泵（两端共用）：影子永远收、surface 只在能吃时收，入站带闸门；远控发来的整屏快照也由它还原、回放。
+    let outputPump: TerminalOutputPump
     /// 击键、粘贴、应答与网格尺寸共用的一条 FIFO。
     let input = TerminalInputChannel()
     /// 影子终端在解析中碰到的事：程序状态（OSC 7501 / 133）、标题、通知……都从这里出来，主线程上、按字节流的先后到。
@@ -38,7 +38,6 @@ final class GhosttyTerminalBridge {
     private(set) var resizeReports = 0
     /// 每一块 write 回调给出的字节（探针读它，核按键编码）。nil = 不记。
     var inputLog: [Data]?
-    private var ingress: Task<Void, Never>?
     /// App 在不在后台（`didEnterBackground` → `willEnterForeground`，和 `MobileTerminalController` 同一对通知）。
     private(set) var isAppInBackground = false
     /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节。
@@ -180,7 +179,7 @@ final class GhosttyTerminalBridge {
             suppressesPixelOnlyResizes: true)
         self.session = session
         self.shadow = shadow
-        router = GhosttyOutputRouter(session: session, shadow: shadow)
+        outputPump = TerminalOutputPump(shadow: shadow, surface: session)
         delegateProxy = SurfaceDelegate()
         view = MGhosttyTerminalView(frame: frame)
         view.controller = controller
@@ -204,8 +203,7 @@ final class GhosttyTerminalBridge {
                 Task { @MainActor in box.bridge?.onEvent?(event) }
             }
         }
-        // 还没有 surface：先只喂影子（它也负责应答），surface 建好、报过尺寸后回放接上。
-        router.setSurfaceFeeding(false)
+        // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后 `syncSurfaceFeeding` 开闸，回放接上。
         installLifecycleObservers()
         if UIApplication.shared.applicationState == .background { setAppInBackground(true) }
     }
@@ -214,49 +212,39 @@ final class GhosttyTerminalBridge {
         lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
         releaseTask?.cancel()
         surfaceSizeTimeout?.cancel()
-        ingress?.cancel()
+        outputPump.reset()
     }
 
     // MARK: 输出
 
     /// 喂远端输出。线程安全；影子当场解析，surface 的解析在 GhosttyKit 的串行队列上。不过闸门（测试与探针直接喂用）。
     nonisolated func feed(_ data: Data) {
-        router.route(data)
+        outputPump.route(data)
     }
 
-    /// 接到一个后端：输出经分流进影子与 surface，输入 / 尺寸走共享通道（尺寸可能早于传输就绪，接上时先补发）。
+    /// 接到一个后端：输出进泵（字节，或远控发来的整屏快照），输入 / 尺寸走共享通道（尺寸可能早于传输就绪，接上时先补发）。
     ///
-    /// 背压：surface 没解析完的字节到 `GhosttyOutputRouter.highWater`（1 MiB）时入站任务不再取下一块，落回低水位再取。
-    /// 取不动的字节留在后端的 `outputStream` 里——那条流（以及 Citadel 的 PTY 输出流）现在是不限长的，所以这还不是
+    /// 背压：surface 没解析完的字节到 1 MiB 时入站任务不再取下一块，落回低水位再取（`TerminalOutputPump`）。
+    /// 取不动的字节留在后端的输出流里——那条流（以及 Citadel 的 PTY 输出流）现在是不限长的，所以这还不是
     /// 真正压到 SSH 窗口上的背压，只保证终端这一层有上界；要压到远端得改 Citadel（见 measure-ios.md 的 M10）。
     func bind(_ backend: any TerminalBackend) {
         input.bind(to: backend, sendingLatestSize: true)
-        ingress?.cancel()
-        router.reopen()
-        let router = router
-        let output = backend.outputStream
-        ingress = Task.detached(priority: .userInitiated) {
-            for await chunk in output {
-                if Task.isCancelled { break }
-                await router.ingest(chunk)
-            }
-        }
+        outputPump.reset()
+        outputPump.start(backend.outputItems)
     }
 
     func unbind() {
-        ingress?.cancel()
-        ingress = nil
-        router.close()
+        outputPump.reset()
         input.unbind()
     }
 
     // MARK: 画面吃不吃字节
 
     /// 画面能吃字节的条件：App 在前台，且 surface 建好并报过尺寸。任何一条不成立就只喂影子；重新成立时
-    /// `GhosttyOutputRouter` 把影子的快照回放进 surface 再接实时字节。重复调用无害。
+    /// 输出泵把影子的快照回放进 surface 再接实时字节。重复调用无害。
     private func syncSurfaceFeeding() {
         let feeds = !isAppInBackground && isSurfaceReady
-        router.setSurfaceFeeding(feeds)
+        outputPump.setSurfaceFeeding(feeds)
     }
 
     /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、来电横幅时 App 只是

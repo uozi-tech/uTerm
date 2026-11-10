@@ -14,7 +14,7 @@ final class RegistryTitleIsolationTests: XCTestCase {
         workspace.sessionRegistrar?.register(paneID: pane.id, serverID: pane.serverProfileID,
                                              serverName: "prod-1", session: pane.session)
 
-        pane.session.terminalView.feed(text: "\u{1b}]0;vim secrets.env\u{07}")
+        pane.session.feedOutput(text: "\u{1b}]0;vim secrets.env\u{07}")
         XCTAssertEqual(pane.session.shellTitle, "vim secrets.env")
         workspace.syncTerminalTitles()
         workspace.syncFocusedTerminalSession()

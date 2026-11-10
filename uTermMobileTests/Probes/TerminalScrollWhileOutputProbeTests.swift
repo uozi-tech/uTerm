@@ -111,7 +111,7 @@ final class TerminalScrollWhileOutputProbeTests: XCTestCase {
         let view = terminal.view
         // surface 建好、网格到位、画面开始吃字节之后再喂：就绪之前喂的只进影子，要等一次回放才上屏。
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            view.surface != nil && terminal.grid != nil && terminal.isSurfaceReady && terminal.router.isFeedingSurface
+            view.surface != nil && terminal.grid != nil && terminal.isSurfaceReady && terminal.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "Ghostty surface 没建起来")
         let cols = terminal.grid?.cols ?? 80

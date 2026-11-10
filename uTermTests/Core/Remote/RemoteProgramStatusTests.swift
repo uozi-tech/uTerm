@@ -331,10 +331,9 @@ final class RemoteProgramStatusTests: XCTestCase {
         try await Task.sleep(for: Self.quietWait)
         XCTAssertEqual(client.programStatus(for: mac.sessionID)?.state, .done, "没看着的结果留在标签上")
 
-        // 获得焦点（`CopyableTerminalView.onFocusGained` → `acknowledgeProgramStatus`）。
+        // 获得焦点（`GhosttySurfaceView.onFocusGained` → `acknowledgeProgramStatus`）。
         looking.value = true
-        let view = try XCTUnwrap(pane.session.terminalView as? CopyableTerminalView)
-        view.hasFocus = true
+        XCTAssertTrue(pane.session.ghostty.view.becomeFirstResponder())
         XCTAssertNil(client.programStatus(for: mac.sessionID))
 
         // 关了标签就不再问它：之后的结果照常留着。

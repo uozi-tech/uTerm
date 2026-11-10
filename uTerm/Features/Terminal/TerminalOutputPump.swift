@@ -1,161 +1,371 @@
 import Foundation
-import SwiftTerm
+import GhosttyTerminal
 
-/// 后端输出 → SwiftTerm 的泵。mac `TerminalSession` 与 iOS `MobileTerminalController` 共用这一份。
-///
-/// 分两段，中间隔一个有界缓冲（`TerminalOutputBuffer`）：
-/// - 入站：detached 任务把 `outputStream` 的块塞进缓冲，不为每个块跳一次主线程；
-/// - 喂入：主线程上的循环按 `TerminalFlushPacer` 的节拍从缓冲取字节、`feedPaced` 给终端视图；
-///   没字节时挂起在 `waitForData()`（0 CPU），一字节到达即恢复——这取代了旧的 100ms 轮询，
-///   那 100ms 是回显字符最坏的可见延迟，是「输入不跟手」的根因。
-///
-/// 代次（`generation`）：`reset()` 递增，上一条连接残留的字节在入站和喂入两端都被拒收。
-///
-/// 两端只在三处不同，都做成了属性，别为平台再抄一份循环：
-/// - `pacing`：mac 固定 `.desktop`；iOS 按前后台在 `.foreground` / `.background` 间换；
-/// - `terminalView`：iOS 的视图可能晚于建连才挂上，没挂上时字节留在缓冲里，低频重试；
-/// - `onFed`：每拍喂完后的钩子（mac 的远控镜像与 holder 检查点要按喂入顺序拿到同一批字节）。
-///
-/// 循环在两拍之间只弱引用泵：拥有者释放后泵随之释放，`deinit` 清缓冲唤醒挂起的循环让它退出。
-@MainActor
-final class TerminalOutputPump {
-    let buffer: TerminalOutputBuffer
-    private(set) var generation = 0
-    /// 每拍开始时读一次；换档后预算回到新档下限（`TerminalFlushPacer.use`）。
-    var pacing: TerminalFlushPacing
-    weak var terminalView: SwiftTerm.TerminalView?
-    /// 紧跟在 `feedPaced` 之后调用，参数就是这一拍喂进去的字节。不计入这一拍的解析耗时。
-    var onFed: (@MainActor (ArraySlice<UInt8>) -> Void)?
+/// 后端输出里的一项：原样字节，或者一张整屏的二进制快照（远控镜像：被控的 Mac 在接入、改尺寸、积压过多时发）。
+nonisolated enum TerminalOutputItem: Sendable {
+    case bytes(Data)
+    /// `ShadowTerminal.snapshot()` 的产物。两端引擎版本一致才会发（握手时核过）。
+    case snapshot(Data)
+}
 
+/// 画面那一侧要的接口（`InMemoryTerminalSession`）。单独成协议是为了单测能换成假的。
+nonisolated protocol TerminalSurfaceSink: AnyObject, Sendable {
+    func receive(_ data: Data)
+    func receiveReplay(_ data: Data)
+    @discardableResult func discardPendingOutput() -> Int
+    func setOutputBacklogHandler(highWater: Int, lowWater: Int, _ handler: (@Sendable (_ isBacklogged: Bool) -> Void)?)
+}
+
+extension InMemoryTerminalSession: TerminalSurfaceSink {}
+
+/// 后端输出 → 影子终端 + 画面的泵。mac `TerminalSession` 与 iOS `MobileTerminalController` 共用这一份
+/// （迁移计划 docs/ghostty-migration-plan.md §2）：
+///
+///     入站任务（detached，不占主线程）
+///        │  闸门：surface 没解析完的字节到 1 MiB 就停取，落回 256 KiB 再取（往后端施背压）
+///        ├─► 影子终端 `ShadowTerminal.feed`（同步解析，事件随之发出）
+///        ├─► tap `onFed`（远控镜像、holder 检查点拿原样字节；这时影子已经解析到这批字节为止）
+///        └─► surface `receive`（异步解析、渲染线程出帧）——只在 surface 吃字节时
+///
+/// **surface 可以暂时不吃字节**（`setSurfaceFeeding(false)`）：surface 还没建（标签没露出过、会话刚从检查点还原）、
+/// iOS 进了后台（GhosttyKit 不 tick，解析线程会卡在 app mailbox 上，M10）。这期间输出只进影子；重新开始吃的时候
+/// 先把影子的状态回放进去（`ShadowTerminal.makeReplay` → `receiveReplay`，不产生应答），再接实时字节。
+/// 影子没有被 surface 落下过内容时不回放。回放会让视口回到底部、清掉选区、丢掉 Kitty 图片（计划里定的，可以接受）。
+///
+/// 代次（`generation`）：`reset()` 递增，上一条连接残留的入站任务随之作废。
+///
+/// 线程：类型线程安全。喂影子、tap、往 surface 入队、切换、回放都在同一把锁里做，所以两边吃到的字节顺序一致，
+/// 切换对字节流是原子的；`performWhileFeedingPaused` 让别人（拍快照的）借这把锁拿到「某个字节位置上」的一致状态。
+nonisolated final class TerminalOutputPump: @unchecked Sendable {
+    /// surface 没解析完的字节到这么多，入站任务就停下不再取后端的输出，落回 `lowWater` 再继续。
+    /// 前台正常时 surface 每秒能解析几百 MB，到不了这里；到了说明主线程卡住没在 tick。
+    static let highWater = 1 << 20
+    static let lowWater = 256 << 10
+    /// 大块输出切成这么大再喂：每片之间看一次闸门，surface 的积压最多超出 `highWater` 一片；
+    /// 读影子的一方（主线程）最多等一片的解析（约 0.1 ms）。
+    static let sliceBytes = 64 << 10
+
+    /// 读数与测试用。
+    nonisolated struct Stats: Sendable {
+        /// 只进了影子、没进 surface 的字节（累计）。
+        var shadowOnlyBytes = 0
+        /// 停喂那一刻 surface 队列里还没解析、被丢掉的字节（累计；它们已经在影子里，由回放补上）。
+        var droppedSurfaceBytes = 0
+        /// 回放次数。
+        var replays = 0
+        /// 最近一次回放：流的字节数、快照的字节数、拍快照 + 生成回放流 + 自查一共用了多久，以及其中三步各多久。
+        var lastReplayBytes = 0
+        var lastSnapshotBytes = 0
+        var lastReplayBuildSeconds = 0.0
+        var lastReplayPhases = ""
+        /// 最近一次回放用的是不是首选的那一版（软折行并回一行）；false = 自查没过，用了逐行的后备版。
+        var lastReplayUnwrapped = true
+        /// 最近一次回放发出去的那一版自查过了没有（没过也照发，画面可能和影子差一点）。
+        var lastReplayVerified = true
+        /// 最近一次回放失败的原因（失败时 surface 不回放、直接接实时字节，画面可能是旧的）。
+        var lastReplayError: String?
+        /// 入站任务因为 surface 积压停下过几次。
+        var backpressureWaits = 0
+        /// 收到的整屏快照（远控镜像）里解不开的张数。
+        var rejectedSnapshots = 0
+    }
+
+    let shadow: ShadowTerminal
+    private let surface: any TerminalSurfaceSink
+
+    /// 保护分流状态（见类型注释）。
+    private let stateLock = NSRecursiveLock()
+    private var feedsSurface = false
+    /// 想不想让 surface 吃字节；回放排在串行队列上，轮到时再看一眼它还作不作数。
+    private var wantsSurface = false
+    /// surface 落后于影子：它不吃字节的时候来过输出，或者停喂时丢过它队列里的积压，或者影子被整个换过。
+    private var surfaceIsStale = false
+    private var stats = Stats()
+    private var currentGeneration = 0
     private var ingressTask: Task<Void, Never>?
-    private var flushTask: Task<Void, Never>?
+    private var fedHandler: (@Sendable (Data) -> Void)?
+    private var replayedHandler: (@Sendable () -> Void)?
 
-    /// 视图还没挂上时多久再看一次。
-    private static let viewlessRetryMs = TerminalFlushPacing.foreground.intervalMs
+    /// 保护闸门。surface 的 backlog 回调可能就在 `surface.receive` 里同步回来（那时 `stateLock` 在手上），
+    /// 所以闸门另用一把锁，并且拿着它时不调 surface、不拿 `stateLock`（顺序只能是 stateLock → gateLock）。
+    private let gateLock = NSLock()
+    private var isBacklogged = false
+    private var gateFollowsBacklog = false
+    private var isClosed = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    init(pacing: TerminalFlushPacing, capacityBytes: Int = 4 * 1024 * 1024) {
-        self.pacing = pacing
-        buffer = TerminalOutputBuffer(capacityBytes: capacityBytes)
-    }
+    /// 回放时人就在等这一帧，按交互优先级跑。
+    private let catchUpQueue = DispatchQueue(label: "com.uozi.uTerm.terminal-catch-up", qos: .userInteractive)
 
-    /// 喂入循环在跑（`start` 之后、`reset` 之前）。
-    var isRunning: Bool { flushTask != nil }
-
-    /// 代次 +1，停掉入站与喂入，丢掉缓冲里的字节。代次必须先递增，旧字节才会被两端可靠地拒收。
-    func reset() {
-        generation &+= 1
-        ingressTask?.cancel()
-        ingressTask = nil
-        flushTask?.cancel()
-        flushTask = nil
-        buffer.clear()
-    }
-
-    /// 按当前代次开始泵 `output`。调用方先 `reset()`。
-    func start(_ output: AsyncStream<Data>) {
-        let generation = generation
-        let buffer = buffer
-        ingressTask?.cancel()
-        // detached：不被主线程上的工作（SwiftUI 渲染、别的窗格的喂入）卡住。
-        ingressTask = Task.detached(priority: .userInitiated) {
-            for await chunk in output {
-                if Task.isCancelled { break }
-                buffer.append(chunk, generation: generation)
-            }
+    init(shadow: ShadowTerminal, surface: any TerminalSurfaceSink) {
+        self.shadow = shadow
+        self.surface = surface
+        // 一开始 surface 不吃字节（还没建）：查询由影子答。
+        shadow.setRepliesEnabled(true)
+        surface.setOutputBacklogHandler(highWater: Self.highWater, lowWater: Self.lowWater) { [weak self] backlogged in
+            self?.backlogChanged(backlogged)
         }
-        startFlushLoop()
-    }
-
-    /// 重起喂入循环，截断正在进行的等待（iOS 切回前台时不必等完后台那一拍）。没在跑就什么也不做。
-    func restartFlushLoop() {
-        guard isRunning else { return }
-        startFlushLoop()
-    }
-
-    private enum Beat {
-        case stop
-        case idle
-        case wait(ms: Int)
-    }
-
-    private func startFlushLoop() {
-        flushTask?.cancel()
-        let generation = generation
-        let buffer = buffer
-        flushTask = Task { [weak self] in
-            var pacer = TerminalFlushPacer(pacing: self?.pacing ?? .desktop)
-            while !Task.isCancelled {
-                switch self?.beat(generation: generation, pacer: &pacer) ?? .stop {
-                case .stop:
-                    return
-                case .idle:
-                    await buffer.waitForData()
-                case .wait(let ms):
-                    // 活跃路径：让短时间内陆续到达的字节合批一次性喂。
-                    try? await Task.sleep(for: .milliseconds(ms))
-                }
-            }
-        }
-    }
-
-    /// 无条件 feed —— 后台（非活动）标签也照样解析 VT，这是**有意保留**的（iOS 后台只是降频，
-    /// 见 `TerminalFlushPacing.background`，字节一样不少）。
-    ///
-    /// 2026-09-01 量过它的成本结构，别再凭「批量化能省」的直觉来改这里。
-    /// 测法：同进程内交替翻转块大小做配对测量（这台机器 load 在 4–14 乱跳，
-    /// 跨进程不可比），6 个 `TerminalView` 交错喂同一份 `script(1)` 录的真实
-    /// 语料（带色 git log/ls -laR + vim 进出 alternate screen + top 全屏重绘），
-    /// 每轮正逆序交替、7 轮取中位数，Release 构建。
-    ///
-    ///   每次 feed 的块大小    调用次数    6.57 MB 总耗时
-    ///   64 B                 107 719     176.8 ms
-    ///   433 B（线上实测均值）  15 922      157.4 ms
-    ///   32 KB                211         153.3 ms
-    ///   256 KB               27          153.9 ms
-    ///
-    /// 拟合出来：**每次调用的固定开销只有 0.21 µs，按字节的解析是 23.3 ms/MB**
-    /// （随内容在 9–27 ms/MB 之间浮动）。也就是说线上那 433 B 的包里，固定开销
-    /// 只占 feed 总耗时的 2.6%；把 flush 从 433 B 攒到 32 KB 就只能省这 2.6%，
-    /// 连 64 B → 256 KB 的极端全跨度也只有 13%。批量化在这里省不到 CPU。预算放大
-    /// （`TerminalFlushPacing`）要解决的是积压时的吞吐，不是省 CPU；没有积压时每拍
-    /// 只有几百字节，预算多大都一样，也就不影响 echo 延迟。
-    ///
-    /// 绝对量级也不值得动：6 个后台标签合计 142 KB/s 的输出，在 Release 下
-    /// ≈ 3.3 ms/s 主线程时间（0.3% 单核）。`uAppKit/docs/pane-groups-design.md`
-    /// §6-2 记的 31.5–65 ms/s 是 **Debug** 构建（`-Onone`）量的，不代表发布版：
-    /// 同一份语料同一套测法，Debug 224.8 ms/MB vs Release 23.9 ms/MB，差 9.4×。
-    ///
-    /// 再往下就只剩「后台标签先不解析、切回来再补」。它省不到 CPU（字节一个不少
-    /// 还是要解析，只是挪到切回来的那一刻，反而制造一次卡顿），却必然改变行为：
-    /// 补 feed 之前若发生过 resize，积压字节会按新 cols 重排，切回来的内容与不
-    /// 优化时不再逐字相同。为 3.3 ms/s 付这个代价不划算。
-    ///
-    /// 顺带钉住一条：SwiftTerm 的解析器对分块边界是中立的 —— 上面五种块大小
-    /// 喂完同一份语料后，主屏/alt 屏全文、逐格字符与属性、scrollback、光标位置
-    /// 全部逐字相同（实测比对过指纹）。所以将来真要改批量策略，正确性这一侧
-    /// 是安全的，不安全的只有上面那条「延迟到可见时再补」。
-    ///
-    /// 一拍：取一批字节喂给终端，返回接下来怎么等。
-    private func beat(generation: Int, pacer: inout TerminalFlushPacer) -> Beat {
-        guard self.generation == generation else { return .stop }
-        guard let terminalView else { return .wait(ms: Self.viewlessRetryMs) }
-        pacer.use(pacing)
-        let chunk = buffer.drain(maxBytes: pacer.budget, generation: generation)
-        guard !chunk.isEmpty else { return .idle }
-
-        let bytes = ArraySlice([UInt8](chunk))
-        let backlogged = pacer.isBacklogged(fed: bytes.count, hasMore: buffer.hasBufferedBytes)
-        let start = CFAbsoluteTimeGetCurrent()
-        terminalView.feedPaced(bytes, backlogged: backlogged)
-        let end = CFAbsoluteTimeGetCurrent()
-        onFed?(bytes)
-        return .wait(ms: pacer.didFeed(bytes: bytes.count, elapsedMs: (end - start) * 1000,
-                                       backlogged: backlogged, nowMs: end * 1000))
     }
 
     deinit {
         ingressTask?.cancel()
-        flushTask?.cancel()
-        buffer.clear()
+        surface.setOutputBacklogHandler(highWater: Self.highWater, lowWater: Self.lowWater, nil)
+    }
+
+    var currentStats: Stats { stateLock.withLock { stats } }
+
+    /// surface 此刻吃不吃实时字节。
+    var isFeedingSurface: Bool { stateLock.withLock { feedsSurface } }
+
+    /// 当前绑定的代次：`reset()` 递增。
+    var generation: Int { stateLock.withLock { currentGeneration } }
+
+    /// 入站任务在跑（`start` 之后、`reset` 之前）。
+    var isRunning: Bool { stateLock.withLock { ingressTask != nil } }
+
+    /// tap：每片字节喂进影子之后、交给 surface 之前调，参数就是这一片。在喂字节的那条线程上、拿着泵的锁调：
+    /// 这时读影子（拍快照）正好对应「到这一片为止」；别在里面做重活，也别反过来调泵的 `start` / `reset`。
+    var onFed: (@Sendable (Data) -> Void)? {
+        get { stateLock.withLock { fedHandler } }
+        set { stateLock.withLock { fedHandler = newValue } }
+    }
+
+    /// 影子的状态整个回放进了 surface（重新开始吃字节、收到整屏快照）之后调，在回放的那条线程上。
+    var onReplayed: (@Sendable () -> Void)? {
+        get { stateLock.withLock { replayedHandler } }
+        set { stateLock.withLock { replayedHandler = newValue } }
+    }
+
+    // MARK: 入站
+
+    /// 代次 +1，停掉入站任务，放掉挂在闸门上的等待。影子和 surface 里已有的内容不动。
+    func reset() {
+        stateLock.lock()
+        currentGeneration &+= 1
+        let task = ingressTask
+        ingressTask = nil
+        stateLock.unlock()
+        task?.cancel()
+        setClosed(true)
+    }
+
+    /// 按当前代次开始泵 `output`。调用方先 `reset()`。
+    func start(_ output: AsyncStream<TerminalOutputItem>) {
+        setClosed(false)
+        stateLock.lock()
+        let generation = currentGeneration
+        ingressTask?.cancel()
+        // detached：不被主线程上的工作（SwiftUI 渲染、别的窗格）卡住。
+        ingressTask = Task.detached(priority: .userInitiated) { [weak self] in
+            for await item in output {
+                guard let self, !Task.isCancelled else { break }
+                await self.ingest(item, generation: generation)
+            }
+        }
+        stateLock.unlock()
+    }
+
+    func start(_ output: AsyncStream<Data>) {
+        start(AsyncStream<TerminalOutputItem> { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                for await chunk in output { continuation.yield(.bytes(chunk)) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        })
+    }
+
+    /// 一项后端输出。surface 积压时在这里挂起（不取下一块 = 往后端施背压）；只喂影子时不等。
+    private func ingest(_ item: TerminalOutputItem, generation: Int) async {
+        switch item {
+        case .bytes(let chunk):
+            var start = chunk.startIndex
+            while start < chunk.endIndex {
+                await waitForAdmission()
+                let end = min(chunk.endIndex, start + Self.sliceBytes)
+                route(chunk[start..<end], generation: generation)
+                start = end
+            }
+        case .snapshot(let snapshot):
+            applySnapshot(snapshot, generation: generation)
+        }
+    }
+
+    /// 不经闸门直接分流一片字节（测试直接喂字节、`clearOutput` 这类不走后端的字节用）。
+    func route(_ slice: Data) {
+        route(slice, generation: nil)
+    }
+
+    private func route(_ slice: Data, generation: Int?) {
+        guard !slice.isEmpty else { return }
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        // 换了连接之后，上一条连接的入站任务手上还攥着的那一片不要了。
+        if let generation, generation != currentGeneration { return }
+        shadow.feed(slice)
+        fedHandler?(slice)
+        if feedsSurface {
+            surface.receive(slice)
+        } else {
+            surfaceIsStale = true
+            stats.shadowOnlyBytes += slice.count
+        }
+    }
+
+    /// 整屏快照（远控镜像）：影子就地换成快照里的终端，再把它回放进 surface。两端共用的入口——
+    /// 主控端（Mac 的远控窗口、iOS）收到 `.snapshot` 一项时走到这里，自己不用再做别的。
+    func applySnapshot(_ snapshot: Data) {
+        applySnapshot(snapshot, generation: nil)
+    }
+
+    private func applySnapshot(_ snapshot: Data, generation: Int?) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if let generation, generation != currentGeneration { return }
+        do {
+            try shadow.restore(snapshot: snapshot)
+        } catch {
+            stats.rejectedSnapshots += 1
+            return
+        }
+        surfaceIsStale = true
+        if feedsSurface { replayLocked() }
+    }
+
+    /// 影子被不经过泵的方式改过（从检查点还原、直接喂了历史）：surface 要重新对齐。正在吃字节就当场回放，
+    /// 否则等下次开始吃的时候。
+    func markSurfaceStale() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        surfaceIsStale = true
+        if feedsSurface { replayLocked() }
+    }
+
+    /// 在「没有字节正在喂」的状态下跑 `body`：里面读影子（拍快照、读光标）对应的是字节流上一个确定的位置，
+    /// 和 tap 看到的先后一致。可重入（tap 里再调也行）。
+    func performWhileFeedingPaused<T>(_ body: () throws -> T) rethrows -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return try body()
+    }
+
+    // MARK: 闸门
+
+    private func waitForAdmission() async {
+        guard !admitsNow() else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            park(continuation)
+        }
+    }
+
+    /// 调用方持 `gateLock`。
+    private var isGateOpen: Bool { isClosed || !(gateFollowsBacklog && isBacklogged) }
+
+    /// 闸门开着就放行；关着就记一次等待。（锁的进出放在同步方法里：异步上下文里不能直接 lock / unlock。）
+    private func admitsNow() -> Bool {
+        let open = gateLock.withLock { isGateOpen }
+        if !open { stateLock.withLock { stats.backpressureWaits += 1 } }
+        return open
+    }
+
+    /// 挂到闸门上；这一瞬间闸门已经开了就直接放行。
+    private func park(_ continuation: CheckedContinuation<Void, Never>) {
+        gateLock.lock()
+        if isGateOpen {
+            gateLock.unlock()
+            continuation.resume()
+        } else {
+            waiters.append(continuation)
+            gateLock.unlock()
+        }
+    }
+
+    private func updateGate(_ change: () -> Void) {
+        gateLock.lock()
+        change()
+        var released: [CheckedContinuation<Void, Never>] = []
+        if isGateOpen {
+            released = waiters
+            waiters.removeAll()
+        }
+        gateLock.unlock()
+        released.forEach { $0.resume() }
+    }
+
+    private func backlogChanged(_ backlogged: Bool) {
+        updateGate { isBacklogged = backlogged }
+    }
+
+    private func setGateFollowsBacklog(_ follows: Bool) {
+        updateGate { gateFollowsBacklog = follows }
+    }
+
+    private func setClosed(_ closed: Bool) {
+        updateGate { isClosed = closed }
+    }
+
+    // MARK: surface 吃不吃字节
+
+    /// `false`：从现在起只喂影子。surface 队列里还没解析的字节丢掉——它们已经在影子里，留着只会在重新开始时先被
+    /// 解析一遍（连同它们带的标题一条条 tick）再被回放盖掉。这期间由影子替 surface 应答查询（surface 不解析就不会答）。
+    /// `true`：把影子的状态回放进 surface，然后接实时字节。回放在后台队列上做，不占主线程。
+    /// 泵刚建好时是 `false`：surface 还没建，谁建好了谁来调 `true`。
+    func setSurfaceFeeding(_ feeding: Bool) {
+        stateLock.lock()
+        wantsSurface = feeding
+        if !feeding, feedsSurface {
+            feedsSurface = false
+            let dropped = surface.discardPendingOutput()
+            if dropped > 0 {
+                surfaceIsStale = true
+                stats.droppedSurfaceBytes += dropped
+            }
+            shadow.setRepliesEnabled(true)
+        }
+        // 只喂影子时不看 surface 的积压：它这时不会消，等它就等于把入站卡死（M10 原来的病）。
+        if !feeding { setGateFollowsBacklog(false) }
+        stateLock.unlock()
+        if feeding {
+            catchUpQueue.async { [weak self] in self?.catchUp() }
+        }
+    }
+
+    /// 等排着的回放做完（测试用）。
+    func waitForCatchUp() {
+        catchUpQueue.sync {}
+    }
+
+    private func catchUp() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard wantsSurface, !feedsSurface else { return }
+        shadow.setRepliesEnabled(false)
+        if surfaceIsStale { replayLocked() }
+        feedsSurface = true
+        setGateFollowsBacklog(true)
+    }
+
+    /// 调用方持 `stateLock`。把影子此刻的状态回放进 surface；它队列里排着的实时字节已经在影子里，先丢掉。
+    private func replayLocked() {
+        let started = DispatchTime.now().uptimeNanoseconds
+        stats.droppedSurfaceBytes += surface.discardPendingOutput()
+        do {
+            let replay = try shadow.makeReplay()
+            // 一次交给 surface：它拿着终端锁把整段解析完，渲染线程看不到「复位了、还没写回来」的中间状态。
+            surface.receiveReplay(replay.stream)
+            stats.replays += 1
+            stats.lastReplayBytes = replay.stream.count
+            stats.lastSnapshotBytes = replay.snapshotBytes
+            stats.lastReplayPhases = String(format: "encode=%.1fms stream=%.1fms verify=%.1fms",
+                                            replay.encodeSeconds * 1000, replay.buildSeconds * 1000, replay.verifySeconds * 1000)
+            stats.lastReplayUnwrapped = replay.unwrapped
+            stats.lastReplayVerified = replay.verified
+            stats.lastReplayError = nil
+        } catch {
+            stats.lastReplayError = "\(error)"
+        }
+        stats.lastReplayBuildSeconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        surfaceIsStale = false
+        replayedHandler?()
     }
 }

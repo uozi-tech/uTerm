@@ -1,19 +1,12 @@
 import XCTest
-import SwiftTerm
 @preconcurrency import Network
 @testable import uTerm
 
 /// 端到端：真实的手机侧客户端（`RemoteMacClient` + `RemoteTerminalBackend`，与 uTermMobile 用的
-/// 同一份代码）经 127.0.0.1 连真实的 `RemoteHostServer`。手机端终端只吃后端吐出来的字节，
-/// 和 `MobileTerminalController` 一样。
+/// 同一份代码）经 127.0.0.1 连真实的 `RemoteHostServer`。手机端是一台影子终端 + 输出泵（`MirrorPhone`），
+/// 只吃后端吐出来的 `outputItems`（整屏快照 + 之后的原样字节），和 `MobileTerminalController` 一样。
 @MainActor
 final class RemoteEndToEndTests: XCTestCase {
-
-    private final class SilentDelegate: TerminalDelegate {
-        func send(source: Terminal, data: ArraySlice<UInt8>) {}
-    }
-
-    private let phoneDelegate = SilentDelegate()
 
     private func waitUntil(_ timeout: TimeInterval = 5, _ condition: () async -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -24,19 +17,15 @@ final class RemoteEndToEndTests: XCTestCase {
         return true
     }
 
-    private func corpus(_ name: String) throws -> [UInt8] {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "terminal-corpus-\(name)", withExtension: "bin"))
-        return [UInt8](try Data(contentsOf: url))
-    }
-
-    private func emit(_ bytes: [UInt8], to backend: MockBackend) async {
+    private func emit(_ bytes: Data, to backend: MockBackend) async {
         for start in stride(from: 0, to: bytes.count, by: 433) {
-            await backend.emitOutput(Data(bytes[start..<min(bytes.count, start + 433)]))
+            await backend.emitOutput(bytes.subdata(in: start..<min(bytes.count, start + 433)))
         }
     }
 
-    private func same(_ mac: Terminal, _ phone: Terminal) -> Bool {
-        mac.snapshotFingerprint().differences(from: phone.snapshotFingerprint()).isEmpty
+    /// Mac 已经吃完 `fedBytes` 字节，并且两边读到的画面一致。
+    private func same(_ mac: ShadowTerminal, _ phone: MirrorPhone, fedBytes: Int = 0) -> Bool {
+        mac.totalFedBytes >= fedBytes && mac.mirrorDifferences(from: phone.shadow).isEmpty
     }
 
     func test_phone_client_pairs_attaches_mirrors_resizes_reconnects_and_sees_session_end() async throws {
@@ -55,7 +44,7 @@ final class RemoteEndToEndTests: XCTestCase {
         defer { server.stop(); session.dispose() }
         _ = await waitUntil { server.port != nil }
         let port = try XCTUnwrap(server.port)
-        let mac = session.terminalView.getTerminal()
+        let mac = session.shadow
 
         // 手机端：首次连接要配对。
         let client = RemoteMacClient(macName: "测试 Mac",
@@ -80,18 +69,21 @@ final class RemoteEndToEndTests: XCTestCase {
 
         // 接入：手机 64×20，手机端终端只吃后端的输出流。
         let backend = RemoteTerminalBackend(client: client, sessionID: sessionID)
-        let phone = Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: 64, rows: 20, scrollback: 2000))
+        let phone = MirrorPhone(cols: 64, rows: 20)
         await backend.resize(cols: 64, rows: 20)
         try await backend.connect()
-        let pump = Task { @MainActor in
-            for await chunk in backend.outputStream { phone.feed(byteArray: [UInt8](chunk)) }
-        }
-        defer { pump.cancel() }
-        XCTAssertEqual(mac.cols, 64)
-        XCTAssertEqual(mac.rows, 20)
-        await emit(try corpus("mixed"), to: macBackend)
-        let mirrored = await waitUntil { self.same(mac, phone) }
-        XCTAssertTrue(mirrored, "接入后画面不一致：\(mac.snapshotFingerprint().differences(from: phone.snapshotFingerprint()))")
+        phone.start(backend.outputItems)
+        defer { phone.stop() }
+        XCTAssertEqual(mac.size.cols, 64)
+        XCTAssertEqual(mac.size.rows, 20)
+        let mixed = try TerminalCorpus.bytes("mixed")
+        await emit(mixed, to: macBackend)
+        var fedBytes = mixed.count
+        let mirrored = await waitUntil { self.same(mac, phone, fedBytes: fedBytes) }
+        XCTAssertTrue(mirrored, "接入后画面不一致：\(mac.mirrorDifferences(from: phone.shadow))")
+        XCTAssertGreaterThanOrEqual(phone.snapshots, 1, "接入后先到一张整屏快照")
+        XCTAssertGreaterThan(phone.outputBytes, 0, "之后是原样字节")
+        XCTAssertEqual(phone.pump.currentStats.rejectedSnapshots, 0)
 
         // 输入。
         await backend.write(Data("pwd\r".utf8))
@@ -99,10 +91,13 @@ final class RemoteEndToEndTests: XCTestCase {
         XCTAssertTrue(wrote)
 
         // 手机改尺寸（转屏 / 键盘）：手机端终端先按新尺寸重排，Mac 调整后重发快照对齐。
+        let snapshotsBeforeResize = phone.snapshots
         phone.resize(cols: 50, rows: 18)
         await backend.resize(cols: 50, rows: 18)
-        let resized = await waitUntil { mac.cols == 50 && mac.rows == 18 && self.same(mac, phone) }
-        XCTAssertTrue(resized, "改尺寸后不一致：\(mac.snapshotFingerprint().differences(from: phone.snapshotFingerprint()))")
+        let resized = await waitUntil {
+            mac.size.cols == 50 && mac.size.rows == 18 && phone.snapshots > snapshotsBeforeResize && self.same(mac, phone)
+        }
+        XCTAssertTrue(resized, "改尺寸后不一致：\(mac.mirrorDifferences(from: phone.shadow))")
 
         // 断线：后端自己重连、重新接入，快照到了画面重新对齐；之后的输出照常同步。
         client.disconnect()
@@ -110,9 +105,13 @@ final class RemoteEndToEndTests: XCTestCase {
         XCTAssertTrue(dropped, "断线后 Mac 应交还尺寸")
         let reattached = await waitUntil(10) { session.remoteController != nil }
         XCTAssertTrue(reattached, "后端应自动重连并重新接入")
-        await emit(try corpus("shell"), to: macBackend)
-        let resynced = await waitUntil { self.same(mac, phone) }
-        XCTAssertTrue(resynced, "重连后不一致：\(mac.snapshotFingerprint().differences(from: phone.snapshotFingerprint()))")
+        XCTAssertEqual(mac.size.cols, 50, "重新接入后还是手机的尺寸")
+        let shell = try TerminalCorpus.bytes("shell")
+        await emit(shell, to: macBackend)
+        fedBytes += shell.count
+        let resynced = await waitUntil { self.same(mac, phone, fedBytes: fedBytes) }
+        XCTAssertTrue(resynced, "重连后不一致：\(mac.mirrorDifferences(from: phone.shadow))")
+        XCTAssertEqual(phone.pump.currentStats.rejectedSnapshots, 0)
 
         // Mac 上的会话结束：手机端收到退出，而不是无限重连。
         var exitIterator = backend.exitStream.makeAsyncIterator()
@@ -167,30 +166,31 @@ final class RemoteEndToEndTests: XCTestCase {
             }
             try await group.waitForAll()
         }
-        var phones: [Terminal] = []
-        var pumps: [Task<Void, Never>] = []
+        var phones: [MirrorPhone] = []
         for backend in backends {
-            let phone = Terminal(delegate: phoneDelegate, options: TerminalOptions(cols: 64, rows: 20, scrollback: 200))
+            let phone = MirrorPhone(cols: 64, rows: 20)
+            phone.start(backend.outputItems)
             phones.append(phone)
-            pumps.append(Task { @MainActor in
-                for await chunk in backend.outputStream { phone.feed(byteArray: [UInt8](chunk)) }
-            })
         }
-        defer { pumps.forEach { $0.cancel() } }
+        defer { phones.forEach { $0.stop() } }
 
         for entry in sessions {
-            let mac = entry.session.terminalView.getTerminal()
-            XCTAssertEqual(mac.cols, 64)
-            XCTAssertEqual(mac.rows, 20)
+            let mac = entry.session.shadow
+            XCTAssertEqual(mac.size.cols, 64)
+            XCTAssertEqual(mac.size.rows, 20)
             XCTAssertNotNil(entry.session.remoteController, "每个终端都被接管")
         }
+        var texts: [Data] = []
         for (index, entry) in sessions.enumerated() {
-            await entry.backend.emitOutput(Data("这是第 \(index) 个终端\r\n".utf8))
+            let text = Data("这是第 \(index) 个终端\r\n".utf8)
+            texts.append(text)
+            await entry.backend.emitOutput(text)
         }
         for (index, entry) in sessions.enumerated() {
-            let mac = entry.session.terminalView.getTerminal()
-            let mirrored = await waitUntil { self.same(mac, phones[index]) }
-            XCTAssertTrue(mirrored, "第 \(index) 个终端画面不一致")
+            let mac = entry.session.shadow
+            let mirrored = await waitUntil { self.same(mac, phones[index], fedBytes: texts[index].count) }
+            XCTAssertTrue(mirrored, "第 \(index) 个终端画面不一致：\(mac.mirrorDifferences(from: phones[index].shadow))")
+            XCTAssertEqual(phones[index].shadow.recentLines(1).lines, ["这是第 \(index) 个终端"], "画面不串台")
         }
         for backend in backends { await backend.close() }
         let released = await waitUntil { sessions.allSatisfy { $0.session.remoteController == nil } }

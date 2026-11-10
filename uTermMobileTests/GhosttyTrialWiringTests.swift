@@ -22,7 +22,7 @@ final class GhosttyTrialWiringTests: XCTestCase {
         let connected = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(connected)
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "surface 没建起来或没接上字节")
 
@@ -75,7 +75,7 @@ final class GhosttyTrialWiringTests: XCTestCase {
         let connected = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(connected)
         let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
         }
         XCTAssertTrue(ready, "surface 没建起来或没接上字节")
         let transport = try XCTUnwrap(handles.latest)
@@ -157,7 +157,7 @@ final class GhosttyTrialWiringTests: XCTestCase {
                                                frame: CGRect(x: inset, y: half, width: size.width - inset * 2, height: half))
             window.addSubview(bridge.view)
             let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-                bridge.isSurfaceReady && bridge.router.isFeedingSurface
+                bridge.isSurfaceReady && bridge.outputPump.isFeedingSurface
             }
             XCTAssertTrue(ready)
             bridge.feed(Data(sample.utf8))

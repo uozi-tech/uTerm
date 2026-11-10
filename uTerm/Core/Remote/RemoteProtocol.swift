@@ -245,6 +245,10 @@ nonisolated struct RemoteMessage: Equatable, Sendable {
         /// 全量快照，之后只发变了的会话。中途接入的设备看不到早先的 OSC 7501，所以状态由 Mac 记着、推过来，
         /// 不靠设备自己解析镜像字节。只发给 `features` 带 `program-status` 的设备。
         case programStatus = 46
+        /// 终端画面的整屏快照（终端通道，Mac → 设备）：接入时、改尺寸后、对端积压过多时发，之后的 `output` 接着它。
+        /// 负载 = 1 字节标志（`RemoteTerminalSnapshotPiece`）+ 影子终端二进制快照的一段。快照可以很大，切成多条发。
+        /// 只有两端终端引擎版本相同（握手里的 `terminalEngine`）才会接入成功，所以设备一定解得开。
+        case terminalSnapshot = 47
     }
 
     var kind: Kind
@@ -500,6 +504,36 @@ nonisolated struct RemoteAttachResult: Codable, Equatable, Sendable {
 
 /// 明文握手消息（加密信道建立之前双方各发一条）。整段字节进入握手记录哈希，
 /// 所以任何一个字段被篡改，两端算出的会话密钥就不一样，第一帧密文即校验失败。
+/// `terminalSnapshot` 负载开头的那个字节。
+nonisolated enum RemoteTerminalSnapshotPiece {
+    /// 一张新快照的第一段：接收端丢掉手上没收完的那张。
+    static let first: UInt8 = 1
+    /// 最后一段：收齐了，可以还原。
+    static let last: UInt8 = 2
+
+    static func encode(_ data: Data, isFirst: Bool, isLast: Bool) -> Data {
+        var payload = Data(capacity: data.count + 1)
+        payload.append((isFirst ? first : 0) | (isLast ? last : 0))
+        payload.append(data)
+        return payload
+    }
+
+    static func decode(_ payload: Data) -> (data: Data, isFirst: Bool, isLast: Bool)? {
+        guard let flags = payload.first else { return nil }
+        return (Data(payload.dropFirst()), flags & first != 0, flags & last != 0)
+    }
+}
+
+/// 两端终端引擎不是同一个版本时拒绝镜像：快照是引擎的二进制格式，画面也要同一个引擎才一致。
+nonisolated enum RemoteTerminalEngine {
+    static let mismatchMessage = "两端的终端引擎版本不同，没法镜像终端。把两端的 uTerm 更新到同一版本"
+
+    /// 对端握手里报的引擎版本和本机一样才行；老版本不报，同样不行。
+    static func matches(_ remote: String?) -> Bool {
+        remote == TerminalEngineVersion.current
+    }
+}
+
 nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     var version: Int
     var deviceID: UUID
@@ -519,6 +553,9 @@ nonisolated struct RemoteHello: Codable, Equatable, Sendable {
     /// 对端是什么设备（`RemoteDevicePlatform` 的原始值），只作展示。用字符串不用枚举：以后多一种取值，
     /// 老版本解不出整条握手消息。老版本不带这个键。
     var platform: String? = nil
+    /// 终端引擎的版本（`TerminalEngineVersion.current`）。终端镜像的快照是引擎的二进制格式，两端不同就不接入终端
+    /// （见 `RemoteTerminalEngine`）；远程桌面不受影响。
+    var terminalEngine: String? = nil
 
     func supports(_ feature: String) -> Bool {
         features?.contains(feature) ?? false

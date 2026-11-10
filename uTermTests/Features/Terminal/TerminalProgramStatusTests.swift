@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import UDesignKit
 import UserNotifications
 import XCTest
@@ -23,7 +22,7 @@ final class TerminalProgramStatusTests: XCTestCase {
     }
 
     private func osc(_ code: Int, _ payload: String) {
-        session.terminalView.feed(text: "\u{1b}]\(code);\(payload)\u{1b}\\")
+        session.feedOutput(text: "\u{1b}]\(code);\(payload)\u{1b}\\")
     }
 
     private func base64(_ text: String) -> String {
@@ -95,19 +94,22 @@ final class TerminalProgramStatusTests: XCTestCase {
 
     func testFocusGainAcknowledgesResult() throws {
         osc(7501, "state=done:app=codex")
-        let view = try XCTUnwrap(session.terminalView as? CopyableTerminalView)
-        view.hasFocus = true
+        XCTAssertTrue(session.ghostty.view.becomeFirstResponder())
         XCTAssertNil(session.programStatus)
     }
 
     /// 从别的 app 切回来：焦点一直在这个终端上，只有窗口重新成为 key。
     func testWindowBecomingKeyAcknowledgesResult() throws {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-                              styleMask: [.titled], backing: .buffered, defer: true)
+        // Ghostty 的视图在「窗口成为 key」时会核对窗口真的是 key；测试宿主不一定在前台，用一个自称 key 的窗口。
+        final class KeyWindow: NSWindow {
+            override var isKeyWindow: Bool { true }
+        }
+        let window = KeyWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                               styleMask: [.titled], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView?.addSubview(session.terminalView)
-        XCTAssertTrue(window.makeFirstResponder(session.terminalView))
+        window.contentView?.addSubview(session.ghostty.view)
+        XCTAssertTrue(window.makeFirstResponder(session.ghostty.view))
 
         session.applyProgramStatus(.report(id: "", record: ProgramStatusRecord(state: .done)), isLooking: false)
         XCTAssertEqual(session.programStatus?.state, .done)
@@ -129,11 +131,10 @@ final class TerminalProgramStatusTests: XCTestCase {
         XCTAssertEqual(session.programStatus?.state, .done)
     }
 
-    /// 接管 OSC 133 后，SwiftTerm 内置的语义提示符处理不能断。
+    /// 收 OSC 133 的事件之外，引擎自己的语义提示符处理不能断（光标在提示符里）。
     func testSemanticPromptStillReachesSwiftTerm() {
         osc(133, "A")
-        let terminal = session.terminalView.getTerminal()
-        XCTAssertNotNil(terminal.activeSemanticPromptOrigin)
+        XCTAssertTrue(session.shadow.isCursorAtPrompt)
     }
 
     func testDisconnectClearsStatus() {
@@ -171,12 +172,12 @@ final class TerminalProgramStatusTests: XCTestCase {
     }
 
     func testNotificationTextDropsControlCharacters() {
-        XCTAssertEqual(TerminalAttention.osc9(Array("a\u{7f}b".utf8)[...]),
+        XCTAssertEqual(TerminalAttention.notification(title: "", body: "a\u{7f}b"),
                        TerminalAttention(title: "终端通知", body: "ab"))
     }
 
     func testBlankNotificationIsIgnored() {
-        XCTAssertNil(TerminalAttention.osc9(Array("   ".utf8)[...]))
+        XCTAssertNil(TerminalAttention.notification(title: "", body: "   "))
     }
 
     // MARK: 限频
@@ -199,7 +200,7 @@ final class TerminalProgramStatusTests: XCTestCase {
         let tab = TerminalTab(payload: pane)
         XCTAssertEqual(TerminalArea.descriptor(for: tab, profiles: [:]).icon, .none)
 
-        pane.session.terminalView.feed(text: "\u{1b}]7501;state=blocked:app=claude-code:kind=question\u{1b}\\")
+        pane.session.feedOutput(text: "\u{1b}]7501;state=blocked:app=claude-code:kind=question\u{1b}\\")
 
         let descriptor = TerminalArea.descriptor(for: tab, profiles: [:])
         XCTAssertEqual(descriptor.icon, .none, "程序状态也只由圆点表达")
@@ -257,13 +258,13 @@ final class TerminalProgramStatusTests: XCTestCase {
         XCTAssertEqual(center.subtitle(for: session), "zsh 2")
 
         let long = "alice@web-1: /var/www/releases/2026/current/public/assets"
-        session.terminalView.feed(text: "\u{1b}]0;\(long)\u{07}")
+        session.feedOutput(text: "\u{1b}]0;\(long)\u{07}")
         XCTAssertEqual(center.subtitle(for: session), long, "标签才截短，通知放全文")
 
         session.receiveShellTitle("第一行\n伪造的第二行")
         XCTAssertEqual(center.subtitle(for: session), "第一行伪造的第二行")
 
-        session.terminalView.feed(text: "\u{1b}]0;   \u{07}")
+        session.feedOutput(text: "\u{1b}]0;   \u{07}")
         XCTAssertEqual(center.subtitle(for: session), "zsh 2", "程序清掉标题后回到原名")
     }
 

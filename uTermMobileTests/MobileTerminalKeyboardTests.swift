@@ -171,7 +171,7 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         XCTAssertTrue(connected)
         let fake = try XCTUnwrap(handles.issued.first)
         let fed = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            a.terminal.isSurfaceReady && a.terminal.router.isFeedingSurface
+            a.terminal.isSurfaceReady && a.terminal.outputPump.isFeedingSurface
         }
         XCTAssertTrue(fed, "surface 没接上字节")
 
@@ -281,7 +281,7 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         let connected = await MobileFakeTerminal.waitUntilConnected(a)
         XCTAssertTrue(connected)
         let fed = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
-            a.terminal.isSurfaceReady && a.terminal.router.isFeedingSurface
+            a.terminal.isSurfaceReady && a.terminal.outputPump.isFeedingSurface
         }
         XCTAssertTrue(fed, "surface 没接上字节")
         let fake = try XCTUnwrap(handles.issued.first)

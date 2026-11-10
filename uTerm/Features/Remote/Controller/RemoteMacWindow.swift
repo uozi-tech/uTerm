@@ -298,7 +298,7 @@ private struct RemoteTerminalPaneView: View {
             case .idle, .connecting:
                 RemoteMacProgressView(text: String(localized: "正在接入…"))
             case .connected:
-                TerminalHostView(terminalView: pane.session.terminalView, isActive: activePaneGate?.isActive ?? true)
+                GhosttyHostView(session: pane.session, isActive: activePaneGate?.isActive ?? true)
             case .failed(let message):
                 RemoteMacStateView(systemImage: "exclamationmark.triangle", title: String(localized: "无法接入这个终端"),
                                    detail: message) {

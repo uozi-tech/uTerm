@@ -72,7 +72,7 @@ final class TerminalSessionTests: XCTestCase {
         let session = TerminalSession()
         let backend = MockBackend()
         await session.connect(using: backend)
-        session.send(source: session.terminalView, data: ArraySlice(Array("ls\n".utf8)))
+        session.sendHostBytes(Data("ls\n".utf8))
         try? await Task.sleep(for: .milliseconds(50))
         let written = await backend.writtenData
         XCTAssertEqual(written.map { String(decoding: $0, as: UTF8.self) }.joined(), "ls\n")

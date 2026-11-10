@@ -93,7 +93,7 @@ final class GhosttyBackgroundTests: XCTestCase {
         var restored = false
         defer { if !restored { enterForeground(bridge) } }
         XCTAssertTrue(bridge.isAppInBackground)
-        XCTAssertFalse(bridge.router.isFeedingSurface, "进后台后 surface 不该再吃字节")
+        XCTAssertFalse(bridge.outputPump.isFeedingSurface, "进后台后 surface 不该再吃字节")
 
         // 后台：400 帧带标题（远超 app mailbox 的 64 格），再来 2 MB 洪流，最后清屏画一屏确定的内容 + 标记 + 几帧。
         var maxPending = 0
@@ -121,7 +121,7 @@ final class GhosttyBackgroundTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(20))
         }
         let pendingInBackground = bridge.session.pendingOutputByteCount
-        let background = bridge.router.currentStats
+        let background = bridge.outputPump.currentStats
         XCTAssertTrue(bridge.isAppInBackground, "假后台阶段里 bridge 被翻回了前台（系统发了真的 willEnterForeground？）")
         XCTAssertEqual(background.replays, 0, "后台阶段不该有回放")
         print("GHBG background: sent=\(sent) max-pending=\(maxPending) pending-after-settle=\(pendingInBackground) "
@@ -144,7 +144,7 @@ final class GhosttyBackgroundTests: XCTestCase {
             else { try await Task.sleep(for: .milliseconds(2)) }
         }
         let catchUpMS = caughtUpAt.map { ($0 - back) * 1000 }
-        let foreground = bridge.router.currentStats
+        let foreground = bridge.outputPump.currentStats
         print("GHBG foreground catch-up: \(catchUpMS.map { String(format: "%.0f ms", $0) } ?? "never") "
             + "replays=\(foreground.replays) snapshot=\(foreground.lastSnapshotBytes)B replay=\(foreground.lastReplayBytes)B "
             + String(format: "build=%.1fms", foreground.lastReplayBuildSeconds * 1000)
@@ -154,7 +154,7 @@ final class GhosttyBackgroundTests: XCTestCase {
         XCTAssertEqual(foreground.replays, 1, "回前台应当回放一次影子的快照")
         XCTAssertNil(foreground.lastReplayError)
         XCTAssertTrue(foreground.lastReplayVerified, "回放流发出去之前的自查没过")
-        XCTAssertTrue(bridge.router.isFeedingSurface)
+        XCTAssertTrue(bridge.outputPump.isFeedingSurface)
         assertSurfaceMatchesShadow(host, "回前台后")
         // 回放带回了标题（一条），没有把后台那 400 多条逐条补发。
         let titleOK = await MobileFakeTerminal.waitUntil(timeout: .seconds(2)) { titles.last.contains("第 502 帧") }
@@ -218,7 +218,7 @@ final class GhosttyBackgroundTests: XCTestCase {
             bridge.session.pendingOutputByteCount == 0 && host.viewportText.contains(marker)
         }
         XCTAssertTrue(caughtUp, "回前台没补出最新画面")
-        let stats = bridge.router.currentStats
+        let stats = bridge.outputPump.currentStats
         let naive = GhosttyViewportDiff.trimmedLines(host.viewportText) == GhosttyViewportDiff.trimmedLines(bridge.shadow.viewportText())
         print("GHBG wide: grid=\(cols)x\(host.grid.rows) naive-equal=\(naive) replays=\(stats.replays) unwrapped=\(stats.lastReplayUnwrapped) "
             + "verified=\(stats.lastReplayVerified) snapshot=\(stats.lastSnapshotBytes)B "
@@ -239,9 +239,9 @@ final class GhosttyBackgroundTests: XCTestCase {
         enterBackground(bridge)
         try await Task.sleep(for: .milliseconds(100))
         enterForeground(bridge)
-        bridge.router.waitForCatchUp()
-        XCTAssertEqual(bridge.router.currentStats.replays, 0)
-        XCTAssertTrue(bridge.router.isFeedingSurface)
+        bridge.outputPump.waitForCatchUp()
+        XCTAssertEqual(bridge.outputPump.currentStats.replays, 0)
+        XCTAssertTrue(bridge.outputPump.isFeedingSurface)
         host.feedAndWait("echo again\r\n")
         XCTAssertTrue(host.viewportText.contains("echo again"))
         assertSurfaceMatchesShadow(host, "没回放")
@@ -284,7 +284,7 @@ final class GhosttyBackgroundTests: XCTestCase {
         let background = await replies { backend.yield(Data(queries.utf8)) }
         enterForeground(bridge)
         restored = true
-        bridge.router.waitForCatchUp()
+        bridge.outputPump.waitForCatchUp()
         bridge.session.waitForPendingOutput()
         // 回放本身不该引出应答。
         try await Task.sleep(for: .milliseconds(400))
@@ -329,7 +329,7 @@ final class GhosttyBackgroundTests: XCTestCase {
             bridge.session.pendingOutputByteCount == 0 && host.viewportText.contains(marker)
         }
         sampler.stop()
-        let stats = bridge.router.currentStats
+        let stats = bridge.outputPump.currentStats
         print("GHBG gate: payload=\(payload.count) max-pending-while-blocked=\(maxWhileBlocked) max-pending=\(sampler.max) waits=\(stats.backpressureWaits)")
         XCTAssertTrue(done, "主线程恢复后输出没解析完")
         XCTAssertGreaterThan(stats.backpressureWaits, 0, "surface 积压时入站应当停下等过")

@@ -87,7 +87,6 @@ final class DefaultsKeyTests: XCTestCase {
         (DefaultsKey.remoteDebugEndpoint, "RemoteDebugEndpoint"),
         (DefaultsKey.remoteDebugPathMatrix, "RemoteDebugPathMatrix"),
         (DefaultsKey.debugLayoutDiagnostics, "debug.layoutDiagnostics"),
-        (DefaultsKey.terminalGhosttyRenderer, "debug.terminalGhosttyRenderer"),
         // 系统定义
         (DefaultsKey.appleActionOnDoubleClick, "AppleActionOnDoubleClick"),
         (DefaultsKey.screenLayoutAdjustOnWindowMove, "NSScreenLayoutAdjustOnWindowMove"),

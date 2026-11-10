@@ -1,4 +1,3 @@
-import SwiftTerm
 import AppKit
 import XCTest
 @testable import uTerm
@@ -438,26 +437,100 @@ final class TerminalHeldReplayTests: XCTestCase {
             output: output, endOffset: UInt64(output.count))
     }
 
-    /// 喂「检查点 + 之后的字节」应该和一直连着喂到底得到一模一样的终端。
-    func test_checkpoint_plus_tail_matches_uninterrupted_terminal() async {
-        let head = Array("\u{1b}[31mred line\u{1b}[0m\r\n第二行 中文\r\n\u{1b}[?1049h\u{1b}[2;3Halt screen".utf8)
-        let tail = Array("\u{1b}[?1049l\r\nback on main\r\n\u{1b}[1mbold".utf8)
+    private let head = "\u{1b}]0;build\u{07}\u{1b}[31mred line\u{1b}[0m\r\n第二行 中文\r\n\u{1b}[?1049h\u{1b}[2;3Halt screen"
+    private let tail = "\u{1b}[?1049l\r\nback on main\r\n\u{1b}[1mbold"
 
+    /// 喂「检查点 + 之后的字节」应该和一直连着喂到底得到一模一样的终端。检查点是影子终端的二进制快照
+    /// （`TerminalCheckpointBlob`），还原只动影子终端；画面等标签露出、surface 建好时由输出泵回放。
+    func test_checkpoint_plus_tail_matches_uninterrupted_terminal() async throws {
         let original = TerminalSession()
-        let terminal = original.terminalView.getTerminal()
-        terminal.resize(cols: 83, rows: 25)
-        original.terminalView.feed(byteArray: head[...])
-        let blob = terminal.snapshotSequence(scrollbackLimit: 1000)
-        original.terminalView.feed(byteArray: tail[...])
+        original.shadow.resize(cols: 83, rows: 25)
+        original.feedOutput(text: head)
+        let blob = TerminalCheckpointBlob.encode(snapshot: try original.shadow.snapshot())
+        original.feedOutput(text: tail)
 
         let restored = TerminalSession()
-        let backend = MockHeldBackend(replay: replay(blob: blob, cols: 83, rows: 25, output: tail))
+        let backend = MockHeldBackend(replay: replay(blob: blob, cols: 83, rows: 25, output: Array(tail.utf8)))
         await restored.connect(using: backend)
         XCTAssertEqual(restored.connectionState, .connected)
-        let restoredTerminal = restored.terminalView.getTerminal()
-        XCTAssertEqual(restoredTerminal.cols, 83)
-        XCTAssertEqual(restoredTerminal.rows, 25)
-        XCTAssertEqual(restoredTerminal.snapshotFingerprint().differences(from: terminal.snapshotFingerprint()), [:])
+        XCTAssertEqual(restored.shadow.size.cols, 83)
+        XCTAssertEqual(restored.shadow.size.rows, 25)
+        XCTAssertEqual(restored.shadow.mirrorDifferences(from: original.shadow), [:])
+        XCTAssertEqual(restored.shadow.title, "build", "标题在快照里，跟着回来")
+        XCTAssertFalse(restored.shadow.isOnAlternateScreen)
+        XCTAssertNil(restored.shellTitle, "回放是历史：不当成这次连接上程序刚设的标题")
+        restored.dispose()
+        original.dispose()
+    }
+
+    /// 检查点从备用屏上存的（vim / Claude 全屏开着时退出）：接回来还在备用屏上，主屏的内容也还在底下。
+    func test_checkpoint_taken_on_the_alternate_screen_restores_both_screens() async throws {
+        let original = TerminalSession()
+        original.feedOutput(text: head)
+        XCTAssertTrue(original.shadow.isOnAlternateScreen)
+        let blob = TerminalCheckpointBlob.encode(snapshot: try original.shadow.snapshot())
+        let size = original.shadow.size
+
+        let restored = TerminalSession()
+        let backend = MockHeldBackend(replay: replay(blob: blob, cols: UInt16(size.cols), rows: UInt16(size.rows), output: []))
+        await restored.connect(using: backend)
+        XCTAssertTrue(restored.shadow.isOnAlternateScreen)
+        XCTAssertEqual(restored.shadow.mirrorDifferences(from: original.shadow), [:])
+        // 程序退出备用屏：主屏上原来的两行还在。
+        restored.feedOutput(text: "\u{1b}[?1049l")
+        original.feedOutput(text: "\u{1b}[?1049l")
+        XCTAssertEqual(restored.shadow.recentLines(5).lines, ["red line", "第二行 中文"])
+        XCTAssertEqual(restored.shadow.mirrorDifferences(from: original.shadow), [:])
+        restored.dispose()
+        original.dispose()
+    }
+
+    /// 检查点不是这个引擎版本存的（升级前留下的、旧的 VT 流检查点）：丢弃，只回放 holder 里那段字节，
+    /// 尺寸先回到存检查点时的行列数（那段字节是按它产生的）。
+    func test_checkpoint_from_another_engine_is_discarded_and_only_the_tail_replays() async throws {
+        let original = TerminalSession()
+        original.feedOutput(text: "old history\r\n")
+        let snapshot = try original.shadow.snapshot()
+        original.dispose()
+
+        for blob in [TerminalCheckpointBlob.encode(snapshot: snapshot, engine: "ghostty-ffffffff+p0000/snapshot-9"),
+                     Array("\u{1b}c\u{1b}[2Jold history\r\n".utf8), Array(snapshot)] {
+            let restored = TerminalSession()
+            let backend = MockHeldBackend(replay: replay(blob: blob, cols: 83, rows: 25, output: Array("tail only\r\n".utf8)))
+            await restored.connect(using: backend)
+            XCTAssertEqual(restored.connectionState, .connected)
+            XCTAssertEqual(restored.shadow.size.cols, 83)
+            XCTAssertEqual(restored.shadow.size.rows, 25)
+            XCTAssertEqual(restored.shadow.recentLines(10).lines, ["tail only"])
+            restored.dispose()
+        }
+    }
+
+    /// 接回之后镜像订阅者（手机一直连着等）拿到的是还原后的画面：影子是绕过输出泵改的，要重发快照。
+    func test_restore_resends_the_snapshot_to_mirror_subscribers() async throws {
+        let original = TerminalSession()
+        original.shadow.resize(cols: 83, rows: 25)
+        original.feedOutput(text: head)
+        let blob = TerminalCheckpointBlob.encode(snapshot: try original.shadow.snapshot())
+        original.feedOutput(text: tail)
+
+        let restored = TerminalSession()
+        let subscriber = restored.mirrorTap.subscribe(id: UUID()) {}
+        _ = subscriber.take(maxBytes: .max)   // 接回之前的那张（空屏）
+        let backend = MockHeldBackend(replay: replay(blob: blob, cols: 83, rows: 25, output: Array(tail.utf8)))
+        await restored.connect(using: backend)
+
+        let phone = MirrorPhone(cols: 80, rows: 24)
+        let assembly = SnapshotAssembly()
+        while let chunk = subscriber.take(maxBytes: .max) {
+            switch chunk {
+            case .snapshot(let piece, let isFirst, let isLast):
+                if let snapshot = assembly.append(piece, isFirst: isFirst, isLast: isLast) { phone.pump.applySnapshot(snapshot) }
+            case .output(let bytes):
+                phone.pump.route(bytes)
+            }
+        }
+        XCTAssertEqual(phone.shadow.mirrorDifferences(from: original.shadow), [:])
         restored.dispose()
         original.dispose()
     }
@@ -475,11 +548,11 @@ final class TerminalHeldReplayTests: XCTestCase {
         XCTAssertEqual(written, [], "回放期间不该往 shell 写任何东西")
         XCTAssertEqual(pasteboard.changeCount, before, "回放期间不该写剪贴板")
 
-        // 回放结束后恢复正常应答。
-        session.terminalView.feed(byteArray: Array("\u{1b}[6n".utf8)[...])
+        // 回放结束后恢复正常应答（surface 还没建，由影子终端答）。
+        session.feedOutput(text: "\u{1b}[6n")
         try? await Task.sleep(for: .milliseconds(100))
         let afterReplay = await backend.written
-        XCTAssertFalse(afterReplay.isEmpty, "回放结束后的查询要回答")
+        XCTAssertEqual(afterReplay, [Data("\u{1b}[1;1R".utf8)], "回放结束后的查询要回答")
         session.dispose()
     }
 
@@ -504,7 +577,6 @@ final class TerminalHeldReplayTests: XCTestCase {
         let session = TerminalSession()
         let backend = MockHeldBackend(replay: replay(blob: [], cols: 80, rows: 24, hasGap: true, output: Array("tail".utf8)))
         await session.connect(using: backend)
-        // 读屏时宽字符后面带一个占位单元。
         let text = session.snapshotScreen(lines: 50).lines.joined(separator: "\n").filter { !$0.isWhitespace && $0 != "\0" }
         XCTAssertTrue(text.contains("较早内容已丢弃"), text)
         XCTAssertTrue(text.contains("tail"), text)
@@ -597,4 +669,3 @@ final class LocalShellRestorerTests: XCTestCase {
         await restorer.finished()
     }
 }
-

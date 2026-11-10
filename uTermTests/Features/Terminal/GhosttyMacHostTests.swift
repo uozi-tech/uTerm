@@ -53,7 +53,7 @@ final class GhosttyMacHostTests: XCTestCase {
         let rect = NSRect(x: 0, y: 0, width: 800, height: 500)
         let session = TerminalSession()
         let backend = MockBackend()
-        let bridge = session.enableGhostty()
+        let bridge = session.ghostty
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
         let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
@@ -83,15 +83,15 @@ final class GhosttyMacHostTests: XCTestCase {
         let rig = try await makeRig()
         defer { rig.close() }
         let original = try XCTUnwrap(rig.bridge.grid)
-        let shadow = rig.session.terminalView.getTerminal()
+        let shadow = rig.session.shadow
 
         for (cols, rows) in [(57, 23), (89, 32), (62, 30), (40, 20), (61, 29)] {
             rig.session.pinRemoteGrid(cols: cols, rows: rows, controller: "测试 iPhone")
             rig.layout()
             let pinned = await waitUntil(3) { rig.bridge.grid?.cols == cols && rig.bridge.grid?.rows == rows }
             XCTAssertTrue(pinned, "钉 \(cols)×\(rows)，Ghostty 的网格是 \(rig.grid)")
-            XCTAssertEqual(shadow.cols, cols, "影子终端的列数")
-            XCTAssertEqual(shadow.rows, rows, "影子终端的行数")
+            XCTAssertEqual(shadow.size.cols, cols, "影子终端的列数")
+            XCTAssertEqual(shadow.size.rows, rows, "影子终端的行数")
             let told = await waitUntil(2) {
                 let last = await rig.backend.resizes.last
                 return last?.cols == UInt16(cols) && last?.rows == UInt16(rows)
@@ -121,14 +121,14 @@ final class GhosttyMacHostTests: XCTestCase {
         XCTAssertEqual(rig.view.frame.maxY, rig.container.bounds.height, accuracy: 0.5, "光标在屏幕顶上：顶边贴着窗格顶")
 
         await emit((1...80).map { "line \($0)\r\n" }.joined(), to: rig.backend)
-        let atBottom = await waitUntil(3) { rig.session.terminalView.getTerminal().getCursorLocation().y == 59 }
+        let atBottom = await waitUntil(3) { rig.session.shadow.cursor.y == 59 }
         XCTAssertTrue(atBottom, "80 行输出后光标应当在最后一行")
         await sleep(0.1)
         rig.container.layoutSubtreeIfNeeded()
         XCTAssertEqual(rig.view.frame.minY, 6, accuracy: 0.5, "光标到了屏幕底：底边贴着窗格底")
 
         await emit("\u{1B}[2J\u{1B}[H> ", to: rig.backend)
-        let atTop = await waitUntil(3) { rig.session.terminalView.getTerminal().getCursorLocation().y == 0 }
+        let atTop = await waitUntil(3) { rig.session.shadow.cursor.y == 0 }
         XCTAssertTrue(atTop)
         await sleep(0.1)
         rig.container.layoutSubtreeIfNeeded()

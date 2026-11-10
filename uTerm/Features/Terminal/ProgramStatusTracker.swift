@@ -1,8 +1,7 @@
 import Foundation
-import SwiftTerm
 
 /// 一条终端会话的程序状态：收 OSC 7501（状态报告）与 OSC 133 A（新提示符）后怎么改状态、要不要回答、
-/// 要不要提醒人。两端共用：Mac 的 `TerminalSession` 与 iOS 的 `MobileTerminalController` 各持一份，
+/// 要不要提醒人。消息来自影子终端的事件（`ShadowTerminal.Event.programStatus` / `.promptStarted`）。两端共用：Mac 的 `TerminalSession` 与 iOS 的 `MobileTerminalController` 各持一份，
 /// 只有「此刻有没有人在看」「怎么提醒」由各自平台决定。
 nonisolated struct ProgramStatusTracker: Equatable, Sendable {
     private(set) var board = ProgramStatusBoard()
@@ -61,31 +60,6 @@ nonisolated struct ProgramStatusTracker: Equatable, Sendable {
     /// 连接没了，上面跑的程序也不再有状态可言。
     mutating func reset() {
         board.clear(id: nil)
-    }
-}
-
-/// 在终端上注册程序状态要用的 OSC 处理器。两端同一套：输出只在主线程喂给 SwiftTerm，回调同步到达主线程。
-nonisolated enum ProgramStatusOSC {
-    /// - `onMessage`：一条解析好的 OSC 7501。
-    /// - `onPrompt`：主屏幕上出现了新的 shell 提示符（OSC 133 A）。SwiftTerm 内置的 133 处理照常执行。
-    @MainActor
-    static func install(on terminal: Terminal,
-                        onMessage: @escaping @MainActor (ProgramStatusMessage) -> Void,
-                        onPrompt: @escaping @MainActor () -> Void) {
-        terminal.registerOscHandler(code: 7501) { data in
-            MainActor.assumeIsolated {
-                guard let message = ProgramStatusMessage.parse(data) else { return }
-                onMessage(message)
-            }
-        }
-        // SwiftTerm 内置了 133 的处理，注册后要自己转回去。
-        terminal.registerOscHandler(code: 133) { [weak terminal] data in
-            MainActor.assumeIsolated {
-                guard let terminal else { return }
-                terminal.oscSemanticPrompt(data)
-                if data.first == UInt8(ascii: "A"), !terminal.isCurrentBufferAlternate { onPrompt() }
-            }
-        }
     }
 }
 
