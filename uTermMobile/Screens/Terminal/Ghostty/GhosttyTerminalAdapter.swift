@@ -10,6 +10,8 @@ import UIKit
 // 2. `GhosttyTerminalBridge`：host-managed IO —— 后端字节 → `InMemoryTerminalSession.receive`，
 //    用户输入 / 网格尺寸 → 共享的 `TerminalInputChannel`（同一条 FIFO，和 SwiftTerm 路径一样）；
 // 3. `TerminalKeyBar` 的键怎么落到 GhosttyKit 的按键 API（`GhosttyKeyBarMapping`）。
+// 后来加的（M10，iOS 后台）：每条终端带一个影子终端（`ShadowTerminal`，libghostty-vt），输出经 `GhosttyOutputRouter`
+// 分流——App 在后台时只喂影子，回前台把影子的快照回放进 surface。原因与读数见 docs/ghostty-eval/measure-ios.md 的 M10。
 //
 // 命名：GhosttyTerminal 也导出了 `TerminalKey` / `TerminalColorScheme` / `TerminalController` / `TerminalTheme`，
 // 本模块里同名的 uTerm 类型优先，所以 GhosttyKit 的一律写全 `GhosttyTerminal.`。
@@ -95,15 +97,20 @@ final class MGhosttyTerminalView: UITerminalView {
 /// 一条 GhosttyKit 终端：视图 + host-managed 会话 + uTerm 的输入通道。
 ///
 /// 字节流方向：
-/// - 远端 → 终端：`feed(_:)` / `bind(_:)` 直接 `session.receive`。GhosttyKit 在自己的串行队列上解析，
-///   按 vsync 在主线程画（`TerminalSurfaceCoordinator` 的 display link），所以**不需要** `TerminalOutputPump`
-///   与 `TerminalFlushPacing`：那两样是为了不让 SwiftTerm 在主线程上解析、画太多帧。
+/// - 远端 → 终端：`feed(_:)` / `bind(_:)` 经 `router` 分流：先进影子终端（同步解析），App 在前台时再 `session.receive`。
+///   GhosttyKit 在自己的串行队列上解析，按 vsync 在主线程画（`TerminalSurfaceCoordinator` 的 display link），所以**不需要**
+///   `TerminalOutputPump` 与 `TerminalFlushPacing`：那两样是为了不让 SwiftTerm 在主线程上解析、画太多帧。
+///   App 在后台时 surface 不吃字节（GhosttyKit 后台不 tick，标题这类消息会把解析卡死），回前台由影子的快照回放补齐。
 /// - 终端 → 远端：键盘 / 粘贴 / 查询应答从 `InMemoryTerminalSession` 的 write 回调出来（可能在任意线程），
 ///   跳回主线程进 `TerminalInputChannel`；网格尺寸走 resize 回调进同一个通道（同轮合并、相同不重发）。
 @MainActor
 final class GhosttyTerminalBridge {
     let view: MGhosttyTerminalView
     let session: InMemoryTerminalSession
+    /// 影子终端：和 surface 吃同一份字节，后台时只有它在吃。读状态、拍快照都找它。
+    let shadow: ShadowTerminal
+    /// 输出分流（影子永远收、surface 只在前台收）与入站的闸门。
+    let router: GhosttyOutputRouter
     let input = TerminalInputChannel()
     /// 最近一次 resize 回调报来的网格（探针读它）。
     private(set) var grid: (cols: Int, rows: Int)?
@@ -114,6 +121,16 @@ final class GhosttyTerminalBridge {
     /// 每一块 write 回调给出的字节（探针读它，核按键编码）。nil = 不记。
     var inputLog: [Data]?
     private var ingress: Task<Void, Never>?
+    /// App 在不在后台（`didEnterBackground` → `willEnterForeground`，和 `MobileTerminalController` 同一对通知）。
+    private(set) var isAppInBackground = false
+    // nonisolated(unsafe)：只在主线程设，deinit 里读。
+    private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
+
+    /// 回滚上限，surface 与影子显式设成同一个值（M4 的前提：只设行数时 vt 的默认字节上限会把 1 万行裁到约 1 千行；
+    /// 两边不一样的话回放进 surface 的历史长度和它自己攒的不同）。字节按「行数 × 1 KB」给（计划第 4 步的算法）。
+    /// 另一个作用是给回前台的回放封顶：1 万行回滚拍快照 + 出回放流 + 自查，Duo 上热着跑约 3 ms，回前台那一下（冷）约 15 ms。
+    nonisolated static let scrollbackLines = 10_000
+    nonisolated static let scrollbackBytes = scrollbackLines * 1000
 
     /// Ghostty 的 `font-size` 在 iOS 上按 96 dpi 换算（实测 11 → 格子 8.93×19.49pt，SwiftTerm 11pt SF Mono 是 6.78×14.07pt，
     /// 宽高都差 ≈4/3）。要和 SwiftTerm 的 11pt 一样大，传 11 × 72/96。
@@ -153,6 +170,9 @@ final class GhosttyTerminalBridge {
             //   在线性空间混合，dim 字会亮一截。
             builder.withCustom("alpha-blending", "native")
             builder.withCustom("faint-opacity", "0.5")
+            // 回滚上限：与影子终端同一个值（见 `scrollbackLines`）。不设的话是 Ghostty 的默认 50 MB、不限行数。
+            builder.withCustom("scrollback-limit-lines", "\(scrollbackLines)")
+            builder.withCustom("scrollback-limit-bytes", "\(scrollbackBytes)")
         }
     }
 
@@ -172,13 +192,33 @@ final class GhosttyTerminalBridge {
         }
     }
 
+    /// 影子终端的配置：和 `makeController` 给 surface 的配置对得上的那几项。
+    private static func shadowOptions() -> ShadowTerminal.Options {
+        var options = ShadowTerminal.Options(scrollbackLines: scrollbackLines, scrollbackBytes: scrollbackBytes)
+        options.cursorBlink = TerminalCursorPreference.defaultBlink
+        // 后台时影子替 surface 答 XTVERSION；surface 答的是「ghostty <版本>」。
+        let info = ghostty_info()
+        if let version = info.version, info.version_len > 0 {
+            let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(version).assumingMemoryBound(to: UInt8.self),
+                                            count: Int(info.version_len))
+            options.versionReport = "ghostty " + String(decoding: bytes, as: UTF8.self)
+        }
+        return options
+    }
+
     init(controller: GhosttyTerminal.TerminalController, frame: CGRect = .zero) {
         let box = WeakBridgeBox()
-        session = InMemoryTerminalSession(
+        // 先按 80×24 建，surface 的终端报出真实网格后跟着改（见下面的 resize 回调）。
+        let shadow = ShadowTerminal(cols: 80, rows: 24, options: Self.shadowOptions())
+        let session = InMemoryTerminalSession(
             write: { data in
                 Task { @MainActor in box.bridge?.userInput(data) }
             },
             resize: { viewport in
+                // 影子跟着 surface 的终端自己报的尺寸走，而且就在这个回调里改、不绕主线程（M4 的前提：按视图尺寸算或者
+                // 晚一拍改，两边会在不同的字节位置换宽度，折行就对不上了）。
+                shadow.resize(cols: viewport.columns, rows: viewport.rows,
+                              cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
                 Task { @MainActor in
                     box.bridge?.cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
                     box.bridge?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
@@ -186,29 +226,47 @@ final class GhosttyTerminalBridge {
             },
             // uTerm 只消费行列数；像素级的尺寸变化（拖分隔条时绝大多数）不必让远端重绘。
             suppressesPixelOnlyResizes: true)
+        self.session = session
+        self.shadow = shadow
+        router = GhosttyOutputRouter(session: session, shadow: shadow)
         view = MGhosttyTerminalView(frame: frame)
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         // 去掉 GhosttyKit 自带的按键辅助条：uTerm 用自己的 `TerminalKeyBar`（同 SwiftTerm 路径置 nil）。
         view.inputAccessoryItems = []
         box.bridge = self
+        // 后台时查询由影子答（DA、DSR、光标位置、颜色查询……），和 surface 的应答走同一条路回后端。
+        shadow.setReplyHandler { data in
+            Task { @MainActor in box.bridge?.userInput(data) }
+        }
+        installLifecycleObservers()
+        if UIApplication.shared.applicationState == .background { setAppInBackground(true) }
     }
 
-    /// 喂远端输出。线程安全、不阻塞；解析在 GhosttyKit 的串行队列上。
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    /// 喂远端输出。线程安全；影子当场解析，surface 的解析在 GhosttyKit 的串行队列上。不过闸门（测试与探针直接喂用）。
     nonisolated func feed(_ data: Data) {
-        session.receive(data)
+        router.route(data)
     }
 
-    /// 接到一个后端：输出直接进会话，输入 / 尺寸走共享通道。
+    /// 接到一个后端：输出经分流进影子与 surface，输入 / 尺寸走共享通道。
+    ///
+    /// 背压：surface 没解析完的字节到 `GhosttyOutputRouter.highWater`（1 MiB）时入站任务不再取下一块，落回低水位再取。
+    /// 取不动的字节留在后端的 `outputStream` 里——那条流（以及 Citadel 的 PTY 输出流）现在是不限长的，所以这还不是
+    /// 真正压到 SSH 窗口上的背压，只保证终端这一层有上界；要压到远端得改 Citadel（见 measure-ios.md 的 M10）。
     func bind(_ backend: any TerminalBackend) {
         input.bind(to: backend, sendingLatestSize: true)
         ingress?.cancel()
-        let session = session
+        router.reopen()
+        let router = router
         let output = backend.outputStream
         ingress = Task.detached(priority: .userInitiated) {
             for await chunk in output {
                 if Task.isCancelled { break }
-                session.receive(chunk)
+                await router.ingest(chunk)
             }
         }
     }
@@ -216,7 +274,48 @@ final class GhosttyTerminalBridge {
     func unbind() {
         ingress?.cancel()
         ingress = nil
+        router.close()
         input.unbind()
+    }
+
+    // MARK: 进出后台（M10）
+
+    /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、来电横幅时 App 只是
+    /// inactive，GhosttyKit 照常 tick，不用切。只看 App 级的通知；iPad 多窗口里单个场景退后台没接（那时 GhosttyKit
+    /// 也只停那个场景的视图，别的场景还在 tick，mailbox 有人清）。
+    private func installLifecycleObservers() {
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setAppInBackground(true) }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setAppInBackground(false) }
+            },
+        ]
+    }
+
+    /// App 进出后台。进后台：从这一刻起输出只喂影子终端，surface 不再吃字节（GhosttyKit 后台不 tick，带标题的输出
+    /// 约 64 帧就把 app mailbox 填满、解析卡死）；影子开始替 surface 应答查询。回前台：把影子的快照回放进 surface
+    ///（后台队列上做），再接实时字节。重复调用无害。通知驱动；`MobileTerminalController` 也会转过来，测试直接调。
+    func setAppInBackground(_ inBackground: Bool) {
+        guard inBackground != isAppInBackground else { return }
+        isAppInBackground = inBackground
+        if inBackground {
+            // 后台答颜色查询要用当前配色（OSC 10 / 11、`CSI ? 996 n`）。
+            let dark = view.traitCollection.userInterfaceStyle != .light
+            let scheme = TerminalColorScheme.resolve(dark: dark)
+            shadow.setDefaultColors(foreground: Self.rgb(scheme.foregroundColor), background: Self.rgb(scheme.backgroundColor),
+                                    cursor: Self.rgb(scheme.cursorColor), dark: dark)
+        }
+        router.setSurfaceFeeding(!inBackground)
+    }
+
+    private static func rgb(_ color: UIColor) -> (UInt8, UInt8, UInt8) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func byte(_ value: CGFloat) -> UInt8 { UInt8(max(0, min(255, Int(value * 255 + 0.5)))) }
+        return (byte(r), byte(g), byte(b))
     }
 
     private func userInput(_ data: Data) {

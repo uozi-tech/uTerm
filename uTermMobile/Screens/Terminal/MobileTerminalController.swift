@@ -114,6 +114,11 @@ final class MobileTerminalController {
         didSet {
             guard isAppInBackground != oldValue else { return }
             (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
+            #if DEBUG
+            // 试用 Ghostty 时：后台只喂影子终端，回前台回放进 surface（M10）。bridge 自己也听这对通知，这里转一遍是为了
+            // 测试直接调 `appVisibilityChanged` 时也走得到；重复调用无害。
+            ghostty?.setAppInBackground(isAppInBackground)
+            #endif
             updatePacing()
             syncRemoteWatch()
             if isLooking { acknowledgeProgramStatus() }
@@ -293,6 +298,7 @@ final class MobileTerminalController {
     #if DEBUG
     private func adoptGhostty(_ bridge: GhosttyTerminalBridge) {
         ghostty = bridge
+        bridge.setAppInBackground(isAppInBackground)
         bridge.view.canTakeKeyboard = { [weak self] in self?.canTakeKeyboard ?? false }
         bridge.view.onFocusChanged = { [weak self] focused in self?.keyboardFocusChanged(focused) }
         bridge.view.setStickyModifierChangeHandler { [weak self] in self?.syncGhosttySticky() }
