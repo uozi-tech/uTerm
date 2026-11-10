@@ -225,7 +225,7 @@ final class ShadowTerminalTests: XCTestCase {
         terminal.setRepliesEnabled(true)
         terminal.feed(queries)
         XCTAssertEqual(String(decoding: box.data, as: UTF8.self),
-                       "\u{1B}[?62;22;52c\u{1B}[3;5R\u{1B}]11;rgb:1414/1414/1414\u{07}")
+                       "\u{1B}[?62;22c\u{1B}[3;5R\u{1B}]11;rgb:1414/1414/1414\u{07}")
     }
 
     /// 回放的开销读数：1 万行回滚（探针里那种洪流），热着连做 5 次。只卡一个很松的上限，读数从日志里取。

@@ -238,11 +238,8 @@ final class TerminalSession: NSObject {
     /// 失败置 failed，远端结束置 disconnected。
     func connect(using backend: any TerminalBackend) async {
         resetFeedAndResizeState()
-        // 新连接上的程序不知道上一条连接上的程序把光标改成了什么形状（DECSCUSR，vim 插入模式的竖线、Claude 的块……）：
-        // 复位成设置里的那一种（`CSI 0 q` = 配置的默认形状与闪烁）。影子、画面、镜像、检查点经同一条泵看到它。
-        // 接回 holder（程序还在跑）、远控镜像时影子随后整个换成快照，这一下被盖掉，程序设的形状保留。
-        // 全新的会话不用（光标本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次）。
-        if shadow.hasContent { outputPump.route(Self.resetCursorShape) }
+        // 重连先复位光标形状（`CSI 0 q`，影子没内容时不送；两端共用，见 `TerminalOutputPump.resetCursorShapeForNewConnection`）。
+        outputPump.resetCursorShapeForNewConnection()
         // `resetFeedAndResizeState()` just bumped `feedGeneration`; snapshot it
         // as this call's identity token. `backend.connect()` below suspends and
         // frees the MainActor — a second `connect(using:)`, `dispose()`, or
@@ -343,8 +340,8 @@ final class TerminalSession: NSObject {
     }
 
     /// 代次 +1，停掉在途的入站任务、输入通道与退出监听：上一条连接残留的输出随之作废。
-    /// DECSCUSR 0：光标形状、闪烁回到配置的默认值。
-    static let resetCursorShape = Data("\u{1B}[0 q".utf8)
+    /// DECSCUSR 0：光标形状、闪烁回到配置的默认值（`TerminalOutputPump.resetCursorShape`）。
+    static let resetCursorShape = TerminalOutputPump.resetCursorShape
 
     private func resetFeedAndResizeState() {
         outputPump.reset()

@@ -336,6 +336,17 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         if feedsSurface, !holdIfGridMismatchedLocked() { replayLocked() }
     }
 
+    /// DECSCUSR 0：光标形状、闪烁回到配置的默认值。
+    static let resetCursorShape = Data("\u{1B}[0 q".utf8)
+
+    /// 换了一条新连接（重连，两端共用）：新连接上的程序不知道上一条连接上的程序把光标改成了什么形状（DECSCUSR，
+    /// vim 插入模式的竖线、Claude 的块……），先复位成设置里的那一种。影子、画面、镜像、检查点经这条泵看到它。
+    /// 接回 holder（程序还在跑）、远控镜像时影子随后整个换成快照，这一下被盖掉，程序设的形状保留。
+    /// 全新的终端（影子没内容）不送：光标本来就是默认的，也免得空终端被当成有内容、surface 挂上时白回放一次。
+    func resetCursorShapeForNewConnection() {
+        if shadow.hasContent { route(Self.resetCursorShape) }
+    }
+
     /// 影子被不经过泵的方式改过（从检查点还原、直接喂了历史）：surface 要重新对齐。正在吃字节就当场回放，
     /// 否则等下次开始吃的时候。
     func markSurfaceStale() {

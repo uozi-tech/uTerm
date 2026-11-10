@@ -39,6 +39,8 @@ final class GhosttyTerminalBridge {
     private(set) var resizeReports = 0
     /// 每一块 write 回调给出的字节（探针读它，核按键编码）。nil = 不记。
     var inputLog: [Data]?
+    /// 程序用 OSC 52 写剪贴板时写到哪（测试换成私有的，别动模拟器那块与 Mac 同步的系统剪贴板）。
+    var pasteboard: UIPasteboard = .general
     /// App 在不在后台（`didEnterBackground` → `willEnterForeground`，和 `MobileTerminalController` 同一对通知）。
     private(set) var isAppInBackground = false
     /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节。
@@ -137,6 +139,11 @@ final class GhosttyTerminalBridge {
             // - dim 按 sRGB（伽马空间）和底色五五开混合；iOS 默认的 linear-corrected 在线性空间混合，dim 字会亮一截。
             builder.withCustom("alpha-blending", "native")
             builder.withCustom("faint-opacity", "0.5")
+            // OSC 52 由影子终端处理（`init` 里的 `setClipboardWriteHandler`：标签藏着、surface 没建或放掉了时也要生效），surface 这边
+            // 不写，免得写两遍、回放进 surface 时把历史里的再写一遍。读剪贴板一律不答（远端程序不能读走手机的剪贴板）。
+            // 只管程序发来的请求；用户自己的拷贝（长按菜单、⌘C）不受影响。同 Mac 的 `GhosttyTerminalConfig.base`。
+            builder.withCustom("clipboard-read", "deny")
+            builder.withCustom("clipboard-write", "deny")
             // 回滚上限：与影子终端同一份（见 `scrollback`）。不设的话是 Ghostty 的默认 50 MB、不限行数。
             for item in scrollback.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
             // 按键绑定（两端共用）：清掉 Ghostty 给自己 App 定的默认绑定（⌘K 只清 surface 的屏、⌘+ / ⌘- 只改这一个终端的字号……），
@@ -224,6 +231,14 @@ final class GhosttyTerminalBridge {
         shadow.setReplyHandler { data in
             Task { @MainActor in box.bridge?.userInput(data) }
         }
+        // 程序写剪贴板（OSC 52）：以影子为准。影子回放历史、从快照还原时不会再写（vt 那边关着事件 / 不解析字节）。
+        shadow.setClipboardWriteHandler { text in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { box.bridge?.pasteboard.string = text }
+            } else {
+                Task { @MainActor in box.bridge?.pasteboard.string = text }
+            }
+        }
         shadow.setEventHandler { event in
             // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
             if Thread.isMainThread {
@@ -271,6 +286,8 @@ final class GhosttyTerminalBridge {
         shadowFollowsRemoteGrid.withLock { $0 = mirrorsRemote }
         input.bind(to: backend, sendingLatestSize: true)
         outputPump.reset()
+        // 重连（影子已有内容）：先把上一条连接上的程序设的光标形状复位成设置里的那一种（同 Mac）。
+        outputPump.resetCursorShapeForNewConnection()
         outputPump.followsSnapshotGrid = mirrorsRemote
         outputPump.start(backend.outputItems)
     }

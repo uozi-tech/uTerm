@@ -266,16 +266,17 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         }
         ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(writePty, to: UnsafeRawPointer.self))
 
-        // 和 surface（termio/stream_handler.zig）答的一样：VT220、彩色、剪贴板；DA2 `>1;10;0c`。
+        // 和 surface（termio/stream_handler.zig）答的一样：VT220、彩色；DA2 `>1;10;0c`。两端的 surface 都配成
+        // `clipboard-write = deny`（OSC 52 由影子写），这时 surface 的 DA1 不带 52（剪贴板），影子也不带——surface 不吃字节时
+        // 由影子答，两边要答得一样（iOS `GhosttyBackgroundTests.testQueriesAreAnsweredOnceInForegroundAndBackground`）。
         let deviceAttributes: GhosttyTerminalDeviceAttributesFn = { _, _, out in
             guard let out else { return false }
             out.pointee.primary.conformance_level = 62
             withUnsafeMutableBytes(of: &out.pointee.primary.features) { raw in
                 let features = raw.bindMemory(to: UInt16.self)
                 features[0] = 22
-                features[1] = 52
             }
-            out.pointee.primary.num_features = 2
+            out.pointee.primary.num_features = 1
             out.pointee.secondary.device_type = 1
             out.pointee.secondary.firmware_version = 10
             out.pointee.secondary.rom_cartridge = 0
