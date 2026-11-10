@@ -56,6 +56,15 @@ final class TerminalEraseScannerTests: XCTestCase {
         XCTAssertEqual(scan("\u{1B}]0;t\u{1B}\\\u{1B}c"), .screen)
     }
 
+    /// 大串体（OSC 52 剪贴板、Kitty 图片的 APC）整段跳过、跨片也跳过；串里的 ESC 是 ST 的开头或打断。
+    func testLargeStringBodiesAreSkippedAcrossChunks() {
+        let body = String(repeating: "QUJDRCBbMko=", count: 200_000)
+        XCTAssertNil(scan("\u{1B}]52;c;" + body, body, body + "\u{07}more"))
+        XCTAssertEqual(scan("\u{1B}_Ga=T;" + body, body + "\u{1B}\\", "\u{1B}[2J"), .screen)
+        XCTAssertEqual(scan("\u{1B}]52;c;" + body + "\u{1B}[2J"), .screen, "ESC 打断串、开始新序列")
+        XCTAssertEqual(scan("\u{1B}]0;" + body + "\u{07}\u{1B}[K"), .inPlace, "BEL 在 ESC 之前收尾")
+    }
+
     func testSequencesSplitAcrossChunksAreRecognised() {
         XCTAssertEqual(scan("abc\u{1B}", "[2J"), .screen)
         XCTAssertEqual(scan("\u{1B}[", "2", "J"), .screen)

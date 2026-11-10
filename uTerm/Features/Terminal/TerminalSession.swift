@@ -116,6 +116,8 @@ final class TerminalSession: NSObject {
         _ = ghostty
         installShadowEventHandler()
         installShadowClipboardHandler()
+        // 未知 OSC 只要命令跟踪的起止标记（`TerminalTrackedRun`）。
+        shadow.reportUnknownOSC(withPrefixes: ["\(TerminalTrackedRun.oscCode);"])
         // surface 没在吃字节的时候（还没建、被丢弃），查询由影子终端答；应答和键盘输入走同一条通道。
         link.onShadowReply = { [weak self] in self?.sendHostBytes($0) }
         updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)

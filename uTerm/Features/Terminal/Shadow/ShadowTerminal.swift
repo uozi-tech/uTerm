@@ -88,6 +88,8 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     private var clipboardWriteHandler: (@Sendable (String) -> Void)?
     /// 正在喂的这批字节是历史（`feed(_:asHistory:)`）：不应答、不写剪贴板，事件带上历史标记。
     private var feedingHistory = false
+    /// 要报的未知 OSC 的开头（`reportUnknownOSC(withPrefixes:)`）。
+    private var unknownOSCPrefixes: [[UInt8]] = []
 
     /// 建一个 `cols` × `rows` 的终端。mode 2027（字素簇）默认开，见 `Options.graphemeClusters`。
     init(cols: UInt16, rows: UInt16, options: Options) {
@@ -218,14 +220,24 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
     /// 活动屏整屏（含回滚）第 `row` 行的文字（0 = 回滚最早的那一行），读法同 `viewportText()`；越界是 nil。
     /// 给标签切回来时找回原来的视口用（`TerminalViewportMark`）。
     func screenRowText(_ row: Int) -> String? {
-        guard row >= 0, row <= Int(UInt32.max) else { return nil }
+        readScreen { _, rowText in rowText(row) }
+    }
+
+    /// 持一次锁连读整屏的几行（整屏回放后找回视口时一找可达几万行，逐行 `screenRowText` 就是逐行拿锁）。
+    /// `body` 拿到此刻的尺寸（整屏行数、一屏行数、列数）和读第几行文字的函数；里面别再碰这个影子（锁不可重入）。
+    func readScreen<T>(_ body: (_ size: (totalRows: Int, rows: Int, cols: Int), _ rowText: (Int) -> String?) -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
+        var total = 0
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total)
         let cols = Self.cols(handle)
-        guard cols > 0,
-              let start = Self.gridRef(handle, x: 0, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN),
-              let end = Self.gridRef(handle, x: cols - 1, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN) else { return nil }
-        return Self.lineText(handle, from: start, to: end)
+        let handle = handle
+        return body((total, Int(Self.rows(handle)), Int(cols))) { row in
+            guard row >= 0, row <= Int(UInt32.max), cols > 0,
+                  let start = Self.gridRef(handle, x: 0, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN),
+                  let end = Self.gridRef(handle, x: cols - 1, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN) else { return nil }
+            return Self.lineText(handle, from: start, to: end)
+        }
     }
 
     // MARK: 应答
@@ -768,6 +780,14 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// 只有以这些开头的未知 OSC 才发 `.unknownOSC`（例如 `"6973;"`）；默认一条都不发。没命中的不拷内容、不打光标标记、
+    /// 不往外送——别的程序的私有 OSC（iTerm2 的 1337、各家 shell 集成）可能很多、很长。
+    func reportUnknownOSC(withPrefixes prefixes: [String]) {
+        lock.lock()
+        unknownOSCPrefixes = prefixes.map { Array($0.utf8) }
+        lock.unlock()
+    }
+
     /// 程序要写剪贴板（OSC 52 等）：参数是要写的文字（vt 已解好 base64；只取纯文本那一份，清空剪贴板的请求不转）。
     /// 和事件一样在 `feed` 里同步调用；历史字节（`feed(_:asHistory:)`）里的不调。读剪贴板（OSC 52 `?`）不接：vt 不答，程序读不到。
     /// 单独一个回调而不是 `Event` 的一种：两端按 `Event` 穷举分发，加一种会让没接的那一端编不过。
@@ -840,8 +860,12 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
             let osc = sequence.value.osc
             guard !osc.truncated, let pointer = osc.content.ptr, osc.content.len > 0 else { return }
             let shadow = Unmanaged<ShadowTerminal>.fromOpaque(userdata).takeUnretainedValue()
-            // 历史里的未知 OSC（命令跟踪标记这类）是过去的事，宿主不要：连拷贝都省掉。
-            guard !shadow.feedingHistory, shadow.eventHandler != nil else { return }
+            // 历史里的未知 OSC（命令跟踪标记这类）是过去的事，宿主不要：连拷贝都省掉。没登记的开头同样。
+            guard !shadow.feedingHistory, shadow.eventHandler != nil,
+                  shadow.unknownOSCPrefixes.contains(where: { prefix in
+                      osc.content.len >= prefix.count && memcmp(pointer, prefix, prefix.count) == 0
+                  })
+            else { return }
             let payload = Data(bytes: pointer, count: osc.content.len)
             shadow.emit(.unknownOSC(payload: payload, cursor: shadow.makeCursorMarker(terminal)))
         }

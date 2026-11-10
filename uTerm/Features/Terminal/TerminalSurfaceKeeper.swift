@@ -7,7 +7,7 @@ import Foundation
 ///    擦空的格子上、拷贝拿到空白。
 /// 2. **整屏回放后找回视口。** 标签切走（App 进后台、surface 被放掉）之前平台那边记一个视口位置（`remember`）；
 ///    surface 追上影子时，补的是尾巴就什么都不用做（视口、选区都还在），是整屏回放的话（复位把视口带回了底部）按记下的
-///    位置在影子里找回原处、滚过去。找行在会话的输出队列上做，不占主线程。
+///    位置在影子里找回原处、滚过去。找行在自己的后台队列上做，不占主线程、也不占 surface 的输出队列。
 nonisolated final class TerminalSurfaceKeeper: @unchecked Sendable {
     private let lock = NSLock()
     private var mark: TerminalViewportMark?
@@ -17,6 +17,7 @@ nonisolated final class TerminalSurfaceKeeper: @unchecked Sendable {
     private let clearSelection: @MainActor @Sendable (TerminalErase) -> Void
     private let scrollToRow: @MainActor @Sendable (Int) -> Void
 
+    private static let searchQueue = DispatchQueue(label: "com.uozi.uTerm.viewport-search", qos: .userInitiated)
     private var restoredRow: Int?
     /// 测试用：最近一次整屏回放后算出来的目标行（nil = 留在底部或没记位置）。
     var lastRestoredRow: Int? { lock.withLock { restoredRow } }
@@ -56,13 +57,17 @@ nonisolated final class TerminalSurfaceKeeper: @unchecked Sendable {
             return self.mark
         }
         guard kind == .replay, let mark else { return }
-        let size = shadow.size
-        let row = mark.targetRow(totalRows: shadow.totalRows, rows: size.rows, columns: size.cols,
-                                 rowText: { [shadow] in shadow.screenRowText($0) })
-        lock.withLock { restoredRow = row }
-        guard let row else { return }
-        let scroll = scrollToRow
-        DispatchQueue.main.async { MainActor.assumeIsolated { scroll(row) } }
+        // 找行不占 surface 的输出队列（后面排着的输出要接着交给 surface）；持一次影子的锁找完。
+        Self.searchQueue.async { [weak self] in
+            guard let self else { return }
+            let row = self.shadow.readScreen { size, rowText in
+                mark.targetRow(totalRows: size.totalRows, rows: size.rows, columns: size.cols, rowText: rowText)
+            }
+            self.lock.withLock { self.restoredRow = row }
+            guard let row else { return }
+            let scroll = self.scrollToRow
+            DispatchQueue.main.async { MainActor.assumeIsolated { scroll(row) } }
+        }
     }
 
     // MARK: 擦屏

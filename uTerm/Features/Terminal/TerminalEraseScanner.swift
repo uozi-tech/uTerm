@@ -43,8 +43,8 @@ nonisolated struct TerminalEraseScanner: Sendable {
 
     /// 扫一片字节，返回这一片里最重的擦屏动作（没有就是 nil）。
     ///
-    /// 在泵的热路径上（每片字节都过一遍）：平常的输出里 ESC 很稀，所以在「地面」状态下用 `memchr` 直接跳到下一个 ESC，
-    /// 只逐字节走转义序列和串。
+    /// 在泵的热路径上（每片字节都过一遍）：平常的输出里 ESC 很稀，所以在「地面」状态下用 `memchr` 直接跳到下一个 ESC；
+    /// 串体里（OSC 52 的剪贴板、Kitty 图片的 APC，可达几 MB）同样直接跳到下一个 BEL / ESC。只逐字节走转义序列。
     mutating func scan(_ bytes: Data) -> TerminalErase? {
         var found: TerminalErase?
         bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
@@ -53,9 +53,23 @@ nonisolated struct TerminalEraseScanner: Sendable {
             let buffer = raw.bindMemory(to: UInt8.self)
             var index = 0
             while index < count {
-                if case .ground = state {
+                switch state {
+                case .ground:
                     guard let hit = memchr(base + index, 0x1B, count - index) else { return }
                     index = base.distance(to: UnsafeRawPointer(hit))
+                case .string(sawEscape: false):
+                    // 下一个 ESC；BEL 只在它之前找。
+                    let escape = memchr(base + index, 0x1B, count - index).map { base.distance(to: UnsafeRawPointer($0)) }
+                    let end = escape ?? count
+                    if let bell = memchr(base + index, 0x07, end - index) {
+                        index = base.distance(to: UnsafeRawPointer(bell))
+                    } else if let escape {
+                        index = escape
+                    } else {
+                        return
+                    }
+                default:
+                    break
                 }
                 if let erase = step(buffer[index]) { found = max(found ?? erase, erase) }
                 index += 1

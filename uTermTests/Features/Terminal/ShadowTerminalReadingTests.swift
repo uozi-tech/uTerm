@@ -111,6 +111,7 @@ final class ShadowTerminalReadingTests: XCTestCase {
     /// 之后的实时字节照常。
     func testHistoryBytesAreMarkedAndNotAnswered() {
         let terminal = makeTerminal()
+        terminal.reportUnknownOSC(withPrefixes: ["6973;"])
         let log = recording(terminal)
         let replies = EventLog()
         terminal.setReplyHandler { _ in replies.append(.bell) }
@@ -137,8 +138,10 @@ final class ShadowTerminalReadingTests: XCTestCase {
 
     func testUnknownOSCCarriesPayloadAndCursorMarker() {
         let terminal = makeTerminal()
+        terminal.reportUnknownOSC(withPrefixes: ["6973;"])
         let log = recording(terminal)
-        feed(terminal, "$ run\r\n\u{1B}]6973;S;1a2b3c4d\u{07}line one\r\nline two\r\n\u{1B}]6973;D;1a2b3c4d;7\u{07}$ ")
+        feed(terminal, "$ run\r\n\u{1B}]6973;S;1a2b3c4d\u{07}line one\r\n\u{1B}]1337;SetMark\u{07}\u{1B}]69730;x\u{07}"
+             + "line two\r\n\u{1B}]6973;D;1a2b3c4d;7\u{07}$ ")
 
         var markers: [ShadowTerminal.Marker] = []
         var payloads: [String] = []
@@ -146,12 +149,20 @@ final class ShadowTerminalReadingTests: XCTestCase {
             payloads.append(String(decoding: payload, as: UTF8.self))
             if let cursor { markers.append(cursor) }
         }
-        XCTAssertEqual(payloads, ["6973;S;1a2b3c4d", "6973;D;1a2b3c4d;7"])
+        XCTAssertEqual(payloads, ["6973;S;1a2b3c4d", "6973;D;1a2b3c4d;7"], "没登记的开头（1337、69730）不报")
         guard markers.count == 2 else { return XCTFail("每条未知 OSC 都要带光标标记") }
         XCTAssertEqual(markers[0].column, 0)
         let output = terminal.text(from: markers[0], to: markers[1])
         XCTAssertEqual(output.text, "line one\nline two")
         XCTAssertFalse(output.truncated)
+    }
+
+    /// 默认一条未知 OSC 都不报（iOS 不要）。
+    func testUnknownOSCIsNotReportedByDefault() {
+        let terminal = makeTerminal()
+        let log = recording(terminal)
+        feed(terminal, "\u{1B}]6973;S;1a2b\u{07}\u{1B}]1337;SetMark\u{07}")
+        XCTAssertFalse(log.events.contains { if case .unknownOSC = $0 { return true } else { return false } })
     }
 
     /// 标记跟着内容滚：后面又来了几屏输出，起止之间读到的还是那一段；软折行拼回一行。
