@@ -17,15 +17,43 @@ nonisolated protocol TerminalSurfaceSink: AnyObject, Sendable {
     /// surface 的终端在用的网格（IO 线程上报过的那个，不是主线程刚设下、终端还没改过去的尺寸）；没有时 nil。
     /// 只在 `followsSnapshotGrid` 时读。
     var surfaceGridSize: (cols: Int, rows: Int)? { get }
+    /// 丢掉排着、还没交给 surface 解析的输出（同 `discardPendingOutput`），全是实时字节时按先后交回来。
+    /// 泵停喂 surface 时用它：恢复时把交回的字节连同停喂期间的输出补给 surface，不必整屏回放（见 `setSurfaceFeeding`）。
+    func takePendingOutputForCatchUp() -> TerminalPendingWrites
+    /// 在这之前交给 surface 的东西都解析完之后调 `body`（任意线程）。
+    func afterPendingOutput(_ body: @escaping @Sendable () -> Void)
+}
+
+/// `TerminalSurfaceSink.takePendingOutputForCatchUp()` 的结果。
+nonisolated struct TerminalPendingWrites: Sendable {
+    /// 丢掉的实时字节，按先后拼好。
+    var bytes: Data
+    /// 丢掉的就是这些（没有夹着回放、队列里也没留着会排到它们前面的东西）：可以原样补给 surface。
+    var complete: Bool
+    /// 一共丢了多少字节（含交不回来的）。
+    var droppedBytes: Int
 }
 
 extension TerminalSurfaceSink {
     nonisolated var surfaceGridSize: (cols: Int, rows: Int)? { nil }
+
+    /// 默认：交不回来（只会整屏回放）。
+    nonisolated func takePendingOutputForCatchUp() -> TerminalPendingWrites {
+        let dropped = discardPendingOutput()
+        return TerminalPendingWrites(bytes: Data(), complete: dropped == 0, droppedBytes: dropped)
+    }
+
+    nonisolated func afterPendingOutput(_ body: @escaping @Sendable () -> Void) { body() }
 }
 
 extension InMemoryTerminalSession: TerminalSurfaceSink {
     nonisolated var surfaceGridSize: (cols: Int, rows: Int)? {
         reportedGrid.map { (Int($0.columns), Int($0.rows)) }
+    }
+
+    nonisolated func takePendingOutputForCatchUp() -> TerminalPendingWrites {
+        let taken = takePendingWrites()
+        return TerminalPendingWrites(bytes: taken.data, complete: taken.complete, droppedBytes: taken.dropped)
     }
 }
 
@@ -39,9 +67,18 @@ extension InMemoryTerminalSession: TerminalSurfaceSink {
 ///        └─► surface `receive`（异步解析、渲染线程出帧）——只在 surface 吃字节时
 ///
 /// **surface 可以暂时不吃字节**（`setSurfaceFeeding(false)`）：surface 还没建（标签没露出过、会话刚从检查点还原）、
-/// iOS 进了后台（GhosttyKit 不 tick，解析线程会卡在 app mailbox 上，M10）。这期间输出只进影子；重新开始吃的时候
-/// 先把影子的状态回放进去（`ShadowTerminal.makeReplay` → `receiveReplay`，不产生应答），再接实时字节。
-/// 影子没有被 surface 落下过内容时不回放。回放会让视口回到底部、清掉选区、丢掉 Kitty 图片（计划里定的，可以接受）。
+/// iOS 进了后台（GhosttyKit 不 tick，解析线程会卡在 app mailbox 上，M10）、Mac 的标签切走了。这期间输出只进影子；
+/// 重新开始吃的时候先让 surface 追上影子（补尾巴，或者把影子的状态回放进去：`ShadowTerminal.makeReplay` → `receiveReplay`，
+/// 都不产生应答），再接实时字节。影子没有被 surface 落下过内容时什么都不补。
+///
+/// **补尾巴优先于整屏回放。** 停喂时 surface 队列里没解析的实时字节拿回来，停喂期间的输出也接着攒（`tail`），恢复时原样
+/// 补给 surface（`receiveReplay`，不产生应答——影子已经答过）：surface 只是晚一点解析同一串字节，往上翻着的视口、选区、
+/// Kitty 图片都还在（标签切走再切回、iOS 回前台）。补不了才整屏回放：surface 换了一个（放掉后重建）、攒过了 `tailLimit`、
+/// 期间网格变了（同一串字节按不同网格解析结果不同）、交回来的不全（夹着回放）、影子被整个换过（快照）。整屏回放的开头是复位，
+/// 视口回到底部、选区清掉、Kitty 图片丢掉；视口由宿主按 `onSurfaceCaughtUp` 找回去（`TerminalViewportMark`）。
+///
+/// **擦屏与选区**：每片字节过一遍 `TerminalEraseScanner`，认出清屏 / 擦除的，等 surface 解析到那里之后（`afterPendingOutput`）
+/// 交给 `onSurfaceErase`，宿主据此清掉 surface 上的选区（Ghostty 引擎清屏时不清选区）。
 ///
 /// 代次（`generation`）：`reset()` 递增，上一条连接残留的入站任务随之作废。
 ///
@@ -84,7 +121,21 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         /// 主控端因为影子与 surface 网格不一致而停画的次数、等不到对齐超时放行的次数。
         var gridHolds = 0
         var gridHoldTimeouts = 0
+        /// 恢复喂 surface 时补尾巴（而不是整屏回放）的次数，以及最近一次补了多少字节。
+        var tailCatchUps = 0
+        var lastTailBytes = 0
     }
+
+    /// surface 追上影子的方式（`onSurfaceCaughtUp`）。
+    nonisolated enum CatchUp: Sendable {
+        /// 补了尾巴：视口、选区都还在原处。
+        case tail
+        /// 整屏回放：视口回到了底部、选区没了。
+        case replay
+    }
+
+    /// 停喂期间最多攒这么多字节等着补给 surface；再多就整屏回放（回放的代价和输出量无关）。
+    static let tailLimit = 2 << 20
 
     let shadow: ShadowTerminal
     private let surface: any TerminalSurfaceSink
@@ -109,6 +160,14 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
     private var holdToken = 0
     /// 超时放行过的那一对网格（影子、surface）：同样的错位不再停第二次，等网格变了再说。
     private var waivedMismatch: [Int]?
+    /// surface 落后于影子的正好是这串字节（停喂时它队列里没解析的 + 停喂期间来的），网格是 `tailGrid`。nil = 补不了。
+    private var tail: Data?
+    private var tailGrid: (cols: Int, rows: Int)?
+    private var scanner = TerminalEraseScanner()
+    /// surface 还没解析到的擦屏（停喂期间来的）：追上之后交出去。
+    private var pendingErase: TerminalErase?
+    private var eraseHandler: (@Sendable (TerminalErase) -> Void)?
+    private var caughtUpHandler: (@Sendable (CatchUp) -> Void)?
 
     /// 保护闸门。surface 的 backlog 回调可能就在 `surface.receive` 里同步回来（那时 `stateLock` 在手上），
     /// 所以闸门另用一把锁，并且拿着它时不调 surface、不拿 `stateLock`（顺序只能是 stateLock → gateLock）。
@@ -159,6 +218,22 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         get { stateLock.withLock { replayedHandler } }
         set { stateLock.withLock { replayedHandler = newValue } }
     }
+
+    /// 字节里有擦屏的序列（`TerminalEraseScanner`），而且 surface 已经解析到了那里。在会话的输出队列上调（不是主线程）。
+    /// surface 停喂期间来的，等它追上之后再调。一片字节最多调一次，取最重的那一档。
+    var onSurfaceErase: (@Sendable (TerminalErase) -> Void)? {
+        get { stateLock.withLock { eraseHandler } }
+        set { stateLock.withLock { eraseHandler = newValue } }
+    }
+
+    /// surface 追上了影子（恢复喂它时补了尾巴，或者整屏回放了），而且已经解析完。在会话的输出队列上调。
+    var onSurfaceCaughtUp: (@Sendable (CatchUp) -> Void)? {
+        get { stateLock.withLock { caughtUpHandler } }
+        set { stateLock.withLock { caughtUpHandler = newValue } }
+    }
+
+    /// surface 落后于影子、等着追（下次开始喂它时补尾巴或回放）。
+    var surfaceNeedsCatchUp: Bool { stateLock.withLock { surfaceIsStale } }
 
     /// 主控端（远控镜像：Mac 的远控窗口、iOS 的远控标签）打开。影子的网格跟着被控端走（快照带来），不跟本地 surface；
     /// 两边网格不一样时——刚接入、本地刚改了尺寸，被控端还没按本地尺寸钉好再发快照——按被控端网格排好的内容灌进本地
@@ -246,14 +321,74 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         defer { stateLock.unlock() }
         // 换了连接之后，上一条连接的入站任务手上还攥着的那一片不要了。
         if let generation, generation != currentGeneration { return }
+        let erase = scanner.scan(slice)
         shadow.feed(slice)
         fedHandler?(slice)
         if feedsSurface, !holdIfGridMismatchedLocked() {
             // 刚放行时回放已经带上了这一片。
-            if surfaceIsStale { replayLocked() } else { surface.receive(slice) }
+            if surfaceIsStale {
+                noteErase(erase)
+                replayLocked()
+            } else {
+                surface.receive(slice)
+                if let erase { deliverEraseAfterSurface(erase) }
+            }
         } else {
             surfaceIsStale = true
             stats.shadowOnlyBytes += slice.count
+            noteErase(erase)
+            appendToTail(slice)
+        }
+    }
+
+    // MARK: 补尾巴、擦屏
+
+    /// 调用方持 `stateLock`。surface 没在吃字节时来的一片：接到尾巴上；网格变了或攒太多就不补了（到时整屏回放）。
+    private func appendToTail(_ slice: Data) {
+        guard tail != nil else { return }
+        let grid = shadow.size
+        guard let tailGrid, tailGrid == grid, tail!.count + slice.count <= Self.tailLimit else {
+            tail = nil
+            return
+        }
+        tail!.append(slice)
+    }
+
+    /// 调用方持 `stateLock`。surface 恢复吃字节：能补尾巴就补（返回 true），补不了返回 false（由调用方整屏回放）。
+    private func catchUpWithTailLocked() -> Bool {
+        guard let pending = tail, let tailGrid else { return false }
+        tail = nil
+        let grid = shadow.size
+        guard grid == tailGrid, surface.surfaceGridSize.map({ $0 == tailGrid }) ?? true else { return false }
+        if !pending.isEmpty { surface.receiveReplay(pending) }
+        stats.tailCatchUps += 1
+        stats.lastTailBytes = pending.count
+        surfaceIsStale = false
+        notifyCaughtUpLocked(.tail)
+        return true
+    }
+
+    /// 调用方持 `stateLock`。surface 还没解析到的擦屏先记着。
+    private func noteErase(_ erase: TerminalErase?) {
+        guard let erase else { return }
+        pendingErase = max(pendingErase ?? erase, erase)
+    }
+
+    /// 调用方持 `stateLock`。等 surface 解析完已经交给它的字节，再交出擦屏。
+    private func deliverEraseAfterSurface(_ erase: TerminalErase) {
+        guard let handler = eraseHandler else { return }
+        surface.afterPendingOutput { handler(erase) }
+    }
+
+    /// 调用方持 `stateLock`。surface 追上了：等它解析完，先交出期间攒下的擦屏，再报追上了。
+    private func notifyCaughtUpLocked(_ kind: CatchUp) {
+        let erase = pendingErase
+        pendingErase = nil
+        let eraseHandler = eraseHandler, caughtUpHandler = caughtUpHandler
+        guard erase != nil && eraseHandler != nil || caughtUpHandler != nil else { return }
+        surface.afterPendingOutput {
+            if let erase { eraseHandler?(erase) }
+            caughtUpHandler?(kind)
         }
     }
 
@@ -281,6 +416,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             waivedMismatch = pair
             stats.gridHoldTimeouts += 1
             surfaceIsStale = true
+            tail = nil
             return false
         }
         heldForGrid = true
@@ -289,6 +425,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         stats.gridHolds += 1
         stats.droppedSurfaceBytes += surface.discardPendingOutput()
         surfaceIsStale = true
+        tail = nil
         // 没有新字节、也没有新快照时由它来放行。
         let token = holdToken
         catchUpQueue.asyncAfter(deadline: .now() + Self.gridAlignmentTimeout + 0.01) { [weak self] in
@@ -333,6 +470,9 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
             return
         }
         surfaceIsStale = true
+        tail = nil
+        // 整屏换了内容：选区一律清掉（surface 追上之后）。
+        noteErase(.screen)
         if feedsSurface, !holdIfGridMismatchedLocked() { replayLocked() }
     }
 
@@ -353,6 +493,7 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         surfaceIsStale = true
+        tail = nil
         if feedsSurface, !holdIfGridMismatchedLocked() { replayLocked() }
     }
 
@@ -421,9 +562,9 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
 
     // MARK: surface 吃不吃字节
 
-    /// `false`：从现在起只喂影子。surface 队列里还没解析的字节丢掉——它们已经在影子里，留着只会在重新开始时先被
-    /// 解析一遍（连同它们带的标题一条条 tick）再被回放盖掉。这期间由影子替 surface 应答查询（surface 不解析就不会答）。
-    /// `true`：把影子的状态回放进 surface，然后接实时字节。回放在后台队列上做，不占主线程。
+    /// `false`：从现在起只喂影子。surface 队列里还没解析的字节拿出来（iOS 后台时 GhosttyKit 不 tick，留在队列里会把解析卡死），
+    /// 记作尾巴的开头，之后来的输出接在后面。这期间由影子替 surface 应答查询（surface 不解析就不会答）。
+    /// `true`：把尾巴补给 surface（补不了就把影子的状态整屏回放进去），然后接实时字节。在后台队列上做，不占主线程。
     /// 泵刚建好时是 `false`：surface 还没建，谁建好了谁来调 `true`。
     func setSurfaceFeeding(_ feeding: Bool) {
         stateLock.lock()
@@ -431,10 +572,20 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         if !feeding, feedsSurface {
             feedsSurface = false
             heldForGrid = false
-            let dropped = surface.discardPendingOutput()
-            if dropped > 0 {
+            // 停喂之前就已经落后了（主控端停着等网格对齐）：差的不止队列里这些，补不了。
+            let wasBehind = surfaceIsStale
+            let taken = surface.takePendingOutputForCatchUp()
+            if taken.droppedBytes > 0 {
                 surfaceIsStale = true
-                stats.droppedSurfaceBytes += dropped
+                stats.droppedSurfaceBytes += taken.droppedBytes
+            }
+            if taken.complete, !wasBehind {
+                tail = taken.bytes
+                tailGrid = shadow.size
+                // 拿回来的字节里的擦屏：surface 还没解析到，等补完再交。
+                noteErase(TerminalEraseScanner.scanFresh(taken.bytes))
+            } else {
+                tail = nil
             }
             shadow.setRepliesEnabled(true)
         }
@@ -457,7 +608,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         guard wantsSurface, !feedsSurface else { return }
         shadow.setRepliesEnabled(false)
         feedsSurface = true
-        if !holdIfGridMismatchedLocked(), surfaceIsStale { replayLocked() }
+        if !holdIfGridMismatchedLocked(), surfaceIsStale, !catchUpWithTailLocked() { replayLocked() }
+        if !surfaceIsStale { tail = nil }
         setGateFollowsBacklog(true)
     }
 
@@ -482,6 +634,8 @@ nonisolated final class TerminalOutputPump: @unchecked Sendable {
         }
         stats.lastReplayBuildSeconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
         surfaceIsStale = false
+        tail = nil
         replayedHandler?()
+        notifyCaughtUpLocked(.replay)
     }
 }

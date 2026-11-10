@@ -12,6 +12,8 @@ struct InMemoryTerminalPendingOperations {
         /// uTerm 本地补丁：重建出来的历史（`receiveReplay`），交给 surface 时不产生应答。
         case replay(Data)
         case processExit(exitCode: UInt32, runtimeMilliseconds: UInt64)
+        /// uTerm 本地补丁：排在这之前的输出都交给 surface 解析完了，在输出队列上调一下（`afterPendingOutput`）。
+        case marker(@Sendable () -> Void)
     }
 
     private struct Entry {
@@ -42,7 +44,7 @@ struct InMemoryTerminalPendingOperations {
         switch operation {
         case let .write(data): writeByteCount += data.count
         case let .replay(data): replayByteCount += data.count
-        case .processExit: break
+        case .processExit, .marker: break
         }
         appendedSequence += 1
         storage.append(Entry(operation: operation, sequence: appendedSequence))
@@ -74,7 +76,7 @@ struct InMemoryTerminalPendingOperations {
             switch entry.operation {
             case let .write(data): writeByteCount -= data.count
             case let .replay(data): replayByteCount -= data.count
-            case .processExit: break
+            case .processExit, .marker: break
             }
             retiredSequence = entry.sequence
             compact()
@@ -119,13 +121,46 @@ struct InMemoryTerminalPendingOperations {
                 storage[index] = nil
                 count -= 1
                 retiredSequence = max(retiredSequence, entry.sequence)
-            case .processExit:
+            case .processExit, .marker:
                 break
             }
         }
         writeByteCount = 0
         replayByteCount = 0
         return dropped
+    }
+
+    /// uTerm 本地补丁：和 `removeAllOutput` 一样丢掉所有还没交给 surface 的输出（进程退出、标记留着），但把实时字节
+    /// 按先后拼好交回来（`dropped` 是一共丢了多少字节）。`complete` 为 false 表示交回来的不是全部：丢掉的里面夹着回放，或者队列里还留着进程退出
+    /// （它会排到这些字节前面去）——这时宿主不能拿交回的字节原样补给 surface，只能整屏回放。
+    mutating func removeAllWrites() -> (data: Data, complete: Bool, dropped: Int) {
+        var data = Data()
+        var complete = true
+        var dropped = 0
+        for index in head ..< storage.count {
+            guard let entry = storage[index] else { continue }
+            switch entry.operation {
+            case let .write(bytes):
+                data.append(bytes)
+                dropped += bytes.count
+                storage[index] = nil
+                count -= 1
+                retiredSequence = max(retiredSequence, entry.sequence)
+            case let .replay(bytes):
+                complete = false
+                dropped += bytes.count
+                storage[index] = nil
+                count -= 1
+                retiredSequence = max(retiredSequence, entry.sequence)
+            case .processExit:
+                complete = false
+            case .marker:
+                break
+            }
+        }
+        writeByteCount = 0
+        replayByteCount = 0
+        return (data, complete, dropped)
     }
 
     /// Amortized O(1): the consumed prefix is dropped only once it is at

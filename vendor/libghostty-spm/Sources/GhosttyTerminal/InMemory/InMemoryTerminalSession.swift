@@ -277,6 +277,22 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         return dropped
     }
 
+    /// uTerm 本地补丁：和 ``discardPendingOutput()`` 一样丢掉还没交给 surface 解析的输出，但把其中的实时字节按先后
+    /// 拼好交回来（`dropped` 是一共丢了多少字节）。宿主暂停喂 surface 时拿着它们，恢复时连同暂停期间的输出一起用 ``receiveReplay(_:)`` 补进去——
+    /// surface 只是晚一点解析同一串字节，视口和选区照常留着，不必整屏回放。`complete` 为 false 时交回的不是全部
+    /// （丢掉的里面夹着回放，或者队列里留着进程退出），宿主只能整屏回放。正在解析的那一块不受影响。
+    public func takePendingWrites() -> (data: Data, complete: Bool, dropped: Int) {
+        let taken = surfaceAccess.takePendingWrites()
+        TerminalDebugLog.log(.output, "pending writes taken bytes=\(taken.dropped) complete=\(taken.complete)")
+        return taken
+    }
+
+    /// uTerm 本地补丁：在这之前交来的输出（``receive(_:)``、``receiveReplay(_:)``）都被 surface 解析完之后调 `body`，
+    /// 在会话的输出队列上（不是主线程）。没挂 surface 时等下一个 surface 解析完再调。
+    public func afterPendingOutput(_ body: @escaping @Sendable () -> Void) {
+        surfaceAccess.enqueueMarker(body)
+    }
+
     /// Feed a UTF-8 string into the terminal from the host backend.
     public func receive(_ string: String) {
         guard let data = string.data(using: .utf8) else { return }

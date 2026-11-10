@@ -44,7 +44,7 @@ final class GhosttyHiddenSurfaceTests: XCTestCase {
                       file: file, line: line)
     }
 
-    /// 隐藏期间来的输出只进影子；露出来回放一次，画面与影子一致。
+    /// 隐藏期间来的输出只进影子；露出来把这段补给 surface（补尾巴，不整屏回放），画面与影子一致。
     func testHiddenTerminalOnlyFeedsTheShadowAndCatchesUpWhenShown() async {
         await rig.feed("before\r\n")
         hide()
@@ -56,9 +56,11 @@ final class GhosttyHiddenSurfaceTests: XCTestCase {
         XCTAssertGreaterThan(rig.session.outputPump.currentStats.shadowOnlyBytes, shadowOnly, "隐藏期间的字节只进影子")
         XCTAssertFalse(rig.bridge.isSurfaceReleased, "还没到放掉的时候")
 
+        let tails = rig.session.outputPump.currentStats.tailCatchUps
         show()
         await assertSurfaceMatchesShadow(containing: "hidden 50")
-        XCTAssertEqual(rig.bridge.seedCount, replays + 1, "露出来回放一次")
+        XCTAssertEqual(rig.session.outputPump.currentStats.tailCatchUps, tails + 1, "露出来补一次尾巴")
+        XCTAssertEqual(rig.bridge.seedCount, replays, "surface 一直在：不整屏回放")
     }
 
     /// 没来新字节：露出来不回放（surface 一直留着、内容没落下）。
@@ -122,5 +124,116 @@ final class GhosttyHiddenSurfaceTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(400))
         XCTAssertFalse(rig.bridge.isSurfaceReleased)
         await assertSurfaceMatchesShadow(containing: "keep")
+    }
+
+    // MARK: 切回来时视口与选区留在原处
+
+    private var scrollbar: (offset: Int, len: Int, total: Int)? {
+        rig.view.uTermScrollbar.map { (Int($0.offset), Int($0.len), Int($0.total)) }
+    }
+
+    /// 灌够回滚，翻到第 `row` 行，等引擎报来滚动条。
+    private func scrollUp(to row: Int, file: StaticString = #filePath, line: UInt = #line) async {
+        await rig.feed((1...300).map { "history \($0)" }.joined(separator: "\r\n") + "\r\n")
+        XCTAssertTrue(rig.view.scrollToRow(UInt(row)), file: file, line: line)
+        rig.keepRendering()
+        let there = await rig.waitUntil(3) { self.scrollbar?.offset == row }
+        XCTAssertTrue(there, "自证：翻到了第 \(row) 行，滚动条 \(String(describing: scrollbar))", file: file, line: line)
+    }
+
+    /// 往上翻着、选中一段，切走，期间来了输出，切回来：视口停在原处、选区还在（补尾巴，surface 一直留着）。
+    func testScrolledViewportAndSelectionSurviveHiddenOutput() async {
+        await scrollUp(to: 100)
+        let before = rig.surfaceText
+        rig.drag(fromCol: 0, row: 2, toCol: 6)
+        let selected = await rig.waitUntil(2) { self.rig.selection != nil }
+        XCTAssertTrue(selected, "自证：拖出了选区")
+        let selection = rig.selection
+
+        hide()
+        rig.session.feedOutput(text: (1...40).map { "while away \($0)" }.joined(separator: "\r\n") + "\r\n")
+        show()
+        await assertCaughtUp()
+        XCTAssertEqual(scrollbar?.offset, 100, "视口停在原处")
+        XCTAssertEqual(rig.surfaceText, before, "看到的还是切走前那几行")
+        XCTAssertEqual(rig.selection, selection, "选区留在同一处内容上")
+        XCTAssertTrue(rig.view.performBindingAction("scroll_to_bottom"))
+        let latest = await rig.waitUntil(3) { self.rig.surfaceText.contains("while away 40") }
+        XCTAssertTrue(latest, "期间的输出补进去了")
+    }
+
+    /// 切走前在底部：切回来仍在底部（跟随输出），看得到期间的新内容。
+    func testViewportAtTheBottomFollowsHiddenOutput() async {
+        await rig.feed((1...100).map { "line \($0)" }.joined(separator: "\r\n") + "\r\n")
+        hide()
+        rig.session.feedOutput(text: "fresh after hide\r\n")
+        show()
+        await assertSurfaceMatchesShadow(containing: "fresh after hide")
+        let bottom = await rig.waitUntil(3) { self.scrollbar.map { $0.offset + $0.len >= $0.total } ?? false }
+        XCTAssertTrue(bottom, "仍在底部：\(String(describing: scrollbar))")
+    }
+
+    /// surface 被放掉了（只能整屏回放，视口被复位带到底部）：回来后按切走前记下的内容找回原处；选区没法恢复
+    /// （C 接口不能设选区），不留错位的高亮。
+    func testScrolledViewportIsRestoredAfterTheSurfaceWasReleased() async {
+        rig.bridge.hiddenReleaseDelay = .milliseconds(100)
+        await scrollUp(to: 120)
+        let before = rig.surfaceText
+        rig.drag(fromCol: 0, row: 1, toCol: 6)
+        _ = await rig.waitUntil(2) { self.rig.selection != nil }
+
+        hide()
+        let released = await rig.waitUntil(5) { self.rig.bridge.isSurfaceReleased }
+        XCTAssertTrue(released)
+        rig.session.feedOutput(text: (1...40).map { "while released \($0)" }.joined(separator: "\r\n") + "\r\n")
+        let replays = rig.bridge.seedCount
+        show()
+        let rebuilt = await rig.waitUntil(5) { !self.rig.bridge.isSurfaceReleased && self.rig.bridge.seedCount > replays }
+        XCTAssertTrue(rebuilt, "重建后整屏回放")
+        rig.keepRendering()
+        let restored = await rig.waitUntil(5) { self.scrollbar?.offset == 120 }
+        XCTAssertTrue(restored, "视口找回原处：\(String(describing: scrollbar))，keeper 算出 \(String(describing: rig.bridge.keeper.lastRestoredRow))")
+        XCTAssertEqual(rig.surfaceText, before, "看到的还是切走前那几行")
+        XCTAssertNil(rig.selection, "选区恢复不了：不留错位的高亮")
+    }
+
+    /// surface 被放掉、切走前在底部：回来仍在底部，看得到期间的新内容。
+    func testViewportAtTheBottomStaysAtTheBottomAfterRelease() async {
+        rig.bridge.hiddenReleaseDelay = .milliseconds(100)
+        await rig.feed((1...100).map { "line \($0)" }.joined(separator: "\r\n") + "\r\n")
+        hide()
+        let released = await rig.waitUntil(5) { self.rig.bridge.isSurfaceReleased }
+        XCTAssertTrue(released)
+        rig.session.feedOutput(text: "fresh after release\r\n")
+        show()
+        await assertSurfaceMatchesShadow(containing: "fresh after release")
+        try? await Task.sleep(for: .milliseconds(200))
+        let bar = scrollbar
+        XCTAssertTrue(bar.map { $0.offset + $0.len >= $0.total } ?? false, "仍在底部：\(String(describing: bar))")
+        XCTAssertNil(rig.bridge.keeper.lastRestoredRow, "在底部时不记位置、不滚")
+    }
+
+    /// 期间没来输出：surface 一直在原处，不追也不动视口。
+    func testScrolledViewportWithoutHiddenOutputIsUntouched() async {
+        await scrollUp(to: 80)
+        let before = rig.surfaceText
+        let stats = rig.session.outputPump.currentStats
+        hide()
+        show()
+        rig.keepRendering()
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(scrollbar?.offset, 80)
+        XCTAssertEqual(rig.surfaceText, before)
+        XCTAssertEqual(rig.session.outputPump.currentStats.replays, stats.replays)
+        XCTAssertEqual(rig.session.outputPump.currentStats.tailCatchUps, stats.tailCatchUps)
+        XCTAssertFalse(rig.bridge.keeper.hasMark, "记下的位置用不上，回来时丢掉")
+    }
+
+    private func assertCaughtUp(file: StaticString = #filePath, line: UInt = #line) async {
+        rig.keepRendering()
+        let live = await rig.waitUntil(5) { self.rig.bridge.isLive && !self.rig.session.outputPump.surfaceNeedsCatchUp }
+        XCTAssertTrue(live, "回到屏上后 surface 应当追上并重新吃字节", file: file, line: line)
+        rig.session.surfaceIO.waitForPendingOutput()
+        try? await Task.sleep(for: .milliseconds(100))
     }
 }

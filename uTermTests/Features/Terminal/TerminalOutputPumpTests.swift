@@ -398,3 +398,230 @@ final class LockedBox<Value>: @unchecked Sendable {
     var value: Value { lock.withLock { storage } }
     func mutate(_ body: (inout Value) -> Void) { lock.withLock { body(&storage) } }
 }
+
+// MARK: - 补尾巴、擦屏
+
+/// 停喂 / 恢复时 surface 追影子：能补尾巴就补（视口、选区都留着），补不了才整屏回放；擦屏在 surface 解析到之后才交出去。
+final class TerminalOutputPumpTailTests: XCTestCase {
+
+    /// 假的 surface，带一个「还没解析」的队列：`receive` 进队列，`parse()` 才算解析完（标记在那之后调）。
+    /// `takePendingOutputForCatchUp` 把队列原样交回，和 `InMemoryTerminalSession` 一样。
+    private final class QueuedSurface: TerminalSurfaceSink, @unchecked Sendable {
+        enum Entry: Equatable {
+            case live(Data)
+            case replay(Data)
+        }
+
+        private let lock = NSLock()
+        private var parsed: [Entry] = []
+        private var queue: [Entry] = []
+        private var markers: [@Sendable () -> Void] = []
+        private var grid: (cols: Int, rows: Int)?
+        /// 下一次交回时假装夹着回放（交不全）。
+        var nextTakeIsIncomplete = false
+
+        var entries: [Entry] { lock.withLock { parsed } }
+        var replays: [Data] { entries.compactMap { if case .replay(let data) = $0 { return data } else { return nil } } }
+        func setGrid(cols: Int, rows: Int) { lock.withLock { grid = (cols, rows) } }
+        var surfaceGridSize: (cols: Int, rows: Int)? { lock.withLock { grid } }
+
+        func receive(_ data: Data) { lock.withLock { queue.append(.live(data)) } }
+        func receiveReplay(_ data: Data) { lock.withLock { queue.append(.replay(data)) } }
+
+        /// 把队列里的都解析掉，再调排着的标记。
+        func parse() {
+            let pending: [@Sendable () -> Void] = lock.withLock {
+                parsed.append(contentsOf: queue)
+                queue.removeAll()
+                defer { markers.removeAll() }
+                return markers
+            }
+            pending.forEach { $0() }
+        }
+
+        func discardPendingOutput() -> Int {
+            lock.withLock {
+                defer { queue.removeAll() }
+                return queue.reduce(0) { if case .live(let d) = $1 { return $0 + d.count }; if case .replay(let d) = $1 { return $0 + d.count }; return $0 }
+            }
+        }
+
+        func takePendingOutputForCatchUp() -> TerminalPendingWrites {
+            lock.withLock {
+                var bytes = Data()
+                var complete = !nextTakeIsIncomplete
+                nextTakeIsIncomplete = false
+                for entry in queue {
+                    switch entry {
+                    case .live(let data): bytes.append(data)
+                    case .replay: complete = false
+                    }
+                }
+                queue.removeAll()
+                return TerminalPendingWrites(bytes: bytes, complete: complete, droppedBytes: bytes.count)
+            }
+        }
+
+        func afterPendingOutput(_ body: @escaping @Sendable () -> Void) {
+            lock.withLock { markers.append(body) }
+        }
+
+        func setOutputBacklogHandler(highWater: Int, lowWater: Int, _ handler: (@Sendable (Bool) -> Void)?) {}
+    }
+
+    private func makePump() -> (TerminalOutputPump, ShadowTerminal, QueuedSurface) {
+        let shadow = ShadowTerminal(cols: 40, rows: 6, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        let surface = QueuedSurface()
+        let pump = TerminalOutputPump(shadow: shadow, surface: surface)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        return (pump, shadow, surface)
+    }
+
+    /// surface 解析过的东西按顺序喂进另一个终端：应当和影子一样。
+    private func screen(_ entries: [QueuedSurface.Entry]) -> String {
+        let terminal = ShadowTerminal(cols: 40, rows: 6, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        for entry in entries {
+            switch entry {
+            case .live(let data), .replay(let data): terminal.feed(data)
+            }
+        }
+        return terminal.viewportText()
+    }
+
+    /// 停喂时 surface 队列里没解析的字节和停喂期间的输出接成尾巴，恢复时原样补给它，不整屏回放。
+    func testHiddenOutputIsAppendedAsATailInsteadOfAReplay() {
+        let (pump, shadow, surface) = makePump()
+        let caughtUp = LockedBox<[TerminalOutputPump.CatchUp]>([])
+        pump.onSurfaceCaughtUp = { kind in caughtUp.mutate { $0.append(kind) } }
+        pump.route(Data("one\r\n".utf8))
+        surface.parse()
+        pump.route(Data("queued\r\n".utf8))      // 交给了 surface、还没解析
+        pump.setSurfaceFeeding(false)
+        pump.route(Data("two\r\n".utf8))
+        XCTAssertTrue(pump.surfaceNeedsCatchUp)
+
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 0, "补得了尾巴就不整屏回放")
+        XCTAssertEqual(pump.currentStats.tailCatchUps, 1)
+        XCTAssertEqual(surface.replays, [Data("queued\r\ntwo\r\n".utf8)], "尾巴 = 队列里没解析的 + 停喂期间的，先后不变")
+        XCTAssertEqual(screen(surface.entries), shadow.viewportText())
+        XCTAssertEqual(caughtUp.value, [.tail])
+        XCTAssertFalse(pump.surfaceNeedsCatchUp)
+    }
+
+    /// 停喂期间网格变了：同一串字节按不同网格解析结果不同，只能整屏回放。
+    func testGridChangeWhileHiddenFallsBackToAReplay() {
+        let (pump, shadow, surface) = makePump()
+        let caughtUp = LockedBox<[TerminalOutputPump.CatchUp]>([])
+        pump.onSurfaceCaughtUp = { kind in caughtUp.mutate { $0.append(kind) } }
+        pump.route(Data("one\r\n".utf8))
+        surface.parse()
+        pump.setSurfaceFeeding(false)
+        shadow.resize(cols: 30, rows: 6)
+        pump.route(Data("two\r\n".utf8))
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 1)
+        XCTAssertEqual(pump.currentStats.tailCatchUps, 0)
+        XCTAssertEqual(caughtUp.value, [.replay])
+    }
+
+    /// 网格先变、后来又没来字节，恢复时网格对不上：同样整屏回放。
+    func testGridChangeWithoutOutputIsCaughtAtResume() {
+        let (pump, shadow, surface) = makePump()
+        pump.route(Data("one\r\n".utf8))
+        pump.setSurfaceFeeding(false)
+        pump.route(Data("two\r\n".utf8))
+        shadow.resize(cols: 30, rows: 6)
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 1)
+        XCTAssertEqual(pump.currentStats.tailCatchUps, 0)
+    }
+
+    /// 停喂期间输出攒过了上限：整屏回放（代价和输出量无关），不留着几 MB 的尾巴。
+    func testTailOverTheLimitFallsBackToAReplay() {
+        let (pump, _, surface) = makePump()
+        pump.setSurfaceFeeding(false)
+        let line = Data(String(repeating: "x", count: 1023).appending("\n").utf8)
+        for _ in 0..<(TerminalOutputPump.tailLimit / line.count + 2) { pump.route(line) }
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 1)
+        XCTAssertEqual(pump.currentStats.tailCatchUps, 0)
+    }
+
+    /// surface 交回的不全（队列里夹着回放）、影子被不经过泵的方式改过：整屏回放。
+    func testIncompleteOrStaleSurfaceFallsBackToAReplay() {
+        let (pump, _, surface) = makePump()
+        pump.route(Data("one\r\n".utf8))
+        surface.nextTakeIsIncomplete = true
+        pump.setSurfaceFeeding(false)
+        pump.route(Data("two\r\n".utf8))
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 1)
+
+        pump.setSurfaceFeeding(false)
+        pump.route(Data("three\r\n".utf8))
+        pump.markSurfaceStale()      // surface 被放掉了
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        surface.parse()
+        XCTAssertEqual(pump.currentStats.replays, 2)
+        XCTAssertEqual(pump.currentStats.tailCatchUps, 0)
+    }
+
+    /// 擦屏等 surface 解析到那一片之后才交出去；普通输出不报。
+    func testEraseIsReportedAfterTheSurfaceParsedIt() {
+        let (pump, _, surface) = makePump()
+        let erases = LockedBox<[TerminalErase]>([])
+        pump.onSurfaceErase = { erase in erases.mutate { $0.append(erase) } }
+        pump.route(Data("plain output\r\n".utf8))
+        pump.route(Data("\u{1B}[H\u{1B}[2J".utf8))
+        XCTAssertEqual(erases.value, [], "surface 还没解析到")
+        surface.parse()
+        XCTAssertEqual(erases.value, [.screen])
+        pump.route(Data("\u{1B}[2K".utf8))
+        surface.parse()
+        XCTAssertEqual(erases.value, [.screen, .inPlace])
+    }
+
+    /// 停喂期间来的擦屏（含停喂时还排在 surface 队列里的）：补完尾巴、surface 解析完之后再报，取最重的那一档。
+    func testEraseWhileHiddenIsReportedAfterCatchingUp() {
+        let (pump, _, surface) = makePump()
+        let events = LockedBox<[String]>([])
+        pump.onSurfaceErase = { erase in events.mutate { $0.append("erase \(erase)") } }
+        pump.onSurfaceCaughtUp = { kind in events.mutate { $0.append("caught up \(kind)") } }
+        pump.route(Data("\u{1B}[?1049h".utf8))   // 交给了 surface、还没解析
+        pump.setSurfaceFeeding(false)
+        pump.route(Data("\u{1B}[K".utf8))
+        surface.parse()
+        XCTAssertEqual(events.value, ["erase screen"], "排在停喂前的那个标记照常调（早一点，无害）")
+
+        pump.setSurfaceFeeding(true)
+        pump.waitForCatchUp()
+        XCTAssertEqual(events.value, ["erase screen"], "补完、解析完之前不报")
+        surface.parse()
+        XCTAssertEqual(events.value, ["erase screen", "erase screen", "caught up tail"])
+    }
+
+    /// 整屏快照（远控镜像）换掉了影子：surface 回放之后报一次整屏擦除（选区一律清掉）。
+    func testSnapshotReportsAScreenErase() throws {
+        let (pump, _, surface) = makePump()
+        let erases = LockedBox<[TerminalErase]>([])
+        pump.onSurfaceErase = { erase in erases.mutate { $0.append(erase) } }
+        let source = ShadowTerminal(cols: 40, rows: 6, options: TerminalScrollbackLimits(lines: 1_000).shadowOptions)
+        source.feed(Data("mirrored".utf8))
+        pump.applySnapshot(try source.snapshot())
+        surface.parse()
+        XCTAssertEqual(erases.value, [.screen])
+    }
+}

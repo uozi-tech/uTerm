@@ -209,6 +209,19 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return Self.viewportLines(handle).joined(separator: "\n")
     }
 
+    /// 活动屏整屏（含回滚）第 `row` 行的文字（0 = 回滚最早的那一行），读法同 `viewportText()`；越界是 nil。
+    /// 给标签切回来时找回原来的视口用（`TerminalViewportMark`）。
+    func screenRowText(_ row: Int) -> String? {
+        guard row >= 0, row <= Int(UInt32.max) else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        let cols = Self.cols(handle)
+        guard cols > 0,
+              let start = Self.gridRef(handle, x: 0, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN),
+              let end = Self.gridRef(handle, x: cols - 1, y: UInt32(row), tag: GHOSTTY_POINT_TAG_SCREEN) else { return nil }
+        return Self.lineText(handle, from: start, to: end)
+    }
+
     // MARK: 应答
 
     /// 查询应答从这里出去。`enabled` 为 false 时影子不答（前台由 surface 答，两边都答远端会收到两份）。
@@ -1102,9 +1115,10 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
         return String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
     }
 
-    private static func gridRef(_ terminal: OpaquePointer, x: UInt16, y: UInt32) -> GhosttyGridRef? {
+    private static func gridRef(_ terminal: OpaquePointer, x: UInt16, y: UInt32,
+                                tag: GhosttyPointTag = GHOSTTY_POINT_TAG_ACTIVE) -> GhosttyGridRef? {
         var point = GhosttyPoint()
-        point.tag = GHOSTTY_POINT_TAG_ACTIVE
+        point.tag = tag
         point.value.coordinate = GhosttyPointCoordinate(x: x, y: y)
         var ref = GhosttyGridRef()
         ref.size = MemoryLayout<GhosttyGridRef>.size
@@ -1122,34 +1136,39 @@ nonisolated final class ShadowTerminal: @unchecked Sendable {
                 lines.append("")
                 continue
             }
-            var selection = GhosttySelection()
-            selection.size = MemoryLayout<GhosttySelection>.size
-            selection.start = start
-            selection.end = end
-            selection.rectangle = false
-            let line: String = withUnsafePointer(to: &selection) { selectionPointer in
-                var options = GhosttyFormatterTerminalOptions()
-                options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-                options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-                options.unwrap = false
-                options.trim = true
-                options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
-                options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
-                options.selection = selectionPointer
-                var formatter: OpaquePointer?
-                guard ghostty_formatter_terminal_new(nil, &formatter, terminal, options) == GHOSTTY_SUCCESS,
-                      let formatter else { return "" }
-                defer { ghostty_formatter_free(formatter) }
-                var pointer: UnsafeMutablePointer<UInt8>?
-                var length = 0
-                guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
-                      let pointer, length > 0 else { return "" }
-                defer { ghostty_free(nil, pointer, length) }
-                return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
-            }
-            lines.append(Self.trimmingTrailingWhitespace(line))
+            lines.append(lineText(terminal, from: start, to: end))
         }
         return lines
+    }
+
+    /// 一行（`start` 到 `end` 两格之间）的纯文字，行尾空白去掉。
+    private static func lineText(_ terminal: OpaquePointer, from start: GhosttyGridRef, to end: GhosttyGridRef) -> String {
+        var selection = GhosttySelection()
+        selection.size = MemoryLayout<GhosttySelection>.size
+        selection.start = start
+        selection.end = end
+        selection.rectangle = false
+        let line: String = withUnsafePointer(to: &selection) { selectionPointer in
+            var options = GhosttyFormatterTerminalOptions()
+            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
+            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+            options.unwrap = false
+            options.trim = true
+            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
+            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
+            options.selection = selectionPointer
+            var formatter: OpaquePointer?
+            guard ghostty_formatter_terminal_new(nil, &formatter, terminal, options) == GHOSTTY_SUCCESS,
+                  let formatter else { return "" }
+            defer { ghostty_formatter_free(formatter) }
+            var pointer: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
+                  let pointer, length > 0 else { return "" }
+            defer { ghostty_free(nil, pointer, length) }
+            return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+        }
+        return Self.trimmingTrailingWhitespace(line)
     }
 
     static func trimmingTrailingWhitespace(_ line: String) -> String {
