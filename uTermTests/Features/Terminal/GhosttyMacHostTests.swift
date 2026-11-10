@@ -90,6 +90,8 @@ final class GhosttyMacHostTests: XCTestCase {
             rig.layout()
             let pinned = await waitUntil(3) { rig.bridge.grid?.cols == cols && rig.bridge.grid?.rows == rows }
             XCTAssertTrue(pinned, "钉 \(cols)×\(rows)，Ghostty 的网格是 \(rig.grid)")
+            // 影子只跟 surface 的终端在 IO 线程上报的网格走（M4 的前提），比主线程上的网格晚一点到。
+            _ = await waitUntil(3) { shadow.size.cols == cols && shadow.size.rows == rows }
             XCTAssertEqual(shadow.size.cols, cols, "影子终端的列数")
             XCTAssertEqual(shadow.size.rows, rows, "影子终端的行数")
             let told = await waitUntil(2) {
@@ -114,8 +116,8 @@ final class GhosttyMacHostTests: XCTestCase {
         await emit("\u{1B}[2J\u{1B}[Hwelcome\r\n> ", to: rig.backend)
         rig.session.pinRemoteGrid(cols: 57, rows: 60, controller: "测试 iPhone")
         rig.layout()
-        let pinned = await waitUntil(3) { rig.bridge.grid?.rows == 60 }
-        XCTAssertTrue(pinned, "钉 57×60，Ghostty 的网格是 \(rig.grid)")
+        let pinned = await waitUntil(3) { rig.bridge.grid?.rows == 60 && rig.session.shadow.size.rows == 60 }
+        XCTAssertTrue(pinned, "钉 57×60，Ghostty 的网格是 \(rig.grid)，影子 \(rig.session.shadow.size)")
         rig.layout()
         XCTAssertGreaterThan(rig.view.frame.height, rig.container.bounds.height, "用例前提：钉住的终端比窗格高")
         XCTAssertEqual(rig.view.frame.maxY, rig.container.bounds.height, accuracy: 0.5, "光标在屏幕顶上：顶边贴着窗格顶")

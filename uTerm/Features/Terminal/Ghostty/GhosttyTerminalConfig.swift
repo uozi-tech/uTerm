@@ -17,7 +17,7 @@ enum GhosttyTerminalConfig {
             terminalConfiguration: base(settings: TerminalSettings.read()))
     }()
 
-    /// 与外观无关的部分：字体、光标、历史、剪贴板、通知。
+    /// 与外观无关的部分：Mac 自己的字体、字重、加粗、选中即复制、通知，加上两端共用的那些项。
     static func base(settings: TerminalSettings) -> GhosttyTerminal.TerminalConfiguration {
         GhosttyTerminal.TerminalConfiguration { b in
             // 终端字体是 `NSFont.monospacedSystemFont(…, weight: .medium)`。Ghostty 按族名在 CoreText 里找字体，
@@ -36,21 +36,11 @@ enum GhosttyTerminalConfig {
             // 回归用例 `GhosttyFontRenderingTests` 读画出来的像素核这几样。
             b.withFontThicken(true)
             b.withFontThickenStrength(0)
-            b.withCursorStyle(cursorStyle(settings.cursorShape))
-            b.withCursorStyleBlink(settings.cursorBlink)
-            // 容器自己留内边距（`GhosttyContainerView.insets`），Ghostty 不再加。
-            b.withWindowPaddingX(0)
-            b.withWindowPaddingY(0)
             b.withCustom("window-padding-balance", "false")
-            // 历史上限：行数用设置里的，字节上限按行数放宽；和影子终端同一个函数算（`TerminalScrollbackLimits`）。
-            // 两个键都只对之后新建的 surface 生效。
-            for item in TerminalScrollbackLimits(lines: settings.scrollback).ghosttyConfiguration {
-                b.withCustom(item.key, item.value)
-            }
-            // OSC 52 由影子终端处理（`TerminalSession.installShadowClipboardHandler`：标签藏着、surface 没建时也要生效），
-            // surface 这边写、读都关掉，免得写两遍；远端程序不能读走 Mac 的剪贴板。
-            b.withCustom("clipboard-read", "deny")
-            b.withCustom("clipboard-write", "deny")
+            // 光标、留白、着色规则、剪贴板、回滚上限、按键绑定：两端共用（`TerminalGhosttyConfig.applyCommon`）。
+            // 回滚的行数用设置里的，字节上限按行数放宽，和影子终端同一个函数算（`TerminalScrollbackLimits`）。
+            TerminalGhosttyConfig.applyCommon(to: &b, cursorShape: settings.cursorShape, cursorBlink: settings.cursorBlink,
+                                              scrollback: TerminalScrollbackLimits(lines: settings.scrollback))
             // 取值是 none / clipboard（`false` 按文档是 none 的别名，但这个版本报 InvalidValue）。
             b.withCustom("copy-on-select", settings.copyOnSelect ? "clipboard" : "none")
             // 桌面通知（OSC 9 / 777）由影子终端的事件发（带「用户是否在看」的过滤，标签藏着时也收得到），
@@ -60,51 +50,11 @@ enum GhosttyTerminalConfig {
             b.withCustom("shell-integration", "none")
             b.withCustom("cursor-click-to-move", "true")
             b.withCustom("mouse-hide-while-typing", "false")
-            // 按键绑定：Ghostty 的默认绑定全清，只留拷贝 / 粘贴 / 全选、自然文本编辑、翻回滚（清单与理由在共享的
-            // `TerminalKeyBindings`）。uTerm 的快捷键归主菜单和 SwiftUI 管，其余组合发给程序。
-            for item in TerminalKeyBindings.ghosttyConfiguration {
-                b.withCustom(item.key, item.value)
-            }
-            // 以下四项是迁移前的着色规则（iOS 试用第二轮逐格对比查出来的，见 docs/ghostty-eval/measure-ios.md M16）：
-            // 256 色的 16–255 由 16 色按 CIELAB 生成；粗体的 0–7 号色用亮色；
-            // dim 按 sRGB 和底色五五开混合。
-            b.withCustom("palette-generate", "true")
-            b.withCustom("bold-color", "bright")
-            b.withCustom("alpha-blending", "native")
-            b.withCustom("faint-opacity", "0.5")
         }
     }
 
-    /// 深 / 浅两套配色：背景、前景、16 色、选区、光标、最低对比度。
-    static func theme() -> GhosttyTerminal.TerminalTheme {
-        GhosttyTerminal.TerminalTheme(light: colors(.vscodeLight), dark: colors(.vscodeDark))
-    }
-
-    static func colors(_ scheme: TerminalColorScheme) -> GhosttyTerminal.TerminalConfiguration {
-        GhosttyTerminal.TerminalConfiguration { b in
-            b.withBackground(hex(scheme.backgroundColor))
-            b.withForeground(hex(scheme.foregroundColor))
-            b.withSelectionBackground(hex(scheme.selectionColor))
-            b.withSelectionForeground(hex(scheme.foregroundColor))
-            b.withCursorColor(hex(scheme.cursorColor))
-            // 块光标下的字用终端底色。
-            b.withCursorText(hex(scheme.backgroundColor))
-            for (index, color) in scheme.ansiColors.enumerated() {
-                b.withPalette(index, color: color.hex)
-            }
-            // minimum-contrast：官方 Ghostty 达不到目标比时把前景换成纯黑或纯白；我们编的引擎带补丁 0022，
-            // 保色相、只调明度（OKLCH），块字符也不豁免。
-            b.withMinimumContrast(Double(TerminalColorScheme.minimumContrastRatio))
-        }
-    }
-
-    static func cursorStyle(_ shape: TerminalCursorShape) -> GhosttyTerminal.TerminalCursorStyle {
-        switch shape {
-        case .block: .block
-        case .underline: .underline
-        case .bar: .bar
-        }
-    }
+    /// 深 / 浅两套配色（两端共用）。
+    static func theme() -> GhosttyTerminal.TerminalTheme { TerminalGhosttyConfig.theme() }
 
     /// 族名回退链：系统等宽字体（`.AppleSystemUIFontMonospaced`）→ Menlo → PingFang SC。
     ///
@@ -120,12 +70,5 @@ enum GhosttyTerminalConfig {
         if let family = TerminalSettings.textFont().familyName { out.append(family) }
         for fallback in ["Menlo", "PingFang SC"] where !out.contains(fallback) { out.append(fallback) }
         return out
-    }
-
-    static func hex(_ color: NSColor) -> String {
-        let c = color.usingColorSpace(.sRGB) ?? color
-        let r = Int((c.redComponent * 255).rounded()), g = Int((c.greenComponent * 255).rounded())
-        let b = Int((c.blueComponent * 255).rounded())
-        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

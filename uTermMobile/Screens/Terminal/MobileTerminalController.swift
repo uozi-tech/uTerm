@@ -88,7 +88,7 @@ final class MobileTerminalController {
     @ObservationIgnored private(set) var isAppInBackground = UIApplication.shared.applicationState == .background {
         didSet {
             guard isAppInBackground != oldValue else { return }
-            // 终端自己也听这对通知，这里转一遍是为了测试直接调 `appVisibilityChanged` 时也走得到；重复调用无害。
+            // 只由控制器听这对通知，转给终端（终端自己不听；测试直接调 `appVisibilityChanged` 也走这里）。
             terminal.setAppInBackground(isAppInBackground)
             syncRemoteWatch()
             if isLooking { acknowledgeProgramStatus() }

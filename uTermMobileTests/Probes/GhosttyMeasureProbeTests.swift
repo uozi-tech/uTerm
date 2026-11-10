@@ -512,6 +512,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
 
         let memory0 = MemoryProbe.read()
         NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: UIApplication.shared)
+        gh.setAppInBackground(true)   // 生产上由控制器听通知转过来
         gh.view.setSurfaceVisible(false)
         resetFrames()
         let t0 = CACurrentMediaTime()
@@ -567,6 +568,7 @@ final class GhosttyMeasureProbeTests: XCTestCase {
         let back = CACurrentMediaTime()
         NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: UIApplication.shared)
         NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: UIApplication.shared)
+        gh.setAppInBackground(false)
         gh.view.setSurfaceVisible(true)
         var ghAt: Double?, ghParsedAt: Double?
         while CACurrentMediaTime() - back < 10, ghAt == nil {

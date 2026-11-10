@@ -9,6 +9,8 @@ import os
 @Observable
 final class TerminalSession: NSObject {
     private(set) var backend: (any TerminalBackend)?
+    /// 影子 + surface 的接线（两端共用，见 `TerminalSurfaceLink`）。下面的 `shadow` / `surfaceIO` / `outputPump` 就是它的。
+    @ObservationIgnored let link: TerminalSurfaceLink
     /// 影子终端（libghostty-vt）：和画面吃同一份字节，uTerm 要读的终端状态都从它读——程序状态、通知、命令跟踪标记、
     /// 读屏、是否在备用屏、光标、kitty 键盘标志、镜像与检查点的快照。尺寸跟着 Ghostty 报来的网格走。
     @ObservationIgnored let shadow: ShadowTerminal
@@ -18,11 +20,6 @@ final class TerminalSession: NSObject {
     @ObservationIgnored let outputPump: TerminalOutputPump
     /// 画面：Ghostty 的视图（见 `GhosttyTerminalBridge`）。surface 等视图第一次进窗口才建。
     @ObservationIgnored private(set) lazy var ghostty = GhosttyTerminalBridge(owner: self)
-    /// 远控主控端（后端 `mirrorsRemoteGrid`）：影子终端的网格跟着对端的快照走，本地 surface 报来的网格不改影子
-    /// （只发给对端，对端钉好后发来新网格的快照）。surface 的 resize 回调在 IO 线程上读它。
-    @ObservationIgnored let shadowFollowsRemoteGrid: OSAllocatedUnfairLock<Bool>
-    /// 新 surface 的网格报告认不认（见 `TerminalSurfaceGridGate`）。resize 回调在 IO 线程上读它。
-    @ObservationIgnored let surfaceGridGate: TerminalSurfaceGridGate
     /// 键盘 / 粘贴 / 远端输入与尺寸变化发往后端的有序通道（两端共用，见 `TerminalInputChannel`）。
     @ObservationIgnored let inputChannel = TerminalInputChannel()
     /// 当前绑定的代次：`connect` / `detach` / `dispose` / `close` 都会递增，旧绑定的在途结果据此作废。
@@ -61,7 +58,7 @@ final class TerminalSession: NSObject {
     /// 含 `idle` 的那条（远控把它推给接入的设备：程序空闲也说明前台是 Agent 而不是 shell）。
     var programReport: ProgramStatusRecord?
     /// 影子终端事件的处理（程序状态、查询应答、历史、远控镜像的规则两端共用，见 `TerminalEventRouter`）。
-    @ObservationIgnored let events = TerminalEventRouter()
+    var events: TerminalEventRouter { link.events }
     var programStatusTracker: ProgramStatusTracker { events.tracker }
     /// 程序状态的记账副本，和字节位置严格对应，存进 holder 检查点（见 `ProgramStatusJournal`）。
     var statusJournal: ProgramStatusJournal { events.journal }
@@ -98,32 +95,13 @@ final class TerminalSession: NSObject {
     override init() {
         // 回滚上限和 surface 用同一个函数算（`GhosttyTerminalConfig.base`）。初始尺寸就是还没量到网格时报给后端的那个。
         let settings = TerminalSettings.read()
-        let shadow = ShadowTerminal(cols: 120, rows: 30,
-                                    options: TerminalScrollbackLimits(lines: settings.scrollback)
-                                        .shadowOptions(cursorBlink: settings.cursorBlink))
+        let link = TerminalSurfaceLink(cols: 120, rows: 30,
+                                       options: TerminalScrollbackLimits(lines: settings.scrollback)
+                                           .shadowOptions(cursorBlink: settings.cursorBlink))
+        self.link = link
+        let shadow = link.shadow, pump = link.pump
         self.shadow = shadow
-        // write / resize 由 Ghostty 在任意线程回调，都转给 `GhosttyTerminalBridge`（它建好之后把自己挂进这个盒子）。
-        let relay = GhosttyTerminalBridge.Relay()
-        let followsRemote = OSAllocatedUnfairLock(initialState: false)
-        shadowFollowsRemoteGrid = followsRemote
-        let gridGate = TerminalSurfaceGridGate()
-        surfaceGridGate = gridGate
-        surfaceIORelay = relay
-        surfaceIO = InMemoryTerminalSession(
-            write: { relay.write($0) },
-            resize: { viewport in
-                // 新 surface 先按出生时的默认网格报一次，再报真实的：那一次不认（见 `TerminalSurfaceGridGate`）。
-                guard gridGate.admits(viewport) else { return }
-                // 影子终端只认这个回调报来的网格（surface 的终端自己的尺寸），当场跟上；格子像素给尺寸查询用。
-                if !followsRemote.withLock({ $0 }) {
-                    shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                                  cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
-                }
-                relay.resize(viewport)
-            },
-            // 只有行列数要发给远端（SIGWINCH）；像素级变化不用。
-            suppressesPixelOnlyResizes: true)
-        let pump = TerminalOutputPump(shadow: shadow, surface: surfaceIO)
+        surfaceIO = link.io
         outputPump = pump
         mirrorTap = TerminalMirrorTap(snapshot: { try? shadow.snapshot(scrollbackLines: RemoteConstants.snapshotScrollback) },
                                       exclusively: { pump.performWhileFeedingPaused($0) })
@@ -138,7 +116,8 @@ final class TerminalSession: NSObject {
         _ = ghostty
         installShadowEventHandler()
         installShadowClipboardHandler()
-        installShadowReplyHandler()
+        // surface 没在吃字节的时候（还没建、被丢弃），查询由影子终端答；应答和键盘输入走同一条通道。
+        link.onShadowReply = { [weak self] in self?.sendHostBytes($0) }
         updateShadowColors(dark: NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         attentionSink = { [weak self] attention in
             guard let self else { return }
@@ -146,33 +125,11 @@ final class TerminalSession: NSObject {
         }
     }
 
-    /// `surfaceIO` 的回调转给 `GhosttyTerminalBridge` 用的盒子。
-    @ObservationIgnored let surfaceIORelay: GhosttyTerminalBridge.Relay
-
-    /// surface 没在吃字节的时候（还没建、被丢弃），查询由影子终端答；应答和键盘输入走同一条通道。
-    /// 在主线程上喂（接回时的回放）就当场处理，回放的标志才挡得住；否则排到主线程，先后顺序不变。
-    private func installShadowReplyHandler() {
-        shadow.setReplyHandler { [weak self] data in
-            TerminalMainHop.run { self?.sendHostBytes(data) }
-        }
-    }
-
     /// 影子终端替 surface 答颜色查询（OSC 10 / 11 / 12、`CSI ? 996 n`）时用的配色，跟着 app 外观走。
     /// 只在 surface 不吃字节时（还没建）才轮到影子答；`GhosttyHostView` 每次更新都会调，值没变就不动。
     func updateShadowColors(dark: Bool) {
-        guard shadowColorsAreDark != dark else { return }
-        shadowColorsAreDark = dark
-        let scheme = TerminalColorScheme.resolve(dark: dark)
-        func rgb(_ color: NSColor) -> (UInt8, UInt8, UInt8) {
-            let c = color.usingColorSpace(.sRGB) ?? color
-            return (UInt8((c.redComponent * 255).rounded()), UInt8((c.greenComponent * 255).rounded()),
-                    UInt8((c.blueComponent * 255).rounded()))
-        }
-        shadow.setDefaultColors(foreground: rgb(scheme.foregroundColor), background: rgb(scheme.backgroundColor),
-                                cursor: rgb(scheme.cursorColor), dark: dark)
+        link.syncShadowColors(dark: dark)
     }
-
-    @ObservationIgnored private var shadowColorsAreDark: Bool?
 
     /// uTerm 自己要发给程序的字节（OSC 7501 应答、贴图后的路径），以及 Ghostty 发出的键盘输入与终端应答。
     /// 进有序输入通道（`TerminalInputChannel`），按产生顺序到达后端。接回时回放的历史不会走到这里（影子喂历史时不应答，
@@ -234,8 +191,8 @@ final class TerminalSession: NSObject {
     /// 失败置 failed，远端结束置 disconnected。
     func connect(using backend: any TerminalBackend) async {
         resetFeedAndResizeState()
-        // 重连先复位光标形状（`CSI 0 q`，影子没内容时不送；两端共用，见 `TerminalOutputPump.resetCursorShapeForNewConnection`）。
-        outputPump.resetCursorShapeForNewConnection()
+        // 重连先复位光标形状、远控主控端的网格跟着对端走（两端共用，见 `TerminalSurfaceLink.prepare`）。
+        link.prepare(for: backend)
         // `resetFeedAndResizeState()` just bumped `feedGeneration`; snapshot it
         // as this call's identity token. `backend.connect()` below suspends and
         // frees the MainActor — a second `connect(using:)`, `dispose()`, or
@@ -245,8 +202,6 @@ final class TerminalSession: NSObject {
         self.backend = backend
         // 远控主控端：影子的网格由对端的快照定，画面等网格对齐再跟（见 `TerminalBackend.mirrorsRemoteGrid`）。
         let mirrorsRemote = backend.mirrorsRemoteGrid
-        shadowFollowsRemoteGrid.withLock { $0 = mirrorsRemote }
-        outputPump.followsSnapshotGrid = mirrorsRemote
         if mirrorsRemote, let size = inputChannel.latestSize {
             // 接入请求就带上本地尺寸：对端钉好这个尺寸再拍第一张快照，不必先按默认的 80×24 接入再改一次。
             await backend.resize(cols: size.cols, rows: size.rows)

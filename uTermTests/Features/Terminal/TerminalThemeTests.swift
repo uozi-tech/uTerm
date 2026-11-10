@@ -29,13 +29,13 @@ final class TerminalThemeTests: XCTestCase {
     /// 输入时看不到光标。配置里光标色必须是配色方案里那个不透明的颜色，光标下的字用终端底色。
     func testCursorColorIsOpaqueAndComesFromTheScheme() {
         for scheme in [uTerm.TerminalColorScheme.vscodeDark, .vscodeLight] {
-            let config = entries(GhosttyTerminalConfig.colors(scheme))
-            let cursor = GhosttyTerminalConfig.hex(scheme.cursorColor)
+            let config = entries(TerminalGhosttyConfig.colors(scheme))
+            let cursor = TerminalRGB(scheme.cursorColor).hex
             XCTAssertEqual(config["cursor-color"], [cursor], scheme.displayName)
             XCTAssertEqual(cursor.count, 7, "#RRGGBB，不带透明度")
-            XCTAssertEqual(config["cursor-text"], [GhosttyTerminalConfig.hex(scheme.backgroundColor)])
+            XCTAssertEqual(config["cursor-text"], [TerminalRGB(scheme.backgroundColor).hex])
             XCTAssertNil(config["cursor-opacity"], "不调光标透明度")
-            XCTAssertNotEqual(cursor, GhosttyTerminalConfig.hex(scheme.backgroundColor), "光标不能和底色一样")
+            XCTAssertNotEqual(cursor, TerminalRGB(scheme.backgroundColor).hex, "光标不能和底色一样")
         }
     }
 
@@ -74,10 +74,10 @@ final class TerminalThemeTests: XCTestCase {
     /// 它随旧引擎的宿主视图一起删了；现在只有配色方案里的这一个底色，直接写进 Ghostty 的配置。）
     func test_terminal_background_matches_workspace_sidebar_background() {
         let dark = uTerm.TerminalColorScheme.resolve(dark: true), light = uTerm.TerminalColorScheme.resolve(dark: false)
-        XCTAssertEqual(GhosttyTerminalConfig.hex(dark.backgroundColor), "#141414")
-        XCTAssertEqual(entries(GhosttyTerminalConfig.colors(dark))["background"], ["#141414"])
-        XCTAssertEqual(GhosttyTerminalConfig.hex(light.backgroundColor), "#FFFFFF")
-        XCTAssertEqual(entries(GhosttyTerminalConfig.colors(light))["background"], ["#FFFFFF"])
+        XCTAssertEqual(TerminalRGB(dark.backgroundColor).hex, "#141414")
+        XCTAssertEqual(entries(TerminalGhosttyConfig.colors(dark))["background"], ["#141414"])
+        XCTAssertEqual(TerminalRGB(light.backgroundColor).hex, "#FFFFFF")
+        XCTAssertEqual(entries(TerminalGhosttyConfig.colors(light))["background"], ["#FFFFFF"])
     }
 
     /// 深浅两套配色各自写全：底色、前景、选区、16 色调色板、最低对比度；深浅的底色不同。
@@ -86,9 +86,9 @@ final class TerminalThemeTests: XCTestCase {
         let light = entries(theme.light), dark = entries(theme.dark)
         XCTAssertNotEqual(light["background"], dark["background"])
         for (name, config, scheme) in [("浅色", light, uTerm.TerminalColorScheme.vscodeLight), ("深色", dark, .vscodeDark)] {
-            XCTAssertEqual(config["background"], [GhosttyTerminalConfig.hex(scheme.backgroundColor)], name)
-            XCTAssertEqual(config["foreground"], [GhosttyTerminalConfig.hex(scheme.foregroundColor)], name)
-            XCTAssertEqual(config["selection-background"], [GhosttyTerminalConfig.hex(scheme.selectionColor)], name)
+            XCTAssertEqual(config["background"], [TerminalRGB(scheme.backgroundColor).hex], name)
+            XCTAssertEqual(config["foreground"], [TerminalRGB(scheme.foregroundColor).hex], name)
+            XCTAssertEqual(config["selection-background"], [TerminalRGB(scheme.selectionColor).hex], name)
             XCTAssertEqual(config["palette"]?.count, 16, name)
             for (index, color) in scheme.ansiColors.enumerated() {
                 XCTAssertEqual(config["palette"]?[index], "\(index)=\(color.hex)", "\(name) 第 \(index) 色")
@@ -122,7 +122,7 @@ final class TerminalThemeTests: XCTestCase {
         for _ in 0..<5 { GhosttyTerminalBridge.apply(settings: current) }
         XCTAssertEqual(GhosttyTerminalConfig.controller.renderedConfig, before)
         let config = before
-        XCTAssertTrue(config.contains("cursor-style = \(GhosttyTerminalConfig.cursorStyle(current.cursorShape).rawValue)"),
+        XCTAssertTrue(config.contains("cursor-style = \(TerminalGhosttyConfig.cursorStyle(current.cursorShape).rawValue)"),
                       "控制器用的就是当前设置的那份配置")
         XCTAssertTrue(config.contains("scrollback-limit-lines = \(current.scrollback)"))
     }

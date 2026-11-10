@@ -1,7 +1,7 @@
 import Foundation
 import GhosttyTerminal
 
-/// 新 surface 的网格报告要不要认（两端共用：Mac 的 `TerminalSession`、iOS 的 `GhosttyTerminalBridge`）。
+/// 新 surface 的网格报告要不要认（两端共用，`TerminalSurfaceLink` 持有）。
 ///
 /// 新 surface 的终端先按出生时的默认网格报一次 resize（Mac 上按 800×600 px 算出约 53×21，iOS 上 30×10 这种），再报真实的。
 /// 那一次不能让影子终端跟：影子缩到默认网格再放回来，备用屏（全屏程序）的内容就被裁掉了，而网格最终没变时程序收不到
@@ -35,9 +35,6 @@ nonisolated final class TerminalSurfaceGridGate: @unchecked Sendable {
             expected = nil
         }
     }
-
-    /// 闸开着（认过和视图一致的那一次，或兜底开了）。
-    var isSettled: Bool { lock.withLock { settled } }
 
     /// IO 线程：这次报告认不认。
     func admits(_ viewport: InMemoryTerminalViewport) -> Bool {
@@ -76,8 +73,32 @@ nonisolated final class TerminalSurfaceGridGate: @unchecked Sendable {
     }
 }
 
-/// 终端画面（surface）的保留策略，两端共用。
-nonisolated enum TerminalSurfaceRetention {
-    /// 标签不在屏上多久之后放掉它的 surface（交换链、帧缓冲、引擎里的回滚；每个十几 MB）。露出来时重建，由影子终端回放。
-    static let hiddenReleaseDelay: Duration = .seconds(60)
+/// 终端画面（surface）的保留：不在屏上多久之后放掉它（交换链、帧缓冲、引擎里的回滚；每个十几 MB），露出来时重建、
+/// 由影子终端回放。两端共用。
+@MainActor
+final class TerminalSurfaceRetention {
+    nonisolated static let hiddenReleaseDelay: Duration = .seconds(60)
+
+    /// 不在屏上多久放掉（测试里改短）。
+    var delay: Duration = TerminalSurfaceRetention.hiddenReleaseDelay
+    private var task: Task<Void, Never>?
+
+    /// 离开屏幕：隔 `delay` 还没回来（没被 `cancel`）就调 `release`。之前排着的那次作废。
+    func scheduleRelease(_ release: @escaping @MainActor () -> Void) {
+        task?.cancel()
+        let delay = delay
+        task = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            release()
+        }
+    }
+
+    /// 回到屏上：不放了。
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    deinit { task?.cancel() }
 }

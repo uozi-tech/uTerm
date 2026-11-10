@@ -16,6 +16,27 @@ nonisolated struct TerminalRGB: Equatable, Sendable {
 
     /// `#RRGGBB`，Ghostty 配置里颜色的写法。
     var hex: String { String(format: "#%02X%02X%02X", red, green, blue) }
+
+    var components: (UInt8, UInt8, UInt8) { (red, green, blue) }
+
+    init(red: UInt8, green: UInt8, blue: UInt8) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    /// 平台颜色（按 sRGB 取分量，四舍五入到 8 位）。透明度不管：终端配色都是不透明的。
+    init(_ color: TerminalPlatformColor) {
+        #if canImport(AppKit)
+        let c = color.usingColorSpace(.sRGB) ?? color
+        let (r, g, b) = (c.redComponent, c.greenComponent, c.blueComponent)
+        #else
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #endif
+        func byte(_ value: CGFloat) -> UInt8 { UInt8(max(0, min(255, (value * 255).rounded()))) }
+        self.init(red: byte(r), green: byte(g), blue: byte(b))
+    }
 }
 
 /// 一套完整的终端配色：背景 / 前景 / accent + 16 色 ANSI 表。
@@ -24,7 +45,7 @@ nonisolated struct TerminalRGB: Equatable, Sendable {
 /// 配色不再可自定义：终端固定用 VS Code 家族的前景 / ANSI 色，按 app 外观自动取
 /// 深 / 浅变体（`resolve(dark:)`）。深色背景对齐工作区基底。
 ///
-/// macOS 与 iOS 共用这一份表；翻成 Ghostty 的配置，Mac 在 `GhosttyTerminalConfig.colors`，iOS 在 `GhosttyPalette`。
+/// macOS 与 iOS 共用这一份表；翻成 Ghostty 的配置在 `TerminalGhosttyConfig.colors`（两端共用）。
 nonisolated struct TerminalColorScheme: @unchecked Sendable {
     /// 渲染期最低 WCAG 对比度（VS Code `minimumContrastRatio` 同思路）。远端
     /// prompt / TUI（p10k 等）常按深色背景硬编码 256 色 / 真彩色，不经过下面的

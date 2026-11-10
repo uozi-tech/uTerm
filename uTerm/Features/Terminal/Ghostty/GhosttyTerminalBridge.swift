@@ -3,21 +3,17 @@ import Carbon.HIToolbox
 import GhosttyTerminal
 import os
 
-/// 把一条 `TerminalSession` 的字节流接到 GhosttyKit 的 host-managed IO：画面、键盘输入、终端应答、网格尺寸都在这里。
+/// 一条 `TerminalSession` 的画面：GhosttyKit 的视图 + 平台那一侧的事（按键、右键菜单、尺寸怎么发给 PTY、远控钉尺寸、
+/// 在不在屏上）。影子与 surface 之间的接线两端共用（`TerminalSurfaceLink`）。
 ///
-/// ## 形态：Ghostty 画面 + 影子终端
-///
-/// 字节先进会话的影子终端（`TerminalSession.shadow`，libghostty-vt，同步解析），同一批字节再交给 Ghostty 的 surface
-/// （异步解析、渲染线程出帧）。uTerm 要读的终端状态一律读影子；surface 只管画和输入。
-/// 应答只能有一个来源：DA、DSR 这类查询由 surface 答（`ghosttyDidWrite`），影子终端不答——用户的键盘输入本来也只从
-/// surface 来。
-///
-/// ## 时序
-///
-/// Ghostty 的 surface 要等视图进了窗口才建（`AppTerminalView.viewDidMoveToWindow`），之前收到的字节最多缓 1 MiB，
-/// 超了丢最旧的——会截断转义序列。所以 surface 没建好时输出泵不往里送（`TerminalOutputPump.setSurfaceFeeding`）；
-/// 建好那一刻泵把影子终端的状态回放进去（`ShadowTerminal.makeReplay`，开头自带复位；`receiveReplay` 不产生应答），
-/// 之后再逐片转发。影子还是空的就不回放。surface 一旦建好，视图离开窗口（切标签）也不销毁，继续吃字节。
+/// 字节流方向：
+/// - 远端 → 终端：两端共用的 `TerminalOutputPump` 分流：先进影子终端（同步解析），画面吃得了的时候再交给 surface
+///   （异步解析、渲染线程出帧）。画面吃不了的三种情况——surface 还没建（标签没露出过）、视图离开了窗口（切走的标签）、
+///   surface 被放掉了（标签藏了 `hiddenReleaseDelay`）——只喂影子；画面回来时先补尾巴或把影子的状态回放进 surface，
+///   再接实时字节。
+/// - 终端 → 远端：键盘 / 粘贴 / 查询应答从 `InMemoryTerminalSession` 的 write 回调出来（任意线程），回主线程进
+///   `TerminalInputChannel`；网格尺寸走 resize 回调进同一个通道（同轮合并、相同不重发）。
+///   应答只有一个来源：画面在吃字节时由 surface 答，其余时候由影子答（输出泵切换）。
 @MainActor
 final class GhosttyTerminalBridge {
     let view: GhosttySurfaceView
@@ -40,51 +36,37 @@ final class GhosttyTerminalBridge {
     /// 视图在不在窗口里（切走的标签被 SwiftUI 卸下来就不在）。不在：surface 停画、不吃字节（只喂影子），
     /// 隔 `hiddenReleaseDelay` 还没回来就放掉 surface；回来时重建（放掉了的话）并由泵回放。
     private(set) var isOnScreen = false
-    /// surface 建好了，并且它的终端报出了和视图一致的网格（或兜底超时了）：这时才往里灌回放、接实时字节。
-    private var isSurfaceReady = false
-    private var expectedGrid: (cols: Int, rows: Int)?
-    private var reportedGridSinceAttach: (cols: Int, rows: Int)?
-    private var surfaceSizeTimeout: Task<Void, Never>?
-    private var releaseTask: Task<Void, Never>?
+    private let retention = TerminalSurfaceRetention()
     /// 不在屏上多久放掉 surface（测试里改短）。
-    var hiddenReleaseDelay: Duration = TerminalSurfaceRetention.hiddenReleaseDelay
-    /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
-    private(set) var keeper: TerminalSurfaceKeeper!
-
-    /// `InMemoryTerminalSession` 的 write / resize 回调（任意线程）转到主线程上的 bridge。会话先建 IO、后建 bridge，
-    /// 所以中间隔一个盒子。主队列是 FIFO，键入与应答的先后顺序不会乱。
-    nonisolated final class Relay: @unchecked Sendable {
-        private let lock = NSLock()
-        private weak var target: GhosttyTerminalBridge?
-
-        fileprivate func attach(_ bridge: GhosttyTerminalBridge) {
-            lock.withLock { target = bridge }
-        }
-
-        private var bridge: GhosttyTerminalBridge? { lock.withLock { target } }
-
-        func write(_ data: Data) {
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.bridge?.ghosttyDidWrite(data) } }
-        }
-
-        func resize(_ viewport: InMemoryTerminalViewport) {
-            let cols = Int(viewport.columns), rows = Int(viewport.rows)
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.bridge?.ghosttyDidResize(cols: cols, rows: rows) } }
-        }
+    var hiddenReleaseDelay: Duration {
+        get { retention.delay }
+        set { retention.delay = newValue }
     }
+    /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
+    var keeper: TerminalSurfaceKeeper { link.keeper }
+    /// 会话的影子 + surface 接线（`TerminalSession.link`）。
+    private let link: TerminalSurfaceLink
 
     init(owner: TerminalSession) {
         self.owner = owner
+        link = owner.link
         io = owner.surfaceIO
         view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
-        owner.surfaceIORelay.attach(self)
+        link.attach(view)
+        link.onSurfaceInput = { [weak self] in self?.ghosttyDidWrite($0) }
+        link.onGridReported = { [weak self] viewport in
+            self?.ghosttyDidResize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+        }
+        link.platformAllowsFeeding = { [weak self] in self?.isOnScreen ?? false }
+        // 从这一刻起尺寸归 surface 管：没有 surface 时钉的尺寸不用再还原（钉着的目标还在 `pendingPin` 里，
+        // surface 报来格子尺寸后照常钉到视图上）。
+        link.onSurfaceAttached = { [weak self] in self?.gridBeforeSurfacelessPin = nil }
         delegate.bridge = self
         view.delegate = delegate
         view.controller = GhosttyTerminalConfig.controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
         view.onResizeSettled = { [weak self] in self?.resizeDidSettle() }
         view.onWindowChange = { [weak self] inWindow in self?.setOnScreen(inWindow) }
-        view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.surfaceGridExpected(cols: cols, rows: rows) }
         view.onFocusGained = { [weak self] in self?.owner?.acknowledgeProgramStatus() }
         view.onPasteImage = { [weak self] in self?.owner?.pasteImage($0) ?? false }
         view.onControlVImage = { [weak self] in self?.owner?.handleControlVImage($0) ?? false }
@@ -104,10 +86,6 @@ final class GhosttyTerminalBridge {
             owner.sendHostBytes(Data([0x0D]))
             return true
         }
-        keeper = TerminalSurfaceKeeper(
-            pump: owner.outputPump, shadow: owner.shadow,
-            clearSelection: { [weak self] erase in self?.view.uTermClearSelection(onlyIfBlank: erase == .inPlace) },
-            scrollToRow: { [weak self] row in _ = self?.view.scrollToRow(UInt(row)) })
     }
 
     /// 键盘焦点在这个终端上、窗口是 key（`TerminalSession.isUserLooking` 再加上 app 在前台）。
@@ -118,81 +96,9 @@ final class GhosttyTerminalBridge {
 
     // MARK: surface 的生命周期
 
-    /// surface 建好了。它的终端此刻还是出生时的默认网格（Mac 上按 800×600 px 算出约 53×21），真实尺寸要等 IO 线程处理完
-    /// 第一条 resize 才生效；在那之前灌进去的回放会按错的网格解析。所以等它的终端报来的网格和视图算出来的对上了
-    /// （`TerminalSurfaceGridGate`）再让泵开始喂它——泵先把影子的状态回放进去（没落下过内容就不回放），再接实时字节。
-    /// 兜底等 0.25 s。
-    fileprivate func surfaceDidAttach() {
-        guard let owner else { return }
-        hasSurface = true
-        // 从这一刻起尺寸归 surface 管：没有 surface 时钉的尺寸不用再还原（钉着的目标还在 `pendingPin` 里，
-        // surface 报来格子尺寸后照常钉到视图上）。
-        gridBeforeSurfacelessPin = nil
-        isSurfaceReady = false
-        expectedGrid = nil
-        reportedGridSinceAttach = nil
-        owner.surfaceGridGate.surfaceAttached()
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self, let owner = self.owner else { return }
-            // 兜底：没等到对得上的那一次。把拦下的最后一次报告认了，开闸。
-            if let held = owner.surfaceGridGate.settle() { self.adopt(held) }
-            self.surfaceBecameReady()
-        }
-    }
-
-    /// surface 没了（放掉了、视图被销毁、换了 controller 重建）：输出只进影子，下一个 surface 建好时再回放——
-    /// 哪怕这期间一个字节都没来：新 surface 是空的。
-    fileprivate func surfaceDidDetach() {
-        hasSurface = false
-        isSurfaceReady = false
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = nil
-        owner?.surfaceGridGate.surfaceDetached()
-        syncSurfaceFeeding()
-        owner?.outputPump.markSurfaceStale()
-    }
-
-    /// 视图按自己的尺寸算出来的网格（surface 刚建好、以及之后每次尺寸变化，主线程上同步报来）。
-    private func surfaceGridExpected(cols: Int, rows: Int) {
-        guard let owner else { return }
-        expectedGrid = (cols, rows)
-        // 终端的报告先到、当时还对不上被拦下了：现在对上了就认它。
-        if let held = owner.surfaceGridGate.expect(cols: cols, rows: rows) { adopt(held) }
-        openGateIfGridSettled()
-    }
-
-    /// 认下一次被拦过的网格报告（和 resize 回调里放行的那条路做同样的事）。
-    private func adopt(_ viewport: InMemoryTerminalViewport) {
-        guard let owner else { return }
-        if !owner.shadowFollowsRemoteGrid.withLock({ $0 }) {
-            owner.shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                                cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
-        }
-        ghosttyDidResize(cols: Int(viewport.columns), rows: Int(viewport.rows))
-    }
-
-    private func openGateIfGridSettled() {
-        guard !isSurfaceReady, hasSurface, let expectedGrid, let reported = reportedGridSinceAttach,
-              expectedGrid == reported else { return }
-        surfaceBecameReady()
-    }
-
-    private func surfaceBecameReady() {
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = nil
-        guard !isSurfaceReady, hasSurface else { return }
-        isSurfaceReady = true
-        // 影子此刻已经在 surface 的终端报来的网格上（resize 回调里当场改的、或兜底认下的那一次）：回放流按它生成。
-        syncSurfaceFeeding()
-    }
-
-    /// 画面能吃字节的条件：视图在窗口里，且 surface 建好、网格到位。任何一条不成立就只喂影子；重新成立时
-    /// 输出泵把影子回放进 surface 再接实时字节。重复调用无害。
-    private func syncSurfaceFeeding() {
-        owner?.outputPump.setSurfaceFeeding(isOnScreen && isSurfaceReady)
-    }
+    /// surface 的生灭、就绪（等它的终端报出和视图一致的网格才开闸）、追上影子都在 `TerminalSurfaceLink`（两端共用）。
+    /// surface 建着没有（视图进过窗口、没被放掉）。没建时没有视图尺寸可钉，接管尺寸直接作用在影子终端和 PTY 上。
+    private var hasSurface: Bool { link.hasSurface }
 
     // MARK: 在不在屏上
 
@@ -200,39 +106,28 @@ final class GhosttyTerminalBridge {
     func setOnScreen(_ onScreen: Bool) {
         guard onScreen != isOnScreen else { return }
         isOnScreen = onScreen
-        releaseTask?.cancel()
-        releaseTask = nil
+        retention.cancel()
         if onScreen {
             if view.uTermIsSurfaceReleased {
-                // 重建：建好后走 `surfaceDidAttach` → 网格到位 → 回放 → 由 `keeper` 找回切走前的视口。
+                // 重建：建好后走 surface 就绪 → 网格到位 → 回放 → 由 `keeper` 找回切走前的视口。
                 view.uTermRestoreSurface()
             } else {
                 view.setSurfaceVisible(true)
                 // 期间没来过输出：surface 一直停在原处，不用追，记着的视口作废。
-                if owner?.outputPump.surfaceNeedsCatchUp == false { keeper.forget() }
+                link.forgetViewportUnlessCatchingUp()
             }
-            syncSurfaceFeeding()
+            link.syncSurfaceFeeding()
             return
         }
         // 切走之前记下视口：之后要是只能整屏回放（surface 被放掉、期间输出太多），回来时找回这里。
-        rememberViewport()
+        link.rememberViewport()
         view.setSurfaceVisible(false)
-        syncSurfaceFeeding()
+        link.syncSurfaceFeeding()
         guard hasSurface else { return }
-        let delay = hiddenReleaseDelay
-        releaseTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self, !self.isOnScreen else { return }
+        retention.scheduleRelease { [weak self] in
+            guard let self, !self.isOnScreen else { return }
             self.view.uTermReleaseSurface()
         }
-    }
-
-    /// 按 surface 此刻的滚动条和视口文字记下视口位置（在底部就不记）。
-    private func rememberViewport() {
-        guard hasSurface, !view.uTermIsSurfaceReleased, let bar = view.uTermScrollbar,
-              let columns = io.surfaceGrid?.columns else { return }
-        keeper.remember(TerminalViewportMark.capture(offset: Int(bar.offset), rows: Int(bar.len), total: Int(bar.total),
-                                                     columns: Int(columns), viewportText: io.readViewportText()))
     }
 
     /// surface 被放掉了没有（测试用）。
@@ -259,12 +154,8 @@ final class GhosttyTerminalBridge {
             rows = Int(current.rows)
         }
         guard cols > 0, rows > 0 else { return }
-        // 远控主控端停着画面等网格对齐的话，现在可能对上了。
-        owner?.outputPump.surfaceGridDidChange()
-        if hasSurface, !isSurfaceReady {
-            reportedGridSinceAttach = (cols, rows)
-            openGateIfGridSettled()
-        }
+        // 远控主控端停着画面等网格对齐的话，现在可能对上了；surface 刚建好的话看闸能不能开。
+        link.gridReported(cols: cols, rows: rows)
         let changed = grid.map { $0.cols != cols || $0.rows != rows } ?? true
         grid = (cols, rows)
         // 镜像端重发快照、检查点重存，要等影子真的换了网格：主线程上的 `surfaceGrid` 可能比终端先变（容器提交尺寸后
@@ -293,8 +184,6 @@ final class GhosttyTerminalBridge {
 
     /// 还没法钉（surface 没建好、量不到格子尺寸）时记下的目标。
     private var pendingPin: (cols: Int, rows: Int)?
-    /// surface 建着没有（视图进过窗口）。没建时没有视图尺寸可钉，接管尺寸直接作用在影子终端和 PTY 上。
-    private var hasSurface = false
     /// 没有 surface 时被接管之前的行列数：解除接管时还原。
     private var gridBeforeSurfacelessPin: (cols: Int, rows: Int)?
 
@@ -385,14 +274,15 @@ final class GhosttyTerminalBridge {
     func viewportText() -> String? { io.readViewportText() }
 
     func dispose() {
+        retention.cancel()
         view.delegate = nil
         view.removeFromSuperview()
     }
 
-    /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。
-    private final class DelegateProxy: TerminalSurfaceTitleDelegate, TerminalSurfaceFocusDelegate,
-        TerminalSurfaceLifecycleDelegate, TerminalSurfacePwdDelegate,
-        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceBellDelegate, TerminalSurfaceScrollbarDelegate {
+    /// Ghostty 的各个回调协议。单独一个对象：`TerminalSession` 不必知道这些协议。标题、铃、OSC 7 都以影子终端为准
+    /// （标签藏着、surface 没在吃字节时它照样更新），surface 的那几个回调不接；surface 的生灭由 `TerminalSurfaceLink` 接。
+    private final class DelegateProxy: TerminalSurfaceFocusDelegate,
+        TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceScrollbarDelegate {
         weak var bridge: GhosttyTerminalBridge?
 
         /// 视口滚了或者内容变长了：给容器画滚动条用。
@@ -400,21 +290,9 @@ final class GhosttyTerminalBridge {
             bridge?.view.onScrollbar?(scrollbar)
         }
 
-        /// 标题以影子终端的为准（标签藏着、surface 没在吃字节时它照样更新）；`receiveShellTitle` 去重。
-        func terminalDidChangeTitle(_ title: String) {}
-
         func terminalDidChangeFocus(_ focused: Bool) {
             if focused { bridge?.owner?.acknowledgeProgramStatus() }
         }
-
-        func terminalDidAttachSurface(_ surface: TerminalSurface) { bridge?.surfaceDidAttach() }
-        func terminalDidDetachSurface() { bridge?.surfaceDidDetach() }
-
-        /// OSC 7。cwd 靠后端轮询，这里不接。
-        func terminalDidChangeWorkingDirectory(_ path: String) {}
-
-        /// 铃由影子终端的 `.bell` 事件响（`handleShadowEvent`，标签藏着也响），这里不重复。
-        func terminalDidRingBell() {}
 
         /// 不安全粘贴（多行 / 带控制字符）与受保护的 OSC 52。uTerm 一直没有粘贴保护，照放行处理；OSC 52 只许写不许读。
         func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {

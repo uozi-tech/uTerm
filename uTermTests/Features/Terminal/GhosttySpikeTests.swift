@@ -154,6 +154,8 @@ final class GhosttySpikeTests: XCTestCase {
         container.frame = window.contentView?.bounds ?? container.frame
         container.layoutSubtreeIfNeeded()
         try await waitUntil(10, "Ghostty 网格变成 100×30") { bridge.grid.map { $0 == (100, 30) } ?? false }
+        // 影子只跟 surface 的终端在 IO 线程上报的网格走（M4 的前提），比主线程上的网格晚一点到。
+        try await waitUntil(5, "影子跟到 100×30") { session.shadow.size == (100, 30) }
         let grid = try XCTUnwrap(bridge.grid)
         print("[GhosttySpike] ghostty grid=\(grid.cols)x\(grid.rows) view=\(bridge.view.frame.size)")
 

@@ -28,9 +28,11 @@ final class GhosttyTerminalBridge {
     let outputPump: TerminalOutputPump
     /// 击键、粘贴、应答与网格尺寸共用的一条 FIFO。
     let input = TerminalInputChannel()
+    /// 影子与 surface 之间的接线（两端共用，见 `TerminalSurfaceLink`）。上面的 `session` / `shadow` / `outputPump` 就是它的。
+    let link: TerminalSurfaceLink
     /// 影子终端的事件：程序状态、查询应答、历史、远控镜像的规则两端共用（`TerminalEventRouter`），控制器接它的出口。
     /// 读状态只认影子：它永远在吃字节，surface 不在（后台、标签没露出、surface 放掉了）时也不漏。
-    let events = TerminalEventRouter()
+    var events: TerminalEventRouter { link.events }
     /// 程序状态以外的影子事件（标题、通知、响铃、未知 OSC），主线程上、按字节流的先后到。
     var onEvent: ((ShadowTerminal.Event) -> Void)?
     /// 最近一次 resize 回调报来的网格（探针读它）。
@@ -43,36 +45,28 @@ final class GhosttyTerminalBridge {
     var inputLog: [Data]?
     /// 程序用 OSC 52 写剪贴板时写到哪（测试换成私有的，别动模拟器那块与 Mac 同步的系统剪贴板）。
     var pasteboard: UIPasteboard = .general
-    /// App 在不在后台（`didEnterBackground` → `willEnterForeground`，和 `MobileTerminalController` 同一对通知）。
+    /// App 在不在后台（`MobileTerminalController` 听 `didEnterBackground` / `willEnterForeground` 转过来，测试直接调）。
     private(set) var isAppInBackground = false
-    /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节。
-    private(set) var isSurfaceReady = false
-    /// surface 刚建好，在等它的终端到位（见 `surfaceAttached`）：视图算出来的网格、终端自己报来的网格，以及兜底的计时。
-    private let gridGate: TerminalSurfaceGridGate
-    /// 远控标签（后端 `mirrorsRemoteGrid`，手机是主控端）：影子的网格跟着 Mac 发来的快照走，surface 报来的网格只发给 Mac、
-    /// 不改影子；网格对齐之前画面停在上一帧（`TerminalOutputPump.followsSnapshotGrid`）。resize 回调在 IO 线程上读它。
-    private let shadowFollowsRemoteGrid: OSAllocatedUnfairLock<Bool>
-    private var expectedGrid: (cols: Int, rows: Int)?
-    private var reportedGridSinceAttach: (cols: Int, rows: Int)?
-    private var surfaceSizeTimeout: Task<Void, Never>?
+    /// surface 建好了、它的终端也报过尺寸了：可以往里灌字节（见 `TerminalSurfaceLink`）。
+    var isSurfaceReady: Bool { link.isSurfaceReady }
     /// 这片终端在不在屏上（所在格的前台标签、终端模式）。
     private(set) var isOnScreen = true
-    /// 不在屏上这么久之后放掉 surface（交换链、网格、回滚都还），再露出来时重建并从影子回放（两端同一个值）。
+    /// 不在屏上之后多久放掉 surface（交换链、网格、回滚都还），再露出来时重建并从影子回放（两端同一个值）。
     /// 每个 surface 的帧缓冲约 14.5 MB，`setSurfaceVisible(false)` 不还（M2）。测试里改短。
-    var hiddenReleaseDelay: Duration = TerminalSurfaceRetention.hiddenReleaseDelay
-    private var releaseTask: Task<Void, Never>?
+    private let retention = TerminalSurfaceRetention()
+    var hiddenReleaseDelay: Duration {
+        get { retention.delay }
+        set { retention.delay = newValue }
+    }
     /// 擦屏后清选区、整屏回放后找回视口（两端共用）。
-    private(set) var keeper: TerminalSurfaceKeeper!
+    var keeper: TerminalSurfaceKeeper { link.keeper }
     private let delegateProxy: SurfaceDelegate
-    // nonisolated(unsafe)：只在主线程设，deinit 里读。
-    private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
 
     /// 回滚上限，surface 与影子用同一份（两端共用的 `TerminalScrollbackLimits` 按行数算出两边的值；不一样的话回放进
     /// surface 的历史长度和它自己攒的不同，M4 的前提）。iOS 固定 1 万行。
     /// 另一个作用是给回放封顶：1 万行回滚拍快照 + 出回放流 + 自查，Duo 上热着跑约 3 ms，回前台那一下（冷）约 15 ms。
     nonisolated static let scrollback = TerminalScrollbackLimits(lines: 10_000)
     nonisolated static var scrollbackLines: Int { scrollback.lines }
-    nonisolated static var scrollbackBytes: Int { scrollback.bytes }
 
     /// 见 `MGhosttyTerminalView.ghosttyFontSize(points:)`。
     nonisolated static func ghosttyFontSize(points: CGFloat) -> Float {
@@ -95,26 +89,21 @@ final class GhosttyTerminalBridge {
         guard look != appliedCursor else { return }
         appliedCursor = look
         sharedController.setTerminalConfiguration(GhosttyTerminal.TerminalConfiguration { builder in
-            builder.withCursorStyle(cursorStyle(look.shape))
+            builder.withCursorStyle(TerminalGhosttyConfig.cursorStyle(look.shape))
             builder.withCursorStyleBlink(look.blink)
         })
     }
 
-    /// 配置在这里定：字体、字号、光标、留白、最低对比度、着色规则、回滚上限；配色作为 `theme` 传（深 / 浅两份都来自
-    /// uTerm 的 `TerminalColorScheme`），GhosttyKit 按视图的日夜自己切。
-    ///
-    /// 配色必须走 `theme`：controller 先装基础配置、再把 theme 叠上去；不传 theme 时用的是 GhosttyKit 自带的
-    /// Alabaster / Afterglow，会把 background / foreground / palette / cursor-color 全部盖掉（实机：浅色底成了 #F7F7F7、
-    /// 深色 #212121、光标蓝块，和外面 uTerm 的终端底色对不上，左右露出两条）。
+    /// 配置在这里定：iOS 自己的字体、字号、底色不透明、留白铺色，加上两端共用的那些项（光标、留白、着色规则、剪贴板、
+    /// 回滚上限、按键绑定，见 `TerminalGhosttyConfig.applyCommon`）；配色作为 `theme` 传（两端共用的
+    /// `TerminalGhosttyConfig.theme`，深 / 浅两份都来自 uTerm 的 `TerminalColorScheme`），GhosttyKit 按视图的日夜自己切。
     static func makeController(
         fontSize: Float,
         cursor: TerminalCursorLook = TerminalCursorLook(shape: TerminalCursorPreference.defaultShape,
                                                         blink: TerminalCursorPreference.defaultBlink),
         overrides: (inout GhosttyTerminal.TerminalConfiguration.Builder) -> Void = { _ in }
     ) -> GhosttyTerminal.TerminalController {
-        let theme = GhosttyTerminal.TerminalTheme(light: GhosttyPalette.colors(TerminalColorScheme.resolve(dark: false)),
-                                                  dark: GhosttyPalette.colors(TerminalColorScheme.resolve(dark: true)))
-        return GhosttyTerminal.TerminalController(theme: theme) { builder in
+        GhosttyTerminal.TerminalController(theme: TerminalGhosttyConfig.theme()) { builder in
             // 字体回退链（font-family 可以重复写，按顺序找）：
             // 1. 系统等宽。iOS 上只认这个私有 family 名（`.AppleSystemUIFontMonospaced`；"SF Mono" 等名字都会静默退回
             //    内置的 JetBrains Mono，M12）。不写 font-style：Ghostty 自己选到的就是常规字重（用例核过不是 Light）。
@@ -124,36 +113,13 @@ final class GhosttyTerminalBridge {
             // 不开 font-thicken：那是对齐 macOS 字体平滑加粗用的，iOS 的 CoreGraphics 没有这一层。
             for family in fontFamilies { builder.withFontFamily(family) }
             builder.withFontSize(fontSize)
-            builder.withCursorStyle(cursorStyle(cursor.shape))
-            builder.withCursorStyleBlink(cursor.blink)
             builder.withBackgroundOpacity(1)
-            // 不要内留白：网格从左上角排起，余下的不到一格留在右 / 下边，由外层 8pt 边距同色铺底。
-            builder.withWindowPaddingX(0)
-            builder.withWindowPaddingY(0)
+            // 余下的不到一格留在右 / 下边，由外层 8pt 边距同色铺底。
             builder.withCustom("window-padding-color", "extend")
-            // 最低对比度（WCAG 比值）。上游 Ghostty 判不过就直接换成黑 / 白；我们编的 GhosttyKit（补丁 0022）
-            // 保色相、只调明度。
-            builder.withMinimumContrast(Double(TerminalColorScheme.minimumContrastRatio))
-            // 着色规则（M16 第二轮逐格对比定下来的）：
-            // - 256 色的 16–255 由 16 色 + 底色 / 前景按 CIELAB 生成；不开的话 Ghostty 用固定的 xterm 表，
-            //   p10k 的 38;5;103 等颜色对不上，浅色下灰阶还是反的。
-            builder.withCustom("palette-generate", "true")
-            // - 粗体的 0–7 号色用亮色。
-            builder.withCustom("bold-color", "bright")
-            // - dim 按 sRGB（伽马空间）和底色五五开混合；iOS 默认的 linear-corrected 在线性空间混合，dim 字会亮一截。
-            builder.withCustom("alpha-blending", "native")
-            builder.withCustom("faint-opacity", "0.5")
-            // OSC 52 由影子终端处理（`init` 里的 `setClipboardWriteHandler`：标签藏着、surface 没建或放掉了时也要生效），surface 这边
-            // 不写，免得写两遍、回放进 surface 时把历史里的再写一遍。读剪贴板一律不答（远端程序不能读走手机的剪贴板）。
-            // 只管程序发来的请求；用户自己的拷贝（长按菜单、⌘C）不受影响。同 Mac 的 `GhosttyTerminalConfig.base`。
-            builder.withCustom("clipboard-read", "deny")
-            builder.withCustom("clipboard-write", "deny")
-            // 回滚上限：与影子终端同一份（见 `scrollback`）。不设的话是 Ghostty 的默认 50 MB、不限行数。
-            for item in scrollback.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
-            // 按键绑定（两端共用）：清掉 Ghostty 给自己 App 定的默认绑定（⌘K 只清 surface 的屏、⌘+ / ⌘- 只改这一个终端的字号……），
-            // 只加回拷贝 / 粘贴 / 全选、自然文本编辑、翻回滚。硬件键盘、键盘条、`sendKey` 都经 `ghostty_surface_key`，都过这张表。
-            // 其中 `macos-option-as-alt` 在 iOS 上不起作用，引擎照收。
-            for item in TerminalKeyBindings.ghosttyConfiguration { builder.withCustom(item.key, item.value) }
+            // 硬件键盘、键盘条、`sendKey` 都经 `ghostty_surface_key`，都过共用的按键绑定表；其中 `macos-option-as-alt`
+            // 在 iOS 上不起作用，引擎照收。
+            TerminalGhosttyConfig.applyCommon(to: &builder, cursorShape: cursor.shape, cursorBlink: cursor.blink,
+                                              scrollback: scrollback)
             // 生产不传；用例拿它在同一份配置上改一两项做对照（换字体、换字重）。
             overrides(&builder)
         }
@@ -161,14 +127,6 @@ final class GhosttyTerminalBridge {
 
     /// 见 `makeController` 里的说明。
     static let fontFamilies = [UIFont.monospacedSystemFont(ofSize: 11, weight: .regular).familyName, "Menlo", "PingFang SC"]
-
-    private static func cursorStyle(_ shape: TerminalCursorShape) -> GhosttyTerminal.TerminalCursorStyle {
-        switch shape {
-        case .block: .block
-        case .bar: .bar
-        case .underline: .underline
-        }
-    }
 
     /// 影子终端的配置：和 `makeController` 给 surface 的配置对得上的那几项（两端共用的算法）。
     private static func shadowOptions() -> ShadowTerminal.Options {
@@ -178,81 +136,41 @@ final class GhosttyTerminalBridge {
     // MARK: 建立
 
     init(controller: GhosttyTerminal.TerminalController = GhosttyTerminalBridge.sharedController, frame: CGRect = .zero) {
-        let box = WeakBridgeBox()
-        let gridGate = TerminalSurfaceGridGate()
-        self.gridGate = gridGate
-        let followsRemote = OSAllocatedUnfairLock(initialState: false)
-        shadowFollowsRemoteGrid = followsRemote
-        // 先按 80×24 建，surface 的终端报出真实网格后跟着改（见下面的 resize 回调）。
-        let shadow = ShadowTerminal(cols: 80, rows: 24, options: Self.shadowOptions())
-        let session = InMemoryTerminalSession(
-            write: { data in
-                Task { @MainActor in box.bridge?.userInput(data) }
-            },
-            resize: { viewport in
-                // 新 surface 的终端先按出生时的默认网格报一次（实测 30×10 这种），再报真实的。那一次不能认：
-                // 影子缩到默认网格再放回来，备用屏的内容就被裁掉了，远端也白收两次 SIGWINCH。只认和视图算出来的对得上的。
-                guard gridGate.admits(viewport) else { return }
-                // 影子跟着 surface 的终端自己报的尺寸走，而且就在这个回调里改、不绕主线程（M4 的前提：按视图尺寸算或者
-                // 晚一拍改，两边会在不同的字节位置换宽度，折行就对不上了）。远控标签例外：影子跟着 Mac 的快照走。
-                if !followsRemote.withLock({ $0 }) {
-                    shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                                  cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
-                }
-                Task { @MainActor in
-                    box.bridge?.cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
-                    box.bridge?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
-                }
-            },
-            // uTerm 只消费行列数；像素级的尺寸变化（拖分隔条时绝大多数）不必让远端重绘。
-            suppressesPixelOnlyResizes: true)
-        self.session = session
-        self.shadow = shadow
-        outputPump = TerminalOutputPump(shadow: shadow, surface: session)
+        // 先按 80×24 建，surface 的终端报出真实网格后跟着改（IO 线程的 resize 回调里当场改，见 `TerminalSurfaceLink`）。
+        let link = TerminalSurfaceLink(cols: 80, rows: 24, options: Self.shadowOptions())
+        self.link = link
+        session = link.io
+        shadow = link.shadow
+        outputPump = link.pump
         delegateProxy = SurfaceDelegate()
         view = MGhosttyTerminalView(frame: frame)
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(
-            backend: .inMemory(session),
+            backend: .inMemory(link.io),
             fontSize: Self.ghosttyFontSize(points: MGhosttyTerminalView.defaultFontSize))
-        box.bridge = self
         view.delegate = delegateProxy
-        view.uTermOnSurfaceAttached = { [weak self] in self?.surfaceAttached() }
-        view.uTermOnSurfaceDetached = { [weak self] in self?.surfaceDetached() }
-        view.uTermSetGridExpectedHandler { [weak self] cols, rows in self?.surfaceGridExpected(cols: cols, rows: rows) }
+        link.attach(view)
+        // surface 写出的（击键、它答的查询）和影子替它答的走同一条路回后端。
+        link.onSurfaceInput = { [weak self] in self?.userInput($0) }
+        link.onShadowReply = { [weak self] in self?.userInput($0) }
+        // 程序写剪贴板（OSC 52）：以影子为准。影子从快照还原时不解析字节、喂历史时不调，都不会再写。
+        link.onClipboardWrite = { [weak self] in self?.pasteboard.string = $0 }
+        link.onGridReported = { [weak self] viewport in
+            self?.cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
+            self?.gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
+        }
+        link.platformAllowsFeeding = { [weak self] in !(self?.isAppInBackground ?? true) }
+        // surface 没了：查询改由影子答，配色要是当前的。
+        link.onSurfaceDetached = { [weak self] in self?.syncShadowColors() }
         // 硬件键盘上没有绑定接的 ⌘ 组合：程序开了 kitty 键盘协议才发（见 `MGhosttyTerminalView.dropsCommandChord`）。
         view.sendsCommandChords = { [weak self] in (self?.shadow.kittyKeyboardFlags ?? 0) != 0 }
-        // surface 不吃字节时查询由影子答（DA、DSR、光标位置、颜色查询……），和 surface 的应答走同一条路回后端。
-        shadow.setReplyHandler { data in
-            TerminalMainHop.run { box.bridge?.userInput(data) }
-        }
-        // 程序写剪贴板（OSC 52）：以影子为准。影子从快照还原时不解析字节、喂历史时不调，都不会再写。
-        shadow.setClipboardWriteHandler { text in
-            TerminalMainHop.run { box.bridge?.pasteboard.string = text }
-        }
         // 在 `feed` 里同步回调。主线程上喂的（测试、探针）当场交出去；入站任务喂的跳回主线程，先后不变。
-        events.onEvent = { event in box.bridge?.onEvent?(event) }
-        events.install(on: shadow)
-        // 影子被整个换掉（远控发来的整屏快照）时不会逐条发事件：回放之后把标题对一次。
-        outputPump.onReplayed = {
-            Task { @MainActor in
-                guard let bridge = box.bridge else { return }
-                bridge.onEvent?(.titleChanged(bridge.shadow.title))
-            }
-        }
-        keeper = TerminalSurfaceKeeper(
-            pump: outputPump, shadow: shadow,
-            clearSelection: { [weak self] erase in self?.view.uTermClearSelection(onlyIfBlank: erase == .inPlace) },
-            scrollToRow: { [weak self] row in _ = self?.view.scrollToRow(UInt(row)) })
-        // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后 `syncSurfaceFeeding` 开闸，回放接上。
-        installLifecycleObservers()
+        link.events.onEvent = { [weak self] in self?.onEvent?($0) }
+        // 泵刚建好时只喂影子（它也负责应答）；surface 建好、网格到位后开闸，回放接上。
         if UIApplication.shared.applicationState == .background { setAppInBackground(true) }
     }
 
     deinit {
-        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
-        releaseTask?.cancel()
-        surfaceSizeTimeout?.cancel()
         outputPump.reset()
     }
 
@@ -272,13 +190,10 @@ final class GhosttyTerminalBridge {
     /// 远控标签（`backend.mirrorsRemoteGrid`）：影子的网格由 Mac 发来的快照定，画面等网格对齐再跟（同 Mac 的远控窗口，
     /// 见迁移日志「收尾二」第 3 项）。尺寸先于输出：接入请求就带上本地网格，Mac 钉好这个尺寸再拍第一张快照。
     func bind(_ backend: any TerminalBackend) {
-        let mirrorsRemote = backend.mirrorsRemoteGrid
-        shadowFollowsRemoteGrid.withLock { $0 = mirrorsRemote }
         input.bind(to: backend, sendingLatestSize: true)
         outputPump.reset()
-        // 重连（影子已有内容）：先把上一条连接上的程序设的光标形状复位成设置里的那一种（同 Mac）。
-        outputPump.resetCursorShapeForNewConnection()
-        outputPump.followsSnapshotGrid = mirrorsRemote
+        // 重连先复位光标形状、远控标签的网格跟着 Mac 走（两端共用，见 `TerminalSurfaceLink.prepare`）。
+        link.prepare(for: backend)
         outputPump.start(backend.outputItems)
     }
 
@@ -289,123 +204,24 @@ final class GhosttyTerminalBridge {
 
     // MARK: 画面吃不吃字节
 
-    /// 画面能吃字节的条件：App 在前台，且 surface 建好并报过尺寸。任何一条不成立就只喂影子；重新成立时
-    /// 输出泵把影子的快照回放进 surface 再接实时字节。重复调用无害。
-    private func syncSurfaceFeeding() {
-        let feeds = !isAppInBackground && isSurfaceReady
-        outputPump.setSurfaceFeeding(feeds)
-    }
-
-    /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、来电横幅时 App 只是
-    /// inactive，GhosttyKit 照常 tick，不用切。只看 App 级的通知；iPad 多窗口里单个场景退后台没接（那时 GhosttyKit
-    /// 也只停那个场景的视图，别的场景还在 tick，mailbox 有人清）。
-    private func installLifecycleObservers() {
-        let center = NotificationCenter.default
-        lifecycleObservers = [
-            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.setAppInBackground(true) }
-            },
-            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.setAppInBackground(false) }
-            },
-        ]
-    }
-
     /// App 进出后台。进后台：从这一刻起输出只喂影子终端，surface 不再吃字节（GhosttyKit 后台不 tick，带标题的输出
     /// 约 64 帧就把 app mailbox 填满、解析卡死）；影子开始替 surface 应答查询。回前台：把影子的快照回放进 surface
-    ///（后台队列上做），再接实时字节。重复调用无害。通知驱动；`MobileTerminalController` 也会转过来，测试直接调。
+    ///（后台队列上做），再接实时字节。重复调用无害。`MobileTerminalController` 听通知转过来，测试直接调。
     func setAppInBackground(_ inBackground: Bool) {
         guard inBackground != isAppInBackground else { return }
         isAppInBackground = inBackground
         if inBackground {
             syncShadowColors()
             // 停喂之前记下视口：回前台时要是只能整屏回放，按它找回原处（能补尾巴的话视口本来就在）。
-            rememberViewport()
+            link.rememberViewport()
         }
-        syncSurfaceFeeding()
-        if !inBackground, !outputPump.surfaceNeedsCatchUp { keeper.forget() }
-    }
-
-    /// 按 surface 此刻的滚动条和视口文字记下视口位置（在底部就不记）。
-    private func rememberViewport() {
-        guard view.surface != nil, let bar = view.uTermScrollbar, let columns = session.surfaceGrid?.columns else { return }
-        keeper.remember(TerminalViewportMark.capture(offset: Int(bar.offset), rows: Int(bar.len), total: Int(bar.total),
-                                                     columns: Int(columns), viewportText: session.readViewportText()))
+        link.syncSurfaceFeeding()
+        if !inBackground { link.forgetViewportUnlessCatchingUp() }
     }
 
     /// 影子替 surface 答颜色查询要用当前配色（OSC 10 / 11、`CSI ? 996 n`）。
     private func syncShadowColors() {
-        let dark = view.traitCollection.userInterfaceStyle != .light
-        let scheme = TerminalColorScheme.resolve(dark: dark)
-        shadow.setDefaultColors(foreground: GhosttyPalette.rgb(scheme.foregroundColor),
-                                background: GhosttyPalette.rgb(scheme.backgroundColor),
-                                cursor: GhosttyPalette.rgb(scheme.cursorColor), dark: dark)
-    }
-
-    // MARK: surface 的生与灭
-
-    /// surface 建好了。它的终端此刻还是出生时的默认网格，真实尺寸要等 IO 线程处理完第一条 resize 才生效；
-    /// 在那之前灌进去的回放会按错的网格解析（备用屏的内容尤其会错位，而且网格和以前一样时程序收不到 SIGWINCH、不会重画）。
-    /// 所以等它的终端报来的网格和视图算出来的对上了再开闸：视图那边主线程上当场就知道该是多少（`surfaceGridExpected`），
-    /// 终端那边由 resize 回调报来（会话对新 surface 的第一次回调不去重，见本地包的 `InMemoryTerminalSession.setSurface`）。
-    /// 兜底等 0.25 s。
-    private func surfaceAttached() {
-        isSurfaceReady = false
-        expectedGrid = nil
-        reportedGridSinceAttach = nil
-        gridGate.surfaceAttached()
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self else { return }
-            // 兜底：没等到对得上的那一次。把拦下的最后一次报告认了，开闸。
-            if let held = self.gridGate.settle() { self.adopt(held) }
-            self.surfaceBecameReady()
-        }
-    }
-
-    private func surfaceDetached() {
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = nil
-        isSurfaceReady = false
-        gridGate.surfaceDetached()
-        syncShadowColors()
-        syncSurfaceFeeding()
-        // surface 连同它的网格和回滚一起没了，下一个是空的：哪怕这期间一个字节都没来，重建后也要从影子回放。
-        outputPump.markSurfaceStale()
-    }
-
-    /// 视图按自己的尺寸算出来的网格（surface 刚建好、以及之后每次尺寸变化，主线程上同步报来）。
-    private func surfaceGridExpected(cols: Int, rows: Int) {
-        expectedGrid = (cols, rows)
-        // 终端的报告先到、当时还对不上被拦下了：现在对上了就认它。
-        if let held = gridGate.expect(cols: cols, rows: rows) { adopt(held) }
-        openGateIfGridSettled()
-    }
-
-    /// 认下一次被拦过的网格报告（和 resize 回调里放行的那条路做同样的事）。
-    private func adopt(_ viewport: InMemoryTerminalViewport) {
-        if !shadowFollowsRemoteGrid.withLock({ $0 }) {
-            shadow.resize(cols: viewport.columns, rows: viewport.rows,
-                          cellWidth: viewport.cellWidthPixels, cellHeight: viewport.cellHeightPixels)
-        }
-        cellPixels = (viewport.cellWidthPixels, viewport.cellHeightPixels)
-        gridChanged(cols: Int(viewport.columns), rows: Int(viewport.rows))
-    }
-
-    private func openGateIfGridSettled() {
-        guard !isSurfaceReady, view.surface != nil,
-              let expectedGrid, let reported = reportedGridSinceAttach,
-              expectedGrid == reported else { return }
-        surfaceBecameReady()
-    }
-
-    private func surfaceBecameReady() {
-        surfaceSizeTimeout?.cancel()
-        surfaceSizeTimeout = nil
-        guard !isSurfaceReady, view.surface != nil else { return }
-        isSurfaceReady = true
-        syncSurfaceFeeding()
+        link.syncShadowColors(dark: view.traitCollection.userInterfaceStyle != .light)
     }
 
     // MARK: 在不在屏上
@@ -420,8 +236,7 @@ final class GhosttyTerminalBridge {
         }
         isOnScreen = onScreen
         view.setSurfaceVisible(onScreen)
-        releaseTask?.cancel()
-        releaseTask = nil
+        retention.cancel()
         if onScreen {
             view.uTermRestoreSurface()
             return
@@ -431,12 +246,7 @@ final class GhosttyTerminalBridge {
             releaseSurface()
             return
         }
-        let delay = hiddenReleaseDelay
-        releaseTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
-            self?.releaseSurface()
-        }
+        retention.scheduleRelease { [weak self] in self?.releaseSurface() }
     }
 
     /// 从没建过 surface 的终端（后台新开、还没露出过的标签）没有网格可报，远端的 PTY 会停在后端默认的 80×24，
@@ -450,14 +260,14 @@ final class GhosttyTerminalBridge {
         guard cellWidth > 0, cellHeight > 0 else { return }
         let cols = UInt16(clamping: max(2, Int(size.width / cellWidth)))
         let rows = UInt16(clamping: max(1, Int(size.height / cellHeight)))
-        if !shadowFollowsRemoteGrid.withLock({ $0 }) { shadow.resize(cols: cols, rows: rows) }
+        if !link.followsRemoteGrid.withLock({ $0 }) { shadow.resize(cols: cols, rows: rows) }
         input.reportSize(cols: cols, rows: rows)
     }
 
     private func releaseSurface() {
         guard !isOnScreen else { return }
         // 放掉之前记下视口：重建后整屏回放（视口回到底部），按它找回原处。
-        rememberViewport()
+        link.rememberViewport()
         view.uTermReleaseSurface()
         view.alignConfiguredFontSize()
     }
@@ -478,12 +288,8 @@ final class GhosttyTerminalBridge {
         resizeReports += 1
         grid = (cols, rows)
         input.reportSize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
-        // 远控标签停着画面等网格对齐的话，surface 这一报可能就对上了（读的是 IO 线程报过的网格）。
-        outputPump.surfaceGridDidChange()
-        if view.surface != nil, !isSurfaceReady {
-            reportedGridSinceAttach = (cols, rows)
-            openGateIfGridSettled()
-        }
+        // 远控标签停着画面等网格对齐的话，surface 这一报可能就对上了（读的是 IO 线程报过的网格）；surface 刚建好的话看闸能不能开。
+        link.gridReported(cols: cols, rows: rows)
     }
 
     /// 像系统粘贴一样送一段文字：程序开了括号粘贴（DECSET 2004）就包上起止标记，程序据此认出是粘贴
@@ -531,11 +337,6 @@ final class GhosttyTerminalBridge {
     var onStickyModifiersChanged: (() -> Void)? {
         didSet { view.setStickyModifierChangeHandler(onStickyModifiersChanged) }
     }
-}
-
-/// write / resize 回调是 `@Sendable` 的、可能在任意线程上来，只带一个弱引用回主线程（类本身是 MainActor 的，所以可跨线程传）。
-private final class WeakBridgeBox {
-    weak var bridge: GhosttyTerminalBridge?
 }
 
 /// 视图的委托：只管点链接。surface 的生灭与网格走视图上不经 delegate 的回调（`uTermOnSurfaceAttached` 等）：

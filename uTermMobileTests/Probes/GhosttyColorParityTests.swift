@@ -164,7 +164,7 @@ final class GhosttyColorParityTests: XCTestCase {
             print(String(format: "PARITY %@ geometry ghostty cell=%.2fx%.2f origin=(%.0f,%.0f)", mode, geo.w, geo.h, geo.x0, geo.y0))
             // 期望值：能直接从配色读出来的只有默认底色和默认前景。
             func triple(_ color: UIColor) -> (Int, Int, Int) {
-                let rgb = GhosttyPalette.rgb(color)
+                let rgb = TerminalRGB(color).components
                 return (Int(rgb.0), Int(rgb.1), Int(rgb.2))
             }
             func distance(_ a: (Int, Int, Int), _ b: (Int, Int, Int)) -> Int { max(abs(a.0 - b.0), abs(a.1 - b.1), abs(a.2 - b.2)) }

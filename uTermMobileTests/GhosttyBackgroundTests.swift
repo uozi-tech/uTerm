@@ -36,12 +36,15 @@ final class GhosttyBackgroundTests: XCTestCase {
 
     private func enterBackground(_ bridge: GhosttyTerminalBridge) {
         NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: UIApplication.shared)
+        // 生产上由 `MobileTerminalController` 听通知转给终端；这里没有控制器，直接转。
+        bridge.setAppInBackground(true)
         bridge.view.setSurfaceVisible(false)
     }
 
     private func enterForeground(_ bridge: GhosttyTerminalBridge) {
         NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: UIApplication.shared)
         NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: UIApplication.shared)
+        bridge.setAppInBackground(false)
         bridge.view.setSurfaceVisible(true)
     }
 
