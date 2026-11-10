@@ -299,6 +299,10 @@ struct WelcomeSidebar: View {
                 )
                 .padding(.horizontal, 8)
                 // 去控制别的 Mac：与快捷命令一样在本窗口右侧换成「我的 Mac」面板。
+                // 它是设备入口而不是「动作」，单独一组。
+                UDSidebarSectionHeader("远程控制")
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.top, Self.sectionGap)
                 UDSidebarRow(
                     systemImage: "desktopcomputer",
                     label: "我的 Mac",
