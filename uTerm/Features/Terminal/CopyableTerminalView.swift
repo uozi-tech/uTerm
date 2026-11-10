@@ -25,6 +25,8 @@ final class CopyableTerminalView: SwiftTerm.TerminalView {
     /// 远控接管尺寸时钉住的视图尺寸（恰好是对端行列数 × 字符格）。非 nil 时
     /// `TerminalContainerView` 按它摆放而不是铺满容器，见 `TerminalSession.pinRemoteGrid`。
     var pinnedFrameSize: NSSize?
+    /// 钉住期间上一次摆放时光标在第几行；变了就重新摆（窗格跟着光标走，见 `TerminalContainerView.pinnedFrame`）。
+    var pinnedCursorRow: Int?
 
     /// 已经装进来的配色和光标，见 `TerminalTheme.apply`。
     var appliedLook: TerminalTheme.Look?

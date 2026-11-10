@@ -39,6 +39,16 @@ extension TerminalSession {
                           height: height.next(after: size.height, got: terminal.rows))
         }
         view.pinnedFrameSize = view.frame.size
+        view.pinnedCursorRow = terminal.getCursorLocation().y
+        view.superview?.needsLayout = true
+    }
+
+    /// 钉住期间来了新输出：光标换了行就让容器重新摆一次（比窗格高的终端跟着光标走）。每批输出查一次，只比一个整数。
+    func repositionPinnedGridIfCursorMoved() {
+        guard let view = terminalView as? CopyableTerminalView, view.pinnedFrameSize != nil else { return }
+        let row = view.getTerminal().getCursorLocation().y
+        guard row != view.pinnedCursorRow else { return }
+        view.pinnedCursorRow = row
         view.superview?.needsLayout = true
     }
 
@@ -48,6 +58,7 @@ extension TerminalSession {
         remoteController = nil
         guard view.pinnedFrameSize != nil else { return }
         view.pinnedFrameSize = nil
+        view.pinnedCursorRow = nil
         if let container = view.superview {
             container.needsLayout = true
             container.layoutSubtreeIfNeeded()

@@ -194,7 +194,9 @@ final class TerminalContainerView: NSView {
         if let pinned = copyable?.pinnedFrameSize {
             cancelHold()
             layer?.masksToBounds = true
-            terminalView.frame = Self.pinnedFrame(pinned, in: bounds, insets: insets)
+            let terminal = terminalView.getTerminal()
+            terminalView.frame = Self.pinnedFrame(pinned, in: bounds, insets: insets,
+                                                  cursorRow: terminal.getCursorLocation().y, rows: terminal.rows)
             return
         }
         let width = bounds.width - insets.left - insets.right
@@ -238,11 +240,32 @@ final class TerminalContainerView: NSView {
         settler.cancel()
     }
 
-    /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时贴底边，裁掉的是最上面的旧行——
-    /// 提示符、光标和最新输出都在底部（手机竖屏的行数常比 Mac 窗格多，贴顶会把正在打字的那一行裁掉）。
-    static func pinnedFrame(_ pinned: NSSize, in bounds: NSRect, insets: NSEdgeInsets) -> NSRect {
+    /// 钉住的终端比窗格高时，光标那一行往下还要留在窗格里的行数（Claude Code 的输入框下面有一条边线和一两行状态）。
+    static let pinnedRowsKeptBelowCursor = 3
+
+    /// 钉住尺寸的终端摆在哪：放得下就贴左上角；比窗格高时跟着光标走——从顶上裁，裁到光标那一行
+    ///（再往下留 `pinnedRowsKeptBelowCursor` 行）刚好落在窗格里为止，最多裁到底边贴着窗格底。
+    ///
+    /// 手机竖屏的行数常比 Mac 窗格多。一律贴顶会把屏幕底部正在打字的那一行裁掉；一律贴底（之前的做法）则在
+    /// 屏幕没写满时裁错地方：程序刚起来、刚清过屏，内容都在屏幕顶上、下面是空行，留在窗格里的反而是一屏空白，
+    /// 看着像被接管状态条挡住了。裁掉的量取整到整行，窗格顶上不留半行。
+    ///
+    /// 不传 `cursorRow` 时按光标在最后一行算（贴底）。
+    static func pinnedFrame(_ pinned: NSSize, in bounds: NSRect, insets: NSEdgeInsets,
+                            cursorRow: Int? = nil, rows: Int = 0) -> NSRect {
         let available = bounds.height - insets.top - insets.bottom
-        let y = pinned.height <= available ? bounds.height - insets.top - pinned.height : insets.bottom
+        // 贴顶时的位置（容器不翻转，y 往上）。
+        var y = bounds.height - insets.top - pinned.height
+        if pinned.height > available {
+            let maxCut = pinned.height - available
+            var cut = maxCut
+            if let cursorRow, rows > 0 {
+                let rowHeight = pinned.height / CGFloat(rows)
+                let keepBottom = min(pinned.height, CGFloat(cursorRow + 1 + pinnedRowsKeptBelowCursor) * rowHeight)
+                cut = min(maxCut, (max(0, keepBottom - available) / rowHeight).rounded(.up) * rowHeight)
+            }
+            y += cut
+        }
         return NSRect(x: insets.left, y: y, width: pinned.width, height: pinned.height)
     }
 

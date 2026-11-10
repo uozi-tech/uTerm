@@ -163,7 +163,7 @@ final class TerminalMirrorTapTests: XCTestCase {
         }
     }
 
-    /// 钉住的终端比窗格矮：贴左上角；比窗格高：贴底边（裁掉顶上的旧行，提示符那一行留在屏上）。
+    /// 钉住的终端比窗格矮：贴左上角；比窗格高、不知道光标在哪：贴底边（裁掉顶上的旧行）。
     func test_pinned_terminal_keeps_its_bottom_visible_when_taller_than_the_pane() {
         let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
         let pane = NSRect(x: 0, y: 0, width: 800, height: 500)
@@ -202,6 +202,65 @@ final class TerminalMirrorTapTests: XCTestCase {
         session.unpinRemoteGrid()
         let released = try await settledContainerHeight()
         XCTAssertEqual(released, 500, accuracy: 0.5, "断开后铺回整个窗格")
+        session.dispose()
+    }
+
+    /// 比窗格高的钉住终端跟着光标走：光标在屏幕顶上（程序刚起来、刚清过屏）时贴顶，不裁；光标往下走，
+    /// 从顶上按整行裁，裁到光标往下 3 行刚好在窗格里；光标到了最后几行就是贴底。
+    func test_pinned_terminal_taller_than_the_pane_follows_the_cursor() {
+        let insets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
+        let pane = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let pinned = NSSize(width: 400, height: 700)   // 35 行，每行 20pt；窗格里放得下 494pt
+        func frame(cursor: Int) -> NSRect {
+            TerminalContainerView.pinnedFrame(pinned, in: pane, insets: insets, cursorRow: cursor, rows: 35)
+        }
+        XCTAssertEqual(frame(cursor: 2).maxY, 500, "光标在第 3 行：贴顶，一行不裁")
+        XCTAssertEqual(frame(cursor: 20).maxY, 500, "光标往下 3 行（到第 24 行底，480pt）还在窗格里：仍然贴顶")
+        XCTAssertEqual(frame(cursor: 26).maxY, 620, "光标在第 27 行：往下 3 行到 600pt，超出 106pt，按整行裁 6 行")
+        XCTAssertEqual(frame(cursor: 34).minY, 6, "光标在最后一行：贴底")
+        XCTAssertEqual(frame(cursor: 31).minY, 6, "往下留的 3 行已经到屏幕底：贴底，不会裁过头")
+        for cursor in 0..<35 {
+            let f = frame(cursor: cursor)
+            let cut = f.maxY - 500
+            XCTAssertGreaterThanOrEqual(cut, 0)
+            XCTAssertLessThanOrEqual(CGFloat(cursor + 1) * 20 - cut, 494, "光标那一行（第 \(cursor + 1) 行）应当在窗格里")
+            XCTAssertGreaterThanOrEqual(CGFloat(cursor) * 20 - cut, 0, "光标那一行（第 \(cursor + 1) 行）不该被裁在顶上")
+        }
+    }
+
+    /// 真实链路：手机的行数比 Mac 窗格多。屏幕没写满（内容在顶上、下面是空行）时窗格里看到的是顶上那几行，
+    /// 不是一屏空白；输出把光标推到屏幕底之后，窗格跟到底。
+    /// 起因：user 用 iPhone Duo 接管本机终端里刚起来的 Claude Code，窗格里只剩输入框的下边线和一屏空白。
+    func test_pinned_terminal_shows_the_cursor_rows_as_output_moves_it() async throws {
+        let (session, backend) = await connectedSession()
+        let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500))
+        defer { window.orderOut(nil) }
+        let host = NSHostingView(rootView: RemoteControlledTerminal(session: session))
+        host.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        window.contentView = host
+        func settle() async throws -> (view: NSRect, container: NSRect) {
+            try? await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            let container = try XCTUnwrap(session.terminalView.superview)
+            return (session.terminalView.frame, container.bounds)
+        }
+        _ = try await settle()
+        await emit(Array("\u{1B}[2J\u{1B}[Hwelcome\r\n> ".utf8), to: backend)
+        session.pinRemoteGrid(cols: 57, rows: 60, controller: "测试 iPhone")
+        let top = try await settle()
+        XCTAssertGreaterThan(top.view.height, top.container.height, "用例前提：钉住的终端比窗格高")
+        XCTAssertEqual(top.view.maxY, top.container.height, accuracy: 0.5, "光标在屏幕顶上：终端的顶边贴着窗格顶，内容不被裁掉")
+
+        // 80 行输出把光标推到最后一行。
+        await emit(Array((1...80).map { "line \($0)\r\n" }.joined().utf8), to: backend)
+        let bottom = try await settle()
+        XCTAssertEqual(session.terminalView.getTerminal().getCursorLocation().y, 59)
+        XCTAssertEqual(bottom.view.minY, 6, accuracy: 0.5, "光标到了屏幕底：终端的底边贴着窗格底")
+
+        // 清屏回到顶上：窗格跟回去。
+        await emit(Array("\u{1B}[2J\u{1B}[H> ".utf8), to: backend)
+        let again = try await settle()
+        XCTAssertEqual(again.view.maxY, again.container.height, accuracy: 0.5, "清屏后光标回到顶上：窗格跟回顶上")
         session.dispose()
     }
 

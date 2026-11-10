@@ -111,6 +111,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             self.mirrorTap.didFeed(bytes)
             self.heldCheckpoints?.noteFed(bytes.count)
             self.ghostty?.didFeedShadow(bytes)
+            self.repositionPinnedGridIfCursorMoved()
         }
         TerminalTheme.apply(to: terminalView, settings: TerminalSettings.read(), dark: true)
         terminalView.terminalDelegate = self
