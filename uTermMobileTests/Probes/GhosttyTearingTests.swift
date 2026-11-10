@@ -17,6 +17,10 @@ import XCTest
 /// 原来同一次运行里做 A/B：第五轮（引擎 wakeup 也在主线程同步重画）和第六轮（不同步重画）各甩一遍，两种都要过。
 /// 那个开关已经从本地包里拿掉，iOS 定死第五轮的行为（`UTermScrollTrace.wakeupDrawsSynchronously`），这里只留这一半；
 /// 读数行的标签仍叫 `round5`，和以前的日志对得上。
+///
+/// 甩动走系统滚动那条路径（单指滚回滚区恒归 UIScrollView）：`EdgeSystemFinger` 拖一步、松手，减速由 display link 每帧
+/// 写 contentOffset 代替 UIKit。原来是伪造 pan 硬调 `handleTouchScrollGesture:` 起本地包自写的惯性；那套自写物理已经删掉。
+/// 这里量的是渲染那一侧（每帧位移很大时画面撕不撕、糊不糊），谁在驱动位移不影响判据，断言原样。
 @MainActor
 final class GhosttyTearingTests: XCTestCase {
     typealias OnScreen = GhosttyOnScreenScrollTests
@@ -27,21 +31,6 @@ final class GhosttyTearingTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
-    }
-
-    private final class Pan: UIPanGestureRecognizer {
-        var fakeState: UIGestureRecognizer.State = .possible
-        var fakeTranslation: CGPoint = .zero
-        var fakeVelocity: CGPoint = .zero
-        override var state: UIGestureRecognizer.State {
-            get { fakeState }
-            set { fakeState = newValue }
-        }
-        override var numberOfTouches: Int { 1 }
-        override func translation(in view: UIView?) -> CGPoint { fakeTranslation }
-        override func setTranslation(_ translation: CGPoint, in view: UIView?) { fakeTranslation = translation }
-        override func velocity(in view: UIView?) -> CGPoint { fakeVelocity }
-        override func location(in view: UIView?) -> CGPoint { CGPoint(x: 200, y: 300) }
     }
 
     /// 一次读画面的结果。
@@ -223,8 +212,8 @@ final class GhosttyTearingTests: XCTestCase {
     private func run(velocityPx: Double, output: Bool, host: GhosttyProbeHost,
                      decoder: Decoder, layer: CALayer, cols: Int) async throws -> Tally {
         let scale = Double(host.view.window?.screen.nativeScale ?? 3)
-        let pan = Pan()
-        let selector = NSSelectorFromString("handleTouchScrollGesture:")
+        let finger = try EdgeSystemFinger(view: host.view)
+        XCTAssertTrue(host.view.uTermSystemPanWouldBegin, "有回滚的普通屏：单指拖动应当归系统滚动")
         let watcher = Watcher(layer: layer, decoder: decoder)
         let feeder = output ? Task { @MainActor in
             var n = 1
@@ -238,10 +227,9 @@ final class GhosttyTearingTests: XCTestCase {
         watcher.start(direction: velocityPx > 0 ? -1 : 1)
         try await Task.sleep(for: .milliseconds(120))
         let v = CGFloat(velocityPx / scale)
-        pan.fakeState = .began; pan.fakeTranslation = .zero; _ = host.view.perform(selector, with: pan)
-        pan.fakeState = .changed; pan.fakeTranslation = CGPoint(x: 0, y: v > 0 ? 6 : -6); _ = host.view.perform(selector, with: pan)
-        pan.fakeState = .ended; pan.fakeTranslation = .zero; pan.fakeVelocity = CGPoint(x: 0, y: v)
-        _ = host.view.perform(selector, with: pan)
+        finger.begin()
+        finger.move(v > 0 ? 6 : -6)
+        finger.end(velocity: v, seconds: EdgeSystemFinger.flingSeconds)
         try await Task.sleep(for: .milliseconds(1800))
         watcher.stop()
         feeder?.cancel()

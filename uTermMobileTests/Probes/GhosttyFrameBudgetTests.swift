@@ -8,12 +8,18 @@ import XCTest
 
 /// M16 第六轮：user 真机日志里剩下的抖是偶发掉帧（个别拍提交晚于 vsync、惯性 link 跳拍），而 user 甩得比测试快得多
 ///（初速 5k–24k px/s，每拍 40–200 px、跨 1–4 行）。这里按 user 的甩速复现，并把每一拍主线程的时间拆开：
-/// - 我们的惯性回调（`glide-cb`）、其中发给 Ghostty 的滚动（`glide-send`，含等 renderer_state 锁）；
+/// - 这一拍写 contentOffset 花的时间（`scroll-cb`：GhosttyKit 的 `scrollViewDidScroll` 就在里面跑，含发给 Ghostty 的滚动、
+///   等 renderer_state 锁）；
 /// - GhosttyKit 协调器的 tick（`tick-app` = ghostty_app_tick、`tick-refresh`、`tick-draw` = 主线程同步整帧重画并等 GPU）；
 /// - 主队列上的 wakeup tick（`wakeup-tick`）；
 /// - Core Animation 提交（CA 的 2000000 号 observer 前后）；
 /// - 主线程这一拍的总忙时（runloop 醒来到睡下）；其余的算「其他」（SwiftUI、输出、UIKit）。
-/// 按这一拍惯性跨了几行分桶，给 p50 / p95 / max。上屏是否赶上 vsync 用 `GhosttyOnScreenScrollTests` 的条码解码。
+/// 按这一拍跨了几行分桶，给 p50 / p95 / max。上屏是否赶上 vsync 用 `GhosttyOnScreenScrollTests` 的条码解码。
+///
+/// 甩动走系统滚动那条路径（单指滚回滚区恒归 UIScrollView）：`EdgeSystemFinger` 拖一步、松手，减速由 display link 每帧按
+/// 三次缓出写 contentOffset 代替 UIKit（UIKit 自己减速也是主线程 display link 回调里写 contentOffset）。「一拍」= 减速 link
+/// 的一次回调。原来这里是伪造 pan 硬调 `handleTouchScrollGesture:`、按本地包自写惯性的回调（`glide-target`）分拍；
+/// 那套自写物理已经整套删掉，账本改记在系统路径上，两条门槛（赶上 vsync、link 不跳拍）原样。
 ///
 /// 这组读数量的是 iOS 现在唯一的行为：引擎 wakeup 也在主线程同步重画（`UTermScrollTrace.wakeupDrawsSynchronously`，
 /// 第五轮 / 第七轮起的默认）。第六轮「wakeup 不同步重画」的 A/B 开关已经从本地包里拿掉，原来按第六轮定的两条门槛
@@ -29,21 +35,6 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
-    }
-
-    private final class Pan: UIPanGestureRecognizer {
-        var fakeState: UIGestureRecognizer.State = .possible
-        var fakeTranslation: CGPoint = .zero
-        var fakeVelocity: CGPoint = .zero
-        override var state: UIGestureRecognizer.State {
-            get { fakeState }
-            set { fakeState = newValue }
-        }
-        override var numberOfTouches: Int { 1 }
-        override func translation(in view: UIView?) -> CGPoint { fakeTranslation }
-        override func setTranslation(_ translation: CGPoint, in view: UIView?) { fakeTranslation = translation }
-        override func velocity(in view: UIView?) -> CGPoint { fakeVelocity }
-        override func location(in view: UIView?) -> CGPoint { CGPoint(x: 200, y: 300) }
     }
 
     /// 主线程忙时（runloop 每次醒来到睡下）和 CA 提交耗时。
@@ -86,8 +77,8 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         var rows = 0
         var sent = 0.0
         var busy = 0.0
-        var glideCB = 0.0
-        var glideSend = 0.0
+        /// 这一拍写 contentOffset 花的时间（ms）。
+        var scrollCB = 0.0
         var tickApp = 0.0
         var tickRefresh = 0.0
         var tickDraw = 0.0
@@ -97,7 +88,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         var decode = 0.0
         var late = false
         var skippedBefore = false
-        var other: Double { max(0, busy - glideCB - tickApp - tickRefresh - tickDraw - wakeup - commit - decode) }
+        var other: Double { max(0, busy - scrollCB - tickApp - tickRefresh - tickDraw - wakeup - commit - decode) }
     }
 
     private func pct(_ values: [Double], _ p: Double) -> Double { ProbeMetrics.percentile(values, p) }
@@ -109,7 +100,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         }
         let draws = frames.map(\.tickDraws).reduce(0, +)
         return "\(label) frames=\(frames.count) late=\(frames.filter(\.late).count) link-skip=\(frames.filter(\.skippedBefore).count) "
-            + "busy=\(stat(\.busy)) glide-cb=\(stat(\.glideCB)) glide-send=\(stat(\.glideSend)) tick-draw=\(stat(\.tickDraw)) (\(draws) 次) "
+            + "busy=\(stat(\.busy)) scroll-cb=\(stat(\.scrollCB)) tick-draw=\(stat(\.tickDraw)) (\(draws) 次) "
             + "tick-app=\(stat(\.tickApp)) tick-refresh=\(stat(\.tickRefresh)) wakeup=\(stat(\.wakeup)) ca-commit=\(stat(\.commit)) "
             + "other=\(stat(\.other)) [p50/p95/max ms]"
     }
@@ -122,13 +113,12 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         let cellPx = Double(cell.height)
         let scale = Double(view.window?.screen.nativeScale ?? 3)
         let layer = try XCTUnwrap(OnScreen.surfaceLayer(in: view.layer))
-        let pan = Pan()
-        let selector = NSSelectorFromString("handleTouchScrollGesture:")
+        let finger = try EdgeSystemFinger(view: view)
+        XCTAssertTrue(view.uTermSystemPanWouldBegin, "有回滚的普通屏：单指拖动应当归系统滚动")
         func fling(_ velocityPt: CGFloat) {
-            pan.fakeState = .began; pan.fakeTranslation = .zero; _ = view.perform(selector, with: pan)
-            pan.fakeState = .changed; pan.fakeTranslation = CGPoint(x: 0, y: velocityPt > 0 ? 6 : -6); _ = view.perform(selector, with: pan)
-            pan.fakeState = .ended; pan.fakeTranslation = .zero; pan.fakeVelocity = CGPoint(x: 0, y: velocityPt)
-            _ = view.perform(selector, with: pan)
+            finger.begin()
+            finger.move(velocityPt > 0 ? 6 : -6)
+            finger.end(velocity: velocityPt, seconds: EdgeSystemFinger.flingSeconds)
         }
 
         var decoder = OnScreen.BarcodeDecoder(cell: cell)
@@ -166,20 +156,20 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         let cpu = ThreadCPU.delta(from: threads0, to: ThreadCPU.snapshot(), mainID: mainID)
         let presents = GhosttyPresentLog.read().times
 
-        // 逐拍：每个惯性回调一拍，key = 它的 target。
-        let targets = trace.filter { $0.kind == "glide-target" }
-        guard !targets.isEmpty else { XCTFail("\(label)：惯性没起来"); return [] }
+        // 逐拍：减速 link 的每次回调一拍，key = 它的 target。
+        let ticks = finger.decelerator.frames
+        guard !ticks.isEmpty else { XCTFail("\(label)：松手后的减速没起来"); return [] }
         var frames: [Frame] = []
         var cumulative = trace.filter { $0.kind == "drag" }.reduce(0) { $0 + $1.value }
         let moves = trace.filter { $0.kind == "momentum" }
-        var previousTarget = targets[0].value - 1.0 / 120
-        for (index, event) in targets.enumerated() {
-            var f = Frame(target: event.value)
-            let windowStart = previousTarget, windowEnd = event.value
+        var previousTarget = ticks[0].target - 1.0 / 120
+        for (index, tick) in ticks.enumerated() {
+            var f = Frame(target: tick.target)
+            let windowStart = previousTarget, windowEnd = tick.target
             f.skippedBefore = index > 0 && windowEnd - windowStart > 0.0105
-            // 这一拍发出的位移（惯性回调在 target 前约 1 拍内）。
-            let nextCallback = index + 1 < targets.count ? targets[index + 1].time : .infinity
-            let sent = moves.filter { $0.time >= event.time && $0.time < nextCallback }.reduce(0) { $0 + $1.value }
+            // 这一拍发出的位移（回调在 target 前约 1 拍内）。
+            let nextCallback = index + 1 < ticks.count ? ticks[index + 1].time : .infinity
+            let sent = moves.filter { $0.time >= tick.time && $0.time < nextCallback }.reduce(0) { $0 + $1.value }
             let before = (cumulative / cellPx).rounded(.down)
             cumulative += sent
             f.rows = Int(abs((cumulative / cellPx).rounded(.down) - before))
@@ -191,8 +181,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
             func spans(_ kind: String) -> [UTermScrollTrace.Event] {
                 trace.filter { $0.kind == kind && $0.time >= windowStart && $0.time < windowEnd }
             }
-            f.glideCB = spans("glide-cb").reduce(0) { $0 + $1.value }
-            f.glideSend = spans("glide-send").reduce(0) { $0 + $1.value }
+            f.scrollCB = tick.writeMS
             f.tickApp = spans("tick-app").reduce(0) { $0 + $1.value }
             f.tickRefresh = spans("tick-refresh").reduce(0) { $0 + $1.value }
             f.tickDraw = spans("tick-draw").reduce(0) { $0 + $1.value }
@@ -201,12 +190,12 @@ final class GhosttyFrameBudgetTests: XCTestCase {
             f.decode = decodeSpans.filter { $0.0 >= windowStart && $0.0 < windowEnd }.reduce(0) { $0 + $1.1 }
             // 上屏晚了：这一步发出后第一次换画面的提交不在它的 target 之前。
             if sent != 0 {
-                let base = sampler.samples.last { $0.time <= event.time }?.value
-                let change = sampler.samples.first { $0.time > event.time && $0.value != base }
-                f.late = (change?.time ?? .infinity) >= event.value
+                let base = sampler.samples.last { $0.time <= tick.time }?.value
+                let change = sampler.samples.first { $0.time > tick.time && $0.value != base }
+                f.late = (change?.time ?? .infinity) >= tick.target
             }
             frames.append(f)
-            previousTarget = event.value
+            previousTarget = tick.target
         }
         let moving = frames.filter { $0.sent > 0 }
         print("BUDGET \(label) v=\(Int(velocityPx))px/s output=\(output) frames=\(moving.count) "
@@ -222,8 +211,8 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         let bad = frames.enumerated().filter { $0.element.late || $0.element.skippedBefore }.prefix(12)
         if !bad.isEmpty {
             print("BUDGET-BAD \(label) v=\(Int(velocityPx)) output=\(output) " + bad.map { index, f in
-                String(format: "#%d rows=%d sent=%.0f busy=%.1f cb=%.1f send=%.1f draw=%.1f(%d) app=%.1f wake=%.1f commit=%.1f other=%.1f%@%@",
-                       index, f.rows, f.sent, f.busy, f.glideCB, f.glideSend, f.tickDraw, f.tickDraws, f.tickApp, f.wakeup,
+                String(format: "#%d rows=%d sent=%.0f busy=%.1f cb=%.1f draw=%.1f(%d) app=%.1f wake=%.1f commit=%.1f other=%.1f%@%@",
+                       index, f.rows, f.sent, f.busy, f.scrollCB, f.tickDraw, f.tickDraws, f.tickApp, f.wakeup,
                        f.commit, f.other, f.late ? " LATE" : "", f.skippedBefore ? " SKIP" : "")
             }.joined(separator: " | "))
         }
@@ -232,7 +221,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     private static let velocities: [Double] = [6000, 12000, 20000]
 
-    /// 打印分桶，并核回归门槛：赶不上 vsync 的拍、惯性 link 跳拍各不超过 2 拍（每组约 1,000 拍）。
+    /// 打印分桶，并核回归门槛：赶不上 vsync 的拍、减速 link 跳拍（主线程卡过了一拍）各不超过 2 拍（每组约 1,000 拍）。
     ///
     /// 只打印、不再设门槛的两项（`BUDGET-SYNC-DRAW` 行）：甩动期间主线程同步整帧重画的次数、跨行拍的主线程忙时 p95。
     /// 它们原来的门槛（0 次、< 2 ms）是第六轮「wakeup 不同步重画」下的读数；iOS 现在定死同步重画，
@@ -249,7 +238,7 @@ final class GhosttyFrameBudgetTests: XCTestCase {
             // 每组约 1,000 拍；手机刚解锁、系统忙时偶尔有一两拍被系统占走（主线程「其他」一下 10 ms 以上），
             // 门槛留 2 拍。
             XCTAssertLessThanOrEqual(frames.filter(\.late).count, 2, "\(key)：没赶上 vsync 的拍")
-            XCTAssertLessThanOrEqual(frames.filter(\.skippedBefore).count, 2, "\(key)：惯性 link 跳拍")
+            XCTAssertLessThanOrEqual(frames.filter(\.skippedBefore).count, 2, "\(key)：减速 link 跳拍")
         }
     }
 

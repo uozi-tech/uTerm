@@ -14,13 +14,15 @@ import XCTest
 ///   在 Core Animation 提交之后（主 runloop 的 beforeWaiting，order 排在 CA 提交的 2000000 之后）读当时已提交的 IOSurface，
 ///   从画面本身解出滚动位置：回滚区每行开头 7 格是行号的二进制条码（█ = 1），第 0 列逐行交替，扫一列像素找到行边界，
 ///   再读 7 格得到行号，位置 = 行号 × 格高 − 行边界的 y。读的是画面，不是我们发了什么。
-///   甩动是伪造 pan 直接调 GhosttyKit 的 `handleTouchScrollGesture:`（自写的拖动 / 惯性；真手指单指滚回滚区现在归
-///   系统 UIScrollView 那条路径，那条路径的上屏位置由 `GhosttySystemScrollJitterTests` 核）。
+///   甩动走系统滚动那条路径（单指滚回滚区恒归 UIScrollView）：按 UIKit 会做的事驱动 GhosttyKit 借来的滚动视图
+///  （`EdgeSystemFinger`：拖一步、松手，减速由 display link 每帧按三次缓出写 contentOffset 代替 UIKit）。
+///   量的是「每一帧 contentOffset 走了多少，那一拍上屏的画面就走了多少」，不是 UIKit 的减速曲线本身。
+///   原来这里是伪造 pan 硬调 `handleTouchScrollGesture:`，量本地包里自写的落点惯性；那套自写物理已经整套删掉。
 ///
 /// 原来还有一半拿换引擎之前的终端视图（UIScrollView 子类）用同一套量法当参照、核「Ghostty 不比它差」；旧引擎已经从 App 里
 /// 拿掉，那一半连同参照用例一起去掉了，Ghostty 自己的绝对门槛（`assertSmooth`）照旧。
 ///
-/// 每个显示帧 = 参考 `CADisplayLink`（80–120 Hz，和惯性 link 同档，不额外抬帧率）两次回调之间；这段时间里最后一次提交的画面
+/// 每个显示帧 = 参考 `CADisplayLink`（80–120 Hz，和减速 link 同档，不额外抬帧率）两次回调之间；这段时间里最后一次提交的画面
 /// 就是下一个 vsync 显示的画面。
 @MainActor
 final class GhosttyOnScreenScrollTests: XCTestCase {
@@ -201,11 +203,11 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         let mismatches: Int
         /// 速度 ≥ 2 px/帧时出现的 0 位移帧（这一拍没换画面）。
         let repeats: Int
-        /// 二阶差分 |Δ[i+1] − 2Δ[i] + Δ[i−1]| 的最大值，不含开头 2 帧（手指拖动交给惯性的那一下单列）。
+        /// 二阶差分 |Δ[i+1] − 2Δ[i] + Δ[i−1]| 的最大值，不含开头 2 帧（手指拖动交给减速的那一下单列）。
         let maxJerk: Double
         /// 相邻两帧位移比的最大值（两帧都 ≥ 4 px 时才算，取整噪声不算进来），同样不含开头 2 帧。
         let maxRatio: Double
-        /// 开头 3 帧的位移（看拖动 → 惯性交接有没有一下跳）。
+        /// 开头 3 帧的位移（只打印）。
         let handoff: [Double]
         /// 换了画面的提交离它该显示的 vsync 还剩多少 ms：最小值，和不到 1 ms 的个数。
         let minMargin: Double
@@ -313,21 +315,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     // MARK: - Ghostty 甩动
 
-    private final class Pan: UIPanGestureRecognizer {
-        var fakeState: UIGestureRecognizer.State = .possible
-        var fakeTranslation: CGPoint = .zero
-        var fakeVelocity: CGPoint = .zero
-        override var state: UIGestureRecognizer.State {
-            get { fakeState }
-            set { fakeState = newValue }
-        }
-        override var numberOfTouches: Int { 1 }
-        override func translation(in view: UIView?) -> CGPoint { fakeTranslation }
-        override func setTranslation(_ translation: CGPoint, in view: UIView?) { fakeTranslation = translation }
-        override func velocity(in view: UIView?) -> CGPoint { fakeVelocity }
-        override func location(in view: UIView?) -> CGPoint { CGPoint(x: 200, y: 300) }
-    }
-
     private func ghosttyFling(output: Bool, velocity: CGFloat) async throws -> Report {
         let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 600))
         defer { host.close() }
@@ -385,13 +372,14 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         for _ in 0..<60 { view.sendMouseScroll(x: 0, y: Double(cell.height), mods: TerminalScrollModifiers(precision: true)) }
         try await Task.sleep(for: .milliseconds(300))
         let layer = try XCTUnwrap(Self.surfaceLayer(in: view.layer), "找不到 IOSurfaceLayer")
-        let pan = Pan()
-        let selector = NSSelectorFromString("handleTouchScrollGesture:")
+        let finger = try EdgeSystemFinger(view: view)
+        XCTAssertTrue(view.uTermSystemPanWouldBegin, "有回滚的普通屏：单指拖动应当归系统滚动")
+        // 按下就松手、带速度：量的是松手后的减速，时长按「初速度 = 抬手速度」定（见 EdgeSystemFinger.flingSeconds）。
+        // 不先拖一步：拖动那一步和减速第一帧之间隔着减速 link 起步的那一拍（测试里的假减速才有，UIKit 没有），
+        // 混进来就是一拍不动再接一大步，量到的是夹具不是滚动。
         func fling(_ velocity: CGFloat) {
-            pan.fakeState = .began; pan.fakeTranslation = .zero; _ = view.perform(selector, with: pan)
-            pan.fakeState = .changed; pan.fakeTranslation = CGPoint(x: 0, y: 6); _ = view.perform(selector, with: pan)
-            pan.fakeState = .ended; pan.fakeTranslation = .zero; pan.fakeVelocity = CGPoint(x: 0, y: velocity)
-            _ = view.perform(selector, with: pan)
+            finger.begin()
+            finger.end(velocity: velocity, seconds: EdgeSystemFinger.flingSeconds)
         }
         // 预热（第一次起 link、编管线不算），等它完全落定。
         fling(-300)
@@ -418,35 +406,32 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         sampler.stop()
         let trace = UTermScrollTrace.drain()
         UTermScrollTrace.isEnabled = false
-        // 惯性每一步按它算位置用的 targetTimestamp 归拍（回调偶尔晚到，按回调时刻归会错拍，上屏其实是准的）。
-        var lastTarget: Double?
+        // 减速每一步按它算位置用的 targetTimestamp 归拍（回调偶尔晚到，按回调时刻归会错拍，上屏其实是准的）。
+        let frames = finger.decelerator.frames
+        func target(for time: Double) -> Double? { frames.last { $0.time <= time }?.target }
         var sent: [(time: Double, value: Double)] = []
         for event in trace {
             switch event.kind {
-            case "glide-target": lastTarget = event.value
-            case "momentum": sent.append((time: (lastTarget ?? event.time + 0.0001) - 0.0001, value: event.value))
+            case "momentum": sent.append((time: (target(for: event.time) ?? event.time + 0.0001) - 0.0001, value: event.value))
             case "drag": sent.append((time: event.time, value: event.value))
             default: break
             }
         }
         let report = Self.analyze("\(label) v=\(Int(velocity)) output=\(output)", sampler: sampler, sentEvents: sent)
-        // 惯性 link 算位置用的 targetTimestamp 和参考 link 的是不是同一个 vsync（不是的话就是两条 link 相位不齐）。
-        let glideTargets = trace.filter { $0.kind == "glide-target" }.map(\.value)
-        let offGrid = glideTargets.filter { t in !sampler.targets.contains { abs($0 - t) < 0.001 } }.count
-        let packageCommits = trace.filter { $0.kind == "commit" }.count
-        // 交接诊断：拖动那一步、惯性第一帧的 timestamp / target、参考 link 的 vsync，都相对拖动时刻（ms）。
-        if let drag = trace.last(where: { $0.kind == "drag" }) {
-            let rel = { (t: Double) in String(format: "%.2f", (t - drag.time) * 1000) }
-            let first = trace.filter { $0.kind.hasPrefix("glide-first") || $0.kind == "glide-target" }.prefix(5)
-                .map { "\($0.kind)=\(rel($0.value))@\(rel($0.time))" }
-            let vsyncs = sampler.targets.filter { abs($0 - drag.time) < 0.03 }.map(rel)
-            print("ONSCREEN-HANDOFF \(label) v=\(Int(velocity)) output=\(output) \(first.joined(separator: " ")) ref-targets=\(vsyncs.joined(separator: ","))")
+        // 减速 link 算位置用的 targetTimestamp 和参考 link 的是不是同一个 vsync（不是的话就是两条 link 相位不齐）。
+        let offGrid = frames.filter { f in !sampler.targets.contains { abs($0 - f.target) < 0.001 } }.count
+        // 起步诊断：减速头几帧的回调时刻 / target、参考 link 的 vsync，都相对第一帧的回调时刻（ms）。
+        if let origin = frames.first?.time {
+            let rel = { (t: Double) in String(format: "%.2f", (t - origin) * 1000) }
+            let first = frames.prefix(4).map { "decel-target=\(rel($0.target))@\(rel($0.time))" }
+            let vsyncs = sampler.targets.filter { abs($0 - origin) < 0.03 }.map(rel)
+            print("ONSCREEN-START \(label) v=\(Int(velocity)) output=\(output) \(first.joined(separator: " ")) ref-targets=\(vsyncs.joined(separator: ","))")
         }
-        print("ONSCREEN-PHASE \(label) v=\(Int(velocity)) output=\(output) glide-frames=\(glideTargets.count) glide-target-not-a-ref-vsync=\(offGrid) package-commit-events=\(packageCommits)")
+        print("ONSCREEN-PHASE \(label) v=\(Int(velocity)) output=\(output) decel-frames=\(frames.count) decel-target-not-a-ref-vsync=\(offGrid)")
         print(report.line)
         print("ONSCREEN-DIAG \(decoder.diagnostic ?? "-")")
 
-        // 时序：每一步惯性发出去之后，Ghostty 多久把画面交给 CA、交的那一刻在显示帧里的相位。
+        // 时序：减速每一步发出去之后，Ghostty 多久把画面交给 CA、交的那一刻在显示帧里的相位。
         let presents = GhosttyPresentLog.read()
         let glide = trace.filter { $0.kind == "momentum" }.map(\.time)
         let latency = glide.compactMap { t in presents.times.first { $0 >= t }.map { ($0 - t) * 1000 } }
@@ -455,12 +440,13 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
             guard let index = starts.lastIndex(where: { $0 <= t }), index + 1 < starts.count else { return nil }
             return (t - starts[index]) / (starts[index + 1] - starts[index])
         }
-        print(String(format: "ONSCREEN-TIMING %@ output=%@ presents=%d offMain=%d glide-steps=%d step→present p50=%.1fms p95=%.1fms max=%.1fms present-phase p50=%.2f p95=%.2f max=%.2f pixel-format=%@ frames=%d frame-interval-p50=%.2fms",
+        print(String(format: "ONSCREEN-TIMING %@ output=%@ presents=%d offMain=%d decel-steps=%d step→present p50=%.1fms p95=%.1fms max=%.1fms present-phase p50=%.2f p95=%.2f max=%.2f pixel-format=%@ frames=%d frame-interval-p50=%.2fms",
                      label, "\(output)", presents.times.count, presents.offMain, glide.count,
                      ProbeMetrics.percentile(latency, 0.5), ProbeMetrics.percentile(latency, 0.95), latency.max() ?? 0,
                      ProbeMetrics.percentile(phases, 0.5), ProbeMetrics.percentile(phases, 0.95), phases.max() ?? 0,
                      fourCC(decoder.pixelFormat), starts.count,
                      ProbeMetrics.percentile(zip(starts, starts.dropFirst()).map { ($1 - $0) * 1000 }, 0.5)))
+        XCTAssertTrue(view.uTermScrollState.isAtRest, "\(report.label)：甩完之后没停在整行上 \(view.uTermScrollState)")
         return report
     }
 
@@ -468,44 +454,23 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         String(bytes: [24, 16, 8, 0].map { UInt8((code >> $0) & 0xFF) }, encoding: .ascii) ?? "\(code)"
     }
 
-    // MARK: - 拖动 → 惯性交接
-
-    /// 在「下一次 display link 回调前 `lead` ms」这个相位上做一次拖动 + 松手（真手指的触摸事件也是在帧开头、回调前后到）。
-    private func flingAtPhase(view: MGhosttyTerminalView, sampler: CommitSampler, lead: Double, velocity: CGFloat) async {
-        let pan = Pan()
-        let selector = NSSelectorFromString("handleTouchScrollGesture:")
-        // 回调大约在它的 timestamp（= 上一拍记下的 target）前 0.9 ms 来；量出来的，见 ONSCREEN-HANDOFF 诊断行。
-        let nextCallback = (sampler.targets.last ?? CACurrentMediaTime()) - 0.0009
-        var fire = nextCallback - lead / 1000
-        while fire < CACurrentMediaTime() + 0.002 { fire += 1.0 / 120 }
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.main.asyncAfter(deadline: .now() + (fire - CACurrentMediaTime() - 0.0015)) {
-                while CACurrentMediaTime() < fire {}
-                pan.fakeState = .began; pan.fakeTranslation = .zero; _ = view.perform(selector, with: pan)
-                pan.fakeState = .changed; pan.fakeTranslation = CGPoint(x: 0, y: velocity > 0 ? 6 : -6)
-                _ = view.perform(selector, with: pan)
-                pan.fakeState = .ended; pan.fakeTranslation = .zero; pan.fakeVelocity = CGPoint(x: 0, y: velocity)
-                _ = view.perform(selector, with: pan)
-                done.resume()
-            }
-        }
-    }
-
     // MARK: - 用例
 
     /// 每拍上屏位移的回归门槛（单独窗口 / 整个工作区界面，有无输出，初速 1000 / 4000 pt/s 都要过）：
     /// - 重复帧 0（速度 ≥ 2 px/帧时没有一拍不换画面）；
     /// - 和这一拍发出去的位移逐拍对得上（错位 ≤ 1 拍）；
-    /// - 二阶差分 ≤ 4 px、相邻两拍位移比 ≤ 1.35（整像素取整的噪声是 1–2 px、比值 1.25 左右）；
-    /// - 交接那一拍只有拖动那一步（不是拖动 + 惯性第一步叠在一起）。
-    private func assertSmooth(_ report: Report, drag: Double = 18, file: StaticString = #filePath, line: UInt = #line) {
+    /// - 二阶差分 ≤ 4 px、相邻两拍位移比 ≤ 1.35（整像素取整的噪声是 1–2 px、比值 1.25 左右）。
+    ///
+    /// 原来还有一条「交接那一拍只有拖动那一步」（开头那一拍的位移 = 18 px）：那是本地包里「拖动 → 惯性交接对齐上屏」的
+    /// 回归门槛，那段代码随自写物理删了；系统路径上手指最后一步和减速第一步谁落在哪一拍是 UIKit 的事，测试里的假减速
+    /// 复现不了，所以这一条去掉，甩动也不再先拖一步（见 measureGhosttyFling）。
+    private func assertSmooth(_ report: Report, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertGreaterThan(report.shown.count, 30, "\(report.label)：上屏位置没解出来（decoded=\(report.decoded) failed=\(report.failures)）",
                              file: file, line: line)
         XCTAssertEqual(report.repeats, 0, "\(report.label)：重复帧", file: file, line: line)
         XCTAssertLessThanOrEqual(report.mismatches, 1, "\(report.label)：上屏和发出的位移对不上", file: file, line: line)
         XCTAssertLessThanOrEqual(report.maxJerk, 4, "\(report.label)：每拍位移忽大忽小（二阶差分）", file: file, line: line)
         XCTAssertLessThanOrEqual(report.maxRatio, 1.35, "\(report.label)：相邻两拍位移比", file: file, line: line)
-        XCTAssertEqual(report.handoff.first ?? 0, drag, accuracy: 1.5, "\(report.label)：交接那一拍一下走了两步", file: file, line: line)
     }
 
     func testGhosttyFlingOnScreen() async throws {
@@ -517,58 +482,14 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         }
     }
 
-    /// 拖动交给惯性的那一帧不能「一帧走两步」：在回调前 0.3–6 ms 各个相位上松手，交接那一帧上屏的位移必须只是拖动那一步。
-    func testGhosttyFlingHandoffOnScreen() async throws {
-        var problems: [String] = []
-        for output in [false, true] {
-            let host = try GhosttyProbeHost(size: CGSize(width: 440, height: 600))
-            defer { host.close() }
-            try await host.waitUntilReady()
-            let cols = host.grid.cols
-            host.feedAndWait(Self.barcodeHistory(lines: 400, cols: cols) + TerminalSpikeCorpus.claudeFrame(0, cols: cols))
-            try await Task.sleep(for: .milliseconds(300))
-            let cell = try XCTUnwrap(host.view.uTermCellPixels)
-            for _ in 0..<120 { host.view.sendMouseScroll(x: 0, y: Double(cell.height), mods: TerminalScrollModifiers(precision: true)) }
-            try await Task.sleep(for: .milliseconds(300))
-            let layer = try XCTUnwrap(Self.surfaceLayer(in: host.view.layer))
-            var decoder = BarcodeDecoder(cell: cell)
-            let feeder = output ? Task { @MainActor in
-                var n = 1
-                while !Task.isCancelled {
-                    host.bridge.feed(Data(TerminalSpikeCorpus.claudeFrame(n, cols: cols).utf8))
-                    n += 1
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-            } : nil
-            defer { feeder?.cancel() }
-            var lines: [String] = []
-            for (index, lead) in [0.3, 0.8, 1.5, 3.0, 6.0, 0.3, 0.8, 1.5].enumerated() {
-                let velocity: CGFloat = index % 2 == 0 ? 1000 : -1000
-                let sampler = CommitSampler()
-                sampler.read = { decoder.position(of: layer) }
-                UTermScrollTrace.isEnabled = true
-                sampler.start()
-                try await Task.sleep(for: .milliseconds(80))
-                await flingAtPhase(view: host.view, sampler: sampler, lead: lead, velocity: velocity)
-                try await Task.sleep(for: .milliseconds(1800))
-                sampler.stop()
-                let trace = UTermScrollTrace.drain()
-                UTermScrollTrace.isEnabled = false
-                let drag = abs(trace.filter { $0.kind == "drag" }.reduce(0) { $0 + $1.value })
-                // 0 = 拖动已画上、照常起步；1 = 拖动还没画上、这一帧先不走；2 = 拖动赶在 vsync 前画上了、惯性第一步当场补上。
-                let skipped = trace.filter { $0.kind == "glide-first" }.map(\.value).max() ?? -1
-                let report = Self.analyze("handoff", sampler: sampler, sentEvents: nil)
-                let first = report.handoff.first ?? 0
-                let merged = abs(first - drag) > 1.5
-                lines.append(String(format: "lead=%.1fms drag=%.0f shown=%@ start=%.0f repeats=%d%@", lead, drag,
-                                    report.handoff.map { String(format: "%.0f", $0) }.joined(separator: "/"), skipped,
-                                    report.repeats, merged ? " MERGED" : ""))
-                if merged { problems.append("output=\(output) lead=\(lead)ms 交接帧 \(Int(first)) px ≠ 拖动 \(Int(drag)) px") }
-                if report.repeats > 0 { problems.append("output=\(output) lead=\(lead)ms 重复帧 \(report.repeats)") }
-            }
-            print("ONSCREEN-HANDOFF-PHASES output=\(output) " + lines.joined(separator: " | "))
-        }
-        XCTAssertTrue(problems.isEmpty, problems.joined(separator: "；"))
+    /// 原来核「拖动交给惯性的那一帧不能一帧走两步」：在 display link 回调前 0.3–6 ms 的各个相位上松手，交接那一帧上屏的
+    /// 位移必须只是拖动那一步。它测的是本地包里自写惯性的交接逻辑（起点对到 vsync、等拖动那一步画上画面层再补发第一步，
+    /// 靠 `glide-first` 打点判定），那段代码已经随自写滚动物理删掉。系统路径上这一拍由 UIKit 自己交接（手指最后一个事件和
+    /// 减速第一帧都在它手里），测试没法伪造触摸来驱动它；剩下的自写惯性（抓鼠标 / 备用屏）不滚视口，没有「上屏位移」可量。
+    /// 系统路径上屏位置的连续性由 `testGhosttyFlingOnScreen` 和 `GhosttySystemScrollJitterTests` 核。
+    func testGhosttyFlingHandoffOnScreen() throws {
+        throw XCTSkip("自写惯性的「拖动 → 惯性交接对齐上屏」已随自写滚动物理删除；系统滚动的交接在 UIKit 里，测试驱动不了。"
+            + "上屏位置的连续性见 testGhosttyFlingOnScreen 与 GhosttySystemScrollJitterTests")
     }
 
     func testGhosttyFlingOnScreenInWorkspace() async throws {

@@ -14,11 +14,12 @@ import XCTest
 /// 只有窗口截图带得上），读一列像素还原出「每个像素行属于第几行文字」。网格原点、相邻行露出的残条、
 /// 最后一行被切、回弹没归零都是同一张表上的事，差 1 px 也看得见。
 /// 手势按真机的规则分路（见 `Rig`）：有回滚的普通屏，单指归系统滚动——直接操作 GhosttyKit 借来的那个 UIScrollView
-/// 并调它的代理方法；没有回滚、备用屏时落回自写的拖动——伪造 `UIPanGestureRecognizer` 调 `handleTouchScrollGesture:`。
+/// 并调它的代理方法（`EdgeSystemFinger`）；没有回滚、备用屏时落回自写的拖动——伪造 `UIPanGestureRecognizer` 调
+/// `handleTouchScrollGesture:`。
 /// 每一步之间隔一帧（真手指也是一帧一个事件，引擎的滚动条回报要一帧才到，旧 bug 正出在这一帧上）。
 ///
-/// 这一组原来每条都按两条路径各跑一遍（`.own` 自写单指拖动 / 惯性 / 回弹，`.system` 系统滚动）。本地包里「自写滚动物理」
-/// 的开关已经拿掉，单指滚回滚区恒走系统滚动，所以只留系统那一半，断言原样；去掉的那一半见
+/// 这一组原来每条都按两条路径各跑一遍（`.own` 自写单指拖动 / 惯性 / 回弹，`.system` 系统滚动）。本地包里那套自写滚动物理
+/// 连同它的开关都已经删掉，单指滚回滚区恒走系统滚动，所以只留系统那一半，断言原样；去掉的那一半见
 /// `testOwnPhysicsAndFreeRendererVariantsAreGone`。
 @MainActor
 final class GhosttyScrollEdgeTests: XCTestCase {
@@ -161,30 +162,33 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         private(set) var hasScrolled = false
         /// 正在进行的这一下手势归系统滚动（UIScrollView）还是自写路径。
         private var systemGesture = false
+        /// 系统滚动那一半的手指（见 `EdgeSystemFinger`）。
+        let finger: EdgeSystemFinger
 
-        init(host: GhosttyProbeHost, scale: CGFloat, cellPx: Int) {
+        init(host: GhosttyProbeHost, scale: CGFloat, cellPx: Int) throws {
             self.host = host; self.scale = scale; self.cellPx = cellPx
             rows = host.grid.rows; cols = host.grid.cols
+            finger = try EdgeSystemFinger(view: host.view)
         }
 
         var scrollView: UIScrollView? { view.uTermSystemScrollView }
+        /// 代替 UIKit 的减速 / 回弹的那个（见 `EdgeSystemFinger.decelerator`）。
+        var decelerator: EdgeDecelerator { finger.decelerator }
 
         // MARK: 手势
         //
         // 归不归系统滚动按真实规则判（`uTermSystemPanWouldBegin`）：有回滚的普通屏归系统，没有回滚、备用屏时和真机一样
         // 落回自写路径。
         // 自写路径：伪造 UIPanGestureRecognizer 调 `handleTouchScrollGesture:`。
-        // 系统路径：UIKit 的减速、回弹没法伪造触摸来驱动，这里按 UIKit 会做的事直接操作 UIScrollView 并调它的代理方法：
-        // 拖动 = 改 contentOffset（didScroll 照常来）、松手 = willEndDragging 算落点 + didEndDragging + setContentOffset(animated:)
-        // 代替减速和回弹（结束时 didEndScrollingAnimation 照常来）。量不到 UIKit 的物理本身，量的是位置映射、到头、对齐。
+        // 系统路径：`EdgeSystemFinger`（按 UIKit 会做的事直接操作 UIScrollView 并调它的代理方法）。
 
         func begin() {
             hasScrolled = true
             // 手指按下来：上一次松手的减速 / 回弹到此为止（UIKit 在按下时也是这样停的）。
             if decelerator.isRunning { touchDown() }
-            if view.uTermSystemPanWouldBegin, let scrollView {
+            if view.uTermSystemPanWouldBegin {
                 systemGesture = true
-                view.scrollViewWillBeginDragging(scrollView)
+                finger.begin()
             } else {
                 systemGesture = false
                 send(.began)
@@ -193,48 +197,21 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
         /// 手指挪 `dy` pt（正 = 往下，内容跟着下移）。
         func move(_ dy: CGFloat) {
-            if systemGesture, let scrollView {
-                scrollView.contentOffset.y -= dy
-            } else {
-                send(.changed, dy: dy)
-            }
+            if systemGesture { finger.move(dy) } else { send(.changed, dy: dy) }
         }
 
         /// 抬手，`velocity` pt/s（正 = 往下甩）。
         func end(velocity: CGFloat) {
-            guard systemGesture, let scrollView else { send(.ended, velocity: velocity); return }
-            let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-            let current = scrollView.contentOffset.y
-            let outOfRange = current < 0 || current > maxOffset
-            // UIKit 的投影（.normal 减速率，每毫秒 0.998）：落点 = 现在的位置 − 速度 × 0.998 / 0.002，再夹进范围。
-            let projected = velocity / 1000 * 0.998 / 0.002
-            var target = CGPoint(x: 0, y: min(max(0, current - projected), maxOffset))
-            view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -velocity / 1000), targetContentOffset: &target)
-            let decelerates = abs(velocity) > 0 || outOfRange
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: decelerates)
-            if decelerates { decelerator.run(scrollView, to: target.y) { [view] in view.scrollViewDidEndDecelerating(scrollView) } }
+            if systemGesture { finger.end(velocity: velocity) } else { send(.ended, velocity: velocity) }
         }
 
         /// 手势被系统打断。
         func cancel() {
-            guard systemGesture, let scrollView else { send(.cancelled); return }
-            let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-            let current = scrollView.contentOffset.y
-            let outOfRange = current < 0 || current > maxOffset
-            view.scrollViewDidEndDragging(scrollView, willDecelerate: outOfRange)
-            if outOfRange {
-                decelerator.run(scrollView, to: min(max(0, current), maxOffset)) { [view] in view.scrollViewDidEndDecelerating(scrollView) }
-            }
+            if systemGesture { finger.cancel() } else { send(.cancelled) }
         }
 
         /// 惯性 / 减速途中手指落下（不拖）。
-        func touchDown() {
-            decelerator.stop()
-            view.uTermTouchDownDuringMomentum()
-        }
-
-        /// 代替 UIKit 的减速 / 回弹：每帧直接写 contentOffset（UIKit 减速也是这样写的），走完报 didEndDecelerating。
-        let decelerator = EdgeDecelerator()
+        func touchDown() { finger.touchDown() }
 
         /// 读图的像素容差：nativeScale 不是整数的屏（Duo 内屏 2.807）上，窗口截图是重采样出来的，画面层差着零点几像素，
         /// 行界糊成一到两像素的混色（实测 591:153,74,60 592:72,112,59 这种两行渐变）；整数倍率的屏上一像素都不让。
@@ -313,7 +290,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         let scale = host.view.window?.screen.nativeScale ?? 3
         let cell = try XCTUnwrap(host.view.uTermCellPixels)
-        let rig = Rig(host: host, scale: scale, cellPx: Int(cell.height))
+        let rig = try Rig(host: host, scale: scale, cellPx: Int(cell.height))
         rig.pan.fakeLocation = CGPoint(x: size.width / 2, y: size.height / 2)
         return rig
     }
@@ -1009,12 +986,11 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     /// - `testSystemScrollWiring` 里「自写物理开关打开时不归系统滚动」那一句；
     /// - 四种组合里的另外三种（渲染不同步 + 系统、同步重画 + 自写、渲染不同步 + 自写）。
     ///
-    /// 自写的那套代码还在本地包里，但真手指只在这几种情况走得到它：程序抓着鼠标（`GhosttyCapturedMomentumTests`）、
-    /// 备用屏、没有回滚（这两种本组用例按真实规则照样落到它上面，见 `Rig.begin()`）、选区拖动、双指。
-    /// 「有回滚的普通屏上单指走自写物理」这个组合真手指走不到了，而且吸附 / 对齐现在一律交给系统滚动那条路径，
-    /// 硬调 `handleTouchScrollGesture:` 量出来的已经不是当初验收过的那套行为。
+    /// 自写的滚动物理（到顶 / 到底的橡皮筋与弹簧、落点惯性、自写的吸附）已经从本地包里整套删掉。留下的自写拖动只在这几种
+    /// 情况才走：程序抓着鼠标（`GhosttyCapturedMomentumTests`）、备用屏、没有回滚（这两种本组用例按真实规则照样落到它上面，
+    /// 见 `Rig.begin()`）、选区拖动、双指。它们的位移原样交给引擎，没有回弹、没有落点。
     func testOwnPhysicsAndFreeRendererVariantsAreGone() throws {
-        throw XCTSkip("自写单指滚动物理（.own）与「渲染不同步」两个 A/B 开关已从本地包里拿掉："
+        throw XCTSkip("自写单指滚动物理（.own）连同它的开关、以及「渲染不同步」的 A/B 开关都已从本地包里删掉："
             + "单指滚回滚区恒走系统 UIScrollView，引擎 wakeup 在 iOS 上恒为主线程同步重画。"
             + "自写拖动只剩程序抓鼠标 / 备用屏 / 没有回滚 / 选区拖动 / 双指时才走；这一组只留系统滚动 + 同步重画那一半。")
     }
@@ -1040,24 +1016,103 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     }
 }
 
-/// 松手后的减速 / 回弹：display link 每帧按三次缓出写 contentOffset，0.35 s 走完调 `done`。
+/// 按 UIKit 会做的事驱动 GhosttyKit 借来的 UIScrollView（单指滚回滚区的那条系统滚动路径）。
+///
+/// UIKit 的跟踪、减速、回弹没法伪造触摸来驱动，这里直接操作滚动视图并调它的代理方法：拖动 = 改 contentOffset
+///（didScroll 照常来）、松手 = willEndDragging 算落点 + didEndDragging、减速和回弹由 `EdgeDecelerator` 每帧写 contentOffset
+/// 代替（UIKit 减速也是这样写的），走完报 didEndDecelerating。量不到 UIKit 的物理本身，量的是 GhosttyKit 这一侧：
+/// contentOffset → 引擎位置的映射、越界平移、到头、落点取整与对齐。
+@MainActor
+final class EdgeSystemFinger {
+    let view: MGhosttyTerminalView
+    let scrollView: UIScrollView
+    let decelerator = EdgeDecelerator()
+
+    /// 甩动的减速走多久（秒）：三次缓出的初速度 = 3 × 距离 ÷ 时长，距离 = 速度 × 0.998 / 0.002 ms（`.normal` 减速率的投影），
+    /// 让初速度等于抬手速度的时长就是这个数，和速度无关。
+    nonisolated static let flingSeconds = 3 * 0.998 / 0.002 / 1000
+
+    init(view: MGhosttyTerminalView) throws {
+        self.view = view
+        scrollView = try XCTUnwrap(view.uTermSystemScrollView, "终端视图里没有借来的 UIScrollView")
+    }
+
+    var maxOffset: CGFloat { max(0, scrollView.contentSize.height - scrollView.bounds.height) }
+    var isOutOfRange: Bool { scrollView.contentOffset.y < 0 || scrollView.contentOffset.y > maxOffset }
+
+    /// 手指按下并拖起来。上一次松手的减速 / 回弹到此为止（UIKit 在按下时也是这样停的）。
+    func begin() {
+        if decelerator.isRunning { touchDown() }
+        view.scrollViewWillBeginDragging(scrollView)
+    }
+
+    /// 手指挪 `dy` pt（正 = 往下，内容跟着下移）。
+    func move(_ dy: CGFloat) {
+        scrollView.contentOffset.y -= dy
+    }
+
+    /// 抬手，`velocity` pt/s（正 = 往下甩）。有速度或停在界外就「减速」`seconds` 秒到落点（落点由 GhosttyKit 取整到行）。
+    func end(velocity: CGFloat, seconds: Double = 0.35) {
+        let current = scrollView.contentOffset.y
+        let outOfRange = isOutOfRange
+        // UIKit 的投影（.normal 减速率，每毫秒 0.998）：落点 = 现在的位置 − 速度 × 0.998 / 0.002，再夹进范围。
+        let projected = velocity / 1000 * 0.998 / 0.002
+        var target = CGPoint(x: 0, y: min(max(0, current - projected), maxOffset))
+        view.scrollViewWillEndDragging(scrollView, withVelocity: CGPoint(x: 0, y: -velocity / 1000), targetContentOffset: &target)
+        let decelerates = abs(velocity) > 0 || outOfRange
+        view.scrollViewDidEndDragging(scrollView, willDecelerate: decelerates)
+        if decelerates {
+            decelerator.run(scrollView, to: target.y, seconds: seconds) { [view, scrollView] in view.scrollViewDidEndDecelerating(scrollView) }
+        }
+    }
+
+    /// 手势被系统打断。
+    func cancel() {
+        let outOfRange = isOutOfRange
+        view.scrollViewDidEndDragging(scrollView, willDecelerate: outOfRange)
+        if outOfRange {
+            decelerator.run(scrollView, to: min(max(0, scrollView.contentOffset.y), maxOffset)) { [view, scrollView] in
+                view.scrollViewDidEndDecelerating(scrollView)
+            }
+        }
+    }
+
+    /// 减速途中手指落下（不拖）。
+    func touchDown() {
+        decelerator.stop()
+        view.uTermTouchDownDuringMomentum()
+    }
+}
+
+/// 松手后的减速 / 回弹：display link 每帧按三次缓出写 contentOffset，`seconds`（默认 0.35 s）走完调 `done`。
 /// 新的一次会顶掉上一次（手指又按下来时测试会先 begin()，那时它也该停：`stop()`）。
 @MainActor
 final class EdgeDecelerator: NSObject {
+    /// 这一次减速的每一帧：回调的时刻、这一帧瞄准的 vsync、写 contentOffset 花了多久（GhosttyKit 的 didScroll 就在里面跑）。
+    struct Frame {
+        let time: Double
+        let target: Double
+        let writeMS: Double
+    }
+
+    private(set) var frames: [Frame] = []
     private var link: CADisplayLink?
     private weak var scrollView: UIScrollView?
     private var from: CGFloat = 0
     private var to: CGFloat = 0
     private var start: CFTimeInterval = 0
+    private var seconds = 0.35
     private var done: (() -> Void)?
 
-    func run(_ scrollView: UIScrollView, to target: CGFloat, done: @escaping () -> Void) {
+    func run(_ scrollView: UIScrollView, to target: CGFloat, seconds: Double = 0.35, done: @escaping () -> Void) {
         stop()
         self.scrollView = scrollView
         from = scrollView.contentOffset.y
         to = target
         start = 0
+        self.seconds = seconds
         self.done = done
+        frames.removeAll()
         let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
@@ -1077,8 +1132,10 @@ final class EdgeDecelerator: NSObject {
     @objc private func frame(_ link: CADisplayLink) {
         guard let scrollView else { stop(); return }
         if start == 0 { start = link.timestamp }
-        let u = min(1, CGFloat(link.targetTimestamp - start) / 0.35)
+        let u = min(1, CGFloat(link.targetTimestamp - start) / CGFloat(seconds))
+        let began = CACurrentMediaTime()
         scrollView.contentOffset.y = from + (to - from) * (1 - pow(1 - u, 3))
+        frames.append(Frame(time: began, target: link.targetTimestamp, writeMS: (CACurrentMediaTime() - began) * 1000))
         if u >= 1 {
             let finish = done
             stop()
