@@ -161,7 +161,7 @@ final class GhosttyMacScrollTests: XCTestCase {
         let bridge = session.ghostty
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
-        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen, keepsDrawing: true)
         // 配色跟着视图的日夜走；钉成深色，底色和 27 档行色分得开。
         window.appearance = NSAppearance(named: .darkAqua)
         container.frame = window.contentView?.bounds ?? rect

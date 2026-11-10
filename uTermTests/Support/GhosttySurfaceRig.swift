@@ -26,7 +26,7 @@ final class GhosttySurfaceRig {
         let rect = NSRect(origin: .zero, size: size)
         container = GhosttyContainerView(surface: session.ghostty.view)
         container.isActive = true
-        window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+        window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen, keepsDrawing: true)
         container.frame = window.contentView?.bounds ?? rect
         container.layoutSubtreeIfNeeded()
         // 真的主菜单会把 ⌘Q、⌘W 执行掉：测试里一律不问它。

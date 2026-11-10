@@ -140,7 +140,7 @@ final class GhosttyFontRenderingTests: XCTestCase {
         let view = GhosttySurfaceView(frame: rect)
         view.controller = controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
-        let window = ProbeWindow.make(contentRect: rect, contentView: view, placement: .transparentOnScreen)
+        let window = ProbeWindow.make(contentRect: rect, contentView: view, placement: .transparentOnScreen, keepsDrawing: true)
         window.appearance = NSAppearance(named: .aqua)
         defer {
             window.orderOut(nil)

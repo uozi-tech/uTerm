@@ -56,7 +56,7 @@ final class GhosttyMacHostTests: XCTestCase {
         let bridge = session.ghostty
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
-        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen)
+        let window = ProbeWindow.make(contentRect: rect, contentView: container, placement: .transparentOnScreen, keepsDrawing: true)
         container.frame = window.contentView?.bounds ?? rect
         container.layoutSubtreeIfNeeded()
         let live = await waitUntil(10) { bridge.isLive && bridge.grid != nil }

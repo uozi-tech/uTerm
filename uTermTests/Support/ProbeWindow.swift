@@ -23,8 +23,8 @@ import AppKit
 /// - `.transparentOnScreen`：落在刷新率最高的那块屏上，但 `alphaValue = 0`。
 ///   给**判据是时间**的性能探针（心跳拍数 / 单帧 ms / hitTest µs）。窗口真的在
 ///   屏幕上（有 display link、有正常合成路径），所以读数与可见时一致；但屏幕上
-///   什么都看不见，不再抢屏。层级是 `.floating`（不被别的 App 的窗口遮挡，见 `make`），
-///   并且 `ignoresMouseEvents`（不吃用户的点击）。
+///   什么都看不见，不再抢屏。读 Ghostty 画面的用例另传 `keepsDrawing: true`：层级 `.floating`
+///   （不被别的 App 的窗口遮挡，见 `make`）并且 `ignoresMouseEvents`（不吃用户的点击）。
 /// - `.visibleOnScreen`：真的可见。只给**依赖真实可见性的用例**（tooltip、真光标）。
 ///
 /// ## 为什么计时探针不能离屏：A/B 实测（2026-09-05，Debug，机器上另有构建在跑）
@@ -235,13 +235,15 @@ enum ProbeWindow {
     ///   - screen: 指定屏；屏内两档不指定时落在 `fastestScreen`。
     ///   - key: `true` 走 `makeKeyAndOrderFront`，`false` 走 `orderFrontRegardless`。
     ///   - placement: 见 `Placement`。**改这个参数前先读本文件顶部的 A/B 数据。**
+    ///   - keepsDrawing: 读 Ghostty 画面的用例传 `true`：屏内窗口浮在别的 App 之上（被盖住 Ghostty 就停画）、放行点击。
     static func make(contentRect: NSRect,
                      styleMask: NSWindow.StyleMask = [.borderless],
                      contentView: NSView? = nil,
                      screen: NSScreen? = nil,
                      key: Bool = false,
                      placement: Placement = .offScreen,
-                     onScreenOrigin: NSPoint = NSPoint(x: 40, y: 40)) -> NSWindow {
+                     onScreenOrigin: NSPoint = NSPoint(x: 40, y: 40),
+                     keepsDrawing: Bool = false) -> NSWindow {
         let placement = forcedPlacement ?? placement
         let target: NSScreen? = placement == .offScreen ? nil : (screen ?? fastestScreen)
         let origin: NSPoint
@@ -270,13 +272,14 @@ enum ProbeWindow {
         if let contentView { window.contentView = contentView }
         // 注意用模式匹配而不是 `== .transparentOnScreen`：后者是
         // `.transparentOnScreen(cursorAt: nil)` 的别名，带光标的那一档比不上。
-        if case .transparentOnScreen = placement {
-            window.alphaValue = 0
+        if case .transparentOnScreen = placement { window.alphaValue = 0 }
+        if keepsDrawing, placement != .offScreen {
             // 浮在普通窗口之上：别的 App 的窗口盖住探针窗口时 AppKit 报「完全遮挡」，GhosttyKit 随即停掉显示节拍、
             // 不出新帧，读画面的用例（GhosttyMacScrollTests / GhosttyMacHostTests / GhosttySpikeTests）就读到旧画面。
             // 2026-11-10 连跑 10 轮实测：所有失败都发生在窗口刚被报 `visible=NO` 之后（日志 `[ProbeWindow] 遮挡`）。
             // 透明窗口之间互不遮挡，所以只怕别的 App；`.floating` 之上只剩系统浮层。
             // `ignoresMouseEvents`：窗口看不见又浮在最上面，不能把用户的点击吃掉。
+            // 只给读 Ghostty 画面的用例开（参数默认关）：悬停探针（`RowHoverTrackerProbeTests`）的追踪区读数会跟着层级变。
             window.level = .floating
             window.ignoresMouseEvents = true
         }

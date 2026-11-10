@@ -125,7 +125,7 @@ final class GhosttySpikeTests: XCTestCase {
         let container = GhosttyContainerView(surface: bridge.view)
         container.isActive = true
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
-                                      contentView: container, placement: .transparentOnScreen)
+                                      contentView: container, placement: .transparentOnScreen, keepsDrawing: true)
         defer {
             session.dispose()
             window.orderOut(nil)
@@ -298,7 +298,7 @@ final class GhosttySpikeTests: XCTestCase {
         view.controller = GhosttyTerminalConfig.controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 400, height: 120), contentView: view,
-                                      placement: .transparentOnScreen)
+                                      placement: .transparentOnScreen, keepsDrawing: true)
         defer { window.orderOut(nil); view.removeFromSuperview() }
         io.receive(text)
         try await waitUntil(10, "Ghostty 出帧") { ioSurfaceBitmap(of: view).map { VisionTextProbe.inkFraction($0) > 0.005 } ?? false }
@@ -357,7 +357,7 @@ final class GhosttySpikeTests: XCTestCase {
         view.controller = GhosttyTerminalConfig.controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
         let window = ProbeWindow.make(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), contentView: view,
-                                      placement: .transparentOnScreen)
+                                      placement: .transparentOnScreen, keepsDrawing: true)
         defer { window.orderOut(nil); view.removeFromSuperview() }
         try await waitUntil(10, "Ghostty surface 建好") { box.value != nil }
         try await Task.sleep(for: .milliseconds(200))
@@ -403,7 +403,7 @@ final class GhosttySpikeTests: XCTestCase {
             let view = GhosttySurfaceView(frame: size)
             view.controller = GhosttyTerminalConfig.controller
             view.configuration = TerminalSurfaceOptions(backend: .inMemory(io))
-            ghWindows.append(ProbeWindow.make(contentRect: size, contentView: view, placement: .transparentOnScreen))
+            ghWindows.append(ProbeWindow.make(contentRect: size, contentView: view, placement: .transparentOnScreen, keepsDrawing: true))
             io.receive(Data(load))
             sessions.append(io)
             try await waitUntil(10, "Ghostty 窗格解析完") { io.pendingOutputByteCount == 0 }
