@@ -67,7 +67,11 @@ struct TerminalSessionBody: View {
     var onClose: () -> Void
     @Environment(MobileStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
-    private var terminalBg: Color { MTerminalColors.background(dark: colorScheme == .dark) }
+    /// 终端区域的底色（头部 / 键盘条之外的留白随终端底色）。日间白底、暗夜卡面色 #141414（即 `M.surface`）：
+    /// 终端与上下的标签条、键盘条铺同一个面，只靠 hairline 分区。
+    private var terminalBg: Color {
+        Color(uiColor: TerminalColorScheme.resolve(dark: colorScheme == .dark).backgroundColor)
+    }
     private var serverContext: String { "\(tab.host.name)（\(tab.host.displayEndpoint)）" }
 
     var body: some View {
@@ -81,7 +85,7 @@ struct TerminalSessionBody: View {
                 .frame(minHeight: 0, maxHeight: .infinity)
                 .opacity(tab.mode == .agent ? 1 : 0)
                 .allowsHitTesting(tab.mode == .agent)
-            // 终端层（顶）：SwiftTerm 是 UIViewRepresentable，其 UIView 会无视 ZStack 顺序盖在
+            // 终端层（顶）：终端是 UIViewRepresentable，其 UIView 会无视 ZStack 顺序盖在
             // 上层 SwiftUI（Agent）之上，且 `.opacity(0)` 不一定作用于该 UIView——只用透明度切会
             // 出现「Agent 模式仍显示终端、切不过去」。故终端层放最上，Agent 模式时把它**移出屏外**
             //（仍挂载，保活会话与回滚缓冲，不卸载），把画面让给下面的 Agent 层。
@@ -91,8 +95,7 @@ struct TerminalSessionBody: View {
         }
         // 终端与 Agent 两态同一个工作面（终端底色 == M.surface），切换时底色不跳。
         .background(tab.mode == .terminal ? terminalBg : M.surface, ignoresSafeAreaEdges: .mSessionBody)
-        // 非活动 / Agent 模式的会话把终端 feed 节拍降下来（字节照常进缓冲，不丢）。
-        // 所有会话常驻挂载，不降频的话切走的终端仍在按 60Hz 解析 + 重绘。
+        // 所有会话常驻挂载：告诉会话此刻有没有人在看它（远控的重连退避、程序状态的已读）。
         .onAppear { syncForeground() }
         .onChange(of: isActive) { _, _ in syncForeground() }
         .onChange(of: tab.mode) { _, _ in syncForeground() }
@@ -114,19 +117,12 @@ struct TerminalSessionBody: View {
                     // 连接中页期间不自动弹键盘（autoFocus=false）；中转页撤下后由终端屏重新聚焦。
                     // 字号随可用宽度自适应（窄屏更小、宽屏 / iPad / 分屏更大）。
                     GeometryReader { geo in
-                        #if DEBUG
-                        if let bridge = tab.controller.ghostty {
-                            GhosttyTrialTerminalView(bridge: bridge, controller: tab.controller,
-                                                     isActive: tab.mode == .terminal,
-                                                     autoFocus: store.connecting == nil && isFocused,
-                                                     isOnScreen: isActive && tab.mode == .terminal,
-                                                     onInteract: onInteract)
-                        } else {
-                            swiftTermView(width: geo.size.width)
-                        }
-                        #else
-                        swiftTermView(width: geo.size.width)
-                        #endif
+                        MTerminalHostView(controller: tab.controller,
+                                          fontSize: adaptiveFontSize(width: geo.size.width),
+                                          isActive: tab.mode == .terminal,
+                                          autoFocus: store.connecting == nil && isFocused,
+                                          isOnScreen: isActive && tab.mode == .terminal,
+                                          onInteract: onInteract)
                     }
                     // 终端页边距（对齐 macOS `TerminalContainerView` 的 8pt 左右边）：字符不再贴着屏幕
                     // 边 / 圆角；上下不留，行数才能用满。
@@ -141,15 +137,6 @@ struct TerminalSessionBody: View {
                 }
             }
         }
-    }
-
-    private func swiftTermView(width: CGFloat) -> SwiftTermView {
-        SwiftTermView(controller: tab.controller,
-                      fontSize: adaptiveFontSize(width: width),
-                      isActive: tab.mode == .terminal,
-                      autoFocus: store.connecting == nil && isFocused,
-                      isOnScreen: isActive && tab.mode == .terminal,
-                      onInteract: onInteract)
     }
 
     /// 终端文本区与四周的间距（pt）。

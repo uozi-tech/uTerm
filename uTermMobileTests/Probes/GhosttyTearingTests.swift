@@ -14,7 +14,9 @@ import XCTest
 /// - 第 0 列行边界的过渡宽度（10%–90% 之间的像素数）= 锐度，滚动中和静止时比；
 /// - 同一个 IOSurface 还挂在层上时内容变了 = 正在显示的那张被拿去重画了；
 /// - 相邻两次换画面的位置往回走 = 乱序。
-/// 同一次运行里用 `UTermScrollTrace.legacyWakeupSyncDraw` 做 A/B：true = 第五轮（wakeup 也同步重画），false = 第六轮。
+/// 原来同一次运行里做 A/B：第五轮（引擎 wakeup 也在主线程同步重画）和第六轮（不同步重画）各甩一遍，两种都要过。
+/// 那个开关已经从本地包里拿掉，iOS 定死第五轮的行为（`UTermScrollTrace.wakeupDrawsSynchronously`），这里只留这一半；
+/// 读数行的标签仍叫 `round5`，和以前的日志对得上。
 @MainActor
 final class GhosttyTearingTests: XCTestCase {
     typealias OnScreen = GhosttyOnScreenScrollTests
@@ -24,7 +26,6 @@ final class GhosttyTearingTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        UTermScrollTrace.legacyWakeupSyncDraw = false
         UTermScrollTrace.isEnabled = false
     }
 
@@ -219,10 +220,8 @@ final class GhosttyTearingTests: XCTestCase {
         }
     }
 
-    private func run(legacy: Bool, velocityPx: Double, output: Bool, host: GhosttyProbeHost,
+    private func run(velocityPx: Double, output: Bool, host: GhosttyProbeHost,
                      decoder: Decoder, layer: CALayer, cols: Int) async throws -> Tally {
-        UTermScrollTrace.legacyWakeupSyncDraw = legacy
-        defer { UTermScrollTrace.legacyWakeupSyncDraw = false }
         let scale = Double(host.view.window?.screen.nativeScale ?? 3)
         let pan = Pan()
         let selector = NSSelectorFromString("handleTouchScrollGesture:")
@@ -266,21 +265,19 @@ final class GhosttyTearingTests: XCTestCase {
         print("TEAR static bands=\(still.bands.map { $0.map { String(Int($0)) } ?? "-" }) mixed=\(still.mixed)/\(still.cells) edge-width=\(still.edgeWidth)px torn=\(still.torn)")
 
         var all: [String: Tally] = [:]
-        for legacy in [true, false] {
-            for output in [false, true] {
-                for velocity in [6000.0, 12000, 20000] {
-                    for sign in [1.0, -1.0] {
-                        let tally = try await run(legacy: legacy, velocityPx: velocity * sign, output: output,
-                                                  host: host, decoder: decoder, layer: layer, cols: cols)
-                        let label = "\(legacy ? "round5" : "round6") v=\(Int(velocity * sign)) output=\(output)"
-                        print("TEAR \(label) \(tally.line)")
-                        all[label] = tally
-                    }
+        for output in [false, true] {
+            for velocity in [6000.0, 12000, 20000] {
+                for sign in [1.0, -1.0] {
+                    let tally = try await run(velocityPx: velocity * sign, output: output,
+                                              host: host, decoder: decoder, layer: layer, cols: cols)
+                    let label = "round5 v=\(Int(velocity * sign)) output=\(output)"
+                    print("TEAR \(label) \(tally.line)")
+                    all[label] = tally
                 }
             }
         }
-        // 回归门槛（两种做法都要过）：不撕裂、不混合、不乱序，滚动中锐度和静止时一样。
-        // 「正在显示的 IOSurface 被重画」两种做法都偶尔出现（每 12 次甩动 1–2 次）：交换链 3 张、GPU 画完就放回，
+        // 回归门槛：不撕裂、不混合、不乱序，滚动中锐度和静止时一样。
+        // 「正在显示的 IOSurface 被重画」偶尔出现（每 12 次甩动 1–2 次）：交换链 3 张、GPU 画完就放回，
         // 不等 CA 换下，是 Zig 侧的问题（见报告），这里只打印不设门槛。
         for (label, tally) in all.sorted(by: { $0.key < $1.key }) {
             XCTAssertGreaterThan(tally.frames, 60, "\(label)：没读到画面")

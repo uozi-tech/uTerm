@@ -105,8 +105,7 @@ final class GhosttyCapturedMomentumTests: XCTestCase {
         let scale = host.view.window?.screen.nativeScale ?? 3
         let cell = try XCTUnwrap(host.view.uTermCellPixels)
         host.bridge.inputLog = []
-        // 生产默认：单指滚动归系统滚动；程序抓着鼠标时它让位给自写的拖动（这里测的就是那条路径）。
-        UTermScrollTrace.usesSystemScrolling = true
+        // 单指滚动归系统滚动；程序抓着鼠标时它让位给自写的拖动（这里测的就是那条路径）。
         let rig = Rig(host: host, cellPt: cell.height / scale)
         rig.pan.fakeLocation = CGPoint(x: 220, y: 300)
         return rig

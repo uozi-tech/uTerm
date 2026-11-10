@@ -3,13 +3,18 @@ import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// M16 第二轮：同一段语料同时喂 SwiftTerm 和 GhosttyKit，逐格取字形的前景色（与段底色）比对，列出不一致的格子。
+/// M16 第二轮的取色探针：一段覆盖 16 色 / 粗体 / dim / 256 色 / 真彩 / 反显的语料喂给 GhosttyKit，逐格取字形的前景色
+///（与段底色），打印成 `PARITY …` 行。
+///
+/// 来历：换引擎之前同一段语料同时喂两个引擎、逐格比对，列出不一致的格子（着色规则——`palette-generate`、
+/// `bold-color`、`alpha-blending`、`faint-opacity`、最低对比度——就是照那份清单定下来的，结论在 docs/ghostty-eval/）。
+/// 旧引擎的视图类删掉之后没有对照组了，这里只留 Ghostty 这一列的读数；能直接从 uTerm 配色（`TerminalColorScheme`）
+/// 算出期望值的两项——默认底色、默认前景——和配色比，其余的格子只列颜色（要比就和文档里上一轮的读数比）。
 ///
 /// 取色：每个用例写 `M#W` 三格；格子位置不靠估算，先用真彩红底空格在 (1,0)/(1,56)/(25,0) 标定格宽格高与原点。
-/// 不用第 0 行：iOS 26 的 UIScrollView 顶部有 scroll edge effect，SwiftTerm（UIScrollView）第一行会被压暗。
+/// 不用第 0 行（留着和历史读数同一套坐标；当时是因为旧引擎的 UIScrollView 顶部有 scroll edge effect）。
 /// 每格取离底色最远的那 8% 像素的中位数当前景（抗锯齿边缘不进来），格子左上角内缩 1px 的像素当底色。
-/// 截图都按 sRGB（`preferredRange = .standard`）：SwiftTerm 用 `layer.render`（它在 `draw(_:)` 里画，CPU 栅格，
-/// `drawHierarchy` 截它会糊），Ghostty 用 `snapshotImage()`（IOSurface 只有 `drawHierarchy` 截得到）。
+/// 截图按 sRGB（`preferredRange = .standard`），用 `drawHierarchy`（IOSurface 只有它截得到）。
 /// 挂在 `UTERM_MEASURE=1` 后面。
 @MainActor
 final class GhosttyColorParityTests: XCTestCase {
@@ -78,7 +83,7 @@ final class GhosttyColorParityTests: XCTestCase {
     }
 
     /// 由红底标定格出格子几何（像素）。纯红前景字（fg196）也是红的，所以只认：最上面那一簇（标定行）、
-    /// 和第 0 列里最下面那一簇（第 25 行，在所有用例行之下）。SwiftTerm 顶部两行被 scroll edge effect 压暗，红阈值放宽。
+    /// 和第 0 列里最下面那一簇（第 25 行，在所有用例行之下）。
     private func calibrate(_ r: Raster) -> (x0: Double, y0: Double, w: Double, h: Double)? {
         func isRed(_ p: (Int, Int, Int)) -> Bool { p.0 > 120 && p.1 < 40 && p.2 < 40 }
         var reds: [(Int, Int)] = []
@@ -114,41 +119,27 @@ final class GhosttyColorParityTests: XCTestCase {
 
     private static func hex(_ c: (Int, Int, Int)) -> String { String(format: "#%02X%02X%02X", c.0, c.1, c.2) }
 
-    func testCellColorsMatchSwiftTerm() async throws {
+    /// 逐格读出 Ghostty 画出来的颜色；默认底色 / 默认前景和 uTerm 的配色比。
+    func testCellColorsReadout() async throws {
         let size = CGSize(width: 440, height: 600)
         let controller = GhosttyTerminalBridge.makeController(fontSize: GhosttyTerminalBridge.ghosttyFontSize(points: 11))
         var totalMismatch = 0
         for dark in [true, false] {
+            let mode = dark ? "dark" : "light"
             let scheme = TerminalColorScheme.resolve(dark: dark)
             let format = UIGraphicsImageRendererFormat()
             format.preferredRange = .standard
             format.scale = 3
 
-            // SwiftTerm
-            let stWindow = try makeSpikeWindow(size: size)
-            stWindow.overrideUserInterfaceStyle = dark ? .dark : .light
-            let stView = MTerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-            stView.contentInsetAdjustmentBehavior = .never
-            TerminalAppearance.applyColors(to: stView, scheme: scheme)
-            stView.backgroundColor = scheme.backgroundColor
-            let stContainer = MTerminalContainerView(terminalView: stView, fontSize: 11)
-            stContainer.frame = CGRect(origin: .zero, size: size)
-            stWindow.addSubview(stContainer)
-            stContainer.layoutIfNeeded()
-            stView.feed(text: Self.corpus)
-            stView.flushPendingDisplay()
-            try await Task.sleep(for: .milliseconds(300))
-            let stImage = UIGraphicsImageRenderer(bounds: stView.bounds, format: format).image { ctx in
-                stView.layer.render(in: ctx.cgContext)
-            }
-
-            // Ghostty
-            let ghWindow = try makeSpikeWindow(size: size)
-            ghWindow.overrideUserInterfaceStyle = dark ? .dark : .light
+            let window = try makeSpikeWindow(size: size)
+            window.overrideUserInterfaceStyle = dark ? .dark : .light
             let bridge = GhosttyTerminalBridge(controller: controller, frame: CGRect(origin: .zero, size: size))
-            ghWindow.addSubview(bridge.view)
-            let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.surface != nil && bridge.grid != nil }
-            XCTAssertTrue(ready)
+            window.addSubview(bridge.view)
+            // 等 surface 建好、网格到位、画面接上实时字节：在那之前喂的只进影子，要等回放才上屏。
+            let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+                bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            }
+            XCTAssertTrue(ready, "\(mode)：surface 没就绪")
             // 第一次报上来的网格可能还是建 surface 那一刻的尺寸，等它停稳再喂，不然内容会按旧宽度折行。
             var lastGrid = "\(String(describing: bridge.grid))", stableSince = CACurrentMediaTime()
             while CACurrentMediaTime() - stableSince < 0.4 {
@@ -156,41 +147,54 @@ final class GhosttyColorParityTests: XCTestCase {
                 let now = "\(String(describing: bridge.grid))"
                 if now != lastGrid { lastGrid = now; stableSince = CACurrentMediaTime() }
             }
-            print("PARITY \(dark ? "dark" : "light") grid swiftterm=\(stView.getTerminal().cols)x\(stView.getTerminal().rows) ghostty=\(lastGrid)")
+            print("PARITY \(mode) grid ghostty=\(lastGrid)")
             bridge.feed(Data(Self.corpus.utf8))
             bridge.session.waitForPendingOutput()
             try await Task.sleep(for: .milliseconds(600))
-            let ghImage = UIGraphicsImageRenderer(bounds: bridge.view.bounds, format: format).image { _ in
+            let image = UIGraphicsImageRenderer(bounds: bridge.view.bounds, format: format).image { _ in
                 bridge.view.drawHierarchy(in: bridge.view.bounds, afterScreenUpdates: false)
             }
-            for (name, image) in [("swiftterm", stImage), ("ghostty", ghImage)] {
-                let attachment = XCTAttachment(image: image)
-                attachment.name = "parity-\(dark ? "dark" : "light")-\(name)"
-                attachment.lifetime = .keepAlways
-                add(attachment)
-            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "parity-\(mode)-ghostty"
+            attachment.lifetime = .keepAlways
+            add(attachment)
 
-            let st = Raster(try XCTUnwrap(stImage.cgImage)), gh = Raster(try XCTUnwrap(ghImage.cgImage))
-            let stGeo = try XCTUnwrap(calibrate(st), "SwiftTerm 标定失败"), ghGeo = try XCTUnwrap(calibrate(gh), "Ghostty 标定失败")
-            print(String(format: "PARITY %@ geometry swiftterm cell=%.2fx%.2f origin=(%.0f,%.0f) | ghostty cell=%.2fx%.2f origin=(%.0f,%.0f)",
-                         dark ? "dark" : "light", stGeo.w, stGeo.h, stGeo.x0, stGeo.y0, ghGeo.w, ghGeo.h, ghGeo.x0, ghGeo.y0))
+            let raster = Raster(try XCTUnwrap(image.cgImage))
+            let geo = try XCTUnwrap(calibrate(raster), "\(mode)：标定失败")
+            print(String(format: "PARITY %@ geometry ghostty cell=%.2fx%.2f origin=(%.0f,%.0f)", mode, geo.w, geo.h, geo.x0, geo.y0))
+            // 期望值：能直接从配色读出来的只有默认底色和默认前景。
+            func triple(_ color: UIColor) -> (Int, Int, Int) {
+                let rgb = GhosttyPalette.rgb(color)
+                return (Int(rgb.0), Int(rgb.1), Int(rgb.2))
+            }
+            func distance(_ a: (Int, Int, Int), _ b: (Int, Int, Int)) -> Int { max(abs(a.0 - b.0), abs(a.1 - b.1), abs(a.2 - b.2)) }
+            let wantBg = triple(scheme.backgroundColor), wantFg = triple(scheme.foregroundColor)
+            print("PARITY \(mode) scheme bg=\(Self.hex(wantBg)) fg=\(Self.hex(wantFg))")
             var mismatches = 0
             for (i, c) in Self.cases.enumerated() {
                 let p = Self.position(i)
-                let a = sample(st, geo: stGeo, row: p.row, col: p.col)
-                let b = sample(gh, geo: ghGeo, row: p.row, col: p.col)
-                let dFg = max(abs(a.fg.0 - b.fg.0), abs(a.fg.1 - b.fg.1), abs(a.fg.2 - b.fg.2))
-                let dBg = max(abs(a.bg.0 - b.bg.0), abs(a.bg.1 - b.bg.1), abs(a.bg.2 - b.bg.2))
-                let bad = dFg > 24 || dBg > 8
-                if bad { mismatches += 1 }
-                print("PARITY \(dark ? "dark" : "light") \(bad ? "DIFF" : "same") \(c.name.padding(toLength: 22, withPad: " ", startingAt: 0)) "
-                      + "fg st=\(Self.hex(a.fg)) gh=\(Self.hex(b.fg)) Δ\(dFg) | bg st=\(Self.hex(a.bg)) gh=\(Self.hex(b.bg)) Δ\(dBg)")
+                let got = sample(raster, geo: geo, row: p.row, col: p.col)
+                // 没写底色、没反显的用例：段底色就是终端底色。`default`：前景就是终端前景。
+                let plainBackground = !c.sgr.contains("48;") && !c.sgr.split(separator: ";").contains("7")
+                var notes: [String] = []
+                if plainBackground {
+                    let d = distance(got.bg, wantBg)
+                    notes.append("bg-vs-scheme Δ\(d)")
+                    if d > 8 { mismatches += 1; notes.append("DIFF") }
+                }
+                if c.name == "default" {
+                    let d = distance(got.fg, wantFg)
+                    notes.append("fg-vs-scheme Δ\(d)")
+                    if d > 24 { mismatches += 1; notes.append("DIFF") }
+                }
+                print("PARITY \(mode) \(c.name.padding(toLength: 22, withPad: " ", startingAt: 0)) "
+                      + "fg=\(Self.hex(got.fg)) bg=\(Self.hex(got.bg)) \(notes.joined(separator: " "))")
             }
-            print("PARITY \(dark ? "dark" : "light") summary mismatches=\(mismatches)/\(Self.cases.count)")
+            print("PARITY \(mode) summary scheme-mismatches=\(mismatches)")
             totalMismatch += mismatches
-            stContainer.removeFromSuperview(); bridge.view.removeFromSuperview()
-            stWindow.isHidden = true; ghWindow.isHidden = true
+            bridge.view.removeFromSuperview()
+            window.isHidden = true
         }
-        print("PARITY total mismatches=\(totalMismatch)")
+        print("PARITY total scheme-mismatches=\(totalMismatch)")
     }
 }

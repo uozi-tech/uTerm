@@ -450,7 +450,7 @@ struct WorkspaceScreen: View {
     }
 
     /// 标签主体；建连中（格内连接中页）时主体移到屏外、连接中页顶上。
-    /// 不能把连接中页叠在终端上面：SwiftTerm 的 UIView 会无视 ZStack 顺序盖住上面的 SwiftUI
+    /// 不能把连接中页叠在终端上面：终端的 UIView 会无视 ZStack 顺序盖住上面的 SwiftUI
     ///（见 TerminalSessionBody 的 Agent 层）。主体仍挂着，建连期 shell 首屏的字节照收。
     @ViewBuilder
     private func coveredTabBody(_ tab: MWorkTab, front: Bool, focused: Bool) -> some View {

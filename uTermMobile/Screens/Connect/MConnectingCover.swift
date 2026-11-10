@@ -2,7 +2,6 @@ import UDesignKit
 import SwiftUI
 import SwiftData
 import Observation
-import class SwiftTerm.TerminalView
 import UIKit
 
 /// 连接目标：终端会话 / SFTP 文件浏览（设计稿 `m-connect` 的 `kind`）。
@@ -15,7 +14,7 @@ enum MConnPhase: Equatable { case connecting, connected, failed(String) }
 /// 一次「受保护连接」的请求：在选定主机与会话/文件浏览打开之间，根视图据此呈现全屏
 /// 「连接中」中转页（设计稿 `m-shell` 的 `cover.type === 'connecting'`）。
 ///
-/// 连接本体仍跑在目标屏（终端 / 文件）里——终端必须在建连期就把 `SwiftTermView` 挂上，
+/// 连接本体仍跑在目标屏（终端 / 文件）里——终端必须在建连期就把 `MTerminalHostView` 挂上，
 /// 否则 shell 首屏（prompt / MOTD）字节会丢。目标屏在建连后把运行时控制器回填到本请求，
 /// 连接中页据其 `state` 真实推进阶段并在 `.connected` 时收尾。
 @MainActor
@@ -399,7 +398,7 @@ private enum CoverKeyboardGuard {
         found = nil
         UIApplication.shared.sendAction(#selector(UIResponder.mCaptureFirstResponder),
                                         to: nil, from: nil, for: nil)
-        if let terminal = found as? SwiftTerm.TerminalView {
+        if let terminal = found as? MGhosttyTerminalView {
             _ = terminal.resignFirstResponder()
         }
         found = nil

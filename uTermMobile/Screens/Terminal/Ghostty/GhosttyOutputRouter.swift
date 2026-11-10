@@ -1,7 +1,8 @@
 import Foundation
 import GhosttyTerminal
 
-// M10（iOS 后台）的修法：后端输出永远先进影子终端；画面（surface）只在 App 看得见时才吃字节。
+// 后端输出永远先进影子终端；画面（surface）只在吃得了的时候才吃字节（App 在前台、surface 建好了；谁来判定见
+// `GhosttyTerminalBridge.syncSurfaceFeeding`）。最初是为 iOS 后台（M10）做的：
 //
 // 为什么：GhosttyKit 在 App 进后台后不再 tick，而 surface 解析时碰到标题 / bell / pwd / 进度条这类要进 ghostty
 // app mailbox（64 格、只有 tick 才清）的消息，mailbox 一满解析线程就卡在 `ghostty_surface_write_buffer` 里，
@@ -9,8 +10,7 @@ import GhosttyTerminal
 // 影子终端同步解析、不经 mailbox，不会卡。回前台时拍一张影子的二进制快照，变成一段回放流灌进 surface
 //（`receiveReplay`：不产生应答），surface 就到了影子此刻的状态，之后接着吃实时字节。
 //
-// **第 2 步要并进共享的 `TerminalOutputPump`**（计划 §4：入站 → 有界缓冲 → tap → 影子（同步）→ surface（异步））。
-// 这里先放在 iOS 试用目录下，只给「Ghostty 试用」那条路用。
+// **要并进两端共享的输出泵**（计划 §4：入站 → 有界缓冲 → tap → 影子（同步）→ surface（异步）），共享层出来之后删掉这份。
 
 /// 一条终端的输出分流。线程安全；`ingest` 在入站任务上调，切换在主线程上调，回放在自己的串行队列上做。
 nonisolated final class GhosttyOutputRouter: @unchecked Sendable {

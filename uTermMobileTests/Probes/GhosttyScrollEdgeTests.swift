@@ -1,11 +1,10 @@
 import GhosttyTerminal
 import QuartzCore
-import SwiftTerm
 import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// 「Ghostty 试用」滚到回滚顶部 / 活动区底部之后，画面有没有回到和「从没滚动过」完全相同的像素位置。
+/// Ghostty 终端滚到回滚顶部 / 活动区底部之后，画面有没有回到和「从没滚动过」完全相同的像素位置。
 ///
 /// 起因：user 在 iPhone Duo 上滚到顶之后，第一行上方多出一截空白和一条细线、最后一行被切。根因是本地滚动补丁
 /// 拿滚动条行号判「到顶」：行号到 0 时引擎还差半行（0023 的小数行偏移），那时就进回弹，真正的第一行永远拉不下来，
@@ -14,8 +13,13 @@ import XCTest
 /// 量法：每一行铺一条整行宽的底色（27 种循环，相邻行必不同），截整扇窗口的合成结果（回弹平移的是宿主层，
 /// 只有窗口截图带得上），读一列像素还原出「每个像素行属于第几行文字」。网格原点、相邻行露出的残条、
 /// 最后一行被切、回弹没归零都是同一张表上的事，差 1 px 也看得见。
-/// 手势走和手指相同的入口：伪造 `UIPanGestureRecognizer` 直接调 GhosttyKit 的 `handleTouchScrollGesture:`，
-/// 每个 changed 之间隔一帧（真手指也是一帧一个事件，引擎的滚动条回报要一帧才到，旧 bug 正出在这一帧上）。
+/// 手势按真机的规则分路（见 `Rig`）：有回滚的普通屏，单指归系统滚动——直接操作 GhosttyKit 借来的那个 UIScrollView
+/// 并调它的代理方法；没有回滚、备用屏时落回自写的拖动——伪造 `UIPanGestureRecognizer` 调 `handleTouchScrollGesture:`。
+/// 每一步之间隔一帧（真手指也是一帧一个事件，引擎的滚动条回报要一帧才到，旧 bug 正出在这一帧上）。
+///
+/// 这一组原来每条都按两条路径各跑一遍（`.own` 自写单指拖动 / 惯性 / 回弹，`.system` 系统滚动）。本地包里「自写滚动物理」
+/// 的开关已经拿掉，单指滚回滚区恒走系统滚动，所以只留系统那一半，断言原样；去掉的那一半见
+/// `testOwnPhysicsAndFreeRendererVariantsAreGone`。
 @MainActor
 final class GhosttyScrollEdgeTests: XCTestCase {
     /// 三种视图：竖屏手机那种、高度正好整除行高（余 0）、Duo 内屏横放那种又宽又矮的（890×504 pt，和 user 截图里终端那一块差不多大）。
@@ -51,7 +55,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         (60 + 60 * (number % 3), 60 + 60 * ((number / 3) % 3), 60 + 60 * ((number / 9) % 3))
     }
 
-    /// 一行带底色的编号行，空格垫到 `cols - 1` 列（不靠「擦到行尾带底色」，SwiftTerm 那边也能铺满）。
+    /// 一行带底色的编号行，空格垫到 `cols - 1` 列（不靠「擦到行尾带底色」）。
     nonisolated static func line(_ number: Int, cols: Int) -> String {
         let c = tint(number)
         let text = "\(number)"
@@ -142,11 +146,8 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     // MARK: 夹具
 
-    /// 单指滚动走哪条路：第九轮的自写拖动 / 惯性 / 回弹，还是第十轮交给 UIScrollView 的系统滚动。
-    enum ScrollPath: String, CaseIterable {
-        case own = "自写"
-        case system = "系统"
-    }
+    /// 读数行里的路径标签。原来有「自写」「系统」两条路径各跑一遍，现在只剩系统滚动；标签留着，新旧日志对得上。
+    nonisolated static let pathLabel = "系统"
 
     @MainActor
     final class Rig {
@@ -156,14 +157,13 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         let cellPx: Int
         let rows: Int
         let cols: Int
-        let path: ScrollPath
         /// 手势处理函数被调过没有（没调过时镜像还没和引擎对过，不核它的行号）。
         private(set) var hasScrolled = false
         /// 正在进行的这一下手势归系统滚动（UIScrollView）还是自写路径。
         private var systemGesture = false
 
-        init(host: GhosttyProbeHost, scale: CGFloat, cellPx: Int, path: ScrollPath) {
-            self.host = host; self.scale = scale; self.cellPx = cellPx; self.path = path
+        init(host: GhosttyProbeHost, scale: CGFloat, cellPx: Int) {
+            self.host = host; self.scale = scale; self.cellPx = cellPx
             rows = host.grid.rows; cols = host.grid.cols
         }
 
@@ -171,17 +171,18 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
         // MARK: 手势
         //
+        // 归不归系统滚动按真实规则判（`uTermSystemPanWouldBegin`）：有回滚的普通屏归系统，没有回滚、备用屏时和真机一样
+        // 落回自写路径。
         // 自写路径：伪造 UIPanGestureRecognizer 调 `handleTouchScrollGesture:`。
         // 系统路径：UIKit 的减速、回弹没法伪造触摸来驱动，这里按 UIKit 会做的事直接操作 UIScrollView 并调它的代理方法：
         // 拖动 = 改 contentOffset（didScroll 照常来）、松手 = willEndDragging 算落点 + didEndDragging + setContentOffset(animated:)
         // 代替减速和回弹（结束时 didEndScrollingAnimation 照常来）。量不到 UIKit 的物理本身，量的是位置映射、到头、对齐。
-        // 归不归系统路径按真实规则判（`uTermSystemPanWouldBegin`）：没有回滚、备用屏时和真机一样落回自写路径。
 
         func begin() {
             hasScrolled = true
             // 手指按下来：上一次松手的减速 / 回弹到此为止（UIKit 在按下时也是这样停的）。
             if decelerator.isRunning { touchDown() }
-            if path == .system, view.uTermSystemPanWouldBegin, let scrollView {
+            if view.uTermSystemPanWouldBegin, let scrollView {
                 systemGesture = true
                 view.scrollViewWillBeginDragging(scrollView)
             } else {
@@ -297,7 +298,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     }
 
     /// `size` 的终端；`feed` 拿到行列数后给出要喂的内容。等它画稳。
-    private func makeRig(size requested: CGSize, path: ScrollPath = .own, feed: (_ rows: Int, _ cols: Int) -> String) async throws -> Rig {
+    private func makeRig(size requested: CGSize, feed: (_ rows: Int, _ cols: Int) -> String) async throws -> Rig {
         // 视图尺寸对到物理像素格上。Duo 内屏的 nativeScale 是 2.807（不是 3），600 pt 是 1684.3 px，截图会被重采样成 1685 px，
         // 每条行界都糊成一像素的混色，什么都量不准；宽高取成整数像素就没这回事。
         let nativeScale = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.nativeScale }.first ?? 3
@@ -312,15 +313,13 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         let scale = host.view.window?.screen.nativeScale ?? 3
         let cell = try XCTUnwrap(host.view.uTermCellPixels)
-        // 开关按手势生效，和宿主的诊断页一样是全局的；每个 rig 按自己的路径设一次。
-        UTermScrollTrace.usesSystemScrolling = path == .system
-        let rig = Rig(host: host, scale: scale, cellPx: Int(cell.height), path: path)
+        let rig = Rig(host: host, scale: scale, cellPx: Int(cell.height))
         rig.pan.fakeLocation = CGPoint(x: size.width / 2, y: size.height / 2)
         return rig
     }
 
-    private func makeRig(size: CGSize, lines: Int, path: ScrollPath = .own) async throws -> Rig {
-        try await makeRig(size: size, path: path) { _, cols in Self.corpus(1...lines, cols: cols) }
+    private func makeRig(size: CGSize, lines: Int) async throws -> Rig {
+        try await makeRig(size: size) { _, cols in Self.corpus(1...lines, cols: cols) }
     }
 
     /// 「滚到顶」该有的行带：同尺寸的终端只喂正好一屏、从没滚动过。
@@ -350,7 +349,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         let head = shot.bands.prefix(3).map(\.description).joined(separator: " ")
         let tail = shot.bands.suffix(3).map(\.description).joined(separator: " ")
         let mixes = shot.bands.filter { $0.key == -2 }.prefix(2).map { "\($0)<\(shot.colors(around: $0))>" }.joined(separator: " ")
-        return "EDGE [\(rig.path.rawValue)] \(label): bar=\(rig.barText) model=\(state.row)+\(state.fractionPixels)px over=\(Int(state.overscrollPixels)) "
+        return "EDGE [\(Self.pathLabel)] \(label): bar=\(rig.barText) model=\(state.row)+\(state.fractionPixels)px over=\(Int(state.overscrollPixels)) "
             + "ty=\(String(format: "%.2f", rig.translation))pt bands=\(shot.bands.count) head=\(head) tail=\(tail)"
             + (mixes.isEmpty ? "" : " mix=\(mixes)")
     }
@@ -373,7 +372,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         if rig.hasScrolled, let bar = rig.bar, bar.total > bar.len {
             XCTAssertEqual(state.row, Int(bar.offset), "镜像行号和引擎报的不一致 — \(context)", file: file, line: line)
         }
-        if rig.path == .system, rig.hasScrollback, let scrollView = rig.scrollView {
+        if rig.hasScrollback, let scrollView = rig.scrollView {
             let offsetPx = scrollView.contentOffset.y * rig.scale
             XCTAssertEqual(Double(offsetPx), Double(state.row * rig.cellPx + state.fractionPixels), accuracy: rig.tolerance > 0 ? 0.5 : 0.01,
                            "UIScrollView 的 contentOffset 和镜像对不上 — \(context)", file: file, line: line)
@@ -445,14 +444,14 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 远超一屏的内容：到顶 / 到底的每一种走法停稳之后，都和从没滚动过的画面逐像素行一致。
     func testEdgesSettleOnTheSameGridAsNeverScrolled() async throws {
-        for path in ScrollPath.allCases { try await runEdgesSettleOnTheSameGridAsNeverScrolled(path: path) }
+        try await runEdgesSettleOnTheSameGridAsNeverScrolled()
     }
 
-    private func runEdgesSettleOnTheSameGridAsNeverScrolled(path: ScrollPath) async throws {
+    private func runEdgesSettleOnTheSameGridAsNeverScrolled() async throws {
         let sizes = try await probeSizes()
         for (sizeIndex, size) in sizes.enumerated() {
             let top = try await topBaseline(size: size)
-            let rig = try await makeRig(size: size, lines: 300, path: path)
+            let rig = try await makeRig(size: size, lines: 300)
             defer { rig.host.close() }
             let tag = "\(Int(size.width))x\(Int(size.height))"
             let bottom = try await settle(rig)
@@ -561,12 +560,12 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 到顶 / 到底停稳之后再接着滚：第一步走多少像素，画面就挪多少，不跳。
     func testScrollingAgainFromAnEdgeDoesNotJump() async throws {
-        for path in ScrollPath.allCases { try await runScrollingAgainFromAnEdgeDoesNotJump(path: path) }
+        try await runScrollingAgainFromAnEdgeDoesNotJump()
     }
 
-    private func runScrollingAgainFromAnEdgeDoesNotJump(path: ScrollPath) async throws {
+    private func runScrollingAgainFromAnEdgeDoesNotJump() async throws {
         let sizes = try await probeSizes()
-        let rig = try await makeRig(size: sizes[0], lines: 300, path: path)
+        let rig = try await makeRig(size: sizes[0], lines: 300)
         defer { rig.host.close() }
         let cell = rig.cellPx
         // 到顶：慢拖越过去、松手。
@@ -621,17 +620,17 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 内容不满一屏、刚好一屏（都没有回滚）、多出一两行：上下拖、甩、松手之后都在格子上；没有回滚时不回弹。
     func testShortContentStaysOnTheGrid() async throws {
-        for path in ScrollPath.allCases { try await runShortContentStaysOnTheGrid(path: path) }
+        try await runShortContentStaysOnTheGrid()
     }
 
-    private func runShortContentStaysOnTheGrid(path: ScrollPath) async throws {
+    private func runShortContentStaysOnTheGrid() async throws {
         let sizes = try await probeSizes()
         let size = sizes[0]
-        let probe = try await makeRig(size: size, lines: 1, path: path)
+        let probe = try await makeRig(size: size, lines: 1)
         let rows = probe.rows
         probe.host.close()
         for lines in [10, rows - 1, rows, rows + 1, rows + 6] {
-            let rig = try await makeRig(size: size, lines: lines, path: path)
+            let rig = try await makeRig(size: size, lines: lines)
             defer { rig.host.close() }
             let rest = try await settle(rig)
             print(describe("short(\(lines)) rest", rig, rest))
@@ -659,12 +658,12 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     /// 备用屏（less、vim 没抓鼠标时）：拖动由引擎换成方向键发给程序。旧实现把它当「没有回滚、已经到头」吃进了回弹，
     /// 程序一个键也收不到。
     func testAlternateScreenDragReachesTheProgram() async throws {
-        for path in ScrollPath.allCases { try await runAlternateScreenDragReachesTheProgram(path: path) }
+        try await runAlternateScreenDragReachesTheProgram()
     }
 
-    private func runAlternateScreenDragReachesTheProgram(path: ScrollPath) async throws {
+    private func runAlternateScreenDragReachesTheProgram() async throws {
         let sizes = try await probeSizes()
-        let rig = try await makeRig(size: sizes[0], lines: 20, path: path)
+        let rig = try await makeRig(size: sizes[0], lines: 20)
         defer { rig.host.close() }
         rig.host.feedAndWait("\u{1B}[?1049h\u{1B}[2J\u{1B}[Halt screen\r\nline 2\r\n")
         try await Task.sleep(for: .milliseconds(200))
@@ -683,12 +682,12 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 惯性途中手指点一下把它停住（不拖）：原地停一下，然后回到整行上。旧实现就停在半行。
     func testTapDuringFlingLandsOnAWholeRow() async throws {
-        for path in ScrollPath.allCases { try await runTapDuringFlingLandsOnAWholeRow(path: path) }
+        try await runTapDuringFlingLandsOnAWholeRow()
     }
 
-    private func runTapDuringFlingLandsOnAWholeRow(path: ScrollPath) async throws {
+    private func runTapDuringFlingLandsOnAWholeRow() async throws {
         let sizes = try await probeSizes()
-        let rig = try await makeRig(size: sizes[0], lines: 300, path: path)
+        let rig = try await makeRig(size: sizes[0], lines: 300)
         defer { rig.host.close() }
         for attempt in 0..<5 {
             try await jump(rig, toRow: 150)
@@ -712,8 +711,8 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         let after = rig.view.uTermScrollState
         let cell = rig.cellPx
         // 系统路径上 UIKit 把 contentOffset 取整到 1/UIScreen.scale pt：倍率不是整数的屏（Duo 内屏 2.807，一格 0.94 px）上，
-        // 要 4 px 实际走 3.74 px，引擎那边的整像素位移是 3 到 5。整数倍率的屏、自写路径一像素都不让。
-        let slack: Double = path == .system && rig.tolerance > 0 ? 1 : 0
+        // 要 4 px 实际走 3.74 px，引擎那边的整像素位移是 3 到 5。整数倍率的屏一像素都不让。
+        let slack: Double = rig.tolerance > 0 ? 1 : 0
         XCTAssertEqual(Double(before.row * cell + before.fractionPixels - 4), Double(after.row * cell + after.fractionPixels), accuracy: slack,
                        "点住后接着拖 4 px，视口应当正好走 4 px（\(before) → \(after)）")
         rig.end(velocity: 0)
@@ -724,15 +723,15 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     /// 镜像不能照它改。旧实现只看「停手 0.1 s 以上」就信回报：镜像错开几行，系统路径上这个差还会被当成位移发给引擎，
     /// 画面跳几行（Duo 实测：镜像 97 行、引擎 96 行）。三处都卡一下：拖动途中、松手对齐之前、减速途中。
     func testMainThreadStallDoesNotMoveTheViewport() async throws {
-        for path in ScrollPath.allCases { try await runMainThreadStallDoesNotMoveTheViewport(path: path) }
+        try await runMainThreadStallDoesNotMoveTheViewport()
     }
 
     /// 把主线程原地卡住这么久（同步睡，不让出：排在主队列里的 tick、display link 都得等）。
     private func stallMainThread(_ seconds: Double) { Thread.sleep(forTimeInterval: seconds) }
 
-    private func runMainThreadStallDoesNotMoveTheViewport(path: ScrollPath) async throws {
+    private func runMainThreadStallDoesNotMoveTheViewport() async throws {
         let sizes = try await probeSizes()
-        let rig = try await makeRig(size: sizes[0], lines: 300, path: path)
+        let rig = try await makeRig(size: sizes[0], lines: 300)
         defer { rig.host.close() }
         let cell = rig.cellPx
         func position() -> Int {
@@ -740,7 +739,7 @@ final class GhosttyScrollEdgeTests: XCTestCase {
             return state.row * cell + state.fractionPixels
         }
         // 系统路径上每一步都可能被 UIKit 取整掉不到 1 px（见上一个用例）。
-        let slack: Double = path == .system && rig.tolerance > 0 ? 1 : 0
+        let slack: Double = rig.tolerance > 0 ? 1 : 0
 
         for round in 0..<3 {
             try await jump(rig, toRow: 150)
@@ -755,30 +754,30 @@ final class GhosttyScrollEdgeTests: XCTestCase {
             rig.move(4 / rig.scale)
             let after = position()
             XCTAssertEqual(Double(before - after), 4, accuracy: slack,
-                           "\(path.rawValue) #\(round)：卡了 0.15 s 之后拖 4 px，镜像应当只走 4 px（\(before) → \(after)）")
+                           "\(Self.pathLabel) #\(round)：卡了 0.15 s 之后拖 4 px，镜像应当只走 4 px（\(before) → \(after)）")
             // 松手前再卡一次：对齐那一步也不能照旧回报改镜像。
             stallMainThread(0.15)
             rig.end(velocity: 0)
             let shot = try await settle(rig)
-            assertAtRest(rig, shot, "\(path.rawValue) stall-drag#\(round)")
+            assertAtRest(rig, shot, "\(Self.pathLabel) stall-drag#\(round)")
             // 一共拖了 4 行零 10 px（2 + 4 × (行高 + 1) + 4），对齐后正好退 4 行。引擎多走了几行就说明旧回报被当成了位移。
             XCTAssertEqual(rig.bar.map { Int($0.offset) }, 146,
-                           "\(path.rawValue) #\(round)：从第 150 行拖 4 行零 10 px 再松手，引擎应当停在第 146 行 — \(describe("stall-drag", rig, shot))")
+                           "\(Self.pathLabel) #\(round)：从第 150 行拖 4 行零 10 px 再松手，引擎应当停在第 146 行 — \(describe("stall-drag", rig, shot))")
         }
 
         // 减速途中卡一下。系统路径上落点是松手时定的（滚动视图坐标），引擎必须停在它对应的那一行。
         for round in 0..<3 {
             try await jump(rig, toRow: 150)
             try await fling(rig, leadPt: 6, velocity: 1500)
-            let landing = path == .system ? rig.decelerator.target.map { Int(($0 * rig.scale / CGFloat(cell)).rounded()) } : nil
+            let landing = rig.decelerator.target.map { Int(($0 * rig.scale / CGFloat(cell)).rounded()) }
             try await Task.sleep(for: .milliseconds(120 + round * 30))
             XCTAssertTrue(rig.view.uTermScrollState.isGliding, "这时惯性应当还在跑")
             stallMainThread(0.15)
             let shot = try await settle(rig)
-            assertAtRest(rig, shot, "\(path.rawValue) stall-glide#\(round)")
+            assertAtRest(rig, shot, "\(Self.pathLabel) stall-glide#\(round)")
             if let landing {
                 XCTAssertEqual(rig.bar.map { Int($0.offset) }, landing,
-                               "\(path.rawValue) #\(round)：减速途中卡了 0.15 s，引擎应当停在松手时定的那一行 — \(describe("stall-glide", rig, shot))")
+                               "\(Self.pathLabel) #\(round)：减速途中卡了 0.15 s，引擎应当停在松手时定的那一行 — \(describe("stall-glide", rig, shot))")
             }
         }
     }
@@ -786,14 +785,14 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     /// 滚轮 / 触控板走的是另一个入口（`handleScrollWheelGesture:`，不回弹、不吸附）：它滚过之后镜像也要跟得上，
     /// 接着用手指拖到顶照样落在真正的顶上。
     func testWheelScrollKeepsTheMirrorInStep() async throws {
-        for path in ScrollPath.allCases { try await runWheelScrollKeepsTheMirrorInStep(path: path) }
+        try await runWheelScrollKeepsTheMirrorInStep()
     }
 
-    private func runWheelScrollKeepsTheMirrorInStep(path: ScrollPath) async throws {
+    private func runWheelScrollKeepsTheMirrorInStep() async throws {
         let sizes = try await probeSizes()
         let size = sizes[0]
         let top = try await topBaseline(size: size)
-        let rig = try await makeRig(size: size, lines: 300, path: path)
+        let rig = try await makeRig(size: size, lines: 300)
         defer { rig.host.close() }
         let cell = rig.cellPx
         try await jump(rig, toRow: 9)
@@ -827,16 +826,17 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 乱序的拖、甩、点停、越界、打断、来新输出，每次停稳都查一遍：镜像没和引擎走散，画面在格子上。
     func testRandomGesturesStayInStepWithTheEngine() async throws {
-        for path in ScrollPath.allCases { try await runRandomGesturesStayInStepWithTheEngine(path: path) }
+        try await runRandomGesturesStayInStepWithTheEngine()
     }
 
-    private func runRandomGesturesStayInStepWithTheEngine(path: ScrollPath) async throws {
+    private func runRandomGesturesStayInStepWithTheEngine() async throws {
         let sizes = try await probeSizes()
         for (round, size) in [sizes[0], sizes[2]].enumerated() {
             let top = try await topBaseline(size: size)
-            let rig = try await makeRig(size: size, lines: 160, path: path)
+            let rig = try await makeRig(size: size, lines: 160)
             defer { rig.host.close() }
-            var random = EdgeRandom(seed: 20261109 + UInt64(round) + (path == .system ? 100 : 0))
+            // 种子里的 +100 是原来系统路径那一半用的，留着：同一串动作，和以前的读数对得上。
+            var random = EdgeRandom(seed: 20261109 + UInt64(round) + 100)
             var nextLine = 161
             for step in 0..<28 {
                 var label = "fuzz#\(round).\(step) "
@@ -895,14 +895,14 @@ final class GhosttyScrollEdgeTests: XCTestCase {
 
     /// 输出一直在涨的时候从底部一路甩到顶（滚动条回报最不准的时候）：停下来、输出也停了之后，照样在格子上、能到真正的顶。
     func testFlingToTopWhileOutputStreams() async throws {
-        for path in ScrollPath.allCases { try await runFlingToTopWhileOutputStreams(path: path) }
+        try await runFlingToTopWhileOutputStreams()
     }
 
-    private func runFlingToTopWhileOutputStreams(path: ScrollPath) async throws {
+    private func runFlingToTopWhileOutputStreams() async throws {
         let sizes = try await probeSizes()
         let size = sizes[0]
         let top = try await topBaseline(size: size)
-        let rig = try await makeRig(size: size, lines: 120, path: path)
+        let rig = try await makeRig(size: size, lines: 120)
         defer { rig.host.close() }
         let cols = rig.cols
         let bridge = rig.host.bridge
@@ -939,10 +939,11 @@ final class GhosttyScrollEdgeTests: XCTestCase {
     }
 
     /// 系统滚动的接线：有回滚、普通屏时单指拖动归 UIScrollView 的 pan（自写的 pan 让位）；没有回滚、备用屏、
-    /// 有选区时归自写路径；自写物理开关打开时也归自写路径。滚动视图本身不接触摸、读屏看不到。
+    /// 有选区时归自写路径。滚动视图本身不接触摸、读屏看不到。
+    ///（原来还核一条「自写物理开关打开时也归自写路径」：那个开关已经从本地包里拿掉，这一句随之去掉。）
     func testSystemScrollWiring() async throws {
         let sizes = try await probeSizes()
-        let rig = try await makeRig(size: sizes[0], lines: 300, path: .system)
+        let rig = try await makeRig(size: sizes[0], lines: 300)
         defer { rig.host.close() }
         let scrollView = try XCTUnwrap(rig.scrollView, "终端视图里没有借来的 UIScrollView")
         XCTAssertTrue(rig.view.gestureRecognizers?.contains { $0 === scrollView.panGestureRecognizer } == true,
@@ -958,10 +959,6 @@ final class GhosttyScrollEdgeTests: XCTestCase {
                        Double(scrollView.bounds.height) + Double(bar.total - bar.len) * Double(rig.cellPx) / Double(rig.scale), accuracy: 0.01)
         XCTAssertEqual(Double(scrollView.contentOffset.y * rig.scale), Double(Int(bar.total - bar.len) * rig.cellPx), accuracy: 0.51)
 
-        UTermScrollTrace.usesSystemScrolling = false
-        XCTAssertFalse(rig.view.uTermSystemPanWouldBegin, "自写物理开关打开时不该归系统滚动")
-        UTermScrollTrace.usesSystemScrolling = true
-
         rig.host.feedAndWait("\u{1B}[?1049h\u{1B}[2J\u{1B}[Halt screen\r\n")
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(rig.view.uTermSystemPanWouldBegin, "备用屏没有回滚：拖动要交给引擎换成方向键，不该归系统滚动")
@@ -969,46 +966,63 @@ final class GhosttyScrollEdgeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertTrue(rig.view.uTermSystemPanWouldBegin, "回到普通屏又该归系统滚动")
 
-        let short = try await makeRig(size: sizes[0], lines: 5, path: .system)
+        let short = try await makeRig(size: sizes[0], lines: 5)
         defer { short.host.close() }
         XCTAssertFalse(short.view.uTermSystemPanWouldBegin, "内容不满一屏、没有回滚：不该归系统滚动")
     }
 
-    /// 两个开关（渲染不同步 × 自写滚动物理）的四种组合都能跑：甩到顶、甩回底、来输出，停稳后都在格子上。
-    func testAllFourSwitchCombinations() async throws {
+    /// 又宽又矮的那一档（Duo 内屏横放）：甩到顶、甩回底、来输出，停稳后都在格子上。
+    ///
+    /// 原来叫 `testAllFourSwitchCombinations`，按两个开关（「渲染不同步」× 自写滚动物理）的四种组合各跑一遍。两个开关都已经
+    /// 从本地包里拿掉，只剩 iOS 现在的这一种：引擎 wakeup 在主线程同步重画（`UTermScrollTrace.wakeupDrawsSynchronously`）
+    /// + 系统滚动。断言原样。
+    func testFlingBothWaysThenOutputLandsOnTheGrid() async throws {
         let sizes = try await probeSizes()
-        let saved = UTermScrollTrace.legacyWakeupSyncDraw
-        defer { UTermScrollTrace.legacyWakeupSyncDraw = saved; UTermScrollTrace.usesSystemScrolling = true }
-        for legacy in [true, false] {
-            for path in ScrollPath.allCases {
-                UTermScrollTrace.legacyWakeupSyncDraw = legacy
-                let top = try await topBaseline(size: sizes[2])
-                let rig = try await makeRig(size: sizes[2], lines: 200, path: path)
-                defer { rig.host.close() }
-                let label = "combo \(legacy ? "同步重画" : "渲染不同步")+\(path.rawValue)"
-                let bottom = try await settle(rig)
-                for _ in 0..<8 where !(rig.atTop && rig.view.uTermScrollState.isAtRest) {
-                    try await fling(rig, leadPt: 6, velocity: 9000)
-                    _ = try await settle(rig)
-                }
-                var shot = try await settle(rig)
-                print(describe("\(label) top", rig, shot))
-                assertAtRest(rig, shot, "\(label) top")
-                XCTAssertTrue(rig.same(shot.bands, top), "\(label)：到顶的画面不对")
-                try await flingToBottom(rig)
-                rig.feed(201...203)
-                shot = try await settle(rig)
-                print(describe("\(label) bottom+output", rig, shot))
-                assertAtRest(rig, shot, "\(label) bottom+output")
-                XCTAssertTrue(rig.atBottom, "\(label)：没回到底")
-                XCTAssertTrue(rig.sameGeometry(shot.bands, bottom.bands), "\(label)：回到底之后网格位置变了")
-            }
+        XCTAssertTrue(UTermScrollTrace.wakeupDrawsSynchronously, "iOS 上引擎 wakeup 应当在主线程同步重画（这条用例的读数按它验收的）")
+        let top = try await topBaseline(size: sizes[2])
+        let rig = try await makeRig(size: sizes[2], lines: 200)
+        defer { rig.host.close() }
+        let label = "combo 同步重画+\(Self.pathLabel)"
+        let bottom = try await settle(rig)
+        for _ in 0..<8 where !(rig.atTop && rig.view.uTermScrollState.isAtRest) {
+            try await fling(rig, leadPt: 6, velocity: 9000)
+            _ = try await settle(rig)
         }
+        var shot = try await settle(rig)
+        print(describe("\(label) top", rig, shot))
+        assertAtRest(rig, shot, "\(label) top")
+        XCTAssertTrue(rig.same(shot.bands, top), "\(label)：到顶的画面不对")
+        try await flingToBottom(rig)
+        rig.feed(201...203)
+        shot = try await settle(rig)
+        print(describe("\(label) bottom+output", rig, shot))
+        assertAtRest(rig, shot, "\(label) bottom+output")
+        XCTAssertTrue(rig.atBottom, "\(label)：没回到底")
+        XCTAssertTrue(rig.sameGeometry(shot.bands, bottom.bands), "\(label)：回到底之后网格位置变了")
     }
 
-    /// 网格不能整除视图高度时余量放哪边：Ghostty 试用和 SwiftTerm 标签各自的排法（只记录，不强求一致）。
-    /// Ghostty 这边钉死现状：网格从视图顶边排起，余量全在底下。
-    func testLeftoverPlacementVersusSwiftTerm() async throws {
+    /// 这一组里随两个开关一起去掉的那几半，留一条跳过的用例把账记在测试结果里：
+    /// - 每条用例的 `.own` 那一半（自写的单指拖动 / 惯性 / 回弹 / 吸附，在有回滚的普通屏上）：
+    ///   `testEdgesSettleOnTheSameGridAsNeverScrolled`、`testScrollingAgainFromAnEdgeDoesNotJump`、`testShortContentStaysOnTheGrid`、
+    ///   `testAlternateScreenDragReachesTheProgram`、`testTapDuringFlingLandsOnAWholeRow`、`testMainThreadStallDoesNotMoveTheViewport`、
+    ///   `testWheelScrollKeepsTheMirrorInStep`、`testRandomGesturesStayInStepWithTheEngine`、`testFlingToTopWhileOutputStreams`；
+    /// - `testSystemScrollWiring` 里「自写物理开关打开时不归系统滚动」那一句；
+    /// - 四种组合里的另外三种（渲染不同步 + 系统、同步重画 + 自写、渲染不同步 + 自写）。
+    ///
+    /// 自写的那套代码还在本地包里，但真手指只在这几种情况走得到它：程序抓着鼠标（`GhosttyCapturedMomentumTests`）、
+    /// 备用屏、没有回滚（这两种本组用例按真实规则照样落到它上面，见 `Rig.begin()`）、选区拖动、双指。
+    /// 「有回滚的普通屏上单指走自写物理」这个组合真手指走不到了，而且吸附 / 对齐现在一律交给系统滚动那条路径，
+    /// 硬调 `handleTouchScrollGesture:` 量出来的已经不是当初验收过的那套行为。
+    func testOwnPhysicsAndFreeRendererVariantsAreGone() throws {
+        throw XCTSkip("自写单指滚动物理（.own）与「渲染不同步」两个 A/B 开关已从本地包里拿掉："
+            + "单指滚回滚区恒走系统 UIScrollView，引擎 wakeup 在 iOS 上恒为主线程同步重画。"
+            + "自写拖动只剩程序抓鼠标 / 备用屏 / 没有回滚 / 选区拖动 / 双指时才走；这一组只留系统滚动 + 同步重画那一半。")
+    }
+
+    /// 网格不能整除视图高度时余量放哪边。钉死现状：网格从视图顶边排起，余量全在底下、不到一行。
+    ///（原来这条同时把换引擎之前那种终端视图的排法打印出来对照、不设断言，用例名也带着「对照旧引擎」；
+    /// 旧引擎已经从 App 里拿掉，对照那一半去掉了，名字跟着改。）
+    func testLeftoverStaysBelowTheGrid() async throws {
         let sizes = try await probeSizes()
         for size in [sizes[0], sizes[2]] {
             let tag = "\(Int(size.width))x\(Int(size.height))"
@@ -1021,30 +1035,6 @@ final class GhosttyScrollEdgeTests: XCTestCase {
                 XCTAssertEqual(rowsTop, 0, "Ghostty 的网格应当从视图顶边排起")
                 XCTAssertLessThan(height - rig.rows * cell, cell, "余量应当不到一行")
                 rig.host.close()
-
-                let swiftTerm = try SwiftTermProbeHost(size: size)
-                swiftTerm.view.feed(text: Self.corpus(1...lines, cols: swiftTerm.grid.cols))
-                try await Task.sleep(for: .milliseconds(600))
-                let image = try Self.windowImage(swiftTerm.window, afterScreenUpdates: true)
-                let bands = try Self.bands(of: image)
-                let rowBands = bands.filter { $0.key >= 0 }
-                print("EDGE layout swiftterm \(tag) \(label): rows=\(swiftTerm.grid.rows) rowPx≈\(rowBands.dropFirst().first?.height ?? 0) "
-                    + "firstRowTop=\(rowBands.first?.top ?? -1)px lastRowBottom=\(rowBands.last?.bottom ?? -1)px viewPx=\(image.height) "
-                    + "contentOffset=\(swiftTerm.view.contentOffset.y)pt contentSize=\(swiftTerm.view.contentSize.height)pt "
-                    + "head=\(bands.prefix(3)) tail=\(bands.suffix(3))")
-                let attachment = XCTAttachment(image: UIImage(cgImage: image))
-                attachment.name = "swiftterm-\(tag)-\(label)"; attachment.lifetime = .keepAlways
-                add(attachment)
-                // 滚到顶再看一次。
-                if lines > swiftTerm.grid.rows {
-                    swiftTerm.view.setContentOffset(.zero, animated: false)
-                    try await Task.sleep(for: .milliseconds(400))
-                    let topBands = try Self.bands(of: Self.windowImage(swiftTerm.window, afterScreenUpdates: true))
-                    let topRows = topBands.filter { $0.key >= 0 }
-                    print("EDGE layout swiftterm \(tag) at-top: firstRowTop=\(topRows.first?.top ?? -1)px lastRowBottom=\(topRows.last?.bottom ?? -1)px "
-                        + "head=\(topBands.prefix(3)) tail=\(topBands.suffix(3))")
-                }
-                swiftTerm.close()
             }
         }
     }

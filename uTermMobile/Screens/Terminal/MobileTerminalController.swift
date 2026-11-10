@@ -1,15 +1,11 @@
 import SwiftUI
 import SwiftData
-import SwiftTerm
 import Observation
 import UIKit
-#if DEBUG
-import GhosttyTerminal
-#endif
 
-/// 一个 iOS 终端会话的运行时控制器：持有 `SSHConnection`（复用 macOS 端
-/// `TerminalBackend` 实现），把入站字节喂给 SwiftTerm 的 `TerminalView`，并把
-/// 键盘输入 / 尺寸变化回送后端。`@MainActor` —— 直接安全触碰 SwiftData 模型与 UI。
+/// 一个 iOS 终端会话的运行时控制器：持有后端（`TerminalBackend`，生产是 `SSHConnection`）和这条会话的终端
+///（`GhosttyTerminalBridge`：GhosttyKit 画面 + 影子终端），把入站字节交给终端、把键盘输入 / 尺寸变化回送后端。
+/// `@MainActor` —— 直接安全触碰 SwiftData 模型与 UI。
 @MainActor
 @Observable
 final class MobileTerminalController {
@@ -46,31 +42,20 @@ final class MobileTerminalController {
     /// 见 `ProgramStatusTracker`）。远控标签不用它：状态由 Mac 推来，见 `TermTab.programStatus`。
     private(set) var programStatus: ProgramStatusRecord?
     @ObservationIgnored private var programStatusTracker = ProgramStatusTracker()
-    /// 已经注册过程序状态处理器的终端视图（横屏切外壳时视图复用，不重复注册）。
-    @ObservationIgnored private weak var programStatusView: SwiftTerm.TerminalView?
     /// 曾经连上过：用于把随后的 `.disconnected` 归为「成功收尾」而非「仍在连接」，
     /// 防止连接中页在「连上即断」时观测不到 `.connected` 而卡死。
     private(set) var hadConnected = false
-    /// Ctrl 粘滞修饰是否已「上膛」：键盘条上点 ctrl 后亮起，下一个软键盘字符按住 Ctrl 发送
-    ///（Ctrl+L/R/C/U……）。底层复用 SwiftTerm `TerminalView.controlModifier`——它在 insertText
-    /// 里消费并自动复位，复位时发 `.terminalViewControlModifierReset`，据此把按钮高亮同步关掉。
-    var controlArmed = false
-    /// Alt/Meta 粘滞修饰是否已「上膛」：与 ctrl 对称，下一个软键盘字符前发 ESC 前缀
-    ///（Alt+f/b/d/. 等 readline/emacs 词操作）。底层复用 SwiftTerm `TerminalView.metaModifier`——
-    /// 它在 insertText 里发 `\u{1b}` + 字符并自动复位，复位时发 `.terminalViewMetaModifierReset`。
-    /// 注：粘滞修饰只作用于系统软键盘字符；点键盘条上的快捷键会先 `clearStickyModifiers()`。
-    var altArmed = false
+    /// Ctrl 粘滞修饰是否已「上膛」：键盘条上点 ctrl 后亮起，下一个软键盘字符或键盘条上的键按住 Ctrl 发送
+    ///（Ctrl+L / R / C / U、Ctrl+←……）。状态在终端视图里（GhosttyKit 原生的粘滞修饰：用完自动复位，连点两下锁定），
+    /// 这里只是给键盘条按钮高亮用的镜像。
+    private(set) var controlArmed = false
+    /// Alt / Meta 粘滞修饰是否已「上膛」：与 ctrl 对称（Alt+f / b / d / . 等 readline / emacs 词操作）。
+    private(set) var altArmed = false
 
-    // 强引用：控制器持有终端视图，使其跨「外壳切换 / TerminalScreen 重建」存活，保活
-    // SwiftTerm 内部的屏幕缓冲与回滚——iPhone Plus/Max 横屏翻 size class 时外壳在
-    // Tab/Split 间切换、TerminalScreen 重建，复用同一视图既不空白也不断连。
-    // 无循环引用：SwiftTerm 的 `terminalDelegate` 是 weak，view 不强持 coordinator。
-    @ObservationIgnored private(set) var terminalView: SwiftTerm.TerminalView?
-    #if DEBUG
-    /// Ghostty 评估分支临时（M16 手感试用，不进 main）：设置里开了「Ghostty 试用」时，新开的标签由 GhosttyKit 画，
-    /// SwiftTerm 视图与输出泵都不用。nil = 照旧走 SwiftTerm。
-    @ObservationIgnored private(set) var ghostty: GhosttyTerminalBridge?
-    #endif
+    /// 这条会话的终端：画面（GhosttyKit 的视图）、影子终端、输入通道。强引用——控制器持有它，使其跨「外壳切换 /
+    /// TerminalScreen 重建」存活：iPhone Plus / Max 横屏翻 size class 时外壳在 Tab / Split 间切换、TerminalScreen 重建，
+    /// 复用同一个视图既不空白也不断连。
+    @ObservationIgnored let terminal: GhosttyTerminalBridge
     /// 后端按协议持有（`TerminalBackend`，桌面 `TerminalSession` 用的同一个抽象）：
     /// 生产是 `SSHConnection`，测试注入假传输。控制器本身不知道底下是谁。
     @ObservationIgnored private var connection: (any TerminalBackend)?
@@ -79,9 +64,6 @@ final class MobileTerminalController {
     private(set) var isReconnecting = false
     /// 唯一的后端来源。默认 `.live` = 原来内联在 `start()` 里的真 SSH 组装。
     @ObservationIgnored private let transportFactory: MobileTerminalTransportFactory
-    /// 输出泵与输入 / 尺寸通道，两端共用（`TerminalOutputPump` / `TerminalInputChannel`）。
-    @ObservationIgnored private let outputPump = TerminalOutputPump(pacing: .foreground)
-    @ObservationIgnored private let inputChannel = TerminalInputChannel()
     @ObservationIgnored private var exitTask: Task<Void, Never>?
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     /// 建连代次：close() / restart() 递增，在途建连落地时对不上就丢弃结果。
@@ -89,18 +71,12 @@ final class MobileTerminalController {
     @ObservationIgnored private var started = false
     /// 该会话是不是**前台**（当前激活标签且处于终端模式）。由 `TerminalSessionBody` 同步。
     ///
-    /// `TerminalScreen` 把所有会话常驻挂载（`ZStack { ForEach(tabs) }`，非活动片只是
-    /// `opacity(0)` + 移出屏外），所以后台会话的终端视图**照样每 16ms 被 feed 一次、
-    /// 照样重绘**。探针实测：4 个会话各 2000 行/秒时，只有一个在吐 vs 四个都在吐，
-    /// 主线程单帧 p50 0.06ms → 3.94ms、超 8.33ms 帧 0% → 16.6%（`term-ab-*`）。
-    ///
-    /// 修法是**降频**：后台会话把 feed 节拍从 16ms 降到 64ms，单次 drain 相应放大，
-    /// 不再每 16ms 逼 SwiftTerm 解析 + 重绘一次。切回前台立刻重启泵，把那一段
-    /// 等待截断。
+    /// `TerminalScreen` 把所有会话常驻挂载（`ZStack { ForEach(tabs) }`，非活动片只是 `opacity(0)` + 移出屏外）。
+    /// 不在前台的终端不画（`MTerminalContainerView.isOnScreen` → `setSurfaceVisible(false)`），字节照常解析；
+    /// 这里只管「有没有人在看」：远控的重连退避、程序状态的已读。
     var isForeground = true {
         didSet {
             guard isForeground != oldValue else { return }
-            updatePacing()
             syncRemoteWatch()
             if isLooking { acknowledgeProgramStatus() }
         }
@@ -108,18 +84,13 @@ final class MobileTerminalController {
 
     /// 整个 App 在后台（`didEnterBackground` → `willEnterForeground`）。这段时间里 SSH 照常收发
     ///（并行执行靠 `BGContinuedProcessingTask` 续命、或系统给的几十秒），只是谁也看不见终端：
-    /// 前台标签也按后台档喂（64ms 一拍，主线程每秒醒 16 次而不是 60 次），终端视图不画。
-    /// 字节一个不少照常解析，回到前台立刻重起泵、补画一次。网络 I/O 不受影响——入站任务不看它。
+    /// 输出只进影子终端（GhosttyKit 后台不 tick，surface 接着吃会卡死，M10），回到前台把影子的状态回放进画面。
+    /// 网络 I/O 不受影响——入站任务不看它。
     @ObservationIgnored private(set) var isAppInBackground = UIApplication.shared.applicationState == .background {
         didSet {
             guard isAppInBackground != oldValue else { return }
-            (terminalView as? MTerminalView)?.isAppInBackground = isAppInBackground
-            #if DEBUG
-            // 试用 Ghostty 时：后台只喂影子终端，回前台回放进 surface（M10）。bridge 自己也听这对通知，这里转一遍是为了
-            // 测试直接调 `appVisibilityChanged` 时也走得到；重复调用无害。
-            ghostty?.setAppInBackground(isAppInBackground)
-            #endif
-            updatePacing()
+            // 终端自己也听这对通知，这里转一遍是为了测试直接调 `appVisibilityChanged` 时也走得到；重复调用无害。
+            terminal.setAppInBackground(isAppInBackground)
             syncRemoteWatch()
             if isLooking { acknowledgeProgramStatus() }
         }
@@ -130,20 +101,7 @@ final class MobileTerminalController {
         isAppInBackground = inBackground
     }
 
-    /// 只有「前台标签 + App 在前台」才按 16ms 喂。
-    nonisolated static func pacing(isForeground: Bool, isAppInBackground: Bool) -> TerminalFlushPacing {
-        isForeground && !isAppInBackground ? .foreground : .background
-    }
-
-    private func updatePacing() {
-        let next = Self.pacing(isForeground: isForeground, isAppInBackground: isAppInBackground)
-        guard next != outputPump.pacing else { return }
-        outputPump.pacing = next
-        // 换到前台档时截断后台档那一拍的等待。
-        if next == .foreground { outputPump.restartFlushLoop() }
-    }
-
-    /// 远控标签：告诉后端此刻有没有人看着它（与按前台档喂字节同一个判定）。Mac 长时间离线时，没人看的标签
+    /// 远控标签：告诉后端此刻有没有人看着它。Mac 长时间离线时，没人看的标签
     /// 重连退避才会放长到最长一分钟；切回来的那一刻后端立刻重试（见 `RemoteReconnectPolicy`）。
     private func syncRemoteWatch() {
         guard let remote = connection as? RemoteTerminalBackend else { return }
@@ -154,11 +112,8 @@ final class MobileTerminalController {
     /// 用户此刻看得见这个终端：前台标签，且 App 在前台。
     var isLooking: Bool { isForeground && !isAppInBackground }
 
-    typealias FlushPacing = TerminalFlushPacing
     // nonisolated(unsafe)：在 nonisolated deinit 里清理这两个非 Sendable 的观察者 token。
     // 仅在主线程设置、deinit（无其它引用存活）时读取，无并发访问。
-    @ObservationIgnored private nonisolated(unsafe) var ctrlResetObserver: NSObjectProtocol?
-    @ObservationIgnored private nonisolated(unsafe) var metaResetObserver: NSObjectProtocol?
     @ObservationIgnored private nonisolated(unsafe) var backgroundObserver: NSObjectProtocol?
     @ObservationIgnored private nonisolated(unsafe) var foregroundObserver: NSObjectProtocol?
 
@@ -168,12 +123,12 @@ final class MobileTerminalController {
     @ObservationIgnored private var lastRelay: HostKeyChallengeRelay?
 
     /// `transportFactory` 默认真 SSH——生产侧调用点（`TermTab`）不用改。
-    init(transportFactory: MobileTerminalTransportFactory = .live) {
+    /// `terminal` 默认新建一条接在 App 共用的 ghostty app 上的终端；探针注入自己配好的。
+    init(transportFactory: MobileTerminalTransportFactory = .live, terminal: GhosttyTerminalBridge? = nil) {
         self.transportFactory = transportFactory
+        self.terminal = terminal ?? GhosttyTerminalBridge()
         installAppVisibilityObservers()
-        #if DEBUG
-        if GhosttyTrial.isEnabled { adoptGhostty(GhosttyTrial.makeBridge()) }
-        #endif
+        adoptTerminal()
     }
 
     /// 用 didEnterBackground / willEnterForeground，不用 resign / becomeActive：拉下控制中心、
@@ -190,34 +145,46 @@ final class MobileTerminalController {
         }
     }
 
-    func attach(_ view: SwiftTerm.TerminalView) {
-        terminalView = view
-        outputPump.terminalView = view
-        (view as? MTerminalView)?.isAppInBackground = isAppInBackground
-        // 远控快照带这么多行历史，接收端要装得下（SwiftTerm 默认只有 500 行）。
-        let terminal = view.getTerminal()
-        if (terminal.options.scrollback) < RemoteConstants.snapshotScrollback {
-            terminal.changeScrollback(RemoteConstants.snapshotScrollback)
+    /// 把终端的回调接到这个会话上：键盘归属、焦点、粘滞修饰、贴图，以及影子终端解析出来的事（标题、程序状态）。
+    private func adoptTerminal() {
+        terminal.setAppInBackground(isAppInBackground)
+        let view = terminal.view
+        view.canTakeKeyboard = { [weak self] in self?.canTakeKeyboard ?? false }
+        view.onFocusChanged = { [weak self] focused in self?.keyboardFocusChanged(focused) }
+        terminal.onStickyModifiersChanged = { [weak self] in self?.syncStickyModifiers() }
+        view.onPasteImage = { [weak self] in
+            guard let self, self.acceptsImages else { return }
+            self.sendImage { try await RemoteDesktopPasteSource.clipboardImage() }
         }
-        installModifierResetObserversIfNeeded()
-        installProgramStatusHandlers(on: view)
+        terminal.onEvent = { [weak self] event in self?.handleTerminalEvent(event) }
+    }
+
+    private func handleTerminalEvent(_ event: ShadowTerminal.Event) {
+        switch event {
+        case .titleChanged(let title):
+            receiveShellTitle(title)
+        case .programStatus(let message):
+            guard !isRemoteTab else { return }
+            applyProgramStatus(message)
+        case .programStatusQuery(let reply):
+            // 程序问支不支持 OSC 7501：答一次。画面（surface）不答这个查询，所以不会重复。
+            guard !isRemoteTab else { return }
+            write(reply)
+        case .promptStarted:
+            guard !isRemoteTab else { return }
+            programStatusTracker.promptStarted()
+            publishProgramStatus()
+        case .unknownOSC, .notification, .bell:
+            // 手机上没有系统通知可发、不做命令跟踪（OSC 6973 是 Mac 的 CLI 用的）。
+            break
+        }
     }
 
     // MARK: 程序状态（OSC 7501 / 133）
 
-    private func installProgramStatusHandlers(on view: SwiftTerm.TerminalView) {
-        guard programStatusView !== view else { return }
-        programStatusView = view
-        ProgramStatusOSC.install(on: view.getTerminal(), onMessage: { [weak self] message in
-            // 远控标签：Mac 自己回答查询、经远控协议推状态。这里再答一遍就成了 Mac 上的程序收到的多余输入。
-            guard let self, !(self.connection is RemoteTerminalBackend) else { return }
-            self.applyProgramStatus(message)
-        }, onPrompt: { [weak self] in
-            guard let self else { return }
-            self.programStatusTracker.promptStarted()
-            self.publishProgramStatus()
-        })
-    }
+    /// 远控标签：Mac 自己回答查询、经远控协议推状态（见 `TermTab.programStatus`）。这里再处理一遍，
+    /// 应答就成了 Mac 上的程序收到的多余输入。
+    private var isRemoteTab: Bool { connection is RemoteTerminalBackend }
 
     /// 手机上没有系统通知可发：需要注意的状态只上标签。
     func applyProgramStatus(_ message: ProgramStatusMessage) {
@@ -245,119 +212,45 @@ final class MobileTerminalController {
 
     // MARK: Ctrl / Alt 粘滞修饰
 
-    /// 点 ctrl 键：切换「上膛」状态并同步给 SwiftTerm 视图。
+    /// 点 ctrl 键：切换「上膛」状态。
     func toggleControl() {
-        #if DEBUG
-        if let ghostty { ghostty.toggleSticky(.ctrl); syncGhosttySticky(); return }
-        #endif
-        controlArmed.toggle()
-        terminalView?.controlModifier = controlArmed
+        terminal.toggleControl()
+        syncStickyModifiers()
     }
 
-    /// 点 alt 键：切换「上膛」状态并同步给 SwiftTerm 视图。
+    /// 点 alt 键：切换「上膛」状态。
     func toggleAlt() {
-        #if DEBUG
-        if let ghostty { ghostty.toggleSticky(.alt); syncGhosttySticky(); return }
-        #endif
-        altArmed.toggle()
-        terminalView?.metaModifier = altArmed
+        terminal.toggleAlt()
+        syncStickyModifiers()
     }
 
-    /// 取消待生效的 Ctrl（点了其它快捷键时调用，避免 Ctrl 漏到后续按键）。
-    func clearControl() {
-        guard controlArmed else { return }
-        controlArmed = false
-        terminalView?.controlModifier = false
-    }
-
-    /// 取消待生效的 Alt。
-    func clearAlt() {
-        guard altArmed else { return }
-        altArmed = false
-        terminalView?.metaModifier = false
-    }
-
-    /// 取消所有粘滞修饰（点键盘条快捷键前调用——修饰只作用于系统软键盘字符）。
+    /// 取消所有粘滞修饰。发提示词前调用：提示词是一段文字，修饰键作用不到它上面，留着只会落到用户接下来打的第一个字上。
+    /// 键盘条上的键不用清：修饰作用在那个键上（Ctrl+←），用完自己复位。
     func clearStickyModifiers() {
-        #if DEBUG
-        // GhosttyKit 的粘滞修饰作用于下一个按键（含键盘条上的键），用完自己复位；这里不清。
-        if ghostty != nil { return }
-        #endif
-        clearControl()
-        clearAlt()
+        terminal.clearStickyModifiers()
+        syncStickyModifiers()
     }
 
-    /// 键盘条上的一个键。SwiftTerm 照旧按字节发；试用 Ghostty 时交给终端按当前模式编码（DECCKM 下方向键发 `ESC O A`）。
+    /// 键盘条上的一个键：交给终端按当前模式编码（应用光标键下方向键发 `ESC O A`），上膛的修饰键一并带上。
     func sendKey(_ key: TerminalKey) {
-        #if DEBUG
-        if let ghostty { ghostty.send(key); return }
-        #endif
-        sendText(key.send)
+        terminal.send(key)
     }
 
-    #if DEBUG
-    private func adoptGhostty(_ bridge: GhosttyTerminalBridge) {
-        ghostty = bridge
-        bridge.setAppInBackground(isAppInBackground)
-        bridge.view.canTakeKeyboard = { [weak self] in self?.canTakeKeyboard ?? false }
-        bridge.view.onFocusChanged = { [weak self] focused in self?.keyboardFocusChanged(focused) }
-        bridge.view.setStickyModifierChangeHandler { [weak self] in self?.syncGhosttySticky() }
-    }
-
-    private func syncGhosttySticky() {
-        guard let view = ghostty?.view else { return }
-        controlArmed = view.stickyActivation(for: .ctrl) != .inactive
-        altArmed = view.stickyActivation(for: .alt) != .inactive
-    }
-    #endif
-
-    /// SwiftTerm 在软键盘按下后会把 control/meta 修饰复位并发通知；据此关掉按钮高亮。
-    private func installModifierResetObserversIfNeeded() {
-        if ctrlResetObserver == nil {
-            ctrlResetObserver = NotificationCenter.default.addObserver(
-                forName: .terminalViewControlModifierReset, object: nil, queue: .main
-            ) { [weak self] note in
-                // queue: .main → 必在主线程回调，可直接断言 MainActor 同步触碰 UI 状态。
-                // 只把 Sendable 的对象身份带过隔离边界（不要把非 Sendable 的 note 捕获进 MainActor 闭包）。
-                let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
-                MainActor.assumeIsolated {
-                    guard let self, let tv = self.terminalView,
-                          objID == ObjectIdentifier(tv) else { return }
-                    self.controlArmed = false
-                }
-            }
-        }
-        if metaResetObserver == nil {
-            metaResetObserver = NotificationCenter.default.addObserver(
-                forName: .terminalViewMetaModifierReset, object: nil, queue: .main
-            ) { [weak self] note in
-                let objID = (note.object as AnyObject?).map(ObjectIdentifier.init)
-                MainActor.assumeIsolated {
-                    guard let self, let tv = self.terminalView,
-                          objID == ObjectIdentifier(tv) else { return }
-                    self.altArmed = false
-                }
-            }
-        }
+    private func syncStickyModifiers() {
+        let (control, alt) = terminal.stickyModifiers
+        if control != controlArmed { controlArmed = control }
+        if alt != altArmed { altArmed = alt }
     }
 
     /// 关闭会话前先收起键盘——否则视图随转场移除后键盘还会残留几百毫秒。
     func resignKeyboard() {
-        _ = keyboardView?.resignFirstResponder()
-    }
-
-    /// 拿键盘的那个视图：SwiftTerm 的终端视图，Debug 试用 Ghostty 时是 GhosttyKit 的视图。
-    private var keyboardView: UIView? {
-        #if DEBUG
-        if let ghostty { return ghostty.view }
-        #endif
-        return terminalView
+        _ = terminal.view.resignFirstResponder()
     }
 
     /// 切到该会话标签时让其终端重新成为第一响应者（弹回键盘）。未连上、或用户收起了键盘时不弹。
     func focusKeyboard() {
         guard canTakeKeyboard, !keyboardCollapsed else { return }
-        _ = keyboardView?.becomeFirstResponder()
+        _ = terminal.view.becomeFirstResponder()
     }
 
     /// 用户点了「收起键盘」。
@@ -372,7 +265,7 @@ final class MobileTerminalController {
         focusKeyboard()
     }
 
-    /// 终端视图报告第一响应者变化。点终端（SwiftTerm 自己聚焦）也走这里，等于用户要回了键盘。
+    /// 终端视图报告第一响应者变化。点终端（视图自己聚焦）也走这里，等于用户要回了键盘。
     func keyboardFocusChanged(_ focused: Bool) {
         keyboardShown = focused
         if focused { keyboardCollapsed = false }
@@ -454,31 +347,19 @@ final class MobileTerminalController {
         syncRemoteWatch()
         acceptsImages = conn is any TerminalImageReceiving
         let exitStream = conn.exitStream
-        #if DEBUG
-        if let ghostty {
-            // 输出直接进 GhosttyKit（它自己的串行队列解析、按 vsync 画），网格尺寸走 bridge 自己的输入通道。
-            ghostty.bind(conn)
-        } else {
-            outputPump.reset()
-            outputPump.start(conn.outputStream)
-        }
-        #else
-        outputPump.reset()
-        outputPump.start(conn.outputStream)
-        #endif
+        // 输出进终端（影子同步解析，画面在 GhosttyKit 自己的串行队列上解析、按 vsync 画）；击键 / 尺寸变化走终端的
+        // 同一条 FIFO。尺寸可能早于传输就绪（首次排布、重连），接上时先补发。
+        terminal.bind(conn)
         exitTask = Task { [weak self] in
             for await _ in exitStream {
                 if case .failed = self?.state { } else { self?.state = .disconnected }
                 break
             }
         }
-
-        // 击键 / 尺寸变化走同一条 FIFO。尺寸可能早于传输就绪（首次排布、重连），接上时先补发。
-        inputChannel.bind(to: conn, sendingLatestSize: true)
     }
 
     func write(_ data: Data) {
-        inputChannel.write(data)
+        terminal.write(data)
     }
 
     // MARK: - 图片
@@ -514,16 +395,7 @@ final class MobileTerminalController {
     /// 像系统粘贴一样送一段文字：终端开了 bracketed paste 就包上起止标记（程序据此认出是粘贴，
     /// 例如 Claude Code 把粘进来的图片路径当附件）。
     func paste(_ text: String) {
-        #if DEBUG
-        // GhosttyKit 自己知道程序开没开括号粘贴。
-        if let surface = ghostty?.view.surface, surface.paste(text: text) { return }
-        #endif
-        write(TerminalPaste.wrap(text, bracketed: bracketedPasteMode))
-    }
-
-    /// 终端里的程序有没有开括号粘贴（DECSET 2004）。
-    private var bracketedPasteMode: Bool {
-        terminalView?.getTerminal().bracketedPasteMode ?? false
+        terminal.paste(text)
     }
 
     private func showImageNote(_ note: String, sticky: Bool = false) {
@@ -562,11 +434,6 @@ final class MobileTerminalController {
         }
     }
 
-    /// 把新尺寸告诉远端：只合并同一轮主线程里的连续变化，和上次发出的相同就不发（见 `TerminalInputChannel`）。
-    func resize(cols: UInt16, rows: UInt16) {
-        inputChannel.reportSize(cols: cols, rows: rows)
-    }
-
     func close() {
         teardownConnection()
         state = .disconnected
@@ -575,12 +442,12 @@ final class MobileTerminalController {
     /// 关标签前问：前台还有没有程序在跑。没连上就没有程序可中断。
     func foregroundActivity() async -> TerminalActivity {
         await TerminalCloseProbe.foregroundActivity(connected: state == .connected, backend: connection) {
-            terminalView?.getTerminal().isCurrentBufferAlternate ?? false
+            terminal.shadow.isOnAlternateScreen
         }
     }
 
     /// 失败后在同一控制器 / 同一终端视图上重连（连接中页「重试」）。终端视图仍挂着，
-    /// 新的输出泵会喂给它；只有处于失败态时才生效。
+    /// 新连接的输出接着喂给它；只有处于失败态时才生效。
     func restart() {
         guard case .failed = state,
               let profile = lastProfile, let container = lastContainer, let relay = lastRelay else { return }
@@ -590,12 +457,11 @@ final class MobileTerminalController {
         start(profile: profile, container: container, relay: relay)
     }
 
-    /// 作废在途建连（代次 +1，晚到的结果一律丢弃），拆掉输出泵、输入通道与传输。
+    /// 作废在途建连（代次 +1，晚到的结果一律丢弃），拆掉终端与后端之间的输出 / 输入，再关传输。
     private func teardownConnection() {
         connectGeneration &+= 1
         connectTask?.cancel()
         connectTask = nil
-        outputPump.reset()
         exitTask?.cancel()
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -603,21 +469,16 @@ final class MobileTerminalController {
         if let remote = connection as? RemoteTerminalBackend {
             remote.client.setProgramStatusLooker(remote.sessionID, nil)
         }
-        inputChannel.unbind()
-        #if DEBUG
-        ghostty?.unbind()
-        #endif
+        terminal.unbind()
         let conn = connection
         Task { await conn?.close() }
         connection = nil
     }
 
     deinit {
-        if let ctrlResetObserver { NotificationCenter.default.removeObserver(ctrlResetObserver) }
-        if let metaResetObserver { NotificationCenter.default.removeObserver(metaResetObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
-        // 输出泵与输入通道随控制器释放，各自的 deinit 收尾。
+        // 终端（入站任务、输入通道）随控制器释放，自己的 deinit 收尾。
         exitTask?.cancel(); connectTask?.cancel()
     }
 }

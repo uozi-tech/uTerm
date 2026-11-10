@@ -1,9 +1,7 @@
 import GhosttyTerminal
 import IOSurface
-import ObjectiveC
 import QuartzCore
 import SwiftData
-import SwiftTerm
 import SwiftUI
 import UIKit
 import XCTest
@@ -16,9 +14,11 @@ import XCTest
 ///   在 Core Animation 提交之后（主 runloop 的 beforeWaiting，order 排在 CA 提交的 2000000 之后）读当时已提交的 IOSurface，
 ///   从画面本身解出滚动位置：回滚区每行开头 7 格是行号的二进制条码（█ = 1），第 0 列逐行交替，扫一列像素找到行边界，
 ///   再读 7 格得到行号，位置 = 行号 × 格高 − 行边界的 y。读的是画面，不是我们发了什么。
-/// - SwiftTerm（UIScrollView）：文字画在滚动视图自己的 layer 上，`bounds` 变了但没重画时文字不动，所以上屏位置 = 最近一次
-///   `draw(_:)` 时的 `contentOffset`。甩动走 UIScrollView 自己的 `handlePan:` 和减速（真 pan 识别器对象，换掉 state /
-///   translation / velocity 三个读数），和手指甩出去走同一套 UIKit 代码。
+///   甩动是伪造 pan 直接调 GhosttyKit 的 `handleTouchScrollGesture:`（自写的拖动 / 惯性；真手指单指滚回滚区现在归
+///   系统 UIScrollView 那条路径，那条路径的上屏位置由 `GhosttySystemScrollJitterTests` 核）。
+///
+/// 原来还有一半拿换引擎之前的终端视图（UIScrollView 子类）用同一套量法当参照、核「Ghostty 不比它差」；旧引擎已经从 App 里
+/// 拿掉，那一半连同参照用例一起去掉了，Ghostty 自己的绝对门槛（`assertSmooth`）照旧。
 ///
 /// 每个显示帧 = 参考 `CADisplayLink`（80–120 Hz，和惯性 link 同档，不额外抬帧率）两次回调之间；这段时间里最后一次提交的画面
 /// 就是下一个 vsync 显示的画面。
@@ -30,8 +30,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
-        restoreDraw?()
-        restoreDraw = nil
     }
 
     // MARK: - 提交后采样
@@ -197,7 +195,7 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         let label: String
         /// 每个显示帧实际显示的位移（px，已按运动方向取正）。
         let shown: [Double]
-        /// 同一帧里我们发出去的位移（SwiftTerm 没有）。
+        /// 同一帧里我们发出去的位移（没传 `sentEvents` 时为 nil）。
         let sent: [Double]?
         let lag: Int
         let mismatches: Int
@@ -344,13 +342,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
     /// 同一套量法，挂在整个工作区界面里（标签条、键盘条、SwiftUI 外壳都在），输出走假 SSH 后端、经控制器进 Ghostty——
     /// 和 user 手机上的路径只差真手指。
     private func ghosttyFlingInWorkspace(output: Bool, velocity: CGFloat) async throws -> Report {
-        let defaults = UserDefaults.standard
-        let previous = defaults.object(forKey: DefaultsKey.debugGhosttyTrial)
-        defaults.set(true, forKey: DefaultsKey.debugGhosttyTrial)
-        defer {
-            if let previous { defaults.set(previous, forKey: DefaultsKey.debugGhosttyTrial) }
-            else { defaults.removeObject(forKey: DefaultsKey.debugGhosttyTrial) }
-        }
         defer { MobileProbeWindow.closeAll() }
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
@@ -369,8 +360,11 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         tab.controller.start(profile: server, container: container, relay: relay)
         let connected = await MobileFakeTerminal.waitUntilConnected(tab.controller)
         XCTAssertTrue(connected)
-        let bridge = try XCTUnwrap(tab.controller.ghostty, "试用开关打开后标签应当走 Ghostty")
-        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.surface != nil && bridge.grid != nil }
+        let bridge = tab.controller.terminal
+        // surface 建好、网格到位、画面开始吃字节之后再喂：就绪之前喂的只进影子，要等一次回放才上屏。
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.router.isFeedingSurface
+        }
         XCTAssertTrue(ready, "Ghostty surface 没建起来")
         let transport = try XCTUnwrap(handles.latest)
         let cols = bridge.grid?.cols ?? 80
@@ -474,132 +468,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         String(bytes: [24, 16, 8, 0].map { UInt8((code >> $0) & 0xFF) }, encoding: .ascii) ?? "\(code)"
     }
 
-    // MARK: - SwiftTerm（UIScrollView）参照
-
-    private var restoreDraw: (() -> Void)?
-    nonisolated(unsafe) private static var drawOffsets: [(time: Double, offset: Double)] = []
-    nonisolated(unsafe) private static var drawTarget: ObjectIdentifier?
-
-    private func hookSwiftTermDraw(scale: Double) {
-        let method = class_getInstanceMethod(SwiftTerm.TerminalView.self, #selector(UIView.draw(_:)))!
-        typealias Draw = @convention(c) (AnyObject, Selector, CGRect) -> Void
-        let original = method_getImplementation(method)
-        let call = unsafeBitCast(original, to: Draw.self)
-        let hooked: @convention(block) (AnyObject, CGRect) -> Void = { view, rect in
-            if ObjectIdentifier(view) == Self.drawTarget, let scroll = view as? UIScrollView {
-                Self.drawOffsets.append((CACurrentMediaTime(), Double(scroll.contentOffset.y) * scale))
-            }
-            call(view, #selector(UIView.draw(_:)), rect)
-        }
-        method_setImplementation(method, imp_implementationWithBlock(hooked))
-        restoreDraw = { method_setImplementation(method, original) }
-    }
-
-    /// 驱动方式：
-    /// - `.uikitAnimation`：`setContentOffset(_:animated: true)`，UIScrollView 自己逐帧推（和它减速走同一个逐帧驱动），
-    ///   测「UIKit 自己滚的时候每拍上屏是什么样」；
-    /// - `.decelerate`：参考 link 每拍按 UIScrollView `.normal` 的减速（每毫秒 0.998）算位置、按物理像素取整后设
-    ///   contentOffset，和 UIScrollView 减速的曲线、取整方式一样。
-    /// 用伪造 pan 调 UIScrollView 的 `handlePan:` 起不了减速（试过：拖动生效、松手不减速，第二次还让测试进程退出），没用。
-    enum SwiftTermDrive: String { case uikitAnimation, decelerate }
-
-    /// 代码设 contentOffset 时 UIKit 的 isTracking / isDecelerating 恒为假，SwiftTerm 会当成没人在滚、来了输出就把视图拽回底部
-    ///（补丁 #17 的逻辑），量的就不是「手指甩出去的惯性」了。把这个实例换成运行时子类，这两个读数由测试给：先 tracking
-    /// 把视图停在回滚区（SwiftTerm 记成用户在看历史），再 decelerating 走完减速——和真甩动时 SwiftTerm 看到的一样。
-    nonisolated(unsafe) private static var fakeTracking = false
-    nonisolated(unsafe) private static var fakeDecelerating = false
-
-    private static func overrideScrollState(_ view: UIScrollView) -> AnyClass {
-        let base: AnyClass = object_getClass(view)!
-        let name = "UTermProbeScrollState_\(NSStringFromClass(base))"
-        if let existing = NSClassFromString(name) {
-            object_setClass(view, existing)
-            return base
-        }
-        let cls: AnyClass = objc_allocateClassPair(base, name, 0)!
-        let tracking: @convention(block) (AnyObject) -> Bool = { _ in Self.fakeTracking }
-        let decelerating: @convention(block) (AnyObject) -> Bool = { _ in Self.fakeDecelerating }
-        for (selector, block) in [(#selector(getter: UIScrollView.isTracking), tracking as Any),
-                                  (#selector(getter: UIScrollView.isDecelerating), decelerating as Any)] {
-            let method = class_getInstanceMethod(base, selector)!
-            class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
-        }
-        objc_registerClassPair(cls)
-        object_setClass(view, cls)
-        return base
-    }
-
-    private func swiftTermScroll(output: Bool, drive: SwiftTermDrive, velocity: Double = 1000) async throws -> Report {
-        let host = try SwiftTermProbeHost(size: CGSize(width: 440, height: 600))
-        defer { host.close() }
-        let view = host.view
-        let scale = Double(host.window.screen.nativeScale)
-        view.feed(text: TerminalSpikeCorpus.history(lines: 400, cols: host.grid.cols)
-                  + TerminalSpikeCorpus.claudeFrame(0, cols: host.grid.cols))
-        host.container.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(300))
-        let cellHeight = view.bounds.height / CGFloat(max(1, host.grid.rows))
-        let bottom = max(0, view.contentSize.height - view.bounds.height)
-        let start = max(0, bottom - 60 * cellHeight)
-        let base = Self.overrideScrollState(view)
-        defer { object_setClass(view, base); Self.fakeTracking = false; Self.fakeDecelerating = false }
-        Self.fakeTracking = true
-        view.setContentOffset(CGPoint(x: 0, y: start), animated: false)
-        try await Task.sleep(for: .milliseconds(300))
-        Self.fakeTracking = false
-        Self.fakeDecelerating = true
-
-        hookSwiftTermDraw(scale: scale)
-        Self.drawTarget = ObjectIdentifier(view)
-        Self.drawOffsets.removeAll()
-        let sampler = CommitSampler()
-        // 上屏位置 = 最近一次 draw 时的 contentOffset（文字画在滚动视图自己的 layer 上，bounds 动了但没重画时文字不动）。
-        sampler.read = { Self.drawOffsets.last.map { $0.offset } }
-        sampler.start()
-        let cols = host.grid.cols
-        let feeder = output ? Task { @MainActor in
-            var n = 1
-            while !Task.isCancelled {
-                view.feed(text: TerminalSpikeCorpus.claudeFrame(n, cols: cols))
-                n += 1
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-        } : nil
-        try await Task.sleep(for: .milliseconds(100))
-        // 往回滚区方向走 UIScrollView 公式算出来的距离（初速 1000 pt/s ≈ 500 pt）。
-        let distance = velocity / 1000 / -log(0.998)
-        let counter = DisplayLinkCounter()
-        switch drive {
-        case .uikitAnimation:
-            view.setContentOffset(CGPoint(x: 0, y: max(0, start - distance)), animated: true)
-        case .decelerate:
-            var v = velocity / 1000            // pt/ms
-            var y = Double(start)
-            var last = CACurrentMediaTime()
-            counter.onTick = {
-                let now = CACurrentMediaTime()
-                let dt = (now - last) * 1000
-                last = now
-                v *= pow(0.998, dt)
-                y -= v * dt
-                guard v > 0.02 else { counter.onTick = nil; return }
-                view.contentOffset = CGPoint(x: 0, y: (max(0, y) * scale).rounded() / scale)
-            }
-            counter.start(preferred: CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120))
-        }
-        try await Task.sleep(for: .milliseconds(drive == .decelerate ? 3000 : 1500))
-        counter.stop()
-        feeder?.cancel()
-        sampler.stop()
-        Self.drawTarget = nil
-        let report = Self.analyze("swiftterm-\(drive.rawValue) output=\(output)", sampler: sampler, sentEvents: nil)
-        print(report.line)
-        print("ONSCREEN-TIMING swiftterm-\(drive.rawValue) output=\(output) draws=\(Self.drawOffsets.count) frames=\(sampler.targets.count)")
-        restoreDraw?()
-        restoreDraw = nil
-        return report
-    }
-
     // MARK: - 拖动 → 惯性交接
 
     /// 在「下一次 display link 回调前 `lead` ms」这个相位上做一次拖动 + 松手（真手指的触摸事件也是在帧开头、回调前后到）。
@@ -625,9 +493,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
 
     // MARK: - 用例
 
-    /// 同一轮里 Ghostty 的读数，留给 SwiftTerm 参照用例比（XCTest 按名字排序跑，Ghostty 的先跑）。
-    nonisolated(unsafe) private static var ghosttyReadings: [Report] = []
-
     /// 每拍上屏位移的回归门槛（单独窗口 / 整个工作区界面，有无输出，初速 1000 / 4000 pt/s 都要过）：
     /// - 重复帧 0（速度 ≥ 2 px/帧时没有一拍不换画面）；
     /// - 和这一拍发出去的位移逐拍对得上（错位 ≤ 1 拍）；
@@ -647,7 +512,6 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         for velocity in [1000, 4000] as [CGFloat] {
             for output in [false, true] {
                 let report = try await ghosttyFling(output: output, velocity: velocity)
-                Self.ghosttyReadings.append(report)
                 assertSmooth(report)
             }
         }
@@ -711,35 +575,8 @@ final class GhosttyOnScreenScrollTests: XCTestCase {
         for velocity in [1000, 4000] as [CGFloat] {
             for output in [false, true] {
                 let report = try await ghosttyFlingInWorkspace(output: output, velocity: velocity)
-                Self.ghosttyReadings.append(report)
                 assertSmooth(report)
             }
-        }
-    }
-
-    /// SwiftTerm（UIScrollView）同一套量法当参照；同一轮跑过 Ghostty 的话，核 Ghostty 不比它差：
-    /// 重复帧不多于它、二阶差分不超过它 + 1 px、相邻位移比不超过它 + 0.05（都按 1000 pt/s 那几条比）。
-    func testSwiftTermScrollOnScreen() async throws {
-        var reference: [Report] = []
-        for drive in [SwiftTermDrive.decelerate, .uikitAnimation] {
-            for output in [false, true] {
-                let report = try await swiftTermScroll(output: output, drive: drive)
-                XCTAssertGreaterThan(report.shown.count, 30, "\(report.label)：没滚起来")
-                if drive == .decelerate { reference.append(report) }
-            }
-        }
-        let ghostty = Self.ghosttyReadings.filter { $0.label.contains("v=1000") }
-        guard !ghostty.isEmpty else { return }
-        let floorRepeats = reference.map(\.repeats).max() ?? 0
-        let floorJerk = reference.map(\.maxJerk).max() ?? 0
-        let floorRatio = reference.map(\.maxRatio).max() ?? 1
-        print(String(format: "ONSCREEN-COMPARE swiftterm-decelerate repeats≤%d jerk≤%.0f ratio≤%.2f | ghostty %@", floorRepeats, floorJerk, floorRatio,
-                     ghostty.map { String(format: "%@ repeats=%d jerk=%.0f ratio=%.2f", $0.label, $0.repeats, $0.maxJerk, $0.maxRatio) }
-                        .joined(separator: "; ")))
-        for report in ghostty {
-            XCTAssertLessThanOrEqual(report.repeats, floorRepeats, "\(report.label) 重复帧比 SwiftTerm 多")
-            XCTAssertLessThanOrEqual(report.maxJerk, floorJerk + 1, "\(report.label) 二阶差分比 SwiftTerm 大")
-            XCTAssertLessThanOrEqual(report.maxRatio, floorRatio + 0.05, "\(report.label) 相邻位移比比 SwiftTerm 大")
         }
     }
 }

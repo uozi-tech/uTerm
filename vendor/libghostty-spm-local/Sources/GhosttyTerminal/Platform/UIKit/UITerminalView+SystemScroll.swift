@@ -73,9 +73,9 @@
     }
 
     extension UITerminalView: UIScrollViewDelegate {
-        /// 系统滚动这条路径现在用不用得上：开关开着、驱动器在、有回滚可滚、程序没抓鼠标。
+        /// 系统滚动这条路径现在用不用得上：驱动器在、有回滚可滚、程序没抓鼠标。
         var systemScrollIsActive: Bool {
-            guard UTermScrollTrace.usesSystemScrolling, systemScroll.driver != nil,
+            guard systemScroll.driver != nil,
                   surface?.isMouseCaptured != true,
                   let bar = core.bridge.scrollbar, bar.total > bar.len else { return false }
             return true

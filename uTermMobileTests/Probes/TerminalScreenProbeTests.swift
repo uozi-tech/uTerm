@@ -17,8 +17,8 @@ import XCTest
 ///
 /// ## 为什么不用 `measureScroll`
 ///
-/// 终端屏没有「列表」。SwiftTerm 的 `TerminalView` 虽然是 `UIScrollView` 子类，
-/// 但刚连上时 `contentSize == bounds`，`requireScrollable()` 会（正确地）判红。
+/// 终端屏没有「列表」。终端视图（GhosttyKit 画）自己不是 `UIScrollView`；它里面借来做系统滚动的那个
+/// 隐藏 `UIScrollView` 刚连上时 `contentSize == bounds`，`requireScrollable()` 会（正确地）判红。
 /// 换成 `MobileTerminalLoad.measure`：同一个窗口里同时收心跳、单帧、CPU 三样，
 /// 口径与 `MobileProbeRig.heartbeat` / `measureScroll` 对齐。
 ///
@@ -119,7 +119,7 @@ final class TerminalScreenProbeTests: XCTestCase {
     /// 1 / 4 / 8 个会话同时挂载：`UIView` 数、挂载耗时、切 tab 耗时。
     ///
     /// `WorkspaceScreen` 每一格是 `ZStack { ForEach(tabs) { TerminalSessionBody } }` ——
-    /// 每片 = 一个 SwiftTerm `TerminalView` + 一个完整 `MobileAgentChat` + 一条键盘条，
+    /// 每片 = 一个终端视图（`MGhosttyTerminalView`）+ 一个完整 `MobileAgentChat` + 一条键盘条，
     /// **全部常驻**（非活动片只是 `opacity(0)` + 移出屏外）。这一条就是量它的账。
     func testResidentSessionsScaling() async throws {
         defer { MobileProbeWindow.closeAll() }
@@ -199,8 +199,9 @@ final class TerminalScreenProbeTests: XCTestCase {
 
     /// 4 个会话全部以 2000 行/秒吐 —— 只有一个是激活标签。
     ///
-    /// 判据是**消费计数**（SwiftTerm 的 scroll-invariant 顶行号 + 光标行，随 `feed`
-    /// 单调推进）：非活动片的推进量若与激活片同阶，就说明「切走的会话仍在全量渲染」。
+    /// 判据是**消费计数**（影子终端的回滚行数 + 光标行，随 `feed` 单调推进，见 `MobileTerminalConsumption`）。
+    /// 换引擎之后所有标签的影子都全量解析（不画的只是 surface），所以非活动片的推进量本来就该和激活片同阶，
+    /// 这条只打印对照、核链路没断；「切走的会话还画不画」要看交帧数（`GhosttyPresentLog.perLayerCounts()`）。
     func testInactiveTabsStillConsumeOutput() async throws {
         defer { MobileProbeWindow.closeAll() }
         let c = try container()
@@ -297,13 +298,16 @@ final class TerminalScreenProbeTests: XCTestCase {
 
     /// **B 类修正的同轮对照**：4 个会话各 2000 行/秒，只有一个是激活标签。
     ///
-    /// - 档「全前台」= 改法之前的行为：把每片的 `isForeground` 强行按回 `true`，
-    ///   于是四个终端都按 16ms 节拍 feed + 重绘。
-    /// - 档「按活动态」= 改法之后：`TerminalSessionBody` 把非活动 / Agent 模式的片
-    ///   降到 64ms 节拍（`MobileTerminalController.FlushPacing.background`）。
+    /// - 档「全前台」= 改法之前的行为：把每片都按回「前台、在屏上」（`isForeground = true`，终端 `setOnScreen(true)`），
+    ///   于是四个终端都在画。
+    /// - 档「按活动态」= 改法之后：`TerminalSessionBody` 只让激活片在屏上，其余的不画
+    ///  （`MTerminalContainerView.isOnScreen` → `GhosttyTerminalBridge.setOnScreen(false)`；字节照常进影子终端和 surface 的解析）。
+    ///
+    /// 换引擎之前这个开关是输出泵的节拍（前台 16ms / 非活动 64ms，`isForeground` 一个量管着）；Ghostty 不走输出泵，
+    /// 「非活动片少干活」落在画不画上，所以「全前台」档除了 `isForeground` 还要把终端按回在屏上，两档才仍然只差这一件事。
     ///
     /// 两档在同一轮里跑，只差这一个开关。判定看主线程单帧与超预算比例；
-    /// 同时钉住「降频不等于丢字节」——两档吐出的行数同阶。
+    /// 同时钉住「不画不等于丢字节」——两档吐出的行数同阶。
     func testInactiveTabDownshiftAB() async throws {
         defer { MobileProbeWindow.closeAll() }
 
@@ -325,7 +329,10 @@ final class TerminalScreenProbeTests: XCTestCase {
             if forceAllForeground {
                 // 视图只在 onAppear / isActive / mode 变化时同步，这里之后不再动它们，
                 // 所以按回去的值在整个量测窗口里都成立。
-                for tab in sessions.terminalTabs { tab.controller.isForeground = true }
+                for tab in sessions.terminalTabs {
+                    tab.controller.isForeground = true
+                    tab.controller.terminal.setOnScreen(true)
+                }
             }
             let live = sessions.terminalTabs.filter(\.controller.isForeground).count
             let before = MobileTerminalConsumption.read(sessions.terminalTabs)

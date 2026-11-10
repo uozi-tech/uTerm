@@ -2,7 +2,6 @@ import Darwin
 import GhosttyTerminal
 import ObjectiveC
 import QuartzCore
-import SwiftTerm
 import UIKit
 import XCTest
 @testable import uTermMobile
@@ -10,8 +9,10 @@ import XCTest
 // GhosttyKit spike（docs/ghostty-eval/ios-spike.md）的探针夹具：
 // - `ThreadCPU`：每条线程的 CPU（Ghostty 有自己的渲染 / IO 线程、解析在 GCD 队列上，只量主线程会漏账）；
 // - `GhosttyPresentLog`：Ghostty 实际交给 Core Animation 的帧（`IOSurfaceLayer.setContents:`）；
-// - `SwiftTermDrawLog`：SwiftTerm 的 `draw(_:)`（与 `TerminalScrollWhileOutputProbeTests` 同一手法）；
-// - `GhosttyProbeHost` / `SwiftTermProbeHost`：同尺寸、同字号、同配色地挂上屏。
+// - `GhosttyProbeHost`：按固定尺寸、字号、配色把一条终端挂上屏。
+//
+// 换引擎之前这里还有对照组的夹具（旧引擎的 `draw(_:)` 计时与宿主）；旧引擎的视图类删掉之后一并去掉，
+// 历史读数留在 docs/ghostty-eval/ 里。
 
 // MARK: - 线程 CPU
 
@@ -179,36 +180,11 @@ nonisolated enum GhosttyPresentLog {
     }
 }
 
-/// SwiftTerm 的每次 `draw(_:)`：开始时刻与耗时（ms，主线程 CPU 时间，`CLOCK_THREAD_CPUTIME_ID`）。
-@MainActor
-enum SwiftTermDrawLog {
-    nonisolated(unsafe) static var draws: [(at: Double, cpuMS: Double)] = []
-    /// 每个视图各画了几次（多终端探针按它分账）；和 `draws` 一起清。
-    nonisolated(unsafe) static var perView: [ObjectIdentifier: Int] = [:]
-    private static var installed = false
-
-    static func install() {
-        guard !installed else { return }
-        installed = true
-        let method = class_getInstanceMethod(SwiftTerm.TerminalView.self, #selector(UIView.draw(_:)))!
-        typealias Draw = @convention(c) (AnyObject, Selector, CGRect) -> Void
-        let call = unsafeBitCast(method_getImplementation(method), to: Draw.self)
-        let timed: @convention(block) (AnyObject, CGRect) -> Void = { view, rect in
-            let at = CACurrentMediaTime()
-            let cpu0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
-            call(view, #selector(UIView.draw(_:)), rect)
-            let cpu = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu0) / 1e6
-            SwiftTermDrawLog.draws.append((at, cpu))
-            SwiftTermDrawLog.perView[ObjectIdentifier(view), default: 0] += 1
-        }
-        method_setImplementation(method, imp_implementationWithBlock(timed))
-    }
-}
-
 // MARK: - 语料
 
 nonisolated enum TerminalSpikeCorpus {
-    /// 一屏 Claude Code 跑过一阵的内容：每行都不同、铺满不溢出（同 `TerminalDrawCostProbeTests.screen`）。
+    /// 一屏 Claude Code 跑过一阵的内容：带色的 diff、路径、中文、界面符号，每行都不同、接近铺满但不溢出
+    ///（Claude Code 按终端宽度自己断行、输出硬换行；溢出折行的话整屏连成一个软折行段落，就不是它的情形了）。
     static func screen(rows: Int, salt: Int) -> String {
         let colors = ["32", "31", "36", "33", "38;2;215;119;87", "90"]
         return (0..<rows).map { index in
@@ -317,7 +293,8 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
         scrollbarUpdates += 1
     }
 
-    /// 等 surface 建好、第一帧交出去、网格报上来。
+    /// 等 surface 建好、第一帧交出去、网格报上来，并且画面已经在吃实时字节（`isSurfaceReady` 之前喂的只进影子，
+    /// 就绪后由一次回放补进 surface——回放排在后台队列上，这里连它一起等完）。
     func waitUntilReady(timeout: Double = 5) async throws {
         let deadline = CACurrentMediaTime() + timeout
         while CACurrentMediaTime() < deadline {
@@ -332,8 +309,12 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
             try await Task.sleep(for: .milliseconds(20))
             if "\(grid)" != last { last = "\(grid)"; stableSince = CACurrentMediaTime() }
         }
-        if view.surface != nil, bridge.grid != nil { return }
-        XCTFail("Ghostty surface 没就绪：surface=\(view.surface != nil) grid=\(String(describing: bridge.grid)) presents=\(GhosttyPresentLog.read().times.count)")
+        while CACurrentMediaTime() < deadline, !(bridge.isSurfaceReady && bridge.router.isFeedingSurface) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        if view.surface != nil, bridge.grid != nil, bridge.isSurfaceReady, bridge.router.isFeedingSurface { return }
+        XCTFail("Ghostty surface 没就绪：surface=\(view.surface != nil) grid=\(String(describing: bridge.grid)) "
+            + "ready=\(bridge.isSurfaceReady) feeding=\(bridge.router.isFeedingSurface) presents=\(GhosttyPresentLog.read().times.count)")
     }
 
     /// 喂字节并等解析完（`waitForPendingOutput` 在主线程上会边等边 tick app）。
@@ -348,39 +329,6 @@ final class GhosttyProbeHost: NSObject, TerminalSurfaceScrollbarDelegate {
 
     func close() {
         bridge.view.removeFromSuperview()
-        window.isHidden = true
-    }
-}
-
-/// SwiftTerm 那一侧：和 `SwiftTermView.makeUIView` 一样装配色、关附加栏，挂在 `MTerminalContainerView` 里。
-@MainActor
-final class SwiftTermProbeHost {
-    let window: UIWindow
-    let view: MTerminalView
-    let container: MTerminalContainerView
-
-    init(size: CGSize = CGSize(width: 393, height: 760)) throws {
-        window = try makeSpikeWindow(size: size)
-        view = MTerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-        view.contentInsetAdjustmentBehavior = .never
-        view.inputAccessoryView = nil
-        view.caretViewTracksFocus = false
-        let scheme = MTerminalColors.resolve(dark: true)
-        TerminalAppearance.applyColors(to: view, scheme: scheme)
-        TerminalAppearance.applyCaretColors(to: view, scheme: scheme, shape: .block)
-        view.backgroundColor = scheme.backgroundColor
-        view.getTerminal().changeScrollback(RemoteConstants.snapshotScrollback)
-        container = MTerminalContainerView(terminalView: view, fontSize: 11)
-        container.frame = window.bounds
-        container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        window.addSubview(container)
-        container.layoutIfNeeded()
-    }
-
-    var grid: (cols: Int, rows: Int) { (view.getTerminal().cols, view.getTerminal().rows) }
-
-    func close() {
-        container.removeFromSuperview()
         window.isHidden = true
     }
 }

@@ -1,5 +1,5 @@
+import GhosttyTerminal
 import SwiftUI
-import SwiftTerm
 import UIKit
 import XCTest
 @testable import uTermMobile
@@ -40,8 +40,10 @@ final class SplitLayoutProbeTests: XCTestCase {
                                             preferredAxis: work.splitAxis, fraction: work.splitFraction)
         var problems: [String] = []
         for (index, pane) in work.panes.enumerated() {
-            guard let term = work.tab(pane.activeID)?.terminal,
-                  let view = term.controller.terminalView else { continue }
+            guard let term = work.tab(pane.activeID)?.terminal else { continue }
+            let view = term.controller.terminal.view
+            // 视图现在由控制器自己建、恒在；从没挂过的（换引擎之前是「控制器上还没有视图」）照旧跳过。
+            guard view.superview != nil || view.hasHostedLayout else { continue }
             let slot = layout.rects[min(index, layout.rects.count - 1)]
             let rect = view.convert(view.bounds, to: win)
             print("SPLITLAYOUT \(step) pane\(index) slot=\(slot.integral) term=\(rect.integral)")
@@ -96,11 +98,24 @@ final class SplitLayoutProbeTests: XCTestCase {
 
     /// 每一格前台的终端都在画：分屏、挪标签、折叠 / 展开（Duo 外屏 466 宽时只能单格）之后，
     /// 不能有哪个看得见的终端停画——停了画面就永远停在那一刻（真机回归：远控 Claude 标签画面卡死）。
+    ///
+    /// 「停画」在 Ghostty 上是三件事里的任何一件（都由 `MTerminalContainerView.isOnScreen` → `GhosttyTerminalBridge.setOnScreen`
+    /// 写进去；当年的 bug 是外壳切换后旧容器把「不在屏上」写进了新容器接走的视图）：
+    /// - 终端记着自己不在屏上（`isOnScreen == false`）；
+    /// - 视图被告知不显示（`setSurfaceVisible(false)`：不出帧、放掉 display link。它同时停用系统滚动的手势，
+    ///   这里读那个手势的 `isEnabled` 当它的回读，GhosttyKit 没有别的公开读法）；
+    /// - surface 被放掉了（`uTermIsSurfaceReleased`，隐藏久了才会）。
     private func frozen(_ work: MobileWorkspace, _ step: String) -> [String] {
         work.panes.enumerated().compactMap { index, pane in
-            guard let term = work.tab(pane.activeID)?.terminal,
-                  let view = term.controller.terminalView as? MTerminalView, view.window != nil else { return nil }
-            return view.suppressesDrawing ? "\(step) pane\(index): 前台终端停画了" : nil
+            guard let term = work.tab(pane.activeID)?.terminal else { return nil }
+            let terminal = term.controller.terminal
+            let view = terminal.view
+            guard view.window != nil else { return nil }
+            var reasons: [String] = []
+            if !terminal.isOnScreen { reasons.append("终端记着不在屏上") }
+            if view.uTermSystemScrollView?.panGestureRecognizer.isEnabled == false { reasons.append("视图被设成不显示") }
+            if view.uTermIsSurfaceReleased { reasons.append("surface 被放掉了") }
+            return reasons.isEmpty ? nil : "\(step) pane\(index): 前台终端停画了（\(reasons.joined(separator: "、"))）"
         }
     }
 
@@ -143,7 +158,10 @@ final class SplitLayoutProbeTests: XCTestCase {
         let (tab, _) = MobileFakeTerminal.tab(host: host, MobileFakeTerminalScript(linesPerSecond: 200, seconds: 1, corpus: .ansiColor))
         work.open(.terminal(tab), in: work.panes[1].id)
         try await Task.sleep(for: .milliseconds(500))
-        XCTAssertNotNil(tab.controller.terminalView)
+        // 新开的标签的终端视图挂进了窗口、按真实窗格排过版（换引擎之前这里核的是「视图已经挂到控制器上」；
+        // 现在视图由控制器自己建、恒在，等价的是它真的上了屏）。
+        XCTAssertNotNil(tab.controller.terminal.view.window, "运行中新开的标签，终端视图没挂进窗口")
+        XCTAssertTrue(tab.controller.terminal.view.hasHostedLayout, "运行中新开的标签，终端视图没按窗格排过版")
         try await resize(win, landscape)
         XCTAssertEqual(misplaced(work, win, "live-opened"), [])
         for tab in work.terminalTabs { tab.controller.close() }
@@ -228,7 +246,7 @@ final class SplitLayoutProbeTests: XCTestCase {
         host.safeAreaRegions = .all
         try await Task.sleep(for: .seconds(3))
 
-        let term = try XCTUnwrap(work.terminalTabs.first?.controller.terminalView)
+        let term = try XCTUnwrap(work.terminalTabs.first?.controller.terminal.view)
         let top = host.view.safeAreaInsets.top
         XCTAssertGreaterThan(top, 0, "这台模拟器竖屏要有顶部安全区")
         let termTop = term.convert(term.bounds, to: win).minY

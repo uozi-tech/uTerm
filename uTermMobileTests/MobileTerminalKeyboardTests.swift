@@ -28,7 +28,7 @@ final class MobileTerminalKeyboardTests: XCTestCase {
     }
 
     /// 把若干控制器的终端视图挂进同一个真窗口（不在窗口里的视图当不了第一响应者）。
-    private func mount(_ controllers: [MobileTerminalController]) -> [MTerminalView] {
+    private func mount(_ controllers: [MobileTerminalController]) -> [MGhosttyTerminalView] {
         let root = UIViewController()
         let win: UIWindow
         if let scene = MobileProbeWindow.activeScene() {
@@ -40,10 +40,8 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         win.makeKeyAndVisible()
         window = win
         return controllers.enumerated().map { i, controller in
-            let view = MTerminalView(frame: CGRect(x: 0, y: CGFloat(i) * 200, width: 390, height: 200),
-                                     font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-            view.controller = controller
-            controller.attach(view)
+            let view = controller.terminal.view
+            view.frame = CGRect(x: 0, y: CGFloat(i) * 200, width: 390, height: 200)
             root.view.addSubview(view)
             return view
         }
@@ -151,7 +149,7 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         XCTAssertTrue(view.isFirstResponder)
         XCTAssertTrue(a.keyboardShown)
 
-        // 点终端（SwiftTerm 直接聚焦视图）也算要回键盘：之后的自动聚焦恢复正常。
+        // 点终端（视图自己聚焦）也算要回键盘：之后的自动聚焦恢复正常。
         a.collapseKeyboard()
         XCTAssertTrue(view.becomeFirstResponder())
         a.ownsKeyboard = false
@@ -167,11 +165,15 @@ final class MobileTerminalKeyboardTests: XCTestCase {
     func testPromptIsPastedThenSubmittedInSeparateWrite() async throws {
         let (c, h, relay) = try host()
         let (a, handles) = MobileFakeTerminal.controller(.idle)
-        let view = mount([a])[0]
+        _ = mount([a])
         a.start(profile: h, container: c, relay: relay)
         let connected = await MobileFakeTerminal.waitUntilConnected(a)
         XCTAssertTrue(connected)
         let fake = try XCTUnwrap(handles.issued.first)
+        let fed = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            a.terminal.isSurfaceReady && a.terminal.router.isFeedingSurface
+        }
+        XCTAssertTrue(fed, "surface 没接上字节")
 
         /// 等上行攒够 `count` 包。假传输是 actor，只能这样轮询。
         func writes(reaching count: Int) async -> [Data] {
@@ -188,7 +190,8 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         let raw = await writes(reaching: 2)
         XCTAssertEqual(raw, packets("继续", "\r"))
 
-        view.feed(text: "\u{1b}[?2004h")
+        a.terminal.feed(Data("\u{1b}[?2004h".utf8))
+        a.terminal.session.waitForPendingOutput()
         a.submitPrompt("继续")
         let pasted = await writes(reaching: 4)
         XCTAssertEqual(Array(pasted.suffix(2)), packets("\u{1b}[200~继续\u{1b}[201~", "\r"))
@@ -265,35 +268,51 @@ final class MobileTerminalKeyboardTests: XCTestCase {
         }
     }
 
-    /// 输入法：默认要英文键盘；拼音组字时光标处能看到正在拼的字，上屏后叠层收起、字发给终端。
-    func testDefaultsToEnglishAndShowsMarkedTextAtTheCursor() async throws {
+    /// 输入法：默认要英文键盘；拼音组字期间不往后端发字，上屏时才发；候选框的锚点跟着光标那一行。
+    /// 组字中的文字由引擎自己画在光标处（换引擎之前是 uTerm 叠的一个 UILabel），这里不再找叠层。
+    func testDefaultsToEnglishAndComposesBeforeSending() async throws {
         let (c, h, relay) = try host()
-        let (a, _) = MobileFakeTerminal.controller(.idle)
+        let (a, handles) = MobileFakeTerminal.controller(
+            MobileFakeTerminalScript(linesPerSecond: 0, seconds: 0, corpus: .plain, echoesInput: false))
         let views = mount([a])
         let view = views[0]
         a.ownsKeyboard = true
         a.start(profile: h, container: c, relay: relay)
         let connected = await MobileFakeTerminal.waitUntilConnected(a)
         XCTAssertTrue(connected)
+        let fed = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            a.terminal.isSurfaceReady && a.terminal.router.isFeedingSurface
+        }
+        XCTAssertTrue(fed, "surface 没接上字节")
+        let fake = try XCTUnwrap(handles.issued.first)
         a.focusKeyboard()
 
         if UITextInputMode.activeInputModes.contains(where: { $0.primaryLanguage?.hasPrefix("en") == true }) {
             XCTAssertEqual(view.textInputMode?.primaryLanguage?.hasPrefix("en"), true)
         }
 
+        let before = await fake.writes.count
         view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0))
-        let overlay = view.subviews.compactMap { $0 as? UILabel }.first { $0.text == "ni" }
-        let label = try XCTUnwrap(overlay, "组字中的文字应当显示在终端上")
-        XCTAssertFalse(label.isHidden)
-        if let caret = view.textInputCaretFrame {
-            XCTAssertEqual(label.frame.minY, caret.minY, accuracy: 0.5, "叠层贴着光标那一行")
-            XCTAssertEqual(view.caretRect(for: view.beginningOfDocument), caret, "候选框跟着光标，而不是整个视图")
-        }
+        XCTAssertNotNil(view.markedTextRange, "组字中")
+        // 候选框锚点：比引擎报的上移一行（见 `MGhosttyTerminalView.liftedOneRow`），高度是一行、落在视图里。
+        let caret = view.caretRect(for: view.beginningOfDocument)
+        XCTAssertGreaterThan(caret.height, 0)
+        XCTAssertTrue(view.bounds.insetBy(dx: -1, dy: -1).contains(CGPoint(x: caret.minX, y: caret.midY)),
+                      "候选框锚点不在视图里：\(caret)")
+        try await Task.sleep(for: .milliseconds(200))
+        let composing = await fake.writes.count
+        XCTAssertEqual(composing, before, "组字期间不该往后端发字")
 
         view.setMarkedText("你", selectedRange: NSRange(location: 1, length: 0))
-        XCTAssertEqual(label.text, "你")
-        view.unmarkText()
-        XCTAssertTrue(label.isHidden, "上屏后叠层收起")
+        view.insertText("你")
+        XCTAssertNil(view.markedTextRange, "上屏后组字结束")
+        var sent = Data()
+        for _ in 0..<100 {
+            sent = await fake.writes.dropFirst(before).reduce(Data(), +)
+            if !sent.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(String(decoding: sent, as: UTF8.self), "你", "上屏的字发给后端")
         a.close()
     }
 }

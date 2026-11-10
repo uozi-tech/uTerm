@@ -9,13 +9,13 @@ import SwiftData
 /// `MobileTerminalController` 本轮已经把后端抽成了 `TerminalBackend` +
 /// `MobileTerminalTransportFactory`（见 `uTermMobile/Screens/Terminal/MobileTerminalTransport.swift`）。
 /// 所以这里走的是**正门**：注入一个返回 `MobileFakeTerminalTransport` 的工厂，
-/// 控制器整条真实路径（`connect()` → 状态翻 `.connected` → 输出泵 → 有界缓冲 →
-/// 按帧 `feed(byteArray:)` 进 SwiftTerm）原样跑起来，只是底下没有 socket。
+/// 控制器整条真实路径（`connect()` → 状态翻 `.connected` → `GhosttyTerminalBridge.bind` 的入站任务 →
+/// `GhosttyOutputRouter` 分流：影子终端当场同步解析，画面的 surface 就绪后再吃）原样跑起来，只是底下没有 socket。
 ///
 /// 因此这些都是**真的**被量到的：
-/// - `TerminalOutputBuffer` 的入队 / 合并 / drain 节流；
-/// - `TerminalOutputPump`（`MobileTerminalController` 持有）每 16ms 一次的 `feed`；
-/// - SwiftTerm 自己的解析与重绘（vendored，不动）；
+/// - 入站任务与 `GhosttyOutputRouter` 的切片 / 闸门（surface 积压时的背压）；
+/// - 影子终端（`ShadowTerminal`）的同步解析——surface 在不在它都吃；
+/// - surface 建好之后 GhosttyKit 在自己线程上的解析与按 vsync 的重画（不走输出泵，主线程不参与解析）；
 /// - `TerminalScreen` 的 `ZStack + ForEach(tabs)` 全常驻挂载。
 ///
 /// 已知局限：`SSHConnection` 的握手 / 认证 / 跳板机那一段不在这条路径上——
@@ -26,7 +26,7 @@ import SwiftData
 /// 一份输出脚本：吐多快、吐多久、吐什么形状的字节。
 struct MobileFakeTerminalScript: Sendable {
 
-    /// 语料风格 —— 决定每行里有多少 ANSI 控制序列要 SwiftTerm 去解析。
+    /// 语料风格 —— 决定每行里有多少 ANSI 控制序列要终端去解析。
     enum Corpus: String, Sendable, CaseIterable {
         /// 纯 ASCII 行，无转义序列（`yes` / `cat 纯文本` 的下界）。
         case plain
@@ -243,7 +243,7 @@ actor MobileFakeTerminalTransport: TerminalBackend {
         exitContinuation.yield()
     }
 
-    /// 立刻同步吐若干行（不走节拍）。用来量「一批字节从 buffer 到 SwiftTerm 要多久」。
+    /// 立刻同步吐若干行（不走节拍）。用来量「一批字节从后端输出流到终端要多久」。
     @discardableResult
     func emitBurst(lines: Int) -> Int {
         var blob = Data()
@@ -519,28 +519,36 @@ enum MobileTerminalLoad {
 
 // MARK: - 终端「吃进了多少输出」的可观测计数
 
-/// 一个会话的终端视图到底消费了多少输出 —— 判「非活动 tab 是不是还在全量渲染」的判据。
+/// 一个会话的终端到底消费了多少输出。
 ///
-/// `MobileTerminalController.outputBuffer` 是 `private`，`@testable` 也够不到；
-/// 但 SwiftTerm 的 `Terminal` 是公开的，两个计数随 `feed` 单调推进：
-/// - `getTopVisibleRow()`：滚出屏幕（进 scrollback）的行号，喂得越多越大；
-/// - `getCursorLocation().y`：scrollback 还没填满时靠它推进。
+/// 读的是影子终端（`controller.terminal.shadow`）：后端来的字节永远先进它、当场同步解析，surface 在不在
+///（标签没露出过、隐藏久了被放掉、App 在后台）都一样。三个计数随喂入推进：
+/// - `topRow`：滚出屏幕（进回滚）的行数 = 活动屏总行数 − 网格行数，喂得越多越大；**回滚满了（iOS 1 万行）就不再涨**；
+/// - `cursorY`：回滚还没开始涨时靠光标行推进；
+/// - `fedBytes`：影子累计解析的字节数，不饱和。
 ///
-/// 两者相加当一个「已消费行数」的下界代理。**只比同轮的相对值**。
+/// `advanced`（前两者相加）当一个「已消费行数」的下界代理，**只比同轮的相对值**；输出量会把回滚顶满的档位看 `fedBytes`。
+///
+/// 语义和换引擎之前不一样的地方：以前读的是终端视图自己的缓冲，非活动标签被输出泵降频时它涨得慢；现在所有标签的影子
+/// 都全量解析（不画的是 surface），所以活动 / 非活动标签的这组计数应该接近。要判「隐藏的标签还画不画」得看交帧数
+///（`GhosttyPresentLog.perLayerCounts()`），不是这里。
 @MainActor
 enum MobileTerminalConsumption {
 
     struct Count: Sendable, Equatable {
         let topRow: Int
         let cursorY: Int
-        /// 单调推进的合成计数。
+        /// 影子终端累计解析的字节数。
+        var fedBytes = 0
+        /// 单调推进的合成计数（回滚顶满之后停住）。
         var advanced: Int { topRow + cursorY }
     }
 
     static func read(_ controller: MobileTerminalController) -> Count {
-        guard let view = controller.terminalView else { return Count(topRow: 0, cursorY: 0) }
-        let terminal = view.getTerminal()
-        return Count(topRow: terminal.getTopVisibleRow(), cursorY: terminal.getCursorLocation().y)
+        let shadow = controller.terminal.shadow
+        return Count(topRow: max(0, shadow.totalRows - shadow.size.rows),
+                     cursorY: shadow.cursor.y,
+                     fedBytes: shadow.totalFedBytes)
     }
 
     /// 读一屏会话的消费计数（同序）。

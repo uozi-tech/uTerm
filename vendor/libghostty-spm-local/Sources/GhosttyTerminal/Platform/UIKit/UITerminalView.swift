@@ -34,6 +34,8 @@
             /// uTerm 本地补丁：单指滚动交给 UIScrollView（见 +SystemScroll）。
             var systemScroll: SystemScrollState = .init()
         #endif
+        /// uTerm 本地补丁：宿主把 surface 放掉了（见 +UTermHost）。放掉期间视图照常挂着，只是不重建 surface。
+        var uTermSurfaceReleased = false
 
         lazy var selectionContextMenuInteraction = UIContextMenuInteraction(delegate: self)
         lazy var inputHandler = TerminalTextInputHandler(view: self)
@@ -203,7 +205,11 @@
             isUserInteractionEnabled = true
             updateDisplayScale()
 
-            core.isAttached = { [weak self] in self?.window != nil }
+            // uTerm 本地补丁：宿主放掉 surface 期间当作没挂上，布局、回窗口都不重建。
+            core.isAttached = { [weak self] in
+                guard let self else { return false }
+                return window != nil && !uTermSurfaceReleased
+            }
             core.displayLinkContext = .view(self)
             core.scaleFactor = { [weak self] in
                 Double(self?.resolvedDisplayScale() ?? UITerminalView.fallbackDisplayScale)

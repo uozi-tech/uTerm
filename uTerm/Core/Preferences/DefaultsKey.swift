@@ -133,14 +133,6 @@ nonisolated enum DefaultsKey {
     static let debugLayoutDiagnostics = "debug.layoutDiagnostics"
     /// macOS 试验：终端窗格改用 GhosttyKit（libghostty）渲染，默认关。见 `docs/ghostty-eval/macos-spike.md`。
     static let terminalGhosttyRenderer = "debug.terminalGhosttyRenderer"
-    /// iOS Debug 构建、Ghostty 评估分支临时：新开的终端标签改用 GhosttyKit（设置 › 诊断 › 调试）。不进 main。
-    static let debugGhosttyTrial = "debug.ghosttyTrial"
-    /// 同上，排查试用版滚动手感时打开 GhosttyKit 的输入日志（`defaults write` 手动设）。
-    static let debugGhosttyInputLog = "debug.ghosttyInputLog"
-    /// 同上，M16 第七轮 A/B：打开 = 第六轮行为（引擎 wakeup 不在主线程同步重画，渲染线程自由出帧）；关（默认）= 第五轮行为。
-    static let debugGhosttyFreeRenderer = "debug.ghosttyFreeRenderer"
-    /// 同上，M16 第十轮 A/B：打开 = 第九轮的自写拖动 / 惯性 / 回弹；关（默认）= 单指滚动交给 UIScrollView（系统滚动）。
-    static let debugGhosttyOwnScrollPhysics = "debug.ghosttyOwnScrollPhysics"
 
     // MARK: - 系统定义的键（键名属于 macOS，不是我们的设置）
 

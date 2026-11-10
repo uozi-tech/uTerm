@@ -1,28 +1,17 @@
-#if DEBUG
 import GhosttyTerminal
 import UIKit
 import XCTest
 @testable import uTermMobile
 
-/// M16「Ghostty 试用」入口的接线（不点界面）：开关打开后新建的控制器走 GhosttyKit，
-/// 后端输出进 Ghostty、软键盘输入与键盘条按键回到后端、粘滞 Ctrl 状态同步到控制器。
+/// 会话控制器与终端的接线（不点界面）：后端输出进终端、软键盘输入与键盘条按键回到后端、粘滞 Ctrl 状态同步到控制器，
+/// 键盘条的键由终端按当前模式编码。类名沿用评估期的（那时终端引擎要靠「Ghostty 试用」开关才走得到，现在只有这一条路径）。
 @MainActor
 final class GhosttyTrialWiringTests: XCTestCase {
     func testTrialControllerRoutesThroughGhostty() async throws {
-        let defaults = UserDefaults.standard
-        let previous = defaults.object(forKey: DefaultsKey.debugGhosttyTrial)
-        defaults.set(true, forKey: DefaultsKey.debugGhosttyTrial)
-        // 测试宿主与装机版共用偏好：用完原样放回，别把用户的开关改掉。
-        defer {
-            if let previous { defaults.set(previous, forKey: DefaultsKey.debugGhosttyTrial) }
-            else { defaults.removeObject(forKey: DefaultsKey.debugGhosttyTrial) }
-        }
-
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
         let (controller, handles) = MobileFakeTerminal.controller(.idle)
-        let bridge = try XCTUnwrap(controller.ghostty, "开关打开后新控制器应当带 Ghostty bridge")
-        XCTAssertNil(controller.terminalView)
+        let bridge = controller.terminal
 
         let window = try makeSpikeWindow(size: CGSize(width: 393, height: 600))
         defer { bridge.view.removeFromSuperview(); window.isHidden = true }
@@ -32,8 +21,10 @@ final class GhosttyTrialWiringTests: XCTestCase {
         controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
         let connected = await MobileFakeTerminal.waitUntilConnected(controller)
         XCTAssertTrue(connected)
-        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.surface != nil && bridge.grid != nil }
-        XCTAssertTrue(ready, "Ghostty surface 没建起来")
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+        }
+        XCTAssertTrue(ready, "surface 没建起来或没接上字节")
 
         controller.ownsKeyboard = true
         controller.focusKeyboard()
@@ -67,10 +58,79 @@ final class GhosttyTrialWiringTests: XCTestCase {
         controller.close()
     }
 
-    /// 试用入口的配色 / 字体 / 留白和 SwiftTerm 标签一致（M16 反馈：底色、光标颜色不对，左右露出两条）。
+    /// 键盘条的方向键由终端按当前模式编码：普通模式 `ESC [ D`，程序开了应用光标键（DECCKM：vim、less、htop）发 `ESC O D`。
+    /// 换引擎之前键盘条固定发 `ESC [ D`，在这些程序里方向键不认。上膛的 Ctrl 作用在键盘条的键上（Ctrl+←）并用完复位。
+    func testKeyBarArrowsFollowCursorKeyModeAndStickyControl() async throws {
+        let container = try MobileFixtures.modelContainer(seed: .smoke)
+        let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
+        // 不回显：发出去的按键不要再被当成输出喂回来。
+        let (controller, handles) = MobileFakeTerminal.controller(
+            MobileFakeTerminalScript(linesPerSecond: 0, seconds: 0, corpus: .plain, echoesInput: false))
+        let bridge = controller.terminal
+        let window = try makeSpikeWindow(size: CGSize(width: 393, height: 600))
+        defer { bridge.view.removeFromSuperview(); window.isHidden = true }
+        bridge.view.frame = window.bounds
+        window.addSubview(bridge.view)
+        controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
+        let connected = await MobileFakeTerminal.waitUntilConnected(controller)
+        XCTAssertTrue(connected)
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.isSurfaceReady && bridge.router.isFeedingSurface
+        }
+        XCTAssertTrue(ready, "surface 没建起来或没接上字节")
+        let transport = try XCTUnwrap(handles.latest)
+        let left = try XCTUnwrap(TerminalKeyCatalog.arrows.first { $0.label == "←" })
+        let up = try XCTUnwrap(TerminalKeyCatalog.arrows.first { $0.label == "↑" })
+
+        /// 发一个键，返回后端因此多收到的字节。
+        func bytes(of key: uTermMobile.TerminalKey) async throws -> [UInt8] {
+            let before = await transport.writes.count
+            controller.sendKey(key)
+            for _ in 0..<100 {
+                if await transport.writes.count > before { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            return await transport.writes.dropFirst(before).flatMap { [UInt8]($0) }
+        }
+
+        let normalLeft = try await bytes(of: left)
+        XCTAssertEqual(normalLeft, Array("\u{1b}[D".utf8), "普通模式方向键发 CSI")
+
+        // 程序开应用光标键。
+        bridge.feed(Data("\u{1b}[?1h".utf8))
+        bridge.session.waitForPendingOutput()
+        let appLeft = try await bytes(of: left)
+        XCTAssertEqual(appLeft, Array("\u{1b}OD".utf8), "应用光标键下方向键发 SS3")
+        let appUp = try await bytes(of: up)
+        XCTAssertEqual(appUp, Array("\u{1b}OA".utf8))
+
+        // 关掉之后回到 CSI。
+        bridge.feed(Data("\u{1b}[?1l".utf8))
+        bridge.session.waitForPendingOutput()
+        let backToNormal = try await bytes(of: up)
+        XCTAssertEqual(backToNormal, Array("\u{1b}[A".utf8))
+
+        // Ctrl 上膛后点 ←：发 Ctrl+←（xterm 的修饰键编码），用完复位。
+        controller.toggleControl()
+        XCTAssertTrue(controller.controlArmed)
+        let controlLeft = try await bytes(of: left)
+        XCTAssertEqual(controlLeft, Array("\u{1b}[1;5D".utf8), "Ctrl 上膛后点 ← 发 Ctrl+←")
+        XCTAssertFalse(controller.controlArmed, "Ctrl 被键盘条的键用掉后应当复位")
+
+        // 发提示词前清掉上膛的修饰键：不落到之后的字符上。
+        controller.toggleAlt()
+        XCTAssertTrue(controller.altArmed)
+        controller.clearStickyModifiers()
+        XCTAssertFalse(controller.altArmed)
+
+        controller.close()
+    }
+
+    /// 终端的配色 / 留白和 uTerm 的终端底色对得上（M16 反馈过：底色、光标颜色不对，左右露出两条）。
     /// 照 `TerminalSessionBody` 的排法：外层 8pt 左右边距铺 uTerm 终端底色，里面是终端视图；深 / 浅各截一张整窗图
-    ///（SwiftTerm 在上半、Ghostty 在下半），并核终端区角上与留白条的像素都等于 uTerm 的底色。
-    func testTrialColorsAndInsetsMatchSwiftTerm() async throws {
+    ///（上半是纯 UIView 铺的底色当参照，终端在下半），并核终端区角上与留白条的像素都等于参照。
+    func testTerminalColorsAndInsetsMatchTheSurroundingSurface() async throws {
         let size = CGSize(width: 440, height: 760)
         let half = size.height / 2
         let inset = TerminalSessionBody.terminalInset.horizontal
@@ -84,29 +144,21 @@ final class GhosttyTrialWiringTests: XCTestCase {
             window.backgroundColor = .magenta   // 哪里没铺到一眼可见
             defer { window.isHidden = true }
 
-            // 上半：SwiftTerm（与 SwiftTermView 同样装配）。
-            let stBack = UIView(frame: CGRect(x: 0, y: 0, width: size.width, height: half))
-            stBack.backgroundColor = scheme.backgroundColor
-            window.addSubview(stBack)
-            let stView = MTerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
-            stView.contentInsetAdjustmentBehavior = .never
-            TerminalAppearance.applyColors(to: stView, scheme: scheme)
-            TerminalAppearance.applyCursor(to: stView, scheme: scheme, shape: .block, blink: false)
-            stView.backgroundColor = scheme.backgroundColor
-            let stContainer = MTerminalContainerView(terminalView: stView, fontSize: 11)
-            stContainer.frame = CGRect(x: inset, y: 0, width: size.width - inset * 2, height: half)
-            window.addSubview(stContainer)
-            stContainer.layoutIfNeeded()
-            stView.feed(text: sample)
+            // 上半：纯 UIView 铺终端底色，当参照。
+            let reference = UIView(frame: CGRect(x: 0, y: 0, width: size.width, height: half))
+            reference.backgroundColor = scheme.backgroundColor
+            window.addSubview(reference)
 
-            // 下半：Ghostty（试用入口同一个 controller 配置）。
+            // 下半：终端（和生产同一份 controller 配置）。
             let ghBack = UIView(frame: CGRect(x: 0, y: half, width: size.width, height: half))
             ghBack.backgroundColor = scheme.backgroundColor
             window.addSubview(ghBack)
             let bridge = GhosttyTerminalBridge(controller: controller,
                                                frame: CGRect(x: inset, y: half, width: size.width - inset * 2, height: half))
             window.addSubview(bridge.view)
-            let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.surface != nil && bridge.grid != nil }
+            let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+                bridge.isSurfaceReady && bridge.router.isFeedingSurface
+            }
             XCTAssertTrue(ready)
             bridge.feed(Data(sample.utf8))
             bridge.session.waitForPendingOutput()
@@ -131,8 +183,8 @@ final class GhosttyTrialWiringTests: XCTestCase {
                                             width: CGFloat(cg.width), height: CGFloat(cg.height)))
                 return (buffer[0], buffer[1], buffer[2])
             }
-            // 参照取同一张图里纯 UIView 铺的底色（上半右侧没字的地方），不拿配色常量比：浅色下整张截图
-            // 实测是 #F9F9F9 而不是 #FFFFFF（SwiftTerm、纯 UIView 都一样，是截图这一步的偏差）。
+            // 参照取同一张图里纯 UIView 铺的底色（上半），不拿配色常量比：浅色下整张截图
+            // 实测是 #F9F9F9 而不是 #FFFFFF（纯 UIView 也一样，是截图这一步的偏差）。
             let want = pixel(CGPoint(x: size.width - inset / 2, y: half / 2))
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             scheme.backgroundColor.getRed(&r, green: &g, blue: &b, alpha: &a)
@@ -142,7 +194,6 @@ final class GhosttyTrialWiringTests: XCTestCase {
                 ("ghostty 左留白", CGPoint(x: inset / 2, y: half + half / 2)),
                 ("ghostty 右留白", CGPoint(x: size.width - inset / 2, y: half + half / 2)),
                 ("ghostty 终端区中下", CGPoint(x: size.width / 2, y: size.height - 30)),
-                ("swiftterm 右下角", CGPoint(x: size.width - inset - 4, y: half - 4)),
             ]
             for (name, point) in probes {
                 let got = pixel(point)
@@ -150,10 +201,9 @@ final class GhosttyTrialWiringTests: XCTestCase {
                 XCTAssertTrue(abs(Int(got.0) - Int(want.0)) <= 2 && abs(Int(got.1) - Int(want.1)) <= 2 && abs(Int(got.2) - Int(want.2)) <= 2,
                               "\(dark ? "深" : "浅")色 \(name) 不是终端底色：\(got) vs \(want)")
             }
-            print("MEASURE m16 \(dark ? "dark" : "light") grid swiftterm=\(stView.getTerminal().cols)x\(stView.getTerminal().rows) ghostty=\(String(describing: bridge.grid)) issue=\(controller.lastConfigurationIssue ?? "-")")
+            print("MEASURE m16 \(dark ? "dark" : "light") grid ghostty=\(String(describing: bridge.grid)) issue=\(controller.lastConfigurationIssue ?? "-")")
             bridge.view.removeFromSuperview()
-            stContainer.removeFromSuperview()
+            reference.removeFromSuperview()
         }
     }
 }
-#endif

@@ -1,5 +1,4 @@
 import Network
-import SwiftTerm
 import SwiftUI
 import XCTest
 @testable import uTermMobile
@@ -11,7 +10,6 @@ final class MobileTabCloseFlowTests: XCTestCase {
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let host = try XCTUnwrap(MobileFixtures.firstServer(in: container))
         let (tab, handles) = MobileFakeTerminal.tab(host: host, MobileFakeTerminalScript(linesPerSecond: 0, seconds: 0))
-        tab.controller.attach(SwiftTerm.TerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 500)))
         tab.controller.start(profile: host, container: container, relay: HostKeyChallengeRelay())
         let isConnected = await MobileFakeTerminal.waitUntilConnected(tab.controller)
         XCTAssertTrue(isConnected)

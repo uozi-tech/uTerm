@@ -14,7 +14,9 @@
                 identifier: UIAction.Identifier("terminal.paste"),
             ) { [weak self] _ in
                 self?.dismissTouchSelection()
-                self?.pasteFromPasteboard()
+                // uTerm 本地补丁：走可覆写的 `paste(_:)`（它默认就是 pasteFromPasteboard），宿主子类才接得到长按菜单里的粘贴
+                //（uTerm 把只有图片的剪贴板当贴图传到远端）。
+                self?.paste(nil)
             }
             let select = UIAction(
                 title: String(localized: "Select", bundle: .module),

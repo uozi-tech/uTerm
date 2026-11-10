@@ -27,7 +27,6 @@ struct SettingsDiagnosticsSection: View {
         }
         #if DEBUG
         DebugLayoutDiagnosticsGroup()
-        DebugGhosttyTrialGroup()
         #endif
     }
 }
@@ -42,26 +41,6 @@ private struct DebugLayoutDiagnosticsGroup: View {
             MInsetRow(label: "布局诊断", last: true,
                       trailing: AnyView(MSwitch(on: $layoutDiagnostics)))
         }
-    }
-}
-
-/// 仅 Debug 构建、Ghostty 评估分支临时（不进 main）：新开的终端标签改用 GhosttyKit，给人比手感（测量门 M16）。
-private struct DebugGhosttyTrialGroup: View {
-    @AppStorage(DefaultsKey.debugGhosttyTrial) private var ghosttyTrial = false
-    @AppStorage(DefaultsKey.debugGhosttyFreeRenderer) private var freeRenderer = false
-    @AppStorage(DefaultsKey.debugGhosttyOwnScrollPhysics) private var ownScrollPhysics = false
-
-    var body: some View {
-        MInsetGroup(header: "引擎试用", footer: "打开后，之后新开的终端标签由 GhosttyKit 绘制（已开着的标签不变）。用来和 SwiftTerm 比滚动、选区、键盘的手感。「渲染不同步」是第六轮的做法（主线程不再跟着重画），关着是第五轮的做法，切换立即生效，用来比滚动时糊不糊。「自写滚动物理」是第九轮的拖动 / 惯性 / 回弹，关着（默认）单指滚动交给系统的 UIScrollView，下一次按下起生效。仅 Debug 构建可见。") {
-            MInsetRow(label: "Ghostty 试用",
-                      trailing: AnyView(MSwitch(on: $ghosttyTrial)))
-            MInsetRow(label: "渲染不同步（第六轮）",
-                      trailing: AnyView(MSwitch(on: $freeRenderer)))
-            MInsetRow(label: "自写滚动物理（第九轮）", last: true,
-                      trailing: AnyView(MSwitch(on: $ownScrollPhysics)))
-        }
-        .onChange(of: freeRenderer) { GhosttyTrial.applyRendererMode() }
-        .onChange(of: ownScrollPhysics) { GhosttyTrial.applyRendererMode() }
     }
 }
 #endif

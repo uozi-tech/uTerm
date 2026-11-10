@@ -14,6 +14,11 @@ import XCTest
 /// - Core Animation 提交（CA 的 2000000 号 observer 前后）；
 /// - 主线程这一拍的总忙时（runloop 醒来到睡下）；其余的算「其他」（SwiftUI、输出、UIKit）。
 /// 按这一拍惯性跨了几行分桶，给 p50 / p95 / max。上屏是否赶上 vsync 用 `GhosttyOnScreenScrollTests` 的条码解码。
+///
+/// 这组读数量的是 iOS 现在唯一的行为：引擎 wakeup 也在主线程同步重画（`UTermScrollTrace.wakeupDrawsSynchronously`，
+/// 第五轮 / 第七轮起的默认）。第六轮「wakeup 不同步重画」的 A/B 开关已经从本地包里拿掉，原来按第六轮定的两条门槛
+///（甩动期间 tick-draw 0 次、跨行拍主线程忙时 p95 < 2 ms）在同步重画下不成立，改成只打印，见 `summarize` 和
+/// `testRoundSixThresholdsWithoutSyncDraw`。
 @MainActor
 final class GhosttyFrameBudgetTests: XCTestCase {
     typealias OnScreen = GhosttyOnScreenScrollTests
@@ -24,7 +29,6 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     override func tearDown() async throws {
         UTermScrollTrace.isEnabled = false
-        UTermScrollTrace.legacyWakeupSyncDraw = false
     }
 
     private final class Pan: UIPanGestureRecognizer {
@@ -114,8 +118,6 @@ final class GhosttyFrameBudgetTests: XCTestCase {
     private func measure(label: String, view: MGhosttyTerminalView, velocityPx: Double, output: Bool,
                          feed: @escaping @MainActor (String) async -> Void,
                          frame: @escaping @MainActor (Int) -> String) async throws -> [Frame] {
-        // 量的是第六轮的做法（wakeup 不在主线程同步重画）；工作区里建 bridge 时会按设置切到第五轮，这里显式切回来。
-        UTermScrollTrace.legacyWakeupSyncDraw = false
         let cell = try XCTUnwrap(view.uTermCellPixels)
         let cellPx = Double(cell.height)
         let scale = Double(view.window?.screen.nativeScale ?? 3)
@@ -230,10 +232,11 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     private static let velocities: [Double] = [6000, 12000, 20000]
 
-    /// 打印分桶，并核回归门槛：
-    /// - 甩动期间主线程不再同步整帧重画（tick-draw 0 次；修前每个跨行的拍一次，2.1 ms、最长 5.5 ms）；
-    /// - 跨行的拍主线程忙时 p95 < 2 ms（修前约 3.1 ms）；
-    /// - 赶不上 vsync 的拍、惯性 link 跳拍各不超过 2 拍（每组约 1,000 拍）。
+    /// 打印分桶，并核回归门槛：赶不上 vsync 的拍、惯性 link 跳拍各不超过 2 拍（每组约 1,000 拍）。
+    ///
+    /// 只打印、不再设门槛的两项（`BUDGET-SYNC-DRAW` 行）：甩动期间主线程同步整帧重画的次数、跨行拍的主线程忙时 p95。
+    /// 它们原来的门槛（0 次、< 2 ms）是第六轮「wakeup 不同步重画」下的读数；iOS 现在定死同步重画，
+    /// 每个跨行的拍都会画一次（18 Pro Max 上 2.1 ms 上下，跨行拍主线程忙时 p95 约 3.1 ms），那两条不成立。
     private func summarize(_ all: [String: [Frame]]) {
         for (key, frames) in all.sorted(by: { $0.key < $1.key }) {
             for rows in 0...4 {
@@ -241,10 +244,10 @@ final class GhosttyFrameBudgetTests: XCTestCase {
                 if !bucket.isEmpty { print("BUDGET-ALL \(key) " + bucketLine(bucket, label: "rows=\(rows < 4 ? "\(rows)" : "4+")")) }
             }
             let crossing = frames.filter { $0.rows > 0 }
-            XCTAssertEqual(frames.map(\.tickDraws).reduce(0, +), 0, "\(key)：甩动期间主线程还在同步重画")
-            XCTAssertLessThan(pct(crossing.map(\.busy), 0.95), 2.0, "\(key)：跨行的拍主线程忙时 p95")
+            print(String(format: "BUDGET-SYNC-DRAW %@ tick-draws=%d crossing-frames=%d crossing-busy-p95=%.2fms", key,
+                         frames.map(\.tickDraws).reduce(0, +), crossing.count, pct(crossing.map(\.busy), 0.95)))
             // 每组约 1,000 拍；手机刚解锁、系统忙时偶尔有一两拍被系统占走（主线程「其他」一下 10 ms 以上），
-            // 门槛留 2 拍。修前不是这个量级：主线程同步重画每跨一行一次。
+            // 门槛留 2 拍。
             XCTAssertLessThanOrEqual(frames.filter(\.late).count, 2, "\(key)：没赶上 vsync 的拍")
             XCTAssertLessThanOrEqual(frames.filter(\.skippedBefore).count, 2, "\(key)：惯性 link 跳拍")
         }
@@ -281,13 +284,6 @@ final class GhosttyFrameBudgetTests: XCTestCase {
 
     /// 整个工作区界面（SwiftUI 外壳、标签条、键盘条，输出走假 SSH 后端经控制器进 Ghostty）。
     func testFrameBudgetInWorkspace() async throws {
-        let defaults = UserDefaults.standard
-        let previous = defaults.object(forKey: DefaultsKey.debugGhosttyTrial)
-        defaults.set(true, forKey: DefaultsKey.debugGhosttyTrial)
-        defer {
-            if let previous { defaults.set(previous, forKey: DefaultsKey.debugGhosttyTrial) }
-            else { defaults.removeObject(forKey: DefaultsKey.debugGhosttyTrial) }
-        }
         defer { MobileProbeWindow.closeAll() }
         let container = try MobileFixtures.modelContainer(seed: .smoke)
         let server = try XCTUnwrap(MobileFixtures.firstServer(in: container))
@@ -306,8 +302,11 @@ final class GhosttyFrameBudgetTests: XCTestCase {
         tab.controller.start(profile: server, container: container, relay: relay)
         let connected = await MobileFakeTerminal.waitUntilConnected(tab.controller)
         XCTAssertTrue(connected)
-        let bridge = try XCTUnwrap(tab.controller.ghostty)
-        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) { bridge.view.surface != nil && bridge.grid != nil }
+        let bridge = tab.controller.terminal
+        // surface 建好、网格到位、画面开始吃字节之后再喂：就绪之前喂的只进影子，要等一次回放才上屏。
+        let ready = await MobileFakeTerminal.waitUntil(timeout: .seconds(5)) {
+            bridge.view.surface != nil && bridge.grid != nil && bridge.isSurfaceReady && bridge.router.isFeedingSurface
+        }
         XCTAssertTrue(ready)
         defer { tab.controller.close() }
         let transport = try XCTUnwrap(handles.latest)
@@ -332,5 +331,15 @@ final class GhosttyFrameBudgetTests: XCTestCase {
             }
         }
         summarize(all)
+    }
+
+    /// 第六轮定的两条门槛只在「引擎 wakeup 不在主线程同步重画」下成立：
+    /// - 甩动期间主线程同步整帧重画 0 次（`tick-draw`）；
+    /// - 跨行的拍主线程忙时 p95 < 2 ms。
+    /// 那个 A/B 开关已经从本地包里拿掉，iOS 定死同步重画（第七轮 user 在真机上说不同步时滚动发糊）。两个数还在
+    /// `BUDGET-SYNC-DRAW` 行里打印，上面两条用例照跑、照核「赶上 vsync」和「link 不跳拍」。
+    func testRoundSixThresholdsWithoutSyncDraw() throws {
+        throw XCTSkip("「wakeup 不同步重画」（第六轮）的 A/B 开关已删，iOS 恒为主线程同步重画："
+            + "tick-draw 0 次、跨行拍主线程忙时 p95 < 2 ms 这两条门槛不再成立，只在 BUDGET-SYNC-DRAW 行里打印")
     }
 }
