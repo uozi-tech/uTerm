@@ -69,17 +69,18 @@ final class RemoteLocalShellTests: XCTestCase {
         let backend = RemoteTerminalBackend(client: client, sessionID: sessionID)
         await backend.resize(cols: 60, rows: 20)
         try await backend.connect()
-        var output = Data()
-        let pump = Task { @MainActor in
-            for await chunk in backend.outputStream { output.append(chunk) }
-        }
-        defer { pump.cancel() }
+        // 手机端：影子终端 + 输出泵，吃后端的 `outputItems`（先是整屏快照，之后是原样字节）。
+        let phone = MirrorPhone(cols: 60, rows: 20)
+        phone.start(backend.outputItems)
+        defer { phone.stop() }
         await backend.write(Data("ls\r".utf8))
         let wrote = await waitUntil { await shellBackend.writtenData.contains(Data("ls\r".utf8)) }
         XCTAssertTrue(wrote)
         await shellBackend.emitOutput(Data("hello-from-mac\r\n".utf8))
-        let echoed = await waitUntil { String(decoding: output, as: UTF8.self).contains("hello-from-mac") }
-        XCTAssertTrue(echoed)
+        let echoed = await waitUntil { phone.shadow.recentLines(5).lines.contains("hello-from-mac") }
+        XCTAssertTrue(echoed, "手机端的画面：\(phone.shadow.recentLines(5).lines)")
+        XCTAssertGreaterThanOrEqual(phone.snapshots, 1, "接入后先到一张整屏快照")
+        XCTAssertEqual(shell.shadow.size.cols, 60, "Mac 上的终端按手机的行列数排")
         XCTAssertNotNil(shell.remoteController, "接入后 Mac 上的本机终端标出正在被接管")
     }
 

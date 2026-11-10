@@ -169,9 +169,17 @@ final class GhosttySurfaceRig {
         return (Int(base[o + 2]), Int(base[o + 1]), Int(base[o]))
     }
 
+    /// 让 surface 继续出帧。窗口的遮挡状态变化（上一个用例的窗口刚收走、这一个刚摆上来）偶尔会让视图把自己当成
+    /// 看不见的而停掉显示节拍；读像素之前把它叫回来。
+    func keepRendering() {
+        window.orderFrontRegardless()
+        view.setSurfaceVisible(true)
+    }
+
     /// 等画面上那一格的颜色满足条件（渲染线程出帧要时间），返回最后读到的颜色。
     func waitForPixel(col: Int, row: Int, timeout: TimeInterval = 5,
                       where matches: ((r: Int, g: Int, b: Int)) -> Bool) async -> (r: Int, g: Int, b: Int)? {
+        keepRendering()
         var last: (r: Int, g: Int, b: Int)?
         _ = await waitUntil(timeout) {
             last = self.pixel(col: col, row: row)
