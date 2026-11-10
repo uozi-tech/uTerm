@@ -29,7 +29,7 @@ nonisolated struct ToolSpec: Sendable, Equatable {
                           description: "一句话说明这条命令要做什么（展示给用户）。", required: false),
         ])
 
-    private func schemaObject() -> [String: Any] {
+    func schemaObject() -> [String: Any] {
         var props: [String: Any] = [:]
         for p in parameters {
             props[p.name] = ["type": p.type, "description": p.description]

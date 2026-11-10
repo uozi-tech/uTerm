@@ -54,7 +54,11 @@ final class AnthropicClientTests: XCTestCase {
         let msgs = obj["messages"] as! [[String: Any]]
         XCTAssertEqual(msgs.count, 1)
         XCTAssertEqual(msgs[0]["role"] as? String, "user")
-        XCTAssertEqual(msgs[0]["content"] as? String, "hi")
+        // 消息内容一律是内容块数组（AgentKit 的 Anthropic 序列化）。
+        let content = try XCTUnwrap(msgs[0]["content"] as? [[String: Any]])
+        XCTAssertEqual(content.count, 1)
+        XCTAssertEqual(content[0]["type"] as? String, "text")
+        XCTAssertEqual(content[0]["text"] as? String, "hi")
     }
 
     func testStreamingDeltasParsed() async throws {

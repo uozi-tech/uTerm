@@ -433,9 +433,8 @@ final class AssistantModel {
                                conversation: [ChatMessage], system: String) async {
         guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
         do {
-            let events = withIdleTimeout(context.client.stream(
-                messages: conversation, system: system, config: context.config),
-                timeout: context.config.streamIdleTimeout)
+            let events = context.client.streamWithIdleTimeout(
+                messages: conversation, system: system, config: context.config)
             for try await event in events {
                 guard owns(operation.id, generation: operation.generation), !Task.isCancelled else { return }
                 switch event {

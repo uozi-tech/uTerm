@@ -87,8 +87,10 @@ final class AgentReasoningWiringTests: XCTestCase {
             assistant("", thinking: "new-sig", callID: "c1"),
         ]
         let msgs = AnthropicClient.buildMessages(conversation: conversation, replayThinking: true)
-        // 旧轮次：纯文本，不带 thinking。
-        XCTAssertEqual(msgs[1]["content"] as? String, "old")
+        // 旧轮次：只有文字块，不带 thinking。
+        let oldContent = try XCTUnwrap(msgs[1]["content"] as? [[String: Any]])
+        XCTAssertEqual(oldContent.map { $0["type"] as? String }, ["text"])
+        XCTAssertEqual(oldContent.first?["text"] as? String, "old")
         // 本轮：thinking 在 tool_use 之前。
         let content = try XCTUnwrap(msgs[3]["content"] as? [[String: Any]])
         XCTAssertEqual(content.first?["type"] as? String, "thinking")
