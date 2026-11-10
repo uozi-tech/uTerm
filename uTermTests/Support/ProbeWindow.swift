@@ -23,7 +23,8 @@ import AppKit
 /// - `.transparentOnScreen`：落在刷新率最高的那块屏上，但 `alphaValue = 0`。
 ///   给**判据是时间**的性能探针（心跳拍数 / 单帧 ms / hitTest µs）。窗口真的在
 ///   屏幕上（有 display link、有正常合成路径），所以读数与可见时一致；但屏幕上
-///   什么都看不见，不再抢屏。
+///   什么都看不见，不再抢屏。层级是 `.floating`（不被别的 App 的窗口遮挡，见 `make`），
+///   并且 `ignoresMouseEvents`（不吃用户的点击）。
 /// - `.visibleOnScreen`：真的可见。只给**依赖真实可见性的用例**（tooltip、真光标）。
 ///
 /// ## 为什么计时探针不能离屏：A/B 实测（2026-09-05，Debug，机器上另有构建在跑）
@@ -269,10 +270,60 @@ enum ProbeWindow {
         if let contentView { window.contentView = contentView }
         // 注意用模式匹配而不是 `== .transparentOnScreen`：后者是
         // `.transparentOnScreen(cursorAt: nil)` 的别名，带光标的那一档比不上。
-        if case .transparentOnScreen = placement { window.alphaValue = 0 }
+        if case .transparentOnScreen = placement {
+            window.alphaValue = 0
+            // 浮在普通窗口之上：别的 App 的窗口盖住探针窗口时 AppKit 报「完全遮挡」，GhosttyKit 随即停掉显示节拍、
+            // 不出新帧，读画面的用例（GhosttyMacScrollTests / GhosttyMacHostTests / GhosttySpikeTests）就读到旧画面。
+            // 2026-11-10 连跑 10 轮实测：所有失败都发生在窗口刚被报 `visible=NO` 之后（日志 `[ProbeWindow] 遮挡`）。
+            // 透明窗口之间互不遮挡，所以只怕别的 App；`.floating` 之上只剩系统浮层。
+            // `ignoresMouseEvents`：窗口看不见又浮在最上面，不能把用户的点击吃掉。
+            window.level = .floating
+            window.ignoresMouseEvents = true
+        }
         if key { window.makeKeyAndOrderFront(nil) } else { window.orderFrontRegardless() }
         logPlacementOnce(window, placement)
+        if placement != .offScreen { traceOcclusion(window) }
         return window
+    }
+
+    /// 屏内窗口的遮挡状态变化打进日志（`[ProbeWindow] 遮挡`）。读画面的用例（Ghostty 的 surface）在窗口被完全遮挡时
+    /// 收不到显示节拍、不出新帧：失败时回看这几行就知道是不是这个原因。
+    private static func traceOcclusion(_ window: NSWindow) {
+        let started = ProcessInfo.processInfo.systemUptime
+        let number = window.windowNumber
+        _ = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window,
+                                                   queue: .main) { note in
+            guard let window = note.object as? NSWindow else { return }
+            let visible = window.occlusionState.contains(.visible)
+            print(String(format: "[ProbeWindow] 遮挡 window=%d +%.2fs visible=%@ level=%d onScreen=%@%@", number,
+                         ProcessInfo.processInfo.systemUptime - started, visible ? "yes" : "NO", window.level.rawValue,
+                         window.isVisible ? "yes" : "no", visible ? "" : " 盖在上面的：\(windowsAbove(window))"))
+        }
+    }
+
+    /// 屏幕上排在这个窗口前面、和它有交叠的别的窗口（属主 App、层级、透明度）。
+    static func windowsAbove(_ window: NSWindow) -> String {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow], CGWindowID(window.windowNumber))
+                as? [[String: Any]] else { return "（读不到）" }
+        // CG 的坐标原点在主屏左上角，AppKit 在左下角。
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let frame = window.frame
+        let mine = CGRect(x: frame.minX, y: mainHeight - frame.maxY, width: frame.width, height: frame.height)
+        let hits = list.compactMap { info -> String? in
+            guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.intersects(mine) else { return nil }
+            let owner = info[kCGWindowOwnerName as String] as? String ?? "?"
+            let layer = info[kCGWindowLayer as String] as? Int ?? 0
+            let alpha = info[kCGWindowAlpha as String] as? Double ?? 1
+            return "\(owner)(layer \(layer), alpha \(alpha), \(Int(rect.width))x\(Int(rect.height)))"
+        }
+        return hits.isEmpty ? "无" : hits.joined(separator: ", ")
+    }
+
+    /// 窗口此刻的可见性（写进读画面用例的失败信息）。
+    static func visibility(_ window: NSWindow) -> String {
+        "occlusion=\(window.occlusionState.contains(.visible) ? "visible" : "OCCLUDED") level=\(window.level.rawValue) "
+            + "onScreen=\(window.isVisible) \(describe(window))"
     }
 
     /// 窗口 frame 是否真的落在所有屏幕之外。探针里可以直接断言它。

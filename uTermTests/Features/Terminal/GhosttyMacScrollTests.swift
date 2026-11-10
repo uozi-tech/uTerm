@@ -194,7 +194,9 @@ final class GhosttyMacScrollTests: XCTestCase {
     /// 画面上第一条行色带：顶边在 0、高度正好一行、颜色是 `line` 那一行的。
     private func assertAligned(_ rig: Rig, firstLine line: Int, _ label: String, file: StaticString = #filePath, line codeLine: UInt = #line) {
         let bands = rig.bands().filter { $0.key >= 0 }
-        guard let first = bands.first else { return XCTFail("\(label)：读不到行色带", file: file, line: codeLine) }
+        guard let first = bands.first else {
+            return XCTFail("\(label)：读不到行色带（\(ProbeWindow.visibility(rig.window))）", file: file, line: codeLine)
+        }
         XCTAssertEqual(first.top, 0, "\(label)：第一行的顶边不在视图顶边（\(bands.prefix(3))）", file: file, line: codeLine)
         XCTAssertEqual(first.height, rig.cell, "\(label)：第一行不是整行高（\(bands.prefix(3))）", file: file, line: codeLine)
         XCTAssertEqual(first.key, Self.key(ofLine: line), "\(label)：第一行不是第 \(line) 行（\(bands.prefix(3))）", file: file, line: codeLine)

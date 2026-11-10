@@ -243,7 +243,7 @@ final class GhosttySpikeTests: XCTestCase {
         let cacheInk = rep.map(VisionTextProbe.inkFraction) ?? -1
         let surfaceInk = ioSurfaceBitmap(of: bridge.view).map(VisionTextProbe.inkFraction) ?? -1
         print("[GhosttySpike] snapshot cacheDisplayInk=\(cacheInk) ioSurfaceInk=\(surfaceInk)")
-        XCTAssertGreaterThan(surfaceInk, 0.01, "Ghostty 的 IOSurface 截图是空的")
+        XCTAssertGreaterThan(surfaceInk, 0.01, "Ghostty 的 IOSurface 截图是空的（\(ProbeWindow.visibility(window))）")
     }
 
     // MARK: - 截图（Ghostty 画在 IOSurface 上，AppKit 的 cacheDisplay 抓不到）

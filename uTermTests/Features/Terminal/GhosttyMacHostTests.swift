@@ -155,7 +155,7 @@ final class GhosttyMacHostTests: XCTestCase {
 
         await emit((1...300).map { "line \($0)\r\n" }.joined(), to: rig.backend)
         let hasHistory = await waitUntil(5) { (rig.view.uTermScrollbarOffset ?? 0) > 0 }
-        XCTAssertTrue(hasHistory, "喂了 300 行应当有回滚")
+        XCTAssertTrue(hasHistory, "喂了 300 行应当有回滚（\(ProbeWindow.visibility(rig.window))）")
         await sleep(0.2)
         XCTAssertFalse(indicator.isShown, "有回滚但没滚动：不显示")
 
