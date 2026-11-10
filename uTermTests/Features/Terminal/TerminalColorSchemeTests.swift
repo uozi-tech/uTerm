@@ -48,37 +48,7 @@ final class TerminalColorSchemeTests: XCTestCase {
         XCTAssertEqual(scheme.ansiColors[11].blue, 0x00)
     }
 
-    // 【迁移中，暂未编译】下面两条核的是渲染期最低对比度的钳制算法（SwiftTerm 补丁 #1 的 `TerminalContrast`）。
-    // 现在钳制在引擎的 shader 里（补丁 0022），等价行为要读 surface 画出来的像素；待在带窗口的用例里补。
-    #if UTERM_LEGACY_SWIFTTERM_TESTS
-    /// 黄字的逐 cell 可读性由渲染期钳制兜底：白底 / 浅灰段底 / 深灰段底
-    /// （powerline 常用 ANSI 15 / 8 当段底）上钳后都必须达到最低对比度。
-    func test_vscode_light_yellow_readable_after_contrast_clamp() {
-        let scheme = TerminalColorScheme.resolve(dark: false)
-        let yellow = nsColor(scheme.ansiColors[3])
-        let ratio = TerminalColorScheme.minimumContrastRatio
-        let backgrounds = [
-            NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),  // 终端白底
-            nsColor(scheme.ansiColors[15]),                    // 浅灰段底 #A5A5A5
-            nsColor(scheme.ansiColors[8]),                     // 深灰段底 #666666
-        ]
-        for bg in backgrounds {
-            let shown = TerminalContrast.ensureContrast(fg: yellow, bg: bg, ratio: ratio)
-            XCTAssertGreaterThanOrEqual(TerminalContrast.contrastRatio(shown, bg), ratio - 0.01)
-        }
-    }
-
-    /// 2026-06-13 回归：深灰段底上的黄必须往亮处钳（保持「亮字配深底」），
-    /// 不允许往暗处修成暗橄榄。
-    func test_vscode_light_yellow_brightens_on_dark_segment() {
-        let scheme = TerminalColorScheme.resolve(dark: false)
-        let yellow = nsColor(scheme.ansiColors[3])
-        let darkSegment = nsColor(scheme.ansiColors[8])
-        let shown = TerminalContrast.ensureContrast(
-            fg: yellow, bg: darkSegment, ratio: TerminalColorScheme.minimumContrastRatio)
-        XCTAssertGreaterThan(TerminalContrast.relativeLuminance(shown),
-                             TerminalContrast.relativeLuminance(yellow),
-                             "深灰段底上的黄应该被提亮而不是压暗")
-    }
-    #endif
+    // 原来这里还有两条核「浅色方案的黄经渲染期钳制后可读 / 在深灰段底上被提亮」（SwiftTerm 补丁的 `TerminalContrast`）。
+    // 钳制现在在引擎的 shader 里，要读 surface 画出来的像素，挪到了 `TerminalContrastTests`
+    // （test_vscode_light_yellow_readable_after_contrast_clamp / …_brightens_on_dark_segment）。
 }

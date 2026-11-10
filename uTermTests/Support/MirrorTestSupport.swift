@@ -10,6 +10,28 @@ nonisolated final class NullTerminalSurface: TerminalSurfaceSink, @unchecked Sen
     func setOutputBacklogHandler(highWater: Int, lowWater: Int, _ handler: (@Sendable (Bool) -> Void)?) {}
 }
 
+/// 记下收到的东西的假 surface；「解析不过来」由测试手动拨（`setBacklogged`）。
+nonisolated final class RecordingTerminalSurface: TerminalSurfaceSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var live: [Data] = []
+    private var replayed: [Data] = []
+    private var backlogHandler: (@Sendable (Bool) -> Void)?
+
+    /// 实时字节，按 `receive` 的调用一段一段记。
+    var pieces: [Data] { lock.withLock { live } }
+    var liveBytes: Data { pieces.reduce(into: Data()) { $0.append($1) } }
+    var replays: [Data] { lock.withLock { replayed } }
+
+    func setBacklogged(_ backlogged: Bool) { lock.withLock { backlogHandler }?(backlogged) }
+
+    func receive(_ data: Data) { lock.withLock { live.append(data) } }
+    func receiveReplay(_ data: Data) { lock.withLock { replayed.append(data) } }
+    func discardPendingOutput() -> Int { 0 }
+    func setOutputBacklogHandler(highWater: Int, lowWater: Int, _ handler: (@Sendable (Bool) -> Void)?) {
+        lock.withLock { backlogHandler = handler }
+    }
+}
+
 /// 镜像的接收端（「手机」）：一台影子终端 + 一台输出泵，和真手机的 `MobileTerminalController` 同一个形态，只是不建画面。
 /// 快照与实时字节从 `TerminalOutputItem` 流进来（`RemoteTerminalBackend.outputItems`，或者测试自己拼的流）。
 nonisolated final class MirrorPhone: @unchecked Sendable {
@@ -64,6 +86,35 @@ nonisolated final class MirrorPhone: @unchecked Sendable {
 }
 
 extension ShadowTerminal {
+    /// 视口里第 `row` 行第 `col` 列的字符（都从 0 数；只用于一格一个字符的 ASCII 内容）。
+    func character(col: Int, row: Int) -> Character? {
+        let lines = viewportText().components(separatedBy: "\n")
+        guard row < lines.count else { return nil }
+        let line = Array(lines[row])
+        return col < line.count ? line[col] : " "
+    }
+
+    /// 比 `mirrorDifferences` 更严的比法：再比「回放流」——从终端状态重新生成的一段 VT（内容、每格的颜色与属性、
+    /// 模式、制表位、字符集、光标样式……），两台逻辑上相同的终端生成的流逐字节相同。看不见的状态靠接着喂同样的字节、
+    /// 再比一次暴露。
+    func stateDifferences(from other: ShadowTerminal) -> [String: String] {
+        var diff = mirrorDifferences(from: other)
+        do {
+            let mine = try makeReplay().stream, theirs = try other.makeReplay().stream
+            if mine != theirs {
+                let at = zip(mine, theirs).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(mine.count, theirs.count)
+                let from = max(0, at - 24)
+                func excerpt(_ data: Data) -> String {
+                    String(decoding: data.dropFirst(from).prefix(72), as: UTF8.self).debugDescription
+                }
+                diff["回放流"] = "第 \(at) 字节起不同（\(mine.count) / \(theirs.count) 字节）：\(excerpt(mine)) ≠ \(excerpt(theirs))"
+            }
+        } catch {
+            diff["回放流"] = "生成失败：\(error)"
+        }
+        return diff
+    }
+
     /// 和另一台影子终端比镜像要保证一致的那几样；空 = 一致。两边还在吃字节时读到的是中间态，放在轮询里用。
     /// `includingHistory`：连回滚的行数也比（两边的回滚上限相同、历史没到上限时才有意义——到了上限按页裁，
     /// 还原出来的终端页的排法不一样，裁掉的行数可以差几行）。
