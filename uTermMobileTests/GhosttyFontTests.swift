@@ -94,7 +94,9 @@ final class GhosttyFontTests: XCTestCase {
         let cg = try XCTUnwrap(image.cgImage)
         let scale = CGFloat(cg.width) / size.width
         let cellPixels = try XCTUnwrap(bridge.view.uTermCellPixels)
-        let cell = CGSize(width: CGFloat(cellPixels.width) / scale, height: CGFloat(cellPixels.height) / scale)
+        // 格子的物理像素按屏幕的原生倍率换回点（Duo 内屏是 2.807，不是截图用的 3）。
+        let native = window.screen.nativeScale
+        let cell = CGSize(width: CGFloat(cellPixels.width) / native, height: CGFloat(cellPixels.height) / native)
         return Rendering(image: cg, scale: scale, cell: cell, paper: Self.paperLevel(of: cg))
     }
 

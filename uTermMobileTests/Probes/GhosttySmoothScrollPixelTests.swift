@@ -184,7 +184,14 @@ final class GhosttySmoothScrollPixelTests: XCTestCase {
                 print(String(format: "SMOOTH handler inline=%@ %@ follow-ratio=%.3f input→frame p50=%.1fms max=%.1fms | ", "\(inline)", label, follow,
                              ProbeMetrics.percentile(latency, 0.5), latency.max() ?? 0)
                       + "shifts=\(shifts) pixel-steps=\(pixelSteps)/20 | after-release=\(after) net=\(after.reduce(0, +)) rest=\(state.row)+\(state.fractionPixels)px | scrollbar=\(sink.text)")
-                XCTAssertGreaterThanOrEqual(pixelSteps, 16, "inline=\(inline) \(label)：手指拖动路径没有按像素平移（\(shifts)）")
+                // 「按像素走」的判据：没有哪一步跳了整行（按行滚的实现是一串 0 夹着整行），而且总量跟得上手指。
+                // 不再要求「20 步里 16 步正好是 want」：系统路径上 UIKit 把 contentOffset 取整到 1/3 pt，Duo 内屏的倍率是 2.807，
+                // 一步 3 px 的手指位移落到屏上是 2 / 3 / 4 px 交替；截图偶尔比换帧早一拍，记成 0 和 2×want 一对（真机实测如此）。
+                let largest = shifts.map(abs).max() ?? 0
+                XCTAssertLessThanOrEqual(largest, 2 * abs(want) + 2, "inline=\(inline) \(label)：有一步跳得太多，不是按像素平移（\(shifts)）")
+                XCTAssertLessThan(largest, Int(cellPx) - 2, "inline=\(inline) \(label)：有一步跳了整行（\(shifts)）")
+                XCTAssertEqual(follow, 1, accuracy: 0.15, "inline=\(inline) \(label)：屏上的总位移没跟上手指（\(shifts)）")
+                XCTAssertGreaterThanOrEqual(shifts.filter { $0 != 0 }.count, 10, "inline=\(inline) \(label)：大多数步子没动（\(shifts)）")
             }
             // 甩：松手带 1500 pt/s，减速每帧的位移应当连续变小，而不是 0 / 整行交替。
             var previous = inkProfile(try await frame(host))
